@@ -8,7 +8,10 @@ genuine STARK proof. This note documents that prover, now in-tree as the
 
 The prover has two layers, deliberately separated. Layer 1 (the STARK over the
 disclosed facts) is **real crypto, complete**. Layer 2 (the live-TLS-origin
-attestation) ships as a **named interim** — do NOT read it as live-trustless-TLS.
+attestation) has three in-tree realizations: the default-path **named interim**
+notary (2a — do NOT read the default path as live-trustless-TLS), the tlsn
+interface+adapter exercised over a fixture (2b), and the genuine MPC-TLS stack
+run live-local behind the `tlsn-live` feature (2c).
 
 ## Layer 1 — the STARK/DECO-leaf prover core (REAL)
 
@@ -60,15 +63,17 @@ Tests (all round-trip the real `stripe_deco.rs` verifier):
 - `circuit-prove::deco_leaf_adapter::deco_leaf_proof_serializes_and_reads_back_claim`
   (SLOW): a real proof serializes and its bytes decode + validate + expose the same claim.
 
-## Layer 2 — the MPC-TLS / notary capture (NAMED INTERIM — not yet trustless)
+## Layer 2 — the TLS-origin capture (2a interim notary · 2b adapter · 2c real MPC-TLS)
 
 `deco-prove/src/notary.rs`. Proving that the disclosed facts came from a **live TLS
 session with Stripe's own API** needs a TLSNotary-style capture. The trustless
 realization is **MPC-TLS**: the notary co-derives the TLS session secret, learns
 nothing of the plaintext, and therefore cannot fabricate a transcript it did not
-co-witness. That is not in-tree.
+co-witness. That realization is in-tree — `deco-prove/src/tlsn_live.rs` (Layer 2c
+below) runs the genuine vendored TLSNotary stack live-local behind the `tlsn-live`
+feature. The default (feature-off) path uses the interim notary described here.
 
-### What ships (the interim)
+### Layer 2a — the interim notary (the default path; NAMED INTERIM, not trustless)
 
 A **semi-honest notary** that observed the real Stripe TLS session, extracted the
 disclosed `PaymentFacts`, and signs (real ed25519 — the SAME curve/lib the bridge's
@@ -92,10 +97,9 @@ the former; the latter is proven.
 
 ### Layer 2b — the tlsn / MPC-TLS INTERFACE + ADAPTER (in-tree; the trustless-shaped swap)
 
-`deco-prove/src/tlsn_attest.rs`. TLSNotary is **git-only** (`v0.1.0-alpha.15`, a
-tokio/rustls + `mpz`-alpha 2PC surface that needs a running notary service — not on
-crates.io, not vendorable as an in-lane live run). So rather than force-fit the live
-stack, we built the **Layer-2 interface + adapter**: it models the exact object a
+`deco-prove/src/tlsn_attest.rs`. TLSNotary is git-pinned (`v0.1.0-alpha.15`, a
+tokio/rustls + `mpz`-alpha 2PC surface). This module is the always-on
+**Layer-2 interface + adapter**: it models the exact object a
 *verified* `tlsn_core::presentation::PresentationOutput` takes and performs the DECO-side
 binding — server pinning (`api.stripe.com`), notary pinning, the presentation signature,
 **selective disclosure** of the payment facts out of an *authenticated* HTTP transcript
@@ -106,18 +110,37 @@ It is exercised end-to-end by a **real tlsn-format fixture** (an authenticated
 `GET api.stripe.com/v1/payment_intents/{id}` transcript that redacts the
 `Authorization: Bearer sk_live_…` secret), which mints the conserved amount through the
 REAL `stripe_deco` verifier (`tests/roundtrip.rs::tlsn_presentation_binds_into_layer2_and_mints`).
-⚑ It is the interface+adapter over a fixture, **NOT** a live trustless MPC-TLS run — the
-notary+2PC session binding is the named remaining wiring. Full design + the exact
-remaining steps: `docs/deos/TLSN-INTEGRATION.md`.
+⚑ This module alone is the interface+adapter over a fixture; the live MPC-TLS run is
+Layer 2c. Full design: `docs/deos/TLSN-INTEGRATION.md`.
 
-Flipping origin to trustless = replacing `deco-prove/src/notary.rs` (Layer 2a) with the
-`tlsn_attest` adapter fed by a real `presentation.verify()` output, with **no change** to
-`deco-prove/src/prover.rs` or the bridge verifier — Layer 1 and the verifier are
-origin-agnostic.
+### Layer 2c — the REAL MPC-TLS run, live-local (`tlsn-live` feature)
+
+`deco-prove/src/tlsn_live.rs`, exercised by `tests/tlsn_live_roundtrip.rs`. The genuine
+vendored tlsn stack runs live-local: a real `tlsn` Prover + a real local Notary perform
+the **MPC-TLS 2PC** handshake against a test HTTPS server (the Notary co-derives the
+session keys and sees no plaintext), the Prover selectively discloses the Stripe payment
+facts (the `Authorization: Bearer` secret stays redacted), the Notary signs a real
+`Attestation`, and `presentation.verify()` yields the real `PresentationOutput` whose
+authenticated transcript feeds the origin-agnostic DECO layer unchanged — through to a
+conserved mint by the real bridge verifier. A tampered `Presentation` fails the real
+`verify()`. The whole flow is self-contained in-process (`tokio::io::duplex`; no external
+notary binary, no network), gated behind the `tlsn-live` cargo feature (the heavy `mpz`
+2PC + tokio + rustls backend).
+
+**Operational remainder (a deploy step, not built here):** pointing the Prover at live
+`api.stripe.com` — a real Stripe TLS session with a real merchant key and a
+deployed/pinned notary. The machinery is exactly that path with the server swapped: the
+local run pins the fixture cert's `test-server.io`; live-Stripe pins
+`tlsn_attest::STRIPE_SERVER_NAME` (`api.stripe.com`).
+
+Flipping origin to trustless = feeding Layer 2c's real `presentation.verify()` output in
+place of the Layer-2a interim notary, with **no change** to `deco-prove/src/prover.rs`
+or the bridge verifier — Layer 1 and the verifier are origin-agnostic.
 
 ## Crates touched
 
-- `deco-prove/` (NEW): the prover core + the interim notary layer + the e2e tests.
+- `deco-prove/`: the prover core, the interim notary layer, the tlsn adapter + live
+  MPC-TLS module, and the e2e tests.
 - `circuit-prove/src/deco_leaf_adapter.rs`: added `serialize_deco_leaf_proof` /
   `verify_deco_leaf_proof_bytes` (the `zk_tls_proof` transport teeth) + tests.
 - `Cargo.toml`: added `deco-prove` to workspace members.
@@ -128,8 +151,9 @@ were changed. The bridge stays light (it does not depend on the heavy recursion 
 
 ## What flips to live-trustless money-in
 
-Layer 1 is done. The single remaining step to live-trustless Stripe money-in is
-replacing the interim notary (Layer 2) with an in-tree MPC-TLS capture. When that
-lands, production flips `MoneyIn::HmacWebhook` → `MoneyIn::Deco` at the one call site
-(`bridge/src/stripe_deco.rs::verify_money_in`), and the money-in is trustless
+Layer 1 is done, and the in-tree MPC-TLS capture exists (Layer 2c). The single
+remaining step to live-trustless Stripe money-in is operational: run Layer 2c against
+live `api.stripe.com` with a real merchant key and a deployed/pinned notary. With that
+run in place, production flips `MoneyIn::HmacWebhook` → `MoneyIn::Deco` at the one call
+site (`bridge/src/stripe_deco.rs::verify_money_in`), and the money-in is trustless
 end-to-end.

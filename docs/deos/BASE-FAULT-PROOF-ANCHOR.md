@@ -1,19 +1,21 @@
-# Base Fault-Proof Anchor — the plan to verify the LIVE Base L2 anchor
+# Base Fault-Proof Anchor — verifying the LIVE Base L2 anchor
 
-**Status:** design scout (no implementation). Closes the named residual in
-`eth-lightclient/src/base.rs:45-54`: that module verifies the legacy
-`L2OutputOracle` honest-oracle model; the live Base anchor is a resolved dispute
-game tracked by an `AnchorStateRegistry`. This doc is the concrete, slot-level
-plan to verify THAT — grounded against the Optimism specs, the contracts-bedrock
+**Status:** IMPLEMENTED. `eth-lightclient/src/base_fault_proof.rs` realizes this
+trust chain — `verify_l1_fault_proof_output_root` (`:608`) and the holding
+composition `verify_base_fault_proof_erc20_holding` (`:795`) — with mainnet
+fixtures and per-link polarity tests (`eth-lightclient/tests/base_fault_proof.rs`).
+`base.rs` verifies the legacy `L2OutputOracle` honest-oracle model and its module
+header routes live Base to `base_fault_proof`. This doc is the slot-level design
+record and its grounding — the Optimism specs, the contracts-bedrock
 storage-layout snapshots, and (decisively) **live reads of Base's L1 contracts on
 2026-07-12** via `eth_getStorageAt`/`eth_call` against Ethereum mainnet. Every
-"validated live" claim below was reproduced against the chain during this scout.
+"validated live" claim below was reproduced against the chain during the scout.
 
 ---
 
 ## 0. The headline discovery: live Base is NOT classic CANNON anymore
 
-The scout brief (and the residual note in `base.rs:45-54`) assumed the live
+The natural assumption — the one the scout brief carried in — is that the live
 anchor is a classic `FaultDisputeGame` (CANNON, game type 0) with the
 portal-era airgap. **Live Base in 2026-07 is two upgrades past that:**
 
@@ -21,7 +23,7 @@ portal-era airgap. **Live Base in 2026-07 is two upgrades past that:**
 |---|---|
 | `OptimismPortal` 0x49048044D57e1C92A77f79988d21Fa8fAF74E97e `version()` | `5.2.0` (post-Upgrade-14 layout: `anchorStateRegistry` at slot 62, old portal `respectedGameType` slot 59 is now a spacer still holding the Oct-2024 launch residue `0x672253a3‖00000000`) |
 | `AnchorStateRegistry` (ASR) proxy | `0x909f6CF47ED12f010A796527F562BFc26c7F4e72`, `version()` = `3.7.0`, impl `0x4483f964f6711cB55F633820eD174e780369B99d` (verified source: **Base's fork**, `lib/contracts/src/dispute/AnchorStateRegistry.sol`, not upstream contracts-bedrock) |
-| `DisputeGameFactory` (DGF) | `0x43edB88C4B80fDD2AdFF2412A7BebF9dF42cB40e` (same address as `base.rs:47` names) — ASR slot 1 points at it (validated live) |
+| `DisputeGameFactory` (DGF) | `0x43edB88C4B80fDD2AdFF2412A7BebF9dF42cB40e` (same address as `base.rs:49` names) — ASR slot 1 points at it (validated live) |
 | **respectedGameType** | **621** (`0x26d`) — ASR slot 6, offset 0 |
 | retirementTimestamp | `0x6a15fbbf` = 1779825599 = 2026-05-26T19:59:59Z — ASR slot 6, offset 4 |
 | Game type 621 implementation | `0x1bd8db5139Ba7aC9277684650c15e6E341761919` = **`AggregateVerifier` v0.1.0** (Blockscout-verified source, `lib/contracts/src/L1/proofs/AggregateVerifier.sol`, solc 0.8.15) — a **dual-attestation validity game**: every proposal is created WITH a TEE attestation or a ZK proof; a challenge is the counter-proof of the other type |
@@ -29,11 +31,11 @@ portal-era airgap. **Live Base in 2026-07 is two upgrades past that:**
 | `ASR.disputeGameFinalityDelaySeconds()` | **0** (raw 32-byte zero word — the registry-level airgap is literally zero; the finality windows live INSIDE the game: `FAST_FINALIZATION_DELAY = 1 days` with both proof types, `SLOW_FINALIZATION_DELAY = 5 days` with one, gating `resolve()` itself) |
 | AggregateVerifier immutables | `TEE_VERIFIER = 0x1FbA0C57b07Af804A9717e51dec9CC27FBC12228`, `TEE_IMAGE_HASH = 0x58557c70…4d212a`, `ZK_VERIFIER = 0xB88D95bDf6972508942d184866890c1834219B75`, `ZK_RANGE_HASH = 0x505c97f1…88d677`, `ZK_AGGREGATE_HASH = 0x001df6df…243a3b`, `CONFIG_HASH = 0x1607709d…5f3c57`, `L2_CHAIN_ID = 8453`, `BLOCK_INTERVAL = 600`, `INTERMEDIATE_BLOCK_INTERVAL = 30`, bond (`DGF.initBonds(621)`) = 0.05 ETH |
 
-**The good news for the plan:** the *storage-proof trust chain* is essentially
+**The good news:** the *storage-proof trust chain* is essentially
 the same for the generic OP-stack `FaultDisputeGame` model and Base's live
 AggregateVerifier model — same factory slots, same GameId packing, same
 game slot-0 packing (`createdAt ‖ resolvedAt ‖ status`), same ASR predicate.
-The plan below is written against the ASR's validity predicate
+The chain below is written against the ASR's validity predicate
 (`isGameClaimValid`, which we reproduced from the live verified source and
 whose getters we confirmed return `true` on the live anchor game), so it covers
 Base-today AND any OP-stack fault-proof chain, parameterized by game type.
@@ -53,14 +55,15 @@ carry over **unchanged**.
 ## 1. THE TRUST CHAIN
 
 The fault-proof analog of `verify_l1_committed_output_root`
-(`base.rs:317-381`). Input: a light-client-verified `FinalizedExecution`
-(`finality.rs:85-135`) giving the finalized L1 `state_root`. Output: a trusted
+(`base.rs:317`), implemented as `verify_l1_fault_proof_output_root`
+(`base_fault_proof.rs:608`). Input: a light-client-verified `FinalizedExecution`
+(`finality.rs:85`) giving the finalized L1 `state_root`. Output: a trusted
 `(output_root, l2_block_number)` — the same `L1CommittedOutput`
-(`base.rs:261-268`) the existing composition consumes.
+(`base.rs:261`) the existing composition consumes.
 
 All storage proofs are EIP-1186 opens via the existing
-`verify_evm_account_proof` (`evm.rs:165`) / `verify_evm_storage_slot`
-(`evm.rs:200-219`) machinery. Ordered checks:
+`verify_evm_account_proof` (`evm.rs:196`) / `verify_evm_storage_slot`
+(`evm.rs:231`) machinery. Ordered checks:
 
 ### Link 1 — ASR account proof
 `l1.execution_state_root() --MPT--> ASR account (0x909f6CF4…7F4e72)`, binding
@@ -186,9 +189,10 @@ slot 0 offset 2, disputeGameFactory 1, anchorGame 2, startingAnchorRoot 3-4,
 blacklist 5, respectedGameType/retirementTimestamp 6 — slots 0,1,2,6 validated
 live by raw reads). Check: slot `keccak256(pad32(game) ‖ pad32(5))` is **zero** —
 which in the EVM storage MPT means the key is ABSENT, so this is an
-**exclusion proof**, not a value proof (live read confirms the zero word). This
-needs a new helper (§2): `verify_evm_storage_slot` as written
-(`evm.rs:200-219`) proves `Some(rlp(value))` and cannot express absence.
+**exclusion proof**, not a value proof (live read confirms the zero word). The
+helper is `verify_evm_storage_slot_absent` (`evm.rs:279`) — the exclusion twin of
+`verify_evm_storage_slot`, which proves `Some(rlp(value))` and cannot express
+absence.
 
 ### Link 8 — the airgap / finality-window predicate
 `l1_finalized_timestamp - resolvedAt > DISPUTE_GAME_FINALITY_DELAY_SECONDS`
@@ -203,11 +207,10 @@ Two grounding facts:
   createdAt/proof-time + 1 day if both TEE+ZK proofs agree, 5 days if only one;
   a nullified proof pushes it out by another 5 days) — so `resolvedAt != 0 ∧
   status == DEFENDER_WINS` already implies the in-game window elapsed on L1.
-- `l1_finalized_timestamp` must come from the light client. `FinalizedExecution`
-  (`finality.rs:85-91`) does not carry the execution timestamp today, but
-  `ExecutionPayloadHeader` already parses it (`execution.rs:58`) — an additive
-  field + accessor (every `new_unchecked` call site updates; it's greppable by
-  design, `finality.rs:94-113`).
+- `l1_finalized_timestamp` comes from the light client: `FinalizedExecution`
+  carries the execution timestamp (`finality.rs:91`, accessor
+  `execution_timestamp()` at `:143`), plumbed from `ExecutionPayloadHeader`'s
+  parsed `timestamp` (`execution.rs:58`).
 - **Policy delay (recommended):** because the on-chain registry delay is 0, the
   verifier should additionally enforce a caller-supplied
   `policy_finality_delay` (e.g. ≥ the guardian's realistic blacklist-response
@@ -243,75 +246,55 @@ FinalizedExecution (finality.rs, unforgeable)
 
 ## 2. WHAT REUSES vs WHAT IS NEW
 
-**Reuses unchanged:**
-- `FinalizedExecution` / `verify_finalized_update` (`finality.rs:187-224`) — the
-  L1 finality authority, as-is (plus one additive timestamp field, below).
-- `verify_evm_account_proof` (`evm.rs:165`) — Links 1, 3, 5.
-- `verify_evm_storage_slot` (`evm.rs:200-219`) — Links 2, 3(slot 1), 4, 6.
+**Reused unchanged:**
+- `FinalizedExecution` / `verify_finalized_update` (`finality.rs:85,198`) — the
+  L1 finality authority (now carrying the execution timestamp, `finality.rs:91`).
+- `verify_evm_account_proof` (`evm.rs:196`) — Links 1, 3, 5.
+- `verify_evm_storage_slot` (`evm.rs:231`) — Links 2, 3(slot 1), 4, 6.
 - `verify_op_output_root` / `compute_op_output_root_v0` (`base.rs:179-222`) —
   Link 9, live-validated against the type-621 rootClaim.
-- `verify_erc20_holding` (`evm.rs:237`) and the `L1CommittedOutput` /
+- `verify_erc20_holding` (`evm.rs:442`) and the `L1CommittedOutput` /
   `L2StateCommitment` shapes (`base.rs:261,387`) — the composition tail of
-  `verify_base_erc20_holding` (`base.rs:418-460`) is reused verbatim; only the
+  `verify_base_erc20_holding` (`base.rs:418`) is reused verbatim; only the
   anchor-opening head is swapped.
 
-**New pieces (all in a new `eth-lightclient/src/base_fault_proof.rs`, or a
-`fault_proof` section of `base.rs`):**
-1. `verify_evm_storage_slot_absent(storage_hash, slot_key, proof)` in `evm.rs` —
-   the exclusion-proof twin of `verify_evm_storage_slot` (alloy-trie
-   `verify_proof` with expected `None`; a zero-valued slot is an absent MPT
-   key). Needed for Link 7. Adversarial tests: an absence proof for a PRESENT
-   key must refuse; a truncated proof must refuse.
-2. `game_uuid(game_type, root_claim, extra_data)` — the
+**The new pieces (all built, in `eth-lightclient/src/base_fault_proof.rs`
+unless noted):**
+1. `verify_evm_storage_slot_absent(storage_hash, slot_key, proof)` in `evm.rs`
+   (`:279`) — the exclusion-proof twin of `verify_evm_storage_slot` (MPT walk
+   with expected `None`; a zero-valued slot is an absent MPT key). Link 7.
+   Adversarial tests cover an absence proof for a PRESENT key and truncated
+   proofs — both refuse.
+2. `game_uuid(game_type, root_claim, extra_data)` (`:409`) — the
    `keccak256(abi.encode(uint32, bytes32, bytes))` head/tail encoding (offset
    word `0x60`, length word, zero-padded tail), plus
-   `dispute_games_mapping_slot(uuid) = keccak256(uuid ‖ pad32(103))` and
-   `GameId::unpack(word) -> (game_type: u32, timestamp: u64, address: [u8;20])`.
-   KATs from the live fixture in §4.
-3. `parse_extra_data_l2_block_number(game_type_profile, extra_data)` — first
-   32-byte word as `uint256` (both the FDG and AggregateVerifier layouts put
-   `l2BlockNumber` first; AggregateVerifier additionally carries parent +
-   intermediate roots, which we do not interpret beyond UUID binding).
+   `dispute_games_mapping_slot(uuid) = keccak256(uuid ‖ pad32(103))` (`:423`) and
+   GameId pack/unpack (`:440-449`,
+   `(game_type: u32, timestamp: u64, address: [u8;20])`). KATs against the live
+   fixture in §4.
+3. `parse_extra_data_l2_block_number(extra_data)` (`:489`) — first 32-byte word
+   as `uint256` (both the FDG and AggregateVerifier layouts put `l2BlockNumber`
+   first; AggregateVerifier additionally carries parent + intermediate roots,
+   which are not interpreted beyond UUID binding).
 4. Game slot-0 unpacking + the resolution predicate (Link 6), with the packed
    word recomputed from claimed fields exactly like `pack_output_meta`
-   (`base.rs:253-255`) does — prove the WHOLE word, parse nothing off-proof.
-5. The airgap predicate (Link 8) + an additive
-   `FinalizedExecution::execution_timestamp()` (plumb
-   `ExecutionPayloadHeader.timestamp`, `execution.rs:58`, through
-   `verify_finalized_update` and `new_unchecked`).
-6. A `FaultProofAnchorParams` config carrying: expected ASR address, expected
-   respected game type, the pinned game-impl/proxy `code_hash`s, the ASR-impl
+   (`base.rs:253`) does — prove the WHOLE word, parse nothing off-proof.
+5. The airgap predicate (Link 8) over
+   `FinalizedExecution::execution_timestamp()` (`finality.rs:143`, plumbed from
+   `ExecutionPayloadHeader.timestamp`, `execution.rs:58`).
+6. `FaultProofAnchorParams` (`:504`): expected ASR address, expected respected
+   game type, the pinned game-impl address for CWIA recomputation, the ASR-impl
    pinned `dispute_game_finality_delay` (0 on Base), and `policy_finality_delay`.
-   New error enum `FaultProofAnchorError` in the `BaseProofError` style
-   (`base.rs:91-129`) — one variant per link, fail-closed.
+   `FaultProofAnchorError` (`:223`) in the `BaseProofError` style (`base.rs:91`)
+   — one variant per link, fail-closed.
 
-Illustrative sketch (shape only — NOT implementation):
-
-```rust
-pub struct FaultProofAnchor {
-    // Link 1-2, 7: ASR
-    pub asr_account: AccountClaim, pub asr_account_proof: Vec<Vec<u8>>,
-    pub respected_slot6_proof: Vec<Vec<u8>>,   // retirementTs ‖ respectedGameType
-    pub dgf_binding_slot1_proof: Vec<Vec<u8>>, // ASR.disputeGameFactory
-    pub blacklist_absence_proof: Vec<Vec<u8>>,
-    // Link 3-4: DGF
-    pub dgf_account: AccountClaim, pub dgf_account_proof: Vec<Vec<u8>>,
-    pub game_id_slot_proof: Vec<Vec<u8>>,      // _disputeGames[uuid] -> GameId
-    // Link 5-6: the game
-    pub game_account: AccountClaim, pub game_account_proof: Vec<Vec<u8>>,
-    pub game_slot0_proof: Vec<Vec<u8>>,
-    pub created_at: u64, pub resolved_at: u64, // status/flags recomputed+proven
-    // The claim being opened (the UUID preimage):
-    pub game_type: u32, pub root_claim: [u8; 32], pub extra_data: Vec<u8>,
-}
-
-pub fn verify_l1_fault_proof_output_root(
-    l1_finalized: &FinalizedExecution,
-    params: &FaultProofAnchorParams,
-    anchor: &FaultProofAnchor,
-) -> Result<L1CommittedOutput, FaultProofAnchorError>;
-// then: verify_op_output_root + verify_erc20_holding, exactly as base.rs:432-459
-```
+The shipped entry points: `FaultProofAnchor` (`:540`, the proof bundle — ASR/DGF/
+game account + slot proofs, the UUID preimage `(game_type, root_claim,
+extra_data)`, `created_at`/`resolved_at`),
+`verify_l1_fault_proof_output_root(l1_finalized, params, anchor) ->
+L1CommittedOutput` (`:608`), then `verify_op_output_root` +
+`verify_erc20_holding` composed by `verify_base_fault_proof_erc20_holding`
+(`:795`).
 
 ---
 
@@ -363,10 +346,12 @@ What each anchor model asks you to believe, beyond L1 finality + keccak/MPT:
 
 ---
 
-## 4. THE SMALLEST FIRST BUILD INCREMENT
+## 4. THE BUILD — one real resolved game, end to end
 
-**Goal:** `verify_l1_fault_proof_output_root` green end-to-end against ONE real
-resolved Base game, fixtures captured from mainnet.
+`verify_l1_fault_proof_output_root` runs green end-to-end against ONE real
+resolved Base game, fixtures captured from mainnet
+(`eth-lightclient/tests/fixtures/base_fault_proof_mainnet.rs`, captured
+2026-07-12).
 
 **The fixture game (all values validated live 2026-07-12):**
 - Game **index 17049** in `_disputeGameList` (found by binary search on
@@ -383,39 +368,42 @@ resolved Base game, fixtures captured from mainnet.
   extraData = 692 bytes (`pad32(48306960) ‖ parent ‖ 20 intermediate roots`,
   last = rootClaim)
 
-**Steps:**
-1. **Fixture capture** (script, one shot, pin the L1 block number): choose a
-   finalized L1 block T with timestamp > resolvedAt; `eth_getProof` at T for
-   (a) ASR `0x909f…4e72` with slots `[5-mapping key for the game, 1, 6]`,
-   (b) DGF `0x43ed…B40e` with slot `[keccak256(uuid‖103)]`,
-   (c) game `0x15F3…3626` with slot `[0]`;
-   plus Base-side `eth_getProof` at block 48306960 for the ERC-20 holding and
-   `0x4200…0016` (the withdrawal root is already in hand above). Serialize as
-   JSON fixtures like the existing base.rs test corpus.
-2. **KAT tests first** (pure, no proofs): `game_uuid` and
-   `dispute_games_mapping_slot` against the §4 constants; `GameId::unpack`
-   against `0x0000026d‖000000006a4c9603‖15f3…3626`; slot-0 unpack against
+**What the test corpus covers** (`tests/base_fault_proof.rs`, evidence classes
+named in its header):
+1. **REAL-EXTERNAL fixtures** — every `eth_getProof` a real node answer under a
+   real finalized L1 block: ASR slots `[blacklist-mapping key, 1, 6]`, DGF slot
+   `keccak256(uuid‖103)`, game slot `[0]`, plus Base-side proofs at block
+   48306960 for the ERC-20 holding and `0x4200…0016`. The `FinalizedExecution`
+   carrier enters via `new_unchecked` with the real block's values (the
+   sync-committee path has its own KATs in `finality_kat.rs`).
+2. **KATs** (pure, no proofs): `game_uuid` + `dispute_games_mapping_slot`
+   against the §4 constants; GameId unpack against
+   `0x0000026d‖000000006a4c9603‖15f3…3626`; slot-0 unpack against
    `0x…010102‖000000006a532d8f‖000000006a4c9603`; slot-6 unpack against
-   `0x…6a15fbbf0000026d`.
-3. `verify_evm_storage_slot_absent` in `evm.rs` + its adversarial tests
-   (absence-of-present-key refused).
-4. `verify_l1_fault_proof_output_root` (Links 1-8) + polarity tests per link:
-   flipped status byte (1 = CHALLENGER_WINS) refused; resolvedAt = 0 refused;
-   createdAt ≤ retirementTimestamp refused; wrong game type refused; a
-   blacklist-PRESENT fixture (synthesized trie) refused; tampered UUID
-   preimage (any byte of extraData) refused — the UUID changes, the mapping
-   slot proof fails; `l1_time ≤ resolvedAt + policy_delay` refused.
-5. Compose `verify_base_erc20_holding_fault_proof` = Links 1-8 +
+   `0x…6a15fbbf0000026d`; the rootClaim recomputing as a v0 output root; the
+   CWIA code-hash reconstruction reproducing the live game's real code hash
+   byte-exactly (`kat_cwia_code_hash_reconstructs`).
+3. **Absence-proof teeth**: absence-of-present-key refused; truncated
+   inclusion-prefix-as-absence refused (the measured alloy-trie 0.9.5 exclusion
+   hole); tampered/truncated absence proofs refused.
+4. **Per-link polarity tests**: flipped status byte (CHALLENGER_WINS, both
+   honest-claim and lying-claim forms) refused; resolvedAt = 0 refused;
+   createdAt ≤ retirementTimestamp refused; wrong/rotated game type refused; a
+   blacklist-PRESENT world (synthesized trie, named as synthesis) refused;
+   tampered UUID preimage (any byte of extraData, forged rootClaim, forged
+   proxy, forged createdAt) refused — the UUID changes, the mapping-slot proof
+   fails; the airgap strict boundary refused; the R3 code-hash teeth (swapped
+   impl address, lied-about creator/l1Head, a look-alike non-CWIA game
+   contract) refused.
+5. **The composition**: `verify_base_fault_proof_erc20_holding` = Links 1-8 +
    `verify_op_output_root` + `verify_erc20_holding`, minting
-   `HoldingTrust::ConsensusProven` exactly like `base.rs:458`. The L1-finality
-   fixture can enter via `FinalizedExecution::new_unchecked` initially (as the
-   existing tests do), with the timestamp field added in the same lane.
+   `HoldingTrust::ConsensusProven` exactly like `base.rs:458`
+   (`full_fault_proof_holding_accepts_consensus_proven`).
 
-**Not in increment 1:** CWIA code-hash *recomputation* (pin the literal
-`code_hash` from the fixture instead), the pause-slot proof, classic-FDG
-game-type profile (add as a parameterized second profile when an OP-mainnet
-anchor is wanted), multi-game parent-chain walking (the ASR predicate
-deliberately doesn't require it; see R5).
+**Not built (named):** the pause-slot proof (U4); a classic-FDG game-type
+profile (a parameterized second profile, for when an OP-mainnet anchor is
+wanted); multi-game parent-chain walking (the ASR predicate deliberately doesn't
+require it; see R5).
 
 ---
 
@@ -433,12 +421,17 @@ deliberately doesn't require it; see R5).
   incentivize challenges but prove nothing cryptographic. The light client
   should treat bonds as liveness lubricant, not a verified property (we do not
   prove `initBonds`).
-- **R3 — Code-hash pinning depth:** increment 1 pins literal code hashes
-  (fixture constants). Full defense = recompute the Solady CWIA proxy bytecode
-  from (impl, creator, rootClaim, l1Head, extraData) so the account-proof
-  `code_hash` independently re-binds the claim, and pin the ASR/impl hashes
-  behind the EIP-1967 slots. Until then, a contracts upgrade (ProxyAdmin) both
-  changes semantics AND breaks our pins — again fail-closed, but noisy.
+- **R3 — Code-hash pinning depth: CLOSED at the game proxy** (see Link 5):
+  `cwia_proxy_code_hash` recomputes the Solady CWIA proxy bytecode from
+  (impl, creator, rootClaim, l1Head, extraData), so the account-proof
+  `code_hash` independently re-binds the claim; a look-alike contract refuses.
+  Remaining (lower): the impl address + CWIA template bytes are documented
+  constants (they change only on an OP-stack upgrade — fail-closed → explicit
+  re-pin), the ASR/impl hashes behind the EIP-1967 slots are not separately
+  account-proven, and the impl's own bytecode is trusted by address (immutable
+  post-Cancun — the same class as the oracle-address trust). A contracts
+  upgrade (ProxyAdmin) both changes semantics AND breaks the pins — fail-closed,
+  but noisy.
 - **R4 — Upgrade/governance keys:** `setRespectedGameType`,
   `updateRetirementTimestamp`, `blacklistDisputeGame` are
   guardian-only (`_assertOnlyGuardian` → `systemConfig.guardian()`); ProxyAdmin

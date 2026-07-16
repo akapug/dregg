@@ -6,7 +6,9 @@ world while iterating on it. Every tool reads or writes the genuine embedded
 executor (`dregg_sdk::embed::DreggEngine` via `starbridge_v2::world::World`) —
 there is no mock and no second object model. It is the inspect→act→inspect loop,
 the moldable inspector's seven presentation faces, the ocap/affordance maps, and
-the headless gpui cockpit bake, exposed as ten tools over JSON-RPC stdio.
+the headless gpui cockpit bake — plus a crawl surface (snapshot/restore/export)
+and a protocol/system-map surface — exposed as twenty-two tools over JSON-RPC
+stdio.
 
 ## Build & run
 
@@ -24,7 +26,9 @@ It is registered in the repo's `.mcp.json` as `dregg-image` (launcher:
 Claude Code session picks it up automatically; the tools then appear as
 `mcp__dregg-image__*`.
 
-## The ten tools
+## The tools
+
+**The core loop** — inspect, act, map, render:
 
 | tool | what it does |
 |------|--------------|
@@ -38,6 +42,28 @@ Claude Code session picks it up automatically; the tools then appear as
 | `render {cell,out?}` | render a cell's full inspector view to a self-contained dark-theme HTML page (the portable, annotatable Firebug DOM). |
 | `screenshot {out?,size?,tab?}` | bake the **real gpui Cockpit element tree**, over this session's driven state (it replays the committed act-trail), to a PNG via the headless-render subprocess. `size` is a logical `WxH` — default **1280×832** (the full cockpit, no truncation); pass `800x600` for the seL4-framebuffer geometry. `tab` picks the cockpit surface (`home`/`inspector`/`graph`/`proofs`/`objects`/`debugger`/`replay`/…). |
 | `view` | session summary: cells, anchors, acts committed, cells visited. |
+
+**The crawl surface** — fast backtracking for game-tree / atlas crawls:
+
+| tool | what it does |
+|------|--------------|
+| `rewind {to}` | backtrack the world to a prefix of the act-trail (reboot + replay the first `to` committed acts; `to`=0 fully resets). Slow (~3s reboot) — prefer snapshot/restore for crawls. |
+| `snapshot` | checkpoint the current world cheaply (a fork-based deep clone, ~ms — no reboot). Returns an id. |
+| `restore {id}` | restore a snapshotted world (the snapshot survives restore, so it is reusable). |
+| `forget {id}` | drop a snapshot to free memory. |
+| `export {out?}` | dump the FULL crawl (meta + every cell's faces/affordances/halo + the ocap graph + the act-trail) as one JSON file for the atlas site-builder. |
+
+**The protocol / system-map surface** — the vocabulary and the seams, as data:
+
+| tool | what it does |
+|------|--------------|
+| `protocol` | the protocol reference: the AuthRequired lattice, the effect/verb vocabulary seen live, and the refusal taxonomy (cap-gate vs executor). |
+| `effect {kind,from,…}` | submit a **raw effect** through the verified executor, beyond self-affordances — `transfer` (from→to, amount), `grant` (a cap, slot), `create` (a new cell). Committed/refused like `act`; mutates the live world. |
+| `effects` | the protocol's action vocabulary: the canonical 8 verbs + an `Effect` catalog, each with its descriptor fields and conservation class (Conservative/Generative/Terminal/Annihilative/Monotonic/Neutral). The catalog is a hand-maintained 31-entry list in `dregg_mcp.rs` mirroring `dregg_turn::action::Effect` (34 variants) — `Mint`, `ShieldedTransfer`, and `Custom` are absent from it; a named drift seam until the list is generated from the enum. |
+| `dataplane` | the captp data plane (`dregg_captp` `Bus`): inboxes, queue depths, pending-vs-delivered, pub/sub topics, wake-by-name cursors. Stands up a real in-process Bus and drives a genuine post→wake→publish→drain cycle; names the seam to the running node's per-node Bus. |
+| `firmament` | the firmament surface/migration state: the (target, rights) capability across the distance axis, the compositor scene contract (the T1/T2/T3 verified teeth), and the live cell-lifecycle frontier read straight from the ledger. Names the live-compositor seam. |
+| `federation` | the federation surface: committee / epoch / checkpoint / cross-fed bridge / revocation-tree vocabulary. The embedded image is a solo n=1 federation; live quorum/consensus state is a named wire seam — surfaced honestly, never faked. |
+| `map {out?}` | ONE cross-linked machine-readable graph over the whole inspectable system — every cell, face, message, effect, and seam as nodes with stable ids and typed edges. The hypermedia backbone the atlas site links over. |
 
 Cell handles accept an anchor name (`treasury`/`service`/`user`), a full 64-char
 hex id, or a short hex prefix (the ids `survey` prints). `as` inspects/acts AS a
@@ -82,11 +108,12 @@ only gestured at? The honest answer, having driven it:
    and the thing you see are one image.
 
 What is *missing* relative to a mature devtools suite, named honestly: a network
-panel (the receipt/blocklace timeline is the provenance face, but there is no
-live SSE inspector here yet), a performance profiler, and a writable gadget
-surface (`CommittingGadget` builds turns from a form; `dregg-mcp` exposes only
-the message-firing `act`, not the full gadget construction yet). These are the
-next rungs, not foundations.
+panel (the receipt/blocklace timeline is the provenance face, and `dataplane`
+surfaces the Bus, but there is no live SSE inspector here yet), a performance
+profiler, and the full form-driven gadget surface (`CommittingGadget` builds
+turns from a form; `dregg-mcp` fires messages via `act` and submits raw
+transfer/grant/create effects via `effect`, but does not expose the gadget's
+form-construction flow). These are the next rungs, not foundations.
 
 ## What it found on its first drive
 

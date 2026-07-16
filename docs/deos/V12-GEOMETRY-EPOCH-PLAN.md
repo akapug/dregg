@@ -1,19 +1,27 @@
 # V12 GEOMETRY EPOCH — the bang's final act (design spec)
 
-> **STATUS: SHIPPED — then superseded by v13.** This is no longer a proposal; the v12
-> geometry widening LANDED exactly as specced. The three named octets are live in the tree:
-> `B_CHILD_VK_OCTET = 88`, `B_CONTRACT_HASH_OCTET = 96`, `B_PUBKEY_OCTET = 104`
-> (`circuit/src/effect_vm/trace_rotated.rs`), with producer fill in
-> `cell/src/commitment.rs::compute_rotated_pre_limbs` and `turn/src/rotation_witness.rs`
+> **STATUS: SHIPPED — then superseded by later geometry steps.** This is no longer a
+> proposal; the v12 geometry widening LANDED exactly as specced. The three named octets are
+> live in the tree: `B_CHILD_VK_OCTET = 89`, `B_CONTRACT_HASH_OCTET = 97`,
+> `B_PUBKEY_OCTET = 105` (`circuit/src/effect_vm/trace_rotated.rs:290-301` — the revoked-root
+> base widen 37→38 shifted every limb ≥ 37 by +1 off the spec's 88/96/104), with producer
+> fill in `cell/src/commitment.rs::compute_rotated_pre_limbs` and `turn/src/rotation_witness.rs`
 > (child_vk8 on CreateCellFromFactory rows, contract_hash8 on hatchery-mint rows, pubkey8
-> unconditionally — O1 resolved as route (a), the turn-level octet). The four per-carrier
+> unconditionally — filled per block with the **operated cell's owner key**,
+> `canonical_32_to_felts_8(cell.public_key())`, consumed by the sovereign KEY_COMMIT gate
+> (`trace_rotated.rs:4429-4438`). O1 thus resolved as the per-block owner-key octet, NOT
+> route (a)'s turn-level actor octet: membership's SENDER endpoint binds off-geometry, via a
+> backing Merkle-STARK leaf carried as claim PIs
+> (`metatheory/Dregg2/Circuit/MembershipBindingFromFold.lean`, the sender_leaf/authorized_root
+> claim tuple), not this octet). The four per-carrier
 > third edges also landed: `metatheory/Dregg2/Circuit/{Factory,Sovereign,Membership,Hatchery}BindingFromFold.lean`
 > (+ Bridge/Dsl/Custom/Deco twins) and `Emit/MembershipAuthRootEdge.lean` (the §4 fields
-> read-open gadget). HEAD has since grown ONE more accumulator step past v12: the **v13
-> fields-octet grow** (`NUM_PRE_LIMBS 112 → 169`, `B_SPAN 151 → 227`, +56 fields[0..7]
-> completion lanes + 1 pad limb). So the constant table in §2d below reads at the *pre-v12*
-> (v11) geometry — kept for the historical delta it documents; the live values are v13's
-> 169/227/169/170/171. Everything under here is preserved as the design rationale of a
+> read-open gadget). HEAD has since grown past v12 again: the **v13 fields-octet grow** plus
+> the revoked-root base widen, cells-completion lanes 169..=175, and two pad limbs 176..=177
+> put the live geometry at `NUM_PRE_LIMBS = 178`, `B_SPAN = 239`
+> (`trace_rotated.rs:96,101`). So the constant table in §2d below reads at the *pre-v12*
+> (v11) geometry — kept for the historical delta it documents; the live values are
+> 178/239/178/179/180. Everything under here is preserved as the design rationale of a
 > completed epoch.
 
 Status (historical): **DESIGN / SCOPE ONLY** at time of writing. This was the fireable spec for the
@@ -128,8 +136,9 @@ anti-vacuity discipline. Offer the shared octet only if ember wants the narrower
 ### 2d. The constant/file carriers (where the geometry lives)
 
 *(the "pre-v12" column below is the v11 geometry this epoch started from; the "v12 value"
-column is what this epoch shipped. HEAD is now v13 — `NUM_PRE_LIMBS 169`, `B_SPAN 227`,
-`B_IROOT 169`, `B_STATE_COMMIT 170`, `B_CHAIN_BASE 171` — one accumulator step further.)*
+column is what this epoch shipped. HEAD has stepped further — `NUM_PRE_LIMBS 178`,
+`B_SPAN 239`, `B_IROOT 178`, `B_STATE_COMMIT 179`, `B_CHAIN_BASE 180`
+(`circuit/src/effect_vm/trace_rotated.rs:96,101,303,353,355`).)*
 
 | constant | pre-v12 (v11) value | file:line | v12 value (primary) |
 |---|---|---|---|

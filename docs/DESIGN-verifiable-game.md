@@ -2,7 +2,7 @@
 
 ## Status and thesis
 
-`attested-dm` should become a game engine in which creative narration remains flexible, but every state-changing outcome is determined by explicit rules and can be independently checked. The AI proposes tone, description, and intent; the engine alone decides state transitions.
+`attested-dm` is a game engine in which creative narration remains flexible, but every state-changing outcome is determined by explicit rules and can be independently checked. The AI proposes tone, description, and intent; the engine alone decides state transitions.
 
 The existing foundation is strong:
 
@@ -10,14 +10,14 @@ The existing foundation is strong:
 - Every landed move creates a previous-entry-linked `LedgerEntry` binding sequence number, narration, effect, prompt and game identities, and an attestation.
 - `DmCaps` gates grants.
 - The `.dungeon` format is readable and has parsing and validation.
-- `GameSession::verify()` detects tampering with the recorded chain.
+- `GameSession::verify()` is the **integrity tier**: it detects tampering with the recorded chain.
+- `GameSession::verify_replay()` is the **re-execution tier**: it reconstructs the genesis world and, for every landed turn in order, re-runs the same `resolve_action` against the from-genesis replay state, rejecting a hash-valid chain that carries a rule-incorrect effect (`attested-dm/src/game.rs`, `verify_replay` / `verify_ledger_replay`). `GameSession::verify_report()` reports the two claims separately, never as one boolean, and the adversarial test `a_forged_effect_passes_chain_integrity_but_replay_catches_it` exhibits the exact gap replay closes. The overworld credits a location only after a session passes both tiers and gates travel on that verified completion (`attested-dm/src/overworld.rs`).
 
-Two boundaries must remain explicit:
+One boundary must remain explicit:
 
-1. The current attestation's authenticity leg is an in-tree fixture. It is not production identity or hardware-backed authenticity.
-2. Current verification authenticates recorded history but does not replay `resolve_action`. It proves that history was not altered after recording, not that every recorded effect followed the rules.
+1. The default attestation's authenticity leg is an in-tree fixture (`AuthenticPolicy::AllowFixture`, `attested-dm/src/lib.rs`); real transport provenance requires `AuthenticPolicy::RequireMpcTls`. The default is not production identity or hardware-backed authenticity.
 
-The target claim is therefore: **a session is verifiable under the deployed prover, cryptographic, and randomness-source assumptions**. It is not “trustless from first principles.” In particular, dregg has real circuit, circuit-proving, folding, and WASM light-client machinery, but ultimate STARK soundness remains an assumption rather than a discharged proof.
+The target claim is therefore: **a session is verifiable under the deployed prover, cryptographic, and randomness-source assumptions**. It is not “trustless from first principles.” dregg has real circuit, circuit-proving, folding, and WASM light-client machinery, and STARK soundness of the deployed verifier is a proven reduction to the RS-proximity core (`starkSound_of_core`, `metatheory/Dregg2/Circuit/StarkSoundReduction.lean`, `#assert_axioms`-clean), with `DeployedTraceExtract` derived from the proven FRI keystone (`deployedTraceExtract_of_embedding`) — the assumption floor is the named proximity core, not an opaque soundness assumption.
 
 ## Design laws
 
@@ -132,6 +132,8 @@ Difficulty: high. Signature/VRF verification and unbiased sampling can dominate 
 
 ### Recommended construction: delayed beacon plus registered VRF
 
+**Status: built** as `dregg_dice::Hybrid` (`dice/src/lib.rs`) — a genesis-committed LB-VRF key-chain plus a verified schedule-bound beacon with timeout finalization; `DrawStream` provides the domain-separated, unbiased bounded draws.
+
 Use a hybrid, with commit-reveal only as an offline fallback:
 
 1. The player signs or otherwise authenticates a canonical action commitment that binds the current pre-state and sequence number.
@@ -165,9 +167,9 @@ Closing the execution gap requires two complementary tracks.
 
 ### Track A: deterministic re-execution light client
 
-The first complete verifier should replay the game, not merely inspect hashes.
+**Status: built.** `GameSession::verify_replay` / `verify_ledger_replay` replay the game from genesis rather than merely inspecting hashes; randomness evidence is re-verified per draw. The checklist below is the specification it answers to.
 
-For each receipt, it should:
+For each receipt, the verifier should:
 
 1. Verify the previous hash, sequence, game and ruleset bindings, and attestation policy.
 2. Load the exact canonical ruleset and `.dungeon` content committed by the game.
@@ -264,16 +266,18 @@ Cross-ruleset transfers require an explicit, versioned migration function that p
 
 Expose verification as named tiers rather than one overloaded boolean:
 
-- **Integrity:** receipt hash chain, bindings, and configured attestation policy are valid.
-- **Replay:** integrity plus deterministic re-execution of every transition.
-- **Succinct:** a folded proof verifies for the committed session prefix under named dregg/prover parameters.
-- **Anchored:** succinct or replay verification plus required beacon, persistence-log, and finality checks.
+- **Integrity** (built — `GameSession::verify`): receipt hash chain, bindings, and configured attestation policy are valid.
+- **Replay** (built — `GameSession::verify_replay`; `verify_report` keeps the two claims distinct): integrity plus deterministic re-execution of every transition.
+- **Succinct** (roadmap): a folded proof verifies for the committed session prefix under named dregg/prover parameters.
+- **Anchored** (roadmap): succinct or replay verification plus required beacon, persistence-log, and finality checks.
 
 The UI and API should report the achieved tier, ruleset hash, verifier version, proof parameters, attestation mode, randomness source, and any trusted checkpoint. A fixture attestation must be visibly labeled as such.
 
 ## Phased roadmap
 
 ### Phase 0 — Canonical transition envelope
+
+**Status: built.** Receipts bind `pre_state_root`, `action_commitment`, and the randomness record; the exit criterion below is what `verify_replay` exercises.
 
 - Define canonical bytes for actions, effects, state roots, capabilities, ruleset identity, and randomness context.
 - Extend ledger entries with pre-state root, action commitment, ruleset hash, randomness context, and post-state root.
@@ -284,6 +288,8 @@ Exit criterion: a receipt contains everything an independent implementation need
 
 ### Phase 1 — Replay verifier
 
+**Status: built.** `GameSession::verify_replay()` walks receipts and re-runs `resolve_action` from genesis; chain-only verification survives as the explicitly named integrity tier; the exit criterion is a passing adversarial test (`a_forged_effect_passes_chain_integrity_but_replay_catches_it`). Named seam: sharing the resolver core with the WASM light client and native/WASM differential vectors.
+
 - Extract a deterministic, portable resolver core.
 - Make `GameSession::verify_replay()` walk receipts and re-run `resolve_action`.
 - Share the core with the WASM light client.
@@ -293,6 +299,8 @@ Exit criterion: a receipt contains everything an independent implementation need
 Exit criterion: mutating an effect or producing a rule-invalid but correctly rehashed transition is rejected.
 
 ### Phase 2 — Non-grindable randomness
+
+**Status: built** — the `dice/` crate (`dregg-dice`) implements the recommended hybrid: a genesis-committed post-quantum LB-VRF key-chain (`ServerVrf`) plus a real verified schedule-bound beacon (offline `HashChainBeacon`, production threshold `DrandBeacon` with a pairing check) with timeout finalization, plus `CommitReveal` as the labeled offline fallback. Draw evidence (`RandomnessRecord`: request + evidence) rides the receipt chain and `verify_replay` reconstructs and re-verifies every draw.
 
 - Register a per-session VRF key and bind its epoch into the game identity.
 - Define action finalization and future beacon-round selection.
@@ -313,6 +321,8 @@ Exit criterion: the WASM light client verifies a session prefix proof establishi
 
 ### Phase 4 — Inventory and combat
 
+**Status: engine half built, proof half roadmap.** The resolver carries a combat state machine (initiative, automatic foes, status effects, downed states) and loot randomness bounded to committed tables, all covered by replay verification; the folded proofs do not exist.
+
 - Add item-conservation proofs for `Take` and bounded transformations for `Use`.
 - Introduce the minimal combat state machine.
 - Prove turn legality, random derivation, and bounded damage before adding complex effects.
@@ -320,6 +330,8 @@ Exit criterion: the WASM light client verifies a session prefix proof establishi
 Exit criterion: a complete small encounter is replay-verifiable and fold-verifiable.
 
 ### Phase 5 — Overworld and progression
+
+**Status: overworld first slice built; progression roadmap.** `attested-dm/src/overworld.rs` joins the bundled dungeons into a `Region` of `Location`s with gated travel `Edge`s; a location is credited complete only through `RegionProgress::record_completion`, which re-verifies the finished session (map fingerprint match + `Won` + `verify` + `verify_replay`) before crediting, and `RegionProgress::travel` admits moves only along gate-satisfied edges. This slice is single-player local progress; server-side per-identity persistence, region-level commitments, and reveal proofs are the named extension.
 
 - Add region-rooted overworld content and reveal proofs.
 - Add receipt-sourced XP, level-up actions, and declarative abilities.
@@ -336,31 +348,19 @@ Exit criterion: travel, encounters, rewards, and level-ups compose without narra
 
 Exit criterion: a character can move between sessions with independently checkable provenance and without silent duplication.
 
-## The one-day, highest-leverage first step
+## The replay-first sequencing principle
 
-**Add a canonical `TransitionInput` to each new ledger entry and implement replay verification for `Move` only.**
+The original highest-leverage first step — bind a canonical transition input into each ledger entry and replay-verify it — is executed, and beyond its original scope: `verify_replay` covers every action type, receipts bind `pre_state_root` and `action_commitment`, and the adversarial test that a hash-valid chain with a rule-invalid effect passes integrity but fails replay exists (`a_forged_effect_passes_chain_integrity_but_replay_catches_it`).
 
-`TransitionInput` should bind:
+The principle it encoded still governs the remaining phases:
 
-```text
-ruleset_hash
-pre_state_root
-canonical_typed_action
-capability_commitment
-randomness_context_or_none
-```
+- a verification gap becomes real when it is an executable failing test;
+- receipts must bind the action and pre-state required by every later verifier;
+- integrity and replay stay separate, named tiers;
+- replay vectors are the golden inputs for the first movement circuit;
+- serialization and resolver-purity problems surface before proof engineering multiplies their cost.
 
-Then add `verify_replay_move()` (or an internal equivalent selected by action type) that reconstructs the prior world, runs `resolve_action` for `Move`, and compares the canonical effect and post-state root. Include one adversarial test that constructs a hash-valid chain with an impossible move and proves that integrity verification accepts it while replay verification rejects it.
-
-This is buildable in a day because `Move` is deterministic and avoids the unresolved randomness design. It has unusually high leverage because it:
-
-- turns the honest verification gap into an executable failing test;
-- forces the receipt to bind the action and pre-state required by every later verifier;
-- establishes the separation between integrity and replay tiers;
-- creates golden inputs for the first movement circuit;
-- reveals serialization and resolver-purity problems before proof engineering multiplies their cost.
-
-Do not start with a circuit or beacon integration. First make the rule-correct statement fully replayable and testable. Succinct proof work should compress a transition relation that already has a clear executable meaning.
+Do not start Phase 3 with a circuit generalization or a new binding scheme. Succinct proof work compresses a transition relation that already has a clear executable meaning — which the replay tier now supplies.
 
 ## Security and claim discipline
 

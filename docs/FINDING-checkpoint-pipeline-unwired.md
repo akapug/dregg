@@ -70,12 +70,15 @@ carry the *same* `ledger_state_root`. Therefore:
   the receipt index is a per-node side log (the live 4/1/1 length divergence), so
   it only qc-anchors *one node's own* chain. Skip it.
 - The **ledger-state inclusion** path (`~/dev/DreggNet/docs/FEDERATION-WIDE-READ.md`
-  Option B) is federation-wide and rides the ALREADY-LIVE attested-root quorum. It
-  needs a `GET /api/cell/{id}/proof` endpoint (B-flat: full leaf set + recompute the
-  flat `canonical_ledger_root` — note it is FLAT, not a Merkle tree, so no O(log n)
-  opening today) and a consumer that checks `finalization_quorum ≥ threshold` (or
-  cross-checks f+1 nodes) + no-rollback. ~2-3 days, and **it does NOT depend on
-  wiring this Checkpoint pipeline.**
+  Option B) is federation-wide and rides the ALREADY-LIVE attested-root quorum — and
+  its node half is BUILT: `GET /api/cell/{id}/proof` (`node/src/api.rs:1654` route,
+  handler `:4376`) serves the full leaf set + the flat `canonical_ledger_root`
+  (B-flat — FLAT, not a Merkle tree, so no O(log n) opening) alongside the latest
+  attested root, its `finalization_quorum` count and threshold, an `is_attested`
+  convenience gate, and a `?height=H` no-rollback assertion. What remains is the
+  consumer side: a lease reader that recomputes the root from the served leaves and
+  gates on `quorum ≥ threshold` (or cross-checks f+1 nodes) instead of the
+  operator-pinned anchor. **None of it depends on wiring this Checkpoint pipeline.**
 
 Wire the qc-bearing `Checkpoint` pipeline only if pruning / fast-bootstrap
 independently needs it — not for the lease read. The log-honesty fix above stands

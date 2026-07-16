@@ -9,11 +9,25 @@
 > bound through the shrink's `expose_claim` channel and BOTH shrink + apex VKs
 > pinned in-circuit. Measured settle gas: **626k** (the 384-byte proof blob with
 > commitments + PoK — higher than this doc's ~250–300k plain-Groth16 estimate).
-> NAMED RESIDUALS: the trusted setup is a single-party DEV ceremony (prod needs
-> MPC); the apex-pin constant is fixture-lifted (RecursionVk-derive pending);
-> `bridge/src/ethereum.rs`'s submitter still assumes the 256-byte blob;
-> `outboundMessageRoot` stays operator-attested; FRI low-degree soundness is
-> assumed. Current-state detail: `WRAP-NATIVE-HASH-DECISION.md` §CURRENT STATE.
+> The bridge seam matches: `bridge/src/ethereum.rs` carries the 384-byte
+> 12-word blob (`GROTH16_EVM_PROOF_BYTES = 384`, `:229`) and the 25-lane
+> binding (`EthSettlementProofV2`). NAMED RESIDUALS: the trusted setup is a
+> single-party DEV ceremony (prod needs MPC); the apex-pin constant is
+> derivation-checked but has no keygen-only path — the baked value loads from
+> the derived `fixtures/apex_vk_identity.json`, minted by
+> `derive_deployed_apex_vk_identity_and_check_fixture`
+> (`circuit-prove/tests/apex_shrink_gnark_fixture.rs`) from a fresh fold of
+> the apex circuit and asserted fail-closed against the governance-pinned
+> `DreggApexRecursionVk` anchor on every load
+> (`chain/gnark/settlement_circuit.go`), so the residual is "derived by
+> running the HEAD circuit once", not a pending derive; `outboundMessageRoot`
+> is fail-closed, not operator-attested — `DreggSettlement.settle` reverts on
+> any non-zero value (`MessageRootNotProofBound`) and `isProvenMessageRoot`
+> returns false for every non-proof-bound root, with the remaining residual
+> the proof-bound leg (threading the turn's effects commitment into the apex
+> claim; `chain/contracts/DreggSettlement.sol` header); FRI low-degree
+> soundness is assumed. Current-state
+> detail: `WRAP-NATIVE-HASH-DECISION.md` §CURRENT STATE.
 
 > ⚠ **CORRECTION (2026-07-11) — see `WRAP-NATIVE-HASH-DECISION.md`.** This doc's
 > efficiency premise (proving cost ∝ constraint count ≈ the verifier's field ops,
@@ -32,7 +46,7 @@ is unchanged — settle a dregg whole-history proof on Ethereum by **proof**, on
 arithmetic circuit** that verifies the dregg Plonky3 FRI proof directly, with no
 RISC-V emulation layer. Grounded in the proving stack at HEAD.
 
-> Companion to `docs/deos/NATIVE-PROOF-BRIDGES.md` (the feasibility survey). This
+> Supersedes `docs/SUPERSEDED/NATIVE-PROOF-BRIDGES.md` (the feasibility survey). This
 > doc is the *replacement design + plan*. Where the two disagree on FRI knobs,
 > this one is correct: the root proof is verified at `ir2_leaf_wrap_config`
 > (log_blowup 6 / 19 queries / 16 PoW), not the default `create_recursion_config`.
@@ -83,22 +97,23 @@ The verifier the wrap circuit must reproduce is
 The Rust light client that runs teeth 1–3 today is `lightclient/src/lib.rs`
 (`verify_history`).
 
-## 1. Why the SP1 path is slow (the emulation tax)
+## 1. Why the SP1 path was slow (the emulation tax)
 
-The legacy bridge is `chain/` (standalone workspace). `chain/program/src/main.rs`
-is an **SP1 RISC-V guest** that runs a STARK verifier; `chain/src/prove.rs`
-(`real_wrap`, `:314`) drives `cargo prove` → SP1 → Groth16/BN254. It is slow —
-and stale — for two compounding reasons.
+**The SP1 path is DELETED.** `chain/` is a Foundry + gnark workspace
+(`chain/gnark/` holds the wrap circuit, `chain/contracts/` the Solidity);
+`chain/src/prove.rs` opens by naming the gnark FRI-verifier circuit as the real
+wrap and records the SP1 removal (`chain/src/prove.rs:1–15`). The analysis
+below is the retirement rationale — why a zkVM wrap is the wrong tool for this
+job — kept because the cost model is the design's motivation.
 
-### 1a. It proves the wrong thing (legacy format)
+### 1a. It proved the wrong thing (legacy format)
 
-The guest verifies `GuestStarkProof { trace_commitment, constraint_commitment,
-fri_commitments, fri_final_poly, query_proofs, … }` (`chain/src/prove.rs:18`,
-mirrored in `chain/program/src/main.rs:86`) — a **pre-Plonky3, hand-rolled**
-verifier: blake3 Merkle trees (`hash_node`, `main.rs:191`), a bespoke
-`MerkleStarkAir` 6-column constraint (`main.rs:305–318`), `BLOWUP = 4`. That is
-*not* `WholeChainProof` (`BatchStarkProof<DreggRecursionConfig>`). So even before
-performance, the SP1 path verifies an artifact dregg no longer produces. It is
+The deleted SP1 guest verified `GuestStarkProof { trace_commitment,
+constraint_commitment, fri_commitments, fri_final_poly, query_proofs, … }` — a
+**pre-Plonky3, hand-rolled** verifier: blake3 Merkle trees, a bespoke
+`MerkleStarkAir` 6-column constraint, `BLOWUP = 4`. That is *not*
+`WholeChainProof` (`BatchStarkProof<DreggRecursionConfig>`). So even before
+performance, the SP1 path verified an artifact dregg no longer produces. It was
 legacy twice over.
 
 ### 1b. The emulation tax (the actual slowness)
@@ -122,7 +137,7 @@ The cost model:
 - Then SP1's own STARK→Groth16 *wrap* of that giant trace is itself a multi-stage
   recursive proving step.
 
-Net: the SP1 wrap is a large GPU-class proving job (minutes to tens of minutes),
+Net: the SP1 wrap was a large GPU-class proving job (minutes to tens of minutes),
 dominated by the interpreter overhead — paying to prove "a RISC-V CPU correctly
 ran a verifier" instead of proving "the verifier accepts."
 
@@ -141,11 +156,11 @@ WholeChainProof root (BabyBear batch-STARK, ir2 knobs: blowup 6 / 19 queries)
    │                per-table quotient + logup bus + NPO Poseidon2/expose_claim)
    │     · tooth 3: exposed segment == [genesis, final, num_turns, chain_digest]
    ▼
-Groth16/BN254 proof (≈256 B, 8 field elements)   ← public inputs = the 4 dregg roots
-   │  to_calldata()  (bridge/src/ethereum.rs:159 — REUSED)
+Groth16/BN254 proof (384 B = 12 words: A/B/C + commitments + PoK)
+   │  EthSettlementProofV2::settle_calldata()  (bridge/src/ethereum.rs:1011)
    ▼
-IDreggSettlement.settle(a,b,c, genesisRoot, finalRoot, numTurns, chainDigest)
-   one EIP-197 pairing check, ~250–300k gas      ← chain/contracts/IDreggSettlement.sol (REUSED)
+IDreggSettlement.settle(a,b,c, commitments, commitmentPok, …25-lane claim)
+   EIP-197 pairing checks, measured 626k gas    ← chain/contracts/DreggGroth16Verifier25.sol
 ```
 
 ### 2a. gnark vs Halo2
@@ -161,8 +176,9 @@ IDreggSettlement.settle(a,b,c, genesisRoot, finalRoot, numTurns, chainDigest)
 | Provenance | exactly what SP1/Succinct/RISC0 use for their *own* final wrap — battle-tested for "STARK-verifier-in-SNARK" | used by zkEVMs, heavier to drive for a FRI verifier |
 
 gnark wins on three axes that matter here: it produces the **cheapest on-chain
-proof** (Groth16, 256 B, ~250–300k gas — the envelope `bridge/src/ethereum.rs`
-already encodes), it has the **directest Solidity export**, and it is the
+proof** (plain Groth16 is ~256 B / ~250–300k gas; the shipped circuit's
+commit-based range checker makes it 384 B / measured 626k — still the cheapest
+class), it has the **directest Solidity export**, and it is the
 **same tool the production STARK-wrap ecosystems already use** for this exact
 job, so we inherit vetted Groth16/pairing crypto rather than building bespoke.
 Pick gnark **PLONK** if avoiding a per-circuit Groth16 ceremony is worth ~1.5×
@@ -198,65 +214,68 @@ drop from **minutes-to-tens-of-minutes (GPU-class, SP1)** to **seconds-to-low-mi
 be confirmed by the §4 spike; the constant factor depends on Poseidon2 round
 count and the table set verify_all_tables walks.)
 
-### 2d. What is reused as-is
+### 2d. The bridge seam around the SNARK
 
-Everything *around* the SNARK is already built and untouched by this change:
+Everything *around* the SNARK lives in `bridge/src/ethereum.rs`, matched to the
+gnark circuit's actual output shape:
 
-- `bridge/src/ethereum.rs` — `EthSettlementProof`, `wrap_for_ethereum`
-  (`:287`), the 256-byte Groth16 `(A,B,C)` slicer (`Groth16Calldata`, `:217`),
-  the four-public-input EVM-word encoding (`EthPublicInputs`, `:260`,
-  `to_calldata`/`from_tail`), the `EthBridgeState` continuity+monotone-height
-  settlement state machine (`:373`), and the `IDreggSettlement` ABI string
-  (`solidity_verifier_interface`, `:473`).
-- `chain/contracts/IDreggSettlement.sol` — the deployed `settle(a,b,c, …)`
-  interface and `Settled` event.
+- the **384-byte / 12-word** Groth16 blob (`GROTH16_EVM_PROOF_BYTES = 384`,
+  `:229`; slicer `Groth16Calldata`, `:244`) — the classic 8 A/B/C words **plus**
+  the Pedersen `commitments[2]` and `commitmentPok[2]` that gnark's commit-based
+  range checker adds;
+- the **25-lane** public-input encoding (`EthPublicInputsV2`, `:610`) and
+  settlement artifact (`EthSettlementProofV2`, `:944`, `settle_calldata`,
+  `:1011`), with the matching ABI string (`solidity_verifier_interface_v2`,
+  `:841`);
+- `wrap_for_ethereum` (`:351`) and the `EthBridgeState` continuity +
+  monotone-height settlement state machine (`:432`);
+- `chain/contracts/IDreggSettlement.sol` — the `settle(…)` interface and
+  `Settled` event; the concrete verifier is
+  `chain/contracts/DreggGroth16Verifier25.sol` (gnark-generated).
 
-The replacement is localized: a real gnark prover feeds 256-byte Groth16 bytes
-into `wrap_for_ethereum(SnarkSystem::Groth16Bn254, Some(bytes), …)`; the calldata,
-binding, state machine, and contract are unchanged.
+The SNARK boundary is one seam: gnark Groth16 bytes feed the settlement
+artifact; the calldata, binding, state machine, and contract sit on the bridge
+side of it.
 
-## 3. The plan
+## 3. The plan (milestones 1–4 done; 5 open)
 
-**Keep** the Solidity settlement ABI + the whole `bridge/src/ethereum.rs` seam.
-**Replace** the SP1 guest (`chain/program/`) with a native gnark wrap circuit that
-verifies the *current* fork proof at `ir2_leaf_wrap_config`. **Retire** the
-`GuestStarkProof` legacy format and the `chain/src/{prove,verify}.rs` SP1 driver
-once the gnark path settles a real root.
+The Solidity settlement ABI + the `bridge/src/ethereum.rs` seam are kept. The
+SP1 guest, the `GuestStarkProof` legacy format, and the SP1 driver are
+**deleted**; the native gnark wrap circuit (`chain/gnark/`) verifies the
+*current* fork proof at `ir2_leaf_wrap_config`.
 
 Milestones:
 
-1. **Witness export (Rust → gnark JSON).** A `circuit-prove` exporter that
-   serializes a `BatchStarkProof<DreggRecursionConfig>` root + the trusted
-   `RecursionVk` + the four publics into the flat field-element witness the gnark
-   circuit consumes. (Pure serialization; the proof already exists.)
-2. **gnark circuit, tooth by tooth.** `chain/gnark/` (new Go module, disjoint):
-   - `fri_verifier.go` — the BabyBear/extension/Poseidon2 gadgets + the three
-     teeth as a `frontend.Circuit`. Skeleton shipped alongside this doc.
-   - Validate the **Fiat-Shamir transcript** byte-for-byte against the Rust
-     challenger first (a single Poseidon2 sponge fixture) — a transcript mismatch
-     is a silent soundness break.
-3. **Spike: accept genuine / reject tampered.** Prove the circuit over a real
-   `WholeChainProofBytes` fixture from `lightclient`'s test history; confirm it
-   *accepts* a genuine root and *rejects* a tampered one (flip a query value, a
-   Merkle sibling, the exposed segment). This is the load-bearing unknown (§5).
-4. **Groth16 export + Solidity.** `gnark-solidity-verifier` → a concrete
-   `DreggSettlementVerifier.sol` implementing `IDreggSettlement`; confirm its VK
-   hash matches `EthSettlementProof::verifying_key_hash`.
-5. **End-to-end on a testnet.** gnark Groth16 bytes → `wrap_for_ethereum` →
-   `submit_eth_settlement` → deployed verifier on an EVM testnet → one real
-   `Settled(oldRoot, newRoot, height)` event.
+1. ✅ **Witness export (Rust → gnark).** A real root + `RecursionVk` + publics
+   serialized into the witness the gnark circuit consumes
+   (`chain/gnark/fixtures/`, `apex_shrink_real_fixture_test.go`).
+2. ✅ **gnark circuit, tooth by tooth.** `chain/gnark/` (Go module):
+   BabyBear/extension/Poseidon2 gadgets + the teeth as a `frontend.Circuit`
+   (`fri_verifier.go`, `settlement_circuit.go`), with the **Fiat-Shamir
+   transcript** validated against the Rust challenger via fixtures
+   (`transcript_fixture_test.go`) — a transcript mismatch is a silent soundness
+   break.
+3. ✅ **Accept genuine / reject tampered.** The circuit proves over a real
+   fixture and the differential ref implementations (`*_ref.go` + sweep tests)
+   pin accept/reject against the Rust verifier.
+4. ✅ **Groth16 export + Solidity.** The gnark-generated verifier is
+   `chain/contracts/DreggGroth16Verifier25.sol`; a real proof settles against
+   it in Foundry (`chain/test/DreggSettlementRealProof.t.sol`).
+5. ⬜ **End-to-end on a live network.** gnark Groth16 bytes →
+   `EthSettlementProofV2::settle_calldata` → deployed verifier on a public EVM
+   network → one real `Settled` event. Open: nothing is deployed as a public
+   product yet.
 
-### Honest size estimate
+### Size (as-planned estimate, kept for the record)
 
-The wrap-around (milestones 1, 4, 5) is days — serialization + a tool-generated
-Solidity verifier + an integration over the existing bridge seam. The **circuit
-itself (milestone 2–3) is the bulk: a multi-week reimplementation** of the fork
-batch-STARK verifier as BN254 constraints — BabyBear/ext/Poseidon2 gadgets, the
-FRI low-degree test, per-table quotient + logup, the four NPO tables
-(Poseidon2-w16, Poseidon2-w24, recompose, expose_claim), and a bit-exact
-Fiat-Shamir transcript. Call it **~4–8 weeks** for a correct, tested
-single-root verifier, dominated by the FRI/transcript fidelity work — not a new
-proof system, but a large, soundness-critical circuit.
+The wrap-around (milestones 1, 4, 5) was estimated at days — serialization + a
+tool-generated Solidity verifier + an integration over the existing bridge
+seam. The **circuit itself (milestones 2–3) was the bulk: a multi-week
+reimplementation** of the fork batch-STARK verifier as BN254 constraints —
+BabyBear/ext/Poseidon2 gadgets, the FRI low-degree test, per-table quotient +
+logup, the NPO tables, and a bit-exact Fiat-Shamir transcript — dominated by
+the FRI/transcript fidelity work. Not a new proof system, but a large,
+soundness-critical circuit.
 
 ## 4. The load-bearing unknown
 
@@ -294,9 +313,10 @@ bridge, a tool-generated Solidity verifier). The circuit is the risk because it 
   this circuit was built for," moving the blake3 out of band. A design decision
   to settle in milestone 2.
 - **No oracle to diff against on-chain.** The only ground truth is the Rust
-  verifier; the circuit must be differentially tested against it
-  (`verify_turn_chain_recursive_from_parts`) over genuine and adversarial
-  fixtures until they agree on every accept/reject.
+  verifier; the circuit is differentially tested against it
+  (`verify_turn_chain_recursive_from_parts`) via the `chain/gnark/*_ref.go`
+  reference implementations and sweep tests over genuine and adversarial
+  fixtures — that harness is the standing accept/reject oracle.
 
 If the transcript and table surface are reproduced faithfully, the rest (BabyBear
 reduction, Merkle paths, the segment tooth as a public-input equality) is
@@ -308,7 +328,7 @@ Native proof-carrying onto Midnight remains **foreclosed by Midnight's
 architecture** (no general in-circuit proof-verification primitive; fixed-VK
 per-entry-point Halo2/KZG-BLS12-381). Ship the optimistic + watchtower bridge that
 already exists (`bridge/src/midnight_verified.rs`). See
-`docs/deos/NATIVE-PROOF-BRIDGES.md §2`. This doc changes only the *Ethereum* wrap
+`docs/SUPERSEDED/NATIVE-PROOF-BRIDGES.md §2`. This doc covers only the *Ethereum* wrap
 prover.
 </content>
 </invoke>

@@ -37,8 +37,9 @@ to this repo (file, and `file:line`/theorem where load-bearing). The Zama domain
 4. **The honest caveats.** dregg's Tier-0 no-viewer clearing is **measured-slow** (FHE
    tractable only at N≈32–512 orders/pair at minute cadence); the clearing-level
    reveal-nothing theorem is **conditional on a named PCS-ZK floor** (not a `sorry`, not yet
-   discharged); the value-binding is **still classical DLog** today and the PQ cutover is a
-   named build; and the product surface is **well-posed, not all discharged**. dregg is
+   discharged); the shielded value-binding is PQ (Poseidon2 hash-commitment, the Option-A
+   cutover — DLog retired from the TCB) but its **64-bit multi-limb in-AIR range widening is
+   a named residual**; and the product surface is **well-posed, not all discharged**. dregg is
    building what Zama has shipped.
 5. **So the strategy is: lead with the eclipse (verified + fair + PQ + committee-free +
    dial), close the product gap deliberately.** Confidentiality is the floor; dregg sells
@@ -143,9 +144,10 @@ that is a machine-checked property, not a mempool trick. **This is the thing Zam
 architecture structurally cannot do.**
 
 **Grade.** **PROVEN at model level** (`uniform_price_optimal`, `FhEggClearing` cores,
-kernel-clean with teeth: `noCrossBook_no_crossing`, `leakBatch_refused`). Ledger-realization
-(binding the histogram fold to on-chain fills in-circuit) is the named circuit step, not yet
-discharged.
+kernel-clean with teeth: `noCrossBook_no_crossing`, `leakBatch_refused`), and
+ledger-realization to the kernel executor is proven (`Market/LedgerRealization{,Ext}.lean`:
+cleared cycles — full-fill and partial-fill — lower to `settleRing`/`recKExec`). Binding the
+histogram fold to on-chain fills in-circuit is the named circuit step.
 
 ### (c) Machine-checked + post-quantum vs classical + audited-only
 
@@ -162,21 +164,24 @@ are audited, not just `#assert_axioms`-clean: `CertF.weak_duality` /
 `certifies_epsilon_optimal`, `FhEggClearing.clearedBatch_conserves` /
 `clearedBatch_optimal`, `RevealNothing.reveal_nothing`, all `#assert_all_clean`. The STARK
 soundness floor itself is proven (BCIKS20 list-decoding, deployed FRI ~112.6-bit; memory
-`project-linking-tower-forgery-closure`). (ii) **PQ by construction on the privacy + proof
-surface** — Poseidon2/FRI hashing, statistical-ZK PCS, lattice FHE at Tier 0 — the two
-things regulated institutions with a decade horizon should actually demand.
+`project-linking-tower-forgery-closure`). (ii) **PQ by construction on the privacy + proof +
+value-binding surface** — Poseidon2/FRI hashing, statistical-ZK PCS, Poseidon2
+hash-commitment value-binding, lattice FHE at Tier 0 — the things regulated institutions
+with a decade horizon should actually demand.
 
-**The honest symmetry (no overclaim).** dregg has its *own* PQ hole and this repo names it:
-the shielded **value-binding is today classical discrete-log** (Pedersen/Ristretto + Schnorr
-excess + Bulletproof range), which is Shor-broken — so dregg's *no-mint* soundness is not yet
-PQ either [`PQ-SHIELDED-COMMITMENT.md §1`]. The difference is that dregg has (1) *diagnosed
-it precisely*, (2) *scoped the fix* (Option A: Poseidon2 hash-commitment + fully-in-AIR STARK
-conservation, retiring all DLog), and (3) *proven the pieces it can* (field⇒integer
-conservation no-wrap; Poseidon2 value-binding hiding). Zama's ZKPoK PQ gap and dregg's
-binding PQ gap are *both real*; dregg's is the one with a verified closure lane.
+**The honest asymmetry (no overclaim).** dregg *had* the mirror-image PQ hole here — a
+classical-DLog value-binding (Pedersen/Ristretto + Schnorr excess + Bulletproof range) — and
+closed it: the deployed value-binding is the Poseidon2 hash-commitment under `HashCR`, with
+conservation as a fully-in-AIR STARK field gate, retiring the DLog path from the
+value-binding TCB (the Option-A cutover, [`PQ-SHIELDED-COMMITMENT.md §5`]). The named
+residuals are the aggregation-fold's Option-B lattice-additive carrier, the full 64-bit
+multi-limb in-AIR range, and physical removal of the DLog crates from the dep graph —
+residuals around the binding, not the binding itself. Zama's ZKPoK PQ gap remains open on
+its side.
 
 **Grade.** Verification: **PROVEN** (the cited cores). PQ privacy/proof: **BUILT/PROVEN**.
-PQ value-binding: **FRONTIER** (the Option-A cutover is a named `M`-difficulty build).
+PQ value-binding: **BUILT** (the Option-A cutover is deployed; the 64-bit multi-limb range
+widening and the Option-B aggregation carrier are the named residuals).
 
 ### (d) A dial vs one posture
 
@@ -195,9 +200,14 @@ to promise more.
 market, or individual trade pick the point, with an unchanging can't-be-cheated guarantee
 underneath.
 
-**Grade.** Tier 2 **NOW**; Tier 1 **BUILDING**; Tier 0 **FRONTIER**. `fhIR` and its
-admissibility theorem are a **named research target** (the theorem *shape* is written, not
-discharged) [`FHEGG-PRODUCT-ORDER-FRONTIER.md`].
+**Grade.** Tier 2 **NOW**; Tier 1 **BUILDING**; Tier 0 **FRONTIER**. `fhIR`'s admissibility
+theorem is **PARTIALLY PROVEN**: the ⟸ keystone is discharged in
+`metatheory/Market/FhIRAdmissible.lean` — `compiles_admissible` (`:178`, compiles ⇒ admissible),
+`passes_runnable` (`:123`), monotonicity, and `mostPrivateTier_runnable` (`:201`, the
+compiler-reported most-private tier is genuinely runnable), all `#assert_all_clean` (`:338`).
+The ⟹ direction (completeness / resource-relative maximality, with a concrete counterexample
+witness) and the other five parts of the six-part theorem are the **named research target**
+[`FHEGG-PRODUCT-ORDER-FRONTIER.md`].
 
 ### (e) Verify-not-find (µs solver + STARK) vs FHE-everything (slow)
 
@@ -233,7 +243,7 @@ where dregg is **measured-slow** and honest about it (§6.2).
 | **Trust to keep a trade private** | 9-of-13 KMS honest-majority + Nitro TEEs [KMS docs] | Tier 1: none (hiding PCS); Tier 0: unconditional on committee honesty [`NO-VIEWER §3`] | **dregg decisive** |
 | **Fairness / MEV** | Confidential AMM; encrypted amounts, ordering still exposed [litepaper] | Sealed-batch uniform price; sniping un-representable, PROVEN [`Optimality`, `FhEggClearing`] | **dregg decisive** |
 | **Formal verification** | None; audits only (OpenZeppelin) | Lean cores, `#assert_all_clean`, statements audited [`CertF`,`RevealNothing`,`FhEggClearing`] | **dregg decisive** |
-| **Post-quantum** | FHE/MPC PQ (LWE); **ZKPoK not yet PQ** [litepaper] | Privacy+proof PQ (Poseidon2/FRI/lattice); **binding not yet PQ**, fix scoped [`PQ-SHIELDED-COMMITMENT`] | dregg stronger surface, both have a named gap |
+| **Post-quantum** | FHE/MPC PQ (LWE); **ZKPoK not yet PQ** [litepaper] | Privacy+proof+value-binding PQ (Poseidon2/FRI/lattice; Option-A cutover deployed); named residuals: Option-B aggregation carrier, 64-bit range [`PQ-SHIELDED-COMMITMENT`] | **dregg stronger**; Zama's ZK gap open |
 | **Postures** | One (FHE-everything) | Dial: Dark/Shielded/Open, one verified kernel [`PRIVACY-TIERS §2`] | dregg stronger |
 | **Compute model** | FHE-everything (>20 TPS; 500–1k roadmap) [litepaper] | Verify-not-find (µs solver + linear cert) [`CertF`] | dregg stronger for matching |
 | **Shipped product** | Mainnet, cUSDT, Confidential Earn LIVE [The Block] | Tier-2 ≈ shippable; Tiers 0/1 building | **Zama decisive** |
@@ -313,15 +323,15 @@ allocation-commitment (Tier-1 SetField attestation) is component 5, difficulty `
 ERC-20 in, Send confidentially, Unshield out (an explicit KMS decrypt) [EIP-7984].
 
 **dregg's stronger version.** The shielded pool already hides amounts with **PQ-safe
-privacy** (perfect Pedersen hiding + statistical-ZK STARK path), and settlement is
+privacy** (hiding Poseidon2 value commitments + statistical-ZK STARK path), and settlement is
 *proof-carrying* — a payment carries a machine-checked conservation/no-mint receipt, not
 just an encrypted number a committee could open. And it is **committee-free**: no quorum can
 decrypt a payroll amount.
 
-**Now vs gap.** *Now:* the shielded value pool, hiding commitments, conservation proofs.
-*Gap:* the **Shield/Unshield/Send primitives are not surfaced** as a product (§5.1); and the
-value-binding PQ cutover (`PQ-SHIELDED-COMMITMENT.md` Option A) must land for the *no-mint*
-side to match the *privacy* side on PQ.
+**Now vs gap.** *Now:* the shielded value pool, hiding commitments, in-AIR conservation with
+a PQ (Poseidon2 `HashCR`) value-binding — the *no-mint* side matches the *privacy* side on
+PQ. *Gap:* the **Shield/Unshield/Send primitives are not surfaced** as a product (§5.1); the
+64-bit multi-limb in-AIR range widening is the named no-mint residual.
 
 ### 4.3 Confidential DeFi / trading
 
@@ -334,10 +344,11 @@ certificate (`CertF.lean`) for richer products. This is **the thing Zama structu
 do**: an AMM has intra-block ordering to exploit; a single-price sealed batch does not, and
 the fairness is proven.
 
-**Now vs gap.** *Now:* the verified clearing + certificate cores, kernel-clean. *Gap:*
-ledger-realization of `uniform_price_optimal` (binding the model-level clearing to on-chain
-fills in-circuit); the N-leg apex + partial-fill inequality (`SHIELDED-DREX-ASSURANCE-ROADMAP`
-components 1, 6); and the private-node STARK-proving path productized.
+**Now vs gap.** *Now:* the verified clearing + certificate cores, kernel-clean, and the
+kernel-level ledger realization — full-fill AND partial-fill cycles lower to
+`settleRing`/`recKExec` (`Market/LedgerRealization{,Ext}.lean`). *Gap:* binding the
+model-level clearing to on-chain fills in-circuit; and the private-node STARK-proving path
+productized.
 
 ### 4.4 Confidential token distribution
 
@@ -367,8 +378,8 @@ frontier headline, not the launch vehicle (it is measured-slow).
 Expose **Shield / Unshield / Send** from the existing shielded pool — the exact primitive
 users know from Zama, but committee-free and PQ-privacy. This is a *packaging* task over
 built machinery, not new cryptography. Ship the npm/pip SDK calls (the SDKs exist — memory
-`project-adoption-deployability-epoch`). *Blocking dependency:* land the value-binding PQ
-cutover (Option A) so the no-mint side is PQ too.
+`project-adoption-deployability-epoch`). The value-binding PQ cutover (Option A) is
+deployed, so the no-mint side is already PQ — no cryptographic dependency blocks this phase.
 
 **Phase 2 — Ship the use-case product surface.**
 Confidential Payments (Shield/Send/Unshield) → Confidential Trading (the fhEgg Tier-1
@@ -427,15 +438,21 @@ a `sorry`, not yet a discharged theorem.** Do not read this as "reveal-nothing i
 is proved *conditional on the PCS-ZK floor*, the same shape the linking tower is
 `HashCR`-conditional.
 
-**6.4 dregg has its own PQ hole, named.** The value-binding is **classical DLog today**
-(Pedersen/Ristretto), so *no-mint* soundness is not yet PQ [`PQ-SHIELDED-COMMITMENT.md`]. The
-privacy side is PQ; the binding side is a named `M`-difficulty cutover (Option A). Symmetric
-honesty with Zama's ZKPoK-not-yet-PQ gap: both real, dregg's has a verified closure lane.
+**6.4 dregg's PQ residuals, named.** The value-binding is **Poseidon2 hash-committed**
+(`HashCR`) with fully-in-AIR STARK conservation — the Option-A cutover, deployed — so
+*no-mint* soundness rests on the same PQ floors as the privacy side
+[`PQ-SHIELDED-COMMITMENT.md §5`]. The named residuals: the aggregation-fold's Option-B
+lattice-additive carrier, the full 64-bit multi-limb in-AIR range, and physical DLog-crate
+removal from the dep graph. Zama's ZKPoK PQ gap remains open; dregg's counterpart is closed
+with its residuals named.
 
-**6.5 The products are well-posed, not all discharged.** `fhIR` and its admissibility theorem
-are a **research target** (theorem *shape* written, not proved)
+**6.5 The products are well-posed, not all discharged.** `fhIR`'s admissibility theorem is
+**partially proven** — the ⟸ keystone (`compiles_admissible`) plus `mostPrivateTier_runnable`
+are discharged in `metatheory/Market/FhIRAdmissible.lean`; the ⟹ completeness direction and
+the remaining five parts of the six-part theorem are the **research target**
 [`FHEGG-PRODUCT-ORDER-FRONTIER.md`]; the launchpad is a **design over proved primitives**, not
-a shipped product; ledger-realization of the model-level clearing/optimality proofs is the
+a shipped product; the kernel-level ledger realization is proven
+(`Market/LedgerRealization{,Ext}.lean`) while its in-circuit binding to on-chain fills is the
 named circuit step. The eclipse rests on *cited, proven cores* (`CertF`, `FhEggClearing`, the
 `RevealNothing` tractable core, `Optimality`, `GraduationPool`) plus *honestly-graded
 frontier* around them — not on claiming the frontier is done.
@@ -453,7 +470,7 @@ never dress a frontier as a finished product or a lower rung as a higher one.**
 
 - `docs/deos/DREGGFI-PRIVACY-TIERS.md` — the Dark/Shielded/Open dial over one verified kernel.
 - `docs/deos/FHEGG-KERNEL.md` · `docs/deos/PRIVATE-CONVEX-ENGINE.md` — the aggregation-monoid + Cert-F engine.
-- `docs/deos/FHEGG-PRODUCT-ORDER-FRONTIER.md` — `fhIR`, Price-Cert, the admissibility theorem (research target).
+- `docs/deos/FHEGG-PRODUCT-ORDER-FRONTIER.md` — `fhIR`, Price-Cert, the admissibility theorem (⟸ keystone proven in `metatheory/Market/FhIRAdmissible.lean`; the ⟹ direction the research target).
 - `docs/deos/DREX-NO-VIEWER-SURPASS.md` — the Tier-0 FHE envelope + the measured slow numbers.
 - `docs/deos/PQ-SHIELDED-COMMITMENT.md` — the value-binding PQ diagnosis + Option-A cutover.
 - `docs/deos/SHIELDED-DREX-ASSURANCE-ROADMAP.md` — the six-component Tier-1 build map + the reveal-nothing crux.

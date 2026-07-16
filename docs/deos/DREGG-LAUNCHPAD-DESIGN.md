@@ -211,16 +211,24 @@ three honest grades:
   (`clearing_respects_limits` over `MatchNode`), settles by spending **nullifiers** (`unshieldK`, never
   revealing owner or value), and conservation is checked over the Pedersen commitments alone
   (`shielded_ring_value_conserves_hidden` — homomorphic excess zero, no value revealed). **No party ever
-  holds the plaintext or the ordering power.** *Honest grade — SPEC/MODEL:* rung 3 is a Lean spec with
-  **toy commitment/Merkle stand-ins** (`MemberAtRoot`) and the **ring AIR unbuilt** — the value-commitments-in-AIR
-  weld tying `MatchNode` offer/want to the hidden note is named as a **MEDIUM→RESEARCH AIR build**, and the
-  *shielded-bid launchpad* weld (bidding through the shielded pool) is the named upgrade, **not built**
-  (§5). It is graded exactly as the report grades it — spec/model, the named frontier, not a live claim.
+  holds the plaintext or the ordering power.** *Honest grade — PROVED spec (real crypto) + BUILT
+  note-level AIR:* the rung-3 keystone is proven over the **real primitives** —
+  `shielded_ring_clears_real_crypto` (`Market/ShieldedClearing.lean`) retires the two toy stand-ins
+  with a real two-generator Pedersen (binding = DLog) and a real Poseidon2 tree
+  (`Dregg2.Shielded.RealCrypto`) — and the **deployed Rust ring AIR realizes the two-leg and N-leg
+  note-algebra layer** (`circuit-prove/src/shielded_ring_clearing_air.rs`,
+  `shielded_ring_clearing_nleg_air.rs`), constraining `MatchNode` offer/want to the spent note's
+  asset/value (the `LegFused` fusion). The named remaining edge is the **endpoint-carrying outer
+  descriptor** — the AIRs publish note-level claims only, not the eight-lane kernel endpoints /
+  receipt-log transition (`Market.ProtocolAssurance.ShieldedRingDescriptorRefines`) — and the
+  *shielded-bid launchpad* weld (bidding through the shielded pool) remains the named upgrade,
+  **not built** (§5).
 
 So the story is: **batch uniform-price clearing is the robust anti-snipe lever (PROVED, live in the
 contract, primitive-independent); commit→reveal is the honest MVP privacy floor (PROVED theorems, weak
 primitive, non-reveal-forfeit hardening); shielded/ZK-sealed bids are the strong dregg-native privacy
-upgrade (rung-3 SPEC/MODEL, the research-named frontier).**
+upgrade (rung-3: PROVED spec over real crypto + BUILT note-level ring AIRs; the endpoint-carrying
+descriptor and the launchpad weld are the named remainder, §5).**
 
 ### 2.3 Graduation — into the provably-solvent pool (the bonding curve, done right)
 
@@ -268,14 +276,16 @@ pricing curve above the floor).
   `HidingFriPcs` (statistically-ZK, salted leaves, zero AIR changes) with PI
   `[nullifier, merkle_root, value_binding]`. This makes participation private without a hidden-supply
   door (the *mint* is still the disclosed §2.1 turn; only the *participant identity* is shielded).
-  *(b) Shielded bidding — the rung-3 ZK-sealed-bid clearing (SPEC/MODEL).* The **strong** privacy grade
+  *(b) Shielded bidding — the rung-3 ZK-sealed-bid clearing (PROVED spec + note-level AIR).* The **strong** privacy grade
   from §2.2: `Market/ShieldedClearing.lean` (`shielded_ring_clears`, DrEX rung 3) clears the *raise
   itself* over hidden commitments — single-phase, no reveal round, no committee — and is the dregg-native
-  answer to the research's "ZK-sealed bids" frontier. Both sit **BESIDE** the core today (no
-  leaf/expose/bind for the pool; toy Merkle/commitment stand-ins and an unbuilt ring AIR for the rung-3
-  clearing), so weaving shielded *bidding* into the launchpad effect stream through the side-structure ABI
-  is a **weld** (§5). **Trust grade: BUILT** (the ZK pool, identity privacy) + **SPEC/MODEL** (the rung-3
-  shielded-bid clearing) + **UNBUILT** (the launchpad-effect binding for either).
+  answer to the research's "ZK-sealed bids" frontier — proven over the real primitives
+  (`shielded_ring_clears_real_crypto`), with the two-leg and N-leg ring AIRs built at note level. Both
+  sit **BESIDE** the core today (no leaf/expose/bind for the pool; the endpoint-carrying outer
+  descriptor for the rung-3 clearing is named, not built), so weaving shielded *bidding* into the
+  launchpad effect stream through the side-structure ABI is a **weld** (§5). **Trust grade: BUILT** (the
+  ZK pool, identity privacy) + **PROVED spec / BUILT note-level AIR** (the rung-3 shielded-bid clearing)
+  + **UNBUILT** (the launchpad-effect binding for either).
 
 ---
 
@@ -288,7 +298,7 @@ layer or in human judgment, and §5 says so plainly.
 
 | Vector (§1.2) | dregg antidote | Rests on (primitive) | Grade |
 |---|---|---|---|
-| **B — Snipe / bundle** | **UNCONSTRUCTABLE (ordering edge), privacy-hardened over the bids.** The robust lever is **batch uniform-price clearing**: one price removes the *value of ordering* — no earliest block to win, no time-priority — so the sniper edge dies *regardless of the privacy layer* (`uniform_price_no_arbitrage`). Over the bids, a privacy layer denies the sniper the *content* to react to: the **MVP floor** is sealed commit→reveal (`uncommitted_cannot_win`, but a weak primitive with named limits — §2.2), and the **strong** upgrade is shielded/ZK-sealed bids (rung-3, SPEC/MODEL). | DrEX `uniform_price_no_arbitrage` (`Optimality.lean:130`) **[lever]**; `SealedAuction.uncommitted_cannot_win` (`:415`), `reveal_binds_committed` (`:248`) **[MVP floor]**; `Market/ShieldedClearing.shielded_ring_clears` **[strong, spec/model]** | **PROVED** (batch lever + commit-reveal floor) / **SPEC** (shielded upgrade) |
+| **B — Snipe / bundle** | **UNCONSTRUCTABLE (ordering edge), privacy-hardened over the bids.** The robust lever is **batch uniform-price clearing**: one price removes the *value of ordering* — no earliest block to win, no time-priority — so the sniper edge dies *regardless of the privacy layer* (`uniform_price_no_arbitrage`). Over the bids, a privacy layer denies the sniper the *content* to react to: the **MVP floor** is sealed commit→reveal (`uncommitted_cannot_win`, but a weak primitive with named limits — §2.2), and the **strong** upgrade is shielded/ZK-sealed bids (rung-3: proved spec + note-level AIR, §2.2). | DrEX `uniform_price_no_arbitrage` (`Optimality.lean:130`) **[lever]**; `SealedAuction.uncommitted_cannot_win` (`:415`), `reveal_binds_committed` (`:248`) **[MVP floor]**; `Market/ShieldedClearing.shielded_ring_clears{,_real_crypto}` **[strong: proved spec + note-level AIR]** | **PROVED** (batch lever + commit-reveal floor) / **PROVED-spec + BUILT-AIR** (shielded upgrade; endpoint descriptor named) |
 | **C — Insider / hidden allocation** | **UNCONSTRUCTABLE (supply half).** No mint enters circulation except the disclosed, issuer-authorized creation turn — `execMintA_iff_spec`; no undisclosed supply door exists. No extra allocation can be inserted into the cleared raise book — `no_insert`. **(Buying half → bond, see F/D.)** | `KeystoneAuditSupply.execMintA_iff_spec_satisfiable` (`:83`), `requires_live_issuer` (`:105`); `Market/Aggregation.no_insert` | **PROVED** (that *hidden* supply is impossible); the creator openly buying at the same uniform price as everyone is **not** an edge (uniform price) — undisclosed pre-buy is bonded (§4) |
 | **A — Dev-rug (LP drain / mint-drain)** | **UNCONSTRUCTABLE (two doors) + BONDED (schedule).** Graduated LP is pool-owned and `pool_solvent_forever` — no creator LP-withdrawal door. Mint-authority use after creation is an *authorized recorded turn* (`execMintA_iff_spec`), so a post-launch mint is publicly visible and a **conduct-bond slashing predicate** (§4). Dumping beyond the disclosed vesting schedule is the primary **bond predicate**. | `Market/Liquidity.pool_solvent_forever` (`:145`); `KeystoneAuditSupply`; §4 conduct bond | **PROVED** (no silent LP/mint door) + **BONDED** (schedule-violation dump) |
 | **D — Curve manipulation** | **UNCONSTRUCTABLE (raise) + BONDED (pool).** In the raise there is no curve to manipulate — it is a batch uniform-price clearing (no per-tx price impact to game). In the graduated pool, uniform-price/CoW batching removes intra-batch reorder profit (`no_improving_deviation`); coordinated wash-pumps are a bond predicate + a detection matter (§5). | DrEX `uniform_price_no_arbitrage`, `no_improving_deviation` (`Optimality.lean`); §4 | **PROVED** (raise) + **BONDED/designed** (pool) |
@@ -373,11 +383,14 @@ binds the executor only through a `_refines_` theorem, and that alignment "is st
   build.
 - **The shielded-participation binding (§2.4) + the rung-3 ZK-sealed-bid clearing (§2.2, strong grade)** —
   the ZK pool is BUILT for *identity* privacy but **BESIDE** the core (no leaf/expose/bind,
-  EFFECTVM-SIDESTRUCTURE-ABI census #1); the rung-3 shielded-bid clearing
-  (`Market/ShieldedClearing.shielded_ring_clears`) is a **SPEC/MODEL** with toy Merkle/commitment
-  stand-ins and an **unbuilt ring AIR** (the value-commitments-in-AIR weld is a MEDIUM→RESEARCH build).
-  Weaving shielded *bidding* into the launchpad effect stream is a side-structure-ABI conformance build
-  on top of that AIR — the named strong-privacy upgrade over the commit→reveal MVP floor.
+  EFFECTVM-SIDESTRUCTURE-ABI census #1); the rung-3 shielded-bid clearing is **PROVED over the real
+  primitives** (`shielded_ring_clears_real_crypto` — real two-generator Pedersen + real Poseidon2
+  tree, `Dregg2.Shielded.RealCrypto`) with the **two-leg and N-leg ring AIRs built**
+  (`circuit-prove/src/shielded_ring_clearing{,_nleg}_air.rs`, note-level claims). The named remaining
+  edge is the **endpoint-carrying outer descriptor** (the eight-lane kernel endpoints + receipt-log
+  transition of `ShieldedRingDescriptorRefines`). Weaving shielded *bidding* into the launchpad effect
+  stream is a side-structure-ABI conformance build on top of that — the named strong-privacy upgrade
+  over the commit→reveal MVP floor.
 - **The conduct-bond launch predicates + slash-leg refinement (§4)** — the bond/slash *conservation* is
   PROVED for relay disputes; the *launch* predicates and the `MarketRefinement` slash-leg `_refines_`
   alignment are the open instance (DREX-DESIGN `:219`, DREGGFI-VISION `:86`). This is "design, not new

@@ -62,14 +62,24 @@ Fold the critical resolver invariants **in-circuit** via dregg's `circuit`/`circ
 so a *succinct* proof attests rule-correctness without full replay. Smallest first invariant:
 **inventory conservation** (no item created/destroyed except by an authorized transfer). This is the
 zk frontier — designed (`docs/DESIGN-verifiable-game.md`), not yet implemented. **Honest caveat:**
-dregg's ultimate STARK soundness is an *assumption*, not a discharged proof — so this rung would be
-"verifiable under the deployed prover assumptions," never "trustless from first principles."
+the deployed prover's per-fold FRI soundness is a *discharged proof* at ~112.6 bits — the BCIKS20
+correlated-agreement chain over the deployed rate-1/64 BabyBear code
+(`metatheory/Dregg2/Circuit/BabyBearFriDeployedInstance.lean`,
+`FriCorrelatedAgreementSharp.lean`) — resting on named hypotheses (Poseidon2
+collision-resistance on the floor). So this rung would be "verifiable under a proven,
+named-floor prover," never "trustless from first principles."
 
 ---
 
 ## Standing honest caveats (not swept under "verifiable")
-- The attestation's **authentic** leg is an in-tree fixture — it does *not* prove a real model
-  produced the narration bytes. The *well-formed* leg (a JSON-parse certificate) is genuine.
+- The attestation's **authentic** leg is *policy-graded*, not one thing. The default carrier is an
+  in-tree self-signed fixture — it does *not* prove a real model produced the narration bytes, and a
+  verifier demanding `AuthenticPolicy::RequireMpcTls` (`verify_zkoracle_with_policy`) **refuses** it.
+  `DmAttestationCarrier::attest_narration_live` (behind the `tlsn-live` feature) fuses a genuine
+  MPC-TLS 2PC presentation as the authentic leg, and `deos_hermes::attest::attest_turn_bedrock`
+  (`zk-live`) binds a live Bedrock TLS session to the completion the model actually returned. The
+  *well-formed* leg (a JSON-parse certificate) is genuine on every path; "provably came from a real
+  model" holds only on the Bedrock path.
 - The `/party` collective vote is now **quorum-certified** on the real `collective-choice` engine
   (the same substrate The Commons uses): each ballot is a `WriteOnce` cap-bounded turn on a
   factory-born ballot cell, the tally is `Monotonic`, and a round certifies only once the polis

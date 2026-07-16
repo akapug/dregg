@@ -206,8 +206,8 @@ structure+binding, then all of the above against the **tracked epoch stake
 table**, and returns `ConsensusVerified` only when every check passes.
 `MirrorState::mint_against_lock_proof_consensus` routes such a verified proof
 through the **same** `credit_lock` conservation accounting as the trusted path.
-`verify_lock_proof` / `mint_against_lock_proof` remain as a **structure-only**
-path (no stake table → `StructureOnly`, never `ConsensusVerified`).
+`verify_lock_proof` remains as a **structure-only** path (no stake table →
+`StructureOnly`, never `ConsensusVerified`).
 
 ### The mainnet wire-format adapter — pass 2 (`bridge/src/solana_wire.rs`)
 
@@ -255,9 +255,11 @@ from an irreducible weak-subjectivity anchor.
    its active stake (`activation_epoch ≤ epoch < deactivation_epoch`) to its
    delegated vote account, and each vote account's `VoteState` (decoded with the
    type-only `solana-vote-interface`, all of V1_14_11/V3/V4) yields the
-   authorized voter. The `EpochStakeTable` is now **proven from the bank hash the
-   votes attest**, not supplied as trusted input. A tampered stake/vote account
-   fails inclusion and is refused.
+   authorized voter. Each supplied account is thus **proven against the bank hash
+   the votes attest**, not trusted. Honest scope: this is a per-account inclusion —
+   a **subset** proof. A tampered stake/vote account fails inclusion and is
+   refused, but nothing proves the supplied set is *complete*; see soundness
+   suspect 2 below.
 2. **Authorized-voter binding — REAL (done).** `VerifiedStakeTable::tally_authorized`
    counts a vote only when it is witness-backed (a real vote transaction, pass 2)
    **and** its signer equals the vote account's on-chain `authorized_voter` for
@@ -272,8 +274,10 @@ from an irreducible weak-subjectivity anchor.
    pinned root; `solana_provenance::rotate` then advances the trusted table one
    epoch at a time, admitting each next-epoch table only when it is (a) derived
    from bank state and (b) attested by ≥ 2/3 of the *already-trusted* epoch's
-   stake. Everything after the anchor is verified; a forged rotation (not
-   attested by trusted stake) is refused.
+   stake. A forged rotation (not attested by trusted stake) is refused. Honest
+   scope: the rotation attestation is the *plain* `verify_supermajority` — the
+   `rotate` doc-comment names this — without the authorized-voter binding
+   `tally_authorized` provides; see soundness suspect 1 below.
 4. **PoH anchoring policy — REAL (done).** `solana_consensus::PohAnchorPolicy`
    makes `require_poh` a real policy: a PoH segment must chain from exactly the
    trusted checkpoint blockhash (`anchor_blockhash`) and stay within `max_hashes`
@@ -282,10 +286,14 @@ from an irreducible weak-subjectivity anchor.
    recursive-proof item; this bounds the in-process re-hash to a checkpoint
    window.)
 
-The trustless entry point is `verify_lock_proof_consensus_anchored(proof,
-spl_mint, min, max, anchor, require_poh, poh_policy)` (and
-`MirrorState::mint_against_lock_proof_anchored`): it takes **no trusted stake
-table** — only the anchor + the proof's `StakeProvenance`.
+The trustless verify entry point is `verify_lock_proof_consensus_anchored(proof,
+spl_mint, min, max, anchor, require_poh, poh_policy)`: it takes **no trusted
+stake table** — only the anchor + the proof's `StakeProvenance`. Production
+minting routes an anchored-verified proof through the committed
+`TurnExecutor::bridge_mint_against_lock` (the bridge-ledger path);
+`MirrorState::mint_against_lock_proof_anchored` is a
+`#[cfg(any(test, feature = "test-utils"))]` RAM-path twin that exercises the
+same gate stack in-process, not a production entry.
 
 **⚠ The bare-table entry is NOT a production path (fixed 2026-07-12).** An
 adversarial audit found that shipping `verify_lock_proof_consensus(…,
@@ -326,7 +334,44 @@ window.
   (`decode_stake_history`). So the effective-stake denominator the ≥ 2/3 is checked
   against comes from the same bank hash the votes attest.
 
-### What still remains (honest — the named refinements)
+### Open soundness suspects (on the value path — named, NOT closed)
+
+Three code-visible soundness holes sit on exactly the anchored consensus path.
+They are triage-flagged in the repo record (HORIZONLOG P1, "close value-path
+holes"); each is stated here with its falsifier.
+
+1. **Rotation lacks the authorized-voter binding.**
+   `rotate` (`bridge/src/solana_provenance.rs:702-706`) attests the next
+   epoch's bank state with the *plain* `verify_supermajority` over the trusted
+   table — its own doc-comment says so — counting votes by vote-account key
+   alone, without the `tally_authorized` check that a vote's signer equals the
+   vote account's on-chain authorized voter. The anchored single-epoch verify
+   has the binding; the rotation step does not. A vote forged under a
+   non-authorized key that nonetheless names a trusted vote account is the
+   falsifier to test.
+
+2. **No stake-set completeness floor.**
+   `derive_stake_table` (`bridge/src/solana_provenance.rs:457`) proves each
+   *supplied* stake/vote account into the accounts hash and sums only those —
+   there is no completeness cross-check (e.g. the summed effective stake
+   against a cluster total). At the anchor epoch the pinned `stake_table_root`
+   equality fixes the full table, so the anchor is sound; but through
+   rotation the relayer chooses which stake accounts exist, so *omitting*
+   stake accounts shrinks the denominator and lets a stake minority clear
+   "≥ 2/3" in rotated epochs.
+
+3. **Exact-slot vote ≠ rooted finality.**
+   The verified relation is "≥ 2/3 of effective stake signed a vote whose
+   newest slot/hash is exactly `(slot, bank_hash)`" — the wire parser takes
+   only the newest slot from `Vote`/`TowerSync`
+   (`bridge/src/solana_wire.rs:326`), with no lockout or root history. That is
+   optimistic-confirmation-shaped, not rooted finality; yet
+   `ConsensusEvidence.slot` documents itself as "the Solana slot the lock was
+   finalized in" (`bridge/src/solana_trustless.rs:74`). Either the claimed
+   semantics narrow to optimistic confirmation, or the verifier gains a
+   root/lockout check.
+
+### The named refinements (not soundness suspects)
 
 1. **The weak-subjectivity anchor itself** is trusted. This is irreducible: a
    from-genesis-trustless Solana light client would replay all history. Every
@@ -359,22 +404,23 @@ window.
    Ed25519 batch + accounts-hash folds + the curve) — a soundness-neutral
    optimization, not a trust change.
 
-**Honest status:** the bridge is now **trustless modulo the weak-subjectivity
-anchor** (plus the named stake-timing / lock-layout / bank-hash-version
-refinements above, none of which is a consensus-soundness hole). For a lock whose
-votes are real signed vote transactions, whose accounts inclusion uses the real
-16-ary format, and whose `StakeProvenance` derives the stake table + authorized
-voters from bank state anchored at a `WeakSubjectivityAnchor`,
+**Honest status:** for a lock whose votes are real signed vote transactions,
+whose accounts inclusion uses the real 16-ary format, and whose
+`StakeProvenance` derives the stake table + authorized voters from bank state
+anchored at a `WeakSubjectivityAnchor`,
 `verify_lock_proof_consensus_anchored` verifies — with **no trusted stake-table
-input** — a ≥ 2/3 **effective-stake** (warmup/cooldown curve) Ed25519 attestation
-by the on-chain authorized voters over a stake distribution proven from the voted
-bank hash (the `StakeHistory` sysvar included too), binds the lock record to that
-bank hash, and (when required) checks PoH against a bounded-anchor policy. The
-watchtower interim remains a cheap complementary hardening for the trusted path.
+input** — a ≥ 2/3 **effective-stake** (warmup/cooldown curve) Ed25519
+attestation by the on-chain authorized voters over a stake distribution proven
+from the voted bank hash (the `StakeHistory` sysvar included), binds the lock
+record to that bank hash, and (when required) checks PoH against a
+bounded-anchor policy. The watchtower interim remains a cheap complementary
+hardening for the trusted path.
 
-The honest distance to a fully-**COMPLETE** trustless Solana bridge is now a
-single optimization, not a soundness item: the **Option-B succinct wrapper** (the
-relayer consensus AIR that turns the `O(votes)` on-dregg verify into an `O(1)`
-succinct check) — designed with its first slice shipped
-(`docs/deos/SOLANA-SUCCINCT-WRAPPER.md`); everything that makes the bridge
-*trustless* (modulo the irreducible weak-subjectivity anchor) is in place.
+That is trust-minimized, not COMPLETE. The honest distance to a fully-trustless
+Solana bridge is, first, the **three open soundness suspects above** — the
+rotation authorized-voter binding, the stake-set completeness floor, and the
+exact-slot-vs-rooted-finality semantics, all on the value path — and only then
+the **Option-B succinct wrapper** (the relayer consensus AIR that turns the
+`O(votes)` on-dregg verify into an `O(1)` succinct check; designed, first slice
+in `docs/deos/SOLANA-SUCCINCT-WRAPPER.md`), which is a cost optimization, not a
+soundness item.

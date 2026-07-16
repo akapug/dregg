@@ -23,9 +23,9 @@ turn.* No git. Dregg has, as ember puts it, full Pijul.
   total/commutative/associative/idempotent), `resolution.rs`/`ConflictRegion` (conflicts are
   first-class objects, never silent overwrites), `blame.rs`, `history.rs`. This is a sound-merge VCS,
   not a diff-and-pray one.
-- **History lives IN the cell.** As of 2026-07-07 (`3f754287e`), a document's whole patch/blame chain
-  is committed heap state (`doc_heap.rs` `COLL_HISTORY`): reopen reconstructs history, every tampered
-  history byte is refused, edit ORDER is committed. A repo's log is not a side-file — it is the cell.
+- **History lives IN the cell.** A document's whole patch/blame chain is committed heap state
+  (`doc_heap.rs` `COLL_HISTORY`): reopen reconstructs history, every tampered history byte is
+  refused, edit ORDER is committed. A repo's log is not a side-file — it is the cell.
 - **A git-face already exists over it.** `deos-zed-full/src/cell_git.rs`: *"each save = a verified turn
   = a commit; the dregg-doc patch theory"* — it serves `status`/`blame`/`show`/`load_commit`/`diff`/
   `branches`/`head_sha`/`revparse`/`search_commits`/`file_history` off the patch chain + `History::
@@ -42,14 +42,14 @@ turn.* No git. Dregg has, as ember puts it, full Pijul.
 |---|---|---|
 | repository | a cell (or a path-tree of cells, as `cell_git` maps paths→cells) | substrate built |
 | commit | a receipted verified **turn** (a patch applied, cap-gated) | built (`cell_git`) |
-| history / log | the patch chain in the cell's heap (`COLL_HISTORY`) | built (2026-07-07) |
+| history / log | the patch chain in the cell's heap (`COLL_HISTORY`) | built |
 | branch | a fork of the repo cell (the membrane fork) | built (branch-and-stitch) |
 | merge | the **pushout** (`dregg-doc::merge`) — provably sound | built |
 | conflict | a first-class `ConflictRegion` | built |
-| pull request | fork → stitch; the diff IS the two forks' divergence | built (mechanism) |
-| code review | the **stitcher** over the `ConflictRegion` + `resolution` | built (mechanism) |
+| pull request | fork → stitch; the diff IS the two forks' divergence | built (`pull_request.rs`) |
+| code review | the **stitcher** over the `ConflictRegion` + `resolution` | built (`review.rs`) |
 | blame | `dregg-doc::blame` over the patch chain | built |
-| CI check | a verified turn whose receipt gates the merge (a `ProofCondition`) | primitives exist |
+| CI check | a verified turn whose receipt gates the merge (`CheckRequirement::{CommittedReceipt, Condition, CiRun}`) | built (`dregg-doc/src/check.rs` + `ci_verdict.rs`) |
 | access control | capabilities — who may push/merge/review is a cap you hold | built (the whole kernel) |
 | forge host | a **forge-grain** on the community platform | FRONTIER (this doc) |
 
@@ -57,14 +57,17 @@ turn.* No git. Dregg has, as ember puts it, full Pijul.
 
 Everything above is a substrate; the forge is the *product surface* welded onto it:
 
-1. **The repo-as-cell object + a real branch/PR model.** `cell_git` today serves ONE synthetic `main`
-   branch (read-mostly). A forge needs first-class branches (repo-cell forks), a `PullRequest` object
-   (a proposed fork + its target + the stitch state + review threads), and merge-gated-on-review
-   (the target's cap-holder resolves the `ConflictRegion` → a verified merge turn). Branch-and-stitch
-   already gives the fork/diverge/stitch; the PR is the named, reviewable, cap-gated wrapper.
-2. **CI as receipted turns.** A check is a turn whose `ProofCondition`/receipt is the merge gate: the
-   merge cannot land until the check-turns are committed. No trusted CI runner — the proof is the pass.
-   (Composes with the confined-brain grain: a CI job is a confined body driving verified turns.)
+1. **The repo-as-cell object + a real branch/PR model.** The `PullRequest` object is built
+   (`dregg-doc/src/pull_request.rs`: the proposed fork + target + stitch state + review, with
+   `land`/`land_checked` gated on checks and conflict resolution; `review.rs` is the
+   review-as-resolution surface). Remaining frontier: first-class branches over repo-cell forks —
+   `cell_git` serves ONE synthetic `main` branch (read-mostly) — and the live-repo wiring (see
+   Follow-ups).
+2. **CI as receipted turns — built.** `dregg-doc/src/check.rs` + `ci_verdict.rs`: a merge cannot
+   land until every `RequiredCheck` is satisfied by a real cryptographic witness (signed committed
+   receipt, `ProofCondition`, or work-binding `CiRun` verdict). No trusted CI runner — the proof is
+   the pass. Remaining frontier: running the check job as a confined grain body (see the
+   CI-runner-grain slice below).
 3. **The federated forge-grain.** A repo lives on a **grain** (like the homeserver-grain): confined,
    cap-metered, R2. A repo hosted on box A is fork-able by box B over the membrane; a PR crosses the
    same `MembraneEnvelope` a co-driven card does. Federation = your repo is reachable from anyone's
@@ -101,56 +104,70 @@ The map:
 | **PR-as-a-bounty** (post→claim→submit→payout, no-double-pay) | `bounty-board` `BountyTreasury::payout` (conserving) |
 | **CI-as-a-market-job** (post/bid/settle, conservation) | `compute-exchange` |
 | Branch-protection (who changes the required-check set) | `governed-namespace` threshold-committee swap |
-| **Terminal check-receipt the forge gate consumes** | ⚠ **THE ONE GAP — see below** |
+| **Terminal check-receipt the forge gate consumes** | **built — the weld below is LANDED** (`sdk/src/runtime.rs` signed drive path; proven end-to-end by `compartment-workflow-mandate/tests/forge_ci_weld.rs`) |
 
-## THE ONE WELD: the terminal check turn needs an executor-SIGNED receipt
+## THE ONE WELD: the executor-SIGNED terminal check receipt — LANDED (Route ii)
 
-Every drive path in the grain family (`agent-platform::drive*`, `grain-turn`, `node.land`) mints
-`Finality::Final` but **`executor_signature == None`** — because `sdk/src/runtime.rs:78` builds the
-`TurnExecutor` with no signing key and NOTHING in the family calls `set_executor_signing_key`. The
-forge gate `RequiredCheck::CommittedReceipt` (`dregg-doc/check.rs:211-230`) refuses an unsigned receipt
-fail-closed (`CheckRefusal::Unsigned`) and Ed25519-verifies over `canonical_executor_signed_message`.
-The ONLY existing producer of a gate-valid receipt is `dregg-doc::ExecutorDrivenDoc` (`executor_drive.rs:182`
-sets the key, `:466` Final). So the weld is exactly one signature domain. Two routes:
+The forge gate `CheckRequirement::CommittedReceipt` (`dregg-doc/src/check.rs:126`) refuses an
+unsigned receipt fail-closed (`CheckRefusal::Unsigned`) and Ed25519-verifies over
+`canonical_executor_signed_message`. The weld is exactly one signature domain, and both signer
+routes exist in-tree:
 
-- **Route (i) — the forge's own executor signs the terminal check turn (RECOMMENDED first slice).** The
-  runner drives the CI workflow through the grain path (metered, R2 — intermediate steps need no
-  signature), and the TERMINAL "checks passed" turn is committed through the forge-grain's
-  `ExecutorDrivenDoc` (signed), producing the receipt `RequiredCheck::satisfied_by` accepts. This is
-  EXACTLY what `check.rs:40-43` already envisions ("the check job as a confined grain whose only egress
-  is committing the check-turn receipt"). It does NOT change any grain host's security surface — the
-  forge-grain's executor key is the trust anchor, pinned in `trusted_executor_keys`.
-- **Route (ii) — sign the whole grain drive path — CHOSEN (ember, 2026-07-08).** The grain HOST is the
-  thing doing the executing, so it is the natural signer. Teach the grain executor construction
-  (`sdk/src/runtime.rs:78` `executor_with_real_verifiers` → `AgentRuntime`) to install the host's
-  `executor_signing_key` (the surface exists: `turn/src/executor/mod.rs:1196` `with_executor_signing_key`),
-  threaded from `agent-platform` (the host holds the seed); expose the host's executor pubkey so the forge
-  pins it in `trusted_executor_keys`. Then EVERY grain turn is `Final` + SIGNED → forge-admissible, and a
-  CWM CI charter's terminal `advance_step` receipt directly satisfies `RequiredCheck::CommittedReceipt`
-  (no bridging check-commit). The grain host's key becomes a forge trust anchor — accepted, and kept
-  honest by the **audit/slashing horizon**: `agent-orchestration::audit_run` already re-derives every
-  receipt from the committed turns, so a host that signs a false pass is DETECTABLE; for deterministic /
-  high-value workloads, random re-execution audits + a stake-slashing bond on the host make lying
-  unprofitable. (Vision — the audit machinery exists; the slashing bond is a later economic layer.)
+- **Route (i) — the forge's own executor signs the terminal check turn.** A check turn committed
+  through the forge-grain's `ExecutorDrivenDoc` (`dregg-doc/src/executor_drive.rs:182` sets the
+  key; the drive commits `Finality::Final`) produces a receipt `RequiredCheck::satisfied_by`
+  accepts, with the forge-grain's executor key as the trust anchor pinned in
+  `trusted_executor_keys`.
+- **Route (ii) — the grain HOST signs the whole drive path (ember's chosen route; DEPLOYED).**
+  The grain host is the thing doing the executing, so it is the natural signer. The SDK runtime
+  installs the host's executor signing key (`sdk/src/runtime.rs:139`; the builder/setter surface
+  is `with_executor_signing_key` / `set_executor_signing_key` at `sdk/src/runtime.rs:449-460`),
+  and `agent-platform` threads the host seed through it
+  (`agent-platform/src/node.rs:269` `runtime.set_executor_signing_key(seed)`;
+  `AgentPlatform::with_executor_signing_key`, `agent-platform/src/lib.rs:456`). Every grain turn
+  is `Final` + SIGNED → forge-admissible, and a CWM CI charter's terminal `advance_step` receipt
+  directly satisfies `CommittedReceipt` — proven end-to-end (charter-not-terminal refused ·
+  terminal signed receipt lands the PR · wrong host key refused) by
+  `starbridge-apps/compartment-workflow-mandate/tests/forge_ci_weld.rs`. The grain host's key is
+  a forge trust anchor, kept honest by the **audit/slashing horizon**:
+  `agent-orchestration::audit_run` re-derives every receipt from the committed turns, so a host
+  that signs a false pass is DETECTABLE; for deterministic / high-value workloads, random
+  re-execution audits + a stake-slashing bond on the host make lying unprofitable. (Vision — the
+  audit machinery exists; the slashing bond is a later economic layer.)
 
-**The same weld closes the market side:** bind `bounty-board::payout` / `compute-exchange::settle` to
-require the runner's terminal SIGNED receipt (the completion witness) — then *PR merges → the runner's
-signed terminal receipt satisfies BOTH the forge merge gate AND the bounty payout*. One signature, three
-gates lit (CI, bounty, market).
+Beyond authorship, the WORK-binding check exists too: `CheckRequirement::CiRun`
+(`dregg-doc/src/ci_verdict.rs`) is satisfied only by a signed receipt committing a `CiVerdict`
+whose `input_root` equals the PR's real post-merge code and whose `exit_code == 0` — the
+CI-grade gate; `CommittedReceipt` remains for approval-shaped checks.
 
-## The weld gaps, prioritized (the ONLY new code)
+**The same weld closes the market side (open — gap 2 below):** bind `bounty-board::payout` /
+`compute-exchange::settle` to require the runner's terminal SIGNED receipt (the completion witness) —
+then *PR merges → the runner's signed terminal receipt satisfies BOTH the forge merge gate AND the
+bounty payout*. One signature, three gates lit (CI, bounty, market).
 
-1. **Signed terminal receipt** (Route i or ii) — the one hard blocker.
-2. **The forge↔grain binding** — a thin forge-grain that seeds a CWM charter, drives it, signs the
-   terminal turn, and hands its receipt to `PullRequest::present_witness`. (`dregg-doc` has no dep on the
-   grain crates today — a new binding crate or a dregg-doc feature.)
-3. **`planned_advance_turn_hash`** on CWM/colonist_job (the pre-image so `RequiredCheck::committed_receipt`
-   can name the terminal turn before it runs — the analogue of `ExecutorDrivenDoc::planned_turn_hash`).
-4. **Completion-witness precondition** on `bounty-board::payout` / `compute-exchange::settle`.
-5. **2→N orchestration arity** (both orchestration crates hardwire `enum Worker{A,B}`) + a **forge-event→
-   turn settlement reactor** (auto-payout on merge; the `CoordinatorReactor` pattern is the template).
+## The weld gaps, prioritized
 
-## Forge-as-a-grain (the design, grounded in tonight's confinement machinery)
+Landed:
+
+- **Signed terminal receipt** (Route ii, the one hard blocker) — the SDK runtime + agent-platform
+  sign the grain drive path (see THE ONE WELD above).
+- **`planned_advance_turn_hash`** on CWM — `starbridge-apps/compartment-workflow-mandate/src/lib.rs:880`,
+  the pre-image so the forge can name the terminal turn before it runs (the analogue of
+  `ExecutorDrivenDoc::planned_turn_hash`); exercised by `tests/forge_ci_weld.rs`.
+- **The forge↔CWM weld itself** — `forge_ci_weld.rs` seeds a charter, drives it signed, and gates a
+  `PullRequest` on the terminal receipt, end-to-end.
+
+Open (the remaining new code):
+
+1. **A production forge-grain binding** — a thin grain that hosts the weld the test proves (seed a
+   CWM charter, drive it, hand the receipt to `PullRequest::present_witness`) as a leased, confined
+   service rather than an in-process test.
+2. **Completion-witness precondition** on `bounty-board::payout` / `compute-exchange::settle`.
+3. **2→N orchestration arity** (the orchestration crates hardwire two-worker enums:
+   `swarm-orchestration` `Worker`, `agent-orchestration` `WorkerSlot`) + a **forge-event→turn
+   settlement reactor** (auto-payout on merge; the `CoordinatorReactor` pattern is the template).
+
+## Forge-as-a-grain (the design, grounded in the confinement machinery)
 
 The forge-grain is the homeserver-grain's sibling — and it reuses the EXACT machinery the
 homeserver-as-a-grain proved (`docs/deos/GRAIN-HOMESERVER.md`): the firmament heavy-body `Confinement`
@@ -196,23 +213,23 @@ things weld:
    build/test tool under {`write_path` = scratch, `exec_image` = the tool, no net or one proxy door}. The
    runner physically can't do anything but its build + advance the step.
 2. **The terminal step's receipt IS the forge check** — the CI charter's terminal `advance_step` commits
-   an executor-signed receipt; a forge `PullRequest`'s `RequiredCheck::CommittedReceipt{turn_hash}`
-   (`dregg-doc/check.rs`) is bound to exactly that turn. So "merge requires CI green" = the forge merge
-   gate requires the CWM charter to reach its terminal step. No trusted runner: the proof IS the pass,
-   and the workflow-mandate + confinement mean the runner can neither forge the receipt nor escape.
+   an executor-signed receipt; a forge `PullRequest`'s `CheckRequirement::CommittedReceipt{turn_hash}`
+   (`dregg-doc/src/check.rs:126`) is bound to exactly that turn. So "merge requires CI green" = the forge
+   merge gate requires the CWM charter to reach its terminal step. No trusted runner: the proof IS the
+   pass, and the workflow-mandate + confinement mean the runner can neither forge the receipt nor escape.
 3. **Metered** — the run's lease/discharge rides `discharge-gateway` / `agent-platform` (a CI run costs;
    the mandate discharges it), for free.
-The weld keystone (first slice): bind a forge `RequiredCheck` to a CWM charter's terminal receipt and
-prove a PR gates on the charter completing (incomplete → merge refused; terminal receipt → admitted).
-The confined-exec of a real build is the terminal step's work, layered on. All in CLEAN crates
-(compartment-workflow-mandate + dregg-doc + firmament).
+The weld keystone is BUILT: `compartment-workflow-mandate/tests/forge_ci_weld.rs` binds a forge
+`RequiredCheck` to a CWM charter's terminal receipt and proves a PR gates on the charter completing
+(incomplete → merge refused; terminal signed receipt → admitted; wrong host key → refused). The
+confined-exec of a real build as the terminal step's work is the layered-on frontier.
 
 **First buildable slices (safe zones, hbox-gated):** the repo-grain lease (agent-platform over a repo
 cell — `agent-platform` is a root crate, coordinate) · the CI-runner grain (reuse
 `spawn_pd_confined_exec` + `check.rs::CommittedReceipt` — firmament excluded ws + dregg-doc excluded ws,
 CLEAN of the other terminal) · the membrane PR carry (extend `card_carry` — the pattern is proven). The
 CI-runner grain is the highest-leverage next: it's the "no trusted runner" property, and it's a direct
-composition of two things we shipped tonight (the confined exec-spawn + the receipt-gated check).
+composition of two existing pieces (the confined exec-spawn + the receipt-gated check).
 
 ## Follow-ups (post 2026-07-07 adversarial-review + surfaces session)
 
@@ -243,11 +260,11 @@ The forge core is built + hardened + surfaced (card in every glass; `dregg-forge
 - **It's a member of the community, not a separate silo.** The forge-grain and the homeserver-grain
   are the same architecture; your town has both a square and a workshop.
 
-## The first buildable slice (no kernel, no git)
+## The keystone slice (no kernel, no git) — BUILT
 
-Build the **`PullRequest` object + the review-as-stitcher weld** over the existing branch-and-stitch +
-`dregg-doc` merge, entirely in-process, two poles: a PR whose forks merge cleanly lands a verified
-merge turn; a PR with a true conflict surfaces a `ConflictRegion` that the target cap-holder must
-resolve before the merge turn is admitted (an unresolved conflict → merge refused; a non-holder's
-merge → refused). This is the forge's keystone, and like the homeserver body it needs neither the
-localnet nor a kernel change — it welds primitives that already exist.
+The **`PullRequest` object + the review-as-stitcher weld** over branch-and-stitch + the `dregg-doc`
+merge exists in-tree (`dregg-doc/src/pull_request.rs`, `review.rs`), with both poles: a PR whose
+forks merge cleanly lands verified merge turns; a PR with a true conflict is refused
+(`PullRequestError::UnresolvedConflict`) until the target cap-holder resolves it, and a
+non-holder's merge is refused (`CapabilityNotHeld` on the first turn — nothing lands). It welds
+primitives only — no localnet, no kernel change, no git.

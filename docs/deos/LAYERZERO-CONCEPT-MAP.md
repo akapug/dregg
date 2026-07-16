@@ -3,7 +3,7 @@
 The LayerZero V2 protocol (docs.layerzero.network/v2/concepts/protocol/protocol-overview)
 decomposes cross-chain messaging into a small set of primitives. This maps each
 one onto the dregg mechanism that provides the same guarantee, with the honest
-deltas. Grounded at HEAD; companion to `docs/deos/NATIVE-PROOF-BRIDGES.md`.
+deltas. Grounded at HEAD; companion to `docs/deos/ETH-NATIVE-WRAP.md`.
 
 The one-line difference first: **LayerZero transports *attestations about*
 messages (a DVN committee votes that a payload hash is real); dregg transports
@@ -19,13 +19,13 @@ hidden.
 |---|---|---|---|
 | **Endpoint** (immutable per-chain contract; `send()` / `lzReceive()`) | Entry/exit point for omnichain messages | Settlement contracts: `IDreggSettlement.settle(a,b,c, genesisRoot, finalRoot, numTurns, chainDigest)` for whole-history proofs; `DreggVault` / `DreggCredentialGate` for value + credentials | `chain/contracts/` |
 | **Message packet + Message Libraries** | Standardized packet a library encodes per sender config | The wire envelope `WholeChainProofBytes` (publics + VK anchor) and the EVM calldata encoding (`Groth16Calldata`, `EthPublicInputs::to_calldata`) | `circuit-prove/src/ivc_turn_chain.rs`, `bridge/src/ethereum.rs` |
-| **DVNs / Security Stack (X of Y of N)** | A configurable committee delivers payload hashes; threshold ⇒ "verified" | Replaced by the proof itself: `verify_turn_chain_recursive_from_parts` — VK pin + batch-STARK FRI verify + segment tooth. Any full or light client re-checks it; there is no threshold to configure because there is no attestor to trust | `circuit-prove/src/ivc_turn_chain.rs:2845`, `lightclient/src/lib.rs` (`verify_history`) |
+| **DVNs / Security Stack (X of Y of N)** | A configurable committee delivers payload hashes; threshold ⇒ "verified" | Replaced by the proof itself: `verify_turn_chain_recursive_from_parts` — VK pin + batch-STARK FRI verify + segment tooth. Any full or light client re-checks it; there is no threshold to configure because there is no attestor to trust | `circuit-prove/src/ivc_turn_chain.rs:3587`, `lightclient/src/lib.rs` (`verify_history`) |
 | **Executor** (permissioned-by-config caller of `lzReceive`) | Triggers delivery, pays dst gas | Untrusted submitter: anyone may relay settlement calldata; the contract verifies the proof, and `EthBridgeState` enforces continuity + monotone height regardless of who submits | `bridge/src/ethereum.rs:373` |
-| **Nonce / exactly-once channel ordering** | Per-channel lazy-nonce tracking prevents replay/loss | Nullifiers (on-chain `usedNullifiers` in the vault/gate; in-protocol nullifier accumulator) for exactly-once spends; chain continuity (`genesis_root → final_root`, monotone `num_turns`) for ordering | `chain/contracts/DreggVault.sol`, `bridge/src/ethereum.rs`, `docs/NULLIFIER-ACCUMULATOR-UNIFICATION.md` |
-| **VM agnosticity** | Endpoints implemented per VM | The proof's publics are BabyBear (31-bit) limbs — losslessly embeddable in any scalar field (BN254 today; BLS12-381 etc. possible); verification lands wherever a Groth16-class verifier runs | `docs/deos/NATIVE-PROOF-BRIDGES.md` §0 |
+| **Nonce / exactly-once channel ordering** | Per-channel lazy-nonce tracking prevents replay/loss | Nullifiers (on-chain `usedNullifiers` in the vault/gate; in-protocol the deployed sorted-Merkle nullifier accumulator, `noteSpendVmDescriptor2R24`) for exactly-once spends; chain continuity (`genesis_root → final_root`, monotone `num_turns`) for ordering | `chain/contracts/DreggVault.sol`, `bridge/src/ethereum.rs`, `metatheory/Dregg2/Exec/RecordKernel.lean`, `circuit/src/descriptor_ir2.rs` |
+| **VM agnosticity** | Endpoints implemented per VM | The proof's publics are BabyBear (31-bit) limbs — losslessly embeddable in any scalar field (BN254 today; BLS12-381 etc. possible); verification lands wherever a Groth16-class verifier runs | `docs/deos/ETH-NATIVE-WRAP.md` |
 | **Immutability / permissionlessness** | Immutable endpoint contracts, open send/receive | Same property, carried by the verifier contract + the VK pin: a settlement is valid iff the proof verifies against the pinned circuit shape, full stop | `chain/contracts/IDreggSettlement.sol` |
 
-## Where dregg still has a committee (the honest rows)
+## The honest rows — where a committee or a named seam remains
 
 - **Asset mirroring (pump.fun $DREGG → the shielded pool):** the Solana-side
   lock *settle* is observed by an **oracle/validator-set threshold
@@ -34,19 +34,25 @@ hidden.
   anchored (governance-pinned `WeakSubjectivityAnchor`, no caller-supplied
   stake table) — `bridge/` (`TOKEN-MIRROR-BRIDGE.md`,
   `TRUSTLESS-SOLANA-BRIDGE.md` / `SOLANA-SUCCINCT-WRAPPER.md`).
-- **The EVM `outboundMessageRoot` leg:** the settlement contract's message root
-  is **operator-attested**, not proof-bound (the named 26th-public-input
-  obligation) — a real committee-of-one residual on the message leg, distinct
-  from the proof-carried state roots.
+- **The EVM `outboundMessageRoot` leg:** **fail-closed**, not committee-run —
+  `DreggSettlement.settle` reverts on any non-zero `outboundMessageRoot`
+  (`MessageRootNotProofBound`), so no operator can record a message root the
+  proof does not carry. The named seam that remains is proof-binding itself
+  (the 26th-public-input obligation): until the root is a proof lane, the
+  message leg refuses rather than trusts. `chain/contracts/DreggSettlement.sol`.
 - **Midnight:** native proof-carrying is foreclosed by Midnight's architecture
   (fixed-VK per entry point, no general verification primitive), so the bridge
   there is optimistic + a **1-of-N watchtower fraud proof** — strictly stronger
   than X-of-Y (one honest watcher suffices, because the objective evidence is a
   circuit proof). `bridge/src/midnight_verified.rs`.
 - **Inbound (reading other chains):** "be a full client of the other chain" is
-  the design stance; today the inbound teeth are the deposit listener
-  (`chain/src/listener.rs`) trusting RPC confirmations, not a verified foreign
-  light client.
+  the design stance, and the verified cores exist: `eth-lightclient/` verifies
+  the Altair sync-committee BLS12-381 aggregate signature and the SSZ
+  committee-rotation branch (with ETH-Base support in `base.rs` /
+  `base_fault_proof.rs`), and `bridge/src/solana_trustless.rs` carries the
+  consensus-anchored ≥2/3-stake verify path. The named seam: the deposit
+  listener (`chain/src/listener.rs`) still trusts RPC confirmations on its
+  polling path — the verified cores are the teeth it does not yet consult.
 
 ## What LayerZero has that dregg does not
 

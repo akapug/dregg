@@ -12,42 +12,42 @@ Everything below is what is at HEAD, with receipts.
 
 ## 1. `dregg-dsl` — the constraint DSL
 
-`dregg-dsl` is a `proc-macro` crate (`dregg-dsl/Cargo.toml:7`). It exposes three attribute macros that each compile a single constraint function (or circuit module) into multiple target backends.
+`dregg-dsl` is a `proc-macro` crate (`dregg-dsl/Cargo.toml:7`). It exposes two attribute macros that each compile a single constraint function into multiple target backends. There is no circuit-level macro: the crate header records that the former `#[dregg_circuit]`/`emit_stark` surface went with the hand-rolled STARK engine, and native Plonky3 (`gen_plonky3`) is the proving backend (`dregg-dsl/src/lib.rs:13-15`).
 
 ### Macros
 
-- **`#[dregg_caveat]`** (`dregg-dsl/src/lib.rs:68`) — a function body of `require!(expr)` checks, where each `expr` is a binary comparison or a `.contains()` membership check (`lib.rs:50-67`).
-- **`#[dregg_effect]`** (`dregg-dsl/src/lib.rs:127`) — a constraint *with state mutation*: `&mut` params and `*balance -= amount` mutation statements, plus `require!()` and `match` arms (`lib.rs:100-126`). Takes an optional `requires = "Send"` permission attribute parsed by `parse_effect_attr` (`lib.rs:212`).
-- **`#[dregg_circuit]`** (`dregg-dsl/src/lib.rs:198`) — a "Level 2" DSL over a module declaring `WIDTH`/`DEGREE`/`PI_COUNT`, a `col` index module, and `constraints`/`transitions`/`boundaries` functions; emits a struct + `impl StarkAir` (`lib.rs:164-209`).
+- **`#[dregg_caveat]`** (`dregg-dsl/src/lib.rs:80`) — a function body of `require!(expr)` checks, where each `expr` is a binary comparison or a `.contains()` membership check (`lib.rs:60-78`).
+- **`#[dregg_effect]`** (`dregg-dsl/src/lib.rs:142`) — a constraint *with state mutation*: `&mut` params and `*balance -= amount` mutation statements, plus `require!()` and `match` arms (`lib.rs:114-133`). Takes an optional `requires = "Send"` permission attribute parsed by `parse_effect_attr` (`lib.rs:181`).
 
-### The eight backends
+### The seven backends
 
-A `#[dregg_caveat]`/`#[dregg_effect]` macro expands the parsed IR into eight code generators (`lib.rs:1-21`, expansion at `lib.rs:77-94` and `lib.rs:139-158`):
+A `#[dregg_caveat]`/`#[dregg_effect]` macro expands the parsed IR into seven code generators (`lib.rs:1-15`, expansion at `lib.rs:88-108` and `lib.rs:153-175`):
 
 | Backend | Module | Emits |
 |---|---|---|
-| `gen_rust` | `dregg-dsl/src/gen_rust.rs` | `{name}_check(...) -> Result<(), ConstraintError>` evaluator (`gen_rust.rs:49`) — the differential **oracle** |
+| `gen_rust` | `dregg-dsl/src/gen_rust.rs` | `{name}_check(...) -> Result<(), ConstraintError>` evaluator (`gen_rust.rs:28`) — the differential **oracle** |
 | `gen_air` | `gen_air.rs` | `{name}_air_constraints() -> AirConstraintSet` topology descriptor |
 | `gen_datalog` | `gen_datalog.rs` | `{name}_datalog() -> &'static str` Datalog rule |
 | `gen_kimchi` | `gen_kimchi.rs` | `{name}_kimchi() -> KimchiCircuitDescriptor` gate descriptor |
-| `gen_plonky3` | `gen_plonky3.rs` | `{Name}P3Air` native Plonky3 AIR struct |
-| `emit_stark` | `emit_stark_impl.rs` | `{Name}Circuit` compile-time STARK AIR |
+| `gen_plonky3` | `gen_plonky3.rs` | `{Name}P3Air` native Plonky3 AIR struct — the proving backend |
 | `gen_midnight` | `gen_midnight.rs` | `{name}_midnight_zkir() -> &'static str` Midnight ZKIR v3 program |
 | `gen_sp1` | `gen_sp1.rs` | `{name}_sp1_guest() -> &'static str` SP1 guest source |
 
-For an `#[dregg_effect]` an additional `{name}_effect_descriptor() -> EffectDescriptor` is emitted (`gen_rust::generate_effect_descriptor`, `lib.rs:143`).
+For an `#[dregg_effect]` an additional `{name}_effect_descriptor() -> EffectDescriptor` is emitted (`gen_rust::generate_effect_descriptor`, `lib.rs:157`).
 
 ### The IR
 
-All backends consume `ConstraintIr` (`dregg-dsl/src/ir.rs:11`): name, typed `params`, `statements`, an `is_effect` flag, and `required_permission`. The restricted type system is `ParamType` (`ir.rs:86`): `U64`, `ByteArray32`, `ByteMatrix32(N)` (Merkle siblings), `Set`, and `UserDefined(String)` (enums like `Direction`). Statements are `Require` / `Mutate` / `Match` (`ir.rs:100`); mutation ops are `SubAssign`/`AddAssign`/`Assign` (`ir.rs:128`).
+All backends consume `ConstraintIr` (`dregg-dsl/src/ir.rs:11`): name, typed `params`, `statements`, an `is_effect` flag, and `required_permission`. The restricted type system is `ParamType` (`ir.rs:86`): `U64`, `ByteArray32`, `ByteMatrix32(N)` (Merkle siblings), `Set`, and `UserDefined(String)` (enums like `Direction`). Statements are `Require` / `Mutate` / `Match` (`ir.rs:100`); mutation ops are `SubAssign`/`AddAssign`/`Assign` (`MutateOp`, `ir.rs:127`).
 
 Requirement shapes are classified by `RequirementKind` (`ir.rs:146`): `LessEqual`, `GreaterEqual`, `Equal`, `NotEqual`, `Membership` (in-memory set), `BitRange` (`in_range!(value, N)` — `value < 2^N` via bit decomposition), `MerkleAtPosition` (`merkle_member!` — Poseidon2 `hash_2_to_1` inclusion proof, sibling order driven by `position` bits, `ir.rs:165`), and `Poseidon2Hash` (`poseidon2_assert!` — `output == poseidon2_hash([inputs])`, `ir.rs:176`).
 
 ### Cross-validation (the agreement set)
 
-Five backends — `gen_rust`, `gen_datalog`, `gen_air`, `gen_kimchi`, `gen_plonky3` — form the **agreement set** cross-checked in-process by `dregg-dsl-differential` (`dregg-dsl-differential/src/lib.rs:5-13`), with `gen_rust` as the accept/reject oracle. `emit_stark` is exercised separately by `dregg-dsl-tests` prove/verify tests, not the differential harness. `gen_midnight` and `gen_sp1` are STRING emitters validated by **lint only** (their proof systems need external toolchains — a Midnight proof server, the SP1 RISC-V toolchain) and cast no agreement vote (`lib.rs:14-21`, `dregg-dsl-differential/src/lib.rs:15-23`).
+Five backends — `gen_rust`, `gen_datalog`, `gen_air`, `gen_kimchi`, `gen_plonky3` — form the **agreement set** cross-checked in-process by `dregg-dsl-differential` (`dregg-dsl-differential/src/lib.rs:5-11`), with `gen_rust` as the accept/reject oracle. `gen_midnight` and `gen_sp1` are STRING emitters validated by **lint only** (their proof systems need external toolchains — a Midnight proof server, the SP1 RISC-V toolchain) and cast no agreement vote (`lib.rs:17-23`).
 
-Range checks (`<=`, `>=`, `in_range!`) compile to a genuine bit-decomposition in both `emit_stark` and `gen_plonky3`: the difference is bound to `RANGE_CHECK_BITS` binary witness columns, the reconstruction is enforced, and top bits forced to zero, so a field-wrapped negative difference is unsatisfiable (`lib.rs:23-29`). `emit_stark` additionally range-checks inequality *operands* to `< 2^29` (`dregg-dsl-differential/src/lib.rs` backend table).
+**The CURRENT RESOLUTION of the `gen_plonky3` vote is a named seam** (`lib.rs:25-34`): the differential's `plonky3_runner` hand-builds its own `CircuitDescriptor` from the IR and round-trips *that* through prove/verify — it never instantiates the macro-emitted `{Name}P3Air`. So the harness agrees with a re-derived mirror of the predicate, not with the columns the backend actually binds. The `gen_plonky3::tests::falsifier_*` tests check the emitted token structure directly (they are what caught the `find_p3_col` column-0 fallback); driving the emitted `{Name}P3Air` itself through prove/verify remains the open seam.
+
+Range checks (`<=`, `>=`, `in_range!`) compile to a genuine bit-decomposition in `gen_plonky3`: the difference (or value) is bound to `RANGE_CHECK_BITS` binary witness columns, the reconstruction is enforced, and top bits forced to zero, so a field-wrapped negative difference is unsatisfiable; each sub-constraint is asserted independently, with no cancellation (`lib.rs:36-42`).
 
 `dregg-dsl` is a workspace-wide dependency: it is referenced from `Cargo.toml`, `circuit/Cargo.toml`, `cell/Cargo.toml`, `turn/Cargo.toml`, `commit/Cargo.toml`, `bridge/Cargo.toml`, and more.
 
@@ -100,7 +100,7 @@ A starbridge-app is a Rust crate of `FactoryDescriptor`s + signed turn-builder h
 
 Each app crate depends on `dregg-app-framework` (+ `dregg-cell`, `dregg-turn`, `dregg-types`) and exports a `FACTORY_DESCRIPTORS` slice plus turn-builders that take an `AppCipherclerk` and produce signed `Action`s — **no `Authorization::Unchecked`, no `[0u8; 64]` placeholder signatures, no reaching past the framework into `dregg_turn::builder::*`** (`starbridge-apps/nameservice/src/lib.rs:1-7`; `starbridge-apps/README.md` §"How a starbridge-app crate plugs in").
 
-There are 21 directories under `starbridge-apps/` (incl. `shared/`). The README's inventory marks eight apps as "real, fully-implemented" each with a passing test suite (`starbridge-apps/README.md:59`), plus `compute-exchange` and `gallery` documented in follow-on tables. Examples:
+There are 31 directories under `starbridge-apps/` (incl. `shared/`; the roster spans nameservice, escrow-market, sealed-auction, polis, privacy-voting, bounty-board, compute-exchange, gallery, agent-orchestration, branch-stitch-multiplayer, execution-lease, org, vat, billing, guard, domains, edge-mandate, tussle, kvstore, and more). The README's inventory marks eight apps as "real, fully-implemented" each with a passing test suite (`starbridge-apps/README.md:59`), plus `compute-exchange` and `gallery` documented in follow-on tables. Examples:
 
 - **`nameservice`** — register → resolve / set-target → renew → transfer → revoke. "Register a name" is userspace policy, expressed as `Effect::SetField(NAME_HASH_SLOT)` + `Effect::EmitEvent("name-registered")` — no new `Effect::RegisterName` (`nameservice/src/lib.rs:53-77`). Uniqueness is a `WriteOnce` cell-program caveat, not a new effect.
 - **`escrow-market`** — a single **factory-born** cell whose installed `CellProgram` IS the rules, re-checked by the verified executor on every turn (`escrow-market/src/lib.rs:1-30`). Composes slot caveats: a bounded credit line (`FieldLteField`), a `WriteOnce` sealed-delivery digest, a conserving settlement, and a one-way `LISTED→FUNDED→SHIPPED→SETTLED` lifecycle (`StrictMonotonic`).

@@ -23,20 +23,19 @@
 > unreferenced). The sound deployed-default flip stays GENTIAN-blocked and OUT, as
 > scoped.
 >
-> **NOT DONE (decoupled follow-through, precisely scoped — NOT part of the
-> coordinated regen since DECO is NON-VK):** the DECO on-wire *live* path —
-> (1) `generate_rotated_stripe_mint_wide` producer filling the mint row's
-> `param0`/PI-46 with `stripe_payment_hash_felt` + a Stripe-context dispatch that
-> routes a Stripe `Effect::Mint` through the PI-46-pinned `mintVmDescriptor2R24`
-> (plain `Effect::Mint` currently routes to `supplyMintVmDescriptor2R24` with NO
-> pin — `trace_rotated.rs:5030`; and `generate_rotated_effect_vm_trace` applies
-> the pin only for `Effect::BridgeMint` — `:617`); (2) executor felt-attach in
-> `bridge/src/stripe_mirror.rs` (compute + retain `stripe_payment_hash_felt` on
-> `VerifiedPayment`; today only the BLAKE3 `payment_nullifier` exists); (3) the
-> DECO deployed fold tooth (twin of `bridge_binding_deployed_tooth.rs`). These
-> MUST land atomically (executor felt → producer → dispatch → fold-live → real-
-> STARK tooth) or the felt is a dead shadow field; that is why they are held as
-> one cohesive lane rather than shipped half-built.
+> **DECOUPLED FOLLOW-THROUGH — ALL THREE LANDED at HEAD** (scoped NOT-DONE when
+> this plan was written; the lane shipped as the cohesive whole the plan demanded,
+> NON-VK under Reading A): (1) the producer `generate_rotated_stripe_mint_wide`
+> fills the deployed PI-46-pinned mint row's `param0` with the felt payment
+> identity (`circuit/src/effect_vm/trace_rotated.rs:4582` — DECO rides the SAME
+> committed `mintVmDescriptor2R24` row as bridge, distinguished by the
+> witness/leaf, not the descriptor); (2) the executor felt-attach exists —
+> `VerifiedPayment::payment_hash` carries `stripe_payment_hash_felt`
+> (`bridge/src/stripe_mirror.rs:654`; the DECO projection also in
+> `bridge/src/stripe_deco.rs:148`); (3) the DECO deployed fold tooth is
+> `circuit-prove/tests/deco_binding_deployed_tooth.rs` (honest identity folds +
+> verifies; a forged published payment identity ⇒ in-circuit `connect` conflict ⇒
+> UNSAT, through the deployed chain prover's `CarrierWitness::Deco` arm).
 
 
 
@@ -429,16 +428,21 @@ seven-carrier universal-fold bang.
 > `verifyBatch_kernel_bidirectional` now carries the honest flag-day asymmetry: sound=welded, complete=bare).
 > **REGEN done**: all 36 cohort rows moved `trace_width` 1581→1626 + carry the `-gentian-deployed-bare-refuse`
 > suffix + the three refuse floor gates (cols 1593/1609/1625); drift PASS; `V3_STAGED_REGISTRY_FP` re-pinned
-> (f6a676cc…). **ANTI-LAUNDER on the DEPLOYED BYTES**: `bare_floor_refuse_weld::deployed_cohort_bytes_carry_the_refuse`
+> (f6a676cc…). *(Those widths, columns, and the FP are this plan's 07-05 snapshot — later welds widened the
+> cohort further. At HEAD the committed registry's 36 refuse-suffixed cohort rows sit at `trace_width`
+> 1664–1702 (32 of them at 1692) with the cap-open tail at 1976+; the TSV is the source of truth, not this
+> doc's numbers.)* **ANTI-LAUNDER on the DEPLOYED BYTES**: `bare_floor_refuse_weld::deployed_cohort_bytes_carry_the_refuse`
 > parses the committed TSV and asserts all 36 cohort rows carry the weld — 8/8 forge tests + 37/37 floor-weld
 > tooths bite; `cargo check` circuit/circuit-prove/turn/cell/sdk GREEN.
 >
-> **REMAINING (NOT this pass):** (a) **G5 free-param binding** (`period`/`amount`/`clock` on the STAGED
-> discharge/vault SATISFACTION descriptors) — the caveat entry params are ZERO today (producer-free), so
-> the bind needs a manifest-schema + producer + slot-selected gate (`PERIOD_COL == Σ_k bit_k·param_period(k)`,
-> `AMOUNT_COL == Σ_k …`, `CLOCK_COL == pub(CURRENT_BLOCK_HEIGHT=PI 18)`) + a staged-fixture regen — a
-> genuine gadget deserving its own focused pass (NOT half-done here). (b) **STEP 5 deploy** (re-genesis +
-> LC VK redistribution) — ember's fire.
+> **FOLLOW-THROUGH STATUS at HEAD:** (a) the **G5 free-param binding is CLOSED** —
+> `circuit/src/effect_vm/discharge_weld.rs` (header "G5 — the FREE-PARAM BINDING is CLOSED", `:48`) gates
+> `PERIOD_COL`/`AMOUNT_COL` equal to the declared discharge caveat's `params[0]`/`params[1]`
+> (`param_bind_gate`, `:260`, applied at `:314-315`, slot-selected by the floor decode's is-discharge bit)
+> and `CLOCK_COL` equal to the AFTER-block `committed_height` column (published as PI 44); the teeth are
+> `gentian_discharge_vault_prove::{forged_period,forged_amount,fabricated_clock}` (a self-chosen scalar ≠
+> the committed term/clock is UNSAT). Vault (tag 19) has no free scalars, so no analog is needed.
+> (b) **STEP 5 deploy** (re-genesis + LC VK redistribution) — ember's fire, the one not-fired step.
 > This section supersedes §2.1's "sound deployed-flip stays GENTIAN-blocked / OUT" for the SOUNDNESS
 > question: the terminal blocker §2.1 named (in-AIR `B_AUTHORITY_DIGEST`→selector) was already
 > discharged by PATH (b) in `CarrierBoundFloorGadget` (decode from the caveat-manifest columns, no
@@ -500,13 +504,16 @@ seven-carrier universal-fold bang.
 `circuit/descriptors/rotation-v3-staged-registry.tsv`). The refuse block's DECODE-WITNESS aux columns
 (bit/inv/or/floor, ~44 for three disjoint tag blocks) start AT `GRAD_ROT_WIDTH` — i.e. **beyond** every
 member's current width. So welding the refuse into the emit is **NOT** a PI-tail-append / geometry-stable
-regen: it **widens each cohort member's `trace_width`** (1581 → ~1626). This is the honest flag-day cost —
+regen: it **widens each cohort member's `trace_width`** (1581 → ~1626 at this plan's geometry; at HEAD,
+after later welds, the committed cohort rows sit at 1664–1702). This is the honest flag-day cost —
 a per-member geometry widening (the `main` table arity moves), larger than §6's "cheapest class" estimate.
 (The escrow SATISFACTION descriptor already paid an analogous widening — `WELD-STATE.md:221-223` B_SPAN
 51→119; the bare-cohort refuse pays it across the whole cohort.)
 
 ### 9.3 The remaining ordered step (the ember-gated flip — RESUME POINT, grounded 2026-07-05 pt2)
 
+> *(pt2 snapshot — superseded by the pt3 banner at the top of §9: steps 1–4 are DONE and the G5
+> free-param binding is closed at HEAD; only Step 5, the ember-gated deploy, remains.)*
 > **RESUME AT STEP 1.** The soundness enabler (§9.1b) is LANDED + green: the deployed-aligned,
 > column-parametric refuse transformer `gentianDeployedBareRefuse` (in
 > `Dregg2/Deos/BareCohortFloorRefuseDeployed.lean`) is the transformer to map over the cohort — it is
@@ -584,9 +591,11 @@ instant the emit-weld + regen land the refuse into the deployed VKs. Until then 
 are byte-identical (STAGED) — the sound core is proven but not yet flipped, and this doc does not claim
 otherwise.
 
-### 9.5 Noted pre-existing drift (not this session's)
+### 9.5 Noted pre-existing drift (fixed; pin tracks geometry)
 
-`circuit/src/effect_vm/carrier_floor_weld.rs:348` pins `caveat_tag_col(0) == 291`, stale at v13 geometry
-(the deployed `CAVEAT_BASE` moved to 642 → `caveat_tag_col(0) == 643`). That concrete drift-pin test is
-likely RED at HEAD independent of this work; the definitional binding (`caveat_tag_col = CAVEAT_BASE + 1
-+ k·ENTRY_SIZE`) is correct. Fix the pin when touching that module.
+The `carrier_floor_weld.rs` concrete drift-pin was stale at this plan's writing (`291` vs the then-live
+`643`); §9.1b's session fixed it, and the pin has tracked geometry since — at HEAD the arity-3 IMT
+migration puts `B_SPAN = 239`, `CAVEAT_BASE = 666`, and the pin asserts `caveat_tag_col(0) == 667`
+(`circuit/src/effect_vm/carrier_floor_weld.rs:350`, green). The definitional binding
+(`caveat_tag_col = CAVEAT_BASE + 1 + k·ENTRY_SIZE`) is the invariant; the concrete values in §9.1b
+(643/650/657/664, fcDep 1593/…) are this plan's dated snapshot of it.

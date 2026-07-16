@@ -77,30 +77,47 @@ DrEX is a Lean-first proof-carrying exchange: the exchange's *rules* are proven 
 `metatheory/Market/` tower), and each execution *instance* carries a proof it obeyed them (the circuit
 + FFI layer). Two rungs are done and axiom-clean (`#assert_all_clean` over all keystones).
 
-> **Status update — rungs 4/5/6 have since LANDED at model scope.** The forward rung-ladder in §4/§5
+> **Status update — rungs 4/5/6 have since LANDED.** The forward rung-ladder in §4/§5
 > below is the original design framing (written when only rungs 1–2 existed). Since then, rung 5
 > (`Market/Priced.lean` — priced/partial-fill/multi-pair, `priced_clearing_keystone`), rung 4
 > (`Market/Optimality.lean` — uniform-price no-arbitrage / envy-freeness / `uniform_price_optimal`), and
 > rung 6 (`Market/Liquidity.lean` — portfolio `pool_solvent_forever`) are all **PROVED, axiom-clean**.
-> The load-bearing caveat: these three are proved over the **priced `Fill` / reserve model** (real ℚ
-> prices, lifted off `DemoRes`), **NOT** yet ledger-realized through `settleRing`/`recKExec`. Only
-> **rung 1** carries the executor tie (`cycleValid_fulfilled_respects_limits` over `settleRing`, via
-> `RingFFI`). What remains genuinely open above the model rungs: **full k-coalition TTC-core** stability,
-> the **on-ledger delta readback** for the priced layer (the `RecordKernelState.bal`-after-`settleRing`
-> weld rung 5's design named), and the constant-function AMM curve above rung 6's solvency floor.
+> The ledger weld: rung-5 priced conservation and the rung-6 per-fill pool absorption ARE
+> ledger-realized through the real executor — `Market/LedgerRealization.lean`
+> (`fullFill_cycle_ledger_realized`) and `Market/LedgerRealizationExt.lean`
+> (`partialFill_cycle_ledger_realized`, full generality; `pool_fill_ledger_realized`) prove
+> `settleRing`/`recTotalAsset` preservation with each priced fill equal to its kernel settlement leg's
+> amount (`partialFillAt_filledIn_eq_settleLeg`), plus the executor-level overdraw refusal
+> (`recKExecAsset_overdraw_refused`). Rung 1 carries its own executor tie
+> (`cycleValid_fulfilled_respects_limits` over `settleRing`, via `RingFFI`). Still model-only:
+> **rung-4 optimality** and the **rung-6 ∀-schedule solvency**. What remains genuinely open above:
+> **full k-coalition TTC-core** stability and the constant-function AMM curve above rung 6's
+> solvency floor.
 >
 > **Rungs 3/7/8 have since landed as Lean SPEC-level theorems** (grade below the model rungs, stated
 > honestly). Rung 3 (`Market/ShieldedClearing.lean`, `shielded_ring_clears`): the shielded-spend CUSTODY
 > layer — nullifier double-spend, pool-undrainability, value-binding (`Dregg2/Exec/ShieldedValue.lean`,
-> `Dregg2/Shielded/ClaimRefinement.lean`) — is REAL over the `RecordKernelState` kernel; but the
-> ledger-settlement clause (rung-1 `settleRing`) and the shielded-spend clause run over DECOUPLED state
-> (the `MatchNode` offer/want are plain `Nat`s, not fused to the note asset/value — the file header names
-> this "two layers composed, not yet fused"), and the value-commitment (`refVC`, additive `(v+r).toNat`)
-> and Merkle root (`refTreeRoot`, a rolling hash) are declared TOY stand-ins, NOT Pedersen/Poseidon2 —
-> so "matching over hidden commitments" is the SPEC; the in-AIR value binding + the ring-clearing circuit
-> are the open weld. Rung 7 (`Market/CrossMargin.lean`, `crossMargin_position_sound`): the mandate half
+> `Dregg2/Shielded/ClaimRefinement.lean`) — is REAL over the `RecordKernelState` kernel, and the
+> note-algebra circuit is BUILT: the deployed 2-leg and N-leg ring-clearing AIRs
+> (`circuit-prove/src/shielded_ring_clearing_air.rs`, `_nleg_air.rs`) fold real shielded-spend leaves
+> and enforce fusion (`LegFused` — the matcher's `offerAsset`/`offerAmount` ARE the spent note's
+> asset/value, via `Market/LedgerRealizationExt.lean::shielded_ring_fused_clears`), the cycle edges,
+> and no-wrap conservation+range in-AIR. `shielded_ring_clears_real_crypto` retires the earlier toy
+> `refVC`/`refTreeRoot` stand-ins over the real two-generator Pedersen (DLog binding) and the real
+> Poseidon2 tree (`Dregg2/Shielded/RealCrypto.lean`). The Lean-authored endpoint-carrying outer
+> descriptor is BUILT and deployed for the two-leg apex: `Market/ShieldedRingEndpointDescriptor.lean`
+> defines `shieldedRingEndpointDescriptor` ("shielded-ring-clear-2-endpoint-wide") with
+> `RingEndpointAccepted.kernel_endpoints` (kernel pre/post endpoints) and `.receipt_transition`
+> (receipt-log transition) proved, and the deployed Rust twin builds the same-named descriptor
+> publishing/pinning creators, action rows, turn count, pre/post receipt roots and 8-felt pre/post
+> commitments, with forged-endpoint KATs (`forged_post_endpoint_lane_is_unsat`,
+> `forged_receipt_log_endpoint_is_unsat`). The remaining edge is finer: the trace-level refinement
+> `ShieldedRingDescriptorRefines` (`Market/ProtocolAssurance.lean`) is defined but proved nowhere, and
+> the N-leg AIR publishes only note-level claims. Rung 7 (`Market/CrossMargin.lean`, `crossMargin_position_sound`): the mandate half
 > (`Dregg2/Agent/Mandate.lean` — `subtree_budget_le_root`/`children_no_oversubscribe`) is REAL; solvency
-> + fairness are the rung-5/6 models; the caveat-in-circuit admission stays the named open weld. Rung 8
+> + fairness are the rung-5/6 models; in-circuit caveat admission covers the decidable atoms
+> (`caveat_admission_leaf_adapter.rs`), and the un-reified `opaque`/`thirdParty` atoms stay the named
+> open weld. Rung 8
 > (`Market/Lending.lean`, `no_bad_debt`) is a fresh `Position`/`Mark` MODEL whose no-bad-debt core is
 > definitionally true (liquidatability DEFINED as a pure function of the mark — a design encoding, not an
 > executor-welded impossibility); its solvency half reuses rung 6. None of these three carry the executor
@@ -153,10 +170,13 @@ which set the whole rung ladder:
   only; on FFI-free builds the in-process transition stands alone, proved-equivalent but not actually
   invoking Lean.)
 
-**Net:** DrEX today is a **provably-fair, provably-conserving, atomic multilateral clearing over an
-exact two-asset/quantity book, settling through the proved kernel** — the matching *rules* are theorems
-and the *settlement* is a proof-carrying executor turn. What it is **not** yet: priced, partial-fillable,
-private, liquidity-pooled, cross-margined, or cross-chain-atomic. That is the ladder.
+**Net:** DrEX today is a **provably-fair, provably-conserving, atomic multilateral clearing, settling
+through the proved kernel** — the matching *rules* are theorems and the *settlement* is a proof-carrying
+executor turn. The tower above is priced and partial-fillable at kernel-real grade
+(`partialFill_cycle_ledger_realized`), the private-matching AIRs + the two-leg endpoint descriptor are
+built (rung 3), and pool solvency is proved at model scope (rung 6); the deployed solver itself clears
+the exact two-asset book (its honest limits above). Open above: the cross-margin engine, cross-chain
+atomicity, and the model-only residuals the status block names.
 
 ---
 
@@ -178,11 +198,18 @@ proofs close inflation; tested both polarities) rather than over the clear ledge
   decrypt.
 - **Rests on:** the shielded pool (BUILT, tested) + the proved ring (rung 1) + sealed-auction commit→
   reveal (`SealedAuction.lean`, CR over a real Blake3 kernel).
-- **Gap (grade UNBUILT, MEDIUM→RESEARCH):** the shielded pool is *not woven into* `effect_vm`
-  (`shielded/mod.rs:47`) — the weld is a custom private-matching circuit proving "this cleared
-  allocation is the correct aggregation + execution of these *committed* orders under the book rules"
-  without revealing them. Matching over hidden orders *fast enough for a book* is a perf frontier even
-  with the wrap + GPU. This is DrEX rung 3.
+- **Gap (grade BUILT — note-level AIRs + the two-leg endpoint descriptor; trace refinement NAMED):**
+  the private-matching circuit exists — the 2-leg and N-leg ring-clearing AIRs
+  (`circuit-prove/src/shielded_ring_clearing_air.rs`, `_nleg_air.rs`) fold shielded-spend leaves with
+  in-AIR fusion, cycle edges, and no-wrap conservation+range, and the Lean-authored endpoint-carrying
+  outer descriptor (`Market/ShieldedRingEndpointDescriptor.lean`,
+  "shielded-ring-clear-2-endpoint-wide") is deployed for the two-leg apex with
+  `kernel_endpoints`/`receipt_transition` proved and forged-endpoint KATs. The pool
+  deliberately stays its *own* composed proof object beside `effect_vm` (`shielded/mod.rs:47` — a
+  classified seam, not an accident); the named remaining welds are the trace-level refinement
+  `ShieldedRingDescriptorRefines` (defined in `Market/ProtocolAssurance.lean`, proved nowhere) and the
+  N-leg endpoint surface. Matching over hidden orders *fast
+  enough for a book* stays a perf frontier even with the wrap + GPU. This is DrEX rung 3.
 
 ### #2 — Proof-carrying clearing (the matching engine as a theorem + a verified turn)
 The clearing *rules* are theorems (rung 1) and the clearing *instance* settles through the proved kernel
@@ -199,16 +226,19 @@ trusting a solver.
   (rung 4). The `MarketRefinement` slash-leg alignment is the one open refinement instance.
 
 ### #3 — Priced, partial-fillable, multi-pair book (DrEX as a real exchange)
-Lift the clearing from the two-asset exact `DemoRes` book to a **priced, continuous book with partial
-fills across many pairs**. The quantity substrate half-exists: the `MatchNode`/`CycleValid` layer already
-carries `offerAmount`/`wantMin` and settles a leg amount ≤ the offer — what's missing is prices
-(a numéraire / rate), partial fills (fractional leg settlement), and lifting conservation off `DemoRes`.
+The clearing lifted from the two-asset exact `DemoRes` book to a **priced, continuous book with partial
+fills across many pairs**. The `MatchNode`/`CycleValid` layer carries `offerAmount`/`wantMin` and
+settles a leg amount ≤ the offer; `Market/Priced.lean` supplies the prices (numéraire / rate), the
+partial fills (fractional leg settlement), and the conservation lift off `DemoRes`.
 - **Beats:** nothing yet — this is the piece that makes DrEX competitive at all as an exchange rather
   than an exact-swap demo. It is the substrate every richer piece needs.
 - **Rests on:** rung 1 (conservation/fairness shape) + the priced columns already in `MatchNode`.
-- **Gap (grade UNBUILT, NEAR):** the module's conservation + clearability theorems are over `DemoRes`
-  (discrete two-asset, exact-book, all-or-nothing). This is a pure Lean lift — the tower's proven mode.
-  This is DrEX rung 5, and it is **prerequisite substrate for rung 4 and rung 6** (see §4/§5).
+- **Gap (grade PROVED, kernel-real; solver exact-book):** `priced_clearing_keystone`
+  (`Market/Priced.lean`), ledger-realized through the real executor
+  (`Market/LedgerRealization.lean`/`LedgerRealizationExt.lean` — `partialFill_cycle_ledger_realized`,
+  each priced fill equal to its kernel settlement leg's amount via
+  `partialFillAt_filledIn_eq_settleLeg`). The deployed Rust solver itself clears the exact book (§2's
+  honest limits). This is DrEX rung 5 — the substrate rungs 4 and 6 build on (see §4/§5).
 
 ### #4 — Uniform-price / envy-free clearing (the fairness apex)
 All legs of a two-sided batch on one pair clear at **one price** (the Budish FBA discipline), and no
@@ -216,9 +246,10 @@ coalition can re-trade among themselves to strictly improve (Shapley–Scarf TTC
 - **Beats:** matches CoW's UDCP and Penumbra's per-block uniform price — but as a **machine-checked
   theorem** about the deployed clearing, not a solver constraint enforced by simulation.
 - **Rests on:** the priced substrate (#3 / rung 5).
-- **Gap (grade UNBUILT, MEDIUM — and BLOCKED on #3):** today's `clearing_respects_limits` is individual
-  rationality (nobody worse than their declaration), which is strictly weaker than uniform-price
-  optimality or core stability. Cannot be built before the priced substrate exists. This is DrEX rung 4.
+- **Gap (grade PROVED, model-scope; k-coalition core NAMED):** `Market/Optimality.lean` proves
+  `uniform_price_no_arbitrage`, `uniform_price_envy_free`, and `uniform_price_optimal` over the priced
+  substrate (#3). It is model-only (no executor tie), and full k-coalition TTC-core stability stays the
+  named open piece. This is DrEX rung 4.
 
 ### #5 — Liquidity: native multilateral CoWs + an optional proven-solvent pool
 dregg's *native* liquidity mode is **multilateral P2P clearing** (the ring finds Coincidences of Wants
@@ -231,10 +262,13 @@ measure — a proven-solvent AMM-hybrid for residual/one-sided flow.
   *cannot lie about its book*.
 - **Rests on:** the ring (native CoWs, PROVED) + `Verify/StripeReserve.lean` (∀-schedule solvency,
   PROVED single-channel) + the shielded pool's homomorphic conservation.
-- **Gap (grade UNBUILT, MEDIUM):** solvency is proved per-channel over cleartext integers; a pool needs
-  it lifted to a portfolio and (for a private pool) to the **hidden aggregate** — proving `reserve ≥
-  liabilities` over Pedersen sums, a range/comparison argument over commitments. Also: an AMM pricing
-  curve as a `MarketClearing`-preserving family is new. This is DrEX rung 6.
+- **Gap (grade PROVED at model scope; AMM curve + hidden aggregate NAMED):** the portfolio lift is
+  proved — `Market/Liquidity.lean` (`pool_solvent_forever`, with the `overdraw_refused` tooth) — and
+  the per-fill pool absorption is kernel-real (`pool_fill_ledger_realized`,
+  `Market/LedgerRealizationExt.lean`). Named open: the ∀-schedule solvency is model-only, the
+  constant-function AMM curve as a `MarketClearing`-preserving family, and (for a private pool) the
+  **hidden aggregate** — `reserve ≥ liabilities` over Pedersen sums, a range/comparison argument over
+  commitments. This is DrEX rung 6.
 
 ### #6 — Fees / incentives: bonded conduct, holder-compensating slashing
 No trusted fee router: the OCIP discipline — a promoter/market-maker **posts a conduct bond**, slashed
@@ -260,10 +294,13 @@ guarded-holes / partial turns (forwards, conditional orders, structured products
   Hyperliquid/dYdX margin engine offers cryptographically-scoped, provably-non-amplifying delegation.
 - **Rests on:** the mandate (PROVED + materialized) + guarded-holes (largely built) + shielded positions
   (#1).
-- **Gap (grade PROVED for delegation/budget/revocation; UNBUILT for per-trade admission + the
-  derivative financialization):** the one open weld is **per-trade caveat-admission in-circuit** — the
-  aggregate `caveatBit` (`Caveat.lean:59`) still *trusts the executor's decision*; reifying it as a real
-  constraint turns "dregg can express this mandate" into "the venue verifies it as a proof." A cross-
+- **Gap (grade PROVED for delegation/budget/revocation; BUILT for decidable per-trade admission;
+  UNBUILT for the derivative financialization):** per-trade caveat-admission in-circuit is BUILT for
+  the decidable atoms — `circuit-prove/src/caveat_admission_leaf_adapter.rs` is a recursion-foldable
+  leaf that EVALUATES the caveat predicate in the AIR (validUntil, heightLt, budget, asset scope;
+  130-bit bignum borrow-subtraction; an over-authorized trade is UNSAT), with the Lean refinement
+  `Dregg2/Circuit/CaveatAdmissionRefines.lean`. The named residual is the un-reified
+  `opaque`/`thirdParty` atoms, which still trust the executor's decision. A cross-
   margin engine over shielded positions is new build. This is DrEX rung 7.
 
 ### #8 — Cross-chain settlement by proof (settle-anywhere)
@@ -275,7 +312,7 @@ Solana/EVM/Cosmos via light clients + `mpt_holding_leaf`.
   must converge assets onto one chain, and the convergence is the honeypot (Ronin *was* the vault).
   dregg proves a state transition that *references* holdings proofs; nothing converges.
 - **Rests on:** `settleRing_atomic` + the field-parameterized wrap (`dregg_outer_config.rs`, EVM-verified)
-  + the leaf-adapter fold fabric (12 adapters, `circuit-prove/src/*_leaf_adapter.rs`).
+  + the leaf-adapter fold fabric (15 adapters, `circuit-prove/src/*_leaf_adapter.rs`).
 - **Gap (grade BUILT for the EVM rail end-to-end; UNBUILT for cross-chain atomicity):** a *single
   multilateral cycle whose legs settle on different chains atomically* needs a commit/abort protocol
   across verifiers — `settleRing_atomic` is single-machine. And the whole rail rides a **single-party dev
@@ -288,9 +325,9 @@ Every economic fact above is a **recursion leaf**: `note_spend_leaf_adapter`, `m
 shrinks BN254-native end-to-end today. A DrEX **structured product** is one apex proof folding
 {shielded note-spend ⊕ solvency ⊕ cross-chain holding ⊕ `clearing_respects_limits`} as leaves — verified
 once, on any chain, and reusable as a leaf in a fund-of-funds above it. No other DEX stack can compose
-proofs this way; it is the moat behind the moat. (Gap: the *financial* leaves — solvency-as-leaf,
-clearing-as-leaf — are not yet written as adapters; the fold *machinery* works, this is build not
-science.)
+proofs this way; it is the moat behind the moat. (The *financial* leaves exist: solvency-as-leaf is
+`circuit-prove/src/solvency_leaf_adapter.rs`, and ring-clearing folds as a leaf via
+`prove_shielded_ring_clear_leaf` / `prove_shielded_ring_clearing_apex`.)
 
 ---
 
@@ -300,11 +337,11 @@ Rungs 1–2 are PROVED (§2). The frontier:
 
 | Rung | Name | Theorem to prove | Build | State / reach |
 |---|---|---|---|---|
-| **3** | **Private matching weld** (marquee) | *`private_clearing_sound`*: a published proof over shielded notes attests that a hidden allocation is the correct fair, conserving aggregation+clearing of committed orders under the book rules — without revealing owner/value/asset. Reflect rungs 1–2 in-circuit; nullifier layer proves *who* traded. | Weave `shielded/pool.rs` into the ring so clearing runs over shielded notes; a custom private-matching AIR atop the shielded-spend circuit; delete the `trustless.rs` DECRYPT committee. | UNBUILT · MEDIUM→RESEARCH |
+| **3** | **Private matching weld** (marquee) | *`private_clearing_sound`*: a published proof over shielded notes attests that a hidden allocation is the correct fair, conserving aggregation+clearing of committed orders under the book rules — without revealing owner/value/asset. Reflect rungs 1–2 in-circuit; nullifier layer proves *who* traded. | Weave `shielded/pool.rs` into the ring so clearing runs over shielded notes; a custom private-matching AIR atop the shielded-spend circuit; delete the `trustless.rs` DECRYPT committee. | Lean SPEC PROVED (`shielded_ring_clears`, `_real_crypto`) + AIR BUILT at 2-leg/N-leg note level (`shielded_ring_clearing_air.rs`, `_nleg_air.rs`) + endpoint-carrying outer descriptor BUILT/deployed for the 2-leg apex (`Market/ShieldedRingEndpointDescriptor.lean`, forged-endpoint KATs); trace refinement `ShieldedRingDescriptorRefines` + N-leg endpoint surface NAMED; the `trustless.rs` committee path still runs beside it |
 | **4** | **Uniform-price / envy-free** (fairness apex) | *`uniform_price_optimal`*: all legs of a two-sided one-pair batch clear at ONE price; *`ttc_core_stable`*: no coalition re-trades to strictly improve (Shapley–Scarf core over `CycleValid`). | Weld the priced-book layer to the cycle model; a call-auction clearing rule. **Blocked on rung 5's substrate.** | UNBUILT · MEDIUM (blocked) |
 | **5** | **Priced / partial-fill / multi-pair** (the substrate lift) | *`priced_clearing_conserves`* + *`partial_fill_respects_limits`*: lift `clearing_conserves_per_asset` and `clearing_respects_limits` off `DemoRes` to a priced continuous resource with fractional leg settlement across many pairs; on-ledger per-participant deltas read back off `RecordKernelState.bal` after `settleRing`. | Generalize `MarketClearing`/`pool`/`toBal` to a priced/continuous resource theory; connect to the `MatchNode` amount columns; partial-fill leg construction. | UNBUILT · **NEAR** |
 | **6** | **Liquidity / proven-solvent pool** | *`pool_solvent_forever`*: a standing pool as a family of clearings whose `reserve ≥ liabilities` invariant is `MarketClearing`-preserved over every schedule; *`pool_solvent_hidden`*: the same over Pedersen sums (private pool). | Lift `stripe_reserve_solvent_forever` to a portfolio + to the hidden aggregate; an AMM curve as a clearing-preserving measure. | UNBUILT · MEDIUM |
-| **7** | **Cross-margin / derivatives via mandate** | *`caveat_admits_in_circuit`*: the per-trade `caveatBit` is a real circuit constraint (mandate breach unconstructable at the venue); *`margin_position_sound`*: a shielded cross-margin position conserves + respects the mandate. | Reify `Caveat.lean:59` in-circuit; a cross-margin engine over shielded positions + guarded-holes for forwards/conditionals. | UNBUILT · MEDIUM |
+| **7** | **Cross-margin / derivatives via mandate** | *`caveat_admits_in_circuit`*: the per-trade `caveatBit` is a real circuit constraint (mandate breach unconstructable at the venue); *`margin_position_sound`*: a shielded cross-margin position conserves + respects the mandate. | Reify the remaining `opaque`/`thirdParty` caveat atoms in-circuit; a cross-margin engine over shielded positions + guarded-holes for forwards/conditionals. | BUILT (decidable-atom admission leaf: `caveat_admission_leaf_adapter.rs` + `Dregg2/Circuit/CaveatAdmissionRefines.lean`; `opaque`/`thirdParty` atoms NAMED) · UNBUILT (cross-margin engine) · MEDIUM |
 | **8** | **Cross-chain atomic settlement** | *`cross_chain_ring_atomic`*: a multilateral cycle whose legs settle on different chains commits all-or-nothing, each leg checked by that chain's verifier via the wrap. | A commit/abort protocol across verifiers atop the (done) EVM wrap + light clients; production MPC ceremony (replaces the dev Groth16). | BUILT (EVM rail) · UNBUILT (atomicity) · RESEARCH |
 
 ---
@@ -346,34 +383,46 @@ is one proof.
 
 ## 6. The honest edges (load-bearing — named once, plainly)
 
-- **Exact-book / two-asset for the LEDGER-REALIZED rung.** Rung 1's ledger-tied conservation +
+- **Ledger realization is per-rung — say which.** Rung 1's ledger-tied conservation +
   clearability (`clearing_conserves_per_asset`, and `cycleValid_fulfilled_respects_limits` over
   `settleRing`) are over `DemoRes`/`MatchNode` (discrete, two-asset, exact, no prices/partial fills).
-  Priced/optimal clearing IS now proved (rungs 4–5, `Market/{Priced,Optimality}.lean`) — but over the
-  **`Fill` model**, off `DemoRes`, and **not** ledger-realized. So "DrEX clears fairly" is
-  ledger-verified on an exact book (rung 1) and model-verified with prices (rungs 4–5) — say which.
+  Rung-5 priced conservation IS ledger-realized: `Market/LedgerRealization.lean`
+  (`fullFill_cycle_ledger_realized`) and `Market/LedgerRealizationExt.lean`
+  (`partialFill_cycle_ledger_realized`, full generality) prove `settleRing`/`recTotalAsset`
+  preservation with each priced fill equal to its kernel settlement leg's amount
+  (`partialFillAt_filledIn_eq_settleLeg`), plus the executor-level overdraw refusal
+  (`recKExecAsset_overdraw_refused`). Rung-4 optimality (`Market/Optimality.lean`) stays over the
+  **`Fill` model**, off `DemoRes`, not ledger-realized.
 - **The solver is greedy + bounded-DFS.** Fair and conserving are theorems; *welfare-optimal* is not —
   no max-weight-matching guarantee. Uniform-price no-arbitrage / envy-freeness are proved (rung 4,
   `Market/Optimality.lean`) at the single-participant / pairwise core; full **k-coalition TTC-core** is
   the open sub-rung.
-- **The DECRYPT committee is still present.** `trustless.rs` front-running prevention rests on a `t`-of-`n`
-  threshold-decryption committee (a real residual trust) *until* rung 3 deletes it. Today's private
-  batch is committee-private, not proof-private.
+- **The DECRYPT committee is still present on the batch path.** `trustless.rs` front-running
+  prevention rests on a `t`-of-`n` threshold-decryption committee (a real residual trust). The rung-3
+  shielded ring path clears with nothing to decrypt — but it deletes the committee *per-path*, not
+  repo-wide: the committee-private batch path still runs beside the proof-private ring.
 - **STARK predicate verifiers are fail-closed, not fail-verified.** The trustless batch's strict registry
   installs `NotYetWiredVerifier` for most predicate kinds (they *reject*, not verify); only `NonMembership`
   ships a real verifier. Honest: proofs currently fail closed.
-- **Shielding ≠ perfect anonymity.** Timing, anonymity-set size, and edge graph-analysis leak. The shielded
-  pool discharges inflation with per-output Bulletproof range proofs (BUILT, tested both polarities) but
-  the range-rib is still a *named obligation* of the Lean conservation law, not yet a Lean theorem — and
-  the pool stands *beside* `effect_vm`, not inside it (the rung-3 weld).
+- **Shielding ≠ perfect anonymity.** Timing, anonymity-set size, and edge graph-analysis leak. The
+  no-mint range discipline is now in-AIR for the ring: the `VALUE_BITS` bit-decomposition gadget makes
+  a wraparound mint UNSAT in-circuit (`shielded_ring_clearing_air.rs` clause (c.range)); the off-AIR
+  Bulletproof covers only amounts above `2^VALUE_BITS` (named residual). The pool stands *beside*
+  `effect_vm` as its own proof object (a classified seam); the two-leg endpoint-carrying descriptor is
+  deployed (`Market/ShieldedRingEndpointDescriptor.lean`), and the named rung-3 welds are the trace
+  refinement `ShieldedRingDescriptorRefines` and the N-leg endpoint surface.
 - **Solvency: portfolio now proved (model), hidden-aggregate open.** `stripe_reserve_solvent_forever`
   is a real ∀-schedule theorem for one channel; the **portfolio** lift is now ALSO proved —
   `pool_solvent_forever` (`Market/Liquidity.lean`), a ∀-schedule fold over `Pool = AssetId → ℚ`, reusing
-  the single-channel apex verbatim as the backing line. Both are over the reserve **model** (not welded
-  to `settleRing`); hidden-aggregate solvency and the AMM curve remain rung-6+ open.
-- **Mandate admission is expressiveness at the per-trade caveat.** Delegation/budget/revocation are PROVED
-  + materialized into committed effects; only the per-trade `caveatBit` still trusts the executor's
-  decision (rung 7 weld).
+  the single-channel apex verbatim as the backing line. The ∀-schedule solvency theorems are over the
+  reserve **model** (not welded to `settleRing`); the per-fill pool absorption IS ledger-realized
+  (`pool_fill_ledger_realized`, `Market/LedgerRealizationExt.lean`); hidden-aggregate solvency and the
+  AMM curve remain rung-6+ open.
+- **Mandate admission is in-circuit for the decidable caveat atoms.** Delegation/budget/revocation are
+  PROVED + materialized into committed effects; the per-trade caveat predicate is EVALUATED in the AIR
+  for the decidable atoms (`caveat_admission_leaf_adapter.rs` +
+  `Dregg2/Circuit/CaveatAdmissionRefines.lean`); only the un-reified `opaque`/`thirdParty` atoms still
+  trust the executor's decision (the rung-7 residual).
 - **Trusted setup.** On-chain enforcement rides a Groth16 verifier on a **single-party dev ceremony**
   (toxic-waste-known), not mainnet MPC. A prerequisite, not a detail (rung 8).
 - **Cross-chain is EVM-outbound end-to-end (real data), not yet atomic-multilateral.** The wrap is done;
@@ -389,11 +438,13 @@ turns the proven exact-book core into a real exchange.
 ---
 
 ## See also
-`DREX-ROUTING.md` (the cross-chain trade-routing design: the three custody modes, the ring-of-locks that dissolves the LP problem, and the atomicity/liveness escrow that is §6's open rung made concrete) ·
+`DREX-ROUTING.md` (the cross-chain trade-routing design: the three custody modes, the ring-of-locks that dissolves the LP problem, and the timeout/refund escrow — built in `DreggVault.sol` — with cross-vault atomic release as §6's open rung) ·
 `DREGGFI-VISION.md` · `DREGGFI-AMBITION.md` (the substrate frame + the moat) ·
 `metatheory/Market/{Clearing,Fairness,Aggregation}.lean` (rungs 1–2, PROVED; rung 1 ledger-realized) ·
-`metatheory/Market/{Priced,Optimality,Liquidity}.lean` (rungs 5/4/6, PROVED at model scope — priced `Fill`/reserve model, not yet `settleRing`-realized) ·
+`metatheory/Market/{Priced,Optimality,Liquidity}.lean` (rungs 5/4/6, PROVED) ·
+`metatheory/Market/LedgerRealization.lean` + `LedgerRealizationExt.lean` (rung-5 conservation + rung-6 per-fill absorption `settleRing`-realized; rung-4 optimality + ∀-schedule solvency stay model-scope) ·
 `metatheory/Dregg2/Intent/{Kernel,Ring,SealedAuction}.lean` · `metatheory/Dregg2/Agent/Mandate.lean` ·
 `metatheory/Dregg2/Verify/StripeReserve.lean` ·
 `intent/src/{solver,trustless,verified_settle,agent_mandate}.rs` ·
-`circuit-prove/src/shielded/pool.rs` · `circuit-prove/src/*_leaf_adapter.rs` · `chain/gnark/`.
+`circuit-prove/src/shielded/pool.rs` · `circuit-prove/src/shielded_ring_clearing_air.rs` (+ `_nleg_air.rs`) ·
+`circuit-prove/src/*_leaf_adapter.rs` · `chain/gnark/`.

@@ -1,246 +1,222 @@
-# Submit-Path Diagnosis — does an external HTTP turn reach the blocklace DAG + finalize cross-node?
+# Submit Path — how an external HTTP turn reaches the blocklace DAG + finalizes cross-node
 
-READ-ONLY diagnosis. Scope: the ingress → consensus wiring in `node/src/api.rs` and
-`node/src/blocklace_sync.rs`. No build, no code change, no live-mesh change. Grounded
-file:line at HEAD.
+Scope: the ingress → consensus wiring in `node/src/api.rs` and `node/src/blocklace_sync.rs`.
+Grounded file:line at HEAD. This doc began as a READ-ONLY diagnosis that found a design gap
+("no path carries a fresh external client's OWN turn into the DAG"); the fix design in §5
+is implemented, so the doc now teaches the wired path. The traced maps remain the reference
+for how each ingress reaches consensus.
 
-Companion lane: the n=3 **finality-gate** diagnosis (a6137a773) covers turns that are
-ALREADY in the DAG (does `tau` super-ratify + does `execute_finalized_turn` fire). This
-doc covers the step *before* that: does an externally-submitted (HTTP) turn ENTER the DAG
-at all, or does it stop at the entry node's local cipherclerk receipt chain.
+Companion lane: the n=3 **finality-gate** diagnosis covers turns that are ALREADY in the
+DAG (does `tau` super-ratify + does `execute_finalized_turn` fire). This doc covers the
+step *before* that: how an externally-submitted (HTTP) turn ENTERS the DAG.
 
 ---
 
 ## Short answer
 
-An external HTTP turn does **not** reliably reach the blocklace DAG. The
-`blocklace.submit_turn(...)` injection wiring **is present** on every ingress's committed
-branch (it is NOT an un-wired stub), but the turn is stopped **upstream of that call** by
-how the ingress handlers author + gate the turn:
+An external HTTP turn reaches the blocklace DAG through **`POST /turns/submit`** (the
+caller-signed rich-client path), and a **fresh** client's first turn finalizes cross-node:
 
-- **`POST /turn/submit`** (thin client) **structurally cannot** carry a *client's* turn
-  into consensus. The confused-deputy hardening rewrites the request's `agent` to the
-  node's OWN operator cell (`api.rs:2891-2900`). A turn is therefore only authorable when
-  the operator's own default cell exists in the ledger — true on a clean-boot genesis
-  node, **absent on a joiner / relaunched node** (`main.rs:846-856`), where the turn is
-  `Rejected("cell not found")` before the blocklace injection (`api.rs:3147`) is reached.
+- **`POST /turns/submit`** carries the client's own cell, binds the client's receipt to the
+  client's **own** chain (not the node operator's), injects to the blocklace on commit
+  (`api.rs:3729-3737`), and relies on finalization as the sole authoritative application in
+  multi-party mode. `execute_finalized_turn` **provisions the turn's actor cell
+  deterministically** (`provision_signer_actor_cell`, `blocklace_sync.rs:4536`) alongside
+  transfer destinations, so "cell not found" no longer blocks a first turn.
 
-- **`POST /turns/submit`** (caller-signed rich client) *can* carry the client's own cell
-  and *does* inject to the blocklace on commit (`api.rs:3407-3423`), but it (a) requires
-  the client cell to **already exist** in the ledger — no actor provisioning path — and
-  (b) binds + appends the client's receipt onto the **node operator's** cipherclerk chain
-  (`api.rs:3269-3283`, `api.rs:3322`), serializing all clients through one node-owned
-  chain.
+- **`POST /turn/submit`** (thin client) is the **operator-only** path by design: the
+  confused-deputy hardening rewrites the request's `agent` to the node's OWN operator cell
+  (`api.rs:3075-3084`), so it can only ever author operator turns. It is not, and cannot
+  be, a client-turn path while the hardening stands (correctly — see §2a).
 
-- **`POST /api/faucet`** works cross-node **only because** its actor is the genesis-
-  provisioned faucet cell, and it was explicitly engineered for finalization-driven
-  provisioning (`api.rs:6572-6607`).
+- **`POST /api/faucet`** acts as the genesis-provisioned faucet cell and was the original
+  template for finalization-driven provisioning (`api.rs:7045-7074`).
 
-**Verdict: DESIGN GAP.** The "external client turn → DAG → cross-node finality" path is
-incompletely wired, not a single broken wire and not pure client-error. The consensus
-injection exists; the ingress layer never gets a *fresh client's own* turn to it.
+Remaining gate downstream of this doc's scope: staged turns only drain into round blocks
+when rounds can advance (`plan_round_block` supermajority) — the n=3 finality-gate lane's
+territory (§6).
 
 ---
 
 ## 1. The three external ingress endpoints
 
-All three are `protected_routes`, gated by `require_auth` (`api.rs:1318`, layered at
-`api.rs:1800`).
+All three are `protected_routes`, gated by `require_auth` (`api.rs:1397`, layered at
+`api.rs:1884`).
 
 | Endpoint | Handler | Agent the turn acts as |
 |---|---|---|
-| `POST /turn/submit` | `post_submit_turn` (`api.rs:2869`) | node operator's own cell — body `agent` **ignored** |
-| `POST /turns/submit` | `post_submit_signed_turn` (`api.rs:3209`) | the caller's signer default cell (must match) |
-| `POST /api/faucet` | `post_faucet` (`api.rs:6490`) | the genesis faucet cell |
+| `POST /turn/submit` | `post_submit_turn` (`api.rs:3053`) | node operator's own cell — body `agent` **ignored** |
+| `POST /turns/submit` | `post_submit_signed_turn` (`api.rs:3414`) | the caller's signer default cell (must match) |
+| `POST /api/faucet` | `post_faucet` (`api.rs:6961`) | the genesis faucet cell |
 
 ---
 
 ## 2. Traced submit path — where each commits, where each injects to the DAG
 
-### 2a. `POST /turn/submit` (thin HTTP)
+### 2a. `POST /turn/submit` (thin HTTP, operator-only)
 
 ```
-post_submit_turn (api.rs:2869)
-  ├─ rate-limit + unlocked gate                                 (api.rs:2878-2889)
+post_submit_turn (api.rs:3053)
+  ├─ rate-limit + unlocked gate
   ├─ CONFUSED-DEPUTY HARDENING: ignore req.agent, derive the
-  │  operator's own cell from s.cclerk.public_key()             (api.rs:2891-2900)
-  ├─ build CallForest signed by the operator cipherclerk        (api.rs:2918-2949)
-  ├─ execute_via_producer(...) against s.ledger                 (api.rs:3002-3007)
+  │  operator's own cell from s.cclerk.public_key()             (api.rs:3075-3084)
+  ├─ build CallForest signed by the operator cipherclerk
+  ├─ execute_via_producer(...) against s.ledger                 (api.rs:3192)
   └─ match exec_result:
-       Committed  → append_receipt onto s.cclerk (LOCAL chain)  (api.rs:3036)
-                  → gossip_turn                                  (api.rs:3136-3141)
-                  → blocklace.submit_turn(...)  ← DAG injection  (api.rs:3147-3163)
-       Rejected   → return; NO blocklace injection               (api.rs:3174-3187)
+       Committed  → append_receipt onto s.cclerk (LOCAL chain)  (api.rs:3232)
+                  → gossip_turn
+                  → blocklace.submit_turn(...)  ← DAG injection  (api.rs:3352-3360)
+       Rejected   → return; NO blocklace injection
 ```
 
-The DAG injection at `api.rs:3147` is only reached on the `Committed` branch. Because the
-turn acts on the operator's own cell, it commits **only when that cell exists**:
+The DAG injection is only reached on the `Committed` branch. Because the turn acts on the
+operator's own cell, it commits **only when that cell exists**:
 
 - Clean-boot genesis node: the operator agent cell is provisioned at boot
-  (`main.rs:855` — "clean boot → agent cell present with the operator key"). The turn
-  commits locally (`append_receipt`, `api.rs:3036`) and stages to the blocklace.
-- Joiner / refused-launch-then-relaunch node: the operator cell is **absent**
-  (`main.rs:846-856` documents exactly this) → `execute_via_producer` returns
-  `Rejected("cell not found")` → the handler returns at `api.rs:3174` and **never** calls
-  `blocklace.submit_turn`. This is the finding's `4fc1e09c… → cell not found`.
+  (`node/src/lib.rs:855-870` — "clean boot → agent cell present with the operator key").
+- Refused-launch-then-relaunch node: the operator cell is **absent** (`lib.rs:855-870`
+  documents exactly this recovery-path trap) → `execute_via_producer` returns
+  `Rejected("cell not found")` and the handler never calls `blocklace.submit_turn`.
 
-Either way, a *client's own* turn is unreachable: the body `agent` is discarded, so the
-endpoint can only ever author operator turns.
+A *client's own* turn is unreachable here by design: the body `agent` is discarded, so the
+endpoint can only ever author operator turns. This is correct — the hardening prevents the
+operator signature being pointed at a victim c-list. Client turns route through the
+caller-signed `/turns/submit`.
 
-### 2b. `POST /turns/submit` (caller-signed SignedTurn)
+### 2b. `POST /turns/submit` (caller-signed SignedTurn — THE external client path)
 
 ```
-post_submit_signed_turn (api.rs:3209)
-  ├─ verify signer signature over turn hash                     (api.rs:3230)
-  ├─ REQUIRE turn.agent == derive_raw(signer, "default")        (api.rs:3243-3256)
-  ├─ REQUIRE turn.previous_receipt_hash == s.cclerk head        (api.rs:3269-3283)  ← NODE chain
-  ├─ execute_via_producer(...) against s.ledger                 (api.rs:3294-3299)
-  └─ Committed → append_receipt onto s.cclerk (NODE chain)      (api.rs:3322)
-              → gossip_turn                                     (api.rs:3398-3403)
-              → blocklace.submit_turn / submit_turn_bundle      (api.rs:3407-3423)  ← DAG injection
+post_submit_signed_turn (api.rs:3414)
+  ├─ verify signer signature over turn hash                     (api.rs:3435)
+  ├─ HYBRID perimeter: a present-but-invalid ML-DSA half REJECTS (api.rs:3454-3467)
+  ├─ REQUIRE turn.agent == derive_raw(signer, "default")        (api.rs:3469-3483)
+  ├─ is_operator_agent split                                    (api.rs:3502)
+  │    operator agent → previous_receipt_hash gated on the NODE
+  │                     head (s.cclerk)                         (api.rs:3510-3525)
+  │    FOREIGN client → NO node-head gate; binds to ITS OWN
+  │                     claimed previous_receipt_hash
+  │                     (None for a first turn)                 (api.rs:3558-3564)
+  ├─ provision_signer_actor_cell + provision_transfer_destinations
+  │    (the IDENTICAL provisioning the finalized path applies)  (api.rs:3580-3581)
+  ├─ execute_via_producer(...) IN PLACE under the write lock    (api.rs:3582-3587)
+  │    MULTI-PARTY: journal rolled back — the run is an
+  │    optimistic ack; finalization is the sole authoritative
+  │    application. SOLO keeps the commit.                      (api.rs:3592-3598)
+  └─ Committed → append_receipt onto s.cclerk ONLY for the
+              operator's own agent (or solo)                    (api.rs:3633-3634)
+              → gossip_turn
+              → blocklace.submit_turn / submit_turn_bundle      (api.rs:3729-3737)  ← DAG injection
 ```
 
-This path **does** let a client carry its own cell (`api.rs:3245`) and **does** inject to
-the blocklace. Two structural couplings remain:
+The two structural couplings the original diagnosis flagged are closed here:
 
-1. **No actor provisioning.** `execute_via_producer` requires `turn.agent` to already
-   exist; a brand-new client cell yields `Rejected("cell not found")`. Nothing along the
-   HTTP path provisions a fresh client cell, and finalization only provisions transfer
-   *destinations* (see §3).
-2. **Node-chain coupling.** The `previous_receipt_hash` gate (`api.rs:3269`) checks the
-   **node operator's** `s.cclerk` head, and `append_receipt` (`api.rs:3322`) appends onto
-   `s.cclerk`. Every client's turns are serialized through the one node-operator receipt
-   chain — this is the "local cipherclerk receipt chain" the finding observes on node0.
+1. **Actor provisioning.** `provision_signer_actor_cell` (`blocklace_sync.rs:8243`) inserts
+   `derive_raw(signer, "default")` as a zero-balance stub when absent — at ingress
+   (`api.rs:3580`) for the local receipt, and authoritatively at finalization
+   (`blocklace_sync.rs:4536`) on every node. A brand-new client cell no longer yields
+   `Rejected("cell not found")`.
+2. **Chain decoupling.** Only the node operator's own agent binds to the `s.cclerk` head;
+   a foreign client's `previous_receipt_hash` is its OWN chain's (None for a first turn),
+   and in multi-party mode the local run is rolled back so clients are not serialized
+   through, or appended onto, the node-owned chain.
 
 ### 2c. `POST /api/faucet`
 
-`post_faucet` (`api.rs:6490`) transfers from the **genesis faucet cell**
-(`api.rs:6595-6596`), which is present authoritatively on every node. In multi-party mode
-it runs execution against a **scratch clone** for the HTTP receipt and leaves authoritative
-state to finalization (`api.rs:6572-6607`), then injects to the blocklace exactly like the
-others (`api.rs:6938-6943`). It reaches the DAG because its actor cell exists.
+`post_faucet` (`api.rs:6961`) transfers from the **genesis faucet cell**, present
+authoritatively on every node. In multi-party mode all provisioning + execution runs
+against a **scratch clone** for the HTTP receipt, leaving authoritative state to
+finalization (`api.rs:7045-7074`), then injects to the blocklace like the others
+(`api.rs:7425`). It is the original template for the finalization-authoritative posture
+`/turns/submit` now shares.
 
 ---
 
-## 3. Traced internal turn → DAG → finalize path (what the external path relies on)
+## 3. Traced internal turn → DAG → finalize path (what every ingress relies on)
 
 Once a payload reaches `blocklace.submit_turn`, the machinery is uniform:
 
 ```
-BlocklaceHandle::submit_turn (blocklace_sync.rs:410)
-  → submit_turn_payload (blocklace_sync.rs:519)
-       n>1: STAGE into pending_payloads, return (receipt, Local)   (blocklace_sync.rs:529-544)
-       n=1: add_block immediately (solo finalizes trivially)       (blocklace_sync.rs:547-565)
+BlocklaceHandle::submit_turn (blocklace_sync.rs:427)
+  → submit_turn_payload (blocklace_sync.rs:536)
+       n>1: STAGE into pending_payloads, return (receipt, Local)   (blocklace_sync.rs:558-561)
+       n=1: add_block immediately (solo finalizes trivially)       (blocklace_sync.rs:568)
 
-cadence_tick_round_driven (blocklace_sync.rs:3369)  [round-driven producer loop]
-  → round_cadence_decision → DrainTurns                            (blocklace_sync.rs:3406)
-  → pop_front pending_payloads → produce_round_block(payload)      (blocklace_sync.rs:3439-3450)
-  → produce_round_block (blocklace_sync.rs:484):
+cadence_tick_round_driven (blocklace_sync.rs:3716)  [round-driven producer loop]
+  → round_cadence_decision → DrainTurns                            (blocklace_sync.rs:3466)
+  → pop_front pending_payloads → produce_round_block(payload)      (blocklace_sync.rs:3787-3797)
+  → produce_round_block (blocklace_sync.rs:501):
        plan_round_block gate — advance ONLY on a supermajority of
-       distinct creators at the current round                     (blocklace_sync.rs:495-502)
-       else RoundPlan::Wait → None → re-stage the payload          (blocklace_sync.rs:3462-3469)
+       distinct creators at the current round                      (blocklace_sync.rs:3341)
+       else RoundPlan::Wait → None → re-stage the payload          (blocklace_sync.rs:514)
 
-finality executor → tau super-ratifies → execute_finalized_turn    (blocklace_sync.rs:3718, 3932)
-  → provision_transfer_destinations (DESTINATIONS ONLY)            (blocklace_sync.rs:7737-7749)
-  → execute_via_producer on every node, uniform post-state         (blocklace_sync.rs:4177-4180)
+finality executor → tau super-ratifies → execute_finalized_turn    (blocklace_sync.rs:4287)
+  → verify the turn signature carried in the block                 (blocklace_sync.rs:4308-4316)
+  → provision_signer_actor_cell (the turn's ACTOR)                 (blocklace_sync.rs:4536)
+  → provision_transfer_destinations (Transfer destinations)        (blocklace_sync.rs:4541)
+  → execute_via_producer on every node, uniform post-state
 ```
 
-Two facts from this path matter to the external gap:
+Two facts from this path matter to the external story:
 
-- **The block producer carries exactly one queued payload per round block**
-  (`blocklace_sync.rs:3439-3448`) and only when `plan_round_block` reaches a supermajority
-  (`blocklace_sync.rs:495`). If rounds cannot advance, staged turns never drain and
-  `block_height` stays at genesis — this is the round-advancement / finality-gate concern
-  the n=3 lane diagnoses (S5-1, documented at `blocklace_sync.rs:453-478`).
-- **`execute_finalized_turn` provisions only Transfer *destinations***
-  (`provision_transfer_destinations`, `blocklace_sync.rs:7737-7749`) — NOT the turn's
-  **actor** cell. So even a finalized foreign-agent turn whose actor cell is absent has no
-  uniform cross-node provisioning for the actor.
-
----
-
-## 4. Verdict — design-gap / bug / client-error
-
-**DESIGN GAP.** Grounded:
-
-- It is **not** a single broken wire: `blocklace.submit_turn` is present and correct on
-  every ingress's committed branch (`api.rs:3147`, `:3407`, `:6938`) and the cadence loop
-  drains staged payloads into round blocks (`blocklace_sync.rs:3439-3450`).
-- It is **not** pure client-error: on `POST /turn/submit` the client's `agent` is
-  deliberately discarded (`api.rs:2895`), so no client request shape can author the
-  client's own turn. There is no documented "use endpoint X instead" that provisions a
-  fresh client cell into consensus.
-- It **is** an incompletely-wired path: the mechanism to take a *fresh external client's
-  OWN* turn all the way into the DAG was never built. `/turn/submit` was built for the node
-  operating on its own (genesis-provisioned) cell; `/turns/submit` requires the client cell
-  to pre-exist and folds it through the node operator's chain; the faucet works only
-  because its actor is genesis-provisioned. On any node whose operator cell is absent, even
-  the operator path fails `cell not found` (`main.rs:846-856`).
-
-Net: external HTTP-submitted turns reach the **entry node's local cipherclerk receipt
-chain** (via `append_receipt`, `api.rs:3036`/`:3322`) and, on nodes where the actor cell
-exists, *stage* toward the DAG — but a fresh client's turn does not become a
-blocklace block that peers cite and `tau` finalizes.
+- **The block producer carries exactly one queued payload per round block** and only when
+  `plan_round_block` reaches a supermajority (`blocklace_sync.rs:3341`). If rounds cannot
+  advance, staged turns never drain and `block_height` stays at genesis — the
+  round-advancement / finality-gate concern the n=3 lane owns (S5-1, documented at
+  `blocklace_sync.rs:470-500`).
+- **`execute_finalized_turn` provisions the turn's actor cell AND transfer destinations**
+  (`blocklace_sync.rs:4536-4541`). Provisioning is byte-deterministic: `SignedTurn.signer`
+  is carried in the block and its signature is verified at `blocklace_sync.rs:4308-4316`,
+  so every node inserts the identical stub — the same uniformity argument
+  transfer-destination provisioning relies on
+  (`provision_transfer_destinations_is_deterministic_and_idempotent`,
+  `blocklace_sync.rs:6729`).
 
 ---
 
-## 5. Fix design (grounded; NOT fired — node/api/consensus layer, ember/consensus-owner call)
+## 4. The path's design (formerly the "fix design" — implemented)
 
-The correct external-turn path = **caller-signed turn → deterministic actor provisioning at
+The external-turn path = **caller-signed turn → deterministic actor provisioning at
 finalization → uniform cross-node execution**, decoupled from the node operator's chain.
 
-1. **Make `/turns/submit` THE external client path; decouple it from the node chain.**
-   The `previous_receipt_hash` gate (`api.rs:3269`) and `append_receipt` (`api.rs:3322`)
-   should key off the **client's own** receipt chain, not the node operator's `s.cclerk`.
-   Simplest safe form: on a foreign-agent turn, treat the local commit as an **optimistic
-   ack only** (do not append to `s.cclerk`), and let the finalization pass be the sole
-   authoritative application — mirroring what the faucet already does with its scratch
-   clone (`api.rs:6572-6607`).
+1. **`/turns/submit` is THE external client path, decoupled from the node chain.** The
+   `previous_receipt_hash` gate and `append_receipt` apply only to the operator's own
+   agent (`api.rs:3502-3525`, `:3633-3634`). A foreign-agent turn's local run is an
+   optimistic ack (multi-party rolls the journal back, `api.rs:3592-3598`); the
+   finalization pass is the sole authoritative application — the posture the faucet
+   pioneered with its scratch clone.
 
-2. **Provision the ACTOR cell at finalization, deterministically.** Extend
-   `provision_transfer_destinations` (`blocklace_sync.rs:7737`) — or add a sibling step in
-   `execute_finalized_turn` before `execute_via_producer` (`blocklace_sync.rs:4177`) — to
-   provision the turn's actor cell as `derive_raw(SignedTurn.signer, "default")` with a
-   zero-balance stub if absent. This is byte-deterministic and safe: `SignedTurn.signer` is
-   carried in the block and its signature is already verified at
-   `blocklace_sync.rs:3955`, so every node inserts the identical stub — the same uniformity
-   argument the transfer-destination provisioning already relies on
-   (`blocklace_sync.rs:4128-4143`). This lets a fresh client's FIRST turn finalize
-   cross-node instead of `cell not found`.
+2. **The ACTOR cell is provisioned at finalization, deterministically.**
+   `provision_signer_actor_cell` (`blocklace_sync.rs:8243`) runs in
+   `execute_finalized_turn` before `execute_via_producer` (`blocklace_sync.rs:4536`),
+   inserting `derive_raw(SignedTurn.signer, "default")` as a zero-balance stub if absent.
+   A fresh client's FIRST turn finalizes cross-node instead of `cell not found`.
 
-3. **Keep `/turn/submit` as an operator-only demo endpoint** and document it as such — it
-   is not, and cannot be, a client-turn path while the confused-deputy hardening
-   (`api.rs:2891-2900`) stands (correctly — the hardening prevents the operator signature
-   being pointed at a victim c-list). Do NOT relax the hardening; route client turns
-   through the caller-signed `/turns/submit` instead.
+3. **`/turn/submit` stays an operator-only endpoint.** The confused-deputy hardening
+   (`api.rs:3075-3084`) stands — do NOT relax it; client turns go through the
+   caller-signed path.
 
-With (1)+(2), a client builds a `SignedTurn` over its own cell, `POST /turns/submit`
-injects it to the blocklace, the round producer carries it, and `execute_finalized_turn`
-provisions the actor + applies it uniformly on every node.
+Net: a client builds a `SignedTurn` over its own cell, `POST /turns/submit` injects it to
+the blocklace, the round producer carries it, and `execute_finalized_turn` provisions the
+actor + applies it uniformly on every node.
 
 ---
 
-## 6. Interaction with the n=3 finality-gate lane
+## 5. Interaction with the n=3 finality-gate lane
 
-**Both fixes are required** for a real flagship turn to finalize cross-node — they are
-sequential gates on the same pipeline:
+The pipeline has two sequential gates; this doc's gate (submit → DAG) is wired, and the
+second is the n=3 lane's territory:
 
 ```
 external client turn
-   │  [THIS lane: submit → DAG]   — actor provisioning + /turns/submit decoupling
+   │  [submit → DAG]          — /turns/submit + actor provisioning (wired, §2b/§4)
    ▼
 blocklace DAG (staged in a round block)
-   │  [n=3 lane: finality-gate]   — plan_round_block supermajority / tau super-ratify
-   ▼                                 (blocklace_sync.rs:495, 3718)
-execute_finalized_turn fires on every node   (blocklace_sync.rs:3932)
+   │  [finality-gate]         — plan_round_block supermajority / tau super-ratify
+   ▼                             (blocklace_sync.rs:3341, cadence at :3716)
+execute_finalized_turn fires on every node   (blocklace_sync.rs:4287)
 ```
 
-- This lane closes the first gate: get a fresh client's own turn INTO the DAG.
-- The n=3 lane closes the second: make DAG turns actually super-ratify + execute
-  cross-node (`plan_round_block` round advancement, `blocklace_sync.rs:495`; the S5-1
-  round-synchronous-shape concern, `blocklace_sync.rs:453-478`).
-
-Fixing only submit→DAG leaves turns staged-but-unfinalized if rounds cannot advance;
-fixing only the finality-gate leaves the DAG finalizing internal operator/faucet turns
-while external client turns never enter it. The payoff ("a real external turn reaches
-consensus + finalizes cross-node") needs **both**.
+A staged turn still finalizes only when rounds advance (`plan_round_block` supermajority;
+the S5-1 round-synchronous-shape analysis, `blocklace_sync.rs:470-500`) — that gate is a
+performance/liveness concern tracked by the n=3 finality-gate lane, not a gap in the
+submit wiring.

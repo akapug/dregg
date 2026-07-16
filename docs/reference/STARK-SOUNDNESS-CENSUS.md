@@ -34,10 +34,14 @@ genuinely: `algoStarkSound_kernel` (STARK) → `StarkSound hash Rfix` + `closedL
   named `FriLdtDeployedBound`. **That bound as-written is now DISCHARGED** (`FriLdtJohnson.lean`,
   `friLdtDeployedBound_discharge`, axiom-clean): at `δ_J=7/8` it is exactly the trivial counting else-branch
   (`accept_prob_le_of_farN`), so `ldt_bound_unconditional` delivers `(1/8)^19 = 2^-57` with NO hypothesis. Its
-  genuine BCIKS20 content (words inside the `δ_J` ball, past unique decoding) is reduced to two precisely-named
-  lemmas — `RSListBound` and `FriProximityGapChallenges` — each PROVED at `L=1` and instantiated on the deployed
-  rate-`1/64` code (min-distance `127` → singleton at radius `63`); only their `L>1` generalization remains open.
-  The prover config (rate `1/8`, `38` queries)
+  genuine BCIKS20 content (words inside the `δ_J` ball, past unique decoding) is DISCHARGED at the deployed
+  code: `rsListBound_johnson_112` proves `RSListBound` at the Johnson radius `112` with `L=15`
+  (`FriLdtJohnsonList.lean`, `#assert_axioms`-clean), `wrap_badChallengePoly_johnson` gives
+  `FriProximityGapChallenges` at `L=26`, and the δ-preserving correlated-agreement primitive is closed by
+  ordered-pair counting (`wrap_correlatedAgreement_sharp_proved : WrapCorrelatedAgreementSharp 292`;
+  `wrap_perFold_soundness_capacity` — the ~112.6-bit per-fold bound, carried to the deployed arity-8 posture
+  at ~109.84 bits by `FriArityTransfer.lean`; `circuit/src/lib.rs`'s Lean-owned FRI ledger quotes 109 bits
+  for the deployed wrap). The prover config (rate `1/8`, `38` queries)
   is separately DISCHARGED in the unique-decoding regime (`DeployedProximitySoundness`, `< 2^-31`).
 - **FS-SZ ε** — Fiat-Shamir non-exceptionality, `ε ≤ deg/|F|` (a game in `ProbCrypto.winProb`, not an axiom).
 - structural range tables (PROVEN, not a floor: `rangeTable bits = [0,2^bits)` symbolically, never enumerated).
@@ -71,17 +75,18 @@ insert is an O(n) suffix-shift unbindable in a fixed-width AIR; the sound closur
 (append-at-free-index) migration** (impact analysis: low-pain, sync is replay not snapshot, order-independence not
 load-bearing; AAFI also kills the O(n) rebuild = a perf win).
 
-## GAP #5 CUTOVER — where it stands
+## GAP #5 CUTOVER — COMPLETE (the flip is routed)
 
 - **Lean closure PROVEN** (`IndexedMerkleTree.lean`): `imtInsert_preserves`, `canonicalHeapExtract_of_imt`,
-  `imt_double_spend_unsat`, + the AAFI bridge composing `aafiInsert_forces_imtInsert` → `canonicalHeapExtract`. Gap #5
-  reduces into `{Poseidon2SpongeCR, FRI-LDT}` the moment the flip routes op=4.
-- **Deployed Stage A LANDED (additive, green)**: `MapKind::AafiInsert` op + the two-path AIR gates (`MAP_WIDTH` 421→897,
-  op≤3 byte-identical) + the Lean mirror (reconciled to the actual columns) + the 90-site `HeapLeaf` migration + the
-  store append-seq persistence. Nothing routes to op=4 yet.
-- **Stage F (OWED — the atomic flip, ember-approved, coordinated)**: route the 3 append-only ops (NoteSpend→nullifier,
-  NoteCreate→commitment, Revoke→revoked) to `AafiInsert`, regen VK + fixtures, **batch the 4 wrap-class fixes into the
-  same VK epoch**. Then Stage P (rebuild + hbox gauntlet last). Plan: `GAP5-AAFI-CUTOVER-PLAN.md`.
+  `imt_double_spend_unsat`, + the AAFI bridge composing `aafiInsert_forces_imtInsert` → `canonicalHeapExtract`. With
+  op=4 routed, gap #5 reduces into `{Poseidon2SpongeCR, FRI-LDT}`.
+- **Deployed machinery**: `MapKind::AafiInsert` op + the two-path AIR gates (`MAP_WIDTH` 897, op≤3 byte-identical) +
+  the Lean mirror (reconciled to the actual columns) + the `HeapLeaf` migration + the store append-seq persistence.
+- **The flip IS ROUTED**: `nullifierInsertOp` (NoteSpend), `commitmentsInsertOp` (NoteCreate), and `revokedInsertOp`
+  (Revoke) all emit `op := .aafiInsert`, as does `cellsInsertOp` (gap #6)
+  (`Emit/EffectVmEmitRotationV3.lean:2288,2483,2583,2710`), matching the deployed
+  `rotation-v3-staged-registry.tsv` (8 `aafi_insert` rows) under the re-keyed VK epoch — the same flip the COMPLETE
+  banner above records.
 - **Named residuals** (not holes): the chain↔vector representation seam (the Lean↔Rust layout correspondence — being
   closed/bounded); the P3 tail (`blocklace_sync` append-seq export, historical-nullifier seq schema); the mutable
   cell/heap map AAFI-vs-sparse decision (deferred — NOT the double-spend; snapshot-sync-driven).

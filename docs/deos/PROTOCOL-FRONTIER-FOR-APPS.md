@@ -1,12 +1,17 @@
 # The Protocol Frontier For Apps — what dregg supports that apps only touch aspirationally
 
 > **As-of census (~2026-06-27), partially executed since.** This is a point-in-time
-> snapshot. Its chosen flagship — a real `SealedEscrow` atomic swap — has since
-> **LANDED** (`demo/tests/sealed_escrow_atomic_swap.rs`), and `escrow-market` itself
-> was regrounded onto the proven capacity (`SealedEscrowMarket`). Those two rows are
-> flipped below; the rest of the spine (Vault/Membrane/StandingObligation UNUSED,
-> conditional/eventual/promises UNUSED, no app implements a RingTradeParticipant)
-> still holds. Re-census before treating any single row as live state.
+> snapshot, and several of its gaps are closed at HEAD: the chosen flagship — a real
+> `SealedEscrow` atomic swap — is **LANDED** (`demo/tests/sealed_escrow_atomic_swap.rs`),
+> `escrow-market` is regrounded onto the proven capacity (`SealedEscrowMarket`),
+> **StandingObligation has three real app users** (subscription, billing,
+> execution-lease), and the eventual/pipeline machinery is exercised by the
+> partial-turn lift (`starbridge-v2/src/pipeline_continuation.rs`). Those rows are
+> flipped below. Vault's ShareVault face has a real app user
+> (`starbridge-apps/compute-exchange`); its conditional-timelock `open_vault`/`claim`
+> face is app-unused. Still holding: Membrane app-UNUSED, and no starbridge-app
+> implements a `RingTradeParticipant`. Re-census before treating any single row as
+> live state.
 
 dregg's substrate has grown far richer than its example apps exercise. This is a
 pillar-by-pillar census of the *rich primitives that exist* (proven and wired)
@@ -20,10 +25,10 @@ that is **distributed · reversible · capability-secure · witnessed ·
 content-addressed · persistent · branch-and-stitch**. We rank the frontier by how
 vividly each pillar shows that vision when a *real app* drives it end to end.
 
-The headline finding: **the kernel is years ahead of the demos.** Most of the
-proven capacities have zero app users; apps overwhelmingly model everything as flat
-`Effect::SetField` slots with hand-rolled caveats, re-deriving (and sometimes
-faking) capacities the protocol already proves correct.
+The headline finding: **the kernel is ahead of the demos.** Five of the six proven
+house capacities have real app users; only Membrane has none,
+and apps overwhelmingly model everything as flat `Effect::SetField` slots with
+hand-rolled caveats, re-deriving capacities the protocol already proves correct.
 
 ---
 
@@ -40,14 +45,18 @@ proven in `metatheory/Dregg2/Deos/{SealedEscrow,Vault,Membrane,StandingObligatio
 | Capacity | API surface | App usage | Verdict |
 |---|---|---|---|
 | **SealedEscrow** | `open_escrow`/`deposit_leg`/`settle`/`reclaim_leg`/`check_claim` (`cell/src/escrow_sealed.rs:375,391,580,595,503`) | **regrounded** — `starbridge-apps/escrow-market/src/lib.rs` now drives the proven capacity via `SealedEscrowMarket` (`:180`), re-exporting `dregg_cell::escrow_sealed`; the old slot-caveat lifecycle is RETAINED only for out-of-scope dependents and is no longer the app's headline escrow (`:38-46`). Also the flagship `demo/tests/sealed_escrow_atomic_swap.rs`. | **USED** |
-| **Vault** (conditional timelock) | `open_vault`/`claim`, `VaultTerms`/`Condition` (`cell/src/vault.rs`) | none | **UNUSED** |
+| **Vault** | ShareVault face: `open_share_vault`/`deposit_shares`, `ShareVaultState`/`is_share_vault`; conditional-timelock face: `open_vault`/`claim`, `VaultTerms`/`Condition` (`cell/src/vault.rs`) | `starbridge-apps/compute-exchange/src/lib.rs:92` drives the ShareVault face as its pooled-sponsor fund (`ShareVaultState` modeled in the same `metatheory/Dregg2/Deos/Vault.lean`); the conditional-timelock `open_vault`/`claim` face has no app user | **USED** (ShareVault face; timelock face UNUSED) |
 | **Membrane** (forwarder / upward authority `meet`) | `Membrane`/`SealedMembrane`/`exercise`/`seal` (`cell/src/membrane.rs`) | none | **UNUSED** |
-| **StandingObligation** (recurring discharge) | `open_obligation`/`discharge`, `ObligationTerms` (`cell/src/obligation_standing.rs`) | none | **UNUSED** |
+| **StandingObligation** (recurring discharge) | `open_obligation`/`discharge`, `ObligationTerms` (`cell/src/obligation_standing.rs`) | `starbridge-apps/subscription/src/obligation.rs:60` (a `BillingPlan` IS an `ObligationTerms`), `starbridge-apps/billing/src/recurring.rs:22`, `starbridge-apps/execution-lease/src/lib.rs:73,205` | **USED** |
 | **DerivedCell** (committed aggregate over sources) | `bind_derivation`/`verify_derivation`, `DerivationSpec` (`cell/src/derived.rs`) | `starbridge-apps/supply-chain-provenance/src/derived.rs:47,111-138` | **USED** |
 | **Hatchery** (object factory / EROS-style minting) | `FactoryDescriptor`/`CapTemplate`/`ChildVkStrategy` (`cell/src/factory.rs`) | `starbridge-apps/polis/src/lib.rs:114,303-315,1184` + framework re-exports (208 sites) | **USED** |
 
-Three of the six proven capacities (Vault, Membrane, StandingObligation) still have
-**zero** app users. The escrow gap this census originally flagged as its most glaring
+One of the six proven capacities (Membrane) has **zero** app users, and Vault's
+conditional-timelock face is likewise app-unused (its ShareVault face is driven by
+compute-exchange);
+StandingObligation is driven by three real apps (subscription, billing,
+execution-lease), each an identity map from its domain vocabulary into the proven
+terms. The escrow gap this census originally flagged as its most glaring
 fake — `escrow-market` re-implementing escrow by hand — has since been **closed**:
 the app was regrounded onto the proven `SealedEscrow` capacity (`SealedEscrowMarket`),
 and a disjoint flagship demo (`demo/tests/sealed_escrow_atomic_swap.rs`) drives the
@@ -58,12 +67,16 @@ and a disjoint flagship demo (`demo/tests/sealed_escrow_atomic_swap.rs`) drives 
 `cell/src/state.rs:198-224,827-860` (`heap_root`, `heap_map`, `get_heap`/`set_heap`),
 `turn/src/umem.rs` (the openable umem projection / cross-cell heap reads).
 
-- **USED** only by `dregg-doc/src/doc_heap.rs:109` (`DocHeapCell`) for document content,
-  and by the kvstore coherent demo for time-travel snapshots.
-- Apps store mutable state in the **16 fixed `SetField` slots**, not per-cell heaps
-  (e.g. `starbridge-apps/subscription`'s queue is 8 slots). The heap — arbitrary
-  committed `(collection,key)→value` memory — is a document/infrastructure feature,
-  not yet an app-state pattern. **Mostly UNUSED at the app layer.**
+- **USED** by `dregg-doc/src/doc_heap.rs:109` (`DocHeapCell`) for document content,
+  by the kvstore coherent demo for time-travel snapshots, and by several
+  starbridge-apps in src code: `org/src/lib.rs:291-300` (member/role registries via
+  `set_heap`/`get_heap` over `MEMBER_COLL`/`ROLE_COLL`),
+  `execution-lease/src/lib.rs:381-406` (`EXEC_COLL` step/digest),
+  `subscription/src/obligation.rs:388` (terms digest), and `edge-mandate/src/lib.rs`.
+- Some apps still store mutable state in the **16 fixed `SetField` slots**
+  (e.g. `starbridge-apps/subscription`'s queue is 8 slots), but the heap — arbitrary
+  committed `(collection,key)→value` memory — is an app-state pattern, not only a
+  document/infrastructure feature. **USED at the app layer.**
 
 ### 3. Temporal caveats (rate / until / since / cooled / challenge)
 
@@ -84,16 +97,29 @@ to executor+circuit (`turn/src/executor/mod.rs:253+`, tags 13-16) but **staged**
 (`EventualRef`/`Pipeline`/`PipelineBuilder`), `turn/src/pending.rs` (promise-holes /
 broken-promise propagation), `captp/src/pipeline.rs` (promise pipelining).
 
-- **UNUSED** — zero app or demo exercises conditional batches, eventual references,
-  promise pipelining, or guarded holes. The broadest gap in the tree.
+- **USED at the shell layer, UNUSED at the app layer.** The reactive vocabulary is
+  first-class in the kernel: `Effect::Promise`/`Notify`/`React` are dispatched
+  `Effect` variants with real linearity classes (Generative / Terminal one-shot
+  spend, `turn/src/action.rs:1440-1471,1896-1918`) riding the real executor path.
+  And `starbridge-v2/src/pipeline_continuation.rs` drives real
+  `Pipeline`/`EventualRef` held-promise continuations — the partial-turn lift: a
+  staged Pipeline-with-holes whose holes are real `EventualRef`s, resolved
+  fail-closed at resume. What remains open: no starbridge-app constructs the
+  reactive effects or an `EventualRef` pipeline directly (the app-layer `Reactor`
+  face desugars to ordinary effects instead).
 
 ### 5. Membrane fork/stitch + branch-and-stitch multiplayer
 
 `docs/deos/BRANCH-AND-STITCH-PROTOCOL.md`, `SettlementSoundness.lean` (PROVEN), the
 production `stitch_pair`/`ForkMembraneHost` in `starbridge-v2/src/{world,shared_fork}.rs`.
 
-- **UNUSED at the app layer.** The production multiplayer fork/stitch is wired and
-  tested only inside starbridge-v2 (`starbridge-v2/tests/stitch_pair_settlement_sound_production.rs`).
+- **USED at the app layer.** `starbridge-apps/branch-stitch-multiplayer/src/main.rs:14`
+  runs two participants forking one shared verified world, diverging, and stitching
+  under the settlement-sound gate. It composes
+  `starbridge_v2::branch_stitch_session::BranchStitchSession` — the transport-free
+  primitive lifted from `ForkMembraneHost::stitch_pair` — over embedded-executor
+  only. The production fork/stitch is also tested inside starbridge-v2
+  (`starbridge-v2/tests/stitch_pair_settlement_sound_production.rs`).
   `starbridge-apps/kvstore/tests/coherent_stack_demo.rs` forks/stitches at the
   *document* layer (`dregg_doc::merge`), not the distributed-world layer.
 
@@ -102,19 +128,23 @@ production `stitch_pair`/`ForkMembraneHost` in `starbridge-v2/src/{world,shared_
 `turn/src/reversible.rs` (`ReversibleHistory`/`Inversion`), `turn/src/umem.rs`
 (`project_ledger`/`reify_ledger`), `docs/deos/FIRST-CLASS-REVERSIBILITY.md`.
 
-- **PARTIAL**: `kvstore/tests/coherent_stack_demo.rs:284-311` uses
+- **USED**: `kvstore/tests/coherent_stack_demo.rs:284-311` uses
   `project_ledger`/`reify_ledger` to snapshot+restore a whole-ledger boundary at a
-  past height (byte-identical). The full `ReversibleHistory` / per-effect `invert`
-  (clean/contextual/committed un-turns) is **unused** by any app.
+  past height (byte-identical), and `demo/tests/time_travel_houyhnhnm.rs:13` drives
+  the full `ReversibleHistory` end to end — `replay_to` (forward-from-genesis),
+  `undo_to` (backward via `Turn::invert` un-turns), and first-class branching via
+  `fork_at`.
 
 ### 7. Mint / Burn supply model
 
 `Effect::Mint`/`Effect::Burn` (`turn/src/action.rs:1407,1283`), `apply_mint`/`apply_burn`
 (`turn/src/executor/apply.rs:2765,2547`).
 
-- **UNUSED in production** — only `starbridge-apps/escrow-market/tests/cross_app_value_flow.rs:125`
-  mints (in a test). Apps are value-agnostic (scalar fields), never minting their own
-  asset wells.
+- **USED**: `starbridge-apps/first-room/src/scenario.rs:403` mints its conserved
+  reward pool in app src, and `escrow-market/tests/cross_app_value_flow.rs:125`,
+  `billing/tests/billing_period_invoice.rs:120`, and
+  `execution-lease/tests/durable_execution_lease.rs:122` construct `Effect::Mint`
+  to fund their asset wells. Most other apps are value-agnostic (scalar fields).
 
 ### 8. Attenuation/delegation · light-client/attested queries · ring/intents/promises
 
@@ -126,9 +156,10 @@ production `stitch_pair`/`ForkMembraneHost` in `starbridge-v2/src/{world,shared_
   audit-only** — `agent-provenance/src/derived.rs`, `supply-chain-provenance/src/derived.rs`
   (`attested_*_log` over the receipt MMR). Never used for live mutable-state assertions.
 - **Ring / intents / partial-turns / promises** (`intent/`, `app-framework/src/ring_trade.rs`,
-  `Effect::{Promise,Notify,React,PipelinedSend}`): the coordinator was just wired
-  (`RingTradeParticipant`→`RingSolver`) but **no starbridge-app implements a participant**
-  and no app uses Promise/Notify/React. Adoption vacuum.
+  `Effect::{Promise,Notify,React,PipelinedSend}`): the coordinator is wired
+  (`RingTradeParticipant`→`RingSolver`) but **no starbridge-app implements a participant**,
+  and no app constructs Promise/Notify/React directly (the kernel dispatch and the
+  starbridge-v2 partial-turn lift exercise them — see pillar 4).
 
 ---
 
@@ -140,9 +171,9 @@ demonstrate* against *tractability of a clean, disjoint demo this lane can build
 | # | Pillar → demo | Houyhnhnm properties shown | Tractability |
 |---|---|---|---|
 | **1** | **SealedEscrow atomic fair-exchange** — a real app trades value "I give X iff you give Y" through the proven capacity | capability-secure · witnessed · atomic/persistent (+ the canonical ocap *escrow exchange agent*) | **HIGH** (pure `cell` API, disjoint from escrow-market) — **LANDED** |
-| **2** | **Branch-and-stitch multiplayer** — two agents fork the world, diverge, stitch under settlement-soundness | distributed · reversible · witnessed · **branch-and-stitch** · persistent | MEDIUM (production `stitch_pair` lives in starbridge-v2) |
-| **3** | **Promise-pipelined coordination** — apps coordinate via `EventualRef`/`Pipeline`/CapTP without round-trips | distributed · capability-secure · witnessed (the E/Houyhnhnm lineage itself) | MEDIUM (turn-level API, no app precedent) |
-| **4** | **Time-travel / undo on a live app** — `ReversibleHistory` un-turns an app's history to a past consistent state, stopping at committed boundaries | reversible · witnessed · persistent | HIGH (extends the kvstore `project_ledger` slice) |
+| **2** | **Branch-and-stitch multiplayer** — two agents fork the world, diverge, stitch under settlement-soundness | distributed · reversible · witnessed · **branch-and-stitch** · persistent | HIGH (`BranchStitchSession` is the reusable primitive) — **LANDED** (`starbridge-apps/branch-stitch-multiplayer`) |
+| **3** | **Promise-pipelined coordination** — apps coordinate via `EventualRef`/`Pipeline`/CapTP without round-trips | distributed · capability-secure · witnessed (the E/Houyhnhnm lineage itself) | MEDIUM (turn-level API; shell precedent exists in `starbridge-v2/src/pipeline_continuation.rs`, no starbridge-app precedent) |
+| **4** | **Time-travel / undo on a live app** — `ReversibleHistory` un-turns an app's history to a past consistent state, stopping at committed boundaries | reversible · witnessed · persistent | HIGH (extends the kvstore `project_ledger` slice) — **LANDED** (`demo/tests/time_travel_houyhnhnm.rs`) |
 | **5** | **Hatchery minting user-defined service kinds** + Mint/Burn — an app mints its own asset well and spawns child service-cells | persistent · content-addressed · capability-secure (generative) | MEDIUM |
 
 ### The chosen flagship — LANDED: a real SealedEscrow atomic swap
@@ -186,13 +217,14 @@ scope for this demo lane.
 
 ---
 
-## The single most inspiring next thing to build
+## The single most inspiring next thing to build — LANDED
 
-After this flagship lands, **branch-and-stitch multiplayer as a real app** (#2) is
-the highest-leverage build: it is THE distributed-Houyhnhnm synthesis
-([[DISTRIBUTED-HOUYHNHNM-FRONTIER]]) with the `SettlementSoundness` theorem already
-proven, and the only thing missing is an *app* (not a starbridge-v2 internal test)
-that forks a shared world between two agents, diverges them, and stitches under the
-settlement-sound gate — turning a proven theorem into a playable multiplayer story.
-The tractability cost is factoring `stitch_pair` out of starbridge-v2 into a
-reusable turn/cell-level primitive a plain demo can call.
+**Branch-and-stitch multiplayer as a real app** (#2) — THE distributed-Houyhnhnm
+synthesis ([[DISTRIBUTED-HOUYHNHNM-FRONTIER]]) with the `SettlementSoundness`
+theorem proven — is **LANDED**: `starbridge-apps/branch-stitch-multiplayer` forks a
+shared world between two agents, diverges them, and stitches under the
+settlement-sound gate — a proven theorem as a playable multiplayer story. The
+factoring this section named as the tractability cost exists too:
+`starbridge_v2::branch_stitch_session::BranchStitchSession` is the transport-free
+primitive lifted from `ForkMembraneHost::stitch_pair`, and the app composes it over
+embedded-executor only.

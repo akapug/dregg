@@ -1,9 +1,15 @@
 # Cross-Platform Prover Acceleration — strategy, feasibility, and a measured first probe
 
-Status: PLAN + MEASURED MICROPROBE (2026-07-12). Nothing here is wired into the
-prover yet. The one measured number in this doc was produced on this repo's dev
-machine (Apple M2 Max, Metal via wgpu); everything else is cited or explicitly
-marked unmeasured.
+Status: MEASUREMENT RECORD (probes dated 2026-07-12) — and the backend these
+probes argued for is wired into the production prover.
+`circuit-prove/src/gpu_backend.rs` puts `GpuDft` and `GpuBn254Mmcs` behind the
+Plonky3 trait seams of §5, adds a GPU variant of the outer shrink config
+(`GpuDreggOuterConfig`), and runtime-dispatches with a CPU fallback (no GPU
+adapter ⇒ `Radix2DitParallel`/`MerkleTreeMmcs` inside the same types); `wgpu`
+is a first-class dependency (`circuit-prove/Cargo.toml:58`). The sections
+below are the measurements that ground that wiring; every number names its
+machine (Apple M2 Max via Metal; hbox RX 6750 XT via Vulkan) and anything
+unmeasured is explicitly marked.
 
 ## 1. What we are accelerating
 
@@ -219,7 +225,8 @@ Read this honestly:
 ## 5. Integration surface (unchanged by toolchain choice)
 
 Two Plonky3 trait seams, both already isolated in our configs — a backend
-swap, not a prover rewrite. Sketch: `circuit-prove/sketches/gpu_dft_prototype.rs`.
+swap, not a prover rewrite. Production home: `circuit-prove/src/gpu_backend.rs`;
+early sketch: `circuit-prove/sketches/gpu_dft_prototype.rs`.
 
 1. **`TwoAdicSubgroupDft<BabyBear>`** (`dft/src/traits.rs:27`) — implement
    `dft_batch`/`coset_lde_batch` on a `GpuDft` handle; swap the one type alias
@@ -253,8 +260,10 @@ streams row-chunks.
 - **P1 — Poseidon2-BabyBear-W16 batch permutation in WGSL** (+W24), parity vs
   `default_babybear_poseidon2_16` test vectors, then a Merkle *level* builder
   reproducing `MerkleTreeMmcs` roots bit-exactly. Measure hashes/s vs the
-  rayon CPU tree on: M2 Max (Metal) and hbox RX 6700 XT (Vulkan — same
-  binary). This is the first number that predicts real prover minutes.
+  rayon CPU tree on: M2 Max (Metal) and hbox RX 6750 XT (Vulkan — same
+  binary). **→ MEASURED (§11: ~300 Mhash/s, 60-85x scalar CPU) and WIRED:
+  the all-BabyBear inner MMCS + DFT dispatch through the production
+  recursion layer in `circuit-prove/src/gpu_backend.rs`.**
 - **P2 — WGSL radix-2/4 BabyBear NTT** (forward+inverse, coset shift,
   bit-reversed output), wired behind `GpuDft`; differential-test vs
   `Radix2DitParallel` (`dft/src/testing.rs` harness); then run the **inner
@@ -262,21 +271,27 @@ streams row-chunks.
   Gate: if wgpu measures >2-3× off references (RISC0-Metal-class throughput on
   Mac; Futhark-HIP spot-check on hbox), escalate that kernel down the ladder
   wgpu → Futhark(HIP)/native Metal → raw CUDA, kernel by kernel.
-  **→ The forward-NTT half of P2 is MEASURED — see §9. The gate did not fire:
-  wgpu beat the RISC0-Metal reference architecture on this machine; no native
-  escalation needed for the NTT.** (Remaining P2 tail: inverse/coset wiring
-  behind `GpuDft` + the in-prover run.)
-- **P3 — the shrink (BN254) decision, post-rebalance:** the HORIZONLOG lever
-  #1 blowup rebalance is LANDED + measured (blowup 64→8: shrink prove 760 s →
-  95 s on a real apex; compounds with everything here). Only if the rebalanced
-  shrink still binds:
-  BN254 Poseidon2-t3 limb kernels (WGSL per ZPrize precedent, or Futhark/HIP
-  on hbox, or ICICLE-CUDA on a rented 4090-class box — 24 GB VRAM suffices per
-  §5). Until then the shrink stays a CPU/server cost, which its
-  one-time-off-chain role tolerates (HORIZONLOG.md:7745).
-- **P4 — client-side proving productization:** package the wgpu prover path
-  (pure-Rust dep tree) so `dregg-sdk` on a user's Mac proves turns/holdings
-  locally; same WGSL compiles for a future WebGPU/wasm surface.
+  **→ MEASURED (§9) — the gate did not fire: wgpu beat the RISC0-Metal
+  reference architecture on this machine; no native escalation needed for the
+  NTT. And WIRED: the inverse/coset/stage-skip `coset_lde_batch` path lives
+  behind the production `GpuDft` (`circuit-prove/src/gpu_backend.rs`), same
+  `Evaluations` type/layout as `Radix2DitParallel`, runtime CPU fallback.**
+- **P3 — the shrink (BN254): WIRED.** The HORIZONLOG lever #1 blowup
+  rebalance is LANDED + measured (blowup 8: shrink prove ~95 s on a real
+  apex), and the BN254 MMCS is GPU'd on top: `GpuBn254Mmcs`
+  (`circuit-prove/src/gpu_backend.rs`) builds the outer Merkle tree with
+  batched Poseidon2-t3 kernels — portable WGSL on every backend, and on
+  native Vulkan a precompiled direct-SPIR-V/native-int64 kernel measured
+  **13.688 Mperm/s (RADV) / 24.738 Mperm/s (AMDVLK)** on Navi 22, an order of
+  magnitude past the portable-WGSL microprobe band the plan reasoned from
+  (GPU-PROVER-WIRING-PLAN.md §7). A proof minted under `GpuDreggOuterConfig`
+  is byte-identical to the CPU-minted one, asserted in the module's tests.
+- **P4 — client-side proving productization (frontier):** package the wgpu
+  prover path (pure-Rust dep tree) so `dregg-sdk` on a user's Mac proves
+  turns/holdings locally. The browser-side half has a seam already: the
+  wasm32 build of `gpu_backend.rs` keeps the CPU recursion path sync and
+  exposes the async WGSL engine via `init_gpu`. SDK packaging is the open
+  item.
 
 ## 7. The strategic angle (why Apple Silicon is not a nice-to-have)
 
@@ -304,16 +319,18 @@ accelerator. One kernel suite, both halves of the thesis.
   the AMD/Vulkan test target with the same binary; it does **not** qualify for
   any CUDA plan.
 - **Expected band:** microprobe-measured ~10-35× field-arithmetic headroom on
-  M2 Max; end-to-end prover **unmeasured** (P2 produces the honest number).
-  The 18-min shrink DID fall via the *rebalance* (config-only, measured ~95 s
-  at blowup 8) before GPU BN254 work was evaluated; the GPU MMCS wiring on top
-  is Amdahl-capped ~2-2.5× (GPU-PROVER-WIRING-PLAN.md §6 — kernel-level 38-64×
-  offload numbers do NOT translate to whole-prover speedups).
-- **Validated this session:** platform probes (hbox/persvati GPUs); WGSL
-  BabyBear Montgomery parity + throughput on Metal; ICICLE's Plonky3/Metal/AMD
-  gaps (cited). **Not validated:** any NTT/Poseidon2/Merkle GPU kernel,
-  ICICLE CUDA numbers on our shapes, Futhark or HIP builds on hbox — all
-  marked unmeasured above.
+  M2 Max; at the trait seam the wired `GpuDft` measures **4-10x** on the
+  pcs-shaped LDE expression (GPU-PROVER-WIRING-PLAN.md §5). The 18-min shrink
+  fell via the *rebalance* (config-only, measured ~95 s at blowup 8); the GPU
+  MMCS wiring on top is Amdahl-capped ~2-2.5× (GPU-PROVER-WIRING-PLAN.md §6 —
+  kernel-level 38-64× offload numbers do NOT translate to whole-prover
+  speedups).
+- **Validated:** platform probes (hbox/persvati GPUs); WGSL BabyBear
+  Montgomery parity + throughput on Metal (§4) and Vulkan (§10); the NTT
+  kernels (§9-§10) and the Poseidon2/Merkle kernels (§11), all p3-parity-gated;
+  ICICLE's Plonky3/Metal/AMD gaps (cited). **Not validated:** ICICLE CUDA
+  numbers on our shapes; Futhark or HIP builds on hbox — marked unmeasured
+  above.
 
 ## 9. MEASURED: WGSL BabyBear NTT vs peak memory bandwidth (P2 probe, 2026-07-12)
 
@@ -445,8 +462,8 @@ not a native-only capability.
   two-tier, LDE stage-skip) that the same WGSL source can reach. A hand-tuned
   native kernel would face the same 32 KiB threadgroup memory and the same
   DRAM; its plausible edge is the ~1.5-2x that the subgroup lever also
-  reaches. Revisit only if, after the `GpuDft` integration (P2 tail), the
-  in-prover LDE measures far off the 60-73%-of-ceiling band established here.
+  reaches. Revisit only if the in-prover LDE (the wired `GpuDft`) measures far
+  off the 60-73%-of-ceiling band established here.
 
 ## 10. MEASURED: AMD hbox — RX 6750 XT via wgpu/Vulkan/RADV (2026-07-12)
 

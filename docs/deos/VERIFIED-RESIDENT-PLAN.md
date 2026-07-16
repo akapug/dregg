@@ -9,8 +9,10 @@ new proof; it is making the mountain of proof already standing in this tree
 **touch ground**: a confined brain takes one turn, holds one real cap the
 operator cannot amplify, refuses one operator instruction with the refusal
 *backed*, and emits one per-turn attestation — landed on a light-client-verifiable
-ledger. Every mechanism below already exists and is tested; the deliverable is the
-**glue binary** that wires them into one story, plus a short list of honest gaps.
+ledger. Every mechanism below exists and is tested, and the **glue binary is
+built**: `deos-hermes/examples/verified_resident.rs` wires all four pieces into
+one story (`cargo run --example verified_resident`). A short list of honest gaps
+remains (§5).
 
 All claims are grounded at `file:line` against `main` HEAD.
 
@@ -125,8 +127,9 @@ Lean capstone `metatheory/Dregg2/Crypto/ZkOracle.lean` + Rust prover
     direction (accepted pre-weld → refused post-weld).
   - `ZkOracleAttestation` — `attestation.rs:73`: presentation + cfg cert + field
     span + content commit + optional STARK injection leg.
-- **What's runnable:** default build **21 tests green**
-  (`cargo test -p dregg-zkoracle-prove`); a real local MPC-TLS 2PC roundtrip behind
+- **What's runnable:** default build **42 tests green**
+  (`cargo test -p dregg-zkoracle-prove`: 33 lib + 9 default integration; only the
+  `tlsn-live`-gated files sit outside the default build); a real local MPC-TLS 2PC roundtrip behind
   `--features tlsn-live` (vendored TLSNotary @ the rev deco-prove pins, a real
   `presentation.verify()`, `tlsn_live_roundtrip.rs`). Measured: a single response
   attests in **~320 µs each way**; a 1M-LLM-token context in ~0.9 s
@@ -284,10 +287,10 @@ refuse-operator + receipts*; `crown_attested_ledger.rs` covers
 *attest + commit + land + verify*. Neither alone is the full "verified resident" —
 they are the two halves.
 
-### 3.2 The minimal glue (one new example binary — no new types)
+### 3.2 The glue binary (built — `deos-hermes/examples/verified_resident.rs`)
 
-A single example (proposed `deos-hermes/examples/verified_resident.rs`, in a
-default-members crate) that composes the existing public functions into one story:
+One example that composes the existing public functions into one story
+(alongside `resident.rs`, `real_llm_attested.rs`, and `zk_live_carrier.rs`):
 
 1. **Hold a cap** — open a session under an **attenuated** mandate
    (`GrantRegistry::default_for_session(...).with_grant_for_tool_deny("write_file")`,
@@ -308,8 +311,8 @@ default-members crate) that composes the existing public functions into one stor
    (`session.rs:338`, `session_store.rs:155`) and assert the budget + receipt chain
    carry over (a second `--again` invocation).
 
-**Size:** ~150–250 lines, **no new types**, mostly wiring of already-public
-functions. It is a *composition*, not a build.
+It is a *composition* of already-public functions — **no new types**, no new
+enforcement; every claim in the example is asserted, not printed.
 
 **The one genuine design seam in the glue:** `drive_serving_attested`
 (`lib.rs:774`) binds **one** precomputed commitment for the whole drive, not
@@ -322,11 +325,11 @@ minter seam. The demo should ship (a) and name (b).
 ### 3.3 The smallest end-to-end (if only one thing ships)
 
 `crown_attested_ledger.rs::attested_turn_lands_bound_to_its_attestation_and_is_verifiable`
-(`:110`) is **already** the smallest confined-brain → one-turn → one-attestation →
+(`:110`) is the smallest confined-brain → one-turn → one-attestation →
 one-committed-turn → verifiable chain. The verified-resident glue adds the two
 resident properties it lacks: the **held cap with an in-band operator refusal**
-(from `resident.rs`) and **persist across calls** (from `session_store`). Combining
-those three existing artifacts is the whole task.
+(from `resident.rs`) and **persist across calls** (from `session_store`).
+`verified_resident.rs` is that combination.
 
 ---
 
@@ -334,7 +337,7 @@ those three existing artifacts is the whole task.
 
 | Element | Proven (Lean) | Runnable (Rust, tested) | Status |
 |---|---|---|---|
-| Authentic floor | `deco_attestation_unforgeable` clean (`DecoUnforgeable.lean:219`) | `verify_zkoracle` authentic leg, 21 tests | proven + runnable (modeled carrier) |
+| Authentic floor | `deco_attestation_unforgeable` clean (`DecoUnforgeable.lean:219`) | `verify_zkoracle` authentic leg, 42 tests | proven + runnable (modeled carrier) |
 | Well-formed leg | `zkOracle_sound` (`ZkOracle.lean:77`) | CFG parse-cert prover/verifier | proven + runnable |
 | Injection-free leg | `malicious_not_injection_free` (`ZkOracle.lean:120`) | `neg`-complement matcher (dregg-dfa) | proven + runnable |
 | Refuse-operator backing | `polis_safety` ∀ctrl (`Polis.lean:102`) | `resident.rs` in-band deny, 0 turns | proven + runnable |
@@ -347,13 +350,17 @@ those three existing artifacts is the whole task.
 
 ## 5. Honest gaps — one named seam each
 
-1. **The authentic leg is a modeled carrier, not a live Anthropic session.**
-   Default (and even `zk-live`) uses a `FixtureNotary` ed25519 carrier over the
-   response bytes (`attest.rs:97`). **Seam:** point the tlsn Prover at live
-   `api.anthropic.com` (real key + deployed/pinned notary) AND fuse the real tlsn
-   `PresentationOutput` into the attestation's authentic *leg*. The `tlsn-live`
-   2PC machinery already exercises the session-integrity locally
-   (`ZKORACLE-PROVER-STATUS.md:129`) — this is a deploy step, not new crypto.
+1. **The default authentic leg is a modeled carrier; the fixture/live distinction
+   is carried and enforced.** The default build uses a `FixtureNotary` ed25519
+   carrier over the response bytes (`deos-hermes/src/attest.rs:156`), and the
+   fusion seam is closed: `AuthenticProvenance::{MpcTls, SelfSignedFixture}` rides
+   every `VerifiedZkOracle`, and `AuthenticPolicy::RequireMpcTls` refuses
+   fixture-only attestations fail-closed before any leg runs
+   (`zkoracle-prove/src/attestation.rs:112–197`). Under `--features zk-live` the
+   authentic leg consumes a genuine local MPC-TLS `presentation.verify()` under
+   that policy. **Seam (the remaining slice):** point the tlsn Prover at live
+   `api.anthropic.com` (real key + deployed/pinned notary) — a deploy step, not
+   new crypto.
 
 2. **The Lean authentic floor is Stripe-payment-shaped.** `decoAuthenticated`
    names `PaymentFacts` / `amountCents` (`DecoUnforgeable.lean:82`); the Anthropic
@@ -381,7 +388,7 @@ those three existing artifacts is the whole task.
 
 6. **The node is an in-process `LocalNode`.** Forwarding the finalized turn to an
    external homelab federation node (`with_node_url`) is a deploy step
-   (`ZKORACLE-PROVER-STATUS.md:298`). R2 also still **trusts the executor host**;
+   (`ZKORACLE-PROVER-STATUS.md:356`). R2 also still **trusts the executor host**;
    R3's whole-history STARK (`grain_verify::WHOLE_HISTORY_GAP`) makes the meter a
    FRI-floor theorem (`grain-turn/src/lib.rs:40`) — not required for the demo.
 
@@ -391,9 +398,8 @@ those three existing artifacts is the whole task.
    (`#assert_axioms` on the delegating theorems). **Seam:** a direct
    `#assert_axioms polis_safety` for a self-contained pin (cosmetic).
 
-8. **No single binary wires all four today.** `resident.rs` and
-   `crown_attested_ledger.rs` are the two halves. **Seam:** the glue example of
-   §3.2 — the actual deliverable of this plan.
+(The former eighth gap — no single binary wiring all four — is closed:
+`deos-hermes/examples/verified_resident.rs` is that binary, §3.2.)
 
 ---
 
@@ -428,12 +434,14 @@ those three existing artifacts is the whole task.
 Every piece exists and is tested: DECO-UC rung-4 makes "authentic" unforgeable
 (`DecoUnforgeable.lean:219`), `polis_safety` makes "refuse the operator" hold for
 *any* operator (`Polis.lean:102`), `dregg-zkoracle-prove` produces and verifies the
-per-turn attestation (21 tests), and `grain-turn` turns an admitted action into a
+per-turn attestation (42 tests), and `grain-turn` turns an admitted action into a
 committed kernel turn that witnesses the attestation (`ATTESTATION_SLOT`). Two
-runnable artifacts already stand as the halves — `resident.rs` (hold-cap +
-refuse-operator) and `crown_attested_ledger.rs` (attest + commit + land + verify).
-The **verified resident** is the ~200-line glue example that fuses those halves and
-adds `ConsumedStore` persistence — a composition of public functions, not a build.
-The honest gaps are the modeled-vs-live authentic carrier, the Stripe-shaped Lean
-authentic floor, the Rust-only cross-leg weld, and the ember-decision on the
-persist/fork mechanism.
+runnable artifacts stand as the halves — `resident.rs` (hold-cap + refuse-operator)
+and `crown_attested_ledger.rs` (attest + commit + land + verify) — and the
+**verified resident** (`deos-hermes/examples/verified_resident.rs`) is the glue
+example that fuses them and adds `ConsumedStore` persistence — a composition of
+public functions, not a build. The honest gaps are the live-`api.anthropic.com`
+session (fixture-only attestations are refused fail-closed under
+`AuthenticPolicy::RequireMpcTls`; the modeled carrier remains the default), the
+Stripe-shaped Lean authentic floor, the Rust-only cross-leg weld, and the
+ember-decision on the persist/fork mechanism.

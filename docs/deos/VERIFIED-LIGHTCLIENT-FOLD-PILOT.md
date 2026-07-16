@@ -1,8 +1,10 @@
 # The Verified-Light-Client Fold PILOT — EVM-MPT inclusion as the rung-3 custom leaf
 
-**The concrete build plan for folding ONE verified light-client verification as a
+**The rung-2 → rung-3 pilot for folding ONE verified light-client verification as a
 recursion-foldable `CellProgram` custom leaf, grounded in the deployed DECO/custom precedent.
-This is the rung-2 → rung-3 pilot PLAN — the fold itself is the follow-up implementer lane.**
+Stage P0 is BUILT: `circuit-prove/src/mpt_holding_leaf.rs` (the MPT holding-commitment leaf)
+with the end-to-end test `circuit-prove/tests/mpt_holding_fold_pilot.rs`. Stages P1
+(rules-in-AIR) and P2 (TID_KECCAK) remain open, staged below.**
 
 Companion to `docs/deos/VERIFIED-LIGHTCLIENT-FOLD-PATH.md` (the fold-path map). That doc maps
 the road for any chain; this doc picks the pilot chain, sequences the increments, and corrects
@@ -67,26 +69,27 @@ zero new circuit code** (`FOLD-PATH.md` §2): register a `CellProgram`, carry
 > VK-affecting (`carrier_claim_pins_admitted`, `ivc_turn_chain.rs:3154–3162` for the bridge
 > twin) and rides the big-bang regen — NOT the pilot.
 
-### P0 — the MPT holding-commitment leaf (the smallest fold-proving increment)
+### P0 — the MPT holding-commitment leaf (BUILT: `circuit-prove/src/mpt_holding_leaf.rs`)
 
 The DECO shape, exactly (`deco_leaf_adapter.rs:1–42` is the template): a Poseidon2-only
 `CellProgram` that recomputes IN-AIR the holding identity over PI-pinned fields, plus the
 Nomad floor. What it proves: *the published holding identity is welded to exactly these
 committed fields* — MPT + keccak stay off-AIR, executor-verified named carriers (the deployed
-DECO posture, `deco_leaf_adapter.rs:27–34`). Constraint list (illustrative sketch, the doc's
-one code block):
+DECO posture, `deco_leaf_adapter.rs:27–34`). The landed constraint list (the doc's one code
+block):
 
 ```text
-columns:  state_root[0..8], token, holder, slot, balance, holding_hash, + range bits
-gates:    PiBinding{First}  each pinned field ↔ its descriptor PI          (First-row pin — the
-                                                                            named narrowing at
-                                                                            custom_leaf_adapter.rs:52–59)
-          ConditionalNonzero / range bits   balance ≠ 0, balance < 2^30    (the DECO AMOUNT_RANGE_BITS
-                                                                            precedent, deco_leaf_adapter.rs:70–74)
-          Hash4to1 → TID_P2 chip            holding_hash = P2(token, holder, balance, root_digest)
+columns:  state_root[0..8], token, holder, slot, balance, holding_hash, bal_inv, + 30 range bits
+gates:    PiBinding{First}  each pinned field ↔ its descriptor PI (13 PIs)  (First-row pin — the
+                                                                             named narrowing at
+                                                                             custom_leaf_adapter.rs:52–59)
+          balance·bal_inv − 1 == 0 (balance ≠ 0) + 30 boolean bit columns   (the DECO AMOUNT_RANGE_BITS
+          + recomposition (balance < 2^30)                                   precedent, deco_leaf_adapter.rs:70–74)
+          FOUR Hash4to1/Hash2to1 chip sites (mpt_holding_hash_felt):
+            holding_hash = H2(H2(H4(root[0..4]), H4(root[4..8])), H4(token, holder, slot, balance))
 ```
 
-Build calls, in order:
+The build calls, in order (the ladder the landed leaf rides):
 
 1. `CellProgram::new(descriptor, version)` (`circuit/src/dsl/circuit.rs:1217`) — mints
    `vk_hash` = BLAKE3(postcard(descriptor)) (`circuit.rs:1231–1235`). Pin the `vk_hash` as a
@@ -103,9 +106,9 @@ Build calls, in order:
    `ivc_turn_chain.rs:3064–3066`). Internally: `lower_cellprogram` → `cellprogram_to_descriptor2`
    (`custom_leaf_adapter.rs:670`) → `prove_vm_descriptor2_for_config` (line 1224) →
    `build_and_prove_next_layer_with_expose` (line 1271) with the `incircuit_custom_pi_commitment`
-   expose hook (line 1117) — the leaf's exposed 4-felt claim is byte-identical to the host
-   `custom_proof_pi_commitment` (`custom_proof_bind.rs:84–88`). Read back host-side with
-   `read_exposed_pi_commitment` (`custom_leaf_adapter.rs:1283`).
+   expose hook (line 1117) — the leaf's exposed 8-felt claim is byte-identical to the host
+   `custom_proof_pi_commitment` (`custom_proof_bind.rs:118`, the full `WideHash` squeeze). Read
+   back host-side with `read_exposed_pi_commitment` (`custom_leaf_adapter.rs:1283`).
 5. Wire the turn: put a `CustomWitnessBundle { program, witness_values, num_rows,
    public_inputs }` (`joint_turn_aggregation.rs:242–253`) on the leg —
    `RotatedParticipantLeg::with_custom_witness` (`joint_turn_aggregation.rs:561`, the test
@@ -114,17 +117,18 @@ Build calls, in order:
 6. The deployed arm does the rest — `prove_chain_core_rotated` (`ivc_turn_chain.rs:3025`)
    matches `Some(CarrierWitness::Custom(bundle))` (line 3107): mints the dual-expose leg leaf
    `prove_descriptor_leaf_dual_expose` (line 3108, defined at `ivc_turn_chain.rs:1483` — one
-   `expose_claim` carrying segment lanes `[0..SEG_WIDTH)` ++ the claimed
-   `custom_proof_commitment` PI 46..49), calls `prove_custom_leaf_with_commitment` (line 3115),
+   `expose_claim` carrying segment lanes `[0..SEG_WIDTH)` ++ the claimed 8-felt
+   `custom_proof_commitment`, IR2 PI 46..53), calls `prove_custom_leaf_with_commitment` (line 3115),
    and folds both under `prove_custom_binding_node_segmented`
    (`joint_turn_recursive.rs:591`, called at line 3126) — the in-circuit `connect` of claimed
    vs genuine commitment, segment re-exposed, so the node enters `aggregate_tree` like any
    segment leaf. A forged claim has no satisfying `connect` partner ⇒ UNSAT ⇒ no
    `WholeChainProof` root exists. There is deliberately NO wildcard arm (lines 3096–3103), so
    nothing here is new dispatch — the pilot rides the ONE deployed carrier arm.
-7. Teeth: honest-accept + ≥3 forged-rejects (forged balance, zero balance, tampered root
-   octet) end-to-end through `prove_turn_chain_recursive → verify_turn_chain_recursive`,
-   mirroring `circuit-prove/tests/custom_binding_deployed_tooth.rs`.
+7. Teeth: honest-accept + ≥3 forged-rejects (forged commitment, forged balance, zero
+   balance) end-to-end through `prove_turn_chain_recursive → verify_turn_chain_recursive` —
+   `circuit-prove/tests/mpt_holding_fold_pilot.rs`, the `custom_binding_deployed_tooth.rs`
+   shape with the demo program replaced by the real MPT holding-commitment `CellProgram`.
 
 ### P1 — the rules-in-AIR MPT leaf (verifyRules folds; keccak verdicts stay carried)
 
@@ -238,7 +242,7 @@ meet at one identity: `vk_hash`, bound at EffectVM column 68 and into the turn h
 
 ---
 
-## 5. NAMED RESIDUALS + the first build increment
+## 5. NAMED RESIDUALS + the P0 increment (built)
 
 Residuals, each named with its closure lane:
 
@@ -262,11 +266,14 @@ Residuals, each named with its closure lane:
 7. **Route B carrier arm** (`CarrierWitness::Mpt` + descriptor claim pin) — the long-term
    home; VK-affecting, rides the big-bang regen tie. Open it only after P1 proves load-bearing.
 
-**The smallest first build increment (what the implementer lane builds first):** P0
-end-to-end on ONE opening — the holding-commitment `CellProgram` (§2 P0 sketch), `vk_hash`
-KAT, `ProgramRegistry` registration, one `CustomWitnessBundle` on one leg via
-`with_custom_witness`, one `prove_turn_chain_recursive → verify_turn_chain_recursive` run with
-honest-accept + forged-reject teeth (the `custom_binding_deployed_tooth.rs` shape). Zero new
-circuit code, zero VK movement, one new `CellProgram` + one test file — and it proves the
-whole rung-3 pipe (Some-witness → foldable leaf → binding node → `aggregate_tree` → a pure
-light client's `WholeChainProof`) for a REAL chain verification for the first time.
+**The P0 increment is built:** the holding-commitment `CellProgram`
+(`circuit-prove/src/mpt_holding_leaf.rs` — 13 PIs through the multi-chunk sponge, the Nomad
+floor, the four chip hash sites), `vk_hash` KAT, `ProgramRegistry` registration, one
+`CustomWitnessBundle` on one leg via `with_custom_witness`, and the end-to-end
+`prove_turn_chain_recursive → verify_turn_chain_recursive` run with honest-accept +
+forged-reject teeth (`circuit-prove/tests/mpt_holding_fold_pilot.rs`). Zero new circuit code,
+zero VK movement, one new `CellProgram` + one test file — the whole rung-3 pipe (Some-witness
+→ foldable leaf → binding node → `aggregate_tree` → a pure light client's `WholeChainProof`)
+exercised on a REAL chain verification. The open stages are P1 (rules-in-AIR) and P2
+(TID_KECCAK — residual 1 above; the table-id family in `circuit/src/descriptor_ir2.rs` has no
+keccak entry).

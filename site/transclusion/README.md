@@ -52,7 +52,7 @@ The rule everywhere: **verification lightens; nothing else does.**
 
 <blockquote data-dregg="dregg://<64-hex cell id>#b=120-240"
             cite="https://any-host.example/charter.html"
-            data-node="https://devnet.dregg.fg-goose.online">
+            data-node="https://<a-node-api-base>">
   fallback text — darkened until the bytes verify
 </blockquote>
 ```
@@ -64,10 +64,14 @@ The rule everywhere: **verification lightens; nothing else does.**
 | `cite` / `data-src` | where the source document's bytes are served (any untrusted host; `data-src` wins) |
 | `data-node` | per-element node API base for the commitment lookup |
 
-Page-wide node default: `data-node` on the script tag → `<meta name="dregg:node">`
-→ `window.__DREGG__.node` → the public devnet node (`sdk/src/endpoints.rs`
-`defaults::DEVNET`). `window.dreggTransclude.rescan()` re-verifies after
-dynamically inserting quotes.
+Page-wide node config: `data-node` on the script tag → `<meta name="dregg:node">`
+→ `window.__DREGG__.node`. There is deliberately **no built-in default
+endpoint**: no public devnet is currently anchored, so an element with no
+configured node paints the honest `unverified` state ("no node configured —
+verification against a live chain is unavailable") instead of querying a dead
+host. A missing endpoint is never a pass, and never a fake one either.
+`window.dreggTransclude.rescan()` re-verifies after dynamically inserting
+quotes.
 
 ## Backlinks — the other half of the two-way link
 

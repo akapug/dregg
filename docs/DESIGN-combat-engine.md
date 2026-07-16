@@ -1,8 +1,29 @@
 # Design: World-Resolved, Verifiable Tactical Combat
 
-Status: proposed  
-Scope: additive combat subsystem for `attested-dm`  
+Status: unadopted design (reference)  
+Scope: a combat subsystem proposal for `attested-dm`  
 Compatibility requirement: all existing games and the current `CombatEnemy` behavior continue to work unchanged.
+
+## 0. Relation to the shipped engine
+
+`attested-dm` ships a multi-combatant tactical encounter engine at HEAD, built on a much
+simpler design than this document proposes — none of this document's API
+(`resolve_combat_command`, `CombatRuleset`, `CombatState`, `CombatPhase`, draw manifests)
+exists in the tree. The shipped engine (`attested-dm/src/game.rs`, `Combatant` /
+`EncounterRule` around game.rs:923–1050) is turn-based and initiative-ordered, with a
+closed ability set (`Strike` / `Guard` / cooldown `Special`), foes driven by a
+deterministic AI folded into the same receipted turn as the player command, HP/cooldowns/
+shields living as world flags, draws domain-separated through `dregg-dice` event kinds,
+and replay verification end-to-end (`attested-dm/examples/combat.rs` drives a full fight).
+It satisfies this document's core principle — the world resolves, the AI only narrates —
+without this document's machinery.
+
+What this document proposes beyond the shipped engine remains unbuilt: tactical zones and
+range bands, rulesets as committed content (`.dungeon` `combat_ruleset` declarations and
+ruleset roots), the closed `RuleEffect` algebra, general status stacks, action economy,
+retreat routes, loot tables, and per-transition draw manifests. Read the rest of this
+document as a reference design for those directions, not as the description or build plan
+of what runs.
 
 ## 1. Decision summary
 

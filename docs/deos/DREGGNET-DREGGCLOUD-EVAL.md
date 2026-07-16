@@ -50,15 +50,17 @@ plan docs, decomposes into:
 | **Token launchpad** (create → bonding curve → graduate) | ✅ BUILT — `DREGG-LAUNCHPAD-DESIGN.md` + launchpad-web `:8785`, contracts 29/29 gate green (`DREGGFI-DEVNET-OFFERINGS.md` row f) |
 | **Trading terminal / DEX** (order entry, clearing, portfolio) | ✅ BUILT engine — ring DrEX `:8781`, derivatives/package/shielded offerings `:8790`, portfolio/CFMM lib (`DREGGFI-DEVNET-OFFERINGS.md` rows a–e) |
 | **A public menu of offerings** | ✅ BUILT — `offerings.mjs` menu surface |
-| **DNS** (subdomains per surface; ideally BYO custom domain per launch/site) | ⚠ MANUAL — hardcoded subdomains under `dregg.fg-goose.online`, one Caddy site-block per surface (§3). **No automated custom-domain / BYO-domain.** |
-| **Gateway / TLS / ingress** | ⚠ MANUAL — AWS gateway Caddy terminates Let's Encrypt TLS + reverse-proxies over Tailscale to fixed hbox ports; per-surface hand-written blocks (§3). No on-demand-TLS, no routing crate. |
-| **Deploy infra** (ship a surface/site → live) | ⚠ HAND-ROLLED — per-surface systemd unit + Caddy block + RUNBOOK; no git→build→publish pipeline. |
-| **Hosting a user's launched site** (a token's page as its own site) | ❌ ABSENT — no "a site is a cell / `<name>.dregg.works`" hosting surface in breadstuffs. |
+| **DNS** (subdomains per surface; ideally BYO custom domain per launch/site) | ⚠ PARTIAL — the verified custom-domain registry is now in-tree (`starbridge-apps/domains`: `DomainBinding`, `is_verified`, `site_for_host` — the ask hook). The per-surface Caddyfiles (`deploy/games`, `deploy/launchpad`) still carry hand-set domain defaults, and DNS records stay manual. |
+| **Gateway / TLS / ingress** | ✅ BUILT in-tree — `deploy/gateway-ask/` serves the on-demand-TLS `ask` (`GET /internal/site-exists` off the domain registry) + a capability forward-auth gate, with `Caddyfile.on-demand-tls` (one wildcard block, no baked-in domain); `deploy/webauth-edge/Caddyfile.capauth` is the cap-auth edge idiom. |
+| **Deploy infra** (ship a surface/site → live) | ⚠ PARTIAL — `deploy/PRACTICES.md` codifies the rules and `gateway-ask/deploy.sh` does staged-alt-port → atomic-swap → rollback; there is still no generic git→build→publish pipeline. |
+| **Hosting a user's launched site** (a token's page as its own site) | ❌ ABSENT — no "a site is a cell / `<name>.<apex>`" hosting surface in breadstuffs. |
 
-**The gap is entirely in the last four rows — the DNS / gateway / deploy / hosting layer.** The
-financial *engine* is done; what's missing to be a "full offering" you can point people at is the
-**deployment substrate** that serves many surfaces (and eventually many user sites/domains) under
-one TLS + DNS + deploy discipline. That is precisely what DreggNet already built.
+**The remaining gap is the deploy-pipeline + hosting rows — and a live edge.** The financial
+*engine* is done, and the gateway/TLS/registry layer this eval recommended now exists in-tree
+(`deploy/gateway-ask`, `starbridge-apps/domains`); what's still missing for a "full offering" is
+the git→build→publish pipeline, the hosted-site surface, and an edge actually running the wildcard
+block (nothing is deployed as a public product right now). The pipeline + hosting halves are
+precisely what DreggNet already built.
 
 ---
 
@@ -216,18 +218,22 @@ public-endpoint-pinning discipline.
 
 ## 4. The DNS / gateway / deploy eval — and how it maps to our deploy-prep
 
-**Our current pattern (this session's deploy-prep).** breadstuffs deploys each surface by hand:
-- `deploy/aws/caddy/Caddyfile` — the AWS gateway: terminates Let's Encrypt TLS for a **fixed,
-  comma-listed** `DREGG_SITE_DOMAINS` (`devnet.`/`dregg.fg-goose.online`) and reverse-proxies fixed
-  paths to `localhost:8420` (node), plus serves built static site dirs.
-- `deploy/games/caddy/Caddyfile.games` + `deploy/launchpad/caddy/Caddyfile.launchpad` — **one new
-  hand-written site block per surface** (`games.` → hbox `:8790`, `launchpad.` → hbox `:8785`), each
-  reverse-proxying **over Tailscale** to a **fixed hbox port**, each with its own systemd unit and
-  RUNBOOK. DNS is manual subdomain records; TLS is per-domain Let's Encrypt on the gateway.
+**Our current pattern (at HEAD).** The old `deploy/aws` layout this eval originally mapped against
+is superseded — its systemd/Caddy/setup content is quarantined in `deploy/aws/SUPERSEDED/`, and
+`deploy/aws/README.md` describes the AWS box as it is (the tailnet's public exit + edge; nothing
+app-shaped runs from that directory). The live deploy docs are `deploy/PRACTICES.md` +
+`deploy/README.md`. The per-surface pattern survives in `deploy/games/caddy/Caddyfile.games` +
+`deploy/launchpad/caddy/Caddyfile.launchpad` — **one hand-written site block per surface**
+(`{$DREGG_GAMES_DOMAIN}` → hbox `:8790`, `{$DREGG_LAUNCHPAD_DOMAIN}` → hbox `:8785`), each
+reverse-proxying **over Tailscale** to a **fixed hbox port**, each with its own systemd unit and
+RUNBOOK. Their domain *defaults* still name `dregg.fg-goose.online` — a dead devnet-era domain (the
+product domain is `dregg.net`, and there is no live public devnet).
 
-This works but **scales by hand**: every new offering (offerings-menu `:8790`, drex `:8781`, a future
-per-launch token site) = a new hardcoded block + unit + DNS record. There is **no automated
-custom-domain, no on-demand-TLS, no deploy pipeline, no Host→site routing.**
+The per-surface pattern **scales by hand**: every new offering = a new hardcoded block + unit + DNS
+record. The replacement now exists in-tree: `deploy/gateway-ask/` (the on-demand-TLS `ask` sidecar +
+capability forward-auth, over `starbridge-apps/domains`) + its `Caddyfile.on-demand-tls` one-wildcard
+block, and `deploy/webauth-edge/Caddyfile.capauth`. What is still missing is the **deploy pipeline**
+(git→build→publish) and a hosted-site surface.
 
 **How DreggNet's infra maps onto it (1:1, same topology):**
 
@@ -244,8 +250,9 @@ custom-domain, no on-demand-TLS, no deploy pipeline, no Host→site routing.**
 **The single biggest upgrade** is replacing "one hardcoded Caddy block + DNS record per surface" with
 "**on-demand-TLS + a verified-domain registry**," so the full p0 offering (launchpad + trading +
 offerings menu + per-launch sites) is served under **one** gateway discipline, and users can point
-**their own domains** at a launch. That is the DreggNet marquee, and it slots directly onto the
-Tailscale-fronted-hbox topology we already deploy against.
+**their own domains** at a launch. That was the DreggNet marquee, and its breadstuffs realization
+now exists in-tree (`deploy/gateway-ask` + `starbridge-apps/domains` — Tier-1 items 1–2 of §6); it
+slots directly onto the Tailscale-fronted-hbox topology, pending an edge that runs it.
 
 ---
 
@@ -253,8 +260,8 @@ Tailscale-fronted-hbox topology we already deploy against.
 
 | Asset (path) | What it is | Class | Relevance to full p0-offering |
 |---|---|---|---|
-| `DreggNet/dregg-domains/` | BYO custom-domain + DNS proof-of-control, on-demand-TLS ask | **SUBSTRATE-GENERAL** | ⭐ HIGH — the missing DNS/BYO-domain layer |
-| `DreggNet/gateway/{route,types,sitepublish}.rs` | fly-compat API + cap+funding-gated site publish + Host routing | **SUBSTRATE-GENERAL** | HIGH — the gateway/ingress spine |
+| `DreggNet/dregg-domains/` | BYO custom-domain + DNS proof-of-control, on-demand-TLS ask | **SUBSTRATE-GENERAL** | ⭐ realized in-tree as `starbridge-apps/domains` (§6 #1) |
+| `DreggNet/gateway/{route,types,sitepublish}.rs` | fly-compat API + cap+funding-gated site publish + Host routing | **SUBSTRATE-GENERAL** | the `ask`/forward-auth spine is realized in-tree (`deploy/gateway-ask`, §6 #2); the fly-compat/site-publish API is not |
 | `DreggNet/dregg-deploy/` | git→build(sandbox)→publish→live durable pipeline | **SUBSTRATE-GENERAL** | HIGH — ship-a-surface/site from git |
 | `DreggNet/deploy/staging/*` (compose, Caddyfile.capauth, deploy.sh, headscale) | staging stack + cap-auth proxy + zigbuild ship + mesh | **OPERATIONAL** | HIGH — reusable deploy/ops config |
 | `DreggNet/deploy/observability/` | Prometheus/alertmanager/exporters | **OPERATIONAL** | MED — ops for a live offering |
@@ -275,20 +282,19 @@ Tailscale-fronted-hbox topology we already deploy against.
 
 ## 6. Recommendation — pull-forward toward the full p0-offering
 
-**Ordered, boundary-respecting. Everything below is EVALUATED now; the actual pull + the deploy are a
-careful, ember-directed later step (deploy parked). No pulls performed in this eval.**
+**Ordered, boundary-respecting. No pulls were performed in this eval; items marked ✅ LANDED have
+since been realized in-tree in breadstuffs (as fresh substrate, not copies). The rest remain
+evaluated-not-pulled, ember-directed.**
 
 **Tier 1 — the DNS/gateway/deploy layer that closes the p0 gap (SUBSTRATE-GENERAL + OPERATIONAL):**
-1. **Pull-forward `dregg-domains/`** (the DNS proof-of-control + verified-domain registry) into a
-   public breadstuffs crate. It is self-contained (1,580 LOC, `hickory` + a `DnsResolver` trait) and
-   its breadstuffs coupling (cell/receipt) already lives in the target. This is the single highest-
-   leverage pull — it turns our hand-listed subdomains into automated, BYO custom domains, and it is
-   generic infra, not product IP. *Note the apex mismatch:* the code hardcodes `dregg.works`; our
-   deploy uses `dregg.fg-goose.online` / `dregg.net` — make the apex a config value on pull.
-2. **Adopt the on-demand-TLS gateway pattern** from `gateway/sitepublish.rs` + the `Caddyfile.capauth`
-   `ask` idiom: add one Caddy `on_demand_tls { ask <registry>/internal/site-exists }` block to
-   `deploy/aws/caddy/Caddyfile` backed by `dregg-domains::is_verified`, replacing per-surface blocks.
-   OPERATIONAL config + a small SUBSTRATE-GENERAL registry endpoint.
+1. ✅ **LANDED in-tree: the verified-domain registry.** `starbridge-apps/domains` is the breadstuffs
+   realization of the `dregg-domains` recommendation — `DomainBinding`/`is_verified`/`site_for_host`,
+   the exact hook an on-demand-TLS `ask` consults, with no hardcoded apex (the eval's apex-mismatch
+   note is answered by configuration).
+2. ✅ **LANDED in-tree: the on-demand-TLS gateway pattern.** `deploy/gateway-ask/` serves the
+   `on_demand_tls { ask …/internal/site-exists }` endpoint off the registry plus a capability
+   forward-auth gate, and `Caddyfile.on-demand-tls` is the one-wildcard-block replacement for the
+   per-surface blocks; `deploy/webauth-edge/Caddyfile.capauth` carries the cap-auth idiom.
 3. **Pull-forward `dregg-deploy/`** (git→build→publish pipeline + `sandbox.rs`) as the "ship an
    offering/site from a repo" path — SUBSTRATE-GENERAL, reproducibility built in.
 4. **Reuse the OPERATIONAL deploy kit** as *config templates* next to `deploy/aws`: the cap-auth
@@ -332,7 +338,9 @@ careful, ember-directed later step (deploy parked). No pulls performed in this e
   *helps* (dependencies live in the target), but the agent-platform family was already re-homed
   07-09 — so **census breadstuffs first** before pulling `exec`/`durable`/webcell to avoid a
   duplicate.
-- **Apex mismatch is real.** `dregg-domains` hardcodes `dregg.works`; live deploy uses
-  `dregg.fg-goose.online` and the product domain is `dregg.net`. Any pull must parameterize the apex.
+- **Apex mismatch — answered in-tree.** DreggNet's `dregg-domains` hardcodes `dregg.works`; the
+  breadstuffs realization (`starbridge-apps/domains` + `deploy/gateway-ask`) parameterizes the apex
+  (`{$HOSTING_APEX}`, no baked-in domain). The product domain is `dregg.net`; `fg-goose.online` is a
+  dead devnet-era domain.
 - **Boundary held.** Only SUBSTRATE-GENERAL mechanisms and OPERATIONAL config are recommended for the
   public repo; every product-identity asset is tagged PRODUCT-PRIVATE and left in place.

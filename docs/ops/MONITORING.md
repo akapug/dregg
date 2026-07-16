@@ -1,18 +1,23 @@
 # MONITORING — the signals, what each alert means, and the stack
 
 The node self-exposes Prometheus metrics at `GET /metrics`
-(`node/src/api.rs:1803` → `node/src/metrics.rs`); `deploy/observability/`
+(`node/src/api.rs:1888` → `node/src/metrics.rs`); `deploy/observability/`
 scrapes, alerts, and renders them. This doc is the *meanings*; the triage
 commands live in [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md).
 
 ## Run the stack
 
+On the live edge it already runs: `/opt/dreggnet/docker-compose.observability.yml`
+alongside the node's compose file (`deploy/aws/README.md`). The in-repo config
+is the closest-to-real in the tree but has drifted — the box also runs a
+blackbox exporter this file does not define (its own header says so). To stand
+it up elsewhere:
+
 ```sh
-# on the box (nodes bind loopback, so the stack runs host-network):
 rsync -a deploy/observability/ box:/opt/dregg-observability/
 ssh box 'cd /opt/dregg-observability && GRAFANA_ADMIN_PASSWORD=<strong> \
   docker compose -f docker-compose.observability.yml up -d'
-# view (everything binds 127.0.0.1 — tunnel in):
+# view (grafana/prometheus/alertmanager bind 127.0.0.1 — tunnel in):
 ssh -L 3000:127.0.0.1:3000 box     # Grafana → http://localhost:3000
 ```
 
@@ -48,7 +53,7 @@ default every alert also lands in the local `alert-sink` log container.
 | Alert | Sev | Fires when | First move |
 |---|---|---|---|
 | ConsensusDivergence | page | rust↔lean divergence counter > 0 | INCIDENT-RESPONSE §5 — treat as a consensus bug, snapshot logs now |
-| NodeDown | page | a node's /metrics unscrapeable 2m | `systemctl status dregg-gateway` / `dregg-node@N` |
+| NodeDown | page | a node's /metrics unscrapeable 2m | `docker compose ps` + `docker logs dreggnet-dregg-node-1` on the edge (INCIDENT-RESPONSE §2) |
 | NodeNotFinalizing | page | mempool has turns, attestations flat 10m | quorum check — every member's `/status` (INCIDENT-RESPONSE §1) |
 | ValidatorSilent | warn | no vote from a member >10m | that member's box/gossip; at n=3, one silent member halts finality |
 | HeightNotAdvancing | warn | submissions but flat height 30m | finality stall triage |
@@ -57,7 +62,7 @@ default every alert also lands in the local `alert-sink` log container.
 | TurnRejectSpike / AuthFailureSpike / CapRefusalSpike | warn | >20 refusals in 10m | Security dashboard — probe vs broken client |
 | SandboxDenials | warn | confined code hit its cage | inspect the workload |
 | AsyncProofFailures / InvalidProofSubmissions | warn | proving pool failures / invalid proofs submitted | prove-pool logs; a submitter probing verification |
-| HostExporterDown / HostDiskAlmostFull / HostDiskCritical / HostMemoryPressure / HostOOMKill | warn/page | host health | free disk (old logs, `cargo clean` in /opt/dregg), grow the volume |
+| HostExporterDown / HostDiskAlmostFull / HostDiskCritical / HostMemoryPressure / HostOOMKill | warn/page | host health | free disk per INCIDENT-RESPONSE §4 (journald, dangling images — never the deployed image tags or the data dir), grow the volume |
 
 ## Known gaps (named, with the closure shape)
 

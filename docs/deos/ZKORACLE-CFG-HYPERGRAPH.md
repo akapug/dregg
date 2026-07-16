@@ -5,7 +5,8 @@ This subsystem attests that an API request (to Anthropic, or any TLS endpoint) i
 (`#assert_axioms ⊆ {propext, Classical.choice, Quot.sound}`) discharge — and then observes that the
 certificate machinery underneath is a special case of *arbitrary hypergraph reduction*.
 
-Three files, `metatheory/Dregg2/Crypto/{Cfg,ZkOracle,Hypergraph}.lean`, wired into `Dregg2.lean`.
+Five files, `metatheory/Dregg2/Crypto/{Cfg,CfgCompact,ZkOracle,Hypergraph,GraphRewrite}.lean`, wired into
+`Dregg2.lean` (crown imports at `:177-183`).
 
 ## 1. `Crypto/Cfg` — the CFG parse-certificate kernel (nested structure the DFA cannot express)
 
@@ -24,6 +25,12 @@ certificate ⟺ language" pattern to context-free grammars.
   STARK `extractable` carrier — the only crypto residue).
 - Non-vacuity: the Dyck grammar `S → [ S ] | ε` (context-free but NOT regular) with a genuine parse of
   `[]` landed in the language via the bridge.
+- **Compact certificate** — `Crypto/CfgCompact.lean`: the O(tokens) certificate (a leftmost rule sequence
+  replayed as a pushdown run), replacing the quadratic form-chain on the wire. `compact_sound` (an
+  accepted replay proves language membership) + `compact_to_chain` (an accepted replay rebuilds the
+  `CfgAccepts` form-chain — the wire changes, the theorem doesn't). The Rust wire is
+  `zkoracle-prove/src/cfg.rs`: `CompactCert` (`:605`), `prove_cfg_compact` (`:652`),
+  `verify_cfg_compact` (`:766`, the O(tokens) replay; `expand_compact` for interop only).
 
 ## 2. `Crypto/ZkOracle` — the capstone: authentic ∧ well-formed ∧ injection-free
 
@@ -96,7 +103,10 @@ mathlib-automata dependence). Nothing implementation-specific survives as a Lean
 - A reference `CfgVerifierKernel` faces the same decidability obstacle as `Dfa`'s (deciding `CfgAccepts`
   against an arbitrary grammar) — a decidable-rule refactor, not the generic cascade (already proved).
 - Binding the SAME body across legs (the Fiat–Shamir shared commitment: DECO's `encode facts` = the
-  CFG input's Poseidon2 commitment) is currently an explicit hypothesis; a deployed circuit threads it
-  as a shared witness.
-- Compact (non-quadratic) parse certificates (the linear CFG-parsing scheme, IACR 2024/562) are an
-  efficiency refinement over the form-chain — correctness-first here.
+  CFG input's Poseidon2 commitment) is absent from the formal statement — `zkOracle_sound`
+  (`metatheory/Dregg2/Crypto/ZkOracle.lean:77`) quantifies over an independent `decoStmt` and an
+  independent `body` with no hypothesis linking them, so the three conjuncts can speak about
+  different data; a deployed circuit threads the binding as a shared witness.
+
+(The compact non-quadratic parse certificate, once listed here as an open efficiency refinement, is
+landed on both sides — `Crypto/CfgCompact.lean` + `zkoracle-prove/src/cfg.rs`, §1 above.)

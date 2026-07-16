@@ -39,8 +39,8 @@ It is the conjunction of three things, each with its own evidence:
    byte-identical post-state, demonstrated by the differential gauntlet below.
 
 This is **audited + differential parity, not proven equivalence.** That is the honest bar, and it is
-the bar this document argues is sufficient to ship the Rust executor by default with the Lean kernel
-as opt-in.
+the bar this document argues is sufficient for the Rust executor's two roles: the producer where Lean
+cannot link, and the trusted cross-check beside the default Lean producer on native.
 
 ## The differential gauntlet
 
@@ -82,12 +82,12 @@ rejections) so it cannot pass by trivially gapping or rejecting everything.
 The gauntlet self-skips (does not fail) when `lean_available()` is false — it cannot run the verified
 kernel without the linked archive.
 
-## Two alignments closed (2026-06-26): CellUnseal + AttenuateCapability
+## Two closed alignments: CellUnseal + AttenuateCapability
 
-These two cohort effects were previously `RustAcceptsLeanRejects` residuals; both are now
-`BothAcceptStateAgree` (byte-identical post-state, including `.root()`), enforced by the gauntlet (off
-the allowlist). The investigation found the divergences were **not** Rust under-enforcements — Rust
-was correct on both — so the fix was on the verified/harness side:
+These two cohort effects are `BothAcceptStateAgree` (byte-identical post-state, including `.root()`),
+enforced by the gauntlet off the allowlist — worth recording because each once classified as a
+divergence, and the investigation found neither was a Rust under-enforcement (Rust was correct on
+both; the alignment landed on the verified/harness side):
 
 - **`CellUnseal`** — the divergence was a **verified-spec over-rejection**, not a wire artifact. The
   admission gate (`Admission.admissible` / `AdmissionReason.admissionReason`) gated the AGENT on
@@ -135,8 +135,8 @@ honestly-named residuals — Rust would accept these turns where the verified sp
   The native cap graph is exercised without the wire limit in
   `dregg-turn::conservation_mint_property`.
 
-(`AttenuateCapability` and `CellUnseal` were formerly listed here; both are now aligned —
-`BothAcceptStateAgree` — see "Two alignments closed" above.)
+(`AttenuateCapability` and `CellUnseal` are not residuals — both are aligned,
+`BothAcceptStateAgree`; see "Two closed alignments" above.)
 
 Each residual is a divergence **of the wire boundary or a staged value-model migration**, not a
 demonstrated case of Rust committing an *unsound* state. None is a `BothAcceptStateDiverge`. The
@@ -145,9 +145,13 @@ recKExec` theorem**, because the Rust executor is not formally specified. Parity
 differential, and a new effect or gate must be added to the corpus (and, ideally, the audit) for the
 guarantee to extend to it.
 
-## The bar for "ship Rust by default, Lean opt-in"
+## The bar for relying on the Rust executor in its roles
 
-Shipping the Rust executor by default is justified when:
+The Rust executor carries two roles: the **producer on no-lean-link targets** (wasm32/zkvm, where the
+Lean archive cannot link) and the **differential cross-check on native** (where the verified Lean
+executor is the authoritative producer by default — `default = ["prover", "exec-lean"]`,
+`sdk/Cargo.toml:101`; opt out with `DREGG_LEAN_PRODUCER=0`, `sdk/src/runtime.rs:30-40`). Relying on it
+in those roles is justified because:
 
 1. the verified executor refines the spec — **proven** (`Exec ⊑ Spec`);
 2. the audited under-enforcements are aligned to the verified spec — **done** (the six alignments;
@@ -157,10 +161,11 @@ Shipping the Rust executor by default is justified when:
    under-enforcement** — **demonstrated** by `rust_lean_parity_gauntlet.rs`;
 4. every divergence that remains is **named, characterised, and in the safe direction** (the verified
    kernel is stricter), with a closure path — **true** of the two residuals above (`Burn`, `Mint`;
-   `CellUnseal` and `AttenuateCapability` are now aligned, not residuals).
+   `CellUnseal` and `AttenuateCapability` are aligned, not residuals).
 
-All four hold. A node that wants the verified guarantee end-to-end links the Lean archive and runs it
-as the authoritative shadow; the SDK default is the Rust executor, justified by the parity above.
+All four hold. On native the verified guarantee is the default end-to-end (the Lean producer, with the
+Rust executor as the parallel cross-check); on wasm/zkvm the Rust producer inherits exactly the parity
+argued above, with the two named residuals as its honest boundary.
 
 ## Where to look
 

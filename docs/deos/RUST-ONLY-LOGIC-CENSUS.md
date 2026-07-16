@@ -50,14 +50,16 @@ direction; aligned six under-enforcements) and the differential gauntlet
 (`exec-lean/tests/rust_lean_parity_gauntlet.rs`, 17 effects byte-identical incl. `.root()`,
 0 silent divergence over a corpus). Both self-skip when the Lean archive is unlinked.
 
-**The SWAP factor (load-bearing, and bigger than the parity doc suggests).** There is a deployed
+**The SWAP factor (load-bearing).** There is a deployed
 runtime inversion that makes the **verified Lean executor authoritative**, default-ON on native
 builds: `produce_via_lean` (`exec-lean/src/lean_apply.rs:1402`) drives the turn through
 `recKExec` via FFI and installs the Lean post-state + commit verdict *unconditionally*, demoting
 Rust to a checked reference; a disagreement surfaces as `LeanAuthoritative { rust_agreed: false }`.
 Gated by `lean_producer_env_enabled()` (`sdk/src/runtime.rs:35`, `node/src/state.rs:39`),
-default `true` unless `DREGG_LEAN_PRODUCER` is off. So the parity doc's "ship Rust by default,
-Lean opt-in" framing (`docs/RUST-LEAN-EXECUTOR-PARITY.md:11`) reads **stale**.
+default `true` unless `DREGG_LEAN_PRODUCER` is off. The parity doc states the same inversion up
+front (`docs/RUST-LEAN-EXECUTOR-PARITY.md:12`): on native builds the verified Lean executor is
+the authoritative producer by default (`default = ["exec-lean"]`; opt out with
+`DREGG_LEAN_PRODUCER=0`), with Rust as the differential cross-check and the wasm/zkvm producer.
 
 But Rust is still load-bearing where the swap can't reach:
 1. **wasm / zkvm builds** (`feature = "no-lean-link"`): the archive isn't linked,
@@ -94,7 +96,7 @@ genuine → false accept. Not fails-closed, not out-of-scope. The mitigating con
   (`cell/src/commitment.rs`), the chained `wireCommit` (`cell/src/commitment.rs`) — now the v11
   8-felt `node8` geometry (~124-bit faithful; `docs/reference/faithful-commitment.md`, v9→v10→v11).
 - Sorted-Poseidon2 leaf roots: `compute_heap_root` (`cell/src/state.rs:409`),
-  `compute_fields_root` (`cell/src/commitment.rs:380`), `compute_canonical_capability_root`
+  `compute_fields_root` (`cell/src/state.rs:470`), `compute_canonical_capability_root`
   (`cell/src/commitment.rs:595`). The heap tree sorts leaves
   (`circuit/src/heap_root.rs:161`, `leaves.sort_by_key(|l| l.addr.as_u32())`) then folds a
   padded binary Poseidon2 Merkle (`CanonicalHeapTree::new`, `circuit/src/heap_root.rs:157`).
@@ -211,11 +213,11 @@ not a TODO.
 ### 5. Verifier orchestration glue — `sdk/src/full_turn_proof.rs`, `turn/src/executor/proof_verify.rs`, `lightclient/src/lib.rs`
 
 **What it is.** The Rust logic that picks *which descriptor/VK a proof verifies against*: the
-rotated cutover (`verify_effect_vm_rotated_with_cutover`, `sdk/src/full_turn_proof.rs:3515`),
-cohort-run splitting (`split_into_cohort_runs`, `sdk/src/full_turn_proof.rs:3186` +
-`turn/src/executor/proof_verify.rs:39`), descriptor resolution by name
-(`circuit/src/effect_vm_descriptors.rs:1407`+), the leg-chain adjacency checks
-(`proof_verify.rs:367`, `full_turn_proof.rs:4312`), the recursion driver
+rotated cutover (`verify_effect_vm_rotated_with_cutover`, `sdk/src/full_turn_proof.rs:4312`),
+cohort-run splitting (`split_into_cohort_runs`, `sdk/src/full_turn_proof.rs:3802` +
+`turn/src/executor/proof_verify.rs:45`), descriptor resolution by name
+(`circuit/src/effect_vm_descriptors.rs`), the leg-chain adjacency checks
+(`proof_verify.rs:631-657`, `full_turn_proof.rs:5062-5184`), the recursion driver
 (`circuit-prove/src/ivc_turn_chain.rs`), and the light-client driver (`lightclient/src/lib.rs:183`).
 
 **Lean-status.** Rust-only **glue**, but the *bindings it enforces* are grounded: every rotated
@@ -225,35 +227,44 @@ Lean `binding_sound` / `light_client_verifies_whole_history`); the light-client 
 embodiment of `light_client_verifies_whole_history`.
 
 **Class: mostly FAILS-CLOSED — with ONE soundness-critical exception.** Cohort splitting (leg
-count + adjacency checked, `proof_verify.rs:376`), name→JSON resolution (FS-bound), leg chaining
+count + adjacency checked, `proof_verify.rs:631-657`), name→JSON resolution (FS-bound), leg chaining
 (anchors trusted-pinned, forged after-state UNSAT), and the aggregation fold (reorder/drop/insert
 is UNSAT in-circuit; the host-side admission gate is *documented as NOT the soundness boundary*,
 `lightclient/src/lib.rs:27`, with tamper tests confirming) all **fail closed**. The exception:
 
 **The authority-floor deny-list — `is_forbidden_plain_cap_descriptor`
-(`sdk/src/full_turn_proof.rs:3497`) + `is_forbidden_authority_only_cap_write_descriptor`
-(`:3466`), used at the cutover `:3613`.** A "plain" cap descriptor (e.g.
+(`sdk/src/full_turn_proof.rs:4203`) + `is_forbidden_authority_only_cap_write_descriptor`
+(`:4162`), used at the cutover `:4469`.** A "plain" cap descriptor (e.g.
 `introduceVmDescriptor2R24`, `revokeVmDescriptor2R24`, `attenuateVmDescriptor2R24`,
 `grantCapVmDescriptor2R24`) is a valid AIR with **no in-circuit cap-membership crown** — a
 producer who never held the capability can produce a proof that genuinely verifies under it. The
-only thing stopping a light-client false-accept of forged authority is this **hand-maintained
-`matches!` name deny-list**. If a new authority-bearing descriptor enters the wide registry and is
-not added here, a cap effect verifies under it and is accepted → host-trusted authority laundered
-into a light-client proof. The *consequence* (cap-open descriptors carry the depth-16 crown, plain
-ones don't) is Lean-modeled per-descriptor, but the **completeness of the deny-list** — "every
-membership-free authority descriptor is forbidden" — is a manual census, **not Lean-grounded**.
+deny-list is the verifier's floor against laundering that authority into a light-client proof,
+and its two legs sit at different resolutions:
 
-**Class: SOUNDNESS-CRITICAL (false-accept if the list is incomplete).**
+- **The list-completeness leg is mechanically enforced.** The test
+  `authority_deny_list_is_complete_over_deployed_registry` (`:6153`) enumerates EVERY descriptor
+  in EVERY deployed registry against a typed `DescriptorAuthorityClass` classification (`:4227`)
+  and fails on any unclassified authority-shaped descriptor or any `LaundersAuthority` descriptor
+  the deny-list misses — a new authority-bearing descriptor cannot enter the registry without
+  either a classification or a red gate. This is a test-time completeness gate, not a runtime
+  check, but the "hand-maintained census with nothing checking it" description no longer holds.
+- **The write-bearing cap effects no longer ride the deny-list alone.** The cap-open write
+  wrappers genuinely prove + light-client-verify the cap-tree write in-circuit ("THE TOOTH IS
+  ON", `:4153-4163`), and the authority-only wrappers are light-client-REJECTED — so for those
+  effects the barrier is a real in-circuit constraint, with the deny-list as the routing gate.
+
+**Class: SOUNDNESS-CRITICAL (false-accept if the classification itself misjudges a
+descriptor).** The residual is the deeper leg: the *classification* (`DescriptorAuthorityClass`)
+is Rust judgment, and there is no Lean totality theorem behind it.
 
 **To Lean-ground.** Make crown-presence a **structural** property the verifier reads off the
 parsed descriptor (presence of the `capOpenConstraintsEff` op-set / a typed
 `carries_authority_crown` flag emitted by Lean), and prove `∀ desc, authority_bearing(desc) →
-has_crown(desc)`, so an omission is impossible by construction rather than caught by a name match.
-(One honest caveat: confirm the current list is in fact complete against the live WIDE registry —
-a registry-vs-list diff is the concrete first step to clear or sharpen this finding. The
-companion `cap_open_key_has_wide_twin` heuristic at `:2450` uses `key.contains("TB")` /
-`name.contains("CapOpen")` string-matching — not a wrong-descriptor accept, but
-commitment-width-fragile glue worth replacing with the registry membership it mirrors.)
+has_crown(desc)`, so a misclassification is impossible by construction rather than caught by an
+enumeration test. (The companion `cap_open_key_has_wide_twin` heuristic at `:2706` uses
+`key.contains("TB")` / `name.contains("CapOpen")` string-matching — not a wrong-descriptor
+accept, but commitment-width-fragile glue worth replacing with the registry membership it
+mirrors.)
 
 ---
 
@@ -262,8 +273,8 @@ commitment-width-fragile glue worth replacing with the registry membership it mi
 **What it is.** The DAG (`blocklace/src/finality.rs`), the consensus ordering rule
 (`supermajority_threshold(n)=2n/3+1`, `blocklace/src/ordering.rs:237`; `tau` / wave-ratification),
 equivocation detection (paper Def 4.2 incomparability, `finality.rs:828`), and the node glue:
-`poll_finalized_blocks` slices `ordered[executed_up_to..]` by a bare index
-(`node/src/blocklace_sync.rs:911`); the live `VerifiedFinality` FFI gate (default-ON, re-runs the
+`poll_finalized_blocks` executes via the identity-keyed `ExecutionCursor`
+(`node/src/blocklace_sync.rs:1360`, `node/src/execution_cursor.rs`); the live `VerifiedFinality` FFI gate (default-ON, re-runs the
 Lean rule, `node/src/finality_gate.rs:60`); slashing as a real conserving executor `Transfer`
 (`node/src/equivocation_court_service.rs`).
 
@@ -294,19 +305,23 @@ tip *assumed*; it extends unfoolability along the revocation axis, not the conse
 SOUNDNESS-CRITICAL for finalized-canonicity (Property B), with precise Rust-only gaps.** For a
 value-bearing client, a Property-B break (settle on a non-finalized fork) is economically a
 soundness break. The Property-B gaps:
-- **Gap B1 — finalized-prefix monotonicity is REFUTED unconditionally.**
-  `metatheory/Dregg2/Consensus/TauPrefixMonotone.lean` proves monotonicity only under
-  `FinalizedRegionStable`, and gives an **honest (non-Byzantine) laggard counterexample**: a late
-  validator's blocks pass every `insert` check yet `xsort` into the middle of the already-executed
-  prefix, so the node's bare `executed_up_to` index re-executes one block and **skips a finalized
-  honest turn forever** (the FinalityGate admits by `(creator,seq)` membership, not position, so it
-  doesn't catch it). The module's own header: *"The deployed code does NOT sit inside the true
-  theorem — that is the soundness finding this module reports."* The node-side index slicing
-  (`blocklace_sync.rs`) is the Rust-only glue that is unsound under honest lag. **Update since this
-  census:** a dedicated `node/src/execution_cursor.rs` (`ExecutionCursor`) now carries the
-  `stableCheck` observability signal and detects the catch-up reorg (loud log +
-  `dregg_tau_prefix_shifts_total`); the gap is not yet fully closed (still conditional on
-  `FinalizedRegionStable`), but the "bare index, no machinery" description is stale.
+- **Gap B1 — index slicing REFUTED; the identity cursor is the deployed closure; the residual is
+  its proof.** `metatheory/Dregg2/Consensus/TauPrefixMonotone.lean` proves prefix monotonicity
+  only under `FinalizedRegionStable`, with an **honest (non-Byzantine) laggard counterexample**:
+  a late validator's blocks pass every `insert` check yet `xsort` into the middle of the
+  already-executed prefix — under a bare `executed_up_to` index the node re-executes one block
+  and **skips a finalized honest turn forever** (the FinalityGate admits by `(creator,seq)`
+  membership, not position, so it doesn't catch it). The deployed code does not slice by index:
+  `poll_finalized_blocks` runs the "TAU-PREFIX-MONOTONE CLOSURE (identity cursor, not an
+  index)" — `cursor.pending(&ordered)` set-difference plus `cursor.mark_executed(block_id)`
+  (`node/src/blocklace_sync.rs:1360-1468`), boot-restored (`:2101`) and durably persisted
+  (`persist_executed_block_ids`). `node/src/execution_cursor.rs`'s own header ("# The closure")
+  states the cursor **must not depend on** `FinalizedRegionStable`: executed blocks are tracked
+  by `BlockId` identity, so a mid-prefix insertion executes late exactly once and nothing already
+  executed is re-served; the prefix-shift event surfaces as observability (loud log +
+  `dregg_tau_prefix_shifts_total`, the executable mirror of the Lean `stableCheck`). **The
+  residual is the Rust↔Lean bridge:** no Lean theorem yet connects the deployed identity cursor
+  to the corrected `tau_finalized_prefix_monotone`.
 - **Gap B2 — `FinalityCert` signature verification — CLOSED since this census.** As written in
   2026-06-26 the cert checked signer COUNT over bare pubkeys, with no Ed25519 verification. That
   is now fixed: `FinalityCert` carries the Ed25519 signatures, and `distinct_signers`
@@ -326,10 +341,10 @@ The equivocation court (slash) is **not** a separate soundness surface — slash
 verified conserving executor turn; a detection bug is a fairness/liveness concern, not an
 invalid-transition accept.
 
-**To Lean-ground.** B1: implement the already-specified `stableCheck` gate (or an identity-based
-cursor) so the node sits inside `tau_finalized_prefix_monotone`. B2: make `verify_finalized_history`
-verify each Ed25519 signature over `(finalized_root, epoch)` and bind `participant_count` to a
-trust-anchored committee root (like the VK), then prove the Rust check discharges full `CertValid`.
+**To Lean-ground.** B1: prove the deployed identity cursor realizes the corrected
+`tau_finalized_prefix_monotone` (the code-side closure is landed; the Rust↔Lean bridge theorem is
+the open piece). B2: CLOSED (bullet above) — the deployed check already verifies the hybrid
+ed25519 + ML-DSA-65 votes against the trusted committee; no code work remains on this leg.
 B3: prove Rust `xsort` ≡ the Lean linearization.
 
 ---
@@ -341,25 +356,27 @@ the already-modeled and fails-closed candidates demoted (they are named, not ran
 
 ### Tier 1 — soundness-critical, Rust-only, and reachable
 
-1. **The authority-floor deny-list** (`is_forbidden_plain_cap_descriptor`,
-   `sdk/src/full_turn_proof.rs:3497`). *Highest priority.* A hand-maintained `matches!` of strings
-   is the **only** barrier between a membership-free authority descriptor and a light-client
-   false-accept of forged authority. Smallest blast-radius fix with the sharpest soundness payoff:
-   first a registry-vs-list completeness diff (hours), then replace the name match with a
-   **structural** crown-presence check read off the parsed descriptor + the Lean theorem
-   `authority_bearing(desc) → has_crown(desc)`. Tractable because the per-descriptor crown
+1. **The authority-floor deny-list — the structural/Lean leg** (`is_forbidden_plain_cap_descriptor`,
+   `sdk/src/full_turn_proof.rs:4203`). The census's original near-term step — a registry-vs-list
+   completeness diff — is DONE and mechanized: `authority_deny_list_is_complete_over_deployed_registry`
+   (`:6153`) enumerates every deployed-registry descriptor against `DescriptorAuthorityClass` and
+   red-gates any unclassified authority-shaped descriptor, and the write-bearing cap-open wrappers
+   now prove the cap-tree write in-circuit (§5). What remains is the deeper leg: replace the name
+   match + Rust classification with a **structural** crown-presence check read off the parsed
+   descriptor + the Lean theorem `authority_bearing(desc) → has_crown(desc)`, so a
+   misclassification is impossible by construction. Tractable because the per-descriptor crown
    semantics are *already* Lean-modeled; what's missing is the totality/structural-resolution step.
 
-2. **The finalized-prefix / `executed_up_to` cursor** (Gap B1, `node/src/blocklace_sync.rs`). The
-   node's index-slicing was *refuted* unsound under honest lag by `TauPrefixMonotone.lean` — a
-   finalized honest turn can be skipped. **Partially addressed since this census:** a dedicated
-   `node/src/execution_cursor.rs` (`ExecutionCursor`) now exists, carrying the `stableCheck`
-   observability signal and detecting reorg-by-catchup (loud log + `dregg_tau_prefix_shifts_total`),
-   with `blocklace_sync.rs` holding it (`cursor: Arc<RwLock<ExecutionCursor>>`). The remaining work
-   is the identity-keyed cursor advancing so the deployed code sits *inside*
-   `tau_finalized_prefix_monotone` (the gap is still conditional on `FinalizedRegionStable`), and
-   proving it — but the "bare index, no machinery" framing is now stale. Tractable because the Lean
-   side is done.
+2. **The finalized-prefix cursor's Rust↔Lean bridge** (Gap B1, `node/src/blocklace_sync.rs`). The
+   index-slicing design was *refuted* unsound under honest lag by `TauPrefixMonotone.lean` — a
+   finalized honest turn could be skipped. The identity-keyed advance is **deployed** (§6):
+   `poll_finalized_blocks` executes via `cursor.pending(&ordered)` set-difference with
+   `cursor.mark_executed(block_id)` by `BlockId` identity (`node/src/blocklace_sync.rs:1393,1408,1468`),
+   boot-restored via `ExecutionCursor::restore` (`:2101`) and durably persisted
+   (`persist_executed_block_ids`), with the `stableCheck` observability signal (loud log +
+   `dregg_tau_prefix_shifts_total`). The remaining work is the Rust↔Lean bridge theorem
+   connecting the deployed identity cursor to the corrected `tau_finalized_prefix_monotone`.
+   Tractable because the Lean side is done.
 
    *(Gap B2 — `FinalityCert` signature verification — is now CLOSED, see §6; it was the #2 near-term
    fix in the 2026-06-26 census and has since landed the Ed25519 `verify_strict` + committee-anchored
@@ -410,7 +427,8 @@ the already-modeled and fails-closed candidates demoted (they are named, not ran
 - **Most verifier orchestration** (cohort split, name→JSON resolution, leg chaining, aggregation
   fold, light-client driver) — Rust glue but fails-closed: proofs are Fiat-Shamir-bound to their
   descriptor, anchors are trusted-pinned, in-circuit constraints make reorder/forge UNSAT. The one
-  exception is the authority deny-list (Tier 1 #1).
+  exception is the authority deny-list's classification leg (Tier 1 #1; its list-completeness leg
+  is mechanically gated).
 - **Blocklace consensus for Property A** — OUT-OF-SCOPE: invalid-transition acceptance is fully
   circuit-enforced; consensus picks *which valid fork*, not *whether a transition is valid*.
 - **`cell/src/nullifier_set.rs`** (BLAKE3, Rust-only, unmodeled) — OUT-OF-SCOPE for the light
@@ -419,10 +437,13 @@ the already-modeled and fails-closed candidates demoted (they are named, not ran
 ## The honest one-liner
 
 The genuinely soundness-critical, Rust-only, and not-yet-Lean-grounded set (as of this census,
-since narrowed) is **two small glue/check gaps** (the authority-floor deny-list; the
-finalized-prefix cursor) plus **two foundational refinement proofs** (Rust-commitment ≡ model;
-Rust-executor ≡ `recKExec` / swap-totality) — the third original glue gap, the `FinalityCert`
-signature check, has since CLOSED (Ed25519 `verify_strict` + committee-anchored quorum). The
-deny-list and the finalized-prefix gap are the high-leverage near-term work — small, sharp, and
-each already has its Lean counterpart waiting. The two refinements are the deep TCB-shrink. Everything else is already modeled, fails-closed, or
-the standard crypto floor. ( ◕‿◕ )
+since narrowed) is **two glue/check gaps, each partially closed** (the authority-floor
+deny-list — its list-completeness leg is now mechanically gated by the registry-enumeration test
+and the write wrappers prove the cap write in-circuit, leaving the structural crown-presence +
+Lean totality theorem; the finalized-prefix cursor — the identity-keyed advance is deployed,
+leaving the Rust↔Lean bridge theorem to `tau_finalized_prefix_monotone`) plus **two foundational refinement proofs**
+(Rust-commitment ≡ model; Rust-executor ≡ `recKExec` / swap-totality) — the third original glue
+gap, the `FinalityCert` signature check, is CLOSED (Ed25519 `verify_strict` + committee-anchored
+quorum). The remaining deny-list and cursor legs are the high-leverage near-term work — small,
+sharp, and each already has its Lean counterpart waiting. The two refinements are the deep
+TCB-shrink. Everything else is already modeled, fails-closed, or the standard crypto floor. ( ◕‿◕ )

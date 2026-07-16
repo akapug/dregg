@@ -55,7 +55,7 @@ substances are carried, respectively, by `CellState::balance` (value),
 ### Identity is content-addressed
 
 `id == derive_raw(public_key, token_id)` — a domain-separated BLAKE3 of `public_key ‖
-token_id` under the key `"dregg-cell-id-v1"` (`types/src/lib.rs:701`, re-exported as
+token_id` under the key `"dregg-cell-id-v1"` (`types/src/lib.rs:867`, re-exported as
 `CellId` via `cell/src/id.rs:5`). The constructors (`Cell::new`, `new_hosted`,
 `with_balance`, `from_config`, `spawn_child`) all derive `id` this way
 (`cell/src/cell.rs:380`). `verify_id_integrity()` re-checks the invariant
@@ -73,28 +73,28 @@ commitment for sovereign cells (`cell/src/ledger.rs:234`).
 
 ## `CellState` — the mutable substance store
 
-`CellState` (`cell/src/state.rs:101`) is the value + state + evidence-root registers.
+`CellState` (`cell/src/state.rs:161`) is the value + state + evidence-root registers.
 Several scalars are `pub(crate)`-sealed (audit P0-1) and mutate only through verbs:
 
 - `fields: [FieldElement; 16]` — the 16 fixed user slots (`STATE_SLOTS = 16`,
-  `cell/src/state.rs:18`), like Mina's `app_state`; `FieldElement = [u8;32]`
-  (`cell/src/state.rs:12`).
+  `cell/src/state.rs:40`), like Mina's `app_state`; `FieldElement = [u8;32]`
+  (`cell/src/state.rs:34`).
 - `field_visibility` + `commitments` — per-slot progressive disclosure: `Public`,
   `Committed` (only a `BLAKE3(value ‖ nonce)` hash is public), or
-  `SelectivelyDisclosable` (`cell/src/state.rs:74`, `cell/src/state.rs:699`). A stale
+  `SelectivelyDisclosable` (`cell/src/state.rs:96`, `cell/src/state.rs:167`). A stale
   commitment after `set_field` returns the all-zero sentinel rather than leaking the
-  plaintext (audit P1-2, `cell/src/state.rs:717`).
+  plaintext (audit P1-2, `cell/src/state.rs:855`).
 - `nonce: u64` — monotone action counter; `increment_nonce` refuses on overflow (audit
-  P2-2 replaced `wrapping_add`, `cell/src/state.rs:875`).
+  P2-2 replaced `wrapping_add`, `cell/src/state.rs:1060`).
 - `balance: i64` — **signed** value (THE EPOCH, `docs/EPOCH-DESIGN.md` §5): issuer wells
-  carry `−supply` so the reachable total is zero (`cell/src/state.rs:127`). Sign
+  carry `−supply` so the reachable total is zero (`cell/src/state.rs:187`). Sign
   discipline is **by verb**: ordinary moves use `debit_balance` / `apply_balance_change`
-  (refuse below zero, `cell/src/state.rs:570`, `cell/src/state.rs:889`); issuer-well moves
+  (refuse below zero, `cell/src/state.rs:696`, `cell/src/state.rs:1074`); issuer-well moves
   use `well_debit_balance` / `apply_balance_change_well` (may go negative,
-  `cell/src/state.rs:589`, `cell/src/state.rs:905`). The executor gates who may invoke the
+  `cell/src/state.rs:715`, `cell/src/state.rs:1090`). The executor gates who may invoke the
   well verbs.
 - `proved_state: bool` — true only when all 16 fields were set by a single
-  proof-authorized action (`cell/src/state.rs:129`).
+  proof-authorized action (`cell/src/state.rs:192`).
 - `delegation_epoch`, `committed_height`, `swiss_table_root`, `refcount_table_root`.
 
 ### Overflow maps: fields_root, system_roots, heap
@@ -103,36 +103,36 @@ The 16-slot array is "unsqueezed" into committed maps (record-layer upgrade):
 
 - **`fields_map` / `fields_root`** — an unbounded `key → FieldElement` map over keys
   `>= 16`; keys `0..15` stay in `fields[]`, keys `>= 16` live in the map
-  (`cell/src/state.rs:773` `get_field_ext`, `cell/src/state.rs:786` `set_field_ext`).
+  (`cell/src/state.rs:901` `get_field_ext`, `cell/src/state.rs:914` `set_field_ext`).
   `fields_root` is the OPENABLE sorted-Poseidon2 Merkle root over the map
-  (`compute_fields_root`, `cell/src/state.rs:380`) — the same `dregg_circuit::heap_root`
+  (`compute_fields_root`, `cell/src/state.rs:470`) — the same `dregg_circuit::heap_root`
   scheme the circuit uses, so a light client can OPEN it (not an opaque sponge). It
   reserves a position-stable zero leaf for the refusal-audit slot
-  (`REFUSAL_AUDIT_EXT_KEY = 2^32`, `cell/src/state.rs:28`, `cell/src/state.rs:334`).
+  (`REFUSAL_AUDIT_EXT_KEY = 2^32`, `cell/src/state.rs:50`, `cell/src/state.rs:400`).
 - **`system_roots: [FieldElement; 8]`** — the kernel-owned side-table roots, each at its
   own fixed index `system_root::{ESCROW, QUEUE, REFCOUNT, STURDYREF, DELEG, NULLIFIER,
-  COMMIT, SEALED_BOXES}` (`cell/src/state.rs:47`). A `set_field*` can NEVER reach these;
+  COMMIT, SEALED_BOXES}` (`cell/src/state.rs:68`). A `set_field*` can NEVER reach these;
   only the kernel's escrow/queue/nullifier/... transitions touch them, via
-  `set_system_root` (`cell/src/state.rs:690`) — a disjoint namespace with a disjoint
-  mutator. Digested by `compute_system_roots_digest` (`cell/src/state.rs:267`).
+  `set_system_root` (`cell/src/state.rs:772`) — a disjoint namespace with a disjoint
+  mutator. Digested by `compute_system_roots_digest` (`cell/src/state.rs:348`).
 - **`heap_map` / `heap_root`** — a `(collection_id, key) → FieldElement` map; sorted-
-  Poseidon2 root via `compute_heap_root` (`cell/src/state.rs:429`), the Rust shadow of
+  Poseidon2 root via `compute_heap_root` (`cell/src/state.rs:519`), the Rust shadow of
   Lean `Substrate.Heap.root`.
 
 All three roots are **order-canonical, injective, anti-vacuous**: distinct maps cannot
 share a root, a tampered value flips the root, and a legacy (no-activity) cell carries a
 fixed cell-independent empty constant (`empty_fields_root`, `empty_heap_root`,
 `empty_system_roots_digest`) so absorbing it into the commitment is a uniform no-op
-(`cell/src/state.rs:1139` anti-vacuity test, `cell/src/state.rs:361`).
+(`cell/src/state.rs:1324` anti-vacuity test, `cell/src/state.rs:442`).
 
 ### Signed-balance boundary encoding
 
 A signed balance crosses any commitment/wire boundary as an order-preserving biased
 `u64`: `biased = bits(balance) ⊕ 2^63`, so `a < b ⇔ biased(a) < biased(b)` unsigned
-(`balance_biased`, `cell/src/state.rs:954`). It decomposes into two 32-bit range-table
-limbs (`balance_limbs`, `cell/src/state.rs:967`) and serializes as `encode_balance_le`
-(`cell/src/state.rs:976`). Pins: `biased(0) = 2^63`, `biased(i64::MIN) = 0`,
-`biased(i64::MAX) = u64::MAX` (`cell/src/state.rs:1012`).
+(`balance_biased`, `cell/src/state.rs:1139`). It decomposes into two 32-bit range-table
+limbs (`balance_limbs`, `cell/src/state.rs:1152`) and serializes as `encode_balance_le`
+(`cell/src/state.rs:1161`). Pins: `biased(0) = 2^63`, `biased(i64::MIN) = 0`,
+`biased(i64::MAX) = u64::MAX` (`cell/src/state.rs:1197`).
 
 ## `Permissions` — per-action authority
 
@@ -148,27 +148,27 @@ incomparable — `cell/src/permissions.rs:51`).
 
 ## `CapabilitySet` — the c-list (authority substance)
 
-`CapabilitySet` (`cell/src/capability.rs:202`) is "the c-list: what other cells this cell
+`CapabilitySet` (`cell/src/capability.rs:263`) is "the c-list: what other cells this cell
 can reference" (`cell/src/cell.rs:272`). Each entry is a `CapabilityRef`
-(`cell/src/capability.rs:44`): a `target: CellId`, a local `slot`, `permissions:
+(`cell/src/capability.rs:52`): a `target: CellId`, a local `slot`, `permissions:
 AuthRequired`, optional `breadstuff` token hash, optional `expires_at`, optional
 `allowed_effects: Option<EffectMask>` facet (None = unrestricted), and an optional
-`stored_epoch` for revocation freshness (`cell/src/capability.rs:101`).
+`stored_epoch` for revocation freshness (`cell/src/capability.rs:109`).
 
 Authority moves only down the attenuation lattice: `is_attenuation(held, granted) =
-granted.is_narrower_or_equal(held)` (`cell/src/capability.rs:741`). `attenuate` /
+granted.is_narrower_or_equal(held)` (`cell/src/capability.rs:1012`). `attenuate` /
 `attenuate_faceted` / `attenuate_in_place` produce narrowed caps and refuse to widen
-(`cell/src/capability.rs:512`, `cell/src/capability.rs:603`).
+(`cell/src/capability.rs:715`, `cell/src/capability.rs:802`).
 
 `revoke(slot)` is a **tombstone** deletion: it drops the cap from the logical c-list AND
-records the slot in `tombstones` (`cell/src/capability.rs:458`), so the openable root
+records the slot in `tombstones` (`cell/src/capability.rs:619`), so the openable root
 folds a ZERO/padding ghost leaf at the revoked slot's sorted position rather than
 compacting (re-indexing) the tree — every other cap's membership witness stays valid, and
-the root matches the in-circuit revoke gate byte-for-byte (`cell/src/capability.rs:215`,
+the root matches the in-circuit revoke gate byte-for-byte (`cell/src/capability.rs:276`,
 `cell/src/state.rs` cap-root context note). `tombstoned_slots()` exposes the set
-(`cell/src/capability.rs:701`).
+(`cell/src/capability.rs:972`).
 
-`CapabilityCaveat` (`cell/src/capability.rs:31`) is the additive surface for
+`CapabilityCaveat` (`cell/src/capability.rs:39`) is the additive surface for
 witness-attached predicates and typed `FacetConstraint`s on a cap's exercise.
 
 ## `CellLifecycle` — retirement
@@ -221,35 +221,40 @@ The capability root absorbed here is the OPENABLE sorted-Poseidon2 Merkle root c
 circuit-side roots agree byte-identically. Revoked slots fold ZERO tombstone leaves
 (`cell/src/commitment.rs:579`).
 
-### The rotated v9 commitment (cell ≡ circuit) — v11 geometry, faithful 8-felt components
+### The rotated v9 commitment (cell ≡ circuit) — faithful 8-felt components
 
-`compute_canonical_state_commitment_v9_felt` (`cell/src/commitment.rs:1218`) is the
+`compute_canonical_state_commitment_v9_felt` (`cell/src/commitment.rs:1324`) is the
 cell-side reconstruction of the EffectVM rotated trace's row-0 `STATE_COMMIT` carrier — a
-Poseidon2 `wireCommitR` over **169** pre-iroot limbs (`V9_NUM_PRE_LIMBS`,
-`cell/src/commitment.rs:700`; the v13 geometry — 37 at v9, 67 at v10, 88 at v11,
-+56 fields-completion lanes 112..=167 + 1 pad at v13) built by
-`compute_rotated_pre_limbs` (`cell/src/commitment.rs:985`). The Merkle-root and
+Poseidon2 `wireCommitR` over **178** pre-iroot limbs (`V9_NUM_PRE_LIMBS`,
+`cell/src/commitment.rs:757`; base limbs 0..=37 with `revoked_root` the last base limb 37,
+completion lanes 38..=88, carrier-material octets 89..=112, fields-completion lanes
+113..=168, the cells-root completion reservation 169..=175, two pad limbs 176..=177)
+built by `compute_rotated_pre_limbs` (`cell/src/commitment.rs:1061`). The Merkle-root and
 authority components ride the pre-limbs **faithful 8-felt (~124-bit)**, each lane-0 at
-its historical position plus seven completion limbs: cap_root 25 ‖ 51..57
-(`compute_canonical_capability_root_8`, `cell/src/commitment.rs:585`), heap_root
-28 ‖ 58..64, fields_root 36 ‖ 65,66,19..23, the authority digest 24 ‖ 12..18
+its historical position plus seven completion limbs: cap_root 25 ‖ 52..58
+(`compute_canonical_capability_root_8`, `cell/src/commitment.rs:609`), nullifier_root
+26 ‖ 68..74, commitments_root 27 ‖ 75..81, heap_root 28 ‖ 59..65, fields_root
+36 ‖ 66,67,19..23, revoked_root 37 ‖ 82..88 (the credential-revocation accumulator the
+fail-closed non-membership gate opens against), the authority digest 24 ‖ 12..18
 (`compute_authority_digest_8` — folds ALL authority residue not on a named limb:
 permissions, VK, delegate, delegation, program, mode, token_id,
-visibility/commitments/proved/side-table roots, `fields[8..16]`), perms 33 ‖ 37..43,
-vk 34 ‖ 44..50, and — the v13 fields octet, closing the former `fields[0..7]`
+visibility/commitments/proved/side-table roots, `fields[8..16]`), perms 33 ‖ 38..44,
+vk 34 ‖ 45..51, and the fields octet, closing the former `fields[0..7]`
 32B→1-felt fold residual — each `fields[i]` lane-0 at 4+i plus completion lanes
-`112+7i..=112+7i+6` (`cell/src/commitment.rs:985-1090`). See
-[`faithful-commitment.md`](faithful-commitment.md) for the full campaign grounding.
+`113+7i..=113+7i+6` (`cell/src/commitment.rs:1061-1216`). The accumulator roots
+(nullifier/commitments/revoked) arrive as `Faithful8` context (`V9RotationContext`,
+`cell/src/commitment.rs:766` — the live `NullifierSet`/`CommitmentSet`/`RevokedSet`
+`root8` values). See [`faithful-commitment.md`](faithful-commitment.md) for the full
+campaign grounding.
 
-One honest residual in this producer: the accumulator completion limbs 67..87
-(nullifier-root lanes 1..7 → 67..73, commitments-root → 74..80, cells-root →
-81..87) stay zero-filled here — their genuine node8 fill lives on the circuit
-trace-producer path (`circuit/src/effect_vm/trace_rotated.rs`). The faithful 8-felt whole-image digest
-`compute_canonical_state_commitment_v9_felt8` (`cell/src/commitment.rs:1252`)
-IS the live deployed binding (the flag-day fired — `9e5a83935`): producer,
-executor verifier, and light client all bind the 8-felt commit; the 1-felt
-`_v9_felt` survives with test/bench callers only. The one remaining 1-felt LC
-surface is the `transferCapOpenTB` V3-registry fallback (see
+One honest residual in this producer: the circuit-only cells-root completion group
+(limbs 169..=175, lanes 1..7) stays zero-filled here — its genuine node8 fill lives on
+the circuit trace-producer path (`circuit/src/effect_vm/trace_rotated.rs`, the createCell
+trace generator). The faithful 8-felt whole-image digest
+`compute_canonical_state_commitment_v9_felt8` (`cell/src/commitment.rs:1358`)
+IS the live deployed binding: producer, executor verifier, and light client all bind the
+8-felt commit; the 1-felt `_v9_felt` survives with test/bench callers only. The one
+remaining 1-felt LC surface is the `transferCapOpenTB` V3-registry fallback (see
 `docs/reference/faithful-commitment.md`, residual 3).
 
 ## `Note` — the evidence substance
@@ -263,8 +268,11 @@ so cell-side note identity matches the circuit's field-domain commitment
 (`cell/src/note.rs:14`). Nullifiers are derived from note-intrinsic data only (no tree
 position), making them globally unique and federation-independent so double-spend
 protection works across federation boundaries (`cell/src/note.rs:10`). The `NullifierSet`
-(`cell/src/nullifier_set.rs`) is an append-only `BTreeSet<Nullifier>` with Merkle
-membership and adjacent-neighbor non-membership proofs (`cell/src/nullifier_set.rs:1`).
+(`cell/src/nullifier_set.rs`) is an append-only `BTreeMap<Nullifier, AppendRecord>` — each
+nullifier carries its spent-note value (the circuit's `NOTE_VALUE_LO` felt source) and its
+AAFI append sequence, with a `next_seq` cursor mirroring the deployed AAFI tree's
+free-index cursor — with Merkle membership and adjacent-neighbor non-membership proofs
+(`cell/src/nullifier_set.rs:96-106`).
 
 ## `dregg-cell-crypto` — the crypto layer
 

@@ -4,11 +4,12 @@
 auctions) · honest (graded against what is proved vs. spec vs. unbuilt). Present-tense, what-is. Every
 dregg claim carries a grade. The honest edges are named in §6, not buried.*
 
-The one-line thesis: **dregg already holds the specification of the auction the private-markets
+The one-line thesis: **dregg holds the specification of the auction the private-markets
 literature calls the frontier — a single-phase, no-committee, sealed-bid clearing over hidden
-commitments — as a machine-checked Lean theorem (`shielded_ring_clears`). What is missing is the
-circuit that realizes it. This doc maps the space, places dregg in it honestly, and says what to
-build.**
+commitments — as a machine-checked Lean theorem (`shielded_ring_clears`, fused by
+`shielded_ring_fused_clears`), AND the ring-clearing circuit that realizes it, at 2-leg and N-leg,
+with its residuals named (§2.4). This doc maps the space, places dregg in it honestly, and says
+what to build next.**
 
 ---
 
@@ -171,30 +172,41 @@ carry. Matching over hidden commitments removes it entirely: the matcher reads *
 claims, settles by spending nullifiers, and checks conservation over Pedersen commitments. **No party ever
 holds the plaintext or the ordering power.**
 
-**Grade — the honest heart of this doc: rung-3 is a Lean SPEC with a NAMED circuit gap.**
-`shielded_ring_clears` is a real machine-checked theorem, but it composes the matching layer (`MatchNode`)
-and the shielded-spend claim as **two layers, not yet fused by an in-AIR constraint** tying
-`node.offerAsset`/`offerAmount` to the hidden note's `asset`/`value` (the "value-commitments-in-AIR" weld;
-the demo legs deliberately leave `node.offerAsset = 10` unfused from the note asset). The **circuit
-realization** — folding N `prove_shielded_spend_leaf_with_claim` leaves into a ring-clearing apex that
-verifies the conserving cycle over hidden commitments — is a **MEDIUM→RESEARCH AIR build, not yet done**.
-The leaves + binding nodes exist; the apex above them does not. The module proves the spec the circuit
-must realize; it does not claim the circuit.
+**Grade — the honest heart of this doc: rung-3 is a Lean spec WITH its circuit realization; the
+residuals are named.** `shielded_ring_clears` is a real machine-checked theorem, and the fusion its
+original statement left open — the constraint tying `node.offerAsset`/`offerAmount` to the hidden
+note's `asset`/`value` — is welded at both altitudes. In Lean: `LegFused` + `shielded_ring_fused_clears`
+(`metatheory/Market/LedgerRealizationExt.lean:279`, `:302`) — every fused leg's committed offer IS a
+fresh member-spend note, so the matcher clears the real note, not a `MatchNode` beside it. In circuit:
+`circuit-prove/src/shielded_ring_clearing_air.rs` (2-leg, tight cycle) and
+`shielded_ring_clearing_nleg_air.rs` (N-leg, variable-length cycle + the partial-fill
+`offer ≥ want_min` inequality in-circuit), registered at `circuit-prove/src/lib.rs:52-53`. Both fold
+`prove_shielded_spend_leaf_with_claim` leaves into a clearing descriptor that enforces the fusion
+(`offer_asset == asset`, `offer_amount == value`, the value bound to the spent note through the
+re-computed Poseidon2 `value_binding`), the `CycleValid` ring edges, pairwise-distinct nullifiers, and
+Pedersen conservation with an in-circuit bit-decomposition range gadget closing the wraparound mint.
+**Named residuals** (per the modules' own headers): the conservation runs over the two-coordinate
+`pedTwoGen (v, r)` abstraction, not real in-circuit Ristretto point arithmetic; amounts above
+`2^VALUE_BITS` still lean on the off-AIR Bulletproof; the blinding coordinate's group-scalar reduction
+rides the off-AIR Schnorr excess. The module realizes the proved spec; the residuals are labeled, not
+asserted closed.
 
 **dregg's precise position:** the literature's frontier is single-phase, no-committee ZK-sealed-bid
-clearing. dregg has that as a *proved specification* (rung-3) resting on a *built and tested* shielded pool
-(§2.1) and a *proved* fair-clearing rule (§2.3) — a combination `DREGGFI-VISION.md §3` argues **no
-deployed system holds together**: beats CoW (orders visible to solvers), Penumbra (validator
-flow-decryption), Shutter (Keyper committee), and dark pools (operator peek), because there is *no instant
-and no party* that holds the plaintext. The gap is the ring-clearing AIR — the finishing step, honestly a
-research build, not a proved artifact.
+clearing. dregg has that as a *proved specification* (rung-3) with a *built* ring-clearing circuit at
+both sizes (§2.4), resting on a *built and tested* shielded pool (§2.1) and a *proved* fair-clearing
+rule (§2.3) — a combination `DREGGFI-VISION.md §3` argues **no deployed system holds together**: beats
+CoW (orders visible to solvers), Penumbra (validator flow-decryption), Shutter (Keyper committee), and
+dark pools (operator peek), because there is *no instant and no party* that holds the plaintext. What
+separates this from a running product is in-circuit clearing-price selection, the ledger-realization
+weld for the uniform-price layer, and the §2.4 residuals — integration and labeled seams, not a missing
+apex.
 
 ---
 
 ## 3. Ranked dregg-native shielded auction primitives — what to build
 
 Ranked shielded-first. Each: **mechanism · dregg primitive · why it beats the committee · honest gap ·
-build cost.** Grades: `PROVED-SPEC` (Lean theorem, circuit unbuilt) · `BUILT` (Rust, tested) ·
+build cost.** Grades: `PROVED-SPEC` (Lean theorem) · `BUILT` (Rust, tested) ·
 `MODEL-PROVED` (Lean, model-level) · `DESIGN` (not started).
 
 ### #1 — Single-phase ZK-sealed-bid uniform-price clearing (the marquee)
@@ -206,13 +218,13 @@ build cost.** Grades: `PROVED-SPEC` (Lean theorem, circuit unbuilt) · `BUILT` (
 - **Beats the committee.** Kills *non-reveal griefing* (no reveal phase — the §1.5 holy grail), *sniping*
   (uniform-price batch), and the *committee* (nothing to decrypt) in one object. This is the union
   `DREGGFI-VISION.md §3` says only dregg holds.
-- **Honest gap.** rung-3 is `PROVED-SPEC`; the ring-clearing AIR is unbuilt (§2.4), the uniform-price
-  layer is `MODEL-PROVED` not ledger-realized, and the AIR must *fuse* the `MatchNode` offer to the hidden
-  note (the in-AIR value-commitment weld). Also: the single-phase clearing must prove *winner selection*
-  (max/clearing-price) in-circuit — the sealed-auction winner logic is today Lean over revealed bids
-  (`winnerOf`), not a ZK circuit.
-- **Build cost.** **Large / RESEARCH.** The ring-clearing apex AIR + the in-AIR offer↔note fusion +
-  in-circuit clearing-price selection. This is the epoch weld, not a sprint.
+- **Honest gap.** The ring-clearing circuit and the offer↔note fusion are `BUILT` (§2.4). What remains:
+  the uniform-price layer is `MODEL-PROVED`, not ledger-realized; the single-phase clearing must prove
+  *winner selection* (max/clearing-price) in-circuit — the sealed-auction winner logic is Lean over
+  revealed bids (`winnerOf`), not a ZK circuit; plus the §2.4 residuals (in-circuit EC, amounts above
+  `2^VALUE_BITS`).
+- **Build cost.** **Medium→Large.** In-circuit clearing-price selection + the ledger-realization weld;
+  the apex and fusion exist.
 
 ### #2 — Shielded batch auction for the launchpad / fair-launch (highest near-term value)
 - **Mechanism.** A token launch (`docs/deos/DREGG-LAUNCHPAD-DESIGN.md`) runs as a **shielded uniform-price
@@ -226,7 +238,7 @@ build cost.** Grades: `PROVED-SPEC` (Lean theorem, circuit unbuilt) · `BUILT` (
   today) with uniform-price settlement — deferring the single-phase rung-3 AIR. That is a *deployable*
   shielded launch now, with the reveal-round tax, upgradable to single-phase when #1 lands.
 - **Build cost.** **Medium** for the two-phase version (compose existing proved pieces + launchpad wiring);
-  **Large** for single-phase (inherits #1's AIR).
+  **Medium→Large** for single-phase (inherits #1's remaining in-circuit selection build).
 
 ### #3 — Shielded DrEX private-matching DEX (the flagship application)
 - **Mechanism.** The DrEX multilateral ring matcher (`intent/src/solver.rs`: Johnson circuits +
@@ -236,9 +248,10 @@ build cost.** Grades: `PROVED-SPEC` (Lean theorem, circuit unbuilt) · `BUILT` (
 - **Beats the committee.** The whole `DREGGFI-VISION.md §4` DrEX claim: *private and fair without trusting
   any operator, committee, or sequencer*, residual leakage = timing + anonymity-set size + intentional
   clearing-price disclosure. No dark pool, encrypted mempool, or batch-auction DEX can claim that.
-- **Honest gap.** Same rung-3 AIR gap as #1, plus welding the model-level priced/optimal rungs (4–6) back
-  to `settleRing` (the ledger-realization weld, named in `DREGGFI-VISION.md §7`).
-- **Build cost.** **Large / RESEARCH** (this is #1 realized as a live exchange).
+- **Honest gap.** The ring-clearing circuit exists (§2.4); remaining is #1's in-circuit clearing-price
+  selection, plus welding the model-level priced/optimal rungs (4–6) back to `settleRing` (the
+  ledger-realization weld, named in `DREGGFI-VISION.md §7`), plus the exchange integration itself.
+- **Build cost.** **Large** (this is #1 realized as a live exchange).
 
 ### #4 — Shielded-Vickrey sealed auction for RWA / NFT (truthful, single-lot)
 - **Mechanism.** A single-lot sealed auction paying the **second price** — bidders bid true value (DSIC,
@@ -254,7 +267,7 @@ build cost.** Grades: `PROVED-SPEC` (Lean theorem, circuit unbuilt) · `BUILT` (
   mechanism** — the private second-max computation is exactly the MPC/ZK sweet spot the literature flags,
   and dregg has *neither* the Lean spec nor the circuit for it yet. `DESIGN`.
 - **Build cost.** **Medium** (Lean second-price spec — a `runnerUpOf` + truthfulness theorem) then
-  **Large** (the ZK second-max circuit). Sequenceable after #1's AIR proves the pattern.
+  **Large** (the ZK second-max circuit). Sequenceable after #1's in-circuit selection proves the pattern.
 
 ### #5 — Private OTC / RFQ (shielded bilateral quote)
 - **Mechanism.** A request-for-quote where responders submit sealed quotes; the requester clears against
@@ -263,10 +276,9 @@ build cost.** Grades: `PROVED-SPEC` (Lean theorem, circuit unbuilt) · `BUILT` (
   2-leg swap) + the shielded pool.
 - **Beats the committee.** OTC desks *are* the operator-peek problem; a shielded RFQ removes the desk's
   informational edge.
-- **Honest gap.** Same rung-3 AIR gap, but the *smallest* instance (2 legs, 1 pair) — the natural **first
-  circuit to build** to de-risk the apex AIR before the general matcher.
-- **Build cost.** **Small→Medium** as the minimal rung-3 realization (2-leg ring apex), inheriting the
-  general AIR research but at the smallest tractable size.
+- **Honest gap.** The 2-leg ring circuit **is built** — `shielded_ring_clearing_air.rs` is exactly this
+  bilateral instance (2 legs, 1 pair, tight cycle). What remains is product wiring, not circuit research.
+- **Build cost.** **Small** — the minimal rung-3 circuit exists; the build is the RFQ surface around it.
 
 ### #6 — Dark pool via MPC (where ZK does *not* suffice)
 - **Mechanism.** A private *order book* where no single party sees resting orders — continuous or
@@ -319,7 +331,8 @@ later; do not build MPC for the auction program.**
   NFT sales (§3 #4), where DSIC matters and demand-reduction is moot (one unit). It requires a **new
   second-price mechanism** (dregg proves first-price today) *and* a private second-max ZK circuit. Worth
   doing — the private second-price computation is a textbook ZK/MPC sweet spot — but *after* the
-  uniform-price rung-3 AIR proves the clearing-circuit pattern. Do not lead with it.
+  in-circuit clearing-price selection proves the private-selection pattern (the ring-clearing circuit
+  pattern already exists, §2.4). Do not lead with it.
 
 - **MPC** is not recommended for the auction program (§4). It re-introduces the committee the ZK fold
   exists to delete. Reserve it strictly for a future persistent dark-pool book if that ever becomes a
@@ -332,38 +345,43 @@ frontier primitive, and it dodges the operator-peek and reveal-round failures in
 
 ## 6. The single most-valuable thing to build next
 
-**Build the 2-leg shielded ring-clearing AIR (§3 #5's core / the minimal rung-3 realization), then lift it
-to the launchpad shielded batch (§3 #2).**
+**The ring-clearing circuit exists at both sizes (§2.4). Build the in-circuit clearing-price selection,
+then lift the fold to the launchpad shielded batch (§3 #2).**
 
 Rationale, honestly:
-- Rung-3 (`shielded_ring_clears`) is the *entire differentiator* — the proved spec of the frontier the
-  literature is stuck short of. Its one gap is the **ring-clearing apex AIR**. Everything downstream
-  (marquee single-phase auction, DrEX DEX, RFQ, shielded launchpad) waits on that one circuit. Building it
-  converts a `PROVED-SPEC` into a `BUILT` artifact and unlocks the whole §3 ladder.
-- Start at the **smallest tractable size** — the 2-leg (single-pair) ring, which `demoShieldedRing`
-  already exercises in Lean — to de-risk the RESEARCH-grade AIR (folding
-  `prove_shielded_spend_leaf_with_claim` leaves into a conserving-cycle apex, with the in-AIR
-  offer↔hidden-note fusion) before scaling to the general N-leg matcher. This is the LANE-FINISHER move:
-  realize the proved spec at minimal size, then widen.
+- Rung-3 (`shielded_ring_clears` / `shielded_ring_fused_clears`) is the *entire differentiator* — the
+  proved spec of the frontier the literature is stuck short of — and its circuit realization is `BUILT`:
+  the 2-leg tight cycle and the N-leg variable cycle with the partial-fill inequality in-circuit, fused
+  to the hidden notes. The critical path to the marquee single-phase auction (§3 #1) is now **in-circuit
+  winner/clearing-price selection** (today Lean over revealed bids, `winnerOf`) and the
+  **ledger-realization weld** for the uniform-price layer (model-proved, not `settleRing`-realized).
+  Everything downstream (DrEX DEX, RFQ, shielded launchpad single-phase) waits on those two, not on an
+  apex.
+- The named circuit residuals — in-circuit Ristretto point arithmetic (conservation today runs over the
+  two-coordinate `pedTwoGen` abstraction) and amounts above `2^VALUE_BITS` (off-AIR Bulletproof) — are
+  labeled seams to close alongside, not blockers to the selection build.
 - The **first product** to carry it is the **launchpad shielded batch** (§3 #2): it has a concrete
   near-term user (fair token launches), its fairness promise *is* "no operator peek," and it can ship a
-  deployable two-phase version on today's proved pieces *while* the single-phase AIR is built — so value
-  lands before the research finishes.
+  deployable two-phase version on today's proved pieces *while* the single-phase selection circuit is
+  built — so value lands before the research finishes.
 
-Concretely, the next lane: **the 2-leg shielded ring-clearing AIR apex** — fold two shielded-spend leaves
-into an apex that verifies the conserving `CycleValid` cycle over the hidden commitments, fusing each
-`MatchNode` offer to its hidden note in-AIR. That single circuit turns the marquee Lean theorem into a
-running private auction.
+Concretely, the next lane: **the in-circuit clearing-price selection** — prove the uniform clearing
+price / winner set over the committed bids inside the fold, composing with the built ring-clearing
+descriptor. That circuit turns the marquee Lean theorem plus its built clearing fold into a running
+single-phase private auction.
 
 ---
 
 *Grade summary: shielded pool = BUILT+tested · sealed first-price auction = Lean-PROVED, ledger-realized ·
-uniform-price optimality = Lean-PROVED, model-level · rung-3 private matching = PROVED-SPEC, circuit AIR
-UNBUILT · shielded-Vickrey = DESIGN · MPC dark pool = DESIGN/deferred. The frontier is a proved
-specification with one named research circuit between it and a running system.*
+uniform-price optimality = Lean-PROVED, model-level · rung-3 private matching = PROVED-SPEC + circuit
+BUILT (2-leg tight + N-leg partial-fill, fused; in-circuit EC and >2^VALUE_BITS range = named residuals)
+· in-circuit clearing-price selection = DESIGN · shielded-Vickrey = DESIGN · MPC dark pool =
+DESIGN/deferred. The frontier is a proved specification with its clearing circuit built; the named
+remaining builds are in-circuit price selection and the ledger-realization weld.*
 
 *Sources: DREX-DESIGN.md, DREGGFI-VISION.md, DREGG-LAUNCHPAD-DESIGN.md; `Market/ShieldedClearing.lean`,
-`Market/Optimality.lean`, `Market/Fairness.lean`, `Dregg2/Intent/SealedAuction.lean`,
-`circuit-prove/src/shielded/pool.rs`, `intent/src/trustless.rs`. External: Budish–Cramton–Shim QJE 2015;
-Vickrey 1961; CoW Protocol docs; Shutter Network; Cryptobazaar (NDSS 2026); zkHawk; Penumbra ZSwap;
-arxiv 2606.14939.*
+`Market/LedgerRealizationExt.lean`, `Market/Optimality.lean`, `Market/Fairness.lean`,
+`Dregg2/Intent/SealedAuction.lean`, `circuit-prove/src/shielded/pool.rs`,
+`circuit-prove/src/shielded_ring_clearing_air.rs`, `circuit-prove/src/shielded_ring_clearing_nleg_air.rs`,
+`intent/src/trustless.rs`. External: Budish–Cramton–Shim QJE 2015; Vickrey 1961; CoW Protocol docs;
+Shutter Network; Cryptobazaar (NDSS 2026); zkHawk; Penumbra ZSwap; arxiv 2606.14939.*

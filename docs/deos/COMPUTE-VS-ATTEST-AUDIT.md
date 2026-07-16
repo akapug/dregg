@@ -1,16 +1,19 @@
 # Compute-vs-Attest / Input-Wire-Binding Audit (the DEPLOYED circuit)
 
-> **⚠ GEOMETRY STALE (post-v12/v13-geom regen) — the CONCLUSIONS still hold, the NUMBERS do not.**
+> **⚠ GEOMETRY STALE (post-regen) — the CONCLUSIONS still hold, the NUMBERS do not.**
 > This audit traced the `transferVmDescriptor2R24` geometry as of 2026-06-28
-> (`trace_width=817`, `public_input_count=62`). The v12-geom and v13-geom big-bang regens have
-> since widened it: the committed row now shows **`trace_width=2495`, `public_input_count=68`**,
-> and the AFTER-carrier base moved (≈151→227). So every CONCRETE column index below (the BEFORE
-> block base 188, AFTER block base 239, commit carriers 705..712/809..816, and the `PI[46..53]`/
-> `PI[54..61]` last-16-PI cites) is **pre-regen and must be re-traced** — with `pi_count=68` the
-> "last 16 PIs" are indices 52..67. The load-bearing verdict is UNCHANGED: the deployed core
-> computes over root-bound wires, and the three named seams (§Real findings) remain staged/tracked.
-> Only the specific column/PI numbers are stale; treat them as "as of 2026-06-28". (The balance
-> gate `var[76]−var[54]−var[68]+2·var[69]·var[68]` itself survived the regens intact.)
+> (`trace_width=817`, `public_input_count=62`). Later big-bang regens widened it: the committed
+> row at HEAD shows **`trace_width=2664`, `public_input_count=68`**
+> (`circuit/descriptors/rotation-wide-registry-staged.tsv`). So every CONCRETE column index below
+> (the BEFORE block base 188, AFTER block base 239, commit carriers 705..712/809..816, and the
+> `PI[46..53]`/`PI[54..61]` last-16-PI cites) is **pre-regen and must be re-traced** — with
+> `pi_count=68` the "last 16 PIs" are indices 52..67. Body `file:line` cites are likewise
+> as-of-date. The load-bearing verdict is UNCHANGED: the deployed core computes over root-bound
+> wires. The three findings' STATUS is updated in place below: FINDING 1's enforcement gates are
+> deployed (the satisfaction member's committed VK remains the named residual), FINDING 2 is
+> superseded by the in-circuit custom-binding fold, and FINDING 3's producer routes wide (a
+> narrow-acceptance residual remains). (The balance gate
+> `var[76]−var[54]−var[68]+2·var[69]·var[68]` itself survived the regens intact.)
 
 Date: 2026-06-28. Scope: read-only soundness audit answering one sharp question for the
 **deployed** verify path (NOT the staged gentian/satisfaction welds):
@@ -37,13 +40,20 @@ carriers.** Every load-bearing input wire in the deployed wide effect-VM leg is 
 in-circuit to the v1 state columns the gates read, those columns absorb (via a co-proven
 Poseidon2 chip AIR) into the published 8-felt ~124-bit commit, and the commit PIs are bound
 to the light client's trusted pre/post commit. There is **no free-wire forgery hole in the
-deployed normal-core arithmetic**. Three honestly-named seams remain, all already tracked:
-(1) house-capacity SATISFACTION is STAGED, not deployed — the deployed gate re-evaluates
-over CALLER-supplied slot views a pure light client does not bind; (2) the custom-effect
-sub-proof's PUBLIC INPUTS are not cross-bound to the host cell's state (the commitment is
-bound; its relation to host state is not); (3) the cap-open narrow residual carries a
-1-felt (~31-bit) commit, a width FLOOR (not a free wire) for cap-gated turns lacking a wide
-twin.
+deployed normal-core arithmetic**. Three honestly-named seams remain, all tracked:
+(1) house-capacity SATISFACTION: the bare-descriptor dodge is CLOSED in the deployed VK
+bytes (the bare-floor refuse weld) and in the verifier (GATE B), but the satisfaction
+member itself carries no committed VK/producer yet, so satisfaction is not
+pure-light-client-witnessed end-to-end; (2) the custom-effect sub-proof's commitment is
+enforced IN-CIRCUIT by the recursion fold at 8 felts, and the deployed per-turn executor
+entry pins the sub-proof's state I/O to the host's committed pre/post state fail-closed
+(`enforce_custom_proof_state_binding`, `turn/src/executor/proof_verify.rs:620`); the
+residual is chain-fold wiring — the state-binding fold node exists and is tested, but
+`prove_chain_core_rotated`'s custom arm folds through the commitment-only node
+(`ivc_turn_chain.rs:2868`); (3) the cap-open producer routes every live key wide (~124-bit), and
+the 1-felt (~31-bit) commit persists only as an ACCEPTANCE residual (the
+no-rotation-witness fallback + the verifier's narrow-TB admission) — a width FLOOR, not a
+free wire.
 
 ---
 
@@ -176,85 +186,126 @@ list; this audit extends it to the chip + memory buses and the full wide-commit 
 
 ## Real findings / honestly-named seams in the DEPLOYED path
 
-### FINDING 1 (Medium) — house-capacity SATISFACTION is STAGED, not deployed
+### FINDING 1 (Medium→Low-Medium) — house-capacity SATISFACTION: dodge CLOSED, satisfaction VK still the residual
 
 The capacity-gate SATISFACTION constraints (e.g. the sealed-escrow gate: both legs
-Deposited before, Consumed after) are NOT in any committed VK. The deployed gate is the
-OFF-AIR re-evaluation `verify::verify_slot_caveat_manifest` (the `SETTLE_ESCROW` arm), which
-reads **CALLER-supplied** `initial_fields`/`final_fields` 8-felt slot views — a pure light
-client does NOT bind those (`circuit/src/effect_vm/satisfaction_weld.rs:12-30`). The in-AIR
-fix (`settle_escrow_satisfaction_gates`, `satisfaction_weld.rs:85-111`) and its selector
-forcing (the GENTIAN keystone, `circuit/src/effect_vm/authority_digest_weld.rs` header) are
-explicitly **STAGED — built BESIDE the deployed, NOT flipped, NOT in a committed VK**
-(`satisfaction_weld.rs:21-30`, `authority_digest_weld.rs:27-37`).
+Deposited before, Consumed after) are still NOT in any committed VK — the deployed
+satisfaction check is the OFF-AIR re-evaluation `verify::verify_slot_caveat_manifest` (the
+`SETTLE_ESCROW` arm), which reads **CALLER-supplied** `initial_fields`/`final_fields`
+8-felt slot views a pure light client does NOT bind
+(`circuit/src/effect_vm/satisfaction_weld.rs` header, its STAGED block). But the
+**bare-descriptor dodge the original finding turned on is CLOSED, two ways, both
+deployed:**
 
-- **Bound today:** the capacity COVERAGE carrier IS deployed (`caveatCommit` → the wide
-  commit), so the manifest cannot be OMITTED — a light client witnesses *presence*
-  (`satisfaction_weld.rs:7-10`).
-- **NOT bound today (pure light client):** that the gate HELD over the committed state. A
-  verifier holding the committed-state opening witnesses it (the cap-membership posture);
-  a commitments-only light client does not.
-- **Severity:** Medium, scoped to capacity-gated cells (escrow/vault/obligation/...).
-  This is attest-over-caller-supplied-inputs for capacity SATISFACTION specifically — not a
-  forgeable free wire in the core arithmetic, but a real gap between "verifier with opening"
-  and "pure light client."
-- **Fix (named, in progress):** the gated VK epoch — emit `settleEscrowSatVmDescriptor2R24`
-  with the four satisfaction gates + the GENTIAN selector forcing, commit its VK, flip the
-  live path. (`docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6 + flip plan.)
+- **GATE A (in the committed VK bytes):** the bare-floor refuse weld
+  (`circuit/src/effect_vm/bare_floor_refuse_weld.rs`, §FLIPPED) welds per-capacity-tag
+  `floor == 0`-refuse gates onto every deployed bare cohort member — the committed cohort
+  rows carry the `-gentian-deployed-bare-refuse` suffix — so a cell whose committed
+  manifest DECLARES a capacity is UNSATISFIABLE under the bare descriptor.
+- **GATE B (in the deployed verifier, geometry-free):** a declared-capacity turn that
+  binds a bare cohort descriptor is rejected by name
+  (`required_satisfaction_member`, `sdk/src/full_turn_proof.rs:4330,4484`), independent of
+  the refuse weld. Inert for the pure-LC entry (no declaration in hand) and for
+  non-declaring cells.
 
-### FINDING 2 (Low-Medium) — custom-effect sub-proof PUBLIC INPUTS not cross-bound to host state
+The welded satisfaction members exist as committed staged-registry descriptors
+(`settleEscrowSat`/`dischargeSat`/`vaultSatVmDescriptor2R24`,
+`circuit/src/effect_vm/trace_rotated.rs:2722,2758,2764`) with declaration-keyed routing
+(`rotated_descriptor_name_for_declared_capacity`, `trace_rotated.rs:2809`).
 
-`verify_proof_bind` (`circuit-prove/src/custom_proof_bind.rs:237-282`) binds, for a Custom
-effect: (1) the program resolves by the committed `vk_hash` column, (2) the program's
-self-computed VK equals it, (3) the sub-proof VERIFIES under the program's AIR, (4) the
-sub-proof's PI **commitment** equals the committed `custom_proof_commitment` column. That
-column is a turn param ⇒ bound into the turn hash and the effects_hash (so it cannot be
-swapped post-hoc, and it is reachable from the auth derived_hash binding).
+- **Bound today:** the capacity COVERAGE carrier (`caveatCommit` → the wide commit), so
+  the manifest cannot be OMITTED; and the dodge — a declared-capacity turn cannot verify
+  under a bare cohort member.
+- **NOT bound today (pure light client):** that the gate HELD over the committed state.
+  The satisfaction members carry **no wide twin, no producer, no committed VK yet**
+  (`trace_rotated.rs:2716-2722`, the §6 BLOCKER-1 note), so satisfaction is witnessed only
+  by a verifier holding the committed-state opening.
+- **Severity:** Low-Medium, scoped to capacity-gated cells (escrow/vault/obligation/...).
+  The dodge is closed fail-closed; the residual is the missing satisfaction-member VK
+  (a liveness + pure-LC-witnessing gap, not a forgery path).
+- **Fix (named residual):** emit the satisfaction members' wide twins + producer, commit
+  their VKs, flip the live path (`docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6).
 
-What is NOT bound: the sub-proof's **public inputs themselves** to the host cell's pre/post
-commit. The in-AIR `ProofBind` op is only a bounds check
-(`custom_proof_bind.rs:6-16`; `descriptor_ir2.rs:469-481,572` — `ProofBindSpec` carries only
-`guard`/`commit`/`vk`, no host-state wiring); the recursion + commitment-equality is an
-OFF-batch check the executor/verifier runs (`enforce_custom_effect_proofs`, the AIR-comp
-audit's FINDING 1 path), not part of the main batch STARK. So the sub-proof attests
-"program P verified over PIs committing to C" — the relation between those PIs and the
-ACTUAL host state transition is not enforced in-circuit.
+### FINDING 2 (Low) — custom-effect sub-proof: binding enforced IN-CIRCUIT; host-state weld live on the per-turn entry; residual = chain-fold wiring
 
-- This is **load-bearing only if** an application relies on the custom sub-proof to
-  constrain host state (e.g. "this transfer is valid per program P over THIS cell's
-  balance"). The host's own Custom-effect state mutation is still EffectVM-constrained, so
-  this is not a free-wire forgery of the core transition — it is a missing semantic link
-  for the foreign attestation.
-- Secondary: the `custom_proof_commitment` is **4 felts (~62-bit)** over adversary-chosen
-  PIs (`custom_proof_bind.rs:61-70`) — a named bit-width floor, collision-relevant, to
-  rotate to 8 felts in a dedicated effect-VM descriptor pass.
-- **Severity:** Low-Medium / by-design boundary; flag so integrators know the custom
-  sub-proof does not pin its I/O to host state.
-- **Fix:** wire the sub-proof's state-I/O public inputs to the host `OLD_COMMIT`/`NEW_COMMIT`
-  columns in the `ProofBind` op (a VK-affecting descriptor change) if the intended semantics
-  require host-state binding; widen the commitment to 8 felts.
+The original finding's mechanics are superseded. The off-AIR `verify_proof_bind` engine is
+DELETED (stark-kill `dd038c08e` — `circuit-prove/src/custom_proof_bind.rs:30-35`); nothing
+in the tree verifies a proof-bind off-AIR. The binding lives IN-CIRCUIT: the chain prover's
+custom fold arm (`prove_custom_binding_node_segmented`,
+`circuit-prove/src/joint_turn_recursive.rs:595`, wired into `prove_chain_core_rotated` at
+`ivc_turn_chain.rs:2868`) folds the effect-vm leg as a DUAL-EXPOSE leaf — the claimed
+commitment published at IR2 PI slots 46..53 — with the custom sub-proof leaf, whose
+commitment is computed in-circuit from the sub-proof's real PIs, and `connect`s them lane
+by lane. A turn whose effect-vm row claims a commitment no verifying sub-proof backs is
+UNSAT: no root proof exists, and a pure light client never receives a verifying artifact.
+The commitment is the full **8-felt** `WideHash` class (~124-bit birthday;
+`PROOF_BIND_COMMIT_WIDTH = 8`, `custom_proof_bind.rs:90`), with old 4-felt custom
+artifacts REFUSED at the versioned admission boundary (`require_custom_commit_teeth_v2`).
 
-### FINDING 3 (Low) — cap-open narrow residual: a 1-felt (~31-bit) commit WIDTH FLOOR (not a free wire)
+The host-state semantic link, per entry point:
 
-A cap-gated turn whose key lacks a proven wide twin (today `transferCapOpenTB`) verifies via
-the V3 fallback (`full_turn_proof.rs:3951-3962`), and its commit is the 1-felt
-`PI[OLD_COMMIT]`/`PI[NEW_COMMIT]` broadcast into slot 0 of the 8-felt anchor
-(`full_turn_proof.rs:4664-4673`). This is **not a free wire** — the 1-felt commit is pinned
-in-circuit to those PIs; it is a COMMITMENT-WIDTH floor (~31-bit vs the ~124-bit wide core)
-for that narrow tail. The reject tooth (`full_turn_proof.rs:3953-3961`) forces any cap-open
-key that HAS a wide twin onto the ~124-bit wide route, so the floor is confined to the named
-residual.
+- **Per-turn (the deployed executor entry): BOUND.** The sole rotated proof-carrying
+  verify path (`verify_and_commit_proof_rotated`, `turn/src/executor/proof_verify.rs:524`)
+  enforces the custom-proof state-binding weld fail-closed BEFORE any leg verify —
+  `enforce_custom_proof_state_binding(turn, stored_old8, claimed_new8)`
+  (`proof_verify.rs:620`), plus the entry weld `enforce_custom_proof_entry_binding`
+  (`proof_verify.rs:415`) — pinning the sub-proof's state I/O to the host's committed
+  pre/post state.
+- **Chain-fold (in-circuit): the mechanism exists; the deployed arm does not wire it.**
+  `prove_custom_binding_node_state_segmented`
+  (`circuit-prove/src/joint_turn_recursive.rs:653`) welds the custom leaf's exposed
+  `[old8 ‖ new8]` prefix (`prove_custom_leaf_with_state_commitment`,
+  `CUSTOM_STATE_CLAIM_LEN = 24`, fail-closed on an 8-lane commitment-only leaf) to the
+  leg's real `SEG_FIRST_OLD`/`SEG_LAST_NEW` lanes, with in-lib both-polarity tests. The
+  deployed custom arm of `prove_chain_core_rotated` folds through the commitment-only
+  `prove_custom_binding_node_segmented` (`ivc_turn_chain.rs:2868`) — there the fold proves
+  "program P verified over PIs committing to C, and C is the committed column" without
+  the state weld.
+
+- The residual is **load-bearing only on the chain-fold path**, and only if an application
+  relies on the custom sub-proof to constrain host state (e.g. "this transfer is valid per
+  program P over THIS cell's balance"). The host's own Custom-effect state mutation is
+  EffectVM-constrained, so this is not a free-wire forgery of the core transition — it is
+  the un-wired state weld for the foreign attestation on that one arm.
+- Automation note: the deployed end-to-end fold poles (honest-accept + forged-reject
+  through `prove_turn_chain_recursive`) are `#[ignore]`d tests not run in CI
+  (`custom_proof_bind.rs:46-53`); the per-lane forgery tooth
+  (`every_forged_commitment_lane_is_rejected_by_the_fold`) runs on plain `cargo test`.
+- **Severity:** Low; flag so integrators know the deployed chain-fold custom arm binds
+  the commitment only — the per-turn executor entry pins the sub-proof's state I/O to
+  host state fail-closed.
+- **Fix (named seam):** wire `prove_custom_binding_node_state_segmented` into
+  `prove_chain_core_rotated`'s custom arm (the state-claim leaf and the fold node exist
+  and are tested; the wiring is the residual).
+
+### FINDING 3 (Low) — cap-open narrow residual: a 1-felt (~31-bit) ACCEPTANCE floor (not a free wire)
+
+Every live cap-open key — the authority crown, the §10 WRITE tail, AND the turn-bound
+`transferCapOpenTB` — has a proven wide twin in the wide registry, and the producer routes
+them all wide (`sdk/src/full_turn_proof.rs:2999-3006`; `node/src/turn_proving.rs:1328-1341`),
+so an honest cap-gated turn publishes the full 8-felt (~124-bit) commit. The 1-felt commit
+persists on the ACCEPTANCE side: the verifier's wide-twin predicate excludes the TB family
+(`cap_open_key_has_wide_twin`, `full_turn_proof.rs:2706-2718`), so a narrow
+`transferCapOpenTB` V3 leg survives the fallback filter (`full_turn_proof.rs:4446-4455`)
+and binds at its single `PI[OLD_COMMIT]`/`PI[NEW_COMMIT]` felt broadcast into slot 0 of the
+8-felt anchor (the `leg_commit` narrow branch, `full_turn_proof.rs:5123+`); the
+no-rotation-witness producer path likewise emits a 1-felt commit
+(`turn_proving.rs:1350`). This is **not a free wire** — the 1-felt commit is pinned
+in-circuit to those PIs; it is a COMMITMENT-WIDTH floor (~31-bit vs the ~124-bit wide
+core). The wide-dodge reject tooth forces every NON-TB cap-open key onto the wide route,
+confining the floor to the named residual.
 - **Severity:** Low; cap-gated turns only; classification = bit-width calibration/floor.
-- **Fix:** land the wide twin for the remaining cap-open keys (in progress per the wide
-  registry weld).
+- **Fix (named residual):** extend the verifier's wide-twin predicate (and so the reject
+  tooth) over the TB family, and retire the no-rotation-witness 1-felt fallback.
 
-### NOTE (deployment placement, not a wire bug) — custom-proof verify is off the main batch
+### NOTE (deployment placement, not a wire bug) — where custom-proof verify lives per entry point
 
-A pure light client running only `verify_full_turn_bound` does NOT verify custom sub-proofs
-in steps 1–9 (custom effects are absent from that flow); they are verified by the executor's
-`verify_and_commit_proof` / `enforce_custom_effect_proofs`. This is an architectural
-placement to be aware of for a light-client integrator (run the custom-proof check too), not
-a free-wire hole.
+A per-turn verifier running only `verify_full_turn_bound` does NOT verify custom sub-proofs
+in steps 1–9 (custom effects are absent from that flow); on that entry they are enforced by
+the executor (`turn/src/executor/proof_verify.rs`, `enforce_custom_effect_proofs`). On the
+chain-fold path the binding is in-circuit (FINDING 2): a light client folding the recursion
+tree needs no extra check. An integrator on the per-turn entry runs the executor check too —
+an architectural placement, not a free-wire hole.
 
 ---
 
@@ -269,9 +320,14 @@ over in-circuit-pinned roots, not free felts; every deployed lookup bus has both
 constrained over a co-proven table. There is **no attest-over-free-wires forgery hole in the
 deployed core arithmetic**.
 
-The honest residue is three named, already-tracked seams: capacity SATISFACTION is staged
-behind the gated VK epoch (deployed gate reads caller-supplied slot views), the custom
-sub-proof's I/O is not pinned to host state (its commitment is), and the cap-open narrow
-residual carries a ~31-bit commit floor. None is a forgeable free input wire in the core;
-the first is a pure-light-client-vs-opening-verifier gap, the second a missing foreign-proof
-semantic link, the third a width floor.
+The honest residue is three named, tracked seams: the capacity-satisfaction member lacks a
+committed VK/producer (the bare-descriptor dodge itself is closed in the deployed VK bytes
+and the verifier), the custom sub-proof's state I/O is pinned to host state on the
+deployed per-turn executor entry — its 8-felt commitment in-circuit via the recursion
+fold — with the deployed chain-fold custom arm binding the commitment only (the
+state-binding fold node exists and is tested; wiring it into that arm is the named
+residual), and the cap-open narrow residual keeps a ~31-bit commit floor on the
+acceptance side (narrow-TB admission + the no-rotation-witness fallback). None is a
+forgeable free input wire in the core; the first is a
+pure-light-client-vs-opening-verifier gap, the second a chain-fold wiring residual, the
+third a width floor.

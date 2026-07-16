@@ -1,61 +1,115 @@
-# The Verified-Game Portfolio — automatafl + multiway-tug (2026-07)
+# The Verified-Game Portfolio — automatafl + multiway-tug
 
-Two new games as the dregg engine's 2nd/3rd customers — the platform proof. Both are verified games: rules modeled in Lean,
-a verified STARK for the mechanics, cards/pieces on the real executor, playable as Offerings on every surface + provable
-in-tab (the extension's generic prover). NB the mechanics are a CUSTOM VK (a bespoke AIR / a Custom leaf in the fold), NOT
-plain StateConstraint teeth — teeth handle the simple state-shape + validity; the Custom AIR proves the complex transition.
+Two games as the dregg engine's 2nd/3rd customers — the platform proof. Both ship as full crates
+(`dregg-automatafl`, `dregg-multiway-tug`) and both are verified games: rules modeled in Lean, a
+custom AIR for the mechanics, plays as real executor turns, playable as Offerings on every dreggnet
+frontend, and a whole match folding to one succinct proof a pure light client accepts. NB the
+mechanics are a CUSTOM VK (a bespoke AIR / a `Custom` leaf in the fold), NOT plain StateConstraint
+teeth — teeth handle the simple state-shape + validity; the Custom AIR proves the complex transition.
 
 ## The shared architecture (per game)
-1. Vendor the reference rules engine (both are real Rust engines) as the deterministic `applyTurn` reference.
-2. Model the STATE: simple scalars as dregg-schema register components; the board/deck/hand as a heap COLLECTION (the
-   16-register model doesn't hold a 121-cell board or a 21-card deck).
-3. The SIMPLE teeth lower via game-turn-slice's compiler (validity, counts, win-thresholds, conservation).
-4. The COMPLEX transition = a hand-authored CUSTOM AIR (a Custom leaf), TRANSLATION-VALIDATION shape (the mover computes the
-   next state off-circuit; the circuit re-checks each rule against the witnessed next-state).
-5. The LEAN: model the rules + prove the AIR REFINES applyTurn ("the circuit accepts iff next == applyTurn(old, moves)") —
-   the game-level analogue of the evalSimpleCtx_*_iff constraint twins. This is "the verified STARK for the mechanics."
-6. The STARK: the Custom leaf -> prove_turn_chain_recursive (fold) -> verify_history — REUSE (generic over any CellProgram).
-7. The Offering + frontends (the DungeonOffering template) + the extension binding + a `<dregg-*>` element (reuse).
 
-## SHARED UPSTREAM GATE: Lane-D (ours now, as the IMT terminal)
-The multi-turn fold is blocked on the 169->178 carrier-geometry migration (WIDE_NUM_CARRIERS 57->60 etc.) — the same
-"Lane-D" that gated The Descent's ZK-leaderboard. SINGLE-LEAF proves in-tree today; a whole match-as-one-succinct-proof
-waits on Lane-D. Unblocking it serves EVERY game (Descent + both new ones). We own the circuit now — claim it first.
+1. The reference rules engine is vendored as the deterministic `apply_turn`/`applyAction` oracle
+   (`dregg-automatafl/src/reference.rs`, `dregg-multiway-tug/src/reference.rs`).
+2. The STATE: simple scalars as dregg-schema register components; the board/deck/hand as a heap
+   COLLECTION (the 16-register model doesn't hold a 121-cell board or a 21-card deck).
+3. The SIMPLE teeth lower via game-turn-slice's compiler (validity, counts, win-thresholds,
+   conservation).
+4. The COMPLEX transition is a hand-authored CUSTOM AIR (a `Custom` leaf), TRANSLATION-VALIDATION
+   shape: the mover computes the next state off-circuit; the circuit re-checks each rule against the
+   witnessed next state.
+5. The LEAN: model the rules and connect the AIR to `applyTurn` — "the circuit accepts iff
+   `next == applyTurn(old, moves)`", the game-level analogue of the `evalSimpleCtx_*_iff`
+   constraint twins.
+6. The STARK: the Custom leaf → `prove_turn_chain_recursive` (fold) → `verify_history` — generic
+   over any CellProgram, reused unchanged.
+7. The Offering + frontends: the `open`/`actions`/`advance`/`verify`/`render`/`price` shape every
+   dreggnet frontend (web / Discord / Telegram / WeChat) drives.
 
-## multiway-tug = HANAMIKOJI (the closer-to-built one — ship first)
-A 2-player geisha card game (~335-LOC Rust engine, o1Labs/Corey Richardson): 7 geisha (charm [2,2,2,3,3,4,5]=21), a 21-card
-deck, a hidden 6-card hand, 4 once-per-round actions (Secret/Discard/Gift/Competition), win at >=11 charm OR >=4 geisha.
-Conservation is the game's own design (a Card Drop-bomb — cards only move, never destroyed = dregg conservation).
-WHY CLOSER TO BUILT: starbridge-apps/TUSSLE is a near-identical 2-party commit->reveal->resolve VERIFIED game (the
-template); cards-as-assets mostly built (dreggnet-asset + E1/E2 packs); JointTurn.lean + tussle give forge-proof 2-party
-resolution (NOT the hard part). THE FRONTIER: the zk HIDDEN-HAND — the fog project_for gives who-may-look but no value-
-binding; the deep-new is "prove a legal play without revealing the hand" via commit-each-hand-as-a-Poseidon2-Merkle-root +
-each play carries StateConstraint::Witnessed{MerkleMembership} (a real tooth proving the card is in the committed hand,
-revealing nothing) + the blind pick as a sealed-auction reveal. Phases: 0 rules-on-executor (M, ~1-2wk, huge reuse) · 1
-cards-as-assets+packs (M) · 2 the zk hidden-hand (L, the frontier, rails exist) · 3 the STARK fold (L, Lane-D-gated;
-Witnessed/Cases/HeapField teeth are named lowering-Blockers) · 4 Lean proof (L, parallel — conservation/one-action/win-
-safety as Good predicates on Boundary/JointTurn) · 5 Offering+frontends+launch (M, reuse tussle/card.rs). HARDEST: Phase 2
-(the value-binding hidden-hand); multiplayer is NOT hard.
+## THE FOLD IS EXERCISED IN-TREE (the former "Lane-D" gate is behind us)
 
-## automatafl = an original SIMULTANEOUS-MOVE cellular-automaton game (the deeper one — second)
-NOT a Tafl variant. ~1.4k-LOC Rust engine + a wasm web client. An 11x11 grid of {Repulsor,Attractor,Automaton,Vacuum};
-players SIMULTANEOUSLY submit a secret move, reveal together, moves resolve, then the AUTOMATON ("Daemon") takes one
-autonomous step; win = steer the Daemon into your goal (NO capture). THE CENTER OF GRAVITY: the board-transition AIR — the
-simultaneous SCC move-resolution (a dep graph + Tarjan + chains/cycles/merges + occlusion raycast) + the Daemon's raycast
-decision are BEYOND the teeth (AllowedTransitions/Reachable/PrefixOf are out-of-scope residuals) -> a big hand-authored
-Custom AIR. Simple teeth that lower: move-validity (rook-align via AffineEq, in-bounds via InRangeTwoSided) + win-check
-(FieldEquals). Phases: A vendor the engine (S) · B mutable-enum-grid encoding (M — a new schema archetype wrapper; the
-HeapAtom::InRangeTwoSided/MemberOf atoms exist) · C the lowering teeth (S-M) · D the board-transition AIR (LARGE, NEW —
-staged D1 Daemon-only -> D2 occlusion -> D3 full SCC) · E Lean applyTurn + the refinement theorem (LARGE, NEW — no game
-precedent, the idiom exists) · F the Offering with a BATCH N-move advance (M — the crowd machinery picks 1 carrier,
-automatafl carries N) · G frontends+launch (M, port rust/web). HARDEST: D (the AIR) + E (the Lean refinement).
+`dregg-automatafl/tests/prove_fold.rs` builds a D1 automaton-step custom leaf, folds a multi-turn
+chain via `prove_turn_chain_recursive`, and `dregg_lightclient::verify_history` ACCEPTS — with a
+forged-chain arm (a spliced `final_root`) REJECTED, so the acceptance is non-vacuous. The same fold
+carries multiway-tug's membership-proven plays (`dregg-multiway-tug/src/fold.rs`): a whole private
+match becomes ONE `WholeChainProof`. Match-as-one-succinct-proof is a shipped path, not a gated plan.
 
-## RECOMMENDED SEQUENCING
-1. CLAIM LANE-D (the multi-turn fold geometry migration) — ours now; unblocks every game's match-as-one-proof.
-2. multiway-tug/Hanamikoji FIRST — closer to built (tussle template), lower complexity, and it exercises the zk-hidden-hand
-   (the differentiated "nobody sees your hand, nobody cheats" card game). Validates the platform with the cheaper game.
-3. automatafl SECOND — the deep board-transition-AIR + Lean-refinement subproject; the flagship "verified boardgame with
-   machine-checked rules." The Custom-VK/Lean-emit muscle built for #2 carries over.
-Both leaning on: the Custom-VK/custom-leaf path, the verified-emit-from-Lean discipline (RotatedLayout Legal idiom), the
-generic fold+verify_history backend, the Offering/extension/frontend reuse. The portfolio (Descent roguelite + Hanamikoji
-TCG + automatafl boardgame) = three genres, one verifiable engine — the platform claim, proven.
+## multiway-tug — the hidden-hand card game (all phases present)
+
+A 2-player card game re-themed from Hanamikoji (Kota Nakayama): 7 guild rows (influence
+`[2,2,2,3,3,4,5]` = 21), a 21-card deck, a hidden 6-card hand, 4 once-per-round actions
+(Secret/Discard/Gift/Competition), win at ≥ 11 influence OR ≥ 4 rows. Conservation is the game's own
+design — cards only move, never destroyed. The phase ladder is BUILT, each phase a module:
+
+- **Phase 0 — rules on the executor** (`src/game.rs`): a play commits the reference engine's
+  projection as a real turn; a legal move lands a `Landed` receipt, an illegal one is `Refused` and
+  commits nothing.
+- **Phase 1 — cards-as-assets + provably-fair packs** (`src/packs.rs`): a printed card is a real
+  `dreggnet_asset` note; a booster's contents are a pure verified function of a committed pack seed
+  over the verified procgen stream (committed-weight rarity draws).
+- **Phase 2 — the cryptographic hidden hand** (`src/hidden_hand.rs`): each hand is COMMITTED at deal
+  as a Poseidon2 4-ary Merkle root over blinded leaves (`Poseidon2(DOMAIN, card, nonce, 0)`); each
+  play carries a `StateConstraint::Witnessed { MerkleMembership }` proof verified through the REAL
+  `WitnessedPredicateRegistry` by the REAL `CellProgram::evaluate_full`; the remaining-hand root
+  updates per play, so a re-play fails membership (the crypto is the no-double-play tooth); the
+  Gift/Competition blind pick and the concealed Secret ride commit→reveal (`BlindPick`).
+- **Phase 3 — the STARK fold** (`src/fold.rs`): each membership-proven play lowers to a
+  `LoweredMembership` custom leaf (the deployed `merkle_poseidon2_descriptor` — the same 4-ary
+  Poseidon2 recurrence the clear-side verifier walks) with public inputs `[leaf, root]`; the turns
+  fold into one `WholeChainProof`. HONEST SCOPE: the played card is face-up; "private-in-fold" means
+  the card ids and the rest of the hand are NOT in the proof/public inputs. The deployed STARK is
+  SUCCINCT, not zero-knowledge — transcript-hiding crypto-ZK is a separate, later concern.
+- **Phase 4 — the Lean** (`metatheory/Dregg2/Games/MultiwayTug.lean` + `MultiwayTugAir.lean`): the
+  pure model proves conservation (genuine multiset arithmetic, lifted along the `Boundary` keystone),
+  one-action-per-round, and control-correct scoring; `MultiwayTugAir` connects the concrete Phase-3
+  fold-leaf shape to the model — `airPlay_iff_applyAction` (the leaf's admission relation IS the
+  graph of `applyAction`, non-vacuous, `#assert_axioms`-clean), with the commitment's
+  collision-resistance carried as the named STARK-soundness-remainder hypothesis (opaque
+  `M.commit`), not re-proven.
+- **Phase 5 — the Offering** (`src/surface.rs`): `TugOffering` with per-viewer fog — `render` paints
+  both hands as fog (count + committed root); `render_for` reveals only the viewer's own hand,
+  sourced from their committed `HandTree`. The UI fog and the proof-layer hiding are separate seams
+  that agree.
+
+## automatafl — the simultaneous-move cellular-automaton game (the deeper one)
+
+An original game (o1Labs / Corey Richardson), NOT a Tafl variant: an 11×11 grid of
+{Repulsor, Attractor, Automaton, Vacuum}; players SIMULTANEOUSLY submit secret moves, reveal
+together, moves conflict-resolve and apply, then the Automaton ("Daemon") takes one autonomous
+raycast-decided step; win = steer the Daemon into your goal (no capture). What exists:
+
+- **The engine** (`src/reference.rs`) — the vendored deterministic `apply_turn` oracle, mirroring
+  `Dregg2.Games.Automatafl` and its `#guard`s.
+- **The staged board-transition AIR** (`src/air.rs`, `src/builder.rs`, `src/moves.rs`) — the
+  translation-validation Custom AIR, staged D1 (Daemon-only) → D2 (single move + occlusion) → D3
+  (n=2 simultaneous resolution with the fork/collide/survive truth table).
+- **The refinement battery** (`tests/refinement.rs`) — the AIR accepts `(old, moves, next)` IFF
+  `next == apply_turn(old, moves)`, driven against the oracle; non-vacuous (a wrong `next`, an
+  invalid move, and a forged resolution are each REJECTED).
+- **The fold** (`tests/prove_fold.rs`) — D1/D2/D3 leaves prove, fold, and `verify_history` accepts;
+  forged steps mint no leaf.
+- **The Lean** (`metatheory/Dregg2/Games/Automatafl.lean` + `AutomataflAir.lean`) — the pure
+  `applyTurn` model with its load-bearing properties, and the CONNECTED refinement:
+  `airAutomatafl_iff_applyTurn` (the staged circuit's admission relation IS the graph of
+  `applyTurn`), `conflictResolve_pair` (the D3 fork/collide/survive table matches the reference
+  resolution), fed into the §7 obligation `concreteAutomataflAIR_refines`. The gadget
+  arithmetizations' soundness is carried as the named `MoveSound`/`StepSound` hypotheses (like
+  `MerkleSound` upstream), not re-proven — that is the deployed circuit's job.
+- **The Offering** (`src/surface.rs`) — `AutomataflOffering` renders the board as a
+  `ViewNode::CoordGrid` and runs the simultaneous-move shape as COMMIT → REVEAL → RESOLVE (sealed
+  moves, opened against their commitments, one real turn applying `apply_turn`).
+
+**Named residuals (labeled, not closed):**
+- **Width** — D2/D3 run the automaton gadget twice, so at n=5 they EXCEED `MAX_TRACE_WIDTH = 1024`
+  (D2 = 1178, D3 = 1411; measured in `tests/size.rs`). They fit and prove-fold-verify at n=3
+  (D2 = 509, D3 = 661). The named close is the segmented board-read scan (the N=11 follow).
+- **Move count** — the concrete gadget is staged to n≤2 simultaneous moves; the general N=11
+  occlusion scan and full-SCC resolution are the labeled residuals (`Automatafl.lean` §4,
+  `moves.rs`).
+
+## The portfolio claim
+
+Descent (roguelite) + multiway-tug (hidden-hand card game) + automatafl (simultaneous-move
+boardgame): three genres on one verifiable engine — the Custom-VK/custom-leaf path, the
+verified-emit-from-Lean discipline, the generic fold + `verify_history` backend, and the
+Offering/frontend reuse, each exercised by a game that is not the engine's author.

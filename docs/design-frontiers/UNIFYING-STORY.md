@@ -6,11 +6,12 @@ new system; it states the one vision that ADOS + the firmament desktop + pg-dreg
 and marks the buildable shape, the killer demo, and the honest scope.*
 
 > Companions (the grounding this synthesizes — do not re-derive them):
-> `docs/FIRMAMENT.md` (the cap-gradation bridge, in code),
-> `docs/DREGG-DESKTOP-OS.md` (the firmament made visual),
-> `docs/STARBRIDGE-V2.md` (the master interface that embeds the verified executor),
-> `docs/PG-DREGG.md` (postgres as a dregg surface),
+> `sel4/dregg-firmament/` (the cap-gradation bridge, in code),
+> `starbridge-v2/` (the master interface that embeds the verified executor),
+> `pg-dregg/` (postgres as a dregg surface; `pg-dregg/docs/QUICKSTART-pg-user.md`),
 > `metatheory/Dregg2/Firmament/` (the Lean semantics the bridge refines).
+> The long-form design companions (`FIRMAMENT.md`, `DREGG-DESKTOP-OS.md`,
+> `STARBRIDGE-V2.md`, `PG-DREGG.md`) are archived under `.docs-history-noclaude/`.
 
 ---
 
@@ -111,7 +112,7 @@ rides the Distributed/Surface arms):
 | Piece | What it is | Which arm of the one handle |
 |---|---|---|
 | **The firmament** (`sel4/dregg-firmament/`) | the cap-gradation bridge in code: the router + `Local`/`Distributed`/`Surface` backings, the `n=1` collapse witnessed, the real executor in the loop | **the spine itself** — `Local{slot}` and `Distributed{cell}` |
-| **The desktop** (`docs/DREGG-DESKTOP-OS.md`) | the firmament *made visual*: a window = `Surface{cell}`; the compositor is a verified dregg cell; output-integrity = unfoolability on the scene | **`Surface{cell}`** — the third arm |
+| **The desktop** (design archived: `.docs-history-noclaude/DREGG-DESKTOP-OS.md`) | the firmament *made visual*: a window = `Surface{cell}`; the compositor is a verified dregg cell; output-integrity = unfoolability on the scene | **`Surface{cell}`** — the third arm |
 | **starbridge-v2** | the master interface that *embeds* the verified executor and runs a live local world; the cap-first shell over `Surface` caps; the **agent-activity + swarm** surfaces (ADOS keystone) | **the cockpit over all arms** + the **agent-turn seam** |
 | **pg-dregg** | postgres as a dregg surface: the same `dga1_…` token gates SQL rows; the commit log projects to queryable tables; writes pass through the verifier | **the `(pg row)` arm** — the same token, a fifth landing point |
 | **ADOS** (the north star) | the OS that makes any agent loop's actions provably authorized/recorded/budgeted/coordinated, without trusting the loop | **the agent-turn seam** woven through Surface (panes) + Distributed (handoffs) + the budget cell |
@@ -303,6 +304,12 @@ closure lane, never a wall; reported ≠ closed.* The honest map:
 - **The verified executor runs a real turn natively** — `execFullForestG`
   recompiled to ELF + linked against an ELF Lean runtime, a transfer applied on
   aarch64-linux-musl, anti-ghost holds.
+- **The live proof path is the rotated IR-v2 wide path.** The composed
+  full-turn prover routes every normal cohort run through the rotated
+  descriptor (`dregg_circuit::descriptor_ir2` / `prove_effect_vm_rotated_wide`
+  — `sdk/src/full_turn_proof.rs`); the v1 hand-AIR effect-VM prover is retired.
+  Staging-era "STAGED, not the default" comments in the circuit tree are named
+  fossils — the sdk routing is authoritative (`REORIENT.md`, 07-06 addendum).
 - **starbridge-v2** — embeds the real executor, runs a live local world; the
   cap-first shell over real `Surface` caps (a forged cap refused on every op; the
   trusted-path identity badge drawn from the live ledger, anti-spoof); the
@@ -323,26 +330,26 @@ closure lane, never a wall; reported ≠ closed.* The honest map:
 
 ### Frontier (named, with closure lanes — severe problems, not walls)
 
-- **The cutover (the live proof path).** The system runs on the IR-v1 path
-  (green, deployable); the rotated IR-v2 path (−65.6% proof size) is staged and
-  validated in-shape, and the live-path rewrite (`G1.5` / `C5`/`C7`) is the
-  multi-day wire rewrite + Lean cohort extension that flips it and deletes v1.
-  Until then the rotated path rides a feature flag. *This is the single biggest
-  in-flight engineering frontier.* (`REORIENT.md` CURRENT STATE; `ROTATION-CUTOVER.md`.)
 - **The l4v binary bridge.** The Lean *composition* is strong
-  (`deployed_system_secure` apex; unfoolability derives conservation), but the
-  distance to l4v-grade is the binary bridge: **Stage 0 = make the verified
-  executor authoritative** (invert `turn/src/lean_apply.rs:1143`, "no new
-  mathematics"), then spec→binary refinement / discharge `leaf_sound` / tie the
+  (`deployed_system_secure` apex; unfoolability derives conservation), and
+  **Stage 0 — the verified executor as authority — is in the tree**
+  (`exec-lean/src/lean_apply.rs`: `produce_via_lean` installs the Lean
+  executor's post-state and commit decision unconditionally on the covered,
+  root-agreeing set, the Rust `TurnExecutor` serving as a checked reference;
+  uncovered shapes surface as `ProducerOutcome::Fallback` — the named Stage-2
+  burn-down; the node's lean producer defaults ON whenever the Lean archive is
+  linked, `node/src/state.rs` `lean_producer_effective`). The distance to
+  l4v-grade is the rest of the bridge: burn down the covered set, then
+  spec→binary refinement / discharge `leaf_sound` / tie the
   apex to one turn / native UC / `n>1` consensus / config-pin the crypto floor.
-  (`ASSURANCE-CRITIQUE.md §5`, Stages 0–6.)
+  (archived `ASSURANCE-CRITIQUE.md` §5, Stages 0–6.)
 - **The authorization-model integration (the deepest open thread).** dregg is
   meant to be a dual multi-aspect biscuit/macaroon/cap/zk token. Today the agent
   **macaroon** layer (federation-membership) and the kernel **cap-crown**
   (in-circuit `granted ⊆ held`) are *u.integrated* — non-amplification is told as
   two informal stories, not one proven arrow. The steer is **integrate the four
   aspects, do not reduce them**; the cipherclerk is a sovereign executor *by
-  design*. (`AUTHORIZATION-MODEL.md`; possibly extends the cap-crown #103.)
+  design*. (archived `AUTHORIZATION-MODEL.md`; possibly extends the cap-crown #103.)
 - **The desktop surface op-set.** `Surface{cell}` attenuate/delegate/revoke is
   real (R0 landed); the full PRESENT/EMBED/GRANT-INPUT/REVOKE verbs + the
   compositor-PD multiplexer + the trusted-path SAK land at R3 Stage D. The
@@ -356,23 +363,27 @@ closure lane, never a wall; reported ≠ closed.* The honest map:
   libuv excision + GMP-for-ELF plan is a concrete checklist). The semihost has a
   real verified heart *now* on the host Lean runtime, so this gates only the
   real-seL4 target, not the product.
-- **pg-dregg Tiers B/C/D.** Tier B (mirror) is GREEN-verdict and the M2 milestone
-  (the commit log already *is* the schema; soundness by privilege construction).
-  Tier C (verifier-in-a-CHECK) and Tier D (executor-as-a-pg-function) are
-  proposed/v-future, honoring the one spine invariant.
+- **pg-dregg Tier D.** Tiers B and C are shipped code, not proposals:
+  `dregg_install_schema()` installs the Tier-B mirror schema,
+  `dregg_install_tier_c()` installs the verified-store gate (the
+  `dregg.commit_log` door + chain re-validation), and the write outbox +
+  `dregg_submit_turn` land writes (`pg-dregg/src/lib.rs:233,:256,:272,:859`)
+  with the node-side submit-queue drainer
+  (`node/src/submit_queue_drainer.rs`, feature `pg-mirror-live`) closing the
+  write loop. Tier D (executor-as-a-pg-function, `_inproc`) remains the
+  frontier, honoring the one spine invariant.
 - **`n > 1` consensus.** An n=3 slice runs the ordering rule; the frontier is
-  gossip dissemination (`STAGE5-CONSENSUS-DEVAC.md`, S5-1). The single-machine
+  gossip dissemination (archived `STAGE5-CONSENSUS-DEVAC.md`, S5-1). The single-machine
   `n=1` collapse is first-class and the bounds are honest distributed bounds —
   the same binary scales out without a rewrite.
 - **The notify VK tail.** The async-signal authority (`Auth.notify`) is proven
   axiom-clean and α-total on all 7 seL4 IPC authorities; the cap-leaf badge-mask +
-  verifier re-pin rides the cutover's one VK epoch. One flagged risk: a badge-OR
+  verifier re-pin rides a VK re-pin epoch. One flagged risk: a badge-OR
   is a one-bit covert channel (dregg has no noninterference argument yet).
 
 The shape of the honesty: **the spine is real and proven; the frontiers are the
-two big bridges (the cutover wire rewrite, the l4v binary bridge), the
-four-aspect authorization integration, and the graphics/seL4 last-hops — each
-named with its lane, none a wall.**
+l4v binary bridge, the four-aspect authorization integration, and the
+graphics/seL4 last-hops — each named with its lane, none a wall.**
 
 ---
 
@@ -419,11 +430,11 @@ human; a database made a verified dregg surface — *the same mechanism, four ti
 
 The minimal first cut of this demo is buildable **now** (see below) entirely in
 starbridge-v2's embedded world + the pg-dregg Tier-A/B mirror, with zero
-dependence on the cutover or real seL4.
+dependence on real seL4.
 
 ---
 
-## 8. What is buildable NOW (wide-safe, off the cutover's critical path)
+## 8. What is buildable NOW (wide-safe, off the live proof path)
 
 These slices advance the unifying story without touching the live proof path or
 the seL4 walls — each is a separate-workspace or additive-Lean slice in the
@@ -436,12 +447,15 @@ test against the real executor, no VK churn.
    add the pg-dregg Tier-A read of step 5 against a local mirror. All in
    already-green crates; the demo *is* the pug evaluation artifact.
 
-2. **pg-dregg Tier B (mirror) — M2.** Project `CommitRecord` into
-   `dregg.turns`/`dregg.cells`/`dregg.capabilities` via a crash-safe commit-log
-   tailer from `commit_cursor()`. Soundness by privilege construction
-   (`dregg_reader` gets `SELECT` only). GREEN-verdict; standalone `pg-dregg/`
-   workspace, no `./target` contention. Makes "your node IS your postgres" real
-   and makes step 5 of the killer demo a true query rather than a mock.
+2. **pg-dregg Tier B (mirror) — run it under the demo.** The mirror is shipped
+   code: `dregg_install_schema()` stands up `dregg.turns`/`dregg.cells`/
+   `dregg.capabilities` (soundness by privilege construction — `dregg_reader`
+   gets `SELECT` only), and the node's write-side projector is
+   `node/src/pg_mirror.rs` (feature `pg-mirror-live`, off by default; it
+   connects only when configured). The buildable slice is standing this up
+   under the killer demo — a local pg + a `pg-mirror-live` node — so step 5 is
+   a true query rather than a mock. Standalone `pg-dregg/` workspace, no
+   `./target` contention.
 
 3. **The `Surface` op-verbs as turns (R1 in starbridge-v2).** Land a surface
    `FactoryDescriptor` + `present()` as a real turn with the anti-ghost tooth
@@ -474,9 +488,9 @@ test against the real executor, no VK churn.
    narration). This is the handoff-readiness burn-down, not new code, and it is
    what turns "we built a pile" into "a stranger can evaluate it."
 
-Each is wide-safe (separate workspace or additive Lean), none is blocked on the
-cutover, and together they make the §7 killer demo runnable and the §5 journeys
-real — which is exactly the refinement epoch's bar: *usable, general, teaches
+Each is wide-safe (separate workspace or additive Lean), none touches the live
+proof path, and together they make the §7 killer demo runnable and the §5
+journeys real — which is exactly the refinement epoch's bar: *usable, general, teaches
 what-is, no toys.*
 
 ---

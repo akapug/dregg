@@ -7,7 +7,8 @@ This document is a north star for the pg-dregg developer experience — not a ri
 spec. It teaches what pg-dregg **is** today, names the **buildable next slices**,
 sketches the **killer demo**, walks the **developer journey** from both sides, and
 keeps an **honest gap ledger**. The substrate it builds on is live: Tiers A, B,
-and C run on PostgreSQL 18 right now (the `pg-dregg` crate + `node/src/pg_mirror.rs`).
+and C run on PostgreSQL 18 right now (the `pg-dregg` crate +
+`node/src/{pg_mirror,submit_queue_drainer}.rs`).
 
 ---
 
@@ -64,7 +65,9 @@ root** (the issuer public key). That convergence is the product.
 
 pg-dregg is a `cargo-pgrx` extension (`pg-dregg/`) plus a node-side mirror writer
 (`node/src/pg_mirror.rs`). It is organized as four tiers; A/B/C are live on pg18,
-D is the frontier.
+and Tier D carries a spike verdict — **D-SIDECAR**
+(`pg-dregg/docs/PG-DREGG-TIER-D-SPIKE.md`): the executor runs in a co-process,
+not in the backend (the Tier D section below).
 
 ### The spine invariant
 
@@ -110,7 +113,7 @@ and the same `SELECT` returns zero of that credential's rows on the next stateme
 
 The node's verified state is mirrored into postgres. The honest model is **one Blum
 multiset** — `dregg.memory` over `Domain × κ`, where `Domain ∈ {registers, heap,
-caps, nullifiers, index}` (`docs/UNIVERSAL-MEMORY.md`). A new state component is a
+caps, nullifiers, index}` (`.docs-history-noclaude/UNIVERSAL-MEMORY.md`). A new state component is a
 new domain *value*, never a new table. The typed tables (`dregg.cells`,
 `dregg.turns`, `dregg.capabilities`) and views (`cell_balances`, `cap_edges`,
 `receipt_chain`, `cap_attenuations`, `cell_fields`, `turn_effects`,
@@ -148,9 +151,11 @@ side rejects, and a tampered one breaks the chain on both sides
 
 What Tier C is **not** (named honestly, §10.2 of the crate docs): it is not a
 per-turn STARK re-proof. A `CommitRecord` carries no per-turn proof — proof
-soundness over a *range* is the whole-chain IVC light client's job
-(`circuit::ivc_turn_chain::verify_turn_chain_recursive`, the heavyweight `tier-c`
-cargo feature). The realizable per-row gate is the structural chain check, and it
+soundness over a *range* is the whole-chain IVC light client's job. That module
+lives in the `dregg-circuit-prove` crate (`circuit-prove/src/ivc_turn_chain.rs`),
+and pg-dregg's heavyweight `tier-c` cargo feature wires its
+`verify_turn_chain_recursive_from_parts` through `pg-dregg/src/attest.rs`. The
+realizable per-row gate is the structural chain check, and it
 fails closed; it is never stubbed to `TRUE`.
 
 ### Tier C-write — submit a verified turn FROM postgres *(live)*
@@ -160,9 +165,16 @@ policy. `dregg_submit_turn(signed_turn bytea, agent bytea)` enqueues a signed tu
 **gated by `dregg_admits('submit', encode(agent,'hex'))`** — a role submits exactly
 the turns its capability authorizes; an unauthorized agent's enqueue is refused by
 Row-Level Security. Crucially, the function is **not** `SECURITY DEFINER`, so the
-`WITH CHECK` policy bites against the calling role. **Postgres never executes** — the
-turn is queued for the node, which drains it through the real verified executor; only
-verified post-state lands. Reads stay free SQL; writes stay verified-only.
+`WITH CHECK` policy bites against the calling role. The enqueue itself never
+executes — the turn is queued, and a drainer resolves it through the four-gate
+SUBMIT → PRODUCE → CHAIN → MIRROR spine; only verified post-state lands. Two drain
+paths exist: the node-side drainer (`node/src/submit_queue_drainer.rs`, S1) and the
+in-database drain `dregg_drain_once(batch_limit)` (`pg-dregg/src/lib.rs`), which a
+`drainerd` daemon (`pg-dregg/src/bin/drainerd.rs`) calls continuously. The
+in-database PRODUCE gate is the `FoldProducer` stand-in on the default build and
+the real executor under `tier-d` (Lean) / `tier-d-rust` (Rust) — under a tier-d
+build, postgres itself executes turns. Reads stay free SQL; writes stay
+verified-only.
 
 pg18's front-door features are wired here too: a `login` **event trigger**
 (`dregg_install_login_binding` + `dregg_bind_role`) binds a connecting pg role to its
@@ -173,13 +185,21 @@ itself*. This is the seam where pg18 OAuth (a `pg_hba.conf` deployment concern) 
 dregg: OAuth authenticates an external identity to a pg role; `dregg_bind_role` binds
 that role to a dregg capability.
 
-### Tier D — the executor as a pg function *(the north star)*
+### Tier D — the executor as a pg function *(spiked; verdict: D-SIDECAR)*
 
-The frontier: `dregg_submit_turn_inproc(envelope)` executes a verified turn **inside
-the postgres backend**, in the same transaction that also `UPDATE`s your application's
-own tables. Kernel state and app state commit together or not at all. **No separate
-node can offer that cross-domain atomicity** — it is the structural payoff of "your
-node IS your postgres." Gated on the pg/Lean process-model spike (§5).
+The full-D north star — `dregg_submit_turn_inproc(envelope)` executing a verified
+turn **inside the postgres backend**, in the same transaction that also `UPDATE`s
+your application's own tables, kernel state and app state committing together or
+not at all — is reconnoitered, and the process-model spike's verdict is
+**D-SIDECAR** (`pg-dregg/docs/PG-DREGG-TIER-D-SPIKE.md`): the executor links and
+runs in a host process, and a cdylib can link it (so a pgrx extension `.so` can),
+but hosting it **in the backend process is unsafe** — the Lean runtime statically
+overrides the global allocator with mimalloc and spawns worker threads, colliding
+with the backend's single-threaded `palloc` / `longjmp` / signal model. The
+realizable safe shape is the executor in a co-process (a pgrx `BackgroundWorker`,
+or the standalone node) that the backend hands intents to — exactly the seam the
+landed `dregg_drain_once` drainer plugs into. The in-backend full-D transaction
+stays a named seam, classified unsafe under the current Lean runtime.
 
 ---
 
@@ -205,7 +225,8 @@ lands four punches that, *together*, no other system delivers in one place:
    `cap_attenuations` view shows, as queryable rows, exactly which effects the
    delegate may exercise — and that it is a subset of the grantor's.
 
-3. **The atomic cross-domain commit (Tier D).** The checkout is ONE transaction:
+3. **The atomic cross-domain commit (the full-D shape; ships today as the
+   outbox form — see below).** The checkout is ONE transaction:
 
    ```sql
    BEGIN;
@@ -224,20 +245,22 @@ lands four punches that, *together*, no other system delivers in one place:
    visibly breaks (`dregg_verify_turn` refuses it). The auditor needs no node — just
    `psql` and the published issuer key.
 
-**Why it lands:** every piece is real today *except* punch #3's `_inproc` variant
-(buildable next, §4). Punches #1, #2, and #4 run on the live Tier A/B/C substrate
-right now via `scripts/e2e-live.sh`. The demo *is* the evaluation artifact for the
+**Why it lands:** punches #1, #2, and #4 run on the live Tier A/B/C substrate
+right now via `scripts/e2e-live.sh`; punch #3 runs in its outbox form (below) —
+the in-backend `_inproc` variant carries the spike's D-SIDECAR verdict (§2,
+Tier D). The demo *is* the evaluation artifact for the
 pug handoff: a stranger clones, runs one script, and watches capabilities narrow
-rows, refuse an overreach, atomically commit across domains, and expose a walkable
-proof chain — all in the prompt they already know.
+rows, refuse an overreach, transactionally submit across domains, and expose a
+walkable proof chain — all in the prompt they already know.
 
-A staged fallback keeps the demo honest before Tier D lands: punch #3 runs as the
-**outbox** form (`dregg_submit_turn` enqueues inside the `BEGIN`; the node drains it
-and the mirror reflects the result), which demonstrates the RLS submission gate and
-the verified-only write discipline. The atomicity claim is then scoped precisely:
+Punch #3's shipping form is the **outbox** (`dregg_submit_turn` enqueues inside
+the `BEGIN`; the drainer executes it and the mirror reflects the result), which
+demonstrates the RLS submission gate and
+the verified-only write discipline. The atomicity claim is scoped precisely:
 "the *submission* is transactional with the app write; the *execution* settles
-asynchronously" — the Tier-D `_inproc` upgrade is what collapses that gap to true
-cross-domain atomicity.
+asynchronously." The in-backend `_inproc` form that would collapse that gap to
+true cross-domain atomicity is the seam the spike judged the wrong process model
+for the Lean runtime (§2, Tier D) — a named seam, not a next slice.
 
 ---
 
@@ -248,33 +271,39 @@ workspace, so it does not touch the metatheory build or the VK rotation) or
 node-side-additive (behind the opt-in `DREGG_PG_MIRROR_URL` / `pg-mirror-live`
 flags, so the default node is unchanged). None is blocked on the rotation cutover.
 
-### S1 — The node-side queue drainer (close the C-write loop) *(highest leverage)*
+### S1 — The node-side queue drainer (close the C-write loop) — **LANDED**
 
-`dregg_submit_turn` enqueues into `dregg.submit_queue` today, but the shipped path
-has no drainer — the status never walks `pending → executed | refused`. Build the
-node-side loop: tail `submit_queue` (the symmetric read-side of `pg_mirror.rs`'s
-write side), feed each signed turn to the **real verified executor**, and write back
-`status` + `receipt_hash` / `error`. This is the missing half of the bidirectional
-story and the precondition for the demo's punch #3 in its outbox form. It reuses the
-exact trust position the mirror already holds (the node is the only writer; the
-executor is the only thing that decides). Lands as a new node service module
-(sibling to `channels_service.rs` / `storage_service.rs`), driven by `LISTEN/NOTIFY`
-on enqueue so it is not a poll loop.
+`node/src/submit_queue_drainer.rs` is the read side of the write loop, symmetric to
+`pg_mirror.rs`'s write side. It `LISTEN`s on the `dregg_submit_queue` notify channel
+AND periodically sweeps the `submit_queue_pending` partial index (so a notification
+lost across a reconnect, or a row enqueued while the drainer was down, still drains
+— a restart resumes from the `pending` rows, losing nothing). For each pending row
+it decodes the `SignedTurn`, runs the SAME admission gates as `POST /turns/submit`
+(signature over the turn hash, agent-derivation, receipt-chain), executes through
+the one executor gate (`executor_setup::execute_via_producer`), and writes the
+outcome back in one `UPDATE` — `status='executed'` + `receipt_hash`, or
+`status='refused'` + `error`. Opt-in exactly as the mirror write side
+(`pg-mirror-live` + `DREGG_PG_MIRROR_URL`); with the flag unset the node is
+byte-identical. The executor stays the sole trust boundary — postgres records an
+intent, the drainer is plumbing, never a second semantics.
 
-### S2 — Tier D spike: `dregg_submit_turn_inproc` *(the north-star slice)*
+### S2 — Tier D spike: `dregg_submit_turn_inproc` — **SPIKE RUN; verdict: D-SIDECAR**
 
-The process-model question: can the verified Lean executor (already FFI-exported and
+The process-model question — can the verified Lean executor (FFI-exported and
 node-invoked) be linked into a postgres backend and called from a `#[pg_extern]`,
-inside the SQL transaction? The spike answers three things — (a) the executor's
-side-effect surface is the in-process kernel-state map, which is exactly what the
-mirror already projects, so executing-then-mirroring in one backend transaction is
-coherent; (b) the FFI's memory/allocation model is compatible with a postgres
-backend's palloc-context lifecycle (the known risk); (c) the proving step stays OFF
-the transaction path (proofs attach asynchronously at the trust boundary, per the
-proving-modality dial — a `BEGIN; … COMMIT;` must not block on a STARK). Deliverable:
-one transaction that `UPDATE`s an app table and mutates a `dregg.cells` balance,
-proven atomic by a kill-between-statements test. The `tier-d` cargo feature already
-declares the path (`tier-d = ["tier-c"]`).
+inside the SQL transaction? — is answered in
+`pg-dregg/docs/PG-DREGG-TIER-D-SPIKE.md`: (a) the executor links and runs in a
+host process, and a cdylib links it, so a pgrx extension `.so` *can* link it;
+(b) in-backend hosting is UNSAFE — the Lean runtime statically overrides the
+global allocator with mimalloc and spawns worker threads, colliding with the
+backend's single-threaded `palloc` / `longjmp` / signal model; (c) the proving
+step stays OFF the transaction path regardless (proofs attach asynchronously at
+the trust boundary, per the proving-modality dial — a `BEGIN; … COMMIT;` must
+not block on a STARK). The realizable shape is D-sidecar: the executor in a
+co-process (a pgrx `BackgroundWorker`, or the standalone node) fed through the
+landed `dregg_drain_once` drainer seam. The in-backend full-D transaction is a
+named seam classified unsafe under the current Lean runtime, not a pending
+slice.
 
 ### S3 — In-SQL minting for dev/single-tenant *(on-ramp friction killer)* — **LANDED**
 
@@ -327,9 +356,10 @@ history with one deliberate amplification for the audit to catch), and
 are tested against the live pg18 mirror (`pg_dregg_mirror`) and run top-to-bottom with
 zero errors; recipe 6's narrowing is observed with real minted `dga1_…` tokens (1 / 6 /
 0 rows for prefix-`5e` / `""` / no-token); recipe 7's write gate is the Tier-C engine
-refusing a non-chaining turn on `pg_dregg_e2e`. The **browser twin** is
-`site/explorer/caps-as-rows.html` — present a capability, watch the cell rows narrow,
-the RLS gate respected (a filtered row's value is redacted, never shown) and explained
+refusing a non-chaining turn on `pg_dregg_e2e`. The **browser twin** is the
+explorer's own index page — `site/explorer/index.html`, which loads
+`caps-as-rows.js` — present a capability, watch the cell rows narrow, the RLS gate
+respected (a filtered row's value is redacted, never shown) and explained
 (`dregg_cap_explain`'s reason, per row). One glass in SQL, one in the browser, both
 rendering the identical seeded world.
 
@@ -420,15 +450,20 @@ token** — gating both the kernel and the SQL.
 These are real, named, and each carries the slice that closes it. A labeled seam is a
 problem to drive to closure, not a wall.
 
-- **The queue drainer is unbuilt.** `dregg_submit_turn` enqueues but nothing drains
-  the shipped path — `status` never advances past `pending`. The bidirectional write
-  story is half-present. → **S1.** (This is the single most load-bearing gap: until it
-  lands, the write path is an RLS-gated inbox with no consumer.)
-- **Tier D is a spike, not a slice yet.** Cross-domain atomicity — the structural
-  payoff — depends on linking the Lean executor into a postgres backend (the
-  palloc-context / FFI-lifetime risk is unproven, and proving must stay off the txn
-  path). The `tier-d` feature declares the path; the spike (S2) decides feasibility.
-  The killer demo's punch #3 runs in its outbox form until then.
+- **The queue drainer — CLOSED (S1, landed).** `dregg_submit_turn` enqueues and
+  `node/src/submit_queue_drainer.rs` drains: `status` walks
+  `pending → executed | refused` through the real verified executor, with
+  `receipt_hash` / `error` written back. The bidirectional write story is whole,
+  and the demo's punch #3 runs in its outbox form today.
+- **Tier D in-backend — SPIKED (S2); the verdict is D-SIDECAR.** In-backend
+  full-D cross-domain atomicity is the wrong process model: the Lean runtime's
+  mimalloc global-allocator override + worker threads collide with the backend's
+  single-threaded `palloc` / `longjmp` / signal model
+  (`pg-dregg/docs/PG-DREGG-TIER-D-SPIKE.md`). The safe realizable shape — the
+  executor as a co-process fed through the `dregg_drain_once` drainer seam — is
+  landed, and the killer demo's punch #3 runs in its outbox form. The
+  one-backend-transaction form stays a named seam, classified unsafe under the
+  current Lean runtime — neither closed nor a pending slice.
 - **The per-row gate is structural, not a proof.** Tier C re-validates the *chain*
   (anti-substitution), which is the realizable per-row tooth; it is **not** a per-turn
   STARK re-proof. Proof attestation is range-level IVC (`circuit::ivc_turn_chain`,
@@ -491,6 +526,10 @@ over one trust root. The on-ramp *is* the product.
 - `node/src/pg_mirror.rs` — the live node→pg writer (`pg_live::PgSink`), the
   `MirrorBatch` projection, the chain gate before shipping. The opt-in switch is
   `DREGG_PG_MIRROR_URL`.
+- `node/src/submit_queue_drainer.rs` — the node-side queue drainer (S1): LISTEN +
+  pending sweep, the same admission gates as `POST /turns/submit`, execution via
+  `executor_setup::execute_via_producer`, the outcome written back to
+  `dregg.submit_queue`. Same opt-in switch as the mirror.
 - `pg-dregg/scripts/e2e-live.sh` + `sql/e2e-live.sql` — the standalone `psql`
   walk-through: rows land, the chain verifies, a tampered batch is refused, the
   write-path gate narrows submission. The demo skeleton.
@@ -502,6 +541,6 @@ over one trust root. The on-ramp *is* the product.
   cap-gated query cookbook (S4): seven runnable, RLS-gated recipes (delegation tree,
   no-amplification audit, conservation, receipt-chain non-omission, time-travel,
   caps-as-rows, the write gate), tested against the live pg18 mirror.
-- `site/explorer/caps-as-rows.html` + `caps-as-rows.js` — the browser twin: present a
-  capability, watch the cell rows narrow (the RLS gate respected + explained). Linked
-  from the explorer header ("Caps as rows").
+- `site/explorer/index.html` + `caps-as-rows.js` — the browser twin (caps-as-rows
+  is the explorer's own index page): present a capability, watch the cell rows
+  narrow (the RLS gate respected + explained).

@@ -2,12 +2,14 @@
 
 *Design frontier doc. Present-tense, first-principles. A north star that shapes
 intuition, with the buildable shape elaborated: the concrete next slice, the
-killer demo, the developer journey, the honest gaps (F1/F2/F3). Companion to
-`docs/DREGG-DESKTOP-OS.md` (the native firmament desktop this is the web
-sibling of), `docs/FIRMAMENT.md` (the cap-gradation bridge), `docs/PG-DREGG.md`
-(postgres as a dregg surface — the same "n is a surface" move on the data side),
-and `docs/STARBRIDGE-V2.md` (the native gpui master interface whose surface/shell
-model the browser compositor mirrors). dregg is the verified accountability
+killer demo, the developer journey, the honest gaps (F1/F2/F3). The grounding in
+code: `sel4/dregg-firmament/` (the cap-gradation bridge), `pg-dregg/` (postgres
+as a dregg surface — the same "n is a surface" move on the data side), and
+`starbridge-v2/` (the native gpui master interface whose surface/shell model the
+browser compositor mirrors). The long-form design companions this doc cites by
+name (`DREGG-DESKTOP-OS.md` — the native firmament desktop this is the web
+sibling of — `FIRMAMENT.md`, `PG-DREGG.md`, `STARBRIDGE-V2.md`) are archived
+under `.docs-history-noclaude/`. dregg is the verified accountability
 SUBSTRATE the web app integrates against, NOT the agent runtime: the loop —
 perceive/plan/act, the agent's will — lives ABOVE.*
 
@@ -22,7 +24,8 @@ machine, past the native gpui shell, into a browser tab. dregg compiles to wasm:
 the `dregg-wasm` `DreggRuntime` already runs a complete cell/turn/capability world
 in the tab, the `dregg-lightclient` already verifies a whole finalized history
 from one succinct aggregate while re-witnessing nothing, and `@dregg/sdk/browser`
-already drives the live devnet over `fetch`+SSE. The web-forward thesis is that
+already drives a devnet node over `fetch`+SSE (no public devnet is currently
+up; the client is real, the endpoint is whatever node you point it at). The web-forward thesis is that
 **output-integrity is unfoolability applied to the display path, and the display
 is now the DOM**: a browser surface paints only the genuine projection of its
 owning cell's verified post-state, its identity chrome is drawn from the live
@@ -69,9 +72,11 @@ first-class dregg surface rather than a thin viewer:
    client.
 
 3. **dregg already drives the wire from the tab.** `@dregg/sdk/browser`
-   (`sdk-ts/src/browser.ts`) is a fetch-only organ surface — a faithful
-   `BrowserNodeClient` (same devnet headers, JSON + SSE) with the `TrustlineClient`
-   and `ChannelsClient` constructed against it; `@dregg/sdk/wasm`
+   (`sdk-ts/src/browser.ts`) is the FULL browser acting + reading surface — the
+   two-noun front door (`Identity → .turn() → .sign() → .submit() → Receipt`,
+   `@noble/ed25519`-backed) bundles for the browser, with `BrowserNodeClient` as
+   the fetch-only, signing-free operand (same devnet headers, JSON + SSE) the
+   `TrustlineClient` and `ChannelsClient` are constructed against; `@dregg/sdk/wasm`
    (`sdk-ts/src/wasm.ts`) wraps the `dregg-wasm` module for STARK verify, token
    ops, predicate proofs, and the full sim. The browser product surface exists; it
    needs a spine and a story, not a green-field build.
@@ -386,12 +391,13 @@ excision, the same-origin policy) the way the kernel names the crypto floor.
 
 ---
 
-## 8. The buildable-now slices (wide-safe, separate-workspace, not blocked on the cutover)
+## 8. The buildable-now slices (wide-safe, separate-workspace, off the live proof path)
 
-Each is buildable today against existing code, in a workspace that does NOT
-contend with the in-flight VK rotation / kernel cutover (the `wasm` and `sdk-ts`
-trees are already workspace-excluded; the firmament crate is standalone; the site
-is static). Ordered easiest/highest-leverage first.
+Each is buildable today against existing code, in a tree that does NOT contend
+with the kernel/circuit workspace (the `wasm` tree is workspace-excluded;
+`sdk-ts` is a TS package outside cargo entirely; the firmament crate is a
+root-workspace member but a light host crate; the site is static). Ordered
+easiest/highest-leverage first.
 
 **S0 — `Target::Surface` is the SAME gate, witnessed (the transfer-triangle, done).**
 `sel4/dregg-firmament/src/surface.rs` already proves the surface cap attenuates,
@@ -401,16 +407,16 @@ delegates, and refuses a widening through the real executor
 keystone the whole design rides — *already landed.* The web slices below carry it
 to the glass.
 
-**S1 — the surface binding in `dregg-wasm` (small, the keystone for W5).** Add
-`#[wasm_bindgen]` functions mirroring `surface.rs` over the existing
-`DreggRuntime` ledger+executor: `open_surface(cell) -> SurfaceView`,
-`present(surface, region, contentDigest)` (checks `requested ⊆ held`),
-`share_surface(from, to, surface, narrower)` (a real `Effect::GrantCapability`
-turn; widening REJECTS), `revoke_surface`, `surface_identity(surface)` (returns
-`(owningCellId, lifecycle, sourceStateRoot)` from the live ledger — the T2 badge
-source). This is the same shape as the ~80 bindings already in `bindings.rs`; it
-is the smallest change that makes "a browser surface = a cell's cap" callable from
-JS. Wide-safe: it only adds to the wasm crate.
+**S1 — the surface binding in `dregg-wasm` (the keystone for W5) — LANDED.**
+`wasm/src/surface.rs` mirrors the firmament `SurfaceBacking` verbs onto the
+existing `DreggRuntime` ledger+executor (never a parallel surface model), and
+`wasm/src/bindings_surface.rs` exposes them to JS: `open_surface`,
+`present_surface` (checks `requested ⊆ held` through the real
+`dregg_cell::is_attenuation`), `share_surface` (a real `Effect::GrantCapability`
+turn; a widening share REJECTS with `DelegationDenied`), `revoke_surface`, and
+`surface_identity` (the `(owningCellId, lifecycle, sourceStateRoot)` T2 badge
+source, read from the live ledger). "A browser surface = a cell's cap" is
+callable from JS today; W5's compositor (S2) consumes it.
 
 **S2 — the browser compositor module (NEW, tiny; W5).** A gpui-free scene-graph
 module — the browser sibling of starbridge-v2's `shell::Shell::compose` — that
@@ -421,22 +427,25 @@ focused pane (T3), and enforces T1 non-overlap on `present`. Port the proven
 layouts (float/tile/stack) and the protected-root console from starbridge-v2.
 This is the firmament-to-pixels weld in the browser. Wide-safe: pure frontend.
 
-**S3 — the killer-demo playground page (W6, the evaluation artifact).** Wire S1+S2
-into the existing `site/playground` as the "two tabs, one surface, the share that
+**S3 — the killer-demo playground page (W6, the evaluation artifact).** Build a
+NEW `site/playground` page (no playground exists under `site/` today; the old
+site's version sits in `site-old-scavenge/playground` as scavenge material) wiring
+S1+S2 into the "two tabs, one surface, the share that
 refuses" demo (§4). Two `DreggRuntime`s (or one shared via the devnet),
 open/share/over-share/revoke, the `⚠ over-share` teaching banner, the live
 dynamics feed. The copy-paste end-to-end story the pug handoff needs. Wide-safe:
 static site.
 
-**S4 — `verify_history` in the tab (W4, the anti-pale-ghost tooth).** Compile
-`dregg-lightclient`'s `verify_history` to wasm (it depends only on
-`dregg-circuit` recursion + `dregg-blocklace`, both wasm-buildable) and expose
-`verify_devnet_history(root, vkAnchor) -> AttestedHistory` from the wasm module;
-add the "verify the whole history yourself" button to the explorer (W6) and the
-playground (S3). The VK anchor is genesis/checkpoint config, never taken from the
-artifact under verification (the lightclient already enforces this). Wide-safe:
-adds a wasm export + a site button. (Honest scope: carries the lightclient's named
-floor — `recursive_sound` — surfaced in the UI, not hidden.)
+**S4 — `verify_history` in the tab (W4, the anti-pale-ghost tooth) — the wasm
+side is LANDED.** `wasm/src/bindings_lightclient.rs` exposes
+`verify_devnet_history` (verify an externally-produced aggregate envelope) and
+`produce_external_history_envelope` (fold a real chain and emit the envelope),
+and `site/light-client/index.html` drives them. The VK anchor is
+genesis/checkpoint config, never taken from the artifact under verification
+(the lightclient enforces this). The remaining slice is wiring the same
+"verify the whole history yourself" button into the explorer (W6) and the
+playground (S3). (Honest scope: carries the lightclient's named floor —
+`recursive_sound` — surfaced in the UI, not hidden.)
 
 *Byte path CLOSED (§7).* The over-wire seam — a `WholeChainProof` had no serde
 because its `root.1` (`Rc<CircuitProverData>`) is prover-only — is wired:
@@ -445,14 +454,15 @@ versioned `WholeChainProofBytes` envelope (`WholeChainProof::to_bytes()`), and
 `dregg_lightclient::verify_history_bytes` runs the three teeth over the decoded
 bytes. The wasm `produce_external_history_envelope` fills `proof_bytes_b64` and
 `verify_devnet_history` decodes + verifies it for real (no longer a reported
-seam). Teeth in `circuit/tests/ivc_turn_chain_rotated.rs::whole_chain_proof_bytes_roundtrip_and_tamper`.
+seam). Teeth in `circuit-prove/tests/ivc_turn_chain_rotated.rs::whole_chain_proof_bytes_roundtrip_and_tamper`.
 
-**S5 — the SDK two-noun browser front door (W3, the acting surface).** Finish the
-`sdk-browser-ed25519-webcrypto` follow-up named in `sdk-ts/src/browser.ts`: back
-`Identity` with WebCrypto/@noble ed25519 so the FULL acting surface (`Identity →
+**S5 — the SDK two-noun browser front door (W3, the acting surface) — LANDED.**
+The `sdk-browser-ed25519-webcrypto` follow-up is done (`sdk-ts/src/browser.ts`
+header): `internal/ed25519` backs `Identity` with `@noble/ed25519`, the SDK no
+longer statically imports `node:crypto`, and the FULL acting surface (`Identity →
 .turn() → .sign() → .submit() → Receipt`) bundles for the browser, not just the
-fetch-only organs. Then a `.turn()` from a tab against the devnet is a real signed
-turn. Wide-safe: sdk-ts only, no crypto reimplemented (WebCrypto/@noble).
+fetch-only organs. A `.turn()` from a tab against the devnet is a real signed
+turn (§1.3). No crypto reimplemented (WebCrypto/@noble).
 
 **S6 — the explorer as caps-as-rows (W6, the PG-DREGG framing in the browser).**
 Reframe `site/explorer` as *"your capabilities, expressed as the rows/cells you
@@ -461,10 +471,10 @@ realized over the live devnet ledger with the wasm light-client attesting the
 state. The explorer becomes the web face of the read side; pairs with S4 (verify)
 and S3 (act/surface). Wide-safe: static site + existing devnet API.
 
-**Sequencing.** S1→S2→S3 is the surface-to-pixels spine and the killer demo; S4
-is the verify tooth (independent, can land in parallel); S5/S6 round out the
-acting+reading product. None touch the kernel/circuit cutover; all ride existing,
-proven code. The deep frontier (F1 trusted chrome, F2 Lean-executor-in-wasm, F3
+**Sequencing.** S1 (landed) → S2 → S3 is the surface-to-pixels spine and the
+killer demo; S4's remaining explorer/playground button is independent; S5
+(landed) and S6 round out the acting+reading product. None touch the kernel/circuit tree; all
+ride existing, proven code. The deep frontier (F1 trusted chrome, F2 Lean-executor-in-wasm, F3
 sandbox confinement) sits beyond this slice, honestly named, with F2 already a
 build in flight in `web/spike/`.
 
@@ -482,9 +492,14 @@ build in flight in `web/spike/`.
   (~80 `#[wasm_bindgen]` fns): a complete cell/turn/capability/note/federation
   world running the REAL `dregg-turn`/`dregg-cell` crates in wasm32. The browser
   `n = 1` machine.
+- **The in-tab surface binding (S1)** — `wasm/src/surface.rs` +
+  `wasm/src/bindings_surface.rs`: the firmament surface verbs (`open_surface` /
+  `present_surface` / `share_surface` / `revoke_surface` / `surface_identity`)
+  over the `DreggRuntime` ledger+executor, callable from JS.
 - **The light client** — `dregg-lightclient::verify_history`: whole-history
   attestation from one succinct aggregate, re-witnessing nothing, against a VK
-  anchor. The anti-pale-ghost tooth, ready to compile to the tab.
+  anchor. The anti-pale-ghost tooth, compiled to the tab
+  (`wasm/src/bindings_lightclient.rs`; driven by `site/light-client/`).
 - **The browser SDK surface** — `@dregg/sdk/browser` (fetch+SSE organs) +
   `@dregg/sdk/wasm` (verify/proof/sim); `sdk-ts/examples/*` (transfer, trustline,
   channel, attested-query, devnet-walkthrough) as the worked snippets.

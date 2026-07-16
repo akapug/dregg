@@ -101,8 +101,10 @@ be tied to committed state in-AIR.
 
 The rotated caveat carrier — the `RotCaveatManifest` (29 felts) chained by `caveatCommit` to a
 published caveat-commit PI — is **already in the deployed AIR** of every R=24 cohort descriptor.
-`circuit/descriptors/rotation-v3-staged-registry.tsv`'s `transferVmDescriptor2R24` (`public_input_count:46`)
-carries the manifest at cols 287.., chained by poseidon2 lookups to col 328, pinned `pi_index 45`.
+`circuit/descriptors/rotation-v3-staged-registry.tsv`'s `transferVmDescriptor2R24` (the avail-hardened
+`-gentian-deployed-bare-refuse` member: `public_input_count:50`, trace width 1702) carries the manifest,
+chained by poseidon2 lookups to the caveat-commit column, pinned `pi_index 45` at col 714
+(`trace_rotated.rs:716`, "PI 45: caveat commit").
 The Lean binding keystone `EffectVmEmitRotationCaveat.caveatCommit_binds` proves equal caveat commits
 force equal manifests under the ONE `Poseidon2SpongeCR` floor. So a pure light client that binds the
 caveat-commit PI (part of the ~124-bit wide commit) witnesses the **exact** manifest; a forger cannot
@@ -115,7 +117,7 @@ new VK bytes") over-stated the carrier's cost — the manifest-binding leg is al
 
 The genuinely-VK-affecting remainder is **narrower** than "the carrier" and is the §6 tail.
 
-## 5. Staged wiring (built this pass, deployed default NOT flipped)
+## 5. Staged wiring (built; deployed default NOT flipped)
 
 * **Lean** — `ConstraintBinding.lean`, the proven soundness core (§3), imported into `Dregg2.Deos`.
 * **Circuit** — `verify_slot_caveat_coverage` (`circuit/src/effect_vm/verify.rs`), the omission-proof
@@ -135,7 +137,7 @@ The genuinely-VK-affecting remainder is **narrower** than "the carrier" and is t
 The deployed `verify_full_turn_bound` and the deployed default (no cell declares a capacity caveat)
 are unchanged.
 
-### The CARRIER staging (Piece 1, built this pass — NOT VK-affecting, NOT flipped)
+### The CARRIER staging (Piece 1 — NOT VK-affecting, NOT flipped)
 
 The capacity manifest now rides the **AIR-bound rotated carrier**, not just the unbound off-AIR
 full-v1 PI leg the deployed coverage check reads:
@@ -166,7 +168,7 @@ STAGED: nothing on the live wire calls these (no deployed cell declares a capaci
 deployed empty-manifest default and the deployed descriptors/VK are byte-identical (descriptor-drift
 guards green).
 
-### The SATISFACTION staging (Piece 2, built this pass — VK-AFFECTING, NOT emitted/flipped)
+### The SATISFACTION staging (Piece 2 — VK-AFFECTING; the emit landed, the flip did not)
 
 The genuinely-VK-affecting half — the SATISFACTION weld — now has its soundness rung PROVEN and its
 in-AIR constraint polynomials BUILT (staged beside the deployed descriptor, NOT yet emitted into a
@@ -199,27 +201,26 @@ committed VK):
   settle satisfies every gate; a partial settle and a phantom settle are UNSAT; selector-0 makes the
   gates inert (no false reject off a declared capacity turn).
 
-STAGED — these constraint polynomials are NOT yet emitted into a committed welded descriptor / VK and
-NOT routed onto any live path. So SATISFACTION is **not light-client-witnessed yet** — only a verifier
-holding the committed-state opening witnesses it (the cap-membership posture). What remains is §6
-item 1's tail: emit the staged `settleEscrowSatVmDescriptor2R24` (its Lean emit keystone), commit its
-VK beside the deployed, and flip. The deployed descriptors/VK are byte-identical this pass
-(descriptor-drift guards green).
+STAGED — the welded descriptors ARE emitted into `rotation-v3-staged-registry.tsv` (see §6), but
+nothing routes them onto the live verify path and no consumer holds their committed VKs. So
+SATISFACTION is **not light-client-witnessed in production** — only a verifier holding the
+committed-state opening witnesses it (the cap-membership posture). What remains is the §6 deploy
+flip.
 
 ## 6. The true distance to "genuinely light-client-witnessed"
 
-* **DONE (this pass):** the soundness core. A verifier that holds (or re-derives from authoritative
+* **DONE — the soundness core.** A verifier that holds (or re-derives from authoritative
   pre/post state) the declared constraint-set + the bound state field views — the same posture as the
   deployed cap-membership expectation (`verify_full_turn_bound` step 9, where the caller re-derives
   `cap_root`/leaf from trusted data) — now **rejects omission**. The gate is no longer
   prover-optional. Proven in Lean, exercised in Rust.
-* **DONE (this pass — Piece 1, the CARRIER, §5):** the capacity manifest rides the AIR-bound rotated
+* **DONE — Piece 1, the CARRIER (§5):** the capacity manifest rides the AIR-bound rotated
   carrier; omission on the bound leg is **impossible** (`carrier_omission_impossible`), proven for a
   pure light client binding PI 45. This discharges the COVERAGE half (the omission tooth) for a pure
   light client: it no longer needs to be handed the manifest opening — the wide commit forces it.
   NOT VK-affecting (the carrier binding is already deployed; see the §4 correction).
 
-* **DONE (this pass — Piece 2, the SATISFACTION SOUNDNESS + CONSTRAINTS, §5):** the in-AIR
+* **DONE — Piece 2, the SATISFACTION SOUNDNESS + CONSTRAINTS (§5):** the in-AIR
   gate-satisfaction weld's soundness rung is PROVEN (`CapacitySatisfaction.lean`,
   `satisfaction_witnessed` + the composed `capacity_witnessed_pure_lightclient`,
   `#assert_all_clean`) and its in-AIR `VmConstraint::Gate` polynomials are BUILT + tested
@@ -227,104 +228,85 @@ VK beside the deployed, and flip. The deployed descriptors/VK are byte-identical
   BEFORE/AFTER field columns carries pure-light-client satisfaction. It is STAGED — NOT yet in a
   committed VK and NOT flipped, so satisfaction is **not light-client-witnessed in production yet**.
 
-* **DONE (2026-06-28 — the tags 18/19 SATISFACTION SOUNDNESS rungs):** `CapacitySatisfaction.lean`
-  now carries the discharge (tag 18) and vault (tag 19) field-column satisfaction keystones beside the
+* **DONE — the tags 18/19 SATISFACTION SOUNDNESS rungs:** `CapacitySatisfaction.lean`
+  carries the discharge (tag 18) and vault (tag 19) field-column satisfaction keystones beside the
   escrow one: `discharge_satisfaction_witnessed` / `vault_satisfaction_witnessed` (equal before/after
   state commits ⟹ the SAME full gate verdict — inequalities included — by REUSE of
   `fieldAt_bound_in_commit`), their teeth (`discharge_{early,cursor_not_advanced,wrong_amount}_field_rejected`;
   `vault_{inflation_attack,dilution,no_deposit}_field_rejected`), and the composed
   `{discharge,vault}_capacity_witnessed_pure_lightclient`. `#assert_all_clean`, 16 keystones, lake green.
-  This proves the soundness an in-AIR weld WOULD carry for all three tags. It is NOT the in-AIR
-  constraint and NOT a VK bump (see the blockers below).
+  This proves the soundness the in-AIR weld carries for all three tags; the in-AIR constraint
+  builders and their registry emits are the LANDED items below.
 
-* **REMAINING (the genuinely-VK-affecting tail — the FLIP is NOT yet soundly takeable; two
-  independent, verified blockers):**
+* **LANDED (the former "two blockers" — both discharged; `docs/deos/VK-EPOCH-PLAN-2026-07-05.md`
+  §9 records the closures and supersedes this section's earlier terminal-blocker framing):**
 
-  * **BLOCKER 1 — the emit/selector/exerciser MACHINERY (now BUILT this pass — the GENTIAN
-    INITIATIVE); the producer/VK/routing tail REMAINS.** What was named-only is now real:
-    - **The welded emit keystone EXISTS** — `metatheory/Dregg2/Deos/SettleEscrowSatDescriptor.lean`
-      defines `settleEscrowSatVmDescriptor2R24` = `graduateV1 (rotateV3 settle-base)` + the four
-      selector-gated satisfaction gates over the rotated FIELD columns + the selector PI pin, with the
-      REFINEMENT rung `settleEscrowSatV3_forces_settle_gate` (a satisfying trace on a selector-on
-      non-last row FORCES both legs Deposited-before/Consumed-after) + partial/phantom UNSAT teeth,
-      `#assert_all_clean`. It is EMITTED into `rotation-v3-staged-registry.tsv` (the 58th member;
-      deployed rows byte-identical, FP re-pinned, drift + Rust descriptor-validation + wide-parity +
-      resolver-cohort gates all green).
-    - **The capacity-selector column is REAL** — `satisfaction_weld.rs` `ESCROW_SEL_COL = PARAM_BASE+2
-      = 70` (pinned to PI 46) replaces the `SEL = 320` placeholder; the emitted descriptor's four
-      welded gate bodies match the Rust builder byte-for-byte and bite (honest accept / forged reject).
-    - **A capacity-caveat-bearing EXERCISER exists** — `circuit/tests/settle_escrow_capacity_weld.rs`:
-      a declared escrow caveat (tag 17, legs 0/1) is COVERAGE-bound on the rotated carrier (can't be
-      omitted) AND the EMITTED welded descriptor's gates accept the honest settle / reject the
-      forged (SATISFACTION) = the full capacity witness for a declared turn, at the descriptor's
-      CONSTRAINT-eval level.
-    What REMAINS (the genuine umem-flip-scale tail; `da0c47dd6` was "the 13th attempt"): a PRODUCER
-    emitting a SATISFYING rotated trace for the welded descriptor (the field-override + commit-
-    recompute surgery the fee/nullifier producers do, now for the two leg field limbs of a
-    zero-amount settle-carrier) → a full STARK **prove/verify** against a **committed VK**; binding
-    the selector to the committed declaration in-AIR (§6 item 2, so a forger cannot dodge by setting
-    the selector 0); and the prover/verify-path routing. The teeth bite in-PROOF today at the LEAN
-    refinement level + the EMITTED-descriptor constraint-eval level, NOT yet a full STARK prove.
+  * **The escrow welded-descriptor machinery.** `metatheory/Dregg2/Deos/SettleEscrowSatDescriptor.lean`
+    defines `settleEscrowSatVmDescriptor2R24` = `graduateV1 (rotateV3 settle-base)` + the four
+    selector-gated satisfaction gates over the rotated FIELD columns + the selector PI pin, with the
+    REFINEMENT rung `settleEscrowSatV3_forces_settle_gate` + partial/phantom UNSAT teeth,
+    `#assert_all_clean`; it is EMITTED into `rotation-v3-staged-registry.tsv`. The capacity-selector
+    column is real (`satisfaction_weld.rs` `ESCROW_SEL_COL = PARAM_BASE+2`, pinned to PI 46), the
+    emitted gate bodies match the Rust builder byte-for-byte, and the wide graduation
+    (`SettleEscrowSatWideDescriptor.lean`, `#assert_all_clean`, 9 keystones) proves the
+    satisfaction-gate field columns lie inside the BEFORE/AFTER limbs the deployed wide carriers
+    absorb (`beforeFieldCol_absorbed` / `afterFieldCol_absorbed` composed with
+    `rotV3Wide_binds_published` under `Poseidon2WideCR`) — a pure light client binding the wide
+    commit binds those columns.
 
-    **SUB-GAP (1) — "1-felt V3, not WIDE" — CLOSED at the proof level (2026-06-28, the GENTIAN
-    FULCRUM).** The GENTIAN verifier lane (`b63f75da3`) named the first structural blocker precisely:
-    `settleEscrowSatVmDescriptor2R24` was a 1-felt V3 staged member, so its satisfaction-gate field
-    columns were NOT absorbed into the ~124-bit wide commit a pure light client binds.
-    `metatheory/Dregg2/Deos/SettleEscrowSatWideDescriptor.lean` (`#assert_all_clean`, 9 keystones,
-    lake green, wired into `Dregg2.Deos`) graduates the welded descriptor to the WIDE form:
-    `settleEscrowSatVmDescriptor2R24Wide = wideAppend (graduateV1 (rotateV3 settle-base)) bb (bb+51)`
-    + the four satisfaction gates + the selector PI pin (the EXACT graduation `EmitWideRegistryProbe.lean`
-    applies to every cohort member; `piCount = 63` = 46 rotated + 16 wide commit anchors + the selector
-    at PI 62). The V3 refinement (`settleEscrowWide_forces_settle_gate`) + partial/phantom UNSAT teeth
-    carry verbatim over the wide form (the gate bodies are byte-identical). The **GRADUATION keystone**
-    (`beforeFieldCol_absorbed` / `afterFieldCol_absorbed`) proves the satisfaction-gate field columns
-    `bb + 4 + k` / `bb + 51 + 4 + k` (k ≤ 7) lie INSIDE the 37 pre-iroot BEFORE/AFTER limbs the wide
-    carriers consume (`bb = (settleEscrowV1Base _ _).traceWidth = EFFECT_VM_WIDTH`, by `rfl`); the
-    deployed `EffectVmEmitRotationWide.rotV3Wide_binds_published` (equal published 8-felt commits ⟹
-    equal limbs, under `Poseidon2WideCR`) then carries the binding — so a pure light client binding the
-    wide commit binds those columns, exactly the `CapacitySatisfaction.fieldAt_bound_in_commit` chain
-    over the DEPLOYED wide carriers. STAGED — this is a Lean definition (the source of truth); NOTHING
-    is emitted into the deployed wide registry / VK and nothing routes through it. The producer +
-    committed VK + live admission (sub-gap above) and the in-AIR selector forcing (§6 item 2 below)
-    remain; **the flip is NOT taken** — the selector forcing is the terminal blocker (a pure light
-    client cannot force `sel = 1` from the committed digest without the in-AIR authority-digest
-    recompute, so a forger would dodge by `sel = 0` or by the bare wide transfer route).
+  * **The `sel = 0` dodge — DISCHARGED in proof.** Not by an in-AIR authority-digest recompute (the
+    path this section originally specced as item 2) but by the caveat-manifest-column decode
+    (`metatheory/Dregg2/Deos/CarrierBoundFloorGadget.lean`): the required-capacity floor decodes
+    in-AIR from the caveat type-tag columns the committed manifest binds at PI 45
+    (`caveatCommit_binds`), so a declared cell cannot present an unforced selector. This removes the
+    caller-asserted `required_tags` input by a route cheaper than the digest recompute.
 
-  * **BLOCKER 2 — tags 18/19 in-AIR gates are NOT a mirror of the escrow EQUALITY template.** The
-    escrow gate is pure status-code equality (`sel·(col − const) == 0`), the whole gate. The discharge
-    gate adds a DUE-NESS INEQUALITY (`due_block ≤ clock`) — a range-check aux column, not an equality
-    gate — plus additive equalities over per-cell manifest-param columns (`period`/`amount`, not
-    constants). The vault gate is ENTIRELY inequalities: two strict positivities and the no-dilution
-    PRODUCT inequality `Tb·m ≤ Sb·d`, whose products exceed the ~31-bit BabyBear field (the off-AIR arm
-    uses u128) — an overflow-safe multi-limb comparison gadget. Emitting an equality-only weld for
-    18/19 and flipping would DROP the early-discharge / inflation-attack / dilution disciplines from
-    what a pure light client witnesses — i.e. ACCEPT FORGERIES. So the sound order is: (a) build +
-    validate the escrow welded descriptor + selector + producer + VK + routing (the proven template);
-    (b) build the range-checked / product in-AIR gates for tags 18/19; (c) only then flip.
+  * **The bare-descriptor dodge — CLOSED in the deployed cohort bytes.** Every cohort row in
+    `circuit/descriptors/rotation-v3-staged-registry.tsv` carries the
+    `-gentian-deployed-bare-refuse` weld (the per-tag floor-decode + `floor == 0`-refuse gates;
+    cohort trace widths off base `GRAD_ROT_WIDTH = 1647` (`trace_rotated.rs:138`): 1692 for the 32
+    standard graduated members, 1702/1700 for the avail-hardened transfer/burn members, 1668/1664
+    for the two distinct-geometry V1Face members), and the anti-launder tooth
+    `bare_floor_refuse_weld::deployed_cohort_bytes_carry_the_refuse`
+    (`circuit/src/effect_vm/bare_floor_refuse_weld.rs`) parses the committed TSV and asserts all 36
+    cohort rows carry it. Soundness: `BareCohortFloorRefuseDeployed.lean`
+    (`declared_{escrow,discharge,vault}_unsat_deployed` — a declared-capacity turn routed through a
+    bare cohort member is UNSAT); completeness: a non-declaring cell decodes `floor = 0` and the
+    refuse is inert.
 
-  * Until (a)+(b)+(c), SATISFACTION is **not light-client-witnessed in production** — only a verifier
-    holding the committed-state opening witnesses it (the cap-membership posture). The earlier framing
-    below ("emit the staged `settleEscrowSatVmDescriptor2R24`") understated this: the descriptor, its
-    selector column, its producer, and its VK do not yet exist.
-  2. **In-AIR coverage-forcing from the authority digest** — bind the required-tag floor to the
-     committed declaration **in-proof**: open the witnessed `state_constraints` against the
-     `B_AUTHORITY_DIGEST` r23 limb the wide commit carries (recompute `compute_authority_digest_felt`,
-     check equality, force the manifest to carry the re-derived required tags). This removes the last
-     caller-asserted input (`required_tags`). The Lean `DeclCommitBinds` floor is the spec; this is its
-     in-proof realization. New constraint = **new VK bytes**, STAGED.
-  3. **Flip** — the lockstep verifier-code + descriptor epoch: ship the upgraded verifier and the
-     staged (1)+(2) descriptors to all consumers, route the live path through
-     `verify_full_turn_bound_with_caveat_coverage` reading the **rotated** leg
-     (`verify_rotated_caveat_coverage`) instead of the off-AIR v1 leg, then allow capacity cells to
-     declare the caveat. Coordinates with the temporal-caveat and umem VK epochs (one upgrade window).
-     Precedent: the umem flip (`da0c47dd6`) — every producer built + loud-probe-validated STAGED, the
-     flip a pure registry-default flip, PI-count-preserving, fail-closed, no coverage narrowing.
+  * **Tags 18/19 in-AIR gates — BUILT, honoring the non-equality shapes this section demanded.**
+    `circuit/src/effect_vm/discharge_weld.rs` builds the due-ness range check as a `DUE_BITS = 28`
+    bit-decomposition (wrap-to-small dodge excluded) with the G5 free-param binding CLOSED:
+    `PERIOD_COL`/`AMOUNT_COL` are gated equal to the committed caveat params and `CLOCK_COL` to the
+    published block height (PI 44) — no producer-free scalars. `vault_weld.rs` builds the
+    no-dilution product inequality `Tb·m ≤ Sb·d` as an overflow-safe multi-limb schoolbook product
+    with witnessed carries (the products exceed the ~31-bit field). Both descriptors are Lean-emitted
+    (`DischargeSatDescriptor.lean` / `VaultSatDescriptor.lean`) and present as staged-registry rows
+    (`dischargeSatVmDescriptor2R24`, `vaultSatVmDescriptor2R24`, beside the escrow row).
 
-The honest scope after this pass: COVERAGE (omission caught) is pure-light-client-witnessed via the
-deployed carrier. SATISFACTION is now **proven sound + its in-AIR constraints built** (Piece 2,
-`CapacitySatisfaction.lean` + `satisfaction_weld.rs`) — but it is witnessed only **for a verifier with
-the committed-state opening** (the cap-membership posture) until (1) emits the welded descriptor +
-commits its VK + flips; it is **NOT light-client-witnessed in production until that flip**. The
-required-tag floor is caller-asserted until (2) binds it in-proof. (1)+(2)+(3) are the remaining gated
-VK epoch — (1) is now reduced from "design + soundness + constraints" to "emit the descriptor + commit
-the VK + flip" for the proven escrow template, then replicate for tags 18/19.
+  * **Real STARK prove/verify exercises run against the emitted descriptors.**
+    `circuit/tests/settle_escrow_weld_prove.rs` (tag 17) and
+    `circuit/tests/gentian_discharge_vault_prove.rs` (tags 18/19): honest discharge/vault settles
+    PROVE + VERIFY through the genuine rotated producer + the production aux-fills; the six
+    gate-mechanic forge arms (early discharge / cursor-not-advanced / wrong-amount; zero-mint /
+    dilution / no-deposit) and the three free-param-bind forge arms are REFUSED.
+
+* **REMAINING — the ember-gated deploy flip (the one deploy caveat).** The deployed light-client
+  entry is still `verify_full_turn_bound`; `verify_full_turn_bound_with_caveat_coverage`
+  (`sdk/src/full_turn_proof.rs:5461`) is its staged sibling, and the declaration-keyed prover
+  routing (`rotated_descriptor_name_for_declared_{capacity,escrow,discharge,vault}`,
+  `circuit/src/effect_vm/trace_rotated.rs`) is built but not the deployed default. Taking the flip
+  is the lockstep verifier-code + VK-redistribution window: route the live verify path through the
+  coverage verifier reading the **rotated** leg (`verify_rotated_caveat_coverage`), admit the welded
+  satisfaction descriptors under committed VKs, re-genesis + redistribute light-client VKs, then
+  allow capacity cells to declare the caveat. Precedent: the umem flip — every producer built +
+  loud-probe-validated STAGED, the flip itself a registry-default flip, fail-closed, no coverage
+  narrowing.
+
+The honest scope at HEAD: COVERAGE (omission caught) is pure-light-client-witnessed via the deployed
+carrier, and the two forger dodges this section once named terminal (`sel = 0`, the bare route) are
+closed in proof and in the deployed cohort bytes. SATISFACTION is proven sound, its in-AIR
+constraints are built and emitted for all three tags, and real STARKs exercise them — but until the
+deploy flip routes the live path and commits the welded VKs to consumers, production satisfaction is
+witnessed only by a verifier holding the committed-state opening (the cap-membership posture), not
+by a pure light client.

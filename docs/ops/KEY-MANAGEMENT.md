@@ -6,12 +6,15 @@ one forces a committee change). Ported from the operated layer's lifecycle
 runbook, re-grounded on native commands.
 
 **Rule zero: live secrets are never committed.** Docs and examples carry the
-*regenerate command*, never the value (`deploy/aws/*.env.example` is the
-pattern; real values live only in `/etc/dregg/*.env`, mode 0600, and in the
-per-node data dirs). A secret that reaches a commit or any shared surface is
+*regenerate command*, never the value (`deploy/games/.env.example` is the
+pattern; real values live only on the box — container environment via the
+compose stack, or 0600 files in the per-node data dirs). A secret that
+reaches a commit or any shared surface is
 compromised — scrub the text AND rotate the secret, in the same breath. The
 repo's pre-commit/pre-push hooks run `scripts/git-hooks/secret-scan.sh` as
-the backstop; `.gitleaks.toml` gates CI.
+the backstop (`.gitleaks.toml` is that scan's config). No CI workflow runs a
+secret scan — the local hooks are the only automated gate; a push from a box
+without the hooks installed is unscanned.
 
 ## 1. Validator key (`node.key`) — the consensus identity
 
@@ -27,9 +30,10 @@ slot and contributing to `federation_id`
   Writes `node.key` (raw 32-byte seed, `0600`) if absent and prints the
   PUBLIC key — that is what you hand the federation operator
   (`docs/OPERATOR-ONBOARDING.md`).
-- **Lives** in the node's data dir (`/opt/dregg-data`, members
-  `/opt/dregg-data-N`), beside `genesis.json` (committee) and the redb store
-  (ledger). Identity / committee / ledger — only the ledger is disposable
+- **Lives** in the node's data dir (whatever `--data-dir` the deployment
+  passes — on the edge, the mount the compose file gives the container),
+  beside `genesis.json` (committee) and the redb store (ledger). Identity /
+  committee / ledger — only the ledger is disposable
   ([DISASTER-RECOVERY.md](DISASTER-RECOVERY.md)).
 - **Back up — the one that matters.** A backed-up `node.key` turns a lost box
   into a non-event; without it, loss forces a committee change. Copy
@@ -50,18 +54,25 @@ member with the wrong genesis speaks into the void (its votes reject as
 across members after any committee change. Re-obtainable from any member —
 never worth backing up secretly, always worth backing up *conveniently*.
 
-## 3. Discord bot token (`/etc/dregg/discord-bot.env`)
+## 3. Discord bot token (`DISCORD_TOKEN`)
 
 - Generate/rotate in the Discord developer portal; free rotation.
-- Install: copy `deploy/aws/discord-bot.env.example` → `/etc/dregg/discord-bot.env`,
-  fill, `sudo systemctl restart dregg-discord-bot`
-  (`deploy/aws/preflight-discord-bot.sh` verifies).
+- Install: the bot runs as the container `dreggnet-dreggnet-discord-bot-1` on
+  the edge; the token reaches it as `DISCORD_TOKEN` in the box's compose stack
+  (`/opt/dreggnet/`, box-only — `deploy/README.md` TODO-4). Rotate = update the
+  env, `docker compose up -d --no-deps dreggnet-discord-bot`. ⚠ One token = one
+  bot: stop the running container before starting the bot anywhere else.
+  Full env table: [DISCORD-BOT.md](DISCORD-BOT.md).
 
 ## 4. TLS
 
-Caddy (`deploy/aws/caddy/Caddyfile`) provisions + rotates ACME certs
-automatically. Nothing to manage; the failure mode is DNS or port 80/443
-reachability, not key rotation.
+No TLS terminates on the edge: nothing routes the node publicly
+(`deploy/README.md` TODO-5), so there are no ACME certs to manage there. The
+one live public TLS surface is the hbox games funnel
+(`https://hbox-dregg.skunk-emperor.ts.net`), whose certs Tailscale provisions
+and rotates automatically — nothing to manage. The Caddy-ACME story is
+quarantined in `deploy/aws/SUPERSEDED/caddy/Caddyfile`; it describes a
+deployment that never ran.
 
 ## 5. Grafana admin (`GRAFANA_ADMIN_PASSWORD`)
 
@@ -77,11 +88,12 @@ container). Grafana binds loopback; the tunnel is the access path.
 
 ## 6. Node signing/unlock (cipherclerk)
 
-The gateway unit unlocks its cipherclerk post-start
-(`deploy/aws/dregg-gateway.service` → `unlock-gateway.sh`); federation
-members deliberately stay locked (consensus signing needs no unlock —
-`deploy/aws/dregg-node@.service` comments). Treat the unlock material like
-`node.key`: data-dir file, 0600, backed up offline, never committed.
+No live deployment exercises a post-start cipherclerk unlock today. (The
+systemd-gateway flow that did — `dregg-gateway.service` → `unlock-gateway.sh`,
+with federation members deliberately staying locked because consensus signing
+needs no unlock — is quarantined in `deploy/aws/SUPERSEDED/` and never ran.)
+The handling rule stands wherever unlock material exists: data-dir file, 0600,
+backed up offline, never committed — treat it exactly like `node.key`.
 
 ## What rotation costs — the table
 
@@ -89,6 +101,6 @@ members deliberately stay locked (consensus signing needs no unlock —
 |---|---|
 | `node.key` | committee change (live epoch path or re-roll) |
 | `genesis.json` | n/a (public); changes only via committee change |
-| bot token | free (portal + restart) |
-| TLS | automatic (Caddy) |
+| bot token | free (portal + container recreate) |
+| TLS | automatic (Tailscale funnel certs on hbox); no public TLS route on the edge |
 | Grafana admin | free (env + restart) |

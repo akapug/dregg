@@ -7,7 +7,7 @@ security-properties + an unwired UC shelf + assumed floors** to a **genuine UC-s
 treatment**: explicit adversary model, whole-system (multi-turn / concurrent / adversarial)
 composition, and machine-checked proof-engineering rigor.
 
-Every "CURRENT" claim is grounded at `file:line` against HEAD (`db466dcd9`), verified
+Every "CURRENT" claim is grounded at `file:line` against HEAD, verified
 against the code, not just the survey. The baseline is `docs/audit/SECURITY-PROPERTY-MAP.md`
 (the fresh security-property survey) cross-checked with `docs/audit/TRUST-BASE-CENSUS.md`
 (the adversarial trust-floor census) and `docs/audit/TIER3.md`. All Lean paths are under
@@ -27,13 +27,15 @@ dregg today proves a **refinement backbone** (`descriptorRefines` / `BindingFrom
 no-dilution `Deos/Vault.lean:175`; settlement soundness `SettlementSoundness.lean:153`).
 It has a **UC/crypto shelf** (`Metatheory/Open/PerfectUC.lean`) that closes only the
 **perfect/statistical** fragment for **deterministic** ideals, wired **only** to the
-selective-disclosure functionality (`realπ_realizes_idealF`, `PerfectUC.lean:448`). It
-**lacks**: a computational UC theorem (explicitly OPEN, `PerfectUC.lean:502` + module
-header), an **explicit adversary model** applied to the deployed guarantees, **whole-system
-composition** (the apex `deployed_system_secure` is ONE turn, `AssuranceCase.lean:886`),
-DECO-as-UC (unforgeability ASSUMED, `Crypto/Deco.lean:315`), SealedEscrow no-theft
-(`Deos/SealedEscrow.lean` has replay + gate-binding but no economic invariant), and the
-capacities' **pure-light-client** in-AIR witness (STAGED, `Deos/CapacitySatisfaction.lean:46-54`).
+selective-disclosure functionality (`realπ_realizes_idealF`, `PerfectUC.lean:448`). Also in
+place: SealedEscrow's economic no-theft invariant (`sealedescrow_no_theft`,
+`Deos/SealedEscrow.lean:743-753`) and the whole-history fold's genesis anchor (Pillar 3) —
+both proven/deployed, so neither is a Tier-0 work item. It **lacks**: a computational UC theorem (explicitly
+OPEN, `PerfectUC.lean:502` + module header), an **explicit adversary model** applied to the
+deployed guarantees, **whole-system composition** (the apex `deployed_system_secure` is ONE
+turn, `AssuranceCase.lean:886`), DECO-as-UC (unforgeability ASSUMED, `Crypto/Deco.lean:315`),
+and the capacities' **pure-light-client** in-AIR witness (STAGED,
+`Deos/CapacitySatisfaction.lean:46-54`).
 
 The target below is not "prove more of the same." It is to **re-cast the guarantees we have
 as ideal-functionality realizations against an explicit adversary, compose them over the
@@ -171,21 +173,25 @@ one published aggregate). The **multi-turn ingredients already exist**:
 `light_client_verifies_whole_history` (`Circuit/RecursiveAggregation.lean:206`) proves the
 published final root is the genuine fold of the *whole history* with the chain-bound tooth
 `new_root[i] == old_root[i+1]` (`HistoryAggregation.ChainBound`), and `settlement_soundness`
-(`SettlementSoundness.lean:153`) gives the temporal/revocation dimension. **Known residual:**
-the fold's `genesis_root` is **prover-chosen and unanchored** (`RecursiveAggregation.lean:194`
-+ deployed `lightclient/src/lib.rs:540`, per `TIER3.md`) — a prefix-completeness gap
-(interior omission/injection are CLOSED).
+(`SettlementSoundness.lean:153`) gives the temporal/revocation dimension. The former
+prefix-completeness residual (a prover-chosen, unanchored `genesis_root`) is **closed**: the
+Lean side proves `light_client_verifies_anchored_history` + `anchored_history_starts_at_genesis`
+(`RecursiveAggregation.lean:230-262`), and the deployed light client holds an 8-felt genesis
+anchor as configuration — "NEVER taken from the artifact under verification" — refusing a
+mismatched fold with `GenesisMismatch` (`lightclient/src/lib.rs:36-40,135-139,526-535`).
+Interior omission/injection are likewise CLOSED.
 
 ### TARGET
 `whole_execution_secure` — the five guarantees hold over an **arbitrary multi-turn,
 concurrent, adversarial** execution, not one turn.
 
 ### Ordered pieces
-1. **Anchor `genesis_root`** — close the `TIER3` residual: bind the fold's start to a committed
-   genesis (a committee-anchored or hardcoded genesis root), turning `light_client_verifies_
-   whole_history` from "some prefix" into "the whole chain from genesis." *Reuse:*
-   `anchored_history_starts_at_genesis` (`RecursiveAggregation.lean:258`) already exists as the
-   anchored variant — the gap is wiring the deployed verify API to demand it.
+1. **Anchor `genesis_root` — CLOSED.** The fold's start is bound to the client's trusted
+   genesis/checkpoint configuration: `anchored_history_starts_at_genesis`
+   (`RecursiveAggregation.lean:258`) is the proved anchored variant, and the deployed verify
+   path demands it (`verify_finalized_history(..., expected_genesis)`, `GenesisMismatch` on a
+   fold from any other genesis — `lightclient/src/lib.rs:526-535`). `light_client_verifies_
+   whole_history` therefore reads "the whole chain from genesis," not "some prefix."
 2. **Two routes to the whole-execution theorem, pick per Pillar-1 timing:**
    - **(a) via UC composition (preferred, rides Pillar 1):** once `F_turn` is realized and
      `compUC_composition` exists, the whole execution is `F_turn` composed with itself under
@@ -203,9 +209,8 @@ concurrent, adversarial** execution, not one turn.
    a corollary of settlement soundness over the config lattice.
 
 ### Size
-MEDIUM. Piece 1 (anchor genesis) is small and independently valuable — do it early regardless
-of Pillar 1. Piece 2(b) is a MEDIUM induction; 2(a) is "free" but gated on Pillar 1. Piece 3
-reuses existing distributed proofs.
+MEDIUM. Piece 1 (anchor genesis) is closed. Piece 2(b) is a MEDIUM induction; 2(a) is "free"
+but gated on Pillar 1. Piece 3 reuses existing distributed proofs.
 
 ---
 
@@ -322,8 +327,8 @@ is what makes them "raise the bar" rather than patch it.
 | Gap | CURRENT (file:line) | Frame as | Ordered pieces + reuse | Size |
 |---|---|---|---|---|
 | **DECO-as-UC** | `deco_authenticates_payment` (`Crypto/Deco.lean:315`) is a soundness refinement; unforgeability ASSUMED (ed25519 EUF-CMA + HMAC + Web-PKI/Stripe); PerfectUC NOT wired to DECO. | `F_payment` realization (Pillar 1a). | Define `F_payment`; prove the deployed DECO verifier realizes it, with the simulator resting on `Ed25519EufCma` + `Poseidon2SpongeCR` (already the named floor). The correctness leg (`deco_authenticates_payment`) is the simulator's soundness half. | MEDIUM (rides Pillar 1) |
-| **SealedEscrow no-theft** | `Deos/SealedEscrow.lean`: replay (`:257`) + gate-forcing (`:361`) + root-binding, but **NO** economic "funds cannot be stolen / value conserved across settle" invariant. | An `F_escrow` where the ideal releases funds only to the entitled party, value-conserving. | Prove the **standalone economic invariant** first (the missing `settle_conserves` / `no_theft` over the kernel `settle` fn, the analog of Vault's `deposit_no_dilution` `Deos/Vault.lean:175` and Lease's `remaining_plus_drawn_conserved` `Deos/PrepaidLease.lean:396`) — this is a self-contained property proof, no UC needed. THEN lift to `F_escrow`. | SMALL (the invariant) + MEDIUM (the lift) |
-| **Capacity pure-LC witness** (gentian — **actively closing this session**) | Vault/escrow/obligation safety hold over pure math / executor / an **off-AIR** gate predicate whose VK is explicitly unchanged; the in-AIR weld is STAGED (`Deos/CapacitySatisfaction.lean:46-54`, `circuit/src/effect_vm/satisfaction_weld.rs`). | Each capacity invariant as a property a **pure light client** (not a re-executor) witnesses. | Emit the satisfaction weld into a committed VK + flip the live path (the gentian flag-day — note it is partially closing NOW). *Reuse:* the completeness core `omission_caught_under_binding` (`Deos/ConstraintBinding.lean:151`) and `carrier_omission_impossible` (`Deos/CapacityCarrier.lean:106`) are already proven ∀-universal; the gap is deployment, not proof. | MEDIUM (VK epoch, ember-gated) |
+| **SealedEscrow no-theft** | The standalone economic invariant is **PROVEN**: `sealedescrow_no_theft` (`Deos/SealedEscrow.lean:743-753`) — per-leg conservation `paid + locked = entered` plus no-free-lunch (an unfunded party receives nothing) over every reachable ledger, with `no_phantom_extraction` alongside; the analog of Vault's `deposit_no_dilution` (`Deos/Vault.lean:175`) and Lease's `remaining_plus_drawn_conserved` (`Deos/PrepaidLease.lean:396`). | An `F_escrow` where the ideal releases funds only to the entitled party, value-conserving. | The invariant is the simulator's soundness half; the remaining piece is the lift to `F_escrow`. | MEDIUM (the lift, rides Pillar 1) |
+| **Capacity pure-LC witness** | Vault/escrow/obligation safety hold over pure math / executor / an **off-AIR** gate predicate whose VK is explicitly unchanged; the in-AIR weld is STAGED (`Deos/CapacitySatisfaction.lean:46-54`, `circuit/src/effect_vm/satisfaction_weld.rs`) — built but not yet emitted into a committed welded descriptor/VK nor flipped onto the live path. | Each capacity invariant as a property a **pure light client** (not a re-executor) witnesses. | Emit the satisfaction weld into a committed VK + flip the live path. *Reuse:* the completeness core `omission_caught_under_binding` (`Deos/ConstraintBinding.lean:151`) and `carrier_omission_impossible` (`Deos/CapacityCarrier.lean:106`) are already proven ∀-universal; the gap is deployment, not proof. | MEDIUM (VK epoch, ember-gated) |
 
 ---
 
@@ -341,10 +346,11 @@ by everything after), the **deep marquee** (computational UC) in the middle, the
 3. **Pillar 2 pieces 1-2 — the adversary object.** Generalize the `KeyLeak`/`polis_safety` opaque
    controller to the full network+prover+Byzantine adversary; make the forger explicit+universal.
    (SMALL-MEDIUM)
-4. **Pillar 3 piece 1 — anchor `genesis_root`.** Close the one known whole-history completeness
-   residual; independently valuable. (SMALL)
-5. **Pillar 5 — SealedEscrow economic no-theft invariant.** A self-contained property proof
-   (Vault/Lease template), no UC needed. (SMALL)
+4. **Pillar 3 piece 1 — anchor `genesis_root`. CLOSED** — the anchored theorem + the deployed
+   `expected_genesis` verify path exist (Pillar 3).
+5. **Pillar 5 — SealedEscrow economic no-theft invariant. CLOSED** — `sealedescrow_no_theft`
+   is proven (`SealedEscrow.lean:743-753`); the remaining escrow piece is the Tier-1
+   `F_escrow` lift.
 
 **Tier 1 — the deep marquee (the level-up):**
 6. **Pillar 1 pieces 1-2 — the computational UC model + composition theorem.** The greenfield
@@ -387,11 +393,11 @@ refinements are the correctness legs, `PerfectUC` is the composition skeleton, `
 | `F_payment` correctness leg | `deco_authenticates_payment` (`Crypto/Deco.lean:315`), bridge `BackedAt` (`BridgeBindingFromFold.lean:200`) |
 | Adversary object | `key_leak_contained` (`KeyLeak.lean:202`) = `polis_safety` (`Polis/Polis.lean:102`), opaque `ctrl : State → Action` |
 | Byzantine `f<n/3` leg | `byzantine_majority_cannot_uphold` (`Disputation.lean:79`) |
-| Whole-execution fold | `light_client_verifies_whole_history` (`RecursiveAggregation.lean:206`), `anchored_history_starts_at_genesis` (`:258`) |
+| Whole-execution fold | `light_client_verifies_whole_history` (`RecursiveAggregation.lean:206`), `anchored_history_starts_at_genesis` (`:258`, deployed as `verify_finalized_history(..., expected_genesis)`) |
 | Temporal/revocation dimension | `settlement_soundness` (`SettlementSoundness.lean:153`), `deployedSettle` (`:289`) |
 | Non-vacuity gate | `KeystoneAudit*` `*_satisfiable`/`*_teeth`; `Claims.lean` `#assert_axioms`; `axiom-hygiene-guard.sh`; `mutation-canary.sh` |
 | TCB manifest | `TRUST-BASE-CENSUS.md §1`; `starkSound_of_verifyAlgo` (`FriVerifierBridge.lean:106`) |
 | `ExerciseHoldFaithful` discharge | `deployedFaithfulEff_canonical` (`DeployedCapTree.lean:551`) pattern |
-| SealedEscrow no-theft | `deposit_no_dilution` (`Vault.lean:175`), `remaining_plus_drawn_conserved` (`PrepaidLease.lean:396`) |
+| SealedEscrow no-theft | discharged: `sealedescrow_no_theft` (`SealedEscrow.lean:743-753`), on the `deposit_no_dilution` (`Vault.lean:175`) / `remaining_plus_drawn_conserved` (`PrepaidLease.lean:396`) template |
 | Capacity pure-LC weld | `omission_caught_under_binding` (`ConstraintBinding.lean:151`), `CapacitySatisfaction.lean:46-54` (STAGED) |
 | Threat-model enumeration | the `*BackingAttack.lean` refutations; `AGENT-CONFINEMENT-REDTEAM.md`; census R1-R8 |

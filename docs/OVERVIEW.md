@@ -3,7 +3,8 @@
 A light client holding one root knows every transition in the whole history was
 authorized, conservative, fresh, and correctly committed — re-executing nothing.
 
-That sentence is the system. Everything below is how it is true.
+That sentence is the system — the guarantee a proven history delivers.
+Everything below is how it is true.
 
 ## The model — four words
 
@@ -31,10 +32,12 @@ That sentence is the system. Everything below is how it is true.
   light-client unfoolability. See [`KERNEL.md`](KERNEL.md). The skeptic-facing ledger of
   exactly what is proved (and what is not) is `metatheory/CLAIMS.md`; the conceptual
   spine is `metatheory/CONSTRUCTIVE-KNOWLEDGE.md`.
-- **The descriptor circuit & light client** — each turn carries a STARK proving it was a
-  valid kernel transition. A light client holds no secrets, re-runs no cell, and yet —
-  checking only a succinct root — learns the whole history is genuine
-  (`metatheory/Dregg2/Circuit/`, `circuit/`, `sdk/`).
+- **The descriptor circuit & light client** — a committed turn can carry a STARK proving
+  it was a valid kernel transition; full-turn proving is a node mode (`--prove-turns` /
+  `DREGG_PROVE_TURNS=1`), off by default — a mode, not a per-turn invariant
+  (`node/src/state.rs` `full_turn_proving_enabled`). A light client holds no secrets,
+  re-runs no cell, and yet — checking only a succinct root — learns a proven history is
+  genuine (`metatheory/Dregg2/Circuit/`, `circuit/`, `sdk/`).
 - **deos / the desktop** — a workspace where every action constructs a verifiable fact
   and adds zero new trust: an affordance is a cap-gated turn template, login is the root
   capability, history is the receipt chain, sharing is a cap-confined membrane. The

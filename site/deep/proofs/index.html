@@ -130,10 +130,11 @@ $ <span class="k">dregg-oracle verify c.json</span>
             <div class="terminal-bar"><i></i><i></i><i></i><b>dregg-tee-verify — real AWS Nitro doc</b></div>
 <pre><span class="c"># captured from a LIVE Nitro enclave (us-east-1), bound to a test commitment</span>
 $ <span class="k">cargo test -p dregg-tee-verify</span>
-  nitro_real :: verifies_real_live_nitro_doc_and_extracts_report_data ... <span class="ok">ok</span>
-  nitro_real :: tampering_the_signed_bytes_is_rejected ................... <span class="ok">ok</span>
-  rail       :: real_nitro_fact_is_accepted_through_the_dregg_rail ....... <span class="ok">ok</span>
-  rail       :: fails_closed_without_a_verifier_installed ................ <span class="ok">ok</span>
+  nitro_real :: verifies_real_live_nitro_doc_and_extracts_bound_report_data <span class="ok">ok</span>
+  nitro_real :: tampering_the_signed_bytes_is_rejected .................... <span class="ok">ok</span>
+  nitro_real :: a_truncated_doc_is_rejected ............................... <span class="ok">ok</span>
+  rail       :: real_nitro_fact_is_accepted_through_the_dregg_rail ........ <span class="ok">ok</span>
+  rail       :: the_rail_fails_closed_without_a_verifier_installed ........ <span class="ok">ok</span>
 <span class="ok">test result: ok. 5 passed; 0 failed</span>
 
 <span class="c"># the real doc verifies: COSE sig + full X.509 chain to the pinned AWS root,</span>
@@ -173,7 +174,7 @@ $ <span class="k">cargo test -p dregg-tee-verify</span>
             <article data-axes="proved">
               <code>tee-verify · Nitro / SNP</code>
               <h3>Confidential execution</h3>
-              <p>A real COSE / X.509 verifier for hardware attestation documents, chained to a pinned vendor root, extracting the code measurement and the bound commitment.</p>
+              <p>Real verifiers for hardware attestation documents — Nitro’s COSE / X.509 chain to the pinned AWS root, SNP’s P-384 report signature chained to the embedded AMD roots — extracting the code measurement and the bound commitment.</p>
               <span class="axis-dot dot-green">real hardware</span>
             </article>
             <article data-axes="operated">
@@ -183,9 +184,9 @@ $ <span class="k">cargo test -p dregg-tee-verify</span>
               <span class="axis-dot dot-green">one interface</span>
             </article>
             <article data-axes="open">
-              <code>github proof · SEV-SNP · grain turn</code>
+              <code>grain turn · live SNP capture · public notary</code>
               <h3>Next welds</h3>
-              <p>A live github-commit proof, an AMD SEV-SNP verifier alongside Nitro, and binding a fact into a running grain turn so an agent’s decision carries its evidence.</p>
+              <p>Binding a fact into a running grain turn so an agent’s decision carries its evidence; exercising the SNP verifier against a captured live report, the way Nitro is; a hosted, pinned public notary.</p>
               <span class="axis-dot dot-amber">named work</span>
             </article>
           </div>
@@ -224,7 +225,9 @@ $ <span class="k">cargo test -p dregg-tee-verify</span>
               <h3 class="now-state state-green">Working</h3>
               <ul>
                 <li>Live coinbase price proof, verified from a portable file</li>
+                <li>Live github-commit proof — same tool, same interface</li>
                 <li>Real AWS Nitro attestation, verified end to end</li>
+                <li>An AMD SEV-SNP verifier: P-384 report signature, cert chain to the embedded AMD roots</li>
                 <li>The shared dregg attestation-as-a-fact rail</li>
                 <li>Fail-closed verifiers with named trust anchors</li>
               </ul>
@@ -232,8 +235,7 @@ $ <span class="k">cargo test -p dregg-tee-verify</span>
             <section>
               <h3 class="now-state state-amber">Frontier</h3>
               <ul>
-                <li>A live github-commit proof (same interface)</li>
-                <li>An AMD SEV-SNP verifier alongside Nitro</li>
+                <li>An SNP run against a captured live report (Nitro-grade evidence)</li>
                 <li>Bind a fact into a running grain’s turn</li>
                 <li>A hosted, pinned public notary</li>
               </ul>

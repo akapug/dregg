@@ -160,47 +160,44 @@ honest accept through the same core.
 
 ---
 
-## 5. Next slice: circuit binding
+## 5. The circuit binding
 
 The checks in §3–4 are **executor-level** — genuine forge rejections a verifier
-runs in the clear. The remaining slice is the **in-circuit witness**, so that a
-light client verifying a *batch* sees settlement atomicity and one-shot
-consumption enforced by the EffectVM circuit (part of the proven kernel
-transition) rather than re-running the check out of band:
+runs in the clear. The circuit-side binding (design:
+`docs/deos/SETTLE-ESCROW-WELD-DESIGN.md`) has three pieces, each at a distinct,
+labeled resolution:
 
-1. A `SettleEscrow` effect descriptor whose **gate binds** *"both legs
-   `Deposited` ∧ conforming ∧ not-yet-`Consumed` ⟹ both `Consumed`"* into the
-   commitment — the same shape as the value/note gates already in
-   `circuit/descriptors/`. The gate must bind the atomic both-legs transition
-   into the commitment, else the rung is FALSE (the standing circuit-soundness
-   apex bar). The deposit/reclaim descriptors bind the per-leg status transition
-   the same way (the one-shot nullifier shape the noteSpend grow-gate already
-   carries).
+**Deployed — the off-AIR `SettleEscrow` manifest gate.** Rather than a new
+`SettleEscrow` `Effect` with new AIR columns (VK-affecting), the gate rides the
+slot-caveat manifest — the same vehicle that carries the temporal caveats — as
+`SLOT_CAVEAT_TAG_SETTLE_ESCROW` (= 17, `circuit/src/effect_vm/pi.rs:470`). The
+verifier arm (`circuit/src/effect_vm/verify.rs:378`) re-evaluates the atomic
+conjunction against the public-input-bound `state_before`/`state_after` slot
+views: **both legs `Deposited` before ∧ both `Consumed` after**. A partial
+settle (one leg flipped — the half-open trade) fails the conjunction and is
+inexpressible. Two companion welds bind the tag: the bare-floor refuser
+(`circuit/src/effect_vm/bare_floor_refuse_weld.rs` — a `SettleEscrow` executing
+on the wire as a plain zero-amount `Transfer` with no manifest entry is refused)
+and the deployed coverage carrier (the manifest is bound into the wide commit
+via `caveatCommit` → PI 45, so the entry cannot be omitted). The AIR constraint
+polynomials — the VK bytes — are unchanged.
 
-2. The two parties' deposited-leg amounts as **heap-opening witnesses** (each leg
-   amount/status opened against the escrow cell's `heap_root`, the escrow cell's
-   commitment proven in the ledger root).
+**Proven — the Lean rung.** `metatheory/Dregg2/Deos/SealedEscrow.lean` §6,
+`#assert_axioms`-clean: `SettleGate` (`:344`, the transition gate),
+`settle_gate_forces_atomic` (`:361` — a satisfying witness forces
+both-legs-or-none), `partial_settle_rejected` (`:372`),
+`phantom_settle_rejected` (`:383`), and `settle_gate_root_bound` (`:397` — the
+light-client tooth: the gate verdict is fixed by the committed roots, so a
+forger must move a root where the Lean §5 status binding bites). The deployed
+verify.rs arm is the off-AIR shadow of exactly these theorems.
 
-3. A Lean rung: `verifyBatch accept ⟹ exchange atomic` — concretely, a settled
-   batch implies both legs were `Deposited`+conforming before and both `Consumed`
-   after, with no leg consumed twice across the batch — joining the
-   circuit-soundness obligation table in `docs/reference/lean-circuit.md`.
-
-Until that lands, sealed escrows are sound under the executor checks and the
-commitment binding; the circuit rung is the named follow-up, not a silent gap.
-
-**Design + first rung (landed).** The in-circuit weld is now designed and begun,
-STAGED and VK-risk-free, in `docs/deos/SETTLE-ESCROW-WELD-DESIGN.md`. Rather than a
-new `SettleEscrow` `Effect` with new AIR columns (VK-affecting), the gate is carried
-as an off-AIR `SettleEscrow` manifest entry (a new slot/heap caveat tag, re-evaluated
-against the bound `state_before`/`state_after` views) — the same vehicle that staged
-the temporal caveats (`circuit/src/effect_vm/verify.rs` tags 13–16), so the AIR
-constraint polynomials (the VK bytes) are **unchanged**. The first soundness rung is
-built and `#assert_axioms`-clean in `metatheory/Dregg2/Deos/SealedEscrow.lean` §6:
-`SettleGate` (the transition gate), `settle_gate_forces_atomic` (a satisfying witness
-forces both-legs-or-none), `partial_settle_rejected` (the half-open trade is
-inexpressible), `phantom_settle_rejected`, and `settle_gate_root_bound` (the
-light-client tooth: the gate verdict is fixed by the committed roots, so a forger must
-move a root where the §5 status binding bites). The eventual verifier arm inherits this
-proof; deploying it is the named **sealed-escrow verifier epoch** (a verifier-code
-rollout, not a VK rotation).
+**Staged (the named seam) — in-AIR satisfaction.** The deployed arm reads
+caller-supplied 8-felt slot views; a pure light client does not bind those.
+`circuit/src/effect_vm/satisfaction_weld.rs` expresses the same gate as in-AIR
+constraints over the rotated before/after state-block columns, and the
+Lean-emitted `settleEscrowSatVmDescriptor2R24` carrying them sits in the staged
+registry (`circuit/descriptors/rotation-v3-staged-registry.tsv`) — built beside
+the deployed descriptor, with **no live routing and no committed VK**. Until
+that flip (a VK epoch), gate *satisfaction* is witnessed by a verifier holding
+the committed-state opening, not by a pure light client; gate *coverage*
+already is.

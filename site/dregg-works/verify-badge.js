@@ -36,17 +36,17 @@
  *   Or a global the host injects before this script:
  *     <script>window.__DREGG__ = { cell:"...", node:"https://...", name:"..." }</script>
  *
- *   When no node is supplied, the badge falls back to DEFAULT_NODE below — the
- *   public devnet node from the central endpoints config (sdk/src/endpoints.rs
- *   `defaults::DEVNET`; this literal is that config's JS projection — if the
- *   devnet domain moves, move both). Every hook above overrides it.
+ *   There is deliberately NO built-in node endpoint: no public devnet is
+ *   currently anchored, so when no node is supplied the badge still re-hashes
+ *   the served bytes locally but states plainly that verification against a
+ *   live chain is unavailable — it never invents an endpoint and never
+ *   upgrades an uncheckable page to a pass.
  *
  *   Because the serving host for *.dregg.works is untrusted infrastructure that
  *   lives OUTSIDE this repo, the badge takes nothing on faith from it: the cell
  *   id is content-addressed (unforgeable), and the commitment is fetched from a
- *   node the visitor can point anywhere (data-node) and cross-check — the default
- *   only picks WHICH node answers when the visitor/publisher expresses no
- *   preference. The host merely ships bytes; it is never asked to be believed.
+ *   node the visitor can point anywhere (data-node) and cross-check. The host
+ *   merely ships bytes; it is never asked to be believed.
  *
  * No build step, no dependencies, no external resources. The blake3 below is a
  * standalone implementation verified byte-for-byte against @noble/hashes across
@@ -135,11 +135,10 @@
   }
 
   /* ---------- config: where the cell id + node API come from ---------- */
-  // The default cell-lookup node: the public devnet API host from the central
-  // endpoints config (sdk/src/endpoints.rs `defaults::DEVNET`). Overridable via
-  // data-node / meta dregg:node / window.__DREGG__.node — the default only
-  // applies when none of those are set.
-  var DEFAULT_NODE = "https://devnet.dregg.fg-goose.online";
+  // The cell-lookup node comes ONLY from explicit configuration (data-node /
+  // meta dregg:node / window.__DREGG__.node). No endpoint is hardcoded — no
+  // public devnet is currently anchored — so an unconfigured badge reports
+  // that honestly instead of querying a dead host.
   function readConfig() {
     var cfg = (window.__DREGG__ && typeof window.__DREGG__ === "object") ? window.__DREGG__ : {};
     var self = document.currentScript || (function () {
@@ -151,7 +150,7 @@
     function data(n) { return self && self.dataset ? self.dataset[n] : null; }
     return {
       cell: (data("cell") || meta("cell") || cfg.cell || "").trim().toLowerCase().replace(/^0x/, ""),
-      node: (data("node") || meta("node") || cfg.node || DEFAULT_NODE).trim().replace(/\/+$/, ""),
+      node: (data("node") || meta("node") || cfg.node || "").trim().replace(/\/+$/, ""),
       name: (data("name") || meta("name") || cfg.name || "").trim(),
     };
   }
@@ -212,25 +211,48 @@
         '<h4>verify badge not configured</h4>' +
         '<div class="note">This page did not declare its on-chain cell. The publisher must add ' +
         '<span class="row">data-cell / meta dregg:cell</span> (the 64-hex cell id) so visitors can verify ' +
-        'the served bytes. Optionally <span class="row">data-node / meta dregg:node</span> picks the node API ' +
-        'base (default: the public devnet node).</div>');
+        'the served bytes, and <span class="row">data-node / meta dregg:node</span> to name the node API ' +
+        'base — there is no default node, and no public devnet is currently anchored.</div>');
       return;
     }
 
     var title = cfg.name ? (cfg.name + ".dregg.works") : "this page";
     var pageUrl = location.href.split("#")[0];
 
+    var pageFetch = fetch(pageUrl, { cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw new Error("re-fetch " + r.status);
+      return r.arrayBuffer();
+    });
+
+    if (!cfg.node) {
+      // No node named and no public devnet is currently anchored. The local half
+      // (re-hashing the served bytes) still runs; the chain half is honestly
+      // reported unavailable — never routed at an invented endpoint.
+      pageFetch.then(function (buf) {
+        var served = blake3hex(new Uint8Array(buf));
+        set("bad", "unverified — no node",
+          '<h4>no node configured — on-chain check unavailable</h4>' +
+          '<div class="row"><b>served bytes — blake3 (computed locally)</b>' + served + '</div>' +
+          '<div class="row"><b>declared cell</b>' + cfg.cell + '</div>' +
+          '<div class="note">No public devnet is currently anchored and this page names no node API ' +
+          '(<span class="row">data-node / meta dregg:node / window.__DREGG__.node</span>), so the served ' +
+          'bytes cannot be compared against an on-chain commitment. A missing check is never a pass — ' +
+          'treat this page as unverified.</div>');
+      }).catch(function (err) {
+        set("bad", "verify failed",
+          '<h4 class="bad">could not complete the check</h4>' +
+          '<div class="row"><b>error</b>' + String(err && err.message || err) + '</div>' +
+          '<div class="note">The badge could not re-read this page. A failed check is never a pass.</div>');
+      });
+      return;
+    }
+
     Promise.all([
-      fetch(pageUrl, { cache: "no-store" }).then(function (r) {
-        if (!r.ok) throw new Error("re-fetch " + r.status);
-        return r.arrayBuffer();
+      pageFetch,
+      fetch(cfg.node + "/api/cell/" + cfg.cell, { cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error("node " + r.status);
+        return r.json();
       }),
-      cfg.node
-        ? fetch(cfg.node + "/api/cell/" + cfg.cell, { cache: "no-store" }).then(function (r) {
-            if (!r.ok) throw new Error("node " + r.status);
-            return r.json();
-          })
-        : Promise.reject(new Error("no node configured (data-node / meta dregg:node)")),
     ]).then(function (res) {
       var served = blake3hex(new Uint8Array(res[0]));
       var detail = res[1] || {};
@@ -246,7 +268,7 @@
           '<h4 class="ok">✓ these exact bytes are committed on-chain</h4>' + rows +
           '<div class="note">You did not trust the host. Your browser re-hashed the bytes it received and ' +
           'matched them against the commitment in cell slot&nbsp;0, fetched from the node. ' +
-          '<a href="https://dregg.fg-goose.online/light-client/" target="_blank" rel="noopener">how this works →</a></div>');
+          '<a href="/light-client/" target="_blank" rel="noopener">how this works →</a></div>');
       } else {
         set("bad", "bytes do not match",
           '<h4 class="bad">✕ served bytes do not match the on-chain commitment</h4>' + rows +

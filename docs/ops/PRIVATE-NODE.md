@@ -13,9 +13,17 @@ the on-chain settle, the demo wiring — are **named and separate** (see
 
 Manage it with [`scripts/private-node.sh`](../../scripts/private-node.sh).
 
+> **Status at HEAD: no node is running.** The instance this runbook's
+> observation record describes was hand-run with a temporary `--data-dir` and
+> its ledger did not survive the hbox reboot — it is gone, unrecoverable, and
+> nothing listens on `:8420` today (`deploy/README.md`, TODO-1: the named gap
+> is a durable systemd user unit + a persistent data dir). Standing a node up
+> is exactly the [Run it](#run-it) procedure — keep `DREGG_PRIV_DATA` at its
+> persistent default (`~/dregg-priv/data`), never a temp dir.
+
 ---
 
-## What it is (observed, 2026-07-13 on hbox)
+## What it does (observation record, 2026-07-13 on hbox)
 
 - **Binary:** `dregg-node`, built on hbox from the working tree, linking the
   **verified Lean executor** archive (`libdregg_lean.a`). Startup logs
@@ -23,9 +31,9 @@ Manage it with [`scripts/private-node.sh`](../../scripts/private-node.sh).
   the PROVED Lean executor over the C ABI` (not the marshal-only tripwire). The
   node **refuses to start** marshal-only unless `DREGG_ALLOW_UNVERIFIED_CONSENSUS=1`
   — we do not use that escape hatch here.
-- **Running:** solo · blocklace consensus · `--enable-faucet` · `--prove-turns`,
-  bound to **`127.0.0.1:8420`** (verified: `ss -tlnp` shows `LISTEN 127.0.0.1:8420`,
-  never `0.0.0.0`). `/status`:
+- **Observed running:** solo · blocklace consensus · `--enable-faucet` ·
+  `--prove-turns`, bound to **`127.0.0.1:8420`** (`ss -tlnp` showed
+  `LISTEN 127.0.0.1:8420`, never `0.0.0.0`). `/status`:
 
   ```json
   {"healthy":true,"federation_mode":"solo","consensus_live":true,
@@ -49,9 +57,11 @@ Manage it with [`scripts/private-node.sh`](../../scripts/private-node.sh).
 - **Bind private.** Default `127.0.0.1` (localhost only — nothing off-box can
   reach it). To reach it from another LAN host or a WireGuard peer, set
   `DREGG_PRIV_BIND=192.168.50.39` (hbox's LAN IP) — still private.
-- **hbox firewall is untouched and stays that way.** `ufw` is **active**,
-  default-deny inbound, LAN `192.168.50.0/24` + SSH only. This work changed **no**
-  ufw rule and opened **no** public port. The node never binds `0.0.0.0`
+- **hbox firewall is untouched and stays that way.** At the observation, `ufw`
+  was **active**, default-deny inbound, LAN `192.168.50.0/24` + SSH only; this
+  work changed **no** ufw rule and opened **no** public port. Box state drifts —
+  **re-verify `ufw status` before widening any bind** (every wildcard-bind
+  safety argument below rests on it). The node never binds `0.0.0.0`
   (`private-node.sh` refuses it), and `dreggcloud` on `:8787` was not disturbed.
 - No gateway, no DNS, no TLS, no public reverse-proxy. If you ever want it
   reachable off-LAN, do it over WireGuard the way `OPS-RUNBOOK.md` describes for
@@ -61,8 +71,11 @@ Manage it with [`scripts/private-node.sh`](../../scripts/private-node.sh).
 
 ## The clickable DrEX (private dogfood, LAN + tailscale) — for ember
 
-`drex-web` is stood up on hbox, pointed at this private node, reachable over the
-**LAN and the tailscale mesh**. Open it from **anywhere on the tailnet**:
+The recipe (plus its 2026-07-13 verification record) for `drex-web` on hbox,
+pointed at the private node, reachable over the **LAN and the tailscale mesh**.
+The server runs in a hand-started tmux session (below) — it does **not** survive
+a reboot; start the node first, then it. Once up, open it from **anywhere on the
+tailnet**:
 
 > **http://hbox-dregg:8781**  (tailscale MagicDNS)
 > **http://100.95.240.73:8781**  (hbox's tailscale IP — works even before MagicDNS resolves the name)
@@ -74,10 +87,10 @@ Manage it with [`scripts/private-node.sh`](../../scripts/private-node.sh).
 > tailscale addresses, so the name resolves to the same live server the instant
 > your tailscaled refreshes.
 
-The **wallet wasm now loads** (the 50 MB `extension/dregg_wasm_bg.wasm` is
-served at `/wasm/dregg_wasm_bg.wasm` with `Content-Type: application/wasm`) — the
-`wallet: wasm load failed` banner is gone and the header reads `wallet: Dragon's
-Egg Cipherclerk · ready`.
+The **wallet wasm loads once the asset is synced** (the 50 MB
+`extension/dregg_wasm_bg.wasm`, served at `/wasm/dregg_wasm_bg.wasm` with
+`Content-Type: application/wasm`; sync recipe below) — the header then reads
+`wallet: Dragon's Egg Cipherclerk · ready`, not `wallet: wasm load failed`.
 
 What to do: click **Place sealed order** → approve the nonce-bound order card in
 the cipherclerk popup (real wasm sign + solvency/eligibility proofs) → **Advance
@@ -97,12 +110,14 @@ POST /settle → turn 3eb0dd7f57065db148209c68b44dde4a190ff05bb4ff942163774a7cfa
 
 **How it settles (and why this shape):** the settlement lands as a real
 value-bearing **Transfer** (operator → the DrEX settlement-pool cell
-`de55e771…`) plus one `EmitEvent` per ring leg. Transfer is the cohort the
+`de55e771…`) plus one `EmitEvent` per ring leg. Transfer is a cohort the
 node's full-turn STARK prover realizes, so the turn commits AND gets a
-self-verified proof. (A multi-`SetField` turn is committed-but-UNATTESTED at this
-node HEAD — the per-index `setFieldVmDescriptor2` cohort selector binds
-ambiguously and the prover rejects its own proof; settling as value *moved* both
-proves and models the clearing faithfully.)
+self-verified proof. (A multi-`SetField` turn also proves — the rotated
+`setFieldVmDescriptor2-{0..7}R24` descriptors carry the nonce-tick gate, with
+Lean rejection theorems `setFieldTick_rejects_wrong_nonce_delta`
+(`EffectVmEmitRotationV3.setFieldTickFace`; `node/src/turn_proving.rs` seam-closure
+block) — so the Transfer shape is a modelling choice: settling as value *moved*
+models the clearing faithfully.)
 
 **Private + safe:** `drex-web` binds `LISTEN 0.0.0.0:8781` **gated by ufw** — an
 all-interfaces bind is safe here *only because* hbox's firewall fronts it:
@@ -220,19 +235,20 @@ public surface, no real value, no mainnet.
 - **The multi-node FEDERATION** — n=4 validators, blocklace BFT finality,
   cross-node attested turns. That needs a full-mode seed (finality/admission
   exports, above) + a committee `genesis.json` + peers. See
-  `docs/OPERATOR-ONBOARDING.md` and `deploy/aws/N3-RUNBOOK.md`. This solo node
-  produces blocks but finalizes as a committee-of-one.
+  `docs/OPERATOR-ONBOARDING.md` (the old `N3-RUNBOOK.md` is quarantined at
+  `deploy/aws/SUPERSEDED/` — the topology it stands up never ran). This solo
+  node produces blocks but finalizes as a committee-of-one.
 - **The on-chain SETTLE** — the EVM/Solana/Cosmos settlement wiring is its own
   lane (`chain/`, `bridge/`); nothing here broadcasts to any chain.
 - **The demos** — DrEX / launchpad hosting is the `OPS-RUNBOOK.md` lane.
 
-### STARK-proving verified (closed at HEAD `11ab66634`, fold reconcile `764225f0c`)
+### STARK-proving (the `--prove-turns` path)
 
-The node runs with `--prove-turns`, spawns the async STARK prove pool, and now
+The node runs with `--prove-turns`, spawns the async STARK prove pool, and
 **attaches a real, self-verified full-turn STARK proof to every committed cohort
-turn**. A faucet `Transfer` submitted at this HEAD flips `has_proof:true` on its
-receipt within ~4 s (`witness_count:1`), and the node log shows the clean
-prove-pool lifecycle with **zero** prove failures:
+turn**. A faucet `Transfer` flips `has_proof:true` on its receipt within ~4 s
+(`witness_count:1`), and the node log shows the clean prove-pool lifecycle with
+**zero** prove failures:
 
 ```
 INFO dregg_node::prove_pool: async prove job ENQUEUED  turn_hash=35e3af92…
@@ -248,30 +264,25 @@ curl -s "http://127.0.0.1:8420/api/starbridge/receipts?turn_hash=$th" \
   | grep -o '"has_proof":true'   # → present; witness_count:1
 ```
 
-**What was blocking it (now fixed).** A value-bearing cohort turn (`Transfer` /
-`SetField`) proves through the **wide rotated IR-v2** leg. Before the VK-epoch
-flip was reconciled, that leg failed *closed* at `custom table id 84 has no
-realized relation` (the 15-bit borrow-limb range table looked up without a
-`tables[]` declaration) and, for teeth-less members like `IncrementNonce`, at a
-`tail mismatch` from a stale fixed `REFUSE_WELD_WIDEN`. Commit `764225f0c`
-reconciled the **wide rotated producer + the IR-v2 realizer** to the regenerated
-deployed descriptors — two pure-Rust circuit fixes:
+**The two circuit facts the wide leg rests on.** A value-bearing cohort turn
+(`Transfer` / `SetField`) proves through the **wide rotated IR-v2** leg, whose
+producer and realizer agree with the regenerated deployed descriptors at two
+points worth knowing when debugging:
 
 1. **Per-member refuse-weld widen** (`circuit/src/effect_vm/bare_floor_refuse_weld.rs`):
-   the teeth-column exclusion is now derived **per member** from the descriptor's
+   the teeth-column exclusion is derived **per member** from the descriptor's
    own committed floor-refuse gates (48 for `IncrementNonce`, 45 for the
-   avail-hardened `Transfer`/`Burn`), instead of a fixed constant that underflowed
-   the tail.
-2. **Realize custom range table 84** (`circuit/src/descriptor_ir2.rs`):
-   `range_bits_for` now decodes the width from the committed tid (the inverse of
-   the Lean `rangeTidW` convention) and realizes the range relation, so the
-   avail-weld descriptors' 15-bit lookup binds.
+   avail-hardened `Transfer`/`Burn`) — not a fixed constant.
+2. **Custom range tables decode from the committed tid**
+   (`circuit/src/descriptor_ir2.rs`): `range_bits_for` decodes the width from
+   the committed table id (the inverse of the Lean `rangeTidW` convention) and
+   realizes the range relation, so the avail-weld descriptors' 15-bit
+   borrow-limb lookup binds.
 
-The prover was never faked: the pre-fix node failed *closed* (no proof attached,
-`witness_count:0`); the post-fix node generates the proof, **self-verifies it**
-via `verify_full_turn`, and only then attaches it. This is the tangible
-milestone — the node now **STARK-proves** real turns, not merely executor-signs
-them.
+The attach path never trusts an unchecked proof: the node generates the proof,
+**self-verifies it** via `verify_full_turn`, and only then attaches it — a
+verification failure means no proof attached (`witness_count:0`), never a bad
+proof served.
 
 > The separate `GET /api/turn/<hash>/proof` endpoint serves the
 > **commit-path-persisted** proof, a distinct persistence leg that in **solo**

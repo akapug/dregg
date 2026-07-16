@@ -14,20 +14,24 @@ The web presence is deliberately two sites:
   educational site: tight, narrative, for people meeting dregg for the first
   time.
 - **This site** (the Pages deploy of this directory) — the technical half:
-  written for LLMs, experts, and developers. Dense, heavily cross-linked,
-  self-describing; the root page (`root/index.html`) is a hub of verified
-  links into the repository, organized by audience (LLMs / developers /
-  operators / provers), and is intended to be valuable as a pretraining
-  artifact as much as a landing page. Register: sober-demonstrative,
-  present-tense what-is; shipped means tests/proofs behind it; named gaps
-  stay named.
+  written for LLMs, experts, and developers. It is itself layered:
+  `root/index.html` is the sober landing at `/` (what-is / play /
+  quickstart / verify, a handful of links), and `root/technical.html`,
+  deployed at `/technical.html`, is the dense hub of verified links into
+  the repository, organized by audience (LLMs / developers / operators /
+  provers) — intended to be valuable as a pretraining artifact as much as
+  an index. Register: sober-demonstrative, present-tense what-is; shipped
+  means tests/proofs behind it; named gaps stay named.
 
 ## Layout (source)
 
 | path | what |
 |------|------|
-| `root/index.html` | The hub page, deployed at `/`. Self-contained HTML (inline CSS, no JS, no framework, no build step). Every link is verified against a real on-disk file. |
-| `assets/style.css` | The shared green stylesheet used by some demo pages (the hub page is self-contained and does not use it). |
+| `root/index.html` | The sober landing, deployed at `/`. Static HTML on the shared green stylesheet, with a small inline script (quickstart tabs); no framework, no build step. Every link is verified against a real on-disk file. |
+| `root/technical.html` | The dense technical hub, deployed at `/technical.html`. Audience-organized (LLMs / developers / operators / provers); every `blob/main` link verified against disk. |
+| `assets/style.css` | The shared green stylesheet used by the landing, the hub, and the demo pages. |
+| `cloud/` | The cloud & userspace subsite, deployed at `/cloud/`: the grain economy plus the ~30 starbridge apps and trustless serving. |
+| `deep/` | The full dense product site (prebuilt zola output from `~/dev/dregg-site`, base-url `…/deep`), deployed at `/deep/`; dregg.net carries the accessible layer and links here per-page. |
 | `explorer/` | Caps-as-rows: capabilities expressed as the rows you may read (static page + `caps-as-rows.js`). |
 | `light-client/` | Whole-history verification in one recursive STARK, in-tab. `history.json` is a real pre-folded aggregate; the pages workflow rejects a stale one. |
 | `transclusion/` | Xanadu made honest: verified `dregg://` transclusion demo (see its `README.md` for what is real vs demo, and the honest-fallback rule: verification lightens, nothing else does). |
@@ -35,6 +39,7 @@ The web presence is deliberately two sites:
 | `deos-viewer/` | The desktop-in-a-link landing: reads a `#deos1!…` tape fragment and hands it to the reader's own `starbridge-v2 --serve-ie6` server (see its `README.md`). |
 | `deos/` | The deos cockpit page (WebImage skin); its wasm pkg is built at assemble time from `starbridge-v2/web/`. |
 | `quickstart/` | Empty placeholder (not assembled into the dist). |
+| `grain/` | Grain pages (not assembled into the dist). |
 | `src/_includes/studio/` | Empty scaffolding from an earlier iteration (not assembled into the dist). |
 | `dist/` | The assembled output. **Gitignored — never edit; it is rebuilt from scratch by the script below.** |
 
@@ -42,7 +47,7 @@ Surfaces that live elsewhere but ship on this site: `/cards/` (the deos-js
 card gallery, baked from `wasm/` + deos-view examples), `/cockpit-gpui/`
 (the full gpui renderer on WebGPU, from `starbridge-v2/web/` with
 `--features gpui-web`), and `/atlas/` (the comprehension atlas, copied from
-`docs/atlas/`).
+`dregg-atlas/site/`).
 
 ## Build
 
@@ -55,11 +60,15 @@ REUSE_WASM=1 scripts/build-pages-dist.sh # reuse already-built wasm pkgs (fast l
 
 The script:
 
-1. copies the static pages (`root/index.html` → `/`, plus `assets/`,
+1. copies the static pages (`root/index.html` → `/`,
+   `root/technical.html` → `/technical.html`, plus `assets/`, `cloud/`,
    `explorer/`, `light-client/`, `dregg-works/`, `transclusion/`,
-   `deos-viewer/`);
-2. `wasm-pack build`s `starbridge-v2/web` → `/deos/pkg/` (and, soft-failing,
-   the `gpui-web` feature → `/cockpit-gpui/`);
+   `deos-viewer/`, and `deep/` — with `test -f` teeth on
+   `deep/index.html` and `deep/egg/index.html`);
+2. `wasm-pack build`s `starbridge-v2/web` → `/deos/pkg/` and, with the
+   `gpui-web` feature, → `/cockpit-gpui/` (required at the default
+   `GPUI=1` — a failed gpui-web build fails the assembly; `GPUI=0` skips
+   it);
 3. builds `wasm/` → `/cards/pkg/` (shared by the cards, the light client,
    and the transclusion page — one pkg, three surfaces) and bakes +
    re-themes the card pages;
@@ -85,10 +94,10 @@ wasm crate rather than shipping a stale artifact.
 
 ## Editing rules
 
-- The hub (`root/index.html`) must keep the kernel sentence verbatim — the
-  workflow greps the dist for `A turn is the exercise`.
-- Every `href` on the hub must point at a file that exists: site-relative
-  links for surfaces assembled into the dist, `github.com/emberian/dregg/
-  blob/main/…` links for repo files not served here. Verify against disk
-  before shipping.
+- The landing (`root/index.html`) must keep the kernel sentence verbatim —
+  the workflow greps the dist for `A turn is the exercise`.
+- Every `href` on the landing and the technical hub must point at a file
+  that exists: site-relative links for surfaces assembled into the dist,
+  `github.com/emberian/dregg/blob/main/…` links for repo files not served
+  here. Verify against disk before shipping.
 - `dist/` is output. Edit sources, re-run the script.

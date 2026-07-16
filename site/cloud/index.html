@@ -164,7 +164,7 @@
   <h3 style="margin-top:var(--s7);color:var(--chalk);">How far the check reaches &mdash; stated honestly</h3>
   <p class="section__intro" style="margin-top:var(--s3)">
     Verifiability is a ladder, and each rung's checker runs every rung below it. We name where the trust
-    still rests &mdash; and where the last rung is a real, unbuilt seam rather than a shipped guarantee.
+    still rests &mdash; and where the last rung's remaining residuals are, by name.
   </p>
   <div class="ladder">
     <div class="rung">
@@ -181,7 +181,7 @@
     </div>
     <div class="rung rung--seam">
       <div class="rung__k">R3 &middot; whole-history STARK</div>
-      <div class="rung__v">The named, unbuilt seam. This would re-execute nothing and remove the executor-host trust by folding the grain's whole history into one recursive proof. It's a deliberate build, not a shipped rung &mdash; we say so plainly.</div>
+      <div class="rung__v">Built, with named residuals. The grain's finalized turns fold into one recursive proof and the accept decision is rendered by a Lean-proven verifier (<code>r3_verify</code> &rarr; <code>r3VerifyCore</code>, no Rust fallback); an end-to-end test runs it on a real driven session. What remains is named, not hidden: the fold anchors the EffectVM-model head rather than the on-ledger grain-cell head, multi-turn cross-continuity, and the reduction rests on the <code>EngineSound</code> STARK floor.</div>
     </div>
   </div>
 </section>

@@ -19,18 +19,17 @@ verified.
 2. **A stale seed does not match the Lean HEAD.** `cargo build` never mutates the seed; it copies
    it into `OUT_DIR`, splices in the freshly-compiled `Dregg2_*.o` from `metatheory/.lake`, and
    then runs **closure-completion** — pulling any newly-referenced dependency members (e.g. new
-   mathlib modules) out of the local `.lake` IR trees, up to a 16-pass bound. If the current Lean
+   mathlib modules) out of the local `.lake` IR trees, up to a 64-pass bound. If the current Lean
    source references mathlib modules the seed lacks **and** the local `.lake` is not fresh enough
    to supply them, the release link fails with:
 
    ```
-   closure hit the 16-pass bound
+   closure completion hit the 64-pass bound — archive may still have undefined initializers
    undefined reference to runtime_initialize_mathlib_*
    ```
 
-   This is exactly what breaks when the seed was produced at an older commit (e.g. before
-   `BlocklaceFinality.tauOrderFast` / the `RoundCache` FIX1 landed in `556c75bb2`) but HEAD pulls
-   newer mathlib. **The seed must match the Lean HEAD.**
+   This is exactly what breaks when the seed was produced at an older commit but HEAD's Lean
+   source pulls newer mathlib. **The seed must match the Lean HEAD.**
 
 ## The recipe
 
@@ -43,12 +42,15 @@ validator):
 
 # 1. refresh the Lean build cache AND (re)seed a HEAD-matching archive, then verify the link:
 ./scripts/bootstrap.sh
-#    step 3 lake-builds Dregg2.Exec.FFI (the first run compiles mathlib — slow; a warm
-#    .lake reuses the platform-independent .olean cache and only recompiles the C IR)
+#    step 3 lake-builds the three splice roots (Dregg2.Exec.FFI + DistributedExports +
+#    FFIDirect); mathlib comes prebuilt via `lake exe cache get` (step 2), so the first
+#    run's cost is compiling the Dregg2 corpus (a warm .lake only recompiles the C IR)
 #    step 4 runs dregg-lean-ffi/scripts/seed-dregg2-closure.sh → writes libdregg_lean.a
 #    step 5 builds the FFI crate and round-trips the kernel; it FAILS if the build is marshal-only
 
-# 2. build the node, requiring the verified link (fail the build on any marshal-only degrade):
+# 2. build the node. A --release build on a native archive-linkable target already fails
+#    loud on any marshal-only degrade (the gate defaults ON in release); setting the env
+#    explicitly also forces the platform-incapable targets to fail rather than degrade:
 DREGG_REQUIRE_LEAN=1 cargo build -p dregg-node --release
 ```
 
@@ -65,27 +67,36 @@ done
 sha256sum "$b"   # record the sha for distribution
 ```
 
-At runtime the node itself reports it: a marshal-only binary logs
-`MARSHAL-ONLY BUILD DETECTED …` at `error` level on startup; a verified one logs
-`verified-executor archive linked …` at `info`.
+At runtime the node itself enforces it: a marshal-only binary logs
+`REFUSING TO START …` at `error` level and **exits 1** on startup; a verified one logs
+`verified-executor archive linked …` at `info`. Only the explicit
+`DREGG_ALLOW_UNVERIFIED_CONSENSUS=1` opt-in proceeds marshal-only, logging
+`MARSHAL-ONLY BUILD OVERRIDDEN …` at `warn`.
 
 ## The fail-loud guards (so this can't recur silently)
 
-- **Build time — `DREGG_REQUIRE_LEAN=1`** (`dregg-lean-ffi/build.rs`): every code path that would
-  leave the crate marshal-only (no archive, unresolvable Lean sysroot, or a target that cannot
-  link the archive: `no-lean-link` / wasm32 / zkvm / windows-msvc) becomes a **hard build panic**
-  naming the cause, instead of a `cargo:warning` that is trivially lost in a CI log. Set it in
-  every distribution / CI / validator build. Unset (the default) preserves warn-and-degrade for
-  dev boxes and the non-linkable targets.
+- **Build time — the `DREGG_REQUIRE_LEAN` gate** (`dregg-lean-ffi/build.rs:1405`), two tiers:
+  - **Release-default** (`require_lean_native`): on a native archive-linkable target, any
+    `--release` build defaults the fail-loud gate **ON** — an archive-absent or
+    sysroot-unresolvable degrade is a **hard build panic** naming the cause, never a
+    `cargo:warning` lost in a CI log. The opt-out for a deliberately-marshal-only release
+    build is `DREGG_REQUIRE_LEAN=0`.
+  - **Explicit** (`DREGG_REQUIRE_LEAN=1`): additionally forces the platform-incapable targets
+    (`no-lean-link` / wasm32 / zkvm / windows-msvc) to fail rather than degrade — the assertion
+    "this build must be a verified node". Debug/dev builds keep warn-and-degrade unless it is set.
 
-- **Startup — the marshal-only tripwire** (`node/src/main.rs`): unconditionally, before any role
-  logic, the node logs a loud `error!` if `dregg_lean_ffi::lean_available()` is false, so a
-  marshal-only artifact can never deploy silently as verified.
+- **Startup — the marshal-only tripwire, fail-CLOSED** (`node/src/lib.rs:846`): before any role
+  logic or state construction, **any** node (solo or full) **refuses to start** (`exit(1)`) when
+  `dregg_lean_ffi::lean_available()` is false. Running the un-verified executor is a deliberate
+  opt-in via `DREGG_ALLOW_UNVERIFIED_CONSENSUS=1`, which proceeds with a loud
+  `MARSHAL-ONLY BUILD OVERRIDDEN` warning — never a silent default. The refusal is deliberately
+  side-effect-free (it runs before the data dir is touched, so a refused first launch cannot
+  half-initialize state).
 
-- **Startup — the verified-consensus hard-check** (`node/src/main.rs`): a node in **full** (BFT)
-  federation mode **refuses to start** if `dregg_lean_ffi::tau_order_available()` is false (it
-  would otherwise silently finalize over the un-verified Rust `ordering::tau`). Escape hatch for
-  a deliberately-unverified dev node: `DREGG_ALLOW_UNVERIFIED_CONSENSUS=1`.
+- **Startup — the verified-consensus hard-check** (`node/src/lib.rs:1527`): a node in **full**
+  (BFT) federation mode **refuses to start** if `dregg_lean_ffi::tau_order_available()` is false
+  (it would otherwise silently finalize over the un-verified Rust `ordering::tau`). Same escape
+  hatch: `DREGG_ALLOW_UNVERIFIED_CONSENSUS=1`.
 
 ## (Re)seeding when the Lean HEAD moves
 

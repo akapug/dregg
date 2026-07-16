@@ -109,38 +109,48 @@ on the page, each element's committed slots + **turn/receipt history** + live re
 
 ## The seam (grounded in the real code)
 
-- **`deos-view`'s `web` feature is gpui-free/serde-only and ALREADY a wasm dep** (`wasm/Cargo.toml`:
+- **`deos-view`'s `web` feature is gpui-free/serde-only and a wasm dep** (`wasm/Cargo.toml:73`:
   `deos-view = { …, default-features = false, features = ["web"] }`). ViewNode→HTML runs in wasm.
-- **Worlds already expose `view_tree_json()`** (`wasm/src/bindings_card.rs:300`) + `fire(turn,arg)` +
-  `read`. The current card pages bake HTML server-side and the world only fires/reads.
-- **What's missing** for a self-contained element: a `render_html()` binding on the world (its
-  `view_tree` → `deos-view::web::render_html` → string, in-wasm), and a `PollWorld` /
-  `DocCollabWorld` exposed like `CardWorld` (the real engines as in-tab worlds).
-- **The proven loop to relocate**: `site/dist/cards/tally.html` — global `window.__deosCard` +
-  document-level `deos-affordance` + data-attrs. We move it into a per-instance, shadow-scoped,
-  self-verifying Custom Element.
+- **Worlds render in-wasm**: each world exposes `render_html()` (`CardWorld` at
+  `wasm/src/bindings_card.rs:260`; the shared walk `render_world_html` at `:106` goes through
+  `deos_view::render_html`), alongside `fire(turn,arg)` + `read`. The document worlds
+  (`DocCollabWorld`, `DocTextWorld` — `wasm/src/bindings_doc.rs`) render through the same renderer.
+- **`PollWorld` exists** (`wasm/src/bindings_card.rs:1238`) — the real `collective-choice`
+  engine's shape as an in-tab world over the wasm `DreggRuntime` executor (re-implemented there
+  rather than depending on the axum-bound crate).
+- **The loop lives in per-instance, shadow-scoped elements** (`extension/src/elements/`):
+  closed-shadow thin views in the page, engines in the background (the split is
+  `DREGG-QUIET-UPGRADE.md` §3). `site/dist/cards/tally.html` remains the server-baked page shape.
 - **Providers that exist**: extension injects `window.dregg` (`extension/src/page.ts`); `@dregg/sdk`
-  (`sdk-ts/`, npm, no bundled wasm); `confirm-intent` faithful-reading consent UX.
+  (`sdk-ts/`, npm, no bundled wasm); `confirm-intent` faithful-reading consent UX; the extension
+  netlayer (`extension/src/netlayer.ts`) resolves `dregg://` behind fail-closed content-addr +
+  attestation gates.
 
 ---
 
-## Build roadmap (ordered; foundation-first)
+## Build roadmap — status
 
-0. **✅ Heal the wasm** onto the current descriptor prover (done, committed `16e0836cb`) — the
-   client-side prover is current + soundness-fixed; CI can ship fresh.
-1. **`render_html()` binding** on the wasm worlds (view_tree → deos-view web → string, in-wasm) +
-   **`PollWorld`** (collective-choice as an in-tab world, mirroring CardWorld). *wasm32 green.*
-2. **`<dregg-card>` substrate element** — one Custom Element: shadow DOM, per-instance world,
-   scoped affordance wire, self-verify badge, `trust` attr. The whole architecture in one artifact.
-3. **`<dregg-poll>` + a served demo** — drop a tag in a plain page, cast a real verifiable
-   quorum-gated vote, see `[verified]`. THE first shippable, magical artifact.
-4. **Capability resolver + provider chain + FETCH netlayer** — extension `window.dregg` →
-   `@dregg/sdk` → passkey/server; content-addressed fetch; honest trust labeling.
-5. **`<dregg-doc>` / `<dregg-transclude>`** — the DDL + authenticated transclusion (semantic-web-
-   physics layer).
-6. **Devtools panel** — the verified-substrate inspector / IDE debugger.
-7. **`@dregg/react`** courtesy wrapper (typed props + a hook) — reach the React population.
-8. **`<dregg-world>` / `<dregg-editor>`** — the surfaces Alif's domain plugs into.
+0. **✅ wasm on the current descriptor prover** — the client-side prover is current +
+   soundness-fixed.
+1. **✅ `render_html()` in-wasm + `PollWorld`** — every world renders its own `view_tree` through
+   `deos-view`'s web renderer inside wasm; `PollWorld` mirrors `CardWorld`.
+2. **✅ The substrate element** — realized as per-kind thin-view elements sharing the port
+   plumbing (`extension/src/elements/`, `cell-port.ts`) rather than a single `<dregg-card>` tag:
+   the element is a VIEW (closed shadow, scoped affordance wire, honest badge, `trust` attr); the
+   world/keys live in the background engine. There is no `<dregg-card>` element; `CardWorld` is
+   the substrate world.
+3. **✅ `<dregg-poll>`** — a plaintext `dregg://poll/…` on an opted-in origin upgrades to a live,
+   votable, fail-closed thin view (`elements/dregg-poll.ts` + the `detect.ts` scanner).
+4. **✅ Capability providers + FETCH netlayer** — extension `window.dregg` (`page.ts`),
+   `@dregg/sdk` (`sdk-ts/`), passkey custody (`extension/src/passkey.ts`), and the
+   content-addr-gated netlayer (`netlayer.ts`, wired in the background when a node URL is
+   configured).
+5. **✅ `<dregg-doc>` / `<dregg-transclude>`** — the DDL + authenticated transclusion
+   (`elements/dregg-doc.ts`; `elements/dregg-embed.ts` + `dregg-transclude.ts` over
+   `cell-port.ts`).
+6. **Devtools panel** — not built (no `devtools_page` in either manifest).
+7. **`@dregg/react`** courtesy wrapper (typed props + a hook) — not built.
+8. **`<dregg-world>` / `<dregg-editor>`** — not built (the surfaces Alif's domain plugs into).
 
 ## Decisions locked
 
@@ -157,18 +167,19 @@ on the page, each element's committed slots + **turn/receipt history** + live re
 
 ## Open questions
 
-- **Where does the SDK live** — evolve `@dregg/sdk` (`sdk-ts/`) into the element runtime, or a new
-  package (`@dregg/elements`)? (Lean: evolve `sdk-ts`, add an `elements` entry.)
-- **`collective-choice` → wasm**: does the cell-executor engine compile to wasm32 cleanly, or does
-  it need a trimmed in-tab shape (like TallyWorld is a trimmed counter)? First real risk of step 1.
-- **Render source**: `render_html()` in-wasm (self-contained element) vs deos-view-web compiled to
-  JS separately (element renders JS-side). Lean: in-wasm (one artifact, no double-compile).
-- **First element**: `<dregg-card>` (substrate proof, fastest) then `<dregg-poll>`, or straight to
-  `<dregg-poll>` (magical) — the substrate is the same either way.
+- **Where does the SDK live** — the extension-delivered elements live in `extension/src/elements/`;
+  the page-bundled (`sdk`) tier has no element runtime yet. Evolve `@dregg/sdk` (`sdk-ts/`) into
+  it, or a new package (`@dregg/elements`)? (Lean: evolve `sdk-ts`, add an `elements` entry.)
+- **Devtools vs closed shadow** — the closed roots are deliberately unreachable from the page; the
+  panel likely needs a privileged inspection channel through the background.
+
+(Settled by the code: `collective-choice` runs in-tab as `PollWorld` — a re-implementation of the
+engine's shape over the wasm executor, not a compile of the axum-bound crate; render is
+`render_html()` in-wasm, one artifact; the poll shipped first, with no separate `<dregg-card>`.)
 
 ---
 
 *Underneath: the assurance floor is proven + fast (engine deleted, descriptor prover, Golden Lift,
-light-client-sound). The worlds + the DDL run. This layer is mostly the relocation of proven parts
-into Web Components + a capability resolver. Ship the substrate, then the collective vote, then the
-document — each on a proven, encapsulated, self-verifying base.*
+light-client-sound). The substrate, the collective vote, and the document each run as proven,
+encapsulated, self-verifying elements; the remaining rungs are the devtools panel, the React
+courtesy wrapper, and the world/editor surfaces.*

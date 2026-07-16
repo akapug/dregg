@@ -55,7 +55,7 @@ STATEMENT both exist and have been exercised at K=2.** The named gaps are elsewh
 
 | Improvement | What it buys | Classification | Effort |
 |---|---|---|---|
-| **Fold LIVE-node turns (the `FullTurnProof→FinalizedTurn` adapter)** | Today the folded apex is a *synthetic* 2-turn `IncrementNonce` chain, not a turn the live node served (`CROSS-CHAIN-SETTLEMENT-REALNESS.md:65-78`). The adapter makes a real node turn foldable. | **BUILDABLE-NOW** — but **another lane owns it** (commit `5ba32ce35` "FullTurnProof->FinalizedTurn wrap adapter"). Coordinate, do not duplicate. | M |
+| **Fold LIVE-node turns (the `FullTurnProof→FinalizedTurn` adapter)** | Makes a real node turn foldable into the wrap statement. | **DONE** — the adapter exists at HEAD (`dregg_turn::rotation_witness::finalized_turn_from_full_turn`, `turn/src/rotation_witness.rs:731`, fail-closed on missing/mismatched wide 8-felt anchors); the transfer-bodied both-polarity test `full_turn_wrap_adapter_binds_real_transfer_and_rejects_mismatch` (`sdk/src/full_turn_proof.rs:10091`) proves a real `FullTurnProof` and bridges it through the adapter. | — |
 | **Scale K > 2 in the wrapped path** | Demonstrate the K-fold at K=4/8/16 through the wrap (the machinery folds arbitrary finite K; only K=2 has been wrapped). The scaling proof. | **BUILDABLE-NOW** | M–L (proving stack is heavy: 264 s/apex) |
 | **Richer statements (mechanism-family / tier / batch tag)** | Attest *which mechanism* (a clearing vs a pool settlement vs a transfer batch) in the public statement, not just the root pair — lets a consumer gate on the kind of transition. | **BUILDABLE-NOW** (add exposed lanes to `expose_claim` + widen the 25-lane vector + regen VK) but **EMBER-GATED to deploy** (VK change). | M |
 | **Clearing-proof attestor (`IClearingAttestor` rung 2)** | Wire the STARK→BN254→Groth16 pipeline to emit a *clearing* statement so the launchpad runs trust-minimized, not rung-1 replayable (`PRIVATE-DREGG-PUBLIC-LAUNCHPAD-ARCHITECTURE.md:200-207`, the named weld). | **BUILDABLE-NOW** (pipeline exists; emit a clearing PI) | M–L |
@@ -111,13 +111,14 @@ named-next, now DONE below for the two just added.
 
 **(A) proof verifier:** the highest-value *marginal* buildable-now brick is **scale
 K > 2 / the clearing-proof attestor**, NOT "aggregate 2 turns" — that is already
-done and cited. And the nearest live-node gap (`FullTurnProof→FinalizedTurn`) is
-**owned by another lane** (`5ba32ce35`); do not duplicate it.
+done and cited. The live-node adapter (`FullTurnProof→FinalizedTurn`) exists
+(`finalized_turn_from_full_turn`, `turn/src/rotation_witness.rs:731`); do not rebuild it.
 
 **(B) safety verifier:** **more invariants — prove the grep'd doors.** This is the
-crisp, self-contained, high-signal gap: 7 of 9 doors are heuristics. Converting even
-one (owner-drain) to a proof is a genuine new capability with an immediate cited
-demonstration on the flagship rug sample.
+crisp, self-contained, high-signal gap: 6 of 9 doors are heuristics (proxy-upgrade,
+selfdestruct, honeypot transfer-gate, blacklist, pausable, fee-manip). Converting even
+one to a proof is a genuine new capability — the owner-drain conversion (INV-NODRAIN,
+the seed below) is the cited demonstration on the flagship rug sample.
 
 **Top buildable-now overall: (B) more-invariants.** Best wow/effort — it is
 self-contained (one Halmos spec + a harness-generator extension), fast (sub-second
@@ -148,7 +149,7 @@ heavier and partly lane-owned.
    public `balanceOf` + `allowance`, dispatching the standard ERC-20 surface **plus
    any detected privileged `(address,address,uint256)` mover** (the seize/rescue
    shape, `transferFrom` excluded as legitimately allowance-gated; internal helpers
-   excluded by visibility). So `dregg-audit` now decides door #5 by PROOF.
+   excluded by visibility). So `dregg-audit` decides door #8 (owner-drain/seize) by PROOF.
 
 **The cited runs (Halmos 0.3.3, z3, solc 0.8.30, real compiled bytecode):**
 

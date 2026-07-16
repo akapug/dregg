@@ -9,6 +9,13 @@ It is the realization, in-AIR, of the `hverifier` obligation that
 `metatheory/Dregg2/Deos/SettleEscrowSelectorBinding.lean`
 (`escrow_selector_bound_to_declaration`) leaves as an explicit verifier discipline hypothesis.
 
+**STATUS AT HEAD.** The gentian obligation is CLOSED and DEPLOYED — by the **manifest-decode
+realization** (§7's alternative to the binding welds), not by this digest-limb gadget: every
+deployed bare cohort member carries the `-gentian-deployed-bare-refuse` flag-day weld, which
+refuses any declared-capacity cell in-AIR off the coverage-bound caveat-manifest columns (§7,
+"DEPLOYED"). The digest-limb gadget below remains STAGED beside the deployed cohort; this doc is
+its design record plus the commit-target analysis (§7) that selected the manifest-decode path.
+
 ## 1. What is already true (the fulcrum this stands on)
 
 Three pieces are proven and (for the carrier) deployed:
@@ -35,25 +42,29 @@ declaration requires the escrow capacity. `SettleEscrowSelectorBinding.lean` pro
 the escrow selector — but a **pure light client holds only the commit, not the declaration
 preimage**, so it cannot perform that re-derivation off-band. The forcing must be moved IN-AIR.
 
-## 2. The recipe to recompute (`compute_authority_digest_felt`)
+## 2. The recipe to recompute (`compute_authority_digest_8`)
 
 The committed declaration is *already* bound into the wide commit. `cell/src/commitment.rs::
-compute_authority_digest_felt` folds the authority residue — including `cell.program`, hence the
-`Predicate`/`Cases` `state_constraints` that carry the capacity declaration — into a single felt:
+compute_authority_digest_8` folds the authority residue — including `cell.program`, hence the
+`Predicate`/`Cases` `state_constraints` that carry the capacity declaration — into the H1
+faithful 8-felt commitment (~124-bit, blake3-rooted):
 
 ```
-authDigest = hash_bytes( b"dregg-cell:v9-authority-digest v1"
-                         ‖ identity ‖ mode ‖ permissions ‖ vk ‖ delegate ‖ delegation
-                         ‖ program(postcard(state_constraints)) ‖ fields[8..16]
-                         ‖ visibility ‖ commitments ‖ proved ‖ side-table-roots )
+authDigest8 = Faithful8::from_bytes32(
+    blake3( b"dregg-cell:v9-authority-digest v1"
+            ‖ identity ‖ mode ‖ permissions ‖ vk ‖ delegate ‖ delegation
+            ‖ program(postcard(state_constraints)) ‖ fields[8..16]
+            ‖ visibility ‖ commitments ‖ proved ‖ side-table-roots ) )
 ```
 
-That felt is `pre[24]` = the `B_AUTHORITY_DIGEST` rotated limb (r23), absorbed into the wide
-commit (`compute_rotated_pre_limbs`). A pure light client binds `authDigest` via
-`rotV3Wide_binds_published`, but it does **not** hold the byte preimage. So to make the selector
-demand un-dodgeable in-AIR, the AIR must, over a *witnessed* declaration:
+Lane 0 of that digest (`compute_authority_digest_felt`, kept as the v1 cross-anchor) is
+`pre[24]` = the `B_AUTHORITY_DIGEST` rotated limb (r23); lanes 1..7 ride the welded headroom
+limbs 12..=18 — all absorbed into the wide commit (`compute_rotated_pre_limbs`). A pure light
+client binds the digest via `rotV3Wide_binds_published`, but it does **not** hold the byte
+preimage. So to make the selector demand un-dodgeable in-AIR, the AIR must, over a *witnessed*
+declaration:
 
-1. **Recompute** `authDigest` in-AIR from the witnessed declaration bytes (the `hash_bytes` sponge).
+1. **Recompute** the digest in-AIR from the witnessed declaration bytes (the blake3 byte fold).
 2. **Bind** the recomputed digest equal to the committed `B_AUTHORITY_DIGEST` limb (col `bb + 24`,
    wide-bound). Under collision-resistance this forces the witnessed declaration to be the committed
    one (or, weaker but sufficient: to have the same required-tag floor — exactly `DeclCommitBinds`).
@@ -136,17 +147,17 @@ shape as the `Poseidon2WideCR`/`Poseidon2SpongeCR` floors the deployed wide comm
 ## 4. The hard part — the recompute chain (4a) and decode (4b)
 
 (1)(2)(3) are expressible and proven in the current IR. (4a) is the genuinely hard remaining piece:
-`compute_authority_digest_felt` is `hash_bytes` over a **variable-length postcard-serialized blob**.
+`compute_authority_digest_8` is blake3 over a **variable-length postcard-serialized blob**.
 The current descriptor IR has a Poseidon2 **chip table** (`TID_P2` / Lean `poseidon2ChipTableDef`)
 that constrains a single fixed-arity permutation per lookup row (`chip_lookup_sound_N`), and the
 wide commit's chained `wire_commit_8_chip` is built from those lookups over **felt-domain** limbs.
-It does **not** have a constraint vocabulary for byte-to-felt packing + a rate-aware,
-variable-length sponge-absorption state machine. Two sound realizations:
+It does **not** have a constraint vocabulary for byte-to-felt packing + a variable-length
+byte-hash (blake3 compression) chain. Two sound realizations:
 
-* **Option A — the literal byte-sponge.** Add a new constraint variant (a `ByteHashChain` /
-  sponge-absorb) or a custom byte-sponge table the descriptor `Lookup`s into, recomputing
-  `hash_bytes` over the witnessed declaration bytes exactly. This is new IR machinery AND new VK
-  bytes. It recomputes the EXACT deployed `authDigest` over the existing r23 limb.
+* **Option A — the literal byte-hash.** Add a new constraint variant (a `ByteHashChain`)
+  or a custom byte-hash table the descriptor `Lookup`s into, recomputing the blake3 fold
+  over the witnessed declaration bytes exactly. This is new IR machinery AND new VK
+  bytes. It recomputes the EXACT deployed digest over the existing r23 limb.
 
 * **Option B — the felt-domain restructure (recommended).** Commit a small **felt-domain
   required-floor digest** as a dedicated rotated limb (the way `perms_digest`/`vk_digest` already
@@ -192,13 +203,16 @@ themselves are real `VmConstraint2` constraints forced by `Satisfied2`.
 `circuit/src/effect_vm/authority_digest_weld.rs` — the STAGED Rust shadow: builds the three gentian
 gates (recompute-bind, decode-boolean, selector-force) over the named columns, with tests that an
 honest declared-escrow row forces `sel = 1` and the gate bodies bite a forged row. NOT emitted into
-any committed VK / registry; the deployed descriptors are byte-identical.
+any committed VK / registry. (The deployed cohort's bytes are NOT the pre-gentian shape — the
+flag-day close shipped as the separate bare-floor-refuse weld, §7 — but nothing of THIS gadget is
+committed.)
 
 ## 6. VK impact + staging
 
 * The equality skeleton (1)(2)(3) is VK-affecting *only* once emitted into a committed welded
-  descriptor — it is STAGED beside the deployed cohort, NOT emitted, NOT flipped. Deployed
-  descriptors / VK byte-identical; descriptor-drift gate green.
+  descriptor — it is STAGED beside the deployed cohort, NOT emitted, NOT flipped. (The deployed
+  cohort's VK bytes DID take a flag day — the bare-floor-refuse weld, §7 — but not via this gadget;
+  the descriptor-drift gate pins the refuse-welded geometry.)
 * The recompute chain (4a)/(4b) is the genuinely-new VK (and, under Option A, new IR) work.
 * **STAGE, do not flip.** Build + prove beside the deployed; commit the welded VK beside (not over)
   the deployed; flip only in the lockstep verifier-code + descriptor epoch, coordinated with the
@@ -211,19 +225,20 @@ any committed VK / registry; the deployed descriptors are byte-identical.
   the WIDE fulcrum, the selector-binding spec (`SettleEscrowSelectorBinding`, under `hverifier`).
 * **DONE this pass:** the in-AIR selector-forcing soundness core — `gentian_selector_forced` /
   `gentian_settle_forced` discharge the `hverifier` obligation in-AIR under the CR floor; the staged
-  equality skeleton (Lean descriptor + Rust gates), `#assert_all_clean`, deployed byte-identical.
+  equality skeleton (Lean descriptor + Rust gates), `#assert_all_clean`.
 * **DONE (the discharge pass):** Option B realized — `hrecompute` (4a) discharged to a felt-domain
   chip lookup + `chip_lookup_sound`; `hdecode` (4b) discharged to the in-AIR is-zero + OR-fold decode.
   `gentian_selector_forced_discharged` / `gentian_settle_forced_discharged` hold under ONLY
   `ChipTableSound` + `FloorDigestBinds` (no off-band hypothesis), `#assert_all_clean`; the Rust gadget
-  shadow + producer-witness + gate-eval teeth are green (`authority_digest_weld.rs`). STAGED — deployed
-  descriptors / VK byte-identical, drift gate green.
-* **REMAINING to a sound escrow FLIP (precise) — the COMMIT-TARGET BLOCKER (verified 2026-06-28).**
+  shadow + producer-witness + gate-eval teeth are green (`authority_digest_weld.rs`). STAGED — not
+  emitted into any committed VK.
+* **THE COMMIT-TARGET ANALYSIS (why the digest-limb flip is not taken).**
   The proven gadget's discharge of `hcommitLimb` requires the committed limb the gadget reads
   (`gentianAuthDigestCol = EFFECT_VM_WIDTH + 24`, the `B_AUTHORITY_DIGEST` r23 limb) to carry the
   *felt-domain* `hash_many(required-tag floor)`. The deployed commitment puts a DIFFERENT value there:
-  `turn/src/rotation_witness.rs:367` sets `pre_limbs[24] = compute_authority_digest_felt(cell)` — the
-  *byte-domain* `hash_bytes` over the WHOLE authority residue (program / permissions / vk / delegate /
+  `turn/src/rotation_witness.rs` sets `pre_limbs[24]` to lane 0 of `compute_authority_digest_8(cell)`
+  (`write_lanes [24, 12..18]`) — the *byte-domain* blake3 fold over the WHOLE authority residue
+  (program / permissions / vk / delegate /
   delegation / mode / fields[8..16] / visibility / commitments / proved / side-table roots). For any
   real escrow cell `compute_authority_digest_felt(cell) ≠ hash_many(floor)`, so:
     - the recompute-bind gate forces the gadget's limb-24 trace column to `hash_many(floor)`; the wide
@@ -241,20 +256,23 @@ any committed VK / registry; the deployed descriptors are byte-identical.
   The SOUND realization is a NEW dedicated felt-domain floor-digest limb (the `perms_digest` /
   `vk_digest` pattern at limbs 33/34).
 
-  **HEADROOM-LIMB REFINEMENT (verified 2026-06-28).** The "width/layout flag-day" earlier framed as the
-  cost of the new limb is NOT required. Pre-limb indices **12..23** (`r11..r22`, the "app-register
-  headroom") are GENUINELY UNCONSTRAINED-FREE columns, not zero-gated and not app-bound:
-    - no gate forces them to zero, and no weld reads them — `EffectVmEmitRotationV3.weldsAt`
-      (`EffectVmEmitRotationV3.lean:327`) welds ONLY offsets 1,2,3 (r0/r1/r2), 4..11 (fields[0..7]),
-      and 25 (`B_CAP_ROOT`); every gated authority sub-limb is ≥ 24 (`trace_rotated.rs:120-168`). The
-      rotation descriptor's constraint list is `v1-constraints ++ weldsAt ++ rotPins ++ hashSites`
-      (`rotateV3`, `:373`) — nothing constrains offsets 12..23.
-    - they ARE in the absorbed set — `wireCommitR`/`wire_commit` chains over all 37 limbs incl. 12..23
-      (`rotation_witness.rs:297`; `preLimbsAt`, `EffectVmEmitRotationV3.lean:194`), so a value there
-      lands in the wide commit a pure light client binds.
-    - the producer writes them as ZERO only by DEFAULT (`vec![ZERO]`, nothing assigns 12..23 —
-      `rotation_witness.rs:349,361`), i.e. they are reserved-for-future-app headroom, not a zero-gate.
-  So writing `hash_many(floor)` into one of them (say offset 12) is a VALUE-ONLY layout change:
+  **HEADROOM-LIMB REFINEMENT.** The "width/layout flag-day" earlier framed as the
+  cost of the new limb is NOT required. Pre-limb offsets **12..=18** (`r11..r17`) carry lanes 1..7
+  of the faithful 8-felt authority digest and are WELDED — the producer assigns them
+  (`compute_authority_digest_8(cell).write_lanes(&mut pre_limbs, [24, 12, 13, 14, 15, 16, 17, 18])`,
+  `turn/src/rotation_witness.rs`) and `authorityHeadroomOffs`/`authorityHeadroomFreezes`
+  (`EffectVmEmitRotationV3.lean`) force them (continuity `colEq` for value effects, record-pin8
+  for movers). The free headroom is offsets **19..=23** (`r18..r22`), UNCONSTRAINED-FREE columns,
+  not zero-gated and not app-bound:
+    - no gate forces them to zero, and no weld reads them — the rotation descriptor's constraint
+      list (`v1-constraints ++ weldsAt ++ rotPins ++ hashSites`, `rotateV3`) constrains nothing at
+      offsets 19..=23.
+    - they ARE in the absorbed set — `wireCommitR`/`wire_commit` chains over all pre-iroot limbs
+      incl. 19..=23 (`rotation_witness.rs`; `preLimbsAt`, `EffectVmEmitRotationV3.lean`), so a value
+      there lands in the wide commit a pure light client binds.
+    - the producer writes them as ZERO only by DEFAULT ("remaining headroom — zero for this turn",
+      `rotation_witness.rs`), i.e. they are reserved-for-future-app headroom, not a zero-gate.
+  So writing `hash_many(floor)` into one of them (say offset 19) is a VALUE-ONLY layout change:
   same trace width + chain structure → deployed descriptors / base-layout VKs stay BYTE-IDENTICAL (only
   each cell's commitment VALUE shifts → a devnet re-genesis). This removes obstacle (a) entirely — no
   pre-limb-vector extension, no width/layout flag-day, no shifting of iroot/state_commit/chain.
@@ -287,14 +305,39 @@ any committed VK / registry; the deployed descriptors are byte-identical.
      `verify_vm_descriptor2` — honest proves, forged (sel=0 dodge / wrong floor / wrong digest) refuses.
   3. Commit the welded VK beside the deployed; route a declared-escrow turn through the gentian
      descriptor on the live verify path; the lockstep flip.
-  Until the binding welds (e) (or the manifest-decode redesign) land, the gadget is a CONDITIONAL truth
-  (sound under `hcommitLimb`); the flip MUST NOT be taken — a value-only headroom-limb write alone leaves
-  the limb forger-choosable at the writing effect (the binding gap), and the limb-24 overwrite would
-  accept forgeries on the record-pin surfaces. SettleEscrow is NOT a deployed pure-light-client truth.
-  (The operative blocker is now the binding gap (e), NOT a width flag-day.)
+  The manifest-decode redesign is the path that DEPLOYED (next bullet). Absent the binding welds (e),
+  the digest-limb gadget stays a CONDITIONAL truth (sound under `hcommitLimb`) and its flip stays off
+  the table — a value-only headroom-limb write alone leaves the limb forger-choosable at the writing
+  effect (the binding gap), and the limb-24 overwrite would accept forgeries on the record-pin surfaces.
+* **DEPLOYED — the gentian close (the manifest-decode realization).** The bare-cohort dodge is closed
+  for a pure light client WITHOUT any digest limb: every deployed bare cohort member carries the
+  `-gentian-deployed-bare-refuse` flag-day weld — three per-tag decode+refuse aux blocks (escrow 17 /
+  discharge 18 / vault 19) anchored at the member's own graduated width, decoding the required-tag
+  floor from the DEPLOYED caveat-manifest columns (`caveat_tag_col k`, the columns the live
+  `caveatCommit` hash-site pins to PI 45 — the binding hypothesis is discharged by the live caveat
+  pin, not a free assumption). A satisfying witness of any bare member on a cell whose committed
+  manifest declares a capacity tag is UNSAT (`declared_tag_unsat_at`, under only `Poseidon2SpongeCR`):
+  `metatheory/Dregg2/Deos/BareCohortFloorRefuse{,Deployed,Wide}.lean`; Rust twin
+  `circuit/src/effect_vm/bare_floor_refuse_weld.rs`. The registry census asserts the weld landed on
+  EVERY bare member — the exact width (`floor_col(last)+1`) AND all three `floor_col == 0` refuse
+  gates present in the committed descriptor (`circuit/src/effect_vm_descriptors.rs:2493`) — a positive
+  coverage tooth, not a width fudge. Defense-in-depth: the executor's GATE B re-derives the declared
+  tags from the committed declaration and rejects a declared-capacity turn routed through any bare
+  member, geometry-free (`turn/src/executor/proof_verify.rs:865`).
+* **NAMED SEAM — satisfaction liveness.** The three welded capacity-satisfaction descriptors
+  (`settleEscrowSatVmDescriptor2R24` / `dischargeSatVmDescriptor2R24` / `vaultSatVmDescriptor2R24`,
+  47 PIs, the shared selector PI pin col 70 → PI 46) are STAGED: no live routing, no committed VK
+  (`circuit/src/effect_vm_descriptors.rs:3027`). A declared-capacity turn today is therefore REFUSED
+  fail-closed (the refuse weld + GATE B), never settled half-open; declared-capacity liveness rides
+  the direct-descriptor path (`circuit/tests/gentian_deployed_capacity_liveness.rs`). Closing the
+  seam = committing + routing the satisfaction members under the §6 staging doctrine. So at HEAD:
+  the bare-cohort DODGE is a deployed pure-light-client refusal; SettleEscrow SATISFACTION is not a
+  live-routed truth.
 * **UNLOCKS 18/19/Custom/temporal:** the selector-forcing core is tag-agnostic — `gentian_selector_forced`
   is parametric in the required-tag predicate, so discharge (18) and vault (19) reuse it verbatim
-  for the *coverage→selector* half once their satisfaction gates land (18 needs the range-checked
-  due-ness inequality; 19 needs the overflow-safe product comparison — `VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md`
-  §6 BLOCKER 2). The same gadget binds any declared caveat's selector to the committed declaration,
-  which is the shared shape the temporal-caveat and Custom-VK welds also need.
+  for the *coverage→selector* half. Their satisfaction gates are STAGED beside the cohort
+  (`dischargeSatVmDescriptor2R24` carries the cursor/total/due + G5 free-param binds;
+  `vaultSatVmDescriptor2R24` the no-dilution `Ta·m ≤ Sa·d` gates —
+  `VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6 BLOCKER 2). The same gadget binds any declared caveat's
+  selector to the committed declaration, which is the shared shape the temporal-caveat and Custom-VK
+  welds also need.

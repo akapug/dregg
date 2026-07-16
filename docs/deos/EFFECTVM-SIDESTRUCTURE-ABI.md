@@ -25,10 +25,12 @@ This document names that latent interface, states the missing fourth field (the 
 dispatch and the state-delta the segment already carries), and gives each side-structure its
 conformance path and its soundness obligation.
 
-The eight already-conforming carriers (`CarrierWitness`, `joint_turn_aggregation.rs:150-505`):
-`Custom`, `Bridge`, `Deco`, `Sovereign`, `Factory`, `Hatchery`, `Membership`, `Dsl`. The ABI
-below is the generalization of their shared shape to the five *not-yet-conforming*
-side-structures.
+The eight carriers conforming through the `CarrierWitness` match
+(`joint_turn_aggregation.rs:150-505`): `Custom`, `Bridge`, `Deco`, `Sovereign`, `Factory`,
+`Hatchery`, `Membership`, `Dsl`. The ABI below is the generalization of their shared shape to
+the five census side-structures (§1) — the marquee of which, the shielded pool, conforms
+through exactly this shape (its own leaf adapter + binding node, folded by the ring-clearing
+AIRs rather than a `CarrierWitness` arm).
 
 ---
 
@@ -36,15 +38,17 @@ side-structures.
 
 | # | Side-structure | Integration state | Committed-claim surface today | Cite |
 |---|---|---|---|---|
-| 1 | **Shielded pool** (marquee) | **BESIDE** | 3-felt uni-STARK PI `[nullifier, merkle_root, value_binding]`; NO leaf/expose/bind | `circuit-prove/src/shielded/mod.rs:43-48`; `spend_circuit.rs:136-147,579` |
-| 2 | **Attested-data lane** | **BESIDE** | `AttestedFact{measurement, payload, report_data, grade}`; NO state-delta, NO leaf | `tee-verify/src/attested_data.rs:161-175`; only consumer is its own test |
-| 3 | **DrEX / Market clearing** | ring = **NATIVE**; Market tower = **BESIDE** | ring → native `Effect::Transfer` legs through `recKExec`; Market clearing = `toBal` shadow, NO PI surface | `intent/src/verified_settle.rs:201-350,680`; `metatheory/Market/Clearing.lean:248,45-54` |
+| 1 | **Shielded pool** (marquee) | **LEAF-ADAPTED** (built) | 3-felt claim `[nullifier, merkle_root, value_binding]` re-exposed by `prove_shielded_spend_leaf_with_claim` + a lane-connecting binding node; the ring-clearing AIRs fold those leaves | `circuit-prove/src/shielded_spend_leaf_adapter.rs:469-490`; `shielded_ring_clearing_air.rs`; `spend_circuit.rs` |
+| 2 | **Attested-data lane** | **BESIDE** | `AttestedFact{measurement, payload, report_data, grade}`; NO state-delta, NO leaf; one downstream consumer — `GradedMark::from_tee_attested` composes it into the graded oracle-mark weld | `tee-verify/src/attested_data.rs:161-175`; `tee-verify/src/oracle_mark.rs`; `metatheory/Market/OracleWeld.lean` |
+| 3 | **DrEX / Market clearing** | ring = **NATIVE**; Market tower = **NATIVE via ledger-realization** (proven) | ring → native `Effect::Transfer` legs through `recKExec`; the clearing's ledger-realization is proven down to `settleRing`/`recKExec` (full-fill, partial-fill, pool-fill, shielded fusion) | `intent/src/verified_settle.rs:201-350,680`; `metatheory/Market/LedgerRealizationExt.lean:5-27` |
 | 4 | **Intent / ring solver** | **BESIDE** (untrusted-search + verified-check) | none — TRUSTED search; output re-verified by the settle path, no proof of its own | `intent/src/solver.rs:51-59`; `lib.rs:10-18`; `verified_settle.rs:214-247` |
 | 5 | **Cross-chain holdings** | governance = **BESIDE**; circuit pilot = **LEAF-FOLDED (commitment-only)** | `ProvenForeignHolding{chain,holder,asset,amount,snapshot,consensus_proven}`; leaf folds an 8-felt identity commitment, MPT/keccak OFF-AIR | `dregg-governance/src/proven_foreign_holding.rs:154`; `circuit-prove/src/{custom_proof_bind,mpt_holding_leaf}.rs` |
 
-The through-line: **one is native, one is half-native, three are beside** — and the beside ones
-each already carry a claim tuple that maps cleanly onto the ABI's committed-claim field. What they
-lack is the *leaf wrap + expose + connect* the eight deployed carriers have.
+The through-line: **the marquee (shielded) is leaf-adapted, the DrEX pair is native (ring by
+construction, Market clearing by proven ledger-realization), the holdings pilot is leaf-folded — and
+the two still-beside structures (attested-data, the solver-as-prover target) each already carry a
+claim tuple that maps cleanly onto the ABI's committed-claim field.** What those lack is the *leaf
+wrap + expose + connect* the deployed carriers have.
 
 ---
 
@@ -60,13 +64,14 @@ Lean-emitted, fingerprint-pinned `EffectVmDescriptor` rendered by `emitVmJson` a
 A native effect is *proved* by its descriptor's AIR: balance moves, cap_root advances, nullifier
 freshness (`nullifierFreshUMem`, `effect_vm_descriptors.rs:866`) are all in-circuit constraints.
 
-**The two open native seams the ABI generalizes** are already visible in the descriptor ledger:
-`Effect::ShieldedTransfer` is a pinned `NamedResidual` — "the shielded-proof verification is
-executor-side; binding it into the effect_vm descriptor is the VK-affecting M2 weld follow-up"
-(`circuit/tests/effect_enum_descriptor_residual_gate.rs:112-126`); and `Effect::Custom`'s AIR
-"explicitly does NOT verify the external proof — it only records its hash commitment"
-(`circuit-prove/src/custom_proof_bind.rs:10-16`, quoting the AIR's own warning). The ABI is the
-disciplined way to close residuals like these without a bespoke circuit each time.
+**The open native seam the ABI generalizes** is already visible in the descriptor ledger:
+`Effect::ShieldedTransfer` is a pinned `NamedResidual` — the executor verifies the shielded proof;
+binding that verification into the effect_vm descriptor is the VK-affecting weld follow-up
+(`circuit/tests/effect_enum_descriptor_residual_gate.rs:112`). `Effect::Custom` shows the closed
+shape: its AIR does NOT verify the external proof (`circuit-prove/src/custom_proof_bind.rs:7-13`),
+and the deployed recursion fold backs it — the sub-proof leaf is re-proven and its 8-felt PI
+commitment recomputed in-circuit and lane-connected (`custom_proof_bind.rs:15-21`). The ABI is the
+disciplined way to close residuals like the former without a bespoke circuit each time.
 
 ### 2.2 The proved invariants (what the ABI must preserve)
 
@@ -281,67 +286,60 @@ theorem S_claim_refines (turn : Turn) (claim : SideClaim S) (k k' : RecordKernel
 
 This is the shape already discharged for the ring (`Market/Fairness.lean:130`
 `cycleValid_fulfilled_respects_limits` returns `recTotalAsset k' b = recTotalAsset k b ∧
-RingBalanced ∧ limit-respecting`) and named as the open weld for the market tower
-(`Market/Clearing.lean:42-44`, "a cleared exact book induces a `RingBalanced` settlement whose
-`settleRing` commit conserves `recTotalAsset`"). The refinement is the honest gate: `#assert_axioms`
-clean ≠ hypothesis-free — audit that `hbound`/`hstep` are the *only* hypotheses and that the
-conclusion is a real law, not a tautology.
+RingBalanced ∧ limit-respecting`), for the market tower (the ledger-realization weld,
+`Market/LedgerRealization{,Ext}.lean` — §4.3), and for the shielded pool
+(`Dregg2.Shielded.ClaimRefinement.shielded_spend_claim_refines` — §4.1). The refinement is the
+honest gate: `#assert_axioms` clean ≠ hypothesis-free — audit that `hbound`/`hstep` are the *only*
+hypotheses and that the conclusion is a real law, not a tautology.
 
 ---
 
 ## 4. The integration path — per side-structure
 
-### 4.1 Shielded pool — BESIDE → verified-leaf (THE MARQUEE)
+### 4.1 Shielded pool — verified-leaf, BUILT (THE MARQUEE)
 
-**Verdict: verified-leaf, PROVED-for-membership+nullifier / ATTESTED-(off-AIR)-for-conservation.
-This is the first integration to do.**
+**Verdict: verified-leaf, PROVED for membership + nullifier + in-AIR ring conservation. The
+adapter, binding node, fused ring AIRs, and the Lean refinement obligation exist.**
 
-Today (`shielded/mod.rs:43-48`, `pool.rs:52-59`): the shielded transfer is its *own* composed
-proof object, "**not** woven into `effect_vm`/`descriptor_ir2`." `Effect::ShieldedTransfer` exists
-(`turn/src/action.rs:1542-1545`, `LinearityClass::Conservative`) but is a pinned `NamedResidual`
-with no descriptor rung and no recursion leaf.
+The base object (`shielded/mod.rs`, `pool.rs`): the shielded transfer is its *own* composed
+proof object, not woven into `effect_vm`/`descriptor_ir2`. `Effect::ShieldedTransfer` exists
+(`turn/src/action.rs:1542-1545`, `LinearityClass::Conservative`) and remains a pinned
+`NamedResidual` with no descriptor rung (`effect_enum_descriptor_residual_gate.rs:112`).
 
-The structure decomposes into two halves that plug in differently:
+The two halves, and where each stands:
 
-- **The STARK half (membership + nullifier) → a PROVED leaf, directly.** `dregg-shielded-spend-v1`
-  (`spend_circuit.rs:179-419`, width 20, 3 PIs) proves in-circuit: the note commitment
-  `hash_fact(value,[asset,owner,rand])` is a member of the 4-ary Merkle tree at `merkle_root`
-  (C3/C6), and `nullifier = hash_fact(leaf, key[0..4])` (C4). Its committed claim is exactly
-  `[nullifier, merkle_root, value_binding]` (`spend_circuit.rs:136-147,579`). **Conformance work:**
-  give this descriptor the *identical* IR-v2 leaf/expose/connect treatment
-  `note_spend_leaf_adapter.rs` already gives `dregg-note-spending-dsl-v3` — a
-  `prove_shielded_spend_leaf_with_claim` exposing the 3-felt tuple, and a binding node connecting
-  `nullifier`+`merkle_root` to the deployed nullifier-set/root PIs. The machinery is a
-  copy-with-different-widths of an existing, tested adapter. *(Note the padding-row subtlety that
-  forced the standalone circuit: `dregg-shielded-spend-v1` was authored fresh because
-  `dsl::note_spending`'s padding rows fail p3's `when_transition` gating, `spend_circuit.rs:11-21`
-  — the lowering must respect that, as the note-spend adapter's `WindowGate on_transition` already
-  does.)*
+- **The STARK half (membership + nullifier) → a PROVED leaf, BUILT.** `dregg-shielded-spend-v1`
+  (`spend_circuit.rs`, 3 PIs) proves in-circuit: the note commitment
+  `hash_fact(value,[asset,owner,rand])` is a member of the 4-ary Merkle tree at `merkle_root`,
+  and `nullifier = hash_fact(leaf, key[0..4])`. Its committed claim is exactly
+  `[nullifier, merkle_root, value_binding]`. The IR-v2 leaf/expose/connect treatment exists:
+  `prove_shielded_spend_leaf_with_claim` re-exposes the 3-felt tuple
+  (`SHIELDED_SPEND_CLAIM_LEN`, `shielded_spend_leaf_adapter.rs:469-490`) and
+  `prove_shielded_spend_binding_node` connects a leg's claimed tuple to the verifying sub-proof
+  lane-by-lane (a `connect` conflict ⇒ UNSAT ⇒ no root). The Lean refinement obligation (§3.6)
+  is discharged as `Dregg2.Shielded.ClaimRefinement.shielded_spend_claim_refines` — a valid
+  claim refines an authorized, never-re-spendable VM step, non-vacuous in both polarities.
 
-- **The value-balance half (conservation) → an OFF-AIR named carrier (ATTESTED), OR the open
-  crypto weld to reach PROVED.** Per-asset Σv_in=Σv_out is **not** a BabyBear STARK — it rides
-  homomorphic Pedersen commitments on Ristretto: one Schnorr excess proof
-  `Σ C_in − Σ C_out = r_excess·R` plus per-output Bulletproof range proofs
-  (`shielded/mod.rs:29-41`, `pool.rs:32-50`, `dregg_cell_crypto`). These cannot fold as an IR-v2
-  leaf (wrong curve). So the honest conformance is the **DECO posture**: the conservation proof
-  stays off-AIR, executor-verified, a named §8 carrier; the leaf binds only a Poseidon2
-  commitment to the `value_binding` lanes. That makes the shielded turn **PROVED for
-  membership+nullifier, ATTESTED for conservation** — the composite grade is ATTESTED until the
-  value commitments are brought in-AIR (a real, named crypto seam:
-  `DREGGFI-VISION.md:7 §7` "the residual is welding that circuit guarantee back into the Lean
-  law").
+- **The value-balance half (conservation) → in-AIR, PROVED for a ring.** `Σ value_in = Σ
+  value_out` is the authoritative in-AIR field gate of the ring-clearing AIRs
+  (`shielded_ring_clearing_air.rs`; a minting / non-conserving ring is UNSAT —
+  `nonconserving_ring_is_unsat`), with the Poseidon2 `value_binding` as the PQ value
+  commitment and in-AIR range over the BabyBear no-wrap window (`wraparound_mint_ring_is_unsat`,
+  `out_of_range_output_is_unsat`). The off-AIR Schnorr excess is retired from the TCB (the
+  Option-A cutover, `docs/deos/PQ-SHIELDED-COMMITMENT.md §5`). Named residual: the full 64-bit
+  multi-limb in-AIR range widening.
 
-**The "ring over shielded notes" weld** (DrEX rung-3, `DREGGFI-VISION.md §4.3`) is exactly:
-the ring matcher's legs (§4.3) clear over the shielded pool's committed notes instead of the clear
-ledger — i.e. the ring's per-leg claim teeth become shielded-spend nullifier/commitment lanes, and
-the market conservation (`clearing_conserves_per_asset`) is discharged over the Pedersen excess
-rather than `recTotalAsset`. The ABI makes this composable: two conforming side-structures
-(shielded + ring) folded in one turn, graded at their weakest leg.
+**The "ring over shielded notes" weld** (DrEX rung-3, `DREGGFI-VISION.md §4.3`) is built at
+both layers: the fused ring AIR folds `prove_shielded_spend_leaf_with_claim` leaves
+(`shielded_ring_clearing_air.rs`, e.g. `honest_shielded_2ring_folds_and_verifies`), and the
+Lean side proves the fusion — `shielded_ring_fused_clears` (`Market/LedgerRealizationExt.lean`),
+where `LegFused` ties the matched cycle's offer asset/amount to a real spent member note. The
+Lean fusion is spec-level; the in-AIR arithmetic tying the cleared amounts to the note values
+is the ring AIR's conservation gate.
 
-**Honest gap:** (a) the `prove_shielded_spend_leaf_with_claim` adapter + its binding node (green
-build work, no new crypto); (b) an `Effect::ShieldedTransfer` descriptor rung to retire the
-`NamedResidual` (VK-affecting — rides the big-bang regen); (c) the value-commitment-in-AIR weld to
-lift conservation from ATTESTED to PROVED (open crypto).
+**Named residuals:** (a) the `Effect::ShieldedTransfer` descriptor rung to retire the
+`NamedResidual` (VK-affecting — rides the big-bang regen); (b) the 64-bit multi-limb in-AIR
+range widening.
 
 ### 4.2 Attested-data lane — BESIDE → verified-leaf (ATTESTED grade)
 
@@ -350,8 +348,13 @@ lift conservation from ATTESTED to PROVED (open crypto).
 Today (`tee-verify/src/attested_data.rs:161-175`): `AttestedFact{kind, measurement, payload,
 report_data, tcb_ok, grade=Attested}` is minted by a four-check fail-closed verifier
 (`attest_data`, `:218-254`) rooted in a pinned TEE root (Nitro G1 `lib.rs:51,159-260`; SNP ARK/ASK
-`snp.rs:343-368`). It is **standalone** — the only consumer is its own test; no `effect_vm` code
-touches it. (A *sibling* turn-integrated path exists via the predicate registry,
+`snp.rs:343-368`). No `effect_vm` code touches it — the BESIDE classification stands — but it has
+one real non-test consumer: `tee-verify/src/oracle_mark.rs`, where `GradedMark::from_tee_attested`
+composes an `AttestedFact` over a price payload into the graded oracle-mark weld (no bare-price
+constructor; both polarities tested), tied to Lean via `metatheory/Market/OracleWeld.lean`
+(`oracle_weld_composite_grade`, restating `no_bad_debt`/`lending_sound` over the `AttestedMark`) —
+the weld `DREGGFI-VISION.md` §7 (the oracle-inputs edge) documents. (A *sibling* turn-integrated
+path exists via the predicate registry,
 `deos-hermes/src/tee_fact.rs:9-16,41,107`, which binds the turn/session commitment into the quote's
 `report_data` — but it mints a predicate result, not an `AttestedFact`.)
 
@@ -374,11 +377,11 @@ fact itself: the attested fact is an *input* leg, its segment the identity delta
 widening the chip bus. Until then the fold's connect target is `zkoracle_leaf_commit`, not
 `content_commitment`.
 
-### 4.3 DrEX / Market clearing — ring NATIVE, Market tower BESIDE
+### 4.3 DrEX / Market clearing — ring NATIVE, Market tower NATIVE via ledger-realization
 
-**Verdict: ring = native (keep); Market clearing = beside → native-via-ledger-realization.**
+**Verdict: ring = native (keep); Market clearing = native-via-ledger-realization, proven.**
 
-The **ring** already conforms as native: `verified_settle.rs` lowers a settlement to
+The **ring** conforms as native: `verified_settle.rs` lowers a settlement to
 `Effect::Transfer` legs (`extract_legs`, `:201-208`) and folds each through the verified per-asset
 executor, cross-checked against the real Lean FFI `record_kernel_step`
 (`verified_settle.rs:311-350,680`; `verified_gate.rs:13-18`) — the proved `Exec.recKExec`. It is
@@ -387,23 +390,22 @@ cross-check only fires when the gate is installed (`verified_settle.rs:701`); an
 is a separate entry surfaced beside `finalize`, not the committing turn itself
 (`trustless.rs:1638-1664`).
 
-The **Market clearing tower** (`metatheory/Market/`) is **BESIDE**: `clearing_conserves_per_asset`
-(`Clearing.lean:248`) and `clearing_respects_limits` (`Fairness.lean:112`) are proved over the
-`toBal` abstraction measure, not stepped through `recKExec`; the ledger-realization rung
-(`MarketClearing` → `settleRing`) is named as *next*, not built (`Clearing.lean:42-44`), and rung-3
-— the custom ZKP that "this cleared allocation is the correct aggregation of these COMMITTED hidden
-orders" — is "the load-bearing custom-circuit surface" that is not yet built (`Clearing.lean:45-54`).
+The **Market clearing tower** (`metatheory/Market/`) inherits the ring's native path through the
+proven ledger-realization refinement: `Market/LedgerRealization.lean` welds the full-fill / tight
+cycle (`fullFill_cycle_ledger_realized`), and `Market/LedgerRealizationExt.lean:5-27` welds the
+rest — genuine partial fills in full generality (`partialFill_cycle_ledger_realized`, with the
+sharp non-vacuity that a non-tight book's FULL-fill lowering does NOT conserve), the per-fill
+pool absorption (`pool_fill_ledger_realized`), and the rung-3 shielded fusion
+(`shielded_ring_fused_clears`) — each down to `settleRing`/`recKExec`, so the clearing's
+conservation IS the kernel's `recTotalAsset`, not a local `netFlow`. Fairness is proven at the
+same level: `uniform_price_envy_free` and `uniform_price_optimal`
+(`Market/Optimality.lean:147-198`, with a `#guard`-pinned concrete instance).
 
-**Conformance work:** the market clearing becomes native by discharging the ledger-realization
-refinement (its committed-claim = the per-asset conservation tuple, exposed as segment deltas over
-the cleared legs) — i.e. it inherits the ring's native path once `MarketClearing → RingBalanced →
-settleRing` is proved. Rung-3 (private matching) is then the shielded-pool weld (§4.1) applied to
-the ring legs.
-
-**Honest gap:** ledger realization (`MarketClearing→settleRing`, named); uniform-price optimality +
-envy-free/TTC-core stability are *unproven* (`Fairness.lean`/`Optimality.lean` are abstract) — so
-"fair" is PROVED for individual-rationality, *architecture* for uniform-price
-(`DREGGFI-VISION.md §7`).
+**Named residuals** (what stays model, per `LedgerRealizationExt.lean`'s own ledger): the pool
+`∀`-schedule solvency lift over the `ℚ → ℤ` boundary (the per-fill tie is kernel-real; its
+kernel gate `recKExecAsset_overdraw_refused` is the reserve-floor analogue), and the Lean-side
+tie between the spec-level fusion (`LegFused`) and the ring AIR's in-AIR amount arithmetic
+(§4.1).
 
 ### 4.4 Intent / ring solver — stays external (untrusted-search + verified-check)
 
@@ -478,7 +480,7 @@ covered. What each plugin owes, per invariant:
 
 | Invariant (core law) | What the plugin owes | Enforced by |
 |---|---|---|
-| **Conservation** `recKExec_conserves` (`RecordKernel.lean:584`) / per-asset `maExec_conserves_per_asset` (`:699`) | Expose a per-asset Σδ the leaf proves. Native effects: the balance/umem AIR. Shielded: the Pedersen excess `ΣC_in−ΣC_out=r·R` + Bulletproof range (§4.1) — off-AIR ⇒ ATTESTED, or in-AIR ⇒ PROVED. Ring/market: `settleRing_conserves` / `clearing_conserves_per_asset`. | segment `first_old8→last_new8` anchored to descriptor roots; `connect` in `segment_combine_expose` |
+| **Conservation** `recKExec_conserves` (`RecordKernel.lean:584`) / per-asset `maExec_conserves_per_asset` (`:699`) | Expose a per-asset Σδ the leaf proves. Native effects: the balance/umem AIR. Shielded: the in-AIR field gate `Σ value_in = Σ value_out` + in-AIR range in the ring-clearing AIRs (§4.1) — PROVED over the BabyBear no-wrap window; 64-bit multi-limb widening named. Ring/market: `settleRing_conserves` / the ledger-realization weld (§4.3). | segment `first_old8→last_new8` anchored to descriptor roots; `connect` in `segment_combine_expose` |
 | **No-forgery** (hash-pinned advances) | Re-prove the **real** statement, not a binding-only shadow (the `bridge_action_air` refusal, `note_spend_leaf_adapter.rs:19-28`). Teeth read from FRI-bound PIs, never free scalars. | `prove_backing_leaf` folds under the recursive verifier; `connect` = equality |
 | **Attenuation-only** `recKExec_authorized` (`:601`) + `attenuate_narrows` (`Caveat.lean:162`) | Authority claims bind the committed authority witness (sovereign KEY_COMMIT, membership auth-root) through the cap_root gate; a claim cannot amplify. | `carrier_claim_pins_admitted` (fail-closed) + the in-AIR non-amp order gates (`effect.rs:106-108`) |
 | **Nullifier no-double-spend** `nullifierFreshUMem` (`effect_vm_descriptors.rs:866`) | Expose the nullifier as a claim lane connected to the deployed `NOTESPEND_NULLIFIER` PI + `nullifier_root`; the runtime grow-gate rejects reuse. | claim lane 0 `connect` (`note_spend_leaf_adapter.rs:70-71,652`); nullifier-set gate |
@@ -501,14 +503,15 @@ covered. What each plugin owes, per invariant:
    degrades to a fabricated fold.
 4. **Grade cannot launder.** An ATTESTED leg (off-AIR authenticity) makes the turn ATTESTED — it
    cannot be re-badged PROVED, because the in-circuit fold only witnesses the *commitment*, and the
-   composition rule (§3.4) grades at the weakest leg. This is why the shielded pool's Pedersen
-   conservation and DECO's ed25519 are honestly ATTESTED, not laundered as PROVED.
+   composition rule (§3.4) grades at the weakest leg. This is why DECO's ed25519 and the TEE
+   attestation lane are honestly ATTESTED, not laundered as PROVED.
 
 **The residual honesty:** the invariant-safety is a *circuit* guarantee until each plugin
 discharges its **Lean refinement obligation** (§3.6) — the `S_claim_refines` theorem that ties the
-committed claim to the `recKExec` law. Discharged for the ring (`Fairness.lean:130`); named-open for
-the market tower (`Clearing.lean:42-44`), the shielded conservation weld (`DREGGFI-VISION.md §7`),
-and the light-client walk/keccak (`VERIFIED-LIGHTCLIENT-FOLD-PILOT.md` P1/P2). `#assert_axioms`
+committed claim to the `recKExec` law. Discharged for the ring (`Fairness.lean:130`), the market
+tower (`Market/LedgerRealization{,Ext}.lean`), and the shielded pool
+(`Dregg2/Shielded/ClaimRefinement.lean`); named-open for the light-client walk/keccak
+(`VERIFIED-LIGHTCLIENT-FOLD-PILOT.md` P1/P2). `#assert_axioms`
 clean is necessary, not sufficient: audit that the refinement's only hypotheses are
 `hbound`/`hstep` and that its conclusion is a real law.
 
@@ -516,23 +519,24 @@ clean is necessary, not sufficient: audit that the refinement's only hypotheses 
 
 ## 6. Summary — the verdict table and the first build
 
-| Side-structure | Mode | Grade (achievable) | Honest gap |
+| Side-structure | Mode | Grade | Named residuals |
 |---|---|---|---|
-| **Shielded pool** | verified-leaf (marquee) | PROVED (membership+nullifier) / ATTESTED (conservation) | `prove_shielded_spend_leaf_with_claim` + bind node (build); `Effect::ShieldedTransfer` descriptor rung (VK regen); value-commitment-in-AIR (open crypto) |
+| **Shielded pool** | verified-leaf (BUILT: adapter + binding node + fused ring AIRs) | PROVED (membership+nullifier+in-AIR ring conservation) | `Effect::ShieldedTransfer` descriptor rung (VK regen); 64-bit multi-limb in-AIR range |
 | **Attested-data** | verified-leaf | ATTESTED (structural) | `zkoracle`-pattern commitment leaf; `zkoracle_leaf_commit ≠ content_commitment` weld |
 | **DrEX ring** | native (keep) | PROVED (conservation+IR) | FFI-gate-conditional; `finalize_verified` beside `finalize` |
-| **DrEX Market clearing** | beside → native | PROVED (IR) / open (uniform-price) | ledger-realization refinement; optimality/envy-free unproven |
+| **DrEX Market clearing** | native via ledger-realization (proven) | PROVED (IR + uniform-price optimality/envy-free) | pool `∀`-schedule `ℚ → ℤ` lift; spec-level fusion ↔ in-AIR amount tie |
 | **Intent solver** | external producer | (output PROVED via ring) | solver-STARK-of-validity (target, not built) |
 | **Cross-chain holdings** | leaf-folded (commitment) | ATTESTED-class (consensus off-fold) | MPT walk + keccak in-AIR (P1/P2); finality stays rung-2 |
 
-**The single most important integration to do first: the shielded pool** — it is the marquee
-BESIDE seam, its STARK half is a copy-with-different-widths of the already-tested
-`note_spend_leaf_adapter` (a `prove_shielded_spend_leaf_with_claim` over the 3-felt claim
-`[nullifier, merkle_root, value_binding]` + a nullifier/root binding node), and closing it unlocks
-the DrEX "ring over shielded notes" weld (§4.1) — two conforming side-structures folded in one
-turn. It is buildable now with no new cryptography for the PROVED-membership+nullifier half; the
-conservation half is honestly ATTESTED (off-AIR Pedersen) until the value-commitment-in-AIR weld,
-which is the one genuinely-open crypto seam and should be named, not hidden.
+**The marquee integration exists.** The shielded pool — the census's headline seam — is
+leaf-adapted: `prove_shielded_spend_leaf_with_claim` over the 3-felt claim
+`[nullifier, merkle_root, value_binding]`, its lane-connecting binding node, the fused
+ring-clearing AIRs that fold those leaves, and the Lean `shielded_spend_claim_refines`
+obligation (§4.1) — realizing the DrEX "ring over shielded notes" weld: two conforming
+side-structures folded in one turn. The open build fronts are now the attested-data commitment
+leaf (§4.2, including the `zkoracle_leaf_commit ≠ content_commitment` weld), the
+`Effect::ShieldedTransfer` descriptor rung (VK-affecting, rides the big-bang regen), and the
+light-client walk/keccak fold (§4.5).
 
 ---
 

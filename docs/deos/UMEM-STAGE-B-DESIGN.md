@@ -25,7 +25,7 @@ checkpoint effect-output that emits the final root, (c) the resume input that
 binds it as the init root via a public input, and (d) the soundness obligations
 those two seams incur. The keystone's two edges
 (`boundary_root_from_memcheck` / `boundary_init_root_bound`,
-`metatheory/Dregg2/Crypto/UniversalMemory.lean:429,475`) ARE checkpoint and
+`metatheory/Dregg2/Crypto/UniversalMemory.lean:460,506`) ARE checkpoint and
 resume; Stage B is the *wiring of a root to a public input*, not a new soundness
 argument — **with one honestly-named exception** (the whole-image
 no-extra-cells fold, §3.4 / §6, which is a proved Lean theorem awaiting its
@@ -44,17 +44,19 @@ in-circuit AIR).
 pub struct UmemRef {
     /// The domain(s) this ref commits. A single-domain ref (the common case:
     /// one cell's `Heap`) carries one; a multi-domain slice carries several,
-    /// each with its OWN per-domain root (composition is Stage D, §5 of
-    /// UMEM-PRIMITIVE — Stage B fixes the single-domain shape and forbids the
-    /// multi-domain form rather than half-supporting it).
-    pub domains: Vec<UDomain>,            // turn/src/umem.rs:93
+    /// each with its OWN per-domain root. In-memory composition is BUILT at
+    /// HEAD (Stage D: `UVal::UmemRef`, turn/src/umem.rs:344; recursive open
+    /// `open_through_umem_ref`, :969) — Stage B still fixes the TURN-LEVEL ref
+    /// to the single-domain shape and forbids the multi-domain form rather
+    /// than half-supporting it.
+    pub domains: Vec<UDomain>,            // turn/src/umem.rs:101
 
     /// The declared boundary addresses (the Lean `as` list), SORTED and unique.
     /// These are the `(domain, key)` cells the root commits; resume opens keys
     /// from exactly this set. Sorting is load-bearing: the boundary view is the
-    /// canonical sorted leaf list `boundaryCells` folds (UniversalMemory.lean:320,
+    /// canonical sorted leaf list `boundaryCells` folds (UniversalMemory.lean:351,
     /// `boundary_root_derived` requires `as.Pairwise (· < ·)`).
-    pub declared_addresses: Vec<UKey>,    // turn/src/umem.rs:118
+    pub declared_addresses: Vec<UKey>,    // turn/src/umem.rs:137
 
     /// The sorted-Poseidon2 boundary root over the present declared cells. This
     /// IS the umem-ref's identity — its content address. Carried at the FAITHFUL
@@ -76,28 +78,35 @@ pub struct UmemRef {
 
 * It is **not** a snapshot of the whole world. It is a slice — a domain/address
   subset — exactly as the per-cell heap (Stage A) is a `Heap{cell, ..}` filter
-  of the global projection (`turn/src/umem.rs:357`).
+  of the global projection (`project_cell`, `turn/src/umem.rs:377`).
 * The `root` does **not** carry the preimage. It binds it (injectively, under
   the CR floor — `Heap.root_injective`), but the bytes live behind
   `availability`. This is the Xanadu `Pin::At` shape, made a value.
-* It is **not yet** a `UVal`. A `UVal::UmemRef` (a umem cell whose value is
-  another umem's root) is **composition, Stage D** (`UMEM-PRIMITIVE.md` §5).
-  Stage B keeps `UmemRef` a turn-level value (effect output / receipt field /
-  carrier payload), not an in-memory cell value.
+* It is **not** the in-memory cell value. `UVal::UmemRef` (a umem cell whose
+  value is another umem's root) EXISTS at HEAD — composition, Stage D, is
+  built (`turn/src/umem.rs:344`; the recursive open `open_through_umem_ref`,
+  `:969`; tests in `turn/tests/umem_stage_d.rs`). Stage B's object is the
+  distinct TURN-LEVEL value (effect output / receipt field / carrier payload),
+  which does not exist yet.
 
 ### 1.3 Root width — a load-bearing floor, not a free choice
 
-The deployed per-cell `heap_root` is `[u8; 32]` (`cell/src/state.rs:210`), and
+The deployed per-cell `heap_root` is a `Faithful8` (8 BabyBear felts, serialized
+as its canonical 32 wide bytes — `cell/src/state.rs:294`), and
 the cross-cell-read leg opens against a single committed-root public input
 (`circuit/tests/effect_vm_umem_real_turn.rs:494`, `PiBinding` to PI 0). But the
 effect-VM's state commitments (`OLD_COMMIT[4]`, `NEW_COMMIT[4]`,
 `circuit/src/effect_vm/mod.rs:104`) are **4 felts**, and the chip carrier was
 widened to the **faithful 8-felt commitment** (`CHIP_WIDE_ARITY = 11`,
-`descriptor_ir2.rs:230`; `WIDE_K = 3`, the wide Merkle–Damgård step). Per
-`docs/FAITHFUL-STATE-COMMITMENT.md` and the don't-launder-a-load-bearing-
-insecurity scar: the umem-ref root **must** be carried at the system's own
-soundness floor (8 felts, matching FRI ~130-bit), **not** the reserved 4 and
-**never** a 31-bit single felt. The `[u8; 32]` external form is fine; the
+`descriptor_ir2.rs:311`; `WIDE_K = 3`, the wide Merkle–Damgård step). Per
+`docs/FAITHFUL-COMMITMENT-LAW.md` (the historical widening analysis is archived
+at `.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md`) and the
+don't-launder-a-load-bearing-insecurity scar: the umem-ref root **must** be
+carried at the system's own soundness floor (8 felts, matching the ~112.6-bit
+**proven** per-fold FRI/STARK soundness floor,
+`wrap_perFold_soundness_capacity` — the ~130-bit figure is the refuted FRI
+capacity conjecture, kept in the record only as a drift baseline), **not** the
+reserved 4 and **never** a 31-bit single felt. The `[u8; 32]` external form is fine; the
 in-circuit public-input carrier is the 8-felt faithful commitment. This is an
 explicit decision point for the owner, flagged so it is not defaulted-into.
 
@@ -109,8 +118,8 @@ explicit decision point for the owner, flagged so it is not defaulted-into.
 
 Checkpoint emits the boundary root of a declared slice **at end of turn**. The
 crucial design realization: **the final boundary edge is already pinned
-in-circuit.** `boundary_root_from_memcheck` (`UniversalMemory.lean:429`) +
-`memcheck_pins_final` (line 281) force the prover's claimed final column to the
+in-circuit.** `boundary_root_from_memcheck` (`UniversalMemory.lean:460`) +
+`memcheck_pins_final` (line 312) force the prover's claimed final column to the
 genuine fold, so the derived final root is trustworthy, not prover-chosen.
 Checkpoint therefore does **not** need a new circuit; it **exposes** a value the
 circuit already commits.
@@ -133,14 +142,14 @@ pub enum TurnOutput {
 The one obligation checkpoint adds is **binding the emitted root to the genuine
 final boundary** so an executor cannot emit a checkpoint of a *different* state
 than the turn actually reached. This is the exact pattern `RefreshDelegation`
-already uses (`turn/src/action.rs:1077`): "the executor DERIVES the genuine
+already uses (`turn/src/action.rs:1195-1196`): "the executor DERIVES the genuine
 value at apply time and refuses a mismatching declaration (the forge antibody);
 both bind into `effects_hash`." For checkpoint:
 
 * The executor derives the final boundary root from the post-state projection
   (the Rust shadow of `boundary_root_derived` — `compute_heap_root` over the
-  declared slice, `cell/src/state.rs:403`, exactly the fold in
-  `open_heap_against_committed`, `turn/src/umem.rs:501`) and **refuses** any
+  declared slice, `cell/src/state.rs:519`, exactly the fold in
+  `open_heap_against_committed`, `turn/src/umem.rs:795`) and **refuses** any
   declared `umem_ref.root` that mismatches.
 * The `umem_ref.root` binds into `effects_hash` (and thence `receipt_hash`), so
   a light client knows WHICH slice was checkpointed and to WHAT root. This is a
@@ -148,7 +157,7 @@ both bind into `effects_hash`." For checkpoint:
 
 ### 2.3 Linearity class
 
-Checkpoint is **`LinearityClass::Neutral`** (`turn/src/action.rs:913`): no
+Checkpoint is **`LinearityClass::Neutral`** (`turn/src/action.rs:940`): no
 resource delta — it is pure book-keeping over an already-committed boundary. It
 requires no paired sibling and no conservation rung. (This is the honest reason
 checkpoint is cheap: it reads the final edge, it does not move value.)
@@ -165,7 +174,7 @@ changes the PI vector → changes the VK (VK-affecting; see §4).
 If the declared slice is exactly a single cell's `Heap` domain (the Stage A
 shape), the final boundary root is `NEW_COMMIT`-adjacent (the cell's committed
 `heap_root` is already folded into the canonical commitment v6→v7,
-`cell/src/state.rs:210`), so checkpoint can in principle pin against an
+`cell/src/state.rs:294`), so checkpoint can in principle pin against an
 already-present commitment rather than a fresh PI — an even cheaper sub-case the
 owner may prefer. (Decision point.)
 
@@ -179,12 +188,12 @@ Resume binds `umem_ref.root` as the **init** image of a later turn and opens the
 declared addresses against it. The deployed machinery for this **already
 exists**: it is the witnessed cross-cell read, `satisfied2U_init_root`
 (`descriptor_ir2.rs:96-104`; Lean `boundary_init_root_derived` /
-`boundary_init_root_bound`, `UniversalMemory.lean:463,475`; the working leg in
+`boundary_init_root_bound`, `UniversalMemory.lean:494,506`; the working leg in
 `circuit/tests/effect_vm_umem_real_turn.rs:425-601`). That leg:
 
 1. pins a committed root to a public input (`PiBinding`, test line 494), and
 2. opens each declared address against it with a `MapOp::Read`
-   (`MapKind::Read`, `descriptor_ir2.rs:405`; test line 500),
+   (`MapKind::Read`, `descriptor_ir2.rs:503`; test line 500),
 
 so a forged root has no satisfying membership path (anti-forge tooth) and a
 forged value opens to the genuine leaf and refuses (mismatch tooth).
@@ -232,7 +241,7 @@ declare*. For full continuation soundness ("the resumed init image is EXACTLY
 the producer's checkpoint, no hidden cells"), you need the **whole-image** pin.
 Its soundness is a **proved, `#assert_axioms`-clean Lean theorem**:
 `boundary_whole_image_sem` / `boundary_image_eq_of_root`
-(`UniversalMemory.lean:521,508`; IR lift `satisfied2U_init_whole_image`,
+(`UniversalMemory.lean:560,546`; IR lift `satisfied2U_init_whole_image`,
 `descriptor_ir2.rs:106-114`) — pin the committed root to the sorted-Poseidon2
 fold of the ENTIRE declared boundary image and, under the CR floor, the committed
 heap agrees with the declared image at every address, absence off-list included.
@@ -269,10 +278,10 @@ design decision (it mirrors transclusion's `Pin::At` vs `Pin::Live`,
   be resumed **exactly once** — resuming twice would fork a linear state. This is
   the partial-turn/promises insight already in the record: **a promise-hole IS a
   nullifier; resolution = a spend** (`project-partial-turn-promises.md`;
-  `Effect::React` "to React is to SPEND the hole", `turn/src/action.rs:1317`).
+  `Effect::React` "to React is to SPEND the hole", `turn/src/action.rs:1431`).
   The circuit **already enforces** nullifier freshness as a memory property
-  (`nullifier_fresh_sound`, `UniversalMemory.lean:611`; `NULLIFIER_DOMAIN = 3`,
-  `descriptor_ir2.rs:205`). So one-shot resume is realized by **deriving a
+  (`nullifier_fresh_sound`, `UniversalMemory.lean:752`; `NULLIFIER_DOMAIN = 3`,
+  `descriptor_ir2.rs:283`). So one-shot resume is realized by **deriving a
   nullifier from the `UmemRef` and spending it on resume** — no new mechanism,
   the `Nullifiers` domain. A second resume reads a non-fresh nullifier and
   refuses.
@@ -373,7 +382,7 @@ applied at the checkpoint/resume seam. Named precisely:
 1. **Final boundary is genuine (checkpoint).** The emitted `umem_ref.root` equals
    the genuine post-state boundary fold.
    - In-circuit: `boundary_root_from_memcheck` + `memcheck_pins_final`
-     (`UniversalMemory.lean:429,281`) — DEPLOYED on the final edge.
+     (`UniversalMemory.lean:460,312`) — DEPLOYED on the final edge.
    - Executor: the derive-and-refuse antibody (§2.2), the `RefreshDelegation`
      pattern. **New obligation:** the antibody must be wired and the root bound
      into `effects_hash`.
@@ -381,14 +390,14 @@ applied at the checkpoint/resume seam. Named precisely:
 2. **Init boundary is bound (resume, subset).** The supplied init preimage is the
    genuine slice under `umem_ref.root`; a forged root/value refuses.
    - `boundary_init_root_derived` + `boundary_init_root_bound`
-     (`UniversalMemory.lean:463,475`) → IR `satisfied2U_init_root` — DEPLOYED
+     (`UniversalMemory.lean:494,506`) → IR `satisfied2U_init_root` — DEPLOYED
      (the cross-cell read). **No new obligation** beyond sourcing the root from
      a `UmemRef` PI.
 
 3. **No extra cells (resume, whole-image).** The committed slice holds nothing
    off the declared list.
    - `boundary_whole_image_sem` / `boundary_image_eq_of_root`
-     (`UniversalMemory.lean:521,508`) → IR `satisfied2U_init_whole_image` — Lean
+     (`UniversalMemory.lean:560,546`) → IR `satisfied2U_init_whole_image` — Lean
      PROVED. **Open obligation:** the in-circuit whole-boundary root-fold AIR
      that discharges `hpin` (B4; rides the rotation).
 
@@ -401,7 +410,7 @@ applied at the checkpoint/resume seam. Named precisely:
 
 5. **One-shot linearity (resume, linear variant).** A continuation ref resumes at
    most once.
-   - `nullifier_fresh_sound` (`UniversalMemory.lean:611`), the `Nullifiers`
+   - `nullifier_fresh_sound` (`UniversalMemory.lean:752`), the `Nullifiers`
      domain — DEPLOYED. **New obligation (B3):** derive the ref's nullifier and
      spend it on resume.
 
@@ -435,20 +444,24 @@ B4 whole-boundary fold chip.
    a fetch path and a broken-promise analog (the `BrokenReason` vocabulary,
    `turn/src/pending.rs:84`, is the natural home in Stage C).
 6. **Multi-domain refs:** Stage B fixes the single-domain shape and forbids
-   multi-domain (§1.1). Confirm composition (`UVal::UmemRef`, recursive open)
-   stays Stage D.
+   multi-domain (§1.1). In-memory composition is already built (Stage D:
+   `UVal::UmemRef` + `open_through_umem_ref`); confirm the TURN-LEVEL ref stays
+   single-domain rather than inheriting the recursive form.
 7. **VK cut batching:** confirm all Stage-B PI additions land in ONE VK cut
    (§4.2).
 
 ---
 
-*Honest scope.* What EXISTS at HEAD: the single global umem and its five domains
-(`turn/src/umem.rs`), the Blum trace + agreement check + no-chip-table row
+*Honest scope.* What EXISTS at HEAD: the single global umem and its six domains
+(`UDomain::Working = 5` is the transient scratch domain — `turn/src/umem.rs:101-123`),
+the Blum trace + agreement check + no-chip-table row
 (`descriptor_ir2.rs`), the final-boundary derivation and the init-binding
 keystone (`boundary_root_from_memcheck` / `boundary_init_root_bound`,
 `UniversalMemory.lean`), the per-cell heap projection + cross-cell read
-(Stage A, `open_heap_against_committed`), and the deployed per-cell init-binding
-leg (`satisfied2U_init_root`, the cross-cell-read circuit test). What Stage B
+(Stage A, `open_heap_against_committed`), the deployed per-cell init-binding
+leg (`satisfied2U_init_root`, the cross-cell-read circuit test), and the Stage D
+composition value (`UVal::UmemRef` + the recursive `open_through_umem_ref`,
+`turn/tests/umem_stage_d.rs`). What Stage B
 ADDS: the `UmemRef` value, the checkpoint output on the already-pinned final
 edge, the subset resume sourcing its root from a passed ref, and — as the one
 genuinely-new circuit artifact — the whole-boundary fold chip for exact-

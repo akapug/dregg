@@ -1,6 +1,32 @@
 # `dregg-dice`: verifiable randomness for `attested-dm`
 
-Status: design for the Phase 2 implementation slice
+Status: design record. The crate is implemented at `dice/` (package `dregg-dice`) and
+**diverges from this document on named protocol choices** — where they differ, the crate
+is the wire-format authority. The divergences:
+
+- **Sources.** The crate ships the full production endpoint, not a mock-first slice:
+  the real post-quantum LB-VRF `ServerVrf` (`pqvrf`, Esgin et al. Set I), a
+  genesis-committed VRF `KeyChain`, a real threshold `DrandBeacon` (BLS pairing check)
+  plus the offline `HashChainBeacon`, and `Hybrid` with timeout finalization
+  (`dice/src/lib.rs`). The design's `Deterministic` and `CommitReveal` sources also
+  exist, honestly labeled.
+- **Bounded mapping.** The crate uses a fixed-width, reject-free wide
+  multiply-and-shift (`dice/src/draw.rs` `draw_bounded`) — deliberately **never**
+  data-dependent rejection sampling, the opposite of this document's original
+  normative algorithm. Rationale under "Unbiased bounded mapping" below.
+- **Event identity.** The shipped `EventId::derive` binds
+  `(game_binding, seq, pre_state_root, action_hash, event_kind, draw_count)`
+  (`dice/src/event.rs:35`) — not this document's
+  `(game_id, parent_receipt_hash, action_commitment, event_ordinal)`.
+- **API shapes.** The shipped source/evidence types are
+  `Deterministic / CommitReveal / MockBeacon / ServerVrf / Hybrid` with their own
+  shapes; the Rust signatures in this document are the design's proposal, kept as a
+  record of the reasoning, not a description of the crate's surface.
+
+The protocol *obligations* this document derives — commit-before-result two-stage
+binding, fixed `draw_count`, indexed random-access draws, domain separation, unbiased
+bounded mapping, honest per-source trust labels — are what the crate satisfies, by its
+own encodings.
 
 ## Purpose and security boundary
 
@@ -16,27 +42,24 @@ The crate does not decide game rules, receipt validity, or ledger ordering. The
 receipt chain. Given the same request and valid evidence, every implementation and
 light client must derive exactly the same seed and draw sequence.
 
-The recommended production source is a server-VRF/delayed-public-beacon hybrid.
-The first implementation slice deliberately uses a deterministic mock or
-commit-reveal source so the protocol, receipt integration, and replay verifier can
-be built and tested without a VRF service or beacon network. That first slice is
-reproducible, but commit-reveal by itself is not fully non-grindable: a party that
-sees an unfavorable outcome can selectively abort.
+The recommended production source is a server-VRF/delayed-public-beacon hybrid,
+and the crate implements it: `Hybrid` combines the genesis-committed LB-VRF
+key-chain with a verified schedule-bound beacon and timeout finalization. The
+deterministic and commit-reveal sources also exist for tests and offline play;
+commit-reveal by itself is not fully non-grindable — a party that sees an
+unfavorable outcome can selectively abort, and the crate's docs label it exactly
+so.
 
 ## Cryptographic suite and canonical encoding
 
-All hashes and XOF operations are suite-versioned. The initial suite is:
-
-```rust
-pub enum RandomnessSuite {
-    V1Blake3 = 1,
-}
-```
-
-V1 uses BLAKE3 keyed derivation and BLAKE3 XOF output. Domain strings below are
-literal ASCII bytes, including the version suffix. Protocol objects must have a
-single canonical byte encoding; the recommended first implementation is explicit
-fixed-width field encoding rather than general-purpose serialization:
+All hashes and XOF operations are versioned. This design proposed an explicit
+`RandomnessSuite` enum; the shipped crate versions through its domain-separation
+strings instead — every hashed object absorbs a literal versioned tag such as
+`dregg-dice/event-id/v1` (`dice/src/event.rs:16`), with length-prefixed absorption
+of variable-length fields. V1 uses BLAKE3 derivation and BLAKE3 XOF output.
+Protocol objects must have a single canonical byte encoding; the design's
+recommendation is explicit fixed-width field encoding rather than general-purpose
+serialization:
 
 - integers: unsigned little-endian, with their width fixed by the field type;
 - byte arrays: raw bytes;
@@ -49,10 +72,11 @@ Never derive protocol hashes from Rust's `Hash`, debug output, JSON, platform-si
 integers, or an encoding with more than one representation. Unknown suite versions
 must fail closed.
 
-## Public API
+## Public API (design proposal — the crate's surface differs)
 
-The signatures below define the intended public surface. Exact error variants may
-grow, but their failure distinctions must not change verification semantics.
+The signatures below are the surface this design proposed. The shipped crate
+diverged (see the divergence ledger at the top); read `dice/src/{lib,event,draw}.rs`
+for the real surface. The section stands as the record of what each type is *for*.
 
 ```rust
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -224,6 +248,13 @@ parent receipt hash prevents the same action bytes in different ledger positions
 from sharing an event. `action_commitment` binds all game inputs that can affect
 how draws are interpreted. The source must neither choose nor rewrite `EventId`.
 
+The shipped derivation satisfies the same obligations with different bindings:
+`EventId::derive(game_binding, seq, pre_state_root, action_hash, event_kind,
+draw_count)` (`dice/src/event.rs:35`) — `seq` + `pre_state_root` play the
+ledger-position role, `event_kind` is a purpose tag that domain-separates
+subsystems (`"combat/hit"`, `"loot"`, …), and `draw_count` is bound directly into
+the event id so it cannot be varied after the fact.
+
 Seed derivation is source-independent after the source has verified its evidence:
 
 ```text
@@ -362,69 +393,55 @@ XOF input = "dregg-dice/draw/v1" ||
 #### Unbiased bounded mapping
 
 Using `x % upper_bound` is forbidden because it is biased unless the bound divides
-`2^64`. V1 uses deterministic rejection sampling over consecutive 64-bit words
-from the single per-index XOF:
+`2^64`. The shipped mapping (`dice/src/draw.rs`, `draw_bounded`) is a fixed-width,
+**reject-free** wide multiply-and-shift — the fixed-width variant of Lemire's
+method without the rejection step:
 
-```rust
-fn unbiased_u64(mut next_u64: impl FnMut() -> u64, bound: u64) -> u64 {
-    assert!(bound != 0);
-    let zone = u64::MAX - (u64::MAX % bound);
-    loop {
-        let x = next_u64();
-        if x < zone {
-            return x % bound;
-        }
-    }
-}
+```text
+draw_bounded(index, n) = ((raw(index) as u128 * n as u128) >> 64) as u64
 ```
 
-Implementations may instead use an equivalent, specified multiply-high/Lemire
-mapping, but V1 must choose exactly one byte-for-byte algorithm and test it with
-vectors. The simple algorithm above is normative for the first slice.
+A uniform 64-bit word is scaled into `0..n` by taking the high word of the 128-bit
+product. The residual bias is at most `n / 2^64` — negligible for game-scale
+bounds (< 2⁻⁵⁹ for a d20).
 
-This rejection sampling is not a grinding opportunity. The seed, event ID, index,
-bound, and XOF byte sequence are already fixed, and rejection merely consumes the
-next word from that same indexed stream. No participant chooses a replacement
-seed, retries an event, or varies an index. The implementation must not expose an
-API that lets a caller provide a retry nonce or choose among accepted candidates.
+This design originally specified deterministic rejection sampling over consecutive
+XOF words as the normative algorithm; the crate rejects that choice, deliberately.
+Rejection sampling makes the number of raw words consumed *depend on the values
+seen*, so the transcript length is not a public constant — and a public, fixed
+draw count is exactly what lets `draw_count` be bound inside the `EventId` up
+front. The fixed-width mapping consumes exactly one raw draw per index regardless
+of the value drawn, keeping the transcript shape committed before any result
+exists. The implementation must not expose an API that lets a caller provide a
+retry nonce or choose among candidates.
 
-The threshold formula intentionally accepts `[0, zone)` where `zone` is the largest
-multiple of `bound` representable below or equal to `u64::MAX`; for `bound == 1`,
-all accepted results are zero. XOF words are interpreted little-endian. A maximum
-internal word count (for example 128) may defensively return `Exhausted`; it is a
-deterministic consensus rule and must be shared by producers and verifiers.
+## What the crate contains
 
-## Minimal first slice
+The crate (`dice/`) carries the full source set, not a mock-first subset:
 
-The first slice should fit in roughly one focused implementation day and require no
-external service. It contains:
-
-- canonical V1 encoding for `EventId`, `RandomnessRequest`,
-  `RequestCommitment`, and first-slice evidence;
 - BLAKE3 domain-separated event ID, request commitment, and seed derivation;
-- the random-access `DrawStream` and normative unbiased bounded mapping;
-- `RandomnessRequest`, `RandomnessEvidence`, `Draw`, and error types;
-- `DeterministicMock` for stable test vectors;
-- a single-party `CommitReveal` source; and
-- receipt-facing helpers to reproduce and compare an ordered draw record.
+- the random-access `DrawStream` with the reject-free bounded mapping;
+- serde-serializable `RandomnessRequest` / `RandomnessEvidence` and error types;
+- `Deterministic` for stable test vectors and reproducible offline play;
+- a `CommitReveal` source, labeled selectively-abortable;
+- the real post-quantum LB-VRF `ServerVrf` (`pqvrf`, one-time Set I keys) with a
+  genesis-committed `KeyChain` of per-event key epochs;
+- beacons: the production threshold `DrandBeacon` (real drand-BLS, verified by a
+  pairing check) and the offline/test `HashChainBeacon`, plus the unverified
+  `MockBeacon` wiring stand-in; and
+- `Hybrid` — key-chain VRF + schedule-bound beacon + timeout finalization, the
+  recommended production endpoint.
 
-The first slice explicitly does not implement a VRF algorithm, beacon networking,
-beacon proof verification, wall-clock timeout policy, or the production Hybrid.
-Their request/evidence variants and trait boundary are reserved now so adding them
-does not change the draw protocol.
+### Deterministic source
 
-### Deterministic mock
-
-The mock is for tests, fixtures, and local demos only. Its seed material is supplied
-at construction and its evidence carries that material so replay is self-contained.
-It must be impossible to enable accidentally in a production build; gate it behind
-`cfg(any(test, feature = "insecure-mock"))`, and name the feature accordingly.
-
-```rust
-impl DeterministicMock {
-    pub fn new(root: [u8; 32]) -> Self;
-}
-```
+The `Deterministic` source (`dice/src/source.rs:102`) is for tests, fixtures, and
+reproducible offline play only: whoever knows the context knows every draw. It is
+not feature-gated out of production builds; the guard is the honest trust label —
+configuration and receipts must surface which source produced a seed, and a
+deployment policy that accepts `Deterministic` evidence has chosen predictable
+randomness. (This design originally prescribed a
+`cfg(any(test, feature = "insecure-mock"))` gate; the shipped crate relies on the
+labeled-source discipline instead.)
 
 ### Commit-reveal
 
@@ -562,7 +579,7 @@ entries.
 
 The six required escape hatches divide as follows.
 
-| Escape hatch | Minimal first slice | VRF/beacon Hybrid |
+| Escape hatch | Deterministic / commit-reveal sources | VRF/beacon Hybrid (shipped) |
 |---|---|---|
 | Server key bound at genesis | Representable and policy-checkable, but unused by mock/commit-reveal | Required: `key_id` and public key must match genesis policy |
 | Beacon round from fixed schedule | Representable in `SourceBinding`, but no beacon verification | Required: derive/validate the round from accepted height/time schedule; server cannot choose it |
@@ -571,7 +588,7 @@ The six required escape hatches divide as follows.
 | Timeout finalization prevents withholding reroll | State machine can forbid a second request and model a fixed timeout, but commit-reveal fallback is not automatically fair | Required: scheduled timeout deterministically finalizes using protocol-fixed evidence/contribution; never grants a fresh event or server-chosen entropy |
 | `draw_count` fixed before seed; indexed XOF | Fully closed: request and ordered bounds are committed in Stage 1; indices are fixed and replayed | Same mechanism; source choice does not alter draws |
 
-Additional minimal-slice protections are real but narrower:
+Additional source-independent protections are real but narrower:
 
 - domain separation prevents cross-game, cross-event, request/seed/draw, and index
   reuse;
@@ -582,19 +599,24 @@ Additional minimal-slice protections are real but narrower:
 
 Trust levels must be surfaced in configuration and receipts:
 
-- `DeterministicMock`: **insecure/test-only**. Anyone knowing its root predicts all
-  outcomes and a producer can choose the root.
+- `Deterministic`: **insecure/test-only**. Anyone knowing the context predicts all
+  outcomes and a producer can choose the material.
 - `CommitReveal`: **reproducible but abortable**. A valid reveal proves the result,
   but a participant can selectively withhold it. A single committer may also grind
   commitments before publishing unless some earlier protocol fixes the reveal.
-- `ServerVrf`: **publicly verifiable but server-withholdable**. It prevents multiple
-  outputs for one input, but a server can refuse to publish an unfavorable output
-  unless timeout policy removes that leverage.
-- `Beacon`: **public-beacon trust**. Security depends on the selected beacon's
-  unpredictability, proof, schedule, and liveness.
-- `Hybrid`: **recommended production mode**. With the server key bound at genesis,
-  a scheduled beacon round, pre-deadline action binding, unique VRF output, and a
-  deterministic timeout, neither source alone can reroll by choosing fresh inputs.
+- `ServerVrf`: **publicly verifiable but server-withholdable**. The shipped VRF is
+  the post-quantum LB-VRF (`pqvrf`, one-time Set I keys, one epoch per event): a
+  forged output or proof is rejected, and output uniqueness reduces to Module-SIS.
+  But a server can refuse to publish an unfavorable output unless timeout policy
+  removes that leverage.
+- beacons: **public-beacon trust**. Security depends on the selected beacon's
+  unpredictability, proof, schedule, and liveness. The shipped production beacon is
+  the threshold `DrandBeacon` (drand-BLS, verified by a pairing check); the
+  `HashChainBeacon` is offline/test; the `MockBeacon` verifies nothing.
+- `Hybrid`: **recommended production mode**. With the VRF key-chain committed at
+  genesis, a scheduled beacon round, pre-deadline action binding, unique VRF
+  output, and a deterministic timeout, neither source alone can reroll by choosing
+  fresh inputs.
 
 The Hybrid does not magically repair arbitrary policy. If operators may change the
 genesis key, deadline, beacon network, round schedule, draw count, bounds, or
@@ -607,8 +629,9 @@ A verifier processes every random event using these checks in order:
 
 1. Decode canonically and reject unknown suites, duplicate fields, oversized
    evidence, invalid enum tags, and noncanonical encodings.
-2. Recompute event identity from game ID, predecessor receipt, accepted action,
-   and event ordinal.
+2. Recompute event identity from its full committed transition context (in the
+   shipped derivation: game binding, sequence, pre-state root, action hash, event
+   kind, and draw count).
 3. Validate `draw_count`, exact bounds length, nonzero bounds, and configured size
    limits before allocating.
 4. Recompute the request commitment and confirm the Stage 1 receipt-chain binding.
@@ -672,19 +695,17 @@ fails.
 The implementation must make biased shortcuts detectable, not merely claim
 uniformity:
 
-- Freeze hand-computed XOF-word fixtures where the first word lies in the rejected
-  tail and the second lies in the accepted zone. Assert V1 returns the second
-  word's residue. A `% bound` implementation will return the first and fail.
+- Freeze hand-computed word fixtures whose multiply-and-shift result differs from
+  the word's residue mod the bound. A `% bound` implementation returns the residue
+  and fails against the fixture.
 - Test difficult bounds (`1`, `2`, `3`, `6`, `2^32 - 1`, `2^32 + 1`,
   `2^63 + 1`, and `u64::MAX`) against a small independent reference mapper.
 - Property-test that every result is `< bound`, that `bound == 0` is rejected, and
-  that random access at index `i` equals sequential consumption at `i`.
-- For a reduced toy word size (for example exhaustive `u8` words), enumerate the
-  entire accepted zone for every bound `1..=255` and assert every outcome has
-  exactly the same number of preimages. This is a proof-oriented test of the
-  mapping logic that would fail for naive modulo over the full word space.
+  that random access at index `i` is stable regardless of access order.
+- Assert the mapping consumes exactly one raw word per index for every bound —
+  the reject-free property the transcript commitment depends on.
 - Add a lint or code-review gate forbidding direct `% upper_bound` in the public
-  draw path outside the specified post-threshold mapper.
+  draw path outside the specified mapper.
 
 Statistical frequency tests may supplement these tests but must not replace them;
 they are flaky and often fail to detect small modulo bias.
@@ -696,29 +717,30 @@ they are flaky and often fail to detect small modulo bias.
   its receipt hash was computed.
 - Verify a pending event cannot be replaced with a new event after a missing
   commit-reveal.
-- In the later Hybrid implementation, test acceptance immediately before and after
-  the beacon deadline, the exact scheduled round, wrong-network proofs, wrong-key
-  VRF proofs, VRF evidence replayed across requests, normal finalization, and the
+- For the Hybrid, test acceptance immediately before and after the beacon
+  deadline, the exact scheduled round, wrong-network proofs, wrong-key VRF proofs,
+  VRF evidence replayed across requests, normal finalization, and the
   deterministic timeout path.
 
 ## Implementation layout and feature policy
 
-A small crate can use this layout:
+The crate's layout:
 
 ```text
-dregg-dice/
+dice/                (package dregg-dice)
   Cargo.toml
   src/
-    lib.rs          public types and exports
-    encoding.rs     canonical V1 encoders/decoders
-    domain.rs       event, request, and seed derivation
-    draw.rs         indexed XOF and bounded mapping
-    source.rs       RandomnessSource trait
-    commit_reveal.rs
-    mock.rs         insecure-mock feature or tests only
-    vrf.rs          later, optional
-    beacon.rs       later, optional
-    hybrid.rs       later, optional
+    lib.rs           public types, exports, and the trust-level docs
+    event.rs         EventId derivation and domain separation
+    request.rs       RandomnessRequest / commitment
+    draw.rs          indexed XOF stream and the reject-free bounded mapping
+    source.rs        RandomnessSource trait + all sources (Deterministic,
+                     CommitReveal, MockBeacon, ServerVrf, Hybrid, beacons)
+    error.rs
+    util.rs
+  tests/
+    randomness.rs
+    weighted.rs
 ```
 
 Default features should be minimal. `alloc` is acceptable for evidence and receipt
@@ -727,19 +749,21 @@ objects; hashing, seed derivation, draw generation, and verification should avoi
 Secret material should use zeroization where applicable, avoid `Debug`, and never
 be included in error messages. Verification accepts public material only.
 
-## Acceptance criteria for the first slice
+## Acceptance criteria
 
-The slice is complete when:
+The obligations the implementation must satisfy (by its own encodings):
 
 1. the engine can commit a request for N bounded draws in an action-accepted
    `LedgerEntry` before producing evidence;
-2. mock and commit-reveal evidence produce a domain-separated seed only after
+2. every source's evidence produces a domain-separated seed only after
    verification;
 3. the engine records exactly N indexed draws in a finalized `LedgerEntry`;
-4. `verify_ledger_replay` reconstructs and compares the complete draw stream and
+4. replay verification reconstructs and compares the complete draw stream and
    resulting state transition from serialized ledger entries;
 5. the count/index/bound/value mutation tests fail verification;
-6. a fixture that distinguishes threshold rejection from naive modulo passes; and
-7. public documentation labels mock as insecure and commit-reveal as selectively
-   abortable, with Hybrid identified as the production target.
+6. a fixture that distinguishes the specified unbiased mapping from naive modulo
+   passes; and
+7. public documentation labels `Deterministic` as insecure and commit-reveal as
+   selectively abortable, with `Hybrid` as the production endpoint — which the
+   crate's module docs do.
 

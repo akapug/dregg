@@ -256,13 +256,15 @@ ring remains a separate (already no-viewer, already PQ-private) product. Do not 
    STARK}` — and the reveal-nothing property is the same **Component 3 "crux" theorem** the shielded
    roadmap already names as RESEARCH (`SHIELDED-DREX-ASSURANCE-ROADMAP.md`).
 
-**PQ posture the FHE must match.** Per `docs/deos/PQ-SHIELDED-COMMITMENT.md`, DrEX's *privacy* is
-already quantum-safe but its *value-binding* is classical discrete-log (Pedersen/Ristretto,
-Shor-broken). The FHE rung must land on **Option A of that note** — Poseidon2 hash-commitment +
-fully-in-AIR STARK conservation, retiring DLog — so that FHE (lattice/LWE, PQ) + STARK (Poseidon2 /
-FRI, PQ) + hash-commitment (PQ) gives an **end-to-end post-quantum** no-viewer clear with no
-classical crypto anywhere on the settlement path. FHE does not fix the DLog binding hole by itself;
-it must be paired with the PQ-commitment cutover.
+**PQ posture the FHE must match.** The **Option-A cutover of `docs/deos/PQ-SHIELDED-COMMITMENT.md`
+is landed** (its §5): the authoritative value-commitment is the Poseidon2 `hash_fact` value-binding
+(`HashCR`; `circuit-prove/src/shielded/spend_circuit.rs::value_binding`, re-computed in-AIR by both
+ring AIRs), conservation is the in-AIR field gate, and the Schnorr/Bulletproof DLog path is retired
+from the TCB. So FHE (lattice/LWE, PQ) + STARK (Poseidon2 / FRI, PQ) + hash-commitment (PQ) already
+compose post-quantum on the settlement path. The PQ residual the FHE rung must respect is the
+**Option-B aggregation-fold carrier** — the PQ-additive commitment for aggregating
+independently-produced commitments, a separate named frontier — plus the 64-bit in-AIR range
+widening. The residual is the aggregation fold, not the value-binding.
 
 ---
 
@@ -273,10 +275,10 @@ no-viewer claim is stated so it is **true at that rung**.
 
 | Rung | Mechanism / what dregg has | Who sees orders | Fair-by-proof? | PQ? | Difficulty · timeline |
 |---|---|---|---|---|---|
-| **1. Trusted/bonded solver** (current DrEX) | `solver.rs` ring matcher + `shielded_ring_clearing_air.rs` STARK; `trustless.rs` bonds/batch | Solver sees cleartext book (rung-1); shielded rung already deletes viewer *for the ring* | **Yes** — clearing is a machine-checked STARK (`shielded_ring_clears`) | Proof PQ (Poseidon2/FRI); **binding classical** (PQ hole) | Shippable **now** |
+| **1. Trusted/bonded solver** (current DrEX) | `solver.rs` ring matcher + `shielded_ring_clearing_air.rs` STARK; `trustless.rs` bonds/batch | Solver sees cleartext book (rung-1); shielded rung already deletes viewer *for the ring* | **Yes** — clearing is a machine-checked STARK (`shielded_ring_clears`) | Proof PQ (Poseidon2/FRI); value-binding PQ (Poseidon2 `HashCR`, Option-A cutover landed) | Shippable **now** |
 | **2. TEE-attested solver** | `tee-verify/` (Nitro + SEV-SNP), `attest_data`, `oracle_mark` | **One attested enclave** binary (`measurement`), offline-checkable | Yes (same STARK) + enclave identity | Attestation sigs ECDSA-P384 (classical); order privacy PQ if FHE-inside | **Low** · built; integration weeks–months |
 | **3. Threshold-decrypt / MPC clearing** | `trustless.rs` 7-layer (Shamir/GF(256) threshold-*decrypt* — BUILT); true MPC-*compute* (Renegade-style, no single viewer) — **NEEDED** | Threshold-decrypt: committee sees book after batch close. MPC-compute: no single party (secret-shared) | Yes (STARK on the solve) | Threshold-decrypt classical; can be PQ | **Medium** · decrypt built; MPC-compute ~1–2 yr |
-| **4. Additive fold + output-boundary MPC** (the surpass) | fold PoC + MPC-crossing PoC BUILT (`fhegg-fhe/`, `OUTPUT-BOUNDARY-MPC.md`); rides `Market/Optimality.lean` uniform-price (model-proved) + threshold partial-decrypt-into-shares + PQ-commitment cutover | **Nobody below `t`** — parties hold only additive shares; only `(p*,V*)` open; no standing master key; `≥ t` collusion reconstructs (honest ceiling) | Yes — Option A re-eval + STARK boundary check (comparator outside TCB) | **Fully PQ** (LWE-FHE + Poseidon2/FRI + hash-commit) | **Med-High** · PoC now; production partial-decrypt-into-shares + malicious-secure online 1–2 yr; succinct 2–4 yr |
+| **4. Additive fold + output-boundary MPC** (the surpass) | fold PoC + MPC-crossing PoC BUILT (`fhegg-fhe/`, `OUTPUT-BOUNDARY-MPC.md`); rides `Market/Optimality.lean` uniform-price (model-proved) + threshold partial-decrypt-into-shares + the landed Option-A PQ-commitment cutover | **Nobody below `t`** — parties hold only additive shares; only `(p*,V*)` open; no standing master key; `≥ t` collusion reconstructs (honest ceiling) | Yes — Option A re-eval + STARK boundary check (comparator outside TCB) | **Fully PQ** (LWE-FHE + Poseidon2/FRI + hash-commit) | **Med-High** · PoC now; production partial-decrypt-into-shares + malicious-secure online 1–2 yr; succinct 2–4 yr |
 
 **What each rung needs from here:**
 
@@ -289,7 +291,7 @@ no-viewer claim is stated so it is **true at that rung**.
   run the fold under the additive BFV carrier and the crossing in **output-boundary MPC** among the
   federation parties (`OUTPUT-BOUNDARY-MPC.md` — the fold + MPC-crossing PoC is built and measured:
   sub-10 ms fold, ~1–7 ms crossing, correctness == plaintext, reveal-only-`(p*,V*)` demonstrated),
-  ship Options A + C, land the PQ-commitment cutover. The remaining production work is the threshold
+  ship Options A + C (the Option-A PQ-commitment cutover is landed). The remaining production work is the threshold
   partial-decrypt-into-shares + the malicious-secure online phase; the assurance ladder is the
   multi-year part, but the no-viewer is now an *adversarial threshold bound*, not a policy.
 
@@ -325,8 +327,9 @@ reconstruct, and "nobody even if all collude" is impossible for clearing over hi
 (`OUTPUT-BOUNDARY-MPC.md §3`); what is removed vs. plain threshold-FHE is the *standing* key liability;
 a dishonest subset can also force a *wrong* price (an integrity fault the STARK/decryption-proof
 catches), so privacy (below `t`) and correctness are stated separately; (d) IND-CPA-D noise-flooding
-params are assumed; (e) the PQ claim requires the PQ-commitment cutover of `PQ-SHIELDED-COMMITMENT.md`
-— FHE alone does not close the DLog binding hole.
+params are assumed; (e) the value-binding side of the PQ claim is landed (`PQ-SHIELDED-COMMITMENT.md`
+Option A: Poseidon2 `HashCR` + in-AIR conservation, DLog retired from the TCB) — the remaining PQ
+residual is the Option-B aggregation-fold carrier, not the value-binding.
 
 ---
 
@@ -343,9 +346,10 @@ evaluation self-verifying, leaving only a small threshold-decryption proof for t
 The honest costs: (1) it requires **switching DrEX's clearing mechanism** from the built ring/TTC
 (graph-hard, not FHE-computable) to the uniform-price layer dregg has proved only at model level;
 (2) the **assurance ladder is multi-year** — a working non-verifiable FHE clear in ~6–12 months, a
-proof-carrying one in ~1–2 years, succinct-for-light-clients in ~2–4; (3) it only becomes *end-to-end
-PQ* once the `PQ-SHIELDED-COMMITMENT.md` DLog cutover lands. None of that is fatal, and all of it is
-scheduled sharpening on a chosen trajectory rather than a surprise.
+proof-carrying one in ~1–2 years, succinct-for-light-clients in ~2–4; (3) the value-binding PQ
+cutover is landed (`PQ-SHIELDED-COMMITMENT.md` Option A), so the *end-to-end PQ* residual is the
+Option-B aggregation-fold carrier plus the 64-bit range widening — both named. None of that is fatal,
+and all of it is scheduled sharpening on a chosen trajectory rather than a surprise.
 
 DrEX can surpass the no-viewer limitation via FHE — enabled specifically by the batch mechanism — and
 the honest way to say it is: **the batch structure is what turns "compute a clear under FHE" from

@@ -175,8 +175,12 @@
       own scratch folder — nothing else.</p>
     <div class="safety">
       <span>✨</span>
-      <span><b>No key needed.</b> The agent is powered by the host's own model
-        (<b>AWS Bedrock · Claude Haiku 4.5</b>) — you just give it a job.</span>
+      <span><b>No key needed — when this page is served by the keyless demo sidecar</b>
+        (<span class="mono">demo/keyless-grain-proxy.py</span>), whose server-side model
+        (<b>AWS Bedrock — Nova-Micro by default</b>) does the thinking. Served straight
+        from <span class="mono">agent-platform</span> there is no server-side model, and
+        the run says so — the <a href="/dev">developer console</a> drives the same
+        sandbox with your own key.</span>
     </div>
     <div class="taskrow">
       <textarea id="task" placeholder="e.g. Write me a haiku about grains, then read it back to me.">Write me a haiku about grains, then read it back to me.</textarea>
@@ -219,7 +223,9 @@
     ? location.origin.replace(/\/+$/, '') : 'http://127.0.0.1:8903';
   const CONTROL = 'control.localhost';
   const BUDGET = 100000;
-  const MODEL = 'AWS Bedrock · Claude Haiku 4.5';   // the host's server-side brain (keyless)
+  // The keyless server-side brain lives in the demo sidecar (demo/keyless-grain-proxy.py),
+  // which defaults to Bedrock Nova-Micro (BEDROCK_MODEL overrides it).
+  const MODEL = 'AWS Bedrock · Nova-Micro by default';
 
   // A fresh, private identity + sandbox for this session. The person never sees any
   // of this — renting is auto-provisioned behind the scenes on their first run.
@@ -347,8 +353,12 @@
       el('run').disabled = false; return;
     }
 
-    // The host's model drives the whole thing server-side and hands back the finished
-    // steps in one response — no key, no browser loop. Show a spinner while it works.
+    // The keyless brain drives the whole thing server-side and hands back the finished
+    // steps in one response — no key, no browser loop. The /keyless-drive route is
+    // provided by the demo sidecar (demo/keyless-grain-proxy.py), which proxies each
+    // proposed action to the real agent-platform /act gate; agent-platform itself has
+    // no such route, so served straight from the bin this POST fails and the error
+    // branch below explains that honestly.
     el('run-status').innerHTML =
       `<span class="spin">⏳</span> the agent is working… <em>(thinking with ${esc(MODEL)})</em>`;
 
@@ -364,7 +374,15 @@
       if (!res.ok) throw new Error(`${res.status} ${text.slice(0, 200)}`);
     } catch (e) {
       el('run-status').textContent = '';
-      addLine('err', '⚠️ The agent could not run.', esc(e.message));
+      if (/^40[45]\b/.test(String(e.message))) {
+        addLine('err', '⚠️ This host has no keyless brain.',
+          `The keyless run needs the demo sidecar (<span class="mono">demo/keyless-grain-proxy.py</span>) in
+           front of the sandbox server — <span class="mono">agent-platform</span> itself has no
+           <code>/keyless-drive</code> route or server-side model. The
+           <a href="/dev">developer console</a> drives the same sandbox with your own key.`);
+      } else {
+        addLine('err', '⚠️ The agent could not run.', esc(e.message));
+      }
       el('run').disabled = false; return;
     }
 

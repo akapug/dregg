@@ -2,8 +2,10 @@
 
 *Design note (2026-07-07). Turns Pillar 3's external-Conduit dependency into a dregg-native confined
 body: the homeserver the co-driven-card membrane rides is a hosted, cap-metered, R2-verifiable grain
-— "dregg is the host" all the way down. Companion: `GOAL-DISTRIBUTED-DEOS.md` (Pillar 3),
-`THE-GRAIN.md`, `LOG-A-HERMES-IN.md` (the confinement machinery).*
+— "dregg is the host" all the way down. Companion: `GOAL-DISTRIBUTED-DEOS.md` (repo root; Pillar 3),
+`LOG-A-HERMES-IN.md` (the confinement machinery). Status at HEAD: the embed
+(`deos-homeserver/`), the heavy-body firmament tier, and the confined spawn are BUILT — see
+"The sequence" below; the `agent-platform` lifecycle wrap is the open step.*
 
 ## Why
 
@@ -21,7 +23,7 @@ Two census facts collapsed the confinement cost:
   grain body as a Rust library (exactly as the confined brain is compiled into the PD body). The
   `execve` door DISSOLVES: no exec grant, tightest jail, and the body can weld dregg machinery
   (receipted message-accepts, metering) directly instead of wrapping a black-box process.
-- **`Confinement::with_fds` already exists** (`sandbox.rs:109`) — the parent pre-binds the
+- **`Confinement::with_fds` already exists** (`sandbox.rs:177`) — the parent pre-binds the
   `TcpListener` and hands the bound fd into the child's keep-list; the child `accept()`s an fd it
   was GIVEN and never holds bind authority (the Endpoint-fd pattern). The listen door DISSOLVES
   into existing machinery.
@@ -34,7 +36,10 @@ Two census facts collapsed the confinement cost:
 (canonical https://forgejo.ellis.link/continuwuation/continuwuity, mirror codeberg.org/continuwuity).
 The conduwuit lineage's community continuation: commit-fresh (last commit the day before the scout),
 multi-maintainer (real bus factor), release every week or two, matrix.org-listed **Stable**, spec
-v1.8–1.14 with a rewritten sync proven against matrix-r
+v1.8–1.14 with a rewritten sync proven against matrix-rust-sdk / Element X (full detail in
+"THE BODY — DECIDED" below).
+
+## The three-door plan (first draft — superseded by the revision above)
 
 **(a) The body — a homeserver serving the CS-API subset the membrane needs.** `deos-matrix`'s
 `matrix-rust-sdk` client exercises a bounded slice of the client-server API: the `/_matrix/client/
@@ -42,19 +47,20 @@ versions` handshake, password login, `/sync`, and room message send/receive (the
 `m.room.message`s). The body must satisfy exactly what matrix-sdk expects over that slice. Two shapes
 (the open fork — see below).
 
-**(b) The new capability — an inbound "listen door" (kernel-adjacent; design-first).** Firmament
-confinement today grants `net_out: Vec<String>` — an *outbound* provider-egress allow-list
-(`spawn_pd_confined_with_surface_and_egress`, `process_kernel.rs:1345`). A homeserver is *listened
-to*: it must bind a port and accept inbound connections. That is a **new** grant shape, the dual of
-the provider door:
+**(b) The new capability — an inbound "listen door".** The agent-tier confinement grants
+`net_out: Vec<String>` — an *outbound* provider-egress allow-list
+(`spawn_pd_confined_with_surface_and_egress`, `process_kernel.rs:1465`). A homeserver is *listened
+to*: it must bind a port and accept inbound connections. That is a distinct grant shape, the dual of
+the provider door (built at HEAD as `Confinement::with_listen`,
+`sel4/dregg-firmament/src/sandbox.rs:225` — see the heavy-body tier below):
 - **Linux:** pre-bind the listener in the parent and pass the bound socket fd into the child's
   keep-list (the child never needs raw bind authority — it `accept()`s on an fd the host handed it,
   exactly as the Endpoint fd is handed today), OR a seccomp `bind`/`accept`-notify door that admits
   exactly one `host:port`. The child's netns stays otherwise empty — deny-default holds.
 - **macOS Seatbelt:** an SBPL `(allow network-inbound (local tcp "*:PORT"))` rule scoped to the one
   port, mirroring the outbound `(allow network-outbound (remote ip …))` provider rule.
-This is a firmament/kernel change. Per the be-thoughtful discipline it gets a **design pass + a
-sound listen-door primitive**, not a swarm from thin context. It is the ONE genuinely new mechanism.
+This is a firmament/kernel primitive, and it exists: `with_listen`, with its deny pole tested
+(`sel4/dregg-firmament/tests/homeserver_confined.rs`: a bind to an unlisted port is denied).
 
 **(c) The lifecycle — a metered, R2 grain (reuses what exists).** `agent-platform`
 (rent/host/meter/reap confined grains) + `grain-turn` (R2: a body's effects are committed executor
@@ -102,9 +108,10 @@ brain is a Rust ACP peer compiled into the PD, not an `execve`'d process. Conseq
    file-write* (subpath …))`, Linux Landlock `LANDLOCK_ACCESS_FS_WRITE_FILE|MAKE_REG|MAKE_DIR|…`).
    This is the only genuinely new firmament grant — a concrete extension of the existing read door.
 
-That single door is still firmament-adjacent → design-first, sound primitive + two-pole test (granted
-dir writable, sibling denied), NOT a thin-context swarm (this doc is the design pass). But it is one
-door, not three — the lib-embed decision paid for itself.
+That door is built — `Confinement::with_write_path`, with the sibling-denied pole tested
+(`sel4/dregg-firmament/tests/homeserver_confined.rs`). The recon below corrects the count to TWO
+doors (a listen door survives; see "Confined-spawn design") — still not three: the lib-embed
+decision paid for itself.
 
 **Non-Rust homeservers ride the sandstorm rail.** Synapse (Python) / Dendrite (Go) can't embed as a
 lib, but `sandstorm-bridge` already models a grain as an `.spk`-packaged execve-in-chroot body with
@@ -133,9 +140,11 @@ Grounded, embed-ready:
 **Vendoring decision: an ISOLATED excluded workspace** (like `discord-bot`/`dregg-tui`) — a new
 `deos-homeserver` crate that git-deps `conduwuit` at a pinned rev with its own `rust-toolchain.toml`
 (continuwuity is edition-2024 / toolchain-pinned; isolating it keeps its heavy pinned-fork dep graph
-OUT of the breadstuffs root resolution). True source-vendoring (copy-in for offline/reproducibility)
-is a later step once the embed is proven. **GATE: a `cargo check -p conduwuit` in the recon clone is
-running to confirm it builds in this env (edition 2024 + the rocksdb fork's C++) BEFORE any wiring.**
+OUT of the breadstuffs root resolution). This crate exists at HEAD: `deos-homeserver/` is the
+isolated excluded workspace (own `rust-toolchain.toml`, `vendor/`, a `sandbox/homeserver.sb` profile,
+an `EmbeddedHomeserver` lib + a `deos-homeserver` bin), and its CS-API round-trip test
+(`deos-homeserver/tests/cs_api_roundtrip.rs`) drives the embedded server through the exact
+matrix-rust-sdk slice: versions handshake, registration, room create, message send, `/sync` read-back.
 
 ## The RocksDB question (ember hates the build time — verdict: keep it, link the system lib)
 
@@ -174,16 +183,15 @@ So `with_fds` does not apply without forking continuwuity. Honest door count for
 continuwuity grain (TCP, the membrane's transport):
 1. **`grant_read_write(db_dir)`** — the RocksDB dir (`EmbeddedHomeserver::data_dir()`). RocksDB keeps
    everything under this dir (WAL · SST · LOCK · CURRENT · MANIFEST · OPTIONS · LOG), so one
-   canonicalized read+write subpath covers it. The write dual of `grant_read` (`deos-hermes/src/
-   egress.rs` `grant_read` → `(allow file-read* (subpath …))` macOS / Landlock read): add
-   `grant_read_write` → `(allow file-write* (subpath …))` + read, Landlock `WRITE_FILE|MAKE_REG|
-   MAKE_DIR|…`. ⚠ verify at wiring time RocksDB needs nothing outside the db dir (a `/tmp` probe on
-   some platforms — the harmless `DEVNAME not found` sysinfo probe already seen is read-only).
+   canonicalized read+write subpath covers it. The write dual of `grant_read`: `(allow file-write*
+   (subpath …))` + read, Landlock `WRITE_FILE|MAKE_REG|MAKE_DIR|…`. Built as
+   `Confinement::with_write_path` (`sel4/dregg-firmament/src/sandbox.rs:212`). ⚠ RocksDB needs
+   nothing outside the db dir (a `/tmp` probe on some platforms — the harmless `DEVNAME not found`
+   sysinfo probe is read-only).
 2. **`grant_listen(host, port)`** — allow bind+listen on exactly ONE loopback `host:port` (continuwuity
-   binds it itself). A real (small) inbound firmament primitive: macOS SBPL `(allow network-inbound
-   (local ip "host:port"))`, Linux allow `bind`/`listen` on that one addr (the child's net namespace
-   otherwise empty ⇒ deny-default holds). This is the "listen door" the first draft hoped to dissolve;
-   it does not dissolve for a body that binds its own listener.
+   binds it itself). Built as `Confinement::with_listen` (`sandbox.rs:225`): macOS SBPL
+   `(allow network-inbound (local ip "host:port"))` + `network-bind`. This is the "listen door" the
+   first draft hoped to dissolve; it does not dissolve for a body that binds its own listener.
    - *Alternative (avoids the listen door, needs a continuwuity fork):* patch `plain::serve` to accept
      a `with_fds` pre-bound listener fd (socket-activation shape) → back to `with_fds` + one door. A
      fork against weekly-churning alpha; NOT preferred unless the listen primitive proves hard.
@@ -191,67 +199,65 @@ continuwuity grain (TCP, the membrane's transport):
      dir (covered by door #1) — but matrix-sdk clients dial HTTP/TCP, so this suits a same-host bridge,
      not the membrane's remote clients.
 
-## Firmament confined-spawn architecture (de-risked spec → the kernel build, 2026-07-07)
+## Firmament confined-spawn architecture (the heavy-body tier — BUILT)
 
-The de-risk (`deos-homeserver/sandbox/homeserver.sb`) PROVED viability + handed the exact SBPL. But
-grounding `sel4/dregg-firmament/src/sandbox.rs` shows the real shape: today's `Confinement` is the
-maximally-tight AGENT jail — `read_paths` + `net_out` only, and by design **NO `mach-lookup*`, NO
-`process-exec*`**. A heavy rocksdb+tokio homeserver needs MORE. So this is not one method — it is a
-second **heavy-body confinement TIER** beside the lightweight agent tier (additive: an all-empty
-`Confinement` is exactly today's behavior). The tier `Confinement` gains, each emitting the de-risk's
-proven SBPL:
-- `write_paths: Vec<String>` (`with_write_path`) → `(allow file-write* (subpath …))` — the ONE db-dir
-  write door (canonical `/private/var/…` path; proven exclusive).
-- `listen_addrs: Vec<String>` (`with_listen`) → `(allow network-inbound (local ip …))` + `network-bind`
-  — loopback-only, inbound-only (federation off ⇒ no outbound).
-- `mach_services: Vec<String>` (`with_mach_service`) → a NAMED allow-list (`(allow mach-lookup
-  (global-name …))` × the de-risk's 10: notifyd/logger/opendirectoryd/trustd/SecurityServer/configd/
-  coreservicesd/diagnosticd/…), NOT blanket `mach-lookup`.
-- a **system-read bundle** (`with_system_reads()`): `/`(!), `/usr/lib`, `/System`, `/dev/{null,random,
-  urandom}`, `/etc`+`/private/etc`, `/private/var/db/timezone`, the brew rocksdb keg stack — the
-  `/`-read is the SIGABRT-pre-main gotcha (dyld firmlink resolution).
-- **exec-one-image** (`with_exec_image(path)`) → `(allow process-exec (literal <deos-homeserver bin>))`
+The de-risk (`deos-homeserver/sandbox/homeserver.sb`) PROVED viability + handed the exact SBPL. The
+base `Confinement` is the maximally-tight AGENT jail — `read_paths` + `net_out` only, and by design
+**NO `mach-lookup*`, NO `process-exec*`**. A heavy rocksdb+tokio homeserver needs MORE, so a second
+**heavy-body confinement TIER** sits beside the lightweight agent tier (additive: an all-empty
+`Confinement` is exactly the agent-tier behavior). The tier's doors, each emitting the de-risked
+SBPL, all live in `sel4/dregg-firmament/src/sandbox.rs`:
+- `write_paths: Vec<String>` (`with_write_path`, `sandbox.rs:212`) → `(allow file-write*
+  (subpath …))` — the ONE db-dir write door (canonical `/private/var/…` path; proven exclusive).
+- `listen_addrs: Vec<String>` (`with_listen`, `sandbox.rs:225`) → `(allow network-inbound
+  (local ip …))` + `network-bind` — loopback-only, inbound-only (federation off ⇒ no outbound).
+- `mach_services: Vec<String>` (`with_mach_service`, `sandbox.rs:232`) → a NAMED allow-list
+  (`(allow mach-lookup (global-name …))` × the de-risk's 10: notifyd/logger/opendirectoryd/trustd/
+  SecurityServer/configd/coreservicesd/diagnosticd/…), NOT blanket `mach-lookup`.
+- a **system-read bundle** (`with_system_reads()`, `sandbox.rs:251`): `/`(!), `/usr/lib`, `/System`,
+  `/dev/{null,random,urandom}`, `/etc`+`/private/etc`, `/private/var/db/timezone`, the brew rocksdb
+  keg stack — the `/`-read is the SIGABRT-pre-main gotcha (dyld firmlink resolution).
+- **exec-one-image** (`with_exec_image(path)`, `sandbox.rs:272`) → `(allow process-exec (literal <deos-homeserver bin>))`
   + `process-fork`. THE ARCHITECTURE CHOICE: firmament EXECs the `deos-homeserver` BINARY as the PD
   body (not a linked closure — linking continuwuity into firmament hits the isolated-ws/1.96.1
   toolchain wall). So `execve` is granted for EXACTLY the one bin image, then continuwuity runs
   lib-embedded inside it (no further exec). This revises the earlier "execve stays denied" — it is
   denied for everything EXCEPT the one named grain image, the "grant execve of exactly the image" door.
 
-**The confined spawn** = `spawn_pd_confined_with_surface_and_egress` execs `<deos-homeserver bin>`
-under a `Confinement` carrying {write=db_dir, listen=127.0.0.1:port, mach=the 10, system-reads,
-exec-image=the bin}. Integration test (mirrors the de-risk, but through firmament's own spawner):
-assert it serves `GET /versions → 200` confined, and that a sibling-path write / a second port / an
-unlisted mach service are each denied. Expect the benign `DEVNAME not found` in the log (no grant).
+**The confined spawn** = `ProcessKernel::spawn_pd_confined_exec`
+(`sel4/dregg-firmament/src/process_kernel.rs:1333`) — its docs name the confined homeserver as its
+driver — self-applies the `Confinement` (which MUST carry an `exec_image`) in the forked child and
+`execve`s the grain image, fail-closed (`CONFINE_FAILED_EXIT`) if confinement cannot apply. The host
+observes readiness on the returned `ConfinedProcess`'s stdout (`READY <base_url>`). The integration
+test is `sel4/dregg-firmament/tests/homeserver_confined.rs`: the positive pole (serves
+`GET /versions → 200` confined, through firmament) is `#[ignore]`-gated on the prebuilt heavy bin
+(~20-min continuwuity build; run with `--ignored`); the three negative poles run in the normal suite
+— a sibling-path write, a bind to an unlisted port, and an unlisted mach lookup are each DENIED,
+proving the heavy doors are named, not broad.
 
-⚑ THIS IS A FOUNDATIONAL CONFINEMENT-MODEL EXPANSION (a new tier + exec-one-image) in shared firmament
-— DESIGN-DONE + DE-RISKED, but the BUILD is ember-aware kernel work, a deliberate lane, not a swarm.
+⚑ This confinement-model expansion (a new tier + exec-one-image) in shared firmament is BUILT: the
+five tier doors above plus the exec spawn, with the deny poles in the normal test suite.
 
-The confined spawn (summary): `spawn_pd_confined_with_surface_and_egress` execs the grain bin under the
-heavy-body `Confinement` above. NOT a thin-context swarm.
+## The sequence — where each step stands
 
-## The sequence (app layer now; the firmament doors design-first)
-
-1. **Body de-risk + embed seam (app, now):** vendor/pin continuwuity (exact revs of it + its ruma /
-   rust-rocksdb forks), stand its homeserver up **in-process as a library** (the rlib workspace entry
-   — for tuwunel the documented `Runtime::new → Server::new → exec` shim; for continuwuity the
-   equivalent `conduwuit-router`/`service` boot), point two `deos-matrix` `MatrixClient`s at it over a
-   plain loopback listener, and drive the real card-carry loop (`card_carry` / `card_carry_bridge`)
-   end-to-end — proving the embedded server satisfies matrix-sdk over the membrane slice and replaces
-   the external Docker Conduit the Pillar-3 live test uses. No jail yet. (RocksDB is the real tax: a
-   C++ build dep + a hungry db dir — note the dir for the one door.)
-2. **The ONE firmament door (kernel, design-first — THOUGHT before code):** `grant_read_write(path)`,
-   the storage write dual of `grant_read` — one canonicalized subpath (the RocksDB dir),
-   sibling-denied, revocable; a two-pole test (granted dir writable / sibling denied). Lands in
-   `sel4/dregg-firmament/src/sandbox.rs` + `process_kernel.rs` + `deos-hermes/src/egress.rs`. (The
-   execve door is gone — lib-embed; the listen door is the existing `with_fds` pre-bound-fd pattern.)
-3. **The confined spawn (weld):** `spawn_pd_confined_with_surface_and_egress` a body that RUNS the
-   embedded homeserver with exactly {read_write=db-dir, listen=the pre-bound fd, net_out=federation
-   peers if federating}. `execve` stays denied. The card-carry clients dial the listen door.
-4. **The lifecycle (reuse):** wrap it in `agent-platform` (rent/host/meter/reap) + `grain-turn` R2 so
-   the homeserver-grain's lease is metered and its message-accepts are receipted turns.
-
-Steps 1 and 2 are independent (app vs kernel) and can run in parallel; step 3 welds them. Step 2 is
-NOT a thin-context swarm — it is the sound-primitive design lane, taken fresh.
+1. **Body + embed seam — BUILT.** `deos-homeserver/` embeds continuwuity as a library
+   (`EmbeddedHomeserver`: loopback config + readiness poll around `conduwuit::run_with_args`);
+   `tests/cs_api_roundtrip.rs` proves the exact matrix-rust-sdk membrane slice, and
+   `scripts/card-carry-local.sh` runs the deos-matrix two-user card-fork-carry live test against
+   this binary instead of the external Docker Conduit. (RocksDB is the real tax: a C++ build dep +
+   a hungry db dir — brew system-link kills the cold build on macOS.)
+2. **The firmament doors — BUILT** as the heavy-body tier above: `with_write_path` (the
+   `grant_read_write` dual of `grant_read`, one canonicalized sibling-denied subpath), plus
+   `with_listen` / `with_mach_service` / `with_system_reads` / `with_exec_image`
+   (`sel4/dregg-firmament/src/sandbox.rs:212-272`).
+3. **The confined spawn (weld) — BUILT.** `ProcessKernel::spawn_pd_confined_exec` execs the
+   `deos-homeserver` bin under the heavy-body `Confinement`; `tests/homeserver_confined.rs`
+   carries the positive pole (`--ignored`, needs the prebuilt heavy bin) and the three
+   always-run deny poles.
+4. **The lifecycle (named seam, open):** wrap the homeserver grain in `agent-platform`
+   (rent/host/meter/reap) + `grain-turn` R2 so its lease is metered and its message-accepts are
+   receipted turns. Nothing in `agent-platform` references the homeserver yet — this is the
+   remaining step.
 
 ## Payoff
 

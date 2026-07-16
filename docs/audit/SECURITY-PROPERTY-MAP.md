@@ -22,12 +22,16 @@ This is a read-only survey. Every claim is grounded at `file:line` against HEAD.
   never an `axiom`. Correctly named as the trust boundary.
 
 The one-line answer: **dregg has GENUINE security-property proofs for authority non-amplification,
-value conservation, freshness/anti-replay, and several capacity invariants (vault no-dilution,
-membrane non-amplification, lease budget-conservation, hatchery invariant-forever, obligation cursor
+value conservation, freshness/anti-replay, DECO attestation unforgeability (as a reduction to the
+named crypto floors), and several capacity invariants (vault no-dilution, membrane
+non-amplification, lease budget-conservation, hatchery invariant-forever, obligation cursor
 monotonicity). Its "UC" layer is almost entirely an abstract, un-wired theory shelf — the one
-exception is settlement soundness. And every capacity's circuit-side / light-client witness is
-STAGED, not in the deployed VK: the safety properties hold over pure math / the kernel / the
-executor / an off-AIR gate predicate, not yet over the emitted AIR a pure light client checks.**
+exception is settlement soundness. On the capacity circuit side, the floor-REFUSE half is deployed
+(the gentian bare-refuse weld sits in the committed wide + welded registries, and the deployed LC
+rejects a declared-capacity bare dodge); the SATISFACTION half — the in-AIR witness that the
+capacity's safety predicate held — is STAGED, so the vault/escrow/obligation safety properties hold
+over pure math / the kernel / the executor / an off-AIR gate predicate, not yet over the emitted AIR
+a pure light client checks.**
 
 ---
 
@@ -131,28 +135,39 @@ honestly-scoped sense, and it does not cover the payment/attestation constructs.
 
 | Theorem (file:line) | Class | What it is |
 |---|---|---|
-| `deco_authenticates_payment` (`:315`) | **REFINEMENT / soundness** (unforgeability ASSUMED) | `verify stmt proof = true → ∃ w, SK.Signed … ∧ MK.Tagged … ∧ opening ∧ 1 ≤ amountCents`. "An accepting proof proves a genuine Stripe-authenticated payment." This is *accept ⟹ the DECO relation holds and lifts to the §8 facts* — a soundness refinement. |
+| `deco_attestation_unforgeable` (`Crypto/DecoUnforgeable.lean:219`) | **SECURITY-PROPERTY** (unforgeability, by reduction) | The rung-4 world property: an attestation accepted with NO genuine DECO ground truth yields a CONCRETE ed25519 `SigForgery` OR HMAC `MacForgery` — so under ed25519 EUF-CMA + HMAC unforgeability + extractability, no forged attestation exists. Registered as `NON-VACUITY-MANIFEST.md` row 22 (fires + bites). |
+| `deco_authenticates_payment` (`:315`) | **REFINEMENT / soundness** | `verify stmt proof = true → ∃ w, SK.Signed … ∧ MK.Tagged … ∧ opening ∧ 1 ≤ amountCents`. "An accepting proof proves a genuine Stripe-authenticated payment." This is *accept ⟹ the DECO relation holds and lifts to the §8 facts* — a soundness refinement. |
 | `deco_bridge` (`:191`), `deco_verify_sound` (`:296`) | REFINEMENT | `Satisfies ↔ DecoRelation`; accept ⟹ ∃ satisfying trace. The bridge is fully proved (range gadget); the four chain gates are threaded. |
 | `deco_binds_payment` (`:228`), `deco_commitment_binds` (`:249`) | ASSUMED-FLOOR lift | Lifts the runnable gates to `Signed`/`Tagged`/unique-opening **given** ed25519 EUF-CMA + HMAC + Poseidon2-CR carriers. |
 
-**Answer to "is the payment unforgeable proven as a property?"** No — the unforgeability is
-**ASSUMED**, carried by ed25519 EUF-CMA (`SK.unforgeable`) and HMAC (`MK.unforgeable`) entering as
-hypotheses, plus the external Web-PKI/Stripe floor (`serverKey`-is-Stripe, `encode`-is-the-schema).
-`deco_authenticates_payment` is a *binding refinement* on top of that floor (accept ⟹ the payment
-facts genuinely hold), not a proof that the payment *cannot be forged*. And **PerfectUC is not wired
-to DECO** — there is no UC/simulator argument for the payment attestation. So DECO = refinement +
-named crypto floor, no security-property/UC proof of its own.
+**Answer to "is the payment unforgeable proven as a property?"** Yes, as a reduction:
+`deco_attestation_unforgeable` (`Crypto/DecoUnforgeable.lean:219`) proves any forged attestation
+reduces to a concrete ed25519 `SigForgery` or HMAC `MacForgery` — the standard game-based shape,
+resting on the same named floors every signature scheme rests on, plus the external Web-PKI/Stripe
+floor (`serverKey`-is-Stripe, `encode`-is-the-schema), which remains a floor, not a theorem.
+`deco_authenticates_payment` is the *binding refinement* alongside it (accept ⟹ the payment facts
+genuinely hold). What DECO still does NOT have: **PerfectUC is not wired to DECO** — there is no
+UC/simulator argument for the payment attestation.
 
 ### Capacities (escrow / obligation / vault, tags 17/18/19)
 
 **Critical cross-cutting fact:** the capacity `*Gate` predicates (`SettleGate`, `DischargeGate`,
 `VaultDepositGate`) are Lean `abbrev … : Prop` modelling an **off-AIR manifest re-evaluation** over
 committed `before/after` heap views — every docstring states "the AIR constraint polynomials — the VK
-bytes — UNCHANGED." The in-AIR weld that would let a **pure light client** witness these
-(`Deos/CapacitySatisfaction.lean`) is built **STAGED** (`circuit/src/effect_vm/satisfaction_weld.rs`)
-and **NOT emitted into a committed VK, NOT flipped onto the live path** (`CapacitySatisfaction.lean`
-docstring §"What is and is NOT witnessed yet", `:46-54`). So the capacity safety facts hold over pure
-math / the executor / an off-AIR gate predicate — *not yet* over the deployed AIR.
+bytes — UNCHANGED." The circuit side splits in two halves with different deployment status:
+the **floor-REFUSE half is DEPLOYED** — the gentian bare-refuse weld is emitted into the committed
+wide + welded registries (marker `gentian-deployed-bare-refuse` in
+`circuit/descriptors/rotation-wide-registry-staged.tsv` and the welded twin, 36 members each), and
+the deployed LC rejects a declared-capacity turn that dodges onto a bare member
+(`sdk/tests/gentian_deployed_registry_dodge_forge.rs`, plus the GATE B declaring-verify
+discriminator in `sdk/src/full_turn_proof.rs`). The **SATISFACTION half is STAGED** — the in-AIR
+weld that would let a **pure light client** witness the safety predicate itself
+(`Deos/CapacitySatisfaction.lean`; `circuit/src/effect_vm/satisfaction_weld.rs`) is not flipped
+onto the wide live path (`CapacitySatisfaction.lean` docstring §"What is and is NOT witnessed yet");
+the three satisfaction members committed today are 1-felt V3 registry entries routed only by the
+declaring verify. So the capacity safety facts hold over pure math / the executor / an off-AIR gate
+predicate — *not yet* over the deployed AIR — while a declared capacity can no longer route around
+its gate.
 
 | Construct | Genuine SECURITY-PROPERTY? | Headline (file:line) | Proven over |
 |---|---|---|---|
@@ -169,15 +184,18 @@ math / the executor / an off-AIR gate predicate — *not yet* over the deployed 
 ### Gentian carrier-floor (a declared capacity is always caught) — `Deos/{CapacityCarrier, CarrierBoundFloorGadget, BareCohortFloorRefuse, BareCohortFloorRefuseDeployed, ConstraintBinding}.lean`
 
 **Answer: YES — the floor gadget's completeness IS proven as a universally-quantified property, not
-just a per-descriptor refuse.** But it is STAGED (nothing emitted into the deployed VK; the docstrings
-say so).
+just a per-descriptor refuse.** The refuse half is deployed: the gentian floor-refuse is emitted
+into the committed wide + welded registries (`gentian-deployed-bare-refuse` in the checked-in TSVs)
+and the deployed LC rejects a declared-capacity bare dodge
+(`sdk/tests/gentian_deployed_registry_dodge_forge.rs`). The satisfaction half stays staged (§4
+capacities, gap 2).
 
 | Theorem (file:line) | Class | What it is |
 |---|---|---|
 | `ConstraintBinding.omission_caught_under_binding` (`:151`) | **SECURITY-PROPERTY / COMPLETENESS** | ∀ declaration/manifest: an omitted required tag is rejected whatever alternate declaration the prover presents (given the declaration commit binds). The soundness core. |
 | `CapacityCarrier.carrier_omission_impossible` (`:106`), `carrier_manifest_forced` (`:86`) | **COMPLETENESS** | ∀ two manifests sharing a caveat-commit: the published manifest is FORCED equal to the committed one — omission on the bound leg is impossible for a *pure light client*. |
-| `BareCohortFloorRefuse.declared_tag_unsat_under_bare` (`:442`); `BareCohortFloorRefuseDeployed.declared_capacity_unsat_deployed` (`:288`) | **COMPLETENESS** (whole-cohort) | ∀ capacity tag `T`, ∀ bare-cohort member: a declared-capacity turn is UNSAT under a gate-less descriptor — it cannot be silently routed around the gate. `non_declared_floor_zero` (`:249`) is the matching no-false-reject direction. |
-| `CarrierBoundFloorGadget.gentian_forged_floor_unsat_carrier` (`:466`) | SECURITY-PROPERTY, tag-17 in-AIR | ∀ satisfying trace: a forged floor omitting the escrow tag is UNSAT — the tag-17 in-AIR refinement of the coverage property. |
+| `BareCohortFloorRefuse.declared_tag_unsat_under_bare` (`:516`); `BareCohortFloorRefuseDeployed.declared_capacity_unsat_deployed` (`:345`) | **COMPLETENESS** (whole-cohort) | ∀ capacity tag `T`, ∀ bare-cohort member: a declared-capacity turn is UNSAT under a gate-less descriptor — it cannot be silently routed around the gate. `non_declared_floor_zero` (`:295`) is the matching no-false-reject direction. |
+| `CarrierBoundFloorGadget.gentian_forged_floor_unsat_carrier` (`:517`) | SECURITY-PROPERTY, tag-17 in-AIR | ∀ satisfying trace: a forged floor omitting the escrow tag is UNSAT — the tag-17 in-AIR refinement of the coverage property. |
 
 All gentian-floor files close `#assert_all_clean` under a single named `Poseidon2SpongeCR` /
 `DeclCommitBinds` collision-resistance hypothesis, never an axiom. Separately,
@@ -189,20 +207,23 @@ the deployed AIR — unrelated to the capacity floor, listed so it is not mistak
 
 ## THE HONEST GAPS — refinement/floor, but no security-property proof (yet)
 
-1. **DECO payment unforgeability is ASSUMED, not proven, and has no UC proof.** `deco_authenticates_payment`
-   (`Crypto/Deco.lean:315`) is a soundness refinement resting on ed25519 EUF-CMA + HMAC + the external
-   Web-PKI/Stripe floor. There is no security-property theorem that the payment attestation *cannot be
-   forged* independent of those carriers, and **PerfectUC is not wired to DECO** — no simulator/UC
-   argument for the payment construct.
+1. ~~**DECO payment unforgeability is ASSUMED, not proven.**~~ **CLOSED (the unforgeability half)** —
+   `deco_attestation_unforgeable` (`Crypto/DecoUnforgeable.lean:219`) is the rung-4 world property:
+   any forged attestation reduces to a concrete ed25519 `SigForgery` or HMAC `MacForgery` under the
+   standard floors. Registered as `NON-VACUITY-MANIFEST.md` row 22, which names this survey's gap as
+   the one it closed. `deco_authenticates_payment` (`Crypto/Deco.lean:315`) remains the binding
+   refinement alongside it; the external Web-PKI/Stripe floor remains a floor. Still open:
+   **PerfectUC is not wired to DECO** — no simulator/UC argument for the payment construct.
 
-2. **Every capacity's circuit-side / pure-light-client witness is STAGED, not deployed.** The vault
-   no-dilution, escrow atomicity, and obligation discharge safety are proven over pure math / the
-   executor / an **off-AIR gate predicate** whose VK bytes are explicitly unchanged
-   (`Vault.lean` §6, `SealedEscrow.lean` §6b, etc.). The in-AIR satisfaction weld that would let a pure
-   light client witness them (`CapacitySatisfaction.lean`, `CarrierBoundFloorGadget.lean`) is built but
-   NOT emitted into a committed VK and NOT flipped onto the live path
-   (`CapacitySatisfaction.lean:46-54`). So in production today a *re-executing validator* is witnessed,
-   a *pure light client* is not. This is the "circuit tooth is the executor tooth's named shadow" seam.
+2. **Every capacity's SATISFACTION witness for a pure light client is STAGED, not deployed.** The
+   vault no-dilution, escrow atomicity, and obligation discharge safety are proven over pure math /
+   the executor / an **off-AIR gate predicate** whose VK bytes are explicitly unchanged
+   (`Vault.lean` §6, `SealedEscrow.lean` §6b, etc.). The in-AIR satisfaction weld that would let a
+   pure light client witness them (`CapacitySatisfaction.lean`, `satisfaction_weld.rs`) is built but
+   not flipped onto the wide live path (`CapacitySatisfaction.lean` §"What is and is NOT witnessed
+   yet"). So in production today a *re-executing validator* is witnessed, a *pure light client* is
+   not. This is the "circuit tooth is the executor tooth's named shadow" seam. (The floor-REFUSE half
+   is deployed — a declared capacity cannot dodge onto a bare member; see §4 gentian.)
 
 3. ~~**SealedEscrow has no standalone economic no-theft invariant.**~~ **CLOSED** (`SealedEscrow.lean`
    §9, `sealedescrow_no_theft` `:753`). Escrow now carries the economic no-theft world-property Vault
@@ -275,14 +296,20 @@ the deployed AIR — unrelated to the capacity floor, listed so it is not mistak
 
 9. **Capacity-floor completeness (a declared capacity is always caught).** `omission_caught_under_binding`
    (`Deos/ConstraintBinding.lean:151`), `carrier_omission_impossible` (`Deos/CapacityCarrier.lean:106`),
-   `declared_tag_unsat_under_bare` (`Deos/BareCohortFloorRefuse.lean:442`) — universal coverage under
-   Poseidon2-CR. (Strength of statement; deployment is STAGED — see gap 2.)
+   `declared_tag_unsat_under_bare` (`Deos/BareCohortFloorRefuse.lean:516`) — universal coverage under
+   Poseidon2-CR. The refuse half is deployed (committed wide + welded registries + the LC dodge-forge
+   rejection); the satisfaction half is staged — see gap 2.
 
 10. **Light-client unfoolability, over the whole history.** `unfoolability_guarantee` /
     `conserves_from_verification` (`AssuranceCase.lean:666`) + the game-based reduction
     `LightClientUC.unfoolable_of_floor`: a `verify agg.root`-only client learns A–D for the whole
     history, and a tampered aggregate cannot bind. (The attestation leg is refinement; the
     conservation-from-verification leg is a derived security property.)
+
+11. **DECO attestation unforgeability, by reduction.** `deco_attestation_unforgeable`
+    (`Crypto/DecoUnforgeable.lean:219`): an attestation accepted with no DECO ground truth yields a
+    concrete ed25519 `SigForgery` or HMAC `MacForgery` — no forgery exists under the named floors.
+    `NON-VACUITY-MANIFEST.md` row 22 (fires + bites).
 
 ---
 
@@ -291,16 +318,19 @@ the deployed AIR — unrelated to the capacity floor, listed so it is not mistak
 - **Proven-safe as security-properties:** authority non-amplification (with teeth, and over the kernel
   via Membrane), value conservation (imbalance unreachable), freshness/no-double-spend, vault
   no-dilution / inflation-immunity, lease budget-conservation, hatchery invariant-forever, obligation
-  cursor monotonicity, settlement soundness, capacity-floor completeness.
+  cursor monotonicity, settlement soundness, capacity-floor completeness, DECO attestation
+  unforgeability (forgery reduces to `SigForgery`/`MacForgery`).
 - **Only-refined (soundness, not a property of the world):** integrity / receipt-binds-whole-post-state
   (the memory-program family), the E-attestation leg, DECO `deco_authenticates_payment`, and every
   capacity `*Gate` forcing/rejection. These are ember's "we have tons of these."
 - **Assumed floor (correctly named):** Poseidon2-CR, FRI/STARK, ed25519 EUF-CMA, HMAC, AEAD, DLog,
-  PostGSTProgress — and DECO's unforgeability + Web-PKI/Stripe floor rest here, not on a proof.
+  PostGSTProgress — and DECO's Web-PKI/Stripe endpoint floor rests here; its unforgeability now
+  reduces to these floors rather than being independently assumed.
 - **UC specifically:** we have `perfectUC_composition` (perfect/statistical, deterministic ideals)
   wired ONLY to the disclosure functionality; the computational UC theorem is OPEN; no UC proof exists
   for DECO, settlement (which has its own non-UC soundness), or the kernel. The rest of `Metatheory/*`
   is an abstract theory shelf, not wired to the deployed system.
-- **The single biggest honest gap:** the capacity safety properties (vault/escrow/obligation) and the
-  floor-completeness are witnessed today only by a *re-executing validator*; the pure-light-client
-  in-AIR weld is STAGED, not in the deployed VK.
+- **The single biggest honest gap:** the capacity safety properties (vault/escrow/obligation) are
+  witnessed today only by a *re-executing validator*; the pure-light-client in-AIR satisfaction weld
+  is STAGED, not in the deployed wide VK (the floor-REFUSE half is deployed — a declared capacity
+  cannot dodge its gate).

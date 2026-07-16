@@ -1,15 +1,23 @@
 # Re-Grounding dregg's Matching Layer on a Boolean-Closed Derivative Algebra
 
-> **STATUS (partly landed):** the Rust half of this doc's Stage 3 has since SHIPPED —
-> the derivative FilterTree compiler (`dfa/src/derivative.rs`, Brzozowski/Antimirov
-> front-end, lazy intersection, native complement) + `Pattern::Not`
+> **STATUS (landed, one named residual):** both halves of this doc's program are built.
+> The Rust half (Stage 3): the derivative FilterTree compiler (`dfa/src/derivative.rs`,
+> Brzozowski/Antimirov front-end, lazy intersection, native complement) + `Pattern::Not`
 > (`dfa/src/compiler.rs`) make the cap-secure **deny filter EXPRESSIBLE**, out-of-circuit
-> and AIR-neutral (same flat `Dfa`). The landing doc is
-> [DERIVATIVE-MATCHING-DESIGN.md](DERIVATIVE-MATCHING-DESIGN.md). What remains OPEN is
-> the Lean reuse — Stages 0/4/5 (the license-blocked `extended-regexes` port, the
-> `derivativeCompile ≡ tableDfa` equivalence lemma, the `Pred`/`CaveatPred` trace-lift).
-> Read the body as the design rationale; treat the §1.3-"inexpressible" / §4.3-Stage-3
-> framing as historical.
+> and AIR-neutral (same flat `Dfa`). The Lean half is dregg's **OWN formalization** —
+> `metatheory/Dregg2/Crypto/Deriv/` (15 modules: `Core`, `Correctness`, `Finiteness`,
+> `TableDfa`, `Powerset`, `Thompson`, `Determinize`, …) builds the symbolic-derivative
+> tower directly over dregg's `Pred` algebra with `σ := Value`, reading the
+> `extended-regexes`/ITP'25 repos PURELY as proof blueprints — never a code dependency —
+> so the license question this doc raised is MOOT. The faithfulness contract is closed
+> table-opaquely (`TableDfa.tableDfa_faithful`; `Powerset` discharges it for the deployed
+> lazy-derivative determinizer; `Thompson` for the legacy subset path). The one surviving
+> Lean residual, named precisely in `Deriv/Determinize.lean` (`:26` and the closing note):
+> the LITERAL table-equality `derivativeCompile_eq_tableDfa` against `compiler.rs`'s
+> powerset `determinize` — unblocked by `der_finite`, not closed. The `(old,new)`/`Ctx`
+> trace-lifts (Stage 5) stay open research. Landing doc:
+> [DERIVATIVE-MATCHING-DESIGN.md](DERIVATIVE-MATCHING-DESIGN.md). Read the body as the
+> design rationale; treat the §1.3-"inexpressible" and license-gate framing as settled.
 
 dregg has **at least four** independent "boolean matching" surfaces, each
 re-deriving the same operators (intersection, complement, union) over a
@@ -18,13 +26,14 @@ stories. This document asks one question: **can RE#/ERE≤'s boolean-closed
 symbolic-derivative algebra — closed under `&`/`~`/lookaround, input-linear,
 and Lean-formalized — serve as the *one* foundation those surfaces share?**
 
-This is a design/research doc for the owner to decide on. It lays out the case,
+This is the design rationale behind what is now built. It lays out the case,
 the reusable Lean artifact, the in-circuit split (which the prior eval
-`REGEX-AUTOMATON-EVAL.md` already settled for the DFA face), a staged re-grounding
-design, and an honest account of what is uncertain. Since it was written, the
-**Rust** derivative front-end (Stage 3) has landed (`dfa/src/derivative.rs` +
-`Pattern::Not`); the **Lean** reuse (Stages 0/4/5) remains open, several claims
-below still explicitly flagged as *unverified*.
+`REGEX-AUTOMATON-EVAL.md` already settled for the DFA face), the staged
+re-grounding design, and an honest account of what is uncertain. The **Rust**
+derivative front-end (Stage 3) is landed (`dfa/src/derivative.rs` +
+`Pattern::Not`); the **Lean** derivative tower is landed as dregg's own
+formalization (`Dregg2/Crypto/Deriv/`, status banner above); the Stage-5
+trace-lifts remain the open research questions flagged *unverified* below.
 
 ---
 
@@ -62,11 +71,11 @@ already a proven Boolean algebra, in both Lean and Rust.
   admissible set (the Heyting residual). The header `:46-60` is explicit that
   this **deliberately is NOT aliased to `Pred`** ("a literal alias would be
   unsound" — different denotation domains, transition-vs-context).
-- **The Rust executor twin**: `cell/src/program/types.rs:521`
-  `SimpleStateConstraint` carries `Not(Box<...>)` (`:589`), the rustdoc
-  (`:500-520`) explicitly lifting "the predicate algebra from distributive
-  lattice to Heyting algebra"; `Implies(P,Q) == AnyOf([Not(P),Q])` is derived,
-  not a variant (`:509-512`).
+- **The Rust executor twin**: `cell/src/program/types.rs:535`
+  `SimpleStateConstraint` carries `Not(Box<...>)` (`:615`), the rustdoc
+  (`:511`) explicitly lifting the predicate algebra from distributive
+  lattice to Heyting algebra; `Implies(P,Q) == AnyOf([Not(P),Q])` is derived,
+  not a variant.
 
 **Boolean operators this surface needs:** intersection (`and`/`allOf`; token
 meet ⋀), complement (`not` — the no-self-transfer tooth `not(digFieldEq from
@@ -78,7 +87,7 @@ to)` at `PredAlgebra.lean:427`, the reactive `Changed`/`Unchanged` complements
 Separate from the predicate algebra: `cell/src/permissions.rs:5`
 `AuthRequired {None,Signature,Proof,Either,Impossible,Custom}` with a lattice
 order `is_narrower_or_equal` (`:52`) — Impossible=⊥, None=⊤, distinct `Custom`
-vk_hashes **incomparable**. `is_attenuation(held,granted)` (`capability.rs:741`)
+vk_hashes **incomparable**. `is_attenuation(held,granted)` (`capability.rs:1012`)
 = `granted.is_narrower_or_equal(held)`. Action attenuation = set intersection:
 `ActionSet::intersect` (`token/src/action_set.rs:166`).
 
@@ -91,22 +100,22 @@ by design.
 ### 1.3 The FilterTree / intent-matcher (the DFA face)
 
 The capability-secure revocation and routing/gossip surface:
-`dfa/src/filter.rs:88` `FilterTree` composes filters by **intersection along
-every root→leaf path** (`compile_subtree` → `dfa_intersection`, `:134-145`);
-`revoke` (`:125`) flips a node to accept-all (intersection identity) and
-`compile_combined` rebuilds. A k-deep tree is a k-fold DFA product,
-`O(∏|S_i|)` — the actual state-explosion site. The compiler
-(`dfa/src/compiler.rs`) was eager Thompson-NFA → subset-construction → flat
+`dfa/src/filter.rs:97` `FilterTree` composes filters by **intersection along
+every root→leaf path**; `revoke` (`:156`) flips a node to accept-all
+(intersection identity) and `compile_combined` (`:163`) rebuilds the active
+intersection. A k-deep tree is a k-fold DFA product,
+`O(∏|S_i|)` — the actual state-explosion site. The legacy compiler path
+(`dfa/src/compiler.rs`) is eager Thompson-NFA → subset-construction → flat
 `Dfa` table; intersection is `dfa_intersection` (a Cartesian product).
-**Complement HAS SINCE LANDED** (this doc's Stage 3, Rust half): `Pattern::Not`
-(`compiler.rs`) is compiled through the lazy Brzozowski/Antimirov derivative
+**Complement is native** (this doc's Stage 3): `Pattern::Not`
+(`compiler.rs`) compiles through the lazy Brzozowski/Antimirov derivative
 front-end (`dfa/src/derivative.rs`) rather than the NFA-product path (Thompson
 NFAs have no complement constructor), so the capability-secure *deny* filter
-(match everything except a revoked namespace) is now **expressible** and emits the
+(match everything except a revoked namespace) is **expressible** and emits the
 same flat `Dfa` the AIR consumes.
 
-**Boolean operators it needs:** intersection (have it — eager product, or the
-lazy derivative `inter`), complement (now have it via `Pattern::Not` /
+**Boolean operators it needs:** intersection (present — eager product, or the
+lazy derivative `inter`), complement (present via `Pattern::Not` /
 `derivative.rs`), union.
 
 ### 1.4 The shape of the problem
@@ -202,8 +211,9 @@ What the repo contains (read at HEAD via the survey):
 is the *exact* shape dregg keeps reaching for — a computable function proven
 equal to a declarative semantics — the "two gates provably agree" /
 denotational-differential pattern (memory: byte-identity-is-not-faithfulness;
-the executor⟺spec⟺circuit triangle). dregg already has the EBA *carrier*
-(`Pred`); the repo has the derivative *tower* and its correctness proof on top.
+the executor⟺spec⟺circuit triangle). dregg has the EBA *carrier* (`Pred`), and
+`Dregg2/Crypto/Deriv/` realizes the derivative *tower* and its correctness proof
+natively over it — the repo served as the blueprint for exactly that shape.
 
 ---
 
@@ -238,15 +248,21 @@ adopts wholesale and does not re-litigate:
   `vk_hash`, and must be name-gated as a new descriptor and re-grounded in Lean
   (REGEX-AUTOMATON-EVAL.md §6.1, §7) — real circuit+proof work, not plumbing.
 
-**The honest open gap from the eval (§3 of its risks):** there is today **no
-Lean equivalence theorem** linking a derivative-compiled DFA to the `TableDfa`
-the proof trusts. The chain `Pattern → Nfa → determinize → Dfa` is *unverified
-Rust*. A faithful re-grounding wants a new lemma `derivativeCompile P ≡ tableDfa`
-that the existing `air_run_is_table_run` consumes — otherwise the boolean
-*semantics* (does this table really equal `R & S`?) is an untrusted Rust gap
-under an otherwise-clean proof. **This lemma is exactly what the
-extended-regexes `correctness` theorem would supply** if ported — the single
-biggest reason to care about the Lean reuse.
+**The gap the eval named — now closed at the language level, one literal
+residual.** `Dregg2/Crypto/Deriv/` supplies the equivalence theorems: `Correctness`
+proves the computable derivative matcher equals the denotational semantics over
+`PredRE`; `TableDfa.tableDfa_faithful` is the table-opaque keystone (ANY flat
+table whose `accepts` agrees with `derives` recognizes exactly `Matches`);
+`Powerset` discharges the agreement hypothesis for the table the deployed
+lazy-derivative determinizer (`derivative.rs::Re::compile`) actually emits, and
+`Thompson` closes the legacy `pattern_to_nfa().determinize()` subset path (both
+halves: Thompson-construction + subset-construction correctness). So "does this
+compiled table really equal `R & S`?" is a theorem, not an untrusted Rust gap.
+The surviving residual, named precisely in `Deriv/Determinize.lean` (`:26`,
+closing note): the LITERAL table-equality `derivativeCompile_eq_tableDfa` against
+the powerset table, up to a reachable-state bijection — its finiteness
+prerequisite is discharged (`Finiteness.der_finite`), and language/bisim
+equivalence (already proven) suffices for the table-opaque AIR.
 
 ---
 
@@ -256,8 +272,8 @@ biggest reason to care about the Lean reuse.
 
 | Surface | Carrier | Re-ground? | Why |
 |---|---|---|---|
-| **FilterTree / intent / routing** (§1.3) | byte/symbol sequences | **Yes — primary; Rust half DONE.** Derivative compiler for `&`/`~`/`\|` (`derivative.rs` + `Pattern::Not`), emitting the same flat `Dfa`. | Already sequence-shaped; had the explosion *and* the missing complement — the derivative front-end now supplies both. The natural home for ERE≤. |
-| **Predicate `Pred`** (§1.1) | single `(old,new)` frame | **Partial — as the EBA instance** under a lifted sequence layer (a turn-*trace* of frames). | Already a boolean algebra of `Value→Value→Bool`; would become the per-symbol acceptance test, with `der` stepping one turn. *Unverified that the lift is sound.* |
+| **FilterTree / intent / routing** (§1.3) | byte/symbol sequences | **Yes — primary; BOTH halves DONE.** Derivative compiler for `&`/`~`/`\|` (`derivative.rs` + `Pattern::Not`), emitting the same flat `Dfa`; the Lean tower (`Dregg2/Crypto/Deriv/`) proves its faithfulness. | Already sequence-shaped; had the explosion *and* the missing complement — the derivative front-end supplies both. The natural home for ERE≤. |
+| **Predicate `Pred`** (§1.1) | single `(old,new)` frame | **Single-frame lift DONE** (`PredRE`'s `sym` leaf IS a `Pred`, σ := `Value`); the turn-*trace* `(old,new)` lift is NOT built (Stage 5). | Already a boolean algebra; the per-symbol acceptance test with `der` stepping one turn. *The trace lift's soundness is unverified.* |
 | **`CaveatPred`** (§1.1) | request `Ctx` | **Maybe — same EBA, different σ.** | Shares connective shape but a deliberately distinct denotation domain; unifying needs reconciling `Ctx` vs `(old,new)` under one σ. The temporal floors/ceilings *are* a 1-frame degenerate of a trace lookbehind. |
 | **Cap-authority lattice** (§1.2) | capability tokens | **No.** | No complement, incomparable Custom vk_hashes — not a complemented lattice; monotone-by-design. Welding it in would be wrong. |
 | **Datalog verify** (§1.4) | fact sets + fixpoint | **No (bridge, don't subsume).** | Stratified deny-rules ≠ algebraic complement; a separate engine with its own STARK path. |
@@ -269,18 +285,21 @@ the kernel. ERE≤ has zero notion of δ-balance, capabilities, or nullifiers.
 Over-claiming a "derivative kernel" would repeat the Rust-periphery-mistaken-
 for-protocol scar.
 
-### 4.2 The Lean-reuse strategy ("weld not build")
+### 4.2 The Lean strategy — blueprint, not dependency
 
-The cleanest move, if licensing clears (§4.4): **instantiate the repo's
-`EffectiveBooleanAlgebra` with dregg's own denotation**, and inherit the
-derivative + `correctness` tower over dregg's character theory. Both are
-Lean4 + mathlib4, so it is a *port*, not a translation. Concretely, three
-candidate σ instantiations, in increasing order of risk:
+The move taken: **build the derivative tower natively over dregg's own `Pred`
+algebra** (`Dregg2/Crypto/Deriv/Core.lean`: `PredRE` is ERE≤'s `RE α` minus the
+four lookarounds, with `Pred` as the `sym` leaf), reading `extended-regexes` and
+the ITP'25 finiteness repo purely as proof blueprints — never a code dependency —
+which dissolves the license gate entirely. The three candidate σ instantiations,
+in increasing order of risk:
 
-1. **σ := byte / symbol-class** (FilterTree). Direct: dregg's routing alphabet
-   *is* RE#'s Σ. This is the path the eval already endorses. The payoff is the
-   `derivativeCompile ≡ tableDfa` lemma (§3) and a `Pattern::Not` combinator.
-2. **σ := `(old, new) : Value` transition** (`Pred` over a turn-trace). Lift
+1. **σ := `Value` (single frame) — BUILT.** The `sym φ` leaf reads one `Value`
+   per step, decided by `Pred.eval φ (.record []) a`. This carries both the
+   FilterTree payoff (the faithfulness theorems of §3) and the `Pattern::Not`
+   combinator.
+2. **σ := `(old, new) : Value` transition** (`Pred` over a turn-trace) — NOT
+   built (`Core.lean` names it explicitly as out of scope). Lift
    `Pred : Value→Value→Bool` to the `RE.Pred` ctor's per-location predicate;
    `der` then steps one *turn* at a time, and `correctness` proves the streaming
    matcher equals the declarative trace-predicate. The reactive
@@ -308,16 +327,19 @@ This sequences the always-good, low-risk pieces first; the speculative
 unifications last and only on demand. Stages 1–3 are lifted from
 REGEX-AUTOMATON-EVAL.md §6; stages 0 and 4–5 are this doc's additions.
 
-- **Stage 0 — license + port spike (gating).** Ask upstream for a license
-  (§4.4). Spike: vendor `extended-regexes` into the metatheory, align toolchain
-  (their `v4.24.0-rc1` + mathlib vs dregg's `Dregg2/*` l4v-shaped tree), and
-  get `correctness` building. *No code lands until this is green.*
+- **Stage 0 — the Lean derivative core. ✅ DONE (natively — no license needed).**
+  Instead of vendoring `extended-regexes`, `Dregg2/Crypto/Deriv/Core.lean` builds
+  `PredRE` + `der`/`derives`/`Matches` directly over dregg's `Pred`, in dregg's
+  own tree, with the upstream repos as read-only blueprints. `#guard`s pin
+  non-vacuity in both polarities.
 - **Stage 1 — symbol-class AIR (in-circuit, name-gated).** Map bytes → small
   category ids before the DFA (RE#'s EBA idea at coarse granularity); shrinks
   `|symbols|` and the AIR degree. New descriptor, new `vk_hash`, re-grounded in
   `DfaAcceptanceAir`. *The only circuit+proof work.*
-- **Stage 2 — lazy determinization (out-of-circuit).** Replace eager
-  `pattern_to_nfa().determinize()` with a lazy determinizer (cache budget +
+- **Stage 2 — lazy determinization for the LEGACY path (out-of-circuit).** The
+  derivative front-end already determinizes lazily (a worklist over canonicalized
+  residuals, `derivative.rs::Re::compile`); the remaining piece is the
+  complement-free legacy `pattern_to_nfa().determinize()` (cache budget +
   give-up, `regex-automata`-hybrid-modeled); same `Dfa` output, same AIR.
   `Dfa::table_size_bytes` becomes the enforced budget.
 - **Stage 3 — derivative `&`/`~` compiler + `Pattern::Not` (out-of-circuit,
@@ -325,45 +347,43 @@ REGEX-AUTOMATON-EVAL.md §6; stages 0 and 4–5 are this doc's additions.
   Brzozowski/Antimirov front-end (lazy intersection, native complement); `Pattern::Not`
   (`compiler.rs`) makes deny-filters expressible, routed through the derivative path.
   Retires the `FilterTree` product explosion. Still emits a flat `Dfa` (AIR-neutral).
-  Landed independently of the Stage-0 license gate — the derivative front-end lives
-  entirely in the compiler and does not need the `extended-regexes` port. See
-  [DERIVATIVE-MATCHING-DESIGN.md](DERIVATIVE-MATCHING-DESIGN.md).
-- **Stage 4 — the equivalence lemma (the faithfulness close).** Prove (or port)
-  `derivativeCompile P ≡ tableDfa` so the boolean semantics is no longer an
-  untrusted Rust gap under the clean AIR proof. **This is the stage that
-  consumes the ported `correctness` theorem and is the real reason to do the
-  Lean port at all.**
+  Independent of the Lean tower — the derivative front-end lives entirely in the
+  compiler. See [DERIVATIVE-MATCHING-DESIGN.md](DERIVATIVE-MATCHING-DESIGN.md).
+- **Stage 4 — the faithfulness close. ✅ CLOSED at the language level** (with
+  `Finiteness.der_finite` as the Stage-3 Lean capstone): `Correctness` (matcher ≡
+  denotation), `TableDfa.tableDfa_faithful` (table-opaque keystone), `Powerset`
+  (the deployed lazy-derivative table agrees with `derives` by construction),
+  `Thompson` (the legacy subset path, both halves). **Named residual:** the
+  literal `derivativeCompile_eq_tableDfa` table equality against the powerset
+  table (`Deriv/Determinize.lean:26` + closing note) — unblocked, not closed.
 - **Stage 5 — predicate/caveat lift (speculative, last).** Only if §4.2(2)/(3)
   prove sound: lift `Pred`/`CaveatPred` to span-indexed recognizers over
   turn-traces, unifying §1.1's frame-algebras with the sequence algebra.
 
 ### 4.4 Risks and open questions (honest)
 
-- **NO LICENSE — the single hard blocker.** `github.com/ezhuchko/extended-
-  regexes` has no LICENSE file (gh api 404). Reuse/port is *legally blocked*
-  until upstream adds one (MIT/Apache). This is an **ember-decision / outreach
-  item**, not technical. Stage 0 cannot start without it.
+- **License — MOOT.** `github.com/ezhuchko/extended-regexes` has no LICENSE
+  file, which blocked any vendor/port. The native `Dregg2/Crypto/Deriv/` tower
+  dissolves this: the upstream repos are read purely as proof blueprints, never
+  a code dependency, so no license is needed.
 - **Semantics mismatch: strings vs turn-traces.** ERE≤ matches `List σ` with
   one predicate per location; dregg's real object is a regex over a *sequence of
   transitions*. Instantiating σ := `(old,new)` is *plausible but unverified*
   (§4.2(2)); the reversal/lookbehind interaction with turn-order is the first
   thing to check.
-- **No equivalence theorem today.** Until Stage 4, the boolean semantics of the
-  compiled table is untrusted Rust under a clean AIR (§3). This is the
-  faithfulness gap, and it is the whole point.
+- **The equivalence theorems exist; one literal residual.** The faithfulness
+  contract is closed table-opaquely and discharged for both deployed compilers
+  (§3); the literal powerset table-equality `derivativeCompile_eq_tableDfa`
+  remains named in `Deriv/Determinize.lean`.
 - **Executable-but-nonlinear.** The Lean repo gives *correctness*, not
   *performance*. RE#'s input-linearity comes from LNF + .NET engineering
   (mintermization, lazy DFA, prefilters) that the Lean artifact does NOT
   contain. dregg would inherit a verified-but-slow matcher and own the perf
   engineering itself.
-- **Finiteness is a *separate* artifact.** Termination/finiteness of the
-  derivative state-set (needed for any DFA/circuit size bound) lives in the
-  *later* ITP'25 `finiteness-derivatives` repo, not `extended-regexes`. A real
-  port pulls both, and they may track different Lean/mathlib revs — a
-  version-alignment cost against dregg's own toolchain.
-- **mathlib weight.** The repo requires full mathlib4. dregg's `Dregg2/*` is
-  l4v-shaped; a port inherits mathlib's build weight and version constraints,
-  which may or may not already be compatible.
+- **Finiteness — proven natively.** `Deriv/Finiteness.lean` proves `der_finite`
+  (Brzozowski finiteness over `PredRE`, up to similarity `≅`), ported as a
+  blueprint-read from the ITP'25 repo with the lookaround arms dropped —
+  kernel-clean, `sorry`-free. No cross-repo version alignment.
 - **Complement does not escape determinization.** RE# makes `~R` a native
   derivative, but settling it into a *committed* DFA still needs a total
   deterministic automaton; a complement of a Unicode-heavy / deeply-intersected
@@ -396,25 +416,24 @@ REGEX-AUTOMATON-EVAL.md §6; stages 0 and 4–5 are this doc's additions.
 
 ## 5. Bottom line
 
-dregg already *has* the Boolean-algebra carrier (`Pred`/`CaveatPred`/the closure
-modules — proven `#assert_axioms`-clean) and the stable in-circuit trust
-boundary (the table-opaque `TableDfa` proof). It **now has (b) `~` for the
-FilterTree** — the derivative front-end + `Pattern::Not` landed (Stage 3, Rust).
-What it still lacks is **(a) the sequence/derivative layer that would unify the
-frame-algebras with the sequence-matcher, and (c) a Lean equivalence theorem
-making the compiled boolean semantics trusted.** ERE≤'s formalization is a
-near-exact fit for (a) and (c) — same EBA abstraction, same `⊢ ↔ ⊫` correctness
-shape, Lean4+mathlib — and RE#'s derivative algebra was the right *compiler* for
-(b) (the eval already proved it is the *wrong* in-circuit transition).
+dregg has the Boolean-algebra carrier (`Pred`/`CaveatPred`/the closure modules —
+proven `#assert_axioms`-clean), the stable in-circuit trust boundary (the
+table-opaque `TableDfa` proof), **(b) `~` for the FilterTree** — the derivative
+front-end + `Pattern::Not` (Stage 3, Rust) — and **(a)+(c) the Lean
+sequence/derivative layer with its faithfulness theorems** — the native
+`Dregg2/Crypto/Deriv/` tower over `Pred` with `σ := Value`, closing "the compiled
+boolean semantics is trusted" table-opaquely for both deployed compilers. RE#'s
+derivative algebra is the *compiler*, never the in-circuit transition (the eval's
+settled split holds).
 
-The move is a **weld, not a build** — *if* the license clears. Stage 3's Rust half
-already landed (the derivative compiler + `Pattern::Not`, license-independent). The
-remaining recommendation: pursue Stage 0 (license + port spike) as the gating
-decision for the *Lean* reuse, land Stages 1–2 (good independent of the
-unification), close Stage 4 (the equivalence lemma), and treat the predicate/caveat
-lift (Stage 5) as a genuine open research question, not a foregone conclusion — the
-turn-trace σ instantiation and the right-skew non-distributivity are real, unverified
-frontiers.
+The move was a **weld, not a build** — and the license never had to clear,
+because the tower is dregg's own formalization with the upstream repos as
+blueprints only. What remains: Stages 1–2 (symbol-class AIR; lazy determinization
+for the legacy path — good independent of the unification), the literal
+`derivativeCompile_eq_tableDfa` table equality (named, unblocked), and the
+predicate/caveat trace-lift (Stage 5) as a genuine open research question, not a
+foregone conclusion — the turn-trace σ instantiation and the right-skew
+non-distributivity are real, unverified frontiers.
 
 ### Cited sources
 
@@ -428,5 +447,6 @@ frontiers.
   `token/src/{action_set,datalog_verify}.rs`.
 - DFA face: `dfa/src/{filter,compiler,derivative}.rs`, `circuit/src/dsl/dfa_routing.rs`,
   `metatheory/Dregg2/Crypto/DfaAcceptanceAir.lean`,
+  `metatheory/Dregg2/Crypto/Deriv/` (the native derivative tower),
   `cell/src/predicate.rs`, `turn/src/executor/membership_verifier.rs`.
 - The settled in-circuit split: `docs/deos/REGEX-AUTOMATON-EVAL.md`.

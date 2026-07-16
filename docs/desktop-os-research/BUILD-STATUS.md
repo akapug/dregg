@@ -1,10 +1,10 @@
 # Desktop OS / Servo-forward — BUILD STATUS
 
 *Present-tense status of what is built in code vs. what is frontier, for the
-desktop / web-surface research in this directory. The vision is settled in
-[ARCHITECTURES.md](ARCHITECTURES.md), [DISTRIBUTED-SERVO-FACETS.md](DISTRIBUTED-SERVO-FACETS.md),
-and [EXPLORATIONS.md](EXPLORATIONS.md); this note records the first compiling,
-tested slice of it.*
+desktop / web-surface research in this directory. The vision docs —
+`ARCHITECTURES.md`, `DISTRIBUTED-SERVO-FACETS.md`, `EXPLORATIONS.md` — are
+archived under `.docs-history-noclaude/desktop-os-research/`; this note records
+the compiling, tested slice of them.*
 
 ## The cap discipline is REAL in code, two layers down
 
@@ -28,21 +28,25 @@ proposal. It is built and tested in `sel4/dregg-firmament/`:
   framebuffer multiplexer enforcing the scene teeth (T1 non-overlap / T2
   label-binding / T3 focus) on the EmulatedKernel.
 
-So the firmament's "first milestone" from ARCHITECTURES.md (add `Target::Surface`
-and prove it composes) is **landed**.
+So the firmament's "first milestone" from the archived ARCHITECTURES.md (add
+`Target::Surface` and prove it composes) is **landed**.
 
 ## NEW: `starbridge-web-surface/` — the web-specific layer
 
-`/Users/ember/dev/breadstuffs/starbridge-web-surface/` is a standalone crate
-(its own empty `[workspace]`, path-deps on the real `dregg-firmament` /
-`dregg-cell` / `dregg-types`; builds with `cd starbridge-web-surface && cargo
-test` without touching the root workspace — the `pg-dregg` / `dregg-firmament`
-pattern). It is the WEB-SPECIFIC layer over the already-real surface cap model
+`/Users/ember/dev/breadstuffs/starbridge-web-surface/` is a member of the root
+workspace (root `Cargo.toml` `members`; its own `Cargo.toml` has no
+`[workspace]` table — the standalone-workspace comment in it is a fossil, and
+`sel4/dregg-firmament` is likewise a root-workspace member; only `pg-dregg` is
+the excluded standalone-workspace pattern). It path-deps on the real
+`dregg-firmament` / `dregg-cell` / `dregg-types` and builds with `cargo test -p
+starbridge-web-surface` from the repo root, resolving in the root workspace and
+its shared `./target`. It is the WEB-SPECIFIC layer over the already-real surface cap model
 and binds — never reinvents — the real types. Two deliverables:
 
 ### 1. The embedded web surface as a cap gate (`src/delegate.rs`)
 
-Realizes [EMBEDDED-WEB-SURFACE.md](../EMBEDDED-WEB-SURFACE.md) §2/§4.1:
+Realizes EMBEDDED-WEB-SURFACE.md §2/§4.1 (archived:
+`.docs-history-noclaude/EMBEDDED-WEB-SURFACE.md`):
 
 - `WebSurfaceDelegate` — a trait shaped one-to-one against libservo's real
   `WebViewDelegate`: `load_web_resource` / `allow_navigation` /
@@ -68,7 +72,8 @@ Realizes [EMBEDDED-WEB-SURFACE.md](../EMBEDDED-WEB-SURFACE.md) §2/§4.1:
 
 ### 2. The `dregg://` web of cells (`src/web_of_cells.rs`)
 
-Realizes [DISTRIBUTED-SERVO-FACETS.md](DISTRIBUTED-SERVO-FACETS.md) Facet 1:
+Realizes DISTRIBUTED-SERVO-FACETS.md Facet 1 (archived:
+`.docs-history-noclaude/desktop-os-research/DISTRIBUTED-SERVO-FACETS.md`):
 
 - `DreggUri` — a `dregg://<cell>` link is a sturdy ref into a cell (the origin's
   content-addressed `CellId`).
@@ -93,14 +98,13 @@ Realizes [DISTRIBUTED-SERVO-FACETS.md](DISTRIBUTED-SERVO-FACETS.md) Facet 1:
 A runnable demo of both facets:
 `cd starbridge-web-surface && cargo run --example web_of_cells_demo`.
 
-### SINCE: the crate grew past the two-deliverable slice
+### Beyond the two deliverables
 
-This note was written at the two-file slice (`delegate.rs` + `web_of_cells.rs`);
-`starbridge-web-surface/src/` has since grown the surrounding surfaces —
+`starbridge-web-surface/src/` carries more than the two modules above —
 `affordance.rs`, `game.rs`, `rehydrate.rs`, `receipt_stream.rs`,
 `transclusion.rs` / `transclusion_chain.rs` / `transclusion_version.rs`,
 `vision_predicate.rs`, `world.rs`. The cap-gate + `dregg://` web-of-cells core
-below is still the load-bearing spine; the newer modules build on it. ( ˘▾˘ )
+is the load-bearing spine; the other modules build on it. ( ˘▾˘ )
 
 ## The LIBSERVO SEAM — exactly where the real engine plugs in
 
@@ -115,10 +119,17 @@ standing in for the libservo `WebView`, with a `// LIBSERVO SEAM` block giving t
 exact `WebViewDelegate` impl that forwards each callback to `CapGatedDelegate`.
 Everything the gate checks against — the cap model, `is_attenuation`, the
 no-amplification mint, the `AttestedRoot` chain — is the REAL dregg machinery and
-is unchanged when the seam closes; only `MockSurface` is replaced. The live
-frontier is the libservo-default feature flip, the first real
-`render_url_to_frame` page render, the URL bar, and the net-cap (`captp`
-`Netlayer::dial`) + fs/cache-cap.
+is unchanged when the seam closes; only `MockSurface` is replaced. On the
+starbridge-v2 side those rungs are landed: `web-shell` rides the default
+`desktop` feature (`starbridge-v2/Cargo.toml`: `default = ["desktop"]`,
+`desktop` → `web-shell` → `servo` + `servo-render/libservo`), and the cockpit
+web shell (`starbridge-v2/src/cockpit/panels_webshell.rs`) drives real
+`render_url_to_frame` page renders behind a real gpui address bar, with
+net-cap routing through `render_url_to_frame_netcap`
+(`servo-render/src/webview.rs` dials `captp`'s `Netlayer` via
+`NetcapConnector`; an unauthorized origin gets a cap-denied body) —
+SERVO-ON-SEL4.md records Stage A DONE on the host. Named remaining seams: the
+fs/cache-cap, and this crate's `MockSurface` seam itself.
 
 ## What the full build will still need (reported, not worked around)
 
@@ -132,8 +143,10 @@ surfaces. None is reinvented here; each is named:
   allowlists, permissions) live in `starbridge-web-surface`'s `SurfaceCapability`
   on top of the firmament window rights. ARCHITECTURES.md L7 / EMBEDDED-WEB-
   SURFACE.md §2 call for these to ride the real `cell/src/facet.rs` `EffectMask`
-  (the free bits 24–31: `EFFECT_SURFACE_PAINT`/`RECEIVE_INPUT`/… and web
-  facets). The `EffectMask` narrowing machinery is already proven non-vacuous
+  (bits 24–26 are assigned at HEAD — `EFFECT_SET_PROGRAM`/`EFFECT_REACTIVE_OPS`/
+  `EFFECT_MINT` — so the free landing zone for new
+  `EFFECT_SURFACE_PAINT`/`RECEIVE_INPUT`/… web facets is bits 27–31). The
+  `EffectMask` narrowing machinery is already proven non-vacuous
   (`rejects_effect_mask_widening`); assigning the web-relevant bits and moving
   the allowlists onto `CapabilityRef.allowed_effects` is the additive follow-up.
   Needs: no new mechanism — bit assignments in `cell/src/facet.rs` (a main-loop
@@ -164,8 +177,8 @@ surfaces. None is reinvented here; each is named:
 ## Verify
 
 ```
-cd /Users/ember/dev/breadstuffs/starbridge-web-surface && cargo test
+cd /Users/ember/dev/breadstuffs && cargo test -p starbridge-web-surface
 ```
 
-builds standalone (its own workspace) and runs the delegate + web-of-cells test
+builds in the root workspace and runs the delegate + web-of-cells test
 suites green.

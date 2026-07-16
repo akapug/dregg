@@ -106,6 +106,14 @@ in-band, exactly as an over-budget action is.
 - **Hostile-body robustness** — a jailed body cannot wedge (crash → clean;
   hang → read-timeout + SIGKILL-reap), fool (garbage → fail-closed), exceed (caps
   refused), or OOM (per-message length cap) the host.
+- **A forkable confined session** — `grain_fork::confined::ConfinedSession`
+  bundles a confined session's full state (committed mind + prepaid budget +
+  caps + egress confinement + receipt chain); `fork_two` takes one checkpoint
+  and yields two sovereign sessions, with all four conservation/attenuation
+  teeth tested (egress doors a subset of the parent's, caps attenuated,
+  budgets summing to no more than the parent's, isolated per-fork receipt
+  chains rooted at the shared fork point). Spec:
+  `docs/deos/FORKABLE-CONFINED-SESSION.md`.
 - **A runnable demo** — `cargo run -p grain-jail --example rent_a_confined_agent`
   (add `--features real-jail` to OS-jail the body).
 
@@ -123,9 +131,11 @@ in-band, exactly as an over-budget action is.
 - **Productization.** `agent-platform` gaining a first-class jailed-grain drive
   (rent → jailed body → drive) so the confined agent is a rentable product, not
   only a test path. (`agent-platform` is edited by another lane — coordinate.)
-- **Fork a confined session.** fork/rewind/stitch live on `grain-fork::Grain`
-  (raw-memory mind), the confined drive on `agent-platform::Tenant` (brain-driven)
-  — unifying them (spine #4) gives a forkable/rewindable confined coding session.
+- **Drive a forked session through `agent-platform::Tenant`.** The unifying
+  type exists (`ConfinedSession`, above); the remaining seam is the adapter
+  that lets a `Tenant`'s brain-driven rent/session state ride a
+  `ConfinedSession` — the forkable/rewindable confined coding session
+  end-to-end, drive loop included.
 - **R3.** The whole-session STARK fold (`grain_verify::WHOLE_HISTORY_GAP`) stays
   the grain's verifiability frontier; R2 is today's ceiling.
 

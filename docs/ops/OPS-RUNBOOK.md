@@ -57,9 +57,13 @@ Two hosts, one exposed surface.
 
 - **AWS gateway (public):** the single exposed surface. Terminates TLS, reverse-
   proxies to the hbox demo ports over the private channel, and rate-limits.
-  Wired by ember — this runbook does **not** configure it. It follows the same
-  `deploy/aws` Caddy-fronted topology the existing ops set describes
-  (`docs/ops/README.md`).
+  Wired by ember — this runbook does **not** configure it. It is **new work**:
+  the AWS edge today runs a docker compose stack with **no Caddy and no public
+  reverse-proxy** (`deploy/aws/README.md`; the Caddy-fronted `deploy/aws`
+  topology older docs described never ran and is quarantined in
+  `deploy/aws/SUPERSEDED/`). Note also that the edge and hbox sit on **two
+  disconnected tailnets** (`deploy/README.md`) — the private channel below must
+  be a dedicated tunnel, not "the tailnet".
 - **hbox (private infra):** the demo web servers, the launchpad indexer, the
   DrEX matcher hop, and the proving pipeline. hbox is **not publicly reachable**;
   the gateway is its only ingress. The demo ports bind to `127.0.0.1` (or the
@@ -151,11 +155,14 @@ state. The design principle is **TRUST-for-liveness vs VERIFY-for-soundness**:
 
 > dregg **verifies** the proof / consensus anchor for every claim it accepts (a
 > STARK apex, an Altair sync-committee signature, a Tendermint validator-set
-> quorum, a ≥2/3-stake Solana vote). So a **lying feed can only STALL** the demo
-> (a liveness/DoS failure — it withholds or lies and the anchored verify rejects)
-> — it **cannot FORGE** an accepted state (a soundness failure). This is why the
-> feed choice is a **cost/liveness** decision, not a security one: we spend where
-> a light client is impractical, and light-client-verify everywhere it is not.
+> quorum, a ≥2/3-stake Solana vote). On the proof and light-client legs a
+> **lying feed can only STALL** the demo (a liveness/DoS failure — it withholds
+> or lies and the anchored verify rejects) — it **cannot FORGE** an accepted
+> state (a soundness failure). On the **Solana leg** the anchored verify carries
+> **three named OPEN soundness seams** (classified in the Solana note below);
+> until they close, "cannot forge" does not hold unqualified there. The feed
+> choice is still a **cost/liveness** decision: we spend where a light client is
+> impractical, and light-client-verify everywhere it is not.
 
 ### Provisioning list (the shopping list)
 
@@ -165,7 +172,7 @@ state. The design principle is **TRUST-for-liveness vs VERIFY-for-soundness**:
 | **Cosmos** | **Tendermint light client on hbox** (IBC-grade validator-set verify) — `cosmos-lightclient/` — or a public RPC | **light-client trust-minimized** (RPC if the LC is deferred) | **free** |
 | **Base-Sepolia** (EVM L2, 84532) | **free public testnet RPC** `https://sepolia.base.org` | **RPC weak-subjectivity** (honestly graded) | **free** |
 | **Robinhood testnet** (EVM L2, 46630) | **free public testnet RPC** `https://rpc.testnet.chain.robinhood.com` | **RPC weak-subjectivity** (honestly graded) | **free** |
-| **Solana** | **HELIUS (paid — ember has the account)** | **RPC trusted for LIVENESS**; dregg's ≥2/3-stake consensus-anchored read (`bridge/src/solana_consensus.rs` + `solana_holdings.rs`) provides the **SOUNDNESS** | **paid — the ONE paid line item** |
+| **Solana** | **HELIUS (paid — ember has the account)** | **RPC trusted for LIVENESS**; dregg's ≥2/3-stake consensus-anchored read (`bridge/src/solana_consensus.rs` + `solana_holdings.rs`) provides the **soundness gate** — with **3 named OPEN seams** (see the Solana note) | **paid — the ONE paid line item** |
 
 Notes on the two that aren't a plain light client:
 
@@ -180,9 +187,24 @@ Notes on the two that aren't a plain light client:
 - **Solana.** A **full node is impractical** (multi-TB state, heavy validator), and
   there is **no clean light client** (no sync-committee analogue). So the feed
   (**Helius**) is **trusted for LIVENESS only** — it tells hbox what to look at —
-  while dregg's own **≥2/3-stake consensus-anchored verify** re-derives soundness
-  from the validator votes (a lying Helius stalls; it cannot forge an accepted
-  holding/settlement). This is the single justified paid feed.
+  while dregg's own **≥2/3-stake consensus-anchored verify** re-derives a
+  ≥2/3-stake tally from the validator votes. That verify carries **three named
+  OPEN soundness seams** (HORIZONLOG P1 "close value-path holes"), each a
+  lying-feed forgery surface until closed:
+  1. **Stake-set completeness under rotation** — `derive_stake_table`
+     (`bridge/src/solana_provenance.rs:457`) proves *membership*, not
+     *completeness*, and `rotate` (`solana_provenance.rs:706`) accepts a feed
+     that omits stake accounts, shrinking the denominator until a minority
+     tallies as a "supermajority".
+  2. **Rotation tally binding** — rotation tallies with the weaker
+     `verify_supermajority`, not `tally_authorized`'s authorized-voter binding
+     (`solana_provenance.rs:619`).
+  3. **Exact-slot, not rooted** — `verify_consensus_anchored`
+     (`bridge/src/solana_trustless.rs:750`) proves an exact-slot supermajority,
+     not ROOTED finality; a "finalized" label on its output over-claims.
+  So on this leg a lying Helius can stall, and — through these seams — has a
+  residual forgery surface; the ◐ grade below states exactly that. This is the
+  single justified paid feed.
 
 ### The honest-grade panel (the demo MUST show this)
 
@@ -194,12 +216,13 @@ honest-grade discipline as the PROVED/ATTESTED/BUILT labels. The demo must rende
   Cosmos          ● light-client verified   (Tendermint validator-set, trust-min)
   Base-Sepolia    ○ RPC (weak-subjectivity) — testnet; L1-anchored LC = prod upgrade
   Robinhood       ○ RPC (weak-subjectivity) — testnet; L1-anchored LC = prod upgrade
-  Solana          ◐ RPC-liveness (Helius) + ≥2/3-stake consensus-anchored SOUNDNESS
+  Solana          ◐ RPC-liveness (Helius) + ≥2/3-stake anchored verify (3 OPEN seams)
 ```
 
 Filled ● = trust-minimized verify; hollow ○ = trusted RPC (testnet-graded);
-half ◐ = trusted-for-liveness, verified-for-soundness. **Do not present an ○ or ◐
-leg as trust-minimized** — the grade is the honesty.
+half ◐ = trusted-for-liveness, anchored-verify-for-soundness with named open
+seams. **Do not present an ○ or ◐ leg as trust-minimized** — the grade is the
+honesty.
 
 ### How each wires into the demo (env + processes on hbox)
 
@@ -265,9 +288,9 @@ RPC for the ETH/Cosmos legs. The LCs are **read-only** and hold **no keys**.
   browser must not see it; if a leg needs a browser-side Solana read, proxy it
   through the hbox backend so the key stays server-side).
 - Rotate it like any credential (`docs/ops/KEY-MANAGEMENT.md`); a leaked testnet-
-  demo Helius key is a **quota/liveness** exposure (someone burns your RPC quota),
-  **not** a value/soundness one — dregg's consensus-anchored verify still gates
-  soundness — but rotate promptly regardless.
+  demo Helius key is primarily a **quota/liveness** exposure (someone burns your
+  RPC quota) — dregg's consensus-anchored verify gates acceptance, subject to the
+  three named open seams above — rotate promptly regardless.
 - The light-client legs carry **no secret** (they verify public consensus data),
   so ETH/Cosmos have no key-management surface — another reason to prefer them.
 
@@ -376,9 +399,9 @@ PORT=8785 node server.mjs
 - The indexer backfills from genesis then polls new blocks — it is **read-only**
   over the testnet RPC (no keys).
 
-**Process management — systemd (matches the existing `docs/ops` native pattern:
-`systemd` units, git-ffwd + rebuild-on-box + restart).** Two units, bound to
-localhost:
+**Process management — systemd (the same pattern as the live hbox units in
+`deploy/games/`: a unit + restart-on-failure; hand-run processes do not survive
+a reboot).** Two units, bound to localhost:
 ```ini
 # /etc/systemd/system/dregg-drex-demo.service
 [Unit]

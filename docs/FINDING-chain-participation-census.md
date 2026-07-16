@@ -1,11 +1,17 @@
 # Finding: the legacy census — EVM contracts, bridge trust models, and chain-agnostic participation (2026-07-11)
 
-> ⚑ **Dated finding — §1's gaps have since been closed (2026-07-12).** The
-> 25-lane statement is now bound end-to-end: `DreggSettlement.sol` +
-> `DreggGroth16Verifier25.sol` exist and a real Groth16 proof settles in
-> Foundry (dev trusted setup; residuals in `docs/deos/WRAP-NATIVE-HASH-DECISION.md`
-> §CURRENT STATE). The findings below record the pre-close state that drove
-> that work.
+> ⚑ **Dated finding — §1's and §3's headline gaps have since been closed.**
+> §1 (2026-07-12): the 25-lane statement is bound end-to-end —
+> `DreggSettlement.sol` + `DreggGroth16Verifier25.sol` exist and a real Groth16
+> proof settles in Foundry (dev trusted setup; residuals in
+> `docs/deos/WRAP-NATIVE-HASH-DECISION.md` §CURRENT STATE). §3's loudest gap:
+> `eth-lightclient/` is a real Altair sync-committee light-client verify core —
+> blst-based BLS12-381 aggregate signature verification over the 512-validator
+> committee plus the SSZ Merkle committee-rotation branch
+> (`eth-lightclient/src/lib.rs`), with Base modules beside it (`base.rs`,
+> `base_fault_proof.rs`) — so "no BLS12-381 verification exists in-tree" is no
+> longer true. The findings below record the pre-close state that drove that
+> work; §3's table is a snapshot, not a live assessment.
 
 Three parallel file:line-grounded sweeps (contracts vs proving stack; governance/voting/passkeys;
 bridge trust models) answering: what is legacy, what needs vast upgrading, and what is missing for
@@ -16,12 +22,14 @@ bridge trust models) answering: what is legacy, what needs vast upgrading, and w
 The live `WholeChainProof` claim is **25 BabyBear lanes**: `genesis_root8 ++ final_root8 ++
 num_turns ++ chain_digest8` (`SEG_ANCHOR_WIDTH = 8` at `circuit-prove/src/ivc_turn_chain.rs:267`,
 `SEG_DIGEST_WIDTH = 8` at `:254`, host tooth `:2807-2811`, envelope v3 postcard `:1751-1755`).
-Everything EVM-side still encodes the **pre-widening 4-scalar model**:
+At the census date, everything EVM-side encoded the **pre-widening 4-scalar model**:
 
-- `IDreggSettlement.settle(...)` takes `bytes32 genesisRoot, bytes32 finalRoot, uint64 numTurns,
-  bytes32 chainDigest` (`chain/contracts/IDreggSettlement.sol:43-51`); its own doc comment (`:18-22`)
-  states the stale "four public inputs" spec. A Groth16 verifier's public-input vector length is
-  fixed by its circuit — a 4-input ABI cannot bind a 25-input statement.
+- The settlement interface took 4 scalars *(closed — see banner: at HEAD
+  `chain/contracts/IDreggSettlement.sol` pins the 25-lane BabyBear public-input contract in its
+  header, and `settle` (`:168`) takes the Groth16 points plus `uint32[8] genesisRoot,
+  uint32[8] finalRoot, uint32 numTurns, uint32[8] chainDigest, bytes32 outboundMessageRoot`)*.
+  A Groth16 verifier's public-input vector length is fixed by its circuit — a 4-input ABI cannot
+  bind a 25-input statement; the widened interface removes that mismatch.
 - `EthPublicInputs` (`bridge/src/ethereum.rs:260-270`) has single-word roots; `to_calldata` writes a
   104-byte tail and `from_tail` hard-rejects anything else (`:186-207`).
 - `DreggVault.withdraw` decodes yet a third shape — Solidity
@@ -36,32 +44,44 @@ Everything EVM-side still encodes the **pre-widening 4-scalar model**:
 
 ## 2. Contract-level defects beyond the shape
 
-- **Fail-open verifier call**: both contracts `staticcall` `verifyProof(bytes32,bytes,bytes)` and
-  check only success (`DreggVault.sol:163-171`, `DreggCredentialGate.sol:128-136`). A staticcall to
-  a codeless address returns `(true, "")` → a misconfigured verifier immutable accepts everything.
-  The foundry mocks normalize the same pattern (`DreggVault.t.sol:15-22`).
-- **The vault's on-chain Merkle tree is decorative**: keccak (notes are Poseidon2 —
-  `IDreggVault.sol:24,45`), O(n) full recompute per deposit (`_computeRoot`,
-  `DreggVault.sol:228-253`, self-labeled "in production… incremental"), odd leaves promoted
-  unhashed — and `withdraw()` **discards the proof's root** rather than comparing
-  (`DreggVault.sol:181`). The security path never uses the tree.
-- **No solvency/fee/relayer model**: withdraw checks token identity but never that the vault holds
-  matching deposits; no relayer fee field; no `nonReentrant`; raw low-level ERC-20 `call`.
-- **CredentialGate is demo-grade governance**: permanent single `admin` key (no rotation/timelock,
-  `DreggCredentialGate.sol:33,95-108`); votes are bare `yes/no` uint counters with no proposal
+- **Fail-open verifier call** *(closed at HEAD)*: the census found both contracts `staticcall`ing
+  `verifyProof(bytes32,bytes,bytes)` and checking only success — a staticcall to a codeless
+  address returns `(true, "")`, so a misconfigured verifier immutable accepted everything. Both
+  contracts fail closed on a codeless verifier at HEAD: `DreggVault` refuses a codeless verifier
+  (and settlement client) at construction and again on the verify path (`DreggVault.sol:186-194`,
+  `:545-549`), and `DreggCredentialGate`'s constructor does the same
+  (`DreggCredentialGate.sol:115-118`).
+- **The vault's on-chain Merkle tree is a labeled placeholder**: keccak where notes are Poseidon2
+  (self-labeled stand-in, `DreggVault.sol:65`), O(n) full recompute per deposit (`_computeRoot`,
+  `DreggVault.sol:576`, self-labeled "in production… incremental"), odd leaves promoted unhashed
+  (`:594`). The census's "withdraw() discards the proof's root" defect is closed at HEAD:
+  `withdraw` checks the proof's committed root against the recent-root ring buffer
+  (`if (!isKnownRoot(proofRoot)) revert UnknownRoot(proofRoot)`, `DreggVault.sol:273-311`) — the
+  security path consults the tree.
+- **No fee/relayer model**: no relayer fee field; raw low-level ERC-20 `call`. The census's
+  solvency/reentrancy gaps are closed at HEAD: `withdraw` is `nonReentrant`, enforces
+  `amount <= tokenBalances[token]` (`InsufficientVaultBalance`), and marks the nullifier used
+  before any external transfer (`DreggVault.sol:273-311`).
+- **CredentialGate is demo-grade governance**: single `admin` key with two-step rotation
+  (`proposeAdmin`/`acceptAdmin`, `DreggCredentialGate.sol:134-146`) but no timelock; votes are
+  bare `yes/no` uint counters with no proposal
   lifecycle/quorum/weighting/enactment (`:52-53,254-258`); non-standard ERC-721 (no
-  transfer/approve/165, caller-chosen tokenId, `tokenURI` never written); **global** mint nullifier
-  contradicting the interface's per-(serial,domain,tokenId) spec (`:196-197` vs
-  `IDreggCredentialGate.sol:60-62`) — and the tests bake the wrong behavior in as intended.
+  transfer/approve/165, caller-chosen tokenId, `tokenURI` never written). The census's
+  global-vs-per-(serial,domain,tokenId) nullifier contradiction is closed at HEAD: interface and
+  contract agree that the BARE presentation nullifier is the replay key — one presentation mints
+  exactly one token (`IDreggCredentialGate.sol:56-64`; check at `DreggCredentialGate.sol:239-241`).
+  The contract classifies per-tokenId scoping as UNSOUND under the current proof format (tokenId is
+  a caller argument the proof does not bind, so scoping the key by it would allow replay-mints,
+  `DreggCredentialGate.sol:26-36`); the global nullifier is the fail-closed design, not a defect.
 
 ## 3. Bridge trust models vs the bar ("wraps only exist where you lack proofs")
 
 | Surface | Today | Distance to the bar |
 |---|---|---|
-| ETH settlement (dregg→ETH) | real proof *design*; Groth16 core absent (`BindingOnly`) | the gnark wrap (runway already laid) |
+| ETH settlement (dregg→ETH) | real proof *design*; Groth16 core absent (`BindingOnly`) | the gnark wrap *(closed — see banner, §1)* |
 | Solana inbound $DREGG mirror | threshold-oracle attestation (`solana_mirror.rs:446-455`) | Option-B succinct wrapper |
 | Solana consensus-verified path | REAL Tower-BFT verify in Rust — stake-weighted Ed25519 supermajority, bank-hash recompute, PoH segment (`solana_consensus.rs:286-343`) — but off-circuit, re-executing-validator grade | fold into an AIR (the multi-month item, `SOLANA-SUCCINCT-WRAPPER.md:160-166`) |
-| ETH/Base inbound deposits | RPC `finalized`-tag trust; Base listener waits **2 confirmations** (`chain/src/listener.rs:85-96`) | sync-committee BLS + MPT proof — **no BLS12-381 verification exists in-tree at all** |
+| ETH/Base inbound deposits | RPC `finalized`-tag trust; Base listener waits **2 confirmations** (`chain/src/listener.rs:85-96`) | sync-committee BLS + MPT proof *(closed: `eth-lightclient` carries the BLS12-381 verify — see banner)* |
 | Midnight | inbound: federation observes GRANDPA finality via WS-RPC; outbound: 2-of-3 attestation upgraded to 1-of-N watchtower fraud-proof (`midnight_verified.rs`); mirror-tree hash still a BLAKE3 `TODO(mirror-hash)` placeholder (`midnight_inclusion.rs:918`) | GRANDPA light client feasible, not built; wire the real Poseidon |
 | Mina | binding-commitment + relay-liveness only (the old Kimchi "Level 2" recursion was VACUOUS and was removed — `mina.rs:154-159`) | in-circuit Ouroboros verify; do not resurrect the vacuous wrap |
 | Stripe money-in | **the one deployed inbound proof**: DECO/zkTLS attestation verified in-AIR, Lean-proven (`stripe_deco.rs`) | already at the bar |
@@ -73,10 +93,10 @@ double-mint fix, `turn/src/executor/bridge_ledger.rs`); the deployed `proofBind`
 gated VK epoch together with the `bridge_action_air` fold and the 4→8-felt lift; proof-to-action
 binding is currently executor-side ("Silver"), not in-circuit.
 
-The Solana paradox: the hardest chain has the most built (a real consensus verifier + the
-weak-subjectivity/stake-rotation template any future light client can copy). The easiest chain
-(ETH: 512-key sync committee) has nothing — BLS12-381 aggregate verification is the single missing
-primitive.
+The Solana paradox, as of the census: the hardest chain had the most built (a real consensus
+verifier + the weak-subjectivity/stake-rotation template any future light client can copy), while
+the easiest chain (ETH: 512-key sync committee) had nothing — BLS12-381 aggregate verification was
+the single missing primitive *(closed: `eth-lightclient` — see banner)*.
 
 ## 4. Governance / non-custodial voting / passkeys — what exists
 
@@ -84,11 +104,15 @@ primitive.
   proposals open polls whose electorate is the constitution's participant set, 2n/3+1 threshold,
   auto-enact on quorum (`src/governance.rs:80-151`, tests in `tests/teeth.rs`). Plus community
   polls with content-addressed causal `VoteBlock`s (dropped ballot ⇒ root mismatch) and
-  non-amplifying liquid delegation. In-memory engine; not node-wired.
-- **`collective-choice`**: a second, executor-backed engine on the real `EmbeddedExecutor` —
+  non-amplifying liquid delegation. Executor-backed at HEAD (`FederationGovernance` ≡
+  `substrate::ExecutorGovernance`); not node-wired.
+- **`collective-choice`**: the executor-backed engine on the real `EmbeddedExecutor` —
   WriteOnce ballot cells, monotone tallies, quorum as an `AffineLe` constraint, `Mandate`
-  sub-delegation, nullifier set + per-voter blinding tokens (3-depth sybil resistance). The two
-  `VoteEngine`s are explicitly unreconciled (`dregg-governance/src/lib.rs:49-56`).
+  sub-delegation, nullifier set + per-voter blinding tokens (3-depth sybil resistance). At HEAD
+  this is THE engine: `dregg-governance`'s crate header declares every face (federation
+  self-governance, community polls, story branch-votes) driven through
+  `collective_choice::VoteEngine`, with the host ballot box demoted to a non-governance host-side
+  derivation aid (`dregg-governance/src/lib.rs:1-58`).
 - **`starbridge-apps/privacy-voting` + `polis`**: the cell substrate (ballot/poll factories;
   council/constitution/mandate/KERI-style identity organs). One-vote + tamper-evident tally;
   ballot *secrecy* (mixnet unlinkability) is a named open follow-up.
@@ -107,8 +131,9 @@ primitive.
 
 **UPDATE (2026-07-11): the primitive is now BUILT and Lean-verified.** The rest of this
 section's framing ("nothing derives weight from holdings") described the state *before* the
-proof-of-holdings primitive landed. It now exists, non-custodially, and closes item 1 below; the
-three welds (2–4) remain. Primary design note: `docs/deos/PROOF-OF-HOLDINGS.md`.
+proof-of-holdings primitive landed. It now exists, non-custodially, and closes item 1 below;
+weld 2's engine-reconciliation half is landed (its node-wiring half remains) and welds 3–4
+remain. Primary design note: `docs/deos/PROOF-OF-HOLDINGS.md`.
 
 The historical gap: every engine was one-voter-one-vote (+ delegation) over a static enumerated
 `[u8;32]` electorate, and nothing derived weight from token holdings. The "$DREGG holder on
@@ -138,9 +163,11 @@ and three welds:
    upgrade from federation-attested to chain-proven the same way. Residuals on the built primitive:
    the live-feed wire-format adapter, the in-circuit fold (`SOLANA-SUCCINCT-WRAPPER.md`), and the
    FFI splice (wired-but-staged) — see `PROOF-OF-HOLDINGS.md`.
-2. **One engine** (weld): reconcile the two `VoteEngine`s (collective-choice's executor-backed one
-   is the keeper; `dregg-governance`'s constitution/auto-enact face plugs onto it) and wire to the
-   node so participation is networked, not in-process.
+2. **One engine** (weld — reconciliation half landed): the constitution/auto-enact face runs on
+   the executor-backed `collective_choice` engine (`governance.rs`/`substrate.rs`, with
+   `reactor::GovernanceEnactReactor` auto-enacting on the real `ConstitutionManager`;
+   `dregg-governance/src/lib.rs:27-38`). Remaining: wire to the node so participation is
+   networked, not in-process.
 3. **One identity** (weld): passkey-custody keys as first-class electorate members (the demo
    already proves the mechanics; make it a library, not demo-page glue).
 4. **One tally** (weld): EVM-side votes (gate) aggregate into the in-protocol tally as bridged

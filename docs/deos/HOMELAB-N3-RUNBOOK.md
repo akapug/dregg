@@ -8,8 +8,10 @@ new VK is `stop.sh && git pull && cargo build && genesis.sh && start.sh && smoke
 
 Grounding: this is the persistent twin of `scripts/devnet-n3-ordering.sh` (the
 canonical N=3 witness — same topology, cadence, and [A]/[B]/[C] gates) crossed with
-`deploy/aws/N3-RUNBOOK.md` (the AWS-instance federation runbook). Read both for the
-consensus semantics; this file is the homelab operations layer.
+`deploy/aws/SUPERSEDED/N3-RUNBOOK.md` (the AWS-instance federation runbook; the
+whole `deploy/aws` tree is retired — the live deploy docs are `deploy/games/` +
+`deploy/PRACTICES.md`). Read both for the consensus semantics; this file is the
+homelab operations layer.
 
 ## Layout on persvati
 
@@ -82,7 +84,7 @@ PATH=$HOME/.elan/bin:$HOME/.cargo/bin:$PATH DREGG_REQUIRE_LEAN=0 nice -n 10 \
 
 `stop.sh && genesis.sh && start.sh` is a clean re-genesis cycle: `federation_id`
 commits to the freshly-minted committee pubkeys, so every genesis is a fresh chain
-(the documented regeneration path — see `deploy/aws/N3-RUNBOOK.md` §"CHAIN RESET").
+(the documented regeneration path — see `deploy/aws/SUPERSEDED/N3-RUNBOOK.md` §"CHAIN RESET").
 
 Knobs (env, see `~/n3/env.sh`): `N3_PROVE_TURNS=1` adds `--prove-turns` (full-turn
 STARK on the commit path — the audit-grade devnet mode); `N3_LEAN_PRODUCER=0/1` pins

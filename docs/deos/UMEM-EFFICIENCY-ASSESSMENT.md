@@ -20,18 +20,20 @@ HEAD unless flagged. Where a memory note and the code disagree, the code wins.
 - **The "−48.6% chip-drop" is REAL and reproducible** — but it is an **isolated micro-probe**
   (a synthetic 4-row, 6-column descriptor), and the win materializes **only when the chip table
   is dropped**, which a "memory-only descriptor" does and a real deployed effect does NOT.
-- **On the DEPLOYED path the win is unrealized — and the welded prover is not yet the default.**
-  Two umem toggles must not be conflated. The executor's umem *observation bridge* is ON by default
+- **On the DEPLOYED path the win is unrealized — the welded form is REQUIRED, and it is additive.**
+  Two umem facts, not to be conflated. The executor's umem *observation bridge* is ON by default
   (`umem_witness_enabled: AtomicBool::new(true)` at every `TurnExecutor` ctor,
-  `turn/src/executor/mod.rs:1008/1070/1114` — the G4 observation epoch: the deployed executor *witnesses*
-  the umem boundary). But the umem-**welded proving registry / VK** stays **STAGED, not flipped**: the
-  deployed prover default remains per-map until the gated VK epoch (`sdk/src/full_turn_proof.rs` —
-  "no VK bump, no default flip, `umem_witness_enabled` untouched"; `rotation-wide-umem-welded-registry-staged.tsv`
-  is the staged *target*, not the deployed default). Measured on that staged welded form it is **purely
-  additive**: it keeps `main/chip/range/memory/map_ops` and ADDS `umemory/umem_boundary` on top. 0 of 54
-  members drop the chip. Static cost: **+0.8% summed trace width, +2 tables/member, +0.6% constraints**.
-  In its current welded form umem is a small **regression**, not a win — and the table-collapse win
-  remains the pending lever the gated VK epoch would unlock.
+  `turn/src/executor/mod.rs:1130/1195/1242`). And THE FLIP (G4) is deployed: for a single-cohort
+  sovereign turn whose descriptor key has a welded twin, `verify_one_cohort_run` computes
+  `require_welded` and DROPS the bare wide member from the accept set — a bare wide proof rejects
+  fail-closed and the welded leg is the sole accepted form
+  (`turn/src/executor/proof_verify.rs:1445-1467`; the producer routes through the welded form via
+  `FullTurnWitness::umem_witness`, `sdk/src/full_turn_proof.rs:183-202`; multi-cohort chain legs
+  and the 4 `LIVE_ONLY_BARE_KEYS` members stay bare). But the welded form is **purely additive**:
+  it keeps `main/chip/range/memory/map_ops` and ADDS `umemory/umem_boundary` on top. 0 of 57
+  members drop the chip. Static cost: **+1.9% summed table arity, +2 tables/member, +0.24% constraints**.
+  So the deployed default pays a small size **regression**, not a win — and the table-collapse win
+  remains the pending lever, riding the universal-map rotation, not the landed welded VK epoch.
 - **The "~130,000×" is NOT a umem benchmark** — it is a dated profiler note about per-turn
   *commitment* FFI (a different subsystem). It does not belong in the umem efficiency story and
   is not cited here as evidence.
@@ -92,27 +94,27 @@ that contains *only* that leg. It does not (and does not claim to) measure a rea
 
 ## 2. The static column / constraint / chip comparison (the deterministic core)
 
-Parsed from the deployed staged registries, matching members by name (54 members common to
+Parsed from the deployed registries, matching members by name (57 members common to
 both; `rotation-wide-registry-staged.tsv` = the per-map "bare wide" baseline at the 8-felt
-commitment, `rotation-wide-umem-welded-registry-staged.tsv` = the umem-welded form — **STAGED**, the
-target of the gated VK epoch, *not* yet the deployed prover default (the executor observation bridge is
-on; the welded VK is not flipped):
+commitment, `rotation-wide-umem-welded-registry-staged.tsv` = the umem-welded form — the `-staged`
+filename suffix notwithstanding, this is the form the deployed executor REQUIRES for a
+single-cohort sovereign turn, `require_welded` in `turn/src/executor/proof_verify.rs:1445`):
 
-| metric (summed over 54 matched members) | bare wide (per-map) | umem-welded | Δ |
+| metric (summed over 57 matched members) | bare wide (per-map) | umem-welded | Δ |
 |---|---|---|---|
-| trace width | 47,632 | 48,010 | **+378 (+0.8%)** |
-| table instances | 270 (5/member) | 378 (7/member) | **+108 (+2/member)** |
-| constraints | 8,884 | 8,938 | **+54 (+0.6%)** |
+| summed table arity | 158,780 | 161,790 | **+3,010 (+1.9%)** |
+| table instances | 285 (5/member) | 399 (7/member) | **+114 (+2/member)** |
+| constraints | 23,692 | 23,749 | **+57 (+0.24%)** |
 
 Per-member table sets (e.g. `transferVmDescriptor2R24`):
 
 ```
-bare:  main(817) + poseidon2_chip(20) + range(1) + memory(5) + map_ops(5)
-weld:  main(824) + poseidon2_chip(20) + range(1) + memory(5) + map_ops(5)
-                 + umemory(8) + umem_boundary(7)          ← purely ADDED
+bare:  main(2617) + poseidon2_chip(25) + range(1) + memory(5) + map_ops(5)
+weld:  main(2671) + poseidon2_chip(25) + range(1) + memory(5) + map_ops(5)
+                  + umemory(8) + umem_boundary(7)         ← purely ADDED
 ```
 
-**The decisive static fact: 0 of 54 welded members drop the chip or the map_ops table.** The
+**The decisive static fact: 0 of 57 welded members drop the chip or the map_ops table.** The
 deployed weld is *additive* — it carries the per-map machinery AND the umem witness side by
 side. This is deliberate (`descriptor_ir2.rs:90-93`: the full per-map "table-collapse … is
 flag-day work … rides THE ONE ROTATION … never before it") and is why the weld can verify
@@ -175,11 +177,11 @@ The umem flip has been refused **10 times** (memory: `project-umem-as-primitive-
 a real deployed-correctness defect caught by the gate — missing verifier leg (6th), domain-2
 `OodEvaluationMismatch` (7th), present-table-set mismatch on `setPerms`/`setVK` (9th), a
 pre-existing 31-bit cap-open waist (10th). This is a lot of soundness-critical surface
-(`turn/src/umem.rs` 2,636 lines, `circuit/src/descriptor_ir2.rs` 7,545 lines, 17 dedicated umem
+(`turn/src/umem.rs` 2,656 lines, `circuit/src/descriptor_ir2.rs` 8,986 lines, 17 dedicated umem
 test files). Two honest readings:
 
-**(a) genuine depth.** The refusals are the gate working: each found a real defect before
-flag-day, and several (the 31-bit cap-open waist, `node/src/turn_proving.rs:1140`) are soundness
+**(a) genuine depth.** The refusals are the gate working: each found a real defect before the
+flip landed, and several (the 31-bit cap-open waist, `node/src/turn_proving.rs:1140`) are soundness
 fixes worth doing regardless of umem. The discipline is sound and the defects were real.
 
 **(b) over-engineering for the stated efficiency goal.** Per-map is already live, proven, and
@@ -200,34 +202,36 @@ oversells it.
 
 **Recommendation for the honest story:** sell umem on **capability** (passable/composable
 witnessed memory) and on the **architectural unification** (one argument, table-collapse as the
-eventual win), not on the −48.6% chip-drop. With the observation bridge on by default but the welded
-prover still STAGED (per-map remains the deployed default), the still-open lever is to either (i)
+eventual win), not on the −48.6% chip-drop. With the observation bridge on and the welded form
+required on the deployed single-cohort path (G4), the still-open levers are (i)
 measure a REAL deployed turn umem-vs-per-map (not a
-micro-probe) so the proof-size claim is grounded at deployment scale, or (ii) commit to the
-table-collapse form (drop the per-map tables for the descriptors that can) so the win is actually
-realized rather than an additive overlay that regresses size by +0.8%.
+micro-probe) so the proof-size claim is grounded at deployment scale, and (ii) the
+table-collapse form (drop the per-map tables for the descriptors that can — it rides the
+universal-map rotation) so the win is actually
+realized rather than an additive overlay that regresses size by +1.9%.
 
 ---
 
 ## Sources (file:line, verified at HEAD)
 
 - Benchmarks: `circuit/tests/effect_vm_ir2_size_measure.rs` (`ir2_mapop_interior_to_umem_chip_drop`
-  :574, `ir2_umem_vs_map_size_probe` :159, `ir2_umem_cohort_vs_general_boundary_size` :752).
+  :583, `ir2_umem_vs_map_size_probe` :160, `ir2_umem_cohort_vs_general_boundary_size` :762).
 - Re-ran at HEAD: `cargo test -p dregg-circuit --release --test effect_vm_ir2_size_measure`
   (the `recursion` feature in the test header is stale/gone; the test compiles by default).
 - Deployed registries: `circuit/descriptors/rotation-wide-registry-staged.tsv` (per-map baseline),
-  `circuit/descriptors/rotation-wide-umem-welded-registry-staged.tsv` (umem flag-day target).
+  `circuit/descriptors/rotation-wide-umem-welded-registry-staged.tsv` (the welded form the
+  deployed executor requires for single-cohort sovereign turns; the `-staged` suffix is a filename,
+  not a status).
 - Circuit AIR: `circuit/src/descriptor_ir2.rs` — `Ir2Air::UMemory/UMemBoundary` (:1809), the
   additive boundary note (:90-128), `BUS_UMEM_*` (:282).
-- Executor bridge: `turn/src/umem.rs` — `project_executor_state` (:513), `fold` (:1062),
+- Executor bridge: `turn/src/umem.rs` — `project_executor_state` (:513), `fold` (:1063),
   `emit_trace`/Blum trace. **The executor observation bridge is ON by default**
-  (`umem_witness_enabled: AtomicBool::new(true)`, `turn/src/executor/mod.rs:1008/1070/1114` — the G4
-  observation epoch, the deployed executor *witnesses* the umem boundary). The umem-**welded proving
-  registry / VK stays STAGED**: per-map remains the deployed prover default until the gated VK epoch
-  (`sdk/src/full_turn_proof.rs`: "STAGED … no VK bump, no default flip, `umem_witness_enabled`
-  untouched"; `turn/src/executor/proof_verify.rs:1162`). Do not read the observation flag as the VK flip.
+  (`umem_witness_enabled: AtomicBool::new(true)`, `turn/src/executor/mod.rs:1130/1195/1242`).
+  **THE FLIP (G4) is deployed**: `verify_one_cohort_run` computes `require_welded` and, when a
+  welded twin exists (and the leg is neither a multi-cohort chain leg nor one of the 4
+  `LIVE_ONLY_BARE_KEYS`), drops the bare wide member from the accept set
+  (`turn/src/executor/proof_verify.rs:1445-1467`); the producer path routes through the welded
+  form via `FullTurnWitness::umem_witness` (`sdk/src/full_turn_proof.rs:183-202`).
 - Lean: `metatheory/Dregg2/Crypto/UniversalMemory.lean` — `universal_memory_sound` (:210),
   `_single` (:236).
 - Per-turn baseline: `.docs-history-noclaude/PROOF-ECONOMICS.md:20` (451.7 KiB `effect-vm`).
-</content>
-</invoke>

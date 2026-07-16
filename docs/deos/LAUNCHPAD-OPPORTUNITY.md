@@ -12,12 +12,12 @@ plainly.*
 **Grade of this document:** REPLAYABLE for the census (re-derivable by reading the cited
 files); a **positioning + build-path** doc over the mechanism design in
 `docs/deos/DREGG-LAUNCHPAD-DESIGN.md` and the landed code in `chain/contracts/launchpad/` +
-`launchpad-web/`. Not a shipped, deployed product — §4 is the honest edge. Since the first
-pass the anti-rug core has picked up three additional assurance layers — a **symbolic proof
-over the compiled contract bytecode** (Halmos, `chain/formal-verification/`), an **independent
+`launchpad-web/`. Not a shipped, deployed product — §4 is the honest edge. Beyond the Lean
+theorems, the anti-rug core carries three assurance layers — a **symbolic proof over the
+compiled contract bytecode** (Halmos, `chain/formal-verification/`), an **independent
 adversarial audit that found and fixed a real permanent-loss bug**
 (`LAUNCHPAD-CONTRACT-AUDIT.md`), and **liveness/attestation backstops** (timeout-refund,
-committee attestor, fraud-proof) — summarized in §2 and detailed in the pitch
+attestor ladder, fraud-proof) — summarized in §2 and detailed in the pitch
 (`LAUNCHPAD-PITCH.md`).
 
 ---
@@ -56,12 +56,16 @@ contracts, a product layer, and a prior research pass (2026-07-13):
   (register → sealed commit → reveal → uniform-price clear → settle → graduate),
   `DreggLaunchToken.sol` (hard-capped, minted once, no second-mint door),
   `DreggSolventPool.sol` (the never-drainable graduation pool), `ILaunchEligibility.sol` +
-  `IClearingAttestor.sol` + `CommitteeAttestor.sol` (a v1 k-of-n committee attestor, now
-  BUILT, with a stateless on-chain fraud proof; the trustless-v2 wrapped-proof attestor is
-  the named upgrade). Explicitly targeted at Robinhood Chain (Arbitrum-Orbit L2, chainId
-  46630) in the contract's own header. `chain/test/DreggLaunchpad*.t.sol` carries **42**
-  on-chain-enforced tests across 4 suites (up from 16 — the backstops and the audit's
-  permanent-loss exploit test landed since the first pass).
+  `IClearingAttestor.sol` + `CommitteeAttestor.sol` (a v1 k-of-n committee attestor with a
+  stateless on-chain fraud proof) + `DreggProofAttestor.sol` (the trustless-v2 PROOF arm of
+  `IClearingAttestor`: a clearing is attested iff a real Groth16(BN254) wrap proof verifies
+  through the OCIP socket — no signatures, no committee; its one named trust point is the
+  `bindLaunch` binder linking a launch to its proof, stated in the contract's own header) +
+  `ConjunctiveAttestor.sol` (AND-composition of attestors). Explicitly targeted at Robinhood
+  Chain (Arbitrum-Orbit L2, chainId 46630) in the contract's own header.
+  `chain/test/DreggLaunchpad*.t.sol` carries **71** on-chain-enforced test functions across
+  6 suites (core 16 · committee-attestor 16 · proof-attestor 20 · conjunctive 9 · refund 9 ·
+  audit-fixes 1).
 - **The product layer** — `launchpad-web/`: create / bid / token-page / replayable-discovery
   frontend + backend driving the *real* contract (no mock of the mechanism), with a gate
   (`gate/run-gate.sh` → `gate/e2e.mjs`) that spins anvil, deploys the real contract, and runs
@@ -78,8 +82,8 @@ contracts, a product layer, and a prior research pass (2026-07-13):
   the design into a deployable Robinhood-Chain MVP. That pass is what produced the contracts
   and the web layer above.
 
-- **The assurance stack (added since the first pass)** — the hand-written Solidity was the one
-  surface the Lean proofs did not directly cover, so three layers now back the anti-rug core:
+- **The assurance stack** — the hand-written Solidity is the one surface the Lean proofs do
+  not directly cover, so three layers back the anti-rug core:
   (a) a **symbolic proof over the compiled bytecode** (Halmos, `chain/formal-verification/`) —
   `DreggLaunchToken` hard-cap/single-mint and `DreggSolventPool` never-drainable re-proven over
   all inputs (7/7, symbolic-bounded, the EVM twins of the Lean theorems); (b) an **independent
@@ -91,8 +95,8 @@ contracts, a product layer, and a prior research pass (2026-07-13):
   proof that slashes a committee signing a non-descending or wrong-price clearing.
 
 So the recall is concrete: **the anti-rug launchpad is designed, its contracts are written,
-tested (42/42), formally verified on the anti-rug core, independently audited, and driven by a
-product surface.** What is new here is only the *moment* and the honest buildable-vs-BD split.
+tested (71 forge tests across 6 suites), formally verified on the anti-rug core, independently
+audited, and driven by a product surface.** What is new here is only the *moment* and the honest buildable-vs-BD split.
 
 ---
 
@@ -134,8 +138,8 @@ exist and pass their gate:
 
 - **The fair sale** — sealed-bid commit→reveal + uniform-price clearing. The theorems
   (`uniform_price_no_arbitrage`, `reveal_binds_committed`, `uncommitted_cannot_win`) are
-  PROVED; the EVM realization (`DreggLaunchpad.sol`) is written and tested (42 on-chain tests
-  across 4 suites; the e2e gate runs a full fair launch + adversarial checks against the
+  PROVED; the EVM realization (`DreggLaunchpad.sol`) is written and tested (71 on-chain tests
+  across 6 suites; the e2e gate runs a full fair launch + adversarial checks against the
   deployed bytecode; the anti-rug core is additionally proven symbolically over the compiled
   bytecode via Halmos).
 - **The supply-conservation proof** — `execMintA_iff_spec` PROVED; `DreggLaunchToken` is
@@ -159,12 +163,16 @@ exist and pass their gate:
    clearing price, checks the disclosed supply against its on-chain commitment, and sees the
    holder distribution from Transfer logs. This *is* the differentiated product: not "trust
    our fair launch," but "here is the launch, verify it."
-4. **Name the open welds honestly on the page** — the trustless-v2 wrapped-proof
-   `IClearingAttestor` (rung-2; launches run rung-1 REPLAYABLE today, and a v1 k-of-n committee
-   attestor + fraud proof are now BUILT as the trust-minimized interim), the `x·y=k` pricing
-   curve above the solvency floor (UNBUILT), the shielded-bidding upgrade (SPEC/MODEL), and the
-   conduct-bond launch-predicate wiring (design, not yet written). These are labeled scheduled
-   sharpening, not surprises.
+4. **Name the open welds honestly on the page** — the attestor ladder is BUILT at both rungs
+   (launches run rung-1 REPLAYABLE today; the v1 k-of-n `CommitteeAttestor` + fraud proof and
+   the trustless-v2 `DreggProofAttestor` — attestation iff a verified Groth16 wrap proof through
+   the OCIP socket — both exist, with the proof attestor's one trust point being the `bindLaunch`
+   binder that links a launch to its proof: the proof itself binds only the dregg state
+   transition, no launch id or clearing price lane), the `x·y=k` pricing curve above the
+   solvency floor (BUILT — `DreggSolventPool` keeps `x·y` non-decreasing under the fee,
+   `ConstantProductViolated` guards it), the shielded-bidding upgrade (SPEC/MODEL), and the conduct-bond
+   launch-predicate wiring (design, not yet written). These are labeled scheduled sharpening,
+   not surprises.
 
 ### 4.2 BD / partnership-speculative (ember-gated, not a build claim)
 

@@ -135,19 +135,19 @@ Both-polarity teeth: a guard-admitted value FILLS and advances toward READY; a g
 value is REJECTED and the continuation stays HELD with the hole still open. A continuation with
 an open hole is NOT ready (cannot drain) — the structural fail-closed.
 
-## 8. Wiring (report only — not edited here)
+## 8. Wiring (applied)
 
-The slice is a NEW file with NO edits to shared `lib.rs` / `Cargo.toml`. To wire it in:
+The module is registered in the shared crate root: `starbridge-v2/src/lib.rs` declares
+`pub mod held_promise;` under `#[cfg(feature = "embedded-executor")]` (alongside `pub mod
+world;`), with a comment citing this document. It carries no new dependencies (`std` only;
+`serde` is already in the workspace if serialization is wanted later — the module does not
+require it).
 
-- Add to `starbridge-v2/src/lib.rs`: `pub mod held_promise;` (alongside `pub mod world;`).
-- No new dependencies (`std` only; `serde` already in the workspace if serialization is wanted
-  later — the slice does not require it).
-
-The cockpit integration (making `World::pending` able to hold a `HeldPromise` rather than only
-a `VecDeque<Turn>`) is the follow-on: replace the flat queue with a continuation that may carry
-a held promise, fill at resume, drain only when READY. That edit touches shared `world.rs` and
-is left to the main loop to sequence (the receipt-chain regression on the commit path is being
-cleared in parallel; the held-promise model is independent of it).
+The cockpit cutover is the NAMED residual: `World::pending` is a flat `VecDeque<Turn>`
+(`starbridge-v2/src/world.rs:185`), so the suspended continuation cannot yet carry a held
+promise. The follow-on replaces the flat queue with a continuation that may carry a
+`HeldPromise` — fill at resume, drain only when READY — a shared-`world.rs` edit sequenced by
+the main loop.
 
 ## 9. The lift, wired onto a real `Pipeline` (`pipeline_continuation.rs`)
 
@@ -183,11 +183,12 @@ no δ into `bound_values()`; a double-resolve is a no-op (value not overwritten)
 threshold is fail-closed and above it resolves; a mixed concrete+partial atomic pipeline drains
 only once the hole fills (deps + atomic flag preserved); the eager shape is never mutated.
 
-### Wiring (report only)
+### Wiring (applied)
 
-- `starbridge-v2/src/lib.rs`: `pub mod held_promise;` and `pub mod pipeline_continuation;`, both
-  `#[cfg(feature = "embedded-executor")]` (alongside `pub mod world;` — `pipeline_continuation`
-  needs `dregg-turn`/`dregg-cell`, which are gated on that feature).
+- `starbridge-v2/src/lib.rs` declares `pub mod held_promise;` and `pub mod
+  pipeline_continuation;`, both `#[cfg(feature = "embedded-executor")]` (alongside `pub mod
+  world;` — `pipeline_continuation` needs `dregg-turn`/`dregg-cell`, which are gated on that
+  feature).
 - No new `Cargo.toml` dependencies: `dregg-turn`/`dregg-cell` are already pulled under
   `embedded-executor`; `pipeline_continuation` re-exports `Guard` from `held_promise`.
 

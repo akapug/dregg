@@ -43,7 +43,8 @@ Ordered from strongest to weakest; the adapter tags each integration with its ru
    correctness. Family: IBC (Tendermint light client), zk-light-clients
    (Succinct/Telepathy, Polymer, Electron, Lagrange), zkIBC.
    *dregg fit:* build the light client; this is the bar. Solana Tower-BFT already
-   real in Rust (off-circuit); ETH sync-committee is the easiest unbuilt win.
+   real in Rust (off-circuit); the ETH sync-committee client is built
+   (`eth-lightclient/`, BLS12-381 aggregate verify via blst).
 2. **Optimistic + fraud proof** — assume valid, allow a bonded challenge within a
    window; 1 honest watcher suffices. Family: **Optics/Nomad → Hyperlane**
    optimistic modules, Across intents.
@@ -61,7 +62,8 @@ Ordered from strongest to weakest; the adapter tags each integration with its ru
    committee's weakest link.
 4. **RPC / finality-tag trust** — trust a node's `finalized` tag or N
    confirmations. Not a real interop trust model; the current ETH/Base inbound
-   listener sits here and must be lifted to rung 1 or 2.
+   listener sits here and must be lifted to rung 1 or 2 (the rung-1 client
+   exists in-tree — `eth-lightclient/` — so the lift is wiring, not a new client).
 
 ## The standards, and where dregg's proof plugs in (2026 survey)
 
@@ -120,8 +122,10 @@ verifier** seam, because dregg plugs in without anyone's permission:
 
 ## What to extend (grounded in the in-tree audit) — do NOT invent a parallel shape
 
-**Rust — the trust dials already exist; unify them, don't replace them.** There
-is no `InterchainAdapter` trait yet, but every piece is present:
+**Rust — the trust dials exist and the `InterchainAdapter` trait unifies them.**
+The trait lives in `bridge/src/interchain_adapter.rs` (re-exported with
+`DialAdapter`/`TrustDial`/`TrustRung`/`ChainAttestation` from `bridge/src/lib.rs`),
+built over these pieces:
 - Trust-tier enums, one per lane, all collapsing to the `consensus_verified: bool`
   the mint gate reads: `LockProofTrust::{StructureOnly, ConsensusVerified}`
   (`bridge/src/solana_trustless.rs:202`), `SnarkSystem::{Groth16Bn254, PlonkBn254,
@@ -141,8 +145,8 @@ is no `InterchainAdapter` trait yet, but every piece is present:
   (double-mint fix), conservation backstop. A new adapter feeds THIS; it is the
   shared hypothesis, not a per-adapter concern.
 
-So the Rust `InterchainAdapter` is a trait these relayers implement whose
-associated attestation is one of the tiers above → `consensus_verified` (or a
+The Rust `InterchainAdapter` is the trait these relayers implement: its
+attestation is one of the tiers above → `consensus_verified` (or a
 richer rung) → `bridge_mint_against_lock`, carrying a `PortableActionBinding`.
 
 **Lean — the "assume foreign chain finalized X ⟹ dregg mint sound" theorem
@@ -160,12 +164,14 @@ ALREADY EXISTS as the §8 CryptoPortal hypothesis.** Extend these, in order:
   inbound mint leaves every asset's supply exactly unchanged — the negative-capable
   well absorbs the bridged supply) + the forgery-rejection `bridgeMint_rejects_*`.
   The foreign confirmation enters as a `Prop`-carrier (the `portalStep` pattern,
-  `metatheory/Dregg2/Exec/Handlers/Bridge.lean:11`).
+  `metatheory/Dregg2/Exec/EffectsPaired.lean:392`).
 - The double-spend gate's Lean twin: `noteSpend_no_double_spend`
   (`metatheory/Dregg2/Exec/EffectsPaired.lean`) + the accumulator bridge
   (`NullifierAccumulatorKernelBridge.lean`).
 
-So the Lean `InterchainAdapter` is a structure carrying
+The Lean `InterchainAdapter` (`metatheory/Metatheory/Bridge/InterchainAdapter.lean`,
+decision layer in `metatheory/Dregg2/Bridge/InterchainAdapterDecision.lean`) is a
+structure carrying
 `foreignFinal : ForeignHeader → Prop` (= the §8 CryptoPortal `Prop`-carrier: an
 assumed oracle for committee/optimistic rungs, a discharged theorem for
 light-client rungs like the Solana stake-verified path) + `inclusion` + a
@@ -177,26 +183,32 @@ its own `foreignFinal` at its rung and inherits credit-soundness + conservation.
 
 Grounded in "permissionless seam × shipped precedent × continues existing dregg work":
 
-1. **Lean `InterchainAdapter` first** — the abstraction is the through-line and it
-   already has a home. A structure over `foreignFinal`/`inclusion`/`TrustRung`
+1. **Lean `InterchainAdapter`** — BUILT: `metatheory/Metatheory/Bridge/InterchainAdapter.lean`
+   (decision layer in `metatheory/Dregg2/Bridge/InterchainAdapterDecision.lean`), the
+   abstraction through-line. A structure over `foreignFinal`/`inclusion`/`TrustRung`
    instantiating `SettlePred`+`BindsLiveAuthority` and the §8 CryptoPortal
    `bridgeinboundmint` shape, with the four in-tree tiers
    (`LockProofTrust`/`SnarkSystem`/`Verdict`/`FinalizedAttestation`) as its rung
-   variants. This is model-work, no foreign chain reimplemented — exactly ember's ask.
-2. **Hyperlane `DreggProofISM.sol`** (the flagship) — a two-function ISM whose
+   variants. Model-work, no foreign chain reimplemented — exactly ember's ask.
+2. **Hyperlane `DreggProofISM.sol`** (the flagship) — BUILT:
+   `chain/contracts/DreggProofISM.sol`, a two-function ISM whose
    `verify()` gates on a `DreggSettlement`-recorded message root + Merkle
    inclusion, AND-ed with a message-id check via an Aggregation ISM (anti-replay).
    THE NOMAD LAW is a hard gate: a test proving `verify` reverts on the
    zero/default input. Routed via `CCIP_READ` moduleType so no relayer change is
    needed. Outbound (dregg is the prover).
-3. **LayerZero `DreggDVN` adapter** — the fastest live demo; an on-chain DVN
-   adapter verifying the same settlement proof, registerable permissionlessly as a
-   required DVN. Shares the verifier contract with lane 2.
-4. **ETH sync-committee inbound light client** (rung 1) — the easiest unbuilt
-   full-client win (no BLS12-381 aggregate verify exists in-tree yet); lifts the
-   ETH/Base listener off RPC-trust; routes its mint through
-   `bridge_mint_against_lock`. Uses the Solana weak-subjectivity/stake-rotation
-   code as the template. Inbound (dregg is the verifier).
+3. **LayerZero `DreggDVN` adapter** — BUILT: `chain/contracts/DreggDVN.sol`, an
+   on-chain DVN adapter verifying the same settlement proof, registerable
+   permissionlessly as a required DVN. Shares the verifier contract with lane 2.
+4. **ETH sync-committee inbound light client** (rung 1) — BUILT: `eth-lightclient/`
+   is a real Altair sync-committee light client verifying the BLS12-381 aggregate
+   G2 signature via blst (sync_aggregate / finality / nomad_law / end_to_end tests
+   plus the ethereum bls12-381 KATs); governance's proven-foreign-holding path
+   consumes it (`dregg-governance/src/proven_foreign_holding.rs`). NAMED SEAM:
+   the bridge's ETH/Base inbound mint listener is not yet wired through it —
+   lifting that listener off RPC-trust onto this client, routing its mint through
+   `bridge_mint_against_lock`, is the remaining wiring. Inbound (dregg is the
+   verifier).
 5. **IBC 08-wasm client** (later, deepest) — a CosmWasm ICS-02 client pinning
    dregg's vkey; needs the fork-choice/misbehaviour story (validity ≠ canonicity)
    that lanes 1–4 don't. Sanctioned per-counterparty, not a quick plug-in.
@@ -208,33 +220,45 @@ one committed consume-once mint gate.
 
 ## From day 0 (in code now) vs. roadmap-before-mainnet
 
-**In the tree today (this session), green + tested:**
+**In the tree today, green + tested:**
 - dregg's own recursive-STARK finality + light client (`lightclient::verify_history`).
+- The gnark wrap (STARK→Groth16 over the FRI verifier) that makes the settlement
+  verifier run on EVM: `chain/gnark/` (`fri_verifier.go`, `challenger_bn254.go`,
+  `settlement_snark_test.go`) — `chain/` rides it (`docs/deos/ETH-NATIVE-WRAP.md`).
 - EVM settlement contract at the real 25-lane proof shape (`DreggSettlement`), with
-  a historical proven-root + outbound-message-root registry.
+  a historical proven-root registry; outbound message roots are FAIL-CLOSED refused
+  until proof-bound (the residual below).
 - A Hyperlane ISM (`DreggProofISM`) and a LayerZero DVN (`DreggDVN`) — both
-  Nomad-law-gated, verifying message inclusion under a recorded message root.
+  Nomad-law-gated, verifying message inclusion under a proven message root (of
+  which, today, there are none — fail-closed).
 - The Lean `InterchainAdapter` (foreign finality as a hypothesis; credit-soundness
   + conservation composed from the existing settlement/mint theorems, axiom-clean,
   non-vacuous) and the Rust `InterchainAdapter` trait unifying the four trust dials
   into the committed consume-once mint gate.
+- The ETH sync-committee inbound light client (`eth-lightclient/`, rung 1): Altair
+  sync-committee verification with the BLS12-381 aggregate via blst, Nomad-law and
+  end-to-end tested.
 - The optimistic + 1-of-N watchtower bridge (Midnight, `Watchtower::examine`) and a
   real Solana Tower-BFT consensus verifier (Rust); a Stripe DECO/zkTLS inbound proof.
 
 **Roadmap before mainnet:**
-- The gnark wrap prover (STARK→Groth16) that makes the settlement verifier actually
-  run on EVM (`docs/deos/ETH-NATIVE-WRAP.md`).
 - **Proof-binding the outbound message root** — the one honest residual below.
-- ETH sync-committee inbound light client (needs BLS12-381 aggregate verify).
+- Wiring the ETH/Base inbound mint listener through the built `eth-lightclient/`
+  and `bridge_mint_against_lock` (the rung-4 → rung-1 lift; wiring, not a new client).
 - IBC 08-wasm client (deeper; needs the fork-choice/misbehaviour story).
 
 ## The one honest residual: proof-binding the message root
 
-The adapters verify a message's inclusion under a keccak Merkle **outbound message
-root** that `DreggSettlement.settle` records. Today that root is
-**operator-attested** — recorded only when a valid 25-lane settlement proof lands,
-but the proof does not yet *constrain its contents*. So the proven-STATE half is
-by-proof; the message→root leg is settler-attested until we bind it.
+The adapters gate a message's inclusion under a keccak Merkle **outbound message
+root** via `DreggSettlement.isProvenMessageRoot`. The 25-lane proof carries NO
+outbound-message commitment, and the contract is FAIL-CLOSED on exactly that fact:
+`settle` reverts on any non-zero `outboundMessageRoot` (`MessageRootNotProofBound`)
+and `isProvenMessageRoot` returns false for every input
+(`chain/contracts/DreggSettlement.sol:46`). An operator-attested registry — record
+the settler-supplied root whenever a valid proof lands — would be an operator-trust
+hole (the settler could attest an arbitrary root and forge message inclusion
+through the adapters); no such path exists. So the proven-STATE half is by-proof;
+the message leg is refused, not attested, until the proof binds it.
 
 Keccak is deliberate and boundary-only: it is the native ~30-gas EVM hash, versus
 ~50-100× for dregg's Poseidon2/BLAKE3 on-chain. This tree is a small purpose-built
@@ -255,13 +279,18 @@ bounded one-time cost), exposed as a wrap public input. This is exactly the
 SP1/RISC0 pattern for EVM-friendly output. The EVM then does cheap keccak
 inclusion, which is what the adapters already implement.
 
-Crucially this is **not a separate gate** — it folds into the gnark-wrap
-milestone. The operator-attested `outboundMessageRoot` registry we shipped is the
-correct placeholder: when the wrap lands, it populates that registry with a
-proof-bound keccak root instead of an attested one, and nothing else in the
-adapters changes. (Alternatives — a Poseidon2 message root, or folding per-message
-inclusion into the wrap and exposing the commitment directly — stay on record but
-lose on the gas axis for the general many-messages case.)
+Crucially this rides the existing wrap: the gnark FRI-verifier wrap is built
+(`chain/gnark/`), but its claim lanes carry no message commitment. The remaining
+work is threading — the fold's segment accumulator absorbs a per-turn
+outbound-message commitment (the turn already commits its emitted effects at
+descriptor PI `EFFECTS_HASH`), the apex exposes it as additional claim lanes, the
+shrink + gnark `SettlementCircuit` bind those lanes as extra public inputs (a new
+Groth16 VK), and `DreggSettlement` then checks `outboundMessageRoot` against the
+proof's lanes before recording. Until then the adapters reject all message
+inclusion — fail-closed — and nothing else in the adapters changes when the leg
+lands. (Alternatives — a Poseidon2 message root, or folding per-message inclusion
+into the wrap and exposing the commitment directly — stay on record but lose on
+the gas axis for the general many-messages case.)
 
 ## Non-goals
 

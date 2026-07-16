@@ -1,16 +1,19 @@
 # Commitment / anchor waist census — "what other 31-bit waists need to expand?"
 
-> **STATUS (regrounded):** the census's two HIGHEST waists have since been
-> LIFTED. The whole-chain light-client anchor is now 8-felt
-> (`SEG_ANCHOR_WIDTH = 8` / `SEG_DIGEST_WIDTH = 8`,
-> `circuit-prove/src/ivc_turn_chain.rs:254,267`; `WholeChainAttestation` fields
-> at `lightclient/src/lib.rs:136,139`) and the IVC attenuation-fold accumulator
-> is now 8-felt (`ACCUMULATED_HASH_WIDTH = 8`, `circuit/src/ivc.rs:187`, with a
+> **STATUS (regrounded):** the census's three HIGHEST waists are LIFTED. The
+> whole-chain light-client anchor is 8-felt
+> (`SEG_DIGEST_WIDTH = 8` / `SEG_ANCHOR_WIDTH = 8`,
+> `circuit-prove/src/ivc_turn_chain.rs:256,269`; `WholeChainAttestation` fields
+> at `lightclient/src/lib.rs:139,142`), the IVC attenuation-fold accumulator is
+> 8-felt (`ACCUMULATED_HASH_WIDTH = 8`, `circuit/src/ivc.rs:175`, with a
 > build-time `assert_eq!(ACCUMULATED_HASH_WIDTH, 8, "the faithful floor is 8
-> felts")`). Rows #1 and #2 below are now **class D (at floor)**. The live
-> remainder is #3 sovereign (STAGED, still 4-felt), #4 `custom_proof_commitment`
-> (4-felt, VK-affecting, deliberately deferred), cap-open, and #5 the
-> identity-fold C\* question.
+> felts")`, `ivc.rs:1547`), and `custom_proof_commitment` is 8-felt
+> (`PROOF_BIND_COMMIT_WIDTH = 8`,
+> `circuit-prove/src/custom_proof_bind.rs:90` — old 4-felt custom artifacts are
+> REFUSED at the versioned admission boundary, `require_custom_commit_teeth_v2`).
+> Rows #1, #2, and the custom row below are **class D (at floor)**. The live
+> remainder is #3 sovereign (STAGED, still 4-felt), the cap-open 1-felt
+> acceptance residual, and #5 the identity-fold C\* question.
 
 > The faithful floor is **8 felts / ~124-bit collision resistance**
 > (`docs/FAITHFUL-COMMITMENT-LAW.md`, grounded at
@@ -40,30 +43,30 @@ soundness-load-bearing set is small. Verdicts:
 | commitment / anchor | felts | bits (collision) | class | evidence (file:line) |
 |---|---|---|---|---|
 | Per-cell state commit `OLD/NEW_COMMIT` (EffectVM PI) | **8** | ~124 | **D** | `circuit/src/effect_vm/pi.rs:27,30` |
-| `hash_many_8` squeeze (8 distinct felts) | **8** | ~124 | **D** | `circuit/src/poseidon2.rs:401` |
-| Cap-open BEFORE/AFTER wide carriers (`wide_commit_anchors`) | **8** | ~124 | **D** (wide leg) | `node/src/turn_proving.rs:1157`; `circuit/src/effect_vm_descriptors.rs:1005` |
-| `EMIT_EVENT_TOPIC_HASH` / `PAYLOAD_HASH` | **8** | ~124 | **D** | `circuit/src/effect_vm/pi.rs:574,577` |
-| `custom_program_vk_hash` (8-limb of 32B VK) | **8** | ~124 | **D** | `circuit/src/effect_vm/pi.rs:289`; `circuit-prove/src/custom_proof_bind.rs:111` |
-| `SCHEMA_NOTE_SPEND/CREATE/BURN` binding fields (8 limbs/32B) | **8** | ~248 raw | **D** | `circuit/src/effect_action_air.rs:639` |
-| **Whole-chain anchor `genesis_root`/`final_root`** (light-client) | **8** | ~124 | **D** (LIFTED, was A) | `circuit-prove/src/ivc_turn_chain.rs` `SEG_ANCHOR_WIDTH=8`; `lightclient/src/lib.rs:136,139` |
-| **Whole-chain `chain_digest` / segment `acc`** (`SEG_DIGEST_WIDTH`) | **8** | ~124 | **D** (LIFTED, was A) | `circuit-prove/src/ivc_turn_chain.rs` `SEG_DIGEST_WIDTH=8`; `lightclient/src/lib.rs:142` |
+| `hash_many_8` squeeze (8 distinct felts) | **8** | ~124 | **D** | `circuit/src/poseidon2.rs:409` |
+| Cap-open BEFORE/AFTER wide carriers (`wide_commit_anchors`) | **8** | ~124 | **D** (wide leg) | `node/src/turn_proving.rs:1012`; `circuit/src/effect_vm_descriptors.rs:1011` |
+| `EMIT_EVENT_TOPIC_HASH` / `PAYLOAD_HASH` | **8** | ~124 | **D** | `circuit/src/effect_vm/pi.rs:692,694` |
+| `custom_program_vk_hash` (8-limb of 32B VK) | **8** | ~124 | **D** | `circuit/src/effect_vm/pi.rs:323`; `circuit-prove/src/custom_proof_bind.rs:57` |
+| `SCHEMA_NOTE_SPEND/CREATE/BURN` binding fields (8 limbs/32B) | **8** | ~248 raw | **D** | `circuit/src/effect_action_air.rs:514,537` |
+| **Whole-chain anchor `genesis_root`/`final_root`** (light-client) | **8** | ~124 | **D** (LIFTED, was A) | `circuit-prove/src/ivc_turn_chain.rs:269` `SEG_ANCHOR_WIDTH=8`; `lightclient/src/lib.rs:139,142` |
+| **Whole-chain `chain_digest` / segment `acc`** (`SEG_DIGEST_WIDTH`) | **8** | ~124 | **D** (LIFTED, was A) | `circuit-prove/src/ivc_turn_chain.rs:256` `SEG_DIGEST_WIDTH=8`; `lightclient/src/lib.rs:147` |
 | **IVC attenuation-fold `AccumulatedHash`** (`ACCUMULATED_HASH_WIDTH`) | **8** | ~124 | **D** (LIFTED, was A) | `circuit/src/ivc.rs` `ACCUMULATED_HASH_WIDTH=8` |
-| **Cap-open 1-felt V3 commit (no-rotation fallback)** | **1** | ~15 | **A** (known) | `node/src/turn_proving.rs:1162` (`wide_from_felt`) |
-| **`custom_proof_commitment` (Custom proof_bind col 72)** | **4** | ~62 | **A** (known) | `circuit-prove/src/custom_proof_bind.rs:61,70` |
-| `SOVEREIGN_TRANSITION_PROOF_COMMITMENT` (inner-proof PI commit) | **4** | ~62 | **B** | `circuit/src/effect_vm/pi.rs:246` |
-| `SOVEREIGN_TRANSITION_PROOF_VK_HASH` (inner-proof VK) | **4** | ~62 | **B** | `circuit/src/effect_vm/pi.rs:241` |
-| `SOVEREIGN_WITNESS_KEY_COMMIT` (Ed25519 owner-key digest) | 4 | ~62 | **C** | `circuit/src/effect_vm/pi.rs:224` |
-| `TURN_HASH`, `EFFECTS_HASH`, `EFFECTS_HASH_GLOBAL`, `PREVIOUS_RECEIPT_HASH` | 4 | ~62 | **C** | `circuit/src/effect_vm/pi.rs:34,102,108,119` |
-| 7× bilateral roots (transfer/grant/intro), `UNILATERAL_ATTESTATIONS_ROOT` | 4 | ~62 | **C** | `circuit/src/effect_vm/pi.rs:163,167,172,175,179,183,187,522` |
-| `FEDERATION_ID`, `OWNER_CELL_ID` | 4 | ~62 | **C** | `circuit/src/effect_vm/pi.rs:602,608` |
-| `NOTESPEND_NULLIFIER`, `NOTECREATE_COMMITMENT`, `BURN_TARGET_PI` | 1 | ~15 | **C** | `circuit/src/effect_vm/pi.rs:647,677,704` |
-| `BRIDGE_MINT_VALUE_LIMBS` (4×16-bit exact value) | 4 | exact | **C** | `circuit/src/effect_vm/pi.rs:275` |
-| `BRIDGE_LOCK` / `CREATE_ESCROW` value limbs (RETIRED sentinel) | 4 | n/a | **C** | `circuit/src/effect_vm/pi.rs:280,285` |
+| **Cap-open 1-felt V3 commit (no-rotation fallback + narrow-TB acceptance)** | **1** | ~15 | **A** (known) | `node/src/turn_proving.rs:1350` (`wide_from_felt`); `sdk/src/full_turn_proof.rs:2706` |
+| **`custom_proof_commitment` (Custom proof_bind, cols 72..76 + commit-teeth cols)** | **8** | ~124 | **D** (LIFTED, was A) | `circuit-prove/src/custom_proof_bind.rs:90` (`PROOF_BIND_COMMIT_WIDTH = 8`; 4-felt artifacts refused, `require_custom_commit_teeth_v2`) |
+| `SOVEREIGN_TRANSITION_PROOF_COMMITMENT` (inner-proof PI commit) | **4** | ~62 | **B** | `circuit/src/effect_vm/pi.rs:261` |
+| `SOVEREIGN_TRANSITION_PROOF_VK_HASH` (inner-proof VK) | **4** | ~62 | **B** | `circuit/src/effect_vm/pi.rs:257` |
+| `SOVEREIGN_WITNESS_KEY_COMMIT` (Ed25519 owner-key digest) | 4 | ~62 | **C** | `circuit/src/effect_vm/pi.rs:240` |
+| `TURN_HASH`, `EFFECTS_HASH`, `EFFECTS_HASH_GLOBAL`, `PREVIOUS_RECEIPT_HASH` | 4 | ~62 | **C** | `circuit/src/effect_vm/pi.rs:33,101,107,118` |
+| 7× bilateral roots (transfer/grant/intro), `UNILATERAL_ATTESTATIONS_ROOT` | 4 | ~62 | **C** | `circuit/src/effect_vm/pi.rs:163-187,640` |
+| `FEDERATION_ID`, `OWNER_CELL_ID` | 4 | ~62 | **C** | `circuit/src/effect_vm/pi.rs:720,726` |
+| `NOTESPEND_NULLIFIER`, `NOTECREATE_COMMITMENT`, `BURN_TARGET_PI` | 1 | ~15 | **C** | `circuit/src/effect_vm/pi.rs:766,796,823` |
+| `BRIDGE_MINT_VALUE_LIMBS` (4×16-bit exact value) | 4 | exact | **C** | `circuit/src/effect_vm/pi.rs:291` |
+| `BRIDGE_LOCK` / `CREATE_ESCROW` value limbs (RETIRED sentinel) | 4 | n/a | **C** | `circuit/src/effect_vm/pi.rs:295,300` |
 | Cap-open turn-identity pins `actor/src/dst` (`fold_bytes32`) | 1 | ~15 | **C\*** | `node/src/turn_proving.rs:1173`; `circuit/src/cap_root.rs` `fold_bytes32` |
 | `cap_root` Merkle root + `CapLeaf.target`/heap roots (sorted-tree) | 1 | ~15 | **C\*** | `circuit/src/cap_root.rs`; `circuit/src/heap_root.rs` |
-| `note_spending_air` legacy single-felt commit (col 5) | 1 | ~15 | **C** (deprecated) | `circuit/src/note_spending_air.rs:109`; `circuit/src/effect_action_air.rs:1267` |
-| `garbled_air` 4-felt circuit-commit / output-label hash | 4 | ~62 | **C** (deprecated) | `circuit/src/garbled_air.rs:66,391` |
-| `bilateral_aggregation_air` 4-felt turn/effects/receipt + roots | 4 | ~62 | **C** | `circuit/src/bilateral_aggregation_air.rs:142` (mirrors the C PI roots) |
+| `note_spending_witness` legacy single-felt commit (col 5) | 1 | ~15 | **C** (deprecated) | `circuit/src/note_spending_witness.rs:44`; `circuit/src/effect_action_air.rs:491` |
+| `garbled_air` 4-felt circuit-commit / output-label hash | 4 | ~62 | **C** (deprecated) | `circuit/src/garbled_air.rs:52` |
+| `bilateral_aggregation_air` 4-felt turn/effects/receipt + roots | 4 | ~62 | **C** | `circuit/src/bilateral_aggregation_air.rs:302` (mirrors the C PI roots) |
 | dregg-query MMR root (BLAKE3, off-chain index) | 32B | n/a | **C** | `dregg-query/src/mmr.rs` (not a circuit-soundness anchor) |
 
 `C\*` = single-felt cell-IDENTITY projection. Below floor, but identity is
@@ -73,10 +76,16 @@ established exploit. See "the identity-fold question" below.
 
 ## The ranked answer — the real waists to lift (class A/B), beyond cap-open + Custom
 
-The two already-known waists (cap-open 1-felt, Custom 4-felt) are being
-lifted by sibling lanes. **The new findings this census surfaces are the
-aggregation / IVC anchors**, which are the *top* of the trust stack: a
-whole-history light client trusts these directly.
+Of the two already-known waists, the Custom one is LIFTED (8-felt,
+`PROOF_BIND_COMMIT_WIDTH`, with 4-felt artifacts refused at admission); the
+cap-open one is lifted on the PRODUCTION path (every live cap-open key has a
+proven wide twin and routes wide, `node/src/turn_proving.rs:1328-1341`) with a
+1-felt ACCEPTANCE residual (the no-rotation-witness fallback, and the
+verifier's wide-twin predicate excludes the TB family so a narrow
+`transferCapOpenTB` leg still verifies — `sdk/src/full_turn_proof.rs:2706`).
+**The new findings this census surfaces are the aggregation / IVC anchors**,
+which are the *top* of the trust stack: a whole-history light client trusts
+these directly.
 
 ### 1. Whole-chain light-client anchor — `genesis_root`/`final_root` + `chain_digest`  ⟵ HIGHEST — **CLOSED (lifted to 8-felt)**
 
@@ -90,7 +99,7 @@ commitment `acc` is `SEG_DIGEST_WIDTH = 8` felts — both AT the ~124-bit floor
 the *per-turn* legs meet (8-felt `OLD/NEW_COMMIT`).
 `WholeChainAttestation.genesis_root`/`final_root` are typed
 `[BabyBear; SEG_ANCHOR_WIDTH]` and `chain_digest` is
-`[BabyBear; SEG_DIGEST_WIDTH]` (`lightclient/src/lib.rs:136,139,142`).
+`[BabyBear; SEG_DIGEST_WIDTH]` (`lightclient/src/lib.rs:139,142,147`).
 
 The original gap: this sits ABOVE every per-turn close, so a narrow anchor here
 (the pre-lift ~15-bit `first_old`/`last_new` or ~62-bit `acc`) would have fooled
@@ -109,7 +118,7 @@ recursion root op-list changed and `RecursionVk` re-emitted as part of the lift.
 attenuation fold-chain accumulator (distinct from the whole-chain accumulator
 above). **This waist has been lifted.** The width is now 8 felts, guarded by a
 build-time `assert_eq!(ACCUMULATED_HASH_WIDTH, 8, "the faithful floor is 8
-felts")` (`circuit/src/ivc.rs:2459`), and the doc-comments now correctly state
+felts")` (`circuit/src/ivc.rs:1547`), and the doc-comments now correctly state
 8 felts = ~124-bit collision resistance rather than laundering a 4-felt
 (~62-bit) width as "124-bit". The lift (`ACCUMULATED_HASH_WIDTH`,
 `StateTransitionAir`, `extend_accumulated_hash_wide`) re-emitted the attenuation
@@ -120,8 +129,8 @@ the comments true rather than just de-laundered.
 
 `SOVEREIGN_TRANSITION_PROOF_{COMMITMENT,VK_HASH}` (4-felt each) bind an inner
 recursively-verified STARK whose public inputs are **adversary-chosen** — so,
-like `custom_proof_commitment`, they ARE collision-relevant. Today they are
-**sentinel-zero / not deployed** (`pi.rs:209`; the recursive verifier is a
+like `custom_proof_commitment` was, they ARE collision-relevant. Today they are
+**sentinel-zero / not deployed** (`pi.rs:254-263`; the recursive verifier is a
 follow-up), so lifting them costs nothing now. They live in the v2 PI prefix,
 so widening shifts `BASE_COUNT` and cascades the `RotationLayout`/`PiV3` drift
 guard + Lean layout facts — widen them 4→8 now so they never ship at 4-felt.
@@ -191,9 +200,22 @@ soundness-criticality:
 3. **Sovereign transition-proof commit+VK 4-felt → 8-felt** (staged today, so
    free to widen) — `SOVEREIGN_TRANSITION_PROOF_{COMMITMENT,VK_HASH}_LEN` 4→8;
    cascades `BASE_COUNT` + the `RotationLayout`/`PiV3` drift guard.
-4. **Cap-open 1-felt → 8-felt** + **Custom `proof_commitment` 4-felt → 8-felt**
-   (the two already-known waists, owned by sibling lanes).
-5. **Identity-fold / `cap_root` confirm-or-lift** (C\*) — widen the
+4. ✅ **DONE — Custom `proof_commitment` 4-felt → 8-felt** —
+   `PROOF_BIND_COMMIT_WIDTH = 8` (`circuit-prove/src/custom_proof_bind.rs:90`):
+   the first 4 limbs keep their column home (cols 72..76), the second squeeze
+   block rides the member-local commit-teeth columns, all 8 published as
+   descriptor PIs the per-turn recursion fold binds; old 4-felt artifacts are
+   REFUSED at the versioned admission boundary
+   (`require_custom_commit_teeth_v2`), never silently widened or zero-padded.
+5. **Cap-open 1-felt → 8-felt** — the PRODUCTION route is wide for every live
+   cap-open key (proven wide twins incl. `transferCapOpenTB`,
+   `node/src/turn_proving.rs:1328-1341`); the residual is ACCEPTANCE-side:
+   the no-rotation-witness fallback still publishes a 1-felt commit
+   (`turn_proving.rs:1350`) and the verifier's wide-twin predicate excludes
+   the TB family (`sdk/src/full_turn_proof.rs:2706`), so a narrow TB leg
+   still verifies. Lift = extend the reject tooth over TB + retire the
+   no-rotation fallback.
+6. **Identity-fold / `cap_root` confirm-or-lift** (C\*) — widen the
    sorted-Poseidon2 root squeeze the same way the state commit did.
 
 Lifting to 8-felt also makes the previously-laundering doc-comments TRUE

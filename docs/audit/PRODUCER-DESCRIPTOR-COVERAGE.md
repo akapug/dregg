@@ -19,9 +19,23 @@ silent-divergence risk). The machine-checked ledger + the anti-regression gate l
 
 | Registry (file) | Members | COVERED | PARTIAL | UNCOVERED | Completeness gate |
 |---|---:|---:|---:|---:|---|
-| **v3-live** (`rotation-v3-staged-registry.tsv`) — the CURRENTLY-DEPLOYED 1-felt registry | 60 | 27 | 10 | 23 | `producer_descriptor_coverage_gate::v3_registry_every_member_classified` (**new**) |
-| **bare-wide** (`rotation-wide-registry-staged.tsv`) — STAGED 8-felt (the v13-affected surface) | 57 | 35 | 2 | 20 | `producer_descriptor_coverage_gate::wide_registry_every_member_classified` (**new**) + `wide_completeness_ledger::provability_scoreboard_deployed_wide_path` (existing) |
-| **umem-welded** (`rotation-wide-umem-welded-registry-staged.tsv`) — STAGED welded | 57 | 17 | 27 | 13 | `wide_umem_weld_matrix_gauntlet::matrix_enumerates_all_57` (existing) |
+| **v3-live** (`rotation-v3-staged-registry.tsv`) — the 1-felt registry; on the deployed LC verify it survives only as the cap-open fallback for keys without a wide twin | 60 | 27 | 10 | 23 | `producer_descriptor_coverage_gate::v3_registry_every_member_classified` (**new**) |
+| **bare-wide** (`rotation-wide-registry-staged.tsv`) — the DEPLOYED-DEFAULT 8-felt registry (the LC verify resolves wide first; `staged` survives only in the filename); the v13-affected surface | 57 | 35 | 2 | 20 | `producer_descriptor_coverage_gate::wide_registry_every_member_classified` (**new**) + `wide_completeness_ledger::provability_scoreboard_deployed_wide_path` (existing) |
+| **umem-welded** (`rotation-wide-umem-welded-registry-staged.tsv`) — the welded twin the executor cohort verify REQUIRES when one exists | 57 | 17 | 27 | 13 | `wide_umem_weld_matrix_gauntlet::matrix_enumerates_all_57` (existing) |
+
+Counts mirror the machine ledger in the gate file. One entry lags the tree:
+`heapWriteVmDescriptor2R24` is ledgered PARTIAL on both v3-live and bare-wide while a real
+prove+verify roundtrip exists against both committed descriptors
+(`circuit/tests/heap_write_roundtrip.rs` — see ranked item 1).
+
+**Deployment routing (HEAD).** The light-client verify
+(`sdk/src/full_turn_proof.rs:4312`, `verify_effect_vm_rotated_with_cutover` →
+`verify_effect_vm_rotated_inner`) iterates the wide 8-felt registry FIRST; the 1-felt V3 registry is
+admitted only as the fallback for cap-open keys that genuinely lack a wide twin (a narrow leg for a
+key WITH a wide twin is rejected). The executor cohort verify
+(`turn/src/executor/proof_verify.rs:1445`, `require_welded` — the G4 flip) drops the bare wide member
+whenever a welded twin exists, so a welded leg is the sole accepted form there. The `*staged*` in the
+registry filenames is naming, not deployment status.
 
 The UNCOVERED counts are dominated by the **cap-write / cap-open family**, which is uncovered *by
 design*: on the bare (sovereign) producer these effects are forbidden / UNSAT and their light-client
@@ -32,7 +46,7 @@ shared Rust handoff (the IR-v2 cap-node lookup multiplicity reconciliation gap).
 ## The live R3 probes (this audit's fresh coverage)
 
 Two deployed **v3-live** members had **zero** prove+verify roundtrip anywhere on the live path — they
-appeared only in the STAGED wide/welded SDK gauntlets, never against the committed 1-felt V3 descriptor:
+appeared only in the wide/welded SDK gauntlets, never against the committed 1-felt V3 descriptor:
 
 - `cellUnsealVmDescriptor2R24`
 - `cellDestroyVmDescriptor2R24`
@@ -50,13 +64,16 @@ The v13 divergence class = a member with a **distinct / special producer path** 
 is not roundtrip-verified. Ranked by how much a member's producer diverges from the well-tested generic
 base:
 
-1. **`heapWriteVmDescriptor2R24` — PARTIAL on BOTH v3-live and bare-wide (highest priority).** A
-   **distinct heap-splice producer** (`generate_rotated_heap_write_*`), structurally pinned only
-   (`heap_write_deployed_root_forced` parses + checks the `.write` map_op; `wide_new_members_cover` pins
-   the 16 wide-commit PIs) — **no end-to-end prove+verify roundtrip** against either committed
-   descriptor. This is the sharpest surviving analog of the v13 finding: one of the exact 7 special
-   members v13 hit, with a distinct producer and no roundtrip on the deployed path. **Recommended next
-   probe.**
+1. **`heapWriteVmDescriptor2R24` — roundtrip-COVERED on BOTH v3-live and bare-wide; the machine
+   ledger still says PARTIAL (a classification lag, not a coverage gap).** The distinct heap-splice
+   producer (`generate_rotated_heap_write_wide`) has a real end-to-end roundtrip:
+   `circuit/tests/heap_write_roundtrip.rs` (four tests, none `#[ignore]`d) proves + light-client-verifies
+   against BOTH committed descriptors (bare-wide 2951/20 and v3-live 1567/4), byte-pins the producer's
+   laid after-root columns to the descriptor's `.write` map-op `new_root` columns, and adds an
+   after-root 8-felt completion-lane forge (UNSAT — all eight felts bound, not lane-0-only). The ledger
+   entries in `producer_descriptor_coverage_gate.rs:216-219,:412-415` still classify the member
+   `Partial`; the named remaining step is flipping those two pointers to
+   `Covered(heap_write_roundtrip)`.
 2. **`customVmDescriptor2R24` — PARTIAL on v3-live.** Proves on the wide path
    (`wide_completeness_ledger::custom_proves_on_deployed_wide_path`); the deeper V3 per-turn `proofBind`
    roundtrip is gated (`custom_binding_*` `#[ignore]`d). Distinct recursion-bound producer.
@@ -108,7 +125,8 @@ The welded registry already has an EXACT-completeness gate. Its lanes map to cov
 - The umem-welded registry is already gated by `matrix_enumerates_all_57`; the new gate names it as the
   third registry so the three-registry surface is jointly closed.
 
-**Remaining recommendation (not scaffolded — needs producer work in another lane):** upgrade the ledger
-from *classification* to *enforced roundtrip pointer* for the PARTIAL set — most valuably a real
-`heapWrite` end-to-end roundtrip (v3-live + bare-wide) and the setField value8 completion, retiring the
-two sharpest PARTIAL entries. The gate structure already reserves the `Covered(test)` slot for them.
+**Remaining recommendation:** upgrade the ledger from *classification* to *enforced roundtrip
+pointer* for the PARTIAL set — the setField value8 completion (producer work in another lane) is the
+sharpest remaining entry, and the two `heapWriteVmDescriptor2R24` ledger entries flip to
+`Covered(heap_write_roundtrip)` (the roundtrip exists — `circuit/tests/heap_write_roundtrip.rs`; only
+the ledger pointer lags). The gate structure already reserves the `Covered(test)` slot for them.

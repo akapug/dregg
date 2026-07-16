@@ -97,12 +97,14 @@ produces a **verifiable receipt** where every field re-derives from chain state.
 
 **What actually runs (reproducible locally today):**
 
-- `chain/test/DreggLaunchpad*.t.sol` — **42/42** on-chain adversarial tests pass across 4
+- `chain/test/DreggLaunchpad*.t.sol` — **71** on-chain adversarial tests pass across 6
   suites (`forge test`): hidden-supply reverts, no-peek, no-late-switch, no-drop permutation,
   no-second-mint-door, seed-mismatch reverts, solvency-drain reverts, creator-lock enforced,
   the timeout-refund disjoint-window, the committee-attestor signature discipline, the
-  fraud-proof slash, **and the audit's permanent-loss exploit now recovering the escrow.** The
-  broader chain suite (settlement + launchpad + backstops) runs green alongside it.
+  fraud-proof slash, the proof-attestor discipline (a real Groth16 wrap proof attests, a
+  forged or unbound one refuses — 20 tests) and its conjunctive composition (9 tests),
+  **and the audit's permanent-loss exploit test recovering the escrow.** The broader chain
+  suite (settlement + launchpad + backstops) runs green alongside it.
 - `launchpad-web/gate/run-gate.sh` — an end-to-end gate runs a full honest launch (register →
   sealed commit → reveal → uniform clear → settle → graduate → live pool trade) **plus** the
   adversarial reverts against the deployed bytecode, **plus** the backend REST layer reflecting
@@ -130,14 +132,15 @@ The receipt is the product. Not "trust our fair launch" — **"here is the launc
 | **No late-switch / no peek** | A revealed bid is exactly the sealed one; a never-committed bid can never win. `reveal_binds_committed`, `uncommitted_cannot_win`. | **PROVED** (Lean) |
 | **Funds-stuck-no-recovery (rug-via-liveness)** | Every committer gets a permissionless full refund once the clearing window elapses without a clearing; clearing and refund windows are disjoint, so worst case is stall-then-refund. The audit's escrow-lockup case is closed on the *cleared* path too. | **BUILT + TESTED** |
 | **Schedule-violating creator dump** | Cumulative creator sells beyond the disclosed vesting unlock = a slashing predicate; slashes compensate holders, never the platform. | **BONDED** (economic, not a theorem) |
-| **Corrupt clearing attestation** | A v1 k-of-n committee attests the clearing; a stateless on-chain fraud proof re-folds the book and replays the uniform walk, slashing a committee that signs a non-descending or wrong-price clearing. A corrupt quorum can misallocate *within bounds* but cannot over-mint, drain, or over-charge; a slash degrades the launch to the timeout-refund backstop (liveness fault, never theft). | **BUILT** (v1 trust-minimized; trustless-v2 = wrap-VK, named) |
+| **Corrupt clearing attestation** | Two built arms. v1: a k-of-n committee attests the clearing; a stateless on-chain fraud proof re-folds the book and replays the uniform walk, slashing a committee that signs a non-descending or wrong-price clearing — a corrupt quorum can misallocate *within bounds* but cannot over-mint, drain, or over-charge, and a slash degrades the launch to the timeout-refund backstop (liveness fault, never theft). v2: `DreggProofAttestor.sol` attests iff a **real Groth16(BN254) dregg wrap proof** verifies on-chain through the OCIP socket's VK-epoch registry — no signatures, no committee; `ConjunctiveAttestor.sol` requires both arms. Honest bound (named in the contract header): the proof attests the dregg state transition; the proof→launch binding is asserted by a trusted binder. | **BUILT** (v1 committee + v2 wrap-proof; launch-binding by binder, named) |
 | **Wash-trading for attention** | Uniform price kills *price*-motivated wash trades; volume-faking is caught by a replayable statistical screener, after the fact. | **detection, not prevention** |
 | **A bad token / sybil uniqueness / organic pump-dump** | Named, not solved: mechanism design fixes the rigged wheel, not the casino; one human ≠ many wallets is an identity-layer problem. | **out of scope** |
 
 The theorem names above are real and machine-checked; file:line citations are in
 `DREGG-LAUNCHPAD-DESIGN.md` §2–3 and cited on the fairness panel of every launch page. The
-committee-attestor, fraud-proof, and timeout-refund backstops are in
-`chain/contracts/launchpad/` (`CommitteeAttestor.sol`, `DreggLaunchpad.sol`).
+attestor arms, fraud-proof, and timeout-refund backstops are in
+`chain/contracts/launchpad/` (`CommitteeAttestor.sol`, `DreggProofAttestor.sol`,
+`ConjunctiveAttestor.sol`, `DreggLaunchpad.sol`).
 
 ---
 
@@ -148,9 +151,9 @@ launchpad consumes a clearing attestation as `address→bool` (`finalizeClearing
 `attestor.attestClearing(...)` over opaque bytes) — there is no VK, no verifier, no Groth16
 point anywhere in the launchpad. A dregg devnet re-genesis or VK rotation **cannot break a
 launch**, because the launch never references dregg's proving key. When a real wrapped clearing
-proof is used instead of the committee signature, VK rotation is absorbed by an on-chain
-epoch registry (a rotation is a single `advanceEpoch` transaction; old epochs stay verifiable)
-— the consumer is unchanged. And custody is entirely on the stable chain: the escrow, the
+proof is used instead of the committee signature (the built `DreggProofAttestor.sol` arm), VK
+rotation is absorbed by an on-chain epoch registry (a rotation is a single `advanceEpoch`
+transaction; old epochs stay verifiable) — the consumer is unchanged. And custody is entirely on the stable chain: the escrow, the
 hard-capped one-shot mint, and the un-drainable pool are enforced by contract code dregg
 cannot alter. **dregg never holds a user asset**, so the strongest thing a compromised, dead,
 or rotated dregg can do to those assets is *nothing*.
@@ -264,7 +267,7 @@ you migrate to.
 - `docs/deos/RUG-FORENSICS-VS-DREGG.md` — the nine dissected rug doors vs our contracts.
 - `docs/deos/LAUNCHPAD-CONTRACT-AUDIT.md` — the independent codex audit + the confirmed bug + the fix.
 - `docs/deos/PRIVATE-DREGG-PUBLIC-LAUNCHPAD-ARCHITECTURE.md` — safe even while dregg rotates.
-- `chain/contracts/launchpad/` — the EVM realization; `chain/test/DreggLaunchpad*.t.sol` (42 tests);
+- `chain/contracts/launchpad/` — the EVM realization; `chain/test/DreggLaunchpad*.t.sol` (71 tests, 6 suites);
   `chain/formal-verification/` (the Halmos proofs); `chain/script/DeployLaunchpad.s.sol` (the one-command deploy).
 - `launchpad-web/` — the product layer driving the real contract; `gate/run-gate.sh` (the e2e
   gate), `gate/make-receipt.sh` (the static verifiable receipt).

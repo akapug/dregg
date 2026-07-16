@@ -40,9 +40,9 @@ inherits that floor for its STARK soundness; component 6 states where the shield
 
 | # | Component | PROVEN | BUILT | NEEDED (gap) | Diff. | Depends on |
 |---|-----------|--------|-------|--------------|-------|-----------|
-| 1 | Ring-clearing AIR | 2-leg spec + fusion spec | 2-leg tight-cycle apex | N-leg variable cycle + partial-fill `offer ≥ want_min` in-AIR | **M**(N-leg) / **M**(inequality) | in-AIR range gadget (exists) |
+| 1 | Ring-clearing AIR | 2-leg spec + fusion spec (already N-general) | 2-leg tight apex **+ N-leg variable-cycle apex with partial-fill `offer ≥ want_min` in-AIR** | fold the N-leg apex under the deployed VK (tracked as component 6) | — | — |
 | 2 | **PQ value-commitment** (Poseidon2 hash + in-AIR STARK conservation) | field⇒integer conservation (no-wrap); Poseidon2 value_binding hiding | `value_binding` hash-commitment, in-AIR conservation gate, `VALUE_BITS` range gadget | migrate note-commitment Poseidon2 (not Ristretto); asset-coord + split/merge equality in-AIR; 64-bit in-AIR range; **retire Pedersen/Schnorr/Bulletproof DLog** | **M** (cutover) / **M–L** (64-bit) | Poseidon2 CR + in-AIR range (exist) |
-| 3 | **ZK / reveal-nothing (the crux)** | abstract perfect-ZK lemma; Pedersen/nullifier hiding carriers | hiding PCS path (ZK=true), minimal PIs, tested | **clearing-level ZK theorem** — transcript independent of trades; simulator/indistinguishability; statistical-ZK of FRI PCS | **RESEARCH** | 1, 2; HidingFriPcs ZK floor |
+| 3 | **ZK / reveal-nothing (the crux)** | **`View ≈ Sim∘Q` tractable core** (`Market/RevealNothing.lean`): reveal-nothing law, same-leakage indistinguishability, value-binding hiding, `Q`-faithful simulator shell, teeth — conditional on the NAMED `HidingFriPcs` floor | hiding PCS path (ZK=true), minimal PIs, tested | discharge the **named `HidingFriPcs` statistical-ZK floor** (the deployed-bundle PCS simulator) | **RESEARCH** | the named ZK floor |
 | 4 | Membership + nullifier in-clearing | `shielded_spend_claim_refines`; deployed nullifier flip | apex `connect` binds legs to spend leaves | bind ring legs to the **deployed** nullifier accumulator (not per-leg toy pre-state) | **M** | deployed accumulator (exists) |
 | 5 | Shielded SetField-attestation | — | — | attested-but-hidden per-trader allocation commitment; resolve SetField cohort ambiguity | **L** | 3, 4 |
 | 6 | Composition + deployed-assurance | STARK soundness on real floors; fusion spec-proven | 2-leg apex folds green | fold N-leg apex under deployed VK; retire named EC/range residuals | **M→L** | 1, 2, 4 |
@@ -67,20 +67,21 @@ recompute anchoring fusion to the spent note under Poseidon2 CR. The apex `conne
 real `prove_shielded_spend_leaf_with_claim`. Teeth tested: non-conserving, wraparound-mint,
 out-of-range, double-spend, mis-fusion, mismatched-fold — all UNSAT.
 
-**NEEDED.**
-- **N-leg (variable-length cycles).** The AIR hard-codes `RING_LEGS = 2` and a leg-major column
-  layout. Generalizing to N legs is a parameterized descriptor + the fold shape (`bind_leg_node`
-  already generalizes leg-by-leg). **Difficulty M.** No new crypto; a descriptor-scaling build.
-  The Lean side is already N-general (`shielded_ring_clears`/`_fused_clears` quantify over the list).
-- **Partial-fill `offer ≥ want_min` inequality in-AIR.** The AIR enforces the *tight* swap
-  (`offer_amount == want_min`); a genuine partial fill needs the **inequality** `offer_amount ≥
-  want_min` as an in-AIR range/compare gate. The Lean partial-fill lowering is already ledger-real
-  and general (`partialFill_cycle_ledger_realized`, `pricedPartialFills_conserves`, no tightness).
-  **Difficulty M** — the Bignum range bedrock exists (`Dregg2.Bignum.legs_noWrap_conservation`,
-  and the AIR's own `VALUE_BITS` bit-decomposition gadget); this is a compare gadget reusing it.
+**BUILT (N-leg + partial fill).** `circuit-prove/src/shielded_ring_clearing_nleg_air.rs` — the
+variable-length-cycle generalization, with the **partial-fill inequality**
+`want_min[i] ≤ offer_amount[(i+1) mod N]` enforced in-AIR by the borrow-sub range compare (the
+circuit twin of `Dregg2.Bignum.le_iff`), pairwise-distinct nullifiers across all N legs, the same
+Poseidon2 value-binding fusion, and Pedersen conservation at N legs
+(`ring_conserves_pedersen_list`; `legs_noWrap_conservation` is already k-leg). The Lean side is
+N-general (`shielded_ring_clears`/`_fused_clears` quantify over the list), so this is the silicon
+at that generality. 3-ring, 4-ring, and partial-fill 4-ring apexes fold and verify green
+(`honest_3ring_folds_and_verifies` etc.), with teeth in both polarities: non-conserving,
+wraparound-mint, double-spend, mis-fusion, under-`want_min`, and mismatched-fold are all UNSAT.
+The module fixes the transcript shape `[nf, root, vb]ⁿ` the reveal-nothing theorem (component 3)
+quantifies over.
 
-**Sequence note:** N-leg unlocks the app-wiring (a real DEX batch is not 2 legs); the partial-fill
-inequality unlocks interior clearing. Both are M and independent of the crux (3).
+**Residual:** the N-leg apex under the **deployed VK** — a leaf-wrap config today, tracked as
+component 6.
 
 ---
 
@@ -103,10 +104,14 @@ re-anchor this refinement onto the Poseidon2 value-commitment instead of `pedTwo
 `binding` carrier.)
 
 **BUILT — Option A is largely already present.** The three pieces of the PQ path exist in the codebase:
-- **Hash value-commitment.** The shielded-spend circuit already publishes a **hiding Poseidon2 commitment
-  to the value**: `value_binding = hash_fact(value, [randomness, 0, 0])` (C7,
-  `shielded/spend_circuit.rs:39–40, 111–125, 143`; PI `[nullifier, merkle_root, value_binding]`), binding
-  = Poseidon2 CR, hiding = the randomness blinder. This *is* the Option-A note-value commitment.
+- **Hash value-commitment.** The shielded-spend circuit publishes a **hiding Poseidon2 commitment
+  to `(value, asset_type)` jointly**: `value_binding = hash_fact(value, [asset_type, randomness, 0])` (C7,
+  `shielded/spend_circuit.rs:39, 116, 131, 180`; PI `[nullifier, merkle_root, value_binding]`), binding
+  = Poseidon2 CR, hiding = the randomness blinder — the same joint `(value, asset_type)` binding the
+  three-generator Ristretto commitment provides, on a hash floor. Both ring-clearing apexes re-compute
+  this binding in-AIR from the fused value/asset/randomness cells
+  (`shielded_ring_clearing_nleg_air.rs:34`, `shielded_ring_clearing_air.rs:36`). This *is* the Option-A
+  note-value commitment.
 - **In-AIR conservation.** `Σ value_in − Σ value_out = 0` is a BabyBear field gate
   (`shielded_ring_clearing_air.rs`, clause (c)).
 - **In-AIR range gadget.** Every conservation value is bit-decomposed into `VALUE_BITS` boolean columns
@@ -124,10 +129,10 @@ the *sole* value-binding and **delete the DLog aggregate** — not a from-scratc
 
 **NEEDED (the Option-A migration).**
 - **Note commitment: Poseidon2, not Ristretto.** Make the on-chain leg the Poseidon2 `value_binding`
-  (already a PI) rather than the 32-byte compressed Ristretto `commitment_bytes`
-  (`pool.rs::HiddenAssetLeg`, `value_commitment.rs::commit_hidden_asset`). Extend the hash preimage to
-  also commit `asset_type` (e.g. `hash_fact(value, [asset_type, randomness, 0])`) so one hash binds
-  `(value, asset_type)` jointly, as the three-generator Ristretto commitment did. **Difficulty S–M.**
+  (already a PI, and already binding `(value, asset_type)` jointly — see BUILT above) rather than the
+  32-byte compressed Ristretto `commitment_bytes`, which `pool.rs::HiddenAssetLeg` still carries
+  (`value_commitment.rs::commit_hidden_asset`). The residual is exactly this on-chain-leg promotion.
+  **Difficulty S–M.**
 - **Conservation + asset-tag + split/merge equality: fully in-AIR, not off-AIR Schnorr.** Delete
   `prove_asset_conservation`/`verify_asset_conservation` (the Schnorr DLog excess). The value conservation
   is already the in-AIR field gate (c); fold the **asset-tag conservation** in as a second in-AIR field
@@ -156,21 +161,42 @@ point in-circuit would deepen the exact assumption Shor breaks.
 
 ## 3. ⚑ The privacy / zero-knowledge property — "nobody learns what settled" (THE CRUX)
 
-This is the new thing and the differentiator. It must be scoped exactly, because the codebase today
-proves *soundness* of the clearing (it conserves, it is fair, it cannot double-spend) but has **no
-theorem stating the clearing proof is zero-knowledge over the trades**. Read the grades carefully.
+This is the differentiator, and it must be scoped exactly. The clearing-level theorem exists:
+`metatheory/Market/RevealNothing.lean` states, and discharges the **tractable core** of, the
+reveal-nothing property on the finalized N-leg transcript `[nf, root, vb]ⁿ` — conditional on one
+NAMED floor. Read the grades carefully; the honest claim is conditional, not unconditional.
 
-**PROVEN (but abstract, not yet on the clearing object):**
-- `Metatheory/Open/PerfectZK.lean` closes the **perfect/statistical** fragment of ZK
-  indistinguishability *generically*: given a perfect-ZK law `hperf : ∀ s w, view s w = sim s` (the
-  real verifier view equals a witness-free simulation), it proves `view_indep_of_witness : ∀ s w₁ w₂,
-  view s w₁ = view s w₂` — the verifier extracts zero information about which witness was used — with
-  a real teeth/non-teeth pair. **This is a template, not instantiated on the ring-clearing transcript.**
-  It **deliberately does NOT touch the computational layer** (PPT adversary, negligible advantage,
-  simulator against efficient distinguishers) — that stays a parameter the metatheory carries.
-- `Dregg2/Privacy.lean` — the value tier (Pedersen hiding, additively homomorphic), the graph tier
-  (`unlinkable` stealth, `nullifier_hides_identity`), each as an abstract hiding **carrier** bundled
-  with its computational law. Again: carriers, not a clearing-level theorem.
+**The honest statement.** Reveal-nothing is **not** "the transcript is independent of the trades" —
+that is false (the transcript reveals that a batch cleared, the price, and the conserved totals).
+The honest statement is a simulator over a **leakage functor** `Q`:
+
+    ∃ Sim,  View(clearing) ≈ Sim(Q(clearing))
+
+— the public transcript is *simulatable from the public leakage `Q` alone*, so an observer
+(including the operator) learns only `Q` (the clearing price, the batch size, the conserved total,
+the public tree root) and nothing about the individual trades (who / value / offer-want /
+allocation). The `≈` is statistical for the PCS/hiding layer and computational for the whole
+system.
+
+**PROVEN (the tractable core — `Market/RevealNothing.lean`, kernel-clean):**
+- `RevealBundle.reveal_nothing` (`View c = Sim (Q c)`) and `view_factors_through_leakage` (the view
+  factors through `Q` — the natural-transformation form), with the marquee
+  `same_leakage_indistinguishable`: two clearings with the SAME leakage `Q` but DIFFERENT private
+  trades produce the SAME transcript.
+- **Value-binding hiding** (`HidingValueBinding`): for a blinded commitment the randomness absorbs
+  the value (`value_hidden`), with teeth (`leakyVB_not_hiding`: a commitment that ignores its
+  blinder leaks the value) — the "the `vb` lane reveals nothing" obligation reduced to a named
+  hiding carrier.
+- **A `Q`-faithful simulator shell** (`canonicalSim`, `shellBundle`): a concrete witness-free
+  transcript generator, proven to emit the right batch size and price from the leakage, on which
+  same-leakage indistinguishability holds non-vacuously (`shell_indistinguishable` on two genuinely
+  different clearings with equal `Q`).
+- **Teeth** — `leaky_no_simulator`: a transcript that leaks a private value verbatim admits NO
+  simulator, so the law is a genuine, falsifiable constraint.
+- **The bridge** — `RevealBundle.toPerfectZK` transports the bundle onto
+  `Metatheory.Open.PerfectZK`, so `reveal_nothing` is literally `view_indep_of_witness` on the
+  ring-clearing transcript. (`PerfectZK` and the `Dregg2/Privacy.lean` carriers — Pedersen hiding,
+  `unlinkable`, `nullifier_hides_identity` — are the generic machinery this instantiates.)
 
 **BUILT (mechanism present, statistical-ZK is a tested config not a proven theorem):**
 - The shielded-spend circuit proves through the **hiding** uni-STARK path (`prove_dsl_zk`,
@@ -178,53 +204,30 @@ theorem stating the clearing proof is zero-knowledge over the trades**. Read the
   Merkle path, randomness, leaf commitment live **only in the witness** under the hiding PCS. The
   circuit exposes exactly **3 PIs**: `[nullifier, merkle_root, value_binding]`, where `value_binding`
   is a *hiding* Poseidon2 commitment to the value (blinded by the note randomness).
-- The ring-clearing apex exposes `[nf₀, root₀, vb₀, nf₁, root₁, vb₁]` — nothing else. All plaintext
-  (values, offer/want, out_val/out_blind, range bits) is witness-only.
+- The ring-clearing apexes expose `[nf, root, vb]` per leg — `[nf₀, root₀, vb₀, nf₁, root₁, vb₁]`
+  at 2 legs, `[nf, root, vb]ⁿ` at N — and nothing else. All plaintext (values, offer/want,
+  out_val/out_blind, range bits) is witness-only.
 - The shielded pool (`pool.rs`) hides value + owner + **asset type** jointly (`HiddenAssetLeg`,
   `commit_hidden_asset`), with a transcript (`pool_message`) that binds no cleartext asset type.
 
-**NEEDED (the crux gap — state it precisely):**
+**NAMED FLOOR (graded, an explicit structure field — NOT a `sorry`, NOT proven):**
 
-A DrEX batch is fully private only when there is a **theorem that the public transcript of the
-clearing is independent of the private trades** — i.e. an observer (including the operator) learns
-only "a fair, conserving, valid batch of size *n* cleared," and nothing about who / amounts /
-allocations. Concretely this decomposes into three obligations, none of which exists yet at the
-clearing level:
+`RevealBundle.reveal_law` carries the reveal-nothing law as a *bundle field*. For the DEPLOYED
+bundle — whose `view` is the real Poseidon2/FRI transcript — that field is the **`HidingFriPcs`
+statistical-ZK + Poseidon2 hash-hiding + nullifier-unlinkability** floor: the PCS simulator object,
+which is not a Lean theorem. The deployed bundle is not constructed; every reveal-nothing
+consequence above is *conditional on a bundle satisfying `reveal_law`*, exactly the way the linking
+tower's forgery bound is conditional on `HashCR`. `HidingFriPcs` / `ZK = true` is a **tested config
+choice, not a proven simulator theorem**; the nullifier-unlinkability reduction to the deployed
+nullifier derivation lives inside the same floor. Discharging (or further decomposing and grading)
+this floor is the remaining obligation. **Difficulty RESEARCH.**
 
-1. **State the clearing-level hiding theorem.** Instantiate PerfectZK's `view`/`sim` on the actual
-   ring-clearing transcript. Prove `view_indep_of_witness` for the *real* exposed transcript: the
-   public output (the proof + `[nf, root, vb]` per leg) is a simulable function of only the public
-   data (the committed tree roots, the fresh-nullifier set, the batch size) — **independent of the
-   private trade content** (owner, value, offer/want, allocation). **Difficulty RESEARCH** — writing
-   the honest statement is the hard part (what is `view`? what does `sim` get?), and it is the
-   differentiator. Depends on components 1 and 2 (the transcript must be finalized first).
-
-2. **Discharge the per-PI leakage.** The three exposed lanes must each be shown to leak nothing:
-   - `nullifier` — revealed **by design** to gate double-spend. Must reduce to the
-     `nullifier_hides_identity` / `unlinkable` carrier (a nullifier is unlinkable to the holder).
-     Today that is an abstract `Prop`, not tied to the deployed nullifier derivation.
-   - `merkle_root` — public tree state; leaks nothing beyond the anonymity set (which is the whole
-     tree). Cheap once stated.
-   - `value_binding` — a hiding Poseidon2 commitment; hiding rests on the randomness + `HashCR`.
-     Must be stated as a hiding property, not merely "it's a hash."
-   **Difficulty M** once (1) frames it; these are reductions to named carriers.
-
-3. **The statistical-ZK of the FRI PCS itself.** `HidingFriPcs` / `ZK = true` gives statistical
-   zero-knowledge of the STARK, but this is a **tested config choice, not a proven simulator theorem**
-   in the tree — and PerfectZK explicitly keeps the computational/statistical simulator as a
-   *parameter*. Making "the proof reveals nothing beyond its PIs" a first-class named floor (the
-   HidingFriPcs statistical-ZK obligation) — or proving it — is a heavy crypto obligation.
-   **Difficulty RESEARCH.** This is the floor the whole reveal-nothing claim rests on; it should be
-   NAMED and graded (statistical-ZK of the deployed hiding FRI), the same way `HashCR` and the DLog
-   `binding` are named, rather than left implicit in a config flag.
-
-**Honest one-line grade for component 3:** the clearing is proved *sound and private-by-construction*
-(the plaintext never leaves the witness; only `[nf, root, vb]` is exposed), and the abstract ZK
-machinery exists — but **there is no theorem yet that the clearing transcript reveals nothing about
-the trades.** That theorem (statement + simulator/indistinguishability + the named statistical-ZK
-floor) is the crux, and it is the single highest-value differentiator to build. Do not claim
-"nobody learns what settled" as *proved* until it lands; today the honest claim is "private by
-construction, with the hiding property tested at the PCS layer and the reveal-nothing theorem named."
+**Honest one-line grade for component 3:** reveal-nothing at the clearing level is **proven
+conditional on the named `HidingFriPcs` statistical-ZK floor** — the statement, the same-leakage
+indistinguishability, the value-binding hiding, the `Q`-faithful simulator shell, and the teeth are
+machine-checked; the deployed-FRI PCS simulator is the named, un-discharged floor. Do not read this
+as "reveal-nothing is proved" unconditionally; the honest claim is "the transcript is simulatable
+from public leakage, machine-checked, conditional on the named PCS-ZK floor."
 
 ---
 
@@ -281,12 +284,14 @@ conservation (`inAir_conservation_refines_pedersen`) — the deployed field gate
 proves for the value-mint hazard (no toy stand-in: the `refVC` additive toy and `refTreeRoot` linear
 hash are *retired* by `RealCrypto.lean`).
 
-**BUILT.** The 2-leg apex folds and verifies green (`honest_shielded_2ring_folds_and_verifies`), and
-the cleared claim round-trips.
+**BUILT.** The 2-leg apex folds and verifies green (`honest_shielded_2ring_folds_and_verifies`), the
+N-leg apex folds and verifies at 3 and 4 legs including a partial-fill ring
+(`honest_3ring_folds_and_verifies`, `honest_partial_fill_4ring_folds_and_verifies`), and the cleared
+claim round-trips.
 
 **NEEDED / named residuals (what is NOT yet clean):**
-- The N-leg apex under the **deployed VK** (composition 1 + 6): the 2-leg apex is a leaf-wrap config,
-  not the deployed epoch VK. **Difficulty M→L.**
+- The N-leg apex under the **deployed VK** (composition 1 + 6): both apexes (2-leg and N-leg) fold
+  as leaf-wrap configs, not under the deployed epoch VK. **Difficulty M→L.**
 - **⚑ PQ residual (real, not just resolution).** The shielded value-**binding** today rests on DLog
   (Pedersen/Ristretto + Schnorr excess + Bulletproof range, `cell-crypto/src/value_commitment.rs`,
   `pool.rs`), which is **Shor-broken** — a genuine hole in the PQ posture, NOT covered by the PQ
@@ -302,14 +307,15 @@ the cleared claim round-trips.
 ## Sequence — what unlocks what
 
 ```
-        ┌─────────────────────────────────────────────────────────────┐
-        │  Component 3: ZK / reveal-nothing theorem  (THE CRUX)        │
-        │  statement → per-PI leakage → statistical-ZK FRI floor       │
-        └───────────────▲─────────────────────────────▲───────────────┘
-                        │ (transcript must be final)   │ (named floor)
-   ┌────────────────────┴───┐                  ┌───────┴──────────────┐
-   │ 1. N-leg ring AIR (M)  │                  │ 6. deployed-VK fold  │
-   │    + partial-fill ≥ (M)│──── app wiring   │    + retire residuals│
+        ┌──────────────────────────────────────────────────────────────┐
+        │  Component 3: View ≈ Sim∘Q — tractable core PROVEN           │
+        │  (Market/RevealNothing.lean); remaining = discharge the      │
+        │  NAMED HidingFriPcs statistical-ZK floor (RESEARCH)          │
+        └───────────────▲──────────────────────────────▲──────────────┘
+                        │ transcript fixed (built)      │ named floor
+   ┌────────────────────┴───┐                  ┌────────┴─────────────┐
+   │ 1. N-leg ring AIR      │                  │ 6. deployed-VK fold  │
+   │    BUILT (+ ≥ in-AIR)  │──── app wiring   │    + retire residuals│
    └────────────────────────┘                  └──────────────────────┘
    ┌────────────────────────┐   ┌───────────────────────┐
    │ 4. accumulator bind (M)│   │ 2. PQ value-commitment │
@@ -319,41 +325,38 @@ the cleared claim round-trips.
                                   └── 5. shielded allocation (L, after 3+4)
 ```
 
-- **1 (N-leg AIR)** unlocks a real DEX batch (not 2 legs) → app wiring. Independent of the crux.
+- **1 (N-leg AIR)** is BUILT (`shielded_ring_clearing_nleg_air.rs`) with the partial-fill inequality
+  in-AIR; it fixes the transcript component 3 quantifies over. Its deployed-VK fold is component 6.
 - **4 (accumulator bind)** makes the double-spend gate deployed-real, not per-leg toy. Independent, M.
 - **2 (PQ value-commitment)** is a *posture-alignment* item, NOT a faithfulness upgrade: the shielded
   value-binding is DLog (Shor-broken) today, so this retires DLog onto Poseidon2 CR + in-AIR STARK
   conservation. Most is built (`value_binding`, in-AIR conservation, `VALUE_BITS` range); the residual is
   a cutover + the 64-bit in-AIR range. The old "Ristretto EC-in-AIR" item is deleted (it entrenched DLog).
-- **3 (the ZK theorem)** depends on 1+2 finalizing the transcript, but its *statement* can be drafted
-  now against the current 2-leg transcript and refined. It is the differentiator and gates the honest
-  "nobody learns what settled" claim.
+- **3 (the ZK theorem)** has its statement and tractable core proven (`Market/RevealNothing.lean`);
+  what gates the honest unconditional "nobody learns what settled" claim is the named
+  `HidingFriPcs` statistical-ZK floor.
 - **5 (shielded allocation)** waits on 3+4.
 
 ---
 
 ## The single most-valuable next step
 
-**Two, in priority order — and they are the ones the task frame calls out:**
+**Two, in priority order:**
 
-1. **The clearing-proof ZK / reveal-nothing theorem (component 3).** This is the crux and the
-   differentiator: it is the *only* thing that turns "private by construction, tested at the PCS
-   layer" into "proved that the operator learns nothing about who/amounts/allocations." Concretely,
-   the first move is to **write the honest statement** — instantiate `PerfectZK.view`/`sim` on the
-   ring-clearing transcript `[nf, root, vb]ⁿ` + the proof, prove `view_indep_of_witness` reducing the
-   exposed lanes to the named carriers (`nullifier_hides_identity`, value-binding hiding, public
-   root), and **name the HidingFriPcs statistical-ZK floor** explicitly (graded, both-pole teeth),
-   the way `HashCR` and DLog `binding` are named. Difficulty RESEARCH; highest strategic value.
+1. **The PQ value-commitment cutover (component 2).** A real security residual, not a mere
+   faithfulness upgrade: the shielded value-binding is discrete-log (Shor-broken) today. Most of the
+   Option-A machinery is built (`value_binding`, the in-AIR conservation gate, the `VALUE_BITS`
+   range); the work is the cutover (delete Pedersen/Schnorr/Bulletproof, promote `value_binding` to
+   the on-chain commitment) plus the 64-bit in-AIR range widening. On the posture-critical path.
 
-2. **The N-leg ring-clearing AIR (component 1).** Difficulty M, no new crypto, and it unlocks a real
-   DEX batch + the app wiring. It also finalizes the transcript shape that (1) must quantify over, so
-   the two are complementary: build N-leg to fix the transcript, then state the ZK theorem over it.
+2. **The accumulator bind (component 4).** Binding the ring legs to the deployed sorted-Merkle
+   nullifier accumulator turns the per-leg toy freshness into the deployed double-spend gate.
+   Difficulty M; the accumulator exists.
 
-Everything else (the PQ value-commitment cutover, 64-bit range, shielded allocation) is real work but
-either a posture-alignment cutover reusing built machinery or a downstream dependent. **Note the PQ
-value-commitment (component 2) is a real security residual, not a mere faithfulness upgrade** — the
-shielded binding is Shor-broken today; retiring DLog is on the posture-critical path even if off the
-demonstrable-batch path.
+The crux's remaining depth — discharging the named `HidingFriPcs` statistical-ZK floor (component 3)
+— stays RESEARCH-grade and is the item that would turn the conditional reveal-nothing theorem into
+an unconditional one. The deployed-VK fold of the N-leg apex (component 6) and the shielded
+allocation (component 5) follow.
 
 ---
 
@@ -363,19 +366,21 @@ demonstrable-batch path.
    ring clears conserving + fair + no-double-spend + **fused** to real hidden notes
    (`shielded_ring_clears`, `shielded_ring_fused_clears`), over real Pedersen (DLog binding) and real
    Poseidon2 (sponge CR), toys retired; the value-mint / wraparound hole is closed *in-circuit*.
-2. **BUILT:** the 2-leg tight-cycle ring-clearing apex AIR runs and folds green with tested teeth
-   (non-conserving, wraparound, double-spend, mis-fusion, mismatched-fold all UNSAT), proving through
-   the hiding PCS with only `[nf, root, vb]` exposed and all plaintext witness-only.
-3. **THE FRONTIER is the reveal-nothing property (component 3):** the clearing is private *by
-   construction* but there is **no theorem yet that its transcript is independent of the trades** — no
-   simulator/indistinguishability at the clearing level and no named statistical-ZK floor for the
-   deployed hiding FRI. That theorem is the differentiator and does not exist today.
-4. **Also NEEDED:** N-leg variable cycles + the partial-fill inequality in-AIR (M), binding legs to
-   the *deployed* nullifier accumulator (M), **the PQ value-commitment cutover — the shielded binding is
-   discrete-log (Shor-broken) today; retire Pedersen/Schnorr/Bulletproof onto the Poseidon2
-   hash-commitment + fully-in-AIR STARK conservation (M, mostly built) + a 64-bit in-AIR range (M–L)**,
-   and the shielded attested-but-hidden allocation (L). Honest posture: the 2-leg AIR and the spec are
+2. **BUILT:** both ring-clearing apexes fold green with tested teeth — the 2-leg tight-cycle apex
+   and the **N-leg variable-cycle apex with the partial-fill `offer ≥ want_min` inequality in-AIR**
+   (`shielded_ring_clearing_nleg_air.rs`; non-conserving, wraparound, double-spend, mis-fusion,
+   under-`want_min`, mismatched-fold all UNSAT) — proving through the hiding PCS with only
+   `[nf, root, vb]ⁿ` exposed and all plaintext witness-only.
+3. **THE CRUX (component 3) is proven at its tractable core, conditionally:**
+   `Market/RevealNothing.lean` machine-checks the `View ≈ Sim∘Q` reveal-nothing law,
+   same-leakage indistinguishability, value-binding hiding, a `Q`-faithful simulator shell, and
+   teeth on the N-leg transcript — **conditional on the named `HidingFriPcs` statistical-ZK floor**
+   (the deployed-FRI PCS simulator, not a Lean theorem). Discharging that floor is the frontier.
+4. **Also NEEDED:** binding legs to the *deployed* nullifier accumulator (M), **the PQ
+   value-commitment cutover — the shielded binding is discrete-log (Shor-broken) today; retire
+   Pedersen/Schnorr/Bulletproof onto the Poseidon2 hash-commitment + fully-in-AIR STARK conservation
+   (M, mostly built) + a 64-bit in-AIR range (M–L)**, the N-leg apex under the deployed VK (M→L),
+   and the shielded attested-but-hidden allocation (L). Honest posture: the AIRs and the spec are
    real; shielded *privacy* is quantum-safe (perfect hiding + statistical ZK) but shielded
    *value-binding* is NOT post-quantum (a real posture hole, `PQ-SHIELDED-COMMITMENT.md`); and the
-   fully-private N-leg ZK clearing that reveals nothing is the frontier — do not overclaim either as
-   proved.
+   reveal-nothing theorem is conditional on its named PCS-ZK floor — do not overclaim either.

@@ -304,11 +304,16 @@ Real multi-node `dregg-node` federations over QUIC gossip + blocklace consensus.
   you lack"); an item conserved across a multi-hop trade, exactly one contender
   wins (no dupe); authority-amplification on a `give` refused; value Σδ=0
   (overdraft refused).
-- **Seam:** presence-token move + Bus-gated "say" are now BUILT (12 tests: a
-  conserved `PresenceToken` moves on enter/leave via the same cap machinery as
-  items; an absent speaker is refused by `SendCap::admits` itself). Remaining:
-  derive the speak cap as an attenuation of the on-ledger token (issuance
-  becomes a receipted grant; multi-node presence follows).
+- **Seam:** presence-token move + Bus-gated "say" are built (a conserved
+  `PresenceToken` moves on enter/leave via the same cap machinery as items; an
+  absent speaker is refused by `SendCap::admits` itself), and the speak cap is
+  derived fresh from the on-ledger presence token on every say
+  (`RoomVoice::speak_cap_for` — issuance is a property of the ledger; pinned by
+  `the_speak_cap_is_derived_from_the_ledger_presence_token` and its
+  WorldSink-boundary ledger-source-agnostic twin). Remaining (multi-node):
+  `speak_cap_for` reads the EMBEDDED `World` ledger, and the hearing
+  subscription is per-process Bus-side — multi-node presence points both at the
+  node-backed ledger view.
 
 ---
 
@@ -500,5 +505,8 @@ These are the named ceilings on the runs above (each tracked in `HORIZONLOG.md`)
 - **App registry (the long tail).** 19/20 apps launch + fire on the live ledger;
   `first-room` is a multi-cell scenario/weld shim (would become a launchable
   scenario, not an app).
-- **MUD presence.** Entry cap-gating is proven; a fuller presence-token
-  move/grant is future.
+- **MUD presence — multi-node.** Entry cap-gating is proven, the
+  presence-token move + Bus-gated "say" are built, and the speak cap is
+  derived from the on-ledger presence token on every say (see the MUD seam
+  above); what remains is multi-node: `speak_cap_for` reads the embedded
+  `World` ledger and the hearing subscription is per-process Bus-side.

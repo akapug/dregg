@@ -5,8 +5,9 @@
 This is the start-here for someone who is *not* the author, building on dregg
 from a clean checkout. It orients you: the architecture, how to build the
 unified workspace, and how to write your first deos-js program. For the exact
-guarantees and open seams, read [`../ASSURANCE.md`](../ASSURANCE.md); for the
-substrate design, [`../DREGG3.md`](../DREGG3.md).
+guarantees and open seams, read
+[`../../metatheory/CLAIMS.md`](../../metatheory/CLAIMS.md); for the substrate
+design, [`../KERNEL.md`](../KERNEL.md).
 
 ## Architecture
 
@@ -138,10 +139,13 @@ There is **one** workspace and **one** toolchain. The trick is the
   dependencies on GitHub**, not local paths — a plain `git clone` + `cargo build`
   works on any machine, not just the author's.
 
-- **A few separate workspaces (excluded):** `chain` / `chain/program` (SP1
-  guest), `wasm` (the in-browser executor), `sdk-py`, `pg-dregg`, `dregg-doc`,
-  `discord-bot`, `deos-zed-full`, and the seL4 firmament crate carry their own
-  manifests. The everyday workspace does not pull them.
+- **A few separate workspaces (excluded):** `solana-lock`, `solana-settlement`,
+  `wasm` (the in-browser executor), `sdk-py`, `pg-dregg`, `deos-zed-full`,
+  `discord-bot`, `dregg-tui`, `deos-homeserver`, `durable-workflow`, and
+  `forge-ci-runner` carry their own manifests (the `exclude` list in
+  [`../../Cargo.toml`](../../Cargo.toml)). The everyday workspace does not pull
+  them. `chain/`, `dregg-doc`, and the seL4 firmament crate are ordinary
+  workspace members.
 
 > **Note on the Lean link.** The node links `libdregg_lean.a`. If the
 > `metatheory/` working tree has an in-progress proof regression, the FFI build
@@ -206,8 +210,8 @@ and [`node/tests/fixtures/gm.js`](../../node/tests/fixtures/gm.js).
 ### Players connect and fire
 
 Players submit signed turns. The submit endpoints on the node include
-`POST /turns/submit` (a signed envelope built by an SDK), plus
-`/turns/submit-signed` and `/turns/submit-encrypted`. The SDKs build these for
+`POST /turns/submit` (a signed envelope built by an SDK) and
+`/turns/submit-encrypted`. The SDKs build these for
 you — two nouns and an inescapable authorization step:
 `.turn().sign().submit()`.
 
@@ -217,10 +221,12 @@ Every one of these routes authorization through the *same* verified kernel:
 
 - **SDKs** — Rust ([`sdk/`](../../sdk/), `AgentRuntime` embeds the executor),
   TypeScript ([`sdk-ts/`](../../sdk-ts/), browser-parsable), Python
-  ([`sdk-py/`](../../sdk-py/), embeds the *real* Lean kernel via FFI).
+  ([`sdk-py/`](../../sdk-py/) — the default wheel is the light, client-only
+  build: signing + wire codec + HTTP, no Lean link; embedding the *real* Lean
+  kernel via FFI is an opt-in build feature).
 - **The CLI** ([`cli/`](../../cli/), bin `dregg`) — manages keys, drives turns,
   decodes the app machines.
-- **The MCP server** ([`node/src/mcp.rs`](../../node/src/mcp.rs)) — cap-gated
+- **The MCP server** ([`node/src/mcp/`](../../node/src/mcp/)) — cap-gated
   AI-agent access; every tool a sub-agent calls carries a capability the node
   admits or refuses through the Lean producer gate. (For driving the *live
   embedded image* in the cockpit, see [`DREGG-MCP.md`](../deos/DREGG-MCP.md).)
@@ -242,19 +248,22 @@ forge authority or reach into another vessel.
 > its tools routed to containers, the live brain in-jail via a confined MCP
 > tool-bridge — is partly built (real jail + dregg-tools-only effect path; the
 > in-jail brain is the closing wire). See
-> [`HERMES-INTEGRATION.md`](../deos/HERMES-INTEGRATION.md).
+> [`deos-hermes/DESIGN.md`](../../deos-hermes/DESIGN.md) and
+> [`LOG-A-HERMES-IN.md`](../deos/LOG-A-HERMES-IN.md) (a live brain driving the
+> cockpit's World via receipted `run_js` turns).
 
 ## Pointers
 
 - **The charter + the brand** — [`HYPERDREGGMEDIA.md`](../deos/HYPERDREGGMEDIA.md) (the
   inhabited world), [`DEOS.md`](../deos/DEOS.md) (the desktop brand), and
   [`COCKPIT-UX.md`](../deos/COCKPIT-UX.md) (the cockpit's five-mode frame).
-- **The guarantees + the honest opens** — [`../ASSURANCE.md`](../ASSURANCE.md) and
+- **The guarantees + the honest opens** —
+  [`../../metatheory/CLAIMS.md`](../../metatheory/CLAIMS.md) (the skeptic-facing
+  ledger, build-enforced) and
   [`AssuranceCase.lean`](../../metatheory/Dregg2/AssuranceCase.lean).
-- **The substrate design** — [`../DREGG3.md`](../DREGG3.md) (four substances,
-  eight verbs, the unifications).
+- **The substrate design** — [`../KERNEL.md`](../KERNEL.md) (four substances,
+  the verbs, the verified kernel).
 - **THE ATLAS** — [`../../dregg-atlas/site/index.html`](../../dregg-atlas/site/index.html).
   The interactive, code-grounded map of every surface, the object-capability web,
   the game tree, and the protocol reference. **The manual is the trail guide; the
   atlas is the territory — explore the whole system there.**
-</content>

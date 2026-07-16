@@ -1,22 +1,30 @@
 # revokedRoot — the committed credential-revocation accumulator (hole #3 / #139)
 
-**Status:** design, ember-approved shape, awaiting a quiet tree. **Why:** without a *committed, canonical*
-revocation root, nobody can **attest to correctly-revoked behavior** — and trustless validium interchain
-therefore does not hold. (ember, 2026-07-10.)
+**Status:** LANDED through Stage E (the gate cutover) — `RevokedSet` (`cell/src/revoked_set.rs`), the
+executor registry (`TurnExecutor::note_revoked`, `turn/src/executor/mod.rs:820`), the flag-day circuit
+geometry (`revoked_root` = base limb 37, completion 82..=88, `circuit/src/effect_vm/trace_rotated.rs:280-283`),
+the commitment twins (`cell/src/commitment.rs:793`, `turn/src/rotation_witness.rs:495`), and the
+committed-registry gate labeled `STAGE E / hole #139` in `turn/src/executor/authorize.rs:1338-1360`.
+**Named residual (Stage G):** the node's proving call sites pass the canonical EMPTY root
+(`empty_revoked_root_8`, byte-identical to a fresh `RevokedSet::root8`) — a live-advanced root does not
+yet ride the committed lanes there (`node/src/turn_proving.rs:513,522,658,667`). **Why this exists:**
+without a *committed, canonical* revocation root, nobody can **attest to correctly-revoked behavior** —
+and trustless validium interchain therefore does not hold. (ember, 2026-07-10.) The rest of this document
+is the design record: the hole as found, the decisions, and the staged plan the landing followed.
 
-## 1. The hole (verified, not assumed)
+## 1. The hole (as found; closed by Stage E)
 
-- `turn/src/executor/authorize.rs:1378` — `if let Some(channel_id) = &proof.revocation_channel` — the
-  **proof (wire)** supplies which revocation channel the gate consults; `:1317` looks it up in
+- `turn/src/executor/authorize.rs:1402` — `if let Some(channel_id) = &proof.revocation_channel` — the
+  **proof (wire)** supplies which revocation channel the gate consults; `:1317` looks up the node-local
   `self.revocation_channels`.
 - `docs/reference/lean-distributed.md` — the deployed rest-hash encoder absorbs the **revocation-channel
   WIRE root**.
-- So the committed state *binds* a wire-supplied root but never proves it **canonical**. A malicious node
+- So the committed state *bound* a wire-supplied root but never proved it **canonical**. A malicious node
   supplies an empty/stale revocation root ⇒ the fail-closed gate sees nothing revoked ⇒ the commitment
   faithfully records the lie ⇒ a light client (holding no revocation set) **cannot detect it**.
 - The canonical Lean says exactly this: `RecordKernelState.revoked` is *"the committed set of revoked
   credential nullifiers … read off committed state (**NOT** the wire-supplied `NodeAuth.rev`), so the
-  fail-closed gate `gateOK` honours revocation"* — tagged **hole #3 / #139** (`RecordKernel.lean:318-325`).
+  fail-closed gate `gateOK` honours revocation"* — tagged **hole #3 / #139** (`RecordKernel.lean`).
 
 **Do not conflate** (I did, at first): the Rust `canonical_revocation_tree_for_set(previously_spent)` is a
 tree of **spent nullifiers** (the non-revocation/*freshness* circuit), i.e. the nullifier set — already
@@ -31,8 +39,9 @@ Also distinct: **delegation** revocation already has a light-client foil (`deleg
 k.revokedRoot }` — `revokedRoot` is **already modeled on the same `Heap8Scheme` accumulator as
 `nullifierRoot`**, and `kernel_revoked_gate_fails` proves: *a revoked `credNul` admits NO non-membership
 witness against `revokedRoot` ⇒ the revocation gate cannot pass* (fail-closed). `RecordKernelState` carries
-`revokedRoot : Fin 8 → ℤ` and `RH`/`RestHashIffFrame` absorbs it (landed `1dce9523c`). **The canonical side
-is done.** The runtime is the ghost that must catch up — same pattern as nullifier/commitments.
+`revokedRoot : Fin 8 → ℤ` and `RH`/`RestHashIffFrame` absorbs it. **The canonical side
+is done**, and the runtime ghost has caught up to it (Stages A–E, header) — same pattern as
+nullifier/commitments.
 
 ## 3. The design (ember-approved)
 
@@ -56,10 +65,14 @@ differential tooth (Rust `root8()` == in-circuit after-root) then holds by const
 (a failed turn must not leave a phantom revocation). The per-cell cap **tombstone** (limb 25 `cap_root`)
 stays — it is capability-slot revocation, orthogonal to the credential registry.
 
-**Gate reads COMMITTED state.** `authorize.rs` stops consulting the wire-supplied `proof.revocation_channel`
-root; it verifies a **non-membership witness** for `credNul` against the **committed `revokedRoot`**
-(fail-closed: no witness ⇒ refuse). This is the actual hole-#139 closure. Retire/reconcile the
-revocation-channel wire root absorbed into the rest-hash.
+**Gate reads COMMITTED state.** The landed shape (Stage E, `authorize.rs:1338-1360` and the bearer-cap
+mirror at `:1430`): the node-local `revocation_channels` check is KEPT as a fast advisory/liveness path,
+and BESIDE it the gate reads the **committed registry `note_revoked`** — deterministic from the finalized
+turns, so a re-executor reproduces it and a node that skips the check commits a divergent state consensus
+rejects. Two domain-separated keys are checked: `cred_nul(provenance)` and `chan_nul(token)`. This is the
+hole-#139 closure — the wire-channel consult was subordinated to advisory, not retired (the original
+design's "retire the wire root" was narrowed at landing; the committed check is what the attestation
+rests on).
 
 **Committed geometry (flag-day; VK regen is cheap per ember).** Every faithful-8-felt group is
 `(lane-0 in the base region, 7 completion felts in 37..87)`. Base limbs 0..36 are FULL
@@ -70,6 +83,14 @@ completion→38..88, carrier→89..112, fields→113..168, pad→169, `V9_NUM_PR
 `(37, 82..88)`. Every index ≥37 shifts +1 (mechanical, `sg`-sweepable). Chosen over the zero-churn "append
 lane-0 at 169" hack because `revoked_root` IS a base root and the base region is where the circuit expresses
 that — keeps `preLimbsAt` honest.
+
+**Landing divergence (tail only).** The landed layout follows this plan through group column, carrier
+89..=112, and fields 113..=168, but the tail was widened at landing: limbs 169..=175 are a circuit-only
+`cells_root` 8-felt completion reservation (zero in the producer, filled by the createCell trace generator,
+placed there to keep it off `revoked_root`'s committed group at 82..=88 — the relocation is
+`circuit/src/effect_vm/trace_rotated.rs:92`), the two zero pads sit at 176..=177 (landing body `[4..177]` =
+174 = 58×3, the clean-3-grouping discipline), and `V9_NUM_PRE_LIMBS` = **178**, not 170
+(`cell/src/commitment.rs:748-757`; `turn/src/rotation_witness.rs:64-70`).
 
 ## 3b. THE CRYSTALLIZED DESIGN (after 4 read-only scholars, 2026-07-10) — smaller than it looked
 
@@ -101,30 +122,46 @@ wire-supplied single `BabyBear` PI instead of the committed 8-felt root.** That 
   insert; batch revoke = one channel insert killing every subscriber at O(1). This batching is INTENTIONAL
   (caps opt in by subscribing) — unlike `delegation_epoch`'s COLLATERAL coarseness (one bump stales every
   earlier cap from that grantor, targeted or not).
-- **Leaf value = `revocation_height`** (the audit felt). `RevokedSet` (Stage A, `5aa0aff86`) takes all of this
+- **Leaf value = `revocation_height`** (the audit felt). `RevokedSet` (Stage A) takes all of this
   unchanged: `[u8;32] -> u64`.
-- **`gatedActionInvG` MUST gain the `revocationGate` conjunct.** Today it has only THREE
-  (`credentialValidG ∧ capAuthorityG ∧ caveatsDischarged`), despite its docstring calling it "the
-  committed⇒all-four headline" (FullForestAuth.lean:1034-1041). Without this, a committed node does NOT
-  attest "was not revoked" — we would wire a registry the attestation still ignores. This is as load-bearing
-  as the registry itself for ember's attestation/validium goal.
+- **`gatedActionInvG` MUST gain the `revocationGate` conjunct — LANDED.** `gateOK` is now
+  `credentialValidG && capAuthorityG && caveatsDischarged && revocationGate`
+  (`FullForestAuth.lean:490`), and `gatedActionInvG` ANDs all FOUR conjuncts (`:1030-1034`;
+  `revocationGate` = `na.credNul ∉ s.kernel.revoked`, the COMMITTED registry, fail-closed). A committed
+  node therefore attests "was not revoked" — this was as load-bearing as the registry itself for ember's
+  attestation/validium goal.
 - **Non-vacuity is the acceptance test.** Today every revocation theorem takes `credNul ∈ revoked` as a
   HYPOTHESIS, discharged only by hand-built fixtures. After this campaign, an ACTION must discharge it.
 
 ## 4. Stages (each verified before the next; never leave the tree red)
 
-- **A** `RevokedSet` primitive + `root8()` + differential tooth vs the circuit grow-gate encoding + cross-turn continuity (mirror `nullifier_set.rs`'s test suite).
-- **B** Executor registry: `note_revoked` + `cap_revoke` insert + rollback (mirror the commitments lane's journal/rollback wiring).
-- **C** Circuit AIR: `revokedRootGroupCol` at `(37, 82..88)`; base widen 37→38; all indices ≥37 shift. Lean emit geometry (`preLimbsAt_length` 37→38) + refinement re-proven.
-- **D** Rust commitment twins: `V9RotationContext.revoked_root: Faithful8`; `write_lanes([37,82..88])` in both twins; every existing `write_lanes` index ≥37 shifted. Caller ripple swept.
-- **E** Gate cutover: `authorize.rs` verifies non-membership vs the COMMITTED `revokedRoot`; retire the wire root. **This is the hole-#139 closure** — the one stage that changes what the deployed executor *trusts*.
-- **F** VK regen + descriptor drift green.
-- **G** Live root threading (`turn_proving` + `blocklace_sync`), differential + cross-node tests mirroring nullifier's, whole-tree Lean green.
+- **A ✅ LANDED** — `RevokedSet` primitive + `root8()` (`cell/src/revoked_set.rs`), the circuit's own
+  exported leaf encoding so it cannot drift.
+- **B ✅ LANDED** — Executor registry: `note_revoked` (`turn/src/executor/mod.rs:820`) + the
+  `cap_revoke` insert at `revocation_height` + journaled rollback (`turn/src/executor/apply.rs:803-827`;
+  rollback threaded through `atomic.rs` / `bridge_ledger.rs`).
+- **C ✅ LANDED** — Circuit AIR: `B_REVOKED_ROOT = 37` with the 8-felt group at `(37, 82..=88)`
+  (`circuit/src/effect_vm/trace_rotated.rs:280-283,1819`); every index ≥37 shifted (+1), Lean
+  `EffectVmEmitRotationV3` mirrors it.
+- **D ✅ LANDED** — Rust commitment twins: `V9RotationContext.revoked_root: Faithful8`
+  (`cell/src/commitment.rs:793`) and `write_lanes(&mut pre_limbs, [37, 82..=88])`
+  (`turn/src/rotation_witness.rs:495`).
+- **E ✅ LANDED** — Gate cutover: the committed-registry check labeled `STAGE E / hole #139` in
+  `authorize.rs` (see §3 for the landed shape — advisory channel check kept beside it). **This is the
+  hole-#139 closure** — the one stage that changes what the deployed executor *trusts*.
+- **F ✅ LANDED** — the deployed descriptor geometry carries the post-flag-day limb layout (the
+  Lean-emitted descriptors and the trace constants agree on 37 / 82..=88).
+- **G ◻ NAMED RESIDUAL** — Live root threading: the proving call sites in `node/src/turn_proving.rs`
+  pass `empty_revoked_root_8()` (canonical empty root, byte-identical to a fresh `RevokedSet::root8`,
+  and COMMITTED — so the lanes are honest for the empty registry); a live-advanced root after an actual
+  revocation does not yet ride those lanes, and the cross-node differential tests mirroring nullifier's
+  are with it.
 
 ## 5. Why this matters (the payoff)
 
-With `revokedRoot` committed + the gate reading it: a light client verifies from commitment+proof alone that
-(i) revocations accumulated correctly and (ii) the turn honoured them. That yields **attestable
-correctly-revoked behavior**, and with it **trustless validium-based interchain** — a remote chain can verify
-dregg state transitions without trusting dregg's nodes about revocation. Enforcement ≠ attestability; this
-closes the gap.
+With `revokedRoot` committed + the gate reading it (both landed): a light client verifies from
+commitment+proof alone that (i) revocations accumulated correctly and (ii) the turn honoured them. That
+yields **attestable correctly-revoked behavior**, and with it **trustless validium-based interchain** — a
+remote chain can verify dregg state transitions without trusting dregg's nodes about revocation.
+Enforcement ≠ attestability; the full payoff arrives when the Stage-G residual closes and a
+live-advanced root rides the committed lanes.

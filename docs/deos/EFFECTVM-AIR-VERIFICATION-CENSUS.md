@@ -7,10 +7,12 @@ witnesses it), or is the real check delegated to an out-of-circuit / off-AIR
 verifier (a TRUSTED SURFACE the bare STARK does not witness)?**
 
 Provenance: triggered by the `Effect::Custom` `proofBind` finding — the in-AIR op
-is `| .proofBind _ => True` (`metatheory/Dregg2/Circuit/DescriptorIR2.lean:596`),
-the genuine sub-proof check is the out-of-circuit Rust
-`dregg_circuit_prove::custom_proof_bind::verify_proof_bind`
-(`circuit-prove/src/custom_proof_bind.rs`). This census asks what ELSE is in that
+is `| .proofBind _ => True` (`metatheory/Dregg2/Circuit/DescriptorIR2.lean:601`);
+the genuine sub-proof check lives outside the EffectVM STARK (on the deployed fold
+path the sub-proof leaf is re-proven and folded in-circuit at the aggregation layer;
+the re-executor path runs the Rust
+`dregg_circuit_prove::custom_proof_bind::verify_proof_bind`,
+`circuit-prove/src/custom_proof_bind.rs`). This census asks what ELSE is in that
 class.
 
 Verified against Lean (`DescriptorIR2.lean`, `CircuitOpenFronts.lean`) and the
@@ -32,26 +34,30 @@ at HEAD.
 - **(4) CARRIED-NOT-FORCED column** — a column the AIR records but no constraint
   binds (a column-level version of (3)).
 
-## The op grammar (`VmConstraint2`, `DescriptorIR2.lean:387`)
+## The op grammar (`VmConstraint2`, `DescriptorIR2.lean:390`)
 
 | op | per-row semantics | in-circuit realization | class | honest? |
 |----|-------------------|------------------------|-------|---------|
 | `base (Gate/Boundary/Transition)` | polynomial `= 0` (`VmConstraint.holdsVm`) | `assert_zero` / `when_first/last/transition` | **1** | n/a |
-| `base (PiBinding)` | `local[col] − pi[i] = 0` (`CircuitEmit.lean:525`) | boundary `assert_zero` binding column↔PI | **1** | n/a |
-| `lookup (Lookup)` | `tuple.map eval ∈ table` (`DescriptorIR2.lean:448`) | LogUp bus (`BUS_FACT`, byte/range buses) | **1** | n/a |
-| `mapOp (MapOp)` | `opensTo`/`writesTo` row-local (`:511`) | Poseidon2 Merkle path on the chip bus `BUS_P2`; functional under CR (`opensTo_functional :480`) | **1** | n/a |
-| `memOp (MemOp)` | `True` row-local (`:593`) | global `Satisfied2` legs: `memDisciplined`/`memBalanced`/`memTableFaithful` → `BUS_MEM_LOG/CHECK/ADDRS` LogUp (Blum `memcheck_sound`) | **2** | honest |
-| `umemOp (UMemOp)` | `True` row-local (`:595`) | global `Satisfied2U` legs: `umemBalanced`/`umemDisciplined`/`umemAddrs`/`umemNullifierInsertOnly` → `BUS_UMEM_LOG/CHECK/ADDRS` LogUp (`universal_memory_sound`) | **2** | honest |
-| `windowGate (WindowConstraint)` | two-row poly `= 0` (`:372`) | windowed `assert_zero` (`when_transition`) | **1** | n/a |
-| `proofBind (ProofBind)` | `True` row-local (`:596`) | **NONE in-AIR** — no bus, bounds-check only (`descriptor_ir2.rs:1388-1394`); content = `Satisfied2Custom.proofBound` leg, an `EngineBinding` named hypothesis; real check is off-AIR `verify_proof_bind` | **3** | honest |
+| `base (PiBinding)` | `local[col] − pi[i] = 0` (`Emit/EffectVmEmit.lean:490-495`) | boundary `assert_zero` binding column↔PI | **1** | n/a |
+| `lookup (Lookup)` | `tuple.map eval ∈ table` (`DescriptorIR2.lean:450`) | LogUp bus (`BUS_FACT`, byte/range buses) | **1** | n/a |
+| `mapOp (MapOp)` | `opensTo`/`writesTo` row-local (`:514`) | Poseidon2 Merkle path on the chip bus `BUS_P2`; functional under CR (`opensTo_functional :485`) | **1** | n/a |
+| `memOp (MemOp)` | `True` row-local (`:598`) | global `Satisfied2` legs: `memDisciplined`/`memBalanced`/`memTableFaithful` → `BUS_MEM_LOG/CHECK/ADDRS` LogUp (Blum `memcheck_sound`) | **2** | honest |
+| `umemOp (UMemOp)` | `True` row-local (`:600`) | global `Satisfied2U` legs: `umemBalanced`/`umemDisciplined`/`umemAddrs`/`umemNullifierInsertOnly` → `BUS_UMEM_LOG/CHECK/ADDRS` LogUp (`universal_memory_sound`) | **2** | honest |
+| `windowGate (WindowConstraint)` | two-row poly `= 0` (`:368`) | windowed `assert_zero` (`when_transition`) | **1** | n/a |
+| `proofBind (ProofBind)` | `True` row-local (`:601`) | **NONE in the EffectVM STARK** — no bus, bounds-check only (`descriptor_ir2.rs:1457-1465`); the eight `(commit, vk)` columns are published as descriptor PIs, and the deployed FOLD backs them: the custom sub-proof leaf is re-proven in-circuit and its 8-felt PI commitment recomputed and `connect`ed lane-by-lane (`prove_custom_binding_node_segmented`); the fold's floor is the named `EngineBinding`/`recursive_sound` hypothesis | **3** (bare STARK) / in-circuit at the fold | honest |
 
 `base`/`lookup`/`mapOp`/`windowGate` are genuinely enforced. `memOp`/`umemOp` are
 row-local `True` but their content rides real in-circuit LogUp buses (the memory /
 universal-memory balance arguments are arithmetized in the deployed descriptor —
-`descriptor_ir2.rs:8-29`, bus constants `:331-338`), so they are fail-closed, not
-holes. **`proofBind` is the only op kind with NO in-circuit realization at all** —
-no bus, no polynomial; the column pair `(commit, vk)` is declaration-and-bounds
-only, and the program-correctness recursion is delegated off-AIR.
+`descriptor_ir2.rs:1-30`, bus constants `:349-361`), so they are fail-closed, not
+holes. **`proofBind` is the only op kind with no realization inside the EffectVM
+batch STARK** — no bus, no polynomial; the column pair `(commit, vk)` is
+declaration-and-bounds only there. Its content is realized in-circuit one layer up:
+the deployed recursion fold re-proves the custom sub-proof as a leaf and recomputes
++ `connect`s the commitment (`custom_proof_bind.rs:1-21`), so a forged or unbacked
+commitment is UNSAT at the fold — but a client running ONLY the bare EffectVM STARK
+does not witness it.
 
 ## The PI-carried surfaces (column-level, not `VmConstraint2` ops)
 
@@ -73,18 +79,19 @@ for class (3).
 
 ### Trusted: off-AIR recursion / signature (class 3)
 
-| surface | PI slots | real check (off-AIR) | status | honest? |
+| surface | PI slots | real check (outside the EffectVM STARK) | status | honest? |
 |---------|----------|----------------------|--------|---------|
-| **Custom proof_bind** | `CUSTOM_PROOFS_*` + descriptor cols 68/72 | recursive STARK verify `verify_proof_bind` (`circuit-prove/src/custom_proof_bind.rs`) | LIVE; commitment 4-felt/~62-bit (below the 8-felt/~124-bit floor) | honest |
-| **Sovereign transition proof (Phase 2)** | `SOVEREIGN_TRANSITION_PROOF_{VK_HASH,COMMITMENT}`, `HAS_TRANSITION_PROOF` (`pi.rs:240-250`) | off-AIR recursive STARK verify ("the off-AIR verifier reads … and recursively verifies the inner STARK", `pi.rs:209-213`; `proof_verify.rs:2485`) | **STAGED** — VK is sentinel-zero today (`proof_verify.rs:2483-2485`), recursive verifier "in a follow-up" | honest |
-| **Sovereign witness signature + sequence** | `SOVEREIGN_WITNESS_{KEY_COMMIT,SEQUENCE}`, `IS_SOVEREIGN_CELL` (`pi.rs:240-252`) | Ed25519 signature verify off-AIR (`authorize.rs:933 verify_ed25519_signature`) + monotonic-sequence chain-walk at executor injection | LIVE; PI carries only a 4-felt key DIGEST + sequence, "backed off-AIR by the actual signature verification" (`pi.rs:236`) | honest |
+| **Custom proof_bind** | `CUSTOM_PROOFS_*` + descriptor cols 68/72 (+ the member-local commit-teeth columns) | deployed fold: the sub-proof leaf is re-proven in-circuit, its commitment recomputed and lane-connected (`prove_custom_binding_node_segmented`); re-executor path: off-AIR `verify_proof_bind` (`circuit-prove/src/custom_proof_bind.rs`) | LIVE; commitment is the full 8-felt `WideHash` (~124-bit, `PROOF_BIND_COMMIT_WIDTH`, `custom_proof_bind.rs:87-104`); old 4-felt custom artifacts are REFUSED at the versioned admission boundary (`require_custom_commit_teeth_v2`) | honest |
+| **Sovereign transition proof (Phase 2)** | `SOVEREIGN_TRANSITION_PROOF_{VK_HASH,COMMITMENT}`, `HAS_TRANSITION_PROOF` (`pi.rs:257-267`) | none — **RETIRED**: `execute.rs:938-948` fails closed on any v1 `transition_proof`; `populate_sovereign_witness_pi` has no caller | **RETIRED / REPURPOSED** — the commitment column carries the sovereign AUTHORITY DIGEST, bound in-circuit by the re-proved sovereign-authority leaf + `prove_sovereign_binding_node_segmented` (`pi.rs:209-231`); no inner recursive verifier exists or is trusted | honest |
+| **Sovereign witness signature + sequence** | `SOVEREIGN_WITNESS_{KEY_COMMIT,SEQUENCE}`, `IS_SOVEREIGN_CELL` (`pi.rs:240-252`) | Ed25519 signature verify off-AIR, inline in the executor: `VerifyingKey::verify_strict` over `SovereignCellWitness::signing_message_for_federation` (`execute.rs:878-895`) + monotonic-sequence chain-walk just below (`execute.rs:896-908`) | LIVE; PI carries only a 4-felt key DIGEST + sequence, "backed off-AIR by the actual signature verification" (`pi.rs:234-238`) | honest |
 
-All three are explicitly NAMED at the code level (the Lean comments, the Rust
+All are explicitly NAMED at the code level (the Lean comments, the Rust
 `pi.rs`/`trace.rs` doc-comments, and `docs/deos/CUSTOM-VK-AUTHORIZATION.md` are all
 scrupulous). None is a *laundered* overclaim (no code/doc asserts these are
-in-circuit). They ARE genuine trusted surfaces: a light client that runs only the
-aggregate EffectVM STARK does NOT witness them and must additionally run the
-recursive verify / signature verify (or trust the federation verifier that does).
+in-circuit where they are not). The live rows ARE genuine trusted surfaces for a
+client that runs only the bare EffectVM STARK: it does not witness them and must
+additionally verify the fold / run the signature verify (or trust the federation
+verifier that does).
 
 ## Re-verdict on the two completeness claims
 
@@ -96,21 +103,26 @@ last vacuous per-effect *gate* (`Effect::Custom`'s `descriptorRefines` was vacuo
 recursive verify (`custom_proof_bind.rs`). The commit body is scrupulous:
 "verifier-side soundness, VK-FREE; no Lean".
 
-But it did NOT make `proofBind` enforced *in the AIR*:
+But it did NOT make `proofBind` enforced *inside the EffectVM AIR*:
 
-- The in-AIR op is STILL `| .proofBind _ => True` (`DescriptorIR2.lean:596`,
-  unchanged) and STILL bounds-only in Rust (`descriptor_ir2.rs:1388`).
+- The in-AIR op is STILL `| .proofBind _ => True` (`DescriptorIR2.lean:601`) and
+  STILL bounds-only in Rust (`descriptor_ir2.rs:1457-1465`).
 - THREE row-local `=> True` ops remain (`memOp`, `umemOp`, `proofBind`). The first
   two are benign (class 2 — forced by in-circuit LogUp buses). `proofBind` is the
-  one whose content is off-AIR.
-- So "GENUINELY verifies" is true **verifier-side**, false **in-AIR**. proofBind
-  remains a class-(3) trusted-out-of-circuit surface; the recursion soundness is
-  the named `EngineBinding`/`recursive_sound` hypothesis (`DescriptorIR2.lean:975`),
-  not an arithmetized constraint.
+  one whose content lives outside the EffectVM batch STARK.
+- So "GENUINELY verifies" is true at the fold and verifier-side, false inside the
+  EffectVM AIR itself; the recursion soundness is the named
+  `EngineBinding`/`recursive_sound` hypothesis (`DescriptorIR2.lean:976`), not an
+  arithmetized EffectVM constraint.
 
-The real in-AIR fix (verify the sub-proof IN-AIR via the recursion verifier
-`verify_p3_batch_proof_circuit` already used by `ivc_turn_chain.rs` for turn-leaves,
-+ lift the commitment 4→8 felt) is VK-affecting and parked with the umem VK epoch.
+The in-circuit fix has since landed at the fold layer: the commitment is the full
+8-felt `WideHash` (~124-bit, `PROOF_BIND_COMMIT_WIDTH`; old 4-felt custom artifacts
+are refused at `require_custom_commit_teeth_v2`, `custom_proof_bind.rs:87-104`), and
+the deployed fold's custom leaf re-proves the sub-proof and recomputes + `connect`s
+the commitment lane-by-lane (`prove_custom_binding_node_segmented`, wired into
+`prove_chain_core_rotated`) — a forged or unbacked commitment is UNSAT at the fold.
+What remains named is the floor: the fold rests on `recursive_sound`, and the bare
+EffectVM STARK alone still does not witness the sub-proof.
 
 ### (b) `Circuit.CircuitOpenFronts.countOpenFronts = 0` / "32/32 effects"
 
@@ -124,11 +136,13 @@ What the metric does NOT count:
 
 1. Row-local `=> True` ops whose content is a global leg (`memOp`/`umemOp` — benign
    anyway, but invisible to this count).
-2. The `proofBind`/Custom off-AIR recursion (and `Effect::Custom` is not even one of
-   the 32 — it rides the `closedLogExtract_all_genuine` catch-all
+2. The `proofBind`/Custom recursion — realized in-circuit at the fold, unwitnessed
+   by the bare EffectVM STARK (and `Effect::Custom` is not even one of the 32 — it
+   rides the `closedLogExtract_all_genuine` catch-all
    `| (n+1) => rds.other (n+1)`, `ClosureFanoutGenuine.lean:1186`; see the apex
    memory correction).
-3. The sovereign off-AIR signature / transition-proof surfaces (table above).
+3. The sovereign off-AIR signature surface (table above; the Phase-2
+   transition-proof surface is retired).
 
 So `countOpenFronts = 0` is NOT a "the AIR verifies everything" certificate — it is
 "no open refinement front in the extraction lane." The trusted-out-of-circuit
@@ -139,18 +153,26 @@ this census surfaces.
 ## Ranked answer — "what else does the EffectVM AIR NOT verify?"
 
 1. **Custom program correctness** (`Effect::Custom` / `proofBind`) — the bound
-   sub-proof's verification is off-AIR (`verify_proof_bind`); commitment 4-felt
-   (~62-bit, below the 124-bit floor). Already documented
-   (`docs/deos/CUSTOM-VK-AUTHORIZATION.md`, `docs/reference/lean-circuit.md:196`).
-2. **Sovereign inner transition proof (Phase 2)** — recursively verified off-AIR;
-   the VK binding is sentinel-zero today (STAGED, recursive verifier is a follow-up).
-   Was NOT surfaced in the soundness census docs before this audit.
-3. **Sovereign witness Ed25519 signature + replay sequence** — signature verified
-   off-AIR (`authorize.rs`), replay via off-AIR chain-walk; the AIR carries only a
-   4-felt key digest + sequence. By design the signature binds the full 256-bit key
-   off-circuit; honest but a genuine trusted surface for the bare STARK.
+   sub-proof is not witnessed by the EffectVM batch STARK itself. On the deployed
+   fold path it IS realized in-circuit one layer up: the sub-proof leaf is
+   re-proven and its full 8-felt (~124-bit) PI commitment recomputed in-circuit and
+   lane-connected (`custom_proof_bind.rs:87-104`; 4-felt artifacts refused at
+   `require_custom_commit_teeth_v2`), resting on the named `recursive_sound` floor.
+   Already documented (`docs/deos/CUSTOM-VK-AUTHORIZATION.md`).
+2. **Sovereign witness Ed25519 signature + replay sequence** — signature verified
+   off-AIR inline in the executor (`verify_strict`, `execute.rs:878-895`; distinct
+   from the action-authorization `verify_ed25519_signature` at `authorize.rs:933`),
+   replay via off-AIR chain-walk; the AIR carries only
+   a 4-felt key digest + sequence. By design the signature binds the full 256-bit
+   key off-circuit; honest but a genuine trusted surface for the bare STARK.
+
+RETIRED from this list: the **sovereign inner transition proof (Phase 2)**. There is
+no staged inner recursive verifier to trust — `execute.rs:938-948` fails closed on
+any v1 `transition_proof`, and the commitment column is repurposed to carry the
+sovereign authority digest, bound in-circuit by the re-proved sovereign-authority
+leaf + binding node (`pi.rs:209-231`).
 
 Everything else in the EffectVM AIR is genuinely enforced (class 1) or fail-closed
-via an in-circuit LogUp bus (class 2). The trusted-surface class is exactly these
-three off-AIR recursion/auth surfaces — and the broad benign off-AIR PI-match
-reconstruction surface (light-client-reproducible, not a hole).
+via an in-circuit LogUp bus (class 2). The trusted-surface class for the bare STARK
+is exactly these two recursion/auth surfaces — plus the broad benign off-AIR
+PI-match reconstruction surface (light-client-reproducible, not a hole).

@@ -2,9 +2,9 @@
 
 *Present-tense, what-is. How a DrEX trade that spans chains actually clears and settles: the
 three custody modes it distinguishes, the ring-of-locks that dissolves the liquidity-provider
-problem, the deposit→clear→release lifecycle, and — named plainly — the atomicity/liveness escrow
-that is the load-bearing open piece. Every claim carries its build/grade. This is a design to build
-from, honest at its edges (§4, §5), not a promise that cross-chain trading is solved.*
+problem, the deposit→clear→release lifecycle, the built timeout/refund escrow, and — named plainly —
+the cross-vault atomic release that is the load-bearing open piece. Every claim carries its
+build/grade. Honest at its edges (§4, §5); not a promise that cross-chain trading is solved.*
 
 > One-line thesis: **a cross-chain DrEX trade needs no pre-funded liquidity pool and no bridge
 > validators — the counterparties' own locks ARE the liquidity, and the multilateral ring
@@ -208,38 +208,42 @@ released." The failure mode is concrete: the clearing settles, vault A (Base) re
 vault B's chain (Robinhood Chain) is down or censoring, so Alice's TSLA never releases to Bob. Bob is
 now short. **This is the open distributed-commit rung** (`DREX-DESIGN.md §6`, RESEARCH).
 
-**The escrow design (the named build):** frame release and refund as the two branches gated on the
-same clearing root, plus a per-chain deadline.
+**The escrow (BUILT — `chain/contracts/DreggVault.sol`, the `escrow*` surface):** release and refund
+are the two branches of one timed escrow, exactly the two-branch design this section named.
 
-- **Commit phase.** A `deposit` carries a *batch id* and a *release deadline* (the batch's proving
-  round + a release window). Funds are locked, not yet assignable.
-- **Settle phase — release.** If the dregg clearing proof for that batch settles and names this
-  deposit as *filled*, the vault releases to the ring-matched recipient (§3 step 4). Because release
-  requires a proof that this specific lock was included in a cleared cycle, a vault can only pay the
-  counterparty the ring actually matched.
-- **Timeout phase — refund.** If the release window passes with **no settled clearing proof naming
-  this deposit as filled**, the depositor reclaims their own lock. The refund is gated on *(i)* the
-  deadline having passed and *(ii)* the absence of a fill — expressed as a dregg-issued *no-fill
-  proof* (the batch settled and this lock was not in the cleared cycle) or, as a weaker fallback, a
-  deadline-only reclaim if the batch never settled at all on this chain.
+- **Commit phase.** `escrowDeposit`/`escrowDepositETH` lock funds under a caller-chosen `escrowId`
+  with a per-deposit `deadline`. Escrow funds are accounted in `escrowedBalances`, **disjoint** from
+  the generic `tokenBalances` pool, so neither surface can drain the other.
+- **Settle phase — release.** `escrowRelease` pays the ring-matched recipient, gated on a fill proof
+  whose public outputs name **this** escrow (`escrowId`/token/amount/recipient/`clearingRoot`) *and*
+  on `settlement.isProvenRoot(clearingRoot)` — the rung-8 accept-path (dregg actually settled that
+  clearing root). A vault can only pay the counterparty the ring actually matched. No deadline check:
+  a real fill proof wins over a timeout, but only while the escrow is still `Locked`.
+- **Timeout phase — refund.** `escrowRefund` reclaims the lock to the depositor once
+  `block.timestamp > deadline` — the timeout IS the condition, no proof needed, so refund is always
+  reachable with no external dependency and a lock can never be stuck. (The design's stronger
+  variant — a refund gated on a dregg-issued *no-fill proof* — is not built; the deadline-only
+  branch is what landed.)
 
-Under this design a deposit reaches **exactly one** terminal state — released-to-counterparty XOR
-refunded-to-self — because release needs a *fill* proof and refund needs a *no-fill / timeout*
-condition, and the two are mutually exclusive on one settled root. **That gives atomicity per leg
-against the dregg clearing.** The residual it does *not* remove: a chain that settles the root but
+A deposit reaches **exactly one** terminal state — `Locked → Released` XOR `Locked → Refunded`, on
+one idempotent-guarded `EscrowStatus` state machine (status flips before the transfer,
+checks-effects-interactions + `nonReentrant`), so a released escrow can never be refunded and
+vice-versa. **That gives atomicity per leg against the dregg clearing.** The residual it does *not*
+remove: a chain that settles the root but
 then censors the `withdraw` transaction delays that leg — this is a per-chain *liveness/censorship*
 assumption (does your destination chain include your tx?), **not** a validator-trust assumption. And
 the genuinely hard case — the clearing settles and releases on A but B's chain is permanently
 unavailable, so A paid out while B cannot — is only fully closed by either a coordinator (which we
 refuse — it reintroduces a trusted party) or a cross-vault "all-legs-settled" attestation (which
 pushes the problem into cross-chain messaging). The honest frame: **the clearing is atomic
-(proved); cross-vault release is single-settlement-authority + per-chain timeout/refund (designed),
+(proved); cross-vault release is single-settlement-authority + per-chain timeout/refund (built),
 and full heterogeneous-vault atomic release is RESEARCH.**
 
 **Grade.** Clearing atomicity: **PROVED** (`settleRing_atomic`, `settleDrex` continuity gate).
-Timeout/refund escrow: **UNBUILT** — `DreggVault.sol` today has *no* refund/reclaim path (`withdraw`
-is the only exit; a deposit that never clears has no batch-scoped reclaim). This is the single most
-load-bearing thing to build. Full cross-vault atomic release: **RESEARCH**.
+Timeout/refund escrow: **BUILT** — `DreggVault.sol`'s `escrow*` surface (two-branch timed escrow,
+`Locked → Released` XOR `Refunded`, deadline-gated refund with no external dependency,
+`escrowedBalances` disjoint from `tokenBalances`). The no-fill-*proof*-gated refund refinement:
+UNBUILT (the deadline-only branch is what landed). Full cross-vault atomic release: **RESEARCH**.
 
 ### (b) NO-FILL RETURN — withdraw a lock that didn't clear
 
@@ -247,12 +251,14 @@ If your batch produces no ring that includes you, you must get your asset back. 
 decoupled design the mirror is minted on lock regardless of clearing, so the round trip already
 exists as an *ordinary* exit: burn the un-traded mirror (`Effect::Burn`) and `withdraw` the
 underlying against your own spend proof — the mirror is yours, so its withdraw proof is yours to
-make. What is missing is the *batch-scoped* version: a deposit that names a batch and auto-refunds if
-that batch does not fill it (this is the refund branch of §4(a)).
+make. The *batch-scoped* version is the escrow surface: an `escrowDeposit` names an `escrowId` and a
+`deadline`, and the depositor reclaims it after the deadline if no fill cleared it (the refund branch
+of §4(a)).
 
 **Grade.** The withdraw-my-own-mirror round trip: **BUILT** primitive (`DreggVault.withdraw` +
 `Effect::Burn`), pending the mint-authority executor wiring `TOKEN-MIRROR-BRIDGE.md` names
-(`holds_mint_authority`). Batch-scoped auto no-fill refund: **UNBUILT** (== §4(a) refund branch).
+(`holds_mint_authority`). Batch-scoped no-fill refund: **BUILT** (`escrowRefund`, the §4(a) refund
+branch — deadline-gated).
 
 ### (c) PARTIAL CROSS-CHAIN FILLS
 
@@ -317,11 +323,13 @@ is *proof generation*: turning a real cleared fill into a fresh Groth16 settleme
   custodian*, not *no custody*. The asset sits in a smart contract; **smart-contract risk replaces
   validator risk**. If the vault is buggy or exploited, funds are at risk. This is a different, not an
   absent, trust surface.
-- **The atomicity/liveness escrow is the load-bearing OPEN piece.** Clearing atomicity is proved;
-  cross-vault atomic *release* across heterogeneous chains is not (§4(a)). Today's `DreggVault` has no
-  timeout/refund path — a deposit that never clears has no batch-scoped reclaim. Until the escrow is
-  built, a stalled or censoring destination chain can strand a counterparty. **Do not claim
-  cross-chain atomic trading is solved. It is designed and named, not built.**
+- **Cross-vault atomic release is the load-bearing OPEN piece.** Clearing atomicity is proved, and
+  the per-leg timeout/refund escrow is built (`DreggVault.sol` `escrow*`, §4(a)) — a deposit that
+  never clears is depositor-reclaimable after its deadline, so no lock is ever stuck. What the escrow
+  does *not* give: all-or-nothing release across heterogeneous chains — a chain that pays out leg A
+  while leg B's chain stays permanently unavailable still strands the cross-leg counterparty. **Do
+  not claim cross-chain atomic trading is solved. Per-leg safety is built; cross-vault atomicity is
+  RESEARCH.**
 - **The mirror rests on the vault's on-chain honesty + the proof system.** The whole model assumes the
   vault contract is correct and the proof system is sound. The proof system is Groth16 over BN254 on a
   **single-party dev ceremony** (toxic-waste-known, not mainnet MPC). `DreggVault`'s on-chain note
@@ -334,7 +342,7 @@ is *proof generation*: turning a real cleared fill into a fresh Groth16 settleme
 **The precise claim, everywhere:** *not* "trustless, custody-free cross-chain trading" — but
 "cross-chain trading with **no custodian and no bridge validators**, over **unified counterparty-supplied
 liquidity**, where the clearing is a machine-checked proof — with the **remaining trust (proof-gated
-smart-contract honesty, per-chain liveness, and the unbuilt cross-vault atomicity escrow) named,
+smart-contract honesty, per-chain liveness, and the open cross-vault atomic release) named,
 graded, and being driven toward zero.**"
 
 ---
@@ -347,12 +355,12 @@ graded, and being driven toward zero.**"
 | Consensus-verified Solana lock → mint (`solana_trustless.rs`, `solana-lock/`) | **BUILT** to `ConsensusVerified` (anchored, off-circuit, live vote-feed pending) |
 | The lock→mint-mirror mechanism (`live_supply ≤ currently_locked`, `Effect::Mint`/`Burn`) | **BUILT** (mint-authority executor wiring named, `TOKEN-MIRROR-BRIDGE.md`) |
 | The ring matcher / router (`solver.rs`: Johnson + TTC, individual rationality, predicate validation) | **BUILT** |
-| Ring clears fair + conserving + private (rung-3 `shielded_ring_clears`) | **PROVED** (spec; circuit-fold AIR named) |
+| Ring clears fair + conserving + private (rung-3 `shielded_ring_clears`) | **PROVED** (spec) + **BUILT** circuit — 2-leg and N-leg ring-clearing AIRs fold shielded-spend leaves with in-AIR fusion/conservation/range (`circuit-prove/src/shielded_ring_clearing_air.rs`, `_nleg_air.rs`); the endpoint-carrying outer descriptor is BUILT for the 2-leg apex (`metatheory/Market/ShieldedRingEndpointDescriptor.lean` — `kernel_endpoints` + `receipt_transition` proved — plus the deployed Rust twin with forged-endpoint KATs); the trace refinement `ShieldedRingDescriptorRefines` and the N-leg endpoint surface stay named |
 | Partial-fill accounting (rung-5 `partialFill_cycle_ledger_realized`) | **PROVED** (kernel-real) |
 | Proven-solvent fallback pool (rung-6 `pool_solvent_forever`) | **PROVED** (model scope; live venue + AMM curve open) |
 | Cross-chain settle-out (rung-8 `drex_fill_cross_chain_settleable`) | **PROVED** (spec) + verifier **LIVE (EVM)** / **DEMONSTRATED (Cosmos, Solana)** |
 | Vault ↔ DrEX wiring (lock → mirror the ring trades → cleared cycle → per-vault release proofs) | **UNBUILT** (proof-gen blocked on fixture-geometry, §4(e)) |
-| **Atomicity / liveness timeout-refund escrow** (the vaults' reclaim path) | **UNBUILT** — the single most load-bearing build (§4(a)) |
+| **Atomicity / liveness timeout-refund escrow** (the vaults' reclaim path) | **BUILT** — `DreggVault.sol` `escrow*`: `Locked → Released` XOR `Refunded`, deadline-gated refund, `escrowedBalances` disjoint (§4(a); the no-fill-proof refund refinement stays UNBUILT) |
 | Full cross-vault atomic release across heterogeneous chains | **RESEARCH** (open distributed-commit, `DREX-DESIGN.md §6`) |
 | Partial-release + residual-note vault wiring | **UNBUILT** (§4(c)) |
 

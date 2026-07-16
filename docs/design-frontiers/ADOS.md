@@ -6,13 +6,15 @@ laundered. ember's steer (2026-06-13): do NOT over-firm a rigid spec — but DO
 elaborate the concrete next slice, the killer demo, the developer journey, and
 the honest gaps.*
 
-> Companion docs: `docs/DREGG-DESKTOP-OS.md` (the cap-first desktop ADOS is the
-> developer face of), `docs/STARBRIDGE-V2.md` (the gpui master interface +
-> cipherclerk + ⌘K palette this IDE extends), `docs/FIRMAMENT.md` (the
-> `n`-parametrized cap fabric), `docs/PG-DREGG.md` (the same caps as a SQL/RLS
+> Companion docs (archived under `.docs-history-noclaude/`; the §-references
+> below resolve there): `DREGG-DESKTOP-OS.md` (the cap-first desktop ADOS is the
+> developer face of), `STARBRIDGE-V2.md` (the gpui master interface +
+> cipherclerk + ⌘K palette this IDE extends), `FIRMAMENT.md` (the
+> `n`-parametrized cap fabric), `PG-DREGG.md` (the same caps as a SQL/RLS
 > surface — the observability backend ADOS can lean on). Code grounding:
-> `starbridge-v2/src/swarm.rs` (the A2 keystone — already implemented + tested),
+> `starbridge-v2/src/swarm.rs` (the A2 keystone — implemented + tested),
 > `starbridge-v2/src/agent.rs` (A1, the single-agent activity surface),
+> `starbridge-v2/src/narration.rs` (the narration-vs-truth model),
 > `starbridge-v2/src/{surface,shell,world,dynamics,cipherclerk,palette}.rs`.
 
 ---
@@ -141,7 +143,7 @@ its actions. Today the loop is external; the seam is the contract.
 A worker's loop decides to call a tool — write a file, transfer a budget, grant
 a sub-capability to a helper, emit a wake to a peer. That tool call routes
 through **`Swarm::run(world, agent, effects)`** — A2's one seam. The seam does,
-in order (`swarm.rs:317`):
+in order (`swarm.rs:604`):
 
 1. **resolve** the acting member (unknown ⇒ refused);
 2. **confirm backed** (the cell is live in the ledger — a destroyed agent
@@ -149,12 +151,16 @@ in order (`swarm.rs:317`):
 3. **CAP-GATE** — for each effect, confirm the acting cell's c-list reaches the
    target (`Capabilities::has_access`); an out-of-mandate action is **refused
    before it runs** (`SwarmError::OutOfMandate`, fail-closed);
-4. **run through the REAL executor** (`World::commit_turn` → `TurnExecutor`) —
+4. **BUDGET-GATE** — refuse, fail-closed and before the turn runs, a dispatch
+   from a member at/over its metered-computron ceiling
+   (`SwarmError::BudgetExhausted`) or whose draw would breach an attached
+   shared Stingray pool (`SwarmError::PoolExhausted`);
+5. **run through the REAL executor** (`World::commit_turn` → `TurnExecutor`) —
    the verified `decode → step → encode`, which enforces conservation,
    no-amplification, nullifier-uniqueness, authenticated root evolution;
-5. on commit, **scan the dynamics** for inter-member `EventEmitted` and deposit
-   notify edges (§3.5);
-6. **update counters** (action count, balance) and append the
+6. on commit, **scan the dynamics** for inter-member `EventEmitted` and deposit
+   notify edges, each gated by the recipient's `NotifyCap` badge-mask (§3.5);
+7. **update counters** (action count, balance, budget spend) and append the
    `SwarmActionOutcome` to the grounded action log.
 
 The developer never sees "the agent claims it wrote the file." They see the
@@ -200,8 +206,12 @@ is a query against receipts, with a provable ceiling.**
 
 *Now:* computrons are metered per turn and surfaced (`receipt.computrons_used`,
 shown in the action log); attenuated capability grants are real and refused when
-widening; the Stingray conservation + ceiling-bound is proved (Lean) and wired
-(coord).
+widening; and the swarm-layer budget gate is enforced — a per-member
+metered-computron ceiling (`BudgetMeter`, `swarm.rs:193`) refuses a breaching
+dispatch fail-closed before the turn runs (`SwarmError::BudgetExhausted`), and
+an attached shared pool is a real `dregg_coord::StingrayCounter`
+(`starbridge-v2/src/swarm_budget.rs`) whose gate refuses a draw past the
+ceiling (`SwarmError::PoolExhausted`), conservation-tested.
 *Research:* binding a *token/dollar* budget (the LLM provider cost) to the
 computron meter or to a dedicated budget-resource — the executor meters
 *computation*, not *API dollars*. The honest mapping (an agent's tool call debits
@@ -225,8 +235,13 @@ is which:
   primitive (`project-notify-primitive`) is the deeper future: a `notify(target,
   badgeMask)` authority — *the right to cause a wake without read/send/reply* —
   the async dual of the synchronous turn, a fourth **Synchrony** dial. Today the
-  edge rides `EmitEvent`; the dedicated `Auth.notify` is designed (Lean
-  `NotifyAuthority.lean`) and held for the cutover-settle.
+  edge rides `EmitEvent`, and the notify *authority* is enforced at the swarm
+  layer: each member carries a `dregg_firmament::NotifyCap` whose `badge_mask`
+  gates every wake via `NotifyCap::signal_admissible` (`swarm.rs:94` — the Rust
+  mirror of the verified `Dregg2.Firmament.NotifyAuthority.NotifyCap.signalAdmissible`,
+  `metatheory/Dregg2/Firmament/NotifyAuthority.lean`). The kernel-level
+  `Auth.notify` constructor + VK bump stays a named seam, held for the
+  cutover-settle.
 - **The joint turn (sync — the all-or-nothing handoff).** When two agents must
   act atomically (a handoff where the give and the take must both happen or
   neither — sig's "atomic handoff"), that is a **joint turn**: a synchronous
@@ -241,9 +256,11 @@ turn). Conflating them is the bug `project-notify-primitive` corrected.
 (`an_emit_event_to_a_member_deposits_a_notify_edge_in_its_inbox`,
 `the_drain_is_the_recipients_own_separate_turn_not_a_joint_turn`); the SwarmView
 render model for the activity feed.
-*Research:* the dedicated `notify` authority + badge-mask sub-lattice (designed,
-Lean-staged, VK-bump-gated); joint turns surfaced in the swarm UI as a co-signed
-exchange (the protocol primitive exists; the swarm-tab affordance is pending).
+*Research:* the kernel-level `Auth.notify` constructor (the badge-mask is
+enforced at the swarm seam today via the verified mirror; the in-VK authority is
+the held cutover piece); joint turns surfaced in the swarm UI as a co-signed
+exchange (`Swarm::run_atomic` runs a coordinator-signed all-or-nothing bundle as
+one receipt; the co-signed two-party affordance is pending).
 
 ### 3.6 Observe executor truth, not agent self-reports
 
@@ -266,12 +283,15 @@ produce. Every "the agent says it did X" is replaced by "the receipt at height H
 shows it did X (or the refusal at height H shows it could not)."
 
 *Now:* `SwarmView`, the blocklace/objects/inspector panels, the dynamics stream,
-all live and tested.
-*Research:* the **agent-narration-vs-truth diff** — a first-class panel that puts
-the agent's *own claim* (from its loop's reflection/log) next to the executor's
-receipts and highlights divergence. This is the sharpest ADOS feature and is pure
-UI over data that already exists (the loop's log + the receipt chain); it
-needs the tool-call→effect compiler (§3.3) to correlate a claim to its turn.
+all live and tested. The **agent-narration-vs-truth diff** is landed as a
+headless model (`starbridge-v2/src/narration.rs`): a member's *own claimed
+action* (supplied by its loop alongside the turn) is put next to the executor's
+receipts, and every divergence is flagged — a fabricated action, a
+claimed-but-refused, a concealed side-effect, a claimed-but-bounded — at the
+feed level of the grounded action log.
+*Research:* the claim-to-**turn** join — correlating one claim to one specific
+receipt — awaits the tool-call→effect compiler (§3.3), a seam `narration.rs`
+names honestly; the cockpit-side render of the model is a weld.
 
 ---
 
@@ -288,7 +308,7 @@ agents. The whole design is **one seam carried through three layers**:
 │   worker. dregg does NOT own or simplify this.                              │
 ├──────────────────────────────── THE SEAM ──────────────────────────────────┤
 │   ONE place: "an agent did X" at the tool-call/verdict boundary.            │
-│   = Swarm::run(world, agent, effects)  (swarm.rs:317)                       │
+│   = Swarm::run(world, agent, effects)  (swarm.rs:604)                       │
 │   cap-gate ▸ verified turn ▸ receipt ▸ budget meter ▸ notify edge.          │
 │   Integrators route their ONE serialization point (PostToolUse /            │
 │   recordPhaseComplete / swarm-callback / AgentRun) here.                    │
@@ -401,8 +421,9 @@ no remote infrastructure:
 The demo *is* the evaluation artifact (the pug-handoff bar: "one runnable
 end-to-end story"). It needs: the swarm boot (exists), the notify edge (exists),
 the over-reach refusal (exists), the immediate revoke (firmament `n=1`, exists),
-the budget attenuation (caps exist; the dollar-binding is the honest gap §3.4),
-and the narration-vs-truth panel (the one new UI). It is the most legible
+the budget gate (the ceiling/pool refusals exist; the dollar-binding is the
+honest gap §3.4), and the narration-vs-truth model (`narration.rs`, landed
+headless — the cockpit render is the remaining weld). It is the most legible
 possible answer to "why would I run my agents on this?"
 
 ---
@@ -413,21 +434,24 @@ possible answer to "why would I run my agents on this?"
 VK/rotation cutover):**
 
 - **The SWARM tab as a first-class ADOS workspace.** `swarm.rs` + `SwarmView`
-  exist and are tested gpui-free; the cockpit-side panel (mapping `SwarmView`
-  onto a default tab) is the UI weld — render members + the activity feed +
-  per-member inbox over the live world.
-- **The budget-attenuation slice.** A coordinator mints a budget cap and grants
-  *attenuated* budget caps to workers; a worker's over-spend is refused
-  (conservation + the no-amplify grant, both already enforced). Surface the
-  metered computrons (already on the receipt) as the per-agent cost column. This
-  is the killer-demo spine and needs no new protocol — only the swarm-boot
-  helper + the feed column.
+  exist and are tested gpui-free, and the cockpit renders them: `Tab::Swarm`
+  maps to `swarm_panel` (`cockpit/panels_workspace.rs`), which builds `SwarmView`
+  over the live world — members + the activity feed + per-member inbox. The weld
+  remaining is depth (default-workspace polish), not existence.
+- **The budget slice — landed.** The per-member metered-computron ceiling
+  (`BudgetMeter`) and the shared `StingrayCounter` pool (`swarm_budget.rs`,
+  attached via `Swarm::attach_stingray_budget`) both refuse a breaching dispatch
+  fail-closed before the turn runs (`BudgetExhausted` / `PoolExhausted`), tested
+  against the real executor; the metered computrons ride each
+  `SwarmActionOutcome`. What remains here is the cockpit cost column — UX, not
+  protocol.
 - **The immediate-revoke kill switch.** A ⌘K palette command "revoke agent" that
   commits a `RevokeCapability` turn and shows the target go dark (the `n=1`
   collapse, already real in the firmament/executor). Pure wiring.
-- **The narration-vs-truth panel.** A view that puts a member's *claimed* action
-  (supplied by the loop alongside the turn) next to its receipt (or the absence
-  of one) and flags divergence. Pure UI over `Swarm::action_log` + the dynamics.
+- **The narration-vs-truth panel — model landed.** `narration.rs` flags the four
+  divergences (fabricated / claimed-but-refused / concealed side-effect /
+  claimed-but-bounded) over `Swarm::action_log` + the dynamics; the cockpit
+  render weld is what remains.
 - **The MCP tool-gate via the existing per-tool cap.** The node already has an
   MCP per-tool cap gate (task #89); an ADOS swarm member's mandate gating *which
   tools it may call* is that gate applied at the seam — a `Vec<Effect>` whose
@@ -447,11 +471,13 @@ VK/rotation cutover):**
   API dollars; a faithful price oracle / declared-cost-debit model is needed to
   turn "computation bounded" into "spend bounded." The conservation machinery is
   there; the dollar mapping is honest-future.
-- **The dedicated `notify` authority** (§3.5, `project-notify-primitive`) — the
-  `Auth.notify(target, badgeMask)` brick (the fourth Synchrony dial). Designed,
-  Lean-staged (`NotifyAuthority.lean`), held for the VK/encoding cutover-settle.
-  Today the edge rides `EmitEvent`; the dedicated authority is the deeper
-  expressivity ("may poke, not message").
+- **The kernel-level `Auth.notify` constructor** (§3.5,
+  `project-notify-primitive`) — the in-VK `Auth.notify(target, badgeMask)` brick
+  (the fourth Synchrony dial), held for the VK/encoding cutover-settle. The
+  badge-mask is enforced today at the swarm seam (`NotifyCap::signal_admissible`,
+  the Rust mirror of the verified Lean keystone,
+  `metatheory/Dregg2/Firmament/NotifyAuthority.lean`); the held piece is carrying
+  "may poke, not message" into the core authority lattice.
 - **Spawning the loop itself** (§3.2) — a managed ADOS process per agent (microVM
   / seL4 app-PD) so the loop's *isolation* (not just its actions) is
   dregg-enforced. Today the loop is external and only the seam is the contract;

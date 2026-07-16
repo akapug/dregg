@@ -7,9 +7,10 @@ and have it checked or enforced?*
 
 It is written present-tense and grounded to `file:line` at HEAD. The short answer is
 that dregg has **more temporal-logic machinery than usually remembered, but it lives
-at three very different altitudes**, and only the narrowest of the three is a thing a
-user can actually deploy. The interesting "historical predicate / running-range"
-capability is **proven in Lean but not yet a writable guard or a query operator**.
+at three very different altitudes**. The interesting "historical predicate /
+running-range" capability is **proven in Lean AND wired as writable, executor-enforced
+caveats** — staged behind the temporal-caveat verifier epoch — while a temporal
+*query* operator over history still does not exist.
 
 ## TL;DR verdict
 
@@ -24,11 +25,11 @@ capability is **proven in Lean but not yet a writable guard or a query operator*
 
 So: *"we were supposed to be able to do full temporal-logic-type stuff"* — we **can,
 and did, at the proof altitude** (LTL/CTL/μ-calculus over the real executor are
-proven and grounded). What we **do not** have is a **usable surface**: there is no
-writable historical-predicate caveat beyond the height window, and no temporal query
-language. The "historical predicates and running-range thingies" you remember wanting
-are exactly the `TemporalAlgebra` atoms — they are *built and proven*, just not
-*exposed* as a guard or a query.
+proven and grounded), and the "historical predicates and running-range thingies" are
+exactly the `TemporalAlgebra` atoms — proven in Lean AND writable as
+`StateConstraint` caveats, executor-enforced and circuit-witnessed (staged behind the
+verifier epoch, §3). What we **do not** have is a **temporal query language**:
+`dregg-query` has no eventually/always/until/since over history (§5).
 
 ---
 
@@ -86,10 +87,11 @@ temporal logic over histories.
 
 ---
 
-## 2. The deployed temporal guard — a height window, and only that
+## 2. The deployed temporal guard — a height window (plus the staged §3 caveats)
 
-The single temporal thing a user can write into a cell today and have **enforced by
-the executor and the circuit** is the two-sided height window:
+The single temporal guard deployable **without the verifier epoch** — enforced by
+the executor and the circuit against old verifiers too — is the two-sided height
+window:
 
 - `cell/src/blueprint.rs` exposes `SimpleStateConstraint::TemporalGate { not_before,
   not_after }` (e.g. timelock vault at line 614, deadlines at 4199).
@@ -108,12 +110,12 @@ not_before = h }`, `beforeHeight h` = `{ not_after = h }`, `withinWindow lo hi`,
 cooling and the pre-rotation app get their cooldown). These are real, enforced, and
 used.
 
-What is **not** deployable: any temporal predicate that must **read a cell register**
-to decide — see §3.
+Temporal predicates that must **read a cell register** to decide are also writable
+and enforced — but staged behind the temporal-caveat verifier epoch, see §3.
 
 ---
 
-## 3. The historical-predicate / running-range algebra — PROVEN, not yet wired
+## 3. The historical-predicate / running-range algebra — PROVEN + WIRED (STAGED)
 
 This is the capability you were remembering. It exists, in full, as an axiom-clean Lean
 algebra, in `metatheory/Dregg2/Authority/TemporalAlgebra.lean` and

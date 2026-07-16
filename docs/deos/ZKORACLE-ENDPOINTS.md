@@ -65,9 +65,9 @@ body timestamp, so the quote time is the moment the session happened — notary-
 **The `PriceOracle` interface — the contract for the auditable-fund lane.** The downstream
 consumer depends on the trait `PriceOracle { fn price(asset) -> AttestedPrice }`, not on the
 prover internals, and can re-verify the carried attestation with `verify_coinbase_spot` to
-trust the amount trustlessly. `CoinbaseSpotOracle` is the real (fixture-backed)
-implementation; a live implementation swaps the fixture for the `tlsn-live` roundtrip
-against `api.coinbase.com`, same interface.
+trust the amount trustlessly. `CoinbaseSpotOracle` is the fixture-backed
+implementation; behind `tlsn-live`, `prove_coinbase_live` / `verify_coinbase_live` run
+the same interface against the live `api.coinbase.com` over genuine MPC-TLS.
 
 Refusals proven: a tampered amount (`BadNotarySignature` — a wrong price cannot be
 attested), a response for a **different asset** than requested (`AssetMismatch`), an unknown
@@ -75,7 +75,7 @@ asset (interface-level).
 
 ## What is REAL vs the live-endpoint operational remainder
 
-Identical honest boundary to the Anthropic origin:
+The honest boundary, endpoint by endpoint:
 
 - **REAL, default (light) build:** the CFG parse-certificate prover+verifier over genuine
   JSON, the injection matcher, the authentic-leg adapter (server/notary pinning +
@@ -90,11 +90,25 @@ Identical honest boundary to the Anthropic origin:
   CFG + fact legs; a tampered presentation fails the real `verify()`. The local server
   presents the `tlsn-server-fixture` cert (`test-server.io`), so the pin there is that
   domain.
-- **Operational remainder (a deploy step, NAMED, not built):** pointing the Prover at the
-  live `api.github.com` / `api.coinbase.com` (a real TLS session + a deployed/pinned
-  notary). This is the same remainder as live-`api.anthropic.com`
-  (`ZKORACLE-PROVER-STATUS.md`) — the machinery is exactly that path with the server pin and
-  `EndpointSpec` swapped.
+- **REAL behind `tlsn-live`, LIVE HOSTS:** genuine MPC-TLS 2PC against the live
+  `api.coinbase.com:443` and `api.github.com:443` (`tlsn_live.rs`, the real-host path): a
+  real `TcpStream` to the real host, the Mozilla/webpki root store (the genuine cert chain
+  verifies; the SNI pins the real domain), and a SEPARATE hosted notary reached over a real
+  socket, whose verifying key the verifier pins out-of-band and which persists to a durable
+  trust root (`notary_server::load_or_generate_notary_key`, `tests/notary_durable_key.rs`).
+  The packaged pairs are `endpoints::price::{prove_coinbase_live, verify_coinbase_live}`
+  and `endpoints::github::{prove_github_live, verify_github_live}`;
+  `examples/coinbase_live.rs` is the portable-proof demo (prove against the live host →
+  write the proof file → re-verify from the file, trusting only the host pin + the
+  published notary key); `tlsn_live::run_url_roundtrip_blocking` covers any
+  `GET https://{host}{path}`.
+- **Operational remainder (a deploy step, NAMED, not built):** two pieces. The live authed
+  `api.anthropic.com` session — a real key + the secret-header redaction against the live
+  host (`ZKORACLE-PROVER-STATUS.md`); the public endpoints above carry no secret, so this
+  leg is exercised only fixture/local so far. And an independently DEPLOYED public notary —
+  today the separate notary party is hosted by the prover's operator
+  (`notary_server::spawn_hosted_notary`) with a durable pinnable key, not run by a third
+  party.
 
 ## Test map
 
@@ -103,3 +117,7 @@ Identical honest boundary to the Anthropic origin:
   every forgery/mismatch is refused, all through the real verifier.
 - `--features tlsn-live` (`tests/tlsn_live_roundtrip.rs`): the real local MPC-TLS roundtrip
   for Anthropic, GitHub, and Coinbase — authentic body → CFG cert → fact, tamper refused.
+  The durable notary trust root is exercised hermetically in `tests/notary_durable_key.rs`.
+- Live-host runs (need network): `cargo run -p dregg-zkoracle-prove --example coinbase_live
+  --features tlsn-live` (prove against the real host, re-verify the portable proof file);
+  `coinbase_inproc` is the in-process variant.

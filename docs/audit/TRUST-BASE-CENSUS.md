@@ -4,12 +4,19 @@
 > `initial commit` (`db466dcd9`). A tier-3 re-verification (`docs/audit/TIER3.md`)
 > confirms **all campaign teeth survived the squash** — 8 carrier Lean pairs + apex +
 > 5 guarantees `lake`-green and `#assert_axioms`-clean (3227 jobs); 7 deployed-fold
-> teeth + 7 audit teeth present and passing; zero regression. It also lands the
-> deepest completeness finding: the whole-history fold's `final_root` is committee-
-> anchored but **`genesis_root` is prover-chosen and unanchored** in both Lean
-> (`RecursiveAggregation.lean:194`) and the deployed verify API
-> (`lightclient/src/lib.rs:540`) — a prefix-completeness residual (interior-omission
-> and injection are CLOSED). See `docs/audit/TIER3.md`.
+> teeth + 7 audit teeth present and passing; zero regression. Its deepest
+> completeness finding — the whole-history fold's `final_root` is committee-anchored
+> but the genesis end had no trusted anchor — is CLOSED at the deployed verify API
+> (`docs/audit/TIER3.md:104`): `verify_finalized_history` takes
+> `expected_genesis: Option<[BabyBear; SEG_ANCHOR_WIDTH]>` (`lightclient/src/lib.rs:659`)
+> and rejects an aggregate folded from any other genesis with
+> `FinalizedError::GenesisMismatch` (`lib.rs:677-679`). The prefix-completeness
+> residual survives EXACTLY for callers passing `None` and for the bare
+> `verify_history` entry — an inherited-by-choice seam, not an unanchored API. In
+> Lean, `AggregateAttests.genesis_pinned` (`RecursiveAggregation.lean:194`) pins
+> `agg.genesisRoot` to the folded chain's own start; WHICH genesis to trust remains
+> the client-side anchor (interior-omission and injection are CLOSED). See
+> `docs/audit/TIER3.md`.
 
 **Adversarial Audit, Lane 1.** Repo `/Users/ember/dev/breadstuffs` @ `main`
 HEAD `b5fe0ff97` (`deos-hermes: brain-in-jail`). READ-ONLY census: this document
@@ -82,13 +89,14 @@ never as `axiom`-keyword declarations.
 
 **Verified: there are exactly TWO `axiom`-keyword declarations in the whole
 metatheory, and both are inert demo fixtures** — nothing real rests on them.
-Zero `sorry` / `admit` / `sorryAx`. One benign `native_decide` (below).
+Zero `sorry` / `admit` / `sorryAx`. `native_decide` is in scoped, corpus-wide use
+in the verified-FIPS crypto modules (below).
 
 | Carrier / axiom | file:line | Assumes | Classification | Note |
 |---|---|---|---|---|
 | `demoEd25519VerifyExtern : (1:Nat)=1` | `Dregg2/Widget/Basic.lean:298` | nothing (1=1) | terminal-by-design (inert) | Widget badge-tier fixture; docstring `:294` states "never used by any real dregg proof." Only consumer: `demo_via_carrier`. |
 | `demoUnvettedAssumption : (2:Nat)=2` | `Dregg2/Widget/Basic.lean:299` | nothing | terminal-by-design (inert) | Sibling red-tier fixture. |
-| `StarkSound` | `Circuit/CircuitSoundness.lean:382` | `verifyBatch accept ⟹ ∃ Satisfied2 witness publishing `pi.toPublished`` | **discharged (no longer terminal)** | FRI/p3 extraction, a `class … : Prop`; `starkSound_of_verifyAlgo:106` makes it a THEOREM over the specified `verifyAlgo` from `AlgoStarkSound`+`DeployedRefines`. The BBHR18/BCIKS20 proximity algebra is PROVED on `HashCR` (`FriSoundness.friProximityK8_discharge`); the deployed `FriLdtDeployedBound` as-written is now DISCHARGED (`FriLdtJohnson.lean`, axiom-clean — the trivial Johnson-radius counting branch), and the residual terminal is the two `L>1` Johnson/correlated-agreement lemmas `RSListBound` + `FriProximityGapChallenges`, each `L=1`-proved with the deployed RS min-distance `127` closed. |
+| `StarkSound` | `Circuit/CircuitSoundness.lean:382` | `verifyBatch accept ⟹ ∃ Satisfied2 witness publishing `pi.toPublished`` | **discharged (no longer terminal)** | FRI/p3 extraction, a `class … : Prop`; `starkSound_of_verifyAlgo:106` makes it a THEOREM over the specified `verifyAlgo` from `AlgoStarkSound`+`DeployedRefines`. The BBHR18/BCIKS20 proximity algebra is PROVED on `HashCR` (`FriSoundness.friProximityK8_discharge`); the deployed `FriLdtDeployedBound` as-written is now DISCHARGED (`FriLdtJohnson.lean`, axiom-clean — the trivial Johnson-radius counting branch), and the two `L>1` Johnson/correlated-agreement lemmas are DISCHARGED at deployed parameters: `rsListBound_johnson_112 : RSListBound (codeC 6 omega128) 112 15` (`FriLdtJohnsonList.lean:193`) and `FriProximityGapChallenges friSetupWrapRate 112 56 292`, proved with no hypothesis via `wrap_correlatedAgreement_sharp_proved : WrapCorrelatedAgreementSharp 292` (`FriCorrelatedAgreementSharp.lean` §3b, the BCIKS20 correlated-agreement core; the interior-radius `112/52/186` variant is also proved). |
 | `AlgoStarkSound` | `Circuit/FriVerifierBridge.lean:75` | same extraction over the *specified* `verifyAlgo` | terminal-by-design | With `DeployedRefines` turns `StarkSound` into a theorem (`starkSound_of_verifyAlgo:106`). |
 | `StarkComplete` | `Circuit/CircuitCompleteness.lean:147` | `Satisfied2 ⟹ ∃ accepting proof` | terminal-by-design | FRI completeness dual. |
 | `Poseidon2SpongeCR` | `Circuit/Poseidon2Binding.lean:169` | `sponge xs = sponge ys → xs = ys` | terminal-by-design | Standard CR as injectivity. |
@@ -105,11 +113,20 @@ Zero `sorry` / `admit` / `sorryAx`. One benign `native_decide` (below).
 (`Tactics.lean:155`) but **no invocation in the tree uses it** — zero keystones
 rest on an excepted non-kernel axiom.
 
-**Lone `native_decide`:** `Exec/ConditionalTurn.lean:989`, inside an anonymous
-`example` over a decidable prop (`topoOrder … = none`). Sound and non-load-bearing,
-but it contradicts the codebase's own "native_decide is banned" invariant
-(`Tactics.lean:8`, `Claims.lean:27`) and leaks `Lean.ofReduceBool` into that
-example's axiom set where no `#assert_axioms` catches it. Minor hygiene nit.
+**`native_decide`:** in wide, scoped use — dozens of files under `Crypto/*` (the
+ML-KEM/ML-DSA verified-FIPS corpus: KAT pins such as `Crypto/MlKemDecaps.lean:91`,
+codec round-trips in `MlKemCodec`/`MlDsaCodec`, spec-equivalence checks in
+`EncapsCoreSpec.lean:414` / `VerifyCoreSpec`), plus the decidable `example` at
+`Exec/ConditionalTurn.lean:989`. Every use is a concrete Bool/byte computation over
+a decidable prop; the trusted base it adds — `Lean.ofReduceBool` +
+`Lean.trustCompiler` — is named in-module as exactly that
+(`Crypto/MlKemFips203FullDim.lean:511`). The repo invariant is narrower than a ban:
+`Tactics.lean:8` forbids `native_decide` on a NON-decidable prop, and
+`Claims.lean:27` excludes it from the pin file itself — a theorem carrying
+`Lean.ofReduceBool` cannot pass a kernel-clean `#assert_axioms` pin, so these
+checks stay out of the pinned keystone axiom sets by construction. Classification:
+terminal code-trust (compiler + `ofReduceBool`), scoped to concrete KAT/codec/
+example checks.
 
 **`:= True` reference instances** (`CryptoKernel.lean:130`, `Crypto/*`) are toy
 inhabitants proving each carrier interface is *inhabitable*; the apexes consume the
@@ -180,7 +197,7 @@ companion explicitly declines; bridge omits the highest-value economic attack
 | # | Seam | file:line (+doc) | Leaves open | Status @ HEAD | Class | If attack-surface: claim to refute |
 |---|---|---|---|---|---|---|
 | **S1** | **setField written-slot completion lanes** (CORRECTED — see §6 R1) | deployed: `EffectVmEmitRotationV3.lean:5363` (`v3OfFrozen`, freeze-ALL); the cited `:2913,3164` (`v3OfFrozenSetField`, except) is DEFINED-BUT-NOT-DEPLOYED; tooth `circuit/tests/setfield_completion_lane_forge.rs` | The DEPLOYED descriptor FREEZES the written slot's completion lanes (before==after), binding them to the pre-state. The forge (arbitrary high bits) is UNSAT (freeze bites #93..99). The real residual: an honest LARGE-value write cannot prove (high bytes frozen) — a completeness seam; lane 0 stays the ~31-bit fold (D6). | OPEN as a **completeness** seam (VALUE8 weld is the close; VK-affecting, gated) | reducible-open (completeness, NOT a soundness forge) | REFUTED as a forge: the deployed freeze binds; no ledgerless silent-forge. The close (VALUE8 weld) buys faithful large-value writes, not soundness. |
-| **S2** | committee-restart hole | `node/src/blocklace_sync.rs:4529-4546`, `persist/src/federation.rs:84`; pin `persist/src/tests.rs:137`; `docs/HANDOFF-committee-restart-fix.md` | Full-mode commit persists a `StoredAttestedRoot` with 1 local sig at `threshold=committee-size`; on restart `verify_signatures` needs a quorum → node **fail-CLOSES** after ≥1 finalized height. Blocked by non-deterministic wall-clock preimage + votes binding `block_id`, not `merkle_root`. | OPEN — only *diagnosed* at `29ab74bc1`; Fix A/B NOT landed (domain still `-v4`) | reducible-open (liveness) | Not a safety hole — a single-sig root IS refused (safety preserved). Availability bug; Fix B designed. |
+| **S2** | committee-restart hole | `types/src/lib.rs:439` (`FINALIZATION_VOTE_DOMAIN_V2`), `node/src/state.rs:1396` (restart anchor), `node/src/blocklace_sync.rs` (`backfill_finalization_quorums`); `docs/audit/LIVE-BYZANTINE.md` Attack 3 | Was: full-mode commit persisted a `StoredAttestedRoot` with 1 local sig at `threshold=committee-size`, so the restart quorum check **fail-CLOSED** after ≥1 finalized height. Fix B: `FinalizationVote` v2 signs `dregg-finalization-vote-v2 ‖ block_id ‖ merkle_root`, the commit path back-fills the assembled quorum into the persisted root, and the restart anchor accepts `verify_signatures` OR `verify_finalization_quorum`. Residual = the bounded trailing-head window (a head persisted before its votes converge is replayed, not trusted). | **CLOSED** — Fix B landed (`2e38c8c49`); green pins `committee_node_restarts_cleanly_with_finalization_quorum`, `finalization_quorum_rejects_forged_and_noncommittee_signatures`, `full_mode_single_sig_root_is_refused_genuine_quorum_accepted` | resolved (was reducible-open, liveness) | — (safety was never at risk; a single-sig root IS refused) |
 | **S3** | transferCapOpenTB 1-felt LC fallback | `sdk/src/full_turn_proof.rs:4285-4295`; `docs/reference/faithful-commitment.md:235` | The sole cap-open key with no wide twin; LC falls back to the 1-felt V3 registry → the transfer's `(actor,src,dst)` identity is bound at **~31 bits** (below the ~130-bit FRI floor). | OPEN — "the ONE load-bearing ~31-bit LC surface left"; reject tooth `:4266` bars fallback for any key WITH a wide twin | **ATTACK-SURFACE** | "Grind a 31-bit collision on a transferCapOpenTB identity felt to bind a different `(actor,src,dst)` than proved." Bounded (identity only). Close = wide-twin grind. |
 | **S4** | cross-cell Σδ=0 not live-enforced | `node/src/turn_proving.rs:935,1312` (`conservation: None`); `CrossCellConservation.lean` | AIR+Lean proven & drift-green, but the deployed path proves **per-cell-isolated** transitions; no point collects ≥2 cells' deltas. A Transfer's debit/credit legs are separate proofs. | OPEN — build-half proven, live-enforcement blocked (batch collector NOT landed) | reducible-open | "Publish a turn whose per-cell legs each pass but whose cross-cell asset sum ≠ 0." Full-node ledger catches it; ledgerless LC does not get turn-wide Σδ=0. Needs a block-level batch collector. |
 | **S5** | agent turn-auth Ed25519 off-circuit | `.docs-history-noclaude/LIGHT-CLIENT-TRUST-SURFACE.md:54,84`; `sovereign_leaf_adapter.rs:50` | Deployed turn auth is Ed25519, verified off-circuit (`authorize.rs`); only a Schnorr/BabyBear^8 stepping-stone is in-circuit. A ledgerless LC cannot conclude "the rightful agent authorized THIS turn." | OPEN (largest LC trust surface) | terminal-by-design | Genuine crypto floor; close needs an in-AIR Ed25519 (Edwards decompress + `[S]B=R+[k]A`) or re-bind to the in-circuit key. |
@@ -505,8 +522,10 @@ each is a genuine hole (not a terminal floor) with a concrete refutation to try.
 `FriExtract` / `Compress8CR` / the PortalFloor kernels / `Ed25519EufCma` /
 `SchnorrDLHard` / BLS carriers (§1); the agent Ed25519 off-circuit signature seam
 (S5); the custom deeper per-turn `proofBind` gated epoch (S9); the refusal
-openable-root soundness step (S7). The committee-restart hole (S2) is fail-closed —
-an availability/liveness bug, not a safety hole.
+openable-root soundness step (S7). The committee-restart hole (S2) is CLOSED —
+Fix B landed (`FinalizationVote` v2 binds the `merkle_root`, the quorum back-fills
+into the persisted root, and the restart anchor accepts it; see §3 and
+`docs/audit/LIVE-BYZANTINE.md` Attack 3); safety was never at risk.
 
 **Two doc-hygiene findings:** `docs/WELD-STATE.md` is stale-pessimistic (calls the
 now-flipped carriers vacuous — §0); `FriVerifierBridge.lean` carries no

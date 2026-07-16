@@ -17,9 +17,11 @@ This isn't a someday plan. Here's what's already built and tested, before we eve
 - an adapter that lets us plug into **LayerZero**,
 - a backup bridge where a *single* honest watcher can catch a lie — safer than
   trusting a group,
-- a real verifier for Solana, and dregg's own lightweight checker.
+- a real verifier for Solana,
+- and dregg's own lightweight checkers for Solana, Ethereum, and Cosmos — plus
+  a Cosmos-side verifier contract, so the IBC world can check dregg's proofs too.
 
-Still to come before launch: the piece that makes those on-chain checks cheap, a checker for Ethereum, and IBC support. A real list, not vibes.
+Still to come before launch: one piece — the prover that makes those on-chain checks cheap. Everything above exists; that compression step is the open item. A real list, not vibes.
 
 And the part that matters most to you as a holder: because everything is checked by proof, **you never move your tokens into a bridge wallet to use them elsewhere.** They stay in your control. You settle, spend, and vote from your own wallet. That's the opposite of the usual wrap-and-pray bridge.
 

@@ -211,20 +211,47 @@ CORRECTION" / "EVM SETTLEMENT REAL END-TO-END" / "APEX-VK PIN" entries):
   inputs. BOTH the shrink VK and the deployed apex's VK-core are pinned as
   circuit constants (mismatches reject; the pins are measured load-bearing).
 
-**Named residuals (each real, none silently absorbed):**
+**Named residuals (each real, none silently absorbed; classified at HEAD):**
 1. **Dev trusted setup** — the Groth16 ceremony is single-party (toxic waste
    known to the runner). Production needs an MPC/PoT ceremony before any
    real-value deployment.
-2. **Apex-pin constant is fixture-lifted** (trust-on-compile from the real
-   fixture); strengthening = derive it independently from `RecursionVk`
-   (`accumulator.rs`).
-3. **Bridge submitter blob** — `settle()` now takes the 384-byte proof blob
-   (commitments + PoK); `bridge/src/ethereum.rs`'s `EthSettlementProof` /
-   `Groth16Calldata` still assume 256 bytes.
-4. **`outboundMessageRoot` is operator-attested**, not proof-bound (the 26th
-   public-input obligation).
-5. **FRI low-degree soundness is assumed** (the `StarkSound` half (i) — the
-   standard FRI conjecture, not discharged).
-6. The "gnark == Lean `AirChecksSatisfied`" tie is an ANALOGY, not a mechanized
+2. **Apex-pin derivation residual** — the baked apex-VK constants are no free
+   fixture read: they load from the DERIVED identity artifact
+   `chain/gnark/fixtures/apex_vk_identity.json`, minted by the Rust derivation
+   lane (`circuit-prove/tests/apex_shrink_gnark_fixture.rs:293`
+   `derive_deployed_apex_vk_identity_and_check_fixture`) from a fresh fold of
+   the apex at HEAD and anchor-checked fail-closed against the
+   governance-pinned `DreggApexRecursionVk` fingerprint
+   (`chain/gnark/settlement_circuit.go`). What remains: there is no keygen-only
+   preprocessed-commitment path in p3-circuit-prover, so "derived from the
+   deployed circuit" means "derived by running the HEAD circuit once,
+   fingerprint-bound and anchor-checked" — re-checkable by anyone via the
+   derivation test.
+3. **`outboundMessageRoot` is not yet proof-bound** — the 26th public-input
+   obligation stands open, but the posture is fail-closed, not attested:
+   `settle()` reverts on any non-zero `outboundMessageRoot`
+   (`chain/contracts/IDreggSettlement.sol:65`; the parameter is RESERVED for
+   the proof-bound root, `:159`).
+4. **The FRI floor's remaining edge is the GS-ideal `L ≤ 128` multiset-word
+   bound** — deployed-instance FRI low-degree soundness rides the Johnson
+   list-decoding radius (BCIKS20 proximity gaps) plus the 16-bit query PoW, NOT
+   the (refuted) FRI capacity conjecture. `FriLdtDeployedBound` as stated is
+   proved axiom-clean (`metatheory/Dregg2/Circuit/FriLdtJohnson.lean:76`,
+   `friLdtDeployedBound_discharge`; `ldt_bound_unconditional` derives the
+   payoff with no hypothesis); the two named `Prop`s (`RSListBound`,
+   `FriProximityGapChallenges`) are each proved at `L = 1` on the deployed
+   rate-1/64 code, their `L > 1` correlated-agreement generalization proved by
+   ordered-pair counting (`L ≤ 186` interior / `L ≤ 292` boundary) in
+   `FriCorrelatedAgreementSharp.lean`, and the deployed per-fold soundness is
+   the proven ~112.6-bit `wrap_perFold_soundness_capacity`. Open: the
+   Guruswami–Sudan-ideal `L ≤ 128` list bound for the multiset word
+   (`Dregg2/ForMathlib/GuruswamiSudan.lean:20-33`).
+   `docs/reference/FRI-BOTH-WIN-LEVERS.md` prices the deployed artifact under
+   BCIKS20.
+5. The "gnark == Lean `AirChecksSatisfied`" tie is an ANALOGY, not a mechanized
    refinement (the `GnarkRefines` obligation in
-   `docs/deos/FRI-VERIFIER-PROOF-ENGINEERING.md` remains open).
+   `docs/deos/FRI-VERIFIER-PROOF-ENGINEERING.md:156` remains open).
+
+Closed (no longer a residual): the bridge submitter blob — `bridge/src/ethereum.rs`
+carries the 384-byte (12-word A/B/C + Pedersen commitment/PoK) proof-blob layout
+end-to-end (`GROTH16_EVM_PROOF_BYTES = 384`, `:229`), matching `settle()`.

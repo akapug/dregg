@@ -5,15 +5,17 @@ experience of **driving and observing a swarm of agents through dregg** — the
 SWARM cockpit, cap-gated dispatch, the notify async wake, receipt provenance,
 the budget meter, and the cipherclerk/⌘K trusted-path anchor. The vision is a
 north star shaping intuition; the buildable-now slice is precise and lives on
-`starbridge-v2/src/swarm.rs`, a standalone workspace that is wide-safe and not
-blocked on the VK cutover.*
+`starbridge-v2/src/swarm.rs` — a root-workspace member (not a default-member, so
+the plain workspace build never pulls gpui) that is wide-safe and not blocked on
+the VK cutover.*
 
-> Companion docs: `docs/STARBRIDGE-V2.md` (the master interface this is a tab
-> inside), `docs/DREGG-DESKTOP-OS.md` §1/§5 (window = surface cap; the
-> trusted-path / pale-ghost framing), `docs/FIRMAMENT.md` §3 (the n-parametrized
-> cap gradation the swarm rides), `docs/NOTIFY-PRIMITIVE.md` +
-> `Dregg2/Firmament/NotifyAuthority.lean` (the async-signal authority the wake
-> edge will land on). The integrator context is
+> Companion docs (archived under `.docs-history-noclaude/`; the §-references
+> below resolve there): `STARBRIDGE-V2.md` (the master interface this is a tab
+> inside), `DREGG-DESKTOP-OS.md` §1/§5 (window = surface cap; the
+> trusted-path / pale-ghost framing), `FIRMAMENT.md` §3 (the n-parametrized
+> cap gradation the swarm rides), `NOTIFY-PRIMITIVE.md` +
+> `metatheory/Dregg2/Firmament/NotifyAuthority.lean` (the async-signal authority
+> the wake edge rides). The integrator context is
 > `project-dregg-integrators-one-seam` (the four loops that each hand-rolled the
 > same six primitives around the same one seam).
 
@@ -67,12 +69,16 @@ This is a weld, not a build. The headless heart already runs.
 - **The SWARM tab is wired into `cockpit.rs`.** `Tab::Swarm` exists; the cockpit
   boots a 3-member swarm (service = coordinator holding a cap to user = worker-a;
   treasury is confined and unreachable, illustrating the boundary); the panel
-  (`swarm_panel`) renders the `SwarmView`; three demo verbs are live
+  (`swarm_panel`) renders the `SwarmView`; three coordination verbs are live
   (`coordinator emit task/go`, `worker-a DRAIN inbox`, `coordinator transfer +
-  wake`), each a real turn. The ⌘K palette registers `GoSwarm` +
+  wake`), each a real turn — and the same tab drives the four-surface killer
+  demo (`starbridge-v2/src/demo.rs`, §9) one receipted frame per press
+  (`cockpit/mod.rs` `killer_demo`). The ⌘K palette registers `GoSwarm` +
   `SwarmCoordinatorEmitA` + `SwarmWorkerADrain` + `SwarmCoordinatorTransferAndWake`
-  with fuzzy keywords, dispatching through the exact `&mut Cockpit` verbs the
-  buttons call (no second action path).
+  plus the killer-demo verbs (`KillerDemoAdvance` / `KillerDemoRunAll` /
+  `KillerDemoOverShare` / `KillerDemoReset`) with fuzzy keywords, dispatching
+  through the exact `&mut Cockpit` verbs the buttons call (no second action
+  path).
 
 - **The notify edge is `dynamics::WorldEvent::EventEmitted`** — `{sender, cell,
   topic_hash, data_len}`. Today the coordination wake rides `Effect::EmitEvent`
@@ -80,16 +86,24 @@ This is a weld, not a build. The headless heart already runs.
   state derived from the dynamics stream. The deep primitive — a `notify(target,
   badgeMask)` authority that is the async DUAL of the synchronous endpoint
   `call`, the 4th **Synchrony** dial — is modeled axiom-clean in
-  `Dregg2/Firmament/NotifyAuthority.lean` (non-amplification via badge-mask
-  subset on the SAME `grantOk`/`authNarrowerOrEqual` the firmament mint proves);
-  its core `Auth.notify` constructor + VK bump is HELD for the cutover-settle.
+  `metatheory/Dregg2/Firmament/NotifyAuthority.lean` (non-amplification via
+  badge-mask subset on the SAME `grantOk`/`authNarrowerOrEqual` the firmament
+  mint proves), and the badge-mask is ENFORCED at the swarm seam: each member
+  carries a `dregg_firmament::NotifyCap` and every wake is gated by
+  `NotifyCap::signal_admissible` (`swarm.rs:94` — the Rust mirror of the
+  verified `signalAdmissible`), refusing an out-of-mask topic fail-closed. The
+  kernel-level `Auth.notify` constructor + VK bump stays a named seam, HELD for
+  the cutover-settle.
 
-- **The budget substrate exists.** The executor meters `computrons_used` per
-  receipt (already surfaced per-member and per-action in the panel and feed). The
-  atomic budget is `dregg_coord::StingrayCounter` — a bounded conservation
-  counter the SDK runtime attaches as a budget gate (`runtime.rs:322`,
-  `attach_budget`). A swarm member's `balance` is the resources its loop holds
-  (pay-for-action); a shared swarm budget is a Stingray ceiling.
+- **The budget gate is live at the seam.** The executor meters `computrons_used`
+  per receipt (surfaced per-member and per-action in the panel and feed), and
+  `Swarm::run` refuses, fail-closed and before the turn runs, a dispatch from a
+  member at/over its metered ceiling (`BudgetMeter`, `swarm.rs:193`;
+  `SwarmError::BudgetExhausted`) or whose draw would breach the attached shared
+  pool — a real `dregg_coord::StingrayCounter` (`swarm_budget.rs`,
+  `Swarm::attach_stingray_budget`; `SwarmError::PoolExhausted`), the same
+  counter the SDK runtime attaches as its budget gate. A swarm member's
+  `balance` remains the pay-for-action floor.
 
 - **The trusted-path anchor exists.** The CIPHERCLERK tab drives the real
   `dregg_sdk::AgentCipherclerk` (mint / attenuate / delegate / discharge of real
@@ -100,7 +114,7 @@ This is a weld, not a build. The headless heart already runs.
 
 So the cockpit can already drive a swarm and show receipts. What this design
 elaborates is the **cockpit experience of accountability** — turning the
-3-demo-verb panel into a real driving-and-observing surface, and naming the
+demo panel into a real driving-and-observing surface, and naming the
 buildable-now slices that get there without touching the cutover.
 
 ---
@@ -272,14 +286,15 @@ primitives the integrators hand-rolled. Three layers, each already substantiated
    the executor (the conservation guarantee — value is neither created nor
    destroyed). This is the floor: a member cannot act beyond what it holds.
 
-3. **The shared Stingray ceiling (weld).** A swarm budget is a
-   `dregg_coord::StingrayCounter` — a bounded conservation counter. Members draw
-   against it; the counter's invariant (drawn ≤ ceiling, and the sum is
-   conserved across resolution) makes "the swarm collectively spent at most B"
-   provable, not best-effort. The SDK already attaches it as a budget gate
-   (`runtime.rs::attach_budget`); the cockpit surfaces it as the aggregate meter
-   strip and a member that would breach the ceiling is REFUSED with `budget
-   exhausted`.
+3. **The shared Stingray ceiling (live, opt-in).** A swarm budget is a
+   `dregg_coord::StingrayCounter` — a bounded conservation counter, attached via
+   `Swarm::attach_stingray_budget` (`swarm_budget.rs`). Every dispatch draws the
+   executor's genuine metered cost against the one shared slice; the counter's
+   invariant (drawn ≤ ceiling, and the sum is conserved across members) makes
+   "the swarm collectively spent at most B" provable, not best-effort, and a
+   draw that would breach is REFUSED by the counter's own gate
+   (`SwarmError::PoolExhausted`, fail-closed, no commit) — mirrored on the SDK's
+   budget-gate wiring so the two are never divergent models.
 
 The meter's UX discipline mirrors the refusal discipline: amber as a member
 approaches its ceiling (a warning, not a denial), red + REFUSED at the breach
@@ -322,9 +337,11 @@ Agreement). The badge-mask is a real sub-lattice riding the SAME non-amplificati
 the firmament mint proves — `[.notify]` = "may poke, not message" is new
 expressivity. The cockpit's inbox is exactly the badge-OR accumulator made
 visible: idempotent coalescing of async signals. The Lean keystone
-(`NotifyAuthority.lean`) is axiom-clean; the core constructor + VK bump is HELD
-for the cutover-settle — so the cockpit's near-term inbox is `EmitEvent`-backed,
-and the badge-mask authority drops in when notify lands without changing the UX.
+(`metatheory/Dregg2/Firmament/NotifyAuthority.lean`) is axiom-clean and its
+badge-mask gate is enforced at the swarm seam today
+(`NotifyCap::signal_admissible`, the verified mirror); the core constructor + VK
+bump is HELD for the cutover-settle — so the inbox is `EmitEvent`-backed, and
+the core authority drops in when notify lands without changing the UX.
 
 **One honest flag carried, not closed:** a badge-OR is a covert channel (a
 one-bit info-flow leak) — dregg has no noninterference argument yet. The cockpit
@@ -357,34 +374,34 @@ total in what it buys, and now legible at the glass.
 
 ---
 
-## 8. The buildable-now slices (wide-safe, separate workspace, not blocked on the cutover)
+## 8. The buildable-now slices (wide-safe, non-default workspace member, not blocked on the cutover)
 
-`starbridge-v2/` is its own standalone build (rolling-nightly, embeds the
-verified executor, its own target dir) — it does NOT participate in the workspace
-build and is NOT gated by the VK rotation / cutover. Everything below is a weld on
+`starbridge-v2/` (and `starbridge-v2/web`) is a root-workspace member but NOT a
+default-member — the gpui-elephant split: a plain `cargo build` never pulls it,
+and it builds explicitly with `-p starbridge-v2`. It is NOT gated by the VK
+rotation / cutover. Everything below is a weld on
 the EXISTING `swarm.rs` heart + the cockpit, gpui-free where the logic lives,
 `cargo test`-able in the headless heart, with the gpui panel as the thin render
 layer. Sequenced so each lands by its own test against the REAL embedded executor.
 
-**S0 — the budget meter (headless model + panel strip).** Add a `BudgetMeter` to
-the `Swarm`: per-member `spent: u64` (running sum of metered computrons, already
-on each `SwarmActionOutcome`) and an optional `ceiling: Option<u64>`; an aggregate
-`SwarmBudget { total_ceiling, total_spent, headroom }`. Extend `Swarm::run` to
-REFUSE a dispatch that would breach the member's ceiling (a new
-`SwarmError::BudgetExhausted { member, spent, ceiling }`), BEFORE the turn runs —
-fail-closed, no commit. Extend `SwarmView`/`SwarmMemberView` with the meter
-fields. Tests: a member under its ceiling commits and `spent` grows by the
-metered computrons; a dispatch that would breach is REFUSED with the budget error
-and no height advance; the aggregate meter sums correctly. (Pure headless; the
-panel strip is the thin render. The Stingray ceiling is the floor model — the
-real `StingrayCounter` weld is S3.)
+**S0 — the budget meter — LANDED.** `BudgetMeter` (`swarm.rs:193`) carries
+per-member `spent` (the running sum of metered computrons, off each
+`SwarmActionOutcome`) and an optional `ceiling`; the aggregate `SwarmBudget`
+sums spend/ceilings/headroom across members. `Swarm::run` REFUSES a dispatch
+from a member at/over its ceiling BEFORE the turn runs
+(`SwarmError::BudgetExhausted`, `swarm.rs:388` — fail-closed, no commit, no
+height advance), and the tests assert exactly that: an under-ceiling dispatch
+commits and grows `spent` by the metered computrons; a breach is refused with
+the budget error and no height advance; the aggregate sums correctly. (This is
+the per-member FLOOR model; the verified shared pool is S3.)
 
 **S1 — the dispatch bar (drive any cap-gated command, not just the 3 demos).**
 Generalize the 3 hardcoded verbs into a `SwarmDispatch` builder: select member +
 verb (`SwarmCommand` vocabulary, mirroring `terminal::Command`) + target,
-assembling effects and calling `Swarm::run`. Add a mandate PRE-CHECK helper
-(`Swarm::can_reach(agent, target) -> bool`, reading the live c-list) so the UI
-greys out unreachable targets and PREDICTS the refusal. New palette commands per
+assembling effects and calling `Swarm::run`. The mandate PRE-CHECK exists
+(`SwarmGraph::can_reach`, `coordination.rs:234`, reading the live c-list and
+tested to agree with the cap-gate); wire it so the UI greys out unreachable
+targets and PREDICTS the refusal. New palette commands per
 verb (one `CommandId` each, dispatched through the same `&mut Cockpit` verb).
 Tests: the dispatch builder assembles the right effects; `can_reach` agrees with
 the cap-gate; a predicted-refused dispatch is in fact refused by the executor
@@ -400,20 +417,23 @@ view matches the cell's real c-list; the authorization boundary's CAN set is
 exactly the reachable+permitted verbs; a member whose backing cell is sealed
 shows the lifecycle honestly. (Mostly a render weld over existing models.)
 
-**S3 — the Stingray ceiling weld (the atomic shared budget).** Replace S0's floor
-ceiling model with a real `dregg_coord::StingrayCounter` as the swarm's shared
-budget: members draw against it; the conservation invariant makes "the swarm
-spent at most B" provable. Wire it the way the SDK runtime does
-(`attach_budget`). Tests: the swarm budget conserves (drawn = sum of metered
-across members); a draw past the ceiling is refused; the aggregate meter reflects
-the counter's state. (This is the depth lift from a UI counter to a verified
+**S3 — the Stingray ceiling weld — LANDED.** `swarm_budget.rs`
+(`StingraySwarmBudget`) wires a real `dregg_coord::StingrayCounter` as the
+swarm's shared budget, attached via `Swarm::attach_stingray_budget`: every
+dispatch draws the executor's genuine metered cost against the ONE shared slice
+under a fresh receipt-hash debit digest, and a draw past the ceiling is refused
+by the counter's own gate (`SwarmError::PoolExhausted`, fail-closed, no commit).
+Tests assert conservation (drawn = sum of metered across members), the refusal,
+and the aggregate view. (The depth lift from a UI counter to a verified
 conservation bound — the simbi-gap closure made real.)
 
-**S4 — the coordination graph (the causal shape).** A gpui-free graph model
-(`SwarmGraph::build`): nodes = members, notify arrows = the `NotifyEdge`s from the
-inbox state, mandate edges = the fainter reach graph. A simple deterministic
-layout. The panel animates arrows on land/drain. Tests: the graph model's arrows
-match the deposited notify edges; the mandate background matches the cap-graph.
+**S4 — the coordination graph — model LANDED.** The gpui-free graph model exists
+(`coordination.rs`, `SwarmGraph::build`): nodes = members, notify arrows = the
+deposited `NotifyEdge`s, mandate edges = the fainter reach graph off the real
+c-lists, on a deterministic circle layout (no force simulation, no RNG — tests
+assert exact positions, that the arrows match the deposited edges, and that the
+mandate background matches the cap-graph). The panel's land/drain animation is
+the render weld that remains.
 
 **S5 — the cipherclerk trusted-path strip for the swarm.** Bind the existing
 CIPHERCLERK surface to the selected swarm member: show its ledger-drawn identity,
@@ -425,26 +445,38 @@ mint→attenuate→delegate chain; the identity is ledger-drawn, not self-report
 lane — see §9 — so the near-term S5 is the identity + lineage strip, with the
 gesture as the designed-pending tooth.)
 
-**S6 — a runnable demo script + the SDK-binding doc.** The "two agents,
-trustline, channel, mailbox" handoff story (the pug evaluation artifact) extended
-with the swarm: boot N members, dispatch a cap-gated task, watch the wake drain,
-watch a refusal, watch the budget meter bite. Plus a short `swarm-sdk.md` showing
-the integrator how the SAME `Swarm::run` seam binds to their one serialization
+**S6 — the runnable demo + the SDK-binding doc — demo LANDED, doc open.** The
+runnable pug evaluation artifact is `starbridge-v2/src/demo.rs` — the
+four-surface killer demo (`HeadlineDemo`): mint → in-mandate agent spend →
+notify handoff with two independent receipts → the DUAL REFUSAL (the
+out-of-mandate over-grant AND the Stingray `PoolExhausted` budget bite). It
+runs headless (`HeadlineDemo::run_headless` asserts every invariant) and the
+SWARM tab drives the same engine one frame per press (§2). What remains is the
+binding half: a short `swarm-sdk.md` (does not exist yet) showing the
+integrator how the SAME `Swarm::run` seam binds to their one serialization
 point (the PostToolUse hook / the `recordPhaseComplete` / the `AgentRun` row).
-(This is the handoff-readiness deliverable — the demo IS the evaluation.)
+(The demo IS the evaluation; the doc is the adoption half of the handoff
+deliverable.)
 
-Sequencing: **S0 → S1 → S2** is the core driving-and-observing loop and is pure
-weld on the existing heart, all wide-safe and cutover-independent. **S3** is the
-budget depth lift. **S4/S5** are the richer observability. **S6** is the handoff
-artifact. None of these touch the metatheory workspace, the VK rotation, or the
-circuit — they live entirely in the standalone starbridge-v2 crate.
+Sequencing: **S0**, **S3**, and **S4**'s headless model are landed; **S1 → S2**
+complete the core driving-and-observing loop as pure weld on the existing heart,
+all wide-safe and cutover-independent. **S5** is the richer trust surface.
+**S6**'s demo half is landed; its `swarm-sdk.md` binding doc is the open
+half. None of these touch the metatheory workspace,
+the VK rotation, or the circuit — they live entirely in the starbridge-v2 crate
+(a non-default workspace member).
 
 ---
 
 ## 9. The killer demo
 
 **A three-agent swarm where the operator watches accountability fire four times
-in ninety seconds, never trusting the loops.** On the SWARM tab:
+in ninety seconds, never trusting the loops.** The runnable core is
+`starbridge-v2/src/demo.rs` (`HeadlineDemo`): mint, the in-mandate spend, the
+notify handoff with two independent receipts, and the dual refusal (mandate +
+budget) — headless via `run_headless`, or frame-by-frame on the SWARM tab; the
+punch-4 cipherclerk attestation rides the existing CIPHERCLERK tab, not the
+scripted demo. On the SWARM tab:
 
 1. **Coordinate (the wake).** The coordinator dispatches `task/go` to worker-a.
    The activity feed shows the receipted `EmitEvent`; worker-a's inbox lights
@@ -495,15 +527,17 @@ A small poem for the glass:
   is the remote `.turn()` lane (#171). Until then, the inbox is correct for the
   single-image cockpit and labeled as such.
 
-- **The deep `notify(target, badgeMask)` authority is HELD, not landed.** The
-  near-term wake rides `Effect::EmitEvent` (already executed, fully receipted) —
-  so the coordination is real and the cockpit UX is final, but the badge-mask
-  sub-lattice ("may poke, not message") is not yet enforced at the core. CLOSURE:
-  `Dregg2/Firmament/NotifyAuthority.lean` is the axiom-clean keystone; Step 2 (the
-  `Auth.notify` constructor + α-totalization + felt-encoder/VK bump, ~9 mechanical
-  arms) is HELD for the cutover-settle (it is a VK/encoding bump, mid-circuit
-  churn). When it lands, the badge-mask drops into the cockpit's inbox model
-  without any UX change.
+- **The kernel-level `notify(target, badgeMask)` authority is HELD, not landed.**
+  The wake rides `Effect::EmitEvent` (already executed, fully receipted), and the
+  badge-mask sub-lattice ("may poke, not message") IS enforced at the swarm seam:
+  each member's `dregg_firmament::NotifyCap` gates every wake via
+  `NotifyCap::signal_admissible` (`swarm.rs:94`, the Rust mirror of the verified
+  `signalAdmissible`). What is held is the CORE enforcement. CLOSURE:
+  `metatheory/Dregg2/Firmament/NotifyAuthority.lean` is the axiom-clean keystone;
+  Step 2 (the `Auth.notify` constructor + α-totalization + felt-encoder/VK bump,
+  ~9 mechanical arms) is HELD for the cutover-settle (it is a VK/encoding bump,
+  mid-circuit churn). When it lands, the badge-mask drops from the swarm seam
+  into the core without any UX change.
 
 - **The badge-OR is a covert channel (a one-bit info-flow leak).** A wake's
   presence/topic is observable; dregg has no noninterference argument yet. The

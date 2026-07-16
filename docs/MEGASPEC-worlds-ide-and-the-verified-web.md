@@ -124,7 +124,8 @@ delivery layer (§4).** The floor is real; the experience is yours to design.
 ## 4. The delivery layer — the `<dregg-*>` capability-resolving Web-Component SDK (the new architecture)
 
 This is the layer that makes your worlds and your IDE **reach anyone, in any browser, with honest
-trust** — and it's the piece we've just designed and are building now.
+trust**. Its element substrate exists and ships in the extension (state inventory in §6); this
+section is its architecture.
 
 ### 4.1 What exists to build on
 - **`@dregg/sdk`** (`sdk-ts/`, published npm) — a TypeScript SDK; it does *not* bundle wasm.
@@ -137,7 +138,8 @@ trust** — and it's the piece we've just designed and are building now.
   turn in a wasm world → repaint) exists (`site/dist/cards/tally.html`).
 
 ### 4.2 The reframe: from an imperative provider to a declarative element runtime
-Today a page calls `window.dregg.request(...)`. The new model is **declarative**: a page drops
+The imperative provider (`window.dregg.request(...)`) remains for scripts; the element model is
+**declarative**: a page drops
 `<dregg-world src="…">` / `<dregg-editor doc="…">` / `<dregg-poll src="…">`, and a runtime
 **resolves each capability from whatever is present**, degrading honestly.
 
@@ -212,7 +214,7 @@ collaboratively, verifiable by strangers, and authorable by AI — in a browser 
 
 ## 6. Honest state inventory (RUNS / PARTIAL / FRONTIER)
 
-**Assurance floor — DONE this cycle:** hand STARK engine deleted; all circuits on the descriptor
+**Assurance floor — DONE:** hand STARK engine deleted; all circuits on the descriptor
 prover; Golden Lift (light-client + aggregation soundness) proven and wired; 7 emitted-descriptor
 forgery bugs found *by proving* and fixed; predicate-comparison descriptors emitted. Axiom-clean.
 
@@ -222,11 +224,20 @@ forgery bugs found *by proving* and fixed; predicate-comparison descriptors emit
 library), `deos-reflect`, `deos-js-runtime`. **PARTIAL:** `deos-zed` (real editor; FirmamentFs is
 the wiring), `deos-leptos`, `deos-matrix`, `deos-terminal`.
 
-**Delivery layer — FRONTIER (immediate work, §8):** the `<dregg-*>` web-component substrate does
-not exist yet as Custom Elements; today's browser loop is a *global* `window.__deosCard` + data-
-attributes (works, but not encapsulated/multi-instance/composable). The extension wasm is
-currently **being repaired** (it was workspace-excluded, so it still referenced the deleted
-engine — the fix migrates it onto the current proven descriptors; in flight).
+**Delivery layer — RUNS the element substrate; FRONTIER the specializations (§8):** the
+`<dregg-*>` Custom Elements exist and ship in the extension — `dregg-poll`, `dregg-doc`,
+`dregg-embed`/`dregg-transclude`, `dregg-story`, `dregg-descent`, `dregg-sprite`
+(`extension/src/elements/*.ts`), each a **closed**-shadow-root view with a reflected `trust=…`
+tier + visible badge, fail-closed on an unresolved port; the engine (background) owns
+wasm/keys/caps, the element only marshals port requests. The passkey/WebAuthn custody floor is
+implemented (`extension/src/passkey.ts` — PRF-wraps the dregg mnemonic; fail-closed, never a
+weak-KDF fallback). The wasm prover rides the deployed descriptor path: `wasm/src/lib.rs` routes
+proofs through `prove_vm_descriptor2` / `verify_vm_descriptor2` with fail-closed
+`descriptor_by_name` dispatch, and the extension ships built artifacts
+(`extension/dist/dregg-cipherclerk-{chrome.zip,firefox.xpi}`, `extension/dregg_wasm_bg.wasm`).
+**FRONTIER:** `<dregg-world>` / `<dregg-editor>` (no such elements yet), and the extension-less
+provider tiers of §4.5 (page-bundled `@dregg/sdk` render/verify, per-origin SSR) — today's
+elements resolve through the extension port.
 
 ---
 
@@ -262,16 +273,18 @@ engine — the fix migrates it onto the current proven descriptors; in flight).
 
 ## 8. Immediate frontier (focused — the next moves, in order)
 
-1. **Heal the extension wasm** onto the current descriptor prover (in flight) — so the person's
-   client-side prover is the *proven-correct* one, and CI ships a fresh module.
-2. **The `<dregg-*>` substrate:** one Custom Element (`<dregg-card>`) that owns its Shadow DOM +
-   a per-instance wasm world + a scoped affordance wire + a self-verify badge — the whole
-   architecture in one small, proven-on-existing-tests artifact.
-3. **Specialize:** `<dregg-poll>` (the real `collective-choice` engine — a verifiable, quorum-
-   gated vote you drop into any page) → `<dregg-doc>` / `<dregg-editor>` (the DDL — transclusion +
-   patch-theory + conflict-as-state) → `<dregg-world>` (your engineering-world surface).
-4. **The capability resolver + provider chain + trust labeling** (§4.5), with passkey as the
-   extension-less custody floor.
+Standing under this list: the extension wasm rides the descriptor prover, the element substrate
+(closed Shadow DOM + trust badge + fail-closed lifecycle, shared via `DreggElement`) exists, the
+poll/doc/transclude/story/descent/sprite specializations exist, and the passkey custody floor is
+implemented (§6). What remains:
+
+1. **`<dregg-world>`** — the engineering-world surface as an element. The specialization pattern
+   is established (`extension/src/elements/`); the world element does not exist yet.
+2. **`<dregg-editor>`** — the DDL *editing* surface. `<dregg-doc>` renders (transclusion +
+   conflict-as-state); the collaborative editor affordance surface is the gap.
+3. **The extension-less provider tiers** (§4.5): page-bundled `@dregg/sdk` render/verify and the
+   per-origin SSR floor, resolved best-available by the same elements — so read + verify reach a
+   bare browser. (Custody already has its extension-less floor: the passkey provider.)
 
 ---
 
@@ -287,9 +300,10 @@ engine — the fix migrates it onto the current proven descriptors; in flight).
   `extension/` (`src/page.ts` = `window.dregg`, `confirm-intent-script.js`, `dregg_wasm.js`),
   `wasm/` (the in-tab worlds + prover), `servo-render/` (verified-pixel compositor path).
 
-*The floor is proven and fast. The worlds and the document language run. The delivery layer is
-the frontier, and it's mostly relocation of proven parts into Web Components + a capability
-resolver. Your two north stars stand on this; the seams are small and named.*
+*The floor is proven and fast. The worlds and the document language run. The delivery elements
+run in the extension; the remaining delivery frontier is the world/editor specializations and
+the extension-less provider tiers. Your two north stars stand on this; the seams are small and
+named.*
 
 ---
 

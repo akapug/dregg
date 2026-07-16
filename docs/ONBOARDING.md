@@ -16,12 +16,17 @@ what was promised, paid, and owed — verifiably.**
 dregg ("Dragon's Egg") is a **formally verified, distributed object-capability
 operating system**. The kernel is a Lean 4 program with machine-checked
 soundness, and it is the *exact* function the running node executes. Every state
-transition is gated by an unforgeable capability, leaves a verifiable receipt,
-and carries a STARK proof a light client can check without re-running history.
+transition is gated by an unforgeable capability and leaves a verifiable
+receipt; with full-turn proving enabled (`--prove-turns` /
+`DREGG_PROVE_TURNS=1` — a node mode, off by default), each committed turn also
+carries a STARK proof a light client can check without re-running history.
+Proving is a mode, not a per-turn invariant: turns commit and finalize without
+a proof unless the operator switches it on
+(`node/src/state.rs` `full_turn_proving_enabled`).
 
-The whole system in one sentence: *a light client holding one root knows every
-transition in the whole history was authorized, conservative, fresh, and
-correctly committed — re-executing nothing.*
+The proving mode's payoff in one sentence: *a light client holding one root
+knows every transition in the whole history was authorized, conservative,
+fresh, and correctly committed — re-executing nothing.*
 
 The four words of the model ([`docs/OVERVIEW.md`](OVERVIEW.md)):
 
@@ -100,7 +105,8 @@ subsystem *is*.
 
 ---
 
-*Honest-state footnote: the Solana bridge is devnet/oracle today; the
-house-capacity circuit welds are partly staged (the executor tooth is real today,
-the light-client circuit tooth is its named shadow — see the memory index).
-Verify against HEAD.*
+*Honest-state footnote: the Solana bridge is devnet/oracle today. All six house
+capacities sit on the executor frame (the executor tooth is real and
+load-bearing); each capacity's light-client circuit weld is its named
+follow-up — see [`deos/HOUSE-CAPACITY-FRAMEWORK.md`](deos/HOUSE-CAPACITY-FRAMEWORK.md)
+§5, which classifies that seam. Verify against HEAD.*

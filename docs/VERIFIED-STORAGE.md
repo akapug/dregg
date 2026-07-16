@@ -11,10 +11,11 @@ cargo run -p dregg-storage --example verified_storage
 ## The one line
 
 Every decentralized-storage network you know (Filecoin, Arweave, Storj, Sia) is *"trust the
-incentives."* Dregg's storage core is **proven** — 17 machine-checked theorems across 6 modules,
+incentives."* Dregg's storage core is **proven** — 50 machine-checked theorems across 15 modules,
 `#assert_axioms`-clean, and the *only* cryptographic assumption is that **Poseidon2 is
 collision-resistant.** Everything else — k-of-n reconstruction, the trustless read, the
-audit refusing a forgery, the slash burning a provider's bond — is a theorem.
+audit refusing a forgery, the slash burning a provider's bond, the deal lifecycle conserving
+value — is a theorem.
 
 ## What is proven (the theorems)
 
@@ -26,6 +27,13 @@ audit refusing a forgery, the slash burning a provider's bond — is a theorem.
 | **Proof-of-retrievability** | `por_sound`, `por_refuses_substitution` | a provider that passes an audit holds the genuine data; a substitution is refused |
 | **End-to-end availability** | `verifiable_erasure_recovers` | a client holding only the root recovers the true blob from any *k* audited shards — no provider trust |
 | **Provider market** | `unauthorized_claim_rejected`, `open_deal_only`, `slash_decreases_collateral` | only a bonded provider claims a deal; no double-sell; a failed audit *strictly* burns the bond |
+| **Deal lifecycle** | `DealLifecycle` + `DealLifecycleTrace` theorems | the deal state machine (`Open → Claimed → Active → Audited → Settled/Slashed`) is guard-sound, strictly forward-only (no un-settling, no cycles), and a slash *requires* a failed audit in its history |
+| **Deal payment** | conservation theorems in `DealPayment` | bond + escrow only move between buckets — settle pays the provider and returns the bond, slash burns the bond and refunds the client; no value minted or destroyed |
+| **Provider registry** | `serves_only_if_registered`, `slash_requires_registered` | a provider serves only once registered with positive stake; the stake is never conjured |
+| **Market integrity** | `MarketAudit` composition | the PoR verdict drives the lifecycle: an honest provider can never be slashed; a withholding one is |
+| **Executor refinement** | `MarketRefinement`, `DealCell` | the executor-wired cell-program's transitions ARE the abstract protocol's, all six legs, under an explicit abstraction — not a lookalike |
+| **End-to-end client protocol** | `ClientProtocol` | the composed promise: store erasure-coded across *n* providers, and the data survives while any *k* pass audit |
+| **Deployed-hash instantiation** | `contentRootDeployed_injective` (`Deployed.lean`) | the bucket content root over the *deployed* Poseidon2 (Lean logic calling the fast Rust hash via `@[extern]`) binds the committed object set |
 
 All reduce to the one carrier `Poseidon2SpongeCR` (collision-resistance), threaded as a hypothesis —
 verified by `#assert_axioms` to depend on nothing but the three standard Lean axioms.
@@ -37,11 +45,14 @@ verified by `#assert_axioms` to depend on nothing but the three standard Lean ax
   property the Lean proves (a mutation canary confirms the tests bite).
 - **"The Lean *is* the runtime" is not aspirational — it already ships, for the kernel.** The core
   turn executor runs as **Lean compiled to native code, linked into the binary** (`@[export]` via
-  `leanc`; `dregg-lean-ffi/libdregg_lean.a` is a 171 MB archive of the machine-checked Lean, and
-  `dregg-lean-ffi`'s tests call it from Rust). The storage verify functions plug into the *identical*
-  `@[export]` path — extracting them is mechanical (add the export, regen the seed), not a new
-  mechanism. So the honest ladder is: kernel = *extracted-from-Lean today*; storage codecs =
-  *checked-against-Lean today, extraction is the wired-in next step.*
+  `leanc`; `dregg-lean-ffi/libdregg_lean.a` is a native archive of the machine-checked Lean, and
+  `dregg-lean-ffi`'s tests call it from Rust). Storage stands on the same path: the **bucket content
+  root already runs as Lean at the deployed hash** — `Dregg2.Storage.Deployed` computes
+  `contentRootDeployed` as verified Lean logic calling the fast Rust Poseidon2 through a
+  native-scalar `@[extern]`, exports it back to Rust (`@[export dregg_storage_content_root]`), and
+  `contentRootDeployed_injective` is the binding theorem at the deployed hash. So the honest ladder
+  is: kernel + the content root = *Lean-is-the-runtime today*; the remaining storage codecs
+  (RS/fountain) = *checked-against-Lean today, extraction is the same mechanical `@[export]` step.*
 - **The Merkle/commitment binding is proved down to Poseidon2 collision-resistance** — a standard,
   named assumption, not hand-waving. We do not claim Poseidon2 is unbreakable; we claim everything
   above it is a theorem *given* it.
@@ -50,7 +61,7 @@ verified by `#assert_axioms` to depend on nothing but the three standard Lean ax
 
 ## The numbers
 
-- **17** theorems · **6** modules · **482** lines of Lean · `#assert_axioms`-clean.
+- **50** theorems · **15** modules · **~1,250** lines of Lean · `#assert_axioms`-clean.
 - **1** cryptographic assumption (Poseidon2 collision-resistance).
 - **0** `sorry`, **0** laundered carriers for the math (RS/fountain are real field algebra, no carrier).
 
@@ -68,5 +79,7 @@ verified by `#assert_axioms` to depend on nothing but the three standard Lean ax
 
 ## Where to look
 
-`metatheory/Dregg2/Storage/{BucketCommitment,Erasure,Fountain,Retrievability,Availability,ProviderMarket}.lean`
+`metatheory/Dregg2/Storage/{BucketCommitment,Erasure,Fountain,Retrievability,Availability,
+ProviderMarket,DealLifecycle,DealLifecycleTrace,DealPayment,DealCell,MarketAudit,MarketRefinement,
+ProviderRegistry,ClientProtocol,Deployed}.lean
 · the bound Rust: `storage/src/{erasure,bucket_commitment}.rs` (see the `lean_spec_binding` tests).

@@ -3,9 +3,9 @@
 This document answers one question: **a dregg private key leaks (or is stolen) — what
 is the blast radius, what bounds the damage, and how is it revoked?** It states the
 adversary model, the blast-radius analysis, the four containment floors, and the
-revocation/rotation story, and it gives an honest verdict: *most of "what if a key
-leaks" is already answered by the deployed proofs*; the genuinely-new work is one
-named seam.
+revocation/rotation story, and it gives an honest verdict: *"what if a key leaks" is
+answered by the deployed proofs* — including the settlement seam, which is proven
+(`metatheory/Metatheory/SettlementSoundness.lean`).
 
 The companion model is `metatheory/Metatheory/KeyLeak.lean` — a kernel-clean Lean
 harness (axioms `propext`/`Classical.choice`/`Quot.sound`
@@ -28,8 +28,10 @@ A dregg key is not a free-floating secret; it is bound to authority at two seams
   tokens under that root** — the macaroon model is symmetric-key, so the root secret is
   the keys-to-the-kingdom *for tokens rooted there*.
 * **Pubkey → cell identity.** A cell's id is `blake3::derive_key("dregg-cell-id-v1",
-  pubkey ‖ token_id)` (`types/src/lib.rs:701`, `CellId::derive_raw`; the domain variant
-  at `:687`). The id is derived from the *public* key, so leaking the *private* key does
+  pubkey ‖ token_id)` (`types/src/lib.rs:867`, `CellId::derive_raw`; the domain variant
+  at `:850`; the ed25519-only derivation is marked LEGACY — the PQ-relevant hybrid
+  ed25519+ML-DSA variant is `derive_hybrid_raw`, `:832`). The id is derived from the
+  *public* key, so leaking the *private* key does
   not change which cell you are — it lets you **act as** that cell (sign turns / present
   caps as that principal).
 
@@ -64,7 +66,7 @@ The attacker gains the caps the principal **held**, plus everything derivable fr
 them by delegation/attenuation. That derivable set is the **blast radius**, and it is
 *bounded*:
 
-* The deployed gate is `cell/src/capability.rs:603`, `is_attenuation(held, granted) =
+* The deployed gate is `cell/src/capability.rs:1012`, `is_attenuation(held, granted) =
   granted.is_narrower_or_equal(held)` (`cell/src/permissions.rs:52`). Every cap an
   attacker can produce from a held cap must be **narrower-or-equal**: same target,
   narrower-or-equal rights. **No amplification, no new targets.**
@@ -110,7 +112,7 @@ per-mechanism re-proof.
 3. **Firmament confinement.** A leaked key inside a sandboxed PD only reaches its
    *confined sub-world*. The OS half is real and enforced:
    `sel4/dregg-firmament/src/sandbox.rs` confines a forked child right after `fork()` —
-   macOS Seatbelt `(deny default)` + fd-closing (`:20`), Linux
+   macOS Seatbelt `(deny default)` + fd-closing (`:22`), Linux
    `unshare(CLONE_NEWUSER|NEWNET|NEWNS|NEWPID)` (`:30`) — so the child has **no ambient
    `open`/`socket`/`execve`**. A key leaked inside that PD reaches only the caps and
    cells granted into the PD, not the host. `KeyLeak.confinedFloor` models this
@@ -121,11 +123,12 @@ per-mechanism re-proof.
 4. **Membrane fork-isolation.** A leaked *fork* key reaches only that fork.
    `starbridge-v2/src/shared_fork.rs` is the authority typing of "invite someone into my
    world": the guest is a fresh confined principal in the *fork's* ledger
-   (`:202`), holding only caps minted via a genuine `Effect::GrantCapability` attenuated
-   by the real powerbox (`Powerbox::grant`, `:251`) — over-authorized grants are
-   **dropped, never amplified** (`:270`). Exercising a target that is not in the fork is
-   rejected (`:283`). So a leaked fork-key is contained to the fork by the same
-   attenuation + confinement floors.
+   (`:286`), holding only caps minted via a genuine `Effect::GrantCapability` attenuated
+   by the real powerbox (`Powerbox::grant`, `:335`) — over-authorized grants are
+   **dropped, never amplified** (`:353`). A boundary target outside the fork carries
+   **no cap at all**; an attempted exercise raises a consent request instead of
+   executing (`NetworkBoundary`, `:107`). So a leaked fork-key is contained to the fork
+   by the same attenuation + confinement floors.
 
 The uniform point: each containment is a floor; `polis_safety` proves *no opaque
 controller — and the leaked-key attacker is one — drives any subject below the meet of
@@ -137,11 +140,11 @@ these floors.* The containment of a key leak is the deployed safety theorem, re-
 
 Containment bounds the *authority* of a leak; revocation bounds it in *time*.
 
-* **The effect.** `Effect::RevokeCapability { cell, slot }` (`turn/src/action.rs:970`)
-  is a first-class, `Terminal`-linearity effect (`:1656`) — it grows the revocation set
+* **The effect.** `Effect::RevokeCapability { cell, slot }` (`turn/src/action.rs:1081`)
+  is a first-class, `Terminal`-linearity effect (`:1847`) — it grows the revocation set
   and flips the cap out of admissibility. `RevokeDelegation` (the child-cap variant)
   bumps the delegation-epoch root so a committing revoke is bound into the commitment
-  (`turn/src/lean_shadow.rs:602`).
+  (`exec-lean/src/lean_shadow.rs:557`).
 * **The bound (proved).** `metatheory/Dregg2/Distributed/Revocation.lean` turns
   revocation into a topology-parametrized guarantee.
   `eventual_bounded_revocation` (`:188`): a cap revoked at origin `m` at time `τ` is
@@ -165,47 +168,57 @@ Containment bounds the *authority* of a leak; revocation bounds it in *time*.
 
 ---
 
-## 6. The settlement seam — the one genuinely-new piece
+## 6. The settlement seam — Settlement Soundness, proven
 
-There is exactly one place "what if a key leaks" is *not* already discharged: the
+The one place the static picture does not cover by instantiation is the
 **revocation/settlement seam**. A leaked-key turn can be branched in the reversible
 substrate and later **settled**; if the leaked cap was revoked *between* branch-time and
 settlement, the settled answer must use the **settlement-tip** revocation set, not the
-stale branch-time view (`docs/deos/DISTRIBUTED-TIMETRAVEL-SEMANTICS.md §6.3`). The
-theorem to pursue:
+stale branch-time view (`docs/deos/DISTRIBUTED-TIMETRAVEL-SEMANTICS.md §6.3`).
 
-> **Settlement Soundness.** If a turn `T` settles on the finalized tip at height `h`,
-> every capability `T` exercised is honored by the tip's finalized revocation set at
-> `h`, and the commitment at `h` *binds* that revocation set, so a light client
-> accepting the settled batch can verify the leaked cap was not already revoked.
+The theorem is proven: `metatheory/Metatheory/SettlementSoundness.lean`
+(kernel-clean, `#assert_axioms`-gated, no new `axiom`):
 
-This is a *composition* of deployed pieces — `Revocation.eventual_bounded_revocation` +
-the finalized-light-client commitment + the cap-bridge — applied with the
-`holeFill_binds_in_circuit` discipline to the late-bound *negative* fact of revocation.
-It is the only part that must be *built*; everything else is *instantiated*.
+* **`settlement_soundness`** (`:153`) — a settled turn necessarily exercised a *live*
+  authority: held-as-an-attenuation AND not-yet-revoked at the settlement tip.
+* **`revoke_before_tip_unsettleable`** (`:192`) — the contrapositive keystone and the
+  operational fact for a key leak: a revoke that binds before the settlement tip makes
+  ANY turn exercising that cap **unsettleable** — fail-closed, no matter the
+  branch-time view. A leaked-then-revoked cap cannot ride a settlement.
+* The genuinely-new hypothesis is a **typed field, not an axiom**: `BindsLiveAuthority`
+  — the settlement predicate must bind the tip's revocation set into the commitment.
+  The canonical inhabitant `liveSettlement` is exhibited, `deployedSettle_sound`
+  (`:313`) discharges the deployed shape, and `settlement_nonvacuous` (`:378`) is the
+  laundering guard: the same cap + same held set settles inside the stale window and is
+  refused once the revoke propagates — the keystone separates real cases, it is not
+  vacuous over an empty class.
+
+The proof is the composition §6.3 prescribed — `Revocation.eventual_bounded_revocation`
+(the fail-closed per-node `honors` view) + the attenuation floor + the settlement rule
+— with the `holeFill_binds_in_circuit` discipline applied to the late-bound *negative*
+fact of revocation.
 
 ---
 
-## 7. The honest verdict — already-covered vs genuinely-new
+## 7. The honest verdict — where each question is discharged
 
 | Question | Status | Where |
 | --- | --- | --- |
-| Blast radius bounded (no amplification, no new targets) | **Already proved** — instance of `is_attenuation` | `cell/src/capability.rs:603`; `KeyLeak.leak_blast_no_amplify`, `reaches_closed` |
+| Blast radius bounded (no amplification, no new targets) | **Already proved** — instance of `is_attenuation` | `cell/src/capability.rs:1012`; `KeyLeak.leak_blast_no_amplify`, `reaches_closed` |
 | Containment (attacker cannot exceed principal's floor) | **Already proved** — instance of `polis_safety` over the authority floor | `Polis.polis_safety`; `KeyLeak.key_leak_contained` |
 | Cannot mint value | **Already enforced** — executor `Σδ = 0`, ANDs into the floor | executor conservation; `KeyLeak.combinedFloor` shape |
 | Confined to sandbox / fork | **Enforced (OS) + modelled** — firmament + membrane, both floors | `sandbox.rs`, `shared_fork.rs`; `KeyLeak.key_leak_contained_confined` |
 | Revocation kills it (bounded, n=1 immediate) | **Already proved** | `Revocation.eventual_bounded_revocation`; `KeyLeak.revoke_kills_leak` |
 | Rotation preserves identity, leak can't seize it | **Designed (KERI pre-rotation), recovery floor proved** | identity/polis app; `Polis.humanOK` |
-| Settled turn honors settlement-time revocation set | **Genuinely new** — Settlement Soundness, a *composition* to build | §6; `DISTRIBUTED-TIMETRAVEL-SEMANTICS.md §6.3` |
+| Settled turn honors settlement-time revocation set | **Proved** — Settlement Soundness + contrapositive keystone | `SettlementSoundness.settlement_soundness` (`:153`), `revoke_before_tip_unsettleable` (`:192`) |
 
-**Bottom line.** "What happens if a key leaks" is, for the static picture (blast
-radius, containment, revocation), *already answered by the deployed proofs* — the
+**Bottom line.** "What happens if a key leaks" is answered by the deployed proofs — the
 leaked-key attacker is the opaque controller `polis_safety` was always proven against,
 and `is_attenuation` + conservation + confinement bound it to the leaked principal's
-floor. There is no large new proof obligation. The one place new construction is owed
-is the **settlement seam**: binding the settlement-time revocation set into the
-finalized commitment so a leaked-then-revoked cap cannot be settled. That is a narrow,
-named, compose-don't-rederive theorem — not "too much additional machinery."
+floor. The settlement seam — binding the settlement-time revocation set into the
+finalized commitment so a leaked-then-revoked cap cannot be settled — is the proven
+`SettlementSoundness` theorem (§6), a compose-don't-rederive result whose contrapositive
+keystone makes a revoked-before-tip cap unsettleable, fail-closed.
 
 ---
 

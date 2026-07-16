@@ -11,18 +11,26 @@ surface those runbooks call.
 
 ## The model (what a federation actually is)
 
-A federation is a fixed **committee** of validator Ed25519 public keys.
+A federation is a fixed **committee** of validator identities. A validator's
+identity is **hybrid**: its Ed25519 signing key plus its ML-DSA-65 (FIPS 204)
+public key, committed together into one member id
+(`dregg_types::hybrid_id_commitment`).
 
-- The `federation_id` is a *commitment to that committee*:
-  `derive_federation_id_with_epoch(sorted_committee_pubkeys, committee_epoch)`
-  (`federation/src/identity.rs`). Every node derives the same id from the same
-  committee. **Adding, removing, or rekeying a member changes the
-  `federation_id`** — so growing the committee is a *coordinated re-roll*, not a
-  unilateral act.
-- The committee lives in each node's `genesis.json` (`validators[].public_key` +
-  the derived `federation_id` + `threshold`). A node cannot verify a
-  federation's blocks — cannot even follow it — without that committee
-  descriptor.
+- The `federation_id` is a *commitment to that committee*. Genesis derives it
+  from the sorted hybrid member ids:
+  `derive_federation_id_hybrid_with_epoch(committee_ed, committee_ml_dsa,
+  committee_epoch)` (`federation/src/identity.rs:65`, written by
+  `node/src/genesis.rs:247`) — so the id commits to the ML-DSA roster, not
+  Ed25519 alone. A committee with no aligned ML-DSA roster derives the legacy
+  Ed25519-only form (`derive_federation_id_with_epoch`,
+  `federation/src/identity.rs:43`) — the fallback, not the hybrid-genesis
+  path. Every node derives the same id from the same committee. **Adding,
+  removing, or rekeying a member changes the `federation_id`** — so growing
+  the committee is a *coordinated re-roll*, not a unilateral act.
+- The committee lives in each node's `genesis.json` (`validators[].public_key`,
+  the optional `validators[].ml_dsa_public_key` + hybrid member id, the derived
+  `federation_id`, and `threshold`). A node cannot verify a federation's
+  blocks — cannot even follow it — without that committee descriptor.
 - A turn is **final** only once a BFT supermajority of the committee has signed a
   finalization vote. The threshold is the strict blocklace supermajority
   `quorum_threshold(n) = ⌊2n/3⌋ + 1` (`federation/src/lib.rs`):
@@ -65,10 +73,20 @@ dregg-node add-validator --data-dir ~/.dregg \
 ```
 
 Reads `genesis.json`, folds the pubkey(s) into the committee, **recomputes the
-`federation_id` + `threshold`** (the exact derivation the node uses), and writes
-the new descriptor back to `genesis.json` plus a content-named sibling
-`genesis-<id8>.json` to distribute. Malformed keys, non-Ed25519 keys, and
-"nothing to add" (all keys already present) are clear refusals.
+`federation_id` + `threshold`**, and writes the new descriptor back to
+`genesis.json` plus a content-named sibling `genesis-<id8>.json` to distribute.
+Malformed keys, non-Ed25519 keys, and "nothing to add" (all keys already
+present) are clear refusals.
+
+> **Named seam — the re-roll speaks Ed25519-only.** `add-validator` recomputes
+> the id with `derive_federation_id_with_epoch` over `validators[].public_key`
+> (`node/src/operator_join.rs:177`) — the legacy/fallback form; it does not
+> read or thread the ML-DSA roster. A hybrid genesis derives its id from the
+> hybrid member ids, so re-rolling a hybrid committee through `add-validator`
+> yields the Ed25519-only id, which the hybrid re-derivation will not match.
+> Until the re-roll path speaks the hybrid derivation, growing a **hybrid**
+> federation is a re-genesis; `add-validator`'s recomputation is exact only
+> for an Ed25519-only committee.
 
 > **Authority.** Filesystem access to a committee node's data dir *is* the
 > authority — there is deliberately **no remote self-admit** (that would defeat
@@ -142,4 +160,6 @@ boot. A committee node rejoins by **catch-up**: clear its `dregg.redb` (keep
 `genesis.json` + `node.key`) and restart; it re-seeds genesis, re-peers, and
 replays the finalized DAG from the quorum, re-deriving the exact finalized state.
 See your federation deployment runbook for the durable-state caveat below the
-first ledger checkpoint (the recovery-order fix landed in `node/src/main.rs`).
+first ledger checkpoint (the recovery order lives in `node/src/lib.rs` —
+committee derived from the persisted chain before the recovery anchor — with
+recovery-overlay install and commit-log tail recovery in `node/src/state.rs`).

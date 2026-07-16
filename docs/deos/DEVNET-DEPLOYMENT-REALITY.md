@@ -1,5 +1,12 @@
 # DEVNET-DEPLOYMENT-REALITY — the honest infra map (read-only recon, 2026-07-14)
 
+> **Snapshot status.** This is a dated recon; the `/node/status` capture in §1 is a
+> point-in-time observation, not a standing fact — the hbox solo node ran hand-launched
+> without a durable unit or persistent data-dir, and its ledger does not survive a
+> reboot. There is no live public devnet. Two of the gaps named below are closed at
+> HEAD and are marked in place; the follow-on recon is
+> `docs/deos/CROSS-CHAIN-SETTLEMENT-REALNESS.md`.
+
 The gap between **"offerings clear through the engine locally"** and **"a real
 dregg devnet, deployed against real chain testnets, all infra enmeshed and
 flowing."** This is a READ-ONLY recon: what is actually live, what is stubbed,
@@ -77,7 +84,7 @@ The "dreggicly flowing" spine, traced through `drex-web/serve.mjs`:
                      → allocations + conservation + reject-polarity   [REAL, not a JS mirror]
    POST /settle  → settleOnNode(): ONE real turn on the LIVE node (127.0.0.1:8420):
                      /cipherclerk/unlock → bearer → /turn/submit
-                     effects = [Transfer(operator→settle-pool de55e771…), EmitEvent per ring leg]
+                     effects = [Transfer(operator→trader's ledger cell) per cleared fill, EmitEvent(drex_clear_batch)]
                      → node effect-VM executes → async prove_pool attaches full-turn STARK
                      → GET /api/turn/{h}/proof + /api/starbridge/receipts read back FROM the node
 ```
@@ -88,13 +95,15 @@ proof. A separate client would see the receipt over `/api/receipts` + SSE.
 
 What is STUBBED / honestly-narrowed (`serve.mjs:126-160`, `PRIVATE-NODE.md`):
 
-- **The clearing settles as value *MOVED*, not as per-trader allocations.** The
-  faithful shape is a multi-`SetField` turn writing each trader's allocation.
-  The node's rotated-IR prover currently *rejects its own proof* on that cohort
-  (`setFieldVmDescriptor2` per-index selector binds ambiguously), so `serve.mjs`
-  settles a single `Transfer` of `legSum` value + `EmitEvent` per leg — which
-  proves, but *models* the clearing rather than *materializing* the per-trader
-  ledger writes. Named, not hidden.
+- **Per-trader settlement lands as individual `Transfer`s, not `SetField`
+  allocations.** `serve.mjs` settles each trader's cleared `received` amount as
+  a real, individual `Transfer` (operator → that trader's deterministic ledger
+  cell) — a genuine per-trader balance change, light-client-checkable, not a
+  lump value-move into a pool. The multi-`SetField` allocation shape stays
+  unattested at the deployed VK (the `setFieldVmDescriptor2` per-slot selectors
+  bind ambiguously, so the SDK's uniqueness gate rejects the proof); making it
+  prove needs a unique per-slot binding — a descriptor/VK change, i.e. a
+  VK-epoch flip, which is ember-gated. Named, not hidden.
 - **No on-chain settle from this path.** `/settle` lands on the local node only.
   The node turn is NOT wrapped and pushed to any external chain. That is a
   separate lane (§3). `serve.mjs:32-34` says this in-line.
@@ -108,15 +117,18 @@ What is STUBBED / honestly-narrowed (`serve.mjs:126-160`, `PRIVATE-NODE.md`):
 | **Base-Sepolia (84532) settlement** | **LIVE on-chain.** A real dregg state-transition proof (STARK apex → BN254 shrink → gnark → Groth16) settled and verified via the Solidity pairing. `DreggSettlement 0x6c87b535…`, settle tx `0xbd2cac6a…`, read-back `provenHeight()=2`. **Honest:** it is a **fixture proof** (pre-generated 2-turn apex, NOT a live user turn) under a **dev single-party Groth16 ceremony** (toxic-waste-known, not production MPC), throwaway deployer. (`chain/DEPLOYMENTS.md`) |
 | **Solana settlement program** | **BUILT + tested, NOT deployed.** Native BPF program verifying the SAME BN254 Groth16 proof via `alt_bn128` syscalls (`solana-settlement/src/`). No on-chain program id / devnet deploy record exists. |
 | **Cosmos settlement (CosmWasm)** | **BUILT + tested, NOT deployed.** A `.wasm` artifact exists (`cosmos-settlement/artifacts/cosmos_settlement.wasm`) verifying the same BN254 proof via arkworks. No chain deploy record. |
-| **ETH L1 / Cosmos light clients** | **Verified RULES as LIBRARIES, no standing process.** `eth-lightclient/` (Altair sync-committee, Base OP-stack L2OutputOracle finality, triple-verified against live Base mainnet output 12086) and `cosmos-lightclient/` (Tendermint validator-set + bisection) are crates with no `[[bin]]` running. `OPS-RUNBOOK.md` names the thin-bin + systemd unit as the wiring step. **Base uses FAULT PROOFS (FaultDisputeGame) on the live chain, not the L2OutputOracle model implemented** — named loudly in `GOAL-MULTICHAIN-SETTLEMENT.md`. |
+| **ETH L1 / Cosmos light clients** | **Verified RULES; one runnable bin, no standing process.** `eth-lightclient/` (Altair sync-committee, Base OP-stack L2OutputOracle finality, triple-verified against live Base mainnet output 12086) ships `src/bin/verify_holding.rs` — it follows the beacon trust chain over real captured mainnet data and settles a WETH holding, with a reject canary (`CROSS-CHAIN-SETTLEMENT-REALNESS.md` §3). `cosmos-lightclient/` (Tendermint validator-set + bisection) has no `[[bin]]`. Neither runs as a standing feed; `OPS-RUNBOOK.md` names the systemd-unit wiring step. **Base uses FAULT PROOFS (FaultDisputeGame) on the live chain, not the L2OutputOracle model implemented** — named loudly in `GOAL-MULTICHAIN-SETTLEMENT.md`. |
 | **Cross-chain governance spine** | **BUILT.** Non-custodial proof-of-holdings binding trilogy (Solana Ed25519 · EVM secp256k1 · Cosmos secp256k1/bech32), `from_foreign_fields` wire, multi-network `ChainId`, u128→u64 fail-closed narrow — all landed + adversarially audited (`GOAL-MULTICHAIN-SETTLEMENT.md` done-log). This is verified *rules*, not a live cross-chain flow. |
 | **Robinhood Chain (46630) launchpad** | **Dry-run-ready, NOT deployed.** `chain/script/DeployLaunchpad.s.sol` + the launchpad contract; the gate runs 29/29 against a *locally-deployed* contract. Testnet broadcast is unperformed. |
 
-**The wrap (the linchpin) is not yet end-to-end from a live turn.** The
-STARK→EVM efficient wrap (BN254-native hashing, ~61× measured) exists, but the
-full apex-proof pipeline from a *live node turn* is blocked on the rotated-proof
-pipeline (`GOAL-MULTICHAIN-SETTLEMENT.md` thread 1). The Base-Sepolia settle used
-a *pre-generated fixture*, not a proof minted from `/settle`.
+**The wrap (the linchpin) is not yet end-to-end from a live turn — but the
+blocking dependency is cleared.** The STARK→EVM efficient wrap (BN254-native
+hashing, ~61× measured) exists, and the `FullTurnProof`→`FinalizedTurn` adapter
+(`turn/src/rotation_witness.rs::finalized_turn_from_full_turn`) carries a
+Transfer-bodied turn into the wrap (the `apex_shrink_bn254_tooth` fixture passes
+with a Transfer body). What remains is wiring `/settle` output through that
+adapter. The Base-Sepolia settle used a *pre-generated fixture*, not a proof
+minted from `/settle`.
 
 ### 4. dreggcloud + federation enmeshing — dreggcloud runs ALONGSIDE, not WOVEN IN
 
@@ -173,18 +185,21 @@ and NOT enmeshed with a federation or a chain.
    `offerings.mjs` `DREGG_NODE` at a federated node so `/settle` lands a turn
    that finalizes **cross-node**, not committee-of-one. Firewalled, no public
    surface — non-gated.
-3. **Fix the per-trader allocation cohort** so `/settle` materializes the real
-   `SetField` allocations (not just value-moved Transfer). This is real circuit
-   work (the rotated-IR `setFieldVmDescriptor2` selector), NOT a gate — it makes
-   the settlement *faithful*, not just *provable*.
+3. **`SetField` allocation cohort — ember-gated, not on this list.** `/settle`
+   materializes per-trader allocations as individual `Transfer`s (the faithful
+   settle that needs no VK flip; §2). Making the multi-`SetField` shape prove
+   needs a unique per-slot binding in the rotated-IR `setFieldVmDescriptor2`
+   selectors — a descriptor/VK change, i.e. a VK-epoch flip, which is
+   ember-gated (see below).
 4. **Wire the on-chain settle from a LIVE node turn**: node `/settle` turn →
    `chain/` fold→shrink→Groth16 wrap → `DreggSettlement` on Base-Sepolia. Today
-   only a *fixture* proof settled; minting the proof from a real turn is the real
-   integration (blocked partly on the rotated-proof pipeline — a real dependency,
-   not a gate).
-5. **Build thin light-client bins** (`eth-lightclient` / `cosmos-lightclient`
-   have no `[[bin]]`) and run them read-only as the ETH/Cosmos feeds, replacing
-   trusted RPC on those legs.
+   only a *fixture* proof settled; the `FullTurnProof`→`FinalizedTurn` adapter
+   (`finalized_turn_from_full_turn`) makes the Transfer-into-wrap path pass —
+   what remains is plumbing `/settle` output through it.
+5. **Finish the light-client feeds**: `eth-lightclient` has a runnable bin
+   (`verify_holding`, real captured mainnet data); `cosmos-lightclient` still
+   has no `[[bin]]`. Build the Cosmos bin and run both read-only as standing
+   ETH/Cosmos feeds, replacing trusted RPC on those legs.
 6. **Keyless testnet dry-runs** of the launchpad + Solana + Cosmos deploys
    (`forge script … DeployLaunchpad` simulates a full fair-launch lifecycle; the
    Cosmos `.wasm` + Solana BPF can be dry-validated) — the *simulation* is

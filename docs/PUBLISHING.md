@@ -20,26 +20,30 @@ below with a token in the environment). The two store uploads are manual.
 The standalone `wasm/` workspace `[patch]`es the four `p3-*` crates onto a
 sibling checkout of `emberian/plonky3-recursion`. cargo forbids re-pointing a
 git source to a different rev of the same URL via `[patch]`, so the override is
-a **path patch** onto `../../plonky3-recursion`, pinned (in CI + dev) at the
-pushed `update-plonky3-rev` tip:
+a **path patch** onto `../../plonky3-recursion`, pinned in CI at the pushed
+fork tip:
 
 ```
-rev 993efecd724261fff3fd894c06cc2525b5532e28
+rev 0a4a554e144f4e60107555ea7a11cd9969d6208b
 ```
 
-This rev is referenced in lockstep by: `wasm/Cargo.toml` (the `[patch]` comment),
+This rev is pinned in lockstep by the three workflows that build the wasm:
 `.github/workflows/pages.yml`, `.github/workflows/extension.yml`, and
-`.github/workflows/publish-sdk-ts.yml`. To build the wasm locally:
+`.github/workflows/publish-sdk-ts.yml` (grep `REV=` / the clone step). To build
+the wasm locally:
 
 ```sh
 git clone https://github.com/emberian/plonky3-recursion ../plonky3-recursion
-git -C ../plonky3-recursion checkout 993efecd724261fff3fd894c06cc2525b5532e28
+git -C ../plonky3-recursion checkout 0a4a554e144f4e60107555ea7a11cd9969d6208b
 cd wasm && RUSTFLAGS="-C link-arg=-zstack-size=33554432" \
   wasm-pack build . --target web --out-dir pkg --release
 ```
 
-(The root workspace pins the same four crates at an EARLIER ancestor rev for the
-native lanes; those revs are circuit/VK-sensitive and are bumped separately.)
+(The root workspace pins the same four crates at the SAME rev `0a4a554e` for
+the native lanes — `Cargo.toml:236-239`, plain git deps, no `[patch]`. The revs
+are circuit/VK-sensitive, so a bump must move the root pins and the three CI
+`REV=` pins together. The `wasm/Cargo.toml` `[patch]` comment's rev claims are
+stale; the workspace `Cargo.toml` and the CI workflows are the authority.)
 
 ---
 
@@ -171,10 +175,12 @@ prerequisite). CI builds them on `gh workflow run Extension --ref main`
   entry points.
 - `alarms` — schedule auto-lock after inactivity and receipt-stream reconnect
   backoff.
-- `host_permissions` (`https://devnet.dregg.fg-goose.online/*`,
-  `http(s)://localhost:8420/*`, `ws://localhost:8420/*`, and the `127.0.0.1`
-  equivalents) — submit signed turns and tail the receipt SSE stream from the
-  user's dregg node (the public devnet and a local node).
+- `host_permissions` (`https://node.dregg.net/*`, `wss://node.dregg.net/*`) —
+  submit signed turns and tail the receipt SSE stream from the user's dregg
+  node endpoint. The `localhost:8420` / `127.0.0.1:8420` entries (http + ws)
+  are **optional** host permissions (`optional_host_permissions` in the Chrome
+  manifest, `optional_permissions` in the Firefox one) — granted at runtime
+  only if the user points the cipherclerk at a local node.
 - content script on `<all_urls>` — expose the page-side `window.dregg`
   provider so any site can *request* (never silently obtain) a signature or a
   capability token; all signing is gated behind an explicit, nonce-bound

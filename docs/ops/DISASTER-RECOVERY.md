@@ -2,9 +2,16 @@
 
 The worst-case runbook: a validator key is gone, a node's store is corrupt, a
 box is lost, or a node's ledger diverged from the committee. For each: what is
-recoverable, what is not, and the procedure — ported from the operated layer's
-recovery runbook (which ran these procedures live) and re-grounded on the
-native layout (`/opt/dregg-data*`, systemd units, `dregg-node` subcommands).
+recoverable, what is not, and the procedure — grounded on the `dregg-node`
+binary and its data dir (written `$DATA_DIR` below).
+
+How a node actually runs: the one AWS edge box runs `dregg-node` as a docker
+compose container (`deploy/aws/README.md`); there is no systemd
+`dregg-node@N`/`dregg-gateway` fleet — that deployment is quarantined fiction
+under `deploy/aws/SUPERSEDED/`. Where a procedure says "stop/start the node",
+on the edge that means `cd /opt/dreggnet && docker compose stop dregg-node` /
+`docker compose up -d --no-deps dregg-node`; for a hand-run node it means the
+process itself.
 
 The load-bearing fact that makes recovery sound: the blocklace is a CRDT — a
 node rejoins by **pulling the finalized DAG from the quorum and unioning it**
@@ -34,8 +41,8 @@ local-only fix.
 1. That validator identity is unrecoverable; the committee still expects its
    signatures.
 2. Generate a fresh identity on the box:
-   `dregg-node gen-validator-key --data-dir /opt/dregg-data` (idempotent;
-   prints the public key — `node/src/main.rs`, `GenValidatorKey`).
+   `dregg-node gen-validator-key --data-dir $DATA_DIR` (idempotent;
+   prints the public key — `node/src/lib.rs:431`, `GenValidatorKey`).
 3. Replace the old member with the new key — two native paths
    (`docs/OPERATOR-ONBOARDING.md`):
    - **live epoch path** (preferred, no downtime):
@@ -59,20 +66,21 @@ This is why [KEY-MANAGEMENT.md](KEY-MANAGEMENT.md) §backup exists.
 ## B. Store corruption / STORE INTEGRITY EVENT
 
 **Symptom.** On restart the node fail-closes (a reconstructed root does not
-match the durably recorded finalized root) and crash-loops under
-`Restart=always`. This is **fail-closed by design** — the node refuses to
-serve a divergent ledger.
+match the durably recorded finalized root) and crash-loops under its
+supervisor's restart policy (the container's `restart:` policy on the edge).
+This is **fail-closed by design** — the node refuses to serve a divergent
+ledger.
 
 **Procedure — wipe the ledger, keep identity + committee, re-sync:**
 
 ```sh
-sudo systemctl stop dregg-node@N          # or dregg-gateway
-sudo cp -a /opt/dregg-data-N /opt/dregg-data-N.bak.$(date +%s)   # BACK UP FIRST
+# stop the node (edge: cd /opt/dreggnet && docker compose stop dregg-node)
+sudo cp -a $DATA_DIR $DATA_DIR.bak.$(date +%s)   # BACK UP FIRST
 # keep node.key + genesis.json; remove ONLY the store files:
-sudo find /opt/dregg-data-N -maxdepth 1 -type f ! -name node.key ! -name genesis.json -delete
-sudo systemctl start dregg-node@N
+sudo find $DATA_DIR -maxdepth 1 -type f ! -name node.key ! -name genesis.json -delete
+# start the node (edge: docker compose up -d --no-deps dregg-node)
 # watch it re-sync from quorum:
-watch -n2 'curl -s http://127.0.0.1:842N/status | jq "{dag_height, peer_count, consensus_live}"'
+watch -n2 'curl -s http://127.0.0.1:8420/status | jq "{dag_height, peer_count, consensus_live}"'
 ```
 
 `dag_height` climbs as the DAG unions in; the node resumes voting when caught
@@ -81,24 +89,29 @@ up. If the *quorum itself* is not live, stop — you are in scenario D.
 ## C. Lost box
 
 With backups of `node.key` + `genesis.json` (KEY-MANAGEMENT §backup):
-provision a new box (`deploy/aws/setup.sh`), restore the two files into the
-data dir, start the unit, let it re-sync (procedure B's watch loop). Without
-a key backup: scenario A (LOST).
+provision a replacement box, build the `dregg-node` image elsewhere and ship
+it (`deploy/aws/README.md` "Updating": never compile on the edge —
+`docker save … | ssh … docker load`), restore the two files into the data
+dir, start the node, let it re-sync (procedure B's watch loop). Without a key
+backup: scenario A (LOST).
 
 ## D. Quorum itself lost (≥ n−⌊2n/3⌋ members' stores gone)
 
 The un-fun one. The finalized DAG survives on ANY member or follower —
 `cp -a` the healthiest surviving store, bring members up one at a time from
 it, and verify they agree (`dag_height`, `federation_id`, and each
-`/api/federations`) BEFORE re-opening the gateway to traffic. If literally no
+`/api/federations`) BEFORE re-opening the edge to traffic. If literally no
 store survives anywhere, the chain restarts from genesis: that is a product
 decision, not an ops procedure — escalate to the humans who own the
 federation.
 
 ## E. Bad deploy (not corruption)
 
-A deploy that fails its health gate is [UPGRADE.md](UPGRADE.md)'s territory:
-`deploy/aws/update-gated.sh rollback` restores the previous release's
-binaries. Note the one thing binary rollback cannot undo: a
-protocol-semantics bump that already rewrote durable state — that is why
-UPGRADE.md stages such bumps on one member first.
+Rollback is image-level: point the compose file back at the previous image
+tag and recreate just the node service (`docker compose up -d --no-deps
+dregg-node`) — the build-elsewhere-ship-the-image flow in
+`deploy/aws/README.md` "Updating". (The systemd-era `update-gated.sh
+rollback` runbook, including its UPGRADE.md, is superseded — successors in
+`docs/SUPERSEDED/README.md`.) Note the one thing an image rollback cannot
+undo: a protocol-semantics bump that already rewrote durable state — stage
+such bumps on one member first.

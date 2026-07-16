@@ -19,14 +19,44 @@ Both are the *same meta-failure*: **the load-bearing checks were only ever exerc
 regime where the bug is invisible.** This audit finds every other place that regime hole exists,
 and designs the harness that closes the perf half.
 
-Scope: **read-only recon + design.** No tests written, no source touched. Ember picks what to build.
+Scope of the audit itself: **recon + design** (no tests were written by the audit). What has since
+been built from it is in the status block below.
+
+---
+
+## STATUS AT HEAD (what this audit's asks became)
+
+- **GAP-1 residual — CLOSED.** `exec-lean/tests/committed_height_effect_families.rs` is the
+  height × effect-family matrix this doc designed: BOTH producers (Rust `TurnExecutor` ==
+  verified-Lean `execute_via_lean`) at `block_height ∈ {0, 1, 7, 1_048_576}` across
+  `SetField`/`Seal`/`Destroy`/`SetPermissions`/`SetVerificationKey`/`MakeSovereign`/cap-introduction,
+  asserting post-state root agreement (the height-0 column is the non-vacuous control).
+- **Part B, finality half — IMPLEMENTED.** `blocklace/tests/perf_growth.rs` is the gating `#[test]`
+  (header: "Design + ground: docs/TEST-GAP-AUDIT.md §B") asserting the machine-independent
+  `SLACK·(N_hi/N_lo)^EXPONENT` ratio bound in `cargo test`. **It refuted one design premise:** the
+  fixed `tau` measures ~O(n²) (inherent to `xsort`'s per-block causal-past computation), NOT the
+  near-linear baseline §B.2 assumed — so the shipped lever gates **sub-cubic**
+  (`FINALITY_EXPONENT = 2.2`, one big-span ratio 100→900) rather than near-linear at 1.2. The O(n³)
+  List-cache regression fails the bound; the present quadratic passes. §B.2's exponent guidance
+  below stands for levers whose healthy baseline IS near-linear (the submit/ledger levers).
+- **Part B, the other levers — IMPLEMENTED.** Three more gating `#[test]`s cite §B:
+  `turn/tests/perf_growth.rs` (the per-turn submit/ledger FLAT lever over M ∈ {100, 1_000, 10_000}
+  cells — bombs #5 pubkey-scan and #9 api-clone), `coord/tests/perf_growth.rs` (the budget
+  anti-replay GROWTH lever, bomb #6, SLACK=4.0/EXPONENT=1.2), and `circuit/tests/perf_growth.rs`
+  (bombs #7 sorted-leaf position scan and #8 lookup-table re-scan).
+- **Still open:** GAP-2 (no seq≠topo lagging-creator lace test), GAP-4 (no live adversary against a
+  running node's differential), and the node-side `node/tests/finality_perf_growth.rs`
+  (`compute_order`) lever of Part B — the one Part-B lever not yet built.
+- **GAP-5:** the matrix test's height-0 control closes the height-gated-vacuity instance; the
+  mutation/non-vacuity pass over the other load-bearing differentials remains a standing
+  discipline, not a shipped sweep.
 
 ---
 
 # PART A — COVERAGE GAPS (ranked by the real bug class each hides)
 
-Inventory (at HEAD): `node/tests` 19 `#[test]`, `blocklace/tests` 25, `blocklace/src` unit 208,
-`exec-lean/tests` 73. The gate is `cargo test --workspace` (`.github/workflows/ci.yml:55`). The
+Inventory (at HEAD): `node/tests` 24 `#[test]`, `blocklace/tests` 28, `blocklace/src` unit 218,
+`exec-lean/tests` 76. The gate is `cargo test --workspace` (`.github/workflows/ci.yml:55`). The
 `perf/` criterion benches are **not** in that gate and **not** in `bench.yml` either (which is
 `workflow_dispatch`-only and lists 7 crates, none of them `dregg-perf`) — see Part B.
 
@@ -50,10 +80,13 @@ Grounded evidence that height 0 was the universal regime:
 - Every other exec-lean differential (`lean_state_producer_widen.rs`, `_coverage.rs`,
   `_differential.rs`, `_denotational_census.rs`, `rust_lean_parity_gauntlet.rs`) constructs ledgers
   with `destroyed_at_height: 0`, `archive_start_height: 0`, `prefix_end_height: 0` and never calls
-  `set_block_height` — i.e. runs at the implicit host height 0. `set_block_height` appears in the
-  *entire* `node/tests` + `exec-lean/tests` tree only inside `faucet_fee_well_divergence.rs`.
+  `set_block_height` — i.e. runs at the implicit host height 0. At audit time `set_block_height`
+  appeared in the *entire* `node/tests` + `exec-lean/tests` tree only inside
+  `faucet_fee_well_divergence.rs`; at HEAD the closure matrix
+  `committed_height_effect_families.rs` calls it too.
 
-**What is still exposed (the residual, ranked within the gap):** the SWAP fix added height>0 goldens
+**The residual the closure had to cover (ranked within the gap; see STATUS for the matrix test that
+covers it):** the SWAP fix added height>0 goldens
 for the *Transfer* family. Every OTHER effect that touches a cell — and therefore gets the
 `committed_height = block_height` stamp folded into its post-root — has **no height>0 differential**:
 `SetField`, `Seal`/`Unseal` (note `lean_state_producer_widen.rs:365` runs `Cell::seal(reason,
@@ -69,7 +102,8 @@ suite cannot see it.
 `rust_lean_divergence_finder.rs` and `lean_state_producer_widen.rs`), asserting Lean-root == Rust-root
 at every height for every effect family. The stamp is where SWAP inverted; height is the axis it
 inverted on. This is the single highest-value gap because it is the *proven* one — it already shipped
-a project-long bug.
+a project-long bug. **Closed at HEAD**: `exec-lean/tests/committed_height_effect_families.rs` is
+exactly this design (see STATUS).
 
 ## GAP-2 (🔴) — single-machine-only finality: the reorg / `PREFIX SHIFTED` / catch-up-churn path is untested
 
@@ -162,7 +196,7 @@ and lift every `if height != 0 { assert }` to run at a height where the branch i
 
 ---
 
-# PART B — PERF-REGRESSION HARNESS DESIGN (design only — do NOT implement)
+# PART B — PERF-REGRESSION HARNESS DESIGN (four levers implemented: `{blocklace,turn,coord,circuit}/tests/perf_growth.rs`; the node-side lever is unbuilt)
 
 **The core defect this closes.** Criterion benches *record* timings; they never *assert*. `bench.yml`
 is `workflow_dispatch`-only, uploads artifacts, and does not even list `dregg-perf`. So today: (a) the
@@ -195,9 +229,15 @@ For consecutive sizes N_lo < N_hi, REQUIRE:
 
     t(N_hi) / t(N_lo)  <  SLACK * (N_hi / N_lo) ^ EXPONENT
 
-  where EXPONENT = 1.2   (tolerates near-linear + log factors; FAILS on quadratic/cubic)
+  where EXPONENT = just above the lever's HEALTHY baseline class
         SLACK    = 3.0    (absorbs constant-factor & scheduler noise at the small end)
 ```
+
+Pick EXPONENT per lever, from the lever's MEASURED healthy baseline — not from hope. 1.2 (tolerates
+near-linear + log factors; fails on quadratic) is right for levers whose fixed path is ~linear (the
+submit/ledger levers). The shipped finality lever measured the fixed `tau` at ~O(n²) (inherent) and
+gates sub-cubic with EXPONENT 2.2 — see the STATUS block. The worked example below uses the original
+near-linear assumption; read it as the method, with the `tau` numbers superseded by measurement.
 
 Worked: for `tau`, N_lo=500, N_hi=2000 (ratio 4): a linear/log path gives `t(2000)/t(500) ≈ 4^1.2 ≈
 5.3`, times SLACK → threshold ≈ **16×**. The old O(n²) path gives `4^2 = 16×` → **fails** (16 ≮ 16,
@@ -220,8 +260,11 @@ Robustness rules the harness must follow (or it self-flakes):
 
 **A `#[test]`, not a criterion bench** — because it must **fail `cargo test --workspace`** to gate CI,
 which is the whole point (criterion can't fail a build and isn't in the gate). Concretely:
-`blocklace/tests/perf_growth.rs` and `node/tests/finality_perf_growth.rs`, each a `#[test]` that runs
-the ladder in-process and asserts the ratio bound. Keep the sizes modest (N=2000, not 100k) so the
+`blocklace/tests/perf_growth.rs` (finality), `turn/tests/perf_growth.rs` (submit/ledger),
+`coord/tests/perf_growth.rs`, and `circuit/tests/perf_growth.rs` — all existing — plus
+`node/tests/finality_perf_growth.rs` (not yet built — the node-side `compute_order` lever),
+each a `#[test]` that runs the ladder in-process and
+asserts the ratio bound. Keep the sizes modest (N=2000, not 100k) so the
 test adds seconds, not minutes, to the suite — the ratio catches the asymptotic without needing huge N.
 Criterion benches stay for *tracking absolute numbers* over time (and `bench.yml` should be extended to
 run `dregg-perf` and the ratio check made available as `cargo test -p dregg-perf-growth`), but the
@@ -253,20 +296,27 @@ would have made this entire class impossible to hide.
 
 ## Summary — top gaps
 
-1. **GAP-1 height=0-only** (🔴 proven — already shipped a project-long bug): the whole host-column /
-   block-height dimension is untested off zero for every effect family except the Transfer goldens the
-   SWAP fix added. **Parametrize the producer differential over `block_height`.**
-2. **GAP-2 single-machine-only finality** (🔴): the seq≠topo catch-up lace — where the `rust_len=0`
-   divergence and `PREFIX SHIFTED` live — is built by no test. **Add a lagging-creator lace to the
-   tau differential.**
-3. **GAP-3 small-N-only** (🟠): nothing exercises `tau`/`compute_order`/executor at large N; the one
-   N-sweeping bench doesn't touch them. **Part B harness + a large-N correctness smoke.**
-4. **GAP-4 no live adversary** (🟠): equivocators are covered pure but never submitted to a *running*
-   node's differential.
+1. **GAP-1 height=0-only** (🔴 proven — it shipped a project-long bug): **CLOSED** by the
+   height × effect-family matrix, `exec-lean/tests/committed_height_effect_families.rs`.
+2. **GAP-2 single-machine-only finality** (🔴 OPEN): the seq≠topo catch-up lace — where the
+   `rust_len=0` divergence and `PREFIX SHIFTED` live — is built by no test. **Add a lagging-creator
+   lace to the tau differential.**
+3. **GAP-3 small-N-only** (🟠 partially closed): the finality lever runs `tau` at N up to 900 blocks
+   under a gating ratio bound (`blocklace/tests/perf_growth.rs`) and the executor lever times
+   `TurnExecutor::execute` against ledgers of 100/1_000/10_000 cells under a flat bound
+   (`turn/tests/perf_growth.rs`); the `compute_order` (verified-gate) lever at large N remains
+   unbuilt.
+4. **GAP-4 no live adversary** (🟠 OPEN): equivocators are covered pure but never submitted to a
+   *running* node's differential.
 5. **GAP-5 vacuous guards** (🟡): assertions gated behind `height != 0` / `participants > 1` the
-   default config never satisfies. **Mutation/non-vacuity pass.**
+   default config never satisfies. The matrix test's height-0 control closes the height instance;
+   the mutation/non-vacuity pass stays a standing discipline.
 
 The perf harness: a `#[test]` (not a criterion bench, so it *gates* `cargo test`) asserting the
-machine-independent ratio bound `t(N_hi)/t(N_lo) < 3.0·(N_hi/N_lo)^1.2` on both finality (N blocks)
-and submit (M cells) ladders — catching 8 of the 9 bombs by ratio/timeout; the 9th (SWAP) is a
-correctness divergence closed by GAP-1.
+machine-independent ratio bound `t(N_hi)/t(N_lo) < SLACK·(N_hi/N_lo)^EXPONENT`, with EXPONENT set
+just above each lever's measured healthy class. Four levers ship: `blocklace/tests/perf_growth.rs`
+(finality — sub-cubic gate, EXPONENT 2.2 over the measured ~quadratic `tau`),
+`turn/tests/perf_growth.rs` (submit — FLAT over the M-cell ladder, FLAT_SLACK=6),
+`coord/tests/perf_growth.rs` (budget anti-replay), and `circuit/tests/perf_growth.rs` (sorted-leaf
+scan + lookup-table re-scan); the node-side lever is designed here and not yet built. The 9th bomb
+(SWAP) is a correctness divergence, closed by GAP-1's matrix.

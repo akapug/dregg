@@ -163,18 +163,27 @@ the current shape**" understates it: **no restatement of the win relation can es
 (`msisHardQuant_top_false_of_compressing`; `mlweHardQuant_top_false` and `dlHardQuant_top_false`
 unconditionally — the MLWE secret and the DL exponent are *fields of the family*).
 
-**The escape is `Eff`, and only `Eff`** — the standard form's "for every EFFICIENT adversary". And here is
-the honest answer this lane owes: **this tree cannot state it.** There is no cost model. `Eff := Computable`
-does not restrict anything (`solvableIsAFiniteSearch`: every answer space is a `Fintype`, so brute force is
-a total computable function — what disqualifies it is that the search is astronomically large, and "large"
-is a statement about COST); Mathlib has no polynomial-time model over an arbitrary carrier; stating one
-needs a deep embedding of the adversary (SSProve/EasyCrypt/FCF each carry one, this tree does not).
+**The escape is `Eff`, and only `Eff`** — the standard form's "for every EFFICIENT adversary". `Eff :=
+Computable` does not restrict anything (`solvableIsAFiniteSearch`: every answer space is a `Fintype`, so
+brute force is a total computable function — what disqualifies it is that the search is astronomically
+large, and "large" is a statement about COST); Mathlib has no polynomial-time model over an arbitrary
+carrier; stating one needs a deep embedding of the adversary (SSProve/EasyCrypt/FCF each carry one).
 Inventing a shallow imitation would have been the fourth costume.
 
 So `Eff` is a **parameter**, with both poles PROVED beside it — `⊤` makes every floor false at deployed
 parameters, `⊥` makes it vacuous (`hard_bot_vacuous`) — so a reader can price any instantiation exactly.
-**Named residual: a cost model.** That is now the whole gap between these floors and cryptographic
-assumptions, and it is one object instead of five names and a docstring.
+
+**The cost-model residual, PARTIALLY DISCHARGED — query counting is in-tree.** For oracle/hash-shaped
+floors the tree now states a genuine `Eff`: `Dregg2.Crypto.{RomOracle, RomCounting, RomQueryFloor}`
+(imported with annotations at `metatheory/Dregg2.lean:705-707`) build a query-counting adversary class —
+`OracleComp` decision trees with `QueryBounded Q` bounding the calls along every path, lazy sampling as
+pure finite counting (no measure theory), and `romCollision_hard` proving the **unconditional** birthday
+bound `(Q² + 1)/|R|`: a floor that is PROVED, not assumed. Both escapes are proved beside it — the class
+is not `⊤` in disguise (the `Classical.choice` adversary is excluded) and not `⊥` (a genuine query-using
+member is exhibited); `RomQueryDial` proves the budget is a load-bearing dial, not a costume. **Named
+residual (narrowed): a general PPT cost model.** Query counting prices hash/oracle adversaries; it
+constrains lattice adversaries not at all, so the gap between the lattice floors and cryptographic
+assumptions remains that one object — now one object instead of five names and a docstring.
 
 **What the repair buys, stated exactly** (it is not nothing, and it is not a floor):
 1. the problem is IN the statement (`msisGame_wins_iff` unfolds `wins` to `IsMSISSolution` by `Iff.rfl`);

@@ -1,8 +1,11 @@
 # DREGG QUIET UPGRADE — building the new world atop the old
 
-*Spec for the content-script layer that scans any page for dregg-things in plaintext and quietly
-upgrades them into live, verified, hyperinteractive `<dregg-*>` components. Companion to
-`DREGG-WEB-SPEC.md` (the element/capability substrate).*
+*Spec and governing rules for the content-script layer that scans any page for dregg-things in
+plaintext and quietly upgrades them into live, verified, hyperinteractive `<dregg-*>` components.
+Companion to `DREGG-WEB-SPEC.md` (the element/capability substrate). The layer is built:
+`extension/src/detect.ts` (the detector, §2), `extension/src/port.ts` + `extension/src/netlayer.ts`
+(the port + resolver, §3), `extension/src/elements/dregg-poll.ts` (the thin view). §§1–7 are the
+governing rules the code cites; §9 states build status.*
 
 ---
 
@@ -31,9 +34,9 @@ A dregg-thing must survive: plaintext, 280 chars, copy/paste, and link-shortener
 **Canonical form:** `dregg://<kind>/<content-addr>[?q]` — e.g. `dregg://poll/b3_7f2a…`
 **Mirror form (REQUIRED for graceful degradation):** `https://dregg.net/d/<kind>/<content-addr>[?q]`
 
-The mirror form is a *clickable link* for anyone without the extension (it resolves to a
-server-rendered, still-verifiable view — trust tier `server`), **and** it is detectable by the
-scanner as the same dregg-thing. One string, two readings: **inert-but-useful without the agent,
+The mirror form is a *clickable link* for anyone without the extension (its target is the
+server-rendered, still-verifiable tier-`server` view — a named seam, not yet built; §9 item 4),
+**and** it is detectable by the scanner as the same dregg-thing. One string, two readings: **inert-but-useful without the agent,
 live-and-verified with it.** Posters SHOULD paste the mirror form; the scanner accepts both.
 
 Constraints:
@@ -145,25 +148,42 @@ asserted claim looked identical to a true one.
 | nothing | a clickable `https://dregg.net/d/…` mirror link → server-rendered verifiable view | `server` |
 | link broken/mangled | plaintext text; nothing pretends to be verified | — |
 
-## 8. Why the poll is the right first artifact
+## 8. Why the poll is the first artifact — and what stands beside it
 
-The sibling interrogation judged the `ViewNode` render IR a **PROTOTYPE**: `u64`-only values,
-`{turn, i64}` affordances, no node identity. That vocabulary expresses **exactly one thing well:
-buttons + integer args + numeric binds** — which *is* a poll. So `<dregg-poll>` is dead in the
-current substrate's competence and ships now. `<dregg-doc>` / an editor is **not** expressible until
-the document IR is re-founded (separate spec). Ship the poll; re-found the document.
+The `ViewNode` render vocabulary's core competence — buttons + integer args + numeric binds — *is*
+a poll, so `<dregg-poll>` is the smallest complete artifact of the split and ships first. The
+catalog does not stop there: `<dregg-doc>` (`extension/src/elements/dregg-doc.ts`) renders a
+verifiable document, holds a first-class conflict as BOTH alternatives side by side, and publishes
+a resolution as a real verified turn through the background DocEngine; `<dregg-story>`,
+`<dregg-descent>`, `<dregg-sprite>`, and the composition pair `<dregg-embed>`/`<dregg-transclude>`
+register from the same content script (`extension/src/content.ts`). Note the delivery split: the
+plaintext *detector* pattern covers `poll` only (`detect.ts`); the other elements upgrade
+author-placed tags, not scanned prose.
 
-## 9. Build order
+## 9. Build status
 
-1. `<dregg-poll>` as a **thin-view element** (closed shadow, port to background, fallback light DOM,
-   trust badge, fail-closed) over the committed `PollWorld` (`wasm/src/bindings_card.rs`).
-2. The **background port** (netlayer `resolve` + `render`/`fire` over the wasm world + `verify`),
-   reusing the extension's existing `window.dregg` provider plumbing and `confirm-intent` for `sign`.
-3. The **detector content script** (MutationObserver, canonical+mirror patterns, idempotent, per-origin
-   opt-in, t.co adapter) — first target any page, tested on a static fixture, then a real timeline.
-4. The **mirror-form server view** (`dregg.net/d/…`, tier `server`) so the no-extension path is real.
-5. Firefox-first WebExtension packaging (full `webRequest` + `protocol_handlers`), Vivaldi/Chromium MV3.
+1. **BUILT — `<dregg-poll>` the thin-view element** (`extension/src/elements/dregg-poll.ts`):
+   closed shadow root held in a module-private `WeakMap` (never on the instance), light-DOM
+   fallback, shadow-scoped click wire, honest trust badge, fail-closed render — over the committed
+   `PollWorld` (`wasm/src/bindings_card.rs:1238`, the real `collective-choice` engine's shape as
+   an in-tab world; a second click is a genuine double-vote its nullifier refuses).
+2. **BUILT — the background port + resolver** (`extension/src/port.ts`:
+   `resolve`/`render`/`fire`/`verify`, every response tiered, custody routed through
+   `confirm-intent`; `extension/src/netlayer.ts`: the real resolver — `blake3(content) == addr`
+   gate, serve-receipt membership, receipt-stream root recompute, committee-anchored quorum, each
+   fail-closed). The background wires `netlayerResolveObject` when a node URL is configured;
+   `defaultResolveObject` (an FNV addr→shape derivation in `port.ts`) is the fixture/test
+   stand-in only.
+3. **BUILT — the detector** (`extension/src/detect.ts`): MutationObserver, canonical+mirror
+   patterns, idempotent (`data-dregg-upgraded`, keyed by content-addr), per-origin default-deny
+   (`dregg_upgrade_origins`), shortener adapter as the only platform-specific shim.
+4. **NAMED SEAM — the mirror-form server view** (`dregg.net/d/…`, tier `server`) is not built:
+   the mirror string parses and upgrades under the extension, but the no-extension click path has
+   no server renderer, and no public devnet currently serves one.
+5. **BUILT — packaging**: MV3 manifests for Chromium (`extension/manifest.json`) and Firefox
+   (`extension/manifest-firefox.json`).
 
-*Open: the exact canonical URI grammar + kind registry; whether closed-shadow blocks our own devtools
-panel (likely: expose a privileged inspection channel through the background, not the page); rate/
-padding policy for netlayer privacy.*
+*Open: whether closed-shadow blocks our own devtools panel (likely: expose a privileged inspection
+channel through the background, not the page); rate/padding policy for netlayer privacy. The
+canonical URI grammar is pinned in `port.ts` (`dregg://<kind>/<addr>`, addr = `b3_<hex>`); the
+detector's kind registry covers `poll`.*

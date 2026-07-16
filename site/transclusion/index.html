@@ -297,14 +297,14 @@
       beside <a href="../dregg-works/">the dregg.works verify badge</a>) fetches the source document's bytes
       from any untrusted host, hashes them <em>in the visitor's browser</em>, and matches the hash against
       the on-chain commitment fetched from a node the visitor can point anywhere. Only a match paints the
-      span verified. A mismatch paints a refusal; an unreachable node leaves the darkened placeholder.
-      A failed check is never a pass.
+      span verified. A mismatch paints a refusal; an unreachable — or unconfigured — node leaves the
+      darkened placeholder. A failed check is never a pass.
     </p>
 <pre class="snippet">&lt;script src="https://&lt;your-host&gt;/transclude.js"&gt;&lt;/script&gt;
 
 &lt;blockquote <span class="a">data-dregg</span>="dregg://&lt;64-hex cell id&gt;<span class="a">#b=120-240</span>"
             <span class="a">cite</span>="https://any-host.example/charter.html"
-            <span class="a">data-node</span>="https://devnet.dregg.fg-goose.online"&gt;
+            <span class="a">data-node</span>="https://&lt;a-node-api-base&gt;"&gt;
   Your fallback text — shown darkened until the bytes verify,
   and NEVER replaced by bytes that failed the check.
 &lt;/blockquote&gt;</pre>
@@ -312,7 +312,11 @@
       <code>data-dregg</code> names the source cell (the fragment <code>#b=start-end</code> selects a byte
       range of the committed document); <code>cite</code> is where the untrusted bytes come from;
       <code>data-node</code> picks which node answers for the on-chain commitment — the visitor's choice,
-      cross-checkable. The host merely ships bytes; it is never asked to be believed.
+      cross-checkable, and deliberately without a built-in default: no public devnet is currently
+      anchored, so a quote with no configured node stays a darkened placeholder saying exactly that —
+      verification against a live chain is unavailable until <code>data-node</code> (or the page-wide
+      <code>meta name="dregg:node"</code> / <code>window.__DREGG__.node</code>) names a reachable node.
+      The host merely ships bytes; it is never asked to be believed.
     </p>
   </section>
 

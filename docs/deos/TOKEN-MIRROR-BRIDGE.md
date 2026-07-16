@@ -136,15 +136,39 @@ a dev-ceremony trusted setup; residuals in `WRAP-NATIVE-HASH-DECISION.md`
 §CURRENT STATE), but the *inbound* zk-proof-of-lock for Solana is **not**
 reusable from the ETH settlement path.
 
-**The honest gaps that remain** (the wire-format adapter layer this paragraph
-used to name is now built — real vote-`Transaction` parsing, bank-state-derived
-stake tables with rotation, the real 16-ary accounts-hash format, the anchored
-PoH policy; `bridge/src/solana_wire.rs` + `solana_provenance.rs`): the
-governance-pinned anchor itself is the irreducible operator-configured trust
-root; the lock-record account layout is a deploy-time choice; bank-hash
-version extras (EAH slots, lt-hash) are unmodeled; and the Option-B succinct
-wrapper (O(1) on-dregg verify) remains the named optimization. The
-`LockProofTrust` dial tells the caller exactly which level a verification
+**The honest gaps that remain on the trustless path.** The wire-format adapter
+layer is built (real vote-`Transaction` parsing, bank-state-derived stake tables
+with rotation, the real 16-ary accounts-hash format, the anchored PoH policy;
+`bridge/src/solana_wire.rs` + `solana_provenance.rs`). What stays open:
+
+- the governance-pinned anchor itself is the irreducible operator-configured
+  trust root;
+- the lock-record account layout is a deploy-time choice;
+- bank-hash version extras (EAH slots, lt-hash) are unmodeled;
+- the Option-B succinct wrapper (O(1) on-dregg verify) is the named
+  optimization;
+
+and three **open soundness suspects** on the consensus path itself (named and
+unresolved at HEAD):
+
+1. **Rotation counts votes without authorized-voter binding.** `rotate`
+   (`bridge/src/solana_provenance.rs:706`) attests the next epoch's bank state
+   with the *plain* `verify_supermajority` over the trusted table — its own
+   doc-comment says so — while the anchored lock verification tallies with the
+   authorized-voter-bound check. A rotation vote signed by a key other than the
+   vote account's on-chain authorized voter still counts toward the ≥ 2/3.
+2. **Stake-table derivation proves membership, never completeness.**
+   `derive_stake_table` (`solana_provenance.rs:457`) verifies each *supplied*
+   stake account's inclusion in the accounts hash, but nothing forces the
+   supplied set to be the complete delegation set — a rotation that omits stake
+   accounts shrinks the ≥ 2/3 denominator for every later epoch.
+3. **"Finalized" is documented; exact-slot supermajority is checked.**
+   `ConsensusEvidence.slot` is doc-labeled the slot the lock was *finalized* in
+   (`bridge/src/solana_trustless.rs:73`), but the check is a supermajority of
+   votes for that exact slot's bank hash — supermajority-voted is a weaker claim
+   than rooted/finalized.
+
+The `LockProofTrust` dial tells the caller exactly which level a verification
 achieved, so the structural check (`StructureOnly`) can never be mistaken for
 the consensus check.
 
@@ -189,15 +213,16 @@ flows through the one verified value rail.
   governance-pinned `WeakSubjectivityAnchor`; caller-supplied stake tables are
   test-gated — see the ⚠ note above) (`bridge/src/solana_trustless.rs`,
   `bridge/src/solana_consensus.rs`; design `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`).
-- **Now built (was a named gap):** the Solana-side lock-vault SPL program —
-  `solana-lock/` (`dregg-solana-lock`: `processor.rs`, `state.rs`, `instruction.rs`,
+  The three open soundness suspects above (rotation voter-binding, stake-table
+  completeness, finalized-vs-voted) qualify this bullet.
+- **Real:** the Solana-side lock-vault SPL program — `solana-lock/`
+  (`dregg-solana-lock`: `processor.rs`, `state.rs`, `instruction.rs`,
   `attestation.rs`, `record.rs`, with `tests/lock_flow.rs` / `tests/unlock_flow.rs`).
-  Earlier drafts of this doc listed it as named-not-built; it is a real program now.
 - **Not built (named gaps):** the Option-B succinct zk-proof-of-lock route
-  (the relayer consensus AIR — the wire-format adapter layer this bullet used
-  to name is now built: `solana_wire.rs` real vote-`Transaction` parsing,
-  `solana_provenance.rs` bank-state-derived stake tables + rotation, the real
-  16-ary accounts-hash format, the anchored PoH policy);
+  (the relayer consensus AIR; the wire-format adapter layer under it is built —
+  `solana_wire.rs` real vote-`Transaction` parsing, `solana_provenance.rs`
+  bank-state-derived stake tables + rotation, the real 16-ary accounts-hash
+  format, the anchored PoH policy);
   the executor wiring that grants the mirror cell `EFFECT_MINT` authority
   over its own issuer well in a live `World` (the effect is produced here;
   minting it requires the mirror cell to hold mint authority — see

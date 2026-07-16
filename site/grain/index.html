@@ -7,7 +7,8 @@
   <meta name="description" content="Rent a confined agent grain, drive it, watch its transcript stream, and verify it — trust no host — from your browser, over the agent-platform HTTP API.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <!-- The shared site stylesheet, when this page is served from the site tree. When
-       served same-origin by the agent-platform bin (GET /), the link 404s and the
+       served same-origin by the agent-platform bin (GET /dev, also /console and
+       /index.html — GET / is the human demo, play.html), the link 404s and the
        inline tokens+styles below carry the whole look — the page is self-contained. -->
   <link rel="stylesheet" href="../assets/style.css">
   <style>
@@ -216,13 +217,14 @@
   <div class="footer">
     Served by <span class="mono">agent-platform</span>. Start it with
     <code>cargo run -p agent-platform -- 127.0.0.1:8903</code> and open
-    <code>http://127.0.0.1:8903/</code>. Live drive: rebuild
+    <code>http://127.0.0.1:8903/dev</code> for this console
+    (<code>/</code> serves the human demo). Live drive: rebuild
     <code>--features live-brain</code> and set an LLM key.
   </div>
 </div>
 
 <script>
-  // Same-origin by default (served by the bin at GET /); editable for a cross-origin
+  // Same-origin by default (served by the bin at GET /dev); editable for a cross-origin
   // dev server. When opened from file://, fall back to the bin's default bind.
   const el = (id) => document.getElementById(id);
   el('base').value = location.origin && location.origin.startsWith('http')
@@ -420,7 +422,7 @@
   const GRAIN_TOOLS = [
     { type:'function', function:{ name:'fs_write', description:'Write a file under the grain workdir.',
       parameters:{ type:'object', properties:{ path:{type:'string'}, content:{type:'string'} }, required:['path','content'] } } },
-    { type:'function', function:{ name:'fs_read', description:'Read a file under the grain workdir. (The host returns a receipt, not the file body.)',
+    { type:'function', function:{ name:'fs_read', description:'Read a file under the grain workdir. (The act response carries the clipped file content in its output field.)',
       parameters:{ type:'object', properties:{ path:{type:'string'} }, required:['path'] } } },
     { type:'function', function:{ name:'list_dir', description:'List a directory under the grain workdir.',
       parameters:{ type:'object', properties:{ path:{type:'string'} }, required:['path'] } } },

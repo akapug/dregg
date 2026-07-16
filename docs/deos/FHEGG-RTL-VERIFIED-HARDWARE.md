@@ -14,8 +14,11 @@ accelerator.*
 ## 0. Five-line summary
 
 1. **The accelerator target is the FHE fold (the Tier-0 dark clear), not the STARK** — settled in
-   `FHEGG-FPGA-ACCELERATOR.md`. Its soundness lives in a *small* datapath (the mint-safe
-   conservation gate + the crossing comparator); the *bulk* is the NTT/PBS pipeline.
+   `FHEGG-FPGA-ACCELERATOR.md`. Its soundness lives in a *small* datapath — the mint-safe
+   conservation gate; the *bulk* is the NTT/PBS pipeline. The crossing comparator is NOT in the
+   soundness TCB: under verify-not-find the STARK re-proves the crossing (the Cert-F AIRs,
+   `circuit-prove/src/cert_f_air.rs`), so a comparator bug yields a wrong `p*` that cannot receive
+   a valid proof — untrusted search, a liveness fault (`FHEGG-CODEX-ROUND4.md` §B).
 2. **The verified-RTL landscape is real but Coq-centric.** Kôika, Kami, and Cava/SilverOak give
    machine-checked hardware **in Coq**; Hardcaml (OCaml), Clash (Haskell), and SpinalHDL/Chisel
    (Scala) give productive, type-safe RTL with *lighter* assurance (SAT property-checking or types

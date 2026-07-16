@@ -8,7 +8,10 @@ tractability. It is a what-is + where-next map; verify each citation against the
 The convention throughout: **carriers are hypotheses, never axioms.** The standard cryptographic
 floor (FRI/STARK soundness, Poseidon2 collision-resistance) and the standard distributed floor
 (honest majority `n > 3f`, post-GST delivery) are named structure fields or theorem premises, so
-every keystone stays `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
+every keystone stays `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). One
+sharp edge of that convention: `#assert_axioms` never audits a hypothesis's CONTENT — the
+cryptographic-floors section below classifies each floor's, because several Boolean floor
+`Prop`s are doc-marked vacuous or trivial at deployed parameters.
 
 ## What IS a verified apex today
 
@@ -38,7 +41,7 @@ every keystone stays `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quo
   the finalized total order is a deterministic function of (lace, participants). This models the
   node's REAL `tau` rule (`computeRounds` / `findAllFinalLeaders` / `tauOrder`) executably, and
   ships a differential golden vector the Rust must reproduce.
-- **`no_conflicting_finalized_history`** (`Dregg2/Consensus/Safety.lean` — **NEW**) — the
+- **`no_conflicting_finalized_history`** (`Dregg2/Consensus/Safety.lean:268`) — the
   CHAIN-LEVEL apex: two honest nodes holding DIFFERENT laces cannot finalize conflicting
   histories. See the next section.
 
@@ -60,29 +63,48 @@ every keystone stays `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quo
   noninterference / sealed-value integrity surface. Integrity is proven; end-to-end
   *confidentiality* of the live PIR / sealed / private-voting paths is NOT yet an apex (below).
 
-### Cryptographic floors — the hybrid perimeter and the DKG (SETTLED 2026-07-09)
-The convention holds sharpest here: **the hardness floors are named `Prop` assumptions
-(`SchnorrDLHard`, `MSISHard`, `MLWESearchHard`), never axioms and never proved.** Each
-keystone reduces a scheme TO one of these, and is `#assert_axioms`/`#assert_all_clean`.
-- **`hybrid_secure_if_either_floor`** (`Dregg2/Crypto/HybridCombiner.lean:213`) — the
+### Cryptographic floors — the hybrid perimeter and the DKG
+The reduction keystones here are real Lean theorems, each `#assert_axioms`/`#assert_all_clean`.
+The floors they bottom out in need their honest classification first, because the tree's own
+doc-marks refute the older framing ("named `Prop` assumptions, never axioms and never proved"
+— true as far as it goes, but `#assert_axioms` never audits a hypothesis's CONTENT):
+
+**The Boolean existence-shaped floors are doc-marked broken at deployment.** `MSISHard` and
+`MLWESearchHard` (`Dregg2/Crypto/Lattice.lean:64–87`) carry the in-tree mark "⚠ BROKEN /
+VACUOUS AT DEPLOYMENT — an EXISTENCE-REFUTATION, not a hardness statement": at compressing
+(real) parameters a short kernel vector always exists by pigeonhole, and an MLWE secret exists
+by construction (it IS the key), so both `Prop`s are FALSE there and everything conditioned on
+them is vacuously true. `SchnorrDLHard` (`SchnorrCurveField.lean:425–432`) is doc-marked
+TRIVIALLY TRUE at finite parameters (the scalar map is non-injective, so no total solver
+exists). A reduction "TO one of these" transports no hardness as named. **The live floor story
+is the game-shaped re-grounding**: `Dregg2/Crypto/FloorGames.lean` restates the floors as
+`Hard` at five distinct `Game`s (the problem is IN the win relation, so a wrong-floor proof no
+longer typechecks), plus the ROM query-counting floor — with the one named residual that the
+efficient-adversary class `Eff` has no cost model in this tree and is carried as a labelled
+obligation at every discharge site. Full sweep: `docs/deos/VACUITY-SWEEP.md` and
+`Dregg2/Crypto/HardQuantVacuity.lean`.
+
+The reduction keystones, read with that classification:
+- **`hybrid_secure_if_either_floor`** (`Dregg2/Crypto/HybridCombiner.lean:232`) — the
   `ed25519 × ML-DSA` hybrid signature is EUF-CMA-unforgeable if EITHER the discrete-log
-  floor `SchnorrDLHard` OR the Module-SIS floor `MSISHard` holds ("hybrid, not PQ-only";
-  commit `a875a9104`). The classical leg is discharged to DL for real
-  (`SchnorrEufCma.schnorr_euf_cma_reduces_to_dl`, `:278`, commit `db1214a9f`); the PQ leg
-  to MSIS through the proved SelfTargetMSIS extraction (`:194`).
-- **`hybrid_kem_ind_cca_if_either`** (`HybridCombiner.lean:406`) + **`ml_kem_ind_cca_
-  reduces_to_mlwe`** (`MlKemIndCca.lean:312`, commit `38e83fac8`) — the `X25519 × ML-KEM`
-  X-Wing KEM is IND-CCA if EITHER component is, under an explicit dual-PRF; the PQ leg
-  reduces to `MLWESearchHard` + the named QROM idealisation (full probabilistic QROM-FO
-  advantage bound honestly open).
-- **`chain_unforgeable_under_hybrid_floor`** (`CapabilityChain.lean:237`, commit
-  `cc99ab01c`) — biscuit/credential attenuation soundness rides the same hybrid floor:
+  floor `SchnorrDLHard` OR the Module-SIS floor `MSISHard` holds ("hybrid, not PQ-only").
+  The classical leg is discharged to DL for real
+  (`SchnorrEufCma.schnorr_euf_cma_reduces_to_dl`, `:278`, against the adversary-shaped
+  `SchnorrDLHardF`); the PQ leg to MSIS through the proved SelfTargetMSIS extraction
+  (`HermineSelfTargetMSIS.no_forgery_under_msis_selftarget`).
+- **`hybrid_kem_ind_cca_if_either`** (`HybridCombiner.lean:425`) + **`ml_kem_ind_cca_
+  reduces_to_mlwe`** (`MlKemIndCca.lean:312`) — the `X25519 × ML-KEM` X-Wing KEM is
+  IND-CCA if EITHER component is, under an explicit dual-PRF; the PQ leg reduces to
+  `MLWESearchHard` + the named QROM idealisation (full probabilistic QROM-FO advantage
+  bound honestly open).
+- **`chain_unforgeable_under_hybrid_floor`** (`CapabilityChain.lean:237`) —
+  biscuit/credential attenuation soundness rides the same hybrid floor:
   a forged accepting chain forces a signature forgery, so soundness reduces to
   `SchnorrDLHard ∨ MSISHard`; `chain_only_attenuates` (`:210`) proves offline delegation
   only shrinks authority.
-- **The joint-Feldman DKG apex** (`Dregg2/Crypto/HermineDkg.lean`, commit `f59fab338`) —
-  Pedersen's joint-Feldman DKG (NO trusted dealer) modelled in Lean, closing the gap
-  where `crypto-hermine/src/dkg.rs` ran ahead of the metatheory. Three theorems:
+- **The joint-Feldman DKG apex** (`Dregg2/Crypto/HermineDkg.lean`) —
+  Pedersen's joint-Feldman DKG (NO trusted dealer) modelled in Lean, matching
+  `crypto-hermine/src/dkg.rs`. Three theorems:
   correctness `dkg_group_key_eq` (`:105`, the broadcasts assemble to `A·s`); Feldman
   soundness `dkg_share_verify_sound` (`:141`, a passing share IS the committed
   evaluation, so an off-polynomial cheater is caught); secrecy `dkg_secrecy_reduces`
@@ -90,16 +112,17 @@ keystone reduces a scheme TO one of these, and is `#assert_axioms`/`#assert_all_
   (`HermineLossiness` pigeonhole + `ShamirPrivacy.shamir_t_privacy`), with the
   computational hiding of the short secret named as the separate MLWE/MSIS floor, not
   re-asserted. `#assert_axioms`-clean.
-- **`sortition_{unique,fair,unpredictable}`** (`SortitionGame.lean:71,124,138`, commit
-  `5baae1f25`) — VRF leader-sortition is fair + unpredictable + unique, each derived
+- **`sortition_{unique,fair,unpredictable}`** (`SortitionGame.lean:71,124,138`) —
+  VRF leader-sortition is fair + unpredictable + unique, each derived
   from the VRF's own `UniqueOutputs` / `Pseudorandom` properties (no new carrier).
 
-The one honest boundary carried through all of these: the game predicates (EUF-CMA /
-IND-CCA / Pseudorandom) are modelled at the Prop level, and the dual-PRF / QROM are
-named idealisations — disclosed in each file, never a hidden lattice carrier. See
+What the reductions genuinely establish: the SHAPE of each argument (a forgery yields a
+solver; a distinguisher yields a distinguisher) and the pairwise wiring — with the hardness
+content living in the game-shaped floors above, not the Boolean names. The dual-PRF / QROM
+are named idealisations, disclosed in each file, never a hidden lattice carrier. See
 `docs/PQ-CRYPTO.md` for the full reduction chain and the laundering audit.
 
-## The new chain-safety apex (`Dregg2/Consensus/Safety.lean`)
+## The chain-safety apex (`Dregg2/Consensus/Safety.lean`)
 
 **The gap it closes.** Every consensus-safety theorem above this module fixes ONE lace or ONE
 state. None states the property a light client's CHAIN-CHOICE rests on: that two honest nodes,

@@ -11,11 +11,12 @@
 > Hermes session all share *one* substrate and the moldable inspector can open any
 > of them as cells.
 
-Today each app renders in deos but its **state lives in app memory**: the editor's
-rope buffer (`deos-zed/src/editor.rs:65` — `Editor` holds the rope `input`), the
-terminal's alacritty grid (`deos-terminal/src/model.rs:204` — `Terminal` owns an
-`Arc<FairMutex<Term>>`), the chat timeline (`deos-matrix`), the Hermes
-tool-call stream. The unlock is to make each app's *durable core* a cell and each
+The apps stand at different depths. The terminal's alacritty grid
+(`deos-terminal/src/model.rs:204` — `Terminal` owns an `Arc<FairMutex<Term>>`) and
+the chat timeline (`deos-matrix`) live in app memory; the editor's durable core is
+a `dregg_doc::RopeDoc` patch history (`deos-zed/src/editor.rs:80`), and the Hermes
+tool-call stream is receipted turns. The unlock, uniform across all four, is to
+make each app's *durable core* a cell and each
 *mutation* a turn, leaving the *ephemeral view-state* (scroll offset, cursor blink,
 selection, syntax-highlight cache) where it belongs — in app memory. The seams that
 point here already exist; this doc designs the mappings against the real machinery
@@ -35,9 +36,9 @@ The four properties an app inherits *for free* by becoming a cell, each grounded
 | property | machinery | file:line |
 |---|---|---|
 | **a stateful object** | `Cell { state, capabilities, program, lifecycle, permissions, … }`; `CellState` is 16 user fields + an ext-field map (`fields_root`) + 8 kernel side-table roots (`system_roots`) + a signed balance | `cell/src/cell.rs:1-9`, `cell/src/state.rs:100-120`, `state.rs:31-67` (`N_SYSTEM_ROOTS` / `system_root::*`) |
-| **cap-gated mutation** | a mutation is a `Turn` the executor admits only if `required ⊆ held`; the c-list is `CapabilitySet`, each `CapabilityRef` carries `permissions: AuthRequired`, facet mask, expiry, R7 freshness epoch | `cell/src/capability.rs:43-90`, `turn/src/executor/execute.rs:152` (`execute(turn, ledger) -> TurnResult`) |
+| **cap-gated mutation** | a mutation is a `Turn` the executor admits only if `required ⊆ held`; the c-list is `CapabilitySet`, each `CapabilityRef` carries `permissions: AuthRequired`, facet mask, expiry, R7 freshness epoch | `cell/src/capability.rs:43-90`, `turn/src/executor/execute.rs:210` (`execute(turn, ledger) -> TurnResult`) |
 | **conservation (Σδ=0)** | the signed-`i64` balance well + the issuer-cell-carries-−supply discipline; every turn conserves value | `cell/src/state.rs:111-120` |
-| **provenance / time-travel** | every committed turn leaves a `TurnReceipt`; `History::replay_to` / `fork_at` folds the chain; the witness cursor is a consistent cut | `turn/src/collapse.rs:14-21`, `deos-matrix/src/membrane.rs:96-99` (`WitnessCursor`) |
+| **provenance / time-travel** | every committed turn leaves a `TurnReceipt`; `History::replay_to` / `fork_at` folds the chain; the witness cursor is a consistent cut | `turn/src/collapse.rs:14-21`, `deos-matrix/src/membrane.rs:126` (`WitnessCursor`) |
 | **per-viewer projection + merge** | `Membrane::project`/`reshare` (the anti-amplification meet), `World::fork`, snapshot/restore, the stitch | `deos-matrix/src/membrane.rs:20-42`, `BRANCH-AND-STITCH-PROTOCOL.md` |
 
 Two substrate facts are *load-bearing* for the apps specifically, because apps are
@@ -66,54 +67,64 @@ interactive and turns are not free:
 
 ### Where it stands
 
-deos-zed is already built around the ONE seam this needs: **`Fs`**
-(`deos-zed/src/fs.rs:59-78`). The editor, file-tree, and demo never call `std::fs`;
+deos-zed is built around the ONE seam this needs: **`Fs`**
+(`deos-zed/src/fs.rs:68-86`). The editor, file-tree, and demo never call `std::fs`;
 all I/O goes through `trait Fs { load, save, read_dir, metadata, backend_label }`.
-`RealFs` (std::fs) ships today; `FirmamentFs` (`deos-zed/src/fs/firmament.rs`) is a
-*documented stub* whose doc-comment already states the exact mapping:
+`RealFs` (std::fs) ships; `FirmamentFs` (`deos-zed/src/fs/firmament.rs`) is the
+**live cell-backed impl** behind the `firmament` feature (the stub build without
+the feature errors clearly rather than faking it). The mapping it realizes:
 
-| `Fs` method | firmament realization (from `firmament.rs:9-46`) |
+| `Fs` method | firmament realization (`firmament.rs:10-21`) |
 |---|---|
-| `load(path)` | resolve `path` → read cap via `DirectoryCell`; read content substance (a read is authority-checked, no turn) |
-| `save(path, c)` | a **dregg TURN**: spend a write cap on the file-cell, bind new content as next substance (Σδ=0 over the content-cell: old note nullified, new created); the **receipt is the "saved" ack**, independently verifiable |
-| `read_dir(p)` | `DirectoryCell::list()` — holding the dir cap IS authority to enumerate |
-| `metadata(p)` | `DirectoryCell::get(name)` → sturdyref + cell kind |
+| `load(path)` | resolve `path` → the file-cell via the path namespace; read the committed content substance (a read is authority-checked, no turn) |
+| `save(path, c)` | a **dregg TURN**: a cap-gated `SetField` write over the file-cell's content, driven through the real `TurnExecutor`; the **receipt is the "saved" ack**, independently verifiable |
+| `read_dir(p)` | list the namespace's entries under `p` (the directory cell) |
+| `metadata(p)` | resolve the path → file-cell or directory; report kind + length |
 
-The save path is already routed: `Editor::save` (`editor.rs:179`) reads the rope
-(`editor.rs:149`, `text()`), and calls `self.fs.save(&path, &content)`. **The only
-thing un-wired is the live executor handle + mounted root `DirectoryCell` cap**
-(`firmament.rs:54-57`) — which the *host deos image* (starbridge-v2's `World`)
-supplies, not deos-zed standalone. This is the cleanest seam in the tree.
+The save path routes through the seam: `Editor::save` (`editor.rs:380`) calls
+`self.fs.save(&path, &content)` (`editor.rs:396`). `FirmamentFs` runs over the
+`LedgerSpine` seam (`deos_zed::fs::LedgerSpine`), with two impls: `OwnedSpine`,
+a self-contained in-process `Ledger` + `TurnExecutor` (the same verified spine
+starbridge-v2's `World` wraps), seeding an author cell + a root directory cell;
+and `WorldSpine` (`starbridge-v2/src/dock/editor_surface.rs:80`), which mounts
+the *host deos image's* live `World` — saves go through `World::commit_turn` and
+land in the same `World::ledger()` the cockpit cell inspector reads, so the
+editor edits the image's cells, not a private ledger.
+`EditorPane::firmament_over(world, ...)` wires the `WorldSpine` mount into the
+unified boot (`starbridge-v2/src/unified_boot.rs:195`) and self-hosting
+(`self_hosting.rs`) paths.
 
-### The two-level mapping (file=cell NOW; buffer=document SOON)
+### The two-level mapping (file=cell; buffer=document — both built)
 
-**Level 1 — file = cell, save = receipted turn (buildable now).** Fill the four
-`FirmamentFs` bodies against the host's `World`/executor. `save` becomes a
-content-replacing turn; the content substance is the editable text. This is the
-*content-flat* mapping: the cell's commitment binds the whole-file bytes; save is
-atomic for free (the turn commits or it doesn't — `fs.rs:103` already notes this).
-No document language yet — just file-as-cell with receipts. **This is the editor's
-membership in the cell graph, and it is a one-file change** (`firmament.rs`),
-gated only on the host wiring.
+**Level 1 — file = cell, save = receipted turn (BUILT, `firmament` feature).**
+`save` is a content-replacing turn; the content substance is the editable text.
+This is the *content-flat* mapping: the cell's commitment binds the whole-file
+bytes; save is atomic for free (the turn commits or it doesn't). This is the
+editor's membership in the cell graph, confined to one impl file — the editor and
+file-tree code never changed, which is the whole point of the `Fs` seam.
 
-**Level 2 — buffer = a document-language DOCUMENT (needs the patch core).** The
-content-flat file is the floor; the *document language* (`DOCUMENT-LANGUAGE.md`)
-is the ceiling. There, a document is a **Pijul-shaped patch graph**: vertices are
-content-addressed atoms (spans), edges encode order, status is alive/dead
-(monotone tombstone). The editor's edits become **patches = turns**:
+**Level 2 — buffer = a document-language DOCUMENT (BUILT — the `dregg-doc`
+crate).** The content-flat file is the floor; the *document language*
+(`DOCUMENT-LANGUAGE.md`) is the ceiling. There, a document is a **Pijul-shaped
+patch graph**: vertices are content-addressed atoms (spans), edges encode order,
+status is alive/dead (monotone tombstone). The patch core is the workspace crate
+`dregg-doc` (`DocGraph`, the `Add`/`Delete`/`Connect` patch grammar, `History`,
+merge, blame — `dregg-doc/src/{graph,patch,history,merge,blame}.rs`), and the
+editor folds it:
 
-- The **rope buffer ↔ patch graph impedance** is the genuine engineering question.
-  The rope (`gpui-component`'s rope-backed input, `editor.rs:65-75`) is a *linear
-  sequence* optimized for edit-at-cursor; the doc-graph is a *partial order* of
-  atoms. The bridge is a **diff-to-patch** layer: on save (or on a debounced
-  checkpoint), diff the current rope against the last-folded content and emit the
-  minimal `Add`/`Delete(=tombstone)`/`Connect` patch (`DOCUMENT-LANGUAGE.md`
-  §2.2). The visible buffer stays a rope (fast interactive editing, ephemeral
-  view-state); the *durable* document is the patch fold (`History::replay_to(tip)`,
-  §1.1). Atom granularity is a **design choice to make empirically** — start
-  span-coarse (line or paragraph), refine if it hurts (`DOCUMENT-LANGUAGE.md`
-  §4.4 RESEARCH; the merge-correctness theorem already LANDED in
-  `metatheory/Dregg2/Deos/DocMerge.lean`).
+- The **rope buffer ↔ patch graph impedance** is bridged by the **diff-to-patch**
+  layer: `Editor` holds a `dregg_doc::RopeDoc` (`editor.rs:80-98`) — a patch
+  `History` whose fold materializes the buffer; on save, `RopeDoc::edit_rope`
+  (`dregg-doc/src/rope.rs:53`) diffs the new rope against the current content and
+  accrues the minimal `Add`/`Delete`/`Connect` patch. The visible buffer stays a
+  rope (fast interactive editing, ephemeral view-state); the *durable* document is
+  the patch fold. Atom granularity is a **design choice to revisit empirically** —
+  the editor runs line-granular (`Granularity::Line`, `editor.rs:327`;
+  `DOCUMENT-LANGUAGE.md` §4.4); the merge-correctness theorem is proven in
+  `metatheory/Dregg2/Deos/DocMerge.lean`, and `RopeDoc::merge_branch`
+  (`dregg-doc/src/rope.rs:156`) is the pushout the editor calls. The
+  blame/timeline + conflict-object faces render in `deos-zed/src/doc_viewer.rs`
+  (both alternatives side by side, never a `<<<<<<<` text wound).
 
 - **Multi-author = branch-and-stitch.** Each author edits a **branch** of the
   document cell (a divergent configuration off a past witness cursor, holding NO
@@ -280,15 +291,24 @@ refusal. This is the ADOS thesis ("a turn = the exercise of an attenuable
 proof-carrying token over owned state, leaving a verifiable receipt") realized with
 a real agent.
 
-The grounding (`lib.rs:30-37`): the enforcement is *entirely* the proven
+The grounding (`lib.rs:25-27`): the enforcement is *entirely* the proven
 `ToolGateway`'s (`delegAdmit` mirror + executor-side `mandate_program` backstop).
-`bridge.rs`'s `HermesGateway` (`bridge.rs:33-44`) holds one `ToolGateway` per
+`bridge.rs`'s `HermesGateway` (`bridge.rs:108`) holds one `ToolGateway` per
 `ToolKind`, lazily admitted via `ToolGateway::admit` against a root token + a
 `ToolGrant` (`grant_registry.rs` — scope + rate ceiling + deadline), and routes each
-call through `ToolGateway::invoke` (`bridge.rs:122`), mapping the verdict back to an
-ACP `PermissionOutcome`. The REAL path yields a genuine `dregg_turn::TurnReceipt`
-(`lib.rs:30-32`); the only stub is the ACP *transport* (parsing a live subprocess'
-JSON-RPC frames — `lib.rs:33-37`).
+call through `ToolGateway::invoke` (`HermesGateway::admit_call`, `bridge.rs:245`),
+mapping the verdict back to an ACP `PermissionOutcome`. The REAL path yields a
+genuine `dregg_turn::TurnReceipt`, and the ACP *transport* is real too:
+`acp_client` is the ndjson JSON-RPC ACP client (`initialize` → `session/new` →
+`session/prompt`, answering each `session/request_permission` through the
+gateway), transport-agnostic over `AcpPeer` — it spawns a live `hermes-acp`
+subprocess (`acp_client::AcpTransport`) or drives an in-process peer.
+`HermesAgentPeer` (`deos-hermes/src/agent_peer.rs`) is the brain-driven ACP peer
+that replaced the scripted `MockHermesPeer`: an `LlmBrain`'s closed loop whose
+every `CallTool` step becomes a streamed `tool_call` + permission request answered
+by the gateway. `tests/acp_loop.rs` exercises the loop over the faithful mock;
+`tests/live_acp.rs` drives the real `hermes-acp` subprocess end to end (it skips,
+stating why, when the environment lacks the install or a model provider).
 
 ### The mapping (already true)
 
@@ -367,60 +387,74 @@ into it.
 
 ---
 
-## 6. THE PHASED PLAN — buildable now vs needs the patch core
+## 6. THE PHASED PLAN — landed vs remaining
+
+### LANDED (in-tree, feature-gated where noted)
+
+1. **Editor file=cell** — `FirmamentFs` is the live cell-backed `Fs` impl
+   (`deos-zed/src/fs/firmament.rs`, `firmament` feature): `save` = a cap-gated
+   receipted `SetField` turn through the real `TurnExecutor`; `load`/`read_dir`/
+   `metadata` = authority-checked reads. The editor/file-tree code never changed —
+   the whole point of the `Fs` seam. The host-image mount is in-tree too:
+   `WorldSpine` implements `LedgerSpine` over the live cockpit `World`, wired in
+   via `EditorPane::firmament_over` in the unified-boot and self-hosting paths
+   (§1); `OwnedSpine` is the self-contained in-process impl of the same seam.
+2. **Hermes** — the cap-gated tool-call→turn→receipt path AND the ACP transport
+   are real: `acp_client` drives a live `hermes-acp` subprocess or the
+   brain-driven `HermesAgentPeer` (`agent_peer.rs`); `tests/live_acp.rs` covers
+   the live loop (§4).
+3. **Buffer = document** — the `dregg-doc` patch core (`DocGraph`, the
+   `Add`/`Delete`/`Connect` grammar, `History`, merge, blame) + the rope↔patch
+   bridge (`RopeDoc::edit_rope`) + the editor fold + the blame/conflict viewer
+   (`doc_viewer.rs`), with the merge join proven in
+   `metatheory/Dregg2/Deos/DocMerge.lean` (§1 Level 2).
+4. **The executor-backed `MembraneHost`** — `ForkMembraneHost`
+   (`starbridge-v2/src/shared_fork.rs:1017`, `dev-surfaces` feature) mints real
+   frustum envelopes, rehydrates into real `World` forks, drives real turns, and
+   stitches the diff back; the `deos-matrix` chat lane holds it as its
+   `dyn MembraneHost`.
+5. **The inspector L1 spine** — `Presentable`/`PresentationKind`
+   (`starbridge-v2/src/presentable.rs:345`) with cell/document/cap inspections
+   implemented (`cell_inspector.rs`, `doc_lens.rs`, `cap_inspector.rs`).
 
 ### NOW (weld; the substrate carries it)
 
-1. **Editor file=cell** — fill the four `FirmamentFs` bodies (`deos-zed/src/fs/
-   firmament.rs`) against the host `World`/executor + a mounted root
-   `DirectoryCell` cap. `save` = a content-replacing receipted turn; `load`/
-   `read_dir`/`metadata` = authority-checked reads. **One-file change**, gated only
-   on the host wiring (the editor/file-tree code does not change — the whole point
-   of the `Fs` seam). This is the editor's membership in the cell graph.
-2. **Hermes** — already done (`deos-hermes`); close the ACP *transport* stub
-   (`lib.rs:33-37`) to drive a live `hermes acp` subprocess. The cap-gated
-   tool-call→turn→receipt path is real.
-3. **Terminal session=cell, command=turn** — give the session a cell (cwd/env
+6. **Terminal session=cell, command=turn** — give the session a cell (cwd/env
    fields + an exec-cap modeled on Hermes' `ToolGrant`); run the session in
    `WitnessMode::Symbolic` (`collapse.rs`); make each command a cap-gated symbolic
    turn; `collapse` on session-close/share. Reuses the Hermes gateway shape and the
    already-built symbolic machinery — a weld, not a build.
-4. **Chat room=cell** — name the room a cell with messages as its turn history; the
-   `MembraneEnvelope` rides as a message payload (`membrane.rs:49`). The membrane
-   mint/rehydrate/drive machinery is "real now" (`membrane.rs:20-34`); wiring the
-   `MembraneHost` impl in the comms-PD is the remaining work.
-5. **Apps as presentations** — `impl Presentable` for each app's core cell so the
-   cockpit inspector opens them (the `DomainVisual` + `RawFields` + `Provenance`
-   faces, `INSPECTOR-FRAMEWORK.md` L1). Pure-additive once the L1 spine lands.
+7. **Chat room=cell** — name the room a cell with messages as its turn history; the
+   `MembraneEnvelope` rides as a message payload (`membrane.rs:49`), and the
+   executor-backed host exists (item 4).
+8. **Per-region edit caps** — lift `{view,comment,edit,admin}` to per-region edit
+   caps over the document patch graph (`DOCUMENT-LANGUAGE.md` §3.2-3.3).
 
-### SOON (the document language + the conflict semantics)
+### SOON (the conflict semantics end to end)
 
-6. **Buffer = document** — build the `dregg-doc` patch core (`DOCUMENT-LANGUAGE.md`
-   §4.1: `DocGraph`, the `Add`/`Delete`/`Connect` grammar, `apply`/`merge`/`resolve`)
-   + the **rope↔patch diff-to-patch bridge** in deos-zed. Content as
-   `History::replay_to(tip)` fold. Lift `{view,comment,edit,admin}` to per-region
-   edit caps.
-7. **First-class conflict states end to end** — the editor's multi-author merge and
-   the chat membrane stitch both surface conflicts as objects (`StitchOutcome`,
-   `DocGraph::ConflictAt`), not rejected merges; the `ConflictView` presentation +
-   resolution gadget in the inspector (`DOCUMENT-LANGUAGE.md` §3.5).
-8. **Terminal collapse-to-membrane** — sharing a session through chat = collapse +
-   frustum-cull + send; a peer rehydrates a read-only or drivable session fork.
+9. **First-class conflict states end to end** — the editor's conflict-object
+   viewer (`doc_viewer.rs`) and the stitch's typed conflicts (`StitchOutcome`)
+   exist; remaining: the `ConflictView` presentation + resolution gadget in the
+   inspector (`DOCUMENT-LANGUAGE.md` §3.5) so a conflict is *resolved* through the
+   same gadget spine it is rendered by.
+10. **Terminal collapse-to-membrane** — sharing a session through chat = collapse +
+    frustum-cull + send; a peer rehydrates a read-only or drivable session fork.
 
 ### RESEARCH (the load-bearing proofs / open questions)
 
-9. **Atom granularity** for the document patch graph (char/line/span/semantic) —
-   an *empirical* design choice, not a theorem (`DOCUMENT-LANGUAGE.md` §4.4). Start
-   span-coarse.
-10. **Conflict-as-state soundness** — a stored conflict binds *both* alternatives +
+11. **Atom granularity** for the document patch graph (char/line/span/semantic) —
+    an *empirical* design choice, not a theorem (`DOCUMENT-LANGUAGE.md` §4.4). The
+    editor runs line-granular; refine if it hurts.
+12. **Conflict-as-state soundness** — a stored conflict binds *both* alternatives +
     provenance in the cell commitment, so a light client can't be shown a conflict
     hiding a forged alternative (the `holeFill_binds_in_circuit` discipline applied
     to the antichain).
-11. **The full Settlement Soundness extension for cross-app stitch** — the stitch's
-    authority-live-at-settlement guarantee (`membrane.rs:38-42`, the open formal
-    frontier) carried across the apps; light-client-unfoolability for a
-    frustum-of-mixed-apps rehydrate.
-12. **The interactive tempo dial (#169)** for the symbolic-local / verified-at-
+13. **Settlement Soundness carried across the cross-app stitch** — the core
+    authority-live-at-settlement theorem is proven
+    (`metatheory/Metatheory/SettlementSoundness.lean`: `settlement_soundness`,
+    `revoke_before_tip_unsettleable`); remaining: carrying it across the apps —
+    light-client-unfoolability for a frustum-of-mixed-apps rehydrate + stitch.
+14. **The interactive tempo dial (#169)** for the symbolic-local / verified-at-
     boundary loop tuned per app (terminal vs editor vs game have different collapse
     cadences) — `DEOS-APPS.md` §"interactive/real-time tempo gap".
 
@@ -428,33 +462,36 @@ into it.
 
 ## 7. HONESTY LEDGER
 
-**Solid from code read at HEAD (read-only):** the `Fs` seam + the documented
-`FirmamentFs` save=turn mapping (`deos-zed/src/fs.rs`, `fs/firmament.rs`; the save
-path is already routed through it, `editor.rs:179-186`); the terminal PTY model
-(`deos-terminal/src/model.rs`) with state in app memory and ambient host authority
-(`cockpit_surface.rs:38`); `WitnessMode::Symbolic` + `collapse` + the
+**Solid from code read at HEAD:** the `Fs` seam + the live cell-backed
+`FirmamentFs` save=turn impl (`deos-zed/src/fs.rs`, `fs/firmament.rs`, `firmament`
+feature; the save path routes through it, `editor.rs:380-396`), mounted over the
+live cockpit `World` via `WorldSpine`
+(`starbridge-v2/src/dock/editor_surface.rs:80`, wired at `unified_boot.rs:195`
+and in `self_hosting.rs`); the terminal PTY
+model (`deos-terminal/src/model.rs`) with state in app memory and ambient host
+authority (`cockpit_surface.rs:38`); `WitnessMode::Symbolic` + `collapse` + the
 symbolic-defers-witness-not-decision soundness (`turn/src/collapse.rs`);
-`CommitmentMode::Partial` (`turn/src/action.rs:31`); the Hermes ToolGateway path —
-tool-call → cap-gated metered receipted turn — REAL, only the ACP transport stubbed
-(`deos-hermes/src/{lib,bridge,grant_registry}.rs`); the rehydratable membrane —
-envelope, frustum cut, witness cursor, derived liveness, mint/rehydrate/drive/stitch
-trait, typed conflict-objects — designed against named real machinery
-(`deos-matrix/src/membrane.rs`); the cell/cap/state/executor substrate
-(`cell/src/{cell,state,capability}.rs`, `turn/src/executor/execute.rs:152`); the
-document language patch core (NEW, `dregg-doc` does not exist) with the
-merge-correctness theorem LANDED in `metatheory/Dregg2/Deos/DocMerge.lean`
-(`DOCUMENT-LANGUAGE.md` §4.4); the moldable inspector Presentable/Gadget framework
-(`INSPECTOR-FRAMEWORK.md`).
+`CommitmentMode::Partial` (`turn/src/action.rs:32`); the Hermes ToolGateway path —
+tool-call → cap-gated metered receipted turn — REAL end to end, including the ACP
+transport (`deos-hermes/src/{lib,bridge,grant_registry,acp_client,agent_peer}.rs`);
+the rehydratable membrane — envelope, frustum cut, witness cursor, derived
+liveness, mint/rehydrate/drive/stitch trait, typed conflict-objects — with the
+executor-backed `ForkMembraneHost` (`deos-matrix/src/membrane.rs`,
+`starbridge-v2/src/shared_fork.rs:1017`); the cell/cap/state/executor substrate
+(`cell/src/{cell,state,capability}.rs`, `turn/src/executor/execute.rs:210`); the
+document language patch core — the `dregg-doc` workspace crate + the rope↔patch
+bridge folded into the editor — with the merge-correctness theorem proven in
+`metatheory/Dregg2/Deos/DocMerge.lean` (`DOCUMENT-LANGUAGE.md` §4.4); the moldable
+inspector `Presentable` spine (`starbridge-v2/src/presentable.rs:345`).
 
-**The honest gap (what is NOT built):** (a) the host wiring that gives `FirmamentFs`
-its live executor + root cap (the editor's file=cell is one fill-in away but needs
-the host); (b) the terminal session cell + exec-cap (designed here, not yet coded —
-but every primitive it needs exists); (c) the `dregg-doc` patch core + the rope↔patch
-bridge (genuinely new); (d) the `MembraneHost` impl in the comms-PD; (e) the
-cross-app Settlement Soundness proof (the open formal frontier `membrane.rs` itself
-flags). None of these is a foundational hole — each is a **weld or a small new core**,
-which is exactly the thesis: the apps become cells by connecting machinery that
-already exists, not by inventing a new substrate.
+**The honest gap (what is NOT built):** (a) the terminal session cell + exec-cap
+(designed here, not yet coded — but every
+primitive it needs exists); (b) per-region edit caps + the conflict-resolution
+gadget; (c) the cross-app *carry* of the proven Settlement Soundness theorem
+(`SettlementSoundness.lean` proves the core; the frustum-of-mixed-apps stitch is
+the remaining extension). None of these is a foundational hole — each is a **weld
+or a small new core**, which is exactly the thesis: the apps become cells by
+connecting machinery that already exists, not by inventing a new substrate.
 
 ---
 

@@ -9,10 +9,10 @@ unshield back to the public chain).
 
 Each stage is graded **EXISTS** (cited, real code), **PARTIAL** (built but one
 wire short), or **MISSING** (the exact wire named). The honest one-line: **the
-middle two stages (shield, private-clear) are real and proven; the two ends
-(deposit-attestation → mint, cleared-result → settle) are DESIGNED with their
-load-bearing primitives already built — the missing pieces are glue, not
-foundations.**
+middle two stages (shield, private-clear) are real and proven; the two ends'
+glue bricks (deposit-attestation → mint, cleared-result → settle) are PoC'd
+over real primitives — what remains at the ends is deploy (the escrow contract,
+the on-chain release), not new crypto.**
 
 The first brick is PoC'd and runs green
 (`circuit-prove/tests/shielded_deposit_bridge_poc.rs`); the numeric clearing +
@@ -30,12 +30,12 @@ Both runs are cited below.
                           gated, PQ-bound          + no-viewer MPC
   ── EXISTS (code) ──      ── EXISTS ──             ── EXISTS ──             ── EXISTS (tail) ──
   attest→mint glue PoC'd,  real + Lean-proven       engine+STARK+MPC real,   settle-back PoC'd,
-  escrow CONTRACT stub                              note↔order seam PoC'd     wrap-prove own-tested
+  vault built, undeployed                           note↔order seam PoC'd     wrap-prove own-tested
 ```
 
 ---
 
-## Stage (a) — DEPOSIT: lock a real token, attest it, mint a note — **EXISTS (code brick); escrow contract stub**
+## Stage (a) — DEPOSIT: lock a real token, attest it, mint a note — **EXISTS (code brick); vault contract built, undeployed**
 
 A real token on a public testnet is locked in a bridge escrow; a proof of that
 lock is produced; the shielded pool consumes the proof and mints a note bound to
@@ -94,13 +94,17 @@ whose identity opens, the note's value is `≤` the attested locked amount (the
 `drawMint` gate), and one lock event mints exactly one note (the deposit dedup
 nullifier). The note is a REAL shielded `BoundNote`, not a transparent mirror.
 
-**REMAINING (labelled stub) — the escrow CONTRACT / lock-event, not balance-snapshot.**
+**REMAINING (deploy + fixture wiring) — the escrow lock-event attestation, not balance-snapshot.**
 `verify_holding` proves a *holding* (a balance at a finalized root). A production
 deposit needs a *lock event* into a specific escrow contract's storage slot. The LC
 machinery proves arbitrary storage slots (real), so the deposit-glue attests the
 LC-verified holding identity + a labelled `lock_ref` (the escrow address + lock
-slot) — but the deposit **escrow contract** itself is unbuilt (its deploy is
-ember-gated). This is a contract-deploy + fixture change, not new crypto.
+slot). The deposit **escrow contract** is built — `chain/contracts/DreggVault.sol`
+holds bridged assets with note-commitment deposits the federation mirrors, plus
+the timed `Locked → Released` XOR `Locked → Refunded` escrow surface, Foundry-
+tested in `chain/test/DreggVault.t.sol` + `chain/test/DreggVaultEscrow.t.sol` —
+but undeployed (its deploy is ember-gated), and the LC lock-slot fixture does not
+yet point at it. This is a contract-deploy + fixture change, not new crypto.
 
 ---
 
@@ -151,7 +155,7 @@ spend are all proven and executable.
 
 ---
 
-## Stage (c) — PRIVATE CLEAR: match the notes privately — **EXISTS (one seam)**
+## Stage (c) — PRIVATE CLEAR: match the notes privately — **EXISTS (seam PoC'd)**
 
 The pooled notes participate in a clearing that reveals nothing but the clearing
 price `p*` and volume `V*`.
@@ -183,15 +187,19 @@ conservation over notes), `shielded_ring_clears_real_crypto` (`:254`, over the r
 primitives). `metatheory/Market/CertF.lean` (`certifies_epsilon_optimal`,
 `weak_duality`), `RevealNothing.lean`, `MpcClearingSecurity.lean`.
 
-**MISSING — the one seam: note ↔ order.**
+**PoC'd — the note ↔ order seam (runs green).**
 The engine clears abstract `Order`s (`clearing.rs`: `qty` + price-level `limit`),
-NOT pool notes. The Lean `shielded_ring_clears` is stated over a `ShieldedRing` of
-notes, but no Rust code turns a minted pool note into a sealed fhEgg order and back
-into an output note. **This is the single highest-leverage missing wire in the
-whole pipeline**: a note→order adapter (hiding the note's value under its
-commitment as the order it seals) and an order→output-note adapter (minting the
-fill as a fresh conserving note), so that `Σ input-note value = Σ output-note value
-= V*` closes `created_value_conservation` across the clearing.
+NOT pool notes; the wire between them is the adapter PoC
+`circuit-prove/tests/shielded_clearing_note_order_poc.rs`. `note_to_order` seals a
+minted pool `BoundNote` as a real fhEgg order (qty = the note's value, the order
+referencing the note's commitment + nullifier); `order_to_note` mints each cleared
+fill as a fresh conserving fill+change note pair; and `check_conservation`
+recomputes `Σ input-note value = Σ output-note value = V*` from the notes and the
+fills — closing `created_value_conservation` across the clearing. Both polarities
+fire: the clearing it runs is the real `fhegg_solver::clearing::{clear, allocate}`
+over orders sealed from actual notes, and a minted output note (`Σ out > Σ in`), a
+value-mismatch note, and a replayed input nullifier are each REJECTED. Run:
+`cargo test -p dregg-circuit-prove --test shielded_clearing_note_order_poc -- --nocapture`.
 
 ---
 
@@ -249,7 +257,7 @@ deployed vault contract (stage (a)).
   │  contract) │   lock proof          │  in the POOL │  ◀(output     │  Cert-F  │
   └────────────┘                       └──────────────┘    notes)     │  + MPC   │
    [glue EXISTS,                        [EXISTS:            [seam        └──────────┘
-    contract stub]                       §6 proven]          PoC'd]         │
+    vault undeployed]                    §6 proven]          PoC'd]         │
                                                                             ▼
                                                               finalized_turn_from_full_turn
                                                               → wrap → on-chain  [EXISTS,
@@ -330,8 +338,8 @@ gadget biting in the debug constraint checker, caught as a refusal).
 
 **What is a labelled STAND-IN:** the deposit `(asset, value)` — it stands in for
 `verify_holding`'s `ProvenErc20Holding{ConsensusProven}` locked in an escrow. The
-LC and the escrow contract are NOT run in this PoC (the LC runs on its own,
-`verify_holding`; the escrow is unbuilt).
+LC and the escrow contract are NOT run in this PoC (each runs on its own: the LC
+under `verify_holding`, the vault contract under its Foundry tests).
 
 ### The numeric clear + Cert-F settle — the real engine
 
@@ -362,9 +370,13 @@ clear + Cert-F settle-certificate. All cited above.
 - the output-note → unshield → release settle-back path (stage (d));
 - the full deposit → shield → clear → settle composition over real pool notes.
 
-**DESIGNED (primitives real, deploy unbuilt):**
-- the deposit escrow contract on a testnet + the lock-event storage proof (the
-  attested lock is the LC-verified holding identity + a labelled `lock_ref`);
+**BUILT BUT UNDEPLOYED (primitives real, deploy open):**
+- the deposit escrow contract's testnet deploy + the lock-event storage proof
+  against it (the contract is built and Foundry-tested —
+  `chain/contracts/DreggVault.sol`, `chain/test/DreggVault.t.sol`,
+  `chain/test/DreggVaultEscrow.t.sol`; the attested lock is the LC-verified
+  holding identity + a labelled `lock_ref` until the LC fixture proves the
+  deployed vault's lock slot);
 - the clearing-turn → wrap on-chain shrink (`finalized_turn_from_full_turn`, wired
   in shape, own-tested).
 
@@ -388,4 +400,3 @@ NOT code: the on-chain escrow CONTRACT deploy (the attested lock is today the
 LC-verified holding identity + a labelled `lock_ref`), the persistent MPC federation
 for the no-viewer clearing, and the public-testnet deploy + VK-epoch re-genesis — all
 ember-gated (deploy-time).
-```

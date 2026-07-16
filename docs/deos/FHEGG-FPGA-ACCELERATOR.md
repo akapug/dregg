@@ -9,6 +9,23 @@ dregg's own measured FHE envelope (`fhegg-fhe/MEASURED-ENVELOPE.md`) and cited
 FPGA-FHE throughput, never guessed. Every sizing number carries its assumptions
 and an error bar. What-is, present tense; every ambitious edge names its grade.*
 
+> ⚑ **TWO ADOPTED CORRECTIONS — read the sizing through them.**
+> **(1) The crossing-comparator is NOT in the soundness TCB.** Under
+> verify-not-find the STARK re-proves the crossing (the Cert-F AIRs,
+> `circuit-prove/src/cert_f_air.rs`), so the FPGA comparator is *untrusted
+> search*: a comparator bug yields a wrong `p*` that cannot receive a valid
+> proof — a liveness fault, not a soundness break (`FHEGG-CODEX-ROUND4.md` §B).
+> §4's verified-core target is the mint-safe/conservation gate only.
+> **(2) The adopted Tier-0 crossing is output-boundary MPC over the additive
+> fold, not a TFHE PBS crossing.** Built and measured (`fhegg-fhe/src/mpc.rs`,
+> `fhegg-fhe/ADDITIVE-FOLD-ENVELOPE.md`, `docs/deos/OUTPUT-BOUNDARY-MPC.md`):
+> the exact-quantized BFV fold is sub-10 ms at every measured size (~10⁵× the
+> exact-integer TFHE fold) and the secret-shared crossing runs in ~1–7 ms,
+> revealing only `(p*, V*)` — no BFV→TFHE scheme-switch, no PBS crossing. The
+> §2 sizing therefore quantifies the **all-TFHE baseline** (the fallback path
+> and any workload that genuinely needs in-ciphertext PBS), not the adopted
+> Tier-0 hot path, which clears in milliseconds on a CPU.
+
 ---
 
 ## 0. Six-line summary
@@ -26,8 +43,8 @@ and an error bar. What-is, present tense; every ambitious edge names its grade.*
    **512-order × 64-price dark batch in ≈0.15–0.7 s of FPGA time** (vs ~8 min on
    the M2 CPU) → **≈100–400 concurrent 512-order dark markets at minute cadence,
    or one ~2×10⁵-order book per minute**, ±3–5× (published-FPGA-PBS-throughput ×
-   dregg's measured op-count model). A CKKS-additive fold lifts N off the bill
-   entirely (§2.4).
+   dregg's measured op-count model). The measured BFV additive fold lifts N off
+   the bill entirely (§2.4).
 4. **Confidential-computing tie (scoped honestly):** Tier-0 needs **no TEE at
    all** — the FPGA computes on *ciphertexts*, so FHE *is* the confidentiality
    (Article X, in silicon), and the unsolved "confidential-VM + FPGA passthrough"
@@ -197,18 +214,22 @@ Take the midpoint F2 budget **~60,000 PBS/s** → **3.6M PBS/minute**.
 - **Latency-tuned.** A single 512×64 market can clear at **~1 s cadence** using a
   fraction of one FPGA, leaving the other 7 for parallel markets.
 
-**The stacking multiplier — CKKS-additive fold (lifts N off the bill).** The
-measured wall is *exact-integer TFHE carry propagation*. Swap the aggregation to
-an **additive scheme** — CKKS-packed or a lattice-additive commitment — and the
-`N·K` adds become genuinely µs-cheap, SIMD-packed across price buckets, and
-**bootstrap-free**. The per-batch FPGA cost then collapses to just the **O(K)
-crossing** (~2.8·K ≈ 180 PBS-equiv at K=64), which is **N-independent**. That is
-a further **~50× at N=512** and, more importantly, it **removes N from the cost
-model entirely**: with a CKKS fold + TFHE crossing, one F2 clears essentially
-*unbounded* orders per pair at K=64 in **well under a second**, bounded only by K
-and by encrypt/IO — i.e. **thousands of concurrent dark markets**. The additive
-fold is the single highest-leverage software change stacking on top of the
-hardware.
+**The stacking multiplier — the additive fold (measured; lifts N off the
+bill).** The measured wall is *exact-integer TFHE carry propagation* — and the
+additive fold that removes it is built and measured, not hypothetical
+(`fhegg-fhe/ADDITIVE-FOLD-ENVELOPE.md`): the exact-quantized **BFV** fold turns
+the `N·K` carry-propagating adds into native carry-free poly-adds, SIMD-packed
+across price buckets, **sub-10 ms at every measured size** (~10⁵× the TFHE
+fold), bootstrap-free, bit-exact, and mint-safe on the proven floor/ceil grid.
+What remains after the fold is the crossing, and the adopted architecture
+dissolves the TFHE hop there too: **output-boundary MPC** (`fhegg-fhe/src/mpc.rs`,
+`docs/deos/OUTPUT-BOUNDARY-MPC.md`) partial-decrypts only the aggregate curve
+into additive shares and runs the oblivious argmax in **~1–7 ms**, revealing
+only `(p*, V*)` — no BFV→TFHE scheme-switch, no PBS crossing. On the adopted
+path the Tier-0 clear is milliseconds on a CPU and N-independent past the
+fold; the F2's PBS budget is spent only where exact-integer TFHE is actually
+kept — the all-TFHE fallback path, or workloads whose nonlinearity genuinely
+needs an in-ciphertext programmable bootstrap (§5's transformer shape).
 
 ### 2.5 Honest error bars
 
@@ -356,9 +377,17 @@ NTT/PBS pipelines, the HBM streamers, the fold datapath — are performance
 plumbing where a bug costs *speed or a failed proof*, not *soundness*. Those two
 have opposite engineering needs, so use two HDLs.
 
-**The verified core (small, soundness-critical).** For the conservation/mint-safe
-checker and the crossing-comparator that gate acceptance, use a **formally
-verified HDL**:
+**The verified core (small, soundness-critical).** The verified-core target is
+the **conservation / mint-safe checker** — and only that. The
+crossing-comparator is *not* in the soundness TCB: under verify-not-find the
+STARK re-proves the crossing (the Cert-F AIRs, `circuit-prove/src/cert_f_air.rs`),
+so a comparator bug yields a wrong `p*` that cannot receive a valid proof —
+untrusted search, a liveness fault (`FHEGG-CODEX-ROUND4.md` §B). The
+higher-value formal target is end-to-end: *any output accepted for
+`(batch_root, tier, parameter_hash, VK, settlement_root)` satisfies the Lean
+market transition for exactly those public inputs* — covering stale-context /
+cross-market mixing, the realistic accelerator hazard. For the mint-safe gate,
+use a **formally verified HDL**:
 
 - **Kôika + Cava** — Coq-verified. Kôika is a rule-based (Bluespec-style) HDL
   embedded in Coq with a **formally-verified compiler that generates circuits
@@ -391,8 +420,8 @@ Nobody has a Coq-verified TFHE bootstrapping pipeline at production throughput;
 Kôika/Cava designs in the literature are small (crypto primitives, security
 kernels), and pushing a full NTT/PBS datapath through a proof assistant today
 would cost more than it buys and would lag the bulk's iteration speed. So the
-verified part is **deliberately the small trusted core** — the conservation gate,
-the acceptance comparator, the boundary the Constitution demands be a theorem —
+verified part is **deliberately the small trusted core** — the conservation
+gate, the boundary the Constitution demands be a theorem —
 and the bulk NTT/PBS datapath is **productive-HDL, property-tested, and
 differentially-checked against tfhe-rs**, not proof-carrying. This mirrors
 dregg's own discipline: a small verified TCB, a fast untrusted periphery, and

@@ -127,23 +127,27 @@ Legend: **✅ STRUCTURALLY ABSENT** = the door does not exist in our source at a
 
 | # | Rug vector | How the real rug does it (cited) | Our defense — or GAP (cited `file:line`) | Verdict |
 |---|-----------|----------------------------------|------------------------------------------|---------|
-| 1 | **Hidden / mintable supply** | Owner `mint()` inflates supply after pump (§1.5); dev dumps new tokens | `DreggLaunchToken.mint` is one-shot: `if (msg.sender != minter) revert NotMinter`; `if (minted) revert AlreadyMinted`; `if (amount > cap) revert CapExceeded` — `cap`/`minter` are `immutable`, `minted` is a latch, **no second mint path exists** (`DreggLaunchToken.sol:28,33,37,65-73`). Launchpad also forces `saleSupply+creatorAllocation+poolAllocation == totalSupply` or reverts `SupplyDoesNotClose` (`DreggLaunchpad.sol:219`). | ✅ ABSENT |
-| 2 | **Owner-drain of pooled funds** | Team-controlled vault; privileged withdraw of depositor principal → bridge → Tornado (HypervaultFi §1.2) | **There is no owner/admin/governance role in any of our contracts** (grep: no `Ownable`, `onlyOwner`, `admin`, `pause`). Escrow is per-bidder; `settleBid` pays each bidder *their own* tokens+refund (`:428`); `reclaimEscrow` is permissionless and returns `msg.sender`'s *own* `deposit` (`:462`). No function sends pooled funds to an operator. | ✅ ABSENT |
+| 1 | **Hidden / mintable supply** | Owner `mint()` inflates supply after pump (§1.5); dev dumps new tokens | `DreggLaunchToken.mint` is one-shot: `if (msg.sender != minter) revert NotMinter`; `if (minted) revert AlreadyMinted`; `if (amount > cap) revert CapExceeded` — `cap`/`minter` are `immutable`, `minted` is a latch, **no second mint path exists** (`DreggLaunchToken.sol:28,33,37,65-73`). Launchpad also forces `saleSupply+creatorAllocation+poolAllocation == totalSupply` or reverts `SupplyDoesNotClose` (`DreggLaunchpad.sol:256`). | ✅ ABSENT |
+| 2 | **Owner-drain of pooled funds** | Team-controlled vault; privileged withdraw of depositor principal → bridge → Tornado (HypervaultFi §1.2) | **The three custody contracts (launchpad, token, pool) carry no owner/admin/governance role** (grep over them: no `Ownable`, `onlyOwner`, `admin`, `pause`). Escrow is per-bidder; `settleBid` pays each bidder *their own* tokens+refund (`:477`); `reclaimEscrow` is permissionless and returns `msg.sender`'s *own* `deposit` (`:515`). No function sends pooled bidder funds to an operator. **The role surface that DOES exist is the deployer gate:** `DreggDeployerGate` — pinned immutably by the launchpad and consulted at `registerLaunch` (`DreggLaunchpad.sol:148,264`) — declares `address public admin` with an `onlyAdmin` modifier, admin rotation (`setAdmin`), and admin-set `attester`/`auditor`/`slasher` roles (`DreggDeployerGate.sol:44-50`); its `receive()` pools deployer conduct bonds, and `slash(deployer, amount, recipient)` lets the admin-appointed slasher transfer pooled deployer-bond ETH to an arbitrary recipient (`:152`). That is a privileged withdrawal path over POOLED DEPLOYER BONDS — by design (the fraud-proof/slashing arm), and it never touches bidder escrow, which flows only through the role-free launchpad. | ✅ ABSENT for bidder funds · ⚠ BOUNDED: deployer bonds are role-custodied in the gate |
 | 3 | **LP-pull / liquidity removal** | Dev `removeLiquidity` / burns LP and takes reserves | **`DreggSolventPool` has no `removeLiquidity`, no LP token, no owner-withdraw.** Reserves move only via `buy`/`sell`, each floored: `if (reserveTokenAfter < floorToken) revert PoolFloorBreached` (`:135`) and `if (reserveQuoteAfter < floorQuote) revert PoolFloorBreached` (`:161`). No privileged path drains the pool below the disclosed floor. | ✅ ABSENT (see §3.2 on floor size) |
 | 4 | **Honeypot (buy-but-can't-sell)** | `transfer`/`transferFrom` blocks the sell direction unless sender ∈ owner/`marketersAndDevs` whitelist (SQUID §1.4) | `DreggLaunchToken._transfer` has **no owner check, no whitelist/blacklist, no direction condition** — only `if (bal < value) revert InsufficientBalance` (`:95-103`). `DreggSolventPool.sell` is open to any caller who `approve`s (`:149`); the only gate is the solvency floor, never identity. | ✅ ABSENT |
-| 5 | **Proxy-upgrade backdoor** | `upgradeTo(newImpl)` on a Transparent Proxy (no timelock) swaps in draining logic (Meerkat §1.3, selector `0x70fcb0a7`) | **No proxy pattern in our source** (grep: no `delegatecall`, `upgradeTo`, `implementation` slot). Token and pool are deployed with `new DreggLaunchToken` / `new DreggSolventPool` (`DreggLaunchpad.sol:228,576`) — immutable bytecode, non-upgradeable. `initialize` is the pool's latch-guarded one-shot seed, **not** a proxy initializer (`DreggSolventPool.sol:106-116`, guarded by `graduation` + `initialized`). | ✅ ABSENT in-source — but see §3.1 (deployment integrity) |
+| 5 | **Proxy-upgrade backdoor** | `upgradeTo(newImpl)` on a Transparent Proxy (no timelock) swaps in draining logic (Meerkat §1.3, selector `0x70fcb0a7`) | **No proxy pattern in our source** (grep: no `delegatecall`, `upgradeTo`, `implementation` slot). Token and pool are deployed with `new DreggLaunchToken` / `new DreggSolventPool` (`DreggLaunchpad.sol:271,629`) — immutable bytecode, non-upgradeable. `initialize` is the pool's latch-guarded one-shot seed, **not** a proxy initializer (`DreggSolventPool.sol:106-116`, guarded by `graduation` + `initialized`). | ✅ ABSENT in-source — but see §3.1 (deployment integrity) |
 | 6 | **Blacklist / pausable-then-drain** | `pause()` freezes holders so only owner trades; or `blacklist[victim]` blocks sells | **No `Pausable`, no `pause`, no `blacklist`/`blocklist` mapping anywhere** (grep clean). No global switch can freeze trading or single out a holder. | ✅ ABSENT |
-| 7 | **Hidden allocation / stealth pre-mint / hidden clearing** | Dev pre-mints a chunk, or clears the sale at a hidden price/allocation to insiders | Creator allocation is **disclosed and vesting-locked**: `claimCreatorAllocation` reverts before `creatorLockUntil` (`DreggLaunchpad.sol:511-520`). Clearing is **uniform-price + permutation-checked**: `_assertPermutation` enforces no-drop/no-insert and `_runClearing` requires descending price — a hidden extra fill cannot be inserted, and every winner pays the same `clearingPrice` (`:381-420`). | ✅ ABSENT |
-| 8 | **Fake LP lock** | "LP locked" but the lock is owner-controlled / a no-op | **No LP token to fake-lock.** The pool *is* the liquidity and is non-withdrawable + floored; graduation seeding is deterministic and enforced (`GraduationSeedMismatch` if the seed is wrong/skimmed, `DreggLaunchpad.sol:566-568`). No lock to trust. | ✅ ABSENT (trust eliminated, not asserted) |
-| 9 | **Rug-via-liveness (funds stuck, no recovery)** | Contract stalls; deposits are trapped with no refund path | `reclaimEscrow` gives every committer a **permissionless full refund** once the clearing window (`revealEnd + REFUND_GRACE = 7 days`) elapses without a clearing; the clearing and refund windows are **disjoint** (`ClearingWindowClosed`), so worst case is stall-then-refund, never loss (`DreggLaunchpad.sol:132,339-374,462-482`). | ✅ ABSENT |
+| 7 | **Hidden allocation / stealth pre-mint / hidden clearing** | Dev pre-mints a chunk, or clears the sale at a hidden price/allocation to insiders | Creator allocation is **disclosed and vesting-locked**: `claimCreatorAllocation` reverts before `creatorLockUntil` (`DreggLaunchpad.sol:564-573`). Clearing is **uniform-price + permutation-checked**: `_assertPermutation` enforces no-drop/no-insert and `_runClearing` requires descending price — a hidden extra fill cannot be inserted, and every winner pays the same `clearingPrice` (`:424-460`). | ✅ ABSENT |
+| 8 | **Fake LP lock** | "LP locked" but the lock is owner-controlled / a no-op | **No LP token to fake-lock.** The pool *is* the liquidity and is non-withdrawable + floored; graduation seeding is deterministic and enforced (`GraduationSeedMismatch` if the seed is wrong/skimmed, `DreggLaunchpad.sol:618-620`). No lock to trust. | ✅ ABSENT (trust eliminated, not asserted) |
+| 9 | **Rug-via-liveness (funds stuck, no recovery)** | Contract stalls; deposits are trapped with no refund path | `reclaimEscrow` gives every committer a **permissionless full refund** once the clearing window (`revealEnd + REFUND_GRACE = 7 days`) elapses without a clearing; the clearing and refund windows are **disjoint** (`ClearingWindowClosed`), so worst case is stall-then-refund, never loss (`DreggLaunchpad.sol:133,392-393,515-537`). | ✅ ABSENT |
 
-**Grep evidence for the "ABSENT" claims** (run over
-`chain/contracts/launchpad/*.sol` at HEAD): no match for
-`ownable|onlyOwner|admin|governance` (the sole `owner` token is the standard ERC-20
-`Approval` event parameter), no match for `pause|blacklist|blocklist|whitelist`, no
-match for `delegatecall|upgradeTo|proxy|implementation`, no match for
-`selfdestruct`. The two `initialize` hits are the pool's one-shot seed, not proxy
-initializers.
+**Grep evidence for the "ABSENT" claims** (run over the three custody contracts
+`chain/contracts/launchpad/{DreggLaunchpad,DreggLaunchToken,DreggSolventPool}.sol`
+at HEAD): no match for `ownable|onlyOwner|admin|governance` (the sole `owner` token
+is the standard ERC-20 `Approval` event parameter), no match for
+`pause|blacklist|blocklist|whitelist`, no match for
+`delegatecall|upgradeTo|proxy|implementation`, no match for `selfdestruct`. The two
+`initialize` hits are the pool's one-shot seed, not proxy initializers. The grep is
+NOT clean over the whole directory: `DreggDeployerGate.sol` deliberately carries
+`admin`/`attester`/`auditor`/`slasher` roles and a slasher-gated `slash` over pooled
+deployer bonds (§2 row 2) — a named, bounded role surface scoped to deployer
+conduct bonds, never to bidder escrow or the token/pool.
 
 ---
 
@@ -165,7 +169,7 @@ launchpad's own deployment.) This is a real caveat, not a code vector; it should
 stated wherever the anti-rug claim is made.
 
 ### 3.2 "Provably solvent" means never-drains-to-zero, NOT price protection
-The pool floor is `FLOOR_BPS = 2000` = **20% of the seed** (`DreggLaunchpad.sol:79`).
+The pool floor is `FLOOR_BPS = 2000` = **20% of the seed** (`DreggLaunchpad.sol:80`).
 So up to **80% of a reserve can still legitimately exit** through priced swaps
 (`sell` takes ETH out down to `floorQuote`; each such swap *adds* tokens to the other
 reserve — it is market activity, not a free drain). The guarantee is
@@ -177,7 +181,7 @@ be read as "can't lose money."
 
 ### 3.3 The launchpad guarantees a FAIR SALE + SOLVENT MARKET, not project delivery ("soft rug")
 `withdrawProceeds` sends the raise proceeds to the creator
-(`DreggLaunchpad.sol:495-505`). This is **legitimate by design** — it is the buyers'
+(`DreggLaunchpad.sol:547-558`). This is **legitimate by design** — it is the buyers'
 payment for tokens *actually delivered at a fair uniform clearing price*, with
 non-winners and over-deposits refunded — and it is emphatically *not* the
 HypervaultFi vector (it is not depositor principal held in custody for yield). But it
@@ -189,11 +193,17 @@ the *launch mechanics* non-rug-pullable; we do not underwrite the team's diligen
 
 ### 3.4 Scope the brief already flags (not gaps, but not "done")
 Per `DREGG-LAUNCHPAD-DESIGN.md` §0: uniform-price clearing *fairness* is PROVED in
-Lean and the on-chain compute is a faithful **replayable** implementation, but the
-real dregg-Groth16 clearing **attestation** (`IClearingAttestor`, rung 2) is a named
-weld — a launch today runs on rung 1 (replayable) with the attestor slot open. Full
-bonded-conduct slashing / shielded participation is designed-not-built. These are
-labeled resolutions on the trajectory, not rug vectors.
+Lean and the on-chain compute is a faithful **replayable** implementation. The
+attestor slot (`IClearingAttestor`, rung 2) has concrete arms in
+`chain/contracts/launchpad/`: `CommitteeAttestor.sol` (threshold-of-n signatures,
+fraud challenge + slashing) and `DreggProofAttestor.sol` (verifies a real Groth16
+wrap through the OCIP socket / VK-epoch registry and gates the on-chain REPLAYABLE
+clearing — its launch-binding is a named TRUSTED residual in its own header, and the
+wrap statement carries no clearing lanes yet). Attestor-less rung 1 (`attestor = 0`,
+on-chain clearing) remains supported. Shielded participation — the attestor as sole
+price source — is designed-not-built. These are labeled resolutions, not rug
+vectors: in every wired grade the clearing values are computed on-chain, so an
+attestor can only gate, never misprice.
 
 ---
 
@@ -206,9 +216,10 @@ each exploit a door our contracts **do not have**:
   contracts (no `delegatecall`, no proxy).
 - SQUID's owner/whitelist **sell-blocking `transfer`** → our `_transfer` and pool
   `sell` have **no identity gate** at all.
-- HypervaultFi's team-vault **privileged withdrawal** → we have **no
-  owner/admin/operator role and no custody of pooled principal** (per-bidder escrow,
-  permissionless refund).
+- HypervaultFi's team-vault **privileged withdrawal** → the custody contracts have
+  **no owner/admin/operator role and no custody of pooled bidder principal**
+  (per-bidder escrow, permissionless refund); the sole role surface is the deployer
+  gate's slashing arm over deployer bonds (§2 row 2), which never holds bidder funds.
 
 And the classic **mintable-supply** rug dies against our one-shot, hard-capped,
 single-minter `DreggLaunchToken`.

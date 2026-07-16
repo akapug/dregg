@@ -39,7 +39,7 @@ original synthesis's "`enabled` = the `is_attenuation` frustum" is right but **h
 | Plane | Object | Bears (Lean) | Do not fold because |
 |---|---|---|---|
 | **A — Authority / actuation** | `AffordanceSurface{cell, [CellAffordance{name, required, effect_template: real Effect}]}` | confers-exactly (`Surface.lean:79`), fire-iff-authorized + binds-attested-root (leg 4, `Affordance.lean`), reshare-no-amplify (`Membrane.lean`) | this **is** the read-facet of a Session |
-| **B — Presentation IR** | `ViewNode` (26 variants: layout/content/bind/actuation/Host/Adept/Tile) | **content-reactivity functor** `project∘step=step∘project` (`Rerender.lean:102`) — content-only, gate-preserving, fixed-list | B is a **peer** of A, not downstream (most ViewNodes never pass through an AffordanceSurface) |
+| **B — Presentation IR** | `ViewNode` (25 variants: layout/content/bind/actuation/Host/Adept/Tile) | **content-reactivity functor** `project∘step=step∘project` (`Rerender.lean:102`) — content-only, gate-preserving, fixed-list | B is a **peer** of A, not downstream (most ViewNodes never pass through an AffordanceSurface) |
 | **C — Pixel / region** | the compositor + `ViewNode::Tile{handle}` (opaque, **no pixels**) → servo/android `RgbaFrame` | paint-order-free + damage-exact (`Compositor.lean`), **content non-interference** (`FogOfWar.lean:149`) | faithfulness is `blake3(bytes)` under `FrameCommit`, a **different** authority model — not re-projectable |
 | **D — Composition operators** | `Host` (mount whole tree) · `Transclusion`=ImportedEq (one finalized value by ref) · `Bind` (one live scalar) | transclusion faithfulness/no-amplify (`Transclusion.lean`); Host DoS fail-safes | three **distinct** provenance semantics the code already separates |
 
@@ -83,19 +83,24 @@ state). Keep both.
 Do **not** add pixel nodes (`Tile` is the seam to C) or a fourth composition node (Host/Transclusion/Bind are correctly
 three).
 
-## What is SAFE to unify now (measured duplications; each independently green, spine untouched)
-1. **One affordance-transport codec** — four encodings of the same `{turn,arg}` today (`deosturn:` · `deos:cell:name` ·
-   `fiction:vote:` · telegram `turn:arg`). Canonicalize `deos-view::{affordance_custom_id, parse_affordance_id}`,
-   transport-parameterized. Cheapest, highest-leverage.
-2. **Extract a `SurfaceBackend` trait in `deos-view`** over the existing ad-hoc render functions; move
-   `dreggnet-web::view_html` + `dreggnet-telegram::render` *into* deos-view backends and **delete the subset walkers**
-   (they silently drop `Host`/`Tabs`/`Grid`/rich leaves — the subsetting IS the evidence they diverged).
-3. **Dedupe `AffordanceSurface`** (defined twice: `starbridge-web-surface` + `deos-reflect`) — keep the Lean-mirrored
-   one canonical; the other re-exports.
-4. **`enabled` = the 2-D frustum ∧ `reactive_ok`** in the render walk (ViewNode growth #1) — the synthesis's correct
-   kernel, done *as one conjunct*.
-5. **Bridge `deos-reflect::Presentation → ViewNode`** (retire the parallel moldable projection) — makes "liberate any
-   surface into a card" lossless.
+## The unify ledger (four of five executed; the spine untouched)
+1. **One affordance-transport codec** — DONE: `deos-view::{affordance_custom_id, parse_affordance_id}` is the
+   canonical codec, parameterized by `AffordanceTransport` (`deos-view/src/affordance.rs`), selected per backend
+   through `SurfaceBackend::transport` (`deos-view/src/backend.rs:27`).
+2. **A `SurfaceBackend` trait in `deos-view`** — DONE: the trait is the one seat every `ViewNode` renderer shares
+   (`deos-view/src/backend.rs:21`); the Telegram backend lives in `deos-view/src/telegram.rs` (`TelegramBackend`,
+   `:26`), and `dreggnet-web` renders through the moved-in `view_html` server-form backend
+   (`dreggnet-web/src/lib.rs:163`).
+3. **Dedupe `AffordanceSurface`** — OPEN, and the census is larger than first measured: at HEAD the struct is defined
+   FOUR times (`starbridge-web-surface/src/affordance.rs:578`, `app-framework/src/affordance.rs:233`,
+   `deos-reflect/src/affordances.rs:64`, `starbridge-v2/src/affordance.rs:219`). Keep the Lean-mirrored one canonical;
+   the others re-export.
+4. **`enabled` = the 2-D frustum ∧ `reactive_ok`** — DONE as one conjunct: `deos-view/src/gate.rs`
+   (`reactive_membrane_enabled`, `:63` = `project_membrane(viewer) ∧ reactive_ok(ctx)`; `gate_actuation_nodes`, `:87`
+   stamps it onto actuation nodes in the walk).
+5. **Bridge `deos-reflect::Presentation → ViewNode`** — DONE: `deos-view/src/lower.rs` is the pure surface→card
+   lowering (every `PresentationBody` into the one IR), making "liberate any surface into a card" ride the same
+   render walk.
 
 ## Grounding
 Lean: `metatheory/Dregg2/Deos/{Surface,Affordance,Reactive,Rerender,FogOfWar,Compositor,Transclusion,Membrane,

@@ -12,9 +12,9 @@ MerkleTreeHidingMmcs` (salted leaves) — `circuit/src/stark_zk.rs`. Its own dec
 than bolt masking onto the hand-rolled FRI (error prone, easy to get subtly wrong), we adopt
 Plonky3's battle-tested hiding PCS… do not hand-roll masking."* It does trace-doubling-with-random-
 rows + a random FRI codeword + leaf salting, statistically-ZK by construction, **zero AIR changes**.
-(Honest scope: there is *also* a non-ZK hand-rolled custom STARK in `crate::stark` and a CG-1
-recursion gadget with a BLAKE3-isn't-algebraic residual — neither is the ZK path. Shielded cells ride
-the p3 `HidingFriPcs` uni-stark path only.)
+(Honest scope: the CG-1 recursion gadget (`circuit/src/bilateral_aggregation_air.rs`) carries a
+BLAKE3-isn't-algebraic residual and is not the ZK path. Shielded cells ride the p3 `HidingFriPcs`
+uni-stark path only.)
 
 ## Why NO Turing-completeness / lambda calculus (load-bearing, not a gap)
 Cell programs are bounded, decidable **predicates** (the Pred algebra, biscuit-Datalog-descended,
@@ -38,7 +38,7 @@ unbounded inner computation in a single step — it refuses on purpose; compose 
   `note_encryption` (ECIES) / `stealth`** · the **nullifier set** (the noteSpend grow-gate =
   double-spend prevention) · the **sorted-Poseidon2 commitment tree** · the p3 `HidingFriPcs`.
 
-## The M2 arc (mine, in `circuit/src/shielded/`)
+## The M2 arc (mine, in `circuit-prove/src/shielded/`)
 A **shielded-action circuit**: prove a transfer (spend input notes → mint output notes) with
 **value + asset-type + owner all hidden**, proving (a) per-asset value balance via the homomorphic
 value commitments, (b) input-note membership in the commitment tree, (c) nullifier derivation (no
@@ -57,10 +57,10 @@ double-spend), (d) spend authority — all hidden via `HidingFriPcs`.
   prove-a-confidential-credential — all bounded predicates, ZK'd. *The jewel.*
 
 ## The seam (approved)
-`circuit/src/shielded/` is its **own AIR + proof**, composed over the existing notes / value-
-commitments / nullifiers / commitment-tree + the p3 `HidingFriPcs`. It is **NOT woven into
+`circuit-prove/src/shielded/` is its **own circuit + proof**, composed over the existing notes /
+value-commitments / nullifiers / commitment-tree + the p3 `HidingFriPcs`. It is **NOT woven into
 `effect_vm`/`descriptor_ir2`** (ember's effect-descriptor correctness refactor) — the two meet only
-at *"a shielded transfer is a kind of conserving turn."* I own `circuit/src/shielded/`; ember owns
+at *"a shielded transfer is a kind of conserving turn."* I own `circuit-prove/src/shielded/`; ember owns
 the effect-descriptor lane. **VK perturbation is free** (ember: "i don't care how often or for what
 reason the vk changes — it is not used at all"), so no separate `shielded` VK variant is needed —
 just change the circuit; the VK changes.

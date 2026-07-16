@@ -1,13 +1,16 @@
 # GPU-Prover Wiring Plan — wgpu behind Plonky3's trait seams, measured
 
-Status: PLAN + FIRST MEASURED INCREMENT (2026-07-12). The backend question is
-settled (GPU-PROVER-PROTOTYPE.md §9-§11: ONE portable wgpu source; native
-Metal buys ≤1.27x on the hash kernel and a tie on the NTT — no native seam).
-This doc is the *wiring*: how the measured kernels get behind the actual
-prover's trait seams, what fraction of the real prove each seam controls, and
-the first trait-level measured number. Increment 1 (the wgpu
-`TwoAdicSubgroupDft`) is BUILT and GREEN:
-`circuit-prove/sketches/gpu-dft-plonky3/` (`cargo run --release` = the gate).
+Status: SEAM ANALYSIS + MEASUREMENTS — and the wiring this doc plans is BUILT.
+The backend question is settled (GPU-PROVER-PROTOTYPE.md §9-§11: ONE portable
+wgpu source; native Metal buys ≤1.27x on the hash kernel and a tie on the NTT
+— no native seam). The production home is `circuit-prove/src/gpu_backend.rs`:
+`GpuDft` (seam 1, lifted from the parity-proven sketch
+`circuit-prove/sketches/gpu-dft-plonky3/`, which remains the standalone
+parity/bench harness) and `GpuBn254Mmcs` (seam 2), plus the GPU variant of the
+outer shrink config (`GpuDreggOuterConfig`) and the all-BabyBear inner
+recursion-layer dispatch — all runtime-dispatched with a CPU fallback inside
+the same types. This doc remains the grounding: which fraction of the real
+prove each seam controls, and the measured numbers the wiring rests on.
 
 ## 1. The exact trait seams (pinned Plonky3 rev 82cfad7)
 
@@ -47,10 +50,11 @@ BitReversedMatrixView<RowMajorMatrix<F>>` (radix_2_dit_parallel.rs:146) — the
 inner matrix is stored in **bit-reversed row order**, so the PCS's
 `.bit_reverse_rows().to_row_major_matrix()` is free. A GPU impl must produce
 the same type/layout or it silently pays a 452-MiB host permute per commit.
-The wiring delta once promoted: ONE type alias
-(`dregg_outer_config.rs:163` and its inner twin
-`plonky3_recursion_impl.rs:75`) — `OuterPcs::new(OuterDft::default(), ..)`
-already constructs it via `Default` (`dregg_outer_config.rs:385`).
+The landed wiring keeps the CPU config untouched and adds a GPU twin:
+`GpuOuterPcs = TwoAdicFriPcs<BabyBear, GpuDft, GpuValMmcs, GpuChallengeMmcs>`
+inside `GpuDreggOuterConfig` (`circuit-prove/src/gpu_backend.rs`) — identical
+`Val`/`Challenge`/`Challenger`/FRI knobs, bit-identical commitments +
+transcript; only WHERE the DFT and hashing run changes.
 
 ### Seam 2 — the MMCS (no batch seam exists; replace the tree BUILD)
 
@@ -107,11 +111,12 @@ what the table above pins.) Two consequences, stated plainly:
 1. **GPU-DFT alone moves the shrink e2e by ~1%.** It is the right FIRST
    wiring (cleanest seam, template for everything else, and it is measured
    below) — it is not the shrink's lever.
-2. **The shrink's lever is the BN254 MMCS** — which needs the 256-bit-limb
-   WGSL Poseidon2 (ZPrize WebGPU-MSM precedent; GPU-PROVER-PROTOTYPE.md
-   §3.3) plus the tree-build integration of §1-seam-2. The BabyBear W16 tree
-   kernels already measured (~300 Mhash/s, §11) serve the *inner* prover
-   (apex fold, 241 s, all-BabyBear), not the shrink.
+2. **The shrink's lever is the BN254 MMCS** — served by `GpuBn254Mmcs`: the
+   256-bit-limb Poseidon2 kernels (ZPrize WebGPU-MSM precedent;
+   GPU-PROVER-PROTOTYPE.md §3.3) plus the tree-build integration of
+   §1-seam-2, both wired. The BabyBear W16 tree kernels measured at
+   ~300 Mhash/s (prototype §11) serve the *inner* prover (apex fold, 241 s,
+   all-BabyBear), not the shrink.
 
 ## 3. Data marshalling — unified memory, residency, and the trait's shape
 
@@ -131,15 +136,14 @@ what the table above pins.) Two consequences, stated plainly:
   butterfly work.
 - **NTT→hash residency (the compounding win)**: `TwoAdicFriPcs::commit`
   pipes `coset_lde_batch` output straight into `mmcs.commit`
-  (two_adic_pcs.rs:316-324). Today that hop is a host `RowMajorMatrix`. When
-  the GPU MMCS lands, keep the LDE device-resident: either a residency cache
-  keyed by the host allocation (GpuMmcs::commit checks whether the matrix's
-  buffer is already on-device and skips the upload) or a `GpuMatrix: Matrix<BabyBear>`
-  carrier type threaded through `commit_ldes` (two_adic_pcs.rs:352-354
-  already separates `get_quotient_ldes` from `commit_ldes` — a natural
-  seam). On UMA the penalty for NOT doing this is one memcpy each way
-  (~1-3 ms per 452-MiB table) — a nice-to-have, not a gate; on discrete
-  boards (hbox) it is the whole ballgame.
+  (two_adic_pcs.rs:316-324). The upload direction of this residency IS wired
+  (`gpu_backend.rs`): `coset_lde_batch` parks its output in a retained device
+  buffer and `GpuBn254Mmcs::commit` consumes it with a device→device blit,
+  skipping the host staging copy + `write_buffer` re-upload. The host
+  READBACK remains by structure: the PCS seam (`.to_row_major_matrix()`) and
+  the FRI query/fold phases read the committed matrix on the host. On UMA
+  the residual cost is one memcpy (~1-3 ms per 452-MiB table); on discrete
+  boards (hbox) the wired upload half is the one that matters.
 - **Capacity**: buffers are clamped to
   `min(max_buffer_size, max_storage_buffer_binding_size)` with transparent
   column-chunking beyond that; all measured shapes ran single-chunk on the
@@ -149,14 +153,16 @@ what the table above pins.) Two consequences, stated plainly:
 
 | kernel | seam quality | status |
 |---|---|---|
-| BabyBear NTT / `coset_lde_batch` | CLEAN — pure trait impl, one type-alias swap | **BUILT + MEASURED (increment 1, below)** |
-| BabyBear W16 Poseidon2 Merkle (inner MMCS) | deeper — replace tree BUILD inside an `Mmcs` impl; must reproduce injection/sponge/compress layout bit-exactly | kernels measured (§11: ~300 Mhash/s, 60-85x CPU); integration NOT started |
-| BN254 t=3 Poseidon2 Merkle (outer MMCS — **the shrink's dominant term**) | deeper still — same tree build PLUS 256-bit limb arithmetic in WGSL + the shifted radix-2^31 row packing | NOT started; ZPrize precedent says writable; rate unmeasured — the next increment's first number |
+| BabyBear NTT / `coset_lde_batch` | CLEAN — pure trait impl, one type-alias swap | **BUILT + MEASURED + WIRED** (production `GpuDft`, `circuit-prove/src/gpu_backend.rs`; measured below) |
+| BabyBear W16 Poseidon2 Merkle (inner MMCS) | deeper — replace tree BUILD inside an `Mmcs` impl; must reproduce injection/sponge/compress layout bit-exactly | kernels measured (prototype §11: ~300 Mhash/s, 60-85x CPU); **WIRED** — inner MMCS + DFT dispatch through the production recursion layer (`gpu_backend.rs`) |
+| BN254 t=3 Poseidon2 Merkle (outer MMCS — **the shrink's dominant term**) | deeper still — same tree build PLUS 256-bit limb arithmetic + the shifted radix-2^31 row packing | **BUILT + WIRED** — `GpuBn254Mmcs` (`gpu_backend.rs`): bit-exact `MerkleTreeMmcs` reproduction, `verify_batch` delegates to the CPU verifier; native Vulkan runs a precompiled direct-SPIR-V/int64 kernel (13.688 Mperm/s RADV / 24.738 Mperm/s AMDVLK, Navi 22), portable WGSL elsewhere |
 | quotient/constraint eval (BabyBear+EF4 vecops) | medium — batch-stark internals, not a public trait seam | future; sized ~20-50% of the shrink with the two above done |
 | FRI query phase, challenger/transcript | stays CPU (sequential, tiny) | permanent CPU |
 
 ## 5. MEASURED — increment 1: wgpu `TwoAdicSubgroupDft` behind the trait
 
+Production impl: `GpuDft` in `circuit-prove/src/gpu_backend.rs`. The numbers
+below come from its parity-proven origin
 `circuit-prove/sketches/gpu-dft-plonky3/` (standalone crate, `[workspace]`
 opt-out; `cargo run --release` = parity gate + bench). Implements
 `dft_batch` + `coset_lde_batch` on `GpuDft` (lazy adapter, permanent
@@ -199,7 +205,7 @@ the honest numbers.
 
 - **Shrink prove (~95 s), GPU-DFT only**: ~1% — wire it for the template and
   the inner prover, not for this number.
-- **Shrink prove, + GPU BN254 MMCS (the next increments)**: hash share
+- **Shrink prove, + GPU BN254 MMCS (wired: `GpuBn254Mmcs`)**: hash share
   45-80% (central ~60%). If the GPU tree build lands at even 10x the CPU's
   0.17-0.19 Mperm/s, e2e ≈ 1/(0.6/10 + 0.4) ≈ **2.2x**; hash-free ceiling ≈
   1/0.4 ≈ **2.5x** (range 1.8-5x across the hash-share bracket). After that
@@ -215,7 +221,7 @@ the honest numbers.
   (blowup-64 CPU) to **well under a minute** for the shrink, each step
   measured before claimed.
 
-## 7. Next increment (named)
+## 7. The MMCS increment (both sub-steps landed)
 
 **The GPU MMCS tree build.** Two sub-steps, in order:
 
@@ -241,12 +247,21 @@ the honest numbers.
    **e2e ≈ 1.9-2.0x** (hash-free ceiling 2.5x) — the 256-bit Montgomery
    tax in 32-bit WGSL (16-bit-split mul32, SOS reduction, ~246 monty
    muls/perm) costs real throughput vs BabyBear's story but the GPU still
-   clears the bar: **GPU-wiring the BN254 outer MMCS is worth it**;
-   proceed to sub-step (2) for the outer config too, not just the inner.
-2. **`GpuMmcs: Mmcs<BabyBear>`** reproducing `MerkleTree::new`'s layout
-   (injection, sponge packing, compress, cap) with root-parity acceptance
-   against the CPU MMCS on real LDE outputs — wired first for the inner
-   BabyBear config (kernels already measured), then the BN254 outer once (1)
-   measures well. Then the residency cache of §3 makes commit consume the
-   GPU-resident LDE directly — the full NTT→hash GPU chain with zero copies
-   on UMA.
+   clears the bar: **GPU-wiring the BN254 outer MMCS is worth it**.
+   The deployed backend goes past this microprobe band on AMD: the native
+   Vulkan path runs a precompiled direct-SPIR-V/native-int64 kernel measured
+   **13.688 Mperm/s (RADV) / 24.738 Mperm/s (AMDVLK)** on Navi 22
+   (`gpu_backend.rs` module docs); other backends retain the portable WGSL
+   engine measured here.
+2. **`GpuBn254Mmcs: Mmcs<BabyBear>` — BUILT** (`circuit-prove/src/gpu_backend.rs`):
+   reproduces `MerkleTree::new`'s layout (injection at matching power-of-two
+   heights, the shifted radix-2^31 sponge packing, `TruncatedPermutation`
+   compress, cap_height 0) with root-parity gates against the CPU MMCS, and
+   `verify_batch` delegating to the untouched CPU verifier — a GPU-minted
+   proof is byte-identical to the CPU-minted one, asserted in tests. The
+   inner all-BabyBear MMCS + DFT ride the production recursion-layer
+   dispatch in the same module. The §3 residency is wired for the upload
+   direction: `coset_lde_batch` parks its output on the device and
+   `GpuBn254Mmcs::commit` consumes it with a device→device blit; the host
+   READBACK remains by structure (the PCS's `.to_row_major_matrix()` and the
+   FRI query/fold phases read the committed matrix on the host).

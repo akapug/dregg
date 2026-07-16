@@ -9,33 +9,41 @@ would today.
 
 This document is the census + gap analysis + the surface→card pattern + the ranked
 migration ladder + where progressive-disclosure lives + the apps-launcher-as-card plan. It
-is read-only on code; the work it plans is sequenced, not yet done.
+is read-only on code; the ladder's remaining rungs are sequenced below.
 
 ## The one-paragraph verdict
 
-**The pattern is already built and proven end-to-end, and ~8 surfaces already have live
-card mounts.** `starbridge-v2/src/dock/card_surface.rs` is the keystone: it mounts a card
-over the cockpit's *live* `World`, generating the view-tree in Rust from the live ledger,
-bridging it to a `deos_view::ViewNode`, hosting it in a `CardPane`, firing real turns
-through `World::commit_turn`, AND routing edit-from-within (`ModeCardSurface::edit_view`, a
-receipted `ViewPatch` with blame). What is NOT done: (1) the card path is a `card-pane`-gated
-*alternative* with the gpui tree still the default home — the thin-renderer claim is not yet
-the deployed default for any surface; (2) the rich-interactive nodes (tab-strips, scrubbers,
-right-click menus, halo handles, spatial grids) are now IN the deos-view *renderer*
-(`tree.rs`'s `Tabs`/`Slider`/`Menu`/`Halo`/`Grid`/`Gauge`/`Section`), so the remaining gap is
-the deos-js authoring *mirror* (`card_editor::ViewTree`) catching each up node-by-node as a
-surface needs to emit one; (3) there is no progressive-disclosure
-(simple-vs-adept) layer; (4) the apps-launcher is built but unmounted and not a card.
-**Recommended first move: flip the already-carded `Objects` surface to card-as-default
-(delete its gpui tree), proving the thin-renderer claim on one self-contained surface; in the
-same lane flip `Proofs` (its `proofs_card.rs` already exists) to prove the flip on a second
-read-only surface.** The deos-view vocabulary already covers both without any extension.
+**The pattern is built and proven end-to-end, and the mode-card IS the deployed surface
+for 19 of the cockpit's 32 tabs.** `starbridge-v2/src/dock/card_surface.rs` is the keystone:
+it mounts a card over the cockpit's *live* `World`, generating the view-tree in Rust from the
+live ledger, bridging it to a `deos_view::ViewNode`, hosting it in a `CardPane`, firing real
+turns through `World::commit_turn`, AND routing edit-from-within (`ModeCardSurface::edit_view`,
+a receipted `ViewPatch` with blame). `card-pane` rides the DEFAULT build (`default =
+["desktop"]` folds it in — `starbridge-v2/Cargo.toml`), and for every carded tab the `Tab`
+dispatch (`cockpit/panels_workspace.rs:193+`) renders the mode-card as the surface, with the
+gpui panel demoted to the fail-soft fallback + the card-pane-off home. The
+progressive-disclosure (simple-vs-adept) layer is built and wired: `ViewNode::Adept` +
+`Disclosure` + the `disclose` pre-walk (`deos-view/src/tree.rs`), authored as `props.adept`
+(`card_editor`), applied at every card mount (`card_pane.rs` mounts the `Simple`
+projection; the web pipeline threads `req.disclosure`). What is NOT done:
+(1) no surface has had its gpui tree DELETED — the card is the default *projection*, not yet
+the sole *definition*, so every carded surface still carries a duplicate gpui render;
+(2) the rich-interactive nodes (tab-strips, scrubbers, right-click menus, halo handles)
+are IN the deos-view *renderer* (`tree.rs`'s
+`Tabs`/`Slider`/`Menu`/`Halo`/`Grid`/`Gauge`/`Section`, plus `Pill`/`Icon` and the
+coordinate-board `CoordGrid`), so the remaining gap is the deos-js authoring *mirror*
+(`card_editor::ViewTree`) catching each up node-by-node as a surface needs to emit one;
+(3) the apps-launcher is mounted, but only as gpui chrome (the Powerbox panel's
+`apps_launcher_section`), not as a card — no `launcher_card.rs` exists. **Recommended first move: delete the gpui trees of the
+self-contained carded read-only surfaces (`Objects`, then `Proofs`), completing the
+thin-renderer flip — card as the ONLY render — on two surfaces the deos-view vocabulary
+already covers without extension.**
 
 ---
 
 ## 1. Census — the cockpit's gpui-only surfaces
 
-The cockpit is `starbridge-v2/src/cockpit/` (a `Tab` enum of 31 surfaces, `mod.rs:227+`).
+The cockpit is `starbridge-v2/src/cockpit/` (a `Tab` enum of 32 surfaces, `mod.rs:227+`).
 The panel renderers are split across `panels_*.rs`. Almost every surface is a hand-built
 gpui element tree: `div()` / `v_flex()` / `h_flex()` / `.child()`, button factories
 (`verb_button`, `cycle_chip`, `nav_button`, `pill`), `cx.listener()` / `on_click` closures,
@@ -43,43 +51,46 @@ and `theme::*()` colors inline. The model objects (e.g. `WonderRoom`, `TrustPane
 `TimeCockpitModel`, `OcapGraph`) are mostly gpui-free and do the data work; the gpui coupling
 is in the *render* function that walks that data into elements.
 
-### The 31 surfaces, by coupling and complexity
+### The 32 surfaces, by coupling and complexity
 
 Coupling = how much the render is raw gpui element-tree construction vs. a data/card path.
 Complexity = read-only display vs. rich interaction (input state, drag, menus, scrubbers).
+"Card today?" = the tab renders its mode-card as the surface in the default (card-pane)
+build, gpui panel as fail-soft fallback.
 
 | Surface | File:function (approx) | Coupling | Complexity | Card today? |
 |---|---|---|---|---|
 | Home | panels_workspace.rs:1175 | high | static prose + pills | **carded** (`ModeCard::Home`) |
-| Shell | panels_workspace.rs:1273 | high | layout picker + ops | optional (card-pane) |
+| Shell | panels_workspace.rs:1273 | high | layout picker + ops | no |
 | Agent | panels_workspace.rs:1640 | high | activity list | **carded** (`ModeCard::Agent`) |
 | Buffer | panels_web.rs:1387 | high | text-buffer + commit | no |
 | Terminal | panels_web.rs:1540 | high | command rows + run | no |
 | Composer | panels_main.rs:346 | high | 7 verb buttons | **carded** (`ModeCard::Composer`) |
 | Simulate | panels_main.rs:405 | high | pickers + predicted receipt | no |
 | Objects | panels_workspace.rs:2741 | high | pure iteration | **carded** (`ModeCard::Objects`) |
-| Debugger | panels_workspace.rs:2486 | high | step list + breakpoints | no |
-| Replay | panels_workspace.rs:2585 | med (delegates) | scrub history | no |
-| Cipherclerk | panels_workspace.rs:2599 | high | macaroon lifecycle buttons | no |
+| Debugger | panels_workspace.rs:2663 | high | step list + breakpoints | **carded** (`ModeCard::Debugger`) |
+| Replay | panels_workspace.rs:2762 | med (delegates) | scrub history | **carded** (`ModeCard::Replay`) |
+| Cipherclerk | panels_workspace.rs:2776 | high | macaroon lifecycle buttons | **carded** (`ModeCard::Cipherclerk`) |
 | Editor | panels_web.rs:1678 | high (delegates) | monospace text | no |
 | Swarm | panels_workspace.rs:2150 | high | member roster + pills | **carded** (`ModeCard::Swarm`) |
 | Organs | panels_workspace.rs:2940 | high | sectioned read-only | **carded** (`ModeCard::Organs`) |
 | Graph | panels_workspace.rs:2814 | high | edge-list iteration | **carded** (`ModeCard::Graph`) |
 | Proofs | panels_web.rs:10 | high | verification-tier board | **carded** (`ModeCard::Proofs`) |
-| WebOfCells | panels_web.rs:98 | high | tier toggle + affordances | no |
+| WebOfCells | panels_web.rs:98 | high | tier toggle + affordances | **carded** (`ModeCard::WebCells`) |
 | WebShell | panels_webshell.rs:619 | high | URL bar + Servo tile | no |
 | LinksHere | panels_web.rs:719 | high | backlink list + depth | **carded** (`ModeCard::Links`) |
 | Powerbox | panels_web.rs:983 | high | app picker + grant | **carded** (`ModeCard::Powerbox`) |
-| Moldable | panels_moldable.rs:227 | med-high | tab-strip + Halo + Spotter | **carded** (inspector card) |
-| InspectAct | panels_moldable.rs:697 | high | state rows + affordance buttons | partial (inspector) |
+| Moldable | panels_moldable.rs:227 | med-high | tab-strip + Halo + Spotter | no |
+| InspectAct | panels_moldable.rs:697 | high | state rows + affordance buttons | **carded** (`ModeCard::Inspector`) |
 | ServiceExplorer | panels_moldable.rs:2187 | high | method list + arg inputs | **carded** (`ModeCard::ServiceExplorer`) |
+| ServiceDirectory | panels_service_directory.rs:19 | high | service roster + announce | **carded** (`ModeCard::ServiceDirectory`) |
 | Workspace | panels_moldable.rs:840 | high | cycle chips + predict/commit | no |
-| Wonder | panels_moldable.rs:993 | high | glowing-cell grid + hover halos | no |
+| Wonder | panels_moldable.rs:1104 | high | glowing-cell grid + hover halos | **carded** (`ModeCard::Wonder`) |
 | Lanes | panels_moldable.rs:1108 | high | 4-lane tab-strip + gadgets | no |
 | Time | time.rs:147 | high | scrubber drag + suspend/resume | no |
 | Share | panels_moldable.rs:1478 | high | frustum cull + attenuation dial | no |
 | Docs | docs.rs:123 | high | conflict editor + transclusion | no |
-| Trust | panels_moldable.rs:650 | med (model render) | guardian/device list | no |
+| Trust | panels_moldable.rs:761 | med (model render) | guardian/device list | **carded** (`ModeCard::Trust`) |
 | Devtools | panels_devtools.rs:124 | high | sub-tabs + drill-downs | no |
 
 A second desktop shell exists beside the cockpit: `starbridge-v2/src/deos_desktop/`
@@ -87,8 +98,9 @@ A second desktop shell exists beside the cockpit: `starbridge-v2/src/deos_deskto
 pane — a `deos_view::ViewNode` body painted by deos-view's native renderer and rewritten
 live by a confined agent. It is the cleanest existing demonstration of "a desktop window
 body IS portable card data." The Halo (`deos_desktop/halo.rs`), right-click menus, and the
-Spotter (`deos_desktop/spotter.rs`) live here as gpui chrome — these are the actuation
-surfaces the vocabulary cannot yet express as cards (see §2).
+Spotter (`deos_desktop/spotter.rs`) live here as gpui chrome — the renderer carries
+`Menu`/`Halo` nodes for these actuation surfaces, but no card emits them yet (the
+authoring-mirror gap, §2).
 
 ### The clean-five vs. the hard-five
 
@@ -129,8 +141,8 @@ whole vocabulary:
 | `table(...)` | table of row-nodes | `v_flex` of children | `deos-table` |
 
 The nodes are mirrored in deos-js's `card_editor::ViewTree` (the gpui-free authoring
-mirror — `VStack/Row/Text/Bind/Button` plus `Section`/`Pill`, the two batch-1 richness
-nodes the read-mostly cards needed) and produced by the JS prelude
+mirror — nine variants: `VStack/Row/Text/Bind/Button` plus the richness nodes
+`Section`/`Pill`/`Grid`/`Icon`) and produced by the JS prelude
 (`deos-js/src/js.rs:430`'s `deos.ui.*`). The wire format is `{kind, props, children}`;
 an unknown kind renders as a visible `‹unmapped node: …›` placeholder (honest fallback).
 The renderer (`deos-view`'s `ViewNode`) carries the full richness vocabulary already; the
@@ -147,17 +159,18 @@ binds a committed turn dirtied — the SolidJS-shaped incremental update.
 
 The 8-node vocabulary cleanly covers any surface that is **a titled column of labeled rows,
 some bound to live state, with buttons that fire turns**. That is precisely the clean-five
-(`Objects`, `Graph`, `Proofs`, `Organs`, `Home`) and the already-carded set (`Objects`,
-`Graph`, `Agent`, `Composer`, `Links`, `Dynamics`, inspector RawFields). The `inspector_card`
+(`Objects`, `Graph`, `Proofs`, `Organs`, `Home`) and the bulk of the carded set (19 tabs at
+HEAD, the census column above). The `inspector_card`
 proves the richest read-case: RawFields → live `Bind` rows, Affordances → cap-gated `Button`s.
 `props.tag` is already used as a styling escape hatch (e.g. `first-room`'s `tag:"genuine"` /
 `tag:"refusal"` rows render with distinct CSS).
 
 ### The richer nodes (now IN the renderer; the mirror catches up)
 
-Update: the richness vocabulary below is now BUILT into the deos-view *renderer*
-(`deos-view/src/tree.rs`: `Section`, `Tabs`, `Gauge`, `Grid`, `Menu`, `Halo`, `Slider` — each
-with a native gpui walker and a web HTML walker). The gap is no longer "the renderer can't
+The richness vocabulary below is BUILT into the deos-view *renderer*
+(`deos-view/src/tree.rs`: `Section`, `Tabs`, `Gauge`, `Grid`, `Menu`, `Halo`, `Slider`, plus
+`Pill`, `Icon`, and the coordinate-board `CoordGrid` — each with a native gpui walker and a
+web HTML walker). The gap is not "the renderer can't
 express these"; it is "the deos-js authoring *mirror* (`card_editor::ViewTree`) emits each one
 node-by-node as a surface needs it." The list documents each node's shape and which surfaces
 consume it:
@@ -173,9 +186,10 @@ consume it:
    a target; each handle fires the same actuation the menu would.
 4. **Scrubber / slider** — `Time`'s rewind scrubber, `Replay`. Needs a `slider{slot, min,
    max, turn}` whose drag fires a `seek` turn (re-derive at a past height).
-5. **Spatial grid** — `Wonder`'s glowing-cell grid, the desktop icon field. Needs a
-   `grid{cols}` (or freeform `canvas` with per-child `x,y`) — `vstack`/`row` cannot place
-   objects spatially or persist positions.
+5. **Spatial grid** — `Wonder`'s glowing-cell grid, the desktop icon field. The mirror
+   carries `Grid{cols}` + `Icon` (`card_editor::ViewTree`), and the Wonder card emits both
+   today (`wonder_view` builds a 4-column grid of icon tiles) — this leg of the mirror is
+   closed. A freeform `canvas` with per-child `x,y` (persisted positions) remains absent.
 6. **Gauge / progress / pill** — a styled status indicator (glow = activity, a balance bar).
    `props.tag` covers simple cases; a first-class `gauge{slot, max}` is cleaner.
 7. **Input with a live model binding** — `input` today binds only *ephemeral* view-state.
@@ -213,14 +227,20 @@ The "reflective cockpit" thread is already three rungs deep. Do not rebuild it.
   arrangement, formerly hardcoded `CockpitMode::surfaces()`) becomes editable card data
   (`deos-js/src/layout_card.rs`), mounted via `ensure_layout_card` (`cockpit/frame.rs:196`).
   The cockpit reads this layout cell to render the rail instead of compiled Rust.
-- **The mode-card mount** (`3f2f6c02d` + `dock/card_surface.rs`) — nine reflective cards
-  (`inspector / objects / graph / dynamics / layout / agent / composer / links / coauthored`)
-  and a live-World bridge that hosts them as cockpit surfaces.
+- **The mode-card mount** (`dock/card_surface.rs`) — twenty `ModeCard` arms at HEAD
+  (`composer / objects / graph / dynamics / agent / links / proofs / organs / home /
+  inspector / service-directory / web-cells / trust / wonder / cipherclerk / debugger /
+  replay / swarm / service-explorer / powerbox`) and a live-World bridge that hosts them as
+  cockpit surfaces; 19 of them ARE a tab's default render (`Dynamics` mounts in the dock).
 
 The pattern RUNG 1 established and the mode-card mount generalized: **a cockpit surface is a
 card cell whose view is a `ViewTree` document, generated from live reflective state, painted
-by deos-view, editable from within as receipted patches.** Each existing card is in
-`deos-js/src/*_card.rs`; each new surface adds one `*_card.rs` and one `ModeCard` arm.
+by deos-view, editable from within as receipted patches.** The view-builders live in two
+homes: twelve in `deos-js/src/*_card.rs` (agent / coauthored / composer / dynamics / graph /
+home / inspector / layout / links / objects / organs / proofs) and the rest directly in
+`starbridge-v2/src/dock/card_surface.rs` (`wonder_view`, `trust_view`, and the
+service-directory / web-cells / cipherclerk / debugger / replay / swarm builders in its
+dispatch); a new surface adds one view-builder and one `ModeCard` arm.
 
 ---
 
@@ -233,10 +253,13 @@ by deos-view, editable from within as receipted patches.** Each existing card is
    `text` / `bind(slot)` / `button(turn, arg)`. No gpui dependency at all. This is the
    proven *portable* pattern: e.g. `bounty-board` is a vstack of a title, a state `bind`, and
    four affordance buttons (`post/claim/submit/payout`).
-2. **Reflective generated card** (the cockpit cards, `deos-js/src/*_card.rs`). A Rust
-   *view-builder* reads the live ledger and emits the `ViewTree` (e.g.
-   `objects_card::objects_view(ledger)` = one row per cell + an `inspect` button). The view
-   is held as an editable `ProgramSource` document so an edit-from-within is a receipted patch.
+2. **Reflective generated card** (the cockpit cards — view-builders in
+   `deos-js/src/*_card.rs` and in `dock/card_surface.rs` itself, §3). A Rust *view-builder*
+   reads the live ledger and emits the `ViewTree` (e.g. `objects_card::objects_view(ledger)`
+   = one row per cell + an `inspect` button). The view is held as an editable
+   `ProgramSource` document so an edit-from-within is a receipted patch. One carded surface
+   is not live-backed: the Trust card's substance is `TrustPanel::demo()` — a fixture
+   (a representative identity until an on-ledger identity cell is wired), not the ledger.
 
 Both produce the SAME `{kind, props, children}` data the SAME renderer paints. The cockpit
 surfaces are flavor 2 (they reflect live state); the launchable apps are flavor 1.
@@ -256,64 +279,69 @@ surfaces are flavor 2 (they reflect live state); the launchable apps are flavor 
    re-folds the view + `set_tree`s the `CardPane` — reshape-from-within, a receipted patch
    with blame, not a recompile.
 
-This is the thing the prompt asks to "design" — and it exists, proven, behind `card-pane`.
+This is the keystone, and it is deployed: `card-pane` is folded into the default `desktop`
+feature, and the `Tab` dispatch renders the mode-card as the surface for every carded tab.
 The button-click → real-turn routing is solved: the affordance name IS the turn method; the
 cap tooth (`is_attenuation(held, required)`) runs in-band before the executor.
 
-### The flip: card-as-default
+### The flip: card-as-sole-definition
 
-What is NOT done is making the card the **source of truth** rather than a feature-gated
-alternative. Today `card-pane` is off the default build, and where a card mount exists the
-gpui panel is still the home (the card is the `mode_card_surface` fallback path). The
+The card is the **default render** for the 19 carded tabs; what is NOT done is making it the
+sole **definition**. Every carded surface still keeps its gpui render function as the
+fail-soft fallback + the card-pane-off home, so the render logic is duplicated. The
 liberation is: for a migrated surface, **delete the gpui render function and make the card
 the only render.** The surface's "definition" becomes its `*_card.rs` view-builder; gpui
 `AppletView`/`CardPane` is the dumb painter. This is the concrete meaning of "starbridge-v2
 is a thin renderer."
 
-Sequencing note (swarm-safe): `card-pane` pulls multi-GB mozjs, so the default-on flip is
-staged — first make a surface's card path the default *within* `card-pane`/`native-full`,
-delete its gpui tree there, and keep a minimal gpui-free static fallback (the AX4 flavor, a
-serde_json card with no live bind) for the lean build. The reflective generated cards do not
-need mozjs to *render* (the view-builder is pure Rust + `parse_view_tree`); only agent
-*rewrite* reaches SpiderMonkey.
+Sequencing note: `card-pane` pulls multi-GB mozjs and the lean/headless builds keep it off —
+which is exactly why the gpui fallbacks still exist. Deleting a surface's gpui tree therefore
+needs a minimal gpui-free static fallback (the AX4 flavor, a serde_json card with no live
+bind) for the card-pane-off build. The reflective generated cards do not need mozjs to
+*render* (the view-builder is pure Rust + `parse_view_tree`); only agent *rewrite* reaches
+SpiderMonkey.
 
 ---
 
 ## 5. The migration ladder (cleanest first)
 
-The pattern is proven; the ladder is about (a) flipping already-carded surfaces to
-card-as-default and (b) extending coverage to new surfaces, easiest vocabulary-fit first.
+The pattern is proven and 19 tabs render card-as-default; the ladder is about (a) deleting
+the duplicate gpui trees so the card is the sole definition and (b) extending card coverage
+to the remaining gpui-only surfaces, easiest vocabulary-fit first.
 
-**Rung A — flip one already-carded surface to card-as-default (the thin-renderer proof).**
-- **`Objects`** is the cleanest first move. It already has `ModeCard::Objects` +
-  `objects_card.rs` (live roster → rows + `inspect` buttons) + edit-from-within. The move:
-  make the card path the default render for the Objects surface and delete its gpui tree in
-  `panels_workspace.rs:2741`. Self-contained (no input state, no menus), expressible in
-  today's vocabulary, and it proves the load-bearing claim — *the surface is defined by its
-  card, gpui only paints* — on a real surface end-to-end. **Recommended FIRST.**
+**Rung A — delete one carded surface's gpui tree (the thin-renderer completion).**
+- **`Objects`** is the cleanest first move. `ModeCard::Objects` + `objects_card.rs` (live
+  roster → rows + `inspect` buttons) + edit-from-within render as the surface today. The
+  move: delete its gpui tree in `panels_workspace.rs:2741` (and give the card-pane-off build
+  a static fallback). Self-contained (no input state, no menus), and it proves the
+  load-bearing claim — *the surface is defined by its card, gpui only paints* — on a real
+  surface end-to-end. **Recommended FIRST.**
 
-**Rung B — flip the remaining read-only surfaces (their cards already exist; no vocabulary gap).**
+**Rung B — delete the remaining read-only surfaces' trees (their cards render today).**
 - **`Proofs`** (`panels_web.rs:10`) — a verification-tier board, pure read-only badges +
-  receipt rows. `deos-js/src/proofs_card.rs` already exists (verdict rows = `text`/`bind`, a
-  per-turn `verify` button) — trivial in the base vocabulary. **Recommended companion to Rung
-  A** — flip it alongside the Objects flip.
-- **`Organs`** (`panels_workspace.rs:2940`) — sectioned read-only organ cell-state.
-  `deos-js/src/organs_card.rs` exists; the `section{title}` node it wants is now in the
-  renderer (`tree.rs`'s `Section`).
-- **`Home`** (`panels_workspace.rs:1175`) — static prose + liveness pills. `LandingPortal`
-  is already gpui-free; `deos-js/src/home_card.rs` exists (mostly `text` + `bind` pills).
+  receipt rows; `deos-js/src/proofs_card.rs` is the default render. **Recommended companion
+  to Rung A.**
+- **`Organs`** (`panels_workspace.rs:2940`) — sectioned read-only organ cell-state;
+  `deos-js/src/organs_card.rs` uses the renderer's `Section`.
+- **`Home`** (`panels_workspace.rs:1175`) — static prose + liveness pills; `LandingPortal`
+  is gpui-free and `deos-js/src/home_card.rs` is the default render.
 
-**Rung C — the moderate-interaction surfaces (one new vocabulary node each).**
-- **`Swarm`**, **`Trust`**, **`Cipherclerk`** — rosters + lifecycle buttons; need `section`
-  + `pill`/`gauge`. `Trust` already renders from a gpui-free `TrustPanel` model.
+**Rung C — card the moderate-interaction gpui-only surfaces.**
 - **`Simulate` / `Workspace`** — pickers (cycle chips) + a predicted-receipt readout; need
   the `tabs`/`select` node for the effect-palette cycle and `input` carrying a turn arg.
-- **`ServiceExplorer`** — method list + arg inputs + invoke; needs `input`→arg binding.
+- **`Shell`** — layout picker + ops; `section` + buttons.
+- The carded rosters (`Swarm`, `Trust`, `Cipherclerk`, `ServiceExplorer`) sit here for
+  tree-deletion once their write-affordances (the genuine crypto / announce / invoke turns
+  that today live only in the gpui fallback) are expressed as card buttons — `input`→arg
+  binding for `ServiceExplorer`.
 
-**Rung D — the rich surfaces (drive the vocabulary extension §2).**
-- **`Lanes`**, **`Devtools`**, **`Moldable`** — need `tabs`. `Moldable` is half-done already.
-- **`Time`**, **`Replay`** — need `slider`/scrubber.
-- **`Wonder`**, the desktop icon field — need `grid`/`canvas` + `halo`.
+**Rung D — the rich surfaces (drive the authoring-mirror extension §2).**
+- **`Lanes`**, **`Devtools`**, **`Moldable`** — need the mirror to emit `tabs`.
+- **`Time`** — needs `slider`/scrubber (the `Replay` card exists; its scrub affordance wants
+  the same node).
+- The desktop icon field — freeform `canvas` + `halo` (the `Wonder` card emits the
+  mirror's `Grid`/`Icon` today; its drag-value grab/drop turn stays in the gpui room).
+- **`Buffer` / `Terminal` / `Editor`** — text-input surfaces; need `input` carrying turn args.
 - **`WebShell`** — needs an embedded native render tile (Servo) the card references by handle;
   the URL bar is an `input`. This is the genuine ceiling — a card referencing an opaque
   native paint region. Park until the rest lands.
@@ -331,22 +359,25 @@ The delight requirement (a 1999-AOL 4-year-old clicks around with wonder; an ade
 and molds it live) lives in the **card layer**, specifically two mechanisms, neither of
 which forks the source of truth:
 
-1. **A disclosure level per render, not per card.** Add a `props.adept: true` tag on nodes
-   (and a card-level `disclosure: "simple" | "adept"` setting the renderer carries). The
-   renderer *filters*: at the simple level it hides adept-only nodes — raw hex cell ids,
-   `ViewNode` kinds, slot/field indices, receipt hashes — and shows the friendly label + the
-   live value + the buttons; at the adept level it shows everything (the Pharo "see the
-   bones" mode). One card, two projections — the SAME data the web renderer would filter
-   identically. This reuses the existing `props.tag` mechanism (already wired for
-   `genuine`/`refusal` styling) rather than inventing a parallel channel.
+1. **A disclosure level per render, not per card — built and wired.** A node authored with
+   `props.adept: true` (`card_editor`'s section flag) lifts into `ViewNode::Adept`, and
+   `deos_view::disclose` (`deos-view/src/tree.rs`) is a pure pre-walk run BEFORE any
+   renderer walk: `Disclosure::Simple` DROPS adept-marked subtrees — raw hex cell ids,
+   slot/field indices, receipt hashes — showing the friendly label + the live value + the
+   buttons; `Disclosure::Adept` UNWRAPS them (the Pharo "see the bones" mode). One card,
+   two projections — and because the pre-walk runs before `bind_plan`'s cursor walk, both
+   projections keep self-consistent bind cursors in every renderer identically. The card
+   mount applies `disclose(&tree, Disclosure::Simple)` on every build
+   (`starbridge-v2/src/card_pane.rs`), and the web pipeline threads `req.disclosure`
+   (`deos-view/src/pipeline.rs`).
 2. **Friendly-by-default labels.** The view-builders already prefer `short_hex` + a human
    label over raw bytes (`objects_card` rows are `"{short} · bal {n}"`, not a 32-byte id).
    Make this a convention: a `bind`/`text` carries a human `label`; the hex/slot is an
    `adept`-tagged sibling, hidden at the simple level. Progressive disclosure is then "show
    the adept siblings," not a different card.
 
-Because disclosure is a renderer filter over one card, it is renderer-independent (web and
-gpui filter the same tree), it survives agent rewrite (a patch adds an `adept` node; both
+Because disclosure is a pre-walk projection over one card, it is renderer-independent (web
+and gpui paint the same disclosed tree), it survives agent rewrite (a patch adds an `adept` node; both
 levels stay coherent), and it keeps the card the single source of truth. Delight is the
 *default projection*; moldability is the *adept projection*; both are the same object.
 
@@ -354,12 +385,17 @@ levels stay coherent), and it keeps the card the single source of truth. Delight
 
 ## 7. The apps-launcher as a card
 
-`RegistryLauncher` (`starbridge-v2/src/powerbox.rs:451`) is built and tested but unmounted:
-it wraps the `AppRegistry` of wired starbridge-apps (`bounty-board`, `gallery`, `kvstore`,
-`identity`, `nameservice`, `first-room`, `polis`, …), exposing `rows()` (one `AppLaunchRow`
-per app) and `launch(id)`. It is gpui-free data today. It should NOT become a new gpui `Tab`;
-it should surface as a **launcher card**, tying the apps-in-desktop milestone to the
-liberation:
+`RegistryLauncher` (`starbridge-v2/src/powerbox.rs:471`) is built, tested, and mounted as
+gpui chrome: the Powerbox panel renders its `rows()` as launch buttons
+(`cockpit/panels_app_launcher.rs::apps_launcher_section`, mounted from the Powerbox render
+in `panels_web.rs`), and a launch drives `RegistryLauncher::launch_on_world` — seeding the
+app's cell + committing a verified turn on the cockpit's live `World`. It wraps the
+`AppRegistry` of wired starbridge-apps (`bounty-board`, `gallery`, `kvstore`, `identity`,
+`nameservice`, `first-room`, `polis`, …), exposing `rows()` (one `AppLaunchRow` per app)
+and `launch(id)`, and the launcher data itself is gpui-free. What it is NOT is a card (no
+`launcher_card.rs` exists) — the mount is a hand-built gpui section, exactly the coupling
+this plan removes. It should surface as a **launcher card**, tying the apps-in-desktop
+milestone to the liberation:
 
 1. **A launcher card** — a new `launcher_card.rs` (reflective flavor): a vstack with a title
    and one `button` per `RegistryLauncher::rows()` entry, the button's affordance
@@ -376,30 +412,30 @@ liberation:
    confined app-cell + a standing `CapabilityRequest`) stays the trusted designation flow;
    the powerbox grant is itself a card surface.
 
-The launcher card is a good **second** brand-new card (after `Proofs`): it is read-only +
-buttons (no vocabulary gap), and it lights up the apps-in-desktop milestone directly.
+The launcher card is the natural next brand-new card: it is read-only + buttons (no
+vocabulary gap), and it lights up the apps-in-desktop milestone directly.
 
 ---
 
 ## 8. Summary — what to build, in order
 
-1. **Flip `Objects` to card-as-default** (Rung A): make `objects_card` the Objects surface's
-   only render; delete the gpui tree. Proves "starbridge-v2 is a thin renderer" on one
-   self-contained surface, end-to-end (card defines it, gpui paints it, buttons fire real
-   turns, edit-from-within reshapes it).
-2. **Flip `Proofs`** (Rung B; `proofs_card.rs` already exists) + **stand up the launcher card**
-   (§7, still greenfield — no `launcher_card.rs` yet): prove the second flip and light the
+1. **Delete the `Objects` gpui tree** (Rung A): `objects_card` renders the surface today;
+   make it the ONLY render. Proves "starbridge-v2 is a thin renderer" on one self-contained
+   surface, end-to-end (card defines it, gpui paints it, buttons fire real turns,
+   edit-from-within reshapes it).
+2. **Delete the `Proofs` tree** (Rung B) + **stand up the launcher card** (§7, still
+   greenfield — no `launcher_card.rs` exists): complete a second flip and light the
    apps-in-desktop milestone — both fit today's vocabulary.
-3. **Add the disclosure filter** (§6): `props.adept` + a simple/adept render level, reusing
-   `props.tag`. Delight by default, moldability for adepts, one card.
-4. **Grow the authoring mirror** to emit the richer nodes (§2) as the surfaces that need them
-   arrive — the renderer already has `section`/`tabs`/`menu`/`halo`/`slider`/`grid`; the
-   `card_editor::ViewTree` constructors catch up: `section` → `tabs`/`menu`/`halo` (the
-   actuation primitives, highest leverage) → `slider` → `grid`.
-5. **Walk the ladder** (Rungs C, D): the moderate surfaces, then the rich ones, `WebShell`
-   and `Docs` last.
+3. **Grow the authoring mirror** to emit the richer nodes (§2) as the surfaces that need them
+   arrive — the renderer has `section`/`tabs`/`menu`/`halo`/`slider`/`grid`, and the mirror
+   already carries `section`/`pill`/`grid`/`icon`; the remaining `card_editor::ViewTree`
+   constructors: `tabs`/`menu`/`halo` (the actuation primitives, highest leverage) →
+   `slider`.
+4. **Walk the ladder** (Rungs C, D): card the remaining gpui-only surfaces, then the rich
+   ones, `WebShell` and `Docs` last.
 
-The liberation is not greenfield: the mount bridge, the renderer, the edit-from-within loop,
-and nine cards exist. The work is (a) flipping the source of truth from gpui trees to cards
-surface by surface, (b) the disclosure layer, (c) the vocabulary extensions the rich
-surfaces need, and (d) the launcher-as-card that makes the desktop a renderer of cards.
+The liberation is not greenfield: the mount bridge, the renderer, the disclosure layer, the
+edit-from-within loop, and twenty mode-cards exist, and 19 tabs render card-as-default. The
+work is (a) deleting the duplicate gpui trees so the card is the sole definition, surface by
+surface, (b) the authoring-mirror extensions the rich surfaces need, and (c) the
+launcher-as-card that makes the desktop a renderer of cards.

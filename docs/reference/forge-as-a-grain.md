@@ -87,8 +87,10 @@ These are the intended assumptions, not hidden.
 
 ## Crates
 
-`dregg-doc` (excluded ws) — the forge core: PR/merge/review, CiVerdict/CiRun, CiAssurance, staked_bond,
-nullifier accumulator. `forge-ci-runner` (excluded ws) — the confined producer + re-executor + the
-doc→worktree materialization. `sandstorm-bridge` (member) — the witnessed cloud serving. Unit green at
-HEAD: dregg-doc 168 lib + suites, forge-ci-runner 14, sandstorm-bridge 77+2. (Whole-tree green awaits the
-other terminal's in-flight `dregg-sdk` work settling — a shared-tree artifact, not this stack.)
+`dregg-doc` (root-workspace member AND default-member — `Cargo.toml:16`/`:23`; its own `Cargo.toml:28`
+notes the fold, with the heavy deps optional behind `cell-heap`/`substrate`/`rope`) — the forge core:
+PR/merge/review, CiVerdict/CiRun, CiAssurance, staked_bond, nullifier accumulator. `forge-ci-runner`
+(its own excluded workspace root, `Cargo.toml:68`; its `src/materialize.rs` builds against an older
+dregg-doc `AtomContent` API — the named seam blocking its fold, `Cargo.toml:57-59`) — the confined
+producer + re-executor + the doc→worktree materialization. `sandstorm-bridge` (member) — the witnessed
+cloud serving.

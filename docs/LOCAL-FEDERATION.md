@@ -109,14 +109,20 @@ not a single node.
    long-lived / cross-machine node, not a safety defect. On a fresh single-box
    `up` it streams steadily.
 
-4. **Full-mode restart recovery hole (open).** On restart a full-mode node
-   persists only its own single signature against a committee threshold and
-   fail-closes; the fix (bind the finalized `merkle_root` into the finalization
-   vote, retain the sigs, persist the quorum-signed root) is specced in
-   `docs/HANDOFF-committee-restart-fix.md` (Fix B). Live finalization is
-   unaffected; only cold restart of a full-mode node is.
+**Closed (formerly caveat 4): full-mode restart recovery.** A full-mode node
+persists a genuine committee quorum with each finalized root: `FinalizationVote`
+v2 binds the finalized `merkle_root` into the vote, the `VoteCollector` retains
+the signature bytes, and the ≥threshold quorum is persisted into the root's
+`finalization_quorum` (back-filled a gossip round or two after the synchronous
+commit when peer votes trail — a deliberate liveness cost, never a block on
+gossip). On restart the recovery anchor accepts
+`verify_signatures || verify_finalization_quorum`
+(`node/src/blocklace_sync.rs`; pinned by
+`dregg_persist::tests::full_mode_single_sig_root_is_refused_genuine_quorum_accepted`
+and `committee_node_restarts_cleanly_with_finalization_quorum`; design record:
+`docs/HANDOFF-committee-restart-fix.md`, Fix B).
 
 **Bottom line:** N=4 private federation with real cross-node BFT finality
 (marshal producer), streaming steadily on a fresh box — a genuine
 decentralization step past the solo node, with the verified-producer upgrade and
-the perf/restart items named and tracked.
+the perf items named and tracked.

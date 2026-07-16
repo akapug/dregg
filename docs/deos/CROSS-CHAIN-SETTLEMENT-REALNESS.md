@@ -63,23 +63,32 @@ refused by the real cryptographic check.
 
 ### HONEST: what is still a fixture in the wrap, and why
 
-The apex the wrap folds is a **synthetic 2-turn `IncrementNonce` chain** built
-in-process (`circuit-prove/tests/apex_shrink_gnark_fixture.rs::make_turn`), NOT a
-turn served by the live node. Two independent reasons, both named, neither a
-surprise:
+The apex the committed gnark fixture folds is a **synthetic 2-turn chain built
+in-process** (`circuit-prove/tests/apex_shrink_gnark_fixture.rs::make_turn`),
+NOT a turn served by the live node. The two blockers this pass originally named
+here are both closed at HEAD; what remains is the end-to-end wiring:
 
-1. **No `FullTurnProof` → `FinalizedTurn` adapter exists.** The live node emits a
-   `FullTurnProof` (a composed Effect-VM STARK; `node/src/turn_proving.rs`) at
-   `GET /api/turn/{h}/proof`. The wrap folds `FinalizedTurn` /
-   `DescriptorParticipant` objects (`prove_turn_chain_recursive`,
-   `circuit-prove/src/ivc_turn_chain.rs`). Nothing in the tree converts one to
-   the other. Building that adapter is **the** next real step for a literal
-   node-turn → wrap; it was out of scope for this pass (it lives adjacent to the
-   effect-VM / turn-proving surface a concurrent lane owns).
-2. **Value-bearing `Transfer` into the wrap is blocked** by a mid-flight sibling
-   wide-registry cutover (GAP #4): a `Transfer` leg fails host admission ("not a
-   known R=24 cohort member"), so only `IncrementNonce` currently traverses the
-   fold. `make_turn`'s own doc-comment records this.
+1. **The `FullTurnProof` → `FinalizedTurn` adapter EXISTS:**
+   `dregg_turn::rotation_witness::finalized_turn_from_full_turn`
+   (`turn/src/rotation_witness.rs:731`). It re-proves the rotated leg under the
+   leaf-wrap config from the same turn context (the two proofs are different
+   FRI-engine instantiations of the same constraint set, so a re-prove is the
+   sound bridge, not a byte-reuse), and its fail-closed faithfulness tie REFUSES
+   any leg whose wide 8-felt anchors differ from the served proof's proven
+   `(old_commit, new_commit)`. Both polarities are tested: a real transfer binds,
+   an anchor off by one felt is refused
+   (`sdk/src/full_turn_proof.rs::full_turn_wrap_adapter_binds_real_transfer_and_rejects_mismatch`).
+2. **Value-bearing `Transfer` traverses the fold.** The capstone tooth
+   (`circuit-prove/tests/apex_shrink_bn254_tooth.rs`) folds a 2-turn `Transfer`
+   chain through `prove_turn_chain_recursive` → BN254 shrink → verify ACCEPT +
+   tamper REJECT. The committed gnark fixture's body is still
+   `IncrementNonce` (its `make_turn` label explains the choice; the export does
+   not depend on which effect the apex folds — only that the apex is real).
+
+**The remaining seam (named, not closed):** nothing yet drives a turn SERVED by
+the node (`GET /api/turn/{h}/proof`) through the adapter into the fold → shrink →
+on-chain settle as one run. The adapter and its teeth exercise the same objects
+in-process; the served-turn end-to-end is the wiring left.
 
 Also honest and unchanged: the Groth16 trusted setup is a **single-party dev
 ceremony** (toxic-waste-known). A production MPC ceremony is ember-gated.
@@ -101,9 +110,10 @@ committee-of-one) — the same `/turn/submit` path `drex-web` uses:
 
 So the node genuinely **executes real value turns and attaches a self-verified
 full-turn STARK proof** to them. This proof is NOT the object the EVM wrap
-consumes (see §1.1) — it corroborates the node side is real; it does not itself
-settle on-chain. Bridging `48419c58`'s `FullTurnProof` into the wrap is exactly
-the missing adapter.
+consumes directly (see §1.1) — it corroborates the node side is real; it does not
+itself settle on-chain. Bridging a served `FullTurnProof` like `48419c58`'s into
+the wrap is what `finalized_turn_from_full_turn` does (§1.1); driving a served
+turn through it end-to-end is the remaining wiring.
 
 ---
 
@@ -192,9 +202,11 @@ Fixtures → real, this session: the wrap is **freshly minted and verified again
 the real Base/Solana/Cosmos verifiers locally**; a **running light-client bin**
 settles a real mainnet WETH holding; the **deploys dry-run against real testnet
 state keyless**; and a **real live-turn STARK proof** exists on the node
-(`48419c58…`, `has_proof:true`). The one remaining fixture in the settle path is
-the wrap's **apex turn body** — a synthetic `IncrementNonce` chain, not the
-node's served `FullTurnProof` — because the `FullTurnProof → FinalizedTurn`
-adapter does not yet exist (and `Transfer`-into-the-wrap waits on the sibling
-wide-registry regen). That adapter is the single next step to a literal
-live-node-turn → on-chain settlement.
+(`48419c58…`, `has_proof:true`). The `FullTurnProof → FinalizedTurn` adapter
+exists with a fail-closed faithfulness tie (`finalized_turn_from_full_turn`,
+`turn/src/rotation_witness.rs:731`), and a `Transfer`-bodied chain folds through
+the capstone tooth (`apex_shrink_bn254_tooth.rs`). The remaining seam in the
+settle path is the **served-turn end-to-end**: driving a node-served
+`FullTurnProof` through the adapter → fold → shrink → on-chain settle as one
+run (the committed gnark fixture's apex body is still a synthetic in-process
+chain).

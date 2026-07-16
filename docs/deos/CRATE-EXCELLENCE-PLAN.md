@@ -11,6 +11,13 @@ file:line a reader actually opened. The patterns generalize *by construction* �
 tree is written — but the per-crate table names only what is read. Nothing here is extrapolated to an unread
 crate.
 
+**Status at HEAD (re-verified 2026-07-16).** The plan below is largely EXECUTED: MOVEs 1–4 are landed —
+the three live defects are closed, the crown-jewel forge test derives its collisions at test time, the
+`#[ignore]`d teeth run on a nightly armed-teeth lane, the named vacuous gates bite, and the front doors
+are rewritten. MOVE 5 (typed boundaries + the adapter trait) and most P6 burndowns are the open work;
+`#![deny(rustdoc::broken_intra_doc_links)]` is a named lane with a measured cost (`circuit/src/lib.rs:215`).
+Per-finding statuses are marked inline below.
+
 ---
 
 ## 1. The honest picture
@@ -36,37 +43,42 @@ would waste the reading.
   crates' own self-reports.* `effect_vm_descriptors.rs:20-27` pre-empts its own FP-tautology hole in its own
   words. `fri_params_soundness_budget.rs` states that the capacity conjecture is **refuted** and that its own
   gate is an engineering margin, not a proof. `producer_descriptor_coverage_gate.rs` tallies its own
-  **43 Uncovered** rows and fails the build on an unclassified one. `lib.rs` in `cell` and `turn` open by
+  **44 Uncovered** rows and fails the build on an unclassified one. `lib.rs` in `cell` and `turn` open by
   declaring themselves LEGACY and not the source of truth. This is the iterative/approximative method working.
-- And the **gap between the two is where excellence is lost.** The ledgers name real holes that nobody burns
-  down. The teeth are written and then never armed. The deep modules are scrupulous and the front doors are
-  stale. The apparatus that finds the gap is better than the discipline that closes it.
+- And the **gap between the two is where excellence is lost.** When read: the ledgers named real holes nobody
+  was burning down, the teeth were written but never armed, the deep modules were scrupulous while the front
+  doors were stale. The arming and the front doors are fixed at HEAD (MOVEs 2 and 4); the undrained ledgers
+  (P6) are where the gap still lives. The apparatus that finds the gap remains better than the discipline that
+  closes it — that is the standing thing to manage.
 
-Three findings are not "gaps" — they are live defects, and they are stated first because grade-averaging hides
-them:
+Three findings were live defects when read — stated first because grade-averaging hides them. **All three are
+CLOSED at HEAD**, each by the exact MOVE-1 mechanism prescribed below:
 
-1. **`cell/src/program/eval.rs:2557` is a wire-reachable panic.** `SimpleStateConstraint::Not(Not(c))` panics in
-   `lift_simple`. The reader *proved* it with three probes: direct eval panics; a 42-byte postcard payload
-   decodes clean and *then* panics (so an attacker-supplied cell program remotely crashes any node that
-   evaluates it); and the public safe builder `implies()` constructs the panicking shape with **no adversary at
-   all**. 30+ crates depend on `dregg-cell`. This is a node-crash DoS.
-2. **`turn/src/verify.rs:245` `verify_receipt_chain_with_keys` is fail-open.** It verifies signatures only on
-   receipts that have them (`if let Some(ref sig_bytes)`). Strip the signature; the chain still verifies under
-   the function whose name promises key-checking. No test catches this because it would not fail. This is the
-   federation-exit path `lightclient/`, `wire/` and the seL4 verifier PD sit on.
-3. **`cell`'s `test-stubs` firewall is defeated by the workspace's own build graph.** `tests/Cargo.toml:38`
-   enables `dregg-cell/test-stubs` as a **normal** `[dependencies]` entry, and `dregg-tests` is in both
-   `members` and `default-members`. Verified empirically: `cargo tree -p dregg-node -p dregg-tests -e features
-   -i dregg-cell` prints `feature "test-stubs"`. A root `cargo build --release` arms `StubVerifier`'s
-   accept-anything path inside the production node binary. Only reachable if a host calls `with_stubs()`, so it
-   is a defeated defense-in-depth layer rather than a live forge — but `cell/Cargo.toml`'s stated guarantee
-   ("production builds never set it", "structurally impossible") **is false as packaged.**
+1. **`cell`'s `Not(Not(c))` panic — CLOSED.** The reading proved a wire-reachable panic in `lift_simple` with
+   three probes (direct eval; a postcard payload that decodes clean and then panics; the public safe builder
+   `implies()` constructing the shape with no adversary — a node-crash DoS on a crate with 30+ dependents). At
+   HEAD `lift_simple`'s `Not` arm is fail-closed (`Err(ProgramError::NegationNotLiftable)`,
+   `cell/src/program/eval.rs:2554-2562`); the smart constructor `SimpleStateConstraint::not` — the only path
+   `implies()` uses — collapses `not(Not(c)) → c` at construction; and the `types.rs` doc states that
+   `Not(Not(c))` **is** representable and how it is collapsed. The false paragraph that caused the bug is gone.
+2. **`turn`'s fail-open chain verify — CLOSED.** `verify_receipt_chain_with_keys` verified signatures only on
+   receipts that carried them — strip the signature and the chain still verified. At HEAD
+   `verify_receipt_chain_strict` requires an executor signature on **every** receipt (`turn/src/verify.rs:285`),
+   the lenient variant carries its leniency in its name (`verify_receipt_chain_with_optional_keys`, `:316`), and
+   the adversarial pair is a test: strip a signature from a valid chain → strict rejects, lenient (documented
+   lenient) accepts (`verify.rs:726-781`).
+3. **`cell`'s `test-stubs` leak — CLOSED.** The workspace build graph armed `StubVerifier`'s accept path in a
+   root release build (a normal `[dependencies]` feature entry + `default-members`). At HEAD `tests/Cargo.toml`
+   carries `dregg-cell` featureless in `[dependencies]` (`:35`) and `test-stubs` only in `[dev-dependencies]`
+   (`:70`); a `compile_error!` fires if `test-stubs` is enabled in a `debug_assertions`-off build
+   (`cell/src/predicate.rs:1343-1353`); a cargo-tree firewall test pins the graph
+   (`tests/tests/test_stubs_firewall.rs`); and the stub accept path itself compiles only under
+   `cfg(test)`/`test-stubs`.
 
-One more, on the record: **`cell/tests/offchain_root_forge_closed.rs` is RED at HEAD.** 2 of 3 tests fail their
-setup precondition — the pinned birthday-search collision constants went stale when `compute_heap_root` /
-`compute_fields_root` changed underneath them. The crate's gold-standard adversarial test (real collision pairs,
-proving the wide 8-felt encoding separates states the old lane-0 projection collided) is providing zero
-protection on the heap and fields planes right now.
+And the crown jewel bites again: **`cell/tests/offchain_root_forge_closed.rs` derives its colliding pairs by
+bounded search at test time** (`find_lane0_collision`, `:89`) — no generator to remember to run, no pinned
+constant to go stale — so a change to `compute_heap_root` / `compute_fields_root` can never again silently
+disarm the forge regression the way the stale pins once did.
 
 ---
 
@@ -76,44 +88,52 @@ This is the product. These are not six crates' six problems; they are one body's
 
 ### ⚑ P1 — The tooth that cannot bite (the dominant pattern)
 
-We write negative tests prolifically and adversarially-*named*. A large fraction of them cannot fail for the
-reason they claim. Four distinct mechanisms, all live:
+We write negative tests prolifically and adversarially-*named*. A large fraction of those read could not fail
+for the reason they claimed. The mechanisms, each with its status at HEAD:
 
 **(a) Structural presence standing in for behaviour.** The test asserts a gate-*shaped* subtree is in the
 constraint list, not that the interpreter enforces it.
 `cap_delegation_nonamp_descriptor.rs::genuine_nonamp_carries_anti_amplify_teeth` pattern-matches the descriptor
 AST for `Mul(Var(granted), Add(Const(1), Mul(Const(-1), Var(held))))` on each of 8 mask bits. No amplifying
-witness is ever constructed; no prover is ever asked to refuse one. The doc claims "the interpreted circuit
-ENFORCES `granted ⊑ held` bitwise — on every delegation effect." The behavioural twin exists 200 lines away
-(`ir2_amplified_submask_refuses`) and is exactly what is missing here.
+witness is ever constructed; no prover is ever asked to refuse one. **Closed at HEAD for this instance:** the
+behavioural tooth exists — `nonamp_submask_gate_refuses_an_amplifying_witness`
+(`cap_delegation_nonamp_descriptor.rs:301`) forges each mask bit independently and requires the running prover
+to refuse — and the module doc states plainly that nothing routes cap-graph rows to this descriptor (`:81`).
+The pattern (AST presence standing in for behaviour) remains the thing to watch for in review.
 
 **(b) The undiscriminating reject.** `match catch_unwind(..) { Err(_) => {}, Ok(Err(_)) => {}, Ok(Ok(_)) =>
-panic!("...is OPEN") }` — **any** panic or **any** error counts as a correct refusal. **36 sites in `circuit`**
-(`descriptor_ir2.rs:6333, 6362, 6502, 6565, 6658, 6738, 6823`, …), **161 sites in `circuit-prove`**. A stray
-`.unwrap()` introduced in trace assembly keeps every one of them green while proving nothing about the
-constraint system. A tooth that cannot distinguish *"rejected the forgery"* from *"crashed"* is measuring the
-wrong thing.
+panic!("...is OPEN") }` — **any** panic or **any** error counts as a correct refusal. The reading counted 197
+such sites across `circuit` and `circuit-prove`. A tooth that cannot distinguish *"rejected the forgery"* from
+*"crashed"* is measuring the wrong thing: a stray `.unwrap()` in trace assembly keeps every one green while
+proving nothing about the constraint system. **Mostly closed at HEAD:** the helper landed —
+`circuit/src/refusal.rs::must_refuse` / `must_refuse_or_unsat_panic` distinguish panic from `Err` (and assert
+the p3 unsat-panic message where that is genuinely the mechanism) and are in use ~63 times in each crate;
+~29 raw `catch_unwind` sites and ~13 bare `Err(_) => {}` shapes remain. The reason-*matching* half
+(`assert!(matches!(e, LeafError::BindingUnsat{..}))`) still waits on MOVE 5's typed errors.
 
-**(c) The fallback IS the expected answer.** `node/src/coord_gate.rs:150` —
-`lean_gate_decides_unanimous_scenarios`, the **only** test of the verified 2PC gate — calls
-`authoritative_decision(Decision::Commit, Some("y=3;n=0;N=3;t=3"))` and asserts `Commit`. The function's `Err`
-branch returns `rust_decision`, i.e. the value passed in. The test passes identically whether
-`verified_2pc_decide` works, is broken, returns garbage, or is **absent**. The differential is defeated because
-the fallback is the assertion. Its sibling `falls_back_to_rust_when_no_wire` asserts `f(x, None) == x` where the
-function's second statement is `let Some(wire) = wire else { return rust_decision; }` — literal P → P.
+**(c) The fallback IS the expected answer.** The reading's canonical case: `coord_gate`'s
+`lean_gate_decides_unanimous_scenarios` asserted the same value the function's `Err` branch returns
+(`rust_decision`, the value passed in) — passing identically whether `verified_2pc_decide` works, is broken,
+returns garbage, or is absent. Its sibling `falls_back_to_rust_when_no_wire` asserted `f(x, None) == x` against
+a body whose second statement is `let Some(wire) = wire else { return rust_decision; }` — literal P → P.
+**Closed at HEAD:** both are deleted; `lean_verdict_overrides_a_wrong_rust_decision`
+(`node/src/coord_gate.rs:179`) hands the gate a deliberately WRONG `rust_decision` and requires the Lean
+verdict to win — every expected value is one the fallback path cannot produce, so a fallback build, a stuck
+export, or a deleted `verified_2pc_decide` all turn it red.
 
-**(d) The tooth that is written, adversarial, correct — and never runs.** All 8 `*_binding_deployed_tooth.rs`
-files in `circuit-prove` are `#[ignore]`-gated (17 of 24 tests; custom/hatchery/membership/sovereign are **100%
-ignored**). CI runs `cargo test --workspace` (`ci.yml:55`), which never runs ignored tests. Nothing in
-`.github/workflows/` or `scripts/test-gauntlet.sh` passes `--ignored` — verified. In `node`, every load-bearing
-verified-gate test self-skips on an archive-less build (`finality_gate.rs:313/413/506/634`, `coord_gate.rs:153`,
-`finalization_votes.rs:929`, `tests/lean_producer_mode.rs:202/223/244` all `eprintln!("SKIP"); return`), and no
-scheduled job sets a hard mode. `consensus_under_failure.rs` is `#[ignore]` *and* launches every node with
-`DREGG_LEAN_PRODUCER=0`, so the verified producer — documented as THE SWAP, on by default in production — is
-never exercised under real cross-node fault injection.
+**(d) The tooth that is written, adversarial, correct — and never runs.** When read, all 8
+`*_binding_deployed_tooth.rs` files in `circuit-prove` were `#[ignore]`-gated with nothing in CI passing
+`--ignored`, every load-bearing verified-gate test in `node` self-skipped on an archive-less build with no
+scheduled hard mode, and `consensus_under_failure.rs` pinned `DREGG_LEAN_PRODUCER=0` — the production default
+was the one thing a real cross-node kill never exercised. **Closed at HEAD:** the nightly armed-teeth lane
+(`.github/workflows/armed-teeth.yml`, cron 05:00) runs all 8 deployed-tooth binaries with `--ignored` plus a
+`DREGG_TEST_REQUIRE_LEAN=1` hard-mode lane that turns every `eprintln!("SKIP"); return` into a panic; and
+`consensus_under_failure.rs` fault-injects the production default (the var stays unset; the legacy-Rust
+comparison lane must be asked for via `DREGG_TEST_LEAN_PRODUCER=0`). The `#[ignore]` attributes stay — a plain
+CI run skips the expensive teeth *explicitly*, and the schedule is where they bite.
 
 > **"Expensive" must mean "runs nightly", not "runs never."** These teeth are minutes-long real recursion
-> folds; they belong on the gauntlet box. Today they are documentation.
+> folds; the armed-teeth schedule is that posture, enforced.
 
 **(e) The identity gate.** `node/src/blocklace_sync.rs:1000` calls
 `admitted_participants(&raw_participants, &raw_participants)` — seeds == candidates, and `AdmissionRegistry`
@@ -129,53 +149,44 @@ literally **cannot** assert *why* a reject fired.
 
 ### ⚑ P2 — The name that outlives its referent (front-door inversion)
 
-**The deepest modules are the most honest and the most-read text is the least accurate.** This is an inversion,
-and it is systematic.
+**The deepest modules are the most honest and the most-read text is the least accurate.** This was an
+inversion, and it was systematic. Every named instance is corrected at HEAD (the MOVE-4 sweep); the list stays
+on the record because the pattern is the crate-review lesson, and because the *structural* fix — the lint that
+makes the class impossible — is still a named open lane:
 
-- `circuit/src/lib.rs:33` — the Trust Model, the first paragraph any auditor reads — claims "negligible
-  soundness error (2^{-128} for STARK)". The crate's **own gate** says capacity 130 is refuted (Crites–Stewart,
-  eprint 2025/2046, disprove the conjecture by reduction; Kambiré, arXiv 2604.09724, gives a prime-field
-  counterexample) and the standing columns are per-fold 109 at the deployed arity 8 (~112.6 is the arity-2
-  figure, and both are claims at 96.9% farness, not at the Johnson radius FRI operates at) / Johnson QUERY
-  column 73 / commit-phase `ε_C` 71, composing under ethSTARK eq. (20) to ~70. The honest text already exists
-  at `descriptor_ir2.rs:5416-5425`; it just never reached the top of the file. Same header: a documented `mock`
-  feature that **does not exist** in Cargo.toml, and three intra-doc links to a `stark` module that **does not
-  exist**.
-- `circuit-prove/src/custom_proof_bind.rs` — a 51-line module doc describing `verify_proof_bind` in present
-  tense with a rustdoc link and a `## The soundness property` section. `grep -rn 'fn verify_proof_bind' .`
-  matches **nothing**; it was deleted in `dd038c08e`. The stale claim propagated to **5 sites** that mislead
-  readers about the live architecture (`turn/src/turn.rs:554`, `turn/src/executor/proof_verify.rs:238`,
-  `joint_turn_aggregation.rs:587`, `custom_leaf_adapter.rs:983`, `sdk/tests/wide_completeness_ledger.rs:341`).
-  `sdk/tests/wide_completeness_ledger.rs:1239` documents the stark-kill **correctly** — the true state is known
-  and was simply never propagated back to the module that owns the name.
-- `cell/src/program/types.rs:594` — the canonical case, because **the false doc caused the bug.** It states
-  "Double-negation: `Not(Not(c))` is *not* representable because the inner is unboxed... the type system shapes
-  against it." The declaration on the very next line is `Not(Box<SimpleStateConstraint>)` — the stated reason is
-  exactly what *makes* it representable. The reasoning is backwards, the belief suppressed the test, and the
-  panic shipped.
-- `turn/src/executor/mod.rs:938-945` and `:1315-1319` claim `require_validity_proof` is "FAIL-CLOSED... rejects
-  EVERY encrypted turn". **Falsified by the crate's own passing test** (`tests.rs:9515`
-  `encrypted_turn_accepts_authenticated_when_gated`). `verify.rs:259-261` says the executor signs "the canonical
-  narrow message... not the full `receipt_hash()`" — v3 signs exactly the full `receipt_hash`. An operator reads
-  these docs to choose a security posture.
-- `cap_delegation_nonamp_descriptor.rs:35` — "The sdk authority-binding routes cap-graph rows to it by name."
-  **False.** Grepping the workspace for the routed name returns zero hits outside the defining module. Both cap
-  descriptors are dead code, `lib.rs:165-181` calls them "the ARGUS linchpin", and **the good descriptor is dead
-  while the opaque-digest one is deployed.**
-- `cell/src/predicate.rs:849-855` — `with_stubs()` claims each stub accepts "only when the proof bytes are not
-  empty AND have the kind's documented length-prefix shape." The code (`:1411-1420`) performs **no shape check
-  whatsoever.** On the exact type whose accept path is the soundness gate.
-- Names that lie by themselves: `turn/src/encrypted.rs:409` **`verify_stark()` verifies no STARK** — it checks
-  an Ed25519 signature and an agent binding. The type is `TurnValidityProof`; the field is `proof_bytes`. The
-  unnamed consequence: `conflict_set` is submitter-declared, unverified, and drives `order_encrypted_turns`, so
-  a malicious submitter can declare a false conflict set, influence ordering, and pass `verify_stark`.
-  `ProofBindError` is a `pub enum` with 5 variants, a hand-written `Display`, an `Error` impl, and **zero
-  construction sites** — while two live doc-comments cite `ProofBindError::UnknownProgram` as a fail-closed
-  mechanism that fires.
+- `circuit/src/lib.rs` — the Trust Model claimed "negligible soundness error (2^{-128} for STARK)" while the
+  crate's own gate calls capacity refuted. **Corrected:** the front door now carries the per-column
+  refuted-conjecture ledger (per-fold / Johnson QUERY / commit-phase `ε_C` / eq. (20) composite / capacity as a
+  drift-only baseline, `lib.rs:95-130`), states "There is no `mock` feature" (`:173`), and the dead `[stark]`
+  links are gone.
+- `circuit-prove/src/custom_proof_bind.rs` — a 51-line module doc described the deleted `verify_proof_bind` as
+  the live engine, propagated to 5 citing sites. **Corrected:** the module doc states the recursion-fold truth
+  (the binding is enforced in-circuit by `prove_custom_binding_node_segmented` wired into
+  `prove_chain_core_rotated`; nothing verifies a proof-bind off-AIR), and the citing sites now describe the
+  deletion accurately.
+- `cell/src/program/types.rs` — the canonical case, because **the false doc caused the bug**: it argued
+  `Not(Not(c))` was unrepresentable for a reason that is exactly what makes it representable; the belief
+  suppressed the test and the panic shipped. **Corrected:** the doc states `Not(Not(c))` IS representable and
+  is *collapsed* — by the smart constructor at build time and by the evaluator definitionally.
+- `turn/src/executor/mod.rs` claimed `require_validity_proof` "rejects EVERY encrypted turn" — falsified by the
+  crate's own passing test — and `verify.rs` misdescribed what v3 signs. **Corrected:** both state what the code
+  does.
+- `cap_delegation_nonamp_descriptor.rs` claimed "the sdk authority-binding routes cap-graph rows to it by
+  name" — false. **Corrected:** the module doc states plainly that nothing routes cap-graph rows to this
+  descriptor (`:81`). The orphan-resolution itself (wire the genuine descriptor or delete both) is still an
+  open burndown (§4).
+- `cell/src/predicate.rs` claimed a "length-prefix shape" check the stubs never performed. **Corrected:** the
+  rustdoc says exactly what a stub checks (emptiness, nothing else) and that the accept path compiles only
+  under `cfg(test)`/`test-stubs`.
+- Names that lied by themselves: `turn`'s `verify_stark()` verified no STARK. **Corrected:** it is
+  `EncryptedTurn::verify_admission_binding` (`turn/src/encrypted.rs:449`), its module doc states what is
+  actually enforced, and the previously-unnamed residual is now a NAMED seam: `conflict_set` is
+  submitter-declared and unverified (`encrypted.rs:7`). The dead `ProofBindError` enum is deleted.
 
-**The signature of P2:** the code was fixed, refactored, or superseded, and the *name* stayed. Nothing enforces
-that a deleted item cannot be documented as live, so the doc becomes the last surviving witness to an
-architecture that no longer exists.
+**The signature of P2:** the code was fixed, refactored, or superseded, and the *name* stayed. Nothing yet
+*enforces* that a deleted item cannot be documented as live — `#![deny(rustdoc::broken_intra_doc_links)]` is
+the structural fix and is a named open lane with a measured cost (`circuit/src/lib.rs:215`: 311 hits, most of
+them bracket-notation escapes, a handful genuine rot the lint caught that hand-sweeping missed).
 
 ### ⚑ P3 — Stringly-typed boundaries, and fail-open at the seams
 
@@ -198,19 +209,19 @@ node loses the error for its own logs.*
    conflicted: a forged claim, the tooth firing)** vs **`ProverFailed` (FRI/OOM/shape: an operational fault)** —
    is destroyed at exactly the boundary that needs it.
 3. **It is the upstream cause of P1(b).** You cannot write `assert!(matches!(e, LeafError::BindingUnsat{..}))`
-   when the variant does not exist. So 197 reject sites settle for `Err(_) => {}`.
+   when the variant does not exist. `must_refuse` closed the panic/Err half; the reason-matching half stays
+   impossible until these enums land.
 
 **And the seams default open:**
 - `node`'s `coord_gate` / `finality_gate` / `strand_admission` all **fall back to the unverified Rust sibling**
   when the archive lacks the export, distinguished only by log level — `coord_gate` logs its fallback at
   `debug!` "to avoid spamming a fallback build". A node silently running three unverified gates is one missing
   symbol away, and the loudest signal for the 2PC gate is a debug line.
-- `circuit-prove/tests/gpu_babybear_merkle_e2e.rs:59` and `:169` — `let Some(gpu) = require_gpu() else {
-  eprintln!("no GPU adapter — skipping"); return; }`. Reports **`ok`** having verified nothing, while its module
-  doc declares "PARITY IS LOAD-BEARING... a fast wrong tree is worthless. Parity is asserted before any timing is
-  reported." The crate's own correct pattern is 40 lines away (`gpu_backend.rs:4624` asserts `adapter_available()`
-  **and** that the GPU path was taken, so it cannot degenerate into a CPU-vs-CPU tautology).
-- `node/src/api.rs:4453/4510` — `let _ = s.store.set_config("passphrase_hash", ...)` under a comment reading
+- ~~`gpu_babybear_merkle_e2e.rs`'s fail-open skip~~ — **closed at HEAD**: `require_gpu()` asserts
+  `adapter_available()` (fail-closed) and the tests are `#[ignore]`d for GPU-less CI with the GPU lane running
+  them `--ignored` (`gpu_babybear_merkle_e2e.rs:52-81`) — the crate's own correct pattern
+  (`gpu_backend.rs`'s assert-adapter-and-assert-GPU-path) made the law.
+- `node/src/api.rs:4521` — `let _ = s.store.set_config("passphrase_hash", ...)` under a comment reading
   "Persist... so they survive restarts." A failed write returns `success: true`; the node reboots with no
   passphrase and the next loopback caller sets a fresh one.
 - `turn`'s `LedgerJournal::rollback` is infallible and best-effort: it swallows every missing cell
@@ -235,9 +246,10 @@ length dies deeper in `prove_vm_descriptor2_for_config`) — fail-closed at the 
 deep string instead of a clean boundary error, inconsistent for no stated reason. Adding a leaf is ~500 lines of
 copy-paste the compiler checks nothing about.
 
-The same shape in `cell`: the Not-depth invariant is enforced **nowhere** — not by the type, not by a validation
-pass (there is no `fn validate` anywhere in `src/program/`), not by a smart constructor. `Not(Box<..>)` is a
-public tuple variant. The invariant lives only in a comment, and the comment is false.
+The same shape in `cell`, at reduced severity since MOVE 1: nested `Not` is collapsed by the smart constructor
+(`SimpleStateConstraint::not`) and the evaluator, and `lift_simple` is fail-closed — but `Not(Box<..>)` remains
+a public tuple variant, so a wire-decoded program can still carry any nesting depth and the invariant is
+constructor-plus-evaluator-enforced, not type-enforced. The type-level version (P4's ask) is not built.
 
 **Contrast — the pattern done right, in this same tree:** `sdk`'s `raw` module seal. `Authorization::Unchecked`
 is spelled in exactly ONE constructor (`raw::unsigned_action`), quarantined behind a module whose docs enumerate
@@ -267,42 +279,38 @@ lowest-priority pattern** — see §4.
 ### P6 — The self-report is better than the burndown
 
 Our best apparatus produces ledgers nobody drains:
-- **43 Uncovered** producer-equals-descriptor rows (32 Covered / 8 Partial / 43 Uncovered). Roughly **half** of
-  deployed descriptor members have no prove+verify roundtrip against the registry descriptor they ship under —
-  on the V3-live registry, which is what a light client verifies against **today**. This is the exact class that
-  already bit once: the gate's own header cites `be732a9dd`, where 7 wide members laid their AFTER carrier chain
-  at a stale base and verify failed on **honest** turns — "a class the drift gate CANNOT see."
-- The FRI gate covers **3 of 5** deployed knobs. `IR2_FRI_MAX_LOG_ARITY` and `IR2_FRI_LOG_FINAL_POLY_LEN` are
-  ungated and can drift silently — and the surviving ~112.6-bit bound is explicitly **structure-specific** ("the
-  deployed dim-2 constant-fold recursion code", "at our fixed r = 2, n = 64"). So the only numeric gate enforces
-  a margin on the arithmetic the same file calls **refuted**, and enforces **nothing** on the structural
-  parameters the surviving bound actually depends on.
+- **44 Uncovered** producer-equals-descriptor rows (`circuit/tests/producer_descriptor_coverage_gate.rs`;
+  some Uncovered BY DESIGN — forbidden/UNSAT paths — the rest genuinely undrained). A large fraction of
+  deployed descriptor members still have no prove+verify roundtrip against the registry descriptor they ship
+  under — on the V3-live registry, which is what a light client verifies against **today**. This is the exact
+  class that already bit once: the gate's own header cites `be732a9dd`, where 7 wide members laid their AFTER
+  carrier chain at a stale base and verify failed on **honest** turns — "a class the drift gate CANNOT see."
+- ~~The FRI gate covers 3 of 5 deployed knobs~~ — **closed at HEAD, past the ask**: the pin covers 7 configs
+  and 6 knobs (`ext_deg` included), `ledger_gate_reds_each_degraded_knob` perturbs each DEPLOYED const and
+  requires a typed refusal NAMING that knob, and `the_export_is_consulted_not_shadowed` proves the numbers
+  track Lean rather than a leftover Rust constant (`circuit-prove/tests/fri_params_soundness_budget.rs:115-125`).
 - Two authority traits (`IssuerRootAuthority`, `FinalizedRootAuthority`) have **no production implementation
   anywhere in the tree** — only cell's own in-memory `Static*` doubles. Their rustdocs say "Production hosts that
   read issuer roots from on-chain slots install their own authority." No such host exists. So BlindedSet
   membership and ObservedFieldEquals are fail-closed-in-practice, i.e. non-functional. Honest and safe — but the
   docs imply a built path that is not built.
-- `node/src/turn_proving.rs:3-4` opens "This module makes the public claim — every committed state transition is
-  proven — TRUE for the running node." Seventy lines later the honest capacity note concedes that beyond 14
-  nullifiers (`TREE_DEPTH=4`) the spend turn commits with **no freshness-bound proof**. The headline is not
-  qualified where it is made; the caveat is downstream of it.
+- ~~`node/src/turn_proving.rs`'s downstream caveat~~ — **closed at HEAD**: the module doc states the
+  14-nullifier exception "at the headline rather than 70 lines downstream" (`turn_proving.rs:1-12`). The
+  underlying capacity limit itself (the depth-parameterized non-revocation AIR) remains the named seam.
 
-**The named-seam law is satisfied and the closure lane is not running.** A named seam is not a hole — but a seam
-named 3 months ago with no lane is drifting toward one.
+**The named-seam law is satisfied and most closure lanes are not running.** A named seam is not a hole — but a
+seam named months ago with no lane is drifting toward one. The authority-trait and coverage-ledger rows above
+are the live examples.
 
-### P7 — Diagnostics registered as tests
+### P7 — Diagnostics registered as tests (closed at HEAD)
 
-`circuit-prove/src/gpu_backend.rs:4544` `dump_hash_wgsl` — a `#[test]` with **zero assertions** that writes
-generated WGSL to a hardcoded `/tmp/hash.wgsl` on **every CI run** and eprintlns. `:4555` `compile_wgsl_from_env`
-— `let Ok(file) = std::env::var("WGSL_FILE") else { eprintln!("skipping"); return; }`; WGSL_FILE is unset in CI,
-so it always trivially passes without executing its body. Both are honestly comment-labelled DIAGNOSTIC (they
-bisect a live RADV compiler SIGSEGV) — so the intent is clean — but they are `#[test]`, so they inflate the count
-and report `ok` while proving nothing. They are debug tools.
-
-Relatedly: `gpu_backend.rs` contains **zero** `#[ignore]` attributes, yet three of its tests assert
-`adapter_available()` unconditionally. Under `cargo test --workspace` these hard-fail on any GPU-less runner —
-or pass **hollowly** against lavapipe/SwiftShader, measuring nothing they claim to measure. The suite's red/green
-is a function of undeclared host hardware. The GPU lane is neither honestly skipped nor honestly required.
+The reading found two RADV-bisection debug tools registered as `#[test]`s in `gpu_backend.rs`: one with zero
+assertions writing WGSL to `/tmp` on every CI run, one whose body never executed in CI (its env var is unset) —
+honestly labelled DIAGNOSTIC, but inflating the count and reporting `ok` while proving nothing. **Both are
+de-registered** (`gpu_backend.rs:4805-4809` records the demotion), and the GPU posture follows one law: tests
+requiring a GPU assert `adapter_available()` (fail-closed) **and** are `#[ignore]`d so GPU-less CI skips them
+explicitly, with the GPU lane running them `--ignored`. The pattern stays on the record: a debug tool that
+cannot fail is not a test, whatever its comment says.
 
 ### What we do NOT have (recorded so it is not re-litigated)
 
@@ -401,7 +409,8 @@ and fails some of them — which is currently all of them.**
 ### S5 — Docs claim exactly what the code does — checked at the front door first
 
 - **The front door is audited first, not last.** `lib.rs:1-110` and every module header is the most-read text in
-  the crate and must be the most accurate. Today the ordering is inverted.
+  the crate and must be the most accurate. (The reading found the ordering inverted; the MOVE-4 sweep corrected
+  the named instances — the gate here is what keeps it corrected.)
 - Every number in a doc is **derived from the code that computes it** or is pinned by a test. A soundness figure
   that contradicts the crate's own gate is a defect of the same severity as a wrong constraint.
 - Every named function/type in a doc **exists**. `#![deny(rustdoc::broken_intra_doc_links)]` is on, so a deleted
@@ -446,13 +455,14 @@ We already pass this. Hold the line:
 - Every knob the bound depends on is **pinned by a gate**. If the surviving bound is structure-specific (dim-2
   constant-fold, r=2, n=64), the **structural** knobs are gated, not just the arithmetic ones.
 - The non-vacuity test for a gate **perturbs the deployed constants and requires a red** — it does not evaluate
-  the formula on a synthetic point. (`budget_gate_reds_a_degraded_config` asserts `conjectured_bits(1,20,0) <
-  128`, i.e. that 20 < 128. It never invokes the gate it is named for, and would pass if that gate's `assert!`
-  were **deleted outright**. Ironic in the crate's best file on floor honesty.)
+  the formula on a synthetic point. (The reading's counterexample — `budget_gate_reds_a_degraded_config`, which
+  asserted that 20 < 128 and would have passed with the gate deleted outright — is replaced at HEAD by
+  `ledger_gate_reds_each_degraded_knob`, which perturbs each deployed knob and requires a typed refusal naming
+  it. That is now the in-tree reference implementation of this gate.)
 - ✓ **Reference implementation, in-tree:** `fri_params_soundness_budget.rs`'s header, which states the
   conjecture is refuted, names its own check as a conservative engineering margin and **not** a proof, and
-  computes its ledger from the exported deployed knobs rather than from comments. That is the discipline; it
-  just needs to reach `lib.rs` and cover all 5 knobs.
+  computes its ledger from the exported deployed knobs rather than from comments. The discipline now reaches
+  `lib.rs` (the per-column ledger at the front door) and pins all deployed knobs.
 
 ### S9 — What is deployed is what is proven
 
@@ -476,135 +486,72 @@ We already pass this. Hold the line:
 
 ## 4. THE PRIORITIZED PLAN
 
-Ordered by leverage, with severity overriding at the top. **Move 1 is severity. Moves 2–4 are the highest
-ratio in the tree — the work is largely already written and merely unarmed or unstated.**
+Ordered by leverage, with severity overriding at the top. **MOVEs 1–4 are LANDED at HEAD** (each records its
+in-tree state below); MOVE 5 and most of the P6 burndowns are the open work.
 
-### ⚑ MOVE 1 — Close the three live holes (days, not weeks; do first)
+### ⚑ MOVE 1 — Close the three live holes — **LANDED**
 
-Not leverage — correctness. These are open now.
+Every item shipped as prescribed; §1 carries the closed state with file:line. In brief: `lift_simple` is total
+and fail-closed with the smart-constructor collapse (`Not(Not(c)) → c`) and the false doc rewritten;
+`verify_receipt_chain_strict` + the renamed `verify_receipt_chain_with_optional_keys` with the strip-a-signature
+adversarial pair; the `test-stubs` feature is dev-only, `compile_error!`-floored, and cargo-tree-firewalled
+(`tests/tests/test_stubs_firewall.rs`). The crown jewel derives its colliding pairs by bounded search at test
+time (`find_lane0_collision`) — the stale-pin failure mode is removed, not patched.
 
-1. **`cell` `Not(Not(c))` panic** (`program/eval.rs:2557`). Do **not** paper over it with an eval-time rejection.
-   Two real fixes, pick one: **(a)** make the type enforce what the doc claims — `Not(Box<NegatableConstraint>)`
-   where `NegatableConstraint` is the Not-free subset, so the invariant is a **type error**; or **(b)** normalize
-   at construction — a smart constructor and `implies()` collapse `Not(Not(c)) → c` definitionally (which the doc
-   itself argues is the correct semantics), making `lift_simple`'s panic arm genuinely unreachable. Either way:
-   **delete the false paragraph at `types.rs:580-602`**, make `lift_simple` total (`Result`), and land the exact
-   three probes as regression tests — direct eval, postcard round-trip, `implies()`-on-a-negated-constraint.
-2. **`turn` fail-open chain verify.** Add `verify_receipt_chain_strict(receipts, keys)` requiring
-   `executor_signature` on **every** receipt. Rename the lenient one
-   `verify_receipt_chain_with_optional_keys`. Add the missing adversarial test: strip a signature from a valid
-   chain, assert strict **rejects** and lenient (documented as lenient) accepts. Audit the ~30 reverse deps —
-   `lightclient/`, `wire/`, `sel4/dregg-pd/verifier/` move to strict.
-3. **`cell` `test-stubs` leak.** Move `dregg-cell/test-stubs` out of `tests/Cargo.toml`'s `[dependencies]` into
-   `[dev-dependencies]` (matching turn/intent/exec-lean, which already do it right), or drop `dregg-tests` from
-   `default-members`. Then make the guarantee self-enforcing rather than a comment: `#[cfg(all(feature =
-   "test-stubs", not(debug_assertions)))] compile_error!(..)` plus the `cargo tree -p dregg-node -p dregg-tests
-   -e features -i dregg-cell` assertion as a CI check. Correct the Cargo.toml prose, which states a false
-   guarantee.
+### ⚑ MOVE 2 — Arm the teeth that already exist — **LANDED**
 
-**Also here (small, and the crown jewel is red):** regenerate `offchain_root_forge_closed`'s stale pins via the
-documented `--ignored` generator, then **remove the failure mode** — have the test derive the colliding pair by
-bounded search at test time, or assert pin validity with a clear "constants stale, regenerate" message, so a root
-change can never again silently disarm the forge regression.
+The nightly armed-teeth lane exists (`.github/workflows/armed-teeth.yml`, cron 05:00): all 8 deployed
+light-client binding-tooth binaries run `--release --no-fail-fast -- --ignored`, and the Lean hard-mode soak
+lane runs with `DREGG_TEST_REQUIRE_LEAN=1` so every archive-less self-skip is a panic there.
+`consensus_under_failure.rs` fault-injects the production default (Lean producer ON; the legacy-Rust comparison
+lane must be asked for via `DREGG_TEST_LEAN_PRODUCER=0`). The GPU posture follows one law — fail-closed
+`adapter_available()` asserts + explicit `#[ignore]` for GPU-less CI — and the two WGSL diagnostics are
+de-registered from the test count (P7).
 
-### ⚑ MOVE 2 — Arm the teeth that already exist (highest ratio in the tree)
+### ⚑ MOVE 3 — Make the named vacuous gates bite, and kill the reject idiom — **LANDED**
 
-The teeth are **written, adversarial, and correct.** They do not run. This is the cheapest assurance available
-anywhere in this report.
+- **`coord_gate`** — `lean_verdict_overrides_a_wrong_rust_decision` (`coord_gate.rs:179`) hands the gate a
+  deliberately wrong `rust_decision` and requires the Lean verdict to win; the P → P
+  `falls_back_to_rust_when_no_wire` is deleted.
+- **`finality_gate`** — `admits_semantics` (which tested `HashSet::contains`) is deleted; the replacement drives
+  the gate over an un-enrolled attacker block (`finality_gate.rs:283` records what it does that the deleted
+  tests could not).
+- **`cap_delegation_nonamp`** — the behavioural tooth exists:
+  `nonamp_submask_gate_refuses_an_amplifying_witness` forges each mask bit independently against the running
+  prover (`cap_delegation_nonamp_descriptor.rs:301`).
+- **The FRI budget canary** — `ledger_gate_reds_each_degraded_knob` perturbs the deployed consts, one knob at a
+  time, and requires a typed refusal naming that knob.
+- **The reject idiom** — `must_refuse` / `must_refuse_or_unsat_panic` landed (`circuit/src/refusal.rs:201,234`),
+  distinguishing panic from `Err` and asserting the p3 unsat-panic message where that is genuinely the
+  mechanism; the bulk of the ~197 sites are converted (~29 raw `catch_unwind` + ~13 bare `Err(_)` remain). The
+  reason-*matching* upgrade waits on MOVE 5's typed errors, as planned.
+- **`turn`'s Property 1** — rewritten to drive CapOps through `TurnExecutor::execute` with real
+  `Effect::GrantCapability`/`RevokeCapability` and real `Authorization`, recording grants only from `Committed`
+  receipts (`turn/tests/proptest_invariants.rs:191-226`); the harness-tests-its-own-model version is gone, and
+  `disjoint_cells_no_conflict` now asserts what its comment promises (`conflict.rs:299,373`).
 
-- Add a gauntlet/nightly lane: `cargo test -p dregg-circuit-prove --release -- --ignored`. Recovers 17 deployed
-  light-client binding teeth from zero coverage.
-- Add `DREGG_TEST_REQUIRE_LEAN=1`: every `eprintln!("SKIP"); return` becomes a **panic**, mirroring the
-  `DREGG_REQUIRE_LEAN` build gate that already exists.
-- Add **one** CI lane setting `DREGG_TEST_REQUIRE_LEAN=1` + `DREGG_TEST_REQUIRE_FINALITY=1` and running the
-  ignored soak tests. **Today the crate's entire verified-consensus claim rests on assertions no scheduled job
-  executes.** This single change converts honest prose into an enforced gate.
-- Drop `DREGG_LEAN_PRODUCER=0` from `consensus_under_failure.rs` (or add a second lane with it on) so the
-  production default is exercised under fault injection.
-- Fix the GPU posture: one law. Tests requiring a GPU assert `adapter_available()` (fail-closed — the crate's own
-  better pattern) **and** are `#[ignore]`d so GPU-less CI skips them **explicitly**, with a gauntlet lane on the
-  GPU box. Delete the fail-open `eprintln!("skipping"); return;` at `gpu_babybear_merkle_e2e.rs:59` and `:169`.
-  Demote `dump_hash_wgsl` and `compile_wgsl_from_env` from `#[test]` to `examples/` or a `wgsl-debug` bin — and
-  stop the unconditional `/tmp` write on every CI run.
+### ⚑ MOVE 4 — The front-door honesty sweep — **LANDED, one named lane open**
 
-### ⚑ MOVE 3 — Make the four named vacuous gates bite, and kill the reject idiom
+Every known-false front-door sentence is corrected (the per-instance record is in P2): the `circuit` Trust Model
+carries the per-column ledger; the `mock`-feature and `[stark]`-link rot is gone; `custom_proof_bind.rs` and its
+citing sites state the recursion-fold truth and the dead `ProofBindError` is deleted; the executor and verify
+docs match the code; the predicate stub docs say what a stub checks; `turn_proving.rs` qualifies its headline
+where it is made; `verify_stark` is `verify_admission_binding` and the submitter-declared `conflict_set` is a
+NAMED seam (`turn/src/encrypted.rs:7`).
 
-Small diffs, and they convert green-that-means-nothing into evidence.
+**Open:** `#![deny(rustdoc::broken_intra_doc_links)]` — the structural turn-the-class-off — is a named lane, not
+a one-line add (`circuit/src/lib.rs:215`: 311 hits at measurement, most of them bracket-notation escapes;
+shipping it red would train readers to ignore `cargo doc`). Do it as its own lane.
 
-- **`coord_gate.rs:150`** — pass a deliberately **wrong** `rust_decision` and assert the Lean verdict overrides:
-  `assert_eq!(authoritative_decision(Decision::Abort, Some("y=3;n=0;N=3;t=3")), Decision::Commit)`. **This fails
-  on a fallback build — which is exactly the point.** Delete `falls_back_to_rust_when_no_wire` (P → P).
-- **`finality_gate.rs:261`** — replace the hand-constructed-struct tests with a **real lace** containing an
-  attacker-created block whose hybrid id is not an enrolled participant; run `compute()`; assert the gate refuses
-  it. Delete `admits_semantics` (it tests `HashSet::contains`).
-- **`cap_delegation_nonamp`** — if wiring (see Move 5), add the behavioural test: construct an amplifying witness
-  (granted bit set where held is clear) and require `prove_vm_descriptor` to `Err`, mirroring
-  `ir2_amplified_submask_refuses`. **The Lean teeth (`capDeleg_rejects_amplify`) are already proved; only the
-  Rust differential is absent.** Delete `genuine_nonamp_parses`'s constraint-**count** assertions — they catch
-  nothing an adversary does (swap a gate for another of equal count) and red on benign re-emits. That is churn,
-  not a tooth.
-- **`budget_gate_reds_a_degraded_config`** — replace with a test that perturbs the **deployed** consts and
-  requires the real gate to red.
-- **The idiom, 197 sites.** Land one helper — `fn must_refuse(f: impl FnOnce() -> Result<T, E>) -> E` — that runs
-  under `catch_unwind`, **distinguishes panic from Err**, and requires `Err` with a matched reason. Accept a panic
-  **only** where the p3 debug prover's documented unsat-panic is genuinely the mechanism, and assert the panic
-  message there. Then a stray `unwrap` in trace assembly reds the suite instead of silently satisfying every
-  forgery test. (This lands properly once Move 5 gives it `BindingUnsat` to match on — do the mechanical
-  panic/Err split now, the reason-matching after.)
-- **De-vacuate `turn`'s Property 1.** `proptest_capability_confinement_holds` is the headline invariant in its own
-  module doc and **never calls `TurnExecutor`**; the harness performs the attenuation check itself and pushes a
-  `GrantRecord` with the same perm it grants, so `was_granted` is true **by construction** (`is_attenuation` is
-  reflexive). It is testing its own 40-line model. `dregg-turn` could have a total capability-amplification bug
-  and this stays green across all 150 cases. Rewrite it to drive CapOps through `TurnExecutor::execute` with real
-  `Effect::GrantCapability`/`RevokeCapability` and real `Authorization`, recording grants **only** from committed
-  receipts' `derivation_records`, asserting confinement against the executor's output. **This matters
-  disproportionately right now: capability confinement is precisely what the Lean differential swap must be shown
-  to preserve, and today the swap's correctness case rests on a property nobody has gated.** Also delete
-  `conflict.rs:303 disjoint_cells_no_conflict` (computes `may_conflict_with`, discards it with `let _`, asserts
-  **nothing**, and never checks the determinism its own comment promises — it would pass if the function returned
-  `true` unconditionally) or give it the assertion its comment describes.
+### ⚑ MOVE 5 — Type the boundaries and lift the abstraction — **OPEN (the remaining engineering lane)**
 
-### ⚑ MOVE 4 — The front-door honesty sweep (hours; the cheapest excellence in the tree)
-
-Every item is a known-false sentence sitting where an auditor lands.
-
-- **`circuit/src/lib.rs:1-110`** — replace `2^{-128}` with the ledger the crate **already computes**, per
-  column and labeled (per-fold 109 at the deployed arity 8, at 96.9% farness / 73 Johnson QUERY column, which
-  drops `ε_C` / 71 commit-phase `ε_C` / ~70 eq. (20) composite / 130 refuted-capacity), pointing at
-  `circuit-prove/tests/fri_params_soundness_budget.rs`, `Dregg2.Circuit.FriLedger`, and
-  `wrap_perFold_soundness_capacity`. Delete the `mock` feature paragraph (the feature does not exist). Fix or
-  drop the three broken `[stark]` links. The honest text exists at `descriptor_ir2.rs:5416-5425`; move it up.
-- **`cap_delegation_nonamp_descriptor.rs:35`** — delete "The sdk authority-binding routes cap-graph rows to it by
-  name" **today**. It is the only outright untrue claim found in `circuit` and it sits on the ARGUS linchpin.
-- **`custom_proof_bind.rs`** — rewrite the module doc to what is true: the binding is enforced by the recursion
-  fold's in-circuit `connect` (`prove_custom_binding_node`, wired in `prove_chain_core_rotated`), witnessed by
-  `every_forged_commitment_lane_is_rejected_by_the_fold`; this module is now types + the canonical
-  `custom_proof_pi_commitment` derivation. Fix the 5 stale citations (`turn/src/turn.rs:554`,
-  `turn/src/executor/proof_verify.rs:238`, `joint_turn_aggregation.rs:587` — which cites the also-deleted
-  `prove_custom_program` — `custom_leaf_adapter.rs:983`, `sdk/tests/wide_completeness_ledger.rs:341`). **Copy the
-  framing from `sdk/tests/wide_completeness_ledger.rs:1239`, which already documents the stark-kill correctly.**
-  Delete `ProofBindError` (dead) or wire it as the fold's typed reject reasons.
-- **`turn/src/executor/mod.rs:938-945`, `:1315-1319`, `verify.rs:259-261`** — state what
-  `require_validity_proof` actually does today (rejects non-empty unverifiable proofs; requires submitter auth
-  binding key to agent cell) and that v3 signs the full `receipt_hash`. **These docs are currently falsified by
-  the crate's own passing tests.**
-- **`cell/src/predicate.rs:849-855`** — delete the phantom "length-prefix shape" claim or implement the check.
-- **`node/src/turn_proving.rs:3`** — qualify the headline where it is made: the freshness leg is a 14-nullifier
-  toy until the depth-parameterized non-revocation AIR lands.
-- **Rename `turn`'s `verify_stark` → `verify_admission_binding`** (or split: `verify_submitter_auth` + a real
-  `verify_validity_stark` stub that fails closed). Then **name the residual that is currently invisible**:
-  `conflict_set` is submitter-declared, unverified, and drives `order_encrypted_turns`. Document that ordering
-  trusts the submitter's conflict declaration, or gate it. **A named seam is not a hole; an unnamed one is.**
-- **Turn the class off permanently:** `#![deny(rustdoc::broken_intra_doc_links)]` crate-wide.
-
-### ⚑ MOVE 5 — Type the boundaries and lift the abstraction (the real engineering lane)
-
-This is where the multi-week work is, and it is ordered last because Moves 1–4 are cheaper per unit of assurance
-— but this is what makes the earlier moves *stick* rather than be re-fixed.
+With MOVEs 1–4 landed, this is where the open multi-week work lives — the piece that makes the earlier moves
+*stick* rather than be re-fixed.
 
 1. **`LeafError` / `RecursionError` in `circuit-prove`.** The variant that matters: **`BindingUnsat{..}`** (the
    connect conflicted — a forged claim, the tooth firing) vs **`ProverFailed{..}`** (FRI/OOM/shape — an
-   operational fault). Everything in Move 3's reject-idiom cleanup depends on this existing.
+   operational fault). The reject-idiom cleanup's mechanical panic/Err split is done (`must_refuse`); the
+   reason-*matching* upgrade depends on this existing (`refusal.rs:88` names the dependency).
 2. **The `LeafAdapter` trait.** The ~20 adapters already share one shape; lift it:
    ```rust
    trait LeafAdapter {
@@ -617,15 +564,15 @@ This is where the multi-week work is, and it is ordered last because Moves 1–4
    ```
    with `prove_leaf` / `prove_leaf_with_claim` as **provided** methods that validate `public_inputs.len() ==
    PI_WIDTH` **once, in the trait, for everyone.** Retires the copy-paste, closes the ragged validation
-   (presentation/dsl/custom/blinded_membership check nothing today), and makes a forgotten PI check a **type
-   error**. Make an emit-gate + a per-lane forge tooth part of the trait's definition of done.
+   (presentation/dsl/custom/blinded_membership checked nothing when read), and makes a forgotten PI check a
+   **type error**. Make an emit-gate + a per-lane forge tooth part of the trait's definition of done.
 3. **`Ir2VerifyError` on the verify boundary.** `{ MalformedDescriptor, TableShapeMismatch{expected, got},
    RangeTableHeight{got, deployed}, ProofInvalid, PublicInputMismatch }` for `verify_vm_descriptor2` /
    `parse_vm_descriptor2`; String stays only on prover internals. Lets `lightclient/` and `bridge/` separate
    deploy bug from adversary. Convert `fill_chip_lanes`'s `panic!` (`descriptor_ir2.rs:3825`) to a `Result` while
    there.
 4. **`ApiError` with `IntoResponse` in `node`.** ~200 mechanical sites; recovers the diagnostics thrown away at
-   every boundary. Start with auth/submit/faucet. Fix the passphrase swallow (`api.rs:4453/4510`) — propagate and
+   every boundary. Start with auth/submit/faucet. Fix the passphrase swallow (`api.rs:4521`) — propagate and
    return 500, or document the store as best-effort. As written the doc and the code disagree **about a
    credential**.
 5. **Harden `turn`'s rollback.** `LedgerJournal::rollback` returns `Result<(), RollbackError>` naming the cell it
@@ -634,14 +581,12 @@ This is where the multi-week work is, and it is ordered last because Moves 1–4
    against a pre-turn clone.
 
 **In parallel, the burndowns (P6):**
-- **The 43 Uncovered rows, V3-live registry first.** The gate already names each row and its reason, so the work
+- **The 44 Uncovered rows, V3-live registry first.** The gate already names each row and its reason, so the work
   is enumerated: drive each producer trace through `prove_vm_descriptor2` + `verify_vm_descriptor2` against the
-  committed descriptor. The two live R3 probes (`cell_unseal` / `cell_destroy`) are the template. Target: zero
-  Uncovered on V3-live; every Partial pinned to a named, dated seam.
-- **Extend the FRI gate to all 5 knobs** (`IR2_FRI_MAX_LOG_ARITY`, `IR2_FRI_LOG_FINAL_POLY_LEN`) and add a
-  `proven_bits` floor at ~112 alongside the capacity margin. The doc names retargeting as an ember call — put the
-  decision in front of ember rather than leaving the only numeric gate calibrated against the metric the same
-  file calls refuted.
+  committed descriptor. Target: zero non-BY-DESIGN Uncovered on V3-live; every Partial pinned to a named, dated
+  seam.
+- ~~Extend the FRI gate to all 5 knobs~~ — **done, past the ask**: 7 configs, 6 knobs pinned to their Lean
+  models, per-knob red canary with typed reasons (`fri_params_soundness_budget.rs:115-125`).
 - **Resolve the cap-descriptor orphans** — wire them into a real selector-to-JSON dispatcher so the delegation
   family proves under the genuine-non-amp descriptor instead of the opaque-digest `attenuateA`, **or** delete both
   modules and their `lib.rs` prose. Do not leave the good one dead and the weak one deployed.
@@ -679,13 +624,13 @@ This is where the multi-week work is, and it is ordered last because Moves 1–4
 
 ## 5. The per-crate table
 
-| crate | role | grade | top gap | priority |
+| crate | role | grade | top remaining gap (at HEAD) | priority |
 |---|---|---|---|---|
-| `dregg-cell` | core-protocol | **good** | **`program/eval.rs:2557` `Not(Not(c))` panics — reachable from decoded wire bytes (node-crash DoS, 30+ dependents) and from the safe `implies()` builder with no adversary; caused by a self-refuting doc at `types.rs:594`. Plus: `test-stubs` armed in the production node build via feature unification; the forge-closed crown jewel is RED at HEAD.** | **high** |
-| `dregg-turn` | core-protocol | **good** | `verify_receipt_chain_with_keys` is **signature-optional → fail-open** on the federation-exit path. Headline property test (`capability_confinement`) never calls `TurnExecutor` — it tests its own harness. Doc rot on `require_validity_proof` falsified by the crate's own tests. Monolith deprioritized (LEGACY, swap in flight). | **high** (items 1–6; decomposition LOW) |
-| `dregg-node` | core-protocol | **good** | The F-4 strand-admission gate is the **identity function** on the live path (`admitted_participants(raw, raw)`); the only test of the verified 2PC gate is **vacuous by construction** (the fallback returns the asserted value); every verified-gate test self-skips on an archive-less build and no scheduled job asserts the crate's central claim. | **high** |
-| `dregg-circuit` | verification | **good** | **43 Uncovered** producer-equals-descriptor rows on the V3-live registry (the class that already bit, `be732a9dd`); `lib.rs`'s Trust Model claims `2^{-128}` while the crate's own gate calls capacity **refuted**; the "ARGUS linchpin" cap descriptors are **dead code carrying a false integration claim**. | **high** |
-| `dregg-circuit-prove` | verification (prove half) | **good** | **All 8 `*_binding_deployed_tooth.rs` are `#[ignore]`d and nothing in CI passes `--ignored`** — 17 genuinely adversarial deployed light-client teeth are dead in automation. Plus: `custom_proof_bind`'s module doc describes a deleted function as the live soundness engine (+5 stale citations); **zero traits in 37.5k lines** → ragged PI validation across ~20 copy-pasted adapters. | **high** |
+| `dregg-cell` | core-protocol | **good** | The MOVE-1 defects (the `Not(Not)` panic, the `test-stubs` leak, the RED forge test) are **closed**. Remaining: the Not-depth invariant is comment+constructor-enforced, not type-enforced (P4); the authority traits (`IssuerRootAuthority` / `FinalizedRootAuthority`) still have no production implementation. | medium |
+| `dregg-turn` | core-protocol | **good** | The fail-open chain verify is **closed** (strict/optional split) and Property 1 drives the real `TurnExecutor`. Remaining: rollback hardening (MOVE 5.5). Monolith deprioritized (LEGACY, swap in flight). | medium (decomposition LOW) |
+| `dregg-node` | core-protocol | **good** | The 2PC-gate tooth bites and the nightly hard-mode lane asserts the verified-consensus claim. Remaining: the F-4 strand-admission gate is still the **identity function** on the live path (`admitted_participants(raw, raw)`, vouch/bond thresholds inert); `ApiError` typing + the passphrase-persist swallow (`api.rs:4521`). | **high** (F-4) |
+| `dregg-circuit` | verification | **good** | Front door **corrected** (per-column ledger). Remaining: **44 Uncovered** producer-equals-descriptor rows on the V3-live registry (the class that already bit, `be732a9dd`); the cap-descriptor orphans (good one dead, opaque-digest one deployed — now honestly labeled); the `deny(broken_intra_doc_links)` lane. | **high** (coverage rows) |
+| `dregg-circuit-prove` | verification (prove half) | **good** | The deployed teeth **run nightly** (armed-teeth lane) and `custom_proof_bind`'s doc states the fold truth. Remaining: **zero traits in 37.5k lines** → ragged PI validation across ~20 copy-pasted adapters; `LeafError`/`BindingUnsat` typing (MOVE 5.1–5.2). | **high** |
 | `dregg-sdk` | core-protocol | **good** | *(assessment truncated — strengths only.)* The `raw` module seal is the tree's **reference implementation of S6**: `Authorization::Unchecked` in exactly one quarantined constructor, omitted from the root re-export, so an unauthorized act is inexpressible on the headline surface. Gaps not read. | re-read to complete |
 
 **Reference implementations worth copying, by standard:** S1 → `every_forged_commitment_lane_is_rejected_by_the_fold`, the `*_emit_gate` canary family · S3 → `TurnChainError`, `turn/src/error.rs` · S4 → `CredentialSetMembershipVerifier`, `canonical_revocation_root_for_set` · S6 → `sdk::raw` · S8 → `fri_params_soundness_budget.rs`'s header · S9 → `note_spending_emit_gate.rs`'s Lean↔Rust double-pin, `GpuBn254Mmcs::verify_batch`.
@@ -694,10 +639,10 @@ This is where the multi-week work is, and it is ordered last because Moves 1–4
 
 ## Coda
 
-> The tests are written. The teeth are sharp.
-> The ledgers count their own unclosed rows.
-> What is missing is not the knowing —
-> it is the arming, and the front door's prose.
+> The teeth are armed; they bite at night.
+> The front doors say what the deep code does.
+> What remains is not the knowing or the arming —
+> it is the types, and the rows the ledger draws.
 >
 > Six crates said *good* in six honest voices,
 > each one naming what it could not do.

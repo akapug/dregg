@@ -38,9 +38,10 @@ The fhEgg line is a **private market-clearing engine** with five moving parts:
    decryption key exists.
 5. **Formal verification in Lean + an anti-rug launchpad.** `metatheory/Market/*.lean` proves
    the fold homomorphism, order-independence, the monotone crossing, conservation, uniform-
-   price optimality, the `Cert-F`/`CertQp` keystones, mint-safe quantization, and a
+   price optimality, the `Cert-F`/`CertQp` keystones, mint-safe quantization, a
    reveal-nothing simulator `View = Sim∘Q` (conditional on a named `HidingFriPcs` statistical-
-   ZK floor). A launchpad keeps custody in stable EVM contracts and consumes dregg only as a
+   ZK floor), and the joined semi-honest MPC-clearing security theorem
+   (`metatheory/Market/MpcClearingSecurity.lean`; §4.1). A launchpad keeps custody in stable EVM contracts and consumes dregg only as a
    **boolean** from a pluggable `IClearingAttestor`, so a VK rotation cannot strand assets.
 
 ---
@@ -96,6 +97,10 @@ otherwise. What genuinely survives adversarial scrutiny:
    over the generic machinery is *non-trivial*, not a plug-in. The sharpest un-occupied point:
    an **explicit named conservation/no-inflation theorem** of a clearing mechanism in a proof
    assistant (the Coq corpus conserves quantity only implicitly inside matching-validity).
+   **This artifact exists in-repo:** `metatheory/Market/MpcClearingSecurity.lean` proves the
+   join on ONE clearing object — `cleared_conserving_optimal_and_reveal_only` (conservation +
+   uniform-price optimality + reveal-only-`(p*,V*)`, semi-honest) — see §4.1 for the exact
+   scope and what remains (malicious security, the `HidingFriPcs` floor, UC composition).
 
 2. **Mint-safe quantization for approximate-FHE conservation (row 13).** No direct prior art:
    prior conservation-under-encryption uses exact arithmetic (invariant free); directional-
@@ -158,10 +163,12 @@ search does not support one.**
   CCS 2021 (verified generic MPC simulator).
 
 - **What must be DONE for it to be publishable.**
-  1. A **real simulation-based security proof** of the output-boundary MPC — the PoC's
-     empirical indistinguishability (bias 0.0014 over 200 runs) is a demo, not a proof; a
-     hostile reviewer rejects "statistically indistinguishable over N runs" outright. Needs a
-     formal simulator + hybrid argument (semi-honest first).
+  1. A **real simulation-based security proof** of the output-boundary MPC — the semi-honest
+     case is a Lean theorem (`metatheory/Market/MpcClearingSecurity.lean`: `perfect_hiding`,
+     `MpcClearing.reveal_only`, the joined `cleared_conserving_optimal_and_reveal_only`); the
+     empirical PoC (bias 0.0014 over 200 runs) is corroboration, not the argument. What a
+     reviewer still demands here is the **malicious** model (item 3) and the hybrid argument
+     across a real online phase.
   2. **Discharge the `HidingFriPcs` statistical-ZK floor** on which the whole reveal-nothing
      result is currently conditional — otherwise the headline privacy claim is
      floor-conditional and a reviewer treats it as unproven.
@@ -183,16 +190,19 @@ This is the load-bearing engineering direction, tied to ember's Lean point: the 
 the system *proves*, so the proofs must reach what a reviewer and the literature expect. The
 top three, ranked:
 
-1. **A real simulation-based MPC security proof (replace the empirical PoC).** The
-   `OUTPUT-BOUNDARY-MPC.md` §7B result is empirical indistinguishability (opened-bit bias
-   0.0014, sign-vector/`V*` equality over 200 runs). That is a *demonstration*, not security.
-   The literature (Haagh CSF 2018, Almeida CCS 2021, Lindell's tutorial) expects a **formal
-   simulator** producing a view *identically/statistically-indistinguishably* distributed to
-   the real one, with a **hybrid argument** across the online phase, first semi-honest then
-   **malicious** (the PoC is semi-honest only; §8 names authenticated shares / verifiable
-   partial decryption / smudging as unbuilt). The Lean `RevealNothing.lean` `View=Sim∘Q` is
-   the *right shape* but sits at the clearing/transcript level; the MPC layer needs its own
-   simulator theorem, and joining them is the combination-novel artifact of §2.1.
+1. **The simulation-based MPC security proof — semi-honest PROVEN in Lean; malicious open.**
+   `metatheory/Market/MpcClearingSecurity.lean` is the discharged semi-honest form: an
+   information-theoretic **perfect-hiding** lemma for additive sharing below the full
+   coalition (`perfect_hiding`; tooth `full_collusion_breaks_hiding` — the full party set
+   reconstructs, so the t-of-n caveat is itself a theorem), the opened sign vector proved
+   **`p*`-determined** from demand/supply monotonicity (`clearsVec_eq_step`), the MPC-layer
+   simulator theorem `MpcClearing.reveal_only` (`View = Sim∘Q`), and the JOINED
+   `cleared_conserving_optimal_and_reveal_only` — the combination-novel artifact of §2.1 as a
+   real theorem, kernel-clean. The `OUTPUT-BOUNDARY-MPC.md` §7B empirical result (opened-bit
+   bias 0.0014, 200 runs) is corroboration at `b=8, n=3`, not the argument. What remains,
+   ranked by what the literature (Haagh CSF 2018, Almeida CCS 2021, Lindell's tutorial)
+   expects: the **malicious** model (§8 names authenticated shares / verifiable partial
+   decryption / smudging as unbuilt) and a **hybrid argument** across a real online phase.
 
 2. **Discharge the reveal-nothing floor (`HidingFriPcs`) and prove composition.** Two coupled
    gaps: (a) the deployed reveal-nothing consequence is *conditional* on the `HidingFriPcs`
@@ -241,9 +251,11 @@ literatures; (2) mint-safe quantization as a provable no-inflation invariant for
 HE (all prior encrypted-conservation uses exact arithmetic); and (3) the PQ + crossing-stays-in-
 MPC + `(p*,V*)`-only system engineering. **There is one legitimate paper** — a systems/applied
 paper at Financial Crypto or AFT (or a verification-first paper at CPP/ITP) framed exactly as
-above — **provided** the MPC gets a real simulation-based proof (not the empirical PoC), the
-`HidingFriPcs` floor is discharged, malicious security and stack composition are argued, and a
-real (non-simulated) threshold + latency evaluation exists.
+above. The semi-honest simulation-based MPC proof exists as a Lean theorem
+(`metatheory/Market/MpcClearingSecurity.lean`, the joined
+`cleared_conserving_optimal_and_reveal_only`); what publication still requires is **malicious
+security**, the **`HidingFriPcs` floor discharge**, **stack composition**, and a real
+(non-simulated) threshold + latency evaluation.
 
 ---
 

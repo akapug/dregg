@@ -30,29 +30,42 @@ FLIP and the Pedersen value-commitment path, not a missing PQ signature. `MSIS`,
 ## What umem actually is (the object under analysis)
 
 `Dregg2/Crypto/UniversalMemory.lean` proves that **one** Blum offline-memory multiset
-argument over a unified, domain-tagged address space (`Domain × κ`, the five domains
-registers/heap/caps/nullifiers/index — `UniversalMemory.lean:75-86`) soundly covers
+argument over a unified, domain-tagged address space (`Domain × κ`, the six domains
+registers/heap/caps/nullifiers/index/working — `UniversalMemory.lean:87-94`; `working`
+is the transient scratch domain, commitment-inert by theorem `working_commitment_inert`
+and mirrored by the Rust `UDomain::Working = 5`) soundly covers
 every per-domain projection simultaneously. The three load-bearing pieces:
 
 1. **The interior memory argument** — `universal_memory_sound`
-   (`UniversalMemory.lean:197-213`) reduces consistency of every domain to ONE balance
+   (`UniversalMemory.lean:210`) reduces consistency of every domain to ONE balance
    via `MemoryChecking.memcheck_sound`. This is a **multiset / LogUp** permutation
    argument; its soundness is *combinatorial inside the field* (the balance is an
    algebraic identity the STARK enforces), not a crypto assumption.
 
 2. **The boundary roots** — the four map roots (cap/nullifier/heap/index) are derived
    sorted-Poseidon2 Merkle roots over the final memory cells: `boundaryCells`
-   (`:320`), `boundary_root_derived` (`:416-422`), and the anti-forgery teeth
-   `boundary_init_root_bound` (`:475-479`) and `nullifier_fresh_binds_root`
-   (`:578-593`). These ride exactly ONE named crypto carrier:
-   **`Poseidon2SpongeCR`** (`Poseidon2Binding.lean:158-169`), collision-resistance of
+   (`:351`), `boundary_root_derived` (`:447`), and the anti-forgery teeth
+   `boundary_init_root_bound` (`:506`) and `nullifier_fresh_binds_root`
+   (`:770`). These ride exactly ONE named crypto carrier:
+   **`Poseidon2SpongeCR`** (`Poseidon2Binding.lean:162-178`), collision-resistance of
    the in-circuit Poseidon2 sponge. The header pins it explicitly: "Crypto enters
    ONLY as the named `Poseidon2SpongeCR` hypothesis ... never as an axiom"
-   (`UniversalMemory.lean:47-49`).
+   (`UniversalMemory.lean:47-48`). Floor-resolution note: the repo's own
+   floor-honesty record states this hypothesis as injectivity and PROVES that
+   statement false at the deployed BabyBear parameters
+   (`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`); the keyed computational
+   `CollisionResistant` restatement is itself proved false at the deployed
+   compressing parameters by the same pigeonhole
+   (`FloorGames.collisionResistant_false_of_compressing`). The honest,
+   actually-proved form is the query-bounded random-oracle floor
+   (`RomQueryFloor.romCollision_hard` / `binaryRom_hard_linear_budget`, with the
+   efficiency class `Eff` carried as a parameter). That is a resolution fact about
+   the classical floor's *statement*, not a quantum exposure — the carrier's
+   quantum status below is unchanged by it.
 
 3. **The proof that wraps it** — the whole memory table + boundary roots are attested
    by the deployed batch-STARK. That soundness is the STARK floor
-   (`docs/STARK-FLOOR.md`): `StarkSound` / FRI extraction over BabyBear with a
+   (`metatheory/docs/STARK-FLOOR.md`): `StarkSound` / FRI extraction over BabyBear with a
    Poseidon2 Merkle commitment. No pairing, no DLog.
 
 So the umem argument's *entire native* cryptographic dependency is two things:
@@ -68,9 +81,9 @@ onto the umem path:
 
 | Carrier | Where (file:line) | Role in umem | Quantum status |
 |---|---|---|---|
-| **Poseidon2-permutation CR** | `AssuranceCase.lean:27-32`; `Poseidon2Binding.lean:158-169` | Sorted-Merkle boundary roots; `root_injective` anti-forgery teeth; nullifier absence binding | **PQ-plausible.** Generic hash, no algebraic structure broken by Shor. |
-| **FRI / STARK soundness** | `AssuranceCase.lean:38-39`; `docs/STARK-FLOOR.md` | Attests the memory table + balance + boundary roots | **PQ-plausible.** FRI is hash-/IOP-based; its Merkle commitments are Poseidon2. No DLog. |
-| **The Blum multiset balance** | `universal_memory_sound`, `memcheck_sound` (`UniversalMemory.lean:197`) | The interior soundness — registers/heap/caps/nullifiers/index from one check | **Not cryptographic.** A field-algebraic permutation identity; nothing for a quantum computer to attack beyond the field/hash terms already counted. |
+| **Poseidon2-permutation CR** | `AssuranceCase.lean:27-32`; `Poseidon2Binding.lean:162-178` | Sorted-Merkle boundary roots; `root_injective` anti-forgery teeth; nullifier absence binding | **PQ-plausible.** Generic hash, no algebraic structure broken by Shor. |
+| **FRI / STARK soundness** | `AssuranceCase.lean:38-39`; `metatheory/docs/STARK-FLOOR.md` | Attests the memory table + balance + boundary roots | **PQ-plausible.** FRI is hash-/IOP-based; its Merkle commitments are Poseidon2. No DLog. |
+| **The Blum multiset balance** | `universal_memory_sound`, `memcheck_sound` (`UniversalMemory.lean:210`) | The interior soundness — registers/heap/caps/nullifiers/index from one check | **Not cryptographic.** A field-algebraic permutation identity; nothing for a quantum computer to attack beyond the field/hash terms already counted. |
 | **BLAKE3 CR** | `AssuranceCase.lean:33` | Out-of-circuit transcript/content hash | **PQ-plausible.** Generic hash. (Adjacent, not strictly inside the in-circuit memory argument.) |
 
 ### NOT PQ — the surrounding authorization / value carriers
@@ -101,7 +114,7 @@ the soundness of the writes themselves.
   rule: an `n`-bit collision/preimage target effectively drops toward `n/2`-ish under
   quantum search (with substantial caveats — Grover parallelizes poorly, and the
   collision speedup via BHT is closer to `n/3` and rarely worth it in practice).
-- **The honest sizing question for umem.** The STARK floor (`docs/STARK-FLOOR.md:97-114`)
+- **The honest sizing question for umem.** The STARK floor (`metatheory/docs/STARK-FLOOR.md:104-105`)
   states the query ledger as `130` bits conjectured (a REFUTED conjecture — Crites–Stewart,
   eprint 2025/2046; Kambiré, arXiv 2604.09724 — kept as a drift baseline) / `73` bits on the
   Johnson QUERY column, with the field challenge space `|EF| ≈ 2^124` and the Poseidon2
@@ -121,7 +134,7 @@ the soundness of the writes themselves.
   the remaining PQ-Grover question is a **margin** one against that deployed 124-bit
   surface (widen further only if a larger quantum margin is demanded), not a
   faithful-commitment widening still-to-do — that campaign has landed.
-- The grinding term (`query_proof_of_work_bits = 16`, `STARK-FLOOR.md:104`) is a hash
+- The grinding term (`query_proof_of_work_bits = 16`, `metatheory/docs/STARK-FLOOR.md:87`) is a hash
   preimage PoW; Grover halves its effective cost (`16 → ~8` bits). Negligible either
   way, but worth noting it is a Grover-soft term.
 
@@ -181,7 +194,7 @@ proof system. That is the whole reason this analysis comes out favorable.
   native crypto carriers are Poseidon2 collision-resistance and FRI/STARK soundness
   (`UniversalMemory.lean:47-49`, `AssuranceCase.lean:27-32,38-39`), both hash-based,
   with the interior covered by a non-cryptographic field-algebraic Blum balance
-  (`universal_memory_sound`, `:197`). No elliptic-curve or discrete-log assumption
+  (`universal_memory_sound`, `:210`). No elliptic-curve or discrete-log assumption
   lives inside it. Its only quantum exposure is **Grover sizing of the hash/commitment
   output** — a parameter choice, not a broken assumption.
 
@@ -203,8 +216,8 @@ proof system. That is the whole reason this analysis comes out favorable.
   its input authority is now hybrid-quantum-safe, staged.
 
 The carrier floor that grounds all of this: `AssuranceCase.lean:21-41` (the eight
-items), `docs/STARK-FLOOR.md` (the FRI/Poseidon2 envelope), and
-`Dregg2/Circuit/Poseidon2Binding.lean:158-169` (the sole in-circuit crypto carrier the
+items), `metatheory/docs/STARK-FLOOR.md` (the FRI/Poseidon2 envelope), and
+`Dregg2/Circuit/Poseidon2Binding.lean:162-178` (the sole in-circuit crypto carrier the
 umem boundary roots ride). The one-line summary: dregg's *memory commitment* is built
 on the post-quantum side of the cryptographic ledger; its *authority tokens* are now
 HYBRID (`ed25519 ∧ ML-DSA`, EUF-CMA reducing to `DL OR MSIS`) and staged default-off —

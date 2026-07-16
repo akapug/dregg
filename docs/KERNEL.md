@@ -12,7 +12,7 @@ design, the circuit's job and never Lean's.
 
 A cell holds four substances, each a distinct epistemic mode (`cell/src/state.rs`; the
 kernel-reserved system-root slots `DELEG`/`NULLIFIER`/`COMMIT` are indices 4/5/6 of the
-`system_root` module, `state.rs:48–68`):
+`system_root` module, `state.rs:68–90`):
 
 - **value** — per-asset signed (`i64`) balances. An asset *is* its issuer cell, which
   carries −supply, so every asset's units sum to identically 0. Conserved knowledge:
@@ -83,7 +83,7 @@ re-discharge at every point of use.
 ## The light client cannot be fooled
 
 The apex is `Dregg2.Circuit.lightclient_unfoolable`
-(`Dregg2/Circuit/CircuitSoundness.lean:453`). Its only inputs are what a light client
+(`Dregg2/Circuit/CircuitSoundness.lean:570`). Its only inputs are what a light client
 actually has — the public inputs and the proof; it takes no `pre`/`post` and no
 `StateDecode` as hypotheses. From `verifyBatch vk pi π = accept` plus named §8 floors it
 derives that there *exists* a genuine kernel transition committing to exactly the published
@@ -93,9 +93,9 @@ roots. Over the whole history this is
 that every turn executed correctly and the chain is correctly ordered (no
 reorder/drop/insert). Conservation rides the same root with no prover-supplied
 state-continuity hypothesis (`Dregg2.Circuit.conserves_from_verification`,
-`Dregg2/Circuit/RecursiveAggregation.lean:276`), and the anti-ghost tooth is
+`Dregg2/Circuit/RecursiveAggregation.lean:339`), and the anti-ghost tooth is
 `Dregg2.Circuit.tampered_aggregate_cannot_bind`
-(`Dregg2/Circuit/RecursiveAggregation.lean:410`): no sound aggregate can attest a reordered
+(`Dregg2/Circuit/RecursiveAggregation.lean:544`): no sound aggregate can attest a reordered
 chain.
 
 ### The five guarantees
@@ -117,30 +117,43 @@ theorems:
 The kernel keystones above are `#assert_axioms`-clean. The genuinely-open frontier is short
 and named (full list and labels in `metatheory/CLAIMS.md` § OPEN):
 
-- **The macaroon ↔ cap arrow.** The credential is meant to be one authority seen four ways
-  (biscuit · macaroon · cap · zk), all refining `granted ⊆ held`. Today the kernel cap face
-  (`capAuthorityG`) and the macaroon caveat-chain face (`chainGateG`) are AND-ed over
-  disjoint state in `gateOK`; there is no theorem `chainGateG na → capAuthorityG na`. It is
-  a genuine fail-closed conjunction (defense-in-depth, not a hole), but not yet *one* proven
-  production-arrow. This is the honest research edge
+- **The macaroon ↔ cap arrow, beyond the coherent overlap.** The credential is one
+  authority seen four ways (biscuit · macaroon · cap · zk), all refining `granted ⊆ held`.
+  The convergence arrow is proved on a coherently-built bridge node:
+  `Dregg2.Authority.CaveatCapBridge.chainGateG_implies_capAuthorityG`
+  (`Dregg2/Authority/CaveatCapBridge.lean:168`) — on a node whose `.capTpDelivered`
+  `granted` IS the macaroon chain's narrowing (`mkBridgeNode`), a verifying-and-admitting
+  caveat chain forces the kernel cap gate (`chainGateG na = true → capAuthorityG na = true`),
+  non-vacuous in both polarities (`…_devac`, `:357`) and `#assert_axioms`-pinned
+  (`:592`, `:606`). What stays open: in `gateOK` the two faces are still AND-ed over
+  disjoint state on an *arbitrary* `NodeAuth`; the proven arrow covers the coherent
+  construction, not every production node shape. A genuine fail-closed conjunction
+  (defense-in-depth, not a hole); the general arrow is the research edge
   (`metatheory/CONSTRUCTIVE-KNOWLEDGE.md` §12).
-- **Settlement soundness as a deployed composition.** `settlement_soundness`
-  (`metatheory/Metatheory/SettlementSoundness.lean:153`) is proved, but its
-  `BindsLiveAuthority` is a typed hypothesis the deployed settlement predicate must be shown
-  to satisfy.
-- **The attenuate v3-registry / moving-face descriptor cutover.** The three epoch-stamp
-  circuit residuals (`RevokeDelegationEpochResidual` / `SpawnEpochStampResidual` /
-  `RefreshEpochStampResidual`, in `Circuit.EffectRefinement` /
-  `Circuit.EffectRefinementBatch2`) are named, fail-closed, data-bearing `Prop`s: the
-  deployed commitment *binds* the field and the executor performs the move, but the frozen
-  v1-face descriptor commitment-binds rather than write-gate-forces the epoch stamp. The
-  closure is the per-effect descriptor cutover on an already-binding commitment, not a
-  commitment change.
 - **`Proof.Refine` full simulation diagram.** The conservation + intra-vat integrity
-  refinements are pinned (`Dregg2.Proof.refine_conservation` et al.); the full abstract
-  forward simulation needs an abstract small-step relation absent from `Core`.
+  refinements are pinned (`Dregg2.Proof.refine_conservation`,
+  `Dregg2/Proof/Refine.lean:65`, et al.); the full abstract forward simulation needs an
+  abstract small-step relation absent from `Core`.
 
-Note: `settlement_soundness` and the macaroon-arrow live in `metatheory/Metatheory/`
-(the constructive-knowledge *logic* tree), not `metatheory/Dregg2/` (the *verification* of
-the dregg2 system); the distinction is `metatheory/CONSTRUCTIVE-KNOWLEDGE.md` §13. Every
-theorem cited above as a kernel keystone resolves under `metatheory/Dregg2/`.
+Two residuals keep their names but are discharged — documentation, not open work:
+
+- **Settlement soundness rides the deployed predicate.** `settlement_soundness`
+  (`metatheory/Metatheory/SettlementSoundness.lean:153`) takes `BindsLiveAuthority` as a
+  typed hypothesis, and the deployed settlement predicate is proven to satisfy it:
+  `deployedSettle_binds_live_authority` (`:305`), discharged from the deployed tip-time
+  revocation gate (non-tautological — unlike the definitional `liveSettlement_binds`,
+  `:244`), with the negative pole `branchSettle_NOT_binds` (`:408`) separating faithful
+  from unfaithful settlements.
+- **The epoch-stamp circuit residuals.** `RevokeDelegationEpochResidual` /
+  `SpawnEpochStampResidual` / `RefreshEpochStampResidual` are CLOSED by the per-effect
+  descriptor cutover: each deployed descriptor's forced PRODUCT component
+  write-gate-forces the epoch stamp, the conjunct is dropped from the bridges, and each
+  `def` survives only as documentation of the forced proposition — "CLOSED (NOT an open
+  residual) … Nothing reads it" (`Dregg2/Circuit/EffectRefinement.lean:359`, `:819`;
+  `Dregg2/Circuit/EffectRefinementBatch2.lean:296`).
+
+Note: `settlement_soundness` lives in `metatheory/Metatheory/` (the constructive-knowledge
+*logic* tree), not `metatheory/Dregg2/` (the *verification* of the dregg2 system); the
+distinction is `metatheory/CONSTRUCTIVE-KNOWLEDGE.md` §13. The macaroon-arrow bridge
+resolves under `metatheory/Dregg2/Authority/`, and every theorem cited above as a kernel
+keystone resolves under `metatheory/Dregg2/`.

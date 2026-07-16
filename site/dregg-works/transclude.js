@@ -55,10 +55,12 @@
  *   - cite / data-src where the source document's bytes are served (any host —
  *                     untrusted; data-src wins over cite when both are set).
  *   - data-node       node API base for the commitment lookup (per element).
- *   Page-wide node default: <script src=".../transclude.js" data-node="...">,
- *   <meta name="dregg:node" content="...">, or window.__DREGG__.node — else
- *   DEFAULT_NODE below (the public devnet node, sdk/src/endpoints.rs
- *   `defaults::DEVNET`; if the devnet domain moves, move both).
+ *   Page-wide node config: <script src=".../transclude.js" data-node="...">,
+ *   <meta name="dregg:node" content="...">, or window.__DREGG__.node. There is
+ *   deliberately NO built-in default endpoint: no public devnet is currently
+ *   anchored, so an element with no configured node stays honestly UNVERIFIED
+ *   ("no node configured") rather than pointing at a dead host — a missing
+ *   endpoint is never a pass, and never a fake one either.
  *
  * Verified quotes are painted as TEXT (textContent), never as markup: the
  * source's bytes are its own; they do not get to script the quoting page.
@@ -150,12 +152,12 @@
     return s;
   }
 
-  /* ---------- config: the page-wide default node ---------- */
-  // The default cell-lookup node: the public devnet API host from the central
-  // endpoints config (sdk/src/endpoints.rs `defaults::DEVNET`). Overridable per
-  // element (data-node) and page-wide (script data-node / meta dregg:node /
-  // window.__DREGG__.node) — the default only applies when none are set.
-  var DEFAULT_NODE = "https://devnet.dregg.fg-goose.online";
+  /* ---------- config: the page-wide node (no built-in default) ---------- */
+  // The cell-lookup node comes ONLY from explicit configuration: per element
+  // (data-node) or page-wide (script data-node / meta dregg:node /
+  // window.__DREGG__.node). No endpoint is hardcoded — no public devnet is
+  // currently anchored — so with nothing configured, every element paints the
+  // honest UNVERIFIED state instead of querying a dead host.
   function pageNode() {
     var cfg = (window.__DREGG__ && typeof window.__DREGG__ === "object") ? window.__DREGG__ : {};
     var self = document.currentScript || (function () {
@@ -165,7 +167,7 @@
     })();
     function meta(n) { var m = document.querySelector('meta[name="dregg:' + n + '"]'); return m && m.content; }
     var scriptNode = self && self.dataset ? self.dataset.node : null;
-    return (scriptNode || meta("node") || cfg.node || DEFAULT_NODE).trim().replace(/\/+$/, "");
+    return (scriptNode || meta("node") || cfg.node || "").trim().replace(/\/+$/, "");
   }
 
   /* ---------- parsing the source ref off an element ---------- */
@@ -305,7 +307,13 @@
       paintUnverified(el, "no source bytes named (set cite= or data-src= to the committed document's URL)");
       return Promise.resolve();
     }
-    var elNode = (el.getAttribute("data-node") || node).replace(/\/+$/, "");
+    var elNode = (el.getAttribute("data-node") || node || "").trim().replace(/\/+$/, "");
+    if (!elNode) {
+      paintUnverified(el, "no node configured — no public devnet is currently anchored, so " +
+        "verification against a live chain is unavailable (set data-node / meta dregg:node / " +
+        "window.__DREGG__.node to a node API base)");
+      return Promise.resolve();
+    }
     return Promise.all([
       fetch(src, { cache: "no-store" }).then(function (r) {
         if (!r.ok) throw new Error("source fetch " + r.status);

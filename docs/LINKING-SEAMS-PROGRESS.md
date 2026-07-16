@@ -1,8 +1,8 @@
 # Linking-seams goal — progress record
 
 Goal: link the parallel PQ-crypto proofs into ONE integrated formal foundation. Close every
-executable↔spec and quantitative↔Boolean seam; prove the bridge, never relabel. Work is on branch
-`mldsa-sign-route` (a +N clean superset of `main`; `git merge --ff-only mldsa-sign-route` captures it).
+executable↔spec and quantitative↔Boolean seam; prove the bridge, never relabel. The work is captured on
+`main` (the `mldsa-sign-route` branch fast-forwarded in; see Seam 5).
 The Crypto real-verify/NTT chain is OUTSIDE the default `lake build` — build modules explicitly
 (`lake build Dregg2.Crypto.<M>`), or direct-`lean`/hbox when the shared lock stalls.
 
@@ -61,7 +61,7 @@ under it (the tail genuinely marginalised via `acceptEvent_eq_cylinder` + `infin
 The model↔reality identification is a theorem — no residual, no assumption, no `sorry`.
 
 ## Seam 4 — trust-shrink + gaps: δ ROUTE CLOSED (one named arithmetic residual)
-`MlKemDelta.lean` elaborates kernel-clean (`#assert_all_clean: 86 keystones`; no real `sorry` — the `sorry`
+`MlKemDelta.lean` elaborates kernel-clean (`#assert_all_clean: 178 keystones`; no real `sorry` — the `sorry`
 tokens are doc-comment prose). Two layers.
 - **The union bound + the FIPS-δ capstone (PROVED).** `mlkem_decapsFail_le` (`Pr[fail] ≤ 768·τ`), and
 `mlkem768_decapsFailure_le_delta : winProb (decapsFails ez) ≤ MlKemCorrect.mlKem768Delta` (the FIPS 203 δ =
@@ -113,9 +113,17 @@ not taken; the deployed wrap runs only 19 queries because its security lives at 
 `δ_J = 1 − √ρ = 7/8`, carried as the NAMED Prop `FriLdtDeployedBound` (`BabyBearFriDeployedInstance.lean`).
 **That Prop as-written is now DISCHARGED** (`FriLdtJohnson.lean`, `friLdtDeployedBound_discharge`, axiom-clean):
 at `δ_J = 7/8` it is the trivial counting else-branch, so `ldt_bound_unconditional` supplies the `2⁻⁵⁷` payoff
-with no hypothesis. Its genuine research-grade residual (words inside the `δ_J` ball, past unique decoding) is
-two precisely-named lemmas — `RSListBound` and `FriProximityGapChallenges` — each PROVED at `L=1` and instantiated
-on the deployed rate-`1/64` code (min-distance `127`); only their `L>1` generalization remains open.
+with no hypothesis. Its BCIKS20 residual (words inside the `δ_J` ball, past unique decoding) is two
+precisely-named lemmas — `RSListBound` and `FriProximityGapChallenges` — and BOTH are discharged at the deployed
+parameters: `rsListBound_johnson_112 : RSListBound (codeC 6 omega128) 112 15`
+(`FriLdtJohnsonList.lean:193`, the Johnson-radius list bound on the deployed rate-`1/64` code, min-distance `127`)
+and `wrap_friProximityGap_johnson : FriProximityGapChallenges friSetupWrapRate 112 42 26`
+(`FriProximityGapWitness.lean:494` — genuine list size `L = 26 > 1`, with the tighter `112 40 8` variant at
+`:605`). The `L>1` correlated-agreement generalization is proved by ordered-pair counting (`L ≤ 186` interior /
+`L ≤ 292` boundary, `FriCorrelatedAgreementSharp.lean`; the GS-ideal `L ≤ 128` is BLOCKED for the multiset word,
+`ForMathlib/GuruswamiSudan.lean:20-33`). The deployed per-fold soundness is the **~112.6-bit**
+`wrap_perFold_soundness_capacity`; the FRI capacity conjecture that once quoted `~130` is refuted
+(`BabyBearFriDeployedInstance.lean:44-50`).
 
 ## Seam 5 — deployment integrity: the GAUNTLET CLAUSE MET; deployment plumbing remains
 **WHOLE-TREE gauntlet PASSED on hbox (`lake build Dregg2` + the full linking chain = 9560 jobs, exit 0)** — the
@@ -129,13 +137,15 @@ the crate); route/allowlist the 23 FFI-free leaf binaries; wire the Crypto chain
 Seam 1 (cores ARE the spec — both NTTs proven from scratch, 4 directions), Seam 2 (tree on quantitative floors),
 Seam 3 (model↔reality is a theorem: independent-challenge combiner + the infinite-RO measure bridge), Seam 4 (δ
 route closed via the exact-MGF convolution; capstone fires on a genuine model), Seam 5 gauntlet-clause (whole-tree
-green on main). The linking + circuit-soundness tower rests on two named, non-axiom cryptographic floors: the hash
-floor **`HashCR`** (Poseidon2 sponge collision-resistance — unavoidable; every hash-based system assumes it), and,
-at the deployed low-query FRI parameters, the two BCIKS20 Johnson-radius lemmas **`RSListBound`** +
-**`FriProximityGapChallenges`** — the `FriLdtDeployedBound` Prop as-written is now DISCHARGED
-(`FriLdtJohnson.lean`, the trivial counting branch), and these two sharp lemmas are its genuine residual, each
-PROVED at `L=1` (deployed RS min-distance `127` closed) with only the `L>1` generalization open. Neither floor is
-smuggled; both are visible `Prop`s.
+green on main). The linking + circuit-soundness tower rests on ONE named, non-axiom cryptographic floor: the hash
+floor **`HashCR`** (Poseidon2 sponge collision-resistance — unavoidable; every hash-based system assumes it). At
+the deployed low-query FRI parameters, the two BCIKS20 Johnson-radius lemmas **`RSListBound`** +
+**`FriProximityGapChallenges`** are PROVED, not assumed — `FriLdtDeployedBound` is DISCHARGED
+(`FriLdtJohnson.lean`, the trivial counting branch), and its sharp residual lemmas are discharged at the deployed
+code: `rsListBound_johnson_112` + `wrap_friProximityGap_johnson` (`L = 26 > 1`), with the `L>1`
+correlated-agreement generalization proved by ordered-pair counting (`FriCorrelatedAgreementSharp.lean`). The
+deployed per-fold soundness is the ~112.6-bit `wrap_perFold_soundness_capacity`. Nothing is smuggled; the floor
+is a visible `Prop`.
 
 Honest named residuals (each a precisely-named obstruction, nothing laundered):
 - **Seam 4:** the true-`Δv` refinement now proves `≤ 2⁻¹⁵³` UNCONDITIONAL in-kernel (§18,
@@ -144,10 +154,11 @@ Honest named residuals (each a precisely-named obstruction, nothing laundered):
   `LightExactPerCoeffTail ≤ 2⁻¹⁷⁴`, true `≈ 2⁻¹⁸⁰`), the Bahadur–Rao prefactor the Chernoff rate discards at ~15.7σ —
   NOT arithmetic slack. Closing it needs a CERTIFIED numeric FFT-convolution evaluation, which is **IN FLIGHT —
   PENDING** (not finalized). `2⁻¹⁵³` is cryptographically negligible, so R1 is exactness, not security.
-- **Circuit floor:** the two `L>1` Johnson/correlated-agreement lemmas `RSListBound` +
-  `FriProximityGapChallenges` (the `FriLdtDeployedBound` Prop as-written is DISCHARGED, `FriLdtJohnson.lean`;
-  these are its residual, each `L=1`-proved with the deployed RS min-distance `127` closed); the general
-  `[StarkSound]` discharge across all sites (the `d = 0` deployed-arity composition IS proved).
+- **Circuit floor:** DISCHARGED at the deployed parameters — `RSListBound` + `FriProximityGapChallenges` are
+  proved (`rsListBound_johnson_112`, `wrap_friProximityGap_johnson` at `L = 26 > 1`; the correlated-agreement
+  generalization by ordered-pair counting, `FriCorrelatedAgreementSharp.lean`; `FriLdtDeployedBound` itself
+  DISCHARGED, `FriLdtJohnson.lean`). Still named: the general `[StarkSound]` discharge across all sites
+  (the `d = 0` deployed-arity composition IS proved).
 - **Seam 1:** the FO wrappers (`G`/`J`-KDF, Keccak slots), compress/decompress rounding, sign's full symbolic
   rejection loop (byte-exact-pinned partial def), the byte round-trip bookkeeping, the `MlDsaParams` module-map,
   KATs → full NIST ACVP.

@@ -66,16 +66,22 @@ side — e.g. on `D=(10,9), S=(5,20)` the `argmax` rule clears `p=1, V=9`, but l
 The load-bearing correction (codex Q2, `FHEGG-CODEX-INSIGHTS.md`): monotone *curves* are not a
 monotone *operator*; the fixpoint is of `F`, not of `D, S`. `Fstep_monotone` proves **`F` is the
 monotone operator** (using `imbalance_antitone`: the clearing guard is upward-closed), so
-Knaster–Tarski applies. `crossing_is_least` proves `crossing` is the least clearing bucket and
-`crossing_fixed` that it is a fixed point of `F` — **assuming a crossing exists**. That
-hypothesis (`CrossingExists`) is stated honestly and is not free: a book whose demand exceeds
-supply at every bucket does not clear (`noCrossBook_no_crossing`), and there is then only the
-spurious top bucket, not a genuine fixpoint.
+Knaster–Tarski applies. The Lean model keeps TWO honestly-named objects. The clearing price is
+the **volume-argmax `crossing`** (`argmaxUpto`, ties to the lowest bucket; `crossing_lt`,
+`clearedVolume_optimal`). The fixpoint object is the distinct **`balanceCrossing`** — the LEAST
+balanced bucket (`Nat.find` on `Clears`), emphatically NOT the clearing price:
+`balanceCrossing_is_least` proves it is the least clearing bucket, `balanceCrossing_fixed` that
+it is a fixed point of `F`, and `below_balanceCrossing_not_clears` that nothing below it clears —
+**assuming a crossing exists**. That hypothesis (`CrossingExists`) is stated honestly and is not
+free: a book whose demand exceeds supply at every bucket does not clear
+(`noCrossBook_no_crossing`), and there is then only the spurious top bucket, not a genuine
+fixpoint. `balanceCrossing` is the threshold of the monotone balance sign vector — the object the
+output-boundary MPC opens (`Market/MpcClearingSecurity.lean`) and the feedback anchor for
+`Market/ZKOpenRel.lean`'s guarded trace; it is what the old least-`{demand ≤ supply}` heuristic
+mistook for the clearing price.
 
 At `p*` the cleared volume is `V* = min(demand(p*), supply(p*))` — NOT `demand(p*)`, which was an artifact
-of the superseded least-crossing rule. (The fixpoint/`F`-operator/`crossing_is_least` prose above described
-that least-crossing formalization and is being re-cast to the `argmax min(D,S)` selector alongside the Lean
-`FhEggClearing` rewrite.) The aggregate
+of the superseded least-crossing rule. The aggregate
 cleared batch neither mints nor burns — `netFlow = 0` on every asset (`clearedBatch_conserves`,
 the priced lift of `clearing_conserves_per_asset`) — and is uniform-price optimal
 (`clearedBatch_optimal`, discharged through `Market/Optimality.lean`'s `uniform_price_optimal`:
@@ -279,7 +285,8 @@ guarded trace of a conservative guarded morphism is guarded — is **false**, an
 guarded, functional, yet its trace is the empty relation). It is **replaced** with the true
 **Tarski feedback closure** `traceAdmissible_guarded`: when the feedback is a monotone self-map of
 a complete lattice, its least fixed point witnesses that the loop clears. This lands on exactly the
-proven monotone crossing operator (`crossing_gtrace_guarded` via `Fstep_monotone` / `crossing_fixed`),
+proven monotone balance-threshold operator (`crossing_gtrace_guarded` via `Fstep_monotone` /
+`balanceCrossing_fixed`),
 fires non-vacuously on a real non-total monotone feedback, and the four instances are discharged as
 `TraceAdmissible`. Privacy is the simulator natural transformation `PrivacyNatTrans`
 (`View ≈ Sim∘Q`), with `RevealNothing.RevealBundle` shown to be exactly such a transformation.
@@ -298,7 +305,7 @@ kernel-clean (`#assert_all_clean` / `#assert_axioms`) at model/spec scope.
 | Kernel component | Lean / code | Status |
 |---|---|---|
 | aggregate curve, fold homomorphism, order-independence | `FhEggClearing.lean` (`demand_cons`, `demand_perm`); `Clearing.lean` (`toBal_mul`); `Aggregation.lean` (`pool_as_perm`, `aggregate_sound`) | proven |
-| the monotone crossing operator (curves ≠ operator) | `FhEggClearing.lean` (`Fstep_monotone`, `crossing_is_least`, `crossing_fixed`) | proven; `CrossingExists` an honest hypothesis |
+| the volume-argmax clearing price + the monotone balance-threshold operator (curves ≠ operator) | `FhEggClearing.lean` (`crossing`/`argmaxUpto_max`, `clearedVolume_optimal`; `Fstep_monotone`, `balanceCrossing_is_least`, `balanceCrossing_fixed`) | proven; `CrossingExists` an honest hypothesis |
 | conservation + uniform-price optimality of the cleared batch | `FhEggClearing.lean` (`clearedBatch_conserves`, `clearedBatch_optimal`); `Optimality.lean` (`uniform_price_optimal`) | proven at model scope; ledger-realization named |
 | verify-not-find certificate (`Cert-F`) | `CertF.lean` (`weak_duality`, `certifies_epsilon_optimal`, `gap_nonneg`); `cert_f_air.rs` (`prove_cert_f`) | proven; STARK-realized |
 | convex-QP / derivatives certificates | `CertQp.lean` (`qp_certifies_epsilon_optimal`); `PriceCert.lean` (`price_cert_certifies`, `snell_feasible_upper_bound`) | proven; named edge cases |

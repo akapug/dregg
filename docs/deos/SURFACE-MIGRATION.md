@@ -7,9 +7,10 @@ runs" is a point on that axis; migration moves the cap from one point to another
 without changing what it is or the cell behind it.
 
 This document grounds the full migration story — Local ↔ Surface ↔ HostPd ↔
-Distributed — in the primitives that already exist, and states honestly what is
-built versus what is wiring. The first concrete migration (Local→Surface, the
-multi-window tear-off) ships with this doc.
+Distributed — in the primitives it relocates, and states each concrete migration
+at its current resolution. All three legs are built: the tear-off (§2a), the
+`migrate` verb + live HostPd re-home (§2b), and the distributed captp-handoff
+carriage (§2c, with its named in-process residual).
 
 ## 1. The primitives migration relocates
 
@@ -72,7 +73,7 @@ existing CapTP machinery:
 - `captp/src/handoff.rs` — the three-party handoff: the introducer signs "I
   authorize <recipient> to reach <swiss>", the recipient presents it, the target
   validates. Two invariants matter for migration and are already enforced:
-  `HandoffError::Amplifies` (`handoff.rs`, the `granted ≤ held`
+  `HandoffError::Amplification` (`handoff.rs`, the `granted ≤ held`
   `handoff_non_amplifying` spec) and `HandoffError::TargetMismatch` (the
   `handoff_same_target` spec — a handoff re-shares the SAME cell, it cannot
   redirect a swiss entry to a different one). Replay is refused by the handoff
@@ -100,7 +101,7 @@ vat (`n>1`) relaxes those bounds.
 
 ## 2. The three concrete migrations
 
-### (a) Tear-off to an OS window — Local→Surface — **BUILT (this slice)**
+### (a) Tear-off to an OS window — Local→Surface — **BUILT**
 
 Relocate the active surface from "composited inside the cockpit's one window" to
 "its own OS window." gpui hosts multiple windows (`App::open_window`); the
@@ -127,55 +128,82 @@ Identity is preserved structurally: the surface keeps its `SurfaceId`, its
 `Target::Surface` face of the same cap — the firmament distance axis with two
 window points at `n=1`.
 
-### (b) Migrate a pane's processing to a HostPd — Local→HostPd — **DESIGN (wiring)**
+### (b) Migrate a pane's processing to a HostPd — Local→HostPd — **BUILT**
 
 Move a surface's *processing* (not just its glass) into a confined, OS-sandboxed
-child PD whose only channel is its firmament Endpoint. What exists:
+child PD whose only channel is its firmament Endpoint. The pieces it stands on:
 
-- `Target::HostPd` + `HostPdBacking` (`host_pd.rs`) already resolve a cap to a
-  confined child over its control socket, with attenuation on the same
-  `granted ⊆ held` gate (`host_pd.rs:99` `invoke`), bounds strong-local at `n=1`,
-  and the held Endpoint load-bearing (drop it and the cap is gone).
-- The compositor-PD already routes `present()`/`route_input()` over an Endpoint
-  with the T1/T2/T3 verified-scene teeth (`sel4/dregg-firmament/src/compositor_pd.rs`,
-  mirrored by `starbridge-v2/src/shell.rs:699` `Shell::present` /
-  `shell.rs:745` `route_input`).
+- `Target::HostPd` + `HostPdBacking` (`host_pd.rs`) resolve a cap to a confined
+  child over its control socket, with attenuation on the same `granted ⊆ held`
+  gate (`host_pd.rs:99` `invoke`), bounds strong-local at `n=1`, and the held
+  Endpoint load-bearing (drop it and the cap is gone).
+- The compositor-PD routes `present()`/`route_input()` over an Endpoint with the
+  T1/T2/T3 verified-scene teeth (`sel4/dregg-firmament/src/compositor_pd.rs`).
 - `process_kernel` + `sandbox` (`--features process-pd[-sandbox]`) fork the child,
   enforce MMU isolation, and confine ambient OS authority.
 
-The wiring needed: a `migrate(surface_cap, Target::HostPd(pd))` that (1) spawns or
-selects the child PD, (2) re-homes the surface's backing so its `present`/
-`route_input` round-trip over that PD's Endpoint instead of the in-process
-compositor, and (3) re-mints the surface cap with `Target::HostPd` while preserving
-the rights and the backing cell. The cap operation is a delegate turn (the child
-gets exactly the delegated rights); the transport changes from in-process call to
-Endpoint round-trip. The honest distance: the firmament has every PIECE (the
-target, the backing, the Endpoint present/route, the sandbox); no single
-`migrate` verb ties them into a surface re-home yet.
+The verb that ties them into a surface re-home:
 
-### (c) Hand a surface to another vat over the network — →Distributed — **DESIGN (wiring)**
+- `dock::migrate::migrate` (`starbridge-v2/src/dock/migrate.rs:177`) is the total
+  `migrate(surface_cap, target)` function over caps: it gates the carried rights
+  on the real `is_attenuation` (a WIDENING migration is refused,
+  `MigrateError::Widening`) and re-mints a fresh `SurfaceCapability` with the
+  SAME `SurfaceId`, the same backing cell, and the new `Target::HostPd { pd }` —
+  the authority half of the move.
+- `Shell::migrate_surface` (`starbridge-v2/src/shell.rs:879`, under `--features
+  process-pd` on unix) is the full glass-follows-the-cap move through the shell:
+  it authenticates the presented cap FIRST through `Shell::authorize` (you can
+  only migrate a window you hold), runs the attenuating re-mint, records the
+  surface as migrated, and installs a live `PresentTransport`. Thereafter
+  `Shell::present`/`Shell::route_input` for that surface dispatch over the child
+  PD's firmament surface Endpoint (`present_migrated`/`route_input_migrated`,
+  `HostPdBacking::present_over_endpoint`) — the in-process compositor never sees
+  it again, and the confined child's frame digests fold into the shell's
+  `FrameCommit` bookkeeping with the same provenance shape as an in-process
+  present. The `live_transport` e2e exercises the move end-to-end.
 
-Give a surface to a remote vat so it renders/drives it there. What exists:
+### (c) Hand a surface to another vat — →Distributed — **BUILT (in-process carriage; the network wire is the named residual)**
 
-- CapTP export + three-party handoff (`sturdy.rs` / `handoff.rs`) already carry a
-  cell reference to a third party with the non-amplification and same-target
+Give a surface to a federation node so it renders/drives it there. The pieces it
+stands on:
+
+- CapTP export + three-party handoff (`sturdy.rs` / `handoff.rs`) carry a cell
+  reference to a third party with the non-amplification and same-target
   invariants enforced (§1).
-- The membrane (`shared_fork.rs`) already travels as a portable, cap-bounded
-  world-snapshot with graduated consent tiers.
-- `Target::Distributed` already resolves a cap to a remote executor turn with the
-  `n>1` relaxed bounds (`lib.rs:241`).
+- `Target::Distributed` resolves a cap to a remote executor turn with the `n>1`
+  relaxed bounds (`lib.rs:241`).
 
-The wiring needed: a `migrate(surface_cap, Target::Distributed(remote))` that (1)
-exports the surface's backing cell to a swiss number, (2) performs the three-party
-handoff of the SURFACE cap to the recipient vat (the introducer = the current
-holder; the cert carries the attenuated rights), (3) ships a membrane fork for the
-live rendered content, and (4) the recipient enlivens the swiss ref into a live
-`Target::Surface` on its side. The handoff's `granted ≤ held` and `same_target`
-invariants give exactly the migration soundness §3 wants — for free, because a
-network surface handoff IS a CapTP handoff. The honest distance: the handoff
-moves a cell reference today; threading the SURFACE cap (the `Target::Surface`
-wrapper + the membrane content) through it, and enlivening it back into a live
-compositor surface on the recipient, is the unbuilt seam.
+The carriage and the re-home:
+
+- `MigrationTarget::Distributed` (`starbridge-v2/src/dock/migrate.rs:87`) is the
+  distributed leg of the same total `migrate` verb: the re-minted cap targets
+  `Target::Distributed { cell }` at narrowed-or-equal rights, same `SurfaceId`,
+  same backing cell.
+- `distributed::DistributedTransport` (`dock/migrate.rs:380`) is the live
+  carriage: `establish` carries the surface's authority to the destination node
+  over a REAL captp handoff — the cell is exported into a swiss table at the
+  HELD rights, the three-party handoff grants the recipient the (attenuated)
+  rights, and the one-shot certificate nonce makes a replayed presentation a
+  refusal (`HandoffError::ReplayDetected`; a widening handoff is
+  `Amplification`, a redirect is `TargetMismatch`).
+- `Shell::migrate_surface_distributed` (`starbridge-v2/src/shell.rs:1049`)
+  authenticates the presented cap, refuses a target cell that does not match the
+  handed-off transport's own destination cell, runs the attenuating re-mint, and
+  installs the transport. Thereafter `present`/`route_input` for that surface
+  resolve REAL turns on the federation node (`present_distributed`/
+  `route_input_distributed`, `granted ⊆ held` at the node's executor), with an
+  anti-confusion check that a forged cap naming the migrated surface id is
+  refused.
+
+The handoff's `granted ≤ held` and `same_target` invariants give exactly the
+migration soundness §3 wants — because a surface handoff IS a CapTP handoff.
+
+**Named residuals:** the carriage is the **a-bar** — the destination federation
+node lives in the same OS process (`DistributedBacking` in-process); a genuine
+second OS process / network wire for the handoff is the **b-bar**, the unbuilt
+seam. And the rendered content is the node's own turn resolution, not a shipped
+membrane fork — threading a `shared_fork.rs` membrane snapshot through the
+carriage for far-side rendered content remains unbuilt.
 
 ## 3. Soundness
 
@@ -190,7 +218,7 @@ not add a new trust surface, it reuses the one that already holds.
   narrows (hand a read-only mirror to a remote vat) is a genuine
   `Effect::GrantCapability` / CapTP handoff at the narrowed rights; a WIDENING
   migration is REJECTED by the real executor (`ShareDenied` /
-  `HandoffError::Amplifies`). Migration cannot amplify authority — the
+  `HandoffError::Amplification`). Migration cannot amplify authority — the
   no-amplification law fires identically at the desktop, the host-PD Endpoint, and
   the network handoff, because all three gate on the SAME `is_attenuation`.
 - **A migration cannot redirect the cap to a different cell.** The handoff

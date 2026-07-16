@@ -42,10 +42,11 @@ theorems, not permissions.
   guarantees + the first-five-minutes commands.
 - [`../../README-LLMs.md`](../../README-LLMs.md) = the dense machine-facing
   reference.
-- [`../ASSURANCE.md`](../ASSURANCE.md) = exactly what is proven, what is
-  assumed, and the honest open seams.
-- [`../DREGG3.md`](../DREGG3.md) = the substrate design (four substances, eight
-  verbs).
+- [`../../metatheory/CLAIMS.md`](../../metatheory/CLAIMS.md) = exactly what is
+  proven, what is assumed, and the honest open seams (build-enforced via
+  `Dregg2/Claims.lean`).
+- [`../KERNEL.md`](../KERNEL.md) = the substrate design (four substances, the
+  verbs, the verified kernel).
 - [`HYPERDREGGMEDIA.md`](../deos/HYPERDREGGMEDIA.md) = the charter for the inhabited
   world.
 - [`DEOS.md`](../deos/DEOS.md) · [`COCKPIT-UX.md`](../deos/COCKPIT-UX.md) = the desktop brand and
@@ -54,6 +55,6 @@ theorems, not permissions.
 > **Honesty note.** This is research software under active development. No
 > independent audit has happened. **Do not use it for anything
 > security-critical.** The crypto floor it stands on is *assumed*, not
-> discharged; the honest open seams are enumerated in [`../ASSURANCE.md`](../ASSURANCE.md) §3.
-</content>
-</invoke>
+> discharged; the honest open seams are enumerated in
+> [`../../metatheory/CLAIMS.md`](../../metatheory/CLAIMS.md) (the honesty
+> labels + § OPEN).

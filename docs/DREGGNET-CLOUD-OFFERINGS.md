@@ -1,11 +1,15 @@
-# DreggNet Cloud — the Offering/Session abstraction (design)
+# DreggNet Cloud — the Offering/Session abstraction
 
-Status: **design** (2026-07-11). The dungeon we built is **offering #0** — the first instance of a general pattern.
-The discord-bot (and a parallel web surface) are **frontends to DreggNet Cloud**; the cloud hosts *offerings*
-(confined, verifiable, paid, per-session things) on the real dregg substrate. The dungeon proved the whole shape
-end-to-end; this generalizes it so hosted-Hermes, Sandstorm grains, and the next thing plug into the same rails.
+Status: **built** — this document is the design rationale; the code is canonical. The abstraction lives in
+`dreggnet-offerings` (the `Offering` trait at `src/lib.rs:446`, the `Frontend` trait at `:572`,
+`mock::MockFrontend` as the reference renderer), with four frontends (the discord-bot, `dreggnet-telegram`,
+`dreggnet-wechat`, `dreggnet-web`) and offerings from the dungeon (#0, in-crate) through `dreggnet-hermes`
+(#1, a confined agent) and `dreggnet-grain` (#2, a confined grain) to the Descent family (`daily_descent`,
+`overworld`, `descent_tournament`) — one core, every surface. `DREGGNET-CLEANER-DESIGN.md` carries the
+current-state framing. The dungeon is **offering #0** — the first instance of the general pattern: the cloud
+hosts *offerings* (confined, verifiable, paid, per-session things) on the real dregg substrate.
 
-## The shape every offering shares (already built, for the dungeon)
+## The shape every offering shares (the invariants every offering carries)
 1. **A per-session confined thing** — a channel/thread hosts one live session.
 2. **A confined intelligence/app** — the dungeon's narrator (jailed LLM); for others, a hosted Hermes agent or a grain.
 3. **Real verifiable turns** — each input is a real executor turn -> a `TurnReceipt`; `verify_by_replay` re-checks the
@@ -28,6 +32,9 @@ trait Offering {
 - **Outcome** = `Landed(TurnReceipt) | Refused(reason)` — the same anti-ghost shape the dungeon uses.
 - **Session** is offering-specific but always carries a real verifiable state chain.
 - The bot never trusts the confined intelligence — it resolves the *typed Action* on the substrate, not the prose.
+- The canonical definition is `dreggnet-offerings/src/lib.rs:446`; beyond this sketch it adds
+  `advance_collective` (one real turn carrying a first-class `CollectiveDecision` — the electorate + the
+  tally + the carrier, recorded beside the committed turn).
 
 ## The shared orchestration layer (the bot's job — the "Midjourney" layer)
 `/start <offering>` -> the bot (admin) **spins a channel/thread** (via the dormant `discord_caps` engine + `GUILDS`/
@@ -48,46 +55,62 @@ trait Frontend {
     fn teardown(&self, s: SessionSurface);                           // archive on completion
 }
 ```
+(The canonical definition, `dreggnet-offerings/src/lib.rs:572`, is generic over the platform's user + event types
+— a Discord `ComponentInteraction`, a Telegram `CallbackQuery`, a web POST — and spins/tears down by `SessionId`.)
 - **Discord (#0, built):** threads/channels + buttons + `GUILDS`/`GUILD_MEMBERS` intents; identity from the user's
   derived Ed25519 (`UserCipherclerk`).
-- **Telegram:** Bot API — groups/forum-topics, inline keyboards, per-chat sessions; identity from the Telegram user id
-  → derived dregg identity; payment via Telegram Payments OR the same on-chain deposit-address flow.
-- **WeChat:** Official Account (template/menu messages — no arbitrary buttons) for lightweight play, a **Mini-Program**
-  for rich surfaces; China-platform constraints (mp.weixin.qq.com, OA message API, WeChat Pay). The heaviest lift.
-- **Web:** the richest surface; the same offerings + `dregg-pay` credits.
+- **Telegram (built — `dreggnet-telegram`):** `TelegramFrontend` over the core; identity = a BLAKE3-derived per-user
+  Ed25519 (`UserCipherclerk`-mirroring, Telegram-scoped domain); the `Surface` walks into message text and the
+  cap-gated `Action`s become inline-keyboard buttons whose `callback_data` carries `{turn, arg}`; drives through an
+  injected `Transport` (`MockTransport` in tests — no token, no network needed).
+- **WeChat (built — `dreggnet-wechat`):** `WeChatFrontend`; an Official Account forbids per-message buttons, so the
+  canonical surface is a **numbered reply list** (affordances as a `1.`-indexed list; the user replies with the
+  number), with an `api::MiniProgramCard` payload for the rich Mini-Program surface.
+- **Web (built — `dreggnet-web`):** `WebFrontend` renders the deos `Surface` into an HTML fragment — a
+  `<form>`/`<button>` per cap-gated affordance, each POSTing its `Action`; `WebState` hosts the axum surface.
 
-**The factoring this demands:** pull the offering/session/payment/verify/ballot logic OUT of `discord-bot/fiction.rs`
-into a **frontend-agnostic `dreggnet-offerings` crate**; the discord-bot becomes a thin `Frontend` impl; Telegram/
-WeChat/web are more `Frontend` impls. `dregg-pay` (payments), the verifiable substrate (WorldCell/receipts), and the
-collective are shared across all of them. Doing this NOW (while there is one frontend) is cheap; later it is a rewrite.
+**The factoring is in place:** the offering/session/payment/verify/ballot logic lives in the **frontend-agnostic
+`dreggnet-offerings` crate** (no serenity/Discord dependency); the discord-bot consumes it (e.g.
+`discord-bot/src/character_store.rs` is the sqlite backing of `dreggnet_offerings::character`'s `CharacterStore`);
+Telegram/WeChat/web are more `Frontend` impls. `dregg-pay` (payments), the verifiable substrate
+(WorldCell/receipts), and the collective are shared across all of them.
 
 **REUSE the deos surface — do NOT reinvent `Surface`/`Action`.** The frontend-agnostic surface layer ALREADY EXISTS
 and the bot already renders it: `deos-view` = a `ViewNode` (a moldable view of a cell); `starbridge-web-surface::
 affordance` = a cell's **cap-gated affordances** (`AffordanceIntent`/`EffectSummary`), each firing a real dregg turn.
 The bot's `/deos` (a cell's affordance surface → cap-gated buttons) and `/card` (a `deos_view` ViewNode → interactive
-buttons that fire real turns + re-render, `deos_surface.rs`) are exactly this. So map the abstractions onto it, don't
-duplicate: an offering's **`Surface` is a deos `ViewNode`/affordance surface**; its **`Action`s are cap-gated
-affordances**; a **`Frontend` is an affordance-renderer** (Discord is built — `deos_surface.rs`; Telegram/WeChat are
-more affordance-renderers mapping the same affordances onto inline keyboards / OA-menus / a Mini-Program). The **web
-frontend is `deos-js` + `web-cells`** (the existing web cell rendering). The dungeon's ballot buttons are just one
+buttons that fire real turns + re-render, `deos_surface.rs`) are exactly this. The abstractions map onto it, not
+beside it — and the code does: an offering's **`Surface` is a deos `ViewNode`/affordance surface**
+(`Offering::render` returns exactly that); its **`Action`s are cap-gated affordances** (the `{turn, arg}` shape a
+`ViewNode` button fires); a **`Frontend` is an affordance-renderer** (Discord — `deos_surface.rs`; Telegram/WeChat —
+built, mapping the same affordances onto inline keyboards / OA numbered replies / a Mini-Program card; web —
+`dreggnet-web`, rendering the same `Surface` to HTML forms). The dungeon's ballot buttons are just one
 affordance shape. EVERYTHING — offerings AND plain deos cells (dregg-doc, the cockpit, a tally card, a grain view) —
 flows through this ONE cap-gated, verifiable, moldable surface, on every frontend. That is the unification: the
 offering/session layer sits *above* the deos affordance surface; the frontends are *renderers of affordances*; the
 executor is the sole referee on all of them.
 
 ## Offerings
-- **#0 dungeon** — `RealSession` over `dungeon_on_dregg` WorldCell + the narrator + ballots. **Built + being migrated
-  into `/dungeon` now.**
-- **hosted-hermes** — a confined Hermes *agent* session (the jailed LLM produces typed Actions; turns are receipts).
-  Reuse `deos-hermes`/`grain-jail`. Next.
-- **grain** — a Sandstorm grain session (a confined app) surfaced in a channel. Next.
-- **web** — the same offerings, a parallel surface.
+- **#0 dungeon (built)** — `dreggnet_offerings::dungeon::DungeonOffering` over the `dungeon_on_dregg` WorldCell +
+  the narrator + ballots; the discord-bot drives it.
+- **#1 hosted-hermes (built — `dreggnet-hermes`)** — a confined Hermes *agent* session: a per-session
+  `AgentRuntime` + session-seed-derived root token, cap-gated tool workers (each a real rate-capped `ToolGateway`);
+  the jailed agent produces typed Actions; turns are receipts. The first non-game offering.
+- **#2 grain (built — `dreggnet-grain`)** — a Sandstorm-style grain session: the confined app is a cap-gated grain
+  turn-cell admitted through the real `grain-turn` R2 minter under a rate-capped `ToolGrant`.
+- **The Descent family (built, in-crate)** — `daily_descent` (a drand-beacon-seeded permadeath roguelite with a
+  no-cheat leaderboard), `overworld` (verified-clear-gated region traversal), `descent_tournament` (a no-cheat
+  bracket over verified runs via `dreggnet-tournament`).
+- **web (built — `dreggnet-web`)** — the same offerings, a parallel surface.
 
-## What's built vs to-build
-- BUILT (dungeon-proven): the substrate (WorldCell/receipts/verify), payments (dregg-pay dual-asset), the collective
-  (ballots/quorum), the narrator (real Bedrock, attested), the beginnings of channel orchestration (`channel.rs` +
-  the dormant `discord_caps`).
-- TO BUILD: the `Offering` trait + factoring the dungeon behind it; the full channel/thread **lifecycle**
-  (create/permission/archive/resume per session, roles); hosted-Hermes + grain offerings; the web surface; the
-  DreggNet Cloud integration (bot + web as cloud frontends). Entwingle with `~/dev/DreggCloud` (operated firmament)
-  and `~/dev/DreggNet` — sibling infra; contribute breadstuffs-native pieces, never scope against them.
+## Current state
+- The core: `dreggnet-offerings` — the `Offering` + `Frontend` traits, `mock::MockFrontend`, the character system
+  (`character`), the `OfferingHost` (`host`), and the session-resume seam (`resume` — a live session re-opened
+  from the durable store).
+- Frontends: discord-bot (#0) · `dreggnet-telegram` · `dreggnet-wechat` · `dreggnet-web`.
+- Offerings: dungeon #0 (in-crate) · `dreggnet-hermes` #1 · `dreggnet-grain` #2 · the Descent family — and the
+  wider `dreggnet-*` constellation (~28 crates: market, guild, quest, tournament, tavern, …) rides the same rails.
+- Shared underneath, on every surface: the substrate (WorldCell/receipts/verify), payments (`dregg-pay`
+  dual-asset), the collective (ballots/quorum).
+- Deploy caveat: none of this is hosted as a public service — "DreggNet Cloud" names the shape, not a live
+  deployment.

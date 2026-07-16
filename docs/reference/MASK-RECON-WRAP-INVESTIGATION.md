@@ -1,5 +1,21 @@
 # CapOpen 32-bit maskRecon wrap — soundness investigation
 
+> ✅ **RESOLVED — this is a point-in-time FINDING record; the gap it names is CLOSED, exactly as §4
+> recommends.** The deployed cap-open circuit reconstructs the mask **per 16-bit limb**:
+> `capOpenConstraintsEff` emits `maskReconLoGate` + `maskReconHiGate` in place of a bare 32-bit recon
+> (`metatheory/Dregg2/Circuit/Emit/CapOpenEmit.lean:276-280`), each limb sum is `< 2^16 < p` so the
+> mod-`p` gate + cell canonicality pins it exactly, and the full 32-bit `maskReconGate` is **DERIVED**
+> via `maskReconGate_of_limbs` (`metatheory/Dregg2/Circuit/DeployedCapOpen.lean:448-459`) — `reconExact`
+> is discharged, not carried: `CapOpenRowCanon` now holds only genuine cell canonicality + the effect-bit
+> range (`CapOpenEmit.lean:154-171`). The forgery below is proven REJECTED on the wire:
+> `maskReconLoGate_rejects_wrap` (`DeployedCapOpen.lean:462-483`, `#assert_axioms`-clean) shows a
+> `p`-shifted decomposition makes the low-limb gate non-vanishing. The Rust twin fills and constrains the
+> same per-limb shape (`circuit/src/effect_vm/trace_rotated.rs:3217`, `fill_cap_open`). The sibling vault
+> carry gap is likewise closed (`CARRY_BITS = 15` in both `metatheory/Dregg2/Deos/VaultSatDescriptor.lean:197`
+> and `circuit/src/effect_vm/vault_weld.rs:76`). Status table: `docs/reference/WRAP-CLASS-AUDIT.md`.
+> The prose below is preserved as the original investigation (its line numbers are pre-fix); do NOT
+> re-chase this as open.
+
 **VERDICT: (A) REAL SOUNDNESS GAP — capability-authorization forgery.** The deployed cap-open
 circuit reconstructs the FULL 32-bit effect mask in one weighted sum and binds it to the committed
 leaf mask ONLY mod `p`. Because `2p = 0xF0000002 < 2^32`, a boolean 32-bit decomposition of
@@ -88,9 +104,9 @@ the deployed per-limb range checks rather than a carried assumption.
 
 | Gate | File:line | Width | Wrap? |
 |---|---|---|---|
-| `maskReconGate` (cap-open) | `DeployedCapOpen.lean:335` / `trace_rotated.rs:2882` | **32-bit**, honest range `[0,2^32) ≥ p` | **SUSPECT — verdict A (this doc)** |
+| `maskReconGate` (cap-open) | `DeployedCapOpen.lean:335` / `trace_rotated.rs:2882` | **32-bit**, honest range `[0,2^32) ≥ p` | **verdict A (this doc) — FIXED, see banner** |
 | `gMaskRecon` (cap-reshape / delegation non-amp) | `EffectVmEmitCapReshape.lean:496`, `MASK_BITS=8` (443) | 8-bit, sum `< 256 < p` | SAFE by width (unique mod-`p` decomposition); anti-amp `gSubmaskBit` also on bits |
-| Vault cross-carry recon | `VaultSatDescriptor` (see VAULT doc) | 16-bit carry, `2^16` reach past `−p` | **verdict A (separate doc, fix `16→15` pending)** |
+| Vault cross-carry recon | `VaultSatDescriptor` (see VAULT doc) | 16-bit carry, `2^16` reach past `−p` | **verdict A (separate doc) — FIXED (`CARRY_BITS = 15` in both files)** |
 | `reconMaskExpr`/`reconMaskN` helpers | `DeployedCapOpen.lean:262/268` | the `maskReconGate` engine | same as row 1 |
 | RotationWide limb groups | `EffectVmEmitRotationWide.lean:130` | Poseidon2 CHIP-ABSORB inputs, equality-bound lane-for-lane (NOT a `Σ·2^k` scalar recompose) | SAFE — not a value reconstruction |
 | `pow2Body` / DFA `stateGrid`/`transition` bodies | `AdjacencyMembershipEmit.lean:133`, `DfaRoutingEmit.lean` | small quadratic/boolean gridding, no `≥p` sum | SAFE — no wide weighted reconstruction |
