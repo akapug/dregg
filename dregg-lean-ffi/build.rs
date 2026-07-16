@@ -163,17 +163,27 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
 /// renamed into place so a working archive is never observed half-written. If the seed is absent we
 /// do nothing: a prior working copy (if any) is reused; otherwise the `!build_archive.exists()`
 /// guard in `main` degrades to marshal-only.
-fn seed_build_archive(seed: &Path, build: &Path) {
+///
+/// **Returns `true` iff a fresh copy was installed.** That fact is load-bearing, not cosmetic: the
+/// seed is a dependency BASE, NOT a self-linking archive. It carries the Dregg2 slice + the
+/// dependency closure it was SEEDED with, but the `initialize_*` objects that closure-completion
+/// (step 4 of `build_dregg2_archive`) compiles land ONLY in the working copy — the seed never gets
+/// them. So a re-seed REVERTS the working archive to a closure-INCOMPLETE state, and the caller
+/// MUST re-run splice + closure-completion + GC over it, even when nothing else changed. (This is
+/// exactly the CI seed lane: `rebuild-dregg2-closure.sh` re-splices the seed's Dregg2 slice at HEAD
+/// out-of-band, so the next `cargo` re-seeds from an archive whose fresh Dregg2 objects import
+/// mathlib modules the OLD closure lacks → dangling `initialize_mathlib_*` at the final link.)
+fn seed_build_archive(seed: &Path, build: &Path) -> bool {
     if !seed.exists() {
-        return;
+        return false;
     }
     // Decide whether to (re)seed. Copy iff the working archive is missing or strictly older than
     // the seed (mtime). `newer_than(seed, build)` ⇒ seed is newer (or build absent) ⇒ copy.
     if build.exists() && !newer_than(seed, build) {
-        return;
+        return false;
     }
     let Some(parent) = build.parent() else {
-        return;
+        return false;
     };
     // Stage to a unique-ish temp in the SAME dir (so the final rename is same-filesystem & atomic),
     // keyed on the build OUT_DIR's own path hash via the process id — one build script runs per
@@ -188,7 +198,7 @@ fn seed_build_archive(seed: &Path, build: &Path) {
                  the build will use the existing working archive if present."
             );
             let _ = std::fs::remove_file(&tmp);
-            return;
+            return false;
         }
     }
     if let Err(e) = std::fs::rename(&tmp, build) {
@@ -198,9 +208,12 @@ fn seed_build_archive(seed: &Path, build: &Path) {
                 "cargo:warning=dregg-lean-ffi: could not install the working archive in OUT_DIR \
                  ({e}) — using the existing working archive if present."
             );
+            let _ = std::fs::remove_file(&tmp);
+            return false;
         }
         let _ = std::fs::remove_file(&tmp);
     }
+    true
 }
 
 /// Produce / refresh `libdregg_lean.a` IN OUT_DIR by (1) `lake build`-ing the FFI module's
@@ -214,7 +227,19 @@ fn seed_build_archive(seed: &Path, build: &Path) {
 /// one Dregg2 object actually changed or the archive lacks Dregg2 members. `rerun-if-changed` is
 /// emitted by the caller for the source tree + toolchain marker, so a genuine no-op cargo build does
 /// not even re-enter this function.
-fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &Path, seed: &Path) {
+///
+/// `reseeded` says the working archive was JUST re-copied from the seed by `seed_build_archive`.
+/// Because the seed is closure-INCOMPLETE by construction (see that function), a re-seed invalidates
+/// the incremental "nothing changed ⇒ nothing to do" reasoning and forces the splice + closure +
+/// GC path regardless of the `.o` cache's warmth.
+fn build_dregg2_archive(
+    meta: &Path,
+    sysroot: &Path,
+    archive: &Path,
+    out_dir: &Path,
+    seed: &Path,
+    reseeded: bool,
+) {
     // (1) Refresh the Lean `:c` facets. `lake build` is incremental; building the FFI module pulls
     // in (and emits `:c` for) its whole Dregg2 transitive closure.
     let inc = sysroot.join("include");
@@ -343,8 +368,12 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
                  Dregg2.Exec.FFI` green in metatheory/ and rebuild."
             );
             // Force the working archive back to the seed (overwrite any prior incoherent splice).
+            // The restored seed is closure-incomplete, but we deliberately do NOT complete it here:
+            // the IR tree is incoherent, so there is nothing trustworthy to complete it FROM. The
+            // link may fail; that is strictly better than splicing a torn set. Making `lake build`
+            // green is the fix, and the warning above says so.
             let _ = std::fs::remove_file(archive);
-            seed_build_archive(seed, archive);
+            let _ = seed_build_archive(seed, archive);
             return;
         }
         Err(e) => {
@@ -466,9 +495,22 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
         }
     }
 
-    // (3) Splice. Only pay the extract/repack cost when something actually changed, or when the
-    // archive is missing Dregg2 members entirely (e.g. a freshly-seeded dependency-only base).
-    let needs_splice = recompiled || !archive_has_dregg2(archive);
+    // (3) Splice. Only pay the extract/repack cost when something actually changed, when the
+    // working archive was just RE-SEEDED, or when the archive is missing Dregg2 members entirely
+    // (e.g. a freshly-seeded dependency-only base).
+    //
+    // `reseeded` is NOT redundant with the other two disjuncts, and omitting it was a real link
+    // break (the CI seed lane's `initialize_mathlib_*` undefined symbols). A re-seed can leave BOTH
+    // other guards false while the working archive still needs closure-completion:
+    //   * `recompiled` is false — the OUT_DIR `.o` cache is warm and no `Dregg2/**/*.c` changed, so
+    //     there is nothing to RE-compile;
+    //   * `archive_has_dregg2(archive)` is true — the out-of-band re-seed
+    //     (`rebuild-dregg2-closure.sh`) put a FRESH Dregg2 slice into the seed, so Dregg2 members
+    //     are present;
+    // …yet the archive we just copied in carries the seed's OLD dependency closure, which lacks the
+    // `initialize_*` objects that fresh slice imports. Returning here would skip steps (4) and (5)
+    // and hand the linker a dangling archive. So: any re-seed re-runs the closure.
+    let needs_splice = recompiled || reseeded || !archive_has_dregg2(archive);
     if !needs_splice {
         return;
     }
@@ -1535,8 +1577,10 @@ fn main() {
     // GC mutation below targets `build_archive`, never the seed — so concurrent multi-feature
     // lanes never tear the shared file. `cargo:rerun-if-changed` on the seed re-runs build.rs
     // when the seed is re-produced out-of-band, picking up the fresh base.
+    // A re-seed reverts the working copy to a closure-INCOMPLETE base, so `reseeded` forces
+    // `build_dregg2_archive` to re-run splice + closure-completion + GC over it (see below).
     println!("cargo:rerun-if-changed={}", seed_archive.display());
-    seed_build_archive(&seed_archive, &build_archive);
+    let reseeded = seed_build_archive(&seed_archive, &build_archive);
 
     // ── PRODUCE / REFRESH the archive from the Lean source (the linchpin). We watch the whole
     // `metatheory/Dregg2` source tree + the toolchain marker; when any of those change, build.rs
@@ -1557,9 +1601,14 @@ fn main() {
         );
 
         match &sysroot_opt {
-            Some(sysroot) => {
-                build_dregg2_archive(meta, sysroot, &build_archive, &out_dir, &seed_archive)
-            }
+            Some(sysroot) => build_dregg2_archive(
+                meta,
+                sysroot,
+                &build_archive,
+                &out_dir,
+                &seed_archive,
+                reseeded,
+            ),
             None => println!(
                 "cargo:warning=dregg-lean-ffi: cannot resolve the Lean sysroot (no \
                  DREGG_LEAN_SYSROOT and `lake env` failed in metatheory/) — skipping the archive \

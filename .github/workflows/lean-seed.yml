@@ -186,9 +186,20 @@ jobs:
           arch=dregg-lean-ffi/libdregg_lean.a
           [ -f "$arch" ] || { echo "::error::no $arch after bootstrap+re-splice"; exit 1; }
           NM=nm; command -v nm >/dev/null 2>&1 || NM=llvm-nm
+          # Read the symbol table ONCE into a variable and match with `case`, rather than
+          # `"$NM" "$arch" | grep -q "$sym"` per symbol. That idiom is SIGPIPE-FRAGILE under the
+          # `set -o pipefail` above: `grep -q` exits at the FIRST match (~line 82k of ~394k), which
+          # SIGPIPEs `$NM` (exit 141), and pipefail then reports the whole pipeline as FAILED even
+          # though the symbol was FOUND. That is a timing race — it happened to pass on the hosted
+          # runs and reproduces reliably on the self-hosted runner — and it fails CLOSED: a perfectly
+          # good seed gets "refused to publish" with a message claiming the export is missing.
+          # `case` does no piping, and runs $NM once instead of once per symbol.
+          syms="$("$NM" "$arch" 2>/dev/null)"
           for sym in dregg_exec_full_forest_auth dregg_tau_order; do
-            "$NM" "$arch" 2>/dev/null | grep -q "$sym" \
-              || { echo "::error::archive lacks the verified-executor export '$sym' — refusing to publish a seed that fetch-lean-seed.sh would reject."; exit 1; }
+            case "$syms" in
+              *"$sym"*) ;;
+              *) echo "::error::archive lacks the verified-executor export '$sym' — refusing to publish a seed that fetch-lean-seed.sh would reject."; exit 1 ;;
+            esac
           done
           # DREGG_REQUIRE_LEAN=1: fail loud rather than let a marshal-only degrade be published.
           DREGG_REQUIRE_LEAN=1 cargo run -q -p dregg-lean-ffi --features lean-lib --bin dregg-lean-ffi
