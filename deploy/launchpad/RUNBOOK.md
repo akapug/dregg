@@ -1,3 +1,20 @@
+> # ⚠ STALE TOPOLOGY — THE GO-LIVE PATH BELOW CANNOT BE EXECUTED AS WRITTEN
+>
+> **The hosting flip is impossible at the network layer** (verified 2026-07-15,
+> `deploy/README.md`). This runbook fronts `launchpad-web` on hbox with "the AWS
+> gateway's Caddy over Tailscale" — the SAME gateway↔tailnet↔hbox pattern that is
+> **false at the network layer**: the AWS edge is on `100.64.0.x` and hbox is on
+> `skunk-emperor.ts.net` — they are on **different tailnets and cannot reach each
+> other**, and there is **no Caddy on the edge**. Following steps (0)/(d) will fail
+> silently at the gateway↔hbox hop.
+>
+> **The only verified public path is `tailscale funnel`** (see
+> `deploy/games/RUNBOOK-FUNNEL.md`, the pattern that actually runs). This runbook's
+> **contract-deploy half** (`chain/script/DeployLaunchpad.s.sol`, `npm ci`, unit/dry-run)
+> is sound and executable; only the **hosting topology** is stale and needs rebasing
+> onto the funnel pattern before go-live. Do not treat the hosting flip as "small and
+> safe" until that rebase lands.
+
 # Launchpad deploy runbook — the revenue rehearsal, public at launchpad.dregg.fg-goose.online
 
 The ordered go-live for the **dregg launchpad product layer** on a **public testnet**

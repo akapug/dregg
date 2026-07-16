@@ -1,3 +1,14 @@
+> # ⚠ STALE HOSTING TOPOLOGY — read before following any host step
+>
+> This runbook's hosting model routes hbox surfaces through an **AWS-gateway-Caddy-over-
+> Tailscale** path that is **false at the network layer** (verified 2026-07-15,
+> `deploy/README.md`): the edge (`100.64.0.x`) and hbox (`skunk-emperor.ts.net`) are on
+> **different tailnets and cannot reach each other**, and there is **no Caddy on the edge**.
+> The only verified public path is `tailscale funnel` (`deploy/games/RUNBOOK-FUNNEL.md`).
+> The architecture/security-review/copy-paste *procedures* here are still useful groundwork;
+> the **two-host gateway topology is not**. (`docs/DEPLOY-PLAN.md`, cited below, does not
+> exist.) The live flip remains ember-gated regardless.
+
 # OPS-RUNBOOK — hosted TESTNET demo (gateway + hbox infra)
 
 The runbook for hosting dregg's clickable demos (**DrEX** — `drex-web/`; and the
