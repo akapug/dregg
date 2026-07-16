@@ -717,6 +717,43 @@ theorem binaryRom_romEff_not_implies_top :
        Hard (romCollisionGame binaryRomFamily) (fun _ => True)) :=
   fun h => binaryRom_top_false (h binaryRom_hard_linear_budget)
 
+/-- **⚑⚑⚑ THE WHOLE VERDICT, AT ONE CONCRETE FAMILY AND ONE CONCRETE BUDGET.**
+
+At `Q l = l + 2` on the `λ`-bit digest family, all three facts at once:
+
+  1. the query-bounded floor is **TRUE** (`binaryRom_hard`),
+  2. the class is **INHABITED** by an adversary that really queries and really wins — its advantage
+     is `1/2^l`, which is **positive at every `l`**,
+  3. the unrestricted floor **at the same game** is **FALSE** (`binaryRom_top_false`).
+
+So the floor is not vacuous, the class is neither `⊤` nor `⊥`, and the verdict is not free. This is
+the statement `FloorGames` §8 says the tree cannot make — made, without a cost model. -/
+theorem binaryRom_verdict :
+    Hard (romCollisionGame binaryRomFamily) (RomEff binaryRomFamily (fun l => l + 2))
+      ∧ (∃ A, RomEff binaryRomFamily (fun l => l + 2) A
+              ∧ ∀ l, 0 < gameAdv (romCollisionGame binaryRomFamily) A l)
+      ∧ ¬ Hard (romCollisionGame binaryRomFamily) (fun _ => True) := by
+  have hlt : ∀ l : ℕ, 1 < 2 * 2 ^ l := by
+    intro l
+    have : 0 < 2 ^ l := by positivity
+    omega
+  let x : ∀ l, binaryRomFamily.D l := fun l => (⟨0, by have := hlt l; omega⟩ : Fin (2 * 2 ^ l))
+  let y : ∀ l, binaryRomFamily.D l := fun l => (⟨1, hlt l⟩ : Fin (2 * 2 ^ l))
+  have hxy : ∀ l, x l ≠ y l := by
+    intro l h
+    have := congrArg Fin.val h
+    simp [x, y] at this
+  refine ⟨binaryRom_hard (fun l => l + 2) ⟨2, 6, ?_⟩,
+    ⟨romAdv binaryRomFamily (fun l => twoPointComp binaryRomFamily l (x l) (y l)),
+      twoPointAdv_in_romEff binaryRomFamily (fun l => l + 2) (fun l => Nat.le_add_left 2 l) x y,
+      fun l => twoPointAdv_gameAdv_pos binaryRomFamily l x y (hxy l)⟩,
+    binaryRom_top_false⟩
+  filter_upwards [Filter.eventually_ge_atTop 2] with n hn
+  have hn' : (2 : ℝ) ≤ (n : ℝ) := by exact_mod_cast hn
+  rw [abs_of_nonneg (by positivity)]
+  push_cast
+  nlinarith
+
 /-! ## Kernel-clean keystones. -/
 
 #assert_all_clean [
@@ -744,7 +781,8 @@ theorem binaryRom_romEff_not_implies_top :
   binaryRom_top_false,
   binaryRom_hard,
   binaryRom_hard_linear_budget,
-  binaryRom_romEff_not_implies_top
+  binaryRom_romEff_not_implies_top,
+  binaryRom_verdict
 ]
 
 end Dregg2.Crypto.RomQueryFloor
