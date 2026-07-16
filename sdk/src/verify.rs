@@ -366,9 +366,16 @@ pub fn verify_selective_presentation(presentation: &crate::AuthorizationPresenta
 /// [`verify_validated_ivc_proof`]): this function has no trusted state, so it never accepts a claim
 /// it cannot check.
 ///
-/// Callers holding trusted token state must use
-/// [`verify_disclosure_presentation_against_state`], which derives each expected commitment
-/// canonically and is the only sound way to accept a predicate proof.
+/// Two entry points DO have a sound source and can accept a predicate proof:
+///
+/// * [`verify_disclosure_presentation_third_party`] — takes the presentation-attested `facts_root`
+///   and accepts a proof whose commitment a [`dregg_bridge::BridgeFactAttestation`] proves is the
+///   blinded image of a MEMBER of that tree. No trusted state, no knowledge of the value.
+/// * [`verify_disclosure_presentation_against_state`] — for callers holding trusted token state;
+///   derives each expected commitment canonically from a fact they already know.
+///
+/// This function stays fail-closed because it takes NEITHER: with no root and no state, there is
+/// still nothing here to check a predicate proof against.
 ///
 /// # Returns
 ///
@@ -458,12 +465,19 @@ pub fn verify_disclosure_presentation_against_state(
                 let Some(trusted_fact) = trusted_facts.get(*fact_index) else {
                     return false;
                 };
+                // This path RE-DERIVES, so it needs the opening. A proof that carries none (the
+                // third-party shape, `blinding: None`) cannot be checked here — the commitment is
+                // unreproducible by construction. Refuse rather than guess: such a proof wants
+                // [`verify_disclosure_presentation_third_party`].
+                let Some(blinding) = pred_proof.blinding else {
+                    return false;
+                };
                 // The VALUE comes from trusted state; only the blinding (the opening) comes from the
                 // proof, and that freedom cannot move which fact the commitment names.
                 let Ok(expected) = crate::AgentCipherclerk::derive_fact_commitment(
                     trusted_fact,
                     state_root,
-                    dregg_circuit::predicate_arith_witness::Blinding(pred_proof.blinding),
+                    dregg_circuit::predicate_arith_witness::Blinding(blinding),
                 ) else {
                     return false;
                 };
@@ -473,6 +487,79 @@ pub fn verify_disclosure_presentation_against_state(
             }
 
             true
+        }
+        _ => false,
+    }
+}
+
+/// **Verify a disclosure presentation as a THIRD PARTY** — no trusted state, no knowledge of the
+/// values, predicate proofs included.
+///
+/// This is the entry point [`verify_disclosure_presentation`] could not be. That function has no
+/// trusted state and no attested source for a predicate proof's expected commitment, so it fails
+/// closed on any predicate proof — honest, but it means a third party cannot verify one at all.
+/// Here the missing source arrives as a parameter: `facts_root`, the root of the token's facts tree,
+/// which the presentation's STARK attests as a public input.
+///
+/// It verifies:
+/// 1. the revealed facts commitment matches the plaintext revealed facts;
+/// 2. every predicate proof carries a [`dregg_bridge::BridgeFactAttestation`] that VERIFIES against
+///    `facts_root` — i.e. its `fact_commitment` is the blinded image of a fact that is a MEMBER of
+///    the attested tree, not one the prover invented;
+/// 3. every predicate STARK verifies against that ATTESTED commitment.
+///
+/// It does NOT verify the presentation STARK itself (use `verify_authorization_proof` for that);
+/// `facts_root` must come from that proof's public inputs.
+///
+/// # What a caller may conclude, and what it may not
+///
+/// For each `(fact_index, proof)`: **"some fact of the token committed at `facts_root` has a value
+/// satisfying `proof.predicate`."** That is what a third party needs for a policy decision like
+/// "this holder is over 18" without learning the birthdate.
+///
+/// It may NOT conclude WHICH fact — the member is a hidden witness of the attestation, deliberately,
+/// because publishing it would make two showings of one fact linkable. `fact_index` travels for
+/// correlation with the trusted-state path but this function does not bind it: a caller needing the
+/// fact NAMED still needs [`verify_disclosure_presentation_against_state`].
+///
+/// # Arguments
+///
+/// * `presentation` — the presentation to check.
+/// * `facts_root` — the attested root of the token's facts tree, from the presentation STARK's
+///   public inputs. Passing a root the prover chose reduces this to the vacuity it exists to close.
+/// * `state_root` — the token state root the commitments are taken against.
+///
+/// # Returns
+///
+/// `true` if the revealed-facts commitment matches AND every predicate proof is attested under
+/// `facts_root` and verifies against its attested commitment. Fail-closed on a missing attestation,
+/// a root mismatch, or any failed proof.
+pub fn verify_disclosure_presentation_third_party(
+    presentation: &crate::AuthorizationPresentation,
+    facts_root: dregg_circuit::BabyBear,
+    state_root: dregg_circuit::BabyBear,
+) -> bool {
+    match presentation {
+        crate::AuthorizationPresentation::Selective {
+            revealed_facts,
+            revealed_facts_commitment,
+            predicate_proofs,
+            ..
+        } => {
+            // 1. Verify revealed facts commitment.
+            if !dregg_bridge::verify_revealed_facts_commitment(
+                revealed_facts,
+                *revealed_facts_commitment,
+            ) {
+                return false;
+            }
+
+            // 2 + 3. Every predicate proof must be ATTESTED under the caller's trusted root. The
+            //        expected commitment is manufactured by the attestation STARK, never read off
+            //        the proof — that is the whole difference from the `x != x` gate.
+            predicate_proofs.iter().all(|(_fact_index, pred_proof)| {
+                dregg_bridge::verify_predicate_proof_third_party(pred_proof, facts_root, state_root)
+            })
         }
         _ => false,
     }

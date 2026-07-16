@@ -2635,10 +2635,12 @@ impl AgentCipherclerk {
                         fact_commitment: committed_proof.fact_commitment,
                         // The committed-threshold commitment is built by its own path
                         // (`prove_committed_threshold`), which does not take an arithmetic
-                        // `Blinding`. `NONE` records that: there is no arithmetic-family
+                        // `Blinding`. `None` records that: there is no arithmetic-family
                         // decommitment to hand a verifier here. The arm is fail-closed at verify
                         // (no IR-v2 committed-threshold descriptor is emitted), so nothing opens it.
-                        blinding: dregg_circuit::field::BabyBear::ZERO,
+                        blinding: None,
+                        // Nor is there an attestation: this arm cannot be third-party verified.
+                        attestation: None,
                     };
                     predicate_proofs.push((*fact_index, bridge_proof));
                 }

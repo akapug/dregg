@@ -453,6 +453,7 @@ pub mod bound_presentation_witness;
 /// `bound_presentation_witness`: `blinded_leaf` and the Merkle path are both constrained in-circuit,
 /// so consumers of `descriptor_by_name` can prove/verify a blinded membership through the real p3
 /// prover (and the fold adapter can wrap it as a recursion leaf). See module docs.
+pub mod attested_fact_membership_witness;
 pub mod blinded_membership_witness;
 
 /// Descriptor + Rust witness builder for the emitted note-spend recursion-leaf descriptor

@@ -80,7 +80,11 @@ fn derive_expected(trusted: &TraceFact, proof: &dregg_bridge::BridgePredicatePro
     AgentCipherclerk::derive_fact_commitment(
         trusted,
         state_root(),
-        dregg_circuit::predicate_arith_witness::Blinding(proof.blinding),
+        dregg_circuit::predicate_arith_witness::Blinding(
+            proof
+                .blinding
+                .expect("the trusted-state shape carries an opening"),
+        ),
     )
     .expect("a trusted fact must have a canonically derivable commitment")
 }
@@ -278,7 +282,8 @@ fn blinding_is_unlinkable_yet_derivable_and_still_sound() {
         "two showings of the same fact must not be correlatable by commitment"
     );
     assert_ne!(
-        first.blinding, second.blinding,
+        first.blinding.expect("opening"),
+        second.blinding.expect("opening"),
         "each showing draws a fresh blinding"
     );
 
@@ -309,8 +314,8 @@ fn blinding_is_unlinkable_yet_derivable_and_still_sound() {
         &dregg_bridge::Predicate::Gte(THRESHOLD),
     );
     for b in [
-        dregg_circuit::predicate_arith_witness::Blinding(forged.blinding),
-        dregg_circuit::predicate_arith_witness::Blinding(first.blinding),
+        dregg_circuit::predicate_arith_witness::Blinding(forged.blinding.expect("opening")),
+        dregg_circuit::predicate_arith_witness::Blinding(first.blinding.expect("opening")),
         dregg_circuit::predicate_arith_witness::Blinding::NONE,
     ] {
         let expected = AgentCipherclerk::derive_fact_commitment(&fact, state_root(), b)

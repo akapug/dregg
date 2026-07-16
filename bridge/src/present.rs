@@ -27,14 +27,14 @@ use dregg_circuit::{
     BabyBear, PresentationAir, PresentationProof, PresentationVerification, PresentationWitness,
 };
 use dregg_commit::merkle::{MerkleProof, MerkleTree};
-use dregg_commit::{Fact, FieldElement, FoldDelta, SymbolTable, TokenState};
+use dregg_commit::{CheckPolicy, Fact, FieldElement, FoldDelta, SymbolTable, TokenState};
 use dregg_dsl_runtime::fold::build_shared_tree;
 use dregg_token::{Attenuation, AuthRequest, MacaroonToken};
 use dregg_trace::{AuthorizationTrace, Conclusion, Term as TraceTerm, symbol_from_str};
 
 use crate::authorize::{self, AuthError};
 use crate::convert::macaroon_to_factset_secure;
-use crate::delta::{further_attenuation_delta, initial_attenuation_delta};
+use crate::delta::{VALID_CHECK_PREDICATES, further_attenuation_delta, initial_attenuation_delta};
 
 /// Trait for resolving issuer membership in a federation.
 ///
@@ -760,28 +760,35 @@ impl BridgePresentationBuilder {
 
     /// Verify the fold chain integrity.
     ///
-    /// Checks that all fold deltas in the chain are valid and properly linked.
+    /// Each delta is verified against the REAL prior state we hold (`chain[i-1].state`),
+    /// which is what binds its `old_root`/`new_root` to actual facts instead of to other
+    /// fields of the same caller-supplied struct. Added checks are admitted only if they
+    /// are `rule:`-prefixed restrictions drawn from [`VALID_CHECK_PREDICATES`] — the same
+    /// allowlist the construction side (`delta.rs`) enforces, so a verifier cannot be
+    /// talked into accepting a capability that a builder would have refused to mint.
     pub fn verify_chain(&self) -> bool {
-        let deltas: Vec<&FoldDelta> = self
-            .chain
-            .iter()
-            .filter_map(|step| step.delta.as_ref())
-            .collect();
+        let policy = CheckPolicy::RuleNames(VALID_CHECK_PREDICATES);
 
-        if deltas.is_empty() {
-            return true; // Only the root, no attenuations.
+        // The root step is the chain's origin; it must not carry a delta.
+        match self.chain.first() {
+            Some(root) if root.delta.is_some() => return false,
+            None => return true,
+            _ => {}
         }
 
-        // Each delta must individually verify.
-        for delta in &deltas {
-            if !delta.apply_and_verify() {
+        for i in 1..self.chain.len() {
+            let delta = match self.chain[i].delta.as_ref() {
+                Some(d) => d,
+                // A step past the root with no delta has no evidence for its state.
+                None => return false,
+            };
+
+            if !delta.apply_and_verify(&self.chain[i - 1].state, &policy) {
                 return false;
             }
-        }
 
-        // Chain continuity: each delta's new_root must equal the next delta's old_root.
-        for i in 0..deltas.len() - 1 {
-            if deltas[i].new_root != deltas[i + 1].old_root {
+            // The delta must land on the state this step actually claims.
+            if delta.new_root != self.chain[i].state.root_immutable() {
                 return false;
             }
         }
@@ -2621,19 +2628,89 @@ pub struct BridgePredicateProof {
     /// and does not close: the blinded weld makes the COMMITMENT unlinkable; it does not by itself
     /// make a decommitted proof private.
     ///
-    /// # The real fix, and why it is not here
+    /// # The real fix — IT IS NOW HERE, and this field is how you opt OUT of it
     ///
     /// The decommitment exists only because [`verify_predicate_proof`] pins the commitment by
     /// EQUALITY, which forces the verifier to reproduce it. The sound shape for a blinded scheme is
-    /// for the verifier to check that the presented commitment OPENS into trusted state (a
+    /// for the verifier to check that the presented commitment OPENS into an attested set (a
     /// membership / opening proof) rather than to re-derive it — then the blinding never leaves the
-    /// prover and unlinkability survives contact with the verifier. That is a protocol rung above
-    /// this lane's descriptor work; it is NAMED in HORIZONLOG, not silently assumed. Until it lands,
-    /// treat this field as the honest admission that the verifier side is still equality-pinned.
+    /// prover and unlinkability survives contact with the verifier.
+    ///
+    /// That rung is [`BridgeFactAttestation`] / [`prove_predicate_for_fact_attested`], and it needs
+    /// NO decommitment: it sets this field to [`None`]. So the brute-force above is not a property
+    /// of the scheme any more — it is a property of a proof that CHOSE to carry an opening.
+    ///
+    /// * `None` — the third-party shape. No decommitment travels; nothing to brute-force. Verify
+    ///   with [`verify_predicate_proof_third_party`] against the presentation-attested `facts_root`.
+    /// * `Some(b)` — a deliberate OPENING to a verifier that already holds the value (issuer,
+    ///   auditor, policy re-evaluator), so it can re-derive and compare via
+    ///   `dregg_sdk::verify::verify_disclosure_presentation_against_state`. Handing `b` to a party
+    ///   that does NOT hold the value hands it a brute-force oracle over a low-entropy domain —
+    ///   which is exactly why this is now a deliberate `Some`, not an unconditional field.
     ///
     /// Stored as the raw field element rather than [`Blinding`] because the circuit-side newtype
     /// carries no serde derives; [`Blinding`] is reconstructed at the derivation site.
-    pub blinding: BabyBear,
+    pub blinding: Option<BabyBear>,
+    /// The ATTESTATION that `fact_commitment` opens to a fact of the presented token — the rung
+    /// that lets a THIRD PARTY (no trusted state, no knowledge of the value) verify this proof.
+    ///
+    /// * `None` — no attestation. A third-party verifier FAILS CLOSED
+    ///   ([`verify_predicate_proof_third_party`] returns `false`): with nothing binding
+    ///   `fact_commitment` to the token, the proof is a true statement about a fact the prover may
+    ///   simply have invented.
+    /// * `Some(a)` — `a` proves `fact_commitment` is the blinded image of a `fact_hash` that is a
+    ///   MEMBER of `a.facts_root`. A verifier that independently trusts `facts_root` (it rides the
+    ///   presentation's public inputs) can then accept.
+    pub attestation: Option<BridgeFactAttestation>,
+}
+
+/// A proof that a `fact_commitment` opens to a fact of the PRESENTED TOKEN — the third-party rung
+/// of the predicate stack.
+///
+/// # The hole it closes
+///
+/// [`verify_predicate_proof`] pins `expected_fact_commitment` as the predicate descriptor's `pi[1]`,
+/// and the descriptor's weld forces the compared value to be the one that commitment covers. The
+/// chain therefore closes only if `expected_fact_commitment` comes from somewhere the prover does
+/// not control. For a verifier holding TRUSTED STATE that source is its own derivation. For a THIRD
+/// PARTY there was NO such source — it does not know the value — so
+/// `dregg_sdk::verify::verify_disclosure_presentation` had to fail closed on every predicate proof.
+///
+/// This is the source. The attestation STARK (`dregg-attested-fact-membership::v1`) proves, at
+/// `pi = [fact_commitment, facts_root, state_root]`:
+///
+/// > "∃ fact_hash, blinding, path: `fact_hash ∈ tree(facts_root)`, and
+/// >  `fact_commitment = hash_4_to_1([fact_hash, state_root, blinding, 0])`."
+///
+/// The commitment is computed by the IDENTICAL arity-4 absorb the predicate descriptor's leg 2
+/// computes (pinned byte-equal by
+/// `dregg_circuit::attested_fact_membership_witness::tests::the_commitment_is_byte_equal_to_the_predicate_familys`),
+/// so the two proofs JOIN on that felt. Their conjunction says what a third party needs: **some fact
+/// of the token committed at `facts_root` has a value satisfying the predicate.**
+///
+/// # Why `facts_root` must not come from here
+///
+/// [`verify_fact_attestation`] takes the expected `facts_root` as a PARAMETER and refuses a
+/// mismatch. Reading it out of this struct instead would be the `x != x` gate one level up: a prover
+/// that picks both the root and the fact under it has attested nothing. The root's sound source is
+/// the presentation's public inputs — the same rung `revealed_facts_commitment` rides.
+///
+/// # What it does NOT carry
+///
+/// `fact_hash` and `blinding` are HIDDEN witnesses of the STARK and appear nowhere on this struct.
+/// That is the point: the member never leaks (unlinkability) and no decommitment travels (nothing
+/// to brute-force).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct BridgeFactAttestation {
+    /// `postcard(Ir2BatchProof)` over `dregg-attested-fact-membership::v1`.
+    pub proof: Vec<u8>,
+    /// `pi[0]` — the attested commitment. THE JOIN with the predicate proof's `pi[1]`.
+    pub fact_commitment: BabyBear,
+    /// `pi[1]` — the facts root this commitment's member sits under. A verifier MUST compare this
+    /// to a root it independently trusts; [`verify_fact_attestation`] enforces that by parameter.
+    pub facts_root: BabyBear,
+    /// `pi[2]` — the token state root the commitment covers.
+    pub state_root: BabyBear,
 }
 
 /// Inner proof representation -- single proof for simple predicates, pair for InRange.
@@ -2784,10 +2861,178 @@ pub fn prove_predicate_for_fact(
         predicate: predicate.clone(),
         proof: inner,
         fact_commitment,
-        // The opening a trusted-state verifier needs to reproduce `fact_commitment`. Without it the
-        // commitment is unreproducible and the verifier's gate has nothing sound to compare against.
-        blinding: blinding.as_field(),
+        // The opening a TRUSTED-STATE verifier needs to reproduce `fact_commitment`. This entry
+        // point is the trusted-state shape, so it carries one. A third-party showing wants
+        // `prove_predicate_for_fact_attested` instead, which carries an attestation and NO opening.
+        blinding: Some(blinding.as_field()),
+        attestation: None,
     })
+}
+
+/// Prove that `fact_commitment` opens to a fact of the presented token: the
+/// `dregg-attested-fact-membership::v1` STARK over a depth-2 leftmost Merkle path.
+///
+/// `siblings` is the co-path of `fact_hash` in the token's facts tree; the root it authenticates is
+/// the `facts_root` the presentation attests. `fact_hash` and `blinding` are HIDDEN witnesses — they
+/// do not appear on the returned [`BridgeFactAttestation`].
+pub fn prove_fact_attestation(
+    fact_hash: BabyBear,
+    state_root: BabyBear,
+    blinding: Blinding,
+    siblings: &[[BabyBear; 3]],
+) -> Option<BridgeFactAttestation> {
+    use dregg_circuit::attested_fact_membership_witness::{
+        ATTESTED_FACT_MEMBERSHIP_NAME, FACT_COMMITMENT_PI, ROOT_PI, STATE_ROOT_PI,
+        attested_fact_membership_witness,
+    };
+    use dregg_circuit::descriptor_by_name::descriptor_by_name;
+    use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
+
+    let desc = descriptor_by_name(ATTESTED_FACT_MEMBERSHIP_NAME)?;
+    let positions = vec![0u8; siblings.len()];
+    let (trace, pis) = attested_fact_membership_witness(
+        fact_hash,
+        state_root,
+        blinding.as_field(),
+        siblings,
+        &positions,
+    )
+    .ok()?;
+    let proof =
+        prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[]).ok()?;
+    Some(BridgeFactAttestation {
+        proof: postcard::to_allocvec(&proof).ok()?,
+        fact_commitment: pis[FACT_COMMITMENT_PI],
+        facts_root: pis[ROOT_PI],
+        state_root: pis[STATE_ROOT_PI],
+    })
+}
+
+/// Verify a [`BridgeFactAttestation`] against a facts root and state root the verifier
+/// INDEPENDENTLY TRUSTS, returning the ATTESTED fact commitment on success.
+///
+/// # The return type is the design
+///
+/// This returns the commitment rather than a `bool` so that the only way to obtain a commitment to
+/// feed [`verify_predicate_proof`] is to have VERIFIED its provenance first. The `x != x` collapse
+/// that made the old gate vacuous was possible because the expected commitment could be read
+/// straight off the prover's struct; here it can only be produced by a STARK that checks out against
+/// `expected_facts_root`. A caller cannot accidentally reintroduce the hole by passing the wrong
+/// thing — there is nothing else to pass.
+///
+/// `expected_facts_root` MUST come from the presentation's public inputs (or another source the
+/// verifier trusts), never from `attestation.facts_root`.
+///
+/// Returns `None` — fail-closed — on a root/state-root mismatch, a malformed proof, or a STARK that
+/// does not verify.
+pub fn verify_fact_attestation(
+    attestation: &BridgeFactAttestation,
+    expected_facts_root: BabyBear,
+    expected_state_root: BabyBear,
+) -> Option<BabyBear> {
+    use dregg_circuit::attested_fact_membership_witness::ATTESTED_FACT_MEMBERSHIP_NAME;
+    use dregg_circuit::descriptor_by_name::descriptor_by_name;
+    use dregg_circuit::descriptor_ir2::{DreggStarkConfig, Ir2BatchProof, verify_vm_descriptor2};
+
+    // The root the attestation names must be the root the VERIFIER trusts. A prover free to pick
+    // both the root and a fact under it has attested nothing at all.
+    if attestation.facts_root != expected_facts_root {
+        return None;
+    }
+    if attestation.state_root != expected_state_root {
+        return None;
+    }
+
+    let desc = descriptor_by_name(ATTESTED_FACT_MEMBERSHIP_NAME)?;
+    let batch: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(&attestation.proof).ok()?;
+    // The PIs are pinned from the TRUSTED root/state-root and the attestation's claimed commitment;
+    // the STARK is what forces that commitment to be a blinded member of that root.
+    let pis = vec![
+        attestation.fact_commitment,
+        expected_facts_root,
+        expected_state_root,
+    ];
+    let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        verify_vm_descriptor2(&desc, &batch, &pis).is_ok()
+    }))
+    .unwrap_or(false);
+
+    ok.then_some(attestation.fact_commitment)
+}
+
+/// Prove a predicate about a fact AND attest that the fact belongs to the presented token — the
+/// THIRD-PARTY shape.
+///
+/// Unlike [`prove_predicate_for_fact`], the returned proof carries NO decommitment
+/// (`blinding: None`) and instead carries a [`BridgeFactAttestation`]. Verify it with
+/// [`verify_predicate_proof_third_party`].
+pub fn prove_predicate_for_fact_attested(
+    private_value: u32,
+    fact: FactBinding,
+    blinding: Blinding,
+    predicate: &Predicate,
+    siblings: &[[BabyBear; 3]],
+) -> Option<BridgePredicateProof> {
+    let mut proof = prove_predicate_for_fact(private_value, fact, blinding, predicate)?;
+    let fact_hash = fact.fact_hash_of(BabyBear::from_u64(private_value as u64));
+    let attestation = prove_fact_attestation(fact_hash, fact.state_root, blinding, siblings)?;
+    // The attestation must name the SAME commitment the predicate proof pins, or the two proofs are
+    // about different facts and the conjunction means nothing. This is a prover-side sanity pin on
+    // the join; the verifier re-checks it from the STARK PIs and does not trust this.
+    if attestation.fact_commitment != proof.fact_commitment {
+        return None;
+    }
+    // The third-party shape carries no opening: nothing for a proof-holder to brute-force.
+    proof.blinding = None;
+    proof.attestation = Some(attestation);
+    Some(proof)
+}
+
+/// **Verify a predicate proof as a THIRD PARTY** — without trusted state and without knowing the
+/// value.
+///
+/// This is the sound counterpart, for a third party, of the trusted-state re-derive path
+/// (`dregg_sdk::verify::verify_disclosure_presentation_against_state`). It checks:
+///
+/// 1. the proof carries an ATTESTATION (no attestation ⇒ fail closed: nothing binds the commitment
+///    to the token, so the proof may be a true statement about an invented fact);
+/// 2. the attestation VERIFIES against `facts_root`/`state_root` — roots the caller trusts
+///    independently, from the presentation's public inputs, NOT from the proof;
+/// 3. the attested commitment EQUALS the one the predicate proof pins (THE JOIN);
+/// 4. the predicate STARK verifies against that ATTESTED commitment.
+///
+/// The commitment fed to step 4 is the value RETURNED by step 2 — i.e. it exists only because a
+/// STARK proved it is the blinded image of a member of `facts_root`. That is what makes this
+/// different from the `x != x` gate it replaces: there, the expected commitment was read off the
+/// prover's own struct and the comparison was vacuous; here it is manufactured by a verified proof
+/// against an independently-trusted root, and a prover-chosen commitment has no way to be produced.
+///
+/// # What a caller may conclude
+///
+/// > "Some fact of the token committed at `facts_root`, over state `state_root`, has a value
+/// > satisfying `proof.predicate`."
+///
+/// NOT *which* fact — the member is a hidden witness. A caller needing to name the fact needs the
+/// trusted-state path.
+pub fn verify_predicate_proof_third_party(
+    proof: &BridgePredicateProof,
+    facts_root: BabyBear,
+    state_root: BabyBear,
+) -> bool {
+    // 1. No attestation ⇒ no sound source for the expected commitment ⇒ refuse.
+    let Some(attestation) = proof.attestation.as_ref() else {
+        return false;
+    };
+    // 2 + 3. The attested commitment, manufactured only by a STARK checking out against the roots
+    //        the CALLER supplied. This is the sound source `verify_predicate_proof` demands.
+    let Some(attested) = verify_fact_attestation(attestation, facts_root, state_root) else {
+        return false;
+    };
+    if attested != proof.fact_commitment {
+        return false;
+    }
+    // 4. The predicate itself, against the ATTESTED commitment.
+    verify_predicate_proof(proof, attested)
 }
 
 /// Verify a predicate proof.

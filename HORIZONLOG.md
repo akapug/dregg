@@ -1,5 +1,35 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑ THIRD-PARTY PREDICATE VERIFICATION — the last fail-closed hole closed (2026-07-16, on disk, uncommitted)
+The predicate stack failed CLOSED for a third party: `verify_disclosure_presentation` refused every
+predicate proof because it had no sound source for the expected `fact_commitment` — the prover chose
+it, and nothing bound it to the token. The trusted-state path worked only for verifiers who already
+held the value. The named fix ("an opening/membership check instead of re-derive; a protocol rung
+above this lane") is now LANDED.
+
+NEW descriptor `dregg-attested-fact-membership::v1` (`AttestedFactMembershipEmit.lean` → byte-pinned
+`circuit/descriptors/by-name/attested-fact-membership.json` → `attested_fact_membership_witness.rs`):
+proves at `pi=[fact_commitment, facts_root, state_root]` that `fact_commitment` is the blinded image
+(`hash_4_to_1([fact_hash, state_root, blinding, 0])`) of a `fact_hash` that is a MEMBER of
+`facts_root`. THE JOIN: that arity-4 absorb is byte-equal to the predicate descriptor's leg-2
+`factCommitLookup`, pinned by
+`attested_fact_membership_witness::tests::the_commitment_is_byte_equal_to_the_predicate_familys`. So
+a predicate proof + an attestation, both pinning the same commitment PI, say "some fact of the token
+at `facts_root` satisfies the bound" — provenance is the presentation, not the prover.
+
+MEMBERSHIP not re-derive ⇒ `blinding`/`fact_hash` stay HIDDEN witnesses: no decommitment travels, so
+the brute-force leak is CLOSED (driven:
+`the_brute_force_falsifier_recovers_the_opened_proof_and_not_the_attested_one` — the opened proof
+still leaks by design, the attested one recovers nothing), and unlinkability survives contact with
+the verifier (two showings, different commitments, both verify to a third party). `BridgePredicateProof.blinding`
+is now `Option` (`None` = third-party shape); new `attestation: Option<BridgeFactAttestation>`.
+Entry points: `prove_predicate_for_fact_attested` / `verify_predicate_proof_third_party` /
+`verify_disclosure_presentation_third_party`. Canaries: `predicate_third_party_attestation_canary.rs`
+(both poles + neuter-attestation canary), `attested_fact_membership_emit_gate.rs` (8 descriptor-level
+teeth). VK delta: +1 by-name descriptor (TAIL-APPEND, no re-genesis); PROVENANCE + VK-REGEN-LOG
+stamped (tree f63d5886). STILL trusted: `facts_root`'s binding to the issuer derivation (the same
+named leaf the whole presentation rides). NO commit.
+
 ## ⚑ SDK DRIFT KILLED AT THE ROOT — vocabulary oracle + gated publish + wasm CI (2026-07-16, on disk, uncommitted)
 The two SDKs are an accidental CONTROLLED EXPERIMENT, and the experiment's verdict is STRUCTURE, NOT DILIGENCE.
 sdk-py **cannot** mis-encode — it depends on `dregg-turn`/`dregg-cell` by PATH and encodes with the same

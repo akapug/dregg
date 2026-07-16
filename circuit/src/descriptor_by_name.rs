@@ -92,6 +92,10 @@ const STATIC_GOLDENS: &[(&str, &str)] = &[
         ADJACENCY_MEMBERSHIP_JSON,
     ),
     (
+        "dregg-attested-fact-membership::v1",
+        ATTESTED_FACT_MEMBERSHIP_JSON,
+    ),
+    (
         "quantified-absence-quotient-accumulator::babybear4-v1",
         QUANTIFIED_ABSENCE_JSON,
     ),
@@ -163,6 +167,8 @@ const TEMPORAL_PREDICATE_JSON: &str =
     include_str!("../descriptors/by-name/temporal-predicate.json");
 const MERKLE_MEMBERSHIP_DEPTH2_JSON: &str =
     include_str!("../descriptors/by-name/merkle-membership-depth2.json");
+const ATTESTED_FACT_MEMBERSHIP_JSON: &str =
+    include_str!("../descriptors/by-name/attested-fact-membership.json");
 const ADJACENCY_MEMBERSHIP_JSON: &str =
     include_str!("../descriptors/by-name/adjacency-membership.json");
 const QUANTIFIED_ABSENCE_JSON: &str =
@@ -185,22 +191,28 @@ const ACCUMULATOR_NONREV_JSON: &str =
 const BRIDGE_ACTION_JSON: &str = include_str!("../descriptors/by-name/bridge-action.json");
 const PREDICATE_ARITH_JSON: &str = include_str!("../descriptors/by-name/predicate-arith.json");
 /// The arithmetic COMPARISON goldens (`≤`/`>`/`<`/`≠`/InRange), authored + byte-pinned in
-/// `metatheory/Dregg2/Circuit/Emit/Predicates{Le,Gt,Lt,Neq,InRange}Emit.lean`. The `≥` sibling above
-/// (`PREDICATE_ARITH_JSON`) carries the Poseidon2 value↔fact weld — the two chip lookups that force
-/// `fact_commitment = hash_2_to_1(hash_fact(pred, [value, ..]), state_root)` INSIDE the circuit, so
-/// the comparison and the committed fact share the compared column.
+/// `metatheory/Dregg2/Circuit/Emit/Predicates{Le,Gt,Lt,Neq,InRange}Emit.lean`.
 ///
-/// **These leaner comparison descriptors do NOT carry that weld.** They emit the C1/C2/C3/C5/C6
-/// comparison teeth with `fact_commitment` as a pass-through public input — their Lean authors
-/// genuinely emit the unwelded shape (disk byte-matches Lean; these are NOT re-authored). But that
-/// makes them honestly-leaner, not sound: the compared column and the `fact_commitment` column sit
-/// in DISJOINT constraint sets, exactly the shape the `≥` forgery exploited before the weld landed.
-/// A prover can satisfy `value ≤/>/</≠ threshold` on a value of its choosing while pinning an
-/// unrelated `fact_commitment`. Closing this is a FOLLOW-UP (a HORIZONLOG workstream): each sibling
-/// needs the same two weld legs its Lean author currently defers as "orthogonal hardening". Until
-/// then, only the `≥` path binds its predicate to token state in-circuit; the sibling paths bind it
-/// only through `prove_predicate_for_fact` deriving the commitment from the value out-of-circuit
-/// (`bridge/src/present.rs`), which a caller that reaches the witness builders directly bypasses.
+/// **Every one of them carries the Poseidon2 value↔fact weld** (M14), like the `≥` sibling above:
+/// the two chip lookups that force `fact_commitment = hash_2_to_1(hash_fact(pred, [value, ..]),
+/// state_root)` INSIDE the circuit, so the comparison and the committed fact share the compared
+/// column (`INPUT`, col 0).
+///
+/// Until M14 these were the leaner pre-weld shape — the C1/C2/C3/C5/C6 comparison teeth with
+/// `fact_commitment` a pass-through public input. Their Lean authors genuinely emitted that shape (so
+/// they were never re-authored mirrors like the `≥` file was), but it left the compared column and
+/// the `fact_commitment` column in DISJOINT constraint sets — exactly what the `≥` forgery exploited:
+/// a prover could satisfy `value ≤/>/</≠ threshold` on a value of its choosing while pinning an
+/// unrelated, honest, verifier-expected `fact_commitment`. `prove_predicate_for_fact`
+/// (`bridge/src/present.rs`) derived the commitment from the value out-of-circuit, which a caller
+/// reaching the witness builders directly bypassed. That is now welded shut in-circuit, and the
+/// builders make it unrepresentable at the API (the commitment is a computed OUTPUT).
+///
+/// The welded widths differ by layout: `≤`/`>`/`<` are 24 (geometry identical to `≥`), `≠` is 25 (it
+/// carries `DIFF_INV`), InRange is 26 (it carries `LO`/`HI`/`DIFF_LO`/`DIFF_HI`). This claim is a
+/// CHECK, not prose: `every_sibling_dispatches_with_both_weld_legs`
+/// (`circuit-prove/tests/predicates_comparison_emit_gate.rs`) asserts both legs on the served bytes,
+/// and `circuit/tests/predicate_comparison_fact_weld_canary.rs` drives the forgery per sibling.
 /// Their Rust witness builders are in `crate::predicate_comparison_witness`.
 const PREDICATE_ARITH_LE_JSON: &str =
     include_str!("../descriptors/by-name/predicate-arith-le.json");
@@ -284,7 +296,13 @@ pub fn descriptor_names_for_kind(kind: PredicateKind) -> &'static [&'static str]
     match kind {
         PredicateKind::Dfa => &["dfa-routing-toggle-2state::poseidon2-v1"],
         PredicateKind::Temporal => &["dregg-temporal-predicate-gte::dsl-v1"],
-        PredicateKind::MerkleMembership => &["merkle-membership-depth2-4ary::poseidon2-v1"],
+        PredicateKind::MerkleMembership => &[
+            "merkle-membership-depth2-4ary::poseidon2-v1",
+            // The third-party rung of the predicate stack: binds a hidden `fact_hash` to the
+            // presentation-attested `facts_root` and republishes it as the blinded
+            // `fact_commitment` the predicate proof pins — the JOIN.
+            "dregg-attested-fact-membership::v1",
+        ],
         PredicateKind::NonMembership => &[
             "dregg-membership-adjacency::poseidon2-v1",
             "quantified-absence-quotient-accumulator::babybear4-v1",
@@ -404,32 +422,76 @@ mod tests {
         }
     }
 
-    /// STRUCTURAL ANTI-FORK GATE for the `≥` predicate: the dispatched descriptor MUST carry the two
-    /// Poseidon2 value↔fact weld legs. This encodes the module doc's claim (that the `≥` sibling
-    /// carries the weld) as a CHECK on the served bytes, not prose — a prose claim is what let the
-    /// deployed file drift to a 5-wide re-authoring with both legs missing while every by-name test
-    /// stayed green. If the dispatched `predicate-arith.json` ever loses a leg, this fails.
+    /// STRUCTURAL ANTI-FORK GATE for the WHOLE arithmetic-predicate family: every dispatched
+    /// descriptor MUST carry the two Poseidon2 value↔fact weld legs and its Lean-emitted welded
+    /// width. This encodes the module doc's claim as a CHECK on the served bytes, not prose — a prose
+    /// claim is what let the deployed `≥` file drift to a 5-wide re-authoring with both legs missing
+    /// (M13) while every by-name test stayed green, and prose is what carried the siblings' identical
+    /// disjoint-set unsoundness as a "follow-up" (M14). If any dispatched predicate descriptor ever
+    /// loses a leg, this fails.
+    ///
+    /// The widths differ by layout: `≥`/`≤`/`>`/`<` = 24, `≠` = 25 (`DIFF_INV`), InRange = 26
+    /// (`LO`/`HI`/`DIFF_LO`/`DIFF_HI`).
     #[test]
-    fn ge_descriptor_carries_both_poseidon2_weld_legs() {
+    fn every_arith_predicate_descriptor_carries_both_poseidon2_weld_legs() {
         use crate::descriptor_ir2::{TID_P2, VmConstraint2};
-        use crate::predicate_arith_witness::PREDICATE_ARITH_NAME;
-        let desc =
-            descriptor_by_name(PREDICATE_ARITH_NAME).expect("the ge predicate must dispatch");
-        let poseidon2_lookups = desc
-            .constraints
-            .iter()
-            .filter(|c| matches!(c, VmConstraint2::Lookup(l) if l.table == TID_P2))
-            .count();
-        assert_eq!(
-            poseidon2_lookups, 2,
-            "the deployed `≥` descriptor must carry BOTH weld legs (leg 1: hash_fact -> FACT_HASH, \
-             leg 2: hash_2_to_1(FACT_HASH, STATE_ROOT) -> FACT_COMMITMENT) — without them the \
-             predicate proof does not bind the compared value to the committed fact"
-        );
-        assert_eq!(
-            desc.trace_width, 24,
-            "the deployed `≥` descriptor must be the Lean-emitted 24-wide welded shape"
-        );
+        use crate::predicate_arith_witness::{PRED_WIDTH, PREDICATE_ARITH_NAME};
+        use crate::predicate_comparison_witness::{
+            IR_WIDTH, NEQ_WIDTH, OS_WIDTH, PREDICATE_ARITH_GT_NAME, PREDICATE_ARITH_INRANGE_NAME,
+            PREDICATE_ARITH_LE_NAME, PREDICATE_ARITH_LT_NAME, PREDICATE_ARITH_NEQ_NAME,
+        };
+        for (name, width) in [
+            (PREDICATE_ARITH_NAME, PRED_WIDTH),
+            (PREDICATE_ARITH_LE_NAME, OS_WIDTH),
+            (PREDICATE_ARITH_GT_NAME, OS_WIDTH),
+            (PREDICATE_ARITH_LT_NAME, OS_WIDTH),
+            (PREDICATE_ARITH_NEQ_NAME, NEQ_WIDTH),
+            (PREDICATE_ARITH_INRANGE_NAME, IR_WIDTH),
+        ] {
+            let desc = descriptor_by_name(name).unwrap_or_else(|| panic!("{name} must dispatch"));
+            let poseidon2_lookups = desc
+                .constraints
+                .iter()
+                .filter(|c| matches!(c, VmConstraint2::Lookup(l) if l.table == TID_P2))
+                .count();
+            assert_eq!(
+                poseidon2_lookups, 2,
+                "the deployed `{name}` descriptor must carry BOTH weld legs (leg 1: hash_fact -> \
+                 FACT_HASH, leg 2: hash_4_to_1([FACT_HASH, STATE_ROOT, BLINDING, 0]) -> \
+                 FACT_COMMITMENT) — without them the predicate proof does not bind the compared \
+                 value to the committed fact"
+            );
+
+            // **EVERY SIBLING IS BLINDED, NOT JUST `≥`.** Leg 2's arity tag (the chip tuple's first
+            // element) must be 4 — the `hash_4_to_1([fact_hash, state_root, blinding, 0])` absorb —
+            // on EVERY descriptor in the family. An arity-2 leg here would be a sibling that welds
+            // the value to the fact but emits a DETERMINISTIC commitment: sound, but linkable, and
+            // linkable on a surface whose peers are not. Privacy has to be uniform across the family
+            // or the odd one out identifies its users.
+            let leg2_arity = desc
+                .constraints
+                .iter()
+                .filter_map(|c| match c {
+                    VmConstraint2::Lookup(l) if l.table == TID_P2 => l.tuple.first(),
+                    _ => None,
+                })
+                .last()
+                .and_then(|e| match e {
+                    crate::lean_descriptor_air::LeanExpr::Const(v) => Some(*v),
+                    _ => None,
+                });
+            assert_eq!(
+                leg2_arity,
+                Some(4),
+                "`{name}`'s weld leg 2 must be the ARITY-4 blinded absorb \
+                 (hash_4_to_1([FACT_HASH, STATE_ROOT, BLINDING, 0])), not the arity-2 unblinded one \
+                 — every sibling in the family must be unlinkable, not just `≥`"
+            );
+            assert_eq!(
+                desc.trace_width, width,
+                "the deployed `{name}` descriptor must be the Lean-emitted welded shape"
+            );
+        }
     }
 
     /// PedersenEquality has NO descriptor (off-STARK) — its name list is empty and no
