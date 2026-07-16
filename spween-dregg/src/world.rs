@@ -473,6 +473,24 @@ impl WorldCell {
         self.commit(method, effects)
     }
 
+    /// **The real committed `dregg_cell::Cell`** this world advances — a CLONE of the live
+    /// cell inside the executor's ledger (its real owner pubkey, balance, nonce,
+    /// permissions, and the full register/heap state a play mutated). `None` if the cell is
+    /// not in the embedded ledger.
+    ///
+    /// This is the WorldCell → prover bridge: a caller snapshots the real cell BEFORE a
+    /// move and AFTER it, then feeds those two `Cell`s into the rotation-witness producer
+    /// (`dregg_turn::rotation_witness::produce`) to fold over the CELL the turn actually
+    /// committed — its real pk/balance/heap — not a synthetic `pk[0]=7` fixture. Every game
+    /// leaf's `[old8 ‖ new8]` state-binding prefix then carries THIS cell's v9 commitment,
+    /// so the deployed custom state-binding weld ties the sub-proof to the real transition
+    /// (the one the installed `CellProgram` teeth — e.g. multiway-tug's win implication —
+    /// already gated at admission).
+    pub fn cell_snapshot(&self) -> Option<Cell> {
+        self.exec
+            .with_ledger_mut(|ledger| ledger.get(&self.cell).cloned())
+    }
+
     /// Read a HEAP field off the committed cell state (`index >= STATE_SLOTS`, resolved
     /// through [`dregg_cell::state::CellState::get_field_ext`]'s committed `fields_map`).
     /// `None` if the key was never written — on the heap, absent ≠ present-zero. The

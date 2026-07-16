@@ -405,6 +405,39 @@ pub fn prove_tug_match(m: &TugMatch) -> Result<MatchProof, ProveError> {
     prove_match(Game::MultiwayTug, &leaves)
 }
 
+/// **PROVE THE TERMINAL WIN OVER THE REAL WORLDCELL CELL.** The board layer ADOPTING the
+/// real-cell fold bridge: snapshot the game's OWN committed cell
+/// (`spween_dregg::WorldCell::cell_snapshot`) after its real `score` turn and fold the win over
+/// it (`dregg_multiway_tug::fold::fold_win_over_cell`). The ranked proof's win root is welded to
+/// the cell whose committed `new8` the deployed win implication (`winner==p ⇒ charm_p>=11 OR
+/// guilds_p>=4`, `WriteOnce(winner)`) already gated at `score` admission — NOT the `pk[0]=7`,
+/// balance-1000 fixture the free `[charm, winner]` literal path folded over.
+///
+/// This is the closure of the board's win mannequin: `prove_tug_match` (above) still folds the
+/// free `win_leaf` literal, which carries no cell state; this path folds over the real cell.
+/// SLOW (the deployed recursion fold).
+pub fn prove_tug_win_over_cell(
+    game: &dregg_multiway_tug::game::MultiwayTug,
+    charm: u64,
+    winner: u64,
+) -> Result<MatchProof, ProveError> {
+    let cell = game
+        .world()
+        .cell_snapshot()
+        .ok_or_else(|| ProveError::Fold("the world-cell has no committed state".to_string()))?;
+    let whole = dregg_multiway_tug::fold::fold_win_over_cell(&cell, charm, winner)
+        .map_err(ProveError::Fold)?;
+    let vk = whole.root_vk_fingerprint();
+    let proof_bytes = whole.to_bytes();
+    let attested = verify_history_bytes(&proof_bytes, &vk).map_err(ProveError::SelfAttest)?;
+    Ok(MatchProof {
+        game: Game::MultiwayTug,
+        proof_bytes,
+        attested,
+        vk,
+    })
+}
+
 /// Fold a played automatafl match (play → prove). SLOW.
 pub fn prove_automatafl_match(m: &AutomataflMatch) -> Result<MatchProof, ProveError> {
     let leaves = m.leaves().map_err(ProveError::Match)?;

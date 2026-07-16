@@ -122,16 +122,37 @@ fn fabricated_card_has_no_membership_leaf() {
     );
 }
 
-/// The win/score turn binds the WINNER: two win bundles differing only in the winner id
-/// commit to different public-input commitments — the attested win is real, not free.
+/// **THE WIN IS WELDED TO THE CELL'S STATE PREFIX.** The win leaf publishes
+/// `[old8 ‖ new8 ‖ charm ‖ winner]`; its public-input commitment (the value the fold binds and
+/// the deployed state-binding node connects to the leg's real rotated roots) MOVES when the
+/// `[old8 ‖ new8]` prefix is one cell's vs another's — so a win cannot be claimed over a
+/// different cell transition. The winner is still a bound output (a different winner moves the
+/// commitment too).
+///
+/// This REPLACES the old `win_output_binds_the_winner`, which only asserted Poseidon2 is
+/// injective over `[charm, winner]` (vacuous — it was true of any hash and said nothing about
+/// the cell). The real-cell drive — the win folding over the WorldCell's own committed cell —
+/// is `tests/fold_real_cell.rs`.
 #[test]
-fn win_output_binds_the_winner() {
-    let a = win_bundle(13, 1);
-    let b = win_bundle(13, 2);
+fn win_output_is_welded_to_the_cell_prefix() {
+    use super::{fixture_wire_commit8, win_leaf_bound};
+    let new8: [BabyBear; 8] = core::array::from_fn(|i| BabyBear::new(500 + i as u32));
+    let cell_a: [BabyBear; 8] = core::array::from_fn(|i| BabyBear::new(i as u32));
+
+    let a = win_leaf_bound(cell_a, new8, 13, 1);
+    let b = win_leaf_bound(fixture_wire_commit8(), new8, 13, 1);
     assert_ne!(
         custom_proof_pi_commitment(&a.public_inputs),
         custom_proof_pi_commitment(&b.public_inputs),
-        "a different winner ⇒ a different bound commitment"
+        "the SAME win over a DIFFERENT cell prefix must bind a different commitment — the win \
+         is welded to the cell, not free"
+    );
+
+    let c = win_leaf_bound(cell_a, new8, 13, 2);
+    assert_ne!(
+        custom_proof_pi_commitment(&a.public_inputs),
+        custom_proof_pi_commitment(&c.public_inputs),
+        "a different winner still binds a different commitment"
     );
 }
 
@@ -144,8 +165,16 @@ fn win_output_binds_the_winner() {
 /// root, the cards never revealed in the proof) — FOLDS via `prove_turn_chain_recursive` into
 /// ONE `WholeChainProof` the pure light client `verify_history` ACCEPTS. Then a relabeled
 /// `final_root` is REJECTED (a non-vacuous light-client bite), and the restored proof accepts.
+// NOTE (state-prefix residual): the two SLOW tests below fold 2-felt membership/win leaves
+// (`[leaf, root]` / `[charm, winner]`) that PREDATE the deployed custom state-binding node,
+// which now requires every custom sub-proof leaf to publish the 16-felt `[old8 ‖ new8]` prefix
+// (see `circuit/src/effect_vm/custom_state_binding.rs`). They therefore no longer mint through
+// `prove_custom_leaf_with_state_commitment` as-is. The WIN leaf's prefix closure is
+// `win_leaf_bound` + the real-cell fold (`tests/fold_real_cell.rs`); the MEMBERSHIP-leaf prefix
+// (prepend the leg's real roots to `[leaf, root]`, identically) is the named residual for the
+// hidden-hand plays.
 #[test]
-#[ignore = "SLOW: real deployed-custom-binding recursion fold over a 2-play private match (~minutes-to-hours); run with --ignored"]
+#[ignore = "SUPERSEDED by tests/fold_real_cell.rs: 2-PI membership leaves predate the state-binding prefix; membership-leaf prefixing is the named residual"]
 fn private_match_folds_and_lightclient_accepts() {
     let hand = sample_hand();
     let t0 = HandTree::commit(hand.clone());
@@ -195,7 +224,7 @@ fn private_match_folds_and_lightclient_accepts() {
 /// leg publishes the honest `custom_proof_pi_commitment([charm, winner])` — the win is a bound
 /// public output. A relabeled final_root is rejected.
 #[test]
-#[ignore = "SLOW: real recursion fold over a membership play + the win turn (~minutes-to-hours); run with --ignored"]
+#[ignore = "SUPERSEDED by tests/fold_real_cell.rs::win_folds_over_the_real_cell_and_lightclient_accepts: the real-cell win fold carries the [old8 ‖ new8] prefix; this 2-PI form predates it"]
 fn match_win_output_is_attested() {
     let hand = sample_hand();
     let tree = HandTree::commit(hand.clone());

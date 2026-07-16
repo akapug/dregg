@@ -130,6 +130,10 @@ fn open_permissions() -> Permissions {
     }
 }
 
+/// The synthetic `pk[0]=7` producer cell — the FIXTURE the fold historically minted every
+/// leg over, identical for every match, carrying none of a game's real state. Retained ONLY
+/// for the probe/plain-turn path (a nonce-bump leg with no app state); a real match folds
+/// over [`cell_custom_leg`] with the WorldCell's own committed cell (see [`cell_rotated_roots`]).
 fn producer_cell(balance: i64, nonce: u64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = 7;
@@ -145,22 +149,30 @@ fn bridge(w: &rw::RotationWitness) -> RotatedBlockWitness {
     RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("pre-iroot limbs")
 }
 
-/// Mint a REAL wide `customVmDescriptor2R24` leg whose published `custom_proof_commitment`
-/// (IR2 PI 46..53) is `commit`, attaching the prover-side re-provable `bundle` the deployed
-/// chain prover re-proves + binds. Custom bumps nonce by 1, balance unchanged.
-fn mint_custom_leg(
-    balance: i64,
-    nonce: u64,
+/// **THE WORLDCELL → LEAF BRIDGE.** Mint a wide `customVmDescriptor2R24` leg whose cell
+/// transition is `before_cell -> after_cell` — the REAL committed cells the caller snapshots
+/// around a played WorldCell turn (`spween_dregg::WorldCell::cell_snapshot`), carrying their
+/// real owner pubkey, balance, nonce, and the full register/heap plane the game wrote. The
+/// leg's wide 8-felt anchors (`wide_old_root8`/`wide_new_root8`) are therefore the real cell's
+/// v9 chip commitment over the actual game state — NOT the `pk[0]=7` fixture's. A game leaf
+/// that publishes `[old8 ‖ new8]` = these anchors at PI[0..16] binds, via the deployed custom
+/// state-binding node, to the transition the installed `CellProgram` teeth already gated (e.g.
+/// multiway-tug's `score`-method win implication). `commit` is the published
+/// `custom_proof_commitment` (IR2 PI 46..53); `bundle` is the retained re-provable sub-proof.
+fn cell_custom_leg(
+    before_cell: &Cell,
+    after_cell: &Cell,
     commit: [BabyBear; 8],
     bundle: Option<CustomWitnessBundle>,
 ) -> RotatedParticipantLeg {
-    let st = CellState::new(balance as u64, nonce as u32);
+    let st = CellState::new(
+        after_cell.state.balance() as u64,
+        before_cell.state.nonce() as u32,
+    );
     let effects = vec![Effect::Custom {
         program_vk_hash: [BabyBear::new(9); 8],
         proof_commitment: commit,
     }];
-    let before_cell = producer_cell(balance, nonce);
-    let after_cell = producer_cell(balance, nonce + 1);
 
     let mut ledger = Ledger::new();
     ledger.insert_cell(after_cell.clone()).expect("ledger seed");
@@ -168,7 +180,7 @@ fn mint_custom_leg(
     let commitments_root = dregg_circuit::heap_root::empty_heap_root_8();
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
     let before_w = bridge(&rw::produce(
-        &before_cell,
+        before_cell,
         &ledger,
         &nullifier_root,
         &commitments_root,
@@ -177,7 +189,7 @@ fn mint_custom_leg(
         &Default::default(),
     ));
     let after_w = bridge(&rw::produce(
-        &after_cell,
+        after_cell,
         &ledger,
         &nullifier_root,
         &commitments_root,
@@ -232,6 +244,48 @@ fn mint_custom_leg(
     }
 }
 
+/// The same cell one nonce later — the Custom effect's post-state (balance/heap unchanged,
+/// nonce + 1). A Custom leg models a nonce bump riding on the cell's committed state, so both
+/// wide anchors carry the SAME real register/heap plane; the sub-proof binds to that state.
+fn nonce_bumped(cell: &Cell) -> Cell {
+    let mut after = cell.clone();
+    let _ = after.state.increment_nonce();
+    after
+}
+
+/// Mint the fixture (`pk[0]=7`) nonce-bump leg — the probe / plain-turn path only. A real
+/// match uses [`cell_custom_leg`] over the WorldCell's own committed cell.
+fn mint_custom_leg(
+    balance: i64,
+    nonce: u64,
+    commit: [BabyBear; 8],
+    bundle: Option<CustomWitnessBundle>,
+) -> RotatedParticipantLeg {
+    let before = producer_cell(balance, nonce);
+    let after = producer_cell(balance, nonce + 1);
+    cell_custom_leg(&before, &after, commit, bundle)
+}
+
+/// **THE REAL CELL'S ROTATED ROOTS.** The wide 8-felt anchors `(old8, new8)` of a nonce-bump
+/// Custom leg over `cell` — the v9 chip commitment the deployed state-binding node connects a
+/// sub-proof's `[old8 ‖ new8]` prefix to. `cell` is the WorldCell's OWN committed cell
+/// (`spween_dregg::WorldCell::cell_snapshot`), so these carry its real pk / balance / heap (the
+/// winner, board, and score the game wrote) — a leaf must publish EXACTLY these at PI[0..16] or
+/// the deployed state weld is UNSAT. Sound because the wide roots come from the rotation
+/// witness over the cell's real limbs + iroot, independent of the claimed commitment/bundle.
+pub fn cell_rotated_roots(cell: &Cell) -> ([BabyBear; 8], [BabyBear; 8]) {
+    let after = nonce_bumped(cell);
+    let probe = cell_custom_leg(cell, &after, [BabyBear::ZERO; 8], None);
+    (
+        probe
+            .wide_old_root8()
+            .expect("the custom wide leg is wide-anchored"),
+        probe
+            .wide_new_root8()
+            .expect("the custom wide leg is wide-anchored"),
+    )
+}
+
 /// Mint one match turn from a foldable leaf bundle at `nonce`: the leg's published
 /// commitment IS `custom_proof_pi_commitment(bundle.public_inputs)` (the honest binding), and
 /// the re-provable membership/teeth witness is retained prover-side.
@@ -246,6 +300,147 @@ fn mint_turn(bundle: &LeafBundle, nonce: u64) -> FinalizedTurn {
     };
     let leg = mint_custom_leg(balance, nonce, commit, Some(cwb));
     FinalizedTurn::new(DescriptorParticipant::rotated(leg))
+}
+
+/// Mint the terminal WIN turn folded over the REAL WorldCell cell. `cell` is the game's OWN
+/// committed cell after the `score` turn — the transition the deployed win implication
+/// (`winner==p ⇒ charm_p>=11 OR guilds_p>=4`, plus `WriteOnce(winner)`) already gated at
+/// admission, so a false winner never reaches a foldable cell. The win leaf publishes
+/// `[old8 ‖ new8 ‖ charm ‖ winner]` with `old8/new8` = the cell's real rotated roots, so the
+/// deployed custom state-binding node ties the win sub-proof to THIS cell's committed state
+/// (the winner is a register `new8` commits), not a `pk[0]=7` fixture nonce-bump.
+fn mint_win_turn_over_cell(cell: &Cell, win: &LeafBundle) -> FinalizedTurn {
+    let commit = custom_proof_pi_commitment(&win.public_inputs);
+    let cwb = CustomWitnessBundle {
+        program: win.program.clone(),
+        witness_values: win.witness_values.clone(),
+        num_rows: win.num_rows,
+        public_inputs: win.public_inputs.clone(),
+    };
+    let after = nonce_bumped(cell);
+    let leg = cell_custom_leg(cell, &after, commit, Some(cwb));
+    FinalizedTurn::new(DescriptorParticipant::rotated(leg))
+}
+
+/// The cell's v9 chip commitment (the wide 8-felt anchor), computed DIRECTLY from the
+/// rotation witness over the cell's real limbs + iroot — no STARK. Byte-identical to the value
+/// a [`cell_custom_leg`] over `cell` publishes as `wide_old_root8`, so a fast test can assert
+/// the fold folds over the REAL cell (real pk/balance/heap) without minting a proof: a cell
+/// whose committed winner/board differs has a different commitment here, and the `pk[0]=7`
+/// fixture's commitment differs from every real game cell's.
+pub fn cell_wire_commit8(cell: &Cell) -> [BabyBear; 8] {
+    let mut ledger = Ledger::new();
+    let _ = ledger.insert_cell(cell.clone());
+    let er = dregg_circuit::heap_root::empty_heap_root_8();
+    let w = rw::produce(
+        cell,
+        &ledger,
+        &er,
+        &er,
+        &rw::empty_revoked_root_8(),
+        &[[3u8; 32]],
+        &Default::default(),
+    );
+    dregg_circuit::poseidon2::wire_commit_8_chip(&w.pre_limbs, w.iroot)
+}
+
+/// The synthetic `pk[0]=7` fixture cell's v9 commitment — the value every fold leg used to be
+/// minted over. Exposed so a canary can assert a real game cell's commitment is NOT this.
+pub fn fixture_wire_commit8() -> [BabyBear; 8] {
+    cell_wire_commit8(&producer_cell(1000, 0))
+}
+
+/// **THE WIN LEAF WELDED TO THE REAL CELL.** The terminal win/score leaf, publishing
+/// `[old8 ‖ new8 ‖ charm ‖ winner]`: `old8/new8` are the real cell's rotated roots (PI[0..16],
+/// the deployed state-binding prefix — fold-connected to the leg's real anchors), and
+/// `charm`/`winner` are CONSTRAINED app outputs (`bind_public_input`, PI 16/17) proven by the
+/// range gadget (`charm >= 11`) with a conserved score. Because `old8/new8` are
+/// [`cell_rotated_roots`] of the cell the `score` turn committed, the deployed custom
+/// state-binding node ties this sub-proof to THAT cell's transition — the win is a bound public
+/// output of the real committed state, not a `pk[0]=7`-fixture literal.
+pub fn win_leaf_bound(
+    old8: [BabyBear; 8],
+    new8: [BabyBear; 8],
+    charm: u64,
+    winner: u64,
+) -> LeafBundle {
+    use dregg_cell::program::{StateConstraint, field_from_u64};
+    use game_turn_slice::compiler::{GameProgramCompiler, SlotAssignment};
+
+    const WIN_CHARM: u8 = 0;
+    const WIN_SCORE: u8 = 1;
+    const WIN_POINTS: u8 = 2;
+    const WIN_WINNER: u8 = 3;
+
+    // Reserve the 16-felt door prefix (`[old8 ‖ new8]`), then bind the app outputs above it.
+    let mut c = GameProgramCompiler::new("multiway-tug-win-bound-v1", 16).with_public_inputs(16);
+    c.lower_state_constraint(&StateConstraint::SumEqualsAcross {
+        input_fields: vec![WIN_SCORE],
+        output_fields: vec![WIN_POINTS],
+    })
+    .expect("score conservation lowers");
+    c.lower_state_constraint(&StateConstraint::FieldGte {
+        index: WIN_CHARM,
+        value: field_from_u64(11),
+    })
+    .expect("the win threshold lowers via the range gadget");
+    let _pi_charm = c.bind_public_input(WIN_CHARM); // PI 16
+    let _pi_winner = c.bind_public_input(WIN_WINNER); // PI 17
+    let program = c.finish();
+    let assign = SlotAssignment::new()
+        .set_new(WIN_CHARM, charm) // >= 11
+        .set_new(WIN_SCORE, 20)
+        .set_old(WIN_SCORE, 15)
+        .set_new(WIN_POINTS, 5) // 20 - 15 - 5 == 0
+        .set_new(WIN_WINNER, winner);
+    let witness_values = c.witness(&assign, 4).expect("honest win witness");
+
+    let mut public_inputs = Vec::with_capacity(18);
+    public_inputs.extend_from_slice(&old8);
+    public_inputs.extend_from_slice(&new8);
+    public_inputs.push(BabyBear::from_u64(charm));
+    public_inputs.push(BabyBear::from_u64(winner));
+    LeafBundle {
+        program,
+        witness_values,
+        num_rows: 4,
+        public_inputs,
+    }
+}
+
+/// A plain nonce-bump Custom leg over `cell` (no bundle) — the linking tail turn of a
+/// real-cell win fold.
+fn plain_turn_over_cell(cell: &Cell) -> FinalizedTurn {
+    let commit = core::array::from_fn(|i| BabyBear::new((i + 1) as u32));
+    let leg = cell_custom_leg(cell, &nonce_bumped(cell), commit, None);
+    FinalizedTurn::new(DescriptorParticipant::rotated(leg))
+}
+
+/// **FOLD THE TERMINAL WIN OVER THE REAL WORLDCELL CELL.** `cell` is the game's OWN committed
+/// cell after the `score` turn (`spween_dregg::WorldCell::cell_snapshot`). The chain is two
+/// turns on the SAME real-cell lineage: the win turn (`cell @ nonce n -> n+1`, carrying the
+/// welded win leaf) then a plain nonce-bump (`n+1 -> n+2`, so the chain links and folds). The
+/// returned `WholeChainProof` attests the win as a bound output of the REAL cell's state — the
+/// winner it publishes is a register the cell's committed `new8` commits, and the deployed win
+/// implication already refused a false winner at the `score` admission.
+///
+/// SLOW (the deployed recursive fold). Membership plays fold over the fixture nonce-bump legs
+/// (their content is the hidden-hand Merkle commitment, not cell state); a full-match single
+/// real-cell lineage over the WorldCell's per-play register commits is the named residual.
+pub fn fold_win_over_cell(
+    cell: &Cell,
+    charm: u64,
+    winner: u64,
+) -> Result<dregg_circuit_prove::ivc_turn_chain::WholeChainProof, String> {
+    let (old8, new8) = cell_rotated_roots(cell);
+    let win = win_leaf_bound(old8, new8, charm, winner);
+    let t0 = mint_win_turn_over_cell(cell, &win);
+    let t1 = plain_turn_over_cell(&nonce_bumped(cell));
+    if t0.new_root() != t1.old_root() {
+        return Err("win fold: turn 0 post-state does not link to the tail turn".to_string());
+    }
+    prove_turn_chain_recursive(&[t0, t1])
+        .map_err(|e| format!("win fold over real cell failed: {e}"))
 }
 
 /// Build the chain of [`FinalizedTurn`]s for a match: turn `i` binds `bundles[i]` at nonce

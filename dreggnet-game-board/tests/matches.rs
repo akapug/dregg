@@ -70,11 +70,33 @@ fn a_played_tug_match_lowers_to_hand_hiding_membership_leaves() {
         leaves[0].public_inputs[1], leaves[1].public_inputs[1],
         "each play proves against the updated remaining-hand root"
     );
-    // The win leaf binds [charm, winner] as its public output.
+    // The free board leaf carries [charm, winner] as a public output — but that literal is NOT
+    // welded to any cell (the mannequin: it reads back what the caller passed). The REAL win
+    // path welds the output to the cell's state prefix: `win_leaf_bound` publishes
+    // `[old8 ‖ new8 ‖ charm ‖ winner]`, so the SAME win over a DIFFERENT cell prefix is a
+    // DIFFERENT public-input vector — a win cannot be replayed across cells. (The full
+    // real-cell fold + light-client accept is `dregg-multiway-tug/tests/fold_real_cell.rs`; the
+    // board adopts it via `prove_tug_win_over_cell`.)
+    use dregg_multiway_tug::fold::{fixture_wire_commit8, win_leaf_bound};
+    let new8: [BabyBear; 8] = core::array::from_fn(|i| BabyBear::new(700 + i as u32));
+    let cell_a: [BabyBear; 8] = core::array::from_fn(|i| BabyBear::new(i as u32));
+
+    let welded = win_leaf_bound(cell_a, new8, 13, 1);
     assert_eq!(
-        leaves[3].public_inputs,
-        vec![BabyBear::from_u64(13), BabyBear::from_u64(1)],
-        "the terminal leaf binds the WIN as a public output"
+        &welded.public_inputs[16..18],
+        &[BabyBear::from_u64(13), BabyBear::from_u64(1)],
+        "the welded win leaf binds [charm, winner] as its app output"
+    );
+    assert_eq!(
+        &welded.public_inputs[0..8],
+        &cell_a,
+        "PI[0..8] is the cell's old8 state prefix — the win is bound to a transition"
+    );
+    let over_fixture = win_leaf_bound(fixture_wire_commit8(), new8, 13, 1);
+    assert_ne!(
+        welded.public_inputs, over_fixture.public_inputs,
+        "the SAME win over the pk[0]=7 fixture cell is a DIFFERENT welded public-input vector — \
+         the win is welded to the real cell, not a free literal"
     );
 }
 
