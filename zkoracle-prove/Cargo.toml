@@ -86,3 +86,11 @@ dregg-tee-verify = { path = "../tee-verify" }
 [[example]]
 name = "coinbase_live"
 required-features = ["tlsn-live"]
+
+# coinbase_inproc drives the same `#[cfg(feature = "tlsn-live")]` API
+# (prove_coinbase_live / verify_coinbase_live), so it needs the same gate — without it the
+# example is compiled in the default config and fails to resolve those imports under
+# `cargo check --all-targets` (CI's Check). Its sibling above was gated; this one was missed.
+[[example]]
+name = "coinbase_inproc"
+required-features = ["tlsn-live"]

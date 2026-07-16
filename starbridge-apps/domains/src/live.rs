@@ -50,7 +50,7 @@ use std::time::Duration;
 
 use hickory_resolver::TokioResolver;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::{RData, RecordType};
 
 use crate::DnsResolver;
@@ -155,9 +155,8 @@ fn build_resolver() -> TokioResolver {
         .ok()
         .map(|(config, _opts)| config)
         .filter(|config| !config.name_servers().is_empty())
-        .unwrap_or_else(ResolverConfig::cloudflare);
-    let mut builder =
-        TokioResolver::builder_with_config(config, TokioConnectionProvider::default());
+        .unwrap_or_else(|| ResolverConfig::udp_and_tcp(&hickory_resolver::config::CLOUDFLARE));
+    let mut builder = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
     {
         let opts: &mut ResolverOpts = builder.options_mut();
         opts.timeout = LOOKUP_TIMEOUT;
@@ -171,7 +170,10 @@ fn build_resolver() -> TokioResolver {
         opts.negative_min_ttl = Some(Duration::ZERO);
         opts.negative_max_ttl = Some(Duration::ZERO);
     }
-    builder.build()
+    // 0.26: `build()` became fallible (returns Result<_, NetError>). A resolver that cannot be
+    // constructed is a startup fault, not a lookup outcome — the DnsResolver seam below turns
+    // real lookup failures into Pending/empty, so it must not swallow this one.
+    builder.build().expect("hickory resolver build")
 }
 
 /// A verification name is always absolute — query it as an FQDN (trailing dot) so no
@@ -183,16 +185,22 @@ fn fqdn(name: &str) -> String {
 /// One TXT lookup. NXDOMAIN / no records / timeout → no records (not an error).
 async fn lookup_txt(resolver: &TokioResolver, name: &str) -> Vec<String> {
     match resolver.txt_lookup(fqdn(name)).await {
+        // 0.26: `Lookup::iter()` (which yielded &RData) is gone; iterate `answers()` and read
+        // each Record's data. TxtLookup no longer exists, so filter the TXT arm explicitly.
         Ok(lookup) => lookup
+            .answers()
             .iter()
-            .map(|txt| {
-                // A TXT record is one or more character-strings; its value is their
-                // concatenation (a long nonce may be split at 255 bytes).
-                let mut bytes = Vec::new();
-                for seg in txt.txt_data() {
-                    bytes.extend_from_slice(seg);
+            .filter_map(|record| match &record.data {
+                RData::TXT(txt) => {
+                    // A TXT record is one or more character-strings; its value is their
+                    // concatenation (a long nonce may be split at 255 bytes).
+                    let mut bytes = Vec::new();
+                    for seg in &txt.txt_data {
+                        bytes.extend_from_slice(seg);
+                    }
+                    Some(String::from_utf8_lossy(&bytes).into_owned())
                 }
-                String::from_utf8_lossy(&bytes).into_owned()
+                _ => None,
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -203,10 +211,13 @@ async fn lookup_txt(resolver: &TokioResolver, name: &str) -> Vec<String> {
 /// compares case-insensitively without it.
 async fn lookup_cname(resolver: &TokioResolver, name: &str) -> Option<String> {
     match resolver.lookup(fqdn(name), RecordType::CNAME).await {
-        Ok(lookup) => lookup.iter().find_map(|rdata| match rdata {
-            RData::CNAME(cname) => Some(cname.0.to_string()),
-            _ => None,
-        }),
+        Ok(lookup) => lookup
+            .answers()
+            .iter()
+            .find_map(|record| match &record.data {
+                RData::CNAME(cname) => Some(cname.0.to_string()),
+                _ => None,
+            }),
         Err(_) => None,
     }
 }

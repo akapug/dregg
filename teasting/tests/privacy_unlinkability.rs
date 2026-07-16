@@ -8,9 +8,7 @@
 //! 4. No fixed identifier leaks through public inputs.
 
 use dregg_circuit::BabyBear;
-use dregg_circuit::dsl::predicates::{
-    PredicateType, PredicateWitness, compute_fact_commitment, prove_predicate,
-};
+use dregg_circuit::dsl::predicates::{compute_blinded_fact_commitment, compute_fact_commitment};
 use dregg_circuit::poseidon2::hash_fact;
 use dregg_sdk::AuthRequest;
 use dregg_teasting::agent::{SimAgent, shared_root_key};
@@ -45,31 +43,37 @@ fn test_presentation_tags_differ_across_presentations() {
     );
 }
 
-/// Blinded predicate proofs: same fact, same predicate, different blinding → different commitments.
+/// Blinded fact commitments: same fact, different blinding → different (unlinkable) commitments.
+///
+/// 2026-07-16: this test previously ended with a "…and both blinded proofs still verify" coda
+/// built on `dsl::predicates::{PredicateWitness, prove_predicate, verify_predicate}`, which
+/// 8cc7ef821 (the `*_air` shim cleanup) DELETED. The live successor,
+/// `dregg_bridge::present::prove_predicate_for_fact`, hardcodes an UNBLINDED
+/// `compute_fact_commitment` and exposes no blinding parameter — so a blinded predicate PROOF
+/// is currently unprovable and that coda has no live implementation to assert against. The
+/// commitment-unlinkability property below is the half that does, and it is now asserted
+/// against the real `compute_blinded_fact_commitment` rather than a hand-rolled hash.
+/// (Blinded predicate PROVING is dead code — see HORIZONLOG.)
 #[test]
-fn test_blinded_predicate_proofs_unlinkable() {
+fn test_blinded_fact_commitments_unlinkable() {
     let value = 100u32;
-    let threshold = 50u32;
 
-    // Compute the raw fact_hash and state_root.
+    // The raw fact_hash and state_root for one fact.
     let fh = hash_fact(
         BabyBear::new(42),
         &[BabyBear::new(value), BabyBear::ZERO, BabyBear::ZERO],
     );
     let sr = BabyBear::new(99999);
 
-    // Without blinding: deterministic commitment.
+    // Without blinding: a deterministic commitment (correlatable across presentations).
     let fc_unblinded = compute_fact_commitment(fh, sr);
 
-    // With blinding factor 1:
-    let blinding1 = BabyBear::new(12345);
-    let fc_blinded1 = dregg_circuit::poseidon2::hash_4_to_1(&[fh, sr, blinding1, BabyBear::ZERO]);
+    // The SAME fact, committed under two different blinding factors.
+    let fc_blinded1 = compute_blinded_fact_commitment(fh, sr, BabyBear::new(12345));
+    let fc_blinded2 = compute_blinded_fact_commitment(fh, sr, BabyBear::new(67890));
 
-    // With blinding factor 2:
-    let blinding2 = BabyBear::new(67890);
-    let fc_blinded2 = dregg_circuit::poseidon2::hash_4_to_1(&[fh, sr, blinding2, BabyBear::ZERO]);
-
-    // Blinded commitments must differ from each other and from unblinded.
+    // Unlinkability: blinded commitments of the same fact must differ from each other, and
+    // from the unblinded one — otherwise colluding verifiers can correlate presentations.
     assert_ne!(
         fc_blinded1, fc_blinded2,
         "Different blinding → different commitments"
@@ -82,35 +86,6 @@ fn test_blinded_predicate_proofs_unlinkable() {
         fc_blinded2, fc_unblinded,
         "Blinded must differ from unblinded"
     );
-
-    // Both blinded proofs should still verify (the verifier uses the blinded commitment
-    // as the expected public input, received out-of-band from the prover).
-    let witness1 = PredicateWitness {
-        private_value: BabyBear::new(value),
-        threshold: BabyBear::new(threshold),
-        predicate_type: PredicateType::Gte,
-        fact_commitment: fc_blinded1,
-        blinding: Some(blinding1),
-        fact_hash: Some(fh),
-        state_root: Some(sr),
-    };
-    let witness2 = PredicateWitness {
-        private_value: BabyBear::new(value),
-        threshold: BabyBear::new(threshold),
-        predicate_type: PredicateType::Gte,
-        fact_commitment: fc_blinded2,
-        blinding: Some(blinding2),
-        fact_hash: Some(fh),
-        state_root: Some(sr),
-    };
-
-    let proof1 = prove_predicate(witness1).expect("blinded proof 1 should succeed");
-    let proof2 = prove_predicate(witness2).expect("blinded proof 2 should succeed");
-
-    // Both verify against their respective (different) fact_commitments.
-    use dregg_circuit::dsl::predicates::verify_predicate;
-    assert!(verify_predicate(&proof1, BabyBear::new(threshold), fc_blinded1).is_ok());
-    assert!(verify_predicate(&proof2, BabyBear::new(threshold), fc_blinded2).is_ok());
 }
 
 // NOTE: removed 2 empty #[ignore] placeholder tests (delegation unlinkability,

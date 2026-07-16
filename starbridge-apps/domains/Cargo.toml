@@ -35,7 +35,13 @@ getrandom = { version = "0.3" }
 blake3 = "1"
 # Live DNS verification backend (off by default to keep the crate dependency-light;
 # `LiveDns` is a production `DnsResolver` instance, `MockDns` is the test one).
-hickory-resolver = { version = "0.25", default-features = false, features = ["system-config", "tokio"], optional = true }
+# 0.26: RUSTSEC-2026-0119 (O(n^2) name-compression DoS on encode) is fixed in
+# hickory-proto 0.26.1, and RUSTSEC-2026-0118 (NSEC3 closest-encloser unbounded loop) is
+# fixed in the new hickory-net 0.26.1 — the 0.26 split moved the dnssec code out of
+# hickory-proto, which is why cargo-audit reports "no fixed upgrade" against 0.25's proto.
+# (0118 was never reachable here anyway: its module is cfg'd on dnssec-ring/dnssec-aws-lc-rs,
+# and we enable neither.) Keep >=0.26 so both advisories stay fixed.
+hickory-resolver = { version = "0.26", default-features = false, features = ["system-config", "tokio"], optional = true }
 tokio = { version = "1", features = ["rt", "time"], optional = true }
 
 [features]
