@@ -1227,3 +1227,22 @@ LIED about being AIRs (garbled_air — I deleted its AIR today; shielded_ring_cl
 away; effect_action_air — it is schemas+limbs). `merkle_air` + `temporal_predicate_air` already told the
 truth. **Did NOT rename the files**: my last mechanical rename sed a WIRE IDENTIFIER and the dispatch gate
 caught it — a truthful header kills the lie with none of that risk.
+
+### ⚑⚑ `b0f8c8eb7` — LAW #1 IS NOW A GATE, NOT PROSE (the systematic enforcement)
+`circuit-prove/tests/law1_enforcement_gate.rs`: scans EVERY `.rs` in circuit/src + circuit-prove/src across
+**all three dialects** and RATCHETS against a frozen baseline — **48 files / 757 sites**, the true scale no
+`*_air.rs` audit could ever see. A NEW file with constraint algebra, or a listed file GROWING, **FAILS**,
+with a message saying to emit from Lean and explicitly NOT to add yourself to the baseline. Shrinking is
+always allowed. **VERIFIED IT BITES**: planted a `Constraint { eval: Box::new(..) }` -> "LAW #1 VIOLATED —
+NEW Rust-authored constraints"; removed -> green.
+This answers the standing critique that the fiction-fixes were "defensive documentation, not a systematic
+enforcement mechanism." A comment cannot stop the next lie. A failing test can.
+
+### ✗ CORRECTION TO MY OWN COMMIT `313239116` — the 3-dialect blindness bit ME
+I wrote "**fold — DEAD, deleted. 15 ConstraintExpr sites -> 0**". True for THAT DIALECT ONLY. `dsl/fold.rs`
+still holds **`FoldAir` with 15 CLOSURE-dialect sites** (`eval: Box::new`), which I never checked, and it
+is used at `ivc.rs:341` + `:742` (production code, though its callers `fold_and_accumulate`/`prove_ivc`
+have NO production callers — so it is test-only scaffolding, same class as StateTransitionAir).
+**The gate I just built is what caught this.** I have now made the same dialect error the audits made — in
+a commit whose whole subject was that error. That is precisely why the enforcement had to be mechanical
+rather than a lesson I keep re-learning. The baseline records `dsl/fold.rs` at 15 with that reason.
