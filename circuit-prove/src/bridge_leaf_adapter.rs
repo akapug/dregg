@@ -141,7 +141,7 @@ pub fn bridge_action_to_descriptor2() -> Result<EffectVmDescriptor2, String> {
     }
 
     Ok(EffectVmDescriptor2 {
-        name: "bridge-action-leaf::bridge_action_witness_v1".to_string(),
+        name: "bridge-action-leaf::bridge_action_air_v1".to_string(),
         trace_width: BRIDGE_ACTION_WIDTH,
         public_input_count: BRIDGE_ACTION_PI_COUNT,
         tables: vec![],

@@ -179,7 +179,7 @@ impl BridgeActionWitness {
 /// 8-limb recipient, 8-limb destination_federation, 2-limb amount).
 pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
     crate::air_descriptor::AirDescriptor {
-        air_id: "bridge_action_witness_v1",
+        air_id: "bridge_action_air_v1",
         column_count: BRIDGE_ACTION_WIDTH,
         public_input_layout: &[
             crate::air_descriptor::PiSlot {

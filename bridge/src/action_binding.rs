@@ -7,7 +7,7 @@
 //!
 //! The proof is minted through the plonky3 descriptor prover
 //! (`descriptor_ir2::prove_vm_descriptor2`) against the
-//! `bridge-action-leaf::bridge_action_witness_v1` descriptor
+//! `bridge-action-leaf::bridge_action_air_v1` descriptor
 //! (`dregg_circuit_prove::bridge_leaf_adapter::bridge_action_to_descriptor2`).
 //! That descriptor is the Lean-authored, byte-pinned emit of the binding AIR and is
 //! certified a term-for-term FAITHFUL twin of the hand `BridgeActionAir` (26 first-row
@@ -85,7 +85,7 @@ pub struct PortableActionBinding {
     /// The full u64 amount.
     pub amount: u64,
     /// The serialized IR-v2 `descriptor_ir2::Ir2BatchProof` for the
-    /// `bridge-action-leaf::bridge_action_witness_v1` descriptor (postcard-encoded).
+    /// `bridge-action-leaf::bridge_action_air_v1` descriptor (postcard-encoded).
     pub proof_bytes: Vec<u8>,
 }
 
@@ -107,7 +107,7 @@ pub fn create_action_binding(
     };
     // The descriptor prover binds the 26-slot typed tuple exactly as the hand AIR did:
     // `generate_trace` lays the typed limbs at row 0 (padded to a power of 2), and the
-    // `bridge_action_witness_v1` descriptor pins each PI slot to its column (`PiBinding{First}`)
+    // `bridge_action_air_v1` descriptor pins each PI slot to its column (`PiBinding{First}`)
     // and holds every column constant across rows (`WindowGate{on_transition}`).
     let (trace, public_inputs) = BridgeActionAir::generate_trace(&witness);
     let desc =
