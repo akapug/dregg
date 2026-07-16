@@ -8,15 +8,15 @@
 //! ([`dregg_circuit::dsl::note_spending::note_spending_circuit_descriptor`], width 62,
 //! 6 PIs `[nullifier, merkle_root, value_lo30, asset_type, destination_federation,
 //! value_hi34]`): `turn::executor::apply::apply_bridge_mint` verifies it via
-//! `verify_note_spend_dsl_full` (apply.rs:1676) inside `verify_portable_note`. It
+//! `verify_note_spend_descriptor2` (apply.rs:65, called at apply.rs:1913). It
 //! carries the SPEND SEMANTICS — spending-key knowledge (the two-step 8-limb
 //! nullifier chain C3/C4), the FULL-WIDTH 28-limb commitment binding (C2a..C2g),
 //! and Merkle membership (the `hash_fact(current, [sib0..2, position])` chain C6/C7)
-//! — everything `bridge_action_air` does NOT have. (`SCHEMA_NOTE_SPEND` in
+//! — everything `bridge_action_witness` does NOT have. (`SCHEMA_NOTE_SPEND` in
 //! `effect_action_air.rs` is a different surface: the in-federation binding schema
 //! for `Effect::NoteSpend` rows, not the bridge's foreign backing proof.)
 //!
-//! ## Why this module exists — folding `bridge_action_air` is UNSOUND as a backing
+//! ## Why this module exists — folding `bridge_action_witness` is UNSOUND as a backing
 //!
 //! [`crate::bridge_leaf_adapter`] folds `BridgeActionAir`, which is a BINDING-ONLY
 //! AIR: its 26-limb tuple is a prover-chosen constant trace with NO Merkle membership
@@ -103,7 +103,7 @@ use dregg_circuit::dsl::note_spending::{
 };
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
-use dregg_circuit::note_spending_air::{NOTE_SPENDING_WIDTH, NoteSpendingWitness, col, pi};
+use dregg_circuit::note_spending_witness::{NOTE_SPENDING_WIDTH, NoteSpendingWitness, col, pi};
 use dregg_circuit::poseidon2::hash_fact;
 
 use p3_recursion::{ProveNextLayerParams, RecursionOutput};
@@ -510,7 +510,7 @@ fn note_spend_leaf_base_trace(
 
 /// Prove a REAL note-spend as a RECURSION-FOLDABLE IR-v2 leaf.
 ///
-/// `witness` is the SAME `NoteSpendingWitness` the off-AIR `prove_note_spend_dsl`
+/// `witness` is the SAME `NoteSpendingWitness` the off-AIR `note_spending_dsl_circuit`
 /// consumes (spending key, 28-limb preimage, Merkle path). `public_inputs` is the
 /// 7-slot claim tuple — for an HONEST proof, [`note_spend_leaf_public_inputs`].
 /// Passing a DIFFERENT tuple is exactly a forged backing: the `PiBinding{First}`
@@ -859,7 +859,7 @@ mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
     use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
-    use dregg_circuit::note_spending_air::test_spending_key;
+    use dregg_circuit::note_spending_witness::test_spending_key;
     use dregg_circuit::poseidon2::hash_many;
     use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 

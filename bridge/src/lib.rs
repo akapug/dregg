@@ -40,7 +40,7 @@ pub mod ethereum;
 /// for finalized `Deposit` logs, runs the off-chain verify (finality + the BR-2-B
 /// escrow-to-contract binding + receipt inclusion), and produces the committed-mint
 /// input. The Ethereum-direction twin of [`solana_relayer`]; the in-circuit witness
-/// of EVM finality is the circuit swarm's VK-epoch (`dregg_circuit::bridge_action_air`).
+/// of EVM finality is the circuit swarm's VK-epoch (`dregg_circuit::bridge_action_witness`).
 pub mod ethereum_relayer;
 pub mod midnight;
 pub mod midnight_gateway;
@@ -104,12 +104,12 @@ pub mod solana_provenance;
 /// verify (finality + the BR-2-B escrow-to-vault binding + structure/binding),
 /// and produces the committed-mint input. Replaces the in-memory feed stand-in.
 /// The in-circuit witness of the consensus path is the circuit swarm's G1
-/// VK-epoch (`dregg_circuit::bridge_action_air`). See `solana_relayer` docs and
+/// VK-epoch (`dregg_circuit::bridge_action_witness`). See `solana_relayer` docs and
 /// `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
 pub mod solana_relayer;
 
 /// Full-fidelity bridge-action binding: a thin re-export plus a wrapper for
-/// the new sibling AIR `dregg_circuit::bridge_action_air` that pins
+/// the new sibling AIR `dregg_circuit::bridge_action_witness` that pins
 /// (nullifier, recipient, destination_federation, amount) at full byte/bit
 /// fidelity (no 30-bit amount truncation, no Poseidon2 compression of 32-byte
 /// values into a single felt). See module docs for the integration shape.

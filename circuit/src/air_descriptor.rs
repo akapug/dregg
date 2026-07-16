@@ -270,8 +270,8 @@ mod tests {
         // would mistakenly accept proofs under another.
         let effect_vm = fingerprint(&crate::effect_vm::AIR_DESCRIPTOR);
         #[allow(deprecated)]
-        let note_spending = fingerprint(&crate::note_spending_air::AIR_DESCRIPTOR);
-        let bridge_action = fingerprint(&crate::bridge_action_air::AIR_DESCRIPTOR);
+        let note_spending = fingerprint(&crate::note_spending_witness::AIR_DESCRIPTOR);
+        let bridge_action = fingerprint(&crate::bridge_action_witness::AIR_DESCRIPTOR);
         assert_ne!(effect_vm, note_spending);
         assert_ne!(note_spending, bridge_action);
         assert_ne!(effect_vm, bridge_action);

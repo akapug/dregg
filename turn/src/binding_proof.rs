@@ -3,7 +3,7 @@
 //! This module defines the on-wire shape for carrying per-effect
 //! full-fidelity binding proofs alongside a `Turn`. Each binding proof
 //! is a sidecar STARK produced by `dregg_circuit::effect_action_air`
-//! (or the dedicated sibling AIRs `bridge_action_air` /
+//! (or the dedicated sibling AIRs `bridge_action_witness` /
 //! `bridge_lock_action_air`) that pins every typed parameter of one
 //! runtime `Effect` at full fidelity:
 //!   - 32-byte fields as 8 × 4-byte BabyBear limbs (~248-bit binding)

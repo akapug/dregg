@@ -457,7 +457,7 @@ fn broken_order_rejected() {
 /// `prove_chain_core_rotated`'s per-leaf match on turn 0 BEFORE any leaf-wrap recursion proving.
 #[test]
 fn mismatched_carrier_witness_is_refused_fail_closed() {
-    use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
+    use dregg_circuit::note_spending_witness::{NoteSpendingWitness, test_spending_key};
     use dregg_circuit::poseidon2::hash_many;
     use dregg_circuit_prove::joint_turn_aggregation::{BridgeWitnessBundle, CarrierWitness};
 

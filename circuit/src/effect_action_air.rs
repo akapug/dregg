@@ -1,13 +1,13 @@
 //! Generalized effect-action binding AIR.
 //!
-//! Sibling AIR to `bridge_action_air`. The bridge AIR established the pattern:
+//! Sibling AIR to `bridge_action_witness`. The bridge AIR established the pattern:
 //! a 32-byte field becomes 8 BabyBear limbs (4 bytes each), a u64 amount
 //! becomes 2 BabyBear limbs (low/high 32 bits), and each limb is pinned to a
 //! trace-row-0 column via a boundary constraint. Transition constraints force
 //! every row to equal row 0, so a malicious prover cannot put one set of
 //! parameters in row 0 and another in row 1 to slip past the boundary check.
 //!
-//! `bridge_action_air` ships a *fixed* schema (nullifier + recipient +
+//! `bridge_action_witness` ships a *fixed* schema (nullifier + recipient +
 //! destination_federation + amount). This module generalizes the same shape to
 //! an arbitrary list of named 32-byte fields and named u64 amounts, so each
 //! `Effect` variant can have its parameters bound at full fidelity without
@@ -140,7 +140,7 @@ impl EffectActionSchema {
 /// Encode a 32-byte value as 8 BabyBear limbs (4 bytes each, little-endian
 /// per chunk, each chunk reduced via `BabyBear::new`).
 ///
-/// Same encoding as `bridge_action_air::encode_hash`. The collision
+/// Same encoding as `bridge_action_witness::encode_hash`. The collision
 /// probability across two distinct 32-byte values whose all 8 limbs collide
 /// modulo the BabyBear prime is ~p^-8 ≈ 2^-248 (well above the 124-bit STARK
 /// soundness target).
@@ -156,7 +156,7 @@ pub fn encode_hash(bytes: &[u8; 32]) -> [BabyBear; HASH_LIMBS] {
 /// Encode a u64 amount as 2 BabyBear limbs (low 32 + high 32, each reduced
 /// canonically via `BabyBear::new`).
 ///
-/// Same encoding as `bridge_action_air::encode_amount`.
+/// Same encoding as `bridge_action_witness::encode_amount`.
 pub fn encode_amount(amount: u64) -> [BabyBear; AMOUNT_LIMBS] {
     let lo = (amount & 0xFFFF_FFFF) as u32;
     let hi = (amount >> 32) as u32;
@@ -484,9 +484,9 @@ pub const SCHEMA_CREATE_CELL_FROM_FACTORY: EffectActionSchema = EffectActionSche
 ///           value_commitment (32B; Pedersen 32B if Some, ZERO if None)]
 /// amounts = [value (u64), asset_type (u64)]
 ///
-/// # Relationship with the deprecated `note_spending_air`
+/// # Relationship with the deprecated `note_spending_witness`
 ///
-/// `circuit/src/note_spending_air.rs` is the legacy AIR that proves
+/// `circuit/src/note_spending_witness.rs` is the legacy AIR that proves
 /// knowledge of the spending key, Merkle membership of the note, and
 /// pins `nullifier`/`merkle_root`/`value`/`asset_type` as **single
 /// BabyBear felts each** (Poseidon2-compressed). That AIR's PIs are
@@ -500,7 +500,7 @@ pub const SCHEMA_CREATE_CELL_FROM_FACTORY: EffectActionSchema = EffectActionSche
 /// `None` (cleartext-value path) and the Pedersen point's compressed
 /// 32 bytes when the runtime variant carries `Some` (committed path).
 ///
-/// **Recommendation:** deprecate `note_spending_air` in favor of the
+/// **Recommendation:** deprecate `note_spending_witness` in favor of the
 /// schema-based generalized AIR. The schema-based binding gives every
 /// callsite 248-bit-strength on every 32-byte field plus full 64-bit
 /// amount binding, replacing the felt-sized PIs of the legacy AIR.
@@ -523,9 +523,9 @@ pub const SCHEMA_NOTE_SPEND: EffectActionSchema = EffectActionSchema {
 ///                             ZERO if None)]
 /// amounts = [value (u64), asset_type (u64)]
 ///
-/// # Relationship with the deprecated `note_spending_air`
+/// # Relationship with the deprecated `note_spending_witness`
 ///
-/// Same story as `SCHEMA_NOTE_SPEND` — the legacy `note_spending_air`
+/// Same story as `SCHEMA_NOTE_SPEND` — the legacy `note_spending_witness`
 /// proves spend-side semantics with felt-sized PIs; this schema is the
 /// **canonical full-fidelity binding** for the create-side action
 /// parameters. Recommend deprecating the legacy AIR in favor of the

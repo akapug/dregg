@@ -221,7 +221,7 @@ impl Note {
     /// production `NullifierSet` in the turn executor. It is computed with
     /// Poseidon2 over the STARK-native field, structurally mirroring the
     /// note-spending AIR's `NoteSpendingWitness::nullifier`
-    /// (`circuit/src/note_spending_air.rs`):
+    /// (`circuit/src/note_spending_witness.rs`):
     ///   `hash_many(commitment_felt ‖ spending_key[8 limbs] ‖ creation_nonce[8 limbs])`,
     /// then encoded to 32 bytes via [`crate::felt_to_bytes32`]. The spending key
     /// is bound through all eight 4-byte limbs (~248-bit secret), so only the
@@ -300,7 +300,7 @@ impl Note {
     /// # AIR lockstep
     ///
     /// `poseidon2_commitment` has no in-tree callers that feed a STARK AIR
-    /// directly: the note-spending AIR (`circuit::note_spending_air`) and its
+    /// directly: the note-spending AIR (`circuit::note_spending_witness`) and its
     /// DSL form build their witness from already-field-element preimages
     /// (`NoteSpendingWitness { owner, value, .. : BabyBear }`) and recompute
     /// `hash_many([owner, value, asset_type, creation_nonce, randomness])`

@@ -4427,7 +4427,7 @@ mod note_spend_descriptor_flip_tests {
     use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
     use dregg_circuit::dsl::note_spending::note_spend_mint_hash_felt;
     use dregg_circuit::note_spend_witness::{NOTE_SPEND_LEAF_NAME, note_spend_witness};
-    use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
+    use dregg_circuit::note_spending_witness::{NoteSpendingWitness, test_spending_key};
     use dregg_circuit::poseidon2::hash_many;
 
     /// A REAL full-width note-spend witness — depth-2 Merkle path, a value above

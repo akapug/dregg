@@ -549,7 +549,7 @@ mod tests {
     /// this tree's), so it is not asserted here.
     #[test]
     fn end_to_end_membership_stark_from_real_tree() {
-        use dregg_circuit::note_spending_air::NoteSpendingWitness;
+        use dregg_circuit::note_spending_witness::NoteSpendingWitness;
         use dregg_circuit::plonky3_prover::generate_sound_merkle_trace;
         use dregg_circuit::poseidon2::hash_many;
 
@@ -559,7 +559,7 @@ mod tests {
         let asset_type = BabyBear::new(1);
         let creation_nonce = BabyBear::new(0xCAFE);
         let randomness = BabyBear::new(0xBEEF);
-        let spending_key = dregg_circuit::note_spending_air::test_spending_key(0xDEAD_BEEF);
+        let spending_key = dregg_circuit::note_spending_witness::test_spending_key(0xDEAD_BEEF);
 
         // Step 2: Compute the commitment (same formula as NoteSpendingWitness::commitment)
         let commitment = hash_many(&[owner, value, asset_type, creation_nonce, randomness]);

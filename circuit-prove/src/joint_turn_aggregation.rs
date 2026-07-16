@@ -154,7 +154,7 @@ pub enum CarrierWitness {
     Custom(CustomWitnessBundle),
     /// FOLD-WIRED (the 7th, LAST carrier): the bridge carrier's re-provable witness — the
     /// REAL foreign note-spend witness (per the carrier-deployment spec: folding the
-    /// binding-only `bridge_action_air` alone is NOT the sound deployed path — a prover-chosen
+    /// binding-only `bridge_action_witness` alone is NOT the sound deployed path — a prover-chosen
     /// tuple; the G2 backing is the re-proven note-spend STARK,
     /// `note_spend_leaf_adapter::prove_note_spend_leaf_with_claim`). The fold arm admits a leg
     /// only when its descriptor pins the felt mint-hash claim slot (`BRIDGE_MINT_HASH_PI` = 46,
@@ -255,7 +255,7 @@ pub struct CustomWitnessBundle {
 /// [`crate::note_spend_leaf_adapter::prove_note_spend_leaf_with_claim`] consumes: the REAL
 /// foreign note-spend witness (spending key, 28-limb commitment preimage, Merkle path) — the
 /// G2 backing the carrier-deployment spec mandates. Folding the binding-only
-/// `bridge_action_air` was REFUSED as the backing (a prover-chosen tuple, no membership / no
+/// `bridge_action_witness` was REFUSED as the backing (a prover-chosen tuple, no membership / no
 /// key knowledge — the vacuous connect the fail-open law forbids); this bundle re-proves the
 /// REAL spend STARK, whose leaf exposes the FELT-domain mint identity
 /// (`note_spend_mint_hash_felt`, in-AIR-recomputed at claim lane 6) the deployed leg's
@@ -264,7 +264,7 @@ pub struct CustomWitnessBundle {
 pub struct BridgeWitnessBundle {
     /// The REAL note-spend witness (the SAME `NoteSpendingWitness` the off-AIR
     /// `verify_note_spend_dsl_full` path proves).
-    pub note_spend: dregg_circuit::note_spending_air::NoteSpendingWitness,
+    pub note_spend: dregg_circuit::note_spending_witness::NoteSpendingWitness,
     /// The 7-slot claim tuple `[nullifier, merkle_root, value_lo, asset_type,
     /// destination_federation, value_hi, mint_hash]` (for an honest bundle,
     /// [`crate::note_spend_leaf_adapter::note_spend_leaf_public_inputs`]).
@@ -276,7 +276,7 @@ impl BridgeWitnessBundle {
     /// witness itself — including the in-AIR-recomputable felt mint identity at lane 6 — so
     /// claim == execution by construction).
     pub fn from_note_spend_witness(
-        note_spend: &dregg_circuit::note_spending_air::NoteSpendingWitness,
+        note_spend: &dregg_circuit::note_spending_witness::NoteSpendingWitness,
     ) -> Self {
         Self {
             public_inputs: crate::note_spend_leaf_adapter::note_spend_leaf_public_inputs(
@@ -292,7 +292,7 @@ impl BridgeWitnessBundle {
     /// from); a wire-rehydrated turn retains nothing (`None`) — the re-exec rung,
     /// FAIL-CLOSED rather than fabricated.
     pub fn from_retained_bridge(
-        retained: Option<&dregg_circuit::note_spending_air::NoteSpendingWitness>,
+        retained: Option<&dregg_circuit::note_spending_witness::NoteSpendingWitness>,
     ) -> Option<Self> {
         retained.map(Self::from_note_spend_witness)
     }

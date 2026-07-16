@@ -10,7 +10,7 @@
 //! honesty.
 //!
 //! Now that the deployed circuit carries a verified bridge-action AIR
-//! ([`dregg_circuit::bridge_action_air`], wrapped by [`crate::action_binding`]),
+//! ([`dregg_circuit::bridge_action_witness`], wrapped by [`crate::action_binding`]),
 //! we can make the message *proof-carrying*. A [`VerifiedDreggToMidnight`]
 //! envelope bundles the federation attestation with a [`PortableActionBinding`]
 //! — a STARK proof that algebraically pins the burn's

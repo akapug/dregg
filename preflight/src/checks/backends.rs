@@ -5,7 +5,7 @@
 //! skip (with a clear message) what requires optional features.
 
 use dregg_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
-use dregg_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
+use dregg_circuit::multi_step_witness::{ALLOW_PREDICATE, build_multi_step_witness};
 use dregg_circuit::poseidon2::hash_fact;
 use dregg_circuit::{
     BabyBear, BodyFactMerkleProof, prove_authorization_with_membership,
@@ -25,7 +25,7 @@ pub fn run() -> Vec<CheckResult> {
 
 /// Build a standard test witness for backend comparison.
 fn build_test_witness() -> (
-    dregg_circuit::multi_step_air::MultiStepWitness,
+    dregg_circuit::multi_step_witness::MultiStepWitness,
     BabyBear,
     Poseidon2MerkleTree,
     usize,
@@ -95,7 +95,7 @@ fn make_membership_proof(tree: &Poseidon2MerkleTree, position: usize) -> BodyFac
 }
 
 fn body_fact_hashes_from_witness(
-    witness: &dregg_circuit::multi_step_air::MultiStepWitness,
+    witness: &dregg_circuit::multi_step_witness::MultiStepWitness,
 ) -> Vec<BabyBear> {
     let mut hashes = Vec::new();
     for step in &witness.steps {

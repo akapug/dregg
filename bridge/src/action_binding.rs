@@ -1,13 +1,13 @@
 //! Bridge-action binding wrapper.
 //!
-//! Wraps `dregg_circuit::bridge_action_air`'s trace shape with bridge-side
+//! Wraps `dregg_circuit::bridge_action_witness`'s trace shape with bridge-side
 //! ergonomics: a `PortableActionBinding` type that bundles a serialized IR-v2
 //! (`descriptor_ir2`) batch proof with its typed parameters, plus prove/verify
 //! helpers tied to `dregg_cell_crypto::note_bridge`'s shapes.
 //!
 //! The proof is minted through the plonky3 descriptor prover
 //! (`descriptor_ir2::prove_vm_descriptor2`) against the
-//! `bridge-action-leaf::bridge_action_air_v1` descriptor
+//! `bridge-action-leaf::bridge_action_witness_v1` descriptor
 //! (`dregg_circuit_prove::bridge_leaf_adapter::bridge_action_to_descriptor2`).
 //! That descriptor is the Lean-authored, byte-pinned emit of the binding AIR and is
 //! certified a term-for-term FAITHFUL twin of the hand `BridgeActionAir` (26 first-row
@@ -27,7 +27,7 @@
 //! AIR's binding (whose primary job is the spending-key + Merkle proof), but
 //! they leave a high-bit / high-byte tail unbound at the algebraic level.
 //!
-//! The sibling AIR in `dregg_circuit::bridge_action_air` carries the full
+//! The sibling AIR in `dregg_circuit::bridge_action_witness` carries the full
 //! 32 bytes of each hash field (8 limbs × 4 bytes) and the full 64 bits of
 //! amount (low 32 + high 32). This module is the bridge-side seam that
 //! produces and consumes those proofs.
@@ -50,7 +50,7 @@
 
 use std::panic::AssertUnwindSafe;
 
-use dregg_circuit::bridge_action_air::{BridgeActionAir, BridgeActionWitness};
+use dregg_circuit::bridge_action_witness::{BridgeActionAir, BridgeActionWitness};
 use dregg_circuit::descriptor_ir2::{
     DreggStarkConfig, Ir2BatchProof, MemBoundaryWitness, prove_vm_descriptor2,
     verify_vm_descriptor2,
@@ -85,7 +85,7 @@ pub struct PortableActionBinding {
     /// The full u64 amount.
     pub amount: u64,
     /// The serialized IR-v2 `descriptor_ir2::Ir2BatchProof` for the
-    /// `bridge-action-leaf::bridge_action_air_v1` descriptor (postcard-encoded).
+    /// `bridge-action-leaf::bridge_action_witness_v1` descriptor (postcard-encoded).
     pub proof_bytes: Vec<u8>,
 }
 
@@ -107,7 +107,7 @@ pub fn create_action_binding(
     };
     // The descriptor prover binds the 26-slot typed tuple exactly as the hand AIR did:
     // `generate_trace` lays the typed limbs at row 0 (padded to a power of 2), and the
-    // `bridge_action_air_v1` descriptor pins each PI slot to its column (`PiBinding{First}`)
+    // `bridge_action_witness_v1` descriptor pins each PI slot to its column (`PiBinding{First}`)
     // and holds every column constant across rows (`WindowGate{on_transition}`).
     let (trace, public_inputs) = BridgeActionAir::generate_trace(&witness);
     let desc =

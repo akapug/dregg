@@ -23,7 +23,7 @@
 
 use crate::dsl::descriptors::merkle_poseidon2_circuit;
 use crate::field::BabyBear;
-use crate::multi_step_air::MultiStepWitness;
+use crate::multi_step_witness::MultiStepWitness;
 use serde::{Deserialize, Serialize};
 
 /// A Merkle proof for a single body fact: siblings + positions (leaf-to-root).

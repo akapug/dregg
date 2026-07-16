@@ -12,7 +12,7 @@
 //!
 //! The Lean is verified at the **digest / state-transition layer**; it
 //! abstracts Poseidon2 / Merkle / selector-dispatch as a hypothesis. The
-//! hand-written AIRs here (`effect_vm/`, `note_spending_air`, `poseidon2_air`,
+//! hand-written AIRs here (`effect_vm/`, `note_spending_witness`, `poseidon2_air`,
 //! `effect_action_air`) are the layer that actually computes those hashes /
 //! Merkle paths in-circuit — a DIFFERENT abstraction layer, not a competing
 //! implementation. They retire one FRONTIER at a time as the Lean-emitted
@@ -208,7 +208,7 @@ pub mod accumulator_types;
 
 // Backward-compatible shim modules (type definitions + re-exports from DSL).
 // These contain deprecated StarkAir impls superseded by DSL descriptors.
-pub mod bridge_action_air;
+pub mod bridge_action_witness;
 #[allow(deprecated)]
 pub mod derivation_air;
 pub mod effect_action_air;
@@ -218,9 +218,9 @@ pub mod garbled_air;
 pub mod merkle_air;
 pub mod merkle_types;
 #[allow(deprecated)]
-pub mod multi_step_air;
+pub mod multi_step_witness;
 #[allow(deprecated)]
-pub mod note_spending_air;
+pub mod note_spending_witness;
 #[allow(deprecated)]
 pub mod poseidon2_air;
 #[cfg(feature = "plonky3")]
@@ -540,7 +540,7 @@ pub use dsl::predicates::{
 };
 
 // Re-export multi-step authorization constants.
-pub use multi_step_air::MAX_DELEGATION_DEPTH;
+pub use multi_step_witness::MAX_DELEGATION_DEPTH;
 
 /// Backward-compatible module alias for predicate types.
 pub mod predicate_types {

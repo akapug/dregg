@@ -45,7 +45,7 @@
 //!
 //! For a **dregg light client** (not a re-executing validator) to witness that a
 //! mint is backed by a real finalized Solana lock, the Solana consensus + vault
-//! binding must be folded into the EffectVM as `dregg_circuit::bridge_action_air`
+//! binding must be folded into the EffectVM as `dregg_circuit::bridge_action_witness`
 //! (the G1 VK-epoch). That weld is owned by the circuit swarm; this module does
 //! the off-chain relayer verify a re-executing validator runs, and binds the same
 //! BR-fix gates into the live path. See `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.

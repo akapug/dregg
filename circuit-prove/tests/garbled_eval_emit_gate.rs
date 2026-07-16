@@ -37,9 +37,10 @@
 //! ## The VERIFIER-WRAPPER tooth (named, not dropped)
 //!
 //! The DSL binds only the FIRST 4 felts of each 8-felt `WideHash` in-circuit (`public_input_count =
-//! 8 = 4+4`). The FULL 8-felt (~124-bit) match is the verifier-side struct equality in
-//! `circuit/src/dsl/garbled.rs::verify_garbled_evaluation_dsl` (`proof.circuit_commitment !=
-//! *expected` → reject). It is off-descriptor by design; it is named here rather than emitted.
+//! 8 = 4+4`). The FULL 8-felt (~124-bit) match was to be a verifier-side struct equality in
+//! `circuit/src/dsl/garbled.rs::verify_garbled_evaluation_dsl` — that function DOES NOT EXIST and
+//! no garbled verifier exists anywhere in the tree, so the ~124-bit binding is currently NOT
+//! enforced; only the ~62-bit in-circuit prefix is. The path has no live consumer.
 
 use std::panic::AssertUnwindSafe;
 

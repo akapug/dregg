@@ -79,7 +79,7 @@
 //!   claim a different value/asset_type than what is committed in the note.
 //! - Soundness: a cheating prover must break Poseidon2 collision resistance
 //!
-//! # Companion AIR: `bridge_action_air`
+//! # Companion AIR: `bridge_action_witness`
 //!
 //! Each 32-byte field in this AIR's PI vector (`nullifier`, `merkle_root`,
 //! `destination_federation`) lives in a **single** BabyBear slot — the prover
@@ -88,7 +88,7 @@
 //! binding, but for bridge mints the destination wants algebraic guarantees
 //! at full 32-byte fidelity on (nullifier, recipient, destination_federation)
 //! and at full 64-bit fidelity on amount. The sibling AIR
-//! `crate::bridge_action_air::BridgeActionAir` provides exactly that: 8 limbs
+//! `crate::bridge_action_witness::BridgeActionAir` provides exactly that: 8 limbs
 //! per 32-byte field and 2 limbs (low+high 32) for u64 amount. A complete
 //! bridge presentation now carries BOTH proofs.
 
@@ -704,7 +704,7 @@ impl NoteSpendingWitness {
 /// the commitment-row width.
 pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
     crate::air_descriptor::AirDescriptor {
-        air_id: "note_spending_air_v1",
+        air_id: "note_spending_witness_v1",
         column_count: NOTE_SPENDING_WIDTH,
         public_input_layout: &[
             crate::air_descriptor::PiSlot {
@@ -744,13 +744,13 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
         source_hash: None,
     };
 
-/// DEPRECATED: Use `crate::dsl::note_spending::note_spending_dsl_circuit()` and
-/// `crate::dsl::note_spending::prove_note_spend_dsl()` instead.
-/// The DSL version uses `hash_fact`-based Merkle constraints (algebraically sound).
-/// This hand-written AIR uses `hash_4_to_1` (also sound, but the DSL is canonical).
-#[deprecated(
-    note = "Use crate::dsl::note_spending::{prove_note_spend_dsl, verify_note_spend_dsl} instead"
-)]
+/// DEPRECATED: use `crate::dsl::note_spending::note_spending_dsl_circuit()`.
+///
+/// Despite the `Air` name this type carries NO constraint algebra — it is a
+/// depth/config holder retained for the trace-generation helpers below. The
+/// constraints live in `note_spending_circuit_descriptor()`; the executor's
+/// verification path is `turn::executor::apply::verify_note_spend_descriptor2`.
+#[deprecated(note = "Use crate::dsl::note_spending::note_spending_dsl_circuit() instead")]
 pub struct NoteSpendingAir {
     /// Merkle tree depth (number of levels in the path).
     pub depth: usize,

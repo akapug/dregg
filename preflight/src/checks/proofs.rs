@@ -4,7 +4,7 @@
 use dregg_bridge::present::{BridgePresentationBuilder, bytes_to_babybear, hash_index};
 use dregg_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
 use dregg_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
-use dregg_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
+use dregg_circuit::multi_step_witness::{ALLOW_PREDICATE, build_multi_step_witness};
 use dregg_circuit::poseidon2::hash_fact;
 use dregg_circuit::{
     BabyBear, BodyFactMerkleProof, prove_authorization_with_membership,

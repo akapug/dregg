@@ -109,12 +109,16 @@ pub mod col {
 ///
 /// # Deprecation
 ///
-/// Use `crate::dsl::garbled::prove_garbled_evaluation_dsl()` and
-/// `crate::dsl::garbled::verify_garbled_evaluation_dsl()` instead.
+/// Use `crate::dsl::garbled::garbled_dsl_circuit()` (constraints:
+/// `garbled_extended_descriptor()`, trace: `generate_extended_garbled_trace()`).
 /// The DSL version supports multi-gate chaining, gate type selectors, and
 /// padding — a strict superset of this 49-column AIR's capabilities.
+///
+/// LAW #1 NOTE: unlike the DSL path, this type's `constraints()` is 16 sites of
+/// Rust-authored algebra. `Dregg2.Circuit.Emit.GarbledEvalEmit` exists; this AIR
+/// should be retired against it, not kept as a parallel hand-authored circuit.
 #[deprecated(
-    note = "Use crate::dsl::garbled::{prove,verify}_garbled_evaluation_dsl(). This AIR is superseded by the 56-column DSL garbled evaluation circuit."
+    note = "Use crate::dsl::garbled::garbled_dsl_circuit(). This AIR is superseded by the 56-column DSL garbled evaluation circuit."
 )]
 pub struct GarbledEvaluationAir {
     /// Gate evaluation records (the witness).

@@ -25,7 +25,7 @@
 //! | `MerkleMembership`| `merkle-membership-depth2-4ary::poseidon2-v1` + the depth-GENERAL builder |
 //! | `NonMembership`   | `dregg-membership-adjacency::poseidon2-v1` + `quantified-absence-…`     |
 //! | `BlindedSet`      | `dregg-non-revocation-sorted-tree::poseidon2-v1` + `dregg-accumulator-nonrev-emit-v2` |
-//! | `BridgePredicate` | `bridge-action-leaf::bridge_action_air_v1` + `dregg-predicate-arith-ge::threshold-v1` |
+//! | `BridgePredicate` | `bridge-action-leaf::bridge_action_witness_v1` + `dregg-predicate-arith-ge::threshold-v1` |
 //! | `Custom`          | `dregg-effectvm-custom-v1` (customVmDescriptor2)                        |
 //! | `PedersenEquality`| NONE — off-STARK Schnorr, no descriptor (returns `&[]` / `None`)        |
 //!
@@ -93,7 +93,7 @@ const STATIC_GOLDENS: &[(&str, &str)] = &[
     ),
     ("dregg-accumulator-nonrev-emit-v2", ACCUMULATOR_NONREV_JSON),
     (
-        "bridge-action-leaf::bridge_action_air_v1",
+        "bridge-action-leaf::bridge_action_witness_v1",
         BRIDGE_ACTION_JSON,
     ),
     (
@@ -255,7 +255,7 @@ pub fn descriptor_names_for_kind(kind: PredicateKind) -> &'static [&'static str]
             "dregg-accumulator-nonrev-emit-v2",
         ],
         PredicateKind::BridgePredicate => &[
-            "bridge-action-leaf::bridge_action_air_v1",
+            "bridge-action-leaf::bridge_action_witness_v1",
             "dregg-predicate-arith-ge::threshold-v1",
             "dregg-predicate-arith-le::threshold-v1",
             "dregg-predicate-arith-gt::threshold-v1",

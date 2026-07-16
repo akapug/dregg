@@ -1,8 +1,8 @@
-//! Bridge action binding AIR (sibling to `note_spending_air`).
+//! Bridge action binding AIR (sibling to `note_spending_witness`).
 //!
 //! # Why a sibling AIR?
 //!
-//! `note_spending_air` (and its DSL twin `dsl::note_spending`) already prove
+//! `note_spending_witness` (and its DSL twin `dsl::note_spending`) already prove
 //! knowledge of a spending key + Merkle membership of the note, and pin
 //! `nullifier`, `merkle_root`, `value`, `asset_type`, `destination_federation`
 //! as public inputs. **However**, each of those PIs is a **single** BabyBear
@@ -179,7 +179,7 @@ impl BridgeActionWitness {
 /// 8-limb recipient, 8-limb destination_federation, 2-limb amount).
 pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
     crate::air_descriptor::AirDescriptor {
-        air_id: "bridge_action_air_v1",
+        air_id: "bridge_action_witness_v1",
         column_count: BRIDGE_ACTION_WIDTH,
         public_input_layout: &[
             crate::air_descriptor::PiSlot {

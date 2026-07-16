@@ -47,7 +47,7 @@ use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
-use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
+use dregg_circuit::note_spending_witness::{NoteSpendingWitness, test_spending_key};
 use dregg_circuit::poseidon2::hash_many;
 use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::ivc_turn_chain::{

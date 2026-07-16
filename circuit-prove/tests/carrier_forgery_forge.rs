@@ -263,8 +263,8 @@ fn bridge_deployed_binds_per_turn_identity_but_not_cross_turn_uniqueness() {
 
 /// The full-width note-spend witness (mirrors the bridge tooth's fixture): a > 2^30 value so the high
 /// limb is live; depth-2 Merkle path. Deterministic in `tag`.
-fn make_witness(tag: u8) -> dregg_circuit::note_spending_air::NoteSpendingWitness {
-    use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
+fn make_witness(tag: u8) -> dregg_circuit::note_spending_witness::NoteSpendingWitness {
+    use dregg_circuit::note_spending_witness::{NoteSpendingWitness, test_spending_key};
     use dregg_circuit::poseidon2::hash_many;
     let owner = [tag; 32];
     let nonce = [tag ^ 0x5A; 32];

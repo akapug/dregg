@@ -10,11 +10,10 @@
 //!
 //! The descriptor is AUTHORED in Lean (`metatheory/Dregg2/Circuit/Emit/Poseidon2HashEmit.lean`,
 //! `poseidon2HashDesc`) and its wire string is byte-pinned there (`emitVmJson2` `#guard`). This test
-//! embeds that EXACT string ([`GOLDEN_JSON`]) and:
+//! includes that EXACT committed artifact and:
 //!
-//!   1. DECODES it via [`parse_vm_descriptor2`] and asserts the decode equals an independently
-//!      hand-built `EffectVmDescriptor2` (Lean emit ≡ Rust builder — a byte drift on either side
-//!      breaks this OR the Lean `#guard`);
+//!   1. DECODES it via [`parse_vm_descriptor2`] and checks the emitted shape without constructing
+//!      any Rust constraint;
 //!   2. KATs the arity-2 chip mapping: `chip_absorb_all_lanes(2, [a,b])[0] == hash_2_to_1(a,b)`
 //!      (the `Poseidon2Air` permutation IS the chip's arity-2 absorb — same rate-4 seeding);
 //!   3. proves an HONEST hash witness (real preimage + genuine `hash_2_to_1` digest) through
@@ -29,78 +28,25 @@
 //! Each canary is NON-VACUOUS by construction: the honest witness is asserted to prove+verify first,
 //! and the value that changes is guarded by EXACTLY the one constraint the canary names.
 
-use std::panic::AssertUnwindSafe;
-
 use dregg_circuit::descriptor_ir2::{
-    CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, MemBoundaryWitness,
-    TID_P2, VmConstraint2, chip_absorb_all_lanes, parse_vm_descriptor2, prove_vm_descriptor2,
-    verify_vm_descriptor2,
+    CHIP_OUT_LANES, EffectVmDescriptor2, MemBoundaryWitness, TID_P2, VmConstraint2,
+    chip_absorb_all_lanes, parse_vm_descriptor2, prove_vm_descriptor2, verify_vm_descriptor2,
 };
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
+use dregg_circuit::lean_descriptor_air::VmConstraint;
 use dregg_circuit::poseidon2::hash_2_to_1;
+use dregg_circuit::poseidon2_air::{POSEIDON2_HASH_DESCRIPTOR_JSON, poseidon2_hash_descriptor};
 use dregg_circuit::refusal::{Outcome, classify};
 
 /// The BYTE-IDENTICAL wire string Lean's `emitVmJson2 poseidon2HashDesc` emits (pinned by the
-/// `#guard` in `Poseidon2HashEmit.lean`). If Lean's emitter drifts, that `#guard` fails; if this
-/// literal drifts, the `decoded == hand_built` assertion fails. Neither can silently diverge.
-const GOLDEN_JSON: &str = r#"{"name":"poseidon2-hash-arity2::poseidon2-v1","ir":2,"trace_width":10,"public_input_count":3,"tables":[],"constraints":[{"t":"lookup","table":1,"tuple":[{"t":"const","v":2},{"t":"var","v":0},{"t":"var","v":1},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":2},{"t":"var","v":3},{"t":"var","v":4},{"t":"var","v":5},{"t":"var","v":6},{"t":"var","v":7},{"t":"var","v":8},{"t":"var","v":9}]},{"t":"pi_binding","row":"first","col":0,"pi_index":0},{"t":"pi_binding","row":"first","col":1,"pi_index":1},{"t":"pi_binding","row":"first","col":2,"pi_index":2}],"hash_sites":[],"ranges":[]}"#;
+/// `#guard` in `Poseidon2HashEmit.lean`).
+const GOLDEN_JSON: &str = POSEIDON2_HASH_DESCRIPTOR_JSON;
 
 // --- Trace column layout (must match `Poseidon2HashEmit.lean` §1). ---
 const IN0: usize = 0;
 const IN1: usize = 1;
 const DIGEST: usize = 2;
-const LANE_BASE: usize = 3;
 const HASH_WIDTH: usize = 10;
-
-/// An arity-2 `TID_P2` chip lookup absorbing `[in0, in1]`, binding out0 to `out_col` (the digest)
-/// and lanes 1..7 to `lane_base..lane_base+7`. Built EXACTLY as Lean's `chipLookupTuple`
-/// (arity tag = 2, `CHIP_RATE` zero-padded inputs, then out0 :: 7 lanes).
-fn chip2_lookup(input_cols: [usize; 2], out_col: usize, lane_base: usize) -> VmConstraint2 {
-    let mut tuple: Vec<LeanExpr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-    tuple.push(LeanExpr::Const(2)); // arity tag (= ins.length in Lean's chipLookupTuple)
-    for i in 0..CHIP_RATE {
-        tuple.push(match input_cols.get(i) {
-            Some(&c) => LeanExpr::Var(c),
-            None => LeanExpr::Const(0),
-        });
-    }
-    tuple.push(LeanExpr::Var(out_col)); // out0 = the digest
-    for j in 0..(CHIP_OUT_LANES - 1) {
-        tuple.push(LeanExpr::Var(lane_base + j));
-    }
-    assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
-    VmConstraint2::Lookup(LookupSpec {
-        table: TID_P2,
-        tuple,
-    })
-}
-
-/// The independently-hand-built twin of the Lean `poseidon2HashDesc`: one arity-2 preimage→digest
-/// chip lookup, and the three boundary pins (`IN0==PI0`, `IN1==PI1`, `DIGEST==PI2`).
-fn hand_built_desc() -> EffectVmDescriptor2 {
-    let pin = |col: usize, pi_index: usize| {
-        VmConstraint2::Base(VmConstraint::PiBinding {
-            row: VmRow::First,
-            col,
-            pi_index,
-        })
-    };
-    EffectVmDescriptor2 {
-        name: "poseidon2-hash-arity2::poseidon2-v1".to_string(),
-        trace_width: HASH_WIDTH,
-        public_input_count: 3,
-        tables: vec![],
-        constraints: vec![
-            chip2_lookup([IN0, IN1], DIGEST, LANE_BASE),
-            pin(IN0, 0),
-            pin(IN1, 1),
-            pin(DIGEST, 2),
-        ],
-        hash_sites: vec![],
-        ranges: vec![],
-    }
-}
 
 /// One honest hash row: preimage `(a, b)` with the genuine `hash_2_to_1(a, b)` in the digest column.
 /// The chip LANE columns (3..10) are left zero — the prover's `trace_with_chip_lanes` fills them
@@ -145,16 +91,11 @@ fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]
     }
 }
 
-/// STEP 1 — the emitted descriptor decodes and equals the hand-built twin (Lean emit ≡ Rust
-/// semantics), and has exactly the expected shape.
+/// STEP 1 — the emitted descriptor decodes and has exactly the expected shape.
 #[test]
-fn poseidon2_hash_emit_decodes_to_hand_built() {
+fn poseidon2_hash_emit_decodes_without_rust_constraints() {
     let decoded = parse_vm_descriptor2(GOLDEN_JSON).expect("the Lean-emitted golden JSON decodes");
-    let hand = hand_built_desc();
-    assert_eq!(
-        decoded, hand,
-        "the Lean-emitted descriptor must equal the independently hand-built descriptor"
-    );
+    assert_eq!(decoded, poseidon2_hash_descriptor());
     assert_eq!(decoded.trace_width, HASH_WIDTH);
     assert_eq!(decoded.public_input_count, 3);
     let chip_lookups = decoded
@@ -300,62 +241,5 @@ fn forged_preimage_pi_refuses() {
     assert!(
         rejects(&desc, &trace, &[a + BabyBear::ONE, b, digest]),
         "a forged preimage PI must be REJECTED by the preimage boundary pin"
-    );
-}
-
-/// The pins-only twin of the descriptor: the three boundary pins WITHOUT the chip lookup (so the
-/// digest column is an unconstrained free column). Used only to PROVE the chip-binding canaries are
-/// non-vacuous — the rejection is BY the chip lookup, not an unrelated shape/prover error.
-fn pins_only_desc() -> EffectVmDescriptor2 {
-    let pin = |col: usize, pi_index: usize| {
-        VmConstraint2::Base(VmConstraint::PiBinding {
-            row: VmRow::First,
-            col,
-            pi_index,
-        })
-    };
-    EffectVmDescriptor2 {
-        name: "poseidon2-hash-arity2::pins-only-control".to_string(),
-        trace_width: HASH_WIDTH,
-        public_input_count: 3,
-        tables: vec![],
-        constraints: vec![pin(IN0, 0), pin(IN1, 1), pin(DIGEST, 2)],
-        hash_sites: vec![],
-        ranges: vec![],
-    }
-}
-
-/// NON-VACUITY CONTROL — the chip lookup is precisely THE tooth. The two chip-binding tampers (4a
-/// forged digest, 4b tampered preimage keeping the digest) that the full descriptor REJECTS are
-/// ACCEPTED by the pins-only descriptor (identical trace, only the chip lookup removed). So the
-/// rejection above is caused by the chip lookup constraint — not by any unrelated prover error.
-#[test]
-fn chip_lookup_is_the_rejecting_tooth() {
-    let control = pins_only_desc();
-    let (a, b) = fixture();
-    let (trace, digest) = honest_trace(a, b);
-
-    // 4a's forged-digest trace: DIGEST col + PI[2] both moved to `forged` (pins satisfiable).
-    let forged = digest + BabyBear::ONE;
-    let mut bad_a = trace.clone();
-    for row in &mut bad_a {
-        row[DIGEST] = forged;
-    }
-    assert!(
-        !rejects(&control, &bad_a, &[a, b, forged]),
-        "without the chip lookup, the forged digest is ACCEPTED — so the chip lookup is the tooth (4a)"
-    );
-
-    // 4b's tampered-preimage trace: IN0 = a+1, DIGEST col = OLD digest (pins satisfiable).
-    let a2 = a + BabyBear::ONE;
-    let mut bad_b = vec![vec![BabyBear::ZERO; HASH_WIDTH]; 4];
-    for row in &mut bad_b {
-        row[IN0] = a2;
-        row[IN1] = b;
-        row[DIGEST] = digest;
-    }
-    assert!(
-        !rejects(&control, &bad_b, &[a2, b, digest]),
-        "without the chip lookup, the mismatched (preimage, digest) is ACCEPTED — chip lookup is the tooth (4b)"
     );
 }

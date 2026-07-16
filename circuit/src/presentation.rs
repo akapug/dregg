@@ -24,7 +24,7 @@ use crate::dsl::fold::{self, FoldAir, FoldWitness, RemovedFact};
 use crate::field::BabyBear;
 use crate::ivc::{FoldDelta, IvcPresentationProof, prove_ivc};
 use crate::merkle_air::{MerkleAir, MerkleLevelWitness, MerkleWitness};
-use crate::multi_step_air;
+use crate::multi_step_witness;
 use crate::poseidon2::hash_fact;
 
 use crate::descriptor_by_name::descriptor_by_name;
@@ -794,7 +794,7 @@ pub fn prove_authorization(
     request_hash: BabyBear,
     derivation_steps: Vec<DerivationWitness>,
 ) -> Option<AuthorizationProof> {
-    let witness = multi_step_air::build_multi_step_witness(
+    let witness = multi_step_witness::build_multi_step_witness(
         initial_state_root,
         request_hash,
         derivation_steps,
@@ -804,7 +804,7 @@ pub fn prove_authorization(
     let num_steps = witness.steps.len();
     let final_accumulated_hash = witness.final_accumulated_hash();
 
-    let proof = multi_step_air::prove_authorization(witness)?;
+    let proof = multi_step_witness::prove_authorization(witness)?;
 
     Some(AuthorizationProof {
         proof,

@@ -11,10 +11,10 @@
 //!     final_accumulated_hash = acc_last               -- MS3, a last-row `pi_binding`
 //!
 //! The chaining semantics are the authoritative producer
-//! (`circuit/src/multi_step_air.rs::MultiStepWitness::compute_accumulated_hashes` +
+//! (`circuit/src/multi_step_witness.rs::MultiStepWitness::compute_accumulated_hashes` +
 //! `circuit/src/dsl/derivation.rs::generate_multi_step_trace_dsl`). ⚠ In the DEPLOYED tree those
 //! chain columns are witness-computed but ENFORCED BY NOTHING (`MultiStepStarkAir::eval_constraints`
-//! returns `ZERO`, `boundary_constraints` returns `[]`, `multi_step_air.rs:195-211`); this emitted
+//! returns `ZERO`, `boundary_constraints` returns `[]`, `multi_step_witness.rs:195-211`); this emitted
 //! descriptor is the ENFORCED assurance twin (the `AccumulatorOpenEmit` posture).
 //!
 //! This test embeds the EXACT Lean-pinned string ([`GOLDEN_JSON`]) and:

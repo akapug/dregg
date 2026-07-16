@@ -27,16 +27,16 @@
 //! 8. `double_mint_rejected` — the same portable proof cannot mint twice on
 //!    the destination (BridgedNullifierSet replay defense).
 //!
-//! Full-fidelity AIR-level binding tests (using `bridge_action_air`):
-//! 9.  `bridge_action_air_wrong_amount_rejected` — proves that the high u64
+//! Full-fidelity AIR-level binding tests (using `bridge_action_witness`):
+//! 9.  `bridge_action_witness_wrong_amount_rejected` — proves that the high u64
 //!     bits of amount are bound (closes the 30-bit truncation gap from
 //!     CAVEAT-LAYER-COVERAGE.md §6.5).
-//! 10. `bridge_action_air_wrong_recipient_rejected` — proves full 32-byte
+//! 10. `bridge_action_witness_wrong_recipient_rejected` — proves full 32-byte
 //!     recipient (destination commitment) binding (closes the audit gap that
 //!     the recipient was previously never threaded into any AIR).
-//! 11. `bridge_action_air_wrong_nullifier_rejected` — full 32-byte nullifier
+//! 11. `bridge_action_witness_wrong_nullifier_rejected` — full 32-byte nullifier
 //!     binding (8 limbs, 248 bits of binding strength).
-//! 12. `bridge_action_air_wrong_destination_federation_rejected` — full
+//! 12. `bridge_action_witness_wrong_destination_federation_rejected` — full
 //!     32-byte destination federation binding.
 
 use dregg_cell::note::{NoteCommitment, Nullifier};
@@ -516,7 +516,7 @@ fn double_mint_rejected() {
 // =============================================================================
 // Full-fidelity bridge-action AIR tests
 //
-// These tests exercise `dregg_circuit::bridge_action_air`, the sibling AIR
+// These tests exercise `dregg_circuit::bridge_action_witness`, the sibling AIR
 // that binds the bridge action's parameters at full byte/bit fidelity:
 //   - nullifier: 8 BabyBear limbs (~248 bits)
 //   - recipient (destination_commitment): 8 BabyBear limbs (~248 bits)
@@ -529,7 +529,7 @@ fn double_mint_rejected() {
 //     lived in executor comments, not the circuit)
 // =============================================================================
 
-use dregg_circuit::bridge_action_air::{
+use dregg_circuit::bridge_action_witness::{
     BridgeActionWitness, prove_bridge_action, verify_bridge_action,
 };
 
@@ -545,7 +545,7 @@ fn make_action_witness() -> BridgeActionWitness {
 }
 
 #[test]
-fn bridge_action_air_happy_path() {
+fn bridge_action_witness_happy_path() {
     let w = make_action_witness();
     let proof = prove_bridge_action(&w);
     let result = verify_bridge_action(
@@ -562,7 +562,7 @@ fn bridge_action_air_happy_path() {
 }
 
 #[test]
-fn bridge_action_air_wrong_amount_rejected() {
+fn bridge_action_witness_wrong_amount_rejected() {
     // Regression test for the 30-bit truncation gap. A prover commits to
     // amount = (1<<33) | 0xDEAD_BEEF (high bits set). A verifier passing
     // only the low 30 bits MUST reject.
@@ -583,7 +583,7 @@ fn bridge_action_air_wrong_amount_rejected() {
 }
 
 #[test]
-fn bridge_action_air_wrong_recipient_rejected() {
+fn bridge_action_witness_wrong_recipient_rejected() {
     // The recipient (destination_commitment) is the new note commitment the
     // bridge mints on the destination. A prover cannot mint to one
     // commitment while claiming a different one.
@@ -605,7 +605,7 @@ fn bridge_action_air_wrong_recipient_rejected() {
 }
 
 #[test]
-fn bridge_action_air_wrong_nullifier_rejected() {
+fn bridge_action_witness_wrong_nullifier_rejected() {
     let w = make_action_witness();
     let proof = prove_bridge_action(&w);
     let mut wrong_nullifier = w.nullifier;
@@ -626,7 +626,7 @@ fn bridge_action_air_wrong_nullifier_rejected() {
 }
 
 #[test]
-fn bridge_action_air_wrong_destination_federation_rejected() {
+fn bridge_action_witness_wrong_destination_federation_rejected() {
     let w = make_action_witness();
     let proof = prove_bridge_action(&w);
     let result = verify_bridge_action(
@@ -643,7 +643,7 @@ fn bridge_action_air_wrong_destination_federation_rejected() {
 }
 
 #[test]
-fn bridge_action_air_double_mint_replay_handled_by_executor_layer() {
+fn bridge_action_witness_double_mint_replay_handled_by_executor_layer() {
     // The bridge-action AIR is binding-only and does NOT enforce single-use.
     // A second verification of the same proof for the same (nullifier,
     // recipient, destination, amount) tuple WILL succeed at the AIR level.
@@ -689,7 +689,7 @@ fn bridge_action_air_double_mint_replay_handled_by_executor_layer() {
 }
 
 #[test]
-fn bridge_action_air_max_amount_roundtrip() {
+fn bridge_action_witness_max_amount_roundtrip() {
     // u64::MAX must round-trip (validates the high/low 32-bit split).
     let mut w = make_action_witness();
     w.amount = u64::MAX;
@@ -718,7 +718,7 @@ fn bridge_action_air_max_amount_roundtrip() {
 }
 
 #[test]
-fn bridge_action_air_proof_tamper_rejected() {
+fn bridge_action_witness_proof_tamper_rejected() {
     let w = make_action_witness();
     let mut proof = prove_bridge_action(&w);
     proof.trace_commitment[0] ^= 0xFF;
@@ -736,11 +736,11 @@ fn bridge_action_air_proof_tamper_rejected() {
 }
 
 #[test]
-fn bridge_action_air_paired_with_note_spending_in_four_phase_flow() {
+fn bridge_action_witness_paired_with_note_spending_in_four_phase_flow() {
     // End-to-end shape: the same bridge mint carries TWO STARK proofs —
     // (1) the note_spending proof (existing; proves knowledge of spending
     //     key + Merkle membership), and
-    // (2) the bridge_action_air proof (this lane; binds the action's typed
+    // (2) the bridge_action_witness proof (this lane; binds the action's typed
     //     parameters at full fidelity).
     //
     // This test demonstrates that the two proofs share a common parameter

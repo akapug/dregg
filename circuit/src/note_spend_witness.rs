@@ -5,7 +5,7 @@
 //! ## What this closes (the Gate-1.5 pattern for the note-spend family)
 //!
 //! The stark-kill migration flips note-spend consumers off the hand DSL STARK
-//! ([`crate::dsl::note_spending::prove_note_spend_dsl`], the v1 `CircuitDescriptor`
+//! ([`crate::dsl::note_spending::note_spending_dsl_circuit`], the v1 `CircuitDescriptor`
 //! `dregg-note-spending-dsl-v3`, width 62, 6 PIs) onto the IR-v2 descriptor prover
 //! ([`crate::descriptor_ir2::prove_vm_descriptor2`]). The IR-v2 descriptor's trace layout is NOT
 //! the hand DSL circuit's layout (it widens to 149 cols: the 62 source columns + the 3 mint-hash
@@ -60,7 +60,7 @@ use crate::dsl::note_spending::{
 };
 use crate::field::BabyBear;
 use crate::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
-use crate::note_spending_air::{
+use crate::note_spending_witness::{
     MIN_MERKLE_DEPTH, NOTE_SPENDING_WIDTH, NoteSpendingWitness, col, pi,
 };
 use crate::poseidon2::hash_fact;
@@ -386,8 +386,9 @@ pub fn note_spend_leaf_descriptor() -> Result<EffectVmDescriptor2, String> {
 }
 
 /// The mint identity from a 6-slot note-spend PI vector — [`note_spend_mint_hash_felt`] over the PI
-/// slots. This is the FELT-DOMAIN production commitment the executor's `verify_note_spend_dsl_full`
-/// binds to; the witness reproduces it byte-for-byte as the appended 7th PI.
+/// slots. This is the FELT-DOMAIN production commitment the executor's
+/// `verify_note_spend_descriptor2` binds to; the witness reproduces it byte-for-byte as the
+/// appended 7th PI.
 fn mint_hash_from_pis(pis: &[BabyBear]) -> BabyBear {
     note_spend_mint_hash_felt(
         pis[pi::NULLIFIER],
@@ -413,7 +414,7 @@ pub fn note_spend_leaf_public_inputs(witness: &NoteSpendingWitness) -> Vec<BabyB
 /// `[nullifier, merkle_root, value_lo, asset_type, destination_federation, value_hi, mint_hash]` for
 /// the emitted [`note_spend_leaf_descriptor`].
 ///
-/// `witness` is the SAME [`NoteSpendingWitness`] the off-AIR `prove_note_spend_dsl` consumes
+/// `witness` is the SAME [`NoteSpendingWitness`] the off-AIR `note_spending_dsl_circuit` consumes
 /// (spending key, 28-limb commitment preimage, Merkle path). The Merkle depth must be
 /// ≥ [`MIN_MERKLE_DEPTH`], the sibling/position lists must agree in length, and every position must
 /// be `< 4`. The source trace is extended with the 3 mint columns on row 0 (Merkle/padding rows stay
@@ -471,7 +472,7 @@ mod tests {
         MemBoundaryWitness, check_descriptor2_wellformed, parse_vm_descriptor2,
         prove_vm_descriptor2, verify_vm_descriptor2,
     };
-    use crate::note_spending_air::{merkle_col, test_spending_key};
+    use crate::note_spending_witness::{merkle_col, test_spending_key};
     use crate::poseidon2::hash_many;
     use crate::refusal::{Outcome, classify};
     use std::panic::AssertUnwindSafe;

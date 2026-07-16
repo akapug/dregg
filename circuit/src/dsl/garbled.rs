@@ -426,8 +426,11 @@ pub fn generate_extended_garbled_trace(
     // Public inputs. The DSL garbled AIR binds the FIRST 4 felts of each 8-felt WideHash in-circuit
     // (it reuses the deprecated GarbledEvaluationAir column layout, which keeps 4-felt commitment /
     // output-label columns — see `col::CIRCUIT_COMMITMENT` / `col::OUTPUT_LABEL_HASH`). The full
-    // 8-felt (~124-bit) binding is enforced by the struct-level WideHash equality in
-    // `verify_garbled_evaluation_dsl`. So PI = 4 (commitment) + 4 (output-label) = `public_input_count`.
+    // 8-felt (~124-bit) binding was to be enforced by a struct-level WideHash equality in a
+    // `verify_garbled_evaluation_dsl` that WAS NEVER WRITTEN: no garbled verifier exists in the
+    // tree, and `garbled_dsl_circuit()` has no live consumer. Only the first 4 felts (~62 bits)
+    // of each WideHash are bound, in-circuit. Do not wire this path until that verifier exists.
+    // So PI = 4 (commitment) + 4 (output-label) = `public_input_count`.
     let mut public_inputs = Vec::with_capacity(8);
     for &elem in &circuit_commitment.as_slice()[..4] {
         public_inputs.push(elem);

@@ -733,7 +733,7 @@ pub const OWNER_CELL_ID_LEN: usize = 4;
 // absorbed into `effects_hash`. But that param was NOT cross-bound to the
 // proof that actually enforces the nullifier against the spent note's
 // preimage — the `SCHEMA_NOTE_SPEND` binding proof (`effect_action_air`,
-// `fields[0]` = the 32-byte nullifier) and `note_spending_air` (which
+// `fields[0]` = the 32-byte nullifier) and `note_spending_witness` (which
 // derives the nullifier from the preimage). So a malicious executor could
 // prove nullifier N via the spending/binding proof yet feed a DIFFERENT M
 // into the EffectVM, and nothing rejected the mismatch.
@@ -750,7 +750,7 @@ pub const OWNER_CELL_ID_LEN: usize = 4;
 //
 // Single felt (one slot, not 8): matches the in-trace `param0` width the
 // AIR already pins. The full 256-bit binding of the nullifier lives in the
-// SCHEMA_NOTE_SPEND binding proof (fields[0], 8 limbs) + note_spending_air;
+// SCHEMA_NOTE_SPEND binding proof (fields[0], 8 limbs) + note_spending_witness;
 // this slot is the weld that forbids the EffectVM from spending a different
 // nullifier than the one the binding proof certified. Mirrors EMIT_EVENT's
 // "first row's value, shared across all matching rows" single-slot shape:

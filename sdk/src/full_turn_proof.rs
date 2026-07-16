@@ -62,7 +62,7 @@ use dregg_circuit::field::BabyBear;
 use dregg_circuit::merkle_air::{
     MembershipP3Proof, membership_public_inputs, prove_membership_p3, verify_membership_p3,
 };
-use dregg_circuit::multi_step_air::ALLOW_PREDICATE;
+use dregg_circuit::multi_step_witness::ALLOW_PREDICATE;
 use dregg_circuit::poseidon2::hash_fact;
 use dregg_dsl_runtime::composition::{AttachedSubProof, ComposedProof, compose_aggregate};
 use dregg_dsl_runtime::{CircuitDescriptor, ComposedCircuitDescriptor};

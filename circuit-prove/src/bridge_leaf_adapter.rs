@@ -4,7 +4,7 @@
 //! ## What this closes
 //!
 //! Today a bridge mint's foreign note-spend binding is a bespoke
-//! [`dregg_circuit::bridge_action_air::BridgeActionAir`] STARK, verified OFF-AIR
+//! [`dregg_circuit::bridge_action_witness::BridgeActionAir`] STARK, verified OFF-AIR
 //! by [`turn::executor::apply::apply_bridge_mint`] (it calls
 //! `verify_bridge_action` and compares the typed limbs). A re-executing validator
 //! runs that off-AIR verify, but a PURE LIGHT CLIENT (one that only folds the
@@ -25,7 +25,7 @@
 //!
 //! ## The constraint mapping (`BridgeActionAir` → `VmConstraint2`)
 //!
-//! The standalone AIR (`circuit/src/bridge_action_air.rs`) has exactly two
+//! The standalone AIR (`circuit/src/bridge_action_witness.rs`) has exactly two
 //! constraint families, both of which have an EXACT, faithful IR-v2 carrier — no
 //! narrowing, no refusal:
 //!
@@ -84,7 +84,7 @@
 //!    `verify_bridge_action` remains the deployed enforcer; this leaf is its
 //!    light-client-witnessable shadow.
 
-use dregg_circuit::bridge_action_air::{
+use dregg_circuit::bridge_action_witness::{
     BRIDGE_ACTION_PI_COUNT, BRIDGE_ACTION_WIDTH, BridgeActionAir, BridgeActionWitness,
 };
 use dregg_circuit::descriptor_ir2::{
@@ -141,7 +141,7 @@ pub fn bridge_action_to_descriptor2() -> Result<EffectVmDescriptor2, String> {
     }
 
     Ok(EffectVmDescriptor2 {
-        name: "bridge-action-leaf::bridge_action_air_v1".to_string(),
+        name: "bridge-action-leaf::bridge_action_witness_v1".to_string(),
         trace_width: BRIDGE_ACTION_WIDTH,
         public_input_count: BRIDGE_ACTION_PI_COUNT,
         tables: vec![],
@@ -271,7 +271,7 @@ mod tests {
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
     use dregg_circuit::refusal::must_refuse;
 
-    /// A typed bridge-action backing (the same shape `bridge_action_air`'s tests
+    /// A typed bridge-action backing (the same shape `bridge_action_witness`'s tests
     /// use): distinct 32-byte nullifier/recipient/dest_federation and a full
     /// 64-bit amount above 2^32 (exercising the high limb).
     fn make_witness() -> BridgeActionWitness {

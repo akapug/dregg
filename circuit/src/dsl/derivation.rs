@@ -992,7 +992,7 @@ pub mod multi_col {
 /// The resulting trace can be proved with the multi-step STARK AIR which
 /// internally delegates per-row constraint checking to the DSL evaluator.
 pub fn generate_multi_step_trace_dsl(
-    witness: &crate::multi_step_air::MultiStepWitness,
+    witness: &crate::multi_step_witness::MultiStepWitness,
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let num_active = witness.steps.len();
     let num_rows = num_active.next_power_of_two().max(2);
@@ -1033,7 +1033,7 @@ pub fn generate_multi_step_trace_dsl(
         }
     }
 
-    // Public inputs (same as multi_step_air)
+    // Public inputs (same as multi_step_witness)
     let conclusion = witness.conclusion();
     let final_acc = witness.final_accumulated_hash();
     let public_inputs = vec![

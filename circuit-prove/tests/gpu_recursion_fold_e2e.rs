@@ -1,6 +1,6 @@
 //! THE FOLD, END-TO-END ON GPU: a REAL recursion layer (the in-circuit STARK
-//! verifier over a `P3MerklePoseidon2Air` inner proof — the canonical recursion
-//! leaf the whole-chain fold wraps) PROVED under the GPU fold config
+//! verifier over the Lean-emitted Merkle-membership IR2 batch — a real
+//! descriptor leaf of the same shape the whole-chain fold wraps) PROVED under the GPU fold config
 //! (`GpuDreggRecursionConfig`: `GpuDft` + `GpuBabyBearMmcs` behind the two
 //! `TwoAdicFriPcs` seams), and shown BYTE-IDENTICAL to the CPU fold path.
 //!
@@ -8,8 +8,8 @@
 //! (`gpu_babybear_merkle_e2e.rs` measured the Merkle+DFT COMMIT stages
 //! byte-identical; this measures the WHOLE fold layer end-to-end):
 //!
-//! 1. mint a real inner uni-STARK proof (`P3MerklePoseidon2Air`, degree-7, the
-//!    real recursion leaf shape) under the recursion FRI engine;
+//! 1. mint a real multi-table IR2 proof from the byte-pinned descriptor emitted
+//!    by `MerkleMembership4aryEmit.lean` under the recursion FRI engine;
 //! 2. wrap it in the recursion verifier circuit and prove that layer TWICE:
 //!    once via the recursion library's `build_and_prove_next_layer` (the REAL
 //!    CPU fold path), once via `prove_recursion_layer_gpu` (GPU fold config);
@@ -36,18 +36,23 @@
 
 use std::time::Instant;
 
+use dregg_circuit::descriptor_ir2::{
+    Ir2Air, MemBoundaryWitness, UMemBoundaryWitness, ir2_airs_and_common_for_config,
+    prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
+};
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::plonky3_prover::{P3MerklePoseidon2Air, generate_sound_merkle_trace, to_p3};
+use dregg_circuit::membership_descriptor_4ary::{
+    membership_descriptor_of_depth_4ary, membership_witness_4ary,
+};
 use dregg_circuit::poseidon2_air::create_poseidon2_test_witness;
 use dregg_circuit_prove::gpu_backend::{
     GpuDft, create_gpu_recursion_config, gpu_recursion_proof_to_cpu, prove_recursion_layer_cpu,
     prove_recursion_layer_gpu, verify_gpu_recursion_layer,
 };
 use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
-    DreggRecursionConfig, create_recursion_backend, create_recursion_config, prove_for_recursion,
-    verify_for_recursion, verify_recursive_batch_proof,
+    DreggRecursionConfig, create_recursion_backend, create_recursion_config,
+    verify_recursive_batch_proof,
 };
-use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::PrimeCharacteristicRing;
 use p3_recursion::{BatchOnly, ProveNextLayerParams, RecursionInput, build_and_prove_next_layer};
 
@@ -69,24 +74,38 @@ fn real_fold_layer_byte_identical_on_gpu_and_measured() {
     );
     let cpu_config = create_recursion_config();
 
-    // ---- 1. a REAL inner proof: P3MerklePoseidon2Air over a sound Merkle trace
+    // ---- 1. a REAL emitted-descriptor IR2 proof over a sound Merkle trace
     let leaf = BabyBear::new(42424242);
     let witness = create_poseidon2_test_witness(leaf, 4);
     let siblings: Vec<[BabyBear; 3]> = witness.levels.iter().map(|l| l.siblings).collect();
     let positions: Vec<u8> = witness.levels.iter().map(|l| l.position).collect();
-    let (trace, public_inputs) = generate_sound_merkle_trace(leaf, &siblings, &positions);
-    let inner_proof = prove_for_recursion(&trace, &public_inputs);
-    verify_for_recursion(&inner_proof, &public_inputs).expect("inner proof verifies");
+    let desc = membership_descriptor_of_depth_4ary(siblings.len());
+    let (trace, public_inputs) =
+        membership_witness_4ary(leaf, &siblings, &positions).expect("membership witness builds");
+    let inner_proof = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+        &desc,
+        &trace,
+        &public_inputs,
+        &MemBoundaryWitness::default(),
+        &[],
+        &UMemBoundaryWitness::default(),
+        &cpu_config,
+    )
+    .expect("emitted membership IR2 proof proves");
+    verify_vm_descriptor2_with_config(&desc, &inner_proof, &public_inputs, &cpu_config)
+        .expect("emitted membership IR2 proof verifies");
 
     // The wrap input — ONE object consumed by BOTH the CPU and GPU layer paths.
-    let air = P3MerklePoseidon2Air;
-    let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-    let input = RecursionInput::UniStark {
-        proof: &inner_proof,
-        air: &air,
-        public_inputs: p3_public,
-        preprocessed_commit: None,
-    };
+    let (airs, table_public_inputs, common) =
+        ir2_airs_and_common_for_config(&desc, &inner_proof, &public_inputs, &cpu_config)
+            .expect("IR2 recursion verifier inputs build");
+    let input: RecursionInput<'_, DreggRecursionConfig, Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof: &inner_proof,
+            common_data: &common,
+            table_public_inputs,
+        };
 
     // ---- 2a. CPU (the REAL fold path): recursion library build+prove --------
     let backend = create_recursion_backend();
@@ -205,7 +224,9 @@ fn real_fold_layer_byte_identical_on_gpu_and_measured() {
     // ---- 5. MEASURE (best-of-3, parity re-asserted each GPU prove) ----------
     let gpu_total = gpu_prep + gpu_prove;
     let cpu_total = cpu_prep + cpu_prove;
-    println!("\n=== REAL FOLD LAYER, END-TO-END ON GPU (P3MerklePoseidon2Air wrap, best-of-3) ===");
+    println!(
+        "\n=== REAL FOLD LAYER, END-TO-END ON GPU (emitted membership IR2 wrap, best-of-3) ==="
+    );
     println!(
         "adapter                    : {}",
         dregg_circuit_prove::gpu_backend::GpuDft::default()
@@ -267,26 +288,40 @@ fn recursion_tower_large_regime_byte_identical_on_gpu() {
     let backend = create_recursion_backend();
     let params = ProveNextLayerParams::default();
 
-    // ---- leaf uni-STARK (P3MerklePoseidon2Air) ------------------------------
+    // ---- Lean-emitted membership IR2 leaf -----------------------------------
     let leaf = BabyBear::new(42424242);
     let witness = create_poseidon2_test_witness(leaf, 4);
     let siblings: Vec<[BabyBear; 3]> = witness.levels.iter().map(|l| l.siblings).collect();
     let positions: Vec<u8> = witness.levels.iter().map(|l| l.position).collect();
-    let (trace, public_inputs) = generate_sound_merkle_trace(leaf, &siblings, &positions);
-    let inner_proof = prove_for_recursion(&trace, &public_inputs);
-    verify_for_recursion(&inner_proof, &public_inputs).expect("inner proof verifies");
-    let air = P3MerklePoseidon2Air;
-    let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+    let desc = membership_descriptor_of_depth_4ary(siblings.len());
+    let (trace, public_inputs) =
+        membership_witness_4ary(leaf, &siblings, &positions).expect("membership witness builds");
+    let inner_proof = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+        &desc,
+        &trace,
+        &public_inputs,
+        &MemBoundaryWitness::default(),
+        &[],
+        &UMemBoundaryWitness::default(),
+        &cpu_config,
+    )
+    .expect("emitted membership IR2 proof proves");
+    verify_vm_descriptor2_with_config(&desc, &inner_proof, &public_inputs, &cpu_config)
+        .expect("emitted membership IR2 proof verifies");
+    let (airs, table_public_inputs, common) =
+        ir2_airs_and_common_for_config(&desc, &inner_proof, &public_inputs, &cpu_config)
+            .expect("IR2 recursion verifier inputs build");
 
     // ---- grow the tower: leaf -> L1 -> L2 (each verifies the previous) -------
     let t_tower = Instant::now();
-    let l1_input = RecursionInput::UniStark {
-        proof: &inner_proof,
-        air: &air,
-        public_inputs: p3_public,
-        preprocessed_commit: None,
-    };
-    let l1 = build_and_prove_next_layer::<DreggRecursionConfig, P3MerklePoseidon2Air, _, D>(
+    let l1_input: RecursionInput<'_, DreggRecursionConfig, Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof: &inner_proof,
+            common_data: &common,
+            table_public_inputs,
+        };
+    let l1 = build_and_prove_next_layer::<DreggRecursionConfig, Ir2Air, _, D>(
         &l1_input,
         &cpu_config,
         &backend,

@@ -22,7 +22,7 @@
 //! Real recursion (minutes), so both poles are `#[ignore]`. Run with:
 //!   cargo test -p dregg-circuit-prove --test bridge_binding_mechanism -- --ignored --nocapture
 
-use dregg_circuit::bridge_action_air::BridgeActionWitness;
+use dregg_circuit::bridge_action_witness::BridgeActionWitness;
 use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim;
 use dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config;

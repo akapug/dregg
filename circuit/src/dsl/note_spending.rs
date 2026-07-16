@@ -2,7 +2,7 @@
 //!
 //! This module provides production prove/verify functions for the note spending AIR
 //! using the DSL `CircuitDescriptor` + `DslCircuit` infrastructure. It replaces the
-//! hand-written `NoteSpendingAir` from `circuit/src/note_spending_air.rs`.
+//! hand-written `NoteSpendingAir` from `circuit/src/note_spending_witness.rs`.
 //!
 //! # Completeness vs. hand-written AIR
 //!
@@ -20,7 +20,7 @@
 //! [nullifier, merkle_root, value, asset_type]
 
 use crate::field::{BABYBEAR_P, BabyBear};
-use crate::note_spending_air::{
+use crate::note_spending_witness::{
     MIN_MERKLE_DEPTH, NOTE_SPENDING_WIDTH, NoteSpendingWitness, col, commitment_chain, limb_col,
     merkle_col, pi,
 };
@@ -39,11 +39,12 @@ pub const NULLIFIER_INTERMEDIATE: usize = 17;
 // Re-export witness types from circuit crate
 // ============================================================================
 
-// Re-exports the legacy hand-written AIR alongside the witness/helper types so the
-// DSL module stays a drop-in replacement surface; `NoteSpendingAir` itself is
-// deprecated in favor of `prove_note_spend_dsl`/`verify_note_spend_dsl`.
+// Re-exports the legacy witness/helper types so the DSL module stays a drop-in
+// replacement surface. `NoteSpendingAir` is a misnomer kept for compatibility:
+// it holds no constraints, and is deprecated in favor of
+// `note_spending_dsl_circuit()` (constraints: `note_spending_circuit_descriptor`).
 #[allow(deprecated)]
-pub use crate::note_spending_air::{
+pub use crate::note_spending_witness::{
     NoteSpendingAir, NoteSpendingWitness as NoteSpendingWitnessType, create_test_witness,
     key_to_field_elements, test_spending_key,
 };
@@ -97,7 +98,7 @@ pub fn note_spending_circuit_descriptor() -> CircuitDescriptor {
     // `hash_fact` sponge whose output is pinned to `col::COMMITMENT`. Each step
     // is a `ConstraintExpr::Hash` (= `hash_fact(predicate, terms)`), gated to the
     // commitment row. The chain layout exactly mirrors
-    // `note_spending_air::commitment_chain`.
+    // `note_spending_witness::commitment_chain`.
     //
     // Limb columns and chain intermediates live in `limb_col` (cols 20..55),
     // present on the commitment row only (Merkle/padding rows zero them).

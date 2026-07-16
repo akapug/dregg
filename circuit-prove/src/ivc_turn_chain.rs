@@ -3127,7 +3127,7 @@ fn prove_chain_core_rotated(
             // published mint identity), (3) re-prove the REAL foreign note-spend STARK as the
             // G2 backing leaf (`prove_note_spend_leaf_with_claim` — spending-key knowledge +
             // Merkle membership + full-width commitment, with the mint identity recomputed
-            // IN-AIR at lane 6; the binding-only `bridge_action_air` was REFUSED as backing),
+            // IN-AIR at lane 6; the binding-only `bridge_action_witness` was REFUSED as backing),
             // (4) fold under the mint-hash binding node — the in-circuit `connect` makes a
             // published mint identity no verifying note-spend backs UNSAT.
             Some(CarrierWitness::Bridge(bundle)) => {

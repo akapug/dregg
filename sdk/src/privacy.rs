@@ -25,7 +25,7 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::dsl::dsl_p3_air::DslP3Proof;
 use dregg_circuit::dsl::revocation::{prove_non_revocation_p3, verify_non_revocation_p3};
 use dregg_circuit::field::BABYBEAR_P;
-use dregg_circuit::note_spending_air::{
+use dregg_circuit::note_spending_witness::{
     NOTE_SPENDING_WIDTH, NoteSpendingWitness, key_to_field_elements, pi as note_spend_pi,
 };
 use dregg_circuit::poseidon2;

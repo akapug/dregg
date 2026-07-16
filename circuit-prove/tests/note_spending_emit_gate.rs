@@ -35,7 +35,7 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::dsl::note_spending::generate_note_spending_trace;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::VmConstraint;
-use dregg_circuit::note_spending_air::{
+use dregg_circuit::note_spending_witness::{
     NOTE_SPENDING_WIDTH, NoteSpendingWitness, merkle_col, pi, test_spending_key,
 };
 use dregg_circuit::poseidon2::{hash_fact, hash_many};

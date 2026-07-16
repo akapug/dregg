@@ -559,7 +559,7 @@ mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
     use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
-    use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
+    use dregg_circuit::note_spending_witness::{NoteSpendingWitness, test_spending_key};
     use dregg_circuit::poseidon2::hash_many;
     use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 

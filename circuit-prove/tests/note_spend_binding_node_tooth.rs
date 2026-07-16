@@ -23,7 +23,7 @@
 //! STANDS.
 
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
+use dregg_circuit::note_spending_witness::{NoteSpendingWitness, test_spending_key};
 use dregg_circuit::poseidon2::hash_many;
 use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config;

@@ -22,7 +22,7 @@ use dregg_cell::{
 };
 use dregg_circuit::body_membership::BodyFactMerkleProof;
 use dregg_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
-use dregg_circuit::multi_step_air::{self, ALLOW_PREDICATE, build_multi_step_witness};
+use dregg_circuit::multi_step_witness::{self, ALLOW_PREDICATE, build_multi_step_witness};
 use dregg_circuit::poseidon2::{self, hash_fact};
 use dregg_circuit::{
     BabyBear, BodyMembershipProof, MultiStepWitness, NoteSpendingAir, NoteSpendingWitness,
@@ -427,7 +427,8 @@ fn test_full_note_lifecycle() {
     let randomness_bb = bytes_to_babybear(&note.randomness);
 
     // Convert the 256-bit spending key to 8 BabyBear limbs (248 bits of security)
-    let spending_key_limbs = dregg_circuit::note_spending_air::key_to_field_elements(&spending_key);
+    let spending_key_limbs =
+        dregg_circuit::note_spending_witness::key_to_field_elements(&spending_key);
 
     // Compute the circuit-level commitment (this is what the Merkle tree stores)
     let circuit_commitment = poseidon2::hash_many(&[

@@ -1260,7 +1260,7 @@ where
     // verify_stark closure receives the proof's declared values and the AIR
     // boundary constraints enforce they match what the prover committed to in
     // the trace; a mismatch fails the STARK verification. This is enforced in
-    // note_spending_air.rs::boundary_constraints().
+    // note_spending_witness.rs::boundary_constraints().
     verify_stark(
         &proof.nullifier,
         &note_tree_root,
