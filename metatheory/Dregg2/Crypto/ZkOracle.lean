@@ -73,7 +73,20 @@ Legs (2)/(3) are `verify_sound`/decidable discharges; leg (1) is the rung-4 real
 `DecoUnforgeable.deco_attestation_realizes` — the deployed verifier REALIZES the ideal attestation
 functionality, so `authentic` now reads "F_attestation emitted this" rather than "∃ a satisfying trace."
 The whole reduces to the two `extractable` carriers plus the standard §8 floor DECO names (ed25519
-EUF-CMA + HMAC). This is the composition the goal asks for: authentic ∧ well-formed ∧ no-injection. -/
+EUF-CMA + HMAC). This is the composition the goal asks for: authentic ∧ well-formed ∧ no-injection.
+
+⚠ **SCOPE — the cross-leg binding is DEPLOYED but not yet modeled here.** This theorem takes the
+three legs' inputs (`decoStmt`, `body`, `field`) as INDEPENDENT: at these types
+(`PaymentFacts` / `List T` / `List Value`) nothing forces the payment attestation, the parsed body,
+and the injection-checked field to concern ONE response. The DEPLOYED verifier DOES bind them — see
+`zkoracle-prove/src/attestation.rs`: a single `content_commitment` (Poseidon2 sponge over the
+authenticated response body) is recomputed and any disagreeing attestation is refused
+(`ZkOracleError::CrossLegMismatch`), and the injection-checked field is enforced as a COMMITTED
+SUBSTRING of that same authenticated body. So the shipped code is STRICTLY STRONGER than this
+statement. Lifting that binding into `zkOracle_sound` (a shared `contentCommitment` witness the three
+legs each bind to) requires unifying the legs onto a common byte-response substrate — the named
+residual, tracked as the zkOracle cross-leg-binding lane. Until then, read this theorem as three
+sound legs, NOT a proof they are one request. -/
 theorem zkOracle_sound
     {Dg Pd : Type} [KD : Deco.DecoVerifierKernel Dg Pd]
     {T Pc : Type} [KC : Cfg.CfgVerifierKernel T Pc]
