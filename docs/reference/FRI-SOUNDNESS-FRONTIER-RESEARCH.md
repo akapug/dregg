@@ -761,8 +761,79 @@ TR25-169** (Kopparty's faculty page), **BCIKS20** and **Haböck 2022/1216** and 
 
 ---
 
+## 8. ⚑ THE `[Sta25]` DEPENDENCY IS ELIMINABLE FOR FRI — the bits are PARTIALLY EARNED (2026-07-16)
+
+Item 2 of §6 ("re-point the proven citation to BCHKS25") and §3.1's missing BCHKS25 ceiling were
+BLOCKED on the same worry the tree records verbatim: BCSS25's improved `O(n)` bound enters FRI only
+through a WEIGHTED correlated-agreement theorem (its Corollary 4.4) whose proof it defers to
+**`[Sta25, Theorem 22]` — the StarkWare S-two whitepaper, a personal communication we cannot read**.
+`FriLedger.lean` refuses to bank a security number on an unreadable citation, correctly.
+
+**This section retires that block by PROVING the underlying transfer instead of citing it.** The full
+line-by-line derivation, cross-checked against the primary sources, is
+[`BCSS25-COMMIT-DERIVATION.md`](./BCSS25-COMMIT-DERIVATION.md) (codex-drafted, checked here against
+BCSS25 Lemma 3.1 / §3.2 / Thm 4.2 and BCIKS20 §7.1–7.2). The load-bearing half is mechanized in
+`metatheory/Dregg2/Circuit/FriWeightingTransfer.lean` (kernel-clean, `#assert_axioms`-clean).
+
+**The finding (both halves verified independently, by hand-reading the PDFs and by a codex constant
+reconstruction that reproduces BCSS25 Thm 4.2 exactly):**
+
+* **The weighting transfer is `[Sta25]`-free.** BCIKS20 §7.1 derives its weighted curve theorem
+  (Thm 7.2) from the UNWEIGHTED one plus a single structural fact — **co-curvilinearity on a large set
+  `S′`** (the found codewords `v₀…v_l` satisfy `∑ zʲ vⱼ = P_z` for every `z ∈ S′`, its Prop 5.5) — via
+  **Lemmas 7.5/7.6, elementary double-counting** (BCIKS20 §7.2, fully public, mechanized here as
+  `weighting_transfer_double_count` / `weighting_transfer_bound`). BCSS25 §3.2 **Step 4** PROVES exactly
+  that co-curvilinear `S′` with the IMPROVED `O(1)`-`Z`-degree interpolant — making `S′` only larger.
+  So the weighted bound FRI's round analysis consumes is reachable by feeding BCSS25's improved `S′`
+  into BCIKS20's public transfer. The `[Sta25]`-backed **Theorem 4.3** (arbitrary prescribed agreement
+  sets `{A_z}`) is a STRONGER statement the FRI application does **not** need.
+
+* **Scope, audited against over-claiming.** The public route closes for the **denominator-bounded**
+  weights FRI uses (`µ⁽ⁱ⁾` = subtree-acceptance probability, denominator `M = |D⁽⁰⁾|/|D⁽ⁱ⁺¹⁾|` — on the
+  rational grid `1/(M|D|)ℤ`, so Lemma 7.6's rounding removes the loss) — **NOT** for BCSS25 Cor 4.4 in
+  its full stated generality (arbitrary real weights, no grid, where Thm 4.3 is genuinely doing extra
+  work). The honest claim is *"`[Sta25]` is eliminable for the FRI application"*, not *"the public
+  ingredients reproduce Corollary 4.4"*. `FriWeightingTransfer` mechanizes the general (lossy) Lemma
+  7.5; the denominator-rounding to zero loss is the FRI-specific step (`CoCurvilinearity`, the named
+  residual).
+
+* **The improved `ε_C` is genuinely LINEAR in `|D⁽⁰⁾|`.** The constant reconstruction pins it to
+  `|S| > d·( 2(m+½)⁵/(3ρ^{3/2})·n + (m+½)/√ρ·(W·n+1) )` — reproducing Thm 4.2 at the unweighted target
+  `W=1, T=d(γn+1)`, so all factors `2, 3, d, ρ` are checked. The former-quadratic term
+  `(m+½)⁷|D⁰|²/(2ρ^{3/2}|F|)` becomes linear; the weighting term was already linear.
+
+* **⚑ THE BITS, HONESTLY — `+1.7 … +7`, NOT `+17 … +31`.** §3.1 estimated the win at `~log₂|D⁽⁰⁾|`.
+  Recomputed with the linear `ε_C`, composed through ethSTARK eq. (20), optimized over `m ≥ 3`:
+
+  | config | old (BCIKS20, optimized) | new (public linear `ε_C`) | gain |
+  |---|---:|---:|---:|
+  | wrap `|D⁰|=2^19`, `ρ=1/64`, arity 8 | 63.98 | **71.00** | **+7.02** |
+  | leaf `|D⁰|=2^12`, `ρ=1/64`, arity 2 | 70.11 | **71.76** | **+1.66** |
+  | outer `|D⁰|=2^18`, `ρ=1/8`, arity 2 | 65.91 | **71.44** | **+5.53** |
+
+  Two reasons the raw `~+21`-bit leading-term improvement collapses to `~+7` after composition: (i)
+  once `ε_C` clears the query column, the `min` in eq. (20) is set by `ζ − s·log₂ α ≈ 72`, so the
+  composed bits **saturate at the query ceiling** — the commit term is no longer what binds; (ii) the
+  arity-8 fold is a degree-`7` CURVE, and BCSS25's public curve theorem (Thm 4.2) requires the
+  multiplicity parameter `m = 2h` where the binary line (Thm 1.5) allows `m = h`, inflating the
+  `(m+½)⁵` constant. The win is real, robust at low rate, and modest.
+
+**Residual (public, names no personal communication).** Fully closing this needs BCSS25 §3.2's
+improved interpolant bookkeeping mechanized — `D_X, D_Y, D_Z` at `O(1)` `Z`-degree — so Step-4's `S′`
+provably clears Lemma 7.6's `|S′| ≥ (|D⁰|+1)·l`. That is `~15` pages of Guruswami–Sudan analysis over
+`𝔽_q(Z)`, PROVED in BCSS25 §3, unmechanized here. `FriWeightingTransfer.CoCurvilinearity` names it as a
+`Prop` with a concrete falsifier. **The verdict: `61` is not "what we can prove until StarkWare
+publishes [Sta25]"; it is "what we can prove until someone mechanizes BCSS25 §3, all of whose
+ingredients are public" — and the honest new number, once that is done, is `~+7` bits at the deployed
+wrap, capped by the query column, not `+17…+31`.**
+
+---
+
 *Sources fetched in full: Kambiré arXiv:2604.09724; BCHKS ECCC TR25-169; BCIKS20 eprint 2020/654;
 Haböck eprint 2022/1216; BaseFold eprint 2023/1705; DG25b cic.iacr.org 1/4/8; zksecurity (Mohnblatt,
-2025-11-14). Code verified verbatim at plonky3 rev `82cfad73`. Recomputation:
-`scratchpad/eps_c.py`. This document changes no deployed parameter and no Lean; it is the research
-record and the corrections list.*
+2025-11-14). §8 (2026-07-16): BCSS25 = ECCC TR25-169 read in full (Lemma 3.1, §3.2, Thm 4.2/4.3, Cor
+4.4); BCIKS20 §7.1–7.2 + Lemma 8.2 read in full; the weighting transfer (Lemma 7.5) mechanized in
+`Dregg2/Circuit/FriWeightingTransfer.lean`; constant audit in `BCSS25-COMMIT-DERIVATION.md`. Code
+verified verbatim at plonky3 rev `82cfad73`. Recomputation: `scratchpad/eps_c.py`. This document's
+§0–§7 change no deployed parameter and no Lean; §8 adds one Lean module (the `[Sta25]`-free transfer)
+and changes no deployed parameter.*
