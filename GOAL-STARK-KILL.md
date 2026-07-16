@@ -1571,3 +1571,29 @@ happens.)
 schedule (or as a pre-push hook) would close the entire class: no test target could go silent again, and
 every ratchet (law-#1, mock-purge, effect-enum, verify-routing) would actually bite.
 → SURFACED to ember: this is an infra decision (wire a real CI remote vs schedule the persvati sweep).
+
+## ⚑⚑⚑ `d5ec509e8` — THE FLAGSHIP IS PURGED (the worst lie in the codebase is gone)
+`dregg_compress_history` — a LIVE MCP tool — used to gather the real receipt chain, use it only for a COUNT,
+`create_test_chain` a SYNTHETIC one, mock-prove it, and answer `"verification":"valid"` with a fabricated
+proof size. A user asking it to prove their history got "valid" for data it never touched.
+**NOW**: mints the real `FinalizedTurn` at the node commit path via `finalized_turn_from_full_turn` (the
+never-called fn whose docstring said its args are "exactly the turn's execution context the node holds"
+HERE), persists it fail-closed (registry row re-parsed + required EQUAL; host admission re-verifies every
+rebuilt leg before any fold; carrier-witness legs REFUSED at encode; mint failure ⇒ nothing persisted),
+loads the real chain IN ORDER, runs `prove_turn_chain_recursive`, and re-verifies the bytes with
+`verify_whole_chain_proof_bytes` against the recomputed VK fingerprint. **"valid" only after that verify.**
+Real proof size. Fake `initial_root` param deleted. Un-retained turns ⇒ honest fail-closed.
+`dregg_compose_proofs` (valid=true unconditionally, verified NOTHING) RETIRED fail-closed with an honest
+message naming what it used to do.
+Teeth: new e2e test proves a REAL transfer turn, encode→decode→host-admission re-verify, and asserts a
+**forged anchor is REFUSED at mint** (1 passed, 126s). Ratchet: handlers_verify **3 -> 0**.
+HONEST RESIDUAL: live histories may legitimately refuse (`ChainBreak`) — consecutive real turns carry
+different receipt logs while the anchor scheme was fixtured on a shared one. We traded "always lies valid"
+for "proves for real, or refuses honestly"; making live histories fold is a real circuit/Lean anchor-scheme
+decision, NAMED not faked.
+
+### PURGE SCOREBOARD: 5 of 7 surfaces done
+✅ preflight/sovereign WIRED · ✅ genesis history DROPPED · ✅ presentation mock RETIRED (-626) ·
+✅ compress_history WIRED (flagship) · ✅ compose_proofs RETIRED fail-closed
+REMAINING: preflight/{proofs,composition,backends} (WIRE-FEASIBLE) · the ENGINES (ivc.rs 70 +
+constraint_prover 17) — retire last, once nothing rides them.
