@@ -233,6 +233,15 @@ pub struct ReceiptInfo {
     pub executor_signed: bool,
     pub has_witness: bool,
     pub witness_count: usize,
+    /// True when a durable finalized `CommitRecord` exists for this turn
+    /// (the commit log's turn-by-hash index). The receipt itself is an
+    /// IMMUTABLE snapshot signed at commit time — a solo/promoted turn's
+    /// receipt stays `finality: "tentative"` forever, so consensus finality
+    /// is surfaced ALONGSIDE it from the durable store, never by mutating it.
+    pub consensus_final: bool,
+    /// The attested height the turn finalized at (`CommitRecord::height`).
+    /// `None` until the turn is consensus-final.
+    pub attested_height: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1698,6 +1707,7 @@ pub fn router_with_cors(
             get(crate::identity_export::get_identity_export),
         )
         .route("/api/turn/{hash}/proof", get(get_turn_proof))
+        .route("/api/turn/{hash}/status", get(get_turn_status))
         .route("/api/starbridge/receipts", get(get_starbridge_receipts))
         .route("/api/starbridge/events", get(get_starbridge_events))
         .route("/api/starbridge/turns", get(get_starbridge_turns))
@@ -2485,6 +2495,40 @@ async fn get_turn_proof(
     }
 }
 
+/// `GET /api/turn/{hash}/status` — consensus-finality status for one turn,
+/// straight from the DURABLE store (the commit log's turn-by-hash index).
+///
+/// The receipt chain is an immutable tentative-at-commit snapshot: a promoted
+/// turn's receipt reports `finality: "tentative"` forever, and a turn whose
+/// receipt-chain append failed has NO receipt at all even though a durable
+/// `CommitRecord` proves it finalized. This surface answers "did consensus
+/// finalize this turn?" independently of the receipt chain; `receipt_present`
+/// says whether `/api/receipts` also carries it.
+async fn get_turn_status(
+    AxumPath(hash): AxumPath<String>,
+    State(state): State<NodeState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let bytes = hex_decode(&hash).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let turn_hash: [u8; 32] = bytes.try_into().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let s = state.read().await;
+    let commit = s
+        .store
+        .lookup_turn(&turn_hash)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let receipt_present = s
+        .cclerk
+        .receipt_chain()
+        .iter()
+        .any(|r| r.turn_hash == turn_hash);
+    Ok(Json(serde_json::json!({
+        "turn_hash": hex_encode(&turn_hash),
+        "consensus_final": commit.is_some(),
+        "attested_height": commit.as_ref().map(|c| c.height),
+        "receipt_hash": commit.as_ref().map(|c| hex_encode(&c.receipt_hash)),
+        "receipt_present": receipt_present,
+    })))
+}
+
 async fn get_starbridge_receipts(
     Query(params): Query<StarbridgeQuery>,
     State(state): State<NodeState>,
@@ -2518,6 +2562,7 @@ async fn get_starbridge_receipts(
             let turn_hash_hex = hex_encode(&r.turn_hash);
             // Same attached-proof semantics as `receipt_infos_from_chain_with_witnesses`.
             let has_proof = witness_count > 0 || stored_full_turn_proof_exists(&s, &turn_hash_hex);
+            let attested_height = committed_turn_height(&s, &r.turn_hash);
             StarbridgeReceiptInfo {
                 receipt: ReceiptInfo {
                     chain_index: idx as u64,
@@ -2538,6 +2583,8 @@ async fn get_starbridge_receipts(
                     executor_signed: r.executor_signature.is_some(),
                     has_witness: witness_count > 0,
                     witness_count,
+                    consensus_final: attested_height.is_some(),
+                    attested_height,
                 },
                 effects_hash: hex_encode(&r.effects_hash),
                 federation_id: hex_encode(&r.federation_id),
@@ -2560,12 +2607,26 @@ fn stored_full_turn_proof_exists(s: &crate::state::NodeStateInner, turn_hash_hex
     matches!(s.store.get_config(&key), Ok(Some(_)))
 }
 
+/// The attested height of the durable finalized `CommitRecord` for a turn, if
+/// one exists (the commit log's turn-by-hash index). `None` = not (yet)
+/// consensus-final on this node — or a store read error, which is
+/// conservatively reported as not-final (the durable record is the ONLY
+/// evidence of consensus finality this surface will claim).
+fn committed_turn_height(s: &crate::state::NodeStateInner, turn_hash: &[u8; 32]) -> Option<u64> {
+    s.store
+        .lookup_turn(turn_hash)
+        .ok()
+        .flatten()
+        .map(|rec| rec.height)
+}
+
 fn receipt_infos_from_chain(s: &crate::state::NodeStateInner, limit: usize) -> Vec<ReceiptInfo> {
     receipt_infos_from_chain_with_witnesses(
         s.cclerk.receipt_chain(),
         limit,
         |hash| s.witnessed_receipt_count(hash),
         |turn_hash_hex| stored_full_turn_proof_exists(s, turn_hash_hex),
+        |turn_hash| committed_turn_height(s, turn_hash),
     )
 }
 
@@ -2574,6 +2635,7 @@ fn receipt_infos_from_chain_with_witnesses(
     limit: usize,
     witness_count_for: impl Fn(&[u8; 32]) -> usize,
     stored_proof_for: impl Fn(&str) -> bool,
+    attested_height_for: impl Fn(&[u8; 32]) -> Option<u64>,
 ) -> Vec<ReceiptInfo> {
     let chain_len = chain.len();
     chain
@@ -2594,6 +2656,7 @@ fn receipt_infos_from_chain_with_witnesses(
             // node configs that never set an executor signing key, even while
             // the pool was attaching real proofs.
             let has_proof = witness_count > 0 || stored_proof_for(&turn_hash_hex);
+            let attested_height = attested_height_for(&r.turn_hash);
             ReceiptInfo {
                 chain_index: idx as u64,
                 chain_head: idx + 1 == chain_len,
@@ -2613,6 +2676,8 @@ fn receipt_infos_from_chain_with_witnesses(
                 executor_signed: r.executor_signature.is_some(),
                 has_witness: witness_count > 0,
                 witness_count,
+                consensus_final: attested_height.is_some(),
+                attested_height,
             }
         })
         .collect()
@@ -7080,6 +7145,22 @@ impl FaucetRateLimiter {
     }
 }
 
+/// Serializes value-carrying faucet grants from nonce RESERVATION through
+/// blocklace SUBMISSION. The full-mode faucet reserves a consecutive nonce
+/// under the state write lock, but the blocklace submission used to run in a
+/// detached task — two concurrent grants could submit in REVERSED order, and
+/// since full-mode blocklace submission is an ordered FIFO
+/// (`pending_payloads.push_back`, drained in order into round blocks), the
+/// lower nonce finalizing after the higher one wedged the reservation floor
+/// (the executor's exact-nonce gate rejects the out-of-order turn forever).
+/// Acquired BEFORE the state write lock (so mutex order == reservation order)
+/// and held on the SAME request task until the blocklace submit returns —
+/// never awaited while the state lock is held, so no lock-order inversion.
+/// Process-wide rather than per-node (state.rs is owned elsewhere): with
+/// multiple in-process nodes this over-serializes across nodes, which only
+/// costs latency, never ordering.
+static FAUCET_SUBMIT_ORDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// POST /api/faucet — transfer computrons from the faucet cell to a recipient.
 ///
 /// Only enabled when `--enable-faucet` is set. Rate limited TWICE:
@@ -7172,6 +7253,16 @@ async fn post_faucet(
             error: Some("rate limited: 1 request per cell per minute".to_string()),
         }));
     }
+
+    // SUBMISSION ORDER (see `FAUCET_SUBMIT_ORDER`): value-carrying grants
+    // serialize reserve→submit so blocklace submissions land in reservation
+    // order. Zero-amount materialization neither reserves nor submits, so it
+    // skips the queue.
+    let _submit_order = if req.amount > 0 {
+        Some(FAUCET_SUBMIT_ORDER.lock().await)
+    } else {
+        None
+    };
 
     let mut s = state.write().await;
 
@@ -7614,11 +7705,15 @@ async fn post_faucet(
                         .await;
                 });
             }
+            // Blocklace submission runs INLINE on this request task, still
+            // under `_submit_order` — a detached task here let two concurrent
+            // grants submit in reversed reservation order and wedge the
+            // reservation floor (see `FAUCET_SUBMIT_ORDER`). The submit is a
+            // staging push (full mode: `pending_payloads.push_back` + notify;
+            // solo: local block production), NOT finality — the response still
+            // returns before the turn finalizes.
             if let Some(blocklace) = state.blocklace().await {
-                let state_for_blocklace = state.clone();
-                tokio::spawn(async move {
-                    blocklace.submit_turn(&state_for_blocklace, turn_data).await;
-                });
+                blocklace.submit_turn(&state, turn_data).await;
             }
 
             Ok(Json(FaucetResponse {
@@ -9071,7 +9166,7 @@ mod tests {
             });
         }
 
-        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 0, |_| false);
+        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 0, |_| false, |_| None);
         assert_eq!(infos.len(), 3);
         assert_eq!(infos[0].chain_index, 2);
         assert!(infos[0].chain_head);
@@ -9097,12 +9192,12 @@ mod tests {
         }];
 
         // No witness, no stored proof: honestly unproven.
-        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 0, |_| false);
+        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 0, |_| false, |_| None);
         assert!(!infos[0].has_proof);
         assert!(!infos[0].executor_signed);
 
         // The async prove pool attached a WitnessedReceipt: has_proof flips.
-        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 1, |_| false);
+        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 1, |_| false, |_| None);
         assert!(
             infos[0].has_proof,
             "a pool-attached WitnessedReceipt must flip has_proof even with no executor signature"
@@ -9114,11 +9209,153 @@ mod tests {
             50,
             |_| 0,
             |th| th == hex_encode(&[0x42u8; 32]),
+            |_| None,
         );
         assert!(
             infos[0].has_proof,
             "a persisted full-turn proof must flip has_proof"
         );
+    }
+
+    /// Consensus finality on the receipts surface comes from the DURABLE
+    /// commit log (turn-by-hash index), never from the immutable receipt: a
+    /// promoted turn's receipt stays `finality: "tentative"` forever, so the
+    /// certificate is surfaced ALONGSIDE it as `consensus_final` +
+    /// `attested_height`.
+    #[test]
+    fn receipt_consensus_finality_comes_from_durable_commit_log() {
+        let store = dregg_persist::PersistentStore::open_in_memory().expect("store");
+        let final_hash = [0x11u8; 32];
+        let record = dregg_persist::CommitRecord {
+            ordinal: 0,
+            height: 7,
+            block_id: [1u8; 32],
+            block_executed_up_to: 0,
+            turn_hash: final_hash,
+            creator: [0xA0u8; 32],
+            receipt_hash: [0x22u8; 32],
+            ledger_root: [0u8; 32],
+            touched_cells: vec![],
+        };
+        store.commit_finalized_turn(0, &record).expect("commit");
+
+        let chain = vec![
+            dregg_turn::TurnReceipt {
+                turn_hash: final_hash,
+                agent: CellId([0xA0; 32]),
+                finality: dregg_turn::Finality::Tentative,
+                ..Default::default()
+            },
+            dregg_turn::TurnReceipt {
+                turn_hash: [0x33; 32],
+                agent: CellId([0xA0; 32]),
+                finality: dregg_turn::Finality::Tentative,
+                ..Default::default()
+            },
+        ];
+        let infos = receipt_infos_from_chain_with_witnesses(
+            &chain,
+            50,
+            |_| 0,
+            |_| false,
+            |th| store.lookup_turn(th).ok().flatten().map(|r| r.height),
+        );
+
+        // Listing is reverse chain order: infos[0] is the NOT-finalized turn.
+        assert!(!infos[0].consensus_final);
+        assert_eq!(infos[0].attested_height, None);
+        assert!(
+            infos[1].consensus_final,
+            "a durable CommitRecord must surface as consensus_final"
+        );
+        assert_eq!(infos[1].attested_height, Some(7));
+        assert_eq!(
+            infos[1].finality, "tentative",
+            "the immutable receipt snapshot must stay untouched"
+        );
+
+        // Response shape: the JSON carries the new fields.
+        let v = serde_json::to_value(&infos[1]).expect("serialize");
+        assert_eq!(v["consensus_final"], serde_json::json!(true));
+        assert_eq!(v["attested_height"], serde_json::json!(7));
+        let v = serde_json::to_value(&infos[0]).expect("serialize");
+        assert_eq!(v["consensus_final"], serde_json::json!(false));
+        assert_eq!(v["attested_height"], serde_json::Value::Null);
+    }
+
+    /// `GET /api/turn/{hash}/status` answers from the durable store even when
+    /// the receipt chain never got the receipt (the append-failed case): the
+    /// turn is reported consensus-final with `receipt_present: false`, and an
+    /// unknown turn is honestly not final.
+    #[tokio::test]
+    async fn turn_status_endpoint_reports_durable_consensus_finality() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let turn_hash = [0x5Au8; 32];
+        {
+            let s = state.write().await;
+            let record = dregg_persist::CommitRecord {
+                ordinal: 0,
+                height: 3,
+                block_id: [1u8; 32],
+                block_executed_up_to: 0,
+                turn_hash,
+                creator: [2u8; 32],
+                receipt_hash: [3u8; 32],
+                ledger_root: [0u8; 32],
+                touched_cells: vec![],
+            };
+            s.store.commit_finalized_turn(0, &record).expect("commit");
+        }
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/turn/{}/status", hex_encode(&turn_hash)))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json["consensus_final"], serde_json::json!(true));
+        assert_eq!(json["attested_height"], serde_json::json!(3));
+        assert_eq!(json["receipt_present"], serde_json::json!(false));
+        assert_eq!(
+            json["receipt_hash"],
+            serde_json::json!(hex_encode(&[3u8; 32]))
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/turn/{}/status", hex_encode(&[0u8; 32])))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json["consensus_final"], serde_json::json!(false));
+        assert_eq!(json["attested_height"], serde_json::Value::Null);
     }
 
     #[tokio::test]
@@ -10080,13 +10317,12 @@ mod tests {
         };
         // Bound to the turn nonce below (`nonce: 0` — the faucet-born agent
         // cell's first turn): dregg-action-sig-v3 binds the submitting turn's
-        // nonce into the signature.
-        let message = dregg_turn::TurnExecutor::compute_signing_message(&unsigned, &fed_id, 0);
-        let sig = clerk.sign_bytes(&message);
-        let action = Action {
-            authorization: Authorization::from_sig_bytes(sig.0),
-            ..unsigned
-        };
+        // nonce into the signature. Signed HYBRID (ed25519 + ML-DSA) — the
+        // deployed admission posture is `require_pq = ON`, and a real
+        // `RemoteRuntime` client emits the hybrid credential; a classical-only
+        // authorization refuses at the PQ admission gate before the replay leg
+        // ever runs.
+        let action = clerk.sign_action_hybrid(unsigned, &fed_id, 0);
         let mut forest = CallForest::new();
         forest.add_root(action);
 

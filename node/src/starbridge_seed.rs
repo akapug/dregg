@@ -377,23 +377,38 @@ fn seed_one_cell(
         owner_pubkey,
     };
 
-    let mut turn = app_cclerk
-        .shared_cipherclerk()
-        .read()
-        .unwrap()
-        .create_from_factory(
-            issuer_cell,
-            factory_vk,
-            owner_pubkey,
-            token_id,
-            params,
-            &federation_id,
-        );
-    turn.fee = 2_000;
-    turn.nonce = ledger
+    // NONCE BEFORE SIGNING — the `dregg-action-sig-v3` per-action signing
+    // message BINDS the submitting turn's nonce, and the executor recomputes
+    // it with `turn.nonce`. `create_from_factory` signs via `make_action`,
+    // which uses THIS fresh clerk's `next_turn_nonce()` (= 0, empty receipt
+    // chain) — but the turn carries the ISSUER CELL's ledger nonce, which
+    // advances with every committed seed turn. All ten default cells share
+    // one issuer ("alice"), so every seed turn after the first carried a
+    // nonce its action signature was not computed over. Compute the carried
+    // nonce first, then re-sign the built action over it (same fix class as
+    // the faucet's `sign_action_hybrid` path in `api.rs::post_faucet`).
+    let seed_nonce = ledger
         .get(&issuer_cell)
         .map(|c| c.state.nonce())
         .unwrap_or(0);
+    let shared = app_cclerk.shared_cipherclerk();
+    let clerk = shared.read().unwrap();
+    let mut turn = clerk.create_from_factory(
+        issuer_cell,
+        factory_vk,
+        owner_pubkey,
+        token_id,
+        params,
+        &federation_id,
+    );
+    turn.fee = 2_000;
+    turn.nonce = seed_nonce;
+    // Re-sign each root action over the nonce the turn actually carries
+    // (`sign_action_hybrid` strips the stale authorization before signing).
+    for root in &mut turn.call_forest.roots {
+        root.action = clerk.sign_action_hybrid(root.action.clone(), &federation_id, seed_nonce);
+    }
+    drop(clerk);
     // Link to the issuer's prior seed receipt (if any) so the executor's
     // per-agent receipt chain validates. The first turn from this issuer carries
     // `None` (genesis chain head); each subsequent one links to the last commit.
@@ -597,6 +612,25 @@ mod tests {
         let parsed = parse_starbridge_cells(&genesis).expect("parse cells");
         assert_eq!(parsed.len(), 10);
         assert_eq!(parsed[0].label, "nameservice-registry");
+    }
+
+    /// End-to-end devnet backfill over a fresh ledger: all ten default cells
+    /// share ONE issuer ("alice"), whose cell nonce advances with every
+    /// committed seed turn — so this exercises the dregg-action-sig-v3 nonce
+    /// binding across turns. Before the carried-nonce re-sign, only the first
+    /// cell seeded; turns 2..10 carried a nonce their action signature was
+    /// not computed over and failed signature verification.
+    #[test]
+    fn devnet_seed_creates_all_default_cells_across_advancing_issuer_nonce() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut ledger = dregg_cell::Ledger::new();
+        let stats = seed_default_starbridge_cells_devnet(dir.path(), &mut ledger, [7u8; 32], None);
+        assert_eq!(
+            stats.failed, 0,
+            "every seed turn must verify (action signature bound to the carried nonce): {stats:?}"
+        );
+        assert_eq!(stats.skipped, 0, "devnet fallback materializes everything");
+        assert_eq!(stats.created, 10, "all ten default starbridge cells seed");
     }
 
     #[test]
