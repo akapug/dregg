@@ -41,6 +41,8 @@ at all times · sophistication proportionate to the challenge, NO further · ACT
 
 - **factory ✅** (0057c5bf1, ac0106b4e, 9f6910b34, dea9008bd): honesty REPAIRED BY CODE — emit_safe now reads+derives DreggLaunchToken.sol byte-for-byte (10 tests, drift fails loud); 4 Halmos invariant families committed both-polarity (honest 3/9 doors + reentrancy, 6 grep-only=P6); pipeline wired spec→emit→audit→gate→capability (deploy-gate CLI, NotGated refusal); interview labeled honest (frozen transcripts, live=P7). Proposed: real deploy, on-chain audit_registry.
 
+- **fhegg-clearing ✅** (8174ec9ec): FOUND+FIXED a live conservation bug in fhegg-solver clearing.rs::fold_curves (out-of-domain-ask phantom supply; proven-absent in Lean, live in Rust; regression=Lean witness book); PROVED per-order allocation (new FhEggAllocation.lean, 20 keystones: conservation-at-V*, cap, ±1 pro-rata fairness teeth, IR) — closes SDK blocker #1; Rust↔Lean golden vectors; Allocation::validate SDK self-check. 75/75 tests + lake build Market green. ⚑ Market-audit #4 (marquee MPC argmax/balance-threshold split) repair now UNBLOCKED (clearing lane off those files). Proposed: price-priority variant, Cert-F>ring3, FHE trust story (ember-gated).
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
