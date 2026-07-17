@@ -129,6 +129,26 @@ pub struct MirrorLeg {
 pub enum RoutingError {
     /// A party's Solana lock attestation failed the mirror's verification.
     MirrorRejected { party: String, err: MirrorError },
+    /// A party in the book has no verified lock backing its offer (nothing minted for it). The
+    /// book may only be built from locks that actually verified through the mirror.
+    MissingLock { party: String },
+    /// A party's verified lock is in a different asset than the party offers into the book, so
+    /// the lock does not back the offer.
+    LockAssetMismatch {
+        party: String,
+        locked_asset: AssetId,
+        offered_asset: AssetId,
+    },
+    /// A party offers more into the book than its verified lock actually backs (`offered >
+    /// backed`). The lock→mirror boundary mints exactly the locked amount; the book may not
+    /// exceed it.
+    UnbackedOffer {
+        party: String,
+        backed: u64,
+        offered: u64,
+    },
+    /// A verified lock maps to no party in the book (an orphan mint with no offer to back).
+    OrphanLock { party_byte: u8 },
     /// The book did not clear into a ring (no cross-chain cycle over the mirrored locks).
     NoClearingRing,
     /// The lowered ring did not settle+conserve on the verified executor.
@@ -142,6 +162,35 @@ impl std::fmt::Display for RoutingError {
         match self {
             Self::MirrorRejected { party, err } => {
                 write!(f, "mirror rejected {party}'s lock: {err}")
+            }
+            Self::MissingLock { party } => {
+                write!(
+                    f,
+                    "{party} offers into the book with no verified lock backing it"
+                )
+            }
+            Self::LockAssetMismatch {
+                party,
+                locked_asset,
+                offered_asset,
+            } => write!(
+                f,
+                "{party}'s verified lock is asset-{:02x} but it offers asset-{:02x} into the book",
+                locked_asset[0], offered_asset[0]
+            ),
+            Self::UnbackedOffer {
+                party,
+                backed,
+                offered,
+            } => write!(
+                f,
+                "{party} offers {offered} into the book but its verified lock backs only {backed}"
+            ),
+            Self::OrphanLock { party_byte } => {
+                write!(
+                    f,
+                    "verified lock for party byte {party_byte} matches no party in the book"
+                )
             }
             Self::NoClearingRing => write!(f, "the book did not clear into a ring"),
             Self::VerifiedSettleRefused(e) => {
@@ -238,7 +287,10 @@ pub fn verify_mirror_lock(
 /// `parties` are the ring participants; `mirror_legs` are their VERIFIED locks (from
 /// [`verify_mirror_lock`], one per party). Runs:
 ///
-///   1. mirror conservation — `Σ minted ≤ Σ locked` per asset across the verified locks;
+///   1. lock→book binding + mirror conservation — every party's offer must be backed by its own
+///      verified lock (same asset, `offer_amount ≤ leg.amount`), and per asset the total offered
+///      (`minted`) may not exceed the total locked. `route(parties, &[], _)` refuses with
+///      `MissingLock`; an over-claimed offer refuses with `UnbackedOffer`;
 ///   2. the REAL ring matcher (`solver.rs`) over the mirrored book;
 ///   3. VERIFIED conserving settlement (`verified_settle.rs`, each leg through `recKExecAsset`);
 ///   4. the CLEARING ROOT over the settled post-ledger + one [`ReleaseLeg`] per ring leg.
@@ -250,21 +302,89 @@ pub fn route(
     mirror_legs: &[MirrorLeg],
     batch_id: u64,
 ) -> Result<RoutingFixture, RoutingError> {
-    // (1) Mirror conservation: the verified minted supply never exceeds the locked backing, per
-    //     asset. Each lock mints exactly its own amount, so per asset minted == locked ≤ locked.
+    // (1) LOCK→BOOK BINDING + mirror conservation. The book is built from what each party OFFERS
+    //     (`p.offer_amount`); the mirror mints exactly what each party LOCKED (`leg.amount`). These
+    //     are two independently-sourced quantities. Bind them by `party_byte` (the mirror mint
+    //     recipient's low byte == the party's `id_byte`) and refuse any offer the verified lock does
+    //     not back. Without this bind `minted`/`locked` were populated from the SAME `leg.amount`,
+    //     so conservation reduced to `x <= x` — a constant `true` that admitted an unbacked offer
+    //     (a party locking 1 could claim 1_000_000 and still route).
+    let by_byte: BTreeMap<u8, &Party> = parties.iter().map(|p| (p.id_byte, p)).collect();
+
+    // Bind each verified lock to a party; an orphan lock (a mint for no party in the book) is
+    // refused rather than silently ignored.
+    let mut backing: BTreeMap<u8, &MirrorLeg> = BTreeMap::new();
+    for leg in mirror_legs {
+        if !by_byte.contains_key(&leg.party_byte) {
+            return Err(RoutingError::OrphanLock {
+                party_byte: leg.party_byte,
+            });
+        }
+        // A duplicate leg for the same party would let two mints back one offer — take the LAST
+        // seen but this is a single-lock-per-party contract (`verify_mirror_lock` yields one leg
+        // per party); a split lock refuses below as under-backed, the sound direction.
+        backing.insert(leg.party_byte, leg);
+    }
+
+    // Per-party: every party must have a verified lock, in the SAME asset it offers, backing AT
+    // LEAST the amount it offers. `locked` is sourced from the verified legs; `minted` from what
+    // the book offers — genuinely distinct quantities.
     let mut locked: BTreeMap<AssetId, u128> = BTreeMap::new();
     let mut minted: BTreeMap<AssetId, u128> = BTreeMap::new();
-    for leg in mirror_legs {
+    for p in parties {
+        let leg = backing
+            .get(&p.id_byte)
+            .ok_or_else(|| RoutingError::MissingLock {
+                party: p.name.clone(),
+            })?;
+        if leg.asset != p.offer_asset {
+            return Err(RoutingError::LockAssetMismatch {
+                party: p.name.clone(),
+                locked_asset: leg.asset,
+                offered_asset: p.offer_asset,
+            });
+        }
+        if p.offer_amount as u128 > leg.amount as u128 {
+            return Err(RoutingError::UnbackedOffer {
+                party: p.name.clone(),
+                backed: leg.amount,
+                offered: p.offer_amount,
+            });
+        }
         *locked.entry(leg.asset).or_default() += leg.amount as u128;
-        *minted.entry(leg.asset).or_default() += leg.amount as u128;
+        *minted.entry(p.offer_asset).or_default() += p.offer_amount as u128;
     }
+
+    // Aggregate conservation: per asset, the total the book OFFERS never exceeds the total LOCKED
+    // backing. The per-party check already forbids a single party over-offering; the aggregate
+    // additionally forbids two parties in the same asset from cross-subsidizing (one over-offers
+    // by exactly what a co-asset party under-offers). Kept alongside the per-party check — both
+    // are load-bearing.
     let mirror_conserves = locked
         .keys()
         .chain(minted.keys())
         .all(|a| minted.get(a).copied().unwrap_or(0) <= locked.get(a).copied().unwrap_or(0));
+    if !mirror_conserves {
+        // With the per-party gate above this is unreachable for well-formed input, but a future
+        // relaxation of the per-party check must not silently ship an over-minted fixture.
+        return Err(RoutingError::UnbackedOffer {
+            party: "<aggregate>".into(),
+            backed: locked
+                .values()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .min(u64::MAX as u128) as u64,
+            offered: minted
+                .values()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .min(u64::MAX as u128) as u64,
+        });
+    }
 
     // (2) Build the mirror book and run the REAL matcher (Johnson circuits + Shapley–Scarf TTC).
-    let by_byte: BTreeMap<u8, &Party> = parties.iter().map(|p| (p.id_byte, p)).collect();
     let nodes: Vec<IntentNode> = parties
         .iter()
         .map(|p| IntentNode {

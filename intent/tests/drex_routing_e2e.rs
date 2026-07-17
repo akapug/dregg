@@ -222,6 +222,107 @@ fn forged_lock_is_rejected_before_it_can_route() {
     );
 }
 
+/// TOOTH (lock→book binding, driving `route`): with NO verified locks, `route` cannot build a book
+/// from self-asserted offers — every party is unbacked, so routing refuses at the binding gate.
+/// This is the falsifier the old `x <= x` gate could never fail (empty `mirror_legs` made
+/// conservation VACUOUSLY true and the book was built entirely from `p.offer_amount`).
+#[test]
+fn no_lock_no_book_entry() {
+    let (parties, _, _, _) = three_party();
+    let res = route(&parties, &[], 0);
+    assert!(
+        matches!(res, Err(RoutingError::MissingLock { .. })),
+        "a party with no verified lock must not enter the book; got {res:?}"
+    );
+}
+
+/// TOOTH (lock→book binding): a party that LOCKS 100 but claims 1_000_000 into the book is refused
+/// — the offer exceeds the verified lock. Under the old `x <= x` gate this routed (the book took
+/// `offer_amount` at face value and conservation compared the lock against itself).
+///
+/// MUTATION CANARY ANCHOR: reverting the `mirror_legs -> parties` bind in `route` (back to
+/// populating `locked`/`minted` from the same `leg.amount`) makes THIS test go RED again.
+#[test]
+fn offer_exceeding_the_verified_lock_is_refused() {
+    let (mut parties, oa, ob, oc) = three_party();
+    // Alice's REAL verified lock is 100 GOLD (see `verify_all`); inflate only her BOOK offer.
+    let mirror_legs = verify_all(&parties, &oa, &ob, &oc);
+    parties[0].offer_amount = 1_000_000;
+    let res = route(&parties, &mirror_legs, 0);
+    assert!(
+        matches!(
+            res,
+            Err(RoutingError::UnbackedOffer {
+                backed: 100,
+                offered: 1_000_000,
+                ..
+            })
+        ),
+        "an offer larger than the verified lock must be refused; got {res:?}"
+    );
+}
+
+/// TOOTH (lock→book binding): a FORGED lock never mints, so it never backs a book offer — and now
+/// this is proven by DRIVING `route` (not just `verify_mirror_lock`). Alice's forged lock fails
+/// mirror verification, so she has NO `MirrorLeg`; `route` over the remaining legs refuses her offer
+/// with `MissingLock`. The routing flow's binding gate bites.
+#[test]
+fn a_forged_lock_never_enters_the_book() {
+    let (parties, oa, ob, oc) = three_party();
+    // Everyone locks honestly EXCEPT Alice, whose lock is forged (wrong oracle key) and so is
+    // rejected at the mirror — she gets no leg.
+    let all_legs = verify_all(&parties, &oa, &ob, &oc);
+    let forger = oracle(0xEE);
+    let m_gold = mirror(0xAA, GOLD, &oa);
+    let forged = lock(0xAA, 100, 1, 1, &forger);
+    assert!(
+        verify_mirror_lock(&m_gold, &parties[0], &forged).is_err(),
+        "the forged lock must fail mirror verification"
+    );
+    // The book still lists Alice, but only Bob's and Carol's legs verified.
+    let backed_legs: Vec<MirrorLeg> = all_legs.into_iter().skip(1).collect();
+    let res = route(&parties, &backed_legs, 0);
+    assert!(
+        matches!(res, Err(RoutingError::MissingLock { .. })),
+        "a party whose lock never minted must not enter the book; got {res:?}"
+    );
+}
+
+/// TOOTH (lock→book binding): a verified lock for the WRONG asset does not back the offer. Alice's
+/// lock verifies for GOLD, but if the book claims she offers ART, the lock→offer asset mismatch is
+/// refused — a lock in one asset cannot silently back an offer in another.
+#[test]
+fn a_lock_for_the_wrong_asset_does_not_back_the_offer() {
+    let (mut parties, oa, ob, oc) = three_party();
+    let mirror_legs = verify_all(&parties, &oa, &ob, &oc);
+    // Alice's verified leg is GOLD; rewrite her BOOK offer asset to ART (her lock does not back it).
+    parties[0].offer_asset = asset(ART);
+    let res = route(&parties, &mirror_legs, 0);
+    assert!(
+        matches!(res, Err(RoutingError::LockAssetMismatch { .. })),
+        "a lock in the wrong asset must not back the offer; got {res:?}"
+    );
+}
+
+/// TOOTH (lock→book binding): a verified lock for a party NOT in the book is an orphan mint — it is
+/// refused, not silently ignored (which would let a mint float free of any offer).
+#[test]
+fn an_orphan_lock_is_refused() {
+    let (parties, oa, ob, oc) = three_party();
+    let mut mirror_legs = verify_all(&parties, &oa, &ob, &oc);
+    // Append a leg whose party byte (0x77) matches no party in the book.
+    mirror_legs.push(MirrorLeg {
+        party_byte: 0x77,
+        asset: asset(GOLD),
+        amount: 100,
+    });
+    let res = route(&parties, &mirror_legs, 0);
+    assert!(
+        matches!(res, Err(RoutingError::OrphanLock { party_byte: 0x77 })),
+        "a lock for no party in the book must be refused; got {res:?}"
+    );
+}
+
 /// A book with no cross-chain cycle does not clear — surfaced honestly, no fixture emitted.
 #[test]
 fn non_clearing_book_yields_no_ring() {
