@@ -110,10 +110,29 @@ pub fn fold_curves(orders: &[Order], k: usize) -> (Vec<u64>, Vec<u64>) {
     let mut bid_hist = vec![0u64; k];
     let mut ask_hist = vec![0u64; k];
     for o in orders {
-        let l = (o.limit as usize).min(k - 1);
         match o.side {
-            Side::Bid => bid_hist[l] += o.qty,
-            Side::Ask => ask_hist[l] += o.qty,
+            Side::Bid => {
+                // A bid with limit ≥ K demands at EVERY represented level (it
+                // buys at any price ≤ its limit, and all grid prices qualify),
+                // so clamping to K-1 is exactly equivalent under the suffix scan.
+                let l = (o.limit as usize).min(k - 1);
+                bid_hist[l] += o.qty;
+            }
+            Side::Ask => {
+                // An ask with limit ≥ K is willing to sell at NO represented
+                // level. Clamping it into the last bucket would fabricate
+                // supply BELOW its limit (an individual-rationality violation)
+                // and can create a false, NON-CONSERVING clearing: `allocate`
+                // filters active asks by the true limit, so the phantom supply
+                // clears against real bids with no seller behind it. Mirrors
+                // the proven Lean semantics (`Market.supplyIncr`,
+                // `Market.FhEggRustDenotation.outOfDomainAskDoesNotClear`) and
+                // the fixed fhegg-fhe encoder (`fhegg-fhe::order_increment`).
+                let l = o.limit as usize;
+                if l < k {
+                    ask_hist[l] += o.qty;
+                }
+            }
         }
     }
     scan_curves(&bid_hist, &ask_hist)
@@ -189,6 +208,53 @@ impl Allocation {
     /// True iff the two sides moved equal volume (value-conservation).
     pub fn conserves(&self) -> bool {
         self.buy_volume == self.sell_volume
+    }
+
+    /// The full allocation invariant, re-checked from scratch against the
+    /// orders and the cleared market (verify-not-find: the caller can gate on
+    /// this instead of trusting `allocate`). Checks, in order:
+    ///
+    /// 1. shape — one fill per order;
+    /// 2. per-order cap — no fill exceeds the order's own quantity;
+    /// 3. individual rationality — only orders ACTIVE at `p*` fill (a bid with
+    ///    `limit ≥ p*`, an ask with `limit ≤ p*`); on a non-crossed market
+    ///    nothing fills;
+    /// 4. the reported side volumes are the actual fill sums;
+    /// 5. conservation at the cleared volume — on a crossed market BOTH sides
+    ///    sum exactly to `V*` (not merely to each other).
+    pub fn validate(&self, orders: &[Order], clearing: &Clearing) -> bool {
+        if self.fills.len() != orders.len() {
+            return false;
+        }
+        let p = clearing.clearing_price as u32;
+        let mut buy = 0u64;
+        let mut sell = 0u64;
+        for (o, &f) in orders.iter().zip(self.fills.iter()) {
+            if f > o.qty {
+                return false;
+            }
+            let active = clearing.crossed
+                && match o.side {
+                    Side::Bid => o.limit >= p,
+                    Side::Ask => o.limit <= p,
+                };
+            if !active && f != 0 {
+                return false;
+            }
+            match o.side {
+                Side::Bid => buy += f,
+                Side::Ask => sell += f,
+            }
+        }
+        if buy != self.buy_volume || sell != self.sell_volume {
+            return false;
+        }
+        let target = if clearing.crossed {
+            clearing.cleared_volume
+        } else {
+            0
+        };
+        buy == target && sell == target
     }
 }
 
@@ -384,6 +450,140 @@ mod tests {
         assert_eq!(alloc.sell_volume, 100, "rationed fills sum exactly to V*");
         assert_eq!(alloc.buy_volume, 100);
         assert!(alloc.conserves());
+    }
+
+    // REGRESSION (the out-of-domain-ask clamp): an ask with limit ≥ K is
+    // willing to sell at NO represented price. The old fold clamped it into
+    // bucket K-1, fabricating supply below its limit — this exact book then
+    // cleared at (p*=2, V*=9) with buy_volume=9, sell_volume=0 (a false,
+    // NON-CONSERVING clearing, since `allocate` correctly never fills the
+    // ask). It is the Lean `Market.FhEggRustDenotation.outOfDomainAskBook`,
+    // proven to output (none, 0).
+    #[test]
+    fn out_of_domain_ask_does_not_clear() {
+        let orders = vec![Order::bid(9, 2), Order::ask(9, 7)];
+        let c = clear(&orders, 3);
+        assert_eq!(c.supply, vec![0, 0, 0], "no phantom supply from the ask");
+        assert!(!c.crossed, "no represented seller: the book must NOT clear");
+        assert_eq!(c.cleared_volume, 0);
+        let alloc = allocate(&orders, &c);
+        assert!(alloc.fills.iter().all(|&f| f == 0));
+        assert!(alloc.conserves());
+        assert!(alloc.validate(&orders, &c));
+    }
+
+    // The bid-side clamp IS semantically correct: a bid with limit ≥ K buys at
+    // any price ≤ its limit, and every grid price qualifies — so it demands at
+    // every represented level and the book clears against it normally.
+    #[test]
+    fn out_of_domain_bid_demands_everywhere() {
+        let orders = vec![Order::bid(5, 99), Order::ask(5, 0)];
+        let c = clear(&orders, 3);
+        assert_eq!(c.demand, vec![5, 5, 5]);
+        assert!(c.crossed);
+        assert_eq!((c.clearing_price, c.cleared_volume), (0, 5));
+        let alloc = allocate(&orders, &c);
+        assert_eq!(alloc.fills, vec![5, 5]);
+        assert!(alloc.validate(&orders, &c));
+    }
+
+    // GOLDEN VECTOR (Lean denotation binding): `Market.FhEggClearing.workBook`
+    // — bids 6@2, 4@1; asks 3@0, 5@1; K=3. Lean proves (kernel-checked):
+    // demand (10,10,6), supply (3,8,8), crossing at p*=1, V*=8
+    // (`workBook_crossing`, `workBook_clearedVolume`), and that the OLD
+    // least-balance heuristic's bucket 2 executes only 6 < 8. The pro-rata
+    // fills are the deterministic largest-remainder rationing of the long
+    // (buy) side: active bids (6,4) share 8 → floors (4,3) + 1 unit to the
+    // larger remainder (48%10=8 vs 32%10=2) → (5,3); the short (sell) side
+    // fills fully (3,5).
+    #[test]
+    fn lean_workbook_golden_vector() {
+        let orders = vec![
+            Order::bid(6, 2),
+            Order::bid(4, 1),
+            Order::ask(3, 0),
+            Order::ask(5, 1),
+        ];
+        let c = clear(&orders, 3);
+        assert_eq!(c.demand, vec![10, 10, 6]);
+        assert_eq!(c.supply, vec![3, 8, 8]);
+        assert!(c.crossed);
+        assert_eq!((c.clearing_price, c.cleared_volume), (1, 8));
+        let alloc = allocate(&orders, &c);
+        assert_eq!(alloc.fills, vec![5, 3, 3, 5]);
+        assert_eq!((alloc.buy_volume, alloc.sell_volume), (8, 8));
+        assert!(alloc.validate(&orders, &c));
+    }
+
+    // GOLDEN VECTOR (Lean denotation binding): `Market.FhEggClearing.counterBook`
+    // — D=(10,9), S=(5,20); K=2. Lean proves p*=1, V*=9
+    // (`counterBook_crossing`, `counterBook_clearedVolume`); this is the book
+    // that refutes the old largest-`{D ≥ S}` heuristic. Sell side rations
+    // (5,15) → 9: floors (2,6) + 1 to the larger remainder (45%20=5 vs
+    // 135%20=15) → (2,7); the bid at limit 0 is INACTIVE at p*=1 (individual
+    // rationality) and fills 0.
+    #[test]
+    fn lean_counterbook_golden_vector() {
+        let orders = vec![
+            Order::bid(9, 1),
+            Order::bid(1, 0),
+            Order::ask(5, 0),
+            Order::ask(15, 1),
+        ];
+        let c = clear(&orders, 2);
+        assert_eq!(c.demand, vec![10, 9]);
+        assert_eq!(c.supply, vec![5, 20]);
+        assert!(c.crossed);
+        assert_eq!((c.clearing_price, c.cleared_volume), (1, 9));
+        let alloc = allocate(&orders, &c);
+        assert_eq!(alloc.fills, vec![9, 0, 2, 7]);
+        assert!(alloc.validate(&orders, &c));
+    }
+
+    // `validate` has teeth: a tampered allocation (one stolen unit moved
+    // between buyers, sides still equal; an inactive order paid; an
+    // over-filled order) is REFUSED even though `conserves()` may still pass.
+    #[test]
+    fn validate_refuses_tampered_allocations() {
+        let orders = vec![
+            Order::bid(6, 2),
+            Order::bid(4, 1),
+            Order::ask(3, 0),
+            Order::ask(5, 1),
+        ];
+        let c = clear(&orders, 3);
+        let good = allocate(&orders, &c);
+        assert!(good.validate(&orders, &c));
+
+        // Move one unit between buyers, then overfill: order 1 holds qty 4.
+        let mut moved = good.clone();
+        moved.fills[0] -= 2;
+        moved.fills[1] += 2; // fill 5 > qty 4 — over-cap
+        assert!(moved.conserves(), "conserves() alone misses the theft");
+        assert!(!moved.validate(&orders, &c));
+
+        // Report volumes that don't match the fills.
+        let mut lied = good.clone();
+        lied.buy_volume += 1;
+        lied.sell_volume += 1;
+        assert!(lied.conserves());
+        assert!(!lied.validate(&orders, &c));
+
+        // Pay an order that is not active at p* (ask limit 2 > p* = 1 never
+        // trades below its limit).
+        let orders2 = vec![
+            Order::bid(6, 2),
+            Order::bid(4, 1),
+            Order::ask(3, 0),
+            Order::ask(5, 1),
+            Order::ask(7, 2),
+        ];
+        let c2 = clear(&orders2, 3);
+        let mut ir = allocate(&orders2, &c2);
+        assert!(ir.validate(&orders2, &c2));
+        ir.fills[4] = 1;
+        ir.sell_volume += 1;
+        assert!(!ir.validate(&orders2, &c2));
     }
 
     // The curves have the right monotonicity and the clearing price is the

@@ -115,10 +115,23 @@ actual product property — is prose plus a modeled seam.
 
 Prioritized. The nearest real target is the plaintext verify-not-find engine, NOT the FHE path.
 
-1. **Allocation + wire types (unblocks the plaintext SDK).** Add a per-order fill/allocation rule
-   (pro-rata rationing of the marginal bucket) on top of `reference_clear`/`clearing.rs`; add serde-stable,
-   versioned, ID-bearing `Order`/`ClearOutcome`/certificate types (today: zero serde in `fhegg-fhe`,
-   JSON only on the solver's Cert path). A tick↔bucket-index mapping.
+1. **Allocation + wire types (unblocks the plaintext SDK).** ~~Add a per-order fill/allocation rule~~
+   **HALF DONE (2026-07-17):** the per-order allocation EXISTS and is VERIFIED —
+   `fhegg-solver/src/clearing.rs::{allocate, ration}` (short side fills fully; long side pro-rata by
+   qty with a deterministic largest-remainder pass) with the invariant re-checker
+   `Allocation::validate` (shape, per-order cap, IR at `p*`, side sums, conservation at `V*` —
+   surfaced as `allocationValid` in `fhegg_uniform`'s JSON), and
+   `metatheory/Market/FhEggAllocation.lean` proves the rule model-side: conservation-at-`V*` both
+   sides (`allocation_conserves_at_Vstar`), per-order cap (`ration_getD_le`), ±1 pro-rata fairness
+   (`ration_fair` / `FairFills`, with `favoritism_refused`/`starvation_refused` teeth), active
+   sides = the curves (`activeBidQtys_sum_eq_demand`), all `#assert_all_clean`-pinned; Rust↔Lean held
+   together by golden-vector KATs both sides (`lean_workbook_golden_vector` ↔ the `#guard`s).
+   REMAINING: serde-stable, versioned, ID-bearing `Order`/`ClearOutcome`/certificate types (still
+   zero serde in `fhegg-fhe`; JSON only on the solver's CLI/Cert paths) and a tick↔bucket-index
+   mapping. Also note: the fold's out-of-domain-ask clamp bug (an ask with `limit ≥ K` fabricated
+   supply in bucket `K-1` → false NON-CONSERVING clearings; the exact bug fhegg-fhe fixed) is now
+   ALSO fixed in `fhegg-solver::fold_curves`, regression-tested against the Lean
+   `outOfDomainAskBook` witness.
 2. **Generalize Cert-F beyond ring-3.** Make `certFDescriptorOf` (already a total fn, `CertFDescriptor.lean:173`)
    the emitted path: prove `certFDescriptor_emit_sound` generically over `p : CertFProg` (not just
    `ring3Prog`), emit + byte-pin descriptors for the real market program shapes, and fix the ε=0-vs-achieved-gap

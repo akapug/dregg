@@ -115,6 +115,11 @@ struct UniformOut {
     #[serde(rename = "sellVolume")]
     sell_volume: u64,
     conserves: bool,
+    /// The full allocation invariant re-checked from scratch (shape, per-order
+    /// cap, individual rationality at `p*`, side sums, conservation at `V*`) —
+    /// `Allocation::validate`, the verify-not-find gate on the fill vector.
+    #[serde(rename = "allocationValid")]
+    allocation_valid: bool,
     orders: Vec<OrderOut>,
     tiers: Vec<Tier>,
 }
@@ -255,6 +260,7 @@ fn main() {
         buy_volume: alloc.buy_volume,
         sell_volume: alloc.sell_volume,
         conserves: alloc.conserves(),
+        allocation_valid: alloc.validate(&orders, &c),
         orders: orders_out,
         tiers: vec![
             Tier {

@@ -46,6 +46,7 @@ import Market.PrecisionEnvelope
 import Market.RevealNothing
 import Market.MpcClearingSecurity
 import Market.FhEggRustDenotation
+import Market.FhEggAllocation
 import Market.ProtocolAssurance
 import Market.CertQp
 import Market.CertQpRustDenotation
