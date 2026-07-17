@@ -116,4 +116,31 @@ theorem governed_no_domination (ctrl : World → Move) :
     ∀ n, worldFloor (govTraj ctrl w0 n) :=
   sandbox_governed_safe ctrl w0 (by decide)
 
+/-! ## The governor is GENTLE, not paralyzing — the missing ADMIT polarity.
+
+`governed_prevents_domination` alone is satisfied identically by a FREEZE-EVERYTHING governor: under
+the trap-only politician the world never leaves `w0` (all-home), so a governor that refuses *every*
+move would pass it too. The safety theorems establish the REFUSE side; the theorems below establish
+the ADMIT side on the SAME governor — a benign move that keeps the floor is admitted and the world
+genuinely ADVANCES. Together they pin `govStep` as neither permissive (it refuses the trap) nor
+paralyzing (it admits honest progress). -/
+
+/-- A world mid-episode: agent `false` is three steps from home (still within budget), agent `true`
+home. The floor holds, and an honest `stepHome` by `false` is a genuine, floor-preserving advance. -/
+def w1 : World := fun i => if i = false then 3 else 0
+
+/-- **The governor ADMITS a benign, world-ADVANCING move.** From `w1`, agent `false`'s honest
+`stepHome` keeps the floor (dist `3 → 2 ≤ budget`), so the governor admits it and the world moves —
+`false`'s distance strictly decreases (`3 → 2`). A freeze-everything governor would leave it at `3`;
+this one does not. This is the polarity `governed_prevents_domination` cannot see. -/
+theorem govStep_admits_benign :
+    govStep w1 ⟨false, .stepHome⟩ false = 2 ∧ govStep w1 ⟨false, .stepHome⟩ true = 0 := by decide
+
+/-- **The discriminator (both polarities, SAME governor, SAME world `w1`).** The governor ADMITS the
+honest `stepHome` (agent `false` advances `3 → 2`) yet REFUSES the politician's `trap` (agent `true`
+stays home at `0`, never pushed to `trapDist = 99`). The floor-gate genuinely turns on the move: the
+governor is not `:= True`-permissive and not freeze-everything. -/
+theorem govStep_discriminates :
+    govStep w1 ⟨false, .stepHome⟩ false = 2 ∧ govStep w1 ⟨false, .trap true⟩ true = 0 := by decide
+
 end Metatheory.PolisSandbox
