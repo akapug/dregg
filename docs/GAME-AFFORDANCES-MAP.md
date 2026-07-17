@@ -1,7 +1,9 @@
 # Game Affordances — Preingest Map
 
 *A self-contained orientation map of everything game-shaped in the dregg monorepo, written for
-collaborators (human and agent) who are about to spelunk. Every path, type, and function name below
+collaborators (h\input{GAME-AFFORDANCES-MAP.md}
+
+uman and agent) who are about to spelunk. Every path, type, and function name below
 is quoted from real code at HEAD (2026-07-16) — nothing is invented. Feed this file to your agents
 before they touch the tree; it replaces the first ~200k tokens of blind exploration.*
 
@@ -364,7 +366,7 @@ is written; execution is scheduled), **NAMED** (tracked, not yet designed).
 |---|---|
 | Board-grid rendering | **CLOSED** — `ViewNode::CoordGrid` renders in text/discord/web (styled game board, `deos-view/src/web.rs:1956`); tug + automatafl offerings registered with per-viewer fog |
 | Solana value-path suspects (finality / stake completeness / rotation binding) | **CLOSED** (`72561117d`, red-first both polarities) + rung-1 live-feed ingestion landed (real SPL over live RPC on a local validator) |
-| Ephemeral web sessions | **IN-FLIGHT** — `FileResumeStore` + the host's resume seam already exist in `dreggnet-offerings/src/resume.rs`; the weld into `dreggnet-web` boot (attach store, `resume_all()`, tamper-refuses test) is landing |
+| Ephemeral web sessions | **CLOSED** — `DREGGNET_WEB_SESSION_DIR` welds `FileResumeStore` into the web boot path: per-session move-log write-through, boot resume by replay, tampered log refuses to reopen (evidence kept). Driven both polarities through the real router across a simulated restart |
 | Custom-VK state binding (the path complex mechanics ride) | **IN-FLIGHT** — executor tooth deployed fail-closed; the state-segmented fold node is routed in the active lane; welded-twin/umem residual + Lean `proofBind` flip remain (coordinate before touching `circuit-prove/`) |
 | Anchoring node down (`:8420`) | **DESIGNED** — a lingering systemd user unit with a persistent `--data-dir` on hbox (`deploy/games/RUNBOOK-FUNNEL.md` TODO-1); one build (`swarm-build cargo build --release -p dregg-node`) + one ember decision (fresh genesis = a new season — honest devnet churn is a feature, and `dregg-epoch`/`dregg-genesis-snapshot` are the boundary tools) |
 | Replay-verify (not STARK) on the live play path | **DESIGNED** — labeled Phase 3: submit enqueues into `dreggnet-prove-service::MatchProveService` (bounded queue, GPU dispatch, bit-exact CPU fallback); the board keeps replay as fast admission and upgrades entries to proof-backed when the `MatchProof` lands + `verify_history_bytes` re-attests |

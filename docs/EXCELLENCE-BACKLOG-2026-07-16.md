@@ -234,6 +234,19 @@ never declared; cosmos-lightclient has no `[[bin]]`.
   re-grounding pass onto the real docker-compose edge (LANE).
 
 ## GAME-SURFACES SWEEP (2026-07-16 evening) — the public-facing wounds
+
+**LANDED same evening** (`065f0226d`, `97ea4f8d4`): the ephemeral-web-sessions
+residual (FileResumeStore weld, driven both polarities on persvati); G3 (pinned
+beacon labeled in every /descent footer + daily warn); G5 (close registered on
+/council + /market; honest caveat: no collective()==true offering has a generic
+wrapper yet, so live close reports direct mode); G6a for cards.rs (env-gated
+explorer base, other fg-goose sites → the sweep lane); G6b (solo FEDERATION_ID
+mismatch fails fast at boot). BONUS found+fixed: **discord-bot did not COMPILE
+at HEAD** (c3d010f20 Rc SharedWorld held across awaits/threads — the "excluded
+workspace never compiles" class, live); repaired structurally (offering factory
+births sessions on the store's owning thread). IN-FLIGHT: G1 rung 1
+(advance_signed seam) and G7 steps 1-2 (the .dungeon→CellProgram compiler with
+translation validation).
 Mined by direct reading + live-surface probing (funnel probed healthy; a real
 session opened and inspected) during the game-affordances mapping campaign
 (`docs/GAME-AFFORDANCES-MAP.md`). One meta-finding up front: **the same disease
@@ -323,3 +336,21 @@ hand-written `deploy_*` worlds into forge-authorable content and gives the
 platform UGC-on-the-real-substrate. Five-step path written in
 `docs/GAME-AFFORDANCES-MAP.md` §8 notes; center of gravity = step 2 (the
 compiler); steps 1/3/4 are mechanical.
+
+### G8. dreggnet-web cannot LINK any bin/test on the primary laptop (observed 07-16 evening) — TRIAGE
+Every `dreggnet-web` link target — including the funnel binary `dreggnet-web-server`
+itself — fails with missing `_runtime_initialize_mathlib_Mathlib_Tactic_*` symbols
+out of `libdregg_lean_ffi` (the lean-ffi working archive is stably
+closure-incomplete; same rlib hash across retries). The chain is by-design
+mandatory: `dreggnet-offerings → dregg-pay → dregg-governance/bridge →
+dregg-lean-ffi` (the Lean cores are fail-closed, no feature door). Observed under
+the in-flight working tree (root Cargo.toml/Cargo.lock + bridge/ mid-edit by the
+Custom-VK lane), so it may be transient to that lane's state — but it means the
+LIVE surface's binary is unrebuildable from this tree TODAY, and it blocked the
+session-durability weld's test gate. **Move:** after the in-flight lane commits,
+re-run `cargo test -p dreggnet-web`; if still red at a clean HEAD, this is a P1
+build wound (suspects: a re-seeded seed archive reverting working copies to
+closure-incomplete per `dregg-lean-ffi/build.rs` docs, or manifest-driven feature
+drift); fix via `cargo clean -p dregg-lean-ffi` + rebuild once the tree is quiet,
+and add a CI gate that LINKS (not just checks) `dreggnet-web-server` — a
+check-green/link-red split is exactly the class the CI-meaningfulness audit hunts.
