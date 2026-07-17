@@ -80,6 +80,15 @@ pub struct TugSession {
     hands: [HandTree; 2],
     /// Whether the round has ended (the round completed).
     ended: bool,
+    /// THE MATCH RECORD (the whole-match-fold seam): each seat's dealt hand exactly as committed
+    /// at open — the `(card_id, blinding nonce)` pairs under the root the opponent saw as fog.
+    /// Together with [`TugSession::plays_of`] and the terminal projection this IS the player's
+    /// private `TugMatch` record the Phase-3 fold consumes; it leaves the session only through
+    /// the explicit owner-facing accessors below (never a render).
+    dealt: [Vec<(u64, u64)>; 2],
+    /// The ordered card ids each seat has PLAYED (each was membership-proven under the
+    /// then-current remaining-hand root when it landed) — the other half of the match record.
+    plays: [Vec<u64>; 2],
 }
 
 impl TugSession {
@@ -98,6 +107,35 @@ impl TugSession {
     /// Whether the round has ended.
     pub fn ended(&self) -> bool {
         self.ended || self.engine.round_complete()
+    }
+
+    /// THE MATCH-RECORD SEAM — the seat's dealt hidden hand, exactly as committed at open: the
+    /// `(card_id, blinding nonce)` pairs under the hand root the opponent only ever saw as fog.
+    /// This is the seat OWNER's private record (it is never rendered to any viewer); a frontend
+    /// reads it solely to hand the player's own whole-match fold its `TugMatch` — the fold whose
+    /// public inputs are `[blinded_leaf, hand_root]`, never the cards.
+    pub fn dealt_hand(&self, seat: Player) -> Vec<(u64, u64)> {
+        self.dealt[seat.idx()].clone()
+    }
+
+    /// The ordered card ids `seat` has played so far — each landed under the then-current
+    /// remaining-hand root, so replaying them through `TugMatch::leaves()` re-proves the same
+    /// membership chain. The other half of the seat's private match record.
+    pub fn plays_of(&self, seat: Player) -> Vec<u64> {
+        self.plays[seat.idx()].clone()
+    }
+
+    /// The terminal WIN facts once the round has scored: `(winner, charm)` where `winner` is
+    /// `1` (seat A) / `2` (seat B) and `charm` is the winner's total influence — exactly the two
+    /// bound public inputs of the whole-match fold's win leaf. `None` while the round runs (or
+    /// if it ended with no winner).
+    pub fn win_facts(&self) -> Option<(u64, u64)> {
+        let proj = self.projection();
+        match proj.winner {
+            1 => Some((1, proj.charm[0])),
+            2 => Some((2, proj.charm[1])),
+            _ => None,
+        }
     }
 
     /// The committed public projection (both hands appear as counts here — the fog datum).
@@ -258,6 +296,31 @@ impl TugSession {
 
         Surface(ViewNode::VStack(kids))
     }
+
+    /// The OPENING-CLAIM surface for a not-yet-seated web viewer — the public fog (both hidden
+    /// hands stay hidden, exactly what a spectator sees) PLUS the action menu for `claimant`, the
+    /// seat this viewer will CLAIM the instant they act. It hands a fresh visitor real opening
+    /// controls without leaking either committed hand before a seat is actually claimed. No menu
+    /// once the round is complete. The executor stays the referee on `advance` (an out-of-turn or
+    /// spent-action POST is still refused).
+    pub fn surface_claim(&self, claimant: Player) -> Surface {
+        let Surface(ViewNode::VStack(mut kids)) = self.surface_for(None) else {
+            return self.surface_for(None);
+        };
+        if !self.ended() {
+            kids.push(self.action_menu(claimant));
+        }
+        Surface(ViewNode::VStack(kids))
+    }
+}
+
+/// The `(card_id, nonce)` openings a committed hand tree was built from — the dealt record the
+/// match fold replays (read back through the tree's own stored openings).
+fn hand_openings(tree: &HandTree) -> Vec<(u64, u64)> {
+    tree.card_ids()
+        .into_iter()
+        .filter_map(|id| tree.opening(id))
+        .collect()
 }
 
 /// Deal the two committed hidden hands from `seed` — distinct card ids `0..12`, seat A the first
@@ -295,11 +358,18 @@ impl Offering for TugOffering {
         // Seed the executor genesis from the reference initial projection.
         game.seed(&engine.projection())
             .map_err(|e| OfferingError::Deploy(e.to_string()))?;
+        let hands = deal_hidden_hands(seed);
+        // Record each seat's dealt openings NOW (the match-record seam): the committed trees
+        // themselves shed played cards as the round runs, but the fold replays from the FULL
+        // dealt hand, so the open-time record is what `TugMatch` consumes.
+        let dealt = [hand_openings(&hands[0]), hand_openings(&hands[1])];
         Ok(TugSession {
             game,
             engine,
-            hands: deal_hidden_hands(seed),
+            hands,
             ended: false,
+            dealt,
+            plays: [Vec::new(), Vec::new()],
         })
     }
 
@@ -366,6 +436,8 @@ impl Offering for TugOffering {
                 let ids = session.hands[seat.idx()].card_ids();
                 if let Some(&played) = ids.first() {
                     session.hands[seat.idx()] = session.hands[seat.idx()].without(played);
+                    // The match record: this card landed under the pre-removal root, in order.
+                    session.plays[seat.idx()].push(played);
                 }
                 let ended = session.engine.round_complete();
                 session.ended = ended;

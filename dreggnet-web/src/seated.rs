@@ -71,6 +71,14 @@ impl SeatedTugSession {
         None
     }
 
+    /// The seat a not-yet-seated viewer would CLAIM on their first act (first free seat, A then
+    /// B), or `None` if both seats are already held (a true spectator).
+    fn claimable_seat(&self) -> Option<Player> {
+        [Player::A, Player::B]
+            .into_iter()
+            .find(|p| self.seats[p.idx()].is_none())
+    }
+
     /// The live tug round (read-only).
     pub fn inner(&self) -> &TugSession {
         &self.inner
@@ -115,7 +123,14 @@ impl Offering for SeatedTug {
             Some(seat) => self
                 .inner
                 .render_for(&session.inner, &TugOffering::seat_identity(seat)),
-            None => self.inner.render(&session.inner),
+            // A not-yet-seated viewer gets the OPENING-CLAIM surface for the seat they will claim
+            // the instant they act (public fog + that seat's action menu) — so a fresh web visitor
+            // has real controls to make the first move. Only a true spectator (both seats already
+            // held) falls back to the viewer-blind public render.
+            None => match session.claimable_seat() {
+                Some(seat) => session.inner.surface_claim(seat),
+                None => self.inner.render(&session.inner),
+            },
         }
     }
 
