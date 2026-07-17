@@ -36,8 +36,17 @@ non-monitorable (`PolisMonitor.liveness_not_prefix_refutable`). What is delivere
 binding — the two distinct predicates over the deployed
 carrier, plus a non-vacuity model and the shared-machinery / non-collapse record.
 
+On the polis floor's non-vacuity specifically: the `∀ Impl x s`-shaped inhabitation is available ONLY
+at the trivial floor `fun _ => True`, and §5a PROVES that no stronger floor exists at that shape
+(`polisFloorProp_forall_shape_iff_trivial` — such a statement carries exactly the information of
+`True`). The load-bearing non-vacuity is therefore the existential, concrete-carrier one:
+`polisFloorProp_inhabited_nontrivial` (§5b) inhabits the floor at a predicate that genuinely fails on
+some observation, and exhibits a captured cell that VIOLATES it — so the floor is a real bar over the
+deployed carrier, refutable as well as satisfiable.
+
 Imports the deployed `Dregg2.Proof.CoinductiveAdversary` and the framework
-`Metatheory.PolisCrossCell`; no `:= True` load-bearing.
+`Metatheory.PolisCrossCell`; no `:= True` load-bearing (the one `fun _ => True` present is *named* as
+trivial and proven to be the shape's ceiling, not passed off as content).
 -/
 import Dregg2.Proof.CoinductiveAdversary
 import Polis.PolisCrossCell
@@ -179,7 +188,16 @@ theorem not_identified :
 /-! ## §5 — Non-vacuity on the deployed carrier (both predicates inhabited).
 
 So this is not a "beautiful but empty" binding: each predicate genuinely holds for the deployed
-carrier in a concrete model. -/
+carrier in a concrete model.
+
+⚑ The two legs are NOT equally strong, and the difference is worth stating plainly.
+`circuitSoundnessProp_inhabited` is real: it discharges the predicate through the deployed
+`obsStream_eq_of_bisim` at the `∀`-shape. Its sibling `polisFloorProp_inhabited_trivial_floor` is
+inhabited only at `fun _ => True` — and §5a *proves* that this is not a shortfall of effort but of
+SHAPE: over an abstract `Obs`, the `∀ Impl x s` quantifier admits no non-trivial floor whatsoever
+(`polisFloorProp_forall_shape_iff_trivial`). §5b then supplies the honest leg the `∀`-shape cannot:
+an EXISTENTIAL, concrete-carrier inhabitation at a floor that genuinely discriminates, with both
+polarities — the same move `not_identified` (§4) already makes. -/
 
 /-- `circuitSoundnessProp` is inhabited on the deployed carrier: by reflexivity of bisimulation
 (`bisim_eq`), the live cell's `obsStream` is circuit-sound against its OWN stream (the impl is its
@@ -189,13 +207,116 @@ theorem circuitSoundnessProp_inhabited (Impl : TurnCoalg Obs AdmissibleTurn) (x 
     circuitSoundnessProp (obsStream Impl x s) (carrier Impl x s) :=
   circuitSoundnessProp_of_bisim (bisim_eq Impl) rfl s
 
-/-- `polisFloorProp` is inhabited on the deployed carrier: the trivial floor `fun _ => True` holds
-at every tick of any `obsStream`. (A non-trivial floor's monitor is `PolisMonitor.polisFloorMonitor`,
-§6.) -/
-theorem polisFloorProp_inhabited (Impl : TurnCoalg Obs AdmissibleTurn) (x : Impl.Carrier)
-    (s : Sched AdmissibleTurn) :
+/-- `polisFloorProp` is inhabited on the deployed carrier **at the TRIVIAL floor** `fun _ => True`,
+which holds at every tick of any `obsStream`. Read the statement, not the name: this says almost
+nothing — and `polisFloorProp_forall_shape_forces_trivial` below proves that it *cannot* say more,
+because the `∀ Impl x s` shape admits NO non-trivial floor at all. The honest inhabitation, at a floor
+that genuinely discriminates, is `polisFloorProp_inhabited_nontrivial` (§5b); the general non-vacuity
+route for a real floor is `polisFloorProp_of_pointwise`, and its monitor is
+`PolisMonitor.polisFloorMonitor` (§6). -/
+theorem polisFloorProp_inhabited_trivial_floor (Impl : TurnCoalg Obs AdmissibleTurn)
+    (x : Impl.Carrier) (s : Sched AdmissibleTurn) :
     polisFloorProp (fun _ => True) (carrier Impl x s) :=
   fun _ => trivial
+
+/-! ### §5a — WHY the `∀`-shape is stuck at `fun _ => True` (the triviality is PROVEN, not pleaded).
+
+It would be easy to excuse the `fun _ => True` above as an unavoidable consequence of `Obs` being
+abstract. That excuse is checkable, so we check it: `echoCell` is a legitimate `TurnCoalg` whose
+tick-`0` observation is *any* chosen `o : Obs`, so a floor that holds on every deployed carrier must
+hold on every observation whatsoever — i.e. it is `True` up to `Iff`. The `∀`-shape is therefore
+UNSTRENGTHENABLE: it is not that we did not try, it is that there is nothing there.
+
+That is an indictment of the SHAPE, not a licence. The fix is the one `not_identified` (§4) already
+uses: quantify EXISTENTIALLY over a concrete carrier. §5b does exactly that. -/
+
+/-- The **echo cell** — a legitimate deployed `TurnCoalg` that emits its own state and is driven along
+any schedule. Its tick-`0` observation is whatever start state it is handed, which is what makes the
+`∀`-shape collapse. -/
+def echoCell : TurnCoalg Obs AdmissibleTurn where
+  Carrier := Obs
+  step := fun w => (w, fun _ => w)
+
+/-- **`polisFloorProp_forall_shape_forces_trivial`** — the `∀ Impl x s` shape admits ONLY the trivial
+floor. If a floor holds at every tick of EVERY deployed carrier, then it holds of EVERY observation:
+instantiate at `echoCell` started at `o` and read tick `0`. So `polisFloorProp_inhabited_trivial_floor`
+is not merely stated at `fun _ => True` — at that shape, no other floor is available, and any
+"`∀`-inhabitation" result is exactly as strong as `True`. (Needs one inhabitant `t` of
+`AdmissibleTurn`, to have a schedule to run.) -/
+theorem polisFloorProp_forall_shape_forces_trivial (t : AdmissibleTurn) (floor : Obs → Prop)
+    (h : ∀ (Impl : TurnCoalg Obs AdmissibleTurn) (x : Impl.Carrier) (s : Sched AdmissibleTurn),
+        polisFloorProp floor (carrier Impl x s)) :
+    ∀ o, floor o :=
+  fun o => h echoCell o (fun _ => t) 0
+
+/-- The collapse as an `Iff`: at the `∀`-shape, "the floor is inhabited on every deployed carrier" is
+EQUIVALENT to "the floor is trivially true everywhere". No information is carried by such a statement.
+-/
+theorem polisFloorProp_forall_shape_iff_trivial (t : AdmissibleTurn) (floor : Obs → Prop) :
+    (∀ (Impl : TurnCoalg Obs AdmissibleTurn) (x : Impl.Carrier) (s : Sched AdmissibleTurn),
+        polisFloorProp floor (carrier Impl x s)) ↔ (∀ o, floor o) :=
+  ⟨polisFloorProp_forall_shape_forces_trivial t floor, fun h _ _ _ n => h _⟩
+
+/-! ### §5b — The HONEST inhabitation: a non-trivial floor, on a concrete deployed carrier.
+
+Following `not_identified`'s pattern (§4), we drop to a concrete `Obs = Bool` where a floor can
+actually discriminate. `boolFloor b := (b = true)` reads "the subject is NOT foreclosed at this tick";
+it genuinely FAILS at `false`, so it is not `True` in disguise. We then exhibit BOTH polarities on the
+deployed `obsStream`, driven along an ARBITRARY unbounded adversarial schedule:
+
+  * a COMPLIANT cell whose stream satisfies the floor at every tick — real inhabitation;
+  * a CAPTURED cell whose stream VIOLATES it — so the predicate is refutable on the deployed carrier,
+    i.e. it is a genuine bar and not a tautology.
+
+Both cells count schedule ticks in their state, so the adversary really drives them. -/
+
+section NonTrivialFloor
+
+/-- The polis floor over a concrete `Obs = Bool`: the subject is not foreclosed at this tick. -/
+def boolFloor : Bool → Prop := fun b => b = true
+
+/-- The floor is NON-TRIVIAL: it genuinely fails at an observation. Not `True` in disguise. -/
+theorem boolFloor_nontrivial : ∃ b, ¬ boolFloor b := ⟨false, by simp [boolFloor]⟩
+
+/-- A **COMPLIANT** deployed cell: its state counts adversary ticks (so the schedule really drives
+it), and it never forecloses the subject — it emits `true` at every tick. -/
+def compliantCell : TurnCoalg Bool Unit where
+  Carrier := Nat
+  step := fun n => (true, fun _ => n + 1)
+
+/-- A **CAPTURED** deployed cell: same shape, same adversary, but the subject is foreclosed — it
+emits `false`. -/
+def capturedCell : TurnCoalg Bool Unit where
+  Carrier := Nat
+  step := fun n => (false, fun _ => n + 1)
+
+/-- Start states (the cells' carriers are `Nat`; named so numerals elaborate against the field). -/
+def compliantStart : compliantCell.Carrier := (0 : Nat)
+/-- The captured cell's start state. -/
+def capturedStart : capturedCell.Carrier := (0 : Nat)
+
+/-- **`polisFloorProp_inhabited_nontrivial`** — the honest replacement for the `fun _ => True`
+inhabitation. On a CONCRETE deployed carrier the polis floor is inhabited at a floor that genuinely
+discriminates, and it is REFUTABLE there too:
+
+  1. `boolFloor` fails at some observation (it is not `True` in disguise);
+  2. the compliant cell's deployed `obsStream` satisfies it at EVERY tick, along ANY unbounded
+     adversarial schedule;
+  3. the captured cell's deployed `obsStream` VIOLATES it — the floor is a real bar, and
+     `polisFloorProp` is not a tautology over the carrier.
+
+Together (2)+(3) say `polisFloorProp boolFloor` separates deployed cells: exactly the content the
+`∀`-shape provably cannot carry (§5a). -/
+theorem polisFloorProp_inhabited_nontrivial :
+    (∃ b, ¬ boolFloor b)
+    ∧ (∀ s : Sched Unit, polisFloorProp boolFloor (carrier compliantCell compliantStart s))
+    ∧ (∀ s : Sched Unit, ¬ polisFloorProp boolFloor (carrier capturedCell capturedStart s)) := by
+  refine ⟨boolFloor_nontrivial, fun s n => rfl, fun s hcap => ?_⟩
+  -- The captured cell emits `false` at tick 0, so its floor obligation there IS `false = true`.
+  have h0 : boolFloor (carrier capturedCell capturedStart s 0) := hcap 0
+  exact Bool.noConfusion (h0 : (false : Bool) = true)
+
+end NonTrivialFloor
 
 /-! ## §6 — Carrier bound; the monitor is CLOSED.
 
@@ -212,5 +333,13 @@ the flow-policy floor's bad-prefix is DECIDED by the deployed Büchi game `FlowR
 (`PolisMonitor.flowBad_iff_decide`). The ONLY thing left is genuinely TERMINAL, not a TODO:
 unbounded liveness is *proven* non-monitorable (`PolisMonitor.liveness_not_prefix_refutable`) and
 belongs to charters/appeal, not the kernel. -/
+
+/-! ## Axiom hygiene — the carrier's non-vacuity keystones. -/
+
+#print axioms not_identified
+#print axioms polisFloorProp_inhabited_nontrivial
+#print axioms polisFloorProp_forall_shape_forces_trivial
+#print axioms polisFloorProp_forall_shape_iff_trivial
+#print axioms circuitSoundnessProp_inhabited
 
 end Metatheory.PolisStreamCarrier
