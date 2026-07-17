@@ -87,6 +87,7 @@ open Dregg2.Crypto.RomCounting
 open Dregg2.Crypto.RomQueryFloor (collWin collWin_pure collWin_query birthday_cond birthday_bound)
 
 set_option autoImplicit false
+set_option linter.unusedSectionVars false
 
 /-! ## §1 — `findCollisionZ`: EXTRACTION-AS-DATA over the deployed `merkleRecomputeZ`.
 
@@ -105,7 +106,9 @@ level's preimage. -/
 theorem merkleRecomputeZ_cons (sponge : List ℤ → ℤ) (idx : Nat) (acc s : ℤ) (rest : List ℤ) :
     merkleRecomputeZ sponge idx acc (s :: rest)
       = merkleRecomputeZ sponge (idx / 2) (sponge (nodeInput idx acc s)) rest := by
-  unfold merkleRecomputeZ nodeInput
+  show merkleRecomputeZ sponge (idx / 2)
+      (if idx % 2 = 0 then sponge [acc, s] else sponge [s, acc]) rest = _
+  unfold nodeInput
   split_ifs <;> rfl
 
 /-- `nodeInput` is injective in the leaf slot (the sibling `s` and index bit are held fixed): distinct
@@ -192,7 +195,7 @@ theorem findCollisionZ_none_binds (sponge : List ℤ → ℤ) (siblings : List �
   by_contra hne
   obtain ⟨p, hp⟩ := findCollisionZ_complete sponge siblings idx l1 l2 hne hroot
   rw [hp] at hnone
-  exact Option.noConfusion hnone
+  exact absurd hnone (Option.some_ne_none p)
 
 /-- **`equivocation_extracts_collisionZ` — the deployed `OodCommitmentBinding` equivocation, extracted as
 data.** A prover that opens two DISTINCT values (`vOpened ≠ vCommitted`) to ONE committed root (the
@@ -212,7 +215,35 @@ theorem equivocation_extracts_collisionZ (sponge : List ℤ → ℤ)
   obtain ⟨x, y⟩ := p
   exact ⟨x, y, hp, findCollisionZ_sound sponge siblings idx vOpened vCommitted x y hp⟩
 
-/-! ## §2 — The Merkle ε: `birthday_cond` bounds `Pr[the query log contains a collision]`.
+/-! ## §2a — The polymorphic node-oracle recompute (no finiteness; the deployed instance is over ℤ). -/
+
+section MerklePoly
+
+variable {α : Type}
+
+/-- The ordered node preimage as an ORACLE POINT `(l, r) : α × α` (even index ⇒ leaf on the left). -/
+def pnode (idx : Nat) (acc s : α) : α × α :=
+  if idx % 2 = 0 then (acc, s) else (s, acc)
+
+/-- `pnode` is injective in the leaf slot. -/
+theorem pnode_inj (idx : Nat) (a b s : α) (h : pnode idx a s = pnode idx b s) : a = b := by
+  unfold pnode at h
+  split_ifs at h with hp
+  · exact ((Prod.mk.injEq ..).mp h).1
+  · exact ((Prod.mk.injEq ..).mp h).2
+
+/-- Recompute against the two-argument oracle `H : α × α → α`: the deployed `merkleRecomputeZ` with the
+node hash `sponge [a,b]` replaced by the oracle value `H (a, b)`. Structural recursion on `siblings`. -/
+def merkleRecO (H : α × α → α) : Nat → α → List α → α
+  | _,   acc, []        => acc
+  | idx, acc, s :: rest => merkleRecO H (idx / 2) (H (pnode idx acc s)) rest
+
+theorem merkleRecO_cons (H : α × α → α) (idx : Nat) (acc s : α) (rest : List α) :
+    merkleRecO H idx acc (s :: rest) = merkleRecO H (idx / 2) (H (pnode idx acc s)) rest := rfl
+
+end MerklePoly
+
+/-! ## §2b — The Merkle ε: `birthday_cond` bounds `Pr[the query log contains a collision]`.
 
 The birthday bound needs a FINITE oracle. The deployed node hash is `sponge [a, b]` over the width-pinned
 sponge state; we model it as the two-argument oracle `H : α × α → α` with `α` finite (the §4.2/§4.5
@@ -223,26 +254,6 @@ its `collWin` event fires on any equivocation. `birthday_cond` then bounds the c
 section RomMerkle
 
 variable {α : Type} [Fintype α] [DecidableEq α] [Nonempty α]
-
-/-- The ordered node preimage as an ORACLE POINT `(l, r) : α × α` (even index ⇒ leaf on the left). -/
-def pnode (idx : Nat) (acc s : α) : α × α :=
-  if idx % 2 = 0 then (acc, s) else (s, acc)
-
-/-- `pnode` is injective in the leaf slot. -/
-theorem pnode_inj (idx : Nat) (a b s : α) (h : pnode idx a s = pnode idx b s) : a = b := by
-  unfold pnode at h
-  split_ifs at h with hp
-  · exact (Prod.mk.injEq .. ▸ h).1
-  · exact (Prod.mk.injEq .. ▸ h).2
-
-/-- Recompute against the two-argument oracle `H : α × α → α`: the deployed `merkleRecomputeZ` with the
-node hash `sponge [a,b]` replaced by the oracle value `H (a, b)`. Structural recursion on `siblings`. -/
-def merkleRecO (H : α × α → α) : Nat → α → List α → α
-  | _,   acc, []        => acc
-  | idx, acc, s :: rest => merkleRecO H (idx / 2) (H (pnode idx acc s)) rest
-
-theorem merkleRecO_cons (H : α × α → α) (idx : Nat) (acc s : α) (rest : List α) :
-    merkleRecO H idx acc (s :: rest) = merkleRecO H (idx / 2) (H (pnode idx acc s)) rest := rfl
 
 /-- **The collision-finder as a query-log extractor.** Query the path preimages `pnode` level by level;
 at the first level whose two distinct preimages receive equal answers, output that colliding pair;
@@ -273,8 +284,8 @@ theorem collFinder_bounded (idx : Nat) (l1 l2 : α) (siblings : List α) :
         · exact QueryBounded.pure _ _
         · exact ih (idx / 2) h1 h2
       have hlen : 2 * (s :: rest).length = (2 * rest.length + 1) + 1 := by
-        simp [List.length_cons]; ring
-      rw [hlen]
+        simp only [List.length_cons]; ring
+      rw [collFinder, hlen]
       exact QueryBounded.query _ _ _ (fun h1 =>
         QueryBounded.query _ _ _ (fun h2 => hstep h1 h2))
 
@@ -297,19 +308,15 @@ theorem collFinder_equivocation_collWin (H : α × α → α) :
       rw [merkleRecO_cons, merkleRecO_cons] at hroot
       have hin : pnode idx l1 s ≠ pnode idx l2 s := fun heq => hne (pnode_inj idx l1 l2 s heq)
       -- Reduce `collWin` at the two head queries: answers are `H (pnode … l1 s)` and `H (pnode … l2 s)`.
-      rw [collWin_query, collWin_query]
+      rw [collFinder]
+      simp only [collWin_query]
       by_cases hcol : H (pnode idx l1 s) = H (pnode idx l2 s)
       · -- Collision at this level: the finder emits `(pnode l1, pnode l2)`.
-        have hcond : (pnode idx l1 s ≠ pnode idx l2 s ∧ H (pnode idx l1 s) = H (pnode idx l2 s)) := ⟨hin, hcol⟩
-        rw [if_pos hcond]
-        simp only [collWin, OracleComp.eval_pure, decide_not]
-        rw [decide_eq_true_iff, Bool.and_eq_true, decide_eq_true_iff, Bool.not_eq_true',
-          decide_eq_false_iff_not]
+        rw [if_pos ⟨hin, hcol⟩, collWin_pure]
+        simp only [Bool.and_eq_true, decide_eq_true_eq]
         exact ⟨hin, hcol⟩
       · -- No collision here: recurse with the two answers, still distinct, still to one root.
-        have hcond : ¬ (pnode idx l1 s ≠ pnode idx l2 s ∧ H (pnode idx l1 s) = H (pnode idx l2 s)) :=
-          fun h => hcol h.2
-        rw [if_neg hcond]
+        rw [if_neg (fun h => hcol h.2)]
         exact ih (idx / 2) _ _ hcol hroot
 
 /-- **⚑ THE MERKLE ε — `birthday_cond` bounds the probability the query log contains a collision.**
@@ -321,7 +328,8 @@ theorem merkle_path_collision_prob_le (idx : Nat) (l1 l2 : α) (siblings : List 
     (S : Finset (α × α)) (σ : α × α → α)
     (hσ : ∀ a ∈ S, ∀ b ∈ S, a ≠ b → σ a ≠ σ b) :
     condProb (cyl S σ) (collWin (collFinder idx l1 l2 siblings))
-      ≤ (2 * siblings.length * S.card + 2 * siblings.length * (2 * siblings.length) + 1)
+      ≤ (((2 * siblings.length : ℕ) : ℝ) * (S.card : ℝ)
+          + ((2 * siblings.length : ℕ) : ℝ) * ((2 * siblings.length : ℕ) : ℝ) + 1)
           / (Fintype.card α : ℝ) :=
   birthday_cond (collFinder_bounded idx l1 l2 siblings) S σ hσ
 
@@ -335,7 +343,8 @@ theorem merkle_equivocation_prob_le (idx : Nat) (l1 l2 : α) (siblings : List α
     (hσ : ∀ a ∈ S, ∀ b ∈ S, a ≠ b → σ a ≠ σ b) :
     condProb (cyl S σ)
         (fun H => decide (merkleRecO H idx l1 siblings = merkleRecO H idx l2 siblings))
-      ≤ (2 * siblings.length * S.card + 2 * siblings.length * (2 * siblings.length) + 1)
+      ≤ (((2 * siblings.length : ℕ) : ℝ) * (S.card : ℝ)
+          + ((2 * siblings.length : ℕ) : ℝ) * ((2 * siblings.length : ℕ) : ℝ) + 1)
           / (Fintype.card α : ℝ) := by
   refine le_trans (condProb_le_of_imp ?_) (merkle_path_collision_prob_le idx l1 l2 siblings S σ hσ)
   intro H _ hwin
@@ -355,9 +364,7 @@ theorem sponge_pair_oracle_bridge (sponge : List ℤ → ℤ) (idx : Nat) (acc :
   induction siblings generalizing idx acc with
   | nil => rfl
   | cons s rest ih =>
-      rw [merkleRecO_cons, merkleRecomputeZ_cons]
-      show merkleRecO (fun p => sponge [p.1, p.2]) (idx / 2) (sponge [pnode idx acc s |>.1, _]) rest = _
-      rw [ih]
+      rw [merkleRecO_cons, merkleRecomputeZ_cons, ih]
       congr 1
       unfold pnode nodeInput
       split_ifs <;> rfl
@@ -466,7 +473,7 @@ theorem findCollisionZ_fires_on_constant_sponge :
 conditioning `|S| = 0`, and `|α| = 7`, the birthday bound is `(0 + 4 + 1)/7 = 5/7 < 1` — a real
 probability, not a vacuous `≤ 1`. -/
 theorem merkle_epsilon_lt_one_example :
-    ((2 * 1 * 0 + 2 * 1 * (2 * 1) + 1 : ℕ) : ℝ) / 7 < 1 := by norm_num
+    (((2 * 1 : ℕ) : ℝ) * (0 : ℝ) + ((2 * 1 : ℕ) : ℝ) * ((2 * 1 : ℕ) : ℝ) + 1) / 7 < 1 := by norm_num
 
 /-! ## Kernel-clean keystones. -/
 
