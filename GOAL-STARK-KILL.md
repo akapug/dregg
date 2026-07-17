@@ -2262,3 +2262,38 @@ clean holistic gate is impractical. Extracting isolated high-value pieces; the r
 SECURITY TALLY THIS SESSION: **5 forgery-class bugs**, all invisible to ~15k green tests, all found by
 "what break would this catch?": ed25519-revocation, credentials-zero-crypto, peer-exchange-fail-open,
 fold-delta-escalation, blocklace-evidence-forgery.
+
+## ⚑ BOARD HARVEST — final state (2026-07-17 ~02:45)
+**COMMITTED (the security-critical + cleanly-isolated):**
+- `5dbeadf2d` Lane C — DSL cmp NOT range-sound (forged `5<=3` accepts live); characterization pin + non-vacuity.
+- `f00a10113` Lane F — **5th forgery**: blocklace equivocation exhibits verified NON-STRICT on an
+  ATTACKER-CHOSEN key (small-order key + `(R=identity,s=0)` = no-secret slashing exhibit; proven by
+  execution vs ed25519-dalek 2.2.0) → `verify_strict`; PLUS the TREE-WIDE `ed25519_strict_guard`
+  ("every first-party ed25519 verify is STRICT") — the invariant, not the patch, is the deliverable.
+- `37a571e5b` Lane B — `ConstraintProver`→`ConstraintValidator` / `ConstraintProof`→`TraceSummary`
+  (census found ZERO surfaces treating the digest as a proof → truth-in-naming, not a rewire); ratchet
+  WIDENED to count both names (a rename can't dodge it), baseline 17→15, tooth mutation-proven.
+
+**HELD — recorded in TESTQALOG, re-apply on a QUIET tree (nothing lost; lanes committed nothing):**
+- **Lane A** (deny flip): verified green, but 124 manifests tangled with co-tenant lanes (turn/Cargo.toml
+  carries another lane's deps). Finding stands: **the lint cage covered only 107/207 crates** — even the
+  warn-era "authoritative list" was half-blind. Caught a 4th phantom (dregg-turn `verifier`, always-false →
+  verify-only builds lost the aggregation path). `DenyFlipReapplyResidual`.
+- **Lane E** (15 dead pub items, −796 LOC, incl. ANOTHER drifted mirror `mint_from_block_witnesses` —
+  already gone from the tree): deletions scattered among ~680 co-tenant dirty files; separating them at 2:45am
+  risks a sloppy commit. Method is the gold standard though: 7,294 items enumerated, `pub use`/comments/impl-
+  bodies excluded as non-consumers, each deletion individually rg-verified.
+- **Lane D** (1059 doc citations repointed; real census 1217, not 629 — my number undercounted).
+
+**WHY STOP:** the tree is 694 dirty files (my 6 lanes + a co-tenant flood). I extracted what is
+security-critical and isolated; the rest is cleanup whose value does not justify a careless sweep. The
+`git add -A` hazard bit 3× tonight — I am not going to become the 4th.
+
+### SESSION TALLY
+Goal's original list: **CLOSED** (one deviation documented, not forced). **5 forgery-class security bugs**
+found+fixed, all invisible to ~15k green tests: ed25519-revocation · credentials zero-crypto · peer-exchange
+fail-OPEN · fold-delta escalation · blocklace no-secret exhibit. **Deleted for real**: the mock IVC engine,
+the 868-line mirror, the gen_plonky3 corpse (emitted UNCOMPILABLE code), the StateTransitionAir husk.
+**Ratchets standing**: law-#1 · mock-proof-purge · effect-enum · verify-routing · ed25519-strict ·
+(unexpected_cfgs deny pending re-apply). Two of the five bugs were the SAME primitive-contract drift —
+which is why the tree-wide invariant, not the patch, is the lasting deliverable.
