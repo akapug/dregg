@@ -570,6 +570,23 @@ jobs:
       - name: Zero-sorry guard
         run: bash scripts/axiom-hygiene-guard.sh
 
+      # CRYPTO LINKING-SEAM GAUNTLET (2026-07-17, CI-meaningfulness audit).
+      # `Dregg2.Crypto.CryptoVerifyAll` is the aggregator for the from-scratch PQ
+      # linking chain. The ML-DSA `SignCoreSpec` (sign =spec), ML-KEM `EncapsCoreSpec`
+      # (encaps =spec), and the `AcvpKats` NIST-ACVP-style native_decide KAT batch are
+      # imported by NOTHING ELSE in the corpus (verified: `grep -rl import` finds only
+      # CryptoVerifyAll) and the module is DELIBERATELY outside the default `Dregg2.lean`
+      # aggregator — its heavy KAT `native_decide` chain would bloat every default build.
+      # Net effect before this step: NO CI job compiled these PQ floor proofs at all —
+      # the sign/encaps `=spec` results and the empirical KAT floor were verified only
+      # on a dev laptop, exactly the "green on ember's laptop" class. This runs LAST in
+      # this job so it reuses the already-built+warm corpus above: only the incremental
+      # crypto-gauntlet closure compiles here (the default corpus is cached from the
+      # zero-sorry build). A red here is a rotted PQ floor proof, not infra flake.
+      - name: Crypto linking-seam gauntlet (SignCoreSpec/EncapsCoreSpec/AcvpKats — outside the default aggregator)
+        working-directory: metatheory
+        run: lake build Dregg2.Crypto.CryptoVerifyAll
+
   descriptor-drift:
     name: Descriptor Lean↔JSON drift gate
     runs-on: ubuntu-latest
