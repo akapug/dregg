@@ -4491,7 +4491,18 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       const w = wasm!;
       const cc = await loadState();
       if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
-      const delegatorKeyHex = Array.from(cc.publicKey).map(b => b.toString(16).padStart(2, "0")).join("");
+      if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+      if (cc.needsPassphraseSetup) {
+        return { id: message.id, error: "Set a cipherclerk passphrase before issuing bearer capabilities." };
+      }
+      // The WASM `create_bearer_cap` first argument is the delegator's 32-byte
+      // Ed25519 *signing seed* (secret), NOT a pubkey: it does
+      // `SigningKey::from_bytes(&seed).sign(&binding)`. Passing the public key
+      // would silently derive an unrelated (and publicly reconstructable)
+      // signing key, issuing the cap under a garbage delegator identity. Hex the
+      // real secret seed so the cap is signed by — and bound to — the user's
+      // actual key (its `delegator_pubkey` then equals `cc.publicKey`).
+      const delegatorKeyHex = Array.from(cc.secretKey).map(b => b.toString(16).padStart(2, "0")).join("");
       // The WASM expiry parameter is a u64 (Unix seconds; 0 = no expiry) and
       // crosses the wasm-bindgen boundary as a BigInt — a plain JS number throws
       // "Cannot convert N to a BigInt". Coerce here (the popup can only send a
@@ -4657,6 +4668,9 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       const cc = await loadState();
       if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
       if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+      if (cc.needsPassphraseSetup) {
+        return { id: message.id, error: "Set a cipherclerk passphrase before running a peer exchange." };
+      }
       // Route through the cipherclerk's canonical `PeerExchange` session so
       // the emitted `PeerStateTransition` is signed by the cipherclerk's
       // Ed25519 key. The previous binding (`peer_exchange_with_proof`)
@@ -4757,6 +4771,9 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       const cc = await loadState();
       if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
       if (!cc.secretKey) return { id: message.id, error: "Cipherclerk secret key not available" };
+      if (cc.needsPassphraseSetup) {
+        return { id: message.id, error: "Set a cipherclerk passphrase before posting an encrypted intent." };
+      }
       const matchSpec = (message.matchSpec as MatchSpec) || {};
       const options = (message.options as { expiry?: number; kind?: string } | undefined) || {};
       const kind = options.kind || "need";
