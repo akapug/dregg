@@ -688,10 +688,17 @@ pub fn permission_outcome_to_acp(outcome: &PermissionOutcome) -> Value {
     // (and Hermes's trajectory) sees exactly which mandate leg decided.
     match outcome {
         PermissionOutcome::Allow {
-            receipt, remaining, ..
+            receipt,
+            remaining,
+            whisper,
+            ..
         } => {
             sel["deosReceipt"] = json!(receipt);
             sel["deosRemaining"] = json!(remaining);
+            // THE CONTEXT CHANNEL's wire face: absent when None (additive).
+            if let Some(w) = whisper {
+                sel["deosWhisper"] = json!(w);
+            }
         }
         PermissionOutcome::Reject { reason, .. } => {
             sel["deosRefusal"] = json!(reason);

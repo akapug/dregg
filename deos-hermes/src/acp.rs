@@ -136,6 +136,13 @@ pub enum PermissionOutcome {
         /// alongside the receipt that witnesses it.
         #[serde(default)]
         paid: u64,
+        /// THE CONTEXT CHANNEL — at most one bounded (≤200B) single-line
+        /// contextual whisper riding this admitted verdict
+        /// (`sdk::tool_gateway::WhisperFrame::text`, budgets enforced at
+        /// intake). `None`/absent = no context pending — the common case, and
+        /// always the case on old nodes (additive: absent on the wire).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        whisper: Option<String>,
     },
     /// The gate REFUSED the call in-band (no turn, no spend). Maps to ACP
     /// `deny`. The `reason` names the leg that bit (scope/deadline/rate/error).

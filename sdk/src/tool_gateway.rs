@@ -326,6 +326,70 @@ impl std::fmt::Display for GatewayRefusal {
 
 impl std::error::Error for GatewayRefusal {}
 
+/// Byte budget for a [`WhisperFrame`]'s text — one line an agent reads in one
+/// saccade (~50 tokens). Enforced at frame intake ([`WhisperFrame::new`] clips
+/// on a codepoint boundary), so no oversized frame can ride a gate return.
+pub const WHISPER_MAX_BYTES: usize = 200;
+
+/// **THE CONTEXT CHANNEL** — a bounded, single-line contextual frame riding an
+/// ADMITTED gate return (`ToolReceipt::whisper`). The gate fires on every tool
+/// call of a mandated inhabitant; this is the one moment the driving loop is
+/// already reading a value from the gateway, so a whisper delivered here reaches
+/// the agent *between tool calls* at zero additional round-trips.
+///
+/// Contract (all fail-closed toward the caller):
+/// * absence is the normal case — `None` on the receipt means "no context";
+/// * never participates in admission — [`deleg_admit`] and the budget/charge
+///   legs are computed exactly as without a whisper, and a refused call carries
+///   no whisper (refusals stay minimal);
+/// * bounded — text is clipped to [`WHISPER_MAX_BYTES`] on a codepoint boundary
+///   and newlines collapse, at intake, so no source can exceed the budget;
+/// * not attested (this slice) — the frame rides the RETURN VALUE, not the
+///   committed turn, so the Lean-mirrored admission crown is untouched. Binding
+///   `hash(text)` into the metered turn (receipt-backed whisper provenance) is
+///   deliberate future work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhisperFrame {
+    /// The one line (≤ [`WHISPER_MAX_BYTES`] bytes, no `'\n'`).
+    pub text: String,
+    /// The writer's cell, when the deposit path knows it (attribution).
+    pub from: Option<CellId>,
+    /// Writer-side sequence number (dedup / audit).
+    pub seq: u64,
+}
+
+impl WhisperFrame {
+    /// Build a frame, enforcing the channel budgets: newlines collapse to
+    /// `"; "`, and the text is clipped to [`WHISPER_MAX_BYTES`] on a UTF-8
+    /// codepoint boundary. An all-whitespace text yields `None` — an empty
+    /// whisper is not a whisper.
+    pub fn new(text: &str, from: Option<CellId>, seq: u64) -> Option<WhisperFrame> {
+        let joined = text
+            .split('\n')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("; ");
+        if joined.is_empty() {
+            return None;
+        }
+        let mut end = joined.len().min(WHISPER_MAX_BYTES);
+        while end > 0 && !joined.is_char_boundary(end) {
+            end -= 1;
+        }
+        (end > 0).then(|| WhisperFrame {
+            text: joined[..end].to_string(),
+            from,
+            seq,
+        })
+    }
+}
+
+/// A pluggable whisper deposit source the gateway drains one frame from per
+/// ADMITTED call. Must be non-blocking (a RAM read — the gate's latency budget
+/// is sacred); a source that has nothing returns `None`.
+pub type WhisperSource = Box<dyn FnMut() -> Option<WhisperFrame> + Send>;
+
 /// The outcome of an admitted, committed tool invocation: the executor receipt
 /// proving the metered turn committed, plus the new counter value.
 #[derive(Clone, Debug)]
@@ -341,6 +405,10 @@ pub struct ToolReceipt {
     /// the metered turn, so the receipt witnesses the payment as well as the
     /// authorization — the "charge recorded in the verdict".
     pub paid: u64,
+    /// THE CONTEXT CHANNEL — at most one bounded [`WhisperFrame`] riding this
+    /// admitted return (`None` = no context pending; the overwhelmingly common
+    /// case, and always the case when no [`WhisperSource`] is installed).
+    pub whisper: Option<WhisperFrame>,
 }
 
 /// A custody-receipt-shaped DELIVERY WITNESS: proof that a routed tool-call's
@@ -509,6 +577,10 @@ pub struct ToolGateway {
     /// the caller's [`ToolGateway::resolve`]. A delivered route lands an
     /// `Ok(RoutedResult)`; a broken route lands an `Err(reason)`.
     results: std::collections::HashMap<[u8; 32], Result<RoutedResult, String>>,
+    /// THE CONTEXT CHANNEL's deposit seam: an optional [`WhisperSource`] the
+    /// gateway drains ONE frame from per admitted call. `None` (the default)
+    /// means every receipt carries `whisper: None` — exactly today's behavior.
+    whisper_source: Option<WhisperSource>,
 }
 
 /// One admitted routed tool-call sitting on the gateway's inbox, awaiting the
@@ -656,6 +728,7 @@ impl ToolGateway {
             inbox: VecDeque::new(),
             pending: PendingTurnRegistry::new(),
             results: std::collections::HashMap::new(),
+            whisper_source: None,
         })
     }
 
@@ -708,6 +781,7 @@ impl ToolGateway {
             inbox: VecDeque::new(),
             pending: PendingTurnRegistry::new(),
             results: std::collections::HashMap::new(),
+            whisper_source: None,
         })
     }
 
@@ -808,6 +882,26 @@ impl ToolGateway {
         self.charge
             .as_ref()
             .map(|c| c.budget.saturating_sub(self.spent))
+    }
+
+    /// Install THE CONTEXT CHANNEL's deposit source. The gateway drains at most
+    /// one frame per ADMITTED call and rides it on the receipt
+    /// ([`ToolReceipt::whisper`]). The source must be non-blocking (a RAM read);
+    /// budgets are re-enforced at intake regardless of what it yields.
+    /// Un-installed (the default), every receipt carries `whisper: None`.
+    pub fn set_whisper_source(&mut self, source: WhisperSource) {
+        self.whisper_source = Some(source);
+    }
+
+    /// Drain one whisper frame for an admitted call, fail-closed: no source, a
+    /// source with nothing, or an over-budget frame that clips to empty all
+    /// yield `None`. Never touches admission state.
+    fn next_whisper(&mut self) -> Option<WhisperFrame> {
+        let frame = self.whisper_source.as_mut().and_then(|s| s())?;
+        // Re-enforce the channel budgets at intake — the source is not trusted
+        // to have clipped (WhisperFrame::new is the only way to build a frame,
+        // but a stored frame's text could have been mutated since).
+        WhisperFrame::new(&frame.text, frame.from, frame.seq)
     }
 
     /// The per-call price of a paid mandate (`0` for a free mandate).
@@ -955,6 +1049,9 @@ impl ToolGateway {
             calls_made: new,
             remaining: self.remaining(),
             paid,
+            // THE CONTEXT CHANNEL: drained only on a COMMITTED call (a refusal
+            // returned above, before any drain — refusals carry no whisper).
+            whisper: self.next_whisper(),
         })
     }
 
@@ -1106,11 +1203,16 @@ impl ToolGateway {
 
             match self.worker.execute_method(&self.grant.tool_method, effects) {
                 Ok(receipt) => {
+                    // THE CONTEXT CHANNEL rides the DRAIN (delivery time), the
+                    // routed twin of the inline population — same one-frame,
+                    // committed-calls-only discipline.
+                    let whisper = self.next_whisper();
                     let tool_receipt = ToolReceipt {
                         receipt,
                         calls_made: item.new_count,
                         remaining: self.grant.rate_limit - item.new_count,
                         paid: item.charged,
+                        whisper,
                     };
                     let delivery = DeliveryReceipt {
                         routed_hash: item.routed_hash,
@@ -1542,5 +1644,69 @@ mod tests {
             gw2.worker_for_test().cap_issuer(),
             "random admits must not collide on issuers"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // THE CONTEXT CHANNEL — whisper frames on admitted gate returns.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn whisper_frame_enforces_the_channel_budgets() {
+        // One line: newlines collapse.
+        let f = WhisperFrame::new("first\nsecond\n", None, 1).expect("non-empty frame");
+        assert_eq!(f.text, "first; second");
+
+        // Byte cap on a codepoint boundary: 199 ASCII bytes + one 3-byte
+        // codepoint must clip to 199 bytes, never split the codepoint.
+        let long = "x".repeat(199) + "€"; // 202 bytes total
+        let f = WhisperFrame::new(&long, None, 2).expect("clipped frame");
+        assert_eq!(f.text.len(), 199, "clip lands on the codepoint boundary");
+        assert!(f.text.chars().all(|c| c == 'x'));
+
+        // An all-whitespace whisper is not a whisper.
+        assert!(WhisperFrame::new("  \n  ", None, 3).is_none());
+    }
+
+    #[test]
+    fn whisper_rides_admitted_returns_only_and_never_couples_to_admission() {
+        let (rt, root) = fresh_epoch();
+        let mut gw = ToolGateway::admit(&rt, &root, seeded_grant()).expect("admit");
+
+        // No source installed (the default): receipts carry None — today's shape.
+        let r1 = gw.invoke(77, 50, vec![]).expect("call 1 commits");
+        assert_eq!(r1.whisper, None, "no source => no whisper, nothing else changes");
+
+        // Install a one-frame source; the next ADMITTED call carries the frame…
+        let mut frames = vec![WhisperFrame::new(
+            "teammate landed the schema change — rebase before writing",
+            None,
+            1,
+        )
+        .unwrap()]
+        .into_iter();
+        gw.set_whisper_source(Box::new(move || frames.next()));
+
+        // …but a REFUSED call carries nothing and must NOT drain the source
+        // (refusals stay minimal; the frame waits for a committed call).
+        let refused = gw.invoke(99, 50, vec![]);
+        assert!(
+            matches!(
+                refused,
+                Err(ToolCallError::Refused(GatewayRefusal::OutOfScope { .. }))
+            ),
+            "out-of-scope refusal is unchanged by the channel"
+        );
+
+        let r2 = gw.invoke(77, 50, vec![]).expect("call 2 commits");
+        assert_eq!(
+            r2.whisper.as_ref().map(|w| w.text.as_str()),
+            Some("teammate landed the schema change — rebase before writing"),
+            "the admitted call after the refusal carries the frame"
+        );
+        assert_eq!(r2.calls_made, 2, "metering unchanged by the whisper");
+
+        // Source drained: the next admitted call is back to None.
+        let r3 = gw.invoke(77, 50, vec![]).expect("call 3 commits");
+        assert_eq!(r3.whisper, None, "one frame delivered exactly once");
     }
 }
