@@ -336,9 +336,28 @@ one-time pad** (enumeration-proven over the full mask space, even against a
 coalition knowing all-but-one mask — `pad_is_exact_and_secret_independent`); each
 party derives its mod-t share LOCALLY (`σ_0 = y − r_0`, `σ_i = −r_i`); one
 `a2b_mod_t` bridge (exact secret-shared sum + n−1 oblivious conditional
-subtractions of the public `t`) feeds the UNCHANGED crossing. So production needs
-no new partial-decrypt primitive at all — the EXISTING federation threshold-decrypt
-is pointed at `ct'`, because its output is now safe to open.
+subtractions of the public `t`) feeds the UNCHANGED crossing.
+
+> **⚠ CORRECTED 2026-07-17 — this section used to claim "production needs no new partial-decrypt primitive
+> at all — the EXISTING federation threshold-decrypt is pointed at `ct'`, because its output is now safe to
+> open." That is a CATEGORY ERROR and it would not compile, let alone hold.**
+> `federation/src/threshold_decrypt.rs` is a **symmetric** scheme — Shamir-shared *symmetric* key +
+> BLAKE3-keyed **ChaCha20-Poly1305 AEAD** — and it says so itself (`:9-14`: *"This is a prototype scheme
+> optimized for simplicity… At epoch start, a **dealer** generates a random 32-byte symmetric key"*). You
+> cannot point an AEAD decryptor at a **BFV ciphertext**; `ct'` needs a *BFV threshold partial-decrypt*,
+> which is a different primitive entirely. Two unrelated things share the name "threshold decrypt" — a
+> false cognate, and the sort this repo has been deleting.
+> **What masking DOES buy (real, measured below):** the opened value is `y = x + r`, so whoever performs the
+> decrypt learns nothing about `x`. **What it does NOT buy:** custody of the BFV *secret key*. If one party
+> holds `sk`, it can decrypt the UNMASKED aggregate directly and the no-viewer property is gone — masking
+> the output does not fix key custody at the input.
+> **The real primitive, and it is closer than the old claim pretended:** `fhe.rs 0.1.1` (ALREADY in the
+> lockfile) ships `mbfv` (Mouchet et al., ePrint 2020/304) — collective keygen (`PublicKeyShare` +
+> `CommonRandomPoly`) and collective decryption (`DecryptionShare`). **Verified caveats, upstream:** n-of-n
+> only (no t-of-n), and the smudging noise is a literal upstream `TODO`
+> (`mbfv/secret_key_switch.rs:76`: *"TODO this should be exponential in ciphertext noise!"*) — so the
+> IND-CPA-D noise channel named at `boundary.rs:54-57` is open UPSTREAM too, not just here.
+> `NoViewerKeyCustodyResidual` — NAMED, not claimed.
 
 Measured (M2 Max, real BFV + real MPC, every row exactly equal to the plaintext
 reference; `AGG→p*` = mask + decrypt + a2b + crossing — the R4 decisive metric):
