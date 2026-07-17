@@ -65,8 +65,7 @@ pub use dregg_circuit::dsl::temporal_absence::{DslTimelineEntry, TemporalAbsence
 // Re-export production non-revocation proving API.
 pub use dregg_circuit::dsl::revocation::{
     DslRevocationTree, NonMembershipWitnessDsl, REVOCATION_TREE_DEPTH, SENTINEL_MAX, SENTINEL_MIN,
-    TREE_DEPTH, generate_non_revocation_trace, non_revocation_dsl_circuit,
-    revocation_hash_to_field,
+    TREE_DEPTH, generate_non_revocation_trace, revocation_hash_to_field,
 };
 
 // Re-export DSL-native fold proving API.
