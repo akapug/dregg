@@ -4,12 +4,13 @@
 //   * libdregg_lean.a — a single static archive of the native objects emitted by the
 //     Lean compiler for `Dregg2.Exec.FFI` and its ENTIRE transitive dependency
 //     closure (Dregg2 modules + mathlib + batteries + aesop + Qq + … — ~8200 .o).
-//     The git-tracked SEED archive lives next to this build.rs; it was produced by
+//     The read-only SEED archive lives next to this build.rs. It is NOT committed
+//     (gitignored by `dregg-lean-ffi/.gitignore` `*.a`); it is produced out-of-band by
 //     compiling each module's `.c` (lake's `:c` facet) with `leanc -c` and archiving
 //     with `llvm-ar` (see `scripts/seed-dregg2-closure.sh`).
 //
 // ── SWARM-SAFE ARCHIVE (the per-OUT_DIR working copy) ──
-// The git-tracked `libdregg_lean.a` is treated as a READ-ONLY SEED. A `cargo build`
+// The `libdregg_lean.a` is treated as a READ-ONLY SEED. A `cargo build`
 // NEVER mutates it. Instead, each build copies the seed into a per-`OUT_DIR` working
 // archive (`$OUT_DIR/libdregg_lean.a`) and does its splice → closure-completion →
 // reachability-GC against THAT copy, then links against it. Because `OUT_DIR` is
@@ -152,7 +153,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Seed the per-OUT_DIR WORKING archive (`build`) from the git-tracked SEED (`seed`), so the
+/// Seed the per-OUT_DIR WORKING archive (`build`) from the SEED (`seed`), so the
 /// splice/closure/GC steps below mutate the working copy and NEVER the shared seed (the swarm-safe
 /// split — see the top-of-file note). The seed is treated as read-only input.
 ///
@@ -220,7 +221,7 @@ fn seed_build_archive(seed: &Path, build: &Path) -> bool {
 /// `:c` facet, (2) `leanc -c`-compiling each freshly-emitted `Dregg2/**/*.c` whose `.c` is newer
 /// than its cached `.o`, and (3) splicing ONLY those `Dregg2_*.o` back into the (seeded) working
 /// archive — preserving the ~5600 expensive mathlib/batteries/aesop dependency objects untouched.
-/// `archive` here is the PER-OUT_DIR working copy, never the git-tracked seed.
+/// `archive` here is the PER-OUT_DIR working copy, never the seed.
 ///
 /// Incremental + cached: `lake` is itself incremental, the `leanc` step is guarded on
 /// `.c`-newer-than-`.o`, and the (relatively expensive) `ar` extract/repack only runs when at least
@@ -355,7 +356,7 @@ fn build_dregg2_archive(
             // SPECIALIZATIONS don't resolve: a freshly-recompiled `Dregg2_Exec_Handler.o` references
             // `_lp_…_TurnExecutorFull_*` specialized symbols that the un-rebuilt `TurnExecutorFull.o`
             // never emitted → `Undefined symbols` at the final link of every downstream binary
-            // (dregg-node included). The git-tracked SEED archive is, by construction, a coherent
+            // (dregg-node included). The SEED archive is, by construction, a coherent
             // linkable set. So on a `lake build` failure we DISCARD any prior (possibly incoherent)
             // working archive and restore the consistent seed, then skip the recompile/splice
             // entirely. The node links the known-good verified kernel; an in-progress metatheory
@@ -363,7 +364,7 @@ fn build_dregg2_archive(
             println!(
                 "cargo:warning=dregg-lean-ffi: `lake build` of the FFI + gate modules exited {s} — \
                  the metatheory IR tree may be incoherent (a module failed to elaborate). Restoring \
-                 the git-tracked consistent seed archive and NOT splicing a partial fresh set (a torn \
+                 the consistent seed archive and NOT splicing a partial fresh set (a torn \
                  splice would fail to link). To pick up fresh Lean changes, make `lake build \
                  Dregg2.Exec.FFI` green in metatheory/ and rebuild."
             );
@@ -1043,6 +1044,10 @@ fn runtime_dead_init_trim(
     let mut sym_def_in: HashMap<String, HashSet<String>> = HashMap::new();
     let mut members: HashSet<String> = HashSet::new();
     let mut roots: HashSet<String> = HashSet::new();
+    // The three module-initializer symbol prefixes Lean v4.30's module system emits (see the
+    // is_init note below). Mutually exclusive as prefixes. Used both to classify an edge as an
+    // init boundary and to recognize a sysroot toolchain init.
+    const INIT_PREFIXES: [&str; 3] = ["initialize_", "runtime_initialize_", "meta_initialize_"];
     let arch = full_archive.to_string_lossy().to_string();
     for line in text.lines() {
         let Some((member, rest)) = nm_split_member(&arch, line) else {
@@ -1056,7 +1061,16 @@ fn runtime_dead_init_trim(
         };
         members.insert(member.to_string());
         let bare = sym.trim_start_matches('_');
-        let is_init = bare.starts_with("initialize_");
+        // Lean v4.30's MODULE system emits THREE initializers per module, not one:
+        //   `initialize_M`, `runtime_initialize_M`, `meta_initialize_M`
+        // — each an `lean_object* (uint8_t)` that chains its imports' same-variant initializers.
+        // The old `starts_with("initialize_")` caught only the FIRST, so `runtime_initialize_aesop_*`
+        // (and the meta variant) read as a real CALL edge, and the reachability BFS below dragged the
+        // ENTIRE proof-time cluster (Aesop + Mathlib.Tactic + Qq + Plausible + ProofWidgets) in as
+        // "runtime-live". Measured: that miss inflated the trim ~6× — 783 members / 104 MB (81.5% of
+        // the trim) reachable ONLY through these init edges, 0 real-call edges among them. Catch all
+        // three so an init chain of any variant is a boundary, not a call.
+        let is_init = INIT_PREFIXES.iter().any(|p| bare.starts_with(p));
         if ty == "U" || ty == "u" {
             if is_init {
                 undef_init
@@ -1115,9 +1129,27 @@ fn runtime_dead_init_trim(
             }
         }
     }
-    // Plausibility floor (mirrors gc_unreachable_members): a misfired parse must not silently
-    // produce a tiny broken archive. And if nothing is dead the trim is a no-op — fall back.
-    if live.len() < 200 || live.len() >= members.len() {
+    // Nothing dead → the trim is a genuine no-op; quiet fallback to the full archive is correct.
+    if live.len() >= members.len() {
+        return None;
+    }
+    // Plausibility floor: a misfired parse/BFS must not silently produce a tiny broken archive.
+    // ⚠ This floor was 200 — calibrated for the OLD 1-of-3 init classification, where the miss
+    // dragged ~936 members in as "runtime-live". With all three init variants now correctly cut,
+    // the TRUE runtime closure is ~153 members (measured: links + round-trips a real turn), which
+    // sits BELOW 200 — so the old floor SILENTLY discarded the correct 153-member trim and shipped
+    // the full archive believing it had trimmed. The floor is now 50 (the real closure clears it
+    // with wide margin; a genuine misfire collapses toward 0, and `roots.is_empty()` above already
+    // catches the zero case) — and it WARNS instead of bailing in silence, the same law as the
+    // parse-failure bail above.
+    if live.len() < 50 {
+        println!(
+            "cargo:warning=dregg-lean-ffi: RUNTIME TRIM found only {} runtime-live of {} members — \
+             below the sanity floor (50). Refusing to ship a suspiciously tiny archive (likely a \
+             BFS/parse misfire); linking the FULL archive instead.",
+            live.len(),
+            members.len()
+        );
         return None;
     }
 
@@ -1127,7 +1159,10 @@ fn runtime_dead_init_trim(
     // so never no-op those — if a live member genuinely references `initialize_Lean`, let the real
     // (sysroot) init run rather than silently skip it.
     let is_toolchain = |bare: &str| -> bool {
-        match bare.strip_prefix("initialize_") {
+        // Strip whichever of the three init-variant prefixes matches (they are mutually exclusive),
+        // then check the module against the sysroot-provided libraries.
+        let rest = INIT_PREFIXES.iter().find_map(|p| bare.strip_prefix(p));
+        match rest {
             Some(rest) => ["Init", "Std", "Lean", "Lake"]
                 .iter()
                 .any(|lib| rest == *lib || rest.starts_with(&format!("{lib}_"))),
@@ -1281,36 +1316,33 @@ fn archive_has_dregg2(archive: &Path) -> bool {
 
 /// The set of archive MEMBER names (e.g. `Await.o`, `Dregg2_Spec_Await.o`) that define a project
 /// module initializer (`_initialize_Dregg2_*` / `_initialize_Metatheory_*`). Computed with `nm -A`,
-/// which prefixes each symbol line with the member location. The prefix format differs by platform:
-///   * macOS/llvm-nm: `<archive>:<member.o>: <addr> T <sym>`
-///   * GNU/binutils:  `<archive>[<member.o>]: <addr> T <sym>`
+/// which prefixes each symbol line with the member location. The prefix format differs by platform
+/// (see `nm_split_member`, THE ONE parser this now routes through):
+///   * BSD / llvm-nm (macOS): `<archive>[<member>.o]: <addr> <ty> <sym>`   (bracket form)
+///   * GNU binutils (Linux):  `<archive>:<member>.o:<addr> <ty> <sym>`     (colon form, NO space)
 ///
-/// We extract the member by taking the basename of the path segment ending in `.o`, so the splice can
-/// purge stale project objects regardless of how they were named when the base archive was seeded.
+/// This USED to extract the member with an ad-hoc `line.split(": ")`, the exact BSD-only pattern
+/// that `nm_split_member` was created to replace: on Linux the GNU form has no `": "`, so every
+/// member came out unrecognized and the purge set was empty — the splice silently kept stale
+/// project objects on every Linux/CI build (the same disease the GC/trim twins already had fixed).
 fn members_defining_project_initializers(archive: &Path) -> std::collections::HashSet<String> {
     let mut members = std::collections::HashSet::new();
     let Ok(out) = Command::new(nm_tool()).arg("-A").arg(archive).output() else {
         return members;
     };
     let text = String::from_utf8_lossy(&out.stdout);
+    let arch = archive.to_string_lossy().to_string();
     for line in text.lines() {
+        let Some((member, rest)) = nm_split_member(&arch, line) else {
+            continue;
+        };
         // Only DEFINING (`T`) lines for a project initializer; skip undefined (`U`) references.
         // The C symbol carries a leading `_` on Mach-O (macOS) but NOT on ELF/COFF (Linux,
         // Windows-MinGW), so accept both `T _initialize_*` and `T initialize_*`.
         let is_project_init = |stem: &str| {
-            line.contains(&format!("T _{stem}")) || line.contains(&format!("T {stem}"))
+            rest.contains(&format!("T _{stem}")) || rest.contains(&format!("T {stem}"))
         };
-        if !(is_project_init("initialize_Dregg2_") || is_project_init("initialize_Metatheory_")) {
-            continue;
-        }
-        // The location prefix is everything up to the first `: ` (space-separated from the address).
-        let Some(prefix) = line.split(": ").next() else {
-            continue;
-        };
-        // Strip a trailing `]` (GNU bracket form), then take the basename and keep it iff it's a `.o`.
-        let prefix = prefix.trim_end_matches(']');
-        let member = prefix.rsplit(['/', ':', '[']).next().unwrap_or(prefix);
-        if member.ends_with(".o") {
+        if is_project_init("initialize_Dregg2_") || is_project_init("initialize_Metatheory_") {
             members.insert(member.to_string());
         }
     }
@@ -1590,7 +1622,7 @@ fn main() {
 
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
-    // The git-tracked SEED archive (read-only input; a `cargo build` never writes it).
+    // The SEED archive (read-only input; a `cargo build` never writes it).
     let seed_archive = crate_dir.join("libdregg_lean.a");
     // The per-OUT_DIR WORKING archive: where splice / closure-completion / GC happen and
     // what we link against. Per-(crate,feature-set,profile) ⇒ concurrent multi-feature
@@ -1615,7 +1647,7 @@ fn main() {
     let sysroot_opt = lean_sysroot();
     let meta_opt = metatheory_dir();
 
-    // ── SEED the per-OUT_DIR working archive from the git-tracked seed (read-only input). This
+    // ── SEED the per-OUT_DIR working archive from the seed (read-only input). This
     // copies the seed into `$OUT_DIR/libdregg_lean.a` once (and re-copies whenever the seed is
     // newer than the working copy, e.g. after an out-of-band re-seed). All splice / closure /
     // GC mutation below targets `build_archive`, never the seed — so concurrent multi-feature
@@ -1671,7 +1703,7 @@ fn main() {
 
     if !build_archive.exists() {
         println!(
-            "cargo:warning=dregg-lean-ffi: libdregg_lean.a absent (no git-tracked seed AND no \
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a absent (no seed AND no \
              prior per-OUT_DIR working archive) — building MARSHAL-ONLY: lean_available() will be \
              false and the node falls back to the UNVERIFIED Rust executor. To link the verified \
              Lean kernel, run `./scripts/bootstrap.sh` from the repo root (one command: it checks \
@@ -2108,9 +2140,9 @@ fn main() {
     // `-Wl,-dead_strip` regardless of archive-member ordering (the empirical link-failure fix).
     let _ = shim_archive;
     // BOTH the shim AND the spliced Lean archive resolve from `OUT_DIR` (the per-build working
-    // copy of `libdregg_lean.a`, seeded from the git-tracked seed and then spliced/GC'd HERE).
+    // copy of `libdregg_lean.a`, seeded from the seed and then spliced/GC'd HERE).
     // We deliberately do NOT add `crate_dir` to the search path: pointing the linker at the
-    // git-tracked seed would (a) reintroduce the wrong-feature-set race this split closes and
+    // seed would (a) reintroduce the wrong-feature-set race this split closes and
     // (b) link a non-GC'd (full-closure) archive. One search root for our static libs: OUT_DIR.
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static:+whole-archive=dregg_ffi_shim");
