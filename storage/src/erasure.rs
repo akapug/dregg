@@ -170,7 +170,7 @@ impl ErasureEncoder {
     /// the chunk-set root (see [`merkle_root`]); a light client holding only
     /// the root can verify any single chunk.
     pub fn encode(&self, data: &[u8]) -> Vec<ErasureChunk> {
-        let mut data_shards = self.split_data_shards(data);
+        let data_shards = self.split_data_shards(data);
         let n_data = data_shards.len();
         let n_parity = n_data * (self.expansion_factor - 1);
 
@@ -179,29 +179,36 @@ impl ErasureEncoder {
         // we fall back to replicating data shards as parity so the encoder is
         // total. Reconstruction from such an oversized set then relies on the
         // data shards directly (still k-of-n for the data shards themselves).
-        let mut all_shards: Vec<Vec<u8>> = data_shards.clone();
+        // MOVE the data shards into the combined buffer (they are never read
+        // again as `data_shards`), then append zeroed parity slots. Avoids
+        // cloning the entire blob's worth of data shards on every encode.
+        let mut all_shards: Vec<Vec<u8>> = data_shards;
         all_shards.extend((0..n_parity).map(|_| vec![0u8; self.chunk_size]));
 
         if let Ok(rs) = reed_solomon_erasure::ReedSolomon::<RsField>::new(n_data, n_parity) {
             // encode() needs &mut [shard]; operate on slices of all_shards.
             let mut refs: Vec<&mut [u8]> =
                 all_shards.iter_mut().map(|v| v.as_mut_slice()).collect();
-            // If encoding fails (it shouldn't, the shapes are validated), the
-            // parity shards stay zero — reconstruction still works from the
-            // data shards, which are untouched.
-            let _ = rs.encode(&mut refs);
+            // Do NOT swallow the codec error: a silent failure here would ship
+            // all-zero parity shards whose commitments still verify, so a later
+            // reconstruct that draws on those parity shards would return WRONG
+            // bytes with no error. The shapes are validated at construction, so
+            // an error is a broken invariant — fail loudly rather than corrupt.
+            rs.encode(&mut refs)
+                .expect("RS encode: shard shapes are validated at codec construction");
         } else {
             // n_data + n_parity > 255: cannot build a GF(2^8) codec. Replicate
             // data shards across parity slots so any n_data data shards still
-            // reconstruct directly.
+            // reconstruct directly. The data shards live in `all_shards[0..n_data]`
+            // (unmodified on this path since the RS codec never ran).
             for p in 0..n_parity {
-                all_shards[n_data + p] = data_shards[p % n_data].clone();
+                let src = all_shards[p % n_data].clone();
+                all_shards[n_data + p] = src;
             }
         }
 
-        // Recompute data_shards view consistent with all_shards (parity now
-        // filled). Build commitments (Merkle leaves) over every shard.
-        data_shards = all_shards;
+        // Build commitments (Merkle leaves) over every shard (data + parity).
+        let data_shards = all_shards;
         let leaves: Vec<[u8; 32]> = data_shards
             .iter()
             .map(|s| chunk_commitment_dual(s).blake3)
@@ -282,11 +289,22 @@ impl ErasureEncoder {
                 }
                 other => ReconstructError::InvalidConfig(other.to_string()),
             })?;
+        } else {
+            // Oversized set (n_data + n_parity > 255): no GF(2^8) codec exists,
+            // so encode REPLICATED each data shard into parity — parity index
+            // `n_data + p` holds a byte-identical copy of data shard `p % n_data`.
+            // Recover any missing data shard from a present replica. Without this
+            // the replicated parity was dead weight: a client holding only parity
+            // shards would advertise them as present yet reconstruct nothing.
+            for p in 0..n_parity {
+                let data_idx = p % n_data;
+                if slots[data_idx].is_none() {
+                    if let Some(replica) = slots[n_data + p].clone() {
+                        slots[data_idx] = Some(replica);
+                    }
+                }
+            }
         }
-        // (If the codec couldn't be built — oversized set — the data shards
-        // were replicated 1:1 into parity at encode time, so any n_data data
-        // shards are already present in `slots[0..n_data]` when reconstructable;
-        // the assembly below handles the data slots directly.)
 
         // Assemble the original from the (now reconstructed) data shards.
         let mut result = Vec::with_capacity(n_data * self.chunk_size);
@@ -702,6 +720,60 @@ mod tests {
         // And every chunk authenticates.
         let root = root_commitment(&chunks);
         assert!(chunks.iter().all(|c| verify_chunk_against_root(c, &root)));
+    }
+
+    /// The oversized fallback (n_data + n_parity > 256 = GF(2^8)'s order, where
+    /// no codec exists) replicates each data shard into parity. Reconstruct must
+    /// actually CONSUME those replicas: a client holding ONLY the parity shards
+    /// recovers the blob. Before the salvage the replicated parity was dead
+    /// weight — this reconstructed nothing and errored despite 129 present shards.
+    #[test]
+    fn oversized_set_reconstructs_from_replicated_parity() {
+        // chunk_size 1, expansion 2, 129-byte blob => n_data = 129, n_parity =
+        // 129, n_total = 258 > 256 → the RS codec cannot be built (real RS tops
+        // out at 256 total shards; 257+ falls back to replication).
+        let data: Vec<u8> = (0..129u32)
+            .map(|i| (i as u8).wrapping_mul(7).wrapping_add(1))
+            .collect();
+        let encoder = ErasureEncoder::new(1, 2);
+        let chunks = encoder.encode(&data);
+        let n_data = encoder.n_data_for(data.len());
+        assert_eq!((n_data, chunks.len()), (129, 258));
+
+        // Hold ONLY the parity shards (indices 129..258). Each is a replica of a
+        // distinct data shard, so together they cover all 129 data values.
+        let parity_only: Vec<ErasureChunk> =
+            chunks.iter().filter(|c| c.is_parity).cloned().collect();
+        assert_eq!(parity_only.len(), 129);
+        let recovered = encoder
+            .reconstruct(&parity_only, data.len())
+            .expect("parity replicas cover every data shard → full recovery");
+        assert_eq!(recovered, data);
+    }
+
+    /// The salvage is NOT vacuous: an oversized set with `present >= n_data` but
+    /// missing EVERY copy of one data shard still fails — replication needs at
+    /// least one copy of each distinct data value, not merely `n_data` shards.
+    #[test]
+    fn oversized_set_without_full_coverage_still_fails() {
+        let data: Vec<u8> = (0..129u32).map(|i| (i as u8) ^ 0x3C).collect();
+        let encoder = ErasureEncoder::new(1, 2);
+        let chunks = encoder.encode(&data);
+        assert_eq!(chunks.len(), 258);
+
+        // Supply 129 shards, but arrange that data shard 0 has NO copy present:
+        // omit data chunk 0 (index 0) AND its only replica, parity index 129
+        // (parity `129 + p` replicates data `p`). Fill the count back up with a
+        // duplicate-coverage shard (data chunk 1) so `present == n_data == 129`.
+        let mut supplied: Vec<ErasureChunk> = chunks[130..258].to_vec(); // 128 parity: replicas of data 1..128
+        supplied.push(chunks[1].clone()); // data shard 1 (already covered) → present = 129
+        assert_eq!(supplied.len(), 129);
+
+        let err = encoder.reconstruct(&supplied, data.len()).unwrap_err();
+        assert!(
+            matches!(err, ReconstructError::InsufficientChunks { .. }),
+            "data shard 0 has no present copy → must fail, got {err:?}"
+        );
     }
 
     #[test]
