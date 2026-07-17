@@ -2113,3 +2113,33 @@ never installed in production — checking showed node:2450 / sdk/runtime:72 / s
 **The rail is REAL.**
 NEXT (open ledger): phantom-cfg cleanup (~11 gates, surfaced by the warn flip); constraint_prover assessment;
 the fhegg spike (ember s, doc ready at docs/deos/FHEGG-SDK-READINESS.md).
+
+## ⚑ PHANTOM-CFG CLEANUP — rustc's authoritative list has exactly ONE real finding (and it's a MIRROR sibling)
+Ran a full workspace check with the `warn` flip (`64bff9501`) to get rustc's list — NOT my grep (which was
+noisy with comment false-positives). Ground truth: **16 sites, all one crate + one feature** —
+`dregg-dsl-tests` × `cfg(feature = "plonky3")`. (The other 7 are `starbridge-v2/vendor/pathfinder_simd` —
+VENDORED third-party, not ours.) My earlier static estimate of "~11 across 4 crates" was, as suspected, noise.
+
+**THE FINDING — `dregg-dsl::gen_plonky3` is DEAD CODEGEN, the macro-sibling of the deleted mirror:**
+- The `#[dregg_caveat]` proc-macro EMITS `#[cfg(feature = "plonky3")]` code (`dregg-dsl/src/gen_plonky3.rs:129,
+  132,143`) into consumer crates — which is why my grep found nothing in `dregg-dsl-tests/src/lib.rs`: the cfg
+  is GENERATED, and rustc points at the macro invocation site. (Another "my tooling lied" instance.)
+- `dregg-dsl-tests` (a COMPILE-test crate: 0 `#[test]`, it exists to prove the macros compile) declares NO
+  features at all → all 16 generated gates are ALWAYS-FALSE → **the DSL's entire P3Air codegen path is never
+  compiled by anyone.** No other crate compiles it either: `dregg-dsl-differential` has no `plonky3` feature
+  and no p3 deps (it drives the CIRCUIT's `dsl_p3_air` interpreter, not the macro's structs); nothing
+  anywhere uses a generated `{Name}P3Air` (grep: zero).
+- **What it emits is UNI-STARK**: its own doc says "Use with `p3_uni_stark::prove`/`verify`". That is the
+  SUPERSEDED approach — the same one the 868-line duplicate `DslP3Air` used (`a83e50a2b`), while production
+  is the batch-stark descriptor-INTERPRETER (`circuit/src/dsl/dsl_p3_air.rs`). So `gen_plonky3` is the
+  MACRO-SIBLING of the mirror I just deleted: vestigial uni-stark codegen, emitted but never compiled.
+
+**`GenPlonky3DeadCodegenResidual` — the honest options** (a DSL-emission-surface call, so surfacing it):
+1. **DELETE `gen_plonky3`** (my lean — it is dead by the same evidence that condemned the mirror: zero
+   consumers, superseded uni-stark path, never compiled/tested). Removes the emission → the 16 phantom
+   warnings vanish because the cfg stops existing, not because we papered it.
+2. **Declare `plonky3` + add p3-air/p3-field/p3-matrix deps to `dregg-dsl-tests`** — makes the codegen
+   compile-tested for the first time. Only worth it if the uni-stark codegen is still wanted.
+3. Leave it (warning noise + dead codegen). Worst option.
+With this resolved, `unexpected_cfgs` can escalate `warn` -> **`deny`** (the vendored pathfinder_simd hits
+would need an allow on that vendored path).
