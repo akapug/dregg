@@ -102,7 +102,7 @@ async fn handle_open(ctx: &Context, command: &CommandInteraction, _state: &BotSt
     let replaced = offering::is_open::<GrainOffering>(channel);
     if let Err(e) = offering::open_in(
         channel,
-        GrainOffering::new(GRAIN_BUDGET),
+        || GrainOffering::new(GRAIN_BUDGET),
         SessionConfig::with_seed(channel),
     ) {
         let _ = command
@@ -171,7 +171,7 @@ mod tests {
         close_in::<GrainOffering>(channel);
         offering::open_in(
             channel,
-            GrainOffering::new(budget),
+            move || GrainOffering::new(budget),
             SessionConfig::with_seed(channel),
         )
         .expect("the grain is admitted");

@@ -128,11 +128,8 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
 async fn handle_open(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let channel = command.channel_id.get();
     let replaced = offering::is_open::<DocOffering>(channel);
-    if let Err(e) = offering::open_in(
-        channel,
-        DocOffering::new(),
-        SessionConfig::with_seed(channel),
-    ) {
+    if let Err(e) = offering::open_in(channel, DocOffering::new, SessionConfig::with_seed(channel))
+    {
         let _ = command
             .create_response(
                 &ctx.http,
@@ -197,12 +194,8 @@ mod tests {
     /// not) — the SAME roster the executor's cap gate reads.
     fn open(channel: u64, editor: &DreggIdentity, commenter: &DreggIdentity) {
         close_in::<DocOffering>(channel);
-        offering::open_in(
-            channel,
-            DocOffering::new(),
-            SessionConfig::with_seed(channel),
-        )
-        .expect("the document opens");
+        offering::open_in(channel, DocOffering::new, SessionConfig::with_seed(channel))
+            .expect("the document opens");
         let editor = editor.clone();
         let commenter = commenter.clone();
         with_live::<DocOffering, _>(channel, move |live| {

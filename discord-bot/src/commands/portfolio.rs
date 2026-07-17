@@ -380,28 +380,27 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     let viewer = identity_of(state, command.user.id.get());
     let cfg = SessionConfig::with_seed(channel);
 
-    // A per-open demo world for the world-backed surfaces (trade/inventory/craft); see the module
-    // HONEST SCOPE note (each opens over its own world on this per-type surface).
-    let world = SharedWorld::demo("Adventurer");
-
+    // The world-backed surfaces (trade/inventory/craft) each build their own per-open demo
+    // `SharedWorld` INSIDE their factory — the world is `Rc`-shared and not `Send`, so it is born
+    // on the offering store's own thread and never crosses; see the module HONEST SCOPE note
+    // (each opens over its own world on this per-type surface).
     let opened: Result<(), OfferingError> = match key.as_str() {
-        "tug" => open_and_post::<SeatedTug>(ctx, command, SeatedTug::new(), &viewer, cfg).await,
+        "tug" => open_and_post::<SeatedTug>(ctx, command, SeatedTug::new, &viewer, cfg).await,
         "automatafl" => {
-            open_and_post::<AutomataflOffering>(ctx, command, AutomataflOffering, &viewer, cfg)
+            open_and_post::<AutomataflOffering>(ctx, command, || AutomataflOffering, &viewer, cfg)
                 .await
         }
         "names" => {
-            open_and_post::<NamesOffering>(ctx, command, NamesOffering::new(), &viewer, cfg).await
+            open_and_post::<NamesOffering>(ctx, command, NamesOffering::new, &viewer, cfg).await
         }
         "compute" => {
-            open_and_post::<ComputeOffering>(ctx, command, ComputeOffering::new(), &viewer, cfg)
-                .await
+            open_and_post::<ComputeOffering>(ctx, command, ComputeOffering::new, &viewer, cfg).await
         }
         "trade" => {
             open_and_post::<TradeOffering>(
                 ctx,
                 command,
-                TradeOffering::in_world(world),
+                || TradeOffering::in_world(SharedWorld::demo("Adventurer")),
                 &viewer,
                 cfg,
             )
@@ -411,21 +410,20 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
             open_and_post::<InventoryOffering>(
                 ctx,
                 command,
-                InventoryOffering::in_world(world),
+                || InventoryOffering::in_world(SharedWorld::demo("Adventurer")),
                 &viewer,
                 cfg,
             )
             .await
         }
         "cheevos" => {
-            open_and_post::<CheevoShowcase>(ctx, command, CheevoShowcase::demo(), &viewer, cfg)
-                .await
+            open_and_post::<CheevoShowcase>(ctx, command, CheevoShowcase::demo, &viewer, cfg).await
         }
         "guild" => {
             open_and_post::<GuildPage>(
                 ctx,
                 command,
-                GuildPage::demo("The Iron Wardens"),
+                || GuildPage::demo("The Iron Wardens"),
                 &viewer,
                 cfg,
             )
@@ -435,34 +433,28 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
             open_and_post::<CraftOffering>(
                 ctx,
                 command,
-                CraftOffering::in_world(world),
+                || CraftOffering::in_world(SharedWorld::demo("Adventurer")),
                 &viewer,
                 cfg,
             )
             .await
         }
         "companion" => {
-            open_and_post::<CompanionOffering>(
-                ctx,
-                command,
-                CompanionOffering::demo(),
-                &viewer,
-                cfg,
-            )
-            .await
+            open_and_post::<CompanionOffering>(ctx, command, CompanionOffering::demo, &viewer, cfg)
+                .await
         }
         "tavern" => {
             open_and_post::<TavernOffering>(
                 ctx,
                 command,
-                TavernOffering::demo("The Salted Tankard"),
+                || TavernOffering::demo("The Salted Tankard"),
                 &viewer,
                 cfg,
             )
             .await
         }
         "party" => {
-            open_and_post::<PartyOffering>(ctx, command, PartyOffering::new(), &viewer, cfg).await
+            open_and_post::<PartyOffering>(ctx, command, PartyOffering::new, &viewer, cfg).await
         }
         other => {
             let _ = command
@@ -500,16 +492,18 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     }
 }
 
-/// Open `offering` in the channel and post its surface (projected FOR the opener). Returns the open
-/// result so the caller reports a fail-closed refusal honestly.
+/// Open the offering `make` builds in the channel and post its surface (projected FOR the
+/// opener). The factory runs on the offering store's own thread ([`offering::open_in`]), so a
+/// world-backed non-`Send` offering is born where it lives. Returns the open result so the caller
+/// reports a fail-closed refusal honestly.
 async fn open_and_post<O: DiscordOffering>(
     ctx: &Context,
     command: &CommandInteraction,
-    offering: O,
+    make: impl FnOnce() -> O + Send + 'static,
     viewer: &DreggIdentity,
     cfg: SessionConfig,
 ) -> Result<(), OfferingError> {
-    offering::open_in(command.channel_id.get(), offering, cfg)?;
+    offering::open_in(command.channel_id.get(), make, cfg)?;
     let channel = command.channel_id.get();
     let viewer = viewer.clone();
     let rendered = offering::with_live::<O, _>(channel, move |live| {
@@ -567,7 +561,7 @@ mod tests {
                 let channel = ch;
                 ch += 1;
                 close_in::<$ty>(channel);
-                offering::open_in(channel, $ctor, SessionConfig::with_seed(channel))
+                offering::open_in(channel, || $ctor, SessionConfig::with_seed(channel))
                     .unwrap_or_else(|e| panic!("`{}` opens on Discord: {e}", $key));
                 assert!(is_open::<$ty>(channel), "`{}` session is live", $key);
                 assert_eq!(
@@ -598,24 +592,30 @@ mod tests {
             }};
         }
 
-        let world = SharedWorld::demo("Adventurer");
+        // The world-backed surfaces each build their demo `SharedWorld` INSIDE the open factory
+        // (the `Rc`-shared world is not `Send`; it is born on the store's thread) — matching the
+        // module HONEST SCOPE note: each opens over its own world on this per-type surface.
         check!(SeatedTug, SeatedTug::new(), "tug");
         check!(AutomataflOffering, AutomataflOffering, "automatafl");
         check!(NamesOffering, NamesOffering::new(), "names");
         check!(ComputeOffering, ComputeOffering::new(), "compute");
         check!(
             TradeOffering,
-            TradeOffering::in_world(world.clone()),
+            TradeOffering::in_world(SharedWorld::demo("Adventurer")),
             "trade"
         );
         check!(
             InventoryOffering,
-            InventoryOffering::in_world(world.clone()),
+            InventoryOffering::in_world(SharedWorld::demo("Adventurer")),
             "inventory"
         );
         check!(CheevoShowcase, CheevoShowcase::demo(), "cheevos");
         check!(GuildPage, GuildPage::demo("The Iron Wardens"), "guild");
-        check!(CraftOffering, CraftOffering::in_world(world), "craft");
+        check!(
+            CraftOffering,
+            CraftOffering::in_world(SharedWorld::demo("Adventurer")),
+            "craft"
+        );
         check!(CompanionOffering, CompanionOffering::demo(), "companion");
         check!(
             TavernOffering,
@@ -623,6 +623,7 @@ mod tests {
             "tavern"
         );
         check!(PartyOffering, PartyOffering::new(), "party");
+        let _ = ch; // the macro's channel cursor past the last offering
     }
 
     /// **The twelve `/play` keys are exactly `PLAY_KEYS`** — the `handle` dispatch + the `register`
@@ -656,7 +657,7 @@ mod tests {
         close_in::<AutomataflOffering>(channel);
         offering::open_in(
             channel,
-            AutomataflOffering,
+            || AutomataflOffering,
             SessionConfig::with_seed(channel),
         )
         .expect("automatafl opens");
@@ -700,7 +701,7 @@ mod tests {
     fn the_tug_hidden_hand_threads_the_viewer_on_discord() {
         let channel = 771_200u64;
         close_in::<SeatedTug>(channel);
-        offering::open_in(channel, SeatedTug::new(), SessionConfig::with_seed(channel))
+        offering::open_in(channel, SeatedTug::new, SessionConfig::with_seed(channel))
             .expect("tug opens");
         let alice = actor("al");
         let bob = actor("bo");

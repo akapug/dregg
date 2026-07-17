@@ -599,6 +599,28 @@ impl EventHandler for Handler {
     }
 }
 
+/// The boot preflight's federation-id check against a reachable **SOLO** node: the node's
+/// executor signs under `blake3(node_pubkey)`, so a bot whose `FEDERATION_ID` differs (including
+/// the all-zero dev default) would have EVERY transfer rejected at runtime with
+/// "Ed25519 signature verification failed". `Ok(())` when they match; `Err` carries the clear
+/// operator message (naming the env var and the exact expected value). `main` fails FAST on
+/// `Err` unless `FEDERATION_ID_ALLOW_MISMATCH=1` (a deliberate dev escape hatch).
+fn check_solo_federation_id(node_pubkey: &[u8], federation_id: [u8; 32]) -> Result<(), String> {
+    let expected = *blake3::hash(node_pubkey).as_bytes();
+    if expected == federation_id {
+        return Ok(());
+    }
+    Err(format!(
+        "FEDERATION_ID mismatch: this is a SOLO node whose executor signs under \
+         blake3(node_pubkey)={expected}, but the bot's FEDERATION_ID is {actual}. Every transfer \
+         would fail at runtime with 'Ed25519 signature verification failed'. Set \
+         FEDERATION_ID={expected} to match (or FEDERATION_ID_ALLOW_MISMATCH=1 to boot anyway, \
+         for a deliberate dev setup).",
+        expected = hex::encode(expected),
+        actual = hex::encode(federation_id),
+    ))
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize tracing.
@@ -696,19 +718,25 @@ async fn main() {
             );
             if pf.federation_mode == "solo" && !pf.public_key.is_empty() {
                 if let Ok(pk) = hex::decode(&pf.public_key) {
-                    let expected = *blake3::hash(&pk).as_bytes();
-                    if expected != federation_id_bytes {
-                        warn!(
-                            "FEDERATION_ID mismatch: this is a SOLO node whose executor signs \
-                             under blake3(node_pubkey)={}, but the bot's FEDERATION_ID is {}. \
-                             Transfers WILL fail with 'Ed25519 signature verification failed'. \
-                             Set FEDERATION_ID={} to match.",
-                            hex::encode(expected),
-                            hex::encode(federation_id_bytes),
-                            hex::encode(expected),
-                        );
-                    } else {
-                        info!("FEDERATION_ID matches the solo node's executor signing domain");
+                    match check_solo_federation_id(&pk, federation_id_bytes) {
+                        Ok(()) => {
+                            info!("FEDERATION_ID matches the solo node's executor signing domain")
+                        }
+                        Err(msg) => {
+                            // A mismatch here is not a degraded mode — EVERY transfer fails at
+                            // runtime. Fail FAST at boot so the operator fixes the env var now,
+                            // unless they deliberately opted out (a dev bot pointed at a node it
+                            // never transfers through).
+                            let allow = std::env::var("FEDERATION_ID_ALLOW_MISMATCH")
+                                .is_ok_and(|v| v == "1");
+                            if allow {
+                                warn!("{msg} (booting anyway: FEDERATION_ID_ALLOW_MISMATCH=1)");
+                            } else {
+                                error!("{msg}");
+                                eprintln!("error: {msg}");
+                                std::process::exit(1);
+                            }
+                        }
                     }
                 }
             }
@@ -849,8 +877,32 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{REGISTERED_COMMAND_NAMES, ROUTED_COMMAND_NAMES};
+    use super::{REGISTERED_COMMAND_NAMES, ROUTED_COMMAND_NAMES, check_solo_federation_id};
     use std::collections::BTreeSet;
+
+    /// A FEDERATION_ID matching the solo node's signing domain (blake3 of its pubkey) boots.
+    #[test]
+    fn a_matching_solo_federation_id_passes_the_boot_preflight() {
+        let pk = [7u8; 32];
+        let fed = *blake3::hash(&pk).as_bytes();
+        assert!(check_solo_federation_id(&pk, fed).is_ok());
+    }
+
+    /// A mismatched FEDERATION_ID (the all-zero dev-default footgun included) is fatal at boot,
+    /// and the message names the env var, the exact expected value, and the escape hatch.
+    #[test]
+    fn a_mismatched_solo_federation_id_is_fatal_with_the_fix_in_the_message() {
+        let pk = [7u8; 32];
+        let expected = hex::encode(blake3::hash(&pk).as_bytes());
+        let err = check_solo_federation_id(&pk, [0u8; 32])
+            .expect_err("an all-zero FEDERATION_ID against a solo node must be refused at boot");
+        assert!(err.contains("FEDERATION_ID"), "{err}");
+        assert!(
+            err.contains(&expected),
+            "the message names the exact expected value: {err}"
+        );
+        assert!(err.contains("FEDERATION_ID_ALLOW_MISMATCH"), "{err}");
+    }
 
     #[test]
     fn registered_commands_have_no_duplicates() {

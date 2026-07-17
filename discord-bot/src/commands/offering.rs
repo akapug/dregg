@@ -129,7 +129,8 @@ type Job<O> = Box<dyn FnOnce(&mut HashMap<u64, Live<O>>) + Send + 'static>;
 ///
 /// So the sessions are **confined to their store's thread** (fittingly: an offering session IS a
 /// confined thing). Every access is a job shipped to that thread and awaited; the session itself
-/// never moves. Only the *offering* (`O: Send` — a council's electorate/catalog/quorum) and the
+/// never moves. Only `Send` job closures (the offering itself is BUILT on the store's thread by
+/// [`open_in`]'s factory, so a world-backed offering holding an `Rc` never crosses either) and the
 /// job's *result* (an embed, an [`Outcome`], a [`VerifyReport`] — all plain data) cross.
 ///
 /// A job is short and CPU-bound (one real executor turn), and the call blocks the caller until it
@@ -177,7 +178,7 @@ impl<O: DiscordOffering> Store<O> {
 /// **An offering the bot serves as a Discord surface.** Implement this on any
 /// [`Offering`] and the whole Discord frontend (embed, buttons, modals, press→turn, verify)
 /// comes from this module.
-pub trait DiscordOffering: Offering + Send + Sized + 'static
+pub trait DiscordOffering: Offering + Sized + 'static
 where
     Self::Session: 'static,
 {
@@ -231,14 +232,17 @@ where
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Open a fresh session for `channel` (fail-closed: an offering that refuses to deploy is
-/// surfaced, never faked). The session is BORN on the store's thread, where it then lives.
-/// Replaces any session already open in the channel.
+/// surfaced, never faked). Takes a **factory** rather than an offering value: the offering (and
+/// its session) is BUILT on the store's thread, where both then live — so an offering that is not
+/// `Send` (a world-backed RPG surface holding an `Rc`-shared [`dreggnet_surfaces::SharedWorld`])
+/// never crosses a thread boundary at all. Replaces any session already open in the channel.
 pub fn open_in<O: DiscordOffering>(
     channel: u64,
-    offering: O,
+    make: impl FnOnce() -> O + Send + 'static,
     cfg: SessionConfig,
 ) -> Result<(), dreggnet_offerings::OfferingError> {
     O::store().run(move |sessions| {
+        let offering = make();
         let session = offering.open(cfg)?;
         // A collective offering opens with a live round over the session's first actions (an open
         // crowd — a restricted electorate is set with [`open_round`]); a direct offering has none.
@@ -527,7 +531,6 @@ pub fn cast_vote<O: DiscordOffering>(channel: u64, voter: DreggIdentity, arg: i6
 /// and opens the next round over the resulting state (preserving the electorate restriction). A
 /// landed move records a real `TurnReceipt`; a refused one commits nothing (anti-ghost). This is
 /// the collective analogue of a single-press resolution — many pressers, one refereed turn.
-#[allow(dead_code)]
 pub fn close_round<O: DiscordOffering>(channel: u64) -> CollectiveClose {
     let carrier = O::collective_carrier();
     O::store().run(move |sessions| {
@@ -1178,23 +1181,44 @@ async fn finish_modal<O: DiscordOffering>(
     }
 }
 
+/// The honest one-line note a resolved round close posts — the round, the plurality winner, the
+/// ballot split, the electorate of record, and the resolved turn's real outcome. Pure, so the
+/// driven tests read exactly what [`handle_close`] posts.
+pub fn close_note(resolved: &CollectiveResolved) -> String {
+    format!(
+        "**Round {} closed.** The party chose **{}** ({}/{} ballot(s) · {} voter(s) of record).\n{}",
+        resolved.round,
+        truncate(&resolved.winner.label, 120),
+        resolved.tally.winning_votes(),
+        resolved.tally.total_votes(),
+        resolved.electorate.len(),
+        outcome_note(&resolved.outcome),
+    )
+}
+
 /// **Close a collective round** (a `/<offering> close`): resolve the plurality winner as ONE real
 /// crowd turn and post the honest outcome + the next round's surface. The collective analogue of
-/// [`handle_component`]'s single-press resolution. Reachable once a collective offering registers
-/// a close subcommand; today the driven tests + the dungeon adapter exercise [`close_round`].
-#[allow(dead_code)]
+/// [`handle_component`]'s single-press resolution. Registered as the `close` subcommand on the
+/// generic wrappers (`/council close`, `/market close`, …); a DIRECT offering answers honestly
+/// that its presses already resolve one-by-one, so there is no round to close.
 pub async fn handle_close<O: DiscordOffering>(ctx: &Context, command: &CommandInteraction) {
+    if !O::collective() {
+        ephemeral(
+            ctx,
+            command,
+            &format!(
+                "`/{key}` runs in DIRECT mode — every press already resolves as its own \
+                 verified turn, so there is no collective round to close.",
+                key = O::KEY
+            ),
+        )
+        .await;
+        return;
+    }
     let channel = command.channel_id.get();
     match close_round::<O>(channel) {
         CollectiveClose::Resolved(resolved) => {
-            let note = format!(
-                "**Round {} closed.** The party chose **{}** ({}/{} ballot(s)).\n{}",
-                resolved.round,
-                truncate(&resolved.winner.label, 120),
-                resolved.tally.winning_votes(),
-                resolved.tally.total_votes(),
-                outcome_note(&resolved.outcome),
-            );
+            let note = close_note(&resolved);
             let rendered = with_live::<O, _>(channel, |live| surface_of::<O>(live));
             let msg = match rendered {
                 Some((embed, rows)) => CreateInteractionResponseMessage::new()
@@ -1210,9 +1234,10 @@ pub async fn handle_close<O: DiscordOffering>(ctx: &Context, command: &CommandIn
         CollectiveClose::Empty => {
             ephemeral(ctx, command, "There is nothing to vote on this round.").await
         }
-        CollectiveClose::NoRound | CollectiveClose::NoSession => {
-            ephemeral(ctx, command, &no_session_text::<O>()).await
+        CollectiveClose::NoRound => {
+            ephemeral(ctx, command, "No collective round is open here.").await
         }
+        CollectiveClose::NoSession => ephemeral(ctx, command, &no_session_text::<O>()).await,
     }
 }
 

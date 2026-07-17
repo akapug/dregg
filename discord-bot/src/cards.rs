@@ -41,38 +41,60 @@ fn button(label: impl Into<String>, turn: impl Into<String>, arg: i64) -> ViewNo
 // (1) THE ACTIVITY FEED — a devnet event, authored as a card (routed LIVE).
 // ════════════════════════════════════════════════════════════════════════════
 
+/// The explorer base URL the activity cards link into — `DREGG_EXPLORER_BASE` (e.g.
+/// `https://explorer.dregg.net`), trailing slash tolerated. Default OFF: with no base configured
+/// the cards render the id as plain (non-link) code text rather than a dead link. (The old
+/// hardcoded `devnet.dregg.fg-goose.online` no longer routes anywhere.)
+fn explorer_base() -> Option<String> {
+    std::env::var("DREGG_EXPLORER_BASE")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// A shortened `` `id...` `` code span, linked into the explorer at `base` when one is
+/// configured — plain text otherwise (never a dead link).
+fn explorer_ref(base: Option<&str>, kind: &str, id: &str, short_len: usize) -> String {
+    let short = if id.len() > short_len {
+        &id[..short_len]
+    } else {
+        id
+    };
+    match base {
+        Some(b) => format!("[`{short}...`]({b}/explorer/{kind}/{id})"),
+        None => format!("`{short}...`"),
+    }
+}
+
 /// A devnet activity event, authored as a `ViewNode` card and rendered to a Discord embed.
 ///
 /// The tree is `vstack[ text(summary), row(Time…), row(Cell…), row(Transaction…) ]`: the
-/// summary becomes the description, each `row` an embed field. The explorer links ride as
-/// markdown inside the `text` cells (the IR carries arbitrary strings), so the projection
-/// loses nothing the hand-rolled embed had. The caller applies `.color()`/`.footer()`.
+/// summary becomes the description, each `row` an embed field. When `DREGG_EXPLORER_BASE` is
+/// configured, explorer links ride as markdown inside the `text` cells (the IR carries arbitrary
+/// strings); otherwise the cell/tx ids render as plain code text ([`explorer_ref`]). The caller
+/// applies `.color()`/`.footer()`.
 pub fn activity_event_card(title: &str, event: &RecentEvent) -> DiscordCard {
+    activity_event_card_with_base(title, event, explorer_base().as_deref())
+}
+
+/// [`activity_event_card`] with the explorer base explicit (the pure core the tests drive).
+fn activity_event_card_with_base(
+    title: &str,
+    event: &RecentEvent,
+    base: Option<&str>,
+) -> DiscordCard {
     let mut children = vec![text(&event.summary)];
 
     if !event.timestamp.is_empty() {
         children.push(field_row("Time", &event.timestamp));
     }
     if let Some(cell_id) = &event.cell_id {
-        let short = if cell_id.len() > 16 {
-            &cell_id[..16]
-        } else {
-            cell_id
-        };
-        children.push(field_row(
-            "Cell",
-            format!("[`{short}...`](https://devnet.dregg.fg-goose.online/explorer/cell/{cell_id})"),
-        ));
+        children.push(field_row("Cell", explorer_ref(base, "cell", cell_id, 16)));
     }
     if let Some(tx_hash) = &event.tx_hash {
-        let short = if tx_hash.len() > 12 {
-            &tx_hash[..12]
-        } else {
-            tx_hash
-        };
         children.push(field_row(
             "Transaction",
-            format!("[`{short}...`](https://devnet.dregg.fg-goose.online/explorer/tx/{tx_hash})"),
+            explorer_ref(base, "tx", tx_hash, 12),
         ));
     }
 
@@ -164,7 +186,11 @@ mod tests {
             cell_id: Some("abcdef0123456789abcdef".to_string()),
             tx_hash: Some("deadbeefcafef00d".to_string()),
         };
-        let card = activity_event_card("\u{1f7e2} Transfer", &event);
+        let card = activity_event_card_with_base(
+            "\u{1f7e2} Transfer",
+            &event,
+            Some("https://explorer.example.test"),
+        );
         let embed = serde_json::to_value(&card.embed).expect("embed serializes");
 
         assert_eq!(embed["title"], "\u{1f7e2} Transfer");
@@ -178,13 +204,46 @@ mod tests {
         let fields = embed["fields"].as_array().expect("rows became fields");
         let names: Vec<&str> = fields.iter().map(|f| f["name"].as_str().unwrap()).collect();
         assert_eq!(names, vec!["Time", "Cell", "Transaction"]);
-        // The explorer link survived the projection (markdown carried in the text cell).
+        // The explorer link survived the projection (markdown carried in the text cell),
+        // rooted at the CONFIGURED base.
         assert!(
             fields[1]["value"]
                 .as_str()
                 .unwrap()
-                .contains("explorer/cell/"),
+                .contains("https://explorer.example.test/explorer/cell/"),
             "the cell link rode the card into the embed field"
+        );
+    }
+
+    /// With NO explorer base configured (the default), the ids render as plain code text — a
+    /// non-link — never the dead hardcoded fg-goose URL a browser can't reach.
+    #[test]
+    fn without_an_explorer_base_the_ids_are_plain_text_not_dead_links() {
+        let event = RecentEvent {
+            event_type: "Transfer".to_string(),
+            summary: "alice → bob: 100 DREGG".to_string(),
+            timestamp: String::new(),
+            cell_id: Some("abcdef0123456789abcdef".to_string()),
+            tx_hash: Some("deadbeefcafef00d".to_string()),
+        };
+        let card = activity_event_card_with_base("Transfer", &event, None);
+        let embed = serde_json::to_value(&card.embed).unwrap();
+        let fields = embed["fields"].as_array().unwrap();
+        for f in fields {
+            let value = f["value"].as_str().unwrap();
+            assert!(!value.contains("http"), "no link without a base: {value}");
+            assert!(
+                !value.contains("fg-goose"),
+                "the dead domain is gone: {value}"
+            );
+        }
+        assert_eq!(fields[0]["value"], "`abcdef0123456789...`");
+        assert_eq!(fields[1]["value"], "`deadbeefcafe...`");
+
+        // A configured base turns the same ids into real links.
+        assert_eq!(
+            explorer_ref(Some("https://x.test"), "tx", "deadbeefcafef00d", 12),
+            "[`deadbeefcafe...`](https://x.test/explorer/tx/deadbeefcafef00d)"
         );
     }
 

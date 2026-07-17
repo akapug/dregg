@@ -91,7 +91,7 @@ impl Config {
         if federation_id_bytes.iter().all(|&b| b == 0) {
             // Non-fatal; operator sees in logs when bot starts. Production cliques set the value.
             eprintln!(
-                "warning: FEDERATION_ID not set (or all-zero); using dev default. Set FEDERATION_ID=<64 hex> for real soft-federation/clique use."
+                "warning: FEDERATION_ID not set (or all-zero); using dev default. Set FEDERATION_ID=<64 hex> for real soft-federation/clique use. (Against a reachable SOLO node the boot preflight fails FAST on a mismatch — every transfer would be rejected; see FEDERATION_ID_ALLOW_MISMATCH.)"
             );
         }
 

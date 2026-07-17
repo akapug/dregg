@@ -550,7 +550,7 @@ async fn handle_start(ctx: &Context, command: &CommandInteraction, state: &BotSt
     // surface resolves against this session. `open_in` replaces any session already open.
     if let Err(e) = open_in(
         target_channel,
-        offering(),
+        offering,
         SessionConfig::with_seed(invoking_channel),
     ) {
         let embed = error_embed(
@@ -627,7 +627,7 @@ async fn handle_start(ctx: &Context, command: &CommandInteraction, state: &BotSt
         close_in::<DungeonOffering>(target_channel);
         let _ = open_in(
             invoking_channel,
-            offering(),
+            offering,
             SessionConfig::with_seed(invoking_channel),
         );
         if let Ok(mut m) = meta().lock() {
@@ -1649,7 +1649,7 @@ mod tests {
     /// generic adapter's store, keyed by `channel` — the SAME path `/dungeon start` drives.
     fn open_channel(channel: u64, seed: u64) {
         close_in::<DungeonOffering>(channel);
-        open_in(channel, offering(), SessionConfig::with_seed(seed))
+        open_in(channel, offering, SessionConfig::with_seed(seed))
             .expect("the Keep opens on a real world-cell");
     }
 

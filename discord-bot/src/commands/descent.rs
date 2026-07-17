@@ -53,6 +53,7 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 
 use serenity::all::{
@@ -113,6 +114,56 @@ pub fn set_live_beacon(utc_day: u64, beacon: DailyBeacon) {
     *live_beacon_cell().lock().expect("live beacon lock") = Some((utc_day, beacon));
 }
 
+/// Which beacon [`resolve_todays_beacon`] serves — surfaced honestly in every `/descent` footer
+/// (mirrors the [`NarratorKind`] idiom): the reveal cron's LIVE round for the current UTC day, or
+/// the pinned published fallback. Both are genuine BLS-verified reveals, but the fallback is NOT
+/// today's — every fallback day plays the SAME dungeon, and the surface must say so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeaconStatus {
+    /// The reveal cron fetched + verified today's live drand round; the day is genuinely fresh.
+    Live {
+        /// The live round number being served.
+        round: u64,
+    },
+    /// The pinned published round stands in (offline, before today's reveal fires, or under
+    /// test) — the daily world repeats until the reveal cron reaches drand.
+    PinnedFallback,
+}
+
+impl BeaconStatus {
+    /// The honest footer fragment (mirrors `NarratorKind::label`).
+    fn label(self) -> String {
+        match self {
+            BeaconStatus::Live { round } => format!("beacon: live round {round}"),
+            BeaconStatus::PinnedFallback => "beacon: PINNED fallback (not today's) — daily \
+                 world repeats until the reveal cron reaches drand"
+                .to_string(),
+        }
+    }
+}
+
+/// The pure resolution core: the cached live beacon when it is `today`'s, else the pinned
+/// published fallback — labeled with WHICH one was served. [`resolve_todays_beacon`] wraps this
+/// over the live cache; the tests drive both polarities directly.
+fn resolve_beacon_for(
+    today: u64,
+    cached: Option<(u64, DailyBeacon)>,
+) -> (DailyBeacon, BeaconStatus) {
+    if let Some((day, beacon)) = cached {
+        if day == today {
+            let round = beacon.round;
+            return (beacon, BeaconStatus::Live { round });
+        }
+    }
+    (
+        DailyBeacon::quicknet(
+            DRAND_QUICKNET_ROUND,
+            hex::decode(DRAND_QUICKNET_SIG_HEX).expect("the pinned drand signature decodes"),
+        ),
+        BeaconStatus::PinnedFallback,
+    )
+}
+
 /// **Resolve today's daily beacon** — the LIVE drand `quicknet` reveal when the reveal cron has
 /// fetched + verified today's round, else the pinned published round (the offline/test fallback).
 ///
@@ -120,18 +171,35 @@ pub fn set_live_beacon(utc_day: u64, beacon: DailyBeacon) {
 /// ([`procgen_dregg::beacon::fetch_todays_beacon`], driven by [`crate::reveal_cron`], which caches
 /// the verified round via [`set_live_beacon`]). Absent a live reveal, the committed pinned round is
 /// served: a genuine reveal whose pairing check holds, so `/descent` always plays a real
-/// beacon-verified day (a forged reveal is refused by [`DailyDescentOffering::open`]).
+/// beacon-verified day (a forged reveal is refused by [`DailyDescentOffering::open`]) — but NOT a
+/// fresh one. Serving the fallback warns once per UTC day; the surface footer carries the
+/// staleness to players ([`todays_beacon_status`]).
 pub fn resolve_todays_beacon() -> DailyBeacon {
     let today = procgen_dregg::beacon::current_utc_day();
-    if let Some((day, beacon)) = live_beacon_cell().lock().expect("live beacon lock").clone() {
-        if day == today {
-            return beacon;
+    let cached = live_beacon_cell().lock().expect("live beacon lock").clone();
+    let (beacon, status) = resolve_beacon_for(today, cached);
+    if status == BeaconStatus::PinnedFallback {
+        // Once per UTC day, put the staleness in the operator's log too (the footer already
+        // carries it to players).
+        static LAST_FALLBACK_WARN_DAY: AtomicU64 = AtomicU64::new(u64::MAX);
+        if LAST_FALLBACK_WARN_DAY.swap(today, Ordering::Relaxed) != today {
+            tracing::warn!(
+                utc_day = today,
+                pinned_round = DRAND_QUICKNET_ROUND,
+                "/descent is serving the PINNED fallback beacon (not today's live drand round) — \
+                 the daily world repeats until the reveal cron reaches drand"
+            );
         }
     }
-    DailyBeacon::quicknet(
-        DRAND_QUICKNET_ROUND,
-        hex::decode(DRAND_QUICKNET_SIG_HEX).expect("the pinned drand signature decodes"),
-    )
+    beacon
+}
+
+/// Today's [`BeaconStatus`] — the live-vs-pinned verdict every `/descent` footer reports beside
+/// the narrator kind.
+pub fn todays_beacon_status() -> BeaconStatus {
+    let today = procgen_dregg::beacon::current_utc_day();
+    let cached = live_beacon_cell().lock().expect("live beacon lock").clone();
+    resolve_beacon_for(today, cached).1
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1229,9 +1297,10 @@ async fn handle_today(ctx: &Context, command: &CommandInteraction) {
          Your character (level / class / earned XP / a hardcore death) carries across days. A WON \
          run posts to the no-cheat board — ranked only if it re-executes to the win.\n\n\
          Descend with `/descent play`.\n\n\
-         _Named seams: the live drand fetch that advances the round each real day; the midnight \
-         auto-reveal; a web spectator page._",
-        round = DRAND_QUICKNET_ROUND,
+         **{status}**\n\n\
+         _Named seams: the midnight auto-reveal; a web spectator page._",
+        round = beacon.round,
+        status = todays_beacon_status().label(),
     );
     let embed = base_embed(&format!("{title} — the day's reveal")).description(desc);
     respond(ctx, command, embed, vec![], true).await;
@@ -1426,7 +1495,13 @@ fn warn_embed(title: &str, body: &str) -> CreateEmbed {
 }
 
 fn footer(kind: NarratorKind) -> CreateEmbedFooter {
-    CreateEmbedFooter::new(format!("{} · {}", kind.label(), TAGLINE))
+    CreateEmbedFooter::new(footer_text(kind, todays_beacon_status()))
+}
+
+/// The rendered footer line — the narrator kind, the beacon's live-vs-pinned verdict, and the
+/// tagline (pure, so the tests can read exactly what a player sees).
+fn footer_text(kind: NarratorKind, beacon: BeaconStatus) -> String {
+    format!("{} · {} · {}", kind.label(), beacon.label(), TAGLINE)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1547,6 +1622,38 @@ mod tests {
 
     fn player(name: &str) -> DreggIdentity {
         DreggIdentity(name.to_string())
+    }
+
+    /// **The staleness is visible at the surface.** With no cached live round (or a stale one)
+    /// the pinned fallback is served and the rendered footer SAYS so; with today's live round
+    /// cached, the footer names the live round instead. (The pure resolution core is driven
+    /// directly so the process-global live-beacon cache — which other tests rely on being
+    /// empty — is never touched.)
+    #[test]
+    fn the_footer_labels_the_pinned_fallback_vs_the_live_round_honestly() {
+        // No cached live round → the pinned fallback, and the footer says so.
+        let (beacon, status) = resolve_beacon_for(20_000, None);
+        assert_eq!(beacon.round, DRAND_QUICKNET_ROUND);
+        assert_eq!(status, BeaconStatus::PinnedFallback);
+        let f = footer_text(NarratorKind::Scripted, status);
+        assert!(f.contains("beacon: PINNED fallback (not today's)"), "{f}");
+        assert!(f.contains("daily world repeats"), "{f}");
+        assert!(f.contains(TAGLINE), "the tagline still footers: {f}");
+
+        // A cached round for a DIFFERENT day is stale → still the pinned fallback.
+        let stale = DailyBeacon::quicknet(5_000_000, vec![0xAB; 48]);
+        let (beacon, status) = resolve_beacon_for(20_000, Some((19_999, stale)));
+        assert_eq!(beacon.round, DRAND_QUICKNET_ROUND);
+        assert_eq!(status, BeaconStatus::PinnedFallback);
+
+        // Today's cached live round is served, and the footer names it — no PINNED warning.
+        let live = DailyBeacon::quicknet(5_000_000, vec![0xAB; 48]);
+        let (beacon, status) = resolve_beacon_for(20_000, Some((20_000, live)));
+        assert_eq!(beacon.round, 5_000_000);
+        assert_eq!(status, BeaconStatus::Live { round: 5_000_000 });
+        let f = footer_text(NarratorKind::Scripted, status);
+        assert!(f.contains("beacon: live round 5000000"), "{f}");
+        assert!(!f.contains("PINNED"), "{f}");
     }
 
     /// Drive a CAREFUL winning line to the hoard through the bot's `advance_core` (fight the

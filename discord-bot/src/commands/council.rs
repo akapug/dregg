@@ -153,6 +153,11 @@ pub fn register() -> CreateCommand {
             "verify",
             "Re-verify the council's decision chain (tallies + enactments)",
         ))
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "close",
+            "Close the collective round — resolve the plurality winner as one verified turn",
+        ))
 }
 
 /// Route `/council` subcommands.
@@ -169,6 +174,10 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
         }
         "status" => offering::handle_status::<CouncilOffering>(ctx, command, state).await,
         "verify" => offering::handle_verify::<CouncilOffering>(ctx, command).await,
+        // The generic collective close: for a collective offering it resolves the round's
+        // plurality winner as ONE real crowd turn ([`offering::handle_close`]); the council is a
+        // DIRECT offering today, and the handler says so honestly.
+        "close" => offering::handle_close::<CouncilOffering>(ctx, command).await,
         _ => {}
     }
 }
@@ -219,8 +228,11 @@ async fn handle_open(
         _ => default_quorum(members.len()),
     };
 
-    let council = CouncilOffering::new(members, catalog, quorum);
-    if let Err(e) = offering::open_in(channel, council, SessionConfig::with_seed(channel)) {
+    if let Err(e) = offering::open_in(
+        channel,
+        move || CouncilOffering::new(members, catalog, quorum),
+        SessionConfig::with_seed(channel),
+    ) {
         let _ = command
             .create_response(
                 &ctx.http,
@@ -292,7 +304,9 @@ mod tests {
     use dreggnet_offerings::Offering;
     use dreggnet_offerings::{DreggIdentity, Outcome};
 
-    use crate::commands::offering::{Driven, close_in, fire_id, with_live};
+    use crate::commands::offering::{
+        CollectiveClose, Driven, close_in, close_round, fire_id, with_live,
+    };
 
     /// A test electorate of three, and the derived identity of each (exactly what a Discord
     /// member's derived public key produces: `member_identity(pk) == public_key_hex()`).
@@ -306,9 +320,12 @@ mod tests {
     fn open(channel: u64, quorum: u64) -> Vec<DreggIdentity> {
         close_in::<CouncilOffering>(channel);
         let (pks, ids) = electorate();
-        let council = CouncilOffering::new(pks, default_catalog(), quorum);
-        offering::open_in(channel, council, SessionConfig::with_seed(channel))
-            .expect("the council cell comes alive");
+        offering::open_in(
+            channel,
+            move || CouncilOffering::new(pks, default_catalog(), quorum),
+            SessionConfig::with_seed(channel),
+        )
+        .expect("the council cell comes alive");
         ids
     }
 
@@ -513,6 +530,32 @@ mod tests {
             DreggIdentity("aa".repeat(32)),
         );
         assert!(matches!(driven, Driven::NoSession), "got {driven:?}");
+    }
+
+    /// The `close` affordance is REGISTERED on the live surface (the generic collective close —
+    /// no more scaffold-only crowd machinery), and a DIRECT offering's close finds no round to
+    /// resolve (its presses already resolve one-by-one) rather than faking a crowd turn.
+    #[test]
+    fn the_close_subcommand_is_registered_and_a_direct_council_has_no_round() {
+        let cmd = serde_json::to_value(register()).expect("the command serializes");
+        let names: Vec<&str> = cmd["options"]
+            .as_array()
+            .expect("subcommands")
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"close"), "registered: {names:?}");
+
+        let channel = 90_006;
+        open(channel, 2);
+        assert!(
+            matches!(
+                close_round::<CouncilOffering>(channel),
+                CollectiveClose::NoRound
+            ),
+            "a direct offering opens no collective round, so there is nothing to close"
+        );
+        close_in::<CouncilOffering>(channel);
     }
 
     #[test]

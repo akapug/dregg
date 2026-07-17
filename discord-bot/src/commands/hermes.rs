@@ -121,7 +121,7 @@ async fn handle_open(ctx: &Context, command: &CommandInteraction, _state: &BotSt
     let replaced = offering::is_open::<HermesOffering>(channel);
     if let Err(e) = offering::open_in(
         channel,
-        HermesOffering::new(),
+        HermesOffering::new,
         SessionConfig::with_seed(channel),
     ) {
         let _ = command
@@ -190,9 +190,11 @@ mod tests {
     /// SAME adapter path `/hermes open` takes — only the brain seam differs from the live default.
     fn open(channel: u64, exec_rate: i64) {
         close_in::<HermesOffering>(channel);
-        let off = HermesOffering::scripted()
-            .with_confinement(Confinement::default().with_rate(ToolKind::Execute, exec_rate));
-        offering::open_in(channel, off, SessionConfig::with_seed(channel))
+        let make = move || {
+            HermesOffering::scripted()
+                .with_confinement(Confinement::default().with_rate(ToolKind::Execute, exec_rate))
+        };
+        offering::open_in(channel, make, SessionConfig::with_seed(channel))
             .expect("the confined agent deploys");
     }
 

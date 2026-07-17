@@ -109,6 +109,11 @@ pub fn register() -> CreateCommand {
             "verify",
             "Re-verify the auction: the winner is the real high bid, the clear conserves",
         ))
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "close",
+            "Close the collective round — resolve the plurality winner as one verified turn",
+        ))
 }
 
 /// Route `/market` subcommands.
@@ -120,6 +125,9 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
         "open" => handle_open(ctx, command, state).await,
         "status" => offering::handle_status::<MarketOffering>(ctx, command, state).await,
         "verify" => offering::handle_verify::<MarketOffering>(ctx, command).await,
+        // The generic collective close ([`offering::handle_close`]): the market is a DIRECT
+        // offering today, and the handler says so honestly.
+        "close" => offering::handle_close::<MarketOffering>(ctx, command).await,
         _ => {}
     }
 }
@@ -133,7 +141,7 @@ async fn handle_open(ctx: &Context, command: &CommandInteraction, _state: &BotSt
     let replaced = offering::is_open::<MarketOffering>(channel);
     if let Err(e) = offering::open_in(
         channel,
-        MarketOffering::new(),
+        MarketOffering::new,
         SessionConfig::with_seed(channel),
     ) {
         let _ = command
@@ -201,7 +209,7 @@ mod tests {
         close_in::<MarketOffering>(channel);
         offering::open_in(
             channel,
-            MarketOffering::new(),
+            MarketOffering::new,
             SessionConfig::with_seed(channel),
         )
         .expect("the market session deploys");
@@ -225,6 +233,19 @@ mod tests {
             Driven::Fired(o) => o,
             other => panic!("a market press must fire a real turn, got {other:?}"),
         }
+    }
+
+    /// The `close` affordance is REGISTERED on the live surface (the generic collective close).
+    #[test]
+    fn the_close_subcommand_is_registered() {
+        let cmd = serde_json::to_value(register()).expect("the command serializes");
+        let names: Vec<&str> = cmd["options"]
+            .as_array()
+            .expect("subcommands")
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"close"), "registered: {names:?}");
     }
 
     /// The value-taking affordances render as MODAL buttons; pressing one asks for the value

@@ -97,7 +97,7 @@ mod tests {
         offering::close_in::<DungeonOffering>(channel);
         // Opening a collective offering auto-opens an OPEN-crowd round; re-open it RESTRICTED to a
         // three-member electorate (a council-shaped crowd) so a non-member ballot is refused.
-        offering::open_in(channel, DungeonOffering::new(), SessionConfig::with_seed(7))
+        offering::open_in(channel, DungeonOffering::new, SessionConfig::with_seed(7))
             .expect("the Keep opens on a real world-cell");
         let members = vec![member("a1"), member("b0"), member("c2")];
         assert!(open_round::<DungeonOffering>(
@@ -145,6 +145,18 @@ mod tests {
                 );
                 assert_eq!(r.tally.winning_votes(), 2);
                 assert_eq!(r.electorate.len(), 2, "two voters of record");
+                // The `/… close` route posts exactly this note ([`offering::handle_close`]):
+                // the round, the winner, the ballot split, and the real landed receipt.
+                let note = offering::close_note(&r);
+                assert!(note.contains("Round 0 closed"), "{note}");
+                assert!(
+                    note.contains("2/2 ballot(s) · 2 voter(s) of record"),
+                    "{note}"
+                );
+                assert!(
+                    note.contains("A verified turn landed"),
+                    "the close surfaces the real receipt: {note}"
+                );
                 match r.outcome {
                     Outcome::Landed { receipt, ended } => {
                         assert!(!ended, "pressing on does not end the Keep");
