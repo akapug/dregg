@@ -240,7 +240,10 @@ fn enc_op(out: &mut Vec<u8>, op: &Op) {
         Op::Add { id, content, after } => {
             out.push(0);
             out.extend_from_slice(&id.0.to_le_bytes());
-            enc_run(out, content.as_bytes());
+            // The typed content's own canonical, type-tagged encoding (binds
+            // Text vs Element, tag/attrs/children — not just a rendered
+            // projection), carried as one length-prefixed run.
+            enc_run(out, &content.canonical_bytes());
             out.extend_from_slice(&after.0.to_le_bytes());
         }
         Op::Delete { id } => {
@@ -350,7 +353,11 @@ pub fn decode_history(bytes: &[u8]) -> Option<History> {
             ops.push(match d.u8()? {
                 0 => Op::Add {
                     id: d.atom_id()?,
-                    content: d.string()?,
+                    // Strict inverse of `enc_op`: the run holds the content's
+                    // canonical type-tagged bytes; `from_canonical_bytes` is
+                    // itself strict (unknown tag / truncation / bad UTF-8 /
+                    // trailing garbage → None), so tampering is still refused.
+                    content: dregg_doc::AtomContent::from_canonical_bytes(d.run()?)?,
                     after: d.atom_id()?,
                 },
                 1 => Op::Delete { id: d.atom_id()? },
