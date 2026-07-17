@@ -22,8 +22,10 @@ This doc is the `verifyBatch`-side companion to `DEBT-A-STARKSOUND-TARGET.md` (t
 
 `p3-batch-stark` rev `82cfad7`,
 `~/.cargo/git/checkouts/plonky3-7d8a3b21a665a86f/82cfad7/batch-stark/src/verifier/mod.rs`
-(the exact `verify_batch` the dregg backend calls — `circuit/Cargo.toml:201`, used at
-`circuit/src/descriptor_ir2.rs:4868` etc.):
+(the exact `verify_batch` the dregg backend calls — the rev is pinned workspace-wide at
+`Cargo.toml:215` and inherited by `circuit/Cargo.toml:33`; used at
+`circuit/src/descriptor_ir2.rs:5840` — the IR-v2 verify entry — and at `:5584` (the
+debug-only prove-path self-verify) and `:6975`):
 
 | # | Step | Lines |
 |---|------|-------|

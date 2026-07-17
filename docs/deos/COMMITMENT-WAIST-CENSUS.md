@@ -116,9 +116,14 @@ recursion root op-list changed and `RecursionVk` re-emitted as part of the lift.
 
 `circuit/src/ivc.rs` `ACCUMULATED_HASH_WIDTH = 8` is the delegation /
 attenuation fold-chain accumulator (distinct from the whole-chain accumulator
-above). **This waist has been lifted.** The width is now 8 felts, guarded by a
-build-time `assert_eq!(ACCUMULATED_HASH_WIDTH, 8, "the faithful floor is 8
-felts")` (`circuit/src/ivc.rs:1547`), and the doc-comments now correctly state
+above). **This waist has been lifted.** The width is now 8 felts
+(`ACCUMULATED_HASH_WIDTH: usize = 8`, `circuit/src/ivc.rs:56`), guarded by the
+anti-laundering test tooth `wide_accumulator_is_eight_distinct_avalanching_felts`
+(`circuit/src/ivc.rs:492`) — which asserts the width (`assert_eq!(ACCUMULATED_HASH_WIDTH,
+8, "the faithful floor is 8 felts")`, `:493`) and then that both the base case and the
+chain step emit 8 pairwise-distinct felts that avalanche over EVERY input felt, so the
+width cannot be laundered as `4 real + 4 zero-pad` or a replicated squeeze. It is a test
+gate, not a build-time assert, and the doc-comments now correctly state
 8 felts = ~124-bit collision resistance rather than laundering a 4-felt
 (~62-bit) width as "124-bit". The lift (`ACCUMULATED_HASH_WIDTH`,
 `StateTransitionAir`, `extend_accumulated_hash_wide`) re-emitted the attenuation

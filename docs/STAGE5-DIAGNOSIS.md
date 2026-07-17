@@ -127,7 +127,8 @@ producer's `lace.write()`, and it skips the redundant secondary finality-gate FF
 from Lean — `:983-988`. The remaining cost is the tau walk itself.)
 
 A related standing cost, not itself the plateau: `min_block_interval_ms` was lowered from 5000 to
-**2000** (`node/src/main.rs:207`) precisely because at 5000 "closing one wave took ~5 interval-spaced
+**2000** (the `--min-block-interval-ms` default, `node/src/lib.rs:219`; overridable at runtime by
+`DREGG_MIN_BLOCK_INTERVAL_MS`, `node/src/lib.rs:1653`) precisely because at 5000 "closing one wave took ~5 interval-spaced
 rounds ≈ 25-30s, so a committee under sustained turn load could not finalize turn-after-turn inside a
 reasonable window (the live n=4 stalled on this)." That fix has landed; the rate cap is no longer the
 primary blocker, but it remains a multiplier on cause 1 (each all-three round is still spaced by the

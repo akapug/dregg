@@ -153,9 +153,13 @@ for (i, proof) in proofs.iter().enumerate() {
 ```
 
 `registry.verify` dispatches to the registered `CustomEffectVerifier::verify`
-(`cell/src/custom_effect.rs:350-363`); the genuine production verifier is
-`custom_proof_bind::verify_proof_bind`, which performs a **full recursive STARK verify**
-(`program.verify_transition`, `circuit-prove/src/custom_proof_bind.rs:268`).
+(`cell/src/custom_effect.rs:350`); at the time of the finding the genuine production verifier
+was `custom_proof_bind::verify_proof_bind`, which performed a **full recursive STARK verify**
+(`program.verify_transition`) — that is what made each loop iteration expensive. (That off-AIR
+hand-STARK engine has since been deleted by stark-kill `dd038c08e`; nothing verifies a
+proof-bind off-AIR any more, and the binding now lives in the recursion fold — see the module
+doc, `circuit-prove/src/custom_proof_bind.rs:30-35`. The wire-vec length seam described below
+is the finding; its per-entry cost is now whatever verifier the registry carries.)
 
 There is **no length cap** on `turn.custom_program_proofs` and **no binding** of its
 length to the in-circuit `PI[CUSTOM_EFFECT_COUNT]` or to the cell's `max_custom_effects`.
