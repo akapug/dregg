@@ -39,6 +39,7 @@ pub mod credext;
 pub mod grant;
 pub mod json;
 pub mod link_claim;
+pub mod link_registry;
 pub mod observe;
 pub mod ratelimit;
 pub mod replay;
