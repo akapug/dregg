@@ -59,9 +59,6 @@ name = "cipherclerk_lifecycle"
 name = "web_auth_flow"
 
 [[example]]
-name = "ivc_attenuation_chain"
-
-[[example]]
 name = "programmable_cell"
 
 [[example]]
