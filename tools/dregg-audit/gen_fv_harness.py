@@ -16,7 +16,7 @@ uncapped/owner-mintable token (e.g. the MoonRugToken sample) Halmos returns a
 counterexample.
 
 When the token exposes public `balanceOf`+`allowance` it also emits INV-NODRAIN
-(owner-drain/seize, door #5) and INV-REENTRANCY (an ETH-conservation guard, the
+(owner-drain/seize, door #8) and INV-REENTRANCY (an ETH-conservation guard, the
 auto best-effort form). When it exposes a public authority accessor (`minter` or
 `owner`) it emits INV-ACCESS-CONTROL (door #1): the mint op is confined to that role
 — a mint missing its access-check yields a counterexample even when the cap holds.
@@ -78,7 +78,7 @@ def parse_ctor_params(code: str, name: str):
 
 def find_privileged_movers(body: str):
     """Return names of external/public functions with a `(address, address, uint256)`
-    signature — the owner-drain / seize / rescue shape (taxonomy door #5).
+    signature — the owner-drain / seize / rescue shape (taxonomy door #8).
 
     `transferFrom` is the ONE legitimate member of this shape (it is allowance-gated,
     which the INV-NODRAIN antecedent already excludes), so it is dropped. Any OTHER
@@ -130,7 +130,7 @@ def main():
         print("unknown")
         return
 
-    # INV-NODRAIN (taxonomy door #5, owner-drain / seize) is generated when the
+    # INV-NODRAIN (taxonomy door #8, owner-drain / seize) is generated when the
     # token exposes public `balanceOf` + `allowance` getters (so the antecedent
     # "caller holds no allowance over victim" and the balance readback compile).
     # Any detected privileged (address,address,uint256) mover is dispatched too, so
@@ -171,7 +171,7 @@ def main():
     assume_str = "\n".join(assumes)
     fname = src_path.split("/")[-1]
 
-    # ── INV-NODRAIN harness (owner-drain / seize, taxonomy door #5) ──────────────
+    # ── INV-NODRAIN harness (owner-drain / seize, taxonomy door #8) ──────────────
     drain_block = ""
     if gen_drain:
         # Dispatch the standard ERC-20 surface PLUS every detected privileged mover.

@@ -47,8 +47,8 @@ export async function nodeStatus() {
 export const endpoints = {
   clearOpen:      { path: '/clear',           live: true,  tier: 'open',     phase: 1, mechanism: 'ring' },
   settle:         { path: '/settle',          live: true,  tier: 'open',     phase: 1, note: 'solo dev node; no on-chain settle yet' },
-  clearShielded:  { path: '/clear-shielded',  live: true,  tier: 'shielded', phase: 2, note: 'fhEgg solver — plaintext Cert-F; reveal-nothing wrap is /prove-shielded' },
-  proveShielded:  { path: '/prove-shielded',  live: true,  tier: 'shielded', phase: 2, note: 'real Cert-F STARK, reveal-nothing (seconds)' },
+  clearShielded:  { path: '/clear-shielded',  live: false, tier: 'shielded', phase: 2, note: 'fhEgg solver — plaintext Cert-F; wired in the v1 server (:8781), NOT yet served by v2 serve.mjs' },
+  proveShielded:  { path: '/prove-shielded',  live: false, tier: 'shielded', phase: 2, note: 'real Cert-F STARK, reveal-nothing (seconds); wired in the v1 server (:8781), NOT yet served by v2 serve.mjs' },
   commitBid:      { path: '/bid',             live: false, tier: 'shielded', phase: 2, note: 'sealed-bid commit → on-chain commitBid — DESIGNED, not built (needs the public signed-data RPC)' },
   revealBid:      { path: '/reveal',          live: false, tier: 'shielded', phase: 2, note: 'sealed-bid reveal — DESIGNED, not built' },
   deposit:        { path: '/deposit',         live: false, tier: 'dark',     phase: 3, note: 'escrow-contract lock → LC attest → shield — escrow contract ember-gated' },
