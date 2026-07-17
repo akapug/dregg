@@ -44,21 +44,26 @@ central line is now mechanized **end to end, in both standard generic-group mode
 `tSdhExperiment D (embed strat) ≤ (C(fuel+D+4,2)·D + (D+1))/(p − 1)`, a genuine `< 1` in the standard
 regime, quantifying over the **image of the generic embedding** `embed` — the generic-restricted class
 that escapes the vacuity (the full `tSdhAdversary` type does not, and the statement over it is provably
-false). This wired capstone is the **Maurer explicit-equality** model: the adversary tests handle pairs
+false). This capstone is the **Maurer explicit-equality** model: the adversary tests handle pairs
 by explicit equality queries (`Move.query`), so only queried pairs can collide and the all-pairs
 collision count on the right-hand side is a sound *over-count* here. Its companion, the **Shoup
 random-encoding** model — where the adversary sees random encodings and compares *all* held pairs
-*freely*, making the all-pairs count *tight* — is mechanized **standalone** as `GgmShoup.shoup_ggm_sound`
-at the identical bound. Covering both standard GGM models is the point, and the random-encoding claim is
-now a proved theorem rather than a label. The full dependency spine — the static Schwartz–Zippel core,
+*freely*, making the all-pairs count *tight* — is now **wired to the same real experiment**,
+`GgmShoupEmbed.shoup_tSdh_ggm_sound : tSdhExperiment D (embedShoup strat) ≤ (C(fuel+D+4,2)·D + (D+1))/(p − 1)`,
+with a right-hand side byte-identical to the Maurer capstone, via a matrix-valued embedding `embedShoup`
+that realizes free comparison in the concrete group (the full group equality matrix folds onto the
+symbolic `eqPattern` off the bad event, by prime-order injectivity — `groupEqPattern_eq`, proven). Its
+symbolic core stays available as the standalone `GgmShoup.shoup_ggm_sound`. **Both standard GGM models
+therefore bound ArkLib's actual experiment; neither is standalone.** The full dependency spine — the static Schwartz–Zippel core,
 the adaptive identical-until-bad simulation, the all-pairs collision count, the field→group transport
 against ArkLib's real `tSdhCondition`, the degree discharge on the actual (pairing-free, linear) oracle,
 the `ProbComp` threading, and the embedding — is `sorry`-free with axioms exactly `[propext,
-Classical.choice, Quot.sound]`, no `sorryAx`. The honest side-conditions are named — for the wired
-Maurer capstone: `1 ≤ D` (at `D = 0` a pairing-free adversary genuinely cannot form `g₁^τ`), `2 ≤ p`,
-`orderOf g₁ = p`, and ArkLib's own `SampleableType` instance; for the standalone Shoup theorem: `1 ≤ D`,
-`2 ≤ p`, and `Fact (Nat.Prime p)` (it never touches the group, so no generator or sampleability
-condition). As far as our census of ArkLib and its dependencies could determine, no generic-group-model
+Classical.choice, Quot.sound]`, no `sorryAx`. The honest side-conditions are named — both wired
+capstones share `1 ≤ D` (at `D = 0` a pairing-free adversary genuinely cannot form `g₁^τ`), `2 ≤ p`,
+`orderOf g₁ = p`, and ArkLib's own `SampleableType` instance (each realizes its generic run in the
+concrete group); the standalone symbolic Shoup core `GgmShoup.shoup_ggm_sound` keeps the group-free
+conditions `1 ≤ D`, `2 ≤ p`, and `Fact (Nat.Prime p)` (it never touches the group, so no generator or
+sampleability condition). As far as our census of ArkLib and its dependencies could determine, no generic-group-model
 security *theorem* previously existed in Lean — ArkLib's own `AGM/Basic.lean` is a `sorry` stub with
 zero theorems, and is moreover *unsound as written* (its adversary is a `ReaderT` over the concrete
 group table, so it can read discrete logs) — so this is, to our knowledge, the first mechanized
@@ -459,8 +464,9 @@ handles it holds*, and they yield the *same* numeric bound.
   equality is ambient, not a spent step. Consequently *every* pair of held handles is a live collision
   candidate, and the all-pairs count is **tight**. In our mechanization this is the `ShoupStrat`
   adversary, which branches on the *full* pairwise-equality matrix `eqPattern` of its held handles at
-  each step and has no `query` move; it is proved **standalone** as `GgmShoup.shoup_ggm_sound` (§9.1),
-  not wired into ArkLib's group experiment.
+  each step and has no `query` move; its symbolic core is `GgmShoup.shoup_ggm_sound` (§9.1), and it is
+  **wired to ArkLib's real `tSdhExperiment`** through the matrix-valued embedding `embedShoup`
+  (`GgmShoupEmbed.shoup_tSdh_ggm_sound`, §9.1) — the free-comparison analogue of the Maurer `embed`.
 
 The encoding `σ` never enters either mechanization. Because `σ` is injective, "the encodings collide" is
 equivalent to "the underlying values collide," so `σ` folds away and only the field-level (eval-at-`τ`)
@@ -472,8 +478,13 @@ behind the handles.
 Both models produce the identical numerator `C(fuel+D+4,2)·D + (D+1)` over `p − 1`. The over-count in
 Maurer and the tight count in Shoup coincide arithmetically because the union bound is taken over the
 same all-pairs set; the distinction is *which adversary class the bound is a theorem about*, not the
-number. Wiring the Shoup model into ArkLib's group experiment (a second "Tier-2" embed) would be
-*optional and redundant* — Maurer is already the wired track that discharges the soundness result.
+number. **Both models are wired to ArkLib's actual group experiment**: Maurer through `embed`
+(`GgmEndToEnd.tSdh_ggm_sound`), Shoup through the matrix-valued `embedShoup`
+(`GgmShoupEmbed.shoup_tSdh_ggm_sound`), each bounding the same `Groups.tSdhExperiment` at the identical
+bound. Free comparison is not assumed on the Shoup side — the concrete-group equality matrix of the
+embedded adversary's held handles folds onto the symbolic `eqPattern` off the bad event by prime-order
+injectivity (`groupEqPattern_eq`, proven), exactly as the encoding `a ↦ g₁^{a.val}` folds away in the
+Maurer embedding.
 
 ---
 
@@ -749,13 +760,14 @@ non-vacuous* from *paper argument, frontier*.
 **The end-to-end soundness theorem is now mechanized — in both standard generic-group models.** The
 single capstone `GgmEndToEnd.tSdh_ggm_sound` — a `sorry`-free upper bound on ArkLib's **real**
 `tSdhExperiment`, quantifying over the image of the generic embedding (the class that escapes the
-vacuity) — closes the last frontier this section named in earlier drafts. This ArkLib-wired capstone is
+vacuity) — closes the last frontier this section named in earlier drafts. This capstone is
 the **Maurer explicit-equality** model (the adversary tests handle pairs by explicit `Move.query`
 queries; the all-pairs count on its right-hand side is a sound over-count here). The **Shoup
 random-encoding** model — the adversary comparing all held encodings *freely*, where the same all-pairs
-count is *tight* — is now mechanized **standalone** as `GgmShoup.shoup_ggm_sound` at the identical
-bound. Earlier drafts labelled the wired capstone "Shoup random-encoding"; that label is accurate only
-for the standalone `GgmShoup` theorem, and the capstone is corrected to Maurer here. Its full dependency
+count is *tight* — is **wired to the same real `tSdhExperiment`** as its second capstone,
+`GgmShoupEmbed.shoup_tSdh_ggm_sound`, via the matrix-valued embedding `embedShoup`, at a byte-identical
+bound; its symbolic core stays available standalone as `GgmShoup.shoup_ggm_sound`. So **both standard GGM
+models bound ArkLib's actual experiment; neither is standalone.** Each capstone's full dependency
 spine (the degree discharge, the transport, the `ProbComp` threading, the embedding) rests on axioms
 exactly `[propext, Classical.choice, Quot.sound]`, no `sorryAx`. §9.1 states both precisely; §9.2 and
 §9.4 record that the residuals they used to track are discharged, with only genuinely-optional items
@@ -779,8 +791,7 @@ remaining off the critical path.
   model** (§4.4): `embed strat` answers explicit equality queries (`Move.query`), so only the pairs the
   adversary queries can collide and the all-pairs count is a sound *over-count* here (the *tight*
   version of this same count, where free comparison makes every held pair a live candidate, is the
-  standalone Shoup theorem below). Earlier drafts called this the "Shoup random-encoding number" — that
-  label belongs to `GgmShoup.shoup_ggm_sound`, not to the wired capstone. **Why it escapes the vacuity**
+  Shoup capstone `GgmShoupEmbed.shoup_tSdh_ggm_sound` below, wired to the same experiment). **Why it escapes the vacuity**
   (§8.2): the
   theorem does **not** quantify over the full `tSdhAdversary D` type — over which the statement is
   provably FALSE, since a `Classical.choice`-definable adversary inverts the encoding and wins with
@@ -869,8 +880,9 @@ remaining off the critical path.
   (Maurer abstract-handle, §4.4) GGM, in which learning equality costs a query — hence the bound is
   **linear in the number of equality queries**, strictly tighter than the classical
   `~(q_G+D)²(D+1)/(p−1)` of Shoup's *random-encoding* model, where equality of visible encodings is free
-  and the bad event ranges over all table pairs (that free-comparison Shoup model is mechanized
-  standalone as `GgmShoup.shoup_ggm_sound`, this bullet's Shoup counterpart; §9.1). The two degree facts
+  and the bad event ranges over all table pairs (that free-comparison Shoup model has its symbolic core
+  in `GgmShoup.shoup_ggm_sound`, this bullet's Shoup counterpart, wired to ArkLib by `GgmShoupEmbed`;
+  §9.1). The two degree facts
   (output handle degree ≤ D; queried-handle differences degree
   ≤ Δ) enter as explicit hypotheses — the SRS degree invariant, the same idiom as the static adversary's
   `degree_le` field — satisfied structurally by the faithful group-op discipline and discharged
@@ -884,7 +896,8 @@ remaining off the critical path.
   the handle-set size `n` — the shape of Shoup's `~(q_G+D)²·D/p` *random-encoding* bound — with
   `n = fuel + D + 4` at the SRS seeding (`rand_encoding_bound_srs`). This is the shared **counting
   core**: in the Maurer-wired capstone (§9.1) it is a sound *over-count* (only queried pairs collide);
-  in the standalone `GgmShoup.shoup_ggm_sound` (below) the same count is *tight*, because free comparison
+  in the Shoup symbolic core `GgmShoup.shoup_ggm_sound` (below), wired to ArkLib by `GgmShoupEmbed`, the
+  same count is *tight*, because free comparison
   makes every held pair a live collision candidate. Two facts that were residuals in the prior draft of §9.2 are now
   THEOREMS: (i) the bad event ranges over *all* handle-table pairs, via
   `badSet ⊆ pairRootUnion(handlePolys)` (`badSet_subset_pairRootUnion`); (ii) the table size
@@ -897,7 +910,7 @@ remaining off the critical path.
   degree-invariant bullet below, §9.2, and the interlock note §9.4). The honest constant is `n = fuel +
   D + 4`: seed count `D+3` (G₁: `1,X,…,X^D`; G₂: `1,X`) plus the zero/identity handle. Axioms
   `[propext, Classical.choice, Quot.sound]`. (`GgmRandomEncoding.lean`.)
-- **⚑ THE SHOUP RANDOM-ENCODING GGM t-SDH BOUND — the second standard model, PROVED standalone.**
+- **⚑ THE SHOUP RANDOM-ENCODING GGM t-SDH BOUND — the second standard model, symbolic core.**
   `GgmShoup.shoup_ggm_sound` (with `runShoup_congr_off_bad`, `realWinSetShoup_subset`,
   `card_realWinSetShoup_le_allPairs`, `shoup_ggm_sound_lt_one`): for every *free-comparison* generic
   strategy `strat : ShoupStrat p` and any query budget `fuel`,
@@ -922,10 +935,37 @@ remaining off the critical path.
   `a ↦ g₁^{a}` folds away in the Maurer embed; `E` and `σ` live only in the model's prose. The degree
   invariants are **DISCHARGED** here, not assumed (`runShoup_output_natDegree_le`,
   `handleSetShoup_natDegree_le`, over the same linear/pairing-free `combine`; `card_handleSetShoup_le` is
-  the table-size THEOREM). **Honest side-conditions:** `1 ≤ D`, `2 ≤ p`, and `Fact (Nat.Prime p)` — the
-  theorem is *standalone* (it never touches ArkLib's group experiment), so it carries **no** generator or
-  `SampleableType` condition; wiring it into ArkLib (a Tier-2 embed) is optional and redundant, since
-  Maurer is the wired track. `sorry`-free, axioms `[propext, Classical.choice, Quot.sound]`. (`GgmShoup.lean`.)
+  the table-size THEOREM). **Honest side-conditions** (symbolic core): `1 ≤ D`, `2 ≤ p`, and `Fact
+  (Nat.Prime p)` — this core never touches the group, so it carries **no** generator or `SampleableType`
+  condition. `sorry`-free, axioms `[propext, Classical.choice, Quot.sound]`. (`GgmShoup.lean`.)
+- **⚑ THE SHOUP CAPSTONE — the random-encoding model WIRED to ArkLib's real `tSdhExperiment`.**
+  `GgmShoupEmbed.shoup_tSdh_ggm_sound` (with `shoup_tSdh_ggm_sound_lt_one`, `embedShoup_run_correspondence`,
+  `embedShoup_det`, `winIndexShoup_card_le`, `embedShoup_noncollapsing`): for every free-comparison
+  strategy `strat : ShoupStrat p` and any budget `fuel`, the embedded ArkLib adversary
+  `embedShoup g₁ D fuel strat` satisfies
+
+  ```
+  tSdhExperiment D (embedShoup strat) ≤ (C(fuel + D + 4, 2)·D + (D + 1)) / (p − 1)
+  ```
+
+  — the left-hand side ArkLib's **own** `Groups.tSdhExperiment`, the right-hand side **byte-identical** to
+  the Maurer capstone `tSdh_ggm_sound`, a genuine `< 1` in the standard regime. `embedShoup : ShoupStrat p
+  → tSdhAdversary D` is the matrix-valued analogue of the Maurer `embed`: it holds real `G₁` elements and,
+  at each step, computes the **full pairwise group-equality matrix** `groupEqPattern` of them for free
+  (`DecidableEq G₁`), feeding the strategy the real equality matrix — which off the bad event **is** the
+  symbolic `eqPattern (realAns τ)` (`groupEqPattern_eq`, proven, one dimension richer than the Maurer
+  embed's single equality bool). **Free comparison is thus discharged, not assumed** — prime-order
+  injectivity of `a ↦ g₁^{a.val}` (`gpow_val_inj_iff`) folds real group equality onto eval-at-`τ`
+  equality entrywise. The capstone composes through the same sockets as the Maurer one:
+  `Ggm.ProbThreading.experiment_eq_count` (adversary-agnostic, reused verbatim) collapses the experiment to
+  a `Fin (p−1)` count, its determinism discharged by `embedShoup_det`; `winIndexShoup_card_le` +
+  `tSdhCondition_iff_field` bound that by `realWinSetShoup.card`; and `card_realWinSetShoup_le_encoding`
+  (the Tier-1 all-pairs Schwartz–Zippel bound, *tight* under free comparison) bounds THAT by the numerator.
+  **Honest side-conditions**, mirroring the Maurer capstone: `1 ≤ D`, `2 ≤ p` (via `Fact (Nat.Prime p)`),
+  `orderOf g₁ = p`, and ArkLib's own `SampleableType` instance (the wired theorem realizes its run in the
+  concrete group). `#print axioms shoup_tSdh_ggm_sound` = `[propext, Classical.choice, Quot.sound]`, no
+  `sorryAx`. So **both standard GGM models now bound ArkLib's actual experiment; neither is standalone.**
+  (`GgmShoupEmbed.lean`, on top of `GgmShoup.lean` and reusing `GgmEmbed`/`GgmEndToEnd`/`GgmProbThreading`.)
 - **The degree invariant, structural — under the pairing discipline; the naive flat claim REFUTED.**
   `degree_invariant_paired` / `degree_invariant_paired_uniform` (with `degree_invariant_linComb`,
   `degree_invariant`, `flat_2D_bound_false`) is the honest structural content behind the degree
@@ -998,19 +1038,19 @@ former residuals, each now discharged:
   `Strat`) inherits the bound — a convenience for chaining §8.1's binding statement to the number, not a
   gap in the t-SDH soundness result, which holds for the whole `embed` image already.
 
-**Both standard generic-group models are covered — and the ArkLib-wired capstone is the Maurer one.**
+**Both standard generic-group models are wired to ArkLib's real `tSdhExperiment`.**
 The **Maurer explicit-equality** model (the adversary spends a `Move.query` to test one handle pair) is
-mechanized as `GgmAdaptive.lean`'s tight linear-in-queries number `(fuel·Δ + (D+1))/(p−1)`, and is the
-model **wired to ArkLib's real `tSdhExperiment`** in the capstone `GgmEndToEnd.tSdh_ggm_sound` — where
-the all-pairs number `(C(fuel+D+4,2)·D + (D+1))/(p−1)` is applied as a sound **over-count** (only queried
-pairs can collide). The **Shoup random-encoding** model (the adversary compares all held encodings
-*freely* via the full equality matrix `eqPattern`, no `query` move) is mechanized **standalone** as
-`GgmShoup.shoup_ggm_sound`, at the *identical* numerator, where the all-pairs count is **tight** (every
-held pair is a live collision candidate) and the hybrid `runShoup_congr_off_bad` is proven. So the
-random-encoding claim earlier drafts attached to the capstone is now a proved standalone theorem,
-correctly separated from the (Maurer) capstone. Wiring Shoup into ArkLib's group experiment (a "Tier-2"
-embed) is **optional and redundant** — Maurer is the wired track and already discharges the soundness
-result; the injective encoding `σ` folds away in both models and is never mechanized. Nothing on the
+mechanized as `GgmAdaptive.lean`'s tight linear-in-queries number `(fuel·Δ + (D+1))/(p−1)`, and is
+**wired** in the capstone `GgmEndToEnd.tSdh_ggm_sound` via `embed` — where the all-pairs number
+`(C(fuel+D+4,2)·D + (D+1))/(p−1)` is applied as a sound **over-count** (only queried pairs can collide).
+The **Shoup random-encoding** model (the adversary compares all held encodings *freely* via the full
+equality matrix `eqPattern`, no `query` move), whose symbolic core is `GgmShoup.shoup_ggm_sound` (where
+the all-pairs count is **tight** — every held pair a live collision candidate — and the hybrid
+`runShoup_congr_off_bad` is proven), is **wired** as its own capstone `GgmShoupEmbed.shoup_tSdh_ggm_sound`
+via the matrix-valued `embedShoup`, bounding the **same** `tSdhExperiment` at a byte-identical numerator.
+Free comparison is discharged in the concrete group by prime-order injectivity (`groupEqPattern_eq`); the
+injective encoding `σ` folds away in both models, exactly as `a ↦ g₁^{a.val}` does, and is never
+mechanized. So both models bound ArkLib's actual experiment; neither is standalone. Nothing on the
 critical path remains open.
 
 **On ArkLib's own `AGM/Basic.lean`.** It remains a WIP stub, not a foundation: `Adversary.run` is literally
@@ -1030,8 +1070,9 @@ bad-event bound (`card_rootUnion_le`) over Mathlib's `card_roots'`. As far as ou
 first **adaptive** generic-group-model security theorem in Lean; the static bound was the first
 generic-group security theorem of any kind, and the residuals above sharpen — they do not gate — the claim.
 The Shoup random-encoding track (`GgmShoup.lean`) reuses the same all-pairs counting core and adds the
-matrix-valued identical-until-bad hybrid `runShoup_congr_off_bad`, so both standard GGM models — Maurer
-(wired) and Shoup (standalone) — are now mechanized at the identical bound.
+matrix-valued identical-until-bad hybrid `runShoup_congr_off_bad`, and its embedding `GgmShoupEmbed.lean`
+wires it to ArkLib's real experiment through the group-equality matrix, so both standard GGM models —
+Maurer and Shoup — are now wired to `tSdhExperiment` at the identical bound.
 
 ### 9.3 What is verified vs. asserted, for the bounds
 
@@ -1082,8 +1123,9 @@ short signatures; the full version [BB08] proves the generic-bilinear-group lowe
 Corollary 13) we use. Shoup [Sho97] introduced the generic group model in its random-encoding form
 (handles are random encodings, equality of held encodings is free); Maurer [Mau05] gave the
 abstract-handle formulation in which equality is an explicit, counted oracle query. We mechanize **both**
-(§4.4): the Maurer model wired to ArkLib's real experiment (`GgmEndToEnd.tSdh_ggm_sound`), and the Shoup
-random-encoding model standalone (`GgmShoup.shoup_ggm_sound`), at the identical bound. Brown–Gallant and
+(§4.4), each wired to ArkLib's real experiment at the identical bound: the Maurer model via `embed`
+(`GgmEndToEnd.tSdh_ggm_sound`), and the Shoup random-encoding model via the matrix-valued `embedShoup`
+(`GgmShoupEmbed.shoup_tSdh_ggm_sound`, on the symbolic core `GgmShoup.shoup_ggm_sound`). Brown–Gallant and
 Cheon [BB08 §3, refs therein] give the matching generic *upper* bound, which is why parameter choice
 matters.
 
@@ -1156,12 +1198,21 @@ Mechanized files (this directory), all against ArkLib `d72f8392`:
   bad event, with the table size a THEOREM (`card_handlePolys_le`); also the δ = D specialization
   `rand_encoding_bound_D` / `card_realWinSet_le_encoding_D` the capstone consumes (as an over-count in
   Maurer; tight when reused by `GgmShoup`). `sorry`-free, axiom-clean (§9.1).
-- `candidates/GgmShoup.lean` — **⚑ THE SHOUP RANDOM-ENCODING GGM BOUND** (the second standard model,
-  standalone) `shoup_ggm_sound : ε ≤ (C(fuel+D+4,2)·D + (D+1))/(p−1)` over the free-comparison
+- `candidates/GgmShoup.lean` — **⚑ THE SHOUP RANDOM-ENCODING GGM BOUND, SYMBOLIC CORE**
+  `shoup_ggm_sound : ε ≤ (C(fuel+D+4,2)·D + (D+1))/(p−1)` over the free-comparison
   `ShoupStrat` class (full equality matrix `eqPattern`, no `query` move), with the matrix-valued
   identical-until-bad hybrid `runShoup_congr_off_bad` PROVEN and the degree invariants discharged.
   Same numerator as the Maurer capstone; the difference is the model. `1 ≤ D`, `2 ≤ p`, `Fact
-  (Nat.Prime p)`; no group/`SampleableType` condition (standalone). `sorry`-free, axiom-clean (§9.1).
+  (Nat.Prime p)`; no group/`SampleableType` condition (symbolic). `sorry`-free, axiom-clean (§9.1).
+- `candidates/GgmShoupEmbed.lean` — **⚑ THE SHOUP CAPSTONE, WIRED to ArkLib** (Tier-2)
+  `shoup_tSdh_ggm_sound : tSdhExperiment D (embedShoup strat) ≤ (C(fuel+D+4,2)·D + (D+1))/(p−1)`
+  (`< 1` in the standard regime). The matrix-valued embedding `embedShoup : ShoupStrat → tSdhAdversary D`
+  realizes free comparison in the concrete group — the full group-equality matrix folds onto the symbolic
+  `eqPattern` off the bad event by prime-order injectivity (`groupEqPattern_eq` PROVEN) — and composes
+  through the same sockets as the Maurer capstone (`experiment_eq_count`, `tSdhCondition_iff_field`,
+  `card_realWinSetShoup_le_encoding`). RHS byte-identical to `tSdh_ggm_sound`; side-conditions mirror it
+  (`1 ≤ D`, `2 ≤ p`, `orderOf g₁ = p`, `SampleableType`). So both standard GGM models bound ArkLib's real
+  `tSdhExperiment`; neither is standalone. `sorry`-free, axiom-clean (§9.1).
 - `candidates/GgmDegreeInvariant.lean` — the **structural degree invariant** (peer, off-path
   δ = 2D ceiling): `degree_invariant_paired` (`2D` under the two-sorted pairing discipline),
   `flat_2D_bound_false` (the naive flat `2D` claim REFUTED, `X⁴` at `D=1`), `degree_invariant`
