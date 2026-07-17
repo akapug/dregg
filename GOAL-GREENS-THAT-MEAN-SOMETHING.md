@@ -76,6 +76,11 @@ fix — NOT a blind rewrite.
   it never gets done. [[feedback-swarm-delegate-identified-work-immediately]]
 
 ## Done log
+- 13:5x — **28-red dark Emit-refine repairs landing** (`c6d6556ee`, `3dd04f611`, pushed): field-faithful
+  mod-p migration for the drifted refinement modules + `FinKernelStep` default + the Gt/Lt/Le/Neq predicate
+  refines. These modules were unreachable from the `Dregg2` root (built nowhere) — a lane is repairing the
+  drift so they can join the now-wired `Dregg2.Claims`/76-module gates. Rust fix lanes (#1 fail-open consensus,
+  #3 predicate forgery, #2/#6 isolated, hollow tests) still in flight, falsifier-first.
 - 13:2x — **Tree-wide ⊤-class defect re-grounded** (`7beec0c6e`, pushed, main green 9743): the 6 earlier
   `*Regrounded` files that rested on bare `CollisionResistant` (= `HashCRHardQuant F ⊤`, false at any
   compressing family) now condition on `HashCRHardQuant F Eff` with explicit undischarged `Eff` — via
