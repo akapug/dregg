@@ -240,44 +240,17 @@ jobs:
         if: always()
         run: rm -f '${{ steps.key.outputs.asset }}' '${{ steps.key.outputs.asset }}.sha256' || true
 
-  # The pin is a POINTER, not a per-commit ledger. Because assets are content-keyed, TAG only ever
-  # needs to be written ONCE — the first successful publish flips the repo from "no seed exists"
-  # (fetch dies, marshal gate can only skip) to "seeds are fetchable" (the gate arms itself). This
-  # job is what performs that flip automatically, so no human edits the pin by hand either.
-  pin:
-    needs: [plan, seed]
-    if: ${{ github.event_name != 'pull_request' && !cancelled() && !contains(needs.seed.result, 'failure') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-      - name: Bump the pin (TAG once; provenance opportunistically)
-        env:
-          TAG: ${{ needs.plan.outputs.tag }}
-        run: |
-          set -euo pipefail
-          pin=dregg-lean-ffi/lean-seed.pin
-          eval "$(bash scripts/lean-seed-key.sh | sed 's/^/K_/')"
-          {
-            sed -n '1,/^$/p' "$pin" | sed '/^$/d' | grep -v '^# TAG empty' || true
-            echo
-            echo "TAG=$TAG"
-            echo "LEAN_TOOLCHAIN=$K_LEAN_TOOLCHAIN"
-            echo "MATHLIB_REV=$K_MATHLIB_REV"
-            echo "DREGG_TREE_HASH=$K_DREGG_TREE_HASH"
-            echo "GENERATED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "NOTE=Published by .github/workflows/lean-seed.yml. Assets under this tag are CONTENT-KEYED (see scripts/lean-seed-key.sh), so TAG is stable and this provenance is a reference snapshot for the drift warning only — fetch-lean-seed.sh always resolves the asset from YOUR checkout's key, not from these values."
-          } > "$pin.new"
-          mv "$pin.new" "$pin"
-          git diff --quiet -- "$pin" && { echo "pin unchanged — nothing to commit."; exit 0; }
-          git config user.name  "dregg-seed-bot"
-          git config user.email "noreply@dregg"
-          git add "$pin"
-          git -c commit.gpgsign=false commit -m "chore(seed): point lean-seed.pin at the CI-published seed release ($TAG)"
-          # Rebase rather than clobber: main moves under long seed builds by construction.
-          for i in 1 2 3; do
-            git pull --rebase --autostash origin '${{ github.ref_name }}' && git push && exit 0
-            echo "push race ($i/3) — retrying"; sleep 5
-          done
-          echo "::warning::could not push the pin bump (protected branch?). Set TAG=$TAG in $pin manually — ONCE; it never needs bumping again."
+  # ── NO `pin` JOB. CI DOES NOT COMMIT TO YOUR BRANCH. ────────────────────────────────────────────
+  # There used to be one here. It rewrote `dregg-lean-ffi/lean-seed.pin` and then
+  # `git pull --rebase --autostash origin main && git push` to land it — i.e. it REBASED THE HUMAN'S
+  # BRANCH UNDER THEM, on every seed build, to push provenance fields that the pin file itself
+  # documents as decorative ("a reference snapshot for the drift warning only — fetch-lean-seed.sh
+  # always resolves the asset from YOUR checkout's key, not from these values"). The only
+  # load-bearing line, `TAG=lean-seed`, is a STABLE constant: assets are content-keyed, so the tag
+  # never needs bumping, and it is already committed. So the job re-rebased main forever to churn
+  # cosmetics. A bot that rewrites the branch you are working on is a hard no — the seed lane's job
+  # is to BUILD and PUBLISH an asset, and it does exactly that above; the release is the artifact,
+  # the git history is not its scratchpad.
+  #
+  # If the pin ever needs a value again (a new platform, a deliberate tag change), a human writes
+  # one line, once. `scripts/lean-seed-key.sh` prints the current key on demand for drift checks.

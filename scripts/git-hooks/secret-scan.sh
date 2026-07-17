@@ -41,6 +41,27 @@ block_msg() {
   printf '  To bypass in a true emergency (discouraged): git commit --no-verify / git push --no-verify\n\n' >&2
 }
 
+# True iff $1 is a base we can actually scan FROM. Guards the two ways this hook used to explode on a
+# live, multi-terminal repo — both reported as mystery errors on an ordinary `git push`:
+#
+#   * "fatal: '..' is outside repository" — an EMPTY base/tip. `git` feeds no ref lines when there is
+#     nothing to push, and pre-push's `printf '%s\n' "$stdin_data"` turns empty stdin into a LONE
+#     NEWLINE, so `read` yields four empty vars. Empty does not match the `^0+$` all-zeros sentinel,
+#     so the old code sailed past every guard into `git diff "$remote_oid..$local_oid"` = `git diff
+#     ".."` — which git parses as a PATHSPEC, not a range. Hence the nonsense message.
+#   * "not a valid commit range" — a base the LOCAL clone does not have. `remote_oid` is what the
+#     REMOTE holds; on this repo several terminals rebase and force-push the shared branch, so the
+#     oid git hands the hook is routinely an object we never fetched. `<unknown>..<tip>` then dies.
+#
+# In both cases the correct fallback is the new-branch form (`<tip> --not --remotes`): scan what is
+# genuinely new locally. Fail OPEN on scanning scope, never fail closed on a bad range — the point is
+# to scan the pushed commits, not to block a push because we could not name them.
+usable_base() {
+  [ -n "${1:-}" ] || return 1
+  printf '%s' "$1" | grep -qE '^0+$' && return 1
+  git cat-file -e "${1}^{commit}" 2>/dev/null
+}
+
 # ---------------------------------------------------------------------------------------------------
 # gitleaks path
 # ---------------------------------------------------------------------------------------------------
@@ -52,21 +73,18 @@ if command -v gitleaks >/dev/null 2>&1; then
     range)
       base="${2:-}"; tip="${3:-}"
       [ -n "$tip" ] || exit 0
-      if [ -z "$base" ] || printf '%s' "$base" | grep -qE '^0+$'; then
-        opts="$tip --not --remotes"
-      else
-        opts="$base..$tip"
-      fi
+      if usable_base "$base"; then opts="$base..$tip"; else opts="$tip --not --remotes"; fi
       gl git --log-opts="$opts" || { block_msg; exit 1; } ;;
     push-stdin)
       rc=0
       while read -r local_ref local_oid remote_ref remote_oid; do
-        # skip branch deletions (all-zero local oid)
+        # Skip blank/short lines (see usable_base) and branch deletions (all-zero local oid).
+        [ -n "${local_oid:-}" ] || continue
         printf '%s' "$local_oid" | grep -qE '^0+$' && continue
-        if printf '%s' "$remote_oid" | grep -qE '^0+$'; then
-          opts="$local_oid --not --remotes"
-        else
+        if usable_base "${remote_oid:-}"; then
           opts="$remote_oid..$local_oid"
+        else
+          opts="$local_oid --not --remotes"
         fi
         gl git --log-opts="$opts" || rc=1
       done
@@ -98,20 +116,22 @@ case "$mode" in
     emit_hits "$diff_text" && exit 0 || { block_msg; exit 1; } ;;
   range)
     base="${2:-}"; tip="${3:-}"; [ -n "$tip" ] || exit 0
-    if [ -z "$base" ] || printf '%s' "$base" | grep -qE '^0+$'; then
-      diff_text="$(git log -p "$tip" --not --remotes | added_lines)"
-    else
+    if usable_base "$base"; then
       diff_text="$(git diff "$base..$tip" | added_lines)"
+    else
+      diff_text="$(git log -p "$tip" --not --remotes | added_lines)"
     fi
     emit_hits "$diff_text" && exit 0 || { block_msg; exit 1; } ;;
   push-stdin)
     rc=0
     while read -r local_ref local_oid remote_ref remote_oid; do
+      # Skip blank/short lines (see usable_base) and branch deletions.
+      [ -n "${local_oid:-}" ] || continue
       printf '%s' "$local_oid" | grep -qE '^0+$' && continue
-      if printf '%s' "$remote_oid" | grep -qE '^0+$'; then
-        diff_text="$(git log -p "$local_oid" --not --remotes | added_lines)"
-      else
+      if usable_base "${remote_oid:-}"; then
         diff_text="$(git diff "$remote_oid..$local_oid" | added_lines)"
+      else
+        diff_text="$(git log -p "$local_oid" --not --remotes | added_lines)"
       fi
       emit_hits "$diff_text" || rc=1
     done
