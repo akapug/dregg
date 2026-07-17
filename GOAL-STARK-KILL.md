@@ -2207,3 +2207,25 @@ ENFORCED BY RATCHETS so it stays closed: law1_enforcement_gate (48 files/757 sit
 mock_proof_purge_gate (shrink-only) · effect_enum_descriptor_residual_gate · verify_routing_guard ·
 unexpected_cfgs (deny-flip in flight, lane A).
 Everything remaining is DERIVED work — the board sweep (`wdghv87w4`, 6 lanes) is on it.
+
+## ⚑ BOARD SWEEP harvest (partial, 2026-07-17) — 2 lanes gated, Lane A HELD on tree-tangle
+- `5dbeadf2d` **Lane C COMMITTED** — DSL comparison lowering PROVEN not-range-check-sound (a forged `5<=3`
+  accepts through the production interpreter). Harness-only (traced, not shipped); production comparisons
+  (committed_threshold/derivation) DO range-check. Characterization-pin tooth that fails LOUD when fixed +
+  a non-vacuity test. `DslComparisonRangeSoundnessResidual` resolved.
+- **Lane A — verified green, but HELD (not committed): multi-lane MANIFEST TANGLE.** It did excellent,
+  real work: found `[workspace.lints]` bound only **107/207** crates (100 never opted in — so even the
+  `warn` "authoritative list" was HALF-BLIND); opted 89 clean manifests in + added `deny` to the 6 with
+  own [lints] tables + root `unexpected_cfgs = "deny"`; caught a REAL 4th phantom (`dregg-turn`'s always-
+  false `cfg(feature="verifier")` that made verify-only builds compile OUT the aggregation path + hard-error
+  on rotated WitnessedReceipts — fail-closed, not a forgery); fixed 3 fix-forward compile breaks. Mutation-
+  proven, `cargo check --workspace` + `-p dregg-tests --all-targets` both GREEN (run 5).
+  **WHY HELD**: it touched **124 Cargo.toml**, and `turn/Cargo.toml` (+ likely others) is MIXED — it carries
+  another lane's new deps (postcard/serde_json/hex) alongside Lane A's `[lints]` opt-in. `git add`-ing the
+  batch would SWEEP other lanes' in-flight work (the `git add -A` hazard, avoided). And the 3 code
+  fix-forwards only compile WITH the full workspace batch, so they can't be split off green either.
+  → RE-APPLY on a SETTLED tree (the `[lints] workspace=true` opt-in is a deterministic one-liner per clean
+  manifest; the dregg-turn phantom fix + 3 fix-forwards are isolated diffs to re-land). The deny flip is
+  the RIGHT end state; it just can't land into a tree 3 other lanes are actively editing. `DenyFlipReapplyResidual`.
+  KEY FINDING TO KEEP regardless: **the lint cage covered only half the workspace** — whoever lands the
+  opt-in must cover all 207, and settle chain/deos-hermes/dreggnet-web/grain-turn (Lane A skipped them dirty).
