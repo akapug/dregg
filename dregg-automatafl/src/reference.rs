@@ -380,11 +380,20 @@ fn follow_chain(
 /// `applyMoves` (faithful subset): occlusion + chain-follow + rewrite.
 pub fn apply_moves(b: &Board, moves: &[Move]) -> Board {
     let srcs: Vec<Coord> = moves.iter().map(|m| m.frm).collect();
-    let piece_srcs: Vec<Coord> = srcs
-        .iter()
-        .copied()
-        .filter(|&c| b.cell_at(c) != VAC)
-        .collect();
+    // A source counts as a MOVING piece only if it carries a particle AND its move
+    // is not occluded. This mirrors the o1Labs `apply_moves`, which inserts a source
+    // into `initial_piece_coords` only inside `if !is_occluded` (all sources are
+    // marked passable first, so `occluded` here matches). An OCCLUDED move's source
+    // is therefore NOT journeyed and NOT cleared — it stays put as a static occupant,
+    // and another piece's chain may flow onto and overwrite it. (Including occluded
+    // sources here would spawn a spurious stationary journey that blocks the incoming
+    // piece — a divergence from o1Labs the 11×11 differential surfaces.)
+    let mut piece_srcs: Vec<Coord> = Vec::new();
+    for m in moves {
+        if b.cell_at(m.frm) != VAC && !occluded(b, &srcs, m) && !piece_srcs.contains(&m.frm) {
+            piece_srcs.push(m.frm);
+        }
+    }
     let fuel = moves.len() + 1;
     let next_c = |c: Coord| next_of(b, moves, &srcs, c);
 
@@ -424,11 +433,14 @@ pub fn apply_moves(b: &Board, moves: &[Move]) -> Board {
 /// `None` if `src` carries no piece (vacuum source).
 pub fn chain_endpoint(b: &Board, moves: &[Move], src: Coord) -> Option<Coord> {
     let all_srcs: Vec<Coord> = moves.iter().map(|m| m.frm).collect();
-    let piece_srcs: Vec<Coord> = all_srcs
-        .iter()
-        .copied()
-        .filter(|&c| b.cell_at(c) != VAC)
-        .collect();
+    // Occlusion-aware moving-piece set — coherent with `apply_moves`: an occluded
+    // move's source is a static occupant, not a journeyed piece.
+    let mut piece_srcs: Vec<Coord> = Vec::new();
+    for m in moves {
+        if b.cell_at(m.frm) != VAC && !occluded(b, &all_srcs, m) && !piece_srcs.contains(&m.frm) {
+            piece_srcs.push(m.frm);
+        }
+    }
     if !piece_srcs.contains(&src) {
         return None;
     }
@@ -445,6 +457,88 @@ pub fn apply_turn(b: &Board, ms: &[Move]) -> Board {
     let resolved = conflict_resolve(b, &valid);
     let mid = apply_moves(b, &resolved);
     automaton_step(&mid)
+}
+
+// ============================================================================
+// The REAL 11×11 two-player game: the stock opening, the goal corners, the win
+// check. Faithful to the o1Labs reference `~/dev/automatafl/logic`
+// (`board.rs::stock_two_player`, `game.rs::try_complete_round`'s goal check) and
+// the README ruleset. TWO-PLAYER ONLY (m=2). The transition itself is the same
+// `apply_turn` above — it is fully parameterized by `Board::n`, so nothing about
+// the resolution changes; only the board size and the win layer are new here.
+// ============================================================================
+
+/// The real board edge for the deployed two-player game.
+pub const N11: usize = 11;
+
+/// **The stock two-player opening (11×11).** A byte-for-byte transcription of the
+/// o1Labs `Board::stock_two_player` grid (`~/dev/automatafl/logic/src/board.rs`):
+/// a repulsor/attractor ring around the flanks, four attractor pairs and repulsor
+/// pairs, and the Automaton dead centre at `(5,5)`. Rows are `y = 0..11` from the
+/// top of the `arr2` literal (o1Labs indexes `particles[[y, x]]`, matching our
+/// `cells[y*n + x]`).
+pub fn stock_two_player() -> Board {
+    // `.` vacuum, `r` repulsor, `a` attractor, `d` automaton — the exact o1Labs grid.
+    const GRID: [&[u8; N11]; N11] = [
+        b"rroorrroorr", // y = 0
+        b"oooarrraooo", // y = 1
+        b"ooooooooooo", // y = 2
+        b"ooooooooooo", // y = 3
+        b"aaoooooooaa", // y = 4
+        b"rrooodooorr", // y = 5
+        b"aaoooooooaa", // y = 6
+        b"ooooooooooo", // y = 7
+        b"ooooooooooo", // y = 8
+        b"oooarrraooo", // y = 9
+        b"rroorrroorr", // y = 10
+    ];
+    let mut cells = vec![VAC; N11 * N11];
+    let mut auto = (0, 0);
+    for (y, row) in GRID.iter().enumerate() {
+        for (x, &ch) in row.iter().enumerate() {
+            let p = match ch {
+                b'o' => VAC,
+                b'r' => REP,
+                b'a' => ATT,
+                b'd' => {
+                    auto = (x as i32, y as i32);
+                    AUTO
+                }
+                other => panic!("bad opening glyph {other:?}"),
+            };
+            cells[y * N11 + x] = p;
+        }
+    }
+    debug_assert_eq!(auto, (5, 5), "the stock automaton sits dead centre");
+    Board {
+        n: N11,
+        cells,
+        auto,
+        col_rule: true,
+    }
+}
+
+/// The four goal corners of the stock two-player game, each tagged with its owning
+/// seat (`0` or `1`). Per the README two-player rule, "each player picks two
+/// corners that are in the same row": seat 0 owns the two `y = 0` corners, seat 1
+/// owns the two `y = 10` corners. When the Automaton steps into a corner, that
+/// corner's owner wins (`Game::try_complete_round`).
+pub const GOAL_CORNERS_2P: [(Coord, u32); 4] = [
+    ((0, 0), 0),
+    ((N11 as i32 - 1, 0), 0),
+    ((0, N11 as i32 - 1), 1),
+    ((N11 as i32 - 1, N11 as i32 - 1), 1),
+];
+
+/// **The win check.** The seat whose goal corner the Automaton currently occupies,
+/// or `None`. Mirrors the o1Labs `try_complete_round` goal scan
+/// (`goals.iter().find(|(c, _)| c == automaton_location)`), evaluated on the
+/// post-`apply_turn` board.
+pub fn win_owner(b: &Board, goals: &[(Coord, u32)]) -> Option<u32> {
+    goals
+        .iter()
+        .find(|(c, _)| *c == b.auto)
+        .map(|(_, who)| *who)
 }
 
 // ============================================================================
