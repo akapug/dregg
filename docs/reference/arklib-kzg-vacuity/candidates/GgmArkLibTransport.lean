@@ -27,11 +27,7 @@ CONTENTS.
      `Groups.zmod_eq_zero_of_gpow_eq_one`; the iff form.
   2. `gpow_val_bijective` — bijectivity: surjectivity is exactly ArkLib's
      `Groups.exists_zmod_power_of_generator`.
-  3. `choose_extracts_exact` — the `Exists.choose` extractor on `g ^ τ.val` recovers EXACTLY `τ`
-     (injectivity pins the witness). This is the mechanism the vacuity finding
-     (`../KzgVacuity.lean`) exploits against the SRS leg `g₂^τ`; stated here it also certifies
-     that the encoding loses no information.
-  4. `tSdhCondition_iff_field` — for an output PRESENTED in encoded form `h = g ^ x.val`,
+  3. `tSdhCondition_iff_field` — for an output PRESENTED in encoded form `h = g ^ x.val`,
      ArkLib's `tSdhCondition (τ, c, h)` holds iff `τ + c ≠ 0 ∧ x = 1/(τ+c)` — exactly the
      filter predicate of `GgmAdaptive.realWinSet` at `x = f.eval τ`.
   5. `groupWinSet` / `groupWinSet_eq_realWinSet` / `field_bound_transports_to_group` — the set
@@ -94,16 +90,6 @@ theorem gpow_val_bijective {g : G} (hpG : Nat.card G = p) (hg : g ≠ 1)
   ⟨gpow_val_injective hord, fun x => by
     obtain ⟨a, ha⟩ := Groups.exists_zmod_power_of_generator hpG hg hord x
     exact ⟨a, ha.symm⟩⟩
-
-/-- **The choice extractor is exact.** The witness `Exists.choose` produces from ArkLib's
-`exists_zmod_power_of_generator` applied to an encoded element `g ^ τ.val` is `τ` itself —
-injectivity pins the witness. (This is the extraction mechanism `../KzgVacuity.lean` turns
-against the SRS leg `g₂^τ`; here it doubles as a correctness certificate for the encoding.) -/
-theorem choose_extracts_exact {g : G} (hpG : Nat.card G = p) (hg : g ≠ 1)
-    (hord : orderOf g = p) (τ : ZMod p) :
-    (Groups.exists_zmod_power_of_generator hpG hg hord (g ^ τ.val)).choose = τ :=
-  gpow_val_injective hord
-    (Groups.exists_zmod_power_of_generator hpG hg hord (g ^ τ.val)).choose_spec.symm
 
 /-! ## 2. The condition-level transport: `tSdhCondition` ↔ the field predicate -/
 
@@ -180,7 +166,6 @@ theorem fraction_bound_transports_to_group {g : G} (hord : orderOf g = p)
 #print axioms gpow_val_injective
 #print axioms gpow_val_inj_iff
 #print axioms gpow_val_bijective
-#print axioms choose_extracts_exact
 #print axioms tSdhCondition_iff_field
 #print axioms groupWinSet_eq_realWinSet
 #print axioms field_bound_transports_to_group
