@@ -21,6 +21,9 @@ at all times · sophistication proportionate to the challenge, NO further · ACT
 - **Launchpad P1/P2:** restore forge-std submodule + un-ignore + forge CI → off-laptop
   reproducible (path-specific, swarm-safe). Genuinely built + adversarially tested already.
 
+## Landed (autonomous)
+- **DrEX ✅** (4e3d38bdd): reconciled to v2 primary; shielded-clearing + reveal-nothing UX; Cert-F check-grid, proof-receipt card, session receipt ledger ('every move is a receipt' on screen); --check green, honesty preserved (real fhegg_clear cleared, unbuilt→502). Proposed: P1 host, SetField flip, build bins on persvati.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
