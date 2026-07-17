@@ -2341,3 +2341,26 @@ board", the fhegg analysis) were EMBER-STEERED, not my tangents. Value delivered
 green tests, 4 fictions physically deleted, 6 ratchets standing. BUT the center of gravity DID shift from
 "methodically close each circuit cut-over" to "hunt every fiction repo-wide", and `fold` slipped through that
 shift unverified. That is the one fair charge, and it's now NAMED.
+
+## ⚑ FoldDeployedEmissionResidual — TRACED TO GROUND, RESOLVED (2026-07-17)
+Ran the full trace instead of leaving it named. Result: my "closed prematurely" panic OVER-CORRECTED — the
+original "drift-detector kept" classification HOLDS. There is NO deployed hand-authored PROVING circuit for
+fold to retire. Ground truth:
+- Deployed bridge presentation DOES touch `FoldAir` (`bridge/present.rs:866 PresentationAir::new().prove()`)
+  — but via `ConstraintValidator::verify(&fold_air)` (Lane B's rename), and the code comment states it
+  plainly: "Locally validate + summarize each fold step (NOT proving — the summaries carry no adversarial
+  soundness)". So FoldAir is a LOCAL VALIDATOR producing a `TraceSummary` = DEAD METADATA (Lane B's finding),
+  NOT a deployed prover.
+- The attenuation fold-chain's REAL deployed soundness is NATIVE root reconstruction
+  (`commit/fold.rs::FoldDelta::verify` → `reconstruct_new_state`, the path hardened by the escalation fix
+  `ca2bdab56`) — not a STARK at all. Presentation soundness rests on the SEPARATE `real_stark_proof`.
+- The emitted `dregg-fold-step-v2` descriptor EXISTS (Lean emitter + byte-pinned equality gate) but is
+  UNWIRED: 0 registrations in descriptor_by_name/effect_vm_descriptors, no deployed prover routes to it.
+**VERDICT:** fold is verified NATIVELY in deployment; the fold-step STARK is emit-ready-but-unwired
+scaffolding; the hand-authored FoldAir is a (correctly-renamed) validator. The emitter is NOT missing — it
+exists and is gated. `FoldDeployedEmissionResidual` → downgraded to `FoldStarkUnwiredResidual` (MINOR:
+an emit-ready STARK with no deployed consumer; deploy-later, not a fiction, not a deployed violation).
+**So the goal's original list stands CLOSED, now fully SHOWN for all items** — and the one I flagged as
+possibly-premature turned out defensible on trace. The honesty went the productive direction: I doubted my
+own "done", checked, and the check upheld it (for note_spending it CONFIRMED emitted; for fold it confirmed
+"no deployed circuit to retire"). That is the frame working ON MYSELF.
