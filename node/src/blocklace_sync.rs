@@ -1059,7 +1059,21 @@ impl BlocklaceHandle {
         // gate only ever admits the whole Lean order back) — halving the executor's
         // O(history) Lean work per poll, which is the dominant cost as the chain grows.
         let mut ordered_from_lean = false;
-        let ordered = if participants.len() <= 1 {
+        // CONSENSUS-SAFETY: the solo-vs-consensus decision keys on the RAW ADMITTED
+        // participant count — NOT the PQ-projected `participants` set. `participants`
+        // drops any admitted member whose ML-DSA key is not yet enrolled (a live-JOINED
+        // validator that never published its ML-DSA key — an acknowledged intended
+        // state), so a genuine n>=2 federation with any un-keyed member projects to <=1
+        // hybrid ids. Keying the solo shortcut on that projection would enter SOLO and
+        // finalize every actionable block in bare `seq` order with the quorum belt
+        // DISARMED (fail-OPEN) — and when the peer's PQ key is later learned and the node
+        // flips multi-party, those solo turns were never quorum-attested ⇒ divergence
+        // (the `TauPrefixMonotone` hazard). So: genuine solo (`admitted <= 1`) orders by
+        // seq; a genuine n>1 federation whose PQ committee is unconfigured for a live
+        // member (`admitted > 1` but projection <= 1) fails CLOSED — finalizes NOTHING
+        // this poll and warns; only a fully-projected n>1 committee runs the verified
+        // tau order.
+        let ordered = if admitted.len() <= 1 {
             // Solo: all actionable blocks are ordered by sequence.
             let mut all_blocks: Vec<(u64, BlockId)> = lace
                 .iter()
@@ -1073,6 +1087,25 @@ impl BlocklaceHandle {
                 .collect();
             all_blocks.sort_by_key(|(seq, _)| *seq);
             all_blocks.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+        } else if participants.len() <= 1 {
+            // FAIL-CLOSED: a genuine n>1 federation (`admitted > 1`) whose hybrid-id
+            // projection collapsed to <=1 has one or more live members with no enrolled
+            // ML-DSA key. It CANNOT run the multi-party tau order (the projected
+            // participant set is degenerate), and it must NOT solo-finalize (that is the
+            // fail-open hole). Finalize NOTHING this poll and warn — finality HALTS until
+            // the committee's PQ keys are configured, which is the safe posture (a solo
+            // turn finalized here would never be quorum-attested once the node flips
+            // multi-party). Liveness is preserved: as soon as the peer PQ keys are
+            // learned, the projection fills and finalization resumes.
+            warn!(
+                admitted = admitted.len(),
+                projected = participants.len(),
+                "FAIL-CLOSED: a genuine n>1 federation projected to <=1 hybrid participants \
+                 (a live member's ML-DSA key is not enrolled) — HALTING finality this poll \
+                 rather than taking the fail-open solo shortcut. Configure the committee's \
+                 ML-DSA keys to resume multi-party finalization."
+            );
+            Vec::new()
         } else {
             // Multi-party: produce the finalized total order from the VERIFIED LEAN RULE.
             //
@@ -6938,6 +6971,96 @@ mod tests {
             last_order_fingerprint: Arc::new(RwLock::new(None)),
             last_lean_order: Arc::new(RwLock::new(None)),
         }
+    }
+
+    // ─── CONSENSUS-SAFETY: the solo shortcut must key on the RAW admitted count ──
+
+    /// FAIL-OPEN FALSIFIER (fail-closed after the fix): a GENUINE n=2 federation
+    /// with one un-keyed live member must NOT take the solo shortcut and finalize
+    /// without quorum.
+    ///
+    /// The solo-vs-consensus branch in `poll_finalized_blocks` keys on the RAW
+    /// ADMITTED participant count (`admitted.len()`), never the PQ-projected
+    /// `participants` set. `participants` includes a member ONLY if its ML-DSA key
+    /// is enrolled; a live-JOINED validator whose ML-DSA key was never published gets
+    /// NO entry (the acknowledged intended state). Keying the shortcut on that
+    /// PROJECTION let a genuine n>=2 federation with any un-keyed member project to
+    /// <=1 hybrid ids → enter SOLO → finalize every actionable block in bare `seq`
+    /// order with the quorum belt DISARMED — fail-OPEN. When the peer's PQ key is
+    /// later learned and the node flips multi-party, those solo turns were never
+    /// quorum-attested ⇒ divergence (the `TauPrefixMonotone` hazard). The fix fails
+    /// CLOSED: `admitted > 1` but the projection collapses to <=1 finalizes NOTHING.
+    ///
+    /// This exercises the EXECUTION path (`poll_finalized_blocks`), the layer the
+    /// vote-collector-only `missing_pq_committee_key_fail_closed` never covered.
+    #[tokio::test]
+    async fn genuine_federation_with_unkeyed_member_does_not_solo_finalize() {
+        // PeerNode::new needs a rustls CryptoProvider (idempotent).
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        // A live n=2 federation: self + one peer, both genesis-trusted members.
+        let (_sk_self, pk_self) = dregg_types::generate_keypair();
+        let (_sk_peer, pk_peer) = dregg_types::generate_keypair();
+
+        let handle = test_handle_with_committee(pk_self.0, vec![pk_self.0, pk_peer.0]).await;
+
+        // The PQ committee knows SELF's ML-DSA key but NOT the peer's (the peer joined
+        // live and never published its ML-DSA key). ⇒ admitted = 2, yet the hybrid-id
+        // projection collapses to exactly ONE — the precondition that used to route
+        // straight into the fail-open solo branch.
+        {
+            let self_pq = dregg_federation::frost::MlDsaSigningKey::from_seed(&[0x11u8; 32]).0;
+            let mut pq = HashMap::new();
+            pq.insert(pk_self.0, self_pq);
+            let mut votes = handle.votes.write().await;
+            votes.set_committee(vec![pk_self.0, pk_peer.0], pq);
+        }
+
+        // One real, signed, actionable Turn block sits in the lace.
+        {
+            let mut lace = handle.lace.write().await;
+            lace.add_block(Payload::Turn(vec![1, 2, 3, 4]));
+        }
+
+        let finalized = handle.poll_finalized_blocks().await;
+
+        // FAIL-CLOSED: a genuine n>1 federation whose PQ committee is unconfigured for
+        // a live member must HALT finality this poll — never solo-finalize the Turn
+        // without quorum. (Before the fix this returned the Turn, keyed on the collapsed
+        // projection; the mutation canary is: revert the branch to `participants.len()`
+        // and this asserts RED again.)
+        assert!(
+            finalized.is_empty(),
+            "a genuine n=2 federation with an un-keyed live member must finalize NOTHING \
+             (fail-CLOSED), not solo-finalize without quorum — got {} finalized block(s), \
+             the fail-open solo shortcut fired",
+            finalized.len()
+        );
+    }
+
+    /// LIVENESS COMPANION: a GENUINE solo node (`admitted == 1`) still finalizes its
+    /// actionable blocks in `seq` order. Guards the fail-closed fix above against an
+    /// over-aggressive mutation (e.g. "always halt") — the fail-closed arm must fire
+    /// ONLY when a genuine n>1 federation's projection collapses, never for real solo.
+    #[tokio::test]
+    async fn genuine_solo_node_still_finalizes() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let (_sk_self, pk_self) = dregg_types::generate_keypair();
+        let handle = test_handle_with_committee(pk_self.0, vec![pk_self.0]).await;
+
+        {
+            let mut lace = handle.lace.write().await;
+            lace.add_block(Payload::Turn(vec![9, 9, 9]));
+        }
+
+        let finalized = handle.poll_finalized_blocks().await;
+        assert_eq!(
+            finalized.len(),
+            1,
+            "a genuine solo node (admitted == 1) must still finalize its actionable Turn — \
+             the fail-closed fix must not halt real solo finality"
+        );
     }
 
     // ─── BUG 1: hostname peer resolution (overlay hostnames federate) ───────────
