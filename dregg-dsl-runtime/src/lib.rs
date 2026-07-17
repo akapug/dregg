@@ -44,11 +44,9 @@ pub use composition::{
 };
 
 #[cfg(feature = "plonky3")]
-pub mod dsl_plonky3;
 
 // Re-export Plonky3 DSL proving API.
 #[cfg(feature = "plonky3")]
-pub use dsl_plonky3::{DslP3Air, prove_dsl_plonky3, verify_dsl_plonky3};
 
 // Re-export primary smart contract runtime types.
 pub use dregg_circuit::dsl::{
