@@ -104,7 +104,10 @@ impl FeePolicy {
     pub fn compute_fee(&self, asset: &AssetId, base_amount: u64) -> Option<u64> {
         let entry = self.accepted.iter().find(|a| &a.asset == asset)?;
         let scaled = (base_amount as u128).saturating_mul(entry.fee_bps as u128) / 10_000;
-        let fee = (scaled as u64).max(entry.min_fee);
+        // Saturate rather than truncate: a `scaled` above `u64::MAX` (reachable
+        // when `fee_bps > 10_000`, i.e. a fee over 100%, on a large base) would
+        // wrap DOWN under a bare `as u64` cast and UNDERCHARGE. Cap at u64::MAX.
+        let fee = u64::try_from(scaled).unwrap_or(u64::MAX).max(entry.min_fee);
         Some(fee)
     }
 }
@@ -142,5 +145,23 @@ mod tests {
         let unknown = [0xFF; 32];
         assert_eq!(policy.compute_fee(&unknown, 100), None);
         assert!(!policy.accepts(&unknown));
+    }
+
+    #[test]
+    fn extreme_fee_saturates_instead_of_truncating() {
+        // fee_bps = 1_000_000 (100x) on base = u64::MAX pushes the u128 `scaled`
+        // to (2^64 - 1) * 100 = 100*2^64 - 100, far above u64::MAX. A bare
+        // `scaled as u64` cast wraps this DOWN to u64::MAX - 99 (undercharging
+        // by ~1e20-fold); the saturating conversion must instead pin it to
+        // u64::MAX. A revert to `scaled as u64` reddens this assertion.
+        let alt = [0xAA; 32];
+        let policy = FeePolicy::computrons_only().with_asset(alt, 1_000_000, 0);
+        assert_eq!(policy.compute_fee(&alt, u64::MAX), Some(u64::MAX));
+
+        // The truncated value the OLD code would have returned, spelled out so
+        // the canary is unambiguous: it is strictly less than u64::MAX.
+        let truncated = ((u64::MAX as u128) * 1_000_000 / 10_000) as u64;
+        assert!(truncated < u64::MAX, "the bare cast undercharges");
+        assert_ne!(policy.compute_fee(&alt, u64::MAX), Some(truncated));
     }
 }
