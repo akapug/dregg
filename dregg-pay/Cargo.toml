@@ -27,6 +27,16 @@ dregg-governance = { path = "../dregg-governance" }
 # what mints a `SwapAuthorization`. No cycle: collective-choice does not depend on
 # dregg-pay.
 collective-choice = { path = "../collective-choice" }
+# The verified cross-cell VALUE-FLOW rail: `resolve_pay` desugars a `pay` to the
+# ONE conserving `Effect::Transfer` the kernel checks per-asset (Σδ=0). The
+# protocol-native run-budget path (`protocol_native.rs`, Track C rung 2a) settles
+# a run through this rail — a conserved cell balance, no custody. Pure data
+# construction (builds an `Action`; never runs the executor / Lean producer). No
+# cycle: dregg-payable depends only on types/cell/turn, none of which touch dregg-pay.
+dregg-payable = { path = "../dregg-payable" }
+# The kernel `Effect::Transfer` type the run desugars to, and the `CellId` value id.
+dregg-turn = { path = "../turn" }
+dregg-types = { path = "../types" }
 # SLIP-0010 ed25519 hardened derivation = HMAC-SHA512; the derived key is a real
 # ed25519 keypair whose public key IS the Solana deposit address.
 hmac = { workspace = true }

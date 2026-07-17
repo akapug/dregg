@@ -75,6 +75,11 @@ pub mod multichain;
 pub mod nft_mint;
 pub mod otc;
 pub mod pricing;
+// Track C rung 2a — the protocol-native run-budget rail: a conserved cell balance
+// in an internal asset, spent by one conserving `Effect::Transfer` the user
+// authorizes. Additive over the custodial rail; it holds NO custody key and NO
+// sweeper (`docs/deos/PROTOCOL-NATIVE-ECONOMY.md` §4 rung 2a).
+pub mod protocol_native;
 pub mod swap;
 pub mod sweeper;
 pub mod treasury;
@@ -116,6 +121,10 @@ pub use otc::{
 pub use pricing::{
     HttpGet, JupiterPriceOracle, MockOracle, PriceError, PriceOracle, discount_factor,
     parse_jupiter_price, runs_for_payment,
+};
+pub use protocol_native::{
+    ChargeError, DEFAULT_RUN_PRICE_CREDITS, RUN_CREDIT_ASSET_DOMAIN, RunBudgetLedger, RunReceipt,
+    RunSettlementMode, run_credit_asset,
 };
 pub use swap::{
     BuiltSwap, GovernanceAuthority, HttpPost, JupiterQuote, JupiterSwap, JupiterVenue, MockSigner,
