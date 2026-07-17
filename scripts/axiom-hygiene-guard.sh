@@ -51,14 +51,30 @@ else
 fi
 
 echo "axiom-hygiene-guard.sh: using lake at $LAKE"
-echo "axiom-hygiene-guard.sh: building $META ..."
+
+# Optional target restriction. When AXIOM_GUARD_TARGETS is set (space/newline
+# separated Lean module names), build EXACTLY those targets instead of the whole
+# corpus. This exists so out-of-default modules — ones NOT reachable from the
+# `Dregg2` lean_lib root, so `lake build` never touches them (CryptoVerifyAll,
+# the orphan gate list) — can be routed through THIS guard rather than a bare
+# `lake build <module>` that checks the exit code only. `sorry`/`admit` are Lean
+# WARNINGS (exit 0), so an exit-code-only step is blind to them; running them
+# through here applies the identical sorry/sorryAx grep below, keeping the
+# textual net's coverage uniform across the default corpus and the orphans.
+read -r -a _targets <<< "${AXIOM_GUARD_TARGETS:-}"
 
 LOG="$(mktemp -t metatheory-build.XXXXXX.log)"
 trap 'rm -f "$LOG"' EXIT
 
-# Build the whole corpus. We capture the exit code explicitly — a head/tail
-# pipe would MASK it — and we keep the full log for the grep below.
-( cd "$META" && "$LAKE" build ) > "$LOG" 2>&1
+# Build. We capture the exit code explicitly — a head/tail pipe would MASK it —
+# and we keep the full log for the grep below.
+if [ "${#_targets[@]}" -gt 0 ]; then
+    echo "axiom-hygiene-guard.sh: building $META targets: ${_targets[*]} ..."
+    ( cd "$META" && "$LAKE" build "${_targets[@]}" ) > "$LOG" 2>&1
+else
+    echo "axiom-hygiene-guard.sh: building $META (whole corpus, default targets) ..."
+    ( cd "$META" && "$LAKE" build ) > "$LOG" 2>&1
+fi
 build_status=$?
 
 # ── Layer (a.1): the `sorry`-warning net (the comprehensive one). ──────────

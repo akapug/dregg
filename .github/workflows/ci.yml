@@ -558,6 +558,32 @@ jobs:
             echo "::notice::seed release '$tag' is pinned — arming the faithfulness gate."
           else
             echo "armed=0" >> "$GITHUB_OUTPUT"
+            # SILENT-DISARM GUARD (gate-vacuity #3). An empty TAG makes
+            # check-lean-marshal.sh SKIP — "NOTHING WAS CHECKED" — and exit 0, so a
+            # disarmed run is byte-for-byte indistinguishable from a passing one. A
+            # published seed EXISTS (lean-seed.pin ships TAG=lean-seed, content-keyed and
+            # stable), so on the protected branch `main` there is NO legitimate unarmed
+            # state: an empty TAG there is a lost/tampered pin and MUST be a red job, not
+            # a green-with-warning. The ONLY sanctioned unarmed state is a deliberate
+            # pre-seed bootstrap, and it must be declared IN THE COMMITTED PIN with a
+            # `LEAN_GATE_INTENTIONALLY_UNARMED=1` line — visible in review, never silent.
+            intentional="$(sed -n 's/^LEAN_GATE_INTENTIONALLY_UNARMED=//p' dregg-lean-ffi/lean-seed.pin | head -1)"
+            # Fire on a PUSH to main AND on a PR TARGETING main. The push-only form was a
+            # POST-MERGE tripwire: a PR that empties/tampers the pin passed its PR CI green
+            # (the marshal gate silently SKIPs), so a reviewer relying on green checks would
+            # MERGE the disarm before the red ever showed. For a pull_request event the
+            # protected target is GITHUB_BASE_REF (= main), not GITHUB_REF. Blocking both
+            # makes the disarm visible in the PR, pre-merge.
+            targets_main=0
+            if [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ "${GITHUB_REF:-}" = "refs/heads/main" ]; then
+              targets_main=1
+            elif [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] && [ "${GITHUB_BASE_REF:-}" = "main" ]; then
+              targets_main=1
+            fi
+            if [ "$targets_main" = "1" ] && [ "$intentional" != "1" ]; then
+              echo "::error::lean-seed.pin has an EMPTY TAG on a change to main (push or PR), with no committed LEAN_GATE_INTENTIONALLY_UNARMED=1 escape. The Lean↔Rust faithfulness gate would SKIP and go green having checked NOTHING. Restore the pin's TAG (run 'Publish Lean seed'), or — for a deliberate pre-seed bootstrap — commit LEAN_GATE_INTENTIONALLY_UNARMED=1 to dregg-lean-ffi/lean-seed.pin so the disarm is visible in review."
+              exit 1
+            fi
             echo "::warning::lean-seed.pin TAG is EMPTY — no seed release exists yet, so this gate can only SKIP and is asserting NOTHING. Run the 'Publish Lean seed' workflow (needs a registered self-hosted runner with the lean-seed + linux-x86_64 labels); it writes TAG and this gate arms itself automatically."
           fi
 
@@ -667,9 +693,16 @@ jobs:
       # this job so it reuses the already-built+warm corpus above: only the incremental
       # crypto-gauntlet closure compiles here (the default corpus is cached from the
       # zero-sorry build). A red here is a rotted PQ floor proof, not infra flake.
+      # Routed through axiom-hygiene-guard.sh (NOT a bare `lake build`) so the
+      # SAME `declaration uses \`sorry\`` / sorryAx grep the zero-sorry step runs
+      # is applied to this out-of-default module too. `sorry`/`admit` are Lean
+      # WARNINGS (exit 0, no warningAsError in metatheory/lakefile.toml), so an
+      # exit-code-only `lake build <module>` here would GREEN even with a sorry
+      # in the module — this closes that hole and keeps the textual net uniform.
       - name: Crypto linking-seam gauntlet (SignCoreSpec/EncapsCoreSpec/AcvpKats — outside the default aggregator)
-        working-directory: metatheory
-        run: lake build Dregg2.Crypto.CryptoVerifyAll
+        env:
+          AXIOM_GUARD_TARGETS: Dregg2.Crypto.CryptoVerifyAll
+        run: bash scripts/axiom-hygiene-guard.sh
 
       # THE CORPUS-WIDE AXIOM-HYGIENE LEDGER, ARMED (2026-07-17, wiring hunt round 2).
       # `Dregg2/Claims.lean` is THE `#assert_axioms` net: 202 per-decl pins +
@@ -727,86 +760,95 @@ jobs:
       # COST: every module here is a LEAF on the corpus the zero-sorry step already built
       # (measured: the 18 non-Circuit ones take 32s warm; the whole 76 ~7 min wall). This runs
       # last so it reuses that warm build. A red here is a rotted proof, not infra flake.
+      # Routed through axiom-hygiene-guard.sh (NOT a bare `lake build`) so the
+      # SAME `declaration uses \`sorry\`` / sorryAx grep runs on all 76 orphan
+      # modules. `sorry`/`admit` are WARNINGS (exit 0, no warningAsError in
+      # metatheory/lakefile.toml), so the previous exit-code-only `lake build
+      # <list>` would GREEN even with a sorry in any of these — apex-soundness
+      # ones included (AlgoStarkSoundFanoutMemFree, AcceptanceDischarge,
+      # Bridge.LightClientEth, ProofOfHoldings, HoldingWeightedTally). The folded
+      # AXIOM_GUARD_TARGETS becomes the space-separated build list; the guard
+      # applies the identical textual net, closing the coverage hole.
       - name: Orphan gate (76 modules reachable from no CI target — the CryptoVerifyAll siblings)
-        working-directory: metatheory
-        run: |
-          lake build \
-            Dregg2.Apps.ColonistJob \
-            Dregg2.Bridge.HoldingFoldRecursive \
-            Dregg2.Bridge.HoldingWeightedTally \
-            Dregg2.Bridge.InterchainAdapterDecision \
-            Dregg2.Bridge.LightClientEth \
-            Dregg2.Bridge.LightClientMpt \
-            Dregg2.Bridge.LightClientTendermint \
-            Dregg2.Bridge.ProofOfHoldings \
-            Dregg2.Bridge.ProofOfHoldingsGeneric \
-            Dregg2.Bridge.VerifiedLightClient \
-            Dregg2.Circuit.AcceptanceDischarge \
-            Dregg2.Circuit.AlgoStarkSoundFanoutMemFree \
-            Dregg2.Circuit.AlgoStarkSoundFanoutMemory \
-            Dregg2.Circuit.AlgoStarkSoundFanoutSetField \
-            Dregg2.Circuit.AlgoStarkSoundGeneral \
-            Dregg2.Circuit.AlgoStarkSoundKernel \
-            Dregg2.Circuit.AlgoStarkSoundKernelAvail \
-            Dregg2.Circuit.BlindedMembershipBindingFromFold \
-            Dregg2.Circuit.CustomLeafEncoding \
-            Dregg2.Circuit.Emit.AccumulatorNonRevocationRefine \
-            Dregg2.Circuit.Emit.AdjacencyMembershipRefine \
-            Dregg2.Circuit.Emit.AdjacencyMembershipRefineAudit \
-            Dregg2.Circuit.Emit.AdjacencyMembershipRung2 \
-            Dregg2.Circuit.Emit.AvailWideMembersNarrow \
-            Dregg2.Circuit.Emit.BilateralAggregationEmit \
-            Dregg2.Circuit.Emit.BilateralAggregationRefine \
-            Dregg2.Circuit.Emit.BilateralAggregationRung2 \
-            Dregg2.Circuit.Emit.BlindedMembershipRung2 \
-            Dregg2.Circuit.Emit.BoundPresentationRefine \
-            Dregg2.Circuit.Emit.BoundPresentationRung2 \
-            Dregg2.Circuit.Emit.CommittedThresholdEmit \
-            Dregg2.Circuit.Emit.CommittedThresholdRefine \
-            Dregg2.Circuit.Emit.DerivationRefine \
-            Dregg2.Circuit.Emit.DfaRoutingGeneralEmit \
-            Dregg2.Circuit.Emit.DfaRoutingRefine \
-            Dregg2.Circuit.Emit.DfaRoutingRung2 \
-            Dregg2.Circuit.Emit.EffectActionBindingEmit \
-            Dregg2.Circuit.Emit.EffectActionBindingRefine \
-            Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransition \
-            Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRefine \
-            Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2 \
-            Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2Full \
-            Dregg2.Circuit.Emit.EmitGraduate \
-            Dregg2.Circuit.Emit.FoldEmit \
-            Dregg2.Circuit.Emit.FoldRefine \
-            Dregg2.Circuit.Emit.FoldRung2 \
-            Dregg2.Circuit.Emit.GarbledEvalEmit \
-            Dregg2.Circuit.Emit.GarbledEvalRefine \
-            Dregg2.Circuit.Emit.GarbledEvalRung2 \
-            Dregg2.Circuit.Emit.MembershipAuthRootEdge \
-            Dregg2.Circuit.Emit.MembershipDepthGeneralRung2 \
-            Dregg2.Circuit.Emit.MultiStepChainEmit \
-            Dregg2.Circuit.Emit.PredicatesRelationalCompoundEmit \
-            Dregg2.Circuit.Emit.RotatedLayout \
-            Dregg2.Circuit.Emit.RotatedLayoutBridge \
-            Dregg2.Circuit.FinBindsKernel \
-            Dregg2.Circuit.FinInjectivityCollapse \
-            Dregg2.Circuit.FriCorrelatedAgreementSharp \
-            Dregg2.Circuit.FriLdtJohnsonList \
-            Dregg2.Circuit.FriProximityGapListDecoding \
-            Dregg2.Circuit.FriProximityGapWitness \
-            Dregg2.Circuit.FriVerifierOracle \
-            Dregg2.Circuit.KernelConfigSoundness \
-            Dregg2.Circuit.KernelConfigSoundnessAvail \
-            Dregg2.Circuit.OodColumnLayout \
-            Dregg2.Circuit.PresentationBindingFromFold \
-            Dregg2.Circuit.RotatedKernelRefinementAvailWideNarrow \
-            Dregg2.Circuit.WrapSafetyStaticAnalyzer \
-            Dregg2.Exec.FFIDirect \
-            Dregg2.Games.Automatafl \
-            Dregg2.Games.AutomataflAir \
-            Dregg2.Games.MultiwayTug \
-            Dregg2.Games.MultiwayTugAir \
-            Dregg2.Verify.LoadBearingAuditBroad \
-            Dregg2.Verify.LoadBearingAuditKey \
+        env:
+          AXIOM_GUARD_TARGETS: >-
+            Dregg2.Apps.ColonistJob
+            Dregg2.Bridge.HoldingFoldRecursive
+            Dregg2.Bridge.HoldingWeightedTally
+            Dregg2.Bridge.InterchainAdapterDecision
+            Dregg2.Bridge.LightClientEth
+            Dregg2.Bridge.LightClientMpt
+            Dregg2.Bridge.LightClientTendermint
+            Dregg2.Bridge.ProofOfHoldings
+            Dregg2.Bridge.ProofOfHoldingsGeneric
+            Dregg2.Bridge.VerifiedLightClient
+            Dregg2.Circuit.AcceptanceDischarge
+            Dregg2.Circuit.AlgoStarkSoundFanoutMemFree
+            Dregg2.Circuit.AlgoStarkSoundFanoutMemory
+            Dregg2.Circuit.AlgoStarkSoundFanoutSetField
+            Dregg2.Circuit.AlgoStarkSoundGeneral
+            Dregg2.Circuit.AlgoStarkSoundKernel
+            Dregg2.Circuit.AlgoStarkSoundKernelAvail
+            Dregg2.Circuit.BlindedMembershipBindingFromFold
+            Dregg2.Circuit.CustomLeafEncoding
+            Dregg2.Circuit.Emit.AccumulatorNonRevocationRefine
+            Dregg2.Circuit.Emit.AdjacencyMembershipRefine
+            Dregg2.Circuit.Emit.AdjacencyMembershipRefineAudit
+            Dregg2.Circuit.Emit.AdjacencyMembershipRung2
+            Dregg2.Circuit.Emit.AvailWideMembersNarrow
+            Dregg2.Circuit.Emit.BilateralAggregationEmit
+            Dregg2.Circuit.Emit.BilateralAggregationRefine
+            Dregg2.Circuit.Emit.BilateralAggregationRung2
+            Dregg2.Circuit.Emit.BlindedMembershipRung2
+            Dregg2.Circuit.Emit.BoundPresentationRefine
+            Dregg2.Circuit.Emit.BoundPresentationRung2
+            Dregg2.Circuit.Emit.CommittedThresholdEmit
+            Dregg2.Circuit.Emit.CommittedThresholdRefine
+            Dregg2.Circuit.Emit.DerivationRefine
+            Dregg2.Circuit.Emit.DfaRoutingGeneralEmit
+            Dregg2.Circuit.Emit.DfaRoutingRefine
+            Dregg2.Circuit.Emit.DfaRoutingRung2
+            Dregg2.Circuit.Emit.EffectActionBindingEmit
+            Dregg2.Circuit.Emit.EffectActionBindingRefine
+            Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransition
+            Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRefine
+            Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2
+            Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2Full
+            Dregg2.Circuit.Emit.EmitGraduate
+            Dregg2.Circuit.Emit.FoldEmit
+            Dregg2.Circuit.Emit.FoldRefine
+            Dregg2.Circuit.Emit.FoldRung2
+            Dregg2.Circuit.Emit.GarbledEvalEmit
+            Dregg2.Circuit.Emit.GarbledEvalRefine
+            Dregg2.Circuit.Emit.GarbledEvalRung2
+            Dregg2.Circuit.Emit.MembershipAuthRootEdge
+            Dregg2.Circuit.Emit.MembershipDepthGeneralRung2
+            Dregg2.Circuit.Emit.MultiStepChainEmit
+            Dregg2.Circuit.Emit.PredicatesRelationalCompoundEmit
+            Dregg2.Circuit.Emit.RotatedLayout
+            Dregg2.Circuit.Emit.RotatedLayoutBridge
+            Dregg2.Circuit.FinBindsKernel
+            Dregg2.Circuit.FinInjectivityCollapse
+            Dregg2.Circuit.FriCorrelatedAgreementSharp
+            Dregg2.Circuit.FriLdtJohnsonList
+            Dregg2.Circuit.FriProximityGapListDecoding
+            Dregg2.Circuit.FriProximityGapWitness
+            Dregg2.Circuit.FriVerifierOracle
+            Dregg2.Circuit.KernelConfigSoundness
+            Dregg2.Circuit.KernelConfigSoundnessAvail
+            Dregg2.Circuit.OodColumnLayout
+            Dregg2.Circuit.PresentationBindingFromFold
+            Dregg2.Circuit.RotatedKernelRefinementAvailWideNarrow
+            Dregg2.Circuit.WrapSafetyStaticAnalyzer
+            Dregg2.Exec.FFIDirect
+            Dregg2.Games.Automatafl
+            Dregg2.Games.AutomataflAir
+            Dregg2.Games.MultiwayTug
+            Dregg2.Games.MultiwayTugAir
+            Dregg2.Verify.LoadBearingAuditBroad
+            Dregg2.Verify.LoadBearingAuditKey
             Dregg2.Verify.LoadBearingLint
+        run: bash scripts/axiom-hygiene-guard.sh
 
   descriptor-drift:
     name: Descriptor Lean↔JSON drift gate
