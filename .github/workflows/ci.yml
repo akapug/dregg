@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manually re-runnable. Also the escape hatch for a real gap: a workflow that pushes with
+  # the default GITHUB_TOKEN (e.g. lean-seed.yml's `pin` job writing lean-seed.pin) does NOT
+  # re-trigger workflows — GitHub suppresses it to prevent loops. So the CI-authored pin commit
+  # that ARMS the Lean marshal gate cannot, by itself, trigger the CI run that would arm it.
+  # `workflow_dispatch` lets that arming run be kicked without waiting for the next human push.
+  workflow_dispatch:
 
 # Explicit least-privilege. The repo default is ALREADY `read`
 # (`gh api repos/emberian/dregg/actions/permissions/workflow`), so this is
