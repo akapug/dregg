@@ -212,8 +212,12 @@ impl EquivocationIndex {
 
 /// Determine which wave a given round belongs to.
 /// Rounds are 1-indexed. Wave 0 = rounds [1, w], Wave 1 = [w+1, 2w], etc.
+///
+/// `round == 0` is out of contract (rounds are 1-indexed); the `saturating_sub`
+/// guards the `round - 1` against a debug panic / release wrap-to-`u64::MAX`,
+/// mapping it to wave 0 rather than the far end of the round space.
 fn round_to_wave(round: u64, wavelength: u64) -> u64 {
-    (round - 1) / wavelength
+    round.saturating_sub(1) / wavelength
 }
 
 /// Get the first round of a wave.
@@ -504,8 +508,11 @@ fn xsort(cache: &PastCache, blocklace: &Blocklace, blocks: &HashSet<BlockId>) ->
 
 /// Extract the total order from the blocklace (the tau function).
 ///
-/// Returns block IDs in their finalized total order. Only blocks in a finalized
-/// leader's causal past (excluding equivocators) are included.
+/// Returns block IDs in their finalized total order. For each finalized leader,
+/// the ordered segment is drawn from the UNION of the causal pasts of all
+/// wave-end blocks that ratify that leader (which is broader than the leader's
+/// own causal past), minus what earlier leaders already covered, and excluding
+/// blocks from creators that equivocated (as visible from the leader).
 ///
 /// Uses default configuration (wavelength = 3).
 ///
@@ -1053,6 +1060,20 @@ mod tests {
         assert_eq!(round_to_wave(5, 3), 1);
         assert_eq!(round_to_wave(6, 3), 1);
         assert_eq!(round_to_wave(7, 3), 2);
+    }
+
+    #[test]
+    fn round_to_wave_zero_does_not_underflow() {
+        // Rounds are 1-indexed, so `round == 0` is out of contract — but it must
+        // not underflow `round - 1` (debug panic / release wrap to u64::MAX).
+        // The `saturating_sub` maps it to wave 0.
+        for wl in [1u64, 2, 3, 5] {
+            assert_eq!(
+                round_to_wave(0, wl),
+                0,
+                "round_to_wave(0, {wl}) must be 0, not u64::MAX"
+            );
+        }
     }
 
     #[test]
