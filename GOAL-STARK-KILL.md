@@ -1888,3 +1888,37 @@ NOW (Fable, on top): wire the 4 preflight IVC checks (`check_ivc_chain`/`check_i
 (the sovereign.rs template), sharing ONE `mint_real_turn` (not a copied minter = a mirror), keeping the
 wrong-root rejection tooth against the REAL verifier. Then the promotion gate certifies the real prover, not
 the mock. Full engine deletion still gated on the OTHER riders (bridge/sdk/circuit-tests — a later step).
+
+## ⚑ OPEN-THREADS LEDGER (ember: "don't narrow our vision") — 2026-07-16 late
+The full surface we identified this session, so nothing is lost to tunnel-vision:
+
+### SYSTEMIC (swarm-able, highest leverage)
+1. **THE ASSUMPTION LEDGER is mostly UN-RIGGED** ← launched `wx50dgnd5` (sonnet→opus, 4 domains). Lane 5's
+   core: an assumption is only rigged if a test flags RED on drift; it did ONE site by hand (ed25519). The
+   rest — every `#assert_axioms` carrier, `SAFETY:`/`INVARIANT:` comment, descriptor pin — has no red-flag
+   test. Instances: `is_a_field_no_zero_divisors` can't detect it's NOT a field (z^8-11 irreducibility is
+   prose); **PROVENANCE.json's 75 sha256 descriptor pins are checked by NO Rust test.** This IS ember's
+   O(1) Labs frame. THE biggest thread.
+2. **Verification↔validation gap (Lane 6)** — Lean modules with no Rust pin; gates comparing two stale
+   checked-in copies instead of re-emitting fresh.
+3. **VerifyTcbReentryResidual** — 6 binaries (drex_clear, dregg-forge, dungeon-service, real-dungeon-service,
+   dreggnet-web-server, gateway-ask) reach the ML-DSA verify stack without the Lean core / allowlist. HIGH.
+4. **Full mock-engine deletion** — preflight rider being wired NOW (Fable); bridge/sdk/circuit-tests remain.
+
+### CONCRETE UNITS
+5. Phantom-cfg cleanup — flip done (`warn`); ~11 gates need delete-or-declare → then `deny`.
+6. `DuplicateDslP3AirResidual` — delete the 868-line shadow interpreter (the mirror the diff harness drove).
+7. Live-node retention UNCOVERED (Lane 4) — no test boots a node with `DREGG_PROVE_TURNS=1` + asserts a real
+   FinalizedTurn retained (the flagship's LIVE path — the wiring is proven only on synthetic-but-real turns).
+8. `PresentationRoundTripResidual` (re-land vs BridgePresentationProof); `EmitGateRetiredPinResidual` (verify
+   the 3 gates pinning retired wire strings); grain-fork native-Faithful8 refinement; the full srot re-run
+   for the non-compiling-TEST map (once the tree settles).
+
+### EMBER DECISIONS
+- `unexpected_cfgs` → `deny` timing (once the ~11 phantoms cleared).
+- Per-phantom-gate: delete vs declare-the-feature.
+- Confirm GitHub Actions actually GATES on the new `origin` remote (the `--workspace --all-targets` job).
+
+### THE SharedTree* residuals (4) — likely STALE now (were other lanes' mid-flight breakage; several landed)
+SharedTreeMarketAggregateBinding (Market built green later), SharedTreeRefusalGauntlet, SharedTreeEffectVm
+DescriptorDrift, SharedTreeBridgePredicateSignature — re-check on a settled tree, most are probably resolved.
