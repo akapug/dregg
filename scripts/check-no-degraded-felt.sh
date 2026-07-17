@@ -50,6 +50,27 @@ SCOPED_PATHS=(
   "circuit/src/effect_vm/trace_rotated.rs"
 )
 
+# ARM THE GATE. `ast-grep scan <path>` prints "No such file or directory" to stderr
+# but EXITS 0 for a path that no longer exists — so if a commitment producer is
+# renamed or moved out from under this list, the scan below would find nothing to
+# scan and report PASS having checked NOTHING. That is exactly the "a mechanism that
+# cannot tell you it did nothing" failure. Verify every scoped producer exists first;
+# a vanished path is a FATAL (exit 2, keep this list in sync with the rule's `files:`),
+# never a silent green.
+missing=0
+for p in "${SCOPED_PATHS[@]}"; do
+  if [ ! -f "$ROOT/$p" ]; then
+    echo "check-no-degraded-felt: FATAL — scoped commitment producer '$p' does not exist." >&2
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then
+  echo "  The commitment-bearing producer moved/renamed. This gate would otherwise scan" >&2
+  echo "  NOTHING and report PASS. Re-point SCOPED_PATHS here AND the 'files:' field in" >&2
+  echo "  .ast-grep/rules/faithful-commitment-felt.yml at the new location(s)." >&2
+  exit 2
+fi
+
 # `sg scan` exits non-zero when an error-severity diagnostic survives
 # suppression. Unused `ast-grep-ignore` directives are help-level only and do
 # NOT fail the scan, so a stale allowlist comment never breaks CI on its own.
