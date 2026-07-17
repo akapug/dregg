@@ -7238,11 +7238,42 @@ async fn post_faucet(
     // `blake3(pubkey)`). Using the raw `s.federation_id` on an unconfigured solo
     // node mismatched the executor's domain and failed Ed25519 verification.
     let exec_federation_id = crate::executor_setup::federation_id_for_executor(&s);
-    let action = faucet_cclerk.make_action(
-        faucet_cell_id,
-        "faucet_transfer",
-        vec![transfer],
+    // NONCE BEFORE SIGNING — the `dregg-action-sig-v3` per-action signing
+    // message BINDS the submitting turn's nonce (`compute_signing_message`),
+    // and the verifier recomputes it with `turn.nonce`. `make_action` signs
+    // over the fresh per-request clerk's `next_turn_nonce()` (= 0, empty
+    // receipt chain), so every faucet turn AFTER the first carried a nonce the
+    // signature was not computed over and was rejected: "invalid
+    // authorization: hybrid: Ed25519 (classical) signature half failed". Sign
+    // explicitly over the nonce the turn will carry.
+    //
+    // SOLO: submission commits authoritatively under this same exclusive
+    // write lock, so the authoritative cell nonce is always current — use it
+    // directly. (The reservation would also poison solo permanently: it is
+    // bumped before execution, never rolled back on a failed turn, and solo's
+    // executor requires turn.nonce == cell nonce exactly.)
+    //
+    // FULL (pipelined): the authoritative nonce only advances at
+    // finalization, so a second submission before the first finalizes must
+    // reserve `max(authoritative, reserved)` and bump — back-to-back
+    // submissions get fresh consecutive nonces that finalize in order; `max`
+    // reconciles once in-flight turns finalize.
+    let authoritative_nonce = s
+        .ledger
+        .get(&faucet_cell_id)
+        .map(|c| c.state.nonce())
+        .unwrap_or(0);
+    let faucet_nonce = if is_solo {
+        authoritative_nonce
+    } else {
+        let n = authoritative_nonce.max(s.faucet_reserved_nonce.unwrap_or(0));
+        s.faucet_reserved_nonce = Some(n + 1);
+        n
+    };
+    let action = faucet_cclerk.sign_action_hybrid(
+        dregg_sdk::raw::unsigned_action_named(faucet_cell_id, "faucet_transfer", vec![transfer]),
         &exec_federation_id,
+        faucet_nonce,
     );
     let mut call_forest = CallForest::new();
     call_forest.add_root(action);
@@ -7251,22 +7282,8 @@ async fn post_faucet(
     // reject ("budget exceeded: limit=0, used=100"); the faucet cell holds the
     // genesis supply, so it covers a real fee. Size the fee to the estimated
     // cost so the gate passes deterministically.
-    // PIPELINED nonce: the faucet's AUTHORITATIVE nonce only advances when a
-    // faucet turn FINALIZES through consensus (the scratch-clone execution below
-    // deliberately does NOT mutate the authoritative ledger in full mode). Reading
-    // it directly meant a second faucet request submitted before the first
-    // finalized re-used the same nonce and replayed. Reserve the next nonce as
-    // `max(authoritative, reserved)` and bump the reservation, so back-to-back
-    // submissions get fresh consecutive nonces that finalize in order. `max`
-    // reconciles the two sides: once the in-flight turns finalize, the
-    // authoritative nonce catches up and no permanent gap opens.
-    let authoritative_nonce = s
-        .ledger
-        .get(&faucet_cell_id)
-        .map(|c| c.state.nonce())
-        .unwrap_or(0);
-    let faucet_nonce = authoritative_nonce.max(s.faucet_reserved_nonce.unwrap_or(0));
-    s.faucet_reserved_nonce = Some(faucet_nonce + 1);
+    // (Nonce computed above, before the action was signed — it is bound into
+    // the per-action signature.)
     // Receipt-chain head for the turn's verified ChainHead leg.
     //
     // SOLO (n=1): submission is authoritative, so bind to the local chain head
@@ -9808,6 +9825,76 @@ mod tests {
         let tx = compute_faucet_activity_hash(&dregg_cell::CellId([0xC0; 32]), 0);
         assert_eq!(tx.len(), 64);
         assert!(tx.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    /// Faucet nonce-binding regression: EVERY sequential funded grant must
+    /// commit, not just the first. The per-action `dregg-action-sig-v3`
+    /// signature binds the submitting turn's nonce; `post_faucet` signed over
+    /// the fresh per-request clerk's nonce (always 0) while the turn carried
+    /// the faucet cell's real nonce (>= 1 after the first grant), so grant 2+
+    /// failed "hybrid: Ed25519 (classical) signature half failed". Three
+    /// grants pin sign/carry nonce agreement at 0, 1 AND 2.
+    #[tokio::test]
+    async fn sequential_faucet_grants_all_commit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        state.write().await.unlocked = true;
+        {
+            let mut s = state.write().await;
+            let sk = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+        }
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state.clone(), true, recorder.handle());
+        let addr: std::net::SocketAddr = "127.0.0.1:4444".parse().unwrap();
+
+        for i in 0u8..3 {
+            let clerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+                *blake3::hash(&[b"seq-faucet".as_slice(), &[i]].concat()).as_bytes(),
+            ));
+            let default_token_id = *blake3::hash(b"default").as_bytes();
+            let cell = dregg_cell::CellId::derive_raw(&clerk.public_key().0, &default_token_id);
+            let body = serde_json::json!({
+                "recipient": hex_encode(&cell.0),
+                "amount": 5_000u64,
+                "public_key": hex_encode(&clerk.public_key().0),
+            });
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/faucet")
+                        .header("content-type", "application/json")
+                        .extension(ConnectInfo(addr))
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .expect("faucet request"),
+                )
+                .await
+                .expect("faucet response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = response
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes();
+            let json: serde_json::Value = serde_json::from_slice(&bytes).expect("faucet json");
+            assert_eq!(
+                json["success"], true,
+                "sequential funded grant {i} must commit: {json}"
+            );
+            let s = state.read().await;
+            assert_eq!(
+                s.ledger
+                    .get(&dregg_cell::CellId(cell.0))
+                    .expect("recipient materialized")
+                    .state
+                    .balance(),
+                5_000,
+                "grant {i} funded its recipient"
+            );
+        }
     }
 
     /// #171 remote `.turn()` e2e through the HTTP router: a keypair the node
