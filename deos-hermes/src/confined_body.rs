@@ -162,6 +162,7 @@ fn outcome_of_verdict(verdict: &Verdict, tool_call_id: &str) -> PermissionOutcom
                 .unwrap_or_else(|| "(receipt)".into()),
             remaining: 0,
             paid: 0,
+            whisper: None,
         }
     } else {
         PermissionOutcome::Reject {

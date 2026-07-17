@@ -295,6 +295,8 @@ impl<'rt> HermesGateway<'rt> {
                 receipt: hex32(&receipt.receipt.turn_hash),
                 remaining: receipt.remaining,
                 paid: receipt.paid,
+                // THE CONTEXT CHANNEL flows through: gate receipt -> ACP verdict.
+                whisper: receipt.whisper.map(|w| w.text),
             },
             Err(ToolCallError::Refused(refusal)) => PermissionOutcome::Reject {
                 tool_call_id: call.tool_call_id.clone(),
