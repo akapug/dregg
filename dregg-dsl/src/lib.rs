@@ -54,31 +54,53 @@
 //! (`RequirementKind::LessEqual`, gen_air.rs:89, "each comparison requirement adds auxiliary columns") into
 //! the descriptor the production interpreter proves.
 //!
-//! ⚠ RESOLVED 2026-07-17 — `DslComparisonRangeSoundnessResidual` was NAMED; the answer is **NOT SOUND**,
-//! and it is now PROVEN by a live prover, not argued:
+//! ⚑ RESOLVED 2026-07-17 — `DslComparisonRangeSoundnessResidual` was NAMED, then PROVEN UNSOUND by a
+//! live prover, then FIXED. Both halves are pinned by teeth in
 //! `dregg-dsl-differential/tests/comparison_wrap_soundness.rs`.
 //!
-//! 1. **`gen_air`'s `Constraint::RangeCheck { diff_col, bit_col }` proves NOTHING.** It is a topology
-//!    DESCRIPTOR (`dregg_dsl_runtime::AirConstraintSet`). Its only consumers are `air_runner.rs` (matches
-//!    the variant SHAPE, then re-derives accept/reject in NATIVE u64 via `check_le`) and structural token
-//!    tests. There is no `AirConstraintSet -> CircuitDescriptor` converter in the repo — nothing lowers it
-//!    into a proved constraint system. One `bit_col` could not range-check a ~31-bit difference anyway.
-//! 2. **The one path that does reach a real prover is UNSOUND.**
-//!    `dregg-dsl-differential/src/plonky3_runner.rs::drive_inequality` hand-builds a `CircuitDescriptor`
-//!    ("diff-le") and proves it through the production interpreter. Its constraints are only:
-//!    `bigger - smaller - diff == 0` (mod p — always satisfiable), `indicator` boolean, `indicator == 0`.
-//!    **No bit decomposition bounds `diff`, and nothing algebraically links `indicator` to `diff`.** The
-//!    comparison's truth lives in the honest WITNESS GENERATOR (native `ir_ok = smaller <= bigger`), which
-//!    volunteers an invalid witness when the claim is false. A malicious prover simply does not.
-//!    Demonstrated: `5 <= 3` with `diff = (3-5) mod p` and `indicator = 0` satisfies every constraint and is
-//!    ACCEPTED by the production p3 prover AND verifier. The in-file comment "we cap the diffs to a 30-bit
-//!    range where this encoding stays sound" is FALSE — the forgery uses far-sub-30-bit operands.
-//! 3. **Scope:** the unsound lowering is the DIFFERENTIAL HARNESS's own, not a shipped circuit — so the
-//!    harness's Plonky3 agreement vote on inequalities validates its witness generator, not its
-//!    constraints. Production circuits needing order comparisons DO range-check genuinely (30-bit
-//!    decomposition + binary-pinned bits + top bit fixed to zero): `circuit/src/dsl/committed_threshold.rs`
-//!    (C4/C5 + `BoundaryDef::Fixed` on the top bit), `derivation.rs` C17/C22, `descriptors.rs` ordering.
-//!    **No DSL surface currently lowers `<=`/`>=`/`in_range!` into a proved circuit at all.**
+//! 1. **`gen_air`'s `Constraint::RangeCheck { diff_col, bit_col }` proves NOTHING — still open.** It is a
+//!    topology DESCRIPTOR (`dregg_dsl_runtime::AirConstraintSet`). Its only consumers are `air_runner.rs`
+//!    (matches the variant SHAPE, then re-derives accept/reject in NATIVE u64 via `check_le`) and structural
+//!    token tests. There is no `AirConstraintSet -> CircuitDescriptor` converter in the repo — nothing
+//!    lowers it into a proved constraint system. One `bit_col` could not range-check a ~31-bit difference
+//!    anyway.
+//! 2. **The one path that reaches a real prover WAS unsound; it is now range-checked — PROVEN SOUND
+//!    against the forgery that broke it.** `dregg-dsl-differential/src/plonky3_runner.rs::drive_inequality`
+//!    hand-builds a `CircuitDescriptor` ("diff-le") and proves it through the production interpreter. Its
+//!    constraints used to be only: `bigger - smaller - diff == 0` (mod p — always satisfiable), `indicator`
+//!    boolean, `indicator == 0`. No bit decomposition bounded `diff`, and nothing linked `indicator` to
+//!    `diff`, so the comparison's truth lived in the honest WITNESS GENERATOR (native `ir_ok = smaller <=
+//!    bigger`), which volunteered an invalid witness when the claim was false — a courtesy a malicious
+//!    prover declines. Demonstrated live: `5 <= 3` with `diff = (3-5) mod p` and `indicator = 0` satisfied
+//!    every constraint and was ACCEPTED by the production p3 prover AND verifier. (The old in-file claim
+//!    that capping operands to "a 30-bit range" kept the encoding sound was FALSE: the forgery used
+//!    far-sub-30-bit operands, because capping the OPERANDS bounds nothing about a `diff` column no
+//!    constraint reads.)
+//!
+//!    `diff-le` now carries the genuine gadget: a 30-bit decomposition of `diff` with every bit
+//!    boolean-pinned, sized exactly to the supported operand range so the recomposition sum
+//!    (`<= 2^30 - 1 < p`) cannot itself wrap — which forces `diff ∈ [0, 2^30)` as an INTEGER and makes a
+//!    field-wrapped negative difference UNSATISFIABLE. `smaller`/`bigger` are also PI-bound, so the proof
+//!    is about the publicly claimed comparison. The `indicator` column is gone: **on the in-range path**
+//!    rejection of a false claim is now the constraint system's verdict, not the generator's confession.
+//!    The forgery pin is flipped into a rejection tooth, with companions pinning that the binary
+//!    constraints and PI bindings are load-bearing.
+//!
+//!    ⚠ **The stated limit.** The gadget is sized to the supported operand range, so `drive_inequality`
+//!    still SHORT-CIRCUITS to `prove_trivial(ir_ok)` when either operand is `>= 2^30`. On that path NO
+//!    circuit is built and the verdict IS the native-`u64` oracle's own answer — precisely the
+//!    generator's confession the sentence above says is gone, for operands the gadget cannot size to.
+//!    `plonky3_runner.rs` discloses this fallback at its call site; it is recorded here so the headline
+//!    is not read as unqualified. The fallback has NO tooth: a test pinning that the `>= 2^30` path is
+//!    the oracle (or a widened decomposition that removes the path) is the honest closure.
+//! 3. **Scope:** that lowering is the DIFFERENTIAL HARNESS's own, not a shipped circuit — so what changed
+//!    is that the harness's Plonky3 agreement vote on inequalities now validates its CONSTRAINTS and not
+//!    merely its witness generator. Production circuits needing order comparisons always did range-check
+//!    genuinely (30-bit decomposition + binary-pinned bits + top bit fixed to zero):
+//!    `circuit/src/dsl/committed_threshold.rs` (C4/C5 + `BoundaryDef::Fixed` on the top bit),
+//!    `derivation.rs` C17/C22, `descriptors.rs` ordering — and the fix copies that precedent.
+//!    **No DSL surface lowers `<=`/`>=`/`in_range!` into a proved circuit at all** — that gap (item 1) is
+//!    what remains.
 
 extern crate proc_macro;
 

@@ -20,11 +20,21 @@
 //!
 //! ## Scope
 //!
-//! - Inequalities (`<=`, `>=`) are encoded as a `Polynomial` constraint
-//!   over the diff column plus a `Binary` constraint on a single
-//!   high-bit-indicator column. The trace puts the diff and the boolean
-//!   indicator (0 if the diff fits in 64 bits) in the witness — i.e. our
-//!   prover's "we can witness it" decision matches u64 arithmetic.
+//! - Inequalities (`<=`, `>=`) are encoded as a `Polynomial` constraint over the diff column plus a
+//!   REAL 30-bit decomposition range check bounding that diff (see [`diff_le_descriptor`]).
+//!   Rejection of a false claim is a property of the CONSTRAINTS — a false `smaller <= bigger` has
+//!   NO satisfying assignment — not of the witness generator's good manners.
+//!
+//!   (Fixed 2026-07-17, `DslComparisonRangeSoundnessResidual`. This lowering used to carry a
+//!   free `indicator` column pinned to zero and NOTHING bounding `diff`; since C1 is a mod-p
+//!   subtraction, a prover claiming `5 <= 3` could witness `diff = (3 - 5) mod p = p - 2`,
+//!   `indicator = 0`, satisfy every constraint, and have the production p3 prover AND verifier
+//!   ACCEPT the false statement. The comparison's truth lived entirely in the honest witness
+//!   generator, which volunteered an invalid witness when the claim was false — a courtesy a
+//!   malicious prover simply declines. The old in-file comment "we cap the diffs to a 30-bit range
+//!   where this encoding stays sound" was false: capping the OPERANDS bounds nothing about a diff
+//!   column no constraint reads. The range check is now real, and the forgery is UNSAT — pinned as
+//!   a rejection tooth in `tests/comparison_wrap_soundness.rs`.)
 //! - Equality (`==`) and non-equality (`!=`) on u64 reduce to `Equality`
 //!   over two columns and a `ConditionalNonzero` respectively.
 //! - Equality / non-equality on `[u8; 32]` are compared as 64-bit limb
@@ -44,7 +54,7 @@ use dregg_circuit::dsl::circuit::DslCircuit;
 use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
 use dregg_dsl_runtime::circuit::{
-    CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
+    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
 
 use crate::predicates::Requirement;
@@ -96,102 +106,207 @@ fn drive(req: &Requirement) -> Result<Verdict, String> {
     }
 }
 
-/// Prove `smaller <= bigger` (i.e. `bigger - smaller` is a non-negative
-/// integer that fits in 64 bits — for our purposes this is the BabyBear
-/// representation of the diff, because BabyBear has a ~31-bit prime, so
-/// we cap the diffs to a 30-bit range where this encoding stays sound. If
-/// either operand exceeds 2^30 we fall back to the IR-level truth and a
-/// trivial proof on the boolean indicator.
+// ============================================================================
+// `diff-le`: the range-checked comparison lowering
+// ============================================================================
+
+/// Bits in the `diff` range decomposition. Sized EXACTLY to the operand range
+/// [`INEQUALITY_SAFE_RANGE`]: with both operands in `[0, 2^30)`, an honest
+/// `diff = bigger - smaller` lies in `[0, 2^30)` and is always representable.
+///
+/// This is what makes the lowering sound. `2^30 - 1 < BABYBEAR_P ~= 2^31`, so the
+/// recomposition sum cannot itself wrap, and therefore C2 (below) forces
+/// `diff ∈ [0, 2^30)` as an INTEGER — pinning the one degree of freedom the mod-p
+/// subtraction in C1 leaves open. A field-wrapped negative difference (`p - k` for
+/// small `k`) exceeds `2^30 - 1` and is UNSAT.
+pub const DIFF_RANGE_BITS: usize = 30;
+
+/// Operands at or above this bound fall back to the IR-level truth (see
+/// [`prove_trivial`]) rather than the circuit.
+pub const INEQUALITY_SAFE_RANGE: u64 = 1 << 30;
+
+/// Column layout of the `diff-le` descriptor.
+pub mod diff_le_col {
+    /// The claimed-smaller operand (bound to PI 0).
+    pub const SMALLER: usize = 0;
+    /// The claimed-bigger operand (bound to PI 1).
+    pub const BIGGER: usize = 1;
+    /// `bigger - smaller` (mod p by C1; range-checked to `[0, 2^30)` by C2/C3).
+    pub const DIFF: usize = 2;
+    /// First of the [`super::DIFF_RANGE_BITS`] decomposition bit columns.
+    pub const DIFF_BITS_START: usize = 3;
+    /// Column of decomposition bit `i`.
+    pub const fn diff_bit(i: usize) -> usize {
+        DIFF_BITS_START + i
+    }
+    /// Total trace width.
+    pub const WIDTH: usize = DIFF_BITS_START + super::DIFF_RANGE_BITS;
+}
+
+/// The `diff-le` descriptor: proves `smaller <= bigger` for operands in
+/// `[0, 2^30)`, where `smaller`/`bigger` are pinned to the public inputs.
+///
+/// Constraints:
+/// - **C1** `bigger - smaller - diff == 0` — mod p, so on its own always satisfiable.
+/// - **C2** `sum(diff_bit[i] * 2^i) - diff == 0` — recomposition.
+/// - **C3..** each `diff_bit[i]` is boolean.
+///
+/// C2 + C3 are the range check: together they force `diff ∈ [0, 2^30)` as an integer
+/// (the sum of 30 boolean-pinned bits maxes at `2^30 - 1 < p`, so it cannot wrap).
+/// With C1 that makes `bigger - smaller` a non-negative integer — i.e. exactly
+/// `smaller <= bigger`. A false claim has NO satisfying assignment.
+///
+/// Boundaries pin `smaller`/`bigger` to PI 0/1 on the first row, so the proof is
+/// about the PUBLICLY CLAIMED comparison and not some other pair of operands the
+/// prover preferred.
+///
+/// Modelled on the deployed precedent `circuit/src/dsl/committed_threshold.rs`
+/// (C4 recomposition + C5 binary-pinned bits) and `derivation.rs` C17/C22. It
+/// deliberately does NOT copy that precedent's `BoundaryDef::Fixed` top-bit-zero:
+/// there the bit count (30) exceeds the range actually needed, so a top bit must be
+/// zeroed to keep the sum under `p`. Here the bit count is sized exactly to the
+/// operand range, so the bound needs no boundary — which is STRONGER, because C2/C3
+/// are per-row constraints that hold on EVERY row, whereas a `BoundaryRow::First`
+/// boundary binds row 0 only.
+pub fn diff_le_descriptor() -> CircuitDescriptor {
+    use diff_le_col as c;
+    let neg_one = BabyBear::new(BABYBEAR_P - 1);
+
+    let mut constraints = vec![
+        // C1: bigger - smaller - diff == 0 (mod p)
+        ConstraintExpr::Polynomial {
+            terms: vec![
+                PolyTerm {
+                    coeff: BabyBear::ONE,
+                    col_indices: vec![c::BIGGER],
+                },
+                PolyTerm {
+                    coeff: neg_one,
+                    col_indices: vec![c::SMALLER],
+                },
+                PolyTerm {
+                    coeff: neg_one,
+                    col_indices: vec![c::DIFF],
+                },
+            ],
+        },
+    ];
+
+    // C2: sum(diff_bit[i] * 2^i) - diff == 0
+    {
+        let mut terms = Vec::with_capacity(DIFF_RANGE_BITS + 1);
+        let mut power_of_two = BabyBear::ONE;
+        for i in 0..DIFF_RANGE_BITS {
+            terms.push(PolyTerm {
+                coeff: power_of_two,
+                col_indices: vec![c::diff_bit(i)],
+            });
+            power_of_two = power_of_two + power_of_two;
+        }
+        terms.push(PolyTerm {
+            coeff: neg_one,
+            col_indices: vec![c::DIFF],
+        });
+        constraints.push(ConstraintExpr::Polynomial { terms });
+    }
+
+    // C3..: every decomposition bit is boolean. Without this, a single "bit"
+    // column could carry an arbitrary field element and the recomposition would
+    // bound nothing.
+    for i in 0..DIFF_RANGE_BITS {
+        constraints.push(ConstraintExpr::Binary {
+            col: c::diff_bit(i),
+        });
+    }
+
+    let mut columns = vec![
+        ColumnDef {
+            name: "smaller".into(),
+            index: c::SMALLER,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "bigger".into(),
+            index: c::BIGGER,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "diff".into(),
+            index: c::DIFF,
+            kind: ColumnKind::Value,
+        },
+    ];
+    for i in 0..DIFF_RANGE_BITS {
+        columns.push(ColumnDef {
+            name: format!("diff_bit_{i}"),
+            index: c::diff_bit(i),
+            kind: ColumnKind::Binary,
+        });
+    }
+
+    CircuitDescriptor {
+        name: "diff-le".to_string(),
+        trace_width: diff_le_col::WIDTH,
+        max_degree: 2,
+        columns,
+        constraints,
+        boundaries: vec![
+            BoundaryDef::PiBinding {
+                row: BoundaryRow::First,
+                col: c::SMALLER,
+                pi_index: 0,
+            },
+            BoundaryDef::PiBinding {
+                row: BoundaryRow::First,
+                col: c::BIGGER,
+                pi_index: 1,
+            },
+        ],
+        public_input_count: 2,
+        lookup_tables: vec![],
+    }
+}
+
+/// Build one `diff-le` trace row from `(smaller, bigger, diff)`, decomposing
+/// `diff` into its low [`DIFF_RANGE_BITS`] bits.
+///
+/// `diff` is taken as a parameter rather than derived so that soundness teeth can
+/// hand this an ADVERSARIAL diff (e.g. a field-wrapped `p - 2`) and watch the
+/// constraint system reject it. For a wrapped diff the low 30 bits cannot
+/// recompose to it, so C2 fails — which is the point.
+pub fn diff_le_row(smaller: u64, bigger: u64, diff: BabyBear) -> Vec<BabyBear> {
+    let mut row = vec![BabyBear::ZERO; diff_le_col::WIDTH];
+    row[diff_le_col::SMALLER] = BabyBear::from_u64(smaller);
+    row[diff_le_col::BIGGER] = BabyBear::from_u64(bigger);
+    row[diff_le_col::DIFF] = diff;
+    let diff_val = diff.as_u32();
+    for i in 0..DIFF_RANGE_BITS {
+        row[diff_le_col::diff_bit(i)] = BabyBear::new((diff_val >> i) & 1);
+    }
+    row
+}
+
+/// Prove `smaller <= bigger` through the production p3 interpreter, with `diff =
+/// bigger - smaller` bounded by a real bit-decomposition range check.
+///
+/// Operands outside `[0, 2^30)` (u64::MAX and friends are common in the predicate
+/// suite) fall back to the IR-level truth: BabyBear's ~31-bit prime cannot hold a
+/// u64 difference, so there is no honest arithmetization to range-check.
 fn drive_inequality(smaller: u64, bigger: u64) -> Verdict {
     let ir_ok = smaller <= bigger;
-    // BabyBear prime ~= 2^31; we constrain both operands to a comfortable
-    // 30-bit subspace so subtraction wraps predictably. Inputs outside that
-    // range are common (u64::MAX), so we proxy on the IR truth and prove a
-    // trivial Binary constraint to keep the round-trip in motion.
-    let safe_range = 1u64 << 30;
-    if smaller >= safe_range || bigger >= safe_range {
+    if smaller >= INEQUALITY_SAFE_RANGE || bigger >= INEQUALITY_SAFE_RANGE {
         return prove_trivial(ir_ok);
     }
 
-    // Trace columns:
-    //   0: smaller    (PI 0)
-    //   1: bigger     (PI 1)
-    //   2: diff       (free, set to bigger - smaller mod p)
-    //   3: indicator  (0 if non-wrapping, 1 otherwise — binary)
-    // Constraints:
-    //   Polynomial: 1*bigger + (-1)*smaller + (-1)*diff = 0
-    //   Binary:     indicator * (indicator - 1) = 0
-    //   Polynomial: 1*indicator = 0   (the "accept" side: indicator must be 0)
-    let descriptor = CircuitDescriptor {
-        name: "diff-le".to_string(),
-        trace_width: 4,
-        max_degree: 2,
-        columns: vec![
-            ColumnDef {
-                name: "smaller".into(),
-                index: 0,
-                kind: ColumnKind::Value,
-            },
-            ColumnDef {
-                name: "bigger".into(),
-                index: 1,
-                kind: ColumnKind::Value,
-            },
-            ColumnDef {
-                name: "diff".into(),
-                index: 2,
-                kind: ColumnKind::Value,
-            },
-            ColumnDef {
-                name: "indicator".into(),
-                index: 3,
-                kind: ColumnKind::Binary,
-            },
-        ],
-        constraints: vec![
-            ConstraintExpr::Polynomial {
-                terms: vec![
-                    PolyTerm {
-                        coeff: BabyBear::ONE,
-                        col_indices: vec![1],
-                    },
-                    PolyTerm {
-                        coeff: BabyBear::new(BABYBEAR_P - 1),
-                        col_indices: vec![0],
-                    },
-                    PolyTerm {
-                        coeff: BabyBear::new(BABYBEAR_P - 1),
-                        col_indices: vec![2],
-                    },
-                ],
-            },
-            ConstraintExpr::Binary { col: 3 },
-            ConstraintExpr::Polynomial {
-                terms: vec![PolyTerm {
-                    coeff: BabyBear::ONE,
-                    col_indices: vec![3],
-                }],
-            },
-        ],
-        boundaries: vec![],
-        public_input_count: 2,
-        lookup_tables: vec![],
-    };
+    let descriptor = diff_le_descriptor();
 
-    // Witness: if smaller > bigger then no valid (diff, 0) pair exists in
-    // u64; we set indicator=1 and the third constraint rejects.
-    let (diff_val, indicator) = if ir_ok {
-        (bigger - smaller, 0u64)
-    } else {
-        (0, 1)
-    };
-
-    let row = vec![
-        BabyBear::from_u64(smaller),
-        BabyBear::from_u64(bigger),
-        BabyBear::from_u64(diff_val),
-        BabyBear::from_u64(indicator),
-    ];
+    // The honest witness. When the claim is FALSE this is the field-wrapped
+    // `p - (smaller - bigger)`, which no 30-bit decomposition recomposes to — so
+    // the prover FAILS TO FIND a witness rather than volunteering a bad one. That
+    // is the whole difference between this and the pre-fix lowering: rejection is
+    // now the constraint system's verdict, not the generator's confession.
+    let diff = BabyBear::from_u64(bigger) - BabyBear::from_u64(smaller);
+    let row = diff_le_row(smaller, bigger, diff);
     let trace = vec![row.clone(), row];
     let pi = vec![BabyBear::from_u64(smaller), BabyBear::from_u64(bigger)];
 
@@ -376,18 +491,16 @@ fn round_trip(
         prove_dsl_p3(&dsl, trace, pi).map(|proof| (dsl, proof))
     }));
     match prove_result {
-        Ok(Ok((dsl, proof))) => match verify_dsl_p3(&dsl, &proof, pi).map(|()| true) {
-            Ok(true) => {
-                if ir_ok {
-                    Verdict::Accept
-                } else {
-                    // Prover-side panic should have rejected, but if it
-                    // didn't and the verifier accepts, our circuit is
-                    // unsound — surface that to the agreement matrix.
-                    Verdict::Accept
-                }
+        // Report what the backend ACTUALLY did, never what it should have done: an accept while
+        // `ir_ok` is false is a backend-vs-oracle disagreement, and reporting it as Accept is what
+        // lets the agreement matrix catch it. (`ir_ok` is threaded here for exactly that reason and
+        // deliberately does not steer the verdict.)
+        Ok(Ok((dsl, proof))) => match verify_dsl_p3(&dsl, &proof, pi) {
+            Ok(()) => {
+                let _ = ir_ok;
+                Verdict::Accept
             }
-            _ => Verdict::Reject,
+            Err(_) => Verdict::Reject,
         },
         Ok(Err(_)) | Err(_) => Verdict::Reject,
     }
