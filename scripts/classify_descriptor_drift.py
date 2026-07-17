@@ -318,8 +318,21 @@ def _materialize_ref(ref: str, subpath: str) -> Path:
     for rel in listing:
         if not rel:
             continue
+        # `git cat-file --filters`, NOT `git show`: the descriptors include seven
+        # LFS-tracked staged-registry TSVs, and `git show` does NOT run the LFS
+        # smudge filter — it writes the ~132-byte POINTER. The NEW side reads the
+        # working tree, which `actions/checkout --lfs` smudged to real content, so
+        # the OLD side parsed ZERO members from exactly the DEPLOYED effect-VM
+        # descriptors (transfer/mint/burn/noteSpend R24) and their 194 members all
+        # looked like phantom tail-ADDs on every run: an IDENTICAL tree classified
+        # TAIL-APPEND and exited 0 instead of UNCHANGED. Worse, that made the gate's
+        # entire purpose unreachable for that cohort — a GEOMETRY-WIDEN (re-genesis
+        # flag-day) looks like an ADD when the old member was never parsed, so exit 4
+        # could not fire. `--filters` applies the smudge filter, so OLD and NEW are
+        # compared in the same representation. (`lfs: true` on checkout does not help:
+        # smudge applies at checkout, not to `git show`.)
         blob = subprocess.run(
-            ["git", "show", f"{ref}:{subpath}/{rel}"],
+            ["git", "cat-file", "--filters", f"{ref}:{subpath}/{rel}"],
             check=True, capture_output=True,
         ).stdout
         dst = tmp / rel
