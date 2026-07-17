@@ -2412,3 +2412,33 @@ swarm: dregg-agent/cred + dregg-auth/credential/chain first). NOT-MINE: dregg-sd
 descriptor-regen churn (flagged, both my sdk lanes green in isolation).
 **SESSION SECURITY TALLY: 8 forgery-class bugs, all invisible to ~15k green tests, all found by "what break
 would this catch?", all left with a tooth.**
+
+## ⚡⚡⚡ dregg/acc SWARM (`wqrdh1xne`, 8 lanes) — harvest 2026-07-17
+**FORGERY #9 (found+fixed):** `dregg-agent/src/cred.rs` credential-chain + discharge verify were COFACTORED
+on a CREDENTIAL-PRESENTED (attacker-chosen) key — identity-key forgery PROVEN BY EXECUTION (A=identity,
+(R=id,s=0) accepts cofactored for any message, no secret; verify_strict denies). → verify_strict (2 sites).
+`dregg-auth/src/credential/chain.rs` (issuer key presented) also converted.
+**BACKLOG AUDITED HONESTLY — the swarm REFUSED to force fixes on non-exploitable sites (rule 2):**
+- `dregg-pay` otc+swap: **PREMISE CORRECTION** — the brief AND both guard grandfathered annotations were
+  FALSE: dregg-pay verifies NO counterpart/wire key (it is operator-side treasury). NOT exploitable, NOT
+  converted. The guard's own annotation was wrong; re-file the entries.
+- classify-A: 2 PINNED-KEY + 1 CONSENSUS-MIRROR — none exploitable, none converted (converting a pinned/
+  mirror site is not a fix and breaks external compat). Proof-by-execution each.
+- classify-B: realm-model/identity + sandstorm-bridge/bridge both PINNED-KEY (proven by execution) — correctly
+  NOT converted (sandstorm was the danger-trap; verified it is not attacker-key-reachable).
+**NEW EXPLOITABLE SITE surfaced (out of lane, for follow-up):** `node/src/api.rs:6789`
+`verify_ed25519_signature` uses cofactored `verify` (:6798) — held DIRTY by another lane; NEXT security
+target (`NodeApiCofactoredVerifyResidual`).
+**LEAN-FIRST BFV — FIRST STONE LAID (both sides):**
+- Lean (`02fbf5468`): no-wrap + noise-budget as kernel-clean THEOREMS on real fhe.rs params, with
+  FAILING-SIDE proofs (decrypt_misses, margin_fails_big_noise) — silent failures made RED. lake 828 jobs, 0
+  sorry, self-verified. Perf answer BANKED: fold = ADDITION ONLY (~1/3 of fhe.rs, no NTT-mult) — Lean-first ≠
+  runs-in-Lean; native Rust speed + verified.
+- Rust (`fhegg-fhe/src/bfv_lean.rs`, pending gate): from-scratch RNS fold-add interops with fhe.rs at BYTE
+  level (7/7 oracle teeth). SUBSTRATE-CHECKED per ember's new CLAUDE.md rule: 0 AIR signals, pure crypto
+  arithmetic — NOT a hand-written Rust AIR (a fold-add is homomorphic encryption, not a circuit).
+**VOTING FORGERY FIXED (pending gate):** ported collective-choice's `CountGe` quorum —
+`AnyOf[Immutable(TALLY_X), CountGe{1, BALLOTS_X}]` (a moving tally must EXHIBIT a ballot, executor-enforced);
+the forgery pin FLIPS from commits→refused.
+**SESSION SECURITY TALLY: 9 forgery-class bugs.** Named residuals: BfvLatticeEstimator, NodeApiCofactoredVerify
++ the BFV later stones (keygen/threshold/smudging-proof).
