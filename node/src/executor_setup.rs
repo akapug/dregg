@@ -42,7 +42,10 @@ pub fn federation_id_for_executor(s: &NodeStateInner) -> [u8; 32] {
     }
 }
 
-fn wall_clock_secs() -> i64 {
+/// Wall-clock seconds — the timestamp source `configure_turn_executor` seeds
+/// executors with; also used directly by the finalization-promotion path
+/// (which derives its height from the durable store, not an executor config).
+pub fn wall_clock_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
