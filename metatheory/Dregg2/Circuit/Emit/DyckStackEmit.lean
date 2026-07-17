@@ -1,0 +1,455 @@
+/-
+# Dregg2.Circuit.Emit.DyckStackEmit — the EMIT-FROM-LEAN author of the Dyck pushdown parse
+descriptor (`dregg-dyck-parse-v1`, `circuit/src/dsl/dyck_stack.rs`).
+
+## What this file IS, and the law it closes
+
+Law #1: ZERO Rust-authored constraints. Every descriptor is AUTHORED in Lean, BYTE-PINNED here by
+an `emitVmJson2` `#guard`, re-derived onto disk by `EmitByName.lean` + `scripts/emit-descriptors.sh`,
+and LOADED by Rust. `dyck_parse_descriptor` was authored in RUST with no Lean emit — and the
+consequence was named in `DyckStackRefine.lean`'s own header: its `dyckDesc` is a HAND
+TRANSCRIPTION, so `dyck_sat_imp_row_valid` (a real, non-vacuous SAT⇒SEM theorem) was about a mirror
+that could silently drift from the deployed circuit. This file is the Lean author that ends the
+hand transcription: `dyckDesc` (`DyckStackRefine` §2) is now the proof-side reading of a descriptor
+that is EMITTED, not re-typed.
+
+It is authored line-for-line on the template `DfaRoutingEmit.lean` — the same IR-v2 grammar, the
+same chip-lookup lowering of the hash chain, the same byte-pin discipline.
+
+## The constraint set (Rust `dyck_stack.rs` ↦ IR-v2 carrier)
+
+| hand-AIR constraint (`dyck_stack.rs`)                          | IR-v2 carrier                          |
+|-----------------------------------------------------------------|----------------------------------------|
+| `Binary{c}` (the six selectors)                                  | `Base(Gate(c·(c−1)))`                  |
+| `IS_RULE + IS_TERM + IS_DONE == 1`                               | `Base(Gate)`                           |
+| `SEL_BRACKET + SEL_EMPTY == IS_RULE`                             | `Base(Gate)`                           |
+| `sel·(RULE_ID − r) == 0` (the sub-selector rule pins)            | `Base(Gate)`                           |
+| rule-table membership `IS_RULE·(RULE_ID−1)(RULE_ID−2) == 0`      | `Base(Gate)` (vanishing poly)          |
+| LHS match `IS_RULE·(STACK0 − S) == 0`                            | `Base(Gate)`                           |
+| terminal top-match `IS_TERM·(STACK0 − INPUT_TOKEN) == 0`         | `Base(Gate)`                           |
+| `done`: `STACK0 == 0`, `STACK_DEPTH == 0`                        | `Base(Gate)` ×2                        |
+| `INPUT_POS_P1 == INPUT_POS + 1`                                  | `Base(Gate)`                           |
+| the four depth deltas (`+2`, `−1`, `−1`, `0`)                    | `Base(Gate)` ×4                        |
+| the four fixed lanes (`op`, `cl`, `S`, `0`)                      | `Base(Gate)` ×4                        |
+| `rBracket` overflow guard `local.STACK[3..5] == 0`               | `Base(Gate)` ×2                        |
+| `Transition{STACK_DEPTH ← DEPTH_NEXT}`                           | `WindowGate` (transition)              |
+| `rBracket` push `next.STACK[0..3] = (op, S, cl)`                 | `WindowGate` ×3 (gated on SEL_BRACKET) |
+| `rBracket` remainder shift `next.STACK[3+j] = local.STACK[1+j]`  | `WindowGate` ×2                        |
+| `rEmpty` / `term` pop-shift + vacated deepest cell               | `WindowGate` ×5 each                   |
+| `done` hold                                                      | `WindowGate` ×5                        |
+| `Gated{IS_TERM, Transition{INPUT_POS ← INPUT_POS_P1}}`           | `WindowGate`                           |
+| `InvertedGated{IS_TERM, Transition{INPUT_POS ← INPUT_POS}}`      | `WindowGate` (`(1 − IS_TERM)·body`)    |
+| `Hash4to1{ENTRY_HASH ← (RULE_ID, STACK0, INPUT_TOKEN, LANE_ZERO)}` | arity-4 `Poseidon2Chip` lookup       |
+| `ChainedHash2to1` + `SeedHash2to1` running commitment            | arity-2 chip + `acc` copy-forward + pin|
+| the four boundary pins + the two PI bindings                     | `Base(PiBinding/Boundary)`             |
+
+The RUNNING-HASH chain is lowered EXACTLY as `DfaRoutingEmit` lowers its own (and as the Rust
+adapter `circuit-prove/src/custom_leaf_adapter.rs` does): a fresh COPY-FORWARD accumulator column
+`ACC` (`acc[i+1] = running[i]` via a transition `WindowGate`, `acc[0] = pi[table_commitment]` via a
+first-row `PiBinding`) makes the per-row hash single-row, so `running[i] = hash_2_to_1(acc[i],
+entry[i])` is ONE arity-2 chip lookup. Together these reproduce BOTH the `ChainedHash2to1` rolling
+step and its `SeedHash2to1` table-commitment seed — which is why the `IS_FIRST` gating of
+`SeedHash2to1` becomes the `IS_FIRST == 1` first-row boundary plus the row-0 `acc` pin.
+
+## Two carriers this descriptor does NOT reproduce from the Rust — deliberately, and stated
+
+1. **`STACK_D`-bound column ranges.** `dyck_stack.rs` emits no `0 ≤ STACK_DEPTH ≤ D` range check,
+   and neither does this emit (fidelity to the deployed circuit is the point). `DyckStackRefine`
+   carries the same bound as the EXPLICIT hypothesis `DyckCanon.depth`, exactly because the circuit
+   does not enforce it. Emitting a range here would make the Lean author STRONGER than the Rust it
+   replaces — a different circuit, not a faithful one. It stays a named gap.
+2. **Trace width.** The Rust descriptor is 23 wide; this one is 38 (23 base + `ACC` + 2×7 chip
+   lanes). The chip lanes are what the IR-v2 lookup lowering costs; the base columns 0..22 are index
+   for index the Rust `dyck_stack::col` layout, so a reader can diff the two by eye.
+
+## Why the loader flip is NOT in this change
+
+`dyck_parse_descriptor` returns an IR-v1 `CircuitDescriptor` (`ConstraintExpr::Gated`/`Transition`/
+`Hash4to1`/`ChainedHash2to1`), and `circuit-prove/tests/dyck_parse_tamper.rs` pattern-MATCHES on
+those v1 variants to isolate each tooth. IR-v2 has no such variants, and no v2→v1 lowering exists.
+Pointing the loader here therefore means rewriting the prover-side driver and the tamper suite, not
+swapping a constructor. The emitted, byte-pinned descriptor + this registration are the law-#1
+spine; the loader flip is the tracked follow-up.
+
+## Axiom hygiene
+
+Definitional descriptor + a byte-pinned `#guard` on its wire string + three genuinely-proven,
+non-vacuous semantic lemmas (the remainder shift, the overflow guard, the rule-table membership —
+each TRUE iff its relation holds, FALSE otherwise, with `#guard` non-vacuity witnesses on both
+sides). NEW file; imports read-only.
+-/
+import Dregg2.Circuit.DescriptorIR2
+
+namespace Dregg2.Circuit.Emit.DyckStackEmit
+
+open Dregg2.Circuit (Assignment)
+open Dregg2.Exec.CircuitEmit (EmittedExpr)
+open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow VmRowEnv)
+open Dregg2.Circuit.DescriptorIR2
+  (EffectVmDescriptor2 VmConstraint2 Lookup TableId WindowExpr WindowConstraint
+   chipLookupTuple CHIP_RATE CHIP_OUT_LANES emitVmJson2)
+
+set_option autoImplicit false
+
+/-! ## §1 — The column layout: base columns 0..22 are `dyck_stack::col` index for index. -/
+
+/-- Bounded stack depth carried in columns (`dyck_stack.rs::STACK_D`). -/
+def STACK_D : Nat := 5
+
+/-- `STACK[i]` — cell `i` of the bounded stack; `STACK[0]` is the top. -/
+def stk (i : Nat) : Nat := i
+
+/-- Current stack depth (pointer). -/
+def STACK_DEPTH : Nat := 5
+/-- The stack depth AFTER this row's action (threaded into `next.STACK_DEPTH`). -/
+def DEPTH_NEXT : Nat := 6
+/-- `STEP_KIND = rule` selector. -/
+def IS_RULE : Nat := 7
+/-- `STEP_KIND = term` selector. -/
+def IS_TERM : Nat := 8
+/-- `STEP_KIND = done` selector. -/
+def IS_DONE : Nat := 9
+/-- The production id this row fires (`RULE_NONE` on term/done rows). -/
+def RULE_ID : Nat := 10
+/-- The input token read on a `term` step. -/
+def INPUT_TOKEN : Nat := 11
+/-- Input-tape pointer. -/
+def INPUT_POS : Nat := 12
+/-- `INPUT_POS + 1` (witness helper). -/
+def INPUT_POS_P1 : Nat := 13
+/-- Rule selector: `1` iff this row fires `rBracket`. -/
+def SEL_BRACKET : Nat := 14
+/-- Rule selector: `1` iff this row fires `rEmpty`. -/
+def SEL_EMPTY : Nat := 15
+/-- Per-step commitment `hash_4_to_1(RULE_ID, STACK0, INPUT_TOKEN, 0)` (chip lookup out0). -/
+def ENTRY_HASH : Nat := 16
+/-- Rolling parse commitment `hash_2_to_1(acc, entry)` (chip lookup out0). -/
+def RUNNING_HASH : Nat := 17
+/-- First-row selector (the seed gate). -/
+def IS_FIRST : Nat := 18
+/-- Fixed lane `= op`. -/
+def LANE_OP : Nat := 19
+/-- Fixed lane `= cl`. -/
+def LANE_CL : Nat := 20
+/-- Fixed lane `= S`. -/
+def LANE_S : Nat := 21
+/-- Fixed lane `= 0` (the EMPTY push source + the 4th entry-hash lane). -/
+def LANE_ZERO : Nat := 22
+
+/-- The COPY-FORWARD accumulator: `acc[0] = pi[table_commitment]`, `acc[i+1] = running[i]`. The
+`ChainedHash2to1`/`SeedHash2to1` chain's prior-accumulator carrier. Not a `dyck_stack::col` column —
+it is what the IR-v2 lowering of a cross-row hash chain costs. -/
+def ACC : Nat := 23
+
+/-- The seven exposed permutation lane columns 1..7 of the entry-hash chip lookup. -/
+def ENTRY_LANES : List Nat := [24, 25, 26, 27, 28, 29, 30]
+/-- The seven exposed permutation lane columns 1..7 of the running-hash chip lookup. -/
+def RUNNING_LANES : List Nat := [31, 32, 33, 34, 35, 36, 37]
+
+/-- Total main-trace width: 23 base (the Rust layout) + `ACC` + 7 + 7 chip lanes. -/
+def DYCK_WIDTH : Nat := 38
+
+/-- pi[0] `initial_symbol` — the grammar's initial nonterminal, pinning the first row's stack top. -/
+def PI_INITIAL : Nat := 0
+/-- pi[1] `input_len` — the `done` step pins `INPUT_POS == INPUT_LEN`. -/
+def PI_INPUT_LEN : Nat := 1
+/-- pi[2] `table_commitment` — the running-hash seed; ties the parse to THIS grammar. -/
+def PI_TABLE : Nat := 2
+/-- pi[3] `route_commitment` — the parse binding (last row's `RUNNING_HASH`). -/
+def PI_ROUTE : Nat := 3
+/-- Number of public inputs. -/
+def DYCK_PI_COUNT : Nat := 4
+
+/-! ## §2 — The symbol / rule alphabet (`dyck_stack.rs`, `CfgCompact.Reference`). -/
+
+/-- Reserved EMPTY stack-cell marker. -/
+def SYM_EMPTY : ℤ := 0
+/-- The sole nonterminal `S`. -/
+def SYM_S : ℤ := 1
+/-- Terminal `op = '['`. -/
+def SYM_OP : ℤ := 2
+/-- Terminal `cl = ']'`. -/
+def SYM_CL : ℤ := 3
+/-- `rBracket : S → [ S ]`. -/
+def RULE_BRACKET : ℤ := 1
+/-- `rEmpty : S → ε`. -/
+def RULE_EMPTY : ℤ := 2
+/-- `|rBracket's RHS| = 3` (`op S cl`) ⇒ the remainder shifts by `3 − 1 = 2`. -/
+def BRACKET_SHIFT : Nat := 2
+
+/-! ## §3 — The small constraint builders (the Rust module's helpers, in IR-v2). -/
+
+/-- `x·(x−1)` — `ConstraintExpr::Binary`. -/
+def gBin (c : Nat) : EmittedExpr := .mul (.var c) (.add (.var c) (.const (-1)))
+/-- `sel · e` — `ConstraintExpr::Gated`. -/
+def gGate (sel : Nat) (e : EmittedExpr) : EmittedExpr := .mul (.var sel) e
+/-- `a − b`. -/
+def gSub (a b : Nat) : EmittedExpr := .add (.var a) (.mul (.const (-1)) (.var b))
+/-- `a − k` — `eq_const`. -/
+def gSubK (a : Nat) (k : ℤ) : EmittedExpr := .add (.var a) (.const (-k))
+/-- `a − b − k` — `diff_is`. -/
+def gDiffIs (a b : Nat) (k : ℤ) : EmittedExpr := .add (gSub a b) (.const (-k))
+
+/-- `next[nc] − local[lc]` — `ConstraintExpr::Transition`. -/
+def wThread (nc lc : Nat) : WindowExpr := .add (.nxt nc) (.mul (.const (-1)) (.loc lc))
+/-- `local[sel] · e` — a `Gated` window. -/
+def wGate (sel : Nat) (e : WindowExpr) : WindowExpr := .mul (.loc sel) e
+/-- `(1 − local[sel]) · e` — an `InvertedGated` window. -/
+def wInvGate (sel : Nat) (e : WindowExpr) : WindowExpr :=
+  .mul (.add (.const 1) (.mul (.const (-1)) (.loc sel))) e
+
+/-- A per-row gate constraint. -/
+def cg (e : EmittedExpr) : VmConstraint2 := .base (.gate e)
+/-- A TRANSITION window constraint (every row but the last — the `when_transition` arm the Rust
+`references_next` driver mirrors by checking rows `0..n−1`). -/
+def cw (b : WindowExpr) : VmConstraint2 := .windowGate ⟨b, true⟩
+
+/-! ### §3.1 — The stack-discipline constraint groups (`dyck_stack.rs`'s three builders). -/
+
+/-- **The general variable-length RHS push with a remainder shift**, gated on `sel`
+(`push_with_remainder_shift`). A production `A → γ` pops `local.STACK[0]` and writes `γ` over the
+top, with everything under `A` shifted up by `|γ| − 1`:
+
+1. **push** — `next.STACK[j] == rhs_lanes[j]` for `j < |γ|`;
+2. **remainder shift** — `next.STACK[j] == local.STACK[j − (|γ|−1)]` for `|γ| ≤ j < D`;
+3. **overflow guard** — `local.STACK[i] == 0` for `i ≥ D − (|γ|−1)`, so a push whose remainder does
+   not fit REJECTS rather than silently dropping a symbol.
+
+Written at `rhsLanes = [LANE_OP, LANE_S, LANE_CL]` (`|γ| = 3`, shift `= 2`) for the Dyck grammar.
+Groups (1)+(2) are transition windows; group (3) is per-row. -/
+def bracketOverflowGuards : List VmConstraint2 :=
+  [ cg (gGate SEL_BRACKET (gSubK (stk 3) SYM_EMPTY))
+  , cg (gGate SEL_BRACKET (gSubK (stk 4) SYM_EMPTY)) ]
+
+/-- The `rBracket` push (`γ = op S cl`) + the remainder shift by `|γ| − 1 = 2`. -/
+def bracketPushWindows : List VmConstraint2 :=
+  [ cw (wGate SEL_BRACKET (wThread (stk 0) LANE_OP))
+  , cw (wGate SEL_BRACKET (wThread (stk 1) LANE_S))
+  , cw (wGate SEL_BRACKET (wThread (stk 2) LANE_CL))
+  , cw (wGate SEL_BRACKET (wThread (stk 3) (stk 1)))
+  , cw (wGate SEL_BRACKET (wThread (stk 4) (stk 2))) ]
+
+/-- **The pop / shift-down** gated on `sel` (`pop_shift`): `next.STACK[j] == local.STACK[j+1]`, the
+vacated deepest cell forced EMPTY (read from `LANE_ZERO`, the pinned constant lane). Fired by
+`rEmpty` (`S → ε`) and by a `term` step. -/
+def popShiftWindows (sel : Nat) : List VmConstraint2 :=
+  [ cw (wGate sel (wThread (stk 0) (stk 1)))
+  , cw (wGate sel (wThread (stk 1) (stk 2)))
+  , cw (wGate sel (wThread (stk 2) (stk 3)))
+  , cw (wGate sel (wThread (stk 3) (stk 4)))
+  , cw (wGate sel (wThread (stk 4) LANE_ZERO)) ]
+
+/-- **The hold** gated on `sel` (`hold_stack`): every stack cell threads unchanged. `done` rows
+(and the `done` self-loop padding) take no action. -/
+def holdStackWindows (sel : Nat) : List VmConstraint2 :=
+  [ cw (wGate sel (wThread (stk 0) (stk 0)))
+  , cw (wGate sel (wThread (stk 1) (stk 1)))
+  , cw (wGate sel (wThread (stk 2) (stk 2)))
+  , cw (wGate sel (wThread (stk 3) (stk 3)))
+  , cw (wGate sel (wThread (stk 4) (stk 4))) ]
+
+/-- The fixed constant lanes (`lane_fixes`) — the `Transition` sources for pushing constants. -/
+def laneFixes : List VmConstraint2 :=
+  [ cg (gSubK LANE_OP SYM_OP), cg (gSubK LANE_CL SYM_CL)
+  , cg (gSubK LANE_S SYM_S), cg (gSubK LANE_ZERO SYM_EMPTY) ]
+
+/-! ## §4 — The hash chain (the `DfaRoutingEmit` lowering, verbatim in shape). -/
+
+/-- The per-step commitment: an arity-4 `Poseidon2Chip` lookup absorbing
+`[RULE_ID, STACK0, INPUT_TOKEN, LANE_ZERO]`, binding out0 to `ENTRY_HASH` — the Rust
+`Hash4to1{ENTRY_HASH ← (RULE_ID, STACK0, INPUT_TOKEN, LANE_ZERO)}`. -/
+def entryHashLookup : VmConstraint2 :=
+  .lookup ⟨TableId.poseidon2,
+    chipLookupTuple [.var RULE_ID, .var (stk 0), .var INPUT_TOKEN, .var LANE_ZERO]
+      ENTRY_HASH ENTRY_LANES⟩
+
+/-- The rolling parse commitment: an arity-2 chip lookup absorbing `[ACC, ENTRY_HASH]`, binding out0
+to `RUNNING_HASH`. Together with `copyForwardWindow` + `seedAccPin` this IS the Rust
+`ChainedHash2to1` rolling step AND its `SeedHash2to1` table-commitment seed. -/
+def runningHashLookup : VmConstraint2 :=
+  .lookup ⟨TableId.poseidon2,
+    chipLookupTuple [.var ACC, .var ENTRY_HASH] RUNNING_HASH RUNNING_LANES⟩
+
+/-- `acc[i+1] = running[i]` — the prior accumulator carried forward (the cross-row leg of the
+running-hash chain). -/
+def copyForwardBody : WindowExpr := .add (.nxt ACC) (.mul (.const (-1)) (.loc RUNNING_HASH))
+
+/-- The copy-forward `WindowGate`, asserted on the transition. -/
+def copyForwardWindow : VmConstraint2 := .windowGate ⟨copyForwardBody, true⟩
+
+/-- The seed pin: first row `acc == pi[table_commitment]`, so
+`running₀ = hash_2_to_1(table_commitment, entry₀)` — the `SeedHash2to1` seed, realized as the
+chain's first-row accumulator pin. -/
+def seedAccPin : VmConstraint2 := .base (.piBinding VmRow.first ACC PI_TABLE)
+
+/-! ## §5 — The constraint list, in the Rust module's order. -/
+
+/-- The remainder-shift body at cell `3` — the slice-2 tooth, named so `bracket_shift_zero_iff`
+can state it. -/
+def bracketShiftBody : WindowExpr := wGate SEL_BRACKET (wThread (stk 3) (stk 1))
+
+/-- The overflow-guard body at cell `3` — the honest statement of the depth bound. -/
+def bracketOverflowBody : EmittedExpr := gGate SEL_BRACKET (gSubK (stk 3) SYM_EMPTY)
+
+/-- The rule-table membership body: `IS_RULE·(RULE_ID − 1)(RULE_ID − 2)`. -/
+def ruleMembershipBody : EmittedExpr :=
+  gGate IS_RULE (.mul (gSubK RULE_ID RULE_BRACKET) (gSubK RULE_ID RULE_EMPTY))
+
+/-- The flat constraint list. -/
+def dyckConstraints : List VmConstraint2 :=
+  -- the two child hashes (entry + running).
+  [ entryHashLookup, runningHashLookup
+  -- selector booleans.
+  , cg (gBin IS_RULE), cg (gBin IS_TERM), cg (gBin IS_DONE), cg (gBin IS_FIRST)
+  , cg (gBin SEL_BRACKET), cg (gBin SEL_EMPTY)
+  -- exactly one action kind.
+  , cg (.add (.add (.add (.var IS_RULE) (.var IS_TERM)) (.var IS_DONE)) (.const (-1)))
+  -- the rule sub-selectors partition IS_RULE.
+  , cg (.add (.add (.var SEL_BRACKET) (.var SEL_EMPTY)) (.mul (.const (-1)) (.var IS_RULE)))
+  -- rule sub-selectors pinned to their ids.
+  , cg (gGate SEL_BRACKET (gSubK RULE_ID RULE_BRACKET))
+  , cg (gGate SEL_EMPTY (gSubK RULE_ID RULE_EMPTY))
+  -- rule-table membership.
+  , ruleMembershipBody |> cg
+  -- top match: a rule pops S; a term's top IS the consumed token.
+  , cg (gGate IS_RULE (gSubK (stk 0) SYM_S))
+  , cg (gGate IS_TERM (gSub (stk 0) INPUT_TOKEN))
+  -- done: empty top at depth zero.
+  , cg (gGate IS_DONE (gSubK (stk 0) SYM_EMPTY))
+  , cg (gGate IS_DONE (gSubK STACK_DEPTH 0))
+  -- input-pointer helper.
+  , cg (gDiffIs INPUT_POS_P1 INPUT_POS 1)
+  -- depth deltas per action.
+  , cg (gGate SEL_BRACKET (gDiffIs DEPTH_NEXT STACK_DEPTH 2))
+  , cg (gGate SEL_EMPTY (gDiffIs DEPTH_NEXT STACK_DEPTH (-1)))
+  , cg (gGate IS_TERM (gDiffIs DEPTH_NEXT STACK_DEPTH (-1)))
+  , cg (gGate IS_DONE (gDiffIs DEPTH_NEXT STACK_DEPTH 0)) ]
+  ++ laneFixes
+  ++ bracketOverflowGuards
+  -- ============ cross-row (transition) constraints ============
+  ++ [ cw (wThread STACK_DEPTH DEPTH_NEXT) ]
+  ++ bracketPushWindows
+  ++ popShiftWindows SEL_EMPTY
+  ++ popShiftWindows IS_TERM
+  ++ holdStackWindows IS_DONE
+  ++ [ cw (wGate IS_TERM (wThread INPUT_POS INPUT_POS_P1))
+     , cw (wInvGate IS_TERM (wThread INPUT_POS INPUT_POS))
+     , copyForwardWindow
+  -- ============ boundaries ============
+     , .base (.piBinding VmRow.first (stk 0) PI_INITIAL)
+     , .base (.boundary VmRow.first (gSubK STACK_DEPTH 1))
+     , .base (.boundary VmRow.first (gSubK INPUT_POS 0))
+     , .base (.boundary VmRow.first (gSubK IS_FIRST 1))
+     , seedAccPin
+     , .base (.boundary VmRow.last (gSubK IS_DONE 1))
+     , .base (.boundary VmRow.last (gSubK STACK_DEPTH 0))
+     , .base (.piBinding VmRow.last INPUT_POS PI_INPUT_LEN)
+     , .base (.piBinding VmRow.last RUNNING_HASH PI_ROUTE) ]
+
+/-- **`dyckParseDesc`** — the Dyck pushdown parse descriptor, AUTHORED IN LEAN. The chip table
+(`TID_P2`) is IMPLICITLY present (Presence-detected from the lookups), so `tables` is empty as the
+working descriptors leave it. -/
+def dyckParseDesc : EffectVmDescriptor2 :=
+  { name        := "dregg-dyck-parse-v1"
+  , traceWidth  := DYCK_WIDTH
+  , piCount     := DYCK_PI_COUNT
+  , tables      := []
+  , constraints := dyckConstraints
+  , hashSites   := []
+  , ranges      := [] }
+
+/-! ## §6 — The byte-pinned wire golden.
+
+`EmitByName.lean` routes `emitVmJson2 dyckParseDesc` to `circuit/descriptors/by-name/dyck-parse.json`,
+and `scripts/check-descriptor-drift.sh` re-derives that file from THIS emission on every run. A drift
+on either side breaks this `#guard` (Lean) or the drift gate (disk). -/
+
+#guard emitVmJson2 dyckParseDesc ==
+  "{\"name\":\"dregg-dyck-parse-v1\",\"ir\":2,\"trace_width\":38,\"public_input_count\":4,\"tables\":[],\"constraints\":[{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":4},{\"t\":\"var\",\"v\":10},{\"t\":\"var\",\"v\":0},{\"t\":\"var\",\"v\":11},{\"t\":\"var\",\"v\":22},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":16},{\"t\":\"var\",\"v\":24},{\"t\":\"var\",\"v\":25},{\"t\":\"var\",\"v\":26},{\"t\":\"var\",\"v\":27},{\"t\":\"var\",\"v\":28},{\"t\":\"var\",\"v\":29},{\"t\":\"var\",\"v\":30}]},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":2},{\"t\":\"var\",\"v\":23},{\"t\":\"var\",\"v\":16},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":17},{\"t\":\"var\",\"v\":31},{\"t\":\"var\",\"v\":32},{\"t\":\"var\",\"v\":33},{\"t\":\"var\",\"v\":34},{\"t\":\"var\",\"v\":35},{\"t\":\"var\",\"v\":36},{\"t\":\"var\",\"v\":37}]},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":7},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":7},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":8},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":9},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":18},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":18},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":14},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":15},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":15},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":7},\"r\":{\"t\":\"var\",\"v\":8}},\"r\":{\"t\":\"var\",\"v\":9}},\"r\":{\"t\":\"const\",\"v\":-1}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":14},\"r\":{\"t\":\"var\",\"v\":15}},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":7}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":10},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":15},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":10},\"r\":{\"t\":\"const\",\"v\":-2}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":7},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":10},\"r\":{\"t\":\"const\",\"v\":-1}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":10},\"r\":{\"t\":\"const\",\"v\":-2}}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":7},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":11}}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"const\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":5},\"r\":{\"t\":\"const\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":13},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":12}}},\"r\":{\"t\":\"const\",\"v\":-1}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":6},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":5}}},\"r\":{\"t\":\"const\",\"v\":-2}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":15},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":6},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":5}}},\"r\":{\"t\":\"const\",\"v\":1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":6},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":5}}},\"r\":{\"t\":\"const\",\"v\":1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":6},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":5}}},\"r\":{\"t\":\"const\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":19},\"r\":{\"t\":\"const\",\"v\":-2}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":20},\"r\":{\"t\":\"const\",\"v\":-3}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":21},\"r\":{\"t\":\"const\",\"v\":-1}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":22},\"r\":{\"t\":\"const\",\"v\":0}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":3},\"r\":{\"t\":\"const\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":4},\"r\":{\"t\":\"const\",\"v\":0}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":5},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":6}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":0},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":19}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":21}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":2},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":20}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":1}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":14},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":4},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":2}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":15},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":0},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":1}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":15},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":2}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":15},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":2},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":3}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":15},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":4}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":15},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":4},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":22}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":0},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":1}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":2}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":2},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":3}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":4}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":4},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":22}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":0},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":0}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":1}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":2},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":2}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":3}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":9},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":4},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":4}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":8},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":12},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":13}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":8}}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":12},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":12}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":23},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":17}}}},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":0,\"pi_index\":0},{\"t\":\"boundary\",\"row\":\"first\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":5},\"r\":{\"t\":\"const\",\"v\":-1}}},{\"t\":\"boundary\",\"row\":\"first\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":12},\"r\":{\"t\":\"const\",\"v\":0}}},{\"t\":\"boundary\",\"row\":\"first\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":18},\"r\":{\"t\":\"const\",\"v\":-1}}},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":23,\"pi_index\":2},{\"t\":\"boundary\",\"row\":\"last\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":9},\"r\":{\"t\":\"const\",\"v\":-1}}},{\"t\":\"boundary\",\"row\":\"last\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":5},\"r\":{\"t\":\"const\",\"v\":0}}},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":12,\"pi_index\":1},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":17,\"pi_index\":3}],\"hash_sites\":[],\"ranges\":[]}"
+
+/-! ## §7 — Genuinely-proven, non-vacuous semantic teeth. -/
+
+/-- **THE REMAINDER-SHIFT TOOTH** (the slice-2 correction). Under a firing `rBracket`
+(`SEL_BRACKET = 1`), the shift body is zero EXACTLY when the next row's `STACK[3]` IS this row's
+`STACK[1]` — the cell that sat under the popped `S` reappears beneath the pushed RHS. TRUE when the
+remainder survives, FALSE when it is dropped or forged. -/
+theorem bracket_shift_zero_iff (env : VmRowEnv) (h : env.loc SEL_BRACKET = 1) :
+    bracketShiftBody.eval env = 0 ↔ env.nxt (stk 3) = env.loc (stk 1) := by
+  simp only [bracketShiftBody, wGate, wThread, WindowExpr.eval, h, one_mul]
+  constructor <;> intro hx <;> omega
+
+/-- **THE OVERFLOW-GUARD TOOTH.** Under a firing `rBracket`, the guard body is zero EXACTLY when
+this row's `STACK[3]` is EMPTY — the cell whose shifted destination (`STACK[5]`) leaves the `D = 5`
+buffer. A push that does not fit REJECTS; it never silently drops a symbol. -/
+theorem bracket_overflow_zero_iff (a : Assignment) (h : a SEL_BRACKET = 1) :
+    bracketOverflowBody.eval a = 0 ↔ a (stk 3) = SYM_EMPTY := by
+  simp only [bracketOverflowBody, gGate, gSubK, EmittedExpr.eval, h, one_mul, SYM_EMPTY]
+  constructor <;> intro hx <;> omega
+
+/-- **THE RULE-TABLE TOOTH.** On a `rule` row the membership body is zero EXACTLY when `RULE_ID` is
+one of the Dyck grammar's two productions — the analogue of `dfa_routing`'s transition-table lookup
+at 2 rules. Over ℤ this is the `(RULE_ID−1)(RULE_ID−2) = 0` factorization; the deployed field
+denotation recovers it from canonicality (`DyckStackRefine.dyck_sat_imp_row_valid`'s
+`ruleMembership`). -/
+theorem rule_membership_zero_iff (a : Assignment) (h : a IS_RULE = 1) :
+    ruleMembershipBody.eval a = 0 ↔ a RULE_ID = RULE_BRACKET ∨ a RULE_ID = RULE_EMPTY := by
+  simp only [ruleMembershipBody, gGate, gSubK, EmittedExpr.eval, h, one_mul,
+    RULE_BRACKET, RULE_EMPTY]
+  constructor
+  · intro hx
+    rcases mul_eq_zero.mp hx with hy | hy
+    · left; omega
+    · right; omega
+  · intro hx; rcases hx with hy | hy <;> rw [hy] <;> ring
+
+/-! ### Non-vacuity witnesses: each tooth ACCEPTS the honest cell and REJECTS the tampered one.
+The values are the `"[[]]"` nested run's row 2 → row 3 window (`build_nested_witness`), the exact
+window `circuit-prove/tests/dyck_parse_tamper.rs` mutates. -/
+
+/-- Row 2 → row 3 of the honest nested run: `SEL_BRACKET = 1`, `local.STACK[1] = cl`,
+`next.STACK[3] = cl` (the shifted remainder), `local.STACK[3] = 0` (no overflow). -/
+def honestNestedEnv : VmRowEnv :=
+  { loc := fun c => if c = SEL_BRACKET then 1 else if c = stk 1 then SYM_CL else 0
+  , nxt := fun c => if c = stk 3 then SYM_CL else 0
+  , pub := fun _ => 0 }
+
+/-- The same window with the remainder DROPPED (`tamper_dropped_remainder_rejects`). -/
+def droppedRemainderEnv : VmRowEnv :=
+  { honestNestedEnv with nxt := fun _ => 0 }
+
+/-- The same window with a symbol parked where the shift cannot carry it
+(`tamper_overflowing_push_rejects`). -/
+def overflowingEnv : Assignment :=
+  fun c => if c = SEL_BRACKET then 1 else if c = stk 3 then SYM_CL else 0
+
+/-- The honest `rBracket` row (`SEL_BRACKET = 1`, no overflow). -/
+def honestGuardAsg : Assignment := fun c => if c = SEL_BRACKET then 1 else 0
+
+-- the remainder shift ACCEPTS the surviving remainder and REJECTS the dropped one.
+#guard decide (bracketShiftBody.eval honestNestedEnv = 0)
+#guard decide (¬ (bracketShiftBody.eval droppedRemainderEnv = 0))
+-- the overflow guard ACCEPTS the fitting push and REJECTS the one that would drop a symbol.
+#guard decide (bracketOverflowBody.eval honestGuardAsg = 0)
+#guard decide (¬ (bracketOverflowBody.eval overflowingEnv = 0))
+-- rule-table membership ACCEPTS rBracket and REJECTS an invented rule id (3).
+#guard decide (ruleMembershipBody.eval
+  (fun c => if c = IS_RULE then 1 else if c = RULE_ID then 1 else 0) = 0)
+#guard decide (¬ (ruleMembershipBody.eval
+  (fun c => if c = IS_RULE then 1 else if c = RULE_ID then 3 else 0) = 0))
+
+/-! ### Shape pins. -/
+
+#guard dyckParseDesc.traceWidth == DYCK_WIDTH
+#guard dyckParseDesc.piCount == 4
+#guard dyckParseDesc.name == "dregg-dyck-parse-v1"
+#guard dyckParseDesc.constraints.length == 61
+#guard (chipLookupTuple [.var RULE_ID, .var (stk 0), .var INPUT_TOKEN, .var LANE_ZERO]
+         ENTRY_HASH ENTRY_LANES).length == CHIP_RATE + 1 + CHIP_OUT_LANES
+#guard (chipLookupTuple [.var ACC, .var ENTRY_HASH] RUNNING_HASH RUNNING_LANES).length
+         == CHIP_RATE + 1 + CHIP_OUT_LANES
+
+#assert_axioms bracket_shift_zero_iff
+#assert_axioms bracket_overflow_zero_iff
+#assert_axioms rule_membership_zero_iff
+
+end Dregg2.Circuit.Emit.DyckStackEmit

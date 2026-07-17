@@ -38,6 +38,7 @@ import Dregg2.Circuit.Emit.BoundPresentationEmit
 import Dregg2.Circuit.Emit.BridgeActionEmit
 import Dregg2.Circuit.Emit.DerivationEmit
 import Dregg2.Circuit.Emit.DfaRoutingEmit
+import Dregg2.Circuit.Emit.DyckStackEmit
 import Dregg2.Circuit.Emit.EffectVmEmitTurnChainBinding
 import Dregg2.Circuit.Emit.FieldDeltaRangeEmit
 import Dregg2.Circuit.Emit.MerkleMembership4aryEmit
@@ -65,13 +66,20 @@ here is a routing gap `emit_descriptors.py` REFUSES (its coverage check recurses
 and fails on any checked-in file no emitter reproduces) — so this table cannot silently fall
 behind the directory.
 
-Two notes the mechanical reader needs:
+Three notes the mechanical reader needs:
 * `blindedMembership4aryDesc` is depth-PARAMETERIZED in Lean; the two checked-in artifacts are its
   `depth := 2` and `depth := 8` instances. (The constraint block is depth-uniform — only the `name`
   field differs — but both are checked in, so both are emitted.)
 * `NoteSpendingLeafEmit` carries a DECOY: `noteSpendLeafDescFixed` shares `noteSpendLeafDesc`'s
   exact `name` and `trace_width` (149) while emitting different bytes. The deployed artifact is
-  `noteSpendLeafDesc`; matching on the header alone would pick the wrong one. -/
+  `noteSpendLeafDesc`; matching on the header alone would pick the wrong one.
+* `dyck-parse.json` is EMITTED but not yet DISPATCHED: `descriptor_by_name.rs` has no arm for it,
+  because `circuit/src/dsl/dyck_stack.rs` still hand-builds the IR-v1 `CircuitDescriptor` the Dyck
+  prover/tamper suite drives. It is registered here anyway — routing it through this table is what
+  makes the byte-pin RE-DERIVABLE and puts the Dyck circuit under the drift gate (law #1's spine);
+  the loader flip is the follow-up. The routing table is a superset of the dispatch table by
+  design: the coverage check fails on a checked-in file NO emitter reproduces, never on an emitted
+  descriptor Rust does not yet serve. -/
 def byNameDescriptors : List (String × EffectVmDescriptor2) :=
   [ ("accumulator-nonrev.json",
       Dregg2.Circuit.Emit.AccumulatorNonRevocationEmit.accumulatorNonRevDesc)
@@ -93,6 +101,8 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
       Dregg2.Circuit.Emit.DerivationEmit.derivationDesc)
   , ("dfa-routing.json",
       Dregg2.Circuit.Emit.DfaRoutingEmit.dfaRoutingDesc)
+  , ("dyck-parse.json",
+      Dregg2.Circuit.Emit.DyckStackEmit.dyckParseDesc)
   , ("field-delta-result-range.json",
       Dregg2.Circuit.Emit.FieldDeltaRangeEmit.fieldDeltaRangeDescriptor)
   , ("merkle-membership-4ary-general.json",
@@ -129,11 +139,11 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
       Dregg2.Circuit.Emit.EffectVmEmitTurnChainBinding.turnChainBindingDescriptor)
   ]
 
-/- The routing table covers the checked-in directory exactly (26 artifacts). A bare count is a
+/- The routing table covers the checked-in directory exactly (28 artifacts). A bare count is a
 weak guard, but it is the one this file can state without IO: the STRONG guard is
 `emit_descriptors.py`'s recursive coverage check, which fails on any by-name file this table does
 not reproduce. -/
-#guard byNameDescriptors.length == 27
+#guard byNameDescriptors.length == 28
 
 def main : IO Unit := do
   for (file, d) in byNameDescriptors do
