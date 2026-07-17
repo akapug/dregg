@@ -2238,3 +2238,27 @@ rigging) are actively editing the tree. Lane D (doc citations, DONE) overlaps fi
 their work into ONE dirty tree; per-lane gating is only clean AFTER the swarm completes and the tree stops
 moving.** Committed only the isolated, COMPLETE lane (C, 5dbeadf2d). HOLD: A (manifest tangle), D (doc, done
 but tree-overlapped), B/E/F (running). Holistic harvest when `wdghv87w4` completes.
+
+## ⚡ BOARD SWEEP complete (`wdghv87w4`, 6/6 lanes) — harvest on a 694-file tree (my swarm + co-tenant flood)
+The swarm landed; but the tree now has **694 dirty files** (my 6 lanes + many co-tenant/codex lanes), so a
+clean holistic gate is impractical. Extracting isolated high-value pieces; the rest is recorded in TESTQALOG
+(lanes committed nothing) and re-applied on a genuinely quiet tree.
+- **Lane C** COMMITTED (`5dbeadf2d`): DSL cmp NOT range-sound (forged 5<=3 accepts live). Harness-only.
+- **Lane F** — found + fixed a **5TH forgery-class security bug** and rigged a TREE-WIDE invariant:
+  `blocklace/src/evidence.rs` verified equivocation exhibits with NON-STRICT ed25519 on an ATTACKER-CHOSEN
+  key (creator read from the exhibit itself) — a small-order key + `(R=identity,s=0)` forges an exhibit
+  with NO SECRET (proven live against ed25519-dalek 2.2.0). Fixed -> verify_strict. Plus
+  `tests/tests/ed25519_strict_guard.rs`: "every first-party module verifying Ed25519 must be STRICT" —
+  the invariant that catches the NEXT drift (the highest-value shape, per the frame).
+- **Lane B** DONE (verified, tooth bites, ratchet 17->15): `constraint_prover` is an HONEST local VALIDATOR
+  with a lying NAME — consumer census found ZERO surfaces treating its trace-digest as a proof. Renamed
+  ConstraintProver->ConstraintValidator / ConstraintProof->TraceSummary; docs corrected. (Overlaps
+  circuit/lib.rs which a co-tenant lane holds dirty — Lane B kept doc-hidden aliases until that frees.)
+- **Lane E** DONE: 15 dead pub items DELETED (-796 LOC), incl. a DRIFTED MIRROR; 8 named-not-deleted.
+- **Lane D** DONE: 1059 dangling docs/*.md citations repointed, 80 named unresolved (the census was 1217,
+  not 629 — my earlier number undercounted).
+- **Lane A** HELD: deny flip verified green (run 5), but 124-manifest tangle with co-tenant lanes; the
+  finding stands (lint cage covered only 107/207 crates) + it caught a 4th phantom (dregg-turn verifier).
+SECURITY TALLY THIS SESSION: **5 forgery-class bugs**, all invisible to ~15k green tests, all found by
+"what break would this catch?": ed25519-revocation, credentials-zero-crypto, peer-exchange-fail-open,
+fold-delta-escalation, blocklace-evidence-forgery.
