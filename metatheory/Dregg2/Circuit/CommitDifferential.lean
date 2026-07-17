@@ -75,10 +75,28 @@ section Surface
 -- `h4 a b c d` — the abstract Poseidon 4-to-1 compress (Rust `poseidon2::hash_4_to_1`).
 variable (h4 : ℤ → ℤ → ℤ → ℤ → ℤ)
 
-/-- **CR carrier `compress4Injective h4`** — the 4-to-1 hash `h4` is injective:
-`h4 a b c d = h4 a' b' c' d' ⇒ (a,b,c,d) = (a',b',c',d')`. The standard collision-resistance of a
-Poseidon 4-to-1 compress (REALIZABLE — the `hash_4_to_1` the circuit verifies). Same shape as
-`StateCommit.compressInjective`, one arity up. NEVER a `+`-fold (whose 4-ary injectivity is FALSE). -/
+/-- ⚠ **BROKEN AS A FLOOR — NOT "REALIZABLE": FALSE AT DEPLOYED PARAMETERS. See the teeth.**
+
+`compress4Injective h4` — the 4-to-1 hash `h4` is injective:
+`h4 a b c d = h4 a' b' c' d' ⇒ (a,b,c,d) = (a',b',c',d')`. Same shape as `StateCommit.compressInjective`,
+one arity up — and it inherits that sibling's fate.
+`InjectiveFloorRegrounded.compress4Injective_false_babyBear` proves it FALSE for the DEPLOYED
+`hash_4_to_1` (KAT-locked to Plonky3's BabyBear Poseidon2): four field elements do not fit in one
+without collision, so the map from the infinite `ℤ⁴` into a bounded field has collisions by pigeonhole.
+This carrier's docstring formerly claimed "REALIZABLE — the `hash_4_to_1` the circuit verifies"; the
+circuit's `hash_4_to_1` is precisely what refutes it.
+
+So `effectVmCommit_binds_all` / `_binds_record_digest` / `_binds_cap_root` — the audit-P0-2 anti-ghost
+teeth below — are **VACUOUSLY TRUE at real parameters**; §3's header already says the premise "is false
+for any bounded real hash", and these are the teeth that prove it.
+
+**RE-GROUNDED:** `Circuit.InjectiveFloorRegrounded` §2 —
+`effectVmCommit_binds_all_advantage_bound` derives the same full-limb binding from a REAL collision game
+on the deployed compress (`FloorGames.HashCRHardQuant (h4Family D) Eff`) via the tree-trace extractor
+`commit4Find`, with the `Eff` obligation in the open. (Contrast
+`CommitFaithfulRegrounded.effectVmCommit_collision_of_ne`, which lands in `Compress4Collision h4 := ∃ …`
+— an EXISTENCE prop, unconditionally TRUE at deployed params, so it is not an object a floor can bind.)
+KEPT here, untouched, as the historical algebraic form. -/
 def compress4Injective : Prop :=
   ∀ a b c d a' b' c' d' : ℤ,
     h4 a b c d = h4 a' b' c' d' → a = a' ∧ b = b' ∧ c = c' ∧ d = d'

@@ -621,12 +621,25 @@ discharged from the named `Compress8CR` floor exactly as `nodeOf_injective` ride
 length-8 felt vector (`[BabyBear; 8]`), modeled as `Fin 8 → ℤ`. -/
 abbrev Digest8 := Fin 8 → ℤ
 
-/-- **`Compress8CR f`** — the 8-output chip absorb `f : List ℤ → Digest8`
-(`descriptor_ir2::chip_absorb_all_lanes`, all 8 squeezed lanes) is collision-resistant: equal 8-felt
-output vectors force equal input lists. THE NEW NAMED CRYPTO FLOOR for the native-8-felt cap tree —
-the 8-lane reading of the SAME single-permutation-call primitive #4 the 1-felt `Compress1CR` carries,
-now at the full ~124-bit width. NOT an axiom: an explicit carrier (`Reference8` exhibits one;
-`badChip8_not_CR` falsifies a colliding one, so it is not `True`). -/
+/-- ⚠ **BROKEN AS A FLOOR — FALSE AT DEPLOYED PARAMETERS, and it is a STRUCTURE FIELD. See the teeth.**
+
+The 8-output chip absorb `f : List ℤ → Digest8` (`descriptor_ir2::chip_absorb_all_lanes`, all 8 squeezed
+lanes) is collision-resistant: equal 8-felt output vectors force equal input lists. This is stated as
+INJECTIVITY, which `VacuitySweepTeeth.compress8CR_false_babyBear` proves FALSE for the deployed chip: it
+compresses the infinite `List ℤ` into 8 BOUNDED BabyBear lanes, so collisions EXIST by pigeonhole.
+
+⚑ Because `Cap8Scheme.chip8CR` carries this as a FIELD, a real deployed `Cap8Scheme` **VALUE CANNOT
+EXIST** — this is not merely a hypothesis on a theorem, it is a non-inhabitable field, and EVERY 8-felt
+cap/heap/fields-tree theorem carries it. The non-vacuity argument below (`Reference8` exhibits an
+injective chip; `badChip8_not_CR` falsifies a colliding one, so it is not `True`) is exactly the FALSE
+COMFORT `HashFloorHonesty`'s header already named: **toy witness satisfiable, real compressing Poseidon2
+false.**
+
+**RE-GROUNDED:** `Circuit.InjectiveFloorRegrounded` §1 — `Chip8Keyed` is the deployed chip WITHOUT this
+field (so it is INHABITED by the real chip), and `node8_injective_advantage_bound` /
+`leaf8_injective_advantage_bound` derive `nodeOf8_injective` / `capLeafDigest8_injective` from a REAL
+collision game on it (`FloorGames.HashCRHardQuant (chip8Family D) Eff`), with the `Eff` obligation in the
+open. KEPT here, untouched, as the historical algebraic form. -/
 def Compress8CR (f : List ℤ → Digest8) : Prop :=
   ∀ a b : List ℤ, f a = f b → a = b
 
