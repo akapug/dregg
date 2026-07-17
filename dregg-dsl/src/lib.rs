@@ -1,7 +1,7 @@
 //! Dregg Constraint DSL — proc macro crate.
 //!
 //! Provides `#[dregg_caveat]` and `#[dregg_effect]` which compile one constraint
-//! function into SEVEN backends:
+//! function into SIX backends:
 //! - `gen_rust`     — a Rust evaluator (`{name}_check`)              [agreement set]
 //! - `gen_air`      — an AIR constraint descriptor (`{name}_air_constraints`) [agreement set]
 //! - `gen_datalog`  — a Datalog rule fragment (`{name}_datalog`)    [agreement set]
