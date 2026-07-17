@@ -175,12 +175,11 @@
       own scratch folder — nothing else.</p>
     <div class="safety">
       <span>✨</span>
-      <span><b>No key needed — when this page is served by the keyless demo sidecar</b>
-        (<span class="mono">demo/keyless-grain-proxy.py</span>), whose server-side model
-        (<b>AWS Bedrock — Nova-Micro by default</b>) does the thinking. Served straight
-        from <span class="mono">agent-platform</span> there is no server-side model, and
-        the run says so — the <a href="/dev">developer console</a> drives the same
-        sandbox with your own key.</span>
+      <span><b>No key needed.</b> This guided demo turns each example into concrete tool
+        calls and sends them one at a time to the sandbox's <span class="mono">/act</span>
+        gate — <b>the cap-gating, metering and receipts are the real thing</b>; only the
+        plan is scripted. To drive the same sandbox with a <b>live model under your own
+        key</b>, use the <a href="/dev">developer console</a>.</span>
     </div>
     <div class="taskrow">
       <textarea id="task" placeholder="e.g. Write me a haiku about grains, then read it back to me.">Write me a haiku about grains, then read it back to me.</textarea>
@@ -223,9 +222,6 @@
     ? location.origin.replace(/\/+$/, '') : 'http://127.0.0.1:8903';
   const CONTROL = 'control.localhost';
   const BUDGET = 100000;
-  // The keyless server-side brain lives in the demo sidecar (demo/keyless-grain-proxy.py),
-  // which defaults to Bedrock Nova-Micro (BEDROCK_MODEL overrides it).
-  const MODEL = 'AWS Bedrock · Nova-Micro by default';
 
   // A fresh, private identity + sandbox for this session. The person never sees any
   // of this — renting is auto-provisioned behind the scenes on their first run.
@@ -331,6 +327,43 @@
     }
   }
 
+  // ── turn a plain-language task into concrete tool calls ──────────────────
+  // No model here: a keyword-guided script maps the demo tasks (and free text) to the
+  // exact tool calls the sandbox will gate. The grain is rented with `fs` caps only, so
+  // internet + shell requests are the deliberate BLOCK surprise — the sandbox refuses
+  // them for real. Anything else falls back to write-then-read, which the /verify step
+  // then re-derives.
+  function planFor(task) {
+    const t = task.toLowerCase();
+    if (/\b(haiku|poem|verse)\b/.test(t)) {
+      const poem = 'Grains in a sealed box —\nthe agent may only ask;\nthe walls decide yes.';
+      return [
+        { tool: 'fs_write', args: { path: 'haiku.txt', content: poem } },
+        { tool: 'fs_read',  args: { path: 'haiku.txt' } },
+      ];
+    }
+    if (/\b(to-?do|todo|list|tasks?)\b/.test(t)) {
+      return [
+        { tool: 'fs_write', args: { path: 'todo.txt',
+            content: '1. Rent a sealed sandbox\n2. Give the agent a job\n3. Verify its work yourself' } },
+        { tool: 'fs_read',  args: { path: 'todo.txt' } },
+      ];
+    }
+    if (/\b(http|https|url|fetch|online|web|internet|page|site)\b/.test(t)) {
+      const m = t.match(/https?:\/\/[^\s"'<>]+/);
+      return [{ tool: 'http_get', args: { url: m ? m[0] : 'https://example.com' }, stopIfBlocked: true }];
+    }
+    if (/\b(shell|command|run|bash|date|time|exec)\b/.test(t)) {
+      const m = task.match(/`([^`]+)`/);
+      return [{ tool: 'shell', args: { cmd: m ? m[1] : 'date' }, stopIfBlocked: true }];
+    }
+    // Default: capture the task in a file, then read it back — a real write + read.
+    return [
+      { tool: 'fs_write', args: { path: 'note.txt', content: task } },
+      { tool: 'fs_read',  args: { path: 'note.txt' } },
+    ];
+  }
+
   async function run() {
     const task = el('task').value.trim();
     if (!task) { el('task').focus(); return; }
@@ -353,50 +386,37 @@
       el('run').disabled = false; return;
     }
 
-    // The keyless brain drives the whole thing server-side and hands back the finished
-    // steps in one response — no key, no browser loop. The /keyless-drive route is
-    // provided by the demo sidecar (demo/keyless-grain-proxy.py), which proxies each
-    // proposed action to the real agent-platform /act gate; agent-platform itself has
-    // no such route, so served straight from the bin this POST fails and the error
-    // branch below explains that honestly.
+    // The guided plan turns the task into concrete tool calls, each sent one at a time
+    // to the sandbox's BYOK /act gate — no key, no server-side model needed. Every /act
+    // is REALLY cap-gated, metered and receipted by agent-platform; a call outside the
+    // grain's caps (internet, shell) comes back honestly BLOCKED, not faked. This is the
+    // route the developer console's own-key model drives too — here the plan is scripted.
     el('run-status').innerHTML =
-      `<span class="spin">⏳</span> the agent is working… <em>(thinking with ${esc(MODEL)})</em>`;
+      `<span class="spin">⏳</span> the agent is working… <em>(each step gated by the sandbox)</em>`;
 
-    let data;
-    try {
-      const res = await fetch(BASE + '/keyless-drive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Dregg-Subject': SUBJECT },
-        body: JSON.stringify({ goal: task, host: GRAIN, subject: SUBJECT }),
-      });
-      const text = await res.text();
-      try { data = JSON.parse(text); } catch { data = { raw: text }; }
-      if (!res.ok) throw new Error(`${res.status} ${text.slice(0, 200)}`);
-    } catch (e) {
-      el('run-status').textContent = '';
-      if (/^40[45]\b/.test(String(e.message))) {
-        addLine('err', '⚠️ This host has no keyless brain.',
-          `The keyless run needs the demo sidecar (<span class="mono">demo/keyless-grain-proxy.py</span>) in
-           front of the sandbox server — <span class="mono">agent-platform</span> itself has no
-           <code>/keyless-drive</code> route or server-side model. The
-           <a href="/dev">developer console</a> drives the same sandbox with your own key.`);
-      } else {
-        addLine('err', '⚠️ The agent could not run.', esc(e.message));
-      }
-      el('run').disabled = false; return;
-    }
-
-    const steps = Array.isArray(data.steps) ? data.steps : [];
+    const plan = planFor(task);
     let didWork = false;
-    for (const s of steps) {
-      if (s.kind === 'act') {
-        renderAct(s);
-        if (s.admitted) didWork = true;
-      } else if (s.kind === 'say') {
-        addLine('think', '💬 ' + esc(s.text || ''));
-      } else if (s.kind === 'error') {
-        addLine('err', '⚠️ The agent hit a snag.', esc(s.text || ''));
+    for (const call of plan) {
+      let r;
+      try {
+        r = await api('/act', { method: 'POST', grainHost: GRAIN,
+          body: { tool: call.tool, args: call.args, goal: task } });
+      } catch (e) {
+        addLine('err', '⚠️ The agent could not run.', esc(e.message));
+        break;
       }
+      if (r.status !== 200) {
+        addLine('err', '⚠️ The sandbox refused the request.',
+          `<code>/act</code> → ${r.status} ${esc(JSON.stringify(r.data))}`);
+        break;
+      }
+      const admitted = (r.data.admitted || 0) > 0;
+      renderAct({ tool: call.tool, args: call.args, admitted,
+        output: r.data.output, receipt: r.data.receipt });
+      if (admitted) didWork = true;
+      // A step that depends on a prior one (read-back after a blocked write) is pointless
+      // once the sandbox has blocked the thing it needed — stop rather than pile on noise.
+      else if (call.stopIfBlocked) break;
     }
 
     el('run').disabled = false;
