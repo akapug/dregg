@@ -4329,6 +4329,44 @@ async fn execute_finalized_turn(
 
     // Execute the turn against the local ledger.
     let mut s = state.write().await;
+
+    // IDEMPOTENT FINALIZATION — solo double-apply fix.
+    //
+    // In SOLO mode the `/turns/submit` ingress path already applied this turn
+    // AUTHORITATIVELY: it kept the in-place ledger commit (`if !is_solo { rollback }`
+    // in api.rs is false for solo) AND appended the turn's receipt to the node
+    // chain (`if is_operator_agent || is_solo { append_receipt }`). Re-executing the
+    // same turn HERE double-applies it: the acting cell's nonce is already advanced
+    // past the turn's nonce, so the executor's admission prologue rejects it as
+    // `nonce replay: expected N, got N-1`. The stale premise this path was written
+    // against — "SOLO (n=1) has no finalization pass" (api.rs) — is no longer true:
+    // solo runs the blocklace and trivially finalizes every block, so EVERY solo
+    // turn hit this and finalization never accepted one (observed devnet:
+    // executed=0, rejected=N; the turns stayed tentative).
+    //
+    // Fix: if this exact turn (by hash) is already in the node's receipt chain AND
+    // we are solo, ingress already committed it authoritatively — treat finalization
+    // as idempotent-already-applied and skip re-execution. Scoped to solo so the
+    // multi-party paths are untouched: a foreign client's turn is NOT in the local
+    // chain here (ingress rolled back and did not append), and the operator's own
+    // multi-party turn rolled its ledger back (nonce NOT advanced), so both still
+    // execute normally below.
+    let is_solo = s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo);
+    if is_solo
+        && s.cclerk
+            .receipt_chain()
+            .iter()
+            .any(|r| r.turn_hash == computed_hash)
+    {
+        debug!(
+            turn_hash = %turn_hash_hex,
+            block_id = %block_id,
+            "finalized turn already applied by solo ingress (authoritative in-place commit); \
+             skipping re-execution to avoid double-apply nonce replay (idempotent finalization)"
+        );
+        return;
+    }
+
     let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
 
     crate::executor_setup::configure_turn_executor(
