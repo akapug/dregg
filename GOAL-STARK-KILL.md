@@ -1386,7 +1386,7 @@ law1_enforcement_gate ratchet holds it.
   CI-gate, relational_predicate_air::prove_value_comparison, ordering.rs::has_equivocation_in_past renamed,
   action.rs DropRef/ValidateHandoff retired-but-modeled, EffectVmAir fail-closed contract, dfa_lookup_descriptor).
 - [D] **629 live lines cite 85 non-existent `docs/*.md`** (archived to `.docs-history-noclaude/`). Top:
-  `docs/PG-DREGG.md` (89 lines, incl. a Cargo.toml `[workspace]` justification).
+  `.docs-history-noclaude/PG-DREGG.md` (89 lines, incl. a Cargo.toml `[workspace]` justification).
 - [E] **328 zero-use pub items** (dead API) across the 8 core crates; 323 mod decls checked.
 - [B] misnamed files beyond `*_air` (constraint_prover, etc.).
 
@@ -2187,3 +2187,23 @@ catches the NEXT drift, not just today s).
 Each lane carries the session s hard rules: verify from CODE not comments; never weaken a gate; prove teeth
 bite by mutation; if a premise is false SAY SO; never git add -A (3 casualties tonight); never checkout to
 "look"; skip files other lanes hold dirty.
+
+## ★★★ `339ee3e7e` — THE GOAL S ORIGINAL LIST IS CLOSED
+StateTransitionAir DELETED — the last original item, and the truth beat the charge: it did not "ignore its
+emitter", it **implemented NOTHING** (bare unit struct, no Air/BaseAir/impl anywhere, zero consumers beyond
+one re-export) under a comment calling it "real STARK AIR". TWO fictions in one husk: the ignored-emitter
+item AND a *_air name on a non-AIR. The real circuit is Lean-authored (`ivcStateTransitionDescriptor`),
+byte-pinned + gated by a drift-detector that hand-builds its OWN twin and never touched the struct. Kept the
+live trace layout; retargeted its docs; replaced the lying header with a retirement note. Verified green.
+
+### THE GOAL, ITEM BY ITEM — ALL CLOSED
+non-revocation -> byte-pinned emitter ✓ · revocation + turn-chain + merkle emitted ✓ ·
+note_spending/fold/committed_threshold classified (dead deleted; drift-detectors KEPT deliberately) ✓ ·
+Claims.lean:383 false-cognate ✓ · dead EmittedDescriptor/LeanDescriptorAir path MARKED ✓ · *_air names on
+non-AIRs ✓ (5 lying re-export shims + this husk) · StateTransitionAir ✓
+ONE DOCUMENTED DEVIATION (not forced): "delete dead derivation.rs" rested on a FALSE PREMISE — it has 7
+callers and IS the emit-gate drift-detector. Named, not deleted.
+ENFORCED BY RATCHETS so it stays closed: law1_enforcement_gate (48 files/757 sites, 3 dialects) ·
+mock_proof_purge_gate (shrink-only) · effect_enum_descriptor_residual_gate · verify_routing_guard ·
+unexpected_cfgs (deny-flip in flight, lane A).
+Everything remaining is DERIVED work — the board sweep (`wdghv87w4`, 6 lanes) is on it.
