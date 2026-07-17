@@ -75,7 +75,29 @@ contributions `rest`, the map from an honest contribution to the output is INJEC
 contributions in the SAME position give distinct outputs. This is PURE collision-resistance — it asserts
 nothing about honest-input entropy or unpredictability — so it is NOT a bespoke carrier: for the
 hash-combine realization it is DISCHARGED by the imported standard `HashCR` (`honestSlotCR_of_hashcr`),
-being hash collision-resistance composed with multiset cons-cancellation. -/
+being hash collision-resistance composed with multiset cons-cancellation.
+
+⚠ **BROKEN AS NAMED — FALSE for a compressing combine, so `honest_makes_unbiasable` below is VACUOUSLY
+TRUE at deployed parameters** (`Crypto.BeaconSlotRegrounded.honestSlotCR_false_of_compressing`;
+`docs/deos/VACUITY-SWEEP.md` FINDING 2). ⚑ Its falsity has a DIFFERENT SHAPE from its siblings and the
+replacement file proves and explains why: with `rest` fixed the slot is `Ct → O`, a map between two
+FIXED-WIDTH types, so there is no infinite domain for the counting core — the honest refutation is
+pigeonhole on cardinalities under `|O| < |Ct|`, which IS the definition of a hash-combine.
+
+⚠ **AND THE "NOT BESPOKE — IT BOTTOMS OUT AT THE STANDARD `HashCR`" DEFENCE ABOVE DOES NOT RESCUE IT.**
+`honestSlotCR_of_hashcr` is true and is not a defence: `HashCR` is ONE OF THE FOUR FLOORS
+`HashFloorHonesty` ALREADY PROVED FALSE (its TOOTH 3), and
+`BeaconSlotRegrounded.honestSlotCR_discharge_hypothesis_is_false_of_finite_out` proves it at the exact
+`cr` this beacon is built from. So the discharge transports NOTHING at deployed parameters — false
+hypothesis, false conclusion, both vacuous. Bottoming out at a standard floor is grounding only if the
+standard floor is SATISFIABLE.
+
+**The honest replacement is `Crypto.BeaconSlotRegrounded`** — `honest_makes_unbiasable`'s
+advantage-bounded sibling, from a REAL bias game via a data-dependent extractor running through
+`Multiset.cons_inj_left` (the same pure cancellation `honestSlotCR_of_hashcr` uses, now CARRYING the
+reduction instead of a false hypothesis), with an explicit undischarged `Eff`. This def is KEPT so the
+record and the teeth — including `bias_breaks_honest_slot_cr`, which the replacement fires THROUGH —
+keep compiling. -/
 def HonestSlotCR (b : Beacon Ct O) : Prop :=
   ∀ (rest : Multiset Ct) (c c' : Ct), b.combine (c ::ₘ rest) = b.combine (c' ::ₘ rest) → c = c'
 

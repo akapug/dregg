@@ -99,7 +99,20 @@ variable {Key : Type}
 equal key sets. The same shape as `Crypto.CommitmentBinding.Compress1CR`; at the deployed hash it
 discharges to the BLAKE3/Poseidon2 floor (`Crypto/PortalFloor.lean`), an explicit hypothesis —
 never `True`. Constructively this also covers preimage-finding: an adversary producing an admitted
-key set ≠ the committed one EXHIBITS a collision. -/
+key set ≠ the committed one EXHIBITS a collision.
+
+⚠ **BROKEN AS NAMED — this carrier is FALSE at deployed parameters, and every consumer below is
+VACUOUSLY TRUE there.** It is `Function.Injective hash` on the INFINITE `List Key`, while the deployed
+digest lands in a BOUNDED range, so pigeonhole refutes it:
+`Apps.PreRotationKeySetRegrounded.keySetCR_false_blake3` (256-bit) /
+`keySetCR_false_babyBear` — the `HashFloorHonesty` counting core, `docs/deos/VACUITY-SWEEP.md`
+FINDING 2. ⚠ `demoHash_CR` below gives FALSE COMFORT: it satisfies the floor with a TOY INJECTIVE
+`Encodable` pairing into all of `ℤ`, while the real compressing hash refutes it.
+
+**The honest replacement is `Apps.PreRotationKeySetRegrounded`** — `rotate_compromise_resistant`'s
+advantage-bounded sibling, from a REAL collision game (whose win relation is the deployed `rotateStep`
+admitting a non-committed key set) via a REAL reduction, carrying an explicit undischarged `Eff`. This
+def is KEPT so §1-§4's record and the teeth stating things ABOUT it keep compiling. -/
 def KeySetCR (hash : List Key → Int) : Prop :=
   ∀ a b : List Key, hash a = hash b → a = b
 

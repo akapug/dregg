@@ -369,7 +369,20 @@ def StateCommitSat (H : Hash) (st : List ℤ) (commit : ℤ) : Prop :=
 
 /-- The load-bearing §8-portal hypothesis: `commitTree H` is injective on the committed tuples
     (a direct consequence of Poseidon2 collision-resistance). This is an **honest carried Prop
-    (PORTAL-OK)** — supplied as a hypothesis, never proved here. -/
+    (PORTAL-OK)** — supplied as a hypothesis, never proved here.
+
+⚠ **BROKEN AS NAMED — FALSE at deployed parameters, so `state_commitment_binds_state` and
+`state_commitment_no_silent_change` below are VACUOUSLY TRUE there**
+(`Spike.CommitTreeRegrounded.commitTreeInjective_false_babyBear`; `docs/deos/VACUITY-SWEEP.md`
+FINDING 2). It is injectivity on the INFINITE `List ℤ` while the root is ONE felt. ⚠ "PORTAL-OK,
+carried as a hypothesis, never proved here" is NOT the protection it reads as: a hypothesis that is
+FALSE at deployed parameters makes its consumers vacuous, and `#assert_axioms` cannot see it — being
+carried honestly is not the same as being satisfiable.
+
+**The honest replacement is `Spike.CommitTreeRegrounded`** — `state_commitment_binds_state`'s
+advantage-bounded sibling, from a REAL state-equivocation game (the adversary exhibits two DISTINCT
+post-state tuples behind ONE published `NEW_COMMIT`) via a REAL reduction, carrying an explicit
+undischarged `Eff`. This def is KEPT so the record and the teeth keep compiling. -/
 def CommitTreeInjective (H : Hash) : Prop :=
   ∀ a b : List ℤ, commitTree H a = commitTree H b → a = b
 

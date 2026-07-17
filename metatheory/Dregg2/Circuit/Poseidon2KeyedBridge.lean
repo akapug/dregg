@@ -142,7 +142,37 @@ theorem wins_iff_deployed_collision (D : DomainSeparatedSponge) (A : CollisionFi
 keyed family (keyed by the domain-separation tag) is `CollisionResistant`. This is the honest deployed-hash
 assumption — the keyed-from-unkeyed-via-domain-separation model. It is a HYPOTHESIS (never an `axiom`),
 and a GENUINE floor: satisfiable (§ `domainSeparatedCR_of_injective_sponge`) and refutable (§
-`brokenDomainSep_not_CR`). -/
+`brokenDomainSep_not_CR`).
+
+⚠⚠ **BROKEN AS NAMED — THIS FLOOR IS FALSE AT THE DEPLOYED SPONGE, so every §4 consumer below
+(including the APEX `deployed_lightclientUnfoolable_advantage_bound`) is VACUOUSLY TRUE at deployed
+parameters.** `Circuit.DomainSeparatedCREffRegrounded.domainSeparatedCR_false_babyBear` proves it;
+`docs/deos/VACUITY-SWEEP.md` FINDING 2. The paragraph above claiming this is "a GENUINE floor …
+SATISFIABLE and REFUTABLE … NOT an injectivity/existence-refutation" is WRONG, and `FloorGames` (07-16)
+is why: `CollisionResistant F ↔ HashCRHardQuant F ⊤` and `Hard G ⊤ ↔ Negl (solvableFrac G)`, so
+`CollisionResistant` IS a floor at the UNRESTRICTED class, hence IS the existence floor, hence FALSE
+wherever collisions merely EXIST — which at a BabyBear-bounded sponge is every tag. Same pigeonhole
+that killed `Poseidon2SpongeCR`, one `Classical.choice` later. Domain separation does not help: the
+prefix is injective, but the prefixed map still lands in one bounded field.
+
+⚠ **AND `refDomainSep_CR` BELOW IS THE TELL, NOT THE REASSURANCE.**
+`domainSeparatedCR_forces_unbounded_sponge` proves anything discharging this floor has an
+INFINITE-RANGE sponge — i.e. is not a field hash at all. That is exactly why `Reference.refSponge` (an
+injective `Encodable`-style map into ALL of `ℤ`) satisfies it and the deployed BabyBear sponge cannot.
+Toy witness satisfiable, real hash false — `HashFloorHonesty`'s own diagnosis of its own predecessor,
+recurring here, in the file written to cure it.
+
+⚑ **HONEST SCOPE — nothing here is WRONG and nothing deployed is unsafe today.** The consumers are
+true; they are true VACUOUSLY, so they transport no security. This file's REAL contributions STAND and
+are untouched: the keyed family, the domain-separation model, and the faithfulness lemmas
+(`deployed_hash_is_family_instance`, `wins_iff_deployed_collision`) — the game genuinely IS about the
+deployed function. The game was never the problem. The adversary CLASS was.
+
+**The honest replacement is `Circuit.DomainSeparatedCREffRegrounded`** —
+`DomainSeparatedCREff D Eff := HashCRHardQuant (poseidon2KeyedFamily D) Eff`: the SAME game over the
+SAME family (so every faithfulness lemma applies verbatim) at an EXPLICIT class, with every §4 consumer
+re-grounded and `domainSeparatedCREff_top_iff_old` proving this def IS that one at `⊤`. This def is
+KEPT so the record and the teeth keep compiling. -/
 def DomainSeparatedCR (D : DomainSeparatedSponge) : Prop :=
   CollisionResistant (poseidon2KeyedFamily D)
 

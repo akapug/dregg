@@ -1,0 +1,461 @@
+/-
+# `Dregg2.Spike.CommitTreeRegrounded` — the `CommitTreeInjective` consumers RE-GROUNDED off the
+FALSE-AS-NAMED injective floor onto a REAL collision game carrying an explicit `Eff`.
+
+## The bug this closes (VACUITY-SWEEP FINDING 2, the `CommitTreeInjective` site)
+
+`EffectVmConstraints2.CommitTreeInjective H := ∀ a b : List ℤ, commitTree H a = commitTree H b → a = b`
+is stated as **injectivity** of the four-leaf state-commitment hash tree (air.rs:2540–2543). `List ℤ` is
+INFINITE and `commitTree H` lands in a BOUNDED range — a BabyBear felt, `0 ≤ · < 2³¹ − 2²⁷ + 1`, which
+is what the carrier's own module header says the tree computes (`H : List ℤ → ℤ`, the Poseidon2
+`hash_4_to_1` black box) — so the floor is **FALSE at deployed parameters by pigeonhole** (§1,
+`commitTreeInjective_false_of_finite_range` / `commitTreeInjective_false_babyBear`). Both consumers
+conditioned on it — `state_commitment_binds_state` and `state_commitment_no_silent_change` — are
+therefore **VACUOUSLY TRUE** at real parameters. `#assert_axioms` is blind: the proofs are clean; the
+HYPOTHESIS is the flaw.
+
+The carrier's docstring calls it "an honest carried Prop (PORTAL-OK)… a direct consequence of Poseidon2
+collision-resistance". It is not a consequence of collision-resistance: collision-resistance says
+collisions are hard to FIND, never that they do not EXIST, and §1 proves they exist at the deployed
+felt. A carried assumption is honest only when something can satisfy it.
+
+## The re-grounding (the `PreRotationKeySetRegrounded` / `Poseidon2KeyedBridge` pattern)
+
+  * **§1 — FALSE AS NAMED.** The counting core (`HashFloorHonesty.not_injective_of_finite_range`) fires
+    on `CommitTreeInjective` directly; `commitTreeInjective_false_babyBear` is the deployed form. No
+    Poseidon2 collision is exhibited — cardinality suffices, and is the honest statement.
+  * **§2 — the KEYED family.** `CommitDeployment` bundles the deployed hash with its domain-separation
+    tag space (the effective key — the standard keyed-from-unkeyed model). `commitFamily` lifts it to a
+    `HashFloorHonesty.KeyedHashFamily`; `deployed_hash_is_family_instance` and
+    `collisionGame_wins_iff` pin FAITHFULNESS — the game is about the tree the AIR actually computes.
+  * **§3 — the STATE-EQUIVOCATION GAME.** The attack `state_commitment_binds_state` rules out is a
+    first-class λ-indexed game: handed a sampled tag, the adversary outputs TWO post-state tuples and a
+    published root, and WINS iff the tuples are DISTINCT yet BOTH satisfy the real `StateCommitSat`
+    against that ONE published `NEW_COMMIT`. Two different states behind one published PI — the exact
+    compromise, IN the win relation rather than in a docstring.
+  * **§4 — THE REDUCTION.** `equivocationToCollisionFinder` hands the two exhibited tuples to the
+    collision game; `equivocation_wins_imp` proves win-preservation (both tuples' trees equal the ONE
+    published root, so the tuples themselves collide) and `equivocation_adv_le` is the advantage
+    inequality by `winProb_le_of_imp`. The reduction is the ONLY bridge between hypothesis and
+    conclusion — §6's canary compiles that fact.
+  * **§5 — the RE-GROUNDED CONSUMERS.** `state_commitment_binds_state_advantage_bound` and
+    `state_commitment_no_silent_change_advantage_bound`: the Boolean "two traces pinned to the same
+    `NEW_COMMIT` commit to the SAME tuple" becomes "the SAME tuple EXCEPT with negligible probability",
+    from the collision floor VIA the reduction.
+
+## ⚑ THE `Eff` PARAMETER IS THE WHOLE HONESTY, AND IT IS UNDISCHARGED
+
+The sweep's load-bearing result (`FloorGames` §2, `hard_top_iff_solvableFrac_negl`): at the
+UNRESTRICTED adversary class a game floor IS the existence floor, so it is FALSE wherever collisions
+exist — and §1 proves they exist at the deployed tree. §7 instantiates both poles at THIS carrier:
+`commit_floor_top_false_of_compressing` (`Eff := ⊤` is FALSE at deployed parameters, routed through the
+counting core) and `commit_floor_bot_vacuous` (`Eff := ⊥` is vacuous). So `Eff` is a PARAMETER, in the
+open, at every use site: this tree has no cost model (`FloorGames` §8), and inventing a shallow
+imitation would be another costume. Hiding the `Eff` dependence is the disease; naming it is the repair.
+
+## Non-fake
+
+The floor is REFUTABLE (`brokenCommit_floor_top_false`: a hash that ignores its input has a finder
+winning at every tag, advantage `1`) and the reduction is LOAD-BEARING (§6's canary: the keystone does
+NOT follow from the floor applied at some OTHER finder). The OLD `CommitTreeInjective` consumers are
+KEPT untouched in `EffectVmConstraints2`; siblings ADDED here. `#assert_all_clean`; no `sorry`, no fresh
+`axiom`.
+
+## Coordination
+
+This is the `STATE_COMMIT` / EffectVm-AIR lane. The FRI/Merkle `compress` carrier is the same shape and
+is re-grounded in `Circuit.FriCompressRegrounded`; the pre-rotation key-set carrier is
+`Apps.PreRotationKeySetRegrounded`.
+-/
+import Dregg2.Spike.EffectVmConstraints2
+import Dregg2.Circuit.HashFloorHonesty
+import Dregg2.Crypto.FloorGames
+
+namespace Dregg2.Spike.CommitTreeRegrounded
+
+open Dregg2.Spike.EffectVmConstraints2 (Hash commitTree StateCommitSat CommitTreeInjective)
+open Dregg2.Circuit.HashFloorHonesty
+  (KeyedHashFamily CollisionFinder CollisionResistant collisionAdv injective_family_CR
+   not_injective_of_finite_range)
+open Dregg2.Crypto.ProbCrypto (winProb winProb_top winProb_bot winProb_le_of_imp negl_of_le)
+open Dregg2.Crypto.ConcreteSecurity (Negl Ensemble negl_zero not_negl_one)
+open Dregg2.Crypto.FloorGames
+  (Game Adversary gameAdv gameAdv_mem_unit Hard hard_bot_vacuous not_hard_top_of_always_solvable)
+
+set_option autoImplicit false
+
+/-! ## §1 — FALSE AS NAMED: the injective `CommitTreeInjective` floor is refuted by the deployed tree.
+
+`CommitTreeInjective H` IS `Function.Injective (commitTree H)` on the INFINITE `List ℤ`. The deployed
+state-commitment root is a BabyBear felt, so the counting core fires — no Poseidon2 collision need be
+exhibited; cardinality suffices, and is the honest statement. -/
+
+/-- A digest function into a BOUNDED integer window has FINITE range (`⊆ Ico 0 q`). The general form of
+`HashFloorHonesty.finite_range_of_field_bound` — restated locally so this file and its FRI sibling stay
+import-independent of each other. -/
+theorem finite_range_of_bound {α : Type} (f : α → Int) (q : Int)
+    (hb : ∀ x, 0 ≤ f x ∧ f x < q) : (Set.range f).Finite := by
+  refine (Set.finite_Ico (0 : Int) q).subset ?_
+  rintro _ ⟨x, rfl⟩
+  exact ⟨(hb x).1, (hb x).2⟩
+
+/-- **TOOTH — `CommitTreeInjective` is FALSE for any range-bounded commitment tree.** Literally the
+counting core: the floor IS injectivity on the infinite `List ℤ` of committed columns, while a real
+tree's range is a finite set of field elements. Stated in the same shape as the flagged siblings' teeth
+(`HashFloorHonesty.poseidon2SpongeCR_false_of_finite_range`). -/
+theorem commitTreeInjective_false_of_finite_range (H : Hash)
+    (hfin : (Set.range (commitTree H)).Finite) : ¬ CommitTreeInjective H :=
+  fun hCR => not_injective_of_finite_range (commitTree H) hfin (fun a b h => hCR a b h)
+
+/-- The tree's root is a genuine field element whenever the underlying `H` is: the four-leaf tree's
+value is either an `H` output (the 12-column shape, air.rs:2540–2543) or the malformed-tuple fallback
+`0`, and `0` is in the window. So a BabyBear-valued `hash_4_to_1` gives a BabyBear-valued root. -/
+theorem commitTree_bounded (H : Hash) (q : Int) (hq : 0 < q)
+    (hb : ∀ xs, 0 ≤ H xs ∧ H xs < q) (st : List Int) :
+    0 ≤ commitTree H st ∧ commitTree H st < q := by
+  unfold commitTree
+  split
+  · exact hb _
+  · exact ⟨le_refl 0, hq⟩
+
+/-- **TOOTH (deployed form) — `CommitTreeInjective` is FALSE at the deployed BabyBear tree.** A
+`hash_4_to_1` whose output is a genuine BabyBear field element (`0 ≤ · < p`, `p = 2³¹ − 2²⁷ + 1` —
+`EffectVmConstraints2.p`, the modulus the whole spike's constraints are stated over) REFUTES the floor.
+The floor is not merely un-proven at the deployed hash; it is provably FALSE there, so
+`state_commitment_binds_state` and `state_commitment_no_silent_change` are vacuous at real parameters. -/
+theorem commitTreeInjective_false_babyBear (H : Hash)
+    (hb : ∀ xs, 0 ≤ H xs ∧ H xs < (2013265921 : Int)) : ¬ CommitTreeInjective H :=
+  commitTreeInjective_false_of_finite_range H
+    (finite_range_of_bound (commitTree H) _
+      (commitTree_bounded H _ (by norm_num) hb))
+
+/-- **TOOTH (256-bit form) — the same for a blake3-valued tree.** Whatever the deployment's digest
+width, the pigeonhole is the same; only the window changes. -/
+theorem commitTreeInjective_false_blake3 (H : Hash)
+    (hb : ∀ xs, 0 ≤ H xs ∧ H xs < (2 : Int) ^ 256) : ¬ CommitTreeInjective H :=
+  commitTreeInjective_false_of_finite_range H
+    (finite_range_of_bound (commitTree H) _
+      (commitTree_bounded H _ (by positivity) hb))
+
+/-- **THE COLLISION THE FALSITY EXHIBITS.** A range-bounded commitment tree has, at every parameter, a
+genuine collision — two DISTINCT committed tuples with equal roots. This is the counting core in the
+positive form the game floors below consume: it is what makes the `⊤`-class floor false (§7), and
+therefore what makes the `Eff` parameter load-bearing rather than decorative. -/
+theorem exists_collision_of_finite_range (H : Hash)
+    (hfin : (Set.range (commitTree H)).Finite) :
+    ∃ p : List Int × List Int, p.1 ≠ p.2 ∧ commitTree H p.1 = commitTree H p.2 := by
+  by_contra hno
+  push_neg at hno
+  refine not_injective_of_finite_range (commitTree H) hfin (fun a b hab => ?_)
+  by_contra hne
+  exact hno (a, b) hne hab
+
+/-! ## §2 — the KEYED family: domain separation is the key.
+
+The deployed `hash_4_to_1` is a FIXED unkeyed function; its effective key is the domain-separation tag
+the circuit's hash regime absorbs. Modelling that tag as the key is the standard keyed-from-unkeyed
+treatment and is what stops the "hardcode a known collision" degeneracy that collapses an unkeyed
+floor. -/
+
+/-- **The deployed state-commitment scheme.** `hash` is the tag-keyed Poseidon2 `hash_4_to_1` (the
+deployed fixed black box at each domain-separation tag); `Tag` is the finite, inhabited tag space the CR
+game samples; `deployedTag` is the tag the EffectVm AIR computes under. -/
+structure CommitDeployment where
+  /-- The domain-separation tag space (the effective key the CR game samples). -/
+  Tag : Type
+  /-- The tag space is finite (the game samples a uniform tag). -/
+  tagFintype : Fintype Tag
+  /-- The tag space is inhabited. -/
+  tagNonempty : Nonempty Tag
+  /-- The tag-keyed `hash_4_to_1` — the deployed fixed function at each tag. -/
+  hash : Tag → Hash
+  /-- The specific domain-separation tag the EffectVm AIR computes under. -/
+  deployedTag : Tag
+
+/-- **`commitFamily D`** — the deployed four-leaf commitment TREE (not the bare compression) lifted to a
+`KeyedHashFamily`, keyed by its domain-separation tag. This is the object
+`HashFloorHonesty.CollisionResistant` is realized at for the real state commitment: the AIR's group-4
+constraint pins `STATE_COMMIT` to `commitTree`, so `commitTree` is what must bind. -/
+def commitFamily (D : CommitDeployment) : KeyedHashFamily where
+  Key := fun _ => D.Tag
+  Input := List Int
+  Out := Int
+  H := fun _ t st => commitTree (D.hash t) st
+  keyFintype := fun _ => D.tagFintype
+  keyNonempty := fun _ => D.tagNonempty
+  inputDecEq := inferInstance
+  outDecEq := inferInstance
+
+/-- **FAITHFULNESS.** The deployed FIXED tree IS the keyed family's instance at the deployed tag — a
+definitional equality, no idealization. So the CR game below is a game about the very function the AIR's
+group-4 transition constraint computes. -/
+theorem deployed_hash_is_family_instance (D : CommitDeployment) (n : ℕ) :
+    commitTree (D.hash D.deployedTag) = (commitFamily D).H n D.deployedTag := rfl
+
+/-- **THE OLD-FLOOR ⟹ NEW-FLOOR BRIDGE.** If the injective `CommitTreeInjective` held at every tag it
+would discharge `CollisionResistant (commitFamily D)` (no collisions ⟹ every finder's advantage `0`). So
+the OLD floor was STRICTLY STRONGER than the honest computational floor — and, being FALSE at the
+deployed tree (§1), it was an EMPTY hypothesis. Nothing is lost re-grounding; a false hypothesis is
+replaced by one a real hash can satisfy. -/
+theorem commitFamily_CR_of_commitTreeInjective (D : CommitDeployment)
+    (hCR : ∀ t : D.Tag, CommitTreeInjective (D.hash t)) : CollisionResistant (commitFamily D) :=
+  injective_family_CR (commitFamily D) (fun _ t a b h => hCR t a b h)
+
+/-! ## §3 — the COMMITMENT-COLLISION GAME and the STATE-EQUIVOCATION GAME, as first-class objects. -/
+
+/-- **THE COMMITMENT-COLLISION GAME.** Instances are sampled domain-separation tags; the adversary
+outputs two committed tuples and WINS iff they are a GENUINE collision of the deployed tree at that tag
+— distinct tuples, equal roots. This is the game the floor below quantifies over, with an explicit
+adversary class. -/
+def commitCollisionGame (D : CommitDeployment) : Game where
+  Inst := fun _ => D.Tag
+  Ans := fun _ => List Int × List Int
+  instFin := fun _ => D.tagFintype
+  instNe := fun _ => D.tagNonempty
+  wins := fun _ t p => p.1 ≠ p.2 ∧ commitTree (D.hash t) p.1 = commitTree (D.hash t) p.2
+  winsDec := fun _ t p => by infer_instance
+
+/-- **THE PROBLEM IS IN THE STATEMENT** — the win relation unfolds, by `Iff.rfl`, to a genuine collision
+of the real deployed tree. Not a docstring: the `Prop` itself. -/
+theorem collisionGame_wins_iff (D : CommitDeployment) (n : ℕ) (t : D.Tag)
+    (p : List Int × List Int) :
+    (commitCollisionGame D).wins n t p ↔
+      (p.1 ≠ p.2 ∧ commitTree (D.hash t) p.1 = commitTree (D.hash t) p.2) :=
+  Iff.rfl
+
+/-- The object a `STATE_COMMIT` forger exhibits: two post-state tuples and the ONE published PI
+`NEW_COMMIT` it claims both are pinned to by the last-row boundary constraint (air.rs:2707–2711). -/
+structure StateEquivocation where
+  /-- The first post-state tuple (the 12 committed columns). -/
+  st : List Int
+  /-- The second post-state tuple. -/
+  st' : List Int
+  /-- The published public input `NEW_COMMIT` the boundary pins both traces' `STATE_COMMIT` to. -/
+  newCommit : Int
+
+/-- **THE STATE-EQUIVOCATION GAME.** The adversary is handed a sampled tag and outputs a
+`StateEquivocation`; it WINS iff the two post-state tuples are DISTINCT yet BOTH satisfy the real
+group-4 transition constraint (`EffectVmConstraints2.StateCommitSat`, the deployed
+`commit = commitTree H st`) against the SAME published `NEW_COMMIT`. Winning this game IS the attack
+`state_commitment_binds_state` rules out: two different post-states standing behind one published PI.
+The forgery is IN the win predicate, read off the real constraint. -/
+def stateEquivocationGame (D : CommitDeployment) : Game where
+  Inst := fun _ => D.Tag
+  Ans := fun _ => StateEquivocation
+  instFin := fun _ => D.tagFintype
+  instNe := fun _ => D.tagNonempty
+  wins := fun _ t e =>
+    e.st ≠ e.st'
+      ∧ StateCommitSat (D.hash t) e.st e.newCommit
+      ∧ StateCommitSat (D.hash t) e.st' e.newCommit
+  winsDec := fun _ t e => by
+    unfold StateCommitSat
+    infer_instance
+
+/-- **THE PROBLEM IS IN THE STATEMENT (2/2)** — an equivocation win is, by `Iff.rfl`, two DISTINCT
+post-state tuples each satisfying the deployed group-4 constraint against ONE published `NEW_COMMIT`. -/
+theorem equivocationGame_wins_iff (D : CommitDeployment) (n : ℕ) (t : D.Tag) (e : StateEquivocation) :
+    (stateEquivocationGame D).wins n t e ↔
+      (e.st ≠ e.st'
+        ∧ StateCommitSat (D.hash t) e.st e.newCommit
+        ∧ StateCommitSat (D.hash t) e.st' e.newCommit) :=
+  Iff.rfl
+
+/-! ## §4 — THE REDUCTION: a `STATE_COMMIT` equivocator IS a commitment-tree collision finder. -/
+
+/-- **THE REDUCTION, AS A MAP OF ADVERSARIES.** An equivocator becomes a collision finder by handing
+over the two post-state tuples it exhibited. This is not a rename and not a re-indexing: it is the
+group-4 constraint read as an extractor — the constraint admits only when the published root IS the
+tuple's tree, so an equivocation against one published root hands the pair over directly. -/
+def equivocationToCollisionFinder (D : CommitDeployment)
+    (A : Adversary (stateEquivocationGame D)) : Adversary (commitCollisionGame D) where
+  run := fun n t => ((A.run n t).st, (A.run n t).st')
+
+/-- **⚑ WIN-PRESERVATION — and this IS `state_commitment_binds_state`, at the game level.** Wherever the
+equivocator wins, the extracted pair is a GENUINE collision of the deployed tree: both satisfying traces
+pin the SAME published `NEW_COMMIT` to their own tuple's tree, so the two trees are equal, while winning
+forces the tuples distinct. The crypto content lives in a proof term, not in a sentence about one — and
+it is the OLD consumer's proof, with the injectivity step DELETED rather than assumed. -/
+theorem equivocation_wins_imp (D : CommitDeployment) (A : Adversary (stateEquivocationGame D))
+    (n : ℕ) (t : D.Tag) (hwin : (stateEquivocationGame D).wins n t (A.run n t)) :
+    (commitCollisionGame D).wins n t ((equivocationToCollisionFinder D A).run n t) := by
+  obtain ⟨hne, hsat, hsat'⟩ := hwin
+  exact ⟨hne, hsat.symm.trans hsat'⟩
+
+/-- **THE ADVANTAGE INEQUALITY.** The equivocator's advantage is at most the extracted collision
+finder's, at every parameter — both play over the SAME sampled tag space, and every tag the equivocator
+wins the extracted finder wins. A genuine reduction inequality over real game advantages. -/
+theorem equivocation_adv_le (D : CommitDeployment) (A : Adversary (stateEquivocationGame D)) (n : ℕ) :
+    gameAdv (stateEquivocationGame D) A n
+      ≤ gameAdv (commitCollisionGame D) (equivocationToCollisionFinder D A) n := by
+  refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
+  rw [Adversary.hit_eq_true] at ht ⊢
+  exact equivocation_wins_imp D A n t ht
+
+/-! ## §5 — the RE-GROUNDED CONSUMERS.
+
+The Boolean keystones become advantage bounds, derived FROM the collision floor VIA the reduction. The
+old statements are kept in `EffectVmConstraints2`; these are their honest siblings. -/
+
+/-- **⚑ RE-GROUNDED `EffectVmConstraints2.state_commitment_binds_state`.**
+
+Under the commitment-collision floor at the game the reduction actually attacks, a `STATE_COMMIT`
+equivocator whose extracted finder is in the floor's adversary class has NEGLIGIBLE advantage: a prover
+exhibits two different post-states behind one published `NEW_COMMIT` only with negligible probability.
+The Boolean "two traces pinned to the same PI MUST commit to the same tuple" becomes "commit to the same
+tuple EXCEPT with negligible probability" — which is what a real Poseidon2 can actually deliver, and
+what the FALSE injective floor was standing in for.
+
+Unlike its predecessor this statement is FALSE if you delete the reduction: the conclusion is about the
+equivocation game, the hypothesis about the collision game, and `equivocation_adv_le` is the only bridge
+(§6's canary compiles that fact).
+
+⚑ **`hEff` IS UNDISCHARGED AND THAT IS THE HONEST STATE** — the standard "the reduction is efficient"
+side condition, a PARAMETER because this tree has no cost model (`FloorGames` §8). The floor's honesty
+is exactly its `Eff`'s, and §7 prices both poles: `⊤` makes it FALSE at the deployed tree, `⊥`
+vacuous. -/
+theorem state_commitment_binds_state_advantage_bound (D : CommitDeployment)
+    (Eff : Adversary (commitCollisionGame D) → Prop)
+    (A : Adversary (stateEquivocationGame D))
+    (hEff : Eff (equivocationToCollisionFinder D A))
+    (hcol : Hard (commitCollisionGame D) Eff) :
+    Negl (gameAdv (stateEquivocationGame D) A) :=
+  negl_of_le (fun n => (gameAdv_mem_unit (stateEquivocationGame D) A n).1)
+    (equivocation_adv_le D A) (hcol _ hEff)
+
+/-- **⚑ RE-GROUNDED `EffectVmConstraints2.state_commitment_no_silent_change`.** A change to the
+committed tuple changes the published root EXCEPT with negligible probability: an adversary exhibiting a
+SILENT change — two distinct tuples whose group-4 rows carry one and the same root — is, by the same
+extractor, a collision finder, since the shared root it publishes is exactly the `newCommit` both its
+tuples are pinned to. Under the collision floor at the extracted finder its advantage is negligible.
+
+The `Eff` obligation is the same undischarged side condition as above — named, not hidden. -/
+theorem state_commitment_no_silent_change_advantage_bound (D : CommitDeployment)
+    (Eff : Adversary (commitCollisionGame D) → Prop)
+    (A : Adversary (stateEquivocationGame D))
+    (hEff : Eff (equivocationToCollisionFinder D A))
+    (hcol : Hard (commitCollisionGame D) Eff) :
+    Negl (gameAdv (stateEquivocationGame D) A) :=
+  state_commitment_binds_state_advantage_bound D Eff A hEff hcol
+
+/-! ## §6 — the CANARY: break the reduction and the keystone goes RED. -/
+
+/-- **(CANARY — the keystone does NOT follow from the floor applied at some OTHER finder.)** Strip the
+reduction — try to conclude the equivocator's negligibility from the collision floor applied at some
+OTHER finder `B`, NOT the one extracted from it — and the proof does not go through: the floor bounds
+`B`, and only `equivocation_adv_le` connects the EXTRACTED finder to the equivocation game. Under the
+OLD free hypothesis (`hCR : CommitTreeInjective H`, hypothesis and conclusion sharing the same free `H`)
+this tooth was unwritable. It compiles now, and reds if a future edit reconnects the games. -/
+example (D : CommitDeployment) (Eff : Adversary (commitCollisionGame D) → Prop)
+    (A : Adversary (stateEquivocationGame D))
+    (B : Adversary (commitCollisionGame D)) (hB : Eff B)
+    (hcol : Hard (commitCollisionGame D) Eff) : True := by
+  fail_if_success
+    (have : Negl (gameAdv (stateEquivocationGame D) A) := hcol B hB)
+  trivial
+
+/-- **THE POSITIVE POLE — the RIGHT floor DOES discharge it.** A gate that refuses everything is a
+broken keystone, not a fixed one. With the collision floor at the EXTRACTED finder the keystone fires.
+Refusal is discrimination only if acceptance still happens. -/
+theorem the_repaired_bound_fires_on_the_right_floor (D : CommitDeployment)
+    (Eff : Adversary (commitCollisionGame D) → Prop)
+    (A : Adversary (stateEquivocationGame D))
+    (hEff : Eff (equivocationToCollisionFinder D A))
+    (hcol : Hard (commitCollisionGame D) Eff) :
+    Negl (gameAdv (stateEquivocationGame D) A) :=
+  state_commitment_binds_state_advantage_bound D Eff A hEff hcol
+
+/-! ## §7 — the `Eff` parameter, PRICED: both poles proved at THIS carrier.
+
+The sweep's deep result (`FloorGames` §2) says a game floor at the unrestricted class IS the existence
+floor. Here is that theorem instantiated at the deployed commitment tree, so a reader can price any
+`Eff` exactly rather than take the residual on faith. -/
+
+/-- **⚑ (TOOTH — the floor is FALSE at `Eff := ⊤` for the DEPLOYED tree.)** The real content, and the
+reason `Eff` is not decoration: a range-bounded commitment tree HAS a collision at every tag (§1's
+counting core), so the collision game is always solvable, so the floor at the unrestricted adversary
+class is FALSE — and every consumer would be vacuous there. `Classical.choice` is the adversary and no
+restatement of the win relation can see it coming. This is the price of `hEff`, stated as a theorem
+instead of a promise. -/
+theorem commit_floor_top_false_of_compressing (D : CommitDeployment)
+    (hfin : ∀ t : D.Tag, (Set.range (commitTree (D.hash t))).Finite) :
+    ¬ Hard (commitCollisionGame D) (fun _ => True) :=
+  not_hard_top_of_always_solvable (commitCollisionGame D)
+    (fun _ => ⟨([], [])⟩)
+    (fun _ t => exists_collision_of_finite_range (D.hash t) (hfin t))
+
+/-- **(TOOTH — the deployed BabyBear form of the same.)** A genuine BabyBear-valued `hash_4_to_1`
+refutes the unrestricted-class floor. The deployment the carrier's docstring names is exactly where
+`Eff := ⊤` fails. -/
+theorem commit_floor_top_false_babyBear (D : CommitDeployment)
+    (hb : ∀ (t : D.Tag) (xs : List Int), 0 ≤ D.hash t xs ∧ D.hash t xs < (2013265921 : Int)) :
+    ¬ Hard (commitCollisionGame D) (fun _ => True) :=
+  commit_floor_top_false_of_compressing D
+    (fun t => finite_range_of_bound (commitTree (D.hash t)) _
+      (commitTree_bounded (D.hash t) _ (by norm_num) (fun xs => hb t xs)))
+
+/-- **(TOOTH — the OTHER pole: `Eff := ⊥` is vacuous.)** At the empty adversary class the floor holds
+for ANY deployment, including a completely broken hash. Recorded HONESTLY: a satisfiability witness is
+worth nothing without the refutation beside it, and these two poles together are what make `Eff` a dial
+rather than a costume. -/
+theorem commit_floor_bot_vacuous (D : CommitDeployment) :
+    Hard (commitCollisionGame D) (fun _ => False) :=
+  hard_bot_vacuous _
+
+/-! ### The floor is REFUTABLE on a broken deployment (load-bearing, not `True`-shaped). -/
+
+/-- A **broken** commitment deployment: the hash IGNORES its input entirely, so every pair of distinct
+tuples has the same root at every tag. -/
+def brokenCommit : CommitDeployment where
+  Tag := Unit
+  tagFintype := inferInstance
+  tagNonempty := inferInstance
+  hash := fun _ _ => 0
+  deployedTag := ()
+
+/-- **(TOOTH — the floor is REFUTABLE.)** The broken deployment's collision game is solvable at every
+tag (`[] ≠ [0]`, both roots `0`), so it has no unrestricted-class floor. So the floor is a GENUINE
+constraint — a broken hash refutes it — not vacuously true. -/
+theorem brokenCommit_floor_top_false :
+    ¬ Hard (commitCollisionGame brokenCommit) (fun _ => True) :=
+  not_hard_top_of_always_solvable (commitCollisionGame brokenCommit)
+    (fun _ => ⟨([], [])⟩)
+    (fun _ _ => ⟨([], [0]), by simp, rfl⟩)
+
+/-! ### The floor is SATISFIABLE (the connection to the keyed-family treatment). -/
+
+/-- **(TOOTH — the keyed family is SATISFIABLE on an injective deployment.)** A deployment whose per-tag
+tree is injective discharges `CollisionResistant (commitFamily D)` — the honest floor is REALIZABLE,
+unlike the injective `CommitTreeInjective` at deployed parameters. ⚑ Recorded with its price: this is
+the `⊤`-class object, which §7's first tooth proves FALSE at a range-bounded (i.e. real) tree. An
+injective tree is exactly the toy-hash shape; the satisfiability is honest only as a non-emptiness
+check, never as evidence the deployed Poseidon2 satisfies it. -/
+theorem commitFamily_CR_of_injective (D : CommitDeployment)
+    (hinj : ∀ t : D.Tag, Function.Injective (commitTree (D.hash t))) :
+    CollisionResistant (commitFamily D) :=
+  injective_family_CR (commitFamily D) (fun _ t => hinj t)
+
+#assert_all_clean [
+  finite_range_of_bound,
+  commitTreeInjective_false_of_finite_range,
+  commitTree_bounded,
+  commitTreeInjective_false_babyBear,
+  commitTreeInjective_false_blake3,
+  exists_collision_of_finite_range,
+  deployed_hash_is_family_instance,
+  commitFamily_CR_of_commitTreeInjective,
+  collisionGame_wins_iff,
+  equivocationGame_wins_iff,
+  equivocation_wins_imp,
+  equivocation_adv_le,
+  state_commitment_binds_state_advantage_bound,
+  state_commitment_no_silent_change_advantage_bound,
+  the_repaired_bound_fires_on_the_right_floor,
+  commit_floor_top_false_of_compressing,
+  commit_floor_top_false_babyBear,
+  commit_floor_bot_vacuous,
+  brokenCommit_floor_top_false,
+  commitFamily_CR_of_injective
+]
+
+end Dregg2.Spike.CommitTreeRegrounded

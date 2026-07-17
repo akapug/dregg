@@ -210,7 +210,20 @@ leaves recompute the same root at the same query position. -/
 /-- The Poseidon2 leaf-compression injectivity the Merkle binding rests on — the
 `Poseidon2SpongeCR` carrier (`Dregg2/Circuit/Poseidon2Binding.lean`) in the shape
 the path recompute needs: `compress` is 2-to-1 injective on its inputs. NAMED, never
-an axiom. -/
+an axiom.
+
+⚠ **BROKEN AS NAMED — FALSE at deployed parameters, so `merkleRecompute_binds` below is VACUOUSLY
+TRUE there** (`Circuit.FriCompressRegrounded.compressInjective_false_of_digest_width`;
+`docs/deos/VACUITY-SWEEP.md` FINDING 2). The refutation's whole hypothesis is a FINITE field plus a
+CONSTANT output length (`w = 8 = DIGEST_ELEMS`) — nothing about Poseidon2's algebra is needed. It
+inherits the defect from the `Poseidon2SpongeCR` carrier it names, which `HashFloorHonesty` had
+ALREADY proved false.
+
+**The honest replacement is `Circuit.FriCompressRegrounded`** — `merkleRecompute_binds_advantage_bound`,
+from a REAL Merkle-opening-forgery game (tied to the deployed `merkleVerify` accepting BOTH leaves
+against one root) via `peelPath`, a CONSTRUCTIVE extractor that walks the forged opening and returns
+the first genuine `compress` collision — so this injectivity STEP is replaced by the extraction it was
+standing in for. This def is KEPT so the record and the teeth keep compiling. -/
 def CompressInjective (compress : List F → List F → List F) : Prop :=
   ∀ a b c d, compress a b = compress c d → a = c ∧ b = d
 

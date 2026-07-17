@@ -157,7 +157,19 @@ variable {Guardian : Type}
 commitments force equal guardian rosters. The `PreRotation.KeySetCR` shape; at the deployed hash it
 discharges to the Poseidon2/BLAKE3 floor (`Crypto/PortalFloor.lean`), an explicit hypothesis — never
 `True`. (Constructively also covers preimage-finding: an adversary presenting any roster other than
-the committed one would exhibit a collision.) -/
+the committed one would exhibit a collision.)
+
+⚠ **BROKEN AS NAMED — FALSE at deployed parameters, so `recStateCommit_recovers_council_roster` below
+is VACUOUSLY TRUE there.** It is `Function.Injective rosterHash` on the INFINITE `List Guardian` into a
+BOUNDED digest: `Circuit.CouncilRosterRegrounded.rosterCR_false_blake3` / `_babyBear` refute it by the
+`HashFloorHonesty` counting core (`docs/deos/VACUITY-SWEEP.md` FINDING 2). It inherits the defect from
+the `KeySetCR` shape it copied — the analogy was exact, and so is the refutation.
+
+**The honest replacement is `Circuit.CouncilRosterRegrounded`** —
+`recStateCommit_recovers_council_roster_advantage_bound`, from a REAL collision game (whose win
+relation mentions the deployed `councilCommitOf` on real kernel states) via a REAL reduction, carrying
+an explicit undischarged `Eff`. This def is KEPT so the record and the teeth stating things ABOUT it
+keep compiling. -/
 def RosterCR (rosterHash : List Guardian → Int) : Prop :=
   ∀ a b : List Guardian, rosterHash a = rosterHash b → a = b
 

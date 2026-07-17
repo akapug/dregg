@@ -142,7 +142,24 @@ variable {State : Type}
 
 /-- **`CompressionCR M`** — the per-block compression `step = perm ∘ absorb` is collision-resistant as
 a chaining function: a collision in the next FULL state forces equal predecessor state AND equal
-absorbed block. THE irreducible primitive (one permutation call), primitive #4 for a single `perm`. -/
+absorbed block. THE irreducible primitive (one permutation call), primitive #4 for a single `perm`.
+
+⚠ **BROKEN AS NAMED — FALSE for ANY REAL SPONGE, so `foldl_step_eq`, `finalState_inj` and the headline
+`spongeCR_of_reduction` below are ALL VACUOUSLY TRUE at deployed parameters**
+(`Crypto.SpongeCompressionRegrounded.compressionCR_false_of_finite_state`;
+`docs/deos/VACUITY-SWEEP.md` FINDING 2). Uncurried, `step : State × List ℤ → State` has an INFINITE
+domain (`List ℤ`) and a FINITE codomain — and `[Finite State]` is the WHOLE hypothesis, needing no
+numeric bound, because a fixed-width permutation state IS a finite type. So the reduction that demotes
+the tower's `spongeCR` carrier from "an unbounded list-hash is injective" to "ONE permutation call is
+CR" transports nothing at a real sponge.
+
+**The honest replacement is `Crypto.SpongeCompressionRegrounded`** — `spongeCR_of_reduction`'s
+advantage-bounded sibling, via `peel`: a CONSTRUCTIVE extractor that walks the two `foldl step` chains
+from the last block inward and RETURNS the first divergence as an explicit `(state, block)` collision
+— this file's own `foldl_step_eq` induction run BACKWARDS (where that theorem CONSUMES `CompressionCR`,
+`peel` PRODUCES the collision a disagreement forces), with `InitStepSeparated` discharging the
+boundary exactly as it does here. Carries an explicit undischarged `Eff`. This def is KEPT so the
+record and the teeth keep compiling. -/
 def CompressionCR (M : SpongeMachine State) : Prop :=
   ∀ (s t : State) (a b : List ℤ), M.step s a = M.step t b → s = t ∧ a = b
 

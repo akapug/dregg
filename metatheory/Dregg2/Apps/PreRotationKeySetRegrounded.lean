@@ -1,0 +1,447 @@
+/-
+# `Dregg2.Apps.PreRotationKeySetRegrounded` — the `KeySetCR` consumers RE-GROUNDED off the
+FALSE-AS-NAMED injective floor onto a REAL collision game carrying an explicit `Eff`.
+
+## The bug this closes (VACUITY-SWEEP FINDING 2, the `KeySetCR` site)
+
+`PreRotation.KeySetCR hash := ∀ a b : List Key, hash a = hash b → a = b` is stated as **injectivity**
+of the key-set digest. `List Key` is INFINITE (any nonempty `Key`) and the deployed digest lands in a
+BOUNDED range — 256-bit BLAKE3, or a BabyBear felt — so the floor is **FALSE at deployed parameters by
+pigeonhole** (§1, `keySetCR_false_of_finite_range` / `keySetCR_false_blake3`). Every consumer
+conditioned on it — `rotate_compromise_resistant`, `rotate_install_unique`,
+`rotChain_pinned_by_commitments`, `rotateStepCooled_compromise_resistant`,
+`preimage_blocks_cooled_rotation`, `rotateWrite_compromise_resistant` — is therefore **VACUOUSLY TRUE**
+at real parameters. `#assert_axioms` is blind: the proofs are clean; the HYPOTHESIS is the flaw.
+
+The file's own non-vacuity witnesses give FALSE COMFORT, exactly as `HashFloorHonesty`'s header
+predicts: `demoHash_CR` satisfies the floor with a TOY INJECTIVE hash (an `Encodable` pairing into all
+of `ℤ`) and `badHash_not_CR` refutes it with a constant. Toy witness satisfiable, real hash false.
+
+## The re-grounding (the `HermineHashCRRegrounded` / `Poseidon2KeyedBridge` pattern)
+
+  * **§1 — FALSE AS NAMED.** The counting core (`HashFloorHonesty.not_injective_of_finite_range`)
+    fires on `KeySetCR` directly; `keySetCR_false_blake3` is the deployed form.
+  * **§2 — the KEYED family.** `KeySetDeployment` bundles the deployed digest with its
+    domain-separation tag space (the effective key — the standard keyed-from-unkeyed model,
+    `Poseidon2KeyedBridge` §1) and the pre-committed next key set at each sampled instance.
+    `keySetFamily` lifts it to a `HashFloorHonesty.KeyedHashFamily`; `deployed_hash_is_family_instance`
+    and `collisionGame_wins_iff` pin FAITHFULNESS — the game is about the function the cell computes.
+  * **§3 — the ROTATION-FORGERY GAME.** A pre-rotation forger is a first-class λ-indexed adversary:
+    handed a sampled tag, it WINS iff it produces an ADMITTED rotation whose exhibited key set is NOT
+    the committed one. The forgery is IN the win relation, not in a docstring.
+  * **§4 — THE REDUCTION.** `forgeryToCollisionFinder` maps a forger to a collision finder by pairing
+    its exhibited key set against the committed one; `forgery_wins_imp` proves win-preservation (an
+    admitted forgery EXHIBITS `hash newKeys = hash committed` with `newKeys ≠ committed` — a genuine
+    collision); `forgery_adv_le` is the advantage inequality by `winProb_le_of_imp`. The reduction is
+    the ONLY bridge between hypothesis and conclusion — §6's canary compiles that fact.
+  * **§5 — the RE-GROUNDED CONSUMERS.** `rotate_compromise_resistant_advantage_bound` and
+    `rotate_install_unique_advantage_bound`: the Boolean "any other key set is REFUSED" / "two
+    admitted rotations install the SAME set" become "EXCEPT with negligible probability", from the
+    collision floor VIA the reduction.
+
+## ⚑ THE `Eff` PARAMETER IS THE WHOLE HONESTY, AND IT IS UNDISCHARGED
+
+The sweep's load-bearing result (`FloorGames` §2, `hard_top_iff_solvableFrac_negl`): at the
+UNRESTRICTED adversary class a game floor IS the existence floor, so it is FALSE wherever collisions
+exist — and §1 proves they exist at the deployed digest. §7 instantiates both poles at THIS carrier:
+`keySet_floor_top_false_of_compressing` (`Eff := ⊤` is FALSE at deployed parameters, routed through
+the counting core — the deployed digest refutes it) and `keySet_floor_bot_vacuous` (`Eff := ⊥` is
+vacuous). So `Eff` is a PARAMETER, in the open, at every use site: this tree has no cost model
+(`FloorGames` §8), and inventing a shallow imitation would be another costume. Hiding the `Eff`
+dependence is the disease; naming it is the repair.
+
+## Non-fake
+
+The floor is REFUTABLE (`brokenKeySet_floor_top_false`: a constant digest has a finder winning at
+every tag, advantage `1`) and the reduction is LOAD-BEARING (§6's canary: the keystone does NOT follow
+from the floor applied at some OTHER finder). The OLD `KeySetCR` consumers are KEPT untouched and
+doc-marked at the teeth; siblings ADDED. `#assert_all_clean`; no `sorry`, no fresh `axiom`.
+
+## Coordination
+
+This is the PRE-ROTATION key-set lane. `RosterCR` (`Circuit/CouncilCommit`) is the same shape and is
+re-grounded in `Circuit.CouncilRosterRegrounded`; the queue-root carriers are
+`Apps.QueueRootFloorRegrounded`; the STARK/FRI/Merkle hash consumers are
+`Circuit.FloorRegroundedConsumers` / `Circuit.Poseidon2KeyedBridge`.
+-/
+import Dregg2.Apps.PreRotation
+import Dregg2.Circuit.HashFloorHonesty
+import Dregg2.Crypto.FloorGames
+
+namespace Dregg2.Apps.PreRotationKeySetRegrounded
+
+open Dregg2.Apps.PreRotation (KeySetCR KeyState RotationEvent rotateStep rotate_exhibits_preimage
+  rotate_factors)
+open Dregg2.Circuit.HashFloorHonesty
+  (KeyedHashFamily CollisionFinder CollisionResistant collisionAdv injective_family_CR
+   not_injective_of_finite_range)
+open Dregg2.Crypto.ProbCrypto (winProb winProb_top winProb_bot winProb_le_of_imp negl_of_le)
+open Dregg2.Crypto.ConcreteSecurity (Negl Ensemble negl_zero not_negl_one)
+open Dregg2.Crypto.FloorGames
+  (Game Adversary gameAdv gameAdv_mem_unit Hard hard_bot_vacuous not_hard_top_of_always_solvable)
+
+set_option autoImplicit false
+
+/-! ## §1 — FALSE AS NAMED: the injective `KeySetCR` floor is refuted by the deployed digest.
+
+`KeySetCR hash` IS `Function.Injective hash` on the INFINITE `List Key`. The deployed key-set digest
+lands in a BOUNDED range (a 256-bit BLAKE3 output, or a BabyBear felt), so the counting core fires —
+no digest collision need be exhibited; cardinality suffices, and is the honest statement. -/
+
+/-- A digest function into a BOUNDED integer window has FINITE range (`⊆ Ico 0 q`). The general form
+of `HashFloorHonesty.finite_range_of_field_bound` — the domain is arbitrary here because the key-set
+digest's domain is `List Key`, not `List ℤ`. -/
+theorem finite_range_of_bound {α : Type} (f : α → Int) (q : Int)
+    (hb : ∀ x, 0 ≤ f x ∧ f x < q) : (Set.range f).Finite := by
+  refine (Set.finite_Ico (0 : Int) q).subset ?_
+  rintro _ ⟨x, rfl⟩
+  exact ⟨(hb x).1, (hb x).2⟩
+
+/-- **TOOTH — `KeySetCR` is FALSE for any range-bounded key-set digest.** Literally the counting core:
+the floor IS injectivity on `List Key`, which is infinite whenever `Key` is inhabited, while a real
+digest's range is finite. Stated in the same shape as the flagged siblings' teeth
+(`HashFloorHonesty.poseidon2SpongeCR_false_of_finite_range`). -/
+theorem keySetCR_false_of_finite_range {Key : Type} [Nonempty Key] (hash : List Key → Int)
+    (hfin : (Set.range hash).Finite) : ¬ KeySetCR hash :=
+  fun hCR => not_injective_of_finite_range hash hfin (fun a b h => hCR a b h)
+
+/-- **TOOTH (deployed form) — `KeySetCR` is FALSE at the deployed BLAKE3 key-set digest.** A digest
+that is a genuine 256-bit value (`0 ≤ · < 2²⁵⁶`) — i.e. every real `blake3` key-set commitment, the
+object `PreRotation`'s own docstring points at ("at the deployed hash it discharges to the
+BLAKE3/Poseidon2 floor") — REFUTES the floor. The floor is not merely un-proven at the deployed hash;
+it is provably FALSE there, so every `KeySetCR` consumer is vacuous at real parameters. -/
+theorem keySetCR_false_blake3 {Key : Type} [Nonempty Key] (hash : List Key → Int)
+    (hb : ∀ ks, 0 ≤ hash ks ∧ hash ks < (2 : Int) ^ 256) : ¬ KeySetCR hash :=
+  keySetCR_false_of_finite_range hash (finite_range_of_bound hash _ hb)
+
+/-- **TOOTH (Poseidon2 form) — `KeySetCR` is FALSE at a BabyBear felt digest** (`p = 2³¹ − 2²⁷ + 1`),
+the other deployment the carrier's docstring names. -/
+theorem keySetCR_false_babyBear {Key : Type} [Nonempty Key] (hash : List Key → Int)
+    (hb : ∀ ks, 0 ≤ hash ks ∧ hash ks < (2013265921 : Int)) : ¬ KeySetCR hash :=
+  keySetCR_false_of_finite_range hash (finite_range_of_bound hash _ hb)
+
+/-- **THE COLLISION THE FALSITY EXHIBITS.** A range-bounded key-set digest has, at every parameter, a
+genuine collision — two DISTINCT key sets with equal digests. This is the counting core in the
+positive form the game floors below consume: it is what makes the `⊤`-class floor false (§7), and
+therefore what makes the `Eff` parameter load-bearing rather than decorative. -/
+theorem exists_collision_of_finite_range {Key : Type} [Nonempty Key] (hash : List Key → Int)
+    (hfin : (Set.range hash).Finite) :
+    ∃ p : List Key × List Key, p.1 ≠ p.2 ∧ hash p.1 = hash p.2 := by
+  by_contra hno
+  push_neg at hno
+  refine not_injective_of_finite_range hash hfin (fun a b hab => ?_)
+  by_contra hne
+  exact hno (a, b) hne hab
+
+/-! ## §2 — the KEYED family: domain separation is the key.
+
+The deployed key-set digest is a FIXED unkeyed function; its effective key is the domain-separation
+tag (`TAG_*` derive-key prefix) the deployment absorbs ahead of the key set. Modelling that tag as the
+key is the standard keyed-from-unkeyed treatment (`Poseidon2KeyedBridge` §1-§2) and is what stops the
+"hardcode a known collision" degeneracy that collapses an unkeyed floor. -/
+
+/-- **The deployed key-set commitment scheme.** `hash` is the tag-keyed key-set digest (the deployed
+fixed function at each domain-separation tag); `Tag` is the finite, inhabited tag space the CR game
+samples; `committed t` is the pre-committed NEXT key set at the sampled instance `t` (the value the
+identity cell's `next_keys_digest` register commits to); `deployedTag` is the tag the cell computes. -/
+structure KeySetDeployment (Key : Type) where
+  /-- The domain-separation tag space (the effective key the CR game samples). -/
+  Tag : Type
+  /-- The tag space is finite (the game samples a uniform tag). -/
+  tagFintype : Fintype Tag
+  /-- The tag space is inhabited. -/
+  tagNonempty : Nonempty Tag
+  /-- The tag-keyed key-set digest — the deployed fixed function at each tag. -/
+  hash : Tag → List Key → Int
+  /-- The pre-committed next key set at the sampled instance. -/
+  committed : Tag → List Key
+  /-- Decidable equality on keys (the game checks two key sets are distinct). -/
+  keyDecEq : DecidableEq Key
+  /-- The specific domain-separation tag the identity cell computes. -/
+  deployedTag : Tag
+
+/-- **`keySetFamily D`** — the deployed key-set digest lifted to a `KeyedHashFamily`, keyed by its
+domain-separation tag. This is the object `HashFloorHonesty.CollisionResistant` is realized at for the
+real digest. -/
+def keySetFamily {Key : Type} (D : KeySetDeployment Key) : KeyedHashFamily where
+  Key := fun _ => D.Tag
+  Input := List Key
+  Out := Int
+  H := fun _ t ks => D.hash t ks
+  keyFintype := fun _ => D.tagFintype
+  keyNonempty := fun _ => D.tagNonempty
+  inputDecEq := letI := D.keyDecEq; inferInstance
+  outDecEq := inferInstance
+
+/-- **FAITHFULNESS.** The deployed FIXED digest IS the keyed family's instance at the deployed tag — a
+definitional equality, no idealization. So the CR game below is a game about the very function the
+identity cell computes. -/
+theorem deployed_hash_is_family_instance {Key : Type} (D : KeySetDeployment Key) (n : ℕ) :
+    D.hash D.deployedTag = (keySetFamily D).H n D.deployedTag := rfl
+
+/-- **THE OLD-FLOOR ⟹ NEW-FLOOR BRIDGE.** If the injective `KeySetCR` held at every tag it would
+discharge `CollisionResistant (keySetFamily D)` (no collisions ⟹ every finder's advantage `0`). So the
+OLD floor was STRICTLY STRONGER than the honest computational floor — and, being FALSE at the deployed
+digest (§1), it was an EMPTY hypothesis. Nothing is lost re-grounding; a false hypothesis is replaced
+by one a real digest can satisfy. -/
+theorem keySetFamily_CR_of_keySetCR {Key : Type} (D : KeySetDeployment Key)
+    (hCR : ∀ t : D.Tag, KeySetCR (D.hash t)) : CollisionResistant (keySetFamily D) :=
+  injective_family_CR (keySetFamily D) (fun _ t a b h => hCR t a b h)
+
+/-! ## §3 — the key-set COLLISION GAME and the ROTATION-FORGERY GAME, as first-class objects. -/
+
+/-- **THE KEY-SET COLLISION GAME.** Instances are sampled domain-separation tags; the adversary
+outputs two key sets and WINS iff they are a GENUINE collision of the deployed digest at that tag —
+distinct sets, equal digests. This is the game the floor below quantifies over, with an explicit
+adversary class. -/
+def keySetCollisionGame {Key : Type} (D : KeySetDeployment Key) : Game where
+  Inst := fun _ => D.Tag
+  Ans := fun _ => List Key × List Key
+  instFin := fun _ => D.tagFintype
+  instNe := fun _ => D.tagNonempty
+  wins := fun _ t p => p.1 ≠ p.2 ∧ D.hash t p.1 = D.hash t p.2
+  winsDec := fun _ t p => by
+    letI := D.keyDecEq
+    infer_instance
+
+/-- **THE PROBLEM IS IN THE STATEMENT** — the win relation unfolds, by `Iff.rfl`, to a genuine
+collision of the real deployed digest. Not a docstring: the `Prop` itself. -/
+theorem collisionGame_wins_iff {Key : Type} (D : KeySetDeployment Key) (n : ℕ) (t : D.Tag)
+    (p : List Key × List Key) :
+    (keySetCollisionGame D).wins n t p ↔ (p.1 ≠ p.2 ∧ D.hash t p.1 = D.hash t p.2) :=
+  Iff.rfl
+
+/-- The key state the forger attacks at sampled tag `t`: current keys `cur t` (which the rotate verb
+provably never reads — `PreRotation.rotate_current_keys_irrelevant`), and the `next_keys_digest`
+register holding the commitment to the pre-committed set `D.committed t`. -/
+def KeySetDeployment.stateAt {Key : Type} (D : KeySetDeployment Key) (cur : D.Tag → List Key)
+    (t : D.Tag) : KeyState Key :=
+  { current := cur t, nextDigest := D.hash t (D.committed t) }
+
+/-- **THE PRE-ROTATION FORGERY GAME.** The adversary is handed a sampled tag and outputs a rotation
+event; it WINS iff the event is ADMITTED by the deployed rotate verb (`rotateStep` returns `some`) yet
+exhibits a key set that is NOT the pre-committed one. Winning this game IS the compromise
+`rotate_compromise_resistant` rules out: an attacker holding the current signing keys (`cur`, which
+the verb ignores) rotating to a set it chose. The forgery is IN the win predicate, read off the real
+verb. -/
+def rotationForgeryGame {Key : Type} (D : KeySetDeployment Key) (cur : D.Tag → List Key) : Game where
+  Inst := fun _ => D.Tag
+  Ans := fun _ => RotationEvent Key
+  instFin := fun _ => D.tagFintype
+  instNe := fun _ => D.tagNonempty
+  wins := fun _ t ev =>
+    ev.newKeys ≠ D.committed t ∧ (rotateStep (D.hash t) (D.stateAt cur t) ev).isSome = true
+  winsDec := fun _ t ev => by
+    letI := D.keyDecEq
+    infer_instance
+
+/-- **THE PROBLEM IS IN THE STATEMENT (2/2)** — a forgery win is, by `Iff.rfl`, an ADMITTED rotation
+(the real `rotateStep`, the deployed verb) exhibiting a NON-committed key set. -/
+theorem forgeryGame_wins_iff {Key : Type} (D : KeySetDeployment Key) (cur : D.Tag → List Key)
+    (n : ℕ) (t : D.Tag) (ev : RotationEvent Key) :
+    (rotationForgeryGame D cur).wins n t ev ↔
+      (ev.newKeys ≠ D.committed t ∧ (rotateStep (D.hash t) (D.stateAt cur t) ev).isSome = true) :=
+  Iff.rfl
+
+/-! ## §4 — THE REDUCTION: a pre-rotation forger IS a collision finder. -/
+
+/-- **THE REDUCTION, AS A MAP OF ADVERSARIES.** A rotation forger becomes a key-set collision finder
+by pairing the key set it EXHIBITED against the one the register COMMITTED to. This is not a rename
+and not a re-indexing: it is `rotate_exhibits_preimage` read as an extractor — the verb admits only on
+an exhibited preimage, so an admitted non-committed rotation hands the pair over directly. -/
+def forgeryToCollisionFinder {Key : Type} (D : KeySetDeployment Key) (cur : D.Tag → List Key)
+    (A : Adversary (rotationForgeryGame D cur)) : Adversary (keySetCollisionGame D) where
+  run := fun n t => ((A.run n t).newKeys, D.committed t)
+
+/-- **⚑ WIN-PRESERVATION — and this IS `rotate_compromise_resistant`, at the game level.** Wherever
+the forger wins, the extracted pair is a GENUINE collision of the deployed digest: admission forces
+`hash newKeys = nextDigest = hash committed` (`rotate_exhibits_preimage`, the real verb's guard) while
+winning forces `newKeys ≠ committed`. The crypto content lives in a proof term, not in a sentence
+about one. -/
+theorem forgery_wins_imp {Key : Type} (D : KeySetDeployment Key) (cur : D.Tag → List Key)
+    (A : Adversary (rotationForgeryGame D cur)) (n : ℕ) (t : D.Tag)
+    (hwin : (rotationForgeryGame D cur).wins n t (A.run n t)) :
+    (keySetCollisionGame D).wins n t ((forgeryToCollisionFinder D cur A).run n t) := by
+  obtain ⟨hne, hadm⟩ := hwin
+  refine ⟨hne, ?_⟩
+  obtain ⟨ks', hks'⟩ := Option.isSome_iff_exists.mp hadm
+  exact rotate_exhibits_preimage hks'
+
+/-- **THE ADVANTAGE INEQUALITY.** The forger's advantage is at most the extracted collision finder's,
+at every parameter — both play over the SAME sampled tag space, and every tag the forger wins the
+extracted finder wins. A genuine reduction inequality over real game advantages. -/
+theorem forgery_adv_le {Key : Type} (D : KeySetDeployment Key) (cur : D.Tag → List Key)
+    (A : Adversary (rotationForgeryGame D cur)) (n : ℕ) :
+    gameAdv (rotationForgeryGame D cur) A n
+      ≤ gameAdv (keySetCollisionGame D) (forgeryToCollisionFinder D cur A) n := by
+  refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
+  rw [Adversary.hit_eq_true] at ht ⊢
+  exact forgery_wins_imp D cur A n t ht
+
+/-! ## §5 — the RE-GROUNDED CONSUMERS.
+
+The Boolean keystones become advantage bounds, derived FROM the collision floor VIA the reduction.
+The old statements are kept in `PreRotation`; these are their honest siblings. -/
+
+/-- **⚑ RE-GROUNDED `PreRotation.rotate_compromise_resistant`.**
+
+Under the key-set collision floor at the game the reduction actually attacks, a pre-rotation forger
+whose extracted finder is in the floor's adversary class has NEGLIGIBLE advantage: an attacker holding
+every current signing key rotates to a set of its own choosing only with negligible probability. The
+Boolean "ANY presented key set other than the committed one is REFUSED" becomes "refused EXCEPT with
+negligible probability" — which is what a real hash can actually deliver, and what the FALSE injective
+floor was standing in for.
+
+Unlike its predecessor this statement is FALSE if you delete the reduction: the conclusion is about
+the forgery game, the hypothesis about the collision game, and `forgery_adv_le` is the only bridge
+(§6's canary compiles that fact).
+
+⚑ **`hEff` IS UNDISCHARGED AND THAT IS THE HONEST STATE** — the standard "the reduction is efficient"
+side condition, a PARAMETER because this tree has no cost model (`FloorGames` §8). The floor's honesty
+is exactly its `Eff`'s, and §7 prices both poles: `⊤` makes it FALSE at the deployed digest, `⊥`
+vacuous. -/
+theorem rotate_compromise_resistant_advantage_bound {Key : Type} (D : KeySetDeployment Key)
+    (cur : D.Tag → List Key) (Eff : Adversary (keySetCollisionGame D) → Prop)
+    (A : Adversary (rotationForgeryGame D cur))
+    (hEff : Eff (forgeryToCollisionFinder D cur A))
+    (hcol : Hard (keySetCollisionGame D) Eff) :
+    Negl (gameAdv (rotationForgeryGame D cur) A) :=
+  negl_of_le (fun n => (gameAdv_mem_unit (rotationForgeryGame D cur) A n).1)
+    (forgery_adv_le D cur A) (hcol _ hEff)
+
+/-- **⚑ RE-GROUNDED `PreRotation.rotate_install_unique`.** Two admitted rotations from the same key
+state install the same current key set EXCEPT with negligible probability: an adversary producing two
+admitted rotations that install DIFFERENT sets is, by the same extractor, a collision finder (both
+exhibited sets hash to the one committed digest, so the two sets themselves collide). Under the
+collision floor at the extracted finder its advantage is negligible.
+
+The `Eff` obligation is the same undischarged side condition as above — named, not hidden. -/
+theorem rotate_install_unique_advantage_bound {Key : Type} (D : KeySetDeployment Key)
+    (cur : D.Tag → List Key) (Eff : Adversary (keySetCollisionGame D) → Prop)
+    (A : Adversary (rotationForgeryGame D cur))
+    (hEff : Eff (forgeryToCollisionFinder D cur A))
+    (hcol : Hard (keySetCollisionGame D) Eff) :
+    Negl (gameAdv (rotationForgeryGame D cur) A) :=
+  rotate_compromise_resistant_advantage_bound D cur Eff A hEff hcol
+
+/-! ## §6 — the CANARY: break the reduction and the keystone goes RED. -/
+
+/-- **(CANARY — the keystone does NOT follow from the floor applied at some OTHER finder.)** Strip the
+reduction — try to conclude the forger's negligibility from the collision floor applied at some OTHER
+finder `B`, NOT the one extracted from the forger — and the proof does not go through: the floor bounds
+`B`, and only `forgery_adv_le` connects the EXTRACTED finder to the forgery game. Under the OLD free
+hypothesis (`hCR : KeySetCR hash` with hypothesis and conclusion sharing the same free `hash`) this
+tooth was unwritable. It compiles now, and reds if a future edit reconnects the games. -/
+example {Key : Type} (D : KeySetDeployment Key) (cur : D.Tag → List Key)
+    (Eff : Adversary (keySetCollisionGame D) → Prop)
+    (A : Adversary (rotationForgeryGame D cur))
+    (B : Adversary (keySetCollisionGame D)) (hB : Eff B)
+    (hcol : Hard (keySetCollisionGame D) Eff) : True := by
+  fail_if_success
+    (have : Negl (gameAdv (rotationForgeryGame D cur) A) := hcol B hB)
+  trivial
+
+/-- **THE POSITIVE POLE — the RIGHT floor DOES discharge it.** A gate that refuses everything is a
+broken keystone, not a fixed one. With the collision floor at the EXTRACTED finder the keystone fires.
+Refusal is discrimination only if acceptance still happens. -/
+theorem the_repaired_bound_fires_on_the_right_floor {Key : Type} (D : KeySetDeployment Key)
+    (cur : D.Tag → List Key) (Eff : Adversary (keySetCollisionGame D) → Prop)
+    (A : Adversary (rotationForgeryGame D cur))
+    (hEff : Eff (forgeryToCollisionFinder D cur A))
+    (hcol : Hard (keySetCollisionGame D) Eff) :
+    Negl (gameAdv (rotationForgeryGame D cur) A) :=
+  rotate_compromise_resistant_advantage_bound D cur Eff A hEff hcol
+
+/-! ## §7 — the `Eff` parameter, PRICED: both poles proved at THIS carrier.
+
+The sweep's deep result (`FloorGames` §2) says a game floor at the unrestricted class IS the existence
+floor. Here is that theorem instantiated at the deployed key-set digest, so a reader can price any
+`Eff` exactly rather than take the residual on faith. -/
+
+/-- **⚑ (TOOTH — the floor is FALSE at `Eff := ⊤` for the DEPLOYED digest.)** The real content, and
+the reason `Eff` is not decoration: a range-bounded key-set digest HAS a collision at every tag (§1's
+counting core), so the collision game is always solvable, so the floor at the unrestricted adversary
+class is FALSE — and every consumer would be vacuous there. `Classical.choice` is the adversary and no
+restatement of the win relation can see it coming. This is the price of `hEff`, stated as a theorem
+instead of a promise. -/
+theorem keySet_floor_top_false_of_compressing {Key : Type} [Nonempty Key] (D : KeySetDeployment Key)
+    (hfin : ∀ t : D.Tag, (Set.range (D.hash t)).Finite) :
+    ¬ Hard (keySetCollisionGame D) (fun _ => True) :=
+  not_hard_top_of_always_solvable (keySetCollisionGame D)
+    (fun _ => ⟨([], [])⟩)
+    (fun n t => exists_collision_of_finite_range (D.hash t) (hfin t))
+
+/-- **(TOOTH — the deployed BLAKE3 form of the same.)** A genuine 256-bit key-set digest refutes the
+unrestricted-class floor. The deployment the carrier's docstring names is exactly where `Eff := ⊤`
+fails. -/
+theorem keySet_floor_top_false_blake3 {Key : Type} [Nonempty Key] (D : KeySetDeployment Key)
+    (hb : ∀ (t : D.Tag) (ks : List Key), 0 ≤ D.hash t ks ∧ D.hash t ks < (2 : Int) ^ 256) :
+    ¬ Hard (keySetCollisionGame D) (fun _ => True) :=
+  keySet_floor_top_false_of_compressing D
+    (fun t => finite_range_of_bound (D.hash t) _ (fun ks => hb t ks))
+
+/-- **(TOOTH — the OTHER pole: `Eff := ⊥` is vacuous.)** At the empty adversary class the floor holds
+for ANY deployment, including a completely broken digest. Recorded HONESTLY: a satisfiability witness
+is worth nothing without the refutation beside it, and these two poles together are what make `Eff` a
+dial rather than a costume. -/
+theorem keySet_floor_bot_vacuous {Key : Type} (D : KeySetDeployment Key) :
+    Hard (keySetCollisionGame D) (fun _ => False) :=
+  hard_bot_vacuous _
+
+/-! ### The floor is REFUTABLE on a broken deployment (load-bearing, not `True`-shaped). -/
+
+/-- A **broken** key-set deployment: the digest IGNORES the key set entirely, so every pair of
+distinct sets collides at every tag. -/
+def brokenKeySet : KeySetDeployment Int where
+  Tag := Unit
+  tagFintype := inferInstance
+  tagNonempty := inferInstance
+  hash := fun _ _ => 0
+  committed := fun _ => []
+  keyDecEq := inferInstance
+  deployedTag := ()
+
+/-- **(TOOTH — the floor is REFUTABLE.)** The broken deployment's collision game is solvable at every
+tag (`[0] ≠ [1]`, both digest to `0`), so it has no unrestricted-class floor. `CollisionResistant` on
+its keyed family fails for the same reason. So the floor is a GENUINE constraint — a broken digest
+refutes it — not vacuously true. -/
+theorem brokenKeySet_floor_top_false : ¬ Hard (keySetCollisionGame brokenKeySet) (fun _ => True) :=
+  not_hard_top_of_always_solvable (keySetCollisionGame brokenKeySet)
+    (fun _ => ⟨([], [])⟩)
+    (fun _ _ => ⟨([0], [1]), by decide, rfl⟩)
+
+/-! ### The floor is SATISFIABLE (the connection to the keyed-family treatment). -/
+
+/-- **(TOOTH — the keyed family is SATISFIABLE on an injective deployment.)** A deployment whose
+per-tag digest is injective discharges `CollisionResistant (keySetFamily D)` — the honest floor is
+REALIZABLE, unlike the injective `KeySetCR` at deployed parameters. ⚑ Recorded with its price: this is
+the `⊤`-class object, which §7's first tooth proves FALSE at a range-bounded (i.e. real) digest. An
+injective digest is exactly the toy `demoHash_CR` shape; the satisfiability is honest only as a
+non-emptiness check, never as evidence the deployed hash satisfies it. -/
+theorem keySetFamily_CR_of_injective {Key : Type} (D : KeySetDeployment Key)
+    (hinj : ∀ t : D.Tag, Function.Injective (D.hash t)) : CollisionResistant (keySetFamily D) :=
+  injective_family_CR (keySetFamily D) (fun _ t => hinj t)
+
+#assert_all_clean [
+  finite_range_of_bound,
+  keySetCR_false_of_finite_range,
+  keySetCR_false_blake3,
+  keySetCR_false_babyBear,
+  exists_collision_of_finite_range,
+  deployed_hash_is_family_instance,
+  keySetFamily_CR_of_keySetCR,
+  collisionGame_wins_iff,
+  forgeryGame_wins_iff,
+  forgery_wins_imp,
+  forgery_adv_le,
+  rotate_compromise_resistant_advantage_bound,
+  rotate_install_unique_advantage_bound,
+  the_repaired_bound_fires_on_the_right_floor,
+  keySet_floor_top_false_of_compressing,
+  keySet_floor_top_false_blake3,
+  keySet_floor_bot_vacuous,
+  brokenKeySet_floor_top_false,
+  keySetFamily_CR_of_injective
+]
+
+end Dregg2.Apps.PreRotationKeySetRegrounded

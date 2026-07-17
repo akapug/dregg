@@ -141,7 +141,20 @@ theorem ZeroFree.cons {l : Int} {ls : List Int} (hl : l ≠ 0) (hls : ZeroFree l
 lists force equal lists. The `KeySetCR` shape (`Apps/PreRotation.lean`). At the deployed
 `blake3_binary_root` this discharges to BLAKE3 CR (+ the leaf/node-separation and zero-freedom
 facts itemized in the header — the zero-free restriction is LOAD-BEARING: full injectivity is
-FALSE for the padded scheme, `padded_root_not_fully_injective`). -/
+FALSE for the padded scheme, `padded_root_not_fully_injective`).
+
+⚠ **BROKEN AS NAMED — FALSE at the deployed `blake3_binary_root`, so every consumer below is
+VACUOUSLY TRUE there** (`Apps.QueueRootFloorRegrounded.rootCR_false_blake3`;
+`docs/deos/VACUITY-SWEEP.md` FINDING 2). ⚑ AND THE ZERO-FREE RESTRICTION DOES NOT SAVE IT — that is
+the subtle part, so read the refutation rather than assuming it is the padding alias below: the
+ZERO-FREE lists are STILL INFINITE (`zfRep n := List.replicate (n+1) 1`), while the digest is still
+bounded, so `exists_zeroFree_collision_of_finite_range` collides two of THEM. The restriction buys
+reality against `padded_root_not_fully_injective`; it buys nothing against counting.
+
+**The honest replacement is `Apps.QueueRootFloorRegrounded`** — `dequeue_proof_pins`'s
+advantage-bounded sibling, from a REAL root-collision/leaf-collision DICHOTOMY with a union bound (the
+win relation is the Rust-verbatim `verifyDequeue` accepting a forged claim against the live root),
+carrying explicit undischarged `Eff`s. This def is KEPT so the record and the teeth keep compiling. -/
 def RootCR (root : List Int → Int) : Prop :=
   ∀ ls₁ ls₂ : List Int, ZeroFree ls₁ → ZeroFree ls₂ → root ls₁ = root ls₂ → ls₁ = ls₂
 
