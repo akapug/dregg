@@ -125,6 +125,21 @@ fn field_from_u64(v: u64) -> FieldElement {
     out
 }
 
+/// A REAL 32-byte blake3-digest field — the `app-framework::fields::field_from_bytes` convention a
+/// `dregg name register` uses for its `set_field` (the raw digest, high bytes non-zero). Its leading
+/// 24 bytes are (overwhelmingly) NON-ZERO, so the value EXCEEDS the low-64 wire carrier
+/// (`lean_shadow::field_to_i128` reads only `bytes[24..32]`) — the `> 2^64` cohort the gauntlet must
+/// exercise so its parity claim stops OVERSTATING (docs/FINDING-state-field-truncation.md).
+fn field_from_bytes(bytes: &[u8]) -> FieldElement {
+    *blake3::hash(bytes).as_bytes()
+}
+
+/// True iff a field EXCEEDS the low-64 wire carrier (its leading 24 bytes are non-zero) — the
+/// producer cannot marshal it losslessly and must FAIL-CLOSED rather than truncate.
+fn exceeds_wire_carrier(f: &FieldElement) -> bool {
+    f[0..24].iter().any(|&b| b != 0)
+}
+
 fn turn_with_auth(
     agent: CellId,
     target: CellId,
@@ -431,6 +446,65 @@ fn build_corpus() -> Vec<Case> {
                     cell: ida,
                     index: 0,
                     value: field_from_u64(999),
+                },
+            ),
+            vec![ida],
+        );
+    }
+
+    // SetField — a REAL 32-byte blake3-digest value that EXCEEDS the low-64 wire carrier (> 2^64).
+    // This is the `dregg name register` → `set_field(name_slot, blake3(name))` scenario from
+    // docs/FINDING-state-field-truncation.md. Pre-fix the producer SILENTLY truncated the digest to
+    // its low 8 bytes and BOTH executors committed a DIVERGING state (a `BothAcceptStateDiverge` the
+    // corpus never exercised — so parity was OVERSTATED). The FAIL-CLOSED interim rejects the
+    // truncation at the marshaller: the value is not wire-carriable, so the turn is INELIGIBLE and
+    // falls to the full-width Rust path → `WireGap`, NEVER a silent divergence. (Full-width field
+    // marshal is the v13 faithful-fields epoch, NOT this interim.)
+    {
+        let a = make_open_cell(1, 100);
+        let ida = a.id();
+        let name_digest = field_from_bytes(b"dregg-name:alice");
+        assert!(
+            exceeds_wire_carrier(&name_digest),
+            "the blake3 name digest must exceed the low-64 carrier for this case to test the cohort"
+        );
+        push(
+            "setfield-name-blake3-over-u64",
+            "SetField",
+            ledger_of(vec![a]),
+            single_effect_turn(
+                ida,
+                ida,
+                0,
+                Effect::SetField {
+                    cell: ida,
+                    index: 2, // `field_index_to_name(2) == "name"` — the nameservice slot.
+                    value: name_digest,
+                },
+            ),
+            vec![ida],
+        );
+    }
+
+    // SetField — a > 2^64 value on the developer slot 6 (the exec-lease PROVIDER_SLOT `cell_tag`
+    // pattern from the FINDING). Same FAIL-CLOSED expectation: `WireGap`, not a truncated commit.
+    {
+        let a = make_open_cell(1, 100);
+        let ida = a.id();
+        let provider_tag = field_from_bytes(b"cell_tag:provider-9e23b1");
+        assert!(exceeds_wire_carrier(&provider_tag));
+        push(
+            "setfield-dev-slot6-over-u64",
+            "SetField",
+            ledger_of(vec![a]),
+            single_effect_turn(
+                ida,
+                ida,
+                0,
+                Effect::SetField {
+                    cell: ida,
+                    index: 6,
+                    value: provider_tag,
                 },
             ),
             vec![ida],
@@ -1182,5 +1256,58 @@ fn rust_lean_parity_gauntlet() {
     assert!(
         n_both_reject >= 5,
         "non-vacuity: expected ≥5 BOTH-REJECT adversarial cases, got {n_both_reject}"
+    );
+}
+
+/// FOCUSED FAIL-CLOSED CANARY (docs/FINDING-state-field-truncation.md). A SetField whose value is a
+/// REAL 32-byte blake3 digest (> 2^64) must FAIL-CLOSED: the producer cannot marshal it losslessly,
+/// so `execute_via_lean` returns `Ineligible` and `run_case` classifies the turn `WireGap` — it falls
+/// to the full-width Rust path, NEVER a silent `BothAcceptStateDiverge`.
+///
+/// CANARY: this is the exact cohort the interim guard protects. If `field_fits_wire_carrier` in
+/// `lean_shadow::{effect_is_mappable, effect_to_wire}` is reverted, the producer silently truncates
+/// the digest to its low 8 bytes, both executors commit a DIVERGING state, and this case REDS as
+/// `BothAcceptStateDiverge` (the main gauntlet's `state_diverges.is_empty()` teeth also fire). WHAT
+/// REMAINS FOR v13: widen the wire carrier to the full 32 bytes so this cohort round-trips as
+/// `BothAcceptStateAgree` instead of fail-closing to `WireGap`.
+#[test]
+fn setfield_over_u64_fails_closed_not_silent_divergence() {
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (the verified kernel)",
+    ) {
+        return;
+    }
+
+    let a = make_open_cell(1, 100);
+    let ida = a.id();
+    let digest = field_from_bytes(b"dregg-name:alice");
+    assert!(
+        exceeds_wire_carrier(&digest),
+        "precondition: the value must exceed the low-64 carrier to exercise the cohort"
+    );
+    let case = Case {
+        name: "setfield-over-u64-canary",
+        cohort: "SetField",
+        ledger: ledger_of(vec![a]),
+        turn: single_effect_turn(
+            ida,
+            ida,
+            0,
+            Effect::SetField {
+                cell: ida,
+                index: 2, // the "name" slot — the `dregg name register` scenario.
+                value: digest,
+            },
+        ),
+        ids: vec![ida],
+    };
+
+    let (verdict, detail) = run_case(&case);
+    assert_eq!(
+        verdict,
+        Verdict::WireGap,
+        "a > 2^64 SetField must FAIL-CLOSED to WireGap (producer ineligible → full-width Rust path), \
+         never a silent BothAcceptStateDiverge; got {verdict:?} ({detail})"
     );
 }

@@ -866,11 +866,16 @@ fn tree_is_marshallable(tree: &CallTree, id_map: &HashMap<CellId, u64>, any: &mu
 fn effect_is_mappable(eff: &Effect, id_map: &HashMap<CellId, u64>) -> bool {
     let has = |c: &CellId| id_map.contains_key(c);
     match eff {
-        Effect::SetField { cell, .. } => has(cell),
+        // FAIL-CLOSED value guard (MUST mirror effect_to_wire's `field_to_i128_checked?`): a SetField
+        // whose value exceeds the low-64 wire carrier (≥ 2^64 — a full 32-byte digest / cell_tag) is
+        // NOT marshallable, so the turn is ineligible and falls to the full-width Rust path instead of
+        // silently truncating (docs/FINDING-state-field-truncation.md; v13 widens the carrier).
+        Effect::SetField { cell, value, .. } => has(cell) && field_fits_wire_carrier(value),
         Effect::Transfer { from, to, .. } => has(from) && has(to),
         Effect::SetPermissions { cell, .. } => has(cell),
         Effect::SetVerificationKey { cell, .. } => has(cell),
-        Effect::EmitEvent { cell, .. } => has(cell),
+        // Same low-64 carrier guard as SetField: a > 2^64 event topic is not wire-carriable.
+        Effect::EmitEvent { cell, event } => has(cell) && field_fits_wire_carrier(&event.topic),
         Effect::MakeSovereign { cell } => has(cell),
         Effect::RevokeDelegation { child } => has(child),
         // Note set-transitions: the actor is the action target (already in the id map),
@@ -1131,7 +1136,12 @@ fn effect_to_wire(
             actor,
             cell: id(cell)?,
             field: field_index_to_name(*index),
-            v: field_to_i128(value),
+            // FAIL-CLOSED (docs/FINDING-state-field-truncation.md): a SetField value that exceeds the
+            // low-64 wire carrier (a full 32-byte digest / cell_tag, ≥ 2^64) has NO faithful wire
+            // image — `?` marks the whole turn ineligible so it falls to the Rust path (full-width
+            // native) rather than committing a silently-truncated value the Rust executor would
+            // diverge from. Widening the carrier to full 32 bytes is the v13 faithful-fields epoch.
+            v: field_to_i128_checked(value)?,
         },
         Effect::Transfer { from, to, amount } => WireAction::Balance {
             actor,
@@ -1198,7 +1208,10 @@ fn effect_to_wire(
         Effect::EmitEvent { cell, event } => WireAction::Emit {
             actor,
             cell: id(cell)?,
-            topic: field_to_i128(&event.topic),
+            // FAIL-CLOSED, same carrier as SetField: a > 2^64 topic has no faithful low-64 wire image,
+            // so `?` bails the turn to the Rust path rather than truncating it silently
+            // (docs/FINDING-state-field-truncation.md).
+            topic: field_to_i128_checked(&event.topic)?,
             data: event_data_to_i128(event),
         },
         Effect::MakeSovereign { cell } => WireAction::MakeSovereign {
@@ -2386,6 +2399,29 @@ fn field_to_i128(field: &FieldElement) -> i128 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&field[24..32]);
     u64::from_be_bytes(bytes) as i128
+}
+
+/// Whether a 32-byte field VALUE can cross the Lean wire WITHOUT LOSS.
+///
+/// `field_to_i128` reads ONLY the low 8 bytes (`field[24..32]`); the wire `SetField.v` / `Emit.topic`
+/// scalar is a low-64 lane (`app-framework::fields::field_from_u64`'s convention — value in the
+/// trailing 8 bytes, leading 24 zero). A field whose leading 24 bytes are NON-ZERO (a full blake3
+/// digest, a `cell_tag`, any value ≥ 2^64) cannot cross losslessly: the producer would commit the
+/// low limb, zero-padded, SILENTLY, and the Rust executor — which carries the full 32 bytes natively —
+/// would diverge (docs/FINDING-state-field-truncation.md). So such a field is NOT wire-carriable and
+/// the turn is FAIL-CLOSED (ineligible for the shadow → falls to the Rust path), never truncated.
+/// Widening the carrier to the full 32 bytes is the v13 faithful-fields epoch — NOT this interim.
+fn field_fits_wire_carrier(field: &FieldElement) -> bool {
+    field[0..24].iter().all(|&b| b == 0)
+}
+
+/// `field_to_i128`, but FAIL-CLOSED: `None` when the field exceeds the low-64 wire carrier
+/// (`!field_fits_wire_carrier` — a ≥ 2^64 value), so the producer projector (`effect_to_wire`) bails
+/// the turn to ineligible instead of committing a SILENTLY TRUNCATED value. Mirrors the Nat-overflow
+/// ERROR idiom in `dregg-lean-ffi/src/marshal.rs` (`nat()` rejects `v > u64::MAX` rather than
+/// truncating). See `field_fits_wire_carrier` / docs/FINDING-state-field-truncation.md.
+fn field_to_i128_checked(field: &FieldElement) -> Option<i128> {
+    field_fits_wire_carrier(field).then(|| field_to_i128(field))
 }
 
 fn field_is_zero(field: &FieldElement) -> bool {
