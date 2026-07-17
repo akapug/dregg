@@ -32,7 +32,7 @@ use std::convert::Infallible;
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 
-use dregg_sdk::{Attenuation, AuthRequest, CellId, SignedTurn};
+use dregg_sdk::{Attenuation, AuthRequest, BudgetSpec, CellId, SignedTurn};
 use dregg_turn::{CallForest, Turn};
 
 use crate::state::{ActivityProofStatus, ActivityStatus, CommittedEvent, NodeEvent, NodeState};
@@ -175,6 +175,24 @@ pub struct AuthorizeRequest {
     pub token_id: String,
     pub service: Option<String>,
     pub action: Option<String>,
+    /// Cost of this specific request, in budget units. Threaded straight into
+    /// `AuthRequest.request_cost` so a token carrying Budget caveats is checked
+    /// against the amount actually being spent (defaults to 1 when the token
+    /// has budgets but no cost is supplied).
+    #[serde(default)]
+    pub request_cost: Option<u64>,
+    /// Current remaining budget per budget id, threaded into
+    /// `AuthRequest.budget_states`. Required for a token that carries Budget
+    /// caveats — the verifier denies when a budget's state is absent.
+    ///
+    /// CAVEAT (do not oversell): these values are CALLER-SUPPLIED and only
+    /// per-request anti-spoofed by the kernel (`remaining <= limit`). Cumulative
+    /// budget accounting across requests is NOT kernel-enforced — that would
+    /// require sourcing the counter from cell state. This field exposes the
+    /// budget caveat for per-request enforcement under the existing model; it is
+    /// NOT a trustless cumulative cap.
+    #[serde(default)]
+    pub budget_states: std::collections::HashMap<String, u64>,
 }
 
 #[derive(Serialize)]
@@ -198,6 +216,22 @@ pub struct MintResponse {
 pub struct AttenuateRequest {
     pub token_id: String,
     pub services: Vec<(String, String)>,
+    /// Validity-window upper bound (Unix seconds), threaded into
+    /// `Attenuation.not_after`. The attenuated token is invalid after this time
+    /// — a real, kernel-enforced narrowing (checked as a time deny at verify).
+    #[serde(default)]
+    pub not_after: Option<i64>,
+    /// Budget enrollment for the attenuated token, threaded into
+    /// `Attenuation.budget`. Adds a Budget caveat (`id`, `class`, `limit`,
+    /// optional `window`) that the holder must satisfy at verify time.
+    ///
+    /// CAVEAT (do not oversell): the caveat binds a per-request `remaining <=
+    /// limit` check whose state is CALLER-SUPPLIED at authorize time. Cumulative
+    /// spend across requests is NOT kernel-enforced (no cell-state counter), so
+    /// this narrows the token's stated budget policy but is not a trustless
+    /// cumulative cap.
+    #[serde(default)]
+    pub budget: Option<BudgetSpec>,
 }
 
 #[derive(Serialize)]
@@ -2199,6 +2233,8 @@ async fn post_authorize(
     let auth_req = AuthRequest {
         service: req.service,
         action: req.action,
+        request_cost: req.request_cost,
+        budget_states: req.budget_states,
         ..Default::default()
     };
 
@@ -2254,6 +2290,8 @@ async fn post_attenuate(
 
     let attenuation = Attenuation {
         services: req.services,
+        not_after: req.not_after,
+        budget: req.budget,
         ..Default::default()
     };
 
@@ -4840,10 +4878,20 @@ async fn get_starbridge_events(
     let since_height = params.since_height;
 
     let s = state.read().await;
-    let events = select_committed_events(&s.event_log, since_height, usize::MAX)
-        .into_iter()
-        .filter(|event| starbridge_event_matches(event, &params))
+    // Filter on the BORROWED ring buffer and clone only the survivors we
+    // actually return (`limit` <= 200). The prior form cloned the ENTIRE
+    // retained event log (passing `usize::MAX`) before filtering/taking — an
+    // O(retained-events) allocation on every poll of this live HTTP endpoint.
+    let height_ok = |e: &CommittedEvent| match since_height {
+        Some(h) if h > 0 => e.height > h,
+        _ => true,
+    };
+    let events = s
+        .event_log
+        .iter()
+        .filter(|event| height_ok(event) && starbridge_event_matches(event, &params))
         .take(limit)
+        .cloned()
         .collect();
     Json(events)
 }
@@ -8111,18 +8159,19 @@ fn starbridge_event_matches(event: &CommittedEvent, params: &StarbridgeQuery) ->
     exact_filter_matches(&event.cell_id, &params.cell)
         && exact_filter_matches(&event.turn_hash, &params.turn_hash)
         && params.memo.as_ref().is_none_or(|memo| {
-            event.effects.iter().any(|effect| {
-                effect
-                    .to_ascii_lowercase()
-                    .contains(&memo.to_ascii_lowercase())
-            })
+            // Lower-case the needle ONCE, not once per effect.
+            let needle = memo.to_ascii_lowercase();
+            event
+                .effects
+                .iter()
+                .any(|effect| effect.to_ascii_lowercase().contains(&needle))
         })
         && params.effect.as_ref().is_none_or(|effect| {
-            event.effects.iter().any(|summary| {
-                summary
-                    .to_ascii_lowercase()
-                    .contains(&effect.to_ascii_lowercase())
-            })
+            let needle = effect.to_ascii_lowercase();
+            event
+                .effects
+                .iter()
+                .any(|summary| summary.to_ascii_lowercase().contains(&needle))
         })
         && params.app.as_ref().is_none_or(|app| {
             classify_starbridge_app(None, &event.effects)
@@ -10994,5 +11043,226 @@ mod tests {
             !s.intent_pool.contains_key(&intent.id),
             "a refused payable intent must not be silently pooled"
         );
+    }
+
+    /// HTTP SURFACE: the cipherclerk authorize/attenuate endpoints now carry the
+    /// Budget caveat (previously dropped by `..Default::default()`). This drives the
+    /// REAL handlers — `post_attenuate` to enroll a budget, then `post_authorize` — and
+    /// asserts the caller-supplied `budget_states`/`request_cost` reach the LIVE
+    /// enforcement path in `datalog_verify`:
+    ///   - authorize with a SATISFYING state passes the budget check;
+    ///   - authorize with NO state on a budget-caveated token is denied (before the
+    ///     fix this was the only reachable state over HTTP, so it could never pass);
+    ///   - authorize claiming `remaining > limit` is denied by the anti-spoof guard.
+    ///
+    /// HONEST SCOPE: this proves the caveat is enforced per the existing per-request
+    /// model — `budget_states` is caller-supplied — NOT that cumulative spend is
+    /// kernel-capped (that would need cell-state sourcing of the counter).
+    #[tokio::test]
+    async fn http_authorize_reaches_budget_enforcement() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        state.write().await.unlocked = true;
+
+        let minted = post_mint(
+            State(state.clone()),
+            Json(MintRequest {
+                service: "compute".into(),
+            }),
+        )
+        .await
+        .expect("mint ok")
+        .0;
+
+        // Enroll a Budget caveat (limit 100) over HTTP — the field the surface dropped before.
+        // The `services` grant keeps the token positively authorizable (a caveat-only
+        // token with no service facts is `unrestricted`, and there is no time/budget-aware
+        // unrestricted rule); realistic attenuation narrows scope AND sets a budget together.
+        let att = post_attenuate(
+            State(state.clone()),
+            Json(AttenuateRequest {
+                token_id: minted.token_id.clone(),
+                services: vec![("compute".into(), "r".into())],
+                not_after: None,
+                budget: Some(BudgetSpec {
+                    id: "ci-bot:daily".into(),
+                    parent_id: None,
+                    class: "api_calls".into(),
+                    limit: 100,
+                    window: None,
+                }),
+            }),
+        )
+        .await
+        .expect("attenuate ok")
+        .0;
+
+        // Satisfying state: 50 remaining, cost 10, 50 <= limit 100 → reaches + passes the check.
+        let mut states = HashMap::new();
+        states.insert("ci-bot:daily".to_string(), 50u64);
+        let ok = post_authorize(
+            State(state.clone()),
+            Json(AuthorizeRequest {
+                token_id: att.new_token_id.clone(),
+                service: Some("compute".into()),
+                action: Some("r".into()),
+                request_cost: Some(10),
+                budget_states: states,
+            }),
+        )
+        .await
+        .expect("authorize call ok")
+        .0;
+        assert!(
+            ok.authorized,
+            "authorize with satisfying budget_states must reach the budget check and PASS: {:?}",
+            ok.reason
+        );
+
+        // No state supplied: a budget-caveated token is denied. Before the fix the HTTP
+        // path ALWAYS sent an empty budget_states, so a budget token could never authorize;
+        // the pass above proves the field now threads through.
+        let missing = post_authorize(
+            State(state.clone()),
+            Json(AuthorizeRequest {
+                token_id: att.new_token_id.clone(),
+                service: Some("compute".into()),
+                action: Some("r".into()),
+                request_cost: Some(10),
+                budget_states: HashMap::new(),
+            }),
+        )
+        .await
+        .expect("authorize call ok")
+        .0;
+        assert!(
+            !missing.authorized,
+            "a budget-caveated token must be DENIED when no budget state is supplied"
+        );
+
+        // Spoof: claim more remaining than the limit → the anti-spoof `remaining <= limit`
+        // guard in datalog_verify must DENY.
+        let mut spoof = HashMap::new();
+        spoof.insert("ci-bot:daily".to_string(), 1_000u64);
+        let denied = post_authorize(
+            State(state.clone()),
+            Json(AuthorizeRequest {
+                token_id: att.new_token_id.clone(),
+                service: Some("compute".into()),
+                action: Some("r".into()),
+                request_cost: Some(10),
+                budget_states: spoof,
+            }),
+        )
+        .await
+        .expect("authorize call ok")
+        .0;
+        assert!(
+            !denied.authorized,
+            "authorize claiming remaining > limit must be DENIED by the anti-spoof guard"
+        );
+    }
+
+    /// HTTP SURFACE: the attenuate endpoint now carries the validity window
+    /// (`not_after`) — a real, kernel-enforced narrowing. A token attenuated with a
+    /// past `not_after` is DENIED at authorize (expired); with a future one it still
+    /// authorizes. Before the fix the field was dropped, so no expiry could be set
+    /// over HTTP.
+    #[tokio::test]
+    async fn http_attenuate_threads_not_after_window() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        state.write().await.unlocked = true;
+
+        let minted = post_mint(
+            State(state.clone()),
+            Json(MintRequest {
+                service: "compute".into(),
+            }),
+        )
+        .await
+        .expect("mint ok")
+        .0;
+
+        // Past not_after (1970) → already expired. The `services` grant keeps the token
+        // positively authorizable so the ONLY thing under test is the validity window.
+        let expired = post_attenuate(
+            State(state.clone()),
+            Json(AttenuateRequest {
+                token_id: minted.token_id.clone(),
+                services: vec![("compute".into(), "r".into())],
+                not_after: Some(1),
+                budget: None,
+            }),
+        )
+        .await
+        .expect("attenuate ok")
+        .0;
+        let resp = post_authorize(
+            State(state.clone()),
+            Json(AuthorizeRequest {
+                token_id: expired.new_token_id.clone(),
+                service: Some("compute".into()),
+                action: Some("r".into()),
+                request_cost: None,
+                budget_states: HashMap::new(),
+            }),
+        )
+        .await
+        .expect("authorize call ok")
+        .0;
+        assert!(
+            !resp.authorized,
+            "a token attenuated with a past not_after must be DENIED (expired) — proving the window threads through"
+        );
+
+        // Control: a future not_after (the only change) still authorizes.
+        let future = post_attenuate(
+            State(state.clone()),
+            Json(AttenuateRequest {
+                token_id: minted.token_id.clone(),
+                services: vec![("compute".into(), "r".into())],
+                not_after: Some(i64::MAX / 2),
+                budget: None,
+            }),
+        )
+        .await
+        .expect("attenuate ok")
+        .0;
+        let resp2 = post_authorize(
+            State(state.clone()),
+            Json(AuthorizeRequest {
+                token_id: future.new_token_id.clone(),
+                service: Some("compute".into()),
+                action: Some("r".into()),
+                request_cost: None,
+                budget_states: HashMap::new(),
+            }),
+        )
+        .await
+        .expect("authorize call ok")
+        .0;
+        assert!(
+            resp2.authorized,
+            "a token attenuated with a future not_after must still authorize: {:?}",
+            resp2.reason
+        );
+    }
+
+    /// Back-compat: an authorize/attenuate body WITHOUT the new fields still
+    /// deserializes (the `#[serde(default)]` guarantee) — existing callers unaffected.
+    #[test]
+    fn http_request_structs_are_backward_compatible() {
+        let auth: AuthorizeRequest =
+            serde_json::from_str(r#"{"token_id":"t","service":"compute","action":"r"}"#)
+                .expect("legacy authorize body must still parse");
+        assert!(auth.request_cost.is_none());
+        assert!(auth.budget_states.is_empty());
+
+        let att: AttenuateRequest =
+            serde_json::from_str(r#"{"token_id":"t","services":[["compute","r"]]}"#)
+                .expect("legacy attenuate body must still parse");
+        assert!(att.not_after.is_none());
+        assert!(att.budget.is_none());
     }
 }
