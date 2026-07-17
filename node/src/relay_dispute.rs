@@ -45,7 +45,8 @@
 //!
 //!   * **Emitting the signed ledger turn from the route.** [`build_slash_turn`]
 //!     produces the real [`Action`] (bond/dispute `SetField`s + the conserving
-//!     restitution `Transfer` + the `Burn`), and it is unit-tested with a test
+//!     restitution `Transfer` + the conserving remainder `Transfer`), and it is
+//!     unit-tested with a test
 //!     cipherclerk. The legacy in-process [`crate::relay_service::RelayState`]
 //!     holds no [`AppCipherclerk`], no governance slash capability, and no minted
 //!     relay-operator `CellId`, so the route mutates the MIRROR and reports the
@@ -81,7 +82,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use dregg_app_framework::{Action, AppCipherclerk, CellId, Effect};
+use dregg_app_framework::{Action, AppCipherclerk, AssetId, CellId, Effect};
 use dregg_captp::custody::{EvidenceOfDrop, InboxState, adjudicate_from_inbox};
 use dregg_storage_templates::relay_operator::{
     BOND_AMOUNT_SLOT, BOND_MIN_SLOT, DISPUTE_COUNT_SLOT, build_slash_action,
@@ -91,7 +92,8 @@ use crate::relay_service::SharedRelayState;
 
 /// Default TOTAL seizure requested on a proven drop (computrons), used when the
 /// disputant does not name one. Always capped by the bond floor. The seizure is
-/// split into a bounded restitution to the wronged party + a burned remainder.
+/// split into a bounded restitution to the wronged party + a remainder Transferred
+/// to the remainder destination (conserving, not destroyed).
 pub const DEFAULT_SLASH_PENALTY: u64 = 1_000;
 
 /// Default bounty added to the wronged party's proven fee when bounding
@@ -120,7 +122,8 @@ pub fn default_slash_treasury() -> CellId {
 /// by default). Both legs are CONSERVING Transfers out of the relay cell; nothing
 /// is destroyed. By
 /// construction `restitution + remainder == seized`: the operator loses the full
-/// seizure, the wronged party gains `restitution`, and `burned` leaves supply.
+/// seizure, the wronged party gains `restitution`, and the `remainder` is
+/// Transferred to the remainder destination (conserving — supply is unchanged).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlashPayout {
     /// Computrons restituted to the wronged inbox owner (their proven loss,
@@ -132,12 +135,13 @@ pub struct SlashPayout {
 }
 
 impl SlashPayout {
-    /// Split a `seized` seizure into a bounded restitution + burned remainder.
+    /// Split a `seized` seizure into a bounded restitution + a remainder.
     ///
     /// Restitution is `min(seized, proven_fee + bounty)`: the wronged party never
     /// receives more than their proven loss (fee) plus a small bounty, and never
-    /// more than was actually seized. The remainder is burned. The seizure is
-    /// fully accounted: `restitution + burned == seized`.
+    /// more than was actually seized. The remainder is Transferred to the remainder
+    /// destination (conserving, not destroyed). The seizure is fully accounted:
+    /// `restitution + remainder == seized`.
     pub fn split(seized: u64, proven_fee: u64, bounty: u64) -> SlashPayout {
         let restitution = seized.min(proven_fee.saturating_add(bounty));
         SlashPayout {
@@ -147,10 +151,76 @@ impl SlashPayout {
     }
 
     /// The total disposed — always equal to the seizure
-    /// (`restitution + burned`).
+    /// (`restitution + remainder`).
     pub fn total(&self) -> u64 {
         self.restitution + self.remainder
     }
+}
+
+// =============================================================================
+// The junior tranche: a $DREGG first-loss holding, forfeited PRICE-FREE
+// =============================================================================
+
+/// The $DREGG **junior** first-loss tranche of a two-tranche bond.
+///
+/// A separate Payable holding — its own cell, its own asset: $DREGG is not the
+/// relay cell's computron balance, so it lives in a distinct bond cell (a cell
+/// holds value in exactly one asset). On a slash it forfeits PROPORTIONALLY with
+/// pure integer arithmetic and **no price input** (obligation 4 — the slash path
+/// is oracle-free), and it NEVER counts toward the deterrence floor: the senior
+/// (quote) tranche alone bears the penalty. See [`junior_forfeit`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JuniorTranche {
+    /// The $DREGG bond cell — the `from` of the conserving junior forfeit
+    /// [`Effect::Transfer`].
+    pub junior_cell: CellId,
+    /// The junior asset ($DREGG). Carried so the forfeit leg is asset-explicit
+    /// even though a kernel `Transfer` is per-cell (the cell holds one asset).
+    pub junior_asset: AssetId,
+    /// The junior bond before this slash.
+    pub junior_amount: u64,
+    /// $DREGG forfeited: `min(junior_amount, ⌊junior_amount · seized_senior /
+    /// slashable_senior_headroom⌋)` — the SAME fraction of slashable collateral
+    /// the senior seized, in integer arithmetic, with no price term.
+    pub seized_junior: u64,
+    /// The junior bond after this slash (`junior_amount − seized_junior`, ≥ 0).
+    pub new_junior_amount: u64,
+}
+
+/// The proportional junior forfeit — the **price-free kernel** of the two-tranche
+/// rule (obligation 4's Rust shadow).
+///
+/// `seized_junior = min(junior_amount, ⌊junior_amount · seized_senior /
+/// slashable_senior_headroom⌋)`: the junior loses the same *fraction* of its bond
+/// that the senior lost of its slashable collateral. The intermediate product is
+/// computed in `u128` (no overflow), the result never exceeds `junior_amount`
+/// (since `seized_senior ≤ slashable_senior_headroom`, the `min` is a proven
+/// belt-and-suspenders bound), and a zero `slashable_senior_headroom` — the bond
+/// already at its floor — forfeits nothing (no division by zero).
+///
+/// Its signature admits **no price / mark argument**; the slash path can never
+/// consult an oracle. That is not a comment — it is the type. The following must
+/// not compile (a mark threaded into the forfeit):
+/// ```compile_fail
+/// # use dregg_node::relay_dispute::junior_forfeit;
+/// // There is no price term in the slash path — a fourth mark argument is a
+/// // type error, so a crashed-mark regression is type-visible, not silent.
+/// let _ = junior_forfeit(2_000, 900, 9_000, /* price_mark = */ 3u64);
+/// ```
+pub fn junior_forfeit(
+    junior_amount: u64,
+    seized_senior: u64,
+    slashable_senior_headroom: u64,
+) -> u64 {
+    if slashable_senior_headroom == 0 {
+        // No slashable senior collateral (bond at its floor) ⇒ no junior forfeit.
+        return 0;
+    }
+    let proportional =
+        (junior_amount as u128 * seized_senior as u128) / slashable_senior_headroom as u128;
+    // proportional ≤ junior_amount whenever seized_senior ≤ headroom (always true
+    // here); the min is the enforced upper bound "seized_junior ≤ junior_amount".
+    junior_amount.min(proportional as u64)
 }
 
 // =============================================================================
@@ -159,9 +229,10 @@ impl SlashPayout {
 
 /// The concrete consequence of a `slash` verdict: how much of the relay's bond
 /// is seized, the resulting slot values, and how the seized bond is disposed
-/// (restituted to the wronged party, remainder burned). Produced by
-/// [`plan_slash`] / [`referee_then_plan`] and realized as an on-ledger
-/// [`Action`] by [`build_slash_turn`].
+/// (restituted to the wronged party, remainder Transferred to the treasury —
+/// conserving, nothing destroyed). Produced by [`plan_slash`] (senior-only) or
+/// [`plan_two_tranche_slash`] (senior + a $DREGG junior) and realized as an
+/// on-ledger [`Action`] by [`build_slash_turn`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlashPlan {
     /// The bonded relay-operator cell being slashed (the `from` of both the
@@ -190,17 +261,27 @@ pub struct SlashPlan {
     /// On-ledger slash provenance: the `content_hash` of the dropped box, so the
     /// slash names the exact fault that caused it.
     pub reason: [u8; 32],
+    /// The $DREGG **junior** first-loss tranche, when this is a two-tranche plan
+    /// ([`plan_two_tranche_slash`]). `None` for a senior-only plan ([`plan_slash`],
+    /// the legacy intake path). The senior fields above are always the QUOTE
+    /// (computron) tranche that bears the deterrence floor; the junior never
+    /// counts toward it and is forfeited PRICE-FREE ([`junior_forfeit`]).
+    pub junior: Option<JuniorTranche>,
 }
 
-/// Turn a referee verdict into a floor-capped [`SlashPlan`] with a split payout.
+/// Turn a referee verdict into a floor-capped, senior-only [`SlashPlan`] with a
+/// split payout.
 ///
 /// Returns `None` when the verdict is `acquit`. On `slash` it always returns a
 /// plan (recording the dispute), with `seized_amount` capped by the bond floor:
 /// the seizure can never push the bond below `bond_min`, mirroring the
 /// relay-operator slash transition's floor. The seizure is then SPLIT: a bounded
 /// restitution (`min(seized, proven_fee + restitution_bounty)`) to the wronged
-/// party and the remainder BURNED — the operator loses the full seizure, only
-/// `restitution` is credited elsewhere, the rest leaves supply.
+/// party and the remainder Transferred to the remainder destination (a treasury
+/// by default) — the operator loses the full seizure, `restitution` is credited
+/// to the wronged party, and the rest is a CONSERVING Transfer, nothing destroyed.
+/// The plan carries no junior tranche (`junior: None`); [`plan_two_tranche_slash`]
+/// adds the $DREGG junior.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_slash(
     slash: bool,
@@ -222,8 +303,9 @@ pub fn plan_slash(
     let headroom = bond_amount.saturating_sub(bond_min);
     let seized = requested_penalty.min(headroom);
     // Split the seizure: restitution makes the wronged party whole (their proven
-    // loss + a small bounty, never more than was seized); the remainder is burned
-    // (a deflationary deterrent) rather than becoming a windfall to the disputer.
+    // loss + a small bounty, never more than was seized); the remainder is a
+    // conserving Transfer to the remainder destination (the treasury by default)
+    // rather than a windfall to the disputer — nothing is destroyed.
     let payout = SlashPayout::split(seized, proven_fee, restitution_bounty);
     Some(SlashPlan {
         relay_cell,
@@ -234,7 +316,67 @@ pub fn plan_slash(
         new_bond_amount: bond_amount - seized,
         new_dispute_count: dispute_count.saturating_add(1),
         reason,
+        junior: None,
     })
+}
+
+/// Turn a referee verdict into a floor-capped **two-tranche** [`SlashPlan`]: the
+/// QUOTE senior tranche (computrons) pays the penalty in full via the existing
+/// split, and a $DREGG **junior** first-loss tranche forfeits PROPORTIONALLY.
+///
+/// The senior computation is exactly [`plan_slash`] (same floor cap, same split,
+/// same quote-only restitution). The junior forfeit is [`junior_forfeit`] over
+/// the senior's own seizure fraction — **no price argument appears anywhere in
+/// this signature**, so the slash path stays oracle-free (obligation 4). The
+/// junior never counts toward the deterrence floor: it is pure first-loss forfeit,
+/// routed (in [`build_slash_turn`]) as a third conserving Transfer to the same
+/// remainder cell — never to the wronged party (their make-whole is quote-only),
+/// never burned.
+///
+/// Returns `None` on `acquit` (neither tranche is touched).
+#[allow(clippy::too_many_arguments)]
+pub fn plan_two_tranche_slash(
+    slash: bool,
+    // Senior (QUOTE / computron) tranche — the deterrence floor.
+    bond_amount: u64,
+    bond_min: u64,
+    dispute_count: u64,
+    requested_penalty: u64,
+    proven_fee: u64,
+    restitution_bounty: u64,
+    relay_cell: CellId,
+    wronged_party: CellId,
+    reason: [u8; 32],
+    // Junior ($DREGG) first-loss tranche — NO price/mark argument, by design.
+    junior_cell: CellId,
+    junior_asset: AssetId,
+    junior_amount: u64,
+) -> Option<SlashPlan> {
+    let mut plan = plan_slash(
+        slash,
+        bond_amount,
+        bond_min,
+        dispute_count,
+        requested_penalty,
+        proven_fee,
+        restitution_bounty,
+        relay_cell,
+        wronged_party,
+        reason,
+    )?;
+    // The junior forfeits the SAME fraction of collateral the senior did, computed
+    // with pure integers over the senior's slashable headroom — no price.
+    let slashable_senior_headroom = bond_amount.saturating_sub(bond_min);
+    let seized_junior =
+        junior_forfeit(junior_amount, plan.seized_amount, slashable_senior_headroom);
+    plan.junior = Some(JuniorTranche {
+        junior_cell,
+        junior_asset,
+        junior_amount,
+        seized_junior,
+        new_junior_amount: junior_amount - seized_junior,
+    });
+    Some(plan)
 }
 
 /// Run the referee ([`adjudicate_from_inbox`]) against the inbox cell and, on a
@@ -244,7 +386,7 @@ pub fn plan_slash(
 /// The wronged party is `receipt.inbox_owner` interpreted as a cell, and the
 /// slash reason is the dropped box's `content_hash`. `proven_fee` is the wronged
 /// party's proven loss (bounding restitution); the remainder of any seizure is
-/// burned.
+/// Transferred to the remainder destination (conserving).
 #[allow(clippy::too_many_arguments)]
 pub fn referee_then_plan(
     evidence: &EvidenceOfDrop,
@@ -276,18 +418,21 @@ pub fn referee_then_plan(
 }
 
 /// Drive the relay-operator slash transition for `plan` and append the payout
-/// effects (restitution Transfer + remainder Burn).
+/// effects (restitution Transfer + remainder Transfer + — for a two-tranche plan
+/// — the junior $DREGG forfeit Transfer).
 ///
 /// [`build_slash_action`] emits the state-transition effects only (`SetField`
-/// bond, `SetField` dispute_count, `EmitEvent`); this appends up to two effects
-/// that dispose of the seized bond FROM the relay cell: the bounded RESTITUTION
-/// [`Effect::Transfer`] to the wronged party, and the REMAINDER as an
-/// [`Effect::Burn`] on the relay cell's balance (destroyed, no destination
-/// credit). Their amounts sum to the seizure, so the relay cell's balance drops
-/// by exactly the seizure while supply drops by the burned remainder. A
-/// zero-amount leg is omitted (a fully-restituted seizure carries a single
-/// Transfer; a fully-burned seizure carries a single Burn; a zero seizure
-/// carries neither).
+/// bond, `SetField` dispute_count, `EmitEvent`); this appends the effects that
+/// dispose of the seized bond: the bounded senior RESTITUTION [`Effect::Transfer`]
+/// to the wronged party and the senior REMAINDER as a conserving
+/// [`Effect::Transfer`] to the remainder destination (both FROM the relay cell,
+/// summing to the senior seizure — nothing destroyed), and, when
+/// [`SlashPlan::junior`] is set, the junior $DREGG forfeit as a third conserving
+/// Transfer FROM the junior bond cell to the SAME remainder destination. Every
+/// leg is a conserving Transfer (no [`Effect::Burn`]): the senior seizure leaves
+/// the relay cell in full, the junior forfeit leaves the junior cell in full. A
+/// zero-amount leg is omitted (a zero seizure carries no senior legs; a zero or
+/// absent junior forfeit carries no junior leg).
 pub fn build_slash_turn(cclerk: &AppCipherclerk, plan: &SlashPlan) -> Action {
     let mut action = build_slash_action(
         cclerk,
@@ -297,7 +442,8 @@ pub fn build_slash_turn(cclerk: &AppCipherclerk, plan: &SlashPlan) -> Action {
         plan.reason,
     );
     // Restitution leg: the wronged party's bounded make-whole (a conserving
-    // Transfer out of the relay cell).
+    // Transfer out of the relay cell). QUOTE-only — the make-whole never arrives
+    // in the correlated junior asset.
     if plan.payout.restitution > 0 {
         action.effects.push(Effect::Transfer {
             from: plan.relay_cell,
@@ -305,15 +451,30 @@ pub fn build_slash_turn(cclerk: &AppCipherclerk, plan: &SlashPlan) -> Action {
             amount: plan.payout.restitution,
         });
     }
-    // Burn leg: the remainder of the seizure is destroyed — debited from the
-    // relay cell's balance with no destination credit, so supply decreases by
-    // `seized - restitution`. No global-owned entity receives it.
+    // Senior remainder leg: the rest of the seizure is Transferred to the
+    // remainder destination (the treasury by default) — a conserving Transfer,
+    // debited from the relay cell and credited to the destination. Nothing is
+    // destroyed; no global-owned entity receives it beyond the deployment-chosen
+    // remainder cell.
     if plan.payout.remainder > 0 {
         action.effects.push(Effect::Transfer {
             from: plan.relay_cell,
             to: plan.remainder_dest,
             amount: plan.payout.remainder,
         });
+    }
+    // Junior forfeit leg ($DREGG): the proportional first-loss forfeit, a single
+    // conserving Transfer FROM the junior bond cell TO the same remainder
+    // destination. Never to the wronged party (restitution is quote-only), never
+    // burned. Omitted when there is no junior tranche or the forfeit is zero.
+    if let Some(junior) = &plan.junior {
+        if junior.seized_junior > 0 {
+            action.effects.push(Effect::Transfer {
+                from: junior.junior_cell,
+                to: plan.remainder_dest,
+                amount: junior.seized_junior,
+            });
+        }
     }
     action
 }
@@ -327,15 +488,15 @@ pub fn build_slash_turn(cclerk: &AppCipherclerk, plan: &SlashPlan) -> Action {
 /// The body is the referee's own [`EvidenceOfDrop`] (the relay's signed receipt
 /// + the dispute height), which deserializes directly from JSON. `requested_penalty`
 /// is the TOTAL seizure the disputant asks for (capped by the bond floor); the
-/// seizure is then split into restitution + a burned remainder, so a large
-/// request is not a windfall to the disputer.
+/// seizure is then split into restitution + a remainder Transferred to the
+/// remainder destination, so a large request is not a windfall to the disputer.
 #[derive(Debug, Deserialize)]
 pub struct DisputeRequest {
     /// The relay's own signed receipt + claimed outcome + dispute height.
     pub evidence: EvidenceOfDrop,
     /// Requested TOTAL seizure in computrons; defaults to [`DEFAULT_SLASH_PENALTY`].
     /// The wronged party's restitution is bounded by their proven loss regardless
-    /// of this; the remainder is burned.
+    /// of this; the remainder is Transferred to the remainder destination.
     #[serde(default)]
     pub requested_penalty: Option<u64>,
 }
@@ -353,8 +514,10 @@ pub struct DisputeResponse {
     /// Of the seizure, computrons restituted to the wronged party (their bounded
     /// proven loss). `0` on acquit.
     pub restitution_amount: u64,
-    /// Of the seizure, computrons BURNED (the remainder, removed from supply).
-    /// `0` on acquit.
+    /// Of the seizure, the remainder Transferred to the remainder destination
+    /// (the treasury by default) — conserving, NOT destroyed. `0` on acquit. (The
+    /// field name is retained for wire compatibility; the value is the remainder
+    /// leg, not a burn — see [`SlashPayout`].)
     pub burned_amount: u64,
     /// The bond before this dispute.
     pub prior_bond_amount: u64,
@@ -369,7 +532,7 @@ pub struct DisputeResponse {
     /// The dropped box's `content_hash` (hex) — the slash provenance.
     pub reason: String,
     /// Number of payout effects the paired ledger turn would carry: one per
-    /// non-zero leg (the restitution Transfer and/or the remainder Burn), so
+    /// non-zero leg (the restitution Transfer and/or the remainder Transfer), so
     /// `0`, `1`, or `2`.
     pub payout_effects: usize,
 }
@@ -433,8 +596,9 @@ pub async fn handle_dispute(
     // The wronged party's PROVEN per-message loss: the fee-policy floor a sender
     // must post per message (the minimum they paid for the box the relay
     // dropped). Restitution is bounded by this + a small bounty; the remainder of
-    // any seizure is burned. Promotion sources the exact paid fee from the
-    // dropped box's queue-entry `deposit` (see module docs).
+    // any seizure is Transferred to the remainder destination (conserving).
+    // Promotion sources the exact paid fee from the dropped box's queue-entry
+    // `deposit` (see module docs).
     let proven_fee = s.config.fee_policy.min_deposit_computrons;
     // The relay-operator cell identity. The legacy service does not track the
     // minted relay CellId; the operator identity is its closest in-process
@@ -457,12 +621,12 @@ pub async fn handle_dispute(
         // Apply the slash transition to the in-process template mirror: bond
         // down by the seized amount, dispute_count +1 — the same slot moves the
         // ledger `build_slash_action` encodes. The paired restitution Transfer
-        // and remainder Burn ride the on-ledger turn (see `build_slash_turn`);
+        // and remainder Transfer ride the on-ledger turn (see `build_slash_turn`);
         // the mirror carries no per-cell balance ledger.
         s.template.slots[BOND_AMOUNT_SLOT as usize] = u64_to_field(plan.new_bond_amount);
         s.template.slots[DISPUTE_COUNT_SLOT as usize] = u64_to_field(plan.new_dispute_count);
         // One payout effect per non-zero leg of the split (restitution Transfer,
-        // remainder Burn).
+        // remainder Transfer).
         let payout_effects =
             usize::from(plan.payout.restitution > 0) + usize::from(plan.payout.remainder > 0);
         return Ok(Json(DisputeResponse {
@@ -556,13 +720,13 @@ mod tests {
     fn proven_drop_restitutes_wronged_and_routes_remainder_to_treasury() {
         // A well-formed receipt + a dropped inbox (no delivered hash, no refund)
         // convicts. The seizure SPLITS: a bounded restitution to the wronged
-        // owner + the remainder BURNED. The bond leaves the operator in full;
-        // supply drops by the burned remainder.
+        // owner + the remainder Transferred to the treasury. The bond leaves the
+        // operator in full; both legs are conserving, nothing destroyed.
         let evidence = EvidenceOfDrop::from_receipt(demo_receipt());
         let inbox = InboxState::from_dequeue(&evidence.receipt, &[], [0x64; 32], false);
         let relay_cell = CellId::from_bytes([0x11; 32]);
 
-        // Seize 500; proven loss 120 + bounty 30 => restitution 150, burn 350.
+        // Seize 500; proven loss 120 + bounty 30 => restitution 150, remainder 350.
         let (slash, plan) = referee_then_plan(
             &evidence, &inbox, 10_000, 1_000, 0, 500, 120, 30, relay_cell,
         );
@@ -572,7 +736,7 @@ mod tests {
         assert_eq!(plan.payout.restitution, 150, "proven loss + bounty");
         assert_eq!(
             plan.payout.remainder, 350,
-            "the remainder is burned (deflationary deterrent)"
+            "the remainder is Transferred to the treasury (conserving)"
         );
         assert_eq!(
             plan.payout.total(),
@@ -586,7 +750,7 @@ mod tests {
 
         let action = build_slash_turn(&test_cclerk(), &plan);
         // build_slash_action = SetField(bond) + SetField(dispute) + EmitEvent (3);
-        // the weld appends the restitution Transfer + the remainder Burn.
+        // the weld appends the restitution Transfer + the remainder Transfer.
         assert_eq!(action.effects.len(), 5);
 
         // Exactly one restitution Transfer, seized FROM the relay cell TO the
@@ -638,8 +802,8 @@ mod tests {
     #[test]
     fn whole_seizure_to_treasury_when_no_proven_loss() {
         // No proven fee and no bounty => the wronged party is owed nothing extra,
-        // so the ENTIRE seizure is burned (a single Burn, no Transfer). Supply
-        // drops by the whole seizure.
+        // so the ENTIRE seizure is Transferred to the treasury (a single conserving
+        // Transfer). Nothing is destroyed.
         let evidence = EvidenceOfDrop::from_receipt(demo_receipt());
         let inbox = InboxState::from_dequeue(&evidence.receipt, &[], [0x64; 32], false);
         let relay_cell = CellId::from_bytes([0x11; 32]);
@@ -684,9 +848,9 @@ mod tests {
     }
 
     #[test]
-    fn restitution_capped_at_seized_nothing_to_burn() {
+    fn restitution_capped_at_seized_no_remainder() {
         // The proven loss dwarfs the seizure (bond at its floor): restitution is
-        // capped at the whole seizure and nothing is burned.
+        // capped at the whole seizure and there is no remainder.
         let evidence = EvidenceOfDrop::from_receipt(demo_receipt());
         let inbox = InboxState::from_dequeue(&evidence.receipt, &[], [0x64; 32], false);
         let relay_cell = CellId::from_bytes([0x11; 32]);
@@ -702,7 +866,7 @@ mod tests {
             plan.payout.restitution, 200,
             "restitution never exceeds the seizure"
         );
-        assert_eq!(plan.payout.remainder, 0, "nothing left to burn");
+        assert_eq!(plan.payout.remainder, 0, "no remainder left");
         assert_eq!(plan.payout.total(), plan.seized_amount);
 
         let action = build_slash_turn(&test_cclerk(), &plan);
@@ -717,13 +881,16 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, Effect::Burn { .. }))
             .count();
-        assert_eq!(burns, 0, "a zero-burn leg is omitted");
+        assert_eq!(
+            burns, 0,
+            "never a burn — every leg is a conserving Transfer"
+        );
     }
 
     #[test]
     fn payout_split_conserves() {
         // The pure split accounts for the whole seizure for every
-        // proven_fee/bounty: restitution + burned == seized.
+        // proven_fee/bounty: restitution + remainder == seized.
         for (seized, fee, bounty) in [
             (0u64, 0u64, 0u64),
             (500, 0, 0),
@@ -736,7 +903,7 @@ mod tests {
             assert_eq!(
                 p.restitution + p.remainder,
                 seized,
-                "restitution + burned == seized"
+                "restitution + remainder == seized"
             );
             assert_eq!(p.total(), seized);
             assert!(
@@ -769,7 +936,7 @@ mod tests {
     fn bond_floor_caps_the_seizure() {
         // penalty 5_000 but only 200 above the floor ⇒ seize 200, land exactly on
         // bond_min. The dispute is still recorded, and the 200 splits per the
-        // payout model (here proven loss 500 => all 200 restituted, nothing burned).
+        // payout model (here proven loss 500 => all 200 restituted, no remainder).
         let evidence = EvidenceOfDrop::from_receipt(demo_receipt());
         let inbox = InboxState::from_dequeue(&evidence.receipt, &[], [0x64; 32], false);
         let relay_cell = CellId::from_bytes([0x11; 32]);
@@ -809,5 +976,261 @@ mod tests {
         for v in [0u64, 1, 500, 10_000, u64::MAX] {
             assert_eq!(u64_from_field(u64_to_field(v)), v);
         }
+    }
+
+    // ── Two-tranche bond (Track C rung 1): a QUOTE senior + a $DREGG junior ──────
+    //
+    // The senior tranche (computrons) is the deterrence floor and pays the penalty
+    // IN FULL through the existing split. The $DREGG junior is a first-loss tranche
+    // that forfeits PROPORTIONALLY with integer arithmetic and NO price input, and
+    // NEVER counts toward the floor. The whole path stays oracle-free and conserving
+    // (no burn; the junior forfeit is a Transfer to the remainder cell, restitution
+    // stays quote-only).
+
+    #[test]
+    fn two_tranche_junior_forfeits_proportionally_senior_pays_in_full_conserving() {
+        // seized_senior / slashable_headroom = 900 / 9_000 = 1/10, so the $DREGG
+        // junior (2_000) forfeits the SAME fraction: 200 — computed with no price.
+        let relay_cell = CellId::from_bytes([0x11; 32]);
+        let junior_cell = CellId::from_bytes([0x22; 32]);
+        let dregg_asset: AssetId = *blake3::hash(b"dregg").as_bytes();
+        let wronged = CellId::from_bytes([0x03; 32]);
+
+        let plan = plan_two_tranche_slash(
+            true,
+            10_000,
+            1_000,
+            0,
+            900,
+            120,
+            30,
+            relay_cell,
+            wronged,
+            [0xAB; 32],
+            junior_cell,
+            dregg_asset,
+            2_000,
+        )
+        .expect("a slash verdict yields a two-tranche plan");
+
+        // Senior pays the QUOTE penalty in full: 900 seized, split 150 / 750.
+        assert_eq!(
+            plan.seized_amount, 900,
+            "senior pays the quote penalty in full"
+        );
+        assert_eq!(plan.payout.restitution, 150);
+        assert_eq!(plan.payout.remainder, 750);
+        assert_eq!(
+            plan.payout.total(),
+            plan.seized_amount,
+            "senior (quote) split conserves"
+        );
+
+        let junior = plan
+            .junior
+            .expect("two-tranche plan carries a junior tranche");
+        assert_eq!(
+            junior.seized_junior, 200,
+            "junior forfeits the same 1/10 fraction (price-free)"
+        );
+        assert_eq!(junior.new_junior_amount, 1_800);
+        assert_eq!(junior.junior_amount, 2_000);
+        assert_eq!(
+            junior.junior_asset, dregg_asset,
+            "the junior tranche is $DREGG, not computrons"
+        );
+
+        // Emit: senior restitution + senior remainder + junior forfeit = 3
+        // conserving Transfers atop build_slash_action's state effects. No burn.
+        let action = build_slash_turn(&test_cclerk(), &plan);
+        assert!(
+            !action
+                .effects
+                .iter()
+                .any(|e| matches!(e, Effect::Burn { .. })),
+            "no burn — every leg is a conserving Transfer"
+        );
+        let transfers: Vec<(CellId, CellId, u64)> = action
+            .effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Transfer { from, to, amount } => Some((*from, *to, *amount)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            transfers.len(),
+            3,
+            "senior restitution + senior remainder + junior forfeit"
+        );
+        // Senior legs come FROM the relay cell (computrons).
+        assert_eq!(
+            transfers[0],
+            (relay_cell, wronged, 150),
+            "senior restitution"
+        );
+        assert_eq!(
+            transfers[1],
+            (relay_cell, default_slash_treasury(), 750),
+            "senior remainder to the treasury"
+        );
+        // Junior leg comes FROM the $DREGG bond cell to the SAME remainder cell —
+        // never to the wronged party (their make-whole is quote-only), never burned.
+        assert_eq!(
+            transfers[2],
+            (junior_cell, default_slash_treasury(), 200),
+            "junior $DREGG forfeit to the treasury"
+        );
+
+        // Per-asset conservation of the split (obligation 1):
+        //   quote: restitution + remainder == seized_senior
+        assert_eq!(
+            plan.payout.restitution + plan.payout.remainder,
+            plan.seized_amount
+        );
+        //   dregg: the whole junior seizure leaves the junior cell (restitution_dregg = 0)
+        assert_eq!(junior.seized_junior, transfers[2].2);
+    }
+
+    #[test]
+    fn two_tranche_no_seizure_beyond_each_tranches_bond() {
+        let relay_cell = CellId::from_bytes([0x11; 32]);
+        let junior_cell = CellId::from_bytes([0x22; 32]);
+        let dregg: AssetId = [0x07; 32];
+        let wronged = CellId::from_bytes([0x03; 32]);
+
+        // (a) The WHOLE slashable senior is taken (penalty ≫ headroom): senior
+        // lands EXACTLY on bond_min; junior forfeits its WHOLE bond (fraction 1),
+        // never a token more, landing on zero.
+        let plan = plan_two_tranche_slash(
+            true,
+            5_000,
+            1_000,
+            0,
+            999_999,
+            0,
+            0,
+            relay_cell,
+            wronged,
+            [1u8; 32],
+            junior_cell,
+            dregg,
+            3_000,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.seized_amount, 4_000,
+            "senior capped at headroom (5000-1000)"
+        );
+        assert_eq!(plan.new_bond_amount, 1_000, "senior never below bond_min");
+        let j = plan.junior.unwrap();
+        assert_eq!(
+            j.seized_junior, 3_000,
+            "junior forfeits its whole bond at fraction 1"
+        );
+        assert_eq!(j.new_junior_amount, 0, "junior never below zero");
+        assert!(
+            j.seized_junior <= j.junior_amount,
+            "seized_junior never exceeds the junior bond"
+        );
+
+        // (b) Bond already at its floor (headroom 0): senior seizes nothing and
+        // the junior forfeits NOTHING — no division by zero, no seizure at all.
+        let plan0 = plan_two_tranche_slash(
+            true,
+            1_000,
+            1_000,
+            2,
+            5_000,
+            0,
+            0,
+            relay_cell,
+            wronged,
+            [2u8; 32],
+            junior_cell,
+            dregg,
+            3_000,
+        )
+        .unwrap();
+        assert_eq!(plan0.seized_amount, 0, "no slashable senior headroom");
+        let j0 = plan0.junior.unwrap();
+        assert_eq!(
+            j0.seized_junior, 0,
+            "no senior seizure => no junior forfeit (no div-by-zero)"
+        );
+        assert_eq!(j0.new_junior_amount, 3_000, "junior untouched");
+
+        // The price-free kernel of the rule, asserted directly at its bounds.
+        assert_eq!(
+            junior_forfeit(3_000, 4_000, 4_000),
+            3_000,
+            "fraction 1 => whole junior, capped at the bond"
+        );
+        assert_eq!(
+            junior_forfeit(3_000, 0, 4_000),
+            0,
+            "no senior seizure => zero"
+        );
+        assert_eq!(
+            junior_forfeit(3_000, 5, 0),
+            0,
+            "zero headroom => zero (no div-by-zero)"
+        );
+        // No overflow: the intermediate product is computed in u128.
+        assert_eq!(junior_forfeit(u64::MAX, u64::MAX, u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn two_tranche_acquit_seizes_neither_tranche() {
+        // Acquit ⇒ no plan at all — neither the senior nor the junior is touched.
+        let plan = plan_two_tranche_slash(
+            false,
+            10_000,
+            1_000,
+            0,
+            900,
+            120,
+            30,
+            CellId::from_bytes([0x11; 32]),
+            CellId::from_bytes([0x03; 32]),
+            [0u8; 32],
+            CellId::from_bytes([0x22; 32]),
+            [0x07; 32],
+            2_000,
+        );
+        assert!(plan.is_none(), "acquit => no plan, neither tranche seized");
+    }
+
+    #[test]
+    fn plan_slash_carries_no_junior_tranche() {
+        // The legacy senior-only planner produces a plan with no junior tranche,
+        // so the existing intake path and its emitted turn are unchanged.
+        let plan = plan_slash(
+            true,
+            10_000,
+            1_000,
+            0,
+            500,
+            120,
+            30,
+            CellId::from_bytes([0x11; 32]),
+            CellId::from_bytes([0x03; 32]),
+            [0xAB; 32],
+        )
+        .unwrap();
+        assert!(
+            plan.junior.is_none(),
+            "senior-only plan has no junior tranche"
+        );
+        let action = build_slash_turn(&test_cclerk(), &plan);
+        let transfers = action
+            .effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Transfer { .. }))
+            .count();
+        assert_eq!(
+            transfers, 2,
+            "senior-only: restitution + remainder, no junior leg"
+        );
     }
 }
