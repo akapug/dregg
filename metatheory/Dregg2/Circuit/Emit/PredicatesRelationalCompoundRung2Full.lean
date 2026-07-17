@@ -4,7 +4,6 @@ emitted relational-predicate descriptor (`relationalPredicateDesc`): what the Po
 `CollisionFree` DOES close, and the ONE residual it PROVABLY cannot — because that residual is an
 EMIT/AIR gap, not a crypto residual.
 
-<<<<<<< ours
 ## Outcome — CLOSED (the emit weld C2b `diff = value_a − value_b` closes the historical residual)
 
 ⚑ UPDATE: the emit gate `(R) : diff = value_a − value_b` (C2b) is now EMITTED in
@@ -16,9 +15,6 @@ forge (`value_a = 5`, `value_b = 3`, `diff = 0`) is now REJECTED by the active-r
 
 ## Historical framing (retained below for context)
 
-=======
-## Outcome — STILL_PARTIAL (crypto is already maximal; the tail is an emit fix)
->>>>>>> theirs
 
 `PredicatesRelationalCompoundRung2.relational_commit_binds` (the committed RUNG 2) already discharges
 the crypto slice UNCONDITIONALLY and with a genuine reference anchor: under `CollisionFree` the
@@ -136,7 +132,6 @@ theorem relTraceV_chipSound (hash : List ℤ → ℤ) (vb : ℤ) :
   · exact ⟨[5, 0], List.replicate 7 0, by decide, by decide, rfl⟩
   · exact ⟨[vb, 0], List.replicate 7 0, by simp [CHIP_RATE], by decide, rfl⟩
 
-<<<<<<< ours
 /-- **The HONEST 2-row trace (`value_a = value_b = 5`) `Satisfied2`s the descriptor** — on the active
 row 0 every gate body vanishes: the WELD `diff − value_a + value_b = 0 − 5 + 5 = 0` holds, EQ mode
 `eq · diff = 1 · 0 = 0`, `result_bit = 1`; the two commitment lookups hit the sound chip table and the
@@ -145,14 +140,6 @@ lookups still hit; the memory legs are the empty-log balance. (A trace with `val
 `diff = 0` NO LONGER satisfies — the weld gate rejects it; see `decoupled_forge_rejected`.) -/
 theorem honestTraceV_satisfied2 (hash : List ℤ → ℤ) :
     Satisfied2 hash relationalPredicateDesc (fun _ => 0) (fun _ => (0, 0)) [] (relTraceV hash 5) where
-=======
-/-- **The 2-row trace `Satisfied2`s the descriptor** — on the active row 0 every gate body vanishes
-(EQ mode: `range = neq = 0`, `eq · diff = 1 · 0 = 0`, `result_bit = 1`), the two commitment lookups
-hit the sound chip table, and the first-row PI pins read their `pi`; on the wrap row 1 the gates and
-first-pins are vacuous and the lookups still hit; the memory legs are the empty-log balance. -/
-theorem relTraceV_satisfied2 (hash : List ℤ → ℤ) (vb : ℤ) :
-    Satisfied2 hash relationalPredicateDesc (fun _ => 0) (fun _ => (0, 0)) [] (relTraceV hash vb) where
->>>>>>> theirs
   rowConstraints := by
     intro i hi c hc
     have hF0 : ((0 : Nat) == 0) = true := rfl
@@ -163,7 +150,6 @@ theorem relTraceV_satisfied2 (hash : List ℤ → ℤ) (vb : ℤ) :
     interval_cases i <;>
       fin_cases hc <;>
       simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, Lookup.holdsAt, gate, piFirst,
-<<<<<<< ours
         commitLookup, relTraceV, relTfV, relPubV, relRowV, envAt, subC, subV, binBody, sumE,
         atLeastOne, oneMinus, prodE, recomposeExpr, recomposeAExpr, recomposeBExpr, EmittedExpr.eval,
         VALUE_A, BLINDING_A, VALUE_B, BLINDING_B, DIFF, NEQ_INV, RESULT_BIT, RANGE_FLAG, EQ_FLAG,
@@ -176,20 +162,6 @@ theorem relTraceV_satisfied2 (hash : List ℤ → ℤ) (vb : ℤ) :
         | exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
         | trivial
         | rfl
-=======
-        commitLookup, hF0, hF1, relTraceV, relTfV, relPubV, relRowV, envAt,
-        VALUE_A, BLINDING_A, VALUE_B, BLINDING_B, DIFF, RESULT_BIT, RANGE_FLAG, EQ_FLAG, NEQ_FLAG,
-        COMMIT_A, COMMIT_B, COMMIT_VERIFY, ZERO_PAD, List.getD_cons_zero, List.getD_cons_succ,
-        reduceIte, reduceCtorEq] <;>
-      first
-        | rfl
-        | exact List.mem_cons.mpr (Or.inl rfl)
-        | exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
-        | decide
-        | exact fun h => absurd h (by decide)
-        | trivial
-        | simp
->>>>>>> theirs
   rowHashes := by intro i _; trivial
   rowRanges := by intro i _ r hr; simp only [relationalPredicateDesc, List.not_mem_nil] at hr
   memAddrsNodup := List.nodup_nil
@@ -215,7 +187,6 @@ theorem relRowV_diff (hash : List ℤ → ℤ) (vb : ℤ) :
 theorem relRowV_eq (hash : List ℤ → ℤ) (vb : ℤ) :
     (envAt (relTraceV hash vb) 0).loc EQ_FLAG = 1 := rfl
 
-<<<<<<< ours
 /-! ## §2 — THE FULL CLOSURE: the weld (C2b) makes EQ genuinely certify `value_a = value_b`.
 
 Before the weld, `diff` was a FREE witness decoupled from the committed values, so an accepting EQ
@@ -232,78 +203,22 @@ conclusion is a genuine security property from three legs (`relational_eq_forces
 `diff`↔values and forces `value_a = value_b`; `relational_commit_binds` CR-binds the columns to the
 reference), not a tautology. -/
 theorem eq_relation_over_committed {hash : List ℤ → ℤ} {minit : ℤ → ℤ}
-=======
-/-! ## §2 — THE CRYPTO-TERMINALITY: the forgery survives the strongest CR carrier.
-
-The forge is `relTraceV hash 3` over an INJECTIVE `hash` (so `CollisionFree (relPrims hash)` holds).
-It `Satisfied2`s at height 2 (RUNG-1 gates ACTIVE), its committed values are CR-BOUND to `(5, 3)`,
-it is in EQ mode with `result_bit = 1` and the active EQ gate forcing `diff = 0` — yet `5 ≠ 3`. So no
-crypto carrier closes "committed values satisfy the relation": even genuine collision resistance
-leaves the relation over committed values a forgery. -/
-
-/-- **`forge_binds_unequal_committed` — the residual is CRYPTO-TERMINAL.** Under a REAL injective
-`hash` the accepting EQ forge CR-binds committed `value_a = 5`, `value_b = 3` (via RUNG 2), with the
-active RUNG-1 comparison forcing `diff = 0` and `result_bit = 1` — yet `5 ≠ 3`. The commitment
-binding (RUNG 2) is maximal, and it does NOT reach the relation over the committed values. -/
-theorem forge_binds_unequal_committed (hash : List ℤ → ℤ) (hinj : Function.Injective hash) :
-    Satisfied2 hash relationalPredicateDesc (fun _ => 0) (fun _ => (0, 0)) [] (relTraceV hash 3)
-      ∧ (envAt (relTraceV hash 3) 0).loc EQ_FLAG = 1
-      ∧ (envAt (relTraceV hash 3) 0).loc RESULT_BIT = 1
-      ∧ (envAt (relTraceV hash 3) 0).loc DIFF = 0
-      ∧ (envAt (relTraceV hash 3) 0).loc VALUE_A = 5
-      ∧ (envAt (relTraceV hash 3) 0).loc VALUE_B = 3
-      ∧ (5 : ℤ) ≠ 3 := by
-  have hsat := relTraceV_satisfied2 hash 3
-  have hchip := relTraceV_chipSound hash 3
-  have hsem := relational_sat_imp_sem (t := relTraceV hash 3) (relTraceV_two hash 3) hchip hsat
-  obtain ⟨hva, _, hvb, _⟩ := relational_commit_binds (t := relTraceV hash 3) (relTraceV_pos hash 3)
-    hchip hsat (collisionFree_of_injective hinj) 5 0 3 0
-    (by simp [relTraceV, relPubV]) (by simp [relTraceV, relPubV])
-  exact ⟨hsat, relRowV_eq hash 3, hsem.resultTrue, hsem.eqRel (relRowV_eq hash 3), hva, hvb, by decide⟩
-
-/-! ## §3 — The missing emit gate `(R)` is the discriminator (it FAILS on the accepting forge). -/
-
-/-- **`forge_violates_diffGate` — `(R)` is load-bearing.** On the accepting forge, `diff = 0` while
-`value_a − value_b = 5 − 3 = 2`, so the (currently un-emitted) gate `diff = value_a − value_b` FAILS.
-Adding `(R)` to the descriptor would REJECT this forge — the gap is the exact soundness deficit. -/
-theorem forge_violates_diffGate (hash : List ℤ → ℤ) :
-    (envAt (relTraceV hash 3) 0).loc DIFF = 0
-      ∧ (envAt (relTraceV hash 3) 0).loc VALUE_A - (envAt (relTraceV hash 3) 0).loc VALUE_B = 2
-      ∧ (envAt (relTraceV hash 3) 0).loc DIFF
-          ≠ (envAt (relTraceV hash 3) 0).loc VALUE_A - (envAt (relTraceV hash 3) 0).loc VALUE_B := by
-  rw [relRowV_diff hash 3, relRowV_valueA hash 3, relRowV_valueB hash 3]
-  refine ⟨rfl, by decide, by decide⟩
-
-/-! ## §4 — THE CONSTRUCTIVE CLOSURE: the exact emit fix `(R)` closes FULL, unconditionally.
-
-Adding the single active-row arithmetic gate `(R) : diff = value_a − value_b`, together with RUNG 1
-(`relational_eq_forces_diff_zero`) and RUNG 2 (`relational_commit_binds`), closes `va = vb` — the
-relation over the cryptographically-committed values (the FULL no-forgery the descriptor cannot
-currently reach). The `hdiffGate` hypothesis is NOT a re-assumed residual — it is the precise, named
-emit constraint the descriptor OMITS; the conclusion `va = vb` is a genuine security property derived
-from three independent legs, not a tautology. -/
-
-/-- **`eq_relation_over_committed_if_diffGate` — the emit fix closes FULL.** For any accepting
-height-≥2 trace in EQ mode against a sound chip table + the CR carrier + a genuine reference opening
-`(va, ba, vb, bb)` of the public commitments, the ONE missing gate `(R)` forces the reference-bound
-committed values equal: `va = vb`. -/
-theorem eq_relation_over_committed_if_diffGate {hash : List ℤ → ℤ} {minit : ℤ → ℤ}
->>>>>>> theirs
     {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hlen : 2 ≤ t.rows.length)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
     (hsat : Satisfied2 hash relationalPredicateDesc minit mfin maddrs t)
+    (hcanon : RelCanon t)
+    (hcc : RelCommitCanon t)
     (cf : @CollisionFree ℤ _ (relPrims hash))
     (va ba vb bb : ℤ)
     (hrefA : t.pub 0 = hash [va, ba])
     (hrefB : t.pub 1 = hash [vb, bb])
-<<<<<<< ours
     (heq : (envAt t 0).loc EQ_FLAG = 1) :
     va = vb := by
   have hvcols : (envAt t 0).loc VALUE_A = (envAt t 0).loc VALUE_B :=
-    relational_eq_forces_values_equal hlen hChip hsat heq
+    relational_eq_forces_values_equal hlen hChip hsat hcanon heq
   obtain ⟨hva, _, hvb, _⟩ :=
-    relational_commit_binds (by omega) hChip hsat cf va ba vb bb hrefA hrefB
+    relational_commit_binds (by omega) hChip hsat hcc cf va ba vb bb hrefA hrefB
   rw [← hva, ← hvb]; exact hvcols
 
 /-! ## §3 — THE DECOUPLING FORGE IS NOW REJECTED (the weld's teeth, machine-checked). -/
@@ -330,14 +245,32 @@ theorem decoupled_forge_rejected (hash : List ℤ → ℤ) :
 
 /-! ## §4 — Non-vacuity: the closure FIRES on the honest trace; the forge rejection is genuine. -/
 
+/-- **The canonicality envelope is INHABITED for the honest trace** (`value_a = value_b = 5`, `diff = 0`,
+flags/bits all `0`/`1` — canonical low-half cells; the commitment digests ride the excluded, non-canonical
+slots). So the closure below is fed a genuine `RelCanon`, not a vacuous one. -/
+theorem relTraceV_canon (hash : List ℤ → ℤ) : RelCanon (relTraceV hash 5) := by
+  -- Every `RelCanon` cell is hash-INDEPENDENT (the commitment digests ride the excluded slots), so each
+  -- reduces to a literal; `of_decide_eq_true rfl` closes the closed decision the kernel computes after
+  -- the (vacuous) `hash` branch is dropped — the `decide` TACTIC's free-var guard would spuriously reject.
+  refine ⟨of_decide_eq_true rfl, of_decide_eq_true rfl, of_decide_eq_true rfl,
+    of_decide_eq_true rfl, of_decide_eq_true rfl, of_decide_eq_true rfl,
+    of_decide_eq_true rfl, ?_, ?_, ?_⟩
+  · intro i hi; simp only [NUM_DIFF_BITS] at hi; interval_cases i <;> exact of_decide_eq_true rfl
+  · intro i hi; simp only [NUM_DIFF_BITS] at hi; interval_cases i <;> exact of_decide_eq_true rfl
+  · intro i hi; simp only [NUM_DIFF_BITS] at hi; interval_cases i <;> exact of_decide_eq_true rfl
+
 /-- **`honest_relation_fires` — the FULL closure FIRES (non-vacuity).** Every hypothesis of
 `eq_relation_over_committed` is discharged from the concrete honest trace (`value_a = value_b = 5`)
 over an injective `hash`, and the conclusion `va = vb` fires as `5 = 5` — a genuine committed value,
 not a tautology. So the closure's hypothesis set is jointly satisfiable. -/
-theorem honest_relation_fires (hash : List ℤ → ℤ) (hinj : Function.Injective hash) :
-    (5 : ℤ) = 5 :=
-  eq_relation_over_committed (t := relTraceV hash 5) (relTraceV_two hash 5)
-    (relTraceV_chipSound hash 5) (honestTraceV_satisfied2 hash) (collisionFree_of_injective hinj)
+theorem honest_relation_fires (hash : List ℤ → ℤ) (hinj : Function.Injective hash)
+    (hcf : 0 ≤ hash [5, 0] ∧ hash [5, 0] < 2013265921) :
+    (5 : ℤ) = 5 := by
+  have hcc : RelCommitCanon (relTraceV hash 5) := by
+    refine ⟨?_, ?_, ?_, ?_⟩ <;> exact hcf
+  exact eq_relation_over_committed (t := relTraceV hash 5) (relTraceV_two hash 5)
+    (relTraceV_chipSound hash 5) (honestTraceV_satisfied2 hash) (relTraceV_canon hash)
+    hcc (collisionFree_of_injective hinj)
     5 0 5 0 (by simp [relTraceV, relPubV]) (by simp [relTraceV, relPubV]) (relRowV_eq hash 5)
 
 /-- The honest trace's committed values are genuinely `(5, 5)` — a real equal pair the closure
@@ -346,55 +279,15 @@ theorem honest_committed_values (hash : List ℤ → ℤ) :
     (envAt (relTraceV hash 5) 0).loc VALUE_A = 5
       ∧ (envAt (relTraceV hash 5) 0).loc VALUE_B = 5 :=
   ⟨relRowV_valueA hash 5, relRowV_valueB hash 5⟩
-=======
-    (heq : (envAt t 0).loc EQ_FLAG = 1)
-    -- THE MISSING EMIT GATE (R): `diff = value_a − value_b` on the active row — the in-circuit
-    -- arithmetic constraint `relationalPredicateDesc` (and the Rust hand-AIR) does NOT produce.
-    (hdiffGate : (envAt t 0).loc DIFF = (envAt t 0).loc VALUE_A - (envAt t 0).loc VALUE_B) :
-    va = vb := by
-  have hdiff0 : (envAt t 0).loc DIFF = 0 := relational_eq_forces_diff_zero hlen hChip hsat heq
-  obtain ⟨hva, _, hvb, _⟩ :=
-    relational_commit_binds (by omega) hChip hsat cf va ba vb bb hrefA hrefB
-  rw [hva, hvb, hdiff0] at hdiffGate
-  omega
-
-/-- **`honest_satisfies_diffGate` — `(R)` ACCEPTS the honest trace.** On the honest EQ proof
-(`value_a = value_b = 5`), `diff = 0 = 5 − 5`, so the missing gate holds — `(R)` accepts the honest
-witness while §3 shows it rejects the forge: `(R)` is a genuine filter, not `True`. -/
-theorem honest_satisfies_diffGate (hash : List ℤ → ℤ) :
-    (envAt (relTraceV hash 5) 0).loc DIFF
-      = (envAt (relTraceV hash 5) 0).loc VALUE_A - (envAt (relTraceV hash 5) 0).loc VALUE_B := by
-  rw [relRowV_diff hash 5, relRowV_valueA hash 5, relRowV_valueB hash 5]; decide
-
-/-- **`honest_relation_fires` — the closure FIRES (non-vacuity).** Every hypothesis of
-`eq_relation_over_committed_if_diffGate` — including the emit gate `(R)` — is discharged from the
-concrete honest trace over an injective `hash`, and the conclusion `va = vb` fires (`5 = 5`, a
-genuine committed value). So the closure theorem's hypothesis set is jointly satisfiable; the fix is
-achievable, not vacuous. -/
-theorem honest_relation_fires (hash : List ℤ → ℤ) (hinj : Function.Injective hash) :
-    (5 : ℤ) = 5 :=
-  eq_relation_over_committed_if_diffGate (t := relTraceV hash 5) (relTraceV_two hash 5)
-    (relTraceV_chipSound hash 5) (relTraceV_satisfied2 hash 5) (collisionFree_of_injective hinj)
-    5 0 5 0 (by simp [relTraceV, relPubV]) (by simp [relTraceV, relPubV]) (relRowV_eq hash 5)
-    (honest_satisfies_diffGate hash)
->>>>>>> theirs
 
 /-! ## §5 — Axiom tripwires: every keystone is `#assert_axioms`-clean (carriers NAMED). -/
 
 #assert_axioms relTraceV_chipSound
-<<<<<<< ours
 #assert_axioms honestTraceV_satisfied2
+#assert_axioms relTraceV_canon
 #assert_axioms eq_relation_over_committed
 #assert_axioms decoupled_forge_rejected
 #assert_axioms honest_relation_fires
 #assert_axioms honest_committed_values
-=======
-#assert_axioms relTraceV_satisfied2
-#assert_axioms forge_binds_unequal_committed
-#assert_axioms forge_violates_diffGate
-#assert_axioms eq_relation_over_committed_if_diffGate
-#assert_axioms honest_satisfies_diffGate
-#assert_axioms honest_relation_fires
->>>>>>> theirs
 
 end Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2Full

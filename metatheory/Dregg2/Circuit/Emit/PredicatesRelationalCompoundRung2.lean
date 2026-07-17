@@ -114,26 +114,44 @@ the two commitment PI pins are FIRST-row pins — both fire on row `0` of any no
 opening leg is available WITHOUT the `2 ≤ height` active-row hypothesis `RelClassified` needs (which
 is only for the comparison GATES). This is the leg RUNG 2 upgrades. -/
 
-/-- **`commit_opens`** — against the named `ChipTableSound` carrier, the public commitments `pi[0]`,
-`pi[1]` are Poseidon2 openings of the trace's private value/blinding columns on row `0`. -/
+/-- **The deployed commitment/PI canonicality envelope.** Under the field-faithful mod-`p` denotation
+the two commitment `PiBinding` gates bind only a congruence `loc COMMIT ≡ pub [ZMOD p]`. The commitment
+cells and the two public commitment inputs are canonical field elements (`0 ≤ · < p`, the deployed
+range-check invariant / a Poseidon2 digest is a field element), so each congruence collapses to the
+genuine ℤ equality `loc COMMIT = pub`. (For a globally-injective reference `hash` these bounds are the
+LOCAL field-valuedness of the two commitments actually used — jointly satisfiable with injectivity, so
+the non-vacuity witnesses below stay genuine.) -/
+def RelCommitCanon (t : VmTrace) : Prop :=
+  (0 ≤ (envAt t 0).loc COMMIT_A ∧ (envAt t 0).loc COMMIT_A < 2013265921)
+  ∧ (0 ≤ (envAt t 0).pub 0 ∧ (envAt t 0).pub 0 < 2013265921)
+  ∧ (0 ≤ (envAt t 0).loc COMMIT_B ∧ (envAt t 0).loc COMMIT_B < 2013265921)
+  ∧ (0 ≤ (envAt t 0).pub 1 ∧ (envAt t 0).pub 1 < 2013265921)
+
+/-- **`commit_opens`** — against the named `ChipTableSound` carrier + the commitment canonicality
+envelope, the public commitments `pi[0]`, `pi[1]` are Poseidon2 openings of the trace's private
+value/blinding columns on row `0`. -/
 theorem commit_opens {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
     {t : VmTrace} (hpos : 0 < t.rows.length)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
-    (hsat : Satisfied2 hash relationalPredicateDesc minit mfin maddrs t) :
+    (hsat : Satisfied2 hash relationalPredicateDesc minit mfin maddrs t)
+    (hcc : RelCommitCanon t) :
     t.pub 0 = hash [(envAt t 0).loc VALUE_A, (envAt t 0).loc BLINDING_A]
       ∧ t.pub 1 = hash [(envAt t 0).loc VALUE_B, (envAt t 0).loc BLINDING_B] := by
+  obtain ⟨hcCA, hcP0, hcCB, hcP1⟩ := hcc
   have hF : ((0 : Nat) == 0) = true := rfl
-  -- lookup A → COMMIT_A = hash [value_a, blinding_a]
+  -- lookup A → COMMIT_A = hash [value_a, blinding_a]  (an EXACT ℤ opening from the chip table).
   have hla := hsat.rowConstraints 0 hpos (commitLookup VALUE_A BLINDING_A COMMIT_A LANES_A)
     rmem_lookupA
   simp only [commitLookup, VmConstraint2.holdsAt, Lookup.holdsAt] at hla
   have hsa := chip_lookup_sound hash (t.tf .poseidon2) hChip (envAt t 0).loc
     [.var VALUE_A, .var BLINDING_A] COMMIT_A LANES_A (by decide) hla
   simp only [List.map_cons, List.map_nil, EmittedExpr.eval] at hsa
-  -- pin A → COMMIT_A = pi[0]
+  -- pin A → COMMIT_A ≡ pi[0] [ZMOD p]; canonical ⇒ COMMIT_A = pi[0].
   have hpa := hsat.rowConstraints 0 hpos (piFirst COMMIT_A 0) rmem_commitAPin
   rw [hF] at hpa
   simp only [piFirst, VmConstraint2.holdsAt, holdsVm_piFirst_true] at hpa
+  have heqA : (envAt t 0).loc COMMIT_A = (envAt t 0).pub 0 := by
+    obtain ⟨kA, hkA⟩ := hpa.dvd; omega
   -- lookup B → COMMIT_B = hash [value_b, blinding_b]
   have hlb := hsat.rowConstraints 0 hpos (commitLookup VALUE_B BLINDING_B COMMIT_B LANES_B)
     rmem_lookupB
@@ -141,15 +159,17 @@ theorem commit_opens {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ
   have hsb := chip_lookup_sound hash (t.tf .poseidon2) hChip (envAt t 0).loc
     [.var VALUE_B, .var BLINDING_B] COMMIT_B LANES_B (by decide) hlb
   simp only [List.map_cons, List.map_nil, EmittedExpr.eval] at hsb
-  -- pin B → COMMIT_B = pi[1]
+  -- pin B → COMMIT_B ≡ pi[1] [ZMOD p]; canonical ⇒ COMMIT_B = pi[1].
   have hpb := hsat.rowConstraints 0 hpos (piFirst COMMIT_B 1) rmem_commitBPin
   rw [hF] at hpb
   simp only [piFirst, VmConstraint2.holdsAt, holdsVm_piFirst_true] at hpb
+  have heqB : (envAt t 0).loc COMMIT_B = (envAt t 0).pub 1 := by
+    obtain ⟨kB, hkB⟩ := hpb.dvd; omega
   refine ⟨?_, ?_⟩
   · have hpub : (envAt t 0).pub 0 = t.pub 0 := rfl
-    rw [← hpub, ← hpa]; exact hsa
+    rw [← hpub, ← heqA]; exact hsa
   · have hpub : (envAt t 0).pub 1 = t.pub 1 := rfl
-    rw [← hpub, ← hpb]; exact hsb
+    rw [← hpub, ← heqB]; exact hsb
 
 /-! ## §3 — THE RUNG-2 DISCHARGE: the committed values are BOUND by the public commitments. -/
 
@@ -165,6 +185,7 @@ theorem relational_commit_binds {hash : List ℤ → ℤ} {minit : ℤ → ℤ} 
     (hpos : 0 < t.rows.length)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
     (hsat : Satisfied2 hash relationalPredicateDesc minit mfin maddrs t)
+    (hcc : RelCommitCanon t)
     (cf : @CollisionFree ℤ _ (relPrims hash))
     (va ba vb bb : ℤ)
     (hrefA : t.pub 0 = hash [va, ba])
@@ -172,7 +193,7 @@ theorem relational_commit_binds {hash : List ℤ → ℤ} {minit : ℤ → ℤ} 
     (envAt t 0).loc VALUE_A = va ∧ (envAt t 0).loc BLINDING_A = ba
       ∧ (envAt t 0).loc VALUE_B = vb ∧ (envAt t 0).loc BLINDING_B = bb := by
   letI := relPrims hash
-  obtain ⟨hoa, hob⟩ := commit_opens hpos hChip hsat
+  obtain ⟨hoa, hob⟩ := commit_opens hpos hChip hsat hcc
   have hcollA : hash [(envAt t 0).loc VALUE_A, (envAt t 0).loc BLINDING_A] = hash [va, ba] := by
     rw [← hoa]; exact hrefA
   have hcollB : hash [(envAt t 0).loc VALUE_B, (envAt t 0).loc BLINDING_B] = hash [vb, bb] := by
@@ -340,17 +361,23 @@ theorem bwTrace_satisfied2 :
 satisfying trace, its sound chip table, the CR carrier (from `Function.Injective hash`), and the honest
 reference `(5, 0, 5, 1)` to `relational_commit_binds` FORCES the committed value/blinding columns equal
 to the reference — WITHOUT assuming it. -/
-theorem bwTrace_binds_fires (hinj : Function.Injective hash) :
+theorem bwTrace_binds_fires (hinj : Function.Injective hash)
+    (hc0 : 0 ≤ hash [5, 0] ∧ hash [5, 0] < 2013265921)
+    (hc1 : 0 ≤ hash [5, 1] ∧ hash [5, 1] < 2013265921) :
     (envAt (bwTrace hash) 0).loc VALUE_A = 5 ∧ (envAt (bwTrace hash) 0).loc BLINDING_A = 0
       ∧ (envAt (bwTrace hash) 0).loc VALUE_B = 5 ∧ (envAt (bwTrace hash) 0).loc BLINDING_B = 1 :=
   relational_commit_binds (by simp [bwTrace]) (bwTf_chipSound hash) (bwTrace_satisfied2 hash)
-    (collisionFree_of_injective hinj) 5 0 5 1 (by simp [bwTrace, bwPub]) (by simp [bwTrace, bwPub])
+    ⟨hc0, hc0, hc1, hc1⟩ (collisionFree_of_injective hinj) 5 0 5 1
+    (by simp [bwTrace, bwPub]) (by simp [bwTrace, bwPub])
 
 /-- The bound committed value is the genuine `value_a = 5` (a real committed value, not a constant `0`)
-— the conclusion is achievably true, not vacuous. -/
-theorem bwTrace_binds_value (hinj : Function.Injective hash) :
+— the conclusion is achievably true, not vacuous (an injective `hash` with `hash [5,0]`, `hash [5,1]`
+landing in `[0, p)` witnesses the joint hypotheses). -/
+theorem bwTrace_binds_value (hinj : Function.Injective hash)
+    (hc0 : 0 ≤ hash [5, 0] ∧ hash [5, 0] < 2013265921)
+    (hc1 : 0 ≤ hash [5, 1] ∧ hash [5, 1] < 2013265921) :
     (envAt (bwTrace hash) 0).loc VALUE_A = 5 ∧ (5 : ℤ) ≠ 0 :=
-  ⟨(bwTrace_binds_fires hash hinj).1, by decide⟩
+  ⟨(bwTrace_binds_fires hash hinj hc0 hc1).1, by decide⟩
 
 end TrueWitness
 
