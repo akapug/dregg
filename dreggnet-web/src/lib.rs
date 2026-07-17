@@ -83,8 +83,8 @@ use dreggnet_council::{CandidateProposal, CouncilOffering};
 use dreggnet_market::MarketOffering;
 use dreggnet_offerings::dungeon::{DungeonOffering, DungeonSession};
 use dreggnet_offerings::{
-    Action, DreggIdentity, Frontend, HostError, Offering, OfferingHost, OfferingInfo, Outcome,
-    SessionConfig, SessionId, Surface, VerifyReport,
+    Action, DreggIdentity, FileResumeStore, Frontend, HostError, Offering, OfferingHost,
+    OfferingInfo, Outcome, SessionConfig, SessionId, Surface, VerifyReport,
 };
 
 /// What the web frontend last presented for a session — the deos [`Surface`] and the cap-gated
@@ -1998,9 +1998,12 @@ fn catalog_missing_offering(key: &str) -> String {
 //  * PERSISTENCE — the Descent leaderboard is durable over sqlite (`descent_store`, rusqlite):
 //    with a `DATABASE_URL` set, submitted runs survive a restart, re-verified by REPLAY on boot
 //    (`DescentState::load_from_store`) so a tampered row is dropped and cannot resurrect a cheat.
-//    Unset → the in-RAM seeded demo (the committed tests' path). STILL EPHEMERAL: the live game
-//    SESSIONS (`WebState` / the catalog `OfferingHost`) — a restart drops in-progress sessions;
-//    what is durable is the leaderboard (the shareable, re-verifiable growth artifact).
+//    Unset → the in-RAM seeded demo (the committed tests' path). The live game SESSIONS (the
+//    catalog `OfferingHost`) are durable the same way: with `DREGGNET_WEB_SESSION_DIR` set, each
+//    session's move-log persists to a `FileResumeStore` and the host resumes every session on boot
+//    by REPLAY (`resolve_demo_host`) — a tampered log refuses to reopen. Unset → in-memory only.
+//    STILL EPHEMERAL: the single-offering `WebState` surface (`/session/{id}`, offering #0 alone —
+//    the catalog serves the same dungeon durably at `/offerings/dungeon/...`).
 //  * An HTTP run-INGEST endpoint — `POST /descent/submit` (see `descent::post_submit`): a stranger
 //    submits a run's reproducible input (day + player + move sequence); it is re-executed +
 //    no-cheat-verified before it can rank (an honest run ingested + persisted, a forged run 4xx).
@@ -2021,6 +2024,64 @@ pub fn demo_host() -> OfferingHost {
     let mut host = catalog_default_host();
     dreggnet_surfaces::register_surfaces(&mut host);
     register_non_game_offerings(&mut host);
+    host
+}
+
+/// **Resolve the demo host from the environment** — the session-durability switch, mirroring
+/// [`resolve_demo_descent`]. With `DREGGNET_WEB_SESSION_DIR` set (non-empty), the host is built over
+/// a durable [`FileResumeStore`] rooted there ([`demo_host_resumed_from`]): live game sessions
+/// survive a restart by move-log replay. Unset → plain [`demo_host`], byte-identical to the
+/// store-less behavior (nothing attached, nothing persisted — the committed tests' path).
+pub fn resolve_demo_host() -> OfferingHost {
+    match std::env::var("DREGGNET_WEB_SESSION_DIR") {
+        Ok(dir) if !dir.is_empty() => demo_host_resumed_from(dir),
+        _ => demo_host(),
+    }
+}
+
+/// **The demo host over a durable session store at `dir`** — the restart-survival weld. Opens a
+/// [`FileResumeStore`] rooted at `dir`, attaches it ([`OfferingHost::with_resume_store`], so every
+/// session open + landed advance is written through), and boot-resumes every persisted move-log
+/// ([`OfferingHost::resume_all`]) — each live session reopens to its identical committed state by
+/// replay. Fail-closed on both edges:
+/// - a **tampered** log is refused on re-drive ([`dreggnet_offerings::ResumeError::Refused`]) —
+///   logged and left refused; its file is NOT deleted (the evidence stays on disk for inspection);
+/// - an **unopenable** `dir` logs a warning and falls back to the store-less host (the server still
+///   boots, sessions stay in-memory) — the same degrade-not-refuse posture as [`resolve_demo_descent`].
+pub fn demo_host_resumed_from(dir: impl Into<std::path::PathBuf>) -> OfferingHost {
+    let dir = dir.into();
+    let mut host = demo_host();
+    match FileResumeStore::open(&dir) {
+        Ok(store) => {
+            host = host.with_resume_store(Box::new(store));
+            let results = host.resume_all();
+            let resumed = results.iter().filter(|(_, r)| r.is_ok()).count();
+            let refused = results.len() - resumed;
+            tracing::info!(
+                dir = %dir.display(),
+                resumed,
+                refused,
+                "session store attached — persisted game sessions resumed by move-log replay"
+            );
+            for (log, outcome) in &results {
+                if let Err(e) = outcome {
+                    tracing::warn!(
+                        key = %log.key,
+                        id = %log.id.0,
+                        error = %e,
+                        "a persisted session log refused to reopen (fail-closed); its file is kept"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "could not open DREGGNET_WEB_SESSION_DIR — sessions stay in-memory (ephemeral)"
+            );
+        }
+    }
     host
 }
 
@@ -2157,9 +2218,12 @@ pub fn demo_win() -> (Vec<usize>, u64, u64) {
 ///
 /// **Persistence.** The Descent leaderboard is durable when a `DATABASE_URL` is set (a sqlite path
 /// / `sqlite:` url; see [`resolve_demo_descent`]): submitted runs survive a restart, re-verified by
-/// replay on boot. With `DATABASE_URL` unset (the committed tests' path) the board is the in-RAM
-/// seeded demo — nothing persists, so the existing suite is unaffected. To serve a specific
-/// pre-built descent state (e.g. a test's sqlite store), use [`make_app_with_descent`].
+/// replay on boot. The live game sessions are durable when `DREGGNET_WEB_SESSION_DIR` is set (a
+/// directory; see [`resolve_demo_host`]): each session's move-log persists to a
+/// [`FileResumeStore`] and every session resumes on boot by replay — a tampered log refuses to
+/// reopen. With both unset (the committed tests' path) everything is in-RAM — nothing persists, so
+/// the existing suite is unaffected. To serve a specific pre-built descent state (e.g. a test's
+/// sqlite store), use [`make_app_with_descent`].
 pub fn make_app() -> Router {
     make_app_with_descent(resolve_demo_descent())
 }
@@ -2169,7 +2233,9 @@ pub fn make_app() -> Router {
 /// board while reusing the whole merged app.
 pub fn make_app_with_descent(descent: Arc<DescentState>) -> Router {
     let web = Arc::new(WebState::new());
-    let catalog = Arc::new(CatalogState::with_host(demo_host));
+    // The session-durability weld: `DREGGNET_WEB_SESSION_DIR` set → the catalog host is built over
+    // a durable `FileResumeStore` and boot-resumes persisted sessions; unset → plain `demo_host`.
+    let catalog = Arc::new(CatalogState::with_host(resolve_demo_host));
 
     Router::new()
         .route("/", get(index))

@@ -1,3 +1,21 @@
+# ✅ THIS IS THE UNIT THAT ACTUALLY RUNS. Verified live 2026-07-15.
+#   Installed on hbox as a systemd USER unit with `loginctl enable-linger`; published
+#   by `tailscale funnel` at https://hbox-dregg.skunk-emperor.ts.net. Both the unit and
+#   the funnel config SURVIVED a hard reboot cleanly — this is the reference example of
+#   deploy/PRACTICES.md §2 (unit + linger = durable).
+#
+# ⚠ ITS DREGG_NODE_URL TARGET IS DEAD. The 127.0.0.1:8420 node below was hand-run with
+#   an ephemeral --data-dir and did NOT survive the reboot; its ledger is permanently
+#   gone. Submitted runs cannot anchor until a node is back on :8420 — and the
+#   replacement must be a UNIT with a PERSISTENT data dir, not another hand-run process
+#   (TODO-1, deploy/README.md). See deploy/games/RUNBOOK-FUNNEL.md's status banner.
+#
+# ⚠ hbox is ALSO the build/prove box, and build load hard-killed it this session,
+#   taking this demo down with it. Moving the demo off hbox (or capping the prover) is
+#   TODO-3. The MemoryHigh/MemoryMax below bound THIS unit — they do nothing to bound
+#   the prover, which is what actually kills the box.
+#
+# ---------------------------------------------------------------------------
 # dregg games web demo — FUNNEL VARIANT (Tailscale-Funnel public exposure).
 #
 # Same `dreggnet-web-server` as dregg-web-games.service, but wired for the
@@ -47,6 +65,10 @@ Environment=DREGGNET_WEB_BIND=127.0.0.1:8790
 # Fallback node target if the env file omits DREGG_NODE_URL: the hbox solo devnet
 # node on loopback :8420 (the faucet node). Submitted runs anchor on its ledger.
 Environment=DREGG_NODE_URL=http://127.0.0.1:8420
+# Durable game sessions: each session's move-log persists here and is resumed on
+# boot by replay (a tampered log refuses to reopen). Without this, a restart drops
+# every in-progress game.
+Environment=DREGGNET_WEB_SESSION_DIR=%h/dregg-games/sessions
 WorkingDirectory=%h/dev/breadstuffs
 ExecStart=%h/dev/breadstuffs/target/release/dreggnet-web-server
 Restart=always
@@ -57,6 +79,10 @@ RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=%h/.local/state/dregg-games
+# The session move-log store (DREGGNET_WEB_SESSION_DIR) — must be writable under
+# ProtectSystem=strict or the store degrades to in-memory. `-` = ignore if the
+# directory is missing (create it first: mkdir -p ~/dregg-games/sessions).
+ReadWritePaths=-%h/dregg-games
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true

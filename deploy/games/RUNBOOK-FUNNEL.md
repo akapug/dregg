@@ -1,5 +1,27 @@
 # Games deploy runbook — FUNNEL variant (public via Tailscale Funnel, no gateway)
 
+> ## ✅ THIS IS WHAT RUNS. Status verified 2026-07-15.
+>
+> **Already live:** `https://hbox-dregg.skunk-emperor.ts.net`. The
+> `dregg-web-games-funnel.service` user unit (+ linger) and the `tailscale funnel`
+> config **both survived this session's hard reboot cleanly**. The go-live flip in
+> step (d) below **has already happened** — read (d) as "how it was done / how to
+> redo it", not as a pending action.
+>
+> **⚠ BUT STEP (a) IS BROKEN — the `:8420` node this points at is GONE.**
+> That node was **hand-run with an ephemeral `--data-dir`**. hbox was hard-killed by
+> build load (`deploy/PRACTICES.md` §1) and the node died with it: **the devnet
+> ledger — the operator cell and every anchored Descent run — is permanently lost.**
+> The unit still sets `DREGG_NODE_URL=http://127.0.0.1:8420`. Until a node is back
+> there, a submitted run still ranks in-process but **cannot anchor** (fail-closed,
+> `cell not found`) — and the one-time unlock + faucet-materialize in (a) must be
+> redone from scratch against the new node.
+>
+> **Do not hand-run the replacement.** That is exactly what lost the ledger. It needs
+> a systemd **user** unit with a **persistent** `--data-dir` (e.g.
+> `%h/.local/state/dregg-node`, never `mktemp -d`) + `enable-linger` — TODO-1 in
+> `deploy/README.md`, and the whole of `PRACTICES.md` §2.
+
 The fastest path to **games-on-a-devnet live for testing**: expose the
 `dreggnet-web-server` publicly **directly from hbox** with `tailscale funnel` —
 **no AWS gateway, no gateway↔tailnet join, no DNS, no Caddy**. Tailscale Funnel
@@ -129,7 +151,7 @@ curl -fsS http://127.0.0.1:8420/api/node/identity | jq '.agent_balance'
 ### (b) Place the funnel env on hbox  ⟨EMBER⟩
 ```bash
 # on hbox:
-mkdir -p ~/.config/dregg ~/.local/state/dregg-games
+mkdir -p ~/.config/dregg ~/.local/state/dregg-games ~/dregg-games/sessions
 cp ~/dev/breadstuffs/deploy/games/.env.funnel.example ~/.config/dregg/games-funnel.env
 $EDITOR ~/.config/dregg/games-funnel.env
 #   DREGGNET_WEB_BIND=127.0.0.1:8790   (loopback — Funnel proxies it)
@@ -227,8 +249,14 @@ systemctl --user stop dregg-web-games-funnel
 - **Funnel must be enabled on the tailnet** (it is — `nextop` already funnels on this
   tailnet). If `tailscale funnel` reports Funnel is not available, that is an admin
   (tailnet policy) enablement, an ember step.
-- **Live game sessions are ephemeral** — a restart drops in-progress sessions; the Descent
-  leaderboard is durable (sqlite, re-verified by replay on boot).
+- **Live game sessions survive a restart** — the unit sets
+  `DREGGNET_WEB_SESSION_DIR=%h/dregg-games/sessions`, so each session's move-log persists there
+  and every session is resumed on boot by replay (the state is re-derived from the logged moves,
+  never trusted from a snapshot). A tampered log refuses to reopen — fail-closed; its file is kept
+  for inspection. The directory must exist and be writable (`mkdir -p ~/dregg-games/sessions`,
+  step b) — the unit whitelists it under `ProtectSystem=strict`; if it is missing, sessions fall
+  back to in-memory (logged at boot). The Descent leaderboard is durable separately (sqlite,
+  re-verified by replay on boot).
 - **Public port is 443** — Funnel only supports `443`/`8443`/`10000` publicly; we reverse
   the public `443` to the local `8790`. There is one public surface per tailnet node on
   `443`; if hbox-dregg already funnels something on `443`, use `8443`/`10000` or free it.
