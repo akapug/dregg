@@ -40,11 +40,22 @@ fix — NOT a blind rewrite.
   dest B, burns the note with no B-side mint. SPOT-CONFIRMED. → fix lane (a3fac0ad, falsifier-first).
 - **#6 overflow** (`node/equivocation_court_service.rs:663` + `sdk/factories.rs:177`) — `req.amount +
   fee` wraps → escrow≠bond. → same fix lane.
-- **#1 fork risk** (`node/blocklace_sync.rs:1062`), **#3 predicate proof unbound to attr/credential**
-  (`credentials/verification.rs:244`; PREREQ: does dregg-bridge bind fact_commitment?), **#4 value_binding
-  unbound to bits** (`cell-crypto/value_link_zk.rs:470`), **#7 amended quorum threshold ignored**
-  (`blocklace/ordering.rs:307`). → READ-ONLY deep-verify lane (a812f3039d) before any fix.
-  Also latent/deprecated soundness (discounted): addressing.rs:341, constitution.rs:168, storage/blinded+operator (deprecated).
+- **#1 fail-OPEN consensus hole** (`node/blocklace_sync.rs:1062`) — DEEP-VERIFIED REAL: solo-branch keys
+  on the PQ-PROJECTED count; a live member with no published ML-DSA key (an acknowledged state) collapses
+  a node to SOLO → finalizes with NO quorum → divergence; genesis-hybrid-unconfigured partitions the whole
+  federation. Raw counts computed but never gate. Cited test covers only the vote layer. ⚑ ONE-LINE FIX
+  (gate solo on RAW admitted count, fail-closed) → fix lane ac3c117a (falsifier-first). **Land before launch.**
+- **#3 predicate FORGERY, live, 2 sites** (`credentials/verification.rs:261` + `intent/fulfillment.rs:605`)
+  — DEEP-VERIFIED REAL: calls the BARE `verify_predicate_proof` against the proof's OWN commitment (`x==x`),
+  so a genuine `Gte(18)` proof attaches to a DIFFERENT credential. The sound `verify_predicate_proof_third_party`
+  EXISTS; the caller just doesn't use it. Introduced by `bac9e2b95` (closed the disclosure leg, left predicate
+  self-referential). → fix lane af2807ce (persvati; route through the sound fn + falsifier). **High blast.**
+- **#7 amended-quorum** (`blocklace/ordering.rs:307`) — REAL but LOW: off the live `tau` path (only bites
+  `tau_unified` consumers amending ABOVE supermajority). Fix = `max(group.threshold, supermajority(n))`. QUEUED.
+- **#4 value_binding unbound** (`cell-crypto/value_link_zk.rs:470`) — REAL constraint gap but UNWIRED (0
+  non-test consumers) = a named seam; danger is the DOC asserting a binding it doesn't deliver. Fix = correct
+  the doc + forbid-wiring guard until bound. QUEUED (doc/guard, not a live hole).
+  Also latent/deprecated (discounted): addressing.rs:341, constitution.rs:168, storage/blinded+operator (deprecated).
 - **Tier-2 silent-gate + Tier-3 correctness + item-22 postcard-class (~15 sites) + item-24 CLI fail-open**:
   proven-pattern applications, QUEUED to fan out path-limited when a build lane frees (lock ceiling ~2).
   Headliners: watcher.rs:363 credits on RPC balance (never calls the trustless verifier — the "Discord
