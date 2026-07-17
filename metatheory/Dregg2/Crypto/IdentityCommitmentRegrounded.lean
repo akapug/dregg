@@ -56,7 +56,10 @@ open Dregg2.Circuit.HashFloorHonesty
 open Dregg2.Crypto.HermineHintMLWE (CommitReveal HashCR)
 open Dregg2.Crypto.HermineHashCRRegrounded
   (commitRevealFamily commitRevealFamily_CR_of_hashcr hermine_commitment_binding_advantage_bound
-   crEquivocator)
+   hermine_commitment_binding_advantage_bound_eff crEquivocator)
+open Dregg2.Crypto.FloorGames
+  (Adversary hashGame finderToAdv HashCRHardQuant collisionResistant_iff_hashCRHardQuant_top
+   hard_bot_vacuous)
 
 set_option autoImplicit false
 
@@ -84,6 +87,25 @@ theorem id_commitment_binds_advantage_bound {Pre Id : Type} [DecidableEq Pre] [D
     (equivocator : CollisionFinder (idCommitFamily cr)) :
     Negl (collisionAdv (idCommitFamily cr) equivocator) :=
   hermine_commitment_binding_advantage_bound hCR equivocator
+
+/-- **⚑ RE-GROUNDED `IdentityCommitment.id_commitment_binds` — the `Eff`-carrying gate.** The bare-CR sibling
+above rests on `CollisionResistant (idCommitFamily cr)` = `HashCRHardQuant (idCommitFamily cr) ⊤`
+(`collisionResistant_iff_hashCRHardQuant_top`), FALSE for the compressing deployed id-commit hash
+`BLAKE3(tag, ed ‖ len(ml) ‖ ml)` — so it transports no security. This one conditions on the SAME collision
+game at an EXPLICIT class `Eff`: under it, an enrollment-equivocation finder in the class (`hEff`) has
+negligible advantage — "one id ⟹ one key pair EXCEPT with negligible probability". Routes through the
+generic `hermine_commitment_binding_advantage_bound_eff`.
+
+⚑ **THE `hEff` OBLIGATION IS UNDISCHARGED AND THAT IS THE HONEST STATE** (`FloorGames` §8 — no cost model);
+the floor is priced at both poles in §3. -/
+theorem id_commitment_binds_advantage_bound_eff {Pre Id : Type} [DecidableEq Pre] [DecidableEq Id]
+    (cr : CommitReveal Unit Pre Id)
+    (Eff : Adversary (hashGame (idCommitFamily cr)) → Prop)
+    (equivocator : CollisionFinder (idCommitFamily cr))
+    (hEff : Eff (finderToAdv equivocator))
+    (hD : HashCRHardQuant (idCommitFamily cr) Eff) :
+    Negl (collisionAdv (idCommitFamily cr) equivocator) :=
+  hermine_commitment_binding_advantage_bound_eff Eff equivocator hEff hD
 
 /-! ## §3 — non-vacuity: the floor is satisfiable AND load-bearing on the id-commitment. -/
 
@@ -128,11 +150,53 @@ theorem id_commitment_binds_fires (equivocator : CollisionFinder idFamily) :
     Negl (collisionAdv idFamily equivocator) :=
   hermine_commitment_binding_advantage_bound idFamily_CR equivocator
 
+/-! ## §4 — the `Eff` parameter, PRICED at both poles, and the CANARY. -/
+
+/-- **(TOOTH — `Eff := ⊤` is FALSE at the deployed compressing id-commit.)** The bare-CR floor at the
+colliding `IdentityCommitment.badCR` is refuted (`idCommit_badCR_not_CR`), and it IS `HashCRHardQuant _ ⊤`
+(`collisionResistant_iff_hashCRHardQuant_top`) — so the `⊤` class is FALSE. The price of `hEff`, stated as
+a theorem: the class cannot be left implicit. -/
+theorem idCommit_eff_top_false :
+    ¬ HashCRHardQuant (idCommitFamily Dregg2.Crypto.IdentityCommitment.badCR) (fun _ => True) :=
+  fun h => idCommit_badCR_not_CR ((collisionResistant_iff_hashCRHardQuant_top _).mpr h)
+
+/-- **(TOOTH — the OTHER pole: `Eff := ⊥` is vacuous.)** At the empty class the floor holds for ANY
+id-commit hash. -/
+theorem idCommit_eff_bot_vacuous {Pre Id : Type} [DecidableEq Pre] [DecidableEq Id]
+    (cr : CommitReveal Unit Pre Id) :
+    HashCRHardQuant (idCommitFamily cr) (fun _ => False) :=
+  hard_bot_vacuous _
+
+/-- **(CANARY — the gate does NOT follow from the floor applied at another adversary.)** From the floor at
+some OTHER adversary `B` the enrollment-equivocator's negligibility does not follow: `hD B hB` bounds a
+DIFFERENT ensemble, and only the game-advantage bridge at the extracted finder connects it. -/
+example {Pre Id : Type} [DecidableEq Pre] [DecidableEq Id] (cr : CommitReveal Unit Pre Id)
+    (Eff : Adversary (hashGame (idCommitFamily cr)) → Prop)
+    (equivocator : CollisionFinder (idCommitFamily cr))
+    (B : Adversary (hashGame (idCommitFamily cr))) (hB : Eff B)
+    (hD : HashCRHardQuant (idCommitFamily cr) Eff) : True := by
+  fail_if_success
+    (have : Negl (collisionAdv (idCommitFamily cr) equivocator) := hD B hB)
+  trivial
+
+/-- **THE `Eff` GATE FIRES AT A REAL FLOOR WITNESS.** On the injective deployed `IdentityCommitment.exCR`
+the `Eff`-floor at `⊤` holds (`idCommit_exCR_CR`, an INHABITED hypothesis, unlike the vacuous injective
+floor), so the `Eff` gate runs end-to-end to a genuine `Negl`. -/
+theorem id_commitment_binds_eff_fires
+    (equivocator : CollisionFinder (idCommitFamily Dregg2.Crypto.IdentityCommitment.exCR)) :
+    Negl (collisionAdv (idCommitFamily Dregg2.Crypto.IdentityCommitment.exCR) equivocator) :=
+  id_commitment_binds_advantage_bound_eff Dregg2.Crypto.IdentityCommitment.exCR (fun _ => True)
+    equivocator trivial ((collisionResistant_iff_hashCRHardQuant_top _).mp idCommit_exCR_CR)
+
 #assert_all_clean [
   id_commitment_binds_advantage_bound,
+  id_commitment_binds_advantage_bound_eff,
   idCommit_exCR_CR,
   idCommit_badCR_not_CR,
-  id_commitment_binds_fires
+  id_commitment_binds_fires,
+  idCommit_eff_top_false,
+  idCommit_eff_bot_vacuous,
+  id_commitment_binds_eff_fires
 ]
 
 end Dregg2.Crypto.IdentityCommitmentRegrounded

@@ -45,6 +45,7 @@ Hash-signature sponge leg. The STARK/FRI/apex sponge consumers are `Circuit.Floo
 `RandomnessBeaconRegrounded` / `XmVrfRefinementRegrounded`. Stays in the hash-signature subtree.
 -/
 import Dregg2.Tactics.ThreadAdvantageBound
+import Dregg2.Crypto.FloorGames
 
 namespace Dregg2.Crypto.HashSigMerkleRegrounded
 
@@ -52,6 +53,9 @@ open Dregg2.Crypto.ConcreteSecurity (Negl)
 open Dregg2.Circuit.HashFloorHonesty
   (KeyedHashFamily CollisionFinder CollisionResistant collisionAdv idFamily idFamily_CR
    brokenFamily brokenFamily_not_CR)
+open Dregg2.Crypto.FloorGames
+  (Adversary hashGame finderToAdv HashCRHardQuant collisionAdv_eq_gameAdv
+   collisionResistant_iff_hashCRHardQuant_top hard_bot_vacuous)
 
 set_option autoImplicit false
 
@@ -75,6 +79,23 @@ theorem merkle_ots_binds_advantage_bound {F : KeyedHashFamily}
     Negl (collisionAdv F leafSwap) := by
   thread_advantage_bound
 
+/-- **⚑ RE-GROUNDED `HashSigMerkle.merkle_ots_binds_index` — the `Eff`-carrying key-swap binding.** The
+bare-CR sibling above rests on `CollisionResistant F` = `HashCRHardQuant F ⊤`
+(`collisionResistant_iff_hashCRHardQuant_top`), FALSE for the compressing p3 Poseidon2 sponge — so it
+transports no security. This conditions on the SAME collision game at an EXPLICIT class `Eff`: a leaf-swap
+finder in the class (`hEff`) has negligible advantage — "verifying signature ⟹ committed key EXCEPT with
+negligible probability", a key swap at an index succeeds only with negligible advantage. The
+`CollisionFinder` advantage IS the game advantage the floor bounds (`collisionAdv_eq_gameAdv`).
+
+⚑ **THE `hEff` OBLIGATION IS UNDISCHARGED AND THAT IS THE HONEST STATE** (`FloorGames` §8 — no cost model);
+the floor is priced at both poles in §2. -/
+theorem merkle_ots_binds_advantage_bound_eff {F : KeyedHashFamily}
+    (Eff : Adversary (hashGame F) → Prop) (leafSwap : CollisionFinder F)
+    (hEff : Eff (finderToAdv leafSwap)) (hD : HashCRHardQuant F Eff) :
+    Negl (collisionAdv F leafSwap) := by
+  rw [collisionAdv_eq_gameAdv]
+  exact hD _ hEff
+
 /-! ## §2 — non-vacuity (the sibling is a genuine implication, the floor is load-bearing). -/
 
 /-- **(TOOTH — the sibling is instantiable at a REAL floor witness.)** The injective identity family satisfies
@@ -91,9 +112,45 @@ to forbid the key swap. -/
 theorem merkle_ots_binds_floor_load_bearing : ¬ CollisionResistant brokenFamily :=
   brokenFamily_not_CR
 
+/-! ## §3 — the `Eff` parameter, PRICED at both poles, the CANARY, and the positive pole. -/
+
+/-- **(TOOTH — `Eff := ⊤` is FALSE at a compressing sponge family.)** The bare-CR floor at the constant-`0`
+`brokenFamily` is refuted (`brokenFamily_not_CR`), and it IS `HashCRHardQuant brokenFamily ⊤`
+(`collisionResistant_iff_hashCRHardQuant_top`) — so the `⊤` class is FALSE. The price of `hEff`, as a
+theorem. -/
+theorem merkle_ots_eff_top_false : ¬ HashCRHardQuant brokenFamily (fun _ => True) :=
+  fun h => brokenFamily_not_CR ((collisionResistant_iff_hashCRHardQuant_top _).mpr h)
+
+/-- **(TOOTH — the OTHER pole: `Eff := ⊥` is vacuous.)** At the empty class the floor holds for ANY sponge
+family. -/
+theorem merkle_ots_eff_bot_vacuous {F : KeyedHashFamily} : HashCRHardQuant F (fun _ => False) :=
+  hard_bot_vacuous _
+
+/-- **(CANARY — the key-swap binding does NOT follow from the floor at another adversary.)** From the floor
+at some OTHER adversary `B` the leaf-swap's negligibility does not follow: `hD B hB` bounds a DIFFERENT
+ensemble, and only `collisionAdv_eq_gameAdv` at the extracted finder connects it. -/
+example {F : KeyedHashFamily} (Eff : Adversary (hashGame F) → Prop)
+    (leafSwap : CollisionFinder F) (B : Adversary (hashGame F)) (hB : Eff B)
+    (hD : HashCRHardQuant F Eff) : True := by
+  fail_if_success
+    (have : Negl (collisionAdv F leafSwap) := hD B hB)
+  trivial
+
+/-- **THE `Eff` KEY-SWAP BINDING FIRES AT A REAL FLOOR WITNESS.** On the injective identity family the
+`Eff`-floor at `⊤` holds (`idFamily_CR`), so the sibling runs end-to-end to a genuine `Negl` at an
+inhabited hypothesis. -/
+theorem merkle_ots_binds_eff_fires (leafSwap : CollisionFinder idFamily) :
+    Negl (collisionAdv idFamily leafSwap) :=
+  merkle_ots_binds_advantage_bound_eff (fun _ => True) leafSwap trivial
+    ((collisionResistant_iff_hashCRHardQuant_top _).mp idFamily_CR)
+
 #assert_all_clean [
   merkle_ots_binds_advantage_bound,
-  merkle_ots_binds_fires
+  merkle_ots_binds_advantage_bound_eff,
+  merkle_ots_binds_fires,
+  merkle_ots_eff_top_false,
+  merkle_ots_eff_bot_vacuous,
+  merkle_ots_binds_eff_fires
 ]
 
 end Dregg2.Crypto.HashSigMerkleRegrounded

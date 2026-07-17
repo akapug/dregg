@@ -95,7 +95,9 @@ open Dregg2.Circuit.HashFloorHonesty
 open Dregg2.Crypto.HermineHintMLWE (CommitReveal HashCR badCR exCR exCR_hashcr)
 open Dregg2.Crypto.FloorGames
   (Game Adversary gameAdv gameAdv_mem_unit msisGame MSISFamily MSISHardQuant Hard
-   hard_bot_vacuous msisHardQuant_top_false_of_compressing)
+   hard_bot_vacuous msisHardQuant_top_false_of_compressing
+   hashGame finderToAdv HashCRHardQuant collisionAdv_eq_gameAdv
+   collisionResistant_iff_hashCRHardQuant_top collisionResistant_false_of_compressing)
 open Dregg2.Crypto.HermineSelfTargetMSIS
   (IsSelfTargetMSISSolution augmented augmented_apply selftarget_extract_nonzero instShortNormProd)
 open scoped Dregg2.Crypto.HermineSelfTargetMSIS
@@ -131,18 +133,84 @@ theorem commitRevealFamily_CR_of_hashcr {Idx W C : Type} [DecidableEq W] [Decida
     CollisionResistant (commitRevealFamily cr i) :=
   injective_family_CR (commitRevealFamily cr i) (fun _ _ w w' h => hcr i w w' h)
 
-/-! ## §2 — the advantage-bounded binding keystone (`commitment_binding`, re-grounded). -/
+/-! ## §2 — the advantage-bounded binding keystone (`commitment_binding`, re-grounded).
 
-/-- **RE-GROUNDED `HermineHintMLWE.commitment_binding`.** Under the proper keyed floor, the
-commitment-equivocation adversary (per key, two DISTINCT reveals of one commitment colliding under the
-commit hash — a collision by `HermineHintMLWE.equivocation_breaks_hashcr`) has negligible advantage. The
-Boolean "two openings of one commitment ⟹ the reveals are equal" becomes "⟹ equal EXCEPT with negligible
-probability" — the rushing-defense teeth on the honest floor. Proof: `thread_advantage_bound` (the single
-`CollisionResistant` leaf). -/
+⚑ **THE `CollisionResistant`-shaped keystone is ITSELF false at deployed parameters** (FINDING-2 of the
+07-17 sweep). `FloorGames.collisionResistant_iff_hashCRHardQuant_top` proves `CollisionResistant F ↔
+HashCRHardQuant F ⊤`, and `collisionResistant_false_of_compressing` proves that floor FALSE for ANY
+compressing `F` — every real commit hash. So `hermine_commitment_binding_advantage_bound` (kept below,
+untouched, and consumed by `WireAke`/`IdentityCommitment`/`XmVrf`/`RandomnessBeacon` re-groundings) is a
+true implication off a hypothesis that transports NO security. `_eff` below is the honest keystone: the
+SAME game over the SAME family at an EXPLICIT adversary class `Eff`, with the `Eff` obligation in the open
+at the use site (`FloorGames` §8 — this tree has no cost model). -/
+
+/-- **RE-GROUNDED `HermineHintMLWE.commitment_binding` (bare-CR form — kept for the downstream consumers).**
+Under the proper keyed floor, the commitment-equivocation adversary (per key, two DISTINCT reveals of one
+commitment colliding under the commit hash — a collision by `HermineHintMLWE.equivocation_breaks_hashcr`)
+has negligible advantage. ⚠ Its hypothesis `CollisionResistant F` IS `HashCRHardQuant F ⊤`
+(`collisionResistant_iff_hashCRHardQuant_top`), FALSE at deployed compressing parameters — use
+`hermine_commitment_binding_advantage_bound_eff` for the security-transporting form. Proof:
+`thread_advantage_bound` (the single `CollisionResistant` leaf). -/
 theorem hermine_commitment_binding_advantage_bound {F : KeyedHashFamily}
     (hCR : CollisionResistant F) (equivocator : CollisionFinder F) :
     Negl (collisionAdv F equivocator) := by
   thread_advantage_bound
+
+/-- **⚑ RE-GROUNDED `HermineHintMLWE.commitment_binding` — the `Eff`-carrying keystone.** Under the hash-CR
+floor at an EXPLICIT adversary class `Eff`, a commitment-equivocation finder whose game adversary is in the
+class (`hEff`) has negligible advantage: the `CollisionFinder` advantage the old consumers state IS the
+game advantage the honest floor bounds (`collisionAdv_eq_gameAdv`). The Boolean "two openings ⟹ equal"
+becomes "⟹ equal EXCEPT with negligible probability", off a floor a real commit hash could satisfy.
+
+⚑ **THE `hEff` OBLIGATION IS UNDISCHARGED AND THAT IS THE HONEST STATE** — the standard "the reduction is
+efficient" side condition, a PARAMETER because this tree has no cost model (`FloorGames` §8). The floor is
+priced at both poles below: `⊤` FALSE at compressing parameters, `⊥` vacuous. This is the generic keystone
+the `IdentityCommitment` / `XmVrf` / `RandomnessBeacon` re-groundings route their own `_eff` siblings
+through. -/
+theorem hermine_commitment_binding_advantage_bound_eff {F : KeyedHashFamily}
+    (Eff : Adversary (hashGame F) → Prop) (equivocator : CollisionFinder F)
+    (hEff : Eff (finderToAdv equivocator)) (hD : HashCRHardQuant F Eff) :
+    Negl (collisionAdv F equivocator) := by
+  rw [collisionAdv_eq_gameAdv]
+  exact hD _ hEff
+
+/-- **(TOOTH — `Eff := ⊤` is FALSE at a compressing family.)** At the unrestricted class the honest floor
+IS `CollisionResistant F` (`collisionResistant_iff_hashCRHardQuant_top`), which is FALSE for any compressing
+commit hash (`collisionResistant_false_of_compressing`). This is the price of `hEff`, stated as a theorem:
+the class cannot be left implicit, because the implicit `⊤` is the empty hypothesis the whole sweep exists
+to name. -/
+theorem hermine_binding_eff_top_false_of_compressing {F : KeyedHashFamily} (hin : Nonempty F.Input)
+    (hcol : ∀ l (k : F.Key l), ∃ x y : F.Input, x ≠ y ∧ F.H l k x = F.H l k y) :
+    ¬ HashCRHardQuant F (fun _ => True) :=
+  fun h => collisionResistant_false_of_compressing F hin hcol
+    ((collisionResistant_iff_hashCRHardQuant_top F).mpr h)
+
+/-- **(TOOTH — the OTHER pole: `Eff := ⊥` is vacuous.)** At the empty class the floor holds for ANY family,
+including a broken one. Recorded HONESTLY: a satisfiability witness is worth nothing without the refutation
+beside it, and the two poles together are what make `Eff` a dial, not a costume. -/
+theorem hermine_binding_eff_bot_vacuous {F : KeyedHashFamily} :
+    HashCRHardQuant F (fun _ => False) :=
+  hard_bot_vacuous _
+
+/-- **(CANARY — the keystone does NOT follow from the floor applied at another adversary.)** Strip the
+reduction — try to conclude the equivocator's negligibility from the floor applied at some OTHER adversary
+`B`, NOT the one extracted from the equivocator — and the proof does not go through: `hD B hB` bounds the
+game advantage of `B`, a DIFFERENT ensemble than `collisionAdv F equivocator`, and only
+`collisionAdv_eq_gameAdv` at the extracted finder connects them. -/
+example {F : KeyedHashFamily} (Eff : Adversary (hashGame F) → Prop)
+    (equivocator : CollisionFinder F) (B : Adversary (hashGame F)) (hB : Eff B)
+    (hD : HashCRHardQuant F Eff) : True := by
+  fail_if_success
+    (have : Negl (collisionAdv F equivocator) := hD B hB)
+  trivial
+
+/-- **THE POSITIVE POLE — the RIGHT floor DOES discharge it.** With the floor at the EXTRACTED finder the
+keystone fires. A gate that refuses everything is a broken keystone, not a fixed one. -/
+theorem hermine_binding_eff_fires {F : KeyedHashFamily} (Eff : Adversary (hashGame F) → Prop)
+    (equivocator : CollisionFinder F) (hEff : Eff (finderToAdv equivocator))
+    (hD : HashCRHardQuant F Eff) :
+    Negl (collisionAdv F equivocator) :=
+  hermine_commitment_binding_advantage_bound_eff Eff equivocator hEff hD
 
 /-! ## §3 — the concurrent forger, as a first-class λ-indexed game.
 
@@ -515,6 +583,10 @@ theorem badCR_family_not_CR : ¬ CollisionResistant (commitRevealFamily badCR 5)
 #assert_all_clean [
   commitRevealFamily_CR_of_hashcr,
   hermine_commitment_binding_advantage_bound,
+  hermine_commitment_binding_advantage_bound_eff,
+  hermine_binding_eff_top_false_of_compressing,
+  hermine_binding_eff_bot_vacuous,
+  hermine_binding_eff_fires,
   cfEquivGame_wins_iff,
   winProb_le_add_of_imp,
   claim_wins_imp,

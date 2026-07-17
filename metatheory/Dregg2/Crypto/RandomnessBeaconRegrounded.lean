@@ -56,7 +56,10 @@ open Dregg2.Circuit.HashFloorHonesty
 open Dregg2.Crypto.HermineHintMLWE (CommitReveal HashCR)
 open Dregg2.Crypto.HermineHashCRRegrounded
   (commitRevealFamily commitRevealFamily_CR_of_hashcr hermine_commitment_binding_advantage_bound
-   crEquivocator)
+   hermine_commitment_binding_advantage_bound_eff crEquivocator)
+open Dregg2.Crypto.FloorGames
+  (Adversary hashGame finderToAdv HashCRHardQuant collisionResistant_iff_hashCRHardQuant_top
+   hard_bot_vacuous)
 open Dregg2.Crypto.HashRandRefinement (HashRand Role)
 
 set_option autoImplicit false
@@ -115,6 +118,49 @@ theorem hashrand_output_binding_advantage_bound {Party Ct Pre Digest : Type}
     (biasAdversary : CollisionFinder (hashRandOutputFamily X)) :
     Negl (collisionAdv (hashRandOutputFamily X) biasAdversary) :=
   hermine_commitment_binding_advantage_bound hCR biasAdversary
+
+/-! ## §2b — ⚑ the `Eff`-CARRYING beacon keystones (FINDING-2 of the 07-17 sweep).
+
+Each bare-CR sibling above rests on `CollisionResistant _` = `HashCRHardQuant _ ⊤`
+(`collisionResistant_iff_hashCRHardQuant_top`), FALSE for the compressing combine/commit hashes — so it
+transports no security. Each `_eff` conditions on the SAME collision game at an EXPLICIT class `Eff`, with
+the finder's `hEff` obligation in the open (`FloorGames` §8 — no cost model). Poles priced in §4. -/
+
+/-- **⚑ RE-GROUNDED beacon unbiasability/unpredictability — the `Eff`-carrying form.** A bias / early-prediction
+finder in the class `Eff` has negligible advantage: no coalition steers or predicts the beacon except with
+negligible probability. -/
+theorem beacon_binding_advantage_bound_eff {Idx W C : Type} [DecidableEq W] [DecidableEq C]
+    (cr : CommitReveal Idx W C) (i : Idx)
+    (Eff : Adversary (hashGame (beaconHashFamily cr i)) → Prop)
+    (biasAdversary : CollisionFinder (beaconHashFamily cr i))
+    (hEff : Eff (finderToAdv biasAdversary))
+    (hD : HashCRHardQuant (beaconHashFamily cr i) Eff) :
+    Negl (collisionAdv (beaconHashFamily cr i) biasAdversary) :=
+  hermine_commitment_binding_advantage_bound_eff Eff biasAdversary hEff hD
+
+/-- **⚑ RE-GROUNDED `HashRandRefinement.hashrand_commit_binds` — the `Eff`-carrying form.** A deployed
+`crypto-hashrand` commit-equivocation finder in `Eff` has negligible advantage — the honest party is pinned
+to one contribution except with negligible probability (UNPREDICTABILITY). -/
+theorem hashrand_commit_binding_advantage_bound_eff {Party Ct Pre Digest : Type}
+    [DecidableEq Pre] [DecidableEq Digest] (X : HashRand Party Ct Pre Digest)
+    (Eff : Adversary (hashGame (hashRandCommitFamily X)) → Prop)
+    (equivocator : CollisionFinder (hashRandCommitFamily X))
+    (hEff : Eff (finderToAdv equivocator))
+    (hD : HashCRHardQuant (hashRandCommitFamily X) Eff) :
+    Negl (collisionAdv (hashRandCommitFamily X) equivocator) :=
+  hermine_commitment_binding_advantage_bound_eff Eff equivocator hEff hD
+
+/-- **⚑ RE-GROUNDED `HashRandRefinement.hashrand_unbiasable` — the `Eff`-carrying form.** A deployed
+`crypto-hashrand` bias finder in `Eff` has negligible advantage — the honest contribution moves the beacon
+except with negligible probability (UNBIASABILITY). -/
+theorem hashrand_output_binding_advantage_bound_eff {Party Ct Pre Digest : Type}
+    [DecidableEq Pre] [DecidableEq Digest] (X : HashRand Party Ct Pre Digest)
+    (Eff : Adversary (hashGame (hashRandOutputFamily X)) → Prop)
+    (biasAdversary : CollisionFinder (hashRandOutputFamily X))
+    (hEff : Eff (finderToAdv biasAdversary))
+    (hD : HashCRHardQuant (hashRandOutputFamily X) Eff) :
+    Negl (collisionAdv (hashRandOutputFamily X) biasAdversary) :=
+  hermine_commitment_binding_advantage_bound_eff Eff biasAdversary hEff hD
 
 /-! ## §3 — non-vacuity: satisfiable AND load-bearing, on the abstract beacon and the deployed surface. -/
 
@@ -195,16 +241,66 @@ theorem beacon_binding_fires (biasAdversary : CollisionFinder idFamily) :
     Negl (collisionAdv idFamily biasAdversary) :=
   hermine_commitment_binding_advantage_bound idFamily_CR biasAdversary
 
+/-! ## §4 — the `Eff` parameter, PRICED at both poles, and the CANARY. -/
+
+/-- **(TOOTH — `Eff := ⊤` is FALSE at the compressing beacon combine hash.)** The bare-CR floor at the
+colliding `badBeaconOut` is refuted (`beacon_badBeaconOut_not_CR`), and it IS `HashCRHardQuant _ ⊤` — so
+the `⊤` class is FALSE. The price of `hEff`, as a theorem. -/
+theorem beacon_eff_top_false :
+    ¬ HashCRHardQuant (beaconHashFamily Dregg2.Crypto.RandomnessBeacon.badBeaconOut 0) (fun _ => True) :=
+  fun h => beacon_badBeaconOut_not_CR ((collisionResistant_iff_hashCRHardQuant_top _).mpr h)
+
+/-- **(TOOTH — `Eff := ⊤` is FALSE at the compressing deployed combine hash.)** Same, on the deployed
+`crypto-hashrand` colliding `badX` output hash (`hashRand_badCR_output_not_CR`). -/
+theorem hashRand_output_eff_top_false :
+    ¬ HashCRHardQuant (hashRandOutputFamily Dregg2.Crypto.HashRandRefinement.badX) (fun _ => True) :=
+  fun h => hashRand_badCR_output_not_CR ((collisionResistant_iff_hashCRHardQuant_top _).mpr h)
+
+/-- **(TOOTH — the OTHER pole: `Eff := ⊥` is vacuous.)** At the empty class the beacon floor holds for ANY
+combine/commit hash. -/
+theorem beacon_eff_bot_vacuous {Idx W C : Type} [DecidableEq W] [DecidableEq C]
+    (cr : CommitReveal Idx W C) (i : Idx) :
+    HashCRHardQuant (beaconHashFamily cr i) (fun _ => False) :=
+  hard_bot_vacuous _
+
+/-- **(CANARY — beacon safety does NOT follow from the floor at another adversary.)** From the floor at some
+OTHER adversary `B` the bias-equivocator's negligibility does not follow: `hD B hB` bounds a DIFFERENT
+ensemble. -/
+example {Idx W C : Type} [DecidableEq W] [DecidableEq C] (cr : CommitReveal Idx W C) (i : Idx)
+    (Eff : Adversary (hashGame (beaconHashFamily cr i)) → Prop)
+    (biasAdversary : CollisionFinder (beaconHashFamily cr i))
+    (B : Adversary (hashGame (beaconHashFamily cr i))) (hB : Eff B)
+    (hD : HashCRHardQuant (beaconHashFamily cr i) Eff) : True := by
+  fail_if_success
+    (have : Negl (collisionAdv (beaconHashFamily cr i) biasAdversary) := hD B hB)
+  trivial
+
+/-- **THE `Eff` BEACON BINDING FIRES AT A REAL FLOOR WITNESS.** On the injective deployed `goodX.cr` the
+output `Eff`-floor at `⊤` holds (`hashRand_goodCR_output_CR`), so the deployed unbiasability runs
+end-to-end to a genuine `Negl` at an inhabited hypothesis. -/
+theorem hashrand_output_eff_fires
+    (biasAdversary : CollisionFinder (hashRandOutputFamily Dregg2.Crypto.HashRandRefinement.goodX)) :
+    Negl (collisionAdv (hashRandOutputFamily Dregg2.Crypto.HashRandRefinement.goodX) biasAdversary) :=
+  hashrand_output_binding_advantage_bound_eff Dregg2.Crypto.HashRandRefinement.goodX (fun _ => True)
+    biasAdversary trivial ((collisionResistant_iff_hashCRHardQuant_top _).mp hashRand_goodCR_output_CR)
+
 #assert_all_clean [
   beacon_binding_advantage_bound,
   hashrand_commit_binding_advantage_bound,
   hashrand_output_binding_advantage_bound,
+  beacon_binding_advantage_bound_eff,
+  hashrand_commit_binding_advantage_bound_eff,
+  hashrand_output_binding_advantage_bound_eff,
   beacon_exBeaconHash_CR,
   beacon_badBeaconOut_not_CR,
   hashRand_goodCR_commit_CR,
   hashRand_goodCR_output_CR,
   hashRand_badCR_output_not_CR,
-  beacon_binding_fires
+  beacon_binding_fires,
+  beacon_eff_top_false,
+  hashRand_output_eff_top_false,
+  beacon_eff_bot_vacuous,
+  hashrand_output_eff_fires
 ]
 
 end Dregg2.Crypto.RandomnessBeaconRegrounded
