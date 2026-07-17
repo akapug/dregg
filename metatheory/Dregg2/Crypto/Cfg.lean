@@ -17,10 +17,16 @@ each consecutive pair a valid one-rule `Produces`. This is the context-free anal
     cfg_bridge        : (∃ chain, CfgAccepts g input chain) ↔ input ∈ g.language
     cfg_verify_sound  : verify accepts → input ∈ g.language   (derived off the bridge + `extractable`)
 
+The chain machinery is NOT re-proven here: `producesChain` IS the generic `Hypergraph.chain`
+(`Crypto/Chain.lean`) at `R := g.Produces`, `CfgAccepts` IS `Hypergraph.Cert` at the grammar's
+start/goal endpoints, and `cfg_bridge` IS `Hypergraph.cfg_parse_via_reduction` — the one generic
+`bridge` induction, instantiated, not duplicated.
+
 No `compress`/hash seam here — a parse certificate is pure structural checking. Crypto residue: the
 STARK `extractable` carrier only (as with `Dfa.lean`).
 -/
 import Mathlib.Computability.ContextFreeGrammar
+import Dregg2.Crypto.Hypergraph
 import Dregg2.Crypto.Primitives
 import Dregg2.Authority.Predicate
 import Metatheory.EpistemicDial
@@ -45,83 +51,39 @@ the prover exhibits the derivation, each rewrite is checked locally, and the end
 boundary bindings. -/
 
 /-- **`producesChain g chain`** — every consecutive pair of sentential forms is one valid production
-step (`g.Produces`). The context-free `Transition`+`Lookup`: each rewrite applies a real grammar rule. -/
-def producesChain (g : ContextFreeGrammar T) : List (List (Symbol T g.NT)) → Prop
-  | [] => True
-  | [_] => True
-  | a :: b :: rest => g.Produces a b ∧ producesChain g (b :: rest)
+step (`g.Produces`). The context-free `Transition`+`Lookup`: each rewrite applies a real grammar rule.
+DEFINITIONALLY the generic `Hypergraph.chain` (`Crypto/Chain.lean`) at `R := g.Produces` — the same
+structural recursion, not a re-roll. -/
+def producesChain (g : ContextFreeGrammar T) : List (List (Symbol T g.NT)) → Prop :=
+  Hypergraph.chain g.Produces
 
 /-- **`CfgAccepts g input chain`** — the CFG acceptance STATEMENT: the derivation chain is NON-EMPTY,
 starts at the initial nonterminal `[.nonterminal g.initial]`, ends at the input word wrapped as terminals
 `input.map .terminal`, and every step is a valid production (`producesChain`). This is the predicate the
-verifier's accepting bit must certify — a valid derivation of `input` from the start symbol. -/
+verifier's accepting bit must certify — a valid derivation of `input` from the start symbol.
+DEFINITIONALLY the generic `Hypergraph.Cert` at `R := g.Produces` with the grammar's start/goal as the
+pinned endpoints (unfolds to `head? = start ∧ getLast? = goal ∧ producesChain`). -/
 def CfgAccepts (g : ContextFreeGrammar T) (input : List T)
     (chain : List (List (Symbol T g.NT))) : Prop :=
-  chain.head? = some [Symbol.nonterminal g.initial] ∧
-  chain.getLast? = some (input.map Symbol.terminal) ∧
-  producesChain g chain
+  Hypergraph.Cert g.Produces [Symbol.nonterminal g.initial] (input.map Symbol.terminal) chain
 
 /-! ## The bridge — `(∃ chain, CfgAccepts) ↔ input ∈ language`, FULLY proven (NO primitive seam).
 
 `g.Derives = Relation.ReflTransGen g.Produces`, so a form-chain is exactly a reflexive-transitive
-derivation unrolled into a checkable list. The two lemmas below are the standard `ReflTransGen ↔ chain`
-correspondence, specialized to `Produces`; `cfg_bridge` then composes with mathlib's `mem_language_iff`
-(which is `rfl`). No `compress`/hash anywhere — pure structural matching. -/
-
-/-- A `Derives` unrolls to a form-chain: prepend the start symbol at each `head`-step. -/
-theorem derives_to_chain (g : ContextFreeGrammar T) {u v : List (Symbol T g.NT)}
-    (h : g.Derives u v) :
-    ∃ chain, chain.head? = some u ∧ chain.getLast? = some v ∧ producesChain g chain := by
-  induction h using Relation.ReflTransGen.head_induction_on with
-  | refl => exact ⟨[v], rfl, rfl, trivial⟩
-  | @head a c h' _hcv ih =>
-    obtain ⟨chain, hhead, hlast, hpc⟩ := ih
-    cases chain with
-    | nil => simp at hhead
-    | cons c' rest =>
-      simp only [List.head?_cons, Option.some.injEq] at hhead
-      subst hhead
-      refine ⟨a :: c' :: rest, rfl, ?_, ?_⟩
-      · rw [List.getLast?_cons_cons]; exact hlast
-      · exact ⟨h', hpc⟩
-
-/-- A form-chain from `u` to `v` witnesses `g.Derives u v`: fold each step through `Produces.trans_derives`. -/
-theorem chain_to_derives (g : ContextFreeGrammar T) :
-    ∀ (chain : List (List (Symbol T g.NT))) {u v},
-      chain.head? = some u → chain.getLast? = some v → producesChain g chain → g.Derives u v := by
-  intro chain
-  induction chain with
-  | nil => intro u v hhead _ _; simp at hhead
-  | cons x xs ih =>
-    intro u v hhead hlast hpc
-    simp only [List.head?_cons, Option.some.injEq] at hhead
-    subst hhead
-    cases xs with
-    | nil =>
-      simp only [List.getLast?_singleton, Option.some.injEq] at hlast
-      subst hlast
-      exact Relation.ReflTransGen.refl
-    | cons y ys =>
-      obtain ⟨hxy, hrest⟩ := hpc
-      rw [List.getLast?_cons_cons] at hlast
-      exact hxy.trans_derives (ih rfl hlast hrest)
+derivation unrolled into a checkable list — which is the GENERIC `Hypergraph.bridge`
+(`Chain.to_chain`/`of_chain`), already composed with mathlib's `mem_language_iff` as
+`Hypergraph.cfg_parse_via_reduction`. Since `CfgAccepts` is definitionally that `Cert`, `cfg_bridge`
+IS `cfg_parse_via_reduction` — one induction, stated once. No `compress`/hash anywhere. -/
 
 /-- **`cfg_bridge`** — the CFG parse-certificate's satisfiability is exactly membership in the grammar's
 language. Soundness: a valid derivation chain from the start symbol to the input word proves
-`input ∈ g.language`. Completeness: a word in the language has such a chain. No `compress` — no primitive
-seam. Crypto residue: `extractable`, consumed by `cfg_verify_sound`. -/
+`input ∈ g.language`. Completeness: a word in the language has such a chain. Literally the canonical
+`Hypergraph.cfg_parse_via_reduction` (the generic `bridge` at `R := g.Produces`) — `CfgAccepts` is
+definitionally its `Cert`. Crypto residue: `extractable`, consumed by `cfg_verify_sound`. -/
 theorem cfg_bridge (g : ContextFreeGrammar T) (input : List T) :
-    (∃ chain, CfgAccepts g input chain) ↔ input ∈ g.language := by
-  rw [mem_language_iff]
-  constructor
-  · rintro ⟨chain, hhead, hlast, hpc⟩
-    exact chain_to_derives g chain hhead hlast hpc
-  · intro hderiv
-    obtain ⟨chain, hhead, hlast, hpc⟩ := derives_to_chain g hderiv
-    exact ⟨chain, hhead, hlast, hpc⟩
+    (∃ chain, CfgAccepts g input chain) ↔ input ∈ g.language :=
+  Hypergraph.cfg_parse_via_reduction g input
 
-#assert_axioms derives_to_chain
-#assert_axioms chain_to_derives
 #assert_axioms cfg_bridge
 
 /-! ## Layer B — the CFG `VerifierKernel`: `verify` + carrier + DERIVED `verify_sound`.

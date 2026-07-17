@@ -567,9 +567,7 @@ pub fn fold_win_over_cell_state_node_canary(
     let t0 = mint_win_turn_state_node_canary(cell, &win);
     let t1 = plain_turn_over_cell(&nonce_bumped(cell));
     if t0.new_root() != t1.old_root() {
-        return Err(
-            "win canary fold: turn 0 post-state does not link to the tail turn".to_string(),
-        );
+        return Err("win canary fold: turn 0 post-state does not link to the tail turn".to_string());
     }
     prove_turn_chain_recursive(&[t0, t1])
         .map_err(|e| format!("win canary fold over real cell failed: {e}"))

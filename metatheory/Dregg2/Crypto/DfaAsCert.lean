@@ -54,17 +54,14 @@ acceptance wrapper, exactly as CFG's start-symbol/goal-word ride as its `Cert`'s
 whose `Hypergraph.chain` coincides with `Dfa.chained`. -/
 def delta (a b : Step State Sym) : Prop := b.state = a.next
 
-/-- **`chained_iff_chain`** — the DEFINITIONAL heart: `Dfa.chained` IS `Hypergraph.chain delta`. Both are
-the same structural recursion on `List (Step)` — `[]`/`[_]` are `True`, and `a :: b :: rest` conjoins the
-head relation (`b.state = a.next`, i.e. `delta a b`) with the recursive tail. So a DFA `Transition` chain
-and a `Hypergraph` reduction chain over `delta` are the same predicate. -/
+/-- **`chained_iff_chain`** — the DEFINITIONAL heart: `Dfa.chained` IS `Hypergraph.chain delta`.
+Since the chain-dedup refactor, `Dfa.chained` is DEFINED as `Hypergraph.chain (fun a b => b.state =
+a.next)` and `delta` unfolds to that same relation, so the identification is `Iff.rfl` — a DFA
+`Transition` chain and a `Hypergraph` reduction chain over `delta` are the same predicate, by
+definition. -/
 theorem chained_iff_chain :
-    ∀ trace : List (Step State Sym), Dfa.chained trace ↔ Hypergraph.chain delta trace
-  | [] => Iff.rfl
-  | [_] => Iff.rfl
-  | a :: b :: rest => by
-    simp only [Dfa.chained, Hypergraph.chain, delta]
-    exact and_congr Iff.rfl (chained_iff_chain (b :: rest))
+    ∀ trace : List (Step State Sym), Dfa.chained trace ↔ Hypergraph.chain delta trace :=
+  fun _ => Iff.rfl
 
 /-! ## `dfaAccepts_as_cert` — a DFA acceptance IS a `Hypergraph.Cert` over `delta`. -/
 

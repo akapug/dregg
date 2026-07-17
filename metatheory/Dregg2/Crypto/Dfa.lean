@@ -18,6 +18,7 @@ accepting state. Per-step `Lookup` membership, `Transition` chaining, and bounda
 The DFA gadget is pure structural matching — no `compress`/hash, no primitive seam. Crypto residue:
 the STARK `extractable` carrier only.
 -/
+import Dregg2.Crypto.Chain
 import Dregg2.Crypto.Primitives
 import Dregg2.Authority.Predicate
 import Metatheory.EpistemicDial
@@ -60,11 +61,11 @@ def stepValid (δ : State → Sym → State → Prop) (s : Step State Sym) : Pro
   δ s.state s.sym s.next
 
 /-- **Consecutive steps chain** (`Transition`): each step's `next` equals the following step's
-`state`. Stated over the step list. -/
-def chained : List (Step State Sym) → Prop
-  | [] => True
-  | [_] => True
-  | a :: b :: rest => b.state = a.next ∧ chained (b :: rest)
+`state`. Stated over the step list. DEFINITIONALLY the generic `Hypergraph.chain`
+(`Crypto/Chain.lean`) at the step-chaining relation `fun a b => b.state = a.next` (=
+`DfaAsCert.delta`) — the same structural recursion, not a re-roll. -/
+def chained : List (Step State Sym) → Prop :=
+  Hypergraph.chain fun a b => b.state = a.next
 
 /-- **`DfaAccepts δ q₀ accept trace`** — the DFA acceptance STATEMENT: the run is NON-EMPTY, every step
 is a valid `δ` transition, the steps chain, the first step starts in the initial state `q₀`, and the
