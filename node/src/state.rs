@@ -147,19 +147,80 @@ pub struct NodeState {
 }
 
 /// The retained result of a solo-ingress authoritative in-place commit,
-/// consumed once by finalization promotion (see
+/// consumed by finalization promotion (see
 /// [`NodeStateInner::ingress_commits`]). Holds exactly what the finalization
 /// phase needs that only the ingress execution knew: the committed receipt
-/// (as appended/attempted on the chain — tentative-signed) and the complete
-/// touched-cell set from the executor's `LedgerDelta`.
+/// (as appended/attempted on the chain — tentative-signed), the complete
+/// touched-cell set from the executor's `LedgerDelta`, and — CRITICALLY — the
+/// PREFIX SNAPSHOT taken at ingress-commit time under the same exclusive
+/// write lock that applied the turn. Solo ingress is serialized under that
+/// lock, so ingress order IS the prefix order: the snapshot binds exactly the
+/// ledger prefix through THIS turn. Promotion writes the snapshot into the
+/// AttestedRoot / CommitRecord instead of re-reading the live ledger — two
+/// turns ingress-committed inside the finality debounce would otherwise
+/// anchor turn A's root/overlay over a ledger that already includes turn B
+/// (prefix poisoning: height-h artifacts no longer reconstruct the exact
+/// prefix through h).
+#[derive(Clone)]
 pub struct IngressCommit {
     /// The receipt the ingress executor committed (solo: finality downgraded
     /// to `Tentative` and node-re-signed before retention).
     pub receipt: dregg_turn::TurnReceipt,
     /// `touched_cell_ids(ledger_delta)` at ingress — the authoritative,
-    /// bounded set of cells this turn mutated, for the durable commit
-    /// record's cell overlay.
+    /// bounded set of cells this turn mutated. Kept alongside the post-state
+    /// clones below because a DESTROYED cell has an id here but no post-state
+    /// entry (the overlay carries no stale entry for it, mirroring the
+    /// executed path).
     pub touched_cells: Vec<CellId>,
+    /// The touched cells' POST-STATES cloned from the just-committed ledger at
+    /// ingress time — the durable commit record's cell overlay for the prefix
+    /// through this turn (NOT re-read from the live ledger at promotion).
+    pub touched_post_cells: Vec<Cell>,
+    /// `canonical_ledger_root` computed right after the in-place commit, under
+    /// the ingress write lock — the AttestedRoot merkle root for the prefix
+    /// through this turn. (Same O(ledger) hash the executed path pays per
+    /// finalized turn: cost parity.)
+    pub prefix_root: [u8; 32],
+}
+
+impl IngressCommit {
+    /// Build the retained ingress commit by SNAPSHOTTING the just-committed
+    /// ledger: clone the touched cells' post-states (destroyed cells are
+    /// simply absent) and bind the canonical prefix root. MUST be called
+    /// under the same exclusive write lock that applied the turn, immediately
+    /// after the in-place commit — that lock hold is what makes the snapshot
+    /// the exact prefix through this turn.
+    pub fn snapshot(
+        ledger: &Ledger,
+        receipt: dregg_turn::TurnReceipt,
+        touched_cells: Vec<CellId>,
+    ) -> Self {
+        let touched_post_cells = touched_cells
+            .iter()
+            .filter_map(|id| ledger.get(id).cloned())
+            .collect();
+        let prefix_root = dregg_persist::canonical_ledger_root(ledger);
+        Self {
+            receipt,
+            touched_cells,
+            touched_post_cells,
+            prefix_root,
+        }
+    }
+}
+
+/// Capacity of [`NodeStateInner::ingress_commits`]. When the retention map is
+/// full the ingress paths REFUSE new solo submissions BEFORE the in-place
+/// apply (backpressure) — never evict: an evicted entry's mutation is already
+/// in the live ledger, so its later promotion would nonce-replay-reject and
+/// every LATER promoted root would contain an undurable mutation recovery
+/// cannot reconstruct.
+pub const MAX_RETAINED_INGRESS_COMMITS: usize = 8192;
+
+/// Whether a retention map of `retained` entries is at capacity — the
+/// ingress-side backpressure check (see [`MAX_RETAINED_INGRESS_COMMITS`]).
+pub fn ingress_backlog_full(retained: usize) -> bool {
+    retained >= MAX_RETAINED_INGRESS_COMMITS
 }
 
 /// The inner mutable state of the node.
@@ -1710,24 +1771,23 @@ impl NodeState {
 // =============================================================================
 
 impl NodeStateInner {
+    /// Whether the solo-ingress retention map is at capacity. The ingress
+    /// paths call this BEFORE the in-place apply and refuse the submission
+    /// when full ("finalization backlog"), so no authoritative in-place
+    /// mutation can ever exist without a retained promotion entry.
+    pub fn ingress_commits_full(&self) -> bool {
+        ingress_backlog_full(self.ingress_commits.len())
+    }
+
     /// Retain a solo-ingress execution result for finalization promotion
-    /// (see [`NodeStateInner::ingress_commits`]). Bounded: if finalization
-    /// stalls pathologically, an arbitrary entry is evicted with a warning —
-    /// an evicted turn falls back to the re-execute path (rejected as a
-    /// replay, exactly the pre-cache regime) and the durable-cursor recovery
-    /// re-applies it after a restart, so eviction degrades liveness of the
-    /// promotion, never safety.
+    /// (see [`NodeStateInner::ingress_commits`]). NEVER evicts: an entry's
+    /// mutation is already committed in the live ledger, so dropping it would
+    /// turn its later promotion into a nonce-replay rejection and leave every
+    /// LATER promoted root carrying an undurable mutation recovery cannot
+    /// reconstruct. Capacity is enforced upstream as ingress backpressure
+    /// ([`Self::ingress_commits_full`] refuses the submission before the
+    /// in-place apply).
     pub fn retain_ingress_commit(&mut self, turn_hash: [u8; 32], commit: IngressCommit) {
-        const MAX_RETAINED: usize = 8192;
-        if self.ingress_commits.len() >= MAX_RETAINED {
-            tracing::warn!(
-                retained = self.ingress_commits.len(),
-                "ingress-commit retention full (finalization stalled?); evicting one entry"
-            );
-            if let Some(k) = self.ingress_commits.keys().next().copied() {
-                let _ = self.ingress_commits.remove(&k);
-            }
-        }
         let _ = self.ingress_commits.insert(turn_hash, commit);
     }
 

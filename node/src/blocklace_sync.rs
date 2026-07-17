@@ -4349,13 +4349,19 @@ async fn execute_finalized_turn(
     //  * exact-hash + retained result, not nonce heuristics — a conflicting
     //    foreign turn at the same nonce hashes differently, MISSES the cache,
     //    executes below, and is correctly rejected as a replay;
-    //  * no federation-mode check HERE — insertion is what is solo-gated, so the
-    //    cache only ever holds turns THIS node ingress-committed; a stale solo
-    //    flag after a live membership change can neither admit a foreign block's
-    //    turn nor skip a local one;
-    //  * consume-once (`remove`) — a re-delivered block re-executes and the
-    //    executor's own replay rejection stands.
-    if let Some(ingress) = s.ingress_commits.remove(&computed_hash) {
+    //  * no federation-mode check HERE — insertion is what is solo-gated (and a
+    //    live solo→multi transition drains the cache atomically with the mode
+    //    flip, see `apply_passed_proposal`), so the cache only ever holds turns
+    //    THIS node ingress-committed; a stale solo flag after a live membership
+    //    change can neither admit a foreign block's turn nor skip a local one;
+    //  * consume-ON-SUCCESS (`get`+clone here; `promote_ingress_committed_turn`
+    //    removes the entry only after the durable commit record lands) — a
+    //    failed durable write keeps the entry so a re-delivered/retried
+    //    finalized block retries promotion idempotently (the durable
+    //    turn-by-hash index guards double-promotion); after a SUCCESSFUL
+    //    promotion the entry is gone, so a re-delivered block re-executes and
+    //    the executor's own replay rejection stands.
+    if let Some(ingress) = s.ingress_commits.get(&computed_hash).cloned() {
         drop(s);
         promote_ingress_committed_turn(
             state,
@@ -5537,18 +5543,50 @@ async fn promote_ingress_committed_turn(
 ) {
     let mut s = state.write().await;
 
-    // Height/timestamp exactly as the executed path derives them: a configured
-    // executor's `block_height` (Next) and clock. Nothing is executed with it.
-    let mut height_exec = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
-    crate::executor_setup::configure_turn_executor(
-        &mut height_exec,
-        &s,
-        crate::executor_setup::BlockHeightMode::Next,
-    );
-    let new_height = height_exec.block_height;
-    let now = height_exec.current_timestamp;
+    // DOUBLE-PROMOTION GUARD (consume-on-success): the retention entry is only
+    // removed after the durable commit record lands, so a block re-delivered
+    // while the entry survives (a prior durable-write failure, or a crash
+    // between the write and the remove) retries promotion. If the durable
+    // commit log ALREADY has this exact turn hash, the promotion happened —
+    // this delivery is a no-op that just consumes the entry. (Checking
+    // `commit_cursor` alone cannot identify WHICH turn landed; the
+    // turn-by-hash index can.)
+    if let Ok(Some(existing)) = s.store.lookup_turn(&computed_hash) {
+        let _ = s.ingress_commits.remove(&computed_hash);
+        info!(
+            turn_hash = %turn_hash_hex,
+            block_id = %block_id,
+            ordinal = existing.ordinal,
+            height = existing.height,
+            "finalized turn already durably promoted (turn-by-hash index hit); \
+             re-delivery is a no-op — retention entry consumed"
+        );
+        return;
+    }
 
-    let receipt = ingress.receipt;
+    // HEIGHT — the DURABLE truth: next attested height = latest durably
+    // attested root height (else 0) + 1. Deliberately NOT the executor
+    // config's `attested_block_height` (max(store, solo)+1): solo ingress
+    // advances `solo.height` per submission, so consulting it here made the
+    // FIRST promotion land at height 2+ and offset the whole ladder. The
+    // ingress-side `solo.height` bookkeeping is left untouched (other readers
+    // consult it); promotion simply no longer derives its height from it.
+    let new_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0)
+        .saturating_add(1);
+    let now = crate::executor_setup::wall_clock_secs();
+
+    let crate::state::IngressCommit {
+        receipt,
+        touched_post_cells,
+        prefix_root,
+        ..
+    } = ingress;
     let receipt_hash = receipt.receipt_hash();
     let receipt_hash_hex: String = receipt
         .turn_hash
@@ -5618,10 +5656,14 @@ async fn promote_ingress_committed_turn(
     let fed_receipt_opt =
         build_federation_receipt(&s, &signed_turn.turn, &receipt, new_height, block_id);
 
-    // ── AttestedRoot — identical to the executed path. The ledger already
-    // holds this turn's post-state (the ingress commit), so the canonical
-    // root binds the same committed state a re-executing validator computes.
-    let merkle_root = canonical_ledger_root(&s.ledger);
+    // ── AttestedRoot — from the PREFIX SNAPSHOT taken at ingress-commit time
+    // under the ingress write lock, NOT the live ledger. Two turns A,B
+    // ingress-committed inside the finality debounce mean the live ledger at
+    // A's promotion already includes B; re-reading it would anchor a root at
+    // A's height that no prefix through A reconstructs (prefix poisoning).
+    // The snapshot is exactly the canonical root a re-executing validator
+    // computes after applying the prefix through this turn.
+    let merkle_root = prefix_root;
     let note_tree_root: Option<[u8; 32]> = None;
     let timestamp_for_root = now;
     let federation_keys = s.known_federation_keys.clone();
@@ -5706,18 +5748,14 @@ async fn promote_ingress_committed_turn(
     }
 
     // ── Durable, crash-consistent commit record — same atomic boundary as the
-    // executed path, with the touched-cell overlay read from the ALREADY
-    // COMMITTED ledger for exactly the ids the ingress executor reported.
+    // executed path, with the touched-cell overlay from the INGRESS-TIME
+    // SNAPSHOT (the touched cells' post-states cloned under the ingress write
+    // lock, destroyed cells absent) — NOT re-read from the live ledger, which
+    // may already hold later turns' mutations (prefix poisoning). The
+    // retention entry is consumed ONLY on a successful durable write: a
+    // failure keeps it so a re-delivered/retried finalized block retries the
+    // promotion (guarded idempotent by the turn-by-hash check at the top).
     {
-        let mut touched_cells: Vec<dregg_cell::Cell> =
-            Vec::with_capacity(ingress.touched_cells.len());
-        for id in &ingress.touched_cells {
-            if let Some(cell) = s.ledger.get(id) {
-                touched_cells.push(cell.clone());
-            }
-            // A touched id absent post-commit was destroyed this turn; the
-            // overlay carries no stale entry (mirrors the executed path).
-        }
         let commit_record = dregg_persist::CommitRecord {
             ordinal: 0, // assigned by the store at the durable cursor
             height: new_height,
@@ -5727,7 +5765,7 @@ async fn promote_ingress_committed_turn(
             receipt_hash,
             ledger_root: merkle_root,
             block_executed_up_to,
-            touched_cells,
+            touched_cells: touched_post_cells,
         };
         let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
         match s
@@ -5735,6 +5773,9 @@ async fn promote_ingress_committed_turn(
             .commit_finalized_turn(expected_ordinal, &commit_record)
         {
             Ok(assigned) => {
+                // Consume-on-success: the promotion is durable, the retained
+                // ingress result has served its purpose.
+                let _ = s.ingress_commits.remove(&computed_hash);
                 debug!(
                     turn_hash = %turn_hash_hex,
                     ordinal = assigned,
@@ -5752,7 +5793,9 @@ async fn promote_ingress_committed_turn(
                     turn_hash = %turn_hash_hex,
                     error = %e,
                     "DURABLE commit-log write FAILED for promoted ingress commit; \
-                     recovery will re-apply from the durable cursor"
+                     retention entry KEPT — a re-delivered finalized block retries \
+                     the promotion, and restart recovery re-applies from the \
+                     durable cursor"
                 );
             }
         }
@@ -7073,13 +7116,12 @@ mod tests {
             else {
                 panic!("ingress execution must commit");
             };
-            s.retain_ingress_commit(
-                computed_hash,
-                crate::state::IngressCommit {
-                    receipt,
-                    touched_cells: touched_cell_ids(&ledger_delta),
-                },
+            let ingress = crate::state::IngressCommit::snapshot(
+                &s.ledger,
+                receipt,
+                touched_cell_ids(&ledger_delta),
             );
+            s.retain_ingress_commit(computed_hash, ingress);
             let cell = s.ledger.get(&sender).expect("sender present");
             (cell.state.balance(), cell.state.nonce())
         };
@@ -7164,6 +7206,329 @@ mod tests {
             sender_balance_after_ingress,
             "conflicting turn moved no value (not laundered into success)"
         );
+    }
+
+    /// F1 (prefix poisoning) + F3 (height ladder) must-fail-pre.
+    ///
+    /// TWO disjoint-cell turns A,B ingress-commit inside the finality debounce
+    /// (both retained before ANY promotion), with real solo posture
+    /// (`solo.height` advanced per ingress, as the handlers do). Then A and B
+    /// promote in order. Pre-fix, promotion (a) read the LIVE ledger for the
+    /// AttestedRoot/CommitRecord — so A's height-1 root anchored the post-A+B
+    /// ledger, a root no prefix through A reconstructs — and (b) derived its
+    /// height via `max(store, solo)+1` — so the first promotion landed at
+    /// height 3 (solo.height was already 2). Post-fix: root(h1) == the
+    /// retained post-A prefix snapshot, root(h2) == post-A+B, heights are
+    /// exactly 1 then 2, and each CommitRecord's overlay carries its OWN
+    /// prefix's post-cells.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn promotion_anchors_ingress_prefix_snapshot_and_durable_heights() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+            let signing_key = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(signing_key));
+        }
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+
+        // Two senders, two destinations — fully disjoint cell sets.
+        let a_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"prefix:sender-a").as_bytes(),
+        ));
+        let b_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"prefix:sender-b").as_bytes(),
+        ));
+        let a_pk = a_cclerk.public_key().0;
+        let b_pk = b_cclerk.public_key().0;
+        let sender_a = dregg_cell::CellId::derive_raw(&a_pk, &[0u8; 32]);
+        let sender_b = dregg_cell::CellId::derive_raw(&b_pk, &[0u8; 32]);
+        let dest_a = dregg_cell::CellId([0x4Au8; 32]);
+        let dest_b = dregg_cell::CellId([0x4Bu8; 32]);
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(a_pk, [0u8; 32], 1_000_000))
+                .expect("fund sender A");
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(b_pk, [0u8; 32], 1_000_000))
+                .expect("fund sender B");
+        }
+
+        let signed_a = signed_transfer_turn(&a_cclerk, sender_a, dest_a, 1_111, 0, &federation_id);
+        let signed_b = signed_transfer_turn(&b_cclerk, sender_b, dest_b, 2_222, 0, &federation_id);
+        let hash_a = signed_a.turn.hash();
+        let hash_b = signed_b.turn.hash();
+
+        // ── Both ingress commits + retentions BEFORE any promotion, exactly
+        // as the solo handlers do (execute in place, snapshot-retain under the
+        // same lock hold, advance solo.height).
+        let mut prefix_roots = Vec::new();
+        for signed in [&signed_a, &signed_b] {
+            let mut s = state.write().await;
+            let executor = crate::executor_setup::new_submit_executor(&s);
+            provision_transfer_destinations(&mut s.ledger, &signed.turn.call_forest);
+            let lean = s.lean_producer_enabled;
+            let exec_result = crate::executor_setup::execute_via_producer(
+                &executor,
+                &signed.turn,
+                &mut s.ledger,
+                lean,
+            );
+            let dregg_turn::TurnResult::Committed {
+                receipt,
+                ledger_delta,
+                ..
+            } = exec_result
+            else {
+                panic!("ingress execution must commit");
+            };
+            let ingress = crate::state::IngressCommit::snapshot(
+                &s.ledger,
+                receipt,
+                touched_cell_ids(&ledger_delta),
+            );
+            prefix_roots.push(ingress.prefix_root);
+            s.retain_ingress_commit(signed.turn.hash(), ingress);
+            if let Some(solo) = s.solo_consensus.as_mut() {
+                solo.advance_height();
+            }
+        }
+        assert_ne!(
+            prefix_roots[0], prefix_roots[1],
+            "B's ingress commit must move the canonical root (the poisoning distinguisher)"
+        );
+
+        let self_key = [0x77u8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+
+        // ── Promote A. Height must be EXACTLY 1 (durable truth, not
+        // solo.height=2), and the root must be the retained post-A prefix.
+        let data_a = postcard::to_stdvec(&signed_a).expect("encode A");
+        execute_finalized_turn(&state, &handle, BlockId([0x31u8; 32]), &data_a, None, 0).await;
+        {
+            let s = state.read().await;
+            let latest = s
+                .store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .expect("first promotion writes an attested root");
+            assert_eq!(
+                latest.height, 1,
+                "first promoted turn lands at exactly height 1 (durable truth, \
+                 independent of solo.height)"
+            );
+            assert_eq!(
+                latest.merkle_root, prefix_roots[0],
+                "height-1 root anchors the PREFIX through A (the ingress \
+                 snapshot), NOT the live post-A+B ledger"
+            );
+            let rec_a = s
+                .store
+                .lookup_turn(&hash_a)
+                .ok()
+                .flatten()
+                .expect("A's durable commit record");
+            assert_eq!(rec_a.height, 1);
+            assert_eq!(
+                rec_a.ledger_root, prefix_roots[0],
+                "A's CommitRecord binds A's own prefix root"
+            );
+            assert!(
+                rec_a
+                    .touched_cells
+                    .iter()
+                    .any(|c| c.id() == sender_a && c.state.nonce() == 1),
+                "A's overlay carries sender A's post-A state"
+            );
+            assert!(
+                rec_a
+                    .touched_cells
+                    .iter()
+                    .all(|c| c.id() != sender_b && c.id() != dest_b),
+                "A's overlay must NOT leak B's cells (its prefix excludes B)"
+            );
+        }
+
+        // ── Promote B. Height exactly 2; root is the post-A+B prefix, which
+        // is now also the live canonical root.
+        let data_b = postcard::to_stdvec(&signed_b).expect("encode B");
+        execute_finalized_turn(&state, &handle, BlockId([0x32u8; 32]), &data_b, None, 0).await;
+        {
+            let s = state.read().await;
+            let latest = s
+                .store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .expect("second promotion writes an attested root");
+            assert_eq!(
+                latest.height, 2,
+                "second promoted turn lands at exactly height 2"
+            );
+            assert_eq!(
+                latest.merkle_root, prefix_roots[1],
+                "height-2 root anchors the prefix through B (post-A+B)"
+            );
+            assert_eq!(
+                prefix_roots[1],
+                canonical_ledger_root(&s.ledger),
+                "B's prefix root reconstructs the full committed ledger"
+            );
+            let rec_b = s
+                .store
+                .lookup_turn(&hash_b)
+                .ok()
+                .flatten()
+                .expect("B's durable commit record");
+            assert_eq!(rec_b.height, 2);
+            assert_eq!(rec_b.ledger_root, prefix_roots[1]);
+            assert!(
+                rec_b
+                    .touched_cells
+                    .iter()
+                    .any(|c| c.id() == sender_b && c.state.nonce() == 1),
+                "B's overlay carries sender B's post-B state"
+            );
+            assert!(
+                s.ingress_commits.is_empty(),
+                "both retention entries consumed on durable success"
+            );
+        }
+    }
+
+    /// F2 (consume-on-success) idempotence: a promotion whose retention entry
+    /// SURVIVES an already-durable write (a crash between the commit-log write
+    /// and the consume, or a retried delivery) must be a no-op — the durable
+    /// turn-by-hash guard detects the existing record, writes nothing, and
+    /// consumes the entry. Pre-fix the entry was `remove`d before the fallible
+    /// durable write, so this recovery shape could not exist at all (a failed
+    /// write orphaned the applied turn permanently).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn promotion_retry_with_surviving_entry_is_idempotent() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+        }
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+        let sender_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"retry:sender").as_bytes(),
+        ));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        let dest = dregg_cell::CellId([0x6Eu8; 32]);
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(
+                    sender_pk, [0u8; 32], 1_000_000,
+                ))
+                .expect("fund sender");
+        }
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 3_333, 0, &federation_id);
+        let computed_hash = signed.turn.hash();
+        let turn_data = postcard::to_stdvec(&signed).expect("encode");
+
+        let ingress_copy = {
+            let mut s = state.write().await;
+            let executor = crate::executor_setup::new_submit_executor(&s);
+            provision_transfer_destinations(&mut s.ledger, &signed.turn.call_forest);
+            let lean = s.lean_producer_enabled;
+            let exec_result = crate::executor_setup::execute_via_producer(
+                &executor,
+                &signed.turn,
+                &mut s.ledger,
+                lean,
+            );
+            let dregg_turn::TurnResult::Committed {
+                receipt,
+                ledger_delta,
+                ..
+            } = exec_result
+            else {
+                panic!("ingress execution must commit");
+            };
+            let ingress = crate::state::IngressCommit::snapshot(
+                &s.ledger,
+                receipt,
+                touched_cell_ids(&ledger_delta),
+            );
+            let copy = ingress.clone();
+            s.retain_ingress_commit(computed_hash, ingress);
+            copy
+        };
+
+        let self_key = [0x78u8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+        let block_id = BlockId([0x41u8; 32]);
+        execute_finalized_turn(&state, &handle, block_id, &turn_data, None, 0).await;
+        {
+            let s = state.read().await;
+            assert_eq!(s.store.commit_cursor().unwrap_or(0), 1, "promotion landed");
+            assert!(
+                s.ingress_commits.is_empty(),
+                "entry consumed on durable success"
+            );
+        }
+
+        // The recovery shape: the entry survives although the durable record
+        // exists. Re-deliver the SAME finalized block.
+        {
+            let mut s = state.write().await;
+            s.retain_ingress_commit(computed_hash, ingress_copy);
+        }
+        execute_finalized_turn(&state, &handle, block_id, &turn_data, None, 0).await;
+        {
+            let s = state.read().await;
+            assert_eq!(
+                s.store.commit_cursor().unwrap_or(0),
+                1,
+                "retry is a NO-OP: no second commit record"
+            );
+            assert_eq!(
+                s.store
+                    .latest_attested_root()
+                    .ok()
+                    .flatten()
+                    .map(|r| r.height)
+                    .unwrap_or(0),
+                1,
+                "retry writes no second attested root"
+            );
+            assert!(
+                s.ingress_commits.is_empty(),
+                "the guard consumes the surviving entry"
+            );
+            let cell = s.ledger.get(&sender).expect("sender present");
+            assert_eq!(cell.state.nonce(), 1, "no re-execution on retry");
+        }
+    }
+
+    /// F4 backpressure: the ingress-side capacity check the three solo arms
+    /// consult BEFORE the in-place apply (a full retention map refuses the
+    /// submission — never evicts, since an evicted entry's mutation is already
+    /// committed in the live ledger).
+    #[test]
+    fn ingress_backpressure_threshold() {
+        use crate::state::{MAX_RETAINED_INGRESS_COMMITS, ingress_backlog_full};
+        assert!(!ingress_backlog_full(0));
+        assert!(!ingress_backlog_full(MAX_RETAINED_INGRESS_COMMITS - 1));
+        assert!(ingress_backlog_full(MAX_RETAINED_INGRESS_COMMITS));
+        assert!(ingress_backlog_full(MAX_RETAINED_INGRESS_COMMITS + 1));
     }
 
     /// A1 install mechanism + concurrency guard, in isolation and deterministic.
@@ -8511,6 +8876,37 @@ async fn apply_passed_proposal(
         let new_version = constitution.version();
         let new_threshold = constitution.threshold();
         drop(constitution);
+        // LIVE SOLO→MULTI CONTAINMENT: when a ratified membership change grows
+        // the participant set past one, atomically (under the state write
+        // lock, which every ingress handler holds across its is_solo read +
+        // in-place commit + retention — so an amendment can never interleave
+        // mid-handler) (a) clear the solo flag, so no further local turn is
+        // optimistically applied+cached against a stale mode, and (b) DRAIN
+        // the ingress promotion cache. A drained entry's turn re-executes at
+        // finalization and is nonce-replay-rejected (its mutation is already
+        // in the live ledger) — that is the pre-existing, recovery-covered
+        // regime, and STRICTLY better than promoting a stale solo execution
+        // result cross-validator without revalidation against the true tau
+        // pre-state. Runs BEFORE `apply_committee_change` so the ingress gate
+        // closes before the new committee is live.
+        if new_count > 1 {
+            let mut s = state.write().await;
+            if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo) {
+                if let Some(solo) = s.solo_consensus.as_mut() {
+                    solo.detect_peers(); // clears is_solo, logs the transition
+                }
+                let drained = s.ingress_commits.len();
+                s.ingress_commits.clear();
+                warn!(
+                    drained,
+                    new_participant_count = new_count,
+                    "live solo→multi transition: solo ingress closed and \
+                     {drained} retained ingress commit(s) drained — their turns \
+                     re-execute at finalization (nonce-replay-rejected; \
+                     restart recovery re-applies from the durable cursor)"
+                );
+            }
+        }
         // HYBRID-PQ committee for the NEW participant set: genesis-published
         // keys from state, plus any continuing member's key the collector
         // already holds (e.g. our OWN locally-derived key on a bootstrap node

@@ -3188,6 +3188,28 @@ async fn post_submit_turn(
     let turn_hash_bytes = turn.hash();
     let turn_hash = hex_encode(&turn_hash_bytes);
 
+    // SOLO BACKPRESSURE — checked BEFORE the in-place apply: a solo commit
+    // must retain its promotion entry, and the retention map never evicts
+    // (an evicted entry's mutation is already in the live ledger — its later
+    // promotion would nonce-replay-reject and later roots would carry an
+    // undurable mutation). Full map = finalization is stalled; refuse now so
+    // no unretained authoritative mutation can exist.
+    if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo) && s.ingress_commits_full() {
+        tracing::warn!(
+            retained = s.ingress_commits.len(),
+            "solo ingress refused: finalization backlog (promotion retention full)"
+        );
+        drop(s);
+        return Ok(Json(SubmitTurnResponse {
+            accepted: false,
+            turn_hash: None,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some("finalization backlog: retry".to_string()),
+        }));
+    }
+
     // O(touched) atomic rollback: arm a per-turn undo journal instead of cloning
     // the whole O(cells) ledger. The executor mutates `s.ledger` IN PLACE below;
     // on the rare `append_receipt` failure the journal restores exactly the
@@ -3267,15 +3289,17 @@ async fn post_submit_turn(
             // SOLO: retain the execution result for finalization PROMOTION —
             // consumed by exact turn hash in `execute_finalized_turn` so the
             // finalized pass writes the attested root + durable record without
-            // re-executing (the double-apply bug).
+            // re-executing (the double-apply bug). `snapshot` binds the PREFIX
+            // through this turn (canonical root + touched post-cells) HERE,
+            // under the same exclusive write lock that applied it — promotion
+            // must not re-read the live ledger (prefix poisoning).
             if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo) {
-                s.retain_ingress_commit(
-                    turn_hash_bytes,
-                    crate::state::IngressCommit {
-                        receipt: receipt.clone(),
-                        touched_cells: crate::blocklace_sync::touched_cell_ids(&ledger_delta),
-                    },
+                let ingress = crate::state::IngressCommit::snapshot(
+                    &s.ledger,
+                    receipt.clone(),
+                    crate::blocklace_sync::touched_cell_ids(&ledger_delta),
                 );
+                s.retain_ingress_commit(turn_hash_bytes, ingress);
             }
             crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             let receipt_hash = receipt.receipt_hash();
@@ -3523,6 +3547,30 @@ async fn post_submit_signed_turn(
     }
 
     let is_solo = s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo);
+
+    // SOLO BACKPRESSURE — checked BEFORE the in-place apply: a solo commit
+    // must retain its promotion entry, and the retention map never evicts
+    // (an evicted entry's mutation is already in the live ledger). Full map =
+    // finalization is stalled; refuse now so no unretained authoritative
+    // mutation can exist.
+    if is_solo && s.ingress_commits_full() {
+        tracing::warn!(
+            retained = s.ingress_commits.len(),
+            "solo signed-turn ingress refused: finalization backlog (promotion retention full)"
+        );
+        drop(s);
+        return Ok(Json(SubmitSignedTurnResponse {
+            accepted: false,
+            turn_hash: Some(turn_hash),
+            signer: Some(signer),
+            action_count,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some("finalization backlog: retry".to_string()),
+        }));
+    }
+
     // Is the acting cell the node OPERATOR's own default cell? Only then does the
     // node operator's cipherclerk chain (`s.cclerk`) authoritatively own the turn's
     // receipt chain. A FOREIGN client's turn is decoupled: its receipt chain is its
@@ -3692,15 +3740,18 @@ async fn post_submit_signed_turn(
             // `execute_finalized_turn` consumes this by EXACT turn hash and
             // writes the finalization artifacts (attested root, durable commit
             // record) without re-executing the turn, which the advanced nonce
-            // would reject as a replay (the double-apply bug).
+            // would reject as a replay (the double-apply bug). `snapshot`
+            // binds the PREFIX through this turn (canonical root + touched
+            // post-cells) HERE, under the same exclusive write lock that
+            // applied it — promotion must not re-read the live ledger
+            // (prefix poisoning).
             if is_solo {
-                s.retain_ingress_commit(
-                    turn_hash_bytes,
-                    crate::state::IngressCommit {
-                        receipt: receipt.clone(),
-                        touched_cells: crate::blocklace_sync::touched_cell_ids(&ledger_delta),
-                    },
+                let ingress = crate::state::IngressCommit::snapshot(
+                    &s.ledger,
+                    receipt.clone(),
+                    crate::blocklace_sync::touched_cell_ids(&ledger_delta),
                 );
+                s.retain_ingress_commit(turn_hash_bytes, ingress);
             }
             let receipt_hash = receipt.receipt_hash();
             let witness_outcome = match prepare_rotatable_turn(
@@ -7140,6 +7191,28 @@ async fn post_faucet(
     // finalization pass, so it provisions + commits authoritatively here.
     let is_solo = s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo);
 
+    // SOLO BACKPRESSURE — checked BEFORE any authoritative provisioning or the
+    // in-place apply: a solo faucet commit must retain its promotion entry,
+    // and the retention map never evicts (an evicted entry's mutation is
+    // already in the live ledger). Full map = finalization is stalled; refuse
+    // now so no unretained authoritative mutation can exist. (Zero-amount is
+    // a cell MATERIALIZATION with no consensus turn and no retention — not
+    // gated.)
+    if is_solo && req.amount > 0 && s.ingress_commits_full() {
+        tracing::warn!(
+            retained = s.ingress_commits.len(),
+            "solo faucet ingress refused: finalization backlog (promotion retention full)"
+        );
+        drop(s);
+        return Ok(Json(FaucetResponse {
+            success: false,
+            tx_hash: None,
+            turn_hash: None,
+            amount: 0,
+            error: Some("finalization backlog: retry".to_string()),
+        }));
+    }
+
     // Ensure the faucet cell exists (create on first use). Uses the genesis-
     // derived faucet key so this is the SAME cell genesis mints the supply into;
     // on a genesis node it already exists on every node. In multi-party mode this
@@ -7441,14 +7514,17 @@ async fn post_faucet(
             // hash. This is what covers the faucet WITHOUT nonce heuristics:
             // its receipt may legitimately be refused by the node chain, so a
             // receipt-chain lookup at finalization cannot identify it.
+            // `snapshot` binds the PREFIX through this turn (canonical root +
+            // touched post-cells) HERE, under the same exclusive write lock
+            // that applied it — promotion must not re-read the live ledger
+            // (prefix poisoning).
             if is_solo {
-                s.retain_ingress_commit(
-                    turn_hash_bytes,
-                    crate::state::IngressCommit {
-                        receipt: receipt.clone(),
-                        touched_cells: crate::blocklace_sync::touched_cell_ids(&ledger_delta),
-                    },
+                let ingress = crate::state::IngressCommit::snapshot(
+                    &s.ledger,
+                    receipt.clone(),
+                    crate::blocklace_sync::touched_cell_ids(&ledger_delta),
                 );
+                s.retain_ingress_commit(turn_hash_bytes, ingress);
             }
 
             // The faucet turn is a REAL committed turn: append its receipt to
