@@ -274,7 +274,11 @@ fn three_node_full_mode_runs_the_ordering_rule() {
     assert!(faucet_ok, "faucet turn submit on node-0 must succeed");
 
     // ── [B] cross-node block exchange + [C] finalization probe ─────────────────
-    let require_finality = std::env::var("DREGG_TEST_REQUIRE_FINALITY")
+    // [C] is HARD by default (see below). A genuinely resource-starved box may set
+    // DREGG_TEST_ALLOW_FINALITY_MISS=1 to DOWNGRADE the non-convergence case to a report —
+    // an explicit, visible opt-out, never the silent default. (The legacy
+    // DREGG_TEST_REQUIRE_FINALITY=1 is still honored as a no-op: hard is now the default.)
+    let allow_finality_miss = std::env::var("DREGG_TEST_ALLOW_FINALITY_MISS")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
     let wait_s: u64 = std::env::var("DREGG_TEST_FINALITY_WAIT_S")
@@ -324,28 +328,33 @@ fn three_node_full_mode_runs_the_ordering_rule() {
          shared DAG (max distinct creators seen by a node = {best_proposers})."
     );
 
-    // [C] converges today (the Stage-5 dissemination leg landed) — reported by default; hard
-    // only under DREGG_TEST_REQUIRE_FINALITY=1 (a contention-flake guard, not an open gap).
+    // [C] is the anti-vacuity PAYOFF: a turn FINALIZES through the ordering rule, AGREED across
+    // all three nodes (an attested root, latest_height >= 1). It converges on loopback today
+    // (verified 2026-07-06: latest_height = (1,1,1)); the Stage-5 gossip-dissemination leg landed.
+    // It is HARD-ASSERTED BY DEFAULT so a real cross-node-finality regression goes RED — an unset
+    // env is NOT a silent pass. A genuinely resource-starved box may raise
+    // DREGG_TEST_FINALITY_WAIT_S, or set DREGG_TEST_ALLOW_FINALITY_MISS=1 to downgrade the miss to
+    // a report (explicit + visible).
     if final_ok {
         eprintln!(
             "[C] CONVERGED — all 3 nodes reached an attested root (latest_height = {final_heights:?}): \
              the turn committed through the n=3 DAG ordering rule cross-node."
         );
-    } else {
+    } else if allow_finality_miss {
         eprintln!(
-            "[C] NOT CONVERGED in {wait_s}s (latest_height = {final_heights:?}). The consensus RULE is \
+            "[C] NOT CONVERGED in {wait_s}s (latest_height = {final_heights:?}) — \
+             DREGG_TEST_ALLOW_FINALITY_MISS set, downgrading to a report. The consensus RULE is \
              verified (blocklace::ordering::tau + Lean Distributed/BlocklaceFinality), cross-node \
-             block exchange WORKS ([B] passed), and this converges on a healthy box (the Stage-5 \
-             gossip-dissemination leg landed; see .docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md) — a miss here is \
-             most likely CPU/loopback contention starving the 3-process mesh; raise \
-             DREGG_TEST_FINALITY_WAIT_S or free resources."
+             block exchange WORKS ([B] passed); a miss here is most likely CPU/loopback contention \
+             starving the 3-process mesh — raise DREGG_TEST_FINALITY_WAIT_S or free resources."
         );
-        if require_finality {
-            panic!(
-                "[C] FAILED (DREGG_TEST_REQUIRE_FINALITY=1): no cross-node attested root; \
-                 latest_height = {final_heights:?}"
-            );
-        }
+    } else {
+        panic!(
+            "[C] FAILED: no cross-node attested root in {wait_s}s (latest_height = {final_heights:?}). \
+             The turn did not finalize across the n=3 federation through the ordering rule. If this \
+             box is resource-starved, raise DREGG_TEST_FINALITY_WAIT_S or set \
+             DREGG_TEST_ALLOW_FINALITY_MISS=1 to downgrade to a report."
+        );
     }
 }
 

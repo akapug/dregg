@@ -292,7 +292,11 @@ fn fresh_client_attested_turn_finalizes_cross_node_on_verified_n4() {
         assert_eq!(mode, "full", "node-{i} must be FULL; got {mode:?}");
     }
 
-    let require_finality = std::env::var("DREGG_TEST_REQUIRE_FINALITY")
+    // The client-turn cross-node finalization (STEP 2, the payoff) is HARD by default (see the
+    // end of the test). A genuinely resource-starved box may set DREGG_TEST_ALLOW_FINALITY_MISS=1
+    // to downgrade the miss to a report — an explicit, visible opt-out, never the silent default.
+    // (The legacy DREGG_TEST_REQUIRE_FINALITY=1 is honored as a no-op: hard is now the default.)
+    let allow_finality_miss = std::env::var("DREGG_TEST_ALLOW_FINALITY_MISS")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
     let wait_s: u64 = std::env::var("DREGG_TEST_FINALITY_WAIT_S")
@@ -531,12 +535,25 @@ fn fresh_client_attested_turn_finalizes_cross_node_on_verified_n4() {
         );
     }
 
-    if require_finality {
-        assert!(
-            all_have_dest,
-            "[REQUIRE_FINALITY] the fresh client's Transfer did not fund the destination on all \
-             {FED_SIZE} nodes — cross-node finalization of the external-client turn did not \
-             complete (destination per node = {last_dest:?})"
+    // THE PAYOFF, HARD-ASSERTED BY DEFAULT: the fresh client's own signed Transfer turn must
+    // finalize cross-node and fund the destination on ALL nodes. An unset env is NOT a silent
+    // pass. (The faucet cross-node finalization is already hard-asserted above at STEP 1; this is
+    // the harder external-client-signed leg. Fixes have landed — the residual is loopback QUIC
+    // mesh speed — so a starved box may raise DREGG_TEST_FINALITY_WAIT_S or set
+    // DREGG_TEST_ALLOW_FINALITY_MISS=1 to downgrade this to a report.)
+    if all_have_dest {
+        // converged — the success eprintln above already reported it.
+    } else if allow_finality_miss {
+        eprintln!(
+            "[payoff] DREGG_TEST_ALLOW_FINALITY_MISS set — downgrading the non-convergence to a \
+             report (destination per node = {last_dest:?})."
+        );
+    } else {
+        panic!(
+            "the fresh client's Transfer did not fund the destination on all {FED_SIZE} nodes — \
+             cross-node finalization of the external-client turn did not complete (destination per \
+             node = {last_dest:?}). If this box is resource-starved, raise \
+             DREGG_TEST_FINALITY_WAIT_S or set DREGG_TEST_ALLOW_FINALITY_MISS=1 to downgrade to a report."
         );
     }
 }
