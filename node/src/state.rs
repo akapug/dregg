@@ -146,6 +146,22 @@ pub struct NodeState {
     prove_pool: Arc<RwLock<Option<crate::prove_pool::ProvePool>>>,
 }
 
+/// The retained result of a solo-ingress authoritative in-place commit,
+/// consumed once by finalization promotion (see
+/// [`NodeStateInner::ingress_commits`]). Holds exactly what the finalization
+/// phase needs that only the ingress execution knew: the committed receipt
+/// (as appended/attempted on the chain — tentative-signed) and the complete
+/// touched-cell set from the executor's `LedgerDelta`.
+pub struct IngressCommit {
+    /// The receipt the ingress executor committed (solo: finality downgraded
+    /// to `Tentative` and node-re-signed before retention).
+    pub receipt: dregg_turn::TurnReceipt,
+    /// `touched_cell_ids(ledger_delta)` at ingress — the authoritative,
+    /// bounded set of cells this turn mutated, for the durable commit
+    /// record's cell overlay.
+    pub touched_cells: Vec<CellId>,
+}
+
 /// The inner mutable state of the node.
 // Some fields back cfg-conditional / not-yet-consulted node surfaces (routing,
 // cross-federation revocation, threshold shares); retained as wired scaffolding.
@@ -195,6 +211,18 @@ pub struct NodeStateInner {
     /// Set of proof hashes that have already been used (nullifiers).
     /// Prevents the same proof from satisfying multiple conditional turns.
     pub used_proof_hashes: HashSet<[u8; 32]>,
+    /// Solo-ingress authoritative commits awaiting blocklace finalization
+    /// PROMOTION, keyed by EXACT turn hash. `/turns/submit` and `/api/faucet`
+    /// retain their execution result here when they commit in place (solo);
+    /// `execute_finalized_turn` consumes an entry and runs the finalization
+    /// phase (attested root, durable commit record, note/nullifier
+    /// persistence) WITHOUT re-executing the turn — re-execution would be
+    /// rejected as a nonce replay (the double-apply bug). Exact-hash identity:
+    /// a conflicting foreign turn at the same nonce hashes differently, misses
+    /// this cache, and takes the normal execution path. RAM-only by design:
+    /// after a restart the durable-cursor recovery re-applies any turn that
+    /// never got its commit record.
+    pub ingress_commits: HashMap<[u8; 32], IngressCommit>,
     /// Known federation public keys for attested root quorum verification.
     ///
     /// Per FEDERATION-UNIFICATION-DESIGN.md §5/§8 this is now a *derived*
@@ -932,6 +960,7 @@ impl NodeState {
                 pending_conditionals: Vec::new(),
                 pending_turns: dregg_turn::PendingTurnRegistry::new(),
                 used_proof_hashes,
+                ingress_commits: HashMap::new(),
                 known_federation_keys: Vec::new(),
                 known_federation_ml_dsa_keys: Vec::new(),
                 known_federations: dregg_federation::KnownFederations::new(),
@@ -1122,6 +1151,7 @@ impl NodeState {
                 pending_conditionals: Vec::new(),
                 pending_turns: dregg_turn::PendingTurnRegistry::new(),
                 used_proof_hashes: HashSet::new(),
+                ingress_commits: HashMap::new(),
                 known_federation_keys: Vec::new(),
                 known_federation_ml_dsa_keys: Vec::new(),
                 known_federations: dregg_federation::KnownFederations::new(),
@@ -1680,6 +1710,27 @@ impl NodeState {
 // =============================================================================
 
 impl NodeStateInner {
+    /// Retain a solo-ingress execution result for finalization promotion
+    /// (see [`NodeStateInner::ingress_commits`]). Bounded: if finalization
+    /// stalls pathologically, an arbitrary entry is evicted with a warning —
+    /// an evicted turn falls back to the re-execute path (rejected as a
+    /// replay, exactly the pre-cache regime) and the durable-cursor recovery
+    /// re-applies it after a restart, so eviction degrades liveness of the
+    /// promotion, never safety.
+    pub fn retain_ingress_commit(&mut self, turn_hash: [u8; 32], commit: IngressCommit) {
+        const MAX_RETAINED: usize = 8192;
+        if self.ingress_commits.len() >= MAX_RETAINED {
+            tracing::warn!(
+                retained = self.ingress_commits.len(),
+                "ingress-commit retention full (finalization stalled?); evicting one entry"
+            );
+            if let Some(k) = self.ingress_commits.keys().next().copied() {
+                let _ = self.ingress_commits.remove(&k);
+            }
+        }
+        let _ = self.ingress_commits.insert(turn_hash, commit);
+    }
+
     /// pg-dregg M2: mirror one DURABLY committed turn to postgres.
     ///
     /// Called from the commit path AFTER `commit_finalized_turn` succeeds, with

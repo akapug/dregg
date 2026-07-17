@@ -3209,7 +3209,11 @@ async fn post_submit_turn(
     );
 
     match exec_result {
-        dregg_turn::TurnResult::Committed { mut receipt, .. } => {
+        dregg_turn::TurnResult::Committed {
+            mut receipt,
+            ledger_delta,
+            ..
+        } => {
             crate::metrics::inc_turns_executed("committed");
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
@@ -3260,6 +3264,19 @@ async fn post_submit_turn(
             // then drop the journal — the in-place commit stands.
             let pre_ledger = s.ledger.pre_turn_touched_ledger();
             s.ledger.commit_restore_point();
+            // SOLO: retain the execution result for finalization PROMOTION —
+            // consumed by exact turn hash in `execute_finalized_turn` so the
+            // finalized pass writes the attested root + durable record without
+            // re-executing (the double-apply bug).
+            if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo) {
+                s.retain_ingress_commit(
+                    turn_hash_bytes,
+                    crate::state::IngressCommit {
+                        receipt: receipt.clone(),
+                        touched_cells: crate::blocklace_sync::touched_cell_ids(&ledger_delta),
+                    },
+                );
+            }
             crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             let receipt_hash = receipt.receipt_hash();
             // Gather the rotated attestation material from the REAL before/after
@@ -3611,7 +3628,11 @@ async fn post_submit_signed_turn(
     }
 
     match exec_result {
-        dregg_turn::TurnResult::Committed { mut receipt, .. } => {
+        dregg_turn::TurnResult::Committed {
+            mut receipt,
+            ledger_delta,
+            ..
+        } => {
             crate::metrics::inc_turns_executed("committed");
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
@@ -3667,6 +3688,20 @@ async fn post_submit_signed_turn(
             // SOLO success: keep the in-place commit, drop the journal. (No-op
             // under MULTI-PARTY, already resolved to untouched above.)
             s.ledger.commit_restore_point();
+            // SOLO: retain the execution result for finalization PROMOTION —
+            // `execute_finalized_turn` consumes this by EXACT turn hash and
+            // writes the finalization artifacts (attested root, durable commit
+            // record) without re-executing the turn, which the advanced nonce
+            // would reject as a replay (the double-apply bug).
+            if is_solo {
+                s.retain_ingress_commit(
+                    turn_hash_bytes,
+                    crate::state::IngressCommit {
+                        receipt: receipt.clone(),
+                        touched_cells: crate::blocklace_sync::touched_cell_ids(&ledger_delta),
+                    },
+                );
+            }
             let receipt_hash = receipt.receipt_hash();
             let witness_outcome = match prepare_rotatable_turn(
                 &signed.turn,
@@ -7357,7 +7392,11 @@ async fn post_faucet(
     }
 
     match exec_result {
-        dregg_turn::TurnResult::Committed { mut receipt, .. } => {
+        dregg_turn::TurnResult::Committed {
+            mut receipt,
+            ledger_delta,
+            ..
+        } => {
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
 
             // Solo mode: tentative finality + height advance, exactly like the
@@ -7377,6 +7416,22 @@ async fn post_faucet(
                 solo.advance_height();
                 #[cfg(debug_assertions)]
                 debug_assert_signed_last(&receipt, &node_signing_key);
+            }
+
+            // SOLO: the faucet's in-place commit stands (committed above)
+            // whatever the receipt-chain append below decides — so retain the
+            // execution result for finalization PROMOTION, keyed by exact turn
+            // hash. This is what covers the faucet WITHOUT nonce heuristics:
+            // its receipt may legitimately be refused by the node chain, so a
+            // receipt-chain lookup at finalization cannot identify it.
+            if is_solo {
+                s.retain_ingress_commit(
+                    turn_hash_bytes,
+                    crate::state::IngressCommit {
+                        receipt: receipt.clone(),
+                        touched_cells: crate::blocklace_sync::touched_cell_ids(&ledger_delta),
+                    },
+                );
             }
 
             // The faucet turn is a REAL committed turn: append its receipt to
