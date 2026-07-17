@@ -9506,3 +9506,22 @@ run detached (setsid nohup swarm-build … & poll log) — swarm-build's systemd
 root digest + CANNOT be exposed this way -> app-root welds share an 8-lane ceiling. NO Lean witness for the app-root tie (Rust-driven +
 canary'd only, like SatCustomFold). Other consumers (automatafl board_new_root8 PI[24..32], entity-compose/param-compose outcome_
 commitment) adopt via .with_app_root_binding(...) AFTER relocating their root into fields[0..7] — that relocation is the real cost.
+
+## 2026-07-17 — Verified layout allocator + tuple-narrow optimizer: BUILT+GREEN, orphaned-then-recovered
+The "verified snarky" workstream (2026-07-13/15) was abandoned mid-stride and repaired-to-green by the
+`cf84a9baa` sweep-up; re-verified GREEN at HEAD 2026-07-17 (`lake build
+Dregg2.Circuit.{RotatedKernelRefinementAvailWideNarrow, Emit.RotatedLayoutBridge}` clean, no sorry). It was
+missing from REORIENT/HORIZONLOG (recorded only in `docs/DESIGN-verified-layout-optimizer.md`, which is the
+authoritative file:line record).
+- ALLOCATOR (BUILT): `RotatedLayout.lean` (Legal = disjoint/inBounds/58×3-aligned as constructor obligations;
+  `rotated178_legal`+`_complete` by native_decide) + `RotatedLayoutBridge.lean` (all 7 emit *GroupCol PROVEN =
+  rotated178.groupCol, zero bytes moved) + Rust `rotated_layout_is_a_complete_disjoint_tiling` test. The
+  disjointness invariant that was a comment is now a theorem. OPEN SEAM = Goal A.
+- OPTIMIZER tuple-narrow (soundness fully PROVEN, NOT deployed): narrow chip bus (BUS_P2_1/CHIP_MULT_NARROW,
+  descriptor_ir2) + routing + `NarrowChip`/`GraduateNarrow`/`GraduateWideNarrow`/`AvailWideMembersNarrow`/
+  `RotatedKernelRefinementAvailWideNarrow` (the whole narrow-graduation availability tower, #assert_axioms-clean,
+  teeth reproduced byte-identical). Named residuals: `effNarrow_rejects_wrong_facet` tooth + the narrow WIRE
+  wrappers + producer + VK regen = the ember-gated DEPLOY (Goal B).
+- GOAL A (codex take-home, `docs/CODEX-BRIEF-allocator-single-source.md`): make producer+circuit+emit DERIVE
+  from the one verified layout (byte-preserving, NO regen) + tidy the parallel-layout cruft. GOAL B: deploy the
+  proven optimizer (regen; a deliberate campaign, out of codex scope).

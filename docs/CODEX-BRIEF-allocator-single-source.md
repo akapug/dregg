@@ -1,5 +1,29 @@
 # Codex take-home: land the verified layout allocator as the ONE source — and tidy the cruft
 
+## §−1. REORIENT FIRST (this brief drifted; the code is the truth)
+
+This brief was drafted 2026-07-15; the tree moves HARD (multiple lanes commit every few minutes — FRI
+ledger, PQ, stark-kill, BFV). By the time you read it, its **specific numbers, file:line, and PI counts
+are probably stale.** Treat this brief as *intent + constraints + gotchas*, NOT as ground truth. Before
+acting, SHAPE from the record, STATE from code at HEAD:
+
+- **The authoritative current record is `docs/DESIGN-verified-layout-optimizer.md`** — it was rewritten
+  with file:line `BUILT` vs `PROPOSED` markers and is kept fresher than this brief. Read it first; §1.3's
+  "named seam" IS Goal A. Where it and this brief disagree, the design doc + the actual code win.
+- **The workstream was abandoned mid-stride and repaired-to-green** by a sweep-up (`cf84a9baa`, "ember
+  apologizes: sweep-up commits") — it BUILDS GREEN at HEAD (verified 2026-07-17: `lake build
+  Dregg2.Circuit.RotatedKernelRefinementAvailWideNarrow Dregg2.Circuit.Emit.RotatedLayoutBridge` clean, no
+  `sorry`) but was orphaned from `REORIENT.md`/`HORIZONLOG.md`. Start from green; do NOT trust that the
+  geometry constants below (`NUM_PRE_LIMBS=178`, the group tilings, PI=46/78) are still current — RE-DERIVE
+  them from `RotatedLayout.lean` + `trace_rotated.rs` + `cell/src/commitment.rs` at HEAD.
+- **First move: re-verify the baseline is green** (`lake build` the layout + narrow modules; `cargo test -p
+  dregg-circuit` the layout tiling test) so you know you're starting from not-broken, and so any red you
+  cause is yours.
+
+Everything below is the durable intent. Verify each concrete fact against HEAD before you lean on it.
+
+---
+
 You are codex, deputized on a detail-dense, high-value job you're well suited to. This brief front-loads
 *everything* — the history, the proven body, the goal, the mess, the hard constraints, the gotchas — so
 you can reason broadly and choose your own path. Broad/rambling scope is fine; use judgment. The one
