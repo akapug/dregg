@@ -518,9 +518,12 @@ impl AgentCipherclerk {
         }
         .bind(state_root);
         let bridge_predicate = Self::predicate_type_to_bridge(predicate_type, threshold.as_u32());
+        // 2026-07-16 Blinding migration (mechanical half): prove_predicate_for_fact now
+        // takes the blinding; thread the SAME in-scope value the commitment above used.
         let predicate_proof = dregg_bridge::prove_predicate_for_fact(
             attribute_value,
             binding,
+            dregg_circuit::predicate_arith_witness::Blinding(blinding),
             &bridge_predicate,
         )
         .ok_or_else(|| {
