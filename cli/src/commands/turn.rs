@@ -312,6 +312,21 @@ fn is_full_hash(needle: &str) -> bool {
     needle.len() == 64 && needle.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Which full 64-hex TURN hash should the durable `/api/turn/{hash}/status`
+/// query use? The endpoint interprets its path strictly as a turn hash, so
+/// when a receipt matched the query, the query itself may be the RECEIPT hash
+/// — sending it verbatim would miss and report a finalized turn as
+/// `consensus_final: false` (F4-D). The raw query is used only when no receipt
+/// matched (it may still be the full turn hash of a durably-final turn whose
+/// receipt-chain append failed — the exact case the endpoint exists for).
+fn status_query_hash(needle: &str, found: Option<&serde_json::Value>) -> Option<String> {
+    found
+        .and_then(|r| r["turn_hash"].as_str())
+        .filter(|th| is_full_hash(&th.to_lowercase()))
+        .map(|th| th.to_lowercase())
+        .or_else(|| is_full_hash(needle).then(|| needle.to_string()))
+}
+
 /// Merge one turn's machine-readable status: the DURABLE `/api/turn/{hash}/status`
 /// answer (the authority on consensus finality — present whenever a full hash
 /// was resolvable) augmented with the matched `/api/receipts` entry (which may
@@ -374,14 +389,7 @@ async fn status(
     // receipt's. Both output modes use it, so the no-receipt-but-durably-final
     // case is answered correctly in `--json` too (previously the JSON mode
     // dumped the raw receipts array and never reached the status endpoint).
-    let full_hash: Option<String> = if is_full_hash(&needle) {
-        Some(needle.clone())
-    } else {
-        found
-            .and_then(|r| r["turn_hash"].as_str())
-            .filter(|th| is_full_hash(&th.to_lowercase()))
-            .map(|th| th.to_lowercase())
-    };
+    let full_hash = status_query_hash(&needle, found);
     let status_resp = match &full_hash {
         Some(h) => get_json(cfg, &format!("/api/turn/{h}/status")).await.ok(),
         None => None,
@@ -599,10 +607,11 @@ fn build_one_effect(kind: &str) -> Result<serde_json::Value, Box<dyn std::error:
 
 #[cfg(test)]
 mod tests {
-    use super::{is_full_hash, merge_status_json};
+    use super::{is_full_hash, merge_status_json, status_query_hash};
     use serde_json::json;
 
     const FULL: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const FULL_RECEIPT: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
     #[test]
     fn full_hash_detection() {
@@ -666,6 +675,71 @@ mod tests {
         assert!(merged["turn_hash"].is_null());
         assert_eq!(merged["receipt_present"], json!(false));
         assert!(merged["attested_height"].is_null());
+    }
+
+    /// F4-D (fourth-pass review): `dregg turn status --json <full receipt
+    /// hash>` — the query is a full 64-hex hash AND a receipt matched it by
+    /// RECEIPT hash. The status query must use the matched receipt's TURN hash
+    /// (the only form `/api/turn/{hash}/status` resolves); sending the receipt
+    /// hash verbatim missed the endpoint, and its `consensus_final: false`
+    /// answer took precedence in the merge — a finalized receipt reported
+    /// not-final in JSON while human mode disagreed.
+    #[test]
+    fn full_receipt_hash_query_prefers_matched_receipts_turn_hash() {
+        let receipt = json!({
+            "turn_hash": FULL,
+            "receipt_hash": FULL_RECEIPT,
+            "consensus_final": true,
+            "attested_height": 4,
+        });
+        assert_eq!(
+            status_query_hash(FULL_RECEIPT, Some(&receipt)).as_deref(),
+            Some(FULL),
+            "a matched receipt's turn hash must drive the status query, not \
+             the raw receipt-hash query"
+        );
+        // Through the merge seam: the status endpoint (queried with the TURN
+        // hash) answers final; the merged JSON must agree.
+        let status = json!({
+            "turn_hash": FULL,
+            "consensus_final": true,
+            "attested_height": 4,
+            "receipt_hash": FULL_RECEIPT,
+        });
+        let merged = merge_status_json(FULL_RECEIPT, Some(&receipt), Some(&status));
+        assert_eq!(merged["consensus_final"], json!(true));
+        assert_eq!(merged["turn_hash"], json!(FULL));
+        assert_eq!(merged["attested_height"], json!(4));
+    }
+
+    /// F4-D companion: the raw query drives the status call ONLY when no
+    /// receipt matched — the no-receipt-but-durably-final case (a full TURN
+    /// hash whose receipt-chain append failed) must keep reaching the durable
+    /// endpoint, and a matched receipt without a usable turn hash falls back
+    /// to the raw full-hash query.
+    #[test]
+    fn raw_query_used_only_when_no_receipt_matched() {
+        // No receipt matched: the full-hash query goes through verbatim.
+        assert_eq!(
+            status_query_hash(FULL, None).as_deref(),
+            Some(FULL),
+            "unmatched full turn hash must still reach the durable endpoint"
+        );
+        // Abbreviated query, nothing matched: no status call at all.
+        assert_eq!(status_query_hash(&FULL[..8], None), None);
+        // Matched receipt with a malformed turn hash: fall back to the query.
+        let malformed = json!({ "turn_hash": "zz", "receipt_hash": FULL_RECEIPT });
+        assert_eq!(
+            status_query_hash(FULL_RECEIPT, Some(&malformed)).as_deref(),
+            Some(FULL_RECEIPT)
+        );
+        // Abbreviated query that matched a receipt: the receipt's full turn
+        // hash drives the status call (pre-existing behavior, preserved).
+        let receipt = json!({ "turn_hash": FULL, "receipt_hash": FULL_RECEIPT });
+        assert_eq!(
+            status_query_hash(&FULL[..8], Some(&receipt)).as_deref(),
+            Some(FULL)
+        );
     }
 
     /// A receipt matched by prefix but the status endpoint was unreachable:
