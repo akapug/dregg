@@ -57,17 +57,27 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 
-# The REAL light-client verify path — no mocks. The TUI fetches a node's DWR1
-# witness artifact (`/api/receipts/{hash}/witnesses`), decodes it with the SDK's
-# canonical decoder (`dregg-sdk::decode_witnessed_receipt_artifact_hex`), and
-# runs the REAL plonky3 STARK verifier (`dregg-verifier::verify_effect_vm_proof`)
-# over the proof bytes + public inputs the artifact carries. Both are pulled with
-# `no-lean-link` so the TUI stays a pure host binary (no Lean runtime / libuv /
-# GMP) — link-suppression only; the verify path is plonky3 + crypto, never Lean.
+# The light-client fetch+decode path. The TUI fetches a node's DWR1 witness
+# artifact (`/api/receipts/{hash}/witnesses`) and decodes it with the SDK's
+# canonical decoder (`dregg-sdk::decode_witnessed_receipt_artifact_hex`).
+#
+# It does NOT verify the proof. `dregg-verifier::verify_effect_vm_proof` — the
+# only single-artifact verify entry reachable from here — is the RETIRED v1
+# hand-AIR core: it discards its arguments and fails closed on every build. The
+# Verify tab reports CANNOT VERIFY HERE and names the missing rewire; see the
+# module doc in src/main.rs. `dregg-verifier` stays a dep so that retirement
+# reason is quoted from the crate itself rather than duplicated as TUI prose.
+#
+# Both are pulled with `no-lean-link` so the TUI stays a pure host binary (no
+# Lean runtime / libuv / GMP) — link-suppression only, never Lean.
 dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link"] }
 dregg-verifier = { path = "../verifier", features = ["no-lean-link"] }
 dregg-turn = { path = "../turn", default-features = false }
-# Used only by `--selfcheck`: prove a fresh HEAD-version Effect-VM turn so the
-# verify core can be shown reaching VERIFIED on a version-matched proof (the live
-# devnet runs an older PI layout). Same audited plonky3 prover the node uses.
+# STALE: this was "used only by `--selfcheck`: prove a fresh HEAD-version
+# Effect-VM turn so the verify core can be shown reaching VERIFIED". That
+# selfcheck is gone (the v1 core it proved against is retired) and `run_selfcheck`
+# now only reports the retirement, so NEITHER `dregg-circuit` NOR the
+# `dregg-turn` dep above is referenced by src/main.rs any more. Both are unused
+# and should be dropped; left in place only because dregg-tui/Cargo.lock is dirty
+# in another lane's working tree and removing a dep rewrites it.
 dregg-circuit = { path = "../circuit" }
