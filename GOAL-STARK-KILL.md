@@ -2098,3 +2098,18 @@ verify path")`). So per binary:
    links transitively via X"), but that claim should be traced before it's written — an unjustified
    allowlist entry is exactly the kind of prose-lie this session has been deleting.
 NOT doing it unilaterally: adding a Lean-archive build dep to a deploy artifact is a deployment decision.
+
+### `f3c133291` — VerifyTcbReentryResidual CLOSED honestly (gate RED -> GREEN, zero false claims)
+6 DEFERRED-WIRING allowlist entries. I almost copy-pasted dregg-cli s "thin client, no local PQ verify path"
+shape — `cargo tree` proved that would be a LIE: 5 of 6 link the FULL stack incl. dregg-lightclient (a
+light CLIENT verifies). So the entries say the uncomfortable truth: **fips204 is in these binaries verify
+TCB**, deferred ONLY on the 101MB libdregg_lean.a link cost (measured), each carrying its EXPIRY: wire +
+DELETE when the ~8MB Lean archive lands (ember s other lane). dregg-doc earned a better justification by
+tracing: optional-only reach (dregg-blocklace optional=true, OFF by default) — the shipped binary has no PQ
+verify path.
+**MY 2 CORRECTIONS (tooling lying to me — the session s recurring lesson):** (1) "6->3, other lanes fixed 3"
+was FALSE — my `tail -14` truncated the gate output; it was always 6. (2) I nearly claimed the Lean rail is
+never installed in production — checking showed node:2450 / sdk/runtime:72 / starbridge-v2:85 all install it.
+**The rail is REAL.**
+NEXT (open ledger): phantom-cfg cleanup (~11 gates, surfaced by the warn flip); constraint_prover assessment;
+the fhegg spike (ember s, doc ready at docs/deos/FHEGG-SDK-READINESS.md).
