@@ -168,6 +168,120 @@ fn find_depth_range(desc: &CircuitDescriptor, depth_col: usize) -> &ConstraintEx
         })
 }
 
+/// Find the **non-empty-below-pointer occupancy gate** for `cell` — the bare `Polynomial`
+/// whose every term references only `{STACK[cell], STACK_DEPTH}` and in which `STACK[cell]`
+/// appears to the 3rd power in its leading monomial (the cubic is-empty indicator
+/// `(x−1)(x−2)(x−3)`). This is the tooth that refuses an `EMPTY` hole strictly below the
+/// pointer; the linear empty-above gate (mult-1 in the cell) and the cell-range gate (no depth
+/// column) are excluded by the shape. Panics if the depth↔occupancy tooth was never wired.
+fn find_occupancy_nonempty_below(desc: &CircuitDescriptor, cell: usize) -> &ConstraintExpr {
+    desc.constraints
+        .iter()
+        .find(|c| match c {
+            ConstraintExpr::Polynomial { terms } => {
+                let cols_ok = terms.iter().all(|t| {
+                    t.col_indices
+                        .iter()
+                        .all(|&i| i == cell || i == col::STACK_DEPTH)
+                });
+                let refs_depth = terms
+                    .iter()
+                    .any(|t| t.col_indices.contains(&col::STACK_DEPTH));
+                let cubic_in_cell = terms
+                    .iter()
+                    .map(|t| t.col_indices.iter().filter(|&&i| i == cell).count())
+                    .max()
+                    .unwrap_or(0)
+                    == 3;
+                cols_ok && refs_depth && cubic_in_cell
+            }
+            _ => false,
+        })
+        .unwrap_or_else(|| {
+            panic!("the descriptor must contain the non-empty-below occupancy gate for cell {cell}")
+        })
+}
+
+// ============================================================================
+// The depth↔occupancy canary: STACK_DEPTH must count the non-EMPTY prefix
+// ============================================================================
+
+/// Canary — **a hole below the pointer**. The design named the depth↔occupancy invariant as
+/// the missing tooth: `STACK_DEPTH` pinned a value but nothing tied it to WHICH cells are
+/// nonzero, so a trace could claim depth 4 while a cell strictly below the pointer sat `EMPTY`.
+/// The nested run's row 3 is `[op, S, cl, cl]` at depth 4; blank cell 1 (`S`) to `EMPTY` while
+/// leaving depth 4.
+///
+/// The reject is ISOLATED to the tooth: the single non-empty-below gate for cell 1 —
+/// `(STACK[1]−1)(STACK[1]−2)(STACK[1]−3) · (STACK_DEPTH)(STACK_DEPTH−1)` — goes from zero
+/// (honest) to nonzero (hole), so it cannot be credited to the neighbouring shift equations.
+#[test]
+fn tamper_occupancy_hole_below_pointer_rejects() {
+    let desc = dyck_parse_descriptor(NAME);
+    let (trace, public_inputs) = build_nested_witness();
+    assert!(
+        dyck_satisfied(&desc, &trace, &public_inputs),
+        "the honest '[[]]' parse must satisfy the descriptor"
+    );
+
+    let gate = find_occupancy_nonempty_below(&desc, col::STACK1);
+    assert_eq!(
+        gate.evaluate(
+            &trace[NROW_AFTER_NESTED_PUSH],
+            &trace[NROW_AFTER_NESTED_PUSH],
+            &public_inputs
+        ),
+        BabyBear::ZERO,
+        "cell 1 is a live symbol below the pointer on the honest run"
+    );
+
+    let mut tampered = trace.clone();
+    tampered[NROW_AFTER_NESTED_PUSH][col::STACK1] = BabyBear::new(SYM_EMPTY);
+
+    assert_ne!(
+        gate.evaluate(
+            &tampered[NROW_AFTER_NESTED_PUSH],
+            &tampered[NROW_AFTER_NESTED_PUSH],
+            &public_inputs
+        ),
+        BabyBear::ZERO,
+        "THE TOOTH: an EMPTY hole strictly below the pointer is off-occupancy"
+    );
+    assert!(
+        !dyck_satisfied(&desc, &tampered, &public_inputs),
+        "a hole below the pointer must REJECT"
+    );
+}
+
+/// Canary — **the pointer overclaims occupancy**. Take the `"[]"` run's row 3 (`[cl]`, depth 1)
+/// and push the pointer to depth 2 while cell 1 stays `EMPTY`: `STACK_DEPTH` now counts two live
+/// cells but only one is nonzero. The non-empty-below gate for cell 1 refuses the phantom cell.
+#[test]
+fn tamper_occupancy_overclaimed_depth_rejects() {
+    let desc = dyck_parse_descriptor(NAME);
+    let (trace, public_inputs) = build_brackets_witness();
+    assert!(
+        dyck_satisfied(&desc, &trace, &public_inputs),
+        "baseline must accept"
+    );
+
+    let gate = find_occupancy_nonempty_below(&desc, col::STACK1);
+    let mut tampered = trace.clone();
+    // Row 3 is `term ']'` at depth 1 (cell 0 = cl live, cells 1.. EMPTY). Claim depth 2.
+    tampered[3][col::STACK_DEPTH] = BabyBear::new(2);
+    tampered[3][col::DEPTH_NEXT] = BabyBear::new(1);
+
+    assert_ne!(
+        gate.evaluate(&tampered[3], &tampered[3], &public_inputs),
+        BabyBear::ZERO,
+        "THE TOOTH: cell 1 EMPTY while the pointer claims it is occupied is off-occupancy"
+    );
+    assert!(
+        !dyck_satisfied(&desc, &tampered, &public_inputs),
+        "an over-claimed STACK_DEPTH must REJECT"
+    );
+}
+
 // ============================================================================
 // The depth-range canaries: a WRAPPED depth is REFUSED
 // ============================================================================

@@ -304,6 +304,114 @@ fn depth_grid() -> Vec<u32> {
     (0..=STACK_D as u32).collect()
 }
 
+/// The legal SYMBOL grid `{EMPTY, S, op, cl} = {0, 1, 2, 3}` — the ids a stack cell may hold.
+/// [`vanishing_on_grid`] over it pins each cell to a symbol, which is what makes the is-empty
+/// indicator in [`occupancy_tooth`] faithful (an unconstrained cell could hold a field value
+/// where `(x−1)(x−2)(x−3)` vanishes without `x` being one of the three symbols).
+fn symbol_grid() -> Vec<u32> {
+    vec![SYM_EMPTY, SYM_S, SYM_OP, SYM_CL]
+}
+
+/// A **product of factors expanded into monomial `PolyTerm`s** (the two-column generalization
+/// of [`vanishing_on_grid`], which is the single-column, single-grid case). `bare` are
+/// degree-1 `col` factors; `linear` are `(col, k)` factors meaning `(col − k)`. The
+/// `ConstraintExpr::Polynomial` carrier stores a sum of `coeff · ∏cols` monomials, so a product
+/// whose factors mix two columns (a stack cell and the depth pointer) must be expanded here
+/// rather than nested — exactly what `vanishing_on_grid` does for one column.
+fn monomial_product(bare: &[usize], linear: &[(usize, i128)]) -> ConstraintExpr {
+    // The running polynomial as a list of (sorted column multiset, integer coeff).
+    let mut poly: Vec<(Vec<usize>, i128)> = vec![(Vec::new(), 1)];
+    let push_col = |poly: &[(Vec<usize>, i128)], c: usize| -> Vec<(Vec<usize>, i128)> {
+        poly.iter()
+            .map(|(m, co)| {
+                let mut mm = m.clone();
+                mm.push(c);
+                mm.sort_unstable();
+                (mm, *co)
+            })
+            .collect()
+    };
+    for &c in bare {
+        poly = push_col(&poly, c);
+    }
+    for &(c, k) in linear {
+        let mut next: Vec<(Vec<usize>, i128)> = Vec::new();
+        for (m, co) in &poly {
+            let mut mm = m.clone();
+            mm.push(c);
+            mm.sort_unstable();
+            next.push((mm, *co)); // × col
+            next.push((m.clone(), *co * (-k))); // × (−k)
+        }
+        // Combine like monomials so any cancellation collapses.
+        let mut combined: Vec<(Vec<usize>, i128)> = Vec::new();
+        for (m, co) in next {
+            if let Some(slot) = combined.iter_mut().find(|(mm, _)| *mm == m) {
+                slot.1 += co;
+            } else {
+                combined.push((m, co));
+            }
+        }
+        poly = combined;
+    }
+    let terms = poly
+        .into_iter()
+        .filter(|(_, c)| *c != 0)
+        .map(|(m, c)| PolyTerm {
+            coeff: int_to_field(c),
+            col_indices: m,
+        })
+        .collect();
+    ConstraintExpr::Polynomial { terms }
+}
+
+/// **THE DEPTH↔OCCUPANCY TOOTH** — the constraint the design named as still owed: pin
+/// `STACK_DEPTH` to count EXACTLY the non-`EMPTY` prefix of the `STACK[·]` cells. Before this,
+/// "nothing tied `STACK_DEPTH` to which cells are nonzero" — the boundaries and per-action
+/// deltas pinned the depth's VALUE on every row but not the identity of the occupied cells, so
+/// a trace could claim depth 2 while only one cell was live (a hole below the pointer) and no
+/// gate saw it. That is exactly what blocks the general `decode`: it reads back the working
+/// stack as the first `STACK_DEPTH` cells, and a hole makes that read disagree with the
+/// threading equations.
+///
+/// Three families over the small domain, per stack cell `i`:
+///
+/// 1. **cell range** — `∏_{s∈{0,1,2,3}} (STACK[i] − s) == 0`: every cell holds a symbol id, so
+///    "non-`EMPTY`" is exactly "`∈ {1,2,3}`".
+/// 2. **empty above the pointer** — `STACK[i] · ∏_{v=i+1}^{D} (STACK_DEPTH − v) == 0`: the
+///    depth product vanishes iff `i < STACK_DEPTH`, so on the empty side (`i ≥ STACK_DEPTH`) it
+///    forces `STACK[i] == 0`.
+/// 3. **non-empty below the pointer** — `(STACK[i]−1)(STACK[i]−2)(STACK[i]−3) ·
+///    ∏_{v=0}^{i} (STACK_DEPTH − v) == 0`: the first factor is nonzero EXACTLY when
+///    `STACK[i] == 0` (the is-empty indicator, given the range), and the depth product vanishes
+///    iff `i ≥ STACK_DEPTH`; so an `EMPTY` hole strictly below the pointer (`i < STACK_DEPTH`)
+///    makes the whole product nonzero and REJECTS.
+///
+/// With the depth range `0 ≤ STACK_DEPTH ≤ D` already emitted, families 2+3 say cells
+/// `[0, STACK_DEPTH)` are precisely the non-`EMPTY` ones. This CANNOT weaken acceptance: an
+/// honest run lays cells `[0, depth)` = the live stack symbols (each `∈ {1,2,3}`) and
+/// `[depth, D)` = `EMPTY`, so all three families hold on every row of the shipped witnesses.
+fn occupancy_tooth() -> Vec<ConstraintExpr> {
+    let d = STACK_D as i128;
+    let mut out = Vec::new();
+    for i in 0..STACK_D {
+        // 1. cell range: STACK[i] ∈ {0, 1, 2, 3}.
+        out.push(vanishing_on_grid(col::stack(i), &symbol_grid()));
+        // 2. empty above the pointer: STACK[i] · ∏_{v=i+1}^{D} (STACK_DEPTH − v).
+        let above: Vec<(usize, i128)> = ((i as i128 + 1)..=d)
+            .map(|v| (col::STACK_DEPTH, v))
+            .collect();
+        out.push(monomial_product(&[col::stack(i)], &above));
+        // 3. non-empty below the pointer:
+        //    (STACK[i]−1)(STACK[i]−2)(STACK[i]−3) · ∏_{v=0}^{i} (STACK_DEPTH − v).
+        let mut linear: Vec<(usize, i128)> =
+            vec![(col::stack(i), 1), (col::stack(i), 2), (col::stack(i), 3)];
+        linear.extend((0..=i as i128).map(|v| (col::STACK_DEPTH, v)));
+        out.push(monomial_product(&[], &linear));
+    }
+    out
+}
+
 fn gated(selector_col: usize, inner: ConstraintExpr) -> ConstraintExpr {
     ConstraintExpr::Gated {
         selector_col,
@@ -598,6 +706,13 @@ pub fn dyck_parse_descriptor(name: &str) -> CircuitDescriptor {
     // ---- lane fixes (constant push sources) -------------------------------
     constraints.extend(lane_fixes());
 
+    // ---- depth↔occupancy tooth --------------------------------------------
+    // Pin STACK_DEPTH to count exactly the non-EMPTY prefix of the stack cells (cell range +
+    // empty-above-pointer + non-empty-below-pointer). The design named this as the missing
+    // tooth; without it a hole below the pointer is invisible and the general `decode` cannot
+    // read the working stack back out. See `occupancy_tooth`.
+    constraints.extend(occupancy_tooth());
+
     // ---- stack threading ---------------------------------------------------
     // rBracket: the general push `S → op S cl` with the remainder shift + overflow guard.
     constraints.extend(push_with_remainder_shift(
@@ -610,11 +725,11 @@ pub fn dyck_parse_descriptor(name: &str) -> CircuitDescriptor {
     // done: the machine has stopped; the stack holds.
     constraints.extend(hold_stack(col::IS_DONE));
 
-    // Degree: the two depth-range vanishing polys are degree `D + 1 = 6` (the grid size —
-    // the same accounting `dfa_routing` does with `range_degree = |a_values|.max(|b_values|)`).
-    // The gated rule-membership polynomial is degree 3 (selector · quadratic); everything
-    // else is ≤ 2. `MAX_CONSTRAINT_DEGREE` is 8, so the grid pin fits with headroom.
-    let max_degree = (STACK_D + 1).max(4);
+    // Degree accounting: the two depth-range vanishing polys are degree `D + 1 = 6` (the grid
+    // size), and the depth↔occupancy tooth's non-empty-below family is the deepest —
+    // `(STACK[i]−1)(STACK[i]−2)(STACK[i]−3) · ∏_{v=0}^{i} (depth − v)` is degree `3 + (i + 1)`,
+    // maximised at `i = D − 1` to `3 + D = 8`. `MAX_CONSTRAINT_DEGREE` is 8, so it fits exactly.
+    let max_degree = (STACK_D + 3).max(4);
 
     let boundaries = vec![
         // first row starts at [initial]: STACK0 == pi[INITIAL_SYMBOL], depth 1.
@@ -1225,6 +1340,77 @@ mod tests {
         );
     }
 
+    /// **THE OCCUPANCY TOOTH, isolated — a hole below the pointer.** The nested run's row 3 is
+    /// `[op, S, cl, cl]` at depth 4, so cell 1 (`S`) is live. Blank it to `EMPTY` while leaving
+    /// depth 4: `STACK_DEPTH` now claims 4 occupied cells but cell 1 is a hole. The
+    /// non-empty-below gate for cell 1 —
+    /// `(STACK[1]−1)(STACK[1]−2)(STACK[1]−3) · (STACK_DEPTH)(STACK_DEPTH−1)` — goes from zero
+    /// (honest) to nonzero (hole), so the reject is credited to the tooth, not a neighbour.
+    #[test]
+    fn occupancy_hole_below_pointer_rejects() {
+        let desc = dyck_parse_descriptor(NAME);
+        let (trace, pi) = build_nested_witness();
+        assert!(dyck_satisfied(&desc, &trace, &pi), "honest nested baseline");
+
+        // Reconstruct the non-empty-below gate for cell 1 (depth product over v = 0, 1).
+        let mut linear: Vec<(usize, i128)> =
+            vec![(col::stack(1), 1), (col::stack(1), 2), (col::stack(1), 3)];
+        linear.extend((0..=1i128).map(|v| (col::STACK_DEPTH, v)));
+        let gate = monomial_product(&[], &linear);
+
+        assert_eq!(
+            gate.evaluate(&trace[3], &trace[3], &pi),
+            BabyBear::ZERO,
+            "cell 1 is a live symbol below the pointer on the honest run"
+        );
+
+        let mut tampered = trace.clone();
+        tampered[3][col::stack(1)] = BabyBear::new(SYM_EMPTY);
+        assert_ne!(
+            gate.evaluate(&tampered[3], &tampered[3], &pi),
+            BabyBear::ZERO,
+            "THE TOOTH: an EMPTY hole below the pointer is off-occupancy"
+        );
+        assert!(
+            !dyck_satisfied(&desc, &tampered, &pi),
+            "a hole below the pointer must REJECT"
+        );
+    }
+
+    /// **THE OCCUPANCY TOOTH, isolated — a live symbol ABOVE the pointer.** The `"[]"` run's
+    /// row 3 is `[cl]` at depth 1, so cells 1..D must be `EMPTY`. Park a `cl` in cell 1
+    /// (`i = 1 ≥ STACK_DEPTH = 1`): the empty-above gate for cell 1 —
+    /// `STACK[1] · ∏_{v=2}^{D}(STACK_DEPTH − v)` — rejects it.
+    #[test]
+    fn occupancy_symbol_above_pointer_rejects() {
+        let desc = dyck_parse_descriptor(NAME);
+        let (trace, pi) = build_brackets_witness();
+        assert!(dyck_satisfied(&desc, &trace, &pi), "honest baseline");
+
+        let above: Vec<(usize, i128)> = (2i128..=STACK_D as i128)
+            .map(|v| (col::STACK_DEPTH, v))
+            .collect();
+        let gate = monomial_product(&[col::stack(1)], &above);
+
+        assert_eq!(
+            gate.evaluate(&trace[3], &trace[3], &pi),
+            BabyBear::ZERO,
+            "cell 1 is EMPTY above the pointer on the honest run"
+        );
+
+        let mut tampered = trace.clone();
+        tampered[3][col::stack(1)] = BabyBear::new(SYM_CL);
+        assert_ne!(
+            gate.evaluate(&tampered[3], &tampered[3], &pi),
+            BabyBear::ZERO,
+            "THE TOOTH: a live symbol above the pointer is off-occupancy"
+        );
+        assert!(
+            !dyck_satisfied(&desc, &tampered, &pi),
+            "a symbol above the pointer must REJECT"
+        );
+    }
+
     /// **The wrapped-depth trace is REJECTED — and this test does NOT establish that the
     /// range tooth is why.**
     ///
@@ -1256,12 +1442,17 @@ mod tests {
         tampered[4][col::STACK_DEPTH] = -BabyBear::new(2);
         tampered[4][col::DEPTH_NEXT] = -BabyBear::new(2);
 
-        // Strip ONLY the two depth-range polys.
+        // Strip ONLY the two depth-range polys — the pure `∏ (depth − v)` over a single depth
+        // column (every term a power of `STACK_DEPTH` or `DEPTH_NEXT`). The depth↔occupancy
+        // tooth also carries degree-`(D+1)` monomials, but its terms mix in a stack cell, so
+        // requiring EVERY term to be a power of a depth column isolates the two range polys.
         let grid_len = STACK_D + 1;
         let mut weakened = desc.clone();
         weakened.constraints.retain(|c| {
             !matches!(c, ConstraintExpr::Polynomial { terms }
-                if terms.iter().any(|t| t.col_indices.len() == grid_len))
+                if terms.iter().any(|t| t.col_indices.len() == grid_len)
+                   && terms.iter().all(|t| t.col_indices.iter()
+                        .all(|&i| i == col::STACK_DEPTH || i == col::DEPTH_NEXT)))
         });
         assert_eq!(
             weakened.constraints.len(),

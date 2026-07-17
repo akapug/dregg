@@ -140,6 +140,64 @@ residual, not needed for the shipped fixed-length witness.) -/
 def decodeRun (word : List Brk) (t : VmTrace) (n : Nat) : List MRow :=
   (List.range n).map (fun i => decodeRow word (t.rows.getD i zeroAsg))
 
+/-! ## §2.1 — THE OCCUPANCY PAYOFF: the new circuit tooth makes `decodeStack` DROP NOTHING.
+
+This is the part of the §5 residual the depth↔occupancy tooth (`dyck_stack.rs::occupancy_tooth`,
+derived from the accept-set by `DyckStackRefine.occupied_of_sat`) DISCHARGES. Before the tooth,
+`decodeStack`'s `filterMap` could silently drop an `EMPTY` hole below the pointer, making the decoded
+stack SHORTER than `STACK_DEPTH` and breaking the correspondence with the shift equations. With the
+tooth, every cell `[0, STACK_DEPTH)` is a real symbol, so the `filterMap` keeps all of them and the
+decoded stack has length EXACTLY `STACK_DEPTH` — the invariant the general `decode_step` threads. -/
+
+/-- A stack cell holding one of the three symbol ids decodes to `some` — never dropped. -/
+theorem symOfId_isSome_of_symbol {z : ℤ}
+    (h : z = SYM_S ∨ z = SYM_OP ∨ z = SYM_CL) : (symOfId z).isSome := by
+  rcases h with h | h | h <;> subst h <;>
+    simp [symOfId, SYM_S, SYM_OP, SYM_CL]
+
+/-- `filterMap` over a list all of whose images are `some` keeps every element. -/
+theorem length_filterMap_all_some {α β : Type _} (f : α → Option β) :
+    ∀ (l : List α), (∀ x ∈ l, (f x).isSome) → (l.filterMap f).length = l.length := by
+  intro l
+  induction l with
+  | nil => intro _; rfl
+  | cons a l ih =>
+    intro h
+    rw [List.filterMap_cons]
+    have ha := h a List.mem_cons_self
+    cases hfa : f a with
+    | none => rw [hfa, Option.isSome_none] at ha; exact absurd ha (by decide)
+    | some b =>
+      simp only [List.length_cons]
+      rw [ih (fun x hx => h x (List.mem_cons_of_mem _ hx))]
+
+/-- **`decodeStack_length` — THE TOOTH'S PAYOFF, abstractly.** If every cell strictly below the
+pointer is a real symbol (the depth↔occupancy invariant), the decoded working stack has length
+EXACTLY `STACK_DEPTH`: `filterMap` drops nothing. -/
+theorem decodeStack_length (a : Assignment)
+    (hocc : ∀ i : Nat, (i : ℤ) < a STACK_DEPTH →
+      a (stk i) = SYM_S ∨ a (stk i) = SYM_OP ∨ a (stk i) = SYM_CL) :
+    (decodeStack a).length = (a STACK_DEPTH).toNat := by
+  unfold decodeStack
+  rw [length_filterMap_all_some _ _ (fun i hi => by
+        rw [List.mem_range] at hi
+        exact symOfId_isSome_of_symbol (hocc i (by omega))),
+      List.length_range]
+
+/-- **`decodeStack_length_of_sat` — the payoff on a SATISFYING trace.** The circuit's acceptance
+(`Satisfied2`) now CERTIFIES, via `occupied_of_sat`, that the decoded working stack of any transition
+row has length exactly its `STACK_DEPTH`. The `EMPTY`-hole failure the general `decode_step` had to
+rule out by hand is retired by the tooth. -/
+theorem decodeStack_length_of_sat {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
+    {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash dyckDesc minit mfin maddrs t) (hcanon : DyckCanon t)
+    (i : Nat) (hi : i + 1 < t.rows.length) :
+    (decodeStack (envAt t i).loc).length = ((envAt t i).loc STACK_DEPTH).toNat := by
+  refine decodeStack_length _ (fun j hj => ?_)
+  have hbound : 0 ≤ (envAt t i).loc STACK_DEPTH ∧ (envAt t i).loc STACK_DEPTH ≤ 5 :=
+    depth_of_sat hsat hcanon i hi
+  exact occupied_of_sat hsat hcanon i hi j (by simp only [STACK_D]; omega) hj
+
 /-! ## §3 — THE LOOP CLOSED FOR THE SHIPPED WORD.
 
 `witTrace` (slice 3, §5) is the honest `"[]"` parse `build_brackets_witness` lays, PROVEN in the
@@ -228,15 +286,26 @@ equals the `Replay` working stack after the first `i` steps.* Threading it forwa
 is the whole general induction; it is discharged HERE for the concrete `witTrace` by
 `decode_witTrace` + `bracketsRows_run`.
 
-**The exact missing tooth** is the DEPTH↔OCCUPANCY invariant: `decode_step` needs `STACK_DEPTH` to
-count exactly the non-`EMPTY` prefix of the `STACK[·]` cells, so that the per-row shift equations
-(`bracketPush`, `emptyPop`, `termPop`) compose into `b.stk = r.output ++ rest`. `dyck_stack.rs` states
-plainly this does not exist yet ("nothing yet ties `STACK_DEPTH` to which cells are nonzero; the
-boundaries and per-action deltas pin the endpoints, not every intermediate cell"). So the honest
-ordering — unchanged from slice 3's §7 — is: land the depth↔occupancy constraint in the CIRCUIT
-first (a real missing tooth, not a proof inconvenience), then `decode_step` closes the general
-`parse_sat_imp_replay` by composing the four PROVEN facts above. Until then, the loop is closed for
-the shipped witness (§3/§4) and the general theorem is this named residual. -/
+**THE MISSING TOOTH IS NOW LANDED.** The DEPTH↔OCCUPANCY invariant `decode_step` needs — that
+`STACK_DEPTH` counts exactly the non-`EMPTY` prefix of the `STACK[·]` cells — is no longer owed. The
+circuit emits it (`dyck_stack.rs::occupancy_tooth`: cell-range + empty-above-pointer +
+non-empty-below-pointer, byte-pinned through `DyckStackEmit.occupancyTooth`), and the proof side READS
+IT BACK OUT of the deployed accept-set:
+
+  * (`DyckStackRefine.occupied_of_sat`) `Satisfied2 dyckDesc → j < STACK_DEPTH → STACK[j] ∈ {S,op,cl}`
+    — the non-`EMPTY`-prefix invariant, DERIVED (not assumed) exactly as `depth_of_sat` reads the
+    depth range out.
+  * (`decodeStack_length_of_sat`, §2.1 above) the payoff for decode: on any transition row the decoded
+    working stack has length EXACTLY `STACK_DEPTH` — `filterMap` drops nothing, so the `EMPTY`-hole
+    failure `decode_step` had to rule out by hand is retired by the tooth.
+
+**What remains** (the SHORTER residual) is the purely STRUCTURAL `decode_step`: assembling the per-row
+cell equations `dyck_sat_imp_row_valid` already gives (`bracketPush`/`emptyPop`/`termPop`) into the
+`MStep` stack relation `b.stk = r.output ++ rest`, threaded across the run as an `MRun`, plus the
+`done`-truncation of the padding. This is transition-relation bookkeeping over the now-length-pinned
+decoded stack — no circuit tooth, no new hypothesis. Until it is written the loop is closed for the
+shipped witness (§3/§4), the occupancy invariant is proven general (§2.1), and `decode_step` +
+`parse_sat_imp_replay` is this named residual. -/
 
 /-! ## §6 — Non-vacuity guards + axiom hygiene. -/
 
@@ -249,6 +318,10 @@ the shipped witness (§3/§4) and the general theorem is this named residual. -/
 #guard (decodeRow [op, cl] witTrace.rows.head!).inp.length = 2
 
 #assert_axioms replay_of_run_initial
+#assert_axioms symOfId_isSome_of_symbol
+#assert_axioms length_filterMap_all_some
+#assert_axioms decodeStack_length
+#assert_axioms decodeStack_length_of_sat
 #assert_axioms decode_witTrace
 #assert_axioms witTrace_replays
 #assert_axioms witTrace_steps_valid

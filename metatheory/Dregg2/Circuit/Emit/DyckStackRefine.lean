@@ -218,6 +218,24 @@ def depthRangeBody : EmittedExpr := gVanishOnGrid STACK_DEPTH depthGrid
 /-- The depth-range body on `DEPTH_NEXT`. -/
 def depthNextRangeBody : EmittedExpr := gVanishOnGrid DEPTH_NEXT depthGrid
 
+/-- The legal SYMBOL grid `{EMPTY, S, op, cl} = {0,1,2,3}` (`dyck_stack.rs::symbol_grid`,
+`DyckStackEmit.symbolGrid`) — the ids a stack cell may hold. -/
+def symbolGrid : List ℤ := [0, 1, 2, 3]
+
+/-- **Empty-above-pointer body** for cell `i` (`dyck_stack.rs::occupancy_tooth` family 2,
+`DyckStackEmit.emptyAboveBody`): `STACK[i] · ∏_{v=i+1}^{D} (STACK_DEPTH − v)`. -/
+def emptyAboveBody (i : Nat) : EmittedExpr :=
+  ((List.range' (i + 1) (STACK_D - i)).map (fun v => gSubK STACK_DEPTH (v : ℤ))).foldl
+    (fun acc g => .mul acc g) (.var (stk i))
+
+/-- **Non-empty-below-pointer body** for cell `i` (`dyck_stack.rs::occupancy_tooth` family 3,
+`DyckStackEmit.nonEmptyBelowBody`):
+`(STACK[i]−1)(STACK[i]−2)(STACK[i]−3) · ∏_{v=0}^{i} (STACK_DEPTH − v)`. -/
+def nonEmptyBelowBody (i : Nat) : EmittedExpr :=
+  ((List.range' 0 (i + 1)).map (fun v => gSubK STACK_DEPTH (v : ℤ))).foldl
+    (fun acc g => .mul acc g)
+    (.mul (.mul (gSubK (stk i) 1) (gSubK (stk i) 2)) (gSubK (stk i) 3))
+
 /-- `next[nc] − local[lc]` as a two-row window body. -/
 def wThread (nc lc : Nat) : WindowExpr := .add (.nxt nc) (.mul (.const (-1)) (.loc lc))
 /-- `local[sel] · e` — the `Gated` wrapper on a window body. -/
@@ -268,6 +286,13 @@ def dyckConstraints : List VmConstraint2 :=
     -- rBracket overflow guard: local.STACK[3] and [4] must be EMPTY under the shift-by-2
     cg (gGate SEL_BRACKET (gSubK (stk 3) SYM_EMPTY)),
     cg (gGate SEL_BRACKET (gSubK (stk 4) SYM_EMPTY)),
+    -- DEPTH↔OCCUPANCY TOOTH: per cell, cell-range + empty-above-pointer + non-empty-below-pointer.
+    -- Pins STACK_DEPTH to count EXACTLY the non-EMPTY prefix; `occupied_of_sat` reads it back out.
+    cg (gVanishOnGrid (stk 0) symbolGrid), cg (emptyAboveBody 0), cg (nonEmptyBelowBody 0),
+    cg (gVanishOnGrid (stk 1) symbolGrid), cg (emptyAboveBody 1), cg (nonEmptyBelowBody 1),
+    cg (gVanishOnGrid (stk 2) symbolGrid), cg (emptyAboveBody 2), cg (nonEmptyBelowBody 2),
+    cg (gVanishOnGrid (stk 3) symbolGrid), cg (emptyAboveBody 3), cg (nonEmptyBelowBody 3),
+    cg (gVanishOnGrid (stk 4) symbolGrid), cg (emptyAboveBody 4), cg (nonEmptyBelowBody 4),
     -- ============ cross-row (transition) constraints ============
     -- depth threading: next.STACK_DEPTH == this.DEPTH_NEXT
     cw (wThread STACK_DEPTH DEPTH_NEXT),
@@ -501,6 +526,95 @@ theorem depthNext_of_sat (hsat : Satisfied2 hash dyckDesc minit mfin maddrs t) (
     (i : Nat) (hi : i + 1 < t.rows.length) :
     0 ≤ (envAt t i).loc DEPTH_NEXT ∧ (envAt t i).loc DEPTH_NEXT ≤ 5 :=
   range_of_gate (dyck_gate hsat i hi (g := depthNextRangeBody) (by dyck_mem)) (canon_loc hc i _)
+
+/-- The non-empty-below occupancy gate for each cell IS in `dyckDesc` (concretely, per cell). -/
+theorem nonEmptyBelow_mem (j : Nat) (hj : j < STACK_D) :
+    cg (nonEmptyBelowBody j) ∈ dyckDesc.constraints := by
+  simp only [STACK_D] at hj
+  interval_cases j <;> dyck_mem
+
+/-- The cubic is-empty factor `(x−1)(x−2)(x−3)` (in `gSubK` normal form `(x + (-k))`) divisible by
+`p` with `x` canonical forces `x ∈ {1,2,3}` — the "`STACK[j]` is a real symbol" leaf shared by every
+cell's `occupied_of_sat` case. Same primality argument as `bin_of_gate`, one factor deeper. -/
+theorem symbol_of_cubic_dvd {x : ℤ} (hx0 : 0 ≤ x) (hx1 : x < 2013265921)
+    (h : (2013265921 : ℤ) ∣ (x + (-1)) * (x + (-2)) * (x + (-3))) :
+    x = 1 ∨ x = 2 ∨ x = 3 := by
+  rcases pPrimeInt.dvd_mul.mp h with h | h
+  · rcases pPrimeInt.dvd_mul.mp h with h | h
+    · obtain ⟨k, hk⟩ := h; omega
+    · obtain ⟨k, hk⟩ := h; omega
+  · obtain ⟨k, hk⟩ := h; omega
+
+/-- Evaluation commutes with the left-fold `mul`: the eval of a product-tree built by
+`List.foldl (·.mul ·) init L` is `init.eval · (∏ over L of eval)`. Lets `occupied_of_sat` reason
+about the depth product WITHOUT depending on the fold's association. -/
+theorem eval_foldl_mul (a : Assignment) (init : EmittedExpr) (L : List EmittedExpr) :
+    (List.foldl (fun acc g => EmittedExpr.mul acc g) init L).eval a
+      = init.eval a * (L.map (fun g => g.eval a)).prod := by
+  induction L generalizing init with
+  | nil => simp
+  | cons g gs ih =>
+    simp only [List.foldl_cons, List.map_cons, List.prod_cons, ih, EmittedExpr.eval]
+    ring
+
+/-- A prime dividing `∏_{v ∈ L} (x − v)` with `x` and the `v`s bounded in `[0,5]` must vanish one
+factor: some `v ∈ L` has `x = v`. The depth-product half of the occupancy extraction. -/
+theorem prime_dvd_map_prod (x : ℤ) (hx0 : 0 ≤ x) (hx5 : x ≤ 5) :
+    ∀ (L : List Nat), (∀ v ∈ L, (v : ℤ) ≤ 5) →
+      (2013265921 : ℤ) ∣ (L.map (fun v => x + -(v : ℤ))).prod → ∃ v ∈ L, x = (v : ℤ) := by
+  intro L
+  induction L with
+  | nil =>
+    intro _ h
+    have h1 : (2013265921 : ℤ) ∣ 1 := h
+    exact absurd (Int.le_of_dvd (by norm_num) h1) (by norm_num)
+  | cons a L' ih =>
+    intro hL h
+    have h' : (2013265921 : ℤ) ∣ (x + -(a : ℤ)) * (L'.map (fun v => x + -(v : ℤ))).prod := h
+    rcases pPrimeInt.dvd_mul.mp h' with h1 | h2
+    · obtain ⟨k, hk⟩ := h1
+      have ha5 : (a : ℤ) ≤ 5 := hL a (List.mem_cons_self)
+      exact ⟨a, List.mem_cons_self, by omega⟩
+    · obtain ⟨v, hv, hxv⟩ := ih (fun w hw => hL w (List.mem_cons_of_mem _ hw)) h2
+      exact ⟨v, List.mem_cons_of_mem _ hv, hxv⟩
+
+/-- **`occupied_of_sat` — THE DEPTH↔OCCUPANCY INVARIANT, DERIVED from the circuit.** On a
+satisfying, canonical trace, every stack cell strictly BELOW the pointer holds a real symbol
+(`∈ {S, op, cl}`), never the `EMPTY` marker. This is the invariant the design named as still owed
+("nothing yet ties `STACK_DEPTH` to which cells are nonzero"): it is now READ OUT of the deployed
+accept-set exactly as `depth_of_sat` reads the depth range out.
+
+The argument mirrors `range_of_gate`, one grid wider: the non-empty-below gate
+`(STACK[j]−1)(STACK[j]−2)(STACK[j]−3) · ∏_{v=0}^{j} (STACK_DEPTH − v)` vanishes mod `p`, and `p`
+prime forces `p` to divide one factor. A depth factor `STACK_DEPTH − v` would pin `STACK_DEPTH = v ≤ j`,
+contradicting `j < STACK_DEPTH`; so a symbol factor `STACK[j] − k` (`k ∈ {1,2,3}`) must vanish, and
+canonicality pins `STACK[j] = k`. The `EMPTY` hole a hand-forged trace would slip past every
+threading equation dies exactly here. -/
+theorem occupied_of_sat (hsat : Satisfied2 hash dyckDesc minit mfin maddrs t) (hc : DyckCanon t)
+    (i : Nat) (hi : i + 1 < t.rows.length) (j : Nat) (hj : j < STACK_D)
+    (hlt : (j : ℤ) < (envAt t i).loc STACK_DEPTH) :
+    (envAt t i).loc (stk j) = SYM_S ∨ (envAt t i).loc (stk j) = SYM_OP
+      ∨ (envAt t i).loc (stk j) = SYM_CL := by
+  have hgate := dyck_gate hsat i hi (g := nonEmptyBelowBody j) (nonEmptyBelow_mem j hj)
+  obtain ⟨hc0, hc1⟩ := canon_loc hc i (stk j)
+  obtain ⟨DB0, DB1⟩ := depth_of_sat hsat hc i hi
+  simp only [STACK_D] at hj
+  -- Reduce the gate to `p ∣ cubic · (∏ depth factors)` SHAPE-ROBUSTLY via `eval_foldl_mul`
+  -- (no dependence on the fold's associativity). `p` prime hits the cubic (→ a real symbol,
+  -- `symbol_of_cubic_dvd`) or the depth product (→ `STACK_DEPTH = v ≤ j`, impossible under `j < ·`).
+  -- `SYM_S/OP/CL` and the cubic `.eval` are left folded — `exact`/`omega` unify them by defeq.
+  have hd := Int.modEq_zero_iff_dvd.mp hgate
+  rw [nonEmptyBelowBody, eval_foldl_mul] at hd
+  rcases pPrimeInt.dvd_mul.mp hd with hcub | hprod
+  · exact symbol_of_cubic_dvd hc0 hc1 hcub
+  · exfalso
+    rw [List.map_map] at hprod
+    simp only [gSubK] at hprod
+    obtain ⟨v, hvmem, hxv⟩ :=
+      prime_dvd_map_prod ((envAt t i).loc STACK_DEPTH) DB0 DB1 (List.range' 0 (j + 1))
+        (fun w hw => by rw [List.mem_range'] at hw; omega) hprod
+    rw [List.mem_range'] at hvmem
+    omega
 
 end Discharge
 
@@ -1083,6 +1197,10 @@ close `parse_sat_imp_replay` by composing the two halves above. -/
 #assert_axioms range_of_gate
 #assert_axioms depth_of_sat
 #assert_axioms depthNext_of_sat
+#assert_axioms symbol_of_cubic_dvd
+#assert_axioms eval_foldl_mul
+#assert_axioms prime_dvd_map_prod
+#assert_axioms occupied_of_sat
 #assert_axioms witTrace_depth_derived
 #assert_axioms dyck_sat_imp_row_valid
 #assert_axioms witTrace_satisfies
