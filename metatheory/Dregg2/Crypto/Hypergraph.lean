@@ -26,7 +26,7 @@ namespace Dregg2.Crypto.Hypergraph
 
 open ContextFreeGrammar
 
-universe u
+universe u v
 
 /-! ## The GENERIC reduction bridge — a locally-checkable chain certifies an arbitrary reduction. -/
 
@@ -91,9 +91,79 @@ theorem bridge (R : α → α → Prop) (start goal : α) :
   · rintro ⟨c, hhead, hlast, hpc⟩; exact of_chain R c hhead hlast hpc
   · intro h; obtain ⟨c, hhead, hlast, hpc⟩ := to_chain R h; exact ⟨c, hhead, hlast, hpc⟩
 
+/-! ### Generic transport + fold — certificates are functorial, and they FOLD into semantics.
+
+Two further relation-parametric lemmas. `Cert.map` transports a certificate along any
+relation-preserving map (`R x y → S (f x) (f y)`), so a certificate over one configuration space
+yields a certificate over any simulating one. `Cert.foldSound` is the generic "walk the chain,
+accumulate an output, carry a semantic invariant" induction: give each configuration an output
+segment (`out`) and a semantics (`Sem`) such that every `R`-step PREPENDS its segment soundly, and
+any certificate folds to `Sem` of the concatenated output at its start — the shape of every
+trace-to-replay assembly (see `ReplayAsCert.mrun_imp_replay_via_fold`). -/
+
+/-- A chain transports pointwise along any relation-preserving map: if every `R`-step maps to an
+`S`-step, an `R`-chain maps to an `S`-chain. -/
+theorem chain_map {β : Type v} {R : α → α → Prop} {S : β → β → Prop} (f : α → β)
+    (hf : ∀ x y, R x y → S (f x) (f y)) :
+    ∀ c : List α, chain R c → chain S (c.map f)
+  | [], _ => trivial
+  | [_], _ => trivial
+  | a :: b :: rest, ⟨hab, hrest⟩ => ⟨hf a b hab, chain_map f hf (b :: rest) hrest⟩
+
+/-- **`Cert.map`** — certificates are functorial along relation-preserving maps: a certificate for
+`R` from `x` to `y` maps to a certificate for `S` from `f x` to `f y`, chain mapped pointwise. -/
+theorem Cert.map {β : Type v} {R : α → α → Prop} {S : β → β → Prop} (f : α → β)
+    (hf : ∀ x y, R x y → S (f x) (f y)) {x y : α} {c : List α}
+    (h : Cert R x y c) : Cert S (f x) (f y) (c.map f) := by
+  obtain ⟨hhead, hlast, hchain⟩ := h
+  refine ⟨?_, ?_, chain_map f hf c hchain⟩
+  · simp [hhead]
+  · simp [hlast]
+
+/-- **`Cert.foldSound`** — the generic chain-fold induction. Give each configuration an output
+segment `out` and a semantics `Sem : List β → α → Prop` such that every `R`-step is SOUND for
+prepending (`Sem rs y → Sem (out x ++ rs) x` whenever `R x y`). Then any certificate from `x` to
+`y` folds: `Sem` of the whole concatenated output holds at the start, given `Sem` of the final
+segment at the goal. This is the one induction behind every "forward trace ⇒ backward replay"
+assembly — the trace is the chain, `out` reconstructs the wire object, `Sem` is the replay. -/
+theorem Cert.foldSound {β : Type v} {R : α → α → Prop}
+    (out : α → List β) (Sem : List β → α → Prop)
+    (hstep : ∀ x y, R x y → ∀ rs, Sem rs y → Sem (out x ++ rs) x) :
+    ∀ {c : List α} {x y : α}, Cert R x y c → Sem (out y) y → Sem (c.flatMap out) x := by
+  intro c
+  induction c with
+  | nil => intro x y h _; obtain ⟨hhead, -, -⟩ := h; simp at hhead
+  | cons a as ih =>
+    intro x y h hsem
+    obtain ⟨hhead, hlast, hchain⟩ := h
+    simp only [List.head?_cons, Option.some.injEq] at hhead
+    subst hhead
+    cases as with
+    | nil =>
+      simp only [List.getLast?_singleton, Option.some.injEq] at hlast
+      subst hlast
+      simpa using hsem
+    | cons b bs =>
+      obtain ⟨hab, hrest⟩ := hchain
+      rw [List.getLast?_cons_cons] at hlast
+      have hSem := ih ⟨rfl, hlast, hrest⟩ hsem
+      simpa [List.flatMap_cons] using hstep _ _ hab _ hSem
+
 end Generic
 
 #assert_axioms bridge
+#assert_axioms Cert.map
+#assert_axioms Cert.foldSound
+
+/-- Non-vacuity of `Cert.map`: the successor chain `[0, 1]` transports along `(· + 1)` to the
+genuine successor certificate `[1, 2]` — the mapped chain's steps are real steps. -/
+theorem cert_map_nonvacuous : Cert (fun a b => b = a + 1) 1 2 [1, 2] := by
+  have base : Cert (fun a b => b = a + 1) 0 1 [0, 1] := ⟨rfl, rfl, rfl, trivial⟩
+  have h := Cert.map (S := fun a b => b = a + 1) (· + 1)
+    (fun x y (h : y = x + 1) => by show y + 1 = x + 1 + 1; omega) base
+  simpa using h
+
+#assert_axioms cert_map_nonvacuous
 
 /-! ## Hypergraphs + hyperedge-replacement reduction. -/
 
