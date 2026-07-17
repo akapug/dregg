@@ -56,9 +56,16 @@ at all times · sophistication proportionate to the challenge, NO further · ACT
   proof-carrying/RECEIPT infra (turn-attestation over the ledger) is a SEPARATE stack from the fhegg
   confidential-clearing computation — it does NOT attest the clearing algorithm's steps. Do NOT use
   the receipt infra as the optimality mechanism. → READ the real fhegg verification path (Cert-F,
-  the AIR/STARK over clearing, FhEgg* Lean) to find what — if anything — actually attests the fhegg
-  run, then state the HONEST optimality claim from THAT. Drop "volume-maximizing"; keep already-proven
-  value-neutrality. (grounding lane dispatched)
+  the AIR/STARK over clearing) — DONE, grounded: FHEGG-ATTESTATION-GROUNDING.md (28f4c942e).
+  ⚑ CORRECT RESOLUTION: (a) receipt stack ⟂ fhegg stack (meet only at settlement: receipt attests
+  transfers-conserve, NOT honest-clearing). (b) HONEST HEADLINE = conservation/value-neutral/IR —
+  proven model-level AND runtime-enforced by the deployed conservation AIR gate. (c) volume-max /
+  ε-optimality = MODEL-LEVEL Lean only, NOT runtime-attested → name it as such (MPC joined-thm is
+  over-named). (d) NO per-step optimizer cert exists AND BY DESIGN must not (verify-not-find keeps
+  solver iters out of TCB); the substitute is Cert-F = verify-not-find OUTPUT ε-optimality cert —
+  exists for the CONVEX route, NOT yet the uniform-price fold. (e) STRENGTHEN path (in-tree): extend
+  Cert-F to uniform-price + extract the CertFDescriptor gap-gate + fix ε-registration + mechanize
+  Rust↔Lean + route Cert-F through HidingFriPcs.
 - FRI: keep driving ALL stages autonomously; surface a genuine design fork, don't paper it.
 
 ## Standing
