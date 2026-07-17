@@ -243,7 +243,7 @@ impl PersistentStore {
         expected_ordinal: u64,
         record: &CommitRecord,
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None)
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None, &[])
     }
 
     /// [`Self::commit_finalized_turn`] PLUS the turn's attested root in the
@@ -274,7 +274,31 @@ impl PersistentStore {
         record: &CommitRecord,
         root: &crate::StoredAttestedRoot,
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root))
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), &[])
+    }
+
+    /// [`Self::commit_finalized_turn_with_root`] PLUS the turn's NoteCreate
+    /// commitments in the SAME redb transaction — the note/record atomicity
+    /// weld (fourth-pass cross-family review, F4-B).
+    ///
+    /// The finalization paths previously appended each note commitment in its
+    /// own durable transaction (`store_note_commitment` — append-only,
+    /// NON-idempotent) BEFORE the paired root/record commit. A failed or
+    /// crashed paired commit followed by a retry/redelivery therefore appended
+    /// the SAME commitment at a second position — permanently. Landing the
+    /// note appends inside the one finalization transaction makes them
+    /// all-or-nothing with the record, and the idempotent-replay path (same
+    /// `turn_hash` already at `expected_ordinal`) returns before reaching the
+    /// append, so one finalized NoteCreate turn contributes EXACTLY ONE leaf
+    /// per commitment across any failure, crash, or redelivery.
+    pub fn commit_finalized_turn_with_root_and_notes(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        root: &crate::StoredAttestedRoot,
+        notes: &[dregg_cell::note::NoteCommitment],
+    ) -> Result<u64> {
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), notes)
     }
 
     /// [`Self::commit_finalized_turn`] PLUS forever-digest burns in the SAME
@@ -294,20 +318,23 @@ impl PersistentStore {
         record: &CommitRecord,
         burns: &[(u8, [u8; 32], [u8; 32])],
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, burns, None)
+        self.commit_finalized_turn_inner(expected_ordinal, record, burns, None, &[])
     }
 
     /// The ONE atomic finalized-turn commit transaction behind
     /// [`Self::commit_finalized_turn`] /
     /// [`Self::commit_finalized_turn_with_burns`] /
-    /// [`Self::commit_finalized_turn_with_root`]: record + indexes + optional
-    /// burns + optional attested root + cursor advance, all-or-nothing.
+    /// [`Self::commit_finalized_turn_with_root`] /
+    /// [`Self::commit_finalized_turn_with_root_and_notes`]: record + indexes +
+    /// optional burns + optional attested root + optional note-commitment
+    /// appends + cursor advance, all-or-nothing.
     fn commit_finalized_turn_inner(
         &self,
         expected_ordinal: u64,
         record: &CommitRecord,
         burns: &[(u8, [u8; 32], [u8; 32])],
         root: Option<&crate::StoredAttestedRoot>,
+        notes: &[dregg_cell::note::NoteCommitment],
     ) -> Result<u64> {
         let write_txn = self.db.begin_write()?;
         let assigned;
@@ -416,6 +443,30 @@ impl PersistentStore {
                 if root.height >= current_latest {
                     meta.insert(tables::META_LATEST_ROOT_HEIGHT, root.height)?;
                 }
+            }
+
+            // 3c. The turn's NoteCreate commitments — SAME transaction (the
+            //     F4-B note/record atomicity weld): a standalone
+            //     `store_note_commitment` before this transaction is
+            //     append-only and non-idempotent, so a failed/crashed paired
+            //     commit + retry appended the same commitment twice. Here the
+            //     appends land atomically with the record (the idempotent
+            //     replay above returns before reaching this point and writes
+            //     nothing). Mirrors `PersistentStore::store_note_commitment`
+            //     byte-for-byte, including the root-cache invalidation.
+            if !notes.is_empty() {
+                let mut note_table = write_txn.open_table(tables::NOTE_COMMITMENTS)?;
+                let mut size = meta
+                    .get(tables::META_NOTE_TREE_SIZE)?
+                    .map(|g| g.value())
+                    .unwrap_or(0);
+                for c in notes {
+                    note_table.insert(size, &c.0)?;
+                    size += 1;
+                }
+                meta.insert(tables::META_NOTE_TREE_SIZE, size)?;
+                let mut meta_bytes = write_txn.open_table(tables::METADATA_BYTES)?;
+                meta_bytes.remove(tables::META_NOTE_TREE_ROOT_CACHE)?;
             }
 
             // 4. Advance the durable cursor LAST within the txn (still atomic).
@@ -1882,6 +1933,151 @@ mod tests {
         let root = store.latest_attested_root().unwrap().unwrap();
         assert_eq!(root.height, 1, "the ladder still tops out at height 1");
         assert_eq!(root.merkle_root, [0xbb; 32], "the original root is intact");
+    }
+
+    /// The node's finalization-path shape for a NoteCreate turn: persist the
+    /// turn's note commitments and its paired root/record durably. This helper
+    /// MIRRORS the production caller (`node/src/blocklace_sync.rs`, executed +
+    /// promotion finalization) so the exactly-once invariant below is tested
+    /// through the same seam the node uses.
+    fn finalize_turn_with_notes(
+        store: &PersistentStore,
+        expected_ordinal: u64,
+        rec: &CommitRecord,
+        root: &crate::StoredAttestedRoot,
+        notes: &[dregg_cell::note::NoteCommitment],
+    ) -> Result<u64> {
+        // (Must-fail-pre baseline mirrored the pre-fix node ordering: a
+        // standalone `store_note_commitment` loop, then the paired commit —
+        // the fault below then left an orphan leaf and the retry doubled it.)
+        store.commit_finalized_turn_with_root_and_notes(expected_ordinal, rec, root, notes)
+    }
+
+    /// F4-B (fourth-pass review): one finalized NoteCreate turn contributes
+    /// EXACTLY ONE note-tree leaf across any commit failure, crash, or
+    /// redelivery. Pre-fix the finalization paths appended the note in its own
+    /// durable transaction BEFORE the paired root/record commit
+    /// (`store_note_commitment` is append-only and non-idempotent), so a
+    /// failed/crashed paired commit followed by a retry appended the same
+    /// commitment at a second position. The fault here is the torn-state
+    /// ordinal guard failing the paired transaction; the retry and the
+    /// idempotent replay then re-run the whole finalization sequence exactly
+    /// as a crash-redelivery does.
+    #[test]
+    fn finalized_turn_appends_note_commitment_exactly_once_across_fault_and_retry() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let mut rec = record(0, 0, vec![cell(3, 30)]);
+        rec.turn_hash[0] = 0xf3;
+        let note = dregg_cell::note::NoteCommitment([0x9e; 32]);
+
+        // Fault: the paired commit fails AFTER the caller reached its
+        // note-persistence step (pre-fix that step had already appended).
+        let err = finalize_turn_with_notes(
+            &store,
+            5, // torn-state guard: wrong expected ordinal
+            &rec,
+            &attested_root(1, 0xdd),
+            std::slice::from_ref(&note),
+        );
+        assert!(matches!(err, Err(StoreError::Integrity(_))), "got {err:?}");
+        assert_eq!(
+            store.note_count().unwrap(),
+            0,
+            "a failed paired commit must leave NO note leaf behind"
+        );
+
+        // Retry the SAME finalized turn (the crash-redelivery shape).
+        finalize_turn_with_notes(
+            &store,
+            0,
+            &rec,
+            &attested_root(1, 0xdd),
+            std::slice::from_ref(&note),
+        )
+        .unwrap();
+
+        // Idempotent replay of the already-durable turn: writes NOTHING.
+        finalize_turn_with_notes(
+            &store,
+            0,
+            &rec,
+            &attested_root(2, 0xee),
+            std::slice::from_ref(&note),
+        )
+        .unwrap();
+
+        // ONE finalized NoteCreate turn ⇒ exactly one durable leaf, position 0.
+        assert_eq!(
+            store.note_count().unwrap(),
+            1,
+            "the same finalized turn must never append its commitment twice"
+        );
+        assert_eq!(store.load_all_note_commitments().unwrap(), vec![note]);
+    }
+
+    /// F4-A (fourth-pass review) — the DURABLE REMOVAL invariant:
+    /// `checkpoint ⊕ commit overlay` must reconstruct the EXACT finalized
+    /// ledger, deletions included. A pre-checkpoint hosted cell removed by a
+    /// post-checkpoint finalized turn (MakeSovereign) must stay absent on
+    /// reopen and the reconstructed root must equal the recorded
+    /// `CommitRecord::ledger_root`.
+    ///
+    /// IGNORED: the commit-record format has no removal/tombstone
+    /// representation yet (`touched_cells` is post-cells-only and
+    /// `cell_overlay_since` only inserts). Implementing it ripples beyond the
+    /// sanctioned rework-4 scope (commit-record wire format, bootstrap
+    /// `Snapshot` wire format + joiner apply, starbridge-v2 overlay consumer,
+    /// index-audit semantics, compaction interplay) — see the rework-4 blast
+    /// radius report. Un-ignore when the durable removal set lands.
+    #[test]
+    #[ignore = "F4-A durable removal-set piece pending (blast radius exceeds rework-4 scope)"]
+    fn hosted_cell_removal_survives_checkpoint_overlay_reconstruction() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("removal.redb");
+        let doomed = cell(0x11, 500);
+        let doomed_id = doomed.id();
+        let survivor = cell(0x22, 700);
+
+        let recorded_root = {
+            let store = PersistentStore::open(&path).unwrap();
+            // Height-1 turn touches both cells; checkpoint covers height 1.
+            let mut rec0 = record(0, 0, vec![doomed.clone(), survivor.clone()]);
+            rec0.turn_hash[1] = 0xa1;
+            store.commit_finalized_turn(0, &rec0).unwrap();
+            checkpoint_from_log_no_codrive(&store, 1);
+
+            // Height-2 finalized turn REMOVES the doomed cell (hosted →
+            // sovereign): the post-turn ledger holds only the survivor.
+            let mut post = Ledger::new();
+            post.insert_cell(survivor.clone()).unwrap();
+            let mut rec1 = record(1, 1, Vec::new());
+            rec1.turn_hash[1] = 0xa2;
+            rec1.ledger_root = post.root();
+            store.commit_finalized_turn(1, &rec1).unwrap();
+            rec1.ledger_root
+        };
+
+        // Reopen and reconstruct AS RECOVERY DOES.
+        let store = PersistentStore::open(&path).unwrap();
+        let cp_height = store.latest_ledger_checkpoint_height().unwrap();
+        let mut ledger = store
+            .load_ledger_checkpoint_at(cp_height)
+            .unwrap()
+            .expect("checkpoint");
+        for c in store.cell_overlay_since(cp_height).unwrap() {
+            let _ = ledger.remove(&c.id());
+            let _ = ledger.insert_cell(c);
+        }
+        assert!(
+            ledger.get(&doomed_id).is_none(),
+            "a cell removed by a post-checkpoint finalized turn must NOT be \
+             resurrected by checkpoint ⊕ overlay"
+        );
+        assert_eq!(
+            ledger.root(),
+            recorded_root,
+            "reconstructed root must equal the recorded post-turn ledger_root"
+        );
     }
 
     /// Route-level turns commit several records at the SAME (height, creator)

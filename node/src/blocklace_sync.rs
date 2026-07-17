@@ -4714,15 +4714,24 @@ async fn execute_finalized_turn(
                 dregg_turn::ResolutionOutcome::Resolved(receipt.clone()),
             );
 
-            // Process note commitments from NoteCreate effects.
-            for tree in &signed_turn.turn.call_forest.roots {
-                for effect in &tree.action.effects {
-                    if let dregg_turn::Effect::NoteCreate { commitment, .. } = effect {
-                        s.note_tree_append_commitment(&commitment.0);
-                        let _ = s.store.store_note_commitment(commitment);
-                    }
-                }
-            }
+            // Note commitments from NoteCreate effects: COLLECTED here,
+            // persisted ATOMICALLY with the commit record below (fourth-pass
+            // review F4-B — `commit_finalized_turn_with_root_and_notes`).
+            // Appending them durably BEFORE the paired transaction
+            // double-applied on a failed/crashed commit + retry
+            // (`store_note_commitment` is append-only and non-idempotent).
+            // The in-memory Poseidon tree advances only after durable success.
+            let note_commitments: Vec<dregg_cell::note::NoteCommitment> = signed_turn
+                .turn
+                .call_forest
+                .roots
+                .iter()
+                .flat_map(|tree| tree.action.effects.iter())
+                .filter_map(|effect| match effect {
+                    dregg_turn::Effect::NoteCreate { commitment, .. } => Some(*commitment),
+                    _ => None,
+                })
+                .collect();
 
             // FRESHNESS: record this turn's spent note nullifiers into the node's
             // CANONICAL persisted nullifier set, so subsequent turns' freshness
@@ -5388,9 +5397,17 @@ async fn execute_finalized_turn(
                     if let Some(cell) = s.ledger.get(id) {
                         touched_cells.push(cell.clone());
                     }
-                    // A touched id absent post-commit means the cell was
-                    // destroyed this turn; its removal is reflected by the
-                    // checkpoint, and the overlay carries no stale entry.
+                    // A touched id absent post-commit means the cell LEFT the
+                    // hosted set this turn (destroyed, or removed
+                    // hosted→sovereign by MakeSovereign). The commit-record
+                    // format is post-cells-only: it CANNOT represent the
+                    // removal, so a PRE-checkpoint cell removed here is
+                    // resurrected by recovery's checkpoint ⊕ overlay (a
+                    // checkpoint taken BEFORE the removal still contains the
+                    // stale cell). Fourth-pass review F4-A — the durable
+                    // removal/tombstone set is a pending format change; see
+                    // the ignored persist test
+                    // `hosted_cell_removal_survives_checkpoint_overlay_reconstruction`.
                 }
                 let commit_record = dregg_persist::CommitRecord {
                     ordinal: 0, // assigned by the store at the durable cursor
@@ -5404,12 +5421,22 @@ async fn execute_finalized_turn(
                     touched_cells,
                 };
                 let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
-                match s.store.commit_finalized_turn_with_root(
+                match s.store.commit_finalized_turn_with_root_and_notes(
                     expected_ordinal,
                     &commit_record,
                     &stored,
+                    &note_commitments,
                 ) {
                     Ok(assigned) => {
+                        // The turn's note commitments are durable (they landed
+                        // in the same transaction as the record) — only NOW
+                        // advance the in-memory Poseidon tree (F4-B: a failed
+                        // durable commit must leave the in-memory tree
+                        // unadvanced so the recovery-time retry appends
+                        // exactly once).
+                        for c in &note_commitments {
+                            s.note_tree_append_commitment(&c.0);
+                        }
                         // Root event only now that the root is durable (F-B:
                         // it landed atomically with the record).
                         state.emit(NodeEvent::Root {
@@ -5622,14 +5649,23 @@ async fn promote_ingress_committed_turn(
 
     // Note commitments + spent-nullifier persistence are FINALIZATION-phase
     // work — the ingress commit did not persist them (only this path does).
-    for tree in &signed_turn.turn.call_forest.roots {
-        for effect in &tree.action.effects {
-            if let dregg_turn::Effect::NoteCreate { commitment, .. } = effect {
-                s.note_tree_append_commitment(&commitment.0);
-                let _ = s.store.store_note_commitment(commitment);
-            }
-        }
-    }
+    // The note commitments are COLLECTED here and persisted ATOMICALLY with
+    // the commit record below (fourth-pass review F4-B): appending them
+    // durably before the paired transaction double-applied on a failed
+    // durable write + retried re-delivery (`store_note_commitment` is
+    // append-only and non-idempotent). The in-memory Poseidon tree advances
+    // only after durable success.
+    let note_commitments: Vec<dregg_cell::note::NoteCommitment> = signed_turn
+        .turn
+        .call_forest
+        .roots
+        .iter()
+        .flat_map(|tree| tree.action.effects.iter())
+        .filter_map(|effect| match effect {
+            dregg_turn::Effect::NoteCreate { commitment, .. } => Some(*commitment),
+            _ => None,
+        })
+        .collect();
     {
         let spent: Vec<dregg_turn::Effect> = signed_turn
             .turn
@@ -5777,11 +5813,22 @@ async fn promote_ingress_committed_turn(
             touched_cells: touched_post_cells,
         };
         let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
-        match s
-            .store
-            .commit_finalized_turn_with_root(expected_ordinal, &commit_record, &stored)
-        {
+        match s.store.commit_finalized_turn_with_root_and_notes(
+            expected_ordinal,
+            &commit_record,
+            &stored,
+            &note_commitments,
+        ) {
             Ok(assigned) => {
+                // The turn's note commitments are durable (same transaction
+                // as the record) — only NOW advance the in-memory Poseidon
+                // tree (F4-B: a failed durable write must leave it unadvanced
+                // so the re-delivered promotion appends exactly once; the
+                // already-promoted re-delivery returned at the turn-by-hash
+                // guard above and never reaches this point).
+                for c in &note_commitments {
+                    s.note_tree_append_commitment(&c.0);
+                }
                 // Consume-on-success: the promotion is durable, the retained
                 // ingress result has served its purpose. Emit the Root event
                 // only now that the root is actually durable.
