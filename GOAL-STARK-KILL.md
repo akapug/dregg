@@ -2018,3 +2018,9 @@ example gone. KEPT the real hash primitives (extend/initial_accumulated_hash) + 
 different FoldDelta. VERIFIED green (persvati: circuit+sdk+tests Finished). constraint_prover = separate pass.
 **MOCK-PURGE COMPLETE: 7/7 surfaces wired to real, ratchet enforced, engine DELETED.** The lesson banked:
 "wired out of production" != "deleted"; dead mock code is a lie waiting to be re-called.
+
+### assumption swarm harvested (inventory) — 2 real gaps named, rig phase lock-blocked
+peer_exchange:287 already strict (stale). sha256 pins NOT theater (check-descriptor-drift.sh is the real
+generate-fresh gate, CI-wired ci.yml:497). REAL un-rigged gaps: MAX_FOLD_DEPTH enforcer (bridge/present.rs:670,
+no test trips it) + EpochMinter treasury-absent epoch-advance (turn/economics.rs:205). Swarm rig lanes
+WAITING on a 56-min Lean build lock; will resume. See TESTQALOG.
