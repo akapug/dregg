@@ -63,6 +63,56 @@ const ROUTE_INSTALL_TOKENS: &[&str] = &[
 /// verifier and the discord bot live in SEPARATE excluded workspaces) are documented here for intent but
 /// are inert to this guard, which only enumerates root-workspace members.
 const DELEGATES_VERIFY: &[(&str, &str)] = &[
+    // ── DEFERRED-WIRING entries (2026-07-17) — these are NOT "no verify path" claims ───────────────
+    // HONESTY NOTE: all three link the FULL verify stack (traced with `cargo tree -e normal`:
+    // dregg-lightclient + dregg-federation + dregg-blocklace + dregg-cell-crypto + dregg-token +
+    // dregg-pq; gateway-ask also dregg-auth). So — unlike `dregg-cli` below — we CANNOT claim they have
+    // no local PQ verify path: they link a light client. The truthful statement is the uncomfortable one:
+    // **`fips204` is in these binaries' verify TCB**, because they never install the Lean-verified core.
+    // WHY DEFERRED, not wired: wiring requires a non-dev `dregg-lean-ffi` dep, i.e. linking
+    // `libdregg_lean.a` — **101 MB today** (measured 2026-07-17) — into a gateway/web/demo binary.
+    // CLOSURE TRIGGER (do not let this entry outlive it): a separate lane is slimming the Lean archive to
+    // ~8 MB; with that + linker GC the cost objection evaporates. WHEN THAT LANDS, WIRE THESE AND DELETE
+    // THESE THREE ENTRIES (exemplars: `starbridge-v2/src/main.rs:85`, `node/src/lib.rs:2450`,
+    // `sdk/src/runtime.rs:72`). Tracked as `VerifyTcbReentryResidual` in GOAL-STARK-KILL.md.
+    (
+        "dregg-gateway-ask",
+        "DEFERRED WIRING (not a no-verify claim): links the full verify stack incl. dregg-auth, whose \
+         credential/pq.rs rides the PQ verify path — so fips204 is in this binary's verify TCB. Wiring \
+         deferred only on the 101MB libdregg_lean.a link cost; WIRE + delete this entry when the ~8MB \
+         Lean archive lands. This is the strongest of the three: it has a named live PQ path.",
+    ),
+    (
+        "dreggnet-web",
+        "DEFERRED WIRING (not a no-verify claim): links the full verify stack incl. dregg-lightclient — \
+         fips204 is in this binary's verify TCB. Deferred only on the 101MB link cost; WIRE + delete this \
+         entry when the ~8MB Lean archive lands.",
+    ),
+    (
+        "real-dungeon-service",
+        "DEFERRED WIRING (not a no-verify claim): links the full verify stack incl. dregg-lightclient — \
+         fips204 is in this binary's verify TCB. Deferred only on the 101MB link cost; WIRE + delete this \
+         entry when the ~8MB Lean archive lands.",
+    ),
+    (
+        "dregg-intent",
+        "DEFERRED WIRING (not a no-verify claim): links the full verify stack incl. dregg-lightclient — \
+         fips204 is in this binary's verify TCB. Deferred only on the 101MB link cost; WIRE + delete this \
+         entry when the ~8MB Lean archive lands.",
+    ),
+    (
+        "dungeon-service",
+        "DEFERRED WIRING (not a no-verify claim): links the full verify stack incl. dregg-lightclient — \
+         fips204 is in this binary's verify TCB. Deferred only on the 101MB link cost; WIRE + delete this \
+         entry when the ~8MB Lean archive lands.",
+    ),
+    (
+        "dregg-doc",
+        "OPTIONAL-ONLY reach (traced 2026-07-17): the default build has NO verify-stack dep at all; it \
+         reaches the stack solely via `dregg-blocklace = { optional = true }`, which is OFF by default (the \
+         guard counts optional normal-deps). So the shipped default binary has no PQ verify path; IF that \
+         feature is enabled, fips204 would be in its TCB and it should wire the core then.",
+    ),
     // ── Audit-seeded entries ───────────────────────────────────────────────────────────────────────
     ("dregg-cli", "thin HTTP/CLI client, no local PQ verify path"),
     (
