@@ -119,6 +119,53 @@ pub fn build_multi_step_witness(
     }
 }
 
+/// **The multi-step accumulator-chain constraints** — the prerequisite named by
+/// `docs/DESIGN-parse-as-derivation.md` §2 ("the multi-step *derivation* accumulator
+/// chain is columns-present/constraints-absent today") and its status ledger (the
+/// GAP row `multi_step_witness.rs:146`).
+///
+/// The 384-column multi-step trace (`dsl::derivation::generate_multi_step_trace_dsl`)
+/// LAYS OUT `STEP_INDEX / ACCUMULATED_HASH / PREV_ACCUMULATED` but no deployed
+/// descriptor CONSTRAINS them. These are the descriptor-level (`ConstraintExpr`)
+/// constraints that bind the linear fold `acc_i = hash_2_to_1(acc_{i-1},
+/// derived_hash_i)` (`compute_accumulated_hashes`, above), authored line-for-line on
+/// the `dsl::dfa_routing` running-hash template:
+///
+/// - **accumulation** — `next.ACCUMULATED_HASH == hash_2_to_1(this.ACCUMULATED_HASH,
+///   next.DERIVED_HASH)` — the exact `ChainedHash2to1` form `dfa_routing.rs:178`
+///   ships for its route commitment, over the derivation step's `DERIVED_HASH`
+///   (`derivation_air::col::DERIVED_HASH`).
+/// - **prev threading** — `next.PREV_ACCUMULATED == this.ACCUMULATED_HASH`, a degree-1
+///   `Transition` (`dfa_routing.rs:173`) so each row's `PREV_ACCUMULATED` witnesses
+///   the previous accumulator (the fold's seed of that step).
+///
+/// The chain's boundary pins (row-0 seed against `pi[INITIAL_STATE_ROOT]`, last-row
+/// `ACCUMULATED_HASH == pi[FINAL_ACCUMULATED_HASH]`, `STEP_INDEX` monotonicity, and
+/// the `IS_FINAL_STEP`/`IS_ACTIVE` selector discipline) are the descriptor's
+/// `BoundaryDef`s / per-row selector constraints — assembled when this list is wired
+/// into a standalone multi-step `CircuitDescriptor`. That descriptor assembly, and
+/// the STEP_INDEX `+1` increment (needs an `INPUT_POS_P1`-style helper column, cf.
+/// `dsl::dyck_stack`), are the remainder of the prerequisite; these two are its
+/// load-bearing chain binds.
+pub fn multi_step_chaining_constraints() -> Vec<crate::dsl::circuit::ConstraintExpr> {
+    use crate::derivation_air::col as dcol;
+    use crate::dsl::circuit::ConstraintExpr;
+    use crate::dsl::derivation::multi_col;
+    vec![
+        // acc_i = hash_2_to_1(acc_{i-1}, derived_hash_i).
+        ConstraintExpr::ChainedHash2to1 {
+            output_next_col: multi_col::ACCUMULATED_HASH,
+            seed_local_col: multi_col::ACCUMULATED_HASH,
+            input_next_col: dcol::DERIVED_HASH,
+        },
+        // next.prev_accumulated == this.accumulated_hash.
+        ConstraintExpr::Transition {
+            next_col: multi_col::PREV_ACCUMULATED,
+            local_col: multi_col::ACCUMULATED_HASH,
+        },
+    ]
+}
+
 /// The multi-step derivation AIR (constraint-prover interface).
 pub struct MultiStepDerivationAir {
     pub witness: MultiStepWitness,
@@ -144,7 +191,13 @@ impl crate::constraint_prover::Air for MultiStepDerivationAir {
         6
     }
     fn constraints(&self) -> Vec<crate::constraint_prover::Constraint> {
-        vec![] // Constraints evaluated by DSL runtime
+        // The retired `constraint_prover::Constraint` interface (a trace-digest mock,
+        // purged 2026-07-16) is not the real constraint path. The descriptor-level
+        // (`ConstraintExpr`) accumulator-chain constraints — the ones the design's
+        // status ledger flags as the GAP here — are authored in
+        // [`multi_step_chaining_constraints`]; per-row derivation checking runs through
+        // the DSL evaluator.
+        vec![]
     }
     fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
         crate::dsl::derivation::generate_multi_step_trace_dsl(&self.witness)

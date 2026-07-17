@@ -33,6 +33,10 @@ pub mod committed_threshold;
 pub mod deco_payment;
 pub mod derivation;
 pub mod dfa_routing;
+// `dyck_stack`: the first slice of the parse-as-derivation circuit
+// (`docs/DESIGN-parse-as-derivation.md`) — a depth-bounded pushdown stack threaded
+// over the `dfa_routing` inter-row pattern, routing the 3-rule Dyck grammar.
+pub mod dyck_stack;
 // `dsl_p3_air` routes DSL circuits through the audited Plonky3 batch-STARK
 // prover/verifier; it requires `p3-air` / `p3-batch-stark` — both verify-floor
 // deps, now always-on. Its prove/verify functions (`revocation::*_p3`,
