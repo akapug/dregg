@@ -158,6 +158,7 @@ pub mod runtime;
 pub mod service_economy;
 pub mod tool_gateway;
 pub mod trustline;
+pub mod whisper_deposit;
 pub mod turns;
 pub mod verify;
 pub mod witness_artifact;
@@ -221,7 +222,15 @@ pub use runtime::{
 // executor).
 pub use tool_gateway::{
     CALLS_MADE_SLOT, Charge, DeliveryReceipt, GatewayRefusal, RoutedHandle, RoutedResult,
-    RoutedStatus, ToolCallError, ToolGateway, ToolGrant, ToolReceipt, deleg_admit, mandate_program,
+    RoutedStatus, ToolCallError, ToolGateway, ToolGrant, ToolReceipt, WHISPER_MAX_BYTES,
+    WhisperFrame, WhisperSource, deleg_admit, mandate_program,
+};
+
+// THE CONTEXT CHANNEL's native deposit half: the cap-gated, apply-time whisper
+// deposit that backs the gateway's `WhisperSource` (replaces the tmpfs-file source).
+pub use whisper_deposit::{
+    WHISPER_SEQ_SLOT, WhisperDeposit, WhisperDepositError, WhisperInbox, WhisperWriter,
+    whisper_method,
 };
 
 // The `Payable` DSI core the metered tool-gateway charge routes through (one

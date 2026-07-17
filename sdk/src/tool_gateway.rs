@@ -1800,4 +1800,78 @@ mod tests {
         let r3 = gw.invoke(77, 50, vec![]).expect("call 3 commits");
         assert_eq!(r3.whisper, None, "one frame delivered exactly once");
     }
+
+    #[test]
+    fn native_deposit_delivers_attributed_frame_and_cap_gate_refuses_unauthorized() {
+        use crate::whisper_deposit::{WhisperDepositError, WhisperInbox, WhisperWriter};
+
+        // THE END-TO-END NATIVE DEPOSIT: a writer's cap-gated APPLY-TIME turn
+        // deposits a frame addressed to a recipient gateway's SEAT; the recipient
+        // reads it off its next admitted call — replacing the tmpfs-file source.
+        let (rt, root) = fresh_epoch();
+        let mut gw = ToolGateway::admit(&rt, &root, seeded_grant()).expect("admit recipient gateway");
+        let seat = gw.worker_cell();
+
+        // Wire the gateway's WhisperSource to drain the native deposit inbox for
+        // THIS seat (the deposit-backed source; no tmpfs file).
+        let inbox = WhisperInbox::new();
+        gw.set_whisper_source(inbox.source_for(seat));
+
+        // AUTHORIZED writer: scoped to exactly this seat's whisper verb.
+        let mut writer =
+            WhisperWriter::admit(&rt, &root, seat, inbox.clone()).expect("admit authorized writer");
+        let line = "teammate landed the schema change — rebase before writing";
+        let dep = writer.whisper(line).expect("authorized deposit commits (apply-time)");
+        assert_eq!(
+            dep.frame.from,
+            Some(writer.writer_cell()),
+            "deposited frame is attributed to the writer's cell"
+        );
+        assert_eq!(inbox.pending(seat), 1, "one frame pending for the seat");
+
+        // The recipient gateway's NEXT admitted call carries the frame, attributed,
+        // with metering untouched (the whisper never couples to admission).
+        let r1 = gw.invoke(77, 50, vec![]).expect("recipient call 1 commits");
+        assert_eq!(
+            r1.whisper.as_ref().map(|w| w.text.as_str()),
+            Some(line),
+            "the deposited frame rides the admitted return"
+        );
+        assert_eq!(
+            r1.whisper.as_ref().and_then(|w| w.from),
+            Some(writer.writer_cell()),
+            "the `from` cell is populated from the cap-gated deposit"
+        );
+        assert_eq!(r1.calls_made, 1, "metering unchanged by the deposited whisper");
+
+        // Exactly-once: the next admitted call is back to None.
+        let r2 = gw.invoke(77, 50, vec![]).expect("recipient call 2 commits");
+        assert_eq!(r2.whisper, None, "native deposit delivered exactly once");
+
+        // UNAUTHORIZED: a writer scoped to a DIFFERENT seat cannot whisper to this
+        // seat — the executor refuses the deposit turn (cap-gate bites in-executor),
+        // and NOTHING lands in the recipient's inbox.
+        let other_seat = ToolGateway::admit(&rt, &root, seeded_grant())
+            .expect("admit a second gateway for a distinct seat")
+            .worker_cell();
+        let mut intruder = WhisperWriter::admit(&rt, &root, other_seat, inbox.clone())
+            .expect("admit a writer authorized only for the OTHER seat");
+        let refused = intruder.whisper_to(seat, "unauthorized: park at a clean point now");
+        assert!(
+            matches!(refused, Err(WhisperDepositError::Refused(_))),
+            "cap-gate refuses a deposit to a seat the writer holds no capability for: {refused:?}"
+        );
+        assert_eq!(
+            inbox.pending(seat),
+            0,
+            "a refused deposit lands no frame for the seat"
+        );
+
+        // The recipient's next admitted call sees nothing from the refused deposit.
+        let r3 = gw.invoke(77, 50, vec![]).expect("recipient call 3 commits");
+        assert_eq!(
+            r3.whisper, None,
+            "an unauthorized deposit never reaches the recipient"
+        );
+    }
 }
