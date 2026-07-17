@@ -46,6 +46,19 @@ at all times · sophistication proportionate to the challenge, NO further · ACT
 
 - **fhegg-clearing ✅** (8174ec9ec): FOUND+FIXED a live conservation bug in fhegg-solver clearing.rs::fold_curves (out-of-domain-ask phantom supply; proven-absent in Lean, live in Rust; regression=Lean witness book); PROVED per-order allocation (new FhEggAllocation.lean, 20 keystones: conservation-at-V*, cap, ±1 pro-rata fairness teeth, IR) — closes SDK blocker #1; Rust↔Lean golden vectors; Allocation::validate SDK self-check. 75/75 tests + lake build Market green. ⚑ Market-audit #4 (marquee MPC argmax/balance-threshold split) repair now UNBLOCKED (clearing lane off those files). Proposed: price-priority variant, Cert-F>ring3, FHE trust story (ember-gated).
 
+
+## ⚑ EMBER GUIDANCE — Market #4 (marquee MPC) repair spec
+- **Reveal = MINIMAL.** MPC goal = "learn only the clearing price/outcome." So fix TOWARD LESS
+  LEAKAGE: change `FhEggRustDenotation` mpc reveal from ARGMAX → BALANCE-THRESHOLD sign vector
+  (what §2 clean-privacy already proves). Two files then agree; privacy covers the actual reveal;
+  reveal-minimality becomes the proven security goal. (Aligning down = always safe direction.)
+- **Optimality = ATTESTED EXECUTION, not "maximizing."** Use the proof-carrying/receipt infra to
+  prove the clearing algo's STEPS were honestly run on sealed inputs (p*/V* = the run's output) +
+  compose with already-proven value-neutrality. Honest headline: "value-neutral uniform-price
+  clearing, computation attested step-by-step" (= 'every move is a receipt'). DROP "provably
+  volume-maximizing" (hard/maybe-false). Stronger AND honest.
+- FRI: keep driving ALL stages autonomously; surface a genuine design fork, don't paper it.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
