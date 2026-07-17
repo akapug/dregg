@@ -2,7 +2,13 @@
 //!
 //! Builds real TFHE ciphertexts, clears homomorphically (nobody decrypts an
 //! order), checks correctness vs the plaintext reference, and reports the
-//! per-phase latency + op counts for N in {32,128,512}, K in {64,256}.
+//! per-phase latency + op counts for N in {8,32,128,512}, K in {16,64,256}.
+//!
+//! Per-op costs are measured on `FheUint32` — the type the CURRENT circuit
+//! actually uses (the aggregate widened from FheUint16 so legal u16 qtys can't
+//! wrap; see `lib.rs`). The crossing estimate models the CURRENT oblivious
+//! argmax (K min-selects + (K-1) gt + 2(K-1) selects), not the superseded
+//! sum-of-[D>=S]-bits circuit.
 //!
 //! CPU only. Apple Silicon has no CUDA, so the tfhe-rs `gpu` feature (which
 //! targets NVIDIA/CUDA) does not apply here; the GPU column is reported as
@@ -14,7 +20,7 @@ use fhegg_fhe::{fhe_clear, reference_clear, FheTiming, Order, Side};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tfhe::prelude::*;
-use tfhe::{generate_keys, set_server_key, ClientKey, ConfigBuilder, FheUint16};
+use tfhe::{generate_keys, set_server_key, ClientKey, ConfigBuilder, FheUint32};
 
 /// Per-config time budget. If a config's ESTIMATED full-run time (from the
 /// measured per-op costs) exceeds this, we report the extrapolation instead of
@@ -24,8 +30,9 @@ const BUDGET_SECS: f64 = 900.0;
 
 fn gen_orders(n: usize, k: usize, rng: &mut StdRng) -> Vec<Order> {
     // Balanced-ish book: half bids, half asks, random limits and small qtys.
-    // Small qtys keep the aggregate sums inside u16 (max N*qty < 65535):
-    // for N=512 we cap qty at 64 -> <= 32768.
+    // The qty caps predate the FheUint32 widening (they kept sums inside u16);
+    // kept IDENTICAL so the seeded books match the earlier FheUint16-era runs
+    // apples-to-apples.
     let qmax: u16 = if n >= 512 { 32 } else { 100 };
     (0..n)
         .map(|i| {
@@ -58,14 +65,14 @@ fn measure_per_op(ck: &ClientKey) -> PerOp {
     let t = Instant::now();
     let mut cts = Vec::new();
     for i in 0..reps {
-        cts.push(FheUint16::encrypt((i as u16) * 3 + 1, ck));
+        cts.push(FheUint32::encrypt((i as u32) * 3 + 1, ck));
     }
     let encrypt = t.elapsed() / reps as u32;
 
-    let a = FheUint16::encrypt(12345u16, ck);
-    let b = FheUint16::encrypt(6789u16, ck);
-    let one = FheUint16::encrypt(1u16, ck);
-    let zero = FheUint16::encrypt(0u16, ck);
+    let a = FheUint32::encrypt(12345u32, ck);
+    let b = FheUint32::encrypt(6789u32, ck);
+    let one = FheUint32::encrypt(1u32, ck);
+    let zero = FheUint32::encrypt(0u32, ck);
 
     // add
     let t = Instant::now();
@@ -94,20 +101,20 @@ fn measure_per_op(ck: &ClientKey) -> PerOp {
     // decrypt
     let t = Instant::now();
     for _ in 0..reps {
-        let _: u16 = a.decrypt(ck);
+        let _: u32 = a.decrypt(ck);
     }
     let decrypt = t.elapsed() / reps as u32;
 
     // sum of 512 ciphertexts (one aggregation bucket at N=512) — the cheap
     // additive-aggregation primitive (deferred-carry parallel tree-sum).
-    let col: Vec<FheUint16> = (0..512)
-        .map(|i| FheUint16::encrypt((i % 30) as u16 + 1, ck))
+    let col: Vec<FheUint32> = (0..512)
+        .map(|i| FheUint32::encrypt((i % 30) as u32 + 1, ck))
         .collect();
-    let refs: Vec<&FheUint16> = col.iter().collect();
+    let refs: Vec<&FheUint32> = col.iter().collect();
     let t = Instant::now();
-    let summed = FheUint16::sum(&refs);
+    let summed = FheUint32::sum(&refs);
     let sum512 = t.elapsed();
-    let chk: u16 = summed.decrypt(ck);
+    let chk: u32 = summed.decrypt(ck);
     debug_assert!(chk > 0);
 
     PerOp {
@@ -131,13 +138,20 @@ fn agg_secs(n: usize, k: usize, po: &PerOp) -> f64 {
     2.0 * k as f64 * per_bucket
 }
 
+fn cross_secs(k: usize, po: &PerOp) -> f64 {
+    // CURRENT circuit: K min-selects (one ge + one select each) then the
+    // oblivious argmax scan — (K-1) iterations of one gt (~ge cost class) +
+    // TWO selects (best_p and best_v). ~3x the ops of the superseded
+    // sum-of-[D>=S]-bits crossing.
+    (k as f64) * (secs(po.ge) + secs(po.select))
+        + ((k - 1) as f64) * (secs(po.ge) + 2.0 * secs(po.select))
+}
+
 fn estimate_secs(n: usize, k: usize, po: &PerOp) -> f64 {
     let nk = (n * k) as f64;
     let enc = nk * secs(po.encrypt);
     let agg = agg_secs(n, k, po);
-    // crossing = K comparisons (ge) + K selects + a cheap sum of K bits
-    let cross = (k as f64) * (secs(po.ge) + secs(po.select));
-    enc + agg + cross
+    enc + agg + cross_secs(k, po)
 }
 
 fn print_timing(tag: &str, t: &FheTiming, reference: &fhegg_fhe::ClearOutcome, ok: bool) {
@@ -167,8 +181,15 @@ fn print_timing(tag: &str, t: &FheTiming, reference: &fhegg_fhe::ClearOutcome, o
 
 fn main() {
     println!("=== fhEgg Stage-2: NO-VIEWER FHE uniform-price clearing — measured envelope ===");
+    // Don't hardcode the host — this bench runs on more than one box (M2 Max,
+    // hbox, persvati). The tfhe-rs `gpu` feature is NVIDIA/CUDA-only; none of
+    // our hosts have CUDA, so every number here is CPU.
     println!(
-        "host: CPU only (Apple Silicon has no CUDA; tfhe-rs gpu feature = NVIDIA-only, N/A here)"
+        "host: {} ({} cores), CPU only (no CUDA on our hosts; tfhe-rs gpu feature = NVIDIA-only)",
+        std::env::var("FHEGG_HOST").unwrap_or_else(|_| "unspecified — pass FHEGG_HOST".into()),
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0)
     );
 
     let config = ConfigBuilder::default().build();
@@ -181,7 +202,9 @@ fn main() {
     set_server_key(sk);
 
     let po = measure_per_op(&ck);
-    println!("\nper-op FHE costs (FheUint16, CPU, tfhe-rs internal rayon):");
+    println!(
+        "\nper-op FHE costs (FheUint32 — the CURRENT circuit's type, CPU, tfhe-rs internal rayon):"
+    );
     println!(
         "  encrypt = {:.3}ms | seq add (carry-propagating +) = {:.3}ms | ge(compare) = {:.3}ms | select = {:.3}ms | decrypt = {:.3}ms",
         secs(po.encrypt) * 1e3,
@@ -198,7 +221,8 @@ fn main() {
     );
 
     let configs = [
-        (32usize, 64usize),
+        (8usize, 16usize),
+        (32, 64),
         (32, 256),
         (128, 64),
         (128, 256),
@@ -217,13 +241,13 @@ fn main() {
             // Extrapolate from measured per-op — labelled, not a real run.
             let enc = (n * k) as f64 * secs(po.encrypt);
             let agg = agg_secs(n, k, &po);
-            let cross = k as f64 * (secs(po.ge) + secs(po.select));
+            let cross = cross_secs(k, &po);
             println!(
                 "  [EXTRAPOLATED from measured per-op — exceeds {:.0}s budget] N={} K={}",
                 BUDGET_SECS, n, k
             );
             println!(
-                "        encrypt ~ {:.1}s | aggregate(2*K={} deferred-carry sums) ~ {:.1}s | crossing(K={} ge+select) ~ {:.1}s | est TOTAL clear ~ {:.1}s",
+                "        encrypt ~ {:.1}s | aggregate(2*K={} deferred-carry sums) ~ {:.1}s | crossing(K={} min-selects + argmax) ~ {:.1}s | est TOTAL clear ~ {:.1}s",
                 enc,
                 2 * k,
                 agg,

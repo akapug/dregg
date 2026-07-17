@@ -211,20 +211,39 @@ witnessing why the `⟹` is open.
 
 ### 3.1 The honest measured FHE reality (Dark)
 
-The Dark posture is correct but bounded by a real, measured envelope
-(`DREX-NO-VIEWER-SURPASS.md`), and the honest numbers matter:
+The Dark posture is correct but bounded by a real envelope we **measured
+ourselves** — our own fhegg-fhe runs, not literature numbers. The sources, in
+order of authority: `fhegg-fhe/MEASURED-ENVELOPE.md` (the all-TFHE clear,
+re-measured 2026-07-17 on the CURRENT FheUint32 + oblivious-argmax circuit),
+`fhegg-fhe/HBOX-24CORE-ENVELOPE.md` (24-core CPU scaling: ~1.0–1.2×, not 2×),
+`fhegg-fhe/ADDITIVE-FOLD-ENVELOPE.md` (the carry-free BFV fold head-to-head),
+`docs/deos/OUTPUT-BOUNDARY-MPC.md` §7/§7.5 (the MPC crossing + masked
+decrypt-to-shares). `DREX-NO-VIEWER-SURPASS.md` is the *estimates/survey*
+note whose literature figures (CKKS sorts ~22 s/128 elts etc.) our
+measurements superseded. The honest numbers:
 
-- Uniform-price FHE clearing is tractable at **N ≈ 32–512 orders per pair at minute cadence** on
-  one server today (published FHE sorts land 128 elements in ~22 s CKKS, 64 in ~36 s rank-sort);
-  it **breaks** at N in the thousands (tens of minutes → hours).
-- **Exact-integer TFHE is slower than approximate CKKS**, because exact-integer radix addition
-  **carry-propagates** — the aggregation fold is not free at exact precision. A DEX needs exact
-  conservation, which argues for exact TFHE with a range/precision discipline (paying the higher
-  constant) rather than treating ciphertext addition as costless. The crossing itself is `O(K)`
-  and cheap; the fold is where the exact-integer bill lands.
-- **The sound-quantized / additive fold is the speed direction**, and it is mint-safe by
-  construction (§3.2). This keeps the aggregation in the cheap additive layer without charging
-  soundness to the approximation.
+- **All-TFHE uniform-price clearing (the baseline, measured):** correct at every
+  size that runs — the FHE `p*`/`V*` equal the plaintext reference — at
+  **minutes cadence** on a 24-core CPU: 24 s (N=8,K=16), ~2 min (32/64),
+  ~5 min (128/64), ~8.8 min (32/256); N=512 lands ~19 min and N=512/K=256
+  ~76 min (extrapolated from same-session per-op costs). The current
+  correct-rule circuit is **2.3–2.7× the superseded FheUint16/bit-sum
+  measurement** — cadence class unchanged, minutes not seconds. It **breaks**
+  (tens of minutes → hours) at N in the thousands.
+- **Exact-integer TFHE addition is PBS-class, not free** — a radix add
+  **carry-propagates** (33.5 ms per input-add even in the deferred-carry
+  parallel tree-sum, `FheUint32`), so in all-TFHE the aggregation fold
+  dominates the clear. A DEX needs exact conservation, so the fix is not
+  approximate CKKS; it is the additive lane below. The crossing is `O(K)` and
+  N-independent (measured: ~33 s at K=64 for N=32 and N=128 alike).
+- **The sound-quantized / additive fold is the speed direction — now MEASURED,
+  not proposed** (`ADDITIVE-FOLD-ENVELOPE.md`): the exact-quantized BFV fold is
+  **sub-10 ms at every size, ~10⁵× the TFHE fold**, and it is mint-safe by
+  construction (§3.2). With the output-boundary-MPC crossing
+  (`OUTPUT-BOUNDARY-MPC.md` §7.5: AGG→p* in **17–76 ms**) the whole
+  post-aggregation pipeline is ms-scale; the named residual is BFV threshold
+  key custody (`NoViewerKeyCustodyResidual` — mbfv is n-of-n, upstream smudging
+  TODO), not compute.
 
 ### 3.2 Mint-safe quantization: approximation proposes, exactification disposes
 
@@ -339,7 +358,7 @@ kernel-clean (`#assert_all_clean` / `#assert_axioms`) at model/spec scope.
 | `Cert-F` / `CertQp` / `Price-Cert` optimality certificate | proven; verify-not-find keystone | `CertF.lean`, `CertQp.lean`, `PriceCert.lean` |
 | Select the optimal exact all-or-nothing subset | **NP-hard** (0-1 balancing = subset-sum); use the `[0,1]` relaxation | codex Q3 |
 | Partial-fill volume-max at scale, oblivious | poly-time flow-LP; scale is the frontier (worst-case padding is the tax) | `pdhg.rs` |
-| Dark FHE clearing | **measured**: tractable N ≈ 32–512/pair at minute cadence; breaks at thousands; exact-integer TFHE > approximate CKKS | `DREX-NO-VIEWER-SURPASS.md` |
+| Dark FHE clearing | **measured (ours, 2026-07-17, current circuit)**: all-TFHE correct at minutes cadence (2 min at 32/64 → ~19 min at N=512, 24-core CPU); breaks at thousands; the measured additive-BFV fold (~10⁵×, sub-10 ms) + MPC crossing (AGG→p* 17–76 ms) are the recovery levers | `fhegg-fhe/MEASURED-ENVELOPE.md`, `HBOX-24CORE-ENVELOPE.md`, `ADDITIVE-FOLD-ENVELOPE.md`, `OUTPUT-BOUNDARY-MPC.md` §7.5 |
 | Reveal-nothing at the clearing level | proven **conditional** on the `HidingFriPcs` statistical-ZK floor | `RevealNothing.lean` |
 | Ledger-realization of the histogram fold in-circuit | named circuit build | `FhEggClearing.lean §2.4`-analogue |
 | Post-quantum aggregate/binding layer | `Cert-F` STARK is PQ; the classical-DLog Pedersen commitment binding is the named cutover | `PQ-SHIELDED-COMMITMENT.md` |
@@ -357,7 +376,9 @@ run once (uniform-price) or `T` times (the convex engine), is the whole of it.
 - `docs/deos/PRIVATE-CONVEX-ENGINE.md` — the oblivious first-order convex engine (the `Cert-F` factory).
 - `docs/deos/DREGGFI-PRIVACY-TIERS.md` — the Dark / Shielded / Open postures over the one kernel.
 - `docs/deos/FHEGG-PRODUCT-ORDER-FRONTIER.md` — `fhIR`, the admissibility theorem, `Price-Cert`.
-- `docs/deos/DREX-NO-VIEWER-SURPASS.md` — the measured FHE envelope for the Dark posture.
+- `docs/deos/DREX-NO-VIEWER-SURPASS.md` — the original estimates/literature survey for the Dark
+  posture; the MEASURED envelope lives in `fhegg-fhe/{MEASURED-ENVELOPE,HBOX-24CORE-ENVELOPE,
+  ADDITIVE-FOLD-ENVELOPE}.md` + `docs/deos/OUTPUT-BOUNDARY-MPC.md` §7.
 - `docs/deos/FHEGG-CODEX-INSIGHTS.md`, `FHEGG-CODEX-ROUND3.md` — the framing corrections cited above.
 - `metatheory/Market/{FhEggClearing,CertF,CertQp,PriceCert,MintSafeQuantization,RevealNothing,ZKOpenRel,FhIRAdmissible}.lean` — the proven core.
 - `fhegg-solver/`, `fhir/`, `circuit-prove/src/cert_f_air.rs` — the untrusted solver family, the typed DSL, and the STARK realization.
