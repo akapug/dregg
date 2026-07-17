@@ -517,7 +517,8 @@ impl Ledger {
     /// set of cells the in-progress turn has mutated, created, or destroyed so
     /// far. Completeness is forced by rollback correctness: every `cells`-map
     /// mutation path (`get_mut` / `update_with` / `create_cell` / `insert_cell`
-    /// / `remove`) journals the prior image first, or
+    /// / `remove` / `make_sovereign`, which routes through `remove`) journals
+    /// the prior image first, or
     /// [`Ledger::rollback_restore_point`] could not restore the exact pre-turn
     /// state. Unlike the executor's `LedgerDelta` — which omits the heap-root /
     /// lifecycle / program / verification-key / delegation dimensions — this
@@ -1370,13 +1371,17 @@ impl Ledger {
     ///
     /// Returns the removed cell on success.
     pub fn make_sovereign(&mut self, id: &CellId) -> Result<Cell, LedgerError> {
-        let cell = self
-            .cells
-            .remove(id)
-            .ok_or(LedgerError::CellNotFound(*id))?;
+        // Route through the JOURNALED removal path (fourth-pass review F4-A):
+        // a direct `self.cells.remove` bypassed the per-turn undo journal, so
+        // the touched-set completeness premise (`restore_point_touched_ids`)
+        // failed for MakeSovereign and a rolled-back turn LOST the hosted cell
+        // outright. `remove` journals the prior image, maintains the pubkey
+        // index, and marks the tree structural. The sovereign-commitment
+        // insert needs no per-cell journaling — the shallow side-maps are
+        // captured wholesale at arm time.
+        let cell = self.remove(id).ok_or(LedgerError::CellNotFound(*id))?;
         let commitment = cell.state_commitment();
         self.sovereign_commitments.insert(*id, commitment);
-        self.pending.touch_structural(); // the cell left the hosted leaf set
         Ok(cell)
     }
 
