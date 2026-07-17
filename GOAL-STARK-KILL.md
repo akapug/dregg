@@ -2042,3 +2042,12 @@ TRIAGE of the swarm inventory (supervisor, from code): #2 peer_exchange ed25519 
 #4 EpochMinter = ALREADY RIGGED (`minter_missing_treasury_returns_none` pins total_minted==0 — the
 no-phantom-supply invariant; last_minted_epoch non-advance is intended: skip, do not defer). Scouts
 over-reported 3 of 4 — the honest count is ONE real gap (MAX_FOLD_DEPTH), now closed.
+
+### `ebb30a288` — all 3 rescued rigs gated + GREEN
+- fold_depth_bound (3 passed) — MAX_FOLD_DEPTH on its sole enforcer.
+- retained_history_ivc_seam (1 passed, 160s) — the compress_history SEAM that had ZERO composition coverage;
+  stale-threaded turn BREAKS the tooth (discriminating power proven). Its #[ignore]d sibling drives the REAL
+  fold end-to-end (SLOW→armed-lane; value depends on the armed lane firing).
+- tree_capacity_guard (7 passed) — deployed sorted-Merkle depth + capacity guard pinned.
+The swarms rig phase was cut short by the limit wall, not fruitless — the work existed untracked, one
+`git clean` from gone.
