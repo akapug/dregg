@@ -4317,6 +4317,116 @@ async fn backfill_finalization_quorums(state: &NodeState, handle: &BlocklaceHand
     }
 }
 
+/// SOLO IDEMPOTENT FINALIZATION — persist the attested root for a finalized turn
+/// that solo INGRESS already applied authoritatively (double-apply fix; see the
+/// gated branch in [`execute_finalized_turn`]).
+///
+/// Builds + persists the `AttestedRoot` over the ALREADY-committed ledger,
+/// advancing the attested height (`latest_height`), and emits the root event. It
+/// does NOT re-execute the turn (the state is already committed by ingress) and
+/// does NOT touch the receipt chain (the receipt is already appended by ingress).
+///
+/// This MIRRORS the attested-root construction in `execute_finalized_turn`'s
+/// `Committed` arm (the fresh-execution path). The two must stay in sync: both
+/// build the same `AttestedRoot`/`StoredAttestedRoot` shape (single-validator
+/// self-signature meets the default threshold of 1; the hybrid quorum is mapped
+/// from any assembled finalization votes). Full mode never calls this — its turns
+/// are applied exactly once through the `Committed` arm.
+async fn persist_solo_finalized_attested_root(
+    s: &mut crate::state::NodeStateInner,
+    handle: &BlocklaceHandle,
+    state: &NodeState,
+    block_id: BlockId,
+    receipt: &dregg_turn::TurnReceipt,
+    new_height: u64,
+    now: i64,
+    finality_round: Option<u64>,
+) {
+    // The attested merkle_root is the canonical root of the CURRENT ledger — which
+    // already reflects the ingress-committed turn.
+    let merkle_root = canonical_ledger_root(&s.ledger);
+    let federation_keys = s.known_federation_keys.clone();
+    let federation_threshold = s.decryption_threshold.max(1);
+    let signing_key_bytes = s.cclerk.gossip_signing_key().to_bytes();
+    // Each finalized block carries exactly one turn; the receipt stream for this
+    // attestation period is the singleton of the already-committed receipt.
+    let receipt_stream_root = Some(dregg_types::merkle_root_of_receipt_hashes(&[
+        receipt.receipt_hash()
+    ]));
+
+    let mut attested = dregg_types::AttestedRoot {
+        merkle_root,
+        note_tree_root: None,
+        nullifier_set_root: None,
+        height: new_height,
+        timestamp: now,
+        blocklace_block_id: Some(block_id.0),
+        finality_round,
+        quorum_signatures: Vec::new(),
+        threshold_qc: None,
+        threshold: federation_threshold,
+        federation_id: dregg_types::FederationId(s.federation_id),
+        receipt_stream_root,
+        hybrid_quorum: Vec::new(),
+    };
+    let signing_msg = attested.signing_message();
+    let local_pk = s.cclerk.public_key();
+    let signing_key = dregg_types::SigningKey::from_bytes(&signing_key_bytes);
+    let sig = dregg_types::sign(&signing_key, &signing_msg);
+    // Solo / single-validator: our signature alone meets the threshold (default 1),
+    // so the persisted root is a genuine quorum and the node restarts cleanly.
+    if federation_keys.is_empty() || federation_keys.contains(&local_pk) {
+        attested.quorum_signatures.push((local_pk, sig));
+    }
+
+    let finalization_quorum = handle
+        .votes
+        .read()
+        .await
+        .assembled_quorum(&block_id)
+        .filter(|(root, _)| *root == attested.merkle_root)
+        .map(|(_, sigs)| sigs)
+        .unwrap_or_default();
+    attested.hybrid_quorum = finalization_quorum
+        .iter()
+        .map(|qs| dregg_types::HybridQuorumSig {
+            pubkey: qs.voter,
+            signature: qs.signature,
+            ml_dsa_pubkey: qs.ml_dsa_pubkey.clone(),
+            pq_signature: qs.pq_signature.clone(),
+        })
+        .collect();
+
+    let stored = dregg_persist::StoredAttestedRoot {
+        merkle_root: attested.merkle_root,
+        note_tree_root: attested.note_tree_root,
+        nullifier_set_root: attested.nullifier_set_root,
+        height: attested.height,
+        timestamp: attested.timestamp,
+        blocklace_block_id: attested.blocklace_block_id,
+        finality_round: attested.finality_round,
+        quorum_signatures: attested.quorum_signatures.clone(),
+        threshold_qc: attested.threshold_qc.clone(),
+        threshold: attested.threshold,
+        federation_id: attested.federation_id,
+        receipt_stream_root: attested.receipt_stream_root,
+        finalization_quorum,
+    };
+    if let Err(e) = s.store.store_attested_root(&stored) {
+        warn!(
+            error = %e,
+            height = new_height,
+            "failed to persist attested root (solo idempotent finalization)"
+        );
+    }
+
+    state.emit(NodeEvent::Root {
+        height: new_height,
+        merkle_root: dregg_types::hex_encode(&stored.merkle_root),
+        timestamp: stored.timestamp,
+    });
+}
+
 async fn execute_finalized_turn(
     state: &NodeState,
     handle: &BlocklaceHandle,
@@ -4412,6 +4522,72 @@ async fn execute_finalized_turn(
 
     let new_height = executor.block_height;
     let now = executor.current_timestamp;
+
+    // ─── IDEMPOTENT SOLO FINALIZATION (double-apply fix) ──────────────────────
+    // In solo (n=1) mode the INGRESS path (`api.rs` /turn/submit, /turns, faucet)
+    // is the AUTHORITATIVE apply: it commits the turn in place, appends the receipt
+    // to the local cclerk chain, and advances the solo height — solo has NO
+    // receipt-only+rollback ingress. This finalization pass then sees the SAME turn,
+    // but the agent cell's nonce is ALREADY ticked, so re-executing it below hits
+    // the executor's exact-nonce gate → `NonceReplay` → the `Rejected` arm, and the
+    // attested root that advances `latest_height` is NEVER written: `/status` stays
+    // at height 0 forever while the DAG climbs (executed=0). Detect the already-
+    // applied turn — its receipt is already on our committed chain (the unambiguous
+    // signal) — and complete ONLY the finality bookkeeping: persist the attested
+    // root (advancing the height), resolve pending waiters, emit events. We do NOT
+    // re-apply state (already committed by ingress; a re-apply against a rewound
+    // clone would double-debit) and do NOT re-append the receipt (already on chain).
+    // The turn is treated as FINALIZED, not Rejected.
+    //
+    // Full mode (n>=2) NEVER reaches this branch: it is gated on `is_solo`, AND full
+    // ingress is receipt-only + rolled back (the receipt is NOT on the chain here),
+    // so full-mode turns fall through to the authoritative SINGLE apply below —
+    // exactly-once preserved.
+    if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo)
+        && let Some(receipt) = s
+            .cclerk
+            .receipt_chain()
+            .iter()
+            .rev()
+            .find(|r| r.turn_hash == computed_hash)
+            .cloned()
+    {
+        // The already-applied turn is ALREADY counted in `solo.height` (ingress
+        // advanced it), so the attested root records the CURRENT height
+        // (`max(store, solo)`), NOT `executor.block_height` (= Next = base+1),
+        // which would double-count and skip a height. For the first solo turn this
+        // is 1 (store=0, solo=1) — matching the fresh-execution path's 0 -> 1.
+        let solo_attested_height = crate::executor_setup::attested_block_height(&s);
+        persist_solo_finalized_attested_root(
+            &mut s,
+            handle,
+            state,
+            block_id,
+            &receipt,
+            solo_attested_height,
+            now,
+            finality_round,
+        )
+        .await;
+        // Resolve any async waiter on this turn with the already-committed receipt.
+        s.pending_turns.resolve(
+            computed_hash,
+            dregg_turn::ResolutionOutcome::Resolved(receipt.clone()),
+        );
+        drop(s);
+        state.emit(NodeEvent::Receipt {
+            hash: turn_hash_hex.clone(),
+        });
+        info!(
+            turn_hash = %turn_hash_hex,
+            block_id = %block_id,
+            height = solo_attested_height,
+            round = ?finality_round,
+            "finalized turn already applied by solo ingress; finality bookkeeping \
+             completed (idempotent — attested root persisted, no state re-apply)"
+        );
+        return;
+    }
 
     // Full-turn proving (commit-path): capture the actor cell's pre-execution
     // state BEFORE the executor mutates the ledger. The full-turn proof binds
@@ -6701,6 +6877,244 @@ mod tests {
                 .balance(),
             1_000_000 - 4_200 - signed.turn.fee as i64,
             "sender debited by amount + burned fee"
+        );
+    }
+
+    /// FALSIFIER for the SOLO double-apply bug: on a solo (n=1) node, ingress is
+    /// the authoritative apply (state committed + receipt on the chain + solo
+    /// height advanced), then the finalization pass sees the SAME turn. Before the
+    /// idempotency fix, `execute_finalized_turn` re-executed it, hit the exact-nonce
+    /// gate (`NonceReplay`, the agent nonce already ticked), landed in the `Rejected`
+    /// arm, and NEVER wrote the attested root — so `latest_height` stuck at 0 while
+    /// the DAG climbed (the observed `executed=0`, `/status latest_height: 0`).
+    ///
+    /// This drives that exact sequence: simulate solo ingress (authoritative commit
+    /// + receipt append), assert `latest_height` is still 0, then run
+    /// `execute_finalized_turn` and assert it (a) ADVANCES `latest_height` 0 -> 1
+    /// (the turn genuinely finalizes, not Rejected), and (b) does NOT re-apply state
+    /// (the sender is debited EXACTLY once, no double-debit) and does NOT
+    /// double-append the receipt. Reverting the idempotency branch reds (a) (height
+    /// stuck at 0); a mutation that re-applied instead of skipping reds (b)
+    /// (double-debit). Full-mode exactly-once is guarded by the sibling test
+    /// `a1_finalized_turn_advances_height_zero_to_one_off_lock` (a NON-solo node
+    /// where the turn is NOT pre-applied still applies once through the `Committed`
+    /// arm — an over-aggressive "always skip" mutation reds that test).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn solo_finalization_is_idempotent_after_ingress_double_apply() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+
+        // Solo (n=1) mode + deterministic Rust producer (no Lean-archive dependence).
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+            let sk = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+        }
+
+        // Bare-executor convention (the Rust producer path the ingress simulation and
+        // the finalized-turn sig-check both use here).
+        let federation_id = [0u8; 32];
+
+        let sender_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"solo-idem:sender").as_bytes(),
+        ));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        // A PRE-EXISTING destination (so ingress needs no destination provisioning).
+        let dest_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"solo-idem:dest").as_bytes(),
+        ));
+        let dest_pk = dest_cclerk.public_key().0;
+        let dest = dregg_cell::CellId::derive_raw(&dest_pk, &[0u8; 32]);
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(
+                    sender_pk, [0u8; 32], 1_000_000,
+                ))
+                .expect("fund sender");
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(dest_pk, [0u8; 32], 0))
+                .expect("seed destination");
+        }
+
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 4_200, 0, &federation_id);
+        let fee = signed.turn.fee as i64;
+        let turn_hash = signed.turn.hash();
+        let turn_data = postcard::to_stdvec(&signed).expect("encode signed turn");
+
+        // ── SIMULATE SOLO INGRESS: the authoritative in-place commit + receipt
+        // append + solo height advance (mirrors `api.rs` /turn/submit solo path). ──
+        {
+            let mut s = state.write().await;
+            let lean = s.lean_producer_enabled;
+            let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+            match crate::executor_setup::execute_via_producer(
+                &executor,
+                &signed.turn,
+                &mut s.ledger,
+                lean,
+            ) {
+                dregg_turn::TurnResult::Committed { mut receipt, .. } => {
+                    // First turn on the fresh node chain: link to the (empty) head.
+                    receipt.previous_receipt_hash =
+                        s.cclerk.receipt_head().map(|r| r.receipt_hash());
+                    s.cclerk.append_receipt(receipt).expect("ingress append");
+                    if let Some(ref mut solo) = s.solo_consensus {
+                        solo.advance_height();
+                    }
+                }
+                other => panic!("solo ingress must commit the transfer, got {other:?}"),
+            }
+        }
+
+        // Ingress applied the transfer authoritatively...
+        {
+            let s = state.read().await;
+            assert_eq!(
+                s.ledger.get(&sender).expect("sender").state.balance(),
+                1_000_000 - 4_200 - fee,
+                "ingress debited the sender exactly once"
+            );
+            assert_eq!(
+                s.ledger.get(&dest).expect("dest").state.balance(),
+                4_200,
+                "ingress credited the destination"
+            );
+            assert_eq!(
+                s.cclerk.receipt_chain_length(),
+                1,
+                "ingress appended exactly one receipt"
+            );
+        }
+        // ...but the ATTESTED ROOT (which drives `latest_height`) is NOT written by
+        // ingress — only finalization writes it.
+        let height_before = {
+            let s = state.read().await;
+            s.store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            height_before, 0,
+            "solo ingress alone does NOT advance the attested height (the finalization pass must)"
+        );
+
+        // ── FINALIZATION of the ALREADY-APPLIED turn. Before the fix this re-executed
+        // → NonceReplay → Rejected → attested root never written (height stuck at 0).
+        let self_key = [0x9Au8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+        let block_id = BlockId([0x22u8; 32]);
+        execute_finalized_turn(&state, &handle, block_id, &turn_data, None, 0).await;
+
+        // (a) THE FIX: the turn genuinely finalizes — attested height advances 0 -> 1.
+        let height_after = {
+            let s = state.read().await;
+            s.store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            height_after, 1,
+            "an already-applied solo turn MUST still finalize (attested height 0 -> 1), \
+             not be rejected as a nonce replay"
+        );
+
+        // (b) IDEMPOTENT: state is unchanged (NO double-apply), receipt not re-appended.
+        {
+            let s = state.read().await;
+            assert_eq!(
+                s.ledger.get(&sender).expect("sender").state.balance(),
+                1_000_000 - 4_200 - fee,
+                "sender is debited EXACTLY once — finalization must not re-apply the turn"
+            );
+            assert_eq!(
+                s.ledger.get(&dest).expect("dest").state.balance(),
+                4_200,
+                "destination balance unchanged by the idempotent finalization"
+            );
+            assert_eq!(
+                s.cclerk.receipt_chain_length(),
+                1,
+                "the receipt is NOT re-appended by finalization"
+            );
+            // Sanity: the persisted attested root's merkle_root matches the live ledger.
+            let stored = s
+                .store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .expect("attested root persisted");
+            assert_eq!(
+                stored.merkle_root,
+                canonical_ledger_root(&s.ledger),
+                "the attested root commits the already-applied ledger state"
+            );
+        }
+
+        // (c) MONOTONIC: `latest_height` TRACKS turns — a second solo turn advances
+        // it 1 -> 2 (not stuck, not a hardcoded 1). This is the `/status` symptom.
+        // A FRESH sender (its own first turn) so the manual harness needs no
+        // per-cell authority-rotation bookkeeping — orthogonal to the height logic.
+        let sender2_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"solo-idem:sender2").as_bytes(),
+        ));
+        let sender2_pk = sender2_cclerk.public_key().0;
+        let sender2 = dregg_cell::CellId::derive_raw(&sender2_pk, &[0u8; 32]);
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(
+                    sender2_pk, [0u8; 32], 1_000_000,
+                ))
+                .expect("fund sender2");
+        }
+        let signed2 =
+            signed_transfer_turn(&sender2_cclerk, sender2, dest, 1_000, 0, &federation_id);
+        let turn_data2 = postcard::to_stdvec(&signed2).expect("encode signed turn 2");
+        {
+            let mut s = state.write().await;
+            let lean = s.lean_producer_enabled;
+            let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+            match crate::executor_setup::execute_via_producer(
+                &executor,
+                &signed2.turn,
+                &mut s.ledger,
+                lean,
+            ) {
+                dregg_turn::TurnResult::Committed { mut receipt, .. } => {
+                    receipt.previous_receipt_hash =
+                        s.cclerk.receipt_head().map(|r| r.receipt_hash());
+                    s.cclerk.append_receipt(receipt).expect("ingress append 2");
+                    if let Some(ref mut solo) = s.solo_consensus {
+                        solo.advance_height();
+                    }
+                }
+                other => panic!("second solo ingress must commit, got {other:?}"),
+            }
+        }
+        let block_id2 = BlockId([0x23u8; 32]);
+        execute_finalized_turn(&state, &handle, block_id2, &turn_data2, None, 0).await;
+        let height_after_2 = {
+            let s = state.read().await;
+            s.store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            height_after_2, 2,
+            "a second solo turn MUST advance the attested height 1 -> 2 (latest_height tracks turns)"
         );
     }
 
