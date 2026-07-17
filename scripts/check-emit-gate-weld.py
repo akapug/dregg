@@ -180,6 +180,23 @@ def main() -> int:
           f"{sum(len(v) for v in lean_pins.values())} Lean #guard pins + "
           f"{sum(len(v) for v in artifact_pins.values())} descriptor artifacts.")
 
+    # ARM THE GATE. If the extraction found ZERO Rust goldens there is nothing to weld,
+    # and every check below vacuously "passes" — the gate would print PASS having verified
+    # NOTHING. That happens on a silent drift of the harness itself: GATES_DIR renamed, or
+    # the raw-string convention changing from `r#"…"#` to `r##"…"##` (needed when a golden
+    # contains `"#`) so RUST_RAW stops matching. A weld gate that welds nothing is exactly
+    # the "mechanism that cannot tell you it did nothing" — fail LOUD instead of green.
+    if checked == 0:
+        print(
+            "\ncheck-emit-gate-weld: FATAL — found ZERO Rust emit-gate goldens to weld.\n"
+            f"  Scanned {GATES_DIR.relative_to(ROOT)}/*.rs with the r#\"…\"# extractor and\n"
+            "  extracted no descriptor literals. The harness has drifted out from under this\n"
+            "  gate (tests moved, or the raw-string delimiter changed) — it is NOT a clean\n"
+            "  tree with nothing to check. Re-point GATES_DIR / RUST_RAW.",
+            file=sys.stderr,
+        )
+        return 2
+
     # The reverse gap (informational): Lean #guard-pinned descriptors nothing Rust-side touches.
     artifact_names = set(artifact_pins)
     orphans = sorted(n for n in lean_pins if n not in rust_names and n not in artifact_names)
