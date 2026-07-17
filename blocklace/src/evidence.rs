@@ -39,7 +39,7 @@
 //! story and must not slash). Construction from blocks refuses cross-creator
 //! pairs. Malformed wire bytes fail decode.
 
-use ed25519_dalek::{Verifier, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
 use crate::finality::{Block, BlockId, EquivocationProof};
@@ -100,12 +100,23 @@ impl EvidenceHeader {
     /// commits to the block's `hybrid_id`, but the signature is verified against
     /// the accused strand's `ed25519` verify key (the hybrid id is not itself a
     /// key). A malformed key or forged signature is `false`.
+    ///
+    /// STRICT (`verify_strict`, not the cofactored `Verifier::verify`) — and here
+    /// that is load-bearing, not hygiene. An `EvidenceOfEquivocation` is a
+    /// SELF-CONTAINED wire value: `creator` is read out of the exhibit, so the
+    /// verifying key is fully attacker-chosen. Under the cofactored check a
+    /// SMALL-ORDER `creator` (e.g. the identity point) makes the signature
+    /// `(R = identity, s = 0)` verify over EVERY message, so an attacker holding
+    /// no secret can mint an exhibit that satisfies this predicate. `verify_strict`
+    /// rejects small-order keys and small-order `R`, which is what makes this
+    /// function's "forged signature is `false`" contract true.
     pub fn verify_signature(&self, hybrid_id: &[u8; 32], ed25519: &[u8; 32]) -> bool {
         let Ok(vk) = VerifyingKey::from_bytes(ed25519) else {
             return false;
         };
         let sig = ed25519_dalek::Signature::from_bytes(&self.signature);
-        vk.verify(&self.signing_content(hybrid_id), &sig).is_ok()
+        vk.verify_strict(&self.signing_content(hybrid_id), &sig)
+            .is_ok()
     }
 }
 
@@ -333,6 +344,77 @@ mod tests {
             EvidenceOfEquivocation::from_blocks(&a, &b),
             Err(EvidenceError::BadSignature { which: 'b' }),
             "a forged exhibit must not certify"
+        );
+    }
+
+    /// THE STRICTNESS TOOTH. `EvidenceOfEquivocation::verify` is a SELF-CONTAINED
+    /// wire predicate — its doc promises "Fail-closed: ... forged/invalid
+    /// signatures ... REJECT", and `creator` is read out of the exhibit, so the
+    /// verifying key is entirely attacker-chosen. Under the cofactored
+    /// `Verifier::verify` a SMALL-ORDER `creator` breaks that promise outright:
+    /// the signature `(R = identity, s = 0)` satisfies `R == s*B + h*A` for EVERY
+    /// message when `A` is the identity point, so an attacker holding NO SECRET
+    /// mints an exhibit that verifies. `verify_strict` denies weak keys; this test
+    /// is what pins that choice.
+    ///
+    /// If someone re-loosens `EvidenceHeader::verify_signature` back to
+    /// `vk.verify(..)`, this test goes RED (confirmed by mutation, 2026-07-17).
+    /// It is NOT redundant with `forged_signature_refuses`, which forges under a
+    /// *different honest key* — that is refused by the cofactored check too, so it
+    /// says nothing about strictness.
+    #[test]
+    fn forged_exhibit_under_a_small_order_creator_refuses() {
+        // The ed25519 identity point, compressed (y = 1) — a canonical, decodable,
+        // SMALL-ORDER verifying key.
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+
+        // NON-VACUITY, from the library's own authority: the key really is
+        // well-formed and really is weak. dalek's `is_weak` doc: "A weak public key
+        // can be used to generate a signature that's valid for almost every
+        // message. verify_strict denies weak keys". So this exhibit is refused for
+        // WEAKNESS, not for being malformed — the test cannot pass for the wrong
+        // reason.
+        let vk = VerifyingKey::from_bytes(&identity)
+            .expect("the identity point is a canonical, decodable ed25519 key");
+        assert!(
+            vk.is_weak(),
+            "premise: the identity point is a small-order (weak) key"
+        );
+
+        // The universal forgery: R = identity, s = 0. No secret was used.
+        let mut forged_sig = [0u8; 64];
+        forged_sig[0] = 1;
+
+        let header = |payload: &[u8]| EvidenceHeader {
+            seq: 3,
+            payload_hash: *blake3::hash(payload).as_bytes(),
+            predecessors: vec![],
+            signature: forged_sig,
+        };
+        let forged = EvidenceOfEquivocation {
+            creator: identity,
+            hybrid_id: [7u8; 32],
+            // Same slot, CONFLICTING content — so `verify` cannot short-circuit on
+            // PositionMismatch or IdenticalContent. The signature check is the only
+            // thing left standing between this exhibit and Ok(()).
+            header_a: header(b"story A"),
+            header_b: header(b"story B"),
+        };
+        assert_eq!(
+            forged.verify(),
+            Err(EvidenceError::BadSignature { which: 'a' }),
+            "SOUNDNESS: an exhibit forged under a small-order creator — minted \
+             holding NO secret — must NOT certify. A cofactored verify accepts it."
+        );
+
+        // CONTROL: a real fork exhibit still certifies, so the refusal above is
+        // caused by the forgery and not by a verifier that refuses everything.
+        let (a, b) = fork(23, 3);
+        assert_eq!(
+            EvidenceOfEquivocation::from_blocks(&a, &b).map(|e| e.verify()),
+            Ok(Ok(())),
+            "control: genuine equivocation evidence must still certify"
         );
     }
 

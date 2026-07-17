@@ -140,7 +140,7 @@ proptest! {
             AuthChoice::Signature => {
                 // Sign over the canonical signing message (matches the
                 // executor's `compute_signing_message`).
-                let msg = TurnExecutor::compute_signing_message(&action, &[0u8; 32]);
+                let msg = TurnExecutor::compute_signing_message(&action, &[0u8; 32], 0);
                 let sig = sk.sign(&msg).to_bytes();
                 let mut r = [0u8; 32];
                 let mut s = [0u8; 32];

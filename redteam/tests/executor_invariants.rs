@@ -51,8 +51,10 @@ impl Kp {
         }
     }
     /// A real signature over the action's canonical signing message.
-    fn sign(&self, action: &Action) -> Authorization {
-        let msg = TurnExecutor::compute_signing_message(action, &[0u8; 32]);
+    /// `turn_nonce` must match the nonce of the turn the action rides
+    /// (dregg-action-sig-v3 binds it into the message).
+    fn sign(&self, action: &Action, turn_nonce: u64) -> Authorization {
+        let msg = TurnExecutor::compute_signing_message(action, &[0u8; 32], turn_nonce);
         Authorization::from_sig_bytes(self.sk.sign(&msg).to_bytes())
     }
 }
@@ -243,8 +245,8 @@ fn unauthorized_transfer_is_rejected_and_state_unchanged() {
         balance_change: None,
         witness_blobs: vec![],
     };
-    let forged_auth = wrong.sign(&action);
     let nonce = ledger.get(&victim_id).unwrap().state.nonce();
+    let forged_auth = wrong.sign(&action, nonce);
     let t_forged = transfer_turn(victim_id, recipient_id, 5_000, nonce, forged_auth, None);
     let r2 = exec.execute(&t_forged, &mut ledger);
     assert!(
