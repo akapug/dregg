@@ -518,11 +518,14 @@ impl AgentCipherclerk {
         }
         .bind(state_root);
         let bridge_predicate = Self::predicate_type_to_bridge(predicate_type, threshold.as_u32());
-        let predicate_proof = dregg_bridge::prove_predicate_for_fact(
-            attribute_value,
-            binding,
-            &bridge_predicate,
-        )
+        let predicate_proof = {
+            // LOCAL VERIFY-BRANCH STUB (never upstream): bridge's prove_predicate_for_fact
+            // gained a Blinding arg (blinded value<->fact weld); sdk lagged. See emberian/dregg#51.
+            let _ = (&attribute_value, &binding, &bridge_predicate);
+            unreachable!("LOCAL VERIFY-BRANCH STUB: unlinkable-predicate path awaits upstream sdk weld migration")
+        };
+        #[allow(unreachable_code)]
+        Option::<()>::Some(())
         .ok_or_else(|| {
             SdkError::Auth(dregg_bridge::AuthError::InvalidRequest(format!(
                 "predicate proof generation failed: '{attribute}' {:?}({}) not satisfiable for value {attribute_value}",
