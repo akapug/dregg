@@ -1,5 +1,21 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑ OVERNIGHT LOOM — operating-devnet + game-quality + floor (2026-07-17)
+Play-tests DROVE the real games (not tests); flywheel = finding -> fix -> verify-by-driving -> commit.
+- ✅ **Games PLAY**: Descent/Council/Market/Dungeon/Automatafl all work (legal lands real receipt, illegal refused). Fixed:
+  anchoring dead-out-of-box (`b81c89e00`: `--dev-unlock` loopback-gated + honest settle-failure surface; a run now anchors
+  settled:true no unlock dance) · tug rendered ZERO controls (`316576e73`: fresh visitor gets 4 real seat-claim forms) ·
+  tug per-play receipts folded over a FIXTURE (`86452fc2a`: now over the REAL WorldCell, 490s prove, forgeries reject).
+- ✅ **Floor**: `cf5b6f647` FriQuerySamplingBias — QUANTIFIES the Stage-4/5 uniformity-defect term Compose left open
+  (residue_reduction_prob_le: Pr[n%m∈E] ≤ |E|/m + m/N; the +m/N is the deployed babybear m∤|F| defect). kernel-clean, non-vacuous.
+- ⚑ **AUTOMATAFL BOARD = EMBER DECISION (costed, parked):** the deployed game is a **5×5 toy** (`game.rs:62 N=5`), NOT hnefatafl.
+  A real tafl board is **ENGINEERING-ONLY (no crypto research)**. Two walls: WIDTH (D3 ~14n²) + DEGREE (`assert_member(0..n)`=deg n;
+  cap is 8). **brandub 7×7** = leg-split (b) ALONE (deg 7 already fits). **hnefatafl 11×11** = coord bit-decompose (d, TINY) +
+  leg-split (b, MEDIUM). Verify-first seam: an intermediate `mid_root` must `connect` like the terminal roots do. My width fix
+  (`85e602976`, 4n³→n²) is a prerequisite, not the game. ⇒ **ember picks the target board; then I build (d)+(b).**
+- **D0**: nightly-pin done (`80cd71310`); ark-serialize rev-pin + `--locked` BLOCKED on perpetual shared-Cargo.lock churn (coordination).
+- In flight: A Rung 2 real Agave-snapshot parse · floor WordProofBridge decode.
+
 ## ⚑ VACUITY-SWEEP FINDING 2, CLUSTER 3 — 10 injective-hash floors re-grounded; the residuals (2026-07-17)
 Landed `81e55f69f` (9 carriers) + `c4294734c` (the fourth costume) + `974a9fb31` (FloorDigestBinds).
 10 new `*Regrounded` files, 216 keystones `#assert_all_clean`, root `lake build Dregg2` green (9743
