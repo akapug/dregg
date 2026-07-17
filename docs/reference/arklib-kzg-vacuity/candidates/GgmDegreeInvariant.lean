@@ -27,12 +27,10 @@ The honest bounds — each proved below, none assumed:
   the flat table, PROVED: nesting one product inside another (`[seed, mul, mul]`) builds
   `X^4` at `D = 1`.
 
-* `degree_invariant_paired` — **B = 2·D** is recovered once the PAIRING DISCIPLINE is made
-  structural: a two-sorted table (G₁ / Gₜ) where products map G₁ × G₁ → Gₜ and hence never
-  nest — exactly the `Move.pair` of `GgmAdaptive.lean` (a bilinear group has no pairing out
-  of Gₜ). Every G₁ entry has degree ≤ D, every Gₜ entry degree ≤ 2·D, uniformly ≤ 2·D
-  (`degree_invariant_paired_uniform`). This is the structural home of `hdeg_pairs`
-  (`Δ = 2·D` covers every queried-handle difference by `natDegree_sub_le` + max).
+* `degree_invariant_paired` — **B = 2·D** is recovered in a separate PAIRING-DISCIPLINED
+  peer model: a two-sorted table (G₁ / Gₜ) where products land in Gₜ and hence never nest.
+  `GgmAdaptive.Move` itself has no pairing constructor, so this peer is not an invariant for
+  its operational run and is not used by the end-to-end theorem.
 -/
 import Mathlib
 
@@ -44,10 +42,9 @@ variable {p : ℕ}
 
 /-! ## The table operations and their interpreter -/
 
-/-- A table-extension move, mirroring the three ways `GgmAdaptive.runAux` grows its
-`St.table`: seeding with the SRS powers, appending a linear combination of two existing
-handles (`Move.lin`, binary case), and appending a product of two existing handles
-(`Move.pair`). Equality queries do not extend the table, so they do not appear. -/
+/-- A peer-model table-extension move: seeding with SRS powers, appending a linear combination,
+or appending a formal product. Only the linear case mirrors `GgmAdaptive.runAux`; its actual
+`Move` type has no product/pairing constructor. -/
 inductive TableOp (p : ℕ) where
   /-- Append the SRS seed `1, X, …, X^D`. -/
   | seed : TableOp p
@@ -210,10 +207,10 @@ theorem flat_2D_bound_false [Fact (Nat.Prime p)] :
 
 /-! ## The pairing-disciplined invariant: B = 2·D, structurally
 
-`GgmAdaptive`'s `Move.pair` is the bilinear pairing G₁ × G₂ → Gₜ: its OPERANDS are group
-elements built by linear combination from the SRS, and its RESULT lands in Gₜ, out of which
-no further pairing exists. Products therefore never nest. The two-sorted table below makes
-that discipline structural, and the uniform bound `2·D` becomes an induction invariant. -/
+In this separate peer model, a product lands in Gₜ, out of which no further product is available.
+Products therefore never nest. The two-sorted table below makes that discipline structural, and
+the uniform bound `2·D` becomes an induction invariant. This section is not wired to
+`GgmAdaptive.runAux`. -/
 
 /-- A pairing-disciplined move: linear combinations within each sort, and a pairing product
 whose operands are BOTH drawn from the G₁ table (degree ≤ D each — the faithful G₁ × G₂

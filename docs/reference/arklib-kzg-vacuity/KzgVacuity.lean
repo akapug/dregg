@@ -192,14 +192,16 @@ theorem binding_hypotheses_unsatisfiable
 
 end BindingIsVacuous
 
-/-! ## ARSDH is vacuous by the same argument
+/-! ## ARSDH is vacuous in the `function_binding` parameter regime by the same argument
 
 ArkLib's `Groups.arsdhAssumption` (`Definition 9.6` in CGKY25, powering `KZG.function_binding`)
 has the identical shape: `∀ adversary, arsdhExperiment D adversary ≤ error`, quantifying over the
-adversary TYPE with no resource bound. It falls the same two ways. The only extra work over the
+adversary TYPE with no resource bound. In the parameter regime used by `function_binding`, it falls
+the same two ways. The only extra work over the
 `t`-SDH case is producing, for each trapdoor `τ`, a size-`D+1` set `S` with `τ ∉ S` (so the
 vanishing polynomial `Z_S` does not vanish at `τ`); this requires `p ≥ D+2`, which is exactly the
-`hp : p ≥ n + 2` hypothesis `function_binding` already carries. -/
+`hp : p ≥ n + 2` hypothesis `function_binding` already carries. No claim is made here about the
+separate degenerate regime `p < D + 2`, where a size-`D+1` set avoiding τ may not exist. -/
 
 section ArsdhRefutation
 
@@ -293,8 +295,9 @@ theorem not_arsdhAssumption (hg₁ : g₁ ≠ 1) (hg₂ : g₂ ≠ 1) (D : ℕ) 
   exact absurd (lt_of_le_of_lt hle herr) (lt_irrefl 1)
 
 omit [PrimeOrderWith G₂ p] in
-/-- **The other regime, for ARSDH.** For any error bound `≥ 1`, `arsdhAssumption` holds
-trivially. So — exactly as with `t`-SDH — `arsdhAssumption` has NO content at ANY parameter. -/
+/-- **The other error regime, for ARSDH.** For any error bound `≥ 1`, `arsdhAssumption` holds
+trivially. Combined with `not_arsdhAssumption`, this exhausts the error regimes when
+`D + 2 ≤ p`, which is the regime consumed by `function_binding`. -/
 theorem arsdhAssumption_trivial_of_one_le (D : ℕ) (error : ℝ≥0)
     (herr : (1 : ℝ≥0∞) ≤ (error : ℝ≥0∞)) :
     Groups.arsdhAssumption (p := p) (G₁ := G₁) (G₂ := G₂) (g₁ := g₁) (g₂ := g₂) D error := by
@@ -333,3 +336,8 @@ theorem arsdh_binding_hypotheses_unsatisfiable (hg₁ : g₁ ≠ 1) (hg₂ : g�
 end ArsdhRefutation
 
 end ArkLibVacuity
+
+#print axioms ArkLibVacuity.not_tSdhAssumption
+#print axioms ArkLibVacuity.tSdhAssumption_trivial_of_one_le
+#print axioms ArkLibVacuity.not_arsdhAssumption
+#print axioms ArkLibVacuity.arsdhAssumption_trivial_of_one_le

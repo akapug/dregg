@@ -12,7 +12,8 @@ WHY THIS ESCAPES VACUITY (END-TO-END-PLAN §1a). `∀ A : tSdhAdversary D, tSdhE
 is FALSE for small ε: a `Classical.choice`-definable adversary inverts the encoding and wins
 t-SDH with probability 1. So the target does NOT quantify over all `tSdhAdversary`. It quantifies
 over generic **strategies** `strat : Strat p` and applies the embedding `GgmEmbed.embed`; the
-"generic-restricted adversary class" is the IMAGE of `embed`. `embed strat` receives only equality
+"generic-restricted adversary class" is the IMAGE of `embed`. Here `Strat` is deterministic and
+fuel-bounded. `embed strat` receives only equality
 booleans (`strat : List Bool → …`) — no group element is ever in scope for it to invert — so it can
 only realize `g₁ ^ (f τ)` with `deg f ≤ D`, which is exactly what the counting bound bounds.
 
@@ -30,9 +31,10 @@ Every gluing lemma is the REAL one: the degree discharge is B's theorems about t
 `tSdhExperiment`; the correspondence is D's `embed_run_correspondence` about ArkLib's SRS. No peer
 model or restated definition is swapped into any socket.
 
-HONEST SIDE-CONDITIONS. `1 ≤ D` (the meaningful KZG regime; at `D = 0` the pairing-free G₁
-adversary genuinely cannot form `g₁^τ`, see GgmEmbed's SCOPE note), `2 ≤ p` (so `p − 1 ≥ 1`), and
-`orderOf g₁ = p` (the base is a generator — used by the encoding injectivity). The `∀ i,
+HONEST SIDE-CONDITIONS. `1 ≤ D` (the meaningful KZG regime for this embedding; at `D = 0` the
+pairing-free G₁ adversary genuinely cannot form `g₁^τ`, see GgmEmbed's SCOPE note) and
+`orderOf g₁ = p` (the base is a generator — used by encoding injectivity). Primality already
+implies `2 ≤ p`, so the headline theorem does not take that redundant hypothesis. The `∀ i,
 SampleableType (unifSpec.Range i)` instance is ArkLib's OWN assumption on `tSdhExperiment`, carried
 verbatim. `tSdh_ggm_sound_lt_one` adds the standard regime hypothesis `C(fuel+D+4,2)·D + (D+1) <
 p − 1` and delivers a genuine `< 1`.
@@ -136,7 +138,7 @@ theorem winIndex_card_le (hord₁ : orderOf g₁ = p) (hp : 2 ≤ p)
 omit [PrimeOrderWith G₂ p] in
 /-- **`tSdh_ggm_sound` — the single end-to-end t-SDH GGM soundness theorem.** For every generic
 strategy `strat : Strat p`, the embedded ArkLib adversary `embed strat` wins ArkLib's REAL t-SDH
-experiment with probability at most the Shoup random-encoding number
+   experiment with probability at most the conservative all-pairs collision number
 `(C(fuel+D+4, 2)·D + (D+1)) / (p − 1)`. The whole argument is wired through ONE socket:
 
 * `experiment_eq_count` (C) turns ArkLib's `tSdhExperiment` into a `Finset` count over `Fin (p−1)`,
@@ -150,9 +152,10 @@ The theorem is about the IMAGE of `embed`, a genuinely rich strategy space — N
 `tSdhAdversary` type (over which the statement is false). -/
 theorem tSdh_ggm_sound
     (hord₁ : orderOf g₁ = p)
-    (hp : 2 ≤ p) (hD : 1 ≤ D) (strat : Strat p) (fuel : ℕ) :
+    (hD : 1 ≤ D) (strat : Strat p) (fuel : ℕ) :
     tSdhExperiment (g₁ := g₁) (g₂ := g₂) D (embed g₁ D fuel strat)
       ≤ (((fuel + D + 4).choose 2 * D + (D + 1) : ℕ) : ℝ≥0∞) / ((p - 1 : ℕ) : ℝ≥0∞) := by
+  have hp : 2 ≤ p := (Fact.out : Nat.Prime p).two_le
   -- (C) collapse the experiment to a count over `Fin (p−1)`
   rw [experiment_eq_count D (embed g₁ D fuel strat) (stratResult g₁ D fuel strat)
     (embed_det hord₁ hD strat fuel)]
@@ -160,7 +163,7 @@ theorem tSdh_ggm_sound
   have hcard : (Finset.univ.filter (winPred (stratResult g₁ D fuel strat) g₁)).card
       ≤ (fuel + D + 4).choose 2 * D + (D + 1) := by
     refine (winIndex_card_le hord₁ hp strat fuel).trans ?_
-    -- (A) the δ = D random-encoding card bound, with (B)'s degree discharge on the real runTable
+    -- (A) the δ = D all-pairs card bound, with (B)'s degree discharge on the real runTable
     exact card_realWinSet_le_encoding_D strat (srsSt D) fuel D (fuel + D + 4)
       (hdeg_out_of_run strat (srsSt D) fuel D (srsSt_table_natDegree_le D hD))
       (hdeg_handles_of_run strat (srsSt D) fuel D (srsSt_table_natDegree_le D hD))
@@ -177,10 +180,10 @@ theorem has real content (it is not a restated `≤ 1`). Composing with `tSdh_gg
 `tSdhExperiment D (embed strat) < 1`. -/
 theorem tSdh_ggm_sound_lt_one
     (hord₁ : orderOf g₁ = p)
-    (hp : 2 ≤ p) (hD : 1 ≤ D) (strat : Strat p) (fuel : ℕ)
+    (hD : 1 ≤ D) (strat : Strat p) (fuel : ℕ)
     (hreg : (fuel + D + 4).choose 2 * D + (D + 1) < p - 1) :
     tSdhExperiment (g₁ := g₁) (g₂ := g₂) D (embed g₁ D fuel strat) < 1 := by
-  refine lt_of_le_of_lt (tSdh_ggm_sound hord₁ hp hD strat fuel) ?_
+  refine lt_of_le_of_lt (tSdh_ggm_sound hord₁ hD strat fuel) ?_
   have hb0 : ((p - 1 : ℕ) : ℝ≥0∞) ≠ 0 := by
     rw [Ne, Nat.cast_eq_zero]; omega
   have hbtop : ((p - 1 : ℕ) : ℝ≥0∞) ≠ ⊤ := ENNReal.natCast_ne_top _

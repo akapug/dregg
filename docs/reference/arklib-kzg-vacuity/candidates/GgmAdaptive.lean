@@ -7,7 +7,7 @@ and `SOUND-FIX-VERDICT.md`.
 
 The static file proves: every *committed* generic adversary (outputs a degree-≤D representation
 polynomial with the trapdoor τ absent) wins t-SDH on ≤ (D+1)/(p−1) of trapdoors. That is the q=0
-fragment. This file builds the ADAPTIVE object: an adversary that makes `q` oracle queries —
+fragment. This file builds a deterministic ADAPTIVE object: a strategy that makes `q` oracle queries —
 group operations (linear combinations) and EQUALITY tests between opaque handles — before
 committing its output. The oracle answers equality *symbolically* (formal polynomial equality),
 never revealing τ.
@@ -16,7 +16,8 @@ The oracle has **no pairing move**: ArkLib's `tSdhAdversary D` is `Vector G₁ (
 … (Option (ZMod p × G₁))` — it must output a `G₁` element and is granted **no pairing map**
 `e : G₁ × G₂ → Gₜ`. Every handle it can form is therefore a `ZMod p`-linear combination of the seed
 `{1, X, …, X^D}`, degree ≤ D (never a product). This is the linear-oracle model on the critical path
-(δ = D); the conservative pairing-aware δ = 2D variant is off it (`GgmDegreeInvariant.buildPaired`).
+(δ = D). A separate peer model studies pairing degree bookkeeping, but is not part of this
+operational semantics.
 
 The Shoup argument, mechanized here at the counting/set level (no probability monad — same honest
 idiom as the static file):
@@ -49,15 +50,16 @@ variable {p : ℕ} [Fact (Nat.Prime p)]
 
 /-! ## Core 1 — the bad-set union-of-roots bound (Schwartz–Zippel, union form)
 
-Given a finite family of nonzero polynomials each of degree ≤ Δ, the set of field points that are a
-root of *at least one* has cardinality ≤ (#polys)·Δ. This bounds the Shoup bad event once the
+Given a finite family of polynomials each of degree ≤ Δ, the set of field points that are a
+root of *at least one* has cardinality ≤ (#polys)·Δ. (Mathlib defines the root multiset of the zero
+polynomial to be empty.) This bounds the Shoup bad event once the
 handle-difference polynomials are collected. -/
 
 /-- The union of the root sets of a finite family of polynomials. -/
 noncomputable def rootUnion (ps : Finset ((ZMod p)[X])) : Finset (ZMod p) :=
   ps.biUnion (fun q => q.roots.toFinset)
 
-/-- **Union Schwartz–Zippel.** If every polynomial in the family is nonzero and has degree ≤ Δ,
+/-- **Union root bound.** If every polynomial in the family has degree ≤ Δ,
 the union of their roots has card ≤ (#polys)·Δ. -/
 theorem card_rootUnion_le {ps : Finset ((ZMod p)[X])} {Δ : ℕ}
     (hdeg : ∀ q ∈ ps, q.natDegree ≤ Δ) :
@@ -91,14 +93,15 @@ There is **no pairing move**: ArkLib's `tSdhAdversary D` receives `Vector G₁ (
 and must output a `G₁` element, with **no pairing map** `e : G₁ × G₂ → Gₜ` in its interface. So
 every handle it can form is a `ZMod p`-linear combination of the seed `{1, X, …, X^D}`, degree ≤ D
 (never a product — no `≤ 2D` term). This is the linear-oracle model on the critical path; the
-pairing-aware `≤ 2D` variant lives off it in `GgmDegreeInvariant` (`buildPaired`). -/
+the separate pairing-degree peer model is not used by this `Move` type. -/
 inductive Move (p : ℕ) where
   | lin   : List (ZMod p × ℕ) → Move p
   | query : ℕ → ℕ → Move p
 
-/-- A generic (adaptive) adversary: a decision function from the history of equality answers to
+/-- A deterministic generic (adaptive) strategy: a decision function from the history of equality answers to
 either a next move or a committed output `(offset, output-handle-index)`. It never receives τ or a
-group element carrying τ — only the equality booleans. -/
+group element carrying τ — only the equality booleans. Randomized strategies are not represented
+by this type; handling them would require an additional random-tape/mixture argument. -/
 abbrev Strat (p : ℕ) := List Bool → Move p ⊕ (ZMod p × ℕ)
 
 /-- Oracle state: the handle table and the equality-answer history. -/
@@ -320,8 +323,8 @@ theorem card_badPolys_le : (badPolys strat st₀ fuel).card ≤ fuel := by
   rw [List.length_map]
   exact (List.length_filter_le _ _).trans (runAux_queries_length_le symAns strat fuel st₀)
 
-/-- **THE ADAPTIVE GGM CARDINALITY BOUND.** For every adaptive generic adversary making ≤ `fuel`
-oracle queries, the number of trapdoors on which it wins t-SDH is ≤ `fuel·Δ + (D+1)`: the static
+/-- **THE ADAPTIVE GGM CARDINALITY BOUND.** For every deterministic strategy in this model making
+≤ `fuel` oracle queries, the number of trapdoors on which it wins t-SDH is ≤ `fuel·Δ + (D+1)`: the static
 Boneh–Boyen root event `(D+1)` plus the Shoup collision event `(#queries)·Δ`. -/
 theorem card_realWinSet_le (D Δ : ℕ)
     (hdeg_out : (symOutput strat st₀ fuel).2.natDegree ≤ D)
@@ -341,8 +344,9 @@ theorem card_realWinSet_le (D Δ : ℕ)
 /-- The adaptive success fraction: winning trapdoors over the `p−1` nonzero trapdoors. -/
 noncomputable def adaptiveExperiment : ℚ := (realWinSet strat st₀ fuel).card / (p - 1)
 
-/-- **THE ADAPTIVE GGM SECURITY BOUND (sorry-free).** Every adaptive generic t-SDH adversary
-making ≤ `fuel` oracle queries wins on at most a `(fuel·Δ + (D+1))/(p−1)` fraction of trapdoors.
+/-- **THE ADAPTIVE GGM SECURITY BOUND (sorry-free).** Every deterministic strategy in this
+explicit-equality model making ≤ `fuel` oracle queries wins on at most a
+`(fuel·Δ + (D+1))/(p−1)` fraction of trapdoors.
 This is the full Shoup / Boneh–Boyen shape — the static `(D+1)/(p−1)` root event plus the
 `(#queries)·Δ/(p−1)` collision event — with `Δ = D` at faithful SRS degrees (the oracle has no
 pairing, so every handle is a linear combination of the seed `{1, X, …, X^D}`, degree ≤ D, and
@@ -380,12 +384,11 @@ theorem adaptive_bound_lt_one (D Δ : ℕ) (hlt : fuel * Δ + (D + 1) < p - 1) (
     push_cast [Nat.cast_sub this]; ring
   rw [h2] at h1; exact h1
 
-/-- **The adaptive theorem strictly generalizes the static one (non-vacuity anchor).** At `fuel = 0`
-the adaptive experiment reduces to the static Boneh–Boyen bound `(D+1)/(p−1)`: the degree
-hypotheses are discharged automatically (empty transcript, zero output polynomial), so
-`adaptive_ggm_sound` is genuinely instantiable and its `fuel = 0` slice is exactly the static
-`ggm_tSdh_sound` number. The `fuel > 0` slices add the honest `(#queries)·Δ` collision term. -/
-theorem adaptive_generalizes_static (D : ℕ) (hp : 2 ≤ p) :
+/-- **The zero-fuel bound.** At `fuel = 0`, `runAux` returns its fixed fallback output `(0, 0)`
+without consulting `strat` or `st₀`. Its success is bounded by the same numeric
+`(D+1)/(p−1)` expression as the static theorem. This is only a boundary-case sanity check: it
+does **not** embed or recover an arbitrary `GgmCandidate.GenericAdversary`. -/
+theorem adaptive_zero_fuel_bound (D : ℕ) (hp : 2 ≤ p) :
     adaptiveExperiment strat st₀ 0 ≤ ((D + 1 : ℕ) : ℚ) / (p - 1) := by
   have hout : (symOutput strat st₀ 0).2.natDegree ≤ D := by
     simp [symOutput, runOutput, runAux]
@@ -396,3 +399,8 @@ theorem adaptive_generalizes_static (D : ℕ) (hp : 2 ≤ p) :
   simpa using this
 
 end GgmAdaptive
+
+#print axioms GgmAdaptive.runAux_congr_of_agree
+#print axioms GgmAdaptive.card_realWinSet_le
+#print axioms GgmAdaptive.adaptive_ggm_sound
+#print axioms GgmAdaptive.adaptive_zero_fuel_bound

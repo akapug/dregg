@@ -158,3 +158,7 @@ theorem ggm_bound_lt_one {D : ℕ} (hp : D + 2 < p) :
   linarith
 
 end GgmCandidate
+
+#print axioms GgmCandidate.winPoly_ne_zero
+#print axioms GgmCandidate.card_winningPoints_le
+#print axioms GgmCandidate.ggm_tSdh_sound

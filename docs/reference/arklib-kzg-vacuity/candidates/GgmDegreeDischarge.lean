@@ -261,7 +261,7 @@ theorem adaptive_ggm_sound_of_run (strat : Strat p) (st₀ : St p) (fuel D : ℕ
     (badPolys_natDegree_le strat st₀ fuel hseed)
 
 /-- **The adaptive bound at the SRS seeding, hypothesis-free** (`1 ≤ D` and `2 ≤ p` only):
-every adaptive generic adversary against the SRS-seeded linear oracle wins on at most a
+every deterministic `Strat` against the SRS-seeded linear oracle wins on at most a
 `(fuel·D + (D+1))/(p−1)` fraction of trapdoors — no degree assumption left. -/
 theorem adaptive_ggm_sound_srs (strat : Strat p) (fuel D : ℕ) (hD : 1 ≤ D) (hp : 2 ≤ p) :
     adaptiveExperiment strat (srsSt D) fuel ≤ ((fuel * D + (D + 1) : ℕ) : ℚ) / (p - 1) :=
@@ -276,7 +276,7 @@ theorem rand_encoding_bound_D_of_run (strat : Strat p) (st₀ : St p) (fuel D n 
     (symOutput_natDegree_le strat st₀ fuel hseed)
     (handlePolys_natDegree_le symAns strat fuel st₀ hseed) hn
 
-/-- **The random-encoding δ = D bound at the SRS seeding, hypothesis-free** (`1 ≤ D`,
+/-- **The all-pairs δ = D bound at the SRS seeding, hypothesis-free** (`1 ≤ D`,
 `2 ≤ p`): the concrete `(C(fuel+D+4, 2)·D + (D+1))/(p−1)` Shoup number with every degree
 fact a theorem about the actual oracle. -/
 theorem rand_encoding_bound_srs_D_of_run (strat : Strat p) (fuel D : ℕ) (hD : 1 ≤ D)

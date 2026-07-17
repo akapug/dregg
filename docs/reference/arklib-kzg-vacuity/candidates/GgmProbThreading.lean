@@ -174,3 +174,6 @@ theorem experiment_eq_count (D : ℕ) (A : tSdhAdversary D (G₁ := G₁) (G₂ 
   rfl
 
 end Ggm.ProbThreading
+
+#print axioms Ggm.ProbThreading.game_collapse
+#print axioms Ggm.ProbThreading.experiment_eq_count

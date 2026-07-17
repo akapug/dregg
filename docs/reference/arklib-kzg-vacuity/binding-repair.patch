@@ -1,8 +1,8 @@
 diff --git a/ArkLib/Commitments/Functional/KZG/Binding.lean b/ArkLib/Commitments/Functional/KZG/Binding.lean
-index 6a56e565..d84e1966 100644
+index 6a56e565..a4d1ef01 100644
 --- a/ArkLib/Commitments/Functional/KZG/Binding.lean
 +++ b/ArkLib/Commitments/Functional/KZG/Binding.lean
-@@ -739,22 +739,31 @@ lemma t_sdh_error_bound {n : ℕ} {AuxState : Type} [SampleableType G₁]
+@@ -739,22 +739,32 @@ lemma t_sdh_error_bound {n : ℕ} {AuxState : Type} [SampleableType G₁]
      adversary)
  
  omit [DecidableEq G₁] in
@@ -22,8 +22,9 @@ index 6a56e565..d84e1966 100644
 +fact that `tSdhAssumption … error` is false below error `1` for an unrestricted adversary
 +class (a `Classical.choice` adversary can read the trapdoor out of the verifier SRS leg):
 +there is no assumption `Prop` here for such an adversary to inhabit. The bound relates two
-+concrete probabilities of *this* adversary and *its* reduction, so it carries content at
-+every parameter. `binding` below is the immediate corollary obtained by bounding the
++concrete probabilities of *this* adversary and *its* reduction. It is a genuine reduction
++statement at every parameter, although the right-hand probability may of course be large for a
++particular adversary. `binding` below is the immediate corollary obtained by bounding the
 +reduction's own success probability via the assumption. -/
 +theorem binding_reduces_to_tSdh {g₁ : G₁} {g₂ : G₂} (hg₁ : g₁ ≠ 1)
 +    (hpair : pairing g₁ g₂ ≠ 0) [SampleableType G₁] (AuxState : Type)
@@ -46,7 +47,7 @@ index 6a56e565..d84e1966 100644
      _ = Pr[bindingCondExt (p := p) (n := n) | game_ext] :=
        binding_game_ext_eq_binding_game (pairing := pairing) adversary
      _ ≤ Pr[(Groups.tSdhCondition (p := p) (g₁ := g₁)) ∘ mapBindingToTsdh (p := p)
-@@ -766,8 +775,26 @@ theorem binding {g₁ : G₁} {g₂ : G₂} (hg₁ : g₁ ≠ 1)
+@@ -766,8 +776,26 @@ theorem binding {g₁ : G₁} {g₂ : G₂} (hg₁ : g₁ ≠ 1)
      _ = Groups.tSdhExperiment (g₁ := g₁) (g₂ := g₂) n
        (bindingReduction (g₁ := g₁) (g₂ := g₂) (pairing := pairing) AuxState adversary) :=
        t_sdh_game_eq (g₁ := g₁) (g₂ := g₂) (pairing := pairing) adversary
@@ -58,10 +59,10 @@ index 6a56e565..d84e1966 100644
 +
 +This is an immediate corollary of `binding_reduces_to_tSdh`: for each adversary, compose
 +the (unconditional) reduction bound with the assumption's bound on the reduction's own
-+success probability. Note that for an *unrestricted* adversary class `Groups.tSdhAssumption
-+… error` is false for `error < 1`, so this corollary only becomes informative once the
-+assumption is stated over a restricted (e.g. algebraic-group-model) adversary class. The
-+unconditional, non-vacuous content lives entirely in `binding_reduces_to_tSdh`. -/
++success probability. For the current, unrestricted `Groups.tSdhAssumption` type this corollary is
++vacuous below error `1`. A future restricted assumption would require a correspondingly changed
++corollary that proves `bindingReduction … adversary` belongs to the restricted class. The
++assumption-free reduction statement lives in `binding_reduces_to_tSdh`. -/
 +theorem binding {g₁ : G₁} {g₂ : G₂} (hg₁ : g₁ ≠ 1)
 +    (hpair : pairing g₁ g₂ ≠ 0) [SampleableType G₁] (tSdhError : ℝ≥0)
 +    (htSdh : Groups.tSdhAssumption (p := p) (G₁ := G₁) (G₂ := G₂) (g₁ := g₁)
