@@ -344,9 +344,25 @@ async fn status(
             let post = receipt["post_state"].as_str().unwrap_or("?");
             let chain_index = receipt["chain_index"].as_u64().unwrap_or(0);
 
+            // The receipt is an immutable commit-time snapshot: a promoted
+            // turn's `finality` stays "tentative" forever. Consensus finality
+            // is surfaced ALONGSIDE it from the node's durable commit log.
+            let consensus_final = receipt["consensus_final"].as_bool().unwrap_or(false);
+
             ctx.header("Turn Receipt");
             ctx.kv("Turn hash", &abbrev_hex(turn_hash, 8, 4));
             ctx.kv("Finality", finality);
+            ctx.kv(
+                "Consensus final",
+                if consensus_final {
+                    "yes (durable commit record)"
+                } else {
+                    "no (pending finalization)"
+                },
+            );
+            if let Some(h) = receipt["attested_height"].as_u64() {
+                ctx.kv("Attested height", &h.to_string());
+            }
             ctx.kv("Chain index", &chain_index.to_string());
             ctx.kv("Actions", &actions.to_string());
             ctx.kv("Computrons", &crate::output::format_number(computrons));
@@ -359,12 +375,44 @@ async fn status(
             }
         }
         None => {
-            ctx.warn(&format!(
-                "No receipt found for turn {}",
-                abbrev_hex(turn_id, 8, 4)
-            ));
-            ctx.info("  The turn may still be pending finalization, or the hash may be wrong.");
-            ctx.info("  Receipts appear after the commit path runs; try again shortly.");
+            // No receipt on the chain — but the durable commit log is the
+            // authority on consensus finality (the receipt-chain append can
+            // fail while the turn still finalized). Ask the node's
+            // turn-status surface before claiming "maybe pending".
+            let is_full_hash = needle.len() == 64 && needle.chars().all(|c| c.is_ascii_hexdigit());
+            let status = if is_full_hash {
+                get_json(cfg, &format!("/api/turn/{needle}/status"))
+                    .await
+                    .ok()
+            } else {
+                None
+            };
+            match status.filter(|st| st["consensus_final"].as_bool() == Some(true)) {
+                Some(st) => {
+                    ctx.header("Turn Status");
+                    ctx.kv("Turn hash", &abbrev_hex(turn_id, 8, 4));
+                    ctx.kv("Consensus final", "yes (durable commit record)");
+                    if let Some(h) = st["attested_height"].as_u64() {
+                        ctx.kv("Attested height", &h.to_string());
+                    }
+                    if let Some(rh) = st["receipt_hash"].as_str() {
+                        ctx.kv("Receipt hash", &abbrev_hex(rh, 8, 4));
+                    }
+                    ctx.info(
+                        "  Finalized through consensus; no receipt on this node's receipt chain.",
+                    );
+                }
+                None => {
+                    ctx.warn(&format!(
+                        "No receipt found for turn {}",
+                        abbrev_hex(turn_id, 8, 4)
+                    ));
+                    ctx.info(
+                        "  The turn may still be pending finalization, or the hash may be wrong.",
+                    );
+                    ctx.info("  Receipts appear after the commit path runs; try again shortly.");
+                }
+            }
         }
     }
 
