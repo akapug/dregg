@@ -9287,3 +9287,39 @@ Attribution footer) · G9 graded path to dregg-the-network (node on hbox →
 option-B settle for catalog games + verify-badge tags → tug fold-anchor) ·
 bot Store + legacy WebState onto the policied host · forge endpoints
 (/author + /validate on the real service; compiler core is done).
+
+## PAUSED: tug app-root weld — the deployed cutover (mechanism proven; deployment is a clean-box job) — 2026-07-17
+
+WHAT'S DONE + COMMITTED: the general app-root weld ATOM (R == cell field K) — mechanism, ABI (AppRootBinding{j,L,K}), the 4-connect
+mandatory node (prove_custom_binding_node_app_root_segmented), driven THROUGH THE NODE + standalone-canary'd, apex held additively. Plus
+the deployed SOCKET + arm branch (CustomWitnessBundle.app_root_binding: None=byte-identical state node, Some=mandatory app-root path,
+CUSTOM_APP_FIELD_OCTET_LEN pins field octet at leg PIs [n-24..n-16)). Plus tug/automatafl/schema genesis one-shots. The genesis write-hatch
+class is ZERO tree-wide.
+WHAT REMAINS (the coordinated VK-epoch big-bang — all THREE land ATOMICALLY or the deployed custom path reds; do NOT half-land):
+1. LEG-EMIT (VERIFIED once already, on hbox): add customFieldKExposure to customV3 — 8 `.piBinding .last` pins over the after-block
+   fields[0..8] octet, BEFORE wideAppend, piCount 78->86. Done at the PROBE level (EmitWideRegistryProbe.lean + EmitWideUMemWeldRegistry
+   Probe.lean via withAfterOctetPins) NOT v3RegistryWide (keeps Dregg2/ clean at HEAD, DREGG_VK_REGEN_ACK satisfiable). Rust twin in
+   circuit/src/effect_vm/trace_rotated.rs::generate_rotated_custom_wide (octet into base_pis at AFTER_BASE+4+k = cols 431..438 on the LAST
+   row; anchors shift [62..78)->[70..86)). Regen both TSVs (EXIT=0, 57 members, custom pi_count 78->86; FPs WIDE_REGISTRY_STAGED_FP=
+   07fa7e87.., WIDE_UMEM_WELD_REGISTRY_FP=427b8155..). ⚠ in-file comments 186/237/187 are STALE — real values 188/427/188 (ROT_WIDTH=709).
+   withAfterOctetPins adds NO columns -> drift = TAIL-APPEND (no DREGG_ALLOW_REGENESIS).
+2. TUG CUTOVER (fold.rs::mint_win_turn_over_cell): .with_app_root_binding(AppRootBinding{app_root_pi_offset:17 (WIN_WINNER PI),app_root_
+   len:1,field_key:reg("winner")}); RELOCATE winner into fields[0..7] — swap winner(12)<->b_board(7) in state.rs (all name-resolved:
+   conservation_indices auto-picks b_board@12, winner out of the SumEquals set; no hardcoded 12, no pinned genesis roots). (nextop's
+   fold.rs was REVERTED to HEAD on pause to keep tug compiling — redo the flip.)
+3. VK RE-KEY (butcher approved): re-derive via derive_deployed_apex_vk_identity_and_check_fixture (its failure msg STATES the new apex),
+   re-pin DREGG_APEX_RECURSION_VK (apex_shrink_gnark_export.rs:216), the fixture, the Go mirror settlement_circuit.go:122 (3ad1c9c6.. ->
+   new), + the leg-leaf/sub-proof-leaf RecursionVk. NOT run — no new hash exists yet.
+HARD GATE (never reached): a tug win folds through the DEPLOYED prove_turn_chain_recursive + verify_history ACCEPTS with R==winner field;
+a disagreeing winner REFUSED through verify_history; canary = revert cutover to None -> disagreeing folds green -> restore -> UNSAT.
+⚑ OPS LESSONS (why 2 attempts thrashed): (a) NEVER rsync .lake (--exclude='.lake/') — it clobbers hbox Mathlib artifacts -> a SPURIOUS
+multi-hour SINGLE-THREADED leanc Mathlib->C rebuild of dregg-lean-ffi (the @[export] archive, on circuit-prove's critical path); the 2nd
+attempt died 76% through that (~6442/8500 objects). (b) Fold verification in DEBUG not --release (release build time dwarfs the fold).
+(c) hbox is CO-TENANT — a ts-verify tree ran the identical Mathlib grind; check WHOSE leanc is at 100% before assuming it's yours. (d)
+run detached (setsid nohup swarm-build … & poll log) — swarm-build's systemd-run --scope + linger DOES survive yields (an earlier
+"orphan death" was a bad pgrep pattern, not SIGHUP). CLEAN-BOX RECIPE: quiet hbox (no co-tenant), warm dregg-lean-ffi (do NOT touch .lake
+/ mass-touch), DEBUG, detached; the leg-emit is already proven so it's re-pin + one verify_history fold.
+⚑ HARD BUDGET FINDING (affects EVERY app-root consumer): only fields 0..7 have direct lane-0 limbs; fields 8..15 ride the opaque fields_
+root digest + CANNOT be exposed this way -> app-root welds share an 8-lane ceiling. NO Lean witness for the app-root tie (Rust-driven +
+canary'd only, like SatCustomFold). Other consumers (automatafl board_new_root8 PI[24..32], entity-compose/param-compose outcome_
+commitment) adopt via .with_app_root_binding(...) AFTER relocating their root into fields[0..7] — that relocation is the real cost.
