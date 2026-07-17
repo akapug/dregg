@@ -53,6 +53,7 @@ set_option autoImplicit false
 namespace Dregg2.Circuit.FriQuerySamplingBias
 
 open Finset
+open Dregg2.Circuit.FriVerifierCompose (epsQuery)
 
 /-! ## 1. The core counting fact — a residue class of `range N` has `≤ ⌊N/m⌋ + 1` elements. -/
 
@@ -174,6 +175,187 @@ theorem residue_bias_bound_holds :
       ≤ ((({0} : Finset ℕ).card : ℕ) : ℝ) / ((2 : ℕ) : ℝ) + ((2 : ℕ) : ℝ) / ((3 : ℕ) : ℝ) :=
   residue_reduction_prob_le 3 2 (by norm_num) (by norm_num) ({0} : Finset ℕ) (by decide)
 
+/-! ## 5. ⚑⚑ WIRING THE DEFECT INTO `εQuery` — the `k`-query composition.
+
+⚑ THIS IS THE CLOSURE OF `FriVerifierCompose` §3 BLOCKER (b). §1–§4 QUANTIFIED the per-index
+defect (`residue_reduction_prob_le`); this section COMPOSES it into the `k`-query survival exponent
+`εQuery` raises `(1 − δ)` to. The uniform model (`FriQuerySoundness.accept_prob_le`,
+`FriVerifierCompose.epsQuery`) counts `k`-samples over `Fin k → κ` and gets per-index survival
+`(1 − δ)` because it assumes the query index is UNIFORM over `κ`. The deployed index is
+`Challenger.sampleBits`: a squeeze `n` uniform over `Fin |F|`, reduced `n % 2^logN`. §1–§4 show that
+reduction inflates any residue event's probability by up to `m/N = 2^logN/|F|`. So the DEPLOYED
+per-index survival is not `(1 − δ)` but `(1 − δ) + 2^logN/|F|`, and the `k` INDEPENDENT squeeze
+draws raise THAT to the `k`:
+
+    biased εQuery = L/|F| + ((1 − δ) + 2^logN/|F|)^k                 (`epsQueryBias`)
+
+The fold-density term `L/|F|` is unchanged — it is a property of the fold-challenge `α` marginal, not
+of the query sampler. Only the query exponent's base carries the defect.
+
+## Why the base is `(1 − δ) + m/N` and not `(1 − δ)`
+
+The uniform per-index survival is `|E|/m` where `E` is the per-index MISS set (the residue values `j`
+at which the folded word AGREES — a `δ`-far word has `≥ δ·m` disagreements, so `|E|/m ≤ 1 − δ`). Under
+the deployed reduction `n % m` with `n` uniform over `N = |F|`, `Pr[n % m ∈ E] ≤ |E|/m + m/N`
+(`residue_reduction_prob_le`), so the deployed per-index survival is `≤ (1 − δ) + m/N`.
+
+## Non-vacuity / load-bearing (`biased_survival_defect_load_bearing`)
+
+The `+ m/N` addend is NOT slack. At `N = 3, m = 2, E = {0}, δ = 1/2, k = 1` the biased `1`-query
+survival is `2/3`, which STRICTLY EXCEEDS the un-defected value `(1 − δ)^k = 1/2` — so the composed
+bound WITHOUT the defect term (`≤ (1 − δ)^k`) is FALSE, and `2 ∤ 3` is exactly the deployed
+`2^logN ∤ |F|` regime (`babybear_order_not_divisible_by_two`). The defect term restores truth
+(`biased_survival_bound_holds_at_witness`).
+-/
+
+/-! ### 5.1 The counting bridge — a residue filter over `Fin N` counts the same as over `range N`. -/
+
+/-- The `Fin N` and `range N` residue-filter cardinalities agree, via the injection `a ↦ a.val`. Lets
+§1–§4's `range N` bounds feed the product-space count over the sample space `Fin k → Fin N`. -/
+theorem card_fin_filter_mod_eq (N m : ℕ) (E : Finset ℕ) :
+    (Finset.univ.filter (fun a : Fin N => a.val % m ∈ E)).card
+      = ((Finset.range N).filter (fun n => n % m ∈ E)).card := by
+  apply Finset.card_bij (fun (a : Fin N) _ => a.val)
+  · intro a ha
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at ha
+    simp only [Finset.mem_filter, Finset.mem_range]
+    exact ⟨a.isLt, ha⟩
+  · intro a _ b _ hab
+    exact Fin.val_injective hab
+  · intro n hn
+    simp only [Finset.mem_filter, Finset.mem_range] at hn
+    refine ⟨⟨n, hn.1⟩, ?_, rfl⟩
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    exact hn.2
+
+/-! ### 5.2 The product count — `k` independent biased draws all survive with count `c^k`. -/
+
+/-- **THE `k`-FOLD COUNTING IDENTITY (biased model).** Over the deployed sample space
+`Fin k → Fin N` (`k` independent squeeze values, each uniform over the `N = |F|` squeeze range), the
+number of samples whose reduced indices `n % m` ALL land in the miss set `E` is `c^k`, where
+`c = |{a : Fin N | a.val % m ∈ E}|` is the per-coordinate survive count. This is the biased analogue
+of `FriQuerySoundness.accepting_card`, over the pre-reduction squeeze space rather than `κ`. -/
+theorem biased_accepting_card (N m k : ℕ) (E : Finset ℕ) :
+    (Finset.univ.filter (fun Q : Fin k → Fin N => ∀ i, (Q i).val % m ∈ E)).card
+      = (Finset.univ.filter (fun a : Fin N => a.val % m ∈ E)).card ^ k := by
+  have hset : (Finset.univ.filter (fun Q : Fin k → Fin N => ∀ i, (Q i).val % m ∈ E))
+      = Fintype.piFinset (fun _ : Fin k => Finset.univ.filter (fun a : Fin N => a.val % m ∈ E)) := by
+    ext Q
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and, Fintype.mem_piFinset]
+  rw [hset, Fintype.card_piFinset_const]
+
+/-! ### 5.3 ⚑ THE BIAS-AWARE `k`-QUERY SURVIVAL BOUND — the composed defect term. -/
+
+/-- **⚑⚑ THE COMPOSED DEFECT-CARRYING SURVIVAL BOUND.** For a `δ`-far word whose per-index MISS set
+`E` has uniform density `|E|/m ≤ 1 − δ`, the fraction of `k`-query DEPLOYED samples (each index
+`n % m`, `n` uniform over `Fin N`) that ALL miss is
+
+    ≤ ((1 − δ) + m/N)^k.
+
+The per-index survival `(1 − δ)` of the uniform model is REPLACED by `(1 − δ) + m/N` — the second
+addend is the `residue_reduction_prob_le` defect — and the `k` independent draws raise it to the `k`
+(`biased_accepting_card` + `pow_le_pow_left₀`). This is exactly the exponent `εQuery` needs over the
+deployed `sampleBits` sampler; without the `m/N` addend the bound is FALSE at `m ∤ N`
+(`biased_survival_defect_load_bearing`). -/
+theorem biased_query_survival_pow_le (N m k : ℕ) (E : Finset ℕ) (δ : ℝ)
+    (hN : 0 < N) (hm : 0 < m) (hE : E.card ≤ m)
+    (hmiss : (E.card : ℝ) / (m : ℝ) ≤ 1 - δ) :
+    ((Finset.univ.filter (fun Q : Fin k → Fin N => ∀ i, (Q i).val % m ∈ E)).card : ℝ)
+        / ((N : ℝ) ^ k)
+      ≤ ((1 - δ) + (m : ℝ) / (N : ℝ)) ^ k := by
+  have hNR : (0 : ℝ) < (N : ℝ) := by exact_mod_cast hN
+  rw [biased_accepting_card]
+  set c : ℕ := (Finset.univ.filter (fun a : Fin N => a.val % m ∈ E)).card with hc
+  have hbridge : ((Finset.range N).filter (fun n => n % m ∈ E)).card = c := by
+    rw [hc]; exact (card_fin_filter_mod_eq N m E).symm
+  have hbase : (c : ℝ) / (N : ℝ) ≤ (1 - δ) + (m : ℝ) / (N : ℝ) := by
+    have h := residue_reduction_prob_le N m hN hm E hE
+    rw [hbridge] at h
+    linarith [hmiss, h]
+  have hbase0 : (0 : ℝ) ≤ (c : ℝ) / (N : ℝ) := by positivity
+  push_cast
+  rw [← div_pow]
+  exact pow_le_pow_left₀ hbase0 hbase k
+
+/-- **⚑ THE DEPLOYED-FIELD INSTANTIATION.** `N = |F| = 2013265921` squeeze values, `m = 2^logN`
+query buckets. A `δ`-far word's `k` deployed spot-checks all miss with probability
+`≤ ((1 − δ) + 2^logN/|F|)^k` — the honest bias-aware query exponent at the shipped BabyBear field.
+(Holds at every `logN`; the defect addend `2^logN/|F|` is nonzero and LOAD-BEARING exactly in the
+deployed `logN ≥ 1` regime where `2^logN ∤ |F|`, `babybear_order_not_divisible_by_two`.) -/
+theorem babybear_biased_query_survival_pow_le (logN k : ℕ) (E : Finset ℕ) (δ : ℝ)
+    (hE : E.card ≤ 2 ^ logN)
+    (hmiss : (E.card : ℝ) / ((2 : ℝ) ^ logN) ≤ 1 - δ) :
+    ((Finset.univ.filter (fun Q : Fin k → Fin 2013265921 =>
+          ∀ i, (Q i).val % (2 ^ logN) ∈ E)).card : ℝ)
+        / ((2013265921 : ℝ) ^ k)
+      ≤ ((1 - δ) + ((2 : ℝ) ^ logN) / (2013265921 : ℝ)) ^ k := by
+  have hcast : (((2 ^ logN : ℕ)) : ℝ) = (2 : ℝ) ^ logN := by push_cast; ring
+  have hmiss' : (E.card : ℝ) / (((2 ^ logN : ℕ)) : ℝ) ≤ 1 - δ := by rw [hcast]; exact hmiss
+  have h := biased_query_survival_pow_le 2013265921 (2 ^ logN) k E δ (by norm_num)
+    (pow_pos (by norm_num) logN) hE hmiss'
+  push_cast at h
+  exact_mod_cast h
+
+/-! ### 5.4 ⚑ `epsQueryBias` — the bias-aware `εQuery`, and its relation to the uniform one. -/
+
+/-- **⚑ THE BIAS-AWARE `εQuery`.** `L/|F| + ((1 − δ) + 2^logN/|F|)^k`: the fold-density term
+(unchanged from `FriVerifierCompose.epsQuery`, a property of the `α` marginal) plus the deployed
+`k`-query survival term whose base carries the `sampleBits` defect (`biased_query_survival_pow_le`).
+This is the value `εQuery` composes to over the DEPLOYED non-uniform query indices. -/
+noncomputable def epsQueryBias (cardF logN k L : ℕ) (δ : ℝ) : ℝ :=
+  (L : ℝ) / (cardF : ℝ) + ((1 - δ) + ((2 : ℝ) ^ logN) / (cardF : ℝ)) ^ k
+
+/-- **The defect is a COST, not slack — `epsQueryBias` DOMINATES the uniform `epsQuery`.** At list
+size `L = 1` the bias-aware bound is `≥` the uniform `FriVerifierCompose.epsQuery`, because the
+survival base is raised from `(1 − δ)` to `(1 − δ) + 2^logN/|F| ≥ (1 − δ)`. So substituting the honest
+deployed sampler can only WEAKEN `εQuery` — the direction a real defect must move a sound bound. -/
+theorem epsQueryBias_ge_epsQuery (cardF logN k : ℕ) (δ : ℝ)
+    (hδ1 : δ ≤ 1) :
+    epsQuery cardF k δ ≤ epsQueryBias cardF logN k 1 δ := by
+  unfold epsQuery epsQueryBias
+  have h0 : (0 : ℝ) ≤ 1 - δ := by linarith
+  have hbias : (0 : ℝ) ≤ (2 : ℝ) ^ logN / (cardF : ℝ) := by positivity
+  have hpow : (1 - δ) ^ k ≤ ((1 - δ) + (2 : ℝ) ^ logN / (cardF : ℝ)) ^ k :=
+    pow_le_pow_left₀ h0 (by linarith) k
+  push_cast
+  linarith
+
+/-! ### 5.5 ⚑ NON-VACUITY — the `+ m/N` addend is load-bearing (its omission makes the bound FALSE). -/
+
+/-- The concrete biased `1`-query survival at `N = 3, m = 2, E = {0}`: `2/3` (two of the three
+squeeze values, `0` and `2`, reduce to residue `0 ∈ E`). -/
+theorem biased_survival_fires :
+    ((Finset.univ.filter (fun Q : Fin 1 → Fin 3 =>
+        ∀ i, (Q i).val % 2 ∈ ({0} : Finset ℕ))).card : ℝ) / ((3 : ℝ) ^ 1) = 2 / 3 := by
+  have hc : (Finset.univ.filter (fun Q : Fin 1 → Fin 3 =>
+      ∀ i, (Q i).val % 2 ∈ ({0} : Finset ℕ))).card = 2 := by decide
+  rw [hc]; norm_num
+
+/-- **⚑⚑ THE DEFECT ADDEND IS LOAD-BEARING.** At `N = 3, m = 2, E = {0}, δ = 1/2, k = 1` the biased
+survival `2/3` STRICTLY EXCEEDS the un-defected exponent `(1 − δ)^k = (1/2)^1 = 1/2`. So the composed
+query bound WITHOUT the `+ m/N` term — i.e. `≤ (1 − δ)^k`, the value the UNIFORM
+`FriQuerySoundness.accept_prob_le` proves — is FALSE for the deployed biased sampler. And `2 ∤ 3` is
+exactly the deployed `2^logN ∤ |F|` regime (`babybear_order_not_divisible_by_two`): the defect is
+real precisely where `sampleBits` lives. -/
+theorem biased_survival_defect_load_bearing :
+    (1 - (1 / 2 : ℝ)) ^ 1
+      < ((Finset.univ.filter (fun Q : Fin 1 → Fin 3 =>
+          ∀ i, (Q i).val % 2 ∈ ({0} : Finset ℕ))).card : ℝ) / ((3 : ℝ) ^ 1) := by
+  rw [biased_survival_fires]; norm_num
+
+/-- **The `+ m/N` restores truth.** The bias-aware bound (with the defect term) DOES hold at the
+witness — a specialization of the general `biased_query_survival_pow_le` at `N = 3, m = 2, E = {0},
+δ = 1/2, k = 1`, whose conclusion `2/3 ≤ ((1 − 1/2) + 2/3)^1 = 7/6` is what makes the composed
+`εQuery` sound over the biased sampler. -/
+theorem biased_survival_bound_holds_at_witness :
+    ((Finset.univ.filter (fun Q : Fin 1 → Fin 3 =>
+        ∀ i, (Q i).val % 2 ∈ ({0} : Finset ℕ))).card : ℝ) / ((3 : ℝ) ^ 1)
+      ≤ ((1 - (1 / 2 : ℝ)) + (2 : ℝ) / (3 : ℝ)) ^ 1 := by
+  have h := biased_query_survival_pow_le 3 2 1 ({0} : Finset ℕ) (1 / 2)
+    (by norm_num) (by norm_num) (by decide) (by rw [Finset.card_singleton]; norm_num)
+  push_cast at h
+  convert h using 2
+
 #assert_all_clean [
   residueClassCard_le,
   residueSetCard_le,
@@ -181,7 +363,15 @@ theorem residue_bias_bound_holds :
   babybear_query_bias_le,
   residue_bias_fires,
   residue_bias_defect_load_bearing,
-  residue_bias_bound_holds
+  residue_bias_bound_holds,
+  card_fin_filter_mod_eq,
+  biased_accepting_card,
+  biased_query_survival_pow_le,
+  babybear_biased_query_survival_pow_le,
+  epsQueryBias_ge_epsQuery,
+  biased_survival_fires,
+  biased_survival_defect_load_bearing,
+  biased_survival_bound_holds_at_witness
 ]
 
 end Dregg2.Circuit.FriQuerySamplingBias
