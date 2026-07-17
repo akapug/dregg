@@ -36,6 +36,21 @@ impl std::error::Error for TransportError {}
 pub trait Transport {
     /// Send a `sendMessage` request, returning the created message's id.
     fn send_message(&mut self, req: &SendMessageRequest) -> Result<MessageId, TransportError>;
+
+    /// EDIT a previously sent message in place (`editMessageText`) to show `req`'s text +
+    /// keyboard — how a re-present keeps ONE live surface message per session instead of
+    /// spamming the chat. **Default: fall back to sending a NEW message** — a transport that
+    /// cannot edit (the recording [`MockTransport`], a minimal impl) still presents the current
+    /// surface, and the frontend records whichever message id came back. [`RawBotApi`]
+    /// overrides this with the real `editMessageText` call.
+    fn edit_message(
+        &mut self,
+        message_id: MessageId,
+        req: &SendMessageRequest,
+    ) -> Result<MessageId, TransportError> {
+        let _ = message_id;
+        self.send_message(req)
+    }
 }
 
 /// **A recording, network-free transport** — the frontend-agnostic proof for Telegram. It records
@@ -150,5 +165,41 @@ impl<H: HttpPost> Transport for RawBotApi<H> {
             .and_then(|m| m.as_i64())
             .ok_or_else(|| TransportError("Bot API response missing message_id".to_string()))?;
         Ok(MessageId(message_id))
+    }
+
+    /// The real `editMessageText`: the same pure composition (URL + the `sendMessage` body plus
+    /// the `message_id` field — `editMessageText` takes a superset of the fields), the same
+    /// injected [`HttpPost`]. Telegram refuses a NO-OP edit (`"message is not modified"`); that
+    /// is an identical re-present, not a failure, so it maps to `Ok` with the message kept.
+    fn edit_message(
+        &mut self,
+        message_id: MessageId,
+        req: &SendMessageRequest,
+    ) -> Result<MessageId, TransportError> {
+        let url = self.method_url("editMessageText");
+        let mut body = serde_json::to_value(req)
+            .map_err(|e| TransportError(format!("encode editMessageText body: {e}")))?;
+        body.as_object_mut()
+            .expect("a SendMessageRequest serializes to a JSON object")
+            .insert("message_id".to_string(), serde_json::json!(message_id.0));
+        let resp = self
+            .http
+            .post_json(&url, &body.to_string())
+            .map_err(TransportError)?;
+        let v: serde_json::Value = serde_json::from_str(&resp)
+            .map_err(|e| TransportError(format!("decode Bot API response: {e}")))?;
+        if v.get("ok").and_then(|b| b.as_bool()) != Some(true) {
+            let desc = v
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("Bot API returned ok=false");
+            // An identical re-present: the message already shows this exact surface. Keep it.
+            if desc.contains("message is not modified") {
+                return Ok(message_id);
+            }
+            return Err(TransportError(desc.to_string()));
+        }
+        // The edited message keeps its id (the `result` echoes the same message).
+        Ok(message_id)
     }
 }

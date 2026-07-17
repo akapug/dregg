@@ -37,6 +37,8 @@ pub mod api;
 pub mod cipherclerk;
 pub mod host;
 pub mod render;
+pub mod reqwest_transport;
+pub mod runtime;
 pub mod seated;
 pub mod transport;
 
@@ -236,7 +238,15 @@ impl<T: Transport> TelegramFrontend<T> {
         let (chat_id, topic) = Self::chat_of(session)
             .ok_or_else(|| TransportError(format!("not a telegram session id: {}", session.0)))?;
         let req = build_present_request(chat_id, topic, surface, actions);
-        let message_id = self.transport.send_message(&req)?;
+        // A RE-present EDITS the session's existing message in place (`editMessageText`) instead
+        // of spamming a new one; the first present sends. A transport that cannot edit falls back
+        // to sending (the [`Transport::edit_message`] default), so `MockTransport`-driven behavior
+        // is unchanged: every present is still recorded as a sent request.
+        let prior = self.sessions.get(session).and_then(|s| s.message_id);
+        let message_id = match prior {
+            Some(mid) => self.transport.edit_message(mid, &req)?,
+            None => self.transport.send_message(&req)?,
+        };
         let slot = self
             .sessions
             .entry(session.clone())

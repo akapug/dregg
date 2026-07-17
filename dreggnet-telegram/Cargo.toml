@@ -58,10 +58,23 @@ hex = "0.4"
 # asserting the request shape asserts the real wire shape.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# THE LIVE BYTE SEAM — the reqwest-backed `HttpPost` (`reqwest_transport::ReqwestHttpPost`)
+# under `RawBotApi` + the `runtime` long-poll loop's `BotApi`. Blocking (the update loop is a
+# plain synchronous long-poll; no tokio) + rustls (no OpenSSL link), mirroring the discord-bot's
+# reqwest posture. The verified core stays net-free: everything above `HttpPost` is pure.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # A workspace MEMBER of the breadstuffs root (registered in `members`, not
 # `default-members`). The root `[workspace]` + `[patch]` tables apply; no standalone
 # `[workspace]`/`[patch]` here.
+
+# THE RUNNING BOT — the runtime shell over the library: token from TELEGRAM_BOT_TOKEN, a
+# durable `FileResumeStore` session dir, the getUpdates long-poll loop routing presses through
+# `TelegramHost::press`/`open`. The real deploy additionally needs the token installed
+# (ops-gated) — see deploy/telegram/RUNBOOK-TELEGRAM.md.
+[[bin]]
+name = "dreggnet-telegram-bot"
+path = "src/bin/dreggnet-telegram-bot.rs"
 
 [dev-dependencies]
 # Offering #0's committed universe — the `KP_*` choice constants the driven tests play a

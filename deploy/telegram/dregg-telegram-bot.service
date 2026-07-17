@@ -1,0 +1,56 @@
+# dreggnet-telegram-bot — the running Telegram surface over the shared DreggNet catalog.
+#
+# ⚠ NOT YET INSTALLED ANYWHERE. This unit is the deploy artifact for the telegram runtime
+#   shell (dreggnet-telegram/src/bin/dreggnet-telegram-bot.rs); the real run is OPS-GATED on
+#   a BotFather token (TELEGRAM_BOT_TOKEN) that only ember mints and installs. Until the env
+#   file below exists on the box, `systemctl --user start` exits 2 with a clear message —
+#   fail-fast, nothing half-runs. See deploy/telegram/RUNBOOK-TELEGRAM.md.
+#
+# Topology: OUTBOUND-ONLY. The bot LONG-POLLS https://api.telegram.org (getUpdates) — no
+# listening socket, no funnel, no gateway, nothing public to expose. That makes it the
+# lightest deploy in the fleet: any box with outbound 443 runs it.
+#
+# hbox discipline (deploy/hbox/RUNBOOK.md): a USER unit under ~/.config/systemd/user/,
+# `loginctl enable-linger` so it survives logout, %h-relative paths, WantedBy=default.target.
+
+[Unit]
+Description=dreggnet telegram bot (long-poll getUpdates, durable sessions)
+After=network-online.target
+Wants=network-online.target
+# Restart-storm brake (same discipline as dregg-web-games-funnel.service): a hard crash loop
+# stops the unit instead of pegging the box. `systemctl --user reset-failed
+# dregg-telegram-bot` re-arms it after a fix. Note the bin exits 2 on a missing/bad token —
+# ten fast exits trip this brake by design.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+# The ops-gated secrets + knobs (TELEGRAM_BOT_TOKEN required; optional TELEGRAM_BOT_SECRET,
+# TELEGRAM_SESSION_DIR, TELEGRAM_COUNCIL_UIDS, TELEGRAM_API_BASE). Placed by ember, chmod 600.
+EnvironmentFile=%h/.config/dregg/telegram-bot.env
+Environment=RUST_LOG=info
+# Durable game sessions: per-(offering,chat) move-logs, resumed by replay on every restart
+# (a tampered log refuses to reopen). The consumed-updates offset persists here too.
+Environment=TELEGRAM_SESSION_DIR=%h/.local/state/dregg-telegram/sessions
+WorkingDirectory=%h/dev/breadstuffs
+ExecStart=%h/dev/breadstuffs/target/release/dreggnet-telegram-bot
+Restart=always
+RestartSec=5
+
+# Security hardening — HONESTLY MINIMAL, learned from the funnel unit (2026-07-17): hbox's
+# user manager cannot apply the full sandboxing set (status=218/CAPABILITIES), and shipping
+# an aspirational block that gets commented out on the box is exactly the repo-vs-box drift
+# we hunt. Keep NoNewPrivileges (works everywhere); add the rest only after observing them
+# start ON THE TARGET BOX.
+NoNewPrivileges=true
+
+# Resource limits — the bot is one synchronous long-poll loop + in-process offering turns;
+# bound it far below any co-tenant (node, builds, prover).
+LimitNOFILE=4096
+MemoryHigh=512M
+MemoryMax=1G
+TasksMax=256
+
+[Install]
+WantedBy=default.target

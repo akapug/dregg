@@ -411,6 +411,31 @@ impl<T: Transport> TelegramHost<T> {
         }
     }
 
+    /// **Rebind a chat to its durably RESUMED offering after a process restart.** A restarted
+    /// host (built over a resume store — [`crate::runtime::durable_telegram_host`]) reopens every
+    /// persisted session by move-log replay on boot, but this surface layer's in-memory routing
+    /// (`active`, the presented keyboard) starts empty, so the first press in a chat answers
+    /// [`HostPress::NoSession`]. This looks the chat's session id up among the LIVE host sessions:
+    /// if some offering has `sid` open (i.e. it was resumed), it is recorded active again and its
+    /// key returned — the caller then re-presents via [`open`](Self::open) (idempotent: the
+    /// resumed session is kept, only the surface is repainted). `None` if no resumed session
+    /// exists for the chat. If a chat had MULTIPLE offerings' sessions persisted (it re-opened
+    /// across offerings), the first in registry order is chosen — `/open <key>` overrides.
+    pub fn resume_chat(&mut self, sid: &SessionId) -> Option<String> {
+        if let Some(k) = self.active.get(sid) {
+            if k != MENU_KEY {
+                return Some(k.clone());
+            }
+        }
+        let key = {
+            let s = sid.clone();
+            self.host
+                .run(move |h| h.keys().into_iter().find(|k| h.is_open(k, &s)))?
+        };
+        self.active.insert(sid.clone(), key.clone());
+        Some(key)
+    }
+
     /// Re-verify `(key, sid)`'s committed chain by the offering's own proof (`None` if absent).
     pub fn verify(&self, key: &str, sid: &SessionId) -> Option<VerifyReport> {
         let key = key.to_string();
