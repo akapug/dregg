@@ -1964,8 +1964,12 @@ async fn run_relay(
         fee_policy: relay_service::FeePolicy {
             min_deposit_computrons: min_message_deposit,
             subscription_fee,
-            accept_external_assets: false,
-            external_rate_micros: 1_000_000,
+            // The `accept_external_assets` + `external_rate_micros` pair was
+            // generalized into the per-asset `external_assets` table (see
+            // relay_service::FeePolicy). Fail-closed default = empty table (no
+            // external assets accepted), matching the old `accept_external_assets:
+            // false`.
+            external_assets: std::collections::BTreeMap::new(),
         },
         max_total_capacity: max_capacity,
         gc_interval_secs: gc_interval,
