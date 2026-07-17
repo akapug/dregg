@@ -2024,3 +2024,21 @@ peer_exchange:287 already strict (stale). sha256 pins NOT theater (check-descrip
 generate-fresh gate, CI-wired ci.yml:497). REAL un-rigged gaps: MAX_FOLD_DEPTH enforcer (bridge/present.rs:670,
 no test trips it) + EpochMinter treasury-absent epoch-advance (turn/economics.rs:205). Swarm rig lanes
 WAITING on a 56-min Lean build lock; will resume. See TESTQALOG.
+
+### RESCUING the swarms UNCOMMITTED rigs (2026-07-17) — real work left untracked by the limit-wall
+The assumption-rigging + validation swarms DID produce rigs before hitting session limits; they were never
+gated (left `??` untracked) and would have been lost:
+- `63eb9e42e` **bridge/tests/fold_depth_bound.rs** — MAX_FOLD_DEPTH re-rigged on its SOLE surviving enforcer
+  (bridge/present.rs:670). VERIFIED 3 passed. **Why it was needed: MY OWN mock deletion (1fdd4a671) removed
+  `ivc.rs:1754 ivc_rejects_chain_exceeding_max_depth` — the ONLY test that ever exercised the bound.** The
+  mock engine was dead, but its boundary test was the last thing covering a LIVE guard elsewhere.
+  **LESSON BANKED: deleting dead code can delete LIVE test coverage. Check what a deletion s tests covered,
+  not just what the code was called by.**
+- pending gate: `circuit/tests/tree_capacity_guard.rs` (assumption-rig: deployed tree depth + capacity guard)
+  and `node/tests/retained_history_ivc_seam.rs` (Lane 4 composition tooth for the compress_history seam that
+  had ZERO composition tests).
+TRIAGE of the swarm inventory (supervisor, from code): #2 peer_exchange ed25519 = STALE (already strict);
+#3 sha256 pins = NOT theater (check-descriptor-drift.sh is the real generate-fresh gate, CI-wired :497);
+#4 EpochMinter = ALREADY RIGGED (`minter_missing_treasury_returns_none` pins total_minted==0 — the
+no-phantom-supply invariant; last_minted_epoch non-advance is intended: skip, do not defer). Scouts
+over-reported 3 of 4 — the honest count is ONE real gap (MAX_FOLD_DEPTH), now closed.
