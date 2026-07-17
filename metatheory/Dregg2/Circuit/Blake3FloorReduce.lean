@@ -142,7 +142,36 @@ theorem blake3Prf_false_of_bounded (key B : Nat) (hb : ∀ s i, blake3Mac key s 
     ¬ Blake3Prf :=
   blake3Prf_eq_shape ▸ macPrfShape_false_of_bounded blake3Mac key B hb
 
-/-! ## §2 — REDUCTION TWINS: the same conclusions, injectivity replaced by a concrete Break. -/
+/-! ## §2 — REDUCTION TWINS: the same conclusions, injectivity replaced by a concrete Break.
+
+⚠⚠ **THESE TWINS ARE TRIVIALLY TRUE AT DEPLOYED PARAMETERS — the FOURTH COSTUME.** `OrBreak Break P`
+is `Break ∨ P`, and `Blake3Collision` is an EXISTENCE claim that `blake3Collision_of_finite_digest`
+(below, in THIS section) PROVES for every finite-digest hash — i.e. for the real 32-byte BLAKE3. So
+every twin here is discharged by `OrBreak.broke (blake3Collision_of_finite_digest hash)` **without
+ever looking at its hypotheses**: `Circuit.Blake3FloorEffRegrounded.orBreak_twin_trivial_at_finite_digest`
+compiles exactly that, and `orBreak_trivial_for_any_conclusion` sharpens it — at a finite digest
+`OrBreak (Blake3Collision hash) P` holds for **ANY `P` whatsoever, including a FALSE one**, so a
+twin's truth is independent of its conclusion and cannot be evidence for it.
+
+§1's falsification is CORRECT and stands. What fails is the prescribed repair: replacing a FALSE
+hypothesis with a TRUE disjunct relocates the vacuity, it does not remove it. `HashFloorHonesty`'s
+`mod2_dumb_negligible` named this exact conflation — existence of a collision does NOT by itself break
+CR — and the `OrBreak` shape reproduces it on the other side of the turnstile.
+
+⚠ **`blake3Collision_of_finite_digest`'s docstring below reads "the Break side is a THEOREM for the
+real (finite-digest) hash. The twin's break branch is not decorative." That is backwards**, and it is
+the sharpest sentence in the finding: a break branch that is a THEOREM is not non-decorative — it is
+an escape hatch this file proved is always open. §3's "FIRE: both branches exercised" fires the break
+branch on TOY hashes; at the deployed hash the break branch is the ONLY branch.
+
+Likewise `blake3_binds_of_no_collision` / `share_mac_detects_tamper_of_no_collision` take
+`¬ Blake3Collision hash`, which `blake3NoCollision_iff_no_break` proves IS the falsified carrier —
+vacuous in the ordinary way (`Blake3FloorEffRegrounded.no_collision_hypothesis_false_at_finite_digest`).
+
+**The honest replacement is `Circuit.Blake3FloorEffRegrounded`** — the break must be about FINDING,
+not EXISTENCE: `blake3_commit_opens_advantage_bound` bounds an equivocating opener's ADVANTAGE at a
+real collision game via a real reduction, carrying an explicit undischarged `Eff`. Everything in this
+section is KEPT so §1's teeth, §3's fire, and the record keep compiling. -/
 
 /-- Break event: a concrete BLAKE3 collision — two distinct byte lists, one digest. The BLAKE3
 analogue of `SpongeCollision` (which is pinned to `List ℤ → ℤ`). -/
