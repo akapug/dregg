@@ -1,38 +1,45 @@
 /-
-STRUCTURAL degree invariant for the GGM handle table — companion to `GgmAdaptive.lean`.
-
-NOT part of ArkLib. Scratch research file supporting
-`docs/reference/arklib-kzg-vacuity/PAPER.md` and `SOUND-FIX-VERDICT.md`.
-
-`GgmAdaptive.lean` proves the adaptive GGM t-SDH bound under two EXTERNAL degree hypotheses
-(`hdeg_out`, `hdeg_pairs`): the polynomials living in the oracle's handle table have bounded
-`natDegree`. This file makes that fact STRUCTURAL: a clean `TableOp` inductive mirroring the
-oracle's table-extension moves (SRS seed / linear combination / product), a `buildTable`
-interpreter, and degree invariants proved by induction on the op list.
-
-The honest bounds — each proved below, none assumed:
-
-* `degree_invariant_linComb` — **B = D** when no product op occurs. The seed powers `X^k`
-  (`k ≤ D`) meet the bound exactly, and a linear combination degrades to the MAX of its
-  operands' degrees (`Polynomial.natDegree_add_le` is a max-bound, `natDegree_C_mul_le`
-  kills the scalar). This is the invariant behind `hdeg_out`: the committed output handle
-  is a G₁ table entry.
-
-* `degree_invariant` — **B = D · 2^(#mul)** for the flat table with products. A product's
-  degree is bounded by the SUM of its operands' (`Polynomial.natDegree_mul_le`), so each
-  `mul` over a flat table can at worst DOUBLE the running bound; the honest uniform flat
-  bound is exponential in the product count, not `2·D`.
-
-* `flat_2D_bound_false` — the naive "B = 2·D once products are allowed" claim is FALSE for
-  the flat table, PROVED: nesting one product inside another (`[seed, mul, mul]`) builds
-  `X^4` at `D = 1`.
-
-* `degree_invariant_paired` — **B = 2·D** is recovered in a separate PAIRING-DISCIPLINED
-  peer model: a two-sorted table (G₁ / Gₜ) where products land in Gₜ and hence never nest.
-  `GgmAdaptive.Move` itself has no pairing constructor, so this peer is not an invariant for
-  its operational run and is not used by the end-to-end theorem.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import Mathlib
+
+/-!
+# Structural degree invariant for the generic-group handle table
+
+The `GgmAdaptive` file proves the adaptive generic group model [Sho97] $t$-SDH bound under two
+external degree hypotheses (`hdeg_out`, `hdeg_pairs`): the polynomials in the oracle's handle
+table have bounded `natDegree`. This file makes that fact structural: a `TableOp` inductive
+mirroring the oracle's table-extension moves (SRS seed / linear combination / product), a
+`buildTable` interpreter, and degree invariants proved by induction on the op list.
+
+The bounds — each proved below, none assumed:
+
+* `degree_invariant_linComb` — $B = D$ when no product op occurs. The seed powers $X^k$
+  ($k \le D$) meet the bound exactly, and a linear combination degrades to the max of its
+  operands' degrees (`Polynomial.natDegree_add_le` is a max-bound, `natDegree_C_mul_le` kills the
+  scalar). This is the invariant behind `hdeg_out`: the committed output handle is a $G_1$ table
+  entry.
+
+* `degree_invariant` — $B = D \cdot 2^{\#\mathrm{mul}}$ for the flat table with products. A
+  product's degree is bounded by the sum of its operands' (`Polynomial.natDegree_mul_le`), so each
+  `mul` over a flat table can at worst double the running bound; the uniform flat bound is
+  exponential in the product count, not $2 D$.
+
+* `flat_2D_bound_false` — the naive "$B = 2 D$ once products are allowed" claim is false for the
+  flat table, proved by nesting one product inside another (`[seed, mul, mul]` builds $X^4$ at
+  $D = 1$).
+
+* `degree_invariant_paired` — $B = 2 D$ is recovered in a separate pairing-disciplined peer model:
+  a two-sorted table ($G_1$ / $G_t$) where products land in $G_t$ and hence never nest.
+  `GgmAdaptive.Move` itself has no pairing constructor, so this peer is not an invariant for its
+  operational run and is not used by the end-to-end theorem.
+
+## References
+
+* [Shoup, V., *Lower Bounds for Discrete Logarithms and Related Problems*][Sho97]
+-/
 
 open Polynomial
 

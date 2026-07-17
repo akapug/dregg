@@ -1,67 +1,87 @@
 /-
-RANDOM-ENCODING (all-pairs / global bad event) strengthening of `GgmAdaptive.lean`.
-
-NOT part of ArkLib. Scratch research file supporting `docs/reference/arklib-kzg-vacuity/PAPER.md §9`
-and `SOUND-FIX-VERDICT.md`.
-
-`GgmAdaptive.lean` bounds the bad event PER EXPLICIT EQUALITY QUERY: `fuel` queries, each
-contributing ≤ Δ collision trapdoors. This file upper-bounds that same explicit-query bad set by
-the GLOBAL all-pairs collision set: some two formally-distinct table polynomials collide at τ.
-The resulting count is the conservative all-pairs number used in random-encoding analyses.
-
-Important scope limit: the operational semantics remains `GgmAdaptive.Strat`, where comparisons
-must be requested with `Move.query`. This file does **not** define a free-comparison
-random-encoding semantics or prove a simulation theorem for one. It proves a sound, looser bound
-for the explicit-query embedded strategies. The bound is parameterized by a per-handle degree
-`Δ`, and is instantiated at two degrees:
-
-  • δ = D — **THE ARKLIB CRITICAL PATH** (`rand_encoding_bound_D`, `rand_encoding_bound_srs_D`).
-    ArkLib's `tSdhAdversary D` receives `Vector G₁ (D+1) × Vector G₂ 2`, must output a `G₁` element,
-    and is granted **no pairing map** `e : G₁ × G₂ → Gₜ`. So every handle it can form is a
-    `ZMod p`-linear combination of the seed `{1, X, …, X^D}`, degree ≤ D, and a difference of two
-    such handles has degree ≤ D (`natDegree_sub_le` — the max, not the sum). This is the
-    `~(q+D)²·D/p` socket the end-to-end capstone consumes, with the degree invariant discharged
-    (not assumed) in `GgmDegreeDischarge`.
-
-  • δ = 2D — **an OFF-PATH algebraic specialization** (`rand_encoding_bound`,
-    `rand_encoding_bound_srs`). These theorems are valid when the caller supplies a `≤ 2D`
-    invariant for the same linear `runAux` semantics. They do not model a pairing move; a genuine
-    pairing-capable oracle would need a separate two-sorted operational semantics and transport.
-
-Both instantiations are one-line specializations of the same general-Δ all-pairs lemma, so the file
-has a single mathematical core; the two degrees differ only in the supplied handle-degree hypothesis.
-
-  1. ALL-PAIRS SCHWARTZ–ZIPPEL (§ PairUnion): for a finite set `ps` of polynomials of degree ≤ Δ,
-     the union over UNORDERED pairs `q₁ ≠ q₂ ∈ ps` of `roots (q₁ − q₂)` has card
-     ≤ C(#ps, 2) · Δ. The unordered count is exact: `roots (q₁−q₂) = roots (q₂−q₁)` as sets, so
-     the ordered `offDiag` union is re-indexed through `Sym2` (`Sym2.card_image_offDiag`), paying
-     `C(n,2)`, not `n(n−1)`. Degree bookkeeping: `natDegree (q₁ − q₂) ≤ MAX(deg q₁, deg q₂) ≤ Δ`
-     (`natDegree_sub_le` — the max, NOT the sum: differences of two degree-≤Δ handles stay ≤ Δ,
-     they do not compound to 2Δ).
-
-  2. THE HANDLE TABLE, STRUCTURALLY (§ Table): `runTable` is the final handle table of a run;
-     every polynomial the adversary ever queried is in it (or is the zero polynomial — the
-     out-of-range handle default, i.e. the group identity), PROVEN by induction, and its length
-     is ≤ (seed count) + fuel, PROVEN by induction. With the SRS seeding of the adaptive file
-     (G₁: `1, X, …, X^D` = D+1 handles; G₂: `1, X` = 2 handles; seed count D+3) the handle-set
-     card is ≤ fuel + D + 4 — the `+4` is the D+3 seeds plus the zero/identity handle. The table
-     size is therefore a THEOREM here (`card_handlePolys_le`), not a hypothesis.
-
-  3. THE ALL-PAIRS BOUND (§ Bound, δ = 2D off-path; § Bound at δ = D, critical path): every
-     deterministic `Strat` in the explicit-query model wins t-SDH on at most a
-     `(C(n,2)·δ + (D+1))/(p−1)` fraction of trapdoors, `n`
-     any bound on the handle-set size (`n = fuel + D + 4` at the SRS seeding), under the handle-degree
-     invariant `≤ δ`. This is Shoup's `(q + d)²·δ / p` shape with the global bad event, covering the
-     global collision event. No free-comparison operational semantics is claimed here.
-
-REUSED from `GgmAdaptive` / `GgmCandidate` (NOT reproved): `realWinSet_subset` (identical-until-bad
-at the set level), `card_winningPoints_le` (the static Boneh–Boyen root event, behind which sit
-`winPoly_ne_zero`, `winPoly_natDegree_le`, `card_roots_winPoly_le`), `badSet`/`badPolys`/`symPairs`,
-`adaptiveExperiment`. NEW here: the all-pairs union lemma, the structural table lemmas, and the
-composition.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import ArkLib.Scratch.KzgVacuity.GgmAdaptive
 import Mathlib.Data.Sym.Card
+
+/-!
+# All-pairs (random-encoding) collision bound for the generic-group t-SDH game
+
+This file strengthens the per-query adaptive generic-group-model bound of `GgmAdaptive` into an
+all-pairs / global bad-event bound, in the style of the random-encoding analyses of the generic
+group model [Sho97].
+
+`GgmAdaptive` bounds the bad event *per explicit equality query*: `fuel` queries, each contributing
+$\le \Delta$ collision trapdoors. Here that same explicit-query bad set is upper-bounded by the
+global all-pairs collision set: some two formally-distinct table polynomials collide at the
+trapdoor $\tau$. The resulting count is the conservative all-pairs number.
+
+The operational semantics remains `GgmAdaptive.Strat`, where comparisons must be requested with
+`Move.query`. This file does not define a free-comparison random-encoding semantics or prove a
+simulation theorem for one; it proves a sound, looser bound for the explicit-query embedded
+strategies. The bound is parameterized by a per-handle degree $\Delta$ and instantiated at two
+degrees:
+
+* $\Delta = D$ — the linear-oracle instantiation. The Boneh–Boyen t-SDH adversary [BB04] receives
+  `Vector G₁ (D+1) × Vector G₂ 2`, must output a `G₁` element, and is granted no pairing map
+  `e : G₁ × G₂ → Gₜ`. So every handle it can form is a `ZMod p`-linear combination of the seed
+  $\{1, X, \dots, X^D\}$, of degree $\le D$, and a difference of two such handles again has degree
+  $\le D$ (`natDegree_sub_le` — the max, not the sum). This is the $\sim (q+D)^2 D / p$ bound, with
+  the degree invariant discharged (not assumed) downstream.
+
+* $\Delta = 2D$ — an algebraic specialization (`rand_encoding_bound`, `rand_encoding_bound_srs`),
+  valid when the caller supplies a $\le 2D$ invariant for the same linear `runAux` semantics. It
+  does not model a pairing move; a genuine pairing-capable oracle would need a separate two-sorted
+  operational semantics and transport.
+
+Both instantiations are one-line specializations of the same general-$\Delta$ all-pairs lemma, so
+the file has a single mathematical core; the two degrees differ only in the supplied handle-degree
+hypothesis.
+
+## All-pairs Schwartz–Zippel
+
+For a finite set `ps` of polynomials of degree $\le \Delta$, the union over unordered pairs
+$q_1 \ne q_2 \in$ `ps` of `roots (q₁ - q₂)` has card $\le \binom{\#ps}{2} \cdot \Delta$
+(`card_pairRootUnion_le`) [Sch80], [Zip79]. The unordered count is exact:
+`roots (q₁ - q₂) = roots (q₂ - q₁)` as sets, so the ordered `offDiag` union is re-indexed through
+`Sym2` (`Sym2.card_image_offDiag`), paying $\binom{n}{2}$, not $n(n-1)$. Degree bookkeeping:
+`natDegree (q₁ - q₂) ≤ max (deg q₁) (deg q₂) ≤ Δ` (`natDegree_sub_le` — the max, not the sum:
+differences of two degree-$\le \Delta$ handles stay $\le \Delta$, they do not compound to
+$2\Delta$).
+
+## The handle table, structurally
+
+`runTable` is the final handle table of a run; every polynomial the adversary ever queried is in it
+(or is the zero polynomial — the out-of-range handle default, i.e. the group identity), proven by
+induction (`runAux_pairs_mem_runTable`), and its length is $\le$ (seed count) $+$ fuel, proven by
+induction (`runTable_length_le`). With the SRS seeding (G₁: `1, X, …, X^D` = D+1 handles; G₂: `1, X`
+= 2 handles; seed count D+3) the handle-set card is $\le$ fuel $+ D + 4$ — the $+4$ is the $D+3$
+seeds plus the zero/identity handle. The table size is therefore a theorem here
+(`card_handlePolys_le`), not a hypothesis.
+
+## The all-pairs bound
+
+Every deterministic `Strat` in the explicit-query model wins t-SDH on at most a
+$(\binom{n}{2} \cdot \Delta + (D+1))/(p-1)$ fraction of trapdoors, for `n` any bound on the
+handle-set size (`n = fuel + D + 4` at the SRS seeding), under the handle-degree invariant
+$\le \Delta$. This is Shoup's $(q+d)^2 \Delta / p$ shape [Sho97] with the global bad event.
+
+The pieces reused from `GgmAdaptive` / `GgmCandidate` (not reproved): `realWinSet_subset`
+(identical-until-bad at the set level), `card_winningPoints_le` (the static Boneh–Boyen root event
+[BB04], behind which sit `winPoly_ne_zero`, `winPoly_natDegree_le`, `card_roots_winPoly_le`),
+`badSet`/`badPolys`/`symPairs`, `adaptiveExperiment`. New here: the all-pairs union lemma, the
+structural table lemmas, and the composition.
+
+## References
+
+* [Boneh, D., and Boyen, X., *Short Signatures Without Random Oracles*][BB04]
+* [Shoup, V., *Lower Bounds for Discrete Logarithms and Related Problems*][Sho97]
+* [Schwartz, J. T., *Fast Probabilistic Algorithms for Verification of Polynomial
+    Identities*][Sch80]
+* [Zippel, R., *Probabilistic Algorithms for Sparse Polynomials*][Zip79]
+-/
 
 open Polynomial
 
@@ -385,7 +405,8 @@ theorem card_realWinSet_le_encoding (strat : Strat p) (st₀ : St p) (fuel : ℕ
 /-- **THE ALL-PAIRS SECURITY BOUND at δ = 2D (sorry-free; OFF-PATH specialization).**
 Every deterministic strategy in the explicit-query model whose handle table stays within `n`
 polynomials (a THEOREM at
-`n = seeds + fuel + 1`, `card_handlePolys_le`) wins on at most a `(C(n,2)·2D + (D+1))/(p−1)` fraction
+`n = seeds + fuel + 1`, `card_handlePolys_le`) wins on at most a
+`(C(n,2)·2D + (D+1))/(p−1)` fraction
 of trapdoors — the global all-pairs collision event plus the static root event. This theorem assumes
 the `≤ 2D` invariant; it does not provide pairing-capable semantics. -/
 theorem rand_encoding_bound (strat : Strat p) (st₀ : St p) (fuel : ℕ) (D n : ℕ) (hp : 2 ≤ p)
@@ -452,17 +473,19 @@ theorem rand_encoding_bound_srs (strat : Strat p) (fuel : ℕ) (D : ℕ) (hp : 2
 
 This is the chain the end-to-end capstone consumes. The embedded adversary receives
 `Vector G₁ (D+1) × Vector G₂ 2`, must output a `G₁` element, and is granted **no pairing map**
-`e : G₁ × G₂ → Gₜ`. So — matching `GgmAdaptive`'s pairing-free `Move` — every handle it can form is a
-`ZMod p`-linear combination of the seed `{1, X, …, X^D}`, degree ≤ D (never a product). The honest
-collision degree is therefore **δ = D**, not 2D: a difference of two degree-≤D handles has degree ≤ D
-(`natDegree_sub_le` — the max, not the sum). This section re-parametrizes the *general-Δ*
-`card_pairRootUnion_le` at Δ = D. It is the exact `~(q+D)²·D/p` Shoup socket the end-to-end theorem
-consumes (`rand_encoding_bound_srs_D` → `GgmDegreeDischarge` → `GgmEndToEnd.tSdh_ggm_sound`), with the
-handle-degree invariant DISCHARGED there, not assumed. The δ = 2D chain above is only the off-path
+`e : G₁ × G₂ → Gₜ`. So — matching `GgmAdaptive`'s pairing-free `Move` — every handle it can form
+is a `ZMod p`-linear combination of the seed `{1, X, …, X^D}`, degree ≤ D (never a product). The
+honest collision degree is therefore **δ = D**, not 2D: a difference of two degree-≤D handles has
+degree ≤ D (`natDegree_sub_le` — the max, not the sum). This section re-parametrizes the
+*general-Δ* `card_pairRootUnion_le` at Δ = D. It is the exact `~(q+D)²·D/p` Shoup socket the
+end-to-end theorem consumes (`rand_encoding_bound_srs_D` → `GgmDegreeDischarge` →
+`GgmEndToEnd.tSdh_ggm_sound`), with the handle-degree invariant DISCHARGED there, not assumed. The
+δ = 2D chain above is only the off-path
 degree specialization. -/
 
 /-- The δ = D instance of the all-pairs root-union bound: a set of degree-≤D handle polynomials has
-all-pairs collision set of card ≤ `C(n,2) · D`. Direct from the general-Δ `card_pairRootUnion_le`. -/
+all-pairs collision set of card ≤ `C(n,2) · D`. Direct from the general-Δ
+`card_pairRootUnion_le`. -/
 theorem card_pairRootUnion_le_D {ps : Finset ((ZMod p)[X])} {D : ℕ}
     (hdeg : ∀ q ∈ ps, q.natDegree ≤ D) :
     (pairRootUnion ps).card ≤ ps.card.choose 2 * D :=
@@ -500,10 +523,10 @@ theorem card_realWinSet_le_encoding_D (strat : Strat p) (st₀ : St p) (fuel : �
 
 /-- **THE ALL-PAIRS GGM SECURITY BOUND AT δ = D (sorry-free; THE ARKLIB CRITICAL PATH).**
 Every adaptive generic t-SDH adversary in the linear (pairing-free) oracle model whose handle table
-stays within `n` polynomials wins on at most a `(C(n,2)·D + (D + 1))/(p − 1)` fraction of trapdoors —
-the exact `~(q+D)²·D/p` Shoup socket for ArkLib's `tSdhExperiment`, whose adversary cannot pair. This
-is the bound the end-to-end capstone consumes (via `GgmDegreeDischarge`); the δ = 2D
-`rand_encoding_bound` is the off-path `≤ 2D` specialization. -/
+stays within `n` polynomials wins on at most a `(C(n,2)·D + (D + 1))/(p − 1)` fraction of
+trapdoors — the exact `~(q+D)²·D/p` Shoup socket for ArkLib's `tSdhExperiment`, whose adversary
+cannot pair. This is the bound the end-to-end capstone consumes (via `GgmDegreeDischarge`); the
+δ = 2D `rand_encoding_bound` is the off-path `≤ 2D` specialization. -/
 theorem rand_encoding_bound_D (strat : Strat p) (st₀ : St p) (fuel : ℕ) (D n : ℕ) (hp : 2 ≤ p)
     (hdeg_out : (symOutput strat st₀ fuel).2.natDegree ≤ D)
     (hdeg_handles : ∀ q ∈ handlePolys symAns strat fuel st₀, q.natDegree ≤ D)

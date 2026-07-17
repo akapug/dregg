@@ -1,55 +1,63 @@
 /-
-RANDOM-ENCODING (Shoup) generic-group model for t-SDH — the SECOND standard GGM track, alongside
-the Maurer explicit-equality track (`GgmAdaptive` → `GgmEmbed` → `GgmEndToEnd`).
-
-NOT part of ArkLib. Scratch research file supporting `docs/reference/arklib-kzg-vacuity/SHOUP-PLAN.md`,
-`PAPER.md §9`, and `SOUND-FIX-VERDICT.md`.
-
-Commit `e125c3308` (codex critical pass) correctly forced the retraction of the "random-encoding /
-Shoup" label from the Maurer docstrings, because that track models Maurer's EXPLICIT-EQUALITY oracle:
-the adversary must SPEND a `Move.query` step to test ONE handle pair, and only queried pairs enter the
-bad event (≤ `fuel` of them). This file makes "Shoup random-encoding GGM" a PROVED THEOREM by
-mechanizing the genuinely different model:
-
-  SHOUP RANDOM ENCODING (this file). Group elements are lazily-sampled encodings under an injection
-  `σ : ZMod p ↪ E`. The adversary holds `List E`, applies the group-op oracle (`lin` — degree ≤ D,
-  pairing-free, matching ArkLib's G₁-only `tSdhAdversary`), and — the crux distinction from Maurer —
-  may compare ANY two encodings it holds FOR FREE via `DecidableEq E`. So at every step it observes the
-  FULL `|tbl|×|tbl|` equality pattern of all its held handles at zero fuel/handle cost, and branches on
-  the ENTIRE pattern-history. Because `σ` is injective, the equality pattern it observes,
-  `σ(fᵢ(τ)) = σ(fⱼ(τ)) ⟺ fᵢ(τ) = fⱼ(τ)`, is exactly the eval-at-τ pattern (`realAns τ`); the symbolic
-  (τ-independent) pattern is formal equality (`symAns`). So the encoding `σ` NEVER enters the
-  mechanization — injectivity folds it away, exactly as `GgmArkLibTransport.gpow_val_inj_iff` folds the
-  concrete encoding `a ↦ g^a.val` away in the Maurer embed. `E` and `σ` live only in this docstring,
-  where they name the model.
-
-Free comparison makes the all-pairs collision event TIGHT (in Maurer it is the conservative
-over-count `badSet ⊆ pairRootUnion`; here the adversary really can compare any pair, so the leak is on
-EXACTLY `pairRootUnion(handleSet)` — no `⊆` slack, no `badSet` indirection). Consequently:
-
-  1. THE MODEL (§ Model): `eqPattern` (the free full-table equality matrix, `Σ n, Fin n → Fin n → Bool`),
-     `ShoupMove` (`lin`-only — no `query`, equality is ambient), `ShoupStrat` (decides on the
-     pattern-history), `ShSt`, `runShoup`, `realWinSetShoup`, `shoupExperiment`.
-  2. THE HYBRID (§ Hybrid), the crux, PROVEN not assumed: `runShoup_congr_off_bad` — a matrix-valued
-     identical-until-bad. If `τ ∉ pairRootUnion(handleSet)` then the real run = the symbolic run,
-     with step-wise full-pattern agreement discharged from the SINGLE global non-collision fact
-     (every reachable table ⊆ the final handle set). This is the free-comparison analogue of
-     `GgmAdaptive.runAux_congr_of_agree`, but the branching input is a whole equality matrix, and the
-     bad event IS the all-pairs union.
-  3. THE BOUND (§ Bound): `realWinSetShoup ⊆ pairRootUnion(handleSet) ∪ winningPoints(sym)`, composed
-     with the REUSED `GgmRandomEncoding.card_pairRootUnion_le_D` (all-pairs Schwartz–Zippel) and
-     `GgmCandidate.card_winningPoints_le` (static Boneh–Boyen root event), giving numerator
-     `C(fuel+D+4, 2)·D + (D+1)` — BYTE-IDENTICAL to `rand_encoding_bound_srs_D`. The difference is the
-     model in which it is proved.
-
-REUSED verbatim (NOT re-derived): `GgmRandomEncoding.pairRootUnion` / `mem_pairRootUnion` /
-`card_pairRootUnion_le_D` (all-pairs SZ core), `GgmRandomEncoding.srsSt` / `srsSt_table_length`,
-`GgmCandidate.card_winningPoints_le` / `winningPoints` / `GenericAdversary` / `nonzeroPoints`,
-`GgmAdaptive.symAns` / `realAns` / `AnswerFn` / `combine`, `GgmDegreeDischarge.natDegree_combine_le` /
-`srsSt_table_natDegree_le`, `GgmDegreeInvariant.natDegree_getD_le`. NEW here: the free-comparison model,
-the matrix-valued hybrid, the Shoup handle-table siblings, and the target theorems.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import ArkLib.Scratch.KzgVacuity.GgmDegreeDischarge
+
+/-!
+# The Shoup random-encoding GGM $t$-SDH bound with a free-comparison adversary
+
+This file mechanizes the random-encoding (Shoup) generic-group model for the $t$-SDH problem
+[Sho97], [BB04] — the second standard GGM track, alongside the Maurer explicit-equality track
+[Mau05]. In Maurer's model the adversary must spend a query step to test one handle pair, and only
+queried pairs enter the bad event. Here the model is genuinely different: comparison is free.
+
+## The Shoup random-encoding model
+
+Group elements are lazily-sampled encodings under an injection
+$\sigma : \mathbb{Z}_p \hookrightarrow E$. The adversary holds a `List E`, applies the group-op
+oracle (`lin` — degree $\le D$, pairing-free, matching ArkLib's $G_1$-only `tSdhAdversary`), and —
+the crux distinction from Maurer — may compare any two encodings it holds for free via
+`DecidableEq E`. So at every step it observes the full $|tbl| \times |tbl|$ equality pattern of all
+its held handles at zero fuel and handle cost, and branches on the entire pattern-history.
+
+Because $\sigma$ is injective, the equality pattern it observes,
+$\sigma(f_i(\tau)) = \sigma(f_j(\tau)) \iff f_i(\tau) = f_j(\tau)$, is exactly the eval-at-$\tau$
+pattern (`realAns τ`); the symbolic ($\tau$-independent) pattern is formal equality (`symAns`). So
+the encoding $\sigma$ never enters the mechanization — injectivity folds it away, exactly as
+`GgmArkLibTransport.gpow_val_inj_iff` folds the concrete encoding $a \mapsto g^{a.\mathrm{val}}$
+away in the Maurer embed. $E$ and $\sigma$ live only in this docstring, where they name the model.
+
+Free comparison makes the all-pairs collision event tight: the adversary really can compare any
+pair, so the leak is on exactly `pairRootUnion (handleSet)` — no $\subseteq$ slack, no `badSet`
+indirection.
+
+## Structure
+
+* The model: `eqPattern` (the free full-table equality matrix, `Σ n, Fin n → Fin n → Bool`),
+  `ShoupMove` (`lin`-only — no query, equality is ambient), `ShoupStrat` (decides on the
+  pattern-history), `ShSt`, `runShoup`, `realWinSetShoup`, `shoupExperiment`.
+* The hybrid, the crux, proven not assumed: `runShoup_congr_off_bad` — a matrix-valued
+  identical-until-bad. If $\tau \notin$ `pairRootUnion (handleSet)` then the real run equals the
+  symbolic run, with step-wise full-pattern agreement discharged from the single global
+  non-collision fact (every reachable table is a subset of the final handle set). This is the
+  free-comparison analogue of `GgmAdaptive.runAux_congr_of_agree`, but the branching input is a
+  whole equality matrix, and the bad event is the all-pairs union.
+* The bound: `realWinSetShoup ⊆ pairRootUnion (handleSet) ∪ winningPoints sym`, composed with the
+  reused `GgmRandomEncoding.card_pairRootUnion_le_D` (all-pairs Schwartz–Zippel [Sch80], [Zip79])
+  and `GgmCandidate.card_winningPoints_le` (static Boneh–Boyen root event [BB04]), giving numerator
+  $\binom{fuel+D+4}{2} \cdot D + (D+1)$.
+
+## References
+
+* [Boneh, D., and Boyen, X., *Short Signatures Without Random Oracles*][BB04]
+* [Shoup, V., *Lower Bounds for Discrete Logarithms and Related Problems*][Sho97]
+* [Maurer, U., *Abstract Models of Computation in Cryptography*][Mau05]
+* [Schwartz, J. T., *Fast Probabilistic Algorithms for Verification of Polynomial
+    Identities*][Sch80]
+* [Zippel, R., *Probabilistic Algorithms for Sparse Polynomials*][Zip79]
+-/
 
 open Polynomial
 
@@ -63,9 +71,9 @@ variable {p : ℕ} [Fact (Nat.Prime p)]
 
 The crux distinction from Maurer. Comparison is AMBIENT and FREE: at every step the adversary
 observes the full equality pattern (the pairwise-equality matrix under the oracle) of ALL handles it
-holds, at no fuel and no handle cost, and branches on the entire pattern-history. There is no `query`
-move — equality is not a spent step. `lin` is the only oracle-consuming move (degree ≤ D, pairing-free:
-ArkLib's `tSdhAdversary` is granted no pairing map). -/
+holds, at no fuel and no handle cost, and branches on the entire pattern-history. There is no
+`query` move — equality is not a spent step. `lin` is the only oracle-consuming move (degree ≤ D,
+pairing-free: ArkLib's `tSdhAdversary` is granted no pairing map). -/
 
 /-- The free-comparison observation: the `|tbl|×|tbl|` equality matrix under the oracle `ans`.
 Packaged with its dimension so successive (growing) observations have a uniform type. -/
@@ -239,7 +247,8 @@ theorem handleSetShoup_natDegree_le (strat : ShoupStrat p) (st₀ : ShSt p) (fue
   · exact runTableShoup_natDegree_le symAns strat fuel st₀ hseed q (List.mem_toFinset.mp h)
 
 /-- **The committed output has degree ≤ D** — a defaulted table read at commit time (or `0` on
-fuel exhaustion); every intermediate table is bounded. Induction on fuel, for ANY answer function. -/
+fuel exhaustion); every intermediate table is bounded. Induction on fuel, for ANY answer
+function. -/
 theorem runShoup_output_natDegree_le (ans : AnswerFn p) (strat : ShoupStrat p) {D : ℕ} :
     ∀ (fuel : ℕ) (st : ShSt p), (∀ q ∈ st.table, q.natDegree ≤ D) →
       (runShoup ans strat fuel st).2.natDegree ≤ D := by
@@ -433,12 +442,14 @@ noncomputable def srsStShoup (D : ℕ) : ShSt p := ⟨(srsSt (p := p) D).table, 
 
 /-- **THE RANDOM-ENCODING (SHOUP) GGM t-SDH BOUND (sorry-free; Tier 1).**
 Every free-comparison generic strategy — one that observes, at each step and FOR FREE, the full
-equality pattern of all its held encodings — wins t-SDH against the real encoding oracle on at most a
-`(C(fuel+D+4, 2)·D + (D+1))/(p−1)` fraction of trapdoors: the all-pairs collision event (now TIGHT,
+equality pattern of all its held encodings — wins t-SDH against the real encoding oracle on at
+most a `(C(fuel+D+4, 2)·D + (D+1))/(p−1)` fraction of trapdoors: the all-pairs collision event
+(now TIGHT,
 because comparison is free) plus the static Boneh–Boyen root event. SAME NUMERATOR as
 `GgmRandomEncoding.rand_encoding_bound_srs_D`; the difference is the MODEL in which it is proved
-(random-encoding free-comparison, not Maurer explicit-equality). The degree invariants are DISCHARGED
-here (not assumed), and the identical-until-bad hybrid `runShoup_congr_off_bad` is PROVEN. -/
+(random-encoding free-comparison, not Maurer explicit-equality). The degree invariants are
+DISCHARGED here (not assumed), and the identical-until-bad hybrid `runShoup_congr_off_bad` is
+PROVEN. -/
 theorem shoup_ggm_sound (strat : ShoupStrat p) (fuel D : ℕ) (hD : 1 ≤ D) (hp : 2 ≤ p) :
     shoupExperiment strat (srsStShoup D) fuel
       ≤ (((fuel + D + 4).choose 2 * D + (D + 1) : ℕ) : ℚ) / (p - 1) := by

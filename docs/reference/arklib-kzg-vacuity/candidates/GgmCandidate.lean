@@ -1,30 +1,43 @@
 /-
-GGM (Generic Group Model) candidate repair for ArkLib's vacuous `tSdhAssumption`.
-NOT part of ArkLib. Scratch file supporting the disclosure note
-`docs/reference/arklib-kzg-vacuity/candidates/ggm.md`.
-
-The disease (mechanized in `KzgVacuity.lean`): ArkLib's `tSdhAdversary` receives the SRS as
-*concrete group elements* `Vector G₁ (D+1) × Vector G₂ 2`. From the verifier leg `g₂^τ`,
-`Classical.choice` (via `Exists.choose` on `exists_zmod_power_of_generator`) recovers the trapdoor
-`τ : ZMod p` and returns the winning element with probability 1. The assumption is FALSE below 1.
-
-The GGM boundary. A *generic* adversary never sees group elements as field data — only opaque
-handles / a symbolic strategy. We model the sound, mechanizable fragment (the "static / committed
-generic" adversary, the same object the Boneh–Boyen '04 t-SDH bound is proved against): the
-adversary commits, WITHOUT the trapdoor, to a challenge offset `c` and a representation polynomial
-`f` of degree ≤ D over `ZMod p`. The environment DEFINES its output group element as `g₁^{f(τ)}`;
-the adversary does not choose it freely. Winning requires `f(τ) = 1/(τ+c)` at the environment's
-random `τ`.
-
-Because `f` is chosen with no `τ` in scope, there is nothing for `Classical.choice` to extract, and
-the winning set of `τ` is bounded by Schwartz–Zippel. We prove the numeric bound `(D+1)/(p-1)` for
-EVERY committed adversary — including every choice-definable one — so the exact attack is dead.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import Mathlib.Algebra.Polynomial.Roots
 import Mathlib.Algebra.Field.ZMod
 import Mathlib.Algebra.Order.Field.Basic
 import Mathlib.Data.ZMod.Basic
 import Mathlib.Data.Finset.Card
+
+/-!
+# Static generic-group $t$-SDH soundness
+
+The `KzgVacuity` file shows that the concrete-group $t$-SDH assumption [BB04] is vacuous: ArkLib's
+adversary receives the structured reference string as concrete group elements
+`Vector G₁ (D+1) × Vector G₂ 2`, and from the verifier leg $g_2^{\tau}$ a
+`Classical.choice`-definable adversary recovers the trapdoor and wins with probability $1$.
+
+This file establishes the *static* generic group model [Sho97], [Mau05] bound, the $q = 0$
+fragment against which the Boneh–Boyen $t$-SDH bound is proved. A generic adversary never sees
+group elements as field data. We model the committed-generic adversary: without the trapdoor, it
+commits to a challenge offset $c$ and a representation polynomial $f$ of degree $\le D$ over
+$\mathbb{Z}/p$. The environment defines the output group element as $g_1^{f(\tau)}$; winning
+requires $f(\tau) = 1/(\tau + c)$ at the environment's random $\tau$.
+
+Because $f$ is chosen with no $\tau$ in scope, there is nothing for `Classical.choice` to extract,
+and the winning set of trapdoors is bounded by Schwartz–Zippel [Sch80], [Zip79]. `ggm_tSdh_sound`
+proves the numeric bound $(D+1)/(p-1)$ for every committed adversary — including every
+choice-definable one — so the concrete-group attack is dead in this model.
+
+## References
+
+* [Boneh, D., and Boyen, X., *Short Signatures Without Random Oracles*][BB04]
+* [Shoup, V., *Lower Bounds for Discrete Logarithms and Related Problems*][Sho97]
+* [Maurer, U., *Abstract Models of Computation in Cryptography*][Mau05]
+* [Schwartz, J. T., *Fast Probabilistic Algorithms for Verification of Polynomial
+    Identities*][Sch80]
+* [Zippel, R., *Probabilistic Algorithms for Sparse Polynomials*][Zip79]
+-/
 
 open Polynomial
 

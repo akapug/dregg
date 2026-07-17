@@ -1,24 +1,37 @@
 /-
-Demonstration that the extraction-shaped repair of KZG evaluation binding
-(`KZG.CommitmentScheme.binding_reduces_to_tSdh`) SURVIVES THE EXACT ATTACK that made the
-original assumption-form vacuous.
-
-NOT part of ArkLib. Scratch file supporting the repair proposal.
-
-The refutation section (`dlogOf … not_tSdhAssumption`) is copied verbatim from the
-disclosure artifact and re-proved here against the *repaired* Binding.lean, so the two
-coexist in one axiom closure. The final theorem `repair_survives_attack` states, for the
-same groups/pairing in which the attack succeeds:
-
-  (1) the exact trapdoor-extracting adversary STILL refutes `tSdhAssumption` below error 1
-      (`not_tSdhAssumption`), AND
-  (2) the repaired reduction bound `binding_reduces_to_tSdh` holds UNCONDITIONALLY and
-      relates two concrete probabilities — it never mentions `tSdhAssumption`, so there is
-      nothing for the choice-adversary to inhabit.
-
-`sorry`-free; axioms `[propext, Classical.choice, Quot.sound]`.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import ArkLib.Commitments.Functional.KZG.Binding
+
+/-!
+# The extraction-shaped binding repair survives the vacuity attack
+
+The companion `KzgVacuity` file shows that ArkLib's `Groups.tSdhAssumption` [BB04], as stated over
+concrete groups, is refuted by a `Classical.choice`-definable trapdoor extractor. This file shows
+that the *extraction-shaped* repair of KZG [KZG10] evaluation binding —
+`KZG.CommitmentScheme.binding_reduces_to_tSdh` — survives that exact attack.
+
+The refutation section (`dlogOf` … `not_tSdhAssumption`) is re-proved here against the repaired
+`Binding.lean`, so the attack and the repair coexist in one axiom closure. The final theorem
+`repair_survives_attack` states, for the same groups and pairing in which the attack succeeds:
+
+1. the trapdoor-extracting adversary still refutes `tSdhAssumption` below error $1$
+   (`not_tSdhAssumption`); and
+2. the repaired reduction bound `binding_reduces_to_tSdh` holds unconditionally and relates two
+   concrete probabilities — it never mentions `tSdhAssumption`, so there is nothing for the
+   choice-adversary to inhabit.
+
+The repair reduces binding to a bound between probabilities rather than to an assumption whose
+statement quantifies over all concrete-group adversaries, which is where the vacuity lived.
+
+## References
+
+* [Boneh, D., and Boyen, X., *Short Signatures Without Random Oracles*][BB04]
+* [Kate, A., Zaverucha, G. M., and Goldberg, I., *Constant-Size Commitments to Polynomials and
+    Their Applications*][KZG10]
+-/
 
 open OracleSpec OracleComp
 open scoped NNReal ENNReal

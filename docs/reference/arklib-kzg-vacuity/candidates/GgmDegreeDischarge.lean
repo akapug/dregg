@@ -1,41 +1,47 @@
 /-
-DEGREE DISCHARGE for the linear GGM oracle — companion to `GgmAdaptive.lean` /
-`GgmRandomEncoding.lean`.
-
-NOT part of ArkLib. Scratch research file supporting
-`docs/reference/arklib-kzg-vacuity/PAPER.md` and `SOUND-FIX-VERDICT.md`.
-
-`GgmAdaptive.lean` (adaptive bound) and `GgmRandomEncoding.lean` (all-pairs bound) consume the
-SRS degree invariant as EXTERNAL HYPOTHESES (`hdeg_out`, `hdeg_pairs`, `hdeg_handles`): the
-committed output polynomial and every handle polynomial have `natDegree ≤ D`. Since the oracle
-is purely LINEAR (`Move.lin` only — no pairing move; ArkLib's `tSdhAdversary` is granted no
-pairing map), those facts are true BY CONSTRUCTION. This file proves them, by induction on the
-ACTUAL run recursion (`runAux` / `runTable` — not the separate `GgmDegreeInvariant.buildPaired`
-peer model):
-
-* `natDegree_combine_le` — a `lin` move's linear combination `Σ C cᵢ · table[kᵢ]` over a
-  degree-≤D table stays ≤ D (`natDegree_add_le` is a MAX bound; `natDegree_C_mul_le` absorbs
-  the scalar; a defaulted out-of-range read is `0`).
-* `runTable_natDegree_le` / `handlePolys_natDegree_le` — every polynomial in the run's final
-  handle table (resp. the `insert 0` handle set) has `natDegree ≤ D`, by induction on fuel.
-* `runAux_output_natDegree_le` / `symOutput_natDegree_le` — the committed output polynomial
-  has `natDegree ≤ D` (it is a defaulted table read at commit time).
-* `badPolys_natDegree_le` — every Shoup bad-event polynomial (difference of a formally
-  distinct queried pair) has `natDegree ≤ D` (`natDegree_sub_le` is a MAX bound — the linear
-  oracle pays δ = D, never 2D).
-* `srsSt_table_natDegree_le` — the SRS seed `1, X, …, X^D, 1, X` meets the bound (`1 ≤ D`
-  because the G₂ handle `X` has degree 1).
-* the `_of_run` corollaries — `hdeg_out_of_run` / `hdeg_pairs_of_run` / `hdeg_handles_of_run`
-  in exactly the shape the existing theorems consume, plus the composed hypothesis-free bounds
-  `adaptive_ggm_sound_of_run` / `adaptive_ggm_sound_srs` / `rand_encoding_bound_D_of_run` /
-  `rand_encoding_bound_srs_D_of_run`. The degree facts are now THEOREMS about the actual
-  oracle, not assumptions a downstream caller must supply.
-
-Reused: `GgmDegreeInvariant.natDegree_getD_le` (the defaulted-read bound) — everything else
-here targets the real `runAux`/`runTable` recursion directly.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import ArkLib.Scratch.KzgVacuity.GgmRandomEncoding
 import ArkLib.Scratch.KzgVacuity.GgmDegreeInvariant
+
+/-!
+# Degree discharge for the linear generic-group oracle
+
+`GgmAdaptive` (adaptive bound) and `GgmRandomEncoding` (all-pairs bound) consume the SRS degree
+invariant as external hypotheses (`hdeg_out`, `hdeg_pairs`, `hdeg_handles`): the committed output
+polynomial and every handle polynomial have `natDegree ≤ D`. Since the oracle is purely linear
+(`Move.lin` only — no pairing move; ArkLib's `tSdhAdversary` is granted no pairing map), those
+facts are true by construction. This file proves them, by induction on the actual run recursion
+(`runAux` / `runTable`, not the separate `GgmDegreeInvariant.buildPaired` peer model):
+
+* `natDegree_combine_le` — a `lin` move's linear combination
+  $\sum_i C(c_i) \cdot \mathrm{table}[k_i]$ over a degree-$\le D$ table stays $\le D$
+  (`natDegree_add_le` is a max-bound; `natDegree_C_mul_le`
+  absorbs the scalar; a defaulted out-of-range read is $0$).
+* `runTable_natDegree_le` / `handlePolys_natDegree_le` — every polynomial in the run's final handle
+  table (resp. the `insert 0` handle set) has `natDegree ≤ D`, by induction on fuel.
+* `runAux_output_natDegree_le` / `symOutput_natDegree_le` — the committed output polynomial has
+  `natDegree ≤ D` (it is a defaulted table read at commit time).
+* `badPolys_natDegree_le` — every Shoup [Sho97] bad-event polynomial (difference of a formally
+  distinct queried pair) has `natDegree ≤ D` (`natDegree_sub_le` is a max-bound — the linear oracle
+  pays $\delta = D$, never $2D$).
+* `srsSt_table_natDegree_le` — the SRS seed $1, X, \dots, X^D, 1, X$ meets the bound ($1 \le D$
+  because the $G_2$ handle $X$ has degree $1$).
+* the `_of_run` corollaries — `hdeg_out_of_run` / `hdeg_pairs_of_run` / `hdeg_handles_of_run` in
+  exactly the shape the existing theorems consume, plus the composed hypothesis-free bounds
+  `adaptive_ggm_sound_of_run` / `adaptive_ggm_sound_srs` / `rand_encoding_bound_D_of_run` /
+  `rand_encoding_bound_srs_D_of_run`. The degree facts are now theorems about the actual oracle,
+  not assumptions a downstream caller must supply.
+
+Reused: `GgmDegreeInvariant.natDegree_getD_le` (the defaulted-read bound); everything else here
+targets the real `runAux`/`runTable` recursion directly.
+
+## References
+
+* [Shoup, V., *Lower Bounds for Discrete Logarithms and Related Problems*][Sho97]
+-/
 
 open Polynomial
 

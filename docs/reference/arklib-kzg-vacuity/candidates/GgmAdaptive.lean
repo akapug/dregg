@@ -1,44 +1,56 @@
 /-
-ADAPTIVE Generic Group Model (Shoup / Boneh–Boyen) bound for t-SDH — the frontier from
-`GgmCandidate.lean` (STATIC, q=0) pushed to `q_G` adaptive oracle queries.
-
-NOT part of ArkLib. Scratch research file supporting `docs/reference/arklib-kzg-vacuity/PAPER.md §9`
-and `SOUND-FIX-VERDICT.md`.
-
-The static file proves: every *committed* generic adversary (outputs a degree-≤D representation
-polynomial with the trapdoor τ absent) wins t-SDH on ≤ (D+1)/(p−1) of trapdoors. That is the q=0
-fragment. This file builds a deterministic ADAPTIVE object: a strategy that makes `q` oracle queries —
-group operations (linear combinations) and EQUALITY tests between opaque handles — before
-committing its output. The oracle answers equality *symbolically* (formal polynomial equality),
-never revealing τ.
-
-The oracle has **no pairing move**: ArkLib's `tSdhAdversary D` is `Vector G₁ (D+1) × Vector G₂ 2 →
-… (Option (ZMod p × G₁))` — it must output a `G₁` element and is granted **no pairing map**
-`e : G₁ × G₂ → Gₜ`. Every handle it can form is therefore a `ZMod p`-linear combination of the seed
-`{1, X, …, X^D}`, degree ≤ D (never a product). This is the linear-oracle model on the critical path
-(δ = D). A separate peer model studies pairing degree bookkeeping, but is not part of this
-operational semantics.
-
-The Shoup argument, mechanized here at the counting/set level (no probability monad — same honest
-idiom as the static file):
-
-  1. THE GENERIC-GROUP ORACLE (§ Oracle): handles are ℕ indices into a table of formal polynomials
-     in `(ZMod p)[X]`, seeded with the SRS `1, X, …, X^D` (G₁), `1, X` (G₂). Moves append linear
-     combinations of existing handles (no pairing product — the ArkLib t-SDH adversary has no
-     pairing); equality is answered by an abstract `AnswerFn`.
-
-  2. IDENTICAL-UNTIL-BAD (§ Coincidence), the crux, PROVEN not assumed: run the adversary against
-     TWO answer functions. If they agree on every pair actually queried in the first run, the runs
-     coincide step-for-step (`run_congr_of_agree`, by induction on fuel). The real oracle (equality
-     at τ) and the symbolic oracle (formal equality) agree on a queried pair `(fᵢ,fⱼ)` UNLESS
-     `fᵢ ≠ fⱼ` formally but `fᵢ(τ) = fⱼ(τ)` — τ a root of the nonzero difference: the BAD EVENT.
-
-  3. THE BOUND (§ Bound): `realWinSet ⊆ symbolicWinSet ∪ badSet`. `symbolicWinSet` is bounded by the
-     STATIC core (`GgmCandidate.card_winningPoints_le`, reused, not reproved). `badSet` is a union
-     of ≤ (#pairs) root-sets of nonzero polys of degree ≤ Δ, bounded by Schwartz–Zippel. Compose →
-     the concrete `(D+1 + #pairs·Δ)/(p−1)` ~ `(q+D)²·D/p`.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import ArkLib.Scratch.KzgVacuity.GgmCandidate
+
+/-!
+# Adaptive generic-group $t$-SDH bound
+
+The static bound of `GgmCandidate` (the generic group model [Sho97], [Mau05] $q = 0$ fragment)
+is pushed here to $q$ adaptive oracle queries, following the Boneh–Boyen $t$-SDH argument [BB04].
+Every committed generic adversary wins $t$-SDH on $\le (D+1)/(p-1)$ of trapdoors when $q = 0$; this
+file builds a deterministic adaptive object: a strategy making $q$ oracle queries — group
+operations (linear combinations) and equality tests between opaque handles — before committing its
+output. The oracle answers equality symbolically (formal polynomial equality), never revealing
+$\tau$.
+
+The oracle has no pairing move: ArkLib's `tSdhAdversary D` maps
+`Vector G₁ (D+1) × Vector G₂ 2 → … (Option (ZMod p × G₁))`, must output a $G_1$ element, and is
+granted no pairing map $e : G_1 \times G_2 \to G_t$. Every handle it forms is a
+$\mathbb{Z}/p$-linear combination of the seed $\{1, X, \dots, X^D\}$, degree $\le D$ (never a
+product). This is the linear-oracle model on the critical path ($\delta = D$).
+
+The Shoup argument is mechanized at the counting/set level (no probability monad, the same idiom
+as the static file):
+
+1. The generic-group oracle: handles are $\mathbb{N}$ indices into a table of formal polynomials in
+   $(\mathbb{Z}/p)[X]$, seeded with the SRS $1, X, \dots, X^D$ ($G_1$) and $1, X$ ($G_2$). Moves
+   append linear combinations of existing handles; equality is answered by an abstract `AnswerFn`.
+
+2. Identical-until-bad (the crux, proved not assumed): run the adversary against two answer
+   functions. If they agree on every pair actually queried in the first run, the runs coincide
+   step-for-step (`runAux_congr_of_agree`, by induction on fuel). The real oracle (equality at
+   $\tau$) and the symbolic oracle (formal equality) agree on a queried pair $(f_i, f_j)$ unless
+   $f_i \ne f_j$ formally but $f_i(\tau) = f_j(\tau)$ — that is, $\tau$ is a root of the nonzero
+   difference: the bad event.
+
+3. The bound: `realWinSet ⊆ symbolicWinSet ∪ badSet`. The symbolic set is bounded by the static
+   core (`GgmCandidate.card_winningPoints_le`, reused). The bad set is a union of
+   $\le \#\text{pairs}$ root-sets of nonzero polynomials of degree $\le \Delta$, bounded by
+   Schwartz–Zippel [Sch80], [Zip79]. Composing gives
+   $(D + 1 + \#\text{pairs} \cdot \Delta)/(p-1) \sim (q+D)^2 D / p$.
+
+## References
+
+* [Boneh, D., and Boyen, X., *Short Signatures Without Random Oracles*][BB04]
+* [Shoup, V., *Lower Bounds for Discrete Logarithms and Related Problems*][Sho97]
+* [Maurer, U., *Abstract Models of Computation in Cryptography*][Mau05]
+* [Schwartz, J. T., *Fast Probabilistic Algorithms for Verification of Polynomial
+    Identities*][Sch80]
+* [Zippel, R., *Probabilistic Algorithms for Sparse Polynomials*][Zip79]
+-/
 
 open Polynomial
 
@@ -98,9 +110,10 @@ inductive Move (p : ℕ) where
   | lin   : List (ZMod p × ℕ) → Move p
   | query : ℕ → ℕ → Move p
 
-/-- A deterministic generic (adaptive) strategy: a decision function from the history of equality answers to
-either a next move or a committed output `(offset, output-handle-index)`. It never receives τ or a
-group element carrying τ — only the equality booleans. Randomized strategies are not represented
+/-- A deterministic generic (adaptive) strategy: a decision function from the history of equality
+answers to either a next move or a committed output `(offset, output-handle-index)`. It never
+receives τ or a group element carrying τ — only the equality booleans. Randomized strategies are
+not represented
 by this type; handling them would require an additional random-tape/mixture argument. -/
 abbrev Strat (p : ℕ) := List Bool → Move p ⊕ (ZMod p × ℕ)
 
@@ -164,14 +177,18 @@ theorem runAux_congr_of_agree {ans1 ans2 : AnswerFn p} (strat : Strat p) :
       | query i j =>
         -- query move: the divergence point.
         have e1 : runAux ans1 strat (fuel + 1) st
-            = ((runAux ans1 strat fuel ⟨st.table, st.hist ++ [ans1 (st.table.getD i 0) (st.table.getD j 0)]⟩).1,
+            = ((runAux ans1 strat fuel
+                  ⟨st.table, st.hist ++ [ans1 (st.table.getD i 0) (st.table.getD j 0)]⟩).1,
                 (st.table.getD i 0, st.table.getD j 0) ::
-                  (runAux ans1 strat fuel ⟨st.table, st.hist ++ [ans1 (st.table.getD i 0) (st.table.getD j 0)]⟩).2) := by
+                  (runAux ans1 strat fuel
+                    ⟨st.table, st.hist ++ [ans1 (st.table.getD i 0) (st.table.getD j 0)]⟩).2) := by
           simp only [runAux, hdec]
         have e2 : runAux ans2 strat (fuel + 1) st
-            = ((runAux ans2 strat fuel ⟨st.table, st.hist ++ [ans2 (st.table.getD i 0) (st.table.getD j 0)]⟩).1,
+            = ((runAux ans2 strat fuel
+                  ⟨st.table, st.hist ++ [ans2 (st.table.getD i 0) (st.table.getD j 0)]⟩).1,
                 (st.table.getD i 0, st.table.getD j 0) ::
-                  (runAux ans2 strat fuel ⟨st.table, st.hist ++ [ans2 (st.table.getD i 0) (st.table.getD j 0)]⟩).2) := by
+                  (runAux ans2 strat fuel
+                    ⟨st.table, st.hist ++ [ans2 (st.table.getD i 0) (st.table.getD j 0)]⟩).2) := by
           simp only [runAux, hdec]
         -- head-of-transcript agreement: ans1 a b = ans2 a b
         have hhead : ans1 (st.table.getD i 0) (st.table.getD j 0)
@@ -208,9 +225,11 @@ theorem runAux_queries_length_le (ans : AnswerFn p) (strat : Strat p) :
         rw [e]; exact (ih _).trans (Nat.le_succ _)
       | query i j =>
         have e : runAux ans strat (fuel + 1) st
-            = ((runAux ans strat fuel ⟨st.table, st.hist ++ [ans (st.table.getD i 0) (st.table.getD j 0)]⟩).1,
+            = ((runAux ans strat fuel
+                  ⟨st.table, st.hist ++ [ans (st.table.getD i 0) (st.table.getD j 0)]⟩).1,
                 (st.table.getD i 0, st.table.getD j 0) ::
-                  (runAux ans strat fuel ⟨st.table, st.hist ++ [ans (st.table.getD i 0) (st.table.getD j 0)]⟩).2) := by
+                  (runAux ans strat fuel
+                    ⟨st.table, st.hist ++ [ans (st.table.getD i 0) (st.table.getD j 0)]⟩).2) := by
           simp only [runAux, hdec]
         rw [e]; simp only [List.length_cons]
         exact Nat.succ_le_succ (ih _)
@@ -324,8 +343,9 @@ theorem card_badPolys_le : (badPolys strat st₀ fuel).card ≤ fuel := by
   exact (List.length_filter_le _ _).trans (runAux_queries_length_le symAns strat fuel st₀)
 
 /-- **THE ADAPTIVE GGM CARDINALITY BOUND.** For every deterministic strategy in this model making
-≤ `fuel` oracle queries, the number of trapdoors on which it wins t-SDH is ≤ `fuel·Δ + (D+1)`: the static
-Boneh–Boyen root event `(D+1)` plus the Shoup collision event `(#queries)·Δ`. -/
+≤ `fuel` oracle queries, the number of trapdoors on which it wins t-SDH is ≤ `fuel·Δ + (D+1)`: the
+static Boneh–Boyen [BB04] root event `(D+1)` plus the Shoup [Sho97] collision event
+`(#queries)·Δ`. -/
 theorem card_realWinSet_le (D Δ : ℕ)
     (hdeg_out : (symOutput strat st₀ fuel).2.natDegree ≤ D)
     (hdeg_pairs : ∀ q ∈ badPolys strat st₀ fuel, q.natDegree ≤ Δ) :

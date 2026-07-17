@@ -1,57 +1,74 @@
 /-
-TRANSPORT: the GGM field-level t-SDH bound (`GgmAdaptive.lean` / `GgmCandidate.lean`) connected
-to ArkLib's GROUP-level winning condition — the predicate `tSdhExperiment` measures.
-
-NOT part of ArkLib. Scratch research file supporting
-`docs/reference/arklib-kzg-vacuity/PAPER.md` and `SOUND-FIX-VERDICT.md`.
-Built against ArkLib @ `d72f8392` (Lean v4.31.0); imports ArkLib's REAL definitions
-(`Groups.tSdhCondition`, `Groups.exists_zmod_power_of_generator`, …) — nothing is restated.
-
-THE GAP THIS FILE CLOSES. `GgmAdaptive.lean` proves its adaptive cardinality bound about a
-FIELD-level predicate: the generic adversary's committed polynomial satisfies
-`f.eval τ = 1/(τ + c)` at the sampled trapdoor `τ : ZMod p`. ArkLib's hardness game
-(`ArkLib.Commitments.Functional.KZG.HardnessAssumptions`) scores a GROUP-level condition over a
-prime-order `G₁`:
-
-    tSdhCondition (τ, c, h) := τ + c ≠ 0 ∧ h = g₁ ^ (1 / (τ + c)).val
-
-and `tSdhExperiment D A = Pr[tSdhCondition | tSdhGame D A]`. The two predicates live on opposite
-sides of the exponent encoding `a : ZMod p ↦ g ^ a.val`. This file proves the encoding is
-INJECTIVE (indeed bijective) in a prime-order group, hence the two conditions are EQUIVALENT,
-hence the GGM winning-trapdoor set stated in group terms IS `GgmAdaptive.realWinSet` and the
-adaptive bound `fuel·Δ + (D+1)` (and its `(…)/(p−1)` fraction) transports verbatim.
-
-CONTENTS.
-  1. `gpow_val_injective` / `gpow_val_inj_iff` — injectivity of `a ↦ g ^ a.val` for `g` of
-     order `p`, derived from ArkLib's own `Groups.gpow_div_eq` and
-     `Groups.zmod_eq_zero_of_gpow_eq_one`; the iff form.
-  2. `gpow_val_bijective` — bijectivity: surjectivity is exactly ArkLib's
-     `Groups.exists_zmod_power_of_generator`.
-  3. `tSdhCondition_iff_field` — for an output PRESENTED in encoded form `h = g ^ x.val`,
-     ArkLib's `tSdhCondition (τ, c, h)` holds iff `τ + c ≠ 0 ∧ x = 1/(τ+c)` — exactly the
-     filter predicate of `GgmAdaptive.realWinSet` at `x = f.eval τ`.
-  5. `groupWinSet` / `groupWinSet_eq_realWinSet` / `field_bound_transports_to_group` — the set
-     of trapdoors on which the adaptive generic run's realized GROUP element wins ArkLib's
-     condition equals `realWinSet`; the cardinality bound and the rational fraction bound follow.
-
-NAMED RESIDUAL (deliberately NOT proven here — probability-monad plumbing, no new mathematics):
-connecting `field_bound_transports_to_group` to the literal inequality
-`tSdhExperiment D A ≤ (fuel·Δ + D + 1)/(p−1)` requires threading VCVio's game monad:
-  (i)  GENERIC-TO-GAME EMBEDDING: exhibit, for each `Strat p`, a `tSdhAdversary D`
-       (`Vector G₁ (D+1) × Vector G₂ 2 → StateT unifSpec.QueryCache ProbComp (Option (ZMod p × G₁))`)
-       whose realized output on the SRS `PowerSrs.generate D τ` is
-       `((runOutput (realAns τ) strat fuel st₀).1, g₁ ^ ((runOutput (realAns τ) strat fuel st₀).2.eval τ).val)`
-       — the generic-oracle-to-group simulation (equality queries answered by comparing real
-       group elements).
-  (ii) SAMPLER SEMANTICS: `Pr[cond | sampleNonzeroZMod >>= deterministic] =
-       (nonzeroPoints.filter cond).card / (p−1)` — `probEvent` over ArkLib's `sampleNonzeroZMod`
-       (a `Fin (p−1)` uniform mapped by `i ↦ i+1`), plus the `ℚ → ℝ≥0∞` cast.
-Both are `OptionT ProbComp` bookkeeping. The CONDITION-level identity proven here
-(`groupWinSet_eq_realWinSet`) is exact, so the counting bound is about precisely the event
-`tSdhExperiment` scores — nothing about the predicate remains to be aligned.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import ArkLib.Scratch.KzgVacuity.GgmAdaptive
 import ArkLib.Commitments.Functional.KZG.HardnessAssumptions
+
+/-!
+# Transporting the GGM field-level t-SDH bound to the group-level game
+
+`GgmAdaptive` proves an adaptive generic-group-model (GGM) cardinality bound about a
+*field-level* predicate: the generic adversary's committed polynomial satisfies
+`f.eval τ = 1 / (τ + c)` at the sampled trapdoor `τ : ZMod p`. The Boneh–Boyen t-SDH hardness
+game [BB04] that underlies the KZG polynomial commitment scheme [KZG10] instead scores a
+*group-level* condition over a prime-order `G₁`:
+$$\mathrm{tSdhCondition}(τ, c, h) := τ + c ≠ 0 ∧ h = g_1^{(1 / (τ + c)).\mathrm{val}}$$
+with `tSdhExperiment D A = Pr[tSdhCondition | tSdhGame D A]`.
+
+The two predicates live on opposite sides of the exponent encoding `a : ZMod p ↦ g ^ a.val`.
+This file proves the encoding is injective — indeed bijective — in a prime-order group, hence the
+two conditions are equivalent, hence the GGM winning-trapdoor set stated in group terms is
+`GgmAdaptive.realWinSet`, and the adaptive bound `fuel·Δ + (D+1)` (and its `(…)/(p−1)` fraction)
+transports verbatim to the group side.
+
+## Contents
+
+1. `gpow_val_injective` / `gpow_val_inj_iff` — injectivity of `a ↦ g ^ a.val` for `g` of
+   order `p`, derived from `Groups.gpow_div_eq` and `Groups.zmod_eq_zero_of_gpow_eq_one`; the
+   iff form.
+2. `gpow_val_bijective` — bijectivity: surjectivity is `Groups.exists_zmod_power_of_generator`
+   (every element of a prime-order group is a `ZMod p` power of a nontrivial generator).
+3. `tSdhCondition_iff_field` — for an output presented in encoded form `h = g ^ x.val`,
+   `Groups.tSdhCondition (τ, c, h)` holds iff `τ + c ≠ 0 ∧ x = 1 / (τ + c)` — exactly the
+   filter predicate of `GgmAdaptive.realWinSet` at `x = f.eval τ`.
+4. `groupWinSet` / `groupWinSet_eq_realWinSet` / `field_bound_transports_to_group` — the set of
+   trapdoors on which the adaptive generic run's realized group element wins `tSdhCondition`
+   equals `realWinSet`; the cardinality bound and the rational fraction bound follow.
+
+## Named residual
+
+Connecting `field_bound_transports_to_group` to the literal inequality
+`tSdhExperiment D A ≤ (fuel·Δ + D + 1) / (p−1)` requires threading VCVio's game monad — this is
+probability-monad plumbing, with no new mathematics:
+
+* Generic-to-game embedding: for each `Strat p`, exhibit a `tSdhAdversary D`,
+
+      Vector G₁ (D+1) × Vector G₂ 2 →
+        StateT unifSpec.QueryCache ProbComp (Option (ZMod p × G₁))
+
+  whose realized output on the SRS `PowerSrs.generate D τ` is
+
+      ((runOutput (realAns τ) strat fuel st₀).1,
+        g₁ ^ ((runOutput (realAns τ) strat fuel st₀).2.eval τ).val)
+
+  the generic-oracle-to-group simulation (equality queries answered by comparing real group
+  elements).
+* Sampler semantics: `Pr[cond | sampleNonzeroZMod >>= deterministic] =
+  (nonzeroPoints.filter cond).card / (p−1)` — `probEvent` over `sampleNonzeroZMod` (a
+  `Fin (p−1)` uniform mapped by `i ↦ i+1`), plus the `ℚ → ℝ≥0∞` cast.
+
+Both are `OptionT ProbComp` bookkeeping. The condition-level identity proven here
+(`groupWinSet_eq_realWinSet`) is exact, so the counting bound is about precisely the event
+`tSdhExperiment` scores — nothing about the predicate remains to be aligned.
+
+## References
+
+* [Boneh, D., and Boyen, X., *Short Signatures Without Random Oracles*][BB04]
+* [Kate, A., Zaverucha, G. M., and Goldberg, I., *Constant-Size Commitments to Polynomials and
+    Their Applications*][KZG10]
+-/
 
 open Polynomial
 

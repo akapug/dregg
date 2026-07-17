@@ -1,44 +1,48 @@
 /-
-PROBABILITY THREADING: ArkLib's real `tSdhExperiment` (an `OptionT ProbComp` game whose
-adversary lives in `StateT unifSpec.QueryCache ProbComp`) reduced to a plain
-`Finset`-cardinality count `(winSet.card) / (p - 1)` in `ℝ≥0∞`.
-
-NOT part of ArkLib. Scratch research file supporting
-`docs/reference/arklib-kzg-vacuity/END-TO-END-PLAN.md` (task C). Built against ArkLib
-@ `d72f8392` (Lean v4.31.0); imports ArkLib's REAL definitions
-(`Groups.tSdhGame`, `Groups.tSdhExperiment`, `Groups.tSdhCondition`,
-`Groups.sampleNonzeroZMod`) — nothing is restated.
-
-THE GAP THIS FILE CLOSES (END-TO-END-PLAN §2c). ArkLib's hardness game is
-
-    tSdhExperiment D A = Pr[tSdhCondition | tSdhGame D A]
-
-with `tSdhGame D A = OptionT.mk (do τ ← sampleNonzeroZMod; …; (A srs).run' ∅; pure …)`
-an `ℝ≥0∞` probability over the `OptionT`/`StateT`/`ProbComp` monad stack. The GGM/counting
-bounds (`GgmAdaptive`, `GgmRandomEncoding`, `GgmArkLibTransport`) are all `ℚ`-cardinality
-statements about a *set of winning trapdoors*. This file threads the two together for any
-adversary that is deterministic-given-τ from an empty cache — exactly the shape that task D's
-`embed` produces (`embed strat srs = pure (…)`, so `(embed strat srs).run' ∅ = pure result`):
-
-  * `game_collapse` (c1): peel the game monad. With `(A (PowerSrs.generate D τ)).run' ∅
-    = pure (resultOf τ)`, the whole `OptionT`/`StateT` game collapses to
-    `OptionT.mk (do τ ← sampleNonzeroZMod; pure ((resultOf τ).map (τ, ·, ·)))`.
-
-  * `experiment_eq_count` (c2): count the sampler. That probability equals
-    `(winSet.card) / (p - 1)`, where `winSet` is the set of nonzero-trapdoor indices
-    `i : Fin (p-1)` on which the deterministic adversary's output wins `tSdhCondition`.
-
-TOOLS REUSED (all pre-existing; END-TO-END-PLAN §2c named them):
-  * VCVio `probEvent_uniformSample` (`Pr[q | $ᵗ α] = (univ.filter q).card / card α`) and
-    `probEvent_map` (`Pr[q | f <$> mx] = Pr[q ∘ f | mx]`).
-  * VCVio `OptionT.probOutput_eq` / `probEvent_eq_tsum_subtype` for the `OptionT.mk` peel
-    (the `none`-mass is handled by a subtype reindexing, no `ℝ≥0∞` subtraction).
-  * ArkLib's `Binding.lean` is the precedent for the identical-shape
-    `Pr[· | OptionT.mk (do τ ← sampleNonzeroZMod; …)]` reduction (it uses the same
-    `OptionT.probEvent_eq_of_run_map_eq` / `probEvent_map` / `probEvent_mono` idioms).
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
-
 import ArkLib.Commitments.Functional.KZG.HardnessAssumptions
+
+/-!
+# Threading the $t$-SDH probability game to a finite cardinality count
+
+ArkLib's real `tSdhExperiment` is an `OptionT ProbComp` game whose adversary lives in
+`StateT unifSpec.QueryCache ProbComp`. This file reduces it to a plain `Finset`-cardinality count
+$\#\mathrm{winSet} / (p - 1)$ in $\mathbb{R}_{\ge 0}^{\infty}$, importing ArkLib's real
+`Groups.tSdhGame`, `Groups.tSdhExperiment`, `Groups.tSdhCondition`, and
+`Groups.sampleNonzeroZMod` without restating them.
+
+ArkLib's hardness game for the $t$-SDH assumption [BB04] underlying KZG [KZG10] is
+`tSdhExperiment D A = Pr[tSdhCondition | tSdhGame D A]`, with
+`tSdhGame D A = OptionT.mk (do τ ← sampleNonzeroZMod; …; (A srs).run' ∅; pure …)`, an
+$\mathbb{R}_{\ge 0}^{\infty}$ probability over the `OptionT`/`StateT`/`ProbComp` monad stack. The
+generic-group counting bounds (`GgmAdaptive`, `GgmRandomEncoding`, `GgmArkLibTransport`) are
+$\mathbb{Q}$-cardinality statements about a set of winning trapdoors. This file threads the two
+together for any adversary that is deterministic-given-$\tau$ from an empty cache — exactly the
+shape the `embed` construction produces (`(embed strat srs).run' ∅ = pure result`):
+
+* `game_collapse`: peel the game monad. With
+  `(A (PowerSrs.generate D τ)).run' ∅ = pure (resultOf τ)`, the whole `OptionT`/`StateT` game
+  collapses to
+  `OptionT.mk (do τ ← sampleNonzeroZMod; pure ((resultOf τ).map (τ, ·, ·)))`.
+* `experiment_eq_count`: count the sampler. That probability equals $\#\mathrm{winSet} / (p - 1)$,
+  where `winSet` is the set of nonzero-trapdoor indices `i : Fin (p-1)` on which the deterministic
+  adversary's output wins `tSdhCondition`.
+
+The reduction reuses VCVio's `probEvent_uniformSample` and `probEvent_map`, together with
+`OptionT.probOutput_eq` / `probEvent_eq_tsum_subtype` for the `OptionT.mk` peel (the `none`-mass is
+handled by a subtype reindexing, with no $\mathbb{R}_{\ge 0}^{\infty}$ subtraction). ArkLib's
+`Binding.lean` is the precedent for the identical-shape
+`Pr[· | OptionT.mk (do τ ← sampleNonzeroZMod; …)]` reduction.
+
+## References
+
+* [Boneh, D., and Boyen, X., *Short Signatures Without Random Oracles*][BB04]
+* [Kate, A., Zaverucha, G. M., and Goldberg, I., *Constant-Size Commitments to Polynomials and
+    Their Applications*][KZG10]
+-/
 
 open OracleSpec OracleComp Groups
 open scoped Classical NNReal ENNReal

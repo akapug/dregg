@@ -1,9 +1,43 @@
 /-
-Mechanized refutation of ArkLib's `Groups.tSdhAssumption`.
-NOT part of ArkLib. Scratch file supporting a disclosure note.
+Copyright (c) 2026 Ember Arlynx. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Ember Arlynx
 -/
 import ArkLib.Commitments.Functional.KZG.Binding
 import ArkLib.Commitments.Functional.KZG.FunctionBinding.Support
+
+/-!
+# Vacuity of the concrete-group `tSdhAssumption` and `arsdhAssumption`
+
+This file mechanizes a refutation of ArkLib's `Groups.tSdhAssumption` and `Groups.arsdhAssumption`
+as stated over *concrete* prime-order groups. The $t$-SDH assumption [BB04] underlies the KZG
+polynomial commitment scheme [KZG10]; ArkLib's hardness game hands its adversary the structured
+reference string as concrete group elements, including the verifier leg $g_2^{\tau}$.
+
+The refutation is that a `Classical.choice`-definable adversary is a legal inhabitant of the
+adversary type. From $g_2^{\tau}$ the extractor `dlogOf` (built from ArkLib's own
+`Groups.exists_zmod_power_of_generator`) recovers the trapdoor $\tau : \mathbb{Z}/p$ and returns a
+winning element with probability $1$:
+
+* `not_tSdhAssumption` — `tauExtractingAdversary` wins `tSdhExperiment` below every error `< 1`.
+* `binding_hypotheses_unsatisfiable` — the hypotheses bundling KZG binding to `tSdhAssumption`
+  are jointly unsatisfiable in the concrete-group model.
+* `not_arsdhAssumption` / `arsdh_binding_hypotheses_unsatisfiable` — the same for the algebraic
+  RSDH variant, using `arsdhExtractingAdversary` on a challenge set avoiding the trapdoor.
+
+The finding is that hardness must be quantified over a *restricted* adversary class — the generic
+group model [Sho97], [Mau05], or the algebraic group model [FKL18] — where the trapdoor is never
+in the adversary's view. The companion `GgmEndToEnd` file supplies that generic bound.
+
+## References
+
+* [Boneh, D., and Boyen, X., *Short Signatures Without Random Oracles*][BB04]
+* [Kate, A., Zaverucha, G. M., and Goldberg, I., *Constant-Size Commitments to Polynomials and
+    Their Applications*][KZG10]
+* [Shoup, V., *Lower Bounds for Discrete Logarithms and Related Problems*][Sho97]
+* [Maurer, U., *Abstract Models of Computation in Cryptography*][Mau05]
+* [Fuchsbauer, G., Kiltz, E., and Loss, J., *The Algebraic Group Model and its Applications*][FKL18]
+-/
 
 open OracleSpec OracleComp
 open scoped NNReal ENNReal
