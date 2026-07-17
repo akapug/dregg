@@ -6,7 +6,7 @@
 //!   3. Create a TurnExecutor with that registry
 //!   4. Register a sovereign cell with the program's VK hash
 //!   5. Generate a valid trace (3 steps, value=100, threshold=50)
-//!   6. Prove using prove_dsl_plonky3
+//!   6. Prove using the PRODUCTION prove_dsl_p3 (dregg_circuit::dsl::dsl_p3_air)
 //!   7. Build a Turn with execution_proof
 //!   8. Execute — executor verifies via registry and updates commitment
 //!   9. Assert: commitment updated, no error
@@ -14,13 +14,12 @@
 //! Also tests: wrong proof rejected, wrong VK rejected.
 
 use dregg_cell::{Cell, CellId, Ledger};
+use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
 use dregg_dsl_runtime::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
-use dregg_dsl_runtime::{
-    CellProgram, DslCircuit, ProgramRegistry, prove_dsl_plonky3, verify_dsl_plonky3,
-};
+use dregg_dsl_runtime::{CellProgram, DslCircuit, ProgramRegistry};
 use dregg_turn::{
     ActionBuilder, ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult,
 };
@@ -359,7 +358,7 @@ fn test_dsl_pipeline_full_proof_carrying_turn() {
     // `StarkAir::eval_constraints` was retired with the hand-STARK engine;
     // the plonky3 prove/verify below is the real constraint check.)
 
-    // --- Step 6: Prove using prove_dsl_plonky3 ---
+    // --- Step 6: Prove using the PRODUCTION prove_dsl_p3 ---
     // The executor expects 32 public inputs (8 BabyBear per: old_commitment,
     // new_commitment, effects_hash, cell_id_hash). The temporal predicate circuit
     // only uses 1 public input (num_steps). For the executor's verification to pass,
@@ -382,7 +381,8 @@ fn test_dsl_pipeline_full_proof_carrying_turn() {
     // Actually, let's step back: the executor's verify_and_commit_proof calls
     // program.verify_transition(public_inputs, proof_bytes) where public_inputs
     // is the 32-element vector. The CellProgram.verify_transition deserializes the
-    // proof and calls verify_dsl_plonky3(&circuit.descriptor, &proof, public_inputs). The circuit's
+    // proof and calls verify_dsl_p3(&circuit, &proof, public_inputs) — the PRODUCTION interpreter
+    // (was verify_dsl_plonky3, the deleted duplicate; corrected 2026-07-17). The circuit's
     // boundary constraints only reference pi[0], but the STARK commitment includes
     // ALL public inputs in its Fiat-Shamir transcript. So the proof must be generated
     // with the EXACT same public inputs vector.
@@ -504,16 +504,25 @@ fn test_dsl_pipeline_full_proof_carrying_turn() {
 
     // Generate the STARK proof with the DslCircuit + full_public_inputs.
     let circuit32 = DslCircuit::new(deploy_descriptor);
-    let proof_bytes = prove_dsl_plonky3(&circuit32.descriptor, &trace, &full_public_inputs)
-        .expect("prove_dsl_plonky3 failed");
+    // PRODUCTION interpreter (migrated 2026-07-17): `prove_dsl_p3`/`verify_dsl_p3` from
+    // `dregg_circuit::dsl::dsl_p3_air` — the circuit the deployed path actually runs. This test used to
+    // drive `dregg_dsl_runtime::prove_dsl_plonky3`, the 868-line DUPLICATE `DslP3Air` (deleted a83e50a2b):
+    // a weaker shadow that could not express `Hash` and enforced row-0-only boundaries. A pipeline test
+    // proving through a shadow validates the shadow.
+    let proof = prove_dsl_p3(&circuit32, &trace, &full_public_inputs).expect("prove_dsl_p3 failed");
 
-    // Sanity: verify locally before submitting.
-    let local_verify = verify_dsl_plonky3(&circuit32.descriptor, &proof_bytes, &full_public_inputs);
+    // Sanity: verify locally before submitting (production `verify_dsl_p3` returns Result<(), _>).
+    let local_verify = verify_dsl_p3(&circuit32, &proof, &full_public_inputs);
     assert!(
-        matches!(local_verify, Ok(true)),
+        local_verify.is_ok(),
         "Local STARK verify failed: {:?}",
         local_verify.err()
     );
+
+    // `execution_proof` is a byte blob on the wire; the production prover returns a typed
+    // `DslP3Proof` (= BatchProof<DreggStarkConfig>), so encode it the way the bridge does
+    // (`bridge/src/present.rs:511`).
+    let proof_bytes = postcard::to_allocvec(&proof).expect("DslP3Proof postcard encode");
 
     assert!(
         proof_bytes.len() > 100,
@@ -532,7 +541,7 @@ fn test_dsl_pipeline_full_proof_carrying_turn() {
     // --- Step 9: The execution_proof path CUT OVER to the rotated R=24
     // `Ir2BatchProof` (the C1/C7 cutover — `turn/src/executor/proof_verify.rs`
     // postcard-deserializes an `Ir2BatchProof`, no longer a raw
-    // `prove_dsl_plonky3` blob). A bare DSL proof is therefore NO LONGER a
+    // `prove_dsl_p3`/`prove_dsl_plonky3` blob — the latter deleted a83e50a2b). A bare DSL proof is therefore NO LONGER a
     // valid turn `execution_proof`: the rotated deserializer fails closed. The
     // DSL prover/verifier itself stays sound — its roundtrip is asserted by the
     // local `verify_dsl_plonky3` above; the live proof-carrying ACCEPTANCE path
@@ -638,8 +647,10 @@ fn test_dsl_pipeline_wrong_proof_rejected() {
     let (trace, _) = generate_temporal_trace(&values, threshold);
 
     let circuit = DslCircuit::new(deploy_descriptor);
-    let mut proof_bytes =
-        prove_dsl_plonky3(&circuit.descriptor, &trace, &full_pi).expect("prove_dsl_plonky3 failed");
+    // PRODUCTION interpreter (migrated 2026-07-17, was the deleted duplicate `prove_dsl_plonky3`).
+    // The tamper semantics are unchanged: encode the typed proof, then corrupt the WIRE BYTES.
+    let proof = prove_dsl_p3(&circuit, &trace, &full_pi).expect("prove_dsl_p3 failed");
+    let mut proof_bytes = postcard::to_allocvec(&proof).expect("DslP3Proof postcard encode");
 
     // Tamper with the proof bytes (flip some bytes in the middle).
     let mid = proof_bytes.len() / 2;
