@@ -52,13 +52,25 @@ for rel in "${blind_files[@]}"; do
     status=1
     continue
   fi
+  # A lockstep gate whose grep matches NOTHING passes having checked nothing: if a
+  # consumer silently loses its pinned rev (line deleted / comment dropped / dep
+  # restructured), the loop body never runs and no mismatch is reported. Count the
+  # matches and FAIL LOUD on zero — a vanished mirror is a lockstep break, not a pass.
+  seen=0
   while IFS= read -r rev; do
     [[ -z "$rev" ]] && continue
+    seen=$((seen + 1))
     if [[ "$rev" != "$P3_REV" ]]; then
       echo "FAIL: $rel pins plonky3 rev $rev, expected $P3_REV" >&2
       status=1
     fi
   done < <(grep -ioE '[0-9a-f]{40}' "$f" | sort -u)
+  if [[ "$seen" -eq 0 ]]; then
+    echo "FAIL: $rel no longer contains the pinned fork rev — the lockstep gate would" >&2
+    echo "      otherwise PASS having checked nothing here. Restore the pin, or drop $rel" >&2
+    echo "      from blind_files if it is intentionally no longer a mirror." >&2
+    status=1
+  fi
 done
 
 # --- Authoritative workspace pin: isolate the plonky3-recursion rev only
@@ -68,13 +80,25 @@ if [[ ! -f "$cargo" ]]; then
   echo "FAIL: root Cargo.toml missing" >&2
   status=1
 else
+  seen=0
   while IFS= read -r rev; do
     [[ -z "$rev" ]] && continue
+    seen=$((seen + 1))
     if [[ "$rev" != "$P3_REV" ]]; then
       echo "FAIL: root Cargo.toml pins plonky3-recursion rev $rev, expected $P3_REV" >&2
       status=1
     fi
   done < <(grep 'plonky3-recursion' "$cargo" | grep -ioE '[0-9a-f]{40}' | sort -u)
+  # The AUTHORITATIVE pin. If this yields zero (the `plonky3-recursion` dep line was
+  # renamed or removed), the gate anchors on nothing and every consumer check above is
+  # meaningless — the whole gate silently greens. That is the exact failure this gate
+  # exists to prevent, turned on itself. FAIL LOUD.
+  if [[ "$seen" -eq 0 ]]; then
+    echo "FAIL: root Cargo.toml yielded NO plonky3-recursion rev — the authoritative pin" >&2
+    echo "      the entire lockstep gate anchors on has vanished (dep renamed/removed?)." >&2
+    echo "      The gate cannot verify lockstep against a missing source of truth." >&2
+    status=1
+  fi
 fi
 
 # --- WARN-only: the VK-hash constant (VK-epoch-gated, not a lockstep failure).
