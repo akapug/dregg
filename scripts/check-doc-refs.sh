@@ -93,7 +93,15 @@ extract() {
       re = "[A-Za-z0-9_][A-Za-z0-9_./+-]*\\.(" exts ")(:[0-9]+)?"
       while (match(line, re)) {
         tok = substr(line, RSTART, RLENGTH)
-        print FILENAME "\t" FNR "\t" tok
+        # POSIX ERE has no lookahead, so the extension alternation happily matches a
+        # PREFIX of a longer extension: `.ts` inside `.tsv`, `.js` inside `.json`. The
+        # truncated token then resolves to nothing and the gate reports a DEAD ref for a
+        # file the doc cited correctly (~49 such false positives). A real reference ends
+        # at a non-word character; if a word char follows, we matched a prefix — skip it.
+        nextch = substr(line, RSTART + RLENGTH, 1)
+        if (nextch !~ /[A-Za-z0-9_]/) {
+          print FILENAME "\t" FNR "\t" tok
+        }
         line = substr(line, RSTART + RLENGTH)
       }
     }
