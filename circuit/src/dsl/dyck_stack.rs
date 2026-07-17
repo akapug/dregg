@@ -665,6 +665,32 @@ pub fn dyck_parse_descriptor(name: &str) -> CircuitDescriptor {
         gated(col::IS_TERM, diff_is(col::DEPTH_NEXT, col::STACK_DEPTH, -1)),
         // done: depth unchanged.
         gated(col::IS_DONE, diff_is(col::DEPTH_NEXT, col::STACK_DEPTH, 0)),
+        // ---- terminal-top: a term row consumes a TERMINAL, never the nonterminal S ----
+        // `IS_TERM · (STACK0 − op)(STACK0 − cl) == 0`, i.e. `STACK0^2 − 5·STACK0 + 6 == 0`.
+        // The `term` top-match (`STACK0 == INPUT_TOKEN`) only ties the top to the tape symbol; it
+        // does NOT forbid consuming the nonterminal `S`. This tooth does — which is what makes the
+        // parsed word DECODABLE from the trace (`DyckStackReplay.decodedWord` reads a genuine `Brk`
+        // terminal off every term row), the tape↔word correspondence a parser-soundness theorem
+        // must derive rather than assume.
+        gated(
+            col::IS_TERM,
+            ConstraintExpr::Polynomial {
+                terms: vec![
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![col::STACK0, col::STACK0],
+                    },
+                    PolyTerm {
+                        coeff: -BabyBear::new(5),
+                        col_indices: vec![col::STACK0],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::new(6),
+                        col_indices: vec![],
+                    },
+                ],
+            },
+        ),
         // ---- per-step commitment ------------------------------------------
         // ENTRY_HASH == hash_4_to_1(RULE_ID, STACK0, INPUT_TOKEN, 0).
         ConstraintExpr::Hash4to1 {

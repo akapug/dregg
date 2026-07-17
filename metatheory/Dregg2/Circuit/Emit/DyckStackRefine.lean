@@ -266,6 +266,10 @@ def dyckConstraints : List VmConstraint2 :=
     cg (gGate IS_RULE (gSubK (stk 0) SYM_S)),
     -- top match, term step: the stack top equals the input token
     cg (gGate IS_TERM (gSub (stk 0) INPUT_TOKEN)),
+    -- terminal-top: a term row's stack top is a TERMINAL (op or cl), never the nonterminal S.
+    -- This is the tooth that makes the parsed word DECODABLE from the trace: `decodedWord` reads a
+    -- genuine `Brk` off every term row (`DyckStackReplay`).
+    cg (gGate IS_TERM (.mul (gSubK (stk 0) SYM_OP) (gSubK (stk 0) SYM_CL))),
     -- done: stack top empty and depth zero
     cg (gGate IS_DONE (gSubK (stk 0) SYM_EMPTY)),
     cg (gGate IS_DONE (gSubK STACK_DEPTH 0)),
@@ -402,6 +406,8 @@ structure DyckRowValid (env : VmRowEnv) : Prop where
     env.loc RULE_ID = RULE_BRACKET ∨ env.loc RULE_ID = RULE_EMPTY
   ruleTopIsS : env.loc IS_RULE = 1 → env.loc (stk 0) = SYM_S
   termTopIsToken : env.loc IS_TERM = 1 → env.loc (stk 0) = env.loc INPUT_TOKEN
+  termTopTerminal : env.loc IS_TERM = 1 →
+    env.loc (stk 0) = SYM_OP ∨ env.loc (stk 0) = SYM_CL
   doneEmpty : env.loc IS_DONE = 1 → env.loc (stk 0) = SYM_EMPTY ∧ env.loc STACK_DEPTH = 0
   depthThreads : env.nxt STACK_DEPTH = env.loc DEPTH_NEXT
   bracketPush : env.loc SEL_BRACKET = 1 →
@@ -693,7 +699,8 @@ theorem dyck_sat_imp_row_valid {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {
   refine
     { kindsBoolean := ?_, kindPartition := ?_, subBoolean := ?_, subPartition := ?_,
       bracketPinned := ?_, emptyPinned := ?_, ruleMembership := ?_, ruleTopIsS := ?_,
-      termTopIsToken := ?_, doneEmpty := ?_, depthThreads := ?_, bracketPush := ?_,
+      termTopIsToken := ?_, termTopTerminal := ?_, doneEmpty := ?_, depthThreads := ?_,
+      bracketPush := ?_,
       emptyPop := ?_, termPop := ?_, doneHolds := ?_, termAdvances := ?_, nonTermHolds := ?_ }
   · exact ⟨bin_of_gate (G (by dyck_mem)) (CL _), bin_of_gate (G (by dyck_mem)) (CL _),
            bin_of_gate (G (by dyck_mem)) (CL _)⟩
@@ -738,6 +745,19 @@ theorem dyck_sat_imp_row_valid {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {
     simp only [gGate, gSub, EmittedExpr.eval] at hg
     rw [hr, one_mul] at hg
     exact lift_loc ((gate_modEq_iff (by ring)).mp hg)
+  · -- termTopTerminal: the term-top gate `IS_TERM·(STACK0−op)(STACK0−cl)` vanishes mod p; IS_TERM=1
+    -- and canonicality pin STACK0 ∈ {op, cl}. Same primality split as `ruleMembership`, one grid
+    -- over (2, 3 instead of 1, 2). This forbids a `term` row consuming the nonterminal S.
+    intro hr
+    have hg := G (g := gGate IS_TERM (.mul (gSubK (stk 0) SYM_OP) (gSubK (stk 0) SYM_CL))) (by dyck_mem)
+    simp only [gGate, gSubK, EmittedExpr.eval] at hg
+    rw [hr, one_mul] at hg
+    have hd : (2013265921 : ℤ) ∣ (e.loc (stk 0) + (-SYM_OP)) * (e.loc (stk 0) + (-SYM_CL)) :=
+      Int.modEq_zero_iff_dvd.mp hg
+    obtain ⟨hc0, hc1⟩ := CL (stk 0)
+    rcases pPrimeInt.dvd_mul.mp hd with hx | hx
+    · obtain ⟨k, hk⟩ := hx; left; simp only [SYM_OP] at hk ⊢; omega
+    · obtain ⟨k, hk⟩ := hx; right; simp only [SYM_CL] at hk ⊢; omega
   · intro hr
     exact ⟨gc (by dyck_mem) hr canon_zero, gc (by dyck_mem) hr canon_zero⟩
   · have hw := W (b := wThread STACK_DEPTH DEPTH_NEXT) (by dyck_mem)
@@ -822,9 +842,10 @@ macro "emit_mem" : tactic =>
 set_option maxRecDepth 100000 in
 set_option maxHeartbeats 4000000 in
 /-- **`dyckDesc_constraints_subset`** — every parse-semantic constraint of `dyckDesc` is a constraint
-of the byte-pinned `DyckStackEmit.dyckParseDesc`. Machine-checked over all 63 constraints; the ones
-`dyckParseDesc` carries that `dyckDesc` does not are exactly the hash-chain carrier it transcribes
-out (the two lookups, the `ACC` copy-forward, the seed pin, the route-commitment PI). -/
+of the byte-pinned `DyckStackEmit.dyckParseDesc`. Machine-checked over the whole `dyckDesc`
+constraint list (`fin_cases <;> emit_mem`); the ones `dyckParseDesc` carries that `dyckDesc` does not
+are exactly the hash-chain carrier the parse-projection transcribes out (the two lookups, the `ACC`
+copy-forward, the seed pin, the route-commitment PI) — parse semantics are the shared subset. -/
 theorem dyckDesc_constraints_subset :
     ∀ c ∈ dyckDesc.constraints, c ∈ DyckStackEmit.dyckParseDesc.constraints := by
   intro c hc

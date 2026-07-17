@@ -202,6 +202,82 @@ fn find_occupancy_nonempty_below(desc: &CircuitDescriptor, cell: usize) -> &Cons
         })
 }
 
+/// Find the **terminal-top gate** `Gated{IS_TERM, Polynomial}` whose polynomial is the quadratic
+/// `(STACK0−op)(STACK0−cl)` — recognised as the only `IS_TERM`-gated `Polynomial` all of whose
+/// terms reference only `STACK0`, with `STACK0` appearing squared in its leading monomial. This
+/// excludes the `IS_TERM`-gated depth delta (which references `DEPTH_NEXT`/`STACK_DEPTH`). Panics if
+/// the tooth was never wired — the state before the tape↔word correspondence was decodable.
+fn find_terminal_top(desc: &CircuitDescriptor) -> &ConstraintExpr {
+    desc.constraints
+        .iter()
+        .find(|c| match c {
+            ConstraintExpr::Gated {
+                selector_col,
+                inner,
+            } if *selector_col == col::IS_TERM => match &**inner {
+                ConstraintExpr::Polynomial { terms } => {
+                    terms
+                        .iter()
+                        .all(|t| t.col_indices.iter().all(|&i| i == col::STACK0))
+                        && terms.iter().any(|t| {
+                            t.col_indices.iter().filter(|&&i| i == col::STACK0).count() == 2
+                        })
+                }
+                _ => false,
+            },
+            _ => false,
+        })
+        .unwrap_or_else(|| panic!("the descriptor must contain the IS_TERM terminal-top gate"))
+}
+
+// ============================================================================
+// The terminal-top canary: a term row consumes a TERMINAL, never the nonterminal S
+// ============================================================================
+
+/// Canary — **a term row claims to consume the nonterminal `S`**. The `term` top-match
+/// (`STACK0 == INPUT_TOKEN`) only ties the stack top to the tape symbol; nothing in the pre-tooth
+/// descriptor forbade the consumed top being `S` rather than a terminal. That was the hole that
+/// blocked DECODING the parsed word from the trace: a `term` row consuming `S` decodes to no `Brk`.
+///
+/// The reject is ISOLATED to the tooth: the single `IS_TERM·(STACK0−op)(STACK0−cl)` gate goes from
+/// zero (honest, `STACK0 = op`) to nonzero (tampered, `STACK0 = S`), so it cannot be credited to a
+/// neighbouring tooth.
+#[test]
+fn tamper_term_consumes_nonterminal_rejects() {
+    let desc = dyck_parse_descriptor(NAME);
+    let (trace, pi_vals) = build_brackets_witness();
+    assert!(
+        dyck_satisfied(&desc, &trace, &pi_vals),
+        "the honest '[]' parse must satisfy the descriptor"
+    );
+
+    let gate = find_terminal_top(&desc);
+    // Row 1 is `term '['`: its stack top is the terminal `op`, on the terminal grid.
+    assert_eq!(
+        gate.evaluate(&trace[ROW_TERM_OPEN], &trace[ROW_TERM_OPEN + 1], &pi_vals),
+        BabyBear::ZERO,
+        "an honest term row consumes a terminal (op)"
+    );
+
+    // Tamper: rewrite the term row's stack top as the NONTERMINAL S.
+    let mut tampered = trace.clone();
+    tampered[ROW_TERM_OPEN][col::STACK0] = BabyBear::new(dregg_circuit::dsl::dyck_stack::SYM_S);
+
+    assert_ne!(
+        gate.evaluate(
+            &tampered[ROW_TERM_OPEN],
+            &tampered[ROW_TERM_OPEN + 1],
+            &pi_vals
+        ),
+        BabyBear::ZERO,
+        "THE TOOTH: a term row consuming the nonterminal S is off the terminal grid"
+    );
+    assert!(
+        !dyck_satisfied(&desc, &tampered, &pi_vals),
+        "a term row consuming the nonterminal S must REJECT"
+    );
+}
+
 // ============================================================================
 // The depth↔occupancy canary: STACK_DEPTH must count the non-EMPTY prefix
 // ============================================================================

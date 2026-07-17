@@ -728,6 +728,235 @@ theorem witTrace_replays_via_general :
             | exact ⟨cl, by decide, by decide⟩)
     (by decide)
 
+/-! ## §8 — THE UNCONDITIONAL SOUNDNESS THEOREM: the parsed word is DEFINED FROM the trace.
+
+`parse_sat_imp_replay` / `_emit` take `hword` — the tape↔word correspondence — as a HYPOTHESIS: that
+the circuit's `INPUT` columns spell an externally-supplied `word`, position by position, with terminal
+tops. That conjunct is IRREDUCIBLE while `word` is a free `∀`-parameter, because a parser-soundness
+statement should DERIVE the word the circuit parsed, not assume it — the circuit carries the tape in
+COLUMNS, not the abstract word.
+
+Here we do the standard parser-soundness move: DEFINE the word FROM the trace. `decodedWord t n`
+reads the consumed terminals off the trace's `term` rows, in order, and `hword` becomes
+provable-by-construction:
+
+* its **tape-content** half (`STACK0 = symId x`) holds because `decodedWord` reads exactly those
+  tokens, and the new terminal-top tooth (`DyckRowValid.termTopTerminal`) forces every `term` top to
+  be a genuine terminal (`op`/`cl`) that decodes to a `Brk` — never the nonterminal `S`;
+* its **position-advance** half holds from the deployed `INPUT_POS` advance/hold gates: `INPUT_POS`
+  starts at `0` (first-row boundary), advances by one on a `term` (`termAdvances`) and holds otherwise
+  (`nonTermHolds`), so `INPUT_POS[i]` counts exactly the `term` rows before `i` — the index of the
+  `i`-th token in `decodedWord`. The advance is a field congruence (`INPUT_POS` is not range-pinned by
+  a gate), lifted to a ℤ equation through the deployed range-check envelope (`DyckCanon` makes every
+  cell canonical) plus a mild `n < p` bound on the run length.
+
+What REMAINS is only the genuine PI-boundary interface a parser-soundness theorem legitimately takes
+as input — the initial symbol is `S` (`hpi`), the run reached an accepting `done` halt (`hdone`/
+`hlive`) — plus the deployed range envelope (`hcanon`) and the run-length bound (`hnp`, like `D`
+bounds nesting). NONE of these is tape-content-shaped: `hword` is gone. -/
+
+/-- Decode a `term` row's stack top to its `Brk` terminal. On a `term` row the terminal-top tooth
+pins `STACK0 ∈ {op, cl}`, so this reads the consumed token; off a `term` row it is junk (never
+consulted). -/
+def tokenBrk (a : Assignment) : Brk :=
+  if a (stk 0) = SYM_OP then Brk.op else Brk.cl
+
+/-- The token a row contributes to the decoded word: the `term` rows' consumed terminal read off the
+stack top, nothing on `rule`/`done` rows. -/
+def rowTok (t : VmTrace) (i : Nat) : Option Brk :=
+  if (envAt t i).loc IS_TERM = 1 then some (tokenBrk (envAt t i).loc) else none
+
+/-- The decoded word read off the `term` rows in the index window `[k, k+len)`, in order. -/
+def decodeWordSeg (t : VmTrace) (k len : Nat) : List Brk :=
+  (List.range' k len).filterMap (rowTok t)
+
+/-- **`decodedWord t n`** — the word the trace PARSES, for a run halting at row `n`: the consumed
+terminals of the `term` rows in `[0, n)`, read in order off the stack tops. This is what the
+unconditional soundness theorem's replay accepts — DEFINED from the trace, not supplied. -/
+def decodedWord (t : VmTrace) (n : Nat) : List Brk := decodeWordSeg t 0 n
+
+/-! ### §8.1 — Pure list bookkeeping on the segment decode. -/
+
+/-- Splitting the decode window: rows `[0, n)` = rows `[0, i)` followed by rows `[i, n)`. -/
+theorem decodeWordSeg_split (t : VmTrace) (i n : Nat) (hi : i ≤ n) :
+    decodeWordSeg t 0 n = decodeWordSeg t 0 i ++ decodeWordSeg t i (n - i) := by
+  unfold decodeWordSeg
+  rw [← List.filterMap_append]
+  congr 1
+  conv_lhs => rw [show n = i + (n - i) from by omega]
+  rw [← List.range'_append_1, Nat.zero_add]
+
+/-- Dropping the `[0, i)` prefix of the full decode leaves the `[i, n)` tail. -/
+theorem decodeWordSeg_drop (t : VmTrace) (i n : Nat) (hi : i ≤ n) :
+    (decodeWordSeg t 0 n).drop (decodeWordSeg t 0 i).length = decodeWordSeg t i (n - i) := by
+  conv_lhs => rw [decodeWordSeg_split t i n hi]
+  exact List.drop_left
+
+/-- The decode of `[0, i)` has at most `i` tokens (each row contributes ≤ 1). -/
+theorem decodeWordSeg_len_le (t : VmTrace) (i : Nat) :
+    (decodeWordSeg t 0 i).length ≤ i := by
+  unfold decodeWordSeg
+  have h := List.length_filterMap_le (rowTok t) (List.range' 0 i)
+  rwa [List.length_range'] at h
+
+/-- One more row extends the decode by exactly the token that row contributes (`1` on a `term`,
+`0` otherwise). -/
+theorem decodeWordSeg_len_succ (t : VmTrace) (i : Nat) :
+    (decodeWordSeg t 0 (i + 1)).length
+      = (decodeWordSeg t 0 i).length + (rowTok t i).toList.length := by
+  rw [decodeWordSeg_split t i (i + 1) (Nat.le_succ i), List.length_append]
+  congr 1
+  have h1 : (i + 1) - i = 1 := by omega
+  rw [h1]
+  unfold decodeWordSeg
+  rw [(rfl : List.range' i 1 = [i])]
+  cases h : rowTok t i <;> simp [h]
+
+/-- On a `term` row, the decode of `[i, n)` peels its head: the consumed terminal, then the decode of
+`[i+1, n)`. -/
+theorem decodeWordSeg_peel (t : VmTrace) (i n : Nat) (hin : i < n)
+    (hterm : (envAt t i).loc IS_TERM = 1) :
+    decodeWordSeg t i (n - i)
+      = tokenBrk (envAt t i).loc :: decodeWordSeg t (i + 1) (n - (i + 1)) := by
+  have hni : n - i = (n - (i + 1)) + 1 := by omega
+  have hrt : rowTok t i = some (tokenBrk (envAt t i).loc) := by
+    simp only [rowTok, if_pos hterm]
+  unfold decodeWordSeg
+  rw [hni, List.range'_succ]
+  simp only [List.filterMap_cons_some hrt]
+
+/-! ### §8.2 — `INPUT_POS[i]` counts the `term` rows before `i`. -/
+
+/-- **`input_pos_congr` — the `INPUT_POS` counting invariant, mod `p`.** On a satisfying, canonical
+trace, `INPUT_POS[i]` is congruent to the number of `term` rows before `i` (the length of
+`decodeWordSeg t 0 i`). By induction along the trace: `INPUT_POS` starts at `0`, advances by one on a
+`term` (`termAdvances`, a field congruence), and holds on every other step (`nonTermHolds`, a ℤ
+equation) — exactly mirroring how the segment length grows by `1` on a `term` row and `0` otherwise. -/
+theorem input_pos_congr {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
+    {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash dyckDesc minit mfin maddrs t) (hcanon : DyckCanon t)
+    (hpos0 : (envAt t 0).loc INPUT_POS = 0) :
+    ∀ i, i < t.rows.length →
+      (envAt t i).loc INPUT_POS ≡ ((decodeWordSeg t 0 i).length : ℤ) [ZMOD 2013265921] := by
+  intro i
+  induction i with
+  | zero =>
+    intro _
+    rw [hpos0]
+    simp [decodeWordSeg]
+  | succ i ih =>
+    intro hi
+    have hcong := ih (by omega)
+    have rv : DyckRowValid (envAt t i) := dyck_sat_imp_row_valid hsat hcanon i (by omega)
+    have hlensucc := decodeWordSeg_len_succ t i
+    have henv : (envAt t i).nxt INPUT_POS = (envAt t (i + 1)).loc INPUT_POS := rfl
+    rcases rv.kindsBoolean.2.1 with hT | hT
+    · -- IS_TERM = 0: the tape holds, the segment length is unchanged.
+      have hhold := rv.nonTermHolds hT
+      rw [henv] at hhold
+      have hrt : (rowTok t i).toList.length = 0 := by
+        unfold rowTok; rw [if_neg (by rw [hT]; decide)]; rfl
+      rw [hlensucc, hrt, Nat.add_zero, hhold]
+      exact hcong
+    · -- IS_TERM = 1: the tape advances by one, the segment length grows by one.
+      have hadv := rv.termAdvances hT
+      rw [henv] at hadv
+      have hrt : (rowTok t i).toList.length = 1 := by
+        unfold rowTok; rw [if_pos hT]; rfl
+      rw [hlensucc, hrt]
+      push_cast
+      exact hadv.trans (hcong.add_right 1)
+
+/-! ### §8.3 — THE UNCONDITIONAL THEOREMS. -/
+
+/-- **`parse_sat_imp_replay_unconditional` — THE HEADLINE, on the projection `dyckDesc`.** For ANY
+trace `t` accepted by the transcribed Dyck descriptor, canonical (`DyckCanon`), whose public initial
+symbol is `S`, whose run halts at an accepting `done` row `n` with no earlier halt, and whose halt
+index is below the field size (`n < p`, the run-length bound) — the leftmost pushdown replay of the
+reconstructed certificate ACCEPTS `decodedWord t n`, the word READ OFF the trace. There is NO `hword`:
+the tape↔word correspondence is discharged by construction (`decodedWord` reads exactly the term
+tokens; `INPUT_POS` counts them via `input_pos_congr`; `termTopTerminal` makes each decodable). -/
+theorem parse_sat_imp_replay_unconditional {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
+    {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash dyckDesc minit mfin maddrs t) (hcanon : DyckCanon t)
+    (n : Nat) (hn : n + 1 < t.rows.length) (hnp : n < 2013265921)
+    (hpi : t.pub PI_INITIAL = SYM_S)
+    (hdone : (envAt t n).loc IS_DONE = 1)
+    (hlive : ∀ i, i < n → (envAt t i).loc IS_DONE = 0) :
+    ReplayAccepts dyck (rulesOf (decodeRun (decodedWord t n) t (n + 1))) (decodedWord t n) := by
+  have hlen : 0 < t.rows.length := by omega
+  have hpos0 : (envAt t 0).loc INPUT_POS = 0 := by
+    have hg := first_boundary hsat hlen (b := gSubK INPUT_POS 0) (by dyck_mem)
+    simp only [gSubK, EmittedExpr.eval] at hg
+    exact eq_of_modEq_canon (canon_loc hcanon 0 INPUT_POS) canon_zero
+      ((gate_modEq_iff (by ring)).mp hg)
+  -- `INPUT_POS[i]` IS the term-count before `i`, as a ℤ equation (canonical lift of the congruence).
+  have hpos : ∀ i, i ≤ n → (envAt t i).loc INPUT_POS = ((decodeWordSeg t 0 i).length : ℤ) := by
+    intro i hi
+    have hb : (decodeWordSeg t 0 i).length < 2013265921 := by
+      have := decodeWordSeg_len_le t i; omega
+    exact eq_of_modEq_canon (canon_loc hcanon i INPUT_POS)
+      ⟨Int.natCast_nonneg _, by exact_mod_cast hb⟩
+      (input_pos_congr hsat hcanon hpos0 i (by omega))
+  -- `hword`, discharged by construction.
+  have hword : ∀ i, i < n → (envAt t i).loc IS_TERM = 1 → ∃ x : Brk,
+      (envAt t i).loc (stk 0) = symId x ∧
+      (decodedWord t n).drop ((envAt t i).loc INPUT_POS).toNat
+        = x :: (decodedWord t n).drop ((envAt t (i + 1)).loc INPUT_POS).toNat := by
+    intro i hin hterm
+    have rv : DyckRowValid (envAt t i) := dyck_sat_imp_row_valid hsat hcanon i (by omega)
+    refine ⟨tokenBrk (envAt t i).loc, ?_, ?_⟩
+    · -- STACK0 = symId (the decoded terminal): from the terminal-top tooth.
+      rcases rv.termTopTerminal hterm with h | h
+      · have ht : tokenBrk (envAt t i).loc = op := by simp only [tokenBrk, if_pos h]
+        rw [ht]; exact h
+      · have hne : ¬ (envAt t i).loc (stk 0) = SYM_OP := by rw [h]; decide
+        have ht : tokenBrk (envAt t i).loc = cl := by simp only [tokenBrk, if_neg hne]
+        rw [ht]; exact h
+    · -- the position-advance: both drops resolve to segment decodes, and a `term` row peels the head.
+      rw [hpos i (by omega), hpos (i + 1) (by omega), Int.toNat_natCast, Int.toNat_natCast]
+      simp only [decodedWord]
+      rw [decodeWordSeg_drop t i n (by omega), decodeWordSeg_drop t (i + 1) n (by omega)]
+      exact decodeWordSeg_peel t i n hin hterm
+  -- `hfin_inp`: at the halt row `INPUT_POS` equals the whole decoded length, so the tape is consumed.
+  have hfin_inp : (decodedWord t n).drop ((envAt t n).loc INPUT_POS).toNat = [] := by
+    rw [hpos n (le_refl n), Int.toNat_natCast]
+    simp only [decodedWord]
+    exact List.drop_length
+  exact parse_sat_imp_replay (decodedWord t n) hsat hcanon n hn hpi hdone hlive hword hfin_inp
+
+/-- **`parse_sat_imp_replay_emit_unconditional` — the unconditional theorem keyed on the BYTE-PINNED
+descriptor.** `parse_sat_imp_replay_unconditional` composed with the projection
+`sat_emit_imp_sat_dyck`: a trace satisfying the deployed, emit-authored `DyckStackEmit.dyckParseDesc`
+(whose wire form the `#guard` byte-pins) has its READ-OFF word accepted by the Dyck replay — with no
+tape↔word hypothesis anywhere. This is the whole parse-as-derivation chain, unconditional, about the
+same object the byte-pin fixes. -/
+theorem parse_sat_imp_replay_emit_unconditional {hash : List ℤ → ℤ} {minit : ℤ → ℤ}
+    {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash DyckStackEmit.dyckParseDesc minit mfin maddrs t) (hcanon : DyckCanon t)
+    (n : Nat) (hn : n + 1 < t.rows.length) (hnp : n < 2013265921)
+    (hpi : t.pub PI_INITIAL = SYM_S)
+    (hdone : (envAt t n).loc IS_DONE = 1)
+    (hlive : ∀ i, i < n → (envAt t i).loc IS_DONE = 0) :
+    ReplayAccepts dyck (rulesOf (decodeRun (decodedWord t n) t (n + 1))) (decodedWord t n) :=
+  parse_sat_imp_replay_unconditional (sat_emit_imp_sat_dyck hsat) hcanon n hn hnp hpi hdone hlive
+
+/-! ### §8.4 — Non-vacuity: the unconditional theorem FIRES on the shipped witness, and the word it
+reads off the trace IS the bracket pair. -/
+
+/-- The word read off the honest `"[]"` witness IS `[op, cl]` — the decode is not vacuous. -/
+theorem decodedWord_witTrace : decodedWord witTrace 4 = [op, cl] := by decide
+
+/-- **`witTrace_replays_unconditional` — the unconditional theorem fired on the shipped witness.**
+Every hypothesis (initial symbol `S`, the accepting halt at row 4, no earlier halt, `4 < p`) is
+discharged by computation; the word is DEFINED from the trace, and by `decodedWord_witTrace` it is the
+real bracket pair. -/
+theorem witTrace_replays_unconditional :
+    ReplayAccepts dyck (rulesOf (decodeRun (decodedWord witTrace 4) witTrace 5))
+      (decodedWord witTrace 4) :=
+  parse_sat_imp_replay_unconditional witTrace_satisfies witTrace_canon 4 (by decide) (by decide)
+    (by decide) (by decide) (by decide)
+
 /-! ## §6 — Non-vacuity guards + axiom hygiene. -/
 
 -- The decoded run has all five rows (nothing collapsed).
@@ -751,6 +980,14 @@ theorem witTrace_replays_via_general :
 #assert_axioms mrun_from
 #assert_axioms parse_sat_imp_replay
 #assert_axioms parse_sat_imp_replay_emit
+#assert_axioms decodeWordSeg_split
+#assert_axioms decodeWordSeg_drop
+#assert_axioms decodeWordSeg_len_succ
+#assert_axioms decodeWordSeg_peel
+#assert_axioms input_pos_congr
+#assert_axioms parse_sat_imp_replay_unconditional
+#assert_axioms parse_sat_imp_replay_emit_unconditional
+#assert_axioms witTrace_replays_unconditional
 #assert_axioms witTrace_replays_via_general
 #assert_axioms decode_witTrace
 #assert_axioms witTrace_replays
