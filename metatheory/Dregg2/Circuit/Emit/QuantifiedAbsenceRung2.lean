@@ -167,6 +167,23 @@ structure HonestAbsence (elem alpha accAll : Ext) where
   /-- **Accumulator-binding carrier (R1):** the public accumulator IS the characteristic evaluation. -/
   accHonest : accAll = charEval S alpha
 
+/-! ## §2c — field-nonzero of a BabyBear⁴ element (the faithful acceptance side-condition).
+
+Under the field-faithful denotation Rung 1's certificate binds only mod `p`, so the honest remainder
+is recovered only in 𝔽_p⁴: the acceptance condition `v ≠ 0` is the FIELD non-zero `¬ EzeroMod v`
+(the deployed `verify` checks `v ≠ 0` as a field element — exactly what the emit-fix `v_inv` gate
+would force). `EzeroMod` is `v = 0` in 𝔽_p⁴ (every limb `≡ 0 [ZMOD p]`). -/
+@[reducible] def EzeroMod (v : Ext) : Prop :=
+  v.1 ≡ 0 [ZMOD 2013265921] ∧ v.2.1 ≡ 0 [ZMOD 2013265921]
+  ∧ v.2.2.1 ≡ 0 [ZMOD 2013265921] ∧ v.2.2.2 ≡ 0 [ZMOD 2013265921]
+
+/-- Cancel a shared ℤ summand under a mod-`p` congruence. -/
+theorem modEq_of_add_cancel {a b c : ℤ} (h : a + b ≡ a + c [ZMOD 2013265921]) :
+    b ≡ c [ZMOD 2013265921] := by
+  rw [Int.modEq_iff_dvd] at h ⊢
+  have he : (a + c) - (a + b) = c - b := by ring
+  rwa [he] at h
+
 /-! ## §3 — THE RUNG-2 DISCHARGE. -/
 
 /-- **`quotientRel_absent` — the core discharge (division certificate ⟹ genuine absence).** Given the
@@ -184,22 +201,32 @@ theorem quotientRel_absent
     (hrel : QuotientAbsenceRel elem w v accAll alpha)
     (g : HonestAbsence elem alpha accAll)
     (hqb : w = g.qPoly alpha)
-    (hv : v ≠ ((0 : ℤ), (0 : ℤ), (0 : ℤ), (0 : ℤ))) :
+    (hv : ¬ EzeroMod v) :
     elem ∉ g.S := by
-  have hrel' : extAdd (extMul w (extSub alpha elem)) v = accAll := hrel
-  -- The anchor's honest certificate at `alpha` (accumulator-binding then remainder identity).
-  -- Uses `.trans` rather than `rw` because `g` is indexed by `accAll` (rewriting `accAll` would
-  -- leave `g.qPoly`/`g.S` mentioning a stale index — an ill-typed motive).
-  have ha : accAll
-      = extAdd (extMul (g.qPoly alpha) (extSub alpha elem)) (charEval g.S elem) :=
-    g.accHonest.trans (g.polyId alpha)
-  have h1 : extAdd (extMul w (extSub alpha elem)) v
-      = extAdd (extMul (g.qPoly alpha) (extSub alpha elem)) (charEval g.S elem) :=
-    hrel'.trans ha
-  rw [hqb] at h1
-  have hv2 : v = charEval g.S elem := extAdd_left_cancel h1
-  have hne : charEval g.S elem ≠ ((0 : ℤ), (0 : ℤ), (0 : ℤ), (0 : ℤ)) := by rw [← hv2]; exact hv
-  exact mt mem_charEval_zero hne
+  intro hmem
+  -- a member's characteristic evaluation vanishes (exactly, over `ℤ[X]/(X⁴−11)`).
+  have hz : charEval g.S elem = ((0 : ℤ), (0 : ℤ), (0 : ℤ), (0 : ℤ)) := mem_charEval_zero hmem
+  -- the anchor's honest certificate at `alpha`, with `w = qPoly α` and the vanishing remainder folded
+  -- in: `accAll = w ⊗ (α ⊖ elem) ⊕ 0` (exact ℤ, from the honest polynomial identity).
+  have ha : accAll = extAdd (extMul w (extSub alpha elem)) (charEval g.S elem) := by
+    rw [hqb]; exact g.accHonest.trans (g.polyId alpha)
+  rw [hz] at ha
+  -- Rung 1's certificate binds only mod `p`: `w ⊗ (α⊖elem) ⊕ v ≡ accAll` per limb. Cancelling the
+  -- shared `w ⊗ (α⊖elem)` summand (exact, via `ha`) forces `v ≡ 0` per limb — i.e. `EzeroMod v`,
+  -- contradicting the field-nonzero acceptance side-condition. So no member can satisfy the certificate.
+  apply hv
+  obtain ⟨e0, e1, e2, e3⟩ := elem
+  obtain ⟨w0, w1, w2, w3⟩ := w
+  obtain ⟨al0, al1, al2, al3⟩ := alpha
+  obtain ⟨v0, v1, v2, v3⟩ := v
+  obtain ⟨ac0, ac1, ac2, ac3⟩ := accAll
+  simp only [QuotientAbsenceRel, extAdd, extMul, extSub] at hrel
+  simp only [extAdd, extMul, extSub, Prod.mk.injEq] at ha
+  obtain ⟨hr0, hr1, hr2, hr3⟩ := hrel
+  obtain ⟨ha0, ha1, ha2, ha3⟩ := ha
+  rw [ha0] at hr0; rw [ha1] at hr1; rw [ha2] at hr2; rw [ha3] at hr3
+  exact ⟨modEq_of_add_cancel hr0, modEq_of_add_cancel hr1,
+         modEq_of_add_cancel hr2, modEq_of_add_cancel hr3⟩
 
 /-- **`quantifiedAbsence_rung2` — the RUNG-2 no-forgery theorem (from `Satisfied2`).** Any multi-table
 witness that `Satisfied2`s the emitted `quantifiedAbsenceDesc` (on a ≥2-row trace, so row 0 is active),
@@ -220,8 +247,8 @@ theorem quantifiedAbsence_rung2
     (hqb : ((envAt t 0).loc Q0, (envAt t 0).loc Q1, (envAt t 0).loc Q2, (envAt t 0).loc Q3)
             = g.qPoly ((envAt t 0).pub (PI_ALPHA0 + 0), (envAt t 0).pub (PI_ALPHA0 + 1),
                        (envAt t 0).pub (PI_ALPHA0 + 2), (envAt t 0).pub (PI_ALPHA0 + 3)))
-    (hv : ((envAt t 0).loc V0, (envAt t 0).loc V1, (envAt t 0).loc V2, (envAt t 0).loc V3)
-            ≠ ((0 : ℤ), (0 : ℤ), (0 : ℤ), (0 : ℤ))) :
+    (hv : ¬ EzeroMod ((envAt t 0).loc V0, (envAt t 0).loc V1,
+            (envAt t 0).loc V2, (envAt t 0).loc V3)) :
     (((envAt t 0).loc E0, (envAt t 0).loc E1, (envAt t 0).loc E2, (envAt t 0).loc E3) : Ext) ∉ g.S :=
   quotientRel_absent (quantifiedAbsence_refines hsat h2) g hqb hv
 
