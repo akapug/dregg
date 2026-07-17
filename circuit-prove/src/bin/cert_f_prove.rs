@@ -37,7 +37,8 @@ use std::io::Read;
 use std::time::Instant;
 
 use dregg_circuit_prove::cert_f_air::{
-    CertFWitness, VALUE_BITS, from_solution_json, prove_cert_f, verify_cert_f,
+    CertFWitness, VALUE_BITS, from_solution_json, from_solution_json_with_epsilon, prove_cert_f,
+    verify_cert_f,
 };
 
 /// The trace width the descriptor commits (public — a function of the program shape only).
@@ -85,8 +86,21 @@ fn main() {
         .filter(|&s: &i64| s >= 1)
         .unwrap_or(1);
 
+    // The PRESCRIPTIVE accuracy budget (the registered program's ε, in the scaled integer
+    // grid). When set, the bridged certificate carries this ε — matching an ε-budget
+    // registration — and the bridge refuses a solve whose achieved gap exceeds it. Unset,
+    // the descriptive form is used (ε := achieved gap; only matches a registration when
+    // exactly tight).
+    let epsilon: Option<i64> = std::env::var("CERT_F_EPSILON")
+        .ok()
+        .and_then(|s| s.parse().ok());
+
     // [1] bridge the solver's f64 certificate into the integer STARK witness.
-    let cert = match from_solution_json(&buf, scale) {
+    let bridged = match epsilon {
+        Some(eps) => from_solution_json_with_epsilon(&buf, scale, eps),
+        None => from_solution_json(&buf, scale),
+    };
+    let cert = match bridged {
         Ok(c) => c,
         Err(e) => emit_err(&format!("cert bridge failed: {e}")),
     };

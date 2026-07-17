@@ -24,8 +24,10 @@
 //! [`cert_f_descriptor`] lowers exactly those rows to an
 //! [`EffectVmDescriptor2`] over the witness columns `(f, π, s)`; the PUBLIC program
 //! `(A, w, c, ε)` rides as descriptor constants. Because those constants are
-//! algebra, each public program must be emitted and proved in Lean; Rust refuses
-//! an unregistered program rather than specializing constraints at runtime.
+//! algebra, each public program must be emitted from Lean and byte-pinned; Rust
+//! refuses an unregistered program rather than specializing constraints at runtime.
+//! (The emit-soundness proof `certFDescriptor_emit_sound` is GENERIC over the
+//! program, so registration costs emission + pinning only — never a new proof.)
 //! [`prove_cert_f`] proves the AIR in
 //! the production IR-v2 STARK ([`prove_vm_descriptor2`], BabyBear + FRI); the
 //! witness `(f, π, s)` — the private flows/allocations — lives ONLY in the trace
@@ -292,30 +294,76 @@ fn fe(x: i64) -> BabyBear {
 }
 
 /// Exact artifact emitted from `Market.CertFDescriptor.certFDescriptor` and
-/// byte-pinned in Lean. The registered public program is the proved unit ring-3.
+/// byte-pinned in Lean (`CERT_F_RING3_GOLDEN`). The proved unit ring-3.
 pub const CERT_F_RING3_DESCRIPTOR_JSON: &str =
     include_str!("../../circuit/descriptors/dregg-cert-f-ir2.json");
 
-fn is_registered_ring3_program(cert: &CertFWitness) -> bool {
-    cert.n_nodes == 3
-        && cert.edges == [(0, 1), (1, 2), (2, 0)]
-        && cert.w == [1, 1, 1]
-        && cert.c == [1, 1, 1]
-        && cert.epsilon == 0
+/// Exact artifact emitted from `Market.CertFDescriptor.certFMarket4Descriptor` and byte-pinned in
+/// Lean (`CERT_F_MARKET4_GOLDEN`) — the first REAL market shape past the ring-3 toy: the
+/// 3-asset / 4-order DrEX trade-circulation batch (`fhegg_clear`'s nodes=assets, edge-per-order
+/// mapping) at fixed-point scale 100 with a PRESCRIPTIVE accuracy budget `ε = 2000`.
+pub const CERT_F_MARKET4_DESCRIPTOR_JSON: &str =
+    include_str!("../../circuit/descriptors/dregg-cert-f-market4-ir2.json");
+
+/// One registered Cert-F public program: the `(A, w, c, ε)` constants a Lean-emitted,
+/// byte-pinned descriptor bakes in. `epsilon` is PRESCRIPTIVE — the accuracy budget the
+/// registered program grants — not the solve's achieved gap.
+struct RegisteredCertFProgram {
+    n_nodes: usize,
+    edges: &'static [(u32, u32)],
+    w: &'static [i64],
+    c: &'static [i64],
+    epsilon: i64,
+    descriptor_json: &'static str,
 }
 
-/// Resolve a Cert-F public program to a proved Lean-emitted artifact. New
-/// `(A,w,c,epsilon)` programs must first be added to `CertFDescriptor.lean`,
-/// proved, emitted, byte-pinned, and registered here.
+/// The Cert-F program registry. Since `Market.CertFDescriptor.certFDescriptor_emit_sound` is
+/// GENERIC over the public program, registering a new `(A,w,c,ε)` costs only emission
+/// (`emitVmJson2 (certFDescriptorOf p)`), a byte pin in `Market.CertFGolden`, a committed
+/// artifact under `circuit/descriptors/`, and an entry here — NO new proof.
+const CERT_F_REGISTRY: &[RegisteredCertFProgram] = &[
+    RegisteredCertFProgram {
+        n_nodes: 3,
+        edges: &[(0, 1), (1, 2), (2, 0)],
+        w: &[1, 1, 1],
+        c: &[1, 1, 1],
+        epsilon: 0,
+        descriptor_json: CERT_F_RING3_DESCRIPTOR_JSON,
+    },
+    RegisteredCertFProgram {
+        n_nodes: 3,
+        edges: &[(0, 1), (1, 2), (2, 0), (1, 0)],
+        w: &[100, 100, 100, 300],
+        c: &[500, 500, 500, 300],
+        epsilon: 2000,
+        descriptor_json: CERT_F_MARKET4_DESCRIPTOR_JSON,
+    },
+];
+
+fn registered_program(cert: &CertFWitness) -> Option<&'static RegisteredCertFProgram> {
+    CERT_F_REGISTRY.iter().find(|p| {
+        p.n_nodes == cert.n_nodes
+            && p.edges == cert.edges.as_slice()
+            && p.w == cert.w.as_slice()
+            && p.c == cert.c.as_slice()
+            && p.epsilon == cert.epsilon
+    })
+}
+
+/// Resolve a Cert-F public program to a Lean-emitted, byte-pinned artifact. New
+/// `(A,w,c,epsilon)` programs must first be emitted from `CertFDescriptor.lean`
+/// (`certFDescriptorOf p`), byte-pinned, committed, and registered here — the
+/// emit-soundness proof already covers them generically.
 pub fn try_cert_f_descriptor(cert: &CertFWitness) -> Result<EffectVmDescriptor2, String> {
-    if !is_registered_ring3_program(cert) {
+    let Some(prog) = registered_program(cert) else {
         return Err(
-            "Cert-F public program is not registered as a proved Lean-emitted descriptor; \
-             emit and prove CertFDescriptorOf(program) before proving it"
+            "Cert-F public program is not registered as a Lean-emitted descriptor; \
+             emit certFDescriptorOf(program), byte-pin, and register it before proving \
+             (no new proof needed: certFDescriptor_emit_sound is generic over the program)"
                 .into(),
         );
-    }
-    parse_vm_descriptor2(CERT_F_RING3_DESCRIPTOR_JSON)
+    };
+    parse_vm_descriptor2(prog.descriptor_json)
         .map_err(|e| format!("Lean-emitted Cert-F descriptor failed to parse: {e}"))
 }
 
@@ -411,6 +459,25 @@ pub fn ring3_cert() -> CertFWitness {
     }
 }
 
+/// **The market4 worked certificate** — the exact optimum of the REGISTERED 3-asset / 4-order
+/// DrEX batch program (`Market.CertFDescriptor.market4Prog`): nodes = assets, one edge per order
+/// `(wantAsset → offerAsset)` (`fhegg_clear`'s mapping), at fixed-point scale 100 with the
+/// prescriptive budget `ε = 2000`. Unique optimum `f = (500, 200, 200, 300)` (ring at 200 + the
+/// priority-3 bilateral leg at its 300 cap), dual `π = (200, 0, 100)`, `s = (w − Aᵀπ)₊ =
+/// (300, 0, 0, 100)`, tight `gap = 0`, cleared volume `wᵀf = 180000`.
+pub fn market4_cert() -> CertFWitness {
+    CertFWitness {
+        n_nodes: 3,
+        edges: vec![(0, 1), (1, 2), (2, 0), (1, 0)],
+        w: vec![100, 100, 100, 300],
+        c: vec![500, 500, 500, 300],
+        f: vec![500, 200, 200, 300],
+        pi: vec![200, 0, 100],
+        s: vec![300, 0, 0, 100],
+        epsilon: 2000,
+    }
+}
+
 /// A larger worked certificate: a single directed `n`-cycle, integer caps `cap`,
 /// unit weights, pushing `cap` around the whole cycle. Optimum `f_e = cap`, dual
 /// `π = 0`, `s = w = 1`, `gap = 0` — a tight certificate at any `n`, `cap`.
@@ -428,15 +495,50 @@ pub fn cycle_cert(n: usize, cap: i64) -> CertFWitness {
     }
 }
 
-/// **The solver bridge** — build an integer Cert-F certificate from a fhegg-solver
-/// `CertF` JSON emission (the f64 wire format of `fhegg-solver/src/cert.rs`) by
-/// FIXED-POINT scaling. The solver's `(f, π)` (found by the untrusted PDHG search) are
-/// scaled by `scale` and rounded; `s` is re-derived as `(scale·w − Aᵀ(scale·π))₊` so
-/// `s ≥ 0` and dual feasibility hold in the integer grid by construction, and `ε` is
-/// set to the resulting integer gap so the certificate is Cert-F-valid at that
-/// fixed-point resolution. The check `check()` must pass before this is proven — the
-/// bridge asserts nothing it does not verify.
+/// **The solver bridge, PRESCRIPTIVE form** — build an integer Cert-F certificate from a
+/// fhegg-solver `CertF` JSON emission (the f64 wire format of `fhegg-solver/src/cert.rs`) by
+/// FIXED-POINT scaling, against a caller-supplied accuracy budget `epsilon` (the REGISTERED
+/// program's ε, in the scaled integer grid). The solver's `(f, π)` are scaled by `scale` and
+/// rounded; `s` is re-derived as `(scale·w − Aᵀ(scale·π))₊` so `s ≥ 0` and dual feasibility
+/// hold by construction. The certificate's `ε` is the BUDGET, not the achieved gap — so a real
+/// solve with a nonzero achieved gap matches a registered `(A,w,c,ε)` program exactly (the
+/// historical descriptive form set `ε := achieved gap`, which could never equal a registered
+/// budget unless the solve landed exactly tight — the ε-mismatch trap). REFUSES (Err) when the
+/// achieved integer gap exceeds the budget: the bridge asserts nothing it does not verify.
+pub fn from_solution_json_with_epsilon(
+    json: &str,
+    scale: i64,
+    epsilon: i64,
+) -> Result<CertFWitness, String> {
+    let mut cert = bridge_solution_json(json, scale)?;
+    let gap = cert.gap();
+    if gap > epsilon {
+        return Err(format!(
+            "solver certificate achieved integer gap {gap} exceeds the prescriptive \
+             epsilon budget {epsilon} at scale={scale}; converge tighter or raise the budget"
+        ));
+    }
+    cert.epsilon = epsilon;
+    Ok(cert)
+}
+
+/// **The solver bridge, DESCRIPTIVE form** — as [`from_solution_json_with_epsilon`], but `ε` is
+/// set to the achieved (nonneg, by weak duality) integer gap, so the certificate is Cert-F-valid
+/// at that fixed-point resolution by construction. NOTE: a descriptive `ε` only matches a
+/// registered program whose pinned budget happens to EQUAL the achieved gap (for ring-3, only an
+/// exactly-tight `gap = 0` solve); use the prescriptive form to prove against an ε-budget
+/// registration.
 pub fn from_solution_json(json: &str, scale: i64) -> Result<CertFWitness, String> {
+    let mut cert = bridge_solution_json(json, scale)?;
+    // ε absorbs the fixed-point quantization: set it to the (nonneg, by weak duality)
+    // integer gap so `gap ≤ ε` holds. gap_nonneg (CertF.lean) guarantees gap ≥ 0.
+    cert.epsilon = cert.gap().max(0);
+    Ok(cert)
+}
+
+/// The shared f64→integer scaling core of the two bridge forms. Returns the certificate with
+/// `ε = 0`; the caller decides the ε policy (prescriptive budget vs descriptive achieved gap).
+fn bridge_solution_json(json: &str, scale: i64) -> Result<CertFWitness, String> {
     let v: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("cert JSON parse: {e}"))?;
     let n_nodes = v["n_nodes"].as_u64().ok_or("missing n_nodes")? as usize;
@@ -476,7 +578,7 @@ pub fn from_solution_json(json: &str, scale: i64) -> Result<CertFWitness, String
     };
     let s: Vec<i64> = (0..m).map(|e| (w[e] - at_pi(e)).max(0)).collect();
 
-    let mut cert = CertFWitness {
+    Ok(CertFWitness {
         n_nodes,
         edges,
         w,
@@ -485,11 +587,7 @@ pub fn from_solution_json(json: &str, scale: i64) -> Result<CertFWitness, String
         pi,
         s,
         epsilon: 0,
-    };
-    // ε absorbs the fixed-point quantization: set it to the (nonneg, by weak duality)
-    // integer gap so `gap ≤ ε` holds. gap_nonneg (CertF.lean) guarantees gap ≥ 0.
-    cert.epsilon = cert.gap().max(0);
-    Ok(cert)
+    })
 }
 
 #[cfg(test)]
@@ -740,6 +838,167 @@ mod tests {
         let (desc, proof, pis) =
             prove_cert_f(&cert).expect("the bridged solver certificate must prove in the STARK");
         verify_cert_f(&desc, &proof, &pis).expect("bridged-cert proof must verify");
+    }
+
+    // ========================================================================
+    // The MARKET4 registered program — the first real market shape past ring-3
+    // (3 assets / 4 orders, fixed-point scale 100, PRESCRIPTIVE ε = 2000).
+    // ========================================================================
+
+    /// The worked market4 optimum is Cert-F-valid and tight.
+    #[test]
+    fn market4_check_is_valid_tight() {
+        let cert = market4_cert();
+        let chk = cert.check();
+        assert!(
+            chk.valid,
+            "the worked market4 certificate must be valid: {chk:?}"
+        );
+        assert_eq!(chk.gap, 0, "exact optimum: gap 0");
+        assert_eq!(cert.objective(), 180_000, "cleared volume wᵀf = 180000");
+    }
+
+    /// POSITIVE: the market4 program resolves to the Lean-emitted market4 artifact
+    /// (not ring-3's) and its worked certificate proves + verifies in the REAL STARK.
+    #[test]
+    fn stark_proves_and_verifies_market4() {
+        let cert = market4_cert();
+        let desc = try_cert_f_descriptor(&cert).expect("market4 is Lean-registered");
+        assert_eq!(
+            desc.trace_width, 497,
+            "the market4 descriptor (m=4), not ring-3's 381"
+        );
+        let (desc, proof, pis) =
+            prove_cert_f(&cert).expect("the worked market4 certificate must prove");
+        assert_eq!(pis[0].as_u32(), 180_000, "the world sees exactly wᵀf");
+        verify_cert_f(&desc, &proof, &pis).expect("the minted market4 proof must verify");
+    }
+
+    /// **THE ε-BUDGET FIX, positive polarity:** a certificate with a REAL nonzero achieved
+    /// gap (1000 > 0) under the registered budget (ε = 2000) registers AND proves — the
+    /// exact case the ε=0-only ring-3 era refused. The mutation tooth is inline: the SAME
+    /// witness carrying the OLD descriptive semantics (ε := achieved gap = 1000) does NOT
+    /// match any registration and fails closed.
+    #[test]
+    fn stark_market4_epsilon_budget_accepts_nonzero_gap() {
+        // Perturb the dual: π = (200, 0, 98). s = (w − Aᵀπ)₊ = (300, 2, 0, 100);
+        // cᵀs = 150000 + 1000 + 0 + 30000 = 181000; gap = 1000 ∈ (0, 2000].
+        let mut cert = market4_cert();
+        cert.pi = vec![200, 0, 98];
+        cert.s = vec![300, 2, 0, 100];
+        let chk = cert.check();
+        assert!(
+            chk.valid,
+            "gap-1000 certificate is valid under the 2000 budget: {chk:?}"
+        );
+        assert_eq!(chk.gap, 1000, "the achieved gap is genuinely nonzero");
+        let (desc, proof, pis) =
+            prove_cert_f(&cert).expect("a real (gap > 0) certificate within budget must prove");
+        verify_cert_f(&desc, &proof, &pis).expect("the ε-budget proof must verify");
+
+        // Mutation tooth: the OLD `ε := achieved gap` bridge semantics on the same witness
+        // is unregistered (1000 ≠ 2000) — the mismatch this fix removed from the real path.
+        let mut descriptive = cert.clone();
+        descriptive.epsilon = descriptive.gap();
+        assert!(descriptive.check().valid);
+        let err = try_cert_f_descriptor(&descriptive)
+            .expect_err("descriptive ε must NOT match the ε-budget registration");
+        assert!(err.contains("not registered"));
+    }
+
+    /// NEGATIVE (budget teeth): a certificate whose achieved gap EXCEEDS the registered
+    /// budget (5000 > 2000) is refused by the STARK — the gap slack g = ε − gap = −3000
+    /// has no VALUE_BITS-bit range preimage.
+    #[test]
+    fn stark_market4_refuses_gap_over_budget() {
+        // π = (200, 0, 90): s = (300, 10, 0, 100); cᵀs = 185000; gap = 5000 > ε = 2000.
+        let mut cert = market4_cert();
+        cert.pi = vec![200, 0, 90];
+        cert.s = vec![300, 10, 0, 100];
+        let chk = cert.check();
+        assert!(
+            chk.conserves && !chk.gap_ok,
+            "gap 5000 must exceed the 2000 budget: {chk:?}"
+        );
+        assert!(
+            prove_cert_f_refused(&cert),
+            "the STARK must REFUSE a certificate over the ε budget"
+        );
+    }
+
+    /// **THE REAL SOLVE, end-to-end:** run the ACTUAL PDHG solver (fhegg-solver) on the
+    /// market4 f64 program, restore exact feasibility, emit the Cert-F JSON wire, bridge it
+    /// at the registered scale (100) under the registered prescriptive budget (2000), and
+    /// prove THAT in the production STARK. This is roadmap §4.2(a): a genuine solver output
+    /// on a registered shape proving without landing exactly tight.
+    #[test]
+    fn stark_proves_real_market4_pdhg_solve() {
+        use fhegg_solver::cert::CertF;
+        use fhegg_solver::pdhg::{FlowLp, restore_feasibility, solve_cpu};
+        // The f64 program whose ×100 fixed-point image is the REGISTERED market4 program.
+        let lp = FlowLp {
+            n_nodes: 3,
+            edges: vec![(0, 1), (1, 2), (2, 0), (1, 0)],
+            w: vec![1.0, 1.0, 1.0, 3.0],
+            c: vec![5.0, 5.0, 5.0, 3.0],
+        };
+        let res = solve_cpu(&lp, 8000);
+        let (f_exact, _box_viol) = restore_feasibility(&lp, res.f.clone());
+        let cert_f64 = CertF::from_solution(&lp, &f_exact, &res.y, 0.2);
+        assert!(
+            cert_f64.check_strict().valid,
+            "the untrusted PDHG search must produce a strictly-checkable f64 certificate"
+        );
+        let json = cert_f64.to_json();
+
+        let cert = from_solution_json_with_epsilon(&json, 100, 2000)
+            .expect("the real solve must bridge under the registered ε budget");
+        let chk = cert.check();
+        assert!(
+            chk.valid,
+            "bridged real-solve certificate must be Cert-F-valid: {chk:?}"
+        );
+        assert!(
+            chk.gap >= 0 && chk.gap <= 2000,
+            "achieved gap within budget: {}",
+            chk.gap
+        );
+        let (desc, proof, pis) =
+            prove_cert_f(&cert).expect("the real market4 solve must prove in the STARK");
+        assert_eq!(
+            pis[0].as_u32() as i64,
+            cert.objective(),
+            "the public input is the solve's own cleared volume"
+        );
+        verify_cert_f(&desc, &proof, &pis).expect("the real-solve proof must verify");
+    }
+
+    /// The prescriptive bridge REFUSES a solve whose achieved gap exceeds the budget —
+    /// it asserts nothing it does not verify.
+    #[test]
+    fn bridge_with_epsilon_refuses_over_budget_gap() {
+        // The worked optimum's JSON wire, but with a deliberately bad dual (π = 0 makes
+        // s = w, cᵀs = 500+500+500+900 = 2400 → scaled gap = 24_000_000... use the f64
+        // program at unit scale instead: gap = cᵀs − wᵀf = 2400·… ). Simplest: scale 100
+        // with π = 0 on the market4 program: s = w = (100,100,100,300) after scaling,
+        // cᵀs = 500·100·3 + 300·300 = 240000; wᵀf = 180000; gap = 60000 > 2000.
+        let json = r#"{
+            "n_nodes": 3,
+            "m_edges": 4,
+            "edges": [[0,1],[1,2],[2,0],[1,0]],
+            "w": [1.0, 1.0, 1.0, 3.0],
+            "c": [5.0, 5.0, 5.0, 3.0],
+            "f": [5.0, 2.0, 2.0, 3.0],
+            "pi": [0.0, 0.0, 0.0],
+            "s": [1.0, 1.0, 1.0, 3.0],
+            "epsilon": 0.0
+        }"#;
+        let err = from_solution_json_with_epsilon(json, 100, 2000)
+            .expect_err("a 60000 gap must not pass a 2000 budget");
+        assert!(
+            err.contains("exceeds the prescriptive"),
+            "named refusal: {err}"
+        );
     }
 
     /// SOUNDNESS of verification (not just of proving): a genuine proof of the ring-3
