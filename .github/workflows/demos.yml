@@ -63,7 +63,6 @@ jobs:
             offline_verification
             progressive_disclosure
             note_privacy
-            ivc_attenuation_chain
             programmable_cell
             wallet_lifecycle
             web_auth_flow
