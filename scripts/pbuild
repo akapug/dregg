@@ -21,7 +21,10 @@
 # reuse; pass --force-cold to deliberately seed a new lane.
 set -euo pipefail
 
-HOST="persvati"
+# The remote build box. Overridable so pbuild is not hardwired to the maintainer's host (#39):
+# a fresh clone / other contributor can point it at their own box, or (below) is taught to build
+# locally when no host is reachable.
+HOST="${PBUILD_HOST:-persvati}"
 # Warmth threshold: a lane counts as warm if its cargo target/{release,debug}/deps
 # holds at least this many built artifacts (a fresh lane has 0). Override with
 # PBUILD_WARM_DEPS. A warm .lake/packages/mathlib also counts as warm.
@@ -32,8 +35,23 @@ if [ "${1:-}" = "--force-cold" ]; then FORCE_COLD=1; shift; fi
 LANE="${1:?usage: pbuild [--force-cold] <lane> <command...>}"; shift
 [ "$#" -ge 1 ] || { echo "pbuild: no command given" >&2; exit 2; }
 
-SRC="/Users/ember/dev/breadstuffs/"
+# Repo root, derived from THIS script's own location (scripts/pbuild) — NOT a hardcoded maintainer
+# path (#39). The old absolute `SRC` silently rsync'd the wrong tree from any other clone.
+SRC="$(cd "$(dirname "$0")/.." && pwd)/"
 REMOTE="dregg-build/${LANE}"
+
+# pbuild is a maintainer OFFLOAD to a warm remote build box; a fresh clone / non-maintainer machine
+# has no such host. Fail with a TEACHING message instead of a raw `ssh: could not resolve` (#39).
+# (The `if !` context is exempt from `set -e`, so an unreachable host does not abort here.)
+if ! ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" true 2>/dev/null; then
+  cat >&2 <<MSG
+pbuild: cannot reach remote build host '$HOST'.
+  pbuild offloads builds to a warm remote box (maintainer setup). From a fresh clone you can:
+    • build locally:                 $*
+    • point pbuild at your own box:  PBUILD_HOST=your-host scripts/pbuild $LANE <cmd>
+MSG
+  exit 2
+fi
 
 # ---- cold-lane guard ------------------------------------------------------
 # Probe the remote (BEFORE any mkdir/rsync — a brand-new lane dir does not yet
