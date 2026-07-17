@@ -77,22 +77,47 @@
 //!    far-sub-30-bit operands, because capping the OPERANDS bounds nothing about a `diff` column no
 //!    constraint reads.)
 //!
-//!    `diff-le` now carries the genuine gadget: a 30-bit decomposition of `diff` with every bit
-//!    boolean-pinned, sized exactly to the supported operand range so the recomposition sum
-//!    (`<= 2^30 - 1 < p`) cannot itself wrap — which forces `diff ∈ [0, 2^30)` as an INTEGER and makes a
-//!    field-wrapped negative difference UNSATISFIABLE. `smaller`/`bigger` are also PI-bound, so the proof
-//!    is about the publicly claimed comparison. The `indicator` column is gone: **on the in-range path**
+//!    The lowering now carries the genuine gadget: a bit-decomposition range check with every bit
+//!    boolean-pinned, so a field-wrapped negative difference is UNSATISFIABLE, and the operands are
+//!    PI-bound so the proof is about the publicly claimed comparison. The `indicator` column is gone:
 //!    rejection of a false claim is now the constraint system's verdict, not the generator's confession.
 //!    The forgery pin is flipped into a rejection tooth, with companions pinning that the binary
 //!    constraints and PI bindings are load-bearing.
 //!
-//!    ⚠ **The stated limit.** The gadget is sized to the supported operand range, so `drive_inequality`
-//!    still SHORT-CIRCUITS to `prove_trivial(ir_ok)` when either operand is `>= 2^30`. On that path NO
-//!    circuit is built and the verdict IS the native-`u64` oracle's own answer — precisely the
-//!    generator's confession the sentence above says is gone, for operands the gadget cannot size to.
-//!    `plonky3_runner.rs` discloses this fallback at its call site; it is recorded here so the headline
-//!    is not read as unqualified. The fallback has NO tooth: a test pinning that the `>= 2^30` path is
-//!    the oracle (or a widened decomposition that removes the path) is the honest closure.
+//!    ⚑ **The stated limit is GONE — the gadget now covers the whole u64 domain** (2026-07-17, lane
+//!    `dsl-2p30-fallback`). The first fix was sound only on `[0, 2^30)`: `drive_inequality`
+//!    SHORT-CIRCUITED to `prove_trivial(ir_ok)` when either operand was `>= 2^30`, and on that path NO
+//!    circuit was built — the verdict WAS the native-`u64` oracle's own answer, precisely the
+//!    generator's confession the paragraph above says is gone, for the operands (`u64::MAX` and
+//!    friends) the predicate suite uses most. It was disclosed rather than closed because no test could
+//!    see it: `Reject` looks identical whether constraints refuted the claim or the oracle just
+//!    answered.
+//!
+//!    That path is DELETED, not documented. It could not be closed by widening the decomposition, for
+//!    two independent reasons worth keeping: (i) `2^30 - 1 < p` but `2^31 - 1 > p`, so 30 bits was
+//!    already THE CEILING for a single-element range check, not a cautious choice; and (ii)
+//!    `BabyBear::from_u64` reduces mod p, so operands `>= p` were never in their columns at all
+//!    (`from_u64(u64::MAX) = 1172168162`, `from_u64(BABYBEAR_P) = 0`) — an EMBEDDING failure no range
+//!    check can reach. So the gadget stopped asking one field element to carry a u64: `u64-le` splits
+//!    each operand into four PI-bound base-`2^16` limbs, range-checks each with 16 boolean bits, and
+//!    subtracts with a borrow chain whose top borrow must be zero. Every intermediate stays under
+//!    `2^18` — ~13 bits of headroom under `p` — so each field equation implies its integer counterpart,
+//!    and the witness is unique, so there is nothing for a prover to search for.
+//!
+//!    The closure is ASSERTED, not announced: `every_operand_takes_the_circuit_never_the_oracle` pins
+//!    that operands across the domain (`0`, `2^30 - 1`, `2^30`, `BABYBEAR_P`, `2^32`, `u64::MAX`) are
+//!    decided by a CIRCUIT, and `modulus_aliased_operands_are_decided_by_constraints` pins the exact
+//!    rock a naive widening would have foundered on — `BABYBEAR_P <= 0` must be UNSAT. Every constraint
+//!    in the gadget has a tooth proven by a mutation canary; see the mutation matrix in
+//!    `dregg-dsl-differential/tests/comparison_wrap_soundness.rs`. One of those canaries found a real
+//!    forgery the lane had not modelled (a non-boolean borrow buying back the modulus), which the
+//!    production prover accepted once its constraint was removed.
+//!
+//!    ⚠ **The remaining fallback.** `drive_equality_u64` / `drive_nonequality_u64` still carry the
+//!    `2^30` cutoff that inequalities no longer do, and it is load-bearing for them: without it
+//!    `eq-u64` would ACCEPT the false `BABYBEAR_P == 0` (both operands embed to the zero column). The
+//!    cutoff hides that aliasing rather than fixing it, and the same limb machinery closes it. Named,
+//!    not closed: `DslEqualityOperandAliasingResidual`. The u64-domain teeth cover `<=`/`>=` only.
 //! 3. **Scope:** that lowering is the DIFFERENTIAL HARNESS's own, not a shipped circuit — so what changed
 //!    is that the harness's Plonky3 agreement vote on inequalities now validates its CONSTRAINTS and not
 //!    merely its witness generator. Production circuits needing order comparisons always did range-check
