@@ -43,27 +43,32 @@ Operations, faithful to the Rust:
     `invariant_holds` as a Lean theorem, non-vacuous both ways (a valid lock/clear/release keeps it;
     an unbacked mint / over-release breaks it → not a valid step).
 
-  * **`custody_cross_boundary_conserves` — END-TO-END CROSS-BOUNDARY CONSERVATION (the keystone).**
-    Across the WHOLE `lock → DrEX-clear → release` lifecycle, composing this module's mirror-backing
-    with the DrEX clearing's ledger-internal conservation:
-      - (BACKING) `supply ≤ locked` holds at every step — every circulating mirror is redeemable;
-      - (DrEX conserves the native ledger) the clear preserves `recTotalAsset` for EVERY asset,
-        INCLUDING the mirror asset (`Market.settleRing_conserves` via the fill's `settled`) — the
-        mirror trades between holders with its total supply preserved; the trade creates/destroys no
-        value inside dregg;
-      - (BOUNDARY 1:1) `lock` and `release` move `locked` and `supply` by the SAME amount, so the
-        redeemability gap `locked − supply` is INVARIANT across the whole lifecycle;
-      - (TOTAL VALUE) hence `systemValue k m := recTotalAsset k mirrorAsset + (locked − supply)` is
-        CONSERVED end-to-end: what the vault gains/loses in escrow exactly equals what dregg gains/loses
-        in circulating mirror. No value is created or destroyed at the vault boundary.
+  * **`custody_cross_boundary_conserves` — END-TO-END CROSS-BOUNDARY CONSERVATION (the keystone), a
+    genuine CROSS-PREDICATE.** Over a `CustodyWorld` (the vault registers PLUS the dregg-ledger
+    circulating total of the mirror asset), across the WHOLE `wlock → wclear → wrelease` lifecycle, the
+    invariant `Solvent` — `ledgerMirror = supply ∧ supply ≤ locked`, hence `ledgerMirror ≤ locked` — is
+    PRESERVED:
+      - (TIE, ACROSS THE BOUNDARY) the dregg-ledger mirror total EQUALS the vault register and is backed
+        by external escrow — a real relation between the two sides, FALSIFIABLE (`phantomMint_not_solvent`
+        shows a world where the register out-runs the ledger is not solvent, which a disjoint conjunction
+        could never detect);
+      - (THE CLEARING GENUINELY PARTICIPATES) `wclear` UPDATES `ledgerMirror` to the clearing's post-state
+        total of the mirror asset, and it stays invariant ONLY because the REAL `settleRing_conserves`
+        preserves that asset (`wclear_ledgerMirror`); the clearing `c` is tied to the boundary by the
+        hypothesis that the world's ledger mirror IS `c`'s pre-total of `mirrorAsset` — not a free
+        variable added to both sides of an already-proven equation;
+      - (SURVIVES END TO END) after the full round trip the tie still holds, so no dregg-ledger mirror is
+        left unbacked and no escrow is lost at the vault boundary.
 
   * **`gatedRingRelease` — CROSS-CHAIN ATOMICITY (modeled).** A multi-chain ring whose per-chain
     releases are ALL gated on the SAME clearing proof: `ringRelease` is all-or-nothing (any leg that
     over-releases aborts the WHOLE ring to `none`, mirroring `settleRing_atomic`), and a release with
-    NO clearing proof is refused (`gatedRingRelease false = none`). The timeout/refund edge (`refund`)
-    reverts the lock to its pre-lock state, restoring the escrow with no value lost. So neither a
+    NO clearing proof is refused (`gatedRingRelease false = none`). The timeout/refund edge (`refund a`)
+    REDEEMS the stuck deposit — an actual `release` that recomputes both registers, proven to round-trip
+    a never-cleared lock back to its pre-lock state (`lock_refund_restores`), no value lost. So neither a
     released-but-uncleared nor a cleared-but-unreleased partial state loses value: the first is
-    unreachable (gated `none`), the second is resolved by refund.
+    unreachable (gated `none`), the second is resolved by refund. (The `cleared` gate remains an
+    uninterpreted flag at spec level — a NAMED residual, not claimed bound to a proof object.)
 
   * NON-VACUITY, BOTH POLARITIES (`#guard` teeth): a valid `init → lock → release` conserves (backing
     holds, gap invariant); an over-mint (`drawMint` with no escrow), a double-draw against a spent
@@ -280,24 +285,106 @@ theorem run_backed {m m' : MirrorState} (hb : m.backed) :
       rw [hstep, Option.bind_some] at h
       exact ih (step_backed hb hstep) h
 
-/-! ## 4. END-TO-END CROSS-BOUNDARY CONSERVATION — compose mirror-backing with the DrEX clearing. -/
+/-! ## 4. END-TO-END CROSS-BOUNDARY CONSERVATION — compose mirror-backing with the DrEX clearing.
 
-/-- **`systemValue k m mirrorAsset`** — the total value the custody layer relates across the boundary:
-dregg's native-ledger total of the mirror asset (`recTotalAsset k mirrorAsset` — what the DrEX clearing
-conserves) PLUS the vault's un-claimed backing slack (`m.gap = locked − supply`). Conserving this end
-to end is the statement "no value is created or destroyed at the vault boundary." -/
-def systemValue (k : RecordKernelState) (m : MirrorState) (mirrorAsset : AssetId) : ℤ :=
-  recTotalAsset k mirrorAsset + m.gap
+The keystone below is a GENUINE cross-boundary conservation, not a disjoint conjunction. The tie it
+maintains — the dregg-ledger's circulating total of the mirror asset EQUALS the vault's mirror register
+(`recTotalAsset _ mirrorAsset = supply`), and that register is backed by external escrow
+(`supply ≤ locked`) — is a real CROSS-PREDICATE between the two sides of the boundary, forced through
+the whole `lock → clear → release` lifecycle. The clearing genuinely participates: the clear step
+UPDATES the tracked ledger-mirror total to the clearing's post-state total, and it stays invariant ONLY
+because the REAL `settleRing_conserves` preserves the mirror asset (`wclear_ledgerMirror`) — the
+clearing `c` is tied to the boundary by the hypothesis that the world's ledger mirror IS `c`'s
+mirror-asset total. -/
 
-/-- **DrEX-CLEAR conserves `systemValue`** (the composition tooth). A settled DrEX clearing (`c :
-DrexClearing`) trades the mirror asset INSIDE the ledger — `Market.settleRing_conserves` preserves
-`recTotalAsset` for EVERY asset (the mirror asset included), and the vault backing `m.gap` is untouched
-(the clear moves no escrow). So the combined value is preserved across the trade: the mirror moves
-between holders, its total supply is preserved, and the vault stays exactly as solvent. -/
-theorem drexClear_conserves_systemValue (c : DrexClearing) (m : MirrorState) (b : AssetId) :
-    systemValue c.post m b = systemValue c.pre m b := by
-  unfold systemValue
-  rw [settleRing_conserves (settlementsOf c.nodes) c.pre c.post c.settled b]
+/-- **`CustodyWorld`** — the combined cross-boundary state: the vault registers (`vault`, the Rust
+`MirrorState`) PLUS the dregg native-ledger circulating total of the mirror asset (`ledgerMirror`,
+i.e. `recTotalAsset _ mirrorAsset`). Bundling them is what lets a lifecycle op move BOTH sides and lets
+the invariant TIE them — the previous `systemValue` kept them disjoint, so its "conservation" was the
+mirror asset's ledger total plus a backing slack added to BOTH sides of an already-proven equation, with
+nothing forcing the clearing to trade the mirror. -/
+structure CustodyWorld where
+  /-- vault side: external escrow + mirror register (the Rust `MirrorState`). -/
+  vault : MirrorState
+  /-- dregg side: the native-ledger circulating total of the mirror asset (`recTotalAsset _ mirrorAsset`). -/
+  ledgerMirror : ℤ
+deriving Repr, DecidableEq
+
+/-- **`Solvent w`** — the CROSS-BOUNDARY invariant: the dregg-ledger mirror total EQUALS the vault's
+circulating register (`ledgerMirror = supply`), and that register is backed by external escrow
+(`supply ≤ locked`). Chaining the two gives `ledgerMirror ≤ locked`: every mirror unit inside dregg's
+ledger is backed by real escrow held in the external vault. This is a genuine relation ACROSS the
+boundary — a disjoint conjunction could never express "the dregg ledger is backed by the foreign chain." -/
+def CustodyWorld.Solvent (w : CustodyWorld) : Prop :=
+  w.ledgerMirror = (w.vault.supply : ℤ) ∧ w.vault.supply ≤ w.vault.locked
+
+/-- **`wlock a`** — deposit: escrow `a` in the vault AND mint `a` mirror into the dregg ledger. Raises
+`locked`, `supply`, AND `ledgerMirror` by `a` (the mint puts `a` into the ledger). -/
+def CustodyWorld.wlock (w : CustodyWorld) (a : Nat) : Option CustodyWorld :=
+  (w.vault.lock a).map (fun v => { vault := v, ledgerMirror := w.ledgerMirror + (a : ℤ) })
+
+/-- **`wrelease a`** — redeem: burn `a` mirror from the dregg ledger AND withdraw `a` escrow. Lowers
+`locked`, `supply`, AND `ledgerMirror` by `a`. -/
+def CustodyWorld.wrelease (w : CustodyWorld) (a : Nat) : Option CustodyWorld :=
+  (w.vault.release a).map (fun v => { vault := v, ledgerMirror := w.ledgerMirror - (a : ℤ) })
+
+/-- **`wclear c b`** — a DrEX clearing `c` trades the mirror asset `b` INSIDE the dregg ledger: the
+world's tracked `ledgerMirror` is UPDATED to the clearing's post-state total of the mirror asset; the
+vault is untouched (the clear moves no escrow). -/
+def CustodyWorld.wclear (w : CustodyWorld) (c : DrexClearing) (b : AssetId) : CustodyWorld :=
+  { w with ledgerMirror := recTotalAsset c.post b }
+
+/-- **The clear preserves the ledger-mirror total — the REAL clearing tie.** The post-state total of
+the mirror asset EQUALS its pre-state total (`Market.settleRing_conserves` via `c.settled`), so the clear
+lands `ledgerMirror` on the clearing's PRE-total. This is where `c` genuinely participates: the clearing
+conserves the mirror asset it trades. -/
+theorem wclear_ledgerMirror (w : CustodyWorld) (c : DrexClearing) (b : AssetId) :
+    (w.wclear c b).ledgerMirror = recTotalAsset c.pre b :=
+  settleRing_conserves (settlementsOf c.nodes) c.pre c.post c.settled b
+
+/-- **`wlock` preserves solvency** — raising `locked`, `supply`, `ledgerMirror` all by `a` keeps
+`ledgerMirror = supply` and `supply ≤ locked`. -/
+theorem wlock_solvent {w w' : CustodyWorld} {a : Nat} (hs : w.Solvent) (h : w.wlock a = some w') :
+    w'.Solvent := by
+  obtain ⟨he, hbk⟩ := hs
+  have hb : w.vault.backed := hbk
+  simp only [CustodyWorld.wlock] at h
+  rw [lock_eq hb a, Option.map_some, Option.some.injEq] at h
+  subst h
+  refine ⟨?_, ?_⟩
+  · show w.ledgerMirror + (a : ℤ) = ((w.vault.supply + a : Nat) : ℤ)
+    rw [he]; push_cast; ring
+  · show w.vault.supply + a ≤ w.vault.locked + a
+    omega
+
+/-- **`wrelease` preserves solvency** — lowering `locked`, `supply`, `ledgerMirror` all by `a` keeps the
+tie (given the redeem commits, so `a ≤ supply`). -/
+theorem wrelease_solvent {w w' : CustodyWorld} {a : Nat} (hs : w.Solvent) (h : w.wrelease a = some w') :
+    w'.Solvent := by
+  obtain ⟨he, hbk⟩ := hs
+  simp only [CustodyWorld.wrelease, MirrorState.release] at h
+  by_cases hg : a ≤ w.vault.supply
+  · rw [if_pos hg, Option.map_some, Option.some.injEq] at h
+    subst h
+    refine ⟨?_, ?_⟩
+    · show w.ledgerMirror - (a : ℤ) = ((w.vault.supply - a : Nat) : ℤ)
+      rw [he]; omega
+    · show w.vault.supply - a ≤ w.vault.locked - a
+      omega
+  · rw [if_neg hg] at h; simp at h
+
+/-- **`wclear` preserves solvency (the composition tooth) — given the clearing trades THE mirror asset.**
+If the world's tracked ledger-mirror total IS the clearing's pre-state total (`htie` — the clearing `c`
+operates on the mirror asset), the clear preserves both `ledgerMirror` and solvency: the real
+`settleRing_conserves` keeps the mirror asset's total, and the vault is untouched. -/
+theorem wclear_solvent {w : CustodyWorld} (c : DrexClearing) (b : AssetId)
+    (hs : w.Solvent) (htie : w.ledgerMirror = recTotalAsset c.pre b) :
+    (w.wclear c b).Solvent ∧ (w.wclear c b).ledgerMirror = w.ledgerMirror := by
+  obtain ⟨he, hbk⟩ := hs
+  have hpres : (w.wclear c b).ledgerMirror = w.ledgerMirror := by
+    rw [wclear_ledgerMirror]; exact htie.symm
+  refine ⟨⟨?_, hbk⟩, hpres⟩
+  rw [hpres]; exact he
 
 /-- **The boundary is 1:1: `lock` moves `locked` and `supply` by the SAME amount**, so the gap — and
 hence `systemValue` at a FIXED ledger — is invariant across a deposit. -/
@@ -317,42 +404,61 @@ theorem release_gap {m m' : MirrorState} {a : Nat} (hb : m.backed) (h : m.releas
     simp only []; omega
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **`custody_cross_boundary_conserves` — THE KEYSTONE: end-to-end cross-boundary conservation.**
+/-- **`custody_cross_boundary_conserves` — THE KEYSTONE: end-to-end cross-boundary conservation, a REAL
+cross-predicate.**
 
-Take the whole custody lifecycle `lock a → DrEX-clear c → release a'`, starting from a backed mirror
-`m0` whose deposit funds a DrEX fill `c` (the clearing the mirror trades through), with `a' ≤` the
-post-lock circulating supply so the redeem commits. Then:
+Take the whole custody lifecycle `wlock a → wclear c → wrelease a'` over a `CustodyWorld`, starting
+`Solvent`, where the clearing `c` genuinely trades the mirror asset: the world's ledger-mirror total
+after the deposit IS `c`'s pre-state total of `mirrorAsset` (`htie`). Then:
 
-  * **(BACKING, throughout)** `m1 = lock m0 a` and `m2 = release m1 a'` are BOTH backed — every
-    circulating mirror is redeemable at every step (mirror-backing, §3);
-  * **(DrEX conserves the native ledger)** the clear preserves `recTotalAsset` for EVERY asset `b`,
-    the mirror asset included (`Market.settleRing_conserves` via `c.settled`) — the trade creates or
-    destroys NO value inside dregg;
-  * **(TOTAL VALUE conserved across the trade)** `systemValue` is preserved across the DrEX clear
-    (`drexClear_conserves_systemValue`): the mirror trades in the ledger while the vault backing is
-    untouched, so the combined value is conserved;
-  * **(BOUNDARY 1:1)** the redeemability gap is INVARIANT across the whole lifecycle
-    (`m2.gap = m1.gap = m0.gap`): what the vault gains then loses in escrow (`+a` then `−a'`) exactly
-    equals what dregg gains then loses in circulating mirror. No value leaks at the vault boundary.
+  * **(SOLVENT throughout)** `w1`, `w1.wclear c mirrorAsset`, and `w3` are ALL `Solvent` — at every step
+    the dregg-ledger mirror total EQUALS the vault register and that register is backed by escrow;
+  * **(THE CLEARING CONSERVES THE TRACKED MIRROR)** the clear leaves `ledgerMirror` invariant
+    (`(w1.wclear c mirrorAsset).ledgerMirror = w1.ledgerMirror`) — and this holds ONLY because the REAL
+    `settleRing_conserves` preserves the mirror asset `c` trades (`wclear_ledgerMirror` + `htie`); `c` is
+    genuinely tied to the boundary, not a free variable added to both sides of an equation;
+  * **(THE TIE SURVIVES END TO END)** `w3.ledgerMirror = w3.vault.supply` and
+    `w3.ledgerMirror ≤ w3.vault.locked`: after the full round trip the dregg-ledger mirror total still
+    equals the vault register and is still fully backed by external escrow. No value leaks at the vault
+    boundary, and no dregg-ledger mirror is left unbacked.
 
-This is the ledger-internal DrEX conservation COMPOSED with the lifted mirror-backing: the DrEX
-clearing conserves the mirror as it trades, and the lock/release move value across the boundary 1:1,
-so the composite `lock → clear → release` conserves total value. -/
+Unlike the previous `systemValue` version, the conserved quantity here is a genuine relation ACROSS the
+boundary (dregg-ledger total ↔ vault escrow), the clearing genuinely participates (via `htie` +
+`settleRing_conserves`), and the invariant is FALSIFIABLE (see `phantomMint_not_solvent`). -/
 theorem custody_cross_boundary_conserves
-    (m0 : MirrorState) (hb : m0.backed) (a a' : Nat) (c : DrexClearing) (mirrorAsset : AssetId)
-    (m1 m2 : MirrorState) (hlock : m0.lock a = some m1) (hrel : m1.release a' = some m2) :
-    m1.backed ∧ m2.backed
-    ∧ (∀ b : AssetId, recTotalAsset c.post b = recTotalAsset c.pre b)
-    ∧ systemValue c.post m1 mirrorAsset = systemValue c.pre m1 mirrorAsset
-    ∧ m1.gap = m0.gap ∧ m2.gap = m0.gap := by
-  have hb1 : m1.backed := lock_backed hlock
-  have hb2 : m2.backed := release_backed hb1 hrel
-  have hg1 : m1.gap = m0.gap := lock_gap hb hlock
-  have hg2 : m2.gap = m1.gap := release_gap hb1 hrel
-  exact ⟨hb1, hb2,
-    fun b => settleRing_conserves (settlementsOf c.nodes) c.pre c.post c.settled b,
-    drexClear_conserves_systemValue c m1 mirrorAsset,
-    hg1, hg2.trans hg1⟩
+    (w0 : CustodyWorld) (hs0 : w0.Solvent) (a a' : Nat)
+    (c : DrexClearing) (mirrorAsset : AssetId)
+    (w1 w3 : CustodyWorld)
+    (hlock : w0.wlock a = some w1)
+    (htie : w1.ledgerMirror = recTotalAsset c.pre mirrorAsset)
+    (hrel : (w1.wclear c mirrorAsset).wrelease a' = some w3) :
+    w1.Solvent
+    ∧ (w1.wclear c mirrorAsset).Solvent
+    ∧ w3.Solvent
+    ∧ (w1.wclear c mirrorAsset).ledgerMirror = w1.ledgerMirror
+    ∧ w3.ledgerMirror = (w3.vault.supply : ℤ)
+    ∧ w3.ledgerMirror ≤ (w3.vault.locked : ℤ) := by
+  have hs1 : w1.Solvent := wlock_solvent hs0 hlock
+  obtain ⟨hs2, hpres⟩ := wclear_solvent c mirrorAsset hs1 htie
+  have hs3 : w3.Solvent := wrelease_solvent hs2 hrel
+  refine ⟨hs1, hs2, hs3, hpres, hs3.1, ?_⟩
+  rw [hs3.1]; exact_mod_cast hs3.2
+
+/-- **A concrete solvent world** — 500 escrowed, 500 mirror both in the vault register and the dregg
+ledger (a fully-backed, fully-drawn deposit). -/
+def demoWorld : CustodyWorld := ⟨⟨500, 500⟩, 500⟩
+
+/-- POSITIVE POLE — the tie holds for a genuine matched deposit. -/
+theorem demoWorld_solvent : demoWorld.Solvent := by
+  refine ⟨?_, ?_⟩ <;> decide
+
+/-- **TOOTH — the tie is a REAL CROSS-PREDICATE that BITES.** A phantom-mint world (the vault register
+claims 50 mirror circulating, but the dregg ledger holds only 40) is NOT `Solvent`, even though the vault
+backing `50 ≤ 100` holds. A DISJOINT conjunction of "backing" and "ledger conservation" could never catch
+this — only a predicate that TIES the dregg ledger to the vault register does. -/
+theorem phantomMint_not_solvent : ¬ (CustodyWorld.mk ⟨100, 50⟩ 40).Solvent := by
+  rintro ⟨he, _⟩
+  exact absurd he (by decide)
 
 /-- **The net boundary crossing, projected** — after `lock a → release a'`, BOTH registers moved by
 exactly `a − a'` (from a backed start with `a' ≤ a`): the vault's escrow change EQUALS dregg's
@@ -434,16 +540,29 @@ theorem ringRelease_backed :
         · subst hh; exact release_backed hmh hrel
         · exact ih htlAll htl m ht
 
-/-- **`refund m0` — the timeout/refund edge.** If the clearing does NOT settle within the window, the
-lock REVERTS: the vault state returns to its pre-lock value `m0` (the escrow is returned to the
-depositor, the mirror un-minted). No value is lost — the deposit round-trips. -/
-def refund (m0 : MirrorState) (_stuck : MirrorState) : MirrorState := m0
+/-- **`refund a m` — the timeout/refund edge** (`redeem` on a stuck lock). If the clearing does NOT
+settle within the window, the deposit is reverted by REDEEMING it: withdraw the `a` escrow and un-mint
+the `a` mirror (`locked -= a`, `supply -= a`), IFF the lock is still fully in place (`a ≤ supply`), else
+refused. This ACTUALLY COMPUTES the reverted state (it is a genuine `release` of the stuck deposit back
+to the depositor) — not a constant returning its input. -/
+def refund (a : Nat) (m : MirrorState) : Option MirrorState := m.release a
 
-/-- **The refund restores the pre-lock state exactly** — a `lock a` that never clears is reverted with
-NO value lost: `refund` returns `m0`, so `refund (lock m0 a) = m0`. A cleared-but-unreleased escrow is
-resolved by refund; it is never stranded. -/
-theorem lock_refund_restores (m0 : MirrorState) (_hb : m0.backed) (a : Nat) {m1 : MirrorState}
-    (_hlock : m0.lock a = some m1) : refund m0 m1 = m0 := rfl
+/-- **The refund RESTORES the pre-lock state exactly — a genuine round trip, not `rfl` over a constant.**
+A `lock a` that never clears is reverted by refunding `a`: the refund recomputes both registers
+(`locked + a - a`, `supply + a - a`) and the arithmetic collapses back to `m0`, so `refund a (lock m0 a)
+= some m0`. No value is lost — a cleared-but-unreleased escrow is resolved by refund, never stranded. -/
+theorem lock_refund_restores (m0 : MirrorState) (hb : m0.backed) (a : Nat) {m1 : MirrorState}
+    (hlock : m0.lock a = some m1) : refund a m1 = some m0 := by
+  rw [lock_eq hb a, Option.some.injEq] at hlock
+  subst hlock
+  unfold refund MirrorState.release
+  rw [if_pos (Nat.le_add_left a m0.supply)]
+  simp only [Nat.add_sub_cancel]
+
+/-- **TOOTH (over-refund refused)** — refunding more than is circulating fails-closed (an already-cleared
+or partially-released lock cannot be double-refunded). -/
+theorem overRefund_refused {m : MirrorState} {a : Nat} (h : m.supply < a) : refund a m = none :=
+  overRelease_refused h
 
 /-! ## 6. NON-VACUITY — both polarities, computed. -/
 
@@ -491,10 +610,14 @@ theorem demo_lifecycle_conserves :
   Market.Interchain.overMint_refused, Market.Interchain.unbacked_mint_refused,
   Market.Interchain.double_draw_refused, Market.Interchain.overRelease_refused,
   Market.Interchain.step_backed, Market.Interchain.run_backed,
-  Market.Interchain.drexClear_conserves_systemValue, Market.Interchain.lock_gap,
-  Market.Interchain.release_gap, Market.Interchain.custody_cross_boundary_conserves,
+  Market.Interchain.wclear_ledgerMirror, Market.Interchain.wlock_solvent,
+  Market.Interchain.wrelease_solvent, Market.Interchain.wclear_solvent,
+  Market.Interchain.lock_gap, Market.Interchain.release_gap,
+  Market.Interchain.custody_cross_boundary_conserves, Market.Interchain.demoWorld_solvent,
+  Market.Interchain.phantomMint_not_solvent,
   Market.Interchain.boundary_net_matched, Market.Interchain.gatedRingRelease_uncleared,
   Market.Interchain.ringRelease_atomic, Market.Interchain.ringRelease_backed,
-  Market.Interchain.lock_refund_restores, Market.Interchain.demo_lifecycle_conserves]
+  Market.Interchain.lock_refund_restores, Market.Interchain.overRefund_refused,
+  Market.Interchain.demo_lifecycle_conserves]
 
 end Market.Interchain
