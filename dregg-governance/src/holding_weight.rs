@@ -96,7 +96,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use dregg_bridge::solana_holdings::ProvenHolding;
 
 use crate::proven_foreign_holding::{ChainId, ProvenForeignHolding};
-use crate::{CastOutcome, HostBallotBox, HostVoteEngine, OptionId, PollId, VoterId};
+use crate::{CastOutcome, OptionId, PollId, VoterId};
 // The verified executor engine's `tally`/`resolve`/`cast` live on its
 // `VoteEngine` trait (the inherent weighted methods ride alongside).
 use collective_choice::VoteEngine as _;
@@ -822,11 +822,12 @@ pub fn grant_foreign_weight<B: HolderBinding>(
 /// chain+holder+asset)` nullifier below are host-side bookkeeping and are honest about
 /// it.
 ///
-/// **Demoted residual**: [`HostBallotBox`] also implements [`WeightedBallotEngine`] —
-/// kept ONLY as the causal-log derivation aid for out-of-lane consumers
-/// (`dregg-interchain-gov`) pending their migration; its one-vote and quorum gates are
-/// a `HashSet` and a `>=`. No test or doc in THIS crate points the holding-weight flow
-/// at it as a gate.
+/// **The ONLY [`WeightedBallotEngine`] is [`VerifiedHoldingBallotBox`]**: the demoted
+/// [`HostBallotBox`] no longer implements this trait — its migration is complete
+/// (`dregg-interchain-gov`'s examples and tests now drive the verified box), so a
+/// granted weight can only land on the verified executor, never on a `HashSet`+`>=`
+/// twin. `HostBallotBox` survives solely as the causal-log derivation aid
+/// (`derive_tally`/`verify_tally`), which is not a weighted-ballot target at all.
 #[derive(Clone, Debug, Default)]
 pub struct HoldingWeightRegistry {
     /// The fired nullifiers: present once a holding's weight has been granted into
@@ -1087,12 +1088,12 @@ impl HoldingWeightRegistry {
 /// [`foreign_grant_and_cast`](HoldingWeightRegistry::foreign_grant_and_cast)
 /// cast through this trait.
 ///
-/// **The front door is [`VerifiedHoldingBallotBox`]** — the verified executor
+/// **The only implementor is [`VerifiedHoldingBallotBox`]** — the verified executor
 /// engine (`collective_choice::CollectiveChoice::cast_weighted`): the weighted
 /// tally bump, the one-ballot-per-voter rule, and the quorum gates are real
-/// executor turns. [`HostBallotBox`] also implements this trait, DEMOTED: a
-/// causal-log derivation aid whose gates are a `HashSet` and a `>=`, retained
-/// for out-of-lane consumers pending migration — do not point new flows at it.
+/// executor turns. The demoted [`HostBallotBox`] does NOT implement this trait
+/// (its migration is complete); it remains only as the causal-log derivation aid
+/// (`derive_tally`/`verify_tally`), never a weighted-ballot target.
 pub trait WeightedBallotEngine {
     /// Cast a ballot of `weight` for `voter` into `poll`.
     ///
@@ -1112,25 +1113,6 @@ pub trait WeightedBallotEngine {
         choice: OptionId,
         weight: u64,
     ) -> Result<CastOutcome, GrantError>;
-}
-
-/// DEMOTED — the host box as a weighted ballot target: `next_block` + `cast`,
-/// the pre-weld flow verbatim. Kept only for out-of-lane consumers
-/// (`dregg-interchain-gov`); the holding-weight front door is
-/// [`VerifiedHoldingBallotBox`].
-impl WeightedBallotEngine for HostBallotBox {
-    fn cast_weighted_ballot(
-        &mut self,
-        poll: PollId,
-        voter: VoterId,
-        choice: OptionId,
-        weight: u64,
-    ) -> Result<CastOutcome, GrantError> {
-        let block = self
-            .next_block(poll, voter, choice, weight)
-            .ok_or(GrantError::PollNotOpen)?;
-        Ok(self.cast(poll, block))
-    }
 }
 
 /// **The verified weighted ballot box** — the holding-weight registry's front
@@ -1513,69 +1495,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn end_to_end_grant_and_cast_into_a_plurality_poll() {
-        if !lean_verdict_core_or_skip() {
-            return;
-        }
-        // The weight flows all the way into the real HostBallotBox tally.
-        let mut engine = HostBallotBox::new();
-        let poll = engine.open_poll(PollSpec {
-            question: "ship it?".into(),
-            options: vec!["no".into(), "yes".into()],
-            electorate: Electorate::Open,
-            rule: DecisionRule::Plurality { quorum: 1 },
-            enact_on_pass: false,
-            nonce: 0,
-        });
-
-        let owner = owner_key(7);
-        let owner_pk = owner.verifying_key().to_bytes();
-        let voter: VoterId = [6u8; 32];
-        let h = proven(owner_pk, [48u8; 32], 777, 20);
-        let binding = bind(&owner, voter);
-        let mut reg = HoldingWeightRegistry::new();
-        reg.open_snapshot(poll, 20);
-
-        let outcome = reg
-            .grant_and_cast(&mut engine, poll, OptionId(1), &h, &binding)
-            .expect("grant succeeds");
-        assert_eq!(outcome, CastOutcome::Accepted);
-
-        let tally = engine.tally(poll).unwrap();
-        assert_eq!(
-            tally.per_option.get(&OptionId(1)).copied().unwrap_or(0),
-            777,
-            "the proven balance N became N units of vote weight for the bound voter",
-        );
-        assert_eq!(tally.distinct_voters, 1);
-
-        // A DIFFERENT holder (owner2) bound to the SAME voter is a DISTINCT nullifier
-        // (different holder), so it clears the consume-once guard and reaches the
-        // engine, whose own one-vote-per-voter rule refuses the second vote. (The same
-        // holder re-presenting is caught earlier by the nullifier — see
-        // solana_holding_cannot_double_count_across_the_two_registry_paths.)
-        let owner2 = owner_key(8);
-        let owner2_pk = owner2.verifying_key().to_bytes();
-        let binding2 = bind(&owner2, voter);
-        let h2 = proven(owner2_pk, [49u8; 32], 111, 20);
-        let outcome2 = reg
-            .grant_and_cast(&mut engine, poll, OptionId(1), &h2, &binding2)
-            .expect("a distinct holder clears the nullifier; the engine then judges the voter");
-        assert_eq!(outcome2, CastOutcome::RefusedDoubleVote);
-        assert_eq!(
-            engine
-                .tally(poll)
-                .unwrap()
-                .per_option
-                .get(&OptionId(1))
-                .copied()
-                .unwrap_or(0),
-            777,
-            "the double-voter's second holding added no weight",
-        );
-    }
-
     // ── the VERIFIED front door: grants land on the executor engine ─────────
 
     /// The end-to-end flow on the VERIFIED box: the Lean-verdicted weight
@@ -1798,53 +1717,6 @@ mod tests {
             .expect("1300 >= 1000 total weight resolves");
         assert_eq!(decision.winner, 1);
         assert_eq!(decision.winner_tally, 1300);
-    }
-
-    #[test]
-    fn poll_not_open_on_the_engine_does_not_burn_the_nullifier() {
-        if !lean_verdict_core_or_skip() {
-            return;
-        }
-        // MINOR-2: if grant_and_cast targets a poll the engine has no ballot box for,
-        // it must NOT consume the (poll, token_account) nullifier — otherwise a correct
-        // later attempt (once the poll opens) is permanently DoS'd.
-        let mut engine = HostBallotBox::new();
-        let owner = owner_key(30);
-        let owner_pk = owner.verifying_key().to_bytes();
-        let voter: VoterId = [30u8; 32];
-        let h = proven(owner_pk, [0xC3u8; 32], 640, 42);
-        let binding = bind(&owner, voter);
-        let mut reg = HoldingWeightRegistry::new();
-
-        // Target a poll the engine does not know. The registry has a snapshot for it,
-        // so we get past check_grant and fail specifically at the engine.
-        let ghost = PollId([0xEEu8; 32]);
-        reg.open_snapshot(ghost, 42);
-        assert_eq!(
-            reg.grant_and_cast(&mut engine, ghost, OptionId(0), &h, &binding),
-            Err(GrantError::PollNotOpen),
-        );
-        assert!(
-            !reg.is_spent(ghost, &h),
-            "a poll-not-open failure must leave the nullifier available",
-        );
-        assert_eq!(reg.granted_count(), 0);
-
-        // Now the poll opens for real — the SAME account still counts.
-        let real = engine.open_poll(PollSpec {
-            question: "later".into(),
-            options: vec!["a".into(), "b".into()],
-            electorate: Electorate::Open,
-            rule: DecisionRule::Plurality { quorum: 1 },
-            enact_on_pass: false,
-            nonce: 1,
-        });
-        reg.open_snapshot(real, 42);
-        assert_eq!(
-            reg.grant_and_cast(&mut engine, real, OptionId(0), &h, &binding)
-                .unwrap(),
-            CastOutcome::Accepted,
-        );
     }
 
     #[test]
@@ -2194,19 +2066,21 @@ mod tests {
         if !lean_verdict_core_or_skip() {
             return;
         }
-        // End-to-end REJECT polarity through the REAL engine: a proven EVM balance
-        // above u64::MAX clears every grant check (it IS a genuine holding) but the
-        // ballot cast REFUSES fail-closed at the narrowing seam — no truncated ballot,
-        // no tally movement, no nullifier burned.
-        let mut engine = HostBallotBox::new();
-        let poll = engine.open_poll(PollSpec {
-            question: "whale?".into(),
-            options: vec!["no".into(), "yes".into()],
-            electorate: Electorate::Open,
-            rule: DecisionRule::Plurality { quorum: 1 },
-            enact_on_pass: false,
-            nonce: 2,
-        });
+        // End-to-end REJECT polarity through the VERIFIED executor box: a proven EVM
+        // balance above u64::MAX clears every grant check (it IS a genuine holding) but
+        // the ballot cast REFUSES fail-closed at the narrowing seam — no truncated
+        // ballot, no tally movement, no nullifier burned.
+        let mut engine = VerifiedHoldingBallotBox::new([0u8; 32]);
+        let poll = engine
+            .open_weighted_poll(&PollSpec {
+                question: "whale?".into(),
+                options: vec!["no".into(), "yes".into()],
+                electorate: Electorate::Open,
+                rule: DecisionRule::Plurality { quorum: 1 },
+                enact_on_pass: false,
+                nonce: 2,
+            })
+            .expect("weighted poll opens");
         let owner = owner_key(60);
         let holder = owner.verifying_key().to_bytes();
         let voter: VoterId = [60u8; 32];
@@ -2230,8 +2104,8 @@ mod tests {
         );
         // Nothing was tallied — especially not a truncated 5.
         let tally = engine.tally(poll).unwrap();
-        assert_eq!(tally.per_option.get(&OptionId(1)).copied().unwrap_or(0), 0);
-        assert_eq!(tally.distinct_voters, 0);
+        assert_eq!(tally.per_option.get(1).copied().unwrap_or(0), 0);
+        assert_eq!(tally.total, 0);
         // And the nullifier is NOT spent (the refusal must not lock the holder out).
         assert!(!reg.is_foreign_spent(poll, &whale));
         assert_eq!(reg.granted_count(), 0);
@@ -2243,16 +2117,18 @@ mod tests {
             return;
         }
         // ACCEPT polarity: a normal (fits-u64) foreign holding casts through
-        // foreign_grant_and_cast and its full weight reaches the tally.
-        let mut engine = HostBallotBox::new();
-        let poll = engine.open_poll(PollSpec {
-            question: "cross-chain ship it?".into(),
-            options: vec!["no".into(), "yes".into()],
-            electorate: Electorate::Open,
-            rule: DecisionRule::Plurality { quorum: 1 },
-            enact_on_pass: false,
-            nonce: 3,
-        });
+        // foreign_grant_and_cast and its full weight reaches the verified tally.
+        let mut engine = VerifiedHoldingBallotBox::new([0u8; 32]);
+        let poll = engine
+            .open_weighted_poll(&PollSpec {
+                question: "cross-chain ship it?".into(),
+                options: vec!["no".into(), "yes".into()],
+                electorate: Electorate::Open,
+                rule: DecisionRule::Plurality { quorum: 1 },
+                enact_on_pass: false,
+                nonce: 3,
+            })
+            .expect("weighted poll opens");
         let owner = owner_key(61);
         let holder = owner.verifying_key().to_bytes();
         let voter: VoterId = [61u8; 32];
@@ -2268,11 +2144,11 @@ mod tests {
         );
         let tally = engine.tally(poll).unwrap();
         assert_eq!(
-            tally.per_option.get(&OptionId(1)).copied().unwrap_or(0),
+            tally.per_option.get(1).copied().unwrap_or(0),
             555,
             "the proven foreign balance became ballot weight"
         );
-        assert_eq!(tally.distinct_voters, 1);
+        assert_eq!(tally.total, 555);
         // The nullifier fired: the SAME holding re-presented is AlreadyCounted.
         assert!(reg.is_foreign_spent(poll, &h));
         assert_eq!(

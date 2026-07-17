@@ -38,13 +38,11 @@ use dregg_bridge::solana_holdings::{
 use dregg_governance::holding_weight::{
     binding_message, cosmos_address_of_pubkey, cosmos_binding_prehash, eip191_message_hash,
     evm_address_of_pubkey, evm_binding_message, narrow_ballot_weight, CosmosOwnerBinding,
-    EvmOwnerBinding, GrantError, HoldingWeightRegistry, OwnerBinding, VoterBinding,
+    EvmOwnerBinding, GrantError, HoldingWeightRegistry, OwnerBinding, VerifiedHoldingBallotBox,
+    VoterBinding, WeightedBallotEngine,
 };
 use dregg_governance::proven_foreign_holding::{ChainId, ProvenForeignHolding};
-use dregg_governance::{
-    CastOutcome, CollectiveChoice, DecisionRule, Electorate, OptionId, PollSpec, VoteEngine,
-    VoterId,
-};
+use dregg_governance::{CastOutcome, DecisionRule, Electorate, OptionId, PollSpec, VoterId};
 use dregg_interchain_gov::{
     cosmos_fact_to_governance, cosmos_fields_to_holding, evm_holding_to_governance,
     solana_holding_to_governance, JoinError,
@@ -460,15 +458,17 @@ fn full_cross_chain_flow_three_chains_one_weighted_tally() {
     }
 
     // A poll: "adopt the treasury proposal?" with a pinned snapshot per chain.
-    let mut engine = CollectiveChoice::new();
-    let poll = engine.open_poll(PollSpec {
-        question: "adopt the treasury proposal?".into(),
-        options: vec!["no".into(), "yes".into()],
-        electorate: Electorate::Open,
-        rule: DecisionRule::Plurality { quorum: 1 },
-        enact_on_pass: false,
-        nonce: 0,
-    });
+    let mut engine = VerifiedHoldingBallotBox::new([0u8; 32]);
+    let poll = engine
+        .open_weighted_poll(&PollSpec {
+            question: "adopt the treasury proposal?".into(),
+            options: vec!["no".into(), "yes".into()],
+            electorate: Electorate::Open,
+            rule: DecisionRule::Plurality { quorum: 1 },
+            enact_on_pass: false,
+            nonce: 0,
+        })
+        .expect("the weighted holding poll opens on the verified executor");
     let mut reg = HoldingWeightRegistry::new();
     reg.open_chain_snapshot(poll, ChainId::Solana, SOLANA_FIXTURE_SLOT);
     reg.open_chain_snapshot(poll, ChainId::BASE, evm_world::BLOCK_NUMBER);
@@ -524,10 +524,12 @@ fn full_cross_chain_flow_three_chains_one_weighted_tally() {
     let alice_weight =
         narrow_ballot_weight(g_sol.weight + g_base.weight + g_cosmos.weight).expect("fits");
     assert_eq!(alice_weight, 3_500);
-    let block = engine
-        .next_block(poll, ALICE_VOTER, OptionId(1), alice_weight)
-        .expect("poll is open");
-    assert_eq!(engine.cast(poll, block), CastOutcome::Accepted);
+    assert_eq!(
+        engine
+            .cast_weighted_ballot(poll, ALICE_VOTER, OptionId(1), alice_weight)
+            .expect("poll is open"),
+        CastOutcome::Accepted
+    );
 
     // BOB votes the other way with a Solana-only holding (1200), via the
     // grant-and-cast convenience.
@@ -546,15 +548,15 @@ fn full_cross_chain_flow_three_chains_one_weighted_tally() {
     // THE CROSS-CHAIN WEIGHTED OUTCOME.
     let tally = engine.tally(poll).expect("tally derives");
     assert_eq!(
-        tally.per_option.get(&OptionId(1)).copied().unwrap_or(0),
+        tally.per_option.get(1).copied().unwrap_or(0),
         3_500,
         "Alice's weight is the SUM of her proven holdings across three chains"
     );
+    assert_eq!(tally.per_option.get(0).copied().unwrap_or(0), 1_200);
     assert_eq!(
-        tally.per_option.get(&OptionId(0)).copied().unwrap_or(0),
-        1_200
+        tally.total, 4_700,
+        "the whole board is Alice's 3500 plus Bob's 1200, two voters"
     );
-    assert_eq!(tally.distinct_voters, 2);
 
     // Re-presenting ANY of Alice's holdings in the same poll is refused — the
     // per-(poll, chain+holder+asset) nullifier already fired.

@@ -21,13 +21,11 @@ use dregg_bridge::solana_holdings::{
 use dregg_governance::holding_weight::{
     binding_message, cosmos_address_of_pubkey, cosmos_binding_prehash, eip191_message_hash,
     evm_address_of_pubkey, evm_binding_message, narrow_ballot_weight, CosmosOwnerBinding,
-    EvmOwnerBinding, GrantError, HoldingWeightRegistry, OwnerBinding, VoterBinding,
+    EvmOwnerBinding, GrantError, HoldingWeightRegistry, OwnerBinding, VerifiedHoldingBallotBox,
+    VoterBinding, WeightedBallotEngine,
 };
 use dregg_governance::proven_foreign_holding::ChainId;
-use dregg_governance::{
-    CastOutcome, CollectiveChoice, DecisionRule, Electorate, OptionId, PollSpec, VoteEngine,
-    VoterId,
-};
+use dregg_governance::{CastOutcome, DecisionRule, Electorate, OptionId, PollSpec, VoterId};
 use dregg_interchain_gov::{
     cosmos_fields_to_holding, evm_holding_to_governance, solana_holding_to_governance,
 };
@@ -64,15 +62,17 @@ fn main() {
     }
 
     // ───────────────────────── the poll ─────────────────────────
-    let mut engine = CollectiveChoice::new();
-    let poll = engine.open_poll(PollSpec {
-        question: "adopt the treasury proposal?".into(),
-        options: vec!["no".into(), "yes".into()],
-        electorate: Electorate::Open,
-        rule: DecisionRule::Plurality { quorum: 1 },
-        enact_on_pass: false,
-        nonce: 0,
-    });
+    let mut engine = VerifiedHoldingBallotBox::new([0u8; 32]);
+    let poll = engine
+        .open_weighted_poll(&PollSpec {
+            question: "adopt the treasury proposal?".into(),
+            options: vec!["no".into(), "yes".into()],
+            electorate: Electorate::Open,
+            rule: DecisionRule::Plurality { quorum: 1 },
+            enact_on_pass: false,
+            nonce: 0,
+        })
+        .expect("the weighted holding poll opens on the verified executor");
     let mut reg = HoldingWeightRegistry::new();
     reg.open_chain_snapshot(poll, ChainId::Solana, SOLANA_FIXTURE_SLOT);
     reg.open_chain_snapshot(poll, ChainId::BASE, BASE_BLOCK);
@@ -163,10 +163,12 @@ fn main() {
     println!("  base grant   : {} weight", g_base.weight);
     println!("  cosmos grant : {} weight", g_cos.weight);
     println!("Alice casts ONE ballot for \"yes\" carrying her cross-chain weight: {total}");
-    let block = engine
-        .next_block(poll, ALICE_VOTER, OptionId(1), total)
-        .expect("poll open");
-    assert_eq!(engine.cast(poll, block), CastOutcome::Accepted);
+    assert_eq!(
+        engine
+            .cast_weighted_ballot(poll, ALICE_VOTER, OptionId(1), total)
+            .expect("poll open"),
+        CastOutcome::Accepted
+    );
 
     // ───────────────────────── Bob votes no ─────────────────────────
     let bob_sol = Ed25519Key::from_bytes(&[0x61u8; 32]);
@@ -183,12 +185,15 @@ fn main() {
 
     // ───────────────────────── the tally ─────────────────────────
     let tally = engine.tally(poll).expect("tally");
-    let yes = tally.per_option.get(&OptionId(1)).copied().unwrap_or(0);
-    let no = tally.per_option.get(&OptionId(0)).copied().unwrap_or(0);
+    let yes = tally.per_option.get(1).copied().unwrap_or(0);
+    let no = tally.per_option.get(0).copied().unwrap_or(0);
     println!("── TALLY ──────────────────────────────────────────────────────────────────");
     println!("  yes : {yes}   (Alice — 2000 solana + 1000 base + 500 cosmoshub-4)");
     println!("  no  : {no}   (Bob — 1200 solana)");
-    println!("  distinct voters: {}", tally.distinct_voters);
+    println!(
+        "  total weight on the verified executor board: {}",
+        tally.total
+    );
     assert_eq!(yes, 3_500);
     assert_eq!(no, 1_200);
     println!("  => \"yes\" carries, 3500 to 1200 — a holding-weighted outcome spanning");
@@ -235,14 +240,16 @@ fn main() {
     );
     println!("  re-presenting Alice's counted holding -> AlreadyCounted (nullifier fired)");
     // 3. On a fresh poll, the stranger binding itself is refused.
-    let poll2 = engine.open_poll(PollSpec {
-        question: "second poll".into(),
-        options: vec!["no".into(), "yes".into()],
-        electorate: Electorate::Open,
-        rule: DecisionRule::Plurality { quorum: 1 },
-        enact_on_pass: false,
-        nonce: 1,
-    });
+    let poll2 = engine
+        .open_weighted_poll(&PollSpec {
+            question: "second poll".into(),
+            options: vec!["no".into(), "yes".into()],
+            electorate: Electorate::Open,
+            rule: DecisionRule::Plurality { quorum: 1 },
+            enact_on_pass: false,
+            nonce: 1,
+        })
+        .expect("second weighted poll opens");
     reg.open_chain_snapshot(poll2, ChainId::BASE, BASE_BLOCK);
     assert_eq!(
         reg.grant_foreign_into_poll(poll2, &base_fact, &evm_bind(&mallory_evm, BOB_VOTER)),
