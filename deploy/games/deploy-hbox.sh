@@ -235,12 +235,19 @@ preflight() {
 # ── build ────────────────────────────────────────────────────────────────────
 build() {
   log "build (cargo --release): ${BINARIES[*]}"
+  # DREGG_REQUIRE_LEAN=0: the games web + bot are the RE-EXECUTION-verified surface
+  # (a run ranks + verifies by replay, not by the Lean-linked verified producer —
+  # that is the node's job, built Lean-linked via deploy/node/). Without this, the
+  # release build hits dregg-lean-ffi/build.rs's "Lean-required in release" gate and
+  # PANICS on any box without a pre-seeded libdregg_lean.a — the reason a from-HEAD
+  # redeploy was not reliably safe. Marshal-only is the correct posture for this
+  # surface and matches how the crate's tests build.
   # web server: root workspace member.
-  run bash -c "cd '$GAMES_REPO_DIR' && cargo build --release -p dreggnet-web --bin dreggnet-web-server"
+  run bash -c "cd '$GAMES_REPO_DIR' && DREGG_REQUIRE_LEAN=0 cargo build --release -p dreggnet-web --bin dreggnet-web-server"
   # bot: its OWN workspace — build from within discord-bot/ (NOT `-p` from root,
   # which fails: it is `exclude`d from the root workspace).
   if [[ "$SKIP_BOT" != "1" ]]; then
-    run bash -c "cd '$GAMES_REPO_DIR/discord-bot' && cargo build --release --bin dregg-discord-bot"
+    run bash -c "cd '$GAMES_REPO_DIR/discord-bot' && DREGG_REQUIRE_LEAN=0 cargo build --release --bin dregg-discord-bot"
   fi
 }
 
