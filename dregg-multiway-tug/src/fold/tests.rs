@@ -156,6 +156,65 @@ fn win_output_is_welded_to_the_cell_prefix() {
     );
 }
 
+/// **THE PER-PLAY MEMBERSHIP RECEIPT IS WELDED TO THE CELL PREFIX.** The membership leaf now
+/// publishes `[old8 ‖ new8 ‖ leaf ‖ root]` (18 PIs), the deployed state-binding shape — not the
+/// old fixture-bound `[leaf, root]`. Its public-input commitment (the value the fold binds and the
+/// state node connects to the leg's real rotated roots) MOVES when the `[old8 ‖ new8]` prefix is
+/// one cell's vs another's, so a per-play move cannot be claimed over a different cell transition.
+/// The membership fact is unchanged (the card id is still NOT in the PIs).
+#[test]
+fn membership_leaf_is_welded_to_the_cell_prefix() {
+    use super::{fixture_wire_commit8, membership_leaf_bound};
+    let hand = sample_hand();
+    let tree = HandTree::commit(hand.clone());
+    let root = root_felt_from_commitment(&tree.root_bytes());
+    let (card, nonce) = hand[5]; // card 18 — a hidden play
+    let proof = tree.prove_play(card).expect("a dealt card proves");
+
+    let new8: [BabyBear; 8] = core::array::from_fn(|i| BabyBear::new(700 + i as u32));
+    // A distinct non-fixture prefix standing in for a cell's rotated roots.
+    let cell_a: [BabyBear; 8] = core::array::from_fn(|i| BabyBear::new(9_000 + i as u32));
+
+    let a = membership_leaf_bound(cell_a, new8, &proof).expect("an honest play lowers to a leaf");
+    // The state-binding ABI shape: [old8 ‖ new8 ‖ leaf ‖ root].
+    assert_eq!(a.public_inputs.len(), 18, "[old8 ‖ new8 ‖ leaf ‖ root]");
+    assert_eq!(&a.public_inputs[0..8], &cell_a, "PI[0..8] = old8");
+    assert_eq!(&a.public_inputs[8..16], &new8, "PI[8..16] = new8");
+    assert_eq!(
+        a.public_inputs[16],
+        card_leaf(card, nonce),
+        "PI[16] = the blinded card leaf"
+    );
+    assert_eq!(
+        a.public_inputs[17], root,
+        "PI[17] = the committed hand root"
+    );
+    // The membership portion [leaf, root] hides the card: the raw card id is not among it (leaf
+    // is the blinded Poseidon2 commitment card_leaf(card, nonce), root is the hand digest).
+    assert!(
+        !a.public_inputs[16..].contains(&BabyBear::from_u64(card)),
+        "the raw card id never appears in the membership PIs — the hand stays private-in-fold"
+    );
+
+    // The SAME play over a DIFFERENT cell prefix binds a different commitment — the receipt is
+    // welded to the cell, not free.
+    let b = membership_leaf_bound(fixture_wire_commit8(), new8, &proof).expect("lowers");
+    assert_ne!(
+        custom_proof_pi_commitment(&a.public_inputs),
+        custom_proof_pi_commitment(&b.public_inputs),
+        "a membership play over a DIFFERENT cell prefix must bind a different commitment — the \
+         per-play receipt is welded to the cell, not the fixture"
+    );
+
+    // A fabricated/tampered play still has no leaf (the refusal survives the prefixing).
+    let mut bad = tree.prove_play(hand[0].0).expect("dealt card proves");
+    bad.path[0].siblings[0] = bad.path[0].siblings[0] + BabyBear::ONE;
+    assert!(
+        membership_leaf_bound(cell_a, new8, &bad).is_err(),
+        "a tampered path is refused at lowering even with the state prefix"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // SLOW (#[ignore]): the whole private match folds to one verify_history-accepted proof.
 // ---------------------------------------------------------------------------
@@ -256,4 +315,99 @@ fn match_win_output_is_attested() {
     );
     whole.final_root = honest_final;
     verify_history(&whole, &vk).expect("the restored match verifies again");
+}
+
+/// Deploy + seed + play a few legal turns on the REAL executor, returning the game's OWN committed
+/// cell snapshot — a real WorldCell cell (real pk / balance / heap), not the `pk[0]=7` fixture.
+fn a_real_world_cell() -> dregg_cell::Cell {
+    use crate::game::MultiwayTug;
+    use crate::reference::Engine;
+    let seed = 0u64;
+    let mut eng = Engine::new(seed);
+    let game = MultiwayTug::deploy(seed as u8).expect("deploy");
+    game.seed(&eng.projection()).expect("genesis seeds");
+    for _ in 0..3 {
+        if eng.round_complete() {
+            break;
+        }
+        let mv = eng.play_next();
+        let proj = eng.projection();
+        game.commit_projection(mv.action().method(), &proj)
+            .expect("a legal play commits");
+    }
+    game.world().cell_snapshot().expect("the world-cell exists")
+}
+
+/// ⚑ THE PER-PLAY MOVE IS A REAL RECEIPT (SLOW). A hidden-hand membership play folds over the
+/// game's OWN committed WorldCell cell through the deployed recursion fold, and the pure light
+/// client `verify_history` ACCEPTS it — the per-play leg is welded to real state, no longer the
+/// `pk[0]=7` fixture. Then the ANTI-GHOST bite: the SAME play whose leaf carries the FIXTURE's
+/// state prefix (not the real cell's rotated roots) is UNSAT over the real leg — no satisfying
+/// fold, refused. This closes the fixture residual for the per-play moves the way
+/// `fold_real_cell.rs` closed it for the WIN move.
+#[test]
+#[ignore = "SLOW: deployed state-binding recursion fold over the real WorldCell per-play membership transition (~minutes)"]
+fn membership_play_folds_over_the_real_cell_and_lightclient_accepts() {
+    use super::{
+        cell_rotated_roots, fixture_wire_commit8, fold_membership_play_over_cell,
+        membership_leaf_bound, mint_membership_turn_over_cell, nonce_bumped, plain_turn_over_cell,
+    };
+    use dregg_circuit_prove::ivc_turn_chain::prove_turn_chain_recursive;
+
+    let real = a_real_world_cell();
+    assert_ne!(
+        super::cell_wire_commit8(&real),
+        fixture_wire_commit8(),
+        "the real cell's v9 commitment differs from the pk[0]=7 fixture's"
+    );
+
+    let hand = sample_hand();
+    let tree = HandTree::commit(hand.clone());
+    let proof = tree.prove_play(hand[0].0).expect("a dealt card proves");
+
+    // HONEST: the membership play welded to the real cell folds and verify_history accepts.
+    let mut whole = fold_membership_play_over_cell(&real, &proof)
+        .expect("the real-cell membership play folds to one proof");
+    let vk = whole.root_vk_fingerprint();
+    let attested = verify_history(&whole, &vk)
+        .expect("the light client ACCEPTS the honest real-cell membership play");
+    assert_eq!(attested.num_turns, 2, "the play turn + the linking tail");
+    eprintln!(
+        "MULTIWAY-TUG REAL-CELL PLAY: a membership play folded over the WorldCell's own cell; \
+         verify_history OK, num_turns={} (the card never appeared in the proof).",
+        attested.num_turns
+    );
+
+    // NON-VACUOUS light-client bite: a relabeled final_root is rejected.
+    let honest_final = whole.final_root;
+    whole.final_root[0] = honest_final[0] + BabyBear::ONE;
+    assert!(
+        verify_history(&whole, &vk).is_err(),
+        "a relabeled final_root must be REJECTED by verify_history"
+    );
+    whole.final_root = honest_final;
+    verify_history(&whole, &vk).expect("the restored real-cell play verifies again");
+
+    // ANTI-GHOST: the SAME play whose leaf prefix is the FIXTURE's roots (not the real cell's) is
+    // UNSAT over the real leg — the state node connects the leaf's [old8 ‖ new8] to the leg's REAL
+    // rotated roots, so a fixture prefix has no satisfying fold.
+    let (_real_old8, real_new8) = cell_rotated_roots(&real);
+    let forged_leaf = membership_leaf_bound(fixture_wire_commit8(), real_new8, &proof)
+        .expect("the leaf lowers (the membership fact is honest; only the prefix is wrong)");
+    let t0 = mint_membership_turn_over_cell(&real, &forged_leaf);
+    let t1 = plain_turn_over_cell(&nonce_bumped(&real));
+    let forged = if t0.new_root() != t1.old_root() {
+        Err("link".to_string())
+    } else {
+        prove_turn_chain_recursive(&[t0, t1]).map_err(|e| format!("{e}"))
+    };
+    assert!(
+        forged.is_err(),
+        "a membership leaf whose state prefix is the fixture's roots (not the real cell's) must be \
+         UNSAT over the real leg — the fixture receipt does not fold (got Ok, the weld leaks!)"
+    );
+    eprintln!(
+        "MULTIWAY-TUG REAL-CELL PLAY REFUSE: a fixture-prefix membership leaf is UNSAT over the \
+         real cell's leg — the per-play receipt is welded to real state."
+    );
 }

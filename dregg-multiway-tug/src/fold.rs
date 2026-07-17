@@ -60,6 +60,10 @@ use game_turn_slice::compiler::{
 
 use dregg_cell::{InputRef, WitnessedPredicate};
 
+use dregg_circuit::dsl::circuit::{BoundaryDef, CellProgram};
+use dregg_circuit::dsl::descriptors::merkle_poseidon2_descriptor;
+use dregg_circuit::effect_vm::custom_state_binding::CUSTOM_PI_STATE_PREFIX_LEN;
+
 use crate::hidden_hand::{PlayProof, card_leaf};
 
 // ===========================================================================
@@ -111,6 +115,60 @@ pub fn membership_leaf_for_play(proof: &PlayProof) -> Result<LoweredMembership, 
     // the path rides blob 1, committed under the played card's root.
     let wp = WitnessedPredicate::merkle_membership(proof.root, InputRef::Witness { index: 0 }, 1);
     lower_witnessed_merkle_membership(&wp, &witness).map_err(|b| b.to_string())
+}
+
+/// The `merkle_poseidon2_descriptor` recurrence, with the deployed 16-felt state-binding prefix
+/// (`[old8 ‖ new8]`) RESERVED at PI[0..16] and the membership leaf/root relocated to PI 16/17.
+///
+/// This is the membership-leaf twin of `win_leaf_bound`'s `GameProgramCompiler::with_public_inputs(16)`
+/// door: the deployed `Effect::Custom` state-binding node
+/// ([`custom_state_binding`](dregg_circuit::effect_vm::custom_state_binding)) requires every custom
+/// sub-proof to publish `[old8 ‖ new8]` at PI[0..16] so it can `connect` those lanes to the leg's
+/// REAL rotated roots — a 2-PI `[leaf, root]` leaf is refused by the deployed prover
+/// (`PublicInputsTooShort`). The 16 prefix lanes are FREE descriptor PIs (no AIR boundary binds
+/// them — the fold does), exactly as the win door's reserved prefix is; the merkle recurrence's
+/// own boundaries (leaf = `CURRENT`@first, root = `PARENT`@last) shift up by the prefix width, so
+/// what the AIR proves is unchanged — only the PI indices move. The trace columns are identical to
+/// [`lower_witnessed_merkle_membership`]'s, so its witness reuses verbatim.
+fn merkle_descriptor_with_state_prefix() -> dregg_circuit::dsl::circuit::CircuitDescriptor {
+    let mut desc = merkle_poseidon2_descriptor();
+    desc.public_input_count = CUSTOM_PI_STATE_PREFIX_LEN + 2; // [old8 ‖ new8 ‖ leaf ‖ root]
+    for b in desc.boundaries.iter_mut() {
+        if let BoundaryDef::PiBinding { pi_index, .. } = b {
+            *pi_index += CUSTOM_PI_STATE_PREFIX_LEN;
+        }
+    }
+    desc
+}
+
+/// **THE MEMBERSHIP RECEIPT WELDED TO THE REAL CELL.** Lower a hidden-hand [`PlayProof`] to a
+/// foldable membership leaf carrying the deployed state-binding prefix: PIs
+/// `[old8 ‖ new8 ‖ leaf ‖ root]`, where `old8`/`new8` are the WorldCell's OWN rotated roots
+/// ([`cell_rotated_roots`]) and `leaf`/`root` are the blinded card commitment + the committed hand
+/// root the merkle recurrence proves (the card id is still NOT in the proof — the hand stays
+/// private-in-fold).
+///
+/// This is the membership twin of [`win_leaf_bound`]. Because the prefix is the real cell's roots,
+/// the deployed `Effect::Custom` state-binding node ties this sub-proof to THAT cell's transition —
+/// a per-play move is now a receipt bound to real state, not the `pk[0]=7` fixture. `Err` = a
+/// fabricated card / tampered path (refused at lowering, as [`membership_leaf_for_play`]).
+pub fn membership_leaf_bound(
+    old8: [BabyBear; 8],
+    new8: [BabyBear; 8],
+    proof: &PlayProof,
+) -> Result<LeafBundle, String> {
+    let base = membership_leaf_for_play(proof)?; // base.public_inputs == [leaf, root]
+    let mut public_inputs =
+        Vec::with_capacity(CUSTOM_PI_STATE_PREFIX_LEN + base.public_inputs.len());
+    public_inputs.extend_from_slice(&old8);
+    public_inputs.extend_from_slice(&new8);
+    public_inputs.extend_from_slice(&base.public_inputs);
+    Ok(LeafBundle {
+        program: CellProgram::new(merkle_descriptor_with_state_prefix(), 1),
+        witness_values: base.witness_values,
+        num_rows: base.num_rows,
+        public_inputs,
+    })
 }
 
 // ===========================================================================
@@ -460,6 +518,101 @@ pub fn fold_win_over_cell(
     }
     prove_turn_chain_recursive(&[t0, t1])
         .map_err(|e| format!("win fold over real cell failed: {e}"))
+}
+
+/// Mint ONE per-play membership turn folded over the REAL WorldCell cell. Mirrors
+/// [`mint_win_turn_over_cell`] but for a hidden-hand membership play: the leg is minted over the
+/// real cell (`cell @ nonce n -> n+1`) via [`cell_custom_leg`], and the retained sub-proof is the
+/// prefixed membership leaf ([`membership_leaf_bound`]) whose `[old8 ‖ new8]` prefix IS the leg's
+/// real rotated roots. `app_root_binding` is `None` — the membership fact has no cell field to weld
+/// (a hand root is not a stored register), so it rides the deployed STATE node
+/// (`prove_custom_binding_node_state_segmented`), which `connect`s the leaf's `[old8 ‖ new8]` to the
+/// leg's real roots. A leaf whose prefix is NOT the leg's roots (e.g. the `pk[0]=7` fixture's) has
+/// no satisfying partner — UNSAT, refused by `verify_history`.
+fn mint_membership_turn_over_cell(cell: &Cell, leaf: &LeafBundle) -> FinalizedTurn {
+    let commit = custom_proof_pi_commitment(&leaf.public_inputs);
+    let cwb = CustomWitnessBundle {
+        program: leaf.program.clone(),
+        witness_values: leaf.witness_values.clone(),
+        num_rows: leaf.num_rows,
+        public_inputs: leaf.public_inputs.clone(),
+        app_root_binding: None,
+    };
+    let after = nonce_bumped(cell);
+    let leg = cell_custom_leg(cell, &after, commit, Some(cwb));
+    FinalizedTurn::new(DescriptorParticipant::rotated(leg))
+}
+
+/// **FOLD ONE MEMBERSHIP PLAY OVER THE REAL WORLDCELL CELL.** The per-play twin of
+/// [`fold_win_over_cell`]: `cell` is the game's OWN committed cell (`WorldCell::cell_snapshot`),
+/// `proof` a hidden-hand [`PlayProof`]. The chain is two turns on the SAME real-cell lineage — the
+/// membership turn (`cell @ n -> n+1`, carrying the prefixed membership leaf) then a plain
+/// nonce-bump (`n+1 -> n+2`, so the chain links and folds). The returned `WholeChainProof` attests
+/// the membership play as a receipt bound to the REAL cell's transition: the leaf's `[old8 ‖ new8]`
+/// prefix is the cell's rotated roots, welded IN-CIRCUIT to the leg by the deployed state node — no
+/// longer the `pk[0]=7` fixture. A `proof` with a tampered path is refused at
+/// [`membership_leaf_bound`]; a leaf whose prefix disagrees with the cell's roots is UNSAT in the
+/// fold.
+///
+/// SLOW (the deployed recursive fold).
+pub fn fold_membership_play_over_cell(
+    cell: &Cell,
+    proof: &PlayProof,
+) -> Result<dregg_circuit_prove::ivc_turn_chain::WholeChainProof, String> {
+    let (old8, new8) = cell_rotated_roots(cell);
+    let leaf = membership_leaf_bound(old8, new8, proof)?;
+    let t0 = mint_membership_turn_over_cell(cell, &leaf);
+    let t1 = plain_turn_over_cell(&nonce_bumped(cell));
+    if t0.new_root() != t1.old_root() {
+        return Err(
+            "membership fold: turn 0 post-state does not link to the tail turn".to_string(),
+        );
+    }
+    prove_turn_chain_recursive(&[t0, t1])
+        .map_err(|e| format!("membership fold over real cell failed: {e}"))
+}
+
+/// Build the chain of per-play membership [`FinalizedTurn`]s for a whole PRIVATE match, each folded
+/// over the REAL WorldCell cell lineage. Turn `i` binds `proofs[i]` over `cell @ nonce n+i -> n+i+1`
+/// (the leaf prefix = that cell's rotated roots); consecutive turns link because turn `i`'s
+/// post-state nonce equals turn `i+1`'s pre-state nonce. This is the real-cell twin of
+/// [`build_match_turns`] — every per-play leg is now welded to real state, not the `pk[0]=7`
+/// fixture.
+pub fn build_membership_turns_over_cell(
+    cell: &Cell,
+    proofs: &[PlayProof],
+) -> Result<Vec<FinalizedTurn>, String> {
+    let mut turns = Vec::with_capacity(proofs.len());
+    let mut cur = cell.clone();
+    for proof in proofs {
+        let (old8, new8) = cell_rotated_roots(&cur);
+        let leaf = membership_leaf_bound(old8, new8, proof)?;
+        turns.push(mint_membership_turn_over_cell(&cur, &leaf));
+        cur = nonce_bumped(&cur);
+    }
+    for w in turns.windows(2) {
+        if w[0].new_root() != w[1].old_root() {
+            return Err(
+                "consecutive membership turns over the real cell must link (post-state → pre-state)"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(turns)
+}
+
+/// **FOLD A WHOLE PRIVATE MATCH OVER THE REAL WORLDCELL CELL.** The real-cell twin of
+/// [`fold_match`]: a chain of hidden-hand membership plays, each welded to the WorldCell's own
+/// committed cell lineage, folds into ONE `WholeChainProof` a pure light client
+/// ([`dregg_lightclient::verify_history`]) attests. Every per-play receipt is bound to real state.
+///
+/// SLOW (the deployed recursive fold).
+pub fn fold_match_over_cell(
+    cell: &Cell,
+    proofs: &[PlayProof],
+) -> Result<dregg_circuit_prove::ivc_turn_chain::WholeChainProof, String> {
+    let turns = build_membership_turns_over_cell(cell, proofs)?;
+    prove_turn_chain_recursive(&turns).map_err(|e| format!("real-cell match fold failed: {e}"))
 }
 
 /// Build the chain of [`FinalizedTurn`]s for a match: turn `i` binds `bundles[i]` at nonce
