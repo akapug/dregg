@@ -1965,3 +1965,22 @@ after I traced the full keep-vs-delete):
   FoldDelta. constraint_prover.rs is a separate follow-up (a validator with other consumers).
 The lesson ember's laugh taught: "wired out of production" ≠ "deleted". The dead code is still a lie waiting
 to be re-called (export_state_proof was one keystroke from being a live mock-proof export).
+
+## ⚑ NEW THRUST (ember): SDK DRIFT + fhegg SDK-readiness + FHEGG-KERNEL doc truth
+ember: the SDKs (sdk/sdk-ts/sdk-py) haven't been updated in a long time and the protocol grew a LOT,
+especially fhegg — AND `FHEGG-KERNEL.md` is probably stale too, and we should ANALYZE the fhe stuff to see
+if it is actually ready for SDK-level integration (not assume).
+SCOPED FINDING (mapped): the 3 SDKs' recent "touches" are other lanes' mechanical commits; **ZERO SDK
+SOURCE exposes fhegg** (only build artifacts matched). fhegg grew to 3 crates (fhegg-fhe: Order/ClearOutcome/
+reference_clear/fhe_clear; fhegg-solver; fhegg-rtl). Rust sdk = 64 pub items (governance/device/guardian…) —
+no clearing module. sdk-py = pyo3 binding, sdk-ts = wasm/TS binding (inherit the Rust sdk surface).
+LAUNCHED `wup1pv94u` (3 fable lanes, read-only): (1) fhegg-fhe clearing SDK-readiness (real homomorphic
+clear vs shell; MEASURED perf on real vs toy K; key mgmt; wire-stability) → READY/PROTOTYPE/RESEARCH per
+capability; (2) fhegg-solver + the Cert-F verify-not-find certificate — is the solve→certify→verify flow
+real + exposable; (3) FHEGG-KERNEL.md claim-by-claim vs the code (theorems exist+non-vacuous? perf real or
+toy? grades honest? overstated readiness?) → the doc-drift list to true it up.
+THE DISCIPLINE (session frame): a PROVEN kernel is model-scope; it says NOTHING about a deployable artifact
+or its perf. Report what the CODE does TODAY, not what a doc/proof claims. Then: true-up the doc to reality
++ an honest SDK-readiness verdict (expose what is deployed, name what is research).
+NOTE (CLAUDE.md updated): `cv workflow <session> <run> --results` now renders FULL per-agent returns +
+`cv show/export <agent-id>` resolves workflow sub-agents — use it to harvest (not hand-grep).
