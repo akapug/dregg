@@ -49,8 +49,7 @@ use dregg_circuit::dsl::cap_membership::verify_cap_membership_p3;
 use dregg_circuit::dsl::dsl_p3_air::DslP3Proof;
 use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
 use dregg_circuit::dsl::revocation::{
-    DslRevocationTree, non_revocation_circuit_descriptor, prove_non_revocation_p3,
-    verify_non_revocation_p3,
+    DslRevocationTree, prove_non_revocation_p3, verify_non_revocation_p3,
 };
 use dregg_circuit::effect_vm::{self, CellState, Effect as VmEffectKind, generate_effect_vm_trace};
 // (The v1 hand-AIR EffectVM proof type + prover/verifier — `effect_vm_p3_full_air`
@@ -787,7 +786,12 @@ fn build_full_turn_descriptor(components: &TurnProofComponents) -> ComposedCircu
 
     // Non-revocation (sorted tree non-membership).
     if components.has_non_revocation {
-        circuits.push(non_revocation_circuit_descriptor());
+        // LOCAL MELD-ADAPTER-BASE STUB (never upstream): the Rust-authored
+        // non-revocation descriptor was retired in 23cd63264; this fingerprint
+        // site awaits the DSL-emitted descriptor half of that migration.
+        unreachable!(
+            "non-revocation descriptor site awaits the upstream migration half of 23cd63264"
+        );
     }
 
     // Cap-membership (consumed capability ∈ openable capability_root). Deferred until the
@@ -4710,7 +4714,11 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
             label: "non-revocation".into(),
             proof_bytes: revoc_proof_bytes,
             sub_public_inputs: revoc_pi,
-            vk_hash: compute_vk_hash_bytes(&non_revocation_circuit_descriptor()),
+            // LOCAL MELD-ADAPTER-BASE STUB (never upstream): awaits the
+            // DSL-emitted descriptor half of 23cd63264.
+            vk_hash: unreachable!(
+                "non-rev vk_hash site awaits the upstream migration half of 23cd63264"
+            ),
         });
     }
 
