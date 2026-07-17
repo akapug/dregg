@@ -23,5 +23,5 @@ TAG=lean-seed
 LEAN_TOOLCHAIN=leanprover/lean4:v4.30.0
 MATHLIB_REV=1c2b90b13009c65b090d95a83c98e248deafb6f1
 DREGG_TREE_HASH=406424cff5c89b25c94e90ad5574380fa6dddda8
-GENERATED_UTC=2026-07-17T08:24:55Z
+GENERATED_UTC=2026-07-17T08:26:26Z
 NOTE=Published by .github/workflows/lean-seed.yml. Assets under this tag are CONTENT-KEYED (see scripts/lean-seed-key.sh), so TAG is stable and this provenance is a reference snapshot for the drift warning only — fetch-lean-seed.sh always resolves the asset from YOUR checkout's key, not from these values.
