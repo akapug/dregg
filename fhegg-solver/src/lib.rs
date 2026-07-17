@@ -75,5 +75,6 @@ pub mod package;
 pub mod pdhg;
 pub mod pricecert;
 pub mod qp;
+pub mod qp_exact;
 pub mod smooth;
 pub mod wire;
