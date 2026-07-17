@@ -39,9 +39,9 @@ SampleableType (unifSpec.Range i)` instance is ArkLib's OWN assumption on `tSdhE
 verbatim. `tSdh_ggm_sound_lt_one` adds the standard regime hypothesis `C(fuel+D+4,2)·D + (D+1) <
 p − 1` and delivers a genuine `< 1`.
 -/
-import GgmEmbed
-import GgmProbThreading
-import GgmDegreeDischarge
+import ArkLib.Scratch.KzgVacuity.GgmEmbed
+import ArkLib.Scratch.KzgVacuity.GgmProbThreading
+import ArkLib.Scratch.KzgVacuity.GgmDegreeDischarge
 
 open Polynomial Groups OracleSpec OracleComp
 open scoped Classical NNReal ENNReal

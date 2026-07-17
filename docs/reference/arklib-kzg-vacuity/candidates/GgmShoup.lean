@@ -49,7 +49,7 @@ REUSED verbatim (NOT re-derived): `GgmRandomEncoding.pairRootUnion` / `mem_pairR
 `srsSt_table_natDegree_le`, `GgmDegreeInvariant.natDegree_getD_le`. NEW here: the free-comparison model,
 the matrix-valued hybrid, the Shoup handle-table siblings, and the target theorems.
 -/
-import GgmDegreeDischarge
+import ArkLib.Scratch.KzgVacuity.GgmDegreeDischarge
 
 open Polynomial
 

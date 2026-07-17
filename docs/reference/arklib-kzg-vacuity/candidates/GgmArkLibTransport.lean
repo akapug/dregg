@@ -54,7 +54,7 @@ Both are `OptionT ProbComp` bookkeeping. The CONDITION-level identity proven her
 (`groupWinSet_eq_realWinSet`) is exact, so the counting bound is about precisely the event
 `tSdhExperiment` scores — nothing about the predicate remains to be aligned.
 -/
-import GgmAdaptive
+import ArkLib.Scratch.KzgVacuity.GgmAdaptive
 import ArkLib.Commitments.Functional.KZG.HardnessAssumptions
 
 open Polynomial

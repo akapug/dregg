@@ -34,8 +34,8 @@ peer model):
 Reused: `GgmDegreeInvariant.natDegree_getD_le` (the defaulted-read bound) — everything else
 here targets the real `runAux`/`runTable` recursion directly.
 -/
-import GgmRandomEncoding
-import GgmDegreeInvariant
+import ArkLib.Scratch.KzgVacuity.GgmRandomEncoding
+import ArkLib.Scratch.KzgVacuity.GgmDegreeInvariant
 
 open Polynomial
 

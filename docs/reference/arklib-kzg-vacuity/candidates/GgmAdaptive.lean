@@ -38,7 +38,7 @@ idiom as the static file):
      of ≤ (#pairs) root-sets of nonzero polys of degree ≤ Δ, bounded by Schwartz–Zippel. Compose →
      the concrete `(D+1 + #pairs·Δ)/(p−1)` ~ `(q+D)²·D/p`.
 -/
-import GgmCandidate
+import ArkLib.Scratch.KzgVacuity.GgmCandidate
 
 open Polynomial
 

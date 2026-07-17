@@ -38,8 +38,8 @@ its own G₁ tower `[g₁^(τ^0),…,g₁^(τ^D)]`. `g₁^τ = g₁^(τ^1)` is p
 pairing to move `g₂^τ` into G₁), so the unconditional correspondence is FALSE there — an honest fact
 about the interface, not a proof gap. `D ≥ 1` is the meaningful KZG regime.
 -/
-import GgmArkLibTransport
-import GgmRandomEncoding
+import ArkLib.Scratch.KzgVacuity.GgmArkLibTransport
+import ArkLib.Scratch.KzgVacuity.GgmRandomEncoding
 import ArkLib.Commitments.Functional.KZG.HardnessAssumptions
 
 open Polynomial Groups

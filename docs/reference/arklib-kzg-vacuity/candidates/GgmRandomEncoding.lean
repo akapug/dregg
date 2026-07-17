@@ -60,7 +60,7 @@ at the set level), `card_winningPoints_le` (the static Boneh–Boyen root event,
 `adaptiveExperiment`. NEW here: the all-pairs union lemma, the structural table lemmas, and the
 composition.
 -/
-import GgmAdaptive
+import ArkLib.Scratch.KzgVacuity.GgmAdaptive
 import Mathlib.Data.Sym.Card
 
 open Polynomial
