@@ -34,7 +34,7 @@ Environment=RUST_LOG=info
 # (a tampered log refuses to reopen). The consumed-updates offset persists here too.
 Environment=TELEGRAM_SESSION_DIR=%h/.local/state/dregg-telegram/sessions
 WorkingDirectory=%h/dev/breadstuffs
-ExecStart=%h/dev/breadstuffs/target/release/dreggnet-telegram-bot
+ExecStart=%h/dregg-telegram/dreggnet-telegram-bot
 Restart=always
 RestartSec=5
 
