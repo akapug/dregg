@@ -657,10 +657,22 @@ async fn post_court_bond(
             balance: 0,
         });
     }
+    // `req.amount` is caller-signable up to u64::MAX; a wrapping `+ ADOPT_TURN_FEE`
+    // would escrow a tiny wrapped amount while `registry.add_bond(req.amount)` records
+    // the huge one, breaking the escrow == bond invariant (and debug-panicking).
+    let escrow_amount = req
+        .amount
+        .checked_add(if needs_adopt { ADOPT_TURN_FEE } else { 0 })
+        .ok_or_else(|| {
+            CourtServiceRefusal::BadRequest(format!(
+                "bond amount {} + adopt fee overflows u64",
+                req.amount
+            ))
+        })?;
     effects.push(Effect::Transfer {
         from: operator,
         to: bond_cell,
-        amount: req.amount + if needs_adopt { ADOPT_TURN_FEE } else { 0 },
+        amount: escrow_amount,
     });
     effects.push(Effect::EmitEvent {
         cell: bond_cell,
@@ -969,6 +981,31 @@ mod tests {
             0
         );
         assert!(s.equivocation_court.bond_cell_of(&victim_pk).is_none());
+    }
+
+    #[tokio::test]
+    async fn bond_amount_overflow_is_rejected_not_wrapped() {
+        // `amount` is caller-signable up to u64::MAX. On a fresh strand the
+        // one-time adopt fee is added on top, so `amount + ADOPT_TURN_FEE`
+        // wraps to a tiny escrow while `registry.add_bond(amount)` would record
+        // the huge one — escrow != bond (and a debug build panics on the add).
+        // The handler must reject the overflow (BadRequest) before any value
+        // moves, not commit a wrapped transfer.
+        let (state, _dir) = funded_state().await;
+        let (_dalek, typed, pk) = strand(51);
+        let (status, json) = post_bond(&state, &typed, u64::MAX).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["reason"], "bad-request");
+        // Nothing moved: no registry bond, no bond cell bound.
+        let s = state.read().await;
+        assert_eq!(
+            s.equivocation_court
+                .registry
+                .bond_amount(&dregg_types::PublicKey(pk)),
+            0,
+            "an overflowing bond must record nothing"
+        );
+        assert!(s.equivocation_court.bond_cell_of(&pk).is_none());
     }
 
     // ── THE SLASH: evidence → one conserved move, exactly once ──────────────

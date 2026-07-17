@@ -195,6 +195,11 @@ pub enum BlueprintError {
     /// — the due block `start + k·period` collapses. Rejected at build
     /// (fail-closed).
     ZeroPeriod,
+    /// The settlement value plus the one-time adopt fee overflows `u64`. A
+    /// wrapping add would fund the cell with a tiny wrapped amount while the
+    /// cell's VALUE slot records the huge one, breaking the funded == recorded
+    /// invariant. Rejected at build (fail-closed).
+    AmountOverflow,
 }
 
 impl std::fmt::Display for BlueprintError {
@@ -238,6 +243,12 @@ impl std::fmt::Display for BlueprintError {
                 write!(
                     f,
                     "standing-obligation period length must be a nonzero number of blocks"
+                )
+            }
+            BlueprintError::AmountOverflow => {
+                write!(
+                    f,
+                    "settlement value + adopt fee overflows u64 (would fund a wrapped amount)"
                 )
             }
         }

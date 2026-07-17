@@ -16,8 +16,8 @@
 //! `Dregg2.Apps.ObligationFactory`, `Dregg2.Apps.BridgeCell`.
 
 use dregg_cell::blueprint::{
-    BridgeTerms, EscrowTerms, ObligationTerms, PARTY_B_SLOT, STATE_OPEN, STATE_RESOLVED_A,
-    STATE_RESOLVED_B, STATE_SLOT,
+    BlueprintError, BridgeTerms, EscrowTerms, ObligationTerms, PARTY_B_SLOT, STATE_OPEN,
+    STATE_RESOLVED_A, STATE_RESOLVED_B, STATE_SLOT,
 };
 use dregg_cell::{Cell, CellId, field_from_u64};
 use dregg_sdk::factories::{
@@ -171,6 +171,24 @@ fn escrow_terms(depositor: CellId, beneficiary: CellId, timeout_height: u64) -> 
         condition: field_from_u64(99),
         timeout_height,
     }
+}
+
+/// Falsifier (soundness): a caller-controlled `amount` near `u64::MAX` makes
+/// `amount + ADOPT_TURN_FEE` wrap. Before the fix, `create_escrow_cell` handed
+/// back a plan whose fund `Transfer` moved the tiny wrapped amount while the
+/// VALUE slot recorded the huge `amount` — funded != recorded. The factory must
+/// reject the overflow at build (fail-closed), not silently wrap it.
+#[test]
+fn escrow_amount_overflow_is_rejected_not_wrapped() {
+    let (runtime, agent, depositor, beneficiary) = harness("escrow-overflow");
+    let mut terms = escrow_terms(depositor, beneficiary, 0);
+    terms.amount = u64::MAX; // + ADOPT_TURN_FEE wraps to ADOPT_TURN_FEE - 1
+    let result = create_escrow_cell(&terms, agent_pubkey(&runtime), [0x0Au8; 32], agent, agent);
+    assert_eq!(
+        result.err(),
+        Some(BlueprintError::AmountOverflow),
+        "value + adopt fee overflow must be rejected, not wrapped into a tiny fund transfer"
+    );
 }
 
 /// Happy path: fund → release with the correct condition witness. The value

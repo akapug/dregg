@@ -150,7 +150,7 @@ fn settlement_plan(
     party_b: FieldElement,
     condition: FieldElement,
     deadline_height: u64,
-) -> SettlementCellPlan {
+) -> Result<SettlementCellPlan, BlueprintError> {
     let factory_vk = descriptor.factory_vk;
     let cell_id = CellId::derive_raw(&owner_pubkey, &token_id);
     let params = FactoryCreationParams {
@@ -171,10 +171,16 @@ fn settlement_plan(
         index: index as usize,
         value,
     };
+    // `value` is caller-controlled; a wrapping `+ ADOPT_TURN_FEE` would fund the
+    // cell with a tiny wrapped amount while the VALUE slot below records the full
+    // `value`, breaking the funded == recorded invariant. Reject on overflow.
+    let funded_amount = value
+        .checked_add(ADOPT_TURN_FEE)
+        .ok_or(BlueprintError::AmountOverflow)?;
     let fund_effects = vec![Effect::Transfer {
         from: funder,
         to: cell_id,
-        amount: value + ADOPT_TURN_FEE,
+        amount: funded_amount,
     }];
     // The cell self-grants the operator driving reach. Non-amplifying: the
     // granter's held authority is the implicit self-cap (⊤ on every axis);
@@ -206,7 +212,7 @@ fn settlement_plan(
         set(DEADLINE_SLOT, field_from_u64(deadline_height)),
         set(STATE_SLOT, field_from_u64(STATE_OPEN)),
     ];
-    SettlementCellPlan {
+    Ok(SettlementCellPlan {
         descriptor,
         factory_vk,
         cell_id,
@@ -214,7 +220,7 @@ fn settlement_plan(
         fund_effects,
         adopt_effects,
         open_effects,
-    }
+    })
 }
 
 /// Shared resolve-turn shape: exhibit a witness (optional), step the state
@@ -280,7 +286,7 @@ pub fn create_escrow_cell(
     operator: CellId,
     funder: CellId,
 ) -> Result<SettlementCellPlan, BlueprintError> {
-    Ok(settlement_plan(
+    settlement_plan(
         escrow_factory_descriptor(terms)?,
         owner_pubkey,
         token_id,
@@ -291,7 +297,7 @@ pub fn create_escrow_cell(
         terms.beneficiary,
         terms.condition,
         terms.timeout_height,
-    ))
+    )
 }
 
 /// Build the release turn for an open escrow — the replacement for
@@ -358,7 +364,7 @@ pub fn create_obligation_cell(
     operator: CellId,
     funder: CellId,
 ) -> Result<SettlementCellPlan, BlueprintError> {
-    Ok(settlement_plan(
+    settlement_plan(
         obligation_factory_descriptor(terms)?,
         owner_pubkey,
         token_id,
@@ -369,7 +375,7 @@ pub fn create_obligation_cell(
         terms.obligee,
         terms.condition,
         terms.deadline_height,
-    ))
+    )
 }
 
 /// Build the fulfil turn for an open obligation — the replacement for
@@ -439,7 +445,7 @@ pub fn bridge_lock_cell(
     operator: CellId,
     funder: CellId,
 ) -> Result<SettlementCellPlan, BlueprintError> {
-    Ok(settlement_plan(
+    settlement_plan(
         bridge_factory_descriptor(terms)?,
         owner_pubkey,
         token_id,
@@ -450,7 +456,7 @@ pub fn bridge_lock_cell(
         terms.pot,
         terms.finality_witness,
         terms.timeout_height,
-    ))
+    )
 }
 
 /// Build the finalize turn for a locked bridge cell — the replacement for

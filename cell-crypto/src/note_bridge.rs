@@ -1048,13 +1048,16 @@ pub fn initiate_bridge(
 ///
 /// * `nullifier` - The nullifier of the pending bridge to finalize.
 /// * `receipt` - The signed receipt from the destination federation.
-/// * `trusted_keys` - Trusted public keys for destination federations (Ed25519).
+/// * `destination_keys` - Map of destination federation id → its authorized
+///   Ed25519 public key. The receipt must be signed by the key registered for
+///   its OWN `destination_federation`; a trusted federation cannot sign a
+///   receipt naming a destination it does not hold the key for.
 /// * `pending_set` - The set of pending bridges.
 /// * `permanent_nullifiers` - The permanent nullifier set to add the nullifier to.
 pub fn finalize_bridge(
     nullifier: &[u8; 32],
     receipt: &BridgeReceipt,
-    trusted_keys: &[[u8; 32]],
+    destination_keys: &HashMap<[u8; 32], [u8; 32]>,
     pending_set: &mut PendingBridgeSet,
     permanent_nullifiers: &mut BridgedNullifierSet,
 ) -> Result<(), BridgeError> {
@@ -1087,8 +1090,9 @@ pub fn finalize_bridge(
         });
     }
 
-    // Verify the receipt signature against trusted keys.
-    if !verify_bridge_receipt(receipt, trusted_keys) {
+    // Verify the receipt signature against the key registered for the receipt's
+    // OWN destination federation (not merely "any trusted key").
+    if !verify_bridge_receipt(receipt, destination_keys) {
         return Err(BridgeError::InvalidReceipt {
             reason: "receipt signature verification failed".to_string(),
         });
@@ -1151,11 +1155,29 @@ pub fn cancel_bridge(
     Ok(())
 }
 
-/// Verify a bridge receipt's Ed25519 signature against a set of trusted federation keys.
+/// Verify a bridge receipt's Ed25519 signature against the key registered for
+/// the receipt's OWN destination federation.
 ///
-/// Returns true if the receipt's signature is valid for any of the trusted keys.
-pub fn verify_bridge_receipt(receipt: &BridgeReceipt, trusted_keys: &[[u8; 32]]) -> bool {
+/// `destination_keys` maps each destination federation id to its authorized
+/// Ed25519 public key. The receipt is accepted ONLY if its signature verifies
+/// under the key mapped to `receipt.destination_federation`.
+///
+/// Binding the signer to the destination is load-bearing: a trusted federation
+/// A must not be able to sign a receipt naming a DIFFERENT destination B (whose
+/// key it does not hold). Verifying against "any trusted key" would let A forge
+/// B's mint-ack and drive `finalize_bridge` to burn the owner's note with no
+/// B-side mint.
+pub fn verify_bridge_receipt(
+    receipt: &BridgeReceipt,
+    destination_keys: &HashMap<[u8; 32], [u8; 32]>,
+) -> bool {
     use ed25519_dalek::{Signature, VerifyingKey};
+
+    // The only key that may sign this receipt is the one registered for the
+    // receipt's own declared destination federation.
+    let Some(key_bytes) = destination_keys.get(&receipt.destination_federation) else {
+        return false;
+    };
 
     let message = BridgeReceipt::signing_message(
         &receipt.nullifier,
@@ -1165,15 +1187,9 @@ pub fn verify_bridge_receipt(receipt: &BridgeReceipt, trusted_keys: &[[u8; 32]])
 
     let signature = Signature::from_bytes(&receipt.signature);
 
-    for key_bytes in trusted_keys {
-        if let Ok(vk) = VerifyingKey::from_bytes(key_bytes)
-            && vk.verify_strict(&message, &signature).is_ok()
-        {
-            return true;
-        }
-    }
-
-    false
+    VerifyingKey::from_bytes(key_bytes)
+        .map(|vk| vk.verify_strict(&message, &signature).is_ok())
+        .unwrap_or(false)
 }
 
 /// Verify a portable note proof from another federation.
@@ -1805,6 +1821,14 @@ mod tests {
         sig.to_bytes()
     }
 
+    /// Helper: a destination→key trust map registering `vk` for `destination`.
+    fn dest_keys(
+        destination: [u8; 32],
+        vk: &ed25519_dalek::VerifyingKey,
+    ) -> HashMap<[u8; 32], [u8; 32]> {
+        HashMap::from([(destination, vk.to_bytes())])
+    }
+
     #[test]
     fn test_two_phase_happy_path() {
         // Full lifecycle: lock -> claim (destination side, not tested here) -> finalize
@@ -1813,7 +1837,7 @@ mod tests {
         let nullifier = [0xAA; 32];
         let mut pending_set = PendingBridgeSet::new();
         let mut permanent_nullifiers = BridgedNullifierSet::new();
-        let trusted_keys = vec![vk.to_bytes()];
+        let trusted_keys = dest_keys(destination, &vk);
 
         // Phase 1: Lock
         let bridge = initiate_bridge(
@@ -1854,6 +1878,107 @@ mod tests {
         assert_eq!(finalized.state, BridgeState::Finalized);
         // Nullifier is now permanently spent.
         assert!(permanent_nullifiers.contains(&nullifier));
+    }
+
+    #[test]
+    fn test_verify_bridge_receipt_rejects_cross_federation_forgery() {
+        // FALSIFIER for the cross-federation signer hole: a trusted federation A
+        // must NOT be able to sign a receipt naming a DIFFERENT destination B.
+        // Under the old "any trusted key" logic this returned true — A's sig over
+        // (nullifier, B, height) verified because A was in the trusted set — so A
+        // could forge B's mint-ack. With signer→destination binding, the receipt
+        // is checked ONLY against B's registered key, so A's forgery is rejected.
+        let key_a = ed25519_dalek::SigningKey::from_bytes(&[0xA1u8; 32]);
+        let key_b = ed25519_dalek::SigningKey::from_bytes(&[0xB2u8; 32]);
+        let fed_a = [0xAA; 32];
+        let fed_b = [0xBB; 32];
+        let nullifier = [0x77; 32];
+
+        // Both federations are trusted, each registered to its OWN key.
+        let mut destination_keys = HashMap::new();
+        destination_keys.insert(fed_a, key_a.verifying_key().to_bytes());
+        destination_keys.insert(fed_b, key_b.verifying_key().to_bytes());
+
+        // A forges a receipt naming destination B, signing with A's own key.
+        let forged_sig = sign_receipt(&nullifier, &fed_b, 50, &key_a);
+        let forged_receipt = BridgeReceipt {
+            nullifier,
+            destination_federation: fed_b,
+            mint_height: 50,
+            signature: forged_sig,
+        };
+        assert!(
+            !verify_bridge_receipt(&forged_receipt, &destination_keys),
+            "federation A must not be able to sign a receipt for destination B"
+        );
+
+        // B's own signature over the same receipt is accepted.
+        let honest_sig = sign_receipt(&nullifier, &fed_b, 50, &key_b);
+        let honest_receipt = BridgeReceipt {
+            nullifier,
+            destination_federation: fed_b,
+            mint_height: 50,
+            signature: honest_sig,
+        };
+        assert!(
+            verify_bridge_receipt(&honest_receipt, &destination_keys),
+            "the receipt signed by B's registered key must verify"
+        );
+    }
+
+    #[test]
+    fn test_finalize_bridge_rejects_forged_destination_signer() {
+        // FALSIFIER (end to end): a note is locked toward destination B. Trusted
+        // federation A forges B's receipt. finalize_bridge must reject it and
+        // leave the note locked — NOT burn the owner's note with no B-side mint.
+        let key_a = ed25519_dalek::SigningKey::from_bytes(&[0xA1u8; 32]);
+        let key_b = ed25519_dalek::SigningKey::from_bytes(&[0xB2u8; 32]);
+        let fed_a = [0xAA; 32];
+        let fed_b = [0xBB; 32];
+        let nullifier = [0x88; 32];
+
+        let mut pending_set = PendingBridgeSet::new();
+        let mut permanent_nullifiers = BridgedNullifierSet::new();
+        let mut destination_keys = HashMap::new();
+        destination_keys.insert(fed_a, key_a.verifying_key().to_bytes());
+        destination_keys.insert(fed_b, key_b.verifying_key().to_bytes());
+
+        // Lock a note toward destination B.
+        initiate_bridge(
+            nullifier,
+            fed_b,
+            1000,
+            1,
+            100,
+            vec![1, 2, 3, 4],
+            &mut pending_set,
+        )
+        .unwrap();
+
+        // A forges B's mint-ack (A's key over (nullifier, B, height)).
+        let forged_sig = sign_receipt(&nullifier, &fed_b, 50, &key_a);
+        let forged_receipt = BridgeReceipt {
+            nullifier,
+            destination_federation: fed_b,
+            mint_height: 50,
+            signature: forged_sig,
+        };
+
+        let result = finalize_bridge(
+            &nullifier,
+            &forged_receipt,
+            &destination_keys,
+            &mut pending_set,
+            &mut permanent_nullifiers,
+        );
+        assert!(
+            matches!(result, Err(BridgeError::InvalidReceipt { .. })),
+            "a receipt forged by a non-destination federation must be rejected: got {:?}",
+            result
+        );
+        // The owner's note stays locked; the nullifier is NOT permanently spent.
+        assert!(pending_set.is_locked(&nullifier));
+        assert!(!permanent_nullifiers.contains(&nullifier));
     }
 
     #[test]
@@ -1975,7 +2100,7 @@ mod tests {
         let nullifier = [0xFF; 32];
         let mut pending_set = PendingBridgeSet::new();
         let mut permanent_nullifiers = BridgedNullifierSet::new();
-        let trusted_keys = vec![vk.to_bytes()];
+        let trusted_keys = dest_keys(destination, &vk);
 
         initiate_bridge(
             nullifier,
@@ -2019,11 +2144,11 @@ mod tests {
             signature: valid_sig,
         };
 
-        // Use empty trusted keys — no federation is trusted.
+        // Use an empty trust map — no federation is registered.
         let result = finalize_bridge(
             &nullifier,
             &receipt,
-            &[], // no trusted keys
+            &HashMap::new(), // no registered destination keys
             &mut pending_set,
             &mut permanent_nullifiers,
         );
@@ -2046,7 +2171,7 @@ mod tests {
         let nullifier = [0x11; 32];
         let mut pending_set = PendingBridgeSet::new();
         let mut permanent_nullifiers = BridgedNullifierSet::new();
-        let trusted_keys = vec![vk.to_bytes()];
+        let trusted_keys = dest_keys(destination, &vk);
 
         let sig = sign_receipt(&nullifier, &destination, 50, &sk);
         let receipt = BridgeReceipt {
@@ -2098,7 +2223,10 @@ mod tests {
             signature: sig,
         };
 
-        assert!(verify_bridge_receipt(&receipt, &[vk.to_bytes()]));
+        assert!(verify_bridge_receipt(
+            &receipt,
+            &dest_keys(destination, &vk)
+        ));
     }
 
     #[test]
@@ -2115,10 +2243,14 @@ mod tests {
             signature: sig,
         };
 
-        // Use a different key for verification.
+        // Register a different key for the destination — the receipt's signer
+        // is not the registered destination key, so verification must fail.
         let other_key = ed25519_dalek::SigningKey::from_bytes(&[0x99u8; 32]);
         let other_vk = other_key.verifying_key();
-        assert!(!verify_bridge_receipt(&receipt, &[other_vk.to_bytes()]));
+        assert!(!verify_bridge_receipt(
+            &receipt,
+            &dest_keys(destination, &other_vk)
+        ));
     }
 
     // ========================================================================
