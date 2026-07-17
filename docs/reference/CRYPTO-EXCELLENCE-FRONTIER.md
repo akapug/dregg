@@ -1,5 +1,22 @@
 # Crypto Excellence Frontier — the redesign map (for codex, driven interactively)
 
+> ⚠ **STATUS: HYPOTHESIS, not verified ground truth.** Written by the main loop (claude-of-dregg)
+> synthesizing lane reports + docs — the same author who *conflated the receipt stack with fhegg
+> attestation* and had to be corrected (see `FHEGG-ATTESTATION-GROUNDING.md`). So this map may contain
+> more errors of that species. **CODEX'S FIRST TASK: factcheck / investigate / critique / REGROUND this
+> against the real code, and propose otherwise where it's wrong — do NOT treat it as gospel.** Re-derive
+> the frontier from source; if a claim here doesn't survive reading the code, the claim is the finding.
+>
+> **The claims most likely to be my synthesis (verify hardest):** (1) §V — that *one* hiding PCS
+> discharges fhegg's `HidingFriPcs` AND gives the FRI decode a hiding form AND is the same object as the
+> ArkLib KZG line — this "three payoffs, one scheme" is my extrapolation, not a proven connection; check
+> whether these are the same commitment abstraction or a loose analogy. (2) §I.1 — that BFV-fold +
+> MPC-crossing is the accurate *decomposition* and that PDHG-matvec is the real remaining perf frontier
+> (read `MEASURED-ENVELOPE.md`, don't trust my paraphrase). (3) §III — whether the biased sampler's fix
+> actually removes the εQuery uniformity-defect *cleanly*, or opens a new term. The Lean-proven facts
+> (the biased-sampler non-uniformity itself, the 3/4 legs, the Market wounds) are cited to theorems and
+> are firmer; the *redesign framings* around them are mine.
+
 **Frame.** Every "honest endpoint" below is a **FLOOR to beat, not a ceiling to defend.** The
 question is not "close the named gap" — it is *"is this the right cryptosystem at all, or does a
 reapproach get us somewhere strictly better?"* Excellence > honesty. But the sufficient test still
