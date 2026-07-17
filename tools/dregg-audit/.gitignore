@@ -7,3 +7,5 @@ fv-workspace/cache/
 # but the committed sample run's codex log is force-added.
 reports/*.codex.log
 reports/*.raw/
+# Transient per-run FV harness-gen stderr (empty on success; the halmos.log carries the proof).
+reports/*.fv.log

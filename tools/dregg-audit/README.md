@@ -27,12 +27,24 @@ PROPOSES; a developer applies the fix). See `docs/deos/DREGG-AUDIT-SERVICE.md`.
   owner-drain/seize, fee/tax manipulation). Deterministic — an ABSENT door is a
   structural absence in source; a PRESENT door is a *surface to review*.
 - **B** auto-generates a Halmos harness for the ERC-20 **supply-cap** shape (a `mint`
-  fn + public `cap`/`totalSupply`) and proves `totalSupply <= cap` over all inputs
-  against the real compiled bytecode — the EVM twin of the Lean supply theorem
-  `execMintA_iff_spec`. A hard-capped one-shot token *proves*; an uncapped/owner-
-  mintable token yields a *counterexample*. Non-token shapes report scaffold-only
-  (FV is deliberately not push-button for arbitrary contracts — pool-solvency
-  contracts use the hand-written harness in `chain/formal-verification/`).
+  fn + public `cap`/`totalSupply`) and proves, over all inputs against the real
+  compiled bytecode, up to **four invariant families** (each mapped to its taxonomy
+  door in the report): **INV-CAP** (`totalSupply <= cap`, door #2 — the EVM twin of
+  the Lean supply theorem `execMintA_iff_spec`); and, when the shape exposes the
+  needed getters, **INV-NODRAIN** (door #8, owner-drain/seize — decided by proof,
+  including any detected privileged `(address,address,uint256)` mover),
+  **INV-REENTRANCY** (ETH-conservation form; the deep both-polarity re-entry proof
+  is the hand-written `chain/formal-verification/DreggReentrancyFV.t.sol`), and
+  **INV-ACCESS-CONTROL** (door #1 — a mint missing its role check yields a
+  counterexample even when the cap holds). A hard-capped one-shot token *proves*;
+  a rug-shaped token yields a *counterexample* on the door it opens. **Honest
+  coverage:** that is proof on 3 of the 9 taxonomy doors (+ the reentrancy guard,
+  which is outside the taxonomy); the other 6 doors (#3 proxy, #4 selfdestruct,
+  #5 honeypot, #6 blacklist, #7 pause, #9 fee) are **grep-only, no proof** —
+  extending harnesses toward them is a named next step. Non-token shapes report
+  scaffold-only (FV is deliberately not push-button for arbitrary contracts —
+  pool-solvency contracts use the hand-written harness in
+  `chain/formal-verification/`).
 - **C** runs `codex exec --sandbox read-only` with a hostile-auditor prompt covering
   every vuln class (`prompts/hostile-audit.txt`). codex errs both ways, so its
   findings are emitted **TRIAGE-REQUIRED** — a human confirms each against source.
@@ -53,19 +65,30 @@ tools/dregg-audit/
   reports/                 # generated audit reports (+ the committed sample run)
 ```
 
-## The sample run
+## The sample runs (committed evidence)
 
-`reports/MoonRugToken.audit.md` is a real run against `samples/MoonRugToken.sol`, a
-reconstruction of publicly documented launchpad-token rug mechanisms (SQUID honeypot,
-mintable-supply overdose, HypervaultFi owner-drain, pausable/blacklist, selfdestruct).
-The pipeline flags 7 rug doors, and **Halmos returns a machine-checked counterexample
-proving the hard cap is not enforced** (an uncapped owner `mint`). This demonstrates
-the service on a NON-DREGG contract.
+`reports/MoonRugToken.audit.md` + `.halmos.log` is a real run against
+`samples/MoonRugToken.sol`, a reconstruction of publicly documented launchpad-token
+rug mechanisms (SQUID honeypot, mintable-supply overdose, HypervaultFi owner-drain,
+pausable/blacklist, selfdestruct). The pipeline flags 7 rug doors, and **Halmos
+returns machine-checked counterexamples on three invariants** — INV-CAP twice (the
+uncapped owner `mint`) and **INV-NODRAIN** (the owner-drain door, disproven by proof,
+not just grep); INV-REENTRANCY and INV-ACCESS-CONTROL honestly PASS (the owner mint
+*is* role-gated — each invariant closes its own door). This demonstrates the service
+on a NON-DREGG contract.
+
+`reports/UnguardedMintToken.audit.md` + `.halmos.log` is the **contrast case**
+(`samples/UnguardedMintToken.sol`): a hard-capped one-shot token whose `mint` forgot
+its `msg.sender == minter` guard. **INV-CAP PASSES** (the cap genuinely holds) while
+**INV-ACCESS-CONTROL returns the counterexample** — any caller can fire the one-shot
+mint and take the whole supply. A grep sees the `minter` field and could assume a
+guard; only the symbolic proof reveals the door. Two invariants, two doors.
 
 Reproduce:
 
 ```sh
 tools/dregg-audit/dregg-audit tools/dregg-audit/samples/MoonRugToken.sol
+tools/dregg-audit/dregg-audit tools/dregg-audit/samples/UnguardedMintToken.sol --no-codex
 ```
 
 ## Requirements
