@@ -334,7 +334,10 @@ pub fn conflict_resolve(b: &Board, ms: &[Move]) -> Vec<Move> {
         .collect()
 }
 
-fn occluded(b: &Board, srcs: &[Coord], m: &Move) -> bool {
+/// `occluded` — does any interior cell of `m` block it? A cell blocks iff it is non-vacuum
+/// and is not one of the moving `srcs` (sources are passable). The refinement target of the
+/// C.4 coordinate-indexed occlusion in `moves::validate_occlusion`; exposed for the differential.
+pub fn occluded(b: &Board, srcs: &[Coord], m: &Move) -> bool {
     interior(m.frm, m.to)
         .iter()
         .any(|&c| b.cell_at(c) != VAC && !srcs.contains(&c))

@@ -147,6 +147,46 @@ fn leg_r_rejects_invalid_move() {
     );
 }
 
+/// **THE constraint-462 CASE — occluded-source overwrite.** Move A is OCCLUDED (a blocker
+/// sits in its interior) so its non-vacuum source is a STATIC occupant, not a journeying
+/// piece; move B journeys onto that source cell and must OVERWRITE it. The corrected oracle
+/// (`apply_moves`, occlusion-aware `piece_srcs`) does exactly that; the OLD additive AIR
+/// rewrite summed the two particles instead (failing constraint id 462). Leg R must now accept
+/// the honest transition and reject a forged one.
+#[test]
+fn leg_r_occluded_source_overwrite_462() {
+    // n=3: A (0,0)->(0,2) is blocked by REP at its interior (0,1) => A occluded, source ATT
+    // stays. B (2,0)->(0,0) journeys west onto A's source and overwrites it with REP.
+    let old = mk(3, &[((0, 0), ATT), ((0, 1), REP), ((2, 0), REP)], (2, 2));
+    let a = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 2),
+    };
+    let b = Move {
+        who: 1,
+        frm: (2, 0),
+        to: (0, 0),
+    };
+    let mid = resolve_mid(&old, &[a, b]);
+    // The corrected oracle: B (REP) lands on A's source (0,0); A's ATT is overwritten, B's
+    // source cleared, and the blocker at (0,1) stays.
+    assert_eq!(mid.cell_at((0, 0)), REP, "B overwrites A's occluded source");
+    assert_eq!(mid.cell_at((2, 0)), VAC, "B's source cleared");
+    assert_eq!(mid.cell_at((0, 1)), REP, "the occluding blocker stays");
+
+    let prog = build_r_honest(&old, &a, &b);
+    let f = prog.failing();
+    assert!(
+        f.is_empty(),
+        "Leg R must ACCEPT the corrected occluded-source-overwrite transition; failing = {:?}",
+        f
+    );
+    // Non-vacuous: a forged mid (no overwrite — A's ATT summed in) is rejected.
+    let bad = corrupt(&mid);
+    assert_failing(&build_r(&old, &a, &b, &bad), "Leg R forged 462 mid");
+}
+
 // ============================================================================
 // Leg A — the automaton leg (mid → new).
 // ============================================================================

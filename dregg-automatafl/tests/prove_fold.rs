@@ -358,6 +358,71 @@ fn leg_r_leaf_proves_and_binds_commitment() {
     );
 }
 
+/// The constraint-462 case: move A OCCLUDED (REP blocks its interior at `(0,1)`), so its ATT
+/// source is a static occupant; move B journeys west onto it and must OVERWRITE. The corrected
+/// oracle's occlusion-aware `apply_moves` does exactly that; the OLD additive rewrite summed the
+/// particles and REJECTED this honest transition (failing constraint id 462). n=3, width-fitting.
+fn c462_case() -> (Board, Move, Move) {
+    let old = mk(3, &[((0, 0), ATT), ((0, 1), REP), ((2, 0), REP)], (2, 2));
+    let a = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 2),
+    };
+    let b = Move {
+        who: 1,
+        frm: (2, 0),
+        to: (0, 0),
+    };
+    (old, a, b)
+}
+
+/// **THE constraint-462 LEAF PROVE** — the honest occluded-source-overwrite Leg R transition
+/// (previously REJECTED by the old additive rewrite) now proves as a foldable custom leaf.
+#[test]
+#[ignore = "SLOW: real leaf prove of the constraint-462 occluded-source-overwrite Leg R transition"]
+fn leg_r_c462_overwrite_leaf_proves() {
+    use dregg_automatafl::reference::resolve_mid;
+    use dregg_circuit_prove::custom_leaf_adapter::{
+        prove_custom_leaf_with_commitment, read_exposed_pi_commitment,
+    };
+    use dregg_circuit_prove::custom_proof_bind::custom_proof_pi_commitment;
+    use dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config;
+
+    let (old, a, bmv) = c462_case();
+    // The corrected oracle: B (REP) overwrites A's occluded ATT source at (0,0).
+    let mid = resolve_mid(&old, &[a, bmv]);
+    assert_eq!(mid.cell_at((0, 0)), REP, "B overwrites A's occluded source");
+    assert_eq!(mid.cell_at((2, 0)), VAC, "B's source cleared");
+    assert_eq!(mid.cell_at((0, 1)), REP, "the occluding blocker stays");
+
+    let prog = build_r_honest(&old, &a, &bmv);
+    assert!(
+        prog.air_accepts(),
+        "sanity: the corrected constraint-462 Leg R must self-accept before proving"
+    );
+    let program = prog.cellprogram();
+    let w = prog.trace_witness(2);
+    let pis = prog.pis.clone();
+    let config = ir2_leaf_wrap_config();
+    let out = prove_custom_leaf_with_commitment(&program, &w, 2, &pis, &config).expect(
+        "the honest constraint-462 (occluded-source-overwrite) Leg R AIR must prove as a foldable leaf",
+    );
+    let exposed =
+        read_exposed_pi_commitment(&out).expect("Leg R c462 leaf exposes an 8-felt commitment");
+    let host = custom_proof_pi_commitment(&pis);
+    assert_eq!(
+        exposed, host,
+        "constraint-462 Leg R commitment must byte-match the host binding"
+    );
+    eprintln!(
+        "LEG R c462 LEAF: occluded-source-overwrite resolution (w={}, {} constraints) PROVED — \
+         the transition the old additive rewrite REJECTED now mints a foldable leaf.",
+        program.descriptor.trace_width,
+        program.descriptor.constraints.len(),
+    );
+}
+
 #[test]
 #[ignore = "SLOW: real leaf prove of Leg A (mid → new automaton) + commitment expose"]
 fn leg_a_leaf_proves_and_binds_commitment() {

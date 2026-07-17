@@ -15,18 +15,23 @@
 //!    from those bits by the enumerated n=2 truth-table AS GATES (not taken from
 //!    the reference). The survive bits and destination keys are therefore a proven
 //!    function of `(old, moves)`;
-//!  - occlusion (bounded interior scan with sources passable) and the board rewrite
-//!    (one-hot writes at the witnessed source/dest indices).
+//!  - occlusion (a COORDINATE-INDEXED masked line scan — see [`validate_occlusion`])
+//!    and the board rewrite (one-hot writes at the witnessed source/dest indices,
+//!    with a landing OVERWRITE so an occluded static occupant is replaced, not summed).
 //!
-//! LABELED RESIDUAL (unchanged): the occlusion interior scan is still enumerated
-//! over the compile-time move line (the general N=11 segmented-indicator scan is
-//! future work), and the concrete Lean `Refines` discharge is the long pole.
+//! C.4 REAL OCCLUSION (landed): occlusion is computed from the WITNESSED endpoints, not
+//! a compile-time interior enumeration — one authenticated line-extract (reusing the C.2
+//! perpendicular one-hot pulls the move's row/column into an n-vector) + a strictly-between
+//! mask `seg[k]` (order-independent, from the endpoint one-hots — no per-position range
+//! gadget) + a moving-source mask, summed and thresholded (`occ = [msum ≥ 1]`). This
+//! matches `reference::occluded` for ANY rook move on ANY board size (the prerequisite for
+//! a real 11×11 board). The concrete Lean `Refines` discharge is the long pole.
 
 use dregg_circuit::dsl::circuit::ColumnKind;
 use dregg_circuit::field::BabyBear;
 
 use crate::air::{alloc_board_pub, automaton_on_mid};
-use crate::builder::{Builder, Head};
+use crate::builder::{Builder, Head, fb};
 use crate::reference::{
     self as r, Board, Move, VAC, apply_moves, apply_turn, conflict_resolve, interior, move_valid,
 };
@@ -48,26 +53,6 @@ fn not_bit(b: &mut Builder, tag: &str, col: usize) -> usize {
     let c = b.alloc(tag, ColumnKind::Binary, v);
     b.assert_zero(&Head::lin(1, c).add_lin(1, col).add_const(-1));
     c
-}
-
-/// Read `board[coord]` into a fresh column via an ungated one-hot read at a
-/// COMPILE-TIME index (used for the interior-occlusion scan, whose cell line is
-/// structurally compile-time at n=2).
-fn read_cell(
-    b: &mut Builder,
-    tag: &str,
-    board_cols: &[usize],
-    n: usize,
-    coord: r::Coord,
-    board: &Board,
-) -> usize {
-    let (x, y) = coord;
-    let idx = (y as usize) * n + (x as usize);
-    let v = board.cell_at(coord) as i128;
-    let vc = b.alloc(format!("{tag}_v"), ColumnKind::Value, v);
-    let index_head = Head::c(idx as i128);
-    b.one_hot_read(tag, board_cols, idx, &index_head, vc);
-    vc
 }
 
 /// `eq = [coord(xa,ya) == coord(xb,yb)]`, pinned by an is-zero over the squared
@@ -116,9 +101,13 @@ fn eq_coords(
 }
 
 /// Validate MoveValid(old, m) with hard gates (rejects an invalid move), returning the
-/// witnessed coordinate columns `(fx,fy,tx,ty)` and the source-particle column. The
-/// source particle is read through the WITNESSED `(fx,fy)` via a one-hot index head,
-/// so `fp == old[n*fy+fx]` — the read is bound to the coordinates the move claims.
+/// witnessed coordinate columns `(fx,fy,tx,ty)`, the source-particle column `fp`, and the
+/// row×column one-hots pinned to the source `(sel_row @ fy, sel_col @ fx)`. The source
+/// particle is read through the WITNESSED `(fx,fy)` via those one-hots, so `fp == old[n*fy+fx]`
+/// — the read is bound to the coordinates the move claims. The one-hots are RETURNED so the
+/// occlusion line-extract can reuse the perpendicular one (C.2) rather than allocate a fresh
+/// n²-wide read per interior cell.
+#[allow(clippy::type_complexity)]
 fn validate_move(
     b: &mut Builder,
     tag: &str,
@@ -126,7 +115,7 @@ fn validate_move(
     m: &Move,
     old_cols: &[usize],
     one: usize,
-) -> (usize, usize, usize, usize, usize) {
+) -> (usize, usize, usize, usize, usize, Vec<usize>, Vec<usize>) {
     let n = old.n;
     let fx = b.alloc(format!("{tag}_fx"), ColumnKind::Value, m.frm.0 as i128);
     let fy = b.alloc(format!("{tag}_fy"), ColumnKind::Value, m.frm.1 as i128);
@@ -194,82 +183,215 @@ fn validate_move(
         ColumnKind::Value,
         old.cell_at(m.frm) as i128,
     );
-    b.read_rowcol(
+    // Build the row×column one-hot pair pinned to the source (sel_row @ fy, sel_col @ fx)
+    // ONCE, then do the read against it (so occlusion can reuse the perpendicular one-hot).
+    let (sel_row, sel_col) = b.one_hot_rowcol(
         &format!("{tag}_fp"),
-        old_cols,
         n,
         m.frm.0 as usize,
         &Head::lin(1, fx),
         m.frm.1 as usize,
         &Head::lin(1, fy),
-        fp,
     );
-    (fx, fy, tx, ty, fp)
+    // fp - Σ_y Σ_x sel_row[y]·sel_col[x]·old[y·n+x] == 0 (the genuine source cell).
+    let mut rd = Head::lin(1, fp);
+    for y in 0..n {
+        for x in 0..n {
+            rd = rd.add_prod(-1, vec![sel_row[y], sel_col[x], old_cols[y * n + x]]);
+        }
+    }
+    b.assert_zero(&rd);
+    (fx, fy, tx, ty, fp, sel_row, sel_col)
 }
 
-/// Occlusion for a move: are all interior cells vacuum-or-passable-source? The
-/// reference `occluded` treats moving sources as passable. We compute `occ` from the
-/// reference and validate it by reading each interior cell (a bounded scan; the move
-/// endpoints are compile-time coords here, so the interior line is fixed — the
-/// labeled N=11 segmented-scan residual).
+/// A moving source OTHER than the move under occlusion analysis: its honest coordinate plus
+/// its witnessed `(fx, fy)` columns. At m=2 exactly one such source can lie strictly interior
+/// to a given move's line (that move's own source is an endpoint, excluded by the between-mask).
+struct OtherSrc {
+    frm: r::Coord,
+    fx_col: usize,
+    fy_col: usize,
+}
+
+/// `eq = [a == c]` for two witnessed scalar columns, pinned by an is-zero over `(a-c)^2`.
+/// The 1-D twin of [`eq_coords`]; a proven boolean function of the two columns.
+fn eq_scalar(b: &mut Builder, tag: &str, a: usize, a_val: i128, c: usize, c_val: i128) -> usize {
+    let dsq_val = (a_val - c_val).pow(2);
+    let dsq = b.alloc(format!("{tag}_dsq"), ColumnKind::Value, dsq_val);
+    // dsq - (a-c)^2 == 0  =>  dsq - a² + 2ac - c² == 0.
+    b.assert_zero(
+        &Head::lin(1, dsq)
+            .add_prod(-1, vec![a, a])
+            .add_prod(2, vec![a, c])
+            .add_prod(-1, vec![c, c]),
+    );
+    let neq = b.forced_ge0(
+        &format!("{tag}_neq"),
+        &Head::lin(1, dsq).add_const(-1),
+        dsq_val - 1,
+        DIFF_RBITS,
+    );
+    let eq = b.alloc(
+        format!("{tag}_eq"),
+        ColumnKind::Binary,
+        (dsq_val == 0) as i128,
+    );
+    b.assert_zero(&Head::lin(1, eq).add_lin(1, neq).add_const(-1));
+    eq
+}
+
+/// **C.4 — COORDINATE-INDEXED occlusion.** `occ = [∃ interior cell that is non-vacuum and not a
+/// moving source]`, matching [`crate::reference::occluded`] for ANY rook move — computed from the
+/// WITNESSED endpoints, not a compile-time interior enumeration:
+///
+/// 1. **Line-extract** — reuse the C.2 perpendicular one-hot (`sel_col @ fx` for a vertical move,
+///    `sel_row @ fy` for a horizontal one) to pull the move's row/column into an n-vector `line[k]`
+///    (each `line[k]` a degree-2 dot product of the perpendicular selector with a board row/column).
+/// 2. **Between-mask** — `seg[k] = [min(from,to) < k < max(from,to)]`, built ORDER-INDEPENDENTLY
+///    from the two along-axis endpoint one-hots as `pfx_from·sfx_to + pfx_to·sfx_from` (prefix/suffix
+///    sums of one-hots — NO per-position range gadget; exactly one product fires). This move's own
+///    source sits at an endpoint, so `seg` excludes it automatically.
+/// 3. **Source-mask** — the OTHER move's source (if it lies on this line) is marked passable by a
+///    gated one-hot `other_sel[k]` (gate = perp-coords-equal), so it never blocks.
+/// 4. **Threshold** — `msum = Σ_k seg[k]·(1-other_sel[k])·line[k]` sums the particle codes (≥1 for
+///    non-vacuum) of the interior, non-source cells; `occ = [msum ≥ 1]` (one range gadget). `occ` is
+///    thus a proven function of the witnessed coordinates and the board.
+#[allow(clippy::too_many_arguments)]
 fn validate_occlusion(
     b: &mut Builder,
     tag: &str,
     old: &Board,
     m: &Move,
     old_cols: &[usize],
-    srcs: &[r::Coord],
-    occ_ref: bool,
+    fx: usize,
+    fy: usize,
+    tx: usize,
+    ty: usize,
+    sel_row: &[usize],
+    sel_col: &[usize],
+    other: Option<OtherSrc>,
 ) -> usize {
     let n = old.n;
-    let interior_cells = interior(m.frm, m.to);
-    // per interior cell: block bit = [cell nonvacuum AND not a moving source]
-    let mut any_block = Head::zero();
-    let mut block_cols = Vec::new();
-    for (k, &c) in interior_cells.iter().enumerate() {
-        let cv = read_cell(b, &format!("{tag}_int{k}"), old_cols, n, c, old);
-        // nz = [cell != 0]
-        let nz = b.forced_ge0(
-            &format!("{tag}_intnz{k}"),
-            &Head::lin(1, cv).add_const(-1),
-            old.cell_at(c) as i128 - 1,
-            SMALL_RBITS,
-        );
-        // is this cell a moving source? (compile-time known)
-        let is_src = srcs.contains(&c);
-        // block = nz AND (not is_src). is_src is compile-time; if src, block=0.
-        let block_val = if is_src { 0 } else { b.value(nz).0 as i128 };
-        let block = b.alloc(format!("{tag}_blk{k}"), ColumnKind::Binary, block_val);
-        if is_src {
-            b.assert_zero(&Head::lin(1, block));
+    let is_vertical = m.frm.0 == m.to.0;
+
+    // --- 1. the authenticated line-extract (reuse the perpendicular C.2 one-hot) ---
+    let mut line = Vec::with_capacity(n);
+    for k in 0..n {
+        let lv = if is_vertical {
+            old.cell_at((m.frm.0, k as i32)) as i128
         } else {
-            b.assert_zero(&Head::lin(1, block).add_lin(-1, nz));
+            old.cell_at((k as i32, m.frm.1)) as i128
+        };
+        let lc = b.alloc(format!("{tag}_line{k}"), ColumnKind::Value, lv);
+        let mut rd = Head::lin(1, lc);
+        if is_vertical {
+            // column fx: line[k] = Σ_x sel_col[x]·old[k·n+x]
+            for x in 0..n {
+                rd = rd.add_prod(-1, vec![sel_col[x], old_cols[k * n + x]]);
+            }
+        } else {
+            // row fy: line[k] = Σ_y sel_row[y]·old[y·n+k]
+            for y in 0..n {
+                rd = rd.add_prod(-1, vec![sel_row[y], old_cols[y * n + k]]);
+            }
         }
-        any_block = any_block.add_lin(1, block);
-        block_cols.push(block);
+        b.assert_zero(&rd);
+        line.push(lc);
     }
-    // occ bit = [any block]. Validate: occ == 1 iff Σ block >= 1. Since blocks are bits
-    // and at most a few, use: occ = 1 - ∏(1 - block).
-    let occ = b.alloc(format!("{tag}_occ"), ColumnKind::Binary, occ_ref as i128);
-    if block_cols.is_empty() {
-        // no interior: never occluded
-        b.assert_zero(&Head::lin(1, occ));
+
+    // --- 2. the along-axis endpoint one-hots (e_from reused, e_to fresh) ---
+    let (from_val, to_val, e_from, e_to): (i32, i32, Vec<usize>, Vec<usize>) = if is_vertical {
+        let e_to = b.one_hot(&format!("{tag}_ety"), n, m.to.1 as usize, &Head::lin(1, ty));
+        (m.frm.1, m.to.1, sel_row.to_vec(), e_to)
     } else {
-        // prod = ∏ (1 - block_k); assert prod + occ - 1 == 0.
-        let mut acc = None::<usize>;
-        for (k, &blk) in block_cols.iter().enumerate() {
-            let fval = 1 - b.value(blk).0 as i128;
-            let fcol = b.alloc(format!("{tag}_f{k}"), ColumnKind::Value, fval);
-            b.assert_zero(&Head::lin(1, fcol).add_lin(1, blk).add_const(-1)); // fcol = 1 - blk
-            acc = Some(match acc {
-                None => fcol,
-                Some(a) => b.alloc_prod(&format!("{tag}_p{k}"), a, fcol),
-            });
+        let e_to = b.one_hot(&format!("{tag}_etx"), n, m.to.0 as usize, &Head::lin(1, tx));
+        (m.frm.0, m.to.0, sel_col.to_vec(), e_to)
+    };
+
+    // --- 3. strictly-between mask seg[k] = [min < k < max], order-independent ---
+    let lo = from_val.min(to_val);
+    let hi = from_val.max(to_val);
+    let mut seg = Vec::with_capacity(n);
+    for k in 0..n {
+        let seg_val = ((lo as usize) < k && k < (hi as usize)) as i128;
+        let s = b.alloc(format!("{tag}_seg{k}"), ColumnKind::Binary, seg_val);
+        // seg - Σ_{j1<k, j2>k} (e_from[j1]·e_to[j2] + e_to[j1]·e_from[j2]) == 0.
+        let mut h = Head::lin(1, s);
+        for j1 in 0..k {
+            for j2 in (k + 1)..n {
+                h = h.add_prod(-1, vec![e_from[j1], e_to[j2]]);
+                h = h.add_prod(-1, vec![e_to[j1], e_from[j2]]);
+            }
         }
-        let prod = acc.unwrap();
-        b.assert_zero(&Head::lin(1, prod).add_lin(1, occ).add_const(-1));
+        b.assert_zero(&h);
+        seg.push(s);
     }
-    occ
+
+    // --- 4. the other-source passable mask (gated one-hot over its along-position) ---
+    let other_sel: Vec<usize> = if let Some(o) = other {
+        let (gate, along_col, along_hot) = if is_vertical {
+            // on this column iff other.x == fx; its along-position is other.y
+            let g = eq_scalar(
+                b,
+                &format!("{tag}_og"),
+                o.fx_col,
+                o.frm.0 as i128,
+                fx,
+                m.frm.0 as i128,
+            );
+            (g, o.fy_col, o.frm.1 as usize)
+        } else {
+            // on this row iff other.y == fy; its along-position is other.x
+            let g = eq_scalar(
+                b,
+                &format!("{tag}_og"),
+                o.fy_col,
+                o.frm.1 as i128,
+                fy,
+                m.frm.1 as i128,
+            );
+            (g, o.fx_col, o.frm.0 as usize)
+        };
+        b.one_hot_gated(
+            &format!("{tag}_osrc"),
+            n,
+            gate,
+            along_hot,
+            &Head::lin(1, along_col),
+        )
+    } else {
+        Vec::new()
+    };
+
+    // --- 5. masked interior sum + occ = [msum >= 1] ---
+    let mut msum_val: i128 = 0;
+    let msum = b.alloc(format!("{tag}_msum"), ColumnKind::Value, 0);
+    let mut h = Head::lin(1, msum);
+    for k in 0..n {
+        let sv = b.value(seg[k]).0 as i128;
+        let ov = if other_sel.is_empty() {
+            0
+        } else {
+            b.value(other_sel[k]).0 as i128
+        };
+        let lv = b.value(line[k]).0 as i128;
+        msum_val += sv * (1 - ov) * lv;
+        // msum - Σ seg·line + Σ seg·other·line == 0  (== msum - Σ seg·(1-other)·line)
+        h = h.add_prod(-1, vec![seg[k], line[k]]);
+        if !other_sel.is_empty() {
+            h = h.add_prod(1, vec![seg[k], other_sel[k], line[k]]);
+        }
+    }
+    b.set_value(msum, fb(msum_val));
+    b.assert_zero(&h);
+
+    // occ = [msum >= 1]  (particle codes are ≥ 1, so any interior non-source non-vacuum ⇒ occluded)
+    b.forced_ge0(
+        &format!("{tag}_occ"),
+        &Head::lin(1, msum).add_const(-1),
+        msum_val - 1,
+        DIFF_RBITS,
+    )
 }
 
 /// One surviving piece's placement data: its witnessed source row/column hot indices +
@@ -290,12 +412,17 @@ struct Placement {
 }
 
 /// Emit the board rewrite `mid` from `old` via one-hot writes at the WITNESSED source
-/// and (derived) destination indices. For each cell `c`:
-///   `mid[c] = old[c] - Σ_i carry_i·sel_src_i[c]·old[c] + Σ_i carry_i·sel_dst_i[c]·particle_i`
-/// i.e. a carried source is cleared to vacuum and its particle re-deposited at the
-/// derived destination — validated cell-by-cell against the reference `mid_cols`. The
-/// source/dest selectors are one-hots pinned to the witnessed index heads, so a wrong
-/// source/dest has no satisfying witness.
+/// and (derived) destination indices. For each cell `c`, with `keep[c] = (1-is_src[c])·(1-land[c])`:
+///   `mid[c] = keep[c]·old[c] + Σ_i carry_i·sel_dst_i[c]·particle_i`
+/// where `is_src[c] = Σ_i carry_i·sel_src_i[c]` (c is a journeying source) and
+/// `land[c] = Σ_i carry_i·sel_dst_i[c]` (a carrying piece lands on c). The `(1-land)` factor
+/// makes a landing an OVERWRITE, not a sum: it clears whatever sat at `c` in `old` — required
+/// when a piece journeys onto an OCCLUDED (hence uncleared, non-journeying) source, the
+/// occlusion-aware `apply_moves` overwrite the old additive rewrite got wrong (the corrected
+/// oracle's constraint-462 case). On the honest path a landing cell is either vacuum (both
+/// forms agree) or a swap/flow-through target that is also a cleared source (both forms agree),
+/// so this strictly generalizes the previous rewrite. Validated cell-by-cell against `mid_cols`;
+/// the selectors are one-hots pinned to the witnessed heads, so a wrong source/dest is UNSAT.
 fn write_mid_witnessed(
     b: &mut Builder,
     n: usize,
@@ -331,13 +458,40 @@ fn write_mid_witnessed(
     for c in 0..k {
         let x = c % n;
         let y = c / n;
+        // expr = keep[c]·old[c] + place[c], with keep = (1-is_src)(1-land):
+        //   old - is_src·old - land·old + (is_src·land)·old + Σ place.
         let mut expr = Head::lin(1, old_cols[c]);
         for (i, p) in pieces.iter().enumerate() {
             let (src_row, src_col, dst_row, dst_col) = &sels[i];
-            // clear carried source: - carry * sel_src_row[y] * sel_src_col[x] * old[c]
+            // - is_src_i·old : clear a carried (journeying) source
             expr = expr.add_prod(-1, vec![p.carry, src_row[y], src_col[x], old_cols[c]]);
-            // place at dest: + carry * sel_dst_row[y] * sel_dst_col[x] * particle
+            // - land_i·old : clear on landing (OVERWRITE) — the constraint-462 fix
+            expr = expr.add_prod(-1, vec![p.carry, dst_row[y], dst_col[x], old_cols[c]]);
+            // + place at dest : carry·sel_dst_row·sel_dst_col·particle
             expr = expr.add_prod(1, vec![p.carry, dst_row[y], dst_col[x], p.particle]);
+        }
+        // + (is_src·land)·old for i≠j : restore the cell that is BOTH a cleared source AND a
+        // landing target (a swap / flow-through cycle) — subtracted twice above, added back once.
+        for i in 0..pieces.len() {
+            for j in 0..pieces.len() {
+                if i == j {
+                    continue;
+                }
+                let (s_row, s_col, ..) = &sels[i];
+                let (.., d_row, d_col) = &sels[j];
+                expr = expr.add_prod(
+                    1,
+                    vec![
+                        pieces[i].carry,
+                        s_row[y],
+                        s_col[x],
+                        pieces[j].carry,
+                        d_row[y],
+                        d_col[x],
+                        old_cols[c],
+                    ],
+                );
+            }
         }
         b.assert_zero(&Head::lin(1, mid_cols[c]).append(&expr.scale(-1)));
     }
@@ -377,13 +531,16 @@ pub fn build_d2_bound(
     }
 
     let one = one_col(&mut b);
-    let (fx, fy, tx, ty, fp) = validate_move(&mut b, "m0", old, m, &old_cols, one);
+    let (fx, fy, tx, ty, fp, sel_row, sel_col) =
+        validate_move(&mut b, "m0", old, m, &old_cols, one);
     let srcs = vec![m.frm];
-    // occlusion + carry
+    // occlusion (coordinate-indexed; single move ⇒ no other source) + carry
     let occ_ref = interior(m.frm, m.to)
         .iter()
         .any(|&c| old.cell_at(c) != VAC && !srcs.contains(&c));
-    let occ = validate_occlusion(&mut b, "m0", old, m, &old_cols, &srcs, occ_ref);
+    let occ = validate_occlusion(
+        &mut b, "m0", old, m, &old_cols, fx, fy, tx, ty, &sel_row, &sel_col, None,
+    );
     // src non-vacuum
     let src_nz = b.forced_ge0(
         "m0_srcnz",
@@ -465,21 +622,48 @@ fn emit_resolution(
 ) {
     let n = old.n;
     let one = one_col(bld);
-    let srcs = vec![ma.frm, mb.frm];
 
     // Validate both moves (rejects an invalid move); source reads bound to (fx,fy).
-    let (fxa, fya, txa, tya, fpa) = validate_move(bld, "ma", old, ma, old_cols, one);
-    let (fxb, fyb, txb, tyb, fpb) = validate_move(bld, "mb", old, mb, old_cols, one);
+    let (fxa, fya, txa, tya, fpa, sra, sca) = validate_move(bld, "ma", old, ma, old_cols, one);
+    let (fxb, fyb, txb, tyb, fpb, srb, scb) = validate_move(bld, "mb", old, mb, old_cols, one);
 
-    // Occlusion per move (sources passable).
-    let occa_ref = interior(ma.frm, ma.to)
-        .iter()
-        .any(|&c| old.cell_at(c) != VAC && !srcs.contains(&c));
-    let occb_ref = interior(mb.frm, mb.to)
-        .iter()
-        .any(|&c| old.cell_at(c) != VAC && !srcs.contains(&c));
-    let occa = validate_occlusion(bld, "ma", old, ma, old_cols, &srcs, occa_ref);
-    let occb = validate_occlusion(bld, "mb", old, mb, old_cols, &srcs, occb_ref);
+    // Occlusion per move (COORDINATE-INDEXED; the OTHER move's source is the passable one).
+    let occa = validate_occlusion(
+        bld,
+        "ma",
+        old,
+        ma,
+        old_cols,
+        fxa,
+        fya,
+        txa,
+        tya,
+        &sra,
+        &sca,
+        Some(OtherSrc {
+            frm: mb.frm,
+            fx_col: fxb,
+            fy_col: fyb,
+        }),
+    );
+    let occb = validate_occlusion(
+        bld,
+        "mb",
+        old,
+        mb,
+        old_cols,
+        fxb,
+        fyb,
+        txb,
+        tyb,
+        &srb,
+        &scb,
+        Some(OtherSrc {
+            frm: ma.frm,
+            fx_col: fxa,
+            fy_col: fya,
+        }),
+    );
 
     // Source non-vacuum bits (vac_fa = 1-anz, vac_fb = 1-bnz).
     let anz = bld.forced_ge0(
@@ -792,6 +976,30 @@ pub fn build_d3_honest_bound(
     build_d3_bound(old, ma, mb, &next, old8, new8)
 }
 
+/// **TEST SUPPORT — the coordinate-indexed occlusion in isolation.** Builds a standalone AIR
+/// carrying [`validate_move`] + [`validate_occlusion`] for `m` (and, if `other` is given, that
+/// move's source as the passable "other" — both moves must be individually valid), and returns
+/// `(air_accepts, occ_bit)`. Lets the differential fuzz compare the in-circuit `occ` against
+/// [`crate::reference::occluded`] directly across many rook moves and board sizes.
+pub fn probe_occlusion(old: &Board, m: &Move, other: Option<&Move>) -> (bool, bool) {
+    let mut b = Builder::new(format!("occ-probe-n{}", old.n));
+    let old_cols = alloc_board_pub(&mut b, "old", old);
+    let one = one_col(&mut b);
+    let (fx, fy, tx, ty, _fp, sr, sc) = validate_move(&mut b, "m", old, m, &old_cols, one);
+    let other_src = other.map(|o| {
+        let (ofx, ofy, ..) = validate_move(&mut b, "o", old, o, &old_cols, one);
+        OtherSrc {
+            frm: o.frm,
+            fx_col: ofx,
+            fy_col: ofy,
+        }
+    });
+    let occ = validate_occlusion(
+        &mut b, "m", old, m, &old_cols, fx, fy, tx, ty, &sr, &sc, other_src,
+    );
+    (b.air_accepts(), b.value(occ) != BabyBear::ZERO)
+}
+
 // ============================================================================
 // THE IN-PROOF SEALED MOVE — the commit→reveal enforced INSIDE the AIR.
 //
@@ -858,7 +1066,7 @@ fn seal_seat(
     let n = old.n;
     // The opened move is a genuine, VALIDATED automatafl move; its coordinates are the
     // witnessed columns the commitment reopens.
-    let (fx, fy, tx, ty, _fp) = validate_move(bld, tag, old, opened, old_cols, one);
+    let (fx, fy, tx, ty, _fp, _sr, _sc) = validate_move(bld, tag, old, opened, old_cols, one);
     // Re-derive the flattened source/dest indices from the WITNESSED coordinates.
     let of = (opened.frm.1 as i128) * n as i128 + opened.frm.0 as i128;
     let ot = (opened.to.1 as i128) * n as i128 + opened.to.0 as i128;
