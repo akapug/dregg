@@ -4330,53 +4330,46 @@ async fn execute_finalized_turn(
     // Execute the turn against the local ledger.
     let mut s = state.write().await;
 
-    // IDEMPOTENT FINALIZATION — solo double-apply fix.
+    // IDEMPOTENT FINALIZATION PROMOTION — solo double-apply fix (reworked per
+    // cross-family review of PR #54).
     //
-    // In SOLO mode the `/turns/submit` ingress path already applied this turn
-    // AUTHORITATIVELY: it kept the in-place ledger commit (`if !is_solo { rollback }`
-    // in api.rs is false for solo) AND appended the turn's receipt to the node
-    // chain (`if is_operator_agent || is_solo { append_receipt }`). Re-executing the
-    // same turn HERE double-applies it: the acting cell's nonce is already advanced
-    // past the turn's nonce, so the executor's admission prologue rejects it as
-    // `nonce replay: expected N, got N-1`. The stale premise this path was written
-    // against — "SOLO (n=1) has no finalization pass" (api.rs) — is no longer true:
-    // solo runs the blocklace and trivially finalizes every block, so EVERY solo
-    // turn hit this and finalization never accepted one (observed devnet:
-    // executed=0, rejected=N; the turns stayed tentative).
+    // In SOLO mode the ingress paths (`/turns/submit`, `/api/faucet`) already
+    // applied this turn AUTHORITATIVELY in place, so re-executing it here is
+    // rejected by the admission prologue as `nonce replay: expected N, got N-1`
+    // (observed devnet: executed=0, rejected=N; every turn stayed tentative and
+    // `latest_height` never advanced). But SKIPPING finalization entirely — the
+    // first version of this fix — is just as wrong: the turn then never gets its
+    // attested root, durable commit record, or note/nullifier persistence, so
+    // "0 rejections" proved only error suppression, never promotion.
     //
-    // Fix: if we are solo and this turn was already applied by ingress, treat
-    // finalization as idempotent-already-applied and skip re-execution. The precise
-    // "already applied" signal is the acting cell's nonce already being PAST the
-    // turn's nonce — exactly the condition that makes the executor's admission
-    // prologue reject the re-exec as `nonce replay: expected N, got N-1`. That single
-    // check covers BOTH ingress paths uniformly: the signed-turn `/turns/submit` path
-    // AND `/api/faucet` (whose turn commits via `post_faucet`, so its receipt is not
-    // in `s.cclerk` — a receipt-chain-only check misses it). The exact-hash
-    // receipt-chain match is kept as a belt-and-suspenders fallback for a self-
-    // creating first turn where the cell/nonce read is ambiguous.
-    //
-    // Scoped to solo so the multi-party paths are untouched: there, ingress rolled the
-    // ledger back (nonce NOT advanced) and a foreign client's turn is not in the local
-    // chain, so neither branch fires and the turn executes normally below. In solo,
-    // every finalized turn came from THIS node's own ingress, so a consumed nonce is
-    // always a legitimate already-applied turn, never a foreign replay.
-    let is_solo = s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo);
-    let already_applied = is_solo
-        && (s
-            .ledger
-            .get(&signed_turn.turn.agent)
-            .is_some_and(|c| c.state.nonce() > signed_turn.turn.nonce)
-            || s.cclerk
-                .receipt_chain()
-                .iter()
-                .any(|r| r.turn_hash == computed_hash));
-    if already_applied {
-        debug!(
-            turn_hash = %turn_hash_hex,
-            block_id = %block_id,
-            "finalized turn already applied by solo ingress (authoritative in-place commit); \
-             skipping re-execution to avoid double-apply nonce replay (idempotent finalization)"
-        );
+    // The rework: the ingress paths RETAIN their execution result (receipt +
+    // touched-cell set) in `ingress_commits`, keyed by EXACT turn hash, and this
+    // path CONSUMES the entry and runs the finalization phase without
+    // re-executing. Consuming the entry is the identity proof:
+    //  * exact-hash + retained result, not nonce heuristics — a conflicting
+    //    foreign turn at the same nonce hashes differently, MISSES the cache,
+    //    executes below, and is correctly rejected as a replay;
+    //  * no federation-mode check HERE — insertion is what is solo-gated, so the
+    //    cache only ever holds turns THIS node ingress-committed; a stale solo
+    //    flag after a live membership change can neither admit a foreign block's
+    //    turn nor skip a local one;
+    //  * consume-once (`remove`) — a re-delivered block re-executes and the
+    //    executor's own replay rejection stands.
+    if let Some(ingress) = s.ingress_commits.remove(&computed_hash) {
+        drop(s);
+        promote_ingress_committed_turn(
+            state,
+            handle,
+            block_id,
+            finality_round,
+            &signed_turn,
+            computed_hash,
+            &turn_hash_hex,
+            ingress,
+            artifacts,
+            block_executed_up_to,
+        )
+        .await;
         return;
     }
 
@@ -5510,6 +5503,292 @@ async fn execute_finalized_turn(
             );
         }
     }
+}
+
+/// Finalization PROMOTION of a turn this node already applied authoritatively
+/// at solo ingress (see `NodeStateInner::ingress_commits`): runs the
+/// finalization phase — attested root, durable commit record, note-commitment
+/// + spent-nullifier persistence, pending-turn resolution — reusing the
+/// RETAINED ingress receipt and touched-cell set instead of re-executing the
+/// turn (re-execution is a guaranteed `nonce replay` rejection; that was the
+/// double-apply bug).
+///
+/// Deliberately NOT repeated from the executed path, because ingress already
+/// did them for this turn: the receipt-chain append (retried below only if the
+/// receipt is absent — e.g. a faucet receipt the chain refused), the
+/// activity-feed push, async proving, and the `Receipt` WS event. The chain
+/// entry remains the ingress-signed TENTATIVE receipt (the chain is
+/// append-only and finality is bound into the receipt hash); consensus
+/// finality for a promoted turn is expressed by the attested root + durable
+/// commit record written here, which is what recovery and finality readers
+/// consult.
+#[allow(clippy::too_many_arguments)]
+async fn promote_ingress_committed_turn(
+    state: &NodeState,
+    handle: &BlocklaceHandle,
+    block_id: BlockId,
+    finality_round: Option<u64>,
+    signed_turn: &dregg_sdk::SignedTurn,
+    computed_hash: [u8; 32],
+    turn_hash_hex: &str,
+    ingress: crate::state::IngressCommit,
+    artifacts: Option<&TurnArtifactBundle>,
+    block_executed_up_to: u64,
+) {
+    let mut s = state.write().await;
+
+    // Height/timestamp exactly as the executed path derives them: a configured
+    // executor's `block_height` (Next) and clock. Nothing is executed with it.
+    let mut height_exec = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    crate::executor_setup::configure_turn_executor(
+        &mut height_exec,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
+    let new_height = height_exec.block_height;
+    let now = height_exec.current_timestamp;
+
+    let receipt = ingress.receipt;
+    let receipt_hash = receipt.receipt_hash();
+    let receipt_hash_hex: String = receipt
+        .turn_hash
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
+    let invalid_bundle_evidence = if let Some(bundle) = artifacts {
+        materialize_blocklace_artifacts(&mut s, block_id, &receipt, bundle)
+    } else {
+        Vec::new()
+    };
+
+    // Resolve any pending turns waiting on this receipt (idempotent when the
+    // ingress path already resolved them).
+    s.pending_turns.resolve(
+        computed_hash,
+        dregg_turn::ResolutionOutcome::Resolved(receipt.clone()),
+    );
+
+    // Note commitments + spent-nullifier persistence are FINALIZATION-phase
+    // work — the ingress commit did not persist them (only this path does).
+    for tree in &signed_turn.turn.call_forest.roots {
+        for effect in &tree.action.effects {
+            if let dregg_turn::Effect::NoteCreate { commitment, .. } = effect {
+                s.note_tree_append_commitment(&commitment.0);
+                let _ = s.store.store_note_commitment(commitment);
+            }
+        }
+    }
+    {
+        let spent: Vec<dregg_turn::Effect> = signed_turn
+            .turn
+            .call_forest
+            .total_effects()
+            .into_iter()
+            .cloned()
+            .collect();
+        for nf in crate::turn_proving::spent_nullifiers(&spent) {
+            if let Err(e) = s.store.store_nullifier(&dregg_cell::note::Nullifier(nf)) {
+                warn!(error = %e, "failed to persist spent note nullifier");
+            }
+        }
+    }
+
+    // Ingress normally appended this receipt to the node chain already; retry
+    // only if it is absent (e.g. `post_faucet`'s append can be refused by the
+    // chain), so a promoted turn is not silently missing from the chain when
+    // an append IS possible. A failure here is surfaced but does not block the
+    // promotion — the attested root + durable record below are the
+    // consensus-finality artifacts.
+    if !s
+        .cclerk
+        .receipt_chain()
+        .iter()
+        .any(|r| r.turn_hash == computed_hash)
+        && let Err(e) = s.cclerk.append_receipt(receipt.clone())
+    {
+        warn!(
+            turn_hash = %turn_hash_hex,
+            error = %e,
+            "ingress-committed receipt not appendable at finalization promotion; \
+             continuing (attested root + durable commit record still written)"
+        );
+    }
+
+    let fed_receipt_opt =
+        build_federation_receipt(&s, &signed_turn.turn, &receipt, new_height, block_id);
+
+    // ── AttestedRoot — identical to the executed path. The ledger already
+    // holds this turn's post-state (the ingress commit), so the canonical
+    // root binds the same committed state a re-executing validator computes.
+    let merkle_root = canonical_ledger_root(&s.ledger);
+    let note_tree_root: Option<[u8; 32]> = None;
+    let timestamp_for_root = now;
+    let federation_keys = s.known_federation_keys.clone();
+    let federation_threshold = s.decryption_threshold.max(1);
+    let signing_key_bytes = s.cclerk.gossip_signing_key().to_bytes();
+
+    let receipt_stream_root = Some(dregg_types::merkle_root_of_receipt_hashes(&[receipt_hash]));
+
+    let mut attested = dregg_types::AttestedRoot {
+        merkle_root,
+        note_tree_root,
+        nullifier_set_root: None,
+        height: new_height,
+        timestamp: timestamp_for_root,
+        blocklace_block_id: Some(block_id.0),
+        finality_round,
+        quorum_signatures: Vec::new(),
+        threshold_qc: None,
+        threshold: federation_threshold,
+        federation_id: dregg_types::FederationId(s.federation_id),
+        receipt_stream_root,
+        hybrid_quorum: Vec::new(),
+    };
+    let signing_msg = attested.signing_message();
+    let local_pk = s.cclerk.public_key();
+    let signing_key = dregg_types::SigningKey::from_bytes(&signing_key_bytes);
+    let sig = dregg_types::sign(&signing_key, &signing_msg);
+    if federation_keys.is_empty() || federation_keys.contains(&local_pk) {
+        attested.quorum_signatures.push((local_pk, sig));
+    }
+
+    let finalization_quorum = handle
+        .votes
+        .read()
+        .await
+        .assembled_quorum(&block_id)
+        .filter(|(root, _)| *root == attested.merkle_root)
+        .map(|(_, sigs)| sigs)
+        .unwrap_or_default();
+
+    attested.hybrid_quorum = finalization_quorum
+        .iter()
+        .map(|qs| dregg_types::HybridQuorumSig {
+            pubkey: qs.voter,
+            signature: qs.signature,
+            ml_dsa_pubkey: qs.ml_dsa_pubkey.clone(),
+            pq_signature: qs.pq_signature.clone(),
+        })
+        .collect();
+
+    let stored = dregg_persist::StoredAttestedRoot {
+        merkle_root: attested.merkle_root,
+        note_tree_root: attested.note_tree_root,
+        nullifier_set_root: attested.nullifier_set_root,
+        height: attested.height,
+        timestamp: attested.timestamp,
+        blocklace_block_id: attested.blocklace_block_id,
+        finality_round: attested.finality_round,
+        quorum_signatures: attested.quorum_signatures.clone(),
+        threshold_qc: attested.threshold_qc.clone(),
+        threshold: attested.threshold,
+        federation_id: attested.federation_id,
+        receipt_stream_root: attested.receipt_stream_root,
+        finalization_quorum,
+    };
+    if let Err(e) = s.store.store_attested_root(&stored) {
+        warn!(error = %e, height = new_height, "failed to persist attested root");
+    }
+
+    state.emit(NodeEvent::Root {
+        height: new_height,
+        merkle_root: dregg_types::hex_encode(&stored.merkle_root),
+        timestamp: stored.timestamp,
+    });
+
+    for effect in signed_turn.turn.call_forest.total_effects() {
+        if let dregg_turn::Effect::RevokeCapability { cell, .. } = effect {
+            state.emit(NodeEvent::Revocation {
+                token_id: dregg_types::hex_encode(&cell.0),
+            });
+        }
+    }
+
+    // ── Durable, crash-consistent commit record — same atomic boundary as the
+    // executed path, with the touched-cell overlay read from the ALREADY
+    // COMMITTED ledger for exactly the ids the ingress executor reported.
+    {
+        let mut touched_cells: Vec<dregg_cell::Cell> =
+            Vec::with_capacity(ingress.touched_cells.len());
+        for id in &ingress.touched_cells {
+            if let Some(cell) = s.ledger.get(id) {
+                touched_cells.push(cell.clone());
+            }
+            // A touched id absent post-commit was destroyed this turn; the
+            // overlay carries no stale entry (mirrors the executed path).
+        }
+        let commit_record = dregg_persist::CommitRecord {
+            ordinal: 0, // assigned by the store at the durable cursor
+            height: new_height,
+            block_id: block_id.0,
+            turn_hash: computed_hash,
+            creator: *signed_turn.turn.agent.as_bytes(),
+            receipt_hash,
+            ledger_root: merkle_root,
+            block_executed_up_to,
+            touched_cells,
+        };
+        let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
+        match s
+            .store
+            .commit_finalized_turn(expected_ordinal, &commit_record)
+        {
+            Ok(assigned) => {
+                debug!(
+                    turn_hash = %turn_hash_hex,
+                    ordinal = assigned,
+                    block_executed_up_to,
+                    "durable commit-log record written for PROMOTED ingress commit (atomic)"
+                );
+                let mirrored = dregg_persist::CommitRecord {
+                    ordinal: assigned,
+                    ..commit_record.clone()
+                };
+                s.mirror_committed_record(&mirrored);
+            }
+            Err(e) => {
+                error!(
+                    turn_hash = %turn_hash_hex,
+                    error = %e,
+                    "DURABLE commit-log write FAILED for promoted ingress commit; \
+                     recovery will re-apply from the durable cursor"
+                );
+            }
+        }
+    }
+
+    drop(s);
+
+    for evidence in invalid_bundle_evidence {
+        warn!(
+            block_id = %evidence.block_id,
+            reason = %evidence.reason,
+            "invalid blocklace turn bundle artifacts"
+        );
+        state.emit(NodeEvent::InvalidBlocklaceBundle {
+            block_id: evidence.block_id.to_string(),
+            reason: evidence.reason,
+        });
+    }
+
+    if let Some(fed_receipt) = fed_receipt_opt {
+        tracing::debug!(
+            federation_id = %dregg_types::hex_encode(&fed_receipt.federation_id),
+            height = fed_receipt.body.block_height,
+            "federation receipt produced",
+        );
+    }
+
+    info!(
+        turn_hash = %turn_hash_hex,
+        receipt_hash = %receipt_hash_hex,
+        block_id = %block_id,
+        height = new_height,
+        round = ?finality_round,
+        "finalized turn PROMOTED from ingress commit (no re-execution; \
+         attested root + durable commit record written)"
+    );
 }
 
 fn materialize_blocklace_artifacts(
@@ -6719,6 +6998,171 @@ mod tests {
                 .balance(),
             1_000_000 - 4_200 - signed.turn.fee as i64,
             "sender debited by amount + burned fee"
+        );
+    }
+
+    /// PR #54 rework — finalization PROMOTION of a solo ingress commit, plus
+    /// the exact-hash negative (no laundering).
+    ///
+    /// Simulates the solo ingress leg exactly as `/turns/submit` performs it
+    /// (authoritative in-place execute through the producer gate + retention
+    /// via `retain_ingress_commit`), then drives the REAL
+    /// `execute_finalized_turn`. Must-fail-pre: the first PR #54 guard
+    /// early-returned on the retained turn and wrote NO finalization artifacts
+    /// (attested height stayed 0, commit cursor unchanged) — this test pins
+    /// the full promotion contract:
+    ///  1. no re-execution — the nonce/balances applied exactly once,
+    ///  2. attested height advances 0 -> 1,
+    ///  3. the durable commit cursor advances (crash-consistent record),
+    ///  4. consume-once — the retention entry is gone,
+    ///  5. NEGATIVE: a CONFLICTING turn at the same nonce (different hash)
+    ///     misses the cache, re-executes, and is REJECTED — never laundered
+    ///     into an idempotent success (no height advance, no value moved).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn solo_ingress_commit_promotes_without_reexecution_and_never_launders() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+        }
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+
+        let sender_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"promotion:sender").as_bytes(),
+        ));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        let dest = dregg_cell::CellId([0x5Du8; 32]);
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(
+                    sender_pk, [0u8; 32], 1_000_000,
+                ))
+                .expect("fund sender");
+        }
+
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 4_200, 0, &federation_id);
+        let computed_hash = signed.turn.hash();
+        let turn_data = postcard::to_stdvec(&signed).expect("encode signed turn");
+
+        // ── The solo ingress leg: authoritative in-place commit + retention,
+        // exactly what `post_submit_signed_turn` does under `is_solo`.
+        let (sender_balance_after_ingress, sender_nonce_after_ingress) = {
+            let mut s = state.write().await;
+            let executor = crate::executor_setup::new_submit_executor(&s);
+            provision_transfer_destinations(&mut s.ledger, &signed.turn.call_forest);
+            let lean = s.lean_producer_enabled;
+            let exec_result = crate::executor_setup::execute_via_producer(
+                &executor,
+                &signed.turn,
+                &mut s.ledger,
+                lean,
+            );
+            let dregg_turn::TurnResult::Committed {
+                receipt,
+                ledger_delta,
+                ..
+            } = exec_result
+            else {
+                panic!("ingress execution must commit");
+            };
+            s.retain_ingress_commit(
+                computed_hash,
+                crate::state::IngressCommit {
+                    receipt,
+                    touched_cells: touched_cell_ids(&ledger_delta),
+                },
+            );
+            let cell = s.ledger.get(&sender).expect("sender present");
+            (cell.state.balance(), cell.state.nonce())
+        };
+        assert_eq!(
+            sender_nonce_after_ingress, 1,
+            "ingress applied the turn once"
+        );
+
+        let self_key = [0x9Bu8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+
+        // ── Finalization: MUST promote (write artifacts), not re-execute.
+        execute_finalized_turn(&state, &handle, BlockId([0x21u8; 32]), &turn_data, None, 0).await;
+
+        {
+            let s = state.read().await;
+            let height = s
+                .store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0);
+            assert_eq!(
+                height, 1,
+                "promotion MUST write the attested root (height 0 -> 1); \
+                 skipping finalization artifacts was the reviewed blocker"
+            );
+            assert_eq!(
+                s.store.commit_cursor().unwrap_or(0),
+                1,
+                "promotion MUST write the durable commit record (cursor 0 -> 1)"
+            );
+            let cell = s.ledger.get(&sender).expect("sender present");
+            assert_eq!(
+                cell.state.nonce(),
+                1,
+                "nonce applied EXACTLY once (no re-execution at finalization)"
+            );
+            assert_eq!(
+                cell.state.balance(),
+                sender_balance_after_ingress,
+                "finalization moved no value (the ingress commit was authoritative)"
+            );
+            assert!(
+                s.ingress_commits.is_empty(),
+                "retention entry consumed exactly once"
+            );
+        }
+
+        // ── NEGATIVE: a conflicting turn at the SAME nonce but different
+        // content (different hash) must NOT be treated as already-applied.
+        let conflicting =
+            signed_transfer_turn(&sender_cclerk, sender, dest, 9_999, 0, &federation_id);
+        assert_ne!(conflicting.turn.hash(), computed_hash);
+        let conflicting_data = postcard::to_stdvec(&conflicting).expect("encode");
+        execute_finalized_turn(
+            &state,
+            &handle,
+            BlockId([0x22u8; 32]),
+            &conflicting_data,
+            None,
+            0,
+        )
+        .await;
+
+        let s = state.read().await;
+        assert_eq!(
+            s.store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0),
+            1,
+            "a conflicting same-nonce turn must be rejected, never promoted"
+        );
+        let cell = s.ledger.get(&sender).expect("sender present");
+        assert_eq!(cell.state.nonce(), 1, "conflicting turn applied nothing");
+        assert_eq!(
+            cell.state.balance(),
+            sender_balance_after_ingress,
+            "conflicting turn moved no value (not laundered into success)"
         );
     }
 
@@ -8250,7 +8694,7 @@ fn build_federation_receipt(
 /// snapshots into the cell-by-id index, so recovery reconstructs the finalized
 /// ledger from (checkpoint ⊕ overlay) without re-execution. Deduplicated and
 /// order-stable.
-fn touched_cell_ids(delta: &dregg_cell::LedgerDelta) -> Vec<dregg_cell::CellId> {
+pub(crate) fn touched_cell_ids(delta: &dregg_cell::LedgerDelta) -> Vec<dregg_cell::CellId> {
     let mut ids: Vec<dregg_cell::CellId> = Vec::new();
     fn push(ids: &mut Vec<dregg_cell::CellId>, id: dregg_cell::CellId) {
         if !ids.contains(&id) {
