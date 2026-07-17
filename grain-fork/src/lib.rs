@@ -235,7 +235,7 @@ impl Grain {
         let mut mind = Cell::with_balance(mind_pk, token, 0);
         mind.state.reseal_heap_root();
         mind.state.reseal_fields_root();
-        let genesis_root = mind.state.heap_root;
+        let genesis_root = mind.state.heap_root.to_bytes32();
 
         let lease_cell =
             Cell::with_balance(cell_bytes(terms.lease), cell_bytes(terms.asset), funding);
@@ -255,12 +255,12 @@ impl Grain {
     /// The mind's current committed boundary root (its checkpoint root) — the grain's
     /// 32-byte identity-of-state a fork descends from and a rewind returns to.
     pub fn root(&self) -> [u8; 32] {
-        self.mind.state.heap_root
+        self.mind.state.heap_root.to_bytes32()
     }
 
     /// The mind's current committed boundary root, hex.
     pub fn root_hex(&self) -> String {
-        hex32(&self.mind.state.heap_root)
+        hex32(&self.mind.state.heap_root.to_bytes32())
     }
 
     /// The fork-point root this grain descends from (`None` for a root grain). Equal to
@@ -371,8 +371,8 @@ impl Grain {
     pub fn checkpoint(&mut self) -> Result<[u8; 32], GrainError> {
         self.mind.state.reseal_heap_root();
         self.mind.state.reseal_fields_root();
-        let root = self.mind.state.heap_root;
-        let fields_root = self.mind.state.fields_root;
+        let root = self.mind.state.heap_root.to_bytes32();
+        let fields_root = self.mind.state.fields_root.to_bytes32();
         // Advance the lease's Monotonic cursor with the mind's checkpoint root as the
         // durable digest (the fields root rides in the committed working image) — a
         // lapsed lease refuses (fail-closed).
@@ -468,7 +468,7 @@ impl Grain {
         }
         child_mind.state.reseal_heap_root();
 
-        let fork_root = self.mind.state.heap_root;
+        let fork_root = self.mind.state.heap_root.to_bytes32();
 
         // The child's OWN lease (own obligor), genesis == the parent's checkpoint root.
         let child_lease_cell = Cell::with_balance(
@@ -486,7 +486,7 @@ impl Grain {
             lease: child_lease,
             checkpoints: vec![GrainCheckpoint {
                 root: fork_root,
-                fields_root: self.mind.state.fields_root,
+                fields_root: self.mind.state.fields_root.to_bytes32(),
                 image: self.mind.state.heap_map.clone(),
                 fields: self.mind.state.fields_map.clone(),
             }],
@@ -593,8 +593,8 @@ impl Grain {
     /// trailing (heap, fields) root PAIR so a stop/stop does not bloat the log — a
     /// fields-only change still logs).
     fn log_checkpoint(&mut self) {
-        let root = self.mind.state.heap_root;
-        let fields_root = self.mind.state.fields_root;
+        let root = self.mind.state.heap_root.to_bytes32();
+        let fields_root = self.mind.state.fields_root.to_bytes32();
         if self.checkpoints.last().map(|c| (c.root, c.fields_root)) != Some((root, fields_root)) {
             self.checkpoints.push(GrainCheckpoint {
                 root,
