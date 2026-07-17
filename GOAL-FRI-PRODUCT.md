@@ -110,6 +110,19 @@ ALL 5 STAGES DONE. Verdict = honest, NOT laundered:
   build-verify (like the ArkLib gold-standard) is warranted before any external claim.
 - ⚑ TWO FINDINGS FOR EMBER: (1) the refutable predicate (our own), (2) the deployed non-uniform sampler.
 
+
+## ✅ FRI GOLD-STANDARD VERIFY (a12f... lane) + the gap it caught, FIXED
+- Fresh from-scratch build (nextop, pinned v4.30.0): 9/9 modules exit 0, FriVerifierCompose
+  #assert_all_clean = 23 keystones ⊆{propext,Classical.choice,Quot.sound}, all 6 headline theorems
+  (hit_cond/epsFri_compose/epsFri_closed_legs/log_freshness_premise_false/babybear_sampleBits_not_balanced/
+  apex_probabilistic_nodeCarrier) axiom-clean, NO sorryAx/native_decide. THE MATH IS REAL.
+- ⚠ CAUGHT: Stage-4 FriVerifierQuery.lean was UNTRACKED (never committed) while committed Compose+Dregg2
+  imported it → committed HEAD couldn't build from source; green depended on the working-tree file. My
+  miss: recorded "Stage 4 done" trusting the lane, never verified the commit. FIXED: committed a8aa92e14.
+  Now all 5 stage files tracked → chain builds from committed source. LESSON (again): verify the COMMIT
+  landed, not just the lane's word — the from-scratch build is the only thing that catches a dangling file.
+- Cosmetic: Dregg2.lean:833 docstring says "22 keystones", real emitted count is 23 (harmless).
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
