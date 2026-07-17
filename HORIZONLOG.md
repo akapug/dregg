@@ -1,16 +1,26 @@
 # HORIZONLOG — the named-follow-up burn-down
 
-## ⚑⚑⚑ AUTOMATAFL 11×11 — the REAL two-player game PROVES end-to-end (2026-07-17)
-Design: `docs/reference/AUTOMATAFL-11X11-DESIGN.md`. Reference = ember's own `emberian/automatafl` (NOT o1Labs — that
-was a design-lane hallucination, swept). SCOPE = two-player m=2 (multiplayer/SCC/merge = future work; `build_d3` is
-already faithful at m=2). Ladder, each real-prove-verified on persvati:
+## ⚠⚠⚠ AUTOMATAFL 11×11 — WRONG SUBSTRATE (Rust AIR = DEBT); must RE-AUTHOR IN LEAN (2026-07-17)
+⚠ REVISED (I over-claimed "the game PROVES end-to-end ⚑⚑⚑" — that was wrong). What the night built is a **RUST AIR**
+(`dregg-automatafl/src/{air,moves,builder}.rs`), which is the anti-pattern we FIGHT (author AIR in LEAN, law #1;
+`~/.claude/CLAUDE.md`). A Rust AIR CANNOT be proven; the "differential"/"refinement" tests are Rust CASE-TESTS with
+ZERO formal content (NO semantics of Rust ⇒ NOT translation validation, NOT verification). "It proves on a box + the
+light client accepts" is NOT verified and NOT sound (inherits the undischarged FRI floor). So the honest status is
+**not "verified STARK" — it is a hand-written Rust AIR (DEBT) that proves on the box for tested cases.**
+⚑ THE REAL WORK: re-author the automatafl AIR IN LEAN (a genuine `automataflAIR_refines_applyTurn` over the EMITTED
+object), `@[export]` it, Rust only CALLS IN to prove. Map the project's Lean-AIR→Rust pattern (Dyck-parse / `Circuit/
+Emit/`) first, then redo. The Rust-AIR ladder below is the SHAPE (leg-split R/A on the mid_root seam, √n reads, degree
+via bit-decomp, occlusion) to REPRODUCE IN LEAN — not a foundation to build on.
+Design: `docs/reference/AUTOMATAFL-11X11-DESIGN.md`. Reference = ember's own `emberian/automatafl`. SCOPE = two-player
+m=2 (multiplayer/SCC/merge = future). RUST-AIR ladder (the shape, NOT verified), each real-prove-on-box on persvati:
 - oracle → real 11×11 board + reproducible differential vs the live public repo (git dev-dep) (`edc26961b`; occluded-
   source-overwrite faithfulness fix). C.1 bit-decompose coords: degree wall 11→5 (`921d56c38`). C.2 row×col √n reads:
   D3 1020→885 (`567f2c71a`). C.5 leg-split R(old→mid)+A(mid→new) on the deployed mid_root seam, K=2 fold accepts
   (`83b023175`). C.4 real occlusion + constraint-462 (`6ac7807d9`). Leg A narrow 1121→901 via prefix-sum in-bounds
   (`e7cfea56f`).
-- ✅ **HONEST 11×11 FOLD ACCEPTS**: Leg R (920) then Leg A (901) → fold(K=2) → verify_history OK, num_turns=2. Both
-  legs prove at the real board; differential (automaton_step∘resolve_mid==apply_turn) green; forgeries reject.
+- **Rust-AIR-proves-on-box**: Leg R (920) then Leg A (901) → fold(K=2) → verify_history accepts, num_turns=2 (ONE
+  tested case). Differential = Rust case-tests vs the reference (NO formal content). Forgeries reject at the leaf. NONE
+  of this is a proof; it is the deployed prover accepting a hand-written Rust AIR on cases.
 - ⚠ **ONE RESIDUAL — mid-seam soundness (EMBER-gated decision, surfaced):** a MISMATCHED-mid fold still ACCEPTS
   (empirically confirmed). Root cause: cross-turn continuity welds the CELL rotated roots (nonce 0→1), independent of
   board content; board mid_root rides app-PI but not the chain segment ABI. Close via (a) board-root weld in the shared
