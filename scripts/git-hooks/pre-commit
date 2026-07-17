@@ -57,10 +57,32 @@ file_edition() {
 while IFS= read -r -d '' f; do
   [ -f "$f" ] || continue
   ed="$(file_edition "$f")"
-  if rustfmt --edition "$ed" "$f" 2>/dev/null; then
-    git add -- "$f"
+
+  if git diff --quiet -- "$f"; then
+    # FULLY STAGED (index == worktree): safe to format the worktree file and re-stage it wholesale.
+    if rustfmt --edition "$ed" "$f" 2>/dev/null; then
+      git add -- "$f"
+    else
+      printf 'pre-commit: rustfmt skipped %s (does not parse?) — committing as-is\n' "$f" >&2
+    fi
   else
-    printf 'pre-commit: rustfmt skipped %s (does not parse?) — committing as-is\n' "$f" >&2
+    # PARTIALLY STAGED — the file carries BOTH staged hunks AND unstaged ones (this repo runs many
+    # concurrent lanes/agents, so an un-staged hunk in the same file is routinely ANOTHER lane's WIP).
+    # The old `rustfmt "$f"; git add "$f"` formatted the WHOLE WORKTREE and re-staged all of it, sweeping
+    # those unstaged hunks into the commit — cross-lane clobber, mis-attribution, exactly the thing the
+    # header wrongly claimed it did not do. Instead: format ONLY the staged blob and write it back to the
+    # INDEX (`update-index`), leaving the working tree — and its unstaged hunks — completely untouched.
+    # (No `git stash`: it is not swarm-safe on this shared branch.) Worktree drift is CI's `cargo fmt
+    # --check` job's to catch, as before.
+    mode="$(git ls-files --stage -- "$f" | awk 'NR==1{print $1}')"
+    tmpd="$(mktemp -d)"; tmp="$tmpd/staged.rs"
+    if git cat-file blob ":$f" > "$tmp" 2>/dev/null && rustfmt --edition "$ed" "$tmp" 2>/dev/null; then
+      new_hash="$(git hash-object -w -- "$tmp")"
+      git update-index --cacheinfo "${mode:-100644},$new_hash,$f"
+    else
+      printf 'pre-commit: rustfmt skipped staged %s (partial-stage, does not parse?) — committing as-is\n' "$f" >&2
+    fi
+    rm -rf "$tmpd"
   fi
 done < <(git diff --cached --name-only --diff-filter=ACM -z -- '*.rs')
 
