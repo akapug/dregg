@@ -306,6 +306,50 @@ fn render_proof_status(s: &str) -> String {
     label.to_string()
 }
 
+/// Is this query string a complete 64-hex turn/receipt hash (the only form the
+/// node's exact `/api/turn/{hash}/status` endpoint accepts)?
+fn is_full_hash(needle: &str) -> bool {
+    needle.len() == 64 && needle.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Merge one turn's machine-readable status: the DURABLE `/api/turn/{hash}/status`
+/// answer (the authority on consensus finality — present whenever a full hash
+/// was resolvable) augmented with the matched `/api/receipts` entry (which may
+/// be absent even for a durably-final turn: the receipt-chain append can fail
+/// while the turn still finalized — the exact case the status endpoint exists
+/// for). `consensus_final` prefers the status endpoint and falls back to the
+/// receipt's own (also durably sourced) field; it is `false` only when neither
+/// surface claims finality.
+fn merge_status_json(
+    query: &str,
+    receipt: Option<&serde_json::Value>,
+    status: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let turn_hash = status
+        .and_then(|st| st["turn_hash"].as_str())
+        .or_else(|| receipt.and_then(|r| r["turn_hash"].as_str()));
+    let consensus_final = status
+        .and_then(|st| st["consensus_final"].as_bool())
+        .or_else(|| receipt.and_then(|r| r["consensus_final"].as_bool()))
+        .unwrap_or(false);
+    let attested_height = status
+        .and_then(|st| st["attested_height"].as_u64())
+        .or_else(|| receipt.and_then(|r| r["attested_height"].as_u64()));
+    let receipt_hash = status
+        .and_then(|st| st["receipt_hash"].as_str())
+        .or_else(|| receipt.and_then(|r| r["receipt_hash"].as_str()));
+    serde_json::json!({
+        "query": query,
+        "turn_hash": turn_hash,
+        "consensus_final": consensus_final,
+        "attested_height": attested_height,
+        "receipt_hash": receipt_hash,
+        "receipt_present": receipt.is_some(),
+        "receipt": receipt,
+        "status": status,
+    })
+}
+
 async fn status(
     cfg: &Config,
     ctx: &Context,
@@ -313,12 +357,6 @@ async fn status(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let spinner = ctx.spinner("Checking turn status...");
     let data = get_json(cfg, "/api/receipts").await?;
-    spinner.finish_and_clear();
-
-    if cfg.is_json() {
-        ctx.json_stdout(&data);
-        return Ok(());
-    }
 
     // Match against either the turn hash or receipt hash; accept an abbreviated prefix.
     let needle = turn_id.trim().to_lowercase();
@@ -330,6 +368,30 @@ async fn status(
             th == needle || rh == needle || th.starts_with(&needle) || rh.starts_with(&needle)
         })
     });
+
+    // Durable finality authority (F-D): consult `/api/turn/{hash}/status`
+    // whenever a FULL turn hash is known — the query itself, or the matched
+    // receipt's. Both output modes use it, so the no-receipt-but-durably-final
+    // case is answered correctly in `--json` too (previously the JSON mode
+    // dumped the raw receipts array and never reached the status endpoint).
+    let full_hash: Option<String> = if is_full_hash(&needle) {
+        Some(needle.clone())
+    } else {
+        found
+            .and_then(|r| r["turn_hash"].as_str())
+            .filter(|th| is_full_hash(&th.to_lowercase()))
+            .map(|th| th.to_lowercase())
+    };
+    let status_resp = match &full_hash {
+        Some(h) => get_json(cfg, &format!("/api/turn/{h}/status")).await.ok(),
+        None => None,
+    };
+    spinner.finish_and_clear();
+
+    if cfg.is_json() {
+        ctx.json_stdout(&merge_status_json(&needle, found, status_resp.as_ref()));
+        return Ok(());
+    }
 
     match found {
         Some(receipt) => {
@@ -377,17 +439,10 @@ async fn status(
         None => {
             // No receipt on the chain — but the durable commit log is the
             // authority on consensus finality (the receipt-chain append can
-            // fail while the turn still finalized). Ask the node's
-            // turn-status surface before claiming "maybe pending".
-            let is_full_hash = needle.len() == 64 && needle.chars().all(|c| c.is_ascii_hexdigit());
-            let status = if is_full_hash {
-                get_json(cfg, &format!("/api/turn/{needle}/status"))
-                    .await
-                    .ok()
-            } else {
-                None
-            };
-            match status.filter(|st| st["consensus_final"].as_bool() == Some(true)) {
+            // fail while the turn still finalized). The turn-status surface
+            // was already consulted above for a full hash; use it before
+            // claiming "maybe pending".
+            match status_resp.filter(|st| st["consensus_final"].as_bool() == Some(true)) {
                 Some(st) => {
                     ctx.header("Turn Status");
                     ctx.kv("Turn hash", &abbrev_hex(turn_id, 8, 4));
@@ -540,4 +595,92 @@ fn build_one_effect(kind: &str) -> Result<serde_json::Value, Box<dyn std::error:
         other => return Err(format!("unknown effect kind: {other}").into()),
     };
     Ok(eff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_full_hash, merge_status_json};
+    use serde_json::json;
+
+    const FULL: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn full_hash_detection() {
+        assert!(is_full_hash(FULL));
+        assert!(!is_full_hash(&FULL[..12])); // abbreviated
+        assert!(!is_full_hash(&format!("{}zz", &FULL[..62]))); // non-hex
+    }
+
+    /// The F-D case the endpoint exists for: durably final with NO receipt on
+    /// the chain — the machine-readable output must say `consensus_final: true`
+    /// with the durable height, and be honest that no receipt is present.
+    #[test]
+    fn no_receipt_but_durably_final_is_machine_readable() {
+        let status = json!({
+            "turn_hash": FULL,
+            "consensus_final": true,
+            "attested_height": 3,
+            "receipt_hash": "bb",
+            "receipt_present": false,
+        });
+        let merged = merge_status_json(FULL, None, Some(&status));
+        assert_eq!(merged["consensus_final"], json!(true));
+        assert_eq!(merged["attested_height"], json!(3));
+        assert_eq!(merged["turn_hash"], json!(FULL));
+        assert_eq!(merged["receipt_present"], json!(false));
+        assert!(merged["receipt"].is_null());
+        assert_eq!(merged["status"]["consensus_final"], json!(true));
+    }
+
+    /// Receipt matched AND status endpoint answered: the durable endpoint is
+    /// the finality authority; the receipt rides alongside.
+    #[test]
+    fn receipt_and_status_merge_prefers_durable_endpoint() {
+        let receipt = json!({
+            "turn_hash": FULL,
+            "receipt_hash": "cc",
+            "finality": "tentative",
+            "consensus_final": false, // stale/absent augmentation
+        });
+        let status = json!({
+            "turn_hash": FULL,
+            "consensus_final": true,
+            "attested_height": 7,
+            "receipt_hash": "cc",
+            "receipt_present": true,
+        });
+        let merged = merge_status_json(FULL, Some(&receipt), Some(&status));
+        assert_eq!(merged["consensus_final"], json!(true));
+        assert_eq!(merged["attested_height"], json!(7));
+        assert_eq!(merged["receipt_present"], json!(true));
+        assert_eq!(merged["receipt"]["finality"], json!("tentative"));
+    }
+
+    /// No receipt, no status answer (abbreviated hash, nothing matched):
+    /// honest machine-readable not-final/not-found shape — never a dump of
+    /// unrelated receipts.
+    #[test]
+    fn nothing_found_is_honest() {
+        let merged = merge_status_json("abcd12", None, None);
+        assert_eq!(merged["consensus_final"], json!(false));
+        assert!(merged["turn_hash"].is_null());
+        assert_eq!(merged["receipt_present"], json!(false));
+        assert!(merged["attested_height"].is_null());
+    }
+
+    /// A receipt matched by prefix but the status endpoint was unreachable:
+    /// fall back to the receipt's own durably-sourced fields.
+    #[test]
+    fn receipt_only_falls_back_to_receipt_fields() {
+        let receipt = json!({
+            "turn_hash": FULL,
+            "receipt_hash": "dd",
+            "consensus_final": true,
+            "attested_height": 2,
+        });
+        let merged = merge_status_json(&FULL[..8], Some(&receipt), None);
+        assert_eq!(merged["consensus_final"], json!(true));
+        assert_eq!(merged["attested_height"], json!(2));
+        assert_eq!(merged["turn_hash"], json!(FULL));
+    }
 }

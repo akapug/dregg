@@ -151,7 +151,7 @@ pub struct NodeState {
 /// [`NodeStateInner::ingress_commits`]). Holds exactly what the finalization
 /// phase needs that only the ingress execution knew: the committed receipt
 /// (as appended/attempted on the chain — tentative-signed), the complete
-/// touched-cell set from the executor's `LedgerDelta`, and — CRITICALLY — the
+/// touched-cell set (restore-journal ids ∪ `LedgerDelta` ids), and — CRITICALLY — the
 /// PREFIX SNAPSHOT taken at ingress-commit time under the same exclusive
 /// write lock that applied the turn. Solo ingress is serialized under that
 /// lock, so ingress order IS the prefix order: the snapshot binds exactly the
@@ -166,11 +166,14 @@ pub struct IngressCommit {
     /// The receipt the ingress executor committed (solo: finality downgraded
     /// to `Tentative` and node-re-signed before retention).
     pub receipt: dregg_turn::TurnReceipt,
-    /// `touched_cell_ids(ledger_delta)` at ingress — the authoritative,
-    /// bounded set of cells this turn mutated. Kept alongside the post-state
-    /// clones below because a DESTROYED cell has an id here but no post-state
-    /// entry (the overlay carries no stale entry for it, mirroring the
-    /// executed path).
+    /// The COMPLETE touched-cell id set at ingress: restore-journal ids ∪
+    /// `touched_cell_ids(ledger_delta)` (see
+    /// `blocklace_sync::complete_ingress_touched_ids`). The journal side is
+    /// what makes it complete — `LedgerDelta` omits the heap-root / lifecycle
+    /// / program / vk / delegation dimensions (third-pass review F-A). Kept
+    /// alongside the post-state clones below because a DESTROYED cell has an
+    /// id here but no post-state entry (the overlay carries no stale entry
+    /// for it, mirroring the executed path).
     pub touched_cells: Vec<CellId>,
     /// The touched cells' POST-STATES cloned from the just-committed ledger at
     /// ingress time — the durable commit record's cell overlay for the prefix
@@ -284,6 +287,20 @@ pub struct NodeStateInner {
     /// after a restart the durable-cursor recovery re-applies any turn that
     /// never got its commit record.
     pub ingress_commits: HashMap<[u8; 32], IngressCommit>,
+    /// Ratified membership proposals whose committee activation is DEFERRED
+    /// because solo promotion retention is non-empty (third-pass review F-C).
+    /// Clearing solo + draining `ingress_commits` on a live solo→multi
+    /// transition stranded applied-but-unpromoted mutations: their promotion
+    /// tokens were dropped while their ledger mutations stayed authoritative,
+    /// so those finalized turns could never get a root or commit record
+    /// locally. Instead, `apply_passed_proposal` parks the passed proposal's
+    /// block id here and the finality executor retries it after each batch;
+    /// while ANY entry is pending, the solo ingress arms REFUSE new
+    /// submissions ("membership change pending: retry") so the retained
+    /// prefix drains — solo self-finalizes within the debounce, so the wait
+    /// is bounded. Deduplicated; drained by
+    /// `blocklace_sync::retry_deferred_membership_proposals`.
+    pub deferred_membership_proposals: Vec<[u8; 32]>,
     /// Known federation public keys for attested root quorum verification.
     ///
     /// Per FEDERATION-UNIFICATION-DESIGN.md §5/§8 this is now a *derived*
@@ -1022,6 +1039,7 @@ impl NodeState {
                 pending_turns: dregg_turn::PendingTurnRegistry::new(),
                 used_proof_hashes,
                 ingress_commits: HashMap::new(),
+                deferred_membership_proposals: Vec::new(),
                 known_federation_keys: Vec::new(),
                 known_federation_ml_dsa_keys: Vec::new(),
                 known_federations: dregg_federation::KnownFederations::new(),
@@ -1213,6 +1231,7 @@ impl NodeState {
                 pending_turns: dregg_turn::PendingTurnRegistry::new(),
                 used_proof_hashes: HashSet::new(),
                 ingress_commits: HashMap::new(),
+                deferred_membership_proposals: Vec::new(),
                 known_federation_keys: Vec::new(),
                 known_federation_ml_dsa_keys: Vec::new(),
                 known_federations: dregg_federation::KnownFederations::new(),
@@ -1777,6 +1796,15 @@ impl NodeStateInner {
     /// mutation can ever exist without a retained promotion entry.
     pub fn ingress_commits_full(&self) -> bool {
         ingress_backlog_full(self.ingress_commits.len())
+    }
+
+    /// Whether a ratified membership change is waiting for the solo promotion
+    /// retention to drain (see [`NodeStateInner::deferred_membership_proposals`]).
+    /// While true, the solo ingress arms refuse NEW submissions ("membership
+    /// change pending: retry") so the retained prefix converges and the
+    /// deferred committee activation can apply.
+    pub fn membership_change_pending(&self) -> bool {
+        !self.deferred_membership_proposals.is_empty()
     }
 
     /// Retain a solo-ingress execution result for finalization promotion

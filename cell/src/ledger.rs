@@ -513,6 +513,23 @@ impl Ledger {
         pre
     }
 
+    /// The cell ids recorded in the active per-turn undo journal — the COMPLETE
+    /// set of cells the in-progress turn has mutated, created, or destroyed so
+    /// far. Completeness is forced by rollback correctness: every `cells`-map
+    /// mutation path (`get_mut` / `update_with` / `create_cell` / `insert_cell`
+    /// / `remove`) journals the prior image first, or
+    /// [`Ledger::rollback_restore_point`] could not restore the exact pre-turn
+    /// state. Unlike the executor's `LedgerDelta` — which omits the heap-root /
+    /// lifecycle / program / verification-key / delegation dimensions — this
+    /// set covers EVERY whole-cell change. Empty when no journal is armed.
+    /// Order is unspecified (HashMap keys).
+    pub fn restore_point_touched_ids(&self) -> Vec<CellId> {
+        self.restore_point
+            .as_ref()
+            .map(|rp| rp.cells.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
     /// Record a cell's prior image into the active journal on its FIRST mutation.
     /// A cheap no-op when no journal is armed or the cell is already recorded.
     #[inline]
