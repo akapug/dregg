@@ -198,7 +198,6 @@ pub fn rotated_transfer_turn(balance: u64, amount: u64) -> RotatedTurn {
     let witness = FullTurnWitness {
         initial_cell_state: initial_vm_state,
         effects: vm_effects,
-        authorization: None,
         membership: None,
         conservation: None,
         non_revocation: None,
