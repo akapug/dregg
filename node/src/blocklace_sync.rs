@@ -4177,6 +4177,13 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
                 }
             }
 
+            // ── Deferred Committee Activation (F-C) ────────────────────────
+            // A membership change ratified while solo promotion retention was
+            // non-empty is parked; now that this batch's promotions have run
+            // (and new solo ingress is refused while a change is pending),
+            // retry it — it applies once the retained prefix has drained.
+            retry_deferred_membership_proposals(&state, &handle).await;
+
             // ── Wave Advancement & Timeout Detection ───────────────────────
             // Advance the constitution's wave counter. Any participants that
             // have been silent for too long are proposed for auto-leave.
@@ -5339,16 +5346,11 @@ async fn execute_finalized_turn(
                 receipt_stream_root: attested.receipt_stream_root,
                 finalization_quorum,
             };
-            if let Err(e) = s.store.store_attested_root(&stored) {
-                warn!(error = %e, height = new_height, "failed to persist attested root");
-            }
-
-            // Emit root event to WebSocket subscribers.
-            state.emit(NodeEvent::Root {
-                height: new_height,
-                merkle_root: dregg_types::hex_encode(&stored.merkle_root),
-                timestamp: stored.timestamp,
-            });
+            // NOTE (F-B): `stored` is NOT persisted here — it lands atomically
+            // WITH the commit record below (`commit_finalized_turn_with_root`,
+            // one redb transaction), so no crash boundary can separate the
+            // attested root from its record. The Root WS event is emitted on
+            // durable success below.
 
             // Emit revocation events for any RevokeCapability effects.
             for effect in signed_turn.turn.call_forest.total_effects() {
@@ -5402,16 +5404,25 @@ async fn execute_finalized_turn(
                     touched_cells,
                 };
                 let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
-                match s
-                    .store
-                    .commit_finalized_turn(expected_ordinal, &commit_record)
-                {
+                match s.store.commit_finalized_turn_with_root(
+                    expected_ordinal,
+                    &commit_record,
+                    &stored,
+                ) {
                     Ok(assigned) => {
+                        // Root event only now that the root is durable (F-B:
+                        // it landed atomically with the record).
+                        state.emit(NodeEvent::Root {
+                            height: new_height,
+                            merkle_root: dregg_types::hex_encode(&stored.merkle_root),
+                            timestamp: stored.timestamp,
+                        });
                         debug!(
                             turn_hash = %turn_hash_hex,
                             ordinal = assigned,
                             block_executed_up_to,
-                            "durable commit-log record written (atomic; index updated)"
+                            "durable commit-log record + attested root written (one atomic \
+                             transaction; index updated)"
                         );
                         // pg-dregg M2: ship this verified turn to the postgres
                         // mirror (opt-in; no-op unless DREGG_PG_MIRROR_URL is set).
@@ -5425,16 +5436,18 @@ async fn execute_finalized_turn(
                     Err(e) => {
                         // A failed durable commit is a serious crash-consistency
                         // event: the ledger was mutated in RAM but the durable
-                        // record/cursor did not advance. We surface it loudly; the
-                        // in-RAM cursor has this block marked executed, but its
-                        // `block_id` is NOT in the durable commit log, so identity
-                        // recovery drops it from the restored executed set and
-                        // re-applies this turn idempotently after a restart.
+                        // record/cursor (and, atomically, the attested root) did
+                        // not advance. We surface it loudly; the in-RAM cursor
+                        // has this block marked executed, but its `block_id` is
+                        // NOT in the durable commit log, so identity recovery
+                        // drops it from the restored executed set and re-applies
+                        // this turn idempotently after a restart.
                         error!(
                             turn_hash = %turn_hash_hex,
                             error = %e,
                             "DURABLE commit-log write FAILED; turn applied in RAM but not durably \
-                             recorded — recovery will re-apply from the durable cursor"
+                             recorded (root withheld atomically) — recovery will re-apply from \
+                             the durable cursor"
                         );
                     }
                 }
@@ -5729,15 +5742,6 @@ async fn promote_ingress_committed_turn(
         receipt_stream_root: attested.receipt_stream_root,
         finalization_quorum,
     };
-    if let Err(e) = s.store.store_attested_root(&stored) {
-        warn!(error = %e, height = new_height, "failed to persist attested root");
-    }
-
-    state.emit(NodeEvent::Root {
-        height: new_height,
-        merkle_root: dregg_types::hex_encode(&stored.merkle_root),
-        timestamp: stored.timestamp,
-    });
 
     for effect in signed_turn.turn.call_forest.total_effects() {
         if let dregg_turn::Effect::RevokeCapability { cell, .. } = effect {
@@ -5747,14 +5751,19 @@ async fn promote_ingress_committed_turn(
         }
     }
 
-    // ── Durable, crash-consistent commit record — same atomic boundary as the
-    // executed path, with the touched-cell overlay from the INGRESS-TIME
-    // SNAPSHOT (the touched cells' post-states cloned under the ingress write
-    // lock, destroyed cells absent) — NOT re-read from the live ledger, which
-    // may already hold later turns' mutations (prefix poisoning). The
-    // retention entry is consumed ONLY on a successful durable write: a
-    // failure keeps it so a re-delivered/retried finalized block retries the
-    // promotion (guarded idempotent by the turn-by-hash check at the top).
+    // ── Durable, crash-consistent commit — ATTESTED ROOT + COMMIT RECORD in
+    // ONE redb transaction (third-pass review F-B: the root/record atomicity
+    // weld — `commit_finalized_turn_with_root`). Writing them in two
+    // transactions left a crash boundary where an orphan root made the retry
+    // promote this same turn one height higher (duplicate/skipped height), or
+    // a record landed without its root. The touched-cell overlay comes from
+    // the INGRESS-TIME SNAPSHOT (the touched cells' post-states cloned under
+    // the ingress write lock, destroyed cells absent) — NOT re-read from the
+    // live ledger, which may already hold later turns' mutations (prefix
+    // poisoning). The retention entry is consumed ONLY on a successful
+    // durable write: a failure keeps it (and, atomically, wrote NO root) so a
+    // re-delivered/retried finalized block retries the promotion at the SAME
+    // height (guarded idempotent by the turn-by-hash check at the top).
     {
         let commit_record = dregg_persist::CommitRecord {
             ordinal: 0, // assigned by the store at the durable cursor
@@ -5770,17 +5779,24 @@ async fn promote_ingress_committed_turn(
         let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
         match s
             .store
-            .commit_finalized_turn(expected_ordinal, &commit_record)
+            .commit_finalized_turn_with_root(expected_ordinal, &commit_record, &stored)
         {
             Ok(assigned) => {
                 // Consume-on-success: the promotion is durable, the retained
-                // ingress result has served its purpose.
+                // ingress result has served its purpose. Emit the Root event
+                // only now that the root is actually durable.
                 let _ = s.ingress_commits.remove(&computed_hash);
+                state.emit(NodeEvent::Root {
+                    height: new_height,
+                    merkle_root: dregg_types::hex_encode(&stored.merkle_root),
+                    timestamp: stored.timestamp,
+                });
                 debug!(
                     turn_hash = %turn_hash_hex,
                     ordinal = assigned,
                     block_executed_up_to,
-                    "durable commit-log record written for PROMOTED ingress commit (atomic)"
+                    "durable commit-log record + attested root written for PROMOTED \
+                     ingress commit (one atomic transaction)"
                 );
                 let mirrored = dregg_persist::CommitRecord {
                     ordinal: assigned,
@@ -5793,9 +5809,10 @@ async fn promote_ingress_committed_turn(
                     turn_hash = %turn_hash_hex,
                     error = %e,
                     "DURABLE commit-log write FAILED for promoted ingress commit; \
-                     retention entry KEPT — a re-delivered finalized block retries \
-                     the promotion, and restart recovery re-applies from the \
-                     durable cursor"
+                     NEITHER the record NOR the attested root persisted (atomic) — \
+                     retention entry KEPT so a re-delivered finalized block retries \
+                     the promotion at the SAME height, and restart recovery \
+                     re-applies from the durable cursor"
                 );
             }
         }
@@ -7518,6 +7535,377 @@ mod tests {
         }
     }
 
+    /// F-A (third-pass review) must-fail-pre: a turn whose ONLY mutation on a
+    /// cross cell is a `LedgerDelta`-OMITTED dimension (`SetVerificationKey` —
+    /// no delta field; likewise lifecycle/program/heap/delegation) must still
+    /// land that cell in the promoted `CommitRecord`'s overlay, so restart
+    /// recovery (checkpoint ⊕ overlay) reconstructs the recorded root.
+    /// Pre-fix, the ingress arms supplied `touched_cell_ids(&ledger_delta)`
+    /// alone: the vk-target cell was in the ingress `prefix_root` but ABSENT
+    /// from `touched_post_cells`, and a store-reopen reconstruction diverged
+    /// from the recorded root. The fix derives the retained set from
+    /// restore-journal ids ∪ delta ids (`complete_ingress_touched_ids`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn promotion_overlay_covers_delta_omitted_dimensions_across_reopen() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+        }
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+
+        let actor_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"vk-overlay:actor").as_bytes(),
+        ));
+        let actor_pk = actor_cclerk.public_key().0;
+        let actor = dregg_cell::CellId::derive_raw(&actor_pk, &[0u8; 32]);
+        let target_pk = *blake3::hash(b"vk-overlay:target").as_bytes();
+        let target = dregg_cell::CellId::derive_raw(&target_pk, &[0u8; 32]);
+
+        // Seed: actor funded and holding an (unfaceted) capability to the
+        // target; the target's SetVerificationKey permission is open so the
+        // cross-cell install authorizes.
+        let baseline = {
+            let mut s = state.write().await;
+            let mut actor_cell = dregg_cell::Cell::with_balance(actor_pk, [0u8; 32], 1_000_000);
+            actor_cell
+                .capabilities
+                .grant(target, dregg_cell::AuthRequired::None);
+            let mut target_cell = dregg_cell::Cell::with_balance(target_pk, [0u8; 32], 0);
+            target_cell.permissions.set_verification_key = dregg_cell::AuthRequired::None;
+            s.ledger.insert_cell(actor_cell).expect("actor cell");
+            s.ledger.insert_cell(target_cell).expect("target cell");
+            // The recovery baseline: the "checkpoint" state before the turn.
+            s.ledger.clone()
+        };
+
+        // The turn: its ONLY effect is a cross-cell SetVerificationKey — the
+        // target cell mutates in NO LedgerDelta dimension.
+        let vk_data = b"vk-omitted-dimension".to_vec();
+        let vk = dregg_cell::VerificationKey {
+            hash: *blake3::hash(&vk_data).as_bytes(),
+            data: vk_data,
+        };
+        let effect = dregg_turn::Effect::SetVerificationKey {
+            cell: target,
+            new_vk: Some(vk.clone()),
+        };
+        let action = actor_cclerk.make_action(actor, "set-vk", vec![effect], &federation_id);
+        let mut call_forest = dregg_turn::CallForest::new();
+        call_forest.add_root(action);
+        let mut turn = dregg_turn::Turn {
+            agent: actor,
+            nonce: 0,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            call_forest,
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: vec![],
+            cross_effect_dependencies: vec![],
+            effect_witness_index_map: vec![],
+        };
+        let est = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        turn.fee = est.estimate_cost(&turn);
+        let signed = actor_cclerk.sign_turn(&turn);
+        let computed_hash = signed.turn.hash();
+        let turn_data = postcard::to_stdvec(&signed).expect("encode");
+
+        // Ingress-mimic EXACTLY as the arms do post-fix: restore journal armed
+        // across execution, snapshot from journal ∪ delta.
+        {
+            let mut s = state.write().await;
+            let executor = crate::executor_setup::new_submit_executor(&s);
+            let lean = s.lean_producer_enabled;
+            s.ledger.begin_restore_point();
+            let exec_result = crate::executor_setup::execute_via_producer(
+                &executor,
+                &signed.turn,
+                &mut s.ledger,
+                lean,
+            );
+            let dregg_turn::TurnResult::Committed {
+                receipt,
+                ledger_delta,
+                ..
+            } = exec_result
+            else {
+                panic!("cross-cell SetVerificationKey ingress must commit: {exec_result:?}");
+            };
+            let journal_ids = s.ledger.restore_point_touched_ids();
+            s.ledger.commit_restore_point();
+
+            // The must-fail-pre DISTINGUISHER: the delta alone omits the
+            // vk-only cell; the restore journal records it.
+            let delta_ids = touched_cell_ids(&ledger_delta);
+            assert!(
+                !delta_ids.contains(&target),
+                "distinguisher: LedgerDelta must OMIT the vk-only cell \
+                 (else this test no longer exercises F-A)"
+            );
+            assert!(
+                journal_ids.contains(&target),
+                "the restore journal records every whole-cell mutation \
+                 (rollback correctness) — the vk write must be in it"
+            );
+
+            let ids = complete_ingress_touched_ids(journal_ids, &ledger_delta);
+            assert!(ids.contains(&target) && ids.contains(&actor));
+            let ingress = crate::state::IngressCommit::snapshot(&s.ledger, receipt, ids);
+            s.retain_ingress_commit(computed_hash, ingress);
+        }
+
+        // Promote through the production finalized path.
+        let self_key = [0x7Au8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+        execute_finalized_turn(&state, &handle, BlockId([0x51u8; 32]), &turn_data, None, 0).await;
+
+        let recorded_root = {
+            let s = state.read().await;
+            let rec = s
+                .store
+                .lookup_turn(&computed_hash)
+                .ok()
+                .flatten()
+                .expect("durable commit record for the promoted vk turn");
+            let overlay_target = rec
+                .touched_cells
+                .iter()
+                .find(|c| c.id() == target)
+                .expect("the vk-target cell is IN the durable overlay (the F-A fix)");
+            assert_eq!(
+                overlay_target.verification_key.as_ref().map(|k| k.hash),
+                Some(vk.hash),
+                "the overlay carries the POST-turn cell (new vk installed)"
+            );
+            assert_eq!(
+                rec.ledger_root,
+                canonical_ledger_root(&s.ledger),
+                "the recorded root is the committed prefix root"
+            );
+            assert!(s.ingress_commits.is_empty(), "entry consumed");
+            rec.ledger_root
+        };
+
+        // STORE REOPEN + recovery reconstruction: (baseline ⊕ overlay) must
+        // reproduce the recorded root — pre-fix the vk mutation was absent
+        // from the overlay and this diverged.
+        drop(handle);
+        drop(state);
+        let store = dregg_persist::PersistentStore::open(&tmp.path().join("dregg.redb"))
+            .expect("reopen store");
+        let overlay = store.cell_overlay_since(0).expect("overlay");
+        let mut recovered = baseline;
+        for cell in overlay {
+            // Last-writer-wins upsert — exactly what recovery does.
+            let _ = recovered.remove(&cell.id());
+            let _ = recovered.insert_cell(cell);
+        }
+        assert_eq!(
+            recovered
+                .get(&target)
+                .expect("target survives recovery")
+                .verification_key
+                .as_ref()
+                .map(|k| k.hash),
+            Some(vk.hash),
+            "recovery reinstates the vk-only mutation from the overlay"
+        );
+        assert_eq!(
+            canonical_ledger_root(&recovered),
+            recorded_root,
+            "recovery (checkpoint ⊕ overlay) reconstructs the RECORDED root — \
+             pre-fix the delta-omitted vk dimension was missing and this failed"
+        );
+
+        // NEGATIVE (the pre-fix shape, demonstrated): an overlay restricted to
+        // the DELTA-only ids (what the arms retained before the fix) cannot
+        // reconstruct the recorded root — the vk-target post-state is missing.
+        let mut prefix_broken = recovered.clone();
+        let pre_target = {
+            let mut c = dregg_cell::Cell::with_balance(target_pk, [0u8; 32], 0);
+            c.permissions.set_verification_key = dregg_cell::AuthRequired::None;
+            c
+        };
+        let _ = prefix_broken.remove(&target);
+        let _ = prefix_broken.insert_cell(pre_target);
+        assert_ne!(
+            canonical_ledger_root(&prefix_broken),
+            recorded_root,
+            "distinguisher: without the vk-target overlay entry the recovered \
+             root DIVERGES — the exact pre-fix failure"
+        );
+    }
+
+    /// F-C (third-pass review) must-fail-pre: a ratified membership change
+    /// arriving while solo promotion retention is non-empty must NOT drop the
+    /// retained entries (the old code cleared solo + drained the cache,
+    /// stranding applied-but-unpromoted mutations). Post-fix: the committee
+    /// activation DEFERS (constitution unamended, solo intact, retention
+    /// kept), new solo ingress is refused while pending, and once the
+    /// retained turn promotes, the finality loop's retry seam applies the
+    /// change — committee amended, solo cleared, marker released.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn join_defers_committee_change_until_retention_drains() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+            let signing_key = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(signing_key));
+        }
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+
+        // One solo ingress commit, retained and NOT yet promoted.
+        let sender_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"join-defer:sender").as_bytes(),
+        ));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        let dest = dregg_cell::CellId([0x6Fu8; 32]);
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(
+                    sender_pk, [0u8; 32], 1_000_000,
+                ))
+                .expect("fund sender");
+        }
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 1_234, 0, &federation_id);
+        let computed_hash = signed.turn.hash();
+        let turn_data = postcard::to_stdvec(&signed).expect("encode");
+        {
+            let mut s = state.write().await;
+            let executor = crate::executor_setup::new_submit_executor(&s);
+            provision_transfer_destinations(&mut s.ledger, &signed.turn.call_forest);
+            let lean = s.lean_producer_enabled;
+            let exec_result = crate::executor_setup::execute_via_producer(
+                &executor,
+                &signed.turn,
+                &mut s.ledger,
+                lean,
+            );
+            let dregg_turn::TurnResult::Committed {
+                receipt,
+                ledger_delta,
+                ..
+            } = exec_result
+            else {
+                panic!("ingress execution must commit");
+            };
+            let ingress = crate::state::IngressCommit::snapshot(
+                &s.ledger,
+                receipt,
+                touched_cell_ids(&ledger_delta),
+            );
+            s.retain_ingress_commit(computed_hash, ingress);
+        }
+
+        // A PASSED Join proposal (solo committee of one: the self-vote passes it).
+        let self_key = [0x7Bu8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+        let proposal_block = BlockId([0x91u8; 32]);
+        let joiner = [0x92u8; 32];
+        {
+            let mut constitution = handle.constitution.write().await;
+            constitution.submit_proposal(
+                proposal_block,
+                MembershipProposal::Join {
+                    node_key: joiner,
+                    justification: vec![],
+                },
+            );
+            let passed = constitution.submit_vote(
+                &MembershipVote {
+                    proposal_block,
+                    approve: true,
+                },
+                self_key,
+            );
+            assert!(passed.is_some(), "solo self-vote passes the proposal");
+        }
+        let version_before = handle.constitution.read().await.version();
+
+        // ── The seam under test: activation arrives while retention pends.
+        apply_passed_proposal(&state, &handle, &proposal_block).await;
+        {
+            let s = state.read().await;
+            assert!(
+                !s.ingress_commits.is_empty(),
+                "retained entry survives (must-fail-pre: old code drained it \
+                 immediately, stranding the applied mutation)"
+            );
+            assert!(
+                s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo),
+                "solo must NOT clear while the change is deferred"
+            );
+            assert!(
+                s.membership_change_pending(),
+                "new solo ingress must be refused while the change is pending"
+            );
+        }
+        {
+            let c = handle.constitution.read().await;
+            assert_eq!(
+                c.version(),
+                version_before,
+                "constitution NOT amended while deferred"
+            );
+            assert_eq!(c.current.participant_count(), 1);
+        }
+
+        // ── Drain: the retained turn's finalized block promotes it.
+        execute_finalized_turn(&state, &handle, BlockId([0x93u8; 32]), &turn_data, None, 0).await;
+        {
+            let s = state.read().await;
+            assert!(s.ingress_commits.is_empty(), "retention drained");
+            assert!(
+                s.store.lookup_turn(&computed_hash).ok().flatten().is_some(),
+                "the retained turn got its durable record (not stranded)"
+            );
+        }
+
+        // ── The finality executor's retry seam applies the deferred change.
+        retry_deferred_membership_proposals(&state, &handle).await;
+        {
+            let s = state.read().await;
+            assert!(
+                !s.membership_change_pending(),
+                "pending marker released after activation"
+            );
+            assert!(
+                !s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo),
+                "solo cleared exactly at (deferred) committee activation"
+            );
+        }
+        {
+            let c = handle.constitution.read().await;
+            assert_eq!(
+                c.current.participant_count(),
+                2,
+                "committee change applied after the drain"
+            );
+            assert!(c.current.is_participant(&joiner));
+        }
+    }
+
     /// F4 backpressure: the ingress-side capacity check the three solo arms
     /// consult BEFORE the in-place apply (a full retention map refuses the
     /// submission — never evicts, since an evicted entry's mutation is already
@@ -8869,8 +9257,60 @@ async fn apply_passed_proposal(
     handle: &BlocklaceHandle,
     proposal_block: &BlockId,
 ) {
+    // ── F-C (third-pass review): DEFER committee activation while solo
+    // promotion retention is non-empty. The old code cleared solo and drained
+    // `ingress_commits` here, stranding applied-but-unpromoted mutations:
+    // their promotion tokens were dropped while their in-place ledger
+    // mutations stayed authoritative, so those finalized turns could never
+    // get a local root/commit record and later durable state could diverge
+    // from a joining peer. Instead: park the passed proposal (the
+    // constitution is NOT amended yet — `apply_if_passed` runs only on the
+    // non-deferred path, so the vote state keeps the proposal applicable),
+    // refuse NEW solo ingress while pending (the arms consult
+    // `membership_change_pending`), and let the finality executor retry after
+    // each finalized batch (`retry_deferred_membership_proposals`). Solo
+    // self-finalizes within the debounce, so the drain — and therefore the
+    // deferral — is bounded.
+    {
+        let mut s = state.write().await;
+        if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo) {
+            if !s.ingress_commits.is_empty() {
+                let retained = s.ingress_commits.len();
+                if !s.deferred_membership_proposals.contains(&proposal_block.0) {
+                    s.deferred_membership_proposals.push(proposal_block.0);
+                }
+                warn!(
+                    proposal_block = %proposal_block,
+                    retained,
+                    "membership change DEFERRED: solo promotion retention pending — \
+                     committee activation waits for the retained prefix to finalize; \
+                     new solo ingress refused until it drains"
+                );
+                return;
+            }
+            // Retention is empty UNDER THIS LOCK — keep (or set) the pending
+            // marker across the amendment window below, so no solo ingress
+            // can slip a NEW retention entry in between this check and the
+            // solo→multi containment (which would re-create the stranded-
+            // mutation bug in a race window). Removed on every exit path
+            // after the amendment attempt.
+            if !s.deferred_membership_proposals.contains(&proposal_block.0) {
+                s.deferred_membership_proposals.push(proposal_block.0);
+            }
+        }
+    }
+
     let mut constitution = handle.constitution.write().await;
-    if constitution.apply_if_passed(proposal_block) {
+    if !constitution.apply_if_passed(proposal_block) {
+        drop(constitution);
+        // Not applied (not passed, or already applied by an earlier delivery) —
+        // release the pending marker so solo ingress is not refused forever.
+        let mut s = state.write().await;
+        s.deferred_membership_proposals
+            .retain(|p| p != &proposal_block.0);
+        return;
+    }
+    {
         let new_participants: Vec<[u8; 32]> = constitution.current.participants.clone();
         let new_count = constitution.current.participant_count();
         let new_version = constitution.version();
@@ -8880,30 +9320,45 @@ async fn apply_passed_proposal(
         // the participant set past one, atomically (under the state write
         // lock, which every ingress handler holds across its is_solo read +
         // in-place commit + retention — so an amendment can never interleave
-        // mid-handler) (a) clear the solo flag, so no further local turn is
-        // optimistically applied+cached against a stale mode, and (b) DRAIN
-        // the ingress promotion cache. A drained entry's turn re-executes at
-        // finalization and is nonce-replay-rejected (its mutation is already
-        // in the live ledger) — that is the pre-existing, recovery-covered
-        // regime, and STRICTLY better than promoting a stale solo execution
-        // result cross-validator without revalidation against the true tau
-        // pre-state. Runs BEFORE `apply_committee_change` so the ingress gate
-        // closes before the new committee is live.
+        // mid-handler) clear the solo flag, so no further local turn is
+        // optimistically applied+cached against a stale mode. The retention
+        // map is PROVABLY EMPTY here (F-C): the deferral gate at the top of
+        // this function verified it empty under the state write lock and set
+        // the pending marker, and the marker makes every solo ingress arm
+        // refuse a new submission — so no applied-but-unpromoted mutation can
+        // be stranded by this transition (the old code DRAINED live entries
+        // here, orphaning their mutations from the durable overlay). Runs
+        // BEFORE `apply_committee_change` so the ingress gate closes before
+        // the new committee is live.
         if new_count > 1 {
             let mut s = state.write().await;
             if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo) {
                 if let Some(solo) = s.solo_consensus.as_mut() {
                     solo.detect_peers(); // clears is_solo, logs the transition
                 }
-                let drained = s.ingress_commits.len();
-                s.ingress_commits.clear();
-                warn!(
-                    drained,
+                debug_assert!(
+                    s.ingress_commits.is_empty(),
+                    "solo→multi containment reached with live retention entries — \
+                     the F-C deferral gate must have drained them first"
+                );
+                if !s.ingress_commits.is_empty() {
+                    // Defensive (should be unreachable): surface loudly rather
+                    // than silently strand — recovery re-applies from the
+                    // durable cursor after a restart.
+                    let stranded = s.ingress_commits.len();
+                    s.ingress_commits.clear();
+                    error!(
+                        stranded,
+                        new_participant_count = new_count,
+                        "live solo→multi transition found retained ingress \
+                         commit(s) despite the deferral gate — dropped; restart \
+                         recovery re-applies from the durable cursor"
+                    );
+                }
+                info!(
                     new_participant_count = new_count,
-                    "live solo→multi transition: solo ingress closed and \
-                     {drained} retained ingress commit(s) drained — their turns \
-                     re-execute at finalization (nonce-replay-rejected; \
-                     restart recovery re-applies from the durable cursor)"
+                    "live solo→multi transition: solo ingress closed with an \
+                     empty (fully promoted) retention map"
                 );
             }
         }
@@ -8943,6 +9398,34 @@ async fn apply_passed_proposal(
         handle
             .apply_committee_change(&new_participants, pq_committee, new_threshold)
             .await;
+    }
+    // Committee change applied — release the F-C pending marker so solo (now
+    // multi) ingress admission is no longer gated on this proposal.
+    {
+        let mut s = state.write().await;
+        s.deferred_membership_proposals
+            .retain(|p| p != &proposal_block.0);
+    }
+}
+
+/// Retry membership proposals whose committee activation was DEFERRED behind
+/// pending solo promotion retention (third-pass review F-C; see the deferral
+/// gate in [`apply_passed_proposal`]). Called by the finality executor after
+/// each finalized batch: once the retained prefix has fully promoted
+/// (`ingress_commits` drained — new solo ingress is refused while a change is
+/// pending, so the drain converges within the bounded finality debounce), the
+/// parked proposal re-enters [`apply_passed_proposal`], passes the gate, and
+/// the committee change applies.
+async fn retry_deferred_membership_proposals(state: &NodeState, handle: &BlocklaceHandle) {
+    let pending: Vec<[u8; 32]> = {
+        let s = state.read().await;
+        if s.deferred_membership_proposals.is_empty() || !s.ingress_commits.is_empty() {
+            return;
+        }
+        s.deferred_membership_proposals.clone()
+    };
+    for proposal in pending {
+        apply_passed_proposal(state, handle, &BlockId(proposal)).await;
     }
 }
 
@@ -9106,6 +9589,39 @@ pub(crate) fn touched_cell_ids(delta: &dregg_cell::LedgerDelta) -> Vec<dregg_cel
     for (from, to, _) in &delta.computron_transfers {
         push(&mut ids, *from);
         push(&mut ids, *to);
+    }
+    ids
+}
+
+/// The COMPLETE touched-cell id set for a SOLO INGRESS commit (third-pass
+/// review F-A): the union of the ledger restore-journal's recorded cell ids
+/// with the executor's [`dregg_cell::LedgerDelta`] ids.
+///
+/// `touched_cell_ids(delta)` alone is INCOMPLETE for the retained ingress
+/// overlay: `LedgerDelta` omits the heap-root / lifecycle / program /
+/// verification-key / delegation dimensions (see [`ledger_touched_diff`]'s
+/// contrast note and `turn/src/executor/finalize.rs`), so a cross-cell
+/// `SetVerificationKey` / `SetProgram` / lifecycle / heap-only mutation could
+/// be present in the ingress-time `prefix_root` but absent from the
+/// `CommitRecord`'s cell overlay — and restart recovery (checkpoint ⊕ overlay)
+/// could not reconstruct the recorded root. The ingress arms all execute with
+/// the per-turn restore journal armed (`Ledger::begin_restore_point`), and the
+/// journal records EVERY mutated/created/destroyed cell (rollback correctness
+/// forces completeness — see [`dregg_cell::Ledger::restore_point_touched_ids`]);
+/// this also holds on the Lean-producer path, whose reconstitution mutates a
+/// clone of the armed ledger through the journaled `get_mut`/`insert_cell`
+/// surface before it is installed. The delta ids are unioned in as
+/// belt-and-braces (they are the executed path's authoritative bounded set).
+/// Order-stable, deduplicated.
+pub(crate) fn complete_ingress_touched_ids(
+    journal_ids: Vec<dregg_cell::CellId>,
+    delta: &dregg_cell::LedgerDelta,
+) -> Vec<dregg_cell::CellId> {
+    let mut ids = journal_ids;
+    for id in touched_cell_ids(delta) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
     }
     ids
 }

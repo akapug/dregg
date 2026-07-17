@@ -243,7 +243,38 @@ impl PersistentStore {
         expected_ordinal: u64,
         record: &CommitRecord,
     ) -> Result<u64> {
-        self.commit_finalized_turn_with_burns(expected_ordinal, record, &[])
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None)
+    }
+
+    /// [`Self::commit_finalized_turn`] PLUS the turn's attested root in the
+    /// SAME redb transaction — the root/record atomicity weld (third-pass
+    /// cross-family review, F-B).
+    ///
+    /// The finalization paths previously wrote the [`crate::StoredAttestedRoot`]
+    /// in its own durable transaction (`store_attested_root`) and the
+    /// [`CommitRecord`] in another. A crash — or a failed record write — between
+    /// them left an ORPHAN ROOT: the retry misses the turn-by-hash idempotence
+    /// guard's record, observes the orphan as `latest_attested_root`, and
+    /// promotes the SAME turn one height higher (a duplicate/skipped height on
+    /// the advertised 1:1 root↔record ladder). The converse boundary left a
+    /// record without its root. This method lands the root (its
+    /// `ATTESTED_ROOTS` entry AND the latest-height metadata advance), the
+    /// commit record, every index entry, and the cursor advance in ONE
+    /// transaction: finalized-turn identity + height are one atomic durability
+    /// event — both land or neither.
+    ///
+    /// Idempotency matches [`Self::commit_finalized_turn`]: on a replay whose
+    /// record at `expected_ordinal` already carries the same `turn_hash`, the
+    /// root was written by the original transaction and the call is a no-op
+    /// success — it writes NOTHING (in particular, never a second root at a
+    /// higher height).
+    pub fn commit_finalized_turn_with_root(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        root: &crate::StoredAttestedRoot,
+    ) -> Result<u64> {
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root))
     }
 
     /// [`Self::commit_finalized_turn`] PLUS forever-digest burns in the SAME
@@ -262,6 +293,21 @@ impl PersistentStore {
         expected_ordinal: u64,
         record: &CommitRecord,
         burns: &[(u8, [u8; 32], [u8; 32])],
+    ) -> Result<u64> {
+        self.commit_finalized_turn_inner(expected_ordinal, record, burns, None)
+    }
+
+    /// The ONE atomic finalized-turn commit transaction behind
+    /// [`Self::commit_finalized_turn`] /
+    /// [`Self::commit_finalized_turn_with_burns`] /
+    /// [`Self::commit_finalized_turn_with_root`]: record + indexes + optional
+    /// burns + optional attested root + cursor advance, all-or-nothing.
+    fn commit_finalized_turn_inner(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        burns: &[(u8, [u8; 32], [u8; 32])],
+        root: Option<&crate::StoredAttestedRoot>,
     ) -> Result<u64> {
         let write_txn = self.db.begin_write()?;
         let assigned;
@@ -349,6 +395,26 @@ impl PersistentStore {
                 for (namespace, scope, digest) in burns {
                     let key = crate::forever_digests::forever_key(*namespace, scope, digest);
                     forever.insert(&key, ())?;
+                }
+            }
+
+            // 3b. The turn's attested root — SAME transaction (the F-B
+            //     root/record atomicity weld): the `ATTESTED_ROOTS` entry and
+            //     the latest-height metadata advance land atomically with the
+            //     record, so no crash boundary can leave an orphan root (retry
+            //     promoting one height higher) or a record without its root.
+            //     Mirrors `PersistentStore::store_attested_root` byte-for-byte.
+            if let Some(root) = root {
+                let serialized = postcard::to_stdvec(root)
+                    .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                let mut roots = write_txn.open_table(tables::ATTESTED_ROOTS)?;
+                roots.insert(root.height, serialized.as_slice())?;
+                let current_latest = meta
+                    .get(tables::META_LATEST_ROOT_HEIGHT)?
+                    .map(|g| g.value())
+                    .unwrap_or(0);
+                if root.height >= current_latest {
+                    meta.insert(tables::META_LATEST_ROOT_HEIGHT, root.height)?;
                 }
             }
 
@@ -1699,6 +1765,123 @@ mod tests {
                 .forever_digest_seen(NS_TRUSTLINE_DIGEST, &scope, &digest)
                 .unwrap()
         );
+    }
+
+    /// A [`crate::StoredAttestedRoot`] for the F-B paired-commit tests: height
+    /// + a tag byte are all that matter to atomicity.
+    fn attested_root(height: u64, tag: u8) -> crate::StoredAttestedRoot {
+        crate::StoredAttestedRoot {
+            merkle_root: [tag; 32],
+            note_tree_root: None,
+            nullifier_set_root: None,
+            height,
+            timestamp: 7,
+            blocklace_block_id: Some([tag.wrapping_add(1); 32]),
+            finality_round: None,
+            quorum_signatures: Vec::new(),
+            threshold_qc: None,
+            threshold: 1,
+            federation_id: dregg_types::FederationId([0u8; 32]),
+            receipt_stream_root: None,
+            finalization_quorum: Vec::new(),
+        }
+    }
+
+    /// F-B (third-pass review) fault injection, boundary 1 — root-without-record.
+    /// The OLD two-step promotion wrote the attested root in its own
+    /// transaction; a failure before the record left an orphan root, so the
+    /// retry (missing the turn-by-hash guard) promoted the SAME turn one
+    /// height higher. With the paired API a mid-transaction failure (here: the
+    /// torn-state ordinal guard) writes NEITHER — no orphan root can exist, so
+    /// height divergence is impossible — and the non-divergence survives a
+    /// reopen.
+    #[test]
+    fn paired_root_and_record_are_one_atomic_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paired.redb");
+
+        {
+            let store = PersistentStore::open(&path).unwrap();
+            // Fault-inject: a wrong expected ordinal fails the transaction
+            // mid-flight (after the root would already be durable under the
+            // old two-step ordering).
+            let mut rec = record(0, 0, vec![cell(1, 10)]);
+            rec.turn_hash[0] = 0xf1;
+            let err = store.commit_finalized_turn_with_root(5, &rec, &attested_root(1, 0xaa));
+            assert!(matches!(err, Err(StoreError::Integrity(_))), "got {err:?}");
+            // NEITHER half landed: no orphan root, no record, no cursor move.
+            assert!(
+                store.latest_attested_root().unwrap().is_none(),
+                "a failed paired commit must leave NO orphan attested root"
+            );
+            assert_eq!(store.commit_cursor().unwrap(), 0);
+            assert!(store.lookup_turn(&rec.turn_hash).unwrap().is_none());
+
+            // The genuine paired commit: both land together.
+            let assigned = store
+                .commit_finalized_turn_with_root(0, &rec, &attested_root(1, 0xaa))
+                .unwrap();
+            assert_eq!(assigned, 0);
+            drop(store); // crash boundary
+        }
+
+        // Reopen: BOTH halves are durable and agree on the height.
+        let store = PersistentStore::open(&path).unwrap();
+        let root = store
+            .latest_attested_root()
+            .unwrap()
+            .expect("paired root survives reopen");
+        assert_eq!(root.height, 1);
+        assert_eq!(root.merkle_root, [0xaa; 32]);
+        let rec = store
+            .lookup_turn(&{
+                let mut th = record(0, 0, vec![]).turn_hash;
+                th[0] = 0xf1;
+                th
+            })
+            .unwrap()
+            .expect("paired record survives reopen");
+        assert_eq!(rec.height, 1, "record and root share ONE height");
+        assert_eq!(store.commit_cursor().unwrap(), 1);
+        let report = store.verify_index_agrees_with_log().unwrap();
+        assert!(
+            report.ok(),
+            "index disagrees after paired commit: {report:?}"
+        );
+    }
+
+    /// F-B fault injection, boundary 2 — the crash-retry shape. After a
+    /// successful paired write, a replayed commit for the SAME turn (crash
+    /// between durability and the caller's in-RAM consume) is a NO-OP: it
+    /// writes no second record AND no second root — even if the confused
+    /// retry supplies a root at a HIGHER height (exactly what the old
+    /// orphan-root bug produced), nothing lands. One turn ⇒ one height,
+    /// forever.
+    #[test]
+    fn paired_replay_writes_no_second_root_at_a_higher_height() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let mut rec = record(0, 0, vec![cell(2, 20)]);
+        rec.turn_hash[0] = 0xf2;
+        store
+            .commit_finalized_turn_with_root(0, &rec, &attested_root(1, 0xbb))
+            .unwrap();
+        assert_eq!(store.attested_root_count().unwrap(), 1);
+
+        // Replay the same turn — with a WOULD-BE height-2 root (the exact
+        // divergence the orphan-root retry produced pre-fix).
+        let assigned = store
+            .commit_finalized_turn_with_root(0, &rec, &attested_root(2, 0xcc))
+            .unwrap();
+        assert_eq!(assigned, 0, "replay is a no-op success at the SAME ordinal");
+        assert_eq!(store.commit_cursor().unwrap(), 1, "no second record");
+        assert_eq!(
+            store.attested_root_count().unwrap(),
+            1,
+            "no second root: the no-op replay writes NOTHING"
+        );
+        let root = store.latest_attested_root().unwrap().unwrap();
+        assert_eq!(root.height, 1, "the ladder still tops out at height 1");
+        assert_eq!(root.merkle_root, [0xbb; 32], "the original root is intact");
     }
 
     /// Route-level turns commit several records at the SAME (height, creator)

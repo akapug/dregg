@@ -3275,6 +3275,27 @@ async fn post_submit_turn(
         }));
     }
 
+    // MEMBERSHIP-CHANGE BACKPRESSURE (F-C): a ratified committee change is
+    // deferred until the retained solo prefix finalizes; refusing NEW solo
+    // ingress while it is pending is what makes the drain converge (each
+    // retained turn self-finalizes within the debounce).
+    if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo) && s.membership_change_pending() {
+        tracing::warn!(
+            retained = s.ingress_commits.len(),
+            "solo ingress refused: membership change pending (committee activation \
+             deferred until the retained prefix finalizes)"
+        );
+        drop(s);
+        return Ok(Json(SubmitTurnResponse {
+            accepted: false,
+            turn_hash: None,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some("membership change pending: retry".to_string()),
+        }));
+    }
+
     // O(touched) atomic rollback: arm a per-turn undo journal instead of cloning
     // the whole O(cells) ledger. The executor mutates `s.ledger` IN PLACE below;
     // on the rare `append_receipt` failure the journal restores exactly the
@@ -3347,9 +3368,13 @@ async fn post_submit_turn(
                 }));
             }
             // Receipt is on the chain: read the pre-turn actor/effect cells from
-            // the journal (the O(touched) stand-in for the old `pre_ledger` clone),
-            // then drop the journal — the in-place commit stands.
+            // the journal (the O(touched) stand-in for the old `pre_ledger` clone)
+            // and capture the journal's COMPLETE touched-id set (F-A: the
+            // retention overlay must cover the delta-omitted dimensions — vk /
+            // program / lifecycle / heap / delegation), then drop the journal —
+            // the in-place commit stands.
             let pre_ledger = s.ledger.pre_turn_touched_ledger();
+            let journal_touched = s.ledger.restore_point_touched_ids();
             s.ledger.commit_restore_point();
             // SOLO: retain the execution result for finalization PROMOTION —
             // consumed by exact turn hash in `execute_finalized_turn` so the
@@ -3357,12 +3382,16 @@ async fn post_submit_turn(
             // re-executing (the double-apply bug). `snapshot` binds the PREFIX
             // through this turn (canonical root + touched post-cells) HERE,
             // under the same exclusive write lock that applied it — promotion
-            // must not re-read the live ledger (prefix poisoning).
+            // must not re-read the live ledger (prefix poisoning). The touched
+            // set is journal ∪ delta — the COMPLETE whole-cell mutation set.
             if s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo) {
                 let ingress = crate::state::IngressCommit::snapshot(
                     &s.ledger,
                     receipt.clone(),
-                    crate::blocklace_sync::touched_cell_ids(&ledger_delta),
+                    crate::blocklace_sync::complete_ingress_touched_ids(
+                        journal_touched,
+                        &ledger_delta,
+                    ),
                 );
                 s.retain_ingress_commit(turn_hash_bytes, ingress);
             }
@@ -3636,6 +3665,27 @@ async fn post_submit_signed_turn(
         }));
     }
 
+    // MEMBERSHIP-CHANGE BACKPRESSURE (F-C): refuse new solo ingress while a
+    // ratified committee change waits for the retained prefix to finalize.
+    if is_solo && s.membership_change_pending() {
+        tracing::warn!(
+            retained = s.ingress_commits.len(),
+            "solo signed-turn ingress refused: membership change pending (committee \
+             activation deferred until the retained prefix finalizes)"
+        );
+        drop(s);
+        return Ok(Json(SubmitSignedTurnResponse {
+            accepted: false,
+            turn_hash: Some(turn_hash),
+            signer: Some(signer),
+            action_count,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some("membership change pending: retry".to_string()),
+        }));
+    }
+
     // Is the acting cell the node OPERATOR's own default cell? Only then does the
     // node operator's cipherclerk chain (`s.cclerk`) authoritatively own the turn's
     // receipt chain. A FOREIGN client's turn is decoupled: its receipt chain is its
@@ -3798,8 +3848,11 @@ async fn post_submit_signed_turn(
                 }
                 crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             }
-            // SOLO success: keep the in-place commit, drop the journal. (No-op
-            // under MULTI-PARTY, already resolved to untouched above.)
+            // SOLO success: capture the journal's COMPLETE touched-id set (F-A:
+            // the retention overlay must cover the delta-omitted dimensions),
+            // keep the in-place commit, drop the journal. (No-op under
+            // MULTI-PARTY, already resolved to untouched above.)
+            let journal_touched = s.ledger.restore_point_touched_ids();
             s.ledger.commit_restore_point();
             // SOLO: retain the execution result for finalization PROMOTION —
             // `execute_finalized_turn` consumes this by EXACT turn hash and
@@ -3809,12 +3862,16 @@ async fn post_submit_signed_turn(
             // binds the PREFIX through this turn (canonical root + touched
             // post-cells) HERE, under the same exclusive write lock that
             // applied it — promotion must not re-read the live ledger
-            // (prefix poisoning).
+            // (prefix poisoning). The touched set is journal ∪ delta — the
+            // COMPLETE whole-cell mutation set.
             if is_solo {
                 let ingress = crate::state::IngressCommit::snapshot(
                     &s.ledger,
                     receipt.clone(),
-                    crate::blocklace_sync::touched_cell_ids(&ledger_delta),
+                    crate::blocklace_sync::complete_ingress_touched_ids(
+                        journal_touched,
+                        &ledger_delta,
+                    ),
                 );
                 s.retain_ingress_commit(turn_hash_bytes, ingress);
             }
@@ -7304,6 +7361,24 @@ async fn post_faucet(
         }));
     }
 
+    // MEMBERSHIP-CHANGE BACKPRESSURE (F-C): refuse new solo faucet grants while
+    // a ratified committee change waits for the retained prefix to finalize.
+    if is_solo && req.amount > 0 && s.membership_change_pending() {
+        tracing::warn!(
+            retained = s.ingress_commits.len(),
+            "solo faucet ingress refused: membership change pending (committee \
+             activation deferred until the retained prefix finalizes)"
+        );
+        drop(s);
+        return Ok(Json(FaucetResponse {
+            success: false,
+            tx_hash: None,
+            turn_hash: None,
+            amount: 0,
+            error: Some("membership change pending: retry".to_string()),
+        }));
+    }
+
     // Ensure the faucet cell exists (create on first use). Uses the genesis-
     // derived faucet key so this is the SAME cell genesis mints the supply into;
     // on a genesis node it already exists on every node. In multi-party mode this
@@ -7561,11 +7636,14 @@ async fn post_faucet(
         )
     };
 
-    // Capture the pre-turn cells from the journal BEFORE resolving it (the
-    // O(touched) stand-in for the old full `pre_ledger` clone), then resolve:
-    // SOLO keeps the authoritative in-place commit; MULTI-PARTY restores the
-    // untouched ledger for finalization. Both drop the journal.
+    // Capture the pre-turn cells AND the journal's COMPLETE touched-id set
+    // (F-A: the retention overlay must cover the delta-omitted dimensions)
+    // from the journal BEFORE resolving it (the O(touched) stand-in for the
+    // old full `pre_ledger` clone), then resolve: SOLO keeps the authoritative
+    // in-place commit; MULTI-PARTY restores the untouched ledger for
+    // finalization. Both drop the journal.
     let pre_ledger = s.ledger.pre_turn_touched_ledger();
+    let journal_touched = s.ledger.restore_point_touched_ids();
     if is_solo {
         s.ledger.commit_restore_point();
     } else {
@@ -7608,12 +7686,16 @@ async fn post_faucet(
             // `snapshot` binds the PREFIX through this turn (canonical root +
             // touched post-cells) HERE, under the same exclusive write lock
             // that applied it — promotion must not re-read the live ledger
-            // (prefix poisoning).
+            // (prefix poisoning). The touched set is journal ∪ delta — the
+            // COMPLETE whole-cell mutation set (F-A).
             if is_solo {
                 let ingress = crate::state::IngressCommit::snapshot(
                     &s.ledger,
                     receipt.clone(),
-                    crate::blocklace_sync::touched_cell_ids(&ledger_delta),
+                    crate::blocklace_sync::complete_ingress_touched_ids(
+                        journal_touched,
+                        &ledger_delta,
+                    ),
                 );
                 s.retain_ingress_commit(turn_hash_bytes, ingress);
             }
