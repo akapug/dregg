@@ -88,13 +88,14 @@ pub mod watcher;
 pub use config::{
     Asset, ConfigError, DEFAULT_DREGG_DECIMALS, DEFAULT_DREGG_DISCOUNT_BPS,
     DEFAULT_OTC_DISCOUNT_BPS, DEFAULT_PRICE_USD_PER_RUN, DEFAULT_USDC_DECIMALS, DepositAddress,
-    Network, PayConfig, SPL_TOKEN_PROGRAM_ID, Seed, UserId, parse_pubkey_base58,
+    Network, PayConfig, PayRole, SPL_TOKEN_PROGRAM_ID, Seed, UserId, parse_pubkey_base58,
 };
 pub use governance::{
     APPROVE_OPTION, GovernanceError, LiquidityGovernance, LiquidityProposal, REJECT_OPTION,
 };
 pub use hd::{
-    DepositAddressProvider, HdDeposit, derive_deposit_address, derive_signing_key, user_index,
+    DepositAddressBook, DepositAddressProvider, HdDeposit, derive_deposit_address,
+    derive_signing_key, user_index,
 };
 pub use ledger::{
     CreditLedger, CreditOutcome, CreditStore, DebitError, InMemoryStore, StoreCreditOutcome,

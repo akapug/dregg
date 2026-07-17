@@ -7,6 +7,25 @@
 //! never baked into committed source. [`PayConfig::network`] defaults to
 //! [`Network::Devnet`]; flipping to [`Network::Mainnet`] is a deliberate operator
 //! action.
+//!
+//! **Custody split ([`PayRole`]).** Seed custody and payment watching are separate
+//! concerns and belong in separate processes:
+//!
+//! * A [`PayRole::WatchOnly`] process (the discord bot) observes deposit addresses
+//!   and credits runs. It needs the PUBLIC deposit addresses but NEVER the signing
+//!   [`Seed`] — so its config carries `seed = None` ([`PayConfig::watch_only_from_env`],
+//!   which does not read `DREGG_PAY_SEED`). Because ed25519 SLIP-0010 has no
+//!   public-child (xpub) derivation (see [`crate::hd`]), a watch-only process cannot
+//!   derive addresses on demand; it is handed a PUBLIC
+//!   [`DepositAddressBook`](crate::hd::DepositAddressBook) precomputed by the sweeper.
+//! * A [`PayRole::Sweeper`] process holds the [`Seed`] ([`PayConfig::from_env`], which
+//!   requires `DREGG_PAY_SEED`), derives custody keys, and moves swept funds. It is the
+//!   ONLY process that ever loads the seed, and it runs in the operator's secured
+//!   signer — never the public bot host.
+//!
+//! The role is selected explicitly by `DREGG_PAY_ROLE` and defaults to the SAFE
+//! [`PayRole::WatchOnly`]: a process only holds custody material when the operator
+//! deliberately asks for it.
 
 use zeroize::Zeroizing;
 
@@ -87,6 +106,45 @@ impl Network {
     /// allowing a real-funds sweep.
     pub fn is_mainnet(&self) -> bool {
         matches!(self, Network::Mainnet)
+    }
+}
+
+/// Which custody role a process runs as — the split between WATCHING money and
+/// HOLDING the key that can move it. Selected by `DREGG_PAY_ROLE` and defaulting to
+/// the safe [`PayRole::WatchOnly`], so a process only takes custody material when the
+/// operator deliberately asks for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PayRole {
+    /// The public path (the discord bot): observe deposit addresses + credit runs,
+    /// holding NO signing seed. Its config is built by
+    /// [`PayConfig::watch_only_from_env`] (which never reads `DREGG_PAY_SEED`) and it
+    /// serves addresses from a precomputed public
+    /// [`DepositAddressBook`](crate::hd::DepositAddressBook).
+    WatchOnly,
+    /// The custody path (the sweeper service, in the operator's secured signer):
+    /// holds the [`Seed`], derives custody keys, and moves swept funds. The ONLY role
+    /// that loads `DREGG_PAY_SEED`.
+    Sweeper,
+}
+
+impl PayRole {
+    /// Read the role from `DREGG_PAY_ROLE` (`watch-only`|`watchonly`|`watch` vs
+    /// `sweeper`|`custody`|`custodian`), case-insensitive. Defaults to the SAFE
+    /// [`PayRole::WatchOnly`] when unset or unrecognized — a process never silently
+    /// escalates to holding the seed.
+    pub fn from_env() -> Self {
+        match std::env::var("DREGG_PAY_ROLE") {
+            Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+                "sweeper" | "custody" | "custodian" => PayRole::Sweeper,
+                _ => PayRole::WatchOnly,
+            },
+            Err(_) => PayRole::WatchOnly,
+        }
+    }
+
+    /// `true` for the custody role — the only role that loads the seed.
+    pub fn is_sweeper(&self) -> bool {
+        matches!(self, PayRole::Sweeper)
     }
 }
 
@@ -173,7 +231,13 @@ pub struct PayConfig {
     pub treasury: DepositAddress,
     /// The HD seed the per-user deposit keys are derived from. Secret custody
     /// material (see [`Seed`]).
-    pub seed: Seed,
+    ///
+    /// `None` on a [`PayRole::WatchOnly`] config ([`PayConfig::watch_only_from_env`]):
+    /// a watch-only process holds no signing key. Only a [`PayRole::Sweeper`] config
+    /// ([`PayConfig::from_env`]) carries `Some(seed)`. [`HdDeposit`](crate::hd::HdDeposit)
+    /// derivation requires it and a watch-only config must never be handed to the
+    /// sweeper / HD derivation — check [`PayConfig::has_seed`] first.
+    pub seed: Option<Seed>,
     /// Atomic `$DREGG` units required for one run credit (`price_per_run`). A
     /// payment of `N` atomic units credits `N / price_per_run` runs.
     pub price_per_run: u64,
@@ -238,7 +302,7 @@ impl PayConfig {
             mint,
             usdc_mint,
             treasury,
-            seed: Seed::new(seed),
+            seed: Some(Seed::new(seed)),
             price_per_run,
             rpc_endpoint: "https://api.devnet.solana.com".to_string(),
             network: Network::Devnet,
@@ -279,12 +343,17 @@ impl PayConfig {
         }
     }
 
-    /// Build a config from the operator environment. Reads:
-    /// `DREGG_PAY_MINT` (base58 mint), `DREGG_PAY_TREASURY` (base58 treasury),
-    /// `DREGG_PAY_SEED` (hex or base58 seed), `DREGG_PAY_PRICE_PER_RUN` (u64),
-    /// `DREGG_PAY_RPC` (RPC url), `DREGG_PAY_NETWORK` (`devnet`|`mainnet`,
+    /// Build a **seed-bearing ([`PayRole::Sweeper`]) config** from the operator
+    /// environment. Reads: `DREGG_PAY_MINT` (base58 mint), `DREGG_PAY_TREASURY`
+    /// (base58 treasury), `DREGG_PAY_SEED` (hex or base58 seed), `DREGG_PAY_PRICE_PER_RUN`
+    /// (u64), `DREGG_PAY_RPC` (RPC url), `DREGG_PAY_NETWORK` (`devnet`|`mainnet`,
     /// default devnet). No mainnet value is ever a compiled-in default — the
     /// mint/treasury/seed MUST be supplied by the operator or this fails closed.
+    ///
+    /// **Custody.** This REQUIRES `DREGG_PAY_SEED` and returns a config with
+    /// `seed = Some(..)`. It is the sweeper/custody path; a watch-only process (the
+    /// bot) must use [`PayConfig::watch_only_from_env`] instead, which never reads the
+    /// seed.
     pub fn from_env() -> Result<Self, ConfigError> {
         let get = |k: &str| std::env::var(k).map_err(|_| ConfigError::MissingEnv(k.to_string()));
         let mint = parse_pubkey_base58(&get("DREGG_PAY_MINT")?)?;
@@ -337,7 +406,7 @@ impl PayConfig {
             mint,
             usdc_mint,
             treasury,
-            seed: Seed::new(seed_bytes),
+            seed: Some(Seed::new(seed_bytes)),
             price_per_run,
             rpc_endpoint,
             network,
@@ -348,6 +417,84 @@ impl PayConfig {
             usdc_decimals,
             dregg_decimals,
         })
+    }
+
+    /// Build a **seed-free ([`PayRole::WatchOnly`]) config** from the operator
+    /// environment — the discord bot's path. Reads exactly the same PUBLIC operator
+    /// values as [`PayConfig::from_env`] (`DREGG_PAY_MINT`, `DREGG_PAY_USDC_MINT`,
+    /// `DREGG_PAY_TREASURY`, `DREGG_PAY_PRICE_PER_RUN`, `DREGG_PAY_RPC`,
+    /// `DREGG_PAY_NETWORK`, and the economics knobs) **but never `DREGG_PAY_SEED`** —
+    /// so a compromised watch-only host leaks no custody material. The resulting
+    /// config has `seed = None`; it can watch payments and declare treasury positions
+    /// but it can NOT derive addresses or sweep (that is the sweeper's job, from a
+    /// [`DepositAddressBook`](crate::hd::DepositAddressBook) the sweeper publishes).
+    pub fn watch_only_from_env() -> Result<Self, ConfigError> {
+        // Build the full seed-bearing config path is NOT reused here on purpose:
+        // that path calls `get("DREGG_PAY_SEED")` and would fail closed (or, worse,
+        // load the seed) for a process that must never see it. Read the public
+        // values directly and leave `seed` None.
+        let get = |k: &str| std::env::var(k).map_err(|_| ConfigError::MissingEnv(k.to_string()));
+        let mint = parse_pubkey_base58(&get("DREGG_PAY_MINT")?)?;
+        let usdc_mint = parse_pubkey_base58(&get("DREGG_PAY_USDC_MINT")?)?;
+        let treasury = DepositAddress::from_base58(&get("DREGG_PAY_TREASURY")?)?;
+        let price_per_run = get("DREGG_PAY_PRICE_PER_RUN")?
+            .parse::<u64>()
+            .map_err(|_| ConfigError::BadValue("DREGG_PAY_PRICE_PER_RUN".to_string()))?;
+        let rpc_endpoint = std::env::var("DREGG_PAY_RPC")
+            .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string());
+        let network = match std::env::var("DREGG_PAY_NETWORK").as_deref() {
+            Ok("mainnet") => Network::Mainnet,
+            _ => Network::Devnet,
+        };
+        let parse_f64 = |k: &str, d: f64| -> Result<f64, ConfigError> {
+            match std::env::var(k) {
+                Ok(v) => v
+                    .parse::<f64>()
+                    .map_err(|_| ConfigError::BadValue(k.to_string())),
+                Err(_) => Ok(d),
+            }
+        };
+        let parse_u32 = |k: &str, d: u32| -> Result<u32, ConfigError> {
+            match std::env::var(k) {
+                Ok(v) => v
+                    .parse::<u32>()
+                    .map_err(|_| ConfigError::BadValue(k.to_string())),
+                Err(_) => Ok(d),
+            }
+        };
+        let parse_u8 = |k: &str, d: u8| -> Result<u8, ConfigError> {
+            match std::env::var(k) {
+                Ok(v) => v
+                    .parse::<u8>()
+                    .map_err(|_| ConfigError::BadValue(k.to_string())),
+                Err(_) => Ok(d),
+            }
+        };
+        Ok(PayConfig {
+            mint,
+            usdc_mint,
+            treasury,
+            seed: None,
+            price_per_run,
+            rpc_endpoint,
+            network,
+            spl_token_program: SPL_TOKEN_PROGRAM_ID,
+            price_usd_per_run: parse_f64("DREGG_PAY_PRICE_USD", DEFAULT_PRICE_USD_PER_RUN)?,
+            dregg_discount_bps: parse_u32(
+                "DREGG_PAY_DREGG_DISCOUNT_BPS",
+                DEFAULT_DREGG_DISCOUNT_BPS,
+            )?,
+            otc_discount_bps: parse_u32("DREGG_PAY_OTC_DISCOUNT_BPS", DEFAULT_OTC_DISCOUNT_BPS)?,
+            usdc_decimals: parse_u8("DREGG_PAY_USDC_DECIMALS", DEFAULT_USDC_DECIMALS)?,
+            dregg_decimals: parse_u8("DREGG_PAY_DREGG_DECIMALS", DEFAULT_DREGG_DECIMALS)?,
+        })
+    }
+
+    /// Whether this config carries the signing [`Seed`] (a [`PayRole::Sweeper`]
+    /// config) or is watch-only (`seed = None`). HD derivation / the sweeper require
+    /// `true`; the watch-only bot runs with `false`.
+    pub fn has_seed(&self) -> bool {
+        self.seed.is_some()
     }
 }
 
