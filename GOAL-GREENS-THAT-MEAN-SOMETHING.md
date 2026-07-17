@@ -30,15 +30,30 @@ off only clearly-mine-and-verified pieces; do NOT force a wholesale integration.
    non-inheriting crates `[lints] workspace = true`, drop continue-on-error. Do NOT red main mid-churn.
 
 ## Open / flagged for ember
-- Sign-floor CI step costs ~22 min via `CryptoVerifyAll`; narrowing that ONE step to
-  `Dregg2.Crypto.AcvpKats` = ~130 s for the same sign-floor coverage (loses `=spec`/NttFaithful).
-- **In flight:** a P→P laundering in the crypto TCB — `HermineHashCRRegrounded.lean:121`
-  `hermine_concurrent_forgery_advantage_bound` carries a FREE ensemble discharged by its own `hmsis`
-  hypothesis (the exact pattern the VRF sibling `VrfRegrounded` was repaired for). HashCR leg is
-  sound; only the MSIS leg is rotten. Repair = port `uniqBreakToMsisSolver` (a real extractor +
-  sampled-MSIS bridge over the real dichotomy `concurrent_forgery_breaks_hashcr_or_msis`). Lane firing.
-- `check-emit-gate-weld.py` is RED on main — real descriptor drift (`dregg-derivation-v1` Rust 379 vs
-  Lean 393; garbled-eval 32 vs 47) from another lane's mid-flight circuit refactor. Gate working.
+### ⚑⚑⚑ RUST DEFECT BACKLOG (07-17, read-only discovery lane — VERIFIED by re-reading code)
+7 Tier-1 SOUNDNESS findings in the deployed system (full list + falsifiers in the discovery lane's
+report). Handled per be-thoughtful-not-trigger-happy: isolated+clear ones get a falsifier-test-first
+fix lane; consensus/crypto/value ones get a READ-ONLY deep-verify (real-hole vs named-seam) before ANY
+fix — NOT a blind rewrite.
+- **#2 bridge receipt** (`cell-crypto/note_bridge.rs:1157`) — `verify_bridge_receipt` accepts ANY
+  trusted key; signer not bound to `destination_federation` → trusted fed A finalizes a bridge for
+  dest B, burns the note with no B-side mint. SPOT-CONFIRMED. → fix lane (a3fac0ad, falsifier-first).
+- **#6 overflow** (`node/equivocation_court_service.rs:663` + `sdk/factories.rs:177`) — `req.amount +
+  fee` wraps → escrow≠bond. → same fix lane.
+- **#1 fork risk** (`node/blocklace_sync.rs:1062`), **#3 predicate proof unbound to attr/credential**
+  (`credentials/verification.rs:244`; PREREQ: does dregg-bridge bind fact_commitment?), **#4 value_binding
+  unbound to bits** (`cell-crypto/value_link_zk.rs:470`), **#7 amended quorum threshold ignored**
+  (`blocklace/ordering.rs:307`). → READ-ONLY deep-verify lane (a812f3039d) before any fix.
+  Also latent/deprecated soundness (discounted): addressing.rs:341, constitution.rs:168, storage/blinded+operator (deprecated).
+- **Tier-2 silent-gate + Tier-3 correctness + item-22 postcard-class (~15 sites) + item-24 CLI fail-open**:
+  proven-pattern applications, QUEUED to fan out path-limited when a build lane frees (lock ceiling ~2).
+  Headliners: watcher.rs:363 credits on RPC balance (never calls the trustless verifier — the "Discord
+  pay on MockWatcher" class); cipherclerk.rs:2852 PQ-sign `unwrap_or_default` masks a signing failure;
+  erasure.rs:195 RS-encode error swallowed; presentation.rs:446 revealed-facts commitment only ~30-bit.
+- Hollow-test batch (item 23a-f) → fix lane (aafb4663). Efficiency/dup deprioritized (topological_subset
+  Θ(P·N)/round; hex_decode_32 duplicated 8-9×).
+- Sign-floor CI step ~22 min via `CryptoVerifyAll`; narrow to `Dregg2.Crypto.AcvpKats` = ~130 s.
+- `check-emit-gate-weld.py` RED on main — real descriptor drift from another lane's circuit refactor.
 
 ## In flight
 - **FINDING-2 sweep: ~20 injective-hash floor carriers re-grounding** — 3 empowered lanes (clusters:
