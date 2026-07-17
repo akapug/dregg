@@ -3,9 +3,102 @@
 //! Keeps federation id, wall-clock timestamp, and attested block height aligned with
 //! the same rules as [`crate::blocklace_sync::execute_finalized_turn`].
 
+use std::sync::Arc;
+use std::sync::OnceLock;
+
+use dregg_circuit::dsl::circuit::CellProgram;
+use dregg_circuit::dsl::dfa_routing::dfa_routing_descriptor;
+use dregg_dsl_runtime::ProgramRegistry;
 use dregg_turn::TurnExecutor;
+use dregg_turn::executor::DslCircuitDfaVerifier;
 
 use crate::state::NodeStateInner;
+
+/// The deployed name of the node's routing circuit — the `dregg-dfa-routing-v1`
+/// route-commitment-binding AIR (`dregg_circuit::dsl::dfa_routing`, faithful to
+/// the Lean model `Dregg2.Crypto.DfaAcceptanceAir`).
+pub const ROUTE_CIRCUIT_NAME: &str = "dregg-dfa-routing-v1";
+
+/// The node's canonical 4-state message router, flattened to `(state, symbol, next)`.
+///
+/// States: `IDLE=0`, `LOCAL=1`, `REMOTE=2`, `REJECT=3`.
+/// Symbols: `internal=0`, `external=1`, `privileged=2`, `unknown=3`.
+///
+/// This is the SAME table the `dregg-dfa-routing-v1` AIR was authored and proven
+/// against (`circuit/src/dsl/dfa_routing.rs` `tests::router_transitions`, and the
+/// `live_routing*` teeth in `turn/src/executor/membership_verifier.rs`). The table
+/// is the routing POLICY: its `compute_table_commitment` seeds every route
+/// commitment, and it flows into the descriptor — so changing it changes
+/// [`route_circuit_vk`], which is a deliberate, visible re-deployment.
+pub fn canonical_router_transitions() -> Vec<(u32, u32, u32)> {
+    // TRANSITIONS = [[1,2,1,3],[1,2,1,3],[1,2,3,3],[3,3,3,3]]
+    let table = [[1, 2, 1, 3], [1, 2, 1, 3], [1, 2, 3, 3], [3, 3, 3, 3]];
+    let mut out = Vec::new();
+    for (state, row) in table.iter().enumerate() {
+        for (symbol, &next) in row.iter().enumerate() {
+            out.push((state as u32, symbol as u32, next));
+        }
+    }
+    out
+}
+
+/// The node's deployed routing program.
+///
+/// No ceremony, no epoch decision: a DSL program's `vk_hash` is CONTENT-DERIVED
+/// (`CellProgram::compute_vk_hash` = blake3 over the postcard-serialized
+/// descriptor), so this program's identity follows from the descriptor + the
+/// canonical table alone — every node that runs this code mints the same vk.
+pub fn route_circuit_program() -> &'static CellProgram {
+    static PROGRAM: OnceLock<CellProgram> = OnceLock::new();
+    PROGRAM.get_or_init(|| {
+        CellProgram::new(
+            dfa_routing_descriptor(ROUTE_CIRCUIT_NAME, &canonical_router_transitions()),
+            1,
+        )
+    })
+}
+
+/// The routing circuit's verification-key hash — the commitment a relay's
+/// `Witnessed { Dfa }` caveat carries (the relay's `route_table_root`).
+///
+/// [`DslCircuitDfaVerifier`] resolves a Dfa caveat's commitment against the
+/// deployed [`ProgramRegistry`]; a `vk_hash` absent from it fails closed. This is
+/// the vk under which [`configure_turn_executor`] deploys the routing program, so
+/// a Dfa caveat carrying it now DISCHARGES through the real STARK verifier
+/// instead of being rejected as `KindNotRegistered`.
+pub fn route_circuit_vk() -> [u8; 32] {
+    route_circuit_program().vk_hash
+}
+
+/// The registry the node's `Dfa` verifier resolves against: the node's deployed
+/// programs PLUS the routing circuit at [`route_circuit_vk`].
+///
+/// Deployment is idempotent (`ProgramRegistry::deploy` keys by vk_hash), so a
+/// registry that already carries the routing program is unchanged.
+pub fn program_registry_with_route_circuit(_s: &NodeStateInner) -> ProgramRegistry {
+    // A FRESH registry holding EXACTLY the canonical route circuit — deliberately
+    // NOT `s.program_registry`.
+    //
+    // `DslCircuitDfaVerifier` resolves ANY `vk_hash` present in the registry it is
+    // handed, lowers that program, and verifies its STARK against PROVER-SUPPLIED
+    // public inputs; nothing else pins the program to the routing circuit. The
+    // node's `s.program_registry` is populated by the UNAUTHENTICATED
+    // `POST /programs/deploy` (`api.rs::post_deploy_program`), which accepts an
+    // arbitrary postcard `CircuitDescriptor` from anyone. Handing that registry to
+    // the verifier would let an attacker deploy a trivially-satisfiable program and
+    // discharge a `Dfa` caveat against their OWN program's vk — turning a
+    // fail-closed (safe-but-dead) relay into a live forgery surface. Pinning the
+    // registry to the one content-derived route vk is what makes wiring the
+    // verifier an improvement rather than a regression.
+    let mut programs = ProgramRegistry::new();
+    // `deploy` only fails on a descriptor that does not validate or a vk_hash that
+    // does not match its descriptor — neither is possible for a `CellProgram::new`
+    // over the pinned descriptor (`descriptor_is_deployable` pins the validation).
+    programs
+        .deploy(route_circuit_program().clone())
+        .expect("the canonical dregg-dfa-routing-v1 program must deploy");
+    programs
+}
 
 /// How to derive the executor's block height from node state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +162,21 @@ pub fn configure_turn_executor(
     // (CONSENSUS-FLEX §7 item 2, live on every node executor).
     if let Some(registry) = executor.witnessed_registry.as_mut() {
         dregg_federation::court::register_equivocation_court(registry);
+
+        // DFA ROUTE-COMMITMENT (the relay's caveat): install the real
+        // `DslCircuitDfaVerifier` over the node's deployed programs + the
+        // canonical routing circuit. The executor default
+        // (`registry_with_real_verifiers`) leaves `Dfa` FAIL-CLOSED because the
+        // kind needs a host-trusted `ProgramRegistry`; this supplies it, so a
+        // relay's `Witnessed { Dfa }` caveat carrying `route_circuit_vk()` now
+        // discharges through the real route-commitment-binding STARK ("a router
+        // cannot claim a delivery it did not make") instead of being rejected
+        // before its verify logic runs. This upgrades ONLY `Dfa` — every other
+        // kind stays exactly as `registry_with_real_verifiers` set it. A caveat
+        // whose commitment is NOT a deployed vk_hash still fails closed.
+        registry.register_builtin(Arc::new(DslCircuitDfaVerifier::new(Arc::new(
+            program_registry_with_route_circuit(s),
+        ))));
     }
 
     // THE EPOCH §5 (signed wells): wire the genesis-declared wells so fees
