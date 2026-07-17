@@ -9217,3 +9217,23 @@ checkout is on a divergent lineage (73c3cb380, doesn't contain local main) + co-
 load 25; needs a repo-sync decision before the swarm-build. Discord-bot deep-read
 grounded: PAYMENTS-GO-LIVE = pay.rs:481 one-line flip; /descent pinned-drand fallback
 (descent.rs:94); collective close dead-code beyond /dungeon.
+
+## 2026-07-16 late — the game-surfaces closure campaign LANDED (six structural commits)
+
+The morning's map became an evening of territory: `065f0226d` durable sessions
+(weld) · `97ea4f8d4` bot compile repair + G3/G5/G6 · `6fa643d05` the
+signed-attribution VERIFIER (advance_signed; Attribution makes trust visible)
+· `71b808b67` the extension SIGNER (signOfferingTurn; TS canonical bytes
+pinned to the Rust vector) · `1dd8a566b` the .dungeon→CellProgram COMPILER
+(translation validation both polarities; authorable content on the real
+executor) · `295b7f73d` SESSION LIFECYCLE in the host layer (working-set
+model; counter floors survive evict/restart). All gates on persvati
+(laptop lean-ffi mid-rebuild = G8).
+
+⚑ Follow-ups now one seam each: the web `act-signed` route (extension wire →
+verify_signed; README in extension/ has the contract) · descent playable on
+web (register DailyDescentOffering in the catalog; identity honesty via
+Attribution footer) · G9 graded path to dregg-the-network (node on hbox →
+option-B settle for catalog games + verify-badge tags → tug fold-anchor) ·
+bot Store + legacy WebState onto the policied host · forge endpoints
+(/author + /validate on the real service; compiler core is done).

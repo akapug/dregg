@@ -354,3 +354,31 @@ closure-incomplete per `dregg-lean-ffi/build.rs` docs, or manifest-driven featur
 drift); fix via `cargo clean -p dregg-lean-ffi` + rebuild once the tree is quiet,
 and add a CI gate that LINKS (not just checks) `dreggnet-web-server` — a
 check-green/link-red split is exactly the class the CI-meaningfulness audit hunts.
+
+### G9. The live demo plays on dregg-the-LIBRARY, not dregg-the-network — LANE (roadmap grounded)
+ember's observation, confirmed by direct reading: offering PLAY is in-process
+everywhere (the `Offering` trait + `OfferingHost` have zero node references; the
+web `/verify` route is in-process replay). The only node touch is the OPT-IN
+settle seam (`dregg-node-target`, default `Local`, fail-closed) wired solely
+into the two descent surfaces; `dreggnet-tavern` is the lone per-turn-real-node
+offering (and shows that model's full cost). The extension (Dragon's Egg
+Cipherclerk) cannot see the hbox demo at all: host permissions = node.dregg.net
+only; it speaks node `/api/*`, not the web routes; its `<dregg-descent>` is its
+own in-tab game. Backlog correction: the honest "no built-in node" language
+lives in site/dregg-works/{verify-badge,transclude}.js, not endpoints.ts:22
+(that is a product default constant).
+**The graded path (each step's machinery exists or is one seam away):**
+1. Node back on hbox (TODO-1; seed watcher armed — build blocked only on the
+   lean seed rebuild finishing).
+2. Option B — give automatafl/tug the daily-descent `settle` seam: anchor the
+   session receipt-chain tip via `NodeTarget::route` (~1000-computron EmitEvent
+   per anchor; play stays local/fast). Smallest honest step; then the served
+   session page emits a `verify-badge.js` tag with the session cell id —
+   client-checkable with ZERO extension changes.
+3. Option C — tug's whole-match fold (`WholeChainProof` exists) bound into a
+   `SubmittedTurn`: one node turn per match, the strongest object. Not wired.
+4. Rung-2 identity join: the extension's `signOfferingTurn` (71b808b67) feeds
+   the web `act-signed` route (follow-up) into `advance_signed` (6fa643d05) —
+   non-custodial player keys on the live surface.
+Option A (tavern-model per-turn node fires) is real but a substrate rewrite per
+offering — not the next step.
