@@ -154,10 +154,21 @@ zstd -d -f -q "$ZST" -o "$TMP/libdregg_lean.a" || die "zstd decompress failed."
 # sanity: the archive must export the load-bearing verified-executor FFI symbols.
 NM="nm"; command -v nm >/dev/null 2>&1 || NM="llvm-nm"
 if command -v "$NM" >/dev/null 2>&1; then
-  if ! "$NM" "$TMP/libdregg_lean.a" 2>/dev/null | grep -q "dregg_exec_full_forest_auth"; then
-    die "the downloaded archive lacks the verified-executor export 'dregg_exec_full_forest_auth' —
-  it is not a valid dregg seed (wrong asset, or a corrupt/placeholder file). NOT installing."
-  fi
+  # Read the symbol table ONCE into a variable, then match — do NOT pipe `$NM … | grep -q`.
+  # Under this script's `set -o pipefail`, `grep -q` exits at the FIRST match and SIGPIPEs `$NM`
+  # (exit 141), so pipefail reports the pipeline FAILED for a symbol that was FOUND. On a ~190MB
+  # seed nm is always still writing when grep quits, so this fires EVERY time: the fast path died
+  # with "lacks the verified-executor export" on a perfectly valid archive, and every consumer
+  # silently fell through to building the corpus from source. It fails CLOSED, so it never risked
+  # a bad install — it just made the good one impossible. (Same bug, same fix, as the export check
+  # in .github/workflows/lean-seed.yml.)
+  syms="$("$NM" "$TMP/libdregg_lean.a" 2>/dev/null || true)"
+  case "$syms" in
+    *dregg_exec_full_forest_auth*) ;;
+    *) die "the downloaded archive lacks the verified-executor export 'dregg_exec_full_forest_auth' —
+  it is not a valid dregg seed (wrong asset, or a corrupt/placeholder file). NOT installing." ;;
+  esac
+  unset syms
   echo "    verified-executor exports present (dregg_exec_full_forest_auth …)"
 fi
 mv -f "$TMP/libdregg_lean.a" "$DEST"

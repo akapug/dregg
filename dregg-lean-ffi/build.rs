@@ -820,6 +820,38 @@ fn complete_initializer_closure(meta: &Path, sysroot: &Path, archive: &Path, out
 /// member, so members that ONLY serve them drop out. If `nm` is unavailable or the computed reachable
 /// set looks implausibly small (a parse failure), we SKIP the GC and keep the (correct, larger) archive
 /// — never risk a broken link to save bytes.
+/// Split one `nm -A` line into `(member, rest)`. THE ONE parser — `gc_unreachable_members` and
+/// `runtime_dead_init_trim` both used to carry their own copy of this, and both copies had the same
+/// bug, which is exactly what duplication buys you.
+///
+/// `nm -A` prefixes every line with the archive path, then names the member PLATFORM-SPECIFICALLY:
+///   BSD / llvm-nm (macOS): `<archive>[<member>.o]: <addr> <ty> <sym>`
+///   GNU binutils (Linux):  `<archive>:<member>.o:<addr> <ty> <sym>`   ← NO space after the colon
+///
+/// The old `split_once(": ")` matched only the BSD form — plus, by accident, the GNU form's
+/// UNDEFINED lines (nm space-pads the empty address there). So on LINUX every DEFINED line was
+/// dropped, `roots` came out empty, and BOTH the GC and the runtime trim bailed to the untouched
+/// archive. Silently. That is why the archive shipped unpruned on every Linux/CI build while the
+/// (Darwin-only) measurements said it had been pruned. The old doc-comment even had the two
+/// platforms swapped, which is likely how it survived review: the parse *looked* cross-platform.
+///
+/// Anchor on the archive path, accept both spellings, and return None only for lines that are
+/// genuinely not archive members.
+fn nm_split_member<'a>(archive: &str, line: &'a str) -> Option<(&'a str, &'a str)> {
+    let after = line.strip_prefix(archive)?;
+    let (member, rest) = if let Some(a) = after.strip_prefix('[') {
+        a.split_once("]: ")?
+    } else if let Some(a) = after.strip_prefix(':') {
+        a.split_once(':')?
+    } else {
+        return None;
+    };
+    if !member.ends_with(".o") {
+        return None;
+    }
+    Some((member, rest))
+}
+
 fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     let Ok(out) = Command::new(nm_tool()).arg("-A").arg(archive).output() else {
         return;
@@ -831,18 +863,11 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     let mut sym_def_in: HashMap<String, HashSet<String>> = HashMap::new();
     let mut members: HashSet<String> = HashSet::new();
     let mut roots: HashSet<String> = HashSet::new();
+    let arch = archive.to_string_lossy().to_string();
     for line in text.lines() {
-        // `nm -A` location-prefixed forms (see `members_defining_project_initializers`):
-        //   macOS/llvm: `<archive>:<member.o>: <addr> T _sym`  /  `<archive>:<member.o>:    U _sym`
-        //   GNU:        `<archive>[<member.o>]: <addr> T _sym`
-        let Some((prefix, rest)) = line.split_once(": ") else {
+        let Some((member, rest)) = nm_split_member(&arch, line) else {
             continue;
         };
-        let prefix = prefix.trim_end_matches(']');
-        let member = prefix.rsplit(['/', ':', '[']).next().unwrap_or(prefix);
-        if !member.ends_with(".o") {
-            continue;
-        }
         let toks: Vec<&str> = rest.split_whitespace().collect();
         let (ty, sym) = match toks.as_slice() {
             [ty, sym] if ty.len() == 1 => (*ty, *sym),
@@ -867,7 +892,18 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
         }
     }
     if members.is_empty() || roots.is_empty() {
-        // Parse failure or no exports found — do not risk a destructive GC.
+        // Parse failure or no exports found — do not risk a destructive GC. But SAY SO. A silent
+        // bail is precisely how this GC spent its whole life no-opping on Linux while every caller
+        // (and every measurement) assumed the archive had been pruned. A mechanism that cannot tell
+        // you it did nothing is a mechanism you cannot trust when it says nothing.
+        println!(
+            "cargo:warning=dregg-lean-ffi: archive GC parsed {} members / {} `dregg_*` roots from \
+             `{} -A` — REFUSING to GC, so the archive ships UNPRUNED. If that is unexpected, this \
+             nm's line format is neither of the two `nm_split_member` accepts.",
+            members.len(),
+            roots.len(),
+            nm_tool()
+        );
         return;
     }
     // BFS: keep a member, then chase each of its undefined symbols to the member(s) defining them.
@@ -957,7 +993,7 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     );
 }
 
-/// **The PRINCIPLED elaborator / proof-time TRIM (docs/EMBEDDABLE-LEAN-RUNTIME.md §4.2).**
+/// **The PRINCIPLED elaborator / proof-time TRIM (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §4.2).**
 ///
 /// `gc_unreachable_members` keeps every member reachable by ANY undefined-symbol edge — and the
 /// per-module `initialize_*` chain is such an edge. So the executor's import closure drags in the
@@ -1007,15 +1043,11 @@ fn runtime_dead_init_trim(
     let mut sym_def_in: HashMap<String, HashSet<String>> = HashMap::new();
     let mut members: HashSet<String> = HashSet::new();
     let mut roots: HashSet<String> = HashSet::new();
+    let arch = full_archive.to_string_lossy().to_string();
     for line in text.lines() {
-        let Some((prefix, rest)) = line.split_once(": ") else {
+        let Some((member, rest)) = nm_split_member(&arch, line) else {
             continue;
         };
-        let prefix = prefix.trim_end_matches(']');
-        let member = prefix.rsplit(['/', ':', '[']).next().unwrap_or(prefix);
-        if !member.ends_with(".o") {
-            continue;
-        }
         let toks: Vec<&str> = rest.split_whitespace().collect();
         let (ty, sym) = match toks.as_slice() {
             [ty, sym] if ty.len() == 1 => (*ty, *sym),
@@ -1048,6 +1080,18 @@ fn runtime_dead_init_trim(
         }
     }
     if members.is_empty() || roots.is_empty() {
+        // Same law as the GC above: never bail in silence. This `return None` is what made
+        // `DREGG_LEAN_FFI_RUNTIME_TRIM=1` build green in 36s on Linux while quietly linking the
+        // FULL archive — the caller takes `None` as "no trim today" and says nothing, so the flag
+        // appeared to work and measured nothing.
+        println!(
+            "cargo:warning=dregg-lean-ffi: RUNTIME TRIM requested but parsed {} members / {} \
+             `dregg_*` roots from `{} -A` — NOT trimming; the FULL archive will be linked. This is \
+             a parse failure, not an empty archive.",
+            members.len(),
+            roots.len(),
+            nm_tool()
+        );
         return None;
     }
 
@@ -1497,7 +1541,7 @@ fn main() {
         }
     };
 
-    // ── PLATFORM GATE (polarity inversion, docs/FEATURE-HYGIENE.md §Lean): the link is
+    // ── PLATFORM GATE (polarity inversion, .docs-history-noclaude/FEATURE-HYGIENE.md §Lean): the link is
     // UNCONDITIONAL on native; the ONE opt-out is the `no-lean-link` platform feature, set
     // only by builds whose target cannot link libdregg_lean.a (wasm32, the SP1 zkvm guest,
     // and Windows-MSVC). We also hard-skip on those targets regardless of the feature — a
@@ -1524,7 +1568,7 @@ fn main() {
     //     embedded `lean_initialize_runtime_module()` under Windows-on-ARM x64 emulation.
     //
     // wasm32 and the SP1 zkvm guest always skip (no native archive at all). The `no-lean-link`
-    // platform feature is the explicit opt-out. See docs/FEATURE-HYGIENE.md §Lean.
+    // platform feature is the explicit opt-out. See .docs-history-noclaude/FEATURE-HYGIENE.md §Lean.
     let no_lean_link = std::env::var_os("CARGO_FEATURE_NO_LEAN_LINK").is_some();
     let gate_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let gate_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -1668,7 +1712,7 @@ fn main() {
 
     println!("cargo:rustc-cfg=lean_lib_present");
 
-    // ── THE PRINCIPLED ELABORATOR / PROOF-TIME TRIM (docs/EMBEDDABLE-LEAN-RUNTIME.md §4.2) ──
+    // ── THE PRINCIPLED ELABORATOR / PROOF-TIME TRIM (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §4.2) ──
     // OPT-IN (`DREGG_LEAN_FFI_RUNTIME_TRIM=1`): derive a SEPARATE trimmed archive holding only the
     // executor's runtime-FUNCTION closure (the elaborator + proof-time mathlib/aesop, reachable only
     // via the per-module init-chain, are dropped), plus a boundary no-op stub for the dead inits the
@@ -1938,7 +1982,7 @@ fn main() {
 
     let mut shim = cc::Build::new();
     shim.file("src/lean_init.c").include(&lean_include);
-    // The SINGLE-THREADED / libuv-thread-free init (docs/EMBEDDABLE-LEAN-RUNTIME.md).
+    // The SINGLE-THREADED / libuv-thread-free init (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md).
     // A C++ TU (it calls the namespaced `lean::initialize_*` runtime initializers
     // directly, skipping `initialize_libuv` so the libuv event-loop thread is never
     // spawned — the pg-Tier-D-embeddable path). Compiled into the SAME shim archive so
@@ -1961,7 +2005,7 @@ fn main() {
     // makes `lean_init_st.cpp` call `lean_initialize_runtime_module` (one runtime
     // copy). NOTE: that exported init pulls libuv, so the shared-mode `dregg_ffi_init_st`
     // is NOT libuv-thread-free — the libuv-free property holds only on the STATIC link
-    // (the host probe + the standalone node). See `docs/EMBEDDABLE-LEAN-RUNTIME.md` §5.
+    // (the host probe + the standalone node). See `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` §5.
     let shared = shared_link_mode();
     if shared {
         shim.define("DREGG_LEAN_SHARED", None);
