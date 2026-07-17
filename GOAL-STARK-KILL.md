@@ -2395,3 +2395,20 @@ live drift in program.ts), sdk-py (lag mapped + reveal/on/presentation/light-cli
 surface over wire.rs — brief's CLI premise was WRONG, corrected), fhegg-remeasure (envelope REAL again:
 2.3–2.7× the superseded table), fhegg-siblingcerts (CertQp advanced, none is a rubber stamp), bfv-sizing (GO
 for fold+n-of-n: ~1/3 of fhe.rs surface because NO multiplication rides this path).
+
+## ✅ FOUR-THREAD SWARM FULLY HARVESTED (11/11 lanes gated, each VERIFIED by me — not trusted from report)
+SECURITY (3 forgeries): 0bd353ae5 dkg cofactored-slash FIX (fed 17 passed) · 4dba9d67f 2 pins (dice 1, voting 1).
+FHEGG: a5f414eaf CertQp exact + fhegg_settle CLI (solver 104 passed) · 3caafb160 envelope REMEASURED real
+(2.3-2.7x, old marked SUPERSEDED, stale Apple-Silicon host un-hardcoded) · d68e3d34c Cert-F GENERALIZED past
+ring-3 (Lean lake 3005 jobs kernel-clean + Rust 20 passed incl. real PDHG->STARK; found the keystone NEVER
+constrained ε — a false-cognate in the theorem itself).
+SDK DRIFT: e7f17cbdb sdk-rust 16 typed verbs + fhegg SDK surface (turns 18, fhegg 3) · f87ffd540 sdk-ts
+7/34->34/34 vs the Rust ORACLE (103 tests) · 296ba1bcb sdk-py surface (Finished).
+BFV: memo only (no code) — GO for Lean-first fold+n-of-n (~1/3 of fhe.rs; no multiplication rides the path).
+CLEAN NEGATIVE: sel4/captp found NO new forgery (hardened; session fixes re-verified biting).
+NAMED RESIDUALS (not bugs, honestly named): DiceVrfKeyBinding, VotingTallyBinding, SealedAuctionReveal,
+CertFRuntimeEmitter, FheggBfvDependency, NoViewerKeyCustody + the grandfathered ed25519 backlog (NEXT security
+swarm: dregg-agent/cred + dregg-auth/credential/chain first). NOT-MINE: dregg-sdk cap_* reds = co-tenant
+descriptor-regen churn (flagged, both my sdk lanes green in isolation).
+**SESSION SECURITY TALLY: 8 forgery-class bugs, all invisible to ~15k green tests, all found by "what break
+would this catch?", all left with a tooth.**
