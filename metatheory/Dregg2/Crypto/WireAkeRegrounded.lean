@@ -61,7 +61,10 @@ open Dregg2.Circuit.HashFloorHonesty
 open Dregg2.Crypto.HermineHintMLWE (CommitReveal HashCR)
 open Dregg2.Crypto.HermineHashCRRegrounded
   (commitRevealFamily commitRevealFamily_CR_of_hashcr hermine_commitment_binding_advantage_bound
-   crEquivocator)
+   hermine_commitment_binding_advantage_bound_eff crEquivocator)
+open Dregg2.Crypto.FloorGames
+  (Adversary hashGame finderToAdv HashCRHardQuant collisionResistant_iff_hashCRHardQuant_top
+   hard_bot_vacuous)
 
 set_option autoImplicit false
 
@@ -97,6 +100,27 @@ theorem channel_binding_advantage_bound {Pre K : Type} [DecidableEq Pre] [Decida
     (uksEquivocator : CollisionFinder (channelKeyFamily cr)) :
     Negl (collisionAdv (channelKeyFamily cr) uksEquivocator) :=
   hermine_commitment_binding_advantage_bound hCR uksEquivocator
+
+/-- **⚑ RE-GROUNDED `WireAke.channel_binding` — the `Eff`-carrying gate.** The bare-CR sibling above rests on
+`CollisionResistant (channelKeyFamily cr)` = `HashCRHardQuant (channelKeyFamily cr) ⊤`
+(`collisionResistant_iff_hashCRHardQuant_top`), FALSE for the compressing deployed concat-KDF session-key
+hash (`cr.H ()` maps a long framed `(ss_x, ss_pq, transcript)` pre-image to a fixed-width session key) — so
+it transports no security. This one conditions on the SAME collision game at an EXPLICIT class `Eff`: under
+it, a key-reuse / UKS equivocation finder in the class (`hEff`) has negligible advantage — "equal session
+key ⟹ equal transcript EXCEPT with negligible probability". Routes through the generic
+`hermine_commitment_binding_advantage_bound_eff` (the `CollisionFinder` advantage IS the game advantage the
+honest floor bounds, `collisionAdv_eq_gameAdv`).
+
+⚑ **THE `hEff` OBLIGATION IS UNDISCHARGED AND THAT IS THE HONEST STATE** (`FloorGames` §8 — no cost model);
+the floor is priced at both poles in §4. -/
+theorem channel_binding_advantage_bound_eff {Pre K : Type} [DecidableEq Pre] [DecidableEq K]
+    (cr : CommitReveal Unit Pre K)
+    (Eff : Adversary (hashGame (channelKeyFamily cr)) → Prop)
+    (uksEquivocator : CollisionFinder (channelKeyFamily cr))
+    (hEff : Eff (finderToAdv uksEquivocator))
+    (hD : HashCRHardQuant (channelKeyFamily cr) Eff) :
+    Negl (collisionAdv (channelKeyFamily cr) uksEquivocator) :=
+  hermine_commitment_binding_advantage_bound_eff Eff uksEquivocator hEff hD
 
 /-! ## §3 — non-vacuity: the floor is satisfiable AND load-bearing on the channel-binding hash. -/
 
@@ -140,12 +164,57 @@ theorem channel_binding_fires (uksEquivocator : CollisionFinder idFamily) :
     Negl (collisionAdv idFamily uksEquivocator) :=
   hermine_commitment_binding_advantage_bound idFamily_CR uksEquivocator
 
+/-! ## §4 — the `Eff` parameter, PRICED at both poles, and the CANARY. -/
+
+/-- **(TOOTH — `Eff := ⊤` is FALSE at the compressing session-key hash.)** The bare-CR floor at the colliding
+`badChannelKey` is refuted (`channelKey_badCR_not_CR`), and it IS `HashCRHardQuant _ ⊤`
+(`collisionResistant_iff_hashCRHardQuant_top`) — so the `⊤` class is FALSE. The price of `hEff`, stated as a
+theorem: the class cannot be left implicit, because the implicit `⊤` is the empty hypothesis the sweep
+exists to name. -/
+theorem channelKey_eff_top_false :
+    ¬ HashCRHardQuant (channelKeyFamily badChannelKey) (fun _ => True) :=
+  fun h => channelKey_badCR_not_CR ((collisionResistant_iff_hashCRHardQuant_top _).mpr h)
+
+/-- **(TOOTH — the OTHER pole: `Eff := ⊥` is vacuous.)** At the empty class the floor holds for ANY
+session-key hash, including a transcript-blind one. Recorded HONESTLY — the two poles together make `Eff` a
+dial, not a costume. -/
+theorem channelKey_eff_bot_vacuous {Pre K : Type} [DecidableEq Pre] [DecidableEq K]
+    (cr : CommitReveal Unit Pre K) :
+    HashCRHardQuant (channelKeyFamily cr) (fun _ => False) :=
+  hard_bot_vacuous _
+
+/-- **(CANARY — the gate does NOT follow from the floor applied at another adversary.)** From the floor at
+some OTHER adversary `B`, NOT the one extracted from the equivocator, the UKS-equivocator's negligibility
+does not follow: `hD B hB` bounds a DIFFERENT ensemble than `collisionAdv (channelKeyFamily cr)
+uksEquivocator`, and only `collisionAdv_eq_gameAdv` at the extracted finder connects them. -/
+example {Pre K : Type} [DecidableEq Pre] [DecidableEq K] (cr : CommitReveal Unit Pre K)
+    (Eff : Adversary (hashGame (channelKeyFamily cr)) → Prop)
+    (uksEquivocator : CollisionFinder (channelKeyFamily cr))
+    (B : Adversary (hashGame (channelKeyFamily cr))) (hB : Eff B)
+    (hD : HashCRHardQuant (channelKeyFamily cr) Eff) : True := by
+  fail_if_success
+    (have : Negl (collisionAdv (channelKeyFamily cr) uksEquivocator) := hD B hB)
+  trivial
+
+/-- **THE `Eff` GATE FIRES AT A REAL FLOOR WITNESS.** On the injective transcript-including carrier
+`WireAke.crK` the `Eff`-floor at `⊤` holds (`channelKey_crK_CR`, an INHABITED hypothesis, unlike the vacuous
+injective floor), so the `Eff` gate runs end-to-end to a genuine `Negl`. -/
+theorem channel_binding_eff_fires
+    (uksEquivocator : CollisionFinder (channelKeyFamily Dregg2.Crypto.WireAke.crK)) :
+    Negl (collisionAdv (channelKeyFamily Dregg2.Crypto.WireAke.crK) uksEquivocator) :=
+  channel_binding_advantage_bound_eff Dregg2.Crypto.WireAke.crK (fun _ => True)
+    uksEquivocator trivial ((collisionResistant_iff_hashCRHardQuant_top _).mp channelKey_crK_CR)
+
 #assert_all_clean [
   channel_binding_advantage_bound,
+  channel_binding_advantage_bound_eff,
   sessionKey_eq_family,
   channelKey_crK_CR,
   channelKey_badCR_not_CR,
-  channel_binding_fires
+  channel_binding_fires,
+  channelKey_eff_top_false,
+  channelKey_eff_bot_vacuous,
+  channel_binding_eff_fires
 ]
 
 end Dregg2.Crypto.WireAkeRegrounded
