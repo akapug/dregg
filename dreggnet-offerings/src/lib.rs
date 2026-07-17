@@ -50,6 +50,16 @@ pub mod daily_descent;
 pub mod descent_tournament;
 pub mod dungeon;
 pub mod host;
+/// THE SESSION-LIFECYCLE SEAM — the host-layer cap/TTL/eviction policy (the structural G2 fix:
+/// session management lives ONCE in [`OfferingHost`](host::OfferingHost), inherited by every
+/// surface). A [`lifecycle::SessionPolicy`] arms per-offering capacity with LRU eviction,
+/// per-opener quotas + open rate (quota-keyed on [`signed::Attribution`] — `Signed` = real,
+/// `Asserted` = advisory), and an idle-TTL [`sweep`](host::OfferingHost::sweep); eviction is SAFE
+/// under the durable resume seam (an evicted persisted session lazily RESUMES on its next touch,
+/// state intact, its signed-replay counter floors persisted so eviction never re-admits a captured
+/// envelope). Time is injected ([`lifecycle::Clock`]); an all-`None` policy is byte-identical to
+/// the unbounded pre-lifecycle behavior. See [`lifecycle`].
+pub mod lifecycle;
 pub mod mock;
 /// THE OVERWORLD OFFERING — a player traverses a REGION of universes, the map opening as they
 /// honestly clear each dungeon. Travel to a dungeon is a real region-cell turn REFUSED unless its
@@ -84,6 +94,7 @@ pub mod session;
 pub mod signed;
 
 pub use host::{HostError, OfferingHost, OfferingInfo, ResumeError};
+pub use lifecycle::{Clock, ManualClock, PolicyRefusal, SessionPolicy, SweepReport, SystemClock};
 pub use resume::{
     FileResumeStore, InMemoryResumeStore, LoggedMove, SessionMoveLog, SessionResumeStore,
 };

@@ -115,7 +115,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # THE SERVER BINARY (`src/bin/dreggnet-web-server.rs`) — the public-demo unblocker. The async
 # runtime for `axum::serve` (`net` = the TcpListener bind, `signal` = ctrl-c graceful shutdown).
 # The library stays runtime-agnostic; only the bin drives the runtime.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 # Structured startup / request logging for the server bin.
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

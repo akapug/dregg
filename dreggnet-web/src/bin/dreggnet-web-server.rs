@@ -13,6 +13,13 @@
 //! - sessions: `DREGGNET_WEB_SESSION_DIR` env (a directory) makes the live game sessions durable —
 //!   each session's move-log persists there and resumes on boot by replay (a tampered log refuses
 //!   to reopen, fail-closed); unset → in-memory only (a restart drops in-progress sessions);
+//! - session lifecycle: `DREGGNET_WEB_MAX_SESSIONS` (live sessions per offering, LRU eviction),
+//!   `DREGGNET_WEB_SESSION_TTL_SECS` (idle eviction; a 60s interval task + on-open sweeps drive
+//!   it), `DREGGNET_WEB_OPENS_PER_USER` and `DREGGNET_WEB_MIN_OPEN_INTERVAL_SECS` (per-identity
+//!   open quota / rate — advisory against a forged cookie identity; capacity + TTL are the real
+//!   backstops). All unset → today's unbounded behavior. With a session dir, eviction is lossless
+//!   (evicted sessions resume from the store on next touch); without one, arming any limit opts
+//!   into honest lossy shedding of the coldest sessions;
 //! - log level: the standard `RUST_LOG` env (`tracing_subscriber` env-filter), default `info`.
 //!
 //! ## Honest scope (the deploy scout's Phase-0)
@@ -26,8 +33,9 @@
 //! (auth). See [`dreggnet_web::make_app`].
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
-use dreggnet_web::make_app;
+use dreggnet_web::make_app_parts;
 use tracing_subscriber::EnvFilter;
 
 /// The bind address the demo server listens on when nothing else is configured.
@@ -51,8 +59,37 @@ async fn main() {
         }
     };
 
-    // The merged public-demo app: games + feature surfaces + the seeded no-cheat leaderboard.
-    let app = make_app();
+    // The merged public-demo app: games + feature surfaces + the seeded no-cheat leaderboard —
+    // plus the catalog handle, for the periodic session-lifecycle sweep below.
+    let (app, catalog) = make_app_parts();
+
+    // THE PERIODIC LIFECYCLE SWEEP — the timer half of the sweep design (documented on
+    // `CatalogState::sweep`): the host already sweeps opportunistically on every fresh open, so
+    // this interval task only covers the NO-TRAFFIC case (idle sessions past their TTL release
+    // memory without waiting for the next visitor). A no-op unless a session policy with a TTL
+    // is armed (`DREGGNET_WEB_SESSION_TTL_SECS`).
+    {
+        let catalog = catalog.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                // `sweep` ships a job to the host's owning thread; run it off the async worker.
+                let catalog = catalog.clone();
+                let report = tokio::task::spawn_blocking(move || catalog.sweep()).await;
+                match report {
+                    Ok(r) if !r.evicted.is_empty() => tracing::info!(
+                        evicted = r.evicted.len(),
+                        retained_unpersisted = r.retained_unpersisted.len(),
+                        "session-lifecycle sweep evicted idle sessions"
+                    ),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "session-lifecycle sweep task failed"),
+                }
+            }
+        });
+    }
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,

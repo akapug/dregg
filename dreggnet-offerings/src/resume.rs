@@ -185,7 +185,34 @@ pub trait SessionResumeStore {
         self.record_landed(key, id, action, actor);
     }
 
+    /// **Persist the signed-advance replay floors** for `(key, id)` — the last consumed
+    /// [`SignedAction::counter`](crate::SignedAction::counter) per signer pubkey (hex). The host
+    /// writes a floor through the moment
+    /// [`advance_signed`](crate::OfferingHost::advance_signed) consumes it, and re-records the
+    /// whole set at lifecycle eviction, so the floors survive eviction AND a process restart —
+    /// wiping them would re-admit a captured envelope (a counter-reset replay). A store MUST
+    /// merge **max-wise** (never lower a recorded floor).
+    ///
+    /// Returns whether the floors were durably recorded. **Default: `false`** (unsupported) —
+    /// additive, an existing external implementor keeps compiling; the host then RETAINS the
+    /// floors in memory at eviction instead of dropping them (fail-closed: a small map, never a
+    /// replay hole).
+    fn record_signed_counters(&self, key: &str, id: &SessionId, floors: &[(String, u64)]) -> bool {
+        let _ = (key, id, floors);
+        false
+    }
+
+    /// The persisted signed-advance replay floors for `(key, id)` — `(signer pubkey hex, last
+    /// consumed counter)` pairs, loaded on [`resume`](crate::OfferingHost::resume) and merged
+    /// max-wise into the host's live ledger. Default: empty (a store that never recorded any).
+    fn load_signed_counters(&self, key: &str, id: &SessionId) -> Vec<(String, u64)> {
+        let _ = (key, id);
+        Vec::new()
+    }
+
     /// Drop `(key, id)`'s log (on session close) — it will not be resumed on the next boot.
+    /// An implementor that persists signed-counter floors drops those too (the log is gone;
+    /// nothing remains to resume, so nothing remains to guard).
     fn forget(&self, key: &str, id: &SessionId);
 
     /// Load `(key, id)`'s recorded log, if any (the reproducible public input to
@@ -203,6 +230,9 @@ pub trait SessionResumeStore {
 #[derive(Clone, Default)]
 pub struct InMemoryResumeStore {
     inner: Rc<RefCell<BTreeMap<(String, String), SessionMoveLog>>>,
+    /// The persisted signed-advance replay floors, `(key, id) → (pubkey hex → last consumed
+    /// counter)` — the counter-survival seam lifecycle eviction/resume rides (merge-max).
+    counters: Rc<RefCell<BTreeMap<(String, String), BTreeMap<String, u64>>>>,
 }
 
 impl InMemoryResumeStore {
@@ -256,8 +286,28 @@ impl SessionResumeStore for InMemoryResumeStore {
         entry.record_attributed(action.clone(), actor.clone(), attribution.clone());
     }
 
+    fn record_signed_counters(&self, key: &str, id: &SessionId, floors: &[(String, u64)]) -> bool {
+        let mut map = self.counters.borrow_mut();
+        let entry = map.entry(Self::map_key(key, id)).or_default();
+        for (pk, c) in floors {
+            // Merge MAX-wise: a floor is never lowered (lowering one re-admits a replay).
+            let slot = entry.entry(pk.clone()).or_insert(*c);
+            *slot = (*slot).max(*c);
+        }
+        true
+    }
+
+    fn load_signed_counters(&self, key: &str, id: &SessionId) -> Vec<(String, u64)> {
+        self.counters
+            .borrow()
+            .get(&Self::map_key(key, id))
+            .map(|m| m.iter().map(|(pk, c)| (pk.clone(), *c)).collect())
+            .unwrap_or_default()
+    }
+
     fn forget(&self, key: &str, id: &SessionId) {
         self.inner.borrow_mut().remove(&Self::map_key(key, id));
+        self.counters.borrow_mut().remove(&Self::map_key(key, id));
     }
 
     fn load(&self, key: &str, id: &SessionId) -> Option<SessionMoveLog> {
@@ -323,11 +373,25 @@ impl FileResumeStore {
     /// The stable file path for `(key, id)` — a content hash of the pair, so an arbitrary key/id
     /// (which may hold path-hostile characters) maps to a safe, collision-resistant file name.
     fn path_for(&self, key: &str, id: &SessionId) -> PathBuf {
+        self.root.join(format!("{}.log", Self::name_for(key, id)))
+    }
+
+    /// The **signed-counter sidecar** path for `(key, id)` — the same content-hash name with a
+    /// `.counters` extension, one `pubkey \t counter` line per signer floor. A sidecar (not extra
+    /// lines in the `.log`) keeps the move-log wire format untouched: an old reader still decodes
+    /// every log, and [`log_files`](FileResumeStore::log_files)'s `.log` filter never sees it.
+    fn counters_path_for(&self, key: &str, id: &SessionId) -> PathBuf {
+        self.root
+            .join(format!("{}.counters", Self::name_for(key, id)))
+    }
+
+    /// The collision-resistant file stem for `(key, id)`.
+    fn name_for(key: &str, id: &SessionId) -> String {
         let mut h = blake3::Hasher::new();
         h.update(key.as_bytes());
         h.update(&[0]); // domain separator between key and id
         h.update(id.0.as_bytes());
-        self.root.join(format!("{}.log", h.finalize().to_hex()))
+        h.finalize().to_hex().to_string()
     }
 
     /// Every `*.log` file path under the root (sorted, for deterministic enumeration).
@@ -386,8 +450,41 @@ impl SessionResumeStore for FileResumeStore {
         }
     }
 
+    fn record_signed_counters(&self, key: &str, id: &SessionId, floors: &[(String, u64)]) -> bool {
+        // Merge MAX-wise over whatever is already persisted (a floor is never lowered), then
+        // rewrite the small sidecar whole. Report honestly: `false` on any IO failure, so the
+        // host retains the floors in memory instead of trusting a write that did not land.
+        let mut merged: BTreeMap<String, u64> = self
+            .load_signed_counters(key, id)
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        for (pk, c) in floors {
+            let slot = merged.entry(pk.clone()).or_insert(*c);
+            *slot = (*slot).max(*c);
+        }
+        let mut text = String::new();
+        for (pk, c) in &merged {
+            text.push_str(&format!("{}\t{}\n", esc(pk), c));
+        }
+        fs::write(self.counters_path_for(key, id), text).is_ok()
+    }
+
+    fn load_signed_counters(&self, key: &str, id: &SessionId) -> Vec<(String, u64)> {
+        let Ok(text) = fs::read_to_string(self.counters_path_for(key, id)) else {
+            return Vec::new();
+        };
+        text.lines()
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| {
+                let (pk, c) = l.split_once('\t')?;
+                Some((unesc(pk), c.parse::<u64>().ok()?))
+            })
+            .collect()
+    }
+
     fn forget(&self, key: &str, id: &SessionId) {
         let _ = fs::remove_file(self.path_for(key, id));
+        let _ = fs::remove_file(self.counters_path_for(key, id));
     }
 
     fn load(&self, key: &str, id: &SessionId) -> Option<SessionMoveLog> {
@@ -681,6 +778,38 @@ mod file_store_tests {
             },
             "a legacy line is honestly Asserted"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Signed-counter floors round-trip through BOTH stores, merge MAX-wise (a stale re-record
+    /// never lowers a floor), and are dropped with the log on `forget`.
+    #[test]
+    fn signed_counter_floors_round_trip_and_never_lower() {
+        let dir = scratch_dir("counters");
+        let file = FileResumeStore::open(&dir).expect("open store");
+        let mem = InMemoryResumeStore::new();
+        let id = SessionId::new("s");
+        let pk = "ab".repeat(32);
+
+        for store in [&file as &dyn SessionResumeStore, &mem] {
+            assert!(store.load_signed_counters("dungeon", &id).is_empty());
+            assert!(store.record_signed_counters("dungeon", &id, &[(pk.clone(), 3)]));
+            // A STALE (lower) re-record must not lower the floor — merge is max-wise.
+            assert!(store.record_signed_counters("dungeon", &id, &[(pk.clone(), 1)]));
+            assert_eq!(
+                store.load_signed_counters("dungeon", &id),
+                vec![(pk.clone(), 3)],
+                "the floor held at its maximum"
+            );
+            store.forget("dungeon", &id);
+            assert!(
+                store.load_signed_counters("dungeon", &id).is_empty(),
+                "forget drops the floors with the log"
+            );
+        }
+        // The sidecar never pollutes the move-log enumeration.
+        assert_eq!(file.len(), 0, "no .log files — sidecars are not logs");
 
         let _ = fs::remove_dir_all(&dir);
     }

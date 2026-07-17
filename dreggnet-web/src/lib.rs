@@ -71,8 +71,8 @@ use std::sync::{Arc, Mutex};
 use axum::{
     Router,
     extract::{Form, Path, Query, State},
-    http::{HeaderMap, header},
-    response::{Html, IntoResponse, Json},
+    http::{HeaderMap, StatusCode, header},
+    response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -83,8 +83,9 @@ use dreggnet_council::{CandidateProposal, CouncilOffering};
 use dreggnet_market::MarketOffering;
 use dreggnet_offerings::dungeon::{DungeonOffering, DungeonSession};
 use dreggnet_offerings::{
-    Action, DreggIdentity, FileResumeStore, Frontend, HostError, Offering, OfferingHost,
-    OfferingInfo, Outcome, SessionConfig, SessionId, Surface, VerifyReport,
+    Action, Attribution, DreggIdentity, FileResumeStore, Frontend, HostError, Offering,
+    OfferingHost, OfferingInfo, Outcome, PolicyRefusal, SessionConfig, SessionId, SessionPolicy,
+    Surface, SweepReport, SystemClock, VerifyReport,
 };
 
 /// What the web frontend last presented for a session — the deos [`Surface`] and the cap-gated
@@ -1177,6 +1178,15 @@ impl CatalogState {
         let id = id.clone();
         self.host.run(move |h| h.is_open(&key, &id))
     }
+
+    /// **Run the host's idle-TTL sweep** at its own injected clock — what the server bin's
+    /// periodic sweeper calls (see `dreggnet-web-server`). A no-op (empty report) unless a
+    /// [`SessionPolicy`] with a TTL was armed on the host. The host ALSO sweeps opportunistically
+    /// before judging capacity on each fresh open, so this timer only covers the no-traffic case
+    /// (idle sessions releasing memory with nobody knocking).
+    pub fn sweep(&self) -> SweepReport {
+        self.host.run(|h| h.sweep_now())
+    }
 }
 
 impl Default for CatalogState {
@@ -1314,20 +1324,34 @@ async fn get_offering_session(
     Path((key, id)): Path<(String, String)>,
     headers: HeaderMap,
     Query(query): Query<WebQuery>,
-) -> Html<String> {
+) -> Response {
     let sid = SessionId::new(id);
-    // Ensure the session is open (deploy on first touch), then render.
-    let opened = {
-        let key = key.clone();
-        let sid = sid.clone();
-        state.host.run(move |h| h.ensure_open(&key, &sid))
-    };
-    if let Err(HostError::UnknownOffering(_)) = opened {
-        return Html(catalog_missing_offering(&key));
-    }
     // The viewer's derived identity (the `dregg_user` cookie / `?user=` param) — the SAME identity a
     // POST attributes a turn to. A seated player renders their OWN hidden hand; a spectator sees fog.
     let viewer = web_identity(&web_user(&headers, &query));
+    // Ensure the session is open (deploy on first touch), then render — LIFECYCLE-AWARE: the
+    // viewer identity is the opener attribution (an ADVISORY `Asserted` quota lane — a forgeable
+    // cookie; capacity + TTL are the real backstops), a policy refusal answers an honest 4xx
+    // instead of minting, and an evicted persisted session transparently resumes.
+    let opened = {
+        let key = key.clone();
+        let sid = sid.clone();
+        let opener = Attribution::Asserted {
+            label: viewer.0.clone(),
+        };
+        state
+            .host
+            .run(move |h| h.ensure_open_as(&key, &sid, Some(&opener)))
+    };
+    match opened {
+        Err(HostError::UnknownOffering(_)) => {
+            return Html(catalog_missing_offering(&key)).into_response();
+        }
+        Err(e @ (HostError::Policy(_) | HostError::ResumeFailed { .. })) => {
+            return refused_open_response(&sid, &e);
+        }
+        _ => {}
+    }
     // A GET is normally a full navigation (full page); an `X-Fragment: 1` GET (e.g. a script
     // refresh) returns just the swappable surface — additive, and the same one render path.
     Html(render_offering_response(
@@ -1338,6 +1362,7 @@ async fn get_offering_session(
         &viewer,
         wants_fragment(&headers),
     ))
+    .into_response()
 }
 
 /// The `{turn, arg}` POST body of `POST /offerings/{key}/session/{id}/act`.
@@ -1371,19 +1396,31 @@ async fn post_offering_act(
     headers: HeaderMap,
     Query(query): Query<WebQuery>,
     Form(form): Form<OfferingActForm>,
-) -> Html<String> {
+) -> Response {
     let sid = SessionId::new(id);
-    // Ensure open first (so a POST to a fresh session still resolves against a live offering).
+    let actor = web_identity(&web_user(&headers, &query));
+    // Ensure open first (so a POST to a fresh session still resolves against a live offering) —
+    // lifecycle-aware exactly as the GET: the actor is the opener attribution, a policy refusal
+    // is an honest 4xx, an evicted persisted session resumes.
     let opened = {
         let key = key.clone();
         let sid = sid.clone();
-        state.host.run(move |h| h.ensure_open(&key, &sid))
+        let opener = Attribution::Asserted {
+            label: actor.0.clone(),
+        };
+        state
+            .host
+            .run(move |h| h.ensure_open_as(&key, &sid, Some(&opener)))
     };
-    if let Err(HostError::UnknownOffering(_)) = opened {
-        return Html(catalog_missing_offering(&key));
+    match opened {
+        Err(HostError::UnknownOffering(_)) => {
+            return Html(catalog_missing_offering(&key)).into_response();
+        }
+        Err(e @ (HostError::Policy(_) | HostError::ResumeFailed { .. })) => {
+            return refused_open_response(&sid, &e);
+        }
+        _ => {}
     }
-
-    let actor = web_identity(&web_user(&headers, &query));
 
     // PRESENT the current surface + COLLECT the posted affordance + ADVANCE, atomically on the
     // host thread: the turn must be among the offering's current affordances (offered), then the
@@ -1442,6 +1479,41 @@ async fn post_offering_act(
         &actor,
         wants_fragment(&headers),
     ))
+    .into_response()
+}
+
+/// **The honest lifecycle-refusal response** — a policy gate ([`HostError::Policy`]) answers
+/// `429 Too Many Requests` naming the tripped limit (with a `Retry-After` when the gate is the
+/// open rate), and a persisted log that refused to reopen ([`HostError::ResumeFailed`]) answers
+/// `409 Conflict` (the durable record is authoritative; a fresh genesis will not shadow it).
+/// Never a 500 — a refused open is the policy WORKING, not a server fault.
+fn refused_open_response(id: &SessionId, err: &HostError) -> Response {
+    let (status, retry_after) = match err {
+        HostError::Policy(PolicyRefusal::OpenRate { retry_after_secs }) => {
+            (StatusCode::TOO_MANY_REQUESTS, Some(*retry_after_secs))
+        }
+        HostError::Policy(_) => (StatusCode::TOO_MANY_REQUESTS, None),
+        _ => (StatusCode::CONFLICT, None),
+    };
+    let body = format!(
+        "<main class=\"session\"><div class=\"notice refused\" role=\"status\">Refused: {err}. \
+         Nothing was opened.</div>\
+         <p class=\"prose\"><a class=\"backlink\" href=\"/offerings\">← Browse the offerings</a></p>\
+         </main>",
+        err = esc(&err.to_string()),
+    );
+    let page = document(
+        &format!("DreggNet Cloud — session {} refused", id.0),
+        "",
+        &body,
+    );
+    let mut resp = (status, Html(page)).into_response();
+    if let Some(secs) = retry_after {
+        if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+            resp.headers_mut().insert(header::RETRY_AFTER, v);
+        }
+    }
+    resp
 }
 
 /// `GET /offerings/{key}/session/{id}/verify` — re-verify the committed chain by the offering's own
@@ -2027,30 +2099,99 @@ pub fn demo_host() -> OfferingHost {
     host
 }
 
-/// **Resolve the demo host from the environment** — the session-durability switch, mirroring
-/// [`resolve_demo_descent`]. With `DREGGNET_WEB_SESSION_DIR` set (non-empty), the host is built over
-/// a durable [`FileResumeStore`] rooted there ([`demo_host_resumed_from`]): live game sessions
-/// survive a restart by move-log replay. Unset → plain [`demo_host`], byte-identical to the
-/// store-less behavior (nothing attached, nothing persisted — the committed tests' path).
-pub fn resolve_demo_host() -> OfferingHost {
-    match std::env::var("DREGGNET_WEB_SESSION_DIR") {
-        Ok(dir) if !dir.is_empty() => demo_host_resumed_from(dir),
-        _ => demo_host(),
+/// The session-lifecycle env knobs the web deployment reads (each unset/empty → `None`, i.e.
+/// today's unbounded behavior; an unparseable value logs a warning and stays `None` — the
+/// degrade-not-refuse boot posture every other env switch here takes).
+pub const WEB_MAX_SESSIONS_ENV: &str = "DREGGNET_WEB_MAX_SESSIONS";
+/// See [`WEB_MAX_SESSIONS_ENV`]. Idle seconds before the TTL sweep evicts a session.
+pub const WEB_SESSION_TTL_ENV: &str = "DREGGNET_WEB_SESSION_TTL_SECS";
+/// See [`WEB_MAX_SESSIONS_ENV`]. Live sessions one web identity may have fresh-minted.
+pub const WEB_OPENS_PER_USER_ENV: &str = "DREGGNET_WEB_OPENS_PER_USER";
+/// See [`WEB_MAX_SESSIONS_ENV`]. Minimum seconds between fresh mints per web identity.
+pub const WEB_MIN_OPEN_INTERVAL_ENV: &str = "DREGGNET_WEB_MIN_OPEN_INTERVAL_SECS";
+
+/// **Build the web [`SessionPolicy`] from an env-shaped getter** — the parse seam
+/// [`resolve_web_policy`] feeds real env vars through, and tests feed fixed pairs through
+/// (process env is global; tests must not mutate it). Unset/empty → `None` (unbounded);
+/// unparseable → warn + `None`.
+pub fn web_policy_from(get: impl Fn(&str) -> Option<String>) -> SessionPolicy {
+    fn parse<T: std::str::FromStr>(name: &str, v: Option<String>) -> Option<T> {
+        let v = v?;
+        match v.parse::<T>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                tracing::warn!(%name, value = %v, "unparseable session-policy env — treating as unset");
+                None
+            }
+        }
+    }
+    SessionPolicy {
+        max_sessions_per_offering: parse(WEB_MAX_SESSIONS_ENV, get(WEB_MAX_SESSIONS_ENV)),
+        max_opens_per_actor: parse(WEB_OPENS_PER_USER_ENV, get(WEB_OPENS_PER_USER_ENV)),
+        idle_ttl_secs: parse(WEB_SESSION_TTL_ENV, get(WEB_SESSION_TTL_ENV)),
+        min_open_interval_secs: parse(WEB_MIN_OPEN_INTERVAL_ENV, get(WEB_MIN_OPEN_INTERVAL_ENV)),
+        // Set by the host assembly, not the env: lossy eviction is armed exactly when no durable
+        // store is attached (see `demo_host_over`).
+        evict_unpersisted: false,
     }
 }
 
-/// **The demo host over a durable session store at `dir`** — the restart-survival weld. Opens a
-/// [`FileResumeStore`] rooted at `dir`, attaches it ([`OfferingHost::with_resume_store`], so every
-/// session open + landed advance is written through), and boot-resumes every persisted move-log
-/// ([`OfferingHost::resume_all`]) — each live session reopens to its identical committed state by
-/// replay. Fail-closed on both edges:
-/// - a **tampered** log is refused on re-drive ([`dreggnet_offerings::ResumeError::Refused`]) —
-///   logged and left refused; its file is NOT deleted (the evidence stays on disk for inspection);
-/// - an **unopenable** `dir` logs a warning and falls back to the store-less host (the server still
-///   boots, sessions stay in-memory) — the same degrade-not-refuse posture as [`resolve_demo_descent`].
+/// [`web_policy_from`] over the real process environment.
+pub fn resolve_web_policy() -> SessionPolicy {
+    web_policy_from(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+}
+
+/// **Resolve the demo host from the environment** — the session-durability switch, mirroring
+/// [`resolve_demo_descent`], PLUS the session-lifecycle policy ([`resolve_web_policy`]: capacity /
+/// TTL / per-user quota / open rate). With `DREGGNET_WEB_SESSION_DIR` set (non-empty), the host is
+/// built over a durable [`FileResumeStore`] rooted there: live game sessions survive a restart by
+/// move-log replay, and lifecycle eviction is SAFE (an evicted session resumes on its next touch).
+/// Unset → the store-less host; with every policy env also unset this is byte-identical to the
+/// pre-lifecycle behavior (nothing attached, nothing tracked — the committed tests' path).
+pub fn resolve_demo_host() -> OfferingHost {
+    let dir = std::env::var("DREGGNET_WEB_SESSION_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from);
+    demo_host_over(dir, resolve_web_policy())
+}
+
+/// **The demo host over a durable session store at `dir`** — the restart-survival weld, with no
+/// lifecycle policy armed (unbounded — the committed suites' path). See [`demo_host_over`].
 pub fn demo_host_resumed_from(dir: impl Into<std::path::PathBuf>) -> OfferingHost {
-    let dir = dir.into();
-    let mut host = demo_host();
+    demo_host_over(Some(dir.into()), SessionPolicy::default())
+}
+
+/// **Assemble the demo host** over an optional durable session dir and a [`SessionPolicy`]:
+///
+/// - the policy is armed FIRST (with the wall-clock [`SystemClock`] — time is injected, and the
+///   boot resume below then stamps every resumed session as touched);
+/// - **lossy eviction is armed exactly when no store is attached**: a store-less deployment's
+///   sessions are ephemeral anyway (a restart drops them all), so shedding the coldest under a
+///   cap/TTL beats unbounded growth — while with a store attached eviction stays LOSSLESS (the
+///   durable move-log resumes on next touch) and `evict_unpersisted` stays off;
+/// - with a dir: opens a [`FileResumeStore`] rooted there, attaches it
+///   ([`OfferingHost::with_resume_store`], so every session open + landed advance + signed-replay
+///   floor is written through), and boot-resumes every persisted move-log
+///   ([`OfferingHost::resume_all`]) — each live session reopens to its identical committed state
+///   by replay. Fail-closed on both edges:
+///   - a **tampered** log is refused on re-drive ([`dreggnet_offerings::ResumeError::Refused`]) —
+///     logged and left refused; its file is NOT deleted (the evidence stays on disk);
+///   - an **unopenable** `dir` logs a warning and falls back to the store-less host (the server
+///     still boots, sessions stay in-memory) — the same degrade-not-refuse posture as
+///     [`resolve_demo_descent`].
+pub fn demo_host_over(dir: Option<std::path::PathBuf>, mut policy: SessionPolicy) -> OfferingHost {
+    if dir.is_none() && !policy.is_unbounded() {
+        policy.evict_unpersisted = true;
+        tracing::info!(
+            "session policy armed with NO durable store — lossy eviction on (sessions are \
+             ephemeral either way; shedding the coldest beats unbounded growth)"
+        );
+    }
+    let mut host = demo_host().with_policy(policy, SystemClock);
+    let Some(dir) = dir else {
+        return host;
+    };
     match FileResumeStore::open(&dir) {
         Ok(store) => {
             host = host.with_resume_store(Box::new(store));
@@ -2228,22 +2369,39 @@ pub fn make_app() -> Router {
     make_app_with_descent(resolve_demo_descent())
 }
 
+/// [`make_app`], also handing back the [`CatalogState`] handle — what the server bin needs to
+/// drive the periodic lifecycle [`sweep`](CatalogState::sweep) beside the served router (the
+/// no-traffic idle-eviction case; the host also sweeps opportunistically on each fresh open).
+pub fn make_app_parts() -> (Router, Arc<CatalogState>) {
+    make_app_parts_with_descent(resolve_demo_descent())
+}
+
 /// [`make_app`] over a caller-supplied [`DescentState`] (the games + catalog + single-offering
 /// surfaces are unchanged). Lets a deployment / a test wire its own — durable or in-RAM — Descent
 /// board while reusing the whole merged app.
 pub fn make_app_with_descent(descent: Arc<DescentState>) -> Router {
+    make_app_parts_with_descent(descent).0
+}
+
+/// [`make_app_with_descent`], also handing back the [`CatalogState`] handle (see
+/// [`make_app_parts`]).
+pub fn make_app_parts_with_descent(descent: Arc<DescentState>) -> (Router, Arc<CatalogState>) {
     let web = Arc::new(WebState::new());
-    // The session-durability weld: `DREGGNET_WEB_SESSION_DIR` set → the catalog host is built over
-    // a durable `FileResumeStore` and boot-resumes persisted sessions; unset → plain `demo_host`.
+    // The session-durability + lifecycle weld: `DREGGNET_WEB_SESSION_DIR` set → the catalog host
+    // is built over a durable `FileResumeStore` and boot-resumes persisted sessions; the
+    // `DREGGNET_WEB_MAX_SESSIONS` / `DREGGNET_WEB_SESSION_TTL_SECS` / `DREGGNET_WEB_OPENS_PER_USER`
+    // / `DREGGNET_WEB_MIN_OPEN_INTERVAL_SECS` envs arm the session policy (all unset → unbounded,
+    // byte-identical). See `resolve_demo_host`.
     let catalog = Arc::new(CatalogState::with_host(resolve_demo_host));
 
-    Router::new()
+    let app = Router::new()
         .route("/", get(index))
         .route("/health", get(health))
         .merge(router(web))
-        .merge(catalog_router(catalog))
+        .merge(catalog_router(Arc::clone(&catalog)))
         .merge(descent_router(descent))
-        .merge(sprite::sprite_router())
+        .merge(sprite::sprite_router());
+    (app, catalog)
 }
 
 /// Resolve the demo Descent state from the environment: with `DATABASE_URL` set (non-empty), open a

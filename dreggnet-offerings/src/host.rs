@@ -32,8 +32,10 @@
 //! the host to one owning thread and ships jobs to it — exactly what the discord-bot `Store` does and
 //! what `dreggnet-web`'s host wrapper does; the host itself stays a plain synchronous object.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
+use crate::lifecycle::{Clock, PolicyRefusal, SessionPolicy, SweepReport, quota_key};
 use crate::resume::{SessionMoveLog, SessionResumeStore};
 use crate::signed::{Attribution, SignedAction, SignedError, verify_signed};
 use crate::{
@@ -76,6 +78,22 @@ pub enum HostError {
     /// replayed ([`SignedError::StaleCounter`]), or malformed ([`SignedError::MalformedKey`]).
     /// Nothing advanced, nothing was recorded (anti-ghost).
     Signature(SignedError),
+    /// A [`SessionPolicy`] gate refused the open — the variant names WHICH limit tripped
+    /// (per-actor quota / open rate / offering capacity), so a surface answers with the honest
+    /// status (a 429 with a retry-after) instead of a generic failure. Nothing was opened.
+    Policy(PolicyRefusal),
+    /// A persisted move-log exists for this session but REFUSED to reopen on lazy resume
+    /// (tampered / undeployable — fail-closed, nothing left live, the durable file kept). The
+    /// host refuses rather than shadowing the durable record with a fresh genesis whose advances
+    /// would append garbage to it.
+    ResumeFailed {
+        /// The offering key.
+        key: String,
+        /// The session whose persisted log refused to reopen.
+        id: SessionId,
+        /// The resume refusal, verbatim.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for HostError {
@@ -87,6 +105,12 @@ impl std::fmt::Display for HostError {
                 write!(f, "no live session {:?} under offering {key:?}", id.0)
             }
             HostError::Signature(e) => write!(f, "signed advance refused: {e}"),
+            HostError::Policy(r) => write!(f, "open refused by session policy: {r}"),
+            HostError::ResumeFailed { key, id, reason } => write!(
+                f,
+                "persisted session {:?} under offering {key:?} refused to reopen: {reason}",
+                id.0
+            ),
         }
     }
 }
@@ -300,8 +324,29 @@ pub struct OfferingHost {
     /// requires each envelope's counter to be strictly greater than the entry here and consumes it
     /// on every successful verification (even an executor-refused move burns its counter — a
     /// verified envelope is single-use, so a captured one can never be re-presented later when the
-    /// session state might have made its move legal). In-memory, like the live sessions it guards.
+    /// session state might have made its move legal). In-memory, like the live sessions it guards
+    /// — and, with a resume store attached, WRITTEN THROUGH to it on every consumption (so the
+    /// floors survive lifecycle eviction and a process restart; see [`crate::lifecycle`]).
     signed_counters: HashMap<(String, SessionId, String), u64>,
+    /// **The session-lifecycle policy** ([`crate::lifecycle`]) — all-`None` (the default) is the
+    /// unbounded pre-lifecycle behavior, byte-identical (nothing tracked, nothing refused).
+    policy: SessionPolicy,
+    /// The injected time source the policy runs on ([`with_policy`](OfferingHost::with_policy)).
+    /// `None` until a policy is attached; no wall clock is ever read outside it.
+    clock: Option<Box<dyn Clock>>,
+    /// Per-live-session last-touched stamps (seconds), `(key, id) → t` — fed by open / advance /
+    /// render, read by the TTL sweep and the LRU capacity eviction. `RefCell` so the read-shaped
+    /// verbs (`render`/`render_for`, `&self`) can stamp activity; the host is single-thread-
+    /// confined by design (see the module doc), so the interior mutability is uncontended.
+    /// Only populated while a policy is armed.
+    touched: RefCell<HashMap<(String, SessionId), u64>>,
+    /// Which quota key FRESH-MINTED each live session (for freeing the quota slot on
+    /// close/eviction). Only populated while a policy is armed and the open carried an opener.
+    openers: HashMap<(String, SessionId), String>,
+    /// Live fresh-minted session count per opener quota key (the `max_opens_per_actor` gate).
+    minted_live: HashMap<String, usize>,
+    /// Last fresh-mint time per opener quota key (the `min_open_interval_secs` gate).
+    last_minted_at: HashMap<String, u64>,
 }
 
 impl OfferingHost {
@@ -319,6 +364,22 @@ impl OfferingHost {
     pub fn with_resume_store(mut self, store: Box<dyn SessionResumeStore>) -> Self {
         self.resume_store = Some(store);
         self
+    }
+
+    /// **Arm a [`SessionPolicy`]** with its injected [`Clock`] — the session-lifecycle seam
+    /// ([`crate::lifecycle`]): per-offering capacity (LRU eviction), per-opener quotas + open
+    /// rate, and the idle-TTL [`sweep`](OfferingHost::sweep). An all-`None` policy (the default)
+    /// arms nothing — the unbounded pre-lifecycle behavior, byte-identical. Attach BEFORE
+    /// [`resume_all`](OfferingHost::resume_all) so boot-resumed sessions get last-touched stamps.
+    pub fn with_policy(mut self, policy: SessionPolicy, clock: impl Clock + 'static) -> Self {
+        self.policy = policy;
+        self.clock = Some(Box::new(clock));
+        self
+    }
+
+    /// The armed [`SessionPolicy`] (the default unbounded one if none was attached).
+    pub fn policy(&self) -> &SessionPolicy {
+        &self.policy
     }
 
     /// **Register an offering** under `key` with a human `title`. Any [`Offering`] whose session is
@@ -368,32 +429,324 @@ impl OfferingHost {
     /// **Open a fresh session** of offering `key`, minting a new [`SessionId`] and returning it. The
     /// session is seeded deterministically from its minted id (a re-open under the same id is the
     /// same replay-verifiable session). Errors if `key` is unregistered or the offering refuses to
-    /// deploy.
+    /// deploy. Attribution-less (no per-actor gates); see [`open_as`](OfferingHost::open_as).
     pub fn open(&mut self, key: &str) -> Result<SessionId, HostError> {
+        self.open_as(key, None)
+    }
+
+    /// [`open`](OfferingHost::open) with the opener's [`Attribution`] — the per-actor lifecycle
+    /// gates (open quota, open rate) key on it when a policy is armed; `None` skips them (there
+    /// is no actor to key), leaving capacity + TTL as the backstops. `Signed` quotas are real
+    /// enforcement, `Asserted` quotas are advisory (a forgeable label) — see [`crate::lifecycle`].
+    pub fn open_as(
+        &mut self,
+        key: &str,
+        opener: Option<&Attribution>,
+    ) -> Result<SessionId, HostError> {
+        if !self.has(key) {
+            return Err(HostError::UnknownOffering(key.to_string()));
+        }
+        self.admit_fresh_open(key, opener)?;
         self.counter += 1;
         let id = SessionId::new(format!("{key}-{}", self.counter));
         let cfg = SessionConfig::with_seed(seed_from_id(&id.0));
         self.open_session(key, id.clone(), cfg)?;
+        self.note_fresh_open(key, &id, opener);
         Ok(id)
     }
 
     /// **Ensure a session is open** under a caller-chosen `id` (the web surface's route param): open
     /// it (seeded from the id) iff it is not already live. Returns `true` if it was newly opened,
-    /// `false` if it already existed. Errors if `key` is unregistered or the deploy is refused.
+    /// `false` if it already existed (or resumed from the durable store — not a fresh world).
+    /// Errors if `key` is unregistered or the deploy is refused. Attribution-less; see
+    /// [`ensure_open_as`](OfferingHost::ensure_open_as).
     pub fn ensure_open(&mut self, key: &str, id: &SessionId) -> Result<bool, HostError> {
+        self.ensure_open_as(key, id, None)
+    }
+
+    /// [`ensure_open`](OfferingHost::ensure_open) with the opener's [`Attribution`] — the
+    /// lifecycle-aware web/adapter entry:
+    ///
+    /// 1. a LIVE session is touched (kept hot) and returned as existing — no gate applies (it is
+    ///    not an open);
+    /// 2. an absent session whose move-log the attached store holds is **lazily RESUMED by
+    ///    replay** (capacity-gated — it re-enters memory, LRU-evicting a colder session if
+    ///    needed) — this is the hot/cold working-set model: an evicted session's next touch
+    ///    brings it back, state intact. A log that refuses to reopen is [`HostError::ResumeFailed`]
+    ///    (fail-closed — never shadowed by a fresh genesis appending to the durable record);
+    /// 3. only a genuinely NEW session is a fresh mint, and only a fresh mint runs the per-actor
+    ///    gates (rate, quota) + the capacity gate ([`HostError::Policy`] names the tripped limit).
+    pub fn ensure_open_as(
+        &mut self,
+        key: &str,
+        id: &SessionId,
+        opener: Option<&Attribution>,
+    ) -> Result<bool, HostError> {
         if !self.has(key) {
             return Err(HostError::UnknownOffering(key.to_string()));
         }
         if self.is_open(key, id) {
+            self.touch(key, id);
             return Ok(false);
         }
+        if self.lazy_resume(key, id)? {
+            return Ok(false);
+        }
+        self.admit_fresh_open(key, opener)?;
         let cfg = SessionConfig::with_seed(seed_from_id(&id.0));
         self.open_session(key, id.clone(), cfg)?;
+        self.note_fresh_open(key, id, opener);
         Ok(true)
+    }
+
+    // ── The lifecycle gates + bookkeeping (no-ops while the policy is unbounded) ──
+
+    /// The current policy time (0 if no clock is attached — only reachable with the unbounded
+    /// policy, where nothing reads it).
+    fn now(&self) -> u64 {
+        self.clock.as_ref().map(|c| c.now()).unwrap_or(0)
+    }
+
+    /// Stamp session `(key, id)` as touched now (open / advance / render activity). A no-op while
+    /// the policy is unbounded (nothing tracked — the byte-identical legacy path).
+    fn touch(&self, key: &str, id: &SessionId) {
+        if self.policy.is_unbounded() {
+            return;
+        }
+        let now = self.now();
+        self.touched
+            .borrow_mut()
+            .insert((key.to_string(), id.clone()), now);
+    }
+
+    /// Admit a FRESH session mint under `key` by `opener`: the per-actor rate + quota gates
+    /// (skipped for attribution-less opens), then a TTL sweep (idle sessions are reaped exactly
+    /// when capacity is about to be judged), then the capacity gate (LRU-evicting if permitted).
+    fn admit_fresh_open(
+        &mut self,
+        key: &str,
+        opener: Option<&Attribution>,
+    ) -> Result<(), HostError> {
+        if self.policy.is_unbounded() {
+            return Ok(());
+        }
+        let now = self.now();
+        if let Some(att) = opener {
+            let qk = quota_key(att);
+            if let Some(min) = self.policy.min_open_interval_secs {
+                if let Some(&last) = self.last_minted_at.get(&qk) {
+                    let next = last.saturating_add(min);
+                    if now < next {
+                        return Err(HostError::Policy(PolicyRefusal::OpenRate {
+                            retry_after_secs: next - now,
+                        }));
+                    }
+                }
+            }
+            if let Some(limit) = self.policy.max_opens_per_actor {
+                if self.minted_live.get(&qk).copied().unwrap_or(0) >= limit {
+                    return Err(HostError::Policy(PolicyRefusal::ActorQuota {
+                        actor: qk,
+                        limit,
+                    }));
+                }
+            }
+        }
+        self.sweep(now);
+        self.admit_capacity(key)
+    }
+
+    /// Admit one more live session under `key` against the per-offering capacity cap, LRU-evicting
+    /// the coldest evictable session(s) if the policy permits; refuses ([`PolicyRefusal::Capacity`])
+    /// when the cap is full and nothing is evictable.
+    fn admit_capacity(&mut self, key: &str) -> Result<(), HostError> {
+        let Some(limit) = self.policy.max_sessions_per_offering else {
+            return Ok(());
+        };
+        loop {
+            let count = self.slots.get(key).map(|s| s.open_count()).unwrap_or(0);
+            if count < limit {
+                return Ok(());
+            }
+            if !self.evict_coldest(key) {
+                return Err(HostError::Policy(PolicyRefusal::Capacity {
+                    key: key.to_string(),
+                    limit,
+                }));
+            }
+        }
+    }
+
+    /// Record a successful fresh mint: the touched stamp + (when an opener was named) its quota
+    /// slot and rate stamp. A no-op while the policy is unbounded.
+    fn note_fresh_open(&mut self, key: &str, id: &SessionId, opener: Option<&Attribution>) {
+        if self.policy.is_unbounded() {
+            return;
+        }
+        self.touch(key, id);
+        if let Some(att) = opener {
+            let qk = quota_key(att);
+            *self.minted_live.entry(qk.clone()).or_insert(0) += 1;
+            self.openers
+                .insert((key.to_string(), id.clone()), qk.clone());
+            self.last_minted_at.insert(qk, self.now());
+        }
+    }
+
+    /// Free session `(key, id)`'s lifecycle bookkeeping (touched stamp + minted-quota slot) —
+    /// shared by eviction and [`close`](OfferingHost::close).
+    fn drop_lifecycle_bookkeeping(&mut self, key: &str, id: &SessionId) {
+        self.touched
+            .borrow_mut()
+            .remove(&(key.to_string(), id.clone()));
+        if let Some(qk) = self.openers.remove(&(key.to_string(), id.clone())) {
+            if let Some(n) = self.minted_live.get_mut(&qk) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    self.minted_live.remove(&qk);
+                }
+            }
+        }
+    }
+
+    /// **Lazily resume `(key, id)` from the attached store's persisted move-log**, if one exists:
+    /// `Ok(true)` = resumed (capacity-admitted, replayed, touched); `Ok(false)` = no persisted log
+    /// (the caller proceeds to a fresh mint / an honest miss); `Err` = a log exists but capacity
+    /// refused or the replay refused it ([`HostError::ResumeFailed`], fail-closed).
+    fn lazy_resume(&mut self, key: &str, id: &SessionId) -> Result<bool, HostError> {
+        let Some(log) = self.resume_store.as_ref().and_then(|s| s.load(key, id)) else {
+            return Ok(false);
+        };
+        self.admit_capacity(key)?;
+        self.resume(&log).map_err(|e| HostError::ResumeFailed {
+            key: key.to_string(),
+            id: id.clone(),
+            reason: e.to_string(),
+        })?;
+        Ok(true)
+    }
+
+    /// **Evict session `(key, id)`** — drop the live slot + in-memory bookkeeping, under the two
+    /// safety rules (see [`crate::lifecycle`]): with a store the durable move-log stays (the
+    /// session resumes lazily on its next touch) and the signed-replay floors are moved into the
+    /// store (dropped from memory only if the store CONFIRMS it persisted them — fail-closed);
+    /// without a store (the lossy opt-in path) the floors are RETAINED in memory so a captured
+    /// envelope can never replay onto a fresh mint of the same id.
+    fn evict(&mut self, key: &str, id: &SessionId) {
+        if let Some(store) = &self.resume_store {
+            let floors: Vec<(String, u64)> = self
+                .signed_counters
+                .iter()
+                .filter(|((k, i, _), _)| k == key && i == id)
+                .map(|((_, _, pk), c)| (pk.clone(), *c))
+                .collect();
+            // Already written through on each consumption; re-record (merge-max, idempotent) and
+            // drop from memory only on the store's confirmation.
+            if floors.is_empty() || store.record_signed_counters(key, id, &floors) {
+                self.signed_counters
+                    .retain(|(k, i, _), _| !(k == key && i == id));
+            }
+        }
+        if let Some(slot) = self.slots.get_mut(key) {
+            slot.close(id);
+        }
+        // The in-memory log is dropped either way: with a store the durable copy is authoritative
+        // (lazy resume reloads it); without one the session is lossily gone (keeping a log with no
+        // live session would be a silent half-resume lane the store-less host never services).
+        self.logs.remove(&(key.to_string(), id.clone()));
+        self.drop_lifecycle_bookkeeping(key, id);
+    }
+
+    /// Evict the COLDEST (longest-idle) session of offering `key`, if eviction is permitted at
+    /// all (a store is attached, or the policy opted into lossy eviction). `false` if nothing was
+    /// evicted (capacity must then refuse).
+    fn evict_coldest(&mut self, key: &str) -> bool {
+        if self.resume_store.is_none() && !self.policy.evict_unpersisted {
+            return false;
+        }
+        let coldest = {
+            let touched = self.touched.borrow();
+            self.slots
+                .get(key)
+                .map(|s| s.session_ids())
+                .unwrap_or_default()
+                .into_iter()
+                // Tie-break equal stamps by id (sorted order) — `min_by_key` alone keeps the
+                // LAST minimum, which would make same-second eviction nondeterministic.
+                .min_by_key(|id| {
+                    (
+                        touched
+                            .get(&(key.to_string(), id.clone()))
+                            .copied()
+                            .unwrap_or(0),
+                        id.0.clone(),
+                    )
+                })
+        };
+        match coldest {
+            Some(id) => {
+                self.evict(key, &id);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// **The idle-TTL sweep** — evict every live session untouched for MORE than
+    /// [`SessionPolicy::idle_ttl_secs`] seconds as of `now`, under the eviction-safety rules: a
+    /// persisted session is dropped from memory and resumes lazily on its next touch (state
+    /// intact); an UNpersisted one is evicted only under the lossy
+    /// [`evict_unpersisted`](SessionPolicy::evict_unpersisted) opt-in, else RETAINED (and
+    /// reported). A no-op (empty report) with no TTL armed. `now` is the caller's time — the
+    /// injected-clock convenience is [`sweep_now`](OfferingHost::sweep_now); the host also sweeps
+    /// opportunistically before judging capacity on each fresh open.
+    pub fn sweep(&mut self, now: u64) -> SweepReport {
+        let mut report = SweepReport::default();
+        let Some(ttl) = self.policy.idle_ttl_secs else {
+            return report;
+        };
+        let candidates: Vec<(String, SessionId)> = {
+            let touched = self.touched.borrow();
+            self.slots
+                .iter()
+                .flat_map(|(key, slot)| {
+                    slot.session_ids()
+                        .into_iter()
+                        .map(move |id| (key.clone(), id))
+                })
+                .filter(|(key, id)| {
+                    let t = touched
+                        .get(&(key.clone(), id.clone()))
+                        .copied()
+                        .unwrap_or(0);
+                    now.saturating_sub(t) > ttl
+                })
+                .collect()
+        };
+        let evictable = self.resume_store.is_some() || self.policy.evict_unpersisted;
+        for (key, id) in candidates {
+            if evictable {
+                self.evict(&key, &id);
+                report.evicted.push((key, id));
+            } else {
+                report.retained_unpersisted.push((key, id));
+            }
+        }
+        report
+    }
+
+    /// [`sweep`](OfferingHost::sweep) at the armed policy's own [`Clock`] — what a deployment's
+    /// periodic sweeper calls. A no-op with no policy/TTL armed.
+    pub fn sweep_now(&mut self) -> SweepReport {
+        let now = self.now();
+        self.sweep(now)
     }
 
     /// Open a session under an explicit `id` and `cfg` (the low-level opener the two public
     /// constructors share). Errors if `key` is unregistered or the deploy is refused.
+    /// **Below the lifecycle gates**: the policy-aware entries are [`open_as`](OfferingHost::open_as)
+    /// / [`ensure_open_as`](OfferingHost::ensure_open_as); a direct caller of this low-level seam
+    /// takes on its own capacity discipline.
     pub fn open_session(
         &mut self,
         key: &str,
@@ -443,6 +796,7 @@ impl OfferingHost {
             if let Some(store) = &self.resume_store {
                 store.forget(key, id);
             }
+            self.drop_lifecycle_bookkeeping(key, id);
         }
         removed
     }
@@ -479,10 +833,19 @@ impl OfferingHost {
         input: Action,
         actor: DreggIdentity,
     ) -> Option<Outcome> {
+        // Lazy resume-on-touch: an evicted-but-persisted session transparently reopens by replay
+        // before the turn resolves (the hot/cold working-set model). A missing/refused log stays
+        // an honest `None` miss on this Option-shaped verb.
+        if !self.is_open(key, id) && !matches!(self.lazy_resume(key, id), Ok(true)) {
+            return None;
+        }
         let out = self
             .slots
             .get_mut(key)?
             .advance(id, input.clone(), actor.clone());
+        if out.is_some() {
+            self.touch(key, id);
+        }
         // A LANDED advance is a committed step of the session's reproducible public input — append it
         // to the move-log (and mirror it to the durable store). A REFUSED move committed nothing, so
         // it records nothing (the anti-ghost tooth: the log holds only what actually landed, which is
@@ -525,10 +888,19 @@ impl OfferingHost {
             return Err(HostError::UnknownOffering(key.to_string()));
         }
         if !self.is_open(key, id) {
-            return Err(HostError::UnknownSession {
-                key: key.to_string(),
-                id: id.clone(),
-            });
+            // Lazy resume-on-touch: an evicted-but-persisted session reopens by replay (its
+            // signed-replay floors reload with it — see `resume`), so a signed turn lands on the
+            // authentic state and a captured pre-eviction envelope still finds its counter burnt.
+            match self.lazy_resume(key, id) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(HostError::UnknownSession {
+                        key: key.to_string(),
+                        id: id.clone(),
+                    });
+                }
+                Err(e) => return Err(e),
+            }
         }
         // The replay ledger is keyed by the canonical (lowercase) pubkey hex, so a re-cased
         // presentation of the same key cannot open a second counter lane.
@@ -553,8 +925,16 @@ impl OfferingHost {
         };
         let actor = verify_signed(key, id, expected, &sa).map_err(HostError::Signature)?;
         // Consume the counter NOW: a verified envelope is single-use whether or not the executor
-        // lands the move (see the `signed_counters` field doc for why).
+        // lands the move (see the `signed_counters` field doc for why). With a store attached the
+        // consumed floor is WRITTEN THROUGH beside the move-log, so it survives lifecycle
+        // eviction and a process restart (a wiped floor would re-admit a captured envelope). A
+        // store that does not persist floors (`record_signed_counters` default) keeps the
+        // in-memory ledger as the floor of record — eviction then retains it (fail-closed).
+        let signer_hex = ledger_key.2.clone();
         self.signed_counters.insert(ledger_key, sa.counter);
+        if let Some(store) = &self.resume_store {
+            let _ = store.record_signed_counters(key, id, &[(signer_hex, sa.counter)]);
+        }
 
         let out = self
             .slots
@@ -565,6 +945,7 @@ impl OfferingHost {
                 key: key.to_string(),
                 id: id.clone(),
             })?;
+        self.touch(key, id);
         if out.landed() {
             let attribution = Attribution::Signed {
                 pubkey_hex: actor.0.clone(),
@@ -617,6 +998,9 @@ impl OfferingHost {
             .slots
             .get_mut(key)?
             .advance_collective(id, input.clone(), decision);
+        if out.is_some() {
+            self.touch(key, id);
+        }
         // Record a landed crowd turn as `(action, carrier)` — the substrate admits exactly one typed
         // move attributed to the mover of record, and re-driving that reproduces the committed STATE
         // chain (the crowd's electorate/tally is beside-the-committed-turn provenance, not part of the
@@ -630,9 +1014,12 @@ impl OfferingHost {
         out
     }
 
-    /// Render session `(key, id)`'s current [`Surface`] (`None` if absent).
+    /// Render session `(key, id)`'s current [`Surface`] (`None` if absent). A successful render
+    /// is a lifecycle TOUCH (a viewed session stays hot under the idle-TTL sweep).
     pub fn render(&self, key: &str, id: &SessionId) -> Option<Surface> {
-        self.slots.get(key)?.render(id)
+        let surface = self.slots.get(key)?.render(id)?;
+        self.touch(key, id);
+        Some(surface)
     }
 
     /// Render session `(key, id)`'s current [`Surface`] **AS `viewer` sees it** — the per-viewer
@@ -641,7 +1028,9 @@ impl OfferingHost {
     /// offering or session is absent. The frontend that knows the acting identity calls THIS (not the
     /// viewer-blind [`render`](OfferingHost::render)) so the right projection reaches the right person.
     pub fn render_for(&self, key: &str, id: &SessionId, viewer: &DreggIdentity) -> Option<Surface> {
-        self.slots.get(key)?.render_for(id, viewer)
+        let surface = self.slots.get(key)?.render_for(id, viewer)?;
+        self.touch(key, id);
+        Some(surface)
     }
 
     /// Re-verify session `(key, id)`'s committed chain (`None` if absent).
@@ -734,6 +1123,17 @@ impl OfferingHost {
         // The session reopened to its authentic state; adopt the log so further advances append to it.
         self.logs
             .insert((log.key.clone(), log.id.clone()), log.clone());
+        // Reload the persisted signed-replay floors (merge MAX-wise — an in-memory floor is never
+        // lowered), so a captured pre-eviction/pre-restart envelope still finds its counter burnt.
+        if let Some(store) = &self.resume_store {
+            for (pk, c) in store.load_signed_counters(&log.key, &log.id) {
+                self.signed_counters
+                    .entry((log.key.clone(), log.id.clone(), pk))
+                    .and_modify(|v| *v = (*v).max(c))
+                    .or_insert(c);
+            }
+        }
+        self.touch(&log.key, &log.id);
         Ok(log.id.clone())
     }
 
