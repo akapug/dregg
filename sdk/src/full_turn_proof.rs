@@ -49,7 +49,7 @@ use dregg_circuit::dsl::cap_membership::verify_cap_membership_p3;
 use dregg_circuit::dsl::dsl_p3_air::DslP3Proof;
 use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
 use dregg_circuit::dsl::revocation::{
-    DslRevocationTree, non_revocation_circuit_descriptor, prove_non_revocation_p3,
+    DslRevocationTree, prove_non_revocation_p3,
     verify_non_revocation_p3,
 };
 use dregg_circuit::effect_vm::{self, CellState, Effect as VmEffectKind, generate_effect_vm_trace};
@@ -787,7 +787,7 @@ fn build_full_turn_descriptor(components: &TurnProofComponents) -> ComposedCircu
 
     // Non-revocation (sorted tree non-membership).
     if components.has_non_revocation {
-        circuits.push(non_revocation_circuit_descriptor());
+        unreachable!("LOCAL VERIFY-BRANCH STUB (never upstream): non-rev fingerprint site awaits upstream migration half of 23cd63264");
     }
 
     // Cap-membership (consumed capability ∈ openable capability_root). Deferred until the
@@ -4710,7 +4710,7 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
             label: "non-revocation".into(),
             proof_bytes: revoc_proof_bytes,
             sub_public_inputs: revoc_pi,
-            vk_hash: compute_vk_hash_bytes(&non_revocation_circuit_descriptor()),
+            vk_hash: unreachable!("LOCAL VERIFY-BRANCH STUB (never upstream): non-rev vk_hash site awaits upstream migration half of 23cd63264"),
         });
     }
 
