@@ -114,6 +114,81 @@ fn commit_keeps_mutations_and_drops_journal() {
     assert_eq!(ledger.get(&a).unwrap().state.balance(), 5);
 }
 
+/// F4-A (fourth-pass review): `make_sovereign` is a cells-map REMOVAL and must
+/// route through the journaled removal path exactly like [`Ledger::remove`].
+/// Two load-bearing consumers depend on it: the touched-set completeness
+/// premise (`restore_point_touched_ids` is COMPLETE only if every cells-map
+/// mutation journals), and rollback correctness (a rejected MakeSovereign turn
+/// must reinstate the hosted cell — pre-fix the cell was LOST: gone from
+/// `cells`, and the arm-time sovereign snapshot restore erased the commitment
+/// too).
+#[test]
+fn make_sovereign_is_journaled_and_rolls_back() {
+    let mut ledger = Ledger::new();
+    let a = ledger
+        .insert_cell(Cell::with_balance(pk(1), tok(1), 100))
+        .unwrap();
+    let a0 = ledger.get(&a).cloned().unwrap();
+    let root0 = ledger.root();
+
+    ledger.begin_restore_point();
+    let removed = ledger.make_sovereign(&a).unwrap();
+    assert_eq!(removed.id(), a);
+
+    // Touched-set completeness: the removal is journaled.
+    assert!(
+        ledger.restore_point_touched_ids().contains(&a),
+        "make_sovereign must journal the removed cell id (touched-set premise)"
+    );
+    // Non-vacuous: the cell really left the hosted set and became sovereign.
+    assert!(ledger.get(&a).is_none());
+    assert!(ledger.is_sovereign(&a));
+    assert_ne!(ledger.root(), root0, "the hosted leaf set visibly changed");
+
+    // Reject the turn: the hosted cell comes back byte-identical.
+    ledger.rollback_restore_point();
+    assert_eq!(
+        ledger.get(&a).cloned(),
+        Some(a0),
+        "rollback must reinstate the hosted cell (pre-fix it was LOST)"
+    );
+    assert!(
+        !ledger.is_sovereign(&a),
+        "rollback must undo the sovereign registration"
+    );
+    assert_eq!(ledger.root(), root0, "root returns to its pre-turn value");
+    assert_eq!(
+        ledger.cell_by_pubkey(&pk(1)).map(|c| c.id()),
+        Some(a),
+        "pubkey index healed through the restore"
+    );
+}
+
+/// F4-A companion: a COMMITTED `make_sovereign` maintains the derived pubkey
+/// index like every other cells-map removal. Pre-fix the departed cell's stale
+/// index entry shadowed a still-hosted cell under the same pubkey
+/// (`cell_by_pubkey` resolves `ids.first()` only).
+#[test]
+fn make_sovereign_maintains_pubkey_index() {
+    let mut ledger = Ledger::new();
+    // Two hosted cells backed by the SAME pubkey (distinct token ids).
+    let a = ledger
+        .insert_cell(Cell::with_balance(pk(5), tok(1), 10))
+        .unwrap();
+    let b = ledger
+        .insert_cell(Cell::with_balance(pk(5), tok(2), 20))
+        .unwrap();
+    assert_ne!(a, b);
+
+    let _ = ledger.make_sovereign(&a).unwrap();
+    assert_eq!(
+        ledger.cell_by_pubkey(&pk(5)).map(|c| c.id()),
+        Some(b),
+        "the departed cell's index entry must be dropped so the still-hosted \
+         cell resolves (pre-fix: stale first entry -> None)"
+    );
+}
+
 #[test]
 fn pre_turn_touched_ledger_exposes_prior_images_only_for_touched() {
     let mut ledger = Ledger::new();
