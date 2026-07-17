@@ -359,14 +359,30 @@ pub struct WhisperFrame {
 }
 
 impl WhisperFrame {
-    /// Build a frame, enforcing the channel budgets: newlines collapse to
-    /// `"; "`, and the text is clipped to [`WHISPER_MAX_BYTES`] on a UTF-8
-    /// codepoint boundary. An all-whitespace text yields `None` — an empty
-    /// whisper is not a whisper.
+    /// Build a frame, enforcing the channel budgets: every line/paragraph break
+    /// (`\n`, `\r`, U+2028, U+2029, U+0085) collapses to `"; "`, all C0/C1 control
+    /// characters (ESC and friends — `char::is_control`, tab excepted) are
+    /// stripped, and the text is clipped to [`WHISPER_MAX_BYTES`] on a UTF-8
+    /// codepoint boundary. An all-whitespace/all-control text yields `None`.
+    ///
+    /// Stripping controls at intake is the fail-closed answer to the whisper being
+    /// an unauthenticated 200-byte string delivered on the TRUSTED gate return: a
+    /// frame cannot carry an ANSI escape or a Unicode line separator that reshapes
+    /// the surface (editor / agent transcript) it is rendered into. (Zero-width /
+    /// bidi FORMAT chars — category Cf — are NOT stripped here: that needs a
+    /// unicode-properties table this crate does not pull in; the consuming surface
+    /// should neutralize confusables. The structural break/escape vectors are what
+    /// this closes.)
     pub fn new(text: &str, from: Option<CellId>, seq: u64) -> Option<WhisperFrame> {
+        let is_break = |c: char| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}' | '\u{0085}');
         let joined = text
-            .split('\n')
-            .map(str::trim)
+            .split(is_break)
+            .map(|seg| {
+                seg.chars()
+                    .filter(|c| *c == '\t' || !c.is_control())
+                    .collect::<String>()
+            })
+            .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("; ");
@@ -886,18 +902,57 @@ impl ToolGateway {
 
     /// Install THE CONTEXT CHANNEL's deposit source. The gateway drains at most
     /// one frame per ADMITTED call and rides it on the receipt
-    /// ([`ToolReceipt::whisper`]). The source must be non-blocking (a RAM read);
-    /// budgets are re-enforced at intake regardless of what it yields.
-    /// Un-installed (the default), every receipt carries `whisper: None`.
+    /// ([`ToolReceipt::whisper`]). Budgets are re-enforced at intake regardless of
+    /// what the source yields, and a source PANIC is caught and drops the whisper
+    /// (see [`next_whisper`](Self::next_whisper)). Un-installed (the default),
+    /// every receipt carries `whisper: None`.
+    ///
+    /// # Source contract (two caveats the gateway cannot enforce for you)
+    ///
+    /// * **Non-blocking.** The source is called on the drain that runs between a
+    ///   committed turn and the caller's receipt. A source that BLOCKS (contended
+    ///   lock, I/O, spin) delays the caller — and where the caller derives `now`
+    ///   from a wall clock, a delayed *next* call can cross `grant.deadline` and be
+    ///   refused. Make it a RAM read. Panics are caught; blocking is not.
+    /// * **Not on a confined-body gateway.** The grain-jail path
+    ///   (`deos-hermes::confined_body`) drains the frame onto the gateway's
+    ///   `PermissionOutcome` but its `Verdict` shape does not carry it onward, so a
+    ///   source installed there is consumed-but-never-delivered. Install sources
+    ///   only on gateways whose `PermissionOutcome`/`ToolReceipt` reaches the agent
+    ///   (the inline / ACP-wire paths) until `Verdict` carries the frame.
     pub fn set_whisper_source(&mut self, source: WhisperSource) {
         self.whisper_source = Some(source);
     }
 
     /// Drain one whisper frame for an admitted call, fail-closed: no source, a
-    /// source with nothing, or an over-budget frame that clips to empty all
-    /// yield `None`. Never touches admission state.
+    /// source with nothing, an over-budget frame that clips to empty, OR a source
+    /// that PANICS all yield `None`. Never touches admission state.
+    ///
+    /// The panic guard is load-bearing for the "purely additive" claim. The drain
+    /// runs AFTER the metered turn has committed (the counter advanced, the charge
+    /// moved value) but BEFORE the caller receives its `ToolReceipt` — on the
+    /// routed path, before the promise resolves. An unguarded panic in the
+    /// arbitrary [`WhisperSource`] closure would unwind through `invoke` /
+    /// `drive_executor` and DESTROY the receipt of a call that already committed
+    /// and was already paid for (worst case: the routed promise stuck `Pending`
+    /// forever). `catch_unwind` turns a source panic into a dropped whisper — the
+    /// whole point of the channel being additive — and disables the poisoned
+    /// source so it cannot panic again. It does NOT tame a source that BLOCKS;
+    /// that stays the documented non-blocking contract on [`set_whisper_source`].
     fn next_whisper(&mut self) -> Option<WhisperFrame> {
-        let frame = self.whisper_source.as_mut().and_then(|s| s())?;
+        let source = self.whisper_source.as_mut()?;
+        let drained =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source()));
+        let frame = match drained {
+            Ok(Some(frame)) => frame,
+            Ok(None) => return None,
+            Err(_) => {
+                // The source panicked mid-drain: drop it so a repeat call cannot
+                // unwind the next committed turn's receipt, and yield no whisper.
+                self.whisper_source = None;
+                return None;
+            }
+        };
         // Re-enforce the channel budgets at intake — the source is not trusted
         // to have clipped (WhisperFrame::new is the only way to build a frame,
         // but a stored frame's text could have been mutated since).
@@ -1665,6 +1720,42 @@ mod tests {
 
         // An all-whitespace whisper is not a whisper.
         assert!(WhisperFrame::new("  \n  ", None, 3).is_none());
+
+        // Structure-forging chars are neutralized at intake: CR / U+2028 / U+2029 /
+        // U+0085 collapse like `\n`, and C0/C1 controls (here ESC) are stripped —
+        // so a frame cannot carry an ANSI escape or a Unicode line separator.
+        let hostile = "ok\r\u{2028}\u{2029}\u{0085}fake\u{1b}[2J line";
+        let f = WhisperFrame::new(hostile, None, 4).expect("frame after scrub");
+        assert!(
+            !f.text.chars().any(|c| c.is_control() && c != '\t'),
+            "no C0/C1 control survives intake: {:?}",
+            f.text
+        );
+        assert!(!f.text.contains('\u{2028}') && !f.text.contains('\u{2029}'));
+        assert_eq!(f.text, "ok; fake[2J line", "breaks collapse, ESC stripped");
+
+        // A text that is ONLY controls/separators is empty after scrub → None.
+        assert!(WhisperFrame::new("\u{1b}\r\u{2028}", None, 5).is_none());
+    }
+
+    #[test]
+    fn whisper_source_panic_is_caught_and_never_unwinds_a_committed_call() {
+        let (rt, root) = fresh_epoch();
+        let mut gw = ToolGateway::admit(&rt, &root, seeded_grant()).expect("admit");
+
+        // A source that PANICS on drain must not take down the receipt of a call
+        // that already committed + metered — the drain runs post-commit, so an
+        // unwind would vaporize a paid-for receipt (worst case on the routed path,
+        // a promise stuck Pending forever). catch_unwind turns it into no whisper.
+        gw.set_whisper_source(Box::new(|| panic!("hostile source")));
+        let r1 = gw.invoke(77, 50, vec![]).expect("committed despite a panicking source");
+        assert_eq!(r1.whisper, None, "panic => dropped whisper, not a lost receipt");
+        assert_eq!(r1.calls_made, 1, "metering unaffected by the source panic");
+
+        // The poisoned source was dropped, so the next call is clean (no re-panic).
+        let r2 = gw.invoke(77, 50, vec![]).expect("next call still commits");
+        assert_eq!(r2.whisper, None);
+        assert_eq!(r2.calls_made, 2);
     }
 
     #[test]
