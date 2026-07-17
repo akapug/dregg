@@ -62,7 +62,7 @@ open Dregg2.Circuit (Assignment)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmRowEnv VmConstraint VmRow)
 open Dregg2.Circuit.DescriptorIR2
-  (Satisfied2 VmTrace TraceFamily VmConstraint2 Lookup TableId WindowConstraint envAt zeroAsg
+  (Satisfied2 VmTrace TraceFamily VmConstraint2 Lookup TableId WindowConstraint WindowExpr envAt zeroAsg
    ChipTableSound chip_lookup_sound chipLookupTuple chipRow CHIP_RATE CHIP_OUT_LANES memOpsOf mapOpsOf
    memLog mapLog opRow memCheck_nil)
 open Dregg2.Circuit.Emit.MultiStepChainEmit
@@ -98,6 +98,28 @@ def derivedAt (t : VmTrace) (i : Nat) : ℤ := (envAt t i).loc DERIVED
 def traceDeriveds (t : VmTrace) : List ℤ :=
   (List.range t.rows.length).map (derivedAt t)
 
+/-! ## §2b — the field-faithful mod-`p` envelope.
+
+Under the deployed denotation the continuity window and the two PI pins bind only CONGRUENCES
+(`≡ [ZMOD p]`, `p` the BabyBear prime). A chain accumulator is re-hashed at the next step, so a mod-`p`
+congruence on `PREV`/`ACC` cannot thread through the abstract `hash` — we recover the genuine ℤ
+equalities from the DEPLOYED range-check canonicality (`0 ≤ cell < p`) of the stored spine columns
+(`PREV`/`ACC` on every row, and the head/tail PIs). The absorb lemma (MS1) rides `chip_lookup_sound`
+directly, so it is a genuine equality already; only MS2/MS3 need this lift. Inhabited by `wMscCanon`. -/
+def Canon (x : ℤ) : Prop := 0 ≤ x ∧ x < 2013265921
+
+/-- Two canonical field cells congruent mod `p` are EQUAL over ℤ. -/
+theorem eq_of_modEq_canon {a b : ℤ} (ha : Canon a) (hb : Canon b)
+    (h : a ≡ b [ZMOD 2013265921]) : a = b := by
+  obtain ⟨ha0, ha1⟩ := ha; obtain ⟨hb0, hb1⟩ := hb
+  rw [Int.modEq_iff_dvd] at h; obtain ⟨k, hk⟩ := h; omega
+
+/-- The deployed range-check envelope: every stored spine cell (`PREV`/`ACC` on every row) and both
+public inputs are canonical field cells. -/
+def MscCanon (t : VmTrace) : Prop :=
+  (∀ i, i < t.rows.length → Canon (prevAt t i) ∧ Canon (accAt t i))
+  ∧ Canon (t.pub INITIAL_PI) ∧ Canon (t.pub FINAL_PI)
+
 /-- A specific constraint is a member of `multiStepChainDesc`'s (flat) constraint list. -/
 local macro "in_ms" : tactic =>
   `(tactic| (simp only [multiStepChainDesc, List.mem_cons, List.mem_singleton]; tauto))
@@ -122,39 +144,50 @@ theorem accAt_absorb (hash : List ℤ → ℤ) (t : VmTrace)
 `prevᵢ₊₁ = accᵢ` — the next step's entering hash is this step's leaving hash. -/
 theorem prev_succ_eq_acc (hash : List ℤ → ℤ) (t : VmTrace)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
-    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t)
+    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) (hcanon : MscCanon t)
     (i : Nat) (hnext : i + 1 < t.rows.length) :
     prevAt t (i + 1) = accAt t i := by
   have hi : i < t.rows.length := by omega
   have hrow := hsat.rowConstraints i hi ms2Continuity (by in_ms)
   simp only [ms2Continuity, VmConstraint2.holdsAt, WindowConstraint.holdsAt, if_true] at hrow
   have hlastf : (i + 1 == t.rows.length) = false := by rw [beq_eq_false_iff_ne]; omega
-  have hbody : contBody.eval (envAt t i) = 0 := hrow hlastf
-  have hlink := (continuity_zero_iff (envAt t i)).mp hbody
-  simpa only [prevAt, accAt, envAt] using hlink
+  -- the window binds `contBody.eval ≡ 0 [ZMOD p]`, i.e. `prevAt (i+1) ≡ accAt i [ZMOD p]`.
+  have hbody : contBody.eval (envAt t i) ≡ 0 [ZMOD 2013265921] := hrow hlastf
+  have hshift : (envAt t i).nxt PREV = prevAt t (i + 1) := by simp only [prevAt, envAt]
+  have hacc : (envAt t i).loc ACC = accAt t i := by simp only [accAt]
+  have hkey : contBody.eval (envAt t i) = prevAt t (i + 1) - accAt t i := by
+    simp only [contBody, Dregg2.Circuit.DescriptorIR2.WindowExpr.eval, hshift, hacc]; ring
+  rw [hkey] at hbody
+  have hmod : prevAt t (i + 1) ≡ accAt t i [ZMOD 2013265921] := by
+    have := hbody.add_right (accAt t i); simpa using this
+  exact eq_of_modEq_canon (hcanon.1 (i + 1) hnext).1 (hcanon.1 i hi).2 hmod
 
 /-- **MS3a (the head pin).** On row 0, `initPin` forces `prev₀ = pi[INITIAL_STATE_ROOT]`. -/
 theorem prev_zero_eq_pi (hash : List ℤ → ℤ) (t : VmTrace)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
-    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) (h0 : 0 < t.rows.length) :
+    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) (hcanon : MscCanon t)
+    (h0 : 0 < t.rows.length) :
     prevAt t 0 = t.pub INITIAL_PI := by
   have hrow := hsat.rowConstraints 0 h0 initPin (by in_ms)
   simp only [initPin, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hrow
-  have hpin := hrow rfl
-  simpa only [prevAt, envAt] using hpin
+  have hpin : prevAt t 0 ≡ t.pub INITIAL_PI [ZMOD 2013265921] := by
+    simpa only [prevAt, envAt] using hrow rfl
+  exact eq_of_modEq_canon (hcanon.1 0 h0).1 hcanon.2.1 hpin
 
 /-- **MS3b (the tail pin).** On the last row, `finalPin` forces `acc_last = pi[FINAL_ACCUMULATED_HASH]`. -/
 theorem acc_last_eq_pi (hash : List ℤ → ℤ) (t : VmTrace)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
-    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) (h0 : 0 < t.rows.length) :
+    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) (hcanon : MscCanon t)
+    (h0 : 0 < t.rows.length) :
     accAt t (t.rows.length - 1) = t.pub FINAL_PI := by
   have hlast : t.rows.length - 1 < t.rows.length := by omega
   have hrow := hsat.rowConstraints (t.rows.length - 1) hlast finalPin (by in_ms)
   simp only [finalPin, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hrow
   have hL : (t.rows.length - 1 + 1 == t.rows.length) = true := by
     rw [show t.rows.length - 1 + 1 = t.rows.length from by omega]; exact beq_self_eq_true _
-  have hpin := hrow hL
-  simpa only [accAt, envAt] using hpin
+  have hpin : accAt t (t.rows.length - 1) ≡ t.pub FINAL_PI [ZMOD 2013265921] := by
+    simpa only [accAt, envAt] using hrow hL
+  exact eq_of_modEq_canon (hcanon.1 (t.rows.length - 1) hlast).2 hcanon.2.2 hpin
 
 /-! ## §4 — the running-accumulator invariant (the chain assembled over the rows). -/
 
@@ -164,7 +197,8 @@ head pin + MS1 at row 0; step = MS1 at `m+1` composed with MS2 (`prevₘ₊₁ =
 theorem acc_chain (hash : List ℤ → ℤ) (t : VmTrace)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
-    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) (h0 : 0 < t.rows.length) :
+    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) (hcanon : MscCanon t)
+    (h0 : 0 < t.rows.length) :
     ∀ m, m < t.rows.length →
       accAt t m = chainFold hash (t.pub INITIAL_PI) ((List.range (m + 1)).map (derivedAt t)) := by
   intro m
@@ -172,7 +206,7 @@ theorem acc_chain (hash : List ℤ → ℤ) (t : VmTrace)
   | zero =>
     intro _
     have hA := accAt_absorb hash t hChip hsat 0 h0
-    have hC := prev_zero_eq_pi hash t hsat h0
+    have hC := prev_zero_eq_pi hash t hsat hcanon h0
     rw [hA, hC]
     simp only [Nat.zero_add, List.range_succ, List.range_zero, List.nil_append,
       List.map_cons, List.map_nil, chainFold, List.foldl_cons, List.foldl_nil]
@@ -182,7 +216,7 @@ theorem acc_chain (hash : List ℤ → ℤ) (t : VmTrace)
     have hmap : (List.range (k + 1 + 1)).map (derivedAt t)
         = ((List.range (k + 1)).map (derivedAt t)) ++ [derivedAt t (k + 1)] := by
       rw [List.range_succ, List.map_append, List.map_cons, List.map_nil]
-    rw [accAt_absorb hash t hChip hsat (k + 1) hk1, prev_succ_eq_acc hash t hsat k hk1, ih hk,
+    rw [accAt_absorb hash t hChip hsat (k + 1) hk1, prev_succ_eq_acc hash t hsat hcanon k hk1, ih hk,
       hmap, chainFold_concat]
 
 /-! ## §5 — THE BRIDGE (SAT ⟹ SEM): a satisfying trace computes the genuine chain fold. -/
@@ -196,10 +230,10 @@ descriptor's chaining semantics, not a single-gate restatement. -/
 theorem multiStepChain_refines_chainFold (hash : List ℤ → ℤ) (t : VmTrace)
     (hChip : ChipTableSound hash (t.tf .poseidon2)) (h0 : 0 < t.rows.length)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
-    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) :
+    (hsat : Satisfied2 hash multiStepChainDesc minit mfin maddrs t) (hcanon : MscCanon t) :
     t.pub FINAL_PI = chainFold hash (t.pub INITIAL_PI) (traceDeriveds t) := by
-  have hD := acc_last_eq_pi hash t hsat h0
-  have hchain := acc_chain hash t hChip hsat h0 (t.rows.length - 1) (by omega)
+  have hD := acc_last_eq_pi hash t hsat hcanon h0
+  have hchain := acc_chain hash t hChip hsat hcanon h0 (t.rows.length - 1) (by omega)
   rw [← hD, hchain, traceDeriveds, Nat.sub_add_cancel h0]
 
 /-! ## §6 — non-vacuity: a CONCRETE satisfying witness (bridge fires) + two failing ones (gate bites).
@@ -254,11 +288,20 @@ theorem wTrace_satisfied2 :
   · rw [w_memLog]; rfl
   · rw [w_mapLog]; rfl
 
+/-- The canonicality envelope is genuinely INHABITED on the all-zero witness. -/
+theorem wMscCanon : MscCanon wTrace := by
+  refine ⟨?_, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+  intro i hi
+  have hi0 : i = 0 := by have : wTrace.rows.length = 1 := rfl; omega
+  subst hi0
+  exact ⟨⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+
 /-- **The bridge fires end-to-end on the concrete witness** (SAT ⟹ SEM, non-vacuously): the tail PI is
 DERIVED to be the chain fold of the head PI, not assumed. -/
 theorem witness_spec :
     wTrace.pub FINAL_PI = chainFold (fun _ => 0) (wTrace.pub INITIAL_PI) (traceDeriveds wTrace) :=
   multiStepChain_refines_chainFold (fun _ => 0) wTrace wChipSound (by decide) wTrace_satisfied2
+    wMscCanon
 
 /-- A two-row trace whose row-1 `PREV` (9) ≠ row-0 `ACC` (5) — the MS2 continuity link is BROKEN. -/
 def badContRow0 : Assignment := fun c => if c = ACC then 5 else 0
@@ -274,7 +317,7 @@ theorem badCont_rejects (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : 
   intro h
   have hc := h.rowConstraints 0 (by decide) ms2Continuity (by in_ms)
   simp only [ms2Continuity, VmConstraint2.holdsAt, WindowConstraint.holdsAt, if_true] at hc
-  have hbody : contBody.eval (envAt badContTrace 0) = 0 := hc (by decide)
+  have hbody : contBody.eval (envAt badContTrace 0) ≡ 0 [ZMOD 2013265921] := hc (by decide)
   revert hbody
   decide
 
