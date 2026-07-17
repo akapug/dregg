@@ -121,7 +121,7 @@
 
 use std::path::Path;
 
-use crate::solana_consensus::{BankHashComponents, PohAnchorPolicy};
+use crate::solana_consensus::{BankHashComponents, PohAnchorPolicy, ValidatorVote};
 use crate::solana_holdings::{
     HoldingAccount, HoldingProof, HoldingProofError, ProvenHolding,
     prove_holding_consensus_anchored,
@@ -478,6 +478,41 @@ fn build_tower_sync_tx(
     slot: u64,
     bank_hash: [u8; 32],
 ) -> Vec<u8> {
+    // The exact-slot ("which bank hash") vote carries NO tower root, so it never
+    // counts toward the rooted-finality tally — that is the rooted harvester's job
+    // ([`LedgerVoteHarvester`] / [`build_tower_sync_tx_rooted`]).
+    build_tower_sync_vote_tx(authority, vote_account, slot, bank_hash, None)
+}
+
+/// Build a real-wire legacy vote `Transaction` carrying a `TowerSync` for
+/// `(voted_slot, bank_hash)` by `vote_account`, signed by `authority`, and
+/// carrying tower root `Some(r)` — the **rooted-finality** attestation
+/// [`crate::solana_provenance::VerifiedStakeTable::tally_authorized_rooted`]
+/// counts. A genuine rooted attestation of a lock slot `S` is a LATER vote
+/// (`voted_slot > S`) whose `root ≥ S`; a tower cannot root its own last-voted
+/// slot. Only a local source can call this meaningfully (it needs the
+/// authorized-voter private key).
+fn build_tower_sync_tx_rooted(
+    authority: &SigningKey,
+    vote_account: [u8; 32],
+    voted_slot: u64,
+    bank_hash: [u8; 32],
+    root: u64,
+) -> Vec<u8> {
+    build_tower_sync_vote_tx(authority, vote_account, voted_slot, bank_hash, Some(root))
+}
+
+/// Shared wire builder for both the exact-slot ([`build_tower_sync_tx`], `root =
+/// None`) and rooted-finality ([`build_tower_sync_tx_rooted`], `root = Some(r)`)
+/// votes. The tower root travels inside the serialized `TowerSync` instruction
+/// data, so the message framing is identical either way.
+fn build_tower_sync_vote_tx(
+    authority: &SigningKey,
+    vote_account: [u8; 32],
+    voted_slot: u64,
+    bank_hash: [u8; 32],
+    root: Option<u64>,
+) -> Vec<u8> {
     use ed25519_dalek::Signer as _;
     use solana_vote_interface::instruction::VoteInstruction;
     use solana_vote_interface::state::{Lockout, TowerSync};
@@ -504,7 +539,8 @@ fn build_tower_sync_tx(
     // `TowerSync.hash` is `solana_hash::Hash`; `From<[u8; 32]>` names the type
     // without depending on the (test-utils-optional) `solana-hash` crate.
     tower.hash = bank_hash.into();
-    tower.lockouts.push_back(Lockout::new(slot));
+    tower.root = root;
+    tower.lockouts.push_back(Lockout::new(voted_slot));
     let ix = VoteInstruction::TowerSync(tower);
     let ix_data = bincode::serialize(&ix).expect("serialize TowerSync vote instruction");
 
@@ -531,6 +567,126 @@ fn build_tower_sync_tx(
     tx.extend_from_slice(&sig);
     tx.extend_from_slice(&message);
     tx
+}
+
+// ===========================================================================
+// The rooted-attestation harvester seam (Track A, rung 1)
+// ===========================================================================
+
+/// **The rooted-vote harvester seam.** Value release
+/// ([`crate::solana_trustless::verify_lock_proof_consensus_anchored`]) demands the
+/// lock slot be **rooted (finalized)**, not merely optimistically confirmed: ≥ 2/3
+/// of the derived stake must submit an authorized-voter-bound vote whose ingested
+/// tower `root ≥ slot`
+/// ([`crate::solana_provenance::VerifiedStakeTable::tally_authorized_rooted`]). The
+/// exact-slot "which bank hash" votes a feed builds carry NO root, so a feed that
+/// supplies only them correctly fails closed at
+/// [`crate::solana_trustless::LockProofError::SlotNotRooted`]. This seam is the
+/// source of the *later* rooted votes that clear the finality leg.
+///
+/// A genuine rooted attestation of slot `S` is a LATER vote (`voted_slot > S`)
+/// whose `root ≥ S` — a tower roots strictly below its last vote. On mainnet these
+/// are harvested from real descendant-block vote transactions (a Geyser stream, or
+/// full-transaction `getBlock` — vote transactions and their signatures appear in
+/// the blocks that descend from `S`); the future `SnapshotFeed` plugs its harvester
+/// in here, sharing the seam with [`LocalValidatorFeed`]. On a local dev cluster the
+/// feed holds the authorized-voter private keys and signs the later rooted votes
+/// itself ([`LedgerVoteHarvester`]) — the same self-signed shape the exact-slot vote
+/// already uses (see the module's honest accounting), because only a local ledger
+/// exposes the voter key at all.
+pub trait VoteHarvester {
+    /// Gather the rooted attestations finalizing `slot`: later votes each carrying
+    /// tower `root ≥ slot`, bound to a proven on-chain authorized voter and keyed
+    /// by the vote account the stake table weights. An empty result ⟹ the slot is
+    /// not (yet) rooted — the value path then fails closed at `SlotNotRooted`, so
+    /// the leg is load-bearing, not decorative.
+    fn harvest_rooted(&self, slot: u64) -> Result<Vec<ValidatorVote>, FeedError>;
+}
+
+/// One validator's signing capability for harvesting a rooted attestation on a
+/// local/dev cluster: the authorized-voter keypair plus the vote account it
+/// controls (the stake-table key). Only a local ledger exposes the private key —
+/// which is exactly why [`LedgerVoteHarvester`] is dev-cluster-only, mirroring the
+/// module's honest accounting for the exact-slot vote.
+pub struct HarvestableVoter {
+    /// The vote account's on-chain authorized voter keypair (the signer the
+    /// rooted tally binds each counted vote to).
+    pub vote_authority: SigningKey,
+    /// The vote account the stake distribution weights.
+    pub vote_account: [u8; 32],
+}
+
+/// **The local/dev-cluster rooted-vote harvester.** Holds the authorized-voter
+/// keypairs (only a local ledger exposes them) and signs one later rooted
+/// `TowerSync` vote per voter — the local-cluster analogue of a real Geyser/getBlock
+/// harvest, with the SAME fidelity as [`build_tower_sync_tx`]'s exact-slot vote
+/// (self-signed by the on-chain authorized voter over the reconstructed bank state).
+/// It cannot impersonate mainnet: it can only sign for voters whose private key is
+/// on disk, and its votes are counted by the rooted tally ONLY when the signer is
+/// the vote account's proven on-chain authorized voter with stake in the derived
+/// table.
+pub struct LedgerVoteHarvester {
+    voters: Vec<HarvestableVoter>,
+    /// How many slots after the lock slot the rooted vote is cast. A tower roots
+    /// strictly below its last vote, so the rooted attestation is necessarily a
+    /// later vote (`voted_slot = slot + lookahead`, `root = slot`).
+    lookahead: u64,
+}
+
+impl LedgerVoteHarvester {
+    /// The default slots-past-the-lock-slot for the harvested rooted vote.
+    pub const DEFAULT_LOOKAHEAD: u64 = 64;
+
+    /// A harvester over `voters`, casting each rooted vote
+    /// [`Self::DEFAULT_LOOKAHEAD`] slots past the lock slot.
+    pub fn new(voters: Vec<HarvestableVoter>) -> Self {
+        Self {
+            voters,
+            lookahead: Self::DEFAULT_LOOKAHEAD,
+        }
+    }
+
+    /// A single-voter harvester (the shape [`LocalValidatorFeed`] uses: its ledger
+    /// key is the cluster's sole authorized voter).
+    pub fn single(vote_authority: SigningKey, vote_account: [u8; 32]) -> Self {
+        Self::new(vec![HarvestableVoter {
+            vote_authority,
+            vote_account,
+        }])
+    }
+
+    /// Override the [`Self::DEFAULT_LOOKAHEAD`] (the slots past the lock slot the
+    /// rooted vote is cast at).
+    pub fn with_lookahead(mut self, lookahead: u64) -> Self {
+        self.lookahead = lookahead.max(1);
+        self
+    }
+}
+
+impl VoteHarvester for LedgerVoteHarvester {
+    fn harvest_rooted(&self, slot: u64) -> Result<Vec<ValidatorVote>, FeedError> {
+        // A distinct later bank hash for the rooted votes: the rooted tally checks
+        // `root ≥ slot` + the authorized voter, NOT the voted bank hash (which
+        // belongs to the later slot, not the lock slot). Domain-separated so it can
+        // never collide with the exact-slot vote's `(slot, bank_hash)`.
+        let voted_slot = slot.saturating_add(self.lookahead);
+        let mut later_bank = [0xB1u8; 32];
+        later_bank[..8].copy_from_slice(&voted_slot.to_le_bytes());
+        let mut out = Vec::with_capacity(self.voters.len());
+        for v in &self.voters {
+            let tx = build_tower_sync_tx_rooted(
+                &v.vote_authority,
+                v.vote_account,
+                voted_slot,
+                later_bank,
+                slot,
+            );
+            let vote = ingest_vote_transaction(&tx)
+                .map_err(|e| FeedError::VoteIngest(format!("{e:?}")))?;
+            out.push(vote);
+        }
+        Ok(out)
+    }
 }
 
 /// Read a Solana CLI keypair file (a JSON array of 64 bytes: 32-byte seed ‖
@@ -577,6 +733,12 @@ pub struct LocalValidatorFeed<T: JsonRpcTransport> {
     vote_authority: SigningKey,
     /// The bootstrap stake account (delegated to the vote account).
     stake_account: [u8; 32],
+    /// The rooted-attestation harvester (the [`VoteHarvester`] seam): the source
+    /// of the later `root ≥ slot` votes that clear the value-release
+    /// rooted-finality leg. Defaults to a single-voter [`LedgerVoteHarvester`] over
+    /// the ledger's own authorized-voter key; a caller may inject a different one
+    /// (e.g. a real Geyser/getBlock harvester) via [`Self::with_harvester`].
+    harvester: Box<dyn VoteHarvester + Send + Sync>,
 }
 
 impl<T: JsonRpcTransport> LocalValidatorFeed<T> {
@@ -590,12 +752,31 @@ impl<T: JsonRpcTransport> LocalValidatorFeed<T> {
     ) -> Result<Self, FeedError> {
         let url = url.into();
         require_loopback_or_tls(&url)?;
+        // Default rooted-vote harvester: the ledger key is this cluster's sole
+        // authorized voter, so it signs the later rooted votes itself (dev-cluster
+        // parity with the exact-slot vote — see the module honest accounting).
+        let vote_account = vote_authority.verifying_key().to_bytes();
+        let harvester = Box::new(LedgerVoteHarvester::single(
+            vote_authority.clone(),
+            vote_account,
+        ));
         Ok(Self {
             url,
             transport,
             vote_authority,
             stake_account,
+            harvester,
         })
+    }
+
+    /// Replace the default rooted-vote [`VoteHarvester`] (e.g. inject a real
+    /// Geyser/getBlock harvester, or a multi-voter [`LedgerVoteHarvester`] for a
+    /// local cluster with more than one validator). The exact-slot "which bank
+    /// hash" vote is still built from the ledger key; only the rooted-finality
+    /// attestations come from `harvester`.
+    pub fn with_harvester(mut self, harvester: Box<dyn VoteHarvester + Send + Sync>) -> Self {
+        self.harvester = harvester;
+        self
     }
 }
 
@@ -683,6 +864,16 @@ impl<T: JsonRpcTransport> HoldingFeedSource for LocalValidatorFeed<T> {
         let validator_vote =
             ingest_vote_transaction(&tx).map_err(|e| FeedError::VoteIngest(format!("{e:?}")))?;
 
+        // (6b) ROOTED-FINALITY evidence (Track A, rung 1): the exact-slot vote
+        // above is optimistic-confirmation grade (`root = None`) and cannot clear
+        // `tally_authorized_rooted`, so a value-release verifier would fail closed
+        // at `SlotNotRooted`. Harvest the later `root ≥ slot` votes through the
+        // seam and carry BOTH sets in the evidence: the exact-slot tally selects
+        // the `(slot, bank_hash)` votes, the rooted tally selects the rooted ones
+        // (each ignores the other's subset — see [`ConsensusEvidence::votes`]).
+        let mut votes = vec![validator_vote];
+        votes.extend(self.harvester.harvest_rooted(slot)?);
+
         let total = derived.table.total_stake();
         let proof = HoldingProof {
             account: HoldingAccount {
@@ -700,7 +891,7 @@ impl<T: JsonRpcTransport> HoldingFeedSource for LocalValidatorFeed<T> {
                 epoch,
                 voted_stake: total,
                 total_stake: total,
-                votes: vec![validator_vote],
+                votes,
                 bank_components,
                 poh: None,
             },
@@ -994,6 +1185,113 @@ mod tests {
         assert_eq!(holding.owner, WALLET);
         assert_eq!(holding.amount, 777);
         assert_eq!(holding.slot, 4_242);
+    }
+
+    /// Rebuild the verified stake table exactly as the anchored verifier does,
+    /// from the ingested feed's own bank-state provenance + derived anchor.
+    fn verified_table_of(feed: &HoldingFeed) -> crate::solana_provenance::VerifiedStakeTable {
+        let p = feed.proof.stake_provenance.as_ref().expect("provenance");
+        crate::solana_provenance::VerifiedStakeTable::from_anchor(
+            &feed.derived_anchor,
+            &p.anchor_accounts_hash,
+            &p.anchor_stake_accounts,
+            &p.anchor_vote_accounts,
+            &p.anchor_stake_history_account,
+            p.new_rate_activation_epoch,
+        )
+        .expect("derive verified table from feed provenance")
+    }
+
+    /// POSITIVE (Track A rung 1): the ingested feed evidence now carries a
+    /// rooted-finality attestation, so `tally_authorized_rooted` — the leg the
+    /// value-release entry `verify_lock_proof_consensus_anchored` demands — clears
+    /// over the feed's OWN derived table, which the exact-slot vote alone cannot.
+    #[test]
+    fn local_feed_supplies_rooted_finality_evidence() {
+        let (node, authority, stake_account) =
+            mock_cluster(&prov::sk(1).verifying_key().to_bytes());
+        let feed = LocalValidatorFeed::new("http://127.0.0.1:8899", node, authority, stake_account)
+            .expect("loopback endpoint accepted")
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect("live-wire ingest");
+
+        let verified = verified_table_of(&feed);
+        let c = &feed.proof.consensus;
+        // The exact-slot "which bank hash" super-majority clears (optimistic grade)…
+        verified
+            .tally_authorized(c.slot, &c.bank_hash, &c.votes)
+            .expect("exact-slot super-majority clears");
+        // …AND the rooted-finality leg clears from the harvested later vote.
+        let rooted = verified
+            .tally_authorized_rooted(c.slot, &c.votes)
+            .expect("rooted-finality leg clears from the harvested attestation");
+        assert!(rooted > 0, "the harvested rooted vote carries real stake");
+    }
+
+    /// ADVERSARIAL (the rooted leg is LOAD-BEARING, not decorative): replace the
+    /// rooted harvester with an empty one and the SAME feed still clears the
+    /// exact-slot super-majority but FAILS the rooted-finality tally with zero
+    /// rooted stake — exactly the `SlotNotRooted` a value-release verifier raises.
+    #[test]
+    fn local_feed_without_rooted_harvest_fails_finality() {
+        struct EmptyHarvester;
+        impl VoteHarvester for EmptyHarvester {
+            fn harvest_rooted(&self, _slot: u64) -> Result<Vec<ValidatorVote>, FeedError> {
+                Ok(vec![])
+            }
+        }
+        let (node, authority, stake_account) =
+            mock_cluster(&prov::sk(1).verifying_key().to_bytes());
+        let feed = LocalValidatorFeed::new("http://127.0.0.1:8899", node, authority, stake_account)
+            .expect("loopback endpoint accepted")
+            .with_harvester(Box::new(EmptyHarvester))
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect("live-wire ingest");
+
+        let verified = verified_table_of(&feed);
+        let c = &feed.proof.consensus;
+        // Exact-slot still clears — the slot is optimistically confirmed…
+        verified
+            .tally_authorized(c.slot, &c.bank_hash, &c.votes)
+            .expect("exact-slot super-majority still clears");
+        // …but WITHOUT the harvest there is no rooted attestation, so finality
+        // fails closed with zero rooted stake.
+        let (rooted, total) = verified
+            .tally_authorized_rooted(c.slot, &c.votes)
+            .expect_err("rooted finality must fail closed without the harvest");
+        assert_eq!(
+            rooted, 0,
+            "no rooted stake without the harvested attestation"
+        );
+        assert!(total > 0, "the derived table has stake");
+    }
+
+    /// ADVERSARIAL: a rooted vote whose signer is NOT the vote account's on-chain
+    /// authorized voter contributes ZERO rooted stake (an imposter cannot forge
+    /// finality) — so the value-release leg still fails closed.
+    #[test]
+    fn imposter_rooted_vote_carries_no_finality() {
+        // Harvest a "rooted" vote for the ledger's vote account, but signed by a
+        // STRANGER key (not the on-chain authorized voter).
+        let (node, authority, stake_account) =
+            mock_cluster(&prov::sk(1).verifying_key().to_bytes());
+        let vote_account = authority.verifying_key().to_bytes();
+        let imposter = HarvestableVoter {
+            vote_authority: prov::sk(9),
+            vote_account,
+        };
+        let feed = LocalValidatorFeed::new("http://127.0.0.1:8899", node, authority, stake_account)
+            .expect("loopback endpoint accepted")
+            .with_harvester(Box::new(LedgerVoteHarvester::new(vec![imposter])))
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect("live-wire ingest");
+
+        let verified = verified_table_of(&feed);
+        let c = &feed.proof.consensus;
+        let (rooted, _total) = verified
+            .tally_authorized_rooted(c.slot, &c.votes)
+            .expect_err("an imposter-signed rooted vote must not root the slot");
+        assert_eq!(rooted, 0, "imposter contributes no rooted stake");
     }
 
     /// ADVERSARIAL: a cluster whose on-chain authorized voter is NOT the
