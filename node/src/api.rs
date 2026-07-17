@@ -10139,7 +10139,12 @@ mod tests {
         );
 
         // ── REPLAY REFUSES: the exact accepted envelope, resubmitted, is
-        // rejected — its receipt-chain binding now points behind the head. ──
+        // rejected. The executor's exact-nonce admission gate refuses it first
+        // ("nonce replay: expected 1, got 0" — the cell's nonce advanced past
+        // the replayed turn); the receipt-chain binding ("receipt chain
+        // mismatch") is the later, second line of defense. Either refusal
+        // upholds the property under test: a committed envelope can never
+        // commit twice. ──
         let response = submit(envelope).await.expect("replay response");
         let bytes = response
             .into_body()
@@ -10149,7 +10154,11 @@ mod tests {
             .to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("replay json");
         assert_eq!(json["accepted"], false, "replayed envelope must refuse");
-        assert_eq!(json["error"], serde_json::json!("receipt chain mismatch"));
+        let err = json["error"].as_str().unwrap_or_default();
+        assert!(
+            err.contains("nonce replay") || err.contains("receipt chain mismatch"),
+            "replay must refuse as a replay, got: {err}"
+        );
     }
 
     #[test]
