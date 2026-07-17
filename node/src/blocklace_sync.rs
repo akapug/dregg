@@ -4344,20 +4344,33 @@ async fn execute_finalized_turn(
     // turn hit this and finalization never accepted one (observed devnet:
     // executed=0, rejected=N; the turns stayed tentative).
     //
-    // Fix: if this exact turn (by hash) is already in the node's receipt chain AND
-    // we are solo, ingress already committed it authoritatively — treat finalization
-    // as idempotent-already-applied and skip re-execution. Scoped to solo so the
-    // multi-party paths are untouched: a foreign client's turn is NOT in the local
-    // chain here (ingress rolled back and did not append), and the operator's own
-    // multi-party turn rolled its ledger back (nonce NOT advanced), so both still
-    // execute normally below.
+    // Fix: if we are solo and this turn was already applied by ingress, treat
+    // finalization as idempotent-already-applied and skip re-execution. The precise
+    // "already applied" signal is the acting cell's nonce already being PAST the
+    // turn's nonce — exactly the condition that makes the executor's admission
+    // prologue reject the re-exec as `nonce replay: expected N, got N-1`. That single
+    // check covers BOTH ingress paths uniformly: the signed-turn `/turns/submit` path
+    // AND `/api/faucet` (whose turn commits via `post_faucet`, so its receipt is not
+    // in `s.cclerk` — a receipt-chain-only check misses it). The exact-hash
+    // receipt-chain match is kept as a belt-and-suspenders fallback for a self-
+    // creating first turn where the cell/nonce read is ambiguous.
+    //
+    // Scoped to solo so the multi-party paths are untouched: there, ingress rolled the
+    // ledger back (nonce NOT advanced) and a foreign client's turn is not in the local
+    // chain, so neither branch fires and the turn executes normally below. In solo,
+    // every finalized turn came from THIS node's own ingress, so a consumed nonce is
+    // always a legitimate already-applied turn, never a foreign replay.
     let is_solo = s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo);
-    if is_solo
-        && s.cclerk
-            .receipt_chain()
-            .iter()
-            .any(|r| r.turn_hash == computed_hash)
-    {
+    let already_applied = is_solo
+        && (s
+            .ledger
+            .get(&signed_turn.turn.agent)
+            .is_some_and(|c| c.state.nonce() > signed_turn.turn.nonce)
+            || s.cclerk
+                .receipt_chain()
+                .iter()
+                .any(|r| r.turn_hash == computed_hash));
+    if already_applied {
         debug!(
             turn_hash = %turn_hash_hex,
             block_id = %block_id,
