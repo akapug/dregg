@@ -6531,9 +6531,7 @@ dependencies = [
 name = "dregg-genesis-snapshot"
 version = "0.1.0"
 dependencies = [
- "blake3",
  "dregg-cell",
- "dregg-circuit",
  "serde",
  "serde_json",
 ]
@@ -6765,6 +6763,7 @@ dependencies = [
  "dregg-cell",
  "dregg-cell-crypto",
  "dregg-circuit",
+ "dregg-circuit-prove",
  "dregg-commit",
  "dregg-coord",
  "dregg-credentials",
@@ -7245,6 +7244,7 @@ dependencies = [
  "dregg-commit",
  "dregg-coord",
  "dregg-dfa",
+ "dregg-dfa-federation",
  "dregg-dsl-runtime",
  "dregg-federation",
  "dregg-intent",
