@@ -7361,9 +7361,17 @@ async fn post_faucet(
         }));
     }
 
-    // MEMBERSHIP-CHANGE BACKPRESSURE (F-C): refuse new solo faucet grants while
-    // a ratified committee change waits for the retained prefix to finalize.
-    if is_solo && req.amount > 0 && s.membership_change_pending() {
+    // MEMBERSHIP-CHANGE BACKPRESSURE (F-C): refuse new solo faucet requests
+    // while a ratified committee change waits for the retained prefix to
+    // finalize. ALL amounts are gated (fourth-pass review F4-C): the
+    // zero-amount materialization convenience mutates the authoritative
+    // ledger with NO consensus turn and NO retention entry, so during the
+    // deferred-amendment window it would strand a live cell outside every
+    // promotion token and durable commit overlay — a post-activation
+    // multi-party root could then include a local-only cell and fail to
+    // converge. Invariant: once a ratified membership change is pending, no
+    // new authoritative solo mutation enters outside the retained prefix.
+    if is_solo && s.membership_change_pending() {
         tracing::warn!(
             retained = s.ingress_commits.len(),
             "solo faucet ingress refused: membership change pending (committee \
@@ -10220,6 +10228,109 @@ mod tests {
         let tx = compute_faucet_activity_hash(&dregg_cell::CellId([0xC0; 32]), 0);
         assert_eq!(tx.len(), 64);
         assert!(tx.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    /// F4-C (fourth-pass review): once a ratified membership change is pending
+    /// (committee activation deferred until the retained prefix finalizes), NO
+    /// new authoritative solo mutation may enter outside the retained prefix —
+    /// the zero-amount materialization convenience included. Pre-fix the
+    /// membership barrier was conditioned on `amount > 0`, so a zero-amount
+    /// request during the window mutated the authoritative ledger with no
+    /// consensus turn and no retention entry — stranded from every promotion
+    /// token and durable commit overlay, so a post-activation multi-party root
+    /// could include a local-only cell and fail to converge.
+    #[tokio::test]
+    async fn zero_amount_faucet_refused_while_membership_change_pending() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        state.write().await.unlocked = true;
+        {
+            let mut s = state.write().await;
+            let sk = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+            // The deferred-amendment window: a ratified membership change
+            // parked until the retained prefix drains.
+            s.deferred_membership_proposals.push([0x91u8; 32]);
+        }
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state.clone(), true, recorder.handle());
+        let addr: std::net::SocketAddr = "127.0.0.1:4444".parse().unwrap();
+
+        let clerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"f4c:zero-amount").as_bytes(),
+        ));
+        let default_token_id = *blake3::hash(b"default").as_bytes();
+        let cell = dregg_cell::CellId::derive_raw(&clerk.public_key().0, &default_token_id);
+        let body = serde_json::json!({
+            "recipient": hex_encode(&cell.0),
+            "amount": 0u64,
+            "public_key": hex_encode(&clerk.public_key().0),
+        });
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/faucet")
+                .header("content-type", "application/json")
+                .extension(ConnectInfo(addr))
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .expect("faucet request")
+        };
+
+        // ── During the window: refused, and NOTHING mutated.
+        let response = app
+            .clone()
+            .oneshot(request())
+            .await
+            .expect("faucet response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("faucet json");
+        assert_eq!(
+            json["success"], false,
+            "zero-amount materialization must be refused while a membership \
+             change is pending: {json}"
+        );
+        {
+            let s = state.read().await;
+            assert!(
+                s.ledger.get(&cell).is_none(),
+                "no authoritative solo mutation may enter outside the retained \
+                 prefix during the deferred-amendment window"
+            );
+            let faucet_cell_id =
+                dregg_cell::CellId::derive_raw(&faucet_public_key(), &FAUCET_TOKEN_ID);
+            assert!(
+                s.ledger.get(&faucet_cell_id).is_none(),
+                "the faucet cell must not be materialized during the window either"
+            );
+            assert!(s.membership_change_pending(), "window still open");
+        }
+
+        // ── Window closed (change activated): the same request succeeds and
+        // materializes — the barrier must not over-block steady state.
+        state.write().await.deferred_membership_proposals.clear();
+        let response = app.oneshot(request()).await.expect("faucet response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("faucet json");
+        assert_eq!(
+            json["success"], true,
+            "zero-amount materialization must succeed once the window closes: {json}"
+        );
+        assert!(
+            state.read().await.ledger.get(&cell).is_some(),
+            "recipient materialized after the window"
+        );
     }
 
     /// Faucet nonce-binding regression: EVERY sequential funded grant must
