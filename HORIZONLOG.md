@@ -1,5 +1,76 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑ VACUITY-SWEEP FINDING 2, CLUSTER 3 — 10 injective-hash floors re-grounded; the residuals (2026-07-17)
+Landed `81e55f69f` (9 carriers) + `c4294734c` (the fourth costume) + `974a9fb31` (FloorDigestBinds).
+10 new `*Regrounded` files, 216 keystones `#assert_all_clean`, root `lake build Dregg2` green (9743
+jobs). Every carrier: proved FALSE as named at deployed params; consumers re-grounded onto a real
+collision game via a real reduction carrying an explicit undischarged `Eff`; doc-marker at the teeth;
+canary MUTATION-TESTED (fed the real bound it goes RED). All 10 files are imported from `Dregg2.lean`,
+so they are inside the gate — not orphans (see the Lean Orphan Gate entry below).
+
+⚠ THE FOLLOW-UPS, in value order:
+
+  * **⚑⚑ THE `⊤`-CLASS DEFECT IS TREE-WIDE, and cluster 3 only closed its own instances.**
+    `DomainSeparatedCREffRegrounded` proves `DomainSeparatedCR` (= `CollisionResistant`, = `Hard` at
+    `⊤`) FALSE at the deployed BabyBear sponge. But `CollisionResistant` is the floor
+    **`FloorRegroundedConsumers`, `HermineHashCRRegrounded` §2, `IdentityCommitmentRegrounded`,
+    `HashSigMerkleRegrounded`, `XmVrfRefinementRegrounded` and `RandomnessBeaconRegrounded` ALL rest
+    on** — every one of them is the same `⊤`-class floor, false at deployed params by
+    `FloorGames.collisionResistant_false_of_compressing`. Those files are the EARLIER floor-sweep's
+    output and were out of cluster 3's scope. The repair is mechanical and proven twice now: swap
+    `CollisionResistant F` for `HashCRHardQuant F Eff` and thread `hEff` (the game and every
+    faithfulness lemma are unchanged — `DomainSeparatedCREffRegrounded` §2-§3 is the template).
+    **This is the highest-value remaining item in the whole FINDING-2 class.**
+  * **⚑ THE `Eff` LANDING SITE for every hash carrier** (`DomainSeparatedCREffRegrounded` §5, stated
+    there precisely rather than hand-waved). `RomQueryFloor.RomEff` is a REAL class with a PROVED
+    unconditional birthday bound and both escapes proved (`choiceAdv_not_romEff`,
+    `twoPointAdv_in_romEff`). But its game samples a uniformly random ORACLE while
+    `poseidon2KeyedFamily` is a FIXED tag-keyed function — so landing the deployed sponge there is the
+    random-oracle IDEALIZATION of Poseidon2: a **MODELLING step, not a derivation**. It must be taken
+    deliberately and labelled. Taking it silently would be exactly the laundering the sweep exists to
+    stop. NOT taken.
+  * `PairCR` / `LenBindCR` (`QueueRoot` §7) are FALSE-PROVED but NOT game-re-grounded — they carry the
+    PROPOSED level-tagged hardening Rust has not adopted (a wire-affecting `message_root` format
+    migration). ⚑ `tagged_carriers_false_at_bounded_root` proves the hardening does not escape the
+    finding: at a bounded digest its carrier conjunction is itself FALSE. It fixes the PADDING ALIAS
+    (structural, and it really does); it cannot fix the counting bug. Repair path: the same
+    Deployment/game/extractor shape at `tRoot`/`bindLen`.
+  * `InAirAuthorityFloorRegrounded` re-grounds **ONE OF THREE LEGS** (the CR leg). Still open: the
+    chip-table faithfulness leg (`ChipTableSound` — a different-shaped floor, "does the poseidon2 chip
+    table compute `hash`?") and the wide-commit limb binding (`hcommitLimb`, carried as a structure
+    FIELD and ASSERTED, not discharged; the file names this in its own § RESIDUAL). The gadget keystone
+    is NOT re-grounded — one of its legs is.
+  * `Crypto/HashRandRefinement.lean:140` consumes the identical `Multiset.cons_inj_left`-against-an-
+    injective-`frameOutput` shape as `HonestSlotCR` and wants the same treatment
+    (`BeaconSlotRegrounded` names it).
+  * `hEff` is UNDISCHARGED everywhere, by design, named at every use site, with BOTH poles proved at
+    every carrier (`⊤` ⇒ false at deployed params, `⊥` ⇒ vacuous) so a reader can price any
+    instantiation. Not a gap that was missed — the honest state, per `FloorGames` §8.
+
+⚑ THREE RESULTS WORTH RE-READING (they generalize past this cluster):
+  * **THE FOURTH COSTUME** (`Blake3FloorEffRegrounded`). `Blake3FloorReduce` "de-vacuates" its
+    consumers by replacing a FALSE hypothesis with an `OrBreak` disjunct naming the break — but
+    `Blake3Collision` is an EXISTENCE claim its own `blake3Collision_of_finite_digest` PROVES at any
+    finite digest, so every twin is discharged by `OrBreak.broke …` **without looking at its
+    hypotheses**, and `orBreak_trivial_for_any_conclusion` shows it holds for ANY `P`, including a
+    FALSE one. A `P ∨ True` is as empty as a `False → P`. **Generalize the lesson: any repair that
+    moves the assumption to the other side of the turnstile without making it about FINDING is this
+    costume.** The file states its own refutation as a feature ("the twin's break branch is not
+    decorative") — that sentence is the tell.
+  * **A RESTRICTED CARRIER NEEDS A RESTRICTED REFUTATION.** `RootCR` is zero-free-restricted precisely
+    because `QueueRoot` already proved full injectivity false (the padding alias). Re-exhibiting that
+    alias would MISS the carrier. The refutation must live INSIDE the restriction — and does: the
+    zero-free lists are still infinite (`List.replicate (n+1) 1`), the digest still bounded.
+  * **"IT BOTTOMS OUT AT A STANDARD FLOOR" IS NOT A DEFENCE** — only if that floor is SATISFIABLE.
+    `RandomnessBeacon` defends `HonestSlotCR` via `honestSlotCR_of_hashcr` from `HashCR`, one of the
+    four floors already proved false. False hypothesis, false conclusion, both vacuous.
+  * ⚑ METHOD NOTE for the next lane: two subagent lanes shipped attack games that were RE-LABELED
+    collision games (`wins := r ≠ committed ∧ hash r = hash committed`), making `wins_imp` a tautology
+    (`exact ⟨hne, hcom⟩`) while the docstring claimed "this IS <the real theorem> at the game level".
+    Both were caught by reading the PROOF BODY, not the report, and both were fixed to transport
+    through a real deployed object. **The tell is a `wins_imp` that is an anonymous-constructor
+    re-pairing of its own hypothesis.** A third lane independently refused the same shape unprompted.
+
 ## ⚑ THE LEAN ORPHAN GATE — 103 modules built by NOTHING; 28 of them ROTTED (2026-07-17)
 The `Dregg2` lean_lib has NO `globs` (metatheory/lakefile.toml), so `lake build` compiles `Dregg2.lean`
 + its transitive imports ONLY. 103 modules under `metatheory/Dregg2/**` are unreachable from that root,
