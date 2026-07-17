@@ -2364,3 +2364,34 @@ an emit-ready STARK with no deployed consumer; deploy-later, not a fiction, not 
 possibly-premature turned out defensible on trace. The honesty went the productive direction: I doubted my
 own "done", checked, and the check upheld it (for note_spending it CONFIRMED emitted; for fold it confirmed
 "no deployed circuit to retire"). That is the frame working ON MYSELF.
+
+## ⚡⚡ FOUR-THREAD SWARM (`whlqzilcb`, 11 Fable lanes, 1.6M tok) — harvest 2026-07-17
+**SECURITY: 3 NEW forgery-class finds + 1 clean negative.** Total this session now **8 forgeries**.
+- **fic-federation — `dkg_ceremony.rs:317` COFACTORED slash witness (FIXED).** Round-message sigs verified
+  with cofactored `Verifier::verify` vs a roster `auth_pk`; a small-order key `(R=id,s=0)` forges a
+  ceremony sig for ANY message → two conflicting forgeries feed `EquivocationEvidence::verify` → the
+  SLASHING WITNESS is forgeable. → `verify_strict`. **This was ITEM #1 on the `ed25519_strict_guard`
+  grandfathered "un-audited debt" allowlist — the invariant did NOT hide it, it NAMED it as debt, and the
+  swarm discharged it. The system worked.** Entry removed (guard rot-check enforces that).
+- **fic-crypto — `dregg-dice` ServerVrf/LbVrf verifier does NOT bind the VRF pubkey to the request**
+  (grinding/forgery-class, ACTIVE). The 5 crypto-* primitives + pqvrf are HONEST (adversarially verified, no
+  fiction — a good negative). Characterization pin `dice/tests/vrf_key_binding_pin.rs` (passes today because
+  broken; flip when bound). NOT fixed — binding is a design change. `DiceVrfKeyBindingResidual`.
+- **fic-apps — privacy-voting tally is NOT ballot-bound (forgery PROVEN).** Poll operator posts any tally
+  ≥ current with ZERO ballots cast; `SetField`+`Monotonic` gate it but nothing binds tally to ballots.
+  `tally_forgery.rs::poll_operator_forges_a_tally_with_zero_ballots_cast` PASSES. Sibling `collective-choice`
+  already fixed EXACTLY this class. Also: sealed-auction on-ledger reveal unbound. NOT fixed (executor-
+  enforced binding is a design change). `VotingTallyBindingResidual`, `SealedAuctionRevealResidual`.
+- **fic-sel4-captp — NO new forgery (clean negative, honestly reported).** The low-level trust boundaries
+  (sel4/firmament, captp, cell-crypto, wire) are hardened — LARGELY because this session already fixed the
+  forgeries there; the session's peer_exchange fixes re-verified BITING.
+**THE GRANDFATHERED BACKLOG this exposes** — dkg was #1 and it was LIVE. Remaining un-audited non-strict
+ed25519 sites on the guard allowlist, PRIORITIZED by attacker-influence: `dregg-agent/src/cred.rs` +
+`dregg-auth/src/credential/chain.rs` (BOTH flagged "attacker-influenced key — likely convert-to-strict"),
+then deco-prove/notary, dregg-doc/ci_verdict, dregg-pay/{otc,swap}, realm-model/identity, sandstorm-bridge.
+**This is the next security swarm** — the guard already named the targets.
+**BUILD LANES (to gate next):** sdk-rust (16 typed verbs +16 teeth), sdk-ts (Effect wire 7/34→34/34, +a found
+live drift in program.ts), sdk-py (lag mapped + reveal/on/presentation/light-client bound), fhegg-wrap (SDK
+surface over wire.rs — brief's CLI premise was WRONG, corrected), fhegg-remeasure (envelope REAL again:
+2.3–2.7× the superseded table), fhegg-siblingcerts (CertQp advanced, none is a rubber stamp), bfv-sizing (GO
+for fold+n-of-n: ~1/3 of fhe.rs surface because NO multiplication rides this path).
