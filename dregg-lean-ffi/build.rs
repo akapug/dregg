@@ -1756,19 +1756,21 @@ fn main() {
         None
     };
 
-    // The handler-cutover export is a SECONDARY path; older archives predate it. Only wire its
-    // string bridge when the archive actually exports it (otherwise the dangling ref breaks the
-    // whole shim under -dead_strip). The forest-auth gate is the load-bearing path and is always
-    // present.
+    // `dregg_exec_handler_turn` is a DELIBERATELY-ABSENT secondary export, NOT a "predates it / older
+    // archive" version-skew: the handler-cutover path executes over an `eraseAuth`'d forest (it DROPS
+    // the authorization — see `eraseAuth` in metatheory/Dregg2/Exec/FFI.lean), so it is intentionally
+    // not `@[export]`ed into the deployed archive. Its absence is the correct, permanent posture. We
+    // set `dregg_handler_present` (and wire the string bridge) ONLY if the symbol is present, so the
+    // shim carries no dangling ref under -dead_strip; `dregg-lean-ffi/src/lib.rs` has the
+    // `#[cfg(not(dregg_handler_present))]` fallback for the normal (absent) case. The load-bearing
+    // forest-auth gate is a separate, always-present path.
+    //
+    // Absence is EXPECTED, so we DO NOT warn (#42): the old "Rebuild the archive to enable
+    // shadow_exec_handler_turn" advice was impossible — a rebuild cannot restore an un-`@[export]`ed,
+    // deliberately-fenced symbol — and it fired on every clean verified build forever.
     let handler_present = archive_exports(&build_archive, "dregg_exec_handler_turn");
     if handler_present {
         println!("cargo:rustc-cfg=dregg_handler_present");
-    } else {
-        println!(
-            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_exec_handler_turn` — \
-             the handler-cutover bridge is compiled out (forest-auth gate unaffected). \
-             Rebuild the archive to enable shadow_exec_handler_turn."
-        );
     }
 
     // The verified FINALITY GATE export (`dregg_blocklace_finalize`) lives in
