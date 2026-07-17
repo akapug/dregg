@@ -2,7 +2,7 @@
 # Dregg2.Substrate.Heap — THE HEAP's sorted-map semantics (REFINEMENT-DESIGN Decision 1, wave R2).
 
 A cell's programmable state becomes **registers + `heap_root`**: a sorted-Poseidon2 Merkle map over
-`(collection_id, key) → value` (`docs/REFINEMENT-DESIGN.md` Decision 1). This module is the Lean
+`(collection_id, key) → value` (`.docs-history-noclaude/REFINEMENT-DESIGN.md` Decision 1). This module is the Lean
 SEMANTIC FLOOR of that heap — the openable sorted map the circuit's gates will open against — built
 as the GENERALIZATION of the proven `cap_root` machinery with a GENERIC leaf:
 

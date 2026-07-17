@@ -348,8 +348,8 @@ fn gen_covariance(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
 fn bench_qp() {
     println!("\n=== QP via ADMM/OSQP (Markowitz portfolio — 2nd convex product) ===");
     println!(
-        "{:>6} {:>7} {:>12} {:>12} {:>12} {:>10}",
-        "n", "T", "solve (ms)", "prim_res", "dual_res", "valid"
+        "{:>6} {:>7} {:>12} {:>12} {:>12} {:>12} {:>10}",
+        "n", "T", "solve (ms)", "prim_res", "dual_res", "normal_res", "valid"
     );
     for &n in &[10usize, 50, 100, 200] {
         let (cov, mu) = gen_covariance(n, 0xA55E7 ^ n as u64);
@@ -363,18 +363,19 @@ fn bench_qp() {
         let cert = CertQp::from_solution(&prob, &res, 1e-3);
         let rep = cert.check();
         println!(
-            "{:>6} {:>7} {:>12.2} {:>12.2e} {:>12.2e} {:>10}",
+            "{:>6} {:>7} {:>12.2} {:>12.2e} {:>12.2e} {:>12.2e} {:>10}",
             n,
             t,
             solve_s * 1e3,
             rep.prim_res,
             rep.dual_res,
+            rep.normal_res,
             rep.valid,
         );
     }
     println!(
         "  (KKT matrix factored ONCE — public P,A — then division-free ADMM steps;\n   \
-         certificate = KKT residual, the QP analogue of Cert-F.)"
+         certificate = primal + stationarity + normal-cone KKT residuals.)"
     );
 
     // Both polarities on one instance.

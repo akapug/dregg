@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  M3 — the firmament's network edge (docs/FIRMAMENT.md §3, §6): a two-PD
+  M3 — the firmament's network edge (.docs-history-noclaude/FIRMAMENT.md §3, §6): a two-PD
   virtio-net system. The driver PD (dregg-net-driver-pd) holds the NIC cap +
   the virtio-mmio region + the DMA paddr and is the SOLE PD that touches the
   wire — the seL4-enforced form of "net-PD owns the NIC cap". The client PD

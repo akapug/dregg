@@ -2855,12 +2855,15 @@ mod tests {
         op: PredicateType,
         threshold: u32,
     ) -> ([u8; 32], BabyBear, Ir2BatchProof<DreggStarkConfig>) {
-        use dregg_circuit::predicate_arith_witness::FactBinding;
         use dregg_circuit::predicate_arith_witness::predicate_arith_witness;
+        use dregg_circuit::predicate_arith_witness::{Blinding, FactBinding};
         use dregg_circuit::predicate_comparison_witness::{
             predicate_gt_witness, predicate_le_witness, predicate_lt_witness, predicate_neq_witness,
         };
         let state_root = BabyBear::new(0xB00C);
+        // A REAL, non-zero per-presentation blinding: this helper drives the verifier in the
+        // deployed (blinded) posture, not the degenerate `Blinding::NONE`.
+        let blinding = Blinding(BabyBear::new(0xB11D1));
         // EVERY descriptor in the family is WELDED: each witness builder takes the fact identity
         // and COMPUTES the commitment from the compared value (the fact witness cols + the two
         // Poseidon2 legs), so no builder can pair a value with an unrelated commitment.
@@ -2870,19 +2873,31 @@ mod tests {
             term2: BabyBear::ZERO,
             state_root,
         };
-        let fact_commitment = fact.commitment_of(BabyBear::from_u64(value as u64));
+        let fact_commitment = fact.commitment_of(BabyBear::from_u64(value as u64), blinding);
         let v = value as u64;
         let t = threshold as u64;
         // Pick the emitted single-bound descriptor + honest witness for this operator
         // (mirror of `single_comparison_descriptor` + dregg-bridge's `prove_predicate_for_fact`).
         let (desc_name, built) = match op {
-            PredicateType::Gte => (PREDICATE_ARITH_NAME, predicate_arith_witness(v, t, fact, 2)),
-            PredicateType::Lte => (PREDICATE_ARITH_LE_NAME, predicate_le_witness(v, t, fact, 2)),
-            PredicateType::Gt => (PREDICATE_ARITH_GT_NAME, predicate_gt_witness(v, t, fact, 2)),
-            PredicateType::Lt => (PREDICATE_ARITH_LT_NAME, predicate_lt_witness(v, t, fact, 2)),
+            PredicateType::Gte => (
+                PREDICATE_ARITH_NAME,
+                predicate_arith_witness(v, t, fact, blinding, 2),
+            ),
+            PredicateType::Lte => (
+                PREDICATE_ARITH_LE_NAME,
+                predicate_le_witness(v, t, fact, blinding, 2),
+            ),
+            PredicateType::Gt => (
+                PREDICATE_ARITH_GT_NAME,
+                predicate_gt_witness(v, t, fact, blinding, 2),
+            ),
+            PredicateType::Lt => (
+                PREDICATE_ARITH_LT_NAME,
+                predicate_lt_witness(v, t, fact, blinding, 2),
+            ),
             PredicateType::Neq => (
                 PREDICATE_ARITH_NEQ_NAME,
-                predicate_neq_witness(v, t, fact, 2),
+                predicate_neq_witness(v, t, fact, blinding, 2),
             ),
             other => panic!("honest_bridge_single: unsupported single-bound op {other:?}"),
         };
@@ -3015,17 +3030,20 @@ mod tests {
     /// rejected.
     #[test]
     fn bridge_predicate_real_verifier_in_range_accept_and_reject() {
-        use dregg_circuit::predicate_arith_witness::FactBinding;
+        use dregg_circuit::predicate_arith_witness::{Blinding, FactBinding};
         let state_root = BabyBear::new(0x5678);
-        // The InRange low bound goes through the WELDED `≥` descriptor: the commitment is computed
-        // from the compared value. The high bound (`≤`) stays unwelded.
+        // A REAL, non-zero per-presentation blinding — the deployed posture. BOTH bounds go through
+        // WELDED descriptors (`≥` for the low bound, `≤` for the high one): each builder computes
+        // the commitment from the compared value under this blinding, and both bounds must pin the
+        // SAME commitment, so they must share the blinding.
+        let blinding = Blinding(BabyBear::new(0xB11D1));
         let fact = FactBinding {
             predicate_sym: BabyBear::new(0x1234),
             term1: BabyBear::ZERO,
             term2: BabyBear::ZERO,
             state_root,
         };
-        let fact_commitment = fact.commitment_of(BabyBear::from_u64(50));
+        let fact_commitment = fact.commitment_of(BabyBear::from_u64(50), blinding);
         let commitment = bridge_predicate_commitment_bytes(fact_commitment);
         let dummy = [0u8; 32];
 
@@ -3035,7 +3053,7 @@ mod tests {
         use dregg_circuit::predicate_comparison_witness::predicate_le_witness;
         let low_desc = descriptor_by_name(PREDICATE_ARITH_NAME).expect("ge descriptor registered");
         let (low_trace, low_pis) =
-            predicate_arith_witness(50, 10, fact, 2).expect("honest low bound builds");
+            predicate_arith_witness(50, 10, fact, blinding, 2).expect("honest low bound builds");
         let low_p = prove_vm_descriptor2(
             &low_desc,
             &low_trace,
@@ -3047,7 +3065,7 @@ mod tests {
         let high_desc =
             descriptor_by_name(PREDICATE_ARITH_LE_NAME).expect("le descriptor registered");
         let (high_trace, high_pis) =
-            predicate_le_witness(50, 100, fact, 2).expect("honest high bound builds");
+            predicate_le_witness(50, 100, fact, blinding, 2).expect("honest high bound builds");
         let high_p = prove_vm_descriptor2(
             &high_desc,
             &high_trace,

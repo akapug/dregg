@@ -1,5 +1,5 @@
 //! The `ProcessKernel` — the v1 PROCESS-backed firmament substrate (the
-//! MMU-enforced isolation upgrade `docs/DREGG-DESKTOP-OS.md §3` names).
+//! MMU-enforced isolation upgrade `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` names).
 //!
 //! ## Why this module exists (the ONE fidelity gap, now closed)
 //!

@@ -3,7 +3,7 @@
 # credential-gated complete-turn executor proved in `metatheory/`). Every app
 # turn runs THROUGH this PD: decode -> step -> encode -> receipt.
 #
-# This is "the firmament's one true blocker" (docs/FIRMAMENT.md §6, §7) — the
+# This is "the firmament's one true blocker" (.docs-history-noclaude/FIRMAMENT.md §6, §7) — the
 # Lean runtime must build for the bare-metal aarch64-sel4-microkit target,
 # libuv-free + IO-free + GMP-resolved. The excision plan has four steps:
 #   (1) ELF-recompile the Lean closure under leanc      -- ✅ DONE (see scripts/)

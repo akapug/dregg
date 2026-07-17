@@ -98,7 +98,7 @@ These are restated in `REORIENT.md` (read it first after any context loss).
   and the deferred layer is exactly what the refinement throws away.
 - **Circuits.** The live proof path is a single rotated multi-table circuit
   (IR-v2, R=24): a heterogeneous turn splits into maximal homogeneous cohort-runs,
-  proven as a chain of rotated legs (`docs/PATH-PRESERVE.md`). STARKs: Plonky3,
+  proven as a chain of rotated legs (`.docs-history-noclaude/PATH-PRESERVE.md`). STARKs: Plonky3,
   BabyBear field, Poseidon2 hash (the audited p3-poseidon2-air chip), FRI,
   Fiat-Shamir — post-quantum assumptions only. Proofs attest turns ADDITIVELY
   (verifying never re-executes history); recursive aggregation folds a whole
@@ -219,7 +219,7 @@ theorem. Key constructs (Lean models in `metatheory/Dregg2/Deos/`):
 ### 8a. The desktop (L5–L8)
 
 deos is a desktop OS, not just a UI library. The layer stack
-(`docs/DREGG-DESKTOP-OS.md`; the running build realizes a growing subset of it):
+(`.docs-history-noclaude/DREGG-DESKTOP-OS.md`; the running build realizes a growing subset of it):
 
 - **Compositor (L5) — the only new TCB.** Sole holder of the framebuffer + HID
   caps; its scene is a verified cell; it admits a surface's pixels only through a
@@ -278,7 +278,7 @@ deos is a desktop OS, not just a UI library. The layer stack
   citizen). **Site:** `site/` (Studio/Playground/Explorer + wasm executor).
 - **pg-dregg:** caps as PostgreSQL RLS + durable workflows; `dregg_admits('read', id)`
   is the same decision the kernel makes.
-- **seL4/firmament:** `sel4/` + `docs/FIRMAMENT.md`. The Robigalia v0 demo boots
+- **seL4/firmament:** `sel4/` + `.docs-history-noclaude/FIRMAMENT.md`. The Robigalia v0 demo boots
   Rust userspace PDs, a real on-device STARK verifier PD, AND the executor PD (the
   Lean kernel runs inside a real seL4 protection domain), under QEMU. A real gpui
   browser): the gpui-offscreen render reaches the seL4 framebuffer — a real gpui
@@ -287,7 +287,7 @@ deos is a desktop OS, not just a UI library. The layer stack
   frontier is making that hosted image INTERACTIVE (input boots; live-repaint-on-turn
   is the next step — `docs/desktop-os-research/SEL4-INTERACTIVE-COCKPIT.md`). The "one
   true blocker" (libuv-free single-threaded Lean runtime) is closed
-  (`docs/EMBEDDABLE-LEAN-RUNTIME.md`). An seL4 capability and a dregg capability are
+  (`.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md`). An seL4 capability and a dregg capability are
   the same abstraction at two distances (the firmament axis: Local / Distributed /
   Surface / HostPd); at n=1 the distributed bounds collapse to strong local
   properties (immediate revoke, consistent checkpoint, synchronous present).

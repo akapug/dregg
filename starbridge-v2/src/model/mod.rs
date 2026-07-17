@@ -8,7 +8,7 @@
 //! dependency on the node a *protocol* dependency, not a *code* dependency.
 //!
 //! INVARIANT to maintain: when `node/src/api.rs` changes a response shape, the
-//! mirror here must follow. A future build-out lane (docs/STARBRIDGE-V2.md
+//! mirror here must follow. A future build-out lane (.docs-history-noclaude/STARBRIDGE-V2.md
 //! §"Build-out lanes") can replace these hand-mirrors with a shared
 //! `dregg-wire-types` crate so the contract is single-sourced.
 

@@ -7,7 +7,7 @@ compressed verbs against its live executable step (`gwrite_is_memory_program` /
 post-state equals the fold of the verb's emitted Blum trace over the pre-state projection. Those
 are PER-STEP facts.
 
-This module composes them to the WHOLE TURN — closing `docs/ASSURANCE-CRITIQUE.md` MEDIUM-8 ("the
+This module composes them to the WHOLE TURN — closing `.docs-history-noclaude/ASSURANCE-CRITIQUE.md` MEDIUM-8 ("the
 whole-post-state binding is per-step (3 verbs) and is NOT yet composed to whole-turn") — and it is
 the machinery `AssuranceCase.deployed_system_secure` uses to put the integrity-C(c2) leg over the
 SAME forest `f` as the A/B/c1 legs (MEDIUM-7).

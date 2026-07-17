@@ -7,7 +7,7 @@
 //! cargo run --release --bin drainerd -- --secs 5      # bounded run (else runs until SIGINT/SIGTERM)
 //! ```
 //!
-//! This is the M3 follow-up to the write outbox (`docs/PG-DREGG.md` §11.4): the
+//! This is the M3 follow-up to the write outbox (`.docs-history-noclaude/PG-DREGG.md` §11.4): the
 //! enqueue half (`dregg_submit_turn` → `dregg.submit_queue`) is shipped; this is
 //! the long-running node-side worker that DRAINS the queue through the verified
 //! executor and mirrors the result back. It runs a real poll loop with graceful
@@ -381,7 +381,7 @@ fn main() {
     assert_eq!(total, 1_000_000_000, "drained stream must conserve value");
 
     println!("\n  (postgres-free demo of the worker loop. The live daemon runs the SAME loop");
-    println!("   over dregg.submit_queue via dregg_drain_once(); see docs/PG-DREGG.md §11.4.)");
+    println!("   over dregg.submit_queue via dregg_drain_once(); see .docs-history-noclaude/PG-DREGG.md §11.4.)");
 }
 
 /// One poll cycle, split into the source-read then sink-write phases (so a real

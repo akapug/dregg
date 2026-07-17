@@ -1,4 +1,4 @@
-//! # Channels — the group-key lift as an SDK noun (docs/ORGANS.md §4,
+//! # Channels — the group-key lift as an SDK noun (.docs-history-noclaude/ORGANS.md §4,
 //! W-organ-3's keystone; blueprint twin `dregg_cell::blueprint` channel
 //! section).
 //!

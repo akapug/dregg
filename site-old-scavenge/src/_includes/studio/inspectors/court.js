@@ -1,7 +1,7 @@
 /**
  * <dregg-court uri="dregg://court/<strand-pubkey>">
  *
- * THE ORGAN (docs/ORGANS.md §3): the equivocation court. A strand author
+ * THE ORGAN (.docs-history-noclaude/ORGANS.md §3): the equivocation court. A strand author
  * posts a slashable BOND (a real bond cell, escrow == bond at every reachable
  * state) to be admitted. If anyone presents EVIDENCE of equivocation — two
  * conflicting signed blocks at the same sequence — the court slashes the bond

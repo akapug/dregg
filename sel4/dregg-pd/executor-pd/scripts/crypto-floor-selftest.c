@@ -275,7 +275,7 @@ int main(void) {
      * not minted in-line. dreggcf_admit_selftest() builds three turn wires and
      * drives dreggcf_admit_proof_carrying_turn: a genuine turn ADMITS (0x1), a
      * tampered-proof turn REFUSES (0x2), a wrong-PI turn REFUSES (0x4). This is the
-     * §4 next step (docs/EMBEDDABLE-LEAN-RUNTIME.md): a LIVE turn's proof bytes
+     * §4 next step (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md): a LIVE turn's proof bytes
      * reach the real verifier, admitted iff verify == 1. */
     {
         uint8_t am = dreggcf_admit_selftest();

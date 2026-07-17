@@ -5,7 +5,7 @@ dregg1 carries ONE temporal guard — `StateConstraint::TemporalGate { not_befor
 (`turn/src/executor/mod.rs:252-257`; modeled as a witnessed seam at `CatalogInstances.lean:140`) —
 and the polis amendment design leans on it as the COOLING-PERIOD primitive ("the amendment takes
 effect only at a wave boundary strictly after its own finalization … re-derived as a TemporalGate",
-`docs/CONSENSUS-FLEX.md §5`). But a single opaque window check is not an algebra: nothing states
+`.docs-history-noclaude/CONSENSUS-FLEX.md §5`). But a single opaque window check is not an algebra: nothing states
 that a window IS the meet of an `after` and a `before`, that cooling IS an `after` at the staged
 height plus the period, that an opened vesting gate STAYS open on every future of the trace, or
 that an expired window STAYS expired. This module supplies that algebra, as installable guard
@@ -41,7 +41,7 @@ system IS a path of `heightClock`.
     target cell — the `ConfluenceClassifier` bounded-BREAKS pole. Within one tau-ordered cell
     history (where every admission is serialized through the cell) the register read is exact.
   * `challengeWindow challengeField stagedAt period` is the STAGED form of the evidence-object
-    design (`docs/CONSENSUS-FLEX.md §7`): "admissible only if the window has elapsed AND no
+    design (`.docs-history-noclaude/CONSENSUS-FLEX.md §7`): "admissible only if the window has elapsed AND no
     challenge object exists". Here the challenge presence is a one-cell REGISTER read
     (`challengeField ≠ 0` = a challenge was filed); the full form — the challenge object as a heap
     entry, refused via heap NON-membership (`Substrate/Heap.sorted_gap_excludes`) — rides the one

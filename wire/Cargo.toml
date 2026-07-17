@@ -7,7 +7,7 @@ edition.workspace = true
 # always compiled in. (The old `stark-verifier`/`bridge` features were illusory anyway:
 # the unconditional `dregg-dsl-runtime` dep pulls `dregg-circuit/plonky3` by default.)
 # Feature flags in this workspace answer "what platform am I compiling for", never
-# "which guarantees does this dregg have" — see docs/FEATURE-HYGIENE.md.
+# "which guarantees does this dregg have" — see .docs-history-noclaude/FEATURE-HYGIENE.md.
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

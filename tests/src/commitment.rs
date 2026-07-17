@@ -366,7 +366,7 @@ fn fold_delta_with_tampered_removal_proof() {
     state.add_fact(Fact::from_symbols("owns", &["alice", "file2"]));
 
     let to_remove = Fact::from_symbols("owns", &["alice", "file1"]);
-    let mut delta = FoldDeltaBuilder::new(state)
+    let mut delta = FoldDeltaBuilder::new(state.clone())
         .remove_fact(to_remove)
         .build()
         .unwrap();
@@ -375,7 +375,7 @@ fn fold_delta_with_tampered_removal_proof() {
     delta.removed[0].1.leaf_hash = [0xEE; 32];
 
     assert_eq!(
-        delta.verify(),
+        delta.verify(&state, &CheckPolicy::NoAddedChecks),
         FoldVerification::InvalidRemovalProof { index: 0 },
         "Tampered removal proof must be detected"
     );

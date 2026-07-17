@@ -672,7 +672,7 @@ impl IssuerRootAuthority for StaticIssuerRootAuthority {
 /// Host channel resolving a peer cell's **finalized** field value for the
 /// cross-cell verified-observation atom
 /// ([`crate::program::StateConstraint::ObservedFieldEquals`],
-/// `docs/CELL-PROGRAM-LANGUAGE.md` §11.2).
+/// `metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §11.2).
 ///
 /// # Why this exists (the cross-cell self-fabrication forge)
 ///

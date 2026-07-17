@@ -3,7 +3,7 @@
 
 **What this closes.** `FieldIntegerLift.OodInterpF.hood` (the per-constraint OOD identity
 `(constraintPoly d t c).eval ζ = Zp.eval ζ · (qp c).eval ζ`) bundles THREE sub-obligations
-(`docs/reference/STARK-FLOOR-REDUCTION.md §1`):
+(`docs/SUPERSEDED/STARK-FLOOR-REDUCTION.md §1`):
 
   * (a) RLC de-batching — Schwartz–Zippel, no assumption [handled by the RLC lane];
   * (b) **commitment-opening binding** — the value `verifyAlgo` OPENS at ζ (`TableOpening.constraintEval`)

@@ -1,6 +1,6 @@
 //! # THE VK-EPOCH FAMILY-2 LIGHT-CLIENT CLOSE — Refusal + the lifecycle PAYLOAD: the HONEST state.
 //!
-//! ## What this measures (`docs/VK-EPOCH-PLAN.md`, STAGE B/C, family 2 — the CLOSED state)
+//! ## What this measures (`.docs-history-noclaude/VK-EPOCH-PLAN.md`, STAGE B/C, family 2 — the CLOSED state)
 //!
 //! Family 1 (`vk_epoch_perms_vk_light_client_binding.rs`) is GENUINELY closed: setPermissions / setVK
 //! carry an IN-CIRCUIT `permsVKWeldGate` welding the committed AFTER perms/vk sub-limb (limb 33/34) to

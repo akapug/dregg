@@ -152,7 +152,7 @@ impl CellState {
 
     /// Phase C: compute the 8-felt state commitment for the public input layout.
     ///
-    /// THE FLOOR this closes (`docs/FAITHFUL-STATE-COMMITMENT.md`): a 4-felt
+    /// THE FLOOR this closes (`.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md`): a 4-felt
     /// BabyBear Poseidon2 digest has ~62-bit COLLISION resistance (half the
     /// ~124-bit digest width) — below the system's FRI ~128-bit soundness. Eight
     /// genuine, independent Poseidon2 squeeze felts give ~124-bit collision

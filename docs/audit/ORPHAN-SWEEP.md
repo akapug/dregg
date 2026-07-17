@@ -257,7 +257,7 @@ labels "⚑ ASSURANCE-LAYER (not the deployed apex descriptor)" (`:1637`).
 protected by the Rust `CanonicalHeapTree8` producer + the `node8` map-op AIR (forge-rejection PROVEN by
 `vk_epoch_notes`/`vk_epoch_birth`). But the **deployed apex descriptor the light client verifies against**
 denotes only lane 0 for these three roots → their in-circuit binding is the ~31-bit fold, not the
-claimed faithful ~124-bit. This is precisely the `docs/FAITHFUL-STATE-COMMITMENT.md` scar surface. The
+claimed faithful ~124-bit. This is precisely the `.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md` scar surface. The
 green 8-felt keystones stand beside a lane-0 deployed denotation — the "misled us" pattern. Named
 residual: "flipping the apex to quantify over `effAccumWriteV3` is a SEPARATE VK epoch" (`:1642`).
 
@@ -401,6 +401,6 @@ an allowlist entry. It is the anti-regression tooth for this audit.
   refinement rides the assumed bridge) + the generalization to the **whole class**.
 - `PRODUCER-DESCRIPTOR-COVERAGE.md` (R3) is the forward dual: deployed→tested. This doc is proven→deployed.
   Together they close the two-way coverage question.
-- The accumulator find is the same object as the `docs/FAITHFUL-STATE-COMMITMENT.md` ~31-bit-vs-124-bit
+- The accumulator find is the same object as the `.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md` ~31-bit-vs-124-bit
   discipline, viewed through the orphan lens: the faithful keystone exists but the deployed apex doesn't
   quantify over it for three roots.

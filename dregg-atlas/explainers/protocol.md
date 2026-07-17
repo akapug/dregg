@@ -1,6 +1,6 @@
 ## thesis
 
-> *A turn is the exercise of an attenuable, proof-carrying token over owned state, leaving a verifiable receipt.* — `docs/DREGG3.md:19-21`
+> *A turn is the exercise of an attenuable, proof-carrying token over owned state, leaving a verifiable receipt.* — `.docs-history-noclaude/DREGG3.md:19-21`
 
 Each clause is concrete code, not slogan:
 
@@ -8,14 +8,14 @@ Each clause is concrete code, not slogan:
 - **"the exercise of … a token"** — the actor does not *describe* what it wants; it *presents* authority. `Authorization` (`turn/src/action.rs:215-443`) is that presentation: an Ed25519 `Signature`, a `Proof`, a `Bearer` capability proof, a `Token` (biscuit/macaroon), a `Custom` witnessed predicate. Exercising a held capability is `Effect::ExerciseViaCapability` (`turn/src/action.rs:1117`).
 - **"attenuable"** — every token narrows monotonically and never widens. The gate is `is_attenuation(held, granted) := granted.is_narrower_or_equal(held)` (`cell/src/capability.rs:603-605`). A delegated capability can only restrict the holder's authority.
 - **"proof-carrying"** — where authority is not a bare signature, the actor carries a proof the executor *checks deterministically*: STARK delegation proofs, witnessed predicates resolved via a `WitnessedPredicateRegistry`, token caveats verified against this call's `(action, resource, effects, nonce, federation, block_height)` (`turn/src/action.rs:412-442`).
-- **"over owned state"** — state is never ownerless. A cell gathers the four substances + program + operator (`docs/DREGG3.md:128-132`); "Nothing is ownerless. Every object IS a cell or lives in one." Mutation is guarded by the cell's own permissions.
+- **"over owned state"** — state is never ownerless. A cell gathers the four substances + program + operator (`.docs-history-noclaude/DREGG3.md:128-132`); "Nothing is ownerless. Every object IS a cell or lives in one." Mutation is guarded by the cell's own permissions.
 - **"leaving a verifiable receipt"** — every committed turn emits a `TurnReceipt` (`turn/src/turn.rs:768`) binding pre/post state, effects, cost, and the prior receipt into a hash chain. A light client verifies only the receipt chain, never re-executes.
 
-The lineage: macaroon → biscuit → capability is the deepest stratum — biscuit's Datalog *became* the derivation circuit, so "the token became the proof system" (`docs/DREGG3.md:23-25`).
+The lineage: macaroon → biscuit → capability is the deepest stratum — biscuit's Datalog *became* the derivation circuit, so "the token became the proof system" (`.docs-history-noclaude/DREGG3.md:23-25`).
 
 ## verbs
 
-DREGG3 collapses the historical 52-variant `Effect` enum to **eight kernel verbs** (`docs/DREGG3.md:151-157`): `create · write · move · grant · revoke · shield/unshield · lifecycle`. These are the *structural rules* of the four-substance logic: `move` is exchange for the linear substance (Value); `grant` is authorized production for Authority; `shield`/nullifiers are Evidence-monotonicity; `write` is heap-update under the frame. Everything else among the 52 is a **cell-program pattern** — queues, inboxes, escrows, auctions, namespaces, bridges are factory + `Pred` + these verbs.
+DREGG3 collapses the historical 52-variant `Effect` enum to **eight kernel verbs** (`.docs-history-noclaude/DREGG3.md:151-157`): `create · write · move · grant · revoke · shield/unshield · lifecycle`. These are the *structural rules* of the four-substance logic: `move` is exchange for the linear substance (Value); `grant` is authorized production for Authority; `shield`/nullifiers are Evidence-monotonicity; `write` is heap-update under the frame. Everything else among the 52 is a **cell-program pattern** — queues, inboxes, escrows, auctions, namespaces, bridges are factory + `Pred` + these verbs.
 
 The live Rust `Effect` enum (`turn/src/action.rs:950-1365`) maps onto these eight:
 
@@ -31,7 +31,7 @@ The live Rust `Effect` enum (`turn/src/action.rs:950-1365`) maps onto these eigh
 
 ## substances
 
-The kernel governs **four substances**, each with its own discipline (`docs/DREGG3.md:56-62`):
+The kernel governs **four substances**, each with its own discipline (`.docs-history-noclaude/DREGG3.md:56-62`):
 
 - **Value** (balance) — linear; moves, never copies or vanishes. Law: `Σδ = 0`, exact.
 - **Authority** (capabilities) — non-forgeable *production*; grows only by authorized construction, narrows freely. Only connectivity begets connectivity.
@@ -40,7 +40,7 @@ The kernel governs **four substances**, each with its own discipline (`docs/DREG
 
 **Conservation, `BALANCE_SUM = 0`.** Value is strictly linear. A signed `balance_change` (`turn/src/action.rs:93-102`) withdraws or deposits; at turn end the executor demands the running `excess == 0` and rolls the whole turn back otherwise — `TurnError::ExcessNotZero` (`turn/src/executor/execute.rs:998-1013`).
 
-**Issuer wells with negative balance.** The "no creation from nothing" law is made literal: `AssetId := CellId of the issuer; the issuer carries −supply, so ∀a. Σ_c bal(c,a) = 0 ALWAYS` (`docs/DREGG3.md:133-138`). Mint and burn are not non-conserving verbs — they are the issuer *moving from/to its own well under its own program*. `Burn` is the one disclosed exception — its receipt's `was_burn` flag is bound into `receipt_hash` so an executor cannot strip the disclosure.
+**Issuer wells with negative balance.** The "no creation from nothing" law is made literal: `AssetId := CellId of the issuer; the issuer carries −supply, so ∀a. Σ_c bal(c,a) = 0 ALWAYS` (`.docs-history-noclaude/DREGG3.md:133-138`). Mint and burn are not non-conserving verbs — they are the issuer *moving from/to its own well under its own program*. `Burn` is the one disclosed exception — its receipt's `was_burn` flag is bound into `receipt_hash` so an executor cannot strip the disclosure.
 
 ## auth-lattice
 

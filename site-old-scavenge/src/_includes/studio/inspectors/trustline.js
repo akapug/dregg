@@ -1,7 +1,7 @@
 /**
  * <dregg-trustline uri="dregg://trustline/<cell>">
  *
- * THE ORGAN (docs/ORGANS.md §1): a bilateral line of credit. "Issuer A
+ * THE ORGAN (.docs-history-noclaude/ORGANS.md §1): a bilateral line of credit. "Issuer A
  * extends holder B a line of N" is an ATTENUATED CAPABILITY whose exercise
  * debits a SHARED counter — granted ⊆ held made QUANTITATIVE. The enforcement
  * tooth is the executor-installed cell program the node re-evaluates on every

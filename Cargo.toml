@@ -319,14 +319,17 @@ large_const_arrays = "allow"
 unused_enumerate_index = "allow"
 
 [workspace.lints.rust]
-# `warn` (flipped from "allow" 2026-07-16, ember-approved). `unexpected_cfgs` fires on a
-# `cfg(feature = "X")` where X is NOT a declared feature — always-false, so the gated code silently
-# compiles to NOTHING. That is how a fail-open peer-exchange guard (cell-crypto, `zkvm` — no such feature)
-# and the "production PIR discovery transport" (dregg-sdk-net, `reqwest` — a non-optional dep, not a
-# feature) both vanished from every build undetected. `warn` (not `deny`) because this is a greenfield repo
-# under major daily surgery — surface every phantom gate without blocking the build; escalate to `deny`
-# once the surfaced set (the validation audit found ~11 across 4 crates) is cleared.
-unexpected_cfgs = "warn"
+# `deny` (escalated from "warn" 2026-07-17; flipped from "allow" 2026-07-16, ember-approved).
+# `unexpected_cfgs` fires on a `cfg(feature = "X")` where X is NOT a declared feature — always-false, so
+# the gated code silently compiles to NOTHING. That is how a fail-open peer-exchange guard (cell-crypto,
+# `zkvm` — no such feature), the "production PIR discovery transport" (dregg-sdk-net, `reqwest` — a
+# non-optional dep, not a feature), and the never-compiled `gen_plonky3` DSL backend (emitted code that
+# didn't build; deleted 43b930241) all vanished from every build undetected. The surfaced set is cleared,
+# so the class is now a build error. NOTE: this binds only crates with `[lints] workspace = true` —
+# every member has it (added 2026-07-17) except crates whose manifests other lanes held dirty at the
+# time (see TESTQALOG 2026-07-17 board/lane-a); vendored third-party (starbridge-v2/vendor/*) keeps
+# rustc's default warn with its real build-script cfgs declared in its own manifest.
+unexpected_cfgs = "deny"
 
 [profile.bench]
 opt-level = 3

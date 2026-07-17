@@ -61,3 +61,6 @@ blake3 = "1"
 [dev-dependencies]
 # (tests live inline in each module + in `tests/`)
 
+
+[lints]
+workspace = true

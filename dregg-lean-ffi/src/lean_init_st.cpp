@@ -1,6 +1,6 @@
 /* lean_init_st.cpp — the SINGLE-THREADED, IO-thread-free Lean runtime init.
  *
- * THE EMBEDDABLE-LEAN-RUNTIME path (docs/EMBEDDABLE-LEAN-RUNTIME.md). The default
+ * THE EMBEDDABLE-LEAN-RUNTIME path (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md). The default
  * `dregg_ffi_init` (lean_init.c) calls `lean_initialize_runtime_module()`, which
  * runs the full init chain INCLUDING `initialize_libuv()`. On a multi-thread Lean
  * build that call spawns the **libuv event-loop thread** (libuv.cpp:
@@ -52,7 +52,7 @@
  *     init MUST route through the single exported `lean_initialize_runtime_module`
  *     (ONE runtime copy) — which DOES start the libuv thread. The shared-mode
  *     `dregg_ffi_init_st` is therefore single-RUNTIME but NOT libuv-thread-free; the
- *     libuv-free property is a STATIC-link property (docs/EMBEDDABLE-LEAN-RUNTIME.md §5).
+ *     libuv-free property is a STATIC-link property (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §5).
  */
 #ifndef DREGG_LEAN_SHARED
 namespace lean {
@@ -95,7 +95,7 @@ lean_object *initialize_Dregg2_Dregg2_Exec_DistributedExports(uint8_t builtin);
 /* dregg_ffi_init_st — the single-threaded init for the executor-in-a-constrained-host
  * path. STATIC linkage: libuv-thread-free (the eight initializers, no libuv). SHARED
  * linkage (the cdylib): single-runtime via the exported `lean_initialize_runtime_module`
- * (which starts the libuv thread — see the header note + docs/EMBEDDABLE-LEAN-RUNTIME.md §5).
+ * (which starts the libuv thread — see the header note + .docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §5).
  *
  * Returns 0 on success, 1 if a module initializer reported an IO error. Idempotency is
  * the CALLER's responsibility (the Rust side guards it behind a OnceLock), exactly as

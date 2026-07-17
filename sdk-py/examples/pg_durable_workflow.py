@@ -23,7 +23,7 @@ WHAT IS REAL HERE (enforced by the database engine, against live pg18):
     crashes: ``resume`` reconciles against the persisted queue rows and re-drives
     only the uncommitted tail — a committed charge is never double-submitted.
 
-THE HONEST SEAM (``docs/PG-DREGG.md`` §11.4). The transition that *executes* a
+THE HONEST SEAM (``.docs-history-noclaude/PG-DREGG.md`` §11.4). The transition that *executes* a
 queued turn (``pending → executed``) is the **node drainer's** job (it runs each
 turn through the real verified Lean executor). This example has no node, so it
 uses ``dregg.pg.LocalDrainer`` — a dev-only ``dregg_kernel``-role applicator that
@@ -221,7 +221,7 @@ def run_story(admin: str, db: str, db_dsn: str) -> int:
          "revocation registry on EVERY call. So a revoked cap fails the WITH CHECK on the very next "
          "INSERT — the cancelled charge cannot even be STAGED. (The drainer ALSO re-checks "
          "dregg_cap_not_revoked at drain — defence-in-depth for a cap revoked AFTER enqueue.)")
-    note("SEAM: dregg_revoke's registry is BACKEND-LOCAL (in-process; docs/PG-DREGG.md §3.4) — shared "
+    note("SEAM: dregg_revoke's registry is BACKEND-LOCAL (in-process; .docs-history-noclaude/PG-DREGG.md §3.4) — shared "
          "within ONE postgres backend, not across connections. Instant CROSS-connection revocation needs "
          "the persistent dregg.revoked-table tier. So BOB cancels + charges on the SAME connection (the "
          "faithful demo of the shipped backend-local registry).")

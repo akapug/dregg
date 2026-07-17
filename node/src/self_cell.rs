@@ -15,7 +15,7 @@
 //!   handlers read. Re-project after a turn and the cell view moves — `ledger_height`,
 //!   `peer_count`, the operator balance/nonce, the producer mode all track the
 //!   running node. It is NOT a static stub.
-//! - It is Reading A of `docs/NODE-REFRAME-SCOPE.md §2.3`: the node is the world's
+//! - It is Reading A of `metatheory/docs/NODE-REFRAME-SCOPE.md §2.3`: the node is the world's
 //!   *representative* cell (identity + federation status + a commitment to the ledger
 //!   it serves). It does NOT nest a sub-ledger (Reading B), which the flat ledger
 //!   does not support today.

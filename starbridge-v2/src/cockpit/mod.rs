@@ -584,7 +584,7 @@ pub struct Cockpit {
     /// folds `world.dynamics().since(self.dynamics_cursor)` into per-slice
     /// invalidation, then advances to `world.dynamics().cursor()`. This is the
     /// producer↔consumer JOIN: turning per-frame O(ledger) projection into
-    /// O(changed-cells) (`docs/deos/EFFICIENCY-WELD-PLAN.md` §2.1).
+    /// O(changed-cells) (`.docs-history-noclaude/deos/EFFICIENCY-WELD-PLAN.md` §2.1).
     dynamics_cursor: usize,
     /// The per-(focus,viewer) projection memo, wrapping the unchanged-pure
     /// `Registry::present`, valid while the live head is unchanged (§2.3).
@@ -612,7 +612,7 @@ pub struct Cockpit {
     /// mode. Defaults `false` (the headless cockpit bake / a re-mount shows the
     /// full frame unless asked).
     first_run: bool,
-    /// M3 WIDEN (`docs/deos/REFLEXIVE-MIGRATION.md` §3.4 — `render(workspace_subgraph)`).
+    /// M3 WIDEN (`.docs-history-noclaude/deos/REFLEXIVE-MIGRATION.md` §3.4 — `render(workspace_subgraph)`).
     /// The cockpit's active-tab SELECTOR self-hosted as a REAL cell: the same
     /// [`BufferCell`] two-tier split [`ViewCell`] uses, only the payload is the
     /// active-tab index. `render()` resolves its dispatch FROM this cell's committed
@@ -927,7 +927,7 @@ pub struct Cockpit {
     sim_commit_banner: Option<String>,
 
     // --- THE MOLDABLE INSPECTOR (the Pharo moldable inspector) ---------------
-    /// M3 — THE INSPECTOR'S OWN VIEW CELL (`docs/deos/REFLEXIVE-MIGRATION.md` §3).
+    /// M3 — THE INSPECTOR'S OWN VIEW CELL (`.docs-history-noclaude/deos/REFLEXIVE-MIGRATION.md` §3).
     /// The moldable inspector's `(focus, present_idx)` camera-aim is self-hosted as
     /// a REAL cell (the [`BufferCell`] two-tier split, generalized): the visible
     /// draft (`inspector_view.doc()`) is free to re-aim; its WITNESSED state rides

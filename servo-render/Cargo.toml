@@ -196,3 +196,6 @@ webpki-roots = { version = "1.0", optional = true }
 # fork checkout. `../` = servo-render → breadstuffs → dev. Keep in sync with the
 # root/firmament blocks; all revert to the git rev once the fork is pushed.
 
+
+[lints]
+workspace = true

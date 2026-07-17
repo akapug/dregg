@@ -191,7 +191,7 @@ pub fn council_charter_from_constitution(
 }
 
 /// [`council_charter_from_constitution`] with **actor-bound approvals**
-/// (`docs/CELL-PROGRAM-LANGUAGE.md` §3, polis gap 1 dissolved): publish one
+/// (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §3, polis gap 1 dissolved): publish one
 /// signing key per member and the installed program rejects any turn that
 /// flips approval slot `i` unless its SENDER is `member_keys[i]` — a stolen
 /// capability cannot vote, and the operator cannot relay approvals.

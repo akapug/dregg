@@ -1,7 +1,7 @@
 //! The `dregg://` web of cells — a link is a capability, a fetch is a verified
 //! attested cross-cell read.
 //!
-//! `docs/desktop-os-research/DISTRIBUTED-SERVO-FACETS.md` Facet 1, in one
+//! `.docs-history-noclaude/desktop-os-research/DISTRIBUTED-SERVO-FACETS.md` Facet 1, in one
 //! paragraph: the open web's link is a **location** (`https://host/path`) — you
 //! trust DNS to find the host, TLS to authenticate the host, and then you trust
 //! *whatever bytes the host hands back*. A `dregg://<cell>` link is not a location

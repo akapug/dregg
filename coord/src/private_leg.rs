@@ -1,7 +1,7 @@
 //! # PrivateLeg: tests for the witnessless-participant turn role.
 //!
 //! Exercises the Rust production-wiring of `Dregg2/Distributed/PrivateLeg.lean` (keystone
-//! `joint_turn_sound_with_private_legs`) and `docs/PRIVATE-OFFLINE-CELLS.md` §4/§7:
+//! `joint_turn_sound_with_private_legs`) and `metatheory/docs/PRIVATE-OFFLINE-CELLS.md` §4/§7:
 //!
 //!   * the commit-path verify-gate `MixedJoint::check_private_legs_admissible` — every private
 //!     leg's ZK proof verifies AND binds the shared `jid` (the Rust analog of the Lean

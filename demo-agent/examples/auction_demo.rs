@@ -213,7 +213,7 @@ fn main() {
     // Winner's bid note is spent (funds go to seller)
     let winner_nullifier = bid_note_b.nullifier(&bidder_b_key);
     nullifier_set
-        .insert(winner_nullifier)
+        .insert(winner_nullifier, bid_note_b.value())
         .expect("Winner spend should succeed");
     println!("  Winner (Bidder B) spends bid note");
     println!(
@@ -241,7 +241,7 @@ fn main() {
     // Bidder A refund
     let refund_a_nullifier = bid_note_a.nullifier(&bidder_a_key);
     nullifier_set
-        .insert(refund_a_nullifier)
+        .insert(refund_a_nullifier, bid_note_a.value())
         .expect("Refund A should succeed");
     let refund_note_a = Note::with_randomness(
         bidder_a_pubkey,
@@ -264,7 +264,7 @@ fn main() {
     // Bidder C refund
     let refund_c_nullifier = bid_note_c.nullifier(&bidder_c_key);
     nullifier_set
-        .insert(refund_c_nullifier)
+        .insert(refund_c_nullifier, bid_note_c.value())
         .expect("Refund C should succeed");
     let refund_note_c = Note::with_randomness(
         bidder_c_pubkey,
@@ -305,7 +305,7 @@ fn main() {
     println!("  Attack 2: Lower minimum_bid -> REJECTED (Immutable)");
 
     // Attempt 3: Double-spend the winner's bid
-    let double_spend = nullifier_set.insert(winner_nullifier);
+    let double_spend = nullifier_set.insert(winner_nullifier, bid_note_b.value());
     assert!(double_spend.is_err());
     println!("  Attack 3: Double-spend winner's bid -> REJECTED (nullifier already spent)");
 

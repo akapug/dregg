@@ -647,110 +647,9 @@ impl CustomWitnessBundle {
 // `dregg_turn::rotation_witness::mint_rotated_participant_leg`.
 
 impl RotatedParticipantLeg {
-    /// Build a [`RotatedParticipantLeg`] from already-produced rotated block witnesses
-    /// (the `before`/`after` `(pre_limbs, iroot)` pairs `rotation_witness::produce` yields)
-    /// — the PURE-CIRCUIT core of the rotated-leg mint, with NO `dregg-cell` / `dregg-turn`
-    /// dependency. The downstream `dregg_turn::rotation_witness::mint_rotated_participant_leg`
-    /// wrapper feeds this the `Cell`-derived witnesses.
-    ///
-    /// `turn_id`, when `Some`, overrides the `TURN_HASH` slot of the carried PI prefix (the
-    /// joint aggregator's shared-turn-id projection) — pass it for joint-turn participants that
-    /// must agree on a shared id; `None` lets the carried hash stand (whole-chain turns).
-    ///
-    /// Fails closed if the turn's effect is not a single rotated R=24 cohort member (the
-    /// generator rejects a non-cohort / empty / heterogeneous slice).
-    pub fn mint_from_block_witnesses(
-        initial_state: &dregg_circuit::effect_vm::CellState,
-        effects: &[dregg_circuit::effect_vm::Effect],
-        before: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
-        after: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
-        turn_id: Option<BabyBear>,
-    ) -> Result<RotatedParticipantLeg, String> {
-        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
-        use dregg_circuit::descriptor_ir2::{
-            UMemBoundaryWitness, prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
-        };
-        use dregg_circuit::effect_vm::trace_rotated::{
-            empty_caveat_manifest, generate_rotated_effect_vm_descriptor_and_trace_wide,
-            transfer_caveat_manifest,
-        };
-
-        // H0 DEPLOYED-WIDE FLIP: the deployed-default leaf is now the WIDE (8-felt / ~124-bit
-        // faithful commit) form. Previously this minted the narrow `*R24` descriptor (PI 46) whose
-        // sole state anchor was the single rotated commit felt (PI 42/43, ~31-bit-birthday under a
-        // whole-history fold). It now mints the wide twin via the SAME full-cohort dispatch the live
-        // SDK wide prover runs (`generate_rotated_effect_vm_descriptor_and_trace_wide`): a 62-PI
-        // vector whose last 16 PIs are the genuine 8-felt before/after commit anchors. The
-        // aggregation reads them through [`crate::ivc_turn_chain::turn_anchors8`] /
-        // [`leg_is_wide_anchored`] (now PI-length-keyed), so the whole-history genesis/final/continuity
-        // all bind the ~124-bit anchor.
-        //
-        // The value/field/create cohort rides the bare wide producer with NO special witnesses
-        // (`None` for the note-spend grow-gate nullifiers / refusal fields / cap-write tree). An
-        // effect that needs one of those (note-spend / refusal / the cap-WRITE attenuate family) is
-        // NOT served by this simple recipe — it routes through the dedicated wide minters
-        // (`mint_welded_wide_*` / `mint_custom_wide_*`); here it fails closed at the wide dispatcher
-        // rather than minting a 1-felt-anchored leg.
-        if effects.is_empty() {
-            return Err("mint_rotated_participant_leg: empty effect slice".to_string());
-        }
-        let caveat = match effects {
-            [dregg_circuit::effect_vm::Effect::Transfer { .. }] => transfer_caveat_manifest(),
-            _ => empty_caveat_manifest(),
-        };
-        let (wide_desc, wide_trace, mut dpis, map_heaps, mem_boundary) =
-            generate_rotated_effect_vm_descriptor_and_trace_wide(
-                initial_state,
-                effects,
-                before,
-                after,
-                &caveat,
-                None,
-                None,
-                None,
-                // Pure-circuit core: no BEFORE cell in hand — the committed transfer row's
-                // membership-teeth tail fills the ZERO pair (the no-caveat sentinel). The
-                // `dregg_turn` recipe wrapper threads the cell-derived pair.
-                None,
-            )
-            .map_err(|e| {
-                format!("mint_rotated_participant_leg: wide producer dispatch failed: {e}")
-            })?;
-
-        // Optional shared-turn-id override (joint participants). The EffectVm AIRs do not
-        // constrain TURN_HASH (it is an executor-trusted shared PI), so overriding the carried
-        // prefix slot and proving against the edited PI yields a still-valid proof binding the
-        // chosen id.
-        if let Some(tid) = turn_id {
-            dpis[pi::TURN_HASH_BASE] = tid;
-        }
-
-        let wrap_config = ir2_leaf_wrap_config();
-        let umem_boundary = UMemBoundaryWitness::default();
-        let proof = prove_vm_descriptor2_for_config(
-            &wide_desc,
-            &wide_trace,
-            &dpis,
-            &mem_boundary,
-            &map_heaps,
-            &umem_boundary,
-            &wrap_config,
-        )
-        .map_err(|e| format!("mint_rotated_participant_leg: wide IR-v2 batch prove failed: {e}"))?;
-        verify_vm_descriptor2_with_config(&wide_desc, &proof, &dpis, &wrap_config).map_err(
-            |e| format!("mint_rotated_participant_leg: minted wide proof self-verify failed: {e}"),
-        )?;
-
-        Ok(RotatedParticipantLeg {
-            proof,
-            descriptor: wide_desc,
-            public_inputs: dpis,
-            carrier_witness: None,
-        })
-    }
-
     /// **THE ROTATED+UMEM WELDED LEG MINT (STAGED, VK-RISK-FREE) — the IVC half of the flag-day
-    /// weld.** Like [`mint_from_block_witnesses`](Self::mint_from_block_witnesses), but the leg's
+    /// weld.** Like the plain rotated-leg mint (`dregg_turn::rotation_witness::
+    /// mint_rotated_participant_leg`), but the leg's
     /// descriptor is the WELDED rotated+umem form
     /// ([`dregg_circuit::effect_vm_descriptors::weld_umem_into_rotated_descriptor`]): the rotated
     /// cohort proof PLUS the universal-memory reconciliation leg (the cohort `umemOp` over 7
@@ -1358,7 +1257,7 @@ pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize,
     // (1) The rotated proof must verify against its carried descriptor over the carried PI
     //     vector (full standalone re-verify of the IR-v2 multi-table batch). The leg's proof is
     //     minted under the leaf-wrap config (recursion-config TYPE, `ir2_config`'s FRI knobs —
-    //     `RotatedParticipantLeg::mint_from_block_witnesses`), so it must be verified under THAT
+    //     `dregg_turn::rotation_witness::mint_rotated_participant_leg`), so it must be verified under THAT
     //     config, not the default `ir2_config()` (which is the `DreggStarkConfig` type).
     verify_vm_descriptor2_with_config(
         &leg.descriptor,

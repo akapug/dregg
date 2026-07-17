@@ -317,6 +317,9 @@ fn handle_move(state: &Mutex<Session>, body: &[u8]) -> WebResponse {
                 choice_index: index,
                 receipt: receipt.clone(),
                 state: s.world.snapshot(),
+                // Single-player `apply_choice` turn: nothing pinned in DECISION_EXT_KEY
+                // (`Some` is only for collective `advance_certified` turns).
+                decision_commitment: None,
             };
             s.steps.push(step);
             WebResponse::json(

@@ -21,9 +21,9 @@ Grep across `*.rs`, `*.toml`, `*.md` (case-insensitive) — 69 hits total. Bucke
 | `node/src/blocklace_sync.rs`      | 3    | comparison comments explaining "replaces Morpheus"            |
 | `node/src/state.rs`               | 1    | comment on `consensus_queue` field                            |
 | `demo/src/federation.rs`          | 1    | module-level comment                                          |
-| `docs/galaxybrain-dregg.md`       | 1    | architectural prose                                           |
-| `docs/protocol-sketch.md`         | 2    | architectural prose                                           |
-| `docs/midnight-comparison.md`     | 1    | comparison table cell                                         |
+| `.docs-history-noclaude/root-docs-2026-05/galaxybrain-dregg.md`       | 1    | architectural prose                                           |
+| `.docs-history-noclaude/protocol-sketch.md`         | 2    | architectural prose                                           |
+| `.docs-history-noclaude/root-docs-2026-05/midnight-comparison.md`     | 1    | comparison table cell                                         |
 
 ### Historical / out-of-scope (do not touch)
 
@@ -95,7 +95,7 @@ Strict criteria: unreferenced AND not behind a live feature flag AND build still
    - `node/src/blocklace_sync.rs:3,64,434` (already comparative — say "Replaces the prior BFT" instead of "Morpheus")
    - `node/src/state.rs:84` (comment on `consensus_queue`)
    - `demo/src/federation.rs:13` (referenced `dregg_federation` crate description)
-   - `docs/galaxybrain-dregg.md:214`, `docs/protocol-sketch.md:21,122`, `docs/midnight-comparison.md:12`
+   - `.docs-history-noclaude/root-docs-2026-05/galaxybrain-dregg.md:214`, `.docs-history-noclaude/protocol-sketch.md:21,122`, `.docs-history-noclaude/root-docs-2026-05/midnight-comparison.md:12`
 
 ### RENAME / MIGRATE (deferred — note only)
 

@@ -2,7 +2,7 @@
 # Dregg2.Circuit.Emit.EffectVmEmitRotationV3 — THE FULL-COHORT REGEN at the rotated block
 (R = 24, CONFIRMED), staged.
 
-`docs/ROTATION-CUTOVER.md` §5 item 1: the staged probes pin the rotated SHAPE; the 26
+`.docs-history-noclaude/ROTATION-CUTOVER.md` §5 item 1: the staged probes pin the rotated SHAPE; the 26
 per-effect descriptors still emit against the 186/14 layout. THIS module re-emits EVERY
 cohort member against the rotated 25+…-limb state block — as ONE parametric transformation
 (`rotateV3`), so the soundness keystones lift ONCE, for all 26, not per-descriptor:

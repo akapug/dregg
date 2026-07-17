@@ -6,7 +6,7 @@
 //!
 //! ## 1. The embedded web surface ([`delegate`])
 //!
-//! `docs/EMBEDDED-WEB-SURFACE.md`: a web page is the canonical piece of
+//! `.docs-history-noclaude/EMBEDDED-WEB-SURFACE.md`: a web page is the canonical piece of
 //! untrusted code that *wants ambient authority* — to fetch any origin, open any
 //! window, read any permission. dregg's thesis is that there is **no ambient
 //! authority**: every action is a held capability presented to a gate. libservo
@@ -22,7 +22,7 @@
 //!
 //! ## 2. The `dregg://` web of cells ([`web_of_cells`])
 //!
-//! `docs/desktop-os-research/DISTRIBUTED-SERVO-FACETS.md` Facet 1: the open web's
+//! `.docs-history-noclaude/desktop-os-research/DISTRIBUTED-SERVO-FACETS.md` Facet 1: the open web's
 //! link is a *location* (`https://host/path`) — you trust DNS to find the host,
 //! TLS to authenticate the host, then trust whatever bytes the host returns. A
 //! `dregg://<cell>` link is a *capability into a cell*: resolving it is a
@@ -112,7 +112,7 @@
 //!
 //! ## 7. The LIVE receipt stream — the cockpit goes live ([`receipt_stream`])
 //!
-//! `docs/NEXT-WAVE.md` item D: today a surface's organs (channel / mailbox /
+//! `.docs-history-noclaude/NEXT-WAVE.md` item D: today a surface's organs (channel / mailbox /
 //! court) are SNAPSHOTS. [`receipt_stream`] is the primitive that makes them
 //! **live reflections of the committing node** — a [`ReceiptStream`] is a
 //! subscription over the node's `GET /api/events/stream`

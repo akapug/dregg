@@ -7,7 +7,7 @@
 //! plus real cap-gated window ops through the firmament-backed [`crate::shell::Shell`].
 //! There is ZERO dependence on the cutover or seL4.
 //!
-//! `docs/FRONTIER-ROADMAP.md` §4 (the headline killer demo) is the script. The four
+//! `.docs-history-noclaude/FRONTIER-ROADMAP.md` §4 (the headline killer demo) is the script. The four
 //! frames + the dual refusal, in order:
 //!
 //!   1. **MINT** — a token/identity cell is born via factory-birth
@@ -38,7 +38,7 @@
 //!
 //! # Step 5 (DEFERRED — the pg Tier-B mirror read)
 //!
-//! `docs/FRONTIER-ROADMAP.md` §4 step 5 ("query the truth in SQL") reads B's narrowed
+//! `.docs-history-noclaude/FRONTIER-ROADMAP.md` §4 step 5 ("query the truth in SQL") reads B's narrowed
 //! authority from the pg-dregg Tier-B mirror. That is N2 / the pg-dregg lane and is
 //! **deliberately not wired here** (it needs a live postgres mirror, outside this
 //! crate's ownership). It is surfaced as a follow-up, not blocked on — the four frames

@@ -17,9 +17,15 @@
 //!    FREE tier (ollama/scripted) — the paid backend is never free-ridden.
 //!
 //! **Safety.** Nothing mainnet is hardcoded: the mint/treasury/seed are operator config
-//! ([`PayConfig::from_env`]); the bot defaults to a DEVNET/MOCK config with a throwaway
-//! seed and a [`MockWatcher`] for the interim. The watcher/sweeper holding the custody seed
-//! ideally run as a separate operator service; the bot polls a mock/devnet watcher until then.
+//! ([`PayConfig::from_env`]); with no operator env the bot falls back to a DEVNET/MOCK
+//! config with a throwaway seed and a [`MockWatcher`]. **The watcher is selected by
+//! config** ([`select_watcher`]): an operator-supplied config gets the REAL
+//! [`SolanaWatcher`] over the configured RPC — watch-only (it reads token-account state,
+//! holds no key, and never touches the seed) — while the mock is reachable ONLY
+//! explicitly (the no-env devnet fallback, or `DREGG_PAY_MOCK=1` on a non-mainnet
+//! network). A mainnet config can never ride the mock, and a mainnet config without a
+//! real RPC fails loudly at construction — never a silent mock on a real network. The
+//! SWEEPER holding the custody seed still runs as a separate operator service.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,9 +36,10 @@ use dregg_narrator::{
     metered_converse,
 };
 use dregg_pay::{
-    ChainId, CreditLedger, CreditOutcome, CreditStore, DepositAddress, DepositAddressProvider,
-    HdDeposit, MultichainHoldings, Network, PayConfig, PaymentRef, ProvenForeignHolding, Treasury,
-    TreasuryError, TreasurySlot, TreasuryStore, TreasuryView, UserId, WatchError, Watcher,
+    AccountFetcher, ChainId, CreditLedger, CreditOutcome, CreditStore, DepositAddress,
+    DepositAddressProvider, FetchedAccount, HdDeposit, MockChain, MockWatcher, MultichainHoldings,
+    Network, PayConfig, PaymentRef, ProvenForeignHolding, SolanaWatcher, Treasury, TreasuryError,
+    TreasurySlot, TreasuryStore, TreasuryView, UserId, WatchError, Watcher,
 };
 
 use crate::db::Database;
@@ -245,7 +252,10 @@ pub struct PayState {
     pub hd: HdDeposit,
     /// The per-user run-credit ledger over the sqlite [`SqliteCreditStore`].
     pub ledger: CreditLedger<SqliteCreditStore>,
-    /// The payment watcher — [`MockWatcher`] on devnet (interim), a Solana watcher for prod.
+    /// The payment watcher, SELECTED BY CONFIG ([`select_watcher`]): the real
+    /// [`SolanaWatcher`] over the configured RPC for an operator-supplied config
+    /// (watch-only — no key, no seed), a [`MockWatcher`] only on the explicit
+    /// devnet/mock paths. A mainnet config never rides the mock.
     pub watcher: Arc<dyn Watcher + Send + Sync>,
     /// The bot database (for the user→deposit-index map).
     pub db: Database,
@@ -431,7 +441,8 @@ impl PayState {
     /// A minimal DEVNET/MOCK pay state with NO hosted backend (paid runs fall back to the free
     /// tier). Never touches AWS or the network — for constructing a `BotState` in contexts that do
     /// not exercise paid narration (e.g. the HTTP-surface tests). Does not query the store, so it is
-    /// safe to build from any runtime flavor.
+    /// safe to build from any runtime flavor. The [`MockWatcher`] here is EXPLICIT — it is this
+    /// constructor's honest name, and the config is always the devnet/mock fallback.
     pub fn devnet_mock_no_backend(
         db: Database,
         bot_secret: &[u8; 32],
@@ -441,8 +452,7 @@ impl PayState {
         let hd = HdDeposit::new(&config);
         let store = SqliteCreditStore::new(db.clone(), handle.clone());
         let ledger = CreditLedger::new(store, config.price_per_run.max(1));
-        let watcher: Arc<dyn Watcher + Send + Sync> =
-            Arc::new(dregg_pay::MockWatcher::new(dregg_pay::MockChain::new()));
+        let watcher: Arc<dyn Watcher + Send + Sync> = Arc::new(MockWatcher::new(MockChain::new()));
         let treasury = Treasury::new(
             SqliteTreasuryStore::new(db.clone(), handle),
             config.usdc_decimals,
@@ -464,9 +474,16 @@ impl PayState {
     ///
     /// * [`PayConfig::from_env`] is used when the `DREGG_PAY_*` env is set (the operator path, the
     ///   only route to mainnet); otherwise a devnet config with a THROWAWAY seed derived from the
-    ///   bot secret and placeholder (non-mainnet) mint/treasury.
-    /// * The watcher is a [`MockWatcher`] for the interim (the bot polls a mock/devnet watcher; the
-    ///   real seed-holding Solana watcher/sweeper run as a separate operator service).
+    ///   bot secret and placeholder (non-mainnet) mint/treasury. If `DREGG_PAY_NETWORK=mainnet`
+    ///   is set but the config is incomplete, this PANICS naming the missing piece — a requested
+    ///   real network never silently rides the devnet/mock fallback.
+    /// * **The watcher is selected by config** ([`select_watcher`]): an operator-supplied config
+    ///   gets the REAL [`SolanaWatcher`] over `DREGG_PAY_RPC` (watch-only — it observes deposit
+    ///   addresses over JSON-RPC and never touches the custody seed; the seed-holding SWEEPER is
+    ///   a separate operator service). The [`MockWatcher`] is reachable ONLY explicitly: the
+    ///   no-env devnet fallback, or `DREGG_PAY_MOCK=1` on a non-mainnet network. A mainnet
+    ///   config with the mock flag, or without a real RPC, PANICS at construction (fail loud,
+    ///   never a silent mock on a real network).
     /// * The paid narrator is wired to real Bedrock when AWS creds appear present; otherwise `None`
     ///   (paid runs fall back to the free tier).
     pub fn from_env_or_devnet(
@@ -474,12 +491,39 @@ impl PayState {
         bot_secret: &[u8; 32],
         handle: tokio::runtime::Handle,
     ) -> PayState {
-        let config = PayConfig::from_env().unwrap_or_else(|_| devnet_mock_config(bot_secret));
+        let (config, from_operator_env) = match PayConfig::from_env() {
+            Ok(config) => (config, true),
+            Err(e) => {
+                // The fallback is DEVNET/MOCK. If the operator ASKED for mainnet, an
+                // incomplete config must fail loud — never a mock silently watching
+                // (i.e. not watching) a real network's money.
+                if matches!(std::env::var("DREGG_PAY_NETWORK").as_deref(), Ok("mainnet")) {
+                    panic!(
+                        "DREGG_PAY_NETWORK=mainnet but the pay config is incomplete ({e}); \
+                         refusing the devnet/mock fallback on a real-network request — set the \
+                         missing DREGG_PAY_* variable or unset DREGG_PAY_NETWORK"
+                    );
+                }
+                (devnet_mock_config(bot_secret), false)
+            }
+        };
+        let selected = select_watcher(
+            &config,
+            from_operator_env,
+            explicit_mock_flag(),
+            handle.clone(),
+        )
+        .unwrap_or_else(|e| panic!("pay watcher construction refused: {e}"));
+        tracing::info!(
+            "Pay watcher selected: {} (network={:?}, rpc={})",
+            selected.kind(),
+            config.network,
+            config.rpc_endpoint
+        );
+        let watcher = selected.into_watcher();
         let hd = HdDeposit::new(&config);
         let store = SqliteCreditStore::new(db.clone(), handle.clone());
         let ledger = CreditLedger::new(store, config.price_per_run.max(1));
-        let watcher: Arc<dyn Watcher + Send + Sync> =
-            Arc::new(dregg_pay::MockWatcher::new(dregg_pay::MockChain::new()));
         let paid = build_bedrock_narrator();
         let treasury = Treasury::new(
             SqliteTreasuryStore::new(db.clone(), handle),
@@ -496,6 +540,286 @@ impl PayState {
             treasury,
             treasury_view,
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Watcher selection — the REAL SolanaWatcher by config; the mock only EXPLICITLY.
+//
+// The healed sin: both PayState constructors used to build a MockWatcher
+// UNCONDITIONALLY, so a Mainnet config handed out real deposit addresses that
+// NOTHING watched. Selection is now a pure, tested function of the config.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The devnet default RPC endpoint `PayConfig` falls back to when `DREGG_PAY_RPC` is
+/// unset. On a MAINNET config this default means "no real RPC was configured" — a
+/// mainnet watcher pointed at devnet observes nothing real, which is the same
+/// unwatched-money sin — so selection treats it as missing and fails loud.
+const DEVNET_DEFAULT_RPC: &str = "https://api.devnet.solana.com";
+
+/// `DREGG_PAY_MOCK=1` (or `true`) — the ONLY named flag that puts an
+/// operator-supplied non-mainnet config on the [`MockWatcher`].
+fn explicit_mock_flag() -> bool {
+    matches!(
+        std::env::var("DREGG_PAY_MOCK").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+/// Why watcher construction was REFUSED. Loud and named — never a silent mock on a
+/// real-network config.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WatcherSelectError {
+    /// `DREGG_PAY_MOCK` was set on a MAINNET config. Real funds never ride the mock,
+    /// even on request — that combination is a misconfiguration, not a choice.
+    MockOnMainnet,
+    /// The network is real but no usable RPC endpoint was configured (empty, or —
+    /// on mainnet — still the devnet default, i.e. `DREGG_PAY_RPC` was never set).
+    RpcMissing {
+        /// The network that demanded a real RPC.
+        network: Network,
+        /// The endpoint that was rejected (empty or the devnet default).
+        endpoint: String,
+    },
+}
+
+impl std::fmt::Display for WatcherSelectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WatcherSelectError::MockOnMainnet => write!(
+                f,
+                "DREGG_PAY_MOCK is set on a MAINNET config — real funds never ride the \
+                 mock watcher; unset DREGG_PAY_MOCK or set DREGG_PAY_NETWORK=devnet"
+            ),
+            WatcherSelectError::RpcMissing { network, endpoint } => write!(
+                f,
+                "network={network:?} needs a real Solana RPC endpoint but DREGG_PAY_RPC \
+                 is not usable (got {endpoint:?}); set DREGG_PAY_RPC to your cluster's \
+                 JSON-RPC URL"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WatcherSelectError {}
+
+/// The watcher [`select_watcher`] chose — kept concrete so callers (and tests) can
+/// see WHICH path was selected before erasing to `Arc<dyn Watcher>`.
+pub enum SelectedWatcher {
+    /// The REAL path: [`SolanaWatcher`] over JSON-RPC. Watch-only — it reads SPL
+    /// token-account state for the deposit addresses; it holds no key and never
+    /// touches `DREGG_PAY_SEED`.
+    RealSolana(SolanaWatcher<RpcAccountFetcher>),
+    /// The explicit devnet/mock path: [`MockWatcher`] over a fresh [`MockChain`].
+    Mock(MockWatcher),
+}
+
+impl SelectedWatcher {
+    /// `true` on the real Solana-RPC path.
+    pub fn is_real(&self) -> bool {
+        matches!(self, SelectedWatcher::RealSolana(_))
+    }
+
+    /// The honest label surfaced in the boot log.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            SelectedWatcher::RealSolana(_) => "solana-rpc (real, watch-only)",
+            SelectedWatcher::Mock(_) => "mock (explicit devnet/mock)",
+        }
+    }
+
+    /// Erase to the trait object [`PayState`] polls.
+    pub fn into_watcher(self) -> Arc<dyn Watcher + Send + Sync> {
+        match self {
+            SelectedWatcher::RealSolana(w) => Arc::new(w),
+            SelectedWatcher::Mock(w) => Arc::new(w),
+        }
+    }
+}
+
+/// **Select the payment watcher from the config** — pure in its inputs, so the rule
+/// is directly testable (no env mutation):
+///
+/// * **Mainnet** ⇒ the REAL [`SolanaWatcher`] over the configured RPC, always.
+///   `explicit_mock` on mainnet is refused ([`WatcherSelectError::MockOnMainnet`]);
+///   an empty RPC or the untouched devnet default is refused
+///   ([`WatcherSelectError::RpcMissing`]). Never a silent mock, never a mainnet
+///   watcher pointed at devnet.
+/// * **Devnet, operator-supplied config** (`from_operator_env`) ⇒ the REAL watcher
+///   against the configured (devnet) RPC — the operator named a real mint on a real
+///   cluster — unless `explicit_mock` asks for the [`MockWatcher`] by name.
+/// * **Devnet fallback config** (no `DREGG_PAY_*` env; `from_operator_env == false`)
+///   ⇒ the [`MockWatcher`]. The fallback's mint/treasury are throwaway blake3
+///   derivations that exist on NO cluster, so a real watcher there would be
+///   meaningless; the mock is the honest labeled interim.
+///
+/// Construction is watch-only and offline: it builds the RPC client but performs no
+/// network call until the first [`Watcher::poll`]. It never reads the seed.
+pub fn select_watcher(
+    config: &PayConfig,
+    from_operator_env: bool,
+    explicit_mock: bool,
+    handle: tokio::runtime::Handle,
+) -> Result<SelectedWatcher, WatcherSelectError> {
+    let rpc = config.rpc_endpoint.trim();
+    if config.network.is_mainnet() {
+        if explicit_mock {
+            return Err(WatcherSelectError::MockOnMainnet);
+        }
+        if rpc.is_empty() || rpc == DEVNET_DEFAULT_RPC {
+            return Err(WatcherSelectError::RpcMissing {
+                network: config.network,
+                endpoint: config.rpc_endpoint.clone(),
+            });
+        }
+        return Ok(SelectedWatcher::RealSolana(SolanaWatcher::new(
+            config,
+            RpcAccountFetcher::new(rpc, handle),
+        )));
+    }
+    // Non-mainnet: the mock is allowed, but only EXPLICITLY — the bot's own no-env
+    // devnet fallback, or the named DREGG_PAY_MOCK flag.
+    if explicit_mock || !from_operator_env {
+        return Ok(SelectedWatcher::Mock(MockWatcher::new(MockChain::new())));
+    }
+    if rpc.is_empty() {
+        return Err(WatcherSelectError::RpcMissing {
+            network: config.network,
+            endpoint: config.rpc_endpoint.clone(),
+        });
+    }
+    Ok(SelectedWatcher::RealSolana(SolanaWatcher::new(
+        config,
+        RpcAccountFetcher::new(rpc, handle),
+    )))
+}
+
+/// The production [`AccountFetcher`]: Solana JSON-RPC `getTokenAccountsByOwner`
+/// (`finalized` commitment, base64 encoding) over the configured endpoint. This is
+/// the injected-transport seam [`SolanaWatcher`] polls through.
+///
+/// **Watch-only.** It READS the deposit wallet's SPL token account (balance + owner
+/// program + slot); it holds no keypair, signs nothing, and never sees
+/// `DREGG_PAY_SEED`. Everything trust-bearing (SPL-program ownership, mint match,
+/// token-owner attribution) is re-checked fail-closed by [`SolanaWatcher::poll`] on
+/// the DECODED bytes — the RPC's word is transport, not proof.
+///
+/// The [`Watcher`] trait is sync but the bot's HTTP client is async, so each fetch
+/// drives the request to completion via the same `block_in_place` bridge
+/// [`SqliteCreditStore::block`] uses (the bot runs the multi-thread runtime).
+pub struct RpcAccountFetcher {
+    client: reqwest::Client,
+    endpoint: String,
+    handle: tokio::runtime::Handle,
+}
+
+impl RpcAccountFetcher {
+    /// A fetcher against `endpoint`. Builds the client only — no network call here.
+    pub fn new(endpoint: impl Into<String>, handle: tokio::runtime::Handle) -> Self {
+        RpcAccountFetcher {
+            client: reqwest::Client::new(),
+            endpoint: endpoint.into(),
+            handle,
+        }
+    }
+
+    /// The endpoint this fetcher polls.
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    /// Drive an async future to completion from the sync `Watcher::poll` — the same
+    /// sync↔async bridge as [`SqliteCreditStore::block`].
+    fn block<F: std::future::Future>(&self, fut: F) -> F::Output {
+        match tokio::runtime::Handle::try_current() {
+            Ok(current) => tokio::task::block_in_place(move || current.block_on(fut)),
+            Err(_) => self.handle.block_on(fut),
+        }
+    }
+}
+
+impl AccountFetcher for RpcAccountFetcher {
+    fn fetch_token_account(
+        &self,
+        owner: &DepositAddress,
+        mint: &[u8; 32],
+    ) -> Result<Option<FetchedAccount>, WatchError> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTokenAccountsByOwner",
+            "params": [
+                owner.to_base58(),
+                { "mint": bs58::encode(mint).into_string() },
+                { "encoding": "base64", "commitment": "finalized" },
+            ],
+        });
+        let resp: serde_json::Value = self.block(async {
+            self.client
+                .post(&self.endpoint)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| WatchError::Rpc(format!("rpc send to {}: {e}", self.endpoint)))?
+                .error_for_status()
+                .map_err(|e| WatchError::Rpc(format!("rpc http status: {e}")))?
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| WatchError::Rpc(format!("rpc response not json: {e}")))
+        })?;
+        if let Some(err) = resp.get("error") {
+            return Err(WatchError::Rpc(format!("rpc error: {err}")));
+        }
+        let result = resp
+            .get("result")
+            .ok_or_else(|| WatchError::Rpc("rpc response missing `result`".to_string()))?;
+        let slot = result
+            .pointer("/context/slot")
+            .and_then(|s| s.as_u64())
+            .ok_or_else(|| WatchError::Rpc("rpc response missing `context.slot`".to_string()))?;
+        let value = result
+            .get("value")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| WatchError::Rpc("rpc response missing `value` array".to_string()))?;
+        // No token account for this (owner, mint) yet — nothing landed. NOT an error.
+        let Some(entry) = value.first() else {
+            return Ok(None);
+        };
+        let account = entry
+            .get("account")
+            .ok_or_else(|| WatchError::Rpc("rpc entry missing `account`".to_string()))?;
+        let data_b64 = account
+            .pointer("/data/0")
+            .and_then(|d| d.as_str())
+            .ok_or_else(|| WatchError::Rpc("rpc account missing base64 `data`".to_string()))?;
+        let encoding = account.pointer("/data/1").and_then(|d| d.as_str());
+        if encoding != Some("base64") {
+            return Err(WatchError::Rpc(format!(
+                "rpc account data encoding is {encoding:?}, expected base64"
+            )));
+        }
+        use base64::Engine as _;
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(data_b64)
+            .map_err(|e| WatchError::Rpc(format!("rpc account data not base64: {e}")))?;
+        let owner_program_b58 = account
+            .get("owner")
+            .and_then(|o| o.as_str())
+            .ok_or_else(|| WatchError::Rpc("rpc account missing `owner` program".to_string()))?;
+        let owner_program: [u8; 32] = bs58::decode(owner_program_b58)
+            .into_vec()
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .ok_or_else(|| {
+                WatchError::Rpc(format!(
+                    "rpc account `owner` program not a 32-byte base58 key: {owner_program_b58}"
+                ))
+            })?;
+        Ok(Some(FetchedAccount {
+            data,
+            owner_program,
+            slot,
+        }))
     }
 }
 
@@ -1124,6 +1448,224 @@ mod tests {
             held.total_amount(),
             held.chains_proven(),
             held.rejected.len()
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Watcher SELECTION — the healed sin. A real-network config must get the
+    // REAL SolanaWatcher; the mock only explicitly; misconfig fails LOUD, never
+    // a silent mock. `select_watcher` is pure in its inputs, so these tests
+    // mutate no env and touch no network (construction never polls).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// A throwaway config (never mainnet values) with the network/RPC under test.
+    fn selection_cfg(network: Network, rpc: &str) -> PayConfig {
+        let mut c = PayConfig::devnet_mock(
+            *b"seedseedseedseedseedseedseedseed",
+            [9u8; 32],
+            DepositAddress([2u8; 32]),
+            100,
+        );
+        c.network = network;
+        c.rpc_endpoint = rpc.to_string();
+        c
+    }
+
+    /// A MAINNET config with a configured RPC selects the REAL watcher — the
+    /// exact case that used to silently ride the mock.
+    #[tokio::test]
+    async fn mainnet_config_selects_the_real_solana_watcher() {
+        let cfg = selection_cfg(Network::Mainnet, "https://rpc.mainnet.example.invalid");
+        let selected = select_watcher(&cfg, true, false, tokio::runtime::Handle::current())
+            .expect("a mainnet config with an RPC constructs the real watcher");
+        assert!(selected.is_real(), "mainnet must get the REAL watcher");
+        assert_eq!(selected.kind(), "solana-rpc (real, watch-only)");
+    }
+
+    /// The mock flag on a MAINNET config is REFUSED — real funds never ride the
+    /// mock, even on request.
+    #[tokio::test]
+    async fn mainnet_never_rides_the_mock_even_explicitly() {
+        let cfg = selection_cfg(Network::Mainnet, "https://rpc.mainnet.example.invalid");
+        let err = select_watcher(&cfg, true, true, tokio::runtime::Handle::current())
+            .expect_err("DREGG_PAY_MOCK on mainnet must refuse");
+        assert_eq!(err, WatcherSelectError::MockOnMainnet);
+        assert!(
+            err.to_string().contains("DREGG_PAY_MOCK"),
+            "the refusal names the flag: {err}"
+        );
+    }
+
+    /// A MAINNET config with no usable RPC (empty, or the untouched devnet
+    /// default meaning DREGG_PAY_RPC was never set) fails LOUD at construction,
+    /// naming DREGG_PAY_RPC — never a silent mock, never a mainnet watcher
+    /// pointed at devnet.
+    #[tokio::test]
+    async fn mainnet_without_a_real_rpc_fails_loud_not_mock() {
+        for rpc in ["", "  ", DEVNET_DEFAULT_RPC] {
+            let cfg = selection_cfg(Network::Mainnet, rpc);
+            let err = select_watcher(&cfg, true, false, tokio::runtime::Handle::current())
+                .expect_err("mainnet with no real RPC must refuse construction");
+            assert!(
+                matches!(err, WatcherSelectError::RpcMissing { .. }),
+                "expected RpcMissing for rpc={rpc:?}, got {err:?}"
+            );
+            assert!(
+                err.to_string().contains("DREGG_PAY_RPC"),
+                "the error names what is missing: {err}"
+            );
+        }
+    }
+
+    /// An OPERATOR-supplied devnet config (env-configured mint + cluster) gets
+    /// the real watcher against the devnet RPC by default.
+    #[tokio::test]
+    async fn operator_devnet_config_gets_the_real_watcher() {
+        let cfg = selection_cfg(Network::Devnet, DEVNET_DEFAULT_RPC);
+        let selected = select_watcher(&cfg, true, false, tokio::runtime::Handle::current())
+            .expect("an operator devnet config constructs the real watcher");
+        assert!(selected.is_real());
+    }
+
+    /// The explicit mock flag on a NON-mainnet config selects the mock — the
+    /// named, honest testing path.
+    #[tokio::test]
+    async fn explicit_mock_flag_selects_the_mock_on_devnet() {
+        let cfg = selection_cfg(Network::Devnet, DEVNET_DEFAULT_RPC);
+        let selected = select_watcher(&cfg, true, true, tokio::runtime::Handle::current())
+            .expect("explicit mock on devnet is allowed");
+        assert!(!selected.is_real());
+        assert_eq!(selected.kind(), "mock (explicit devnet/mock)");
+    }
+
+    /// The no-env devnet FALLBACK config (throwaway blake3 mint that exists on
+    /// no cluster) stays on the mock — the labeled interim, not a silent one.
+    #[tokio::test]
+    async fn no_env_devnet_fallback_stays_mock() {
+        let cfg = selection_cfg(Network::Devnet, DEVNET_DEFAULT_RPC);
+        let selected = select_watcher(&cfg, false, false, tokio::runtime::Handle::current())
+            .expect("the devnet fallback constructs the mock");
+        assert!(!selected.is_real());
+    }
+
+    /// An operator devnet config with an EMPTY RPC also fails loud (not mock).
+    #[tokio::test]
+    async fn operator_devnet_with_empty_rpc_fails_loud() {
+        let cfg = selection_cfg(Network::Devnet, "");
+        let err = select_watcher(&cfg, true, false, tokio::runtime::Handle::current())
+            .expect_err("an operator config with no RPC must refuse");
+        assert!(matches!(err, WatcherSelectError::RpcMissing { .. }));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // The REAL transport, polled — a local mock Solana JSON-RPC server. The
+    // HTTP + JSON-RPC + base64 + SPL-layout decode path is the production one;
+    // only the cluster behind the socket is canned. NEVER a real cluster.
+    // (The live `solana-test-validator` round-trip — real cluster software,
+    // still no real funds — is the named residual; see the lane report.)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// The deposit address the mock RPC simulates an outage for.
+    const RPC_OUTAGE_OWNER: [u8; 32] = [0xEE; 32];
+
+    /// A canned Solana JSON-RPC `getTokenAccountsByOwner`: echoes the queried
+    /// (owner, mint) back as a real 165-byte SPL token-account layout holding a
+    /// finalized balance of 750, owned by the SPL Token program — exactly the
+    /// shape a real RPC returns. The outage owner returns a JSON-RPC error.
+    async fn mock_solana_rpc(
+        axum::Json(req): axum::Json<serde_json::Value>,
+    ) -> axum::Json<serde_json::Value> {
+        assert_eq!(
+            req["method"], "getTokenAccountsByOwner",
+            "the fetcher issues getTokenAccountsByOwner"
+        );
+        let owner: [u8; 32] = bs58::decode(req["params"][0].as_str().unwrap())
+            .into_vec()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        if owner == RPC_OUTAGE_OWNER {
+            return axum::Json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "error": { "code": -32000, "message": "simulated rpc outage" },
+            }));
+        }
+        let mint: [u8; 32] = bs58::decode(req["params"][1]["mint"].as_str().unwrap())
+            .into_vec()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let mut data = vec![0u8; 165];
+        data[0..32].copy_from_slice(&mint);
+        data[32..64].copy_from_slice(&owner);
+        data[64..72].copy_from_slice(&750u64.to_le_bytes());
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+        axum::Json(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {
+                "context": { "apiVersion": "2.3.0", "slot": 424_242 },
+                "value": [{
+                    "pubkey": bs58::encode([7u8; 32]).into_string(),
+                    "account": {
+                        "data": [b64, "base64"],
+                        "executable": false,
+                        "lamports": 2_039_280u64,
+                        "owner": bs58::encode(dregg_pay::config::SPL_TOKEN_PROGRAM_ID)
+                            .into_string(),
+                        "rentEpoch": 0,
+                    },
+                }],
+            },
+        }))
+    }
+
+    /// The mainnet-selected REAL watcher, polled through the production
+    /// `RpcAccountFetcher` transport: observes the finalized balance as one
+    /// attributed payment, dedups on re-poll, and surfaces a transport failure
+    /// as a WatchError (fail closed) — never a silent empty poll.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn real_watcher_polls_through_the_rpc_transport_and_dedups() {
+        let app = axum::Router::new().route("/", axum::routing::post(mock_solana_rpc));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let cfg = selection_cfg(Network::Mainnet, &endpoint);
+        let selected = select_watcher(&cfg, true, false, tokio::runtime::Handle::current())
+            .expect("mainnet + rpc constructs the real watcher");
+        let SelectedWatcher::RealSolana(watcher) = selected else {
+            panic!("mainnet must select the real watcher");
+        };
+
+        let user = UserId::from("alice");
+        let deposit = DepositAddress([1u8; 32]);
+        let got = watcher.poll(&user, &deposit).unwrap();
+        assert_eq!(got.len(), 1, "one finalized payment observed");
+        assert_eq!(got[0].amount, 750);
+        assert_eq!(got[0].asset, Asset::Dregg);
+        assert_eq!(got[0].user, user);
+        assert!(
+            got[0].reference.0.contains("424242"),
+            "the payment ref binds the finalized slot: {}",
+            got[0].reference
+        );
+
+        // Same finalized balance on re-poll ⇒ nothing new (watcher-level dedup).
+        assert!(
+            watcher.poll(&user, &deposit).unwrap().is_empty(),
+            "re-poll at the same balance credits nothing"
+        );
+
+        // A transport failure is an ERROR the caller sees, not a silent empty.
+        let outage = DepositAddress(RPC_OUTAGE_OWNER);
+        assert!(
+            matches!(watcher.poll(&user, &outage), Err(WatchError::Rpc(_))),
+            "an RPC failure fails closed"
+        );
+        println!(
+            "[real-transport] getTokenAccountsByOwner → SPL decode → 750 credited once, \
+             deduped, outage fails closed"
         );
     }
 }

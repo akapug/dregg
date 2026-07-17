@@ -1,6 +1,6 @@
 // proving-client.js — the page-side promise wrapper around the proving Worker.
 //
-// `docs/WEB-FORWARD-EVERYWHERE.md §(a)`. The page calls
+// `.docs-history-noclaude/WEB-FORWARD-EVERYWHERE.md §(a)`. The page calls
 // `await provingClient.lightClientDemo(2, 100n)` (or `.verifyHistoryAgainstAnchor`,
 // etc.) and the heavy STARK fold runs OFF the main thread in `prove-worker.js`; the
 // UI stays responsive while it works. Each call returns a Promise resolved with the

@@ -28,3 +28,6 @@ hex = "0.4"
 # (the ed25519 fixture path) but not run live proofs or verify live-carrier proofs.
 default = ["live"]
 live = ["dregg-zkoracle-prove/tlsn-live"]
+
+[lints]
+workspace = true

@@ -8,7 +8,7 @@
  * idiomatically from TS. It binds what pg-dregg actually ships — it does not
  * invent a surface.
  *
- * THE MODEL pg-dregg enforces (`docs/PG-DREGG.md` §8, the spine):
+ * THE MODEL pg-dregg enforces (`.docs-history-noclaude/PG-DREGG.md` §8, the spine):
  *
  * > Reads are free SQL; state mutates ONLY through verified turns.
  *
@@ -17,7 +17,7 @@
  * - **connect** — {@link Pg.connect} wraps a `pg`/`node-postgres`-style client.
  *   Presenting a capability token ({@link Pg.presentToken}) sets the
  *   `dregg.token` session GUC and assumes `dregg_reader`, so Row-Level Security
- *   bites (a superuser BYPASSes RLS — `docs/QUICKSTART-pg-user.md` §2).
+ *   bites (a superuser BYPASSes RLS — `pg-dregg/docs/QUICKSTART-pg-user.md` §2).
  * - **submit a verified turn** — {@link Pg.submitTurn} enqueues a signed turn
  *   via the real `dregg_submit_turn(signed_turn, agent)` extern (RLS-gated by
  *   `dregg_admits('submit', …)`). The node's §11.4 drainer applies it through
@@ -26,7 +26,7 @@
  *   {@link Pg.cellBalances} (`dregg.cell_balances`), {@link Pg.receiptChain}
  *   (`dregg.receipt_chain`), {@link Pg.capEdges} (`dregg.cap_edges`).
  * - **federation health** — {@link Pg.federationHealth} calls the real
- *   `dregg_federation_health()` (`docs/PG-DREGG.md` §15).
+ *   `dregg_federation_health()` (`.docs-history-noclaude/PG-DREGG.md` §15).
  * - **dev-mint / issuer-status** — {@link Pg.devMint} (`dregg_dev_mint`, DEV
  *   ONLY) and {@link Pg.issuerStatus} (`dregg_issuer_status`).
  *
@@ -368,7 +368,7 @@ export class Pg {
 
   /**
    * Submit a SIGNED turn FROM postgres via `dregg_submit_turn(signed_turn,
-   * agent)` (`docs/PG-DREGG.md` §11). `signedTurn` is the postcard `SignedTurn`
+   * agent)` (`.docs-history-noclaude/PG-DREGG.md` §11). `signedTurn` is the postcard `SignedTurn`
    * bytes; `agent` is the turn's agent cell id.
    *
    * Enqueues into `dregg.submit_queue` and returns the submission `uuid`. The
@@ -474,7 +474,7 @@ export class Pg {
 
   /**
    * `dregg_federation_health()` — the subscriber-side federation health check
-   * (`docs/PG-DREGG.md` §15): the pg18 apply-conflict counters DRIVE the chain
+   * (`.docs-history-noclaude/PG-DREGG.md` §15): the pg18 apply-conflict counters DRIVE the chain
    * re-validation. Returns the one-line verdict (`'ok: …'` / `'ALARM …'` /
    * `'CRITICAL …'`).
    */

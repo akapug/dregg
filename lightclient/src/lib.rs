@@ -12,12 +12,13 @@
 //! This is the executable counterpart of the Lean theorem
 //! `Dregg2.Circuit.RecursiveAggregation.light_client_verifies_whole_history`. Under `EngineSound` —
 //! the plonky3 FRI obligation `recursive_sound`, the EffectVm circuit⟺executor obligation
-//! `leaf_sound`, the `TurnChainBindingAir` obligation `binding_sound` — verifying `agg.root` yields
-//! `AggregateAttests`. What the fold discharges in-circuit:
+//! `leaf_sound`, and the Lean-emitted turn-chain descriptor obligation `binding_sound` — verifying
+//! `agg.root` plus the carried descriptor proof yields `AggregateAttests`. What the deployed
+//! verifier checks:
 //!
 //! - `binding_sound` — ordering (no reorder/drop/insert, the temporal tooth `new_root[i] ==
-//!   old_root[i+1]`) and the final root as the genuine fold, via the wrapped `TurnChainBindingAir`
-//!   leaf;
+//!   old_root[i+1]`) and the final root as the genuine fold, via the directly verified
+//!   `dregg-turn-chain-binding-v2` descriptor proof;
 //! - `leaf_sound` — **the folded leaves ARE the turn circuits**: each leaf is the Lean-descriptor
 //!   EffectVM AIR (`EffectVmDescriptorAir`, the graduated ONE-circuit cutover constraint set —
 //!   Poseidon2 state-commit hash sites, transition continuity, `OLD/NEW_COMMIT` PI bindings, range

@@ -94,3 +94,6 @@ required-features = ["tlsn-live"]
 [[example]]
 name = "coinbase_inproc"
 required-features = ["tlsn-live"]
+
+[lints]
+workspace = true

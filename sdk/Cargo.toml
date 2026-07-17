@@ -25,7 +25,7 @@ dregg-turn = { path = "../turn" }
 dregg-payable = { path = "../dregg-payable" }
 starbridge-polis = { path = "../starbridge-apps/polis" }
 dregg-bridge = { path = "../bridge" }
-# UNCONDITIONAL (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): THE SWAP producer-mode
+# UNCONDITIONAL (polarity-inverted, .docs-history-noclaude/FEATURE-HYGIENE.md §Lean): THE SWAP producer-mode
 # path. The verified Lean executor (via `dregg_turn::lean_apply`) and the `dregg-lean-ffi`
 # runtime are compiled into every native build, so `AgentRuntime` makes the verified
 # executor the authoritative state producer (runtime-gated by `DREGG_LEAN_PRODUCER`,

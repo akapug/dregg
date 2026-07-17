@@ -1,6 +1,6 @@
 //! End-to-end teeth for IDENTITY PRE-ROTATION on the REAL executor.
 //!
-//! The identity rider (`docs/ORGANS.md`): every key-state event in an
+//! The identity rider (`.docs-history-noclaude/ORGANS.md`): every key-state event in an
 //! identity cell commits to the digest of the NEXT, unexposed key set;
 //! rotation must exhibit the preimage. Compromise of current keys no longer
 //! suffices to rotate. Kernel semantics proven in

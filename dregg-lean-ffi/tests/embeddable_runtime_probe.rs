@@ -32,7 +32,7 @@
 //! All three GREEN ⇒ the SAME `libdregg_lean.a` + static Lean runtime that the
 //! host links today is already embeddable into a single-threaded host (the
 //! pg-Tier-D-embeddable half) on this platform. See
-//! `docs/EMBEDDABLE-LEAN-RUNTIME.md` for the cross-platform caveats (the Linux
+//! `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` for the cross-platform caveats (the Linux
 //! `static.c.o` interposition story is different — handled by DREGG_LEAN_LINK).
 #![cfg(feature = "lean-lib")]
 #![cfg(target_os = "macos")]

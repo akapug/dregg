@@ -913,7 +913,7 @@ pub enum FocusTarget {
     /// A live ledger cell (resolves to [`ReflectedCell`]).
     Cell(CellId),
     /// A UI **view cell** — the inspector's own `(focus, present_idx)` camera-aim,
-    /// self-hosted as a real cell (`docs/deos/REFLEXIVE-MIGRATION.md` §3). Anchored
+    /// self-hosted as a real cell (`.docs-history-noclaude/deos/REFLEXIVE-MIGRATION.md` §3). Anchored
     /// on the view's backing cell id, it resolves to a
     /// [`ViewCell`](crate::view_cell::ViewCell) `impl Presentable` — so the
     /// inspector can focus on ITSELF (inspect the inspector). The keystone reflexive
@@ -921,7 +921,7 @@ pub enum FocusTarget {
     ViewCell(CellId),
     /// A **meta-debug frame** — a suspended/frozen world AS AN OBJECT, at a level in
     /// the reflective tower (`docs/deos/FIRMAMENT-REFLEXIVE-SUBSTRATE.md` §2.3,
-    /// `docs/deos/REFLEXIVE-MIGRATION.md` §4.2). Resolves to a
+    /// `.docs-history-noclaude/deos/REFLEXIVE-MIGRATION.md` §4.2). Resolves to a
     /// [`MetaDebugView`](crate::meta_debug::MetaDebugView) `impl Presentable` looked
     /// up in the cockpit's [`MetaStack`](crate::meta_debug::MetaStack) — so
     /// "debug the debugger" is focusing the inspector on a meta-level's own view,
@@ -1065,7 +1065,7 @@ impl<'w> Registry<'w> {
 // cached projection across the head advance. The ONLY way a stale entry survives
 // is a state change with no naming `WorldEvent` — the cache-soundness =
 // dynamics-completeness obligation closed by `world::collect_effect_events`'s
-// completeness arms (`docs/deos/EFFICIENCY-WELD-PLAN.md` §4.1, §2.3).
+// completeness arms (`.docs-history-noclaude/deos/EFFICIENCY-WELD-PLAN.md` §4.1, §2.3).
 //
 // Interior mutability (`RefCell`) so the cockpit's `&self` moldable render path
 // can read-through-and-fill without threading `&mut self` through the whole

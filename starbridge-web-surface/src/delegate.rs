@@ -1,6 +1,6 @@
 //! The embedder boundary IS the cap gate.
 //!
-//! `docs/EMBEDDED-WEB-SURFACE.md §2/§4.1`: libservo surfaces every
+//! `.docs-history-noclaude/EMBEDDED-WEB-SURFACE.md §2/§4.1`: libservo surfaces every
 //! authority-bearing operation a `WebView` can perform as a `WebViewDelegate`
 //! callback, and "a delegate is a trait that the embedder installs its own impl
 //! for — so the embedding boundary IS the cap gate." This module is that, real:
@@ -38,7 +38,7 @@ use dregg_types::CellId;
 /// The authority a web surface (a `WebView`) holds, grounded in the REAL
 /// firmament cap model.
 ///
-/// `docs/EMBEDDED-WEB-SURFACE.md §1`: "a web surface IS a `SurfaceCapability`
+/// `.docs-history-noclaude/EMBEDDED-WEB-SURFACE.md §1`: "a web surface IS a `SurfaceCapability`
 /// over a backing cell." This is that: a [`dregg_firmament::Capability`] whose
 /// [`Target::Surface`] names the cell backing the `WebView`, carrying the
 /// firmament `rights` lattice. We do NOT invent a windowing model or an authority
@@ -141,7 +141,7 @@ impl SurfaceCapability {
 
     /// Attenuate this surface to a CHILD — the no-amplification keystone.
     ///
-    /// `docs/EMBEDDED-WEB-SURFACE.md §3`: "an iframe, or a script-opened window,
+    /// `.docs-history-noclaude/EMBEDDED-WEB-SURFACE.md §3`: "an iframe, or a script-opened window,
     /// is an ATTENUATION of its opener — it cannot amplify." The child:
     ///
     /// - binds a (possibly different) `child_cell`, but with `child_rights` that
@@ -280,7 +280,7 @@ pub enum PermissionDecision {
 /// The embedder's mediation surface for a web engine — shaped one-to-one against
 /// libservo's `WebViewDelegate`.
 ///
-/// `docs/EMBEDDED-WEB-SURFACE.md §4.1`: the `WebView` / `WebViewDelegate` API is
+/// `.docs-history-noclaude/EMBEDDED-WEB-SURFACE.md §4.1`: the `WebView` / `WebViewDelegate` API is
 /// libservo's first-class embedder surface, "modeled explicitly on the delegates
 /// in Apple's WebKit API — the embedder installs an impl of the delegate trait
 /// and Servo calls *out* to it at every authority point." Each method here is one
@@ -347,7 +347,7 @@ pub trait WebSurfaceDelegate {
 
 /// The cap-enforcing delegate: every callback discharges the held capability.
 ///
-/// This is the real `WebViewDelegate` impl `docs/EMBEDDED-WEB-SURFACE.md §2`
+/// This is the real `WebViewDelegate` impl `.docs-history-noclaude/EMBEDDED-WEB-SURFACE.md §2`
 /// describes — "the delegate callback is the powerbox." It holds NO ambient
 /// authority of its own; every decision is a function of the `surface` argument's
 /// held caps (the c-list entry) checked against the request. The checks are the
@@ -453,7 +453,7 @@ impl WebSurfaceDelegate for CapGatedDelegate {
 
 /// **THE LIBSERVO SEAM.** A stand-in for the libservo `WebView`.
 ///
-/// `docs/EMBEDDED-WEB-SURFACE.md §0/§6`: the surface/shell discipline + the cap
+/// `.docs-history-noclaude/EMBEDDED-WEB-SURFACE.md §0/§6`: the surface/shell discipline + the cap
 /// model are real today; "the libservo embed behind the cap gate is a near-term
 /// build." This crate deliberately does NOT link libservo (a multi-MB Rust
 /// codebase + a Metal/wgpu toolchain that does not build cleanly in this

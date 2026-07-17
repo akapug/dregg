@@ -481,25 +481,6 @@ impl CanonicalCapTree {
         &self.sorted_leaves
     }
 
-    /// Number of real (non-sentinel, non-tombstone) capabilities.
-    ///
-    /// A TOMBSTONE ghost (a revoked slot's position, stored digest
-    /// `BabyBear::ZERO`) is NOT a live capability, so it is excluded — both the
-    /// MIN/MAX sentinels (by key) and any ghost position (by its ZERO leaf
-    /// digest in `levels[0]`) are filtered out.
-    pub fn num_caps(&self) -> usize {
-        self.sorted_leaves
-            .iter()
-            .enumerate()
-            .filter(|(i, l)| {
-                l.slot_hash != SENTINEL_MIN
-                    && l.slot_hash != SENTINEL_MAX
-                    // A ghost (tombstone) position carries a ZERO leaf digest.
-                    && self.node(0, *i) != CAP_ZERO8
-            })
-            .count()
-    }
-
     /// The tree depth.
     pub fn depth(&self) -> usize {
         self.depth
@@ -752,7 +733,8 @@ impl CanonicalCapTree {
     /// The LIVE (non-sentinel, non-tombstone) leaves + the tombstoned keys of
     /// THIS tree — the `(live, tombstones)` pair `new_with_tombstones` rebuilds
     /// byte-identically from. A ghost position is recognized by its ZERO stored
-    /// digest (exactly as [`Self::num_caps`] filters).
+    /// digest (a tombstone is NOT a live capability; the MIN/MAX sentinels are
+    /// excluded by key).
     fn live_and_tombstones(&self) -> (Vec<CapLeaf>, Vec<BabyBear>) {
         let mut live = Vec::new();
         let mut tombs = Vec::new();

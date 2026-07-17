@@ -51,3 +51,6 @@ dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 # `dregg_circuit::effect_vm::{CellState, Effect}` and `dregg_cell::Cell`.
 dregg-turn = { path = "../turn", features = ["prover"] }
 dregg-cell = { path = "../cell" }
+
+[lints]
+workspace = true

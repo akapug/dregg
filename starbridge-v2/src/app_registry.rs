@@ -1,6 +1,6 @@
 //! THE APP REGISTRY — pre-built starbridge-apps wired into the live cockpit.
 //!
-//! The census (`docs/deos/APP-AND-FEDERATION-CENSUS-2026-06-23.md`) found the
+//! The census (`.docs-history-noclaude/deos/APP-AND-FEDERATION-CENSUS-2026-06-23.md`) found the
 //! chasm: `dregg-app-framework` is real + load-bearing and the 20 starbridge-apps
 //! are fully built + tested — but `starbridge-v2` did not even depend on them.
 //! There was no `AppRegistry`, no launcher, no way to open a *pre-built* app. The

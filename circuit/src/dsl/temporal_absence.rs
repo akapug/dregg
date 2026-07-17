@@ -33,8 +33,7 @@ use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2::hash_fact;
 
 use crate::dsl::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
-    PolyTerm,
+    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
 
 // ============================================================================
@@ -199,11 +198,6 @@ pub fn temporal_absence_descriptor() -> CircuitDescriptor {
     }
 }
 
-/// Create a DslCircuit from the temporal absence descriptor.
-pub fn temporal_absence_dsl_circuit() -> DslCircuit {
-    DslCircuit::new(temporal_absence_descriptor())
-}
-
 // ============================================================================
 // Witness types
 // ============================================================================
@@ -268,67 +262,4 @@ impl TemporalAbsenceDslWitness {
         }
         true
     }
-}
-
-// ============================================================================
-// Trace generation
-// ============================================================================
-
-/// Generate a valid temporal absence trace.
-///
-/// The trace consists of 2 rows: entry_before (row 0) and entry_after (row 1).
-/// Returns (trace, public_inputs).
-pub fn generate_temporal_absence_trace(
-    witness: &TemporalAbsenceDslWitness,
-) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    let entry_before = &witness.entry_before;
-    let entry_after = &witness.entry_after;
-    let timeline_root = entry_before.merkle_root;
-    let excluded_attr = witness.excluded_attribute_hash;
-
-    // Row 0: entry_before
-    let mut row0 = vec![BabyBear::ZERO; TRACE_WIDTH];
-    row0[BLOCK_HEIGHT] = BabyBear::new(entry_before.block_height);
-    row0[EVENT_TYPE] = entry_before.event_type;
-    row0[ATTRIBUTE_HASH] = entry_before.attribute_hash;
-    row0[TIMELINE_INDEX] = BabyBear::new(entry_before.timeline_index);
-    row0[LEAF_HASH] = entry_before.leaf_hash();
-    row0[MERKLE_ROOT] = timeline_root;
-    row0[ADJ_INDEX_PLUS1] = BabyBear::new(entry_before.timeline_index + 1);
-    row0[IS_BEFORE] = BabyBear::ONE;
-    row0[TIMING_OK] = BabyBear::ONE;
-    let diff_before = entry_before.attribute_hash - excluded_attr;
-    row0[ATTR_DIFF_INV] = if diff_before != BabyBear::ZERO {
-        diff_before.inverse().unwrap_or(BabyBear::ZERO)
-    } else {
-        BabyBear::ZERO
-    };
-
-    // Row 1: entry_after
-    let mut row1 = vec![BabyBear::ZERO; TRACE_WIDTH];
-    row1[BLOCK_HEIGHT] = BabyBear::new(entry_after.block_height);
-    row1[EVENT_TYPE] = entry_after.event_type;
-    row1[ATTRIBUTE_HASH] = entry_after.attribute_hash;
-    row1[TIMELINE_INDEX] = BabyBear::new(entry_after.timeline_index);
-    row1[LEAF_HASH] = entry_after.leaf_hash();
-    row1[MERKLE_ROOT] = timeline_root;
-    row1[ADJ_INDEX_PLUS1] = BabyBear::new(entry_after.timeline_index + 1);
-    row1[IS_BEFORE] = BabyBear::ZERO;
-    row1[TIMING_OK] = BabyBear::ONE;
-    let diff_after = entry_after.attribute_hash - excluded_attr;
-    row1[ATTR_DIFF_INV] = if diff_after != BabyBear::ZERO {
-        diff_after.inverse().unwrap_or(BabyBear::ZERO)
-    } else {
-        BabyBear::ZERO
-    };
-
-    let trace = vec![row0, row1];
-    let public_inputs = vec![
-        BabyBear::new(witness.t1),
-        BabyBear::new(witness.t2),
-        excluded_attr,
-        timeline_root,
-    ];
-
-    (trace, public_inputs)
 }

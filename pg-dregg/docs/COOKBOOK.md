@@ -6,7 +6,7 @@ non-omission, anti-substitution — are all ordinary SQL over the materialized
 state.*
 
 This cookbook is a small library of copy-paste SQL recipes over the pg-dregg
-mirror schema (Tier B/C, `docs/PG-DREGG.md` §8–§10). Each recipe is a real tool
+mirror schema (Tier B/C, `.docs-history-noclaude/PG-DREGG.md` §8–§10). Each recipe is a real tool
 **and** a teaching artifact, and every one **runs** against the live mirror.
 Pair it with the browser glass — `site/explorer/caps-as-rows.html` — which is
 the same "a cap is a view" insight rendered as a page: present a token, watch

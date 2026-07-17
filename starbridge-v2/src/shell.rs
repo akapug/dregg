@@ -219,7 +219,7 @@ pub struct Shell {
     /// The shell's logical work-area size (for tile/stack arrangement).
     area: Rect,
     /// THE VERIFIED-SCENE COMPOSITOR: enforces the T1/T2/T3 scene-authority
-    /// teeth (`docs/DREGG-DESKTOP-OS.md` §5; the Lean `Dregg2.Apps.Compositor`).
+    /// teeth (`.docs-history-noclaude/DREGG-DESKTOP-OS.md` §5; the Lean `Dregg2.Apps.Compositor`).
     /// The shell rebuilds its scene each present from the live surfaces + world
     /// ([`Shell::compose_scene`]) and routes every `present()` / input through
     /// it. This is a SEPARATE gate from the firmament cap-fabric above: the

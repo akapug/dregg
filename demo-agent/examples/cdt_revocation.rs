@@ -285,7 +285,7 @@ fn main() {
     let mut nullifier_set = NullifierSet::new();
     let vp_nullifier = Nullifier(vp_revocation_hash);
     nullifier_set
-        .insert(vp_nullifier)
+        .insert(vp_nullifier, 0) // a revocation marker, not a value note
         .expect("first insert should succeed");
 
     let root = nullifier_set.root();

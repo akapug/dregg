@@ -1,6 +1,6 @@
 //! # THE VK-EPOCH LIGHT-CLIENT BINDING BITE — noteSpend / noteCreate FORCED ON-WIRE.
 //!
-//! ## What this closes (`docs/VK-EPOCH-PLAN.md`, the notes family — #13 noteCreate, #14 noteSpend)
+//! ## What this closes (`.docs-history-noclaude/VK-EPOCH-PLAN.md`, the notes family — #13 noteCreate, #14 noteSpend)
 //!
 //! noteSpend is the GOLD-STANDARD in-circuit gate of the whole effect vocabulary: its nullifier
 //! accumulator lives on a ROTATED limb (`B_NULLIFIER_ROOT = 26`), witness-carried, and the live

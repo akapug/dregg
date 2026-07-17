@@ -57,3 +57,4 @@ dregg-agent = { path = "../dregg-agent" }
 
 [lints.rust]
 unsafe_code = "forbid"
+unexpected_cfgs = "deny"

@@ -2,7 +2,7 @@
 # Dregg2.Firmament.SeL4Kernel — the FORMAL LEAN SEMANTICS of the semihost seL4 microkernel.
 
 `sel4/dregg-firmament/src/emulated_kernel.rs` is the EXECUTABLE: the `n = 1` `EmulatedKernel`,
-the host-native backend for the rust-sel4 API surface (`docs/DREGG-DESKTOP-OS.md §3`, the
+the host-native backend for the rust-sel4 API surface (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §3`, the
 semihosted-seL4 KEYSTONE). ONE protection-domain source tree runs on this host emulator under
 `cargo test` today and on real seL4 unchanged. The kernel PROMOTES `LocalBacking` (the real CNode
 slot-table + mint/revoke derivation tree) by ADDING the three seL4 IPC primitives the desktop §3

@@ -206,6 +206,15 @@ pub enum FeedError {
     /// The feed-built vote transaction did not ingest through the wire parser
     /// (an internal invariant — a bug, not an environment condition).
     VoteIngest(String),
+    /// A snapshot-parsing stage is **DESIGNED but NOT YET BUILT** (Track A rung 2 —
+    /// the real Agave snapshot format). Returned by [`AgaveSnapshotBank`] so a
+    /// pending path fails LOUD rather than silently passing with fabricated data;
+    /// `stage` names exactly which leg of the pipeline
+    /// (`bridge/src/solana_feed.rs:113`–`:120`) is unbuilt.
+    NotYetImplemented {
+        /// The unbuilt pipeline stage, e.g. "unpack Agave snapshot bank fields".
+        stage: &'static str,
+    },
 }
 
 impl std::fmt::Display for FeedError {
@@ -229,6 +238,10 @@ impl std::fmt::Display for FeedError {
             }
             Self::Derive(e) => write!(f, "stake-table derivation failed: {e}"),
             Self::VoteIngest(e) => write!(f, "feed-built vote failed wire ingestion: {e}"),
+            Self::NotYetImplemented { stage } => write!(
+                f,
+                "snapshot parsing stage not yet implemented (Track A rung 2): {stage}"
+            ),
         }
     }
 }
@@ -914,6 +927,289 @@ impl<T: JsonRpcTransport> HoldingFeedSource for LocalValidatorFeed<T> {
 }
 
 // ===========================================================================
+// The mainnet snapshot source (Track A, rung 2) — SCAFFOLD
+// ===========================================================================
+//
+// This is the rung-2 SnapshotFeed scaffold. Its SHAPE is real and its trait
+// wiring is real (a bank flows through the PRODUCTION anchored entry unchanged);
+// its one honestly-labeled hole is the Agave snapshot *format* parsing, which
+// returns [`FeedError::NotYetImplemented`] rather than fabricating bytes.
+//
+// The design lives in the module doc (`bridge/src/solana_feed.rs:70`–`:120`); the
+// operator runbook that is gated on exactly this code landing is
+// `docs/ops/SOLANA-ANCHOR-AND-SNAPSHOT-FEED.md` §7. What a snapshot provides that
+// RPC structurally cannot: the bank-hash preimage, a REAL 16-ary accounts Merkle +
+// inclusion proofs, and the full epoch stake set (module doc `:70`–`:97`).
+
+/// **The parsed contents of one Agave snapshot bank, as `SnapshotFeed` consumes
+/// them.** Everything the anchored verifier needs that RPC cannot bind to a
+/// commitment (module doc `:70`–`:97`): the bank-hash preimage, the committed
+/// accounts-hash Merkle root, and each account with a REAL
+/// [`AccountsInclusionProof16`] extracted from the committed accounts DB
+/// (holder / stake / vote / StakeHistory sysvar). A [`SnapshotBankSource`]
+/// produces one of these; [`SnapshotFeed`] turns it into the same
+/// [`HoldingProof`] the fixtures emit and runs it through
+/// [`prove_holding_consensus_anchored`] unmodified.
+///
+/// All accounts are [`ProvenAccount`]s carrying real per-account leaves + 16-ary
+/// proofs that fold to [`Self::accounts_hash`]. There is no `single_chunk`
+/// reconstruction here (the local source's dev-only seam,
+/// `bridge/src/solana_feed.rs:449`) — the snapshot's committed Merkle is the whole
+/// point of this rung. (A fixture bank legitimately computes that Merkle over its
+/// own small account set; a mainnet bank walks the AppendVec/tiered-storage DB.)
+#[derive(Clone, Debug)]
+pub struct SnapshotBank {
+    /// The snapshot slot (the bank's slot).
+    pub slot: u64,
+    /// The epoch the snapshot slot falls in — the epoch the derived stake table
+    /// and the harvested votes are for.
+    pub epoch: u64,
+    /// The committed accounts-hash Merkle root at the slot (the root every
+    /// per-account proof folds to, and the value bound into [`Self::bank_components`]).
+    pub accounts_hash: [u8; 32],
+    /// The bank-hash preimage (`parent_bank_hash`, accounts hash, `signature_count`,
+    /// `last_blockhash`) — the four fields RPC never returns (module doc `:76`–`:84`).
+    /// `bank_components.compute()` is the `bank_hash` the harvested votes sign over.
+    pub bank_components: BankHashComponents,
+    /// The holder's own SPL token account, with its REAL inclusion proof.
+    pub holder: ProvenAccount,
+    /// The stake accounts whose delegations derive the epoch stake table.
+    pub stake_accounts: Vec<ProvenAccount>,
+    /// The vote accounts the stake distribution weights (each → its on-chain
+    /// authorized voter, decoded during derivation).
+    pub vote_accounts: Vec<ProvenAccount>,
+    /// The `StakeHistory` sysvar account (the warmup/cooldown curve input).
+    pub stake_history: ProvenAccount,
+    /// The `reduce_stake_warmup_cooldown` feature epoch, if past it at the snapshot
+    /// slot (`None` ⟹ the original 25% rate) — passed straight to
+    /// [`derive_stake_table`].
+    pub new_rate_activation_epoch: Option<u64>,
+    /// The attested [`crate::solana_provenance::RotationStep`] chain from the
+    /// governance-pinned anchor epoch to [`Self::epoch`]. Empty ⟺ the snapshot is
+    /// AT the anchor epoch. On mainnet these come from snapshots at successive
+    /// epoch boundaries (module doc `:93`–`:97`).
+    pub rotation: Vec<crate::solana_provenance::RotationStep>,
+    /// The exact-slot "which bank hash" votes AND the later rooted votes, harvested
+    /// from a live Geyser/`getBlock` stream (the feed holds NO keys — module doc
+    /// `:99`–`:107`) and matched to [`Self::bank_components`]`.compute()`. The
+    /// exact-slot subset clears [`crate::solana_provenance::VerifiedStakeTable::tally_authorized`];
+    /// the rooted subset clears `tally_authorized_rooted` for the value path.
+    pub votes: Vec<ValidatorVote>,
+}
+
+/// **The snapshot-bank parsing seam.** One method: unpack a snapshot into the
+/// committed [`SnapshotBank`] artifacts for a holder token account. The real
+/// implementation ([`AgaveSnapshotBank`]) walks an Agave snapshot archive — that
+/// format parsing is the one pending leg of rung 2 and returns
+/// [`FeedError::NotYetImplemented`]; a fixture implementation feeds an in-memory
+/// bank through the SAME [`SnapshotFeed`] path so the trait wiring and the
+/// production-entry plumbing are exercised and tested today.
+pub trait SnapshotBankSource {
+    /// Parse the snapshot bank and extract the committed artifacts for
+    /// `token_account` and the epoch stake set: the bank-hash preimage, the real
+    /// accounts-hash Merkle root, and REAL inclusion proofs for the holder / stake
+    /// / vote / StakeHistory accounts.
+    fn load_bank(&self, token_account: &[u8; 32]) -> Result<SnapshotBank, FeedError>;
+}
+
+/// **The mainnet snapshot feed source — SCAFFOLD (Track A rung 2).** Implements
+/// [`HoldingFeedSource`] over a [`SnapshotBankSource`] and a governance-pinned
+/// [`WeakSubjectivityAnchor`]. The pipeline (module doc `:113`–`:120`):
+///
+/// 1. `source.load_bank` → unpack bank fields → [`BankHashComponents`], walk the
+///    accounts DB → the real accounts Merkle + per-account inclusion proofs, and
+///    gather the epoch stake set + rotation chain from the pinned anchor epoch.
+/// 2. [`derive_stake_table`] over the real stake/vote set → the derived table
+///    (its root is the source's pin-once [`HoldingFeed::derived_anchor`] report).
+/// 3. Assemble the SAME [`HoldingProof`] the fixtures emit and run it through the
+///    UNMODIFIED [`prove_holding_consensus_anchored`] (via [`prove_feed_holding`]),
+///    against the CALLER's pinned anchor — never the feed's.
+///
+/// **What is real here:** the trait wiring, the anchor plumbing, the stake
+/// derivation, and the full assembly of a verifiable [`HoldingProof`] from a
+/// bank — proven by a fixture bank that reaches `ConsensusVerified` through the
+/// production entry (see the tests). **What is pending:** the Agave snapshot
+/// *format* parsing inside [`AgaveSnapshotBank`], which returns
+/// [`FeedError::NotYetImplemented`]. No `single_chunk` reconstruction and no
+/// fixture constructor live on this source's assembly path — the reconstruction
+/// seam that makes [`LocalValidatorFeed`] dev-cluster-only is exactly what the
+/// snapshot's committed Merkle replaces.
+pub struct SnapshotFeed<S: SnapshotBankSource> {
+    source: S,
+    pinned_anchor: WeakSubjectivityAnchor,
+}
+
+impl<S: SnapshotBankSource> SnapshotFeed<S> {
+    /// Build a snapshot feed over a bank source and the governance-pinned anchor.
+    /// The anchor is the operator's config trust root (module doc `:59`–`:68`);
+    /// it is the epoch the rotation chain in each [`SnapshotBank`] must start from,
+    /// and — as with every source — verification still pins it from the CALLER
+    /// ([`prove_feed_holding`]), so a compromised source cannot self-authorize.
+    pub fn new(source: S, pinned_anchor: WeakSubjectivityAnchor) -> Self {
+        Self {
+            source,
+            pinned_anchor,
+        }
+    }
+
+    /// The governance-pinned anchor this feed was configured with (the operator's
+    /// trust root — the rotation chain's start epoch, and the tuple a caller should
+    /// pin into [`prove_feed_holding`]).
+    pub fn pinned_anchor(&self) -> &WeakSubjectivityAnchor {
+        &self.pinned_anchor
+    }
+}
+
+impl<S: SnapshotBankSource> HoldingFeedSource for SnapshotFeed<S> {
+    fn ingest_holding(&self, token_account: &[u8; 32]) -> Result<HoldingFeed, FeedError> {
+        // (1) unpack the snapshot bank — the pending leg lives inside the source;
+        //     a real Agave parser returns NotYetImplemented, a fixture bank returns
+        //     committed artifacts. Everything below is production wiring either way.
+        let bank = self.source.load_bank(token_account)?;
+
+        // (2) derive the stake table from the snapshot's REAL bank-state accounts;
+        //     the derived root is the operator's pin-once anchor report. This is
+        //     the SAME derivation the anchored verifier re-runs and checks against
+        //     the caller's pinned root.
+        let derived = derive_stake_table(
+            bank.epoch,
+            &bank.accounts_hash,
+            &bank.stake_accounts,
+            &bank.vote_accounts,
+            &bank.stake_history,
+            bank.new_rate_activation_epoch,
+        )
+        .map_err(FeedError::Derive)?;
+        let derived_anchor = WeakSubjectivityAnchor::from_table(&derived.table);
+        let total = derived.table.total_stake();
+
+        // (3) the bank hash the votes sign over is the preimage's own compute() —
+        //     the load-bearing faithfulness the CI gate checks against a harvested
+        //     real vote (runbook §7 last paragraph); here it is the snapshot's own.
+        let bank_hash = bank.bank_components.compute();
+
+        // (4) assemble the SAME HoldingProof the fixtures emit — nothing downstream
+        //     changes; the verifier entry stays prove_holding_consensus_anchored.
+        let holder = HoldingAccount {
+            token_account: bank.holder.pubkey,
+            lamports: bank.holder.lamports,
+            owner_program: bank.holder.owner,
+            executable: bank.holder.executable,
+            rent_epoch: bank.holder.rent_epoch,
+            data: bank.holder.data.clone(),
+            inclusion: bank.holder.proof.clone(),
+        };
+        let proof = HoldingProof {
+            account: holder,
+            consensus: ConsensusEvidence {
+                slot: bank.slot,
+                bank_hash,
+                epoch: bank.epoch,
+                voted_stake: total,
+                total_stake: total,
+                votes: bank.votes,
+                bank_components: bank.bank_components,
+                poh: None,
+            },
+            stake_provenance: Some(StakeProvenance {
+                anchor_accounts_hash: bank.accounts_hash,
+                anchor_stake_accounts: bank.stake_accounts,
+                anchor_vote_accounts: bank.vote_accounts,
+                anchor_stake_history_account: bank.stake_history,
+                new_rate_activation_epoch: bank.new_rate_activation_epoch,
+                rotation: bank.rotation,
+            }),
+        };
+
+        Ok(HoldingFeed {
+            proof,
+            derived_anchor,
+            poh_policy: None,
+        })
+    }
+}
+
+/// **The real Agave snapshot bank source — PENDING (Track A rung 2).** Points at a
+/// full snapshot archive (`snapshot-<slot>-<hash>.tar.zst`) on a durable data-dir
+/// and the governance-pinned anchor. Its [`SnapshotBankSource`] impl is the one
+/// unbuilt leg of the rung: parsing the Agave on-disk bank/accounts serialization.
+/// Every stage returns [`FeedError::NotYetImplemented`] — a pending path fails
+/// LOUD, never a silent pass over fabricated bytes (the load-bearing faithfulness
+/// posture, runbook §7). The pipeline stages are written out so the SHAPE is
+/// reviewable; each is gated on the format work landing.
+pub struct AgaveSnapshotBank {
+    /// Path to the Agave full snapshot archive on a durable data-dir.
+    pub archive_path: std::path::PathBuf,
+    /// The governance-pinned anchor epoch the rotation chain starts from.
+    pub anchor: WeakSubjectivityAnchor,
+}
+
+impl AgaveSnapshotBank {
+    /// Point at a snapshot archive and the pinned anchor.
+    pub fn new(
+        archive_path: impl Into<std::path::PathBuf>,
+        anchor: WeakSubjectivityAnchor,
+    ) -> Self {
+        Self {
+            archive_path: archive_path.into(),
+            anchor,
+        }
+    }
+
+    /// STAGE 1 (pending): unpack the serialized bank fields into
+    /// [`BankHashComponents`] — `parent_bank_hash`, the committed accounts hash
+    /// (`accounts_delta_hash`, or the lattice hash post-SIMD-215), `signature_count`,
+    /// `last_blockhash` (module doc `:76`–`:84`).
+    fn unpack_bank_fields(&self) -> Result<BankHashComponents, FeedError> {
+        Err(FeedError::NotYetImplemented {
+            stage: "unpack Agave snapshot bank fields -> BankHashComponents \
+                    (parent_bank_hash, accounts_hash, signature_count, last_blockhash)",
+        })
+    }
+
+    /// STAGE 2 (pending): walk the accounts DB (AppendVec / tiered-storage) to
+    /// compute the REAL 16-ary accounts-hash Merkle and extract a REAL
+    /// [`AccountsInclusionProof16`] for the holder / stake / vote / StakeHistory
+    /// accounts — replacing `single_chunk_proofs` (module doc `:85`–`:92`).
+    fn walk_accounts_db(&self, _token_account: &[u8; 32]) -> Result<Vec<ProvenAccount>, FeedError> {
+        Err(FeedError::NotYetImplemented {
+            stage: "walk Agave accounts DB (AppendVec/tiered-storage) -> real 16-ary \
+                    accounts-hash Merkle + AccountsInclusionProof16 per account",
+        })
+    }
+
+    /// STAGE 3 (pending): from the real stake/vote set + StakeHistory sysvar, and
+    /// from snapshots at successive epoch boundaries, build the
+    /// [`crate::solana_provenance::RotationStep`] chain from
+    /// [`Self::anchor`]`.epoch` to the snapshot epoch (module doc `:93`–`:97`).
+    fn build_rotation_chain(
+        &self,
+    ) -> Result<Vec<crate::solana_provenance::RotationStep>, FeedError> {
+        Err(FeedError::NotYetImplemented {
+            stage: "build the RotationStep chain from the pinned anchor epoch to the \
+                    snapshot epoch (snapshots at successive epoch boundaries)",
+        })
+    }
+}
+
+impl SnapshotBankSource for AgaveSnapshotBank {
+    fn load_bank(&self, token_account: &[u8; 32]) -> Result<SnapshotBank, FeedError> {
+        // The pipeline shape, in order — each stage pending on the Agave snapshot
+        // format work (Track A rung 2). The FIRST unbuilt stage fails loud, so this
+        // can never silently return a fabricated bank.
+        let _bank_components = self.unpack_bank_fields()?;
+        let _accounts = self.walk_accounts_db(token_account)?;
+        let _rotation = self.build_rotation_chain()?;
+        // Votes are harvested from a live Geyser/getBlock stream and matched to the
+        // snapshot bank hash (module doc `:99`–`:107`) — also pending until the
+        // stages above yield a bank hash to match against.
+        Err(FeedError::NotYetImplemented {
+            stage: "assemble SnapshotBank + match harvested >=2/3 votes to the snapshot bank hash",
+        })
+    }
+}
+
+// ===========================================================================
 // The fixture source (test/dev only) — the constructors, behind the same seam
 // ===========================================================================
 
@@ -952,6 +1248,182 @@ impl HoldingFeedSource for FixtureFeedSource {
             proof,
             derived_anchor: anchor,
             poh_policy: Some(policy),
+        })
+    }
+}
+
+// ===========================================================================
+// A fixture snapshot bank (test/dev only) — a REAL in-memory bank behind the seam
+// ===========================================================================
+
+/// **Fixture [`SnapshotBankSource`] — TEST/DEV ONLY.** Builds a real in-memory
+/// bank from a small validator set and computes a GENUINE 16-ary accounts-hash
+/// Merkle + real inclusion proofs over its own account set (holder + per-validator
+/// vote/stake + StakeHistory sysvar), then signs the exact-slot and rooted votes
+/// with the fixture validators' keys. It is NOT snapshot-format parsing — it stands
+/// in for [`AgaveSnapshotBank`] so [`SnapshotFeed`]'s trait wiring, stake
+/// derivation, and production-entry plumbing are exercised end-to-end today. The
+/// Merkle here is real *for this bank* (a real committed tree has millions of
+/// accounts and demands the AppendVec walk — the pending leg). Gated on
+/// `cfg(test)` / the dev-only `test-utils` feature.
+#[cfg(any(test, feature = "test-utils"))]
+pub struct FixtureSnapshotBank {
+    /// The `$DREGG` SPL mint the fixture holder holds.
+    pub dregg_mint: [u8; 32],
+    /// The SPL Token program id the fixture cluster uses.
+    pub spl_token_program: [u8; 32],
+    /// The wallet (SPL `Account.owner`) that controls the holder account.
+    pub wallet: [u8; 32],
+    /// The balance the fixture holder holds.
+    pub amount: u64,
+    /// The fixture validator set as `(key_seed, delegated_stake)` pairs — one
+    /// vote+stake account pair each (`2·len + 2 ≤ 16`, so `len ≤ 7`).
+    pub validators: Vec<(u8, u64)>,
+    /// The snapshot slot.
+    pub slot: u64,
+    /// The snapshot epoch (bootstrap stake is fully effective at epoch 0).
+    pub epoch: u64,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl SnapshotBankSource for FixtureSnapshotBank {
+    fn load_bank(&self, token_account: &[u8; 32]) -> Result<SnapshotBank, FeedError> {
+        use crate::solana_holdings::fixtures::spl_account_data;
+        use crate::solana_provenance::fixtures as prov;
+        use crate::solana_provenance::{STAKE_PROGRAM_ID, SYSVAR_OWNER_ID, vote_program_id};
+
+        assert!(
+            2 * self.validators.len() + 2 <= MERKLE_FANOUT,
+            "fixture snapshot bank holds at most {MERKLE_FANOUT} accounts in one chunk"
+        );
+
+        // Build every account in the bank as a FetchedAccount, in a fixed order so
+        // the inclusion proofs line up: holder, then (vote, stake) per validator,
+        // then the StakeHistory sysvar.
+        let mut pubkeys: Vec<[u8; 32]> = Vec::new();
+        let mut accounts: Vec<FetchedAccount> = Vec::new();
+
+        pubkeys.push(*token_account);
+        accounts.push(FetchedAccount {
+            lamports: 2_039_280,
+            owner: self.spl_token_program,
+            executable: false,
+            rent_epoch: u64::MAX,
+            data: spl_account_data(&self.dregg_mint, &self.wallet, self.amount),
+        });
+
+        // Per-validator: the vote account lives AT the authorized-voter pubkey (the
+        // test-validator convention), the stake account delegates to it with the
+        // BOOTSTRAP sentinel (`activation_epoch == u64::MAX`) so it is fully
+        // effective at epoch 0 under Solana's own warmup curve.
+        let mut voters: Vec<(SigningKey, [u8; 32])> = Vec::new(); // (authority, vote_account)
+        for (seed, stake) in &self.validators {
+            let authority = prov::sk(*seed);
+            let vote_account = authority.verifying_key().to_bytes();
+            let stake_account = prov::sk(seed.wrapping_add(100)).verifying_key().to_bytes();
+
+            pubkeys.push(vote_account);
+            accounts.push(FetchedAccount {
+                lamports: 1_000_000,
+                owner: vote_program_id(),
+                executable: false,
+                rent_epoch: 0,
+                data: prov::build_vote_account_data(&[0x01u8; 32], &vote_account, self.epoch),
+            });
+            pubkeys.push(stake_account);
+            accounts.push(FetchedAccount {
+                lamports: 1_000_000,
+                owner: STAKE_PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+                data: prov::build_stake_account_data(&vote_account, *stake, u64::MAX, u64::MAX),
+            });
+            voters.push((authority, vote_account));
+        }
+
+        pubkeys.push(STAKE_HISTORY_SYSVAR_ID);
+        accounts.push(FetchedAccount {
+            lamports: 1,
+            owner: SYSVAR_OWNER_ID,
+            executable: false,
+            rent_epoch: 0,
+            data: prov::encode_stake_history_data(&[]),
+        });
+
+        // The REAL 16-ary accounts-hash Merkle over this bank's own accounts + a
+        // real inclusion proof per account (correct for THIS bank; a mainnet bank
+        // needs the AppendVec walk — the pending leg).
+        let leaves: Vec<[u8; 32]> = accounts
+            .iter()
+            .zip(&pubkeys)
+            .map(|(a, pk)| a.leaf(pk))
+            .collect();
+        let accounts_hash = accounts_merkle_node(&leaves);
+        let proofs = single_chunk_proofs(&leaves);
+
+        let proven: Vec<ProvenAccount> = accounts
+            .iter()
+            .zip(&pubkeys)
+            .zip(&proofs)
+            .map(|((a, pk), pr)| a.proven(*pk, pr.clone()))
+            .collect();
+
+        let holder = proven[0].clone();
+        let mut stake_accounts = Vec::new();
+        let mut vote_accounts = Vec::new();
+        for i in 0..self.validators.len() {
+            vote_accounts.push(proven[1 + 2 * i].clone());
+            stake_accounts.push(proven[2 + 2 * i].clone());
+        }
+        let stake_history = proven[proven.len() - 1].clone();
+
+        // The bank-hash preimage around the real accounts hash, and the bank hash
+        // the harvested votes sign over.
+        let bank_components = BankHashComponents {
+            parent_bank_hash: [0u8; 32],
+            accounts_hash,
+            signature_count: self.validators.len() as u64,
+            last_blockhash: [0u8; 32],
+        };
+        let bank_hash = bank_components.compute();
+
+        // The harvested votes: an exact-slot "which bank hash" vote AND a later
+        // rooted vote per validator, each signed by its on-chain authorized voter —
+        // the two subsets tally_authorized / tally_authorized_rooted select over.
+        let mut votes = Vec::new();
+        for (authority, vote_account) in &voters {
+            let exact = build_tower_sync_tx(authority, *vote_account, self.slot, bank_hash);
+            votes.push(
+                ingest_vote_transaction(&exact)
+                    .map_err(|e| FeedError::VoteIngest(format!("{e:?}")))?,
+            );
+        }
+        for vote in LedgerVoteHarvester::new(
+            voters
+                .iter()
+                .map(|(authority, vote_account)| HarvestableVoter {
+                    vote_authority: authority.clone(),
+                    vote_account: *vote_account,
+                })
+                .collect(),
+        )
+        .harvest_rooted(self.slot)?
+        {
+            votes.push(vote);
+        }
+
+        Ok(SnapshotBank {
+            slot: self.slot,
+            epoch: self.epoch,
+            accounts_hash,
+            bank_components,
+            holder,
+            stake_accounts,
+            vote_accounts,
+            stake_history,
+            new_rate_activation_epoch: None,
+            rotation: vec![],
+            votes,
         })
     }
 }
@@ -1330,6 +1802,153 @@ mod tests {
         .err()
         .expect("non-loopback plaintext must be refused");
         assert!(matches!(err, FeedError::Rpc(_)));
+    }
+
+    // ---- the mainnet SnapshotFeed scaffold (Track A rung 2) ----------------
+
+    fn fixture_snapshot_bank() -> FixtureSnapshotBank {
+        FixtureSnapshotBank {
+            dregg_mint: MINT,
+            spl_token_program: spl_token_program_id(),
+            wallet: WALLET,
+            amount: 5_000,
+            validators: vec![(1, 700), (2, 200), (3, 100)],
+            slot: 9_001,
+            epoch: 0,
+        }
+    }
+
+    /// POSITIVE (the rung-2 scaffold's load-bearing claim): a fixture bank fed
+    /// through `SnapshotFeed` reaches the PRODUCTION anchored entry
+    /// `prove_holding_consensus_anchored` and verifies to `ConsensusVerified` — the
+    /// same trait wiring + production plumbing the real Agave source will use, with
+    /// only the snapshot-format parsing left pending.
+    #[test]
+    fn snapshot_feed_fixture_bank_reaches_production_entry() {
+        let bank = fixture_snapshot_bank();
+        // The pinned anchor the feed is configured with is the operator's governance
+        // pin (module doc `:59`–`:68`); for a single-epoch fixture bank it equals the
+        // derived anchor. Build it once by ingesting, then re-verify against the pin.
+        let probe = SnapshotFeed::new(fixture_snapshot_bank(), placeholder_anchor())
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect("fixture bank ingests through the snapshot seam");
+        let pinned = probe.derived_anchor.clone();
+
+        let feed_src = SnapshotFeed::new(bank, pinned.clone());
+        assert_eq!(
+            feed_src.pinned_anchor().epoch,
+            pinned.epoch,
+            "the anchor plumbing carries the configured pin"
+        );
+        let feed = feed_src
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect("fixture bank ingests through the snapshot seam");
+        let holding = prove_feed_holding(&feed, &MINT, &spl_token_program_id(), &pinned, false)
+            .expect("the assembled proof verifies through prove_holding_consensus_anchored");
+        assert_eq!(holding.trust, LockProofTrust::ConsensusVerified);
+        assert!(holding.is_consensus_proven());
+        assert_eq!(holding.owner, WALLET);
+        assert_eq!(holding.amount, 5_000);
+        assert_eq!(holding.token_account, TOKEN_ACCOUNT);
+        assert_eq!(holding.slot, 9_001);
+    }
+
+    /// A throwaway anchor for the ingest-probe (ingestion does not check the pin;
+    /// verification does — that is `snapshot_feed_rejects_wrong_pin`).
+    fn placeholder_anchor() -> WeakSubjectivityAnchor {
+        WeakSubjectivityAnchor {
+            epoch: 0,
+            stake_table_root: [0u8; 32],
+        }
+    }
+
+    /// PENDING-IS-LOUD (the honesty gate): the real Agave snapshot source is not
+    /// built, so ingesting through it returns `NotYetImplemented` naming the first
+    /// unbuilt stage — a pending parse path FAILS, it does not silently pass with
+    /// fabricated bytes.
+    #[test]
+    fn snapshot_feed_agave_source_is_pending_not_silent() {
+        let src = SnapshotFeed::new(
+            AgaveSnapshotBank::new(
+                "/nonexistent/snapshot-100-abc.tar.zst",
+                placeholder_anchor(),
+            ),
+            placeholder_anchor(),
+        );
+        let err = src
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect_err("the unbuilt Agave snapshot parser must fail loud, not pass");
+        match err {
+            FeedError::NotYetImplemented { stage } => {
+                assert!(
+                    stage.contains("bank fields"),
+                    "the FIRST pending stage (unpack bank fields) is reported, got: {stage}"
+                );
+            }
+            other => panic!("want NotYetImplemented, got {other:?}"),
+        }
+    }
+
+    /// ADVERSARIAL (the anchor is load-bearing through the snapshot seam too): a
+    /// bank whose derived distribution + self-derived root cannot satisfy a DIFFERENT
+    /// governance pin — verification refuses with `AnchorRootMismatch`. The snapshot
+    /// source cannot self-authorize any more than the fixture or local source can.
+    #[test]
+    fn snapshot_feed_rejects_wrong_pin() {
+        let feed = SnapshotFeed::new(fixture_snapshot_bank(), placeholder_anchor())
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect("fixture bank ingests");
+        let honest_pin = WeakSubjectivityAnchor {
+            epoch: feed.derived_anchor.epoch,
+            stake_table_root: [0xEEu8; 32], // a pin the bank's derived root cannot match
+        };
+        let err = prove_feed_holding(&feed, &MINT, &spl_token_program_id(), &honest_pin, false)
+            .expect_err("a self-derived snapshot anchor must not satisfy a different pin");
+        assert!(
+            matches!(
+                err,
+                HoldingProofError::Provenance(ProvenanceError::AnchorRootMismatch { .. })
+            ),
+            "want AnchorRootMismatch, got {err:?}"
+        );
+    }
+
+    /// ADVERSARIAL (the committed inclusion has teeth through the snapshot seam):
+    /// flipping the holder balance bytes after ingestion breaks the per-account hash
+    /// and the verifier refuses with `AccountsInclusionInvalid` — a snapshot consumer
+    /// cannot inflate a fed balance.
+    #[test]
+    fn snapshot_feed_tampered_holder_amount_refused() {
+        let mut feed = SnapshotFeed::new(fixture_snapshot_bank(), placeholder_anchor())
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect("fixture bank ingests");
+        let pinned = feed.derived_anchor.clone();
+        feed.proof.account.data[crate::solana_holdings::SPL_AMOUNT_OFFSET
+            ..crate::solana_holdings::SPL_AMOUNT_OFFSET + 8]
+            .copy_from_slice(&u64::MAX.to_le_bytes());
+        let err = prove_feed_holding(&feed, &MINT, &spl_token_program_id(), &pinned, false)
+            .expect_err("a tampered balance must be refused");
+        assert_eq!(err, HoldingProofError::AccountsInclusionInvalid);
+    }
+
+    /// The rooted-finality leg is present through the snapshot seam too: the
+    /// assembled evidence carries the harvested rooted votes, so
+    /// `tally_authorized_rooted` — the leg the value path demands — clears over the
+    /// bank's own derived table.
+    #[test]
+    fn snapshot_feed_supplies_rooted_finality_evidence() {
+        let feed = SnapshotFeed::new(fixture_snapshot_bank(), placeholder_anchor())
+            .ingest_holding(&TOKEN_ACCOUNT)
+            .expect("fixture bank ingests");
+        let verified = verified_table_of(&feed);
+        let c = &feed.proof.consensus;
+        verified
+            .tally_authorized(c.slot, &c.bank_hash, &c.votes)
+            .expect("exact-slot super-majority clears");
+        let rooted = verified
+            .tally_authorized_rooted(c.slot, &c.votes)
+            .expect("rooted-finality leg clears from the harvested attestations");
+        assert!(rooted > 0, "the harvested rooted votes carry real stake");
     }
 
     /// The SPL Token program id round-trips to its canonical base58.

@@ -428,7 +428,7 @@ pub fn build_drain_action(
 // The deos-native surface — the dispatch BOARD as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #3): swarm-orchestration's deos
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #3): swarm-orchestration's deos
 // re-expression was the second deos-native test, but lived in `tests/reexpress_deos_app.rs`
 // on the scaffold `emit`/`edit` placeholders (the "honest seam" it admitted). This
 // PROMOTES `board_app` into `src/`: the same operations are ONE [`DeosApp`]

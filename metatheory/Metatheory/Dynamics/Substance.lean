@@ -2,7 +2,7 @@
 # Metatheory.Dynamics.Substance — the FOUR substances, candidate-independent.
 
 This is the **dynamics layer** of the constructive-knowledge metatheory
-(`CONSTRUCTIVE-KNOWLEDGE.md`, `docs/DREGG3.md §2.1`). The metatheory's `§1–§5`
+(`CONSTRUCTIVE-KNOWLEDGE.md`, `.docs-history-noclaude/DREGG3.md §2.1`). The metatheory's `§1–§5`
 (`Metatheory.ConstructiveKnowledge`) gave the *statics* — what a claim/witness/turn IS.
 DREGG3 §2.1 names the *substances* the dynamics move, each with its own discipline of
 use:

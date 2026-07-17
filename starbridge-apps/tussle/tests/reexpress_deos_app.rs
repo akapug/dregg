@@ -2,7 +2,7 @@
 //! composed deos framework — **a TWO-FIGURE app**, smaller + more capable, shipped from
 //! `src/`.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: TUSSLE re-expressed as a composed
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: TUSSLE re-expressed as a composed
 //! [`DeosApp`] with **two figure cells** (figure A and figure B), each carrying the
 //! commit→reveal→resolve verbs as affordances. This file drives the SHIPPED surface
 //! ([`tussle_app`] from `src/`): per-viewer projection of each figure's surface, the

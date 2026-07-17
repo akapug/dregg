@@ -227,7 +227,7 @@ pub const COMMIT_COMPACTED_BLOCK_IDS: TableDefinition<&[u8; 32], ()> =
 // resolve / no-double-slash). These are NOT derivable from the cells: the
 // cell holds only the LAST digest (`TL_DIGEST_SLOT`) and the court's verdicts
 // move value without leaving the full digest set on any cell. See
-// `docs/PERSISTENCE.md`.
+// `.docs-history-noclaude/PERSISTENCE.md`.
 
 /// Forever-burned digest sets, namespaced per registry and scoped per cell.
 ///
@@ -248,7 +248,7 @@ pub const NS_TRUSTLINE_DIGEST: u8 = 1;
 /// (scope = all-zero; evidence digests are global, not per-cell).
 pub const NS_COURT_RESOLVED: u8 = 2;
 
-// ─── Durable Channel Rosters (docs/PERSISTENCE.md §3, the roster caveat) ─────
+// ─── Durable Channel Rosters (.docs-history-noclaude/PERSISTENCE.md §3, the roster caveat) ─────
 //
 // The channel-group cell holds only the roster's COMMITMENT
 // (`CH_MEMBER_ROOT_SLOT`); the member→seal-pk CONTENT is node-held and

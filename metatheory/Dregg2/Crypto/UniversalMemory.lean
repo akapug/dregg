@@ -1,7 +1,7 @@
 /-
 # Dregg2.Crypto.UniversalMemory — ONE Blum multiset for ALL of dregg's state (the deepest collapse).
 
-THE THESIS under test (docs/EPOCH-DESIGN.md tables → docs/CONVERGENT-CIRCUIT.md collapse): every
+THE THESIS under test (.docs-history-noclaude/EPOCH-DESIGN.md tables → .docs-history-noclaude/CONVERGENT-CIRCUIT.md collapse): every
 state access — register read/write, heap get/set, capability membership check, nullifier
 insert/freshness — is a tuple in ONE memory multiset over a unified DOMAIN-TAGGED address space,
 and the four map roots (cap_root, nullifier_root, heap_root, index root) are DERIVED boundary

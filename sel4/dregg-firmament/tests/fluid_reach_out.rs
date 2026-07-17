@@ -1,6 +1,6 @@
 //! The ACCEPTANCE test for the fluid reach-out.
 //!
-//! `docs/FIRMAMENT.md §3` ("The fluid reach-out") promises: a program runs
+//! `.docs-history-noclaude/FIRMAMENT.md §3` ("The fluid reach-out") promises: a program runs
 //! first-class locally holding local caps, and when it reaches the network the
 //! firmament resolves the SAME `(target, rights)` handle through the
 //! executor→net path with no seam — only the bounds relax along `n`.
@@ -179,7 +179,7 @@ fn amplification_refused_at_both_backings() {
 }
 
 // ===========================================================================
-// THE GLASS — `docs/DREGG-DESKTOP-OS.md` R0: a window IS a surface capability.
+// THE GLASS — `.docs-history-noclaude/DREGG-DESKTOP-OS.md` R0: a window IS a surface capability.
 //
 // These two tests are the desktop-OS first slice: they make "a window =
 // `Capability{ target: Surface(cell), rights }`" REAL and load-bearing. A
@@ -356,7 +356,7 @@ fn surface_n_equals_one_collapse() {
 }
 
 // ===========================================================================
-// THE FIVE-VERB WINDOW LIFECYCLE — `docs/DREGG-DESKTOP-OS.md §5`: a window's
+// THE FIVE-VERB WINDOW LIFECYCLE — `.docs-history-noclaude/DREGG-DESKTOP-OS.md §5`: a window's
 // whole life is `create-surface → present → embed → grant-input → revoke`,
 // each routed through the REAL executor + the SAME `granted ⊆ held` gate, with
 // `embed` authorized by the REAL three-party Introduce. One green test against

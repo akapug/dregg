@@ -6,7 +6,7 @@
   Microkit image from libvmm's own generated .system (see the Makefile, which
   delegates to au-ts/libvmm examples/simple). This file DOCUMENTS the shape for
   the dregg reader and is the SEED for the dregg-owned consumer wiring at M-b.
-  docs/desktop-os-research/SEL4-GPU-DRIVER-VM.md.
+  .docs-history-noclaude/desktop-os-research/SEL4-GPU-DRIVER-VM.md.
 
   The shape (Microkit 2.2.0 schema — manual §7.1; the SDK kernel has
   CONFIG_ARM_HYPERVISOR_SUPPORT=1, so a PD may parent a <virtual_machine>):

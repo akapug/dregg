@@ -3,7 +3,7 @@
 //! caveat — the now-REAL `SenderAuthorized(PublicRoot)` membership check included — BITES in
 //! the fire path itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: identity is THE
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: identity is THE
 //! credential-across-trust-boundary web-of-cells story; the promotion's task is to close the
 //! fire→full-`CellProgram` seam so a non-+1 issuance / a revocation-root rewind / an
 //! UNAUTHORIZED issuer is a REAL executor refusal in the fire path, not a `program.evaluate`-

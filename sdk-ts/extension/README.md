@@ -4,7 +4,7 @@ A Manifest-V3 browser extension that gives any web page a **dregg identity** and
 **human-confirmed `.turn()`** — built directly on `@dregg/sdk/browser`'s front
 door (`Identity → .turn() → .sign() → .submit() → Receipt`, WebCrypto/@noble
 ed25519). This is the **browser-extension front door** slice (e) of
-`docs/WEB-FORWARD-EVERYWHERE.md`, built on the just-committed sdk-ts browser
+`.docs-history-noclaude/WEB-FORWARD-EVERYWHERE.md`, built on the just-committed sdk-ts browser
 surface.
 
 ## The security property: the page ASKS, the extension + user APPROVE, the key STAYS

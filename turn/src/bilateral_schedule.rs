@@ -728,9 +728,11 @@ pub fn extract_from_pi(pi: &[BabyBear]) -> (BilateralCounts, BilateralRoots) {
 /// canonical-turn `expected_*` projection; CG-3 in-circuit then rejects any block that diverges
 /// from the canonical schedule, so this honest construction carries no tampering vector.
 ///
-/// `recursion`/`verifier`-gated alongside `schedule_block_from_inner_pi` (the only feature configs
-/// that compile the aggregation path).
-#[cfg(any(feature = "prover", feature = "verifier"))]
+/// UNGATED, like `schedule_block_from_inner_pi` and the whole `bilateral_aggregation_air`
+/// module (unconditional in `dregg-circuit` — the verify floor). This previously carried
+/// `#[cfg(any(feature = "prover", feature = "verifier"))]`, but `verifier` was never a
+/// declared `dregg-turn` feature (that arm was ALWAYS FALSE — the `unexpected_cfgs` class),
+/// so verify-only builds silently lost this function despite the gate's plain intent.
 pub fn schedule_block_for_cell(
     turn: &Turn,
     cell_id: &CellId,
@@ -810,7 +812,8 @@ pub fn schedule_block_for_cell(
 /// 28 · is_agent 1). Fields OUTSIDE the window (e.g. the unilateral-attestation accumulator at
 /// v1 offset 168/169) stay zero — the sentinel a bilateral-only rotated WR carries, matching the
 /// empty `unilateral_attestations` schedule.
-#[cfg(any(feature = "prover", feature = "verifier"))]
+///
+/// UNGATED (see `schedule_block_for_cell` — the old `verifier` cfg arm was a phantom).
 pub fn pi_from_schedule_block(
     block: &[BabyBear; dregg_circuit::bilateral_aggregation_air::sched::WIDTH],
 ) -> Vec<BabyBear> {

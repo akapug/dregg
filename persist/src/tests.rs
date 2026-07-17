@@ -1057,7 +1057,7 @@ fn forever_digest_scopes_are_disjoint() {
 }
 
 // =============================================================================
-// Durable Channel Roster Tests (docs/PERSISTENCE.md §3, the roster caveat)
+// Durable Channel Roster Tests (.docs-history-noclaude/PERSISTENCE.md §3, the roster caveat)
 // =============================================================================
 
 #[test]

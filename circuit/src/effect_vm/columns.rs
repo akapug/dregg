@@ -335,8 +335,8 @@ pub mod aux_off {
     pub const ASSET_CLASS: usize = 97;
 }
 
-/// THE ROTATED STATE BLOCK (THE ROTATION, STAGED — `docs/UNIVERSAL-MAP-ROTATION.md`
-/// §2.1/§2.4/§2.6, cutover = `docs/ROTATION-CUTOVER.md`).
+/// THE ROTATED STATE BLOCK (THE ROTATION, STAGED — `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md`
+/// §2.1/§2.4/§2.6, cutover = `.docs-history-noclaude/ROTATION-CUTOVER.md`).
 ///
 /// NOTHING on the live wire path reads these: the live layout above (186-wide,
 /// 14-slot state block) stays byte-identical until the one VK flag-day. These
@@ -395,7 +395,7 @@ pub mod rotation {
     pub const CHAIN_ARITY: usize = 4;
 
     /// THE WIDENED CAVEAT OPERAND (staged — the second rotation wire-shape
-    /// pre-gate, `docs/ROTATION-CUTOVER.md` §3). The live `SlotCaveatEntry`
+    /// pre-gate, `.docs-history-noclaude/ROTATION-CUTOVER.md` §3). The live `SlotCaveatEntry`
     /// operand is `slot_index: u8` — slot-only; the rotated operand is
     /// `(domain_tag, key)` on the universal-memory `UDomain` wire codes
     /// (registers 0 · heap 1 — `turn/src/umem.rs`), key widened `u8 → felt`

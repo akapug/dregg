@@ -118,3 +118,6 @@ cc = "1"
 name = "direct_vs_json_overhead"
 path = "benches/direct_vs_json_overhead.rs"
 harness = false
+
+[lints]
+workspace = true

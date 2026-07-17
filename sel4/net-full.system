@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   M3 net-full — the firmament's network edge as a COMPLETE two-PD system
-  (docs/FIRMAMENT.md §3, §6; docs/SEL4-EMBEDDING.md §4). This is the assembly
+  (.docs-history-noclaude/FIRMAMENT.md §3, §6; .docs-history-noclaude/SEL4-EMBEDDING.md §4). This is the assembly
   that turns "the NIC is up" into "a turn arrives over TCP":
 
     * dregg_net_driver  (../sel4/dregg-pd/net/)        — the SOLE holder of the

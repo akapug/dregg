@@ -64,7 +64,7 @@ Runnable version: `node examples/devnet-walkthrough.mjs` (after `npm run build`)
 
 ## The organ nouns
 
-Above the two base nouns sit the **organs** (`docs/ORGANS.md`) — the higher
+Above the two base nouns sit the **organs** (`.docs-history-noclaude/ORGANS.md`) — the higher
 primitives. Each is the ergonomic TS face of a node service: the node computes
 the per-cell factory descriptors and seal fan-outs (Poseidon2 commitments,
 X25519 key schedules) that the TS wire layer does not carry, and these clients

@@ -2,7 +2,7 @@
 //! composed deos framework — **the same app, smaller + more capable, now SHIPPED from
 //! `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (the workflow port): the compartment
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (the workflow port): the compartment
 //! workflow MANDATE, re-expressed as a composed [`DeosApp`] and PROMOTED into
 //! `src/lib.rs` (it lived in this test). This file drives the SHIPPED surface
 //! ([`workflow_app`] from `src/`), proving the promotion: per-viewer projection, the

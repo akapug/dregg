@@ -2109,14 +2109,14 @@ var NodeClient = class {
     return new NodeEvents(this.baseUrl, { devnetKey: this.opts.devnetKey });
   }
   /**
-   * The **trustline** organ (`docs/ORGANS.md` §1) over this node's
+   * The **trustline** organ (`.docs-history-noclaude/ORGANS.md` §1) over this node's
    * operator-local trustline service. Operator-gated — pass a `devnetKey`.
    */
   trustline() {
     return new TrustlineClient(this);
   }
   /**
-   * The **channels** organ (`docs/ORGANS.md` §4) over this node's channels
+   * The **channels** organ (`.docs-history-noclaude/ORGANS.md` §4) over this node's channels
    * service. Operator-gated — pass a `devnetKey`.
    */
   channels() {
@@ -2845,7 +2845,7 @@ var Pg = class _Pg {
   // ── the write path: submit a verified turn (the node drains it) ──
   /**
    * Submit a SIGNED turn FROM postgres via `dregg_submit_turn(signed_turn,
-   * agent)` (`docs/PG-DREGG.md` §11). `signedTurn` is the postcard `SignedTurn`
+   * agent)` (`.docs-history-noclaude/PG-DREGG.md` §11). `signedTurn` is the postcard `SignedTurn`
    * bytes; `agent` is the turn's agent cell id.
    *
    * Enqueues into `dregg.submit_queue` and returns the submission `uuid`. The
@@ -2939,7 +2939,7 @@ var Pg = class _Pg {
   // ── federation health ──
   /**
    * `dregg_federation_health()` — the subscriber-side federation health check
-   * (`docs/PG-DREGG.md` §15): the pg18 apply-conflict counters DRIVE the chain
+   * (`.docs-history-noclaude/PG-DREGG.md` §15): the pg18 apply-conflict counters DRIVE the chain
    * re-validation. Returns the one-line verdict (`'ok: …'` / `'ALARM …'` /
    * `'CRITICAL …'`).
    */

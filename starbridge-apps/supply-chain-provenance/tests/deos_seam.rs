@@ -2,7 +2,7 @@
 //! executor against the FULL custody program, so the verified caveats BITE in the fire
 //! path itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #1): the reference port's one
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #1): the reference port's one
 //! self-disclosed seam was that a fired affordance executed against a cell with NO
 //! custody program installed — so the actor-bound `AnyOf[Immutable, SenderInSlot]` +
 //! `StrictMonotonic(epoch)` + `WriteOnce(links)` + `Monotonic(head)` caveats did NOT

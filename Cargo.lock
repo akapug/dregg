@@ -6531,9 +6531,7 @@ dependencies = [
 name = "dregg-genesis-snapshot"
 version = "0.1.0"
 dependencies = [
- "blake3",
  "dregg-cell",
- "dregg-circuit",
  "serde",
  "serde_json",
 ]
@@ -6765,6 +6763,7 @@ dependencies = [
  "dregg-cell",
  "dregg-cell-crypto",
  "dregg-circuit",
+ "dregg-circuit-prove",
  "dregg-commit",
  "dregg-coord",
  "dregg-credentials",
@@ -6863,6 +6862,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-param-compose"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-turn",
+ "postcard",
+]
+
+[[package]]
 name = "dregg-pay"
 version = "0.1.0"
 dependencies = [
@@ -6873,6 +6884,9 @@ dependencies = [
  "curve25519-dalek",
  "dregg-bridge",
  "dregg-governance",
+ "dregg-payable",
+ "dregg-turn",
+ "dregg-types",
  "ed25519-dalek",
  "hmac 0.12.1",
  "serde_json",
@@ -6961,6 +6975,7 @@ dependencies = [
  "dregg-cell",
  "dregg-cell-crypto",
  "dregg-circuit",
+ "dregg-circuit-prove",
  "dregg-commit",
  "dregg-federation",
  "dregg-intent",
@@ -7245,6 +7260,7 @@ dependencies = [
  "dregg-commit",
  "dregg-coord",
  "dregg-dfa",
+ "dregg-dfa-federation",
  "dregg-dsl-runtime",
  "dregg-federation",
  "dregg-intent",
@@ -7745,6 +7761,7 @@ dependencies = [
  "dregg-app-framework",
  "dregg-node-target",
  "dregg-pay",
+ "dregg-types",
  "dreggnet-tournament",
  "dungeon-on-dregg",
  "hex",
@@ -7933,6 +7950,8 @@ dependencies = [
  "dreggnet-sprite",
  "dreggnet-surfaces",
  "dungeon-on-dregg",
+ "metrics",
+ "metrics-exporter-prometheus",
  "procgen-dregg",
  "rusqlite",
  "serde",
@@ -24569,6 +24588,7 @@ dependencies = [
  "blake3",
  "dregg-circuit",
  "dregg-circuit-prove",
+ "dregg-ipfs",
  "dregg-lightclient",
  "dungeon-on-dregg",
  "ed25519-dalek",

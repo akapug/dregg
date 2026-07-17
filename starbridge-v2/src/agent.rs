@@ -7,7 +7,7 @@
 //! conservation-checked TURN against the verified executor. This surface renders
 //! that grounded seam: an agent cell's *provable activity*, as a Surface cell.
 //!
-//! `docs/DREGG-DESKTOP-OS.md` §1 casts the whole desktop as the firmament made
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md` §1 casts the whole desktop as the firmament made
 //! visual: a window is a `Capability{ Surface(cell) }`. The agent-activity panel
 //! is one such surface — a cap-confined VIEW of an agent cell — showing:
 //!

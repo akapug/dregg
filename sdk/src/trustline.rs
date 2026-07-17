@@ -1,5 +1,5 @@
 //! # Trustline — the bilateral line of credit as an SDK noun
-//! (docs/ORGANS.md §1, docs/TRUSTLINES.md; Lean twin
+//! (.docs-history-noclaude/ORGANS.md §1, .docs-history-noclaude/TRUSTLINES.md; Lean twin
 //! `metatheory/Dregg2/Apps/Trustline.lean`).
 //!
 //! "Issuer A extends holder B a line of N" is an ATTENUATED CAPABILITY whose

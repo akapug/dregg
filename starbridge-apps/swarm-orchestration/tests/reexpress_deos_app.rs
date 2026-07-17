@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `swarm-orchestration` starbridge-app, on the composed deos
 //! framework — **the same app, smaller + more capable, now SHIPPED from `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #3, the multi-agent exemplar): the
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #3, the multi-agent exemplar): the
 //! swarm dispatch BOARD, re-expressed as a composed [`DeosApp`] and PROMOTED into
 //! `src/lib.rs` (it lived in this test on the scaffold `emit`/`edit` placeholders). This
 //! file now drives the SHIPPED surface ([`board_app`] from `src/`), proving the promotion:

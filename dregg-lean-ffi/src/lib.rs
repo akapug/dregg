@@ -886,7 +886,7 @@ mod ffi {
     extern "C" {
         fn dregg_ffi_init() -> i32;
         /// The SINGLE-THREADED / libuv-thread-free init (the pg-Tier-D-embeddable
-        /// path — see `docs/EMBEDDABLE-LEAN-RUNTIME.md` + `src/lean_init_st.cpp`).
+        /// path — see `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` + `src/lean_init_st.cpp`).
         /// Runs the libuv-free initializer chain so NO libuv event-loop thread is
         /// spawned. Same once-per-process contract as `dregg_ffi_init`.
         fn dregg_ffi_init_st() -> i32;
@@ -1864,7 +1864,7 @@ fn ensure_lean_init() -> Result<(), String> {
 }
 
 /// Initialize the Lean runtime in the **single-threaded / libuv-thread-free** mode
-/// (the pg-Tier-D-embeddable path — see `docs/EMBEDDABLE-LEAN-RUNTIME.md`). Unlike
+/// (the pg-Tier-D-embeddable path — see `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md`). Unlike
 /// [`lean_available`], this init does NOT start the libuv event-loop thread, so the
 /// runtime executes entirely on the caller's thread — the property a single-threaded
 /// host (a postgres backend) requires. Returns `true` on a successful init.

@@ -137,3 +137,6 @@ deos-hermes = { path = "../deos-hermes" }
 # test builds the real `Narration` the crown attests, never a parallel narration type.
 dregg-narrator = { path = "../narrator" }
 
+
+[lints]
+workspace = true

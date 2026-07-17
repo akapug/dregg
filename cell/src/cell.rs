@@ -173,7 +173,7 @@ impl std::fmt::Display for VerificationKeyIntegrityError {
 impl std::error::Error for VerificationKeyIntegrityError {}
 
 /// The cached canonical Merkle-leaf digest of a `Cell`
-/// (`docs/INCREMENTAL-COMMITMENT.md` step 3 — the cell-leaf cache).
+/// (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md` step 3 — the cell-leaf cache).
 ///
 /// ## Why this exists
 ///
@@ -289,7 +289,7 @@ pub struct Cell {
     /// lifecycle explicit going forward.
     #[serde(default)]
     pub lifecycle: CellLifecycle,
-    /// Cached canonical Merkle-leaf digest (`docs/INCREMENTAL-COMMITMENT.md`
+    /// Cached canonical Merkle-leaf digest (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md`
     /// step 3). Read ONLY by `Ledger::hash_cell`; invalidated at every ledger
     /// `&mut`-handoff seam. `#[serde(skip)]` ⇒ reconstructs dirty on decode;
     /// excluded from `PartialEq`/`Eq`/`Clone`-identity via the
@@ -584,7 +584,7 @@ impl Cell {
     }
 
     /// Mark the cached Merkle-leaf digest dirty
-    /// (`docs/INCREMENTAL-COMMITMENT.md` step 3). Called by EVERY ledger path
+    /// (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md` step 3). Called by EVERY ledger path
     /// that hands out a `&mut Cell` or mutates a cell's fields directly, BEFORE
     /// the mutation is observable — the completeness guarantee. Cheap (a single
     /// `Mutex` store), so calling it unconditionally (even when a mutation turns

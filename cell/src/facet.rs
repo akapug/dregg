@@ -97,7 +97,7 @@ pub const EFFECT_SET_PROGRAM: EffectMask = 1 << 24;
 /// react (or a replayed hole-id) is rejected by the double-spend gate.
 pub const EFFECT_REACTIVE_OPS: EffectMask = 1 << 25;
 
-/// `Effect::Mint` — the cap-gated SUPPLY ENTRY (`docs/SUPPLY-MODEL.md` Stage 2).
+/// `Effect::Mint` — the cap-gated SUPPLY ENTRY (`.docs-history-noclaude/SUPPLY-MODEL.md` Stage 2).
 /// A cap bearing this bit, held over an asset's ISSUER WELL with control-grade
 /// permission, authorizes minting that asset (well → holder, well goes more
 /// negative). This is the Rust image of Lean `mintAuthorizedB`

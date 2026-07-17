@@ -1,6 +1,6 @@
 //! The microkit facade — the "port" the dregg PDs code against, UML-style.
 //!
-//! `docs/DREGG-DESKTOP-OS.md §3` + L1 (the microkernel seam, "the same-code
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` + L1 (the microkernel seam, "the same-code
 //! contract") specifies a **minimal `sel4-microkit`-shaped API** the dregg
 //! protection domains (PDs) code against: a `#[protection_domain]`-style entry,
 //! a [`Handler`] trait (`notified`/`protected`/`fault`), a [`Channel`]
@@ -304,7 +304,7 @@ impl EventLoop {
 /// A protection domain running on the semihost — the facade's
 /// `#[protection_domain]` entry, realized as a host thread.
 ///
-/// `docs/DREGG-DESKTOP-OS.md §3`: a PD's `init()` returns its [`Handler`]; the
+/// `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3`: a PD's `init()` returns its [`Handler`]; the
 /// runtime then enters the event loop. On real Microkit the `#[protection_domain]`
 /// macro wires `init` as the PD entry and the runtime calls `Handler::run`. On
 /// the semihost [`ProtectionDomain::spawn`] does the same: it spawns a host
@@ -344,7 +344,7 @@ impl ProtectionDomain {
 }
 
 /// The `memory_region_symbol!`-style shared-memory accessor — a PD's view onto a
-/// shared region the firmament mapped into it at boot (`docs/DREGG-DESKTOP-OS.md
+/// shared region the firmament mapped into it at boot (`.docs-history-noclaude/DREGG-DESKTOP-OS.md
 /// §3`: "`memory_region_symbol!` maps to host shared buffers").
 ///
 /// On real Microkit `memory_region_symbol!(foo: *mut [u8], n = N)` resolves a

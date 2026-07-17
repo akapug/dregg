@@ -91,16 +91,34 @@ pub fn pick_params(plaintext_nbits: usize) -> Arc<BfvParameters> {
         .expect("degree-4096 parameter set")
 }
 
-/// The BFV additive fold. Each order is expanded (locally, trader-side) into its
-/// K-bucket unary increment vector, packed into ONE SIMD ciphertext, and summed
-/// homomorphically into the running demand/supply curve ciphertexts. Returns the
-/// decrypted `(demand, supply)` curves (length K) and the timing. The keypair is
-/// generated fresh here; in production it is the network/threshold key.
-pub fn bfv_fold(
+/// The folded book with its curves still ENCRYPTED — the object the output
+/// boundary consumes. `bfv_fold` decrypts this to check against the plaintext
+/// reference; `crate::boundary::masked_decrypt_to_shares` instead opens only a
+/// one-time-pad-MASKED plaintext and hands mod-t shares to the MPC crossing, so
+/// no curve coefficient is ever decrypted in the clear.
+pub struct BfvFoldedBook {
+    /// Encrypted aggregate demand curve (K slots live, rest zero).
+    pub d_ct: Ciphertext,
+    /// Encrypted aggregate supply curve.
+    pub s_ct: Ciphertext,
+    /// The keypair. PoC-only convenience: in production the secret key is the
+    /// network/threshold key and never exists in one place.
+    pub sk: SecretKey,
+    pub pk: PublicKey,
+    /// keygen/encrypt/fold/add_ops filled; decrypt & p*/V* belong to the caller.
+    pub timing: BfvFoldTiming,
+}
+
+/// The encrypted-output core of the BFV additive fold: keygen → encrypt each
+/// order's packed K-bucket increment as ONE SIMD ciphertext → carry-free fold
+/// into the demand/supply curve ciphertexts. Identical phases (and identical
+/// fixed rng seed, hence identical bytes) to [`bfv_fold`], which is now a thin
+/// decrypt-and-check wrapper around this.
+pub fn bfv_fold_encrypted(
     orders: &[Order],
     k: usize,
     params: &Arc<BfvParameters>,
-) -> (Vec<u64>, Vec<u64>, BfvFoldTiming) {
+) -> BfvFoldedBook {
     let mut t = BfvFoldTiming {
         n: orders.len(),
         k,
@@ -157,6 +175,34 @@ pub fn bfv_fold(
     }
     t.fold = t0.elapsed();
     t.add_ops = bid_cts.len() + ask_cts.len();
+
+    BfvFoldedBook {
+        d_ct,
+        s_ct,
+        sk,
+        pk,
+        timing: t,
+    }
+}
+
+/// The BFV additive fold. Each order is expanded (locally, trader-side) into its
+/// K-bucket unary increment vector, packed into ONE SIMD ciphertext, and summed
+/// homomorphically into the running demand/supply curve ciphertexts. Returns the
+/// decrypted `(demand, supply)` curves (length K) and the timing. The keypair is
+/// generated fresh here; in production it is the network/threshold key.
+pub fn bfv_fold(
+    orders: &[Order],
+    k: usize,
+    params: &Arc<BfvParameters>,
+) -> (Vec<u64>, Vec<u64>, BfvFoldTiming) {
+    let folded = bfv_fold_encrypted(orders, k, params);
+    let BfvFoldedBook {
+        d_ct,
+        s_ct,
+        sk,
+        pk: _,
+        timing: mut t,
+    } = folded;
 
     // (b) Decrypt the two aggregate curve ciphertexts (K slots each). In the
     //     no-viewer deployment the curves are NEVER opened — the crossing runs

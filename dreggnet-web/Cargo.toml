@@ -90,6 +90,14 @@ serde_json = "1"
 # a stable DreggIdentity via blake3) + a deterministic session seed from a session id.
 blake3 = "1"
 
+# OBSERVABILITY — the SAME crate + versions node/Cargo.toml uses (workspace-consistent), so the
+# web surface's `GET /metrics` (src/metrics.rs) speaks the same Prometheus exposition the
+# deploy/observability stack already scrapes from the nodes. The `metrics` macros are no-ops
+# until `metrics::install_recorder()` runs (make_app installs it), so the library stays
+# zero-cost for embedders that never mount /metrics.
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+
 # THE FEDERATION NODE-TARGET SEAM — `NodeTarget::{Local, Federation}` + `from_env` (reads
 # `DREGG_NODE_URL`) + the real `http` transport (`HttpNode`, POSTs a turn to `/turn/submit` +
 # confirms it landed on `/api/receipts`). Enabled with `features = ["http"]` so the Federation

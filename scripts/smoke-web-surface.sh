@@ -2,7 +2,7 @@
 # smoke-web-surface.sh — the N13 web-killer-demo verification (build + headless).
 #
 # Verifies "TWO TABS, ONE SURFACE, the share that REFUSES" (the web evaluation
-# artifact, docs/FRONTIER-ROADMAP.md §4 web cut + docs/WEB-FORWARD-EVERYWHERE.md
+# artifact, .docs-history-noclaude/FRONTIER-ROADMAP.md §4 web cut + .docs-history-noclaude/WEB-FORWARD-EVERYWHERE.md
 # N13) end-to-end in a REAL headless browser against the BUILT dist:
 #
 #   1. Builds site/dist in Docker (node + browsers via the Playwright image) —

@@ -42,3 +42,6 @@ dregg-cell = { path = "../cell", default-features = false }
 deos-view = { path = "../deos-view", default-features = false }
 # The council-cell token / federation-id derivation (same hash the substrate uses).
 blake3 = "1"
+
+[lints]
+workspace = true

@@ -4,7 +4,7 @@
 //! former Mina/Kimchi/Pickles backend family was REMOVED: its pickles wrap
 //! never verified the Kimchi proof in-circuit (the recursive step was
 //! vacuous scaffolding), so it provided no soundness the Plonky3 path does
-//! not — see `docs/PROOF-ECONOMICS.md` §4.
+//! not — see `.docs-history-noclaude/PROOF-ECONOMICS.md` §4.
 //!
 //! # Trait Hierarchy
 //!

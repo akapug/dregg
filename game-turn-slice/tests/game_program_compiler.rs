@@ -610,6 +610,65 @@ fn witnessed_membership_lowering_is_non_vacuous() {
     assert!(lower_witnessed_merkle_membership(&wp, &witness).is_ok());
 }
 
+/// **THE PI-BINDING FIX — a published output is CONSTRAINED, not merely committed.** The demo
+/// `build_game_program` publishes `[score, level]` as BARE public inputs (`with_public_inputs(2)`):
+/// the in-circuit PI-commitment covers them, but NOTHING pins them to the trace, so a prover could
+/// publish any score for the same constrained transition. `bind_public_input` cures this — it emits
+/// a real `ConstraintExpr::PiBinding` tying the published PI to the constrained `new`-side slot
+/// column, which the custom-leaf adapter lowers to `Base(PiBinding{First,..})` (the validated
+/// foldable path). So "this turn published score = X" becomes "X is exactly what the constrained
+/// transition produced" — the structural cure for `boundaries: vec![]`.
+#[test]
+fn bind_public_input_constrains_a_published_output() {
+    let mut c = GameProgramCompiler::new("pi-binding-fix", RANGE_BITS);
+    // A StrictMonotonic score tooth constrains SLOT_SCORE in the trace (new > old)...
+    c.lower_state_constraint(&StateConstraint::StrictMonotonic { index: SLOT_SCORE })
+        .expect("StrictMonotonic lowers via the range gadget");
+    // ...and binding it publishes THAT constrained column as PI 0 (not a free value).
+    let pi_index = c.bind_public_input(SLOT_SCORE);
+    assert_eq!(pi_index, 0, "the first bound PI rides slot 0");
+
+    let program = c.finish();
+    assert_eq!(
+        program.descriptor.public_input_count, 1,
+        "one bound public input"
+    );
+    let bindings = program
+        .descriptor
+        .constraints
+        .iter()
+        .filter(|k| {
+            matches!(
+                k,
+                ConstraintExpr::PiBinding {
+                    col: _,
+                    pi_index: 0
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        bindings, 1,
+        "exactly one PiBinding pins the published output to its constrained trace column"
+    );
+
+    // The REAL custom-leaf adapter carries it into a genuine IR-v2 PI binding (the foldable path).
+    let desc2 = cellprogram_to_descriptor2(&program)
+        .expect("a PiBinding-bearing game program lowers through the real custom-leaf adapter");
+    assert_eq!(desc2.public_input_count, 1);
+    assert!(
+        desc2
+            .constraints
+            .iter()
+            .any(|k| format!("{k:?}").contains("PiBinding")),
+        "the adapter must lower the binding to an IR-v2 PiBinding constraint"
+    );
+    eprintln!(
+        "PI-BINDING FIX: a StrictMonotonic-constrained score is bind_public_input'd → a real \
+         ConstraintExpr::PiBinding → IR-v2 Base(PiBinding) via the adapter. Published == derived."
+    );
+}
+
 /// THE POSITIVE POLE (SLOW): an honest in-committed-hand play PROVES as a foldable custom
 /// leaf through the REAL `prove_custom_leaf_with_commitment`, and its in-circuit-exposed
 /// commitment binds the `[leaf, root]` PIs (byte-identical to the host binding). The played

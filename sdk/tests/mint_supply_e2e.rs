@@ -1,5 +1,5 @@
 //! End-to-end exercise of the SDK `factories::mint_supply` affordance against a
-//! real `TurnExecutor` (`docs/SUPPLY-MODEL.md`, the cap-gated supply entry).
+//! real `TurnExecutor` (`.docs-history-noclaude/SUPPLY-MODEL.md`, the cap-gated supply entry).
 //!
 //! Proves the SDK builder is genuinely wired through to the executor's
 //! `Effect::Mint` handler: a turn carrying `mint_supply(..)` COMMITS and leaves

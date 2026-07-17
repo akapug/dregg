@@ -17,3 +17,6 @@ serde = { workspace = true, features = ["derive", "alloc"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

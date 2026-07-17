@@ -2,7 +2,7 @@
 //!
 //! The second DEVELOPER content surface of the dregg IDE (A1) and **the place
 //! the ADOS A0 tool-call seam will live**: an agent's `Bash`/command, routed
-//! through a terminal-cell's capability. `docs/DREGG-DESKTOP-OS.md` §1 + the
+//! through a terminal-cell's capability. `.docs-history-noclaude/DREGG-DESKTOP-OS.md` §1 + the
 //! agent-activity surface (`crate::agent`) cast the integrator wedge as grounding
 //! *the agent's ACTIONS, at the tool-call/turn boundary* — and a terminal IS
 //! that boundary made a surface: a command is a cap-gated action; the

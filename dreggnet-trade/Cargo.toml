@@ -34,3 +34,6 @@ dregg-cell = { path = "../cell", default-features = false }
 # The single CellId type (the escrow leg party/asset addresses).
 dregg-types = { path = "../types" }
 blake3 = "1"
+
+[lints]
+workspace = true

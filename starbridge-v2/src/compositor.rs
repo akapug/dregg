@@ -3,7 +3,7 @@
 //! This is the Rust realization of the Lean `Dregg2.Apps.Compositor` `AppSpec`
 //! (`metatheory/Dregg2/Apps/Compositor.lean`) — the same `Scene` / `Surface`
 //! tuple and the SAME three scene-authority teeth, enforced at the pixel layer
-//! the shell composites. `docs/DREGG-DESKTOP-OS.md` §5 ("the verified scene")
+//! the shell composites. `.docs-history-noclaude/DREGG-DESKTOP-OS.md` §5 ("the verified scene")
 //! casts output-integrity as *unfoolability applied to the display path*: a
 //! light client that checks `verify root = true` cannot be fooled by the pale
 //! ghost lying about protocol state, and the compositor asks the SAME question

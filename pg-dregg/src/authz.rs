@@ -16,7 +16,7 @@
 //!    layer — `dregg-auth` is deliberately revocation-free, see its Cargo.toml);
 //! 4. the **attenuation-narrowing** property, observable through this surface.
 //!
-//! The assurance boundary (docs/PG-DREGG.md §4): the *capability decision* is
+//! The assurance boundary (.docs-history-noclaude/PG-DREGG.md §4): the *capability decision* is
 //! the verified `dregg-auth` decision; the LRU + revocation set this module adds
 //! are conventional code, tested here directly.
 
@@ -96,13 +96,13 @@ fn issuer_pk() -> Option<PublicKey> {
 // and `GUC_NO_SHOW_ALL | GUC_SUPERUSER_ONLY` — so it does not appear in
 // `SHOW ALL` and cannot be read by non-superusers. `dregg_mint` is
 // `SECURITY DEFINER` and checks that it is called by a role the DBA explicitly
-// granted (see docs/PG-DREGG.md §2.1).
+// granted (see .docs-history-noclaude/PG-DREGG.md §2.1).
 //
 // In tests the key is set directly via `set_mint_key`.
 //
 // HONEST SCOPE: the extension-layer mint/attenuate helpers are a convenience for
 // applications that want to issue row-scoped sub-tokens inside SQL. The production
-// recommendation (docs/PG-DREGG.md §2.1) is to never place the private key in
+// recommendation (.docs-history-noclaude/PG-DREGG.md §2.1) is to never place the private key in
 // postgres at all and mint tokens out-of-database. The helpers are offered as an
 // opt-in with a loud privilege model; the recommendation stands.
 
@@ -152,7 +152,7 @@ fn mint_key() -> Option<RootKey> {
 // ============================================================================
 //
 // `dregg_mint` / `dregg_attenuate` accept caveats as a small JSON DSL that maps
-// 1:1 onto the `Pred` algebra (docs/PG-DREGG.md §2.1). The mapping is the
+// 1:1 onto the `Pred` algebra (.docs-history-noclaude/PG-DREGG.md §2.1). The mapping is the
 // COMPLETE `Pred` enum — every variant is reachable, every variant rejects a
 // malformed JSON with a named error, and nothing new is invented. The DSL is the
 // `serde_json` representation of `Pred` as defined in `dregg-auth`.
@@ -182,7 +182,7 @@ fn mint_key() -> Option<RootKey> {
 /// them; they do not need special handling here since the `Pred` enum covers the
 /// full first-party algebra and we are parsing ONLY first-party predicates at
 /// the SQL surface (a third-party discharge path through SQL is out of scope per
-/// docs/PG-DREGG.md §5).
+/// .docs-history-noclaude/PG-DREGG.md §5).
 pub fn parse_caveats(caveats_json: &str) -> Result<Vec<Caveat>, String> {
     let arr: Vec<serde_json::Value> = serde_json::from_str(caveats_json)
         .map_err(|e| format!("caveats is not a JSON array: {e}"))?;
@@ -238,7 +238,7 @@ pub fn attenuate_token(token: &str, caveats_json: &str) -> Result<String, String
 }
 
 // ============================================================================
-// The dev-mint convenience shape (docs/PG-DREGG-DX.md §4 S3, FRONTIER-ROADMAP N19)
+// The dev-mint convenience shape (docs/design-frontiers/PG-DREGG-DX.md §4 S3, FRONTIER-ROADMAP N19)
 // ============================================================================
 //
 // The first-ten-minutes friction is "hand-write a `Pred` JSON array to mint a
@@ -302,7 +302,7 @@ pub fn dev_mint_caveats_json(actions: &[String], resource_prefix: &str) -> Strin
 /// encoded `dga1_…` token, or `Err` with the SAME fail-closed message
 /// `mint_token` raises when no mint key is configured ("no mint key configured
 /// (dregg.issuer_privkey not set)") — i.e. **no key ⇒ a loud error, never a
-/// silently-minted token**. This is the dev on-ramp (docs/PG-DREGG-DX.md §4 S3);
+/// silently-minted token**. This is the dev on-ramp (docs/design-frontiers/PG-DREGG-DX.md §4 S3);
 /// the production recommendation (mint out-of-database, private key never in pg)
 /// is unchanged because this shares `mint_token`'s discipline rather than
 /// re-implementing minting.

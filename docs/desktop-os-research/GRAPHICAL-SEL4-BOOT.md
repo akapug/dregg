@@ -5,7 +5,7 @@ end to end**, at the simplest honest scope. A single protection domain (the
 `compositor-fb` PD) configures QEMU's `ramfb` display device over `fw_cfg` and
 writes a deos splash directly into a framebuffer it solely holds — pixels the
 QEMU window scans out. This is what closes the **output side** that THEME 3 of
-`docs/MATURATION-LEDGER.md` names ("authority is real, pixels & durability are
+`.docs-history-noclaude/MATURATION-LEDGER.md` names ("authority is real, pixels & durability are
 not"): until now the firmament booted HEADLESS (`-nographic`), and the
 compositor "framebuffer" was a 256-byte host-test authority witness
 (`sel4/dregg-firmament/src/compositor_pd.rs`, `FRAMEBUFFER_TILES = 256`), not
@@ -175,7 +175,7 @@ the desktop endgame, in honest rungs:
      `execFullForestG` cross-compiled to `aarch64-sel4-microkit` (the
      executor-stub seat, `sel4/dregg-pd/executor-stub`). The embeddable-runtime
      spike already refuted the "blocker" framing (the runtime is measurable;
-     `docs/EMBEDDABLE-LEAN-RUNTIME.md`), so this is a grind, not a research wall.
+     `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md`), so this is a grind, not a research wall.
 
 **What is built here (rung 0) vs the frontier (rung 3):** the **bytes->glass
 mechanism** — a confined seL4 PD configuring real display hardware over `fw_cfg`

@@ -1,17 +1,17 @@
 /-
 # Dregg2.Circuit.RotationLayout — THE ROTATED COMMITMENT LAYOUT (the one VK epoch's state shape).
 
-The staged Lean expression of `docs/UNIVERSAL-MAP-ROTATION.md` §2.1/§2.4/§2.6 — the flag-day
+The staged Lean expression of `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.1/§2.4/§2.6 — the flag-day
 commitment layout, expressed and PROVEN here BEFORE any wire flip (the live v1 path is untouched;
-the cutover commit consumes this module's shape, `docs/ROTATION-CUTOVER.md`):
+the cutover commit consumes this module's shape, `.docs-history-noclaude/ROTATION-CUTOVER.md`):
 
   * **registers 8 → 16** (§2.1): sixteen NAMED register limbs, direct in the commitment (the one
-    state structure that is correctly NOT a map — `docs/EPOCH-DESIGN.md` §"Per-structure choices").
+    state structure that is correctly NOT a map — `.docs-history-noclaude/EPOCH-DESIGN.md` §"Per-structure choices").
     `resolve` is the `FactoryDescriptor.fields` name-declaration semantics: a declared field name
     resolves to a register index, first-match, total on declared names (≤ 16) and injective on
     resolved indices (`resolve_total` / `resolve_inj`) — compilation resolves indices, the
     commitment binds the values (`rotatedCommit_binds_named_field`).
-  * **the limb order** (`docs/EPOCH-DESIGN.md` §"The commitment layout", reconciled): cells root ·
+  * **the limb order** (`.docs-history-noclaude/EPOCH-DESIGN.md` §"The commitment layout", reconciled): cells root ·
     the 16 registers · the map roots ADJACENT AND UNIFORM (cap_root, nullifier_root, heap_root —
     the §2.4 `heap_root` limb) · lifecycle · epoch · committed height · the receipt-index root
     **literally LAST**. The index root is last because the NAMED obligations
@@ -335,7 +335,7 @@ namespace PiV3
 /-- The frozen v2 PI prefix length (`circuit/src/effect_vm/pi.rs` `BASE_COUNT`). Drift-guarded
 by the Rust twin test — if the live layout grows before the flag-day, the pin fails there.
 
-Phase C (`docs/FAITHFUL-STATE-COMMITMENT.md`): re-anchored 201 → 209 when the
+Phase C (`.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md`): re-anchored 201 → 209 when the
 OLD/NEW state commitment widened 4 → 8 felts each (+8 prefix shift) to lift the
 collision floor ~62 → ~124 bits, matching FRI ~128-bit soundness. -/
 def V2_BASE_COUNT : Nat := 209

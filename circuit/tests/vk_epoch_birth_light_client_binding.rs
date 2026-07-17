@@ -1,6 +1,6 @@
 //! # THE VK-EPOCH BIRTH-FAMILY LIGHT-CLIENT BINDING BITE — createCell / factory / spawn FORCED ON-WIRE.
 //!
-//! ## What this closes (`docs/VK-EPOCH-PLAN.md`, STAGE B / Family A — the BIRTH family)
+//! ## What this closes (`.docs-history-noclaude/VK-EPOCH-PLAN.md`, STAGE B / Family A — the BIRTH family)
 //!
 //! Family 1 (`vk_epoch_perms_vk_light_client_binding.rs`, commit d58545a5f) proved setPermissions /
 //! setVK are FORCED-ON-WIRE via an in-circuit DIGEST-LIMB WELD (`permsVKWeldGate`: committed AFTER

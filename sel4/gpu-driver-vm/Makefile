@@ -2,7 +2,7 @@
 # boot a minimal Linux GUEST under the seL4 Microkit VMM on qemu_virt_aarch64.
 #
 # This is the FIRST rung toward real-GPU acceleration for the deos cockpit
-# (docs/desktop-os-research/SEL4-GPU-DRIVER-VM.md). It is a DISJOINT workstream:
+# (.docs-history-noclaude/desktop-os-research/SEL4-GPU-DRIVER-VM.md). It is a DISJOINT workstream:
 # it does NOT touch sel4/Makefile, sel4/dregg-pd/, sel4/render-pd/, or any shared
 # .system file. Everything it produces lives under this directory + $(LIBVMM_DIR).
 #

@@ -1,6 +1,6 @@
 //! The `EmulatedKernel` — the semihost firmament's `n = 1` microkernel.
 //!
-//! `docs/DREGG-DESKTOP-OS.md §3` (the semihosted-seL4 KEYSTONE) names the
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` (the semihosted-seL4 KEYSTONE) names the
 //! load-bearing decision of the whole desktop plan: **the robigalia emulator is
 //! a host-native backend for the rust-sel4 API surface, so ONE protection-domain
 //! (PD) source tree runs (a) on the host emulator under `cargo test` today and
@@ -155,7 +155,7 @@ struct Notification {
 ///
 /// This is the async dual of an endpoint-call cap: it confers the right to *poke*
 /// `target`, scoped to badges within `badge_mask`, and NOTHING else — no read, no
-/// synchronous message body, no reply. The census (`docs/NOTIFY-PRIMITIVE.md`) found
+/// synchronous message body, no reply. The census (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md`) found
 /// five subsystems that each re-implement async-signal ungated; this is the one held,
 /// attenuable authority the bare [`EmulatedKernel::signal`] lacked. The badge mask is
 /// the seL4 `NotificationCap oref badge cap_rights` payload scope: "may signal, but
@@ -301,7 +301,7 @@ pub struct EmulatedKernel {
 impl EmulatedKernel {
     /// A short, honest statement of the ONE deliberate non-fidelity — the v0
     /// isolation gap — so it travels WITH the code, never laundered as solved.
-    /// (`docs/DREGG-DESKTOP-OS.md §3`, the fidelity discipline.)
+    /// (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §3`, the fidelity discipline.)
     ///
     /// This describes the v0 THREAD backing's reality. The gap is **closed by
     /// the v1 process backing** ([`crate::process_kernel::ProcessKernel`],
@@ -376,7 +376,7 @@ impl EmulatedKernel {
     /// The bounds this kernel advertises — [`crate::Bounds::LOCAL`] (the strong
     /// `n = 1` guarantees: immediate revocation, synchronous commit).
     ///
-    /// `docs/DREGG-DESKTOP-OS.md §3` (the fidelity discipline): these are
+    /// `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` (the fidelity discipline): these are
     /// *genuinely real* on the host, NOT a nominal label. A host thread's
     /// [`Self::revoke`] IS synchronous — it removes the slot + its mint subtree
     /// under the held kernel `Mutex`, so there is no in-flight window (a
@@ -511,7 +511,7 @@ impl EmulatedKernel {
     /// Otherwise it REFUSES with [`IpcError::NotPermitted`] (fail-closed): you cannot
     /// wake a notification you hold no cap to, nor with a badge bit outside your mask.
     ///
-    /// This is the WELD (`docs/NOTIFY-PRIMITIVE.md` §3.1): the same badge-OR
+    /// This is the WELD (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md` §3.1): the same badge-OR
     /// [`Notification`] object, now reachable ONLY through a held authority — the
     /// ungated [`Self::signal`] becomes the kernel-internal primitive, and a wake the
     /// authority model can reason about (attenuable, non-amplifying) is `signal_gated`.

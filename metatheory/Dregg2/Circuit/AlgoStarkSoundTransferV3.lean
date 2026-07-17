@@ -101,7 +101,7 @@ arithmetic (main-table) constraints of a descriptor `d`; the interaction-bus arm
 residual is the separate LogUp AIR). This is `d.constraints.filter isArithB` by definition — not an
 abstract stand-in. For `transferV3` it is `arithList transferV3` (used by the instance below).
 
-The `d`-parametricity is the automation punchline (see `docs/reference/STARK-COMPLETION-AUTOMATION.md`):
+The `d`-parametricity is the automation punchline (see `docs/SUPERSEDED/STARK-COMPLETION-AUTOMATION.md`):
 the whole derivation core below is descriptor-POLYMORPHIC; only the final assembler is per-effect. -/
 def arithList (d : EffectVmDescriptor2) : List VmConstraint2 := d.constraints.filter isArithB
 

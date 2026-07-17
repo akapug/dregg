@@ -16,3 +16,6 @@ license = { workspace = true }
 [dependencies]
 starbridge-execution-lease = { path = "../starbridge-apps/execution-lease" }
 dregg-cell = { path = "../cell" }
+
+[lints]
+workspace = true

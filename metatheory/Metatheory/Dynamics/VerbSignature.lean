@@ -1,7 +1,7 @@
 /-
 # Metatheory.Dynamics.VerbSignature — the verb as `admission × footprint-Fpu`.
 
-`docs/DREGG3.md §2.1` (the two-gate result, the S0 verdict
+`.docs-history-noclaude/DREGG3.md §2.1` (the two-gate result, the S0 verdict
 `Dregg2/Substrate/FpuProbe.lean §LEDGER`): every kernel verb is
 
 > **admission** (a `Pred` discharge — does the supplied witness realize the demanded
@@ -77,7 +77,7 @@ instance (adm : Admission P) (w : W) : Decidable (Admits (P := P) (W := W) adm w
 
 A `Verb` over the product substance camera bundles the TWO gates: an admission demand and
 a footprint update (a `pre`/`post` pair in the product camera). It is the dynamics-layer
-realization of `docs/DREGG3.md §2.1`. -/
+realization of `.docs-history-noclaude/DREGG3.md §2.1`. -/
 
 variable {V : Type u} {A : Type v} {E : Type w} {S : Type x}
 variable [ResourceAlgebra V] [ResourceAlgebra A] [ResourceAlgebra E] [ResourceAlgebra S]

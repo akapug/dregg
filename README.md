@@ -184,12 +184,12 @@ Given algebra, that sentence is:
   turn), and intent demand (wanted of the world) — are one `Pred` algebra.
 
 The substrate's full design — the four substances, the eight verbs, the
-unifications — is [docs/DREGG3.md](docs/DREGG3.md).
+unifications — is [.docs-history-noclaude/DREGG3.md](.docs-history-noclaude/DREGG3.md).
 
 ## The organs
 
 The same primitives compose into runnable, two-agent services. Each is a small
-story you can drive end-to-end. See [docs/ORGANS.md](docs/ORGANS.md).
+story you can drive end-to-end. See [.docs-history-noclaude/ORGANS.md](.docs-history-noclaude/ORGANS.md).
 
 - **Trustlines** — a shared budget counter between two parties. "I extend you a
   line of N" is an attenuated capability whose exercise debits the shared
@@ -254,7 +254,7 @@ Four things make the proofs load-bearing rather than decorative:
   them; Rust authors no constraints. The live proof path is a single rotated
   multi-table circuit (IR-v2, R=24): a heterogeneous turn is split into maximal
   homogeneous cohort-runs and proven as a chain of rotated legs
-  ([docs/PATH-PRESERVE.md](docs/PATH-PRESERVE.md)). STARK proofs (Plonky3,
+  ([.docs-history-noclaude/PATH-PRESERVE.md](.docs-history-noclaude/PATH-PRESERVE.md)). STARK proofs (Plonky3,
   BabyBear, Poseidon2, FRI — post-quantum assumptions only) attest turns
   *additively* — verifying a turn never requires re-executing history — and
   recursive aggregation folds a whole history into one root a light client
@@ -315,7 +315,7 @@ deos is the userlayer where a *window is a capability* and an interaction is a
 *verified turn*. It adds **zero new trust**: every visual and interactive
 primitive reduces to a kernel theorem. The native cockpit is
 [`starbridge-v2/`](starbridge-v2/); see [docs/deos/DEOS.md](docs/deos/DEOS.md)
-and [docs/DREGG-DESKTOP-OS.md](docs/DREGG-DESKTOP-OS.md).
+and [.docs-history-noclaude/DREGG-DESKTOP-OS.md](.docs-history-noclaude/DREGG-DESKTOP-OS.md).
 
 - **Login = your root capability.** Authenticate a key → derive the root cell →
   receive your per-user capability template. A session *is* the resulting c-list;
@@ -408,7 +408,7 @@ It is four surfaces of the one kernel, proven to be the same object. See
   ([`Protocol/Workflow.lean`](metatheory/Dregg2/Protocol/Workflow.lean)).
 - **A step *is* an affordance fire** — the deos surface renders the choreography,
   it does not fork it ([`Deos/WorkflowBridge.lean`](metatheory/Dregg2/Deos/WorkflowBridge.lean)).
-- **Durable execution over verified turns** — [pg-dregg](docs/PG-DREGG.md) is
+- **Durable execution over verified turns** — [pg-dregg](.docs-history-noclaude/PG-DREGG.md) is
   "DBOS, but every step is a verified turn": reads are free SQL over the
   materialized mirror, writes go through the `AUTHZ → CHAIN → APPLY` spine, and
   crash-recovery re-validates every persisted turn on the way up
@@ -437,7 +437,7 @@ the same verified kernel.
   turns, cipherclerk macaroons — not a read-only mirror.
 - **The Studio / Playground** (the [site](site/)). Stage, run, and prove turns
   in the browser against a live wasm executor.
-- **[pg-dregg](docs/PG-DREGG.md)** ([`pg-dregg/`](pg-dregg/)). dregg capabilities
+- **[pg-dregg](.docs-history-noclaude/PG-DREGG.md)** ([`pg-dregg/`](pg-dregg/)). dregg capabilities
   as a PostgreSQL Row-Level-Security + durable-workflow layer: a policy reads
   `dregg_admits('read', id)` instead of hand-rolled SQL — the decision is the
   *same one the kernel makes*, from the session's presented token.
@@ -446,7 +446,7 @@ the same verified kernel.
 - **DreggDL** ([`dregg-deploy/`](dregg-deploy/)). Declarative deployment specs;
   an over-grant in a spec is caught as in-forest capability amplification before
   anything deploys.
-- **The seL4 / Robigalia embedding** ([docs/FIRMAMENT.md](docs/FIRMAMENT.md) ·
+- **The seL4 / Robigalia embedding** ([.docs-history-noclaude/FIRMAMENT.md](.docs-history-noclaude/FIRMAMENT.md) ·
   [`sel4/`](sel4/)). An seL4 capability and a dregg capability are the *same*
   abstraction at two points on a distance parameter; at `n = 1` (one machine) the
   distributed bounds collapse to strong local properties. **Today:** the
@@ -454,7 +454,7 @@ the same verified kernel.
   STARK verifier PD, **and the executor PD itself** — the Lean kernel
   `execFullForestG` runs inside a real seL4 protection domain — under QEMU. The
   Lean-runtime embedding embeds single-threaded, allocator-override-free, IO-free
-  ([docs/EMBEDDABLE-LEAN-RUNTIME.md](docs/EMBEDDABLE-LEAN-RUNTIME.md)).
+  ([.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md](.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md)).
   **Remaining (named):** the crypto floor supplied from the verifier-STARK PD,
   the decomposed multi-PD assembly, and making the hosted image interactive.
 

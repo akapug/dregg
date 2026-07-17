@@ -247,7 +247,7 @@ impl PersistentStore {
     }
 
     /// [`Self::commit_finalized_turn`] PLUS forever-digest burns in the SAME
-    /// redb transaction — the same-transaction burn weld (docs/PERSISTENCE.md
+    /// redb transaction — the same-transaction burn weld (.docs-history-noclaude/PERSISTENCE.md
     /// §3): a turn that burns an anti-replay digest (a trustline draw, a court
     /// slash) lands its commit record AND its digest atomically, so no crash
     /// can leave the turn durable without its burn or the burn durable without
@@ -1647,7 +1647,7 @@ mod tests {
         }
     }
 
-    /// THE SAME-TRANSACTION BURN WELD (docs/PERSISTENCE.md): a turn's commit
+    /// THE SAME-TRANSACTION BURN WELD (.docs-history-noclaude/PERSISTENCE.md): a turn's commit
     /// record and its forever-digest burns land in ONE redb transaction —
     /// after an arbitrary crash, either both are durable or neither is. The
     /// crash is modeled exactly as in `crash_recovery_is_consistent`: commits

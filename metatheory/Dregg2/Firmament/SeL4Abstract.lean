@@ -440,7 +440,7 @@ Control↦control`) is FAITHFUL and INJECTIVE on the 8 seL4 auth constructors it
 7 seL4 IPC authorities (`alpha_total_on_ipc`). The remaining 4 (`Write, Read, DeleteDerived, AAuth`)
 have no dregg cap-lattice image, but these are PRINCIPLED projections, not conflations: dregg factors
 memory access into the richer Blum-multiset `Crypto.MemoryChecking.Kind` model, revocation into the
-registry / `CNode.revoke` op, and operates above the arch layer (`docs/rebuild/AUTHORITY-DIVERGENCE-FINDING.md`).
+registry / `CNode.revoke` op, and operates above the arch layer (`.docs-history-noclaude/rebuild/metatheory/AUTHORITY-DIVERGENCE-FINDING.md`).
 So `α` is total only on the USED subset; we encode this honestly: `alpha` returns `Option DAuth.Auth`
 (`none` exactly on the 4 principled-projection ctors), and `alpha_total_iff_used` proves α is defined ⟺
 the auth is one of the used 8. dregg's authority lattice is an 8-of-12 PROJECTION of seL4's, with the
@@ -457,7 +457,7 @@ used seL4 auth ctors onto dregg's `Auth`; `none` on the 4 remaining seL4-richer 
 (`Write`/`Read`/`DeleteDerived`/`AAuth`) that are *principled* projections (memory access lives in
 dregg's Blum-multiset `Crypto.MemoryChecking.Kind` model, not the cap lattice; `DeleteDerived` is the
 revocation registry / `CNode.revoke` op; `AAuth` is above dregg's arch level — see
-`docs/rebuild/AUTHORITY-DIVERGENCE-FINDING.md`). Per the verdict: `Receive↦read, SyncSend↦write,
+`.docs-history-noclaude/rebuild/metatheory/AUTHORITY-DIVERGENCE-FINDING.md`). Per the verdict: `Receive↦read, SyncSend↦write,
 Grant↦grant, Call↦call, Reply↦reply, Reset↦reset, Control↦control`, **and now `Notify↦notify`** — the
 one genuine IPC conflation the transcription found, closed (`Auth.notify` is the new dregg async-signal
 authority, `Authority/Positional.lean:38`; `Firmament/NotifyAuthority` proves its cap algebra). So α is

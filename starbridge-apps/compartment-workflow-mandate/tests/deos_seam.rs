@@ -1,7 +1,7 @@
 //! THE SEAM CLOSED — the deos-native `advance_step` fired through the executor against
 //! the FULL workflow program, so the verified caveats BITE in the fire path itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (the workflow port): the promotion's task
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (the workflow port): the promotion's task
 //! is to close the fire→full-`CellProgram` seam so a skipped/rewound step or a
 //! past-terminal advance is a REAL executor refusal in the fire path, not a
 //! `cwm_advance_admits` / `evaluate`-only check. This file proves that seam CLOSED.

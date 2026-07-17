@@ -3,7 +3,7 @@
 The current Midnight path (`bridge/src/midnight_verified.rs`,
 `midnight_gateway.rs`) is an optimistic / watchtower bridge: Midnight checks a
 federation **attestation**, and a STARK proof rides along *only as dregg-side
-fraud-proof material* (`docs/deos/NATIVE-PROOF-BRIDGES.md §2`). Midnight itself
+fraud-proof material* (`docs/SUPERSEDED/NATIVE-PROOF-BRIDGES.md §2`). Midnight itself
 verifies nothing meaningful in-circuit — just a signature/hash.
 
 This document designs a *different* bridge that gives Midnight something real to

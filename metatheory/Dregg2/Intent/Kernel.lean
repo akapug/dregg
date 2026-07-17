@@ -1,7 +1,7 @@
 /-
 # Dregg2.Intent.Kernel — the concrete `KernelIntent` (the auction proves on this).
 
-Phase 2, layer 4 (`docs/rebuild/PHASE-2-INTENT-SPEC.md`). The concrete instance of the four-faced
+Phase 2, layer 4 (`.docs-history-noclaude/rebuild/metatheory/PHASE-2-INTENT-SPEC.md`). The concrete instance of the four-faced
 `Intent` (`Intent/Core.lean`) over the kernel's resources. The abstract laws — `fulfill_discharges`
 (the receipt⊣intent keystone), `fulfill_conserves`, `no_double_fulfill` — are polymorphic over the
 resource theory `R` and the time-world `(B, reg, stmtOf)`, so they **transfer to `KernelIntent` by

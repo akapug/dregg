@@ -1,3 +1,14 @@
+# ⚠⚠ ASPIRATIONAL — THERE IS NO CADDY TO INSTALL THIS INTO. ⚠⚠
+#
+# Verified 2026-07-15: the AWS edge runs a docker compose stack with NO caddy
+# container. There is no gateway Caddy config for this block to be added to. And even
+# with one, the `reverse_proxy 100.95.240.73:8790` line below points at hbox, which is
+# on a DIFFERENT TAILNET from the edge (skunk-emperor vs 100.64.0.x) — unreachable.
+#
+# The live games demo needs none of this: `tailscale funnel` on hbox supplies the
+# public hostname AND the TLS. See deploy/games/RUNBOOK-FUNNEL.md, deploy/README.md.
+#
+# ---------------------------------------------------------------------------
 # Caddyfile block — the dregg games public demo (games.dregg.fg-goose.online).
 #
 # ⚠ THIS BLOCK RUNS ON THE AWS GATEWAY, NOT ON hbox. It is a NEW SITE BLOCK to be

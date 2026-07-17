@@ -19,7 +19,7 @@
 //!   * the subscriber's "active subscription" IS a dregg capability;
 //!   * **`dregg_revoke(token)` — the subscriber hits "cancel" — and the VERY
 //!     NEXT billing turn for that subscriber is REFUSED** by the AUTHZ gate, with
-//!     no polling, no TTL, no bounded staleness (`docs/PG-DREGG.md` §3; ember
+//!     no polling, no TTL, no bounded staleness (`.docs-history-noclaude/PG-DREGG.md` §3; ember
 //!     decision #1 — revocation is instant). The merchant cannot bill a
 //!     cancelled subscriber even by replaying last month's signed turn;
 //!   * **re-subscription (`dregg_unrevoke`) restores billing on the next turn** —

@@ -1,6 +1,6 @@
 //! # dregg-query — attested queries over the receipt fact-base
 //!
-//! The Q1+Q2 core of `docs/EPISTEMIC-DATALOG.md`, deliberately NOT a full
+//! The Q1+Q2 core of `.docs-history-noclaude/EPISTEMIC-DATALOG.md`, deliberately NOT a full
 //! Datalog engine (the named trap): no IDB rules, no recursion, no
 //! stratification — one conjunctive query at a time, over a closed EDB
 //! schema, with the two things no Datalog DB has:

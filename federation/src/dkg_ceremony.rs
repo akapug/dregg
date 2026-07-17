@@ -4,7 +4,7 @@
 //! [`crate::dkg`] is the pure protocol: Feldman rounds, Ack/Complaint, QUAL,
 //! [`DkgOutput`] → `BeaconShare`. It deliberately models transport as "bytes
 //! that arrived" and assumes a COMMON VIEW. This module supplies what that
-//! leaves open, mapped onto the organs (docs/ORGANS.md):
+//! leaves open, mapped onto the organs (.docs-history-noclaude/ORGANS.md):
 //!
 //! * **Authenticated broadcast** — every round message rides as a
 //!   [`SignedCeremonyMsg`]: an ed25519 signature over a domain-tagged

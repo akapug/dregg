@@ -1,5 +1,5 @@
 # net — M3 the firmament's network edge: the virtio-net driver PD (the
-# distributed end of the cap gradation, docs/FIRMAMENT.md §3).
+# distributed end of the cap gradation, .docs-history-noclaude/FIRMAMENT.md §3).
 #
 # This is the rust-sel4 `microkit-http-server-example-virtio-net-driver` PD
 # vendored verbatim, pulling the rust-sel4 driver/ring-buffer/virtio crates as

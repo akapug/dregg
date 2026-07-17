@@ -14,7 +14,7 @@ byte-identical columns and the VK is unchanged. The VK only moves when a REAL no
 emitted with its badge-mask leaf. That emission + the Rust marshaller agreement is THIS checklist. It
 MUST ride the same single VK epoch as the rotation/C3 cutover (the cell-commitment ↔ circuit ↔ verifier
 triangle honors one VK at a time; two simultaneous bumps break the verifier contract — see
-`docs/NOTIFY-CASCADE.md` "The hard constraint").
+`.docs-history-noclaude/NOTIFY-CASCADE.md` "The hard constraint").
 
 ## What is ALREADY DONE (Lean, staged-additive, VK byte-identical — do NOT redo)
 
@@ -94,7 +94,7 @@ This is the felt-level encoding change — the heart of the VK bump.
 - **Site:** `verifier/src/` — the VK / public-input contract.
 - **Edit:** re-pin the VK after items 2 (and 4, if taken) change the leaf digest. This is THE single
   coordinated VK bump — it MUST be the only VK change in flight (the rotation/C3 churn must have settled
-  first; confirm `docs/ROTATION-CUTOVER.md` is at its post-cutover VK epoch before starting).
+  first; confirm `.docs-history-noclaude/ROTATION-CUTOVER.md` is at its post-cutover VK epoch before starting).
 - **Re-pin the descriptor SHA registry** (the "VK" = the 26+ descriptor SHA fingerprints): the 5
   felt-encoders now emit a column value `7` for a notify right, so any golden descriptor/byte-pin that
   could contain a notify cap re-pins. (No deployed descriptor contains one yet, so in practice the

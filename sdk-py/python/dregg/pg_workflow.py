@@ -1,7 +1,7 @@
 """``dregg.pg.workflow`` — durable verified workflows over pg-dregg.
 
 A **durable workflow** is an ordered, named sequence of verified turns driven
-through the pg-dregg write spine (``docs/PG-DREGG.md`` §8/§11): each step is a
+through the pg-dregg write spine (``.docs-history-noclaude/PG-DREGG.md`` §8/§11): each step is a
 signed turn enqueued into ``dregg.submit_queue`` (RLS-gated by
 ``dregg_admits('submit', agent)``), which the node's drainer applies through the
 real verified executor (``pending → executed | refused``). The runner here is the
@@ -32,7 +32,7 @@ THE THREE PROPERTIES the runner gives a Python user (the lane's deliverable):
   :mod:`dregg.pg` unchanged — a workflow reads state back as free SQL
   (:meth:`dregg.pg.Pg.cell_balances`) and every write IS a verified turn.
 
-THE HONEST SEAM (named, per ``docs/PG-DREGG.md`` §11.4 / §13). The
+THE HONEST SEAM (named, per ``.docs-history-noclaude/PG-DREGG.md`` §11.4 / §13). The
 soundness-load-bearing halves — the durable enqueue, the ``submit_gate`` RLS, and
 the audit-reconciliation that makes resume exactly-once — are **real and enforced
 by the database engine** and are exercised against live pg18. The transition that
@@ -548,7 +548,7 @@ class LocalDrainer:
     """A **dev/test stand-in** for the node's submit-queue drainer — NOT the
     verified executor.
 
-    The real write path (``docs/PG-DREGG.md`` §11.4) is: a pg-user enqueues a
+    The real write path (``.docs-history-noclaude/PG-DREGG.md`` §11.4) is: a pg-user enqueues a
     signed turn; the **node's drainer** (``dregg_kernel`` role) decodes it, runs it
     through the real verified Lean executor (``execute_via_producer``), materializes
     the post-state, and stamps the queue row ``executed`` (with the receipt) or

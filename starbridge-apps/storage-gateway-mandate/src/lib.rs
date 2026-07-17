@@ -577,7 +577,7 @@ pub fn build_init_gateway_action(
 // The deos-native surface — the GATEWAY as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the storage-gateway mandate should
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the storage-gateway mandate should
 // "actually mount at node startup" — its scaffold floor ([`sgm_cell_program`] /
 // [`sgm_factory_descriptor`]) was executor-truth (the volume-budget caveats bite on a
 // born cell) but had NO deos surface. This PROMOTES it: the three VFS operations are ONE

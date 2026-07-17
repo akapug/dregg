@@ -35,12 +35,12 @@ Fulfillment is a STARK proof that leaks nothing about the satisfier."* The
 **parenthetical "(public)" is the actual privacy boundary** — and it's where
 most of the marketplace de-anonymisation surface lives.
 
-`docs/unlinkability-analysis.md` is the most honest internal document. It
+`.docs-history-noclaude/root-docs-2026-05/unlinkability-analysis.md` is the most honest internal document. It
 enumerates seven unlinkability properties (multi-show, issuer, sender/
 receiver, transaction-graph, intent, network, cross-federation) and grades
 five of them as "partial" or worse.
 
-`docs/intent-privacy-assessment.md` opens with *"Short answer: No. The system
+`.docs-history-noclaude/root-docs-2026-05/intent-privacy-assessment.md` opens with *"Short answer: No. The system
 provides component-level privacy ... but the composition leaks enough metadata
 to profile participants in a real marketplace."*
 
@@ -57,11 +57,11 @@ to profile participants in a real marketplace."*
 | Trustless intent engine      | "Threshold-encrypted intents — no party reads before collective decryption"                  | `intent/src/trustless.rs:5-7`                                                           |
 | Note model                   | Anonymous, consume-once, "self-proving" with federation-independent nullifiers               | `cell/src/note.rs:1-12`                                                                 |
 | Value commitments            | Pedersen-hiding; "executor never learns actual amounts"                                      | `cell/src/value_commitment.rs:14-21,46-66`                                              |
-| Federated presentation       | Multi-show unlinkability via fresh `presentation_randomness` and blinded leaf                | `docs/unlinkability-analysis.md` §1-2, code in `bridge/src/present.rs`                  |
+| Federated presentation       | Multi-show unlinkability via fresh `presentation_randomness` and blinded leaf                | `.docs-history-noclaude/root-docs-2026-05/unlinkability-analysis.md` §1-2, code in `bridge/src/present.rs`                  |
 | Cell field visibility        | Progressive disclosure: `Public` / `Committed` / `SelectivelyDisclosable`                    | `cell/src/state.rs:13-26`                                                               |
 | Wire layer                   | "TLS provides confidentiality and authentication of the transport"                           | `wire/src/lib.rs:8-15`                                                                  |
-| Network layer                | (Acknowledged to have none.) Future: Dandelion++ + padding + Tor + mixnet                    | `docs/design-network-privacy.md`                                                        |
-| Midnight bridge              | Observation/attestation bridge; "value privacy" delegated to Midnight                        | `docs/midnight-comparison.md`, `bridge/src/midnight.rs:1-28`                            |
+| Network layer                | (Acknowledged to have none.) Future: Dandelion++ + padding + Tor + mixnet                    | `.docs-history-noclaude/root-docs-2026-05/design-network-privacy.md`                                                        |
+| Midnight bridge              | Observation/attestation bridge; "value privacy" delegated to Midnight                        | `.docs-history-noclaude/root-docs-2026-05/midnight-comparison.md`, `bridge/src/midnight.rs:1-28`                            |
 
 The headline claim of `README.md:94-103` ("Three verification modes:
 Trusted | Selective Disclosure | Fully Private") refers specifically to
@@ -127,7 +127,7 @@ responsibility, per `DESIGN-commitment-framework.md` §2.1.
 3. The endpoint has no rate-limiting, no auth, no Tor/onion routing. Every
    `/commit` and every `/consume` carries the caller's IP. Network-level
    linkability is *complete*. The README, the design docs, and the
-   `docs/design-network-privacy.md` all flag this; it is not a hidden
+   `.docs-history-noclaude/root-docs-2026-05/design-network-privacy.md` all flag this; it is not a hidden
    shortfall, but the blinded-endpoint module's docstring (lines 1-12) does
    not warn the caller about it.
 
@@ -350,7 +350,7 @@ private election. The docstring is honest; the README is loose.
 
 `bridge/src/midnight.rs:1-28` and `bridge/src/midnight_observer.rs` describe
 an **observation bridge**. The pattern is the same one Midnight uses with
-Cardano (per `docs/midnight-comparison.md`):
+Cardano (per `.docs-history-noclaude/root-docs-2026-05/midnight-comparison.md`):
 
 1. *`dregg` → Midnight*: burn a note on dregg; federation produces threshold
    attestation; Midnight contract verifies and mints.
@@ -390,7 +390,7 @@ shielded execution layer (`gen_midnight.rs`), but the dregg ↔ Midnight
 *value* bridge (`midnight.rs` + `midnight_observer.rs`) is a vanilla
 attestation bridge with no Zswap involvement.** The privacy benefit of
 Midnight is therefore available to *apps that target Midnight as a backend*,
-not to *value flowing through the bridge*. `docs/midnight-comparison.md`
+not to *value flowing through the bridge*. `.docs-history-noclaude/root-docs-2026-05/midnight-comparison.md`
 line 37-39 is honest about this: *"a dregg cell locks a note → federation
 attests → Midnight contract mints shielded coin (or vice versa)"* — and
 "shielded coin" is up to the contract on Midnight, not the bridge.
@@ -419,7 +419,7 @@ What TLS does NOT do, that the privacy claim *might* be read to imply:
   gossip), the intermediate node decrypts and re-encrypts (or sees the
   cleartext content in postcard-framed form internally).
 - *Not mix-network privacy.* No Sphinx wrapping, no Loopix delays, no Tor
-  integration. `docs/design-network-privacy.md` lists this as a Phase 2-3
+  integration. `.docs-history-noclaude/root-docs-2026-05/design-network-privacy.md` lists this as a Phase 2-3
   roadmap; nothing is wired in today.
 
 CapTP-level encryption of *contents*: the `wire/src/captp_routing.rs` and
@@ -432,7 +432,7 @@ federation node mid-pipeline) sees: who is talking to whom, what
 opcode, the size, and any non-sealed payload — but not the contents of
 sealed capabilities.
 
-This is captured in `docs/TRUST_MODEL.md` line 46-51: *"wire/: Transport
+This is captured in `.docs-history-noclaude/TRUST_MODEL.md` line 46-51: *"wire/: Transport
 (not a trust boundary). Authenticated channels (TLS + PeerRole). Does NOT
 verify payload semantics."* Honest framing.
 
@@ -492,7 +492,7 @@ The marketplace-privacy story is a layered set of components:
 
 | Layer                     | Status                                                                                                                       |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Network                   | None. `docs/design-network-privacy.md` is a plan; gossip is plaintext.                                                       |
+| Network                   | None. `.docs-history-noclaude/root-docs-2026-05/design-network-privacy.md` is a plan; gossip is plaintext.                                                       |
 | Intent content            | SSE keyword tokens (`intent/src/sse.rs`) — `BLAKE3_derive_key("dregg-sse-token-v1", keyword \|\| epoch_le_bytes)`            |
 | Intent body               | x25519 sealed box (designed; partially implemented in `intent/src/sse.rs`)                                                   |
 | Threshold-encrypted intents | Stubbed in `intent/src/trustless.rs` — cryptosystem not yet selected                                                       |
@@ -501,7 +501,7 @@ The marketplace-privacy story is a layered set of components:
 | Payment hiding            | Pedersen value commitments designed (`cell/src/value_commitment.rs`), partially wired (executor consumes `ValueCommitment`)  |
 | Receipt chain             | Not hidden; receipt is BLAKE3-chained and the chain shape leaks turn count                                                   |
 
-`docs/intent-privacy-assessment.md` is right: the *components* are privacy-
+`.docs-history-noclaude/root-docs-2026-05/intent-privacy-assessment.md` is right: the *components* are privacy-
 preserving in isolation, and the *composition* leaks.
 
 ---
@@ -509,8 +509,8 @@ preserving in isolation, and the *composition* leaks.
 ## 10. Side channels we admit
 
 These are things dregg does NOT hide, in order of severity for a real
-deployment. I'm collating from `docs/intent-privacy-assessment.md`,
-`docs/unlinkability-analysis.md`, and a code scan.
+deployment. I'm collating from `.docs-history-noclaude/root-docs-2026-05/intent-privacy-assessment.md`,
+`.docs-history-noclaude/root-docs-2026-05/unlinkability-analysis.md`, and a code scan.
 
 1. **Network metadata.** IP, connection timing, message size, message
    ordering. No mixing, no padding, no Tor, no Dandelion++. *Documented as
@@ -527,7 +527,7 @@ deployment. I'm collating from `docs/intent-privacy-assessment.md`,
 3. **Federation membership / federation root.** The blinded-leaf STARK
    anonymizes *which* member of a federation produced a credential, but
    reveals *which federation*. Federation roots are public.
-   `docs/unlinkability-analysis.md` §2 is explicit.
+   `.docs-history-noclaude/root-docs-2026-05/unlinkability-analysis.md` §2 is explicit.
 
 4. **Turn timing.** `Turn.timestamp` is in the public receipt
    (`turn/src/turn.rs` and its receipt sibling). No batching, no Poisson
@@ -535,7 +535,7 @@ deployment. I'm collating from `docs/intent-privacy-assessment.md`,
    turn.
 
 5. **Cell IDs.** `CellId` is `BLAKE3(public_key || token_id)` per
-   `docs/sovcell-whichone-upgrades.md`. Pseudonymous but **stable across
+   `.docs-history-noclaude/root-docs-2026-05/sovcell-whichone-upgrades.md`. Pseudonymous but **stable across
    turns**. The intent-privacy-assessment §1 calls this out as the
    profiling vector: "CommitmentId 0xAB posts GPU compute intents every
    Monday."
@@ -548,7 +548,7 @@ deployment. I'm collating from `docs/intent-privacy-assessment.md`,
 
 7. **Nullifier-set ordering.** The append-only nullifier set
    (`cell/src/nullifier_set.rs`) reveals the *temporal ordering* of spends.
-   `docs/unlinkability-analysis.md` §4 calls this "weak transaction-graph
+   `.docs-history-noclaude/root-docs-2026-05/unlinkability-analysis.md` §4 calls this "weak transaction-graph
    unlinkability."
 
 8. **Bridge anonymity.** A bridge transfer in a low-volume cross-federation
@@ -613,7 +613,7 @@ Places where code or docs claim more than the implementation delivers:
    metadata surface.
 
 6. **The "Privacy-preserving marketplace" README claim is contradicted by
-   `docs/intent-privacy-assessment.md`.** The latter document is, in my
+   `.docs-history-noclaude/root-docs-2026-05/intent-privacy-assessment.md`.** The latter document is, in my
    view, the correct framing. The README oversells.
 
 7. **Cipherclerk REST/JSON APIs probably leak via the sdk-ts client.** The
@@ -681,7 +681,7 @@ explicitly absent. `N/A` = not claimed.
 | Sender-receiver unlinkability in note transfer     | Partial        | Executor sees the spend+create in the same turn; conservation check leaks mapping  |
 | Anonymous note value (Pedersen hiding)             | Designed, partly wired | `cell/src/value_commitment.rs`; consumed in `executor.rs:2326,5739`         |
 | Note value hidden from executor                    | Stub           | The `ValueCommitment` path exists; range-proof + Schnorr-on-excess not enforced    |
-| Network IP privacy                                 | No             | TLS only; no Tor/mixnet (`docs/design-network-privacy.md`)                         |
+| Network IP privacy                                 | No             | TLS only; no Tor/mixnet (`.docs-history-noclaude/root-docs-2026-05/design-network-privacy.md`)                         |
 | Network timing privacy                             | No             | No Dandelion++/Loopix; designed only                                               |
 | Network size privacy                               | No             | No padding; messages range 1-432 KiB                                                |
 | Encrypted-turn ordering (federation blind to body) | Stub           | `turn/src/encrypted.rs` not consumed by executor                                   |
@@ -761,13 +761,13 @@ explicitly absent. `N/A` = not claimed.
 
 11. **Network-layer privacy is the largest unmitigated leak.** The
     Dandelion++ + padding + Tor plan is well-scoped in
-    `docs/design-network-privacy.md`. Is it on a real roadmap, or is the
+    `.docs-history-noclaude/root-docs-2026-05/design-network-privacy.md`. Is it on a real roadmap, or is the
     deployment story "users should run dregg behind their own Tor/VPN"?
     The README's bullet "All modes work offline" is not the same answer
     as "the protocol provides metadata hiding."
 
 12. **The "Privacy-preserving marketplace" claim in `README.md:17`. Given
-    `docs/intent-privacy-assessment.md`'s opening line ("Short answer:
+    `.docs-history-noclaude/root-docs-2026-05/intent-privacy-assessment.md`'s opening line ("Short answer:
     No"), should this README claim be softened?** A more accurate phrasing
     might be "Pseudonymous marketplace with cryptographic frontrunning
     protection."
@@ -793,7 +793,7 @@ window. The Midnight bridge does not leverage Midnight's shielded value
 semantics.
 
 The internal documentation is unusually honest about this: 
-`docs/intent-privacy-assessment.md` and `docs/unlinkability-analysis.md`
+`.docs-history-noclaude/root-docs-2026-05/intent-privacy-assessment.md` and `.docs-history-noclaude/root-docs-2026-05/unlinkability-analysis.md`
 are the most reliable summary. The README is more aspirational and would
 benefit from a more careful description of which guarantees hold at which
 trust-boundary layer.

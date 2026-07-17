@@ -194,7 +194,7 @@ pub struct AttenuatedCap {
 }
 
 /// Per-cell-state sub-root cache for the capability tree
-/// (`docs/INCREMENTAL-COMMITMENT.md` step 2). Holds the last-materialized
+/// (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md` step 2). Holds the last-materialized
 /// canonical cap-root felt (as its `u32` value) so a turn that does NOT touch
 /// the cap set reuses it instead of re-folding the sorted-Poseidon2 tree.
 ///
@@ -263,7 +263,7 @@ impl Eq for CapRootCache {}
 pub struct CapabilitySet {
     refs: Vec<CapabilityRef>,
     next_slot: u32,
-    /// Cached canonical cap-root felt value (`docs/INCREMENTAL-COMMITMENT.md`
+    /// Cached canonical cap-root felt value (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md`
     /// step 2). `#[serde(skip)]` so it is never persisted and always
     /// reconstructs as dirty (`None`) on deserialize — the byte-identical fold
     /// fills it on first read. Excluded from `PartialEq`/`Eq` via the
@@ -313,7 +313,7 @@ impl CapabilitySet {
         }
     }
 
-    /// Mark the cached cap-root dirty (`docs/INCREMENTAL-COMMITMENT.md` step 2).
+    /// Mark the cached cap-root dirty (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md` step 2).
     /// Called by EVERY path that can change the c-list bytes — the completeness
     /// guarantee. Cheap (a single `Cell::set`), so calling it unconditionally
     /// (even when a mutator turns out to be a no-op, e.g. a `revoke` of a missing

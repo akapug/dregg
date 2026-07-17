@@ -559,8 +559,10 @@ fn signature_signed_for_federation_a_rejects_on_federation_b() {
 
     let fed_a = [0xA1u8; 32];
     let fed_b = [0xB2u8; 32];
-    let signed_for_a = TurnExecutor::compute_signing_message(&action, &fed_a);
-    let verifier_at_b = TurnExecutor::compute_signing_message(&action, &fed_b);
+    // Same turn nonce on both sides: the inequality below is federation
+    // binding alone (dregg-action-sig-v3 also binds the turn nonce).
+    let signed_for_a = TurnExecutor::compute_signing_message(&action, &fed_a, 0);
+    let verifier_at_b = TurnExecutor::compute_signing_message(&action, &fed_b, 0);
 
     assert_ne!(
         signed_for_a, verifier_at_b,

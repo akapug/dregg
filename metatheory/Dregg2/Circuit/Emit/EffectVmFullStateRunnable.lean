@@ -4,7 +4,7 @@ descriptor binds the FULL post-state (all 17 `RecordKernelState` fields), per ef
 
 ## The gap this module closes (the dominant Class-C disease)
 
-`docs/rebuild/_CIRCUIT-ASSURANCE-PER-EFFECT.md:42-62`: the deployed EffectVM row's `state_commit`
+`.docs-history-noclaude/rebuild/metatheory/_CIRCUIT-ASSURANCE-PER-EFFECT.md:42-62`: the deployed EffectVM row's `state_commit`
 absorbs **exactly 13 state-block columns** (`bal_lo, bal_hi, nonce, fields[0..7], cap_root` —
 `EffectVmEmitTransferSound.absorbedCols`). It does **NOT** absorb the `system_roots` sub-block
 (`auxCol SYSTEM_ROOTS_DIGEST = 186` is PAST `EFFECT_VM_WIDTH = 186` — the running prover carries no
@@ -546,7 +546,7 @@ anti-ghost (§4) is then `runnable_full_commit_binds` instantiated at `X`'s spec
 
 ## §7 — THE WORKLIST (which effects need the per-effect instance; for a later farm).
 
-Source of truth for the current class: `docs/rebuild/_CIRCUIT-ASSURANCE-PER-EFFECT.md` THE LEDGER.
+Source of truth for the current class: `.docs-history-noclaude/rebuild/metatheory/_CIRCUIT-ASSURANCE-PER-EFFECT.md` THE LEDGER.
 
   * **Already FULL on the per-cell block (instance is near-trivial — `fullClause` is the per-cell
     spec, no side-table root):** transfer, mint, burn, incrementNonce. (Class A; `decodeFull` =

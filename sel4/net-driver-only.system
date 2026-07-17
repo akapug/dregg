@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   M3 driver-only boot — the firmament's network edge, probing a REAL
-  virtio-net-device (docs/FIRMAMENT.md §3, §6). This is net.system with the
+  virtio-net-device (.docs-history-noclaude/FIRMAMENT.md §3, §6). This is net.system with the
   smoltcp client PD removed so the driver PD can be booted standalone to PROVE
   it probes a real device: it maps the virtio-mmio slot QEMU places a single
   `-device virtio-net-device` into (slot 31 of the qemu_virt_aarch64 mmio bus:

@@ -388,10 +388,10 @@ fn main() {
 
     // Record nullifiers as spent
     nullifier_set
-        .insert(alice_nullifier)
+        .insert(alice_nullifier, alice_bid_note.value())
         .expect("Alice nullifier accepted");
     nullifier_set
-        .insert(bob_nullifier)
+        .insert(bob_nullifier, bob_bid_note.value())
         .expect("Bob nullifier accepted");
 
     println!(
@@ -444,8 +444,8 @@ fn main() {
     // =======================================================================
     println!("--- Step 5: MATCHED BIDS CANNOT BE REUSED ---");
 
-    let replay_alice = nullifier_set.insert(alice_nullifier);
-    let replay_bob = nullifier_set.insert(bob_nullifier);
+    let replay_alice = nullifier_set.insert(alice_nullifier, alice_bid_note.value());
+    let replay_bob = nullifier_set.insert(bob_nullifier, bob_bid_note.value());
 
     assert!(replay_alice.is_err());
     assert!(replay_bob.is_err());

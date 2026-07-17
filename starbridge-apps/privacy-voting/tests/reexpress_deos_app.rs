@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `privacy-voting` starbridge-app, on the composed deos
 //! framework — **the same app, now a composed TWO-CELL [`DeosApp`] shipped from `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: privacy-voting, re-expressed as a composed
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: privacy-voting, re-expressed as a composed
 //! [`DeosApp`] and PROMOTED into `src/lib.rs` (it lived only in the floor's factory-birth
 //! tests). This file drives the SHIPPED surface ([`voting_app`] from `src/`), proving the
 //! promotion: TWO cells (the POLL tally board + the BALLOT capability), per-viewer

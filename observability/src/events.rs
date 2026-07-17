@@ -304,7 +304,7 @@ pub enum AuthorizationPayload {
         signature_prefix: String,
     },
     /// First-class biscuit/macaroon credential authorization
-    /// (`docs/TOKEN-CAPABILITY-UNIFICATION.md`). The encoded token is
+    /// (`.docs-history-noclaude/TOKEN-CAPABILITY-UNIFICATION.md`). The encoded token is
     /// hashed (it can be large and is presented, not a secret); the key
     /// reference and discharge count are surfaced so studio consumers can
     /// see the trust anchor and third-party-caveat shape.

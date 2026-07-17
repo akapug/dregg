@@ -803,7 +803,7 @@ pub fn resolve_target(uri: &str) -> FieldElement {
 // The deos-native surface — the NAME as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: nameservice is THE web-of-cells
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: nameservice is THE web-of-cells
 // keystone. Re-expressed as a composed [`DeosApp`] ([`name_app`] below) and mounted by
 // `register(ctx)` (see [`register_deos`]): the framework wires per-viewer projection,
 // the generated `<dregg-affordance-surface>` component, the manifest, the rehydratable

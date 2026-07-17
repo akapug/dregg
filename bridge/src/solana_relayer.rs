@@ -771,37 +771,17 @@ impl<R: SolanaRpc> SolanaRelayer<R> {
         }
     }
 
-    /// **Observe the vault lock and verify it to
-    /// [`LockProofTrust::ConsensusVerified`] — ANCHORED (the production path).**
-    ///
-    /// The stake table is NEVER a caller input: it is *derived from Solana's own
-    /// bank state* via the feed-supplied `provenance`
+    /// **Anchored consensus-verifying observe of a specific `pubkey` — the
+    /// production path.** The stake table is NEVER a caller input: it is derived
+    /// from Solana's own bank state via the feed-supplied `provenance`
     /// ([`verify_lock_proof_consensus_anchored`]) and trusted only back to the
     /// **governance-pinned** [`WeakSubjectivityAnchor`] in the mirror config
     /// ([`Self::pinned_anchor`]). A feed (or attacker) supplying a fabricated
-    /// distribution — e.g. one key holding 100% of the stake — is refused because
-    /// the derived table's root cannot match the pinned anchor's root, and every
-    /// counted vote must be a real Solana vote transaction signed by the proven
-    /// on-chain authorized voter.
-    pub fn observe_vault_lock_consensus_anchored(
-        &self,
-        consensus: ConsensusEvidence,
-        provenance: StakeProvenance,
-        require_poh: bool,
-        poh_policy: Option<&PohAnchorPolicy>,
-    ) -> Result<ObservedLock, RelayerError> {
-        let vault = self.config.vault_account;
-        self.observe_lock_at_consensus_anchored(
-            &vault,
-            consensus,
-            provenance,
-            require_poh,
-            poh_policy,
-        )
-    }
-
-    /// Anchored consensus-verifying observe of a specific `pubkey` (see
-    /// [`Self::observe_vault_lock_consensus_anchored`]).
+    /// stake distribution is refused: the derived table's root cannot match the
+    /// pinned anchor's root, and every counted vote must be a real Solana vote
+    /// transaction signed by the proven on-chain authorized voter. (The old
+    /// zero-caller vault convenience wrapper `observe_vault_lock_consensus_anchored`
+    /// was deleted 2026-07-17; pass `&self.config.vault_account` for the vault.)
     pub fn observe_lock_at_consensus_anchored(
         &self,
         pubkey: &[u8; 32],
@@ -881,7 +861,7 @@ impl<R: SolanaRpc> SolanaRelayer<R> {
     /// both the evidence and the table (their key = 100% stake) forges a
     /// [`LockProofTrust::ConsensusVerified`] observation. Gated behind
     /// `cfg(test)` / the dev-only `test-utils` feature; production routes through
-    /// [`Self::observe_vault_lock_consensus_anchored`] (pinned-anchor, derived
+    /// [`Self::observe_lock_at_consensus_anchored`] (pinned-anchor, derived
     /// table, authorized-voter binding).
     #[cfg(any(test, feature = "test-utils"))]
     pub fn observe_vault_lock_consensus(

@@ -46,3 +46,6 @@ blake3 = "1"
 # type-unifies (the App ID = this key).
 ed25519-dalek = { version = "2.1", features = ["std"] }
 sha2 = "0.10"
+
+[lints]
+workspace = true

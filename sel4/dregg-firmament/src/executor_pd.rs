@@ -1,6 +1,6 @@
 //! The EXECUTOR-PD — the firmament's HEART, on the semihost [`EmulatedKernel`].
 //!
-//! `docs/FIRMAMENT.md §2` names the executor-PD as **L3, the heart**: "*every*
+//! `.docs-history-noclaude/FIRMAMENT.md §2` names the executor-PD as **L3, the heart**: "*every*
 //! authority decision, *every* cap mint/revoke, *every* state transition flows
 //! through it." Its seL4 cap partition is exact (`§2` table): `turn_in` (R, the
 //! de-enveloped signature-checked turn), `commit_out` (RW, the commit-log/receipt
@@ -8,7 +8,7 @@
 //! holds **NO device cap, NO NIC cap** — it is pure compute over bytes, and the
 //! verified semantics is the only authority over state transitions.
 //!
-//! `docs/DREGG-DESKTOP-OS.md §3` (the semihosted-seL4 KEYSTONE) states the
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` (the semihosted-seL4 KEYSTONE) states the
 //! payoff plainly: **"the verified executor-PD hosts on the host's *ordinary*
 //! macOS/Linux Lean runtime ... so the semihost has a REAL verified heart NOW"**
 //! — the executor-PD blocker that gates real-seL4 (WALL step 4) does **not** gate

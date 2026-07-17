@@ -43,7 +43,8 @@ const SKIP_MARKERS: &[&str] = &[
 ///
 /// All 41 examples that exist under demo-agent/examples/ as of 2026-06-12.
 /// (federation_bootstrap / federation_exit / proof_obligation were retired;
-/// orchestration_demo was added.)
+/// orchestration_demo was added. ivc_attenuation_chain was retired 2026-07-16
+/// with the simulated `dregg_circuit::ivc` engine — mock-proof purge, final cut.)
 const EXAMPLES: &[&str] = &[
     "agent_network",
     "ai_agent_mcp_workflow",
@@ -62,7 +63,6 @@ const EXAMPLES: &[&str] = &[
     "delegation_swarm",
     "escrow_demo",
     "intent_lifecycle",
-    "ivc_attenuation_chain",
     "multi_org_delegation",
     "multi_silo_budget",
     "nft_demo",

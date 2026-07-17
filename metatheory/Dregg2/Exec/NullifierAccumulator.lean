@@ -4,7 +4,7 @@
 The double-spend gate (`RecordKernel.noteSpendNullifier`) and the revocation gate
 (`FullForestAuth.revocationGate`) carry a whole append-only `List Nat` in kernel state and check
 membership by O(#history) scan — so the *entire* spent/revoked set crosses the FFI/wire boundary each
-turn. This file is the accumulator gate that replaces that (`docs/NULLIFIER-ACCUMULATOR-DESIGN.md`):
+turn. This file is the accumulator gate that replaces that (`docs/SUPERSEDED/NULLIFIER-ACCUMULATOR-DESIGN.md`):
 state carries only a fixed-width `Digest8` root, and the *transaction* supplies a client-side
 non-membership + insert witness verified against that root. The wire carries the commitment, never
 the set.
@@ -31,7 +31,7 @@ The sorted/indexed-Merkle-tree non-membership + fresh-key insert are fully prove
                                                           set by EXACTLY the new key.
   * `SortedTreeNonMembershipHeap8.GapOpen8.excludesSpine` — the UNCONDITIONAL combinatorial keystone.
 
-The three security obligations (`docs/NULLIFIER-ACCUMULATOR-DESIGN.md` §4) re-derived over the root:
+The three security obligations (`docs/SUPERSEDED/NULLIFIER-ACCUMULATOR-DESIGN.md` §4) re-derived over the root:
 
   (a) `no_double_spend_root`   ← contrapositive of `nonMembership_sound8` (present ⇒ no witness).
   (b) `spend_inserts_root`     ← the `y = nf` disjunct of `update_sound8`.

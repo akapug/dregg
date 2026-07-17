@@ -404,7 +404,7 @@ impl Identity {
         })
     }
 
-    /// The **trustline** organ (`docs/ORGANS.md` §1) bound to `node_url`,
+    /// The **trustline** organ (`.docs-history-noclaude/ORGANS.md` §1) bound to `node_url`,
     /// acting as the issuer under this identity's operator credential. See
     /// [`Trustline`].
     #[pyo3(signature = (node_url, devnet_key=None))]
@@ -415,7 +415,7 @@ impl Identity {
         }
     }
 
-    /// The **channels** organ (`docs/ORGANS.md` §4) bound to `node_url`. See
+    /// The **channels** organ (`.docs-history-noclaude/ORGANS.md` §4) bound to `node_url`. See
     /// [`Channels`].
     #[pyo3(signature = (node_url, devnet_key=None))]
     fn channels(&self, node_url: &str, devnet_key: Option<&str>) -> Channels {
@@ -425,7 +425,7 @@ impl Identity {
         }
     }
 
-    /// This identity's **mailbox** (`docs/ORGANS.md` §2) on the relay at
+    /// This identity's **mailbox** (`.docs-history-noclaude/ORGANS.md` §2) on the relay at
     /// `relay_url`. Membership ops are Ed25519-signed by this identity. See
     /// [`Mailbox`].
     fn mailbox(slf: &Bound<'_, Self>, relay_url: &str) -> Mailbox {
@@ -1333,7 +1333,7 @@ fn descriptor<'py>(
     Ok(d)
 }
 
-// ─── organs: the higher primitives (docs/ORGANS.md), as ergonomic HTTP faces ───
+// ─── organs: the higher primitives (.docs-history-noclaude/ORGANS.md), as ergonomic HTTP faces ───
 //
 // Each organ is the Python face of a node service — the same routes the TS
 // SDK's organ clients drive. The node computes the per-cell factory
@@ -1342,7 +1342,7 @@ fn descriptor<'py>(
 // either way (see each method's route). Operator-gated organs (trustline,
 // channels) carry a devnet key; the relay (mailbox) is owner-signed.
 
-/// **Trustline** — the bilateral line of credit (`docs/ORGANS.md` §1).
+/// **Trustline** — the bilateral line of credit (`.docs-history-noclaude/ORGANS.md` §1).
 ///
 /// A line `issuer → holder` of N is an ATTENUATED CAPABILITY whose exercise
 /// debits a shared counter; the executor-installed cell program enforces
@@ -1473,7 +1473,7 @@ impl Trustline {
     }
 }
 
-/// **Channels** — the group-key epoch lift (`docs/ORGANS.md` §4).
+/// **Channels** — the group-key epoch lift (`.docs-history-noclaude/ORGANS.md` §4).
 ///
 /// A group is a CELL: membership root, key epoch, and key commitment live
 /// on-cell. `remove(m)` darkens BOTH m's forward-read ability AND m's
@@ -1759,7 +1759,7 @@ fn hex_or_bytes(obj: &Bound<'_, PyAny>, what: &str) -> PyResult<String> {
     )))
 }
 
-/// **Mailbox** — a hosted inbox over the relay (`docs/ORGANS.md` §2).
+/// **Mailbox** — a hosted inbox over the relay (`.docs-history-noclaude/ORGANS.md` §2).
 ///
 /// Store-and-forward: senders enqueue sealed bodies to your inbox; you drain
 /// them with a custody proof. The relay sees only ciphertext. Membership ops

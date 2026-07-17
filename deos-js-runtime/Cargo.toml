@@ -45,3 +45,6 @@ serde_json = "1"
 # and the in-band reveal-binding check rest on a genuine collision-resistant hash (the
 # binding tooth: a sealed commitment opens to EXACTLY its bid — no peeking-then-switching).
 blake3 = "1"
+
+[lints]
+workspace = true

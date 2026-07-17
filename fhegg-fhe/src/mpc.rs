@@ -328,8 +328,9 @@ pub fn index_bits(k: usize) -> usize {
 }
 
 /// A PUBLIC integer as a boolean-shared constant (party 0 carries the bits, LSB
-/// first). No secrecy — used for the argmax's candidate bucket indices.
-fn const_int(value: u64, bits: usize, n: usize) -> SharedInt {
+/// first). No secrecy — used for the argmax's candidate bucket indices (and by
+/// `crate::boundary`'s mod-t reduction, whose modulus `t` is public).
+pub fn const_int(value: u64, bits: usize, n: usize) -> SharedInt {
     (0..bits)
         .map(|i| share_const(((value >> i) & 1) as u8, n))
         .collect()
@@ -338,7 +339,7 @@ fn const_int(value: u64, bits: usize, n: usize) -> SharedInt {
 /// Oblivious multiplexer on boolean-shared integers: returns `a` when `cond`=1,
 /// else `b`, bit-by-bit `out_i = b_i ⊕ (cond ∧ (a_i ⊕ b_i))`. One AND gate per
 /// bit; opens only the (one-time-pad-masked) Beaver reveals, never `cond` itself.
-fn select_int(
+pub fn select_int(
     cond: &Bit,
     a: &SharedInt,
     b: &SharedInt,

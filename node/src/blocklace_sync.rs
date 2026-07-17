@@ -882,7 +882,7 @@ impl BlocklaceHandle {
         // cross-linked — which needs every creator's block to reach every node
         // PROMPTLY. Routing each block through one random stem relay delivers
         // blocks asymmetrically at small N (the Stage-5 dissemination gap,
-        // `docs/STAGE5-CONSENSUS-DEVAC.md`); `publish_eager` reaches every
+        // `.docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md`); `publish_eager` reaches every
         // committee peer in one hop so the round-synchronous shape `tau`
         // finalizes over actually forms on the running node.
         if let Err(e) = self.gossip.publish_eager(&self.topic, &peer_msg).await {

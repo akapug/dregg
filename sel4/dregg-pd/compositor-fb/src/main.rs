@@ -12,7 +12,7 @@
 //!   1. is the SOLE holder of a DEVICE cap — QEMU's `fw_cfg` engine MMIO at phys
 //!      `0x9020000` on the `virt` machine (the same "one device-region cap, held
 //!      by exactly one PD" discipline the net-driver PD has for the virtio-mmio
-//!      slot, `docs/FIRMAMENT.md §2`),
+//!      slot, `.docs-history-noclaude/FIRMAMENT.md §2`),
 //!   2. holds a DMA-capable framebuffer region whose PHYSICAL base it learns via
 //!      the Microkit `region_paddr` setvar (exactly as the net PD learns
 //!      `virtio_net_driver_dma_paddr`) — fw_cfg's DMA engine dereferences GUEST
@@ -137,8 +137,8 @@ struct FwCfgDmaAccess {
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct FwCfgFile {
-    size: u32,       // big-endian
-    select: u16,     // big-endian
+    size: u32,   // big-endian
+    select: u16, // big-endian
     _reserved: u16,
     name: [u8; 56],
 }
@@ -188,9 +188,9 @@ unsafe fn fw_cfg_dma(
     // (the control word is updated in place by QEMU; in-flight => non-zero
     // beyond the error bit). This mirrors the canonical bare-metal poll.
     loop {
-        let ctl = u32::from_be(core::ptr::read_volatile(
-            core::ptr::addr_of!((*desc_vaddr).control),
-        ));
+        let ctl = u32::from_be(core::ptr::read_volatile(core::ptr::addr_of!(
+            (*desc_vaddr).control
+        )));
         if ctl & !FW_CFG_DMA_CTL_ERROR == 0 {
             if ctl & FW_CFG_DMA_CTL_ERROR != 0 {
                 debug_println!("[compositor-fb]   WARN fw_cfg DMA returned ERROR bit");
@@ -311,9 +311,30 @@ fn draw_splash(fb: &mut [u32]) -> usize {
 
     // (3) The banner + subtitle, hand-rolled 5x7 font, scaled.
     let text_x = card_x + 28;
-    draw_text(fb, "deos - robigalia v0", text_x, card_y + 36, 4, rgb(230, 245, 245));
-    draw_text(fb, "a rust userspace on sel4", text_x, card_y + 96, 2, rgb(150, 210, 210));
-    draw_text(fb, "compositor-fb pd - ramfb scanout", text_x, card_y + 128, 2, rgb(120, 180, 190));
+    draw_text(
+        fb,
+        "deos - robigalia v0",
+        text_x,
+        card_y + 36,
+        4,
+        rgb(230, 245, 245),
+    );
+    draw_text(
+        fb,
+        "a rust userspace on sel4",
+        text_x,
+        card_y + 96,
+        2,
+        rgb(150, 210, 210),
+    );
+    draw_text(
+        fb,
+        "compositor-fb pd - ramfb scanout",
+        text_x,
+        card_y + 128,
+        2,
+        rgb(120, 180, 190),
+    );
 
     // (4) The colour test-pattern strip (the F1 observable: WHICH bytes reached
     // glass). Eight bars across the bottom; if you see them, the PD's writes
@@ -404,7 +425,9 @@ fn init() -> HandlerImpl {
     debug_println!("    │   compositor-fb PD : ramfb scanout       │");
     debug_println!("    └─────────────────────────────────────────┘");
     debug_println!("[compositor-fb] booted — the SOLE holder of the fw_cfg device cap + the");
-    debug_println!("[compositor-fb] framebuffer DMA region (the graphical edge, GRAPHICAL-SEL4-BOOT.md)");
+    debug_println!(
+        "[compositor-fb] framebuffer DMA region (the graphical edge, GRAPHICAL-SEL4-BOOT.md)"
+    );
 
     let fb_v = fb_vaddr();
     let fb_p = fb_paddr();
@@ -446,7 +469,9 @@ fn init() -> HandlerImpl {
             s
         }
         None => {
-            debug_println!("[compositor-fb]   ERROR 'etc/ramfb' not in fw_cfg dir — is -device ramfb present?");
+            debug_println!(
+                "[compositor-fb]   ERROR 'etc/ramfb' not in fw_cfg dir — is -device ramfb present?"
+            );
             debug_println!("[compositor-fb]   (boot with `make run-graphical`; -display none still proves the rest)");
             return HandlerImpl;
         }

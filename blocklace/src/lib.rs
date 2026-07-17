@@ -73,7 +73,7 @@ pub use ordering::supermajority_threshold;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 /// A block identifier: the BLAKE3 hash of the block's canonical encoding.
@@ -268,7 +268,7 @@ impl Block {
                 sequence: self.sequence,
             })?;
         let sig = ed25519_dalek::Signature::from_bytes(&self.signature);
-        vk.verify(&self.id(), &sig)
+        vk.verify_strict(&self.id(), &sig)
             .map_err(|_| InsertError::BadSignature {
                 creator: self.creator,
                 sequence: self.sequence,

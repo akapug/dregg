@@ -52,9 +52,33 @@
 //!
 //! WHAT IS TRUE NOW: comparisons lower through `gen_air`
 //! (`RequirementKind::LessEqual`, gen_air.rs:89, "each comparison requirement adds auxiliary columns") into
-//! the descriptor the production interpreter proves. **NAMED, NOT CLAIMED**: whether that lowering is
-//! range-check sound (field-wrap safe) is NOT asserted here — no `RANGE_CHECK_BITS` bit-decomposition
-//! exists in `gen_air` or `circuit/src/dsl/`. `DslComparisonRangeSoundnessResidual`.
+//! the descriptor the production interpreter proves.
+//!
+//! ⚠ RESOLVED 2026-07-17 — `DslComparisonRangeSoundnessResidual` was NAMED; the answer is **NOT SOUND**,
+//! and it is now PROVEN by a live prover, not argued:
+//! `dregg-dsl-differential/tests/comparison_wrap_soundness.rs`.
+//!
+//! 1. **`gen_air`'s `Constraint::RangeCheck { diff_col, bit_col }` proves NOTHING.** It is a topology
+//!    DESCRIPTOR (`dregg_dsl_runtime::AirConstraintSet`). Its only consumers are `air_runner.rs` (matches
+//!    the variant SHAPE, then re-derives accept/reject in NATIVE u64 via `check_le`) and structural token
+//!    tests. There is no `AirConstraintSet -> CircuitDescriptor` converter in the repo — nothing lowers it
+//!    into a proved constraint system. One `bit_col` could not range-check a ~31-bit difference anyway.
+//! 2. **The one path that does reach a real prover is UNSOUND.**
+//!    `dregg-dsl-differential/src/plonky3_runner.rs::drive_inequality` hand-builds a `CircuitDescriptor`
+//!    ("diff-le") and proves it through the production interpreter. Its constraints are only:
+//!    `bigger - smaller - diff == 0` (mod p — always satisfiable), `indicator` boolean, `indicator == 0`.
+//!    **No bit decomposition bounds `diff`, and nothing algebraically links `indicator` to `diff`.** The
+//!    comparison's truth lives in the honest WITNESS GENERATOR (native `ir_ok = smaller <= bigger`), which
+//!    volunteers an invalid witness when the claim is false. A malicious prover simply does not.
+//!    Demonstrated: `5 <= 3` with `diff = (3-5) mod p` and `indicator = 0` satisfies every constraint and is
+//!    ACCEPTED by the production p3 prover AND verifier. The in-file comment "we cap the diffs to a 30-bit
+//!    range where this encoding stays sound" is FALSE — the forgery uses far-sub-30-bit operands.
+//! 3. **Scope:** the unsound lowering is the DIFFERENTIAL HARNESS's own, not a shipped circuit — so the
+//!    harness's Plonky3 agreement vote on inequalities validates its witness generator, not its
+//!    constraints. Production circuits needing order comparisons DO range-check genuinely (30-bit
+//!    decomposition + binary-pinned bits + top bit fixed to zero): `circuit/src/dsl/committed_threshold.rs`
+//!    (C4/C5 + `BoundaryDef::Fixed` on the top bit), `derivation.rs` C17/C22, `descriptors.rs` ordering.
+//!    **No DSL surface currently lowers `<=`/`>=`/`in_range!` into a proved circuit at all.**
 
 extern crate proc_macro;
 

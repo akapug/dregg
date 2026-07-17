@@ -557,7 +557,7 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
 // The deos-native surface — the MANDATE as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (the workflow port): the compartment
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (the workflow port): the compartment
 // workflow MANDATE, re-expressed as a composed [`DeosApp`] and PROMOTED into
 // `src/lib.rs`. The workflow operations are ONE [`DeosApp`] ([`workflow_app`] below);
 // the framework wires the rest — per-viewer projection, web-of-cells publish (the

@@ -14,3 +14,6 @@ publish = false
 # drives the reference deterministic samplers. No `rand` crate: sampling rides a
 # caller-supplied master seed through blake3's XOF (reproducible tests). Pure Rust.
 blake3 = "1"
+
+[lints]
+workspace = true

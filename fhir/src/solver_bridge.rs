@@ -117,8 +117,13 @@ impl RunOutcome {
                 report.valid, report.gap, cert.epsilon, report.feas_residual, cert.primal_obj,
             ),
             RunOutcome::CertQp { report, cert } => format!(
-                "CertQp: valid={} prim_res={:.3e} dual_res={:.3e} (ε={:.1e}) objective={:.4}",
-                report.valid, report.prim_res, report.dual_res, cert.epsilon, cert.objective,
+                "CertQp: valid={} prim_res={:.3e} dual_res={:.3e} normal_res={:.3e} (ε={:.1e}) objective={:.4}",
+                report.valid,
+                report.prim_res,
+                report.dual_res,
+                report.normal_res,
+                cert.epsilon,
+                cert.objective,
             ),
             RunOutcome::Discriminatory {
                 report, clearing, ..

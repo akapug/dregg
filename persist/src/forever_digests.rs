@@ -12,7 +12,7 @@
 //!
 //! The write is per-digest and append-only (digests are never removed:
 //! deletion would be a guarded write under the persistence axis —
-//! `docs/PERSISTENCE.md`; these collections sit at the `attested`-shaped
+//! `.docs-history-noclaude/PERSISTENCE.md`; these collections sit at the `attested`-shaped
 //! point: kept forever, refusal-load-bearing).
 
 use crate::tables;

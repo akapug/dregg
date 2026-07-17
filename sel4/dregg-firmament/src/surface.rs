@@ -1,6 +1,6 @@
 //! The SURFACE backing — a window IS a dregg cell's surface capability.
 //!
-//! `docs/DREGG-DESKTOP-OS.md` casts the dregg-native desktop as **the firmament
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md` casts the dregg-native desktop as **the firmament
 //! made visual**: a window is a `Capability{ target: Surface(cell), rights }` on
 //! the SAME `(target, rights)` handle that today resolves [`crate::Target::Local`]
 //! (an seL4 syscall) and [`crate::Target::Distributed`] (a real executor turn).
@@ -283,7 +283,7 @@ impl SurfaceBacking {
         }
     }
 
-    // ── THE FIVE CAP-CONFINED SURFACE VERBS (`docs/DREGG-DESKTOP-OS.md §5`) ──
+    // ── THE FIVE CAP-CONFINED SURFACE VERBS (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §5`) ──
     //
     // `create-surface` / `present` / `embed` / `grant-input` / `revoke`. Every
     // one routes through the SAME real executor + the SAME `is_attenuation`
@@ -296,7 +296,7 @@ impl SurfaceBacking {
 
     /// **CREATE-SURFACE** — birth a new surface cell and hand `owner` the window.
     ///
-    /// `docs/DREGG-DESKTOP-OS.md §5`: "authorized by a surface-factory cap; the
+    /// `.docs-history-noclaude/DREGG-DESKTOP-OS.md §5`: "authorized by a surface-factory cap; the
     /// factory CONTRACT bounds what surface/input rights the cell may ever hold."
     /// This is the powerbox handing an app a fresh window: it seeds the surface
     /// cell (the View — its state is what the compositor renders) and grants
@@ -313,7 +313,7 @@ impl SurfaceBacking {
 
     /// **PRESENT** — `holder` draws into its `surface` (paints a frame).
     ///
-    /// `docs/DREGG-DESKTOP-OS.md §5`: "requires a write-cap on the surface." A
+    /// `.docs-history-noclaude/DREGG-DESKTOP-OS.md §5`: "requires a write-cap on the surface." A
     /// present is a turn that resolves the surface cap against real cell-state
     /// requiring DRAW authority (`required ⊆ held`, the REAL
     /// [`dregg_cell::is_attenuation`]): an app holding only a read-only mirror is
@@ -341,7 +341,7 @@ impl SurfaceBacking {
     /// **EMBED** — make a surface-tree edge from `recipient` to a `child_surface`,
     /// authorized by the REAL three-party introduction.
     ///
-    /// `docs/DREGG-DESKTOP-OS.md §5`: "a surface-tree edge authorized ONLY by
+    /// `.docs-history-noclaude/DREGG-DESKTOP-OS.md §5`: "a surface-tree edge authorized ONLY by
     /// `Spec.Authority.Introduce` — Fuchsia's non-clonable token handshake IS
     /// dregg's introduce; the surface tree is decoupled from the cell-ownership
     /// tree." This runs a GENUINE [`Effect::Introduce`] turn through the real
@@ -384,7 +384,7 @@ impl SurfaceBacking {
     /// **GRANT-INPUT** — hand `recipient` a (narrowed) input-receive facet over a
     /// `surface`, run as a GENUINE grant turn.
     ///
-    /// `docs/DREGG-DESKTOP-OS.md §5`: "the explicit attenuable cap Wayland leaves
+    /// `.docs-history-noclaude/DREGG-DESKTOP-OS.md §5`: "the explicit attenuable cap Wayland leaves
     /// as an ungoverned 'privileged client' bit — in dregg a global screenshot
     /// cap simply does NOT exist unless minted." Focus IS a capability: the
     /// compositor grants a short-lived input-receive cap to exactly one surface;
@@ -409,7 +409,7 @@ impl SurfaceBacking {
 
     /// **REVOKE** — drop `holder`'s cap over the `surface`; the glass goes dark.
     ///
-    /// `docs/DREGG-DESKTOP-OS.md §5`: "drops the surface cap; n=1 immediate via
+    /// `.docs-history-noclaude/DREGG-DESKTOP-OS.md §5`: "drops the surface cap; n=1 immediate via
     /// seL4_CNode_Revoke." At `n = 1` (compositor + apps on one box) this is
     /// SYNCHRONOUS — the surface cap is dead the instant `revoke` returns, with
     /// no in-flight window (a subsequent [`Self::present`] / [`Self::invoke`]

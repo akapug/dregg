@@ -54,3 +54,6 @@ dregg-narrator = { path = "../../narrator" }
 serde_json = { workspace = true }
 # The running commitment over the receipt chain (the on-ledger fingerprint).
 blake3 = "1"
+
+[lints]
+workspace = true

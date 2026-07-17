@@ -2,7 +2,7 @@
 # Dregg2.Apps.HostingLease — paying coin to be hosted is a VERIFIED VALUE TURN, and a lapsed fee
 EVICTS — the deos app-hosting economy as ONE cell program.
 
-`docs/PG-DREGG-ON-SEL4-DEOS-SPINE.md` makes the persist-PD the durable "postgres" of the seL4 deos OS:
+`.docs-history-noclaude/PG-DREGG-ON-SEL4-DEOS-SPINE.md` makes the persist-PD the durable "postgres" of the seL4 deos OS:
 an app is a CELL with durable hosted state in the persist-PD, and (the economy this file models) hosting
 that app COSTS COIN — per hosting period the app pays a fee to the host cell. That payment is a real
 value move (`turn/src/action.rs:819` `Effect::Transfer`, conservative), committed as a verified turn
@@ -81,7 +81,7 @@ admissible at all.
   * `balanceGe`/`balanceDeltaGe` are the BOUNDED / ordering pole (§8): a budget gate on a decrementable
     balance is i-confluent only under the single serializer (n=1). Named, not laundered — the same scope
     `Exec/Program.lean` carries for the balance atoms, and the same scope the durable persist-PD honours
-    (the n=1 synchronous-commit single writer, `docs/FIRMAMENT.md` §3).
+    (the n=1 synchronous-commit single writer, `.docs-history-noclaude/FIRMAMENT.md` §3).
   * The sealed balance + its pre-image (`balanceBefore`) are the executor-held kernel balances at
     program-check time (Rust `old_balance`/`new_balance`); the §8 seam is the kernel balance carrier,
     not a record field. The budget arithmetic is proved here.

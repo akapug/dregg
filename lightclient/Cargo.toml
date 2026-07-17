@@ -49,3 +49,6 @@ dregg-pq = { path = "../dregg-pq" }
 # the whole-history light client. On by default so `cargo build -p dregg-lightclient` carries it.
 default = ["prover"]
 prover = ["dregg-turn/prover"]
+
+[lints]
+workspace = true

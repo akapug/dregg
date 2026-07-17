@@ -802,7 +802,7 @@ impl Match {
 // The deos-native surface — the two FIGURES as a composed two-cell `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: TUSSLE re-expressed as a composed
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: TUSSLE re-expressed as a composed
 // [`DeosApp`] — the interaction surface is ONE app with **TWO cells** (figure A and
 // figure B), each carrying the commit→reveal→resolve verbs as affordances; the
 // framework wires the rest (per-viewer projection, the web-of-cells publish — each

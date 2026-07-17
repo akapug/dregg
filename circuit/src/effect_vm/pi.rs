@@ -15,7 +15,7 @@
 // ---- Commitments (Phase C widened to 8 felts each, ~124-bit collision) ----
 //
 // Stage 1 took the commitment 1 felt -> 4 felts. Phase C
-// (`docs/FAITHFUL-STATE-COMMITMENT.md`) takes it 4 -> 8. THE FLOOR: a
+// (`.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md`) takes it 4 -> 8. THE FLOOR: a
 // 4-felt BabyBear commit packs ~124 raw bits but, as a Poseidon2 digest,
 // its COLLISION resistance is ~half the digest width = ~62 bits — below the
 // system's FRI ~128-bit security. Eight genuine Poseidon2 squeeze felts give
@@ -850,11 +850,11 @@ pub const MAX_CUSTOM_EFFECTS_DEFAULT: u8 = 4;
 // state), not by per-row AIR constraints. Stage 2 may add aux columns
 // to anchor positions 1..3 of state-commit forms inside the trace.
 
-// ---- PI v3 (THE ROTATION, STAGED — `docs/UNIVERSAL-MAP-ROTATION.md` §2.6) ----
+// ---- PI v3 (THE ROTATION, STAGED — `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.6) ----
 //
 // The v3 tail appends THREE slots after the frozen v2 prefix. NOTHING on the
 // live wire path reads these yet: they are staged for the one VK flag-day
-// (`docs/ROTATION-CUTOVER.md`), exactly the additive IR-v2 pattern. The Lean
+// (`.docs-history-noclaude/ROTATION-CUTOVER.md`), exactly the additive IR-v2 pattern. The Lean
 // twin is `metatheory/Dregg2/Circuit/RotationLayout.lean` namespace `PiV3` —
 // the offsets below are EMITTED THERE (every layout fact a theorem or a named
 // carrier); the `pi_v3_offsets_match_lean` test is the drift guard: if the

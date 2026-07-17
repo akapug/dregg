@@ -1,3 +1,18 @@
+# ⚠⚠ ASPIRATIONAL — NOT INSTALLED ON hbox. ⚠⚠
+#
+# Verified 2026-07-15: hbox runs NO Discord bot. The bot runs ON THE AWS EDGE as the
+# container `dreggnet-dreggnet-discord-bot-1` (image `dregg-discord-bot:staging`), from
+# the compose stack at /opt/dreggnet — NOT from any systemd unit anywhere.
+#
+# The double-fire hazard noted below is REAL and still current, but its subject has
+# moved: the token is held by the EDGE CONTAINER, not by a "graviton bot" systemd unit
+# (deploy/aws/SUPERSEDED/dregg-discord-bot.service never ran). Before starting this unit:
+#   ssh <edge> 'cd /opt/dreggnet && docker compose stop dreggnet-discord-bot'
+#
+# Moving the bot OFF the edge is TODO-2 in deploy/README.md — but persvati is the
+# better target than hbox (hbox is already over-tenanted; see deploy/PRACTICES.md §1).
+#
+# ---------------------------------------------------------------------------
 # dregg games Discord bot — the Descent daily + slash commands on hbox.
 #
 # Runs `dregg-discord-bot` (package `dregg-discord-bot`): the daily-reveal cron

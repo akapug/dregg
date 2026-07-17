@@ -889,7 +889,7 @@ pub fn build_bounty_state_publish_action(
 // The deos-native surface — the FEED as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #2): subscription's deos
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #2): subscription's deos
 // re-expression was the MOST complete of the leading cohort, but MISLOCATED — it
 // lived in `app-framework/tests/reexpress_subscription.rs` (the framework tree). This
 // PROMOTES it into the crate: the four pub/sub operations are ONE [`DeosApp`]

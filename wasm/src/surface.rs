@@ -2,7 +2,7 @@
 //!
 //! This is the in-tab realization of `sel4/dregg-firmament/src/surface.rs`'s
 //! `Target::Surface{cell}` arm (`docs/design-frontiers/WEB-FORWARD.md §2`, the
-//! N10 slice of `docs/FRONTIER-ROADMAP.md`). The native `SurfaceBacking` holds
+//! N10 slice of `.docs-history-noclaude/FRONTIER-ROADMAP.md`). The native `SurfaceBacking` holds
 //! its own [`Ledger`] + [`TurnExecutor`]; here we MIRROR its verb shapes onto
 //! the EXISTING [`DreggRuntime`] ledger + executor, so a browser surface rides
 //! the SAME real `dregg-cell`/`dregg-turn` world the ~80 existing bindings drive

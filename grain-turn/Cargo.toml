@@ -14,11 +14,27 @@ name = "grain_turn"
 path = "src/lib.rs"
 
 [features]
-# The R3 ADAPTER (heavy, opt-in — mirrors `dregg-turn`'s own `prover` gate). Enables
+# `prover` is DEFAULT-ON so the R3-adapter test (`tests/r3_grain_adapter.rs`, whole-file
+# `#![cfg(feature = "prover")]`) actually COMPILES under `cargo test` / `cargo check
+# --all-targets`. Before this, the crate declared no `default`, so the whole test compiled
+# to an EMPTY crate (doubly dead — also `#[ignore]`d) and CI compile-checked nothing. The
+# gate must be default-on for the same reason the peers align it there (`turn`, `tests`,
+# `teasting`, `lightclient` all put `prover`/`plonky3` in `default`): a feature-gated test
+# that is never built catches no drift.
+#
+# TRADE-OFF (see the report): this pulls the STARK prover (`dregg-circuit-prove`) into
+# grain-turn's DEFAULT build, so a STANDALONE `cargo build -p <consumer>` of the lean R2
+# minters that depend on grain-turn (dreggnet-grain, agent-platform, deos-hermes) now links
+# the prover unless they opt out with `default-features = false`. In a `--workspace` build
+# there is NO extra cost — `dregg-circuit-prove` is already a workspace member built anyway,
+# and feature unification would build grain-turn with `prover` there regardless.
+default = ["prover"]
+# The R3 ADAPTER (heavy — mirrors `dregg-turn`'s own `prover` gate). Enables
 # `finalize_grain_turn` / `finalize_session`: minting the rotated wide-anchored EffectVM
 # leg(s) for a committed grain turn so each becomes a `FinalizedTurn` the whole-history
-# fold (grain-verify::r3_verify) can fold. Pulls the STARK prover; the default grain-turn
-# (the R2 minter) stays lean — no circuit/prover link on the commit path.
+# fold (grain-verify::r3_verify) can fold. Pulls the STARK prover. Consumers that must keep
+# the R2 minter lean (no circuit/prover link on the commit path) take grain-turn with
+# `default-features = false`.
 prover = ["dep:dregg-turn", "dep:dregg-circuit", "dep:dregg-circuit-prove", "dregg-turn/prover"]
 
 [dependencies]

@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `storage-gateway-mandate` starbridge-app, on the composed
 //! deos framework — **the SAME app, now SHIPPED from `src/` with a deos surface.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the storage-gateway mandate's scaffold
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the storage-gateway mandate's scaffold
 //! floor ([`sgm_cell_program`] / [`sgm_factory_descriptor`]) was executor-truth (the
 //! volume-budget caveats bite on a born cell) but had NO deos surface. This file drives
 //! the PROMOTED surface ([`gateway_app`] from `src/`): per-viewer projection, the

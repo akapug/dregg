@@ -21,7 +21,7 @@ cargo pgrx test pg14               # the SAME arc through real pg14 RLS
 
 ## 1. The model: state is a projection of verified turns
 
-The spine invariant (`docs/PG-DREGG.md` §8):
+The spine invariant (`.docs-history-noclaude/PG-DREGG.md` §8):
 
 > **Reads are free SQL; state mutates ONLY through verified turns.**
 
@@ -34,7 +34,7 @@ C even its writes pass the `dregg_verify_turn` CHECK.
 The projection is owned in Rust, postgres-free and `cargo test`-proven, in
 `src/mirror.rs`:
 
-- `Domain` + `MemCell` — the universal-memory model (`docs/UNIVERSAL-MEMORY.md`):
+- `Domain` + `MemCell` — the universal-memory model (`.docs-history-noclaude/UNIVERSAL-MEMORY.md`):
   ONE multiset over `Domain × κ`. A new state component is a new domain *value*,
   never a new table.
 - `CellRow` / `TurnRow` / `CapRow` — typed query-sugar projections of
@@ -135,7 +135,7 @@ A batch that doesn't chain is **refused** — proven by
 ## 6. The universal-memory table (the honest model)
 
 The typed tables (§3–5) are derived boundary views over one Blum multiset,
-`dregg.memory`, over `Domain × κ` (`docs/UNIVERSAL-MEMORY.md`):
+`dregg.memory`, over `Domain × κ` (`.docs-history-noclaude/UNIVERSAL-MEMORY.md`):
 
 ```sql
 SELECT domain, encode(collection,'hex') AS cell, encode(key,'hex') AS k,
@@ -252,7 +252,7 @@ unauthorized_agent`, `cargo pgrx test pg18`.)
 | **A** | caps as RLS (the M1 functions) | **landed**, proven (`cargo test`, `cargo pgrx test pg18`) |
 | **B** | dregg state as queryable tables (this doc) | **LANDED + live on pg18**: the node→pg writer (`node/src/pg_mirror.rs` `pg_live::PgSink`) ships each verified turn's `MirrorBatch` over `tokio-postgres`; the `RootChain` tooth gates it |
 | **C** | the verified-store gate (`dregg_verify_turn` + `dregg.commit_log`) | **LANDED + live**: the trigger runs the REAL anti-substitution chain re-validator + materializes via MERGE; a tampered batch is refused by the engine (`dregg_install_tier_c()`). |
-| **C-proof** | the whole-chain IVC RANGE attestation (`dregg_attest_range`) | **SHAPE LANDED, fail-closed** (§11 below): the SRF + its anti-overclaim tooth are built + `cargo test`-proven; the circuit-link (serialize `WholeChainProof` + the `tier-c` dep on the Lean-free verifier) is the named settle item (`src/attest.rs`, `docs/PG-DREGG.md` §10.2.1). With `tier-c` off it attests nothing (the safe default). |
+| **C-proof** | the whole-chain IVC RANGE attestation (`dregg_attest_range`) | **SHAPE LANDED, fail-closed** (§11 below): the SRF + its anti-overclaim tooth are built + `cargo test`-proven; the circuit-link (serialize `WholeChainProof` + the `tier-c` dep on the Lean-free verifier) is the named settle item (`src/attest.rs`, `.docs-history-noclaude/PG-DREGG.md` §10.2.1). With `tier-c` off it attests nothing (the safe default). |
 | **C-write** | submit a verified turn FROM pg (`dregg_submit_turn` + the outbox) | **LANDED** (§8): RLS-gated enqueue; the node-side drainer is M3 |
 | **Fed** | federation via logical replication (`dregg_install_federation`) | **RE-VALIDATION LANDED** (§10 below): the publication emitter + the subscriber re-validation sweep (`dregg_revalidate_replicated_chain`) are built; replication itself is a `pg_createsubscriber` runbook the DBA runs |
 | **D** | the executor as a pg function (in-process) | the north star — one transaction mutates dregg state AND your app data atomically |
@@ -264,7 +264,7 @@ is refused, the write-path gate narrows submission).
 Tier D is where it gets awesome: `SELECT dregg_submit_turn_inproc(envelope)`
 inside a transaction that also `UPDATE`s your app tables — kernel state and app
 state commit together or not at all. No separate node can offer that cross-domain
-atomicity. See `docs/PG-DREGG.md` §11.
+atomicity. See `.docs-history-noclaude/PG-DREGG.md` §11.
 
 ---
 
@@ -272,7 +272,7 @@ atomicity. See `docs/PG-DREGG.md` §11.
 
 Your mirror is a replicable feed. `dregg.turns` is a hash chain, so another
 postgres can tail it by PostgreSQL's own logical replication — federation-via-pg,
-no bespoke gossip (`docs/PG-DREGG.md` §15). On the **publisher**:
+no bespoke gossip (`.docs-history-noclaude/PG-DREGG.md` §15). On the **publisher**:
 
 ```sql
 SELECT dregg_install_federation();   -- CREATE PUBLICATION dregg_mirror over turns/cells/caps/memory
@@ -306,7 +306,7 @@ replicated turn's *proof*, not just the chain — a full verifying replica.)
 The per-row `dregg_verify_turn` re-validates the *chain* (cheap, structural). The
 *proof* — that every turn in a range actually executed correctly — is one succinct
 whole-chain IVC proof (`circuit::ivc_turn_chain`), verified as a **range
-attestation** (`docs/PG-DREGG.md` §10.2.1):
+attestation** (`.docs-history-noclaude/PG-DREGG.md` §10.2.1):
 
 ```sql
 -- One proof attests the whole window; the SRF returns the attested ordinals as rows.

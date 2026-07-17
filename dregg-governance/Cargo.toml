@@ -70,3 +70,6 @@ ripemd = "0.1"
 sha2 = "0.10"
 
 blake3 = "1"
+
+[lints]
+workspace = true

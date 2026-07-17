@@ -241,17 +241,25 @@ fn main() {
         if is_valid { "PASS" } else { "FAIL" }
     );
 
-    // Verify the STARK proof cryptographically
-    let stark_result = presentation.verify_issuer_stark();
-    match stark_result {
-        Some(Ok(())) => {
+    // MIGRATED: `verify_issuer_stark` was removed on the StarkProof -> Ir2BatchProof
+    // wire flip; `verify_presentation_bb` above IS the cryptographic verification (both
+    // committed descriptor wires, bound to the EXTERNAL federation root). Require the
+    // real STARK backing and prove the root binding bites (wrong root REFUSES).
+    match (
+        presentation.has_real_stark_proof(),
+        !verify_presentation_bb(
+            &presentation,
+            bytes_to_babybear(&org_a_federation_root_bytes) + BabyBear::ONE,
+        ),
+    ) {
+        (true, true) => {
             println!("  STARK cryptographic verification: PASS");
-            println!("    (80 FRI queries, ~124-bit security)");
+            println!("    (committed descriptor wires + external-root binding)");
         }
-        Some(Err(e)) => {
-            panic!("  STARK verification failed: {}", e);
+        (true, false) => {
+            panic!("  STARK verification ACCEPTED a wrong federation root!");
         }
-        None => {
+        (false, _) => {
             panic!("  No STARK proof attached!");
         }
     }
@@ -311,13 +319,18 @@ fn main() {
     // =========================================================================
     println!("--- Step 6: WIRE TRANSPORT ---");
 
-    let proof_bytes = presentation
-        .issuer_proof_bytes()
-        .expect("Should have proof bytes");
+    // MIGRATED: the opaque `issuer_proof_bytes()` blob was removed on the wire flip;
+    // the wire artifact is now the pair of committed descriptor proofs carried in
+    // `real_stark_proof` (extract with `into_wire_proof()` for transmission).
+    let real = presentation
+        .real_stark_proof
+        .as_ref()
+        .expect("Should have a real STARK proof");
+    let proof_bytes_len = real.total_proof_size_bytes();
     println!(
         "  Extractable proof bytes: {} bytes ({:.1} KiB)",
-        proof_bytes.len(),
-        proof_bytes.len() as f64 / 1024.0
+        proof_bytes_len,
+        proof_bytes_len as f64 / 1024.0
     );
     println!("  These bytes are all Org B needs to verify (plus the trusted federation root).");
     println!("  The entire token chain, delegation structure, and agent identity");

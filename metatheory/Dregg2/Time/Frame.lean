@@ -1,8 +1,8 @@
 /-
 # Dregg2.Time.Frame — `frame_within`: the FRAME-CONVENTION deadline (attested, honest §8 trust).
 
-The relativistic time-typing's *other* face (`docs/rebuild/INTENT-AS-CO-RECEIPT.md` §4,
-`docs/rebuild/INTENT-REFS-time.md` ref #4 Spanner/TrueTime, ref #5 Lamport–Melliar-Smith): a
+The relativistic time-typing's *other* face (`.docs-history-noclaude/rebuild/metatheory/INTENT-AS-CO-RECEIPT.md` §4,
+`.docs-history-noclaude/rebuild/metatheory/INTENT-REFS-time.md` ref #4 Spanner/TrueTime, ref #5 Lamport–Melliar-Smith): a
 wall-clock deadline is NOT a lightcone fact — it is a **chosen reference frame**. A "time authority"
 `F` (a fault-tolerant clock-sync quorum, Lamport–Melliar-Smith 1985) attests a frame-time `t`, valid
 only **within a skew bound `±δ`** (TrueTime's `ε`: time is an interval `[earliest, latest]`, never a

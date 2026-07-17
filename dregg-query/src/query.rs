@@ -1,7 +1,7 @@
 //! The Q1 query surface: conjunctive queries over the EDB — patterns,
 //! filters, joins on shared variables, and (safe, EDB-only) negated atoms.
 //!
-//! Deliberately NOT a Datalog engine (the trap docs/EPISTEMIC-DATALOG.md
+//! Deliberately NOT a Datalog engine (the trap .docs-history-noclaude/EPISTEMIC-DATALOG.md
 //! names): no user-defined IDB rules, no recursion, no stratification
 //! machinery. A query is one conjunction. Negated atoms exist because
 //! "granted and not revoked" is the canonical query — and because they are
@@ -86,7 +86,7 @@ pub struct Filter {
 }
 
 /// An aggregation operator (the Q3 surface, toward
-/// docs/EPISTEMIC-DATALOG.md). All four are NON-MONOTONE in their value over an
+/// .docs-history-noclaude/EPISTEMIC-DATALOG.md). All four are NON-MONOTONE in their value over an
 /// append-only EDB — `count`/`sum` grow, `min` falls, `max` rises as more
 /// receipts arrive — so any query that aggregates is graded
 /// [`crate::classify::CoordinationClass::FinalizedDependent`]: the aggregate is

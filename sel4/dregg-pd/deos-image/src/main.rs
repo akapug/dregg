@@ -44,7 +44,7 @@
 //! a real `dregg-cell` snapshot. The cells do NOT yet CHANGE while you watch:
 //! the LIVE in-VM executor running real turns to MUTATE these cells as you
 //! navigate is the named frontier (Rung 3, the executor-PD Lean runtime —
-//! `docs/SEL4-EMBEDDING.md §2`). This viewer makes real cells NAVIGABLE;
+//! `.docs-history-noclaude/SEL4-EMBEDDING.md §2`). This viewer makes real cells NAVIGABLE;
 //! live-mutation is the next rung.
 
 #![no_std]
@@ -53,8 +53,8 @@
 extern crate alloc;
 
 use sel4_microkit::{
-    Channel, ChannelSet, Handler, Infallible, debug_println, memory_region_symbol,
-    protection_domain,
+    debug_println, memory_region_symbol, protection_domain, Channel, ChannelSet, Handler,
+    Infallible,
 };
 
 mod cockpit_frame;
@@ -66,7 +66,7 @@ mod view;
 
 use fb::Canvas;
 use keyboard::{Keyboard, Nav};
-use view::{LiveTurn, N_SUBSTANCES, ViewState};
+use view::{LiveTurn, ViewState, N_SUBSTANCES};
 
 /// The keyboard IRQ channel (matches `<irq id="0">` in deos-image.system).
 const KBD: Channel = Channel::new(0);

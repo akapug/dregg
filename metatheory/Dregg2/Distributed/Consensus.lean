@@ -2,7 +2,7 @@
 # Dregg2.Distributed.Consensus — the consensus long pole (Titanium Phase 2.1),
 # grounded in Sridhar et al. and Wong et al.
 
-**The grounding (see `docs/rebuild/CONSENSUS-GROUNDING.md`).** Two 2024 papers reshape what
+**The grounding (see `.docs-history-noclaude/rebuild/metatheory/CONSENSUS-GROUNDING.md`).** Two 2024 papers reshape what
 Phase 2.1 must prove over the leaderless blocklace DAG-BFT (`Proof.CordialMiners`, the protocol
 dregg1 actually runs) and the finalization→executor bridge (`Exec.ConsensusExec`):
 

@@ -1,4 +1,4 @@
-//! Tier-C PROOF gate — the whole-chain IVC range attestation (`docs/PG-DREGG.md`
+//! Tier-C PROOF gate — the whole-chain IVC range attestation (`.docs-history-noclaude/PG-DREGG.md`
 //! §10.2), the crate-side shape behind the `tier-c` feature.
 //!
 //! # The two halves of Tier C, and which one this is
@@ -89,7 +89,7 @@
 //! (`circuit::ivc_turn_chain::prove_turn_chain_recursive` / the `fold_two_turns`
 //! accumulator) and write the serialized proof + its window bounds into the
 //! `dregg.turn_proofs(lo, hi, genesis_root, final_root, proof bytea, vk)` table the
-//! SRF reads. That is a node/relayer job (`docs/PG-DREGG.md` §10.2), not a gap in
+//! SRF reads. That is a node/relayer job (`.docs-history-noclaude/PG-DREGG.md` §10.2), not a gap in
 //! this verifier.
 
 use serde::{Deserialize, Serialize};
@@ -231,7 +231,7 @@ pub const WHOLE_CHAIN_DIGEST_LANES: usize = 8;
 // S1 — the SQL-crossable transport for a whole-chain proof.
 // ============================================================================
 //
-// docs/PG-DREGG.md §10.2 names S1 as "serialize WholeChainProof". The honest
+// .docs-history-noclaude/PG-DREGG.md §10.2 names S1 as "serialize WholeChainProof". The honest
 // shape of that, established by reading the circuit:
 //
 //   `circuit::ivc_turn_chain::WholeChainProof` is
@@ -273,7 +273,7 @@ pub const WHOLE_CHAIN_DIGEST_LANES: usize = 8;
 pub const WHOLE_CHAIN_PROOF_TRANSPORT_V1: u16 = 1;
 
 /// The versioned, `bytea`-crossable transport of a whole-chain IVC proof — the S1
-/// artifact (`docs/PG-DREGG.md` §10.2). It carries the VERIFY-SUFFICIENT subset of
+/// artifact (`.docs-history-noclaude/PG-DREGG.md` §10.2). It carries the VERIFY-SUFFICIENT subset of
 /// `circuit::ivc_turn_chain::WholeChainProof` (the prover-only `root.1`
 /// `Rc<CircuitProverData>` is omitted — the verifier never reads it), so the node
 /// (S2) ships a proof as `bytea` and the SRF (S3) decodes + verifies it from the
@@ -408,7 +408,7 @@ pub fn verify_serialized_proof(
         let _ = &transport;
         Err(
             "proof verification not yet wired (Tier-C circuit-link settle item, \
-             docs/PG-DREGG.md §10.2): the transport decoded, but the whole-chain IVC \
+             .docs-history-noclaude/PG-DREGG.md §10.2): the transport decoded, but the whole-chain IVC \
              parts verifier (circuit::ivc_turn_chain::verify_turn_chain_recursive_from_parts) \
              is not linked in this build — the range-attest SRF fails closed (attests nothing)"
                 .to_string(),

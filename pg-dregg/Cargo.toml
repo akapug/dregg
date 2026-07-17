@@ -2,12 +2,12 @@
 # RLS/policy layer (pgrx extension). Milestone 1.
 #
 # This crate is a STANDALONE workspace root (its own empty `[workspace]`), kept
-# OUT of the parent workspace `members` list (docs/PG-DREGG.md §5): a
+# OUT of the parent workspace `members` list (.docs-history-noclaude/PG-DREGG.md §5): a
 # `cargo-pgrx`-managed cdylib does not want to participate in
 # `cargo check --workspace`, and excluding it protects the shared `./target`
 # from pgrx's postgres-binding build during concurrent lanes / VK rotation.
 #
-# TWO build modes (see docs/PG-DREGG.md §5 + the M1 verification boundary):
+# TWO build modes (see .docs-history-noclaude/PG-DREGG.md §5 + the M1 verification boundary):
 #
 #   1. CORE (no postgres needed) — the postgres-independent cores live in
 #      `src/authz.rs` (Tier-A: decode+verify, the verified-credential LRU,
@@ -32,7 +32,7 @@
 #      and `pg_dregg.control` name it as primary). pg13–pg17 remain selectable
 #      for older deployments (`cargo pgrx test pg17`, etc.). The pg18 leverage
 #      (virtual generated columns, RETURNING old/new, uuidv7, OAuth, async I/O)
-#      is surveyed in docs/PG-DREGG-PG18.md.
+#      is surveyed in .docs-history-noclaude/PG-DREGG-PG18.md.
 [workspace]
 
 [package]
@@ -72,7 +72,7 @@ pg17 = ["pgrx", "pgrx/pg17", "dep:pgrx-tests", "pgrx-tests/pg17"]
 pg18 = ["pgrx", "pgrx/pg18", "dep:pgrx-tests", "pgrx-tests/pg18"]
 # pg_test enables the #[pg_test]s (cargo-pgrx sets this).
 pg_test = []
-# Tier C (docs/PG-DREGG.md §10) — the VERIFIED STORE.
+# Tier C (.docs-history-noclaude/PG-DREGG.md §10) — the VERIFIED STORE.
 #
 # The CHAIN re-validation half ships UNCONDITIONALLY (no feature needed): the
 # `dregg_verify_turn` extern + the `dregg.commit_log` gate are backed by
@@ -100,7 +100,7 @@ pg_test = []
 # authorizes the circuit link for Tier C) so `attest::verify_serialized_proof` becomes the
 # REAL `verify_turn_chain_recursive_from_parts` instead of the fail-closed stub.
 tier-c = ["dep:dregg-circuit-prove"]
-# Tier D (docs/PG-DREGG.md §11) — the EXECUTOR-IN-POSTGRES endgame. There are now
+# Tier D (.docs-history-noclaude/PG-DREGG.md §11) — the EXECUTOR-IN-POSTGRES endgame. There are now
 # TWO executor producers, the same ship-Rust-default split `sdk-py` took
 # (`3dd988be`); both supersede the default `FoldProducer` stand-in on the live path.
 #
@@ -115,7 +115,7 @@ tier-c = ["dep:dregg-circuit-prove"]
 #     no Lean), so the executor builds verify-light.
 #   * `tier-d` (alias `tier-d-lean`, the HEAVY executor) — the drainer's PRODUCE gate
 #     runs the verified Lean `execFullForestG` SINGLE-THREADED, IN the backend
-#     process (`docs/EMBEDDABLE-LEAN-RUNTIME.md`: mimalloc is private + the task
+#     process (`.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md`: mimalloc is private + the task
 #     manager is lazy + the libuv-thread-free init `dregg_ffi_init_st`, so the
 #     verified executor lives in a single-threaded `palloc`/`longjmp`/`fork`
 #     backend). Implies tier-c (executing implies verifying); pulls the optional
@@ -224,7 +224,7 @@ dregg-turn = { path = "../turn", default-features = false, features = ["prover"]
 # postcard is already a normal dependency above; the test re-uses it to project a
 # `WholeChainProof` into the transport blobs (the documented S2 producer mapping).
 
-# The marketable throughput/latency numbers (docs/PG-DREGG-VS-DBOS.md): the
+# The marketable throughput/latency numbers (.docs-history-noclaude/PG-DREGG-VS-DBOS.md): the
 # verified-write submit-decision path, the MirrorBatch chain-gate apply, the
 # free-SQL read projection (the RLS filter), the RootChain anti-substitution
 # tooth, and the MirrorBatch serde decode. `harness = false` so criterion owns

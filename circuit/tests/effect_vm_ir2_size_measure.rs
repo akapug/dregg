@@ -1,6 +1,6 @@
 //! # THE EPOCH PAYOFF MEASUREMENT — does IR-v2 actually make the per-turn proof SMALLER?
 //!
-//! `docs/EPOCH-DESIGN.md` predicts that moving Poseidon2 out of row-width (the 4 hash-site aux
+//! `.docs-history-noclaude/EPOCH-DESIGN.md` predicts that moving Poseidon2 out of row-width (the 4 hash-site aux
 //! blocks = 1,408 of the 1,654 extended columns, 85%) into a chip-table lookup shrinks the
 //! 451.7 KiB per-turn proof toward ~100-200 KiB. This test MEASURES that claim before the VK
 //! bump rides on it: the SAME real transfer effect (the validated reference of
@@ -9,7 +9,7 @@
 //!
 //!   * **v1** — the LIVE path: `lean_descriptor_air::prove_vm_descriptor` over the graduated
 //!     transfer descriptor (the single-table extended-row AIR; the wire `EffectVmP3Proof` the
-//!     SDK cutover emits today — `docs/PROOF-ECONOMICS.md` §1's 451.7 KiB baseline).
+//!     SDK cutover emits today — `.docs-history-noclaude/PROOF-ECONOMICS.md` §1's 451.7 KiB baseline).
 //!   * **IR-v2** — `descriptor_ir2::prove_vm_descriptor2` over the graduated
 //!     `transferVmDescriptor2` (the five-table EPOCH batch STARK: main + poseidon2-chip +
 //!     range + memory + map-ops).
@@ -18,7 +18,7 @@
 //! compared are sizes of REAL proofs. The test asserts nothing about WHICH is smaller — it is
 //! a measurement, and a negative result (multi-table overhead exceeding the inline-aux saving
 //! at this trace size) is exactly what it exists to surface. The numbers land in
-//! `docs/PROOF-ECONOMICS.md`.
+//! `.docs-history-noclaude/PROOF-ECONOMICS.md`.
 //!
 //! Gated on `recursion` (the feature that compiles `descriptor_ir2`). Run ONCE, release
 //! (debug prove times would be lies):
@@ -151,7 +151,7 @@ fn ir2_vs_v1_transfer_proof_size() {
 
 /// THE UNIVERSAL-MEMORY SIZE PROBE: one state write + read-back expressed BOTH ways —
 /// as boundary map ops (sorted-Poseidon2 openings riding the chip bus) and as universal
-/// memory ops (the ONE Blum multiset, `docs/UNIVERSAL-MEMORY.md`) — plus the `absent`
+/// memory ops (the ONE Blum multiset, `.docs-history-noclaude/UNIVERSAL-MEMORY.md`) — plus the `absent`
 /// non-membership shape, all proven through the production `ir2_config` and measured.
 /// The umem proof commits NO chip table (zero intra-proof hashing); the map/absent proofs
 /// pay the chip. Numbers, not vibes: this is the intra-proof half of the universal-memory
@@ -350,7 +350,7 @@ fn ir2_umem_vs_map_size_probe() {
 /// milliseconds): size falls monotonically with blowup, prove time roughly doubles
 /// per step. Points below lb=3 are unprovable with the inline x⁷ S-box (quotient
 /// needs 8 chunks); they were measured with a degree-3 registered-S-box chip variant
-/// and LOST at parity anyway (+89/+356 KiB at lb=2/lb=1) — docs/PROOF-ECONOMICS.md §2c.
+/// and LOST at parity anyway (+89/+356 KiB at lb=2/lb=1) — .docs-history-noclaude/PROOF-ECONOMICS.md §2c.
 #[test]
 fn ir2_fri_grid() {
     use dregg_circuit::plonky3_prover::create_config_with_fri;

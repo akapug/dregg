@@ -29,7 +29,7 @@
 //! verifier. See `docs/RECEIPT-CONTRACT.md` (breadstuffs) for the contract in
 //! prose.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -225,6 +225,14 @@ impl ReceiptSigner {
 /// produced `sig` over exactly `msg`. A tampered message, a wrong signer, or a
 /// malformed key/signature all return `false` (fail-closed). Used to re-witness
 /// each independent co-signer in a multi-sig quorum over a shared fact.
+///
+/// STRICT (`verify_strict`): `signer` is caller-supplied (in the quorum path it
+/// is `Attestation::signer`, carried in the wire attestation), so it is
+/// attacker-influenced. The cofactored `Verifier::verify` would let a small-order
+/// `signer` (e.g. the identity point) satisfy the check for EVERY message with
+/// `(R = identity, s = 0)` — a co-signer witness minted with no secret. That
+/// directly violates the "a wrong signer ... `false`" contract above.
+/// `verify_strict` rejects weak keys, which is what makes the contract true.
 pub fn verify_signature(signer: &[u8; 32], msg: &[u8], sig: &[u8]) -> bool {
     let Ok(vk) = VerifyingKey::from_bytes(signer) else {
         return false;
@@ -232,7 +240,7 @@ pub fn verify_signature(signer: &[u8; 32], msg: &[u8], sig: &[u8]) -> bool {
     let Ok(sig) = Signature::from_slice(sig) else {
         return false;
     };
-    vk.verify(msg, &sig).is_ok()
+    vk.verify_strict(msg, &sig).is_ok()
 }
 
 /// The producer-side chain: a [`ReceiptSigner`] plus the moving chain head.
@@ -361,7 +369,10 @@ pub fn verify_chain_from<R: ReceiptBody>(
             .map_err(|_| ChainError::BadSignature { seq: r.seq() })?;
         let sig = Signature::from_slice(&att.signature)
             .map_err(|_| ChainError::BadSignature { seq: r.seq() })?;
-        vk.verify(&rh, &sig)
+        // STRICT: `att.signer` is wire-carried (attacker-influenced), so a
+        // cofactored verify would admit a small-order signer forging every
+        // receipt-chain link. See `verify_signature` above.
+        vk.verify_strict(&rh, &sig)
             .map_err(|_| ChainError::BadSignature { seq: r.seq() })?;
 
         expected_prev = Some(rh);
@@ -411,6 +422,51 @@ mod tests {
             out.push(b);
         }
         (out, chain)
+    }
+
+    /// THE STRICTNESS TOOTH for `verify_signature`. The `signer` argument is
+    /// caller-supplied bytes (in the quorum path, `Attestation::signer` off the
+    /// wire), so it is attacker-chosen. Under the cofactored `Verifier::verify` a
+    /// SMALL-ORDER signer makes the signature `(R = identity, s = 0)` verify over
+    /// EVERY message — a co-signer witness minted holding NO secret. This pins the
+    /// `verify_strict` choice: re-loosen it to `vk.verify(..)` and this goes RED
+    /// (confirmed by mutation, 2026-07-17).
+    #[test]
+    fn a_small_order_signer_cannot_forge_a_signature() {
+        // The ed25519 identity point, compressed (y = 1): canonical, decodable,
+        // small-order.
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        // NON-VACUITY (library authority): really a well-formed, weak key — so the
+        // refusal below is for WEAKNESS, not malformedness.
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&identity)
+            .expect("identity point is a canonical ed25519 key");
+        assert!(vk.is_weak(), "premise: identity point is a small-order key");
+
+        // The universal forgery: R = identity, s = 0. No secret used.
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+
+        assert!(
+            !verify_signature(&identity, b"pay alice 1000", &forged),
+            "SOUNDNESS: a signature forged under a small-order signer — minted with \
+             NO secret — must be refused. A cofactored verify accepts it."
+        );
+        assert!(
+            !verify_signature(&identity, b"a completely different fact", &forged),
+            "the same no-secret forgery must not authenticate a different message either"
+        );
+
+        // CONTROL: an honestly-signed message under a real key still verifies, so
+        // the refusal is the forgery being caught, not a verifier that says no to
+        // everything.
+        let signer = SigningKey::from_bytes(&[42u8; 32]);
+        let msg = b"pay alice 1000";
+        let real = signer.sign(msg).to_bytes();
+        assert!(
+            verify_signature(&signer.verifying_key().to_bytes(), msg, &real),
+            "control: a genuine signature must still verify"
+        );
     }
 
     #[test]

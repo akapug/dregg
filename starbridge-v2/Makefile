@@ -3,7 +3,7 @@
 # Always run FROM INSIDE this directory (`cd starbridge-v2 && make …`): the
 # toolchain pin (`rust-toolchain.toml`, the rolling nightly gpui needs) is
 # directory-scoped, and the standalone workspace must NOT be reached via
-# `--manifest-path` from the repo root (see Cargo.toml + docs/STARBRIDGE-V2.md).
+# `--manifest-path` from the repo root (see Cargo.toml + .docs-history-noclaude/STARBRIDGE-V2.md).
 #
 # The embedded VERIFIED executor (real conservation proofs / ocap checks / caveat
 # crypto) is *pathologically slow in debug* — so the cockpit and the test suite

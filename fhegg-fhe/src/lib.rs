@@ -43,6 +43,7 @@ use tfhe::{ClientKey, FheUint32};
 /// The CARRY-FREE ADDITIVE fold (BFV / fhe.rs) — codex Round-3 Q1's Tier-0 speed
 /// lever, measured head-to-head against the exact-integer TFHE fold above.
 pub mod additive;
+pub mod boundary;
 
 /// The OUTPUT-BOUNDARY MPC crossing (BFV / fhe.rs → additive shares → secret-shared
 /// comparison) — codex Round-4 gold: adversarial no-viewer + the dissolved

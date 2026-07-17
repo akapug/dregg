@@ -254,7 +254,7 @@ explainer that lands the through-line before the layer cake.
   verification-literate reader. **ALIVE.**
 - `metatheory/docs/NAVIGATION.md` — the where-is-X index (92 Rust crates, ~790 Lean modules), with a
   stale-link banner that honestly points at the harvested `rebuild/` stratum. **ALIVE.**
-- `docs/ASSURANCE.md`, `docs/DREGG3.md`, `README-LLMs.md`, the `docs/deos/` corpus — deep teaching
+- `docs/ASSURANCE.md`, `.docs-history-noclaude/DREGG3.md`, `README-LLMs.md`, the `docs/deos/` corpus — deep teaching
   material. **ALIVE.**
 
 **The gap:** the guides are excellent but pitched at the *verification-literate*; the README leads with

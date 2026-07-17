@@ -7,7 +7,7 @@
 //! read what the swarm *actually did* (the grounded [`Swarm::action_log`] +
 //! the [`WorldEvent`] dynamics), and the panel surfaces the gap.
 //!
-//! `docs/ADOS-DEEPENING.md` §3.5 is the spec; the four divergences it names:
+//! `.docs-history-noclaude/ADOS-DEEPENING.md` §3.5 is the spec; the four divergences it names:
 //!
 //! | the agent CLAIMS…        | the receipt chain SHOWS…          | the divergence flagged   |
 //! |--------------------------|-----------------------------------|--------------------------|
@@ -32,7 +32,7 @@
 //! What it does NOT do — and **must not pretend to** — is correlate a *specific
 //! narrated claim* ("I transferred 500 to worker-b") to the *specific turn* that
 //! claim should have produced. That needs the **tool-call → effect compiler**
-//! (`FRONTIER-ROADMAP.md` R1 / `docs/ADOS-DEEPENING.md` §3.9): an adapter that
+//! (`FRONTIER-ROADMAP.md` R1 / `.docs-history-noclaude/ADOS-DEEPENING.md` §3.9): an adapter that
 //! turns a provider's tool-call schema into the typed effects [`Swarm::run`]
 //! executes, emitting a stable correlation id the panel can join on. Until that
 //! lands, a [`ClaimedAction`] carries an OPTIONAL `expected` posture (the member's
@@ -100,7 +100,7 @@ impl ClaimPosture {
 }
 
 /// The kind of divergence the panel found between a claim and the ground truth —
-/// the four pale-ghost flags from `docs/ADOS-DEEPENING.md` §3.5, plus the honest
+/// the four pale-ghost flags from `.docs-history-noclaude/ADOS-DEEPENING.md` §3.5, plus the honest
 /// "no divergence" verdict.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Divergence {

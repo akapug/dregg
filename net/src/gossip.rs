@@ -1542,7 +1542,7 @@ impl GossipNetwork {
     /// routing each block through a single random stem relay (then a fluff hop)
     /// delivers blocks asymmetrically at small N on loopback, so no node assembles
     /// the round-synchronous shape `tau` needs and `is_super_ratified` never fires
-    /// (the Stage-5 / HIGH-6 dissemination gap, `docs/STAGE5-CONSENSUS-DEVAC.md`).
+    /// (the Stage-5 / HIGH-6 dissemination gap, `.docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md`).
     ///
     /// Eager-pushing directly to ALL committee peers closes that gap: each block
     /// reaches every other validator in ONE hop. The receiver's existing
@@ -1843,7 +1843,7 @@ impl GossipNetwork {
         let mut dead_peers: Vec<SocketAddr> = Vec::new();
 
         // Apply two-bucket padding to hide message type from size analysis.
-        // See docs/design-network-privacy.md Phase 1.
+        // See .docs-history-noclaude/root-docs-2026-05/design-network-privacy.md Phase 1.
         // Wrap once in an Arc so each per-link spawn clones a refcounted handle,
         // not the whole padded frame (an N-link broadcast was N full copies).
         let padded = Arc::new(crate::message::pad_message(data));
@@ -2275,7 +2275,7 @@ impl GossipNetwork {
                     s.scoreboard.reward_fresh_delivery(remote_addr);
 
                     // BIDIRECTIONAL membership (the small-N dissemination fix,
-                    // `docs/STAGE5-CONSENSUS-DEVAC.md` S5-1 option (a)): a peer we
+                    // `.docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md` S5-1 option (a)): a peer we
                     // received a full message FROM joins this topic's peer set even
                     // if WE never dialed it. Without this the eager/lazy split is
                     // seeded only from the addresses a node DIALS, so an
@@ -2944,7 +2944,7 @@ async fn read_signed_envelope(recv: &mut RecvStream) -> Result<SignedEnvelope, S
     recv.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
 
     // Strip two-bucket padding to recover the actual envelope bytes.
-    // See docs/design-network-privacy.md Phase 1.
+    // See .docs-history-noclaude/root-docs-2026-05/design-network-privacy.md Phase 1.
     let payload = crate::message::unpad_message(&buf)
         .ok_or_else(|| "invalid padded frame (malformed length prefix)".to_string())?;
 

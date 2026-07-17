@@ -5,7 +5,7 @@ createCell / createCellFromFactory / spawn (+ spawnWrite) / refusal / heapWrite,
 invocation of the general assembler `AlgoStarkSoundGeneral.algoStarkSound_of_memoryLegs` with
 its `MemoryLegs` input ASSEMBLED from the MapOps-AIR modeler (`MapOpsColumnLayout`), never
 re-assumed. (SetFieldDyn — the sole `.memOp` effect — is OUT OF SCOPE here; its leg load-bears
-the named-open higher-order-pole LogUp extension, `docs/reference/MEMORY-LEGS-SCOPE.md` §4.)
+the named-open higher-order-pole LogUp extension, `docs/SUPERSEDED/MEMORY-LEGS-SCOPE.md` §4.)
 
 ## HONEST SCOPE (first sentence)
 

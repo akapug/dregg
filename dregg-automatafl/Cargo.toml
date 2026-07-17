@@ -39,3 +39,6 @@ blake3 = "1"
 # real turn chain the light client verify_history accepts.
 dregg-turn = { path = "../turn" }
 dregg-lightclient = { path = "../lightclient" }
+
+[lints]
+workspace = true

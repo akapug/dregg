@@ -19,3 +19,6 @@ serde_json = "1"
 [[bin]]
 name = "fhir-demo"
 path = "src/bin/fhir_demo.rs"
+
+[lints]
+workspace = true

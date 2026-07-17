@@ -1,6 +1,6 @@
 //! Starbridge v2 — the native dregg master interface.
 //!
-//! TWO BUILDS, ONE CODEBASE (see Cargo.toml + docs/STARBRIDGE-V2.md):
+//! TWO BUILDS, ONE CODEBASE (see Cargo.toml + .docs-history-noclaude/STARBRIDGE-V2.md):
 //!
 //!   * `native-full` (DEFAULT) — EMBEDS THE REAL VERIFIED EXECUTOR and runs a
 //!     LIVE LOCAL dregg world natively (`crate::world::World` over
@@ -13,7 +13,7 @@
 //!
 //!   * `sel4-thin` (`--no-default-features --features sel4-thin`) — the Lean-
 //!     free thin HTTP client / verifier path for the eventual seL4 component
-//!     (docs/SEL4-EMBEDDING.md). No embedded executor, no gpui: it speaks the
+//!     (.docs-history-noclaude/SEL4-EMBEDDING.md). No embedded executor, no gpui: it speaks the
 //!     node's wire contract (`client`/`model`) against a remote node.
 //!
 //! The `NodeClient::{Mock,Http}` surface (`client`/`model`) is compiled in BOTH

@@ -426,7 +426,7 @@ pub fn build_revoke_action(
 // The deos-native surface — the MANDATE as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: tool-access-delegation, re-expressed as a
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: tool-access-delegation, re-expressed as a
 // composed deos app and PROMOTED into `src/`. The same operations are ONE [`DeosApp`]
 // ([`tad_app`] below); the framework wires the rest — per-viewer projection, web-of-cells
 // publish (the MANDATE cell IS a `dregg://` sturdyref), the rehydratable frustum-snapshot,

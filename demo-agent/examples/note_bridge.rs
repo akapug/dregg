@@ -149,7 +149,7 @@ fn main() {
 
     let alice_nullifier = alice_note.nullifier(&alice_sk);
     fed_a_nullifiers
-        .insert(alice_nullifier)
+        .insert(alice_nullifier, alice_note.value())
         .expect("first spend should succeed");
 
     println!(

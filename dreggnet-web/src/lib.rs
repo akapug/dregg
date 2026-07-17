@@ -45,6 +45,10 @@
 //! axum, DRIVEN — affordances → HTML controls, a POST → an `Action` → one real turn, a session
 //! playing through, executor-refereed, `verify` holding.
 
+/// The SIGNED-turn route (`POST /offerings/{key}/session/{id}/act-signed`): the verifying consumer
+/// of the extension's `dregg.signOfferingTurn` — a JSON `SignedAction` wire verified into one real
+/// turn via `OfferingHost::advance_signed`. See [`act_signed`].
+pub mod act_signed;
 /// THE SPECTATOR / PROVENANCE surface for *The Descent* (the flagship's growth artifact): a
 /// stranger opens a URL and INDEPENDENTLY re-verifies a run — a re-verified no-cheat leaderboard
 /// (`GET /descent/leaderboard`) + a run-card that re-executes the recorded run to PASS/FAIL
@@ -54,6 +58,11 @@ pub mod descent;
 /// reproducible public input (the day seed + the move sequence), re-verified by REPLAY on boot so
 /// the board survives restart and a tampered row cannot resurrect a cheat. See [`descent_store`].
 pub mod descent_store;
+/// Prometheus metrics for the web surface (the `node/src/metrics.rs` pattern): the idempotent
+/// process-global recorder + the `GET /metrics` handler + the named emit helpers this surface's
+/// call sites bump (session opens/evictions, policy refusals, executor refusals, anchor + resume
+/// failures). See [`metrics`].
+pub mod metrics;
 /// The seat-claiming adapter that makes `dregg-multiway-tug` playable by real frontend users (a web
 /// identity is a derived key, never the game's canonical seat string). See [`seated::SeatedTug`].
 pub mod seated;
@@ -427,6 +436,7 @@ async fn post_act(
                 // The executor is the sole referee: a crafted POST of a dimmed / ineligible
                 // affordance lands as a REAL refusal — nothing committed, the world unmoved.
                 Outcome::Refused(why) => {
+                    metrics::inc_turn_refused();
                     format!("Refused: {why} (nothing committed — anti-ghost).")
                 }
             }
@@ -1185,7 +1195,15 @@ impl CatalogState {
     /// before judging capacity on each fresh open, so this timer only covers the no-traffic case
     /// (idle sessions releasing memory with nobody knocking).
     pub fn sweep(&self) -> SweepReport {
-        self.host.run(|h| h.sweep_now())
+        let (report, open) = self.host.run(|h| {
+            let report = h.sweep_now();
+            (report, live_session_count(h))
+        });
+        if !report.evicted.is_empty() {
+            metrics::inc_sessions_evicted(report.evicted.len() as u64);
+        }
+        metrics::set_sessions_open(open as f64);
+        report
     }
 }
 
@@ -1193,6 +1211,13 @@ impl Default for CatalogState {
     fn default() -> Self {
         CatalogState::new()
     }
+}
+
+/// The host's TOTAL live-session count (summed over every registered offering) — what the
+/// `dregg_web_sessions_open` gauge reports. Computed ON the host's owning thread (inside a
+/// `HostThread::run` job) beside the open/sweep it observes.
+fn live_session_count(host: &OfferingHost) -> usize {
+    host.list_offerings().iter().map(|o| o.open_sessions).sum()
 }
 
 /// **The default catalog host** — registers the three heterogeneous offerings the web catalog
@@ -1304,6 +1329,10 @@ pub fn catalog_router(state: Arc<CatalogState>) -> Router {
         .route("/offerings/{key}/session/{id}", get(get_offering_session))
         .route("/offerings/{key}/session/{id}/act", post(post_offering_act))
         .route(
+            "/offerings/{key}/session/{id}/act-signed",
+            post(act_signed::post_offering_act_signed),
+        )
+        .route(
             "/offerings/{key}/session/{id}/verify",
             get(get_offering_verify),
         )
@@ -1333,16 +1362,18 @@ async fn get_offering_session(
     // viewer identity is the opener attribution (an ADVISORY `Asserted` quota lane — a forgeable
     // cookie; capacity + TTL are the real backstops), a policy refusal answers an honest 4xx
     // instead of minting, and an evicted persisted session transparently resumes.
-    let opened = {
+    let (opened, open_count) = {
         let key = key.clone();
         let sid = sid.clone();
         let opener = Attribution::Asserted {
             label: viewer.0.clone(),
         };
-        state
-            .host
-            .run(move |h| h.ensure_open_as(&key, &sid, Some(&opener)))
+        state.host.run(move |h| {
+            let r = h.ensure_open_as(&key, &sid, Some(&opener));
+            (r, live_session_count(h))
+        })
     };
+    metrics::set_sessions_open(open_count as f64);
     match opened {
         Err(HostError::UnknownOffering(_)) => {
             return Html(catalog_missing_offering(&key)).into_response();
@@ -1402,16 +1433,18 @@ async fn post_offering_act(
     // Ensure open first (so a POST to a fresh session still resolves against a live offering) —
     // lifecycle-aware exactly as the GET: the actor is the opener attribution, a policy refusal
     // is an honest 4xx, an evicted persisted session resumes.
-    let opened = {
+    let (opened, open_count) = {
         let key = key.clone();
         let sid = sid.clone();
         let opener = Attribution::Asserted {
             label: actor.0.clone(),
         };
-        state
-            .host
-            .run(move |h| h.ensure_open_as(&key, &sid, Some(&opener)))
+        state.host.run(move |h| {
+            let r = h.ensure_open_as(&key, &sid, Some(&opener));
+            (r, live_session_count(h))
+        })
     };
+    metrics::set_sessions_open(open_count as f64);
     match opened {
         Err(HostError::UnknownOffering(_)) => {
             return Html(catalog_missing_offering(&key)).into_response();
@@ -1459,6 +1492,7 @@ async fn post_offering_act(
             }
         }
         CatalogAct::Advanced(Outcome::Refused(why)) => {
+            metrics::inc_turn_refused();
             format!("Refused: {why} (nothing committed — anti-ghost).")
         }
         CatalogAct::NotOffered => {
@@ -1488,6 +1522,15 @@ async fn post_offering_act(
 /// `409 Conflict` (the durable record is authoritative; a fresh genesis will not shadow it).
 /// Never a 500 — a refused open is the policy WORKING, not a server fault.
 fn refused_open_response(id: &SessionId, err: &HostError) -> Response {
+    // Count the refusal at its one funnel point — a labelled policy refusal (WHICH limit
+    // tripped) or a lazy-resume failure (a persisted log that refused to reopen, the 409).
+    match err {
+        HostError::Policy(PolicyRefusal::ActorQuota { .. }) => metrics::inc_open_refused("quota"),
+        HostError::Policy(PolicyRefusal::OpenRate { .. }) => metrics::inc_open_refused("rate"),
+        HostError::Policy(PolicyRefusal::Capacity { .. }) => metrics::inc_open_refused("capacity"),
+        HostError::ResumeFailed { .. } => metrics::inc_resume_failure(),
+        _ => {}
+    }
     let (status, retry_after) = match err {
         HostError::Policy(PolicyRefusal::OpenRate { retry_after_secs }) => {
             (StatusCode::TOO_MANY_REQUESTS, Some(*retry_after_secs))
@@ -2206,6 +2249,7 @@ pub fn demo_host_over(dir: Option<std::path::PathBuf>, mut policy: SessionPolicy
             );
             for (log, outcome) in &results {
                 if let Err(e) = outcome {
+                    metrics::inc_resume_failure();
                     tracing::warn!(
                         key = %log.key,
                         id = %log.id.0,
@@ -2386,6 +2430,14 @@ pub fn make_app_with_descent(descent: Arc<DescentState>) -> Router {
 /// [`make_app_with_descent`], also handing back the [`CatalogState`] handle (see
 /// [`make_app_parts`]).
 pub fn make_app_parts_with_descent(descent: Arc<DescentState>) -> (Router, Arc<CatalogState>) {
+    // OBSERVABILITY — install the process-global Prometheus recorder (idempotent) BEFORE the
+    // catalog host builds, so its boot-resume refusals are already counted. `/metrics` is
+    // DELIBERATELY NOT mounted on this app: it is served on a SEPARATE loopback listener
+    // ([`metrics_app`] + the bin's metrics port) so a public `tailscale funnel` of the main port
+    // can never expose the operational counters. The recorder is installed here regardless — the
+    // emit sites are no-ops until it exists, and this is the earliest point that covers boot.
+    let _ = metrics::install_recorder();
+
     let web = Arc::new(WebState::new());
     // The session-durability + lifecycle weld: `DREGGNET_WEB_SESSION_DIR` set → the catalog host
     // is built over a durable `FileResumeStore` and boot-resumes persisted sessions; the
@@ -2402,6 +2454,19 @@ pub fn make_app_parts_with_descent(descent: Arc<DescentState>) -> (Router, Arc<C
         .merge(descent_router(descent))
         .merge(sprite::sprite_router());
     (app, catalog)
+}
+
+/// The metrics-only app — `GET /metrics` in the Prometheus exposition format — served on its OWN
+/// loopback listener, never merged into the public/funnel'd surface. This is the deliberate split:
+/// the operational counters (session counts, refusal/anchor/resume rates) are readable only from
+/// the box, so a `tailscale funnel` of the main port cannot leak them. Installs the process-global
+/// recorder (idempotent), so ordering vs [`make_app_parts`] is irrelevant. The bin binds this to
+/// `DREGGNET_WEB_METRICS_BIND` (default `127.0.0.1:9790`).
+pub fn metrics_app() -> Router {
+    let handle = metrics::install_recorder();
+    Router::new()
+        .route("/metrics", get(metrics::metrics_handler))
+        .with_state(handle)
 }
 
 /// Resolve the demo Descent state from the environment: with `DATABASE_URL` set (non-empty), open a

@@ -1,8 +1,8 @@
 /-
 # Dregg2.Firmament.NotifyOrgans — the `notify` CASCADE across the organs (the WELD, STEP-3 Lean).
 
-This module is the **WELD** the `notify` primitive was built for (`docs/NOTIFY-PRIMITIVE.md` §3.1,
-`docs/NOTIFY-CASCADE.md` §1e/§5): the census found **five subsystems** that each re-implement
+This module is the **WELD** the `notify` primitive was built for (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md` §3.1,
+`.docs-history-noclaude/NOTIFY-CASCADE.md` §1e/§5): the census found **five subsystems** that each re-implement
 async-signal UNGATED — the seL4 `Notification` (modelled, no authority shadow), the mailbox/CapInbox
 (`deliver` = sender-set MEMBERSHIP), pubsub/channels (`publish` = a frozen publisher SLOT + an UNGATED
 `broadcast`), the WorldEvent dynamics (`emit` = AMBIENT), the blocklace `finality_notify` (an in-process

@@ -654,7 +654,7 @@ whether `g`'s discharge is forced in-circuit. Two cases:
 2. **If `g` is checked only by the off-circuit executor** (the runtime evaluates `Pred.eval g old new`
    but the *circuit* does not bind it), then a light client that trusts only the proof **cannot tell
    whether the guard held.** This is the *worse* outcome, and it is the same failure mode the
-   obligation table in `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md` catalogues for the ~17 effects whose
+   obligation table in `.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md` catalogues for the ~17 effects whose
    writes are not yet bound into the commitment.
 
 > **Finding (Q3).** Guarded holes do not *create* the off-circuit-trust problem and they do not *make

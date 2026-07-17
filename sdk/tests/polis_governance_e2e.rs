@@ -551,7 +551,7 @@ fn council_proposal_staging_teeth() {
 }
 
 /// **Approval slots are ACTOR-BOUND** (`starbridge_polis` gap 1 DISSOLVED —
-/// turn-context atoms, `docs/CELL-PROGRAM-LANGUAGE.md` §3).
+/// turn-context atoms, `metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §3).
 ///
 /// A charter built with `CouncilCharter::with_member_keys` installs, per
 /// member, `AnyOf[Immutable{approval_slot_i}, SenderIs{member_keys[i]}]`.

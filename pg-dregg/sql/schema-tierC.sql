@@ -3,12 +3,12 @@
 -- =============================================================================
 -- This is the human-readable mirror of the Rust DDL emitter
 -- `pg_dregg::mirror::ddl::tier_c()` (the SQL the extension actually ships via
--- `SELECT dregg_install_tier_c()`). See docs/PG-DREGG.md §10 (Tier C).
+-- `SELECT dregg_install_tier_c()`). See .docs-history-noclaude/PG-DREGG.md §10 (Tier C).
 -- =============================================================================
 -- Tier C makes the database engine — not a trusted writer — gate dregg state:
 -- a row reaches dregg.cells/memory/capabilities ONLY through dregg.commit_log,
 -- whose BEFORE INSERT trigger re-validates the turn and only then materializes
--- the post-image. This is the spine invariant (docs/PG-DREGG.md §8) enforced in
+-- the post-image. This is the spine invariant (.docs-history-noclaude/PG-DREGG.md §8) enforced in
 -- SQL:
 --
 --     Reads are free SQL; state mutates ONLY through verified turns.
@@ -17,7 +17,7 @@
 -- role model). Requires SELECT dregg_install_schema() to have run first.
 --
 -- WHAT `dregg_verify_turn` DOES (and does NOT) — the honest boundary
--- (docs/PG-DREGG.md §10.2/§10.3):
+-- (.docs-history-noclaude/PG-DREGG.md §10.2/§10.3):
 --   * It RE-VALIDATES THE CHAIN: the turn's ordinal is the next expected one AND
 --     its prev_root equals the database's current head root (the post-state of
 --     turn N is the pre-state of turn N+1). This is the REAL anti-substitution
@@ -130,7 +130,7 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 -- free, they can be ATTESTED free.
 
 -- ===========================================================================
--- 5.  The WRITE-path outbox (docs/PG-DREGG.md §11) — submit a turn FROM pg.
+-- 5.  The WRITE-path outbox (.docs-history-noclaude/PG-DREGG.md §11) — submit a turn FROM pg.
 -- ===========================================================================
 -- The mirror of pg_dregg::mirror::ddl::write_outbox() (SELECT
 -- dregg_install_write_outbox()). A pg-user submits a SIGNED turn FROM postgres
@@ -160,7 +160,7 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 --   GRANT INSERT, SELECT ON dregg.submit_queue TO dregg_reader;  -- the submitter
 --   GRANT SELECT, UPDATE ON dregg.submit_queue TO dregg_kernel;  -- the node drainer
 --
--- THE DRAINER (the M3 worker — docs/PG-DREGG.md §11.4) is LANDED: the node-side
+-- THE DRAINER (the M3 worker — .docs-history-noclaude/PG-DREGG.md §11.4) is LANDED: the node-side
 -- background worker that turns queued intents into verified state. It runs the
 -- four-gate spine — SUBMIT (re-check the cap) → PRODUCE (the executor seam) →
 -- CHAIN (the RootChain anti-substitution tooth) → MIRROR+resolve (apply through
@@ -174,7 +174,7 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 -- producer (docs/PG-DREGG-TIER-D-SPIKE.md names the executor-link verdict).
 
 -- ===========================================================================
--- 6.  Tier D preview (docs/PG-DREGG.md §11) — the executor as a pg function.
+-- 6.  Tier D preview (.docs-history-noclaude/PG-DREGG.md §11) — the executor as a pg function.
 -- ===========================================================================
 -- With the `tier-d` feature (the embedded executor, gated on the pg/Lean
 -- process-model spike), submission collapses to EXECUTION inside the backend:
@@ -202,7 +202,7 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 -- exactly what dregg_drain_once()'s PRODUCE seam plugs into.
 
 -- ===========================================================================
--- 7.  The whole-chain IVC RANGE attestation (docs/PG-DREGG.md §10.2.1) — the
+-- 7.  The whole-chain IVC RANGE attestation (.docs-history-noclaude/PG-DREGG.md §10.2.1) — the
 --     PROOF half of Tier C, the SRF SHAPE (emitted from src/attest.rs, not SQL).
 -- ===========================================================================
 -- dregg_verify_turn (above) re-validates the CHAIN structurally per row. The
@@ -227,7 +227,7 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 -- reads (S2, post-flip M3).
 
 -- ===========================================================================
--- 8.  Federation via logical replication (docs/PG-DREGG.md §15) — distributed.
+-- 8.  Federation via logical replication (.docs-history-noclaude/PG-DREGG.md §15) — distributed.
 -- ===========================================================================
 -- dregg.turns is a hash chain, so another postgres tails this node's verified
 -- state by PostgreSQL's own logical replication — federation-via-pg. PUBLISHER:

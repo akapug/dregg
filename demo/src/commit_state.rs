@@ -7,7 +7,7 @@
 //! Merkle commitment and fold delta using `dregg-commit` in parallel.
 
 use dregg_commit::{
-    Fact as CommitFact, FoldDelta as CommitFoldDelta, FoldVerification,
+    CheckPolicy, Fact as CommitFact, FoldDelta as CommitFoldDelta, FoldVerification,
     TokenState as CommitTokenState,
 };
 
@@ -99,7 +99,10 @@ pub fn compute_real_fold_delta(
         added_check_facts,
     )?;
 
-    let verification = delta.verify();
+    // `verify` recomputes the post-state root from `old_state` (it no longer trusts the
+    // delta's own root fields); the policy admits exactly the rule-prefixed checks this
+    // function itself built via `make_rule` above.
+    let verification = delta.verify(&old_state, &CheckPolicy::RuleNames(added_checks));
     let valid = verification == FoldVerification::Valid;
 
     Some((delta, valid))

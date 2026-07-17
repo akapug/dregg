@@ -36,3 +36,6 @@ dregg-cell = { path = "../cell" }
 dregg-schema = { path = "../dregg-schema" }
 blake3 = "1"
 zeroize = { workspace = true }
+
+[lints]
+workspace = true

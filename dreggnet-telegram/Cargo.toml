@@ -81,3 +81,6 @@ serde_json = { workspace = true }
 # winning / illegal line with (exactly as `dreggnet-offerings/tests/driven.rs` does). A
 # test-only dep: the frontend itself is offering-agnostic (it renders any `Offering`).
 dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+
+[lints]
+workspace = true

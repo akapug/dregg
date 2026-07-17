@@ -12,7 +12,7 @@ executable kernel **step-complete** and PROVE it — which:
   * realizes `Boundary.StepComplete` for a concrete machine, so `stepComplete_preserves`
     fires end-to-end, and
   * unblocks the dregg1→dregg2 cascade of the `turn` executor (the gating risk in
-    `docs/rebuild/DREGG1-TO-DREGG2.md`).
+    `.docs-history-noclaude/rebuild/dregg2-design/DREGG1-TO-DREGG2.md`).
 
 We extend the kernel with the **receipt chain** (the append-only log = the ChainLink /
 ObsAdvance carrier) and prove every committed chained step attests all four conjuncts.

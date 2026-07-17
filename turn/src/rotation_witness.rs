@@ -1,6 +1,6 @@
 //! # `rotation_witness` — the per-turn ROTATION producers (the deferred long pole).
 //!
-//! `docs/ROTATION-CUTOVER.md` §5 items 3-5 name three witness columns of the rotated
+//! `.docs-history-noclaude/ROTATION-CUTOVER.md` §5 items 3-5 name three witness columns of the rotated
 //! state block that no v1 column carries, and that no producer existed for: `cells_root`
 //! (the turn-level boundary view over present cells), `iroot` (the MMR root over the
 //! receipt log — whole-history non-omission, Lean `mroot_injective` /
@@ -535,12 +535,14 @@ pub fn produce(
 /// **THE ROTATED-LEG MINTING RECIPE (Bucket-F / PATH-PRESERVE Phase 5a).** Build a
 /// [`RotatedParticipantLeg`](dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg) for a
 /// single homogeneous-cohort turn from the real before/after actor `Cell`s: run [`produce`] over
-/// each cell to derive its rotated block witness (`pre_limbs` + `iroot`), then hand those to the
-/// pure-circuit
-/// [`RotatedParticipantLeg::mint_from_block_witnesses`](dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg::mint_from_block_witnesses),
-/// which generates the 311-column rotated trace + 38-PI vector and proves it through the IR-v2
-/// batch prover under the leaf-wrap config (so the minted `Ir2BatchProof` folds directly as a
-/// `NativeBatchStark` recursion leaf). The proof self-verifies natively before return.
+/// each cell to derive its rotated block witness (`pre_limbs` + `iroot`), then drive the wide
+/// full-cohort dispatcher (`generate_rotated_effect_vm_descriptor_and_trace_wide`) over them —
+/// threading the BEFORE cell's producer-honest membership teeth — and prove the result through
+/// the IR-v2 batch prover under the leaf-wrap config (so the minted `Ir2BatchProof` folds
+/// directly as a `NativeBatchStark` recursion leaf). The proof self-verifies natively before
+/// return. (An earlier `RotatedParticipantLeg::mint_from_block_witnesses` "pure-circuit core"
+/// duplicated this body WITHOUT the membership-teeth threading and had zero callers — a drifted
+/// mirror, deleted 2026-07-17; this recipe is the one real mint.)
 ///
 /// This lives in `dregg-turn` (NOT `dregg-circuit`) because it drives [`produce`] over
 /// `dregg_cell::Cell`s, and `dregg-circuit` cannot depend on `dregg-cell` / `dregg-turn` (a

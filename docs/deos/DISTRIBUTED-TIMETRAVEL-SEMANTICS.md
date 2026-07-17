@@ -738,7 +738,7 @@ tip-withdrawal (`blocklace/src/lib.rs`); `History::replay_to` root-verified repl
 `RootMismatch` fail-closed, `fork_at` mainline-intact, `recover = checkpoint ⊕ overlay`
 (`starbridge-v2/src/replay.rs`); `simulate`/`World::fork` predicted-root/predicted-receipt,
 cap-gated refusals (over-grant/over-spend/program-violation) (`starbridge-v2/src/simulate.rs`);
-attested-fetch + `AttestedRoot` + light-client `verify_history` (`docs/DISTRIBUTED-SERVO.md`
+attested-fetch + `AttestedRoot` + light-client `verify_history` (`.docs-history-noclaude/DISTRIBUTED-SERVO.md`
 §1); `IConfluent`/`admits_sound`/`nonpairwise_escalation` (`metatheory/Dregg2/Confluence.lean`);
 `mergeLace` as `Finset`-union join, CRDT laws, `merge_convergence_to_state`
 (`LaceMerge.lean`); `localRevSet`/`honors`/`eventual_bounded_revocation`/`immediate_revocation`

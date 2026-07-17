@@ -1,5 +1,5 @@
 //! The node-side submit-queue DRAINER — the READ side of pg-dregg's write loop
-//! (`docs/PG-DREGG.md` §11.4, M3), symmetric to the WRITE side in
+//! (`.docs-history-noclaude/PG-DREGG.md` §11.4, M3), symmetric to the WRITE side in
 //! [`crate::pg_mirror`].
 //!
 //! # The one gap this closes

@@ -1,7 +1,7 @@
 /-
 # Metatheory.Dynamics.Production — the non-forgeability production law + the Dregg2 model.
 
-`CONSTRUCTIVE-KNOWLEDGE.md §3` (and `docs/DREGG3.md §2.1`, the Authority row): authority is
+`CONSTRUCTIVE-KNOWLEDGE.md §3` (and `.docs-history-noclaude/DREGG3.md §2.1`, the Authority row): authority is
 **produced, not merely spent**. The model "every step only narrows" (monotone descent down
 a meet-semilattice) is WRONG — it forbids exactly the patterns that give capabilities their
 power (Miller). The real dynamics GROW authority, disciplined by ONE law:

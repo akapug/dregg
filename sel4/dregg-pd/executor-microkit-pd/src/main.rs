@@ -25,7 +25,7 @@
 //! heaps below are ported verbatim from the root task; only the entry/event-loop
 //! shape is Microkit's.
 //!
-//! Cap partition (docs/FIRMAMENT.md §2): `turn_in` (R), `commit_out` (RW), and
+//! Cap partition (.docs-history-noclaude/FIRMAMENT.md §2): `turn_in` (R), `commit_out` (RW), and
 //! NOTHING else — no device cap, no NIC cap. seL4 faults this PD if it touches a
 //! cap it does not hold, so the VERIFIED turn reading turn_in and writing
 //! commit_out IS the partition, enforced.
@@ -101,7 +101,9 @@ static PREINIT_INSTALL_SYSCALL_HANDLER: unsafe extern "C" fn() = install_syscall
 #[protection_domain(heap_size = 0x10000)]
 fn init() -> HandlerImpl {
     debug_println!("");
-    debug_println!("[executor] dregg executor-PD — the firmament HEART, embedding the VERIFIED executor");
+    debug_println!(
+        "[executor] dregg executor-PD — the firmament HEART, embedding the VERIFIED executor"
+    );
     debug_println!("[executor]   cap partition: turn_in (R), commit_out (RW); NO device/NIC cap");
     debug_println!("[executor]   (the .preinit_array hook installed the sel4-musl syscall handler");
     debug_println!("[executor]    ahead of the Lean C++ ctors that global_init() already ran)");
@@ -137,7 +139,9 @@ fn init() -> HandlerImpl {
     // read of the (here read-only, net-filled) turn_in. This is the assembled-PD
     // analogue of the rootserver's compiled-in wire.
     if rc == 0 {
-        debug_println!("[executor]   >>> running the verified DEMO turn (in-PD wire) through the PD");
+        debug_println!(
+            "[executor]   >>> running the verified DEMO turn (in-PD wire) through the PD"
+        );
         run_demo_turn();
     }
 
@@ -425,7 +429,8 @@ fn handle_by_number(
         nr::FACCESSAT | nr::READLINKAT | nr::STATX | nr::NEWFSTATAT => -ENOENT,
         nr::CLOSE | nr::FCNTL => 0,
         nr::READ => {
-            let fd: SyscallReturnValue = args.next_arg::<usize>().unwrap_or(0) as SyscallReturnValue;
+            let fd: SyscallReturnValue =
+                args.next_arg::<usize>().unwrap_or(0) as SyscallReturnValue;
             let buf: *mut u8 = args.next_arg::<usize>().unwrap_or(0) as *mut u8;
             let count: usize = args.next_arg().unwrap_or(0);
             if fd == URANDOM_FD && !buf.is_null() {

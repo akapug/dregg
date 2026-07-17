@@ -11,7 +11,13 @@
 //! Run: `cargo test -p dregg-circuit --test descriptor_leaf_recursion -- --nocapture`
 //! (recursion proving is slow; each wrap compiles + proves a verifier circuit).
 
-#![cfg(feature = "prover")]
+// NOTE: this file previously carried `#![cfg(feature = "prover")]`, the SAME vestigial
+// gate `ivc_turn_chain_rotated.rs` / `joint_turn_recursive_rotated.rs` documented and
+// removed — `dregg-circuit-prove` defines NO features at all, so the gate was
+// UNSATISFIABLE: the entire file compiled out (0 tests) in every possible
+// configuration (found 2026-07-16, Lane 2 config-space audit). The gate is removed so
+// the leaf-recursion teeth compile and run. (The run command above is also stale —
+// this test now lives in `dregg-circuit-prove`, not `dregg-circuit`.)
 
 use std::time::Instant;
 

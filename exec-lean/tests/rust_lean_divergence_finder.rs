@@ -665,7 +665,7 @@ fn rust_lean_divergence_finder() {
     // not a hidden bug:
     //
     //   * `Burn` — a genuine, SAFE-DIRECTION MODEL DIFFERENCE (the verified kernel is
-    //     STRICTER), now PURELY AUTHORITY. SUPPLY-MODEL Stage 1 (docs/SUPPLY-MODEL.md) closed
+    //     STRICTER), now PURELY AUTHORITY. SUPPLY-MODEL Stage 1 (.docs-history-noclaude/SUPPLY-MODEL.md) closed
     //     the CONSERVATION half: apply.rs's `Effect::Burn` is now itself a RETURN-TO-WELL move
     //     — EVERY asset resolves a per-asset issuer well (lazily derived if unregistered) and
     //     value flows holder→well, conserving `Σ_c bal c a` EXACTLY (per-turn Σδ=0), matching

@@ -1,4 +1,4 @@
-//! Trustline service — the ORGANS §1 weld (docs/TRUSTLINES.md).
+//! Trustline service — the ORGANS §1 weld (.docs-history-noclaude/TRUSTLINES.md).
 //!
 //! The Stingray bounded-counter machinery existed end to end and was
 //! stillborn at exactly one joint: `init_budget_coordinator`
@@ -32,7 +32,7 @@
 //!   conservation keystone lifts free) together with the cell's monotone
 //!   `settled` register march.
 //!
-//! ## Design rule (docs/TRUSTLINES.md §2): the cell is the truth; the
+//! ## Design rule (.docs-history-noclaude/TRUSTLINES.md §2): the cell is the truth; the
 //! coordinator is a derived shadow.
 //!
 //! The coordinator can always be REBUILT from the cell's registers
@@ -92,7 +92,7 @@ pub struct TrustlineRegistry {
 
 impl TrustlineRegistry {
     /// Rebuild the registry from the durable forever-digest table at boot
-    /// (`docs/PERSISTENCE.md`): every digest ever burned on this node is
+    /// (`.docs-history-noclaude/PERSISTENCE.md`): every digest ever burned on this node is
     /// reloaded, so a replayed draw refuses identically across restarts —
     /// the deployed counterpart of Lean `draw_replay_refused_across_epochs`
     /// holds across process lifetimes, not only rebalance epochs.
@@ -2160,7 +2160,7 @@ mod tests {
 
     // ── persistence: the forever registry survives the restart ──────────────
 
-    /// THE RESTART TEST (docs/PERSISTENCE.md): a committed draw digest is
+    /// THE RESTART TEST (.docs-history-noclaude/PERSISTENCE.md): a committed draw digest is
     /// burned durably, so a brand-new process over the same data dir still
     /// refuses the replay — the deployed counterpart of Lean
     /// `draw_replay_refused_across_epochs` holds across process lifetimes,

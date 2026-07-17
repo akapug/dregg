@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `governed-namespace` governance board, on the composed deos
 //! framework — **the same app, smaller + more capable, now SHIPPED from `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the governance BOARD, re-expressed as a
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the governance BOARD, re-expressed as a
 //! composed [`DeosApp`] ([`governance_app`] from `src/`) and PROMOTED into `src/lib.rs`.
 //! This file drives the SHIPPED surface, proving the promotion: per-viewer projection,
 //! the cap-gated fires through the mounted axum surface, the `dregg://` web-of-cells

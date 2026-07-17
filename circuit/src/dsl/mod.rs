@@ -101,9 +101,6 @@ pub use accumulator::{
     generate_accumulator_trace,
 };
 
-// Re-export DSL-native committed-threshold proving API.
-pub use committed_threshold::generate_committed_threshold_trace;
-
 // Re-export DSL-native derivation proving API.
 pub use derivation::{
     BODY_HASH_INV_START, EXTENDED_TRACE_WIDTH, MULTI_STEP_DSL_WIDTH, derivation_circuit_descriptor,

@@ -824,7 +824,7 @@ pub fn build_forged_handoff_action(
 // The deos-native surface — the ITEM as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #1, the reference port): the
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #1, the reference port): the
 // supply-chain ITEM, re-expressed as a composed deos app and PROMOTED into `src/`
 // (it lived in `tests/reexpress_deos_app.rs`). The same operations are ONE
 // [`DeosApp`] (`item_app` below); the framework wires the rest — per-viewer

@@ -1,7 +1,7 @@
 /-
 # Dregg2.Distributed.Fibration — the distributed-adversarial semantics as ONE indexed structure.
 
-Titanium Phase 1 (`docs/rebuild/TITANIUM-PHASE.md` §"PHASE 1 · THE FIBRATION"). The per-deployment
+Titanium Phase 1 (`.docs-history-noclaude/rebuild/metatheory/TITANIUM-PHASE.md` §"PHASE 1 · THE FIBRATION"). The per-deployment
 guarantees of dregg are not independent theorems; they are **fibres of one structure** — a fibration
 
     p : E → B   over the base   B = Topology × FaultModel × CryptoStrength

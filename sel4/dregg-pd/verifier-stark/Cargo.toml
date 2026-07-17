@@ -10,7 +10,7 @@
 #
 # This is the high-value fallback heart organ while the full Lean executor-PD is
 # blocked on the ELF-recompile + libuv-excision + musl-host port
-# (docs/SEL4-EMBEDDING.md §2, docs/FIRMAMENT.md §6).
+# (.docs-history-noclaude/SEL4-EMBEDDING.md §2, .docs-history-noclaude/FIRMAMENT.md §6).
 
 [package]
 name = "dregg-verifier-stark-pd"

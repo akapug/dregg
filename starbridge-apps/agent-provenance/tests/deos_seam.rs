@@ -1,7 +1,7 @@
 //! THE SEAM CLOSED — the deos-native `append_entry` fired through the executor against
 //! the FULL provenance program, so the verified caveats BITE in the fire path itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the promotion's task is to close the
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the promotion's task is to close the
 //! fire→full-`CellProgram` seam so a REWOUND head / an OVERWRITTEN entry is a REAL
 //! executor refusal in the fire path, not a `program.evaluate`-only check. This file
 //! proves that seam CLOSED. `src::register_deos` / `src::seed_log` install

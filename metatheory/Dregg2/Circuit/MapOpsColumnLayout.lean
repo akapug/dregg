@@ -7,7 +7,7 @@ recompute), ∀ `d : EffectVmDescriptor2` — the memory/map twin of `LogUpColum
 
 This file MODELS, for an ARBITRARY v2 descriptor, the `Ir2Air::MapOps` AIR
 (`circuit/src/descriptor_ir2.rs:2213`, `heap_root.rs::CanonicalHeapTree`) that
-`docs/reference/MEMORY-LEGS-SCOPE.md` §3 names as the ONE shared real item for the 7 mapOp
+`docs/SUPERSEDED/MEMORY-LEGS-SCOPE.md` §3 names as the ONE shared real item for the 7 mapOp
 effects — and PROVES the ∀ d MAPOPS-AIR LAW: the deployed map-reconcile gates (a sibling-path
 recompute of the opened leaf to the committed pre-root, plus — for writes — the SAME path
 recomputing the new leaf to the post-root column) FORCE `MapOp.holdsAt`, the existential
@@ -680,7 +680,7 @@ def MapReconcileModelOk (hash : List ℤ → ℤ) (d : EffectVmDescriptor2) (t :
 /-- **THE `.mapOp` ARM, ∀ d (`mapOpsArm_of_modeler`).** For ANY descriptor, the map-reconcile
 model + CR discharge the ENTIRE `.mapOp` arm of `Satisfied2.rowConstraints`: every declared
 `.mapOp` holds on every row. The 7 mapOp effects' Species-A leg
-(`docs/reference/MEMORY-LEGS-SCOPE.md` §0), now produced by the modeler for all of them at once —
+(`docs/SUPERSEDED/MEMORY-LEGS-SCOPE.md` §0), now produced by the modeler for all of them at once —
 their per-effect teeth (`*_grow_gate_forces_set_insert`, `*_forces_write`,
 `heapWrite_splice_forced`) consume `Satisfied2` downstream unchanged. -/
 theorem mapOpsArm_of_modeler (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)

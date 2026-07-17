@@ -362,7 +362,7 @@ fn main() {
     // Winner spends their bid note (payment)
     let winner_nullifier = winner.bid_note.nullifier(&winner.spending_key);
     nullifier_set
-        .insert(winner_nullifier)
+        .insert(winner_nullifier, winner.bid_note.value())
         .expect("winner spend succeeds");
 
     println!("  Step 4b: Winner spends bid note (nullifier published)");
@@ -464,7 +464,7 @@ fn main() {
         // Spend their bid note (refund to themselves)
         let nullifier = bidder.bid_note.nullifier(&bidder.spending_key);
         nullifier_set
-            .insert(nullifier)
+            .insert(nullifier, bidder.bid_note.value())
             .expect("refund spend succeeds");
 
         // Create a fresh note for the refund (same amount, new randomness)
@@ -516,7 +516,7 @@ fn main() {
 
     // Attack: double-spend winning bid
     println!("  Attack 2: Double-spend the winning bid note");
-    let double_spend = nullifier_set.insert(winner_nullifier);
+    let double_spend = nullifier_set.insert(winner_nullifier, winner.bid_note.value());
     assert!(double_spend.is_err());
     println!(
         "    Nullifier already in set: {:?} [BLOCKED]",

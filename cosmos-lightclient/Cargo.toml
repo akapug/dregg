@@ -46,3 +46,6 @@ prost = "0.13"
 base64 = "0.22"
 # Decode the app_hash hex.
 hex = "0.4"
+
+[lints]
+workspace = true

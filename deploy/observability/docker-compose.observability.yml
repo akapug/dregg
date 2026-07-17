@@ -1,5 +1,18 @@
 # dregg observability stack — Prometheus + Alertmanager + Grafana + exporters.
 #
+# ⚠ CLOSE TO REAL, BUT DRIFTED — the box is authoritative. Verified 2026-07-15: the
+# edge runs `/opt/dreggnet/docker-compose.observability.yml`, and its grafana(3000) /
+# prometheus(9090) / alertmanager(9093) / node-exporter / alert-sink match this file.
+# BUT the deployed stack ALSO runs a **blackbox exporter**, which this file does not
+# define. Diff against the box before assuming they are the same file (TODO-4,
+# deploy/README.md).
+#
+# ⚠ The scrape-target premise below is STALE: it says the nodes bind
+# 127.0.0.1:8420/8421/8422 per `deploy/aws/dregg-node@.service`. That unit NEVER
+# EXISTED on the box (it is now in deploy/aws/SUPERSEDED/). The real edge runs ONE
+# node — the container `dreggnet-dregg-node-1` — bound **0.0.0.0:8420**. There are no
+# :8421/:8422 nodes to scrape.
+#
 # Ported from the operated layer's observability compose and re-grounded on the
 # native deploy: the dregg nodes on this box bind their HTTP APIs to
 # 127.0.0.1:8420/8421/8422 (deploy/aws/dregg-node@.service), so every service

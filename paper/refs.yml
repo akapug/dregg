@@ -17,7 +17,7 @@ biscuit:
   type: web
   title: 'Biscuit: Authorization Tokens with Decentralized Verification'
   author:
-  - Sonntag, Geoffroy
+  - Couprie, Geoffroy
   url: https://www.biscuitsec.org/
   date: 2023
 mina:

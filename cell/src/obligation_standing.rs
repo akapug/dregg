@@ -98,7 +98,7 @@
 //! the commitment, and (b) the Lean rung
 //! `verifyBatch accept ⟹ obligation honored on schedule` joining the
 //! circuit-soundness obligation table in
-//! `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`. See
+//! `.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`. See
 //! `docs/deos/STANDING-OBLIGATION.md` §"Next slice: circuit binding".
 
 use serde::{Deserialize, Serialize};

@@ -169,7 +169,7 @@ pub struct CellState {
     /// Monotonically increasing action counter. Sealed (P0-1); mutate via
     /// `increment_nonce`, read via `nonce()`.
     pub(crate) nonce: u64,
-    /// SIGNED value balance (THE EPOCH, `docs/EPOCH-DESIGN.md` §5 "signed
+    /// SIGNED value balance (THE EPOCH, `.docs-history-noclaude/EPOCH-DESIGN.md` §5 "signed
     /// wells"). The Lean kernel's ledger is `bal : cell → asset → ℤ` and
     /// `reachable_total_zero` holds because issuer WELLS carry −supply; the
     /// Rust value model now matches: `i64`, encoded at every commitment/wire
@@ -197,7 +197,7 @@ pub struct CellState {
     /// `delegation_epoch()`.
     #[serde(default)]
     pub(crate) delegation_epoch: u64,
-    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3): the block height at which
+    /// `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3): the block height at which
     /// this cell's state was last committed. Folded into the canonical state
     /// commitment as the `committedHeight` limb so the commitment (and its PI
     /// face) is bound to a specific chain height — closing the temporal gate's
@@ -278,7 +278,7 @@ pub struct CellState {
     /// keeps every existing serialized cell deserializing.
     #[serde(default = "default_system_roots")]
     pub system_roots: [FieldElement; N_SYSTEM_ROOTS],
-    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: the committed openable sorted-
+    /// `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.4: the committed openable sorted-
     /// Poseidon2 root of the cell's **heap** — a `(collection_id, key) →
     /// FieldElement` map. Included in `compute_canonical_state_commitment` so
     /// the cell's state commitment binds heap state. A legacy (no-heap-activity)
@@ -292,7 +292,7 @@ pub struct CellState {
     /// bytes (`faithful8_serde`) so the on-disk shape is unchanged.
     #[serde(default = "empty_heap_root", with = "faithful8_serde")]
     pub heap_root: Faithful8,
-    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: the **prover-side witness** store
+    /// `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.4: the **prover-side witness** store
     /// for the heap — the actual `(collection, key) → value` entries whose
     /// digest is [`heap_root`]. Not itself committed (its digest is).
     /// `BTreeMap` for deterministic iteration order so the root is canonical.
@@ -946,7 +946,7 @@ impl CellState {
     }
 
     // ───────────────────────────────────────────────────────────────────────
-    // `docs/UNIVERSAL-MAP-ROTATION.md` §2.4 — the committed HEAP (sorted-
+    // `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.4 — the committed HEAP (sorted-
     // Poseidon2 `(collection, key) → value` map). The heap root is a canonical
     // commitment limb; `heap_map` is the prover-side witness store.
     // ───────────────────────────────────────────────────────────────────────
@@ -1121,7 +1121,7 @@ impl Default for CellState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE EPOCH signed-balance boundary encoding (`docs/EPOCH-DESIGN.md` §5 +
+// THE EPOCH signed-balance boundary encoding (`.docs-history-noclaude/EPOCH-DESIGN.md` §5 +
 // the range-table limb discipline).
 //
 // A signed balance crosses a proof/commitment boundary as the ORDER-PRESERVING
@@ -1384,7 +1384,7 @@ mod fields_map_tests {
 
 #[cfg(test)]
 mod heap_root_tests {
-    //! `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: the committed `heap_root` register.
+    //! `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.4: the committed `heap_root` register.
 
     use super::*;
 

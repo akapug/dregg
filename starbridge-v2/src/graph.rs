@@ -1,6 +1,6 @@
 //! THE OCAP DELEGATION GRAPH — the whole-graph capability layout (multi-hop).
 //!
-//! `docs/DREGG-DESKTOP-OS.md` casts the desktop as the firmament made visual:
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md` casts the desktop as the firmament made visual:
 //! "the View tree IS the ocap graph." Every other panel reflects ONE object;
 //! this one reflects the *relation between* objects — the live capability graph
 //! the whole image is woven from. It projects the embedded [`World`]'s c-lists

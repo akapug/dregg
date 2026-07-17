@@ -1,7 +1,7 @@
 //! Mint a dregg capability token to present to `pg-dregg` RLS / the write path.
 //!
 //! Minting holds the issuer SECRET, so it is a CLI/operator action, not a SQL
-//! one (`dregg_mint` is deliberately out of the M1 SQL surface — `docs/PG-DREGG.md`
+//! one (`dregg_mint` is deliberately out of the M1 SQL surface — `.docs-history-noclaude/PG-DREGG.md`
 //! §5). This is the documented "tokens are minted in Rust and handed to SQL as
 //! text" path: mint here, then `SET dregg.token = '<the dga1_… string>'` in psql.
 //!

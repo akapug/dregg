@@ -7,7 +7,7 @@
 #
 # This workspace builds the Rust protection-domain ELFs that the Microkit tool
 # (`microkit`) links into a bootable seL4 image (see ../Makefile). Each binary
-# in src/bin/ is one PD on the boot ladder of docs/SEL4-EMBEDDING.md §5:
+# in src/bin/ is one PD on the boot ladder of .docs-history-noclaude/SEL4-EMBEDDING.md §5:
 #
 #   m0_hello   — M0: a minimal Rust PD that prints "dregg robigalia v0".
 #   verifier   — M1: the dregg proof verifier (Lean-free) as a PD.

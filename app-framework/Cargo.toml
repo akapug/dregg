@@ -82,7 +82,7 @@ server = [
     "dep:reqwest",
     "dep:dregg-storage",
 ]
-# PLATFORM gate passthrough (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the verified
+# PLATFORM gate passthrough (polarity-inverted, .docs-history-noclaude/FEATURE-HYGIENE.md §Lean): the verified
 # Lean producer is UNCONDITIONAL on native (the sdk compiles it in by default; runtime-gated
 # by `DREGG_LEAN_PRODUCER` / `EmbeddedExecutor::set_lean_producer`). Only wasm32/zkvm builds
 # set `no-lean-link`, which compiles the legacy Rust-producer path instead.

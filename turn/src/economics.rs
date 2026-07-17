@@ -248,24 +248,6 @@ impl EpochMinter {
             .saturating_sub(self.policy.total_minted)
     }
 
-    /// Estimate the annual issuance rate given a block time in seconds.
-    ///
-    /// Useful for economic modeling and governance dashboards.
-    pub fn estimated_annual_issuance(&self, block_time_secs: u64) -> u64 {
-        if block_time_secs == 0 || self.policy.epoch_length == 0 {
-            return 0;
-        }
-        let blocks_per_year = 365 * 24 * 3600 / block_time_secs;
-        let epochs_per_year = blocks_per_year / self.policy.epoch_length;
-        let current_epoch = self.policy.last_minted_epoch;
-
-        let mut total = 0u64;
-        for i in 0..epochs_per_year {
-            total = total.saturating_add(self.policy.issuance_for_epoch(current_epoch + i));
-        }
-        total
-    }
-
     /// Compute the equilibrium supply level for a given burn rate.
     ///
     /// At equilibrium, annual issuance == annual burn. This returns the epoch

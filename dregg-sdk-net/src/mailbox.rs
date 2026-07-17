@@ -1,5 +1,5 @@
 //! # MailboxCrank — drain a hosted inbox and feed its messages to the owner's
-//! executor as deferred turns (docs/ORGANS.md §2, the mailbox organ).
+//! executor as deferred turns (.docs-history-noclaude/ORGANS.md §2, the mailbox organ).
 //!
 //! This is a WELD of existing machinery, not a new protocol:
 //!

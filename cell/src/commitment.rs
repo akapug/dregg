@@ -73,12 +73,12 @@ use crate::state::{CellState, FieldVisibility};
 /// is [`crate::state::balance_limbs`]. Rides the epoch's one
 /// VK/commitment flag-day.
 ///
-/// `v6 → v7` (`docs/UNIVERSAL-MAP-ROTATION.md` §2.4): add the `heap_root`
+/// `v6 → v7` (`.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.4): add the `heap_root`
 /// register as a canonical commitment limb — the openable sorted-Poseidon2
 /// root of the cell's `(collection, key) → value` heap (`circuit::heap_root`).
 /// A legacy (no-heap-activity) cell contributes the fixed `empty_heap_root()`
 /// constant, so the absorption is a uniform no-op for legacy cells.
-/// `v7 → v8` (`docs/UNIVERSAL-MAP-ROTATION.md` §2.6): add the `committed_height`
+/// `v7 → v8` (`.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.6): add the `committed_height`
 /// scalar as a canonical commitment limb — the PI v3 committed-height column's
 /// commitment face. A legacy (never-committed) cell contributes 0, so the
 /// absorption is a uniform no-op for legacy cells.
@@ -351,7 +351,7 @@ fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     }
     hasher.update(&[state.proved_state as u8]);
     hasher.update(&state.delegation_epoch.to_le_bytes());
-    // `docs/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3): absorb the
+    // `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3): absorb the
     // `committed_height` scalar. This folds the block height at which the cell's
     // state was last committed into the authority-bearing commitment, so the
     // commitment (and its PI face) is bound to a specific chain height. A legacy
@@ -393,7 +393,7 @@ fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     // tampered side-table root flips this digest, flipping the commitment
     // (`SystemRoots.cellCommitS_binds_systemRoots`).
     hasher.update(&state.system_roots_digest());
-    // `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: absorb the `heap_root` register.
+    // `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.4: absorb the `heap_root` register.
     // This folds the openable sorted-Poseidon2 root of the cell's
     // `(collection, key) → value` heap into the authority-bearing commitment.
     // Absorbed at a FIXED position by a FIXED constant for legacy cells: a
@@ -578,7 +578,7 @@ fn auth_required_to_tag(auth: &AuthRequired) -> dregg_circuit::field::BabyBear {
 pub fn compute_canonical_capability_root_felt(
     caps: &CapabilitySet,
 ) -> dregg_circuit::field::BabyBear {
-    // Per-cell sub-root cache (`docs/INCREMENTAL-COMMITMENT.md` step 2): a turn
+    // Per-cell sub-root cache (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md` step 2): a turn
     // that did not touch the cap set reuses the last-folded root instead of
     // re-folding the sorted-Poseidon2 tree. The cache is invalidated by EVERY
     // c-list mutation (see `CapabilitySet::invalidate_cap_root_cache` callers),
@@ -1654,7 +1654,7 @@ mod tests {
         assert_ne!(before, after);
     }
 
-    /// **THE STEP-2 SUB-ROOT-CACHE DIFFERENTIAL** (`docs/INCREMENTAL-COMMITMENT.md`).
+    /// **THE STEP-2 SUB-ROOT-CACHE DIFFERENTIAL** (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md`).
     ///
     /// Over a random corpus of interleaved mutation sequences (grants/revokes/
     /// attenuations/restores/field-writes/heap-writes/nonce-ticks/balance-changes),
@@ -2192,7 +2192,7 @@ mod tests {
         *hasher.finalize().as_bytes()
     }
 
-    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4 (the heap-root absorb): the
+    /// `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.4 (the heap-root absorb): the
     /// `heap_root` register is FOLDED into the canonical commitment (v6->v7
     /// bump). Mutating ANY heap entry MUST move the commitment. This is the
     /// anti-ghost tooth for the heap: a `heap_root := 0` stub would make this
@@ -2233,7 +2233,7 @@ mod tests {
         );
     }
 
-    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4 backward-compat keystone (the no-op
+    /// `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.4 backward-compat keystone (the no-op
     /// fold): a LEGACY cell (empty `heap_map`) carries the FIXED
     /// `empty_heap_root()` constant, which is cell-INDEPENDENT. So absorbing
     /// `heap_root` is a uniform no-op across legacy cells.
@@ -2273,7 +2273,7 @@ mod tests {
         );
     }
 
-    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3 committed-height limb): the
+    /// `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3 committed-height limb): the
     /// `committed_height` scalar is FOLDED into the canonical commitment
     /// (v7->v8 bump). Setting it to a non-zero height MUST move the commitment;
     /// a legacy cell carries 0 and the no-op reference still matches.

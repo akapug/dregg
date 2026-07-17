@@ -36,7 +36,7 @@
 //! # Relationship to NoteSpendingAir
 //!
 //! The private consumption proof (`PrivateConsumptionProof`) reuses the exact circuit
-//! from `circuit/src/note_spending_air.rs`, pointed at the queue's commitment tree
+//! from `circuit/src/note_spending_witness.rs`, pointed at the queue's commitment tree
 //! instead of the note tree. See `plans/blinded-queue-design.md` for full design.
 //!
 //! # Commitment scheme (post-Stage-10 migration)
@@ -1061,7 +1061,7 @@ mod tests {
         use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
         use dregg_circuit::field::BabyBear;
         use dregg_circuit::note_spend_witness::{NOTE_SPEND_LEAF_NAME, note_spend_witness};
-        use dregg_circuit::note_spending_air::{
+        use dregg_circuit::note_spending_witness::{
             NoteSpendingWitness, key_to_field_elements, pi as np,
         };
 

@@ -37,3 +37,8 @@ path = "src/lib.rs"
 
 [build-dependencies.rustc_version]
 version = "0.4"
+
+# VENDORED third-party (path-dep, so no cap-lints). `pf_rustc_nightly` is set by its
+# build.rs via rustc_version; declare it so `unexpected_cfgs` stays quiet without a blanket allow.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pf_rustc_nightly)'] }

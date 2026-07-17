@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # gate-starbridge.sh — the verify-don't-trust gate for the Starbridge Lean-web
-# program (docs/rebuild/STARBRIDGE-LEAN-REIMAGINING.md).
+# program (.docs-history-noclaude/rebuild/dregg2-design/STARBRIDGE-LEAN-REIMAGINING.md).
 #
 # Reconcile-builds EXACTLY the new modules the fan-out produces (Hatchery
 # Dregg2/Verify/* + the ProofWidgets Dregg2/Widget/*), and FAILS on any `sorry`

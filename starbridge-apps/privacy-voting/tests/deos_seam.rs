@@ -2,7 +2,7 @@
 //! through the executor against the FULL slot caveats, so the verified caveats BITE in the
 //! fire path itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the promotion's task is to close the
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the promotion's task is to close the
 //! fire→full-`CellProgram` seam so a double vote / tally rewind / poll re-open is a REAL
 //! executor refusal in the fire path, not an `evaluate`-only check. This file proves that
 //! seam CLOSED on a TWO-CELL app. `src::register_deos` / `src::seed_poll` / `src::seed_ballot`

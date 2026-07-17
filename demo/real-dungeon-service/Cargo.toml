@@ -50,3 +50,6 @@ dregg-app-framework = { path = "../../app-framework", default-features = false }
 http-serve = { path = "../../http-serve" }
 # JSON for the request/response bodies.
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

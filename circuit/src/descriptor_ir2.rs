@@ -1,4 +1,4 @@
-//! Descriptor IR v2 — the EPOCH multi-table interpreter (`docs/EPOCH-DESIGN.md`).
+//! Descriptor IR v2 — the EPOCH multi-table interpreter (`.docs-history-noclaude/EPOCH-DESIGN.md`).
 //!
 //! `lean_descriptor_air.rs` PART 6 interprets the SINGLE-table v1 EffectVM descriptor
 //! (`emitVmJson`): per-row hash sites cost a 352-column Poseidon2 aux block each, and range
@@ -47,7 +47,7 @@
 //! and verifier agree): the chip table iff any chip lookup or map op, the byte table iff any
 //! range lookup or mem op, memory+boundary iff any mem op, map-ops iff any map op. FRI
 //! opening cost is per-query × the row width of every committed matrix, so committing a
-//! padded empty table is pure regression (`docs/PROOF-ECONOMICS.md` §2b measured the empty
+//! padded empty table is pure regression (`.docs-history-noclaude/PROOF-ECONOMICS.md` §2b measured the empty
 //! map-ops table alone at ~1.7 MiB per transfer proof).
 //!
 //! **The law: Rust authors NO constraints.** Every enforced relation here is the realization
@@ -58,8 +58,8 @@
 //! descriptor's (= Lean's) choice.
 //!
 //! Two ADDITIVE table families ride the same batch, recursion-gated like everything here,
-//! committed only when a descriptor uses them (`docs/UNIVERSAL-MEMORY.md` /
-//! `docs/UNIVERSAL-MAP-ROTATION.md` §2.2):
+//! committed only when a descriptor uses them (`.docs-history-noclaude/UNIVERSAL-MEMORY.md` /
+//! `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.2):
 //!
 //!   * **map-absent** — one row per `map_op` kind `absent`: the bracketed sorted-gap
 //!     NON-MEMBERSHIP opening (Lean `opensTo … none` via `opensTo_none_of_gap`): two
@@ -252,7 +252,7 @@ pub const TID_MAP_OPS: usize = 4;
 /// Wire id of `custom 0` = the bitwise-submask table (`DescriptorIR2.SUBMASK_TID`).
 pub const TID_CUSTOM_SUBMASK: usize = 5;
 /// Wire id of `custom 1` = the UNIVERSAL memory table (`DescriptorIR2.UMEM_TID`,
-/// `docs/UNIVERSAL-MEMORY.md` — one Blum multiset over the `Domain × κ` address space).
+/// `.docs-history-noclaude/UNIVERSAL-MEMORY.md` — one Blum multiset over the `Domain × κ` address space).
 pub const TID_UMEMORY: usize = 6;
 /// Wire id of `custom 2` = the universal boundary table (declared `(domain, key)` addresses
 /// with their init/final `Option` images).
@@ -329,7 +329,7 @@ const MEM_GAP_BITS: usize = 30;
 /// Bits per range-table limb: 4-bit nibble chunks against a `[0,16)` table.
 ///
 /// MEASURED better than 8-bit byte limbs at every FRI grid point
-/// (docs/PROOF-ECONOMICS.md §2c): the table's degree_bits drop 8 → 4, which shortens
+/// (.docs-history-noclaude/PROOF-ECONOMICS.md §2c): the table's degree_bits drop 8 → 4, which shortens
 /// the whole batch's FRI commit phase and the table's per-query Merkle paths
 /// (transfer at the production `ir2_config` [DATED measurement, approximate]: 124.1 → 120.4 KiB, prove ~330 → ~55 ms —
 /// the 2¹⁴-point byte-table LDE was the high-blowup prover's dominant cost), while
@@ -2032,7 +2032,7 @@ fn map_leaf_input_cols(value_col: usize) -> [usize; 3] {
 //    the recursion verifier circuit (`plonky3_recursion_impl.rs`). NOTE: the descriptor
 //    param `sbox_registers: 1` describes the p3-air REGISTERED layout, which this chip
 //    deliberately does NOT use (measured net-negative, see `max_constraint_degree` +
-//    docs/PROOF-ECONOMICS.md §2c); the parameter is a frozen descriptor pin (no regen
+//    .docs-history-noclaude/PROOF-ECONOMICS.md §2c); the parameter is a frozen descriptor pin (no regen
 //    off-cycle), and the permutation function is unaffected by arithmetization shape.
 //
 //    AMORTIZATION (#175): ONE chip table per batch proof serves ALL hash facts — the
@@ -2150,7 +2150,7 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for Ir2Air {
             // A 1-register (committed-cube, degree-3) variant was built and MEASURED
             // worse at every security-parity FRI point: +141 aux columns ⇒ +25.8 KiB
             // on transfer at (lb=3, q=38), and the low blowup it would enable loses
-            // to high-blowup/few-queries anyway (docs/PROOF-ECONOMICS.md §2c).
+            // to high-blowup/few-queries anyway (.docs-history-noclaude/PROOF-ECONOMICS.md §2c).
             // Guarded by `ir2_degree_budget`.
             Ir2Air::Chip => Some(7),
             // Let the symbolic analysis infer the rest (map-ops is lookup-spine only now;
@@ -3932,7 +3932,7 @@ struct Presence {
     map_absent: bool,
     /// Universal memory + universal boundary tables: any umem op. NOTE: umem ops alone pull
     /// in NO chip table — the universal memory argument does zero hashing, which is the
-    /// measured point of `docs/UNIVERSAL-MEMORY.md`.
+    /// measured point of `.docs-history-noclaude/UNIVERSAL-MEMORY.md`.
     umem: bool,
     /// The universal boundary is the COHORT single-row specialization (`Ir2Air::UMemBoundaryCohort`,
     /// width 9) rather than the general `Ir2Air::UMemBoundary` (width 38). A DECLARATION property
@@ -5408,7 +5408,7 @@ fn instance_airs(
 /// `38 × 3 + 16`; proven/Johnson: `19 × 3 + 16 = 73`, identical to v1's
 /// `38 × 1.5 + 16`). The full measured grid lives in
 /// `tests/effect_vm_ir2_size_measure.rs::ir2_fri_grid` and
-/// `docs/PROOF-ECONOMICS.md` §2c. The shape of the trade, in brief:
+/// `.docs-history-noclaude/PROOF-ECONOMICS.md` §2c. The shape of the trade, in brief:
 /// queries dominate IR-v2 proof size (the tables are 2³–2⁸ rows, so the prover-side
 /// LDE cost of high blowup is milliseconds), so RAISING blowup and CUTTING queries
 /// shrinks the wire — transfer: 194.1 KiB at (3, 38) → 120.4 KiB at (6, 19) — while
@@ -5443,7 +5443,7 @@ fn ir2_config() -> DreggStarkConfig {
 /// ledger (`@[export] dregg_fri_ledger`) and PIN them against the Lean-modeled
 /// `FriVerifier.ir2LeafWrapConfig` — the config every per-fold theorem in the metatheory is stated
 /// about. The gate derives no soundness number from these; Lean does. The `(6, 19)` pin is the
-/// measured size-optimal security-parity point (see the [`ir2_config`] doc + `docs/PROOF-ECONOMICS.md`
+/// measured size-optimal security-parity point (see the [`ir2_config`] doc + `.docs-history-noclaude/PROOF-ECONOMICS.md`
 /// §2c); moving any knob moves the wire (FRI shape + Fiat–Shamir).
 ///
 /// ⚑ NAME COLLISION, do not be misled: the Lean `ir2LeafWrapConfig` models THIS config (`ir2_config`),
@@ -7746,7 +7746,7 @@ mod tests {
 
     /// THE UNIVERSAL-MEMORY GATE: nullifier insert + Merkle-path-free freshness read +
     /// cross-domain register write, ONE multiset, proven and verified — with NO chip table
-    /// committed (the memory argument hashes nothing; `docs/UNIVERSAL-MEMORY.md`'s point,
+    /// committed (the memory argument hashes nothing; `.docs-history-noclaude/UNIVERSAL-MEMORY.md`'s point,
     /// measured).
     #[test]
     fn ir2_umem_honest_proves_and_verifies_no_chip() {
@@ -8635,7 +8635,7 @@ mod tests {
     // parametric Lean emission (`EffectVmEmitRotationR.lean`, keystone
     // `wireCommitR_binds` parametric in R) stages R=24/R=32 probes beside the
     // deployed R=16 so the register-count decision is MEASURED, not vibed
-    // (`docs/ROTATION-CUTOVER.md` pre-gates).
+    // (`.docs-history-noclaude/ROTATION-CUTOVER.md` pre-gates).
 
     /// The staged probe descriptor for a v3-staged registry key.
     fn rotation_probe_desc_key(key: &str) -> EffectVmDescriptor2 {
@@ -8709,7 +8709,7 @@ mod tests {
     /// `ir2_config` and print the always-paid grid — proof bytes, opened-values
     /// bytes, prove/verify time, chip rows, trace width. Run with
     /// `--release --nocapture` to read it; the verdict lives in
-    /// `docs/ROTATION-CUTOVER.md`.
+    /// `.docs-history-noclaude/ROTATION-CUTOVER.md`.
     #[test]
     fn rotation_probe_register_count_measurement() {
         for (key, r) in [

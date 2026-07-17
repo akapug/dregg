@@ -12,6 +12,12 @@
 #       ../docker-compose.observability.yml).
 #   - node_exporter :9100 for host disk/mem/OOM (run the container in the
 #     compose, or the systemd unit on bare metal).
+#   - dreggnet-web /metrics (dreggnet-web/src/metrics.rs) — the live games/web
+#     surface. /metrics is served on a SEPARATE loopback listener
+#     (DREGGNET_WEB_METRICS_BIND=127.0.0.1:9790), DISTINCT from the funnel-able
+#     app port (DREGGNET_WEB_BIND=127.0.0.1:8790), so a public `tailscale funnel`
+#     of the demo never exposes the counters. This stack scrapes the metrics port
+#     on the box that runs the web unit (hbox for the funnel deploy).
 #
 # Series that drive the rules (all real at node/src/metrics.rs):
 #   dregg_block_height, dregg_mempool_pending, dregg_federation_peers_connected,
@@ -59,6 +65,21 @@ scrape_configs:
       - targets: ["127.0.0.1:8422"]
         labels:
           node: node-3
+
+  # --- the dreggnet-web live surface: native Prometheus exposition ----------
+  # The public games demo (dreggnet-web-server). It binds LOOPBACK
+  # (DREGGNET_WEB_BIND=127.0.0.1:8790 — the funnel unit's bind), so the scrape
+  # is local to the box running the web unit. Series (all real at
+  # dreggnet-web/src/metrics.rs): dregg_web_sessions_open,
+  # dregg_web_sessions_evicted_total, dregg_web_opens_refused_total{limit},
+  # dregg_web_anchor_failures_total, dregg_web_turns_refused_total,
+  # dregg_web_session_resume_failures_total.
+  - job_name: dregg-web
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8790"]
+        labels:
+          surface: games-funnel
 
   # --- HOST metrics: node_exporter ------------------------------------------
   # CPU / RAM / disk usage+IO / network / load / OOM. Add remote boxes (other

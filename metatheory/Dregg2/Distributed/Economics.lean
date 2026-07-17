@@ -1,7 +1,7 @@
 /-
 # Dregg2.Distributed.Economics — the economics / DoS pillar (Titanium Phase 2.5)
 
-**The grounding (see `docs/rebuild/TITANIUM-PHASE.md` §2.5 and `CONSENSUS-GROUNDING.md` §2,
+**The grounding (see `.docs-history-noclaude/rebuild/metatheory/TITANIUM-PHASE.md` §2.5 and `CONSENSUS-GROUNDING.md` §2,
 Wong et al. 4.1).** "Sound ≠ live-under-economic-attack." A turn is *expensive to admit*
 (the network pays `proveCost` to verify-admit it) but *cheap to emit* (an attacker pays only
 `submitCost` to throw it at the mempool) — Wong's 4.1 distributed-DoS asymmetry. The protocol's

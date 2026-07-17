@@ -1,7 +1,7 @@
 /-
 # Dregg2.Projection — the cand-D choreography front-end (the syntactic spine).
 
-`docs/rebuild/cand-D-choreography.md`: a choreography is a *diagram in the turn-category*;
+`.docs-history-noclaude/rebuild/dregg2-design/cand-D-choreography.md`: a choreography is a *diagram in the turn-category*;
 endpoint projection is the *functor* to per-cell behaviours; the runtime monitor of a
 projected local type *is* the vat-boundary membrane. This module sits atop `Coordination`
 (which carries the MPST `GlobalType`/`project`/`LocalType` machinery) and adds cand-D's

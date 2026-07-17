@@ -36,7 +36,7 @@ move is a PAIR of guarded writes (debit at src, credit at dst — the `move` ver
   * **THE HEADLINE** (`linearity_recovered_from_orthogonality`): linearity is recovered from
     orthogonality IFF the test side may CORRELATE the components. The refutation of
     non-conservation is itself a relational (sum-reading) witness; rectangles can never field it.
-    This is `docs/EPISTEMIC-DATALOG.md`'s fact/fiction line made formal: the resource law lies
+    This is `.docs-history-noclaude/EPISTEMIC-DATALOG.md`'s fact/fiction line made formal: the resource law lies
     OUTSIDE every per-turn (rectangular) testing fragment and INSIDE the composite-test fragment,
     with the deployed `valTotal` observable as the one test that crosses the line.
 

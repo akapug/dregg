@@ -2,7 +2,7 @@
 //!
 //! # The one material gap this closes
 //!
-//! `docs/PG-DREGG.md` §8 ships the mirror *core* — the SQL-row projection, the
+//! `.docs-history-noclaude/PG-DREGG.md` §8 ships the mirror *core* — the SQL-row projection, the
 //! universal-memory model, the DDL, and the anti-substitution [`RootChain`] —
 //! and proves it with plain `cargo test` (no postgres) in `pg-dregg/src/mirror.rs`.
 //! What it could NOT ship from there is the half that needs `dregg-cell`: the
@@ -58,7 +58,7 @@ pub const GENESIS_ROOT: [u8; 32] = [0u8; 32];
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PgMirrorConfig {
     /// The postgres connection URL (`postgres://…`) the kernel writer connects
-    /// to. The PRIMARY target is pg18 (`docs/PG-DREGG.md` §5).
+    /// to. The PRIMARY target is pg18 (`.docs-history-noclaude/PG-DREGG.md` §5).
     pub url: String,
 }
 
@@ -162,7 +162,7 @@ fn cell_caps_to_rows(cell: &Cell) -> Vec<CapRow> {
 }
 
 /// Project a cell's scalar registers into the universal-memory [`Domain::Registers`]
-/// rows (`docs/UNIVERSAL-MEMORY.md`: balance/nonce are register cells of the ONE
+/// rows (`.docs-history-noclaude/UNIVERSAL-MEMORY.md`: balance/nonce are register cells of the ONE
 /// multiset). Collection = the cell id; key = a stable register selector. This
 /// is the honest single-relation view the pg `dregg.memory` table holds.
 fn cell_registers_to_mem(cell: &Cell) -> Vec<MemCell> {

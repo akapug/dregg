@@ -33,3 +33,6 @@ hex = "0.4"
 rcgen = "0.14"
 # RSA-4096 keygen for the RSA-PSS-SHA384 link primitive test (AMD's ARK/ASK algorithm).
 rand = "0.8"
+
+[lints]
+workspace = true

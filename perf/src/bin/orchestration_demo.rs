@@ -1,7 +1,7 @@
 //! End-to-end multi-agent ORCHESTRATION demo — the polis loop, run for real and
 //! wall-clock measured.
 //!
-//! The product/polis assessment (`docs/rebuild/_PRODUCT-POLIS-ASSESSMENT.md`,
+//! The product/polis assessment (`.docs-history-noclaude/rebuild/metatheory/_PRODUCT-POLIS-ASSESSMENT.md`,
 //! §2) found the agent-orchestration substrate genuine but UNDER-DEMONSTRATED:
 //! "the pieces (spawn → delegate → worker submits gated turn → grantor revokes)
 //! are all present and unit-tested, but there is no single runnable example that

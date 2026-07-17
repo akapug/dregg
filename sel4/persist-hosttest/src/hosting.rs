@@ -9,7 +9,7 @@
 //!
 //! deos hosts apps. An app is a **cell with durable hosted state in the persist-PD**
 //! (its rows live in the same `dregg.turns` commit log as everything else — the
-//! deos spine, `docs/PG-DREGG-ON-SEL4-DEOS-SPINE.md`). Hosting is not free: per
+//! deos spine, `.docs-history-noclaude/PG-DREGG-ON-SEL4-DEOS-SPINE.md`). Hosting is not free: per
 //! hosting period the app **pays a fee in coin to the host cell**. That payment is
 //! a real value move — a [`turn`-crate `Effect::Transfer { from, to, amount }`]
 //! (conservative linearity, `turn/src/action.rs:819`): coin LEAVES the app cell and
@@ -315,8 +315,11 @@ impl HostingEconomy {
         if app_bal >= lease.fee_per_period {
             // PAY: a conserving Transfer app -> host commits as a verified turn.
             let fee = lease.fee_per_period;
-            let ordinal =
-                self.commit_hosting_turn(HostingTurn::Charge { app, fee, period }, app, host_of(&lease))?;
+            let ordinal = self.commit_hosting_turn(
+                HostingTurn::Charge { app, fee, period },
+                app,
+                host_of(&lease),
+            )?;
             // conserving move: app -> host. (Σ value invariant — the load-bearing
             // economic property: hosting charges coin, it does not forge it.)
             *self.balances.entry(app).or_insert(0) -= fee;
@@ -529,7 +532,11 @@ mod tests {
         let a = app(0x01);
         econ.register_app(a, HOST, 10).unwrap();
         econ.top_up(a, TREASURY, 100).unwrap();
-        assert_eq!(econ.total_value(), 1000, "top-up conserves (treasury → app)");
+        assert_eq!(
+            econ.total_value(),
+            1000,
+            "top-up conserves (treasury → app)"
+        );
 
         let total_before = econ.total_value();
         let app_before = econ.balance(a);
@@ -538,10 +545,22 @@ mod tests {
         let outcome = econ.charge_period(a).unwrap();
         assert!(matches!(outcome, ChargeOutcome::Paid { period: 1, .. }));
         assert_eq!(econ.balance(a), app_before - 10, "app debited the fee");
-        assert_eq!(econ.balance(HOST), host_before + 10, "host credited the fee");
-        assert_eq!(econ.total_value(), total_before, "Σ value conserved (transfer, not mint)");
+        assert_eq!(
+            econ.balance(HOST),
+            host_before + 10,
+            "host credited the fee"
+        );
+        assert_eq!(
+            econ.total_value(),
+            total_before,
+            "Σ value conserved (transfer, not mint)"
+        );
         assert!(econ.is_hosted(a), "a paid app stays hosted");
-        assert_eq!(econ.lease(a).unwrap().paid_through, 1, "lease advanced one period");
+        assert_eq!(
+            econ.lease(a).unwrap().paid_through,
+            1,
+            "lease advanced one period"
+        );
     }
 
     /// THE EVICTION TOOTH: a hosted app whose fee lapses (cannot pay) is EVICTED —
@@ -565,17 +584,31 @@ mod tests {
         // then is evicted on period 3 (balance 0 < fee 10).
         let paid_out = econ.run_periods(paid, 4).unwrap();
         assert_eq!(paid_out.len(), 4, "paid app ran all 4 periods");
-        assert!(paid_out.iter().all(|o| matches!(o, ChargeOutcome::Paid { .. })));
+        assert!(paid_out
+            .iter()
+            .all(|o| matches!(o, ChargeOutcome::Paid { .. })));
         assert!(econ.is_hosted(paid), "the paid app's hosting persists");
         assert_eq!(econ.balance(paid), 10, "50 − 4×10 = 10 remaining");
 
         let lapsing_out = econ.run_periods(lapsing, 4).unwrap();
         // periods 1,2 paid; period 3 evicts; run stops (no period 4).
         assert_eq!(lapsing_out.len(), 3, "two paid + one eviction, then stop");
-        assert!(matches!(lapsing_out[0], ChargeOutcome::Paid { period: 1, .. }));
-        assert!(matches!(lapsing_out[1], ChargeOutcome::Paid { period: 2, .. }));
-        assert!(matches!(lapsing_out[2], ChargeOutcome::Evicted { period: 3, .. }));
-        assert!(!econ.is_hosted(lapsing), "the lapsed app is EVICTED (fail-closed)");
+        assert!(matches!(
+            lapsing_out[0],
+            ChargeOutcome::Paid { period: 1, .. }
+        ));
+        assert!(matches!(
+            lapsing_out[1],
+            ChargeOutcome::Paid { period: 2, .. }
+        ));
+        assert!(matches!(
+            lapsing_out[2],
+            ChargeOutcome::Evicted { period: 3, .. }
+        ));
+        assert!(
+            !econ.is_hosted(lapsing),
+            "the lapsed app is EVICTED (fail-closed)"
+        );
         assert_eq!(econ.balance(lapsing), 0, "the lapsing app drained to 0");
     }
 
@@ -591,9 +624,15 @@ mod tests {
         let turns_before = econ.turn_count();
         let outcome = econ.charge_period(a).unwrap();
         assert!(matches!(outcome, ChargeOutcome::Evicted { period: 1, .. }));
-        assert_eq!(econ.turn_count(), turns_before + 1, "the eviction is a durable turn");
+        assert_eq!(
+            econ.turn_count(),
+            turns_before + 1,
+            "the eviction is a durable turn"
+        );
         // the durable chain re-validates across the eviction (self-checking).
-        econ.store().verify_chain_intact().expect("the durable chain is intact across eviction");
+        econ.store()
+            .verify_chain_intact()
+            .expect("the durable chain is intact across eviction");
         // the eviction row is in the durable log with the Evict tag.
         let records = econ.store().read_ordered().unwrap();
         let last = records.last().unwrap();
@@ -629,7 +668,9 @@ mod tests {
         // both eventually evicted (a after 5 paid periods, b after 6).
         assert!(!econ.is_hosted(a) || econ.balance(a) < 7);
         assert_eq!(econ.total_value(), supply, "value conserved end-to-end");
-        econ.store().verify_chain_intact().expect("durable chain intact end-to-end");
+        econ.store()
+            .verify_chain_intact()
+            .expect("durable chain intact end-to-end");
     }
 
     /// TOP-UP CANNOT OVERDRAFT: a funder cannot top up more than it holds (no value
@@ -641,7 +682,10 @@ mod tests {
         let a = app(0x66);
         econ.register_app(a, HOST, 10).unwrap();
         let err = econ.top_up(a, TREASURY, 50).unwrap_err();
-        assert!(matches!(err, HostingError::NotConserving(_)), "overdraft refused");
+        assert!(
+            matches!(err, HostingError::NotConserving(_)),
+            "overdraft refused"
+        );
         assert_eq!(econ.total_value(), 30, "no value forged");
         assert_eq!(econ.balance(a), 0, "the app got nothing");
     }
@@ -673,9 +717,22 @@ mod tests {
         // Reopen over the SAME bytes — the durable store recovers exactly.
         let backend = RegionBackend::file(&path).unwrap();
         let store = DurableCommitStore::open(backend).unwrap();
-        assert_eq!(store.head_root().unwrap(), head_after, "durable head recovered");
-        assert_eq!(store.commit_cursor().unwrap(), cursor_after, "durable cursor recovered");
-        store.verify_chain_intact().expect("the recovered durable chain is intact");
-        assert!(cursor_after >= 4, "genesis+register+topup+charge = 4 durable turns");
+        assert_eq!(
+            store.head_root().unwrap(),
+            head_after,
+            "durable head recovered"
+        );
+        assert_eq!(
+            store.commit_cursor().unwrap(),
+            cursor_after,
+            "durable cursor recovered"
+        );
+        store
+            .verify_chain_intact()
+            .expect("the recovered durable chain is intact");
+        assert!(
+            cursor_after >= 4,
+            "genesis+register+topup+charge = 4 durable turns"
+        );
     }
 }

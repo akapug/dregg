@@ -70,3 +70,6 @@ blake3 = "1"
 #    root, the repo-root `[patch]` does NOT reach it, so the transitive dregg deps
 #    cannot re-resolve without these. They revert with the others once the forks land.
 
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 /-
 # Dregg2.Authority.CaveatCapBridge — the macaroon ↔ kernel-cap convergence arrow.
 
-`docs/rebuild/_AUTHORIZATION-COMPLETE.md §3` welds FOUR caveat operators onto the SAME live
+`.docs-history-noclaude/rebuild/metatheory/_AUTHORIZATION-COMPLETE.md §3` welds FOUR caveat operators onto the SAME live
 `execFullForestG` gate: the within-cell tiers, the cap-authority `granted ≤ held`
 (`capAuthorityG`, the WHAT leg), the coordinated cross-cell axis, and the macaroon HMAC
 caveat-CHAIN (`chainGateG`). Those last two — the macaroon narrowing and the kernel cap
@@ -237,7 +237,7 @@ construction* — so its conclusion (`capAuthorityG = true`) holds REGARDLESS of
 hypothesis is unused). That is the honest defense-in-depth fact, but it does not make the macaroon
 gate *load-bearing*: the cap leg would pass even with a forged chain.
 
-This section closes that gap, exactly as `docs/AUTHORIZATION-MODEL.md:53-61` asks: make the macaroon
+This section closes that gap, exactly as `.docs-history-noclaude/AUTHORIZATION-MODEL.md:53-61` asks: make the macaroon
 caveat that narrows a capability-bearing verb **emit the SAME `(granted, held)` pair the kernel cap
 leg already consumes**, and prove `chainGateG na = true → granted(na) ⊆ held(na)` on the delegation
 verb — **NON-VACUOUSLY**: the conclusion `granted ≤ held` is a FREE proposition over a free pair, and
@@ -332,7 +332,7 @@ def mkDelegNode (cred : Authorization Dg Pf) (target : Label) (granted held : Ex
 whose macaroon chain caveat reads the shared `(granted, held)` pair, the macaroon caveat-chain gate
 passing FORCES the kernel non-amplification atom: `chainGateG na = true → granted ≤ held`. The proof
 CONSUMES the hypothesis (it reads the admit leg, which IS `decide (granted ≤ held)`), unlike `§3`.
-This is `docs/AUTHORIZATION-MODEL.md:58`'s `chainGateG na = true → granted(na) ⊆ held(na)`, on the
+This is `.docs-history-noclaude/AUTHORIZATION-MODEL.md:58`'s `chainGateG na = true → granted(na) ⊆ held(na)`, on the
 overlap verb, with `granted`/`held` FREE. -/
 theorem chainGateG_emits_granted_le_held (cred : Authorization Dg Pf) (target : Label)
     (granted held : ExecAuth)

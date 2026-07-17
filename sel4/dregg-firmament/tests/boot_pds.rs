@@ -1,6 +1,6 @@
 //! THE BOOT TEST — the same-code claim, CONTINUOUSLY CHECKED.
 //!
-//! `docs/DREGG-DESKTOP-OS.md §3` + §6 R1 (TRACK 0, the SEMIHOST fulcrum): the
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` + §6 R1 (TRACK 0, the SEMIHOST fulcrum): the
 //! SAME protection-domain (PD) source that runs on real seL4 boots here on the
 //! host [`EmulatedKernel`] under plain `cargo test` — no QEMU, no nightly, no
 //! build-std. This file boots a small PD set on the emulator and proves a PD's

@@ -151,6 +151,6 @@ argument.
 - The proven reductions it wires: `OodQuotientConsistency.verifyAlgo_accept_forces_table_identity`,
   `OodCommitmentBinding.commitmentOpening_binds_of_poseidon2CR`, `OodSoundnessGame.rlc_debatch` /
   `ood_hnonexc_escape_prob_le`, `FieldIntegerLift.ood_forces_mainAirAccept_field_of_residuals`.
-- The residual-floor map it completes: `docs/reference/STARK-FLOOR-REDUCTION.md`.
+- The residual-floor map it completes: `docs/SUPERSEDED/STARK-FLOOR-REDUCTION.md`.
 - The general (all-eight-leg) assembler for memory-touching effects:
   `AlgoStarkSoundInstance.algoStarkSound_of_bricks`.

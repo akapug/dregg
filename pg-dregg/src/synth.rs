@@ -2,7 +2,7 @@
 //!
 //! The real Tier-B writer (M2) tails the node's commit log and projects each
 //! `dregg_cell::Cell` post-image into a [`MirrorBatch`](crate::mirror::MirrorBatch)
-//! (see `docs/PG-DREGG.md` §9.1: "the mirror is a projection of an artifact that
+//! (see `.docs-history-noclaude/PG-DREGG.md` §9.1: "the mirror is a projection of an artifact that
 //! already exists"). That writer needs `node/` + `dregg-cell` and is queued
 //! behind the rotation lane.
 //!

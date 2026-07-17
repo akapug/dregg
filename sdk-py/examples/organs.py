@@ -1,6 +1,6 @@
 """The organ nouns in Python — trustline, channels, mailbox, attested-query.
 
-These are the higher primitives (docs/ORGANS.md): the ergonomic Python face of
+These are the higher primitives (.docs-history-noclaude/ORGANS.md): the ergonomic Python face of
 the node's operator-local services. The node computes the per-cell factory
 descriptors and seal fan-outs the wire layer does not carry; these clients
 drive them. The enforcement tooth is the executor-installed cell program.
@@ -65,4 +65,4 @@ else:
 # Membership ops are Ed25519-signed by the owner; sealing/custody-verification
 # happen outside pure Python (bring sealed ciphertext, recompute content_hash).
 print(f"\nmailbox owner (inbox id): {holder.mailbox(RELAY).owner[:16]}…")
-print("(subscribe/drain need a running relay; see docs/ORGANS.md §2)")
+print("(subscribe/drain need a running relay; see .docs-history-noclaude/ORGANS.md §2)")

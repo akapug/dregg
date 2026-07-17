@@ -92,7 +92,13 @@ pub(super) async fn tool_grant_capability(params: &Value, state: &NodeState) -> 
         valid_until: None,
         // Use a signed action so the cell's `delegate: Signature` permission
         // accepts it. (Hosted-cell grants require the cell owner's signature.)
-        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.cclerk, &s.federation_id),
+        call_forest: build_signed_forest(
+            agent_cell_id,
+            vec![effect],
+            &s.cclerk,
+            &s.federation_id,
+            nonce,
+        ),
         depends_on: vec![],
         previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,

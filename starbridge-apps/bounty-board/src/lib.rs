@@ -337,7 +337,7 @@ pub fn state_field(state: u64) -> FieldElement {
 // The deos-native surface — the BOUNTY as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the bounty-board, re-expressed as a
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the bounty-board, re-expressed as a
 // composed deos app and PROMOTED into `src/`. The four-state gated lifecycle is ONE
 // [`DeosApp`] ([`bounty_app`] below); the framework wires the rest — per-viewer
 // projection, web-of-cells publish (the BOUNTY cell IS a `dregg://` sturdyref), the

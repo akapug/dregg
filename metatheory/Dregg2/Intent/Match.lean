@@ -1,7 +1,7 @@
 /-
 # Dregg2.Intent.Match — the solver as a coend `∫^B`, and the bilateral lens fill.
 
-Phase 2, layer 3 (`docs/rebuild/PHASE-2-INTENT-SPEC.md`; spine `INTENT-AS-CO-RECEIPT.md` §3,
+Phase 2, layer 3 (`.docs-history-noclaude/rebuild/metatheory/PHASE-2-INTENT-SPEC.md`; spine `INTENT-AS-CO-RECEIPT.md` §3,
 `INTENT-REFS-optics.md`). Bilateral matching ("I want C, you offer C") is the easy case. A real
 **exchange** routes demand to supply *through intermediate resources*: an intent `A ⊢ C` is filled by a
 chain `A → B → C` assembled from available offers, existentially over the intermediate `B`. That

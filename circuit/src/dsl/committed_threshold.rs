@@ -18,9 +18,7 @@
 //!
 //! `[threshold_commitment, fact_commitment]`
 
-use crate::committed_threshold::{
-    COMMITTED_DIFF_BITS, COMMITTED_THRESHOLD_AIR_WIDTH, CommittedThresholdWitness, col,
-};
+use crate::committed_threshold::COMMITTED_DIFF_BITS;
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2;
 
@@ -43,50 +41,6 @@ pub use crate::committed_threshold::{
 // ============================================================================
 // Circuit descriptor
 // ============================================================================
-
-// ============================================================================
-// Trace generation
-// ============================================================================
-
-/// Generate the DSL trace from a `CommittedThresholdWitness`.
-///
-/// Returns (trace, public_inputs) where trace is padded to power-of-2 length.
-pub fn generate_committed_threshold_trace(
-    witness: &CommittedThresholdWitness,
-) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    let mut row = vec![BabyBear::ZERO; COMMITTED_THRESHOLD_AIR_WIDTH];
-
-    // Fill witness columns
-    row[col::PRIVATE_VALUE] = witness.private_value;
-    row[col::THRESHOLD] = witness.threshold;
-    row[col::BLINDING] = witness.blinding;
-
-    // Compute diff
-    let diff = witness.private_value - witness.threshold;
-    row[col::DIFF] = diff;
-
-    // Bit decomposition
-    let diff_val = diff.as_u32();
-    for i in 0..COMMITTED_DIFF_BITS {
-        let bit = (diff_val >> i) & 1;
-        row[col::diff_bit(i)] = BabyBear::new(bit);
-    }
-
-    // Poseidon2 commitment
-    let poseidon2_result = poseidon2::hash_2_to_1(witness.threshold, witness.blinding);
-    row[col::POSEIDON2_RESULT] = poseidon2_result;
-
-    // Public-input-matching columns
-    let threshold_commitment = witness.compute_threshold_commitment();
-    row[col::THRESHOLD_COMMITMENT] = threshold_commitment;
-    row[col::FACT_COMMITMENT] = witness.fact_commitment;
-
-    let public_inputs = vec![threshold_commitment, witness.fact_commitment];
-
-    // Pad to power of 2 (min 2 rows for STARK)
-    let trace = vec![row.clone(), row];
-    (trace, public_inputs)
-}
 
 // ============================================================================
 // Production prove/verify API

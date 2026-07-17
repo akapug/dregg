@@ -2,7 +2,7 @@
 //!
 //! The first DEVELOPER content surface of the dregg IDE (A1, the rung after the
 //! A0 compositor + agent-activity surface). An editor buffer is exactly the
-//! `docs/DREGG-DESKTOP-OS.md` §1 story applied to *text you author*: a window is
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md` §1 story applied to *text you author*: a window is
 //! a `Capability{ Surface(cell) }`, and a buffer is a cap-confined VIEW of a
 //! cell whose state IS the buffer — so *who may edit it* is an ocap question the
 //! verified executor answers, not an ambient one.

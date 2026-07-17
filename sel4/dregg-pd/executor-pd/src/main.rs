@@ -3,10 +3,10 @@
 //! The destination: a protection domain that embeds the VERIFIED dregg executor
 //! (`execFullForestG` via `dregg-lean-ffi`) and runs every app turn through the
 //! proved `decode -> step -> encode -> receipt`. This is "the firmament's one
-//! true blocker" (docs/FIRMAMENT.md §6).
+//! true blocker" (.docs-history-noclaude/FIRMAMENT.md §6).
 //!
 //! The blocker is the Lean RUNTIME on bare-metal aarch64-sel4-microkit. The
-//! excision plan (docs/SEL4-EMBEDDING.md §2) is four steps. Step (1) — the
+//! excision plan (.docs-history-noclaude/SEL4-EMBEDDING.md §2) is four steps. Step (1) — the
 //! object-format wall, the part the roadmap called "weeks-to-a-quarter fog" — is
 //! now GREEN: the entire 757-object Dregg2 closure (including the executor entry
 //! `dregg_exec_full_forest_auth`) ELF-recompiles for aarch64 on the native macOS
@@ -36,11 +36,13 @@ fn init() -> HandlerImpl {
     debug_println!("[exec] destination: run every app turn through the VERIFIED");
     debug_println!("[exec]   execFullForestG (decode -> step -> encode -> receipt)");
     debug_println!("");
-    debug_println!("[exec] excision plan (docs/SEL4-EMBEDDING.md §2):");
+    debug_println!("[exec] excision plan (.docs-history-noclaude/SEL4-EMBEDDING.md §2):");
     debug_println!("[exec]   (1) ELF-recompile the Lean closure ........ ✅ GREEN");
     debug_println!("[exec]       757/757 Dregg2 facets -> ELF aarch64, 0 source edits");
     debug_println!("[exec]   (2) ELF Lean RUNTIME (leanrt+lib+kernel) ... ✅ GREEN — built");
-    debug_println!("[exec]   (3) GMP for ELF ........................... ✅ GREEN — real GMP 6.3.0");
+    debug_println!(
+        "[exec]   (3) GMP for ELF ........................... ✅ GREEN — real GMP 6.3.0"
+    );
     debug_println!("[exec]   (4) host on sel4-musl + root-task-with-std . ◐ this PD");
     debug_println!("");
     debug_println!("[exec] THE WALL IS PASSED: dregg-executor.elf (static aarch64-musl,");

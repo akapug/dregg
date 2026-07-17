@@ -41,7 +41,7 @@
 //!   each room after re-committing the stored roster against the on-cell
 //!   `member_root` (`ChannelRegistry::restore_rosters`), so a restart no
 //!   longer serves `RosterStale` for a roster that still matches its cell
-//!   (docs/PERSISTENCE.md §3, the roster caveat).
+//!   (.docs-history-noclaude/PERSISTENCE.md §3, the roster caveat).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::convert::Infallible;
@@ -115,7 +115,7 @@ pub struct Room {
     next_seq: u64,
 }
 
-/// The durable carrier of a room's node-held roster (docs/PERSISTENCE.md §3,
+/// The durable carrier of a room's node-held roster (.docs-history-noclaude/PERSISTENCE.md §3,
 /// the roster caveat). The cell pins only the membership ROOT; the
 /// member→seal-pk content and the epoch anchor are node-held, verifiable
 /// against the cell but not derivable from it. Persisting this lets a node
@@ -259,7 +259,7 @@ impl ChannelRegistry {
     }
 
     /// Restore node-held rooms from the durable roster table at boot
-    /// (docs/PERSISTENCE.md §3, the roster caveat). For each stored roster we
+    /// (.docs-history-noclaude/PERSISTENCE.md §3, the roster caveat). For each stored roster we
     /// RE-COMMIT it against the live cell's on-chain membership root before
     /// trusting it:
     ///
@@ -945,7 +945,7 @@ fn run_epoch_step(
         .expect("room exists (resolved above)");
     room.roster = new_roster.clone();
     room.keys.insert(new_epoch, key);
-    // Persist the post-step roster durably (docs/PERSISTENCE.md §3): the
+    // Persist the post-step roster durably (.docs-history-noclaude/PERSISTENCE.md §3): the
     // roster the committed turn installed survives an arbitrary crash from
     // here on, so a restart rebuilds the room without waiting for members to
     // re-post (re-committed against the on-cell root at load).
@@ -2307,7 +2307,7 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
-    /// THE DURABLE-ROSTER CLOSURE (docs/PERSISTENCE.md §3 roster caveat):
+    /// THE DURABLE-ROSTER CLOSURE (.docs-history-noclaude/PERSISTENCE.md §3 roster caveat):
     /// every committed epoch step persists the roster; a fresh registry
     /// (the restart) rebuilds the room from the durable table after
     /// RE-COMMITTING it against the on-cell membership root — and discards a

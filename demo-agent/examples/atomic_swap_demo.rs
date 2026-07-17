@@ -387,18 +387,18 @@ fn main() {
 
     // Record the nullifiers as spent
     nullifier_set
-        .insert(alice_nullifier)
+        .insert(alice_nullifier, alice_note.value())
         .expect("Alice's nullifier should be accepted");
     nullifier_set
-        .insert(bob_nullifier)
+        .insert(bob_nullifier, bob_note.value())
         .expect("Bob's nullifier should be accepted");
 
     println!("  Alice's nullifier recorded as spent");
     println!("  Bob's nullifier recorded as spent");
 
     // Try to replay the swap (double-spend)
-    let replay_alice = nullifier_set.insert(alice_nullifier);
-    let replay_bob = nullifier_set.insert(bob_nullifier);
+    let replay_alice = nullifier_set.insert(alice_nullifier, alice_note.value());
+    let replay_bob = nullifier_set.insert(bob_nullifier, bob_note.value());
 
     assert!(replay_alice.is_err());
     assert!(replay_bob.is_err());

@@ -4,7 +4,7 @@ register count R (the 16-vs-24-vs-32 measurement probes).
 
 `EffectVmEmitRotation.lean` pins the R=16 staged emission (the deployed reference; its
 artifacts are byte-frozen). THIS module re-expresses that emission as a FUNCTION of the
-register count R, so the register-count decision (`docs/ROTATION-CUTOVER.md` — registers are
+register count R, so the register-count decision (`.docs-history-noclaude/ROTATION-CUTOVER.md` — registers are
 ALWAYS-PAID limbs in every turn proof's commitment chain, heap fields are METERED umem rows)
 can be settled by MEASUREMENT instead of vibes:
 

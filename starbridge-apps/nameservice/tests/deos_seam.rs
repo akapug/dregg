@@ -2,7 +2,7 @@
 //! executor against the FULL name program, so the verified caveats BITE in the fire path
 //! itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: nameservice is THE web-of-cells keystone;
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: nameservice is THE web-of-cells keystone;
 //! the promotion's task is to close the fire→full-`CellProgram` seam so a rewound expiry /
 //! un-revoke / name-rebind is a REAL executor refusal in the fire path, not a
 //! `program.evaluate`-only check. This file proves that seam CLOSED. `src::register_deos` /

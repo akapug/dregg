@@ -1,6 +1,6 @@
 //! THE COMPOSITOR-PD BOOT TEST — two app-PDs composite to the framebuffer
 //! through the compositor-PD; an overpaint is REFUSED; input routes to the
-//! focused one (`docs/DREGG-DESKTOP-OS.md §2 L5` + `§6 R3 Stage D`).
+//! focused one (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §2 L5` + `§6 R3 Stage D`).
 //!
 //! This is the §6 R3 Stage D slice, native-now on the semihost
 //! [`EmulatedKernel`]: "Two app-PDs composite to screen, input routes to the

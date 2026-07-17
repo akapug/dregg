@@ -74,7 +74,7 @@
 //!   signals but does NOT hold the gate or the executor; it fires a turn over the
 //!   **server function** [`server::fire_affordance`] and reflects the receipted,
 //!   committed result. Leptos's server-function model maps onto this 1:1: the island
-//!   is the *will*, the server is the *law* (`docs/REFINEMENT-DESIGN.md` "cells are
+//!   is the *will*, the server is the *law* (`.docs-history-noclaude/REFINEMENT-DESIGN.md` "cells are
 //!   law, agents are will").
 //!
 //! **So the fit is strong on the runtime axis (signals = reactive rung; hydration =

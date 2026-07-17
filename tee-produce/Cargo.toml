@@ -53,3 +53,6 @@ serde_bytes = { version = "0.11", optional = true }
 # exactly what the REAL verifier accepts (COSE sig + chain to the pinned root).
 dregg-tee-verify = { path = "../tee-verify" }
 dregg-cell = { path = "../cell" }
+
+[lints]
+workspace = true

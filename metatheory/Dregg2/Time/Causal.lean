@@ -1,8 +1,8 @@
 /-
 # Dregg2.Time.Causal — `causal_after`: the LIGHTCONE-FACT deadline (frame-invariant, no trust).
 
-The relativistic time-typing innovation (`docs/rebuild/INTENT-AS-CO-RECEIPT.md` §4,
-`docs/rebuild/INTENT-REFS-time.md`) splits "time" into two different things, and FORCES
+The relativistic time-typing innovation (`.docs-history-noclaude/rebuild/metatheory/INTENT-AS-CO-RECEIPT.md` §4,
+`.docs-history-noclaude/rebuild/metatheory/INTENT-REFS-time.md`) splits "time" into two different things, and FORCES
 the author of a deadline to declare which one they mean:
 
   * **CAUSAL / ordering time** — the lightcone partial order = the lace = happens-before. It is

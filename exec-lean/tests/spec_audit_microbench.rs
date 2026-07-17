@@ -112,7 +112,7 @@ fn microbench_where_the_cost_lives() {
     let mut l2 = ledger.clone();
     // WARM the ledger once outside the timed loop: the first `root()` is a
     // STRUCTURAL rebuild that cold-folds every cell's cap sub-root (filling the
-    // per-cell sub-root cache, `docs/INCREMENTAL-COMMITMENT.md` step 2). Timing
+    // per-cell sub-root cache, `.docs-history-noclaude/INCREMENTAL-COMMITMENT.md` step 2). Timing
     // it would amortize that one-time cold rebuild across the loop and hide the
     // STEADY-STATE per-turn cost (a single incremental dirty-leaf re-hash that
     // reuses the cached cap-root). The steady-state number is the one the doc's

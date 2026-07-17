@@ -92,7 +92,7 @@
 //!   `escrowRelease`/`obSettle` rather than a checked field.
 //! * The committed-escrow knowledge gate (release on a HASH-PREIMAGE reveal)
 //!   is now EXPRESSIBLE: `PreimageGate` is a `SimpleStateConstraint`
-//!   (`docs/CELL-PROGRAM-LANGUAGE.md` §4), so `when_state(RESOLVED_A,
+//!   (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §4), so `when_state(RESOLVED_A,
 //!   PreimageGate { commitment_index: CONDITION_SLOT, .. })` composes — see
 //!   `cell::program::tests::preimage_gate_composes_under_state_guard` and the
 //!   Lean `committedRelease` twin (`Dregg2/Exec/Program.lean`). The cleartext
@@ -103,7 +103,7 @@
 //!   `balance_atoms_see_own_balance` pin). The published settlement
 //!   blueprints keep the Lean-twin constraint set verbatim; adding the drain
 //!   tooth is a descriptor evolution to land together with its Lean keystone
-//!   (one semantics, both sides — see `docs/CELL-PROGRAM-LANGUAGE.md` §9).
+//!   (one semantics, both sides — see `metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §9).
 
 use crate::cell::CellMode;
 use crate::factory::{CapTarget, CapTemplate, ChildVkStrategy, FactoryDescriptor};
@@ -583,7 +583,7 @@ pub fn bridge_factory_descriptor(terms: &BridgeTerms) -> Result<FactoryDescripto
 // beneficiary after the condition is genuinely met — savings, a vesting
 // schedule, a commitment device ("I cannot spend this until block N"), a
 // deadbolt fund opened by a secret. It is the FIRST house room welded
-// (`docs/HOUSE-CAPACITIES-WELD-PLAN.md` headline #1: highest value × smallest).
+// (`metatheory/docs/HOUSE-CAPACITIES-WELD-PLAN.md` headline #1: highest value × smallest).
 //
 // A vault is a COMPOSITION, NOT a new `Effect`: it rides the SAME committed-cell
 // substrate and the SAME wired settlement triple as the escrow/obligation/bridge
@@ -785,7 +785,7 @@ pub fn vault_factory_descriptor(terms: &VaultTerms) -> Result<FactoryDescriptor,
 // per epoch, the ceiling enforced so it can be neither EXCEEDED nor FORGED,
 // refilling each epoch — pocket money an agent hands a sub-agent that the
 // sub-agent literally CANNOT overspend within an epoch. It is the SECOND house
-// room welded (`docs/HOUSE-CAPACITIES-WELD-PLAN.md`, after the vault).
+// room welded (`metatheory/docs/HOUSE-CAPACITIES-WELD-PLAN.md`, after the vault).
 //
 // An allowance is a COMPOSITION, NOT a new `Effect`: it rides the SAME
 // committed-cell substrate and the SAME wired settlement triple as the
@@ -973,7 +973,7 @@ pub fn allowance_factory_descriptor(
 // schedule, so an obligor can neither FORGE the terms (amount/period/beneficiary
 // are frozen), nor UNDERPAY a period (the amount is fixed), nor DISCHARGE EARLY
 // (each period must wait for its due block). It is the THIRD house room welded
-// (`docs/HOUSE-CAPACITIES-WELD-PLAN.md`, after the vault + allowance), distinct
+// (`metatheory/docs/HOUSE-CAPACITIES-WELD-PLAN.md`, after the vault + allowance), distinct
 // from the one-shot bonded `ObligationTerms` (the escrow-family slash-on-deadline
 // deal) above: that is a single bonded duty, this is a recurring payment train.
 //
@@ -1293,7 +1293,7 @@ pub fn trustline_cell_program(terms: &TrustlineTerms) -> Result<CellProgram, Blu
 }
 
 /// **The trustline factory (per-line, content-addressed)** — the cell shape
-/// of docs/TRUSTLINES.md §3, Lean twin `Dregg2.Apps.Trustline`. Like the
+/// of .docs-history-noclaude/TRUSTLINES.md §3, Lean twin `Dregg2.Apps.Trustline`. Like the
 /// settlement families, each line gets its own descriptor whose constraints
 /// bake the terms as literals; the escrowed value lives in the cell's own
 /// `balance` (funding and settling are ordinary conserving `Transfer`s).

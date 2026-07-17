@@ -1,6 +1,6 @@
 # pg-dregg Tier-D feasibility spike — can the verified executor run IN postgres?
 
-**The question** (the north star, `docs/PG-DREGG.md` §13.1 / the QUICKSTART roadmap
+**The question** (the north star, `.docs-history-noclaude/PG-DREGG.md` §13.1 / the QUICKSTART roadmap
 Tier-D row): can the VERIFIED executor run inside the postgres backend process —
 i.e. can `libdregg_lean.a` (the `@[export]`ed Lean executor that
 `dregg-lean-ffi` builds) **link and execute inside a postgres C-extension's

@@ -3051,7 +3051,7 @@ impl TurnExecutor {
         // the verb conserves exactly (per-turn Σδ=0). The bare non-conserving
         // debit path is retired.
         //
-        // HONEST SCOPE (docs/SUPPLY-MODEL.md): Stage 1 delivers PER-TURN
+        // HONEST SCOPE (.docs-history-noclaude/SUPPLY-MODEL.md): Stage 1 delivers PER-TURN
         // conservation (each burn nets zero). The STANDING invariant
         // `Σholders + well = 0` (the well as a proper −supply account) requires
         // wells to be initialized to −supply at issuance — that is Stage 2
@@ -3182,7 +3182,7 @@ impl TurnExecutor {
     /// for this gate). A cap that does not carry the `EFFECT_MINT` facet (e.g. a
     /// plain transfer/state cap) does NOT authorize minting.
     ///
-    /// DECISION A (`docs/SUPPLY-MODEL.md`): this gates on the ACTOR's cap over
+    /// DECISION A (`.docs-history-noclaude/SUPPLY-MODEL.md`): this gates on the ACTOR's cap over
     /// the issuer, not the well's own permission table — matching Lean, where
     /// the authority is a cap the actor HOLDS, never a property of the issuer.
     fn holds_mint_authority(&self, ledger: &Ledger, actor: &CellId, well: &CellId) -> bool {
@@ -3226,7 +3226,7 @@ impl TurnExecutor {
         slot: u32,
         amount: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
-        // The sign-flipped DUAL of `apply_burn` (`docs/SUPPLY-MODEL.md` Stage
+        // The sign-flipped DUAL of `apply_burn` (`.docs-history-noclaude/SUPPLY-MODEL.md` Stage
         // 2a): well → holder. The well (carrying −supply) is DEBITED negative-
         // capably (going more negative), the recipient `target` is CREDITED, and
         // the verb conserves exactly (per-turn, per-asset Σδ=0). The one place

@@ -27,3 +27,6 @@ dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 # net's PeerScoreboard exposes the eclipse-resistant eager-selection surface
 # (incl. anchor pinning) that the F-5 / L4 anti-eclipse attack test drives.
 dregg-net = { path = "../net" }
+
+[lints]
+workspace = true

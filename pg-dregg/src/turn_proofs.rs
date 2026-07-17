@@ -1,4 +1,4 @@
-//! S2 — the node-side whole-chain PROOF PRODUCER (`docs/PG-DREGG.md` §10.2).
+//! S2 — the node-side whole-chain PROOF PRODUCER (`.docs-history-noclaude/PG-DREGG.md` §10.2).
 //!
 //! # Where this sits (the orthogonal soundness half)
 //!
@@ -163,7 +163,7 @@ impl ChainFolder for StandInFolder {
 /// One `dregg.turn_proofs` row — a whole-chain proof attesting the window
 /// `[lo, hi]`, the unit the producer writes and the SRF reads. The schema is
 /// `dregg.turn_proofs(lo, hi, genesis_root, final_root, proof bytea, vk)`
-/// (`docs/PG-DREGG.md` §10.2); this is its in-Rust projection.
+/// (`.docs-history-noclaude/PG-DREGG.md` §10.2); this is its in-Rust projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TurnProofRow {
     /// The inclusive lower ordinal the proof attests.
@@ -252,7 +252,7 @@ impl core::fmt::Display for ProduceProofError {
 
 impl std::error::Error for ProduceProofError {}
 
-/// The whole-chain proof producer (`docs/PG-DREGG.md` §10.2, S2). It tails the
+/// The whole-chain proof producer (`.docs-history-noclaude/PG-DREGG.md` §10.2, S2). It tails the
 /// node's finalized turns in order and, each time finality advances by a foldable
 /// window, folds the new turns ([`ChainFolder`]) into ONE proof and yields the
 /// [`TurnProofRow`] to write into `dregg.turn_proofs`.

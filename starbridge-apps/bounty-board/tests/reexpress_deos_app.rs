@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `bounty-board` starbridge-app, on the composed deos
 //! framework — **the same app, smaller + more capable, now SHIPPED from `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the bounty-board — THE canonical 4-state
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the bounty-board — THE canonical 4-state
 //! gated lifecycle — re-expressed as a composed [`DeosApp`] and PROMOTED into `src/lib.rs`.
 //! This file drives the SHIPPED surface ([`bounty_app`] from `src/`), proving the
 //! promotion: per-viewer projection, the cap-gated fires through the mounted axum surface,

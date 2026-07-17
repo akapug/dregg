@@ -23,7 +23,7 @@ getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 # Local crates (only WASM-safe ones). `no-lean-link` is THE platform gate
-# (docs/FEATURE-HYGIENE.md §Lean): wasm32 cannot link libdregg_lean.a, so these
+# (.docs-history-noclaude/FEATURE-HYGIENE.md §Lean): wasm32 cannot link libdregg_lean.a, so these
 # crates compile their Rust fallback paths here — a statement about this target's
 # linker, never about which guarantees native dregg has (there Lean is unconditional).
 dregg-macaroon = { path = "../macaroon" }

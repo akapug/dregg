@@ -7,7 +7,7 @@
 -- (no-amplification, conservation, non-omission, anti-substitution) are all
 -- expressible as ordinary SQL over the materialized state.
 --
--- THE SPINE INVARIANT (docs/PG-DREGG.md §8): reads are free SQL; state mutates
+-- THE SPINE INVARIANT (.docs-history-noclaude/PG-DREGG.md §8): reads are free SQL; state mutates
 -- ONLY through verified turns. Every recipe here is a READ. Recipe 7 shows the
 -- WRITE gate (the database engine refusing a tampered turn) for contrast.
 --

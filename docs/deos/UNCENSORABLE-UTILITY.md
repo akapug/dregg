@@ -5,7 +5,7 @@ halt, censor, or bias — because the service IS a proof-carrying turn on a ledg
 nobody owns, decided by a confined brain whose honesty is attested and finalized
 by an independent quorum.*
 
-> Companion docs: `docs/deos/HERMES-INTEGRATION.md` (the crown / confined+attested
+> Companion docs: `docs/SUPERSEDED/HERMES-INTEGRATION.md` (the crown / confined+attested
 > brain) · `docs/deos/FORKABLE-CONFINED-SESSION.md` (scale-is-fork) ·
 > `docs/deos/GRAIN-CONFINED-BODY.md` (the OS jail) ·
 > `docs/deos/DEV-NODE-RUNBOOK.md` + `docs/deos/HOMELAB-N3-RUNBOOK.md` (standing up

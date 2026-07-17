@@ -89,7 +89,7 @@ in-memory ack: a crash between the digest commit and the turn's `CommitRecord` l
 durably burned while the turn is absent — the SAFE direction (the digest is refused after
 recovery even though the draw never committed; no replay is ever ADMITTED). The CONVERSE — every
 committed turn's digest is durably burned in the same transaction — is exactly the named node
-closure "same-transaction burn weld" (docs/PERSISTENCE.md; HORIZONLOG `Node / runtime`). The
+closure "same-transaction burn weld" (.docs-history-noclaude/PERSISTENCE.md; HORIZONLOG `Node / runtime`). The
 theorem's `hburn` hypothesis ranges over the durable registry, so it states exactly what
 durable-then-acknowledge guarantees and no more.
 

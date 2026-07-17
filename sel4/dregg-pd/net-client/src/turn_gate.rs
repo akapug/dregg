@@ -9,7 +9,7 @@
 //     signed). We Ed25519-`verify_strict` the signature over the message under
 //     the embedded key. ACCEPTED only if the check passes — this is the seL4
 //     net-PD enforcing "signature-bad turns never reach the verified core"
-//     (docs/SEL4-EMBEDDING.md §4). On accept we'd hand the message to the
+//     (.docs-history-noclaude/SEL4-EMBEDDING.md §4). On accept we'd hand the message to the
 //     executor PD; here (no executor PD on the bare target yet) we reply with
 //     the verdict so the gate is observable over the wire.
 //
@@ -57,7 +57,10 @@ pub fn handle_chunk(chunk: &[u8]) -> GateOutcome {
                 reply.extend_from_slice(b"TURN-ACCEPTED ");
                 push_usize(&mut reply, msg_len);
                 reply.extend_from_slice(b"\n");
-                GateOutcome { reply, accepted: Some(msg.to_vec()) }
+                GateOutcome {
+                    reply,
+                    accepted: Some(msg.to_vec()),
+                }
             }
             Err(why) => {
                 sel4_microkit::debug_println!(
@@ -68,13 +71,19 @@ pub fn handle_chunk(chunk: &[u8]) -> GateOutcome {
                 reply.extend_from_slice(b"TURN-REFUSED ");
                 reply.extend_from_slice(why.as_bytes());
                 reply.extend_from_slice(b"\n");
-                GateOutcome { reply, accepted: None }
+                GateOutcome {
+                    reply,
+                    accepted: None,
+                }
             }
         }
     } else {
         // Plain echo — the bare smoke test. Never an accepted turn.
         sel4_microkit::debug_println!("[net-client] echo {} bytes", chunk.len());
-        GateOutcome { reply: chunk.to_vec(), accepted: None }
+        GateOutcome {
+            reply: chunk.to_vec(),
+            accepted: None,
+        }
     }
 }
 

@@ -4,7 +4,7 @@
 # qemu-system-aarch64/riscv64). Run `./setup.sh` once to install deps + the SDK,
 # then `make run` (aarch64) or `make run-riscv` (riscv64).
 #
-# Boot ladder (docs/SEL4-EMBEDDING.md §5), each an actual QEMU boot:
+# Boot ladder (.docs-history-noclaude/SEL4-EMBEDDING.md §5), each an actual QEMU boot:
 #   make run-m0   — M0: a Rust PD prints "dregg robigalia v0" on seL4.
 #   make run-m1   — M1: the verifier PD (proof-in -> verdict-out contract).
 #   make run-m2   — M2: the rbg DirectoryCell PD (the Robigalia heart).
@@ -34,7 +34,7 @@ QEMU_AARCH64 := qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-
                 -m 2G -nographic
 # The 5-PD assembly's executor seat embeds the verified Lean image (~280 MiB of
 # ELF segments); the loader copies it into RAM, so the assembly needs more guest
-# memory than the single-PD demos. (docs/EMBEDDABLE-LEAN-RUNTIME.md §4.)
+# memory than the single-PD demos. (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §4.)
 QEMU_AARCH64_ASSEMBLY := qemu-system-aarch64 -machine virt,virtualization=on \
                 -cpu cortex-a53 -m 4G -nographic
 QEMU_RISCV   := qemu-system-riscv64 -machine virt -m 2G -nographic
@@ -142,7 +142,7 @@ run-net: build-aarch64
 		-serial mon:stdio
 
 # ── THE 5-PD FIRMAMENT ASSEMBLY (dregg.system) ──────────────────────────────
-# Wire the real PDs into ONE booting multi-PD seL4 image (docs/FIRMAMENT.md §2):
+# Wire the real PDs into ONE booting multi-PD seL4 image (.docs-history-noclaude/FIRMAMENT.md §2):
 #   verifier — dregg-verifier-stark-pd : a REAL BabyBear+BLAKE3+FRI STARK
 #              proved+verified on-device (the bankable verified-compute HEART
 #              ORGAN; anti-ghost teeth fire). Self-contains its proof — no Lean.

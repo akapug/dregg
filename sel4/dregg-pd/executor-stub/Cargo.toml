@@ -1,8 +1,8 @@
 # executor-stub — the firmament HEART seat, held by a minimal placeholder PD
 # until the verified Lean executor (`execFullForestG`) can be cross-compiled for
 # the bare aarch64-sel4-microkit target (THE blocker: the Lean-runtime
-# bottom-half ELF recompile + libuv excision + musl host — docs/SEL4-EMBEDDING.md
-# §2, docs/FIRMAMENT.md §6).
+# bottom-half ELF recompile + libuv excision + musl host — .docs-history-noclaude/SEL4-EMBEDDING.md
+# §2, .docs-history-noclaude/FIRMAMENT.md §6).
 #
 # In the 5-PD assembly (../../dregg.system) this PD occupies the executor seat so
 # the assembly is COMPLETE and BOOTS as a real multi-PD image: it maps the

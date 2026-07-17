@@ -567,7 +567,7 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
 // The deos-native surface — the LOG as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the agent-provenance LOG, re-expressed
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the agent-provenance LOG, re-expressed
 // as a composed deos app and SHIPPED from `src/`. The same operations are ONE
 // [`DeosApp`] ([`provenance_app`] below); the framework wires the rest — per-viewer
 // projection, web-of-cells publish (the LOG cell IS a `dregg://` sturdyref), the

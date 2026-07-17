@@ -5,7 +5,7 @@
 scalar ledger, and `exec_conserves`/`exec_authorized`/`exec_unauthorized_fails` are PROVED over
 that whole-state ℤ. But the concrete dregg2 cell is NOT a scalar — it is `Exec/Value.lean`'s
 schema-keyed record `Value` (named fields, `flatten`/`width`/`conforms`, `flatten_width` PROVED).
-The construction study's single-highest-leverage move (`docs/rebuild/PHASE-CONSTRUCTION.md §1`,
+The construction study's single-highest-leverage move (`.docs-history-noclaude/rebuild/dregg2-design/PHASE-CONSTRUCTION.md §1`,
 "The single highest-leverage next move") is to replace the toy scalar ledger with that
 content-addressed record cell and re-prove the kernel laws over a NAMED FIELD (`balance`) rather
 than the whole-state ℤ — aligning the conserved quantity with `Spec/Conservation`'s domain-typed
@@ -419,7 +419,7 @@ structure RecordKernelState where
   rides THE ONE ROTATION; until then the field is Lean-side only and uncommitted. -/
   heaps : CellId → List (ℤ × ℤ) := fun _ => []
   /-- **THE NULLIFIER ACCUMULATOR ROOT** (VK-epoch flip; the O(1)-wire double-spend frontier,
-  `docs/NULLIFIER-ACCUMULATOR-DESIGN.md` §3/§10). The Poseidon2 sorted-tree root of the spent-note
+  `docs/SUPERSEDED/NULLIFIER-ACCUMULATOR-DESIGN.md` §3/§10). The Poseidon2 sorted-tree root of the spent-note
   nullifier SET — the `Digest8` (`= Fin 8 → ℤ`) the circuit already commits at `nullifier_root`
   @ limb 26. It carries ONLY the commitment; the whole spent-set NEVER crosses the wire (the
   transaction supplies a client-side non-membership + insert witness verified against this root, the

@@ -75,7 +75,7 @@ these named `.mapOp`s/`.memOp`s", splitting the non-arith arm — mechanical.
 ## 2. The per-effect work-list
 
 Common to all 8 (mechanical, per effect):
-- `FriLdtExtract_<effect>` bundle copy-swap (`docs/reference/STARK-COMPLETION-AUTOMATION.md` §1f) with
+- `FriLdtExtract_<effect>` bundle copy-swap (`docs/SUPERSEDED/STARK-COMPLETION-AUTOMATION.md` §1f) with
   the two emptiness facts replaced by the effect's legs from §0;
 - `@mainAirAcceptF_of_floor <descriptor>` instantiation (already ∀ d,
   `AlgoStarkSoundTransferV3.lean:219-245`);

@@ -1,4 +1,4 @@
--- pg-dregg — worked RLS examples (Milestone 1; see docs/PG-DREGG.md §2.2).
+-- pg-dregg — worked RLS examples (Milestone 1; see .docs-history-noclaude/PG-DREGG.md §2.2).
 --
 -- The functions are provided by the pg-dregg extension, backed by dregg-auth's
 -- proven credential core. A token reaches every policy via the `dregg.token`

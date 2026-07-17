@@ -5443,13 +5443,28 @@ pub const CUSTOM_HOST_WIDTH: usize = GRAD_ROT_WIDTH - 28; // 1647 − 4·7 sites
 pub const CUSTOM_COMMIT_TEETH_BASE: usize = CUSTOM_HOST_WIDTH; // 1619..1623
 /// The number of commit-teeth columns (commitment limbs 4..8).
 pub const CUSTOM_COMMIT_TEETH_LEN: usize = 4;
+
+/// **THE APP-ROOT WELD FIELD OCTET (the wide custom leg-emit).** The wide custom descriptor
+/// additionally PUBLISHES the AFTER-block committed `fields[0..8]` octet — the cell's
+/// faithfully-carried field lane-0 limbs the `new8` commitment absorbs — as 8 TAIL PIs, placed
+/// AHEAD of the 16 wide anchors (leg PI count 78 → 86; anchors shift to `[70..86)`). The per-turn
+/// FOLD's app-root arm (`dregg_circuit_prove::ivc_turn_chain` `Some(binding)`) reads
+/// `field[binding.field_key]` from this octet and connects it to the custom sub-proof's published
+/// root `R`, forcing `R == field[K]`. Byte-pinned to the Lean `withAfterOctetPins customV3 4`
+/// emit and to `dregg_circuit_prove::ivc_turn_chain::CUSTOM_APP_FIELD_OCTET_LEN`.
+pub const CUSTOM_APP_FIELD_OCTET_LEN: usize = 8;
+/// In-block offset of the AFTER rotated block's `fields[0..8]` lane-0 octet: the field registers
+/// r3..r10 sit at in-block offsets `4..12` (Lean `weldsAt base+4 ↔ state.FIELD_BASE`). The absolute
+/// after-block field column is [`AFTER_BASE`] `+ CUSTOM_APP_FIELD_ROT_BASE + i`.
+pub const CUSTOM_APP_FIELD_ROT_BASE: usize = 4;
 /// The custom member's host width INCLUDING the commit teeth — the base the wide
 /// carrier appendix is appended at (wide trace = 1623 + 960 = 2583; the deployed
 /// wide member additionally carries the gentian bare-refuse block past that).
 pub const CUSTOM_HOST_WIDTH_TEETH: usize = CUSTOM_HOST_WIDTH + CUSTOM_COMMIT_TEETH_LEN; // 1623
 
 /// **THE WIDE custom trace generator (`customVmDescriptor2R24`, host 1623 incl the
-/// commit teeth / 62 base PIs + 16 wide anchors = 78).**
+/// commit teeth / 70 base PIs [46 rot + 12 exposure + 4 rc + 8 app-root field octet] + 16 wide
+/// anchors = 86).**
 ///
 /// Lay the wide custom row for a [`Effect::Custom`] lead. The descriptor's
 /// `proof_bind` op names two row columns, and (the VK epoch + the proof-bind
@@ -5551,14 +5566,36 @@ pub fn generate_rotated_custom_wide(
             base_pis.push(r0[PARAM_BASE + param::CUSTOM_VK_HASH_BASE + k]); // PI 54..57
         }
         base_pis.extend_from_slice(&rc_tail); // PI 58..61: the dsl rc tail
+
+        // THE APP-ROOT WELD LEG-EMIT (Lean `withAfterOctetPins customV3 4`): publish the AFTER-block
+        // committed `fields[0..8]` octet — the faithfully-carried field lane-0 limbs the `new8`
+        // commitment absorbs — as 8 TAIL PIs (slots 62..69), AHEAD of the 16 wide anchors. These are
+        // `.piBinding .last` pins, so read the AFTER rotated block's field registers r3..r10
+        // (`AFTER_BASE + CUSTOM_APP_FIELD_ROT_BASE + k`, cols 431..438) on the LAST row (the rotated
+        // block is producer-filled uniformly). The fold's app-root arm reads `field[field_key]` from
+        // this octet and connects it to the sub-proof's published root R (`field[K] == R`).
+        let last = trace
+            .last()
+            .expect("custom wide trace has at least one row");
+        for k in 0..CUSTOM_APP_FIELD_OCTET_LEN {
+            base_pis.push(last[AFTER_BASE + CUSTOM_APP_FIELD_ROT_BASE + k]); // PI 62..69
+        }
     }
-    debug_assert_eq!(base_pis.len(), ROT_PI_COUNT + 12 + DFA_RC_LEN); // 46 base + 12 custom + 4 rc = 62
+    // 46 base + 12 custom exposure + 4 rc + 8 app-root field octet = 70
+    debug_assert_eq!(
+        base_pis.len(),
+        ROT_PI_COUNT + 12 + DFA_RC_LEN + CUSTOM_APP_FIELD_OCTET_LEN
+    );
     let dpis = append_wide_carriers(&mut trace, base_pis, CUSTOM_HOST_WIDTH_TEETH);
     debug_assert_eq!(
         trace[0].len(),
         CUSTOM_HOST_WIDTH_TEETH + 2 * WIDE_NUM_CARRIERS * 8
     );
-    debug_assert_eq!(dpis.len(), ROT_PI_COUNT + 12 + DFA_RC_LEN + 16); // 62 + 16 wide = 78
+    // 70 + 16 wide anchors = 86 (anchors at [70..86))
+    debug_assert_eq!(
+        dpis.len(),
+        ROT_PI_COUNT + 12 + DFA_RC_LEN + CUSTOM_APP_FIELD_OCTET_LEN + 16
+    );
     Ok((trace, dpis))
 }
 

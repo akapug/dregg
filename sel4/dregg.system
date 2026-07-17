@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   dregg.system — THE 6-PD firmament assembly. The §1 "decomposed system" of
-  docs/SEL4-EMBEDDING.md, realized as a REAL booting multi-PD seL4 image: six
+  .docs-history-noclaude/SEL4-EMBEDDING.md, realized as a REAL booting multi-PD seL4 image: six
   protection domains whose seL4 capability partition IS the trust boundary the
   node's crate-split gestures at ("capabilities all the way down",
-  docs/FIRMAMENT.md §2).
+  .docs-history-noclaude/FIRMAMENT.md §2).
 
   THE INGRESS PATH IS CLOSED (2026-06-24): a SignedTurn arriving on TCP :5555 is
   Ed25519-checked by the net_client (ingress) PD, staged into turn_in, and handed
@@ -20,7 +20,7 @@
     verifier  — dregg-verifier-stark-pd : the REAL plonky3 STARK
                 (BabyBear+BLAKE3+FRI), proved + verified ON-DEVICE with the
                 anti-ghost tooth. The firmament's bankable verified-compute HEART
-                ORGAN (docs/FIRMAMENT.md §6) — no Lean, no libuv, no GMP.
+                ORGAN (.docs-history-noclaude/FIRMAMENT.md §6) — no Lean, no libuv, no GMP.
     executor  — dregg-executor-microkit-pd : the HEART, REAL. EMBEDS the VERIFIED
                 Lean executor (`dregg_exec_full_forest_auth` = `execFullForestG` +
                 admission, proved in `metatheory/`). Its Microkit handler reads
@@ -35,7 +35,7 @@
                 (sole holder). redb-over-block-cap is the §3 port.
     net       — dregg-net-driver-pd     : the EDGE DRIVER. SOLE holder of the NIC
                 cap + the virtio-mmio region + the DMA paddr + IRQ 79. Probes a
-                real virtio-net device and brings the NIC UP (docs/FIRMAMENT.md §6,
+                real virtio-net device and brings the NIC UP (.docs-history-noclaude/FIRMAMENT.md §6,
                 M3) — the distributed end (n>1) of the cap gradation (§3).
     net_client— dregg-net-client-pd     : the INGRESS edge (the firmament's ear).
                 The smoltcp TCP/IP PD: DHCP, listens on TCP :5555, Ed25519-checks a
@@ -45,7 +45,7 @@
     app       — dregg-rbg-dir           : a houyhnhnm app-PD. The rbg
                 DirectoryCell (CAS swap + membership ACL + factory slot-caveat →
                 seL4_Untyped_Retype). Holds only its own caps — no ambient
-                authority (docs/FIRMAMENT.md §5).
+                authority (.docs-history-noclaude/FIRMAMENT.md §5).
 
   The executor seat now runs the VERIFIED Lean executor (the §2 Lean-ELF port is
   CLEARED — folded from ../executor-rootserver); the persist seat remains a
@@ -94,7 +94,7 @@
     <!-- The net EDGE's device + DMA + ring regions. The virtio-mmio region is a
          DEVICE region (phys_addr pinned to where QEMU places -device
          virtio-net-device: mmio slot 31, base 0xa003000). These live ONLY in the
-         net PD — it is the sole holder of the NIC cap (docs/FIRMAMENT.md §2). -->
+         net PD — it is the sole holder of the NIC cap (.docs-history-noclaude/FIRMAMENT.md §2). -->
     <memory_region name="virtio_mmio" size="0x1000" phys_addr="0xa003000" />
     <memory_region name="virtio_net_driver_dma" size="0x200_000" page_size="0x200_000" />
     <memory_region name="virtio_net_client_dma" size="0x200_000" page_size="0x200_000" />
@@ -125,7 +125,7 @@
          verifier (ch 3). The musl + libuv-excised Lean-ELF hosting proven in
          ../executor-rootserver (one verified turn under seL4 → status:2 ok:1) is
          folded into this PD seat (executor-microkit-pd, the firmament keystone /
-         WALL step 4 assembled — docs/EMBEDDABLE-LEAN-RUNTIME.md §4). Exact cap
+         WALL step 4 assembled — .docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §4). Exact cap
          partition: turn_in (R), commit_out (RW), NOTHING else (no device/NIC
          cap). The verified turn reading turn_in and writing commit_out IS the
          partition, enforced. A larger stack (the Lean runtime's C++ ctors + the
@@ -185,7 +185,7 @@
          PD: net_client  — the INGRESS edge (the firmament's ear). The smoltcp
          TCP/IP PD: acquires an IPv4 address by DHCP, listens on TCP :5555, and on
          each chunk Ed25519-`verify_strict`-checks a SignedTurn envelope BEFORE the
-         turn crosses into the verified executor (docs/SEL4-EMBEDDING.md §4). It
+         turn crosses into the verified executor (.docs-history-noclaude/SEL4-EMBEDDING.md §4). It
          shares the ring buffers + the client DMA region with the driver PD (the
          `Provide` role to the driver's `Use`); a plain line is echoed (the bare
          smoke test). On ACCEPT it STAGES the verified turn bytes into turn_in

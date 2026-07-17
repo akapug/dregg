@@ -84,6 +84,23 @@ fn effect_executor_coverage(e: &Effect) -> bool {
         Effect::Promise { .. } => false,
         Effect::Notify { .. } => false,
         Effect::React { .. } => false,
+        // ShieldedTransfer: PRE-EXISTING HOLE, surfaced 2026-07-16. This arm was never
+        // added when the variant landed, so this whole test target FAILED TO COMPILE and
+        // was silently out of the build — the exact disease its sibling
+        // `tests/src/every_variant_roundtrip.rs` documents for the same variant. The gate
+        // is restored here. Coverage is honestly `false`: no executor-invoking test drives
+        // a shielded transfer today (only the every_variant_roundtrip no-panic smoke).
+        Effect::ShieldedTransfer { .. } => false,
+        // THE CUSTOM-VK DOOR (landed 2026-07-16): the classical-path REFUSAL is
+        // driven end-to-end (a turn carrying `Effect::Custom` with no
+        // `execution_proof` is refused fail-closed by the executor). The ACCEPT
+        // flow — a turn carrying a valid custom sub-proof + rotated custom
+        // execution_proof COMMITS — is exercised by an `#[ignore]`d fold test
+        // (the rotated STARK is minutes-slow, run `--ignored` on the build box),
+        // so per the honesty contract (under-claim until a dedicated non-ignored
+        // accept+reject coverage suite gates it through `TurnExecutor::execute`)
+        // this stays `false` until that fold runs in CI.
+        Effect::Custom { .. } => false,
     }
 }
 
@@ -95,15 +112,23 @@ const NOT_YET_COVERED: &[&str] = &[
     "Promise",
     "Notify",
     "React",
+    "ShieldedTransfer",
+    "Custom",
 ];
 
 /// Ratchet: the number of not-yet-covered `Effect` variants may only DECREASE.
 ///
 /// History: 2 → 6 when the cell-program-install (`SetProgram`) and partial-turn/
 /// reactor (`Promise`/`Notify`/`React`) effect vocabulary landed without a
-/// dedicated accept/reject coverage flow; shrink back as each gains a
-/// coverage_* suite that drives it through `TurnExecutor::execute`.
-const MAX_UNCOVERED_EFFECTS: usize = 6;
+/// dedicated accept/reject coverage flow; 6 → 8 on 2026-07-16 when this target was
+/// RESTORED TO THE BUILD (it had stopped compiling when `ShieldedTransfer` landed
+/// without an arm, so the ratchet had silently not been gating anything) and the
+/// Custom-VK door (`Effect::Custom`) landed with its ACCEPT flow behind an
+/// `#[ignore]`d rotated-STARK fold. Neither addition is new debt discovered by
+/// loosening the ratchet — `ShieldedTransfer` was always uncovered; the gate just
+/// could not say so. Shrink back as each gains a coverage_* suite that drives it
+/// through `TurnExecutor::execute` (Custom: once the accept fold runs in CI).
+const MAX_UNCOVERED_EFFECTS: usize = 8;
 
 #[test]
 fn effect_coverage_ratchet_only_shrinks() {

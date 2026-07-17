@@ -518,9 +518,14 @@ impl AgentCipherclerk {
         }
         .bind(state_root);
         let bridge_predicate = Self::predicate_type_to_bridge(predicate_type, threshold.as_u32());
+        // A FRESH blinding factor per proof: the fact commitment is
+        // `hash_4_to_1([fact_hash, state_root, blinding, 0])`, so two showings of the same attribute
+        // emit DIFFERENT commitments (unlinkable) while the in-circuit weld keeps each bound to the
+        // value compared (sound).
         let predicate_proof = dregg_bridge::prove_predicate_for_fact(
             attribute_value,
             binding,
+            dregg_bridge::present::fresh_predicate_blinding(),
             &bridge_predicate,
         )
         .ok_or_else(|| {

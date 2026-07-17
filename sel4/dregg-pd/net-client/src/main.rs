@@ -1,6 +1,6 @@
 //
-// net-client — the firmament's network edge, CLIENT half (docs/FIRMAMENT.md §3,
-// §6; docs/SEL4-EMBEDDING.md §4).
+// net-client — the firmament's network edge, CLIENT half (.docs-history-noclaude/FIRMAMENT.md §3,
+// §6; .docs-history-noclaude/SEL4-EMBEDDING.md §4).
 //
 // This PD turns "the NIC is up" into "a turn arrives over TCP". It runs a
 // smoltcp Interface over the shared ring buffers it shares with the driver PD
@@ -38,8 +38,7 @@ use sel4_abstract_allocator::WithAlignmentBound;
 use sel4_abstract_allocator::basic::BasicAllocator;
 use sel4_driver_interfaces::net::GetNetDeviceMeta;
 use sel4_microkit::{
-    ChannelSet, Handler, Infallible, debug_println, memory_region_symbol,
-    protection_domain,
+    ChannelSet, Handler, Infallible, debug_println, memory_region_symbol, protection_domain,
 };
 use sel4_microkit_driver_adapters::net::client::Client as NetClient;
 use sel4_shared_memory::SharedMemoryRef;
@@ -140,7 +139,9 @@ impl EdgeHandler {
         self.service_tcp();
 
         // Re-poll so any bytes we queued onto the TCP socket egress promptly.
-        let _ = self.iface.poll(self.now(), &mut self.device, &mut self.sockets);
+        let _ = self
+            .iface
+            .poll(self.now(), &mut self.device, &mut self.sockets);
 
         // Self-sustaining poll while we still need a DHCP lease: kick the driver
         // so it flushes our just-queued TX (the DISCOVER/REQUEST) and notifies
@@ -229,7 +230,10 @@ impl EdgeHandler {
         framed[2] = ((len >> 16) & 0xff) as u8;
         framed[3] = ((len >> 24) & 0xff) as u8;
         framed[4..].copy_from_slice(msg);
-        self.turn_in.as_mut_ptr().index(0..total).copy_from_slice(&framed);
+        self.turn_in
+            .as_mut_ptr()
+            .index(0..total)
+            .copy_from_slice(&framed);
 
         debug_println!(
             "[net-client] staged {} turn bytes into turn_in; signalling executor (ch 1)",

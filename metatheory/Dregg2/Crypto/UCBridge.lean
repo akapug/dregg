@@ -52,7 +52,7 @@ single-kernel Lean proof: the trust spans two kernels + the transport fidelity.
 real, already-proven `Sigma_Commit_Crypto` theorems. CAVEAT: the green build was NOT reproduced on
 the dev machine — the local AFP checkout (`afp-devel`) is an Isabelle-*dev* revision incompatible
 with Isabelle2025-RC3 at the ML/proof-automation level; it needs the RC3-matched AFP. See
-`docs/rebuild/PHASE-UC-TRANSPORT.md §3` for the exact obstruction. The Pedersen security itself is
+`.docs-history-noclaude/rebuild/metatheory/PHASE-UC-TRANSPORT.md §3` for the exact obstruction. The Pedersen security itself is
 long-established in the AFP; what is blocked is recompiling that AFP under this release candidate.
 
 ## Axiom hygiene.

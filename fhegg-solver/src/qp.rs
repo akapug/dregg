@@ -32,16 +32,21 @@
 //!
 //! ## The certificate (§2.3, the QP Fenchel-gap specialization)
 //!
-//! A convex-QP optimum is certified by a primal-dual pair `(x, y)` with vanishing
-//! KKT residual — the QP analogue of Cert-F, still linear/quadratic-then-linear:
+//! A convex-QP optimum is certified by a primal-dual pair `(x, y)` satisfying the
+//! complete KKT system — the QP analogue of Cert-F, still linear/quadratic-then-linear:
 //!
 //! ```text
 //!   primal:  (A x − u)₊ = 0  and  (l − A x)₊ = 0        (l ≤ A x ≤ u)
 //!   dual:    P x + q + Aᵀy = 0                          (stationarity)
+//!   normal:  y ∈ N_[l,u](Ax)                            (sign + complementarity)
 //! ```
 //!
-//! Both residuals → 0 certify ε-optimality INDEPENDENT of how `(x, y)` were found
-//! (untrusted search, checked certificate). [`CertQp::check`] validates them.
+//! For a symmetric PSD `P`, all three residuals → 0 certify optimality INDEPENDENT
+//! of how `(x, y)` were found (untrusted search, checked certificate).
+//! [`CertQp::check`] validates the residuals; the public-program layer must pin the
+//! convexity/PSD fact.  The
+//! normal-cone check is load-bearing: primal feasibility plus stationarity alone can
+//! be forged at a suboptimal point by choosing a dual with the wrong bound sign.
 
 use serde::Serialize;
 
@@ -319,10 +324,13 @@ pub struct CertQp {
 /// The QP certificate check report.
 #[derive(Clone, Debug, Serialize)]
 pub struct CertQpReport {
+    pub well_formed: bool,
     pub primal_feasible: bool,
     pub dual_feasible: bool,
+    pub normal_cone: bool,
     pub prim_res: f64,
     pub dual_res: f64,
+    pub normal_res: f64,
     pub tol: f64,
     pub valid: bool,
 }
@@ -346,9 +354,45 @@ impl CertQp {
         }
     }
 
-    /// Validate the KKT residual against `epsilon` (recomputed from `(x,y)` — a
-    /// checker does not trust the stored residuals).
+    /// Validate the complete KKT residual against `epsilon` (recomputed from
+    /// `(x,y)` — a checker does not trust the stored residuals).
     pub fn check(&self) -> CertQpReport {
+        let p_len = self.n.checked_mul(self.n);
+        let a_len = self.mc.checked_mul(self.n);
+        let all_finite = self
+            .p
+            .iter()
+            .chain(&self.q)
+            .chain(&self.a)
+            .chain(&self.l)
+            .chain(&self.u)
+            .chain(&self.x)
+            .chain(&self.y)
+            .all(|v| v.is_finite());
+        let well_formed = p_len == Some(self.p.len())
+            && self.q.len() == self.n
+            && a_len == Some(self.a.len())
+            && self.l.len() == self.mc
+            && self.u.len() == self.mc
+            && self.x.len() == self.n
+            && self.y.len() == self.mc
+            && self.epsilon.is_finite()
+            && self.epsilon >= 0.0
+            && all_finite
+            && self.l.iter().zip(&self.u).all(|(l, u)| l <= u);
+        if !well_formed {
+            return CertQpReport {
+                well_formed: false,
+                primal_feasible: false,
+                dual_feasible: false,
+                normal_cone: false,
+                prim_res: f64::INFINITY,
+                dual_res: f64::INFINITY,
+                normal_res: f64::INFINITY,
+                tol: self.epsilon,
+                valid: false,
+            };
+        }
         let prob = QpProblem {
             n: self.n,
             p: self.p.clone(),
@@ -358,16 +402,48 @@ impl CertQp {
             u: self.u.clone(),
             mc: self.mc,
         };
+        let ax = prob.a_times(&self.x);
+        let px = prob.p_times(&self.x);
+        let aty = prob.at_times(&self.y);
+        let arithmetic_finite = ax.iter().all(|v| v.is_finite())
+            && px.iter().all(|v| v.is_finite())
+            && aty.iter().all(|v| v.is_finite())
+            && (0..self.n).all(|j| (px[j] + self.q[j] + aty[j]).is_finite())
+            && (0..self.mc).all(|r| (ax[r] + self.y[r]).is_finite());
+        if !arithmetic_finite {
+            return CertQpReport {
+                well_formed: false,
+                primal_feasible: false,
+                dual_feasible: false,
+                normal_cone: false,
+                prim_res: f64::INFINITY,
+                dual_res: f64::INFINITY,
+                normal_res: f64::INFINITY,
+                tol: self.epsilon,
+                valid: false,
+            };
+        }
         let recomputed = finalize_qp(&prob, self.x.clone(), self.y.clone(), 0);
+        // y ∈ N_[l,u](z) iff z = projection_[l,u](z + y).  This single
+        // projection residual enforces lower-bound y≤0, upper-bound y≥0,
+        // interior y=0, and leaves equality-row duals free.
+        let normal_res = (0..self.mc).fold(0.0f64, |m, r| {
+            let projected = (ax[r] + self.y[r]).clamp(self.l[r], self.u[r]);
+            m.max((ax[r] - projected).abs())
+        });
         let primal_feasible = recomputed.prim_res <= self.epsilon;
         let dual_feasible = recomputed.dual_res <= self.epsilon;
+        let normal_cone = normal_res <= self.epsilon;
         CertQpReport {
+            well_formed,
             primal_feasible,
             dual_feasible,
+            normal_cone,
             prim_res: recomputed.prim_res,
             dual_res: recomputed.dual_res,
+            normal_res,
             tol: self.epsilon,
-            valid: primal_feasible && dual_feasible,
+            valid: primal_feasible && dual_feasible && normal_cone,
         }
     }
 
@@ -454,6 +530,71 @@ mod tests {
         let mut cert = CertQp::from_solution(&prob, &res, 1e-3);
         cert.x[0] += 0.5; // break budget + stationarity
         assert!(!cert.check().valid, "tampered QP solution must be rejected");
+    }
+
+    #[test]
+    fn forged_wrong_sign_dual_is_rejected() {
+        // min 1/2 x² - x on [0,2] has optimum x=1.  At the suboptimal lower
+        // bound x=0, forged y=+1 cancels the gradient, so the OLD checker saw
+        // prim_res=dual_res=0 and accepted at epsilon=0.  Lower-bound KKT duals
+        // must be non-positive: the normal-cone residual catches the forgery.
+        let prob = QpProblem {
+            n: 1,
+            p: vec![1.0],
+            q: vec![-1.0],
+            a: vec![1.0],
+            l: vec![0.0],
+            u: vec![2.0],
+            mc: 1,
+        };
+        let forged = finalize_qp(&prob, vec![0.0], vec![1.0], 0);
+        assert_eq!(forged.prim_res, 0.0);
+        assert_eq!(forged.dual_res, 0.0);
+        let cert = CertQp::from_solution(&prob, &forged, 0.0);
+        let report = cert.check();
+        assert_eq!(report.normal_res, 1.0);
+        assert!(!report.normal_cone);
+        assert!(
+            !report.valid,
+            "wrong-sign dual must not certify a suboptimal point"
+        );
+    }
+
+    #[test]
+    fn nonfinite_certificate_fails_closed() {
+        let (cov, mu) = instance(3);
+        let prob = markowitz(&cov, &mu, 1.0, 1.0);
+        let res = solve_admm(&prob, 2000, 1.0, 1e-6, 1.6);
+        let mut cert = CertQp::from_solution(&prob, &res, 1e-3);
+        cert.x[0] = f64::NAN;
+        let report = cert.check();
+        assert!(!report.well_formed);
+        assert!(!report.valid);
+    }
+
+    #[test]
+    fn overflowing_certificate_fails_closed() {
+        let prob = QpProblem {
+            n: 1,
+            p: vec![f64::MAX],
+            q: vec![0.0],
+            a: vec![1.0],
+            l: vec![0.0],
+            u: vec![f64::MAX],
+            mc: 1,
+        };
+        let res = QpResult {
+            x: vec![f64::MAX],
+            y: vec![0.0],
+            objective: 0.0,
+            prim_res: 0.0,
+            dual_res: 0.0,
+            iters: 0,
+        };
+        let cert = CertQp::from_solution(&prob, &res, 0.0);
+        let report = cert.check();
+        assert!(!report.well_formed);
+        assert!(!report.valid);
     }
 
     #[test]

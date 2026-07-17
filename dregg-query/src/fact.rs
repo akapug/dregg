@@ -1,4 +1,4 @@
-//! The ground-fact schema — the EDB of docs/EPISTEMIC-DATALOG.md.
+//! The ground-fact schema — the EDB of .docs-history-noclaude/EPISTEMIC-DATALOG.md.
 //!
 //! Ground predicates extracted from the receipt graph + cell state:
 //!

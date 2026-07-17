@@ -42,7 +42,7 @@ metering"* (`execute.rs:203`).
 
 **Lean-status.** **NO `TurnExecutor::execute = recKExec` theorem exists.** The Rust executor is
 not specified in Lean; only the *Lean* executor is, and it is proven `Exec ⊑ Spec`
-(`docs/reference/lean-kernel.md:164`, `Spec/ExecRefinement.lean`). The Rust↔Lean link is
+(`docs/reference/lean-kernel.md:164`, `metatheory/Dregg2/Spec/ExecRefinement.lean`). The Rust↔Lean link is
 **audited + differential parity**, not proven equality — stated outright at
 `docs/RUST-LEAN-EXECUTOR-PARITY.md:20`. Evidence: the rejection-parity audit
 (`exec-lean/tests/rejection_parity.rs`, hard-fails only the dangerous Rust-accepts-Lean-rejects
@@ -184,11 +184,11 @@ non-membership (`circuit/src/non_membership.rs`, `circuit/src/membership_adjacen
 **Lean-status.** The Poseidon2 permutation is an **ABSTRACT CARRIER**: `compress`/`compressN` are
 uninterpreted with only a `collisionHard : Prop` law (`metatheory/Dregg2/Crypto/Primitives.lean`),
 discharged at the real params via the named hypothesis `Poseidon2SpongeCR`
-(`Circuit/Poseidon2Binding.lean`). The real round constants are not evaluated in Lean; they live
+(`metatheory/Dregg2/Circuit/Poseidon2Binding.lean`). The real round constants are not evaluated in Lean; they live
 as `rc_source: BABYBEAR_POSEIDON2_RC_16` consumed by the Rust prover. The sponge→permutation CR
 reduction IS done (`Crypto/SpongeReduction.lean`, `#assert_axioms`-clean), shrinking the
 irreducible primitive to "one fixed-width permutation is collision-resistant." The **trees are
-MODELED**: cap-tree (`Circuit/DeployedCapTree.lean`, `DeployedCapOpen.lean`, `CapRootBridge.lean`),
+MODELED**: cap-tree (`metatheory/Dregg2/Circuit/DeployedCapTree.lean`, `DeployedCapOpen.lean`, `CapRootBridge.lean`),
 heap tree (`Substrate/Heap.lean`, `MapMerkleRoot.lean`), sorted non-membership
 (`SortedTreeNonMembership.lean`) — with declared Rust twins and proven membership/non-amplification
 gates. Permutation conformance to the audited Plonky3 reference is pinned byte-for-byte by KAT

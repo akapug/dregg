@@ -1,4 +1,4 @@
-# net-client — M3 the firmament's network edge, the CLIENT half (docs/FIRMAMENT.md
+# net-client — M3 the firmament's network edge, the CLIENT half (.docs-history-noclaude/FIRMAMENT.md
 # §3, §6): the smoltcp TCP/IP PD that turns "the NIC is up" into "a turn arrives
 # over TCP". It is the distributed END of the capability gradation.
 #
@@ -11,7 +11,7 @@
 # SignedTurn-shaped envelope BEFORE it would ever reach the executor — the
 # seL4-enforced form of "the net-PD de-envelopes + Ed25519-checks a SignedTurn
 # before handing the turn to the executor; bad signatures never reach the heart"
-# (docs/SEL4-EMBEDDING.md §4).
+# (.docs-history-noclaude/SEL4-EMBEDDING.md §4).
 #
 # Built on the rust-sel4 `sel4-shared-ring-buffer-smoltcp::DeviceImpl` (the
 # canonical multi-PD net substrate; same crates the http-server example uses),

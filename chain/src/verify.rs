@@ -17,6 +17,16 @@ use crate::prove::EvmProof;
 /// # Returns
 /// `true` if the proof verified on-chain, `false` if the verifier reverted.
 ///
+/// # Behavior by feature (fail-closed, mirroring [`crate::wrap_for_evm`])
+/// * `on-chain`: the real contract call via alloy.
+/// * `mock` (without `on-chain`): a SIMULATED structural check for tests. Must be
+///   opted into — it trusts the proof's own committed `valid` bit, so it accepts
+///   any consistently-minted fake by design.
+/// * neither: returns [`ChainError::VerifierMissing`]. The default build NEVER
+///   silently substitutes a simulated verification for a real one. (It used to:
+///   the mock path rode `not(on-chain)`, so a default build "verified" a minted
+///   fake by decoding its self-declared `valid` bit — found 2026-07-16.)
+///
 /// # On-Chain Gas Cost
 /// A Groth16/BN254 verifier costs ~250-300k gas per proof (one EIP-197 pairing).
 /// This is constant regardless of the complexity of the wrapped computation.
@@ -30,15 +40,23 @@ pub async fn verify_on_chain(
         return real_verify_on_chain(proof, rpc_url, verifier_address).await;
     }
 
-    #[cfg(not(feature = "on-chain"))]
+    #[cfg(all(feature = "mock", not(feature = "on-chain")))]
     {
-        mock_verify_on_chain(proof, rpc_url, verifier_address).await
+        return mock_verify_on_chain(proof, rpc_url, verifier_address).await;
+    }
+
+    #[cfg(all(not(feature = "mock"), not(feature = "on-chain")))]
+    {
+        let _ = (proof, rpc_url, verifier_address);
+        Err(ChainError::VerifierMissing)
     }
 }
 
-/// Mock on-chain verification for testing.
-/// Validates proof structure without actually calling a contract.
-#[cfg(not(feature = "on-chain"))]
+/// Mock on-chain verification for testing (`mock` feature only, like the mock
+/// provers). Validates proof structure without actually calling a contract,
+/// then returns the proof's own committed `valid` bit — meaningful ONLY for
+/// proofs minted by this crate's own mock wrap path in tests.
+#[cfg(all(feature = "mock", not(feature = "on-chain")))]
 async fn mock_verify_on_chain(
     proof: &EvmProof,
     _rpc_url: &str,
@@ -165,6 +183,31 @@ pub fn format_calldata(proof: &EvmProof) -> Result<Vec<u8>, ChainError> {
 mod tests {
     use super::*;
 
+    /// THE DEFAULT-BUILD TOOTH: with neither `on-chain` nor `mock`, a
+    /// consistently-minted fake proof (structurally valid, self-declared
+    /// `valid = true`) must be REJECTED fail-closed. Before 2026-07-16 this
+    /// exact input returned `Ok(true)` in the default build — verification by
+    /// reading the attacker's own bit.
+    #[cfg(all(not(feature = "on-chain"), not(feature = "mock")))]
+    #[tokio::test]
+    async fn test_verify_fails_closed_without_verifier() {
+        let public_values = bincode::serialize(&(true, vec![12345u32, 67890])).unwrap();
+        let minted_fake = EvmProof {
+            proof_bytes: vec![1, 2, 3, 4],
+            public_values,
+            vkey: "deadbeef".repeat(4),
+            verifier_address: crate::MOCK_VERIFIER_ADDRESS.to_string(),
+        };
+        let result = verify_on_chain(
+            &minted_fake,
+            "http://localhost:8545",
+            &minted_fake.verifier_address,
+        )
+        .await;
+        assert!(matches!(result.unwrap_err(), ChainError::VerifierMissing));
+    }
+
+    #[cfg(all(feature = "mock", not(feature = "on-chain")))]
     #[tokio::test]
     async fn test_mock_verify_cases() {
         let public_values = bincode::serialize(&(true, vec![12345u32, 67890])).unwrap();

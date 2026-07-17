@@ -2,7 +2,7 @@
 //! real dregg cells, by generalizing the proven [`BufferCell`](crate::buffer)
 //! two-tier split.
 //!
-//! `docs/deos/REFLEXIVE-MIGRATION.md` §3 names the keystone: promote the
+//! `.docs-history-noclaude/deos/REFLEXIVE-MIGRATION.md` §3 names the keystone: promote the
 //! cockpit's ~50 plain-Rust *camera-aim* fields (focus, tab, present-index,
 //! selection, …) into dregg **cells**, so the inspector becomes inspectable, the
 //! UI becomes a witnessed graph, and the tools become objects in the image (the

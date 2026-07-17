@@ -534,7 +534,7 @@ pub fn register(ctx: &StarbridgeAppContext) -> ([u8; 32], [u8; 32]) {
 // The deos-native surface — the POLL + BALLOT as a composed two-cell `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: privacy-voting, re-expressed as a composed
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: privacy-voting, re-expressed as a composed
 // [`DeosApp`] and PROMOTED into `src/` (it lived only in the floor's factory-birth tests).
 // The interaction surface is ONE [`DeosApp`] ([`voting_app`] below) with **TWO cells** —
 // the poll cell (the public tally board) and the ballot cell (the per-voter capability) —

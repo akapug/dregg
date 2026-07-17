@@ -1,5 +1,5 @@
 /**
- * Organs — the v0.3.0 SDK nouns (docs/ORGANS.md) as a live try-it surface.
+ * Organs — the v0.3.0 SDK nouns (.docs-history-noclaude/ORGANS.md) as a live try-it surface.
  *
  * The four organs (trustline · channels · mailbox · attested-query) are the
  * ergonomic faces of node-side services, NOT pure in-browser primitives: a
@@ -371,7 +371,7 @@ const cp    = await aq.checkpoint();      // latest finalized checkpoint</pre>
   section.innerHTML = `
     <div class="pg-section__header">
       <h2>Organs <span class="org-version">@dregg/sdk v0.3.0</span></h2>
-      <p>The four <strong>organs</strong> (docs/ORGANS.md) are the v0.3.0 SDK nouns — bilateral credit, a
+      <p>The four <strong>organs</strong> (.docs-history-noclaude/ORGANS.md) are the v0.3.0 SDK nouns — bilateral credit, a
         hosted inbox, a light-client read, and a group key-epoch lift. They aren't browser-local primitives:
         each is the ergonomic face of a node-side service whose enforcement tooth is the executor-installed
         cell program. This section drives the two stateful organs (<strong>trustline</strong>,

@@ -60,7 +60,7 @@ cargo nextest list -p <crate>                 # list tests without running (vali
   `--release` — these are proof-heavy and **debug mode is the main reason they crawl**
   (the IVC recursion fold is *minutes* in debug). The wrapper is
   `scripts/test-gauntlet.sh heavy-release` (also `default | ci | full | list-heavy`);
-  full detail — the profile table + the heavy-set list — is in `docs/TESTING.md`.
+  full detail — the profile table + the heavy-set list — is in `.docs-history-noclaude/TESTING.md`.
   Offload it to the build node: `scripts/pbuild test scripts/test-gauntlet.sh heavy-release`.
 - A few tests are `#[ignore]`'d outright (e.g. `t3_ivc_root_k2/k3`, "recursion fold
   is slow (minutes)") — run those with `--run-ignored`/`--ignored` only when needed.

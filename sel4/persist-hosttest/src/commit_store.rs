@@ -9,7 +9,7 @@
 //! *before the turn returns* — the `n = 1` **synchronous commit** property
 //! (FIRMAMENT §3 line 135). This module is that store's logic, transport-free, so
 //! the same code runs in the host witness here AND (via `#[path]` include) inside
-//! the persist PD once the redb-over-block-cap backend (`docs/SEL4-EMBEDDING.md`
+//! the persist PD once the redb-over-block-cap backend (`.docs-history-noclaude/SEL4-EMBEDDING.md`
 //! §3) lands under it.
 //!
 //! THE DISCIPLINE IS REUSED, NOT REINVENTED. Every gate below is the EXACT

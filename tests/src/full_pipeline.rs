@@ -195,9 +195,18 @@ fn test_full_private_authorization_pipeline() {
         "verify_presentation_bb should pass with correct BabyBear root"
     );
 
-    // Also verify via the issuer_stark method
-    let stark_result = proof.verify_issuer_stark().unwrap();
-    assert!(stark_result.is_ok(), "verify_issuer_stark should pass");
+    // MIGRATED: `verify_issuer_stark` was removed on the StarkProof -> Ir2BatchProof wire
+    // flip; `verify_presentation_bb` (step 8) IS the cryptographic verification. Require
+    // the real STARK backing, and the wrong-root refusal tooth (non-vacuity of the root
+    // binding — without it the step-8 green could be structural).
+    assert!(
+        proof.has_real_stark_proof(),
+        "a real STARK proof must be attached"
+    );
+    assert!(
+        !verify_presentation_bb(&proof, federation_root_bb + BabyBear::ONE),
+        "verify_presentation_bb must REFUSE a wrong federation root"
+    );
 
     // --- Step 9: Assert verification passes (done above) ---
 

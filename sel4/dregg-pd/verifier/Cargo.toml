@@ -15,7 +15,7 @@
 # closure (dregg-circuit + dregg-turn/captp/federation, ~66 circuit files, 10
 # std-using) must be carried to no_std — Plonky3 itself is already #![no_std]
 # (p3-field etc.), so the port is mechanical-but-large, not blocked. See
-# ../README.md and docs/SEL4-EMBEDDING.md §5.
+# ../README.md and .docs-history-noclaude/SEL4-EMBEDDING.md §5.
 
 [package]
 name = "dregg-verifier-pd"

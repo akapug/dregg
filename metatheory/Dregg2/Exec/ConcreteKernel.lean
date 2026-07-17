@@ -26,7 +26,7 @@ refinement square at this layer. `concreteTransferAsset` (the `balMap`-backed, f
 `concreteTransferAsset_conserves_per_asset` carries `recTotalAsset _ b` conservation FOR EVERY asset
 `b` down to the node-grade state THROUGH the square — plus the cross-asset non-laundering tooth
 (`concreteTransferAsset_no_cross_asset_leak`). The per-asset guarantee does not stop at the abstract
-layer. See `docs/rebuild/_PROOF-INTEGRITY-LEDGER.md` MID-2 (now RESOLVED).
+layer. See `.docs-history-noclaude/rebuild/metatheory/_PROOF-INTEGRITY-LEDGER.md` MID-2 (now RESOLVED).
 
 `CellId = Label = Nat` carries `LawfulBEq` + `LawfulHashable`, so `Std.HashMap.getD_insert`'s
 `if k == a then …` collapses to the abstract `if c = src then …` cleanly — the representation does NOT

@@ -1,6 +1,6 @@
 # rbg → seL4 — from "Robigalia ideas in std Rust" to a real seL4 component
 
-`docs/SEL4-EMBEDDING.md` §0 is honest that `rbg/` is **heritage, not a host**:
+`.docs-history-noclaude/SEL4-EMBEDDING.md` §0 is honest that `rbg/` is **heritage, not a host**:
 it ports Robigalia's *userspace design ideas* (the VFS triple, directory cells,
 scoped intents, factory-constrained creation) into ordinary `std` Rust on the
 dregg runtime, with **no seL4 syscall, no CapDL, no capability-to-kernel-object

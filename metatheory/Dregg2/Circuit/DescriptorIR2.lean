@@ -3,7 +3,7 @@
 
 `Emit/EffectVmEmit.lean` (v1) is a SINGLE-table IR: per-row gates / transitions / boundary pins /
 PI bindings / in-row Poseidon2 hash sites / in-row range teeth over one fixed-width trace. The EPOCH
-design (`docs/EPOCH-DESIGN.md`) makes hashing a BOUNDARY phenomenon: interiors ride lookup arguments
+design (`.docs-history-noclaude/EPOCH-DESIGN.md`) makes hashing a BOUNDARY phenomenon: interiors ride lookup arguments
 into shared tables, so v2 adds exactly the four kinds that blocked the graduation cohort and carry
 the measured 85% lever:
 
@@ -94,7 +94,7 @@ inductive RowSemantics where
   /-- One row per boundary reconciliation: a `(root, key, value, op, new_root)` sorted-map opening. -/
   | mapReconcile
   /-- One row per UNIVERSAL state access: the domain-tagged `Option`-valued offline-checking
-  entry (`docs/UNIVERSAL-MEMORY.md` — the one Blum multiset over `Domain × κ`). -/
+  entry (`.docs-history-noclaude/UNIVERSAL-MEMORY.md` — the one Blum multiset over `Domain × κ`). -/
   | umemAccess
   /-- One row per declared universal address: the `(domain, key)` boundary image
   (init/final `Option` cells), domain-major strictly increasing. -/
@@ -210,7 +210,7 @@ structure MemOp where
   kind       : MemoryChecking.Kind
   deriving Repr
 
-/-! ### The UNIVERSAL memory op (`docs/UNIVERSAL-MEMORY.md` — the one Blum multiset).
+/-! ### The UNIVERSAL memory op (`.docs-history-noclaude/UNIVERSAL-MEMORY.md` — the one Blum multiset).
 
 A `UMemOp` is a state access against the unified `Domain × κ` address space
 (`Dregg2.Crypto.UniversalMemory.UAddr`): the address is the PAIR `(domain, key)` — the domain
@@ -290,7 +290,7 @@ instance : Repr MapOp where
     ", key := " ++ repr m.key ++ ", value := " ++ repr m.value ++
     ", newRoot := " ++ repr (List.ofFn m.newRoot) ++ ", op := " ++ repr m.op ++ " }"
 
-/-! ### The accumulator / recursive-proof-binding op (`docs/EPOCH-DESIGN.md` — the Custom leg).
+/-! ### The accumulator / recursive-proof-binding op (`.docs-history-noclaude/EPOCH-DESIGN.md` — the Custom leg).
 
 The four `Lookup`/`MemOp`/`MapOp`/`UMemOp` kinds are all ROW-LOCAL: a lookup is a table
 membership, a mem/map/umem op is one entry in an offline-checking multiset. NONE can fold in
@@ -715,7 +715,7 @@ theorem satisfied2_init_whole_image (hash : List ℤ → ℤ) (hCR : Poseidon2Sp
 
 /-! ## §6b — `Satisfied2U`: the UNIVERSAL-memory denotation (the one-Blum-multiset leg).
 
-`docs/UNIVERSAL-MEMORY.md`, realized at the IR: a descriptor's `umemOp`s gather into ONE log
+`.docs-history-noclaude/UNIVERSAL-MEMORY.md`, realized at the IR: a descriptor's `umemOp`s gather into ONE log
 over the `Domain × κ` address space with `Option ℤ` cells, certified by ONE balance against a
 declared universal boundary `(uinit, ufin, uaddrs)`. The keystones are direct applications of
 the PROVED `Dregg2.Crypto.UniversalMemory` results:

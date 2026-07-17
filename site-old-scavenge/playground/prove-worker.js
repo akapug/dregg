@@ -1,6 +1,6 @@
 // prove-worker.js — the in-browser proving Web Worker (WEB-FORWARD §(a)).
 //
-// `docs/WEB-FORWARD-EVERYWHERE.md §(a)`: recursive STARK proving in the tab is
+// `.docs-history-noclaude/WEB-FORWARD-EVERYWHERE.md §(a)`: recursive STARK proving in the tab is
 // ~minutes of single-core wasm work; on the MAIN thread it FREEZES the page. This
 // worker moves the heavy `light_client_demo` / `verify_history_against_anchor` /
 // `prove_*` calls OFF the main thread so the UI stays responsive (a spinner

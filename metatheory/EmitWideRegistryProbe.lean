@@ -193,6 +193,19 @@ def main : IO Unit := do
       -- `wideFee_{fee,amount}_forgery_unsat`).
       let feeWide := Dregg2.Circuit.Emit.AvailWideFeeMember.transferFeeAvailWide
       IO.println s!"{key}\t{feeWide.name}\t{emitVmJson2 feeWide}"
+    else if key == "customVmDescriptor2R24" then
+      -- DELIVER #1 — THE APP-ROOT WELD LEG-EMIT (the VK epoch): the wide custom member additionally
+      -- PUBLISHES the AFTER-block `fields[0..8]` octet (`withAfterOctetPins … 4`, cols 431..438 = the
+      -- custom face's after rotated block, exposed at PIs 62..69) AHEAD of the 16 wide anchors (which
+      -- move to 70..85; piCount 78 → 86). The per-turn FOLD's app-root arm connects
+      -- `field[field_key]` to the custom sub-proof's published root R (`field[K] == R`). `bb = 188 =
+      -- EFFECT_VM_WIDTH` (the custom face base), `ab = bb + 239 = 427`. `withAfterOctetPins` adds NO
+      -- columns (only 8 PIs), so the custom wide `traceWidth` is UNCHANGED (a TAIL-APPEND, not a
+      -- geometry widen). The refuse weld (`weldWide`) keys off `traceWidth`, so it is unaffected.
+      let cuHost := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withAfterOctetPins
+        (withDfaRcPins Dregg2.Circuit.Emit.EffectVmEmitRotationV3.customV3) 4
+      let cuWide := wideAppend cuHost 188 (188 + 239)
+      IO.println s!"{key}\t{(weldWide key cuWide).name}\t{emitVmJson2 (weldWide key cuWide)}"
     else
       IO.println s!"{key}\t{(weldWide key d).name}\t{emitVmJson2 (weldWide key d)}"
   -- position 45: `transferCapOpenTB` made 8-felt-wide, RETARGETED to the AVAIL base (the

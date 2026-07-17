@@ -1,4 +1,4 @@
-//! Durable channel rosters (docs/PERSISTENCE.md §3, the roster caveat).
+//! Durable channel rosters (.docs-history-noclaude/PERSISTENCE.md §3, the roster caveat).
 //!
 //! A channel-group cell pins only the roster's COMMITMENT
 //! (`CH_MEMBER_ROOT_SLOT`); the member→seal-pk content is node-held —

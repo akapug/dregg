@@ -247,7 +247,9 @@ impl PeerExchange {
     /// Verify and accept a transition from a peer.
     ///
     /// Checks:
-    /// 1. Signature valid (Ed25519 over canonical fields)
+    /// 1. Signature valid (Ed25519 `verify_strict` over canonical fields —
+    ///    strict because `peer_pubkey` is caller-supplied and non-strict
+    ///    `verify` admits small-order-key universal forgeries)
     /// 2. `old_commitment` matches our `last_known_commitment` for this peer
     /// 3. `sequence == last_sequence + 1` (monotonic, no skips)
     /// 4. `timestamp >= last_updated` (no going back in time)
@@ -283,8 +285,17 @@ impl PeerExchange {
             transition.sequence,
         );
         let signature = ed25519_dalek::Signature::from_bytes(&transition.signature);
+        // STRICT verify (the tree-wide contract: crypto-floor's ed25519.rs, the
+        // executor gates, cell-crypto's own capability_proof.rs / note_bridge.rs
+        // all use verify_strict). This is NOT stylistic here: `peer_pubkey` is
+        // caller-supplied off the wire (wasm agent_verify_peer_transition), NOT
+        // looked up from an enrolled roster, so an attacker picks it. Non-strict
+        // `verify()` is cofactored and accepts small-order public keys, under
+        // which a fixed (R, s) pair verifies for EVERY message — a universal
+        // forgery against an attacker-chosen key. verify_strict refuses
+        // small-order A/R. Rigged: `small_order_pubkey_forgery_rejected_by_strict_verify`.
         verifying_key
-            .verify(&message, &signature)
+            .verify_strict(&message, &signature)
             .map_err(|_| PeerExchangeError::InvalidSignature)?;
 
         // 2. Check old_commitment matches what we last saw.
@@ -707,5 +718,111 @@ mod tests {
             "the identical transition without a v1 proof must verify"
         );
         assert_eq!(bob.peer_commitment(&alice_cell), Some([0xBB; 32]));
+    }
+
+    /// RIGS the assumption: the signature check in `verify_transition` uses the
+    /// STRICT ed25519 primitive (`verify_strict`), matching the rest of the tree
+    /// (crypto-floor's ed25519.rs, the executor gates, cell-crypto's own
+    /// capability_proof.rs / note_bridge.rs). If the code drifts back to
+    /// non-strict `verify()`, THIS TEST GOES RED.
+    ///
+    /// Why it matters HERE specifically: `peer_pubkey` is caller-supplied off the
+    /// wire (`wasm::runtime::agent_verify_peer_transition` decodes it straight
+    /// from an untrusted message), NOT looked up from an enrolled roster. So the
+    /// attacker picks the key. Non-strict `verify()` is cofactored and admits
+    /// small-order public keys, under which a single fixed `(R, s)` pair verifies
+    /// for EVERY message — a universal forgery of the classical half against an
+    /// attacker-chosen key, requiring no peer's private key. This is the exact
+    /// pathology TESTQALOG hunts: an assumption checkable in Rust but, at this
+    /// one site, drifted off the tree's own strict-verify contract.
+    ///
+    /// The forgery construction (verified against ed25519-dalek 2.2.0):
+    ///   A = the Ed25519 identity point (`01 00 .. 00`, order 1 — "small order").
+    ///   Because k·A vanishes, the verification reduces to `[s]B == R`,
+    ///   independent of the message. Take R = the compressed basepoint
+    ///   (`58 66 .. 66`) and s = 1, and `verify()` returns Ok for any message
+    ///   while `verify_strict()` refuses (A is small order). Both facts are
+    ///   asserted below as controls, so the tooth cannot pass vacuously.
+    #[test]
+    fn small_order_pubkey_forgery_rejected_by_strict_verify() {
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+        // Attacker-chosen public key: the identity point (small order 1).
+        let mut atk_pub = [0u8; 32];
+        atk_pub[0] = 0x01;
+
+        // Universal forgery under the non-strict / cofactored verifier.
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes[0] = 0x58; // R = compressed basepoint: 58 66 66 .. 66
+        for b in sig_bytes[1..32].iter_mut() {
+            *b = 0x66;
+        }
+        sig_bytes[32] = 0x01; // s = 1 (little-endian)
+
+        // Receiver has a registered view for the cell the attacker impersonates.
+        let bob_key = test_signing_key(9);
+        let bob_cell = test_cell_id(9);
+        let mut bob = PeerExchange::new(bob_cell, bob_key);
+        let victim_cell = test_cell_id(42);
+        let old_commitment = [0x11; 32];
+        bob.register_peer(victim_cell, old_commitment);
+
+        // A transition that passes EVERY non-signature check: old_commitment
+        // continues bob's view, sequence advances by one, timestamp does not
+        // regress, no v1 proof attached. The signature primitive is the ONLY
+        // thing between the attacker and an accepted forged state install.
+        let transition = PeerStateTransition {
+            cell_id: victim_cell,
+            old_commitment,
+            new_commitment: [0x22; 32], // attacker-chosen next state
+            effects_hash: [0x33; 32],
+            timestamp: 1_000,
+            sequence: 1,
+            signature: sig_bytes,
+            transition_proof: None,
+            unilateral_attestation: None,
+        };
+
+        // CONTROLS — prove the reject below is caused by STRICTNESS alone, not by
+        // a malformed signature or a mismatched field.
+        let message = canonical_message(
+            &transition.old_commitment,
+            &transition.new_commitment,
+            &transition.effects_hash,
+            transition.timestamp,
+            transition.sequence,
+        );
+        let vk = VerifyingKey::from_bytes(&atk_pub).expect("identity point decompresses");
+        let sig = Signature::from_bytes(&sig_bytes);
+        assert!(
+            vk.verify(&message, &sig).is_ok(),
+            "control: the small-order forgery MUST pass non-strict verify(), \
+             else this test does not exercise the strict/non-strict gap"
+        );
+        assert!(
+            vk.verify_strict(&message, &sig).is_err(),
+            "control: verify_strict() must refuse the small-order key"
+        );
+
+        // THE TOOTH: verify_transition must refuse the forgery with
+        // InvalidSignature. It does iff it uses verify_strict. If it drifts to
+        // non-strict verify(), step 1 passes and — every other check being
+        // satisfied — the function returns Ok(()): a universal forgery of a peer
+        // state transition is accepted. This assert then goes RED.
+        let result = bob.verify_transition(&transition, &atk_pub);
+        assert_eq!(
+            result,
+            Err(PeerExchangeError::InvalidSignature),
+            "a small-order-key universal forgery must be refused by the signature \
+             check; accepting it (or reaching a later check) means verify_transition \
+             dropped to non-strict ed25519 verify()"
+        );
+
+        // The rejected forgery must not have advanced bob's view of the victim.
+        assert_eq!(
+            bob.peer_commitment(&victim_cell),
+            Some(old_commitment),
+            "a rejected forgery must not mutate the peer view"
+        );
     }
 }

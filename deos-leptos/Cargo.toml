@@ -115,3 +115,6 @@ path = "src/bin/transclusion_demo.rs"
 [[bin]]
 name = "parallel_source_view"
 path = "src/bin/parallel_source_view.rs"
+
+[lints]
+workspace = true

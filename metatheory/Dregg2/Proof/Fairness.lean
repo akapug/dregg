@@ -7,7 +7,7 @@ alone are the trivial ones (`P now → ◇P`, `□P → ◇P`); a real liveness 
 hypothesis + a measure"* (`Temporal.lean` §"the residue"). This module supplies exactly that —
 but it adopts **van Glabbeek's JUSTNESS**, NOT weak/strong fairness, as the base completeness criterion.
 
-THE DECISION (locked, `docs/rebuild/INTENT-REFS-fairness.md` §3–§4; ember's colleague Rob van Glabbeek):
+THE DECISION (locked, `.docs-history-noclaude/rebuild/metatheory/INTENT-REFS-fairness.md` §3–§4; ember's colleague Rob van Glabbeek):
 adopt **reactive B-JUSTNESS** ([Just] = van Glabbeek, *Justness: A Completeness Criterion …*, FoSSaCS'19,
 Def 6), not fairness. Justness is the unique criterion that is simultaneously *feasible* in a CCS-like
 reactive language (dregg2's executor IS one — fair schedulers are provably unimplementable there,

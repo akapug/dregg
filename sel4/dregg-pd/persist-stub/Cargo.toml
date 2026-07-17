@@ -1,7 +1,7 @@
 # persist-stub — the durable-store PD seat in the 5-PD firmament assembly
 # (../../dregg.system). The real persist-PD is the SOLE holder of the
-# storage-device cap and backs `redb` over a raw block cap (docs/SEL4-EMBEDDING.md
-# §3, docs/FIRMAMENT.md §2) with the snapshot⊕overlay + root tooth
+# storage-device cap and backs `redb` over a raw block cap (.docs-history-noclaude/SEL4-EMBEDDING.md
+# §3, .docs-history-noclaude/FIRMAMENT.md §2) with the snapshot⊕overlay + root tooth
 # (persist/src/snapshot.rs). That backend is the §3 block-cap ecosystem work.
 #
 # This placeholder occupies the persist seat so the assembly boots as a real

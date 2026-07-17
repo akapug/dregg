@@ -44,12 +44,8 @@ pub use composition::{
 };
 
 #[cfg(feature = "plonky3")]
-pub mod dsl_plonky3;
-
 // Re-export Plonky3 DSL proving API.
 #[cfg(feature = "plonky3")]
-pub use dsl_plonky3::{DslP3Air, prove_dsl_plonky3, verify_dsl_plonky3};
-
 // Re-export primary smart contract runtime types.
 pub use dregg_circuit::dsl::{
     BoundaryDef, BoundaryRow, CellProgram, CircuitDescriptor, ColumnDef, ColumnKind,
@@ -65,8 +61,7 @@ pub use dregg_circuit::dsl::temporal_absence::{DslTimelineEntry, TemporalAbsence
 // Re-export production non-revocation proving API.
 pub use dregg_circuit::dsl::revocation::{
     DslRevocationTree, NonMembershipWitnessDsl, REVOCATION_TREE_DEPTH, SENTINEL_MAX, SENTINEL_MIN,
-    TREE_DEPTH, generate_non_revocation_trace, non_revocation_dsl_circuit,
-    revocation_hash_to_field,
+    TREE_DEPTH, generate_non_revocation_trace, revocation_hash_to_field,
 };
 
 // Re-export DSL-native fold proving API.

@@ -30,7 +30,7 @@ crate-type = ["cdylib", "rlib"]
 # node for the whole sdk-py graph). Its build.rs then early-returns — no `lake`,
 # no archive splice, no shim, no link directives — so the cdylib links WITHOUT
 # the Lean runtime and `lean_available()` is false. This is the SAME polarity-
-# inverted platform opt-out wasm32/zkvm use (docs/FEATURE-HYGIENE.md §Lean).
+# inverted platform opt-out wasm32/zkvm use (.docs-history-noclaude/FEATURE-HYGIENE.md §Lean).
 #
 # The HEAVY wheel (the embedded verified kernel — `dregg[kernel]`) is built with
 #   maturin build --release --no-default-features --features kernel
@@ -49,7 +49,7 @@ kernel = []
 # dregg-captp, reqwest) — the Python binding does its own blocking HTTP via
 # ureq. The always-on modules we ride: cipherclerk, profiles, turns/raw,
 # receipt, program, explain. The Lean FFI link is UNCONDITIONAL on native
-# (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean) and this module gets the
+# (polarity-inverted, .docs-history-noclaude/FEATURE-HYGIENE.md §Lean) and this module gets the
 # REAL Lean kernel via the SHARED link mode: `.cargo/config.toml` sets
 # `DREGG_LEAN_LINK=shared` (an ENV var, not a feature — features unify, env
 # vars don't), under which dregg-lean-ffi links the toolchain's libleanshared

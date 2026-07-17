@@ -2,7 +2,7 @@
 //! `AgentCipherclerk::prove_predicate_unlinkable` (`sdk/src/privacy.rs:413`).
 //!
 //! The bot previously emitted `cryptographic_proof: null` for a verify request
-//! (the toy finding in `docs/MATURATION-LEDGER.md` Theme 5). This module closes
+//! (the toy finding in `.docs-history-noclaude/MATURATION-LEDGER.md` Theme 5). This module closes
 //! that: it parses a predicate string (`"age>=18"`), reads the subject's attribute
 //! value out of their held credential, reconstructs the subject's REAL
 //! [`AgentCipherclerk`] from the bot's custodial seed, and produces a genuine

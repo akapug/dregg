@@ -542,6 +542,7 @@ async fn post_submit(
                     Ok(None) => {}
                     Err(e) => {
                         // The run still ranks in-process; the on-chain anchor failed (fail-closed).
+                        crate::metrics::inc_anchor_failure();
                         resp["settled"] = serde_json::json!(false);
                         resp["settle_error"] = serde_json::json!(e.to_string());
                     }

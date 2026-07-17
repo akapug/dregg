@@ -41,6 +41,10 @@ use tracing_subscriber::EnvFilter;
 /// The bind address the demo server listens on when nothing else is configured.
 const DEFAULT_BIND: &str = "127.0.0.1:8787";
 
+/// The loopback address the SEPARATE metrics listener binds when nothing else is configured — a
+/// distinct port from the main app so a public funnel of the demo never exposes `/metrics`.
+const DEFAULT_METRICS_BIND: &str = "127.0.0.1:9790";
+
 #[tokio::main]
 async fn main() {
     // Structured logging — `RUST_LOG` selects the level (default `info`).
@@ -89,6 +93,36 @@ async fn main() {
                 }
             }
         });
+    }
+
+    // THE METRICS LISTENER — a SEPARATE loopback server for `GET /metrics`, deliberately NOT on
+    // the main (funnel-able) port, so a public `tailscale funnel` of the demo can never expose the
+    // operational counters. Default `127.0.0.1:9790` (loopback); override with
+    // `DREGGNET_WEB_METRICS_BIND`. Prometheus scrapes THIS port. A bind failure here is non-fatal —
+    // the demo serves fine without a scrape target; we log and carry on.
+    {
+        let metrics_bind = std::env::var("DREGGNET_WEB_METRICS_BIND")
+            .unwrap_or_else(|_| DEFAULT_METRICS_BIND.to_string());
+        match metrics_bind.parse::<SocketAddr>() {
+            Ok(maddr) => match tokio::net::TcpListener::bind(maddr).await {
+                Ok(mlistener) => {
+                    tracing::info!(%maddr, "metrics listener up (loopback) — GET /metrics");
+                    tokio::spawn(async move {
+                        if let Err(e) = axum::serve(mlistener, dreggnet_web::metrics_app()).await {
+                            tracing::error!(error = %e, "metrics server error");
+                        }
+                    });
+                }
+                Err(e) => tracing::error!(
+                    %maddr, error = %e,
+                    "failed to bind the metrics listener — /metrics unavailable, demo continues"
+                ),
+            },
+            Err(e) => tracing::error!(
+                %metrics_bind, error = %e,
+                "invalid DREGGNET_WEB_METRICS_BIND — /metrics unavailable, demo continues"
+            ),
+        }
     }
 
     let listener = match tokio::net::TcpListener::bind(addr).await {

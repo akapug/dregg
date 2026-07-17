@@ -759,7 +759,7 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
 // The deos-native surface — the ESCROW as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: escrow's deos re-expression, PROMOTED
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: escrow's deos re-expression, PROMOTED
 // into `src/`. The lifecycle operations are ONE [`DeosApp`] ([`escrow_app`] below); the
 // framework wires the rest — per-viewer projection, web-of-cells publish (the ESCROW cell
 // IS a `dregg://` sturdyref), per-viewer rehydration, the generated

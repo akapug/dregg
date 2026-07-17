@@ -18,3 +18,6 @@ dregg-query = { path = "../dregg-query" }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

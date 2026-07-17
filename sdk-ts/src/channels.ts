@@ -1,5 +1,5 @@
 /**
- * **Channels** — the group-key lift as an SDK noun (`docs/ORGANS.md` §4).
+ * **Channels** — the group-key lift as an SDK noun (`.docs-history-noclaude/ORGANS.md` §4).
  *
  * A group is a CELL: the membership commitment, the key-epoch counter, and
  * the epoch-key commitment live on-cell. Joins / removals / rekeys are

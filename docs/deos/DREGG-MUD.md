@@ -37,7 +37,7 @@ up an item, the other cannot dupe it.*
 | **say / emote / shout** | a pub/sub to the room's inbox on the data plane (a no-value turn, Σδ=0 trivially) | `captp/src/data_plane.rs:366` (`Bus`: `publish`/`subscribe`/`enqueue`/`drain`) |
 | **the shared world** | a forkable, rehydratable, stitchable cap-bounded membrane | `starbridge-v2/src/shared_fork.rs`, `deos-matrix/src/membrane.rs`, `World::fork` `world.rs:632` |
 | **presence / "who is here"** | Matrix membership + typing/presence over the room cell | `deos-matrix/` (room↔cell `cell.rs`, presence `client.rs`) |
-| **NPC / mob / bot** | an **agent session** — a principal with a deliberately narrower cap-tree (mandate) | `session.rs:120` (agent template), `docs/deos/HERMES-INTEGRATION.md` |
+| **NPC / mob / bot** | an **agent session** — a principal with a deliberately narrower cap-tree (mandate) | `session.rs:120` (agent template), `docs/SUPERSEDED/HERMES-INTEGRATION.md` |
 | **the client** | a deos surface (a room-view) — Third-Room-shaped gpui + Matrix | `starbridge-v2/src/{cockpit,room,scene,world}.rs` |
 | **"can't cheat"** | conservation (Σδ=0) + nullifier non-membership + **Settlement Soundness** | `metatheory/Metatheory/SettlementSoundness.lean:153` (`settlement_soundness`) |
 
@@ -245,7 +245,7 @@ shopkeeper NPC holds caps to its shop cell and a transfer cap; a quest-giver hol
 a cap to mint a quest-reward note; a wandering mob holds movement caps over its
 patrol subgraph and nothing else.
 
-A *Hermes* agent (`docs/deos/HERMES-INTEGRATION.md`) — an LLM-driven inhabitant —
+A *Hermes* agent (`docs/SUPERSEDED/HERMES-INTEGRATION.md`) — an LLM-driven inhabitant —
 runs the **controller-blind** loop: its tool-calls are dregg turns authorized by a
 cap-gated token; a tool it lacks the cap for returns an in-band refusal
 (`TokenInsufficientCapability`); each tool-result carries a `TurnReceipt` proving

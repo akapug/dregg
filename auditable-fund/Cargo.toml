@@ -42,3 +42,6 @@ dregg-agent = { path = "../dregg-agent" }
 # confirm it landed). One flip from replicating the track record onto a live federation.
 dregg-node-target = { path = "../node-target" }
 blake3 = "1"
+
+[lints]
+workspace = true

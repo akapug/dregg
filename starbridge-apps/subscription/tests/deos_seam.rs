@@ -2,7 +2,7 @@
 //! against the FULL queue invariants, so the verified caveats BITE in the fire path
 //! itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #2): the promotion's task is to
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #2): the promotion's task is to
 //! close the fire→full-`CellProgram` seam so a stale delivery / over-draw is a REAL
 //! executor refusal in the fire path, not a `program.evaluate`-only check. This file
 //! proves that seam CLOSED. `src::register_deos` / `src::seed_feed` install

@@ -29,7 +29,7 @@
  *   anyOf / not / implies composition) with content-addressed factory
  *   descriptors.
  *
- * The **organ nouns** (`docs/ORGANS.md`) are the higher primitives, each the
+ * The **organ nouns** (`.docs-history-noclaude/ORGANS.md`) are the higher primitives, each the
  * ergonomic TS face of a node service: [`TrustlineClient`] (§1, the bilateral
  * line of credit), [`ChannelsClient`] (§4, the group-key epoch lift),
  * [`MailboxClient`] (§2, a hosted inbox over the relay), and [`AttestedQuery`]
@@ -108,7 +108,7 @@ export type { NodeEventsOptions } from "./events";
 // The clerk's faithful reading.
 export { explainAction, explainEffect, explainTurn, renderTurn } from "./explain";
 
-// ── The organ nouns (docs/ORGANS.md) ──────────────────────────────────────
+// ── The organ nouns (.docs-history-noclaude/ORGANS.md) ──────────────────────────────────────
 // Each is the ergonomic TS face of a node service. The node computes the
 // factory descriptors / seal fan-outs the TS wire layer does not carry;
 // these clients drive them. See each module's "Honest scope" for what stays

@@ -210,13 +210,13 @@ export class BrowserNodeClient {
     }
   }
 
-  /** The **trustline** organ (`docs/ORGANS.md` §1). Operator-gated. */
+  /** The **trustline** organ (`.docs-history-noclaude/ORGANS.md` §1). Operator-gated. */
   trustline(): TrustlineClient {
     // The organ client only duck-types getJson/postJson; this is faithful.
     return new TrustlineClient(this as unknown as never);
   }
 
-  /** The **channels** organ (`docs/ORGANS.md` §4). Operator-gated. */
+  /** The **channels** organ (`.docs-history-noclaude/ORGANS.md` §4). Operator-gated. */
   channels(): ChannelsClient {
     return new ChannelsClient(this as unknown as never);
   }

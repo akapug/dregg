@@ -359,10 +359,10 @@ pub(super) async fn tool_prove_predicate(params: &Value, state: &NodeState) -> M
     drop(s);
 
     // The fact identity the predicate speaks about: the attribute is the predicate symbol, the
-    // compared value is `terms[0]`. The `≥` descriptor is now WELDED — its witness builder computes
-    // the fact commitment FROM the value (`hash_2_to_1(hash_fact(sym, [value, ..]), state_root)`), so
-    // the predicate proof binds to the committed fact in-circuit. The sibling comparisons remain
-    // unwelded (opaque pass-through commitment) pending their own weld follow-up.
+    // compared value is `terms[0]`. EVERY descriptor in the family is WELDED and BLINDED — the
+    // witness builders compute the fact commitment FROM the value, the fact identity and a private
+    // blinding factor (`hash_4_to_1([hash_fact(sym, [value, ..]), state_root, blinding, 0])`), so the
+    // predicate proof binds to the committed fact in-circuit and stays unlinkable across showings.
     let state_root = dregg_circuit::BabyBear::new(state_root_u32);
     let attr_sym = dregg_circuit::BabyBear::new(
         blake3::hash(attribute.as_bytes()).as_bytes()[0] as u32
@@ -374,10 +374,23 @@ pub(super) async fn tool_prove_predicate(params: &Value, state: &NodeState) -> M
         term2: dregg_circuit::BabyBear::ZERO,
         state_root,
     };
-    // The commitment a verifier derives from token state for this value's fact (the `≥` path uses
-    // the welded builder, which reproduces exactly this; the siblings take it as the pass-through).
-    let fact_commitment =
-        fact.commitment_of(dregg_circuit::BabyBear::from_u64(private_value as u64));
+    // A FRESH blinding factor for THIS proof. The commitment is `hash_4_to_1([fact_hash, state_root,
+    // blinding, 0])`, so two proofs about the same attribute emit different commitments and cannot be
+    // correlated; the weld still binds each to the value compared.
+    let mut blinding_bytes = [0u8; 8];
+    if getrandom::fill(&mut blinding_bytes).is_err() {
+        return McpToolResult::error(
+            "OS randomness unavailable; refusing to emit an unblinded proof",
+        );
+    }
+    let blinding = dregg_circuit::predicate_arith_witness::Blinding(
+        dregg_circuit::BabyBear::from_u64(u64::from_le_bytes(blinding_bytes)),
+    );
+    // The commitment the welded builders reproduce in-circuit for this value + blinding.
+    let fact_commitment = fact.commitment_of(
+        dregg_circuit::BabyBear::from_u64(private_value as u64),
+        blinding,
+    );
 
     // The retired hand-AIR `prove_predicate` is replaced by the descriptor prover: each comparison
     // operator maps to an emitted, byte-pinned IR-v2 descriptor (dispatched by `descriptor_by_name`)
@@ -401,23 +414,23 @@ pub(super) async fn tool_prove_predicate(params: &Value, state: &NodeState) -> M
     let (air_name, built) = match predicate_type_str {
         "gte" => (
             PREDICATE_ARITH_NAME,
-            predicate_arith_witness(value, thr, fact, HEIGHT),
+            predicate_arith_witness(value, thr, fact, blinding, HEIGHT),
         ),
         "lte" => (
             PREDICATE_ARITH_LE_NAME,
-            predicate_le_witness(value, thr, fact, HEIGHT),
+            predicate_le_witness(value, thr, fact, blinding, HEIGHT),
         ),
         "gt" => (
             PREDICATE_ARITH_GT_NAME,
-            predicate_gt_witness(value, thr, fact, HEIGHT),
+            predicate_gt_witness(value, thr, fact, blinding, HEIGHT),
         ),
         "lt" => (
             PREDICATE_ARITH_LT_NAME,
-            predicate_lt_witness(value, thr, fact, HEIGHT),
+            predicate_lt_witness(value, thr, fact, blinding, HEIGHT),
         ),
         "neq" => (
             PREDICATE_ARITH_NEQ_NAME,
-            predicate_neq_witness(value, thr, fact, HEIGHT),
+            predicate_neq_witness(value, thr, fact, blinding, HEIGHT),
         ),
         other => {
             return McpToolResult::error(format!(

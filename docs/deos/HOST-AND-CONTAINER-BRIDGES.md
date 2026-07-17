@@ -6,10 +6,10 @@ backing, the `Confinement` cap→OS-rule mapping); clearly-scoped frontier where
 isn't (the new `Target` kinds, the container cell, the bridge backings). First
 principles, no trajectory narrative.*
 
-> Companion docs: `docs/FIRMAMENT.md` (the cap-gradation bridge — the abstraction
-> these bridges extend), `docs/DREGG-DESKTOP-OS.md §3` (the sandboxed-firmament
+> Companion docs: `.docs-history-noclaude/FIRMAMENT.md` (the cap-gradation bridge — the abstraction
+> these bridges extend), `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` (the sandboxed-firmament
 > KEYSTONE this is the *inverse* of), `docs/deos/CROSS-DEVICE-FIRMAMENT.md` (the
-> device-distance instance of the same router), `docs/deos/SEL4-PARITY-PLAN.md`
+> device-distance instance of the same router), `.docs-history-noclaude/deos/SEL4-PARITY-PLAN.md`
 > (the systems gap toward native seL4).
 > Companion code: `sel4/dregg-firmament/src/{lib,router,host_pd,sandbox,surface,process_kernel}.rs`,
 > `cell/src/capability.rs`.

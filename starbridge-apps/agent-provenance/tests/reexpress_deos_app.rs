@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `agent-provenance` starbridge-app, on the composed deos
 //! framework — **the same app, smaller + more capable, SHIPPED from `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the agent-provenance LOG, re-expressed as
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the agent-provenance LOG, re-expressed as
 //! a composed [`DeosApp`] and SHIPPED in `src/lib.rs`. This file drives the SHIPPED
 //! surface ([`provenance_app`] from `src/`): per-viewer projection, the cap-gated fires
 //! through the mounted axum surface, the `dregg://` web-of-cells publish, the

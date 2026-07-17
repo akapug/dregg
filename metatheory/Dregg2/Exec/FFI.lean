@@ -27,7 +27,7 @@ open Dregg2.CatalogInstances (EffectKind)
 The `execFullTurnStep` codec above (`§FULL`) marshals a `List FullAction` over the OLD 5-arm
 `FullAction` (balance/delegate/revoke/mint/burn) — a small sliver of dregg1's complete turn. THIS
 section widens the wire codec to the **whole** dregg1 turn the wholesale swap must cross
-(`docs/rebuild/WHOLESALE-SWAP-LEDGER.md` FILL I):
+(`.docs-history-noclaude/rebuild/dregg2-design/WHOLESALE-SWAP-LEDGER.md` FILL I):
 
   * the **Turn ENVELOPE** — `agent` / `nonce` / `fee` / `valid_until` / `previous_receipt_hash`
     (dregg1 `turn/src/turn.rs`'s outer fields, the admission preamble's inputs);

@@ -3,7 +3,7 @@
 //!
 //! # Where this sits
 //!
-//! The write path has two halves (`docs/PG-DREGG.md` §11):
+//! The write path has two halves (`.docs-history-noclaude/PG-DREGG.md` §11):
 //!
 //!   * the ENQUEUE half (shipped): a pg-user calls `dregg_submit_turn(signed, agent)`,
 //!     which RLS-gates the insert on the `submit_gate` policy and lands a `pending`
@@ -189,7 +189,7 @@ impl FoldProducer {
 /// `bin/loadgen.rs`). This is the producers' `ledger_root` over the chaining
 /// context `(prev_root, ordinal, touched-cells)`: the CHAIN gate's anti-substitution
 /// tooth is structural on these roots (the kernel's in-circuit root is the
-/// whole-chain IVC light client's concern, `docs/PG-DREGG.md` §10.2), so a single
+/// whole-chain IVC light client's concern, `.docs-history-noclaude/PG-DREGG.md` §10.2), so a single
 /// shared derivation is what lets the two producers' turns share one chain.
 pub fn fold_chain_root(prev: [u8; 32], ordinal: u64, touched: &[([u8; 32], i64, u64)]) -> [u8; 32] {
     let mut acc: u64 = 0xcbf29ce484222325 ^ ordinal.wrapping_mul(0x100000001b3);

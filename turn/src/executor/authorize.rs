@@ -215,7 +215,8 @@ impl TurnExecutor {
         // through the per-permission requirement check below so a cell that
         // forbids the action (Impossible) is honored. We verify the stealth
         // signature up front (fail-closed) and let the permission lattice
-        // accept it via `to_auth_kind() == Signature`.
+        // accept it via `check_single_auth_requirement`'s `Authorization::Stealth`
+        // arm under `AuthRequired::Signature` (which re-verifies, self-contained).
         if let Authorization::Stealth { .. } = &action.authorization {
             self.verify_stealth_authorization(action, target_cell, path, turn_nonce)?;
             // Fall through to the permission-requirement checks so that

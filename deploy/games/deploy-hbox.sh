@@ -1,6 +1,28 @@
 #!/bin/bash
 # deploy-hbox.sh — one-command deploy of the dregg GAMES stack onto hbox.
 #
+# ⚠⚠ USE `--funnel`. THE DEFAULT (GATEWAY) PATH TARGETS A TOPOLOGY THAT DOES NOT
+# EXIST. Verified 2026-07-15:
+#   • the AWS edge and hbox are on DIFFERENT TAILNETS (edge = 100.64.0.x;
+#     hbox-dregg = 100.95.240.73 on skunk-emperor). The edge CANNOT reach hbox.
+#   • there is NO Caddy on the edge, so `./deploy-hbox.sh gateway` has nothing to
+#     install into.
+#   • `docs/ops/OPS-RUNBOOK.md` and `docs/DEPLOY-PLAN.md`, cited below as the
+#     authority for "the real topology", DO NOT EXIST in this repo.
+# What actually runs: `--funnel` -> dregg-web-games-funnel.service (loopback:8790)
+# + `tailscale funnel` -> https://hbox-dregg.skunk-emperor.ts.net. See
+# deploy/games/RUNBOOK-FUNNEL.md and deploy/README.md.
+#
+# ⚠ `--funnel`'s DREGG_NODE_URL target (127.0.0.1:8420) is DEAD — that node was
+# hand-run with an ephemeral data dir and its ledger is gone (TODO-1). The web unit
+# still deploys and health-checks fine; submitted runs just cannot anchor.
+#
+# ⚠ The build step below runs ON hbox, which is also the prove box AND the live demo
+# host. Build load hard-killed hbox this session (deploy/PRACTICES.md §1). Prefer
+# building on persvati, or cap the build.
+#
+# --------------------------------------------------------------------------------
+# STALE (kept for the hbox-side shape, which is sound):
 # Real topology (docs/ops/OPS-RUNBOOK.md): DNS -> AWS GATEWAY (public, runs its OWN
 # Caddy for *.dregg.fg-goose.online) -> TAILSCALE -> hbox (tailnet node hbox-dregg,
 # 100.95.240.73). Caddy lives on the GATEWAY, not hbox. THIS SCRIPT RUNS ON hbox and

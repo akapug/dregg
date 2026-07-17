@@ -863,7 +863,7 @@ fn rejection_parity_differential() {
     // the Lean verdict vetoes the Rust commit) and hard-fails ONLY on a NEW, uncharacterised hole.
     //
     //   * `burn-no-well` — `Effect::Burn` on an owned cell with no mint cap. The remaining
-    //     asymmetry is PURELY AUTHORITY now (SUPPLY-MODEL Stage 1, docs/SUPPLY-MODEL.md):
+    //     asymmetry is PURELY AUTHORITY now (SUPPLY-MODEL Stage 1, .docs-history-noclaude/SUPPLY-MODEL.md):
     //       - CONSERVATION half CLOSED — apply.rs no longer commits a Σδ≠0 scalar destroy. EVERY
     //         asset resolves a per-asset issuer well (lazily derived if unregistered), so the burn
     //         is a CONSERVING holder→well MOVE (per-turn Σδ=0). The "no issuer well" precondition
@@ -879,7 +879,7 @@ fn rejection_parity_differential() {
     //     `Dregg2/Exec/RecordKernel.lean:495`); now AGREE-both-reject, no longer a hole. Removed from
     //     the allowlist (kept here as a record of the closed asymmetry).
     //   * `mint-authorized` — `Effect::Mint` with a control-grade `EFFECT_MINT` cap over the issuer
-    //     well (SUPPLY-MODEL Stage 2a, docs/SUPPLY-MODEL.md). apply.rs `apply_mint` ACCEPTS the
+    //     well (SUPPLY-MODEL Stage 2a, .docs-history-noclaude/SUPPLY-MODEL.md). apply.rs `apply_mint` ACCEPTS the
     //     CORRECT supply entry (well→holder conserving move, cap-gated by the Rust image of
     //     `mintAuthorizedB`). The asymmetry is PURELY a WIRE-FAITHFULNESS limit, NOT under-
     //     enforcement: the shadow marshals `Mint` with the synthetic `asset: 0` (exactly as `Burn`,

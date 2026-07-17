@@ -75,3 +75,6 @@ base64 = "0.22"
 hex = "0.4"
 tendermint = { version = "=0.40.4", default-features = false, features = ["rust-crypto"] }
 tendermint-light-client-verifier = "=0.40.4"
+
+[lints]
+workspace = true

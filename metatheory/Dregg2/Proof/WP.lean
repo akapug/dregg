@@ -1,7 +1,7 @@
 /-
 # Dregg2.Proof.WP — a weakest-precondition / VCG calculus over the record cell.
 
-`docs/rebuild/PHASE-VCG-WP.md §6` (the recommended minimal first version): dregg's
+`.docs-history-noclaude/rebuild/archived-2026-06-06/PHASE-VCG-WP.md §6` (the recommended minimal first version): dregg's
 metatheory today proves conservation/authority hold along an arbitrary run — but it does so
 *per fixed program*, by hand, one `theorem` per cell (`recordCell_run_preserves_sumEquals`).
 There is no **calculus** that, given an arbitrary `RecordProgram` + a developer-supplied
@@ -342,7 +342,7 @@ OPEN: the CROSS-VAT escrow conservation fragment.
 When the payer's `escrowed` lives in vat A and the payee's `paidOut` lives in vat B, the
 conservation `escrowed_A + paidOut_B = deposit₀` is NOT a single-cell invariant — it is a
 JointTurn CG-5 cross-side binding over `νF_A ⊗ νF_B`, which is *not* final
-(`docs/rebuild/pdfs/study-category.md`). Per the inviolable rule (`REORIENT.md §6`,
+(`.docs-history-noclaude/rebuild/archived-2026-06-06/study-category.md`). Per the inviolable rule (`REORIENT.md §6`,
 `Exec/JointCell.lean`), cross-cell soundness must be routed to the JointTurn aggregate as an
 explicit HYPOTHESIS — `JointCell.joint_cg5_conserves` — and NEVER derived from the two per-cell
 triples. The VCG would *declare* a `boundDelta`/cross-cell VC and discharge it by HANDING it the

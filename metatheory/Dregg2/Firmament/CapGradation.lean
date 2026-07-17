@@ -1,8 +1,8 @@
 /-
 # Dregg2.Firmament.CapGradation — the FORMAL LEAN SEMANTICS of the firmament cap-gradation.
 
-`sel4/dregg-firmament/` is a runnable Rust crate (`docs/FIRMAMENT.md §3`,
-`docs/DREGG-DESKTOP-OS.md §L2`): ONE `Capability { target, rights }` handle whose
+`sel4/dregg-firmament/` is a runnable Rust crate (`.docs-history-noclaude/FIRMAMENT.md §3`,
+`.docs-history-noclaude/DREGG-DESKTOP-OS.md §L2`): ONE `Capability { target, rights }` handle whose
 `Target` is `Local { slot }` (an seL4 CNode slot), `Distributed { cell }` (a dregg
 cell on a federation), or `Surface { cell }` (a dregg cell rendered as a window — the
 firmament made visual). A `FirmamentRouter` dispatches an invocation by the handle's

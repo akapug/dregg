@@ -109,7 +109,7 @@ pub struct CourtLedger {
     /// strand key → the cell escrowing that strand's bond.
     bond_cells: HashMap<[u8; 32], CellId>,
     /// Resolved-evidence digests restored from (and mirrored to) the durable
-    /// forever-digest table (`docs/PERSISTENCE.md`): the live court's set is
+    /// forever-digest table (`.docs-history-noclaude/PERSISTENCE.md`): the live court's set is
     /// rebuilt fresh each boot, so without this carrier a restart would
     /// forget every verdict and re-admit a double-slash. Checked alongside
     /// the live court by [`Self::is_resolved`].
@@ -1227,7 +1227,7 @@ mod tests {
 
     // ── persistence: the resolved set survives the restart ──────────────────
 
-    /// THE RESTART TEST (docs/PERSISTENCE.md): a resolved exhibit's digest is
+    /// THE RESTART TEST (.docs-history-noclaude/PERSISTENCE.md): a resolved exhibit's digest is
     /// burned durably, so a brand-new process over the same data dir still
     /// refuses the re-submission — no-double-resolve (and so no-double-slash)
     /// holds across process lifetimes. Without the durable carrier the reborn

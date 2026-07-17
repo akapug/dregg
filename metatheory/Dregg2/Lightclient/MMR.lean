@@ -1,7 +1,7 @@
 /-
 # Dregg2.Lightclient.MMR — the receipt index as an append-only range structure (Merkle Mountain Range).
 
-THE EPOCH's per-structure choice for the receipt index (docs/EPOCH-DESIGN.md): history keys are
+THE EPOCH's per-structure choice for the receipt index (.docs-history-noclaude/EPOCH-DESIGN.md): history keys are
 DENSE POSITIONS, so the index does not need a sorted map — it needs an append-only structure where
 completeness holds BY CONSTRUCTION. This module is the MMR theory that specializes the
 `HistoryIndex`/`AttestedQuery` non-omission machinery onto exactly that structure:

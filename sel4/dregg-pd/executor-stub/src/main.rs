@@ -3,12 +3,12 @@
 //! This is a minimal placeholder PD holding the firmament HEART seat until the
 //! verified Lean executor (`execFullForestG`, `metatheory/`) can cross-compile
 //! for `aarch64-sel4-microkit` (THE blocker — the Lean-runtime bottom-half ELF
-//! recompile + libuv excision + musl host, docs/SEL4-EMBEDDING.md §2 /
-//! docs/FIRMAMENT.md §6). It does NOT run verified compute; the verifier-stark
+//! recompile + libuv excision + musl host, .docs-history-noclaude/SEL4-EMBEDDING.md §2 /
+//! .docs-history-noclaude/FIRMAMENT.md §6). It does NOT run verified compute; the verifier-stark
 //! PD is the bankable verified-compute heart organ in this assembly.
 //!
 //! What it DOES do, faithfully, is occupy the executor's exact place in the cap
-//! partition (docs/FIRMAMENT.md §2): it maps the `turn_in` (R) and `commit_out`
+//! partition (.docs-history-noclaude/FIRMAMENT.md §2): it maps the `turn_in` (R) and `commit_out`
 //! (RW) shared regions the real executor will use — and NOTHING else (no device
 //! cap, no NIC cap) — touches them to prove the caps are live, and prints the
 //! partition over serial. The assembly therefore BOOTS as a real multi-PD image
@@ -48,7 +48,9 @@ fn init() -> HandlerImpl {
         echo
     );
 
-    debug_println!("[executor]   verified turn path (execFullForestG) is BLOCKED on the Lean ELF port (§2);");
+    debug_println!(
+        "[executor]   verified turn path (execFullForestG) is BLOCKED on the Lean ELF port (§2);"
+    );
     debug_println!("[executor]   the verifier-stark PD is the bankable verified-compute heart organ this image ships.");
     debug_println!("[executor]   awaiting ingress→executor signal (channel id 1) …");
     HandlerImpl
@@ -64,7 +66,10 @@ impl Handler for HandlerImpl {
     // persist on id 2. The seat acknowledges the edge so the channel is live.
     fn notified(&mut self, channels: sel4_microkit::ChannelSet) -> Result<(), Self::Error> {
         for channel in channels.iter() {
-            debug_println!("[executor]   notified on channel {} (turn staged)", channel.index());
+            debug_println!(
+                "[executor]   notified on channel {} (turn staged)",
+                channel.index()
+            );
         }
         Ok(())
     }

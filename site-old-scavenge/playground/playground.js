@@ -145,7 +145,7 @@ const PLAYGROUND_SCENARIOS = [
   {
     id: 'organs',
     label: 'Organs',
-    lede: 'The v0.3.0 SDK nouns (docs/ORGANS.md): bilateral credit, group key-epochs, hosted inbox, and the light-client read — driven against a real node through the actual @dregg/sdk client.',
+    lede: 'The v0.3.0 SDK nouns (.docs-history-noclaude/ORGANS.md): bilateral credit, group key-epochs, hosted inbox, and the light-client read — driven against a real node through the actual @dregg/sdk client.',
     starbridgeHref: '/starbridge/?at=dregg://turn/demo',
     starbridgeLabel: 'Open a turn in Starbridge',
     sections: ['organs'],

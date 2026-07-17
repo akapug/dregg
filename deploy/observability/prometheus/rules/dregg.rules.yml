@@ -213,6 +213,47 @@ groups:
           summary: "invalid proofs submitted ({{ $labels.node }})"
           description: "dregg_proofs_verified_total{result=\"invalid\"} advanced — someone submitted proofs that fail verification (a probe or a broken prover)."
 
+  - name: dregg-web
+    rules:
+      # PAGE — the web surface's /metrics is unscrapeable (the public games demo
+      # is down or wedged). The web analogue of NodeDown: the funnel still
+      # terminates TLS while the backing unit is dead, so a public visitor sees
+      # a broken page with no other signal reaching us.
+      - alert: DreggWebDown
+        expr: up{job="dregg-web"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "dreggnet-web surface down"
+          description: "the dregg-web /metrics scrape has failed for 2m — the web unit is down or wedged (the funnel keeps serving TLS to a dead backend). systemctl --user status dregg-web-games-funnel. Runbook: deploy/games/RUNBOOK-FUNNEL.md."
+
+      # WARN — verified runs are ranking but their devnet-node anchors are
+      # failing (fail-closed: the run still ranks in-process, the on-chain
+      # anchor did not land). A sustained rate means the anchor node is gone /
+      # locked / unfunded — exactly the RUNBOOK-FUNNEL step (a) bring-up debt.
+      - alert: WebAnchorFailureSpike
+        expr: sum(rate(dregg_web_anchor_failures_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Descent run anchors failing on the devnet node"
+          description: "dregg_web_anchor_failures_total is advancing — submitted runs rank in-process but their node anchor fails (node down / cipherclerk locked / operator cell not materialized). Runbook: deploy/games/RUNBOOK-FUNNEL.md step (a)."
+
+      # WARN — the session-lifecycle sweep is shedding sessions at a sustained
+      # rate: the working set is thrashing against the armed cap/TTL (a traffic
+      # storm or a too-tight DREGGNET_WEB_MAX_SESSIONS/TTL). Occasional idle
+      # eviction is healthy; a sustained rate is pressure.
+      - alert: WebSessionEvictionStorm
+        expr: sum(rate(dregg_web_sessions_evicted_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "web session evictions elevated"
+          description: "the lifecycle sweep is evicting sessions at >0.5/s for 5m — the live working set is churning against the armed capacity/TTL policy (traffic storm or too-tight limits). Live count: dregg_web_sessions_open."
+
   - name: dregg-hosts
     rules:
       # WARN — a node_exporter host target is down (host unreachable / exporter

@@ -1,6 +1,6 @@
 //! THE ORGAN PANELS — reflecting each dregg organ's live cell-state.
 //!
-//! `docs/ORGANS.md` names dregg's higher-order primitives — the *organs* — as
+//! `.docs-history-noclaude/ORGANS.md` names dregg's higher-order primitives — the *organs* — as
 //! cells whose installed program enforces a quantitative invariant: a
 //! **trustline** (a bilateral line of credit, `drawn ≤ ceiling` forever), a
 //! **flash well** (a zero-duration line, the net-floor flash-loan invariant), a

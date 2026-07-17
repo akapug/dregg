@@ -204,5 +204,5 @@ SELECT dregg_cap_subject(current_setting('dregg.token', true));   -- e.g. 'agent
 
 You added one extension, one GUC, and policies in a closed, proved capability
 calculus. The full SQL surface and the assurance boundary are in
-`docs/PG-DREGG.md`; the dregg-developer view (postgres as the dregg store) is in
+`.docs-history-noclaude/PG-DREGG.md`; the dregg-developer view (postgres as the dregg store) is in
 `QUICKSTART-dregg-dev.md`.

@@ -24,3 +24,6 @@ description = "The shared dungeon draft + the bounded structured edit model for 
 # THE FAIL-CLOSED VALIDATOR — parse_dungeon / validate / DungeonError. The disposer re-parses the
 # rendered draft through this: a broken edit never becomes a playable world.
 attested-dm = { path = "../attested-dm" }
+
+[lints]
+workspace = true

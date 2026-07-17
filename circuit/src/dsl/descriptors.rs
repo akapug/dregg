@@ -547,8 +547,8 @@ pub fn non_revocation_descriptor() -> CircuitDescriptor {
     // HALF). A negative diff (a committed member, diff = -1 = p-1) also passes
     // (HALF−(p-1) = HALF+1 < 2^30). Decomposing diff DIRECTLY into 30 bits pins
     // diff ∈ [0, 2^30); the intersection forces diff ∈ [0, HALF] — p-1 cannot be
-    // reconstructed from 30 bits, so a member trace is UNSAT. See
-    // `crate::dsl::revocation::non_revocation_circuit_descriptor` C13-C16.
+    // reconstructed from 30 bits, so a member trace is UNSAT. This legacy,
+    // non-deployed descriptor is retained only by the v1 name registry.
 
     // C13: diff_left DIRECT bits are binary
     for i in 0..NON_REVOCATION_ORDERING_BITS {

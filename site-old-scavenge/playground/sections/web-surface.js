@@ -1,7 +1,7 @@
 // Web Surface — the killer demo (N13): "TWO TABS, ONE SURFACE, the share that REFUSES".
 //
 // `docs/design-frontiers/WEB-FORWARD.md §4` (the web killer demo) + the §4 web cut
-// of `docs/FRONTIER-ROADMAP.md`. The single copy-paste end-to-end web evaluation
+// of `.docs-history-noclaude/FRONTIER-ROADMAP.md`. The single copy-paste end-to-end web evaluation
 // artifact: a browser surface IS a dregg cell's surface capability, carried to a
 // `<canvas>` pane, with the no-amplification law firing at the PIXEL LAYER.
 //

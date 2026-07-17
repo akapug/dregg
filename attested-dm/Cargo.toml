@@ -80,3 +80,6 @@ serde_json = "1"
 # roundtrip (zkoracle-prove's vendored TLSNotary) instead of the modeled ed25519
 # carrier. OFF by default so the standard build stays HTTP/TLS-free.
 tlsn-live = ["dregg-zkoracle-prove/tlsn-live"]
+
+[lints]
+workspace = true

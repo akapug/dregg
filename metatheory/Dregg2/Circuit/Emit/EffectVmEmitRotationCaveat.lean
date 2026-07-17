@@ -7,7 +7,7 @@ lane (heap-keyed `StateConstraint`s landed `5e0558fdc`: `heapKey k = FieldsMap.u
 `rfl`, `HeapAtom.lift`), so capability attenuation must reach HEAP KEYS before the cutover
 freezes the wire (`HORIZONLOG.md` "HEAP-KEYED CAVEATS — rotation-URGENT"). THIS module is the
 Lean-first design + staged emission of the widened operand, at the CONFIRMED register count
-R=24 (`docs/ROTATION-CUTOVER.md` §2b, ember 2026-06-12):
+R=24 (`.docs-history-noclaude/ROTATION-CUTOVER.md` §2b, ember 2026-06-12):
 
   * **§1 the operand** — `(domain, key)`: the domain is the universal-memory `Domain`
     (`Crypto/UniversalMemory.lean`), wire-coded by THE one `DescriptorIR2.domainCode`

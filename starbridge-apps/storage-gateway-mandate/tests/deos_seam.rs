@@ -1,7 +1,7 @@
 //! THE SEAM CLOSED — the deos-native `put` fired through the executor against the FULL
 //! gateway invariants, so the volume budget BITES in the fire path itself (a LIVE gate).
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the storage-gateway mandate's scaffold
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the storage-gateway mandate's scaffold
 //! floor proved the volume-budget caveats on a born cell via predicate evaluation only.
 //! This file proves the deos fire→full-`CellProgram` seam CLOSED: a STALE/over-budget
 //! write is a REAL executor refusal in the fire path. `src::register_deos` /

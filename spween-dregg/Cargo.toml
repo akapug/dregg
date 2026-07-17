@@ -46,3 +46,6 @@ zeroize = "1"
 # A workspace MEMBER of the breadstuffs root (registered in `members`, not
 # `default-members` — it is a heavy narrative demo). The root `[workspace]` +
 # `[patch]` tables apply; no standalone `[workspace]`/`[patch]` here.
+
+[lints]
+workspace = true

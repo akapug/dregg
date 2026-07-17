@@ -378,6 +378,15 @@ fn all_effect_variants() -> Vec<Variant> {
                 },
             },
         },
+        // -- The Custom-VK door ---------------------------------------------------
+        Variant {
+            label: "Custom",
+            effect: Effect::Custom {
+                cell: cell_a,
+                program_vk_hash: [0x11; 32],
+                proof_commitment: [0x22; 32],
+            },
+        },
     ]
 }
 
@@ -427,6 +436,7 @@ fn assert_variant_coverage(e: &Effect) -> &'static str {
         Effect::Promise { .. } => "Promise",
         Effect::Notify { .. } => "Notify",
         Effect::React { .. } => "React",
+        Effect::Custom { .. } => "Custom",
     }
 }
 

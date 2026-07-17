@@ -27,7 +27,7 @@
 //!     below the floor) is refused by the well's `StrictMonotonic(ratchet)` +
 //!     rung-ladder `BalanceGte` teeth.
 //!
-//! These are the REAL Lean-twin invariants (`docs/ORGANS.md`,
+//! These are the REAL Lean-twin invariants (`.docs-history-noclaude/ORGANS.md`,
 //! `Dregg2.Apps.Trustline` / the flash-well ratchet), enforced in-protocol by the
 //! same executor every other turn runs through. The verbs only SHAPE the effects
 //! + pre-check for a legible error; the load-bearing gate is the program.
@@ -38,7 +38,7 @@
 //! factory-born cells default to `Signature` permissions, so every cross-cell
 //! well/trustline touch rides `Effect::ExerciseViaCapability` at the operator's
 //! adopt-grant slot. The embedded `World` is single-custody (the OPERATOR is the
-//! authority; `docs/STARBRIDGE-V2.md`): the organ cell is born with
+//! authority; `.docs-history-noclaude/STARBRIDGE-V2.md`): the organ cell is born with
 //! `open_permissions`, so the operator's own turns touch it directly (a bare
 //! self-targeting `SetField`/`Transfer`) — the single-machine collapse of the
 //! capability dance. The VALUE conservation and the SLOT invariants are
@@ -435,7 +435,7 @@ impl OrganDriver {
     ///
     /// THE OWNER GATE (single-custody collapse): the well's program carries a
     /// `SenderIs{owner}` governance gate over its LIFECYCLE writes (open/close —
-    /// `docs/ORGANS.md`). The executor evaluates that `sender` as the ACTING
+    /// `.docs-history-noclaude/ORGANS.md`). The executor evaluates that `sender` as the ACTING
     /// CELL'S OWN public key (`execute_tree.rs:781` — `parent_pk_opt`). So we set
     /// `owner` to the WELL CELL'S OWN key (read from the ledger after birth): the
     /// organ is its own governance root, and the operator-root's `world.turn(well,

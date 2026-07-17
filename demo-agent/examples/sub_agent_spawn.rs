@@ -496,10 +496,15 @@ fn main() {
                     &presentation,
                     bytes_to_babybear(&federation_root_bytes),
                 );
-                let stark_ok = presentation
-                    .verify_issuer_stark()
-                    .map(|r| r.is_ok())
-                    .unwrap_or(false);
+                // MIGRATED: `verify_issuer_stark` was removed on the StarkProof ->
+                // Ir2BatchProof wire flip; `verify_presentation_bb` (above) IS the
+                // cryptographic check. "STARK ok" now means: real backing present AND
+                // the wrong-root refusal tooth bites.
+                let stark_ok = presentation.has_real_stark_proof()
+                    && !verify_presentation_bb(
+                        &presentation,
+                        bytes_to_babybear(&federation_root_bytes) + BabyBear::ONE,
+                    );
                 println!("  {} proof:", agent.name);
                 println!(
                     "    Chain depth: {} (root -> sub-agent)",

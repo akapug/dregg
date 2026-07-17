@@ -820,7 +820,7 @@
           "type": "HashKind"
         }
       ],
-      "semantics": "**Pre-rotation gate (KERI-shaped)** — the identity rider (`docs/ORGANS.md` \"Identity rider\"; kernel semantics proven in `metatheory/Dregg2/Apps/PreRotation.lean`, the `rotateWriteCooled` production shape).",
+      "semantics": "**Pre-rotation gate (KERI-shaped)** — the identity rider (`.docs-history-noclaude/ORGANS.md` \"Identity rider\"; kernel semantics proven in `metatheory/Dregg2/Apps/PreRotation.lean`, the `rotateWriteCooled` production shape).",
       "in_view": true,
       "locally_evaluable": false,
       "simple": false
@@ -952,7 +952,7 @@
           "type": "usize"
         }
       ],
-      "semantics": "**Cross-cell verified observation** (`docs/CELL-PROGRAM-LANGUAGE.md` §11.2): `new[local_field]` must equal the value `source_field` held by the PEER cell `source_cell` at the FINALIZED state-commitment root `at_root`.",
+      "semantics": "**Cross-cell verified observation** (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §11.2): `new[local_field]` must equal the value `source_field` held by the PEER cell `source_cell` at the FINALIZED state-commitment root `at_root`.",
       "in_view": true,
       "locally_evaluable": false,
       "simple": false
@@ -977,7 +977,7 @@
           "type": "CollPred"
         }
       ],
-      "semantics": "**Aggregate-over-a-collection gate** (`docs/CELL-PROGRAM-LANGUAGE.md` gaps 7/11.1 — the heap/layout rung, the documented \"lamesauce\" N≤3 fixed-slot cap *lifted*).",
+      "semantics": "**Aggregate-over-a-collection gate** (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md` gaps 7/11.1 — the heap/layout rung, the documented \"lamesauce\" N≤3 fixed-slot cap *lifted*).",
       "in_view": true,
       "locally_evaluable": false,
       "simple": false
@@ -990,7 +990,7 @@
           "type": "Vec<BoundBranch>"
         }
       ],
-      "semantics": "**Witnessed branches under disjunction** (`docs/CELL-PROGRAM-LANGUAGE.md` §11.3 — the `AnyOfBound` rung) — admits IFF SOME `branches` element admits.",
+      "semantics": "**Witnessed branches under disjunction** (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §11.3 — the `AnyOfBound` rung) — admits IFF SOME `branches` element admits.",
       "in_view": true,
       "locally_evaluable": false,
       "simple": false
@@ -1116,7 +1116,7 @@
   ],
   "expressibility_limits": [
     "The cell `balance` is sealed (not one of the 16 slots), so \"resolve drains the full balance\" and \"the payout goes to the published counterparty\" are NOT program-enforced; they are enforced by the SDK builders (`dregg_sdk::factories`) constructing the only sensible turn, and by the kernel move law (a `Transfer` conserves and fail-closes). This mirrors the Lean contracts, where the settle target is an argument of `escrowRelease`/`obSettle` rather than a checked field.",
-    "The committed-escrow knowledge gate (release on a HASH-PREIMAGE reveal) is now EXPRESSIBLE: `PreimageGate` is a `SimpleStateConstraint` (`docs/CELL-PROGRAM-LANGUAGE.md` §4), so `when_state(RESOLVED_A, PreimageGate { commitment_index: CONDITION_SLOT, .. })` composes — see `cell::program::tests::preimage_gate_composes_under_state_guard` and the Lean `committedRelease` twin (`Dregg2/Exec/Program.lean`). The cleartext witness-equality gate below remains the Lean `EscrowFactory` contract; a committed-deal blueprint is the natural next variant.",
-    "The \"resolve drains the full balance\" tooth is likewise now expressible (`BalanceLte { max: 0 }` under the terminal-state guards — the `balance_atoms_see_own_balance` pin). The published settlement blueprints keep the Lean-twin constraint set verbatim; adding the drain tooth is a descriptor evolution to land together with its Lean keystone (one semantics, both sides — see `docs/CELL-PROGRAM-LANGUAGE.md` §9)."
+    "The committed-escrow knowledge gate (release on a HASH-PREIMAGE reveal) is now EXPRESSIBLE: `PreimageGate` is a `SimpleStateConstraint` (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §4), so `when_state(RESOLVED_A, PreimageGate { commitment_index: CONDITION_SLOT, .. })` composes — see `cell::program::tests::preimage_gate_composes_under_state_guard` and the Lean `committedRelease` twin (`Dregg2/Exec/Program.lean`). The cleartext witness-equality gate below remains the Lean `EscrowFactory` contract; a committed-deal blueprint is the natural next variant.",
+    "The \"resolve drains the full balance\" tooth is likewise now expressible (`BalanceLte { max: 0 }` under the terminal-state guards — the `balance_atoms_see_own_balance` pin). The published settlement blueprints keep the Lean-twin constraint set verbatim; adding the drain tooth is a descriptor evolution to land together with its Lean keystone (one semantics, both sides — see `metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §9)."
   ]
 }

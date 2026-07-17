@@ -82,3 +82,6 @@ landlock = { version = "0.4", optional = true }
 
 [dev-dependencies]
 # (tests live inline + in tests/)
+
+[lints]
+workspace = true

@@ -1231,7 +1231,7 @@ impl Default for AtomicForestBuilder {
 // side of the turn was a real, guarded, conserving, authorized executor step.
 //
 // This is the Rust production-wiring of `Dregg2/Distributed/PrivateLeg.lean` (keystone
-// `joint_turn_sound_with_private_legs`) and `docs/PRIVATE-OFFLINE-CELLS.md` §4/§7. Where
+// `joint_turn_sound_with_private_legs`) and `metatheory/docs/PRIVATE-OFFLINE-CELLS.md` §4/§7. Where
 // the public legs of an `AtomicForest` apply an `Action`/`Effect` to the shared `Ledger`,
 // a private leg is `(commit_pre, commit_post, proof)` and NEVER touches the shared machine.
 //

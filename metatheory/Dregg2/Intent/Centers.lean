@@ -1,7 +1,7 @@
 /-
 # Dregg2.Intent.Centers — the commutative central monoid + its escrow monad (Phase 3, step 1–2).
 
-`docs/rebuild/INTENT-REFS-centers.md` §4, steps 1–2 (the *unifier*; the monoidal-Kleisli L-gate and
+`.docs-history-noclaude/rebuild/metatheory/INTENT-REFS-centers.md` §4, steps 1–2 (the *unifier*; the monoidal-Kleisli L-gate and
 Theorem B are explicitly DEFERRED — steps 3–5). Anchor: Flake–Laugwitz–Posur, *Projection Formulas and
 Induced Functors on Centers of Monoidal Categories* (arXiv 2402.10094), Def 5.1 + Thm 5.6.
 

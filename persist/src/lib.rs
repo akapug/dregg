@@ -1,4 +1,4 @@
-//! `dregg-persist`: the node's ONE durable store (docs/PERSISTENCE.md).
+//! `dregg-persist`: the node's ONE durable store (.docs-history-noclaude/PERSISTENCE.md).
 //!
 //! This crate provides the node's durable storage — the commit log + index,
 //! ledger checkpoints, blocklace blocks/meta, notes/nullifiers, attested
@@ -246,7 +246,7 @@ impl PersistentStore {
             // Forever-digest sets (restart-durable anti-replay carriers).
             let _ = write_txn.open_table(tables::FOREVER_DIGESTS)?;
             // Durable channel rosters (member→seal-pk content; the cell holds
-            // only the commitment — docs/PERSISTENCE.md §3 roster caveat).
+            // only the commitment — .docs-history-noclaude/PERSISTENCE.md §3 roster caveat).
             let _ = write_txn.open_table(tables::CHANNEL_ROSTERS)?;
             // Metadata tables.
             let _ = write_txn.open_table(tables::METADATA)?;

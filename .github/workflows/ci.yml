@@ -153,6 +153,114 @@ jobs:
             wasm-pack build wasm --target web --out-dir pkg --release
           test -s wasm/pkg/dregg_wasm.d.ts
 
+  # EXCLUDED-WORKSPACES GATE (2026-07-17, CI-meaningfulness audit Track A2).
+  # The repo-root `Cargo.toml` `exclude` list carries eleven DELIBERATE standalone
+  # workspaces (each its own `[workspace]` + Cargo.lock), kept out of the root
+  # resolution for `links =` / version-pin conflicts. The isolation is correct —
+  # and it is the SAME failure mode every time: `cargo check --workspace` never
+  # touches them, so nothing can say they have rotted. discord-bot sat silently
+  # uncompilable at HEAD until 2026-07-16; wasm's ~78 tests were unbuildable for
+  # the identical reason (see the wasm job above). solana-lock and wasm have their
+  # dedicated jobs above; sdk-py is compile+test-gated by publish-sdk-py.yml. This
+  # matrix closes the hole for the remaining buildable five. Still ungated:
+  # pg-dregg (cargo-pgrx cdylib — wants a pgrx-managed postgres, not a bare
+  # runner), solana-settlement (needs the SBF toolchain; its native tests are a
+  # candidate for a solana-lock-style job later), and deos-zed-full (the vendored
+  # full-Zed recon spike: gpui/display-bound, same reason the root test job
+  # excludes deos-zed).
+  #
+  # `--locked` is deliberate: these workspaces path-dep into the main tree, so a
+  # manifest edit anywhere upstream silently invalidates their committed locks —
+  # exactly the drift class that goes unnoticed when nothing builds them. A red
+  # here that says "stale Cargo.lock" is fixed by regenerating the lock in that
+  # directory (cd <dir> && cargo update -w — or any cargo build there without
+  # --locked) and committing it.
+  #
+  # Toolchains: dtolnay/rust-toolchain exports RUSTUP_TOOLCHAIN, which overrides
+  # each directory's rust-toolchain.toml — that is what keeps this lane on the
+  # repo's date-pinned nightly instead of the crates' local ROLLING `nightly`
+  # pins (deliberately non-reproducible in CI). deos-homeserver is the exception:
+  # it pins stable 1.96.1 to match its embedded continuwuity upstream, so its
+  # matrix leg carries that toolchain instead.
+  excluded-workspaces:
+    name: Excluded workspace (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # check-only: its lock resolves dregg-lean-ffi WITHOUT no-lean-link, so
+          # test binaries would need the Lean seed archive at link time; `cargo
+          # check --all-targets` compiles every target (tests included) without
+          # linking, which is the honest hosted-runner gate.
+          - dir: discord-bot
+            toolchain: nightly-2026-06-21
+            timeout: 60
+          # no-lean-link end to end — test binaries link clean, so run them.
+          - dir: dregg-tui
+            toolchain: nightly-2026-06-21
+            timeout: 45
+            test: true
+          # self-contained (vendored sqlite via duroxide; no path deps on the
+          # default features) — the full suite runs in seconds.
+          - dir: durable-workflow
+            toolchain: nightly-2026-06-21
+            timeout: 30
+            test: true
+          # stable 1.96.1 = continuwuity's pin (rust-toolchain.toml there);
+          # check-only: the embed is a full Matrix homeserver over a from-source
+          # rocksdb — the long pole is the compile, and compiling it is the gate.
+          # Its conduwuit dep is a git dep on forgejo.ellis.link (an external
+          # forge) — if that host is down this leg fails at fetch, not at build.
+          - dir: deos-homeserver
+            toolchain: '1.96.1'
+            timeout: 90
+          # ⚠ EXPECTED RED at introduction (2026-07-17): src/materialize.rs still
+          # calls the OLD dregg-doc API (`AtomContent::as_bytes()`, `d.string()?:
+          # AtomContent`) — the pre-existing source drift its isolation hid, the
+          # same one that reverted the root-workspace fold (see the exclude-list
+          # note in the repo-root Cargo.toml). This leg is the tooth that keeps
+          # that wound visible until materialize.rs is fixed; do NOT green it by
+          # deleting the leg.
+          - dir: forge-ci-runner
+            toolchain: nightly-2026-06-21
+            timeout: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
+      # Same system-dep set as the Check job: these workspaces path-dep deep into
+      # the main tree (discord-bot alone pulls deos-view + starbridge surfaces),
+      # so give every leg the same floor rather than bisecting -sys probes per leg.
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libgl1-mesa-dev libegl-dev libgles-dev libharfbuzz-dev libfreetype-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gperf libunwind-dev
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.dir }}
+      # forge-ci-runner's `[patch]` path-points ../../plonky3-recursion (same
+      # sibling-checkout requirement as the wasm job above, same REV — they must
+      # stay in lockstep or the VK forks; see the wasm job's warning block).
+      - name: Fetch the plonky3-recursion fork as a sibling (forge-ci-runner patch target)
+        if: matrix.dir == 'forge-ci-runner'
+        run: |
+          set -euo pipefail
+          REV=0a4a554e144f4e60107555ea7a11cd9969d6208b
+          if [ ! -d ../plonky3-recursion/.git ]; then
+            git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
+            git -C ../plonky3-recursion fetch --depth 1 origin "$REV"
+            git -C ../plonky3-recursion checkout "$REV"
+          fi
+      - name: cargo check --all-targets --locked (the gate)
+        working-directory: ${{ matrix.dir }}
+        run: cargo check --all-targets --locked
+      - name: cargo test --locked (legs whose test binaries link honestly on a hosted runner)
+        if: matrix.test
+        working-directory: ${{ matrix.dir }}
+        run: cargo test --locked
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

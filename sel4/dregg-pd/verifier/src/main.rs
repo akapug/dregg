@@ -23,7 +23,7 @@
 //! federation`), which is `std`-bound today. Plonky3 itself is already
 //! `#![no_std]` (`p3-field`, `p3-uni-stark`, …), so carrying that closure to
 //! `no_std` for this target is a mechanical-but-large port, not a wall — see
-//! `../../README.md` and `docs/SEL4-EMBEDDING.md` §5.
+//! `../../README.md` and `.docs-history-noclaude/SEL4-EMBEDDING.md` §5.
 
 #![no_std]
 #![no_main]
@@ -116,7 +116,10 @@ fn verify_bundle_structure(buf: &[u8]) -> StructuralVerdict {
             return StructuralVerdict {
                 code: VERDICT_REJECTED,
                 entry_count: seen,
-                reason: format!("entry {}: commitment must be 32 bytes, got {}", seen, commit_len),
+                reason: format!(
+                    "entry {}: commitment must be 32 bytes, got {}",
+                    seen, commit_len
+                ),
             };
         }
         if off + commit_len > buf.len() {
@@ -207,7 +210,11 @@ fn init() -> HandlerImpl {
 
     // 3. Garbage -> ERROR.
     let v = verify_bundle_structure(b"not a bundle at all");
-    debug_println!("[m1] garbage      -> verdict={} reason=\"{}\"", v.code, v.reason);
+    debug_println!(
+        "[m1] garbage      -> verdict={} reason=\"{}\"",
+        v.code,
+        v.reason
+    );
 
     debug_println!("[m1] structural verify path is live; STARK core is the no_std closure port");
     HandlerImpl

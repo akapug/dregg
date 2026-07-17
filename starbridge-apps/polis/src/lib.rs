@@ -57,7 +57,7 @@
 //! listed with what carries it instead:
 //!
 //! 1. **Member ↔ approval-slot sender binding — DISSOLVED** (turn-context
-//!    atoms, `docs/CELL-PROGRAM-LANGUAGE.md` §3). A charter built with
+//!    atoms, `metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §3). A charter built with
 //!    [`council::CouncilCharter::with_member_keys`] installs, per member,
 //!    `AnyOf[Immutable{approval_slot_i}, SenderIs{member_keys[i]}]`: slot
 //!    *i* flips only in a turn whose SENDER is member *i*. A stolen/shared
@@ -95,7 +95,7 @@
 //!    spend exceeding the remaining balance cannot commit. The pinned
 //!    `SLICE` slot publishes the slice for audit; it is not the enforcement.
 //!    (The balance is no longer sealed from the grammar — `BalanceGte` /
-//!    `BalanceLte` atoms exist (`docs/CELL-PROGRAM-LANGUAGE.md` §3) for
+//!    `BalanceLte` atoms exist (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §3) for
 //!    programs that want explicit floors/drain teeth; the mandate keeps
 //!    conservation as its enforcement because it is already exact.)
 //! 6. **Tool-scope semantics.** The mandate's tool scope is a pinned 32-byte
@@ -176,7 +176,7 @@ pub enum PolisError {
     /// A proposal treasury exceeding the constitutional cap. Enforced
     /// fail-closed at descriptor build by the SDK's constitution-governed
     /// builders (a build gate; a `BalanceLte { max: treasury_cap }`
-    /// program tooth is now expressible — `docs/CELL-PROGRAM-LANGUAGE.md`
+    /// program tooth is now expressible — `metatheory/docs/CELL-PROGRAM-LANGUAGE.md`
     /// §3 — and is the natural descriptor evolution).
     EndowmentExceedsTreasuryCap { endowment: u64, cap: u64 },
     /// A worker mandate with a zero budget slice can do nothing; rejected so
@@ -1487,9 +1487,9 @@ pub mod mandate {
 
 pub mod identity {
     //! The identity cell: a person's identity as a small governance cell
-    //! (`docs/REFINEMENT-DESIGN.md` Decision 2 — devices are council
+    //! (`.docs-history-noclaude/REFINEMENT-DESIGN.md` Decision 2 — devices are council
     //! members, recovery is amendment-with-cooling) carrying the
-    //! **pre-rotation register** (`docs/ORGANS.md` "Identity rider"; kernel
+    //! **pre-rotation register** (`.docs-history-noclaude/ORGANS.md` "Identity rider"; kernel
     //! semantics proven in `metatheory/Dregg2/Apps/PreRotation.lean`).
     //!
     //! ## Pre-rotation in one line

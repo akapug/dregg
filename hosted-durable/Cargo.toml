@@ -37,3 +37,6 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 # settlement through `dregg_cell::CellState`'s signed-balance discipline
 # (`recTransfer_balanceSum_conserve`) on every build.
 dregg-cell = { path = "../cell" }
+
+[lints]
+workspace = true

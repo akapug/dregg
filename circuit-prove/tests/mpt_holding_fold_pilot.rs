@@ -35,6 +35,9 @@
 //! `#[ignore]`. Run with:
 //!   cargo test -p dregg-circuit-prove --test mpt_holding_fold_pilot -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use dregg_cell::Ledger;
 use dregg_circuit::descriptor_ir2::UMemBoundaryWitness;
 use dregg_circuit::descriptor_ir2::prove_vm_descriptor2_for_config;
@@ -102,6 +105,15 @@ fn producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
 
 fn bridge(w: &rw::RotationWitness) -> RotatedBlockWitness {
     RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("pre-iroot limbs")
+}
+
+/// Stand-in ABI roots for the LEAF-ONLY poles. The leaf itself does not check the prefix against
+/// anything (that is the FOLD's job — `prove_custom_binding_node_state_segmented`), so a leaf-only
+/// tooth may declare any well-formed prefix. The DEPLOYED poles use `leg_real_roots` instead.
+fn leaf_pis(w: &MptHoldingWitness) -> Vec<BabyBear> {
+    let old8: [BabyBear; 8] = core::array::from_fn(|k| BabyBear::new(100 + k as u32));
+    let new8: [BabyBear; 8] = core::array::from_fn(|k| BabyBear::new(200 + k as u32));
+    w.public_inputs(&old8, &new8)
 }
 
 /// The rung-2-verified EIP-1186 holding tuple the pilot folds (stands in for the
@@ -213,11 +225,54 @@ fn plain_custom_turn(balance: i64, nonce: u64) -> FinalizedTurn {
     FinalizedTurn::new(DescriptorParticipant::rotated(leg))
 }
 
+/// **THE LEG'S REAL ROTATED ROOTS.** Mint a probe leg and read its wide 8-felt anchors — the
+/// values the deployed state fold connects the sub-proof's declared ABI prefix to.
+///
+/// Sound because the wide roots come from the rotation witness (the cell's limbs + iroot) and do
+/// NOT depend on the claimed commitment or the attached bundle; `build_chain` asserts that
+/// independence rather than assuming it.
+fn leg_real_roots(nonce: u64) -> ([BabyBear; 8], [BabyBear; 8]) {
+    let probe = mint_custom_leg(CHAIN_BALANCE, nonce, [BabyBear::ZERO; 8], None);
+    (
+        probe
+            .wide_old_root8()
+            .expect("the custom leg is wide-anchored"),
+        probe
+            .wide_new_root8()
+            .expect("the custom leg is wide-anchored"),
+    )
+}
+
+const CHAIN_BALANCE: i64 = 1000i64;
+
+/// The honest bundle: the holding tuple declaring the LEG's real roots as its ABI prefix.
+fn honest_bundle() -> CustomWitnessBundle {
+    let (old8, new8) = leg_real_roots(0);
+    holding_witness().bundle(&old8, &new8)
+}
+
 /// Build the 2-turn chain: turn 0 the MPT-holding-bundled custom turn claiming
 /// `commit`; turn 1 a plain custom turn linking off turn 0's post-state.
 fn build_chain(commit: ProofBindCommitment) -> Vec<FinalizedTurn> {
-    let balance = 1000i64;
-    let t0_leg = mint_custom_leg(balance, 0, commit, Some(holding_witness().bundle()));
+    build_chain_with(commit, honest_bundle())
+}
+
+/// Build the chain from an EXPLICIT `(commit, bundle)`, so each tooth forges exactly one thing.
+fn build_chain_with(
+    commit: ProofBindCommitment,
+    bundle: CustomWitnessBundle,
+) -> Vec<FinalizedTurn> {
+    let balance = CHAIN_BALANCE;
+    let t0_leg = mint_custom_leg(balance, 0, commit, Some(bundle));
+    // THE TWO-PHASE SAFETY ASSERT: the real leg publishes the SAME wide roots the probe did.
+    assert_eq!(
+        (
+            t0_leg.wide_old_root8().expect("wide"),
+            t0_leg.wide_new_root8().expect("wide")
+        ),
+        leg_real_roots(0),
+        "the leg's wide rotated roots must not depend on the claimed commitment / bundle"
+    );
     let t0 = FinalizedTurn::new(DescriptorParticipant::rotated(t0_leg));
     let t1 = plain_custom_turn(balance, 1);
     assert_eq!(
@@ -251,7 +306,7 @@ fn assert_leaf_refuses(label: &str, witness: &MptHoldingWitness, public_inputs: 
 #[ignore = "SLOW: real recursion leaf wrap (~seconds-minutes); run with --ignored"]
 fn honest_holding_proves_as_foldable_leaf() {
     let w = holding_witness();
-    let pis = w.public_inputs();
+    let pis = leaf_pis(&w);
     let program = mpt_holding_program();
     let (wv, rows) = w.witness_values();
     let config = ir2_leaf_wrap_config();
@@ -278,7 +333,7 @@ fn honest_holding_proves_as_foldable_leaf() {
 #[ignore = "SLOW: real recursion leaf wrap attempt; run with --ignored"]
 fn forged_balance_does_not_fold() {
     let w = holding_witness();
-    let mut pis = w.public_inputs();
+    let mut pis = leaf_pis(&w);
     pis[11] += BabyBear::ONE; // balance lane; identity lane stays stale
     assert_leaf_refuses("forged balance (+1, identity stale)", &w, &pis);
 }
@@ -291,7 +346,7 @@ fn forged_balance_does_not_fold() {
 fn zero_balance_does_not_fold() {
     let mut w = holding_witness();
     w.balance = BabyBear::ZERO;
-    let pis = w.public_inputs(); // self-consistent: identity genuinely over balance 0
+    let pis = leaf_pis(&w); // self-consistent: identity genuinely over balance 0
     assert_eq!(pis[MPT_HOLDING_HASH_PI], w.holding_hash());
     assert_leaf_refuses("zero balance (self-consistent, floor bites)", &w, &pis);
 }
@@ -302,7 +357,7 @@ fn zero_balance_does_not_fold() {
 #[ignore = "SLOW: real recursion leaf wrap attempt; run with --ignored"]
 fn tampered_root_octet_does_not_fold() {
     let w = holding_witness();
-    let mut pis = w.public_inputs();
+    let mut pis = leaf_pis(&w);
     pis[3] += BabyBear::ONE; // root limb 3; identity lane stays stale
     assert_leaf_refuses("tampered root octet (limb 3 +1, identity stale)", &w, &pis);
 }
@@ -318,8 +373,8 @@ fn tampered_root_octet_does_not_fold() {
 #[test]
 #[ignore = "SLOW: real deployed custom-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_mpt_holding_turn_honest_accepts() {
-    let w = holding_witness();
-    let real = custom_proof_pi_commitment(&w.public_inputs());
+    let (old8, new8) = leg_real_roots(0);
+    let real = custom_proof_pi_commitment(&holding_witness().public_inputs(&old8, &new8));
     let turns = build_chain(real);
 
     let whole = prove_turn_chain_recursive(&turns)
@@ -344,8 +399,9 @@ fn deployed_mpt_holding_turn_forged_commitment_rejected() {
     let honest = holding_witness();
     let mut tampered = honest;
     tampered.balance += BabyBear::ONE;
-    let forged = custom_proof_pi_commitment(&tampered.public_inputs());
-    let real = custom_proof_pi_commitment(&honest.public_inputs());
+    let (old8, new8) = leg_real_roots(0);
+    let forged = custom_proof_pi_commitment(&tampered.public_inputs(&old8, &new8));
+    let real = custom_proof_pi_commitment(&honest.public_inputs(&old8, &new8));
     assert_ne!(
         connected_lanes(&forged),
         connected_lanes(&real),
@@ -355,10 +411,14 @@ fn deployed_mpt_holding_turn_forged_commitment_rejected() {
     // build_chain attaches the HONEST bundle; the leg publishes the forged claim.
     let turns = build_chain(forged);
 
-    must_refuse(
+    let err = must_refuse(
         "a FORGED holding commitment folded into a verifying deployed whole-chain artifact —  the rung",
         || prove_turn_chain_recursive(&turns),
     );
+    // ASSERT THE REASON. Without this the tooth passes VACUOUSLY: the deployed arm's fail-closed
+    // ABI-width check refuses before the fold, so a fixture that drifted below 16 PIs would satisfy
+    // an any-`Err` assertion while the commitment binding was never exercised at all.
+    assert_refused_by_binding_node(&err, "state-binding custom-binding node failed");
     eprintln!("RUNG-3 P0: forged MPT holding commitment REJECTED by the deployed fold (no root).");
 }
 
@@ -367,7 +427,7 @@ fn deployed_mpt_holding_turn_forged_commitment_rejected() {
 // ============================================================================
 
 mod structural {
-    use super::holding_witness;
+    use super::{holding_witness, leaf_pis};
     use dregg_circuit::descriptor_ir2::{CHIP_OUT_LANES, TID_P2, VmConstraint2};
     use dregg_circuit::dsl::circuit::ProgramRegistry;
     use dregg_circuit::field::BabyBear;
@@ -375,8 +435,9 @@ mod structural {
     use dregg_circuit_prove::custom_leaf_adapter::cellprogram_to_descriptor2;
     use dregg_circuit_prove::mpt_holding_leaf::{
         BALANCE_RANGE_BITS, COL_BAL_INV, COL_BALANCE, COL_HOLDING_HASH, MPT_HOLDING_BASE_WIDTH,
-        MPT_HOLDING_HASH_PI, MPT_HOLDING_PI_LEN, MPT_HOLDING_ROWS, MPT_HOLDING_VK_HASH_HEX,
-        RANGE_BASE, mpt_holding_hash_felt, mpt_holding_program,
+        MPT_HOLDING_HASH_PI, MPT_HOLDING_PI_LEN, MPT_HOLDING_ROWS, MPT_HOLDING_TUPLE_BASE,
+        MPT_HOLDING_TUPLE_LEN, MPT_HOLDING_VK_HASH_HEX, RANGE_BASE, mpt_holding_hash_felt,
+        mpt_holding_program,
     };
 
     fn hex32(b: &[u8; 32]) -> String {
@@ -440,8 +501,10 @@ mod structural {
             })
             .count();
         assert_eq!(
-            pins, MPT_HOLDING_PI_LEN,
-            "8 root pins + token/holder/slot/balance + the identity pin"
+            pins, MPT_HOLDING_TUPLE_LEN,
+            "8 root pins + token/holder/slot/balance + the identity pin — the TUPLE's 13 pins. \
+             The 16 ABI state-prefix PIs are deliberately UNPINNED: the prefix is a declaration \
+             the FOLD binds (to the leg's real roots), not a field this program computes."
         );
         assert_eq!(
             desc2.trace_width,
@@ -450,18 +513,41 @@ mod structural {
         );
     }
 
-    /// The host PI tuple matches the named identity composition (lane 12 = the
-    /// holding identity over lanes 0..12).
+    /// The host PI tuple matches the named identity composition (the last lane = the
+    /// holding identity over the TUPLE lanes, which start at `MPT_HOLDING_TUPLE_BASE`).
     #[test]
     fn public_inputs_match_named_identity() {
         let w = holding_witness();
-        let pis = w.public_inputs();
+        let pis = leaf_pis(&w);
+        let b = MPT_HOLDING_TUPLE_BASE;
         assert_eq!(pis.len(), MPT_HOLDING_PI_LEN);
         assert_eq!(pis[MPT_HOLDING_HASH_PI], w.holding_hash());
-        let root: [BabyBear; 8] = core::array::from_fn(|i| pis[i]);
+        let root: [BabyBear; 8] = core::array::from_fn(|i| pis[b + i]);
         assert_eq!(
             pis[MPT_HOLDING_HASH_PI],
-            mpt_holding_hash_felt(&root, pis[8], pis[9], pis[10], pis[11]),
+            mpt_holding_hash_felt(&root, pis[b + 8], pis[b + 9], pis[b + 10], pis[b + 11]),
+        );
+    }
+
+    /// **THE PREFIX IS NOT THE ETH ROOT.** The ABI state prefix (`pis[0..16]`, the dregg cell's
+    /// rotated pre/post commitments) and the EIP-1186 foreign-chain `state_root`
+    /// (`pis[16..24]`) are DIFFERENT objects occupying different lanes. Pinned because the
+    /// cheap wrong answer to "this carrier needs a 16-felt prefix" is to reuse the 8-felt Eth
+    /// root — which would satisfy the width check and then be UNSAT at the fold's state
+    /// `connect`, for reasons no one would enjoy debugging.
+    #[test]
+    fn the_state_prefix_is_not_the_eth_state_root() {
+        let w = holding_witness();
+        let pis = leaf_pis(&w);
+        let prefix: [BabyBear; 8] = core::array::from_fn(|i| pis[i]);
+        let eth_root: [BabyBear; 8] = core::array::from_fn(|i| pis[MPT_HOLDING_TUPLE_BASE + i]);
+        assert_eq!(
+            eth_root, w.state_root,
+            "the tuple's root lanes ARE the Eth state_root"
+        );
+        assert_ne!(
+            prefix, eth_root,
+            "the ABI state prefix must not be the Eth state_root — they are different objects"
         );
     }
 

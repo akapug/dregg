@@ -74,3 +74,6 @@ getrandom = { version = "0.3" }
 # production method itself takes only dregg-cell's registry seam; the vendor
 # crypto stays a dev/test (or host-install, see deos-hermes::tee_fact) concern.
 dregg-tee-verify = { path = "../tee-verify" }
+
+[lints]
+workspace = true

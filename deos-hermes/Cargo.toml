@@ -35,6 +35,16 @@ description = "Hermes-as-a-confined-deos-agent: every ACP tool-call becomes a ca
 name = "deos-hermes"
 path = "src/main.rs"
 
+# The crown-over-a-REAL-local-MPC-TLS-2PC runner drives `attest::attest_turn_live` +
+# `dregg_zkoracle_prove::tlsn_live::*` + `verify_zkoracle_live` UNCONDITIONALLY (not behind
+# a `#[cfg]`, unlike `verified_resident.rs` which guards its `attest_turn_live` uses). Those
+# items only exist under `zk-live`, so the example must declare it as a required feature —
+# else `cargo check --all-targets` (default features, zk-live OFF) fails to resolve
+# `attest_turn_live`. Mirrors zkoracle-prove's `coinbase_live` / `coinbase_inproc`.
+[[example]]
+name = "zk_live_carrier"
+required-features = ["zk-live"]
+
 [dependencies]
 # THE GROUNDING DEP — the real SDK with its DEFAULT features (the verified Lean
 # executor + the proven `ToolGateway`). We reuse `ToolGateway::{admit,invoke}`,

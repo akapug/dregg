@@ -78,7 +78,7 @@ it tested the machinery, not the thesis.
    `linearity_recovered_from_orthogonality` — linearity is recovered from
    orthogonality IFF the test side may CORRELATE the pair. The resource law
    lies outside every per-turn testing fragment (the fact/fiction line of
-   `docs/EPISTEMIC-DATALOG.md`, made formal) and exactly at the deployed
+   `.docs-history-noclaude/EPISTEMIC-DATALOG.md`, made formal) and exactly at the deployed
    composite observable.
 2. **The coordination grading: PARTIAL — and the conjectured form REFUTED.**
    The tier IS a structural property of the behaviour: coordination-free ⟺ the

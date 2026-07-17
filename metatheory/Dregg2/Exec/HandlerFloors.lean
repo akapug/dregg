@@ -888,7 +888,7 @@ names — the silent missing-gate carried as a refinement SIDE-HYPOTHESIS — is
 families AND inherited by the forest path per node; it is NOT a remaining forest-specific campaign. (The
 genuinely-remaining circuit-soundness work — binding the `heaps` field into the state-commitment conjunct
 `Circuit/StateCommit.RestHashIffFrame`, and the in-circuit `SortedTreeNonMembership` ↔ executor-set
-agreement — is the CIRCUIT/descriptor frontier tracked in `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`, a
+agreement — is the CIRCUIT/descriptor frontier tracked in `.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`, a
 distinct campaign from the handler-floor internalization this module completes.) -/
 
 end Dregg2.Exec.HandlerFloors

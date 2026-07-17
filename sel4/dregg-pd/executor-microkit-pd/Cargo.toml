@@ -16,8 +16,8 @@
 # `declare_rust_entrypoint! { global_init if true }`), exactly as the root task
 # does — so the `.preinit_array` syscall-handler install + the in-PD Linux-
 # syscall handler that services the Lean runtime's malloc/write/... work the same
-# way here. (docs/EMBEDDABLE-LEAN-RUNTIME.md §4, docs/SEL4-EMBEDDING.md §2,
-# docs/FIRMAMENT.md §6, ../executor-pd/WALL.md.)
+# way here. (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §4, .docs-history-noclaude/SEL4-EMBEDDING.md §2,
+# .docs-history-noclaude/FIRMAMENT.md §6, ../executor-pd/WALL.md.)
 #
 # Standalone workspace (own target dir; swarm-safe; never edits the shared
 # dregg-pd `members` list — same rationale as ../executor-pd and

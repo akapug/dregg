@@ -55,3 +55,4 @@ deos-view = { path = "../deos-view", default-features = false, features = ["web"
 
 [lints.rust]
 unsafe_code = "forbid"
+unexpected_cfgs = "deny"

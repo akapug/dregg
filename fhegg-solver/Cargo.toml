@@ -58,3 +58,6 @@ path = "src/bin/package_clear.rs"
 [[bin]]
 name = "fhegg_uniform"
 path = "src/bin/fhegg_uniform.rs"
+
+[lints]
+workspace = true

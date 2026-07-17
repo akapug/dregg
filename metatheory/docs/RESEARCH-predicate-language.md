@@ -1,7 +1,7 @@
 # RESEARCH — the predicate / caveat / datalog language uplift (read-only scoping pass)
 
 Source-verified 2026-06-23 against HEAD. The governing design doc is
-`docs/rebuild/_POLICY-LANGUAGES-REFRESH.md` (the D0–D9 worklist). **This research pass corrects that
+`.docs-history-noclaude/rebuild/metatheory/_POLICY-LANGUAGES-REFRESH.md` (the D0–D9 worklist). **This research pass corrects that
 doc against the actual source: most of D0–D5 is BUILT, not pending.** Every claim below cites
 `file:line`; trust the code, not the harvest.
 
@@ -239,7 +239,7 @@ The corollary caveat (connects to the circuit-soundness-apex campaign): because 
 policy was genuinely satisfied." Making the circuit bind the predicate *term* (so a light client can't
 be fooled about WHICH policy gated a write) WOULD be VK-affecting — but that is the apex campaign's
 descriptor-fix work, explicitly out of scope for the language uplift, and listed in
-`docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`. The uplift does not regress it; it also does not close it.
+`.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`. The uplift does not regress it; it also does not close it.
 
 ### Per-atom soundness
 

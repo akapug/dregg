@@ -12,7 +12,7 @@
 import { parseRef, isRef } from './uri.js';
 
 /**
- * The operational ORGANS (docs/ORGANS.md) — the live cell surfaces the node
+ * The operational ORGANS (.docs-history-noclaude/ORGANS.md) — the live cell surfaces the node
  * serves, each a dregg:// kind with a registered inspector that reads its
  * node-side status route. The workbench offers them as palette entries.
  */
@@ -897,7 +897,7 @@ function writeUrlState({ at, runtime }) {
       { group: 'Collections', label: 'Agent 0 capabilities', detail: 'Open capability list for first agent', priority: 6, run: () => setCurrentUri('dregg://capability-list/0') },
     ];
 
-    // The operational ORGANS (docs/ORGANS.md) — each reads its live node-side
+    // The operational ORGANS (.docs-history-noclaude/ORGANS.md) — each reads its live node-side
     // status route. Prompt for the organ id (cell / strand / owner key); the
     // inspector degrades honestly to "node-only" off a connected node.
     for (const organ of ORGAN_KINDS) {

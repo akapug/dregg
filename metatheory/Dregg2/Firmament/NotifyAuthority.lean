@@ -1,7 +1,7 @@
 /-
 # Dregg2.Firmament.NotifyAuthority — async-signal AS a held capability (the `notify` brick, STEP 1).
 
-This module is the **transfer triangle** of the `notify` primitive (`docs/NOTIFY-PRIMITIVE.md`):
+This module is the **transfer triangle** of the `notify` primitive (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md`):
 it makes the *cap-algebra on async-signal authority* a THEOREM **before** the core `Auth` inductive
 (`Authority/Positional.lean:37`) is touched. It adds NO core-`Auth` constructor, NO felt/Fintype/FFI
 arm, NO VK bump — those are STEP 2 (the `Auth.notify` core edit + α-totalization, held for ember).

@@ -1,7 +1,7 @@
 /**
  * Turn Workbench — the verb-first turn surface (dregg3 framing).
  *
- * The kernel is being reduced to EIGHT verbs (docs/DREGG3.md §2.3:
+ * The kernel is being reduced to EIGHT verbs (.docs-history-noclaude/DREGG3.md §2.3:
  * create · write · move · grant · revoke · shield/unshield · lifecycle);
  * everything else among the legacy effects is a cell-program pattern
  * (factory + Pred + these verbs). This section drives the verbs against the
@@ -56,7 +56,7 @@ function defaultNodeUrl() {
   return 'http://localhost:8420';
 }
 
-// The eight dregg3 verbs (docs/DREGG3.md §2.3) with their subsumption notes
+// The eight dregg3 verbs (.docs-history-noclaude/DREGG3.md §2.3) with their subsumption notes
 // and what THIS workbench can drive tonight. `effects` are turn-composable
 // staged effects (wasm execute_turn RawAction kinds); `action` is a dedicated
 // runtime-call mini-action.
@@ -411,7 +411,7 @@ function render(section) {
     <div class="pg-section__header">
       <h2>Turn Workbench</h2>
       <p>
-        Speak the kernel's <strong>eight verbs</strong> (docs/DREGG3.md §2.3) instead of 50 effect
+        Speak the kernel's <strong>eight verbs</strong> (.docs-history-noclaude/DREGG3.md §2.3) instead of 50 effect
         names: stage a turn, read what each effect <em>means</em> (from the verified-Lean catalog)
         <strong>before</strong> running it, execute it on the real in-browser executor, prove it,
         or submit the thin-HTTP fragment to a devnet node. ${wasmOk ? '' : '<strong>wasm failed to load — local runs are unavailable; node submit still works.</strong>'}

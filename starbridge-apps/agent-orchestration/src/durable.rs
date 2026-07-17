@@ -1,6 +1,6 @@
 //! # The orchestration as a pg-dregg-shaped DURABLE WORKFLOW — DBOS, but every step a verified turn.
 //!
-//! `docs/PG-DREGG.md` + `pg-dregg/src/workflow.rs` (`WorkflowEngine` / `run_durable` /
+//! `.docs-history-noclaude/PG-DREGG.md` + `pg-dregg/src/workflow.rs` (`WorkflowEngine` / `run_durable` /
 //! `recover_from_durable` / `resume_durable` / the `RootChain` anti-substitution tooth) +
 //! `docs/deos/DURABLE-WORKFLOW.md`. This module re-expresses the agent orchestration ON the
 //! pg-dregg durable-workflow SHAPE, so the orchestration is DBOS-style durable execution where every

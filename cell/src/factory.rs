@@ -941,14 +941,14 @@ impl FactoryRegistry {
 
 // ---- THE ROTATION (staged): `FactoryDescriptor.fields` name declarations ----
 //
-// `docs/UNIVERSAL-MAP-ROTATION.md` §2.1: the rotation widens the register
+// `.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.1: the rotation widens the register
 // file 8 → 16 and gives `FactoryDescriptor` a `fields` NAME declaration;
 // compilation resolves indices. The RESOLUTION SEMANTICS ship here, staged;
 // the struct field itself (`pub fields: Vec<String>` + the `hash` absorption
 // under a v2 derive key) is a flag-day change — it touches all ~65
 // `FactoryDescriptor { .. }` construction sites across the workspace and the
 // descriptor's content-addressed identity — and is listed in
-// `docs/ROTATION-CUTOVER.md`, NOT flipped here.
+// `.docs-history-noclaude/ROTATION-CUTOVER.md`, NOT flipped here.
 //
 // The Lean twin (the authority on the semantics): `metatheory/Dregg2/Circuit/
 // RotationLayout.lean` — `resolve` with `resolve_total` (total on declared

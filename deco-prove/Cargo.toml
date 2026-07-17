@@ -71,3 +71,6 @@ tlsn-live = [
 # The RAM mint path (mint_against_deco / live_supply bookkeeping) is a bridge
 # test-utils surface; enable it so the e2e round-trip can assert conservation.
 dregg-bridge = { path = "../bridge", features = ["test-utils"] }
+
+[lints]
+workspace = true

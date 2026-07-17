@@ -43,7 +43,7 @@ weight.
 **Refuted assumption (the reason this census was commissioned):** the perf-epoch
 "incremental commitment ~130,000×" did NOT leave dregg-commit stale or
 duplicated. That work lives entirely in `cell/src/commitment.rs` (the cap-root
-cache, `docs/INCREMENTAL-COMMITMENT.md`) and is orthogonal to dregg-commit —
+cache, `.docs-history-noclaude/INCREMENTAL-COMMITMENT.md`) and is orthogonal to dregg-commit —
 `cell/src` has ZERO `dregg_commit` references; the dep is `zkvm`-feature-gated and
 only pulled by the sp1-guest build. dregg-commit is genuinely the live core that
 ~28 non-test files across 12 crates depend on.
@@ -98,7 +98,7 @@ the perf-epoch hot file) is a duplicate that bypassed dregg-commit. It is NOT:
   `zkvm` feature (`cell/Cargo.toml:19`), which is enabled only by the sp1-guest
   build (`circuit/sp1-guest/Cargo.toml:25`), never by any native dependent.
 - The perf-epoch "incremental commitment" is the cap-root sub-root cache at
-  `cell/src/commitment.rs:558-566` (`docs/INCREMENTAL-COMMITMENT.md`), with its
+  `cell/src/commitment.rs:558-566` (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md`), with its
   own `cap_root_cache_matches_fresh` differential — orthogonal to dregg-commit.
 
 So dregg-commit and cell-commitment are two orthogonal schemes; neither
@@ -422,7 +422,7 @@ unless DAS-at-consensus (`lib.rs:48-51`) is on the actual roadmap.
 - **Refute the commissioning premise (worth a MEMORY note):** the perf-epoch
   "incremental commitment ~130,000×" did NOT leave dregg-commit stale or
   duplicated. That work is `cell/src/commitment.rs` (cap-root cache,
-  `docs/INCREMENTAL-COMMITMENT.md`), orthogonal to dregg-commit; `cell/src` has
+  `.docs-history-noclaude/INCREMENTAL-COMMITMENT.md`), orthogonal to dregg-commit; `cell/src` has
   zero `dregg_commit` refs (dep is `zkvm`-gated, sp1-guest-only). dregg-commit is
   the live token-commitment core for 12 crates / ~28 non-test files.
 - **`dfa/air.rs:88` & `:211-219` are STALE/FALSE** — they claim

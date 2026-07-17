@@ -236,3 +236,6 @@ lockstitch = { version = "0.29", features = ["portable"] }
 # (`performance_now`) + `TryInto` are gated behind the crate's own `wasm` feature.
 biscuit-auth = { version = "6.0.0", features = ["wasm"] }
 
+
+[lints]
+workspace = true

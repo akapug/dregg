@@ -320,6 +320,7 @@ fn bundle_of(program: CellProgram, pis: Vec<BabyBear>) -> CustomWitnessBundle {
         witness_values: w,
         num_rows: rows,
         public_inputs: pis,
+        app_root_binding: None,
     }
 }
 

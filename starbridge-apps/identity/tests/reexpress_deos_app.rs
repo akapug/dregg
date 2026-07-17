@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `identity` starbridge-app, on the composed deos framework —
 //! **the same app, smaller + more capable, now SHIPPED from `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: identity is THE
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: identity is THE
 //! credential-across-trust-boundary web-of-cells story. The ISSUER, re-expressed as a
 //! composed [`DeosApp`] ([`identity_app`] from `src/`) and PROMOTED into `src/lib.rs`. This
 //! file drives the SHIPPED surface, proving the promotion: per-viewer projection, the

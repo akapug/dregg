@@ -1,5 +1,5 @@
 //! BYTE-IDENTITY differential for the cell-leaf digest cache
-//! (`docs/INCREMENTAL-COMMITMENT.md` step 3).
+//! (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md` step 3).
 //!
 //! The cell-leaf cache stores the finished 32-byte canonical Merkle leaf on the
 //! `Cell` and reuses it on later `Ledger::root()` calls until the cell is next

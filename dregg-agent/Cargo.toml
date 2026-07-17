@@ -60,3 +60,6 @@ reqwest = { version = "0.12", optional = true, default-features = false, feature
   "json",
   "rustls-tls",
 ] }
+
+[lints]
+workspace = true

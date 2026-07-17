@@ -1,5 +1,5 @@
 //! THE OS-SANDBOX CONFINEMENT — Phase-0 of the cross-platform sandboxed
-//! firmament (`docs/DREGG-DESKTOP-OS.md §3`, the ambient-authority half of the
+//! firmament (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §3`, the ambient-authority half of the
 //! v1 isolation upgrade).
 //!
 //! ## What gap this closes

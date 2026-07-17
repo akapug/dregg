@@ -101,3 +101,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 
+
+[lints]
+workspace = true

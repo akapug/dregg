@@ -1,14 +1,14 @@
 /-
 # Dregg2.Apps.Trustline — the bilateral line of credit (mutual credit) as a verified cell-program.
 
-**The organ this births** (docs/ORGANS.md §1): trustlines are "built but stillborn at one uncalled
+**The organ this births** (.docs-history-noclaude/ORGANS.md §1): trustlines are "built but stillborn at one uncalled
 init" — the Stingray bounded-counter machinery exists end to end (`coord/src/shared_budget.rs`,
 `coord/src/budget.rs`, the executor `BudgetGate` in `turn/src/budget_gate.rs`, the per-turn seeding
 at `node/src/blocklace_sync.rs:2081`), but `node/src/state.rs:1129 init_budget_coordinator` has ZERO
 callers, so the gate is always `None` (and the settlement edges `collect_spending_certificates` /
 `rebalance_budgets` dangle uncalled too). This module models the thing the init edge births: the
 DIRECTIONAL bilateral line of credit, and proves its keystones. The companion design doc
-(`docs/TRUSTLINES.md`) names the init/settle weld.
+(`.docs-history-noclaude/TRUSTLINES.md`) names the init/settle weld.
 
 **The model.** "Issuer A extends holder B a line of N" is an ATTENUATED CAPABILITY whose exercise
 debits a shared counter:
@@ -484,7 +484,7 @@ theorem ceiling_immutable_forever (t₀ : Line) (sched : TLSched) :
 
 The trustline's counter is LITERALLY the bounded counter the executor's `BudgetGate` runs
 (`turn/src/budget_gate.rs:70 try_debit`) and the payment-channel demo bursts against — lines of
-credit and payment channels are one primitive at two settings (docs/ORGANS.md §1). -/
+credit and payment channels are one primitive at two settings (.docs-history-noclaude/ORGANS.md §1). -/
 
 /-- **`draw_slice_tracks_tryDebit`** — a committed draw's counter move IS `Slice.tryDebit` on the
 line's slice face: same gate, same arithmetic, same post-state. -/
@@ -1068,14 +1068,14 @@ theorem sline_derived_view_faithful {s : SLine} (hwf : s.WF) :
   show SLine.mk (Line.ofView s.tl.ceiling s.tl.drawn s.tl.draws) s.settled = s
   rw [derived_view_faithful hwf.1]
 
-/-! ## §12 — The collateral axis, reified (docs/ORGANS.md parameterization discipline).
+/-! ## §12 — The collateral axis, reified (.docs-history-noclaude/ORGANS.md parameterization discipline).
 
 §5b's `settlePay` is the pureCredit point (holder repays HARD value to the issuer; the credit
 legs unwind); the deployed node is the fullReserve point (the issuer escrowed the full line at
 open; settle pays the holder OUT OF THE ESCROW while `settled` marches). One axis, two points,
 ONE parametric conservation keystone — the Rust settle is a theorem instance, not a divergence. -/
 
-/-- The collateral backing of a line (docs/TRUSTLINES.md §2/§5). -/
+/-- The collateral backing of a line (.docs-history-noclaude/TRUSTLINES.md §2/§5). -/
 inductive Collateral where
   /-- The full line is escrowed at open (payment-channel point — the DEPLOYED node weld). -/
   | fullReserve

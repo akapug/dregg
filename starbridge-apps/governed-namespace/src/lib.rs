@@ -1522,7 +1522,7 @@ pub mod committee_board {
 // The deos-native surface — the governance BOARD as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the governed-namespace governance
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the governed-namespace governance
 // board, re-expressed as a composed [`DeosApp`] and SHIPPED from `src/`. The same
 // operations are ONE [`DeosApp`] ([`governance_app`] below); the framework wires the
 // rest — per-viewer projection, web-of-cells publish (the governance cell IS a

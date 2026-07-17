@@ -1,6 +1,6 @@
 //! # THE EPOCH FLAG-DAY VALIDATE GATE — does IR-v2 prove+verify a REAL transfer end-to-end?
 //!
-//! `docs/EPOCH-DESIGN.md` makes hashing a BOUNDARY phenomenon: the per-effect circuit becomes a
+//! `.docs-history-noclaude/EPOCH-DESIGN.md` makes hashing a BOUNDARY phenomenon: the per-effect circuit becomes a
 //! MULTI-TABLE batch STARK (main + poseidon2-chip + range + memory + map-ops), Lean emits the
 //! table/relation grammar (`emitVmJson2`, `"ir":2`), and `descriptor_ir2.rs` assembles it. This
 //! file is the GATE the full VK cutover is gated on: it drives ONE real effect — `transfer`, the

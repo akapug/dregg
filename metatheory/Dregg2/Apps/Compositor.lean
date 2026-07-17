@@ -1,7 +1,7 @@
 /-
 # Dregg2.Apps.Compositor — THE VERIFIED COMPOSITOR (output-integrity = unfoolability on the scene).
 
-**THE THESIS (`docs/DREGG-DESKTOP-OS.md §5).** dregg already proves a light client checking
+**THE THESIS (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §5).** dregg already proves a light client checking
 `verify root = true` cannot be fooled by *the pale ghost* (a server lying about protocol state,
 `AssuranceCase.unfoolability_guarantee`). The compositor asks the SAME question one hop further out:
 **can the HUMAN at the glass be fooled?** The pale ghost on the display is a UI that paints pixels

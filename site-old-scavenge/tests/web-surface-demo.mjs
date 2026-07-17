@@ -2,7 +2,7 @@
  * Web-surface KILLER-DEMO end-to-end smoke test (N13 — the web evaluation
  * artifact): "TWO TABS, ONE SURFACE, the share that REFUSES".
  *
- * `docs/FRONTIER-ROADMAP.md §4` (the web killer demo) + `docs/WEB-FORWARD-EVERYWHERE.md`
+ * `.docs-history-noclaude/FRONTIER-ROADMAP.md §4` (the web killer demo) + `.docs-history-noclaude/WEB-FORWARD-EVERYWHERE.md`
  * (N13). The companion `web-surface-proving-worker.mjs` covers the off-thread
  * Worker + the `verify_history` anchor discipline; THIS test covers the SURFACE
  * demo state machine itself — the headline N13 deliverable — in a REAL headless

@@ -41,7 +41,7 @@ use commit_store::{ChainRefusal, CommitRecord, CommitStore, GENESIS_ROOT};
 /// A faithful tiny stand-in for the executor PD's producer side. The REAL
 /// executor is the verified Lean `execFullForestG` (`dregg_exec_full_forest_auth`)
 /// — blocked on the §2 Lean ELF port for the bare target, refuted-and-booting per
-/// `docs/EMBEDDABLE-LEAN-RUNTIME.md`. What the producer CONTRACT is, though, is
+/// `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md`. What the producer CONTRACT is, though, is
 /// fixed (`pg-dregg/src/drainer.rs`): it receives `(ordinal, prev_root)` from the
 /// chain head and stamps them onto the turn it returns; a stale or forged producer
 /// is caught at the persist store's chain gate. This stand-in models exactly that
@@ -92,7 +92,10 @@ fn digest32(tag: u8, turn_id: u64, prev: &[u8; 32]) -> [u8; 32] {
             ^ (i as u64);
     }
     for (i, slot) in out.iter_mut().enumerate() {
-        acc = acc.rotate_left(11).wrapping_add(i as u64).wrapping_mul(0x0100_0000_01b3);
+        acc = acc
+            .rotate_left(11)
+            .wrapping_add(i as u64)
+            .wrapping_mul(0x0100_0000_01b3);
         *slot = (acc >> ((i % 8) * 8)) as u8;
     }
     out
@@ -110,7 +113,9 @@ fn main() {
     println!("   (the deos spine: executor commits a verified turn -> persist stores it ->");
     println!("    a read returns it; a non-chaining / out-of-order / replayed turn is gated)\n");
 
-    let producer = ProducerStub { creator: [0xA1; 32] };
+    let producer = ProducerStub {
+        creator: [0xA1; 32],
+    };
     let mut store = CommitStore::new();
 
     // ---- the spine, end to end ------------------------------------------------
@@ -124,12 +129,20 @@ fn main() {
         .commit_verified_turn(&turn0)
         .expect("genesis turn commits");
     println!("  [1] executor produced turn 7000 (ordinal {ord0}, prev=GENESIS); persist committed at ordinal {a0}");
-    println!("      cursor now {} ; head -> {}", store.commit_cursor(), hexshort(&store.head_root().unwrap()));
+    println!(
+        "      cursor now {} ; head -> {}",
+        store.commit_cursor(),
+        hexshort(&store.head_root().unwrap())
+    );
 
     // READ it back three ways — reads are free.
     let by_ord = store.lookup_by_ordinal(a0).expect("read by ordinal");
-    let by_th = store.lookup_by_turn_hash(&turn0.turn_hash).expect("read by turn_hash");
-    let by_rh = store.lookup_by_receipt_hash(&turn0.receipt_hash).expect("read by receipt_hash");
+    let by_th = store
+        .lookup_by_turn_hash(&turn0.turn_hash)
+        .expect("read by turn_hash");
+    let by_rh = store
+        .lookup_by_receipt_hash(&turn0.receipt_hash)
+        .expect("read by receipt_hash");
     assert_eq!(by_ord, &turn0);
     assert_eq!(by_th, &turn0);
     assert_eq!(by_rh, &turn0);
@@ -141,14 +154,23 @@ fn main() {
     assert_eq!(prev1, root0, "the head IS turn 0's ledger_root (the chain)");
     let turn1 = producer.produce(7001, ord1, prev1);
     let root1 = turn1.ledger_root;
-    let a1 = store.commit_verified_turn(&turn1).expect("turn 1 chains and commits");
+    let a1 = store
+        .commit_verified_turn(&turn1)
+        .expect("turn 1 chains and commits");
     println!("  [3] turn 7001 chains onto turn 7000 (prev_root == prior ledger_root); committed at ordinal {a1}");
-    println!("      cursor now {} ; head -> {}", store.commit_cursor(), hexshort(&store.head_root().unwrap()));
+    println!(
+        "      cursor now {} ; head -> {}",
+        store.commit_cursor(),
+        hexshort(&store.head_root().unwrap())
+    );
 
     // a light client walks the log and re-checks the root chain — the
     // self-checking projection (§10): prev_root[N+1] == ledger_root[N].
     let walk_ok = chain_is_intact(&store);
-    println!("  [4] light-client walk re-checks the on-store root chain -> {}", if walk_ok { "INTACT" } else { "BROKEN" });
+    println!(
+        "  [4] light-client walk re-checks the on-store root chain -> {}",
+        if walk_ok { "INTACT" } else { "BROKEN" }
+    );
     assert!(walk_ok, "the committed log must form an intact hash chain");
 
     // ---- the anti-substitution teeth all bite ---------------------------------
@@ -160,8 +182,15 @@ fn main() {
     forged.prev_root = [0xFF; 32];
     let r = store.commit_verified_turn(&forged);
     println!("  admit(turn w/ wrong prev_root)   -> {}", verdict(&r));
-    assert!(matches!(r, Err(ChainRefusal::RootMismatch { .. })), "wrong prev_root must REFUSE");
-    assert_eq!(store.commit_cursor(), ord2, "head/cursor must NOT move on a refusal");
+    assert!(
+        matches!(r, Err(ChainRefusal::RootMismatch { .. })),
+        "wrong prev_root must REFUSE"
+    );
+    assert_eq!(
+        store.commit_cursor(),
+        ord2,
+        "head/cursor must NOT move on a refusal"
+    );
 
     // TOOTH 2 — an OUT-OF-ORDER turn (ordinal gap) is REFUSED.
     let prev_now = store.head_root().unwrap();
@@ -169,36 +198,64 @@ fn main() {
     gapped.ordinal = ord2 + 5;
     let r = store.commit_verified_turn(&gapped);
     println!("  admit(turn w/ ordinal gap)       -> {}", verdict(&r));
-    assert!(r.is_err(), "an ordinal gap must REFUSE (no holes in the log)");
-    assert_eq!(store.commit_cursor(), ord2, "cursor must NOT move on a refusal");
+    assert!(
+        r.is_err(),
+        "an ordinal gap must REFUSE (no holes in the log)"
+    );
+    assert_eq!(
+        store.commit_cursor(),
+        ord2,
+        "cursor must NOT move on a refusal"
+    );
 
     // TOOTH 3 — REPLAY of an already-committed turn is an idempotent NO-OP.
     let replay = store.commit_verified_turn(&turn0);
-    println!("  admit(replay of committed turn0) -> {} (idempotent)", verdict(&replay));
+    println!(
+        "  admit(replay of committed turn0) -> {} (idempotent)",
+        verdict(&replay)
+    );
     assert_eq!(replay, Ok(0), "replaying turn 0 returns its ordinal, no-op");
-    assert_eq!(store.commit_cursor(), ord2, "a replay must NOT advance the cursor");
+    assert_eq!(
+        store.commit_cursor(),
+        ord2,
+        "a replay must NOT advance the cursor"
+    );
 
     // TOOTH 4 — a DIFFERENT turn at an already-taken ordinal is REFUSED (Integrity).
     let mut collision = producer.produce(9999, 0, GENESIS_ROOT); // ordinal 0, but a different turn
     collision.ordinal = 0;
     let r = store.commit_verified_turn(&collision);
     println!("  admit(different turn @ ordinal0) -> {}", verdict(&r));
-    assert!(matches!(r, Err(ChainRefusal::Integrity(_))), "a collision at a taken ordinal must REFUSE");
+    assert!(
+        matches!(r, Err(ChainRefusal::Integrity(_))),
+        "a collision at a taken ordinal must REFUSE"
+    );
 
     // the store is still exactly the two good turns — nothing forged slipped in.
     assert_eq!(store.commit_cursor(), 2, "exactly two turns committed");
-    assert!(chain_is_intact(&store), "the chain is still intact after all refusals");
-    println!("\n  store holds exactly {} committed turns; chain intact; no forged state admitted", store.commit_cursor());
+    assert!(
+        chain_is_intact(&store),
+        "the chain is still intact after all refusals"
+    );
+    println!(
+        "\n  store holds exactly {} committed turns; chain intact; no forged state admitted",
+        store.commit_cursor()
+    );
 
     // ---- a persist-PD RESTART resumes from the durable head -------------------
     let resumed = CommitStore::resume(store.head_root(), store.commit_cursor());
-    println!("  [5] persist-PD restart resumes at cursor {} head {} (no turn lost)",
-        resumed.commit_cursor(), hexshort(&resumed.head_root().unwrap()));
+    println!(
+        "  [5] persist-PD restart resumes at cursor {} head {} (no turn lost)",
+        resumed.commit_cursor(),
+        hexshort(&resumed.head_root().unwrap())
+    );
     assert_eq!(resumed.commit_cursor(), 2);
     assert_eq!(resumed.head_root(), Some(root1));
 
     println!("\n== deos spine GREEN: a verified turn commits durably, a read returns it,");
-    println!("== and the chain gate refuses every non-chaining / out-of-order / forged turn ( ◕‿◕ ) ==");
+    println!(
+        "== and the chain gate refuses every non-chaining / out-of-order / forged turn ( ◕‿◕ ) =="
+    );
 }
 
 /// Walk the committed log in order and re-check `prev_root[N+1] == ledger_root[N]`
@@ -240,7 +297,9 @@ mod tests {
     use commit_store::verify_chain_step;
 
     fn producer() -> ProducerStub {
-        ProducerStub { creator: [0xA1; 32] }
+        ProducerStub {
+            creator: [0xA1; 32],
+        }
     }
 
     /// The spine: a verified turn commits durably and a read returns it.
@@ -265,7 +324,10 @@ mod tests {
         let t0 = p.produce(1, 0, GENESIS_ROOT);
         s.commit_verified_turn(&t0).unwrap();
         let t1 = p.produce(2, s.commit_cursor(), s.head_root().unwrap());
-        assert_eq!(t1.prev_root, t0.ledger_root, "prev_root == prior ledger_root");
+        assert_eq!(
+            t1.prev_root, t0.ledger_root,
+            "prev_root == prior ledger_root"
+        );
         s.commit_verified_turn(&t1).unwrap();
         assert_eq!(s.commit_cursor(), 2);
         assert_eq!(s.head_root(), Some(t1.ledger_root));
@@ -278,7 +340,8 @@ mod tests {
     fn wrong_prev_root_is_refused_root_mismatch() {
         let p = producer();
         let mut s = CommitStore::new();
-        s.commit_verified_turn(&p.produce(1, 0, GENESIS_ROOT)).unwrap();
+        s.commit_verified_turn(&p.produce(1, 0, GENESIS_ROOT))
+            .unwrap();
         let mut forged = p.produce(2, 1, [0xEE; 32]);
         forged.prev_root = [0xEE; 32];
         let r = s.commit_verified_turn(&forged);
@@ -291,7 +354,8 @@ mod tests {
     fn ordinal_gap_is_refused() {
         let p = producer();
         let mut s = CommitStore::new();
-        s.commit_verified_turn(&p.produce(1, 0, GENESIS_ROOT)).unwrap();
+        s.commit_verified_turn(&p.produce(1, 0, GENESIS_ROOT))
+            .unwrap();
         let mut gapped = p.produce(2, 9, s.head_root().unwrap());
         gapped.ordinal = 9;
         let r = s.commit_verified_turn(&gapped);
@@ -307,7 +371,8 @@ mod tests {
         let mut s = CommitStore::new();
         let t0 = p.produce(1, 0, GENESIS_ROOT);
         s.commit_verified_turn(&t0).unwrap();
-        s.commit_verified_turn(&p.produce(2, 1, s.head_root().unwrap())).unwrap();
+        s.commit_verified_turn(&p.produce(2, 1, s.head_root().unwrap()))
+            .unwrap();
 
         // replay turn0 -> no-op success, cursor unchanged.
         assert_eq!(s.commit_verified_turn(&t0), Ok(0));
@@ -328,7 +393,8 @@ mod tests {
     fn restart_resumes_from_durable_head() {
         let p = producer();
         let mut s = CommitStore::new();
-        s.commit_verified_turn(&p.produce(1, 0, GENESIS_ROOT)).unwrap();
+        s.commit_verified_turn(&p.produce(1, 0, GENESIS_ROOT))
+            .unwrap();
         let t1 = p.produce(2, 1, s.head_root().unwrap());
         s.commit_verified_turn(&t1).unwrap();
 
@@ -351,7 +417,7 @@ mod tests {
         // ordinal must be 0.
         assert!(verify_chain_step(None, 0, GENESIS_ROOT, 0).is_ok());
         assert!(verify_chain_step(None, 0, GENESIS_ROOT, 1).is_err()); // wrong ordinal
-        // non-genesis: prev must equal head.
+                                                                       // non-genesis: prev must equal head.
         let head = [0x11; 32];
         assert!(verify_chain_step(Some(head), 5, head, 5).is_ok());
         assert!(matches!(

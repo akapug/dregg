@@ -1,7 +1,7 @@
 //! Tier B/C CORE — postgres-independent, `cargo test`-proven.
 //!
 //! This is the storage/query/verified-write substrate of `pg-dregg`, built to
-//! the spine invariant of `docs/PG-DREGG.md` §8:
+//! the spine invariant of `.docs-history-noclaude/PG-DREGG.md` §8:
 //!
 //! > **Reads are free SQL; state mutates ONLY through verified turns.**
 //!
@@ -27,7 +27,7 @@
 //! ## What is in here
 //!
 //! 1. [`Domain`] + [`MemCell`] — the universal-memory model
-//!    (`docs/UNIVERSAL-MEMORY.md`): ONE multiset over `Domain × κ`, the honest
+//!    (`.docs-history-noclaude/UNIVERSAL-MEMORY.md`): ONE multiset over `Domain × κ`, the honest
 //!    single-relation form of all dregg state.
 //! 2. [`CellRow`] / [`TurnRow`] / [`CapRow`] — the typed projections of the
 //!    commit log's `CommitRecord` + `Cell` + `CapabilityRef` (the query sugar
@@ -48,13 +48,13 @@ use serde::{Deserialize, Serialize};
 // 1. The universal-memory model — ONE multiset over Domain × κ.
 // ============================================================================
 //
-// docs/UNIVERSAL-MEMORY.md proves dregg's whole state is one Blum multiset over
+// .docs-history-noclaude/UNIVERSAL-MEMORY.md proves dregg's whole state is one Blum multiset over
 // `Domain × κ`, with the map roots as derived boundary views. A future state
 // component is a NEW DOMAIN VALUE, never a new table. So this enum is the whole
 // address space of dregg memory, and `MemCell` is one cell of it.
 
 /// The memory domain — the `Domain` half of the universal `(domain, key)`
-/// address (`docs/UNIVERSAL-MEMORY.md`). A new state component is a new VARIANT
+/// address (`.docs-history-noclaude/UNIVERSAL-MEMORY.md`). A new state component is a new VARIANT
 /// here, never a new table; that is the whole point of the collapse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -73,7 +73,7 @@ pub enum Domain {
 
 impl Domain {
     /// The stable SQL/tag string. Load-bearing: the tag is what keeps the flat
-    /// untagged address space from aliasing (`docs/UNIVERSAL-MEMORY.md`: a cap
+    /// untagged address space from aliasing (`.docs-history-noclaude/UNIVERSAL-MEMORY.md`: a cap
     /// check at key 7 must NOT read the nullifier value at 7).
     pub fn tag(self) -> &'static str {
         match self {
@@ -297,7 +297,7 @@ impl MirrorBatch {
     }
 
     /// The touched-cell post-images as the jsonb the Tier-C `dregg.commit_log`
-    /// trigger consumes (`docs/PG-DREGG.md` §10; [`ddl::tier_c`]). Each element
+    /// trigger consumes (`.docs-history-noclaude/PG-DREGG.md` §10; [`ddl::tier_c`]). Each element
     /// carries the fields `dregg.apply_verified_turn` reads to materialize the
     /// cell via `dregg.merge_cell`: `cell_id` / `cell_root` / `fields` as hex,
     /// `mode` / `lifecycle` as text, `balance` / `nonce` as numbers, and the
@@ -457,7 +457,7 @@ impl RootChain {
 /// function over scalars, so it can be lifted verbatim into SQL.
 ///
 /// This is the load-bearing "pg re-validates, never trusts" check
-/// (`docs/PG-DREGG.md` §10, Tier C): given the current chain `head`
+/// (`.docs-history-noclaude/PG-DREGG.md` §10, Tier C): given the current chain `head`
 /// (`None` ⇒ genesis, no turns yet) and the `next_ordinal` the chain expects, a
 /// candidate turn with pre-state `prev_root` and `ordinal` is admitted ONLY if
 ///
@@ -470,7 +470,7 @@ impl RootChain {
 /// It decides nothing about the *contents* of the turn — that is the proof
 /// verifier's job (the whole-chain IVC recursion, `circuit::ivc_turn_chain`; a
 /// per-row STARK check is not realizable because a `CommitRecord` carries no
-/// per-turn proof, `docs/PG-DREGG.md` §10.2). What it DOES enforce, on every row,
+/// per-turn proof, `.docs-history-noclaude/PG-DREGG.md` §10.2). What it DOES enforce, on every row,
 /// is that the row claims to chain onto the exact head the database already
 /// holds — the structural half of the spine invariant the read-only mirror can
 /// (and the Tier-C trigger does) enforce on a live database without re-running a
@@ -506,7 +506,7 @@ pub fn verify_chain_step(
 // 4b. Federation: a SUBSCRIBER re-validates a replicated chain (does not trust).
 // ============================================================================
 //
-// docs/PG-DREGG.md §15 — federation via PostgreSQL logical replication. A
+// .docs-history-noclaude/PG-DREGG.md §15 — federation via PostgreSQL logical replication. A
 // subscriber tails a publisher's `dregg.turns`/`cells`/`capabilities`/`memory`
 // (CREATE PUBLICATION / CREATE SUBSCRIPTION). The load-bearing soundness claim is
 // that the anti-substitution tooth SURVIVES replication: it is STRUCTURAL ON THE
@@ -534,7 +534,7 @@ pub struct ChainLink {
     pub ledger_root: [u8; 32],
 }
 
-/// Re-validate a replicated chain on the SUBSCRIBER SIDE (docs/PG-DREGG.md §15).
+/// Re-validate a replicated chain on the SUBSCRIBER SIDE (.docs-history-noclaude/PG-DREGG.md §15).
 /// Walks the replicated links (which MUST be ordered by ordinal) through the SAME
 /// [`verify_chain_step`] the publisher ran, from the pinned `genesis` root. Returns
 /// `Ok(head)` (the post-state root of the last link) if the whole replicated chain
@@ -590,7 +590,7 @@ pub fn revalidate_replicated_chain(
 // 4c. Federation: the pg18 conflict counters DRIVE re-validation (compose).
 // ============================================================================
 //
-// docs/PG-DREGG.md §15 + docs/PG-DREGG-PG18.md §10. The `dregg.replication_conflicts`
+// .docs-history-noclaude/PG-DREGG.md §15 + .docs-history-noclaude/PG-DREGG-PG18.md §10. The `dregg.replication_conflicts`
 // view sums pg18's seven per-subscription `confl_*` counters into a
 // `conflicts_total` alarm. The dregg federation model is SINGLE-WRITER FAN-OUT:
 // the publisher is the only writer, subscribers RE-VALIDATE the replicated turn
@@ -618,7 +618,7 @@ pub fn revalidate_replicated_chain(
 // returning the [`FederationHealth`] this module composes.
 
 /// One subscription's pg18 apply-conflict counters — the per-subscription row of
-/// `dregg.replication_conflicts` (`docs/PG-DREGG-PG18.md` §10), the SQL-crossable
+/// `dregg.replication_conflicts` (`.docs-history-noclaude/PG-DREGG-PG18.md` §10), the SQL-crossable
 /// projection of `pg_stat_subscription_stats`'s seven `confl_*` columns. The
 /// `total` is their sum (the view's `conflicts_total`), carried so a consumer does
 /// not re-sum. A non-zero `total` on ANY subscription is a federation anomaly.
@@ -721,7 +721,7 @@ impl ConflictReport {
     }
 }
 
-/// The composed subscriber-side federation health verdict (`docs/PG-DREGG.md`
+/// The composed subscriber-side federation health verdict (`.docs-history-noclaude/PG-DREGG.md`
 /// §15): the pg18 apply-conflict alarm AND — when it fires — the chain
 /// re-validation it TRIGGERS. This is the realization of "the conflict counters
 /// COMPOSE with the chain-tooth re-validation": the counters catch an apply-level
@@ -799,7 +799,7 @@ impl FederationHealth {
 }
 
 /// Compose the federation health verdict from a [`ConflictReport`] and a
-/// re-validation closure (`docs/PG-DREGG.md` §15) — the PURE composition the
+/// re-validation closure (`.docs-history-noclaude/PG-DREGG.md` §15) — the PURE composition the
 /// `dregg_federation_health()` extern realizes over live pg.
 ///
 /// This is the load-bearing wiring: the pg18 apply-conflict counters DRIVE the
@@ -891,7 +891,7 @@ pub mod ddl {
     /// [`tier_b`]; mirrored in `sql/schema-tierB.sql` (anti-drift test below).
     pub const VIEWS_SQL: &str = VIEWS;
 
-    /// The Tier C schema (`docs/PG-DREGG.md` §10) — the verified-store gate.
+    /// The Tier C schema (`.docs-history-noclaude/PG-DREGG.md` §10) — the verified-store gate.
     /// Makes `dregg.commit_log` the ONE door to state: its `BEFORE INSERT`
     /// trigger runs the real chain re-validator (`dregg_verify_turn`, the
     /// extension function backed by [`super::verify_chain_step`]) and, on
@@ -922,7 +922,7 @@ pub mod ddl {
         s
     }
 
-    /// The Tier-C PROOF store (`docs/PG-DREGG.md` §10.2) — the `dregg.turn_proofs`
+    /// The Tier-C PROOF store (`.docs-history-noclaude/PG-DREGG.md` §10.2) — the `dregg.turn_proofs`
     /// table the node-side whole-chain PROOF producer
     /// ([`crate::turn_proofs::TurnProofProducer`], S2) writes and the range-attest
     /// SRF (`dregg_attest_range`) reads. ONE row per folded finalized WINDOW: a
@@ -947,7 +947,7 @@ pub mod ddl {
     }
 
     /// DECLARED-BUT-SPINE-ENFORCED invariants on the materialized state, using two
-    /// pg18 constraint features (`docs/PG-DREGG-PG18.md` §13.1) — the lock-light,
+    /// pg18 constraint features (`.docs-history-noclaude/PG-DREGG-PG18.md` §13.1) — the lock-light,
     /// non-enforcing way to make the verified turn's guarantees LEGIBLE to schema
     /// tooling, `\d dregg.cells`, and an auditor, WITHOUT the database re-deciding
     /// (or worse, *fighting*) the verified writer.
@@ -964,7 +964,7 @@ pub mod ddl {
     ///   does not pay a per-write CHECK and (crucially) cannot REFUSE a verified
     ///   post-image that some future legitimate turn shape produces. Enforcing it in
     ///   pg would be a SECOND, weaker authority fighting the spine — exactly the
-    ///   double-enforcement anti-pattern (`docs/PG-DREGG.md` §8). Declaring it
+    ///   double-enforcement anti-pattern (`.docs-history-noclaude/PG-DREGG.md` §8). Declaring it
     ///   `NOT ENFORCED` is the honest pg18 idiom: the invariant lives in the catalog
     ///   as documentation + a target a DBA can later `ALTER ... ENFORCED` to spot-audit.
     ///
@@ -989,7 +989,7 @@ pub mod ddl {
         INVARIANTS.to_string()
     }
 
-    /// The WRITE-path outbox (`docs/PG-DREGG.md` §11; the first-class
+    /// The WRITE-path outbox (`.docs-history-noclaude/PG-DREGG.md` §11; the first-class
     /// bidirectional piece). A pg-user submits a SIGNED turn FROM postgres by
     /// enqueuing it here through `dregg.submit_turn`; the node tails the queue,
     /// executes it through the REAL verified executor, and the resulting
@@ -1003,7 +1003,7 @@ pub mod ddl {
     ///
     /// Builds on [`tier_b`] (the role model). Idempotent. The node-side drainer
     /// (queue → `execute_via_producer` → mirror) is [`crate::drainer`] /
-    /// `bin/drainerd` (the landed M3 half, `docs/PG-DREGG.md` §11.x); this
+    /// `bin/drainerd` (the landed M3 half, `.docs-history-noclaude/PG-DREGG.md` §11.x); this
     /// installs the enqueue half + its gate.
     pub fn write_outbox() -> String {
         let mut s = String::new();
@@ -1012,7 +1012,7 @@ pub mod ddl {
         s
     }
 
-    /// The pg17 LOGIN EVENT TRIGGER authz binding (`docs/PG-DREGG-PG18.md` §6):
+    /// The pg17 LOGIN EVENT TRIGGER authz binding (`.docs-history-noclaude/PG-DREGG-PG18.md` §6):
     /// bind a connecting pg role to its dregg agent identity AT CONNECTION TIME.
     /// A `dregg.role_identity` table maps `pg_role -> (agent cell, default token)`;
     /// an `event_trigger ON login` reads the connecting `session_user`'s row and
@@ -1032,7 +1032,7 @@ pub mod ddl {
     /// SECURITY DEFINER (it reads the mapping table the connecting role may not
     /// see) and is written defensively so a fault never locks every role out
     /// (it wraps the body so an error in the hook does not abort the login —
-    /// `docs/PG-DREGG-PG18.md` §6.1, the lockout-avoidance discipline). Requires
+    /// `.docs-history-noclaude/PG-DREGG-PG18.md` §6.1, the lockout-avoidance discipline). Requires
     /// [`tier_b`] (the role model). Idempotent.
     pub fn login_binding() -> String {
         let mut s = String::new();
@@ -1041,7 +1041,7 @@ pub mod ddl {
         s
     }
 
-    /// The FEDERATION-via-logical-replication publication (`docs/PG-DREGG.md`
+    /// The FEDERATION-via-logical-replication publication (`.docs-history-noclaude/PG-DREGG.md`
     /// §15) — the PUBLISHER side. Publishes the four state tables + `turns` so a
     /// subscriber postgres tails the verified-turn stream by PostgreSQL's own
     /// logical replication (federation-via-pg, no bespoke gossip): the publisher's
@@ -1060,7 +1060,7 @@ pub mod ddl {
         FED_PUBLICATION.to_string()
     }
 
-    /// The FEDERATION SUBSCRIBER runbook (`docs/PG-DREGG.md` §15) — emitted as a
+    /// The FEDERATION SUBSCRIBER runbook (`.docs-history-noclaude/PG-DREGG.md` §15) — emitted as a
     /// commented template because standing up a subscriber needs the publisher's
     /// connection string and is a `pg_createsubscriber` operation, not in-database
     /// SQL the extension runs. It documents (a) the `pg_createsubscriber` bootstrap
@@ -1074,7 +1074,7 @@ pub mod ddl {
     }
 
     /// The recommended pg18 `COPY … ON_ERROR ignore` bulk-load command for the
-    /// OAuth→role bind map (`docs/PG-DREGG-PG18.md` §12), with the CSV path
+    /// OAuth→role bind map (`.docs-history-noclaude/PG-DREGG-PG18.md` §12), with the CSV path
     /// substituted. COPY needs a literal path + format, so — like the federation
     /// runbook — this is emitted as a ready-to-run template rather than executed by
     /// the extension. It loads `(pg_role, agent_hex, token)` rows into the
@@ -1097,7 +1097,7 @@ pub mod ddl {
     }
 
     const LOAD_ROLE_IDENTITY_TEMPLATE: &str = r#"
--- BULK-LOAD the OAuth→role bind map via pg18 COPY ON_ERROR (docs/PG-DREGG-PG18.md
+-- BULK-LOAD the OAuth→role bind map via pg18 COPY ON_ERROR (.docs-history-noclaude/PG-DREGG-PG18.md
 -- §12). Lands raw (pg_role, agent_hex, token) rows into the staging table,
 -- SKIPPING malformed lines (a bad hex agent, a short row) instead of aborting:
 TRUNCATE dregg.role_identity_load;
@@ -1111,7 +1111,7 @@ TRUNCATE dregg.role_identity_load;                  -- clear the staging table
 "#;
 
     const FED_PUBLICATION: &str = r#"
--- FEDERATION via logical replication (docs/PG-DREGG.md §15) — the PUBLISHER.
+-- FEDERATION via logical replication (.docs-history-noclaude/PG-DREGG.md §15) — the PUBLISHER.
 -- The publisher's dregg.turns hash chain IS the replicated feed; a subscriber
 -- that tails it is a read replica of VERIFIED dregg state. Publishing the four
 -- state tables + turns is all the subscriber needs to re-validate locally.
@@ -1122,7 +1122,7 @@ EXCEPTION WHEN duplicate_object THEN
     -- Re-runnable: keep the existing publication (a DBA ALTERs it to add tables).
     NULL;
 END $$;
--- pg18 logical-replication CONFLICT observability (docs/PG-DREGG-PG18.md §10).
+-- pg18 logical-replication CONFLICT observability (.docs-history-noclaude/PG-DREGG-PG18.md §10).
 -- The dregg federation model is single-writer fan-out: the publisher is the ONLY
 -- writer, subscribers are read replicas that RE-VALIDATE the replicated turn
 -- chain (`dregg_revalidate_replicated_chain`) rather than accept local writes —
@@ -1167,7 +1167,7 @@ GRANT SELECT ON dregg.replication_conflicts TO dregg_kernel, dregg_reader;
 "#;
 
     const FED_SUBSCRIBER_TEMPLATE: &str = r#"
--- FEDERATION via logical replication (docs/PG-DREGG.md §15) — the SUBSCRIBER.
+-- FEDERATION via logical replication (.docs-history-noclaude/PG-DREGG.md §15) — the SUBSCRIBER.
 -- This is a RUNBOOK (it needs the publisher conninfo + pg_createsubscriber), not
 -- extension SQL. Steps:
 --
@@ -1206,7 +1206,7 @@ CREATE INDEX IF NOT EXISTS turns_by_height  ON dregg.turns (height);
 CREATE INDEX IF NOT EXISTS turns_by_creator ON dregg.turns (creator, ordinal);
 "#;
 
-    // DECLARED-BUT-SPINE-ENFORCED invariants (docs/PG-DREGG-PG18.md §13.1), using
+    // DECLARED-BUT-SPINE-ENFORCED invariants (.docs-history-noclaude/PG-DREGG-PG18.md §13.1), using
     // two pg18-new constraint forms. These make the verified turn's guarantees
     // legible to the catalog / `\d` / an auditor WITHOUT pg re-deciding or fighting
     // the verified writer. See `ddl::invariants()` for the rationale of each.
@@ -1220,7 +1220,7 @@ CREATE INDEX IF NOT EXISTS turns_by_creator ON dregg.turns (creator, ordinal);
 -- + conservation); we DECLARE them so the catalog documents the floor, but mark
 -- them NOT ENFORCED so pg pays no per-write CHECK and never REFUSES a verified
 -- post-image (the spine is the single enforcer — double-enforcement is the
--- anti-pattern, docs/PG-DREGG.md §8). A DBA may later `ALTER ... ENFORCED` to run
+-- anti-pattern, .docs-history-noclaude/PG-DREGG.md §8). A DBA may later `ALTER ... ENFORCED` to run
 -- a one-off audit, or `VALIDATE` it, without changing the write path.
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cells_balance_nonneg') THEN
@@ -1263,7 +1263,7 @@ END $$;
 "#;
 
     // The cells table carries GENERATED COLUMNS for the canonical derived state
-    // (docs/PG-DREGG-PG18.md §4) — pg-MAINTAINED projections that cannot drift
+    // (.docs-history-noclaude/PG-DREGG-PG18.md §4) — pg-MAINTAINED projections that cannot drift
     // from the canonical bytea, since the database derives them from the pinned
     // expression. pg18 makes VIRTUAL (read-time, zero storage) the DEFAULT kind;
     // we pick STORED-vs-VIRTUAL per column by whether it must be indexed:
@@ -1299,7 +1299,7 @@ CREATE TABLE IF NOT EXISTS dregg.cells (
 -- the pre-18 fallback (a full index scan or a seq scan). So the one index covers
 -- the analytics surface's two hot access paths — `WHERE mode = …` and
 -- `WHERE balance >= …` / `ORDER BY balance` — with no separate `balance` index to
--- maintain on the write path. (docs/PG-DREGG-PG18.md §8 — applied pg18 leverage.)
+-- maintain on the write path. (.docs-history-noclaude/PG-DREGG-PG18.md §8 — applied pg18 leverage.)
 CREATE INDEX IF NOT EXISTS cells_by_mode_balance ON dregg.cells (mode, balance);
 CREATE INDEX IF NOT EXISTS cells_fields_gin ON dregg.cells USING gin (fields_json);
 -- The canonical-order index: byte-order on the hex id under the builtin C
@@ -1335,7 +1335,7 @@ CREATE INDEX IF NOT EXISTS memory_by_domain ON dregg.memory (domain);
     // MERGE in a SQL function (rather than issuing it as a top-level statement) is
     // also what lets the mirror invoke it through a plain `SELECT
     // dregg.merge_cell(...)` — the MERGE status is consumed inside the function;
-    // the caller sees a normal SELECT result. (docs/PG-DREGG-PG18.md §7.)
+    // the caller sees a normal SELECT result. (.docs-history-noclaude/PG-DREGG-PG18.md §7.)
     //
     // pg18 form: `RETURNING WITH (OLD AS o, NEW AS n)` binds explicit aliases for
     // the pre/post image (the spec-standard pg18 syntax). It is strictly better
@@ -1376,7 +1376,7 @@ END $$;
 -- and the streaming mirror both materialize through dregg.merge_cell (the string
 -- form); this twin is the analytics face when a caller wants the numbers typed —
 -- e.g. asserting conservation (the per-cell balance deltas of a transfer sum to
--- zero) directly off the applicator's report. (docs/PG-DREGG-PG18.md §7.)
+-- zero) directly off the applicator's report. (.docs-history-noclaude/PG-DREGG-PG18.md §7.)
 CREATE OR REPLACE FUNCTION dregg.merge_cell_delta(
     p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
     p_fields bytea, p_fields_json jsonb, p_lifecycle text,
@@ -1408,7 +1408,7 @@ END $$;
     // jsonb columns (`capabilities.allowed_effects`, `cells.fields_json`) into a
     // flat relational surface — turning dregg's embedded JSON state into proper
     // rows a developer can JOIN/aggregate without hand-written jsonb operators.
-    // (docs/PG-DREGG-PG18.md §5.) JSON_TABLE is a pg17 feature; the mirror's
+    // (.docs-history-noclaude/PG-DREGG-PG18.md §5.) JSON_TABLE is a pg17 feature; the mirror's
     // PRIMARY target is pg18 (which includes it), so these ship by default.
     // Every dev-view is created `WITH (security_invoker = true)` (pg15). Without
     // it, a view runs with its OWNER's privileges, so the read-side RLS on the base
@@ -1418,7 +1418,7 @@ END $$;
     // `security_invoker`, RLS is evaluated as the INVOKING reader on every base
     // table the view reads, so the capability gate on `dregg.cells` / `turns` /
     // `capabilities` is enforced THROUGH the view, by declaration not by accident.
-    // (docs/PG-DREGG.md §14.3 — the cheap hardening, now wired.)
+    // (.docs-history-noclaude/PG-DREGG.md §14.3 — the cheap hardening, now wired.)
     const VIEWS: &str = r#"
 CREATE OR REPLACE VIEW dregg.cap_edges WITH (security_invoker = true) AS
     SELECT holder AS src, target AS dst, slot, permissions, expires_at
@@ -1448,12 +1448,12 @@ CREATE OR REPLACE VIEW dregg.cell_fields WITH (security_invoker = true) AS
 -- canonical roots use, via the pg17 builtin C collation (pg_c_utf8) on the
 -- generated cell_hex column. ORDER BY here matches the kernel's sorted-leaf
 -- ordering exactly (no ICU/locale drift), so a pg-side fold over this view sees
--- leaves in the same order the ledger root commits them. (docs/PG-DREGG-PG18.md §3.)
+-- leaves in the same order the ledger root commits them. (.docs-history-noclaude/PG-DREGG-PG18.md §3.)
 CREATE OR REPLACE VIEW dregg.canonical_cells WITH (security_invoker = true) AS
     SELECT cell_hex, balance, nonce, lifecycle, cell_root_hex, last_ordinal
     FROM dregg.cells
     ORDER BY cell_hex COLLATE pg_c_utf8;
--- pg18 AIO observability (docs/PG-DREGG-PG18.md §8, docs/PG-DREGG.md §14.2): the
+-- pg18 AIO observability (.docs-history-noclaude/PG-DREGG-PG18.md §8, .docs-history-noclaude/PG-DREGG.md §14.2): the
 -- mirror is read-heavy (the explorer/analytics scans + the recursive cap_edges
 -- walk) and Tier C adds verify-on-write, so the read/write/verify I/O mix is the
 -- thing worth making legible. pg18's asynchronous I/O subsystem feeds pg_stat_io;
@@ -1475,7 +1475,7 @@ CREATE OR REPLACE VIEW dregg.mirror_io_stats AS
     FROM pg_stat_io
     WHERE object IN ('relation')
       AND context IN ('normal','vacuum','bulkread','bulkwrite');
--- pg18 AIO IN-FLIGHT surface (docs/PG-DREGG-PG18.md §8). pg_stat_io is the
+-- pg18 AIO IN-FLIGHT surface (.docs-history-noclaude/PG-DREGG-PG18.md §8). pg_stat_io is the
 -- CUMULATIVE counter view; pg18 ALSO ships `pg_aios` — the live view of the I/O
 -- handles a backend currently has OUTSTANDING under the asynchronous I/O
 -- subsystem. For a read-heavy mirror that now issues batched async reads, the
@@ -1486,7 +1486,7 @@ CREATE OR REPLACE VIEW dregg.mirror_io_stats AS
 -- AIO is engaged as the ledger grows. (pg18-only: pg_aios does not exist pre-18.)
 CREATE OR REPLACE VIEW dregg.mirror_aio_inflight AS
     SELECT * FROM pg_aios;
--- pg18 DATA-INTEGRITY status (docs/PG-DREGG-PG18.md §11). dregg's whole thesis is
+-- pg18 DATA-INTEGRITY status (.docs-history-noclaude/PG-DREGG-PG18.md §11). dregg's whole thesis is
 -- integrity-down-to-the-bytes: the kernel commits a sorted-leaf root, the chain
 -- tooth refuses a substituted batch, the IVC light client attests execution. The
 -- STORAGE floor under all of that is page-level integrity — and pg18 makes
@@ -1539,7 +1539,7 @@ REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dregg FROM PUBLIC;
 "#;
 
     // ----------------------------------------------------------------------
-    // Tier C (docs/PG-DREGG.md §10) — the verified-store gate. The commit_log
+    // Tier C (.docs-history-noclaude/PG-DREGG.md §10) — the verified-store gate. The commit_log
     // is the ONE door to state; its BEFORE INSERT trigger re-validates the
     // chain and materializes the post-image. Mirrors sql/schema-tierC.sql.
     // ----------------------------------------------------------------------
@@ -1625,7 +1625,7 @@ CREATE TRIGGER verify_before_apply BEFORE INSERT ON dregg.commit_log
     // verified store. This is the realizable per-turn effect surface (a
     // CommitRecord's touched cells — the payload the gate verified; §10.2). Lives
     // in Tier C because it reads dregg.commit_log (the verified-store door).
-    // (docs/PG-DREGG-PG18.md §5.)
+    // (.docs-history-noclaude/PG-DREGG-PG18.md §5.)
     const TIER_C_VIEWS: &str = r#"
 CREATE OR REPLACE VIEW dregg.turn_effects AS
     SELECT cl.ordinal, jt.cell_id, jt.balance, jt.nonce, jt.lifecycle,
@@ -1653,7 +1653,7 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 "#;
 
     // ----------------------------------------------------------------------
-    // The WRITE-path outbox (docs/PG-DREGG.md §11) — submit a verified turn
+    // The WRITE-path outbox (.docs-history-noclaude/PG-DREGG.md §11) — submit a verified turn
     // FROM postgres. The node drains this queue through the real executor.
     // ----------------------------------------------------------------------
 
@@ -1665,7 +1665,7 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
     // pg18 `uuidv7()` mints a TEMPORALLY-SORTABLE id (its leading bits are a
     // millisecond timestamp), so the queue's primary key already orders by
     // submission time — the node drains in arrival order by `id` alone, and the
-    // index is append-friendly (no random-uuid page churn). (docs/PG-DREGG-PG18.md §6.)
+    // index is append-friendly (no random-uuid page churn). (.docs-history-noclaude/PG-DREGG-PG18.md §6.)
     const SUBMIT_QUEUE: &str = r#"
 CREATE TABLE IF NOT EXISTS dregg.submit_queue (
     id           uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -1709,7 +1709,7 @@ CREATE POLICY submit_read ON dregg.submit_queue FOR SELECT TO dregg_reader
 GRANT INSERT, SELECT ON dregg.submit_queue TO dregg_reader;
 GRANT SELECT, UPDATE ON dregg.submit_queue TO dregg_kernel;
 REVOKE INSERT, UPDATE, DELETE ON dregg.submit_queue FROM PUBLIC;
--- The queue audit surface (docs/PG-DREGG-PG18.md §6): pg18's `uuidv7()` key is
+-- The queue audit surface (.docs-history-noclaude/PG-DREGG-PG18.md §6): pg18's `uuidv7()` key is
 -- not merely sortable — its leading bits ARE the submission timestamp, and pg18
 -- ships `uuid_extract_timestamp()` / `uuid_extract_version()` to read them back.
 -- So the key itself is an audit signal: `enqueued_at` is recovered FROM the id
@@ -1735,7 +1735,7 @@ GRANT SELECT ON dregg.submit_queue_audit TO dregg_reader, dregg_kernel;
 "#;
 
     // ----------------------------------------------------------------------
-    // The Tier-C PROOF store (docs/PG-DREGG.md §10.2) — the dregg.turn_proofs
+    // The Tier-C PROOF store (.docs-history-noclaude/PG-DREGG.md §10.2) — the dregg.turn_proofs
     // table: ONE row per folded finalized WINDOW, written by the node-side
     // whole-chain proof producer (crate::turn_proofs, S2) and read by the
     // range-attest SRF (dregg_attest_range). The proof half the per-row chain
@@ -1768,7 +1768,7 @@ GRANT INSERT, SELECT, UPDATE, DELETE ON dregg.turn_proofs TO dregg_kernel;
 "#;
 
     // ----------------------------------------------------------------------
-    // The pg17 LOGIN EVENT TRIGGER authz binding (docs/PG-DREGG-PG18.md §6) —
+    // The pg17 LOGIN EVENT TRIGGER authz binding (.docs-history-noclaude/PG-DREGG-PG18.md §6) —
     // bind a connecting pg role to its dregg agent identity at connection time.
     // ----------------------------------------------------------------------
 
@@ -1786,7 +1786,7 @@ CREATE TABLE IF NOT EXISTS dregg.role_identity (
     bound_at      timestamptz NOT NULL DEFAULT now());
 REVOKE ALL ON dregg.role_identity FROM PUBLIC;
 GRANT SELECT ON dregg.role_identity TO dregg_kernel;
--- The bind point where pg18 OAuth meets dregg (docs/PG-DREGG-PG18.md §6). OAuth
+-- The bind point where pg18 OAuth meets dregg (.docs-history-noclaude/PG-DREGG-PG18.md §6). OAuth
 -- itself is `pg_hba.conf` deployment config (the `oauth` auth method + an
 -- `oauth_validator_libraries` validator — NOT extension SQL); what it produces is
 -- a pg ROLE for the authenticated IdP subject. `dregg.bind_role` is the seam that
@@ -1809,7 +1809,7 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION dregg.bind_role(text, bytea, text) FROM PUBLIC;
 -- BULK ONBOARDING of the OAuth→role bind map via pg18 COPY ON_ERROR
--- (docs/PG-DREGG-PG18.md §12). Provisioning many federated identities at once
+-- (.docs-history-noclaude/PG-DREGG-PG18.md §12). Provisioning many federated identities at once
 -- (an IdP export of `pg_role,agent_hex,token` rows) is a real bootstrap path —
 -- and a single malformed line (a bad hex agent, a truncated row) should NOT abort
 -- the whole load. pg18 adds `ON_ERROR ignore` + `REJECT_LIMIT n` + the
@@ -2578,7 +2578,7 @@ mod tests {
 
     /// The pg17 login-binding DDL is emittable and shaped: the role→identity map
     /// + the `ON login` event trigger that binds a connecting role to its dregg
-    /// capability (docs/PG-DREGG-PG18.md §6). Defensive (anti-lockout) and
+    /// capability (.docs-history-noclaude/PG-DREGG-PG18.md §6). Defensive (anti-lockout) and
     /// SECURITY DEFINER (it reads the mapping the connecting role cannot).
     #[test]
     fn login_binding_ddl_is_emittable_and_defensive() {
@@ -2623,7 +2623,7 @@ mod tests {
     }
 
     /// The pg18 INVARIANTS DDL is emittable and uses BOTH pg18-new constraint
-    /// forms (docs/PG-DREGG-PG18.md §13.1): `CHECK ... NOT ENFORCED` (declared,
+    /// forms (.docs-history-noclaude/PG-DREGG-PG18.md §13.1): `CHECK ... NOT ENFORCED` (declared,
     /// not double-enforced) for the non-negativity/projection floor the spine
     /// guarantees, and `ADD CONSTRAINT ... NOT NULL ... NOT VALID` + `VALIDATE
     /// CONSTRAINT` (the lock-light migration form) for a named cell_root NOT NULL.

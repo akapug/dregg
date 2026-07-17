@@ -25,7 +25,7 @@ IDEs, mypy, and pyright resolve the whole surface.
 
 ## The organ nouns
 
-Above the two base nouns sit the **organs** (`docs/ORGANS.md`) — the higher
+Above the two base nouns sit the **organs** (`.docs-history-noclaude/ORGANS.md`) — the higher
 primitives, each the ergonomic Python face of a node service. The node computes
 the per-cell factory descriptors and seal fan-outs the wire layer does not
 carry; these clients drive them. The enforcement tooth is the
@@ -96,7 +96,7 @@ raises `DreggError` naming it.
 ## pg-dregg-native — drive pg-dregg from Python (`dregg.pg`)
 
 `dregg.pg` is a thin, well-typed `psycopg`-based binding of the **real** pg-dregg
-SQL surface (`docs/PG-DREGG.md`): a Python user connects to a pg-dregg-enabled
+SQL surface (`.docs-history-noclaude/PG-DREGG.md`): a Python user connects to a pg-dregg-enabled
 PostgreSQL and lets pg-dregg enforce. The model is the spine — **reads are free
 SQL; state mutates only through verified turns** — so the surface falls into
 exactly that shape. `psycopg` is imported lazily; install it with
@@ -147,7 +147,7 @@ revocation, consulted by the `submit_gate` RLS).
 reconciliation are **real and enforced by the database engine** (exercised against
 live pg18 in `tests/test_pg_workflow.py`). The transition that *executes* a queued
 turn (`pending → executed`) is the **node drainer's** job (it runs each turn
-through the real verified Lean executor; `docs/PG-DREGG.md` §11.4). Where no node
+through the real verified Lean executor; `.docs-history-noclaude/PG-DREGG.md` §11.4). Where no node
 runs, `dregg.pg.LocalDrainer` stands in for dev/tests — a `dregg_kernel`-role
 applicator that resolves the row (and faithfully re-checks revocation) but is NOT
 the verified executor. See `examples/pg_durable_workflow.py` for the full

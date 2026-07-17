@@ -10,7 +10,7 @@
 //!   * [`NodeClient::http`] — points at a real node base URL. The fetch
 //!     methods are wired to the routes; the SSE receipt stream is a build-out
 //!     lane (it needs to be driven on gpui's async executor — see
-//!     docs/STARBRIDGE-V2.md §"Build-out lanes").
+//!     .docs-history-noclaude/STARBRIDGE-V2.md §"Build-out lanes").
 //!
 //! Both return the same [`crate::model`] types, so the views never know which
 //! backend they are bound to.

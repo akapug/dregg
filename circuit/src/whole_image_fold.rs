@@ -82,7 +82,7 @@
 //!
 //! The chip thus folds EXACTLY the read peer's declared field-plane boundary, and pins that
 //! fold to the published root — the per-domain reconciliation of the universal-map rotation
-//! (`docs/UNIVERSAL-MAP-ROTATION.md`), no longer a free-floating list. The complementary
+//! (`.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md`), no longer a free-floating list. The complementary
 //! `declared ⊆ committed` direction rides the deployed per-cell `MapOp::Read` against the
 //! published root; the two together close `committed == declared` in-circuit. The fold
 //! arithmetic — the `hpin` content — is realized in the self-contained chip below.

@@ -11,7 +11,7 @@ use dregg_commit::{FieldElement, SymbolTable, TokenState};
 use dregg_token::AuthRequest;
 use dregg_trace::{
     AuthorizationRequest as TraceRequest, AuthorizationTrace, Conclusion, Evaluator,
-    Fact as TraceFact, Rule, Term, symbol_from_bytes, symbol_from_str,
+    Fact as TraceFact, Term, symbol_from_bytes, symbol_from_str,
 };
 
 /// Errors that can occur during authorization evaluation.
@@ -212,32 +212,6 @@ fn enforce_budget_and_revocation(
     }
 
     Ok(())
-}
-
-/// Evaluate an authorization request using custom rules.
-///
-/// Like `authorize_with_trace` but allows specifying custom policy rules
-/// instead of the standard set.
-pub fn authorize_with_custom_rules(
-    state: &TokenState,
-    request: &AuthRequest,
-    symbols: &SymbolTable,
-    rules: Vec<Rule>,
-) -> Result<AuthorizationTrace, AuthError> {
-    if state.is_empty() {
-        return Err(AuthError::EmptyState);
-    }
-
-    let trace_facts = committed_facts_to_trace(state, symbols);
-    let trace_request = auth_request_to_trace(request)?;
-
-    let evaluator = Evaluator::new(trace_facts, rules);
-    let trace = evaluator.evaluate(&trace_request);
-
-    match &trace.conclusion {
-        Conclusion::Allow { .. } => Ok(trace),
-        Conclusion::Deny => Err(AuthError::Denied),
-    }
 }
 
 /// Convert committed facts (FieldElement-based) to trace-format facts (Symbol-based).

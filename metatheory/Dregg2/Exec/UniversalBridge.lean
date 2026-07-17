@@ -1,7 +1,7 @@
 /-
 # Dregg2.Exec.UniversalBridge — THE EXECUTOR-STATE BRIDGE: the executor IS a memory program.
 
-The universal-map rotation's long pole (`docs/UNIVERSAL-MAP-ROTATION.md` §2.3/§3/§6,
+The universal-map rotation's long pole (`.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.3/§3/§6,
 `Substrate/VerbCompression.lean:87-89` — "the executor-state bridge ... rides THE ONE ROTATION").
 This module is that bridge's Lean keystone, in three movements:
 
@@ -36,7 +36,7 @@ Plus the two umem-lane adapters that arise here:
       cell VALUE (`capCellValue = hash[target, rights, op]`) loses nothing: the generic leaf
       is injective in the full `(holder, target, rights, op)` tuple under the same named
       `Poseidon2SpongeCR` floor. A value-codec lemma, no new combinatorics
-      (`docs/UNIVERSAL-MEMORY.md:138-144`).
+      (`.docs-history-noclaude/UNIVERSAL-MEMORY.md:138-144`).
 
   (b) **the index-domain MMR boundary derivation** (`index_boundary_mroot_derived` /
       `index_boundary_mroot_from_memcheck`): the receipt-index domain's boundary commitment
@@ -44,7 +44,7 @@ Plus the two umem-lane adapters that arise here:
       `boundary_root_derived`/`boundary_root_from_memcheck` analogues hold — the log
       reconstructed from the (pinned) final index cells IS the committed log, so the MMR
       root derived at the boundary equals today's root, by canonicity, NO crypto
-      (`docs/UNIVERSAL-MEMORY.md:115-121`).
+      (`.docs-history-noclaude/UNIVERSAL-MEMORY.md:115-121`).
 
 Axiom hygiene: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} everywhere; crypto
 enters ONLY as the named `Poseidon2SpongeCR` hypothesis. Non-vacuity: a concrete three-verb
@@ -856,7 +856,7 @@ theorem create_is_memory_program (C : UCodec) {s s' : RecChainedState}
     rw [step3_frame (writeOp_addr_ne (by simp)) (writeOp_addr_ne (by simp))
       (writeOp_addr_ne (by simp))]; rfl
 
-/-! ## §5 — ADAPTER (a): the cap-leaf value codec (`docs/UNIVERSAL-MEMORY.md:138-144`).
+/-! ## §5 — ADAPTER (a): the cap-leaf value codec (`.docs-history-noclaude/UNIVERSAL-MEMORY.md:138-144`).
 
 Today's live cap leaf is the FLAT 4-ary sponge `hash[holder, target, rights, op]`
 (`EffectVmEmitCapRoot.siteCapEdgeLeaf`); the universal map's generic leaf is the 2-ary
@@ -900,7 +900,7 @@ theorem cap_leaf_flat_injective (hash : List ℤ → ℤ) (hCR : Poseidon2Sponge
   exact ⟨hh, ht, hr, ho⟩
 
 /-! ## §6 — ADAPTER (b): the index-domain MMR boundary derivation
-(`docs/UNIVERSAL-MEMORY.md:115-121`).
+(`.docs-history-noclaude/UNIVERSAL-MEMORY.md:115-121`).
 
 The receipt-index domain is keyed by POSITION (append-only), and its boundary commitment is
 the MMR root (`MMR.mroot`), not a sorted-map root. The `boundary_root_derived` analogue:

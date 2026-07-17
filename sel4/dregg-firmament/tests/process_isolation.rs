@@ -1,6 +1,6 @@
 //! THE PROCESS-BACKED BOOT TEST + THE ISOLATION TOOTH (v1, the closed gap).
 //!
-//! `docs/DREGG-DESKTOP-OS.md §3` (the v1 process-backed-PD upgrade): the SAME PD
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` (the v1 process-backed-PD upgrade): the SAME PD
 //! source that boots on the v0 thread backing (`tests/boot_pds.rs`) boots here
 //! on the v1 PROCESS backing — PDs are forked host PROCESSES, so the host MMU
 //! enforces address-space separation. This file proves TWO things the v0 test

@@ -297,6 +297,7 @@ fn mint_turn(bundle: &LeafBundle, nonce: u64) -> FinalizedTurn {
         witness_values: bundle.witness_values.clone(),
         num_rows: bundle.num_rows,
         public_inputs: bundle.public_inputs.clone(),
+        app_root_binding: None,
     };
     let leg = mint_custom_leg(balance, nonce, commit, Some(cwb));
     FinalizedTurn::new(DescriptorParticipant::rotated(leg))
@@ -311,11 +312,29 @@ fn mint_turn(bundle: &LeafBundle, nonce: u64) -> FinalizedTurn {
 /// (the winner is a register `new8` commits), not a `pk[0]=7` fixture nonce-bump.
 fn mint_win_turn_over_cell(cell: &Cell, win: &LeafBundle) -> FinalizedTurn {
     let commit = custom_proof_pi_commitment(&win.public_inputs);
+    // DELIVER #2 — THE APP-ROOT CUTOVER (LANDED with the wide custom leg-emit `withAfterOctetPins
+    // customV3 4`): weld the win sub-proof's PUBLISHED winner (PI 17, `WIN_WINNER`) to the cell's
+    // REAL committed winner field IN-CIRCUIT. The wide leg now exposes the AFTER-block `fields[0..8]`
+    // octet; `field_key` selects the winner's cell field index (relocated into that octet —
+    // `Deployment::reg("winner")` = 7), and the fold routes through
+    // `prove_custom_binding_node_app_root_segmented`, forcing `PI 17 == field[K]`. A tug turn
+    // publishing a winner that does NOT match the cell's committed winner field then has NO
+    // satisfying fold — UNSAT, refused by the DEPLOYED `verify_history`, light-client-visible. This
+    // is no longer the state-node adoption (winner bound only as a commitment preimage): it is the
+    // app-root weld, a property of the artifact.
+    let winner_field_key = crate::state::Deployment::new().reg("winner") as usize;
     let cwb = CustomWitnessBundle {
         program: win.program.clone(),
         witness_values: win.witness_values.clone(),
         num_rows: win.num_rows,
         public_inputs: win.public_inputs.clone(),
+        app_root_binding: Some(
+            dregg_circuit::effect_vm::custom_state_binding::AppRootBinding {
+                app_root_pi_offset: 17,
+                app_root_len: 1,
+                field_key: winner_field_key,
+            },
+        ),
     };
     let after = nonce_bumped(cell);
     let leg = cell_custom_leg(cell, &after, commit, Some(cwb));

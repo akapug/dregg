@@ -3,7 +3,7 @@
 //! A cell's law is its installed [`CellProgram`]: the `StateConstraint` set a
 //! factory bakes into every cell it births, re-evaluated by the executor on
 //! EVERY turn that touches the cell. This module makes the language — in
-//! particular the **turn-context actor atoms** (`docs/CELL-PROGRAM-LANGUAGE.md`
+//! particular the **turn-context actor atoms** (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md`
 //! §3: sender bindings, own-balance bounds, the composable preimage gate) —
 //! reachable from the SDK without spelling `dregg_cell::program` paths:
 //!

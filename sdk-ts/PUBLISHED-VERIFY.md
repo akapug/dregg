@@ -352,6 +352,85 @@ The full sign → submit → `Receipt` path is covered against a mock node in
 turn-construction (the core) is proven here; only the network bonus is pending a
 live node.
 
+> ## ⚑ CLASS CLOSURE (2026-07-16) — the FIELDS were caught up; now the MECHANISM is
+>
+> Corrections 1–3 fixed *fields*: `provenance`, the `v3` signing message, the
+> hybrid PQ authorization. That left the class open. The codec is still a
+> hand-ported TypeScript mirror of a Rust wire format, so the *next* protocol
+> change drifts again — and the reason drift was invisible was never diligence.
+>
+> **The two SDKs are an accidental controlled experiment.** sdk-py *cannot*
+> mis-encode: it depends on `dregg-turn`/`dregg-cell` by PATH and encodes with the
+> same `postcard` the node decodes with. It never had the `provenance` bug, and it
+> got hybrid PQ signing **for free** — a Python-signed turn is 10953 B, 97.5%
+> ML-DSA-65, because it rides the real Rust signer. sdk-ts *must* port the codec,
+> and drifted three ways. Same team, same week, opposite outcomes: **structure,
+> not diligence.** CARRY THE OBJECT, NOT ITS NAME.
+>
+> ### What was still silent, and what now catches it
+>
+> The byte differential's oracle is already the right one — the **freshly-built
+> `dregg-wasm`**, i.e. the real Rust codec, rebuilt by `pretest` on every run.
+> That is option (b) applied exactly where it is viable (build/test time; the
+> runtime SDK stays pure TS because `dregg-wasm` is not on npm).
+>
+> But a differential only compares what you thought to compare. **Rust's `Effect`
+> has 34 variants; the TS union models 7.** A 35th variant, a renamed field, or a
+> reordered one is invisible to a byte comparison over 7 hand-built fixtures. That
+> was the remaining silent channel.
+>
+> `test/protocol-vocabulary.test.mjs` + `test/protocol-source.mjs` close it, the
+> way sdk-py's `wire_drift_killer.rs` does: they **parse `turn/src/action.rs` and
+> `cell/src/capability.rs` at test time** (no cached copy, no generated artifact —
+> a missing or restructured source THROWS) and enforce that
+>
+> * every `Effect`/`Authorization` variant is either MODELED or explicitly
+>   declared UNMODELED **with a reason** — so a new variant cannot be absorbed
+>   silently; someone must decide, in the tree;
+> * every postcard discriminant the TS codec writes equals the Rust variant's
+>   **position** (read from *both* sources — the Rust enum and the literal
+>   `w.varint(n)` in `wire.ts` — so this is not a third hand-maintained mirror).
+>   `action.rs` states the law itself: *"a new variant MUST append, never insert —
+>   the durable postcard codec is index-sensitive"*;
+> * every modeled variant's **field set** is what the codec was written against,
+>   including `CapabilityRef`'s eight fields — the literal M30 site.
+>
+> The division of labour: **the differential proves the bytes; the vocabulary gate
+> proves you are still encoding the right things.** Neither oracle can go stale.
+>
+> ### Driven (not asserted)
+>
+> Each drift shape was produced against the real tree and observed to fail, then
+> restored:
+>
+> | Mutation | Result |
+> |---|---|
+> | Append `Effect::ShinyNewEffect` to `action.rs` | RED — EXHAUSTIVE names it unaccounted-for |
+> | Add field `memo: u64` to `Effect::Transfer` | RED — FIELD PIN |
+> | Insert a variant at index 1 (reorder) | RED — EXHAUSTIVE **and** DISCRIMINANT PIN |
+> | Drop `provenance` from `writeCapabilityRef` (replay M30) | RED — byte differential |
+> | Revert the signing domain to `sig-v2` (replay the shipped bug) | RED — byte differential |
+>
+> The last row is the point: **the gate this file kept asking for would have
+> blocked the `0.3.0` publish.** `publish-sdk-ts.yml` now runs `npm test` (both
+> oracles) before `npm publish`, mirroring `publish-sdk-py.yml`'s `cargo test`
+> gate. And `ci.yml` gains a `wasm (standalone workspace)` job — mirroring
+> `solana-lock` — so the oracle's own crate cannot rot invisibly again.
+>
+> ### Honest residual
+>
+> The codec is **still a hand-port**. What the vocabulary gate guarantees is that
+> the port's *scope and shape* cannot silently diverge from the protocol — not
+> that a TS engineer cannot write a wrong encoder for a correctly-named field.
+> That second risk is what the byte differential covers, and only for the 7
+> modeled variants. **Generating the TS codec from the Rust source (option (a))
+> remains the real endgame** — it would make drift a compile error rather than a
+> test failure — but it is a large lift: the transitive closure of 34 variants
+> pulls `CellProgram`, `PortableNoteProof`, `EventualRef`, `Box<Action>`
+> recursion, and `dregg_cell::Permissions` into a generated TS codec, most of
+> which a browser client has no business carrying. Doing it properly is the SDK
+> overhaul, not a patch — and it is the right shape for that overhaul.
+
 ## Republish requirements (EMBER-GATED — do NOT `npm publish` autonomously)
 
 Everything above is on disk, **uncommitted and unpublished**. Publishing is
@@ -421,8 +500,14 @@ The `require_pq` flip now costs TS callers nothing, on this code. Classical
 stays available and explicit.
 
 Still open: a republish is EMBER-GATED and wants the SDK overhaul, so `0.3.0`
-remains the published (and broken) truth until then — deprecate it. CI must run
-`npm test` with a buildable oracle, or this file will simply grow a correction 4.
+remains the published (and broken) truth until then — deprecate it.
+
+The "CI must run `npm test` with a buildable oracle, or this file will simply
+grow a correction 4" line that stood here is **done** (see "CLASS CLOSURE"
+above): `publish-sdk-ts.yml` gates on `npm test`, and the suite now carries a
+second oracle that reads the protocol's Rust source at test time, so a variant
+added to `Effect` fails the build instead of shipping. Correction 4, if it comes,
+will have to come from somewhere this file has not already been told to look.
 The wasm oracle's `sign_turn_v3` signs at nonce 0 regardless of `turn.nonce` (a
 `wasm/` fidelity gap, out of scope here). No live-node round trip (no reachable
 node). The legacy `@dregg/sdk/wasm` subpath's unpublished `dregg-wasm` peer

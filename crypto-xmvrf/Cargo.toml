@@ -16,3 +16,6 @@ blake3 = "1"
 # No dev-dependencies: tests pin fixed seeds via `keygen_from_seed`, so every run
 # is deterministic and self-contained (the statistical smoke test draws its sample
 # from the VRF itself and blake3's XOF — no external RNG).
+
+[lints]
+workspace = true

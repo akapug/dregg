@@ -49,3 +49,6 @@ dregg-types = { path = "../types" }
 procgen-dregg = { path = "../procgen-dregg" }
 # The narrative-world driver + `WorldError` the faction gate is driven / refused on.
 spween-dregg = { path = "../spween-dregg" }
+
+[lints]
+workspace = true

@@ -41,6 +41,10 @@ hex = "0.4"
 # return `ChainError::WrapProverMissing` (fail-closed) — a build NEVER silently
 # substitutes a SIMULATED proof for a real one. The real wrap prover is the native
 # gnark FRI-verifier circuit (docs/deos/ETH-NATIVE-WRAP.md), not yet wired.
+# VERIFY is fail-closed the same way (since 2026-07-16): `verify_on_chain` without
+# `on-chain` OR `mock` returns `ChainError::VerifierMissing`. It previously rode
+# `not(on-chain)` straight into the mock verifier, so the DEFAULT build "verified"
+# a minted fake by decoding the proof's own committed `valid` bit.
 default = []
 # Mock mode: simulated proofs for development/tests. Must be opted into, never the default.
 mock = []

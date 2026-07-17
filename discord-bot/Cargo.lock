@@ -2577,6 +2577,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-ipfs"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dregg-lean-ffi"
 version = "0.1.0"
 dependencies = [
@@ -2664,6 +2673,9 @@ dependencies = [
  "curve25519-dalek",
  "dregg-bridge",
  "dregg-governance",
+ "dregg-payable",
+ "dregg-turn",
+ "dregg-types",
  "ed25519-dalek",
  "hmac 0.12.1",
  "serde_json",
@@ -8318,6 +8330,7 @@ dependencies = [
  "blake3",
  "dregg-circuit",
  "dregg-circuit-prove",
+ "dregg-ipfs",
  "dregg-lightclient",
  "dungeon-on-dregg",
  "ed25519-dalek",

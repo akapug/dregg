@@ -48,6 +48,14 @@ pub const GENESIS: &str = "genesis";
 pub const SCORE: &str = "score";
 
 /// The 16 register components, in allocation order (slots `0..16`).
+///
+/// APP-ROOT WELD RELOCATION: `winner` rides slot 7 (was 12), inside the rotated block's
+/// directly-committed `fields[0..8]` octet (register limbs r3..r10 = field indices 0..7) that the
+/// wide custom leg exposes as PIs (Lean `withAfterOctetPins customV3 4`). `b_board` takes the vacated
+/// slot 12 — it is committed via `fields_root` past the octet, which is sound for a `SumEquals`
+/// conservation counter (the tooth reads the field VALUE, not a limb position, and
+/// `conservation_indices` resolves it BY NAME). This lets the fold weld the published winner (win
+/// sub-proof PI 17) to `field[7]` in-circuit through `prove_custom_binding_node_app_root_segmented`.
 const REGISTERS: [&str; 16] = [
     "deck",
     "oop",
@@ -56,12 +64,12 @@ const REGISTERS: [&str; 16] = [
     "a_secret",
     "b_secret",
     "a_board",
-    "b_board",
+    "winner",
     "a_charm",
     "b_charm",
     "a_guilds",
     "b_guilds",
-    "winner",
+    "b_board",
     "current",
     "round_actions",
     "scored",

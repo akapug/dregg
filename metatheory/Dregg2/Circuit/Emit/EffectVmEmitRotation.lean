@@ -4,8 +4,8 @@
 `Circuit/RotationLayout.lean` pins the rotation's COMMITMENT shape (`RotatedLimbs` — 23 named
 limbs, receipt-index root literally last, `rotatedCommit_binds` the anti-ghost keystone). THIS
 module propagates that shape onto the WIRE, staged behind the IR-v2 recursion-gated path
-(`docs/UNIVERSAL-MAP-ROTATION.md` §2.1/§2.4/§2.6 → the layout flag-day; cutover =
-`docs/ROTATION-CUTOVER.md`). The live v1 registry is untouched — nothing here rides the wire
+(`.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.1/§2.4/§2.6 → the layout flag-day; cutover =
+`.docs-history-noclaude/ROTATION-CUTOVER.md`). The live v1 registry is untouched — nothing here rides the wire
 until the flag-day regen.
 
   * **§1 the rotated state BLOCK** — the 25-slot column block (`BLOCK_SIZE`): the 23

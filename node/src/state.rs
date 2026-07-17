@@ -497,7 +497,7 @@ pub struct NodeStateInner {
     /// projects the `CommitRecord` into a verified-turn `MirrorBatch`, chains it
     /// (the same anti-substitution tooth the pg side re-checks), and ships it.
     /// The node is the ONLY writer; reads on the pg side are free SQL.
-    /// (`crate::pg_mirror`; docs/PG-DREGG.md §8.)
+    /// (`crate::pg_mirror`; .docs-history-noclaude/PG-DREGG.md §8.)
     pub pg_mirror: Option<crate::pg_mirror::NodeMirror>,
 }
 
@@ -810,7 +810,7 @@ impl NodeState {
         let used_proof_hashes = store.load_all_proof_hashes().unwrap_or_default();
         let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
 
-        // Restore the forever-digest registries (docs/PERSISTENCE.md): the
+        // Restore the forever-digest registries (.docs-history-noclaude/PERSISTENCE.md): the
         // trustline draw/settle anti-replay set and the court's resolved-
         // evidence set are node-local-but-load-bearing — NOT derivable from
         // the cells — so their refusal teeth must survive the restart.
@@ -897,7 +897,7 @@ impl NodeState {
         let silo_id: SiloId = *blake3::hash(cclerk.public_key().as_bytes()).as_bytes();
 
         // Restore node-held channel rooms from the durable roster table
-        // (docs/PERSISTENCE.md §3, the roster caveat): each stored roster is
+        // (.docs-history-noclaude/PERSISTENCE.md §3, the roster caveat): each stored roster is
         // RE-COMMITTED against the recovered ledger's on-cell membership root;
         // a stale durable roster is discarded (and durably removed). This is
         // built against the just-recovered `ledger`, before it moves into the
@@ -1048,7 +1048,7 @@ impl NodeState {
         let cclerk = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(key_bytes));
         let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
 
-        // Restore the forever-digest registries (docs/PERSISTENCE.md): the
+        // Restore the forever-digest registries (.docs-history-noclaude/PERSISTENCE.md): the
         // trustline draw/settle anti-replay set and the court's resolved-
         // evidence set are node-local-but-load-bearing — NOT derivable from
         // the cells — so their refusal teeth must survive the restart.
@@ -1103,7 +1103,7 @@ impl NodeState {
         let silo_id: SiloId = *blake3::hash(cclerk.public_key().as_bytes()).as_bytes();
 
         // Restore node-held channel rooms from the durable roster table
-        // (docs/PERSISTENCE.md §3), re-committed against the recovered ledger.
+        // (.docs-history-noclaude/PERSISTENCE.md §3), re-committed against the recovered ledger.
         let mut channels = crate::channels_service::ChannelRegistry::default();
         channels.restore_rosters(&store, &ledger);
 
@@ -2673,7 +2673,7 @@ mod witnessed_receipt_persistence_tests {
 
 #[cfg(test)]
 mod crash_recovery_overlay_tests {
-    //! Recovery-soundness regressions (docs/ARCHEOLOGY-LEDGER.md, HIGH tier).
+    //! Recovery-soundness regressions (.docs-history-noclaude/ARCHEOLOGY-LEDGER.md, HIGH tier).
     //!
     //! 1. LAST-WRITER-WINS OVERLAY: a post-checkpoint commit-log write to a cell
     //!    the checkpoint ALREADY holds must OVERWRITE it (the verified

@@ -1,4 +1,4 @@
-//! SUPPLY-MODEL Stage 1 conservation property test (`docs/SUPPLY-MODEL.md`).
+//! SUPPLY-MODEL Stage 1 conservation property test (`.docs-history-noclaude/SUPPLY-MODEL.md`).
 //!
 //! Property: a `Burn` of ANY asset (default `[0u8;32]` or any non-default
 //! `token_id`), for any amount up to the holder's balance, is a CONSERVING

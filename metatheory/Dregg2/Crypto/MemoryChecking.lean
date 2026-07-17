@@ -1,7 +1,7 @@
 /-
 # Dregg2.Crypto.MemoryChecking — offline memory checking (Blum): multiset balance ⇒ consistency.
 
-THE EPOCH's interior principle (docs/EPOCH-DESIGN.md): inside one proof's transcript, state
+THE EPOCH's interior principle (.docs-history-noclaude/EPOCH-DESIGN.md): inside one proof's transcript, state
 consistency needs NO authenticated structure — every read and write is a tuple in a multiset,
 and the read-multiset = write-multiset check (with the serial discipline and the init/final
 boundary sets) IS memory consistency. This module is the semantic contract for the IR v2

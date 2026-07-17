@@ -59,11 +59,23 @@ AVAILABILITY RETARGET: the transfer key's host is the AVAIL crown member
 decode the WRONG columns), so its welded row is exactly the proven
 `EffectVmEmitUMemWeldWide.weldedTransferAvailWide`. -/
 def weldRefusedFirst (e : String × EffectVmDescriptor2) : String × EffectVmDescriptor2 :=
+  -- DELIVER #1 (welded twin): rebuild the custom wide host WITH the app-root field octet
+  -- (`withAfterOctetPins … 4`, PIs 62..69 ahead of the 16 wide anchors; piCount 78 → 86) so the
+  -- umem-welded custom member matches the bare wide member the fold binds. `host == e.2` for every
+  -- other key, so the refuse/umem composition below is unchanged for them.
+  let host :=
+    if e.1 == "customVmDescriptor2R24" then
+      Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend
+        (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withAfterOctetPins
+          (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+            Dregg2.Circuit.Emit.EffectVmEmitRotationV3.customV3) 4)
+        188 (188 + 239)
+    else e.2
   let refused :=
     if e.1 == "transferVmDescriptor2R24" then
       Dregg2.Circuit.Emit.AvailWireMembers.gentianDeployedBareRefuseAt
         (Dregg2.Circuit.Emit.AvailWireMembers.cavBaseOf
-          Dregg2.Circuit.Emit.EffectVmEmitTransfer.AVAIL_WIDTH) e.2
+          Dregg2.Circuit.Emit.EffectVmEmitTransfer.AVAIL_WIDTH) host
     -- AVAILABILITY RETARGET, the WIDE-BURN twin: the burn key's host is the burn AVAIL crown
     -- member (`burnV3AvailWide`), whose caveat region rides the burn-AVAIL-shifted base — its
     -- refuse is `gentianDeployedBareRefuseAt (cavBaseOf 196)`, so its welded row is exactly the
@@ -71,9 +83,9 @@ def weldRefusedFirst (e : String × EffectVmDescriptor2) : String × EffectVmDes
     else if e.1 == "burnVmDescriptor2R24" then
       Dregg2.Circuit.Emit.AvailWireMembers.gentianDeployedBareRefuseAt
         (Dregg2.Circuit.Emit.AvailWireMembers.cavBaseOf
-          Dregg2.Circuit.Emit.EffectVmEmitBurn.AVAIL_WIDTH) e.2
-    else if bareCohortKeys.contains e.1 then gentianWideBareRefuse e.2
-    else e.2
+          Dregg2.Circuit.Emit.EffectVmEmitBurn.AVAIL_WIDTH) host
+    else if bareCohortKeys.contains e.1 then gentianWideBareRefuse host
+    else host
   (e.1, weldUMemIntoWide refused (wideKeyUMemDomain e.1))
 
 /-- The refuse-first welded registry: the 45 crown members refuse-then-umem, the 9 §10 write-tail +

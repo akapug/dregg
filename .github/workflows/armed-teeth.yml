@@ -60,6 +60,8 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
 
       # Same disk reclaim as ci.yml's Linux test job: the hosted runner ships ~14 GB free on /,
       # which this workspace's target/ overruns (ci.yml documents the SIGBUS root cause at length).
@@ -146,6 +148,8 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
 
       - name: Is a seed release published? (reads dregg-lean-ffi/lean-seed.pin)
         id: pin

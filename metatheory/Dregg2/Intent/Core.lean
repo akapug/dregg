@@ -1,7 +1,7 @@
 /-
 # Dregg2.Intent.Core — the four-faced `Intent`, `fulfill`, and the receipt⊣intent discharge keystone.
 
-Phase 2, layer 2 (`docs/rebuild/PHASE-2-INTENT-SPEC.md`; spine `INTENT-AS-CO-RECEIPT.md`). An **intent**
+Phase 2, layer 2 (`.docs-history-noclaude/rebuild/metatheory/PHASE-2-INTENT-SPEC.md`; spine `INTENT-AS-CO-RECEIPT.md`). An **intent**
 is a *co-receipt*: the same string-diagram a receipt attests, but with the interior left as a TYPED HOLE
 (`§1`). It has FOUR faces (`§2`):
 

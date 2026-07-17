@@ -15,7 +15,7 @@
 //!
 //! pg-dregg gives you durable execution where **state mutates ONLY through a
 //! verified, capability-secure, conservation-respecting turn** (the spine
-//! invariant, `docs/PG-DREGG.md` §8):
+//! invariant, `.docs-history-noclaude/PG-DREGG.md` §8):
 //!
 //!   * **reads are free SQL** — any `SELECT`/join/aggregate over the mirror is
 //!     sound by construction (a read cannot break a transition-function invariant);

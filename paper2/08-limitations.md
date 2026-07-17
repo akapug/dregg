@@ -22,7 +22,7 @@ end-to-end statement does not.
 conservation (Σδ = 0 per asset, per turn, lifted to attested runs) is
 proven. The stronger discipline — `AssetId` identified with the issuer cell,
 the issuer carrying negative supply so every asset's system-wide total is
-identically zero at all times — is specified (`docs/DREGG3.md` §2.2, risk
+identically zero at all times — is specified (`.docs-history-noclaude/DREGG3.md` §2.2, risk
 R2) and probed, but is not the deployed ledger discipline.
 
 **Guard expressibility has stated edges.** The enforceable constraint

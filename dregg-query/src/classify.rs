@@ -1,5 +1,5 @@
 //! The CALM coordination classifier — the query planner of
-//! docs/EPISTEMIC-DATALOG.md, graded from day one.
+//! .docs-history-noclaude/EPISTEMIC-DATALOG.md, graded from day one.
 //!
 //! CALM (Hellerstein/Ameloot): a distributed computation is coordination-free
 //! iff it is expressible in monotone Datalog. The proved instance on dregg's

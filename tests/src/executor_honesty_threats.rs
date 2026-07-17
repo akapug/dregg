@@ -345,9 +345,9 @@ fn t6_signed_turn_for_federation_a_rejects_on_federation_b() {
     let federation_b = [0xB6u8; 32];
 
     assert_ne!(
-        TurnExecutor::compute_signing_message(&action, &federation_a),
-        TurnExecutor::compute_signing_message(&action, &federation_b),
-        "full action signatures must bind federation_id"
+        TurnExecutor::compute_signing_message(&action, &federation_a, 42),
+        TurnExecutor::compute_signing_message(&action, &federation_b, 42),
+        "full action signatures must bind federation_id (same turn nonce)"
     );
     assert_ne!(
         TurnExecutor::compute_partial_signing_message(&action, 0, &federation_a, 42),

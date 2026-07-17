@@ -76,3 +76,6 @@ deos-view = { path = "../deos-view", default-features = false }
 blake3 = "1"
 
 # A workspace MEMBER of the breadstuffs root; the root `[workspace]` + `[patch]` apply.
+
+[lints]
+workspace = true

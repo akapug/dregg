@@ -22,10 +22,60 @@ use dregg_cell::note::Note;
 use dregg_cell::nullifier_set::NullifierSet;
 use dregg_circuit::{
     BabyBear,
-    dsl::note_spending::{
-        create_test_witness, key_to_field_elements, prove_note_spend, verify_note_spend,
+    descriptor_by_name::descriptor_by_name,
+    descriptor_ir2::{
+        DreggStarkConfig, Ir2BatchProof, MemBoundaryWitness, prove_vm_descriptor2,
+        verify_vm_descriptor2,
     },
+    dsl::note_spending::{create_test_witness, key_to_field_elements, note_spend_mint_hash_felt},
+    note_spend_witness::{NOTE_SPEND_LEAF_NAME, note_spend_witness},
+    note_spending_witness::NoteSpendingWitness,
 };
+
+/// Prove a note spend through the DEPLOYED IR-v2 leaf descriptor (fetched fail-closed
+/// by name, exactly as the turn executor does).
+fn prove_note_spend_leaf(witness: &NoteSpendingWitness) -> Ir2BatchProof<DreggStarkConfig> {
+    let desc = descriptor_by_name(NOTE_SPEND_LEAF_NAME).expect("leaf descriptor registered");
+    let (trace, pis) = note_spend_witness(witness).expect("witness builds the leaf trace");
+    prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+        .expect("the honest note-spend must prove")
+}
+
+/// Verify a note-spend proof from PUBLIC data only — rebuilds the 7-slot claim tuple
+/// exactly as the turn executor's `verify_note_spend_descriptor2` does
+/// (turn/src/executor/apply.rs).
+fn verify_note_spend_claim(
+    nullifier: BabyBear,
+    merkle_root: BabyBear,
+    value_lo: BabyBear,
+    asset_type: BabyBear,
+    proof: &Ir2BatchProof<DreggStarkConfig>,
+) -> Result<(), String> {
+    let desc = descriptor_by_name(NOTE_SPEND_LEAF_NAME).ok_or_else(|| {
+        format!("note-spend leaf descriptor `{NOTE_SPEND_LEAF_NAME}` is not registered")
+    })?;
+    let destination_federation = BabyBear::ZERO; // a local spend (no bridge leg)
+    let value_hi = BabyBear::ZERO; // demo values fit the low limb
+    let mint = note_spend_mint_hash_felt(
+        nullifier,
+        merkle_root,
+        value_lo,
+        asset_type,
+        destination_federation,
+        value_hi,
+    );
+    let pi = vec![
+        nullifier,
+        merkle_root,
+        value_lo,
+        asset_type,
+        destination_federation,
+        value_hi,
+        mint,
+    ];
+    verify_vm_descriptor2(&desc, proof, &pi)
+        .map_err(|e| format!("note-spend descriptor verification failed: {e}"))
+}
 
 /// Mock USDC token identifier (in production, this would be the ERC-20 address hash).
 const ASSET_USDC: u64 = 0xA0B8_6991_C621_8B36; // first 8 bytes of USDC address
@@ -156,7 +206,9 @@ fn main() {
 
     // Alice spends her 100 USDC note by revealing its nullifier.
     let alice_nullifier = alice_note.nullifier(&alice_sk);
-    nullifier_set.insert(alice_nullifier).expect("first spend");
+    nullifier_set
+        .insert(alice_nullifier, alice_note.value())
+        .expect("first spend");
 
     println!("  Alice spends her 100 USDC note inside dregg:");
     println!(
@@ -173,10 +225,10 @@ fn main() {
         key_to_field_elements(&alice_sk),
         4,
     );
-    let alice_proof = prove_note_spend(&alice_witness);
+    let alice_proof = prove_note_spend_leaf(&alice_witness);
 
     // Verify the STARK proof (now includes value + asset_type to prevent inflation).
-    let verify = verify_note_spend(
+    let verify = verify_note_spend_claim(
         alice_witness.nullifier(),
         alice_witness.merkle_root(),
         alice_witness.value,
@@ -244,7 +296,9 @@ fn main() {
 
     // Bob burns his note (reveals nullifier) to initiate withdrawal.
     let bob_nullifier = bob_note.nullifier(&bob_sk);
-    nullifier_set.insert(bob_nullifier).expect("first spend");
+    nullifier_set
+        .insert(bob_nullifier, bob_note.value())
+        .expect("first spend");
 
     println!("  Bob wants to withdraw 30 USDC to his Base address.");
     println!("  He burns his dregg note:");
@@ -262,9 +316,9 @@ fn main() {
         key_to_field_elements(&bob_sk),
         4,
     );
-    let bob_proof = prove_note_spend(&bob_witness);
+    let bob_proof = prove_note_spend_leaf(&bob_witness);
 
-    let bob_verify = verify_note_spend(
+    let bob_verify = verify_note_spend_claim(
         bob_witness.nullifier(),
         bob_witness.merkle_root(),
         bob_witness.value,
@@ -371,14 +425,14 @@ fn main() {
     println!();
 
     // Alice tries to spend her note again.
-    let double_spend = nullifier_set.insert(alice_nullifier);
+    let double_spend = nullifier_set.insert(alice_nullifier, alice_note.value());
     assert!(double_spend.is_err());
     println!("  Alice tries to spend her 100 USDC note again:");
     println!("    Nullifier already in set: [REJECTED]");
     println!();
 
     // Bob tries to withdraw with the same nullifier.
-    let bob_double = nullifier_set.insert(bob_nullifier);
+    let bob_double = nullifier_set.insert(bob_nullifier, bob_note.value());
     assert!(bob_double.is_err());
     println!("  Bob tries to withdraw 30 USDC again:");
     println!("    Nullifier already in set: [REJECTED]");

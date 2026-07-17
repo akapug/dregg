@@ -1,4 +1,4 @@
-//! SUPPLY-MODEL Stage 2a mint tests (`docs/SUPPLY-MODEL.md`).
+//! SUPPLY-MODEL Stage 2a mint tests (`.docs-history-noclaude/SUPPLY-MODEL.md`).
 //!
 //! `Effect::Mint` is the cap-gated SUPPLY ENTRY — the sign-flipped dual of
 //! `Burn`. The asset's ISSUER WELL (resolved from the recipient's `token_id`)

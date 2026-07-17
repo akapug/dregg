@@ -197,7 +197,7 @@ pub mod mud;
 // from `dregg-app-framework`), seeds its backing cell, and its affordances fire REAL
 // verified turns on that substrate's ledger — visible to a second reader (the
 // inspector seam). Gated on `app-registry` (pulled by `embedded-executor`);
-// gpui-free + `cargo test`-able. See `docs/deos/APP-AND-FEDERATION-CENSUS-2026-06-23.md`.
+// gpui-free + `cargo test`-able. See `.docs-history-noclaude/deos/APP-AND-FEDERATION-CENSUS-2026-06-23.md`.
 #[cfg(feature = "app-registry")]
 pub mod app_registry;
 
@@ -416,7 +416,7 @@ pub mod world;
 pub mod held_promise;
 #[cfg(feature = "embedded-executor")]
 pub mod pipeline_continuation;
-// NATIVE WORLD PERSISTENCE (M4 — docs/deos/WORLD-PERSISTENCE-PLAN.md): the
+// NATIVE WORLD PERSISTENCE (M4 — .docs-history-noclaude/deos/WORLD-PERSISTENCE-PLAN.md): the
 // durable-image weld onto the node's already-built `dregg-persist` spine (redb
 // commit log + checkpoint⊕overlay recovery). gpui-free, `cargo test`-able.
 #[cfg(all(feature = "embedded-executor", not(target_arch = "wasm32")))]
@@ -428,7 +428,7 @@ pub mod persistence;
 #[path = "persistence_wasm.rs"]
 pub mod persistence;
 
-// THE DURABLE-IMAGE WELD for the windowed desktop (docs/deos/WORLD-PERSISTENCE-PLAN.md):
+// THE DURABLE-IMAGE WELD for the windowed desktop (.docs-history-noclaude/deos/WORLD-PERSISTENCE-PLAN.md):
 // make "your world is one durable image" LITERALLY true for `--desktop` by booting the
 // desktop's World from the durable redb image (open-recovering + seed-on-first-run) beside
 // the layout sidecar, with a :memory:/ephemeral escape hatch for bakes/tests/CI. Builds NO

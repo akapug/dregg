@@ -1,6 +1,6 @@
 //! # THE VK-EPOCH LIGHT-CLIENT BINDING BITE — setPermissions / setVK FORCED ON-WIRE.
 //!
-//! ## What this closes (`docs/VK-EPOCH-PLAN.md`, STAGE B / Family 1)
+//! ## What this closes (`.docs-history-noclaude/VK-EPOCH-PLAN.md`, STAGE B / Family 1)
 //!
 //! Before the VK epoch, setPermissions / setVK were *full-node-only*: the deployed verifier
 //! (`turn::executor::proof_verify.rs` step 6b, ~`:718-735`) re-derived the post-cell via

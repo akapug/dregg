@@ -49,8 +49,7 @@ use dregg_circuit::dsl::cap_membership::verify_cap_membership_p3;
 use dregg_circuit::dsl::dsl_p3_air::DslP3Proof;
 use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
 use dregg_circuit::dsl::revocation::{
-    DslRevocationTree, non_revocation_circuit_descriptor, prove_non_revocation_p3,
-    verify_non_revocation_p3,
+    DslRevocationTree, prove_non_revocation_p3, verify_non_revocation_p3,
 };
 use dregg_circuit::effect_vm::{self, CellState, Effect as VmEffectKind, generate_effect_vm_trace};
 // (The v1 hand-AIR EffectVM proof type + prover/verifier — `effect_vm_p3_full_air`
@@ -63,6 +62,9 @@ use dregg_circuit::merkle_air::{
     MembershipP3Proof, membership_public_inputs, prove_membership_p3, verify_membership_p3,
 };
 use dregg_circuit::multi_step_witness::ALLOW_PREDICATE;
+use dregg_circuit::non_revocation_adjacency_witness::{
+    NON_REVOCATION_ADJACENCY_NAME, NONREV_ADJ_PI_COUNT, NONREV_ADJ_WIDTH,
+};
 use dregg_circuit::poseidon2::hash_fact;
 use dregg_dsl_runtime::composition::{AttachedSubProof, ComposedProof, compose_aggregate};
 use dregg_dsl_runtime::{CircuitDescriptor, ComposedCircuitDescriptor};
@@ -787,7 +789,7 @@ fn build_full_turn_descriptor(components: &TurnProofComponents) -> ComposedCircu
 
     // Non-revocation (sorted tree non-membership).
     if components.has_non_revocation {
-        circuits.push(non_revocation_circuit_descriptor());
+        circuits.push(non_revocation_composed_circuit_descriptor());
     }
 
     // Cap-membership (consumed capability ∈ openable capability_root). Deferred until the
@@ -836,6 +838,23 @@ fn membership_circuit_descriptor() -> CircuitDescriptor {
         constraints: vec![],
         boundaries: vec![],
         public_input_count: emitted.public_input_count,
+        lookup_tables: vec![],
+    }
+}
+
+/// Structural composition identity for the Lean-emitted, depth-general
+/// adjacency-plus-ordering non-revocation descriptor. The algebra lives only in
+/// the byte-pinned IR2 artifact; this legacy composition carrier authors no
+/// constraints.
+fn non_revocation_composed_circuit_descriptor() -> CircuitDescriptor {
+    CircuitDescriptor {
+        name: NON_REVOCATION_ADJACENCY_NAME.into(),
+        trace_width: NONREV_ADJ_WIDTH,
+        max_degree: 3,
+        columns: vec![],
+        constraints: vec![],
+        boundaries: vec![],
+        public_input_count: NONREV_ADJ_PI_COUNT,
         lookup_tables: vec![],
     }
 }
@@ -4684,11 +4703,10 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // 5. Non-revocation proof (token freshness)
     // ========================================================================
     if let Some(revoc_witness) = &witness.non_revocation {
-        // AUDITED PATH: non-revocation (sorted-tree non-membership) is proven
-        // through the real Plonky3 verifier (`p3-batch-stark`) via
-        // `prove_non_revocation_p3`. Its two `hash_fact` node-hash constraints
-        // are arithmetized in-circuit by the real Poseidon2 gadget — NOT the
-        // bespoke `stark`.
+        // AUDITED PATH: non-revocation is proved by the byte-pinned Lean-emitted
+        // adjacency-plus-ordering descriptor through the real Plonky3 verifier.
+        // Its two depth-general `hash_fact` paths fold one genuine tree level
+        // per row; Rust only builds the witness and interprets the descriptor.
         let revoc_proof = prove_non_revocation_p3(&revoc_witness.tree, revoc_witness.item_hash)
             .map_err(|e| {
                 SdkError::InvalidWitness(format!("non-revocation p3 proof failed: {e}"))
@@ -4698,9 +4716,9 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
         })?;
 
         // Non-revocation public inputs: [revocation_root, queried_item]. The
-        // queried item is the spent nullifier; the non-revocation AIR binds it
-        // in-circuit to the bracketed control-row COL_0 (row-0 QUERIED_ITEM
-        // boundary), so this is a real handle the verifier can compare to the
+        // queried item is the spent nullifier; the emitted descriptor binds it
+        // to the first-row X wire consumed by strict ordering, so this is a real
+        // handle the verifier can compare to the
         // Effect-VM nullifier (no-double-spend binding "b").
         let revoc_pi = vec![revoc_witness.tree.root(), revoc_witness.item_hash];
 
@@ -4710,7 +4728,7 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
             label: "non-revocation".into(),
             proof_bytes: revoc_proof_bytes,
             sub_public_inputs: revoc_pi,
-            vk_hash: compute_vk_hash_bytes(&non_revocation_circuit_descriptor()),
+            vk_hash: compute_vk_hash_bytes(&non_revocation_composed_circuit_descriptor()),
         });
     }
 
@@ -5222,9 +5240,8 @@ pub fn verify_full_turn_bound(
     //    proof proved fresh IS THIS turn's nullifier.
     //
     //    The non-revocation sub-proof now publishes the queried item as its
-    //    SECOND public input (`pi[QUERIED_ITEM]`), bound IN-CIRCUIT to the
-    //    bracketed control-row COL_0 by a row-0 boundary
-    //    (`circuit/src/dsl/revocation.rs`, `QUERIED_ITEM` PI). Step 3 already
+    //    SECOND public input, bound IN-CIRCUIT to the first-row X wire used by
+    //    the emitted strict-ordering constraints. Step 3 already
     //    re-verified the sub-proof against that published item, so it is a
     //    cryptographically-bound handle on the genuinely-proven item — NOT a
     //    free felt. Requiring it to equal the Effect-VM proof's NoteSpend
@@ -5800,9 +5817,9 @@ pub enum FullTurnVerifyError {
     },
     /// The non-revocation sub-proof proved freshness for an item that is NOT
     /// this turn's spent nullifier. This is the no-double-spend / freshness
-    /// anti-forgery tooth, binding (b): the non-revocation AIR now publishes
-    /// the queried item as `pi[QUERIED_ITEM]`, bound in-circuit to the
-    /// bracketed control-row COL_0 (`dsl/revocation.rs`). Requiring it to equal
+    /// anti-forgery tooth, binding (b): the emitted non-revocation descriptor
+    /// publishes the queried item as `pi[1]`, bound in-circuit to the first-row
+    /// ordering wire X. Requiring it to equal
     /// the Effect-VM proof's `PI[NOTESPEND_NULLIFIER]` (pinned in-circuit to the
     /// spend row's folded nullifier) ensures the freshness attests THIS turn's
     /// nullifier, not some other item a prover proved fresh and attached. Only
@@ -10506,42 +10523,43 @@ mod tests {
         );
     }
 
-    /// BINDING (b) CLOSED — circuit guard: the audited non-revocation circuit
-    /// now exposes the queried item as its second public input
-    /// (`pi::QUERIED_ITEM`), bound in-circuit to control-row `COL_0` by a row-0
-    /// `PiBinding` boundary. This guards against silent regression of the
-    /// circuit half of binding (b): if the item PI is ever removed (back to
-    /// `public_input_count == 1` / no row-0 COL_0 boundary), the verifier's
+    /// BINDING (b) CLOSED — the emitted descriptor exposes the queried item as
+    /// its second public input, bound on the first row to the ordering wire `X`.
+    /// This guards against silent regression of the circuit half of binding
+    /// (b): if the item PI is ever removed, the verifier's
     /// nullifier tooth (step 8) would have nothing real to compare and this test
     /// fails LOUDLY.
     #[test]
     fn revocation_item_pi_exposed_binding_b_closed() {
-        use dregg_circuit::dsl::circuit::{BoundaryDef, BoundaryRow};
-        use dregg_circuit::dsl::revocation::{col as rcol, pi as rpi};
+        use dregg_circuit::descriptor_by_name::descriptor_by_name;
+        use dregg_circuit::descriptor_ir2::VmConstraint2;
+        use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+        use dregg_circuit::non_revocation_adjacency_witness::{PI_QUERIED_ITEM, X};
 
-        let desc = dregg_circuit::dsl::revocation::non_revocation_circuit_descriptor();
+        let desc = descriptor_by_name(NON_REVOCATION_ADJACENCY_NAME)
+            .expect("the Lean-emitted non-revocation descriptor is registered");
         assert_eq!(
             desc.public_input_count, 2,
-            "the audited non-revocation circuit must publish [revocation_root, queried_item] so \
+            "the emitted non-revocation circuit must publish [revocation_root, queried_item] so \
              verify_full_turn_bound can bind the proven-fresh item to this turn's nullifier \
              (no-double-spend binding b)",
         );
-        // The queried-item PI must be a REAL binding: a row-0 PiBinding tying
-        // control-row COL_0 (the value the ordering constraints bracket) to
-        // pi[QUERIED_ITEM]. A free felt would make the SDK tooth vacuous.
-        let has_item_boundary = desc.boundaries.iter().any(|b| {
+        // The queried-item PI must be a REAL binding to the same X wire used by
+        // the first-row strict-ordering equations. A free felt would make the
+        // SDK tooth vacuous.
+        let has_item_boundary = desc.constraints.iter().any(|constraint| {
             matches!(
-                b,
-                BoundaryDef::PiBinding {
-                    row: BoundaryRow::Index(0),
-                    col,
-                    pi_index,
-                } if *col == rcol::COL_0 && *pi_index == rpi::QUERIED_ITEM
+                constraint,
+                VmConstraint2::Base(VmConstraint::PiBinding {
+                    row: VmRow::First,
+                    col: X,
+                    pi_index: PI_QUERIED_ITEM,
+                })
             )
         });
         assert!(
             has_item_boundary,
-            "the queried-item PI must be pinned by a row-0 PiBinding on COL_0 — otherwise pi[1] is \
+            "the queried-item PI must be pinned by a first-row PiBinding on X — otherwise pi[1] is \
              a free wire and the item==nullifier tooth would be vacuous",
         );
     }

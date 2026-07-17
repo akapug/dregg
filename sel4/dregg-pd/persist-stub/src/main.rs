@@ -2,12 +2,12 @@
 //!
 //! The real persist-PD is the SOLE holder of the storage-device cap, backing
 //! `redb` over a raw block cap with the snapshot⊕overlay + root tooth
-//! (`persist/src/snapshot.rs`, docs/SEL4-EMBEDDING.md §3, docs/FIRMAMENT.md §2).
+//! (`persist/src/snapshot.rs`, .docs-history-noclaude/SEL4-EMBEDDING.md §3, .docs-history-noclaude/FIRMAMENT.md §2).
 //! That block-cap backend is the §3 ecosystem work; until it lands this seat
 //! holds the persist place in the cap partition so the assembly BOOTS as a real
 //! multi-PD image.
 //!
-//! Cap partition (docs/FIRMAMENT.md §2): it maps `commit_out` (R) — the
+//! Cap partition (.docs-history-noclaude/FIRMAMENT.md §2): it maps `commit_out` (R) — the
 //! executor→persist commit-log handoff — and NOTHING else (no block-device cap
 //! YET; the device cap will land HERE and only here). It touches the region to
 //! prove the cap is live and services the executor→persist notification channel.
@@ -36,7 +36,9 @@ fn init() -> HandlerImpl {
         committed
     );
 
-    debug_println!("[persist]   redb-over-block-cap + snapshot⊕overlay root tooth is the §3 block-cap port;");
+    debug_println!(
+        "[persist]   redb-over-block-cap + snapshot⊕overlay root tooth is the §3 block-cap port;"
+    );
     debug_println!("[persist]   no other PD can ever touch the disk — the partition makes durable state unforgeable.");
     debug_println!("[persist]   awaiting executor→persist commit signal (channel id 1) …");
     HandlerImpl
@@ -52,7 +54,10 @@ impl Handler for HandlerImpl {
     // the turn returns (the n=1 synchronous-commit property, FIRMAMENT §3).
     fn notified(&mut self, channels: sel4_microkit::ChannelSet) -> Result<(), Self::Error> {
         for channel in channels.iter() {
-            debug_println!("[persist]   notified on channel {} (commit ready)", channel.index());
+            debug_println!(
+                "[persist]   notified on channel {} (commit ready)",
+                channel.index()
+            );
         }
         Ok(())
     }

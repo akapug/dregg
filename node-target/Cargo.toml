@@ -42,3 +42,6 @@ default = []
 # The REAL federation transport over HTTP. OFF by default so the standard build + the
 # green wiring tests stay HTTP-free (they exercise the seam against the in-memory stub).
 http = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:hex"]
+
+[lints]
+workspace = true

@@ -38,3 +38,6 @@ dregg-agent = { path = "../dregg-agent" }
 
 [dev-dependencies]
 tempfile = { version = "3" }
+
+[lints]
+workspace = true

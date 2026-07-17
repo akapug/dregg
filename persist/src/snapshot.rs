@@ -6,7 +6,7 @@
 //! A node joining the federation, or recovering after long downtime, otherwise
 //! has to obtain and replay every finalized turn from genesis — O(history). The
 //! durable store already holds the two halves a recovered node reconstructs its
-//! ledger from (`docs/PROTOCOL-ENHANCEMENTS.md` §2.2): the latest full ledger
+//! ledger from (`.docs-history-noclaude/PROTOCOL-ENHANCEMENTS.md` §2.2): the latest full ledger
 //! **checkpoint** (`ledger_store.rs::checkpoint_ledger`) and the **cell overlay**
 //! committed since that checkpoint's height (`commit_log.rs::cell_overlay_since`).
 //! Shipping those two halves over the wire lets a joiner reconstruct the exact

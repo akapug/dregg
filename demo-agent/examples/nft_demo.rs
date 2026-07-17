@@ -88,7 +88,7 @@ fn main() {
 
     // Insert nullifier into the set (spend the note)
     nullifier_set
-        .insert(nullifier_alice)
+        .insert(nullifier_alice, nft_note_alice.value())
         .expect("First spend should succeed");
     println!("  Nullifier accepted (note is now spent)");
 
@@ -142,7 +142,7 @@ fn main() {
 
     // An adversary (or Alice herself) tries to spend the same note again
     println!("  Adversary attempts to re-spend Alice's original note...");
-    let double_spend_result = nullifier_set.insert(nullifier_alice);
+    let double_spend_result = nullifier_set.insert(nullifier_alice, nft_note_alice.value());
 
     match double_spend_result {
         Err(dregg_cell::note::NoteError::DoubleSpend { nullifier }) => {
@@ -176,7 +176,7 @@ fn main() {
     // Bob transfers to Carol
     let nullifier_bob_spend = nft_note_bob.nullifier(&bob_spending_key);
     nullifier_set
-        .insert(nullifier_bob_spend)
+        .insert(nullifier_bob_spend, nft_note_bob.value())
         .expect("Bob's spend should succeed");
 
     let nft_note_carol = Note::with_randomness(carol_pubkey, transfer_fields, [0x44u8; 32]);

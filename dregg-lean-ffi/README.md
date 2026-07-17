@@ -143,6 +143,6 @@ test.
 
 The next consumers are the real `turn` / `verifier` conservation + authority checks:
 extend the FFI surface and this harness to cover them, per
-`docs/rebuild/DREGG1-TO-DREGG2.md` (the dregg1→dregg2 migration plan). Each component
+`.docs-history-noclaude/rebuild/dregg2-design/DREGG1-TO-DREGG2.md` (the dregg1→dregg2 migration plan). Each component
 graduates the same way it did here: state the native semantics, diff against the
 oracle until 100% agreement, then swap.

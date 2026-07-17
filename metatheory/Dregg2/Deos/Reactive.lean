@@ -1,7 +1,7 @@
 /-
 # Dregg2.Deos.Reactive — affordances that react to a state TRANSITION, a deadline WINDOW, and a per-viewer MEMBRANE.
 
-`docs/REFINEMENT-DESIGN.md` Decision 3 ("cells are law, agents are will, receipts are the nervous
+`.docs-history-noclaude/REFINEMENT-DESIGN.md` Decision 3 ("cells are law, agents are will, receipts are the nervous
 system" — the reactivity model) + `docs/deos/DEOS.md` §"htmx on crack". This is the TEMPORAL/REACTIVE
 rung above `Dregg2.Deos.GatedAffordance`.
 

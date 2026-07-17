@@ -2,7 +2,7 @@
 //!
 //! Turns a predicate specification into the appropriate AIR proof(s).
 //! This implements Stage 1 of the programmable predicates compilation pipeline
-//! from `docs/programmable-predicates.md`:
+//! from `.docs-history-noclaude/programmable-predicates.md`:
 //!
 //! ```text
 //! PredicateProgram
@@ -676,110 +676,6 @@ fn compile_boolean_composition(
             sub_proofs,
             formula,
         })
-    }
-}
-
-// =============================================================================
-// NOR Helper
-// =============================================================================
-
-/// Compile a NOR ("none of these hold") predicate expression.
-///
-/// For predicate-based NOR: flips each range predicate's comparison direction,
-/// then compiles as AND of flipped predicates:
-/// - `Gte` becomes `Lt`
-/// - `Lte` becomes `Gt`
-/// - `Gt` becomes `Lte`
-/// - `Lt` becomes `Gte`
-/// - `Neq` becomes an `ExprEq` (via Arithmetic)
-///
-/// This is sound because "none hold" = "all are false" = "all negations are true".
-///
-/// For non-range predicates in the input, they are wrapped in ThresholdBelow(1, [p])
-/// which means "zero of [p] hold".
-///
-/// Returns a `PredicateExpr` that can be fed to `compile_predicate`.
-pub fn compile_nor(predicates: &[PredicateExpr]) -> PredicateExpr {
-    let flipped: Vec<PredicateExpr> = predicates.iter().map(flip_predicate).collect();
-    PredicateExpr::And(flipped)
-}
-
-/// Flip a single predicate to its negation.
-///
-/// For range predicates, this flips the comparison direction.
-/// For other predicate types, wraps in ThresholdBelow(1, ...) meaning "zero hold".
-fn flip_predicate(pred: &PredicateExpr) -> PredicateExpr {
-    match pred {
-        PredicateExpr::Range {
-            attribute,
-            predicate_type,
-            threshold,
-        } => {
-            let flipped_type = match predicate_type {
-                PredicateType::Gte => PredicateType::Lt,
-                PredicateType::Lte => PredicateType::Gt,
-                PredicateType::Gt => PredicateType::Lte,
-                PredicateType::Lt => PredicateType::Gte,
-                PredicateType::Neq => {
-                    // NEQ flipped = EQ. Use Arithmetic with ExprEq.
-                    return PredicateExpr::Arithmetic {
-                        inputs: vec![attribute.clone()],
-                        expression: crate::dsl::predicates::ArithExpr::Var(0),
-                        predicate: crate::dsl::predicates::ArithPredicate::ExprEq(
-                            crate::dsl::predicates::ArithExpr::Var(0),
-                            *threshold as u32,
-                        ),
-                    };
-                }
-                PredicateType::InRangeLow | PredicateType::InRangeHigh => {
-                    // These are internal types; treat as unsupported by wrapping.
-                    return PredicateExpr::ThresholdBelow {
-                        max_k: 1,
-                        predicates: vec![pred.clone()],
-                    };
-                }
-            };
-            PredicateExpr::Range {
-                attribute: attribute.clone(),
-                predicate_type: flipped_type,
-                threshold: *threshold,
-            }
-        }
-        PredicateExpr::Neq { attribute, value } => {
-            // NEQ flipped = EQ. Compile as Arithmetic ExprEq.
-            PredicateExpr::Arithmetic {
-                inputs: vec![attribute.clone()],
-                expression: crate::dsl::predicates::ArithExpr::Var(0),
-                predicate: crate::dsl::predicates::ArithPredicate::ExprEq(
-                    crate::dsl::predicates::ArithExpr::Var(0),
-                    *value as u32,
-                ),
-            }
-        }
-        PredicateExpr::NotInRange {
-            attribute,
-            low,
-            high,
-        } => {
-            // NOT(NotInRange) = InRange. Use a Range with InRangeLow + AND + InRangeHigh.
-            PredicateExpr::And(vec![
-                PredicateExpr::Range {
-                    attribute: attribute.clone(),
-                    predicate_type: PredicateType::Gte,
-                    threshold: *low,
-                },
-                PredicateExpr::Range {
-                    attribute: attribute.clone(),
-                    predicate_type: PredicateType::Lte,
-                    threshold: *high,
-                },
-            ])
-        }
-        // For other complex predicates, wrap in ThresholdBelow(1) meaning "zero hold".
-        _ => PredicateExpr::ThresholdBelow {
-            max_k: 1,
-            predicates: vec![pred.clone()],
-        },
     }
 }
 

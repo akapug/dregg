@@ -305,7 +305,7 @@ fn self_sovereign_turn_carries_no_consumed_cap_witness() {
     ledger.insert_cell(agent).unwrap();
 
     let mut action = set_field_action(agent_id, Authorization::Unchecked, [5u8; 32]);
-    let message = TurnExecutor::compute_signing_message(&action, &[0u8; 32]);
+    let message = TurnExecutor::compute_signing_message(&action, &[0u8; 32], 0);
     let sig = agent_kp.signing_key.sign(&message).to_bytes();
     let mut r = [0u8; 32];
     let mut s = [0u8; 32];

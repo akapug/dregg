@@ -400,7 +400,7 @@ import './inspectors/cell-history.js';
 // with the charter terms read from the served program view / descriptor.
 import './inspectors/polis.js';
 
-// THE OPERATIONAL ORGANS (docs/ORGANS.md) — the live cell/agent surfaces that
+// THE OPERATIONAL ORGANS (.docs-history-noclaude/ORGANS.md) — the live cell/agent surfaces that
 // landed with the node services + the @dregg/sdk organ clients:
 //   <dregg-trustline> §1 — the bilateral line of credit (GET /trustline/status)
 //   <dregg-channel>   §4 — the encrypted group + the epochs-unified keystone

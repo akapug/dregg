@@ -410,7 +410,7 @@ pub enum Authorization {
         signature: [u8; 64],
     },
     /// **First-class biscuit/macaroon credential authorization** per
-    /// `docs/TOKEN-CAPABILITY-UNIFICATION.md` (goal 3). A peer of
+    /// `.docs-history-noclaude/TOKEN-CAPABILITY-UNIFICATION.md` (goal 3). A peer of
     /// `Bearer`/`CapTpDelivered`: the caller authorizes by *presenting a
     /// token* whose caveats/Datalog are verified — deterministically and
     /// on-chain — against THIS call's `(action, resource, effects,
@@ -715,40 +715,6 @@ pub fn verify_stark_delegation_binding(
 }
 
 impl Authorization {
-    /// Map this authorization to the corresponding AuthKind for permission checking.
-    /// Returns None for Authorization::Unchecked, Breadstuff, and Bearer (handled separately).
-    pub fn to_auth_kind(&self) -> Option<dregg_cell::AuthKind> {
-        match self {
-            Authorization::Signature(_, _) => Some(dregg_cell::AuthKind::Signature),
-            // A hybrid (ed25519 + ML-DSA) signature satisfies a Signature
-            // requirement; it IS a signature (with a post-quantum half).
-            Authorization::HybridSignature { .. } => Some(dregg_cell::AuthKind::Signature),
-            Authorization::Proof { .. } => Some(dregg_cell::AuthKind::Proof),
-            Authorization::Breadstuff(_) => None,
-            Authorization::Bearer(_) => None,
-            Authorization::Unchecked => None,
-            Authorization::CapTpDelivered { .. } => None,
-            // Custom is not part of the Sig/Proof lattice; cells that
-            // require Custom auth declare `AuthRequired::Custom { vk_hash }`
-            // and the executor checks the predicate directly.
-            Authorization::Custom { .. } => None,
-            // OneOf is a disjunction — its discriminant depends on
-            // which candidate the executor verifies, not on the
-            // wrapper. Permission checks dispatch by inspecting the
-            // chosen candidate at `verify_authorization` time.
-            Authorization::OneOf { .. } => None,
-            // Stealth authorizes by a one-time Ed25519 signature; it
-            // satisfies the Signature requirement (the one-time key is
-            // a derived signing key). Reported as Signature so cells
-            // requiring `AuthRequired::Signature` accept it.
-            Authorization::Stealth { .. } => Some(dregg_cell::AuthKind::Signature),
-            // Token is verified holistically by the TokenAuthorityVerifier
-            // (capability-cover decides whether it satisfies the cell's
-            // requirement), so it is not part of the Sig/Proof lattice.
-            Authorization::Token { .. } => None,
-        }
-    }
-
     /// Placeholder authorization for an [`Action`] that is ASSEMBLED unsigned by
     /// a higher-level routing/builder core and MUST be signed before submission
     /// (e.g. via `AppCipherclerk::sign_action`, which OVERWRITES this field).
@@ -1484,7 +1450,7 @@ pub enum Effect {
         wake: Box<crate::turn::Turn>,
     },
     /// Mint new supply of an asset into a holder's balance slot — the
-    /// cap-gated SUPPLY ENTRY (`docs/SUPPLY-MODEL.md` Stage 2, the dual
+    /// cap-gated SUPPLY ENTRY (`.docs-history-noclaude/SUPPLY-MODEL.md` Stage 2, the dual
     /// of `Burn`). The issuer WELL of `target`'s asset is DEBITED (going
     /// more negative — the `−supply` account grows) and `target` is
     /// CREDITED, so a mint CONSERVES exactly (`Σδ=0`, per-asset): supply

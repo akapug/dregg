@@ -220,3 +220,6 @@ required-features = ["web"]
 #     transitive dregg + gpui deps cannot re-resolve without these. They revert with
 #     the others once the forks land.
 
+
+[lints]
+workspace = true

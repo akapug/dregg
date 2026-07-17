@@ -76,3 +76,6 @@ tlsn-live = ["dregg-zkoracle-prove/tlsn-live"]
 # `[workspace]` + its `[patch]` tables (the plonky3-recursion sibling checkout + the
 # ark-serialize serde fork) apply, so zkoracle-prove's proof dep-tree resolves
 # identically — no standalone `[workspace]`/`[patch]` here.
+
+[lints]
+workspace = true

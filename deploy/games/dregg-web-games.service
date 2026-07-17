@@ -1,3 +1,17 @@
+# ⚠⚠ ASPIRATIONAL — NOT INSTALLED, NOT RUNNABLE TODAY. ⚠⚠
+#
+# What actually runs on hbox is the FUNNEL variant: dregg-web-games-funnel.service
+# (loopback:8790 + `tailscale funnel`), live at https://hbox-dregg.skunk-emperor.ts.net
+# and verified reboot-proof 2026-07-15.
+#
+# This gateway-variant unit binds the tailnet iface (100.95.240.73:8790) so "the AWS
+# gateway's Caddy" can reverse-proxy it. Both halves of that premise are FALSE:
+#   • the AWS edge is on the 100.64.0.x tailnet, hbox is on skunk-emperor — the edge
+#     CANNOT reach 100.95.240.73 at all (deploy/README.md);
+#   • there is no Caddy container on the edge.
+# Installing this unit would bind a port nothing can reach. See deploy/games/RUNBOOK.md.
+#
+# ---------------------------------------------------------------------------
 # dregg games web demo — the standalone dreggnet-web public-demo server.
 #
 # Runs `dreggnet-web-server` (package `dreggnet-web`): all 5 games + the do-once

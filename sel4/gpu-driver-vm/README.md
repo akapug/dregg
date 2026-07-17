@@ -3,7 +3,7 @@
 The canonical seL4 route to **real GPU acceleration** for the deos cockpit: a Linux guest,
 virtualised under the seL4 **Microkit VMM**, owns the graphics stack and exposes
 **virtio-gpu** (2D → virgl/venus accel) to the cockpit PD. Architecture + plan:
-`docs/desktop-os-research/SEL4-GPU-DRIVER-VM.md`.
+`.docs-history-noclaude/desktop-os-research/SEL4-GPU-DRIVER-VM.md`.
 
 This directory is a **disjoint** workstream. It does NOT touch `sel4/Makefile`,
 `sel4/dregg-pd/`, `sel4/render-pd/`, or any shared `.system`. It is distinct from the

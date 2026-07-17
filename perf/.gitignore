@@ -1,5 +1,5 @@
 # Baseline capture outputs (criterion baselines, proof-size JSON, perf reports).
 # Captured per-run on persvati; not committed (the COMMITTED reference numbers
-# live in docs/PERF.md). Keep the dir via .gitkeep.
+# live in .docs-history-noclaude/PERF.md). Keep the dir via .gitkeep.
 /baselines/*
 !/baselines/.gitkeep

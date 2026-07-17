@@ -6,7 +6,7 @@ edition.workspace = true
 # `test-utils` is a DEV/TEST gate only (loud, fail-closed: it ADDS test helpers, never
 # removes a guarantee). The old `turn` feature gated the turn-proof verifier module —
 # core semantics — and was removed: the verifier is always compiled in.
-# See docs/FEATURE-HYGIENE.md.
+# See .docs-history-noclaude/FEATURE-HYGIENE.md.
 [features]
 # `test-utils` additionally activates the type-only `solana-hash`/`solana-pubkey`
 # crates the bank-state-provenance fixture builders (`solana_provenance::fixtures`)

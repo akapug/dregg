@@ -10,7 +10,7 @@
 //! constraints PER WIRE**, and it scales linearly in `bits` for every wire.
 //!
 //! This module replaces that with a **LogUp range bus** (the canonical lookup
-//! win, see `docs/rebuild/DESIGN-lookups-plonky3-perf.md`). A wire of `bits`
+//! win, see `.docs-history-noclaude/rebuild/metatheory/DESIGN-lookups-plonky3-perf.md`). A wire of `bits`
 //! width is split into `ceil(bits / LIMB_BITS)` byte-sized limbs; each limb is
 //! `lookup_key`-ed against a single shared `[0, 2^LIMB_BITS)` range table. The
 //! cost on the QUERY air is then **one permutation (aux) column per limb**

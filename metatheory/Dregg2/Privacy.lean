@@ -2,7 +2,7 @@
 # Dregg2.Privacy — the three privacy tiers, on existing cryptographic primitives.
 
 This module encodes dregg2's privacy stack as three first-class tiers (see
-`docs/rebuild/dregg2.md §6a` and `docs/rebuild/dregg2-multicell-privacy.md §2`),
+`.docs-history-noclaude/rebuild/dregg2-design/dregg2.md §6a` and `.docs-history-noclaude/rebuild/archived-2026-06-06/dregg2-multicell-privacy.md §2`),
 distinguished by *what* is hidden, each grounded in deployed crypto:
 
   1. **Field tier** — *hide a field's value from the schema-public view.* A

@@ -1,7 +1,7 @@
 /-
 # Dregg2.Intent.Resource — the resource-theory layer (Coecke–Fritz) + the convertibility preorder.
 
-Phase 2, layer 1 (`docs/rebuild/PHASE-2-INTENT-SPEC.md`, `INTENT-REFS-resources.md`). The abstract
+Phase 2, layer 1 (`.docs-history-noclaude/rebuild/metatheory/PHASE-2-INTENT-SPEC.md`, `INTENT-REFS-resources.md`). The abstract
 home of *what an intent's resources ARE and when one converts to another* — the substrate `Intent`
 (face 1, the boundary) and `Match` (the solver) are built over.
 

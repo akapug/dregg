@@ -336,11 +336,21 @@ impl TurnExecutor {
     ///
     /// ## Reach (honest scope)
     ///
-    /// This is the OFF-AIR leg: an executor / re-executing validator enforces it. A PURE
-    /// LIGHT CLIENT that only folds the recursion tree does not yet witness it — the
-    /// in-circuit leg (connecting the custom leaf's exposed PI lanes `0..16` to the
-    /// dual-expose leg's segment roots) is the named remainder documented on
+    /// This is the OFF-AIR leg: an executor / re-executing validator enforces it. The
+    /// in-circuit leg is now LANDED and DEPLOYED — the chain prover
+    /// (`dregg_circuit_prove::ivc_turn_chain::prove_chain_core_rotated`'s Custom arm) mints
+    /// the 24-lane state leaf under `prove_custom_binding_node_state_segmented`, which
+    /// `connect`s the custom leaf's exposed PI lanes `0..16` to the dual-expose leg's
+    /// segment roots. So a PURE LIGHT CLIENT folding only the recursion tree now witnesses
+    /// this property too; see
     /// [`custom_state_binding`](dregg_circuit::effect_vm::custom_state_binding).
+    ///
+    /// The two legs are kept deliberately and are not redundant: this one refuses the turn
+    /// at admission (cheap, before any STARK is parsed), while the fold makes the refusal a
+    /// property of the ARTIFACT rather than of the verifier's diligence. Both compare the
+    /// prefix against the SAME value — the v9 chip commit (`bytes32_to_felt8` of the
+    /// stored/claimed commitment), which is byte-identical to the leg's last-16 tail PIs
+    /// that the fold's segment anchors are sourced from.
     ///
     /// Does not weaken any existing gate: it is an ADDITIONAL refusal after the registry
     /// dispatch, the DoS cap, and the count binding have all passed. A turn carrying no

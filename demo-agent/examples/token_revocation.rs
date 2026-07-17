@@ -262,7 +262,7 @@ fn main() {
 
     println!("  Adding Token A's nullifier to revocation set...");
     revocation_set
-        .insert(nullifier_a)
+        .insert(nullifier_a, 0) // a revocation marker, not a value note
         .expect("First insertion should succeed");
 
     let new_root = revocation_set.root();
@@ -291,7 +291,7 @@ fn main() {
     assert!(!result_a_revoked.allowed);
 
     // Double-check: trying to re-insert the same nullifier fails
-    let double_revoke = revocation_set.insert(nullifier_a);
+    let double_revoke = revocation_set.insert(nullifier_a, 0);
     println!(
         "  Double-revocation attempt: {:?}",
         double_revoke.err().unwrap()

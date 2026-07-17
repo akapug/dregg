@@ -21,7 +21,13 @@
 //!   Pedersen side — balanced value commitments VERIFY (blind);
 //!                   an unbalanced set (inflation) REJECTS.
 
-#![cfg(feature = "prover")]
+// NOTE: this file previously carried `#![cfg(feature = "prover")]`, the SAME vestigial
+// gate `ivc_turn_chain_rotated.rs` / `joint_turn_recursive_rotated.rs` documented and
+// removed — `dregg-circuit-prove` defines NO features at all, so the gate was
+// UNSATISFIABLE: the entire file compiled out (0 tests) in every possible
+// configuration and every shielded-transfer soundness tooth here was silently dead
+// (found 2026-07-16, Lane 2 config-space audit). The prover is unconditional in this
+// crate; the gate is removed so the teeth compile and run.
 
 use dregg_circuit::field::BabyBear;
 use dregg_circuit_prove::shielded::{

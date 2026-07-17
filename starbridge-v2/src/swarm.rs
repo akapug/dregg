@@ -47,7 +47,7 @@
 //!     `dregg_firmament` [`SurfaceCapability`](crate::surface::SurfaceCapability)
 //!     the shell gates every window op on. So the swarm's panes carry the SAME
 //!     no-ambient-authority discipline at the glass as its turns do on the
-//!     ledger (`docs/DREGG-DESKTOP-OS.md`: each agent pane is a confined Surface
+//!     ledger (`.docs-history-noclaude/DREGG-DESKTOP-OS.md`: each agent pane is a confined Surface
 //!     the shell composites).
 //!
 //! # What is runnable
@@ -90,7 +90,7 @@ use crate::world::{self, CommitOutcome, World};
 /// THE NOTIFY AUTHORITY OVER A SWARM WAKE — the topic-badge a peer's `EmitEvent`
 /// must fall within for the coordinator to route it into a member's inbox.
 ///
-/// The async cross-agent edge (`docs/NOTIFY-PRIMITIVE.md` §2.5) is now a HELD,
+/// The async cross-agent edge (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md` §2.5) is now a HELD,
 /// attenuable authority, not ambient routing: a member holds a [`NotifyCap`]
 /// ([`SwarmMember::notify_grant`]) whose `badge_mask` is the set of topic bits
 /// peers may wake it with. A peer's wake is admitted iff the emitted topic's
@@ -174,7 +174,7 @@ impl NotifyEdge {
 }
 
 /// THE PER-MEMBER BUDGET METER — the conserved-spend face of the swarm (N1 /
-/// `docs/ADOS-DEEPENING.md` §3.3, `docs/AGENT-SWARM-UX.md` §5).
+/// `.docs-history-noclaude/ADOS-DEEPENING.md` §3.3, `docs/design-frontiers/AGENT-SWARM-UX.md` §5).
 ///
 /// `spent` is the RUNNING SUM of the metered computrons across every committed
 /// action the member took through [`Swarm::run`] / [`Swarm::run_atomic`] /
@@ -229,7 +229,7 @@ impl BudgetMeter {
 }
 
 /// THE SWARM-AGGREGATE BUDGET — the conserved-spend strip across all members
-/// (`docs/AGENT-SWARM-UX.md` §4.5). `total_spent` is the sum of every member's
+/// (`docs/design-frontiers/AGENT-SWARM-UX.md` §4.5). `total_spent` is the sum of every member's
 /// metered spend; `total_ceiling` is the sum of the SET ceilings (members with no
 /// ceiling contribute nothing to it — `bounded_members` counts how many are
 /// gated); `headroom` is `total_ceiling - total_spent` saturating at 0.
@@ -266,7 +266,7 @@ pub struct SwarmMember {
     /// `None` if the swarm was constructed without a shell (headless / test).
     pub surface: Option<crate::surface::SurfaceId>,
     /// THE PER-MEMBER SURFACE CAPABILITY — the REAL `dregg_firmament` cap that
-    /// confines this member's pane (`docs/DREGG-DESKTOP-OS.md`: each agent pane is
+    /// confines this member's pane (`.docs-history-noclaude/DREGG-DESKTOP-OS.md`: each agent pane is
     /// a cap-confined Surface the shell composites). Held once the member is
     /// bound to a shell surface via [`Swarm::bind_surface`]; the shell gates every
     /// window op on it (a forged cap is refused on every op), so a swarm member's
@@ -294,7 +294,7 @@ pub struct SwarmMember {
     /// ([`member_notify_object`]). The coordinator routes a peer's `EmitEvent`
     /// into this member's inbox iff the emitted topic's badge is within this cap's
     /// `badge_mask` ([`NotifyCap::signal_admissible`]) — making the async edge a
-    /// held, attenuable capability (`docs/NOTIFY-PRIMITIVE.md` §2.5), not ambient
+    /// held, attenuable capability (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md` §2.5), not ambient
     /// routing. Opens at `u64::MAX` (wake-me-for-any-topic) so the prior behaviour
     /// is preserved; [`Self::restrict_notify`] attenuates it (a peer with an
     /// out-of-mask topic is then REFUSED, fail-closed).
@@ -384,7 +384,7 @@ pub enum SwarmError {
     /// runaway-spend fear: a provable bound on the metered cost, enforced AT the
     /// seam rather than reconciled after. `would_be` is the spend the dispatch
     /// would push the member to if it ran (the prospective sum). Note the bound is
-    /// over COMPUTRONS, not dollars (`docs/ADOS-DEEPENING.md` §3.3 carries that gap).
+    /// over COMPUTRONS, not dollars (`.docs-history-noclaude/ADOS-DEEPENING.md` §3.3 carries that gap).
     BudgetExhausted {
         member: CellId,
         spent: u64,
@@ -641,7 +641,7 @@ impl Swarm {
         //      already spent its metered-computron ceiling cannot dispatch again:
         //      we refuse here, before `commit_turn`, so NO turn commits and the
         //      height does not advance (the swarm-layer twin of the conservation
-        //      refusal — `docs/ADOS-DEEPENING.md` §3.3). The bound is on the
+        //      refusal — `.docs-history-noclaude/ADOS-DEEPENING.md` §3.3). The bound is on the
         //      executor's metered `computrons_used` (summed into `spent`), the
         //      genuine cost, not a re-derived estimate. (The ceiling is over
         //      COMPUTRONS, not dollars — §3.3 names that as the carried gap; the
@@ -847,7 +847,7 @@ impl Swarm {
 
     /// **BIND A MEMBER TO A CAP-CONFINED SHELL SURFACE** — give a swarm member
     /// its own pane, owned via a REAL `dregg_firmament` `SurfaceCapability` the
-    /// shell mints (`docs/DREGG-DESKTOP-OS.md`: each agent pane is a cap-confined
+    /// shell mints (`.docs-history-noclaude/DREGG-DESKTOP-OS.md`: each agent pane is a cap-confined
     /// Surface the shell composites). After binding, the member holds the cap
     /// that authorizes every window op on its pane — a forged cap is refused on
     /// every op (the ocap heart at the glass), so the swarm's panes carry the
@@ -1381,7 +1381,7 @@ pub struct SwarmView {
     /// The swarm's aggregate committed action count.
     pub total_actions: usize,
     /// THE AGGREGATE BUDGET STRIP — total spent / total ceiling / headroom across
-    /// the bounded members (`docs/AGENT-SWARM-UX.md` §4.5).
+    /// the bounded members (`docs/design-frontiers/AGENT-SWARM-UX.md` §4.5).
     pub budget: SwarmBudget,
 }
 
@@ -1685,7 +1685,7 @@ mod tests {
 
     // ── THE NOTIFY-AUTHORITY WELD: the async edge is a HELD, attenuable cap ────
     //
-    // `docs/NOTIFY-PRIMITIVE.md` §2.5 — a member holds a `NotifyCap` over its wake
+    // `.docs-history-noclaude/NOTIFY-PRIMITIVE.md` §2.5 — a member holds a `NotifyCap` over its wake
     // object; a peer's `EmitEvent` lands in the inbox iff the emitted topic's
     // badge is within that member's `badge_mask` (the REAL `dregg_firmament`
     // `NotifyCap::signal_admissible`). These are the BOTH-POLARITY teeth at the

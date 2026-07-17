@@ -497,7 +497,7 @@ conservation/transfer-debit invariants the real field circuit does NOT enforce. 
 ### ⚑ HONEST SCOPE (2026-07-11, ember's "what about the rest of the kernel?"): KERNEL STARK-SOUNDNESS = 1/27
 The transferV3 STARK-soundness work (reduced to {Poseidon2SpongeCR, FRI-LDT@deployed, FS-game}) is ONE effect. The
 kernel is NOT STARK-sound — it is transfer-sound (1/27 EffectTags), and even that in a ZERO-ROW slice. The other 26
-have NO Satisfied2Faithful keystone at any perm. Doc: docs/reference/PHASE2-ALL-EFFECTS-SOUNDNESS.md.
+have NO Satisfied2Faithful keystone at any perm. Doc: docs/SUPERSEDED/PHASE2-ALL-EFFECTS-SOUNDNESS.md.
 SHARED foundation extends free to all 27: field denotation (Phase 0), MainAirAcceptF⟹Satisfied2 (generic), the crypto
 floor, the descriptor-independent perm-level faithfulness half, Rfix (real registry), algoStarkSound_of_bricks
 (already general over any R). So Phase 2 is a GROUNDED FAN-OUT, not 27 hard problems:

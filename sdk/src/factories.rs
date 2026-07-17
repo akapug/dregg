@@ -495,11 +495,11 @@ pub fn cancel_bridge(bridge: CellId, terms: &BridgeTerms) -> Vec<Effect> {
 }
 
 // =============================================================================
-// Supply — the cap-gated mint entry (`docs/SUPPLY-MODEL.md`)
+// Supply — the cap-gated mint entry (`.docs-history-noclaude/SUPPLY-MODEL.md`)
 // =============================================================================
 
 /// Plan a cap-gated **mint** of supply into a holder — the one authored entry
-/// for new supply (`docs/SUPPLY-MODEL.md`; the sign-flipped dual of `Burn`).
+/// for new supply (`.docs-history-noclaude/SUPPLY-MODEL.md`; the sign-flipped dual of `Burn`).
 ///
 /// The minted asset is `recipient`'s own asset class (its `token_id`); the
 /// asset's deterministic per-asset **issuer well** is debited negative-capably

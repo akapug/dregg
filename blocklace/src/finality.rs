@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 // ─── Core Types ──────────────────────────────────────────────────────────────
@@ -416,7 +416,7 @@ impl Block {
             })?;
         let signature = ed25519_dalek::Signature::from_bytes(&self.signature);
         verifying_key
-            .verify(&content, &signature)
+            .verify_strict(&content, &signature)
             .map_err(|_| BlockError::InvalidSignature {
                 creator: self.creator,
                 seq: self.seq,

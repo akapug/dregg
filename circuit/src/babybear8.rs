@@ -465,6 +465,189 @@ mod tests {
         assert!(!(a * b).is_zero(), "A·(y+x^2) must be nonzero in a field");
     }
 
+    /// THE IRREDUCIBILITY GATE — the assumption `z^8 - 11` is irreducible (module
+    /// header lines 4-6) rigged as a CHECK on the built field, not prose.
+    ///
+    /// `F_p[z]/(z^8 - W)` is a genuine degree-8 FIELD iff `z^8 - W` is irreducible
+    /// over `F_p`, iff the Frobenius orbit of the root `z` has size exactly 8 —
+    /// i.e. `z^(p^8) = z` (always, `z` lies in some extension of degree | 8) AND
+    /// `z^(p^d) ≠ z` for every PROPER divisor `d ∈ {1, 2, 4}` of 8. If `z^8 - W`
+    /// factored (the historical `W = 121 = 11²` bug: `z^8-121 = (z^4-11)(z^4+11)`,
+    /// making the quotient the **product ring** `F_{p^4} × F_{p^4}` with zero
+    /// divisors), then `z` would satisfy a lower-degree relation and `z^(p^4) = z`
+    /// would HOLD — this gate fires.
+    ///
+    /// Why this and not `is_a_field_no_zero_divisors`: that test sweeps *random*
+    /// elements, and in the product ring `F_{p^4} × F_{p^4}` a uniformly random
+    /// element is invertible with probability `(1 - p^-4)²` — so a 2000-sample
+    /// sweep (and the specific `z - z^4` witness, which is a unit in BOTH rings)
+    /// passes CLEAN on the broken construction. Proven by exact simulation
+    /// (scratchpad `bb8sim.py`, 2026-07-16): under `W = 121` every existing
+    /// babybear8 test — including the one literally named
+    /// `is_a_field_no_zero_divisors` — reports PASS; only this Frobenius-orbit
+    /// gate reports FAIL. The zero divisors of a product ring hide from a random
+    /// sweep because they are a measure-`~p^-4` sliver; the algebraic invariant
+    /// (orbit size = field degree) does not hide.
+    #[test]
+    fn irreducibility_frobenius_orbit_of_z_is_exactly_eight() {
+        let p_limbs = {
+            let mut l = [0u32; 8];
+            l[0] = BABYBEAR_P;
+            l
+        };
+        // z = c1 coordinate.
+        let mut z = BabyBear8::ZERO;
+        z.0[1] = BabyBear::ONE;
+
+        // z^(p^d) via d applications of Frobenius (p-th power).
+        let frob = |a: BabyBear8, times: usize| {
+            let mut cur = a;
+            for _ in 0..times {
+                cur = cur.pow_multi(&p_limbs);
+            }
+            cur
+        };
+
+        // z^(p^8) = z — z always lives in a subfield of degree dividing 8.
+        assert_eq!(
+            frob(z, 8),
+            z,
+            "z^(p^8) must equal z (root lies in an extension of degree dividing 8)"
+        );
+        // z^(p^d) ≠ z for every PROPER divisor d of 8 — this is what irreducibility
+        // BUYS and what the product-ring bug (W=121) would violate at d=4.
+        for d in [1usize, 2, 4] {
+            assert_ne!(
+                frob(z, d),
+                z,
+                "z^(p^{d}) == z ⇒ z satisfies a degree-{d} relation ⇒ z^8-W FACTORS ⇒ \
+                 F_p[z]/(z^8-W) is NOT a field (product ring with zero divisors). \
+                 The construction is unsound — this is the W=121 regression."
+            );
+        }
+    }
+
+    /// NON-VACUITY CONTROL for the gate above — *proof that the gate can FAIL*.
+    ///
+    /// A gate that cannot go red is decoration. The deployed `BabyBear8` hard-codes
+    /// `W = 11` in a private const, so we cannot sabotage it in-process without
+    /// mutating shared source. Instead this mirrors the *exact* arithmetic
+    /// (`mul` = schoolbook convolution folded by `z^8 = W`, `pow` = square-and-
+    /// multiply) as a `W`-PARAMETERISED local, then shows the orbit predicate is
+    /// genuinely DISCRIMINATING:
+    ///
+    /// - `W = 11`  (the deployed value)  → orbit size 8   → gate PASSES
+    /// - `W = 121` (`= 11²`, the historical bug: `z^8-121 = (z^4-11)(z^4+11)`,
+    ///    quotient = the product ring `F_{p^4} × F_{p^4}` with zero divisors)
+    ///                                   → `z^(p^4) == z`  → gate FAILS
+    ///
+    /// The mirror is checked faithful against the deployed type at `W = 11`, so
+    /// "the mirror at W=121 fails" transfers to "the real gate fires if W ever
+    /// becomes 121". This is the tooth the other babybear8 tests do not have: a
+    /// simulation (scratchpad `bb8sim.py`) confirmed `is_a_field_no_zero_divisors`,
+    /// `frobenius_order_eight` and `defining_relation_z8_eq_w` ALL report PASS
+    /// under `W = 121` — a random-element sweep cannot see a measure-`p^-4` sliver
+    /// of zero divisors.
+    #[test]
+    fn irreducibility_gate_is_non_vacuous_it_fails_on_the_product_ring() {
+        /// `mul` mirroring `BabyBear8::mul`, parameterised by the non-residue W.
+        fn mul_w(a: &[BabyBear; 8], b: &[BabyBear; 8], w: BabyBear) -> [BabyBear; 8] {
+            let mut conv = [BabyBear::ZERO; 16];
+            for i in 0..8 {
+                if a[i] == BabyBear::ZERO {
+                    continue;
+                }
+                for j in 0..8 {
+                    conv[i + j] += a[i] * b[j];
+                }
+            }
+            let mut r = [BabyBear::ZERO; 8];
+            for m in 0..8 {
+                r[m] = conv[m] + w * conv[m + 8];
+            }
+            r
+        }
+        /// `pow_multi` mirror: square-and-multiply over little-endian u32 limbs.
+        fn pow_w(a: &[BabyBear; 8], exp: &[u32; 8], w: BabyBear) -> [BabyBear; 8] {
+            let mut base = *a;
+            let mut result = [BabyBear::ZERO; 8];
+            result[0] = BabyBear::ONE;
+            for &limb in exp {
+                let mut e = limb;
+                for _ in 0..32 {
+                    if e & 1 == 1 {
+                        result = mul_w(&result, &base, w);
+                    }
+                    base = mul_w(&base, &base, w);
+                    e >>= 1;
+                }
+            }
+            result
+        }
+
+        let p_limbs = {
+            let mut l = [0u32; 8];
+            l[0] = BABYBEAR_P;
+            l
+        };
+        let mut z = [BabyBear::ZERO; 8];
+        z[1] = BabyBear::ONE;
+
+        // `orbit_is_eight(W)` = the predicate the real gate asserts, on the mirror.
+        let orbit_is_eight = |w: BabyBear| {
+            let frob = |a: [BabyBear; 8], times: usize| {
+                let mut cur = a;
+                for _ in 0..times {
+                    cur = pow_w(&cur, &p_limbs, w);
+                }
+                cur
+            };
+            frob(z, 8) == z && frob(z, 4) != z && frob(z, 2) != z && frob(z, 1) != z
+        };
+
+        // (a) FAITHFULNESS: at W = 11 the mirror must agree with the DEPLOYED type,
+        //     else the control below proves nothing about the real gate.
+        let deployed_z = {
+            let mut t = BabyBear8::ZERO;
+            t.0[1] = BabyBear::ONE;
+            t
+        };
+        let deployed_z_p4 = {
+            let mut cur = deployed_z;
+            for _ in 0..4 {
+                cur = cur.pow_multi(&p_limbs);
+            }
+            cur
+        };
+        let mirror_z_p4 = {
+            let mut cur = z;
+            for _ in 0..4 {
+                cur = pow_w(&cur, &p_limbs, W);
+            }
+            cur
+        };
+        assert_eq!(
+            deployed_z_p4.0, mirror_z_p4,
+            "the W-parameterised mirror must reproduce the deployed BabyBear8 at W = 11 — \
+             otherwise the non-vacuity control is testing something else"
+        );
+
+        // (b) The gate PASSES on the honest construction.
+        assert!(
+            orbit_is_eight(W),
+            "the deployed non-residue W = 11 must give an orbit of size 8 (an irreducible z^8-11)"
+        );
+
+        // (c) THE TOOTH: the gate FAILS on the product ring. If this ever passes, the
+        //     irreducibility gate has stopped discriminating and is decoration.
+        assert!(
+            !orbit_is_eight(BabyBear::new(121)),
+            "z^8 - 121 = (z^4-11)(z^4+11) FACTORS — the quotient is the product ring \
+             F_{{p^4}} × F_{{p^4}} with zero divisors. The orbit gate MUST reject it; if it \
+             does not, the gate cannot detect a reducible defining polynomial and proves nothing."
+        );
+    }
+
     /// Fermat: for a field of size q = p^8, every nonzero a satisfies
     /// `a^(q-1) = 1`. We check the equivalent `a^q = a` via repeated p-th powers
     /// (Frobenius), avoiding a 248-bit exponent: a^(p^8) = Frob^8(a) = a.

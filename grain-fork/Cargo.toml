@@ -60,3 +60,6 @@ starbridge-v2 = { path = "../starbridge-v2", default-features = false, features 
 # shared fork point, verifiable from `(fork_root, turns)` alone). Same blake3 the
 # grain-commons pedigree fold uses.
 blake3 = "1"
+
+[lints]
+workspace = true

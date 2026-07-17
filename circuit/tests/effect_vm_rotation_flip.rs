@@ -1,6 +1,6 @@
 //! # THE ROTATION FLIP — the rotated cohort proves+verifies end-to-end, LIVE-GENERATED.
 //!
-//! `docs/ROTATION-CUTOVER.md` §5 items 1,3-5,8: the staged Lean keystones
+//! `.docs-history-noclaude/ROTATION-CUTOVER.md` §5 items 1,3-5,8: the staged Lean keystones
 //! (`EffectVmEmitRotationV3.lean`) PROVE the rotated 26-descriptor cohort sound and the
 //! staged probe measures the rotated SHAPE; what remained was (a) the per-turn PRODUCERS of
 //! the witness-carried limbs (`cells_root`, `iroot`, `lifecycle`/`epoch`) — built in

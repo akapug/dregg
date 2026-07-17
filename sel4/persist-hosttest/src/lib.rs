@@ -2,7 +2,7 @@
 //! the `no_std` chain-gate discipline, the REAL `redb` durable backend over a
 //! block-device `StorageBackend`, and the app-hosting economy on top.
 //!
-//! THREE ORGANS, ONE SPINE (`docs/PG-DREGG-ON-SEL4-DEOS-SPINE.md`):
+//! THREE ORGANS, ONE SPINE (`.docs-history-noclaude/PG-DREGG-ON-SEL4-DEOS-SPINE.md`):
 //!
 //!  * [`commit_store`] — the persist-PD's chain-gate discipline, `no_std`+`alloc`
 //!    over a `BTreeMap` stand-in. This is the module that rides INSIDE the persist

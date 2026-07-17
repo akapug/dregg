@@ -626,6 +626,291 @@ mod tests {
         assert_eq!(32 - hi.leading_zeros() + 7 * 32, 248);
     }
 
+    /// DECIMAL PIN — the `ORDER` limbs are the exact `N` the module doc quotes
+    /// (`schnorr_curve.rs:117`). The 8 little-endian u32 limbs are hand-authored;
+    /// a transcription slip in any limb yields a *different* group order while
+    /// every structural test (`generator_has_order_n`, primality below) would
+    /// still pass against the wrong N. This nails the limbs to the documented
+    /// decimal, base-2^32 reconstructed here so the assertion carries its own
+    /// ground truth.
+    #[test]
+    fn order_limbs_equal_documented_decimal() {
+        // N = 269903886087112502248563194479599378757044855200285447932848137338699712099
+        // reconstructed as Σ limb_i · 2^(32 i) using u128 accumulation over the
+        // decimal digits (schoolbook: value = value*10 + digit).
+        const DECIMAL: &str =
+            "269903886087112502248563194479599378757044855200285447932848137338699712099";
+        // Reconstruct the limbs from the decimal by repeated division by 2^32.
+        let mut digits: Vec<u64> = DECIMAL.bytes().map(|b| (b - b'0') as u64).collect();
+        let mut got = [0u32; 8];
+        for slot in got.iter_mut() {
+            // Long division of the big-decimal by 2^32: quotient digits + remainder.
+            // The remainder (< 2^32) is this little-endian limb.
+            let mut rem: u64 = 0;
+            let mut quotient = Vec::with_capacity(digits.len());
+            for &d in &digits {
+                let cur = rem * 10 + d;
+                quotient.push(cur >> 32);
+                rem = cur & 0xFFFF_FFFF;
+            }
+            // strip leading zeros of the quotient before the next round.
+            let first_nz = quotient
+                .iter()
+                .position(|&x| x != 0)
+                .unwrap_or(quotient.len());
+            digits = quotient[first_nz..].to_vec();
+            *slot = rem as u32;
+        }
+        assert_eq!(
+            got, ORDER,
+            "ORDER limbs drifted from the documented decimal N — a limb transcription error \
+             would silently change the group order"
+        );
+        assert!(
+            digits.is_empty(),
+            "decimal exceeded 8 limbs — N does not fit the ORDER shape"
+        );
+    }
+
+    /// PRIMALITY GATE — the module doc's central assumption is `N` PRIME with
+    /// cofactor 1 (`schnorr_curve.rs:19-24`): "every non-identity point generates
+    /// the full group". That claim is load-bearing for security AND for
+    /// `generator_cofactor_is_one`'s inference (order divides prime N, is not 1,
+    /// therefore equals N). But primality was asserted only in PROSE (a PARI
+    /// `isprime(N)` run recorded in a comment) — nothing bit if `N` were composite.
+    /// If `N = a·b`, the generator could have order `a`, a proper factor; `N·G = O`
+    /// would STILL hold (a | N), so `generator_has_order_n` passes on a broken order
+    /// and the cofactor-1 argument silently collapses along with the DL hardness the
+    /// whole curve rests on. This is precisely the shape of the retired bug: the old
+    /// base-field-embedded order was the composite `2013191319 = 3·331·2027383`
+    /// (module header line 30).
+    ///
+    /// We rig a **Miller–Rabin** strong-probable-prime test over an INDEPENDENT
+    /// modulus-parameterised bigint (not `scalar_mul_mod`, which is hard-wired to
+    /// `ORDER`) — independence is deliberate: a bug in the deployed scalar
+    /// arithmetic then cannot mask a composite `ORDER`. Miller–Rabin, not Fermat:
+    /// a Fermat base-2 witness is blind to Carmichael numbers (`2^560 ≡ 1 mod 561`;
+    /// verified 2026-07-16), and "the constant is a Carmichael number" is exactly
+    /// the substitution a Fermat gate would wave through.
+    ///
+    /// This is a *witness*, not a proof: MR with fixed bases is a strong-probable-
+    /// prime test (error ≤ 4^-k for random bases). It is sufficient for the
+    /// assumption it rigs — that the pinned limbs never DRIFT to a composite — and
+    /// the primality proof itself remains the Lean/PARI job.
+    #[test]
+    fn order_is_prime_miller_rabin() {
+        assert!(
+            miller_rabin_probably_prime(&ORDER),
+            "the pinned ORDER is COMPOSITE (Miller-Rabin). The prime-order / cofactor-1 \
+             assumption underpinning generator_cofactor_is_one — and the DL hardness of the \
+             whole curve — is FALSE for this N."
+        );
+    }
+
+    /// NON-VACUITY CONTROL — *proof the primality gate can FAIL.*
+    ///
+    /// A gate that never goes red is decoration. This points the SAME routine at
+    /// known composites and requires rejection — most pointedly `2013191319`, the
+    /// actual composite order of the retired base-field curve the module header
+    /// records as "trivially broken": the exact regression the gate exists to catch.
+    /// The Carmichael numbers are the sharp ones — they PASS a Fermat base-2 test,
+    /// so their rejection here is what proves the gate is Miller-Rabin-strong and
+    /// not merely Fermat-weak.
+    #[test]
+    fn primality_gate_is_non_vacuous_it_rejects_composites() {
+        let small = |v: u32| {
+            let mut s = [0u32; 8];
+            s[0] = v;
+            s
+        };
+
+        // (a) It ACCEPTS known primes — else it rejects everything and its verdict on
+        //     ORDER carries no information.
+        assert!(
+            miller_rabin_probably_prime(&small(crate::field::BABYBEAR_P)),
+            "must ACCEPT the known prime BABYBEAR_P (2^31 - 2^27 + 1)"
+        );
+        for prime in [3u32, 5, 97, 65537, 2027383] {
+            assert!(
+                miller_rabin_probably_prime(&small(prime)),
+                "must ACCEPT the known prime {prime}"
+            );
+        }
+
+        // (b) THE TOOTH: it REJECTS the retired composite curve order and its factors'
+        //     products — the historical regression, and the Carmichael numbers that a
+        //     Fermat witness would wave straight through.
+        for (composite, why) in [
+            (
+                2013191319u32,
+                "the RETIRED composite curve order 3*331*2027383 (module header:30)",
+            ),
+            (671063773, "331*2027383"),
+            (561, "Carmichael 3*11*17 — PASSES a Fermat base-2 test"),
+            (1105, "Carmichael 5*13*17 — PASSES a Fermat base-2 test"),
+            (1729, "Carmichael 7*13*19 — PASSES a Fermat base-2 test"),
+            (2465, "Carmichael 5*17*29 — PASSES a Fermat base-2 test"),
+        ] {
+            assert!(
+                !miller_rabin_probably_prime(&small(composite)),
+                "Miller-Rabin FAILED to reject {composite} ({why}). The primality gate cannot \
+                 detect a composite ORDER and is decoration."
+            );
+        }
+    }
+
+    /// DIFFERENTIAL — the independent modulus-parameterised `mul_mod_m` used by the
+    /// primality gate must agree with the DEPLOYED `scalar_mul_mod` on the `ORDER`
+    /// modulus. Two implementations written from different shapes agreeing on random
+    /// inputs is real evidence about the deployed scalar arithmetic that carries every
+    /// Schnorr response `s = k - e*sk`.
+    #[test]
+    fn independent_mul_mod_agrees_with_deployed_scalar_mul_mod() {
+        for s in 0u64..60 {
+            let a = rand_scalar(s);
+            let b = rand_scalar(s ^ 0x5EED);
+            assert_eq!(
+                mul_mod_m(&a, &b, &ORDER),
+                scalar_mul_mod(&a, &b),
+                "independent mul_mod_m disagrees with deployed scalar_mul_mod at seed {s}"
+            );
+        }
+    }
+
+    // ---- Independent (modulus-parameterised) bigint arithmetic backing the
+    // ---- primality gate. Deliberately NOT built on `scalar_mul_mod` (which is
+    // ---- hard-wired to ORDER) so a bug there cannot mask a composite ORDER.
+
+    fn sub_m(a: &Scalar, m: &Scalar) -> Scalar {
+        let mut d = [0u32; 8];
+        let mut borrow = 0i64;
+        for i in 0..8 {
+            let t = a[i] as i64 - m[i] as i64 - borrow;
+            if t < 0 {
+                d[i] = (t + (1i64 << 32)) as u32;
+                borrow = 1;
+            } else {
+                d[i] = t as u32;
+                borrow = 0;
+            }
+        }
+        d
+    }
+
+    /// `(a + b) mod m` for `a, b < m`. `m <= 2^248` so `a + b < 2^249` — no 8-limb overflow.
+    fn add_mod_m(a: &Scalar, b: &Scalar, m: &Scalar) -> Scalar {
+        let mut r = [0u32; 8];
+        let mut carry = 0u64;
+        for i in 0..8 {
+            let s = a[i] as u64 + b[i] as u64 + carry;
+            r[i] = s as u32;
+            carry = s >> 32;
+        }
+        if !scalar_lt(&r, m) { sub_m(&r, m) } else { r }
+    }
+
+    /// `(a * b) mod m` via MSB->LSB double-and-add (no wide intermediate needed).
+    fn mul_mod_m(a: &Scalar, b: &Scalar, m: &Scalar) -> Scalar {
+        let mut acc = [0u32; 8];
+        for limb in (0..8).rev() {
+            for bit in (0..32).rev() {
+                let dbl = add_mod_m(&acc, &acc, m);
+                acc = dbl;
+                if (b[limb] >> bit) & 1 == 1 {
+                    acc = add_mod_m(&acc, a, m);
+                }
+            }
+        }
+        acc
+    }
+
+    /// `base^exp mod m` via MSB->LSB square-and-multiply.
+    fn pow_mod_m(base: &Scalar, exp: &Scalar, m: &Scalar) -> Scalar {
+        let mut acc = {
+            let mut o = [0u32; 8];
+            o[0] = 1;
+            o
+        };
+        for limb in (0..8).rev() {
+            for bit in (0..32).rev() {
+                acc = mul_mod_m(&acc, &acc.clone(), m);
+                if (exp[limb] >> bit) & 1 == 1 {
+                    acc = mul_mod_m(&acc, base, m);
+                }
+            }
+        }
+        acc
+    }
+
+    fn shr1(a: &Scalar) -> Scalar {
+        let mut r = [0u32; 8];
+        for i in 0..8 {
+            r[i] = a[i] >> 1;
+            if i + 1 < 8 {
+                r[i] |= a[i + 1] << 31;
+            }
+        }
+        r
+    }
+
+    fn is_zero_s(a: &Scalar) -> bool {
+        a.iter().all(|&l| l == 0)
+    }
+
+    /// Miller-Rabin strong-probable-prime test with fixed small bases.
+    fn miller_rabin_probably_prime(n: &Scalar) -> bool {
+        let one = {
+            let mut o = [0u32; 8];
+            o[0] = 1;
+            o
+        };
+        let two = {
+            let mut t = [0u32; 8];
+            t[0] = 2;
+            t
+        };
+        // n < 2 => not prime; n == 2 => prime; n even => composite.
+        if scalar_lt(n, &two) {
+            return false;
+        }
+        if *n == two {
+            return true;
+        }
+        if n[0] & 1 == 0 {
+            return false;
+        }
+
+        let n_minus_1 = sub_m(n, &one);
+        // n - 1 = 2^s * d with d odd.
+        let mut d = n_minus_1;
+        let mut s = 0u32;
+        while d[0] & 1 == 0 && !is_zero_s(&d) {
+            d = shr1(&d);
+            s += 1;
+        }
+
+        'bases: for b in [2u32, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
+            let mut base = [0u32; 8];
+            base[0] = b;
+            // Skip bases >= n (only reachable for the tiny controls).
+            if !scalar_lt(&base, n) {
+                continue;
+            }
+            let mut x = pow_mod_m(&base, &d, n);
+            if x == one || x == n_minus_1 {
+                continue;
+            }
+            for _ in 1..s {
+                x = mul_mod_m(&x, &x.clone(), n);
+                if x == n_minus_1 {
+                    continue 'bases;
+                }
+            }
+            return false; // witness to compositeness
+        }
+        true
+    }
+
     #[test]
     fn add_sub_are_inverse_full_width() {
         for s in 0u64..200 {

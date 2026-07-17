@@ -128,7 +128,7 @@ pub enum ShadowAgreement {
     ///
     /// NAMED RESIDUAL: to upgrade these to `FullState` the root-gap effects need their lossy wire
     /// fields bound into the commitment (the cap-reshape / descriptor-fix work tracked in
-    /// `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`); until then a commit-bit check is the honest claim.
+    /// `.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`); until then a commit-bit check is the honest claim.
     CommitBitOnly { agreed: bool },
 }
 
@@ -1285,7 +1285,7 @@ fn effect_to_wire(
             asset: 0,
             amt: *amount as i128,
         },
-        // Mint: the cap-gated SUPPLY ENTRY, the dual of Burn (`docs/SUPPLY-MODEL.md`
+        // Mint: the cap-gated SUPPLY ENTRY, the dual of Burn (`.docs-history-noclaude/SUPPLY-MODEL.md`
         // Stage 2a). The verified `mintH` (`Handlers/StateSupply.lean:90`) runs the
         // proved issuer-move `recKMintAsset` — `mintAuthorizedB actor asset` (issuer/
         // node authority) ∧ recipient liveness ∧ `issuerOf a ≠ dst`, moving `amt`

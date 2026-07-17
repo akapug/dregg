@@ -40,7 +40,7 @@ Not every finding is portable now. Classify each by whether the Lean *exists*:
 The same `voted*3 ≥ total*2` threshold decision is hand-rolled across **six**
 soundness-critical sites, while `metatheory/Dregg2/Distributed/QuorumThreshold.lean::supermajorityThreshold`
 (verified, with `two_quorums_share_honest` intersection) and
-`Bridge/HoldingWeightedTally.lean::passes` sit unused:
+`metatheory/Dregg2/Bridge/HoldingWeightedTally.lean::passes` sit unused:
 - `bridge/src/solana_consensus.rs::is_supermajority` / `tally_votes` (~320L, HIGH, CONFIRMED)
 - `bridge/src/solana_provenance.rs` tally_authorized / rooted / rotate (~780L, HIGH, CONFIRMED)
 - `bridge/src/solana_trustless.rs` the composed lock-proof mint gate (~650L, HIGH, CONFIRMED)
@@ -118,7 +118,7 @@ structure / root-acceptance* logic is a candidate. Discern per-file before porti
 
 ## Exemplars — the pattern already works here (don't touch, copy)
 - ML-KEM / ML-DSA / X25519 / FIPS-204: Lean-authored + `@[export]` + Rust calls them.
-- `Bridge/ProofOfHoldings.lean::grantWeightCore` is `@[export]`ed as `grantWeightFFI`
+- `metatheory/Dregg2/Bridge/ProofOfHoldings.lean::grantWeightCore` is `@[export]`ed as `grantWeightFFI`
   and dregg-governance calls it — BUT the bridge re-authors `is_consensus_proven`
   in Rust (DUAL_AUTHORED, HIGH, DOWNGRADE); route the bridge through the export too.
 - The consensus-ordering lane found a STRONG-FORM export-swap already deployed for

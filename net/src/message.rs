@@ -194,7 +194,7 @@ impl PeerMessage {
 // ─── Two-Bucket Message Padding ─────────────────────────────────────────────
 //
 // Hides message type from traffic-analysis by padding all wire messages to one
-// of two fixed sizes. See docs/design-network-privacy.md Phase 1.
+// of two fixed sizes. See .docs-history-noclaude/root-docs-2026-05/design-network-privacy.md Phase 1.
 
 /// Small bucket size: 4 KiB. Covers turns, intents, revocations.
 pub const SMALL_BUCKET: usize = 4096;

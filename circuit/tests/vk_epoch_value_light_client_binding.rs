@@ -1,7 +1,7 @@
 //! # THE VK-EPOCH LIGHT-CLIENT BINDING BITE — the VALUE family FORCED ON-WIRE.
 //!
-//! ## What this confirms (audit a6473605 / `docs/SAFELY-LIVE-CHECKLIST.md` line 14;
-//! `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md` §"The VALUE_MISSING wall")
+//! ## What this confirms (audit a6473605 / `.docs-history-noclaude/SAFELY-LIVE-CHECKLIST.md` line 14;
+//! `.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md` §"The VALUE_MISSING wall")
 //!
 //! Six VALUE effects move a column the deployed circuit ALREADY binds into the published
 //! commitment — `bal` (`transfer` / `mint` (a balance-IN transfer) / `burn` / `bridgeMint`),

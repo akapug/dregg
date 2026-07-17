@@ -5,7 +5,7 @@ surface (``pg-dregg/src/lib.rs`` + the ``dregg.*`` schema emitted by
 ``mirror::ddl::tier_b``). It binds what pg-dregg actually ships — it does not
 invent a surface.
 
-THE MODEL pg-dregg enforces (``docs/PG-DREGG.md`` §8, the spine):
+THE MODEL pg-dregg enforces (``.docs-history-noclaude/PG-DREGG.md`` §8, the spine):
 
     Reads are free SQL; state mutates ONLY through verified turns.
 
@@ -15,7 +15,7 @@ So this module's helpers fall into exactly that shape:
   on a pg-dregg-enabled database. Presenting a capability token
   (:meth:`Pg.present_token`) sets the ``dregg.token`` session GUC and assumes
   the ``dregg_reader`` role, so Row-Level Security actually bites (a superuser
-  BYPASSes RLS — see ``docs/QUICKSTART-pg-user.md`` §2).
+  BYPASSes RLS — see ``pg-dregg/docs/QUICKSTART-pg-user.md`` §2).
 * **submit a verified turn** — :meth:`Pg.submit_turn` enqueues a signed turn
   into ``dregg.submit_queue`` via the real ``dregg_submit_turn(signed_turn,
   agent)`` extern (RLS-gated by ``dregg_admits('submit', …)``); the node's
@@ -26,7 +26,7 @@ So this module's helpers fall into exactly that shape:
   (``dregg.receipt_chain``), :meth:`Pg.cap_edges` (``dregg.cap_edges``).
 * **federation health** — :meth:`Pg.federation_health` calls the real
   ``dregg_federation_health()`` (the conflict-counter-driven chain
-  re-validation, ``docs/PG-DREGG.md`` §15).
+  re-validation, ``.docs-history-noclaude/PG-DREGG.md`` §15).
 * **dev-mint / issuer-status** — :meth:`Pg.dev_mint` (``dregg_dev_mint``, DEV
   ONLY, issuer-key discipline intact) and :meth:`Pg.issuer_status`
   (``dregg_issuer_status``).
@@ -406,7 +406,7 @@ class Pg:
     # ── the write path: submit a verified turn (the node drains it) ──
     def submit_turn(self, signed_turn: bytes, agent: Bytes32) -> Any:
         """Submit a SIGNED turn FROM postgres via ``dregg_submit_turn(signed_turn,
-        agent)`` (``docs/PG-DREGG.md`` §11). ``signed_turn`` is the postcard
+        agent)`` (``.docs-history-noclaude/PG-DREGG.md`` §11). ``signed_turn`` is the postcard
         ``SignedTurn`` bytes; ``agent`` is the turn's agent cell id.
 
         Enqueues the turn into ``dregg.submit_queue`` and returns the submission
@@ -540,7 +540,7 @@ class Pg:
     # ── federation health ──
     def federation_health(self) -> str:
         """``dregg_federation_health()`` — the subscriber-side federation health
-        check (``docs/PG-DREGG.md`` §15): the pg18 apply-conflict counters DRIVE
+        check (``.docs-history-noclaude/PG-DREGG.md`` §15): the pg18 apply-conflict counters DRIVE
         the chain re-validation. Returns the one-line verdict, one of
         ``'ok: federation healthy — …'`` / ``'ALARM (…) but chain re-validates: …'``
         / ``'CRITICAL (…) AND chain REFUSED: …'``."""

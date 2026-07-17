@@ -4,7 +4,7 @@ name: starbridge-v2 native installers
 # (the native gpui desktop shell that EMBEDS the verified executor). This is the
 # "you can actually run this" desktop proof: a macOS .app/.dmg and a Linux
 # AppImage/.tar.gz, each a `--release` `native-full` build. See
-# docs/STARBRIDGE-V2.md for the build (cd starbridge-v2 && cargo build) + the
+# .docs-history-noclaude/STARBRIDGE-V2.md for the build (cd starbridge-v2 && cargo build) + the
 # gpui `runtime_shaders` Metal note this relies on.
 #
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ jobs:
           # We still try to fetch it so a future build-time-shader path also works;
           # a failure here is fine BECAUSE runtime_shaders makes it non-load-bearing.
           xcodebuild -downloadComponent MetalToolchain 2>/dev/null || \
-            echo "Metal Toolchain unavailable; runtime_shaders path is used (see docs/STARBRIDGE-V2.md §Window)."
+            echo "Metal Toolchain unavailable; runtime_shaders path is used (see .docs-history-noclaude/STARBRIDGE-V2.md §Window)."
 
       # Each runner is its OWN native arch, so the default host target IS
       # matrix.target — no `--target` cross-compile (which would mismatch the

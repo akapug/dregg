@@ -1,3 +1,27 @@
+> # ⚠ ASPIRATIONAL — THIS PLAN CANNOT BE EXECUTED TODAY
+>
+> **This is not what runs.** The live games demo is the **funnel** variant:
+> [`RUNBOOK-FUNNEL.md`](RUNBOOK-FUNNEL.md) → `https://hbox-dregg.skunk-emperor.ts.net`.
+>
+> This runbook is **impossible as written**, for two independent reasons verified
+> 2026-07-15:
+>
+> 1. **The gateway and hbox are on DIFFERENT TAILNETS.** The AWS edge is on
+>    `100.64.0.x` (it is `100.64.0.1`); hbox is `hbox-dregg` `100.95.240.73` on
+>    `skunk-emperor.ts.net`. The edge **cannot reach `100.95.240.73:8790`**. Step (0)
+>    below ("add the gateway to the tailnet") is not a small prerequisite — it is the
+>    whole plan, and it is unstarted. This is false at the **network layer**, not just
+>    unimplemented.
+> 2. **There is no Caddy on the edge.** The edge runs a docker compose stack with no
+>    caddy container; `devnet.dregg.fg-goose.online/status` returns **HTTP 000**. The
+>    "gateway's Caddy terminates TLS" premise has no gateway behind it.
+>
+> Also stale below: `docs/DEPLOY-PLAN.md` and `docs/ops/OPS-RUNBOOK.md` — cited
+> repeatedly as "the real live topology" — **do not exist in this repo**.
+>
+> Kept because the hbox-side shape (units, health gate, rollback) is sound and the
+> funnel variant reuses it. See `deploy/README.md` for the real topology.
+
 # Games deploy runbook — the dregg games stack, public at games.dregg.fg-goose.online
 
 The ordered go-live for the **standalone games public demo** (docs/DEPLOY-PLAN.md

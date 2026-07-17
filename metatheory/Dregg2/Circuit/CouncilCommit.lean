@@ -292,7 +292,7 @@ deployment that makes it LIVE is VK-affecting and is NAMED, not laundered:
   2. **Descriptor binds the threshold check.** The recovery effect's circuit descriptor must bind the
      `Authorization::Custom -> ThresholdSigVerifier` check INTO the leaf the circuit commits, so a
      host cannot omit it and still produce an accepting root (the `Circuit-Soundness Apex` per-effect
-     rung for the recovery effect — the obligation table in `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`).
+     rung for the recovery effect — the obligation table in `.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`).
   3. **Regenerate the VK + redeploy.** A new descriptor ⇒ a new verifying key ⇒ a redeploy of the
      live devnet verifier. This is the ember-gated step: do NOT regen the live VK / do NOT deploy
      here.

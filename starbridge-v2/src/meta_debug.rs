@@ -2,7 +2,7 @@
 //! object, recursively (debug the debugger).
 //!
 //! `docs/deos/FIRMAMENT-REFLEXIVE-SUBSTRATE.md` §2-§3 and
-//! `docs/deos/REFLEXIVE-MIGRATION.md` §4 name the keystone: make a meta-level
+//! `.docs-history-noclaude/deos/REFLEXIVE-MIGRATION.md` §4 name the keystone: make a meta-level
 //! *itself a [`FocusTarget`]*, so "debug the debugger" is literally focusing the
 //! inspector on its own [`MetaDebugView`] — recursion through the SAME
 //! [`Registry::present`](crate::presentable::Registry::present) dispatch, no new

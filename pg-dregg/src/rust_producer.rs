@@ -241,7 +241,7 @@ impl Producer for RustProducer {
         // The chaining ledger root, derived bit-identically to the fold + Lean
         // producers (`crate::drainer::fold_chain_root`) so a mixed-producer history
         // still chains (the kernel's in-circuit root is the IVC light client's
-        // concern, `docs/PG-DREGG.md` §10.2; the CHAIN gate's tooth is structural).
+        // concern, `.docs-history-noclaude/PG-DREGG.md` §10.2; the CHAIN gate's tooth is structural).
         let post = crate::drainer::fold_chain_root(prev_root, ordinal, &touched);
 
         let cells = vec![

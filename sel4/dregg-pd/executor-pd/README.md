@@ -4,7 +4,7 @@ This is the attempt at "the firmament's one true blocker": building the VERIFIED
 dregg executor (`execFullForestG` via `dregg_exec_full_forest_auth`, proved in
 `metatheory/`) for the bare-metal `aarch64-sel4-microkit` target, so a protection
 domain can run one real turn and print the receipt over serial — the firmament's
-first heartbeat (docs/FIRMAMENT.md §6).
+first heartbeat (.docs-history-noclaude/FIRMAMENT.md §6).
 
 ## What this lane BANKED
 

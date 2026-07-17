@@ -2238,8 +2238,8 @@ mod tests {
 
     #[test]
     fn test_verify_fulfillment_with_valid_predicate_proofs() {
-        use dregg_bridge::present::prove_predicate_for_fact;
-        use dregg_circuit::poseidon2::hash_fact;
+        use dregg_bridge::present::{FactTerms, prove_predicate_for_fact};
+        use dregg_circuit::predicate_arith_witness::Blinding;
 
         // Create an intent with a predicate requirement
         let spec = MatchSpec {
@@ -2265,13 +2265,24 @@ mod tests {
         // Generate a valid descriptor-backed Gte proof (balance = 5000 >= 1000), replacing the
         // retired hand-STARK `prove_predicate`. `prove_predicate_for_fact` computes the same
         // `fact_commitment` internally and the proof carries it for the verifier.
-        let balance = BabyBear::new(5000);
-        let attr_hash = BabyBear::new(42); // simulated attribute hash
-        let fact_hash = hash_fact(attr_hash, &[balance, BabyBear::ZERO, BabyBear::ZERO]);
+        // The fact is named by its TERMS, not by an opaque `fact_hash`: the value (5000) is
+        // `terms[0]` and the hash is DERIVED, so the value and the commitment cannot name
+        // different facts. A REAL, non-zero blinding — the deployed (unlinkable) posture.
+        let attr_sym = BabyBear::new(42); // simulated attribute symbol
         let state_root = BabyBear::new(99999);
-        let predicate_proof =
-            prove_predicate_for_fact(5000, fact_hash, state_root, &BridgePredicate::Gte(1000))
-                .expect("gte predicate proof should be produced");
+        let fact = FactTerms {
+            predicate_sym: attr_sym,
+            term1: BabyBear::ZERO,
+            term2: BabyBear::ZERO,
+        }
+        .bind(state_root);
+        let predicate_proof = prove_predicate_for_fact(
+            5000,
+            fact,
+            Blinding(BabyBear::new(0xB11D1)),
+            &BridgePredicate::Gte(1000),
+        )
+        .expect("gte predicate proof should be produced");
 
         // Build a base fulfillment (trusted mode for simplicity)
         let token = source_token();
@@ -2320,8 +2331,8 @@ mod tests {
 
     #[test]
     fn test_verify_fulfillment_rejects_stale_state_root() {
-        use dregg_bridge::present::prove_predicate_for_fact;
-        use dregg_circuit::poseidon2::hash_fact;
+        use dregg_bridge::present::{FactTerms, prove_predicate_for_fact};
+        use dregg_circuit::predicate_arith_witness::Blinding;
 
         let spec = MatchSpec {
             actions: vec![ActionPattern {
@@ -2343,16 +2354,25 @@ mod tests {
         };
         let pred_intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 5000, None);
 
-        let balance = BabyBear::new(5000);
-        let attr_hash = BabyBear::new(42);
-        let fact_hash = hash_fact(attr_hash, &[balance, BabyBear::ZERO, BabyBear::ZERO]);
+        // Real descriptor-backed Gte proof (balance 5000 >= 1000). The fact is named by its
+        // TERMS (the value 5000 is `terms[0]`); `prove_predicate_for_fact` DERIVES the fact hash
+        // and computes the blinded `fact_commitment` internally, and the proof carries it (plus
+        // the blinding decommitment) for the verifier.
+        let attr_sym = BabyBear::new(42);
         let state_root = BabyBear::new(99999);
-        // Real descriptor-backed Gte proof (balance 5000 >= 1000), replacing the retired
-        // hand-STARK `prove_predicate`. `prove_predicate_for_fact` computes the same
-        // `fact_commitment` internally and the proof carries it for the verifier.
-        let predicate_proof =
-            prove_predicate_for_fact(5000, fact_hash, state_root, &BridgePredicate::Gte(1000))
-                .expect("gte predicate proof should be produced");
+        let fact = FactTerms {
+            predicate_sym: attr_sym,
+            term1: BabyBear::ZERO,
+            term2: BabyBear::ZERO,
+        }
+        .bind(state_root);
+        let predicate_proof = prove_predicate_for_fact(
+            5000,
+            fact,
+            Blinding(BabyBear::new(0xB11D1)),
+            &BridgePredicate::Gte(1000),
+        )
+        .expect("gte predicate proof should be produced");
 
         let token = source_token();
         let matched = Match {
@@ -2402,8 +2422,8 @@ mod tests {
 
     #[test]
     fn test_verify_fulfillment_rejects_wrong_threshold() {
-        use dregg_bridge::present::prove_predicate_for_fact;
-        use dregg_circuit::poseidon2::hash_fact;
+        use dregg_bridge::present::{FactTerms, prove_predicate_for_fact};
+        use dregg_circuit::predicate_arith_witness::Blinding;
 
         let spec = MatchSpec {
             actions: vec![ActionPattern {
@@ -2428,13 +2448,24 @@ mod tests {
         // Generate a proof for Gte(1000) — but the requirement demands Gte(2000). The bridge
         // proof carries its DECLARED predicate, and the verifier rejects the predicate
         // mismatch (the currency replacement for the retired hand-STARK `prove_predicate`).
-        let balance = BabyBear::new(5000);
-        let attr_hash = BabyBear::new(42);
-        let fact_hash = hash_fact(attr_hash, &[balance, BabyBear::ZERO, BabyBear::ZERO]);
+        // The fact is named by its TERMS, not by an opaque `fact_hash`: the value (5000) is
+        // `terms[0]` and the hash is DERIVED, so the value and the commitment cannot name
+        // different facts. A REAL, non-zero blinding — the deployed (unlinkable) posture.
+        let attr_sym = BabyBear::new(42); // simulated attribute symbol
         let state_root = BabyBear::new(99999);
-        let predicate_proof =
-            prove_predicate_for_fact(5000, fact_hash, state_root, &BridgePredicate::Gte(1000))
-                .expect("gte predicate proof should be produced");
+        let fact = FactTerms {
+            predicate_sym: attr_sym,
+            term1: BabyBear::ZERO,
+            term2: BabyBear::ZERO,
+        }
+        .bind(state_root);
+        let predicate_proof = prove_predicate_for_fact(
+            5000,
+            fact,
+            Blinding(BabyBear::new(0xB11D1)),
+            &BridgePredicate::Gte(1000),
+        )
+        .expect("gte predicate proof should be produced");
 
         let token = source_token();
         let matched = Match {
@@ -2554,8 +2585,8 @@ mod tests {
 
     #[test]
     fn test_verify_fulfillment_multiple_predicates_all_must_pass() {
-        use dregg_bridge::present::prove_predicate_for_fact;
-        use dregg_circuit::poseidon2::hash_fact;
+        use dregg_bridge::present::{FactTerms, prove_predicate_for_fact};
+        use dregg_circuit::predicate_arith_witness::Blinding;
 
         let spec = MatchSpec {
             actions: vec![ActionPattern {
@@ -2587,22 +2618,31 @@ mod tests {
         let pred_intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 5000, None);
 
         let state_root = BabyBear::new(99999);
+        // Each presentation draws its OWN blinding — two facts shown at once are not correlatable
+        // through a shared commitment factor.
+        let terms = |sym: u32| FactTerms {
+            predicate_sym: BabyBear::new(sym),
+            term1: BabyBear::ZERO,
+            term2: BabyBear::ZERO,
+        };
 
-        // Generate proof for balance >= 1000 (balance = 5000)
-        let balance = BabyBear::new(5000);
-        let balance_attr = BabyBear::new(42);
-        let balance_fact = hash_fact(balance_attr, &[balance, BabyBear::ZERO, BabyBear::ZERO]);
-        let balance_proof =
-            prove_predicate_for_fact(5000, balance_fact, state_root, &BridgePredicate::Gte(1000))
-                .expect("balance gte proof should be produced");
+        // Generate proof for balance >= 1000 (balance = 5000, `terms[0]` of the balance fact)
+        let balance_proof = prove_predicate_for_fact(
+            5000,
+            terms(42).bind(state_root),
+            Blinding(BabyBear::new(0xB11D1)),
+            &BridgePredicate::Gte(1000),
+        )
+        .expect("balance gte proof should be produced");
 
-        // Generate proof for reputation >= 50 (reputation = 85)
-        let reputation = BabyBear::new(85);
-        let rep_attr = BabyBear::new(99);
-        let rep_fact = hash_fact(rep_attr, &[reputation, BabyBear::ZERO, BabyBear::ZERO]);
-        let rep_proof =
-            prove_predicate_for_fact(85, rep_fact, state_root, &BridgePredicate::Gte(50))
-                .expect("reputation gte proof should be produced");
+        // Generate proof for reputation >= 50 (reputation = 85, `terms[0]` of the reputation fact)
+        let rep_proof = prove_predicate_for_fact(
+            85,
+            terms(99).bind(state_root),
+            Blinding(BabyBear::new(0x5EED)),
+            &BridgePredicate::Gte(50),
+        )
+        .expect("reputation gte proof should be produced");
 
         let token = source_token();
         let matched = Match {

@@ -235,3 +235,6 @@ path = "src/bin/perf_report.rs"
 [[bin]]
 name = "orchestration-demo"
 path = "src/bin/orchestration_demo.rs"
+
+[lints]
+workspace = true

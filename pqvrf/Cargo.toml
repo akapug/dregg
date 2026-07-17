@@ -12,3 +12,6 @@ description = "Readable reference implementation of the Esgin et al. one-time la
 [dependencies]
 blake3 = "1"
 
+
+[lints]
+workspace = true

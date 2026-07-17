@@ -80,12 +80,7 @@
 //! constraints. The `idx_out` boundary binds the in-circuit reconstructed
 //! index, so a prover cannot bind a tampered index PI.
 
-use crate::dsl::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
-    PolyTerm,
-};
 use crate::field::BabyBear;
-use crate::poseidon2::hash_2_to_1;
 
 /// AIR name (versioned). A future re-layout bumps the `-v1` suffix so proofs
 /// for distinct layouts can never be cross-verified.
@@ -132,19 +127,7 @@ pub mod adj_pi {
 pub const ADJ_PUBLIC_INPUT_COUNT: usize = 5;
 
 // ────────────────────────────────────────────────────────────────────────
-// Descriptor
-// ────────────────────────────────────────────────────────────────────────
-
-fn col(name: &str, index: usize, kind: ColumnKind) -> ColumnDef {
-    ColumnDef {
-        name: name.into(),
-        index,
-        kind,
-    }
-}
-
-// ────────────────────────────────────────────────────────────────────────
-// Witness / prover
+// Witness
 // ────────────────────────────────────────────────────────────────────────
 
 /// A single Merkle authentication step for a binary tree.
@@ -157,24 +140,6 @@ fn col(name: &str, index: usize, kind: ColumnKind) -> ColumnDef {
 pub struct AdjStep {
     pub sibling: BabyBear,
     pub dir: bool,
-}
-
-/// Compute the root and the reconstructed leaf index implied by a path.
-fn walk(leaf: BabyBear, path: &[AdjStep]) -> (BabyBear, u64) {
-    let mut cur = leaf;
-    let mut idx: u64 = 0;
-    for (level, step) in path.iter().enumerate() {
-        let (left, right) = if step.dir {
-            (step.sibling, cur)
-        } else {
-            (cur, step.sibling)
-        };
-        cur = hash_2_to_1(left, right);
-        if step.dir {
-            idx |= 1u64 << level;
-        }
-    }
-    (cur, idx)
 }
 
 /// Errors produced while building or proving an adjacency witness.
@@ -220,118 +185,3 @@ impl core::fmt::Display for AdjacencyError {
 }
 
 impl std::error::Error for AdjacencyError {}
-
-/// Generate the adjacency trace + public inputs for two consecutive leaves.
-///
-/// Returns `(trace, public_inputs)` where `public_inputs` follows [`adj_pi`].
-/// Validates power-of-two equal depth, equal roots, and consecutiveness
-/// *before* emitting — a dishonest witness fails here, not silently.
-pub fn generate_adjacency_trace(
-    leaf_lower: BabyBear,
-    lower_path: &[AdjStep],
-    leaf_upper: BabyBear,
-    upper_path: &[AdjStep],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), AdjacencyError> {
-    let depth = lower_path.len();
-    if depth != upper_path.len() {
-        return Err(AdjacencyError::DepthMismatch {
-            lower: depth,
-            upper: upper_path.len(),
-        });
-    }
-    // Require power-of-two depth ≥ 2 so the last trace row is a real Merkle
-    // level (no padding row can move `*_par[last]` off the committed root).
-    if depth < 2 || !depth.is_power_of_two() {
-        return Err(AdjacencyError::BadDepth { depth });
-    }
-
-    let (root_l, idx_lower) = walk(leaf_lower, lower_path);
-    let (root_u, idx_upper) = walk(leaf_upper, upper_path);
-    if root_l != root_u {
-        return Err(AdjacencyError::RootMismatch);
-    }
-    if idx_upper != idx_lower + 1 {
-        return Err(AdjacencyError::NotConsecutive {
-            idx_lower,
-            idx_upper,
-        });
-    }
-
-    let mut trace: Vec<Vec<BabyBear>> = Vec::with_capacity(depth);
-    let mut l_cur = leaf_lower;
-    let mut u_cur = leaf_upper;
-    let mut pow = BabyBear::ONE;
-    let mut l_idx_in = BabyBear::ZERO;
-    let mut u_idx_in = BabyBear::ZERO;
-
-    for level in 0..depth {
-        let ls = lower_path[level];
-        let us = upper_path[level];
-
-        let l_dir = bit(ls.dir);
-        let (l_left, l_right) = if ls.dir {
-            (ls.sibling, l_cur)
-        } else {
-            (l_cur, ls.sibling)
-        };
-        let l_par = hash_2_to_1(l_left, l_right);
-        let l_idx_out = l_idx_in + l_dir * pow;
-
-        let u_dir = bit(us.dir);
-        let (u_left, u_right) = if us.dir {
-            (us.sibling, u_cur)
-        } else {
-            (u_cur, us.sibling)
-        };
-        let u_par = hash_2_to_1(u_left, u_right);
-        let u_idx_out = u_idx_in + u_dir * pow;
-
-        let pow2 = pow + pow;
-
-        let mut row = vec![BabyBear::ZERO; ADJ_WIDTH];
-        row[adj_col::L_CUR] = l_cur;
-        row[adj_col::L_SIB] = ls.sibling;
-        row[adj_col::L_DIR] = l_dir;
-        row[adj_col::L_LEFT] = l_left;
-        row[adj_col::L_RIGHT] = l_right;
-        row[adj_col::L_PAR] = l_par;
-        row[adj_col::L_IDX_IN] = l_idx_in;
-        row[adj_col::L_IDX_OUT] = l_idx_out;
-        row[adj_col::U_CUR] = u_cur;
-        row[adj_col::U_SIB] = us.sibling;
-        row[adj_col::U_DIR] = u_dir;
-        row[adj_col::U_LEFT] = u_left;
-        row[adj_col::U_RIGHT] = u_right;
-        row[adj_col::U_PAR] = u_par;
-        row[adj_col::U_IDX_IN] = u_idx_in;
-        row[adj_col::U_IDX_OUT] = u_idx_out;
-        row[adj_col::POW] = pow;
-        row[adj_col::POW2] = pow2;
-        trace.push(row);
-
-        l_cur = l_par;
-        u_cur = u_par;
-        l_idx_in = l_idx_out;
-        u_idx_in = u_idx_out;
-        pow = pow2;
-    }
-
-    // `depth` is already a power of two ≥ 2, so the trace length is correct and
-    // the last row is the real root level — no padding needed.
-    debug_assert!(trace.len().is_power_of_two());
-
-    let root = root_l;
-    let public_inputs = vec![
-        root,
-        leaf_lower,
-        leaf_upper,
-        BabyBear::from_u64(idx_lower),
-        BabyBear::from_u64(idx_upper),
-    ];
-    Ok((trace, public_inputs))
-}
-
-#[inline]
-fn bit(b: bool) -> BabyBear {
-    if b { BabyBear::ONE } else { BabyBear::ZERO }
-}

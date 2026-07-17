@@ -458,7 +458,7 @@ pub fn decode_present(b: &[u8]) -> Option<(CellId, Present)> {
 pub const FRAMEBUFFER_TILES: usize = 256;
 
 /// THE COMPOSITOR-PD — the minimal framebuffer/input multiplexer on the
-/// [`EmulatedKernel`] (`docs/DREGG-DESKTOP-OS.md §2 L5` + `§6 R3 Stage D`).
+/// [`EmulatedKernel`] (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §2 L5` + `§6 R3 Stage D`).
 ///
 /// It is the SOLE holder of the framebuffer region ([`Self::framebuffer`], an
 /// EmulatedKernel shm region no app-PD is granted), models its scene as a dregg
@@ -487,7 +487,7 @@ pub struct CompositorPd {
 
 impl CompositorPd {
     /// A short, honest statement of the fidelity boundary — it travels WITH the
-    /// code, NEVER laundered (`docs/DREGG-DESKTOP-OS.md §5` F1/F2/F3, the
+    /// code, NEVER laundered (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §5` F1/F2/F3, the
     /// don't-launder-vacuity discipline). The compositor-PD enforces scene
     /// AUTHORITY (T1∧T2∧T3 — verified here, mirroring the Lean AppSpec proofs);
     /// the PIXELS are the renderer's.

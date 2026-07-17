@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `nameservice` starbridge-app, on the composed deos
 //! framework — **the web-of-cells keystone.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: nameservice re-expressed as a composed
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: nameservice re-expressed as a composed
 //! [`DeosApp`] ([`name_app`] from `src/`). The headline this app carries is the
 //! **web-of-cells publish**: each NAME cell is exported as a real `dregg://` sturdyref
 //! ([`the_name_cell_is_published_into_the_web_of_cells`] below), so a name's

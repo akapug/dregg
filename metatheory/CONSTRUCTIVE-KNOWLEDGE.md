@@ -490,7 +490,7 @@ witnessed against the authenticated `capability_root`). The credential is meant 
 seen four ways* — **biscuit** (Datalog policy: what is permitted) · **macaroon** (caveat-chain
 transport: how it narrows hop by hop) · **cap** (kernel c-list: what the kernel enforces) · **zk**
 (proof of honest narrowing) — all refining the single relation `granted ⊆ held`
-(see `docs/AUTHORIZATION-MODEL.md`).
+(see `.docs-history-noclaude/AUTHORIZATION-MODEL.md`).
 
 Today these are joined by **conjunction, not by a proven arrow**. `gateOK` reads *independent*
 `NodeAuth` fields: `capAuthorityG` (`FullForestAuth.lean:443`) and `chainGateG` (`:452`, the macaroon
@@ -505,7 +505,7 @@ not *one* proven production-arrow.
 chain's narrowing *is* (or refines) the kernel's `granted ⊆ held` narrowing on the verb where they
 overlap, so the four aspects bind into a single proven production rather than four agreeing stories.
 The smallest first step is a single Lean lemma over a shared `NodeAuth.narrowed : ExecAuth` field plus
-the SDK projection of the caveat chain onto that lattice (`docs/AUTHORIZATION-MODEL.md` §4). Until that
+the SDK projection of the caveat chain onto that lattice (`.docs-history-noclaude/AUTHORIZATION-MODEL.md` §4). Until that
 arrow exists, the production law is *proven for the cap aspect and conjoined with the others*, not yet
 *proven as one production* across all four. This is the place the four facets do not yet bind into one
 proven production-arrow, and it is named, not papered over.

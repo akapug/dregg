@@ -253,7 +253,7 @@ impl SlotCaveatEntry {
 }
 
 /// STAGED (THE ROTATION — the widened caveat operand,
-/// `docs/ROTATION-CUTOVER.md` §3 pre-gate). NOTHING live reads this type:
+/// `.docs-history-noclaude/ROTATION-CUTOVER.md` §3 pre-gate). NOTHING live reads this type:
 /// the live `SlotCaveatEntry` manifest at PI 101..126 is untouched; the
 /// staged probe + tamper teeth ride the recursion-gated IR-v2 path
 /// (`descriptor_ir2.rs`).

@@ -16,7 +16,12 @@
 //! Gated on `recursion`. SLOW; run with
 //! `cargo test -p dregg-circuit --features recursion batchstark_leaf_smoke -- --nocapture`.
 
-#![cfg(feature = "prover")]
+// NOTE: this file previously carried `#![cfg(feature = "prover")]` (and its doc above
+// says "Gated on `recursion`") — BOTH features are undeclared in `dregg-circuit-prove`
+// (the crate defines NO features), so the gate was UNSATISFIABLE: the entire file
+// compiled out (0 tests) in every possible configuration (found 2026-07-16, Lane 2
+// config-space audit). Same vestigial gate `ivc_turn_chain_rotated.rs` documented and
+// removed. The gate is removed so the smoke fold compiles and runs.
 
 use dregg_cell::{AuthRequired, Cell, Ledger, Permissions};
 use dregg_circuit::descriptor_ir2::{
@@ -115,14 +120,18 @@ fn rotated_transfer_leaf_folds_as_batchstark() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
+        &Default::default(),
     );
 
     let bridge = |w: &rw::RotationWitness| -> RotatedBlockWitness {
@@ -228,14 +237,18 @@ fn two_rotated_leaves_aggregate_at_wrap_config() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
+            &Default::default(),
         );
         let bridge = |w: &rw::RotationWitness| -> RotatedBlockWitness {
             RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("31 pre-iroot limbs")

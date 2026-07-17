@@ -114,7 +114,9 @@ pub mod col {
 /// # Deprecation
 ///
 /// Use `crate::dsl::garbled::garbled_dsl_circuit()` (constraints:
-/// `garbled_extended_descriptor()`, trace: `generate_extended_garbled_trace()`).
+/// `garbled_extended_descriptor()`; the old trace generator
+/// `generate_extended_garbled_trace` had zero callers and was deleted 2026-07-17 —
+/// no in-tree producer mints garbled-evaluation traces today).
 /// The DSL version supports multi-gate chaining, gate type selectors, and
 /// padding — a strict superset of this 49-column AIR's capabilities.
 ///

@@ -537,9 +537,12 @@ impl WitnessedReceipt {
             }
             // Rotated WR: re-base its native 49-felt schedule block into the v1 PI window, exactly
             // mirroring how the aggregator's `build_inner_rows_v2` prefers the native schedule over
-            // the PI projection. The schedule-expansion path compiles only where the aggregation
-            // path does (`recursion`/`verifier`); `not(recursion)` (wasm) has no rotated WRs.
-            #[cfg(any(feature = "prover", feature = "verifier"))]
+            // the PI projection. UNGATED: this used to carry
+            // `#[cfg(any(feature = "prover", feature = "verifier"))]`, but `verifier` was never a
+            // declared dregg-turn feature (always-false arm), so verify-only builds silently
+            // compiled this expansion OUT and hard-errored on every rotated WR below — the
+            // opposite of the gate's plain intent. The expansion needs only the verify floor
+            // (`bilateral_aggregation_air` is unconditional in dregg-circuit).
             if let Some(block) = &wr.bilateral_schedule {
                 let arr =
                     <[BabyBear; dregg_circuit::bilateral_aggregation_air::sched::WIDTH]>::try_from(

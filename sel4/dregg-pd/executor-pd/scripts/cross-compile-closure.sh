@@ -3,8 +3,8 @@
 # cross-compile-closure.sh — ELF-recompile the verified-executor Lean closure
 # for the bare-metal seL4 aarch64 target.
 #
-# THE HEART, step (1) of the executor-PD excision plan (docs/SEL4-EMBEDDING.md §2,
-# docs/FIRMAMENT.md §6): the compiled Lean closure (`libdregg_lean.a`) is Mach-O
+# THE HEART, step (1) of the executor-PD excision plan (.docs-history-noclaude/SEL4-EMBEDDING.md §2,
+# .docs-history-noclaude/FIRMAMENT.md §6): the compiled Lean closure (`libdregg_lean.a`) is Mach-O
 # arm64 (the macOS host build); the seL4 target is ELF aarch64. The whole closure
 # must be RECOMPILED with the Lean toolchain's clang targeting an ELF triple — a
 # recompile, not a relink.

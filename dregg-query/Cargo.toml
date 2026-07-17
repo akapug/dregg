@@ -20,3 +20,6 @@ hex = "0.4"
 blake3 = "1"
 hex = "0.4"
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

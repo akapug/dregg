@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `supply-chain-provenance` starbridge-app, on the composed
 //! deos framework — **the same app, smaller + more capable, now SHIPPED from `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #1, the reference port): the
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #1, the reference port): the
 //! supply-chain ITEM, re-expressed as a composed [`DeosApp`] and PROMOTED into
 //! `src/lib.rs` (it lived in this test). This file now drives the SHIPPED surface
 //! ([`item_app`] from `src/`), proving the promotion: per-viewer projection, the

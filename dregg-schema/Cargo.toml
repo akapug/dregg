@@ -30,3 +30,6 @@ dregg-cell = { path = "../cell" }
 # (`WorldCell::deploy_compiled` installs the emitted program; `apply_raw` drives a
 # verified turn the real executor admits IFF the archetype teeth pass).
 spween-dregg = { path = "../spween-dregg" }
+
+[lints]
+workspace = true

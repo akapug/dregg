@@ -123,7 +123,7 @@ pub fn create_config() -> DreggStarkConfig {
     //     (lambda >= min{-log2 eps_C, zeta - s*log2 alpha} - 1) reads ~70 at the deployed
     //     wrap's |D^(0)| = 2^12, not 73.
     // (both additionally capped by the degree-4 extension field, ~2^124, and the
-    // Poseidon2 commitment hash.) See docs/PROOF-ECONOMICS.md for the measured
+    // Poseidon2 commitment hash.) See .docs-history-noclaude/PROOF-ECONOMICS.md for the measured
     // size/prover-time tradeoff of these knobs: q = 50 → 38 (the rotation's
     // planned ride-along) keeps the conjectured bound ≥ 128 bits and was
     // measured at −23% proof size. Proofs are NOT interchangeable across this
@@ -450,7 +450,7 @@ pub fn poseidon2_permute_aux_witness(input: [BabyBear; WIDTH]) -> Vec<BabyBear> 
     out
 }
 
-// NOTE on S-box arithmetization (measured 2026-06-11, docs/PROOF-ECONOMICS.md §2c):
+// NOTE on S-box arithmetization (measured 2026-06-11, .docs-history-noclaude/PROOF-ECONOMICS.md §2c):
 // a 1-register variant of the gadget above (committed cube `s3 = x³` per S-box, so no
 // constraint exceeds degree 3 — the `sbox_registers = 1` shape the IR-v2 chip
 // descriptor params describe) was built and measured against this inline-x⁷ form.

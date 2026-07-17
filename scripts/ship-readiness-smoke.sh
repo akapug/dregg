@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ship-readiness-smoke.sh — run every shipped cockpit feature surface and report
-# SOLID / PARTIAL / STUB / BUSTED. The companion to docs/deos/SHIP-READINESS.md.
+# SOLID / PARTIAL / STUB / BUSTED. The companion to .docs-history-noclaude/deos/SHIP-READINESS.md.
 #
 # This RUNS the real harnesses (render bakes + per-crate tests), it does not assert
 # from code-reading. Each surface prints its evidence (the test-result line and/or

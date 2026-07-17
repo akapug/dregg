@@ -24,7 +24,7 @@
 //! It then asserts [C]: a turn finalizes through the ordering rule, AGREED across all three
 //! nodes (an attested root, `latest_height >= 1`). The gossip-dissemination leg that used to
 //! block this at small N (the eager/lazy Plumtree mesh over UNIDIRECTIONAL QUIC streams
-//! delivering blocks asymmetrically — see `docs/STAGE5-CONSENSUS-DEVAC.md`) has since landed:
+//! delivering blocks asymmetrically — see `.docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md`) has since landed:
 //! [C] CONVERGES on loopback today (verified 2026-07-06 under `DREGG_TEST_REQUIRE_FINALITY=1`:
 //! `latest_height = (1, 1, 1)` across all three nodes). The consensus RULE is verified
 //! (`metatheory/Dregg2/Distributed/BlocklaceFinality.lean`).
@@ -336,7 +336,7 @@ fn three_node_full_mode_runs_the_ordering_rule() {
             "[C] NOT CONVERGED in {wait_s}s (latest_height = {final_heights:?}). The consensus RULE is \
              verified (blocklace::ordering::tau + Lean Distributed/BlocklaceFinality), cross-node \
              block exchange WORKS ([B] passed), and this converges on a healthy box (the Stage-5 \
-             gossip-dissemination leg landed; see docs/STAGE5-CONSENSUS-DEVAC.md) — a miss here is \
+             gossip-dissemination leg landed; see .docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md) — a miss here is \
              most likely CPU/loopback contention starving the 3-process mesh; raise \
              DREGG_TEST_FINALITY_WAIT_S or free resources."
         );

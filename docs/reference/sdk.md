@@ -236,7 +236,7 @@ backed by these app/organ modules:
   `sdk/src/factories.rs:1`). The cap-gated supply mint `factories::mint_supply`
   (not re-exported at root) emits one `Effect::Mint`, admitted by the executor
   only for an agent holding a control-grade mint-cap over the issuer well — a
-  self-mint is rejected (`sdk/src/factories.rs:512`, `docs/SUPPLY-MODEL.md`).
+  self-mint is rejected (`sdk/src/factories.rs:512`, `.docs-history-noclaude/SUPPLY-MODEL.md`).
 - **`flashwell`** — the flash-well ring builder (zero-duration credit;
   settlement enforced by the well's installed program) (`sdk/src/lib.rs:249`).
 - **`council_seal` + `sealed_governance`** — the threshold council seal (DKG

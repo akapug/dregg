@@ -1056,7 +1056,7 @@ deployed chain, not only the abstract kernel; the two conservation deployment ca
 guarantee B are discharged.
 
 The remaining rotation legs ride ONE further VK/commitment epoch together (the descriptor IR-v2
-flag-day, `docs/EPOCH-DESIGN.md`): registers 8→16 with the `FactoryDescriptor` fields declaration
+flag-day, `.docs-history-noclaude/EPOCH-DESIGN.md`): registers 8→16 with the `FactoryDescriptor` fields declaration
 · the `heap_root` register + PI v3 (committed-height column + rateBound/challengeWindow caveat tags)
 · the RESERVED deletion + 54→29 selector compaction (the 186-column layout dies; the post-LogUp
 main table is far thinner, so the 159 target is obsolete) · the descriptor IR-v2 regeneration

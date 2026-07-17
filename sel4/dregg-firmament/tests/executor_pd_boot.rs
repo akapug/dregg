@@ -1,6 +1,6 @@
 //! THE EXECUTOR-PD BOOT TEST — an app-PD stages a turn, signals the executor-PD
 //! over the Endpoint, and the receipt round-trips back through `commit_out`
-//! (`docs/FIRMAMENT.md §2` L3 — the heart; `docs/DREGG-DESKTOP-OS.md §3` — the
+//! (`.docs-history-noclaude/FIRMAMENT.md §2` L3 — the heart; `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` — the
 //! KEYSTONE payoff "the verified executor-PD hosts on the semihost NOW").
 //!
 //! This is the executor-PD's `turn_in → step → commit_out` cap partition,

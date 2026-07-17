@@ -2,7 +2,7 @@
 # Dregg2.Authority.TokenCapBridge — the token-caveat ⟷ cell-program (cap-crown) arrow.
 ## offline biscuit/macaroon verify ⟺ the in-circuit `checkSubset` proof, as ONE predicate.
 
-`docs/AUTHORIZATION-MODEL.md` diagnoses the deepest open seam: the agent token layer (biscuit /
+`.docs-history-noclaude/AUTHORIZATION-MODEL.md` diagnoses the deepest open seam: the agent token layer (biscuit /
 macaroon — the `Authority.Caveat` `Token.admits` caveat-set and the `Authority.Biscuit` signed
 delegation chain) and the in-circuit cap-crown (#103 — the c-list `granted ⊆ held` the circuit
 witnesses, realized as the `Circuit.Argus` `RecStmt.checkSubset` CELL-PROGRAM, `Stmt.lean §L′`,
@@ -73,7 +73,7 @@ and §2 proves the two renderings are the SAME Boolean. -/
 
 /-- **`RightsCtx`** — the request context a rights-bearing caveat reads: the `granted` (asked) and
 `held` (parent) rights of the capability-bearing verb being authorized. This is the agent-layer view
-of the kernel's `(granted, held) : ExecAuth` pair (`docs/AUTHORIZATION-MODEL.md §4.1`, the
+of the kernel's `(granted, held) : ExecAuth` pair (`.docs-history-noclaude/AUTHORIZATION-MODEL.md §4.1`, the
 "narrowed-authority spine"). A macaroon/biscuit caveat evaluates against exactly this. -/
 structure RightsCtx where
   /-- the rights the request asks to exercise / install (the kernel `granted`). -/

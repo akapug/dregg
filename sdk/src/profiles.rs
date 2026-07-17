@@ -3,7 +3,7 @@
 //! `dregg id create <name>` / `dregg id list` / `dregg id use <name>` — the
 //! cipherclerk gains named local profiles so an identity is a *name you
 //! chose*, not a hex key you pasted. This is stage 1 of the identity design
-//! (`docs/REFINEMENT-DESIGN.md` Decision 2); the identity-council factory
+//! (`.docs-history-noclaude/REFINEMENT-DESIGN.md` Decision 2); the identity-council factory
 //! and petname-DB ties are later stages.
 //!
 //! ## Store layout (shared with `dregg-cli`)

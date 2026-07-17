@@ -100,7 +100,7 @@ state of its own — every state move is a node's `execFullTurnA`. So the descri
 `ConditionalBatch` effect is the **composition** of its nodes' (already-verified) descriptors under the
 topo order, plus the `condTurn_dependency_sound` ordering witness. This is a COMPOSITION rung
 (the same shape as the OPEN `∀ e, descriptorRefines` assembly in
-`docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`), NOT a brand-new crypto floor. The hole/promise resolution
+`.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`), NOT a brand-new crypto floor. The hole/promise resolution
 rides the slot environment, whose monotone forwarding (`runOrder_filled_stays`/`runOrder_fills`) is
 proven; the one-shot linearity is the `Await` continuation (optionally unified with `noteSpendA`'s
 nullifier set as a future hardening — see §2). Sizing: a real (but bounded) campaign — a composite

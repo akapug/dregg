@@ -1210,7 +1210,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "872fcb0d5ebdf809bddfb2808dd345859c200baa662ae6021701d5a9f06226a7";
+    "07fa7e870bbf227f75c0648ed6b4e9ceb34f771339c90723a2300e93d1fc7d86";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -1236,7 +1236,7 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "d17064a2435fe41e68202995201f2661ba98b8e81365cda09be8ce8b9834dcde";
+    "427b8155ed0fdcc44f2768cbc965cff9f51d662cc3b96fd85efe746f5bd59ccb";
 
 /// **THE LEAN-EMITTED setField VALUE8 EPOCH (STAGED, VK-AFFECTING BUT NON-DESTRUCTIVE).** The 8
 /// written-slot value8 members (`setFieldValue8VmDescriptor2-{slot}R24`) that swap the deployed
@@ -1902,6 +1902,126 @@ mod tests {
         assert_eq!(
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    /// RIG (descriptor-pins, 2026-07-16) — every registered descriptor's committed
+    /// `*_FP` constant equals the SHA-256 of its own `*_JSON` bytes.
+    ///
+    /// The module doc (lines 21-26) frames this as "self-consistency, not Lean
+    /// agreement" and points at the generate-fresh `scripts/check-descriptor-drift.sh`
+    /// as the real Lean↔JSON gate — that gate is CI-only and Lean-toolchain-dependent.
+    /// This test rigs the WEAKER-but-real property the FP pins actually assert: the
+    /// JSON and its committed fingerprint have not drifted APART. That is NOT a
+    /// tautology (`X == X`) — the JSON file and the FP hex string are two independently
+    /// editable artifacts, and `all_descriptors_parse` above only checks parseability,
+    /// which a byte-changing-but-still-parseable hand-edit / bad merge / partial
+    /// checkout survives silently. This is the identical `sha256_hex(x) == X_FP` check
+    /// already wired 1300 lines below for `WIDE_UMEM_WELD_REGISTRY_TSV` and
+    /// `V3_SETFIELD_VALUE8_STAGED_REGISTRY_TSV`, applied to the descriptors themselves.
+    /// It does NOT prove Lean-agreement — only that nothing edited a descriptor JSON
+    /// (or its FP) without re-running the emit script that repins both together.
+    #[test]
+    fn every_descriptor_fp_matches_its_json_bytes() {
+        let mut n = 0usize;
+        for (name, json, fp) in ALL_DESCRIPTORS {
+            assert_eq!(
+                sha256_hex(json.as_bytes()).as_str(),
+                *fp,
+                "descriptor {name}: sha256(JSON) != committed *_FP pin — the JSON and its \
+                 fingerprint have DRIFTED APART (hand-edit / bad merge / stale FP)"
+            );
+            n += 1;
+        }
+        for (sel, name, json, fp) in SELECTOR_DESCRIPTORS {
+            assert_eq!(
+                sha256_hex(json.as_bytes()).as_str(),
+                *fp,
+                "selector {sel} ({name}): sha256(JSON) != committed *_FP pin"
+            );
+        }
+        for (name, json, fp) in NAME_ONLY_DESCRIPTORS {
+            assert_eq!(
+                sha256_hex(json.as_bytes()).as_str(),
+                *fp,
+                "name-only descriptor {name}: sha256(JSON) != committed *_FP pin"
+            );
+        }
+        for (key, json, fp) in V2_DESCRIPTORS {
+            assert_eq!(
+                sha256_hex(json.as_bytes()).as_str(),
+                *fp,
+                "v2 descriptor {key}: sha256(JSON) != committed *_FP pin"
+            );
+        }
+        // A truncated/emptied registry must not let this pass vacuously.
+        assert_eq!(
+            n, 27,
+            "ALL_DESCRIPTORS length changed ({n} != 27); re-audit the FP-pin gate"
+        );
+    }
+
+    /// RIG (descriptor-pins, 2026-07-16) — every `descriptor_sha256` and
+    /// `by_name_sha256` pin in `circuit/descriptors/PROVENANCE.json` equals the
+    /// SHA-256 of the actual checked-in file it names.
+    ///
+    /// PROVENANCE.json's whole job is to let an operator or federation member
+    /// independently confirm "these are the descriptor bytes this build runs." Yet NO
+    /// Rust source references it and NO CI job checks it: the only checker is
+    /// `verify_provenance()` in `scripts/emit_descriptors.py`, run by hand pre-ceremony
+    /// (per VK-CEREMONY.md / VK-REGEN-CONTROLS.md). A hand-edit or bad merge that drifts
+    /// a checked-in descriptor from its pin is invisible to `cargo test` today. This
+    /// test bites that gap in pure Rust using the same FIPS-vector-tested `sha256_hex`.
+    ///
+    /// `fp_file_sha256` is deliberately NOT checked here: it pins SOURCE files (this
+    /// file among them) that change on every legitimate edit, so it is a provenance
+    /// snapshot, not a stable invariant — rigging it would make the test red on every
+    /// source change. Named, not rigged.
+    #[test]
+    fn provenance_json_pins_match_checked_in_descriptor_bytes() {
+        use std::path::Path;
+        let descdir = Path::new(env!("CARGO_MANIFEST_DIR")).join("descriptors");
+        let prov_bytes =
+            std::fs::read(descdir.join("PROVENANCE.json")).expect("PROVENANCE.json must exist");
+        let prov: serde_json::Value =
+            serde_json::from_slice(&prov_bytes).expect("PROVENANCE.json must parse");
+
+        let check_map = |map_key: &str, subdir: Option<&str>| -> usize {
+            let map = prov[map_key]
+                .as_object()
+                .unwrap_or_else(|| panic!("PROVENANCE.json missing object `{map_key}`"));
+            let mut n = 0usize;
+            for (fname, pin) in map {
+                let pin = pin
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{map_key}[{fname}] pin is not a string"));
+                let path = match subdir {
+                    Some(s) => descdir.join(s).join(fname),
+                    None => descdir.join(fname),
+                };
+                let bytes = std::fs::read(&path).unwrap_or_else(|_| {
+                    panic!(
+                        "PROVENANCE {map_key} pins `{fname}` but {} is missing on disk",
+                        path.display()
+                    )
+                });
+                assert_eq!(
+                    sha256_hex(&bytes).as_str(),
+                    pin,
+                    "PROVENANCE {map_key} pin for `{fname}` != sha256 of the file on disk (DRIFT)"
+                );
+                n += 1;
+            }
+            n
+        };
+
+        let d = check_map("descriptor_sha256", None);
+        let b = check_map("by_name_sha256", Some("by-name"));
+        // Exact counts: a truncated map (fewer pins) must not pass vacuously.
+        assert_eq!(
+            (d, b),
+            (75, 27),
+            "PROVENANCE pin counts changed (descriptor_sha256={d}, by_name_sha256={b}); re-audit"
         );
     }
 

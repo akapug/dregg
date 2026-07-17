@@ -85,7 +85,7 @@ pub enum WorldEvent {
     /// loop's invalidation is COMPLETE: every `commit_turn` effect that writes a
     /// cell the inspector renders names that cell in the dynamics stream, so a
     /// memoized projection of that cell is always invalidated. (Cache soundness =
-    /// dynamics completeness — `docs/deos/EFFICIENCY-WELD-PLAN.md` §4.1.)
+    /// dynamics completeness — `.docs-history-noclaude/deos/EFFICIENCY-WELD-PLAN.md` §4.1.)
     CellMutated { cell: CellId },
     /// A cell was sealed (lifecycle → Sealed; rejects effects until unsealed).
     CellSealed { cell: CellId },

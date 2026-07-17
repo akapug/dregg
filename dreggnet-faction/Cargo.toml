@@ -49,3 +49,6 @@ serde_json = { workspace = true }
 
 # A workspace MEMBER of the breadstuffs root (registered in `members`). The root
 # `[workspace]` + `[patch]` tables apply; no standalone `[workspace]`/`[patch]`.
+
+[lints]
+workspace = true

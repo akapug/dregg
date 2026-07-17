@@ -21,6 +21,15 @@ pub enum ChainError {
     )]
     WrapProverMissing,
 
+    /// No verifier is enabled: the default build has neither the real
+    /// on-chain verifier (`--features on-chain`) nor the opt-in simulated
+    /// one (`--features mock`). Fail-closed, mirroring [`Self::WrapProverMissing`]:
+    /// a build NEVER silently substitutes a simulated verification for a real one.
+    #[error(
+        "no on-chain verifier enabled (use --features on-chain for the real contract call, or --features mock for simulated verification in tests)"
+    )]
+    VerifierMissing,
+
     /// On-chain verification call failed.
     #[error("on-chain verification failed: {0}")]
     OnChainError(String),

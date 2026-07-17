@@ -2,7 +2,7 @@
 # Dregg2.Distributed.StrandIntegrity — the per-creator FEED projection of the lace,
 # and the feed-integrity (C1) the FIXED `blocklace/src/lib.rs::insert` enforces.
 
-**The gap this closes (audit A1 / property C1, `docs/rebuild/_FEDERATION-SSB-DESIGN.md`).**
+**The gap this closes (audit A1 / property C1, `.docs-history-noclaude/rebuild/metatheory/_FEDERATION-SSB-DESIGN.md`).**
 A **strand** is a Secure-Scuttlebutt feed: a single creator's append-only, Ed25519-signed,
 monotone-sequence log — the SSB notion dregg inherits (`blocklace/src/lib.rs:80-94`, the
 `creator`/`sequence`/`predecessors`/`signature` fields). The lace's `tips[creator]` /

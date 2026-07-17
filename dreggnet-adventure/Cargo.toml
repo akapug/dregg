@@ -61,3 +61,6 @@ dregg-epoch = { path = "../dregg-epoch" }          # the EpochManifest a season 
 blake3 = "1"                                        # domain-separated loot-seed derivation off the run
 
 # A workspace MEMBER of the breadstuffs root; the root `[workspace]` + `[patch]` apply.
+
+[lints]
+workspace = true

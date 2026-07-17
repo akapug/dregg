@@ -1,7 +1,7 @@
 /-
 # Dregg2.Apps.SealedBidAuction — the gallery SEALED-BID AUCTION (Track-A Phase 4, the proving-ground app).
 
-The first END-TO-END app on the intent-as-co-receipt stack (`docs/rebuild/INTENT-AS-CO-RECEIPT.md` §5/§7,
+The first END-TO-END app on the intent-as-co-receipt stack (`.docs-history-noclaude/rebuild/metatheory/INTENT-AS-CO-RECEIPT.md` §5/§7,
 HANDOFF Track A). It is **composition, not new theory**: every keystone INSTANTIATES a proved abstract
 lemma from the green Phase-1/2/3 modules. The auction proves, on the same-bundle settle (the
 decision-free core — see the OPEN block below for the model-shape calls deferred to ember):

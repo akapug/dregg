@@ -1,7 +1,7 @@
 //! RE-EXPRESSION proof: the `subscription` starbridge-app, on the composed deos
 //! framework — **the same app, smaller + more capable, now SHIPPED from `src/`.**
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #2): subscription's deos
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #2): subscription's deos
 //! re-expression was the MOST complete of the leading cohort, but MISLOCATED — it lived
 //! in `app-framework/tests/reexpress_subscription.rs` (the framework tree). This file is
 //! that proof RELOCATED into the crate and driving the SHIPPED surface

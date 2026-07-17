@@ -1,7 +1,7 @@
 //! THE SEAM CLOSED — the deos-native `dispatch` / `open_board` fired through the executor
 //! against the FULL swarm program, so the verified caveats BITE in the fire path itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #3): the re-expression's named gap
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #3): the re-expression's named gap
 //! was that a fired affordance ran on the scaffold `emit`/`edit` placeholders, NOT against
 //! a factory-born coordinator cell carrying `swarm_constraints()` — so the `AffineLe`
 //! budget gate, `WriteOnce` mandate/lead, and `StrictMonotonic` epoch did NOT bite in the

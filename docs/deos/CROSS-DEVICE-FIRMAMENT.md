@@ -5,10 +5,10 @@ distance parameter, the blocklace, attested roots, cell migration, the in-browse
 light client, the persistence spine all ship today); clearly-scoped frontier where
 it isn't (the mobile client app, Willow, seL4-on-a-phone). First-principles, no
 trajectory narrative. This is the **device-distance** instance of the firmament:
-where `docs/FIRMAMENT.md` and `sel4/dregg-firmament/src/lib.rs` parametrize
+where `.docs-history-noclaude/FIRMAMENT.md` and `sel4/dregg-firmament/src/lib.rs` parametrize
 distance by an integer `n` abstractly, this doc makes `n` concrete as the number
 of **your own devices** a cell spans. Companion to
-`docs/DISTRIBUTED-SERVO.md` (the federation/render-distance face this reuses
+`.docs-history-noclaude/DISTRIBUTED-SERVO.md` (the federation/render-distance face this reuses
 wholesale), `docs/deos/{DISTRIBUTED-TIMETRAVEL-SEMANTICS,BRANCH-AND-STITCH-PROTOCOL,
 WORLD-PERSISTENCE-PLAN}.md` (the branch/merge/persistence machinery cross-device
 sync IS), and `project-firmament-sel4-boots` (the one-cap-across-distance thesis).*
@@ -229,7 +229,7 @@ verifier PD), M2 (the rbg `DirectoryCell` PD), and **M-STARK** (a real
 BabyBear+BLAKE3+FRI STARK proved + verified *on-device*, anti-ghost teeth, no Lean)
 — all aarch64, plus M5 on riscv64. The GPU path is a virtio-gpu driver-PD (clone
 the booting net-PD, swap virtio-net→virtio-gpu; `sel4/gpu-driver-vm/README.md`,
-`docs/desktop-os-research/EXPLORATIONS.md`), today bootable as a Linux-guest-under-
+`.docs-history-noclaude/desktop-os-research/EXPLORATIONS.md`), today bootable as a Linux-guest-under-
 VMM on QEMU-aarch64 but **"not turnkey on macOS-QEMU" (no host Vulkan)** and with
 real-GPU accel deferred to real hardware.
 

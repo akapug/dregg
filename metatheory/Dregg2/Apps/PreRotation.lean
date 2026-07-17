@@ -2,11 +2,11 @@
 # Dregg2.Apps.PreRotation — KERI pre-rotation for identity-as-council: the next key set is
 committed BEFORE it is exposed, so compromising the CURRENT signing keys cannot rotate.
 
-The resonance study's best single steal, adopted outright (`docs/ORGANS.md:131-138`, the identity
+The resonance study's best single steal, adopted outright (`.docs-history-noclaude/ORGANS.md:131-138`, the identity
 rider): *every key-state event in an identity cell commits to the digest of the NEXT, unexposed key
 set; rotation must exhibit the preimage. Compromise of current keys no longer suffices to rotate.
 One register + one guarded-write rule; composes with the recovery cooling period.* The identity
-cell itself is a council (`docs/REFINEMENT-DESIGN.md:89-109`, Decision 2: identity = a small
+cell itself is a council (`.docs-history-noclaude/REFINEMENT-DESIGN.md:89-109`, Decision 2: identity = a small
 governance cell; recovery = a friend-council rotation under the cooling-period TemporalGate).
 
 ## The model
@@ -61,7 +61,7 @@ governance cell; recovery = a friend-council rotation under the cooling-period T
 
 The identity cell's rotation events export as KERI `rot` events: `nextDigest` = KERI's `n` (next
 key digest), the exhibited `newKeys` = `k`, the receipt chain = the witness-receipted KEL. The
-chained/signed/witness-receipted export is the interop lane (`docs/ORGANS.md:134-138`,
+chained/signed/witness-receipted export is the interop lane (`.docs-history-noclaude/ORGANS.md:134-138`,
 W-organ-3); this module is the kernel-side semantics it exports.
 
 l4v bar: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto enters ONLY as the

@@ -1,5 +1,5 @@
 //! Property / fuzz tests for the `RootChain` anti-substitution discipline — the
-//! spine invariant's load-bearing tooth (`docs/PG-DREGG.md` §10, §15). These
+//! spine invariant's load-bearing tooth (`.docs-history-noclaude/PG-DREGG.md` §10, §15). These
 //! properties try to break the chain gate: accept a substituted root, accept a
 //! gap/reorder, move the head on a refusal, or disagree between `RootChain::extend`
 //! and the `revalidate_replicated_chain` subscriber sweep.

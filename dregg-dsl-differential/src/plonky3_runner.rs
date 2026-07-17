@@ -5,8 +5,13 @@
 //! `CircuitDescriptor` whose constraints encode the requirement
 //! algebraically, generate a witness trace by hand (the prover knows the
 //! values from the IR-level inputs), then call
-//! [`dregg_dsl_runtime::prove_dsl_plonky3`] followed by
-//! [`dregg_dsl_runtime::verify_dsl_plonky3`].
+//! [`dregg_circuit::dsl::dsl_p3_air::prove_dsl_p3`] followed by
+//! [`dregg_circuit::dsl::dsl_p3_air::verify_dsl_p3`] — the PRODUCTION interpreter.
+//!
+//! (Corrected 2026-07-17: this doc used to name `dregg_dsl_runtime::prove_dsl_plonky3` — the 868-line
+//! DUPLICATE `DslP3Air` this harness once drove. The imports were migrated to production but the doc was
+//! not; the duplicate is now DELETED. A harness that names the shadow it no longer drives is the mirror
+//! lying about itself.)
 //!
 //! A successful round-trip means "the runtime Plonky3 verifier accepts
 //! this requirement on these inputs." A panic during prove (the standard

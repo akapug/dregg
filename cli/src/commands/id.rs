@@ -1,6 +1,6 @@
 //! Named identity profiles: `dregg id create / list / use`.
 //!
-//! Identity step 1 (`docs/REFINEMENT-DESIGN.md` Decision 2): an identity is a
+//! Identity step 1 (`.docs-history-noclaude/REFINEMENT-DESIGN.md` Decision 2): an identity is a
 //! *name you chose*, not a hex key you pasted. Profiles live where the
 //! cipherclerk keeps keys, in the exact store the SDK reads
 //! (`sdk/src/profiles.rs` — keep the two in lockstep):

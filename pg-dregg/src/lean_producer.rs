@@ -18,7 +18,7 @@
 //! belief that the Lean runtime (a) overrides the global allocator with mimalloc
 //! and (b) spawns worker threads — both fatal in a single-threaded
 //! `palloc`/`longjmp`/`fork` backend. The embeddable-runtime spike
-//! (`docs/EMBEDDABLE-LEAN-RUNTIME.md`) REFUTED both: mimalloc is a PRIVATE heap
+//! (`.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md`) REFUTED both: mimalloc is a PRIVATE heap
 //! (no `MI_MALLOC_OVERRIDE`), the task manager is LAZY (`Task.spawn` runs inline
 //! until an explicit `lean_init_task_manager` the executor never calls), and the
 //! only thread the default init spawns is the libuv event loop — which
@@ -289,7 +289,7 @@ impl Producer for LeanProducer {
         // the executor-verified post-balances over the chaining context, the SAME
         // way the stand-in / `bin/loadgen.rs` do (the executor's own kernel root is
         // not surfaced on this wire — the in-circuit root is the IVC light client's
-        // concern, `docs/PG-DREGG.md` §10.2; the CHAIN gate's tooth is structural on
+        // concern, `.docs-history-noclaude/PG-DREGG.md` §10.2; the CHAIN gate's tooth is structural on
         // these roots). Bit-identical to the stand-in's fold so a mixed-producer
         // history still chains.
         let post = crate::drainer::fold_chain_root(prev_root, ordinal, &touched);

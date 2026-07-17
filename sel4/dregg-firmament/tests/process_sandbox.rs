@@ -1,7 +1,7 @@
 //! THE SANDBOXED-FIRMAMENT ACCEPTANCE TEST (Phase 0) — the ambient-authority
 //! confinement tooth that `tests/process_isolation.rs` could not enforce.
 //!
-//! `docs/DREGG-DESKTOP-OS.md §3`: the v1 process backing gives a forked PD
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3`: the v1 process backing gives a forked PD
 //! **MMU** isolation (separate page tables) but the fork-path child still
 //! inherits **ambient OS authority** — it can `open` arbitrary files,
 //! `socket(AF_INET)` the network, `execve`, and keeps every inherited fd

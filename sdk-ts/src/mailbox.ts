@@ -1,5 +1,5 @@
 /**
- * **Mailbox** — a hosted inbox over the relay (`docs/ORGANS.md` §2).
+ * **Mailbox** — a hosted inbox over the relay (`.docs-history-noclaude/ORGANS.md` §2).
  *
  * The relay is a store-and-forward service: senders enqueue sealed bodies to
  * your inbox; you drain them with a custody proof. The relay sees only

@@ -2,7 +2,7 @@
 # Dregg2.Liveness — GC-as-cell-liveness, and distributed cycle collection.
 
 This module formalizes `dregg2.md §1.7` ("CapTP GC = cell-liveness, the dual of
-coinductive existence") together with the design probe `docs/rebuild/study-gc.md`.
+coinductive existence") together with the design probe `.docs-history-noclaude/rebuild/dregg2-design/study-gc.md`.
 It is the **operational dual** of `Dregg2.Boundary`: where `Boundary` says a sound
 cell's `ν`-unfold *never bottoms out*, this module supplies the side-condition that
 makes that honest — the unfold continues **only while the cell is reachable**, and the

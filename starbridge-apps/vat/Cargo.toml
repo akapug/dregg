@@ -21,3 +21,6 @@ dregg-types = { path = "../../types" }
 starbridge-execution-lease = { path = "../execution-lease" }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

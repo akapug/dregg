@@ -50,7 +50,7 @@ function shortHex(s, n = 8) {
 }
 
 /**
- * The operational ORGANS (docs/ORGANS.md) — the live cell surfaces the node
+ * The operational ORGANS (.docs-history-noclaude/ORGANS.md) — the live cell surfaces the node
  * serves. Each is a dregg:// kind with a registered inspector that reads its
  * node-side status route. The rail offers them as entry points: you supply
  * the organ's id (the cell / strand / owner key) and the shell mounts the

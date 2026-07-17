@@ -1,7 +1,7 @@
 //! # THE FIRST NON-EXEMPLAR UMEM PROOF — the universal-memory prover consumes a REAL
 //! # emitted trace, end-to-end.
 //!
-//! The executor-state bridge (`docs/UNIVERSAL-MAP-ROTATION.md` §2.3/§3; Lean keystones in
+//! The executor-state bridge (`.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.3/§3; Lean keystones in
 //! `metatheory/Dregg2/Exec/UniversalBridge.lean`) makes the LIVE executor produce the
 //! universal-memory witness for a real turn (`dregg_turn::umem` — the journal re-read as a
 //! Blum write trace over the `(domain, key)` address space). Until now every umem proof was
@@ -425,7 +425,7 @@ fn umem_real_turn_stale_prev_refuses() {
 // ============================================================================
 // THE CROSS-CELL-READ LEG — a turn proving it READ a SECOND cell's committed state.
 //
-// The unlock the boundary→committed-state binding opens (`docs/UNIVERSAL-MAP-ROTATION.md`;
+// The unlock the boundary→committed-state binding opens (`.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md`;
 // Lean anchors `boundary_init_root_derived` / `boundary_init_root_bound` in
 // `Dregg2/Crypto/UniversalMemory.lean`, lifted to the IR as `satisfied2U_init_root`).
 //

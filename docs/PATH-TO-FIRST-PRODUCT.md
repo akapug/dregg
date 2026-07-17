@@ -6,7 +6,7 @@ gate currently checks, where a hole sits) is verified against code at HEAD with 
 pins; every *step* is labeled as such. The audit that shaped it is the 2026-07-15
 launch-readiness block in [`HORIZONLOG.md`](../HORIZONLOG.md) ("the disease is *green on
 ember's laptop*"); the doc-level ground truth is
-[`audit/TRIAGE-2026-07-16.md`](audit/TRIAGE-2026-07-16.md).
+[`docs/audit/TRIAGE-2026-07-16.md`](docs/audit/TRIAGE-2026-07-16.md).
 
 The sequence, in one sentence: **the rung-1 launchpad ships first — it is the one
 end-to-end product where dregg is not in the transaction loop, so it is immune to every

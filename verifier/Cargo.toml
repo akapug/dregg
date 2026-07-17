@@ -52,8 +52,8 @@ verifier = []
 prover = ["verifier", "dep:dregg-circuit-prove"]
 default = ["prover"]
 
-# The seL4 protection-domain floor selector (see docs/FEATURE-HYGIENE.md §Lean and
-# docs/SEL4-EMBEDDING.md §2). After the lean-FFI boundary carve the verifier has NO
+# The seL4 protection-domain floor selector (see .docs-history-noclaude/FEATURE-HYGIENE.md §Lean and
+# .docs-history-noclaude/SEL4-EMBEDDING.md §2). After the lean-FFI boundary carve the verifier has NO
 # transitive reach to `libdregg_lean.a` at all — {federation, captp, turn} are FFI-free by
 # construction (they route their verified gates through `verified_gate` seams that only a
 # Lean-boundary crate, never depended on here, registers). So Lean-freedom is now STRUCTURAL,

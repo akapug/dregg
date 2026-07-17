@@ -640,7 +640,7 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
 // The deos-native surface — the ISSUER as a composed `DeosApp`.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: identity is THE
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: identity is THE
 // credential-across-trust-boundary web-of-cells story. The issuer's operations are
 // re-expressed as ONE [`DeosApp`] ([`identity_app`] below) and PROMOTED into `src/`;
 // the framework wires the rest — per-viewer projection, web-of-cells publish (the

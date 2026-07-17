@@ -13,7 +13,7 @@ description = "Federation node daemon — hosts an agent cipherclerk, participat
 dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
-# Lean is UNCONDITIONAL on native (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the
+# Lean is UNCONDITIONAL on native (polarity-inverted, .docs-history-noclaude/FEATURE-HYGIENE.md §Lean): the
 # shadow/gate executor, the F-4 admission gate, verified settle, and the captp/coord gates are
 # all compiled in by default — no per-crate enables needed here anymore.
 dregg-turn = { path = "../turn" }
@@ -96,7 +96,7 @@ starbridge-execution-lease = { path = "../starbridge-apps/execution-lease" }
 # row types + the anti-substitution RootChain), staying circuit- and postgres-free. The
 # node's pg_mirror sink owns the `dregg_cell::Cell -> CellRow` decode (this crate cannot
 # see dregg-cell by design) and calls MirrorBatch::from_parts + RootChain to ship verified
-# turns. (docs/PG-DREGG.md §8; node/src/pg_mirror.rs.)
+# turns. (.docs-history-noclaude/PG-DREGG.md §8; node/src/pg_mirror.rs.)
 pg-dregg = { path = "../pg-dregg", default-features = false }
 dregg-macaroon = { workspace = true, features = ["crypto"] }
 ark-serialize = { workspace = true }

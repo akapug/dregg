@@ -2,7 +2,7 @@
 //!
 //! A small directed view of how a swarm's members coordinate, built purely from
 //! the live [`Swarm`] + [`World`] (gpui-free, `cargo test`-able). Two relations,
-//! drawn as two layers (`docs/ADOS-DEEPENING.md` §3.4, `docs/AGENT-SWARM-UX.md`
+//! drawn as two layers (`.docs-history-noclaude/ADOS-DEEPENING.md` §3.4, `docs/design-frontiers/AGENT-SWARM-UX.md`
 //! §4.3):
 //!
 //!   * **NODES** are the swarm's members (one per member, in boot order).

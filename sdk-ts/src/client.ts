@@ -373,7 +373,7 @@ export class NodeClient {
   }
 
   /**
-   * The **trustline** organ (`docs/ORGANS.md` §1) over this node's
+   * The **trustline** organ (`.docs-history-noclaude/ORGANS.md` §1) over this node's
    * operator-local trustline service. Operator-gated — pass a `devnetKey`.
    */
   trustline(): TrustlineClient {
@@ -381,7 +381,7 @@ export class NodeClient {
   }
 
   /**
-   * The **channels** organ (`docs/ORGANS.md` §4) over this node's channels
+   * The **channels** organ (`.docs-history-noclaude/ORGANS.md` §4) over this node's channels
    * service. Operator-gated — pass a `devnetKey`.
    */
   channels(): ChannelsClient {

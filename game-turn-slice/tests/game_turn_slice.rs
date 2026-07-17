@@ -446,6 +446,7 @@ fn honest_bundle() -> CustomWitnessBundle {
         witness_values: w,
         num_rows: rows,
         public_inputs: combat_pis(),
+        app_root_binding: None,
     }
 }
 

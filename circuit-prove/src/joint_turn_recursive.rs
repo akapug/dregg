@@ -1623,7 +1623,8 @@ mod custom_fold_wire_tests {
 // The leg leaf here is a minimal stand-in for the 789-wide deployed `customVmDescriptor2R24`
 // at the SAME two exposure surfaces the real member has: the 8-felt commitment claim at IR2
 // PI [46..54) and the 16 wide anchors in the LAST 16 PIs (the deployed custom member ships at
-// 78 PIs = 62 base + 16 wide, so the claim and the anchors do not overlap — mirrored here).
+// 86 PIs = 70 base + 16 wide since the app-root leg-emit epoch, so the claim and the anchors do
+// not overlap — mirrored here).
 // ============================================================================
 #[cfg(test)]
 // The `canary__*` name uses a double underscore to set the CANARY label off from the
@@ -1654,11 +1655,13 @@ mod custom_state_fold_wire_tests {
     use dregg_circuit::refusal::must_refuse;
     use std::collections::HashMap;
 
-    /// PI count of the stand-in leg — the deployed custom wide member's shape (62 base + 16
-    /// wide anchors). Keeps the claim slice [46..54) and the anchors [62..78) disjoint, and is
-    /// >= `WIDE_PI_COUNT` (66) so `prove_descriptor_leaf_dual_expose` takes the WIDE anchor
-    /// branch (sourcing the genuine 8-felt roots rather than broadcasting a single felt).
-    const STANDIN_LEG_PI_COUNT: usize = 78;
+    /// PI count of the stand-in leg — the deployed custom wide member's shape (70 base [46 rot +
+    /// 12 exposure + 4 rc + 8 app-root field octet] + 16 wide anchors = 86, the app-root leg-emit
+    /// epoch). Keeps the claim slice [46..54) and the anchors [70..86) disjoint (the state node
+    /// ignores the field octet at [62..70)), and is >= `WIDE_PI_COUNT` (66) so
+    /// `prove_descriptor_leaf_dual_expose` takes the WIDE anchor branch (sourcing the genuine 8-felt
+    /// roots rather than broadcasting a single felt).
+    const STANDIN_LEG_PI_COUNT: usize = 86;
 
     /// A STATE-BINDING custom program: the same minimal-but-REAL conservation shape as the
     /// demo, but publishing the `custom_state_binding` ABI's public inputs —
@@ -1757,8 +1760,8 @@ mod custom_state_fold_wire_tests {
         config: &DreggRecursionConfig,
     ) -> RecursionOutput<DreggRecursionConfig> {
         let n = STANDIN_LEG_PI_COUNT;
-        let old_first = n - 2 * SEG_ANCHOR_WIDTH; // 62
-        let new_first = n - SEG_ANCHOR_WIDTH; // 70
+        let old_first = n - 2 * SEG_ANCHOR_WIDTH; // 70
+        let new_first = n - SEG_ANCHOR_WIDTH; // 78
 
         // cols 0..8 = the claim; 8..16 = old8; 16..24 = new8.
         let mut constraints: Vec<VmConstraint2> = (0..CUSTOM_COMMIT_LEN)
@@ -2083,11 +2086,13 @@ mod app_root_weld_fold_tests {
         }
     }
 
-    /// Stand-in leg PI count: the deployed custom wide member's shape (62 base + 16 wide anchors),
-    /// widened so the field octet claim [54..62) sits ahead of the anchors [62..78).
-    const STANDIN_LEG_PI_COUNT: usize = 78;
-    /// Fixed PI offset of the leg's committed field octet (ahead of the wide anchors).
-    const FIELD_PI_LO: usize = 54;
+    /// Stand-in leg PI count: the deployed custom wide member's shape (70 base + 16 wide anchors =
+    /// 86, the app-root leg-emit epoch), so the field octet claim [62..70) sits ahead of the anchors
+    /// [70..86) — mirroring the deployed `generate_rotated_custom_wide` / Lean `withAfterOctetPins`.
+    const STANDIN_LEG_PI_COUNT: usize = 86;
+    /// Fixed PI offset of the leg's committed field octet (ahead of the wide anchors) — the deployed
+    /// `octet_lo = n - 2*SEG_ANCHOR_WIDTH - CUSTOM_APP_FIELD_OCTET_LEN = 86 - 16 - 8 = 62`.
+    const FIELD_PI_LO: usize = 62;
 
     /// An APP-ROOT custom program: the same conservation shape as the state demo, publishing the
     /// state prefix AND an 8-felt app root — `[old8 ‖ new8 ‖ R8]` (24 PIs).
@@ -2176,8 +2181,8 @@ mod app_root_weld_fold_tests {
     }
 
     /// A stand-in leg leaf exposing `[segment ‖ commitment(8) ‖ field_K(8)]`: it publishes the
-    /// claimed commitment at IR2 PI [46..54), the committed field octet at [54..62), and the REAL
-    /// rotated roots in the last 16 PIs — every published lane pinned to a trace column by a
+    /// claimed commitment at IR2 PI [46..54), the committed field octet at [62..70), and the REAL
+    /// rotated roots in the last 16 PIs [70..86) — every published lane pinned to a trace column by a
     /// `PiBinding` (FRI-bound, not free scalars).
     fn app_root_leg_leaf(
         claim: crate::custom_proof_bind::ProofBindCommitment,
@@ -2187,8 +2192,8 @@ mod app_root_weld_fold_tests {
         config: &DreggRecursionConfig,
     ) -> RecursionOutput<DreggRecursionConfig> {
         let n = STANDIN_LEG_PI_COUNT;
-        let old_first = n - 2 * SEG_ANCHOR_WIDTH; // 62
-        let new_first = n - SEG_ANCHOR_WIDTH; // 70
+        let old_first = n - 2 * SEG_ANCHOR_WIDTH; // 70
+        let new_first = n - SEG_ANCHOR_WIDTH; // 78
 
         // cols: 0..8 = commit, 8..16 = field_K, 16..24 = old8, 24..32 = new8.
         let mut constraints: Vec<VmConstraint2> = (0..CUSTOM_COMMIT_LEN)

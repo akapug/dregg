@@ -58,3 +58,13 @@ path = "src/bin/additive_bench.rs"
 [[bin]]
 name = "fhe-mpc-bench"
 path = "src/bin/mpc_bench.rs"
+
+# The MASKED DECRYPT-TO-SHARES pipeline (closes OUTPUT-BOUNDARY-MPC.md §8's
+# partial-decrypt-into-shares item): fold -> homomorphic Z_t masking -> decrypt
+# only the padded value -> mod-t shares -> a2b_mod_t -> unchanged crossing.
+[[bin]]
+name = "fhe-boundary-bench"
+path = "src/bin/boundary_bench.rs"
+
+[lints]
+workspace = true

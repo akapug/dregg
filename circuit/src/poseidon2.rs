@@ -404,7 +404,7 @@ pub fn hash_many(inputs: &[BabyBear]) -> BabyBear {
 ///
 /// THIS IS A STANDALONE PRIMITIVE — it is NOT yet wired into the live commitment. A faithful commitment
 /// also requires the Merkle–Damgård CHAIN's intermediate accumulator to be 8 felts wide (else an
-/// adversary collides a 31-bit intermediate carrier); see `docs/FAITHFUL-STATE-COMMITMENT.md`. Bolting
+/// adversary collides a 31-bit intermediate carrier); see `.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md`. Bolting
 /// this onto only the final squeeze would be a laundered widening.
 pub fn hash_many_8(inputs: &[BabyBear]) -> [BabyBear; 8] {
     let rate = 4;

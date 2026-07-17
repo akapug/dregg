@@ -104,7 +104,7 @@
 //! `H(witness) == condition_digest`) ∧ not-yet-settled ⟹ settled ∧ value released"
 //! into the commitment, and (b) the Lean rung `verifyBatch accept ⟹ vault released
 //! only when its condition was genuinely met` joining the circuit-soundness
-//! obligation table in `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`. See
+//! obligation table in `.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`. See
 //! `docs/deos/CONDITIONAL-VAULT.md` §"Next slice: circuit binding".
 
 use serde::{Deserialize, Serialize};

@@ -192,7 +192,7 @@ be RED before the fix — a falsifier that was never red proves nothing).
 - **AGGRAVATING** — `metatheory/Dregg2/Apps/VERIFICATION-TOOLKIT-GUIDE.md:171` names this exact file **THE
   TEMPLATE** for every new verified app's differential ("Template: `compartment-workflow-mandate/tests/
   cwm_lean_differential.rs`"). The census banks it as proven core to keep
-  (`docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md:46`). **The pattern propagates.**
+  (`metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md:46`). **The pattern propagates.**
 - **FIX — FOUR TOKENS, and the pinned literal does not change.** Both helpers are **already `pub`**
   (verified: `lib.rs:173` `pub fn officer_label`, `:177` `pub fn clerk_label`) and already used correctly
   by `tests/deos_seam.rs:410,455`. Mirror the sibling that does it right — `src/colonist_job.rs:458-465`

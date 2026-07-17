@@ -833,3 +833,494 @@ inventory:
    (or that the skip is intended). REAL gap.
 NEXT: let the swarm's rig lanes finish when the lock frees; rig #3/#4 (the two real gaps) either via the
 swarm or by hand on a settled tree.
+
+## 2026-07-17 — board/Lane D — the 629(->1217 measured) dangling `docs/*.md` citations: 1059 mechanically repointed, 80 named unresolved
+
+**Scope check first.** `git grep -nE 'docs/[A-Za-z0-9_./-]+\.md' -- . ':!.docs-history-noclaude'` over
+tracked files (9971 files; the 233G working copy is too big to `grep -r`, use `git grep`) found **2859**
+boundary-checked `docs/*.md` mentions. Resolving each against the CITING FILE's own ancestor chain (a ref
+inside `metatheory/docs/X.md` or `pg-dregg/docs/X.md` legitimately means the sibling file, not
+repo-root `docs/`) — the brief's "629" underestimated it: **1217 lines cited a `docs/*.md` path that does
+not exist anywhere reachable from the citing file, across 197 distinct targets.**
+
+**Method (mechanical, not manual-per-line) — verified safe before applying at scale:**
+1. Built an index of every real `.md` file under `docs/`, `metatheory/docs/`, `pg-dregg/docs/`, and
+   `.docs-history-noclaude/` (`os.walk`, existence-checked).
+2. Classified each of the 197 dangling targets: **34 MOVED** (renamed/relocated — found live under
+   `docs/design-frontiers/`, `docs/SUPERSEDED/`, `metatheory/docs/`, or `pg-dregg/docs/` by basename,
+   single unmabiguous match each — checked, zero ambiguous multi-matches); **124 ARCHIVED** (found in
+   `.docs-history-noclaude/`, again unambiguous); **39 GONE** (not found anywhere — genuinely never
+   written, or truly deleted with no archive copy).
+3. Confirmed the repo's OWN convention for archived pointers before choosing mine:
+   `HORIZONLOG.md:1441` already writes `` `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` `` directly
+   — direct-repoint, no extra "(archived)" annotation needed, matches `HORIZONLOG.md:7521`'s own note
+   about the same class of dead link. Used the same pattern.
+4. **`git status --short` FIRST**: 255 pre-existing dirty files. Any citing file already dirty was
+   **skipped entirely** (17 files, 30 dangling lines) — reported below, not touched.
+5. Applied a boundary-safe substring replace (`(?<![A-Za-z0-9_./-])docs/X\.md` → resolved path) per
+   **clean** citing file, operating on real file reads (not on any grep-truncated text) so an
+   already-correctly-prefixed occurrence (e.g. a line that already said
+   `metatheory/docs/CELL-PROGRAM-LANGUAGE.md`) could never be double-prefixed. **Verified this held**:
+   `grep -rn "metatheory/metatheory/docs\|pg-dregg/pg-dregg/docs\|docs-history-noclaude/\.docs-history-noclaude"`
+   over the whole tree post-edit → **zero hits**.
+
+**Result — 1059 citations fixed across 416 files, zero collisions with other lanes' dirty files (checked
+by set-intersection, not by eye):**
+- **(a) 117 lines — MOVED, repointed to the real live path.** E.g. `docs/AGENT-SWARM-UX.md` →
+  `docs/design-frontiers/AGENT-SWARM-UX.md`; `docs/CELL-PROGRAM-LANGUAGE.md` → the sibling
+  `metatheory/docs/CELL-PROGRAM-LANGUAGE.md` (36 sites incl. `cell/src/blueprint.rs:95,106`,
+  `cell/src/predicate.rs:675`, `cell/src/state.rs`); `docs/QUICKSTART-pg-user.md` →
+  `pg-dregg/docs/QUICKSTART-pg-user.md`; `docs/NULLIFIER-ACCUMULATOR-*.md` →
+  `docs/SUPERSEDED/NULLIFIER-ACCUMULATOR-*.md`.
+- **(b) 942 lines — GENUINELY ARCHIVED, repointed to `.docs-history-noclaude/`.** This is the
+  brief's top offender and it checks out: **`docs/PG-DREGG.md` had 137 dangling citing lines** (not 89 —
+  the brief's count was itself stale/an undercount), now all `` `.docs-history-noclaude/PG-DREGG.md` ``.
+  Fixed the exact instance the brief called out: `pg-dregg/Cargo.toml`'s `[workspace]`-exclusion
+  justification (lines 5, 10, 75, 103 — four separate `docs/PG-DREGG.md` citations in that one file, not
+  one) plus `docs/PG-DREGG-PG18.md`, `docs/EMBEDDABLE-LEAN-RUNTIME.md`, `docs/PG-DREGG-VS-DBOS.md` in the
+  same file. Also `node/Cargo.toml:99`, `pg-dregg/sql/schema-tier{B,C}.sql` (both cite `docs/PG-DREGG.md`
+  in header comments), `sel4/dregg.system`'s XML comments (`docs/SEL4-EMBEDDING.md`,
+  `docs/FIRMAMENT.md`), and 40+ `sel4/dregg-pd/*/Cargo.toml` build-mode justifications.
+- **(c) 39 targets / ~50 lines — GONE, named not fixed** (per the lane brief's rule c: verify every
+  target exists before repointing; did not fabricate). Two shapes:
+  - **A coherent cluster that was never written**: `docs/engine/{review,design,probes}/*.md` (5 targets,
+    ~17 lines) cited from `orb/Reactor/*.lean` (Stage/ConditionalRequest.lean, DateHeader.lean,
+    FramingValidation.lean, etc.), `orb/GOAL.md`, `orb/conformance/FOOTGUN-MAP.md` — `docs/engine/`
+    **does not exist at all** in this repo (checked: `ls docs/engine` → No such file or directory). These
+    read as forward-references to docs that were planned but never authored, not renames.
+  - **Scattered singles**, mostly `dregg-agent/src/*.rs` citing a `docs/HACKATHON-STACK.md`,
+    `docs/BRING-YOUR-OWN-HARNESS.md`, `docs/VISION-NEXT-PRODUCT.md`, `docs/AGENT-RUNTIME-OPEN-SOURCE.md`
+    that likewise never landed; `docs/deos/CONSENSUS-BINDS-INDEX.md` (5 lines, `dregg-query/src/client.rs`,
+    `node/src/{api,state}.rs`); `docs/GRAIN-FORK.md`/`docs/GRAIN-VERIFY-HOME.md` — checked `grain-fork/`
+    and `grain-turn/` for a moved doc, found only `README.md` in each, not a rename (the crates document
+    themselves in-crate now, the top-level doc was apparently never split out). None of these have a
+    plausible unambiguous target; each needs either the doc written or the citing claim revisited — an
+    owner call, not a lane fix. Full 80-line list with file:line is in my scratch
+    (`truly_final.json`) if wanted; not pasted here to keep this entry readable.
+
+**NOT touched (dirty, reported not fixed) — 17 files, 30 dangling lines**, all mid-edit by other lanes:
+`.github/workflows/ci.yml` (`docs/DESCRIPTOR-EMIT.md`), `circuit-prove/tests/proof_economics.rs`,
+`circuit/src/{effect_vm/trace_rotated,effect_vm_descriptors,ivc,lib}.rs`, `dregg-lean-ffi/Cargo.toml`,
+`dregg-query/Cargo.toml`, `grain-fork/Cargo.toml`, `grain-turn/Cargo.toml`, `perf/Cargo.toml`,
+`sdk/src/full_turn_proof.rs`, `sel4/dregg-firmament/Cargo.toml`, `starbridge-v2/{Cargo.toml,src/world.rs}`,
+`starbridge-web-surface/Cargo.toml`, `turn/src/executor/proof_verify.rs`. Their dangling refs are the same
+two shapes as (a)/(b) above (e.g. `sel4/dregg-firmament/Cargo.toml` → `docs/FIRMAMENT.md` +
+`docs/DREGG-DESKTOP-OS.md`, both archived-only) — mechanical once that lane lands, not a design call.
+
+**Verification of the fix itself (not just "it ran"):** re-ran the full detection pass post-edit
+(`git grep -nE` again, same boundary-aware resolver) → **80 dangling lines remain**, all accounted for by
+the two buckets above (30 dirty-skipped + 50 genuinely-gone); **zero regressions** (diff-stat 640 files /
++7967/-3835, every sampled diff — `.rs` doc-comments, `.toml` build-mode headers, `.sql` header comments,
+`.lean` module docs, `.system` XML comments — is a pure path-string substitution inside a comment/string
+literal, never touching code; spot-checked ~10 diffs by hand + the double-prefix grep sweep above).
+**Did not run a full `cargo check --workspace`** (contended target dir, out of this lane's budget) —
+these are comment-only edits with no compilation surface, but flagging per the frame's own rule (build
+what you change) rather than asserting it silently.
+
+**Correction to the lane brief:** "Top offender: `docs/PG-DREGG.md` (89 lines)" undercounted — it was
+**137 lines** (undercounting is exactly the class of error this whole campaign hunts, so noting it rather
+than quietly using the bigger number).
+
+Committed NOTHING — supervisor gates.
+
+## 2026-07-17 — board/Lane C — DslComparisonRangeSoundnessResidual RESOLVED: the DSL comparison lowering is NOT range-check sound (PROVEN by a live prover)
+
+**The question (from the corrected `dregg-dsl/src/lib.rs` doc):** the surviving DSL comparison path
+(`<=`/`>=`/`in_range!`) — is a field-wrapped negative difference UNSATISFIABLE, or can a wrapped value
+satisfy it? **Answer, established FROM CODE then pinned with a live prover: NOT SOUND — a wrapped value
+satisfies it. The production p3 prover AND verifier ACCEPT a forged `5 <= 3`.**
+
+**Ground truth traced (not inferred):**
+1. `gen_air`'s `Constraint::RangeCheck { diff_col, bit_col }` (gen_air.rs:89-102) proves NOTHING. It is a
+   TOPOLOGY descriptor (`dregg_dsl_runtime::AirConstraintSet`). Its only consumers are
+   `dregg-dsl-differential/src/air_runner.rs` (matches the variant SHAPE, then re-derives accept/reject in
+   NATIVE u64 via `check_le`) and structural token tests. **There is NO `AirConstraintSet -> CircuitDescriptor`
+   converter anywhere in the repo** (grepped) — nothing lowers that descriptor into a proved constraint
+   system. A single `bit_col` could not range-check a ~31-bit field difference anyway.
+2. The ONLY DSL comparison that reaches a REAL prover is
+   `dregg-dsl-differential/src/plonky3_runner.rs::drive_inequality`. It hand-builds a `CircuitDescriptor`
+   ("diff-le", cols [smaller,bigger,diff,indicator]) and proves it through the PRODUCTION interpreter
+   `dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3,verify_dsl_p3}`. Its ENTIRE constraint system:
+   `C1: bigger - smaller - diff == 0` (mod p — always satisfiable), `C2: indicator*(indicator-1)==0`,
+   `C3: indicator == 0`. **No bit decomposition bounds `diff`; nothing algebraically links `indicator` to
+   `diff`.** The comparison's truth lives entirely in the HONEST WITNESS GENERATOR (native
+   `ir_ok = smaller <= bigger`, which volunteers an invalid witness when the claim is false). A malicious
+   prover just doesn't.
+
+**THE FORGERY (proven live):** claim `5 <= 3` with witness `diff = (3-5) mod p = p-2`, `indicator = 0`.
+Every constraint is satisfied → `prove_dsl_p3` produces a proof and `verify_dsl_p3` ACCEPTS it. The in-file
+comment "we cap the diffs to a 30-bit range where this encoding stays sound" is FALSE — the forgery uses
+far-sub-30-bit operands (5 and 3).
+
+**Severity — a NAMED soundness gap, not a live production forgery:** the unsound lowering is the
+DIFFERENTIAL HARNESS's own, not a shipped circuit. Consequence: the harness's Plonky3 "agreement vote" on
+inequalities validates its witness generator, NOT its constraints — a genuinely unsound backend would still
+pass the vote (same species as a soundness suite over a mock). Production circuits that need order
+comparisons DO range-check genuinely — verified in code: `circuit/src/dsl/committed_threshold.rs` (C4 bit
+reconstruction + C5 binary bits + `BoundaryDef::Fixed` forcing the top bit to zero), `derivation.rs`
+C17/C22, `descriptors.rs` non-membership ordering. **No DSL surface currently lowers `<=`/`>=`/`in_range!`
+into a proved circuit at all.**
+
+**TOOTH RIGGED (permanent, mutation-verified):**
+`dregg-dsl-differential/tests/comparison_wrap_soundness.rs` (4 tests, all green on persvati/srot):
+- `honest_le_accepts_through_production_p3` — non-vacuity: a TRUE `3<=5` proves+verifies through the
+  production interpreter (the pipeline is real).
+- `rig_is_not_vacuous_inconsistent_diff_is_rejected` — PROVED THE RIG BITES: a `diff` violating C1
+  (claim `3<=5`, diff=7) IS rejected, so the acceptance below is a real property, not a broken test.
+- `honest_false_le_is_rejected_by_harness` — the harness rejects a false `5<=3` (but via the witness
+  generator, per the finding above).
+- `wrapped_negative_difference_forgery_is_accepted_known_unsound` — the CHARACTERIZATION PIN: asserts the
+  wrapped-diff forgery IS accepted today. **If someone fixes the lowering (real bit-decomposition), this
+  test goes RED — the signal to flip it into a rejection tooth and upgrade the doc from NAMED-UNSOUND to
+  PROVEN-SOUND.** Explicitly documented NOT to be "fixed" by deletion.
+
+Doc `dregg-dsl/src/lib.rs` "Range-check soundness" section updated NAMED -> RESOLVED (NOT SOUND), with the
+test named and the production-circuit contrast recorded. Did NOT touch `plonky3_runner.rs` (held dirty by
+another lane; only read it — my test reproduces its "diff-le" descriptor locally with a note to resync if
+its shape changes).
+
+Committed NOTHING — supervisor gates.
+
+## 2026-07-17 — board/lane-a — `unexpected_cfgs` warn -> DENY, and 100/207 crates were never in the cage at all
+
+**THE FINDING THE FLIP HID:** `[workspace.lints]` binds only crates with `[lints] workspace = true` —
+and **100 of 207 members never opted in** (cargo-metadata census, not grep). The warn flip's "authoritative
+list" only ever saw half the workspace; a phantom cfg in the other half would have warned at rustc's
+default level and never been counted. Fixed structurally: appended the opt-in to **89** clean manifests;
+added `unexpected_cfgs = "deny"` directly to the 6 with their own `[lints.rust]/[lints.clippy]` tables
+(they can't ALSO set `workspace = true`); escalated starbridge-v2's existing declared-cfg entry
+warn->deny (keeping its documented `zed-full-pane` check-cfg). Root `Cargo.toml` `unexpected_cfgs = "deny"`
+with the coverage caveat written into the comment.
+
+**SKIPPED (other lanes hold them dirty): `chain`, `deos-hermes`, `dreggnet-web`, `grain-turn`** — their
+manifests were mid-surgery, so they are NOT bound by the deny (they keep rustc's default warn). Whoever
+settles those crates: append `[lints]\nworkspace = true` (one liner each) to close the cage.
+
+**VENDORED (targeted declarations, not blanket allows, not a workspace retreat):**
+- `starbridge-v2/vendor/pathfinder_simd` — declared `cfg(pf_rustc_nightly)` (its build.rs emits it).
+- `servo-render/vendor/servo-net` — declared `cfg(feature, values("test-util"))` (upstream feature the
+  vendor trim dropped; surfaced as default-warn in run 1).
+Path-deps get no cap-lints, so these would have warned forever; they can't fail the build (no opt-in).
+
+**A REAL PHANTOM SURVIVOR, deny caught it on run 1 (rustc's list, not mine):** 3 sites in dregg-turn —
+`#[cfg(any(feature = "prover", feature = "verifier"))]` at `bilateral_schedule.rs:733,813` +
+`witnessed_receipt.rs:542`. **`verifier` was never a dregg-turn feature** (expected: default/prover/
+threshold-sig) — the arm was ALWAYS FALSE. Consequence (the class's signature move): verify-only
+consumers (`wasm`, `dregg-tui`, `sdk-ts/test/rust-verifier`, `starbridge-v2` — all
+`default-features = false`, no `prover`) silently compiled OUT the rotated-WR schedule expansion in
+`bilateral_bundle_pi` and hard-error on every rotated WitnessedReceipt — the OPPOSITE of the gate's
+written intent ("the only feature configs that compile the aggregation path" — stale: `verifier` is
+circuit's RETIRED feature namespace, and `bilateral_aggregation_air` is unconditional in dregg-circuit
+now). FIX: removed the gates (everything referenced — `compute_turn_identity_pi`, `ExpectedBilateral`,
+`sched` — is verify-floor, verified ungated); verify-only builds now get the expansion. Fail-closed gap,
+not a forgery hole (it refused, it didn't accept).
+
+**THE GREEN RUN UNMASKED 3 MORE ROT LAYERS** (cargo aborts-first, so each hid the next; all in CLEAN
+files — missed consumers of other lanes' landed struct changes, fixed forward):
+1. `demo/src/commit_state.rs:102` — 0-arg `delta.verify()` missed by the FoldDelta rewrite; now
+   `verify(&old_state, &CheckPolicy::RuleNames(added_checks))` (the checks it admits are exactly the
+   `rule:`-prefixed facts the same function builds via `make_rule`).
+2. `tests/src/commitment.rs:378` (`fold_delta_with_tampered_removal_proof`) — same 0-arg call, invisible
+   to plain `cargo check` (it's `#[cfg(test)]` — why the fold lane's check missed it); rewired to the
+   builder's `state.clone()` pattern; ordering read from `fold.rs::verify` confirms
+   `InvalidRemovalProof{0}` still the asserted variant (OldRootMismatch binds first, and old_root here
+   is honest).
+3. `perf/src/bin/perf_report.rs:220` — printed retired `TurnProofComponents::has_authorization` (field
+   removed by the dirty sdk lane); dropped from the println. And
+   `demo/real-dungeon-service/src/main.rs:315` — `StepReceipt` grew `decision_commitment`; this is a
+   single-player `apply_choice` driver, so `None` per the field's own doc (the dreggnet-offerings
+   initializers already carried it).
+
+**PROOF OF GREEN (persvati srot, run 5):** `cargo check --workspace` AND `cargo check -p dregg-tests
+--all-targets` both `Finished` — **0 errors, 0 `unexpected_cfgs` warnings anywhere** (scratchpad
+deny-check5.log). Final hit list: EMPTY.
+
+**TOOTH PROVEN TO BITE (mutation test):** planted `#[cfg(feature = "phantom_bite_proof_feature")]` in
+`types/src/lib.rs` -> `cargo check -p dregg-types` FAILED with ``error: unexpected `cfg` condition value
+... requested on the command line with `-D unexpected-cfgs` ``; removed the mutation (Edit, not
+checkout) -> file byte-identical to HEAD (git-status clean) -> green in 1.14s.
+
+Committed NOTHING — supervisor gates.
+
+## 2026-07-17 — board/lane-F (rig the assumption surface) — the "every ed25519 site is strict" primitive-contract, RIGGED tree-wide (and one universal-forgery vector on the SLASHING path)
+
+**The frame applied.** An assumption is only rigged if a test flags RED when the code drifts. The lane's
+own headline pathology (`token/revocation.rs` non-strict ed25519 vs a STRICT Lean model, no test caught it)
+is a PRIMITIVE-CONTRACT assumption: "every ed25519 verify is strict". I rigged it — two local mutation-proven
+teeth on the highest-consequence attacker-key paths, plus the TREE-WIDE invariant the lane asked for (worth
+more than ten local ones: it catches the NEXT drift).
+
+**Ground truth FIRST (execution, not inference).** Built a standalone probe (`scratchpad/edprobe`) against
+ed25519-dalek 2.2.0: a small-order verifying key (the identity point, compressed `y=1`) with signature
+`(R=identity, s=0)` — `non-strict verify(): true` for EVERY message tested; `verify_strict(): false`.
+`from_bytes` accepts the identity point (canonical), and `vk.is_weak()==true`. So under a cofactored verify,
+an attacker holding NO SECRET forges a signature that passes — wherever the key is attacker-chosen.
+
+### RIG 1 (FIXED code + mutation-proven tooth) — `dregg_blocklace::evidence`: a no-secret equivocation exhibit could SLASH a bonded strand
+
+`EvidenceOfEquivocation` is a SELF-CONTAINED wire value — `verify()` reads `creator` out of the exhibit
+itself (`blocklace/src/evidence.rs:165`), so the verifying key is fully attacker-chosen. It verified the
+accused's Ed25519 half with the cofactored `vk.verify(...)` (`evidence.rs:108`). Consequence is real: this
+predicate feeds `federation/src/court.rs::EquivocationEvidenceVerifier::verify` and `Court::resolve`
+(`court.rs:98,228`), which SLASH the accused strand's bond. A small-order `creator` + `(R=identity,s=0)`
+makes both headers "verify" over any conflicting content → a forged exhibit minted with no secret certifies
+and slashes. FIXED to `verify_strict` at all three blocklace ed25519 verify sites: `evidence.rs:108`
+(exhibit), `finality.rs:419` (block admission), `lib.rs:271` (hybrid block verify — the classical half).
+Dropped the now-unused `Verifier` trait import from all three (finality/lib's remaining `.verify` are
+`MlDsaPublicKey` inherent, not dalek). `blocklace` built warning-free.
+- **Tooth (`evidence.rs:363 forged_exhibit_under_a_small_order_creator_refuses`)**: mints the identity-point
+  forgery, asserts `vk.is_weak()` for NON-VACUITY (refused for weakness, not malformedness), same-slot +
+  CONFLICTING content so `verify` cannot short-circuit, + a CONTROL that a genuine fork still certifies.
+- **PROVEN TO BITE**: reverted `verify_signature` to `vk.verify(..)` → tooth FAILED
+  `left: Ok(())` (the cofactored verify CERTIFIED the no-secret forgery); restored → 219/219 green.
+  It is NOT redundant with the existing `forged_signature_refuses` (that forges under a different HONEST
+  key, which the cofactored check refuses too — so it says nothing about strictness).
+
+### RIG 2 (FIXED code + mutation-proven tooth) — `dregg_agent::receipt::verify_signature`: forged quorum co-signature
+
+`verify_signature(signer, msg, sig)` (`dregg-agent/src/receipt.rs:243`) authenticates each independent
+co-signer in a multi-sig quorum; `signer` is caller-supplied (in the quorum path it is `Attestation::signer`,
+carried in the wire attestation). Its doc promises "a wrong signer ... `false` (fail-closed)". It used
+cofactored `vk.verify(..)`, so a small-order `signer` forged a co-signer witness with no secret. FIXED both
+sites to `verify_strict` (`:243`, plus the receipt-chain link verify at `:373`); dropped the `Verifier`
+import.
+- **Tooth (`receipt.rs:427 a_small_order_signer_cannot_forge_a_signature`)**: identity-point forgery over two
+  distinct messages + `is_weak()` non-vacuity + a genuine-signature CONTROL.
+- **PROVEN TO BITE**: reverted to `vk.verify(..)` → FAILED (cofactored verify accepted the no-secret forgery);
+  restored → `cargo test -p dregg-agent --lib receipt::` 7/7 green.
+
+### RIG 3 (NEW tree-wide gate) — `tests/tests/ed25519_strict_guard.rs`: the primitive-contract invariant, ENFORCED
+
+The robust, compiler-grounded signal: `verify_strict` is INHERENT on `VerifyingKey`; the non-strict `verify`
+is the `signature::Verifier` trait method and REQUIRES a trait import. A **module-top (column-0)**
+`use ed25519_dalek::…Verifier` / `use signature::…Verifier` is the necessary condition for a non-strict dalek
+verify at module scope — and test-mod / fn-local imports are indented, so they fall out automatically. The
+gate walks every first-party production `src/**.rs`, flags a module-top non-strict `Verifier` import, and
+requires each to be on a reviewed `ALLOWLIST`. Ground truth: **21 current hits, all classified** (the two
+crates I fixed dropped their imports and are DELIBERATELY absent — a regression there re-adds the import and
+turns the gate RED). Categories in the allowlist are honest, not blessing:
+- `EXTERNAL-SCHEME MIRROR` (2, verified by reading): `bridge/src/solana_{consensus,wire}.rs` verify Solana
+  vote-tx signatures under wire keys. **CORRECTION to the naive "every ed25519 is strict" premise: making
+  these strict would be a BUG** — Solana's runtime uses cofactored verify; a strict bridge would REJECT votes
+  the chain ACCEPTS (small-order keys are consensus-valid on Solana), diverging the bridge from the chain it
+  tracks. Cofactored is correct there. (This is why a blanket invariant is unsound; the gate encodes the
+  exception with its reason.)
+- `TEST MODULE` (1): `turn/src/tests.rs` (`#[cfg(test)] mod tests;`).
+- `HELD DIRTY` (2): `cell-crypto/src/peer_exchange.rs` (already `verify_strict` + already carries the
+  small-order tooth from a prior lane — corroborates the technique), `federation/src/dkg_ceremony.rs`. Both
+  uncommitted by other lanes — not touched (shared-tree rule).
+- `GRANDFATHERED` (16): un-audited non-strict prod sites present before the gate — an honest DEBT LEDGER,
+  each owing an attacker-key-reachability review (several — `dregg-agent/cred.rs`, `dregg-auth/credential/
+  chain.rs`, `dregg-pay/{otc,swap}.rs`, `sdk/device_pairing.rs`, `webauth-core/credext.rs` — read as likely
+  convert-to-strict: presented/wire keys). NOT claimed safe; the gate stops NEW ones and enumerates the rest.
+- **NON-VACUITY shipped as a test** (`detector_is_non_vacuous`): the matcher MUST fire on the forbidden
+  module-top import and MUST NOT fire on `VerifyingKey`-only or indented imports.
+- **VERIFIED**: compiled + ran the gate standalone against the REAL tree (`rustc --test`, CARGO_MANIFEST_DIR
+  pinned): both tests PASS (`2 passed`; the gate walk found exactly the 21 allowlisted, 0 violations, 0
+  stale). Cross-checked the walk with a faithful Python mirror (21 hits, 0 viol, 0 stale). BITE proven by
+  mutation: a simulated blocklace regression (`use ed25519_dalek::{Verifier, VerifyingKey};`) fires the
+  detector AND is a violation (blocklace is not allowlisted). The `dregg-tests` crate is heavy (links the
+  workspace) and its full `cargo test` build did not finish in-session; my test file is std-only so it cannot
+  introduce a compile error of its own — the standalone `rustc --test` run IS the executable proof.
+
+### NAMED — irreducible / owner-decisions (not fake-rigged)
+- **Pure-math carriers stay irreducible**: `SchnorrDLHard`, `Ed25519EufCma`, `ForkingExtractor` are correctly
+  Props whose negation is a solver — NOT test-riggable, and I did not fake-rig them. The validation question
+  for that class is "does the deployed Rust implement the scheme the carrier is about" — exactly the gap the
+  strict/non-strict drift sat in. This gate is one systematic answer for the ed25519 carrier.
+- **16 GRANDFATHERED sites owe an audit** (above). The high-suspicion convert-to-strict set is named; I did
+  not convert them because each needs a per-site key-source read + a crate build I could not all verify this
+  session (and `node/src/{relay_service,identity_export,api}.rs` carry the SAME native attacker-key shape but
+  `node` has a standing build blocker — `dregg-lean-ffi/build.rs` arity — so I did not blind-edit it).
+- **CI wiring**: the gate runs as a normal `dregg-tests` test (like `verify_routing_guard.rs`). I did NOT
+  wire it into `.github/workflows/ci.yml` — that file is held dirty by another lane. Supervisor: ensure the
+  `dregg-tests` test target runs in CI so this gate (and the routing guard) actually execute.
+
+**Files (mine, all clean on arrival — verified against the session-start dirty snapshot):**
+`blocklace/src/{evidence,finality,lib}.rs`, `dregg-agent/src/receipt.rs` (NOT its Cargo.toml — that was dirty,
+untouched), new `tests/tests/ed25519_strict_guard.rs`. **Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — board/lane-E (zero-use pub items) — 15 dead pub items DELETED (−796 LOC), one drifted MIRROR among them; 8 named-not-deleted incl. a doctest carrier my grep called dead
+
+**Method (the greps-lie discipline, mechanized then hand-verified):** enumerated 7,294 bare-`pub` items
+(5,995 unique names) across the 8 core crates, one repo-wide rg pass per name-chunk over ALL file types
+(tests/src + teasting/ are crates; sdk-ts/sdk-py bind rust — all included), per-line classified: def /
+`pub use` (NOT a consumer) / comment (NOT a use) / `impl Name` (the item's own body) / plain-`use`+everything-else
+(= consumer, conservative). 225 zero-use candidates survived (the board's 328 was a coarser count). Ranked
+by removable LOC (brace-matched spans incl. docs/attrs); every deletion target then got an individual
+`rg -n "\bname\b" .` whose full output was ONLY the def (+ doc mentions, each fixed) — recorded in-session.
+
+**DELETED (15 pub items, +3 private orphans the compiler/warnings named; net −796/+36 lines, all files
+clean-or-citation-only at edit time):**
+1. `RotatedParticipantLeg::mint_from_block_witnesses` (circuit-prove/joint_turn_aggregation.rs, 101 LOC) —
+   **a drifted MIRROR, not mere dead code**: `turn/rotation_witness.rs::mint_rotated_participant_leg`'s doc
+   claimed it "hands witnesses to the pure-circuit core" — it REIMPLEMENTS the body inline, and the dead
+   "core" hard-codes `None` where the live path threads `sender_membership_teeth(before_cell)` (its legs
+   would be REFUSED by the fold's membership arm on transfer turns). Same species as the deleted DslP3Air
+   shadow. Docs rewritten to the truth at rotation_witness.rs + the welded-mint sibling doc +
+   umem_boundary_producer.rs. RESIDUAL: `sdk/src/full_turn_proof.rs:1188` doc still cites the corpse —
+   file held dirty by another lane, not touched.
+2. `generate_extended_garbled_trace` (circuit/dsl/garbled.rs, 121) + 3. `comparison_records_to_extended`
+   (17) — the garbled-DSL prove side; nothing in-tree ever minted a garbled trace. garbled_air.rs's
+   deprecation note (which pointed users AT the deleted fn as the migration path) corrected.
+4. `generate_adjacency_trace` (circuit/membership_adjacency_air.rs, 109) + private `bit`/`col`/`walk`
+   helpers + 3 orphaned imports — the hand-rolled adjacency prove side (the emitted-descriptor path is the
+   live one; `verify_adjacency` untouched).
+5. `temporal_absence_dsl_circuit` + 6. `generate_temporal_absence_trace` (circuit/dsl/temporal_absence.rs,
+   72) — prove side; the witness types dregg-dsl-runtime re-exports stay.
+7. `generate_committed_threshold_trace` (circuit/dsl/committed_threshold.rs, 47) + its dsl/mod.rs re-export
+   (a re-export is not a consumer; both deleted).
+8. `Authorization::to_auth_kind` (turn/action.rs, 33) — an UNWIRED MIRROR of the permission lattice: the
+   real dispatch is `check_single_auth_requirement`'s direct match; the comment at executor/authorize.rs:218
+   cited `to_auth_kind() == Signature` as the mechanism — a citation lie, rewritten to name the real arm.
+9. `observe_vault_lock_consensus_anchored` (bridge/solana_relayer.rs, 28) — zero-caller vault wrapper whose
+   sibling doc called it "the production path" while production actually calls
+   `observe_lock_at_consensus_anchored` (:1558); the pinned-anchor security doc MOVED to the live method,
+   the test-gated weak variant's doc now points at the real production entry.
+10. `authorize_with_custom_rules` (bridge/authorize.rs, 25). 11. `compile_nor` + private `flip_predicate`
+   (circuit/predicate_program.rs, 104) — NOR was never reachable. 12./13. `deep_nested_gate_tree` /
+   `three_level_gate_tree` (circuit/dsl/predicates/compound.rs, 39). 14. `CanonicalCapTree::num_caps`
+   (circuit/cap_root.rs, 20; filter-semantics doc folded into `live_and_tombstones`).
+   15. `EpochMinter::estimated_annual_issuance` (turn/economics.rs, 18).
+
+**VERIFIED:** persvati `cargo check --workspace` (excl. `real-dungeon-service`, red from ANOTHER lane's
+in-flight `StepReceipt.decision_commitment` deepening — their fix sits dirty in-tree) → **Finished, ZERO
+errors/warnings in any file I touched** (all-targets pass too, see below). `mock_proof_purge_gate` → ok.
+
+**FALSE POSITIVES my scan produced — the method lesson, again:** (i) `sdk/cipherclerk.rs::_Marker` scored
+28 dead LOC — it is the `#[cfg(doctest)]` CARRIER of three `compile_fail` sealed-value gates; the doc
+comments ARE the test. A doc-comment-is-not-a-use heuristic calls the one construct whose docs are
+load-bearing "dead". Kept. (ii) My first import cleanup over-deleted `ColumnDef`/`ColumnKind` (rustc's
+unused list for a DIFFERENT file read as this file's) — the compiler caught it; trust rustc's file:line,
+not pattern-matched warning text.
+
+**NAMED, NOT DELETED (deliberate surface / ambiguous / held-dirty):**
+- `prove_{shielded_spend_root,caveat_admission,note_spend}_binding_node_segmented` (~270 LOC, zero use) —
+  each is a documented "ready consumer" of a NAMED VK-gated big-bang seam (ABI §4.1(b) exposure regen);
+  prepared machinery, not corpses. (Bridge sibling: file held dirty.)
+- `Turn::with_custom_program_proofs` (49) — the only correct attach-side packing for the live, hash-bound
+  `custom_program_proofs` wire field (`enforce_custom_effect_proofs` is the live verify side); every
+  in-tree producer writes `None`, so the FEATURE has no first-party producer — an owner question, not a
+  deletion.
+- `verify_presentation_nonce` (bridge/present.rs, 31) — documented challenge-response replay protection
+  that NOTHING calls, and the prover hard-codes `verifier_nonce = ZERO` ("TODO: accept from verifier
+  challenge") — the whole nonce mode is unbuilt; wire-or-retire is ember's call.
+- `CanonicalCapTree::delegation_witness` (26) — Phase-B2-documented staged machinery.
+- `dregg-sdk` surface left alone on principle (e.g. `derive_keypair_bip39_compat`, `plan_trustline`,
+  `explain_and_sign_turn`): SDK exports with zero in-tree callers may serve external consumers.
+- Held-dirty at arrival (zero-use but untouchable): `prove_bridge_binding_node_segmented` (86, joint_turn_recursive),
+  `derivation_authorizing_effects` (79) / `effect_action_binding` (46) / `rotated_prover_enabled` (20)
+  (sdk/full_turn_proof.rs), `verify_proof_carrying_turn_bundle_with_ledger` (40, executor/proof_verify.rs),
+  `is_known_dsl_air` (17, dsl/descriptors.rs), ivc.rs remnants. Mid-session real edits arrived in
+  presentation.rs (Lane B's TraceSummary rewrite) and witnessed_receipt.rs (phantom-`verifier`-cfg ungating),
+  so `PresentationBuilder`+3 helpers (~140) and `from_components_strict_recursive` (23) were dropped from
+  my delete set and belong to a later pass. Remaining ~200 candidates: scratchpad ranked.json (session dir).
+
+**PRE-EXISTING BREAKS SURFACED (not mine — proven against HEAD):** `--all-targets` shows
+`demo-agent/examples/garbled_ot_auction.rs` imports `prove_private_threshold_dsl`/`verify_private_threshold_dsl`
+and `private_auction.rs` imports `PredicateProof`/`prove_predicate`/`committed_threshold::prove_committed_threshold`
+— NONE of these exist anywhere at HEAD (`git show` grep = zero defs). Two more never-compiled examples of
+the "nobody ever compiled it" class. Also: **law1_enforcement_gate is RED independently of me** —
+`circuit/src/custom_leaf_lowering.rs` (46 NEW sites) was COMMITTED at `21e2c58d0` without a baseline story,
+and dirty `joint_turn_recursive.rs` grew 2→6 sites (another lane, in flight). My deletions only shrink
+listed files, which the ratchet explicitly allows.
+
+**Shared-tree note:** mid-session the tree went 155→684 dirty files (Lane D's mechanical
+`docs/*.md → .docs-history-noclaude/` citation sweep). For the 3 of my files carrying such diffs
+(action.rs, predicate_program.rs, rotation_witness.rs) I verified their changed lines (5, 3, 410/1484) are
+disjoint from my spans before editing. **Committed NOTHING — supervisor gates.**
+
+
+## 2026-07-17 — board/lane-B — the "constraint PROVER" that proves nothing is renamed to VALIDATOR; consumer census found ZERO surfaces treating its digest as a proof
+
+**Verdict from CODE (not comments): `constraint_prover.rs` is an HONEST LOCAL VALIDATOR with a lying NAME.**
+Its own doc (:5-8) already confessed "a trace digest ... **not** a cryptographic proof ... nothing here is
+sound against a prover that lies." The lane question was whether any real consumer treats its output as a
+PROOF. Answer, from a full workspace census (no `/tests/`-exclusion this time — `tests/src` IS the
+`dregg-tests` crate): **nobody does.** So the fix is the `*_air`-on-a-non-AIR fix — make the NAME tell the
+truth — not a rewire, because there was no lie in the wiring, only in the identifiers.
+
+### The consumer census (every non-comment ref to `ConstraintProver`/`ConstraintProof`/`generate*`)
+- **`ConstraintProver::verify` / `verify_trace`** — a row-by-row AIR constraint check on a caller-supplied
+  trace. Real callers: `circuit/src/presentation.rs` (`PresentationAir::prove`/`verify_all`),
+  `circuit/src/tests.rs`, `bridge/src/present.rs` + `bridge/src/tests.rs` (both `#[cfg(test)]`),
+  `tests/src/soundness.rs`. **Every one is legitimate LOCAL validation** — prover-side witness sanity or a
+  test exercising an AIR's constraint set. None is a cross-trust-boundary "verify".
+- **`ConstraintProof` (the digest struct)** — appears ONLY inside `PresentationProof.{fold_proofs,
+  derivation_proof, issuer_membership_proof}`, which rides `WirePresentationProof` on the wire. I traced
+  ALL production verifiers of that wire: `dregg_bridge::present::{verify_proof_complete,
+  verify_presentation_full, verify_presentation_bb, verify_presentation_complete}`. **Not one reads a
+  `trace_digest`.** They require + cryptographically verify the SEPARATE `real_stark_proof` descriptor
+  wires (`verify_descriptor_wire` → `descriptor_by_name` → `verify_vm_descriptor2`), and read only
+  `circuit_proof.public_inputs` as metadata to bind against the STARK's own PIs. `is_valid()`
+  (`present.rs:334`) rests solely on `real_stark_proof.is_some() && verification==Valid`. The digest is
+  DEAD METADATA. (The wire even carries a self-labelled `AUDIT[P3]` footgun — a prover-set `verification`
+  field — and the audit note already confirms `verify_proof_complete` ignores it.)
+- **`generate_unchecked`** — one caller: `PresentationAir::prove` for issuer membership (the witness uses a
+  different hash than `MerkleAir`, so the local check is deliberately skipped; the real check is the
+  Poseidon2 STARK). Honest.
+- **`ProofTier::Structural` / `constraint_prover_tier()` / `CONSTRAINT_PROVER_BACKEND`** — the tier that
+  named this a "backend." **Zero callers** for the fn and the const (grep-confirmed).
+- **`PresentationProof::verify` (the plaintext meta-check)** — **zero production callers** (only
+  `circuit/src/tests.rs`). It compares prover-authored PIs against each other; a lying prover satisfies it
+  trivially. Left in place, doc corrected to say NOT-cryptographic + zero-production-callers.
+
+### FIXED (rename to honest names; the artifact is byte-identical, only identifiers changed)
+- `circuit/src/constraint_prover.rs`: `ConstraintProver → ConstraintValidator`, `ConstraintProof →
+  TraceSummary`; module + type docs rewritten to state plainly it is LOCAL validation with no adversarial
+  soundness and that no workspace verifier reads the digest. Deleted the dead `ConstraintProof::verify`
+  (renamed to `TraceSummary::public_inputs_match` — it was a plaintext PI compare misnamed "verify") and
+  the unused `proof_size_display`. Legacy `type` aliases (`ConstraintProver`/`ConstraintProof`/`Mock*`)
+  kept `#[doc(hidden)]` ONLY because `circuit/src/lib.rs` (held dirty by another lane) re-exports them by
+  name — retire the aliases when lib.rs is free.
+- `circuit/src/presentation.rs`: migrated to the new names; `PresentationProof` struct doc now states the
+  three fields are NOT proofs and names where the real crypto lives; `prove`/`verify_all`/`verify` docs
+  corrected from "prove/verify" to "locally validate/summarize."
+- `circuit/src/proof_tier.rs`: DELETED `constraint_prover_tier()` + `CONSTRAINT_PROVER_BACKEND` (zero
+  callers, and they advertised the validator as a proof backend); `Structural` tier doc now says no live
+  producer constructs it.
+- Test-mod consumers migrated: `circuit/src/tests.rs` (`mock_prover::MockProver` → `ConstraintValidator`),
+  `bridge/src/present.rs` + `bridge/src/tests.rs` (`ConstraintProver::verify` → `ConstraintValidator`).
+
+### RATCHET lowered + PROVEN TO BITE
+`circuit-prove/tests/mock_proof_purge_gate.rs`: widened `count_mock_sites` to count BOTH `ConstraintProof`
+(surviving alias) AND the new `TraceSummary` (identical artifact, so the gate cannot be dodged by the
+rename), and SHRANK the `constraint_prover.rs` baseline **17 → 15** (dead `proof_size_display` gone). Module
+doc updated to record the rename + the census verdict.
+- **Bite proof**: dropped a scratch `circuit/src/zz_lane_b_bite_probe.rs` containing the string
+  `"TraceSummary"` → gate went RED: `NEW production surface rides a MOCK prover: .../zz_lane_b_bite_probe.rs
+  (1 sites)`. Removed the probe → GREEN again. The widened pattern set is what makes the rename un-dodgeable.
+
+### VERIFIED (persvati `srot`)
+- `cargo test -p dregg-circuit --lib constraint_prover::tests` → **4 passed** (renamed
+  `constraint_validator_*` + `trace_summary_*`).
+- `cargo test -p dregg-circuit --lib tests::` → all presentation/fold/merkle/e2e tests pass
+  (`end_to_end_authorization_proof`, `long_attenuation_chain`, `single_step_no_attenuation`, etc.) — the
+  `verify_all`/`prove`/`verify` path through the renamed validator.
+- `cargo test -p dregg-bridge --lib present::tests` → **21 passed** (the presentation build/verify surface).
+- `cargo check -p dregg-bridge --all-targets` → **Finished** (clean); `cargo check -p dregg-tests
+  --all-targets` → **Finished**.
+- `mock_proof_purge_gate` → **ok**; bite-probe RED-then-GREEN as above.
+
+### NOT MY BREAKAGE (named, other lanes' in-flight descriptor rename)
+Pre-existing failures NOT caused by this rename (a semantically inert identifier change cannot alter a
+descriptor identity string or Ethereum calldata):
+- `circuit` lib: `effect_vm_descriptors::tests::provenance_json_pins_match_checked_in_descriptor_bytes` —
+  `circuit/src/effect_vm_descriptors.rs` is DIRTY (another lane); descriptor-sha256 pin drift.
+- `bridge` lib: `present::ir2_issuer_wire_roundtrip::*` (3) assert descriptor identity
+  `"merkle-membership::poseidon2-4ary-general-depth4"` but code now emits
+  `"dregg-merkle-membership-4ary-general::v1"` — a descriptor-name rename in flight elsewhere; and
+  `ethereum::tests::real_fixture_settle_calldata_matches_foundry_ground_truth` (calldata ground-truth).
+  None touch `constraint_prover`/`presentation` type names.
+
+### SKIPPED as dirty (reported, not edited)
+`circuit/src/lib.rs` (held dirty; still re-exports the legacy `ConstraintProof`/`ConstraintProver`/`Mock*`
+names — kept working via the doc-hidden aliases), `circuit/src/dsl/mod.rs` +
+`circuit/src/membership_adjacency_air.rs` (a dead-code-removal lane, briefly broke the circuit build
+mid-session then settled), `circuit/src/effect_vm_descriptors.rs`. `tests/src/soundness.rs` uses
+`mock_prover::MockProver` but is gated behind the `__legacy_tests` feature (declared in `tests/Cargo.toml`
+but never enabled — the module NEVER COMPILES, a separate known husk; the `RemovedFact` fields it
+constructs (`membership_verified`, no `added_checks_commitment`) do not even match the real struct). Left
+untouched; the doc-hidden `MockProver` alias keeps it name-resolvable if that feature is ever turned on.
+
+**Committed NOTHING — supervisor gates.**

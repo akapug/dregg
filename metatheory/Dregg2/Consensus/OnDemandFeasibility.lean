@@ -1,6 +1,6 @@
 /-
 # Dregg2.Consensus.OnDemandFeasibility — the afternoon-sized soundness core of
-# CONSENSUS-ON-DEMAND (`docs/CONSENSUS-FLEX.md`), proved; the wave obligations named.
+# CONSENSUS-ON-DEMAND (`.docs-history-noclaude/CONSENSUS-FLEX.md`), proved; the wave obligations named.
 
 **The thesis this serves.** Total order (tau) is a special case the system overpays for:
 the blocklace gives causal order free (`Coord/CausalOrder`, `LaceMerge`), and the

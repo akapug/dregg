@@ -31,3 +31,6 @@ blake3 = "1"
 [[bin]]
 name = "deos-core-smoke"
 path = "src/main.rs"
+
+[lints]
+workspace = true

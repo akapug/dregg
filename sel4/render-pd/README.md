@@ -11,7 +11,7 @@ persvati (the off-VM bake host) into a std-on-seL4-musl PD. The render-PD is the
 **executor-rootserver profile** (root-task-with-std + `sel4-musl`), NOT the
 `#![no_std]` deos-image PD — lavapipe needs mmap/threads/getenv/W^X-JIT, the
 heavy OS surface the executor-PD already proved a seL4 PD can host
-(`docs/EMBEDDABLE-LEAN-RUNTIME.md`).
+(`.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md`).
 
 ## THE GATE — `scripts/build-llvm-elf.sh` then `scripts/build-mesa-lavapipe-elf.sh`
 

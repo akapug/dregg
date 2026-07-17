@@ -23,7 +23,7 @@
 
 > ⚑ POST-COMPACT: read `HORIZONLOG.md` → the "POST-COMPACT ORIENTATION (2026-06-21)" entry FIRST — it carries the
 > live 8-agent swarm roster, the held-welds-to-bank, the Track-1 queue (the revokeCapability #1 route-FORGE is the
-> top soundness pickup), the 3 irreducible floors, and the Track-2 capacity status. `docs/SAFELY-LIVE-CHECKLIST.md`
+> top soundness pickup), the 3 irreducible floors, and the Track-2 capacity status. `.docs-history-noclaude/SAFELY-LIVE-CHECKLIST.md`
 > is the goal's mechanical audit. Two tracks, SAME bar: VERIFIED-working (passing forge-rejection / mutation-red apex
 > / end-to-end test), never named-or-designed. A green only counts if it reds when the thing it guards breaks.
 
@@ -65,18 +65,18 @@ not durable across compaction; the log is the burn-down. Sweep it at every Conve
 
 ## Where everything is
 
-- **The epoch design**: `docs/REFINEMENT-DESIGN.md` — five decisions: THE HEAP
+- **The epoch design**: `.docs-history-noclaude/REFINEMENT-DESIGN.md` — five decisions: THE HEAP
   (registers + openable sorted-Poseidon2 map; reuses proven cap_root gadgets; the write
   verb's spec always said "heap"; ONE rotation bundles registers-16/heap_root/signed-
   wells/RESERVED-removal/column-compaction/genesis+fee fixes), IDENTITY = a governance
   cell, cells=law/agents=will/receipts=nervous-system, cross-cell reads = verified
   observations, SDK → two nouns + authorization inescapable. Waves R2→R4 sequenced.
-- **The language design**: `docs/CELL-PROGRAM-LANGUAGE.md` (the expressiveness uplift).
-- **The DSL convergence**: `docs/DSL-ALIGNMENT.md` + its AMENDMENT (law #1 applied).
-- **Proof economics**: `docs/PROOF-ECONOMICS.md` (when the lane lands).
-- **The dreggrs boundary**: `docs/DREGGRS-SEGREGATION.md` (note: its "kimchi from_dsl
+- **The language design**: `metatheory/docs/CELL-PROGRAM-LANGUAGE.md` (the expressiveness uplift).
+- **The DSL convergence**: `.docs-history-noclaude/DSL-ALIGNMENT.md` + its AMENDMENT (law #1 applied).
+- **Proof economics**: `.docs-history-noclaude/PROOF-ECONOMICS.md` (when the lane lands).
+- **The dreggrs boundary**: `.docs-history-noclaude/DREGGRS-SEGREGATION.md` (note: its "kimchi from_dsl
   load-bearing" claim was corrected by the DSL census — the feature is enabled nowhere).
-- **The substrate record**: `docs/DREGG3.md` (+ MARATHON), the kernel = 8 verbs in
+- **The substrate record**: `.docs-history-noclaude/DREGG3.md` (+ MARATHON), the kernel = 8 verbs in
   `metatheory/Dregg2/Substrate/VerbRegistry.lean` (minimality/completeness theorems).
 - **Hands-on**: `QUICKSTART.md` (every command verified live).
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
@@ -337,7 +337,7 @@ obligations: translation-validation of `dregg-lean-ffi/src/marshal.rs` as a THEO
 encodeWWire ∘ lift`, the codec-in-TCB seam; + the Lean→C/`.a` link correspondence that the linked
 `libdregg_lean.a` IS the `@[export]`ed Lean. Stage 0 = invert `turn/src/lean_apply.rs:~1143` to make Lean
 authoritative, "no new mathematics"). devnet-golden **CLOSE** — the node commits at n>1; the redeploy is
-held for ember. The forward work is captured in **`docs/NEXT-WAVE.md`** (ready-to-fire, each with its lever).
+held for ember. The forward work is captured in **`.docs-history-noclaude/NEXT-WAVE.md`** (ready-to-fire, each with its lever).
 
 ## ⚑⚑⚑ (SUPERSEDED ↑) CURRENT STATE (2026-06-13 LATE — head `d4adcc765`, Opus 1M; the REFINEMENT BRAID — 5 commits banked, cutover at C4, notify FINISHED)
 
@@ -347,18 +347,18 @@ ember's mode: **BRAIDS not waves** ([[feedback-braids-not-waves]]) — finish a 
 - `d51dc74df` **cross-cell imports** (`Authority/CrossCellImport.lean` — gap 6, "the deepest naturalness gap", DISSOLVED: an import cites a source receipt + the value its field held there; the crown `importValid_stable_under_source_advance` proves a past-snapshot import is I-CONFLUENT where a live read is not; tamper-evidence inherited from `Exec.Receipt.chain_tamper_evident`, HInj/HFresh stay named hyps) + **2 real integrator-wedge apps** (`Apps/{AgentOrchestrationBudget,EscrowDeskCouncil}.lean` — the six primitives buildr/builders/sig/simbi hand-roll, lamesauce refuted, teeth both polarities).
 - `d70046a88` + `bae653495` **CUTOVER C4**: the two recursion consumers + the FLOW-B SDK leg rewired onto the rotated leaf-wrap; the **bilateral aggregation AIR EMITTED FROM LEAN** (`Circuit/Emit/EffectVmEmitBilateralAgg.lean` + a NEW two-row `windowGate` IR-v2 primitive in `DescriptorIR2.lean`; soundness teeth `agg_rejects_turn_mismatch`/`agg_rejects_bad_agent_count`).
 - `3ffc3af0c` **cell-program language atoms** (`Exec/Program.lean`: `senderMemberOf` + `affineDeltaLe` + `balanceDeltaLe/Ge` — the apps-surfaced expressiveness; the flash-well `BalanceDeltaGte` twin now landed).
-- `d4adcc765` **NOTIFY STEP 2 FINISHED** (staged — VK **BYTE-IDENTICAL**, no cap emits `[.notify]` yet): the `Auth.notify` ctor (`Authority/Positional.lean`) + α total on all 7 seL4 IPC authorities + NotifyAuthority re-bound onto the real Auth (`notifyCap_confers_no_edge`) + the full ripple (rise-to-the-claim: found 2 "every Auth" sites the divergence-finding missed) + `Firmament/SeL4Composition.lean` (a dregg turn in a PD preserves BOTH the seL4 cap-space invariant AND dregg non-amp, same grantOk witness). The VK-touching tail (cap-leaf badge-mask + verifier re-pin) rides the cutover's ONE VK epoch — `docs/NOTIFY-STEP2-VK-CHECKLIST.md`.
+- `d4adcc765` **NOTIFY STEP 2 FINISHED** (staged — VK **BYTE-IDENTICAL**, no cap emits `[.notify]` yet): the `Auth.notify` ctor (`Authority/Positional.lean`) + α total on all 7 seL4 IPC authorities + NotifyAuthority re-bound onto the real Auth (`notifyCap_confers_no_edge`) + the full ripple (rise-to-the-claim: found 2 "every Auth" sites the divergence-finding missed) + `Firmament/SeL4Composition.lean` (a dregg turn in a PD preserves BOTH the seL4 cap-space invariant AND dregg non-amp, same grantOk witness). The VK-touching tail (cap-leaf badge-mask + verifier re-pin) rides the cutover's ONE VK epoch — `metatheory/docs/NOTIFY-STEP2-VK-CHECKLIST.md`.
 
 **LIVE BRAID (running):** cutover-tail relaunch (`a99329b58` — the bilateral Rust interpreter [decode `windowGate` + restructure the WR 49-felt schedule block + rewire `aggregate_bilateral_prover.rs`, retire `bilateral_aggregation_air.rs`] + node FLOW-B producer threading + the ~70 call-sites → C5 regen → **C7 delete v1 + grep-zero**; C5/C7 = the coordinated VK-epoch **SETTLE the main loop runs**, batching notify's felt-encoders) · apps-round-2 (rebuild weak toy apps on the new expressiveness).
 
 **HELD for the cutover-settle:** starbridge-v2 **A2 swarm surface** (`swarm.rs` — the notify async edge; blocked ONLY by the known **p3-recursion fork seam** — starbridge-v2 + sel4 are separate workspaces lacking the breadstuffs `[patch]`; fix = push the fork `72ffc56` + retarget revs + drop the local patch) · the notify VK-batch · the dead-pg-dregg-agent draft (pg-dregg M3 is post-flip anyway, but M2+Tier-C are LIVE on pg18).
 
-**THE l4v ROADMAP (post-cutover, `ASSURANCE-CRITIQUE.md` §5):** the Lean composition is strong (`deployed_system_secure` apex; unfoolability derives conservation). The distance to l4v-grade is the **binary bridge** — **Stage 0 = make the verified executor authoritative (invert `turn/src/lean_apply.rs:1143`, "no new mathematics")**; Stages 1-6 = spec→binary refinement / discharge `leaf_sound` / tie the apex to one turn / native UC / n>1 consensus (**S5-1** = the gossip-dissemination blocker, `docs/STAGE5-CONSENSUS-DEVAC.md`) / config-pin the crypto floor. seL4 step-4 is DONE (the verified executor runs a turn inside a booted PD).
+**THE l4v ROADMAP (post-cutover, `ASSURANCE-CRITIQUE.md` §5):** the Lean composition is strong (`deployed_system_secure` apex; unfoolability derives conservation). The distance to l4v-grade is the **binary bridge** — **Stage 0 = make the verified executor authoritative (invert `turn/src/lean_apply.rs:1143`, "no new mathematics")**; Stages 1-6 = spec→binary refinement / discharge `leaf_sound` / tie the apex to one turn / native UC / n>1 consensus (**S5-1** = the gossip-dissemination blocker, `.docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md`) / config-pin the crypto floor. seL4 step-4 is DONE (the verified executor runs a turn inside a booted PD).
 
 ## ⚑⚑⚑ (SUPERSEDED ↑) CURRENT STATE (2026-06-13, head db046eaf2 — Opus, +20 commits; CUTOVER C1+C2 LANDED · C3 WALLED+SCOPED · REORIENTING TO THE DESKTOP-MESHING DEVNET)
 
 A long brave-fanout continuation (~18 commits, persvati-gauntlet-green incl. the v8→v9 cap-crown ripple).
-Landed: the Gerwin-Klein critique (`docs/ASSURANCE-CRITIQUE.md`) + **Klein CRITICAL-2 (wire codec) CLOSED both
+Landed: the Gerwin-Klein critique (`.docs-history-noclaude/ASSURANCE-CRITIQUE.md`) + **Klein CRITICAL-2 (wire codec) CLOSED both
 halves** (Lean `Refine.lean` export-refines-model + the Rust marshaller conformance-gated to the proof); the
 composed `deployed_system_secure` apex + conserves-from-verification (#2/#3); **cap-crown #103 finished as the
 cutover gate** — RevokeCapability graduated (in-circuit non-amp + cell-TOMBSTONE binding; cap-root v2→v3,
@@ -366,7 +366,7 @@ commitment v8→v9) + Custom graduated via a new **`ProofBind` recursive-binding
 RESIDUE IS EMPTY** (all ~36 effects rotate); **the verified Lean executor RUNS a real turn on aarch64**
 (`3f188ef60` — ELF Lean runtime from lean4@d024af099, status:2 accepted, anti-ghost holds; remaining = host on
 the seL4 root-task-with-std substrate); an n=3 consensus slice runs the ordering rule (frontier = gossip
-dissemination, `docs/STAGE5-CONSENSUS-DEVAC.md`); pg-dregg PgSink + starbridge cipherclerk/⌘K-palette.
+dissemination, `.docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md`); pg-dregg PgSink + starbridge cipherclerk/⌘K-palette.
 
 ⚑⚑ THE CUTOVER — C1+C2 LANDED (`0db2e44e8`), C3 IS A REAL WALL (the recursion knot), and its closure lane is RUNNING.
 The rotated path is PROVEN end-to-end (all 36 effects rotate; residue EMPTY) and the sovereign matched pair is
@@ -403,7 +403,7 @@ Resumed post-compaction; landed 8 commits by file set (each narrow-verified):
 `34dbca54a` starbridge-v2 coverage · `29c51bde3` metatheory assurance frontiers + Klein #2/#3
 (composed `deployed_system_secure` apex; conserves-from-verification — `StateChained` derived now;
 the macaroon↔kernel-cap arrow `chainGateG⇒capAuthorityG`; host-correspondence) · `84e4409db` the
-Gerwin-Klein assurance critique (`docs/ASSURANCE-CRITIQUE.md` — the deliverable; honest verdict:
+Gerwin-Klein assurance critique (`.docs-history-noclaude/ASSURANCE-CRITIQUE.md` — the deliverable; honest verdict:
 abstract kernel sound / deployed-binary bridge unverified / NOT l4v-grade; §4 = a 16-item TCB
 manifest; §5 = closure roadmap Stages 0-6) · `5df9a091a` flip G3 (r23 full-authority digest — a
 real soundness fix) · `59eef48dd` flip G4 (cohort-general generator) · `231c70c39` pg-dregg M2
@@ -462,7 +462,7 @@ firmament, paper) AND forced a TOY AUDIT that found a real recurring failure:
 ember (2026-06-13): "we need to DEFINITELY figure out how to actually integrate these major
 foundational aspects of the token/authorization model... we're supposed to have a dual
 multiaspect **biscuit/macaroon/cap/zk**... something was missing somewhere and never worked
-out enough." The cipherclerk audit (`docs/CIPHERCLERK-AUDIT.md`, `4bfbdef79`) found the seam:
+out enough." The cipherclerk audit (`.docs-history-noclaude/CIPHERCLERK-AUDIT.md`, `4bfbdef79`) found the seam:
 the agent MACAROON layer (federation-membership tree) and the kernel CAP-CROWN (in-circuit
 c-list `granted⊆held`, #103) are UNINTEGRATED — a token authorizes at the macaroon layer while
 the cap-root knows nothing; non-amplification is told as TWO informal stories, not one proven
@@ -470,7 +470,7 @@ arrow. ⚑ ember GUARDRAILS (do not violate): (1) it's FOUR aspects, not "two tr
 — integrate, don't reduce; (2) **the cipherclerk IS a sovereign executor BY DESIGN** ("someone
 needs to execute sovereign nodes, that's where they go") — the "overloaded clerk, split it"
 audit point is RETRACTED; (3) DON'T prematurely foreclose what's been built. Study →
-`docs/AUTHORIZATION-MODEL.md` (the 4-aspect map + recovered intent + seam diagnosis + staged
+`.docs-history-noclaude/AUTHORIZATION-MODEL.md` (the 4-aspect map + recovered intent + seam diagnosis + staged
 integration). This is the deepest open thread. Possible convergence extends #103.
 
 ### Commits since the 14-landing block (15→32)
@@ -613,7 +613,7 @@ the current green system modestly. Do NOT attempt the flip until G1+G3 are built
 - **pg-dregg M1** (postgres RLS extension; STANDALONE workspace `pg-dregg/`, own target —
   no ./target contention). ember decisions baked: INSTANT revocation in the default path
   (verified-credential LRU mandatory), credential-path leads, FFI-Lean tier deferred.
-  Proposal already committed `bfe802c1b` (docs/PG-DREGG.md). Two-mode build: `cargo test`
+  Proposal already committed `bfe802c1b` (.docs-history-noclaude/PG-DREGG.md). Two-mode build: `cargo test`
   core (no pg) + `cargo pgrx` extension.
 - **starbridge-v2 → THE MASTER INTERFACE** (ember reframe): REVERSES the scaffold's thin-
   client decision — now EMBEDS the real verified executor + is comprehensive for ALL data &
@@ -635,7 +635,7 @@ ember decided: (1) #93 = NOT close — AUTOMATE the assert_axioms verbosity (a T
 byte-pinned); (3) next wave = ALL fronts incl. lean-side HORIZONLOG followups.
 RUNNING: THE FLIP (a1e5cf2 — owns circuit/ + metatheory/{Circuit,Exec} + turn/ producers;
 builds the deferred cells_root/iroot/lifecycle-epoch producers, regen-to-default, VK bump,
-v1→dormant-or-deleted; the cutover commit-train, docs/ROTATION-CUTOVER.md) · DreggDL/
+v1→dormant-or-deleted; the cutover commit-train, .docs-history-noclaude/ROTATION-CUTOVER.md) · DreggDL/
 dregg-deploy (the checkable-deployment-spec synthesis) · persist snapshot-shipping ·
 demo receipt-chain modernization (pre-existing example rot, marketing-facing) ·
 assert_axioms ergonomics (the #93 transform). HELD until the flip lands (collide w/ its
@@ -661,7 +661,7 @@ OWN narrow build (verification economy), lander commits by file set:
 - Apps up-to-snuff + one new organ-composing verified app (starbridge-apps/ → /tmp/apps-lane.log)
 - Protocol/network/persist/storage enhancement catalog + 1 concrete win (/tmp/protocol-lane.log)
 ROUND 8 gauntlet still validating the converged tree (persvati). STILL PENDING (ember
-reminder): the rotation FLIP + its preidentified followups (docs/ROTATION-CUTOVER.md);
+reminder): the rotation FLIP + its preidentified followups (.docs-history-noclaude/ROTATION-CUTOVER.md);
 devnet redeploy (low-priority).
 
 ## ⚑⚑ OPUS LANDING COMPLETE (2026-06-12 night — all 13 full-burn lanes home, head 5bf7adda3)
@@ -680,7 +680,7 @@ unverified Fable drafts carried (flash-well laundered-vacuity refusals; channels
 determinism test; ecvrf RFC nibble typo; dregg-query serde tag collision; ocapn dial claim).
 NEXT: ROUND 8 gauntlet on persvati (the converged tree's full validation + the python-lean
 ELF proof + the DKG/KERI/roster e2e in a lock-free window) → the rotation FLIP when ready
-(docs/ROTATION-CUTOVER.md, both wire-shapes staged + R=24 confirmed) → deploy.
+(.docs-history-noclaude/ROTATION-CUTOVER.md, both wire-shapes staged + R=24 confirmed) → deploy.
 
 ## ⚑⚑ OPUS RELAUNCH (2026-06-12 night, head 6f13c22dd — Fable sealed by export directive; Opus is the lander)
 
@@ -729,7 +729,7 @@ the working tree. Land by file set, spot-check seconds-scale, push, sweep HORIZO
 - Argus R1/R2 Boundary arm → /tmp/argus-r1r2-lane.log (lean_descriptor_air.rs + differential)
 - preflight failure names → /tmp/preflight-names.log (rerun preflight after the PI fix 26b452772)
 Decided: NUM_REGISTERS=24 (cutover pre-gate 1 ✓). The work queue = HORIZONLOG.md.
-Cutover = docs/ROTATION-CUTOVER.md. Deploy next week, pug-handoff bar in HORIZONLOG.
+Cutover = .docs-history-noclaude/ROTATION-CUTOVER.md. Deploy next week, pug-handoff bar in HORIZONLOG.
 
 ## ⚑⚑ UNCOMMITTED LOCAL TREE STATE (2026-06-11 late — READ BEFORE ANY `git add`)
 
@@ -759,7 +759,7 @@ blanket `git add`. Land each cleanly by its OWN file set:
 
 ## ⚑ EPOCH STATUS (2026-06-12 — GATE 0 GREEN, executor heap wired, flag-day deferred)
 
-THE EPOCH (docs/EPOCH-DESIGN.md) — boundary/interior proving. LANDED + pushed:
+THE EPOCH (.docs-history-noclaude/EPOCH-DESIGN.md) — boundary/interior proving. LANDED + pushed:
 - `6f23f5467` **foundations** (Lean): Blum MemoryChecking (memcheck_sound),
   DescriptorIR2 (the five tables), EffectVmEmitV2 re-anchor (graduateV1
   sound/complete/faithful + Attenuate = cap-crown phase-B circuit leg), MMR
@@ -869,14 +869,14 @@ phase COMPLETE + COMMITTED; interpreter + regen hit the session limit.
   composite gates, polis actor-bound approvals). Verify: `cargo test -p dregg-cell
   --lib`; factory_settlement_e2e + both polis e2e; producer gauntlet
   `--features lean-shadow`; `lake build Dregg2 Dregg2.Claims Dregg2.AssuranceCase`.
-  Commit: docs/CELL-PROGRAM-LANGUAGE.md + cell/turn/metatheory/polis/sdk.
+  Commit: metatheory/docs/CELL-PROGRAM-LANGUAGE.md + cell/turn/metatheory/polis/sdk.
   **At landing, check against law #1** (its Rust-grammar+Lean-mirror shape is
   transitional; the doc must state the Lean-emission end state).
 - `a4060c207b1781aae` **devnet quality #159**. Verify: node bins + gauntlet. Commit:
   node/ + marshal. Then instance redeploy `GATEWAY_ONLY=1 bash deploy/aws/update.sh`
   (PATH needs ~/.cargo/bin) + live has_proof:true evidence.
 - `ad69cb706450d0fa9` **proof economics #161**. Verify measurements are real (no toy
-  substitutes). Commit: docs/PROOF-ECONOMICS.md + any free-win config.
+  substitutes). Commit: .docs-history-noclaude/PROOF-ECONOMICS.md + any free-win config.
 - (DSL census #162 LANDED: `f2af0f2f0` + amendment `32537eeda`.)
 
 ## The board after the lanes (tasks #149–#163 hold details)

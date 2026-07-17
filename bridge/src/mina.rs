@@ -11,7 +11,7 @@
 //! Kimchi circuit, wrapped via Pickles into a Mina zkApp proof) was REMOVED
 //! with the kimchi/pickles backend family: its pickles step never verified the
 //! Kimchi proof in-circuit, so the recursion was vacuous scaffolding — see
-//! `docs/PROOF-ECONOMICS.md` §4. A proof-carrying Mina bridge would need a
+//! `.docs-history-noclaude/PROOF-ECONOMICS.md` §4. A proof-carrying Mina bridge would need a
 //! real (audited) in-circuit verifier; until then this module is honest about
 //! being binding-commitment + relay-liveness only.
 //!

@@ -1,7 +1,7 @@
 //! umem: THE EXECUTOR-STATE BRIDGE — the live executor's state as a view of the ONE
 //! universal map, and the live executor's turn as a Blum memory-op trace.
 //!
-//! The universal-map rotation's long pole (`docs/UNIVERSAL-MAP-ROTATION.md` §2.3/§3:
+//! The universal-map rotation's long pole (`.docs-history-noclaude/UNIVERSAL-MAP-ROTATION.md` §2.3/§3:
 //! "the 3-verb executor-state bridge: RecordKernelState → the ONE map"). This module is
 //! the Rust half of the bridge whose Lean keystone is
 //! `metatheory/Dregg2/Exec/UniversalBridge.lean` (`uproj` + the three

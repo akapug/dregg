@@ -16,7 +16,7 @@
 //!   4. TEETH: a tampered installed value REFUSES (the boundary no longer balances).
 //!
 //! VK-RISK-FREE: this touches no registry/VK/deployed-prover routing. The deployed rotated prover
-//! (`prove_effect_vm_rotated_ir2_with_caveat` / `mint_from_block_witnesses`) still passes
+//! (`prove_effect_vm_rotated_ir2_with_caveat` / `rotation_witness::mint_rotated_participant_leg`) still passes
 //! `::default()` — the prover-switch is the next sequenced, gated step.
 
 use std::sync::atomic::Ordering;

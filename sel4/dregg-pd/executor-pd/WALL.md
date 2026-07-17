@@ -1,6 +1,6 @@
 # The executor-PD wall — PASSED, and step 4 DONE: the verified executor runs INSIDE seL4
 
-*The firmament's one true blocker (docs/FIRMAMENT.md §6, §7) — the ELF Lean
+*The firmament's one true blocker (.docs-history-noclaude/FIRMAMENT.md §6, §7) — the ELF Lean
 runtime — is BUILT, the VERIFIED executor runs one real turn through
 `dregg_exec_full_forest_auth` on aarch64-linux-musl, AND (step 4) that turn now
 runs INSIDE a real seL4 protection domain booted under qemu-system-aarch64,

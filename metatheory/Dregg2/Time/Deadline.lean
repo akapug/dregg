@@ -1,8 +1,8 @@
 /-
 # Dregg2.Time.Deadline — the `Deadline` sum type (causal vs frame, FORCED) + the commit-wait bridge.
 
-The §4 innovation made syntactic (`docs/rebuild/INTENT-AS-CO-RECEIPT.md`,
-`docs/rebuild/INTENT-REFS-time.md`): a deadline language must FORCE the causal-vs-frame distinction
+The §4 innovation made syntactic (`.docs-history-noclaude/rebuild/metatheory/INTENT-AS-CO-RECEIPT.md`,
+`.docs-history-noclaude/rebuild/metatheory/INTENT-REFS-time.md`): a deadline language must FORCE the causal-vs-frame distinction
 at the type level. You cannot write a deadline without declaring whether it is a **lightcone FACT**
 (`causalAfter`, frame-invariant, no trust — `Dregg2/Time/Causal.lean`) or a **frame CONVENTION**
 (`frameWithin`, an attested predicate with explicit skew `±δ` — `Dregg2/Time/Frame.lean`). A court

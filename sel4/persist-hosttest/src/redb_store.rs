@@ -22,7 +22,7 @@
 //!
 //! After `commit()` returns, the turn is durable: a crash cannot lose it and cannot
 //! leave it half-written (redb is ACID — the txn either fully commits or not at
-//! all). That is the `n = 1` synchronous commit (`docs/FIRMAMENT.md` §3) realized.
+//! all). That is the `n = 1` synchronous commit (`.docs-history-noclaude/FIRMAMENT.md` §3) realized.
 //!
 //! # The block-device seam — WHY this ports to seL4 with the gate UNCHANGED
 //!
@@ -65,16 +65,14 @@ use crate::commit_store::{ChainRefusal, CommitRecord, GENESIS_ROOT};
 /// `n` turns committed before it.
 const COMMIT_LOG: TableDefinition<u64, &[u8]> = TableDefinition::new("commit_log");
 /// turn_hash -> ordinal (`tables::IDX_TURN_BY_HASH`).
-const IDX_TURN_BY_HASH: TableDefinition<&[u8; 32], u64> =
-    TableDefinition::new("idx_turn_by_hash");
+const IDX_TURN_BY_HASH: TableDefinition<&[u8; 32], u64> = TableDefinition::new("idx_turn_by_hash");
 /// receipt_hash -> ordinal (`tables::IDX_RECEIPT_BY_HASH`).
 const IDX_RECEIPT_BY_HASH: TableDefinition<&[u8; 32], u64> =
     TableDefinition::new("idx_receipt_by_hash");
 /// Store-level counters (`tables::METADATA`). The durable cursor lives here.
 const METADATA: TableDefinition<&str, u64> = TableDefinition::new("metadata");
 /// 32-byte metadata (`tables::METADATA_BYTES`) — the durable chain head.
-const METADATA_BYTES: TableDefinition<&str, &[u8; 32]> =
-    TableDefinition::new("metadata_bytes");
+const METADATA_BYTES: TableDefinition<&str, &[u8; 32]> = TableDefinition::new("metadata_bytes");
 
 /// The durable cursor key (`persist`'s `META_COMMIT_CURSOR`).
 const META_COMMIT_CURSOR: &str = "commit_cursor";
@@ -377,7 +375,7 @@ impl DurableCommitStore {
     }
 
     /// Re-check the durable chain end-to-end — the "chain is self-checking" tooth
-    /// (`docs/PG-DREGG.md` §15.1) over the on-store rows. Walks the log in ordinal
+    /// (`.docs-history-noclaude/PG-DREGG.md` §15.1) over the on-store rows. Walks the log in ordinal
     /// order and asserts each `prev_root` equals the prior `ledger_root` (genesis
     /// carries `GENESIS_ROOT`), and that ordinals are dense. Returns `Ok(())` iff
     /// intact; `Err` names the first broken link (a tampered store fails closed).
@@ -631,7 +629,10 @@ mod tests {
                     ^ (i as u64);
             }
             for (i, slot) in out.iter_mut().enumerate() {
-                acc = acc.rotate_left(11).wrapping_add(i as u64).wrapping_mul(0x0100_0000_01b3);
+                acc = acc
+                    .rotate_left(11)
+                    .wrapping_add(i as u64)
+                    .wrapping_mul(0x0100_0000_01b3);
                 *slot = (acc >> ((i % 8) * 8)) as u8;
             }
             out
@@ -666,8 +667,14 @@ mod tests {
         assert_eq!(ord, 0);
         assert_eq!(store.commit_cursor().unwrap(), 1);
         assert_eq!(store.lookup_by_ordinal(0).unwrap(), Some(t.clone()));
-        assert_eq!(store.lookup_by_turn_hash(&t.turn_hash).unwrap(), Some(t.clone()));
-        assert_eq!(store.lookup_by_receipt_hash(&t.receipt_hash).unwrap(), Some(t));
+        assert_eq!(
+            store.lookup_by_turn_hash(&t.turn_hash).unwrap(),
+            Some(t.clone())
+        );
+        assert_eq!(
+            store.lookup_by_receipt_hash(&t.receipt_hash).unwrap(),
+            Some(t)
+        );
     }
 
     /// Turn N+1 chains onto N; the durable head IS N's ledger_root.
@@ -690,20 +697,35 @@ mod tests {
     #[test]
     fn wrong_prev_root_is_refused_and_durable_head_unmoved() {
         let (_d, store) = fresh();
-        store.commit_verified_turn(&produce(1, 0, GENESIS_ROOT)).unwrap();
+        store
+            .commit_verified_turn(&produce(1, 0, GENESIS_ROOT))
+            .unwrap();
         let mut forged = produce(2, 1, [0xEE; 32]);
         forged.prev_root = [0xEE; 32];
         let r = store.commit_verified_turn(&forged);
-        assert!(matches!(r, Err(DurableError::Refused(ChainRefusal::RootMismatch { .. }))));
-        assert_eq!(store.commit_cursor().unwrap(), 1, "durable cursor unmoved on refusal");
-        assert_eq!(store.lookup_by_ordinal(1).unwrap(), None, "the forgery did not persist");
+        assert!(matches!(
+            r,
+            Err(DurableError::Refused(ChainRefusal::RootMismatch { .. }))
+        ));
+        assert_eq!(
+            store.commit_cursor().unwrap(),
+            1,
+            "durable cursor unmoved on refusal"
+        );
+        assert_eq!(
+            store.lookup_by_ordinal(1).unwrap(),
+            None,
+            "the forgery did not persist"
+        );
     }
 
     /// An ordinal gap is refused (no holes in the durable log).
     #[test]
     fn ordinal_gap_is_refused_durably() {
         let (_d, store) = fresh();
-        store.commit_verified_turn(&produce(1, 0, GENESIS_ROOT)).unwrap();
+        store
+            .commit_verified_turn(&produce(1, 0, GENESIS_ROOT))
+            .unwrap();
         let head = store.head_root().unwrap().unwrap();
         let mut gapped = produce(2, 9, head);
         gapped.ordinal = 9;
@@ -759,16 +781,30 @@ mod tests {
         // durable METADATA, and the rows are already in COMMIT_LOG).
         let backend = RegionBackend::file(&path).unwrap();
         let store = DurableCommitStore::open(backend).unwrap();
-        assert_eq!(store.commit_cursor().unwrap(), 2, "durable cursor recovered");
+        assert_eq!(
+            store.commit_cursor().unwrap(),
+            2,
+            "durable cursor recovered"
+        );
         assert_eq!(store.head_root().unwrap(), head, "durable head recovered");
-        assert_eq!(store.lookup_by_ordinal(0).unwrap(), Some(t0.clone()), "row 0 durable");
-        assert_eq!(store.lookup_by_ordinal(1).unwrap(), Some(t1.clone()), "row 1 durable");
+        assert_eq!(
+            store.lookup_by_ordinal(0).unwrap(),
+            Some(t0.clone()),
+            "row 0 durable"
+        );
+        assert_eq!(
+            store.lookup_by_ordinal(1).unwrap(),
+            Some(t1.clone()),
+            "row 1 durable"
+        );
         assert_eq!(
             store.lookup_by_turn_hash(&t1.turn_hash).unwrap(),
             Some(t1.clone()),
             "the by-hash index is durable too"
         );
-        store.verify_chain_intact().expect("the recovered durable chain is intact");
+        store
+            .verify_chain_intact()
+            .expect("the recovered durable chain is intact");
 
         // And the recovered store enforces the chain from the durable head: the next
         // turn must chain onto exactly where the log left off.
@@ -785,7 +821,9 @@ mod tests {
     #[test]
     fn a_tampered_durable_chain_fails_the_self_check() {
         let (_d, store) = fresh();
-        store.commit_verified_turn(&produce(1, 0, GENESIS_ROOT)).unwrap();
+        store
+            .commit_verified_turn(&produce(1, 0, GENESIS_ROOT))
+            .unwrap();
         store
             .commit_verified_turn(&produce(2, 1, store.head_root().unwrap().unwrap()))
             .unwrap();
@@ -806,7 +844,10 @@ mod tests {
         }
         let r = store.verify_chain_intact();
         assert!(
-            matches!(r, Err(DurableError::Refused(ChainRefusal::RootMismatch { .. }))),
+            matches!(
+                r,
+                Err(DurableError::Refused(ChainRefusal::RootMismatch { .. }))
+            ),
             "a tampered durable chain must fail the self-check closed, got {r:?}"
         );
     }

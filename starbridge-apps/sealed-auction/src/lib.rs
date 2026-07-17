@@ -354,7 +354,7 @@ pub fn fund_ledger(rows: &[(CellId, AssetId, i128)]) -> VerifiedLedger {
 // THE ON-LEDGER FLOOR — the auction as a factory-born sovereign cell.
 // =============================================================================
 //
-// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the census payoff for sealed-auction
+// `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the census payoff for sealed-auction
 // is to put the COMMIT PHASE ON-LEDGER. The original commit board was an in-process
 // `BTreeMap<Seal>` — the anti-front-running tooth lived in a Rust membership check.
 // Here the auction is a factory-born cell whose installed `CellProgram` IS the

@@ -63,7 +63,7 @@ use crate::world::{CommitOutcome, World};
 /// damage wake carries, projected to ONE bit of the 64-bit notify badge lattice.
 ///
 /// A committed present is the compositor's **async signal** to whoever watches
-/// the surface for repaint (`docs/NOTIFY-PRIMITIVE.md` §2.4 — "the compositor
+/// the surface for repaint (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md` §2.4 — "the compositor
 /// `signal`s the surface's notification on damage, badge = the damage kind").
 /// The damage KIND here is the present's region extent (how much was painted):
 /// `region_count` projects to bit `region_count % 64`, so a small-region repaint
@@ -272,7 +272,7 @@ pub struct VerifiedScene {
     /// ([`NotifyCap::signal_admissible`], the Rust mirror of the verified
     /// `Dregg2.Firmament.NotifyAuthority.NotifyCap.signalAdmissible`). This routes
     /// the compositor's damage edge through the SAME held, attenuable async-signal
-    /// authority the swarm's cross-agent edge uses (`docs/NOTIFY-PRIMITIVE.md`
+    /// authority the swarm's cross-agent edge uses (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md`
     /// §2.4) — the ambient `emit_dynamics` becomes cap-gated. Seeded at `u64::MAX`
     /// (wake-for-any-damage) when an owner opens, so the prior behaviour is
     /// preserved until a watcher attenuates it via [`Self::restrict_damage_notify`].
@@ -464,7 +464,7 @@ impl VerifiedScene {
                 // `dregg_firmament::NotifyCap::signal_admissible`). An out-of-mask
                 // damage kind is REFUSED (fail-closed): the frame still advanced (the
                 // commit is the ground truth), but no damage wake is signalled — the
-                // async edge is a cap, not ambient routing (`docs/NOTIFY-PRIMITIVE.md`
+                // async edge is a cap, not ambient routing (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md`
                 // §2.4). Absent a cap (surface not opened through `open_surface`) the
                 // wake also does not fire — fail-closed, no ambient default.
                 let badge = damage_badge(p.target.len());
@@ -980,7 +980,7 @@ mod tests {
 
     // =====================================================================
     // THE DAMAGE-NOTIFY WELD — the async damage signal is a HELD, attenuable
-    // `dregg_firmament::NotifyCap` (`docs/NOTIFY-PRIMITIVE.md` §2.4), routed
+    // `dregg_firmament::NotifyCap` (`.docs-history-noclaude/NOTIFY-PRIMITIVE.md` §2.4), routed
     // through the SAME verified `signal_admissible` the swarm's cross-agent
     // edge uses. BOTH POLARITIES at the real `present()` call-site: a committed
     // present whose damage badge is within the held mask SIGNALS the wake; one

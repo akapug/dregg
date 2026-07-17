@@ -86,7 +86,7 @@ Several scalars are `pub(crate)`-sealed (audit P0-1) and mutate only through ver
   plaintext (audit P1-2, `cell/src/state.rs:855`).
 - `nonce: u64` — monotone action counter; `increment_nonce` refuses on overflow (audit
   P2-2 replaced `wrapping_add`, `cell/src/state.rs:1060`).
-- `balance: i64` — **signed** value (THE EPOCH, `docs/EPOCH-DESIGN.md` §5): issuer wells
+- `balance: i64` — **signed** value (THE EPOCH, `.docs-history-noclaude/EPOCH-DESIGN.md` §5): issuer wells
   carry `−supply` so the reachable total is zero (`cell/src/state.rs:187`). Sign
   discipline is **by verb**: ordinary moves use `debit_balance` / `apply_balance_change`
   (refuse below zero, `cell/src/state.rs:696`, `cell/src/state.rs:1074`); issuer-well moves

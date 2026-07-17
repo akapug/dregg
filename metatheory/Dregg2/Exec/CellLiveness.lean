@@ -2,7 +2,7 @@
 # Dregg2.Exec.CellLiveness — GC = cell-liveness, executable; death is TIMED OUT, not decided.
 
 This module is the **executable** facet of `Dregg2.Liveness` (which carries the
-spec-level design, `dregg2 §1.7` + `docs/rebuild/study-gc.md`). It is the operational dual
+spec-level design, `dregg2 §1.7` + `.docs-history-noclaude/rebuild/dregg2-design/study-gc.md`). It is the operational dual
 of the coinductive cell (`Boundary` / `Exec.Cell`): a cell unfolds forever (`ν`) UNLESS it
 falls out of the reachable subobject, and the runtime reclaims it once it does. Here we
 make the collection decision concrete and prove the four load-bearing facts on it, by

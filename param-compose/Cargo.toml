@@ -22,3 +22,6 @@ dregg-turn = { path = "../turn" }
 dregg-cell = { path = "../cell" }
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }
+
+[lints]
+workspace = true

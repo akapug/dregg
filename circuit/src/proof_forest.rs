@@ -2,7 +2,7 @@
 //!
 //! The original bespoke-`EffectVmAir` proof FOREST (`ForestNode` / `ProofForest` /
 //! `verify_forest` — the v1 Proof-Carrying-Data-minus-recursion realization of
-//! `docs/rebuild/PHASE-PROOF-CARRYING.md`) is RETIRED with the v1 hand-AIR. The
+//! `.docs-history-noclaude/rebuild/archived-2026-06-06/PHASE-PROOF-CARRYING.md`) is RETIRED with the v1 hand-AIR. The
 //! recursion tower folds the rotated leaf in `crate::ivc_turn_chain` /
 //! `crate::joint_turn_recursive` instead. What remains here is the shared
 //! [`CUTOVER_READY_SELECTORS`] set the joint-turn aggregation reads.

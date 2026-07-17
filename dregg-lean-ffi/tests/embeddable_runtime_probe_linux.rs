@@ -1,5 +1,5 @@
 //! THE EMBEDDABLE-LEAN-RUNTIME SPIKE — **Linux re-measurement** (the un-run check
-//! the spike flagged: `docs/EMBEDDABLE-LEAN-RUNTIME.md` §5).
+//! the spike flagged: `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` §5).
 //!
 //! The macOS spike (`embeddable_runtime_probe.rs`) measured PROP-1/2/3 on
 //! libSystem/mach. The pg-dregg Tier-D deploy target is **Linux**, and the cdylib
@@ -18,7 +18,7 @@
 //!
 //!   PROP-2 (thread discipline): the OS thread count of THIS process across
 //!     `dregg_ffi_init_st()` and a real turn. The honest Linux story is
-//!     LINK-MODE-DEPENDENT (`docs/EMBEDDABLE-LEAN-RUNTIME.md` §5 + `lean_init_st.cpp`):
+//!     LINK-MODE-DEPENDENT (`.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` §5 + `lean_init_st.cpp`):
 //!       * STATIC link: `dregg_ffi_init_st` calls the eight libuv-free initializers
 //!         directly (omitting `initialize_libuv`), so NO thread is spawned — count
 //!         is FLAT across init AND the turn (the macOS 2→2→2 result, on Linux).
@@ -175,7 +175,7 @@ fn embeddable_runtime_probe_linux() {
         // libuv. MEASURED on this Linux host: init adds TWO threads (2→4), not the
         // single thread the macOS spike observed — Linux's libuv brings up the event
         // loop AND a helper thread (the libuv threadpool/signal worker). This is a
-        // real cross-platform refinement of `docs/EMBEDDABLE-LEAN-RUNTIME.md` §1.3/§5
+        // real cross-platform refinement of `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` §1.3/§5
         // (which counted ONE libuv thread on macOS). The load-bearing facts are
         // unchanged: (a) these are libuv infrastructure threads, NOT Lean worker
         // threads (the task manager stays nullptr — see the turn-delta assertion

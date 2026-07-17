@@ -1226,7 +1226,7 @@ impl Ledger {
         crate::commitment::compute_canonical_state_commitment(cell)
     }
 
-    /// The CACHED Merkle-leaf hash (`docs/INCREMENTAL-COMMITMENT.md` step 3).
+    /// The CACHED Merkle-leaf hash (`.docs-history-noclaude/INCREMENTAL-COMMITMENT.md` step 3).
     /// Called ONLY by `update_leaf`/`rebuild_tree` — the materialize path that
     /// runs strictly AFTER the ledger's `&mut`-handoff invalidation seams
     /// (`get_mut`/`update_with`/`apply_delta`/transfers/migrate-commit), so a

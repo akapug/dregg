@@ -40,3 +40,6 @@ path = "src/main.rs"
 [lib]
 name = "interactive_fiction_demo"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

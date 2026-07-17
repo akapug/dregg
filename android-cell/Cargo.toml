@@ -67,3 +67,6 @@ bs58 = "0.5"
 # conversion/round-trip tests can also exercise a PNG-sourced frame, and so the
 # host-emulator path's H.264/encoded variant has a decode precedent in-tree.
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[lints]
+workspace = true

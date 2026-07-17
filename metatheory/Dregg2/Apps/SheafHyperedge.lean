@@ -55,7 +55,7 @@ groups / a simplicial `face_map`) — exactly as `EpistemicSheaf` declines them.
 *content* (the gluing / non-gluing), not the named coboundary.
 
 CITATION: `Dregg2.Apps.EpistemicSheaf` (the ported frame), `Dregg2.Hyperedge` (the wide pullback),
-`docs/rebuild/DREGG4-HYPERSYSTEM.md §5.2` (the frontier this closes).
+`.docs-history-noclaude/rebuild/dregg2-design/DREGG4-HYPERSYSTEM.md §5.2` (the frontier this closes).
 -/
 import Dregg2.Hyperedge
 import Dregg2.Apps.EpistemicSheaf

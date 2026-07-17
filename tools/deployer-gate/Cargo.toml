@@ -17,3 +17,6 @@ sha2 = "0.10"
 thiserror = "2"
 
 [dev-dependencies]
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 -- pg-dregg — Tier B schema sketch: dregg state AS queryable postgres tables.
 --
 -- =============================================================================
--- ⚠ DESIGN SKETCH — NOT A MIGRATION. See docs/PG-DREGG.md §8 (Tier B/C/D).
+-- ⚠ DESIGN SKETCH — NOT A MIGRATION. See .docs-history-noclaude/PG-DREGG.md §8 (Tier B/C/D).
 -- =============================================================================
 -- This file is the concrete artifact for the Tier B proposal: it shows the
 -- shape of the cells / receipts / blocklace / capability tables, the
@@ -34,7 +34,7 @@
 --   * persist/src/ledger_store.rs :: LedgerCheckpoint
 --   * cell/src/cell.rs            :: Cell / CellState / Permissions
 --   * cell/src/capability.rs      :: CapabilitySet / CapabilityRef
---   * docs/UNIVERSAL-MEMORY.md    :: the (domain,key)->value Blum multiset
+--   * .docs-history-noclaude/UNIVERSAL-MEMORY.md    :: the (domain,key)->value Blum multiset
 
 CREATE EXTENSION IF NOT EXISTS pg_dregg;
 CREATE SCHEMA IF NOT EXISTS dregg;
@@ -188,7 +188,7 @@ CREATE TABLE dregg.block_edges (
 CREATE INDEX block_edges_parent ON dregg.block_edges (parent);
 
 -- ===========================================================================
--- 5.  UNIVERSAL MEMORY — the elegant collapse (docs/UNIVERSAL-MEMORY.md).
+-- 5.  UNIVERSAL MEMORY — the elegant collapse (.docs-history-noclaude/UNIVERSAL-MEMORY.md).
 -- ===========================================================================
 -- The Blum multiset over Domain × κ maps to ONE table. Domain ∈ {registers,
 -- heap, caps, nullifiers, index}; a future state component is a NEW DOMAIN
@@ -225,7 +225,7 @@ CREATE INDEX memory_by_domain ON dregg.memory (domain);
 -- spec-standard pg18 form (strictly better than the bare `old.`/`new.`
 -- pseudo-aliases, which only resolve when no column is named old/new). Shipped as
 -- a function (the same one the mirror::ddl emitter generates) so the node invokes
--- it as `SELECT dregg.merge_cell(...)`. (docs/PG-DREGG-PG18.md §7; the Tier-C
+-- it as `SELECT dregg.merge_cell(...)`. (.docs-history-noclaude/PG-DREGG-PG18.md §7; the Tier-C
 -- trigger materializes the same way, schema-tierC.sql §3.)
 CREATE OR REPLACE FUNCTION dregg.merge_cell(
     p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
@@ -256,7 +256,7 @@ END $$;
 -- WITH (OLD/NEW) reads from the pre-image. The string `dregg.merge_cell` stays the
 -- materialization path; this twin is the analytics face when a caller wants the
 -- numbers typed — e.g. asserting conservation (the per-cell balance deltas of a
--- transfer sum to zero) directly off the applicator. (docs/PG-DREGG-PG18.md §7.)
+-- transfer sum to zero) directly off the applicator. (.docs-history-noclaude/PG-DREGG-PG18.md §7.)
 CREATE OR REPLACE FUNCTION dregg.merge_cell_delta(
     p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
     p_fields bytea, p_fields_json jsonb, p_lifecycle text,
@@ -287,7 +287,7 @@ END $$;
 -- with this file by the `emitted_ddl_agrees_with_committed_sql_file` test in
 -- src/mirror.rs). Each is created WITH (security_invoker = true) (pg15), so RLS on
 -- the base tables is evaluated as the INVOKING reader THROUGH the view — the
--- capability gate is enforced by declaration, not incidentally (docs/PG-DREGG.md
+-- capability gate is enforced by declaration, not incidentally (.docs-history-noclaude/PG-DREGG.md
 -- §14.3). See docs/QUICKSTART-dregg-dev.md for worked queries.
 
 -- The delegation graph; WITH RECURSIVE over it gives reachability / the
@@ -311,7 +311,7 @@ CREATE OR REPLACE VIEW dregg.receipt_chain WITH (security_invoker = true) AS
 
 -- PostgreSQL 17 SQL/JSON projections (JSON_TABLE) — the embedded jsonb state,
 -- surfaced as flat relational rows so a developer JOINs/aggregates it without
--- hand-rolled jsonb operators (docs/PG-DREGG.md "PostgreSQL 17 leverage").
+-- hand-rolled jsonb operators (.docs-history-noclaude/PG-DREGG.md "PostgreSQL 17 leverage").
 
 -- One row per attenuated effect in a capability's allowed_effects array: the
 -- no-amplification audit surface, exploded from the jsonb array into rows.
@@ -342,7 +342,7 @@ CREATE OR REPLACE VIEW dregg.canonical_cells WITH (security_invoker = true) AS
     FROM dregg.cells
     ORDER BY cell_hex COLLATE pg_c_utf8;
 
--- pg18 AIO observability (docs/PG-DREGG-PG18.md §8, docs/PG-DREGG.md §14.2): the
+-- pg18 AIO observability (.docs-history-noclaude/PG-DREGG-PG18.md §8, .docs-history-noclaude/PG-DREGG.md §14.2): the
 -- read/write/verify I/O mix made legible. pg18's asynchronous I/O subsystem feeds
 -- pg_stat_io; this projects the read-path-relevant relation contexts (normal,
 -- vacuum, bulkread/bulkwrite) into a compact mirror-facing surface with the
@@ -359,7 +359,7 @@ CREATE OR REPLACE VIEW dregg.mirror_io_stats AS
     WHERE object IN ('relation')
       AND context IN ('normal','vacuum','bulkread','bulkwrite');
 
--- pg18 AIO IN-FLIGHT (docs/PG-DREGG-PG18.md §8): pg_stat_io is the cumulative
+-- pg18 AIO IN-FLIGHT (.docs-history-noclaude/PG-DREGG-PG18.md §8): pg_stat_io is the cumulative
 -- counter; pg18 ALSO ships `pg_aios`, the live view of the async-I/O handles a
 -- backend currently has outstanding. For a read-heavy mirror issuing batched
 -- async reads, the in-flight depth shows whether AIO is actually queueing reads
@@ -368,7 +368,7 @@ CREATE OR REPLACE VIEW dregg.mirror_io_stats AS
 CREATE OR REPLACE VIEW dregg.mirror_aio_inflight AS
     SELECT * FROM pg_aios;
 
--- pg18 DATA-INTEGRITY status (docs/PG-DREGG-PG18.md §11): dregg's thesis is
+-- pg18 DATA-INTEGRITY status (.docs-history-noclaude/PG-DREGG-PG18.md §11): dregg's thesis is
 -- integrity-down-to-the-bytes; the STORAGE floor under the kernel root + chain
 -- tooth + IVC light client is page-level integrity, and pg18 makes `initdb`
 -- enable data checksums BY DEFAULT (every page carries a checksum verified on
@@ -414,7 +414,7 @@ CREATE POLICY memory_read ON dregg.memory FOR SELECT TO dregg_reader
 -- ===========================================================================
 -- Applications (dregg_reader) get SELECT only. NO write grants. The ONLY writer
 -- is dregg_kernel, and in Tier C even dregg_kernel's writes pass through the
--- dregg_verify_turn CHECK (see docs/PG-DREGG.md §9 and schema-tierC.sql).
+-- dregg_verify_turn CHECK (see .docs-history-noclaude/PG-DREGG.md §9 and schema-tierC.sql).
 GRANT USAGE  ON SCHEMA dregg TO dregg_reader, dregg_kernel;
 GRANT SELECT ON ALL TABLES IN SCHEMA dregg TO dregg_reader;
 GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dregg TO dregg_kernel;

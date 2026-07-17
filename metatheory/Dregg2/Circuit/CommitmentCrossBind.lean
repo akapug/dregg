@@ -1,7 +1,7 @@
 /-
 # Dregg2.Circuit.CommitmentCrossBind — THE THREE-COMMITMENT CROSS-BINDING CROWN (MID-4).
 
-`docs/rebuild/_PROOF-INTEGRITY-LEDGER.md` MID-4: the system carries **three disjoint state
+`.docs-history-noclaude/rebuild/metatheory/_PROOF-INTEGRITY-LEDGER.md` MID-4: the system carries **three disjoint state
 commitments**, and — until this module — **no Lean theorem bound any two to ONE authenticated state
 object**. So a proof about one (e.g. "the circuit witness pins `recStateCommit`") did NOT constrain
 the others (the running cell's BLAKE3 `cellCommit`, or the executor's receipt-chain-bearing root). The

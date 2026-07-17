@@ -105,7 +105,7 @@
 //! epoch reset only at the genuine boundary" into the commitment, and (b) the
 //! Lean rung `verifyBatch accept ⟹ allowance never overspent its rate` joining
 //! the circuit-soundness obligation table in
-//! `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`. See
+//! `.docs-history-noclaude/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`. See
 //! `docs/deos/RATE-LIMITED-ALLOWANCE.md` §"Next slice: circuit binding".
 
 use serde::{Deserialize, Serialize};

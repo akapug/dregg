@@ -26,7 +26,7 @@
 #                                 genesis on the cluster; at least one node assembles blocks
 #                                 from >= 2 distinct creators (real wire delivery, not local).
 #
-# WHAT IT PROBES + REPORTS (the Stage-5 frontier — see docs/STAGE5-CONSENSUS-DEVAC.md):
+# WHAT IT PROBES + REPORTS (the Stage-5 frontier — see .docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md):
 #
 #   [C] turn finalization through the ordering rule — does a turn reach an attested root
 #       (latest_height >= 1) AGREED across all three nodes? This is the full n>1 commit.
@@ -271,7 +271,7 @@ else
   echo "    but the node's gossip DISSEMINATION (eager/lazy Plumtree over unidirectional QUIC"
   echo "    streams, net/src/gossip.rs) delivers blocks asymmetrically at small N on loopback,"
   echo "    so no node assembles a supermajority of creators' round-blocks and is_super_ratified"
-  echo "    (blocklace/src/ordering.rs:263) never fires. See docs/STAGE5-CONSENSUS-DEVAC.md."
+  echo "    (blocklace/src/ordering.rs:263) never fires. See .docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md."
   if [ "$REQUIRE_FINALITY" = "1" ]; then
     echo "[C] FAILED (REQUIRE_FINALITY=1) — gated as a hard assertion." >&2
     exit 6
@@ -287,5 +287,5 @@ echo ""
 echo "The consensus path RUNS at n>1 (not n=1): 3 real nodes, full mode, the verified"
 echo "Cordial-Miners tau ordering rule with supermajority=3 is the live finality path,"
 echo "and blocks cross the real gossip wire. The remaining leg to a committed cross-node"
-echo "turn is gossip dissemination, mapped in docs/STAGE5-CONSENSUS-DEVAC.md."
+echo "turn is gossip dissemination, mapped in .docs-history-noclaude/STAGE5-CONSENSUS-DEVAC.md."
 exit 0

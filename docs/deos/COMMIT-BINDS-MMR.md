@@ -2,7 +2,7 @@
 
 `dregg-query` answers carry a **non-omission certificate**: a range opening of
 the receipt log against an MMR root, re-derived by the verifier so the server is
-trusted for nothing but availability (`docs/EPISTEMIC-DATALOG.md` Q2,
+trusted for nothing but availability (`.docs-history-noclaude/EPISTEMIC-DATALOG.md` Q2,
 `dregg-query/src/attested.rs`). There is exactly **one** residual trust in that
 story: the root the certificate opens against is supplied to
 `AttestedAnswer::verify(&hasher, &trusted_root)` as a **parameter**, and today

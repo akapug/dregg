@@ -1,7 +1,7 @@
 /**
  * <dregg-mailbox uri="dregg://mailbox/<owner-pubkey>">
  *
- * THE ORGAN (docs/ORGANS.md §2): a hosted inbox over the relay. The relay is
+ * THE ORGAN (.docs-history-noclaude/ORGANS.md §2): a hosted inbox over the relay. The relay is
  * a store-and-forward service — senders enqueue SEALED bodies to your inbox;
  * you drain them with a CUSTODY PROOF (a dequeue proof: old/new roots +
  * remaining leaves + the entry's content_hash). The relay sees only

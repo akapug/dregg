@@ -7,16 +7,71 @@
 //! 4. Bob transfers partial amount to Carol: spends his note, creates two new notes (change + transfer)
 //! 5. Show: at no point does any observer learn Alice->Bob->Carol linkage
 //! 6. Show: double-spend attempt fails (nullifier already in set)
-//! 7. Uses real STARK proofs via `prove_note_spend` to verify note ownership
+//! 7. Uses real STARK proofs (the deployed IR-v2 note-spend leaf descriptor,
+//!    `note-spend-leaf::dregg-note-spending-dsl-v3`) to verify note ownership —
+//!    the same prove/verify pair the turn executor's `verify_note_spend_descriptor2`
+//!    dispatches to.
 
 use dregg_cell::note::Note;
 use dregg_cell::nullifier_set::NullifierSet;
 use dregg_circuit::{
     BabyBear,
-    dsl::note_spending::{
-        create_test_witness, key_to_field_elements, prove_note_spend, verify_note_spend,
+    descriptor_by_name::descriptor_by_name,
+    descriptor_ir2::{
+        DreggStarkConfig, Ir2BatchProof, MemBoundaryWitness, prove_vm_descriptor2,
+        verify_vm_descriptor2,
     },
+    dsl::note_spending::{create_test_witness, key_to_field_elements, note_spend_mint_hash_felt},
+    note_spend_witness::{NOTE_SPEND_LEAF_NAME, note_spend_witness},
+    note_spending_witness::NoteSpendingWitness,
 };
+
+/// Prove a note spend through the DEPLOYED IR-v2 leaf descriptor (fetched fail-closed
+/// by name, exactly as the turn executor does).
+fn prove_note_spend_leaf(witness: &NoteSpendingWitness) -> Ir2BatchProof<DreggStarkConfig> {
+    let desc = descriptor_by_name(NOTE_SPEND_LEAF_NAME).expect("leaf descriptor registered");
+    let (trace, pis) = note_spend_witness(witness).expect("witness builds the leaf trace");
+    prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+        .expect("the honest note-spend must prove")
+}
+
+/// Verify a note-spend proof from PUBLIC data only — the verifier rebuilds the 7-slot
+/// claim tuple `[nullifier, merkle_root, value_lo, asset_type, destination_federation,
+/// value_hi, mint_hash]` from the public claim, mirroring the turn executor's
+/// `verify_note_spend_descriptor2` (turn/src/executor/apply.rs). A forged slot makes the
+/// descriptor's boundary pins UNSAT, so verification fails.
+fn verify_note_spend_claim(
+    nullifier: BabyBear,
+    merkle_root: BabyBear,
+    value_lo: BabyBear,
+    asset_type: BabyBear,
+    proof: &Ir2BatchProof<DreggStarkConfig>,
+) -> Result<(), String> {
+    let desc = descriptor_by_name(NOTE_SPEND_LEAF_NAME).ok_or_else(|| {
+        format!("note-spend leaf descriptor `{NOTE_SPEND_LEAF_NAME}` is not registered")
+    })?;
+    let destination_federation = BabyBear::ZERO; // a local spend (no bridge leg)
+    let value_hi = BabyBear::ZERO; // demo values fit the low limb
+    let mint = note_spend_mint_hash_felt(
+        nullifier,
+        merkle_root,
+        value_lo,
+        asset_type,
+        destination_federation,
+        value_hi,
+    );
+    let pi = vec![
+        nullifier,
+        merkle_root,
+        value_lo,
+        asset_type,
+        destination_federation,
+        value_hi,
+        mint,
+    ];
+    verify_vm_descriptor2(&desc, proof, &pi)
+        .map_err(|e| format!("note-spend descriptor verification failed: {e}"))
+}
 
 /// Asset type constant for GOLD.
 const ASSET_GOLD: u64 = 0xABCD_0000_0000_0001;
@@ -99,12 +154,12 @@ fn main() {
         key_to_field_elements(&alice_sk), // spending key (8 limbs)
         4,                                // Merkle depth
     );
-    let alice_proof = prove_note_spend(&alice_witness);
+    let alice_proof = prove_note_spend_leaf(&alice_witness);
     println!("  STARK proof generated");
     println!();
 
     // Verify the STARK proof (anyone can do this with only public inputs).
-    let verify_result = verify_note_spend(
+    let verify_result = verify_note_spend_claim(
         alice_witness.nullifier(),
         alice_witness.merkle_root(),
         alice_witness.value,
@@ -117,9 +172,9 @@ fn main() {
     println!("  (Verifier did NOT learn: who Alice is, or how much she spent.)");
     println!();
 
-    // Add nullifier to the set (note is now spent).
+    // Add nullifier to the set with the spent note's value (note is now spent).
     nullifier_set
-        .insert(alice_nullifier)
+        .insert(alice_nullifier, alice_note.value())
         .expect("nullifier should be accepted");
     println!("  Nullifier recorded in global set (note is spent).");
     println!();
@@ -199,10 +254,10 @@ fn main() {
         key_to_field_elements(&bob_sk),
         4,
     );
-    let bob_proof = prove_note_spend(&bob_witness);
+    let bob_proof = prove_note_spend_leaf(&bob_witness);
     println!("  Bob's STARK proof generated");
 
-    let bob_verify = verify_note_spend(
+    let bob_verify = verify_note_spend_claim(
         bob_witness.nullifier(),
         bob_witness.merkle_root(),
         bob_witness.value,
@@ -213,9 +268,9 @@ fn main() {
     println!("  STARK proof verified: [PASS]");
     println!();
 
-    // Record Bob's nullifier as spent.
+    // Record Bob's nullifier as spent (with the spent note's value).
     nullifier_set
-        .insert(bob_nullifier)
+        .insert(bob_nullifier, bob_note.value())
         .expect("Bob's nullifier should be accepted");
     println!("  Bob's nullifier recorded (his 100 GOLD note is spent).");
     println!();
@@ -311,14 +366,14 @@ fn main() {
 
     // Alice tries to spend her note again.
     println!("  Alice attempts to re-use her nullifier (double-spend)...");
-    let double_spend = nullifier_set.insert(alice_nullifier);
+    let double_spend = nullifier_set.insert(alice_nullifier, alice_note.value());
     assert!(double_spend.is_err());
     println!("  REJECTED: {:?}", double_spend.unwrap_err());
     println!();
 
     // Bob tries to spend his original 100 GOLD note again.
     println!("  Bob attempts to re-spend his 100 GOLD note...");
-    let bob_double = nullifier_set.insert(bob_nullifier);
+    let bob_double = nullifier_set.insert(bob_nullifier, bob_note.value());
     assert!(bob_double.is_err());
     println!("  REJECTED: {:?}", bob_double.unwrap_err());
     println!();

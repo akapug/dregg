@@ -1,6 +1,6 @@
 //! # dregg-firmament — the cap-gradation bridge (the fluid reach-out, in code)
 //!
-//! `docs/FIRMAMENT.md §3` makes the firmament's central claim: **an seL4
+//! `.docs-history-noclaude/FIRMAMENT.md §3` makes the firmament's central claim: **an seL4
 //! capability and a dregg capability are the same abstraction at different
 //! points on a distance parameter.** Both are unforgeable, attenuable,
 //! delegable references to a resource; they differ only in *how far away* the
@@ -47,7 +47,7 @@
 //!
 //! ## The semihost ([`EmulatedKernel`] + the [`microkit_facade`])
 //!
-//! `docs/DREGG-DESKTOP-OS.md §3` (the semihosted-seL4 KEYSTONE) makes the local
+//! `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` (the semihosted-seL4 KEYSTONE) makes the local
 //! leg *runnable on your mac/linux today*: the [`EmulatedKernel`] PROMOTES
 //! [`LocalBacking`]'s CNode slot-table with the three seL4 IPC primitives (a
 //! synchronous Endpoint, a badge-OR Notification, Untyped+Retype), and the
@@ -82,7 +82,7 @@
 //! thread→process. The boot test (m0-hello + the 2-PD notify slice) runs on
 //! both, and the v1 path adds the isolation tooth v0 lacked (a PD CANNOT read
 //! another PD's memory NOR forge a cap by writing raw bytes, while IPC still
-//! works). `docs/DREGG-DESKTOP-OS.md §3`.
+//! works). `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3`.
 
 use std::string::String;
 
@@ -107,7 +107,7 @@ pub mod surface;
 pub mod recovery_monitor;
 
 // The COMPOSITOR-PD — the minimal framebuffer/input multiplexer on the
-// EmulatedKernel (`docs/DREGG-DESKTOP-OS.md §2 L5` + `§6 R3 Stage D`, native-now
+// EmulatedKernel (`.docs-history-noclaude/DREGG-DESKTOP-OS.md §2 L5` + `§6 R3 Stage D`, native-now
 // on the semihost). It is the SOLE holder of the framebuffer region, models its
 // scene as a dregg cell, and enforces the verified scene (T1 non-overlap / T2
 // label-binding / T3 focus-exclusivity — the anti-ghost teeth PROVEN in the Lean
@@ -117,8 +117,8 @@ pub mod recovery_monitor;
 // `is_attenuation` (`granted ⊆ held`) lattice, never reinvented.
 pub mod compositor_pd;
 
-// The EXECUTOR-PD — the firmament HEART on the semihost (`docs/FIRMAMENT.md §2`
-// L3, `docs/DREGG-DESKTOP-OS.md §3` the KEYSTONE payoff: "the verified
+// The EXECUTOR-PD — the firmament HEART on the semihost (`.docs-history-noclaude/FIRMAMENT.md §2`
+// L3, `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3` the KEYSTONE payoff: "the verified
 // executor-PD hosts on the host's ordinary Lean runtime NOW"). It is the
 // Endpoint SERVER for staged turns: an app-PD stages a turn into `turn_in`,
 // signals the executor over its PP channel, and the executor runs it through a
@@ -156,7 +156,7 @@ pub mod repaint;
 // refuses raw-bytes cap forgery. This CLOSES the one honestly-labeled v0
 // non-fidelity ([`EmulatedKernel::ISOLATION_FIDELITY`]). It EXTENDS the
 // emulator with a cfg-selected backing — the v0 thread kernel stays the default
-// for fast `cargo test`; see `docs/DREGG-DESKTOP-OS.md §3`.
+// for fast `cargo test`; see `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3`.
 #[cfg(all(feature = "process-pd", unix))]
 pub mod process_kernel;
 
@@ -166,7 +166,7 @@ pub mod process_kernel;
 // body runs, closes every non-granted fd and drops ambient OS authority (macOS
 // Seatbelt / Linux namespaces+seccomp+Landlock), so its ONLY channel is the
 // firmament Endpoint. Unix-only, behind `process-pd-sandbox` (implies
-// `process-pd`); see `docs/DREGG-DESKTOP-OS.md §3`.
+// `process-pd`); see `.docs-history-noclaude/DREGG-DESKTOP-OS.md §3`.
 #[cfg(all(feature = "process-pd-sandbox", unix))]
 pub mod sandbox;
 
@@ -265,7 +265,7 @@ pub enum Target {
         cell: CellId,
     },
     /// A SURFACE: a dregg cell whose state is rendered as a window — **the
-    /// firmament made visual** (`docs/DREGG-DESKTOP-OS.md`). A window IS a
+    /// firmament made visual** (`.docs-history-noclaude/DREGG-DESKTOP-OS.md`). A window IS a
     /// capability over a cell; holding/attenuating/delegating/revoking the
     /// window is exactly holding/attenuating/delegating/revoking that cap,
     /// through the SAME `granted ⊆ held` gate and the SAME real executor as a

@@ -202,7 +202,7 @@ session sees the other's private cap-tree.
 ### 3.3 An agent (Hermes) logging in = a cap-bounded inhabitant
 
 This is where the model pays off. An agent is "an intricate loop"
-(`docs/deos/HERMES-INTEGRATION.md`); dregg closes the enforcement gap at one
+(`docs/SUPERSEDED/HERMES-INTEGRATION.md`); dregg closes the enforcement gap at one
 seam — the tool-call → verdict → receipt boundary. **Agent login is exactly the
 same ceremony as user login**: the agent authenticates with its key, derives its
 root cell, and is handed a `CapTemplate`. The only difference is *which*

@@ -5,7 +5,7 @@
 # main tree). It is a light client: it connects over HTTP to a running dregg
 # node's API (node/src/api.rs — /api/node/identity, /api/cells, /api/receipts),
 # lists cells, shows receipts, and renders the node identity. This is M4 of the
-# seL4 boot ladder (docs/SEL4-EMBEDDING.md §5): once the M3 net stack carries
+# seL4 boot ladder (.docs-history-noclaude/SEL4-EMBEDDING.md §5): once the M3 net stack carries
 # the node onto seL4, this same TUI is the operator's window onto it.
 #
 # Runs on the host (the operator's terminal). It reaches the node over the

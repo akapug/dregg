@@ -17,7 +17,7 @@ entire forest — and the substance laws ride through the gate unchanged
 just the raw step).
 
 Around the kernel, the trust base is a named, surveyed set of host
-components (`docs/DREGGRS-SEGREGATION.md`): the FFI marshalling, the node's
+components (`.docs-history-noclaude/DREGGRS-SEGREGATION.md`): the FFI marshalling, the node's
 admission gates, the standalone and succinct verifiers, the canonical
 codecs, the bearer-token cryptography, and consensus safety. Transport,
 storage, and networking sit outside the boundary — commitments catch

@@ -1,7 +1,7 @@
 //! THE SEAM CLOSED — the deos-native `fund` / `ship` / `settle` fired through the executor
 //! against the FULL escrow program, so the verified caveats BITE in the fire path itself.
 //!
-//! `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the promotion's task is to close the
+//! `metatheory/docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the promotion's task is to close the
 //! fire→full-`CellProgram` seam so an over-ceiling fund / a value-conjuring settle / a
 //! non-advancing state is a REAL executor refusal in the fire path, not a `program.evaluate`-only
 //! check. This file proves that seam CLOSED. `src::register_deos` / `src::seed_escrow` install

@@ -924,7 +924,7 @@ impl StateConstraint {
 /// `EvalContext` passed at replay time should be reconstructed from the
 /// receipt, not from the replayer's live ledger.
 /// A single branch of an [`StateConstraint::AnyOfBound`] disjunction
-/// (`docs/CELL-PROGRAM-LANGUAGE.md` §11.3). The branch shape that lets a
+/// (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md` §11.3). The branch shape that lets a
 /// WITNESSED (proof-bearing) leaf sit beside a CHEAP (no-proof) leaf under
 /// `⊔` WITHOUT the proof-stripping unsoundness §4 warns of: each witnessed
 /// branch names its OWN proof carrier (`proof_witness_index`), so "this
@@ -1344,7 +1344,7 @@ pub enum StateConstraint {
     BalanceLte { max: u64 },
 
     /// **Pre-rotation gate (KERI-shaped)** — the identity rider
-    /// (`docs/ORGANS.md` "Identity rider"; kernel semantics proven in
+    /// (`.docs-history-noclaude/ORGANS.md` "Identity rider"; kernel semantics proven in
     /// `metatheory/Dregg2/Apps/PreRotation.lean`, the `rotateWriteCooled`
     /// production shape).
     ///
@@ -1480,7 +1480,7 @@ pub enum StateConstraint {
     /// Lean. APPEND-ONLY.
     AffineDeltaLe { terms: Vec<(i64, u8)>, c: i64 },
 
-    /// **Cross-cell verified observation** (`docs/CELL-PROGRAM-LANGUAGE.md`
+    /// **Cross-cell verified observation** (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md`
     /// §11.2): `new[local_field]` must equal the value `source_field` held by
     /// the PEER cell `source_cell` at the FINALIZED state-commitment root
     /// `at_root`. THE rung that makes a real app natural — a market cell
@@ -1533,7 +1533,7 @@ pub enum StateConstraint {
         proof_witness_index: usize,
     },
 
-    /// **Aggregate-over-a-collection gate** (`docs/CELL-PROGRAM-LANGUAGE.md`
+    /// **Aggregate-over-a-collection gate** (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md`
     /// gaps 7/11.1 — the heap/layout rung, the documented "lamesauce"
     /// N≤3 fixed-slot cap *lifted*). Predicates over a NAMED COLLECTION
     /// living in the cell's openable `(collection_id, key) → value` heap
@@ -1594,7 +1594,7 @@ pub enum StateConstraint {
         pred: CollPred,
     },
 
-    /// **Witnessed branches under disjunction** (`docs/CELL-PROGRAM-LANGUAGE.md`
+    /// **Witnessed branches under disjunction** (`metatheory/docs/CELL-PROGRAM-LANGUAGE.md`
     /// §11.3 — the `AnyOfBound` rung) — admits IFF SOME `branches` element
     /// admits. The rung that lets a real escrow/governance ceremony express
     /// "release if EITHER the timeout passed OR a finalized-read proof

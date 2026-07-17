@@ -1,7 +1,7 @@
 /-
 # Dregg2.Apps.SwarmSignal — the VERIFIED ASYNC SWARM-SIGNAL coordinator (the `notify` demo app).
 
-The demonstration of the `notify` primitive (`docs/NOTIFY-CASCADE.md` §demo-app-design): a
+The demonstration of the `notify` primitive (`.docs-history-noclaude/NOTIFY-CASCADE.md` §demo-app-design): a
 coordinator-agent NOTIFIES worker-agents under ATTENUATED, badge-masked notify caps — the verified
 async `--wake` the metatheory previously lacked (the ADOS A2 async swarm-coordination layer made a
 theorem). A worker may be poked by its coordinator on a held badge but **cannot signal back, cannot

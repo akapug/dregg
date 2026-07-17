@@ -139,7 +139,7 @@ end aux_off_sys
 /-! ## §0½ — THE WIDENED `system_roots` COLUMN (magnesium STAGE 4: the deployed gap closed).
 
 The finding the per-effect files PROVE (`*_root_not_in_descriptor_commit`,
-`docs/rebuild/_CIRCUIT-ASSURANCE-PER-EFFECT.md:52-56`): the side-table `system_roots` digest is
+`.docs-history-noclaude/rebuild/metatheory/_CIRCUIT-ASSURANCE-PER-EFFECT.md:52-56`): the side-table `system_roots` digest is
 `Exec.SystemRoots.systemRootsDigest`-bound at the RECORD layer (`cellCommitS`), but `auxCol
 aux_off_sys.SYSTEM_ROOTS_DIGEST = AUX_BASE + 96 = 186` is **PAST the GROUP-4-bound state** — the
 deployed EffectVM row's `state_commit` does NOT absorb it. THIS section closes that, ADDITIVELY
@@ -223,7 +223,7 @@ end aux_off
 
 /-! Public-input slot indices (`pi::*`).
 
-Phase C (`docs/FAITHFUL-STATE-COMMITMENT.md`): the OLD/NEW state commitment
+Phase C (`.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md`): the OLD/NEW state commitment
 widened from 4 felts to 8 felts each (~62-bit → ~124-bit collision floor,
 matching FRI), shifting the whole PI prefix by +8. The slot indices below are
 the Rust twin (`effect_vm/pi.rs`); the commit-binding lemmas (`saCol STATE_COMMIT

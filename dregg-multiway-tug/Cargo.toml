@@ -80,3 +80,6 @@ procgen-dregg = { path = "../procgen-dregg" }
 # Domain-separated hashing for the pack-seed derivation + the card content/traits/mint
 # commitments (the same blake3 1.x resolved workspace-wide).
 blake3 = "1"
+
+[lints]
+workspace = true

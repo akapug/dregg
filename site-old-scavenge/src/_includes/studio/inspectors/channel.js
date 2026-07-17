@@ -1,7 +1,7 @@
 /**
  * <dregg-channel uri="dregg://channel/<cell>">
  *
- * THE ORGAN (docs/ORGANS.md §4): a group is a CELL — the membership
+ * THE ORGAN (.docs-history-noclaude/ORGANS.md §4): a group is a CELL — the membership
  * commitment, the key-epoch counter, and the epoch-key commitment live
  * on-cell; joins / removals / rekeys are ordinary turns. Message BODIES never
  * touch the chain (control plane on-cell, data plane ciphertext over any

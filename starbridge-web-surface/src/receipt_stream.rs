@@ -1,6 +1,6 @@
 //! **The live receipt-stream primitive** — a surface subscribes to the node's
 //! committing receipt feed and reflects it LIVE (the "cockpit goes LIVE"
-//! foundation, `docs/NEXT-WAVE.md` item D).
+//! foundation, `.docs-history-noclaude/NEXT-WAVE.md` item D).
 //!
 //! ## What this is
 //!

@@ -106,7 +106,7 @@
 //!
 //! ## CRITICAL HOLES #1/#2/#6 — CLOSED by the ordered SEGMENT ACCUMULATOR (2026-06-24)
 //!
-//! A cross-model adversarial review (`docs/CODEX-IVC-SOUNDNESS-REVIEW.md` +
+//! A cross-model adversarial review (`metatheory/docs/CODEX-IVC-SOUNDNESS-REVIEW.md` +
 //! `CODEX-IVC-REVIEW-2.md`) found a forged whole-chain claim the verifier ACCEPTS: a
 //! root that EXECUTED history A paired with a whole-chain CLAIM for a different history
 //! B. The root cause was that the chain claim came from a separate hand-authored binding AIR
@@ -247,7 +247,7 @@ type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericCon
 /// **The segment digest width** — the multi-felt Poseidon2 commitment carried as the
 /// ordered-history `acc`. Codex re-review #3 replaced the algebraically-broken one-felt
 /// quadratic fold with a genuine collision-resistant commitment; the FAITHFUL-FLOOR lift
-/// (`docs/FAITHFUL-STATE-COMMITMENT.md`, `docs/deos/COMMITMENT-WAIST-CENSUS.md` #1) widened it
+/// (`.docs-history-noclaude/FAITHFUL-STATE-COMMITMENT.md`, `docs/deos/COMMITMENT-WAIST-CENSUS.md` #1) widened it
 /// from 4 lanes (~62-bit) to **8** lanes ⇒ ~124-bit collision resistance, MATCHING the
 /// per-turn leg's 8-felt faithful floor. The host's tooth compares all eight; the
 /// commitment is a real full-round Poseidon2 sponge ([`seg_poseidon_commit`] squeezes exactly
@@ -1558,7 +1558,7 @@ impl WholeChainProof {
 }
 
 /// The versioned, wire-crossable byte envelope of a [`WholeChainProof`] — the S1
-/// artifact (`docs/PG-DREGG.md` §10.2, `WEB-FORWARD.md` §7).
+/// artifact (`.docs-history-noclaude/PG-DREGG.md` §10.2, `WEB-FORWARD.md` §7).
 ///
 /// It carries the VERIFY-SUFFICIENT subset of a [`WholeChainProof`]: the
 /// prover-only `root.1` (`Rc<CircuitProverData>`) is omitted because the verifier

@@ -49,7 +49,7 @@ fn init() -> HandlerImpl<DeviceWrapper<HalImpl, MmioTransport<'static>>> {
         .unwrap();
         let transport =
             unsafe { MmioTransport::new(header, config::VIRTIO_NET_MMIO_SIZE) }.unwrap();
-        // The edge's first real probe (docs/FIRMAMENT.md §6, M3): we read the
+        // The edge's first real probe (.docs-history-noclaude/FIRMAMENT.md §6, M3): we read the
         // virtio-mmio header at the slot QEMU placed `-device
         // virtio-net-device` into and confirm it is a NETWORK device — the
         // wall here used to be InvalidDeviceType(0) (an empty slot).
