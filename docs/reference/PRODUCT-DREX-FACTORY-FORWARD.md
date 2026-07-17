@@ -106,9 +106,10 @@ Three tools in `tools/`: `token-factory/` (orchestrator), `dregg-audit/` (9-door
   `emit_token.py`; `:110` shells the real `dregg-audit`; `:114-115` reads the **freshly written**
   report and parses machine verdicts (`parse_audit_report`, `:60-73`). The GATE is real and
   strict (`:119-124`: `fv_proven ∧ ¬counterexample ∧ ¬dangerous_door ∧ latch_detected`).
-- **Both polarities demonstrably ran with real Halmos.** `artifacts/GOOD/GOOD.halmos.log` =
-  "2 passed; 0 failed"; `artifacts/RMOON/RMOON.halmos.log` = "0 passed; 2 failed" with concrete
-  symbolic counterexamples. "Proven-safe or caught" holds end-to-end on these two runs.
+- **Both polarities demonstrably ran with real Halmos** (refreshed 2026-07-17 on the
+  derived emit + 4 invariant families): `artifacts/GOOD/GOOD.halmos.log` = "5 passed;
+  0 failed"; `artifacts/RMOON/RMOON.halmos.log` = "3 passed; 2 failed" with concrete
+  symbolic INV-CAP counterexamples. "Proven-safe or caught" holds end-to-end on these runs.
 - **Stage A (9-door grep) is real deterministic forensics** (`dregg-audit:102-130`, one ERE per
   door, comment-filtered). **Stage B (Halmos) is real** (`dregg-audit:186` invokes
   `uvx --from halmos halmos`, maps each `[PASS]/[FAIL]` to a door).
@@ -125,39 +126,49 @@ Three tools in `tools/`: `token-factory/` (orchestrator), `dregg-audit/` (9-door
 
 ### 2b. WOUNDS (mock-where-real-needed / overclaims)
 
-1. **"Parameterizes the FV'd template" is an overstatement.** `emit_token.py:52-158`
-   (`emit_safe`) emits a **hardcoded inline f-string** and **never reads**
-   `chain/contracts/launchpad/DreggLaunchToken.sol`. The emitted contract **structurally diverges**
-   from that FV'd file: real template `uint256 public immutable cap;` via
-   `constructor(name_, symbol_, cap_, minter_)` (`DreggLaunchToken.sol:28,54`) vs emitted
-   `uint256 public constant cap = <literal>;` with `constructor(minter_)` (`GOOD.sol:31,52`). The
-   README (`token-factory/README.md:27`) and docstrings (`emit_token.py:10-11`, `token-factory:16`)
-   call it "a parameterization of the FV'd template." It is a **separate, hand-maintained cap-safe
-   reimplementation in the same shape.** "Proven-safe" survives (Halmos runs on the emitted
-   bytecode), but the contract carrying the "both-polarities-tested" FV pedigree is **not** the one
-   the factory ships. (Arguably the emitted `constant`-literal cap is *more* disclosed — but the
-   claim of provenance from the FV'd file is inaccurate as written.)
+1. **"Parameterizes the FV'd template" — was an overstatement; FIXED (2026-07-17, code
+   reconciled).** The old `emit_safe` emitted a hardcoded inline f-string and never read
+   `chain/contracts/launchpad/DreggLaunchToken.sol` — a separate, hand-maintained cap-safe
+   reimplementation in the same shape. Now `emit_safe` **reads the FV'd template at emit
+   time** and derives the contract by exactly five **count-checked substitutions**
+   (`emit_token.py: safe_substitutions`); every function body (the one-shot `mint` latch +
+   the ERC-20 surface) is carried **byte-for-byte** and re-verified on every emit
+   (`verify_derivation`), and a template whose anchors drift makes the emit **fail loudly**.
+   Tested: `test_emit_token.py` (byte-identity per pedigree function, the drift tooth, the
+   divergence tooth — 10 tests). "Proven-safe carries the FV pedigree" is now true both
+   ways: provenance by derivation, plus Halmos still proving the emitted contract's own
+   bytecode downstream.
 
 2. **Safe/unsafe determination is a 2-point whitelist.** `emit_token.py:266` — a single string
    equality: `mint_authority == "launchpad-oneshot"` → safe; **everything else** → one hardcoded
    unsafe variant (`:268-269`). "A rug-y spec is caught" is proven over a 2-element input space,
    not general specs.
 
-3. **"5 of 9 doors proven" is NOT supported by code.** `gen_fv_harness.py` generates harnesses for
-   at most **3 of the 9 taxonomy doors** — INV-CAP (#2, `:268`), INV-NODRAIN (#8, `:196`),
-   INV-ACCESS-CONTROL (#1, `:236`) — plus INV-REENTRANCY (which is **outside** the 9-door
-   taxonomy). The other 6 doors (#3 proxy, #4 selfdestruct, #5 honeypot, #6 blacklist, #7 pause,
-   #9 fee) are **grep-only, no proof.** Worse: **only INV-CAP has committed run evidence** — every
-   committed `.halmos.log` (GOOD/RMOON/MoonRugToken) shows only the 2 INV-CAP checks; the
-   drain/reentrancy/access-control harness code post-dates those runs and has no committed PASS/FAIL.
+3. **"5 of 9 doors proven" was NOT supported by code — evidence now committed at the honest
+   3/9 (2026-07-17).** `gen_fv_harness.py` generates harnesses for **3 of the 9 taxonomy
+   doors** — INV-CAP (#2), INV-NODRAIN (#8), INV-ACCESS-CONTROL (#1) — plus INV-REENTRANCY
+   (outside the taxonomy). The other 6 doors (#3 proxy, #4 selfdestruct, #5 honeypot,
+   #6 blacklist, #7 pause, #9 fee) remain **grep-only, no proof** (now stated in both
+   READMEs; extending harnesses is P6). The evidence gap is CLOSED: committed `.halmos.log`
+   runs now cover all four invariant families in both polarities — GOOD 5/5 PASS on the
+   derived contract; RMOON INV-CAP 2× COUNTEREXAMPLE (+3 honest PASS); MoonRugToken
+   INV-CAP 2× + **INV-NODRAIN COUNTEREXAMPLE** (the owner-drain door disproven by proof);
+   UnguardedMintToken (new committed sample run) INV-CAP PASS + **INV-ACCESS-CONTROL
+   COUNTEREXAMPLE** — the two-invariants-two-doors contrast case. (INV-REENTRANCY has
+   PASS-only evidence; its FAIL polarity lives in the hand-written
+   `chain/formal-verification/DreggReentrancyFV.t.sol`.)
 
-4. **The Opus "interview" is not live.** `deployer-gate/interview/interview.rs` is a **text parser
-   only** (`InterviewVerdict::parse`) — no Anthropic client, no HTTP (`Cargo.toml` deps =
-   macaroon/sha2/thiserror). The "two real runs" are **frozen static transcripts**
-   (`interview/runs/verdict-{legit,rug}.txt`, "Captured verbatim …") that the tests `include_str!`.
-   The verdicts are real Opus-4.8 output produced **once, offline, by hand**; the automated gate
-   replays the same two transcripts forever. The zkTLS/DECO attestation is doc-and-type-shape only
-   (`AttestedInterview::is_admissible` just checks `verdict_field == "PASS"`).
+4. **The Opus "interview" is not live — now LABELED honestly (2026-07-17); wiring it is P7.**
+   `deployer-gate/src/interview.rs` is a **text parser only** (`InterviewVerdict::parse`) —
+   no Anthropic client, no HTTP. The "two real runs" are **frozen static transcripts**
+   (`interview/runs/verdict-{legit,rug}.txt`) of real Opus-4.8 output produced **once,
+   offline**; the automated gate replays them forever, and the zkTLS/DECO attestation is
+   doc-and-type-shape only. The overclaim is corrected in place: `interview.rs` carries an
+   "Honest scope: the transcripts are FROZEN — the interview arm is not live" module note,
+   the README's "Real (this PoC)" list now says "captured once, offline" with a dedicated
+   honest-scope paragraph, and `lib.rs`'s marquee bullet points at both. What runs today is
+   the parser + captured evidence; the live per-applicant interview remains the named
+   wire-later (ember-gated on provider choice).
 
 5. **Door-number label bug (FIXED, see Part 3).** `gen_fv_harness.py` labeled owner-drain/seize as
    "door #5" in 4 comments; the DOORS array has it as **#8** (honeypot is #5). Cosmetic; the
@@ -165,14 +176,18 @@ Three tools in `tools/`: `token-factory/` (orchestrator), `dregg-audit/` (9-door
 
 ### 2c. Factory frontier (most-blocking gap)
 
-**The three tools are disconnected PoCs with no deploy and no integration.** token-factory ends
-at a markdown verdict (`token-factory:203`) — there is **no deploy stage at all** (no
-`forge create`, no `--broadcast`, no RPC; verified by grep). Its output never feeds
-deployer-gate; deployer-gate's `authorize_deploy` is a library call returning `Ok(())` that never
-touches a chain; the marquee interview arm has no live LLM. An on-chain path exists **elsewhere**
-(`chain/script/DeployLaunchpad.s.sol`; `DreggLaunchpad.registerLaunch:264` really enforces the
-gate) but the factory is not wired to it. To ship: (a) an actual deploy stage, (b) the
-audit-report-hash → gate `audit_registry` wire, (c) live interview automation — none exist yet.
+**Was: three disconnected PoCs. Now (2026-07-17): ONE wired flow, deploy still deliberately
+absent.** The audit-report-hash → gate `audit_registry` wire is BUILT: `token-factory`'s
+GATE-WIRE stage shells the new `deploy-gate` CLI (`tools/deployer-gate/src/bin/deploy-gate.rs`
+— file-backed operator state over the real macaroon lib): a VERIFIED-SAFE report's sha256 is
+registered, a real capability (Audit arm, launch-params-scoped, expiring) is **issued and
+authorized**; a REJECTED token's unregistered hash is demonstrably **refused** (`NotGated`).
+Both polarities recorded in the committed artifacts (GOOD/RMOON). Still open, correctly:
+(a) an actual deploy execution — the artifact now carries the exact `forge create` +
+`registerLaunch` invocation as a **proposed, ember-gated** step (the factory NEVER
+deploys); (b) live interview automation (P7, labeled); (c) the file-backed PoC registry vs
+the on-chain `audit_registry` (the landed `DreggLaunchpad` hook is the on-chain twin —
+feeding it from the factory is the remaining seam).
 
 ---
 
@@ -188,6 +203,26 @@ Two clear-cut, self-contained, non-settlement/non-deploy fixes, both verified:
    owner-drain/seize from "door #5" to the correct "door #8" (honeypot is #5). Comment-only;
    `python3 -m ast` parses OK; no logic touched.
 
+### Executed 2026-07-17 (the factory honesty-repair lane)
+
+3. **P2 (code-reconciled):** `emit_safe` now genuinely derives from the FV'd
+   `DreggLaunchToken.sol` — read at emit time, five count-checked substitutions, every
+   function body byte-for-byte + `verify_derivation` on every emit + the drift tooth;
+   10 tests in `test_emit_token.py`. README/docstrings updated to the (now true) claim.
+4. **P4:** all four Halmos invariant families now have committed run evidence, both
+   polarities across GOOD / RMOON / MoonRugToken / UnguardedMintToken (see Part 2b#3);
+   `reports/UnguardedMintToken.{audit.md,halmos.log}` newly committed.
+5. **P3 (off-chain leg):** GATE-WIRE stage + `deploy-gate` CLI — report-hash registry →
+   real macaroon capability issued+authorized / refused NotGated; deploy invocation
+   emitted as **proposed, ember-gated** (see Part 2c).
+6. **Bug found+fixed by the wiring:** `token-factory`'s `parse_audit_report` matched the
+   literal `"HALMOS FOUND A COUNTEREXAMPLE"` while the multi-invariant dregg-audit writes
+   `"HALMOS FOUND <n> COUNTEREXAMPLE(S)"` — rejections cited the weaker "not proven"
+   instead of the machine counterexample. Regex now matches both formats; RMOON's fresh
+   artifact cites the counterexample again.
+7. **Interview overclaim labeled** (Part 2b#4): honest-scope notes in `interview.rs`,
+   `lib.rs`, and the deployer-gate README; live automation remains P7.
+
 ## Part 4 — PROPOSED (ranked; not executed — bigger / ember-gated / judgment / settlement-touching)
 
 Ranked by leverage toward a shippable surface. Effort = rough; Risk = to soundness/settlement.
@@ -195,14 +230,16 @@ Ranked by leverage toward a shippable surface. Effort = rough; Risk = to soundne
 | # | Move | Why | Effort | Risk | Gate |
 |---|------|-----|--------|------|------|
 | P1 | **Stand up the durable node + host ONE DrEX frontend** behind the existing tailscale-funnel pattern | The #1 frontier: turns "green on my laptop" into a stranger-completable surface; artifacts (`deploy/node/dregg-node.service`, funnel units) already exist | M | Deploy — **ember-gated** | ember |
-| P2 | **Reconcile the emit ↔ FV'd template divergence** — either (a) make `emit_safe` derive from / share the real `DreggLaunchToken.sol` shape, or (b) correct the README/docstrings to "cap-safe emit in the shape of" (not "parameterization of") | Closes the top factory overclaim; makes "proven-safe carries the FV pedigree" true | S–M | Low (doc) / Med (code) | ember for narrative call |
-| P3 | **Wire token-factory → deployer-gate** — feed the verified-safe report hash into the gate's `audit_registry` (the documented 3-line hook) | Turns 3 disconnected PoCs into one pipeline; the audit becomes a real gate arm, not a parallel PoC | M | Low (off-chain) | — |
-| P4 | **Run + commit the 3 newer Halmos invariants** (INV-NODRAIN/REENTRANCY/ACCESS-CONTROL) on the sample tokens so they have committed PASS/FAIL evidence | Substantiates door coverage beyond INV-CAP; cheap, high-honesty | S | Low | — |
+| P2 | ~~Reconcile the emit ↔ FV'd template divergence~~ **DONE 2026-07-17** — option (a) executed: `emit_safe` derives from the real `DreggLaunchToken.sol` (count-checked substitutions + byte-for-byte bodies + drift tooth + tests) | Closes the top factory overclaim; "proven-safe carries the FV pedigree" is now true | S–M | Low | done |
+| P3 | ~~Wire token-factory → deployer-gate~~ **DONE (off-chain leg) 2026-07-17** — GATE-WIRE stage + `deploy-gate` CLI; remaining seam: feed the ON-CHAIN `audit_registry` (the landed `DreggLaunchpad` hook) | 3 PoCs → one pipeline; the audit is a real gate arm | M | Low (off-chain) | done (off-chain) |
+| P4 | ~~Run + commit the 3 newer Halmos invariants~~ **DONE 2026-07-17** — committed PASS/FAIL evidence for all 4 families across GOOD/RMOON/MoonRugToken/UnguardedMintToken | Substantiates door coverage beyond INV-CAP | S | Low | done |
 | P5 | **v1→v2 cutover plan** — port v1's shielded/prove/settle routes onto v2's server (or retire v2 seed) to kill the two-frontend fork | Removes divergent-surface maintenance risk; v2 is the cleaner base | M | Low (app-layer) | — |
 | P6 | **Extend Halmos harnesses toward the remaining 6 grep-only doors** (proxy/selfdestruct/blacklist/pause/fee) | Moves "caught by proof" from 3/9 toward the full taxonomy | L | Low | — |
 | P7 | **Live interview automation** — wire a real LLM call (grain-jail / hosted) behind the deployer-gate interview arm, replacing the frozen transcripts | Makes the marquee anti-scam arm a live gate, not a canned replay | M | Low (off-chain) | ember (LLM provider) |
 | P8 | **Broaden the factory spec space** beyond the 2-point whitelist — real spec→variant mapping over more mint-authority / tokenomics shapes | "Rug-y spec caught" over a real input space, not 2 points | M | Low | — |
 
 **Sequencing note.** P1 is the single unblock that most changes the product's posture (off-laptop);
-it is ember-gated. P3+P4 are the cheapest factory-integrity wins and are safe to execute now. P2 is
-the highest-value honesty correction but wants an ember call on narrative-vs-code.
+it is ember-gated. P2/P3(off-chain)/P4 were executed 2026-07-17 (see Part 3) — P2 took the code
+route (derivation), which proved landable in a day. The live factory frontier is now: P1 (deploy,
+ember-gated), the on-chain `audit_registry` seam, P6 (harnesses toward the 6 grep-only doors),
+P7 (live interview), P8 (spec space beyond the 2-point whitelist).
