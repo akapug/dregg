@@ -185,16 +185,26 @@ async fn check_routes(cfg: &Config) -> Check {
     }
 }
 
+/// Percent of quota remaining for a storage reading, and whether it passes.
+///
+/// Uses `saturating_sub` so an OVER-quota node (`bytes_stored > bytes_limit`)
+/// yields 0% remaining — the exact ALARM condition this check exists to catch —
+/// rather than wrapping the u64 subtraction into a huge "plenty remaining" value
+/// that would print "OK". A `bytes_limit` of 0 means no quota advertised → 100%.
+fn storage_remaining_pct(bytes_stored: u64, bytes_limit: u64) -> u64 {
+    if bytes_limit > 0 {
+        (bytes_limit.saturating_sub(bytes_stored) as f64 / bytes_limit as f64 * 100.0) as u64
+    } else {
+        100
+    }
+}
+
 async fn check_storage(cfg: &Config) -> Check {
     match get_json(cfg, "/storage/quota").await {
         Ok(data) => {
             let bytes_stored = data["bytes_stored"].as_u64().unwrap_or(0);
             let bytes_limit = data["bytes_limit"].as_u64().unwrap_or(0);
-            let remaining_pct = if bytes_limit > 0 {
-                ((bytes_limit - bytes_stored) as f64 / bytes_limit as f64 * 100.0) as u64
-            } else {
-                100
-            };
+            let remaining_pct = storage_remaining_pct(bytes_stored, bytes_limit);
 
             if remaining_pct < 10 {
                 Check {
@@ -307,5 +317,41 @@ async fn check_receipts(cfg: &Config) -> Check {
             passed: false,
             detail: "Receipt chain status unavailable (node/cipherclerk unreachable)".to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The storage check treats `< 10%` remaining as FAIL. The `remaining_pct`
+    // helper feeds that gate, so proving the OVER-quota case yields a FAILing
+    // (small) percentage proves the whole check fires the alarm it exists for.
+    fn passes(bytes_stored: u64, bytes_limit: u64) -> bool {
+        storage_remaining_pct(bytes_stored, bytes_limit) >= 10
+    }
+
+    #[test]
+    fn over_quota_reports_fail_not_ok() {
+        // stored > limit: the u64 subtraction USED to wrap to a huge value and
+        // print "Storage quota OK". saturating_sub pins remaining to 0 → FAIL.
+        assert_eq!(storage_remaining_pct(2_000, 1_000), 0);
+        assert!(
+            !passes(2_000, 1_000),
+            "over-quota must FAIL the health check"
+        );
+        // Exactly at the limit is 0% remaining → still the alarm condition.
+        assert_eq!(storage_remaining_pct(1_000, 1_000), 0);
+        assert!(!passes(1_000, 1_000), "at-quota (0% left) must FAIL");
+    }
+
+    #[test]
+    fn healthy_and_low_quota_classify_correctly() {
+        assert_eq!(storage_remaining_pct(0, 1_000), 100);
+        assert!(passes(0, 1_000)); // empty node: plenty remaining
+        assert!(passes(500, 1_000)); // 50% remaining
+        assert!(!passes(950, 1_000)); // 5% remaining < 10% → low → FAIL
+        assert_eq!(storage_remaining_pct(0, 0), 100); // no quota advertised
+        assert!(passes(0, 0));
     }
 }
