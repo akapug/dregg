@@ -68,6 +68,8 @@ at all times · sophistication proportionate to the challenge, NO further · ACT
   Rust↔Lean + route Cert-F through HidingFriPcs.
 - FRI: keep driving ALL stages autonomously; surface a genuine design fork, don't paper it.
 
+- **fhegg-perf ✅** (cf84a9baa+81cdaae11): Tier-0 confidential value path now TENS OF MS (was minutes) — BFV fold 10⁵× sub-10ms + output-boundary MPC crossing 0.9-7ms (both already landed) + THIS lane closed the last un-built seam: masked-decrypt-to-shares (only decrypt opens a OTP value; production needs NO new decrypt primitive; a2b_mod_t→Beaver crossing). KAT-equal to plaintext (pad-exactness by enumeration). MEASURED AGG→p* 17-76ms vs 12-17s. Proposed: wire real threshold-decrypt, tournament-argmax round-depth, PDHG matvec on additive carrier; FPGA deprioritized for Tier-0.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
