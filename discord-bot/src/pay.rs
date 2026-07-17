@@ -37,9 +37,10 @@ use dregg_narrator::{
 };
 use dregg_pay::{
     AccountFetcher, ChainId, CreditLedger, CreditOutcome, CreditStore, DepositAddress,
-    DepositAddressProvider, FetchedAccount, HdDeposit, MockChain, MockWatcher, MultichainHoldings,
-    Network, PayConfig, PaymentRef, ProvenForeignHolding, SolanaWatcher, Treasury, TreasuryError,
-    TreasurySlot, TreasuryStore, TreasuryView, UserId, WatchError, Watcher,
+    DepositAddressBook, DepositAddressProvider, FetchedAccount, HdDeposit, MockChain, MockWatcher,
+    MultichainHoldings, Network, PayConfig, PayRole, PaymentRef, ProvenForeignHolding,
+    SolanaWatcher, Treasury, TreasuryError, TreasurySlot, TreasuryStore, TreasuryView, UserId,
+    WatchError, Watcher,
 };
 
 use crate::db::Database;
@@ -242,14 +243,71 @@ impl PaidNarrator {
 // credit ledger (sqlite-backed), the watcher, and the paid narrator.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Where a [`PayState`] resolves a user's deposit address — the CUSTODY SPLIT made a
+/// type. A watch-only bot never holds the signing seed; it serves addresses from a
+/// public book the seed-holding sweeper published.
+pub enum DepositSource {
+    /// Seed-bearing HD derivation (the sweeper role, and the devnet-mock fallback).
+    /// Total: every user deterministically derives an address. Holds the seed.
+    Custodial(HdDeposit),
+    /// Seed-free: a public [`DepositAddressBook`] the sweeper published (the
+    /// production bot). Holds NO key. A user not yet in the book is fail-closed
+    /// ([`DepositError::NotProvisioned`]) — never a guessed or wrong address.
+    WatchOnly(DepositAddressBook),
+}
+
+impl DepositSource {
+    /// `true` on the seed-free watch-only path.
+    pub fn is_watch_only(&self) -> bool {
+        matches!(self, DepositSource::WatchOnly(_))
+    }
+
+    /// Resolve `user`'s deposit address; fail-closed on an unprovisioned watch-only
+    /// user (the custodial path always resolves).
+    pub fn address_checked(&self, user: &UserId) -> Result<DepositAddress, DepositError> {
+        match self {
+            DepositSource::Custodial(hd) => Ok(hd.deposit_address(user)),
+            DepositSource::WatchOnly(book) => book
+                .address_for_user(user)
+                .ok_or_else(|| DepositError::NotProvisioned(user.clone())),
+        }
+    }
+}
+
+/// Why a watch-only deposit-address lookup failed.
+#[derive(Clone, Debug)]
+pub enum DepositError {
+    /// The sweeper has not yet published this user's address to the book. Refresh the
+    /// book (run the sweeper keygen over the current roster and republish) — the bot
+    /// never guesses an address it cannot derive.
+    NotProvisioned(UserId),
+}
+
+impl std::fmt::Display for DepositError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DepositError::NotProvisioned(user) => write!(
+                f,
+                "no deposit address provisioned for user {user} (watch-only): the sweeper \
+                 must publish this user's address into DREGG_PAY_ADDRESS_BOOK"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DepositError {}
+
 /// The bot's payment/earning state. Held in `BotState`; the pay commands + the `/dungeon` gate
 /// read it. Devnet/mock by default (a throwaway seed + a [`MockWatcher`]); mainnet is an operator
 /// env flip ([`PayConfig::from_env`]).
 pub struct PayState {
     /// Operator config (mint/treasury/seed/price/network). Nothing mainnet hardcoded.
     pub config: PayConfig,
-    /// The per-user deposit-address provider (the "B" HD-deposit model).
-    pub hd: HdDeposit,
+    /// The per-user deposit-address source, SPLIT BY CUSTODY ROLE ([`PayRole`]):
+    /// seed-bearing HD derivation ([`DepositSource::Custodial`] — the sweeper/devnet
+    /// path) or a seed-free published [`DepositAddressBook`] ([`DepositSource::WatchOnly`]
+    /// — the production bot, which holds NO custody key).
+    pub deposits: DepositSource,
     /// The per-user run-credit ledger over the sqlite [`SqliteCreditStore`].
     pub ledger: CreditLedger<SqliteCreditStore>,
     /// The payment watcher, SELECTED BY CONFIG ([`select_watcher`]): the real
@@ -294,8 +352,29 @@ pub enum PaidRunResult {
 
 impl PayState {
     /// The caller's deterministic Solana deposit address (same user ⇒ same address).
+    ///
+    /// # Panics
+    /// On a WATCH-ONLY [`PayState`] whose published [`DepositAddressBook`] has not yet
+    /// provisioned this user. The custodial / devnet paths always resolve, so this is
+    /// total for the currently-wired constructors; a watch-only adopter must call
+    /// [`PayState::deposit_address_checked`] and handle [`DepositError::NotProvisioned`].
     pub fn deposit_address(&self, discord_id: &str) -> DepositAddress {
-        self.hd.deposit_address(&UserId::from(discord_id))
+        self.deposits
+            .address_checked(&UserId::from(discord_id))
+            .expect(
+                "deposit_address on a watch-only PayState hit an unprovisioned user; \
+                 use deposit_address_checked and handle NotProvisioned",
+            )
+    }
+
+    /// The caller's deposit address, fail-closed on a watch-only bot that has not yet
+    /// been handed this user's published address. The watch-only-safe form of
+    /// [`PayState::deposit_address`].
+    pub fn deposit_address_checked(
+        &self,
+        discord_id: &str,
+    ) -> Result<DepositAddress, DepositError> {
+        self.deposits.address_checked(&UserId::from(discord_id))
     }
 
     /// The base58 deposit address to show a user.
@@ -336,7 +415,12 @@ impl PayState {
     pub async fn record_deposit_assignment(&self, discord_id: &str) -> Result<(), sqlx::Error> {
         let user = UserId::from(discord_id);
         let index = dregg_pay::user_index(&user);
-        let addr = self.hd.deposit_address(&user).to_base58();
+        // Watch-only + not-yet-provisioned: nothing to persist until the sweeper
+        // publishes this user's address. Not an error — the next book refresh fills it.
+        let addr = match self.deposits.address_checked(&user) {
+            Ok(a) => a.to_base58(),
+            Err(_) => return Ok(()),
+        };
         self.db
             .pay_assign_deposit_index(discord_id, index, &addr, now_secs())
             .await
@@ -353,7 +437,13 @@ impl PayState {
     /// treasury never double-counts.
     pub fn poll_and_credit(&self, discord_id: &str) -> Result<Vec<CreditOutcome>, WatchError> {
         let user = UserId::from(discord_id);
-        let addr = self.hd.deposit_address(&user);
+        // Watch-only + not-yet-provisioned: there is no address to poll yet. An
+        // address the bot cannot resolve is nothing to watch — return empty, not an
+        // error (the sweeper's next book publish makes it observable).
+        let addr = match self.deposits.address_checked(&user) {
+            Ok(a) => a,
+            Err(_) => return Ok(Vec::new()),
+        };
         let payments = self.watcher.poll(&user, &addr)?;
         let mut outcomes = Vec::with_capacity(payments.len());
         for p in &payments {
@@ -449,7 +539,7 @@ impl PayState {
         handle: tokio::runtime::Handle,
     ) -> PayState {
         let config = devnet_mock_config(bot_secret);
-        let hd = HdDeposit::new(&config);
+        let deposits = DepositSource::Custodial(HdDeposit::new(&config));
         let store = SqliteCreditStore::new(db.clone(), handle.clone());
         let ledger = CreditLedger::new(store, config.price_per_run.max(1));
         let watcher: Arc<dyn Watcher + Send + Sync> = Arc::new(MockWatcher::new(MockChain::new()));
@@ -460,7 +550,7 @@ impl PayState {
         let treasury_view = build_treasury_view(&config);
         PayState {
             config,
-            hd,
+            deposits,
             ledger,
             watcher,
             db,
@@ -521,7 +611,32 @@ impl PayState {
             config.rpc_endpoint
         );
         let watcher = selected.into_watcher();
-        let hd = HdDeposit::new(&config);
+        // ── CUSTODY SPLIT ─────────────────────────────────────────────────────
+        // This constructor builds the SEED-BEARING (custodial) deposit source: it
+        // holds `DREGG_PAY_SEED` and can derive every user's key. That is correct for
+        // the devnet-mock fallback (throwaway seed) and for a deliberately-custodial
+        // operator, but a PUBLIC bot host should run WATCH-ONLY
+        // ([`PayState::watch_only_from_env`], which never loads the seed). Make the
+        // posture explicit and loud so custody is never silent.
+        let role = PayRole::from_env();
+        if from_operator_env && config.has_seed() {
+            if role.is_sweeper() {
+                tracing::warn!(
+                    "Pay custody: DREGG_PAY_ROLE=sweeper — this process HOLDS the HD seed and \
+                     can move every user's deposit. Run it only in the operator's secured signer, \
+                     never on the public bot host."
+                );
+            } else {
+                tracing::warn!(
+                    "Pay custody: this process loaded DREGG_PAY_SEED and is therefore CUSTODIAL, \
+                     though DREGG_PAY_ROLE is not 'sweeper'. A public bot should be WATCH-ONLY: \
+                     publish a DepositAddressBook from the sweeper and construct the pay state via \
+                     watch_only_from_env (no seed). Set DREGG_PAY_ROLE=sweeper to acknowledge \
+                     custody, or move to the watch-only path."
+                );
+            }
+        }
+        let deposits = DepositSource::Custodial(HdDeposit::new(&config));
         let store = SqliteCreditStore::new(db.clone(), handle.clone());
         let ledger = CreditLedger::new(store, config.price_per_run.max(1));
         let paid = build_bedrock_narrator();
@@ -532,7 +647,7 @@ impl PayState {
         let treasury_view = build_treasury_view(&config);
         PayState {
             config,
-            hd,
+            deposits,
             ledger,
             watcher,
             db,
@@ -540,6 +655,81 @@ impl PayState {
             treasury,
             treasury_view,
         }
+    }
+
+    /// Build a **WATCH-ONLY (seed-free) pay state** from the operator environment —
+    /// the intended production discord-bot path, splitting the seed OUT of the bot.
+    ///
+    /// It reads the PUBLIC config ([`PayConfig::watch_only_from_env`], which never
+    /// reads `DREGG_PAY_SEED`), constructs the REAL [`SolanaWatcher`] over the
+    /// configured RPC ([`select_watcher`]), and serves deposit addresses from the
+    /// public [`DepositAddressBook`] the sweeper published at the file named by
+    /// `DREGG_PAY_ADDRESS_BOOK`. This process holds NO custody key: a host compromise
+    /// leaks no seed and cannot move user funds.
+    ///
+    /// Fails closed with a [`dregg_pay::ConfigError`] when the public config is
+    /// incomplete or the address-book file is missing/unreadable/malformed — a
+    /// watch-only bot never falls back to a guessed address or a silent mock.
+    ///
+    /// The seed-holding sweeper is a SEPARATE service
+    /// ([`PayState::from_env_or_devnet`] with `DREGG_PAY_ROLE=sweeper`, run in the
+    /// operator's secured signer); it periodically re-derives the book over the
+    /// current user roster ([`DepositAddressBook::generate_for_users`]) and
+    /// republishes it here.
+    ///
+    /// NOTE (adoption seam): a watch-only deposit lookup is fallible for a not-yet-
+    /// provisioned user, so the command layer must call
+    /// [`PayState::deposit_address_checked`] (not [`PayState::deposit_address`]) and
+    /// surface [`DepositError::NotProvisioned`] ("your address is being provisioned —
+    /// try again shortly"). Wiring `main.rs` to this constructor + that command change
+    /// is the remaining step to flip the default.
+    pub fn watch_only_from_env(
+        db: Database,
+        handle: tokio::runtime::Handle,
+    ) -> Result<PayState, dregg_pay::ConfigError> {
+        let config = PayConfig::watch_only_from_env()?;
+        // Real watcher by config (watch-only observation; no seed touched). A
+        // watch-only deployment is always an operator-supplied config.
+        let selected = select_watcher(&config, true, explicit_mock_flag(), handle.clone())
+            .unwrap_or_else(|e| panic!("pay watcher construction refused: {e}"));
+        tracing::info!(
+            "Pay (watch-only) watcher selected: {} (network={:?}, rpc={})",
+            selected.kind(),
+            config.network,
+            config.rpc_endpoint
+        );
+        let watcher = selected.into_watcher();
+        let book_path = std::env::var("DREGG_PAY_ADDRESS_BOOK").map_err(|_| {
+            dregg_pay::ConfigError::MissingEnv("DREGG_PAY_ADDRESS_BOOK".to_string())
+        })?;
+        let tsv = std::fs::read_to_string(&book_path).map_err(|e| {
+            dregg_pay::ConfigError::BadValue(format!("DREGG_PAY_ADDRESS_BOOK ({book_path}): {e}"))
+        })?;
+        let book = DepositAddressBook::from_tsv(&tsv)?;
+        tracing::info!(
+            "Pay (watch-only): loaded {} published deposit addresses from {} (no seed held)",
+            book.len(),
+            book_path
+        );
+        let deposits = DepositSource::WatchOnly(book);
+        let store = SqliteCreditStore::new(db.clone(), handle.clone());
+        let ledger = CreditLedger::new(store, config.price_per_run.max(1));
+        let paid = build_bedrock_narrator();
+        let treasury = Treasury::new(
+            SqliteTreasuryStore::new(db.clone(), handle),
+            config.usdc_decimals,
+        );
+        let treasury_view = build_treasury_view(&config);
+        Ok(PayState {
+            config,
+            deposits,
+            ledger,
+            watcher,
+            db,
+            paid,
+            treasury,
+            treasury_view,
+        })
     }
 }
 
@@ -634,6 +824,17 @@ impl SelectedWatcher {
             SelectedWatcher::RealSolana(w) => Arc::new(w),
             SelectedWatcher::Mock(w) => Arc::new(w),
         }
+    }
+}
+
+// The inner watchers aren't `Debug`; print just the selected variant (its honest
+// `kind()` label) so `select_watcher(...).unwrap_err()` and test assertions work
+// without a derive cascade onto `SolanaWatcher` / `MockWatcher`.
+impl std::fmt::Debug for SelectedWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SelectedWatcher")
+            .field(&self.kind())
+            .finish()
     }
 }
 
@@ -1023,7 +1224,7 @@ mod tests {
         let mint = [9u8; 32];
         let treasury_addr = DepositAddress([2u8; 32]);
         let config = PayConfig::devnet_mock(seed.to_vec(), mint, treasury_addr, price_per_run);
-        let hd = HdDeposit::new(&config);
+        let deposits = DepositSource::Custodial(HdDeposit::new(&config));
         let handle = tokio::runtime::Handle::current();
         let store = SqliteCreditStore::new(db.clone(), handle.clone());
         let ledger = CreditLedger::new(store, price_per_run);
@@ -1044,7 +1245,7 @@ mod tests {
         let treasury_view = build_treasury_view(&config);
         PayState {
             config,
-            hd,
+            deposits,
             ledger,
             watcher,
             db,
@@ -1564,6 +1765,37 @@ mod tests {
     // (The live `solana-test-validator` round-trip — real cluster software,
     // still no real funds — is the named residual; see the lane report.)
     // ─────────────────────────────────────────────────────────────────────────
+
+    /// THE CUSTODY SPLIT, at the deposit-source seam: a WATCH-ONLY source holds no
+    /// seed and serves only the addresses the sweeper PUBLISHED. A provisioned user
+    /// resolves to exactly the published address; an unprovisioned user is fail-closed
+    /// [`DepositError::NotProvisioned`] — never a guessed or wrong address (the
+    /// "no funds to the void" invariant).
+    #[test]
+    fn watch_only_deposit_source_is_fail_closed_for_unprovisioned_users() {
+        let alice = UserId::from("alice");
+        let published = DepositAddress([0x7Au8; 32]);
+        let mut book = DepositAddressBook::new();
+        book.insert(dregg_pay::user_index(&alice), published);
+
+        let watch_only = DepositSource::WatchOnly(book);
+        assert!(
+            watch_only.is_watch_only(),
+            "no seed on the watch-only source"
+        );
+        assert_eq!(
+            watch_only.address_checked(&alice).unwrap(),
+            published,
+            "a provisioned user resolves to the published address, exactly"
+        );
+        assert!(
+            matches!(
+                watch_only.address_checked(&UserId::from("bob")),
+                Err(DepositError::NotProvisioned(_))
+            ),
+            "an unprovisioned user is fail-closed, never a guessed address"
+        );
+    }
 
     /// The deposit address the mock RPC simulates an outage for.
     const RPC_OUTAGE_OWNER: [u8; 32] = [0xEE; 32];
