@@ -94,6 +94,23 @@ pub const META_LATEST_LEDGER_CHECKPOINT_HEIGHT: &str = "latest_ledger_checkpoint
 /// which fall back to the legacy height cut (additive migration).
 pub const META_LEDGER_CHECKPOINT_COVERED_PREFIX: &str = "ledger_checkpoint_covered_ordinal:";
 
+/// Key PREFIX (in METADATA_BYTES) for a ledger checkpoint's FINALIZED ROOT
+/// ANCHOR: `"{prefix}{height}"` -> the 32-byte canonical ledger root of the
+/// finalized head at checkpoint-write time (F59-R1, emberian/dregg#59
+/// cross-family refutation).
+///
+/// Compaction deletes the commit records whose `ledger_root` was the ONLY
+/// durable copy of the finalized root; once `cursor <= floor` the covering
+/// checkpoint is the sole reconstruction source, and without an anchor an
+/// absent, undecodable, or semantically WRONG checkpoint row was
+/// indistinguishable from fresh state (served instead of refused). This key —
+/// written in the SAME transaction as the checkpoint — preserves the exact
+/// committed head root so recovery can validate the checkpoint against it and
+/// `recovered_ledger_root` can resolve it instead of fresh-`None`. ABSENT on
+/// checkpoints written by older code, which fall back to the checkpoint's own
+/// canonical root (additive migration; documented weaker).
+pub const META_LEDGER_CHECKPOINT_ROOT_PREFIX: &str = "ledger_checkpoint_root:";
+
 // ─── Blocklace Tables ──────────────────────────────────────────────────────
 
 /// Blocklace blocks: block_id (32 bytes) -> serialized Block.

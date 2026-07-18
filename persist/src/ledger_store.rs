@@ -73,6 +73,11 @@ impl PersistentStore {
         let snapshot = ledger_to_checkpoint(ledger, height);
         let serialized =
             postcard::to_stdvec(&snapshot).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        // F59-R1: the finalized-root ANCHOR this checkpoint must preserve — the
+        // durable head root as recorded BEFORE this write (live head record, or
+        // the prior checkpoint's anchor when already compacted). Read outside
+        // the write txn (redb MVCC: reads see pre-write state).
+        let anchor_root = self.recovered_ledger_root()?;
 
         let write_txn = self.db.begin_write()?;
         {
@@ -102,6 +107,18 @@ impl PersistentStore {
                 height
             );
             meta.insert(key.as_str(), covered)?;
+            // F59-R1: persist the root anchor ATOMICALLY with the checkpoint —
+            // once compaction deletes the covered records, this anchor is the
+            // only durable copy of the finalized root the checkpoint claims to
+            // reproduce. Recovery validates the row against it; a checkpoint
+            // covering no commits (covered == 0) anchors nothing.
+            if covered > 0
+                && let Some(root) = anchor_root
+            {
+                let mut meta_bytes = write_txn.open_table(tables::METADATA_BYTES)?;
+                let root_key = format!("{}{}", tables::META_LEDGER_CHECKPOINT_ROOT_PREFIX, height);
+                meta_bytes.insert(root_key.as_str(), root.as_slice())?;
+            }
         }
         write_txn.commit()?;
 
@@ -129,6 +146,11 @@ impl PersistentStore {
     /// Load the latest ledger checkpoint.
     ///
     /// Returns `None` if no checkpoint has ever been written (fresh node).
+    ///
+    /// F59-R1: metadata that POINTS at a checkpoint height whose row is ABSENT
+    /// is structural corruption, not "no checkpoint" — reporting it as ordinary
+    /// `None` let a compacted store whose sole checkpoint row was deleted read
+    /// as fresh state. An undecodable row likewise errors (postcard).
     pub fn load_latest_ledger_checkpoint(&self) -> Result<Option<(u64, Ledger)>> {
         let read_txn = self.db.begin_read()?;
         let meta = read_txn.open_table(tables::METADATA)?;
@@ -144,6 +166,48 @@ impl PersistentStore {
                 let snapshot: LedgerCheckpoint = postcard::from_bytes(value.value())?;
                 let ledger = checkpoint_to_ledger(snapshot);
                 Ok(Some((height, ledger)))
+            }
+            None => Err(StoreError::Integrity(format!(
+                "load_latest_ledger_checkpoint: metadata records a checkpoint at height \
+                 {height} but the checkpoint row is ABSENT — structural corruption"
+            ))),
+        }
+    }
+
+    /// The COVERED COMMIT ORDINAL recorded for the checkpoint at `height`
+    /// (RSA-3): the checkpoint folds in exactly the records with
+    /// `ordinal < covered`. `None` for a checkpoint written by pre-RSA-3 code
+    /// (consumers fall back to the legacy height cut).
+    pub fn ledger_checkpoint_covered_ordinal(&self, height: u64) -> Result<Option<u64>> {
+        let read_txn = self.db.begin_read()?;
+        let meta = read_txn.open_table(tables::METADATA)?;
+        let key = format!(
+            "{}{}",
+            tables::META_LEDGER_CHECKPOINT_COVERED_PREFIX,
+            height
+        );
+        Ok(meta.get(key.as_str())?.map(|g| g.value()))
+    }
+
+    /// The FINALIZED ROOT ANCHOR recorded for the checkpoint at `height`
+    /// (F59-R1), or `None` for checkpoints written by pre-anchor code (or
+    /// covering no commits). A present-but-malformed anchor is an integrity
+    /// error.
+    pub fn ledger_checkpoint_root_anchor(&self, height: u64) -> Result<Option<[u8; 32]>> {
+        let read_txn = self.db.begin_read()?;
+        let meta_bytes = read_txn.open_table(tables::METADATA_BYTES)?;
+        let key = format!("{}{}", tables::META_LEDGER_CHECKPOINT_ROOT_PREFIX, height);
+        match meta_bytes.get(key.as_str())? {
+            Some(guard) => {
+                let bytes = guard.value();
+                let root: [u8; 32] = bytes.try_into().map_err(|_| {
+                    StoreError::Integrity(format!(
+                        "ledger_checkpoint_root_anchor: anchor at height {height} is {} bytes, \
+                         expected 32 — structural corruption",
+                        bytes.len()
+                    ))
+                })?;
+                Ok(Some(root))
             }
             None => Ok(None),
         }
@@ -273,21 +337,6 @@ impl PersistentStore {
         Ok(())
     }
 
-    /// The COVERED COMMIT ORDINAL recorded for the checkpoint at `height`
-    /// (RSA-3): the checkpoint folds in exactly the records with
-    /// `ordinal < covered`. `None` for a checkpoint written by pre-RSA-3 code
-    /// (consumers fall back to the legacy height cut).
-    pub fn ledger_checkpoint_covered_ordinal(&self, height: u64) -> Result<Option<u64>> {
-        let read_txn = self.db.begin_read()?;
-        let meta = read_txn.open_table(tables::METADATA)?;
-        let key = format!(
-            "{}{}",
-            tables::META_LEDGER_CHECKPOINT_COVERED_PREFIX,
-            height
-        );
-        Ok(meta.get(key.as_str())?.map(|g| g.value()))
-    }
-
     /// Install a set of overlay cell post-states into the cell-by-id index (the
     /// snapshot-apply path). Each cell is upserted under its id (last-writer-wins
     /// by the overlay's own ordering — the overlay is already a last-writer-wins
@@ -319,6 +368,72 @@ impl PersistentStore {
             out.push(postcard::from_bytes(entry.1.value())?);
         }
         Ok(out)
+    }
+
+    // =========================================================================
+    // Boot baseline (emberian/dregg#59)
+    // =========================================================================
+
+    /// Durably record the BOOT BASELINE: the fully-seeded ledger exactly as
+    /// boot left it BEFORE any turn committed (genesis cells + `genesis_moves`,
+    /// the fee/issuer wells, the faucet, starbridge seed cells — every cell
+    /// established by boot seeding rather than by a committed turn).
+    ///
+    /// Why (emberian/dregg#59): every commit record's `ledger_root` commits the
+    /// FULL ledger (baseline ⊕ touched cells), but BELOW the first periodic
+    /// ledger checkpoint there is no checkpoint to restore the untouched
+    /// baseline cells from, and the commit-log overlay carries only touched
+    /// cells. Boot recovery must therefore reconstruct over this baseline
+    /// ([`PersistentStore::recover_to_last_consistent_from_base`]) or the
+    /// empty-base walk falsely refuses a healthy sub-checkpoint image as
+    /// unsalvageable. The node saves the baseline on any boot whose commit log
+    /// is still EMPTY (`run_node`, after seeding and before the recovery
+    /// verdict); overwriting during that commit-free window is sound — no
+    /// recorded root constrains the baseline until the first turn commits over
+    /// it. Once a turn commits, the caller must not overwrite it: the saved
+    /// baseline is exactly the one the recorded roots were committed over,
+    /// immune to later seeding-config drift.
+    pub fn save_boot_baseline(&self, ledger: &Ledger) -> Result<()> {
+        // F59-C: the freeze is enforced AT THE PERSISTENCE BOUNDARY, not by
+        // caller convention. Once a turn has committed, the recorded roots
+        // depend on the exact saved baseline; once a checkpoint exists,
+        // recovery starts from the checkpoint and a rewritten baseline could
+        // only shadow it. Either way an overwrite is refused.
+        if self.commit_cursor()? > 0 {
+            return Err(StoreError::Integrity(
+                "save_boot_baseline: the boot baseline is FROZEN once a turn has committed \
+                 (recorded roots were committed over it) — refusing the overwrite"
+                    .to_string(),
+            ));
+        }
+        if self.load_latest_ledger_checkpoint()?.is_some() {
+            return Err(StoreError::Integrity(
+                "save_boot_baseline: a ledger checkpoint exists — recovery starts from the \
+                 checkpoint and the boot baseline is frozen, refusing the overwrite"
+                    .to_string(),
+            ));
+        }
+        let snapshot = ledger_to_checkpoint(ledger, 0);
+        let bytes =
+            postcard::to_stdvec(&snapshot).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        self.set_config(BOOT_BASELINE_CONFIG_KEY, &bytes)
+    }
+
+    /// Load the saved boot baseline, if this store ever recorded one.
+    ///
+    /// `None` on stores written before the baseline existed (their
+    /// sub-checkpoint recovery keeps the historical empty-base behavior) and on
+    /// stores with genuinely no boot seeding — every cell established by a
+    /// committed turn (e.g. a starbridge World) — for which the empty base IS
+    /// the correct reconstruction.
+    pub fn load_boot_baseline(&self) -> Result<Option<Ledger>> {
+        match self.get_config(BOOT_BASELINE_CONFIG_KEY)? {
+            Some(bytes) => {
+                let snapshot: LedgerCheckpoint = postcard::from_bytes(&bytes)?;
+                Ok(Some(checkpoint_to_ledger(snapshot)))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Remove old ledger checkpoints, keeping only the most recent `keep_last_n`.
@@ -360,6 +475,10 @@ impl PersistentStore {
         Ok(to_remove.len() as u64)
     }
 }
+
+/// METADATA_BYTES key for the boot baseline ledger
+/// ([`PersistentStore::save_boot_baseline`]).
+const BOOT_BASELINE_CONFIG_KEY: &str = "boot_baseline_ledger";
 
 // =============================================================================
 // Conversion helpers
@@ -441,4 +560,101 @@ fn checkpoint_to_ledger(snapshot: LedgerCheckpoint) -> Ledger {
     }
 
     ledger
+}
+
+// =============================================================================
+// Boot baseline round-trip (emberian/dregg#59)
+// =============================================================================
+#[cfg(test)]
+mod boot_baseline_tests {
+    use super::*;
+
+    fn cell(seed: u8, balance: i64) -> Cell {
+        Cell::with_balance([seed; 32], [seed.wrapping_add(7); 32], balance)
+    }
+
+    /// The saved baseline round-trips cell-exactly, and its canonical root is
+    /// preserved — the property `recover_to_last_consistent_from_base` depends
+    /// on (a drifted root would strand or falsely truncate a healthy image).
+    #[test]
+    fn boot_baseline_round_trips_with_canonical_root() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        assert!(
+            store.load_boot_baseline().unwrap().is_none(),
+            "a fresh store has no boot baseline (the true-empty path)"
+        );
+
+        let mut baseline = Ledger::new();
+        for seed in [0xf0u8, 0xf1, 0xf2] {
+            baseline.insert_cell(cell(seed, 1_000_000)).unwrap();
+        }
+        store.save_boot_baseline(&baseline).unwrap();
+
+        let loaded = store.load_boot_baseline().unwrap().expect("baseline saved");
+        assert_eq!(loaded.len(), baseline.len());
+        for (id, cell) in baseline.iter() {
+            assert_eq!(
+                loaded.get(id).map(|c| c.state.balance()),
+                Some(cell.state.balance()),
+                "baseline cell must round-trip exactly"
+            );
+        }
+        assert_eq!(
+            crate::canonical_ledger_root(&loaded),
+            crate::canonical_ledger_root(&baseline),
+            "the canonical root the recovery walk reconstructs against must survive the round-trip"
+        );
+
+        // Overwriting during the commit-free window is allowed and last-writer-wins.
+        let mut later = baseline.clone();
+        later.insert_cell(cell(0xf3, 42)).unwrap();
+        store.save_boot_baseline(&later).unwrap();
+        assert_eq!(store.load_boot_baseline().unwrap().unwrap().len(), 4);
+    }
+
+    /// **F59-C boundary.** Once a turn has committed (or a checkpoint exists),
+    /// the baseline is FROZEN — it is exactly the one the recorded roots were
+    /// committed over, so the persistence layer itself refuses an overwrite
+    /// (the invariant is enforced where the data lives, not by caller
+    /// convention).
+    #[test]
+    fn boot_baseline_save_refused_once_frozen() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let mut baseline = Ledger::new();
+        baseline.insert_cell(cell(0xf0, 1_000)).unwrap();
+        store.save_boot_baseline(&baseline).unwrap();
+
+        // A turn commits over the baseline: frozen from here on.
+        let mut ledger = baseline.clone();
+        let touched = cell(0x10, 7);
+        ledger.insert_cell(touched.clone()).unwrap();
+        let rec = crate::CommitRecord {
+            ordinal: 0,
+            height: 1,
+            block_id: [0u8; 32],
+            block_executed_up_to: 0,
+            turn_hash: [0xc1; 32],
+            creator: [0u8; 32],
+            receipt_hash: [0xc2; 32],
+            ledger_root: crate::canonical_ledger_root(&ledger),
+            touched_cells: vec![touched],
+        };
+        store.commit_finalized_turn(0, &rec).unwrap();
+
+        assert!(
+            store.save_boot_baseline(&ledger).is_err(),
+            "a committed-over baseline must be immutable at the persistence boundary"
+        );
+        // The frozen baseline is untouched.
+        assert_eq!(store.load_boot_baseline().unwrap().unwrap().len(), 1);
+
+        // A checkpoint alone also freezes it (recovery starts from the
+        // checkpoint; a mutated baseline could silently shadow it).
+        let store2 = PersistentStore::open_in_memory().unwrap();
+        store2.checkpoint_ledger(&baseline, 1).unwrap();
+        assert!(
+            store2.save_boot_baseline(&baseline).is_err(),
+            "a checkpointed store must refuse a boot-baseline write"
+        );
+    }
 }
