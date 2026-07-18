@@ -655,6 +655,208 @@ def forkB : Move := { who := 1, frm := ⟨0, 0⟩, to := ⟨3, 0⟩ }
 #guard winner demoBoard [(⟨0, 0⟩, 7)] = none
 #guard hasWon (automatonStep demoBoard) [(⟨2, 3⟩, 3)] = true    -- steps onto the goal → win
 
+/-! ## §8b  CELL-WISE CONGRUENCE for the Automaton step — the SEAM LEMMA.
+
+The two Lean-authored automatafl AIRs meet at the mid board, and what the fold-level `mid_root`
+public input enforces is a CELL-WISE agreement (`∀ in-bounds c, b₁.cellAt c = b₂.cellAt c`), NOT a
+`Board` equality: `Board` carries function fields (`cells`, `conflictAt`), so two boards that agree
+everywhere a player can observe are still not `Eq` without funext plus agreement OFF the board.
+Composing the two capstones therefore needs `automatonStep` to RESPECT that agreement. It does, and
+these lemmas prove it: `automatonStep` reads the board only through `size`, `automaton`,
+`useColumnRule` and `cellAt` — `raycastFuel` guards every read with the in-bounds test, and `stepTo`
+rewrites cells positionally. -/
+
+/-- The raycast reads the board only at IN-BOUNDS cells (its own guard), so it cannot distinguish
+two boards of equal size that agree on `cellAt` in bounds. -/
+theorem raycastFuel_congr (b₁ b₂ : Board) (hs : b₁.size = b₂.size)
+    (hc : ∀ c : Coord, c.x < b₁.size → c.y < b₁.size → b₁.cellAt c = b₂.cellAt c)
+    (dx dy : Int) : ∀ (fuel : Nat) (x y : Int) (dist : Nat),
+      raycastFuel b₁ x y dx dy dist fuel = raycastFuel b₂ x y dx dy dist fuel := by
+  intro fuel
+  induction fuel with
+  | zero => intro x y dist; rfl
+  | succ f ih =>
+    intro x y dist
+    simp only [raycastFuel, hs]
+    by_cases hb : 0 ≤ x + dx ∧ x + dx < (b₂.size : Int) ∧ 0 ≤ y + dy ∧ y + dy < (b₂.size : Int)
+    · rw [if_pos hb, if_pos hb]
+      have hx : ((x + dx).toNat) < b₁.size := by
+        have := hb.2.1; omega
+      have hy : ((y + dy).toNat) < b₁.size := by
+        have := hb.2.2.2; omega
+      have hcell : b₁.cellAt ⟨(x + dx).toNat, (y + dy).toNat⟩
+          = b₂.cellAt ⟨(x + dx).toNat, (y + dy).toNat⟩ := hc _ hx hy
+      simp only [hcell]
+      split
+      · exact ih _ _ _
+      · rfl
+    · rw [if_neg hb, if_neg hb]
+
+/-- The four cardinal rays agree. -/
+theorem raycast_congr (b₁ b₂ : Board) (hs : b₁.size = b₂.size)
+    (hc : ∀ c : Coord, c.x < b₁.size → c.y < b₁.size → b₁.cellAt c = b₂.cellAt c)
+    (from_ : Coord) (d : Dir) : b₁.raycast from_ d = b₂.raycast from_ d := by
+  simp only [Board.raycast, hs]
+  exact raycastFuel_congr b₁ b₂ hs hc _ _ _ _ _ _
+
+/-- Hence the Daemon's chosen offset agrees. -/
+theorem automatonOffset_congr (b₁ b₂ : Board) (hs : b₁.size = b₂.size)
+    (ha : b₁.automaton = b₂.automaton) (hu : b₁.useColumnRule = b₂.useColumnRule)
+    (hc : ∀ c : Coord, c.x < b₁.size → c.y < b₁.size → b₁.cellAt c = b₂.cellAt c) :
+    automatonOffset b₁ = automatonOffset b₂ := by
+  simp only [automatonOffset, ha, hu, raycast_congr b₁ b₂ hs hc]
+
+/-- **THE SEAM LEMMA.** Two boards agreeing on size, automaton, column rule and every IN-BOUNDS cell
+step to boards that agree on every in-bounds cell (and on size and automaton). This is exactly the
+congruence the whole-turn composition needs, because the Leg R → Leg A seam is a cell-wise
+agreement, not a `Board` equality. -/
+theorem automatonStep_congr (b₁ b₂ : Board) (hs : b₁.size = b₂.size)
+    (ha : b₁.automaton = b₂.automaton) (hu : b₁.useColumnRule = b₂.useColumnRule)
+    (hc : ∀ c : Coord, c.x < b₁.size → c.y < b₁.size → b₁.cellAt c = b₂.cellAt c) :
+    (automatonStep b₁).size = (automatonStep b₂).size
+    ∧ (automatonStep b₁).automaton = (automatonStep b₂).automaton
+    ∧ ∀ c : Coord, c.x < b₁.size → c.y < b₁.size →
+        (automatonStep b₁).cellAt c = (automatonStep b₂).cellAt c := by
+  have hoff := automatonOffset_congr b₁ b₂ hs ha hu hc
+  -- after this rewrite the two guards differ ONLY in `b₁.cellAt` vs `b₂.cellAt` at the SAME target
+  simp only [automatonStep, hoff, hs, ha]
+  have hcellNC : ∀ nx ny : Int, 0 ≤ nx → nx < (b₂.size : Int) → 0 ≤ ny → ny < (b₂.size : Int) →
+      b₁.cellAt ⟨nx.toNat, ny.toNat⟩ = b₂.cellAt ⟨nx.toNat, ny.toNat⟩ := by
+    intro nx ny h3 h1 h4 h2
+    exact hc ⟨nx.toNat, ny.toNat⟩ (by simp only [hs]; omega) (by simp only [hs]; omega)
+  by_cases hg : 0 ≤ (b₂.automaton.x : Int) + (automatonOffset b₂).1
+      ∧ (b₂.automaton.x : Int) + (automatonOffset b₂).1 < (b₂.size : Int)
+      ∧ 0 ≤ (b₂.automaton.y : Int) + (automatonOffset b₂).2
+      ∧ (b₂.automaton.y : Int) + (automatonOffset b₂).2 < (b₂.size : Int)
+      ∧ ((automatonOffset b₂).1 ≠ 0 ∨ (automatonOffset b₂).2 ≠ 0)
+      ∧ b₂.cellAt ⟨((b₂.automaton.x : Int) + (automatonOffset b₂).1).toNat,
+                   ((b₂.automaton.y : Int) + (automatonOffset b₂).2).toNat⟩ = .vacuum
+  · have hg₁ : 0 ≤ (b₂.automaton.x : Int) + (automatonOffset b₂).1
+        ∧ (b₂.automaton.x : Int) + (automatonOffset b₂).1 < (b₂.size : Int)
+        ∧ 0 ≤ (b₂.automaton.y : Int) + (automatonOffset b₂).2
+        ∧ (b₂.automaton.y : Int) + (automatonOffset b₂).2 < (b₂.size : Int)
+        ∧ ((automatonOffset b₂).1 ≠ 0 ∨ (automatonOffset b₂).2 ≠ 0)
+        ∧ b₁.cellAt ⟨((b₂.automaton.x : Int) + (automatonOffset b₂).1).toNat,
+                     ((b₂.automaton.y : Int) + (automatonOffset b₂).2).toNat⟩ = .vacuum :=
+      ⟨hg.1, hg.2.1, hg.2.2.1, hg.2.2.2.1, hg.2.2.2.2.1,
+        by rw [hcellNC _ _ hg.1 hg.2.1 hg.2.2.1 hg.2.2.2.1]; exact hg.2.2.2.2.2⟩
+    rw [if_pos hg₁, if_pos hg]
+    refine ⟨by simp only [stepTo, hs], by simp only [stepTo], ?_⟩
+    intro c hcx' hcy'
+    have hcx : c.x < b₁.size := hs ▸ hcx'
+    have hcy : c.y < b₁.size := hs ▸ hcy'
+    have hraw : b₁.cells c = b₂.cells c := by
+      have h := hc c hcx hcy
+      simp only [Board.cellAt, if_pos (⟨hcx, hcy⟩ : c.x < b₁.size ∧ c.y < b₁.size),
+        if_pos (⟨hcx', hcy'⟩ : c.x < b₂.size ∧ c.y < b₂.size)] at h
+      exact h
+    simp only [stepTo, Board.cellAt, hs, ha]
+    rw [if_pos (⟨hcx', hcy'⟩ : c.x < b₂.size ∧ c.y < b₂.size),
+        if_pos (⟨hcx', hcy'⟩ : c.x < b₂.size ∧ c.y < b₂.size)]
+    split
+    · rfl
+    · split
+      · rfl
+      · exact hraw
+  · have hg₁ : ¬ (0 ≤ (b₂.automaton.x : Int) + (automatonOffset b₂).1
+        ∧ (b₂.automaton.x : Int) + (automatonOffset b₂).1 < (b₂.size : Int)
+        ∧ 0 ≤ (b₂.automaton.y : Int) + (automatonOffset b₂).2
+        ∧ (b₂.automaton.y : Int) + (automatonOffset b₂).2 < (b₂.size : Int)
+        ∧ ((automatonOffset b₂).1 ≠ 0 ∨ (automatonOffset b₂).2 ≠ 0)
+        ∧ b₁.cellAt ⟨((b₂.automaton.x : Int) + (automatonOffset b₂).1).toNat,
+                     ((b₂.automaton.y : Int) + (automatonOffset b₂).2).toNat⟩ = .vacuum) := by
+      intro h
+      exact hg ⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2.1,
+        by rw [← hcellNC _ _ h.1 h.2.1 h.2.2.1 h.2.2.2.1]; exact h.2.2.2.2.2⟩
+    rw [if_neg hg₁, if_neg hg]
+    exact ⟨hs, ha, fun c hx hy => hc c (hs ▸ hx) (hs ▸ hy)⟩
+
+
+/-! ## §8c  THE REFERENCE UNFOLDING of `applyMoves bd [ma, mb]`, per cell.
+
+Leg R's per-cell circuit gate is an arithmetic polynomial over indicator products; the reference is
+a `filter`/`map`/`find?` pipeline. These four lemmas evaluate that pipeline at a literal 2-element
+move list, in the FOUR shapes of `pieceSrcs` (which sources actually carry a piece at turn start),
+into the same per-cell if-chain the gate computes — landing particle first, then the other landing,
+then vacuum on a cleared source, else the old cell. This is the reference half of the Leg R
+capstone's bookkeeping layer. -/
+
+/-- `applyMoves` never resizes the board. -/
+theorem applyMoves_size (bd : Board) (ms : List Move) : (applyMoves bd ms).size = bd.size := rfl
+
+/-- BOTH sources carry: two journeys, `find?` scanned in list order (A's landing wins a shared
+destination — exactly the gate's `B`-before-`D` priority). -/
+theorem applyMoves_cell_TT (bd : Board) (ma mb : Move) (c : Coord)
+    (hx : c.x < bd.size) (hy : c.y < bd.size)
+    (ha : (bd.cellAt ma.frm).isVacuum = false) (hb : (bd.cellAt mb.frm).isVacuum = false) :
+    (applyMoves bd [ma, mb]).cellAt c
+      = (if followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm, mb.frm] ma.frm [] 3 = c
+         then bd.cellAt ma.frm
+         else if followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm, mb.frm] mb.frm [] 3 = c
+         then bd.cellAt mb.frm
+         else if c = ma.frm ∨ c = mb.frm then Particle.vacuum else bd.cellAt c) := by
+  rw [Board.cellAt, applyMoves_size, if_pos (⟨hx, hy⟩ : c.x < bd.size ∧ c.y < bd.size)]
+  simp only [applyMoves, List.map, List.filter_cons, ha, hb, List.find?, List.filter_nil,
+    not_false_eq_true, decide_true, if_true, decide_eq_true_eq, List.length_cons,
+    List.length_nil, List.contains_cons, List.elem_nil, Bool.or_false,
+    if_pos (show ¬(false = true) by decide),
+    show (0 + 1 + 1 + 1 : Nat) = 3 from rfl, Bool.or_eq_true, beq_iff_eq]
+  by_cases h1 : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm, mb.frm] ma.frm [] 3 = c
+  · rw [if_pos h1]; simp only [h1, decide_true]
+  · rw [if_neg h1]; simp only [h1, decide_false]
+    by_cases h2 : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm, mb.frm] mb.frm [] 3 = c
+    · rw [if_pos h2]; simp only [h2, decide_true]
+    · rw [if_neg h2]; simp only [h2, decide_false]
+
+/-- Only A carries: one journey, and only `ma.frm` is cleared. -/
+theorem applyMoves_cell_TF (bd : Board) (ma mb : Move) (c : Coord)
+    (hx : c.x < bd.size) (hy : c.y < bd.size)
+    (ha : (bd.cellAt ma.frm).isVacuum = false) (hb : (bd.cellAt mb.frm).isVacuum = true) :
+    (applyMoves bd [ma, mb]).cellAt c
+      = (if followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm] ma.frm [] 3 = c
+         then bd.cellAt ma.frm
+         else if c = ma.frm then Particle.vacuum else bd.cellAt c) := by
+  rw [Board.cellAt, applyMoves_size, if_pos (⟨hx, hy⟩ : c.x < bd.size ∧ c.y < bd.size)]
+  simp only [applyMoves, List.map, List.filter_cons, ha, hb, List.find?, List.filter_nil,
+    not_false_eq_true, decide_true, if_true, decide_eq_true_eq, List.length_cons,
+    List.length_nil, List.contains_cons, List.elem_nil, Bool.or_false,
+    if_pos (show ¬(false = true) by decide), if_neg (show ¬(¬(true = true)) by decide), not_true_eq_false, if_neg not_false,
+    show (0 + 1 + 1 + 1 : Nat) = 3 from rfl, Bool.or_eq_true, beq_iff_eq]
+  by_cases h1 : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm] ma.frm [] 3 = c
+  · rw [if_pos h1]; simp only [h1, decide_true]
+  · rw [if_neg h1]; simp only [h1, decide_false]
+
+/-- Only B carries: the mirror. -/
+theorem applyMoves_cell_FT (bd : Board) (ma mb : Move) (c : Coord)
+    (hx : c.x < bd.size) (hy : c.y < bd.size)
+    (ha : (bd.cellAt ma.frm).isVacuum = true) (hb : (bd.cellAt mb.frm).isVacuum = false) :
+    (applyMoves bd [ma, mb]).cellAt c
+      = (if followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [mb.frm] mb.frm [] 3 = c
+         then bd.cellAt mb.frm
+         else if c = mb.frm then Particle.vacuum else bd.cellAt c) := by
+  rw [Board.cellAt, applyMoves_size, if_pos (⟨hx, hy⟩ : c.x < bd.size ∧ c.y < bd.size)]
+  simp only [applyMoves, List.map, List.filter_cons, ha, hb, List.find?, List.filter_nil,
+    not_false_eq_true, decide_true, if_true, decide_eq_true_eq, List.length_cons,
+    List.length_nil, List.contains_cons, List.elem_nil, Bool.or_false,
+    if_pos (show ¬(false = true) by decide), if_neg (show ¬(¬(true = true)) by decide), not_true_eq_false, if_neg not_false,
+    show (0 + 1 + 1 + 1 : Nat) = 3 from rfl, Bool.or_eq_true, beq_iff_eq]
+  by_cases h1 : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [mb.frm] mb.frm [] 3 = c
+  · rw [if_pos h1]; simp only [h1, decide_true, List.contains_cons, List.elem_nil,
+      Bool.or_false, beq_iff_eq]
+  · rw [if_neg h1]; simp only [h1, decide_false, List.contains_cons, List.elem_nil,
+      Bool.or_false, beq_iff_eq]
+
+/-- NEITHER source carries: the board is untouched. -/
+theorem applyMoves_cell_FF (bd : Board) (ma mb : Move) (c : Coord)
+    (hx : c.x < bd.size) (hy : c.y < bd.size)
+    (ha : (bd.cellAt ma.frm).isVacuum = true) (hb : (bd.cellAt mb.frm).isVacuum = true) :
+    (applyMoves bd [ma, mb]).cellAt c = bd.cellAt c := by
+  rw [Board.cellAt, applyMoves_size, if_pos (⟨hx, hy⟩ : c.x < bd.size ∧ c.y < bd.size)]
+  simp only [applyMoves, List.map, List.filter_cons, ha, hb, List.find?, List.filter_nil,
+    not_false_eq_true, decide_true, if_true, decide_eq_true_eq,
+    if_neg (show ¬(¬(true = true)) by decide), not_true_eq_false, if_neg not_false, List.contains_nil]
+  rfl
+
 /-! ## §9  Axiom-cleanliness self-check (no `native_decide`; core axioms only). -/
 
 #print axioms moveValidB_iff
@@ -663,5 +865,10 @@ def forkB : Move := { who := 1, frm := ⟨0, 0⟩, to := ⟨3, 0⟩ }
 #print axioms winner_sound
 #print axioms applyTurn_preserves_inBounds
 #print axioms automatafl_air_refines_applyTurn
+#print axioms automatonStep_congr
+#print axioms applyMoves_cell_TT
+#print axioms applyMoves_cell_TF
+#print axioms applyMoves_cell_FT
+#print axioms applyMoves_cell_FF
 
 end Dregg2.Games.Automatafl

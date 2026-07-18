@@ -33,62 +33,70 @@ regenerated). The `BoardAlphabet` envelope is consequently a THEOREM here — `b
 extracted from the byte-pinned constraint list, and `srcNonVac_of_sat` no longer takes it as a
 hypothesis. Every result in this file is UNCONDITIONAL: there is no assumed envelope left.
 
-## DEFECT #5, FOUND HERE — the identical-move turn has NO satisfying witness (COMPLETENESS)
+## DEFECT #5, FOUND HERE AND NOW FIXED AT SOURCE — the identical-move turn was UNSATISFIABLE
 
-`write_mid_witnessed`'s cell polynomial subtracts `carry_i·src_i[c]·old[c]` once PER PIECE. When
-both moves clear the SAME square (`frm_a = frm_b` with both sources carrying — two players proposing
-the identical move, which the reference explicitly does NOT treat as a conflict, see
-`Automatafl.conflictResolve`) the old particle is subtracted TWICE, forcing `mid[frm] ≡ −old[frm]`.
-Since DEFECT #4's alphabet gates now pin both cells into `{0,1,2,3}`, that forces `old[frm] = 0` —
-contradicting the carry. So the leaf is UNSATISFIABLE on that legal turn.
+`write_mid_witnessed`'s cell polynomial subtracted `carry_i·src_i[c]·old[c]` once PER PIECE. When
+both moves cleared the SAME square (`frm_a = frm_b` with both sources carrying — two players
+proposing the identical move, which the reference explicitly does NOT treat as a conflict, see
+`Automatafl.conflictResolve`) the old particle was subtracted TWICE, forcing `mid[frm] ≡ −old[frm]`.
+Since DEFECT #4's alphabet gates pin both cells into `{0,1,2,3}`, that forced `old[frm] = 0` —
+contradicting the carry. The leaf was UNSATISFIABLE on that legal turn: a COMPLETENESS defect
+(soundness was never at risk — a legal turn was refused, no forged board admitted).
 
-This is a COMPLETENESS defect, not a soundness one: no forged board is admitted, a legal one is
-refused. It is recorded (`noSharedSource`, `canonDoubleGood`) rather than papered over, and it is
-the fact that rules the double-count configurations out of the R6 algebra.
+FIXED: `AutomataflResolveEmit.writeCellHead` now carries the SHARED-ENDPOINT inclusion–exclusion —
+`+ A·C·old` (a shared source is vacated exactly once) and `+ B·D·old − B·D·particle_b` (a shared
+landing deposits exactly one particle). Constraint COUNT is unchanged (379); the wire golden was
+re-pinned and `circuit/descriptors/by-name/automatafl-resolve.json` regenerated (drift gate PASS).
+The canary polarity is FLIPPED: `canonDoubleGood` now SATISFIES both the cell gate and the alphabet
+gate at `mid = 0`, and the two forges (`mid = −1`, the OLD forced value; `mid = 1`, source not
+vacated) are REJECTED — so the fix MOVED the pinned value rather than widening the gate.
+`noSharedSource` is replaced by `sharedSourceVacatesOnce`, and `cellAlgebra` no longer takes
+`A·C = 0` / `B·D = 0` as hypotheses: those two configurations are now LIVE, satisfiable cases.
 
 ## What is CLOSED here, and what is NOT (the honest residual)
 
 CLOSED: R1 (auto pin) · R2 (`validate_move` ⇒ `MoveValid`, witnessed source read) · R3 (witnessed
 `is_vertical`, occlusion) · the R4 pattern bits, selection truth table and `srcNonVac`
-(now unconditional) · (a) `boardvalid_of_sat` · (b) `conflictResolve_pair`, the R4 corollary
-identifying the emitted `fork`/`collide`/`surv` selection with the reference `conflictResolve` on
-the 2-element move list · (c) THE `m = 2` CATERPILLAR, BOTH SIDES:
+(unconditional) · (a) `boardvalid_of_sat` · (b) `conflictResolve_pair` · (c) THE `m = 2`
+CATERPILLAR, BOTH SIDES (`chainDest_a`/`chainDest_b`; `carry_of_sat`/`ft_of_sat` and their four
+instances) · (d) R6's EXTRACTORS AND ALGEBRA (§5.8): `dstOneHot_of_sat`, `writeCell_of_sat`,
+`cellAlgebra` (eleven live cases of sixteen, the five excluded ones being ONLY the same-piece
+`A·B = C·D = 0`) · (e) NEW, §5.8.2 — THE INDICATOR GLUE, residual (i), CLOSED:
+`oneHotPair_indicator`, `srcIndicator_of_sat` and `dstIndicator_of_sat` identify the emitted
+products `carry·srcRow·srcCol` / `carry·dstRow·dstCol` with the decidable `Coord` predicates
+`⟨x,y⟩ = frm_k` / `⟨x,y⟩ = dest_k` (the interpolated `to_own + ft·(to_other − to_own)`), per cell,
+via the `Int.toNat` bridge — memberships `decide`d against the byte-pinned constraint list.
 
-  * reference — `nextOf_pair` and the FOUR terminal shapes `followChain_own`,
-    `followChain_own_landing`, `followChain_flowThrough` and (NEW, §5.6) `followChain_twoCycle`,
-    plus their B-side mirrors, assembled into `chainDest_a` / `chainDest_b`: the landing square is
-    `to_other` EXACTLY on the circuit's `ft` pattern and `to_own` otherwise. (The three earlier
-    lemmas were NOT jointly exhaustive — the 2-cycle `to_a = frm_b`, `¬bnz`, `to_b = frm_a` fell
-    through all of them; `followChain_twoCycle` closes that hole.)
-  * circuit — `carry_of_sat` / `ft_of_sat` (§5.7) and their four instances `carryA/B_of_sat`,
-    `ftA/B_of_sat`: `carry = surv ∧ nz ∧ ¬occ` and
-    `ft = eq_chain ∧ ¬other_nz ∧ surv ∧ ¬occ_other ∧ ¬eq_back`, over the byte-pinned
-    `carryConstraints` / `flowThroughConstraints`.
+Also CLOSED, in `Dregg2.Games.Automatafl` (reference side, no circuit content):
 
-(d) R6's EXTRACTORS AND ALGEBRA (§5.8): `dstOneHot_of_sat` (the landing selector is pinned to the
-INTERPOLATED `destHead`, so the one-hot cannot name a square the `ft` bit did not select),
-`writeCell_of_sat` (the per-cell gate as an extracted field congruence, its polynomial SHAPE
-discharged by `rfl` against the emitted head at each of the four cells), and `cellAlgebra` — the
-seven live cases of the sixteen indicator combinations, proving the emitted cell polynomial equals
-the reference `applyMoves` rewrite VALUE (landing particle / cleared-source vacuum / kept cell)
-given the structural exclusions, of which the shared-source one is `noSharedSource`.
+  * §8b THE SEAM LEMMA — `automatonStep_congr`: two boards agreeing on `size`, `automaton`,
+    `useColumnRule` and every IN-BOUNDS cell step to boards agreeing on every in-bounds cell.
+    This is what the whole-turn composition needs, because the Leg R → Leg A seam is a CELL-WISE
+    agreement (what a `mid_root` PI equality gives) and NOT a `Board` equality. Built on
+    `raycastFuel_congr` / `raycast_congr` / `automatonOffset_congr`.
+  * §8c THE REFERENCE UNFOLDING, residual (ii), CLOSED — `applyMoves_cell_TT/TF/FT/FF`: the
+    `filter`/`map`/`find?` pipeline of `applyMoves bd [ma, mb]` evaluated per cell in all FOUR
+    `(anz, bnz)` shapes of `pieceSrcs`, into the same per-cell if-chain the gate computes
+    (landing-A first, then landing-B, then vacuum on a cleared source, else the old cell — the
+    reference's `find?` list order IS the gate's `B`-before-`D` priority).
 
-NOT CLOSED, precisely — ONE bookkeeping layer and the two theorems above it:
+NOT CLOSED, precisely — residual (iii) ONLY, the assembly:
 
-  (i) the INDICATOR GLUE: `A = carry_a · wSrcRow a y · wSrcCol a x` (and the three siblings) must be
-      identified with the decidable Coord predicates `⟨x,y⟩ = ma.frm` / `⟨x,y⟩ = dest_a` that
-      `cellAlgebra`'s conclusion and the reference rewrite are phrased in — a per-cell unfolding of
-      the one-hot values at literal `(x, y)`, plus the `Int.toNat` bridge between the witnessed
-      coordinate columns and `moveDecode`'s `Coord` fields;
-  (ii) the REFERENCE UNFOLDING of `applyMoves bd [ma, mb]` into that same per-cell if-chain, in the
-      four `(anz, bnz)` shapes of `pieceSrcs` (its `filter`/`map`/`find?` evaluated);
-  (iii) and therefore THE CAPSTONE `resolve_sat_imp_resolveMid`, and the WHOLE-TURN composition
-      through `Automatafl.applyTurn_factors` with `AutomataflStepRefine.astep_sat_imp_automatonStep`
-      (which additionally needs an `automatonStep` congruence over boards agreeing on `cellAt` at
-      in-bounds coordinates, since the mid seam is a cell-wise agreement, not a `Board` equality).
+  * `resolve_sat_imp_resolveMid` is NOT stated. Every ingredient it needs now exists — the
+    indicator glue (i), the reference unfolding (ii), `cellAlgebra`, `conflictResolve_pair`,
+    `chainDest_a`/`chainDest_b`, `carryA/B_of_sat`, `ftA/B_of_sat`, `boardvalid_of_sat` — but the
+    ASSEMBLY is unwritten: it must case on which moves survive `moveValidB`-filtering and
+    `conflictResolve` (the reference applies `applyMoves` to the FILTERED list, whereas
+    `chainDest_a/b` are stated over the literal pair `[ma, mb]`), then match the surviving shape
+    against the corresponding `applyMoves_cell_*` lemma and rewrite `cellAlgebra`'s conclusion
+    through the indicator glue.
+  * THE WHOLE-TURN THEOREM is therefore also NOT stated. `automatonStep_congr` and
+    `Automatafl.applyTurn_factors` are both in place to glue it the moment (iii) lands; the seam
+    would enter as a NAMED hypothesis (`boardDecode` of Leg A's OLD columns agrees cell-wise with
+    Leg R's decoded MID columns — what the fold-level `mid_root` PI equality enforces).
 
-None of (i)–(iii) is stated: there is no `sorry`, no assumed arithmetization hypothesis, no assumed
-mid-board link, and no weakened or vacuous capstone standing in for them.
+There is no `sorry`, no assumed arithmetization hypothesis, no assumed mid-board link, and no
+weakened or vacuous capstone standing in for either.
 
 ## Axiom hygiene
 
@@ -1646,7 +1654,19 @@ theorem writeCell_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
           + (-1) * ((envAt t i).loc (carryCol 1) * (envAt t i).loc (wSrcRow 1 y)
               * (envAt t i).loc (wSrcCol 1 x) * (envAt t i).loc (carryCol 0)
               * (envAt t i).loc (wDstRow 0 y) * (envAt t i).loc (wDstCol 0 x)
-              * (envAt t i).loc (old c))) :
+              * (envAt t i).loc (old c))
+          + (-1) * ((envAt t i).loc (carryCol 0) * (envAt t i).loc (wSrcRow 0 y)
+              * (envAt t i).loc (wSrcCol 0 x) * (envAt t i).loc (carryCol 1)
+              * (envAt t i).loc (wSrcRow 1 y) * (envAt t i).loc (wSrcCol 1 x)
+              * (envAt t i).loc (old c))
+          + (-1) * ((envAt t i).loc (carryCol 0) * (envAt t i).loc (wDstRow 0 y)
+              * (envAt t i).loc (wDstCol 0 x) * (envAt t i).loc (carryCol 1)
+              * (envAt t i).loc (wDstRow 1 y) * (envAt t i).loc (wDstCol 1 x)
+              * (envAt t i).loc (old c))
+          + (envAt t i).loc (carryCol 0) * (envAt t i).loc (wDstRow 0 y)
+              * (envAt t i).loc (wDstCol 0 x) * (envAt t i).loc (carryCol 1)
+              * (envAt t i).loc (wDstRow 1 y) * (envAt t i).loc (wDstCol 1 x)
+              * (envAt t i).loc (particleCol 1)) :
     (envAt t i).loc (mid c)
       ≡ (1 - (envAt t i).loc (carryCol 0) * ((envAt t i).loc (wSrcRow 0 y)
                 * (envAt t i).loc (wSrcCol 0 x))
@@ -1661,12 +1681,22 @@ theorem writeCell_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
                 * ((envAt t i).loc (wDstRow 1 y) * (envAt t i).loc (wDstCol 1 x)))
            + (envAt t i).loc (carryCol 1) * ((envAt t i).loc (wSrcRow 1 y)
                 * (envAt t i).loc (wSrcCol 1 x)) * ((envAt t i).loc (carryCol 0)
-                * ((envAt t i).loc (wDstRow 0 y) * (envAt t i).loc (wDstCol 0 x))))
+                * ((envAt t i).loc (wDstRow 0 y) * (envAt t i).loc (wDstCol 0 x)))
+           + (envAt t i).loc (carryCol 0) * ((envAt t i).loc (wSrcRow 0 y)
+                * (envAt t i).loc (wSrcCol 0 x)) * ((envAt t i).loc (carryCol 1)
+                * ((envAt t i).loc (wSrcRow 1 y) * (envAt t i).loc (wSrcCol 1 x)))
+           + (envAt t i).loc (carryCol 0) * ((envAt t i).loc (wDstRow 0 y)
+                * (envAt t i).loc (wDstCol 0 x)) * ((envAt t i).loc (carryCol 1)
+                * ((envAt t i).loc (wDstRow 1 y) * (envAt t i).loc (wDstCol 1 x))))
           * (envAt t i).loc (old c)
         + (envAt t i).loc (carryCol 0) * ((envAt t i).loc (wDstRow 0 y)
             * (envAt t i).loc (wDstCol 0 x)) * (envAt t i).loc (particleCol 0)
         + (envAt t i).loc (carryCol 1) * ((envAt t i).loc (wDstRow 1 y)
             * (envAt t i).loc (wDstCol 1 x)) * (envAt t i).loc (particleCol 1)
+        - (envAt t i).loc (carryCol 0) * ((envAt t i).loc (wDstRow 0 y)
+            * (envAt t i).loc (wDstCol 0 x)) * ((envAt t i).loc (carryCol 1)
+            * ((envAt t i).loc (wDstRow 1 y) * (envAt t i).loc (wDstCol 1 x)))
+            * (envAt t i).loc (particleCol 1)
         [ZMOD 2013265921] := by
   have hg := rgateH hsat i hi hmem
   rw [hshape] at hg
@@ -1691,43 +1721,49 @@ per-cell VALUE. Both are pure integer statements over the four indicator product
 `A = carry_a·src_a[c]`, `B = carry_a·dst_a[c]`, `C = carry_b·src_b[c]`, `D = carry_b·dst_b[c]`, so
 they hold for every cell and every board without further case analysis upstream. -/
 
-/-- **THE DOUBLE-COUNT EXCLUSION — and a DESCRIPTOR DEFECT (completeness), found here.**
+/-- **THE SHARED-SOURCE CASE — DEFECT #5, NOW FIXED (the canary polarity is FLIPPED).**
 
-If BOTH pieces carry and BOTH clear the SAME cell (`frm_a = frm_b`, the "two players propose the
-identical move" turn, which the reference explicitly does NOT treat as a conflict —
+BEFORE: if BOTH pieces carried and BOTH cleared the SAME cell (`frm_a = frm_b`, the "two players
+propose the identical move" turn, which the reference explicitly does NOT treat as a conflict —
 `Automatafl.conflictResolve`'s doc: "Identical `(src,dst)` moves are NOT a conflict"), the emitted
-cell gate subtracts the old particle TWICE, forcing `mid ≡ −old`. With both cells range-checked into
-the particle alphabet that pins `old = 0` — i.e. the source was VACUUM, contradicting the carry.
+cell gate subtracted the old particle TWICE, forcing `mid ≡ −old`; with both cells range-checked
+into the particle alphabet that pinned `old = 0`, contradicting the carry — the leaf had NO
+satisfying witness on a legal turn (a COMPLETENESS defect; soundness was never at risk).
 
-So the descriptor has NO satisfying witness on an identical-move turn: soundness is intact (this is
-the fact the capstone leans on to rule out the double-count configurations), but the leaf is
-INCOMPLETE — a legal automatafl turn it cannot prove. Recorded as a defect, not papered over. -/
-theorem noSharedSource {oldc midc : ℤ} (hold : 0 ≤ oldc ∧ oldc ≤ 3) (hmid : 0 ≤ midc ∧ midc ≤ 3)
-    (hmod : midc ≡ -oldc [ZMOD 2013265921]) : oldc = 0 := by
-  have h : midc + oldc ≡ 0 [ZMOD 2013265921] := by
-    have := hmod.add_right oldc
-    simpa using this
-  have := eq_of_modEq_canon (a := midc + oldc) (b := 0) ⟨by omega, by omega⟩ canon_zero h
-  omega
+AFTER: `AutomataflResolveEmit.writeCellHead` carries the inclusion–exclusion overlap terms
+`A·C·old` and `B·D·(old − particle_b)`, so a shared source is vacated EXACTLY ONCE. This lemma is
+that fact: on the shared-source configuration the gate now pins `mid = 0`, which IS in the particle
+alphabet — the turn is SATISFIABLE, and no `old = 0` is forced. It is the shared-source
+specialization of `cellAlgebra`, which no longer needs `A·C = 0` or `B·D = 0` as hypotheses. -/
+theorem sharedSourceVacatesOnce {oldc midc : ℤ} (hold : 0 ≤ oldc ∧ oldc ≤ 3)
+    (hmid : 0 ≤ midc ∧ midc ≤ 3)
+    (hmod : midc ≡ (1 - 1 - 0 - 1 - 0 + 1 * 0 + 1 * 0 + 1 * 1 + 0 * 0) * oldc + 0 * oldc + 0 * oldc
+              [ZMOD 2013265921]) : midc = 0 := by
+  norm_num at hmod
+  exact eq_of_modEq_canon ⟨hmid.1, by omega⟩ canon_zero hmod
 
-/-- **(2) THE PER-CELL REWRITE, RESOLVED.** With the two structural exclusions (a cell is never both
-a cleared source and a landing of the SAME piece; and — by `noSharedSource` — never a shared source
-or a shared landing of BOTH pieces), the emitted cell polynomial evaluates to exactly the reference
-`applyMoves` rewrite of that cell: a landing piece's particle, else vacuum on a cleared source, else
-the old cell kept. Seven live cases out of sixteen; the other nine are the excluded products. -/
+/-- **(2) THE PER-CELL REWRITE, RESOLVED.** With the ONLY remaining structural exclusion (a cell is
+never both a cleared source and a landing of the SAME piece: `A·B = C·D = 0`), the emitted cell
+polynomial evaluates to exactly the reference `applyMoves` rewrite of that cell: a landing piece's
+particle, else vacuum on a cleared source, else the old cell kept. Eleven live cases out of sixteen;
+the other five are the same-piece exclusions.
+
+DEFECT #5's fix is visible right here: the SHARED-SOURCE case `A = C = 1` and the SHARED-LANDING
+case `B = D = 1` are now LIVE cases with a satisfying `midc` (`0` and `pa` respectively), where
+before they were hypotheses (`hAC`, `hBD`) ruling the configurations out as unsatisfiable. -/
 theorem cellAlgebra {oldc midc pa pb A B C D : ℤ}
     (hA : A = 0 ∨ A = 1) (hB : B = 0 ∨ B = 1) (hC : C = 0 ∨ C = 1) (hD : D = 0 ∨ D = 1)
-    (hAB : A * B = 0) (hCD : C * D = 0) (hAC : A * C = 0) (hBD : B * D = 0)
+    (hAB : A * B = 0) (hCD : C * D = 0)
     (hold : 0 ≤ oldc ∧ oldc ≤ 3) (hmid : 0 ≤ midc ∧ midc ≤ 3)
     (hpa : 0 ≤ pa ∧ pa ≤ 3) (hpb : 0 ≤ pb ∧ pb ≤ 3)
-    (hmod : midc ≡ (1 - A - B - C - D + A * D + C * B) * oldc + B * pa + D * pb
-              [ZMOD 2013265921]) :
+    (hmod : midc ≡ (1 - A - B - C - D + A * D + C * B + A * C + B * D) * oldc
+              + B * pa + D * pb - B * D * pb [ZMOD 2013265921]) :
     midc = if B = 1 then pa else if D = 1 then pb else if A = 1 ∨ C = 1 then 0 else oldc := by
   have hcan : ∀ z : ℤ, 0 ≤ z → z ≤ 3 → Canon z := fun z h1 h2 => ⟨h1, by omega⟩
   rcases hA with a | a <;> rcases hB with b | b <;> rcases hC with c | c <;> rcases hD with d | d <;>
     subst a <;> subst b <;> subst c <;> subst d <;>
     first
-      | (exfalso; simp only [mul_one, one_mul, mul_zero, zero_mul] at hAB hAC hBD hCD; omega)
+      | (exfalso; simp only [mul_one, one_mul, mul_zero, zero_mul] at hAB hCD; omega)
       | (norm_num at hmod ⊢;
          refine eq_of_modEq_canon (hcan _ hmid.1 hmid.2) ?_ hmod;
          first
@@ -1735,6 +1771,112 @@ theorem cellAlgebra {oldc midc pa pb A B C D : ℤ}
            | exact hcan _ hpa.1 hpa.2
            | exact hcan _ hpb.1 hpb.2
            | exact canon_zero)
+
+
+/-! ### §5.8.2 — THE INDICATOR GLUE (residual (i), CLOSED).
+
+`cellAlgebra` is phrased over the four indicator products `A, B, C, D`; the reference rewrite is
+phrased over the decidable `Coord` predicates `⟨x,y⟩ = ma.frm` / `⟨x,y⟩ = dest_a`. These three
+lemmas identify them, by per-cell unfolding of the one-hot VALUES at literal `(x, y)` plus the
+`Int.toNat` bridge from the witnessed coordinate columns to `moveDecode`'s `Coord` fields. -/
+
+/-- THE INDICATOR CORE: a pair of two-selector one-hots pinned to `(vx, vy)` multiplies to the
+`Coord` equality indicator at every literal cell of the 2×2 board. -/
+theorem oneHotPair_indicator {r0 r1 c0 c1 vx vy : ℤ}
+    (hr1 : r1 = vy) (hr0 : r0 = 1 - vy) (hvy : vy = 0 ∨ vy = 1)
+    (hc1 : c1 = vx) (hc0 : c0 = 1 - vx) (hvx : vx = 0 ∨ vx = 1)
+    (x y : Nat) (hx : x < 2) (hy : y < 2) :
+    (if y = 0 then r0 else r1) * (if x = 0 then c0 else c1)
+      = if (⟨x, y⟩ : Coord) = (⟨vx.toNat, vy.toNat⟩ : Coord) then 1 else 0 := by
+  interval_cases x <;> interval_cases y <;>
+    rcases hvx with hvx | hvx <;> rcases hvy with hvy | hvy <;>
+    subst hr0 <;> subst hr1 <;> subst hc0 <;> subst hc1 <;> rw [hvx, hvy] <;> decide
+
+section IndicatorGlue
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- THE SOURCE-INDICATOR GLUE: piece `k`'s emitted source one-hot product at cell `(x,y)` IS the
+decidable `Coord` predicate `⟨x,y⟩ = ma.frm` that the reference rewrite is phrased in — the
+`Int.toNat` bridge between the witnessed coordinate columns and `moveDecode`'s `Coord` fields. -/
+theorem srcIndicator_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (k x y : Nat)
+    (hx : x < 2) (hy : y < 2)
+    (hr0 : cg (gBin (wSrcRow k 0)) ∈ automataflResolveDesc.constraints)
+    (hr1 : cg (gBin (wSrcRow k 1)) ∈ automataflResolveDesc.constraints)
+    (hrs : cgH (((Head.c (-1)).addLin 1 (wSrcRow k 0)).addLin 1 (wSrcRow k 1))
+            ∈ automataflResolveDesc.constraints)
+    (hrx : cgH ((Head.lin 1 (wSrcRow k 1)).addLin (-1) (cFy (mvBase k)))
+            ∈ automataflResolveDesc.constraints)
+    (hc0 : cg (gBin (wSrcCol k 0)) ∈ automataflResolveDesc.constraints)
+    (hc1 : cg (gBin (wSrcCol k 1)) ∈ automataflResolveDesc.constraints)
+    (hcs : cgH (((Head.c (-1)).addLin 1 (wSrcCol k 0)).addLin 1 (wSrcCol k 1))
+            ∈ automataflResolveDesc.constraints)
+    (hcx : cgH ((Head.lin 1 (wSrcCol k 1)).addLin (-1) (cFx (mvBase k)))
+            ∈ automataflResolveDesc.constraints) :
+    (envAt t i).loc (wSrcRow k y) * (envAt t i).loc (wSrcCol k x)
+      = if (⟨x, y⟩ : Coord)
+           = (⟨((envAt t i).loc (cFx (mvBase k))).toNat,
+              ((envAt t i).loc (cFy (mvBase k))).toNat⟩ : Coord) then 1 else 0 := by
+  obtain ⟨hvy, hs1, hs0⟩ := oneHot_of_sat hsat hc i hi (wSrcRow k 0) (wSrcRow k 1)
+    (cFy (mvBase k)) hr0 hr1 hrs hrx
+  obtain ⟨hvx, ht1, ht0⟩ := oneHot_of_sat hsat hc i hi (wSrcCol k 0) (wSrcCol k 1)
+    (cFx (mvBase k)) hc0 hc1 hcs hcx
+  have hrow : (envAt t i).loc (wSrcRow k y)
+      = if y = 0 then (envAt t i).loc (wSrcRow k 0) else (envAt t i).loc (wSrcRow k 1) := by
+    interval_cases y <;> simp
+  have hcol : (envAt t i).loc (wSrcCol k x)
+      = if x = 0 then (envAt t i).loc (wSrcCol k 0) else (envAt t i).loc (wSrcCol k 1) := by
+    interval_cases x <;> simp
+  rw [hrow, hcol]
+  exact oneHotPair_indicator hs1 hs0 hvy ht1 ht0 hvx x y hx hy
+
+/-- THE DESTINATION-INDICATOR GLUE: piece `k`'s emitted landing one-hot product at cell `(x,y)` IS
+the decidable `Coord` predicate `⟨x,y⟩ = dest_k`, where `dest_k` is the INTERPOLATED destination
+`to_own + ft·(to_other − to_own)` the `ft` bit selects (`chainDest_a`/`chainDest_b`'s value). -/
+theorem dstIndicator_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (k x y : Nat)
+    (hx : x < 2) (hy : y < 2) (ownx othx owny othy ft : Nat)
+    (hr0 : cg (gBin (wDstRow k 0)) ∈ automataflResolveDesc.constraints)
+    (hr1 : cg (gBin (wDstRow k 1)) ∈ automataflResolveDesc.constraints)
+    (hrs : cgH (((Head.c (-1)).addLin 1 (wDstRow k 0)).addLin 1 (wDstRow k 1))
+            ∈ automataflResolveDesc.constraints)
+    (hrx : cgH (((Head.lin 0 (wDstRow k 0)).addLin 1 (wDstRow k 1)).append
+              ((destHead owny othy ft).scale (-1))) ∈ automataflResolveDesc.constraints)
+    (hc0 : cg (gBin (wDstCol k 0)) ∈ automataflResolveDesc.constraints)
+    (hc1 : cg (gBin (wDstCol k 1)) ∈ automataflResolveDesc.constraints)
+    (hcs : cgH (((Head.c (-1)).addLin 1 (wDstCol k 0)).addLin 1 (wDstCol k 1))
+            ∈ automataflResolveDesc.constraints)
+    (hcx : cgH (((Head.lin 0 (wDstCol k 0)).addLin 1 (wDstCol k 1)).append
+              ((destHead ownx othx ft).scale (-1))) ∈ automataflResolveDesc.constraints)
+    (hox : (envAt t i).loc ownx = 0 ∨ (envAt t i).loc ownx = 1)
+    (htx : (envAt t i).loc othx = 0 ∨ (envAt t i).loc othx = 1)
+    (hoy : (envAt t i).loc owny = 0 ∨ (envAt t i).loc owny = 1)
+    (hty : (envAt t i).loc othy = 0 ∨ (envAt t i).loc othy = 1)
+    (hf : (envAt t i).loc ft = 0 ∨ (envAt t i).loc ft = 1) :
+    (envAt t i).loc (wDstRow k y) * (envAt t i).loc (wDstCol k x)
+      = if (⟨x, y⟩ : Coord)
+           = (⟨((envAt t i).loc ownx
+                 + (envAt t i).loc ft
+                     * ((envAt t i).loc othx - (envAt t i).loc ownx)).toNat,
+              ((envAt t i).loc owny
+                 + (envAt t i).loc ft
+                     * ((envAt t i).loc othy - (envAt t i).loc owny)).toNat⟩ : Coord)
+        then 1 else 0 := by
+  obtain ⟨hs1, hs0, hvy⟩ := dstOneHot_of_sat hsat hc i hi (wDstRow k 0) (wDstRow k 1)
+    owny othy ft hr0 hr1 hrs hrx hoy hty hf
+  obtain ⟨ht1, ht0, hvx⟩ := dstOneHot_of_sat hsat hc i hi (wDstCol k 0) (wDstCol k 1)
+    ownx othx ft hc0 hc1 hcs hcx hox htx hf
+  have hrow : (envAt t i).loc (wDstRow k y)
+      = if y = 0 then (envAt t i).loc (wDstRow k 0) else (envAt t i).loc (wDstRow k 1) := by
+    interval_cases y <;> simp
+  have hcol : (envAt t i).loc (wDstCol k x)
+      = if x = 0 then (envAt t i).loc (wDstCol k 0) else (envAt t i).loc (wDstCol k 1) := by
+    interval_cases x <;> simp
+  rw [hrow, hcol]
+  exact oneHotPair_indicator hs1 (by rw [hs0, hs1]) (hs1 ▸ hvy)
+    ht1 (by rw [ht0, ht1]) (ht1 ▸ hvx) x y hx hy
+
+end IndicatorGlue
 
 /-! ## §6 — The remaining gate bundles, discharged by `decide` against the byte-pinned list. -/
 
@@ -1859,19 +2001,46 @@ def canonDstForge : Assignment := fun c => if c = cTy (mvBase 0) then 1 else 0
 #guard canonDstExpr.eval canonDstGood == 0     -- ft = 0: the piece lands on its OWN `to`
 #guard canonDstExpr.eval canonDstForge != 0    -- landing square forged away from `to`: REJECTED
 
-/-- **THE DOUBLE-COUNT CANARY** (the completeness defect, witnessed). On the identical-move turn
-(`frm_a = frm_b`, both carrying) the emitted cell gate subtracts the source particle TWICE, so the
-only satisfying `mid` at that cell is `−old` — out of the particle alphabet for every non-vacuum
-source. Both gates are shown biting on the SAME assignment: the cell gate is satisfiable only at
-`mid = −1`, which the alphabet gate then rejects. -/
-def canonDoubleGood : Assignment := fun c =>
+/-- **THE DEFECT-#5 CANARY, POLARITY FLIPPED (the completeness fix, witnessed).** On the
+identical-move turn (`frm_a = frm_b`, both carrying) the emitted cell gate USED TO subtract the
+source particle twice, so the only satisfying `mid` at the shared source was `−old` — out of the
+particle alphabet for every non-vacuum source, i.e. NO witness on a legal turn.
+
+With the inclusion–exclusion overlap terms the shared source vacates ONCE: the honest `mid = 0`
+now satisfies BOTH the cell gate and the alphabet gate. Two-sided, in both directions:
+
+* GOOD — `mid[0] = 0` (vacated once): cell gate `== 0` AND alphabet gate `== 0`. The turn the
+  descriptor previously could not prove is now PROVABLE.
+* FORGE (i) — the OLD forced value `mid[0] = −1` is now REJECTED by the cell gate (so the fix did
+  not merely widen the gate: it MOVED the pinned value).
+* FORGE (ii) — `mid[0] = 1` (the source not vacated at all) is REJECTED: soundness intact, the
+  cell is still pinned to exactly one value. -/
+def canonDoubleBase : Assignment := fun c =>
   if c = old 0 ∨ c = particleCol 0 ∨ c = particleCol 1 then 1
   else if c = carryCol 0 ∨ c = carryCol 1 ∨ c = wSrcRow 0 0 ∨ c = wSrcCol 0 0
        ∨ c = wSrcRow 1 0 ∨ c = wSrcCol 1 0 then 1
-  else if c = mid 0 then -1 else 0
+  else 0
+def canonDoubleGood : Assignment := fun c => if c = mid 0 then 0 else canonDoubleBase c
+def canonDoubleForgeNeg : Assignment := fun c => if c = mid 0 then -1 else canonDoubleBase c
+def canonDoubleForgeKeep : Assignment := fun c => if c = mid 0 then 1 else canonDoubleBase c
 
-#guard (headToExpr (writeCellHead 0)).eval canonDoubleGood == 0        -- forced: mid = −old
-#guard (memberExpr (mid 0) [0, 1, 2, 3]).eval canonDoubleGood != 0     -- and −1 is NOT a particle
+#guard (headToExpr (writeCellHead 0)).eval canonDoubleGood == 0       -- vacated ONCE: SATISFIED
+#guard (memberExpr (mid 0) [0, 1, 2, 3]).eval canonDoubleGood == 0    -- and 0 IS a particle code
+#guard (headToExpr (writeCellHead 0)).eval canonDoubleForgeNeg != 0   -- the OLD forced −old: GONE
+#guard (headToExpr (writeCellHead 0)).eval canonDoubleForgeKeep != 0  -- source not vacated: REJECTED
+
+/-- **THE SHARED-LANDING CANARY.** The other half of the inclusion–exclusion: both pieces landing on
+the SAME square (the identical move's destination) deposits exactly ONE particle, not two. -/
+def canonLandBase : Assignment := fun c =>
+  if c = particleCol 0 ∨ c = particleCol 1 then 2
+  else if c = carryCol 0 ∨ c = carryCol 1 ∨ c = wDstRow 0 0 ∨ c = wDstCol 0 0
+       ∨ c = wDstRow 1 0 ∨ c = wDstCol 1 0 then 1
+  else 0
+def canonLandGood : Assignment := fun c => if c = mid 0 then 2 else canonLandBase c
+def canonLandForge : Assignment := fun c => if c = mid 0 then 4 else canonLandBase c
+
+#guard (headToExpr (writeCellHead 0)).eval canonLandGood == 0    -- ONE particle lands: SATISFIED
+#guard (headToExpr (writeCellHead 0)).eval canonLandForge != 0   -- doubled deposit: REJECTED
 
 /-! ## §8 — Axiom hygiene. Every exported theorem, kernel-clean. -/
 
@@ -1935,7 +2104,10 @@ def canonDoubleGood : Assignment := fun c =>
 #print axioms ftB_of_sat
 #print axioms dstOneHot_of_sat
 #print axioms writeCell_of_sat
-#print axioms noSharedSource
+#print axioms sharedSourceVacatesOnce
 #print axioms cellAlgebra
+#print axioms oneHotPair_indicator
+#print axioms srcIndicator_of_sat
+#print axioms dstIndicator_of_sat
 
 end Dregg2.Circuit.Emit.AutomataflResolveRefine
