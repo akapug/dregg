@@ -180,6 +180,28 @@ verifier changes identity → needs re-deploy + re-ceremony. Do NOT autonomously
 Follow-ups: transcript/challenger concretization (low compose-count — confirm it is composed not residual),
 BatchTable reuse stark_constraint_interp, merkle_open + boolean-decode.
 
+
+## ⚠⚠ CORRECTION — gnark-lean was OVER-CLAIMED (cutover gate-failed, correctly)
+The cycle-5 differential gate (FIRST check against a REAL proof, not an abstract theorem) revealed:
+the emit-driven circuit is a COMPILE-ONLY ~20% SKELETON (2.56M vs the deployed 12.87M), NOT a verifier:
+NO public statement, NO assignment mapping the real fixture proof into witnesses, NEVER calls
+test.IsSolved (compiles + counts constraints only; would accept ANY structurally-consistent witness).
+It does NOT model the settlement phases (transcript-replay challenger / FRI core / open_input seed
+binding / 25-lane statement) — the ~10M gap IS the real verifier. emit_faithful does NOT cover the
+compact descriptor (Lean says so).
+⇒ "keystone fired / #2 circuit-faithfulness CLOSED / hand-Go PROVABLY REDUNDANT" (75f90163b, e11e99a6f)
+was FALSE. What's REAL + banked: cycles 1-4 Lean theorems (leaf refinements + emitVerifier_refines↔
+verifyAlgo) are genuine but about a STRUCTURAL ABSTRACTION (~20%, never ingests a real proof).
+verifyAlgo/emitVerifier are MODELS; the FUNCTIONAL replacement (emit the FULL SettlementCircuit +
+Publics + assignment + all phases, covered by emit_faithful) is LARGELY UNDONE.
+The gate did its job — REFUSED to delete the deployed verifier. Nothing deleted (HEAD dd55012f3 clean).
+LESSON: adversarial-verify lanes checked each theorem's internal consistency AGAINST THE ABSTRACTION,
+never its CORRESPONDENCE to the deployed circuit on real proofs — that hole is why the over-claim
+survived 4 cycles. 3rd over-claim-at-swarm-speed today (flywheel · FRI-attribution · this); the real
+check always catches it. Remaining REAL work (cutover lane's actionable): (a) model the un-modeled
+phases, (b) expose Publics, (c) an assignment mapping the real proof into the witness = emit the FULL
+SettlementCircuit, not the leaf abstraction, with emit_faithful covering it. THAT is "replace the hand-Go".
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
