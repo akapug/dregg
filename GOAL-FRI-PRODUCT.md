@@ -236,6 +236,20 @@ Discipline now correct: Lean authors constraints · Go replays blind · the REAL
 NEXT (cycle 2): the next MEASURED divergence = input-open Merkle binding (block 2b: input-MMCS leaf hash via
 the Lean Poseidon2 + input-root), reality-gated to get the emit PAST 2b on the real proof.
 
+
+## AIR-in-Lean CYCLE 2 — input-open: PROGRESS + honest BLOCK (ac83a7e2f)
+✅ block 2a commit-Merkle now BINDS the real proof with LEAN Poseidon2 constraints (verified go test Diff).
+⚠ block 2b input-open still diverges — the Lean template emitted was WRONG SHAPE (single-leaf/W=8/single-
+height) but the real input-open is a MULTI-MATRIX MULTI-HEIGHT MMCS batch tree (6 matrices/520 limbs/65 rate
+slots; 4 height-classes + injected class-hash compressions through the depth-18 path). The wire lane REFUSED
+to fake (root=path[last] = self-signed mirror) — kept the placeholder, named the unblock. THE DISCIPLINE HELD.
+UNBLOCK (named, Lean-authored — InputOpenEmit machinery exists ∀-width, serialization absent): (1) per-width
+leaf-hash templates from multiFieldHashW, ReplayTemplate-shaped, NO select; (2) add `select` (api.Select, op
+arity 3) + bind-by-var-index to the generic Go replayer; (3) descriptor carries per-round height-class + row
+widths; widen block-2b + assignment to the multi-height batch (hashGroup per class, injected class hashes).
+RECALIBRATION: phases have REAL DEPTH (input-open = multi-height batch, not a Merkle walk); direction right +
+honest (Lean authors · real proof judges · lanes refuse to fake), but each phase is a substantial cycle.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
