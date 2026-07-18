@@ -1,5 +1,26 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑⚑⚑ AUTOMATAFL IN LEAN — Leg A (the automaton step) PROVEN, unconditionally (2026-07-18)
+The redo on the right substrate (`~/.claude/CLAUDE.md` law #1: AIR authored in LEAN, Rust calls in). Design:
+`docs/reference/AUTOMATAFL-11X11-DESIGN.md`. Reference = ember's `emberian/automatafl`. SCOPE two-player m=2.
+- ✅ **DESCRIPTOR AUTHORED IN LEAN + byte-pinned**: `AutomataflStepEmit.lean` — `automataflStepDesc` (traceWidth 269,
+  418 constraints, piCount 32), `#guard emitVmJson2 == <wire>`, emitted to `by-name/automatafl-step.json`, DRIFT-GATE PASS.
+- ✅ **LEG A CLOSED (`3a3f85b12`)**: `astep_sat_imp_automatonStep` — Satisfied2 + StepCanon ⇒ the decoded new board
+  = `automatonStep(old)`, cell-wise (the honest maximal statement; `Board.cells` is total). **UNCONDITIONAL** — no
+  `hvalid`, no arithmetization hypothesis, no `sorry`. Built bottom-up: auto-pin ▸ 4 rays = `Board.raycast` ▸
+  `Decision = evaluateAxis` (9 cases × 2 axes) ▸ `offset = chooseOffset` (20-bit score no-wrap + order embedding) ▸
+  the board-update fold. All `#assert_axioms = {propext, Classical.choice, Quot.sound}`.
+- ⚑ **TWO REAL DEFECTS the formalization surfaced** (invisible in the Rust, which "proved on a box" with both):
+  (1) the descriptor **never range-checked board cells** ⇒ `old[c] ≥ 4` decoded VACUUM (reference steps) while
+  `targ_vac` blocked (circuit didn't) — refinement FALSE; fixed at source (+8 gates, re-pinned, drift PASS, canary
+  rejects `cell = 4`). (2) **compile-time-baked geometry** — the not-auto gates baked `old.auto`, and occlusion baked
+  `is_vertical`; both now WITNESSED (`8087ae20d`: `iv = 1 ⟺ fx == tx` by `eq_scalar`, both branches gated).
+- ⏳ **Leg R (move adjudication)** in progress: validity + witnessed auto-read + occlusion authored (traceWidth 189,
+  226 constraints, byte-pinned in-file, deliberately NOT registered until complete). Remaining: anz/bnz,
+  eq_coords+fork/collide/survive, carry, ft_a/ft_b flow-through, `write_mid_witnessed`, `bind_board_roots`; then the
+  Leg R refinement (`Satisfied2 ⇒ resolve_mid`), the reveal (Leg S), the mid-root seam, win-check, DELETE THE RUST, ship.
+- Residuals: board_root8 transport (capstone ↔ PI digests); `NN = 2` minimal board (n=5/11 re-pin mechanically).
+
 ## ⚑⚑⚑ NOTE-TREE ACCUMULATOR → LEAN (retire the Rust) — chunk 1 DONE (2026-07-17)
 The note-COMMITMENT tree accumulator was hand-rolled RUST (`commit/src/poseidon2_tree.rs`) — AIR/circuit
 logic that slid into Rust (law #1 drift) — with only a TOY Lean model (`RotatedKernelRefinementNotes.
