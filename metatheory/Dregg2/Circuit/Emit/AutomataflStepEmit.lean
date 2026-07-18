@@ -574,18 +574,147 @@ def backEndConstraints : List VmConstraint2 :=
   ++ stepConstraints
   ++ bindBoardRootsConstraints
 
-/-- **`automataflStepDesc`** — the automatafl automaton-step (D1) descriptor, AUTHORED IN LEAN.
-Stage 1a authored the board + auto-pin + four-ray-scan front-end; Stage 1b completes it with the
-`decide_axis` truth table (×2 axes), `choose_offset`, the step, the board-update equalities, and the
-two `board_root8` `MerkleHash8` chip lookups (PIs `[16..32)`) — the full automaton-step gate set. -/
-def automataflStepDesc : EffectVmDescriptor2 :=
+/-! ## §4c — `descN n`: the board size as an explicit PARAMETER (AUTOMATAFL-NGENERIC-DESIGN §4).
+
+`NGen` threads the board dimension `n` through the Stage-1a FRONT-END — the `n²` board cells, the
+coordinate one-hots (`(List.range n).map …`) and the four ray scans (`List.range' 1 n`). The pure
+`Head`/gate combinators (`cgH`, `oneHotConstraints`, `memberExpr`, …) are reused as-is.
+
+`automataflStepDescN 2` is DEFINITIONALLY EQUAL to the byte-golden `automataflStepDesc` below (same
+numerals, same list), so every existing byte-golden `#guard` and `by decide` gate-membership proof
+over `automataflStepDesc.constraints` is preserved.
+
+SCOPE HONESTY: the Stage-1b BACK-END (`decide_axis` / `choose_offset` / step / `board_root8`) is
+authored at ABSOLUTE `n = 2` column offsets (`58`, `152`, `209`, `252`, …) — it is REUSED FROZEN, so
+`automataflStepDescN n` carries the frozen back-end unchanged. The front-end ray-block spacing (`10`
+columns/ray) and the coordinate bit width (`1` bit) are likewise the `n = 2` layout. Consequently the
+ONLY cleanly-`n`-parametric shape here is the BOARD-CELL COUNT (`2·n²` range gates); that is what the
+`n = 11` pin below asserts. Re-deriving the back-end column layout as functions of `n` is the later
+(§3.2 named-residual) proof-rebuild step. -/
+namespace NGen
+
+set_option linter.unusedVariables false
+
+def KK (n : Nat) : Nat := n * n
+def old (n : Nat) (i : Nat) : Nat := i
+def new (n : Nat) (i : Nat) : Nat := (KK n) + i
+def AX (n : Nat) : Nat := 2 * (KK n)
+def AY (n : Nat) : Nat := 2 * (KK n) + 1
+def axLoBit (n : Nat) : Nat := 2 * (KK n) + 2
+def axHiBit (n : Nat) : Nat := 2 * (KK n) + 3
+def ayLoBit (n : Nat) : Nat := 2 * (KK n) + 4
+def ayHiBit (n : Nat) : Nat := 2 * (KK n) + 5
+def selRow (n : Nat) (y : Nat) : Nat := 2 * (KK n) + 6 + y
+def selCol (n : Nat) (x : Nat) : Nat := 2 * (KK n) + 6 + n + x
+def rayBase (n : Nat) (d : Nat) : Nat := 2 * (KK n) + 6 + 2 * n + 10 * d
+def rIb (n : Nat) (d kk : Nat) : Nat := (rayBase n) d + 2 * (kk - 1)
+def rRc (n : Nat) (d kk : Nat) : Nat := (rayBase n) d + 2 * (kk - 1) + 1
+def rHit (n : Nat) (d kk : Nat) : Nat := (rayBase n) d + 4 + (kk - 1)
+def rDist (n : Nat) (d : Nat) : Nat := (rayBase n) d + 6
+def rWhat (n : Nat) (d : Nat) : Nat := (rayBase n) d + 7
+def rHib (n : Nat) (d : Nat) : Nat := (rayBase n) d + 8
+def rInv (n : Nat) (d : Nat) : Nat := (rayBase n) d + 9
+def A_FRONT_WIDTH (n : Nat) : Nat := 2 * (KK n) + 6 + 2 * n + 10 * 4
+def decomposeConstraints (n : Nat) (col loBit hiBit : Nat) : List VmConstraint2 :=
+  [ cg (gBin loBit)
+  , cgH ((Head.lin 1 col).addLin (-1) loBit)                      -- col − b_lo == 0
+  , cg (gBin hiBit)
+  , cgH (((Head.c ((n : ℤ) - 1)).addLin (-1) col).addLin (-1) hiBit) ]  -- (n−1) − col − b_hi == 0
+def autoPinHead (n : Nat) : Head :=
+  (List.range n).foldl (fun h (y : Nat) =>
+    (List.range n).foldl (fun h2 (x : Nat) =>
+      h2.addProd 1 [(selRow n) y, (selCol n) x, (old n) (y * n + x)]) h) (Head.c (-AUTO))
+def inWindowCols (n : Nat) (dx dy : ℤ) (kk : Nat) : List Nat :=
+  ((List.range n).filterMap (fun (t : Nat) =>
+      bif (dx == 1 && decide ((t : ℤ) ≤ (n : ℤ) - 1 - (kk : ℤ)))
+          || (dx == -1 && decide ((t : ℤ) ≥ (kk : ℤ)))
+      then some ((selCol n) t) else none))
+  ++ ((List.range n).filterMap (fun (t : Nat) =>
+      bif (dy == 1 && decide ((t : ℤ) ≤ (n : ℤ) - 1 - (kk : ℤ)))
+          || (dy == -1 && decide ((t : ℤ) ≥ (kk : ℤ)))
+      then some ((selRow n) t) else none))
+def ibEqHead (n : Nat) (d : Nat) (dx dy : ℤ) (kk : Nat) : Head :=
+  (Head.lin 1 ((rIb n) d kk)).append
+    ((((inWindowCols n) dx dy kk).foldl (fun h co => h.addLin 1 co) Head.zero).scale (-1))
+def rcReadHead (n : Nat) (d : Nat) (dx dy : ℤ) (kk : Nat) : Head :=
+  let sx := (kk : ℤ) * dx
+  let sy := (kk : ℤ) * dy
+  (List.range n).foldl (fun h (y : Nat) =>
+    let ty := (y : ℤ) + sy
+    bif decide (0 ≤ ty ∧ ty < (n : ℤ)) then
+      (List.range n).foldl (fun h2 (x : Nat) =>
+        let tx := (x : ℤ) + sx
+        bif decide (0 ≤ tx ∧ tx < (n : ℤ)) then
+          h2.addProd (-1) [(rIb n) d kk, (selRow n) y, (selCol n) x, (old n) (ty.toNat * n + tx.toNat)]
+        else h2) h
+    else h) (Head.lin 1 ((rRc n) d kk))
+def beforeConstraints (n : Nat) (d : Nat) : List VmConstraint2 :=
+  (List.range n).flatMap (fun (i : Nat) =>
+    let js := (List.range n).filter (fun (j : Nat) => decide (j > i))
+    let vacH := js.foldl (fun h (j : Nat) => h.addProd 1 [(rHit n) d (j + 1), (rRc n) d (i + 1)]) Head.zero
+    let inbH := js.foldl (fun h (j : Nat) =>
+      (h.addLin 1 ((rHit n) d (j + 1))).addProd (-1) [(rHit n) d (j + 1), (rIb n) d (i + 1)]) Head.zero
+    (bif headIsZero vacH then [] else [cgH vacH])
+    ++ (bif headIsZero inbH then [] else [cgH inbH]))
+def rayConstraints (n : Nat) (d : Nat) (dx dy : ℤ) : List VmConstraint2 :=
+  -- per step kk ∈ {1..n}: the in-bounds bit + its prefix-sum gate + the gated shifted read.
+  ((List.range' 1 n).flatMap (fun (kk : Nat) =>
+      [ cg (gBin ((rIb n) d kk)), cgH ((ibEqHead n) d dx dy kk), cgH ((rcReadHead n) d dx dy kk) ]))
+  -- the hit one-hot over steps 1..n: booleans then Σ == 1.
+  ++ ((List.range' 1 n).map (fun (kk : Nat) => cg (gBin ((rHit n) d kk))))
+  ++ [ cgH ((List.range' 1 n).foldl (fun h (kk : Nat) => h.addLin 1 ((rHit n) d kk)) (Head.c (-1))) ]
+  -- dist = Σ kk·hit_kk.
+  ++ [ cgH ((List.range' 1 n).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) ((rHit n) d kk))
+              (Head.lin (-1) ((rDist n) d))) ]
+  -- what ∈ {VAC, REP, ATT} and what = Σ hit_kk·rc_kk.
+  ++ [ cg (memberExpr ((rWhat n) d) [0, 1, 2])
+     , cgH ((List.range' 1 n).foldl (fun h (kk : Nat) => h.addProd 1 [(rHit n) d kk, (rRc n) d kk])
+              (Head.lin (-1) ((rWhat n) d))) ]
+  -- occlusion: vacuum-before + in-bounds-before.
+  ++ (beforeConstraints n) d
+  -- hib = Σ hit_kk·ib_kk (in bounds at the hit).
+  ++ [ cgH ((List.range' 1 n).foldl (fun h (kk : Nat) => h.addProd 1 [(rHit n) d kk, (rIb n) d kk])
+              (Head.lin (-1) ((rHib n) d))) ]
+  -- (1 − hib)·what == 0  (an OOB hit reads wall vacuum).
+  ++ [ cgH ((Head.lin 1 ((rWhat n) d)).addProd (-1) [(rHib n) d, (rWhat n) d]) ]
+  -- cond_nonzero: hib·(what·inv − 1) == 0  (an in-bounds hit read a genuine non-vacuum particle).
+  ++ [ cg (.mul (.var ((rHib n) d)) (.add (.mul (.var ((rWhat n) d)) (.var ((rInv n) d))) (.const (-1)))) ]
+def boardRangeConstraints (n : Nat) : List VmConstraint2 :=
+  ((List.range (KK n)).map (fun c => cg (memberExpr ((old n) c) [0, 1, 2, 3])))
+  ++ ((List.range (KK n)).map (fun c => cg (memberExpr ((new n) c) [0, 1, 2, 3])))
+def frontEndConstraints (n : Nat) : List VmConstraint2 :=
+  (boardRangeConstraints n)
+  ++ (decomposeConstraints n) (AX n) (axLoBit n) (axHiBit n)
+  ++ (decomposeConstraints n) (AY n) (ayLoBit n) (ayHiBit n)
+  ++ oneHotConstraints ((List.range n).map (selRow n)) (Head.lin 1 (AY n))   -- the row one-hot @ ay (n-wide)
+  ++ oneHotConstraints ((List.range n).map (selCol n)) (Head.lin 1 (AX n))   -- the col one-hot @ ax (n-wide)
+  ++ [ cgH (autoPinHead n) ]
+  ++ (rayConstraints n) 0 1 0      -- XP
+  ++ (rayConstraints n) 1 (-1) 0   -- XN
+  ++ (rayConstraints n) 2 0 1      -- YP
+  ++ (rayConstraints n) 3 0 (-1)   -- YN
+
+end NGen
+
+/-- **`automataflStepDescN n`** — the automaton-step (D1) descriptor with the board size `n` an
+EXPLICIT parameter (AUTOMATAFL-NGENERIC-DESIGN §4). The FRONT-END is `n`-threaded; the Stage-1b
+BACK-END (`backEndConstraints`) is REUSED FROZEN at its `n = 2` absolute column layout, so `traceWidth`
+stays `A_WIDTH` and the object is well-formed only at `n = 2`. `automataflStepDescN 2` is defeq to the
+byte-golden `automataflStepDesc`; the board-cell count is the `n`-parametric shape (pinned at 11). -/
+def automataflStepDescN (n : Nat) : EffectVmDescriptor2 :=
   { name        := "dregg-automatafl-step-d1-n2"
   , traceWidth  := A_WIDTH
   , piCount     := A_PI_COUNT
   , tables      := []
-  , constraints := frontEndConstraints ++ backEndConstraints
+  , constraints := NGen.frontEndConstraints n ++ backEndConstraints
   , hashSites   := []
   , ranges      := [] }
+
+/-- **`automataflStepDesc`** — the automatafl automaton-step (D1) descriptor, AUTHORED IN LEAN.
+Stage 1a authored the board + auto-pin + four-ray-scan front-end; Stage 1b completes it with the
+`decide_axis` truth table (×2 axes), `choose_offset`, the step, the board-update equalities, and the
+two `board_root8` `MerkleHash8` chip lookups (PIs `[16..32)`) — the full automaton-step gate set. -/
+def automataflStepDesc : EffectVmDescriptor2 := automataflStepDescN 2
 
 /-! ## §5 — The byte-pinned wire golden + shape pins.
 
@@ -608,5 +737,21 @@ re-derives that file from THIS emission on every run. A drift on either side bre
 #guard automataflStepDesc.constraints.length == 418
 #guard automataflStepDesc.tables.length == 0
 #guard automataflStepDesc.hashSites.length == 0
+
+
+/-! ## §6 — `descN 11` shape pin: the board-cell count (the cleanly `n`-parametric part).
+
+`automataflStepDescN 11` is a well-formed term. The Step back-end and the front-end column LAYOUT
+stay `n = 2`-frozen (see §4c), so the one shape that IS correctly `n`-parametric is the board-cell
+count: `2·n²` range-membership gates (n² old + n² new). The commitment / decide / choose / step
+back-end is NOT pinned at 11. -/
+example : EffectVmDescriptor2 := automataflStepDescN 11
+#guard (NGen.boardRangeConstraints 11).length == 2 * 121
+#guard (NGen.boardRangeConstraints 11).length == 242
+#guard NGen.KK 11 == 121
+-- descN 2 is the frozen object: the parametric front-end agrees with the n = 2 instance.
+#guard NGen.KK 2 == KK
+#guard (NGen.boardRangeConstraints 2).length == boardRangeConstraints.length
+#guard (NGen.frontEndConstraints 2).length == frontEndConstraints.length
 
 end Dregg2.Circuit.Emit.AutomataflStepEmit
