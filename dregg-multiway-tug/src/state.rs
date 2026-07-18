@@ -49,15 +49,15 @@ pub const SCORE: &str = "score";
 
 /// The 16 register components, in allocation order (slots `0..16`).
 ///
-/// ⚠ APP-ROOT WELD — BLOCKED, diagnosis is a Lean-layout FACT (see docs/audit/CIRCUIT-LEAN-BOUNDARY.md).
-/// `winner` rides slot 7 (was 12) so `octet_index_of_register(7) = 7 - FIELD_BASE(3) = 4` is a VALID
-/// octet index — but the app-root weld (`PI[app] == octet[K]`) is UNSAT anyway, because the wide leg's
-/// AFTER-block octet exposes the CELL'S committed `fields[0..8]`, and `winner` is an `.identity`
-/// REGISTER-FILE component: it is absorbed into `state_commit`/`new8` but is NOT written into a
-/// committed `fields[0..7]` lane, so octet lane 4 holds 0 while the winner is 2 (the driven `0 vs 2`
-/// WitnessConflict). This slot move does NOT fix it (a register slot is not a cell field). THE REAL
-/// FIX is a schema/lowering change: lower/mirror `winner` into a committed `fields[0..7]` lane — the
-/// region the octet actually carries. Tracked as a tug follow-up; the fold test is `#[ignore]`d + red.
+/// APP-ROOT WELD — RESOLVED. `winner` rides slot 7 (was 12) so it lands inside the wide leg's exposed
+/// AFTER-block `fields[0..8]` octet — the region with direct lane-0 limbs (`fields[8..16]` ride only
+/// the opaque `fields_root`/authority digest and CANNOT be app-root exposed). A schema `Slot::Register(r)`
+/// IS the cell's committed `fields[r]` (the game writes `winner` via `SetField{index: reg("winner")=7}`
+/// -> `cell.state.fields[7]`; `.identity` vs `.stat` only picks the tooth, not the commitment location),
+/// and the producer puts `fields[k]` at octet index `k`. So `winner` IS committed at octet index 7, and
+/// the fold welds it with `field_key = reg("winner")` (see `fold::mint_win_turn_over_cell`). The earlier
+/// `0 vs 2` conflict was a WRONG octet-index map (`octet_index_of_register(7) = 4` aimed the weld at
+/// `a_secret`), NOT a missing commitment — fixed by using the cell field slot directly.
 const REGISTERS: [&str; 16] = [
     "deck",
     "oop",

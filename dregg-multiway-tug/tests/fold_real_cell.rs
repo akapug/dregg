@@ -109,6 +109,80 @@ fn the_cell_commitment_reflects_the_committed_winner() {
     );
 }
 
+/// ⚑ THE FIX, AT THE LEG LEVEL (medium: one wide-leg prove). The wide leg's exposed AFTER-block field
+/// octet (leg PIs the app-root weld's `field_key` indexes) must carry the cell's REAL committed fields —
+/// specifically `octet[reg("winner")] == winner`. Before the fix the octet was ALL ZEROS (the EffectVM
+/// `CellState::new` zeroed `fields`, and `fill_block` OVERRODE the octet from that zero state block), so
+/// no `field_key` could ever read the winner. `cell_custom_leg` now routes the cell's real lane-0 field
+/// octet into the EffectVM `CellState.fields`, so the octet exposes the committed values.
+#[test]
+#[ignore = "MEDIUM: one wide-leg STARK prove (~1min)"]
+fn the_leg_octet_exposes_the_committed_field_values() {
+    let (game, _charm, winner) = winning_game();
+    let real = game.world().cell_snapshot().expect("cell");
+    let octet = dregg_multiway_tug::fold::probe_leg_field_octet(&real);
+    let winner_slot = game.dep().reg("winner") as usize;
+
+    // Every exposed octet lane equals the cell's committed lane-0 field at that slot.
+    for k in 0..8 {
+        let committed = dregg_circuit::effect_vm::field_limbs8(&real.state.fields[k])[0].as_u32();
+        assert_eq!(
+            octet[k], committed,
+            "leg octet[{k}] ({}) must equal the committed fields[{k}] lane-0 ({committed})",
+            octet[k]
+        );
+    }
+    // The load-bearing one: the winner's field slot exposes the winner — the value the weld reads.
+    assert_eq!(
+        octet[winner_slot], winner as u32,
+        "leg octet[reg(\"winner\")={winner_slot}] must expose the committed winner ({winner}) — the app-root \
+         weld's field_key reads exactly this lane"
+    );
+}
+
+/// ⚑ THE APP-ROOT OCTET INDEX (fast regression for the winner-weldable fix). The wide leg exposes the
+/// AFTER-block `fields[0..8]` octet, and the producer (`compute_rotated_pre_limbs`, `fields[i] -> limb
+/// 4+i`) puts `cell.state.fields[k]` at octet index `k` — so the octet index of a cell field slot IS
+/// that slot itself. `winner` rides slot `reg("winner")`, so its committed value sits at octet index
+/// `reg("winner")` — the `field_key` the app-root weld must aim at. The old `octet_index_of_register`
+/// (which subtracts `FIELD_BASE` for the rotated-limb r3..r10 numbering) aimed at octet index `7-3=4`
+/// = `a_secret`, the driven `0 vs 2` WitnessConflict — captured here so the mis-map cannot return.
+#[test]
+fn the_winner_rides_its_own_field_slot_in_the_exposed_octet() {
+    use dregg_circuit::effect_vm::{field_limbs8, layout_generated::CUSTOM_APP_FIELD_OCTET_LEN};
+
+    let (game, _charm, winner) = winning_game();
+    let real = game.world().cell_snapshot().expect("cell");
+    let winner_slot = game.dep().reg("winner") as usize;
+
+    // The winner must ride the exposed octet (fields[0..8]) to be weldable at all.
+    assert!(
+        winner_slot < CUSTOM_APP_FIELD_OCTET_LEN,
+        "winner slot {winner_slot} must be < {CUSTOM_APP_FIELD_OCTET_LEN} (only fields[0..8] have lane-0 limbs)"
+    );
+
+    // octet index = field slot: octet[k] lane-0 == field value at slot k.
+    let octet_at = |k: usize| field_limbs8(&real.state.fields[k])[0];
+    assert_eq!(
+        octet_at(winner_slot),
+        BabyBear::from_u64(winner),
+        "octet index reg(\"winner\")={winner_slot} carries the committed winner ({winner}) — the correct field_key"
+    );
+
+    // The OLD buggy field_key: octet_index_of_register(winner_slot) = winner_slot - FIELD_BASE.
+    let old_buggy_key =
+        dregg_circuit::effect_vm::layout_generated::octet_index_of_register(winner_slot);
+    assert_ne!(
+        old_buggy_key, winner_slot,
+        "the rotated-limb map differs from the cell field slot — that difference WAS the bug"
+    );
+    assert_ne!(
+        octet_at(old_buggy_key),
+        BabyBear::from_u64(winner),
+        "the old field_key ({old_buggy_key}) reads a DIFFERENT field (a_secret), not the winner — the `0 vs N` conflict"
+    );
+}
+
 /// The win leaf publishes `[old8 ‖ new8 ‖ charm ‖ winner]`, and its public-input commitment
 /// (the value the fold binds) MOVES when the `[old8 ‖ new8]` prefix is the real cell's vs the
 /// fixture's. This replaces the vacuous `win_output_binds_the_winner` (which only asserted
@@ -184,4 +258,60 @@ fn win_folds_over_the_real_cell_and_lightclient_accepts() {
     );
     whole.final_root = honest_final;
     verify_history(&whole, &vk).expect("the restored real-cell win fold verifies again");
+}
+
+/// ⚑ THE HARD GATE — the app-root weld is a property of the ARTIFACT, light-client-visible. Three
+/// legs over the SAME real WorldCell win transition:
+///   (A) HONEST: the win sub-proof publishes the winner == the cell's committed winner field →
+///       the app-root fold is SAT and `verify_history` ACCEPTS (R == field[K] forced IN-CIRCUIT by
+///       `prove_custom_binding_node_app_root_segmented`).
+///   (B) DISAGREEING: the sub-proof publishes a winner != the cell's committed winner field → the
+///       app-root fold is UNSAT (no satisfying partner), so NO verifying artifact ever reaches
+///       `verify_history` — the DEPLOYED fold refuses it, visible to a pure light client.
+///   (C) CANARY (no code disabled): the SAME disagreeing winner folded through the STATE node
+///       (`app_root_binding = None`, the pre-cutover behavior) folds GREEN and `verify_history`
+///       ACCEPTS it — proving (B)'s refusal IS the app-root weld, not incidental.
+#[test]
+#[ignore = "SLOW: deployed app-root-welded recursion fold over the real WorldCell (~minutes ×3)"]
+fn app_root_weld_refuses_disagreeing_winner_through_verify_history() {
+    use dregg_lightclient::verify_history;
+    use dregg_multiway_tug::fold::{fold_win_over_cell, fold_win_over_cell_state_node_canary};
+
+    let (game, charm, winner) = winning_game();
+    let real = game.world().cell_snapshot().expect("cell");
+    let wrong = if winner == 1 { 2 } else { 1 };
+
+    // (A) HONEST — the app-root fold welds the published winner to the cell's committed field[K].
+    let whole = fold_win_over_cell(&real, charm, winner)
+        .expect("the honest app-root win folds to one proof");
+    let vk = whole.root_vk_fingerprint();
+    let attested = verify_history(&whole, &vk)
+        .expect("verify_history ACCEPTS the honest app-root win (R == committed winner field)");
+    assert_eq!(attested.num_turns, 2, "the win turn + the linking tail");
+    eprintln!(
+        "HARD GATE (A) HONEST: app-root win folded, verify_history OK, winner={winner}, charm={charm}."
+    );
+
+    // (B) DISAGREEING — a winner not matching the cell's committed field has NO satisfying fold.
+    let disagree = fold_win_over_cell(&real, charm, wrong);
+    assert!(
+        disagree.is_err(),
+        "a winner ({wrong}) disagreeing with the cell's committed winner field ({winner}) must have \
+         NO satisfying app-root fold — UNSAT, refused through verify_history (got Ok, the weld leaks!)"
+    );
+    eprintln!(
+        "HARD GATE (B) REFUSE: disagreeing winner={wrong} is UNSAT — no artifact reaches verify_history."
+    );
+
+    // (C) CANARY — the SAME disagreeing winner through the STATE node folds GREEN + verifies.
+    let canary = fold_win_over_cell_state_node_canary(&real, charm, wrong)
+        .expect("the STATE-node fold accepts the disagreeing winner (no field-K weld)");
+    let cvk = canary.root_vk_fingerprint();
+    let cattested = verify_history(&canary, &cvk)
+        .expect("verify_history ACCEPTS the disagreeing winner through the state node (canary)");
+    assert_eq!(cattested.num_turns, 2);
+    eprintln!(
+        "HARD GATE (C) CANARY: disagreeing winner={wrong} folds GREEN through the STATE node — \
+         so (B)'s refusal IS the app-root weld, not incidental."
+    );
 }

@@ -223,10 +223,27 @@ fn cell_custom_leg(
     commit: [BabyBear; 8],
     bundle: Option<CustomWitnessBundle>,
 ) -> RotatedParticipantLeg {
-    let st = CellState::new(
+    let mut st = CellState::new(
         after_cell.state.balance() as u64,
         before_cell.state.nonce() as u32,
     );
+    // ROUTE THE REAL COMMITTED FIELDS INTO THE EFFECTVM STATE. The wide leg exposes the AFTER-block
+    // `fields[0..8]` octet (leg PIs 62..69) that the app-root weld's `field_key` indexes; but that octet
+    // is `fill_block`-OVERRIDDEN from the v1 EffectVM AFTER-state-block fields
+    // (`row[STATE_AFTER_BASE + FIELD_BASE + i]` = `st.fields[i]`, `EffectVmEmitRotationV3.weldsAt`), NOT
+    // from `after_w` — so with the default `CellState::new` (fields all zero) the octet is ALL ZEROS and
+    // NO `field_key` can ever read the committed winner. Populate `st.fields` with the cell's real
+    // lane-0 field octet (`field_limbs8(fields[i])[0]`, the SAME lane the v9 commitment absorbs) so the
+    // v1 state block, the appendix octet, and the wide anchors all carry the real committed values and
+    // the octet exposes `field[7] == winner`. A `Custom` effect never mutates fields, so the AFTER block
+    // (which the octet reads) carries exactly these. Fields 8..15 have no lane-0 limb and are unaffected.
+    for i in 0..8 {
+        st.fields[i] = dregg_circuit::effect_vm::field_limbs8(&after_cell.state.fields[i])[0];
+    }
+    // `CellState::new` stored `state_commitment` over the (default-zero) fields; recompute it now that
+    // `fields` carry the real values, or the trace's committed-state column is stale vs the hash the
+    // descriptor recomputes over the real fields (a STARK constraint violation at prove time).
+    st.refresh_commitment();
     let effects = vec![Effect::Custom {
         program_vk_hash: [BabyBear::new(9); 8],
         proof_commitment: commit,
@@ -370,20 +387,35 @@ fn mint_turn(bundle: &LeafBundle, nonce: u64) -> FinalizedTurn {
 /// (the winner is a register `new8` commits), not a `pk[0]=7` fixture nonce-bump.
 fn mint_win_turn_over_cell(cell: &Cell, win: &LeafBundle) -> FinalizedTurn {
     let commit = custom_proof_pi_commitment(&win.public_inputs);
-    // DELIVER #2 — THE APP-ROOT CUTOVER (the wide custom leg-emit `withAfterOctetPins customV3 4`):
+    // DELIVER — THE APP-ROOT CUTOVER (the wide custom leg-emit `withAfterOctetPins customV3 4`):
     // weld the win sub-proof's PUBLISHED winner (the tug win-leaf's app-output PI, see below) to the
     // cell's REAL committed winner field IN-CIRCUIT. The wide leg exposes the AFTER-block `fields[0..8]`
-    // octet, holding field register `r(FIELD_BASE + i)` at octet index `i`. `winner` rides register
-    // slot `reg("winner")` (see `state::schema`), so its OCTET INDEX is the LEAN-AUTHORED query
-    // `layout_generated::octet_index_of_register(reg) == reg - FIELD_BASE` — NOT a hand `- 3`. The fold
-    // routes through `prove_custom_binding_node_app_root_segmented`, forcing
-    // `PI[app_root_pi_offset] == octet[field_key] == winner`. A tug turn publishing a winner that does
-    // NOT match the cell's committed winner field then has NO satisfying fold — UNSAT, refused by the
-    // DEPLOYED `verify_history`, light-client-visible. This is the app-root weld (a property of the
-    // artifact), not the state-node adoption (winner bound only as a commitment preimage).
-    let winner_reg = crate::state::Deployment::new().reg("winner") as usize;
-    let winner_field_key =
-        dregg_circuit::effect_vm::layout_generated::octet_index_of_register(winner_reg);
+    // octet as leg PIs 62..69. The producer (`cell::commitment::compute_rotated_pre_limbs`,
+    // `for i in 0..8 { fields[i] -> limb 4+i }`) and the leg-emit (octet PI `62+k` reads AFTER col
+    // `CUSTOM_APP_FIELD_ROT_BASE + k` = `fields[k]` lane-0) put `cell.state.fields[k]` at octet index `k`.
+    // So the OCTET INDEX of a cell field slot IS that slot itself (for slots `< CUSTOM_APP_FIELD_OCTET_LEN`).
+    // `winner` rides cell field slot `reg("winner") == 7` (see `state::schema`; it was relocated into
+    // `fields[0..7]` precisely so it lands in this exposed octet), so its `field_key` is that slot
+    // DIRECTLY — name-resolved by the dregg-schema allocator, not a hand offset.
+    //
+    // ⚠ NOT `octet_index_of_register(reg("winner"))`: that Lean query subtracts `FIELD_BASE` for the
+    // ROTATED-LIMB `r3..r10` numbering (r3 = fields[0]), NOT the cell field slot. Feeding it the cell
+    // field slot mis-aimed the weld at octet index `7 - 3 = 4` = `a_secret` (= 0) instead of `winner`
+    // (= 2) — the driven `0 vs 2` WitnessConflict. The winner was ALWAYS committed in the octet at
+    // index 7; the index map, not the commitment location, was the bug.
+    //
+    // The fold routes through `prove_custom_binding_node_app_root_segmented`, forcing
+    // `PI[app_root_pi_offset] == octet[field_key] == field[7] == winner`. A tug turn publishing a winner
+    // that does NOT match the cell's committed winner field then has NO satisfying fold — UNSAT, refused
+    // by the DEPLOYED `verify_history`, light-client-visible. This is the app-root weld (a property of
+    // the artifact), not the state-node adoption (winner bound only as a commitment preimage).
+    use dregg_circuit::effect_vm::layout_generated::CUSTOM_APP_FIELD_OCTET_LEN;
+    let winner_field_key = crate::state::Deployment::new().reg("winner") as usize;
+    assert!(
+        winner_field_key < CUSTOM_APP_FIELD_OCTET_LEN,
+        "the winner field slot ({winner_field_key}) must ride the exposed fields[0..{CUSTOM_APP_FIELD_OCTET_LEN}] \
+         octet to be app-root weldable — fields[8..16] have no lane-0 limbs (the app-root 8-lane ceiling)"
+    );
     // The winner's PI slot in the win sub-proof: past the Lean-owned state-binding prefix
     // (`CUSTOM_PI_STATE_PREFIX_LEN = [old8 ‖ new8]`) the win leaf binds its app outputs in order
     // [charm, winner] (see `win_leaf_bound`), so winner rides prefix + `WINNER_APP_PI_INDEX`. The
@@ -406,6 +438,21 @@ fn mint_win_turn_over_cell(cell: &Cell, win: &LeafBundle) -> FinalizedTurn {
     let after = nonce_bumped(cell);
     let leg = cell_custom_leg(cell, &after, commit, Some(cwb));
     FinalizedTurn::new(DescriptorParticipant::rotated(leg))
+}
+
+/// **THE EXPOSED FIELD OCTET (test accessor).** The AFTER-block committed `fields[0..8]` octet a
+/// probe custom-wide leg over `cell` publishes (leg PIs `octet_lo..octet_lo+8`, `octet_lo = n - 24` —
+/// ahead of the 16 wide anchors), as lane-0 `u32`s. This is EXACTLY the octet the app-root weld's
+/// `field_key` indexes; asserting `octet[reg("winner")] == winner` proves the winner is weldable at the
+/// leg level without minting the whole recursive fold.
+pub fn probe_leg_field_octet(cell: &Cell) -> Vec<u32> {
+    let after = nonce_bumped(cell);
+    let leg = cell_custom_leg(cell, &after, [BabyBear::ZERO; 8], None);
+    let n = leg.public_inputs.len();
+    leg.public_inputs[n - 24..n - 16]
+        .iter()
+        .map(|f| f.as_u32())
+        .collect()
 }
 
 /// The cell's v9 chip commitment (the wide 8-felt anchor), computed DIRECTLY from the
@@ -567,7 +614,9 @@ pub fn fold_win_over_cell_state_node_canary(
     let t0 = mint_win_turn_state_node_canary(cell, &win);
     let t1 = plain_turn_over_cell(&nonce_bumped(cell));
     if t0.new_root() != t1.old_root() {
-        return Err("win canary fold: turn 0 post-state does not link to the tail turn".to_string());
+        return Err(
+            "win canary fold: turn 0 post-state does not link to the tail turn".to_string(),
+        );
     }
     prove_turn_chain_recursive(&[t0, t1])
         .map_err(|e| format!("win canary fold over real cell failed: {e}"))
