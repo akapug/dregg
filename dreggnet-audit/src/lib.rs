@@ -684,7 +684,10 @@ fn prune_old(dir: &Path, today: i64, retain_days: u64) {
 }
 
 // Howard Hinnant's civil-date algorithms (proleptic Gregorian, UTC).
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+
+/// Days-since-epoch → `(year, month, day)` (UTC, proleptic Gregorian). Public
+/// for tool-side timestamp formatting (`auditq`).
+pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64; // [0, 146096]
@@ -697,7 +700,9 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+/// `(year, month, day)` (UTC) → days-since-epoch. Public for tool-side
+/// time-range parsing (`auditq --since 2026-07-16`).
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u64;
