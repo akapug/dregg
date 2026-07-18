@@ -164,6 +164,22 @@ delete the hand-Go. Closes circuit-faithfulness (#2); NOT the FRI floor (#1) or 
 - Honest: gadgets KAT+edge-VALIDATED not yet ∀-proven; real faithfulness lands at cutover. ATTRIBUTION: the
   FRI verifier model (verifyAlgoO) + wrap_sound socket are prior/codex work, consumed read-only, not mine.
 
+
+## ⚑⚑ GNARK-LEAN CYCLE 4 KEYSTONE FIRED (e11e99a6f) — the proof side is DONE
+emitVerifier_refines (EmitVerifier.lean:278) COMPOSES all 6 leaves (merkle/friFold/batchTable/queryPow/
+segment/canonicity — cited, not re-proved) → emitVerifier_wrap_sound (:342) fires the ALREADY-PROVEN
+wrap_sound structurally. Adversarial verdict: keystone-fires, NOT partial, NOT vacuous, no leaf stubbed.
+Gnark subtree green (1175 jobs), 7 #assert_axioms clean, sorry-free. So the CIRCUIT-FAITHFULNESS seam (#2)
+is CLOSED at the proof level: the Lean-authored emit-driven circuit is proven-faithful; the hand-Go
+verifier is PROVABLY REDUNDANT. Cycles 1-4 (foundation+gadgets · e2e socket · 5 leaves · keystone) done
+in ~5 ultracode swarm cycles vs the architect's quarter-plus.
+2 NAMED caveats (pre-existing, NOT closed here, worked separately): FRI extraction floor (#1) + dev VK
+ceremony (#3). ⚑ CUTOVER (cycle 5) IS EMBER-GATED: wiring the emit-driven circuit as gnark's source +
+deleting settlement_circuit.go produces a NEW VK (different constraint layout) → the deployed Base-Sepolia
+verifier changes identity → needs re-deploy + re-ceremony. Do NOT autonomously delete the deployed circuit.
+Follow-ups: transcript/challenger concretization (low compose-count — confirm it is composed not residual),
+BatchTable reuse stark_constraint_interp, merkle_open + boolean-decode.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
