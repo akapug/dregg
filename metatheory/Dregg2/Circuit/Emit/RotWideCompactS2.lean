@@ -193,17 +193,41 @@ def s2DeadCols (bb laneBase : Nat) : List Nat :=
 theorem s2DeadCols_length (bb laneBase : Nat) : (s2DeadCols bb laneBase).length = 960 := by
   simp [s2DeadCols, s2CarrierCols]
 
-/-- The compaction index map: a surviving column falls by the number of deleted columns below
-it. Strictly monotone on survivors; the identity below the first deleted column. -/
-def dropIdx (dead : List Nat) (c : Nat) : Nat := c - dead.countP (fun d => decide (d < c))
+/-- O(1) membership in the dead-column set (the list `s2DeadCols` is the SPEC; this is the
+computable form the emit-time gates and the index map run on). -/
+def isDeadCol (bb laneBase c : Nat) : Bool :=
+  (decide (bb + 179 ≤ c) && decide (c < bb + 239))
+    || (decide (bb + 418 ≤ c) && decide (c < bb + 478))
+    || (decide (laneBase ≤ c) && decide (c < laneBase + 840))
 
-theorem dropIdx_id_of_below (dead : List Nat) (c : Nat) (h : ∀ d ∈ dead, c ≤ d) :
-    dropIdx dead c = c := by
-  unfold dropIdx
-  have : dead.countP (fun d => decide (d < c)) = 0 := by
-    rw [List.countP_eq_zero]
-    intro d hd
-    simpa using Nat.not_lt.mpr (h d hd)
+theorem isDeadCol_eq_mem (bb laneBase c : Nat) :
+    isDeadCol bb laneBase c = true ↔ c ∈ s2DeadCols bb laneBase := by
+  unfold isDeadCol s2DeadCols s2CarrierCols
+  simp only [List.mem_append, List.mem_map, List.mem_range, Bool.or_eq_true, Bool.and_eq_true,
+    decide_eq_true_eq]
+  constructor
+  · rintro ((⟨h1, h2⟩ | ⟨h1, h2⟩) | ⟨h1, h2⟩)
+    · exact Or.inl (Or.inl ⟨c - (bb + 179), by omega, by omega⟩)
+    · exact Or.inl (Or.inr ⟨c - (bb + 239 + 179), by omega, by omega⟩)
+    · exact Or.inr ⟨c - laneBase, by omega, by omega⟩
+  · rintro ((⟨i, hi, rfl⟩ | ⟨i, hi, rfl⟩) | ⟨i, hi, rfl⟩)
+    · exact Or.inl (Or.inl ⟨by omega, by omega⟩)
+    · exact Or.inl (Or.inr ⟨by omega, by omega⟩)
+    · exact Or.inr ⟨by omega, by omega⟩
+
+/-- How many columns of the `span`-wide cut at `lo` sit strictly below `c`. -/
+def cutBelow (lo span c : Nat) : Nat := if c ≤ lo then 0 else min span (c - lo)
+
+/-- The compaction index map: a surviving column falls by the number of deleted columns below
+it. O(1); strictly monotone on survivors; the identity below the first deleted column. -/
+def dropIdx (bb laneBase c : Nat) : Nat :=
+  c - (cutBelow (bb + 179) 60 c + cutBelow (bb + 418) 60 c + cutBelow laneBase 840 c)
+
+theorem dropIdx_id_of_low (bb laneBase c : Nat) (h1 : c ≤ bb + 179) (h2 : c ≤ laneBase) :
+    dropIdx bb laneBase c = c := by
+  unfold dropIdx cutBelow
+  have h3 : c ≤ bb + 418 := by omega
+  rw [if_pos h1, if_pos h3, if_pos h2]
   omega
 
 /-! ## §3 — the EXPECTED S2 stratum (what the member must carry for the deletion to be sound).
@@ -279,11 +303,12 @@ def planOk : List (VmHashSite × Nat) → Bool
 /-- One surviving constraint is compatible with the deletion: it reads no dead column, and if
 it is a `.transition` (offset-encoded through the face bases) its columns sit BELOW every dead
 column, so the remap is the identity there. -/
-def keptOk (dead : List Nat) (c : VmConstraint2) : Bool :=
-  (refs2 c).all (fun r => !dead.contains r)
+def keptOk (bb laneBase : Nat) (c : VmConstraint2) : Bool :=
+  (refs2 c).all (fun r => !isDeadCol bb laneBase r)
     && (match c with
         | .base (.transition hi lo) =>
-            dead.all (fun d => decide (sbCol hi < d) && decide (saCol lo < d))
+            decide (sbCol hi < bb + 179) && decide (saCol lo < bb + 179)
+              && decide (sbCol hi ≤ laneBase) && decide (saCol lo ≤ laneBase)
         | _ => true)
 
 /-- **The whole decidable side-condition bundle** — the emit gate AND the bridge hypothesis:
@@ -291,17 +316,17 @@ def keptOk (dead : List Nat) (c : VmConstraint2) : Bool :=
     falsifier of the "dead stratum" verdict);
   * every surviving constraint / hash site / range tooth avoids the dead columns;
   * the walk plan is well-formed;
-  * the dead-column list is duplicate-free (the width bookkeeping is exact);
+  * the three dead bands are pairwise disjoint (`bb + 478 ≤ laneBase` — exact width bookkeeping);
   * every override column is a dead column (the expansion touches nothing that survives). -/
 def compactOk (M : EffectVmDescriptor2) (bb laneBase : Nat) : Bool :=
-  let dead := s2DeadCols bb laneBase
   s2LookupsOf M bb == s2Lookups bb laneBase
-    && M.constraints.all (fun c => isS2 bb c || keptOk dead c)
-    && M.hashSites.all (fun s => (refsSite s).all (fun r => !dead.contains r))
-    && M.ranges.all (fun r => !dead.contains r.wire)
+    && M.constraints.all (fun c => isS2 bb c || keptOk bb laneBase c)
+    && M.hashSites.all (fun s => (refsSite s).all (fun r => !isDeadCol bb laneBase r))
+    && M.ranges.all (fun r => !isDeadCol bb laneBase r.wire)
     && planOk (s2Plan bb laneBase)
-    && dead.Nodup
-    && (s2Plan bb laneBase).all (fun p => (overrideColsOf p.1 p.2).all (dead.contains ·))
+    && decide (bb + 478 ≤ laneBase)
+    && (s2Plan bb laneBase).all
+        (fun p => (overrideColsOf p.1 p.2).all (isDeadCol bb laneBase))
     && decide (960 ≤ M.traceWidth)
 
 /-! ## §4 — `compactS2`: the deletion itself. -/
@@ -311,8 +336,7 @@ surviving column reference remapped through `dropIdx`, the width down by exactly
 table arity following. Name, PI count, and every published value are UNCHANGED (the retired
 PI slots 42/43 stay as producer-zeroed slots — they bound nothing before and bind nothing now). -/
 def compactS2 (M : EffectVmDescriptor2) (bb laneBase : Nat) : EffectVmDescriptor2 :=
-  let dead := s2DeadCols bb laneBase
-  let g := dropIdx dead
+  let g := dropIdx bb laneBase
   { name := M.name
   , traceWidth := M.traceWidth - 960
   , piCount := M.piCount
@@ -513,26 +537,25 @@ theorem expandGo_site (permOut : List ℤ → List ℤ)
       rw [hfinal_ov, hset, hins]
     · exact ih _ hrest p hp'
 
-/-- The expanded OLD-geometry row of a compact row: survivors read through `dropIdx`, the dead
-chain columns are recomputed by the walk. -/
-def expandRow (permOut : List ℤ → List ℤ) (dead : List Nat) (plan : List (VmHashSite × Nat))
+/-- The expanded OLD-geometry row of a compact row: survivors read through the index map `g`,
+the dead chain columns are recomputed by the walk. -/
+def expandRow (permOut : List ℤ → List ℤ) (g : Nat → Nat) (plan : List (VmHashSite × Nat))
     (a : Assignment) : Assignment :=
-  expandGo permOut (fun c => a (dropIdx dead c)) plan
+  expandGo permOut (fun c => a (g c)) plan
 
 /-- On any column outside the plan's override blocks (in particular any surviving column), the
 expanded row reads the compact row through the index map. -/
-theorem expandRow_agree (permOut : List ℤ → List ℤ) (dead : List Nat)
+theorem expandRow_agree (permOut : List ℤ → List ℤ) (g : Nat → Nat)
     (plan : List (VmHashSite × Nat)) (a : Assignment) (c : Nat)
     (h : ∀ p ∈ plan, c ∉ overrideColsOf p.1 p.2) :
-    expandRow permOut dead plan a c = a (dropIdx dead c) :=
+    expandRow permOut g plan a c = a (g c) :=
   expandGo_notin permOut _ plan c h
 
 /-- The expanded trace: rows expanded, PIs untouched, and the chip table EXTENDED with exactly
 the genuine permutation rows the recomputed chains absorb (every other table untouched). -/
 def expandTrace (permOut : List ℤ → List ℤ) (bb laneBase : Nat) (t : VmTrace) : VmTrace :=
-  let dead := s2DeadCols bb laneBase
   let plan := s2Plan bb laneBase
-  let rows := t.rows.map (expandRow permOut dead plan)
+  let rows := t.rows.map (expandRow permOut (dropIdx bb laneBase) plan)
   { rows := rows
   , pub := t.pub
   , tf := fun tid => if tid = TableId.poseidon2
@@ -720,9 +743,9 @@ theorem siteHoldsAll_transport (hash : List ℤ → ℤ) (E EX : VmRowEnv) (g : 
 
 theorem memOpsOf_compactS2 (M : EffectVmDescriptor2) (bb laneBase : Nat) :
     memOpsOf (compactS2 M bb laneBase)
-      = (memOpsOf M).map (mapMemF (dropIdx (s2DeadCols bb laneBase))) := by
+      = (memOpsOf M).map (mapMemF (dropIdx bb laneBase)) := by
   show ((M.constraints.filter (fun c => !isS2 bb c)).map
-      (mapC2 (dropIdx (s2DeadCols bb laneBase)))).filterMap _ = _
+      (mapC2 (dropIdx bb laneBase))).filterMap _ = _
   unfold memOpsOf
   induction M.constraints with
   | nil => rfl
@@ -741,9 +764,9 @@ theorem memOpsOf_compactS2 (M : EffectVmDescriptor2) (bb laneBase : Nat) :
 
 theorem mapOpsOf_compactS2 (M : EffectVmDescriptor2) (bb laneBase : Nat) :
     mapOpsOf (compactS2 M bb laneBase)
-      = (mapOpsOf M).map (mapMapF (dropIdx (s2DeadCols bb laneBase))) := by
+      = (mapOpsOf M).map (mapMapF (dropIdx bb laneBase)) := by
   show ((M.constraints.filter (fun c => !isS2 bb c)).map
-      (mapC2 (dropIdx (s2DeadCols bb laneBase)))).filterMap _ = _
+      (mapC2 (dropIdx bb laneBase))).filterMap _ = _
   unfold mapOpsOf
   induction M.constraints with
   | nil => rfl
@@ -897,7 +920,7 @@ theorem memLog_expand (permOut : List ℤ → List ℤ) (M : EffectVmDescriptor2
   unfold memLog
   rw [memOpsOf_compactS2]
   have hrows : (expandTrace permOut bb laneBase t).rows
-      = t.rows.map (expandRow permOut (s2DeadCols bb laneBase) (s2Plan bb laneBase)) := rfl
+      = t.rows.map (expandRow permOut (dropIdx bb laneBase) (s2Plan bb laneBase)) := rfl
   rw [hrows]
   apply flatMap_map_rows
   intro a
@@ -915,7 +938,7 @@ theorem mapLog_expand (permOut : List ℤ → List ℤ) (M : EffectVmDescriptor2
   unfold mapLog
   rw [mapOpsOf_compactS2]
   have hrows : (expandTrace permOut bb laneBase t).rows
-      = t.rows.map (expandRow permOut (s2DeadCols bb laneBase) (s2Plan bb laneBase)) := rfl
+      = t.rows.map (expandRow permOut (dropIdx bb laneBase) (s2Plan bb laneBase)) := rfl
   rw [hrows]
   apply flatMap_map_rows
   intro a
@@ -929,8 +952,8 @@ theorem expandTrace_getD_agree (permOut : List ℤ → List ℤ) (bb laneBase : 
     (hsub : ∀ p ∈ s2Plan bb laneBase, ∀ x ∈ overrideColsOf p.1 p.2, x ∈ s2DeadCols bb laneBase)
     (i : Nat) (c : Nat) (hc : c ∉ s2DeadCols bb laneBase) :
     (expandTrace permOut bb laneBase t).rows.getD i zeroAsg c
-      = t.rows.getD i zeroAsg (dropIdx (s2DeadCols bb laneBase) c) := by
-  show (t.rows.map (expandRow permOut (s2DeadCols bb laneBase) (s2Plan bb laneBase))).getD
+      = t.rows.getD i zeroAsg (dropIdx bb laneBase c) := by
+  show (t.rows.map (expandRow permOut (dropIdx bb laneBase) (s2Plan bb laneBase))).getD
       i zeroAsg c = _
   rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_map]
   cases h : t.rows[i]? with
@@ -956,15 +979,20 @@ theorem compactS2_expand (permOut : List ℤ → List ℤ) (hash : List ℤ → 
   unfold compactOk at hok
   simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq, beq_iff_eq,
     Bool.or_eq_true] at hok
-  obtain ⟨⟨⟨⟨⟨⟨⟨hshape, hkeptAll⟩, hsitesOk⟩, hrangesOk⟩, hplan⟩, hnodup⟩, hsubAll⟩, hwidth⟩ := hok
+  obtain ⟨⟨⟨⟨⟨⟨⟨hshape, hkeptAll⟩, hsitesOk⟩, hrangesOk⟩, hplan⟩, hdisj⟩, hsubAll⟩, hwidth⟩ := hok
   set dead := s2DeadCols bb laneBase with hdead
-  set g := dropIdx dead with hg
+  set g := dropIdx bb laneBase with hg
   set plan := s2Plan bb laneBase with hplanDef
   set tX := expandTrace permOut bb laneBase t with htX
+  have hDeadOf : ∀ r, isDeadCol bb laneBase r = true → r ∈ dead :=
+    fun r hr => (isDeadCol_eq_mem bb laneBase r).mp hr
+  have hNotDeadOf : ∀ r, (!isDeadCol bb laneBase r) = true → r ∉ dead := by
+    intro r hr hmem
+    rw [Bool.not_eq_true'] at hr
+    exact absurd ((isDeadCol_eq_mem bb laneBase r).mpr hmem) (by simp [hr])
   have hsub : ∀ p ∈ plan, ∀ x ∈ overrideColsOf p.1 p.2, x ∈ dead := by
     intro p hp x hx
-    have := hsubAll p hp x hx
-    simpa [List.contains_eq_mem] using this
+    exact hDeadOf x (hsubAll p hp x hx)
   have hlen : tX.rows.length = t.rows.length := by
     simp [htX, expandTrace]
   have hlocAg : ∀ i, ∀ c, c ∉ dead → (envAt tX i).loc c = (envAt t i).loc (g c) :=
@@ -972,13 +1000,12 @@ theorem compactS2_expand (permOut : List ℤ → List ℤ) (hash : List ℤ → 
   have hnxtAg : ∀ i, ∀ c, c ∉ dead → (envAt tX i).nxt c = (envAt t i).nxt (g c) :=
     fun i c hc => expandTrace_getD_agree permOut bb laneBase t hsub (i + 1) c hc
   have hpubAg : ∀ i, (envAt tX i).pub = (envAt t i).pub := fun _ => rfl
-  have hnotdead : ∀ (c : VmConstraint2), keptOk dead c = true →
+  have hnotdead : ∀ (c : VmConstraint2), keptOk bb laneBase c = true →
       ∀ r ∈ refs2 c, r ∉ dead := by
     intro c hk r hr
     unfold keptOk at hk
     simp only [Bool.and_eq_true, List.all_eq_true] at hk
-    have := hk.1 r hr
-    simpa [List.contains_eq_mem] using this
+    exact hNotDeadOf r (hk.1 r hr)
   -- kept-constraint membership in the compact object
   have hkeptMem : ∀ c ∈ M.constraints, isS2 bb c = false →
       mapC2 g c ∈ (compactS2 M bb laneBase).constraints := by
@@ -1044,14 +1071,14 @@ theorem compactS2_expand (permOut : List ℤ → List ℤ) (hash : List ℤ → 
         show Lookup.holdsAt tX.tf (envAt tX i) (siteLookup [] p.1 p.2)
         unfold Lookup.holdsAt
         have haXeq : (envAt tX i).loc
-            = expandRow permOut dead plan (t.rows.getD i zeroAsg) := by
+            = expandRow permOut g plan (t.rows.getD i zeroAsg) := by
           show tX.rows.getD i zeroAsg = _
-          have hrows : tX.rows = t.rows.map (expandRow permOut dead plan) := rfl
+          have hrows : tX.rows = t.rows.map (expandRow permOut g plan) := rfl
           rw [hrows, List.getD_eq_getElem?_getD, List.getElem?_map,
               List.getElem?_eq_getElem hi]
           simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
         have hov := expandGo_site permOut hperm
-          (fun c => t.rows.getD i zeroAsg (dropIdx dead c)) plan hplan p hp
+          (fun c => t.rows.getD i zeroAsg (g c)) plan hplan p hp
         have hcol := planOk_colOnly plan hplan p hp
         have htuple : (siteLookup [] p.1 p.2).tuple.map (·.eval ((envAt tX i).loc))
             = chipRowN permOut (insVals ((envAt tX i).loc) p.1) := by
@@ -1079,7 +1106,7 @@ theorem compactS2_expand (permOut : List ℤ → List ℤ) (hash : List ℤ → 
       | windowGate w => simp [isS2] at hs2
     · -- the kept constraints: transported through the index map
       have hs2f : isS2 bb c = false := by simpa using hs2
-      have hkept : keptOk dead c = true := by
+      have hkept : keptOk bb laneBase c = true := by
         rcases hkeptAll c hc with ht | hk
         · rw [hs2f] at ht; cases ht
         · exact hk
@@ -1094,27 +1121,22 @@ theorem compactS2_expand (permOut : List ℤ → List ℤ) (hash : List ℤ → 
       subst hceq
       unfold keptOk at hkept
       simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hkept
-      constructor
-      · exact dropIdx_id_of_below dead _ (fun d hd => Nat.le_of_lt (hkept.2 d hd).1)
-      · exact dropIdx_id_of_below dead _ (fun d hd => Nat.le_of_lt (hkept.2 d hd).2)
+      obtain ⟨-, ⟨⟨⟨hb1, hb2⟩, hl1⟩, hl2⟩⟩ := hkept
+      exact ⟨dropIdx_id_of_low bb laneBase _ (by omega) hl1,
+             dropIdx_id_of_low bb laneBase _ (by omega) hl2⟩
   · -- rowHashes
     intro i hi
     rw [hlen] at hi
     have hcompact := hsat.rowHashes i hi
     apply siteHoldsAll_transport hash (envAt t i) (envAt tX i) g M.hashSites
     · intro s hs r hr
-      have hrd : r ∉ dead := by
-        have := hsitesOk s hs r hr
-        simpa [List.contains_eq_mem] using this
-      exact hlocAg i r hrd
+      exact hlocAg i r (hNotDeadOf r (hsitesOk s hs r hr))
     · exact hcompact
   · -- rowRanges
     intro i hi r hr
     rw [hlen] at hi
     have hcompact := hsat.rowRanges i hi (mapRange g r) (List.mem_map_of_mem hr)
-    have hrd : r.wire ∉ dead := by
-      have := hrangesOk r hr
-      simpa [List.contains_eq_mem] using this
+    have hrd : r.wire ∉ dead := hNotDeadOf r.wire (hrangesOk r hr)
     unfold VmRange.holds at hcompact ⊢
     simp only [mapRange] at hcompact
     rw [hlocAg i r.wire hrd]
@@ -1148,7 +1170,7 @@ theorem expandTrace_shape (permOut : List ℤ → List ℤ) (bb laneBase : Nat) 
     ∧ (expandTrace permOut bb laneBase t).pub = t.pub
     ∧ ∀ i c, c ∉ s2DeadCols bb laneBase →
         (envAt (expandTrace permOut bb laneBase t) i).loc c
-          = (envAt t i).loc (dropIdx (s2DeadCols bb laneBase) c) :=
+          = (envAt t i).loc (dropIdx bb laneBase c) :=
   ⟨by simp [expandTrace], rfl,
    fun i c hc => expandTrace_getD_agree permOut bb laneBase t hsub i c hc⟩
 
