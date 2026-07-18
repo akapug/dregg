@@ -31,11 +31,14 @@ the cardinal-offset membership (`offset_of_sat`, the circuit-side analogue of
 `automatonOffset_bounded`) — all DERIVED from the constraints, none assumed. Sub-lemma (2) closes as
 `raycast_xp_of_sat`: on a satisfying canonical trace the decoded `(rDist 0, rWhat 0)` IS the reference
 `Board.raycast (boardDecode e) auto .xp` — the hit one-hot, the vacuum-before / in-bounds-before
-occlusion gates, and the `cond_nonzero` in-bounds-hit witness force the true first-non-vacuum cell. The
-remaining legs — the OTHER THREE rays `XN`/`YP`/`YN` (a mechanical replay of XP, §7 (2')), and (3),
-(5) — are the NAMED residual (§7): they require modelling `evaluateAxis`/the board-update fold against
-the decide/step columns, a multi-file effort. Nothing here assumes them, and nothing is a vacuous
-`P → P`: the top-level composition is NOT stated as a proven theorem — only the sub-lemmas that close.
+occlusion gates, and the `cond_nonzero` in-bounds-hit witness force the true first-non-vacuum cell.
+Sub-lemma (2) is now closed for ALL FOUR rays (`raycast_{xp,xn,yp,yn}_of_sat`), and sub-lemma (3) — the
+`decide_axis` truth table — is closed IN FULL for BOTH axes (`decideAxis_x_sound` / `decideAxis_y_sound`:
+`decodeDecision = evaluateAxis`), resting on `forcedGe0_core` (the no-wrap comparison heart) and the nine
+PURE decode lemmas. The remaining legs — (4) `chooseOffset` and (5) the board-update fold — are the NAMED
+residual (§7): they require modelling the score-compare / board-update against the offset/step columns, a
+multi-file effort. Nothing here assumes them, and nothing is a vacuous `P → P`: the top-level composition
+is NOT stated as a proven theorem — only the sub-lemmas that close.
 
 ## The field denotation (mod-`p`, `p = 2013265921`) and the single-row model
 
@@ -1809,6 +1812,1684 @@ theorem decideAxis_xdec_attRep (hsat : Satisfied2 hash automataflStepDesc minit 
 
 end DecideXdec
 
+
+section DecideXdecRest
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- The `gnd = [nd ≥ 2]` guard bit (col 74) genuinely decides `rDist 1 ≥ 2` (no wrap). -/
+theorem xdec_gnd_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 74 = 0 ∨ (envAt t i).loc 74 = 1)
+    ∧ ((envAt t i).loc 74 = 1 → 2 ≤ (envAt t i).loc (rDist 1))
+    ∧ ((envAt t i).loc 74 = 0 → (envAt t i).loc (rDist 1) ≤ 1) := by
+  set e := envAt t i with he
+  have gndB : e.loc 74 = 0 ∨ e.loc 74 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 16)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 75 = 0 ∨ e.loc 75 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 17)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 76 = 0 ∨ e.loc 76 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 18)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 77 = 0 ∨ e.loc 77 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 19)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 78 = 0 ∨ e.loc 78 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 20)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 79 = 0 ∨ e.loc 79 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 21)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 17) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 16) ((Head.lin 1 (rDist 1)).addConst (-2))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 17) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 16) ((Head.lin 1 (rDist 1)).addConst (-2))))).eval e.loc
+      = 2 * (e.loc 74 * e.loc (rDist 1)) + -4 * e.loc 74 + e.loc 74 + -1 * e.loc (rDist 1)
+        + -1 * e.loc 75 + -2 * e.loc 76 + -4 * e.loc 77 + -8 * e.loc 78 + -16 * e.loc 79 + 1 from rfl] at grec
+  have gmod : (2 * e.loc 74 * (e.loc (rDist 1) - 2) + e.loc 74 - (e.loc (rDist 1) - 2) - 1)
+      ≡ (e.loc 75 + 2 * e.loc 76 + 4 * e.loc 77 + 8 * e.loc 78 + 16 * e.loc 79) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have ndMem := xdec_nd_mem hsat hc i hi
+  rw [← he] at ndMem
+  have core := forcedGe0_core (D := e.loc (rDist 1) - 2)
+    (S := e.loc 75 + 2 * e.loc 76 + 4 * e.loc 77 + 8 * e.loc 78 + 16 * e.loc 79) gndB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases ndMem with h|h <;> rw [h] <;> norm_num) (by rcases ndMem with h|h <;> rw [h] <;> norm_num)
+  exact ⟨gndB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The `lt = [pd < nd]` compare bit (col 80). -/
+theorem xdec_lt_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 80 = 0 ∨ (envAt t i).loc 80 = 1)
+    ∧ ((envAt t i).loc 80 = 1 → (envAt t i).loc (rDist 0) < (envAt t i).loc (rDist 1))
+    ∧ ((envAt t i).loc 80 = 0 → (envAt t i).loc (rDist 1) ≤ (envAt t i).loc (rDist 0)) := by
+  set e := envAt t i with he
+  have ltB : e.loc 80 = 0 ∨ e.loc 80 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 22)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 81 = 0 ∨ e.loc 81 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 23)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 82 = 0 ∨ e.loc 82 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 24)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 83 = 0 ∨ e.loc 83 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 25)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 84 = 0 ∨ e.loc 84 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 26)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 85 = 0 ∨ e.loc 85 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 27)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 23) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 22) (((Head.lin 1 (rDist 1)).addLin (-1) (rDist 0)).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 23) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 22) (((Head.lin 1 (rDist 1)).addLin (-1) (rDist 0)).addConst (-1))))).eval e.loc
+      = 2 * (e.loc 80 * e.loc (rDist 1)) + -2 * (e.loc 80 * e.loc (rDist 0)) + -2 * e.loc 80 + e.loc 80
+        + -1 * e.loc (rDist 1) + e.loc (rDist 0)
+        + -1 * e.loc 81 + -2 * e.loc 82 + -4 * e.loc 83 + -8 * e.loc 84 + -16 * e.loc 85 from rfl] at grec
+  have gmod : (2 * e.loc 80 * (e.loc (rDist 1) - e.loc (rDist 0) - 1) + e.loc 80
+        - (e.loc (rDist 1) - e.loc (rDist 0) - 1) - 1)
+      ≡ (e.loc 81 + 2 * e.loc 82 + 4 * e.loc 83 + 8 * e.loc 84 + 16 * e.loc 85) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have core := forcedGe0_core (D := e.loc (rDist 1) - e.loc (rDist 0) - 1)
+    (S := e.loc 81 + 2 * e.loc 82 + 4 * e.loc 83 + 8 * e.loc 84 + 16 * e.loc 85) ltB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+  exact ⟨ltB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The `gt = [pd > nd]` compare bit (col 86). -/
+theorem xdec_gt_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 86 = 0 ∨ (envAt t i).loc 86 = 1)
+    ∧ ((envAt t i).loc 86 = 1 → (envAt t i).loc (rDist 1) < (envAt t i).loc (rDist 0))
+    ∧ ((envAt t i).loc 86 = 0 → (envAt t i).loc (rDist 0) ≤ (envAt t i).loc (rDist 1)) := by
+  set e := envAt t i with he
+  have gtB : e.loc 86 = 0 ∨ e.loc 86 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 28)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 87 = 0 ∨ e.loc 87 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 29)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 88 = 0 ∨ e.loc 88 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 30)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 89 = 0 ∨ e.loc 89 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 31)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 90 = 0 ∨ e.loc 90 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 32)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 91 = 0 ∨ e.loc 91 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 33)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 29) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 28) (((Head.lin 1 (rDist 0)).addLin (-1) (rDist 1)).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 29) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 28) (((Head.lin 1 (rDist 0)).addLin (-1) (rDist 1)).addConst (-1))))).eval e.loc
+      = 2 * (e.loc 86 * e.loc (rDist 0)) + -2 * (e.loc 86 * e.loc (rDist 1)) + -2 * e.loc 86 + e.loc 86
+        + -1 * e.loc (rDist 0) + e.loc (rDist 1)
+        + -1 * e.loc 87 + -2 * e.loc 88 + -4 * e.loc 89 + -8 * e.loc 90 + -16 * e.loc 91 from rfl] at grec
+  have gmod : (2 * e.loc 86 * (e.loc (rDist 0) - e.loc (rDist 1) - 1) + e.loc 86
+        - (e.loc (rDist 0) - e.loc (rDist 1) - 1) - 1)
+      ≡ (e.loc 87 + 2 * e.loc 88 + 4 * e.loc 89 + 8 * e.loc 90 + 16 * e.loc 91) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have core := forcedGe0_core (D := e.loc (rDist 0) - e.loc (rDist 1) - 1)
+    (S := e.loc 87 + 2 * e.loc 88 + 4 * e.loc 89 + 8 * e.loc 90 + 16 * e.loc 91) gtB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+  exact ⟨gtB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The `le = [pd ≤ nd]` compare bit (col 92). -/
+theorem xdec_le_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 92 = 0 ∨ (envAt t i).loc 92 = 1)
+    ∧ ((envAt t i).loc 92 = 1 → (envAt t i).loc (rDist 0) ≤ (envAt t i).loc (rDist 1))
+    ∧ ((envAt t i).loc 92 = 0 → (envAt t i).loc (rDist 1) < (envAt t i).loc (rDist 0)) := by
+  set e := envAt t i with he
+  have leB : e.loc 92 = 0 ∨ e.loc 92 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 34)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 93 = 0 ∨ e.loc 93 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 35)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 94 = 0 ∨ e.loc 94 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 36)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 95 = 0 ∨ e.loc 95 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 37)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 96 = 0 ∨ e.loc 96 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 38)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 97 = 0 ∨ e.loc 97 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 39)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 35) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 34) ((Head.lin 1 (rDist 1)).addLin (-1) (rDist 0))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 35) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 34) ((Head.lin 1 (rDist 1)).addLin (-1) (rDist 0))))).eval e.loc
+      = 2 * (e.loc 92 * e.loc (rDist 1)) + -2 * (e.loc 92 * e.loc (rDist 0)) + e.loc 92
+        + -1 * e.loc (rDist 1) + e.loc (rDist 0)
+        + -1 * e.loc 93 + -2 * e.loc 94 + -4 * e.loc 95 + -8 * e.loc 96 + -16 * e.loc 97 + -1 from rfl] at grec
+  have gmod : (2 * e.loc 92 * (e.loc (rDist 1) - e.loc (rDist 0)) + e.loc 92
+        - (e.loc (rDist 1) - e.loc (rDist 0)) - 1)
+      ≡ (e.loc 93 + 2 * e.loc 94 + 4 * e.loc 95 + 8 * e.loc 96 + 16 * e.loc 97) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have core := forcedGe0_core (D := e.loc (rDist 1) - e.loc (rDist 0))
+    (S := e.loc 93 + 2 * e.loc 94 + 4 * e.loc 95 + 8 * e.loc 96 + 16 * e.loc 97) leB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+  exact ⟨leB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The `min` gadget value (col 98) `= le·pd + nd − le·nd = min(pd, nd)`. -/
+theorem xdec_min_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 98
+      = (envAt t i).loc 92 * (envAt t i).loc (rDist 0) + (envAt t i).loc (rDist 1)
+        - (envAt t i).loc 92 * (envAt t i).loc (rDist 1) := by
+  set e := envAt t i with he
+  obtain ⟨leB, _, _⟩ := xdec_le_sound hsat hc i hi
+  rw [← he] at leB
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have hg := astep_gate hsat i hi
+    (g := headToExpr ((((Head.lin 1 98).addProd (-1) [92, rDist 0]).addLin (-1) (rDist 1)).addProd 1 [92, rDist 1])) (by decide)
+  rw [show (headToExpr ((((Head.lin 1 98).addProd (-1) [92, rDist 0]).addLin (-1) (rDist 1)).addProd 1 [92, rDist 1])).eval e.loc
+      = e.loc 98 + -1 * (e.loc 92 * e.loc (rDist 0)) + -1 * e.loc (rDist 1) + e.loc 92 * e.loc (rDist 1) from rfl] at hg
+  refine eq_of_modEq_canon (canon_loc hc i _) ?_
+    ((gate_modEq_iff (a := e.loc 98)
+      (b := e.loc 92 * e.loc (rDist 0) + e.loc (rDist 1) - e.loc 92 * e.loc (rDist 1)) (by ring)).mp hg)
+  rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+    rw [h, hp, hn] <;> exact ⟨by norm_num, by norm_num⟩
+
+/-- The `gm = [min ≥ 2]` guard bit (col 99). -/
+theorem xdec_gm_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 99 = 0 ∨ (envAt t i).loc 99 = 1)
+    ∧ ((envAt t i).loc 99 = 1 → 2 ≤ (envAt t i).loc 98)
+    ∧ ((envAt t i).loc 99 = 0 → (envAt t i).loc 98 ≤ 1) := by
+  set e := envAt t i with he
+  have hmin := xdec_min_sound hsat hc i hi
+  rw [← he] at hmin
+  obtain ⟨leB, _, _⟩ := xdec_le_sound hsat hc i hi
+  rw [← he] at leB
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have minMem : e.loc 98 = 1 ∨ e.loc 98 = 2 := by
+    rw [hmin]; rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+      rw [h, hp, hn] <;> norm_num
+  have gmB : e.loc 99 = 0 ∨ e.loc 99 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 41)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 100 = 0 ∨ e.loc 100 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 42)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 101 = 0 ∨ e.loc 101 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 43)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 102 = 0 ∨ e.loc 102 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 44)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 103 = 0 ∨ e.loc 103 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 45)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 104 = 0 ∨ e.loc 104 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (58 + 46)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 42) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 41) ((Head.lin 1 98).addConst (-2))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 42) SMALL_RBITS)[k]!))
+      (forcedGe0Term (58 + 41) ((Head.lin 1 98).addConst (-2))))).eval e.loc
+      = 2 * (e.loc 99 * e.loc 98) + -4 * e.loc 99 + e.loc 99 + -1 * e.loc 98
+        + -1 * e.loc 100 + -2 * e.loc 101 + -4 * e.loc 102 + -8 * e.loc 103 + -16 * e.loc 104 + 1 from rfl] at grec
+  have gmod : (2 * e.loc 99 * (e.loc 98 - 2) + e.loc 99 - (e.loc 98 - 2) - 1)
+      ≡ (e.loc 100 + 2 * e.loc 101 + 4 * e.loc 102 + 8 * e.loc 103 + 16 * e.loc 104) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have core := forcedGe0_core (D := e.loc 98 - 2)
+    (S := e.loc 100 + 2 * e.loc 101 + 4 * e.loc 102 + 8 * e.loc 103 + 16 * e.loc 104) gmB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases minMem with h|h <;> rw [h] <;> norm_num) (by rcases minMem with h|h <;> rw [h] <;> norm_num)
+  exact ⟨gmB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+end DecideXdecRest
+
+/-! ### Pure, axis-independent decode lemmas (decode = evaluateAxis given field values + guards). -/
+
+theorem decode_vacVac {pd nd v pos att rep : ℤ}
+    (hv : v = 0) (hpos : pos = 0) (hatt : att = 0) (hrep : rep = 0) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .vacuum, dist := pd.toNat } { what := .vacuum, dist := nd.toNat } := by
+  subst hv hpos hatt hrep
+  simp [decodeDecision, evaluateAxis]
+
+theorem decode_attRep {pd nd gpd v pos att rep : ℤ}
+    (hpd : pd = 1 ∨ pd = 2)
+    (hg0 : gpd = 0 ∨ gpd = 1) (hg1 : gpd = 1 → 2 ≤ pd) (hg2 : gpd = 0 → pd ≤ 1)
+    (hv : v = 3 * gpd) (hpos : pos = gpd) (hatt : att = gpd * pd) (hrep : rep = gpd * nd) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .attractor, dist := pd.toNat } { what := .repulsor, dist := nd.toNat } := by
+  rcases hg0 with hg | hg <;> subst hg
+  · have hpd1 : pd = 1 := by rcases hpd with h | h <;> [exact h; (exfalso; have := hg2 rfl; omega)]
+    subst hpd1; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hpd2 : pd = 2 := by rcases hpd with h | h <;> [(exfalso; have := hg1 rfl; omega); exact h]
+    subst hpd2; simp only [hv, hpos, hatt, hrep]; norm_num [decodeDecision, evaluateAxis]
+
+theorem decode_repAtt {pd nd gnd v pos att rep : ℤ}
+    (hnd : nd = 1 ∨ nd = 2)
+    (hg0 : gnd = 0 ∨ gnd = 1) (hg1 : gnd = 1 → 2 ≤ nd) (hg2 : gnd = 0 → nd ≤ 1)
+    (hv : v = 3 * gnd) (hpos : pos = 0) (hatt : att = gnd * nd) (hrep : rep = gnd * pd) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .repulsor, dist := pd.toNat } { what := .attractor, dist := nd.toNat } := by
+  rcases hg0 with hg | hg <;> subst hg
+  · have hnd1 : nd = 1 := by rcases hnd with h | h <;> [exact h; (exfalso; have := hg2 rfl; omega)]
+    subst hnd1; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hnd2 : nd = 2 := by rcases hnd with h | h <;> [(exfalso; have := hg1 rfl; omega); exact h]
+    subst hnd2; simp only [hv, hpos, hatt, hrep]; norm_num [decodeDecision, evaluateAxis]
+
+theorem decode_repVac {pd nd gnd v pos att rep : ℤ}
+    (hnd : nd = 1 ∨ nd = 2)
+    (hg0 : gnd = 0 ∨ gnd = 1) (hg1 : gnd = 1 → 2 ≤ nd) (hg2 : gnd = 0 → nd ≤ 1)
+    (hv : v = 2 * gnd) (hpos : pos = 0) (hatt : att = 0) (hrep : rep = gnd * pd) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .repulsor, dist := pd.toNat } { what := .vacuum, dist := nd.toNat } := by
+  rcases hg0 with hg | hg <;> subst hg
+  · have hnd1 : nd = 1 := by rcases hnd with h | h <;> [exact h; (exfalso; have := hg2 rfl; omega)]
+    subst hnd1; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hnd2 : nd = 2 := by rcases hnd with h | h <;> [(exfalso; have := hg1 rfl; omega); exact h]
+    subst hnd2; simp only [hv, hpos, hatt, hrep]; norm_num [decodeDecision, evaluateAxis]
+
+theorem decode_vacRep {pd nd gpd v pos att rep : ℤ}
+    (hpd : pd = 1 ∨ pd = 2)
+    (hg0 : gpd = 0 ∨ gpd = 1) (hg1 : gpd = 1 → 2 ≤ pd) (hg2 : gpd = 0 → pd ≤ 1)
+    (hv : v = 2 * gpd) (hpos : pos = gpd) (hatt : att = 0) (hrep : rep = gpd * nd) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .vacuum, dist := pd.toNat } { what := .repulsor, dist := nd.toNat } := by
+  rcases hg0 with hg | hg <;> subst hg
+  · have hpd1 : pd = 1 := by rcases hpd with h | h <;> [exact h; (exfalso; have := hg2 rfl; omega)]
+    subst hpd1; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hpd2 : pd = 2 := by rcases hpd with h | h <;> [(exfalso; have := hg1 rfl; omega); exact h]
+    subst hpd2; simp only [hv, hpos, hatt, hrep]; norm_num [decodeDecision, evaluateAxis]
+
+theorem decode_attVac {pd nd gpd v pos att rep : ℤ}
+    (hpd : pd = 1 ∨ pd = 2)
+    (hg0 : gpd = 0 ∨ gpd = 1) (hg1 : gpd = 1 → 2 ≤ pd) (hg2 : gpd = 0 → pd ≤ 1)
+    (hv : v = gpd) (hpos : pos = gpd) (hatt : att = gpd * pd) (hrep : rep = 0) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .attractor, dist := pd.toNat } { what := .vacuum, dist := nd.toNat } := by
+  rcases hg0 with hg | hg <;> subst hg
+  · have hpd1 : pd = 1 := by rcases hpd with h | h <;> [exact h; (exfalso; have := hg2 rfl; omega)]
+    subst hpd1; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hpd2 : pd = 2 := by rcases hpd with h | h <;> [(exfalso; have := hg1 rfl; omega); exact h]
+    subst hpd2; simp only [hv, hpos, hatt, hrep]; norm_num [decodeDecision, evaluateAxis]
+
+theorem decode_vacAtt {pd nd gnd v pos att rep : ℤ}
+    (hnd : nd = 1 ∨ nd = 2)
+    (hg0 : gnd = 0 ∨ gnd = 1) (hg1 : gnd = 1 → 2 ≤ nd) (hg2 : gnd = 0 → nd ≤ 1)
+    (hv : v = gnd) (hpos : pos = 0) (hatt : att = gnd * nd) (hrep : rep = 0) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .vacuum, dist := pd.toNat } { what := .attractor, dist := nd.toNat } := by
+  rcases hg0 with hg | hg <;> subst hg
+  · have hnd1 : nd = 1 := by rcases hnd with h | h <;> [exact h; (exfalso; have := hg2 rfl; omega)]
+    subst hnd1; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hnd2 : nd = 2 := by rcases hnd with h | h <;> [(exfalso; have := hg1 rfl; omega); exact h]
+    subst hnd2; simp only [hv, hpos, hatt, hrep]; norm_num [decodeDecision, evaluateAxis]
+
+theorem decode_repRep {pd nd le lt gt minv v pos att rep : ℤ}
+    (hpd : pd = 1 ∨ pd = 2) (hnd : nd = 1 ∨ nd = 2)
+    (hlt0 : lt = 0 ∨ lt = 1) (hlt1 : lt = 1 → pd < nd) (hlt2 : lt = 0 → nd ≤ pd)
+    (hgt0 : gt = 0 ∨ gt = 1) (hgt1 : gt = 1 → nd < pd) (hgt2 : gt = 0 → pd ≤ nd)
+    (hle0 : le = 0 ∨ le = 1) (hle1 : le = 1 → pd ≤ nd) (hle2 : le = 0 → nd < pd)
+    (hminv : minv = le * pd + nd - le * nd)
+    (hv : v = 2 * lt + 2 * gt) (hpos : pos = gt) (hatt : att = 0)
+    (hrep : rep = lt * minv + gt * minv) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .repulsor, dist := pd.toNat } { what := .repulsor, dist := nd.toNat } := by
+  rcases hpd with rfl | rfl <;> rcases hnd with rfl | rfl
+  · have hltv : lt = 0 := by rcases hlt0 with h | h <;> [exact h; (exfalso; have := hlt1 h; omega)]
+    have hgtv : gt = 0 := by rcases hgt0 with h | h <;> [exact h; (exfalso; have := hgt1 h; omega)]
+    subst hltv hgtv; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hltv : lt = 1 := by rcases hlt0 with h | h <;> [(exfalso; have := hlt2 h; omega); exact h]
+    have hgtv : gt = 0 := by rcases hgt0 with h | h <;> [exact h; (exfalso; have := hgt1 h; omega)]
+    have hlev : le = 1 := by rcases hle0 with h | h <;> [(exfalso; have := hle2 h; omega); exact h]
+    have hmv : minv = 1 := by rw [hminv, hlev]; ring
+    subst hltv hgtv; rw [hmv] at hrep
+    simp only [hv, hpos, hatt, hrep]
+    rw [show (1:ℤ).toNat = 1 from rfl, show (2:ℤ).toNat = 2 from rfl]
+    norm_num [decodeDecision, evaluateAxis]
+  · have hltv : lt = 0 := by rcases hlt0 with h | h <;> [exact h; (exfalso; have := hlt1 h; omega)]
+    have hgtv : gt = 1 := by rcases hgt0 with h | h <;> [(exfalso; have := hgt2 h; omega); exact h]
+    have hlev : le = 0 := by rcases hle0 with h | h <;> [exact h; (exfalso; have := hle1 h; omega)]
+    have hmv : minv = 1 := by rw [hminv, hlev]; ring
+    subst hltv hgtv; rw [hmv] at hrep
+    simp only [hv, hpos, hatt, hrep]
+    rw [show (1:ℤ).toNat = 1 from rfl, show (2:ℤ).toNat = 2 from rfl]
+    norm_num [decodeDecision, evaluateAxis]
+  · have hltv : lt = 0 := by rcases hlt0 with h | h <;> [exact h; (exfalso; have := hlt1 h; omega)]
+    have hgtv : gt = 0 := by rcases hgt0 with h | h <;> [exact h; (exfalso; have := hgt1 h; omega)]
+    subst hltv hgtv; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+
+theorem decode_attAtt {pd nd le lt gt gm minv v pos att rep : ℤ}
+    (hpd : pd = 1 ∨ pd = 2) (hnd : nd = 1 ∨ nd = 2)
+    (hlt0 : lt = 0 ∨ lt = 1) (hlt1 : lt = 1 → pd < nd) (hlt2 : lt = 0 → nd ≤ pd)
+    (hgt0 : gt = 0 ∨ gt = 1) (hgt1 : gt = 1 → nd < pd) (hgt2 : gt = 0 → pd ≤ nd)
+    (hle0 : le = 0 ∨ le = 1) (hle1 : le = 1 → pd ≤ nd) (hle2 : le = 0 → nd < pd)
+    (hgm0 : gm = 0 ∨ gm = 1) (hgm1 : gm = 1 → 2 ≤ minv) (hgm2 : gm = 0 → minv ≤ 1)
+    (hminv : minv = le * pd + nd - le * nd)
+    (hv : v = lt * gm + gt * gm) (hpos : pos = lt * gm)
+    (hatt : att = lt * gm * minv + gt * gm * minv) (hrep : rep = 0) :
+    decodeDecision v pos att rep
+      = evaluateAxis { what := .attractor, dist := pd.toNat } { what := .attractor, dist := nd.toNat } := by
+  rcases hpd with rfl | rfl <;> rcases hnd with rfl | rfl
+  · have hltv : lt = 0 := by rcases hlt0 with h | h <;> [exact h; (exfalso; have := hlt1 h; omega)]
+    have hgtv : gt = 0 := by rcases hgt0 with h | h <;> [exact h; (exfalso; have := hgt1 h; omega)]
+    subst hltv hgtv; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hlev : le = 1 := by rcases hle0 with h | h <;> [(exfalso; have := hle2 h; omega); exact h]
+    have hmv : minv = 1 := by rw [hminv, hlev]; ring
+    have hgmv : gm = 0 := by rcases hgm0 with h | h <;> [exact h; (exfalso; have := hgm1 h; omega)]
+    subst hgmv; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hlev : le = 0 := by rcases hle0 with h | h <;> [exact h; (exfalso; have := hle1 h; omega)]
+    have hmv : minv = 1 := by rw [hminv, hlev]; ring
+    have hgmv : gm = 0 := by rcases hgm0 with h | h <;> [exact h; (exfalso; have := hgm1 h; omega)]
+    subst hgmv; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+  · have hltv : lt = 0 := by rcases hlt0 with h | h <;> [exact h; (exfalso; have := hlt1 h; omega)]
+    have hgtv : gt = 0 := by rcases hgt0 with h | h <;> [exact h; (exfalso; have := hgt1 h; omega)]
+    subst hltv hgtv; simp only [hv, hpos, hatt, hrep]; simp [decodeDecision, evaluateAxis]
+
+/-! ### The other seven xdec cases (extraction ▸ pure decode). -/
+
+section DecideXdecCases
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+theorem decideAxis_xdec_repAtt (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 0) = 1) (hnw : (envAt t i).loc (rWhat 1) = 2) :
+    decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
+  obtain ⟨gndB, gnd1, gnd2⟩ := xdec_gnd_sound hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip1 : e.loc 63 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin2 : e.loc 67 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [63,67,58]).addProd (-3) [63,67,74])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [63,67,58]).addProd (-3) [63,67,74])).eval e.loc
+      = e.loc 63 * e.loc 67 * e.loc 58 + -3 * (e.loc 63 * e.loc 67 * e.loc 74) from rfl, hip1, hin2] at hgv
+  have hvar : e.loc 58 = 3 * e.loc 74 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 58) (b := 3 * e.loc 74) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [63,67,59])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [63,67,59])).eval e.loc = e.loc 63 * e.loc 67 * e.loc 59 from rfl,
+     hip1, hin2] at hgp
+  have hpos : e.loc 59 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 59) (b := 0) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [63,67,60]).addProd (-1) [63,67,74, rDist 1])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [63,67,60]).addProd (-1) [63,67,74, rDist 1])).eval e.loc
+      = e.loc 63 * e.loc 67 * e.loc 60 + -1 * (e.loc 63 * e.loc 67 * e.loc 74 * e.loc (rDist 1)) from rfl,
+     hip1, hin2] at hga
+  have hatt : e.loc 60 = e.loc 74 * e.loc (rDist 1) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> rcases ndMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 60) (b := e.loc 74 * e.loc (rDist 1)) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [63,67,61]).addProd (-1) [63,67,74, rDist 0])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [63,67,61]).addProd (-1) [63,67,74, rDist 0])).eval e.loc
+      = e.loc 63 * e.loc 67 * e.loc 61 + -1 * (e.loc 63 * e.loc 67 * e.loc 74 * e.loc (rDist 0)) from rfl,
+     hip1, hin2] at hgr
+  have hrep : e.loc 61 = e.loc 74 * e.loc (rDist 0) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> rcases xdec_pd_mem hsat hc i hi with hp|hp <;>
+          rw [← he] at hp <;> rw [hp] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 61) (b := e.loc 74 * e.loc (rDist 0)) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_repAtt ndMem gndB gnd1 gnd2 hvar hpos hatt hrep
+
+theorem decideAxis_xdec_repVac (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 0) = 1) (hnw : (envAt t i).loc (rWhat 1) = 0) :
+    decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
+  obtain ⟨gndB, gnd1, gnd2⟩ := xdec_gnd_sound hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  have pdMem := xdec_pd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip1 : e.loc 63 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin0 : e.loc 65 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [63,65,58]).addProd (-2) [63,65,74])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [63,65,58]).addProd (-2) [63,65,74])).eval e.loc
+      = e.loc 63 * e.loc 65 * e.loc 58 + -2 * (e.loc 63 * e.loc 65 * e.loc 74) from rfl, hip1, hin0] at hgv
+  have hvar : e.loc 58 = 2 * e.loc 74 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 58) (b := 2 * e.loc 74) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [63,65,59])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [63,65,59])).eval e.loc = e.loc 63 * e.loc 65 * e.loc 59 from rfl,
+     hip1, hin0] at hgp
+  have hpos : e.loc 59 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 59) (b := 0) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [63,65,60])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [63,65,60])).eval e.loc = e.loc 63 * e.loc 65 * e.loc 60 from rfl,
+     hip1, hin0] at hga
+  have hatt : e.loc 60 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 60) (b := 0) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [63,65,61]).addProd (-1) [63,65,74, rDist 0])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [63,65,61]).addProd (-1) [63,65,74, rDist 0])).eval e.loc
+      = e.loc 63 * e.loc 65 * e.loc 61 + -1 * (e.loc 63 * e.loc 65 * e.loc 74 * e.loc (rDist 0)) from rfl,
+     hip1, hin0] at hgr
+  have hrep : e.loc 61 = e.loc 74 * e.loc (rDist 0) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> rcases pdMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 61) (b := e.loc 74 * e.loc (rDist 0)) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_repVac ndMem gndB gnd1 gnd2 hvar hpos hatt hrep
+
+theorem decideAxis_xdec_vacRep (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 0) = 0) (hnw : (envAt t i).loc (rWhat 1) = 1) :
+    decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
+  obtain ⟨gpdB, gpd1, gpd2⟩ := xdec_gpd_sound hsat hc i hi
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip0 : e.loc 62 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin1 : e.loc 66 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [62,66,58]).addProd (-2) [62,66,68])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [62,66,58]).addProd (-2) [62,66,68])).eval e.loc
+      = e.loc 62 * e.loc 66 * e.loc 58 + -2 * (e.loc 62 * e.loc 66 * e.loc 68) from rfl, hip0, hin1] at hgv
+  have hvar : e.loc 58 = 2 * e.loc 68 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 58) (b := 2 * e.loc 68) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [62,66,59]).addProd (-1) [62,66,68])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [62,66,59]).addProd (-1) [62,66,68])).eval e.loc
+      = e.loc 62 * e.loc 66 * e.loc 59 + -1 * (e.loc 62 * e.loc 66 * e.loc 68) from rfl, hip0, hin1] at hgp
+  have hpos : e.loc 59 = e.loc 68 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 59) (b := e.loc 68) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [62,66,60])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [62,66,60])).eval e.loc = e.loc 62 * e.loc 66 * e.loc 60 from rfl,
+     hip0, hin1] at hga
+  have hatt : e.loc 60 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 60) (b := 0) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [62,66,61]).addProd (-1) [62,66,68, rDist 1])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [62,66,61]).addProd (-1) [62,66,68, rDist 1])).eval e.loc
+      = e.loc 62 * e.loc 66 * e.loc 61 + -1 * (e.loc 62 * e.loc 66 * e.loc 68 * e.loc (rDist 1)) from rfl,
+     hip0, hin1] at hgr
+  have hrep : e.loc 61 = e.loc 68 * e.loc (rDist 1) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> rcases ndMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 61) (b := e.loc 68 * e.loc (rDist 1)) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_vacRep pdMem gpdB gpd1 gpd2 hvar hpos hatt hrep
+
+theorem decideAxis_xdec_attVac (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 0) = 2) (hnw : (envAt t i).loc (rWhat 1) = 0) :
+    decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
+  obtain ⟨gpdB, gpd1, gpd2⟩ := xdec_gpd_sound hsat hc i hi
+  have pdMem := xdec_pd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip2 : e.loc 64 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin0 : e.loc 65 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [64,65,58]).addProd (-1) [64,65,68])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [64,65,58]).addProd (-1) [64,65,68])).eval e.loc
+      = e.loc 64 * e.loc 65 * e.loc 58 + -1 * (e.loc 64 * e.loc 65 * e.loc 68) from rfl, hip2, hin0] at hgv
+  have hvar : e.loc 58 = e.loc 68 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 58) (b := e.loc 68) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [64,65,59]).addProd (-1) [64,65,68])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [64,65,59]).addProd (-1) [64,65,68])).eval e.loc
+      = e.loc 64 * e.loc 65 * e.loc 59 + -1 * (e.loc 64 * e.loc 65 * e.loc 68) from rfl, hip2, hin0] at hgp
+  have hpos : e.loc 59 = e.loc 68 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 59) (b := e.loc 68) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [64,65,60]).addProd (-1) [64,65,68, rDist 0])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [64,65,60]).addProd (-1) [64,65,68, rDist 0])).eval e.loc
+      = e.loc 64 * e.loc 65 * e.loc 60 + -1 * (e.loc 64 * e.loc 65 * e.loc 68 * e.loc (rDist 0)) from rfl,
+     hip2, hin0] at hga
+  have hatt : e.loc 60 = e.loc 68 * e.loc (rDist 0) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> rcases pdMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 60) (b := e.loc 68 * e.loc (rDist 0)) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [64,65,61])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [64,65,61])).eval e.loc = e.loc 64 * e.loc 65 * e.loc 61 from rfl,
+     hip2, hin0] at hgr
+  have hrep : e.loc 61 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 61) (b := 0) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_attVac pdMem gpdB gpd1 gpd2 hvar hpos hatt hrep
+
+theorem decideAxis_xdec_vacAtt (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 0) = 0) (hnw : (envAt t i).loc (rWhat 1) = 2) :
+    decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
+  obtain ⟨gndB, gnd1, gnd2⟩ := xdec_gnd_sound hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip0 : e.loc 62 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin2 : e.loc 67 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [62,67,58]).addProd (-1) [62,67,74])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [62,67,58]).addProd (-1) [62,67,74])).eval e.loc
+      = e.loc 62 * e.loc 67 * e.loc 58 + -1 * (e.loc 62 * e.loc 67 * e.loc 74) from rfl, hip0, hin2] at hgv
+  have hvar : e.loc 58 = e.loc 74 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 58) (b := e.loc 74) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [62,67,59])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [62,67,59])).eval e.loc = e.loc 62 * e.loc 67 * e.loc 59 from rfl,
+     hip0, hin2] at hgp
+  have hpos : e.loc 59 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 59) (b := 0) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [62,67,60]).addProd (-1) [62,67,74, rDist 1])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [62,67,60]).addProd (-1) [62,67,74, rDist 1])).eval e.loc
+      = e.loc 62 * e.loc 67 * e.loc 60 + -1 * (e.loc 62 * e.loc 67 * e.loc 74 * e.loc (rDist 1)) from rfl,
+     hip0, hin2] at hga
+  have hatt : e.loc 60 = e.loc 74 * e.loc (rDist 1) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> rcases ndMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 60) (b := e.loc 74 * e.loc (rDist 1)) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [62,67,61])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [62,67,61])).eval e.loc = e.loc 62 * e.loc 67 * e.loc 61 from rfl,
+     hip0, hin2] at hgr
+  have hrep : e.loc 61 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 61) (b := 0) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_vacAtt ndMem gndB gnd1 gnd2 hvar hpos hatt hrep
+
+theorem decideAxis_xdec_repRep (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 0) = 1) (hnw : (envAt t i).loc (rWhat 1) = 1) :
+    decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
+  obtain ⟨ltB, lt1, lt2⟩ := xdec_lt_sound hsat hc i hi
+  obtain ⟨gtB, gt1, gt2⟩ := xdec_gt_sound hsat hc i hi
+  obtain ⟨leB, le1, le2⟩ := xdec_le_sound hsat hc i hi
+  have hmineq := xdec_min_sound hsat hc i hi
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip1 : e.loc 63 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin1 : e.loc 66 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have minMem : e.loc 98 = 1 ∨ e.loc 98 = 2 := by
+    rw [hmineq]; rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+      rw [h, hp, hn] <;> norm_num
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr (((Head.zero.addProd 1 [63,66,58]).addProd (-2) [63,66,80]).addProd (-2) [63,66,86])) (by decide)
+  rw [show (headToExpr (((Head.zero.addProd 1 [63,66,58]).addProd (-2) [63,66,80]).addProd (-2) [63,66,86])).eval e.loc
+      = e.loc 63 * e.loc 66 * e.loc 58 + -2 * (e.loc 63 * e.loc 66 * e.loc 80)
+        + -2 * (e.loc 63 * e.loc 66 * e.loc 86) from rfl, hip1, hin1] at hgv
+  have hvar : e.loc 58 = 2 * e.loc 80 + 2 * e.loc 86 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 58) (b := 2 * e.loc 80 + 2 * e.loc 86) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [63,66,59]).addProd (-1) [63,66,86])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [63,66,59]).addProd (-1) [63,66,86])).eval e.loc
+      = e.loc 63 * e.loc 66 * e.loc 59 + -1 * (e.loc 63 * e.loc 66 * e.loc 86) from rfl, hip1, hin1] at hgp
+  have hpos : e.loc 59 = e.loc 86 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 59) (b := e.loc 86) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [63,66,60])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [63,66,60])).eval e.loc = e.loc 63 * e.loc 66 * e.loc 60 from rfl,
+     hip1, hin1] at hga
+  have hatt : e.loc 60 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 60) (b := 0) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr (((Head.zero.addProd 1 [63,66,61]).addProd (-1) [63,66,80,98]).addProd (-1) [63,66,86,98])) (by decide)
+  rw [show (headToExpr (((Head.zero.addProd 1 [63,66,61]).addProd (-1) [63,66,80,98]).addProd (-1) [63,66,86,98])).eval e.loc
+      = e.loc 63 * e.loc 66 * e.loc 61 + -1 * (e.loc 63 * e.loc 66 * e.loc 80 * e.loc 98)
+        + -1 * (e.loc 63 * e.loc 66 * e.loc 86 * e.loc 98) from rfl, hip1, hin1] at hgr
+  have hrep : e.loc 61 = e.loc 80 * e.loc 98 + e.loc 86 * e.loc 98 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases minMem with hm|hm <;>
+          rw [h,h',hm] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 61) (b := e.loc 80 * e.loc 98 + e.loc 86 * e.loc 98) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_repRep pdMem ndMem ltB lt1 lt2 gtB gt1 gt2 leB le1 le2 hmineq hvar hpos hatt hrep
+
+theorem decideAxis_xdec_attAtt (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 0) = 2) (hnw : (envAt t i).loc (rWhat 1) = 2) :
+    decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
+  obtain ⟨ltB, lt1, lt2⟩ := xdec_lt_sound hsat hc i hi
+  obtain ⟨gtB, gt1, gt2⟩ := xdec_gt_sound hsat hc i hi
+  obtain ⟨leB, le1, le2⟩ := xdec_le_sound hsat hc i hi
+  obtain ⟨gmB, gm1, gm2⟩ := xdec_gm_sound hsat hc i hi
+  have hmineq := xdec_min_sound hsat hc i hi
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip2 : e.loc 64 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin2 : e.loc 67 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have minMem : e.loc 98 = 1 ∨ e.loc 98 = 2 := by
+    rw [hmineq]; rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+      rw [h, hp, hn] <;> norm_num
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr (((Head.zero.addProd 1 [64,67,58]).addProd (-1) [64,67,80,99]).addProd (-1) [64,67,86,99])) (by decide)
+  rw [show (headToExpr (((Head.zero.addProd 1 [64,67,58]).addProd (-1) [64,67,80,99]).addProd (-1) [64,67,86,99])).eval e.loc
+      = e.loc 64 * e.loc 67 * e.loc 58 + -1 * (e.loc 64 * e.loc 67 * e.loc 80 * e.loc 99)
+        + -1 * (e.loc 64 * e.loc 67 * e.loc 86 * e.loc 99) from rfl, hip2, hin2] at hgv
+  have hvar : e.loc 58 = e.loc 80 * e.loc 99 + e.loc 86 * e.loc 99 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases gmB with hg|hg <;>
+          rw [h,h',hg] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 58) (b := e.loc 80 * e.loc 99 + e.loc 86 * e.loc 99) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [64,67,59]).addProd (-1) [64,67,80,99])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [64,67,59]).addProd (-1) [64,67,80,99])).eval e.loc
+      = e.loc 64 * e.loc 67 * e.loc 59 + -1 * (e.loc 64 * e.loc 67 * e.loc 80 * e.loc 99) from rfl, hip2, hin2] at hgp
+  have hpos : e.loc 59 = e.loc 80 * e.loc 99 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gmB with hg|hg <;> rw [h,hg] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 59) (b := e.loc 80 * e.loc 99) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr (((Head.zero.addProd 1 [64,67,60]).addProd (-1) [64,67,80,99,98]).addProd (-1) [64,67,86,99,98])) (by decide)
+  rw [show (headToExpr (((Head.zero.addProd 1 [64,67,60]).addProd (-1) [64,67,80,99,98]).addProd (-1) [64,67,86,99,98])).eval e.loc
+      = e.loc 64 * e.loc 67 * e.loc 60 + -1 * (e.loc 64 * e.loc 67 * e.loc 80 * e.loc 99 * e.loc 98)
+        + -1 * (e.loc 64 * e.loc 67 * e.loc 86 * e.loc 99 * e.loc 98) from rfl, hip2, hin2] at hga
+  have hatt : e.loc 60 = e.loc 80 * e.loc 99 * e.loc 98 + e.loc 86 * e.loc 99 * e.loc 98 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases gmB with hg|hg <;> rcases minMem with hm|hm <;>
+          rw [h,h',hg,hm] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 60) (b := e.loc 80 * e.loc 99 * e.loc 98 + e.loc 86 * e.loc 99 * e.loc 98) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [64,67,61])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [64,67,61])).eval e.loc = e.loc 64 * e.loc 67 * e.loc 61 from rfl,
+     hip2, hin2] at hgr
+  have hrep : e.loc 61 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero
+      ((gate_modEq_iff (a := e.loc 61) (b := 0) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_attAtt pdMem ndMem ltB lt1 lt2 gtB gt1 gt2 leB le1 le2 gmB gm1 gm2 hmineq hvar hpos hatt hrep
+
+/-- **Leg (3) for the X axis, IN FULL: `decodeDecision = evaluateAxis` for BOTH rays.** Case-splits on
+the two ray `what`-codes over all nine `evaluate_axis` cases; each closes against the byte-pinned
+`automataflStepDesc`. -/
+theorem decideAxis_x_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  have hpwm : (envAt t i).loc (rWhat 0) = 0 ∨ (envAt t i).loc (rWhat 0) = 1 ∨ (envAt t i).loc (rWhat 0) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 0) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+  have hnwm : (envAt t i).loc (rWhat 1) = 0 ∨ (envAt t i).loc (rWhat 1) = 1 ∨ (envAt t i).loc (rWhat 1) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+  rcases hpwm with hp|hp|hp <;> rcases hnwm with hn|hn|hn
+  · exact decideAxis_xdec_none hsat hc i hi hp hn
+  · exact decideAxis_xdec_vacRep hsat hc i hi hp hn
+  · exact decideAxis_xdec_vacAtt hsat hc i hi hp hn
+  · exact decideAxis_xdec_repVac hsat hc i hi hp hn
+  · exact decideAxis_xdec_repRep hsat hc i hi hp hn
+  · exact decideAxis_xdec_repAtt hsat hc i hi hp hn
+  · exact decideAxis_xdec_attVac hsat hc i hi hp hn
+  · exact decideAxis_xdec_attRep hsat hc i hi hp hn
+  · exact decideAxis_xdec_attAtt hsat hc i hi hp hn
+
+end DecideXdecCases
+
+
+section DecideYdec
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- The YP ray distance `rDist 2 ∈ {1,2}`. -/
+theorem ydec_pd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc (rDist 2) = 1 ∨ (envAt t i).loc (rDist 2) = 2 := by
+  set e := envAt t i with he
+  have b1 : e.loc (rHit 2 1) = 0 ∨ e.loc (rHit 2 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 1)) (by decide)) (canon_loc hc i _)
+  have b2 : e.loc (rHit 2 2) = 0 ∨ e.loc (rHit 2 2) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 2)) (by decide)) (canon_loc hc i _)
+  have hsum : e.loc (rHit 2 1) + e.loc (rHit 2 2) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 2 kk))
+        (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 2 kk))
+        (Head.c (-1)))).eval e.loc = e.loc (rHit 2 1) + e.loc (rHit 2 2) + (-1) from rfl] at hg
+    have := (gate_modEq_iff (a := e.loc (rHit 2 1) + e.loc (rHit 2 2)) (b := 1) (by ring)).mp hg
+    rcases b1 with h0 | h0 <;> rcases b2 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have hval : e.loc (rDist 2) = e.loc (rHit 2 1) + 2 * e.loc (rHit 2 2) := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 2 kk))
+        (Head.lin (-1) (rDist 2)))) (by decide)
+    rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 2 kk))
+        (Head.lin (-1) (rDist 2)))).eval e.loc
+        = (-1) * e.loc (rDist 2) + e.loc (rHit 2 1) + 2 * e.loc (rHit 2 2) from rfl] at hg
+    have hmod := (gate_modEq_iff (a := e.loc (rHit 2 1) + 2 * e.loc (rHit 2 2))
+      (b := e.loc (rDist 2)) (by ring)).mp hg
+    have hcD : Canon (e.loc (rHit 2 1) + 2 * e.loc (rHit 2 2)) := by
+      rcases b1 with h|h <;> rcases b2 with h2|h2 <;> rw [h, h2] <;> exact ⟨by norm_num, by norm_num⟩
+    exact (eq_of_modEq_canon hcD (canon_loc hc i _) hmod).symm
+  rw [hval]; rcases b1 with h|h <;> rcases b2 with h2|h2 <;> rw [h, h2] at hsum ⊢ <;> omega
+
+/-- The YN ray distance `rDist 3 ∈ {1,2}`. -/
+theorem ydec_nd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc (rDist 3) = 1 ∨ (envAt t i).loc (rDist 3) = 2 := by
+  set e := envAt t i with he
+  have b1 : e.loc (rHit 3 1) = 0 ∨ e.loc (rHit 3 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 1)) (by decide)) (canon_loc hc i _)
+  have b2 : e.loc (rHit 3 2) = 0 ∨ e.loc (rHit 3 2) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 2)) (by decide)) (canon_loc hc i _)
+  have hsum : e.loc (rHit 3 1) + e.loc (rHit 3 2) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 3 kk))
+        (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 3 kk))
+        (Head.c (-1)))).eval e.loc = e.loc (rHit 3 1) + e.loc (rHit 3 2) + (-1) from rfl] at hg
+    have := (gate_modEq_iff (a := e.loc (rHit 3 1) + e.loc (rHit 3 2)) (b := 1) (by ring)).mp hg
+    rcases b1 with h0 | h0 <;> rcases b2 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have hval : e.loc (rDist 3) = e.loc (rHit 3 1) + 2 * e.loc (rHit 3 2) := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 3 kk))
+        (Head.lin (-1) (rDist 3)))) (by decide)
+    rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 3 kk))
+        (Head.lin (-1) (rDist 3)))).eval e.loc
+        = (-1) * e.loc (rDist 3) + e.loc (rHit 3 1) + 2 * e.loc (rHit 3 2) from rfl] at hg
+    have hmod := (gate_modEq_iff (a := e.loc (rHit 3 1) + 2 * e.loc (rHit 3 2))
+      (b := e.loc (rDist 3)) (by ring)).mp hg
+    have hcD : Canon (e.loc (rHit 3 1) + 2 * e.loc (rHit 3 2)) := by
+      rcases b1 with h|h <;> rcases b2 with h2|h2 <;> rw [h, h2] <;> exact ⟨by norm_num, by norm_num⟩
+    exact (eq_of_modEq_canon hcD (canon_loc hc i _) hmod).symm
+  rw [hval]; rcases b1 with h|h <;> rcases b2 with h2|h2 <;> rw [h, h2] at hsum ⊢ <;> omega
+
+/-- The ydec `ipw` one-hot (over the YP ray's `what`-code, columns 109..111). -/
+theorem ydec_ipw_sel (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 109 = 0 ∨ (envAt t i).loc 109 = 1)
+    ∧ ((envAt t i).loc 110 = 0 ∨ (envAt t i).loc 110 = 1)
+    ∧ ((envAt t i).loc 111 = 0 ∨ (envAt t i).loc 111 = 1)
+    ∧ (envAt t i).loc 109 + (envAt t i).loc 110 + (envAt t i).loc 111 = 1
+    ∧ (envAt t i).loc 110 + 2 * (envAt t i).loc 111 = (envAt t i).loc (rWhat 2) := by
+  set e := envAt t i with he
+  have b0 : e.loc 109 = 0 ∨ e.loc 109 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 109) (by decide)) (canon_loc hc i _)
+  have b1 : e.loc 110 = 0 ∨ e.loc 110 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 110) (by decide)) (canon_loc hc i _)
+  have b2 : e.loc 111 = 0 ∨ e.loc 111 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 111) (by decide)) (canon_loc hc i _)
+  have hsum : e.loc 109 + e.loc 110 + e.loc 111 = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ([109,110,111].foldl (fun h co => h.addLin 1 co) (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ([109,110,111].foldl (fun h co => h.addLin 1 co) (Head.c (-1)))).eval e.loc
+        = e.loc 109 + e.loc 110 + e.loc 111 + -1 from rfl] at hg
+    have := (gate_modEq_iff (a := e.loc 109 + e.loc 110 + e.loc 111) (b := 1) (by ring)).mp hg
+    rcases b0 with h|h <;> rcases b1 with h'|h' <;> rcases b2 with h''|h'' <;>
+      exact eq_of_modEq_small (by rw [h,h',h'']; norm_num) (by norm_num) this
+  have hidx : e.loc 110 + 2 * e.loc 111 = e.loc (rWhat 2) := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr (((List.range 3).foldl (fun h (j:Nat) => h.addLin (j:ℤ) ([109,110,111][j]!)) Head.zero).append
+        ((Head.lin 1 (rWhat 2)).scale (-1)))) (by decide)
+    rw [show (headToExpr (((List.range 3).foldl (fun h (j:Nat) => h.addLin (j:ℤ) ([109,110,111][j]!)) Head.zero).append
+        ((Head.lin 1 (rWhat 2)).scale (-1)))).eval e.loc = e.loc 110 + 2 * e.loc 111 + -1 * e.loc (rWhat 2) from rfl] at hg
+    have hmod := (gate_modEq_iff (a := e.loc 110 + 2 * e.loc 111) (b := e.loc (rWhat 2)) (by ring)).mp hg
+    have hcL : Canon (e.loc 110 + 2 * e.loc 111) := by
+      rcases b1 with h|h <;> rcases b2 with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩
+    exact eq_of_modEq_canon hcL (canon_loc hc i _) hmod
+  exact ⟨b0, b1, b2, hsum, hidx⟩
+
+/-- The ydec `inw` one-hot (over the YN ray's `what`-code, columns 112..114). -/
+theorem ydec_inw_sel (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 112 = 0 ∨ (envAt t i).loc 112 = 1)
+    ∧ ((envAt t i).loc 113 = 0 ∨ (envAt t i).loc 113 = 1)
+    ∧ ((envAt t i).loc 114 = 0 ∨ (envAt t i).loc 114 = 1)
+    ∧ (envAt t i).loc 112 + (envAt t i).loc 113 + (envAt t i).loc 114 = 1
+    ∧ (envAt t i).loc 113 + 2 * (envAt t i).loc 114 = (envAt t i).loc (rWhat 3) := by
+  set e := envAt t i with he
+  have b0 : e.loc 112 = 0 ∨ e.loc 112 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 112) (by decide)) (canon_loc hc i _)
+  have b1 : e.loc 113 = 0 ∨ e.loc 113 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 113) (by decide)) (canon_loc hc i _)
+  have b2 : e.loc 114 = 0 ∨ e.loc 114 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 114) (by decide)) (canon_loc hc i _)
+  have hsum : e.loc 112 + e.loc 113 + e.loc 114 = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ([112,113,114].foldl (fun h co => h.addLin 1 co) (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ([112,113,114].foldl (fun h co => h.addLin 1 co) (Head.c (-1)))).eval e.loc
+        = e.loc 112 + e.loc 113 + e.loc 114 + -1 from rfl] at hg
+    have := (gate_modEq_iff (a := e.loc 112 + e.loc 113 + e.loc 114) (b := 1) (by ring)).mp hg
+    rcases b0 with h|h <;> rcases b1 with h'|h' <;> rcases b2 with h''|h'' <;>
+      exact eq_of_modEq_small (by rw [h,h',h'']; norm_num) (by norm_num) this
+  have hidx : e.loc 113 + 2 * e.loc 114 = e.loc (rWhat 3) := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr (((List.range 3).foldl (fun h (j:Nat) => h.addLin (j:ℤ) ([112,113,114][j]!)) Head.zero).append
+        ((Head.lin 1 (rWhat 3)).scale (-1)))) (by decide)
+    rw [show (headToExpr (((List.range 3).foldl (fun h (j:Nat) => h.addLin (j:ℤ) ([112,113,114][j]!)) Head.zero).append
+        ((Head.lin 1 (rWhat 3)).scale (-1)))).eval e.loc = e.loc 113 + 2 * e.loc 114 + -1 * e.loc (rWhat 3) from rfl] at hg
+    have hmod := (gate_modEq_iff (a := e.loc 113 + 2 * e.loc 114) (b := e.loc (rWhat 3)) (by ring)).mp hg
+    have hcL : Canon (e.loc 113 + 2 * e.loc 114) := by
+      rcases b1 with h|h <;> rcases b2 with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩
+    exact eq_of_modEq_canon hcL (canon_loc hc i _) hmod
+  exact ⟨b0, b1, b2, hsum, hidx⟩
+
+/-- The ydec `gpd = [pd ≥ 2]` guard bit (col 115) decides `rDist 2 ≥ 2`. -/
+theorem ydec_gpd_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 115 = 0 ∨ (envAt t i).loc 115 = 1)
+    ∧ ((envAt t i).loc 115 = 1 → 2 ≤ (envAt t i).loc (rDist 2))
+    ∧ ((envAt t i).loc 115 = 0 → (envAt t i).loc (rDist 2) ≤ 1) := by
+  set e := envAt t i with he
+  have gpdB : e.loc 115 = 0 ∨ e.loc 115 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 10)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 116 = 0 ∨ e.loc 116 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 11)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 117 = 0 ∨ e.loc 117 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 12)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 118 = 0 ∨ e.loc 118 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 13)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 119 = 0 ∨ e.loc 119 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 14)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 120 = 0 ∨ e.loc 120 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 15)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 11) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 10) ((Head.lin 1 (rDist 2)).addConst (-2))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 11) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 10) ((Head.lin 1 (rDist 2)).addConst (-2))))).eval e.loc
+      = 2 * (e.loc 115 * e.loc (rDist 2)) + -4 * e.loc 115 + e.loc 115 + -1 * e.loc (rDist 2)
+        + -1 * e.loc 116 + -2 * e.loc 117 + -4 * e.loc 118 + -8 * e.loc 119 + -16 * e.loc 120 + 1 from rfl] at grec
+  have gmod : (2 * e.loc 115 * (e.loc (rDist 2) - 2) + e.loc 115 - (e.loc (rDist 2) - 2) - 1)
+      ≡ (e.loc 116 + 2 * e.loc 117 + 4 * e.loc 118 + 8 * e.loc 119 + 16 * e.loc 120) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have pdMem := ydec_pd_mem hsat hc i hi
+  rw [← he] at pdMem
+  have core := forcedGe0_core (D := e.loc (rDist 2) - 2)
+    (S := e.loc 116 + 2 * e.loc 117 + 4 * e.loc 118 + 8 * e.loc 119 + 16 * e.loc 120) gpdB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases pdMem with h|h <;> rw [h] <;> norm_num) (by rcases pdMem with h|h <;> rw [h] <;> norm_num)
+  exact ⟨gpdB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The ydec `gnd = [nd ≥ 2]` guard bit (col 121) decides `rDist 3 ≥ 2`. -/
+theorem ydec_gnd_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 121 = 0 ∨ (envAt t i).loc 121 = 1)
+    ∧ ((envAt t i).loc 121 = 1 → 2 ≤ (envAt t i).loc (rDist 3))
+    ∧ ((envAt t i).loc 121 = 0 → (envAt t i).loc (rDist 3) ≤ 1) := by
+  set e := envAt t i with he
+  have gndB : e.loc 121 = 0 ∨ e.loc 121 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 16)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 122 = 0 ∨ e.loc 122 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 17)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 123 = 0 ∨ e.loc 123 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 18)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 124 = 0 ∨ e.loc 124 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 19)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 125 = 0 ∨ e.loc 125 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 20)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 126 = 0 ∨ e.loc 126 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 21)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 17) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 16) ((Head.lin 1 (rDist 3)).addConst (-2))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 17) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 16) ((Head.lin 1 (rDist 3)).addConst (-2))))).eval e.loc
+      = 2 * (e.loc 121 * e.loc (rDist 3)) + -4 * e.loc 121 + e.loc 121 + -1 * e.loc (rDist 3)
+        + -1 * e.loc 122 + -2 * e.loc 123 + -4 * e.loc 124 + -8 * e.loc 125 + -16 * e.loc 126 + 1 from rfl] at grec
+  have gmod : (2 * e.loc 121 * (e.loc (rDist 3) - 2) + e.loc 121 - (e.loc (rDist 3) - 2) - 1)
+      ≡ (e.loc 122 + 2 * e.loc 123 + 4 * e.loc 124 + 8 * e.loc 125 + 16 * e.loc 126) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have ndMem := ydec_nd_mem hsat hc i hi
+  rw [← he] at ndMem
+  have core := forcedGe0_core (D := e.loc (rDist 3) - 2)
+    (S := e.loc 122 + 2 * e.loc 123 + 4 * e.loc 124 + 8 * e.loc 125 + 16 * e.loc 126) gndB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases ndMem with h|h <;> rw [h] <;> norm_num) (by rcases ndMem with h|h <;> rw [h] <;> norm_num)
+  exact ⟨gndB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The ydec `lt = [pd < nd]` compare bit (col 127). -/
+theorem ydec_lt_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 127 = 0 ∨ (envAt t i).loc 127 = 1)
+    ∧ ((envAt t i).loc 127 = 1 → (envAt t i).loc (rDist 2) < (envAt t i).loc (rDist 3))
+    ∧ ((envAt t i).loc 127 = 0 → (envAt t i).loc (rDist 3) ≤ (envAt t i).loc (rDist 2)) := by
+  set e := envAt t i with he
+  have ltB : e.loc 127 = 0 ∨ e.loc 127 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 22)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 128 = 0 ∨ e.loc 128 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 23)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 129 = 0 ∨ e.loc 129 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 24)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 130 = 0 ∨ e.loc 130 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 25)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 131 = 0 ∨ e.loc 131 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 26)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 132 = 0 ∨ e.loc 132 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 27)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 23) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 22) (((Head.lin 1 (rDist 3)).addLin (-1) (rDist 2)).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 23) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 22) (((Head.lin 1 (rDist 3)).addLin (-1) (rDist 2)).addConst (-1))))).eval e.loc
+      = 2 * (e.loc 127 * e.loc (rDist 3)) + -2 * (e.loc 127 * e.loc (rDist 2)) + -2 * e.loc 127 + e.loc 127
+        + -1 * e.loc (rDist 3) + e.loc (rDist 2)
+        + -1 * e.loc 128 + -2 * e.loc 129 + -4 * e.loc 130 + -8 * e.loc 131 + -16 * e.loc 132 from rfl] at grec
+  have gmod : (2 * e.loc 127 * (e.loc (rDist 3) - e.loc (rDist 2) - 1) + e.loc 127
+        - (e.loc (rDist 3) - e.loc (rDist 2) - 1) - 1)
+      ≡ (e.loc 128 + 2 * e.loc 129 + 4 * e.loc 130 + 8 * e.loc 131 + 16 * e.loc 132) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have core := forcedGe0_core (D := e.loc (rDist 3) - e.loc (rDist 2) - 1)
+    (S := e.loc 128 + 2 * e.loc 129 + 4 * e.loc 130 + 8 * e.loc 131 + 16 * e.loc 132) ltB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+  exact ⟨ltB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The ydec `gt = [pd > nd]` compare bit (col 133). -/
+theorem ydec_gt_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 133 = 0 ∨ (envAt t i).loc 133 = 1)
+    ∧ ((envAt t i).loc 133 = 1 → (envAt t i).loc (rDist 3) < (envAt t i).loc (rDist 2))
+    ∧ ((envAt t i).loc 133 = 0 → (envAt t i).loc (rDist 2) ≤ (envAt t i).loc (rDist 3)) := by
+  set e := envAt t i with he
+  have gtB : e.loc 133 = 0 ∨ e.loc 133 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 28)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 134 = 0 ∨ e.loc 134 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 29)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 135 = 0 ∨ e.loc 135 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 30)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 136 = 0 ∨ e.loc 136 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 31)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 137 = 0 ∨ e.loc 137 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 32)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 138 = 0 ∨ e.loc 138 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 33)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 29) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 28) (((Head.lin 1 (rDist 2)).addLin (-1) (rDist 3)).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 29) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 28) (((Head.lin 1 (rDist 2)).addLin (-1) (rDist 3)).addConst (-1))))).eval e.loc
+      = 2 * (e.loc 133 * e.loc (rDist 2)) + -2 * (e.loc 133 * e.loc (rDist 3)) + -2 * e.loc 133 + e.loc 133
+        + -1 * e.loc (rDist 2) + e.loc (rDist 3)
+        + -1 * e.loc 134 + -2 * e.loc 135 + -4 * e.loc 136 + -8 * e.loc 137 + -16 * e.loc 138 from rfl] at grec
+  have gmod : (2 * e.loc 133 * (e.loc (rDist 2) - e.loc (rDist 3) - 1) + e.loc 133
+        - (e.loc (rDist 2) - e.loc (rDist 3) - 1) - 1)
+      ≡ (e.loc 134 + 2 * e.loc 135 + 4 * e.loc 136 + 8 * e.loc 137 + 16 * e.loc 138) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have core := forcedGe0_core (D := e.loc (rDist 2) - e.loc (rDist 3) - 1)
+    (S := e.loc 134 + 2 * e.loc 135 + 4 * e.loc 136 + 8 * e.loc 137 + 16 * e.loc 138) gtB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+  exact ⟨gtB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The ydec `le = [pd ≤ nd]` compare bit (col 139). -/
+theorem ydec_le_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 139 = 0 ∨ (envAt t i).loc 139 = 1)
+    ∧ ((envAt t i).loc 139 = 1 → (envAt t i).loc (rDist 2) ≤ (envAt t i).loc (rDist 3))
+    ∧ ((envAt t i).loc 139 = 0 → (envAt t i).loc (rDist 3) < (envAt t i).loc (rDist 2)) := by
+  set e := envAt t i with he
+  have leB : e.loc 139 = 0 ∨ e.loc 139 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 34)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 140 = 0 ∨ e.loc 140 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 35)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 141 = 0 ∨ e.loc 141 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 36)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 142 = 0 ∨ e.loc 142 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 37)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 143 = 0 ∨ e.loc 143 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 38)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 144 = 0 ∨ e.loc 144 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 39)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 35) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 34) ((Head.lin 1 (rDist 3)).addLin (-1) (rDist 2))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 35) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 34) ((Head.lin 1 (rDist 3)).addLin (-1) (rDist 2))))).eval e.loc
+      = 2 * (e.loc 139 * e.loc (rDist 3)) + -2 * (e.loc 139 * e.loc (rDist 2)) + e.loc 139
+        + -1 * e.loc (rDist 3) + e.loc (rDist 2)
+        + -1 * e.loc 140 + -2 * e.loc 141 + -4 * e.loc 142 + -8 * e.loc 143 + -16 * e.loc 144 + -1 from rfl] at grec
+  have gmod : (2 * e.loc 139 * (e.loc (rDist 3) - e.loc (rDist 2)) + e.loc 139
+        - (e.loc (rDist 3) - e.loc (rDist 2)) - 1)
+      ≡ (e.loc 140 + 2 * e.loc 141 + 4 * e.loc 142 + 8 * e.loc 143 + 16 * e.loc 144) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have core := forcedGe0_core (D := e.loc (rDist 3) - e.loc (rDist 2))
+    (S := e.loc 140 + 2 * e.loc 141 + 4 * e.loc 142 + 8 * e.loc 143 + 16 * e.loc 144) leB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases pdMem with h|h <;> rcases ndMem with h'|h' <;> rw [h,h'] <;> norm_num)
+  exact ⟨leB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- The ydec `min` gadget value (col 145) `= le·pd + nd − le·nd = min(pd, nd)`. -/
+theorem ydec_min_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 145
+      = (envAt t i).loc 139 * (envAt t i).loc (rDist 2) + (envAt t i).loc (rDist 3)
+        - (envAt t i).loc 139 * (envAt t i).loc (rDist 3) := by
+  set e := envAt t i with he
+  obtain ⟨leB, _, _⟩ := ydec_le_sound hsat hc i hi
+  rw [← he] at leB
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have hg := astep_gate hsat i hi
+    (g := headToExpr ((((Head.lin 1 145).addProd (-1) [139, rDist 2]).addLin (-1) (rDist 3)).addProd 1 [139, rDist 3])) (by decide)
+  rw [show (headToExpr ((((Head.lin 1 145).addProd (-1) [139, rDist 2]).addLin (-1) (rDist 3)).addProd 1 [139, rDist 3])).eval e.loc
+      = e.loc 145 + -1 * (e.loc 139 * e.loc (rDist 2)) + -1 * e.loc (rDist 3) + e.loc 139 * e.loc (rDist 3) from rfl] at hg
+  refine eq_of_modEq_canon (canon_loc hc i _) ?_
+    ((gate_modEq_iff (a := e.loc 145)
+      (b := e.loc 139 * e.loc (rDist 2) + e.loc (rDist 3) - e.loc 139 * e.loc (rDist 3)) (by ring)).mp hg)
+  rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+    rw [h, hp, hn] <;> exact ⟨by norm_num, by norm_num⟩
+
+/-- The ydec `gm = [min ≥ 2]` guard bit (col 146). -/
+theorem ydec_gm_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 146 = 0 ∨ (envAt t i).loc 146 = 1)
+    ∧ ((envAt t i).loc 146 = 1 → 2 ≤ (envAt t i).loc 145)
+    ∧ ((envAt t i).loc 146 = 0 → (envAt t i).loc 145 ≤ 1) := by
+  set e := envAt t i with he
+  have hmin := ydec_min_sound hsat hc i hi
+  rw [← he] at hmin
+  obtain ⟨leB, _, _⟩ := ydec_le_sound hsat hc i hi
+  rw [← he] at leB
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  rw [← he] at pdMem ndMem
+  have minMem : e.loc 145 = 1 ∨ e.loc 145 = 2 := by
+    rw [hmin]; rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+      rw [h, hp, hn] <;> norm_num
+  have gmB : e.loc 146 = 0 ∨ e.loc 146 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 41)) (by decide)) (canon_loc hc i _)
+  have bit0 : e.loc 147 = 0 ∨ e.loc 147 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 42)) (by decide)) (canon_loc hc i _)
+  have bit1 : e.loc 148 = 0 ∨ e.loc 148 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 43)) (by decide)) (canon_loc hc i _)
+  have bit2 : e.loc 149 = 0 ∨ e.loc 149 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 44)) (by decide)) (canon_loc hc i _)
+  have bit3 : e.loc 150 = 0 ∨ e.loc 150 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 45)) (by decide)) (canon_loc hc i _)
+  have bit4 : e.loc 151 = 0 ∨ e.loc 151 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (105 + 46)) (by decide)) (canon_loc hc i _)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 42) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 41) ((Head.lin 1 145).addConst (-2))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (105 + 42) SMALL_RBITS)[k]!))
+      (forcedGe0Term (105 + 41) ((Head.lin 1 145).addConst (-2))))).eval e.loc
+      = 2 * (e.loc 146 * e.loc 145) + -4 * e.loc 146 + e.loc 146 + -1 * e.loc 145
+        + -1 * e.loc 147 + -2 * e.loc 148 + -4 * e.loc 149 + -8 * e.loc 150 + -16 * e.loc 151 + 1 from rfl] at grec
+  have gmod : (2 * e.loc 146 * (e.loc 145 - 2) + e.loc 146 - (e.loc 145 - 2) - 1)
+      ≡ (e.loc 147 + 2 * e.loc 148 + 4 * e.loc 149 + 8 * e.loc 150 + 16 * e.loc 151) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have core := forcedGe0_core (D := e.loc 145 - 2)
+    (S := e.loc 147 + 2 * e.loc 148 + 4 * e.loc 149 + 8 * e.loc 150 + 16 * e.loc 151) gmB
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases bit0 with h|h <;> rcases bit1 with h1|h1 <;> rcases bit2 with h2|h2 <;>
+        rcases bit3 with h3|h3 <;> rcases bit4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    gmod (by rcases minMem with h|h <;> rw [h] <;> norm_num) (by rcases minMem with h|h <;> rw [h] <;> norm_num)
+  exact ⟨gmB, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-! ### The nine ydec cases (extraction ▸ pure decode). -/
+
+theorem decideAxis_ydec_none (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 0) (hnw : (envAt t i).loc (rWhat 3) = 0) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip0 : e.loc 109 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin0 : e.loc 112 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,112,105])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [109,112,105])).eval e.loc = e.loc 109 * e.loc 112 * e.loc 105 from rfl,
+     hip0, hin0] at hgv
+  have hvar : e.loc 105 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 105) (b := 0) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,112,106])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [109,112,106])).eval e.loc = e.loc 109 * e.loc 112 * e.loc 106 from rfl,
+     hip0, hin0] at hgp
+  have hpos : e.loc 106 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 106) (b := 0) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,112,107])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [109,112,107])).eval e.loc = e.loc 109 * e.loc 112 * e.loc 107 from rfl,
+     hip0, hin0] at hga
+  have hatt : e.loc 107 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 107) (b := 0) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,112,108])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [109,112,108])).eval e.loc = e.loc 109 * e.loc 112 * e.loc 108 from rfl,
+     hip0, hin0] at hgr
+  have hrep : e.loc 108 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 108) (b := 0) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_vacVac hvar hpos hatt hrep
+
+theorem decideAxis_ydec_attRep (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 2) (hnw : (envAt t i).loc (rWhat 3) = 1) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  obtain ⟨gpdB, gpd1, gpd2⟩ := ydec_gpd_sound hsat hc i hi
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip2 : e.loc 111 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin1 : e.loc 113 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [111,113,105]).addProd (-3) [111,113,115])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [111,113,105]).addProd (-3) [111,113,115])).eval e.loc
+      = e.loc 111 * e.loc 113 * e.loc 105 + -3 * (e.loc 111 * e.loc 113 * e.loc 115) from rfl, hip2, hin1] at hgv
+  have hvar : e.loc 105 = 3 * e.loc 115 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 105) (b := 3 * e.loc 115) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [111,113,106]).addProd (-1) [111,113,115])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [111,113,106]).addProd (-1) [111,113,115])).eval e.loc
+      = e.loc 111 * e.loc 113 * e.loc 106 + -1 * (e.loc 111 * e.loc 113 * e.loc 115) from rfl, hip2, hin1] at hgp
+  have hpos : e.loc 106 = e.loc 115 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 106) (b := e.loc 115) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [111,113,107]).addProd (-1) [111,113,115, rDist 2])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [111,113,107]).addProd (-1) [111,113,115, rDist 2])).eval e.loc
+      = e.loc 111 * e.loc 113 * e.loc 107 + -1 * (e.loc 111 * e.loc 113 * e.loc 115 * e.loc (rDist 2)) from rfl,
+     hip2, hin1] at hga
+  have hatt : e.loc 107 = e.loc 115 * e.loc (rDist 2) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> rcases pdMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 107) (b := e.loc 115 * e.loc (rDist 2)) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [111,113,108]).addProd (-1) [111,113,115, rDist 3])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [111,113,108]).addProd (-1) [111,113,115, rDist 3])).eval e.loc
+      = e.loc 111 * e.loc 113 * e.loc 108 + -1 * (e.loc 111 * e.loc 113 * e.loc 115 * e.loc (rDist 3)) from rfl,
+     hip2, hin1] at hgr
+  have hrep : e.loc 108 = e.loc 115 * e.loc (rDist 3) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> rcases ndMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 108) (b := e.loc 115 * e.loc (rDist 3)) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_attRep pdMem gpdB gpd1 gpd2 hvar hpos hatt hrep
+
+theorem decideAxis_ydec_repAtt (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 1) (hnw : (envAt t i).loc (rWhat 3) = 2) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  obtain ⟨gndB, gnd1, gnd2⟩ := ydec_gnd_sound hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip1 : e.loc 110 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin2 : e.loc 114 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [110,114,105]).addProd (-3) [110,114,121])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [110,114,105]).addProd (-3) [110,114,121])).eval e.loc
+      = e.loc 110 * e.loc 114 * e.loc 105 + -3 * (e.loc 110 * e.loc 114 * e.loc 121) from rfl, hip1, hin2] at hgv
+  have hvar : e.loc 105 = 3 * e.loc 121 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 105) (b := 3 * e.loc 121) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [110,114,106])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [110,114,106])).eval e.loc = e.loc 110 * e.loc 114 * e.loc 106 from rfl,
+     hip1, hin2] at hgp
+  have hpos : e.loc 106 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 106) (b := 0) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [110,114,107]).addProd (-1) [110,114,121, rDist 3])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [110,114,107]).addProd (-1) [110,114,121, rDist 3])).eval e.loc
+      = e.loc 110 * e.loc 114 * e.loc 107 + -1 * (e.loc 110 * e.loc 114 * e.loc 121 * e.loc (rDist 3)) from rfl,
+     hip1, hin2] at hga
+  have hatt : e.loc 107 = e.loc 121 * e.loc (rDist 3) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> rcases ndMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 107) (b := e.loc 121 * e.loc (rDist 3)) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [110,114,108]).addProd (-1) [110,114,121, rDist 2])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [110,114,108]).addProd (-1) [110,114,121, rDist 2])).eval e.loc
+      = e.loc 110 * e.loc 114 * e.loc 108 + -1 * (e.loc 110 * e.loc 114 * e.loc 121 * e.loc (rDist 2)) from rfl,
+     hip1, hin2] at hgr
+  have hrep : e.loc 108 = e.loc 121 * e.loc (rDist 2) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> rcases ydec_pd_mem hsat hc i hi with hp|hp <;>
+          rw [← he] at hp <;> rw [hp] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 108) (b := e.loc 121 * e.loc (rDist 2)) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_repAtt ndMem gndB gnd1 gnd2 hvar hpos hatt hrep
+
+theorem decideAxis_ydec_repVac (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 1) (hnw : (envAt t i).loc (rWhat 3) = 0) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  obtain ⟨gndB, gnd1, gnd2⟩ := ydec_gnd_sound hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  have pdMem := ydec_pd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip1 : e.loc 110 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin0 : e.loc 112 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [110,112,105]).addProd (-2) [110,112,121])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [110,112,105]).addProd (-2) [110,112,121])).eval e.loc
+      = e.loc 110 * e.loc 112 * e.loc 105 + -2 * (e.loc 110 * e.loc 112 * e.loc 121) from rfl, hip1, hin0] at hgv
+  have hvar : e.loc 105 = 2 * e.loc 121 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 105) (b := 2 * e.loc 121) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [110,112,106])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [110,112,106])).eval e.loc = e.loc 110 * e.loc 112 * e.loc 106 from rfl,
+     hip1, hin0] at hgp
+  have hpos : e.loc 106 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 106) (b := 0) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [110,112,107])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [110,112,107])).eval e.loc = e.loc 110 * e.loc 112 * e.loc 107 from rfl,
+     hip1, hin0] at hga
+  have hatt : e.loc 107 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 107) (b := 0) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [110,112,108]).addProd (-1) [110,112,121, rDist 2])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [110,112,108]).addProd (-1) [110,112,121, rDist 2])).eval e.loc
+      = e.loc 110 * e.loc 112 * e.loc 108 + -1 * (e.loc 110 * e.loc 112 * e.loc 121 * e.loc (rDist 2)) from rfl,
+     hip1, hin0] at hgr
+  have hrep : e.loc 108 = e.loc 121 * e.loc (rDist 2) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> rcases pdMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 108) (b := e.loc 121 * e.loc (rDist 2)) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_repVac ndMem gndB gnd1 gnd2 hvar hpos hatt hrep
+
+theorem decideAxis_ydec_vacRep (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 0) (hnw : (envAt t i).loc (rWhat 3) = 1) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  obtain ⟨gpdB, gpd1, gpd2⟩ := ydec_gpd_sound hsat hc i hi
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip0 : e.loc 109 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin1 : e.loc 113 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [109,113,105]).addProd (-2) [109,113,115])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [109,113,105]).addProd (-2) [109,113,115])).eval e.loc
+      = e.loc 109 * e.loc 113 * e.loc 105 + -2 * (e.loc 109 * e.loc 113 * e.loc 115) from rfl, hip0, hin1] at hgv
+  have hvar : e.loc 105 = 2 * e.loc 115 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 105) (b := 2 * e.loc 115) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [109,113,106]).addProd (-1) [109,113,115])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [109,113,106]).addProd (-1) [109,113,115])).eval e.loc
+      = e.loc 109 * e.loc 113 * e.loc 106 + -1 * (e.loc 109 * e.loc 113 * e.loc 115) from rfl, hip0, hin1] at hgp
+  have hpos : e.loc 106 = e.loc 115 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 106) (b := e.loc 115) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,113,107])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [109,113,107])).eval e.loc = e.loc 109 * e.loc 113 * e.loc 107 from rfl,
+     hip0, hin1] at hga
+  have hatt : e.loc 107 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 107) (b := 0) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [109,113,108]).addProd (-1) [109,113,115, rDist 3])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [109,113,108]).addProd (-1) [109,113,115, rDist 3])).eval e.loc
+      = e.loc 109 * e.loc 113 * e.loc 108 + -1 * (e.loc 109 * e.loc 113 * e.loc 115 * e.loc (rDist 3)) from rfl,
+     hip0, hin1] at hgr
+  have hrep : e.loc 108 = e.loc 115 * e.loc (rDist 3) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> rcases ndMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 108) (b := e.loc 115 * e.loc (rDist 3)) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_vacRep pdMem gpdB gpd1 gpd2 hvar hpos hatt hrep
+
+theorem decideAxis_ydec_attVac (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 2) (hnw : (envAt t i).loc (rWhat 3) = 0) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  obtain ⟨gpdB, gpd1, gpd2⟩ := ydec_gpd_sound hsat hc i hi
+  have pdMem := ydec_pd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip2 : e.loc 111 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin0 : e.loc 112 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [111,112,105]).addProd (-1) [111,112,115])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [111,112,105]).addProd (-1) [111,112,115])).eval e.loc
+      = e.loc 111 * e.loc 112 * e.loc 105 + -1 * (e.loc 111 * e.loc 112 * e.loc 115) from rfl, hip2, hin0] at hgv
+  have hvar : e.loc 105 = e.loc 115 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 105) (b := e.loc 115) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [111,112,106]).addProd (-1) [111,112,115])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [111,112,106]).addProd (-1) [111,112,115])).eval e.loc
+      = e.loc 111 * e.loc 112 * e.loc 106 + -1 * (e.loc 111 * e.loc 112 * e.loc 115) from rfl, hip2, hin0] at hgp
+  have hpos : e.loc 106 = e.loc 115 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 106) (b := e.loc 115) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [111,112,107]).addProd (-1) [111,112,115, rDist 2])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [111,112,107]).addProd (-1) [111,112,115, rDist 2])).eval e.loc
+      = e.loc 111 * e.loc 112 * e.loc 107 + -1 * (e.loc 111 * e.loc 112 * e.loc 115 * e.loc (rDist 2)) from rfl,
+     hip2, hin0] at hga
+  have hatt : e.loc 107 = e.loc 115 * e.loc (rDist 2) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gpdB with h|h <;> rw [h] <;> rcases pdMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 107) (b := e.loc 115 * e.loc (rDist 2)) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [111,112,108])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [111,112,108])).eval e.loc = e.loc 111 * e.loc 112 * e.loc 108 from rfl,
+     hip2, hin0] at hgr
+  have hrep : e.loc 108 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 108) (b := 0) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_attVac pdMem gpdB gpd1 gpd2 hvar hpos hatt hrep
+
+theorem decideAxis_ydec_vacAtt (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 0) (hnw : (envAt t i).loc (rWhat 3) = 2) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  obtain ⟨gndB, gnd1, gnd2⟩ := ydec_gnd_sound hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip0 : e.loc 109 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin2 : e.loc 114 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [109,114,105]).addProd (-1) [109,114,121])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [109,114,105]).addProd (-1) [109,114,121])).eval e.loc
+      = e.loc 109 * e.loc 114 * e.loc 105 + -1 * (e.loc 109 * e.loc 114 * e.loc 121) from rfl, hip0, hin2] at hgv
+  have hvar : e.loc 105 = e.loc 121 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 105) (b := e.loc 121) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,114,106])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [109,114,106])).eval e.loc = e.loc 109 * e.loc 114 * e.loc 106 from rfl,
+     hip0, hin2] at hgp
+  have hpos : e.loc 106 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 106) (b := 0) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [109,114,107]).addProd (-1) [109,114,121, rDist 3])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [109,114,107]).addProd (-1) [109,114,121, rDist 3])).eval e.loc
+      = e.loc 109 * e.loc 114 * e.loc 107 + -1 * (e.loc 109 * e.loc 114 * e.loc 121 * e.loc (rDist 3)) from rfl,
+     hip0, hin2] at hga
+  have hatt : e.loc 107 = e.loc 121 * e.loc (rDist 3) :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases gndB with h|h <;> rw [h] <;> rcases ndMem with hp|hp <;> rw [hp] <;>
+          exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 107) (b := e.loc 121 * e.loc (rDist 3)) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,114,108])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [109,114,108])).eval e.loc = e.loc 109 * e.loc 114 * e.loc 108 from rfl,
+     hip0, hin2] at hgr
+  have hrep : e.loc 108 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 108) (b := 0) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_vacAtt ndMem gndB gnd1 gnd2 hvar hpos hatt hrep
+
+theorem decideAxis_ydec_repRep (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 1) (hnw : (envAt t i).loc (rWhat 3) = 1) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  obtain ⟨ltB, lt1, lt2⟩ := ydec_lt_sound hsat hc i hi
+  obtain ⟨gtB, gt1, gt2⟩ := ydec_gt_sound hsat hc i hi
+  obtain ⟨leB, le1, le2⟩ := ydec_le_sound hsat hc i hi
+  have hmineq := ydec_min_sound hsat hc i hi
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip1 : e.loc 110 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin1 : e.loc 113 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have minMem : e.loc 145 = 1 ∨ e.loc 145 = 2 := by
+    rw [hmineq]; rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+      rw [h, hp, hn] <;> norm_num
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr (((Head.zero.addProd 1 [110,113,105]).addProd (-2) [110,113,127]).addProd (-2) [110,113,133])) (by decide)
+  rw [show (headToExpr (((Head.zero.addProd 1 [110,113,105]).addProd (-2) [110,113,127]).addProd (-2) [110,113,133])).eval e.loc
+      = e.loc 110 * e.loc 113 * e.loc 105 + -2 * (e.loc 110 * e.loc 113 * e.loc 127)
+        + -2 * (e.loc 110 * e.loc 113 * e.loc 133) from rfl, hip1, hin1] at hgv
+  have hvar : e.loc 105 = 2 * e.loc 127 + 2 * e.loc 133 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 105) (b := 2 * e.loc 127 + 2 * e.loc 133) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [110,113,106]).addProd (-1) [110,113,133])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [110,113,106]).addProd (-1) [110,113,133])).eval e.loc
+      = e.loc 110 * e.loc 113 * e.loc 106 + -1 * (e.loc 110 * e.loc 113 * e.loc 133) from rfl, hip1, hin1] at hgp
+  have hpos : e.loc 106 = e.loc 133 :=
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (a := e.loc 106) (b := e.loc 133) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [110,113,107])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [110,113,107])).eval e.loc = e.loc 110 * e.loc 113 * e.loc 107 from rfl,
+     hip1, hin1] at hga
+  have hatt : e.loc 107 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 107) (b := 0) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi
+    (g := headToExpr (((Head.zero.addProd 1 [110,113,108]).addProd (-1) [110,113,127,145]).addProd (-1) [110,113,133,145])) (by decide)
+  rw [show (headToExpr (((Head.zero.addProd 1 [110,113,108]).addProd (-1) [110,113,127,145]).addProd (-1) [110,113,133,145])).eval e.loc
+      = e.loc 110 * e.loc 113 * e.loc 108 + -1 * (e.loc 110 * e.loc 113 * e.loc 127 * e.loc 145)
+        + -1 * (e.loc 110 * e.loc 113 * e.loc 133 * e.loc 145) from rfl, hip1, hin1] at hgr
+  have hrep : e.loc 108 = e.loc 127 * e.loc 145 + e.loc 133 * e.loc 145 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases minMem with hm|hm <;>
+          rw [h,h',hm] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 108) (b := e.loc 127 * e.loc 145 + e.loc 133 * e.loc 145) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_repRep pdMem ndMem ltB lt1 lt2 gtB gt1 gt2 leB le1 le2 hmineq hvar hpos hatt hrep
+
+theorem decideAxis_ydec_attAtt (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hpw : (envAt t i).loc (rWhat 2) = 2) (hnw : (envAt t i).loc (rWhat 3) = 2) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  obtain ⟨ltB, lt1, lt2⟩ := ydec_lt_sound hsat hc i hi
+  obtain ⟨gtB, gt1, gt2⟩ := ydec_gt_sound hsat hc i hi
+  obtain ⟨leB, le1, le2⟩ := ydec_le_sound hsat hc i hi
+  obtain ⟨gmB, gm1, gm2⟩ := ydec_gm_sound hsat hc i hi
+  have hmineq := ydec_min_sound hsat hc i hi
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  set e := envAt t i with he
+  rw [hpw] at iidx; rw [hnw] at nidx
+  have hip2 : e.loc 111 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> omega
+  have hin2 : e.loc 114 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> omega
+  have minMem : e.loc 145 = 1 ∨ e.loc 145 = 2 := by
+    rw [hmineq]; rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+      rw [h, hp, hn] <;> norm_num
+  have hgv := astep_gate hsat i hi
+    (g := headToExpr (((Head.zero.addProd 1 [111,114,105]).addProd (-1) [111,114,127,146]).addProd (-1) [111,114,133,146])) (by decide)
+  rw [show (headToExpr (((Head.zero.addProd 1 [111,114,105]).addProd (-1) [111,114,127,146]).addProd (-1) [111,114,133,146])).eval e.loc
+      = e.loc 111 * e.loc 114 * e.loc 105 + -1 * (e.loc 111 * e.loc 114 * e.loc 127 * e.loc 146)
+        + -1 * (e.loc 111 * e.loc 114 * e.loc 133 * e.loc 146) from rfl, hip2, hin2] at hgv
+  have hvar : e.loc 105 = e.loc 127 * e.loc 146 + e.loc 133 * e.loc 146 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases gmB with hg|hg <;>
+          rw [h,h',hg] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 105) (b := e.loc 127 * e.loc 146 + e.loc 133 * e.loc 146) (by ring)).mp hgv)
+  have hgp := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addProd 1 [111,114,106]).addProd (-1) [111,114,127,146])) (by decide)
+  rw [show (headToExpr ((Head.zero.addProd 1 [111,114,106]).addProd (-1) [111,114,127,146])).eval e.loc
+      = e.loc 111 * e.loc 114 * e.loc 106 + -1 * (e.loc 111 * e.loc 114 * e.loc 127 * e.loc 146) from rfl, hip2, hin2] at hgp
+  have hpos : e.loc 106 = e.loc 127 * e.loc 146 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gmB with hg|hg <;> rw [h,hg] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 106) (b := e.loc 127 * e.loc 146) (by ring)).mp hgp)
+  have hga := astep_gate hsat i hi
+    (g := headToExpr (((Head.zero.addProd 1 [111,114,107]).addProd (-1) [111,114,127,146,145]).addProd (-1) [111,114,133,146,145])) (by decide)
+  rw [show (headToExpr (((Head.zero.addProd 1 [111,114,107]).addProd (-1) [111,114,127,146,145]).addProd (-1) [111,114,133,146,145])).eval e.loc
+      = e.loc 111 * e.loc 114 * e.loc 107 + -1 * (e.loc 111 * e.loc 114 * e.loc 127 * e.loc 146 * e.loc 145)
+        + -1 * (e.loc 111 * e.loc 114 * e.loc 133 * e.loc 146 * e.loc 145) from rfl, hip2, hin2] at hga
+  have hatt : e.loc 107 = e.loc 127 * e.loc 146 * e.loc 145 + e.loc 133 * e.loc 146 * e.loc 145 :=
+    eq_of_modEq_canon (canon_loc hc i _)
+      (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases gmB with hg|hg <;> rcases minMem with hm|hm <;>
+          rw [h,h',hg,hm] <;> exact ⟨by norm_num, by norm_num⟩)
+      ((gate_modEq_iff (a := e.loc 107) (b := e.loc 127 * e.loc 146 * e.loc 145 + e.loc 133 * e.loc 146 * e.loc 145) (by ring)).mp hga)
+  have hgr := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [111,114,108])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [111,114,108])).eval e.loc = e.loc 111 * e.loc 114 * e.loc 108 from rfl,
+     hip2, hin2] at hgr
+  have hrep : e.loc 108 = 0 :=
+    eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 108) (b := 0) (by ring)).mp hgr)
+  rw [hpw, hnw]
+  exact decode_attAtt pdMem ndMem ltB lt1 lt2 gtB gt1 gt2 leB le1 le2 gmB gm1 gm2 hmineq hvar hpos hatt hrep
+
+/-- **Leg (3) for the Y axis, IN FULL: `decodeDecision = evaluateAxis` for BOTH rays.** -/
+theorem decideAxis_y_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)
+      = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
+                     { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  have hpwm : (envAt t i).loc (rWhat 2) = 0 ∨ (envAt t i).loc (rWhat 2) = 1 ∨ (envAt t i).loc (rWhat 2) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+  have hnwm : (envAt t i).loc (rWhat 3) = 0 ∨ (envAt t i).loc (rWhat 3) = 1 ∨ (envAt t i).loc (rWhat 3) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+  rcases hpwm with hp|hp|hp <;> rcases hnwm with hn|hn|hn
+  · exact decideAxis_ydec_none hsat hc i hi hp hn
+  · exact decideAxis_ydec_vacRep hsat hc i hi hp hn
+  · exact decideAxis_ydec_vacAtt hsat hc i hi hp hn
+  · exact decideAxis_ydec_repVac hsat hc i hi hp hn
+  · exact decideAxis_ydec_repRep hsat hc i hi hp hn
+  · exact decideAxis_ydec_repAtt hsat hc i hi hp hn
+  · exact decideAxis_ydec_attVac hsat hc i hi hp hn
+  · exact decideAxis_ydec_attRep hsat hc i hi hp hn
+  · exact decideAxis_ydec_attAtt hsat hc i hi hp hn
+
+end DecideYdec
+
 /-! ## §4.9 — NON-VACUITY for leg (3): the `forced_ge0` bit + `assert_case` gate REJECT wrong witnesses
 (`#guard`).
 
@@ -1848,6 +3529,35 @@ def acForgeAsg : Assignment := fun c => if c = 64 ∨ c = 66 then 1 else if c = 
 
 #guard acVariantExpr.eval acGoodAsg == 0      -- variant = 3·gpd = 3: consistent
 #guard acVariantExpr.eval acForgeAsg != 0     -- variant = 3 but gpd = 0: unbalancedPair LIE FAILS
+
+/-! ### §4.9b — canary for a NEWLY-CLOSED case: the `gnd` guard + the `(1,2)` `assert_case` REJECT
+forged witnesses exactly as the `gpd`/`(2,1)` teeth do. `gnd` decides `nd ≥ 2` (`xdec_gnd_sound`), used
+by the `(1,2)`/`(1,0)`/`(0,2)` cases; the `(1,2)` variant gate `ipw₁·inw₂·(variant − 3·gnd)` rejects a
+`repulsor/attractor` decision that claims `unbalancedPair` (`variant = 3`) while `nd = 1` (`gnd = 0`). -/
+
+/-- The `forced_ge0` recomposition body for the `gnd` gadget (`col 74`, term `= 2·gnd·(nd−2)+…`). -/
+def gndRecompExpr : EmittedExpr :=
+  headToExpr ((List.range SMALL_RBITS).foldl
+    (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom (58 + 17) SMALL_RBITS)[k]!))
+    (forcedGe0Term (58 + 16) ((Head.lin 1 (rDist 1)).addConst (-2))))
+/-- `gnd = 1`, `nd = 2`: term `= 0`, all range bits `0` — the gadget ACCEPTS. -/
+def gndGoodAsg : Assignment := fun c => if c = 74 then 1 else if c = rDist 1 then 2 else 0
+/-- `gnd = 1`, `nd = 1`: term `= −1`; no 5-bit non-negativity witness — a forged `[nd ≥ 2]` FAILS. -/
+def gndForgeAsg : Assignment := fun c => if c = 74 then 1 else if c = rDist 1 then 1 else 0
+
+#guard gndRecompExpr.eval gndGoodAsg == 0     -- nd = 2, gnd = 1: term recomposes, gate holds
+#guard gndRecompExpr.eval gndForgeAsg != 0    -- nd = 1, forged gnd = 1: NO decomposition, gate FAILS
+
+/-- The `(1,2)` `assert_case` variant gate `ipw₁·inw₂·(variant − 3·gnd)`. -/
+def acVariant12Expr : EmittedExpr :=
+  headToExpr ((Head.zero.addProd 1 [63,67,58]).addProd (-3) [63,67,74])
+/-- Selected `(1,2)` case (`ipw₁ = inw₂ = 1`), `gnd = 1`, `variant = 3`: consistent — holds. -/
+def ac12GoodAsg : Assignment := fun c => if c = 63 ∨ c = 67 ∨ c = 74 then 1 else if c = 58 then 3 else 0
+/-- Selected `(1,2)` case, `gnd = 0` while `variant = 3` claims `unbalancedPair` — a LIE; FAILS. -/
+def ac12ForgeAsg : Assignment := fun c => if c = 63 ∨ c = 67 then 1 else if c = 58 then 3 else 0
+
+#guard acVariant12Expr.eval ac12GoodAsg == 0  -- variant = 3·gnd = 3: consistent
+#guard acVariant12Expr.eval ac12ForgeAsg != 0 -- variant = 3 but gnd = 0: unbalancedPair LIE FAILS
 
 /-! ## §5 — NON-VACUITY: the auto-pin gate is a two-sided discriminator (`#guard`).
 
@@ -1912,8 +3622,22 @@ def rayVacBadAsgXN : Assignment := fun c => if c = rHib 1 then 1 else 0
 #print axioms raycast_yn_of_sat
 #print axioms forcedGe0_core
 #print axioms xdec_gpd_sound
+#print axioms xdec_gnd_sound
+#print axioms xdec_lt_sound
+#print axioms xdec_gt_sound
+#print axioms xdec_le_sound
+#print axioms xdec_min_sound
+#print axioms xdec_gm_sound
 #print axioms decideAxis_xdec_none
 #print axioms decideAxis_xdec_attRep
+#print axioms decideAxis_xdec_repRep
+#print axioms decideAxis_xdec_attAtt
+#print axioms decideAxis_x_sound
+#print axioms ydec_gpd_sound
+#print axioms ydec_min_sound
+#print axioms decideAxis_ydec_repRep
+#print axioms decideAxis_ydec_attAtt
+#print axioms decideAxis_y_sound
 
 /-! ## §7 — THE NAMED RESIDUAL (what remains for the full composition).
 
@@ -1932,30 +3656,35 @@ Proven here, keyed on the byte-pinned `automataflStepDesc`, canonical over BabyB
     its own `inWindowCols`/`rcReadHead` closed form: `XN` shifts `−x`; `YP`/`YN` scan ROWS via
     `selRow`). **SUB-LEMMA (2) IS NOW CLOSED FOR ALL FOUR RAYS** — leg (2) is complete;
   * `offset_of_sat` — the value-range half of sub-lemma (4);
-  * **leg (3), PARTIAL — the `forced_ge0` NO-WRAP heart + the `decide_axis` case selection + two of the
-    nine cases IN FULL:**
+  * **leg (3), NOW CLOSED IN FULL — `decodeDecision = evaluateAxis` for BOTH axes:**
       - `forcedGe0_core` — the no-wrap soundness heart: a 5-bit range witness pins the ACTUAL
         comparison (`SMALL_RBITS = 5` ⇒ magnitudes `< 2^5 ≪ p`, the exact no-wrap window). PURE, the
         lemma every distance guard rests on;
-      - `xdec_gpd_sound` — `forcedGe0_core` APPLIED to the byte-pinned descriptor: the guard column `68`
-        genuinely decides `rDist 0 ≥ 2` (the field-congruence trap discharged, not tripped);
+      - `xdec_gpd_sound` / `xdec_gnd_sound` — `forcedGe0_core` APPLIED to the byte-pinned descriptor:
+        the guard columns `68`/`74` genuinely decide `rDist 0 ≥ 2` / `rDist 1 ≥ 2`; `xdec_lt_sound`,
+        `xdec_gt_sound`, `xdec_le_sound` decide `pd < nd`, `pd > nd`, `pd ≤ nd`; `xdec_min_sound` pins
+        the `min` gadget to `min(pd, nd)`, and `xdec_gm_sound` decides `min ≥ 2` (the field-congruence
+        trap discharged, not tripped, for EVERY comparison the truth table reads);
       - `xdec_pd_mem` / `xdec_nd_mem` — the ray distances are `n = 2` step counts (`∈ {1,2}`);
       - `xdec_ipw_sel` / `xdec_inw_sel` — the `ipw`/`inw` one-hots select exactly the ray-code case;
-      - `decideAxis_xdec_none` (vacuum/vacuum ⇒ `.none`) and `decideAxis_xdec_attRep`
-        (attractor/repulsor ⇒ `.unbalancedPair`) — TWO of the nine `decide_axis` cases closed IN FULL:
-        the decoded `(variant, pos, att, rep)` = `evaluateAxis` of the two rays, keyed on the byte-pinned
-        object, only the ray `what`-codes as premises. §4.9 canary `#guard`s show the `forced_ge0` bit
-        and the `assert_case` gate REJECT forged witnesses (a `[pd ≥ 2]` lie at `pd = 1`; an
-        `unbalancedPair` claim with `gpd = 0`).
+      - `decode_vacVac`/`decode_attRep`/`decode_repAtt`/`decode_repVac`/`decode_vacRep`/`decode_attVac`/
+        `decode_vacAtt`/`decode_repRep`/`decode_attAtt` — the nine PURE, axis-independent decode lemmas:
+        given the extracted field values + guard soundness, the decoded `(variant, pos, att, rep)` IS
+        the `evaluateAxis` priority match for that `(pw, nw)` cell (at `n = 2` the `attractor/attractor`
+        cell always resolves to `.none`, since `pd ≠ nd ⇒ min = 1`);
+      - `decideAxis_xdec_none/vacRep/vacAtt/repVac/repRep/repAtt/attVac/attRep/attAtt` — ALL NINE
+        `decide_axis` cases closed IN FULL against the byte-pinned object (extraction ▸ pure decode),
+        only the ray `what`-codes as premises; `decideAxis_x_sound` unions them by case-splitting the two
+        `what`-codes over the whole truth table: `decodeDecision (loc 58..61) = evaluateAxis` on the X
+        rays. The `ydec` axis (base `105`, rays `d = 2,3`) is the identical column-shift replay
+        (`ydec_*` + `decideAxis_ydec_*`), unioned by `decideAxis_y_sound`. §4.9 canary `#guard`s show the
+        `forced_ge0` bit and the `assert_case` gate REJECT forged witnesses on BOTH the `gpd`/`(2,1)` and
+        the newly-closed `gnd`/`(1,2)` teeth (a `[· ≥ 2]` lie at distance `1`; an `unbalancedPair` claim
+        with the guard `= 0`). **LEG (3) IS COMPLETE — both axes, `Decision = evaluateAxis`.**
 
 REMAINING (each NOT assumed, NOT stubbed — no `sorry`, no placeholder):
-  (3, rest) the OTHER SEVEN `decide_axis` cases (`(1,2)`/`(1,0)`/`(0,1)`/`(2,0)`/`(0,2)` each a single
-      `gpd`/`gnd` guard, mechanical replays of `attRep`; `(1,1)`/`(2,2)` need the `lt`/`gt`/`le`/`gm`
-      + `min` gadgets — all six `forced_ge0` closed forms are already verified) AND the `ydec` axis
-      (base `105`, rays `d = 2,3` — a column-shift replay of `xdec`); then the union `Decision =
-      evaluateAxis` over all `(pw, nw)`;
   (4) `chooseOffset` — the score-compare (`sgt/slt`, 20-bit) soundness closing offset = `chooseOffset`;
   (5) the step + board-update fold ⇒ `boardDecode(new) = automatonStep(boardDecode(old))`.
-The top-level composition is deliberately NOT stated as a proven theorem until (3, rest)-(5) close. -/
+The top-level composition is deliberately NOT stated as a proven theorem until (4)-(5) close. -/
 
 end Dregg2.Circuit.Emit.AutomataflStepRefine
