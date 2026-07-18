@@ -223,6 +223,19 @@ transcript one deep) to a DIFFERENTIAL-PASSING cutover — but the AIR-in-Lean g
 DECISION for ember: continue descriptor-emit (toward differential-passing cutover, Go-gadget constraints) OR
 reconsider the approach.
 
+
+## ✅ TRUE AIR-in-Lean CYCLE 1 — VERIFIED-BY-ME (af8f2d2e7): Lean-authored Poseidon2 constraints pass the REAL gate
+Poseidon2Emit.lean: poseidon2Template emits the ~240-constraint R1CS from Poseidon2Fr.permuteW (Lean SOURCE;
+poseidon2_bn254.go = pinned reference only); poseidon2Template_refines proves the CONSTRAINTS ↔ the Lean
+permutation; emit_faithful covers it; 8 #assert_axioms clean. Go emitted_gadget_replay.go = generic blind
+replayer (ZERO Poseidon2 knowledge); the emit Merkle block calls ReplayTemplate, NOT the hand-Go gadget.
+⚑ I RAN IT: go test -run Diff → PASS (110s) — commit-phase Merkle verifies the REAL fixture proof against
+the REAL roots with LEAN-AUTHORED constraints + preserves reject polarity. First real AIR-in-Lean slice,
+reality-gated, verified by me (not the lane's word). Nothing deleted (hand-Go stays as differential oracle).
+Discipline now correct: Lean authors constraints · Go replays blind · the REAL PROOF judges each cycle.
+NEXT (cycle 2): the next MEASURED divergence = input-open Merkle binding (block 2b: input-MMCS leaf hash via
+the Lean Poseidon2 + input-root), reality-gated to get the emit PAST 2b on the real proof.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
