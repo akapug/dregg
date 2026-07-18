@@ -6146,6 +6146,7 @@ async fn get_pending_conditionals(
                 dregg_turn::ProofCondition::RemoteProof { .. } => "remote_proof",
                 dregg_turn::ProofCondition::LocalProof { .. } => "local_proof",
                 dregg_turn::ProofCondition::TurnExecuted { .. } => "turn_executed",
+                dregg_turn::ProofCondition::TurnProven { .. } => "turn_proven",
             };
             PendingConditionalInfo {
                 hash: hex_encode(&ct.hash()),

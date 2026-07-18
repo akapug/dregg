@@ -17,7 +17,11 @@ use std::collections::HashSet;
 
 use dregg_circuit::BabyBear;
 use dregg_circuit::descriptor_by_name::descriptor_by_name;
-use dregg_circuit::descriptor_ir2::{DreggStarkConfig, Ir2BatchProof, verify_vm_descriptor2};
+use dregg_circuit::descriptor_ir2::{
+    DreggStarkConfig, Ir2BatchProof, parse_vm_descriptor2, verify_vm_descriptor2,
+};
+use dregg_circuit::effect_vm::pi as effect_vm_pi;
+use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use serde::{Deserialize, Serialize};
 
 use crate::error::TurnError;
@@ -78,9 +82,43 @@ pub enum ProofCondition {
     },
 
     /// Receipt-based: prove a specific turn was executed (by presenting its receipt).
+    ///
+    /// RETIRED as a trust root (assurance-perimeter #3, `project-witness-gen-assurance-perimeter`).
+    /// This variant resolved by ed25519-verifying the receipt's `executor_signature` against a set
+    /// of `trusted_executor_keys` — NO proof of correct execution was consulted, so any holder of a
+    /// trusted key could mint a valid receipt. The resolver now REJECTS this variant fail-closed and
+    /// directs callers to [`ProofCondition::TurnProven`], which requires a VERIFIED EffectVM STARK.
+    /// Kept only so existing wire/struct constructions still compile during migration.
     TurnExecuted {
         /// BLAKE3 hash of the turn that must have been executed.
         turn_hash: [u8; 32],
+    },
+
+    /// Proof-carrying successor to [`ProofCondition::TurnExecuted`]: the condition is satisfied only
+    /// by a VERIFIED (non-recursive) EffectVM STARK — not a trusted signature (assurance-perimeter
+    /// #3). The presented [`ConditionProof::EffectVmProof`] must crypto-verify against the committed
+    /// rotated cohort descriptor AND its public inputs must bind THIS turn:
+    ///
+    /// * `PI[TURN_HASH_BASE..+4] == canonical_32_to_felts_4(turn_hash)` — the turn identity, and
+    /// * the leg's wide 8-felt state-commitment endpoints (`PI[n-16..n-8]` / `PI[n-8..n]`) equal
+    ///   `commitment_to_8bb(expected_pre_commitment)` / `..(expected_post_commitment)`.
+    ///
+    /// HONEST SCOPE: the EffectVM AIR is one-directionally constrained and the endpoints are the
+    /// verifier's TRUSTED inputs (exactly the shape of the deployed `verify_full_turn_bound`), so a
+    /// verified proof attests the state-commitment DELTA `pre -> post` for this turn — NOT the full
+    /// state — and it still rests on the undischarged FRI floor (`project-fri-soundness-reality`).
+    /// The advance over `TurnExecuted` is real: the receipt is bound to a PROOF, not a trusted signer.
+    TurnProven {
+        /// BLAKE3 hash of the turn that must have been executed (bound to `PI[TURN_HASH_BASE..+4]`).
+        turn_hash: [u8; 32],
+        /// The pre-state circuit commitment (8-felt Poseidon2 form packed into 32 bytes, the
+        /// `commitment_8bb_to_bytes` convention) the turn is expected to move FROM. The proof's
+        /// wide OLD anchor must equal `commitment_to_8bb(expected_pre_commitment)`. This is the
+        /// verifier's TRUSTED endpoint — never taken from the (prover-controlled) proof.
+        expected_pre_commitment: [u8; 32],
+        /// The post-state circuit commitment the turn is expected to move TO. The proof's wide NEW
+        /// anchor must equal `commitment_to_8bb(expected_post_commitment)`.
+        expected_post_commitment: [u8; 32],
     },
 }
 
@@ -137,6 +175,16 @@ impl ConditionalTurn {
                 hasher.update(&[3u8]);
                 hasher.update(turn_hash);
             }
+            ProofCondition::TurnProven {
+                turn_hash,
+                expected_pre_commitment,
+                expected_post_commitment,
+            } => {
+                hasher.update(&[4u8]);
+                hasher.update(turn_hash);
+                hasher.update(expected_pre_commitment);
+                hasher.update(expected_post_commitment);
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -183,8 +231,31 @@ pub enum ConditionProof {
         /// was generated for. Must match `expected_air` in the condition.
         air_name: String,
     },
-    /// Present a turn receipt (for TurnExecuted conditions).
+    /// Present a turn receipt (for the RETIRED `TurnExecuted` condition).
+    ///
+    /// A bare receipt carries only an `executor_signature` — NO proof of correct execution — so this
+    /// is no longer a trust root (assurance-perimeter #3). The resolver rejects it; present a
+    /// [`ConditionProof::EffectVmProof`] against a [`ProofCondition::TurnProven`] instead.
     Receipt(TurnReceipt),
+
+    /// Present the (non-recursive) EffectVM STARK proving a turn executed, for a
+    /// [`ProofCondition::TurnProven`] condition. The VERIFIED proof — not a trusted signature — is
+    /// the trust root.
+    EffectVmProof {
+        /// The turn receipt (identity + metadata). Its `executor_signature`, if any, is IGNORED —
+        /// the STARK is what is trusted. Boxed to keep the enum small (`TurnReceipt` is large).
+        receipt: Box<TurnReceipt>,
+        /// `postcard(Ir2BatchProof<DreggStarkConfig>)` — the rotated multi-table EffectVM batch
+        /// proof (the `"effect-vm-rotated"` leg a finalized turn's commit pipeline emits). This blob
+        /// is prover-controlled and carries NO descriptor identity of its own: the verifier resolves
+        /// the constraint semantics by self-detecting the UNIQUELY-accepting committed WIDE cohort
+        /// descriptor (`WIDE_REGISTRY_STAGED_TSV`), never letting the blob choose what it is checked
+        /// against.
+        proof_bytes: Vec<u8>,
+        /// The public inputs the proof binds, as canonical `u32` BabyBear values. Must carry the
+        /// rotated PI prefix (`TURN_HASH`, `OLD/NEW_COMMIT`) plus the wide 8-felt anchor tail.
+        public_inputs: Vec<u32>,
+    },
 }
 
 /// Resolve a conditional turn by presenting a proof.
@@ -192,9 +263,11 @@ pub enum ConditionProof {
 /// Checks timeout, proof nullifier (reuse prevention), proof type matching,
 /// AIR name verification, root freshness, and constraint satisfaction.
 ///
-/// For `TurnExecuted` conditions, `trusted_executor_keys` is used to verify
-/// the receipt's `executor_signature`. If the receipt lacks a valid signature
-/// from a known executor, the condition is rejected (prevents fabricated receipts).
+/// `TurnProven` conditions are the trust root for "a turn executed": they REQUIRE a verified
+/// (non-recursive) EffectVM STARK ([`ConditionProof::EffectVmProof`]) whose public inputs bind the
+/// turn (see [`ProofCondition::TurnProven`]). The legacy `TurnExecuted` + bare-receipt path is
+/// RETIRED (assurance-perimeter #3): a trusted executor signature is no longer a trust root, so
+/// `trusted_executor_keys` is unused and retained only for API stability.
 pub fn resolve_condition(
     condition: &ProofCondition,
     proof: &ConditionProof,
@@ -257,6 +330,18 @@ pub fn compute_proof_hash(proof: &ConditionProof) -> [u8; 32] {
             hasher.update(&[2u8]);
             hasher.update(&receipt.turn_hash);
         }
+        ConditionProof::EffectVmProof {
+            receipt,
+            proof_bytes,
+            public_inputs,
+        } => {
+            hasher.update(&[3u8]);
+            hasher.update(&receipt.turn_hash);
+            hasher.update(proof_bytes);
+            for pi in public_inputs {
+                hasher.update(&pi.to_le_bytes());
+            }
+        }
     }
     *hasher.finalize().as_bytes()
 }
@@ -267,7 +352,11 @@ fn resolve_inner(
     current_height: u64,
     trusted_roots: &[TrustedRoot],
     max_root_age: u64,
-    trusted_executor_keys: &[[u8; 32]],
+    // RETIRED (assurance-perimeter #3): the trusted-executor-key set is NO LONGER a trust root for
+    // `TurnExecuted`. Kept in the signature so the public `resolve_condition` API is unchanged for its
+    // many callers; the `TurnExecuted` arm below now fail-closes and the `TurnProven` arm verifies a
+    // STARK instead. The parameter is intentionally unused.
+    _trusted_executor_keys: &[[u8; 32]],
 ) -> ConditionalResult {
     match (condition, proof) {
         (ProofCondition::HashPreimage { hash }, ConditionProof::Preimage(preimage)) => {
@@ -458,7 +547,34 @@ fn resolve_inner(
             ConditionalResult::Resolved
         }
 
-        (ProofCondition::TurnExecuted { turn_hash }, ConditionProof::Receipt(receipt)) => {
+        (ProofCondition::TurnExecuted { .. }, ConditionProof::Receipt(_)) => {
+            // RETIRED trust root (assurance-perimeter #3). This arm used to resolve by
+            // ed25519-verifying the receipt's `executor_signature` against `trusted_executor_keys` —
+            // consulting NO proof of correct execution, so any trusted-key holder could mint a valid
+            // receipt. The trust root has moved OFF the bare signature: present a
+            // `ProofCondition::TurnProven` with a `ConditionProof::EffectVmProof` carrying the
+            // verified EffectVM STARK.
+            ConditionalResult::InvalidProof(
+                "TurnExecuted bare-receipt resolution is RETIRED (assurance-perimeter #3): a trusted \
+                 executor signature is no longer a trust root. Present a ProofCondition::TurnProven \
+                 with a ConditionProof::EffectVmProof carrying the EffectVM STARK."
+                    .to_string(),
+            )
+        }
+
+        (
+            ProofCondition::TurnProven {
+                turn_hash,
+                expected_pre_commitment,
+                expected_post_commitment,
+            },
+            ConditionProof::EffectVmProof {
+                receipt,
+                proof_bytes,
+                public_inputs,
+            },
+        ) => {
+            // Identity: the receipt must name the same turn the condition commits to.
             if receipt.turn_hash != *turn_hash {
                 return ConditionalResult::InvalidProof(format!(
                     "receipt turn_hash mismatch: expected {:02x}{:02x}..., got {:02x}{:02x}...",
@@ -466,52 +582,18 @@ fn resolve_inner(
                 ));
             }
 
-            // Verify the receipt's executor_signature against trusted executor keys.
-            // Without this check, anyone could fabricate a receipt with a matching turn_hash.
-            let Some(ref sig_bytes) = receipt.executor_signature else {
-                return ConditionalResult::InvalidProof(
-                    "receipt has no executor_signature (cannot verify authenticity)".to_string(),
-                );
-            };
-
-            if sig_bytes.len() != 64 {
-                return ConditionalResult::InvalidProof(format!(
-                    "executor_signature has invalid length: {} (expected 64)",
-                    sig_bytes.len(),
-                ));
-            }
-
-            if trusted_executor_keys.is_empty() {
-                return ConditionalResult::InvalidProof(
-                    "no trusted executor keys configured to verify receipt".to_string(),
-                );
-            }
-
-            // The executor signs the domain-prefixed canonical message
-            // (`executor-receipt-sig-v3:` ‖ receipt_hash), NOT the bare receipt
-            // hash — the same message every other executor-signature verifier in
-            // the tree checks (node `identity_export`, `api`). Verifying the bare
-            // hash here rejected every honestly-signed receipt.
-            let signed_message = receipt.canonical_executor_signed_message();
-            let mut sig_arr = [0u8; 64];
-            sig_arr.copy_from_slice(sig_bytes);
-            let signature = ed25519_dalek::Signature::from_bytes(&sig_arr);
-
-            let verified = trusted_executor_keys.iter().any(|key_bytes| {
-                if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(key_bytes) {
-                    vk.verify_strict(&signed_message, &signature).is_ok()
-                } else {
-                    false
-                }
-            });
-
-            if verified {
-                ConditionalResult::Resolved
-            } else {
-                ConditionalResult::InvalidProof(
-                    "receipt executor_signature not verified by any trusted executor key"
-                        .to_string(),
-                )
+            // The trust root: a VERIFIED (non-recursive) EffectVM STARK whose public inputs bind
+            // THIS turn (turn hash + the pre/post state-commitment endpoints). No signature is
+            // consulted.
+            match verify_effect_vm_turn_proof(
+                proof_bytes,
+                public_inputs,
+                turn_hash,
+                expected_pre_commitment,
+                expected_post_commitment,
+            ) {
+                Ok(()) => ConditionalResult::Resolved,
+                Err(reason) => ConditionalResult::InvalidProof(reason),
             }
         }
 
@@ -519,6 +601,153 @@ fn resolve_inner(
             ConditionalResult::InvalidProof("proof type does not match condition type".to_string())
         }
     }
+}
+
+/// Verify a (non-recursive) EffectVM STARK and check its public inputs bind THIS turn — the
+/// STARK-as-trust-root replacement for the retired trusted-executor-key signature (assurance-
+/// perimeter #3, `docs/DESIGN-assurance-perimeter-closure.md` §4).
+///
+/// This mirrors the deployed `dregg_sdk::full_turn_proof::verify_full_turn_bound` recipe on the
+/// prover-free VERIFY floor (no `dregg-circuit-prove`, no recursion): the proof blob is decoded as
+/// a rotated `Ir2BatchProof` and verified SELECTOR-BOUND against the committed WIDE cohort registry
+/// (`WIDE_REGISTRY_STAGED_TSV`) — the proof carries NO descriptor identity of its own, so the
+/// verifier resolves the UNIQUELY-accepting descriptor (a sound rotated proof binds exactly one via
+/// its in-Lean selector tooth; zero ⇒ not a cohort proof, more than one ⇒ ambiguous, both rejected).
+/// The endpoints (`expected_pre/post_commitment`) are the verifier's TRUSTED inputs, never taken
+/// from the proof — a wrong-root expectation or a proof of a DIFFERENT transition is rejected.
+///
+/// # Honest scope
+///
+/// A pass proves the state-commitment DELTA `pre -> post` for this turn is attested by a real
+/// satisfying EffectVM trace — NOT the full state (the AIR is one-directionally constrained and the
+/// state-commit is PI-bound, assurance-perimeter #2) — and it still rests on the undischarged FRI
+/// floor (`project-fri-soundness-reality`, ~57 calculator bits deployed). It is a real improvement
+/// over the retired signature: the receipt is bound to a PROOF, not to a trusted signer.
+fn verify_effect_vm_turn_proof(
+    proof_bytes: &[u8],
+    public_inputs: &[u32],
+    turn_hash: &[u8; 32],
+    expected_pre_commitment: &[u8; 32],
+    expected_post_commitment: &[u8; 32],
+) -> Result<(), String> {
+    use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
+
+    if proof_bytes.is_empty() {
+        return Err(
+            "EffectVmProof carries no proof bytes (a receipt without a proof is not a \
+                    trust root)"
+                .to_string(),
+        );
+    }
+
+    // The PI must at least carry the rotated prefix (OLD/NEW_COMMIT + TURN_HASH) plus the wide
+    // 8-felt anchor tail (last 16 elements). A shorter vector cannot be a wide rotated leg.
+    if public_inputs.len() < V1_PI_COUNT || public_inputs.len() < 16 {
+        return Err(format!(
+            "EffectVmProof PI too short: have {} elements, need at least the rotated prefix \
+             ({V1_PI_COUNT}) and the 16-felt wide anchor tail",
+            public_inputs.len()
+        ));
+    }
+
+    let proof: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(proof_bytes)
+        .map_err(|e| format!("EffectVmProof deserialize (postcard Ir2BatchProof): {e}"))?;
+
+    let pi_felts: Vec<BabyBear> = public_inputs
+        .iter()
+        .map(|&v| BabyBear::new_canonical(v))
+        .collect();
+
+    // Self-detect the committed WIDE cohort descriptor: verify SELECTOR-BOUND against every member,
+    // requiring EXACTLY ONE accept. The proof never chooses its own descriptor — the semantics come
+    // from the trusted registry, and a sound proof binds exactly one member. (Mirrors the standalone
+    // `verifier::rotated_replay::verify_rotated_leg`, pointed at the WIDE registry the deployed wide
+    // legs bind.)
+    let mut accepting: Vec<&str> = Vec::new();
+    let mut accepted_pi_count: usize = 0;
+    for line in WIDE_REGISTRY_STAGED_TSV.lines() {
+        // Each line is `key\tname\tjson`; the descriptor JSON is the final tab-field.
+        let mut it = line.splitn(3, '\t');
+        let key = match it.next() {
+            Some(k) => k,
+            None => continue,
+        };
+        let _name = it.next();
+        let json = match it.next() {
+            Some(j) => j,
+            None => continue,
+        };
+        if let Ok(desc) = parse_vm_descriptor2(json)
+            && pi_felts.len() >= desc.public_input_count
+            && verify_vm_descriptor2(&desc, &proof, &pi_felts[..desc.public_input_count]).is_ok()
+        {
+            accepting.push(key);
+            accepted_pi_count = desc.public_input_count;
+        }
+    }
+    match accepting.as_slice() {
+        [] => {
+            return Err(
+                "EffectVmProof verified under NO committed WIDE cohort descriptor (not a rotated \
+                 effect-vm leg, or a forged/tampered proof)"
+                    .to_string(),
+            );
+        }
+        [_one] => {}
+        multi => {
+            return Err(format!(
+                "EffectVmProof verified under MULTIPLE cohort descriptors {multi:?} — selector \
+                 binding ambiguous, rejecting rather than laundering a wrong-descriptor accept"
+            ));
+        }
+    }
+
+    // The accepting descriptor pins the authoritative PI length. The wide 8-felt state-commitment
+    // anchors are the last 16 PIs of that window (`[dpc-16..dpc-8)` = wide OLD, `[dpc-8..dpc)` =
+    // wide NEW), exactly as `RotatedParticipantLeg::wide_{old,new}_root8` read them and as the
+    // deployed `verify_full_turn_bound` binds them.
+    let dpc = accepted_pi_count;
+    if dpc < 16 {
+        return Err(format!(
+            "accepting descriptor binds {dpc} PIs (< 16): cannot carry the wide 8-felt anchors"
+        ));
+    }
+    let wide_old = &pi_felts[dpc - 16..dpc - 8];
+    let wide_new = &pi_felts[dpc - 8..dpc];
+
+    let expected_old = crate::executor::TurnExecutor::commitment_to_8bb(expected_pre_commitment);
+    let expected_new = crate::executor::TurnExecutor::commitment_to_8bb(expected_post_commitment);
+    if wide_old != expected_old.as_slice() {
+        return Err(
+            "EffectVmProof wide OLD_COMMIT anchor does not match the condition's expected \
+             pre-state commitment (proof of a different transition)"
+                .to_string(),
+        );
+    }
+    if wide_new != expected_new.as_slice() {
+        return Err(
+            "EffectVmProof wide NEW_COMMIT anchor does not match the condition's expected \
+             post-state commitment (proof of a different transition)"
+                .to_string(),
+        );
+    }
+
+    // Bind the turn identity: PI[TURN_HASH_BASE..+4] == canonical_32_to_felts_4(turn_hash). This is
+    // the executor-trusted turn-identity slot (the AIR does not constrain it to the trace; the
+    // load-bearing binding is the wide-anchor endpoint check above). Rejecting a mismatch stops a
+    // proof of a valid transition from being relabelled onto a different turn.
+    let expected_turn_hash = dregg_commit::typed::canonical_32_to_felts_4(turn_hash);
+    let th_lo = effect_vm_pi::TURN_HASH_BASE;
+    let th_hi = th_lo + effect_vm_pi::TURN_HASH_LEN;
+    if th_hi > pi_felts.len() || pi_felts[th_lo..th_hi] != expected_turn_hash[..] {
+        return Err(
+            "EffectVmProof PI[TURN_HASH] does not match the condition's turn_hash (proof relabelled \
+             onto a different turn)"
+                .to_string(),
+        );
+    }
+
+    Ok(())
 }
 
 /// Validate a ConditionalTurn at submission time.
@@ -919,18 +1148,10 @@ mod tests {
         assert!(matches!(result, ConditionalResult::InvalidProof(_)));
     }
 
-    #[test]
-    fn test_turn_executed_resolved() {
-        use ed25519_dalek::{Signer, SigningKey};
-
-        let turn_hash = [0xAB; 32];
-        let condition = ProofCondition::TurnExecuted { turn_hash };
-
-        // Generate an executor signing key and sign the receipt.
-        let executor_key = SigningKey::from_bytes(&[0x42; 32]);
-        let executor_pub = executor_key.verifying_key().to_bytes();
-
-        let mut receipt = TurnReceipt {
+    /// A minimal receipt naming `turn_hash` (all other fields zero/default). The
+    /// `executor_signature` is intentionally left `None` — the STARK is the trust root now.
+    fn receipt_for(turn_hash: [u8; 32]) -> TurnReceipt {
+        TurnReceipt {
             turn_hash,
             forest_hash: [0u8; 32],
             pre_state_hash: [0u8; 32],
@@ -951,16 +1172,29 @@ mod tests {
             was_encrypted: false,
             was_burn: false,
             consumed_capabilities: vec![],
-        };
-        // Sign the canonical executor message — the exact bytes the real
-        // executor signs (`turn::executor::mod` calls
-        // `receipt.canonical_executor_signed_message()`), NOT the bare hash.
+        }
+    }
+
+    /// The RETIRED trust root (assurance-perimeter #3): a bare receipt presented for a
+    /// `TurnExecuted` condition must be REJECTED, regardless of any executor signature it carries —
+    /// a trusted signature is no longer sufficient. (Previously this path RESOLVED for any
+    /// trusted-key-signed receipt.)
+    #[test]
+    fn turn_executed_bare_receipt_is_retired() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let turn_hash = [0xAB; 32];
+        let condition = ProofCondition::TurnExecuted { turn_hash };
+
+        // Even a receipt signed with the canonical executor message + a matching trusted key —
+        // the exact input the retired path accepted — is now rejected.
+        let executor_key = SigningKey::from_bytes(&[0x42; 32]);
+        let executor_pub = executor_key.verifying_key().to_bytes();
+        let mut receipt = receipt_for(turn_hash);
         let sig = executor_key.sign(&receipt.canonical_executor_signed_message());
         receipt.executor_signature = Some(sig.to_bytes().to_vec());
 
         let proof = ConditionProof::Receipt(receipt);
         let mut n = nullifiers();
-        let trusted_keys: &[[u8; 32]] = &[executor_pub];
         let result = resolve_condition(
             &condition,
             &proof,
@@ -969,99 +1203,29 @@ mod tests {
             &[],
             DEFAULT_MAX_ROOT_AGE,
             &mut n,
-            trusted_keys,
-        );
-        assert_eq!(result, ConditionalResult::Resolved);
-    }
-
-    /// Regression: a receipt whose signature covers the BARE `receipt_hash()`
-    /// (the shape the old verifier and its fixture both used) must now be
-    /// REJECTED — the verifier binds the domain-prefixed canonical message the
-    /// executor actually signs, so a bare-hash signature is a forgery here. This
-    /// is the tooth for the fix: sign-the-bare-hash was green only because the
-    /// verifier was equally wrong.
-    #[test]
-    fn test_turn_executed_rejects_bare_hash_signature() {
-        use ed25519_dalek::{Signer, SigningKey};
-
-        let turn_hash = [0xAB; 32];
-        let condition = ProofCondition::TurnExecuted { turn_hash };
-
-        let executor_key = SigningKey::from_bytes(&[0x42; 32]);
-        let executor_pub = executor_key.verifying_key().to_bytes();
-
-        let mut receipt = TurnReceipt {
-            turn_hash,
-            forest_hash: [0u8; 32],
-            pre_state_hash: [0u8; 32],
-            post_state_hash: [0u8; 32],
-            timestamp: 1000,
-            effects_hash: [0u8; 32],
-            computrons_used: 500,
-            action_count: 1,
-            previous_receipt_hash: None,
-            agent: dregg_cell::CellId([0u8; 32]),
-            federation_id: [0u8; 32],
-            routing_directives: vec![],
-            introduction_exports: vec![],
-            derivation_records: vec![],
-            emitted_events: vec![],
-            executor_signature: None,
-            finality: Default::default(),
-            was_encrypted: false,
-            was_burn: false,
-            consumed_capabilities: vec![],
-        };
-        // Sign the BARE receipt hash — the pre-fix (wrong) form.
-        let sig = executor_key.sign(&receipt.receipt_hash());
-        receipt.executor_signature = Some(sig.to_bytes().to_vec());
-
-        let proof = ConditionProof::Receipt(receipt);
-        let mut n = nullifiers();
-        let trusted_keys: &[[u8; 32]] = &[executor_pub];
-        let result = resolve_condition(
-            &condition,
-            &proof,
-            10,
-            100,
-            &[],
-            DEFAULT_MAX_ROOT_AGE,
-            &mut n,
-            trusted_keys,
+            &[executor_pub],
         );
         assert!(
-            matches!(result, ConditionalResult::InvalidProof(_)),
-            "a signature over the bare receipt_hash must be rejected, got {result:?}"
+            matches!(result, ConditionalResult::InvalidProof(ref m) if m.contains("RETIRED")),
+            "trusted-key TurnExecuted must be retired, got {result:?}"
         );
     }
 
+    /// A `TurnProven` condition with an `EffectVmProof` carrying NO proof bytes is rejected: a
+    /// receipt without a proof is not a trust root. (Cheap — no proving.)
     #[test]
-    fn test_turn_executed_rejects_unsigned_receipt() {
-        let turn_hash = [0xAB; 32];
-        let condition = ProofCondition::TurnExecuted { turn_hash };
-        let receipt = TurnReceipt {
+    fn turn_proven_missing_proof_rejected() {
+        let turn_hash = [0x11; 32];
+        let condition = ProofCondition::TurnProven {
             turn_hash,
-            forest_hash: [0u8; 32],
-            pre_state_hash: [0u8; 32],
-            post_state_hash: [0u8; 32],
-            timestamp: 1000,
-            effects_hash: [0u8; 32],
-            computrons_used: 500,
-            action_count: 1,
-            previous_receipt_hash: None,
-            agent: dregg_cell::CellId([0u8; 32]),
-            federation_id: [0u8; 32],
-            routing_directives: vec![],
-            introduction_exports: vec![],
-            derivation_records: vec![],
-            emitted_events: vec![],
-            executor_signature: None,
-            finality: Default::default(),
-            was_encrypted: false,
-            was_burn: false,
-            consumed_capabilities: vec![],
+            expected_pre_commitment: [0u8; 32],
+            expected_post_commitment: [1u8; 32],
         };
-        let proof = ConditionProof::Receipt(receipt);
+        let proof = ConditionProof::EffectVmProof {
+            receipt: Box::new(receipt_for(turn_hash)),
+            proof_bytes: vec![],
+            public_inputs: vec![0u32; 64],
+        };
         let mut n = nullifiers();
         let result = resolve_condition(
             &condition,
@@ -1074,41 +1238,165 @@ mod tests {
             &[],
         );
         assert!(
-            matches!(result, ConditionalResult::InvalidProof(ref m) if m.contains("no executor_signature"))
+            matches!(result, ConditionalResult::InvalidProof(ref m) if m.contains("no proof bytes")),
+            "a proofless EffectVmProof must be rejected, got {result:?}"
         );
     }
 
-    #[test]
-    fn test_turn_executed_wrong_hash() {
-        let turn_hash = [0xAB; 32];
-        let condition = ProofCondition::TurnExecuted { turn_hash };
-        let receipt = TurnReceipt {
-            turn_hash: [0xCD; 32],
-            forest_hash: [0u8; 32],
-            pre_state_hash: [0u8; 32],
-            post_state_hash: [0u8; 32],
-            timestamp: 1000,
-            effects_hash: [0u8; 32],
-            computrons_used: 500,
-            action_count: 1,
-            previous_receipt_hash: None,
-            agent: dregg_cell::CellId([0u8; 32]),
-            federation_id: [0u8; 32],
-            routing_directives: vec![],
-            introduction_exports: vec![],
-            derivation_records: vec![],
-            emitted_events: vec![],
-            executor_signature: None,
-            finality: Default::default(),
-            was_encrypted: false,
-            was_burn: false,
-            consumed_capabilities: vec![],
+    /// The producer-cell recipe for a rotated Transfer leg (mirrors
+    /// `circuit-prove/tests/ivc_turn_chain_rotated.rs`): open permissions so the rotated producer
+    /// admits the actor cell without auth gating.
+    #[cfg(feature = "prover")]
+    fn open_permissions() -> dregg_cell::Permissions {
+        use dregg_cell::AuthRequired;
+        dregg_cell::Permissions {
+            send: AuthRequired::None,
+            receive: AuthRequired::None,
+            set_state: AuthRequired::None,
+            set_permissions: AuthRequired::None,
+            set_verification_key: AuthRequired::None,
+            increment_nonce: AuthRequired::None,
+            delegate: AuthRequired::None,
+            access: AuthRequired::None,
+        }
+    }
+
+    #[cfg(feature = "prover")]
+    fn producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
+        let mut pk = [0u8; 32];
+        pk[0] = 7;
+        let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], balance);
+        cell.permissions = open_permissions();
+        for _ in 0..nonce {
+            let _ = cell.state.increment_nonce();
+        }
+        cell
+    }
+
+    /// Mint a GENUINE (non-recursive, DEFAULT-config) wide rotated EffectVM STARK for a Transfer
+    /// DEBIT of `amount`, with `PI[TURN_HASH]` filled to the canonical projection of `turn_hash`
+    /// (the honest producer's job — the AIR does not constrain that slot). Returns exactly the
+    /// material an `EffectVmProof` carries plus the wide 8-felt endpoints packed to the condition's
+    /// 32-byte commitment form. This is the same recipe `rotation_witness::mint_rotated_participant_leg`
+    /// runs, but proved under the deployed non-recursive `prove_vm_descriptor2` (the verify floor)
+    /// instead of the recursion leaf-wrap config, so the resolver's `verify_vm_descriptor2` accepts it.
+    #[cfg(feature = "prover")]
+    fn genuine_effect_vm_turn_proof(
+        turn_hash: [u8; 32],
+        amount: u64,
+    ) -> (Vec<u8>, Vec<u32>, [u8; 32], [u8; 32]) {
+        use crate::rotation_witness::{empty_revoked_root_8, produce, sender_membership_teeth};
+        use dregg_cell::Ledger;
+        use dregg_cell::commitment::RotationCarrierMaterial;
+        use dregg_circuit::descriptor_ir2::prove_vm_descriptor2;
+        use dregg_circuit::effect_vm::pi as p;
+        use dregg_circuit::effect_vm::trace_rotated::{
+            RotatedBlockWitness, generate_rotated_effect_vm_descriptor_and_trace_wide,
+            transfer_caveat_manifest,
         };
-        let proof = ConditionProof::Receipt(receipt);
+        use dregg_circuit::effect_vm::{CellState, Effect};
+        use dregg_commit::typed::canonical_32_to_felts_4;
+
+        let balance = 1000i64;
+        let nonce = 0u64;
+        let state = CellState::new(balance as u64, nonce as u32);
+        let effects = vec![Effect::Transfer {
+            amount,
+            direction: 1,
+        }];
+        let before_cell = producer_cell(balance, nonce);
+        let after_cell = producer_cell(balance - amount as i64, nonce);
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
+        let commitments_root = dregg_circuit::heap_root::empty_heap_root_8();
+        let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+
+        let mut ledger = Ledger::new();
+        ledger.insert_cell(after_cell.clone()).expect("seed ledger");
+        let carrier = RotationCarrierMaterial::default();
+        let before_w = produce(
+            &before_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &empty_revoked_root_8(),
+            &receipt_log,
+            &carrier,
+        );
+        let after_w = produce(
+            &after_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &empty_revoked_root_8(),
+            &receipt_log,
+            &carrier,
+        );
+        let before_block = RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot)
+            .expect("before block witness");
+        let after_block = RotatedBlockWitness::new(after_w.pre_limbs.clone(), after_w.iroot)
+            .expect("after block witness");
+        let caveat = transfer_caveat_manifest();
+        let (desc, trace, mut dpis, map_heaps, mem_boundary) =
+            generate_rotated_effect_vm_descriptor_and_trace_wide(
+                &state,
+                &effects,
+                &before_block,
+                &after_block,
+                &caveat,
+                None,
+                None,
+                None,
+                Some(sender_membership_teeth(&before_cell)),
+            )
+            .expect("wide rotated transfer producer");
+
+        // Honest producer: fill the (AIR-unconstrained) TURN_HASH slot with the canonical projection
+        // of the turn identity, so the proof binds THIS turn.
+        let th = canonical_32_to_felts_4(&turn_hash);
+        dpis[p::TURN_HASH_BASE..p::TURN_HASH_BASE + p::TURN_HASH_LEN].copy_from_slice(&th);
+
+        let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+            .expect("default-config wide effect-vm prove");
+        verify_vm_descriptor2(&desc, &proof, &dpis).expect("minted proof self-verifies");
+
+        let proof_bytes = postcard::to_allocvec(&proof).expect("postcard-encode proof");
+        let public_inputs: Vec<u32> = dpis.iter().map(|f| f.as_u32()).collect();
+        let n = dpis.len();
+        let wide_old: [BabyBear; 8] = dpis[n - 16..n - 8].try_into().unwrap();
+        let wide_new: [BabyBear; 8] = dpis[n - 8..n].try_into().unwrap();
+        let expected_pre = crate::executor::TurnExecutor::commitment_8bb_to_bytes(wide_old);
+        let expected_post = crate::executor::TurnExecutor::commitment_8bb_to_bytes(wide_new);
+        (proof_bytes, public_inputs, expected_pre, expected_post)
+    }
+
+    /// THE GATE, adversarial: a `TurnProven` condition RESOLVES for a genuine EffectVM STARK bound
+    /// to the turn, and REJECTS (a) a proof for a DIFFERENT turn (wrong `turn_hash`), (b) a wrong
+    /// expected pre/post commitment (a proof of a different state transition), (c) a mutated proof
+    /// blob (the mutation canary), and (d) tampered public inputs. Heavy: mints one real wide
+    /// rotated proof.
+    #[cfg(feature = "prover")]
+    #[test]
+    fn turn_proven_gate_accepts_genuine_and_rejects_forgeries() {
+        let turn_hash = [0x5Au8; 32];
+        let (proof_bytes, public_inputs, expected_pre, expected_post) =
+            genuine_effect_vm_turn_proof(turn_hash, 7);
+
+        let condition = ProofCondition::TurnProven {
+            turn_hash,
+            expected_pre_commitment: expected_pre,
+            expected_post_commitment: expected_post,
+        };
+        let good_proof = ConditionProof::EffectVmProof {
+            receipt: Box::new(receipt_for(turn_hash)),
+            proof_bytes: proof_bytes.clone(),
+            public_inputs: public_inputs.clone(),
+        };
+
+        // (accept) genuine proof bound to the turn resolves.
         let mut n = nullifiers();
-        let result = resolve_condition(
+        let ok = resolve_condition(
             &condition,
-            &proof,
+            &good_proof,
             10,
             100,
             &[],
@@ -1116,7 +1404,105 @@ mod tests {
             &mut n,
             &[],
         );
-        assert!(matches!(result, ConditionalResult::InvalidProof(_)));
+        assert_eq!(
+            ok,
+            ConditionalResult::Resolved,
+            "genuine proof must resolve"
+        );
+
+        // (a) a proof for a DIFFERENT turn: the condition names another turn_hash, the receipt's
+        // turn_hash mismatches AND PI[TURN_HASH] no longer matches.
+        let other_condition = ProofCondition::TurnProven {
+            turn_hash: [0xC3u8; 32],
+            expected_pre_commitment: expected_pre,
+            expected_post_commitment: expected_post,
+        };
+        let other_receipt_proof = ConditionProof::EffectVmProof {
+            receipt: Box::new(receipt_for([0xC3u8; 32])),
+            proof_bytes: proof_bytes.clone(),
+            public_inputs: public_inputs.clone(),
+        };
+        let mut n = nullifiers();
+        assert!(
+            matches!(
+                resolve_condition(&other_condition, &other_receipt_proof, 10, 100, &[], DEFAULT_MAX_ROOT_AGE, &mut n, &[]),
+                ConditionalResult::InvalidProof(ref m) if m.contains("TURN_HASH")
+            ),
+            "a genuine proof relabelled onto a different turn must be rejected"
+        );
+
+        // (b) wrong expected post-commitment (a proof of a different transition).
+        let mut bad_post = expected_post;
+        bad_post[0] ^= 0x01;
+        let wrong_endpoint = ProofCondition::TurnProven {
+            turn_hash,
+            expected_pre_commitment: expected_pre,
+            expected_post_commitment: bad_post,
+        };
+        let mut n = nullifiers();
+        assert!(
+            matches!(
+                resolve_condition(&wrong_endpoint, &good_proof, 10, 100, &[], DEFAULT_MAX_ROOT_AGE, &mut n, &[]),
+                ConditionalResult::InvalidProof(ref m) if m.contains("NEW_COMMIT")
+            ),
+            "a wrong post-state endpoint must be rejected"
+        );
+
+        // (c) MUTATION CANARY: flip a byte of the proof blob → the STARK no longer verifies under
+        // any cohort descriptor.
+        let mut mutated = proof_bytes.clone();
+        let mid = mutated.len() / 2;
+        mutated[mid] ^= 0x01;
+        let mutated_proof = ConditionProof::EffectVmProof {
+            receipt: Box::new(receipt_for(turn_hash)),
+            proof_bytes: mutated,
+            public_inputs: public_inputs.clone(),
+        };
+        let mut n = nullifiers();
+        assert!(
+            matches!(
+                resolve_condition(
+                    &condition,
+                    &mutated_proof,
+                    10,
+                    100,
+                    &[],
+                    DEFAULT_MAX_ROOT_AGE,
+                    &mut n,
+                    &[]
+                ),
+                ConditionalResult::InvalidProof(_)
+            ),
+            "a mutated proof blob must be rejected (mutation canary)"
+        );
+
+        // (d) tampered PUBLIC INPUTS: bump the wide NEW anchor felt → Fiat–Shamir / anchor binding
+        // rejects.
+        let mut bad_pi = public_inputs.clone();
+        let last = bad_pi.len() - 1;
+        bad_pi[last] = bad_pi[last].wrapping_add(1);
+        let bad_pi_proof = ConditionProof::EffectVmProof {
+            receipt: Box::new(receipt_for(turn_hash)),
+            proof_bytes: proof_bytes.clone(),
+            public_inputs: bad_pi,
+        };
+        let mut n = nullifiers();
+        assert!(
+            matches!(
+                resolve_condition(
+                    &condition,
+                    &bad_pi_proof,
+                    10,
+                    100,
+                    &[],
+                    DEFAULT_MAX_ROOT_AGE,
+                    &mut n,
+                    &[]
+                ),
+                ConditionalResult::InvalidProof(_)
+            ),
+            "tampered public inputs must be rejected"
+        );
     }
 
     #[test]

@@ -1942,6 +1942,7 @@ pub fn get_pending_conditionals(handle: usize) -> Result<JsValue, JsError> {
                 let kind = match &pc.conditional.condition {
                     ProofCondition::HashPreimage { .. } => "HashPreimage",
                     ProofCondition::TurnExecuted { .. } => "TurnExecuted",
+                    ProofCondition::TurnProven { .. } => "TurnProven",
                     ProofCondition::RemoteProof { .. } => "RemoteProof",
                     ProofCondition::LocalProof { .. } => "LocalProof",
                 }
