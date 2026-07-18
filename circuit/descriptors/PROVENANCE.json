@@ -1,8 +1,8 @@
 {
   "version": 1,
   "mode": "emit",
-  "dregg2_tree_hash": "45c734198995c5da69a33b278a10b878c41cc2c2",
-  "repo_head": "74aaed5e0b8c52bca350e84ce10f2459d8168629",
+  "dregg2_tree_hash": "c76bd0761bd1eef3016088fce8427451441db148",
+  "repo_head": "f52207f3314a48151862405e0059775837bd6dd5",
   "source_dirty": true,
   "lean_toolchain": "leanprover/lean4:v4.30.0",
   "emitters": [
@@ -22,7 +22,7 @@
     "EmitCertF.lean",
     "EmitCertFMarket4.lean"
   ],
-  "generated_utc": "2026-07-18T07:36:59Z",
+  "generated_utc": "2026-07-18T09:08:01Z",
   "operator": "ember@nextop.local",
   "descriptor_sha256": {
     "dregg-bilateral-aggregation-v2.json": "47222a8cbc3e7809e3a6dc15e5c01faa09eba3bd244f52eb45003fc5fb77277d",
@@ -106,6 +106,7 @@
     "accumulator-nonrev.json": "ad8f91b437b6d35aa07f609434eb97c9d43ecdb1ab778496fe5128baa32a6ff4",
     "adjacency-membership.json": "d986477879b9a63e5220b7ec28ce9920d77f98c256d8e9059c62fee522d30dbc",
     "attested-fact-membership.json": "a66055fca6672174460d774b1dda778702520b82650ce0566e89fff37f5c665b",
+    "automatafl-resolve.json": "09ef066848f6433be8fd17657b9e2e7d1f6d90da1779c06eea746e2df08ce200",
     "automatafl-step.json": "5c9c622388aace8bee6835a72272a477adc330f6783dff9ebc1e96cac768476f",
     "blinded-membership-4ary-depth2.json": "e4b165cff0b0d0170f312bcdc0b54558697c8f7f9dacd987b9b4c0bcd1737caf",
     "blinded-membership-4ary-depth8.json": "47f0bf0f67aa88287032ef7498c32a57eac3e8cc415430ce575b1f82f6ef90c9",
