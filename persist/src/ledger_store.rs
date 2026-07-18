@@ -73,6 +73,11 @@ impl PersistentStore {
         let snapshot = ledger_to_checkpoint(ledger, height);
         let serialized =
             postcard::to_stdvec(&snapshot).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        // F59-R1: the finalized-root ANCHOR this checkpoint must preserve — the
+        // durable head root as recorded BEFORE this write (live head record, or
+        // the prior checkpoint's anchor when already compacted). Read outside
+        // the write txn (redb MVCC: reads see pre-write state).
+        let anchor_root = self.recovered_ledger_root()?;
 
         let write_txn = self.db.begin_write()?;
         {
@@ -87,6 +92,32 @@ impl PersistentStore {
                 .unwrap_or(0);
             if height >= current_latest {
                 meta.insert(tables::META_LATEST_LEDGER_CHECKPOINT_HEIGHT, height)?;
+            }
+            // RSA-3: pin the exact commit-ordinal cut — the caller checkpoints
+            // the LIVE full ledger, which reflects every record committed so
+            // far, so the covered ordinal is the current commit cursor. Same
+            // transaction as the checkpoint itself (never torn).
+            let covered = meta
+                .get(tables::META_COMMIT_CURSOR)?
+                .map(|g| g.value())
+                .unwrap_or(0);
+            let key = format!(
+                "{}{}",
+                tables::META_LEDGER_CHECKPOINT_COVERED_PREFIX,
+                height
+            );
+            meta.insert(key.as_str(), covered)?;
+            // F59-R1: persist the root anchor ATOMICALLY with the checkpoint —
+            // once compaction deletes the covered records, this anchor is the
+            // only durable copy of the finalized root the checkpoint claims to
+            // reproduce. Recovery validates the row against it; a checkpoint
+            // covering no commits (covered == 0) anchors nothing.
+            if covered > 0
+                && let Some(root) = anchor_root
+            {
+                let mut meta_bytes = write_txn.open_table(tables::METADATA_BYTES)?;
+                let root_key = format!("{}{}", tables::META_LEDGER_CHECKPOINT_ROOT_PREFIX, height);
+                meta_bytes.insert(root_key.as_str(), root.as_slice())?;
             }
         }
         write_txn.commit()?;
@@ -115,6 +146,11 @@ impl PersistentStore {
     /// Load the latest ledger checkpoint.
     ///
     /// Returns `None` if no checkpoint has ever been written (fresh node).
+    ///
+    /// F59-R1: metadata that POINTS at a checkpoint height whose row is ABSENT
+    /// is structural corruption, not "no checkpoint" — reporting it as ordinary
+    /// `None` let a compacted store whose sole checkpoint row was deleted read
+    /// as fresh state. An undecodable row likewise errors (postcard).
     pub fn load_latest_ledger_checkpoint(&self) -> Result<Option<(u64, Ledger)>> {
         let read_txn = self.db.begin_read()?;
         let meta = read_txn.open_table(tables::METADATA)?;
@@ -130,6 +166,46 @@ impl PersistentStore {
                 let snapshot: LedgerCheckpoint = postcard::from_bytes(value.value())?;
                 let ledger = checkpoint_to_ledger(snapshot);
                 Ok(Some((height, ledger)))
+            }
+            None => Err(StoreError::Integrity(format!(
+                "load_latest_ledger_checkpoint: metadata records a checkpoint at height \
+                 {height} but the checkpoint row is ABSENT — structural corruption"
+            ))),
+        }
+    }
+
+    /// The COVERED COMMIT ORDINAL recorded for the checkpoint at `height`
+    /// (RSA-3), or `None` for checkpoints written by pre-RSA-3 code.
+    pub fn ledger_checkpoint_covered_ordinal(&self, height: u64) -> Result<Option<u64>> {
+        let read_txn = self.db.begin_read()?;
+        let meta = read_txn.open_table(tables::METADATA)?;
+        let key = format!(
+            "{}{}",
+            tables::META_LEDGER_CHECKPOINT_COVERED_PREFIX,
+            height
+        );
+        Ok(meta.get(key.as_str())?.map(|g| g.value()))
+    }
+
+    /// The FINALIZED ROOT ANCHOR recorded for the checkpoint at `height`
+    /// (F59-R1), or `None` for checkpoints written by pre-anchor code (or
+    /// covering no commits). A present-but-malformed anchor is an integrity
+    /// error.
+    pub fn ledger_checkpoint_root_anchor(&self, height: u64) -> Result<Option<[u8; 32]>> {
+        let read_txn = self.db.begin_read()?;
+        let meta_bytes = read_txn.open_table(tables::METADATA_BYTES)?;
+        let key = format!("{}{}", tables::META_LEDGER_CHECKPOINT_ROOT_PREFIX, height);
+        match meta_bytes.get(key.as_str())? {
+            Some(guard) => {
+                let bytes = guard.value();
+                let root: [u8; 32] = bytes.try_into().map_err(|_| {
+                    StoreError::Integrity(format!(
+                        "ledger_checkpoint_root_anchor: anchor at height {height} is {} bytes, \
+                         expected 32 — structural corruption",
+                        bytes.len()
+                    ))
+                })?;
+                Ok(Some(root))
             }
             None => Ok(None),
         }

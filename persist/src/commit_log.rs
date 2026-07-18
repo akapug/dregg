@@ -583,13 +583,32 @@ impl PersistentStore {
         // F59-A: with the cursor ABOVE the compaction floor the head record
         // must be live — its absence is structural corruption, not a fresh
         // store. `None` here let a gutted commit log read as "nothing to
-        // converge to" and pass the boot verdict. A FULLY COMPACTED store
-        // (`cursor <= floor`: a covering checkpoint subsumed the head) has
-        // legally no live head and keeps returning `None`. Mirrors
-        // `recovered_block_cursor`'s missing-head classification.
+        // converge to" and pass the boot verdict.
+        //
+        // F59-R1: a FULLY COMPACTED store (`cursor <= floor`: a covering
+        // checkpoint subsumed the head) RESOLVES its finalized root instead of
+        // returning fresh-`None` — `cursor > 0` is never "no finalized turn
+        // recorded". The durable root anchor written beside the checkpoint is
+        // authoritative; a pre-anchor checkpoint falls back to its own
+        // canonical root (weaker: it binds the served state to the checkpoint
+        // rather than to the committed head — documented legacy migration).
         match self.commit_record_at(cursor - 1)? {
             Some(rec) => Ok(Some(rec.ledger_root)),
-            None if cursor <= self.commit_compacted_floor()? => Ok(None),
+            None if cursor <= self.commit_compacted_floor()? => {
+                match self.load_latest_ledger_checkpoint()? {
+                    Some((height, checkpoint)) => {
+                        match self.ledger_checkpoint_root_anchor(height)? {
+                            Some(anchor) => Ok(Some(anchor)),
+                            None => Ok(Some(crate::canonical_ledger_root(&checkpoint))),
+                        }
+                    }
+                    None => Err(StoreError::Integrity(format!(
+                        "recovered_ledger_root: cursor {cursor} is fully compacted but NO \
+                         covering ledger checkpoint exists — the finalized root is \
+                         unreconstructable"
+                    ))),
+                }
+            }
             None => Err(StoreError::Integrity(format!(
                 "recovered_ledger_root: cursor {cursor} is above the compaction floor but \
                  no record exists at {} — structural corruption",
@@ -610,10 +629,20 @@ impl PersistentStore {
         }
         // Missing-head classification mirrors `recovered_ledger_root` (F59-A):
         // `None` above the compaction floor would silently skip the NODE-2
-        // anti-rollback comparison; a fully compacted head stays `None`.
+        // anti-rollback comparison. F59-R1: a fully compacted head resolves to
+        // the covering checkpoint's height (the anti-rollback floor the
+        // compaction preserved), never fresh-`None`.
         match self.commit_record_at(cursor - 1)? {
             Some(rec) => Ok(Some(rec.height)),
-            None if cursor <= self.commit_compacted_floor()? => Ok(None),
+            None if cursor <= self.commit_compacted_floor()? => {
+                match self.load_latest_ledger_checkpoint()? {
+                    Some((height, _)) => Ok(Some(height)),
+                    None => Err(StoreError::Integrity(format!(
+                        "recovered_head_height: cursor {cursor} is fully compacted but NO \
+                         covering ledger checkpoint exists — structural corruption"
+                    ))),
+                }
+            }
             None => Err(StoreError::Integrity(format!(
                 "recovered_head_height: cursor {cursor} is above the compaction floor but \
                  no record exists at {} — structural corruption",
@@ -1044,6 +1073,38 @@ impl PersistentStore {
             return Ok(0);
         }
 
+        // ── F59-R1: trust the covering checkpoint before deleting records ───
+        // The doomed records' `ledger_root`s are the only per-turn copies of
+        // the finalized root; after compaction the checkpoint (+ its durable
+        // anchor) is the sole reconstruction source. Deleting records under a
+        // checkpoint that does NOT reproduce the anchored finalized root would
+        // destroy the committed state irrecoverably — refuse (no-op, records
+        // stay; boot recovery then arbitrates the mismatch fail-closed). A
+        // pre-anchor (legacy) checkpoint keeps the historical behavior.
+        match self.load_ledger_checkpoint_at(checkpoint_height)? {
+            None => {
+                tracing::warn!(
+                    checkpoint_height,
+                    "compact_below: metadata points at a checkpoint whose row is absent — \
+                     refusing to compact (no-op)"
+                );
+                return Ok(0);
+            }
+            Some(checkpoint) => {
+                if let Some(anchor) = self.ledger_checkpoint_root_anchor(checkpoint_height)?
+                    && crate::canonical_ledger_root(&checkpoint) != anchor
+                {
+                    tracing::warn!(
+                        checkpoint_height,
+                        "compact_below: the covering checkpoint does not reproduce its \
+                         durable finalized-root anchor — refusing to compact (no-op), the \
+                         commit records remain the source of truth"
+                    );
+                    return Ok(0);
+                }
+            }
+        }
+
         let write_txn = self.db.begin_write()?;
         let compacted;
         {
@@ -1255,7 +1316,34 @@ impl PersistentStore {
         let floor = self.commit_compacted_floor()?;
         let cursor = self.commit_cursor()?;
         if cursor <= floor {
-            // No live records to check (fresh or fully compacted) — nothing to do.
+            // No live records to walk (fresh, or fully compacted). F59-R1: a
+            // FULLY COMPACTED store (cursor > 0) has no live head record — its
+            // covering checkpoint is the ONLY reconstruction source, so before
+            // trusting the compaction the checkpoint must exist, decode, and
+            // reproduce the durable root anchor written beside it. Without
+            // this, an absent/undecodable/replaced checkpoint row read as
+            // fresh state and was SERVED instead of refused.
+            if cursor > 0 {
+                let (height, checkpoint) = match self.load_latest_ledger_checkpoint()? {
+                    Some(x) => x,
+                    None => {
+                        return Err(StoreError::Integrity(format!(
+                            "recover_to_last_consistent: cursor {cursor} is fully compacted \
+                             (floor {floor}) but NO covering ledger checkpoint exists — the \
+                             finalized state is unreconstructable"
+                        )));
+                    }
+                };
+                if let Some(anchor) = self.ledger_checkpoint_root_anchor(height)?
+                    && crate::canonical_ledger_root(&checkpoint) != anchor
+                {
+                    return Err(StoreError::Integrity(format!(
+                        "recover_to_last_consistent: the covering checkpoint at height \
+                         {height} does not reproduce its durable finalized-root anchor — \
+                         the compacted image cannot be trusted"
+                    )));
+                }
+            }
             return Ok(0);
         }
 
@@ -1278,17 +1366,39 @@ impl PersistentStore {
 
         // Scan the live log in ordinal order, applying each record's touched cells
         // and remembering the last ordinal whose running root matches its claim.
+        //
+        // F59-R2: the scan is BOUNDED to `[floor, cursor)` and enforces the
+        // EXACT key set — each table key must be `floor + index` and each
+        // record's own `ordinal` must equal its key. A count over an unbounded
+        // range let a gap (missing required key) be balanced by a forbidden
+        // record PAST the cursor, whose table key then became `last_good` and
+        // FABRICATED a higher cursor out of structural corruption.
         let mut last_good: Option<u64> = None;
-        let mut live_records: u64 = 0;
+        let mut expected_key = floor;
         {
             let read_txn = self.db.begin_read()?;
             let log = read_txn.open_table(tables::COMMIT_LOG)?;
-            for entry in log.range(floor..)? {
+            for entry in log.range(floor..cursor)? {
                 let entry =
                     entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
                 let ordinal = entry.0.value();
-                live_records += 1;
+                if ordinal != expected_key {
+                    return Err(StoreError::Integrity(format!(
+                        "recover_to_last_consistent: commit-log key {ordinal} where \
+                         {expected_key} was required — records are missing in \
+                         [{floor}, {cursor}): structural corruption, refusing recovery"
+                    )));
+                }
                 let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+                if record.ordinal != ordinal {
+                    return Err(StoreError::Integrity(format!(
+                        "recover_to_last_consistent: record at key {ordinal} claims ordinal \
+                         {} — key/ordinal identity broken: structural corruption, refusing \
+                         recovery",
+                        record.ordinal
+                    )));
+                }
+                expected_key += 1;
                 // Apply this record's touched cells last-writer-wins. A record above
                 // the checkpoint contributes the overlay; one at/below it merely
                 // re-asserts cells the checkpoint already folded in (idempotent —
@@ -1303,23 +1413,28 @@ impl PersistentStore {
                     last_good = Some(ordinal);
                 }
             }
-        }
 
-        // STRUCTURAL check (F59-A): the live log must be DENSE in
-        // `[floor, cursor)` — compaction only ever removes at/below the floor
-        // and truncation regresses the cursor, so a gap (or a record past the
-        // cursor) is tampering/corruption, never a torn tail. This must be
-        // classified as its own integrity failure, NOT the ambiguous
-        // no-converging-prefix refusal below: an empty walk over missing
-        // records would otherwise masquerade as the deferrable baseline
-        // ambiguity and a structurally gutted store could read as fresh.
-        let expected = cursor - floor;
-        if live_records != expected {
-            return Err(StoreError::Integrity(format!(
-                "recover_to_last_consistent: commit log holds {live_records} live record(s) \
-                 where the cursor/floor claim {expected} — records are missing (or extra) in \
-                 [{floor}, {cursor}): structural corruption, refusing recovery"
-            )));
+            // F59-R2, the other two structural bounds: the required keys must
+            // ALL be present (a truncated table tail is not a torn-tail
+            // recovery case — the cursor says those turns were applied), and
+            // NOTHING may sit at/above the cursor (a record there is exactly
+            // the balancing artifact that fooled the count check).
+            if expected_key != cursor {
+                return Err(StoreError::Integrity(format!(
+                    "recover_to_last_consistent: live records end at key {expected_key} but \
+                     the cursor claims {cursor} — records are missing in [{floor}, {cursor}): \
+                     structural corruption, refusing recovery"
+                )));
+            }
+            if let Some(entry) = log.range(cursor..)?.next() {
+                let entry =
+                    entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+                return Err(StoreError::Integrity(format!(
+                    "recover_to_last_consistent: commit-log record at key {} is AT/ABOVE the \
+                     durable cursor {cursor} — structural corruption, refusing recovery",
+                    entry.0.value()
+                )));
+            }
         }
 
         // The new cursor: one past the last converging ordinal. If NOTHING
@@ -1327,11 +1442,7 @@ impl PersistentStore {
         // last-good point in the records (the caller must start fresh; we do not
         // silently empty the log here, that is the caller's explicit choice).
         let Some(last_good) = last_good else {
-            return Err(StoreError::Integrity(format!(
-                "recover_to_last_consistent: {} — the image cannot be salvaged to a \
-                 last-good point (start fresh)",
-                crate::RECOVERY_NO_CONVERGING_PREFIX
-            )));
+            return Err(StoreError::RecoveryNoConvergingPrefix);
         };
         let new_cursor = last_good + 1;
         if new_cursor == cursor {
@@ -2418,7 +2529,10 @@ mod tests {
     #[test]
     fn checkpoint_ledger_co_drives_compaction() {
         let store = PersistentStore::open_in_memory().unwrap();
-        commit_distinct(&store, 6); // heights 1..=6
+        // Canonical roots (the real node shape): the F59-R1 anchor guard only
+        // trusts — and co-drives compaction under — a checkpoint that
+        // reproduces the recorded finalized head root.
+        commit_canonical(&store, 6); // heights 1..=6
         let root_before = recovered_root(&store);
 
         // Build the FULL live ledger (what node passes to checkpoint_ledger).
@@ -2748,7 +2862,7 @@ mod tests {
         assert!(
             matches!(
                 store.recover_to_last_consistent(),
-                Err(StoreError::Integrity(_))
+                Err(StoreError::RecoveryNoConvergingPrefix)
             ),
             "no-baseline reconstruction falsely refuses a consistent sub-checkpoint image"
         );
@@ -2853,7 +2967,7 @@ mod tests {
         assert!(
             matches!(
                 store.recover_to_last_consistent_from_base(&genesis),
-                Err(StoreError::Integrity(_))
+                Err(StoreError::RecoveryNoConvergingPrefix)
             ),
             "genuine corruption (no converging prefix) must FAIL CLOSED, never \
              silently recover to an empty image"
@@ -2895,5 +3009,151 @@ mod tests {
         let reopened = PersistentStore::open(&path).unwrap();
         assert_eq!(reopened.commit_cursor().unwrap(), 1);
         assert!(reopened.commit_record_at(0).unwrap().is_some());
+    }
+
+    // ---- F59-R1 / F59-R2: second-pass cross-family refutation probes ----
+
+    /// **F59-R2 (must-fail-pre).** The live commit-log key set must be EXACTLY
+    /// `[floor, cursor)` with every record's ordinal equal to its table key. A
+    /// gap balanced by a record PAST the cursor (keys {0,2} under cursor 2)
+    /// passed the count-only density check, and a converging record at key 2
+    /// fabricated cursor 3 — structural corruption "recovered" into a HIGHER
+    /// durable cursor. Recovery must refuse and leave the cursor untouched.
+    #[test]
+    fn recover_refuses_gap_balanced_by_record_past_cursor() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        commit_canonical(&store, 2);
+        assert_eq!(store.commit_cursor().unwrap(), 2);
+
+        // Raw-move record 1 to key 2: count over `range(floor..)` still sees 2.
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut log = txn.open_table(tables::COMMIT_LOG).unwrap();
+            let bytes = log.get(1u64).unwrap().unwrap().value().to_vec();
+            log.remove(1u64).unwrap();
+            log.insert(2u64, bytes.as_slice()).unwrap();
+        }
+        txn.commit().unwrap();
+
+        assert!(
+            store.recover_to_last_consistent().is_err(),
+            "a non-dense commit log (gap at 1, forbidden key 2) must REFUSE recovery"
+        );
+        assert_eq!(
+            store.commit_cursor().unwrap(),
+            2,
+            "refusal must leave the durable cursor untouched (no fabricated cursor 3)"
+        );
+    }
+
+    /// A fully compacted fixture: ONE canonical finalized record, then a
+    /// covering checkpoint ABOVE its height (the idle-heartbeat shape) whose
+    /// co-driven compaction removes the head record (`cursor == floor == 1`).
+    /// Returns the committed head root.
+    fn fully_compacted_fixture(store: &PersistentStore) -> [u8; 32] {
+        let mut ledger = Ledger::new();
+        let c = cell(0x5c, 900);
+        ledger.insert_cell(c.clone()).unwrap();
+        let mut rec = record(0, 0, vec![c]);
+        rec.ledger_root = crate::canonical_ledger_root(&ledger);
+        let root = rec.ledger_root;
+        store.commit_finalized_turn(0, &rec).unwrap();
+        store.checkpoint_ledger(&ledger, rec.height + 1).unwrap();
+        assert_eq!(store.commit_cursor().unwrap(), 1, "fixture: head committed");
+        assert_eq!(
+            store.commit_compacted_floor().unwrap(),
+            1,
+            "fixture: covering checkpoint compacted the head (cursor == floor)"
+        );
+        root
+    }
+
+    /// **F59-R1 (must-fail-pre).** A fully compacted store RETAINS its
+    /// finalized-root anchor: `recovered_ledger_root` must resolve the durable
+    /// anchor (the committed head root), never fresh-state `None` — cursor > 0
+    /// is never "no finalized turn recorded". A clean compacted image still
+    /// recovers as a no-op.
+    #[test]
+    fn fully_compacted_store_resolves_root_anchor_not_fresh() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let root = fully_compacted_fixture(&store);
+        assert_eq!(
+            store.recovered_ledger_root().unwrap(),
+            Some(root),
+            "the durable anchor must resolve the committed head root, not fresh None"
+        );
+        assert_eq!(
+            store.recover_to_last_consistent().unwrap(),
+            0,
+            "a clean fully compacted image recovers as a no-op"
+        );
+    }
+
+    /// **F59-R1 (must-fail-pre).** Compaction is trusted only when the covering
+    /// checkpoint REPRODUCES the committed head root: checkpointing a DIFFERENT
+    /// valid ledger over committed records must NOT compact them away (deleting
+    /// them would destroy the only source of the finalized root), and recovery
+    /// must refuse the non-reproducing image outright.
+    #[test]
+    fn wrong_checkpoint_does_not_compact_the_committed_head() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let mut ledger_a = Ledger::new();
+        let ca = cell(0x5a, 700);
+        ledger_a.insert_cell(ca.clone()).unwrap();
+        let mut rec = record(0, 0, vec![ca]);
+        rec.ledger_root = crate::canonical_ledger_root(&ledger_a);
+        store.commit_finalized_turn(0, &rec).unwrap();
+
+        // A DIFFERENT valid ledger (disjoint cell) checkpointed above the head.
+        let mut ledger_b = Ledger::new();
+        ledger_b.insert_cell(cell(0x5b, 42)).unwrap();
+        store.checkpoint_ledger(&ledger_b, rec.height + 1).unwrap();
+
+        assert!(
+            store.commit_record_at(0).unwrap().is_some(),
+            "the committed head record must SURVIVE a non-reproducing checkpoint"
+        );
+        assert_eq!(
+            store.commit_compacted_floor().unwrap(),
+            0,
+            "no compaction may be co-driven by a checkpoint that does not reproduce \
+             the committed head root"
+        );
+        assert!(
+            store.recover_to_last_consistent().is_err(),
+            "recovery must refuse the non-reproducing checkpointed image"
+        );
+    }
+
+    /// **F59-R1 (must-fail-pre).** Post-compaction tampering: replacing the
+    /// covering checkpoint row with a DIFFERENT valid ledger's checkpoint must
+    /// refuse recovery — the row no longer reproduces the durable root anchor.
+    #[test]
+    fn fully_compacted_replaced_checkpoint_row_refuses() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let root = fully_compacted_fixture(&store);
+
+        // Replace the checkpoint row (height 2) with a checkpoint of ledger B.
+        let mut ledger_b = Ledger::new();
+        ledger_b.insert_cell(cell(0x5b, 42)).unwrap();
+        let forged = crate::ledger_store::LedgerCheckpoint {
+            height: 2,
+            cells: ledger_b.iter().map(|(_, c)| c.clone()).collect(),
+            sovereign_commitments: Vec::new(),
+            sovereign_registrations: Vec::new(),
+        };
+        let bytes = postcard::to_stdvec(&forged).unwrap();
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut t = txn.open_table(tables::LEDGER_CHECKPOINTS).unwrap();
+            t.insert(2u64, bytes.as_slice()).unwrap();
+        }
+        txn.commit().unwrap();
+
+        assert!(
+            store.recover_to_last_consistent().is_err(),
+            "a replaced covering checkpoint (root != durable anchor {}) must refuse",
+            dregg_types::hex_encode(&root)
+        );
     }
 }

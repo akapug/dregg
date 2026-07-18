@@ -78,6 +78,39 @@ pub const LEDGER_CHECKPOINTS: TableDefinition<u64, &[u8]> =
 /// Key for the latest ledger checkpoint height.
 pub const META_LATEST_LEDGER_CHECKPOINT_HEIGHT: &str = "latest_ledger_checkpoint_height";
 
+/// Key PREFIX (in METADATA) for a ledger checkpoint's COVERED COMMIT ORDINAL:
+/// `"{prefix}{height}"` -> the commit cursor at checkpoint-write time = one
+/// past the last commit ordinal the checkpoint folds in (RSA-3, cross-family
+/// refutation of 0396015ac).
+///
+/// The commit log supports MULTIPLE records at one height (normal for
+/// ROUTE-level turns), but a checkpoint keyed by height alone cannot say which
+/// same-height records it includes: a height-only overlay cut
+/// (`record.height <= H` skipped) hides a removal committed at the SAME height
+/// after the checkpoint was taken, resurrecting the checkpointed cell. This
+/// key pins the exact cut: `cell_overlay_since` skips ordinals BELOW it and
+/// applies everything at/after it regardless of height. Written in the same
+/// transaction as the checkpoint; ABSENT on checkpoints written by older code,
+/// which fall back to the legacy height cut (additive migration).
+pub const META_LEDGER_CHECKPOINT_COVERED_PREFIX: &str = "ledger_checkpoint_covered_ordinal:";
+
+/// Key PREFIX (in METADATA_BYTES) for a ledger checkpoint's FINALIZED ROOT
+/// ANCHOR: `"{prefix}{height}"` -> the 32-byte canonical ledger root of the
+/// finalized head at checkpoint-write time (F59-R1, emberian/dregg#59
+/// cross-family refutation).
+///
+/// Compaction deletes the commit records whose `ledger_root` was the ONLY
+/// durable copy of the finalized root; once `cursor <= floor` the covering
+/// checkpoint is the sole reconstruction source, and without an anchor an
+/// absent, undecodable, or semantically WRONG checkpoint row was
+/// indistinguishable from fresh state (served instead of refused). This key —
+/// written in the SAME transaction as the checkpoint — preserves the exact
+/// committed head root so recovery can validate the checkpoint against it and
+/// `recovered_ledger_root` can resolve it instead of fresh-`None`. ABSENT on
+/// checkpoints written by older code, which fall back to the checkpoint's own
+/// canonical root (additive migration; documented weaker).
+pub const META_LEDGER_CHECKPOINT_ROOT_PREFIX: &str = "ledger_checkpoint_root:";
+
 // ─── Blocklace Tables ──────────────────────────────────────────────────────
 
 /// Blocklace blocks: block_id (32 bytes) -> serialized Block.

@@ -874,11 +874,8 @@ impl NodeState {
                 // structurally missing records, or a no-prefix refusal when the
                 // walk had a baseline or checkpoint (exact) — is authoritative:
                 // refuse boot now.
-                let ambiguous_no_prefix = matches!(
-                    &e,
-                    dregg_persist::StoreError::Integrity(msg)
-                        if msg.contains(dregg_persist::RECOVERY_NO_CONVERGING_PREFIX)
-                );
+                let ambiguous_no_prefix =
+                    matches!(&e, dregg_persist::StoreError::RecoveryNoConvergingPrefix);
                 let baseline_unknowable = ambiguous_no_prefix
                     && boot_baseline.is_none()
                     && matches!(store.load_latest_ledger_checkpoint(), Ok(None));
@@ -1246,11 +1243,8 @@ impl NodeState {
                 // converge over the empty base) — defer to the convergence
                 // check below (which fails closed on genuine divergence).
                 // Every other recovery error is authoritative: fail now.
-                let ambiguous_no_prefix = matches!(
-                    &e,
-                    dregg_persist::StoreError::Integrity(msg)
-                        if msg.contains(dregg_persist::RECOVERY_NO_CONVERGING_PREFIX)
-                );
+                let ambiguous_no_prefix =
+                    matches!(&e, dregg_persist::StoreError::RecoveryNoConvergingPrefix);
                 let baseline_unknowable = ambiguous_no_prefix
                     && boot_baseline.is_none()
                     && matches!(store.load_latest_ledger_checkpoint(), Ok(None));
@@ -3779,6 +3773,174 @@ mod crash_recovery_overlay_tests {
             crate::blocklace_sync::canonical_ledger_root(&guard.ledger),
             "the re-saved baseline root must equal the current config root"
         );
+    }
+
+    // ---- F59-R1: fully compacted stores keep their finalized-root anchor ----
+
+    /// Both production completion surfaces must refuse: the HTTP order
+    /// (construction + `complete_boot_recovery`) and the MCP order (`mcp_boot`).
+    async fn assert_boot_refuses_all_surfaces(dir: &Path, why: &str) {
+        assert_boot_refuses(dir, why).await;
+        assert!(
+            crate::mcp_boot(dir, vec![]).await.is_err(),
+            "MCP surface must refuse too: {why}"
+        );
+    }
+
+    /// A fully compacted store: one finalized turn over a one-cell ledger, then
+    /// a covering checkpoint ABOVE its height (the idle-heartbeat shape) whose
+    /// co-driven compaction removes the head record (`cursor == floor == 1`).
+    /// Returns the committed head root.
+    fn seed_fully_compacted_store(dir: &Path) -> [u8; 32] {
+        let store = PersistentStore::open(&dir.join("dregg.redb")).expect("open store");
+        let mut ledger = Ledger::new();
+        let c = cell(0xc5, 900);
+        ledger.insert_cell(c.clone()).expect("cell");
+        let root = crate::blocklace_sync::canonical_ledger_root(&ledger);
+        let rec = dregg_persist::CommitRecord {
+            ordinal: 0,
+            height: 5,
+            block_id: [0u8; 32],
+            block_executed_up_to: 0,
+            turn_hash: [0xa5; 32],
+            creator: [0u8; 32],
+            receipt_hash: [0xb5; 32],
+            ledger_root: root,
+            touched_cells: vec![c],
+        };
+        store.commit_finalized_turn(0, &rec).expect("commit head");
+        store
+            .checkpoint_ledger(&ledger, 6)
+            .expect("covering checkpoint");
+        root
+    }
+
+    /// **F59-R1 regression pin.** A LEGIT fully compacted store keeps booting on
+    /// both surfaces and serves exactly the committed state (the compacted-head
+    /// hardening must not fail-close healthy idle-checkpointed nodes).
+    #[tokio::test]
+    async fn fully_compacted_store_still_boots_and_serves_committed_state() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = seed_fully_compacted_store(tmp.path());
+
+        let state = NodeState::new_with_key_file(tmp.path(), vec![], "node.key")
+            .expect("a legit fully compacted store boots");
+        crate::complete_boot_recovery(&state, tmp.path(), false, 10_000)
+            .await
+            .expect("completion verdict passes on the legit compacted image");
+        {
+            let guard = state.read().await;
+            assert_eq!(
+                guard
+                    .ledger
+                    .get(&cell(0xc5, 0).id())
+                    .map(|c| c.state.balance()),
+                Some(900),
+                "the committed cell is served from the covering checkpoint"
+            );
+            assert_eq!(
+                crate::blocklace_sync::canonical_ledger_root(&guard.ledger),
+                root
+            );
+        }
+        drop(state); // release the redb lock before the MCP surface reopens it
+        let mcp_state = crate::mcp_boot(tmp.path(), vec![])
+            .await
+            .expect("MCP boots the legit compacted image");
+        assert_eq!(
+            crate::blocklace_sync::canonical_ledger_root(&mcp_state.read().await.ledger),
+            root
+        );
+    }
+
+    /// **F59-R1 (must-fail-pre).** Deleting the sole covering checkpoint row of
+    /// a fully compacted store leaves NOTHING that reproduces the finalized
+    /// state — yet `cursor <= floor` read as "fresh" and the node SERVED an
+    /// empty ledger (reviewer probe, Nextest 9444d8c0). Both surfaces must
+    /// refuse.
+    #[tokio::test]
+    async fn compacted_store_missing_checkpoint_row_refuses_boot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        seed_fully_compacted_store(tmp.path());
+        {
+            let db = redb::Database::open(tmp.path().join("dregg.redb")).expect("raw redb");
+            let txn = db.begin_write().expect("txn");
+            {
+                let def = redb::TableDefinition::<u64, &[u8]>::new("ledger_checkpoints");
+                let mut t = txn.open_table(def).expect("ledger_checkpoints");
+                t.remove(6u64).expect("delete the sole checkpoint row");
+            }
+            txn.commit().expect("commit");
+        }
+        assert_boot_refuses_all_surfaces(
+            tmp.path(),
+            "a compacted store whose covering checkpoint row is ABSENT has no finalized \
+             state to serve",
+        )
+        .await;
+    }
+
+    /// **F59-R1 (must-fail-pre).** A covering checkpoint of a DIFFERENT valid
+    /// ledger over committed records must not be served as truth (reviewer
+    /// probe, Nextest 746417ee: MCP served ledger B over committed ledger A).
+    /// Both surfaces must refuse.
+    #[tokio::test]
+    async fn compacted_wrong_checkpoint_refuses_boot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        {
+            let store = PersistentStore::open(&tmp.path().join("dregg.redb")).expect("open store");
+            let mut ledger_a = Ledger::new();
+            let ca = cell(0xc5, 900);
+            ledger_a.insert_cell(ca.clone()).expect("cell A");
+            let rec = dregg_persist::CommitRecord {
+                ordinal: 0,
+                height: 5,
+                block_id: [0u8; 32],
+                block_executed_up_to: 0,
+                turn_hash: [0xa5; 32],
+                creator: [0u8; 32],
+                receipt_hash: [0xb5; 32],
+                ledger_root: crate::blocklace_sync::canonical_ledger_root(&ledger_a),
+                touched_cells: vec![ca],
+            };
+            store.commit_finalized_turn(0, &rec).expect("commit A");
+            // Checkpoint a DIFFERENT valid ledger B above the head.
+            let mut ledger_b = Ledger::new();
+            ledger_b.insert_cell(cell(0xc6, 1)).expect("cell B");
+            store.checkpoint_ledger(&ledger_b, 6).expect("checkpoint B");
+        }
+        assert_boot_refuses_all_surfaces(
+            tmp.path(),
+            "a covering checkpoint that does not reproduce the committed root must \
+             never be served as finalized state",
+        )
+        .await;
+    }
+
+    /// **F59-R1 (must-fail-pre).** An UNDECODABLE covering checkpoint row on a
+    /// fully compacted store must refuse — pre-fix the lenient checkpoint-load
+    /// arm fell back to an empty ledger and the fresh-`None` verdict served it.
+    #[tokio::test]
+    async fn compacted_undecodable_checkpoint_refuses_boot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        seed_fully_compacted_store(tmp.path());
+        {
+            let db = redb::Database::open(tmp.path().join("dregg.redb")).expect("raw redb");
+            let txn = db.begin_write().expect("txn");
+            {
+                let def = redb::TableDefinition::<u64, &[u8]>::new("ledger_checkpoints");
+                let mut t = txn.open_table(def).expect("ledger_checkpoints");
+                t.insert(6u64, [0xff, 0x01, 0x02].as_slice())
+                    .expect("garbage row");
+            }
+            txn.commit().expect("commit");
+        }
+        assert_boot_refuses_all_surfaces(
+            tmp.path(),
+            "an undecodable covering checkpoint row must refuse, not fall back to an \
+             empty ledger",
+        )
+        .await;
     }
 
     // ---- Issuer-well genesis recovery (the genesis_moves ordering fix) ----
