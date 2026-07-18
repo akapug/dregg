@@ -27,6 +27,8 @@ use serenity::all::{
     EditInteractionResponse,
 };
 
+use webauth_core::link_registry::LinkStore;
+
 use crate::BotState;
 use crate::db::IdentityMode;
 use crate::embeds;
@@ -233,6 +235,33 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
                 )
                 .await;
             }
+
+            // CROSS-PLATFORM: record (discord custodial pubkey -> the proven ROOT key K) into the
+            // SHARED link registry. The proven external key IS the root; the bot-derived discord
+            // custodial pubkey is what turns are attributed under and what `resolve_root` maps FROM.
+            // A Telegram/web session that later links to the SAME K resolves to one human.
+            let root_pubkey_hex = public_key_hex.trim().to_lowercase();
+            let custodial = crate::cipherclerk::UserCipherclerk::derive(
+                &state.config.bot_secret,
+                command.user.id.get(),
+                state.federation_id_bytes,
+            );
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let cross_platform_recorded = webauth_core::link_registry::FileLinkStore::new(
+                webauth_core::link_registry::default_store_path(),
+            )
+            .record(&webauth_core::link_registry::LinkRecord {
+                root_pubkey_hex,
+                platform: "discord".to_string(),
+                platform_uid: discord_id.clone(),
+                custodial_pubkey_hex: custodial.public_key_hex().to_string(),
+                verified_at: now_secs,
+            })
+            .is_ok();
+
             let binding = if key_is_address {
                 "the linked address IS this public key"
             } else {
@@ -265,6 +294,18 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
                         "The bot cannot SIGN for an external cell — you hold its key. \
                          `/cap-share`, `/cap-delegate`-as-granter, and custodial turns need a \
                          hosted `/cipherclerk create` identity.",
+                        false,
+                    )
+                    .field(
+                        "One you, everywhere",
+                        if cross_platform_recorded {
+                            "This key is now your **root identity** across platforms. Link the \
+                             same key from Telegram (the Mini App) and you become ONE human — your \
+                             Discord and Telegram play resolve together on boards + leaderboards."
+                        } else {
+                            "_(the cross-platform link registry was unavailable; the local proof \
+                             still holds — retry to record the cross-platform binding.)_"
+                        },
                         false,
                     ),
             )

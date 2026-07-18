@@ -165,6 +165,7 @@ dreggnet-offerings = { path = "../dreggnet-offerings" }
 # event shape + non-blocking JSONL writer all three frontends emit through; `src/audit.rs`
 # is this bot's log resolution + Discord-side redaction helpers over it.
 dreggnet-audit = { path = "../dreggnet-audit" }
+webauth-core = { path = "../webauth-core" }
 # THE OFFERINGS THE GENERIC ADAPTER SERVES (`src/commands/offering.rs`): any
 # `dreggnet_offerings::Offering` becomes a Discord surface — its deos `ViewNode` render is the
 # embed, its cap-gated `Action`s are the buttons/modals, a press is ONE real `advance` attributed

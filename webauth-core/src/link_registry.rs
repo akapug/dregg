@@ -144,6 +144,19 @@ impl FileLinkStore {
     }
 }
 
+/// The shared link-store path EVERY frontend points at: `$DREGG_LINK_DIR/links.tsv`, default
+/// `$HOME/.local/state/dregg/links.tsv`. One file, so a link recorded on Discord resolves on
+/// Telegram and the web (all three dregg processes on one box). Set `DREGG_LINK_DIR` in each
+/// unit to the same directory.
+pub fn default_store_path() -> PathBuf {
+    let dir = std::env::var("DREGG_LINK_DIR").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|h| format!("{h}/.local/state/dregg"))
+            .unwrap_or_else(|_| ".".to_string())
+    });
+    PathBuf::from(dir).join("links.tsv")
+}
+
 impl LinkStore for FileLinkStore {
     fn record(&mut self, rec: &LinkRecord) -> std::io::Result<()> {
         let line = rec.to_line().ok_or_else(|| {

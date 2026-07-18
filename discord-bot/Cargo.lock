@@ -2383,6 +2383,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "ugc-dregg",
+ "webauth-core",
  "zeroize",
 ]
 
@@ -3262,11 +3263,14 @@ dependencies = [
  "dregg-app-framework",
  "dregg-cell",
  "dregg-dice",
+ "dregg-schema",
  "dregg-turn",
  "dregg-types",
  "dregg-zkoracle-prove",
  "dreggnet-asset",
  "procgen-dregg",
+ "serde",
+ "serde_json",
  "spween",
  "spween-dregg",
  "starbridge-v2",
@@ -8681,6 +8685,22 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webauth-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "dregg-agent",
+ "dregg-types",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hex",
+ "postcard",
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

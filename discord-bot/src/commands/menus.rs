@@ -132,10 +132,10 @@ pub fn global_commands() -> Vec<Value> {
         command_json(&commands::dashboard::register()),
         // 2. /descent — today's beacon-seeded daily roguelite world, unchanged.
         command_json(&commands::descent::register()),
-        // 3. /play — the arcade: open any portfolio offering; /market folds in.
+        // 3. /play — the Lab shelf: open any portfolio offering; /market folds in.
         top(
             "play",
-            "The DreggNet arcade — open a game or offering world in this channel",
+            "The Lab — poke an experimental engine offering (the featured game is /descent)",
             vec![
                 menu_sub(),
                 fold(commands::portfolio::register(), Some("open")),
@@ -605,12 +605,24 @@ fn back_row() -> CreateActionRow {
     )])
 }
 
-/// The `/play` arcade: a select of every portfolio offering + the market.
+/// The `/play` lab shelf: a select of every portfolio offering + the market. The Descent leads
+/// (the featured game — its own `/descent` command, NOT in this catalog), and the framing words
+/// are the shared `dreggnet_catalog::{flagship_pointer, lab_intro}`.
 fn play_view() -> (CreateEmbed, Vec<CreateActionRow>) {
-    let embed = embeds::dregg_embed("The Arcade")
-        .description(
-            "Every move in every game is a real, receipted dregg turn. Open a world in this \
-             channel with **/play open** — or pick an offering below to see what it is.",
+    let embed = embeds::dregg_embed("🧪 The Lab")
+        .description(format!(
+            "{lab}\n\nEvery move in every one of them is a real, receipted dregg turn. Open a \
+             world in this channel with **/play open** — or pick an offering below to see what \
+             it is.",
+            lab = dreggnet_catalog::lab_intro(),
+        ))
+        .field(
+            "The featured game",
+            format!(
+                "{flagship} Play it: `/descent play`.",
+                flagship = dreggnet_catalog::flagship_pointer(),
+            ),
+            false,
         )
         .field(
             "Games",
@@ -641,7 +653,7 @@ fn play_view() -> (CreateEmbed, Vec<CreateActionRow>) {
         .collect();
     let select = CreateActionRow::SelectMenu(
         CreateSelectMenu::new(ID_PICK_PLAY, CreateSelectMenuKind::String { options })
-            .placeholder("Browse the offerings…"),
+            .placeholder("Browse the Lab…"),
     );
     (embed, vec![select, back_row()])
 }

@@ -372,7 +372,7 @@ pub fn register() -> CreateCommand {
     }
     CreateCommand::new("play")
         .description(
-            "Open a DreggNet Cloud offering — a game or a feature surface — in this channel",
+            "Open a Lab offering — an experimental engine surface (the featured game is /descent)",
         )
         .add_option(option)
         // `/play <offering> action:verify` — re-verify the channel's live session chain (the

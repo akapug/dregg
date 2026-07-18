@@ -209,9 +209,11 @@ pub(crate) fn help_embed() -> CreateEmbed {
         )
         .field(
             "\u{1f3b2} Worlds",
-            "`/descent` — the daily beacon-seeded permadeath roguelite · `/adventure` — the \
-             AI-narrated party dungeon · `/play` — the arcade (tug, automatafl, the market, \
-             …) · `/gallery` — publish + remix procgen worlds · `/leaderboard` — glory.",
+            "`/descent` — **the featured game**: the daily beacon-seeded permadeath roguelite \
+             with the no-cheat board · `/adventure` — the AI-narrated party dungeon · `/play` \
+             — 🧪 the Lab (tug, automatafl, the market, …: experimental engine surfaces, for \
+             the curious) · `/gallery` — publish + remix procgen worlds · `/leaderboard` — \
+             glory.",
             false,
         )
         .field(
