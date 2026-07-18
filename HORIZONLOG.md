@@ -9603,7 +9603,10 @@ invariant, and chains witness/never author (sovereign 32-byte commitment, offlin
 `modality_price_is_tier`). Full-read audit of the coalgebra corner surfaced two flags:
 - ⚠ `commClo` (`Dregg2/Proof/CoinductiveAdversary.lean:341`) is extensionally the IDENTITY closure — the one
   deployed use of the Paco/gpaco up-to machinery is vacuous as an up-to technique; `Claims.lean:400`
-  over-claims it "closes the coinductive open"; `obsBisim_of_uptoComm` has zero callers. FIX LANE DISPATCHED
-  2026-07-18 (genuine Eqv-parametric closure + non-vacuity witness + Claims fix, or honest deletion).
+  over-claimed it "closes the coinductive open"; `obsBisim_of_uptoComm` had zero callers. FIXED `ad238bea0`:
+  genuine up-to-equivalence closure `commClo E` over a congruent `StateEqv` (non-trivial `commClo_compatible`),
+  strictness PROVEN (§8b toy: `commClo_proper` + `R0_not_postfixpoint` — bare coinduction provably stuck, up-to
+  closes it), Claims.lean re-scoped to actual strength; whole reverse-import closure green (9787 jobs). Residual:
+  instantiate `StateEqv` at `CrossCellBisim.xeq` (import direction blocked the lane; congruence lemmas exist).
 - ⚠ `Boundary.Later` (`Boundary.lean:87`) = identity placeholder for ▷ (labeled in-tree; productivity not
   machine-enforced). Named, not yet worked.
