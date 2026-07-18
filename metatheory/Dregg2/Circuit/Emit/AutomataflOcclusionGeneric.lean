@@ -547,6 +547,155 @@ example :
       (segVal (fun j => if j = 0 then 1 else 0) (fun j => if j = 2 then 1 else 0) 3)
       (fun k => if k = 1 then 1 else 0) (fun k => if k = 1 then 2 else 0) 3) := by decide
 
+/-! ## §6.5 — THE GENERIC BRIDGE, DRIVEN CONTENTFULLY AT `n = 3` on a REAL `Board`.
+
+§6's `decide`s exercise `segVal` / `msumVal` in isolation. This section drives the FULL generic
+bridge theorem — `occ_eq_occluded_vert` / `occ_eq_occluded_horiz`, the one that equates the emitted
+`msum ≥ 1` threshold with the reference `Automatafl.occluded` — at `n = 3`, on concrete 3×3 boards,
+in the three configurations a 2×2 board structurally cannot express (its interior is empty):
+
+  * **fires** — a non-vacuum, non-passable piece STRICTLY BETWEEN src and dst forces BOTH the
+    threshold and the reference `occluded` to `true`;
+  * **clear** — an empty interior forces BOTH to `false`;
+  * **passable** — an interior piece that IS a moving source (`mark_passable`d) forces BOTH to
+    `false`, and it is the `(1 − osrc)` factor — not board smallness — that suppresses it.
+
+Every hypothesis of `occ_eq_occluded_vert/horiz` (the along-axis one-hots, the line-read, the
+passable mask, the range/boolean side-conditions) is discharged for the concrete witnesses; the
+biconditional AND the shared non-trivial truth value are both exhibited, so the correspondence is
+NON-VACUOUS — this is what `occluded_false_n2` could not be. The witnesses are constructed by hand
+(this validates the generic bridge THEOREM, not the off-`Satisfied2` discharge of its hypotheses
+from an emitted descriptor). -/
+
+/-- The `[· = i]` indicator really is `OneHotAt` at `i`, n-generically. -/
+theorem oneHotAt_ite (n i : Nat) (hi : i < n) :
+    OneHotAt (fun j => if j = i then (1 : ℤ) else 0) n i :=
+  ⟨hi, fun _ _ => rfl⟩
+
+/-- `0 ≤ line k ≤ 3` for the `felt = 1 at k = 1, else 0` line shape, `k < 3`. -/
+theorem lineRange_ite1_3 : ∀ k, k < 3 →
+    0 ≤ (if k = 1 then (1 : ℤ) else 0) ∧ (if k = 1 then (1 : ℤ) else 0) ≤ 3 := by
+  intro k _
+  by_cases h : k = 1
+  · rw [if_pos h]; constructor <;> norm_num
+  · rw [if_neg h]; constructor <;> norm_num
+
+/-! ### Vertical instances: a rook move down the shared column `x = 0`, `y : 0 → 2`; interior `⟨0,1⟩`. -/
+
+/-- A vertical rook move on the shared column `x = 0`, from `y = 0` to `y = 2`. Its interior is the
+single cell `⟨0,1⟩` — the cell a 2-line does not have. -/
+def mV3 : Move := ⟨0, ⟨0, 0⟩, ⟨0, 2⟩⟩
+/-- The moving sources at the two endpoints (the interior `⟨0,1⟩` is NOT among them). -/
+def srcsV3 : List Coord := [⟨0, 0⟩, ⟨0, 2⟩]
+/-- The same, plus the interior cell registered as a moving source (`mark_passable`). -/
+def srcsV3pass : List Coord := [⟨0, 0⟩, ⟨0, 1⟩, ⟨0, 2⟩]
+/-- A 3×3 board with a repulsor STRICTLY BETWEEN the endpoints (at `⟨0,1⟩`), vacuum elsewhere. -/
+def bV3blocked : Board where
+  size := 3
+  cells := fun c => if c = ⟨0, 1⟩ then Particle.repulsor else Particle.vacuum
+  automaton := ⟨2, 2⟩
+/-- The same board with a CLEAR interior — every cell vacuum. -/
+def bV3clear : Board where
+  size := 3
+  cells := fun _ => Particle.vacuum
+  automaton := ⟨2, 2⟩
+
+/-- Along-axis source one-hot at index `0`. -/
+def efromV3 : Nat → ℤ := fun j => if j = 0 then 1 else 0
+/-- Along-axis destination one-hot at index `2`. -/
+def etoV3 : Nat → ℤ := fun j => if j = 2 then 1 else 0
+/-- The line down `x = 0` on the blocked board: felt `1` (a piece) at interior `k = 1`, else `0`. -/
+def lineV3blocked : Nat → ℤ := fun k => if k = 1 then 1 else 0
+/-- The line down `x = 0` on the clear board: vacuum everywhere. -/
+def lineV3clear : Nat → ℤ := fun _ => 0
+/-- No interior source ⇒ the passable mask is `0`. -/
+def osrcV3zero : Nat → ℤ := fun _ => 0
+/-- The interior cell IS a moving source ⇒ the passable mask marks `k = 1`. -/
+def osrcV3one : Nat → ℤ := fun k => if k = 1 then 1 else 0
+
+theorem efromV3_oneHot : OneHotAt efromV3 3 0 := oneHotAt_ite 3 0 (by decide)
+theorem etoV3_oneHot : OneHotAt etoV3 3 2 := oneHotAt_ite 3 2 (by decide)
+
+/-- **FIRES.** The interior blocker forces the emitted threshold AND the reference `occluded` to
+`true`, and the generic bridge equates them — at `n = 3`, where a 2-line's empty interior cannot. -/
+theorem occ_bridge_vert_fires_n3 :
+    ((1 ≤ msumVal (segVal efromV3 etoV3 3) osrcV3zero lineV3blocked 3)
+        ↔ occluded bV3blocked srcsV3 mV3 = true)
+      ∧ (1 ≤ msumVal (segVal efromV3 etoV3 3) osrcV3zero lineV3blocked 3)
+      ∧ occluded bV3blocked srcsV3 mV3 = true := by
+  refine ⟨?_, by decide, by decide⟩
+  refine occ_eq_occluded_vert (m := mV3) (b := bV3blocked) (srcs := srcsV3) (n := 3)
+    rfl (by decide) (by decide) efromV3_oneHot etoV3_oneHot
+    (fun k _ => Or.inl rfl) (fun k hk => lineRange_ite1_3 k hk) ?_ ?_
+  · -- LineReadsVert: line k = 0 ↔ cell (0,k) vacuum
+    intro k hk; rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2) with rfl | rfl | rfl <;> decide
+  · -- OsrcIsOtherSourceVert: on the interior (k = 1) the mask is 0 and ⟨0,1⟩ ∉ srcs
+    intro k hk hbet; rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2) with rfl | rfl | rfl <;>
+      first | decide | exact absurd hbet (by decide)
+
+/-- **CLEAR.** An empty interior forces BOTH sides to `false`. -/
+theorem occ_bridge_vert_clear_n3 :
+    ((1 ≤ msumVal (segVal efromV3 etoV3 3) osrcV3zero lineV3clear 3)
+        ↔ occluded bV3clear srcsV3 mV3 = true)
+      ∧ ¬ (1 ≤ msumVal (segVal efromV3 etoV3 3) osrcV3zero lineV3clear 3)
+      ∧ occluded bV3clear srcsV3 mV3 = false := by
+  refine ⟨?_, by decide, by decide⟩
+  refine occ_eq_occluded_vert (m := mV3) (b := bV3clear) (srcs := srcsV3) (n := 3)
+    rfl (by decide) (by decide) efromV3_oneHot etoV3_oneHot
+    (fun k _ => Or.inl rfl) (fun k _ => by simp [lineV3clear]) ?_ ?_
+  · intro k hk; rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2) with rfl | rfl | rfl <;> decide
+  · intro k hk hbet; rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2) with rfl | rfl | rfl <;>
+      first | decide | exact absurd hbet (by decide)
+
+/-- **PASSABLE.** An interior piece that IS a moving source does NOT occlude: the `(1 − osrc)`
+factor kills the term (threshold `false`) and `occluded`'s `¬ srcs.contains` guard drops the cell
+(reference `false`). This is the load-bearing factor made visible at a real interior cell. -/
+theorem occ_bridge_vert_passable_n3 :
+    ((1 ≤ msumVal (segVal efromV3 etoV3 3) osrcV3one lineV3blocked 3)
+        ↔ occluded bV3blocked srcsV3pass mV3 = true)
+      ∧ ¬ (1 ≤ msumVal (segVal efromV3 etoV3 3) osrcV3one lineV3blocked 3)
+      ∧ occluded bV3blocked srcsV3pass mV3 = false := by
+  refine ⟨?_, by decide, by decide⟩
+  refine occ_eq_occluded_vert (m := mV3) (b := bV3blocked) (srcs := srcsV3pass) (n := 3)
+    rfl (by decide) (by decide) efromV3_oneHot etoV3_oneHot
+    ?_ (fun k hk => lineRange_ite1_3 k hk) ?_ ?_
+  · -- osrcV3one is boolean
+    intro k _; by_cases h : k = 1
+    · right; simp [osrcV3one, h]
+    · left; simp [osrcV3one, h]
+  · intro k hk; rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2) with rfl | rfl | rfl <;> decide
+  · -- on the interior (k = 1) the mask is 1 and ⟨0,1⟩ ∈ srcsV3pass
+    intro k hk hbet; rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2) with rfl | rfl | rfl <;>
+      first | decide | exact absurd hbet (by decide)
+
+/-! ### Horizontal instance: a rook move across the shared row `y = 0`, `x : 0 → 2`; interior `⟨1,0⟩`.
+Exercises the OTHER generic bridge theorem (`occ_eq_occluded_horiz`, the row-scan branch). -/
+
+/-- A horizontal rook move on the shared row `y = 0`, from `x = 0` to `x = 2`; interior `⟨1,0⟩`. -/
+def mH3 : Move := ⟨0, ⟨0, 0⟩, ⟨2, 0⟩⟩
+def srcsH3 : List Coord := [⟨0, 0⟩, ⟨2, 0⟩]
+/-- A 3×3 board with an attractor STRICTLY BETWEEN the horizontal endpoints (at `⟨1,0⟩`). -/
+def bH3blocked : Board where
+  size := 3
+  cells := fun c => if c = ⟨1, 0⟩ then Particle.attractor else Particle.vacuum
+  automaton := ⟨2, 2⟩
+
+/-- **FIRES (horizontal).** The interior blocker on the row forces both sides `true`, equated by
+`occ_eq_occluded_horiz` at `n = 3`. -/
+theorem occ_bridge_horiz_fires_n3 :
+    ((1 ≤ msumVal (segVal efromV3 etoV3 3) osrcV3zero lineV3blocked 3)
+        ↔ occluded bH3blocked srcsH3 mH3 = true)
+      ∧ (1 ≤ msumVal (segVal efromV3 etoV3 3) osrcV3zero lineV3blocked 3)
+      ∧ occluded bH3blocked srcsH3 mH3 = true := by
+  refine ⟨?_, by decide, by decide⟩
+  refine occ_eq_occluded_horiz (m := mH3) (b := bH3blocked) (srcs := srcsH3) (n := 3)
+    (by decide) (by decide) (by decide) efromV3_oneHot etoV3_oneHot
+    (fun k _ => Or.inl rfl) (fun k hk => lineRange_ite1_3 k hk) ?_ ?_
+  · -- LineReadsHoriz: line k = 0 ↔ cell (k,0) vacuum
+    intro k hk; rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2) with rfl | rfl | rfl <;> decide
+  · intro k hk hbet; rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2) with rfl | rfl | rfl <;>
+      first | decide | exact absurd hbet (by decide)
+
 /-! ## §7 — Axiom pins. -/
 
 #assert_axioms segVal_eq
@@ -557,5 +706,9 @@ example :
 #assert_axioms occluded_horiz_iff
 #assert_axioms occ_eq_occluded_vert
 #assert_axioms occ_eq_occluded_horiz
+#assert_axioms occ_bridge_vert_fires_n3
+#assert_axioms occ_bridge_vert_clear_n3
+#assert_axioms occ_bridge_vert_passable_n3
+#assert_axioms occ_bridge_horiz_fires_n3
 
 end Dregg2.Circuit.Emit.AutomataflOcclusionGeneric
