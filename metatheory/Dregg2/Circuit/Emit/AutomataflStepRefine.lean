@@ -640,6 +640,837 @@ theorem raycast_xp_of_sat
 
 end RayXP
 
+/-! ## §4.6 — sub-lemma (2), the XN ray (`Dir.xn`, ray block `d = 1`, shifts `−x`).
+
+A mechanical replay of the XP leg (§4.5) with the along-axis direction flipped: the in-window bit at
+`kk = 1` is `selCol 1` (`= AX`, in bounds iff `AX = 1`), the shifted read collapses to cell `(0, Y)`,
+and the reference reduction reads `−x`. Same hit one-hot / occlusion / `cond_nonzero` machinery. -/
+
+/-- The `Board.raycast … .xn` reduction at `n = 2`: from `(X, Y)` the ray reads cell `(0, Y)` when
+`X = 1` (dist 1 on a hit, else dist 2 at the wall) and hits the wall immediately when `X = 0`. -/
+theorem raycast_xn_reduce (b : Board) (hs : b.size = 2) (X Y : Nat) (hX : X < 2) (hY : Y < 2) :
+    Board.raycast b ⟨X, Y⟩ Dir.xn
+      = (if X = 1 then
+           (if (b.cellAt ⟨0, Y⟩).isVacuum then { what := .vacuum, dist := 2 }
+            else { what := b.cellAt ⟨0, Y⟩, dist := 1 })
+         else { what := .vacuum, dist := 1 }) := by
+  have h3 : (b.size + 1) = 3 := by omega
+  have hY1 : (Y : Int) ≤ 1 := by exact_mod_cast Nat.lt_succ_iff.mp hY
+  rcases (by omega : X = 0 ∨ X = 1) with rfl | rfl
+  · rw [if_neg (by norm_num)]
+    simp only [Board.raycast, Dir.delta, h3]
+    rw [raycastFuel, hs]; norm_num
+  · rw [if_pos rfl]
+    simp only [Board.raycast, Dir.delta, h3]
+    rw [raycastFuel, hs]
+    norm_num [hY1]
+    by_cases hv : (b.cellAt ⟨0, Y⟩).isVacuum = true
+    · rw [if_pos hv, if_pos hv, raycastFuel, hs]; norm_num
+    · rw [if_neg hv, if_neg hv]
+
+section RayXN
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- **`raycast_xn_of_sat` — SUB-LEMMA (2) for the XN ray, in full.** The decoded `(rDist 1, rWhat 1)`
+of the XN ray block equals the reference `Board.raycast (boardDecode e) auto .xn`. -/
+theorem raycast_xn_of_sat
+    (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    Board.raycast (boardDecode (envAt t i)) (boardDecode (envAt t i)).automaton Dir.xn
+      = { what := codeToParticle ((envAt t i).loc (rWhat 1)),
+          dist := ((envAt t i).loc (rDist 1)).toNat } := by
+  set e := envAt t i with he
+  -- ============ selector / coordinate facts (shared front-end auto one-hot) ============
+  have bC0 : e.loc (selCol 0) = 0 ∨ e.loc (selCol 0) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (by decide)) (canon_loc hc i _)
+  have bC1 : e.loc (selCol 1) = 0 ∨ e.loc (selCol 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (by decide)) (canon_loc hc i _)
+  have sumC : e.loc (selCol 0) + e.loc (selCol 1) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    have := (gate_modEq_iff (x := e.loc (selCol 0) + e.loc (selCol 1) + -1)
+      (a := e.loc (selCol 0) + e.loc (selCol 1)) (b := 1) (by ring)).mp hg
+    rcases bC0 with h0 | h0 <;> rcases bC1 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have idxC : e.loc AX = e.loc (selCol 1) := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (by ring)).mp hg)).symm
+  have bR0 : e.loc (selRow 0) = 0 ∨ e.loc (selRow 0) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (by decide)) (canon_loc hc i _)
+  have bR1 : e.loc (selRow 1) = 0 ∨ e.loc (selRow 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (by decide)) (canon_loc hc i _)
+  have sumR : e.loc (selRow 0) + e.loc (selRow 1) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    have := (gate_modEq_iff (x := e.loc (selRow 0) + e.loc (selRow 1) + -1)
+      (a := e.loc (selRow 0) + e.loc (selRow 1)) (b := 1) (by ring)).mp hg
+    rcases bR0 with h0 | h0 <;> rcases bR1 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have idxR : e.loc AY = e.loc (selRow 1) := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (by ring)).mp hg)).symm
+  have hc0 : e.loc (selCol 0) = 1 - e.loc AX := by rw [idxC]; omega
+  have hc1 : e.loc (selCol 1) = e.loc AX := idxC.symm
+  have hr0 : e.loc (selRow 0) = 1 - e.loc AY := by rw [idxR]; omega
+  have hr1 : e.loc (selRow 1) = e.loc AY := idxR.symm
+  have hax : e.loc AX = 0 ∨ e.loc AX = 1 := idxC ▸ bC1
+  have hay : e.loc AY = 0 ∨ e.loc AY = 1 := idxR ▸ bR1
+  -- ============ ray-XN gate extractions (d = 1, steps kk ∈ {1,2}) ============
+  have hib1 : e.loc (rIb 1 1) = e.loc (selCol 1) := by
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 1 (-1) 0 1)) (by decide)
+    rw [show (headToExpr (ibEqHead 1 (-1) 0 1)).eval e.loc
+        = e.loc (rIb 1 1) + (-1) * e.loc (selCol 1) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hib2 : e.loc (rIb 1 2) = 0 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 1 (-1) 0 2)) (by decide)
+    rw [show (headToExpr (ibEqHead 1 (-1) 0 2)).eval e.loc = e.loc (rIb 1 2) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
+  have hrc2 : e.loc (rRc 1 2) = 0 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 1 (-1) 0 2)) (by decide)
+    rw [show (headToExpr (rcReadHead 1 (-1) 0 2)).eval e.loc = e.loc (rRc 1 2) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
+  have hb1 : e.loc (rHit 1 1) = 0 ∨ e.loc (rHit 1 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 1)) (by decide)) (canon_loc hc i _)
+  have hb2 : e.loc (rHit 1 2) = 0 ∨ e.loc (rHit 1 2) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 2)) (by decide)) (canon_loc hc i _)
+  have hsum : e.loc (rHit 1 1) + e.loc (rHit 1 2) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 1 kk))
+        (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 1 kk))
+        (Head.c (-1)))).eval e.loc = e.loc (rHit 1 1) + e.loc (rHit 1 2) + (-1) from rfl] at hg
+    have := (gate_modEq_iff (a := e.loc (rHit 1 1) + e.loc (rHit 1 2)) (b := 1) (by ring)).mp hg
+    rcases hb1 with h0 | h0 <;> rcases hb2 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have hDist := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 1 kk))
+      (Head.lin (-1) (rDist 1)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 1 kk))
+      (Head.lin (-1) (rDist 1)))).eval e.loc
+      = (-1) * e.loc (rDist 1) + e.loc (rHit 1 1) + 2 * e.loc (rHit 1 2) from rfl] at hDist
+  have hWhat := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 1 kk, rRc 1 kk])
+      (Head.lin (-1) (rWhat 1)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 1 kk, rRc 1 kk])
+      (Head.lin (-1) (rWhat 1)))).eval e.loc
+      = (-1) * e.loc (rWhat 1) + e.loc (rHit 1 1) * e.loc (rRc 1 1)
+        + e.loc (rHit 1 2) * e.loc (rRc 1 2) from rfl] at hWhat
+  have hHib := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 1 kk, rIb 1 kk])
+      (Head.lin (-1) (rHib 1)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 1 kk, rIb 1 kk])
+      (Head.lin (-1) (rHib 1)))).eval e.loc
+      = (-1) * e.loc (rHib 1) + e.loc (rHit 1 1) * e.loc (rIb 1 1)
+        + e.loc (rHit 1 2) * e.loc (rIb 1 2) from rfl] at hHib
+  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 1 (-1) 0 1)) (by decide)
+  rw [show (headToExpr (rcReadHead 1 (-1) 0 1)).eval e.loc
+      = e.loc (rRc 1 1)
+        + (-1) * (e.loc (rIb 1 1) * e.loc (selRow 0) * e.loc (selCol 1) * e.loc (old 0))
+        + (-1) * (e.loc (rIb 1 1) * e.loc (selRow 1) * e.loc (selCol 1) * e.loc (old 2)) from rfl]
+    at hRC1
+  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 1 2, rRc 1 1])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [rHit 1 2, rRc 1 1])).eval e.loc
+      = e.loc (rHit 1 2) * e.loc (rRc 1 1) from rfl] at hVac
+  have hInb := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addLin 1 (rHit 1 2)).addProd (-1) [rHit 1 2, rIb 1 1])) (by decide)
+  rw [show (headToExpr ((Head.zero.addLin 1 (rHit 1 2)).addProd (-1) [rHit 1 2, rIb 1 1])).eval e.loc
+      = e.loc (rHit 1 2) + (-1) * (e.loc (rHit 1 2) * e.loc (rIb 1 1)) from rfl] at hInb
+  have hCond := astep_gate hsat i hi
+    (g := .mul (.var (rHib 1)) (.add (.mul (.var (rWhat 1)) (.var (rInv 1))) (.const (-1)))) (by decide)
+  simp only [EmittedExpr.eval] at hCond
+  have hMem : e.loc (rWhat 1) = 0 ∨ e.loc (rWhat 1) = 1 ∨ e.loc (rWhat 1) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (by decide))
+      (canon_loc hc i _)
+  -- ============ reduce the reference raycast to the two-step n=2 scan ============
+  have hXlt : (e.loc AX).toNat < 2 := by rcases hax with h | h <;> rw [h] <;> decide
+  have hYlt : (e.loc AY).toNat < 2 := by rcases hay with h | h <;> rw [h] <;> decide
+  rw [show (boardDecode e).automaton = ⟨(e.loc AX).toNat, (e.loc AY).toNat⟩ from rfl,
+     raycast_xn_reduce (boardDecode e) (show (boardDecode e).size = 2 from rfl) _ _ hXlt hYlt]
+  have hone : (e.loc (rHit 1 1) = 1 ∧ e.loc (rHit 1 2) = 0)
+            ∨ (e.loc (rHit 1 1) = 0 ∧ e.loc (rHit 1 2) = 1) := by
+    rcases hb1 with h1 | h1 <;> rcases hb2 with h2 | h2
+    · exfalso; rw [h1, h2] at hsum; norm_num at hsum
+    · right; exact ⟨h1, h2⟩
+    · left; exact ⟨h1, h2⟩
+    · exfalso; rw [h1, h2] at hsum; norm_num at hsum
+  rcases hone with ⟨hh1, hh2⟩ | ⟨hh1, hh2⟩
+  · -- CASE hit = (1,0): dist = 1, what = rc1, hib = ib1.
+    rw [hh1, hh2] at hDist hWhat hHib
+    have hd : e.loc (rDist 1) = 1 :=
+      (eq_of_modEq_canon canon_one (canon_loc hc i _)
+        ((gate_modEq_iff (a := (1 : ℤ)) (b := e.loc (rDist 1)) (by ring)).mp hDist)).symm
+    have hw : e.loc (rWhat 1) = e.loc (rRc 1 1) :=
+      (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+        ((gate_modEq_iff (a := e.loc (rRc 1 1)) (b := e.loc (rWhat 1)) (by ring)).mp hWhat)).symm
+    have hh : e.loc (rHib 1) = e.loc (rIb 1 1) :=
+      (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+        ((gate_modEq_iff (a := e.loc (rIb 1 1)) (b := e.loc (rHib 1)) (by ring)).mp hHib)).symm
+    rcases hax with hAX | hAX
+    · -- X = 0: out of window (selCol 1 = AX = 0) → wall, dist 1 vacuum.
+      have hib1v : e.loc (rIb 1 1) = 0 := by rw [hib1, hc1, hAX]
+      have hrc1 : e.loc (rRc 1 1) = 0 := by
+        rw [hib1v] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) canon_zero
+          ((gate_modEq_iff (a := e.loc (rRc 1 1)) (b := 0) (by ring)).mp hRC1)
+      have hw0 : e.loc (rWhat 1) = 0 := by rw [hw, hrc1]
+      have hX0 : ¬ ((e.loc AX).toNat = 1) := by rw [hAX]; decide
+      rw [if_neg hX0, hw0, hd]
+      rfl
+    · -- X = 1: in window → genuine hit, read cell (0, Y).
+      have hib1v : e.loc (rIb 1 1) = 1 := by rw [hib1, hc1, hAX]
+      have hHib1 : e.loc (rHib 1) = 1 := by rw [hh, hib1v]
+      rw [hHib1] at hCond
+      have hwne : e.loc (rWhat 1) ≠ 0 := by
+        intro h0
+        rw [h0] at hCond
+        have hneg : (1 : ℤ) * (0 * e.loc (rInv 1) + -1) = -1 := by ring
+        rw [hneg] at hCond
+        obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp hCond
+        omega
+      have hw12 : e.loc (rWhat 1) = 1 ∨ e.loc (rWhat 1) = 2 := by
+        rcases hMem with h | h | h
+        · exact absurd h hwne
+        · exact Or.inl h
+        · exact Or.inr h
+      have hX1 : (e.loc AX).toNat = 1 := by rw [hAX]; rfl
+      rcases hay with hAY | hAY
+      · -- Y = 0: cell = old 0.
+        have hrc1 : e.loc (rRc 1 1) = e.loc (old 0) := by
+          rw [hib1v, (show e.loc (selCol 1) = 1 by rw [hc1, hAX]),
+              (show e.loc (selRow 0) = 1 by rw [hr0, hAY]; norm_num),
+              (show e.loc (selRow 1) = 0 by rw [hr1, hAY])] at hRC1
+          exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+            ((gate_modEq_iff (a := e.loc (rRc 1 1)) (b := e.loc (old 0)) (by ring)).mp hRC1)
+        have hcell : (boardDecode e).cellAt ⟨0, (e.loc AY).toNat⟩ = codeToParticle (e.loc (old 0)) := by
+          rw [hAY]; norm_num [boardDecode, Board.cellAt, NN, old]
+        rw [if_pos hX1, hcell, ← hrc1, ← hw,
+            if_neg (show ¬ (codeToParticle (e.loc (rWhat 1))).isVacuum = true from by
+              rcases hw12 with h | h <;> rw [h] <;> decide), hd]
+        rfl
+      · -- Y = 1: cell = old 2.
+        have hrc1 : e.loc (rRc 1 1) = e.loc (old 2) := by
+          rw [hib1v, (show e.loc (selCol 1) = 1 by rw [hc1, hAX]),
+              (show e.loc (selRow 0) = 0 by rw [hr0, hAY]; norm_num),
+              (show e.loc (selRow 1) = 1 by rw [hr1, hAY])] at hRC1
+          exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+            ((gate_modEq_iff (a := e.loc (rRc 1 1)) (b := e.loc (old 2)) (by ring)).mp hRC1)
+        have hcell : (boardDecode e).cellAt ⟨0, (e.loc AY).toNat⟩ = codeToParticle (e.loc (old 2)) := by
+          rw [hAY]; norm_num [boardDecode, Board.cellAt, NN, old]
+        rw [if_pos hX1, hcell, ← hrc1, ← hw,
+            if_neg (show ¬ (codeToParticle (e.loc (rWhat 1))).isVacuum = true from by
+              rcases hw12 with h | h <;> rw [h] <;> decide), hd]
+        rfl
+  · -- CASE hit = (0,1): dist = 2, what = rc2 = 0; forces X = 1 (in window).
+    rw [hh1, hh2] at hDist hWhat
+    rw [hh2] at hVac hInb
+    have hd : e.loc (rDist 1) = 2 :=
+      (eq_of_modEq_canon canon_two (canon_loc hc i _)
+        ((gate_modEq_iff (a := (2 : ℤ)) (b := e.loc (rDist 1)) (by ring)).mp hDist)).symm
+    have hrc1z : e.loc (rRc 1 1) = 0 :=
+      eq_of_modEq_canon (canon_loc hc i _) canon_zero
+        ((gate_modEq_iff (a := e.loc (rRc 1 1)) (b := 0) (by ring)).mp hVac)
+    have hib1v : e.loc (rIb 1 1) = 1 :=
+      (eq_of_modEq_canon canon_one (canon_loc hc i _)
+        ((gate_modEq_iff (a := (1 : ℤ)) (b := e.loc (rIb 1 1)) (by ring)).mp hInb)).symm
+    have hAX : e.loc AX = 1 := by
+      have hsc : e.loc (selCol 1) = 1 := by rw [← hib1, hib1v]
+      rw [hc1] at hsc; exact hsc
+    have hw0 : e.loc (rWhat 1) = 0 := by
+      have := hWhat
+      rw [hrc2] at this
+      exact (eq_of_modEq_canon canon_zero (canon_loc hc i _)
+        ((gate_modEq_iff (a := (0 : ℤ)) (b := e.loc (rWhat 1)) (by ring)).mp this)).symm
+    have hX1 : (e.loc AX).toNat = 1 := by rw [hAX]; rfl
+    rcases hay with hAY | hAY
+    · -- Y = 0: cell = old 0 = rc1 = 0 → vacuum.
+      have hrc1 : e.loc (rRc 1 1) = e.loc (old 0) := by
+        rw [hib1v, (show e.loc (selCol 1) = 1 by rw [hc1, hAX]),
+            (show e.loc (selRow 0) = 1 by rw [hr0, hAY]; norm_num),
+            (show e.loc (selRow 1) = 0 by rw [hr1, hAY])] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+          ((gate_modEq_iff (a := e.loc (rRc 1 1)) (b := e.loc (old 0)) (by ring)).mp hRC1)
+      have hcell : (boardDecode e).cellAt ⟨0, (e.loc AY).toNat⟩ = codeToParticle (e.loc (old 0)) := by
+        rw [hAY]; norm_num [boardDecode, Board.cellAt, NN, old]
+      rw [if_pos hX1, hcell, ← hrc1, hrc1z,
+          if_pos (show (codeToParticle (0 : ℤ)).isVacuum = true from rfl), hw0, hd]
+      rfl
+    · -- Y = 1: cell = old 2 = rc1 = 0 → vacuum.
+      have hrc1 : e.loc (rRc 1 1) = e.loc (old 2) := by
+        rw [hib1v, (show e.loc (selCol 1) = 1 by rw [hc1, hAX]),
+            (show e.loc (selRow 0) = 0 by rw [hr0, hAY]; norm_num),
+            (show e.loc (selRow 1) = 1 by rw [hr1, hAY])] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+          ((gate_modEq_iff (a := e.loc (rRc 1 1)) (b := e.loc (old 2)) (by ring)).mp hRC1)
+      have hcell : (boardDecode e).cellAt ⟨0, (e.loc AY).toNat⟩ = codeToParticle (e.loc (old 2)) := by
+        rw [hAY]; norm_num [boardDecode, Board.cellAt, NN, old]
+      rw [if_pos hX1, hcell, ← hrc1, hrc1z,
+          if_pos (show (codeToParticle (0 : ℤ)).isVacuum = true from rfl), hw0, hd]
+      rfl
+
+end RayXN
+
+/-! ## §4.7 — sub-lemma (2), the YP ray (`Dir.yp`, ray block `d = 2`, scans ROWS via `selRow +y`).
+
+The row analogue of the XP leg: the in-window bit at `kk = 1` is `selRow 0` (`= 1 − AY`, in bounds iff
+`AY = 0`), the shifted read collapses to cell `(X, 1)` (column chosen by `selCol`), the reference
+reduction reads `+y`. -/
+
+/-- The `Board.raycast … .yp` reduction at `n = 2`: from `(X, Y)` the ray reads cell `(X, 1)` when
+`Y = 0` (dist 1 on a hit, else dist 2 at the wall) and hits the wall immediately when `Y = 1`. -/
+theorem raycast_yp_reduce (b : Board) (hs : b.size = 2) (X Y : Nat) (hX : X < 2) (hY : Y < 2) :
+    Board.raycast b ⟨X, Y⟩ Dir.yp
+      = (if Y = 0 then
+           (if (b.cellAt ⟨X, 1⟩).isVacuum then { what := .vacuum, dist := 2 }
+            else { what := b.cellAt ⟨X, 1⟩, dist := 1 })
+         else { what := .vacuum, dist := 1 }) := by
+  have h3 : (b.size + 1) = 3 := by omega
+  have hX1 : (X : Int) ≤ 1 := by exact_mod_cast Nat.lt_succ_iff.mp hX
+  rcases (by omega : Y = 0 ∨ Y = 1) with rfl | rfl
+  · rw [if_pos rfl]
+    simp only [Board.raycast, Dir.delta, h3]
+    rw [raycastFuel, hs]
+    norm_num [hX1]
+    by_cases hv : (b.cellAt ⟨X, 1⟩).isVacuum = true
+    · rw [if_pos hv, if_pos hv, raycastFuel, hs]; norm_num
+    · rw [if_neg hv, if_neg hv]
+  · rw [if_neg (by norm_num)]
+    simp only [Board.raycast, Dir.delta, h3]
+    rw [raycastFuel, hs]; norm_num
+
+section RayYP
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- **`raycast_yp_of_sat` — SUB-LEMMA (2) for the YP ray, in full.** The decoded `(rDist 2, rWhat 2)`
+of the YP ray block equals the reference `Board.raycast (boardDecode e) auto .yp`. -/
+theorem raycast_yp_of_sat
+    (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    Board.raycast (boardDecode (envAt t i)) (boardDecode (envAt t i)).automaton Dir.yp
+      = { what := codeToParticle ((envAt t i).loc (rWhat 2)),
+          dist := ((envAt t i).loc (rDist 2)).toNat } := by
+  set e := envAt t i with he
+  -- ============ selector / coordinate facts (shared front-end auto one-hot) ============
+  have bC0 : e.loc (selCol 0) = 0 ∨ e.loc (selCol 0) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (by decide)) (canon_loc hc i _)
+  have bC1 : e.loc (selCol 1) = 0 ∨ e.loc (selCol 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (by decide)) (canon_loc hc i _)
+  have sumC : e.loc (selCol 0) + e.loc (selCol 1) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    have := (gate_modEq_iff (x := e.loc (selCol 0) + e.loc (selCol 1) + -1)
+      (a := e.loc (selCol 0) + e.loc (selCol 1)) (b := 1) (by ring)).mp hg
+    rcases bC0 with h0 | h0 <;> rcases bC1 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have idxC : e.loc AX = e.loc (selCol 1) := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (by ring)).mp hg)).symm
+  have bR0 : e.loc (selRow 0) = 0 ∨ e.loc (selRow 0) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (by decide)) (canon_loc hc i _)
+  have bR1 : e.loc (selRow 1) = 0 ∨ e.loc (selRow 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (by decide)) (canon_loc hc i _)
+  have sumR : e.loc (selRow 0) + e.loc (selRow 1) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    have := (gate_modEq_iff (x := e.loc (selRow 0) + e.loc (selRow 1) + -1)
+      (a := e.loc (selRow 0) + e.loc (selRow 1)) (b := 1) (by ring)).mp hg
+    rcases bR0 with h0 | h0 <;> rcases bR1 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have idxR : e.loc AY = e.loc (selRow 1) := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (by ring)).mp hg)).symm
+  have hc0 : e.loc (selCol 0) = 1 - e.loc AX := by rw [idxC]; omega
+  have hc1 : e.loc (selCol 1) = e.loc AX := idxC.symm
+  have hr0 : e.loc (selRow 0) = 1 - e.loc AY := by rw [idxR]; omega
+  have hr1 : e.loc (selRow 1) = e.loc AY := idxR.symm
+  have hax : e.loc AX = 0 ∨ e.loc AX = 1 := idxC ▸ bC1
+  have hay : e.loc AY = 0 ∨ e.loc AY = 1 := idxR ▸ bR1
+  -- ============ ray-YP gate extractions (d = 2, steps kk ∈ {1,2}) ============
+  have hib1 : e.loc (rIb 2 1) = e.loc (selRow 0) := by
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 2 0 1 1)) (by decide)
+    rw [show (headToExpr (ibEqHead 2 0 1 1)).eval e.loc
+        = e.loc (rIb 2 1) + (-1) * e.loc (selRow 0) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hib2 : e.loc (rIb 2 2) = 0 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 2 0 1 2)) (by decide)
+    rw [show (headToExpr (ibEqHead 2 0 1 2)).eval e.loc = e.loc (rIb 2 2) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
+  have hrc2 : e.loc (rRc 2 2) = 0 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 2 0 1 2)) (by decide)
+    rw [show (headToExpr (rcReadHead 2 0 1 2)).eval e.loc = e.loc (rRc 2 2) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
+  have hb1 : e.loc (rHit 2 1) = 0 ∨ e.loc (rHit 2 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 1)) (by decide)) (canon_loc hc i _)
+  have hb2 : e.loc (rHit 2 2) = 0 ∨ e.loc (rHit 2 2) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 2)) (by decide)) (canon_loc hc i _)
+  have hsum : e.loc (rHit 2 1) + e.loc (rHit 2 2) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 2 kk))
+        (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 2 kk))
+        (Head.c (-1)))).eval e.loc = e.loc (rHit 2 1) + e.loc (rHit 2 2) + (-1) from rfl] at hg
+    have := (gate_modEq_iff (a := e.loc (rHit 2 1) + e.loc (rHit 2 2)) (b := 1) (by ring)).mp hg
+    rcases hb1 with h0 | h0 <;> rcases hb2 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have hDist := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 2 kk))
+      (Head.lin (-1) (rDist 2)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 2 kk))
+      (Head.lin (-1) (rDist 2)))).eval e.loc
+      = (-1) * e.loc (rDist 2) + e.loc (rHit 2 1) + 2 * e.loc (rHit 2 2) from rfl] at hDist
+  have hWhat := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 2 kk, rRc 2 kk])
+      (Head.lin (-1) (rWhat 2)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 2 kk, rRc 2 kk])
+      (Head.lin (-1) (rWhat 2)))).eval e.loc
+      = (-1) * e.loc (rWhat 2) + e.loc (rHit 2 1) * e.loc (rRc 2 1)
+        + e.loc (rHit 2 2) * e.loc (rRc 2 2) from rfl] at hWhat
+  have hHib := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 2 kk, rIb 2 kk])
+      (Head.lin (-1) (rHib 2)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 2 kk, rIb 2 kk])
+      (Head.lin (-1) (rHib 2)))).eval e.loc
+      = (-1) * e.loc (rHib 2) + e.loc (rHit 2 1) * e.loc (rIb 2 1)
+        + e.loc (rHit 2 2) * e.loc (rIb 2 2) from rfl] at hHib
+  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 2 0 1 1)) (by decide)
+  rw [show (headToExpr (rcReadHead 2 0 1 1)).eval e.loc
+      = e.loc (rRc 2 1)
+        + (-1) * (e.loc (rIb 2 1) * e.loc (selRow 0) * e.loc (selCol 0) * e.loc (old 2))
+        + (-1) * (e.loc (rIb 2 1) * e.loc (selRow 0) * e.loc (selCol 1) * e.loc (old 3)) from rfl]
+    at hRC1
+  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 2 2, rRc 2 1])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [rHit 2 2, rRc 2 1])).eval e.loc
+      = e.loc (rHit 2 2) * e.loc (rRc 2 1) from rfl] at hVac
+  have hInb := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addLin 1 (rHit 2 2)).addProd (-1) [rHit 2 2, rIb 2 1])) (by decide)
+  rw [show (headToExpr ((Head.zero.addLin 1 (rHit 2 2)).addProd (-1) [rHit 2 2, rIb 2 1])).eval e.loc
+      = e.loc (rHit 2 2) + (-1) * (e.loc (rHit 2 2) * e.loc (rIb 2 1)) from rfl] at hInb
+  have hCond := astep_gate hsat i hi
+    (g := .mul (.var (rHib 2)) (.add (.mul (.var (rWhat 2)) (.var (rInv 2))) (.const (-1)))) (by decide)
+  simp only [EmittedExpr.eval] at hCond
+  have hMem : e.loc (rWhat 2) = 0 ∨ e.loc (rWhat 2) = 1 ∨ e.loc (rWhat 2) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (by decide))
+      (canon_loc hc i _)
+  -- ============ reduce the reference raycast to the two-step n=2 scan ============
+  have hXlt : (e.loc AX).toNat < 2 := by rcases hax with h | h <;> rw [h] <;> decide
+  have hYlt : (e.loc AY).toNat < 2 := by rcases hay with h | h <;> rw [h] <;> decide
+  rw [show (boardDecode e).automaton = ⟨(e.loc AX).toNat, (e.loc AY).toNat⟩ from rfl,
+     raycast_yp_reduce (boardDecode e) (show (boardDecode e).size = 2 from rfl) _ _ hXlt hYlt]
+  have hone : (e.loc (rHit 2 1) = 1 ∧ e.loc (rHit 2 2) = 0)
+            ∨ (e.loc (rHit 2 1) = 0 ∧ e.loc (rHit 2 2) = 1) := by
+    rcases hb1 with h1 | h1 <;> rcases hb2 with h2 | h2
+    · exfalso; rw [h1, h2] at hsum; norm_num at hsum
+    · right; exact ⟨h1, h2⟩
+    · left; exact ⟨h1, h2⟩
+    · exfalso; rw [h1, h2] at hsum; norm_num at hsum
+  rcases hone with ⟨hh1, hh2⟩ | ⟨hh1, hh2⟩
+  · -- CASE hit = (1,0): dist = 1, what = rc1, hib = ib1.
+    rw [hh1, hh2] at hDist hWhat hHib
+    have hd : e.loc (rDist 2) = 1 :=
+      (eq_of_modEq_canon canon_one (canon_loc hc i _)
+        ((gate_modEq_iff (a := (1 : ℤ)) (b := e.loc (rDist 2)) (by ring)).mp hDist)).symm
+    have hw : e.loc (rWhat 2) = e.loc (rRc 2 1) :=
+      (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+        ((gate_modEq_iff (a := e.loc (rRc 2 1)) (b := e.loc (rWhat 2)) (by ring)).mp hWhat)).symm
+    have hh : e.loc (rHib 2) = e.loc (rIb 2 1) :=
+      (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+        ((gate_modEq_iff (a := e.loc (rIb 2 1)) (b := e.loc (rHib 2)) (by ring)).mp hHib)).symm
+    rcases hay with hAY | hAY
+    · -- Y = 0: in window (selRow 0 = 1 − AY = 1) → genuine hit, read cell (X, 1).
+      have hib1v : e.loc (rIb 2 1) = 1 := by rw [hib1, hr0, hAY]; norm_num
+      have hHib1 : e.loc (rHib 2) = 1 := by rw [hh, hib1v]
+      rw [hHib1] at hCond
+      have hwne : e.loc (rWhat 2) ≠ 0 := by
+        intro h0
+        rw [h0] at hCond
+        have hneg : (1 : ℤ) * (0 * e.loc (rInv 2) + -1) = -1 := by ring
+        rw [hneg] at hCond
+        obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp hCond
+        omega
+      have hw12 : e.loc (rWhat 2) = 1 ∨ e.loc (rWhat 2) = 2 := by
+        rcases hMem with h | h | h
+        · exact absurd h hwne
+        · exact Or.inl h
+        · exact Or.inr h
+      have hY0 : (e.loc AY).toNat = 0 := by rw [hAY]; rfl
+      rcases hax with hAX | hAX
+      · -- X = 0: cell = old 2.
+        have hrc1 : e.loc (rRc 2 1) = e.loc (old 2) := by
+          rw [hib1v, (show e.loc (selRow 0) = 1 by rw [hr0, hAY]; norm_num),
+              (show e.loc (selCol 0) = 1 by rw [hc0, hAX]; norm_num),
+              (show e.loc (selCol 1) = 0 by rw [hc1, hAX])] at hRC1
+          exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+            ((gate_modEq_iff (a := e.loc (rRc 2 1)) (b := e.loc (old 2)) (by ring)).mp hRC1)
+        have hcell : (boardDecode e).cellAt ⟨(e.loc AX).toNat, 1⟩ = codeToParticle (e.loc (old 2)) := by
+          rw [hAX]; norm_num [boardDecode, Board.cellAt, NN, old]
+        rw [if_pos hY0, hcell, ← hrc1, ← hw,
+            if_neg (show ¬ (codeToParticle (e.loc (rWhat 2))).isVacuum = true from by
+              rcases hw12 with h | h <;> rw [h] <;> decide), hd]
+        rfl
+      · -- X = 1: cell = old 3.
+        have hrc1 : e.loc (rRc 2 1) = e.loc (old 3) := by
+          rw [hib1v, (show e.loc (selRow 0) = 1 by rw [hr0, hAY]; norm_num),
+              (show e.loc (selCol 0) = 0 by rw [hc0, hAX]; norm_num),
+              (show e.loc (selCol 1) = 1 by rw [hc1, hAX])] at hRC1
+          exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+            ((gate_modEq_iff (a := e.loc (rRc 2 1)) (b := e.loc (old 3)) (by ring)).mp hRC1)
+        have hcell : (boardDecode e).cellAt ⟨(e.loc AX).toNat, 1⟩ = codeToParticle (e.loc (old 3)) := by
+          rw [hAX]; norm_num [boardDecode, Board.cellAt, NN, old]
+        rw [if_pos hY0, hcell, ← hrc1, ← hw,
+            if_neg (show ¬ (codeToParticle (e.loc (rWhat 2))).isVacuum = true from by
+              rcases hw12 with h | h <;> rw [h] <;> decide), hd]
+        rfl
+    · -- Y = 1: out of window (selRow 0 = 0) → wall, dist 1 vacuum.
+      have hib1v : e.loc (rIb 2 1) = 0 := by rw [hib1, hr0, hAY]; norm_num
+      have hrc1 : e.loc (rRc 2 1) = 0 := by
+        rw [hib1v] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) canon_zero
+          ((gate_modEq_iff (a := e.loc (rRc 2 1)) (b := 0) (by ring)).mp hRC1)
+      have hw0 : e.loc (rWhat 2) = 0 := by rw [hw, hrc1]
+      have hY1 : ¬ ((e.loc AY).toNat = 0) := by rw [hAY]; decide
+      rw [if_neg hY1, hw0, hd]
+      rfl
+  · -- CASE hit = (0,1): dist = 2, what = rc2 = 0; forces Y = 0 (in window).
+    rw [hh1, hh2] at hDist hWhat
+    rw [hh2] at hVac hInb
+    have hd : e.loc (rDist 2) = 2 :=
+      (eq_of_modEq_canon canon_two (canon_loc hc i _)
+        ((gate_modEq_iff (a := (2 : ℤ)) (b := e.loc (rDist 2)) (by ring)).mp hDist)).symm
+    have hrc1z : e.loc (rRc 2 1) = 0 :=
+      eq_of_modEq_canon (canon_loc hc i _) canon_zero
+        ((gate_modEq_iff (a := e.loc (rRc 2 1)) (b := 0) (by ring)).mp hVac)
+    have hib1v : e.loc (rIb 2 1) = 1 :=
+      (eq_of_modEq_canon canon_one (canon_loc hc i _)
+        ((gate_modEq_iff (a := (1 : ℤ)) (b := e.loc (rIb 2 1)) (by ring)).mp hInb)).symm
+    have hAY : e.loc AY = 0 := by
+      have hsr : e.loc (selRow 0) = 1 := by rw [← hib1, hib1v]
+      rw [hr0] at hsr; omega
+    have hw0 : e.loc (rWhat 2) = 0 := by
+      have := hWhat
+      rw [hrc2] at this
+      exact (eq_of_modEq_canon canon_zero (canon_loc hc i _)
+        ((gate_modEq_iff (a := (0 : ℤ)) (b := e.loc (rWhat 2)) (by ring)).mp this)).symm
+    have hY0 : (e.loc AY).toNat = 0 := by rw [hAY]; rfl
+    rcases hax with hAX | hAX
+    · -- X = 0: cell = old 2 = rc1 = 0 → vacuum.
+      have hrc1 : e.loc (rRc 2 1) = e.loc (old 2) := by
+        rw [hib1v, (show e.loc (selRow 0) = 1 by rw [hr0, hAY]; norm_num),
+            (show e.loc (selCol 0) = 1 by rw [hc0, hAX]; norm_num),
+            (show e.loc (selCol 1) = 0 by rw [hc1, hAX])] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+          ((gate_modEq_iff (a := e.loc (rRc 2 1)) (b := e.loc (old 2)) (by ring)).mp hRC1)
+      have hcell : (boardDecode e).cellAt ⟨(e.loc AX).toNat, 1⟩ = codeToParticle (e.loc (old 2)) := by
+        rw [hAX]; norm_num [boardDecode, Board.cellAt, NN, old]
+      rw [if_pos hY0, hcell, ← hrc1, hrc1z,
+          if_pos (show (codeToParticle (0 : ℤ)).isVacuum = true from rfl), hw0, hd]
+      rfl
+    · -- X = 1: cell = old 3 = rc1 = 0 → vacuum.
+      have hrc1 : e.loc (rRc 2 1) = e.loc (old 3) := by
+        rw [hib1v, (show e.loc (selRow 0) = 1 by rw [hr0, hAY]; norm_num),
+            (show e.loc (selCol 0) = 0 by rw [hc0, hAX]; norm_num),
+            (show e.loc (selCol 1) = 1 by rw [hc1, hAX])] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+          ((gate_modEq_iff (a := e.loc (rRc 2 1)) (b := e.loc (old 3)) (by ring)).mp hRC1)
+      have hcell : (boardDecode e).cellAt ⟨(e.loc AX).toNat, 1⟩ = codeToParticle (e.loc (old 3)) := by
+        rw [hAX]; norm_num [boardDecode, Board.cellAt, NN, old]
+      rw [if_pos hY0, hcell, ← hrc1, hrc1z,
+          if_pos (show (codeToParticle (0 : ℤ)).isVacuum = true from rfl), hw0, hd]
+      rfl
+
+end RayYP
+
+/-! ## §4.8 — sub-lemma (2), the YN ray (`Dir.yn`, ray block `d = 3`, rows `−y` via `selRow`).
+
+The row analogue of the XN leg: the in-window bit at `kk = 1` is `selRow 1` (`= AY`, in bounds iff
+`AY = 1`), the shifted read collapses to cell `(X, 0)` (column chosen by `selCol`), the reference
+reduction reads `−y`. -/
+
+/-- The `Board.raycast … .yn` reduction at `n = 2`: from `(X, Y)` the ray reads cell `(X, 0)` when
+`Y = 1` (dist 1 on a hit, else dist 2 at the wall) and hits the wall immediately when `Y = 0`. -/
+theorem raycast_yn_reduce (b : Board) (hs : b.size = 2) (X Y : Nat) (hX : X < 2) (hY : Y < 2) :
+    Board.raycast b ⟨X, Y⟩ Dir.yn
+      = (if Y = 1 then
+           (if (b.cellAt ⟨X, 0⟩).isVacuum then { what := .vacuum, dist := 2 }
+            else { what := b.cellAt ⟨X, 0⟩, dist := 1 })
+         else { what := .vacuum, dist := 1 }) := by
+  have h3 : (b.size + 1) = 3 := by omega
+  have hX1 : (X : Int) ≤ 1 := by exact_mod_cast Nat.lt_succ_iff.mp hX
+  rcases (by omega : Y = 0 ∨ Y = 1) with rfl | rfl
+  · rw [if_neg (by norm_num)]
+    simp only [Board.raycast, Dir.delta, h3]
+    rw [raycastFuel, hs]; norm_num
+  · rw [if_pos rfl]
+    simp only [Board.raycast, Dir.delta, h3]
+    rw [raycastFuel, hs]
+    norm_num [hX1]
+    by_cases hv : (b.cellAt ⟨X, 0⟩).isVacuum = true
+    · rw [if_pos hv, if_pos hv, raycastFuel, hs]; norm_num
+    · rw [if_neg hv, if_neg hv]
+
+section RayYN
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- **`raycast_yn_of_sat` — SUB-LEMMA (2) for the YN ray, in full.** The decoded `(rDist 3, rWhat 3)`
+of the YN ray block equals the reference `Board.raycast (boardDecode e) auto .yn`. -/
+theorem raycast_yn_of_sat
+    (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    Board.raycast (boardDecode (envAt t i)) (boardDecode (envAt t i)).automaton Dir.yn
+      = { what := codeToParticle ((envAt t i).loc (rWhat 3)),
+          dist := ((envAt t i).loc (rDist 3)).toNat } := by
+  set e := envAt t i with he
+  -- ============ selector / coordinate facts (shared front-end auto one-hot) ============
+  have bC0 : e.loc (selCol 0) = 0 ∨ e.loc (selCol 0) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (by decide)) (canon_loc hc i _)
+  have bC1 : e.loc (selCol 1) = 0 ∨ e.loc (selCol 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (by decide)) (canon_loc hc i _)
+  have sumC : e.loc (selCol 0) + e.loc (selCol 1) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    have := (gate_modEq_iff (x := e.loc (selCol 0) + e.loc (selCol 1) + -1)
+      (a := e.loc (selCol 0) + e.loc (selCol 1)) (b := 1) (by ring)).mp hg
+    rcases bC0 with h0 | h0 <;> rcases bC1 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have idxC : e.loc AX = e.loc (selCol 1) := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (by ring)).mp hg)).symm
+  have bR0 : e.loc (selRow 0) = 0 ∨ e.loc (selRow 0) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (by decide)) (canon_loc hc i _)
+  have bR1 : e.loc (selRow 1) = 0 ∨ e.loc (selRow 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (by decide)) (canon_loc hc i _)
+  have sumR : e.loc (selRow 0) + e.loc (selRow 1) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    have := (gate_modEq_iff (x := e.loc (selRow 0) + e.loc (selRow 1) + -1)
+      (a := e.loc (selRow 0) + e.loc (selRow 1)) (b := 1) (by ring)).mp hg
+    rcases bR0 with h0 | h0 <;> rcases bR1 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have idxR : e.loc AY = e.loc (selRow 1) := by
+    have hg := astep_gate hsat i hi
+      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (by decide)
+    simp only [EmittedExpr.eval] at hg
+    exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+      ((gate_modEq_iff (by ring)).mp hg)).symm
+  have hc0 : e.loc (selCol 0) = 1 - e.loc AX := by rw [idxC]; omega
+  have hc1 : e.loc (selCol 1) = e.loc AX := idxC.symm
+  have hr0 : e.loc (selRow 0) = 1 - e.loc AY := by rw [idxR]; omega
+  have hr1 : e.loc (selRow 1) = e.loc AY := idxR.symm
+  have hax : e.loc AX = 0 ∨ e.loc AX = 1 := idxC ▸ bC1
+  have hay : e.loc AY = 0 ∨ e.loc AY = 1 := idxR ▸ bR1
+  -- ============ ray-YN gate extractions (d = 3, steps kk ∈ {1,2}) ============
+  have hib1 : e.loc (rIb 3 1) = e.loc (selRow 1) := by
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 3 0 (-1) 1)) (by decide)
+    rw [show (headToExpr (ibEqHead 3 0 (-1) 1)).eval e.loc
+        = e.loc (rIb 3 1) + (-1) * e.loc (selRow 1) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hib2 : e.loc (rIb 3 2) = 0 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 3 0 (-1) 2)) (by decide)
+    rw [show (headToExpr (ibEqHead 3 0 (-1) 2)).eval e.loc = e.loc (rIb 3 2) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
+  have hrc2 : e.loc (rRc 3 2) = 0 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 3 0 (-1) 2)) (by decide)
+    rw [show (headToExpr (rcReadHead 3 0 (-1) 2)).eval e.loc = e.loc (rRc 3 2) from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
+  have hb1 : e.loc (rHit 3 1) = 0 ∨ e.loc (rHit 3 1) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 1)) (by decide)) (canon_loc hc i _)
+  have hb2 : e.loc (rHit 3 2) = 0 ∨ e.loc (rHit 3 2) = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 2)) (by decide)) (canon_loc hc i _)
+  have hsum : e.loc (rHit 3 1) + e.loc (rHit 3 2) = 1 := by
+    have hg := astep_gate hsat i hi
+      (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 3 kk))
+        (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 3 kk))
+        (Head.c (-1)))).eval e.loc = e.loc (rHit 3 1) + e.loc (rHit 3 2) + (-1) from rfl] at hg
+    have := (gate_modEq_iff (a := e.loc (rHit 3 1) + e.loc (rHit 3 2)) (b := 1) (by ring)).mp hg
+    rcases hb1 with h0 | h0 <;> rcases hb2 with h1 | h1 <;>
+      exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
+  have hDist := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 3 kk))
+      (Head.lin (-1) (rDist 3)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 3 kk))
+      (Head.lin (-1) (rDist 3)))).eval e.loc
+      = (-1) * e.loc (rDist 3) + e.loc (rHit 3 1) + 2 * e.loc (rHit 3 2) from rfl] at hDist
+  have hWhat := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 3 kk, rRc 3 kk])
+      (Head.lin (-1) (rWhat 3)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 3 kk, rRc 3 kk])
+      (Head.lin (-1) (rWhat 3)))).eval e.loc
+      = (-1) * e.loc (rWhat 3) + e.loc (rHit 3 1) * e.loc (rRc 3 1)
+        + e.loc (rHit 3 2) * e.loc (rRc 3 2) from rfl] at hWhat
+  have hHib := astep_gate hsat i hi
+    (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 3 kk, rIb 3 kk])
+      (Head.lin (-1) (rHib 3)))) (by decide)
+  rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 3 kk, rIb 3 kk])
+      (Head.lin (-1) (rHib 3)))).eval e.loc
+      = (-1) * e.loc (rHib 3) + e.loc (rHit 3 1) * e.loc (rIb 3 1)
+        + e.loc (rHit 3 2) * e.loc (rIb 3 2) from rfl] at hHib
+  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 3 0 (-1) 1)) (by decide)
+  rw [show (headToExpr (rcReadHead 3 0 (-1) 1)).eval e.loc
+      = e.loc (rRc 3 1)
+        + (-1) * (e.loc (rIb 3 1) * e.loc (selRow 1) * e.loc (selCol 0) * e.loc (old 0))
+        + (-1) * (e.loc (rIb 3 1) * e.loc (selRow 1) * e.loc (selCol 1) * e.loc (old 1)) from rfl]
+    at hRC1
+  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 3 2, rRc 3 1])) (by decide)
+  rw [show (headToExpr (Head.zero.addProd 1 [rHit 3 2, rRc 3 1])).eval e.loc
+      = e.loc (rHit 3 2) * e.loc (rRc 3 1) from rfl] at hVac
+  have hInb := astep_gate hsat i hi
+    (g := headToExpr ((Head.zero.addLin 1 (rHit 3 2)).addProd (-1) [rHit 3 2, rIb 3 1])) (by decide)
+  rw [show (headToExpr ((Head.zero.addLin 1 (rHit 3 2)).addProd (-1) [rHit 3 2, rIb 3 1])).eval e.loc
+      = e.loc (rHit 3 2) + (-1) * (e.loc (rHit 3 2) * e.loc (rIb 3 1)) from rfl] at hInb
+  have hCond := astep_gate hsat i hi
+    (g := .mul (.var (rHib 3)) (.add (.mul (.var (rWhat 3)) (.var (rInv 3))) (.const (-1)))) (by decide)
+  simp only [EmittedExpr.eval] at hCond
+  have hMem : e.loc (rWhat 3) = 0 ∨ e.loc (rWhat 3) = 1 ∨ e.loc (rWhat 3) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (by decide))
+      (canon_loc hc i _)
+  -- ============ reduce the reference raycast to the two-step n=2 scan ============
+  have hXlt : (e.loc AX).toNat < 2 := by rcases hax with h | h <;> rw [h] <;> decide
+  have hYlt : (e.loc AY).toNat < 2 := by rcases hay with h | h <;> rw [h] <;> decide
+  rw [show (boardDecode e).automaton = ⟨(e.loc AX).toNat, (e.loc AY).toNat⟩ from rfl,
+     raycast_yn_reduce (boardDecode e) (show (boardDecode e).size = 2 from rfl) _ _ hXlt hYlt]
+  have hone : (e.loc (rHit 3 1) = 1 ∧ e.loc (rHit 3 2) = 0)
+            ∨ (e.loc (rHit 3 1) = 0 ∧ e.loc (rHit 3 2) = 1) := by
+    rcases hb1 with h1 | h1 <;> rcases hb2 with h2 | h2
+    · exfalso; rw [h1, h2] at hsum; norm_num at hsum
+    · right; exact ⟨h1, h2⟩
+    · left; exact ⟨h1, h2⟩
+    · exfalso; rw [h1, h2] at hsum; norm_num at hsum
+  rcases hone with ⟨hh1, hh2⟩ | ⟨hh1, hh2⟩
+  · -- CASE hit = (1,0): dist = 1, what = rc1, hib = ib1.
+    rw [hh1, hh2] at hDist hWhat hHib
+    have hd : e.loc (rDist 3) = 1 :=
+      (eq_of_modEq_canon canon_one (canon_loc hc i _)
+        ((gate_modEq_iff (a := (1 : ℤ)) (b := e.loc (rDist 3)) (by ring)).mp hDist)).symm
+    have hw : e.loc (rWhat 3) = e.loc (rRc 3 1) :=
+      (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+        ((gate_modEq_iff (a := e.loc (rRc 3 1)) (b := e.loc (rWhat 3)) (by ring)).mp hWhat)).symm
+    have hh : e.loc (rHib 3) = e.loc (rIb 3 1) :=
+      (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+        ((gate_modEq_iff (a := e.loc (rIb 3 1)) (b := e.loc (rHib 3)) (by ring)).mp hHib)).symm
+    rcases hay with hAY | hAY
+    · -- Y = 0: out of window (selRow 1 = AY = 0) → wall, dist 1 vacuum.
+      have hib1v : e.loc (rIb 3 1) = 0 := by rw [hib1, hr1, hAY]
+      have hrc1 : e.loc (rRc 3 1) = 0 := by
+        rw [hib1v] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) canon_zero
+          ((gate_modEq_iff (a := e.loc (rRc 3 1)) (b := 0) (by ring)).mp hRC1)
+      have hw0 : e.loc (rWhat 3) = 0 := by rw [hw, hrc1]
+      have hY0 : ¬ ((e.loc AY).toNat = 1) := by rw [hAY]; decide
+      rw [if_neg hY0, hw0, hd]
+      rfl
+    · -- Y = 1: in window → genuine hit, read cell (X, 0).
+      have hib1v : e.loc (rIb 3 1) = 1 := by rw [hib1, hr1, hAY]
+      have hHib1 : e.loc (rHib 3) = 1 := by rw [hh, hib1v]
+      rw [hHib1] at hCond
+      have hwne : e.loc (rWhat 3) ≠ 0 := by
+        intro h0
+        rw [h0] at hCond
+        have hneg : (1 : ℤ) * (0 * e.loc (rInv 3) + -1) = -1 := by ring
+        rw [hneg] at hCond
+        obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp hCond
+        omega
+      have hw12 : e.loc (rWhat 3) = 1 ∨ e.loc (rWhat 3) = 2 := by
+        rcases hMem with h | h | h
+        · exact absurd h hwne
+        · exact Or.inl h
+        · exact Or.inr h
+      have hY1 : (e.loc AY).toNat = 1 := by rw [hAY]; rfl
+      rcases hax with hAX | hAX
+      · -- X = 0: cell = old 0.
+        have hrc1 : e.loc (rRc 3 1) = e.loc (old 0) := by
+          rw [hib1v, (show e.loc (selRow 1) = 1 by rw [hr1, hAY]),
+              (show e.loc (selCol 0) = 1 by rw [hc0, hAX]; norm_num),
+              (show e.loc (selCol 1) = 0 by rw [hc1, hAX])] at hRC1
+          exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+            ((gate_modEq_iff (a := e.loc (rRc 3 1)) (b := e.loc (old 0)) (by ring)).mp hRC1)
+        have hcell : (boardDecode e).cellAt ⟨(e.loc AX).toNat, 0⟩ = codeToParticle (e.loc (old 0)) := by
+          rw [hAX]; norm_num [boardDecode, Board.cellAt, NN, old]
+        rw [if_pos hY1, hcell, ← hrc1, ← hw,
+            if_neg (show ¬ (codeToParticle (e.loc (rWhat 3))).isVacuum = true from by
+              rcases hw12 with h | h <;> rw [h] <;> decide), hd]
+        rfl
+      · -- X = 1: cell = old 1.
+        have hrc1 : e.loc (rRc 3 1) = e.loc (old 1) := by
+          rw [hib1v, (show e.loc (selRow 1) = 1 by rw [hr1, hAY]),
+              (show e.loc (selCol 0) = 0 by rw [hc0, hAX]; norm_num),
+              (show e.loc (selCol 1) = 1 by rw [hc1, hAX])] at hRC1
+          exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+            ((gate_modEq_iff (a := e.loc (rRc 3 1)) (b := e.loc (old 1)) (by ring)).mp hRC1)
+        have hcell : (boardDecode e).cellAt ⟨(e.loc AX).toNat, 0⟩ = codeToParticle (e.loc (old 1)) := by
+          rw [hAX]; norm_num [boardDecode, Board.cellAt, NN, old]
+        rw [if_pos hY1, hcell, ← hrc1, ← hw,
+            if_neg (show ¬ (codeToParticle (e.loc (rWhat 3))).isVacuum = true from by
+              rcases hw12 with h | h <;> rw [h] <;> decide), hd]
+        rfl
+  · -- CASE hit = (0,1): dist = 2, what = rc2 = 0; forces Y = 1 (in window).
+    rw [hh1, hh2] at hDist hWhat
+    rw [hh2] at hVac hInb
+    have hd : e.loc (rDist 3) = 2 :=
+      (eq_of_modEq_canon canon_two (canon_loc hc i _)
+        ((gate_modEq_iff (a := (2 : ℤ)) (b := e.loc (rDist 3)) (by ring)).mp hDist)).symm
+    have hrc1z : e.loc (rRc 3 1) = 0 :=
+      eq_of_modEq_canon (canon_loc hc i _) canon_zero
+        ((gate_modEq_iff (a := e.loc (rRc 3 1)) (b := 0) (by ring)).mp hVac)
+    have hib1v : e.loc (rIb 3 1) = 1 :=
+      (eq_of_modEq_canon canon_one (canon_loc hc i _)
+        ((gate_modEq_iff (a := (1 : ℤ)) (b := e.loc (rIb 3 1)) (by ring)).mp hInb)).symm
+    have hAY : e.loc AY = 1 := by
+      have hsr : e.loc (selRow 1) = 1 := by rw [← hib1, hib1v]
+      rw [hr1] at hsr; exact hsr
+    have hw0 : e.loc (rWhat 3) = 0 := by
+      have := hWhat
+      rw [hrc2] at this
+      exact (eq_of_modEq_canon canon_zero (canon_loc hc i _)
+        ((gate_modEq_iff (a := (0 : ℤ)) (b := e.loc (rWhat 3)) (by ring)).mp this)).symm
+    have hY1 : (e.loc AY).toNat = 1 := by rw [hAY]; rfl
+    rcases hax with hAX | hAX
+    · -- X = 0: cell = old 0 = rc1 = 0 → vacuum.
+      have hrc1 : e.loc (rRc 3 1) = e.loc (old 0) := by
+        rw [hib1v, (show e.loc (selRow 1) = 1 by rw [hr1, hAY]),
+            (show e.loc (selCol 0) = 1 by rw [hc0, hAX]; norm_num),
+            (show e.loc (selCol 1) = 0 by rw [hc1, hAX])] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+          ((gate_modEq_iff (a := e.loc (rRc 3 1)) (b := e.loc (old 0)) (by ring)).mp hRC1)
+      have hcell : (boardDecode e).cellAt ⟨(e.loc AX).toNat, 0⟩ = codeToParticle (e.loc (old 0)) := by
+        rw [hAX]; norm_num [boardDecode, Board.cellAt, NN, old]
+      rw [if_pos hY1, hcell, ← hrc1, hrc1z,
+          if_pos (show (codeToParticle (0 : ℤ)).isVacuum = true from rfl), hw0, hd]
+      rfl
+    · -- X = 1: cell = old 1 = rc1 = 0 → vacuum.
+      have hrc1 : e.loc (rRc 3 1) = e.loc (old 1) := by
+        rw [hib1v, (show e.loc (selRow 1) = 1 by rw [hr1, hAY]),
+            (show e.loc (selCol 0) = 0 by rw [hc0, hAX]; norm_num),
+            (show e.loc (selCol 1) = 1 by rw [hc1, hAX])] at hRC1
+        exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
+          ((gate_modEq_iff (a := e.loc (rRc 3 1)) (b := e.loc (old 1)) (by ring)).mp hRC1)
+      have hcell : (boardDecode e).cellAt ⟨(e.loc AX).toNat, 0⟩ = codeToParticle (e.loc (old 1)) := by
+        rw [hAX]; norm_num [boardDecode, Board.cellAt, NN, old]
+      rw [if_pos hY1, hcell, ← hrc1, hrc1z,
+          if_pos (show (codeToParticle (0 : ℤ)).isVacuum = true from rfl), hw0, hd]
+      rfl
+
+end RayYN
+
 /-! ## §5 — NON-VACUITY: the auto-pin gate is a two-sided discriminator (`#guard`).
 
 A full satisfying trace for all 410 constraints (ray/decide/step witness columns + the two Poseidon2
@@ -674,12 +1505,33 @@ def rayVacBadAsg : Assignment := fun c => if c = rHib 0 then 1 else 0
 #guard (EmittedExpr.mul (.var (rHib 0))
           (.add (.mul (.var (rWhat 0)) (.var (rInv 0))) (.const (-1)))).eval rayVacBadAsg != 0 -- vac-hit lie: FAILS
 
+/-! ### §5c — the XN ray teeth are two-sided discriminators (`#guard`, canary for the replay).
+
+The same occlusion teeth, now on the XN ray block (`d = 1`): they REJECT a wrong `(dist, what)` exactly
+as the XP teeth do. This is the canary that the mechanical replay pins a REAL gate set per direction,
+not a re-authored mirror — the `d = 1` columns are the ones `raycast_xn_of_sat` extracts. -/
+
+/-- XN near-hit witness (`hit₁ = 1`, `rc₁ = 1`) for ray block `d = 1`. -/
+def rayGoodAsgXN : Assignment := fun c => if c = rHit 1 1 then 1 else if c = rRc 1 1 then 1 else 0
+/-- XN far-hit lie (`hit₂ = 1`, near cell `rc₁ = 1` non-vacuous). -/
+def rayFarBadAsgXN : Assignment := fun c => if c = rHit 1 2 then 1 else if c = rRc 1 1 then 1 else 0
+/-- XN vacuum-hit lie (`hib = 1`, read VACUUM `what = 0`). -/
+def rayVacBadAsgXN : Assignment := fun c => if c = rHib 1 then 1 else 0
+
+#guard (headToExpr (Head.zero.addProd 1 [rHit 1 2, rRc 1 1])).eval rayGoodAsgXN == 0    -- near hit: ok
+#guard (headToExpr (Head.zero.addProd 1 [rHit 1 2, rRc 1 1])).eval rayFarBadAsgXN != 0  -- far-hit lie: FAILS
+#guard (EmittedExpr.mul (.var (rHib 1))
+          (.add (.mul (.var (rWhat 1)) (.var (rInv 1))) (.const (-1)))).eval rayVacBadAsgXN != 0 -- vac-hit lie: FAILS
+
 /-! ## §6 — Axiom hygiene. -/
 
 #print axioms autoPin_of_sat
 #print axioms decoded_auto_holds_automaton
 #print axioms offset_of_sat
 #print axioms raycast_xp_of_sat
+#print axioms raycast_xn_of_sat
+#print axioms raycast_yp_of_sat
+#print axioms raycast_yn_of_sat
 
 /-! ## §7 — THE NAMED RESIDUAL (what remains for the full composition).
 
@@ -691,14 +1543,15 @@ Proven here, keyed on the byte-pinned `automataflStepDesc`, canonical over BabyB
   * `raycast_xp_of_sat` — SUB-LEMMA (2) for the XP ray IN FULL: `(rDist 0, rWhat 0) = Board.raycast`,
     derived from the hit one-hot, the vacuum-before / in-bounds-before occlusion gates, and the
     `cond_nonzero` in-bounds-hit witness (with `mem3_of_gate` pinning `what ∈ {VAC,REP,ATT}`);
+  * `raycast_xn_reduce` / `raycast_yp_reduce` / `raycast_yn_reduce` — the pure `Board.raycast`
+    reductions at `n = 2` for the remaining three cardinals;
+  * `raycast_xn_of_sat` / `raycast_yp_of_sat` / `raycast_yn_of_sat` — SUB-LEMMA (2) for the OTHER
+    THREE rays IN FULL, keyed on the byte-pinned `rayConstraints d dx dy` for `d = 1,2,3` (each with
+    its own `inWindowCols`/`rcReadHead` closed form: `XN` shifts `−x`; `YP`/`YN` scan ROWS via
+    `selRow`). **SUB-LEMMA (2) IS NOW CLOSED FOR ALL FOUR RAYS** — leg (2) is complete;
   * `offset_of_sat` — the value-range half of sub-lemma (4).
 
 REMAINING (the heavier soundness legs, each a multi-file effort; NOT assumed, NOT stubbed):
-  (2') the OTHER THREE rays — `XN`/`YP`/`YN`. They are structurally identical to `raycast_xp_of_sat`
-       (same hit one-hot / occlusion / `cond_nonzero` shape); each needs its own byte-pinned gate
-       membership (`rayConstraints d dx dy` for `d = 1,2,3`), its own `inWindowCols`/`rcReadHead`
-       closed forms (`XN` shifts `−x`, `YP`/`YN` scan ROWS not columns via `selRow`), and its own
-       `raycast_*_reduce`. No new proof technique — a mechanical replay of the XP leg per direction.
   (3) `evaluateAxis` refinement — the `decide_axis` 9×4 truth table + `forced_ge0` range gadgets
       force `Decision = evaluateAxis` (watch the field-congruence trap on the `ge0` bits);
   (4) `chooseOffset` — the score-compare (`sgt/slt`, 20-bit) soundness closing offset = `chooseOffset`;
