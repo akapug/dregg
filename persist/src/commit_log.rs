@@ -1116,6 +1116,15 @@ impl PersistentStore {
                     })
                     .or_insert((ordinal, cell.clone()));
             }
+            // The cell index is the REMOVAL-AWARE last-writer-wins projection
+            // (the commit transaction deletes a removed cell's entry; see
+            // `commit_finalized_turn_welded`), so the audit's expected
+            // projection must apply the tombstones too — without this, a
+            // record that removed a cell (MakeSovereign) made the audit
+            // falsely report the deleted index entry as missing.
+            for id in &record.removed {
+                latest_cell_writer.remove(id);
+            }
         }
 
         // Reverse direction: no orphan hash-index entries.
