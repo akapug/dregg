@@ -68,7 +68,8 @@ open Dregg2.Circuit (Assignment)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow VmRowEnv)
 open Dregg2.Circuit.DescriptorIR2
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gate_modEq_iff pPrimeInt)
-open Dregg2.Games.Automatafl (Board Coord Particle Dir raycastFuel Decision Raycast evaluateAxis)
+open Dregg2.Games.Automatafl (Board Coord Particle Dir raycastFuel Decision Raycast evaluateAxis
+  chooseOffset decisionCmp tiebreak revCmp)
 
 set_option autoImplicit false
 set_option maxRecDepth 8000
@@ -3611,6 +3612,603 @@ def rayVacBadAsgXN : Assignment := fun c => if c = rHib 1 then 1 else 0
 #guard (EmittedExpr.mul (.var (rHib 1))
           (.add (.mul (.var (rWhat 1)) (.var (rInv 1))) (.const (-1)))).eval rayVacBadAsgXN != 0 -- vac-hit lie: FAILS
 
+/-! ## §4.10 — LEG (4): `chooseOffset` refinement — the pure score-order heart.
+
+The `choose_offset` cross-axis tie-break compares the two per-axis decisions by a SCORE HEAD
+`score = variant·100000 − att·100 − rep` (`air.rs::score_head`), and moves along the higher-scoring
+axis. This section lands the PURE content: (a) the wide no-wrap window (`SCORE_RBITS = 20` ≫ the
+5-bit small window — the score magnitudes are `≤ 300000 < 2^20`, but the range witness spans 20 bits
+so the interval is proportionally wider), and (b) `decScore`, the felt score of a decoded `Decision`,
+proven to be an ORDER EMBEDDING of `decisionCmp` (so a numeric `>` on scores IS the decision order). -/
+
+/-- Wide no-wrap window for the SCORE compare: two integers of magnitude `≤ 2·10⁶` congruent mod `p`
+are EQUAL. This is the interval that contains every score-difference `sx − sy − 1 ∈ [−300203, 300201]`
+AND every 20-bit range-sum `S ∈ [0, 2²⁰−1] = [0, 1048575]` — both well inside `(−p, p)`, so
+`p ∣ (a − b)` collapses to `a = b`. Wider than `eq_of_modEq_win` (which caps at `10⁶ < 2²⁰`). -/
+theorem eq_of_modEq_score {a b : ℤ} (ha : -2000000 ≤ a ∧ a ≤ 2000000)
+    (hb : -2000000 ≤ b ∧ b ≤ 2000000) (h : a ≡ b [ZMOD 2013265921]) : a = b := by
+  obtain ⟨k, hk⟩ := h.dvd; obtain ⟨ha0, ha1⟩ := ha; obtain ⟨hb0, hb1⟩ := hb; omega
+
+/-- **The 20-bit `forced_ge0` NO-WRAP soundness heart (SCORE width).** Identical in shape to
+`forcedGe0_core`, but the range-sum is 20 bits (`S ∈ [0, 2²⁰−1]`) and the compared magnitude `D` is a
+SCORE difference (`|D| ≤ 400000`, dwarfing `10²·att + rep` at `n = 2`). Given `ib ∈ {0,1}`, the 20-bit
+sum `S`, and the recomposed non-negativity term `2·ib·D + ib − D − 1 ≡ S [ZMOD p]`, the bit is exactly
+the comparison: `ib = 1 → 0 ≤ D` and `ib = 0 → D ≤ −1`. The window `[−400000,400000] ∪ [0,1048575] ⊂
+(−p, p)` is the exact no-wrap interval — a 20-bit witness cannot alias a different residue. This is the
+lemma that makes the `sgt`/`slt` score compares SOUND (a forged bit has no satisfying decomposition). -/
+theorem forcedGe0_core_score {ib D S : ℤ}
+    (hib : ib = 0 ∨ ib = 1) (hS0 : 0 ≤ S) (hS1 : S ≤ 1048575)
+    (hmod : (2 * ib * D + ib - D - 1) ≡ S [ZMOD 2013265921])
+    (hDlo : -400000 ≤ D) (hDhi : D ≤ 400000) :
+    (ib = 1 → 0 ≤ D) ∧ (ib = 0 → D ≤ -1) := by
+  rcases hib with h | h
+  · subst h
+    rw [show (2 * (0:ℤ) * D + 0 - D - 1) = -D - 1 by ring] at hmod
+    have heq : -D - 1 = S := eq_of_modEq_score (by omega) (by omega) hmod
+    exact ⟨by intro hc; omega, by intro _; omega⟩
+  · subst h
+    rw [show (2 * (1:ℤ) * D + 1 - D - 1) = D by ring] at hmod
+    have heq : D = S := eq_of_modEq_score (by omega) (by omega) hmod
+    exact ⟨by intro _; omega, by intro hc; omega⟩
+
+/-- The felt SCORE of a decoded `Decision` (`air.rs::score_head`, `SCORE_PRI = 100000`,
+`SCORE_ATT = 100`): the priority tier in the top digits, then `−100·att − rep` so that SMALLER
+distances score HIGHER. `none = 0`. The circuit's `sx = 100000·variant − 100·att − rep` equals this
+on a witness where the UNUSED fields are pinned to `0` (`decideAxis`'s `assert_case` formulas). -/
+def decScore : Decision → ℤ
+  | .unbalancedPair _ a r => 300000 - 100 * (a : ℤ) - (r : ℤ)
+  | .fromRepulsor _ r     => 200000 - (r : ℤ)
+  | .towardAttractor _ a  => 100000 - 100 * (a : ℤ)
+  | .none                 => 0
+
+/-- The `n = 2` distance envelope: a decision's `att`/`rep` fields are step counts `≤ 2` (every ray
+distance is `∈ {1,2}`, and `min`/either endpoint inherits that). This is the bound under which the
+score is a faithful order embedding (`rep ≤ 2 < 100` ⇒ no carry into the `att` digit; `att ≤ 2` ⇒ the
+`100000` variant tier dominates). -/
+def attRep2 : Decision → Prop
+  | .unbalancedPair _ a r => a ≤ 2 ∧ r ≤ 2
+  | .fromRepulsor _ r     => r ≤ 2
+  | .towardAttractor _ a  => a ≤ 2
+  | .none                 => True
+
+/-- **`decScore` IS an order embedding of `decisionCmp`.** For decisions with `n = 2`-bounded fields,
+comparing the felt scores REPRODUCES the reference decision order (`impl Ord for AutomatonDecision`):
+priority first (the `100000` tier), then the intra-priority tie-break (smaller distance wins, via
+`−100·att − rep`). The load-bearing fact for the score-compare gates: `sgt`/`slt` decide `decisionCmp`. -/
+theorem decScore_cmp (d1 d2 : Decision) (h1 : attRep2 d1) (h2 : attRep2 d2) :
+    compare (decScore d1) (decScore d2) = decisionCmp d1 d2 := by
+  rcases d1 with ⟨p1, a1, r1⟩ | ⟨p1, r1⟩ | ⟨p1, a1⟩ | _ <;>
+    rcases d2 with ⟨p2, a2, r2⟩ | ⟨p2, r2⟩ | ⟨p2, a2⟩ | _ <;>
+    simp only [attRep2] at h1 h2
+  · obtain ⟨ha1, hr1⟩ := h1; obtain ⟨ha2, hr2⟩ := h2
+    interval_cases a1 <;> interval_cases r1 <;> interval_cases a2 <;> interval_cases r2 <;> decide +revert
+  · obtain ⟨ha1, hr1⟩ := h1
+    interval_cases a1 <;> interval_cases r1 <;> interval_cases r2 <;> decide +revert
+  · obtain ⟨ha1, hr1⟩ := h1
+    interval_cases a1 <;> interval_cases r1 <;> interval_cases a2 <;> decide +revert
+  · obtain ⟨ha1, hr1⟩ := h1
+    interval_cases a1 <;> interval_cases r1 <;> decide +revert
+  · obtain ⟨ha2, hr2⟩ := h2
+    interval_cases r1 <;> interval_cases a2 <;> interval_cases r2 <;> decide +revert
+  · interval_cases r1 <;> interval_cases r2 <;> decide +revert
+  · interval_cases r1 <;> interval_cases a2 <;> decide +revert
+  · interval_cases r1 <;> decide +revert
+  · obtain ⟨ha2, hr2⟩ := h2
+    interval_cases a1 <;> interval_cases a2 <;> interval_cases r2 <;> decide +revert
+  · interval_cases a1 <;> interval_cases r2 <;> decide +revert
+  · interval_cases a1 <;> interval_cases a2 <;> decide +revert
+  · interval_cases a1 <;> decide +revert
+  · obtain ⟨ha2, hr2⟩ := h2
+    interval_cases a2 <;> interval_cases r2 <;> decide +revert
+  · interval_cases r2 <;> decide +revert
+  · interval_cases a2 <;> decide +revert
+  · decide +revert
+
+/-- Consequence: on `n = 2`-bounded decisions, `decisionCmp = .gt` IFF the first score strictly
+exceeds the second. This is the exact bridge the `sgt` gate lands on. -/
+theorem decisionCmp_gt_iff_score (d1 d2 : Decision) (h1 : attRep2 d1) (h2 : attRep2 d2) :
+    decisionCmp d1 d2 = .gt ↔ decScore d2 < decScore d1 := by
+  rw [← decScore_cmp d1 d2 h1 h2, Int.compare_eq_gt]
+
+/-! ## §4.11 — LEG (4): the score-compare bits `sgt`/`slt` are SOUND on the byte-pinned object.
+
+The heart wired to the descriptor: the `choose_offset` `forced_ge0` guard column `152` (`sgt`) pins
+`[sx > sy]` and `173` (`slt`) pins `[sy > sx]` with NO wraparound, via the 20-bit range witness
+(`bitsFrom 153 20` / `bitsFrom 174 20`) forcing the non-negativity of `2·sgt·(sx−sy−1) + sgt −
+(sx−sy−1) − 1`. `forcedGe0_core_score` discharges the field-congruence trap: the score magnitudes are
+`≤ 300000` (variant `≤ 3`, `att`/`rep` `≤ 2` at `n = 2`), so `|sx − sy − 1| ≤ 400000 < p − 2²⁰` — the
+20-bit witness cannot alias a different residue. The `att`/`rep ≤ 2` envelope is supplied as the
+hypotheses `h60/h61/h107/h108` (the score-field determination is §4.13 / the named residual). -/
+
+section ScoreBits
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- A boolean-pinned column is in `[0,1]` (bounds form, for `omega`). -/
+theorem binBnd (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (c : Nat)
+    (hmem : cg (gBin c) ∈ automataflStepDesc.constraints) :
+    0 ≤ (envAt t i).loc c ∧ (envAt t i).loc c ≤ 1 := by
+  rcases bin_of_gate (astep_gate hsat i hi (g := gBin c) hmem) (canon_loc hc i _) with h|h <;> omega
+
+/-- **`sgt = [sx > sy]` — SOUND, no wrap.** On a satisfying canonical trace whose score fields are the
+`n = 2` envelope (`variant ≤ 3`, `att`/`rep ≤ 2`), the `sgt` bit (col 152) genuinely decides the score
+order `sx > sy` (where `sx = 100000·variant − 100·att − rep`). -/
+theorem sgt_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (h58 : (envAt t i).loc 58 ≤ 3) (h60 : (envAt t i).loc 60 ≤ 2) (h61 : (envAt t i).loc 61 ≤ 2)
+    (h105 : (envAt t i).loc 105 ≤ 3) (h107 : (envAt t i).loc 107 ≤ 2) (h108 : (envAt t i).loc 108 ≤ 2) :
+    ((envAt t i).loc 152 = 0 ∨ (envAt t i).loc 152 = 1)
+    ∧ ((envAt t i).loc 152 = 1 →
+        100000 * (envAt t i).loc 105 - 100 * (envAt t i).loc 107 - (envAt t i).loc 108
+          < 100000 * (envAt t i).loc 58 - 100 * (envAt t i).loc 60 - (envAt t i).loc 61)
+    ∧ ((envAt t i).loc 152 = 0 →
+        100000 * (envAt t i).loc 58 - 100 * (envAt t i).loc 60 - (envAt t i).loc 61
+          ≤ 100000 * (envAt t i).loc 105 - 100 * (envAt t i).loc 107 - (envAt t i).loc 108) := by
+  set e := envAt t i with he
+  have hib : e.loc 152 = 0 ∨ e.loc 152 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin SGT_IB) (by decide)) (canon_loc hc i _)
+  have b0 : 0 ≤ e.loc 153 ∧ e.loc 153 ≤ 1 := binBnd hsat hc i hi 153 (by decide)
+  have b1 : 0 ≤ e.loc 154 ∧ e.loc 154 ≤ 1 := binBnd hsat hc i hi 154 (by decide)
+  have b2 : 0 ≤ e.loc 155 ∧ e.loc 155 ≤ 1 := binBnd hsat hc i hi 155 (by decide)
+  have b3 : 0 ≤ e.loc 156 ∧ e.loc 156 ≤ 1 := binBnd hsat hc i hi 156 (by decide)
+  have b4 : 0 ≤ e.loc 157 ∧ e.loc 157 ≤ 1 := binBnd hsat hc i hi 157 (by decide)
+  have b5 : 0 ≤ e.loc 158 ∧ e.loc 158 ≤ 1 := binBnd hsat hc i hi 158 (by decide)
+  have b6 : 0 ≤ e.loc 159 ∧ e.loc 159 ≤ 1 := binBnd hsat hc i hi 159 (by decide)
+  have b7 : 0 ≤ e.loc 160 ∧ e.loc 160 ≤ 1 := binBnd hsat hc i hi 160 (by decide)
+  have b8 : 0 ≤ e.loc 161 ∧ e.loc 161 ≤ 1 := binBnd hsat hc i hi 161 (by decide)
+  have b9 : 0 ≤ e.loc 162 ∧ e.loc 162 ≤ 1 := binBnd hsat hc i hi 162 (by decide)
+  have b10 : 0 ≤ e.loc 163 ∧ e.loc 163 ≤ 1 := binBnd hsat hc i hi 163 (by decide)
+  have b11 : 0 ≤ e.loc 164 ∧ e.loc 164 ≤ 1 := binBnd hsat hc i hi 164 (by decide)
+  have b12 : 0 ≤ e.loc 165 ∧ e.loc 165 ≤ 1 := binBnd hsat hc i hi 165 (by decide)
+  have b13 : 0 ≤ e.loc 166 ∧ e.loc 166 ≤ 1 := binBnd hsat hc i hi 166 (by decide)
+  have b14 : 0 ≤ e.loc 167 ∧ e.loc 167 ≤ 1 := binBnd hsat hc i hi 167 (by decide)
+  have b15 : 0 ≤ e.loc 168 ∧ e.loc 168 ≤ 1 := binBnd hsat hc i hi 168 (by decide)
+  have b16 : 0 ≤ e.loc 169 ∧ e.loc 169 ≤ 1 := binBnd hsat hc i hi 169 (by decide)
+  have b17 : 0 ≤ e.loc 170 ∧ e.loc 170 ≤ 1 := binBnd hsat hc i hi 170 (by decide)
+  have b18 : 0 ≤ e.loc 171 ∧ e.loc 171 ≤ 1 := binBnd hsat hc i hi 171 (by decide)
+  have b19 : 0 ≤ e.loc 172 ∧ e.loc 172 ≤ 1 := binBnd hsat hc i hi 172 (by decide)
+  have c58 : 0 ≤ e.loc 58 := (canon_loc hc i _).1
+  have c60 : 0 ≤ e.loc 60 := (canon_loc hc i _).1
+  have c61 : 0 ≤ e.loc 61 := (canon_loc hc i _).1
+  have c105 : 0 ≤ e.loc 105 := (canon_loc hc i _).1
+  have c107 : 0 ≤ e.loc 107 := (canon_loc hc i _).1
+  have c108 : 0 ≤ e.loc 108 := (canon_loc hc i _).1
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SCORE_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 153 SCORE_RBITS)[k]!))
+      (forcedGe0Term SGT_IB (((scoreHead X_VAR X_ATT X_REP).append
+        ((scoreHead Y_VAR Y_ATT Y_REP).scale (-1))).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SCORE_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 153 SCORE_RBITS)[k]!))
+      (forcedGe0Term SGT_IB (((scoreHead X_VAR X_ATT X_REP).append
+        ((scoreHead Y_VAR Y_ATT Y_REP).scale (-1))).addConst (-1))))).eval e.loc
+      = 200000*(e.loc 152*e.loc 58) + -200*(e.loc 152*e.loc 60) + -2*(e.loc 152*e.loc 61)
+        + -200000*(e.loc 152*e.loc 105) + 200*(e.loc 152*e.loc 107) + 2*(e.loc 152*e.loc 108)
+        + -2*e.loc 152 + e.loc 152 + -100000*e.loc 58 + 100*e.loc 60 + e.loc 61 + 100000*e.loc 105
+        + -100*e.loc 107 + -1*e.loc 108 + -1*e.loc 153 + -2*e.loc 154 + -4*e.loc 155 + -8*e.loc 156
+        + -16*e.loc 157 + -32*e.loc 158 + -64*e.loc 159 + -128*e.loc 160 + -256*e.loc 161
+        + -512*e.loc 162 + -1024*e.loc 163 + -2048*e.loc 164 + -4096*e.loc 165 + -8192*e.loc 166
+        + -16384*e.loc 167 + -32768*e.loc 168 + -65536*e.loc 169 + -131072*e.loc 170
+        + -262144*e.loc 171 + -524288*e.loc 172 from rfl] at grec
+  have gmod : (2 * e.loc 152 * (100000*e.loc 58 - 100*e.loc 60 - e.loc 61
+        - 100000*e.loc 105 + 100*e.loc 107 + e.loc 108 - 1) + e.loc 152
+        - (100000*e.loc 58 - 100*e.loc 60 - e.loc 61 - 100000*e.loc 105 + 100*e.loc 107 + e.loc 108 - 1) - 1)
+      ≡ (e.loc 153 + 2*e.loc 154 + 4*e.loc 155 + 8*e.loc 156 + 16*e.loc 157 + 32*e.loc 158
+         + 64*e.loc 159 + 128*e.loc 160 + 256*e.loc 161 + 512*e.loc 162 + 1024*e.loc 163
+         + 2048*e.loc 164 + 4096*e.loc 165 + 8192*e.loc 166 + 16384*e.loc 167 + 32768*e.loc 168
+         + 65536*e.loc 169 + 131072*e.loc 170 + 262144*e.loc 171 + 524288*e.loc 172) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have core := forcedGe0_core_score (ib := e.loc 152)
+    (D := 100000*e.loc 58 - 100*e.loc 60 - e.loc 61 - 100000*e.loc 105 + 100*e.loc 107 + e.loc 108 - 1)
+    (S := e.loc 153 + 2*e.loc 154 + 4*e.loc 155 + 8*e.loc 156 + 16*e.loc 157 + 32*e.loc 158
+         + 64*e.loc 159 + 128*e.loc 160 + 256*e.loc 161 + 512*e.loc 162 + 1024*e.loc 163
+         + 2048*e.loc 164 + 4096*e.loc 165 + 8192*e.loc 166 + 16384*e.loc 167 + 32768*e.loc 168
+         + 65536*e.loc 169 + 131072*e.loc 170 + 262144*e.loc 171 + 524288*e.loc 172)
+    hib (by omega) (by omega) gmod (by omega) (by omega)
+  exact ⟨hib, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+/-- **`slt = [sy > sx]` — SOUND, no wrap.** The mirror of `sgt_of_sat` on the `slt` bit (col 173) and
+its 20-bit witness (`bitsFrom 174 20`): `slt = 1 → sx < sy`, `slt = 0 → sy ≤ sx`. -/
+theorem slt_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (h58 : (envAt t i).loc 58 ≤ 3) (h60 : (envAt t i).loc 60 ≤ 2) (h61 : (envAt t i).loc 61 ≤ 2)
+    (h105 : (envAt t i).loc 105 ≤ 3) (h107 : (envAt t i).loc 107 ≤ 2) (h108 : (envAt t i).loc 108 ≤ 2) :
+    ((envAt t i).loc 173 = 0 ∨ (envAt t i).loc 173 = 1)
+    ∧ ((envAt t i).loc 173 = 1 →
+        100000 * (envAt t i).loc 58 - 100 * (envAt t i).loc 60 - (envAt t i).loc 61
+          < 100000 * (envAt t i).loc 105 - 100 * (envAt t i).loc 107 - (envAt t i).loc 108)
+    ∧ ((envAt t i).loc 173 = 0 →
+        100000 * (envAt t i).loc 105 - 100 * (envAt t i).loc 107 - (envAt t i).loc 108
+          ≤ 100000 * (envAt t i).loc 58 - 100 * (envAt t i).loc 60 - (envAt t i).loc 61) := by
+  set e := envAt t i with he
+  have hib : e.loc 173 = 0 ∨ e.loc 173 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin SLT_IB) (by decide)) (canon_loc hc i _)
+  have b0  : 0 ≤ e.loc 174 ∧ e.loc 174 ≤ 1 := binBnd hsat hc i hi 174 (by decide)
+  have b1  : 0 ≤ e.loc 175 ∧ e.loc 175 ≤ 1 := binBnd hsat hc i hi 175 (by decide)
+  have b2  : 0 ≤ e.loc 176 ∧ e.loc 176 ≤ 1 := binBnd hsat hc i hi 176 (by decide)
+  have b3  : 0 ≤ e.loc 177 ∧ e.loc 177 ≤ 1 := binBnd hsat hc i hi 177 (by decide)
+  have b4  : 0 ≤ e.loc 178 ∧ e.loc 178 ≤ 1 := binBnd hsat hc i hi 178 (by decide)
+  have b5  : 0 ≤ e.loc 179 ∧ e.loc 179 ≤ 1 := binBnd hsat hc i hi 179 (by decide)
+  have b6  : 0 ≤ e.loc 180 ∧ e.loc 180 ≤ 1 := binBnd hsat hc i hi 180 (by decide)
+  have b7  : 0 ≤ e.loc 181 ∧ e.loc 181 ≤ 1 := binBnd hsat hc i hi 181 (by decide)
+  have b8  : 0 ≤ e.loc 182 ∧ e.loc 182 ≤ 1 := binBnd hsat hc i hi 182 (by decide)
+  have b9  : 0 ≤ e.loc 183 ∧ e.loc 183 ≤ 1 := binBnd hsat hc i hi 183 (by decide)
+  have b10 : 0 ≤ e.loc 184 ∧ e.loc 184 ≤ 1 := binBnd hsat hc i hi 184 (by decide)
+  have b11 : 0 ≤ e.loc 185 ∧ e.loc 185 ≤ 1 := binBnd hsat hc i hi 185 (by decide)
+  have b12 : 0 ≤ e.loc 186 ∧ e.loc 186 ≤ 1 := binBnd hsat hc i hi 186 (by decide)
+  have b13 : 0 ≤ e.loc 187 ∧ e.loc 187 ≤ 1 := binBnd hsat hc i hi 187 (by decide)
+  have b14 : 0 ≤ e.loc 188 ∧ e.loc 188 ≤ 1 := binBnd hsat hc i hi 188 (by decide)
+  have b15 : 0 ≤ e.loc 189 ∧ e.loc 189 ≤ 1 := binBnd hsat hc i hi 189 (by decide)
+  have b16 : 0 ≤ e.loc 190 ∧ e.loc 190 ≤ 1 := binBnd hsat hc i hi 190 (by decide)
+  have b17 : 0 ≤ e.loc 191 ∧ e.loc 191 ≤ 1 := binBnd hsat hc i hi 191 (by decide)
+  have b18 : 0 ≤ e.loc 192 ∧ e.loc 192 ≤ 1 := binBnd hsat hc i hi 192 (by decide)
+  have b19 : 0 ≤ e.loc 193 ∧ e.loc 193 ≤ 1 := binBnd hsat hc i hi 193 (by decide)
+  have c58 : 0 ≤ e.loc 58 := (canon_loc hc i _).1
+  have c60 : 0 ≤ e.loc 60 := (canon_loc hc i _).1
+  have c61 : 0 ≤ e.loc 61 := (canon_loc hc i _).1
+  have c105 : 0 ≤ e.loc 105 := (canon_loc hc i _).1
+  have c107 : 0 ≤ e.loc 107 := (canon_loc hc i _).1
+  have c108 : 0 ≤ e.loc 108 := (canon_loc hc i _).1
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SCORE_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 174 SCORE_RBITS)[k]!))
+      (forcedGe0Term SLT_IB (((scoreHead Y_VAR Y_ATT Y_REP).append
+        ((scoreHead X_VAR X_ATT X_REP).scale (-1))).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SCORE_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 174 SCORE_RBITS)[k]!))
+      (forcedGe0Term SLT_IB (((scoreHead Y_VAR Y_ATT Y_REP).append
+        ((scoreHead X_VAR X_ATT X_REP).scale (-1))).addConst (-1))))).eval e.loc
+      = 200000*(e.loc 173*e.loc 105) + -200*(e.loc 173*e.loc 107) + -2*(e.loc 173*e.loc 108)
+        + -200000*(e.loc 173*e.loc 58) + 200*(e.loc 173*e.loc 60) + 2*(e.loc 173*e.loc 61)
+        + -2*e.loc 173 + e.loc 173 + -100000*e.loc 105 + 100*e.loc 107 + e.loc 108 + 100000*e.loc 58
+        + -100*e.loc 60 + -1*e.loc 61 + -1*e.loc 174 + -2*e.loc 175 + -4*e.loc 176 + -8*e.loc 177
+        + -16*e.loc 178 + -32*e.loc 179 + -64*e.loc 180 + -128*e.loc 181 + -256*e.loc 182
+        + -512*e.loc 183 + -1024*e.loc 184 + -2048*e.loc 185 + -4096*e.loc 186 + -8192*e.loc 187
+        + -16384*e.loc 188 + -32768*e.loc 189 + -65536*e.loc 190 + -131072*e.loc 191
+        + -262144*e.loc 192 + -524288*e.loc 193 from rfl] at grec
+  have gmod : (2 * e.loc 173 * (100000*e.loc 105 - 100*e.loc 107 - e.loc 108
+        - 100000*e.loc 58 + 100*e.loc 60 + e.loc 61 - 1) + e.loc 173
+        - (100000*e.loc 105 - 100*e.loc 107 - e.loc 108 - 100000*e.loc 58 + 100*e.loc 60 + e.loc 61 - 1) - 1)
+      ≡ (e.loc 174 + 2*e.loc 175 + 4*e.loc 176 + 8*e.loc 177 + 16*e.loc 178 + 32*e.loc 179
+         + 64*e.loc 180 + 128*e.loc 181 + 256*e.loc 182 + 512*e.loc 183 + 1024*e.loc 184
+         + 2048*e.loc 185 + 4096*e.loc 186 + 8192*e.loc 187 + 16384*e.loc 188 + 32768*e.loc 189
+         + 65536*e.loc 190 + 131072*e.loc 191 + 262144*e.loc 192 + 524288*e.loc 193) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have core := forcedGe0_core_score (ib := e.loc 173)
+    (D := 100000*e.loc 105 - 100*e.loc 107 - e.loc 108 - 100000*e.loc 58 + 100*e.loc 60 + e.loc 61 - 1)
+    (S := e.loc 174 + 2*e.loc 175 + 4*e.loc 176 + 8*e.loc 177 + 16*e.loc 178 + 32*e.loc 179
+         + 64*e.loc 180 + 128*e.loc 181 + 256*e.loc 182 + 512*e.loc 183 + 1024*e.loc 184
+         + 2048*e.loc 185 + 4096*e.loc 186 + 8192*e.loc 187 + 16384*e.loc 188 + 32768*e.loc 189
+         + 65536*e.loc 190 + 131072*e.loc 191 + 262144*e.loc 192 + 524288*e.loc 193)
+    hib (by omega) (by omega) gmod (by omega) (by omega)
+  exact ⟨hib, by intro h; have := core.1 h; omega, by intro h; have := core.2 h; omega⟩
+
+end ScoreBits
+
+/-! ## §4.12 — LEG (4): the column pin + the two offset equalities, extracted from the object.
+
+The `choose_offset` back half: `col == col_rule` pins the column-rule flag to `true` (`= 1`), and the
+two offset gates pin `ox`/`oy` to the winner's step. With `col = 1` the `oy` `push_f` expansion
+collapses to `oy = ymove·(2·posy−1)·(1 − sgt)` — i.e. the Automaton moves in `y` exactly when the
+score compare did NOT hand the win to `x` (`sgt = 0`). Combined with `sgt_of_sat`/`slt_of_sat` and the
+`decScore` order embedding these are the full `chooseOffset` cross-axis tie-break — see §4.13. -/
+
+/-- Decode a `{−1,0,1}` offset column (felt `p−1 ≡ −1`) into its signed `ℤ` value. -/
+def decodeOff (z : ℤ) : ℤ := if z = 2013265920 then -1 else z
+
+section OffsetGates
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- **The column rule is pinned `true`.** `col == col_rule` forces `col` (col 206) to `COL_RULE = 1`. -/
+theorem colPin_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 206 = 1 := by
+  have hg := astep_gate hsat i hi (g := headToExpr ((Head.lin 1 COL_C).addConst (-COL_RULE))) (by decide)
+  rw [show (headToExpr ((Head.lin 1 COL_C).addConst (-COL_RULE))).eval (envAt t i).loc
+      = (envAt t i).loc 206 + -1 from rfl] at hg
+  exact eq_of_modEq_canon (canon_loc hc i _) canon_one ((gate_modEq_iff (by ring)).mp hg)
+
+/-- **The `ox` offset equality.** `ox − 2·sgt·xmove·posx + sgt·xmove == 0`, i.e. the `x` offset is the
+score-winner bit `sgt` times the `x`-decision's signed step `xmove·(2·posx−1)`. Stated as the field
+congruence (the value half is `offset_of_sat`: `ox ∈ {−1,0,1}`). -/
+theorem ox_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 207
+      ≡ 2 * ((envAt t i).loc 152 * (envAt t i).loc 194 * (envAt t i).loc 59)
+          - (envAt t i).loc 152 * (envAt t i).loc 194 [ZMOD 2013265921] := by
+  have hg := astep_gate hsat i hi
+    (g := headToExpr (((Head.lin 1 OX_C).addProd (-2) [SGT_IB, XMOVE_IB, X_POS]).addProd 1 [SGT_IB, XMOVE_IB]))
+    (by decide)
+  rw [show (headToExpr (((Head.lin 1 OX_C).addProd (-2) [SGT_IB, XMOVE_IB, X_POS]).addProd 1 [SGT_IB, XMOVE_IB])).eval (envAt t i).loc
+      = (envAt t i).loc 207 + -2*((envAt t i).loc 152*(envAt t i).loc 194*(envAt t i).loc 59)
+        + (envAt t i).loc 152*(envAt t i).loc 194 from rfl] at hg
+  exact (gate_modEq_iff (by ring)).mp hg
+
+/-- **The `oy` offset equality (`col = 1`).** The `push_f`-expanded `oy` gate, with the column rule
+pinned `true` (`colPin_of_sat`), collapses to `oy = ymove·(2·posy−1)·(1 − sgt)`: the Automaton takes
+the `y` step exactly when `sgt = 0` (the score compare did not give the win to `x`). -/
+theorem oy_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 208
+      ≡ (envAt t i).loc 200 * (2 * (envAt t i).loc 106 - 1) * (1 - (envAt t i).loc 152)
+        [ZMOD 2013265921] := by
+  have hcol := colPin_of_sat hsat hc i hi
+  have hg := astep_gate hsat i hi (g := headToExpr oyHead) (by decide)
+  rw [show (headToExpr oyHead).eval (envAt t i).loc
+      = (envAt t i).loc 208 + -2*((envAt t i).loc 200*(envAt t i).loc 106*(envAt t i).loc 173)
+        + (envAt t i).loc 200*(envAt t i).loc 173 + -2*((envAt t i).loc 200*(envAt t i).loc 106*(envAt t i).loc 206)
+        + (envAt t i).loc 200*(envAt t i).loc 206
+        + 2*((envAt t i).loc 200*(envAt t i).loc 106*(envAt t i).loc 152*(envAt t i).loc 206)
+        + -1*((envAt t i).loc 200*(envAt t i).loc 152*(envAt t i).loc 206)
+        + 2*((envAt t i).loc 200*(envAt t i).loc 106*(envAt t i).loc 173*(envAt t i).loc 206)
+        + -1*((envAt t i).loc 200*(envAt t i).loc 173*(envAt t i).loc 206) from rfl] at hg
+  rw [hcol] at hg
+  exact (gate_modEq_iff (by ring)).mp hg
+
+end OffsetGates
+
+/-! ## §4.13 — LEG (4): the offset IS `chooseOffset` (conditional on the score-field determination).
+
+The capstone: on a satisfying canonical trace, the decoded offset `(ox, oy)` equals the reference
+cross-axis tie-break `chooseOffset (decode xdec) (decode ydec) true`. The proof composes the pieces:
+`sgt_of_sat`/`slt_of_sat` (the score compare is sound, no wrap) ▸ `decScore_cmp` (score order =
+`decisionCmp`) ▸ `xmove_of_sat`/`ymove_of_sat` (the move bit = "decision ≠ none") ▸ `ox_of_sat`/
+`oy_of_sat` (the offset = winner·signed-step). The two obligations threaded as HYPOTHESES are the §4.13
+RESIDUAL — the score-field determination `sx = decScore (decode xdec)` and the `att`/`rep ≤ 2`
+envelope — which need the `decide_axis` `assert_case` field-value extraction (the 9-case ×2 that
+`decideAxis_x_sound` proves for the DECODED decision but not for the raw score columns). NOT assumed
+as a top-level fact; the bridge is stated as the conditional it is. -/
+
+/-- A canonical cell whose `{0,1,2,3}` membership gate vanishes mod `p` is `0,1,2,3`. -/
+theorem mem4_of_gate {a : Assignment} {c : Nat}
+    (h : (memberExpr c [0, 1, 2, 3]).eval a ≡ 0 [ZMOD 2013265921]) (hc : Canon (a c)) :
+    a c = 0 ∨ a c = 1 ∨ a c = 2 ∨ a c = 3 := by
+  simp only [memberExpr, List.foldl, EmittedExpr.eval] at h
+  have hd : (2013265921 : ℤ) ∣ a c * (a c + -1) * (a c + -2) * (a c + -3) :=
+    Int.modEq_zero_iff_dvd.mp (by simpa using h)
+  obtain ⟨hc0, hc1⟩ := hc
+  rcases pPrimeInt.dvd_mul.mp hd with h1 | h1
+  · rcases pPrimeInt.dvd_mul.mp h1 with h2 | h2
+    · rcases pPrimeInt.dvd_mul.mp h2 with h3 | h3
+      · obtain ⟨k, hk⟩ := h3; left; omega
+      · obtain ⟨k, hk⟩ := h3; right; left; omega
+    · obtain ⟨k, hk⟩ := h2; right; right; left; omega
+  · obtain ⟨k, hk⟩ := h1; right; right; right; omega
+
+/-- Convert an offset column (`{0,1,p−1}`) congruent to a SMALL `r` into `decodeOff = r`. -/
+theorem decodeOff_eq_of {z r : ℤ} (htri : z = 0 ∨ z = 1 ∨ z = 2013265920)
+    (hr : -16 ≤ r ∧ r ≤ 16) (hmod : z ≡ r [ZMOD 2013265921]) : decodeOff z = r := by
+  unfold decodeOff
+  rcases htri with h|h|h <;> subst h
+  · rw [if_neg (by norm_num)]; exact eq_of_modEq_small (by norm_num) hr hmod
+  · rw [if_neg (by norm_num)]; exact eq_of_modEq_small (by norm_num) hr hmod
+  · rw [if_pos rfl]
+    exact eq_of_modEq_small (by norm_num) hr
+      ((Int.modEq_iff_dvd.mpr (by norm_num)).trans hmod)
+
+/-- **Pure**: the `x`-decision's signed step is `xmove·(2·posx−1)` (`xmove = [variant ≥ 1] = [≠ none]`). -/
+theorem decodeDecision_delta_x_fst (v posx att rep : ℤ)
+    (hv : v = 0 ∨ v = 1 ∨ v = 2 ∨ v = 3) (hp : posx = 0 ∨ posx = 1) :
+    ((decodeDecision v posx att rep).delta (1, 0)).1 = (if 1 ≤ v then 1 else 0) * (2 * posx - 1) := by
+  rcases hv with h|h|h|h <;> subst h <;> rcases hp with h|h <;> subst h <;>
+    simp [decodeDecision, Decision.delta]
+
+/-- **Pure**: the `x`-decision's step has zero `y`-component. -/
+theorem decodeDecision_delta_x_snd (v posx att rep : ℤ) :
+    ((decodeDecision v posx att rep).delta (1, 0)).2 = 0 := by
+  unfold decodeDecision; split_ifs <;> simp only [Decision.delta] <;> first | rfl | (split_ifs <;> rfl)
+
+/-- **Pure**: the `y`-decision's signed step is `ymove·(2·posy−1)` in the `y`-component. -/
+theorem decodeDecision_delta_y_snd (v posy att rep : ℤ)
+    (hv : v = 0 ∨ v = 1 ∨ v = 2 ∨ v = 3) (hp : posy = 0 ∨ posy = 1) :
+    ((decodeDecision v posy att rep).delta (0, 1)).2 = (if 1 ≤ v then 1 else 0) * (2 * posy - 1) := by
+  rcases hv with h|h|h|h <;> subst h <;> rcases hp with h|h <;> subst h <;>
+    simp [decodeDecision, Decision.delta]
+
+/-- **Pure**: the `y`-decision's step has zero `x`-component. -/
+theorem decodeDecision_delta_y_fst (v posy att rep : ℤ) :
+    ((decodeDecision v posy att rep).delta (0, 1)).1 = 0 := by
+  unfold decodeDecision; split_ifs <;> simp only [Decision.delta] <;> first | rfl | (split_ifs <;> rfl)
+
+section MoveBits
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- **`xmove = [variant ≥ 1]` — SOUND.** The `xmove` `forced_ge0` bit (col 194) pins `[xdec ≠ none]`
+(`variant ≥ 1`) with no wrap (`variant ∈ {0,1,2,3}` from its member gate ⇒ `|variant − 1| ≤ 2`). -/
+theorem xmove_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 194 = (if 1 ≤ (envAt t i).loc 58 then 1 else 0) := by
+  set e := envAt t i with he
+  have h58 : e.loc 58 = 0 ∨ e.loc 58 = 1 ∨ e.loc 58 = 2 ∨ e.loc 58 = 3 :=
+    mem4_of_gate (astep_gate hsat i hi (g := memberExpr 58 [0,1,2,3]) (by decide)) (canon_loc hc i _)
+  have hmv : e.loc 194 = 0 ∨ e.loc 194 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin XMOVE_IB) (by decide)) (canon_loc hc i _)
+  have d0 : 0 ≤ e.loc 195 ∧ e.loc 195 ≤ 1 := binBnd hsat hc i hi 195 (by decide)
+  have d1 : 0 ≤ e.loc 196 ∧ e.loc 196 ≤ 1 := binBnd hsat hc i hi 196 (by decide)
+  have d2 : 0 ≤ e.loc 197 ∧ e.loc 197 ≤ 1 := binBnd hsat hc i hi 197 (by decide)
+  have d3 : 0 ≤ e.loc 198 ∧ e.loc 198 ≤ 1 := binBnd hsat hc i hi 198 (by decide)
+  have d4 : 0 ≤ e.loc 199 ∧ e.loc 199 ≤ 1 := binBnd hsat hc i hi 199 (by decide)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 195 SMALL_RBITS)[k]!))
+      (forcedGe0Term XMOVE_IB ((Head.lin 1 X_VAR).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 195 SMALL_RBITS)[k]!))
+      (forcedGe0Term XMOVE_IB ((Head.lin 1 X_VAR).addConst (-1))))).eval e.loc
+      = 2*(e.loc 194*e.loc 58) + -2*e.loc 194 + e.loc 194 + -1*e.loc 58 + -1*e.loc 195
+        + -2*e.loc 196 + -4*e.loc 197 + -8*e.loc 198 + -16*e.loc 199 from rfl] at grec
+  have gmod : (2 * e.loc 194 * (e.loc 58 - 1) + e.loc 194 - (e.loc 58 - 1) - 1)
+      ≡ (e.loc 195 + 2*e.loc 196 + 4*e.loc 197 + 8*e.loc 198 + 16*e.loc 199) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have core := forcedGe0_core (ib := e.loc 194) (D := e.loc 58 - 1)
+    (S := e.loc 195 + 2*e.loc 196 + 4*e.loc 197 + 8*e.loc 198 + 16*e.loc 199)
+    hmv (by omega) (by omega) gmod (by omega) (by omega)
+  split_ifs with hcond
+  · rcases hmv with h|h
+    · exact absurd (core.2 h) (by omega)
+    · exact h
+  · rcases hmv with h|h
+    · exact h
+    · exact absurd (core.1 h) (by omega)
+
+/-- **`ymove = [variant ≥ 1]` — SOUND.** The mirror on col 200 / `ydec` variant (col 105). -/
+theorem ymove_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 200 = (if 1 ≤ (envAt t i).loc 105 then 1 else 0) := by
+  set e := envAt t i with he
+  have h105 : e.loc 105 = 0 ∨ e.loc 105 = 1 ∨ e.loc 105 = 2 ∨ e.loc 105 = 3 :=
+    mem4_of_gate (astep_gate hsat i hi (g := memberExpr 105 [0,1,2,3]) (by decide)) (canon_loc hc i _)
+  have hmv : e.loc 200 = 0 ∨ e.loc 200 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin YMOVE_IB) (by decide)) (canon_loc hc i _)
+  have d0 : 0 ≤ e.loc 201 ∧ e.loc 201 ≤ 1 := binBnd hsat hc i hi 201 (by decide)
+  have d1 : 0 ≤ e.loc 202 ∧ e.loc 202 ≤ 1 := binBnd hsat hc i hi 202 (by decide)
+  have d2 : 0 ≤ e.loc 203 ∧ e.loc 203 ≤ 1 := binBnd hsat hc i hi 203 (by decide)
+  have d3 : 0 ≤ e.loc 204 ∧ e.loc 204 ≤ 1 := binBnd hsat hc i hi 204 (by decide)
+  have d4 : 0 ≤ e.loc 205 ∧ e.loc 205 ≤ 1 := binBnd hsat hc i hi 205 (by decide)
+  have grec := astep_gate hsat i hi
+    (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 201 SMALL_RBITS)[k]!))
+      (forcedGe0Term YMOVE_IB ((Head.lin 1 Y_VAR).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 201 SMALL_RBITS)[k]!))
+      (forcedGe0Term YMOVE_IB ((Head.lin 1 Y_VAR).addConst (-1))))).eval e.loc
+      = 2*(e.loc 200*e.loc 105) + -2*e.loc 200 + e.loc 200 + -1*e.loc 105 + -1*e.loc 201
+        + -2*e.loc 202 + -4*e.loc 203 + -8*e.loc 204 + -16*e.loc 205 from rfl] at grec
+  have gmod : (2 * e.loc 200 * (e.loc 105 - 1) + e.loc 200 - (e.loc 105 - 1) - 1)
+      ≡ (e.loc 201 + 2*e.loc 202 + 4*e.loc 203 + 8*e.loc 204 + 16*e.loc 205) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp grec
+  have core := forcedGe0_core (ib := e.loc 200) (D := e.loc 105 - 1)
+    (S := e.loc 201 + 2*e.loc 202 + 4*e.loc 203 + 8*e.loc 204 + 16*e.loc 205)
+    hmv (by omega) (by omega) gmod (by omega) (by omega)
+  split_ifs with hcond
+  · rcases hmv with h|h
+    · exact absurd (core.2 h) (by omega)
+    · exact h
+  · rcases hmv with h|h
+    · exact h
+    · exact absurd (core.1 h) (by omega)
+
+/-- **LEG (4), the tie-break refinement (conditional).** The decoded offset `(ox, oy)` equals the
+reference `chooseOffset` of the two decoded axis decisions, with the column rule `true`. The two
+hypotheses `hsx`/`hsy` (the raw score head equals `decScore` of the decoded decision) and the
+`att`/`rep ≤ 2` envelope are the §4.13 residual — the `decide_axis` field-value determination. -/
+theorem offset_matches_chooseOffset (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (h60 : (envAt t i).loc 60 ≤ 2) (h61 : (envAt t i).loc 61 ≤ 2)
+    (h107 : (envAt t i).loc 107 ≤ 2) (h108 : (envAt t i).loc 108 ≤ 2)
+    (hxe : attRep2 (decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)))
+    (hye : attRep2 (decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)))
+    (hsx : 100000 * (envAt t i).loc 58 - 100 * (envAt t i).loc 60 - (envAt t i).loc 61
+      = decScore (decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)))
+    (hsy : 100000 * (envAt t i).loc 105 - 100 * (envAt t i).loc 107 - (envAt t i).loc 108
+      = decScore (decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108))) :
+    (decodeOff ((envAt t i).loc 207), decodeOff ((envAt t i).loc 208))
+      = chooseOffset
+          (decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61))
+          (decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108))
+          true := by
+  set dx := decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61) with hdx
+  set dy := decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108) with hdy
+  -- field ranges
+  have h58 : (envAt t i).loc 58 = 0 ∨ (envAt t i).loc 58 = 1 ∨ (envAt t i).loc 58 = 2 ∨ (envAt t i).loc 58 = 3 :=
+    mem4_of_gate (astep_gate hsat i hi (g := memberExpr 58 [0,1,2,3]) (by decide)) (canon_loc hc i _)
+  have h105 : (envAt t i).loc 105 = 0 ∨ (envAt t i).loc 105 = 1 ∨ (envAt t i).loc 105 = 2 ∨ (envAt t i).loc 105 = 3 :=
+    mem4_of_gate (astep_gate hsat i hi (g := memberExpr 105 [0,1,2,3]) (by decide)) (canon_loc hc i _)
+  have hp59 : (envAt t i).loc 59 = 0 ∨ (envAt t i).loc 59 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 59) (by decide)) (canon_loc hc i _)
+  have hp106 : (envAt t i).loc 106 = 0 ∨ (envAt t i).loc 106 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 106) (by decide)) (canon_loc hc i _)
+  -- score compare bit soundness
+  have hsgt := sgt_of_sat hsat hc i hi (by omega) h60 h61 (by omega) h107 h108
+  have hsgtb : (envAt t i).loc 152 = 0 ∨ (envAt t i).loc 152 = 1 := hsgt.1
+  -- move bits (and their {0,1} membership)
+  have hxm := xmove_of_sat hsat hc i hi
+  have hym := ymove_of_sat hsat hc i hi
+  have hxmb : (envAt t i).loc 194 = 0 ∨ (envAt t i).loc 194 = 1 := by rw [hxm]; split_ifs <;> simp
+  have hymb : (envAt t i).loc 200 = 0 ∨ (envAt t i).loc 200 = 1 := by rw [hym]; split_ifs <;> simp
+  -- offset membership + congruence -> decodeOff values
+  have hoxtri := (offset_of_sat hsat hc i hi).1
+  have hoytri := (offset_of_sat hsat hc i hi).2
+  have hoxv : decodeOff ((envAt t i).loc 207)
+      = (envAt t i).loc 152 * ((envAt t i).loc 194 * (2 * (envAt t i).loc 59 - 1)) := by
+    refine decodeOff_eq_of hoxtri ?_ ?_
+    · rcases hsgtb with h|h <;> rcases hxmb with h2|h2 <;> rcases hp59 with h3|h3 <;>
+        rw [h, h2, h3] <;> norm_num
+    · calc (envAt t i).loc 207
+          ≡ 2 * ((envAt t i).loc 152 * (envAt t i).loc 194 * (envAt t i).loc 59)
+              - (envAt t i).loc 152 * (envAt t i).loc 194 [ZMOD 2013265921] := ox_of_sat hsat hc i hi
+        _ = (envAt t i).loc 152 * ((envAt t i).loc 194 * (2 * (envAt t i).loc 59 - 1)) := by ring
+  have hoyv : decodeOff ((envAt t i).loc 208)
+      = (1 - (envAt t i).loc 152) * ((envAt t i).loc 200 * (2 * (envAt t i).loc 106 - 1)) := by
+    refine decodeOff_eq_of hoytri ?_ ?_
+    · rcases hsgtb with h|h <;> rcases hymb with h2|h2 <;> rcases hp106 with h3|h3 <;>
+        rw [h, h2, h3] <;> norm_num
+    · calc (envAt t i).loc 208
+          ≡ (envAt t i).loc 200 * (2 * (envAt t i).loc 106 - 1) * (1 - (envAt t i).loc 152) [ZMOD 2013265921] := oy_of_sat hsat hc i hi
+        _ = (1 - (envAt t i).loc 152) * ((envAt t i).loc 200 * (2 * (envAt t i).loc 106 - 1)) := by ring
+  -- x-delta / y-delta of the decoded decisions
+  have hdeltax : (dx.delta (1, 0)).1 = (envAt t i).loc 194 * (2 * (envAt t i).loc 59 - 1) := by
+    rw [hdx, decodeDecision_delta_x_fst _ _ _ _ h58 hp59, hxm]
+  have hdeltay : (dy.delta (0, 1)).2 = (envAt t i).loc 200 * (2 * (envAt t i).loc 106 - 1) := by
+    rw [hdy, decodeDecision_delta_y_snd _ _ _ _ h105 hp106, hym]
+  -- sgt = [decisionCmp dx dy = gt]
+  have hcmpiff := decisionCmp_gt_iff_score dx dy hxe hye
+  rw [← hsx, ← hsy] at hcmpiff
+  -- case on the decision order
+  rcases Dregg2.Games.Automatafl.decisionCmp_total dx dy with hcmp|hcmp|hcmp
+  · -- lt : not gt, so sgt = 0
+    have hsgt0 : (envAt t i).loc 152 = 0 := by
+      rcases hsgtb with h|h
+      · exact h
+      · have := hcmpiff.mpr (hsgt.2.1 h); rw [hcmp] at this; exact absurd this (by decide)
+    have hchoose : chooseOffset dx dy true = dy.delta (0, 1) := by simp only [chooseOffset, hcmp]
+    rw [hchoose]
+    apply Prod.ext
+    · rw [hoxv, hsgt0, decodeDecision_delta_y_fst]; ring
+    · rw [hoyv, hsgt0, hdeltay]; ring
+  · -- eq : not gt, sgt = 0
+    have hsgt0 : (envAt t i).loc 152 = 0 := by
+      rcases hsgtb with h|h
+      · exact h
+      · have := hcmpiff.mpr (hsgt.2.1 h); rw [hcmp] at this; exact absurd this (by decide)
+    have hchoose : chooseOffset dx dy true = dy.delta (0, 1) := by simp only [chooseOffset, hcmp]
+    rw [hchoose]
+    apply Prod.ext
+    · rw [hoxv, hsgt0, decodeDecision_delta_y_fst]; ring
+    · rw [hoyv, hsgt0, hdeltay]; ring
+  · -- gt : sgt = 1
+    have hsgt1 : (envAt t i).loc 152 = 1 := by
+      rcases hsgtb with h|h
+      · have h1 := hsgt.2.2 h; have h2 := hcmpiff.mp hcmp; omega
+      · exact h
+    have hchoose : chooseOffset dx dy true = dx.delta (1, 0) := by simp only [chooseOffset, hcmp]
+    rw [hchoose]
+    apply Prod.ext
+    · rw [hoxv, hsgt1, hdeltax]; ring
+    · rw [hoyv, hsgt1, decodeDecision_delta_x_snd]; ring
+
+end MoveBits
+
+/-! ## §4.14 — NON-VACUITY for leg (4): the `ox` gate REJECTS a score-forbidden move (`#guard`).
+
+The `ox` offset gate `ox − 2·sgt·xmove·posx + sgt·xmove` is a two-sided discriminator: with `sgt = 1`,
+`xmove = 1`, `posx = 1` it ACCEPTS `ox = 1` (the Automaton steps `+x`), and with `sgt = 0` (the score
+compare did NOT hand the win to `x`) it REJECTS a witness that still claims `ox = 1` — the exact "a
+wrong offset the score-compare forbids makes `Satisfied2` false" tooth. -/
+
+/-- The `ox` offset gate body `ox − 2·sgt·xmove·posx + sgt·xmove`. -/
+def oxGateExpr : EmittedExpr :=
+  headToExpr (((Head.lin 1 OX_C).addProd (-2) [SGT_IB, XMOVE_IB, X_POS]).addProd 1 [SGT_IB, XMOVE_IB])
+/-- `sgt = xmove = posx = 1`, `ox = 1`: the `x`-axis genuinely won the score compare and the step is
+`+x` — consistent, the gate HOLDS. -/
+def oxGoodAsg : Assignment := fun c => if c = 152 ∨ c = 194 ∨ c = 59 ∨ c = 207 then 1 else 0
+/-- `ox = 1` claimed while `sgt = 0` (the score compare did NOT give `x` the win) — a FORBIDDEN move;
+the gate FAILS. -/
+def oxForgeAsg : Assignment := fun c => if c = 207 then 1 else 0
+
+#guard oxGateExpr.eval oxGoodAsg == 0     -- sgt·xmove·posx step, ox = 1: consistent, gate holds
+#guard oxGateExpr.eval oxForgeAsg != 0    -- ox = 1 but sgt = 0: score-forbidden move FAILS
+
 /-! ## §6 — Axiom hygiene. -/
 
 #print axioms autoPin_of_sat
@@ -3638,6 +4236,19 @@ def rayVacBadAsgXN : Assignment := fun c => if c = rHib 1 then 1 else 0
 #print axioms decideAxis_ydec_repRep
 #print axioms decideAxis_ydec_attAtt
 #print axioms decideAxis_y_sound
+-- leg (4): the score-compare no-wrap heart + order embedding + offset extraction
+#print axioms forcedGe0_core_score
+#print axioms decScore_cmp
+#print axioms decisionCmp_gt_iff_score
+#print axioms sgt_of_sat
+#print axioms slt_of_sat
+#print axioms colPin_of_sat
+#print axioms ox_of_sat
+#print axioms oy_of_sat
+#print axioms xmove_of_sat
+#print axioms ymove_of_sat
+#print axioms decodeDecision_delta_x_fst
+#print axioms offset_matches_chooseOffset
 
 /-! ## §7 — THE NAMED RESIDUAL (what remains for the full composition).
 
@@ -3682,9 +4293,35 @@ Proven here, keyed on the byte-pinned `automataflStepDesc`, canonical over BabyB
         the newly-closed `gnd`/`(1,2)` teeth (a `[· ≥ 2]` lie at distance `1`; an `unbalancedPair` claim
         with the guard `= 0`). **LEG (3) IS COMPLETE — both axes, `Decision = evaluateAxis`.**
 
+  * **leg (4), the `chooseOffset` cross-axis tie-break (§4.10–§4.14):**
+      - `forcedGe0_core_score` — the 20-bit NO-WRAP score-compare heart: `SCORE_RBITS = 20` (`S ∈
+        [0, 2²⁰−1]`) with score magnitudes `≤ 300000 ⇒ |sx − sy − 1| ≤ 400000 < p − 2²⁰`, the exact
+        no-wrap interval (WIDER than the 5-bit small window `eq_of_modEq_score` supplies);
+      - `sgt_of_sat` / `slt_of_sat` — `forcedGe0_core_score` APPLIED to the byte-pinned descriptor:
+        cols `152`/`173` genuinely decide `sx > sy` / `sy > sx` (the field-congruence trap discharged
+        at 20-bit width, over the `att`/`rep ≤ 2` envelope);
+      - `decScore` + `decScore_cmp` / `decisionCmp_gt_iff_score` — PURE: the felt score is an ORDER
+        EMBEDDING of the reference `decisionCmp` (priority tier + intra-tier distance tie-break) at
+        `n = 2`, so a `>` on scores IS the decision order;
+      - `xmove_of_sat` / `ymove_of_sat` — the move bits (cols `194`/`200`) decide `[variant ≥ 1] =
+        [decision ≠ none]` (no wrap, `variant ∈ {0,1,2,3}`); `colPin_of_sat` pins the column rule
+        `true`; `ox_of_sat` / `oy_of_sat` extract the two offset equalities (the `push_f` `oy`
+        expansion collapsing to `ymove·(2·posy−1)·(1−sgt)` under `col = 1`);
+      - `offset_matches_chooseOffset` — the CAPSTONE: `(decodeOff ox, decodeOff oy) =
+        chooseOffset (decode xdec) (decode ydec) true`, keyed on the byte-pinned object. §4.14 canary
+        `#guard`s show the `ox` gate REJECTS a score-forbidden move (`ox = 1` with `sgt = 0`).
+      The capstone is CONDITIONAL on two hypotheses = the leg-(4) RESIDUAL: `sx = decScore (decode
+      xdec)` and the `att`/`rep ≤ 2` envelope (cols `60/61/107/108`). These are the `decide_axis`
+      score-field DETERMINATION — the raw `variant/att/rep` columns feed the score, and while
+      `decideAxis_x_sound` proves the DECODED decision equals `evaluateAxis`, it does NOT pin the raw
+      score columns (unused `att`/`rep` are `0` by the `assert_case` formulas, a 9-case ×2 extraction
+      NOT yet done). They are threaded as hypotheses, NOT asserted — the capstone is the conditional it is.
+
 REMAINING (each NOT assumed, NOT stubbed — no `sorry`, no placeholder):
-  (4) `chooseOffset` — the score-compare (`sgt/slt`, 20-bit) soundness closing offset = `chooseOffset`;
+  (4′) the score-field DETERMINATION discharging `offset_matches_chooseOffset`'s two hypotheses —
+       `xScoreEval`/`yScoreEval`: `sx = decScore (decode xdec)` + the `att`/`rep ≤ 2` envelope, by the
+       `decide_axis` `assert_case` 9-case field extraction (the same shape `decideAxis_*` already run);
   (5) the step + board-update fold ⇒ `boardDecode(new) = automatonStep(boardDecode(old))`.
-The top-level composition is deliberately NOT stated as a proven theorem until (4)-(5) close. -/
+The unconditional top-level composition is deliberately NOT stated as a proven theorem until (4′)-(5) close. -/
 
 end Dregg2.Circuit.Emit.AutomataflStepRefine
