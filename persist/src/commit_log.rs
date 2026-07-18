@@ -147,6 +147,50 @@ pub struct CellOverlay {
     /// An id absent from the checkpoint base too (created and removed both
     /// above it) is a harmless no-op delete.
     pub removed: Vec<CellId>,
+    /// Sovereign side-map UPSERTS (RSA-1): `(cell id, state commitment)`
+    /// entries a post-checkpoint turn inserted or updated in the ledger's
+    /// `sovereign_commitments` map (MakeSovereign's second half; sovereign
+    /// commitment transitions), last-event-wins. Consumers apply via
+    /// `register_sovereign_cell` (or `update_sovereign_commitment` when
+    /// already registered).
+    pub sovereign_upserts: Vec<(CellId, [u8; 32])>,
+    /// Sovereign side-map REMOVALS (RSA-1): ids whose sovereign commitment a
+    /// post-checkpoint turn removed and never re-inserted. Consumers apply
+    /// via `deregister_sovereign_cell` (absent id = harmless no-op).
+    pub sovereign_removed: Vec<CellId>,
+}
+
+/// The per-turn durable sidecar accompanying a [`CommitRecord`]: every ledger
+/// dimension the turn changed that `touched_cells` (hosted post-states) cannot
+/// express. Landed atomically with the record; all fields empty = the plain
+/// hosted-only commit (byte-identical behavior to the pre-sidecar store).
+#[derive(Clone, Debug, Default)]
+pub struct OverlaySidecar {
+    /// Hosted cells this turn REMOVED (destroyed, or removed hosted→sovereign
+    /// by MakeSovereign): present pre-turn, absent post-turn (F4-A).
+    pub removed_cells: Vec<CellId>,
+    /// Sovereign side-map entries this turn inserted/updated (RSA-1):
+    /// MakeSovereign's commitment insert, sovereign commitment transitions.
+    pub sovereign_upserts: Vec<(CellId, [u8; 32])>,
+    /// Sovereign side-map entries this turn removed (RSA-1).
+    pub sovereign_removed: Vec<CellId>,
+}
+
+impl OverlaySidecar {
+    /// A sidecar carrying only hosted removals (the F4-A shape).
+    pub fn removals(removed_cells: &[CellId]) -> Self {
+        Self {
+            removed_cells: removed_cells.to_vec(),
+            ..Self::default()
+        }
+    }
+
+    /// Whether nothing beyond the plain record needs persisting.
+    pub fn is_empty(&self) -> bool {
+        self.removed_cells.is_empty()
+            && self.sovereign_upserts.is_empty()
+            && self.sovereign_removed.is_empty()
+    }
 }
 
 /// Report from [`PersistentStore::verify_index_agrees_with_log`].
@@ -263,7 +307,26 @@ impl PersistentStore {
         expected_ordinal: u64,
         record: &CommitRecord,
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None, &[], &[])
+        self.commit_finalized_turn_inner(
+            expected_ordinal,
+            record,
+            &[],
+            None,
+            &[],
+            &OverlaySidecar::default(),
+        )
+    }
+
+    /// [`Self::commit_finalized_turn`] PLUS the turn's full [`OverlaySidecar`]
+    /// (hosted removals + sovereign side-map delta) in the SAME redb
+    /// transaction (F4-A + RSA-1).
+    pub fn commit_finalized_turn_with_sidecar(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        sidecar: &OverlaySidecar,
+    ) -> Result<u64> {
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None, &[], sidecar)
     }
 
     /// [`Self::commit_finalized_turn`] PLUS the turn's REMOVED-cell id set in
@@ -288,7 +351,14 @@ impl PersistentStore {
         record: &CommitRecord,
         removed_cells: &[CellId],
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None, &[], removed_cells)
+        self.commit_finalized_turn_inner(
+            expected_ordinal,
+            record,
+            &[],
+            None,
+            &[],
+            &OverlaySidecar::removals(removed_cells),
+        )
     }
 
     /// [`Self::commit_finalized_turn`] PLUS the turn's attested root in the
@@ -319,7 +389,14 @@ impl PersistentStore {
         record: &CommitRecord,
         root: &crate::StoredAttestedRoot,
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), &[], &[])
+        self.commit_finalized_turn_inner(
+            expected_ordinal,
+            record,
+            &[],
+            Some(root),
+            &[],
+            &OverlaySidecar::default(),
+        )
     }
 
     /// [`Self::commit_finalized_turn_with_root`] PLUS the turn's NoteCreate
@@ -343,30 +420,30 @@ impl PersistentStore {
         root: &crate::StoredAttestedRoot,
         notes: &[dregg_cell::note::NoteCommitment],
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), notes, &[])
-    }
-
-    /// [`Self::commit_finalized_turn_with_root_and_notes`] PLUS the turn's
-    /// REMOVED-cell id set in the SAME redb transaction (fifth-pass review
-    /// F4-A; see [`Self::commit_finalized_turn_with_removals`]). This is the
-    /// full finalization-path commit: record + root + notes + removals, one
-    /// atomic durability event.
-    pub fn commit_finalized_turn_with_root_notes_and_removals(
-        &self,
-        expected_ordinal: u64,
-        record: &CommitRecord,
-        root: &crate::StoredAttestedRoot,
-        notes: &[dregg_cell::note::NoteCommitment],
-        removed_cells: &[CellId],
-    ) -> Result<u64> {
         self.commit_finalized_turn_inner(
             expected_ordinal,
             record,
             &[],
             Some(root),
             notes,
-            removed_cells,
+            &OverlaySidecar::default(),
         )
+    }
+
+    /// [`Self::commit_finalized_turn_with_root_and_notes`] PLUS the turn's
+    /// full [`OverlaySidecar`] — hosted removals (fifth-pass review F4-A) AND
+    /// the sovereign side-map delta (RSA-1) — in the SAME redb transaction.
+    /// This is the full finalization-path commit: record + root + notes +
+    /// sidecar, one atomic durability event.
+    pub fn commit_finalized_turn_with_root_notes_and_sidecar(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        root: &crate::StoredAttestedRoot,
+        notes: &[dregg_cell::note::NoteCommitment],
+        sidecar: &OverlaySidecar,
+    ) -> Result<u64> {
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), notes, sidecar)
     }
 
     /// [`Self::commit_finalized_turn`] PLUS forever-digest burns in the SAME
@@ -386,7 +463,14 @@ impl PersistentStore {
         record: &CommitRecord,
         burns: &[(u8, [u8; 32], [u8; 32])],
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, burns, None, &[], &[])
+        self.commit_finalized_turn_inner(
+            expected_ordinal,
+            record,
+            burns,
+            None,
+            &[],
+            &OverlaySidecar::default(),
+        )
     }
 
     /// The ONE atomic finalized-turn commit transaction behind
@@ -395,7 +479,8 @@ impl PersistentStore {
     /// [`Self::commit_finalized_turn_with_root`] /
     /// [`Self::commit_finalized_turn_with_root_and_notes`]: record + indexes +
     /// optional burns + optional attested root + optional note-commitment
-    /// appends + optional removed-cell ids + cursor advance, all-or-nothing.
+    /// appends + optional overlay sidecar (hosted removals + sovereign delta)
+    /// + cursor advance, all-or-nothing.
     fn commit_finalized_turn_inner(
         &self,
         expected_ordinal: u64,
@@ -403,17 +488,31 @@ impl PersistentStore {
         burns: &[(u8, [u8; 32], [u8; 32])],
         root: Option<&crate::StoredAttestedRoot>,
         notes: &[dregg_cell::note::NoteCommitment],
-        removed_cells: &[CellId],
+        sidecar: &OverlaySidecar,
     ) -> Result<u64> {
         // A cell cannot both carry a post-state and be removed by the SAME
         // turn — refuse the ambiguous record outright (fail-closed) before
         // opening the transaction.
-        for removed in removed_cells {
+        for removed in &sidecar.removed_cells {
             if record.touched_cells.iter().any(|c| c.id() == *removed) {
                 return Err(StoreError::Integrity(format!(
                     "commit_finalized_turn: removed cell {} also appears in touched_cells \
                      (a turn cannot both post-state and remove the same cell)",
                     hex32(&removed.0)
+                )));
+            }
+        }
+        // A cell cannot be HOSTED post-turn and simultaneously gain a
+        // sovereign commitment (no-double-custody, RSA-1) — refuse. The
+        // converse (sovereign_removed ∩ touched_cells) is LEGAL: a sovereign
+        // cell re-hosted by migration removes its commitment AND gains a
+        // hosted post-state in one turn.
+        for (id, _) in &sidecar.sovereign_upserts {
+            if record.touched_cells.iter().any(|c| c.id() == *id) {
+                return Err(StoreError::Integrity(format!(
+                    "commit_finalized_turn: sovereign upsert {} also appears in touched_cells \
+                     (a cell cannot be hosted and sovereign at once)",
+                    hex32(&id.0)
                 )));
             }
         }
@@ -496,7 +595,7 @@ impl PersistentStore {
                 // A removed cell's index entry is DELETED in the same txn (the
                 // index is the removal-aware last-writer-wins projection of the
                 // log — the latest event for these ids is now a removal).
-                for removed in removed_cells {
+                for removed in &sidecar.removed_cells {
                     idx_cell.remove(&removed.0)?;
                 }
             }
@@ -507,12 +606,31 @@ impl PersistentStore {
             //     reconstruction deletes these ids instead of resurrecting a
             //     pre-checkpoint cell. The CommitRecord postcard shape is
             //     untouched — old stores simply lack the (empty) table.
-            if !removed_cells.is_empty() {
-                let ids: Vec<[u8; 32]> = removed_cells.iter().map(|id| id.0).collect();
+            if !sidecar.removed_cells.is_empty() {
+                let ids: Vec<[u8; 32]> = sidecar.removed_cells.iter().map(|id| id.0).collect();
                 let encoded = postcard::to_stdvec(&ids)
                     .map_err(|e| StoreError::Serialization(e.to_string()))?;
                 let mut removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
                 removed_tbl.insert(assigned, encoded.as_slice())?;
+            }
+
+            // 2c. The turn's SOVEREIGN side-map delta — SAME transaction
+            //     (RSA-1): MakeSovereign's second half (the commitment insert)
+            //     and any commitment update/removal land atomically with the
+            //     record, so recovery/joiners reconstruct the sovereign map,
+            //     not only the hosted deletion.
+            if !sidecar.sovereign_upserts.is_empty() || !sidecar.sovereign_removed.is_empty() {
+                let upserts: Vec<([u8; 32], [u8; 32])> = sidecar
+                    .sovereign_upserts
+                    .iter()
+                    .map(|(id, c)| (id.0, *c))
+                    .collect();
+                let removed: Vec<[u8; 32]> =
+                    sidecar.sovereign_removed.iter().map(|id| id.0).collect();
+                let encoded = postcard::to_stdvec(&(upserts, removed))
+                    .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                let mut sov_tbl = write_txn.open_table(tables::SOVEREIGN_DELTA_BY_ORDINAL)?;
+                sov_tbl.insert(assigned, encoded.as_slice())?;
             }
 
             // 3. Burn the turn's forever digests in the SAME transaction (the
@@ -599,6 +717,16 @@ impl PersistentStore {
         let read_txn = self.db.begin_read()?;
         let table = open_removed_ro(&read_txn)?;
         removed_at(&table, ordinal)
+    }
+
+    /// The sovereign side-map delta the turn at `ordinal` committed (RSA-1):
+    /// `(upserts of (id, commitment), removed ids)`. Empty for a turn that
+    /// changed no sovereign entry, and for every record written before the
+    /// sovereign sidecar existed.
+    pub fn sovereign_delta_at(&self, ordinal: u64) -> Result<SovereignDelta> {
+        let read_txn = self.db.begin_read()?;
+        let table = open_sovereign_ro(&read_txn)?;
+        sovereign_at(&table, ordinal)
     }
 
     /// The blocklace `block_id` of every durably committed turn this node has
@@ -743,11 +871,16 @@ impl PersistentStore {
         let read_txn = self.db.begin_read()?;
         let log = read_txn.open_table(tables::COMMIT_LOG)?;
         let removed_tbl = open_removed_ro(&read_txn)?;
+        let sovereign_tbl = open_sovereign_ro(&read_txn)?;
         // ordinal-ascending iteration → later writers overwrite earlier ones,
         // a later removal deletes an earlier post-state, and a later re-creation
-        // supersedes an earlier removal.
+        // supersedes an earlier removal. Same last-event-wins rule for the
+        // sovereign side-map delta (RSA-1).
         let mut latest: HashMap<[u8; 32], Cell> = HashMap::new();
         let mut removed: std::collections::BTreeSet<[u8; 32]> = std::collections::BTreeSet::new();
+        // id -> Some(commitment) = live upsert; None = removed.
+        let mut sovereign: std::collections::BTreeMap<[u8; 32], Option<[u8; 32]>> =
+            std::collections::BTreeMap::new();
         for entry in log.iter()? {
             let entry =
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
@@ -770,10 +903,27 @@ impl PersistentStore {
                 latest.remove(&id.0);
                 removed.insert(id.0);
             }
+            let (sov_upserts, sov_removed) = sovereign_at(&sovereign_tbl, ordinal)?;
+            for (id, c) in sov_upserts {
+                sovereign.insert(id.0, Some(c));
+            }
+            for id in sov_removed {
+                sovereign.insert(id.0, None);
+            }
+        }
+        let mut sovereign_upserts = Vec::new();
+        let mut sovereign_removed = Vec::new();
+        for (id, slot) in sovereign {
+            match slot {
+                Some(c) => sovereign_upserts.push((CellId(id), c)),
+                None => sovereign_removed.push(CellId(id)),
+            }
         }
         Ok(CellOverlay {
             cells: latest.into_values().collect(),
             removed: removed.into_iter().map(CellId).collect(),
+            sovereign_upserts,
+            sovereign_removed,
         })
     }
 
@@ -1046,6 +1196,19 @@ impl PersistentStore {
                 }
             }
         }
+        // Same hygiene for the sovereign delta sidecar (RSA-1).
+        if let Some(sov_tbl) = open_sovereign_ro(&read_txn)? {
+            for entry in sov_tbl.iter()? {
+                let entry =
+                    entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+                let ordinal = entry.0.value();
+                if log.get(ordinal)?.is_none() {
+                    report.orphan_entries.push(format!(
+                        "sovereign_delta_by_ordinal -> missing ordinal {ordinal}"
+                    ));
+                }
+            }
+        }
 
         Ok(report)
     }
@@ -1272,6 +1435,7 @@ impl PersistentStore {
                 let mut idx_hc = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
                 let mut compacted_ids = write_txn.open_table(tables::COMMIT_COMPACTED_BLOCK_IDS)?;
                 let mut removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
+                let mut sov_tbl = write_txn.open_table(tables::SOVEREIGN_DELTA_BY_ORDINAL)?;
                 for d in &doomed {
                     log.remove(d.ordinal)?;
                     idx_receipt.remove(&d.receipt_hash)?;
@@ -1282,8 +1446,11 @@ impl PersistentStore {
                     // A compacted ordinal's removal entry FOLDS into the
                     // covering checkpoint (F4-A): the checkpointed baseline
                     // already lacks the removed cell, so the entry is spent —
-                    // deleting it keeps the removal table orphan-free.
+                    // deleting it keeps the removal table orphan-free. Same
+                    // for its sovereign delta (RSA-1): checkpoints capture the
+                    // FULL sovereign side maps, so the delta is subsumed.
                     removed_tbl.remove(d.ordinal)?;
+                    sov_tbl.remove(d.ordinal)?;
                 }
             }
 
@@ -1545,12 +1712,16 @@ impl PersistentStore {
                 let mut idx_turn = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
                 let mut idx_hc = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
                 let mut removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
+                let mut sov_tbl = write_txn.open_table(tables::SOVEREIGN_DELTA_BY_ORDINAL)?;
                 for d in &doomed {
                     log.remove(d.ordinal)?;
                     idx_receipt.remove(&d.receipt_hash)?;
                     idx_turn.remove(&d.turn_hash)?;
                     idx_hc.remove(d.hc_key.as_slice())?;
                     removed_tbl.remove(d.ordinal)?;
+                    // A truncated turn was never safely applied — its
+                    // sovereign delta goes with it (RSA-1).
+                    sov_tbl.remove(d.ordinal)?;
                 }
             }
 
@@ -1683,6 +1854,48 @@ fn removed_at(
     match table {
         Some(t) => decode_removed(t.get(ordinal)?),
         None => Ok(Vec::new()),
+    }
+}
+
+/// A per-ordinal sovereign side-map delta (RSA-1): upserts + removals.
+pub type SovereignDelta = (Vec<(CellId, [u8; 32])>, Vec<CellId>);
+
+/// Decode a [`tables::SOVEREIGN_DELTA_BY_ORDINAL`] entry (absent = no delta).
+fn decode_sovereign(guard: Option<redb::AccessGuard<'_, &'static [u8]>>) -> Result<SovereignDelta> {
+    match guard {
+        Some(g) => {
+            let (upserts, removed): (Vec<([u8; 32], [u8; 32])>, Vec<[u8; 32]>) =
+                postcard::from_bytes(g.value())?;
+            Ok((
+                upserts.into_iter().map(|(id, c)| (CellId(id), c)).collect(),
+                removed.into_iter().map(CellId).collect(),
+            ))
+        }
+        None => Ok((Vec::new(), Vec::new())),
+    }
+}
+
+/// Open [`tables::SOVEREIGN_DELTA_BY_ORDINAL`] in a READ transaction,
+/// tolerating a store written before the table existed (RSA-1 backward
+/// compatibility — mirrors [`open_removed_ro`]).
+fn open_sovereign_ro(
+    txn: &redb::ReadTransaction,
+) -> Result<Option<redb::ReadOnlyTable<u64, &'static [u8]>>> {
+    match txn.open_table(tables::SOVEREIGN_DELTA_BY_ORDINAL) {
+        Ok(t) => Ok(Some(t)),
+        Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Sovereign delta at `ordinal` through an optionally-present table.
+fn sovereign_at(
+    table: &Option<redb::ReadOnlyTable<u64, &'static [u8]>>,
+    ordinal: u64,
+) -> Result<SovereignDelta> {
+    match table {
+        Some(t) => decode_sovereign(t.get(ordinal)?),
+        None => Ok((Vec::new(), Vec::new())),
     }
 }
 
@@ -2494,6 +2707,102 @@ mod tests {
         assert!(cp.get(&doomed_id).is_none());
         assert!(store.lookup_cell(&doomed_id).unwrap().is_none());
         assert!(store.verify_index_agrees_with_log().unwrap().ok());
+    }
+
+    /// RSA-1 — the sovereign sidecar's own lifecycle: last-event-wins
+    /// projection across upsert → removal, atomicity with the record, orphan
+    /// hygiene under compaction and truncation, and the same-record
+    /// hosted/sovereign double-custody guard.
+    #[test]
+    fn sovereign_delta_is_last_event_wins_and_cleaned_by_compaction() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let c = cell(0x71, 500);
+        let cid = c.id();
+        let commitment = [0x5c; 32];
+
+        // t0 (h1): hosted create. t1 (h2): MakeSovereign — hosted removal +
+        // sovereign upsert in ONE sidecar.
+        let mut rec0 = record(0, 0, vec![c.clone()]);
+        rec0.turn_hash[1] = 0xe5;
+        store.commit_finalized_turn(0, &rec0).unwrap();
+        let mut rec1 = record(1, 1, Vec::new());
+        rec1.turn_hash[1] = 0xe6;
+        store
+            .commit_finalized_turn_with_sidecar(
+                1,
+                &rec1,
+                &OverlaySidecar {
+                    removed_cells: vec![cid],
+                    sovereign_upserts: vec![(cid, commitment)],
+                    sovereign_removed: Vec::new(),
+                },
+            )
+            .unwrap();
+        let overlay = store.cell_overlay_since(0).unwrap();
+        assert_eq!(overlay.removed, vec![cid]);
+        assert_eq!(overlay.sovereign_upserts, vec![(cid, commitment)]);
+        assert!(overlay.sovereign_removed.is_empty());
+        assert_eq!(
+            store.sovereign_delta_at(1).unwrap(),
+            (vec![(cid, commitment)], Vec::new())
+        );
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+
+        // t2 (h3): the sovereign entry is DEREGISTERED — the later event wins.
+        let mut rec2 = record(2, 2, Vec::new());
+        rec2.turn_hash[1] = 0xe7;
+        store
+            .commit_finalized_turn_with_sidecar(
+                2,
+                &rec2,
+                &OverlaySidecar {
+                    removed_cells: Vec::new(),
+                    sovereign_upserts: Vec::new(),
+                    sovereign_removed: vec![cid],
+                },
+            )
+            .unwrap();
+        let overlay = store.cell_overlay_since(0).unwrap();
+        assert!(overlay.sovereign_upserts.is_empty(), "removal supersedes");
+        assert_eq!(overlay.sovereign_removed, vec![cid]);
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+
+        // Same-record double custody is refused: a hosted post-state AND a
+        // sovereign upsert for one id cannot land together.
+        let conflicted = cell(0x72, 10);
+        let conflicted_id = conflicted.id();
+        let mut bad = record(3, 3, vec![conflicted]);
+        bad.turn_hash[1] = 0xe8;
+        let err = store.commit_finalized_turn_with_sidecar(
+            3,
+            &bad,
+            &OverlaySidecar {
+                removed_cells: Vec::new(),
+                sovereign_upserts: vec![(conflicted_id, [1u8; 32])],
+                sovereign_removed: Vec::new(),
+            },
+        );
+        assert!(matches!(err, Err(StoreError::Integrity(_))), "got {err:?}");
+        assert_eq!(store.commit_cursor().unwrap(), 3, "nothing landed");
+
+        // Compaction under a covering checkpoint cleans the spent sovereign
+        // entries (no orphans), exactly like the removal sidecar.
+        let mut rec3 = record(3, 3, vec![cell(0x73, 900)]);
+        rec3.turn_hash[1] = 0xe9;
+        store.commit_finalized_turn(3, &rec3).unwrap();
+        checkpoint_from_log_no_codrive(&store, 4);
+        assert_eq!(store.compact_below(4).unwrap(), 3, "h1..h3 compacted");
+        assert_eq!(
+            store.sovereign_delta_at(1).unwrap(),
+            (Vec::new(), Vec::new()),
+            "a compacted ordinal's sovereign delta is cleaned"
+        );
+        assert_eq!(
+            store.sovereign_delta_at(2).unwrap(),
+            (Vec::new(), Vec::new())
+        );
+        let report = store.verify_index_agrees_with_log().unwrap();
+        assert!(report.ok(), "audit after sovereign compaction: {report:?}");
     }
 
     /// RSA-3 (cross-family refutation of 0396015ac) — the SAME-HEIGHT

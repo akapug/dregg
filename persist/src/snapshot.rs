@@ -206,15 +206,30 @@ impl PersistentStore {
         // Does any post-checkpoint REMOVAL delete a cell the shipped base
         // still holds? The wire overlay (`Vec<Cell>`) is insert-only and
         // cannot express that deletion, so such a snapshot must FOLD (below).
+        // A post-checkpoint SOVEREIGN delta (RSA-1) is likewise inexpressible
+        // in the hosted-cell wire overlay — it rides the folded checkpoint's
+        // sovereign side maps.
         let removal_hits_base = full_overlay
             .removed
             .iter()
             .any(|id| ledger.get(id).is_some());
+        let has_sovereign_delta = !full_overlay.sovereign_upserts.is_empty()
+            || !full_overlay.sovereign_removed.is_empty();
         for cell in &full_overlay.cells {
             upsert_cell(&mut ledger, cell.clone());
         }
         for id in &full_overlay.removed {
             let _ = ledger.remove(id);
+        }
+        for (id, c) in &full_overlay.sovereign_upserts {
+            if ledger.is_sovereign(id) {
+                let _ = ledger.update_sovereign_commitment(id, *c);
+            } else {
+                let _ = ledger.register_sovereign_cell(*id, *c);
+            }
+        }
+        for id in &full_overlay.sovereign_removed {
+            let _ = ledger.deregister_sovereign_cell(id);
         }
         let claimed_root = snapshot_ledger_root(&ledger);
 
@@ -229,8 +244,11 @@ impl PersistentStore {
         // and reconstructs the exact finalized ledger, deletions included.
         // Removal-free windows (the overwhelmingly common case) ship the
         // original minimal {checkpoint ⊕ delta} split unchanged.
-        let (checkpoint, base_height, overlay) = if removal_hits_base {
+        let (checkpoint, base_height, overlay) = if removal_hits_base || has_sovereign_delta {
             let head_height = self.recovered_head_height()?.unwrap_or(base_height);
+            // `ledger_to_checkpoint` captures the reconstructed ledger's
+            // sovereign side maps too, so a post-checkpoint MakeSovereign's
+            // commitment rides the folded base to the joiner (RSA-1).
             let folded = crate::ledger_store::ledger_to_checkpoint(&ledger, head_height);
             (Some(folded), head_height, Vec::new())
         } else {
@@ -718,7 +736,10 @@ mod tests {
             })
             .unwrap();
 
-        // Height-2 finalized turn REMOVES the doomed cell.
+        // Height-2 finalized turn: MakeSovereign — the doomed cell LEAVES the
+        // hosted set AND registers its sovereign commitment (RSA-1: the
+        // durable sidecar carries BOTH halves of the transition).
+        let sovereign_commitment = doomed.state_commitment();
         let _ = running.remove(&doomed_id);
         let rec1 = CommitRecord {
             ordinal: 1,
@@ -732,7 +753,15 @@ mod tests {
             touched_cells: Vec::new(),
         };
         shipper
-            .commit_finalized_turn_with_removals(1, &rec1, &[doomed_id])
+            .commit_finalized_turn_with_sidecar(
+                1,
+                &rec1,
+                &crate::commit_log::OverlaySidecar {
+                    removed_cells: vec![doomed_id],
+                    sovereign_upserts: vec![(doomed_id, sovereign_commitment)],
+                    sovereign_removed: Vec::new(),
+                },
+            )
             .unwrap();
 
         // Ship: succeeds (pre-fix: Integrity refusal), folded to a synthesized
@@ -752,10 +781,18 @@ mod tests {
         // A fresh joiner reconstructs the exact finalized ledger: the removed
         // cell is ABSENT and the root matches the recorded head root.
         let joiner = PersistentStore::open_in_memory().unwrap();
-        let mut rebuilt = joiner.install_snapshot(&snap, &snap.claimed_root).unwrap();
+        let rebuilt = joiner.install_snapshot(&snap, &snap.claimed_root).unwrap();
         assert!(rebuilt.get(&doomed_id).is_none(), "no resurrection");
         assert!(rebuilt.get(&survivor.id()).is_some());
         assert_eq!(crate::canonical_ledger_root(&rebuilt), rec1.ledger_root);
+        // RSA-1: the post-checkpoint MakeSovereign's COMMITMENT survives
+        // joiner installation — the folded checkpoint carries the sovereign
+        // side maps, so the joiner sees the whole transition.
+        assert_eq!(
+            rebuilt.get_sovereign_commitment(&doomed_id),
+            Some(&sovereign_commitment),
+            "the sovereign commitment must survive ship -> install (RSA-1)"
+        );
 
         // A removal-FREE window still ships the minimal split (no fold): a
         // creation-only turn above the fold point keeps the delta shape.
@@ -777,10 +814,14 @@ mod tests {
         // The removal still hits the (height-1) base, so the fold re-applies —
         // and the joiner again reconstructs the exact ledger.
         let joiner2 = PersistentStore::open_in_memory().unwrap();
-        let mut rebuilt2 = joiner2
+        let rebuilt2 = joiner2
             .install_snapshot(&snap2, &snap2.claimed_root)
             .unwrap();
         assert!(rebuilt2.get(&doomed_id).is_none());
+        assert!(
+            rebuilt2.is_sovereign(&doomed_id),
+            "the sovereign commitment still rides the re-folded base (RSA-1)"
+        );
         assert_eq!(crate::canonical_ledger_root(&rebuilt2), rec2.ledger_root);
     }
 }

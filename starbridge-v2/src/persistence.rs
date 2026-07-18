@@ -282,6 +282,13 @@ impl WorldPersist {
             .filter(|id| ledger.get(id).is_none())
             .copied()
             .collect();
+        // RSA-1: a touched id with no hosted post-state that IS sovereign
+        // transitioned hosted→sovereign this turn — persist the commitment
+        // (the transition's second half) alongside the removal.
+        let sovereign_upserts: Vec<(dregg_cell::CellId, [u8; 32])> = removed_cells
+            .iter()
+            .filter_map(|id| ledger.get_sovereign_commitment(id).map(|c| (*id, *c)))
+            .collect();
         let record = CommitRecord {
             ordinal: 0, // assigned by the store at the cursor
             height,
@@ -299,9 +306,14 @@ impl WorldPersist {
         let bytes =
             postcard::to_stdvec(turn).map_err(|e| StoreError::Serialization(e.to_string()))?;
         self.store.set_config(&turn_key(self.cursor), &bytes)?;
+        let sidecar = dregg_persist::OverlaySidecar {
+            removed_cells,
+            sovereign_upserts,
+            sovereign_removed: Vec::new(),
+        };
         let assigned =
             self.store
-                .commit_finalized_turn_with_removals(self.cursor, &record, &removed_cells)?;
+                .commit_finalized_turn_with_sidecar(self.cursor, &record, &sidecar)?;
         self.cursor = assigned + 1;
         Ok(())
     }
@@ -366,6 +378,18 @@ impl WorldPersist {
         }
         for id in &overlay.removed {
             let _ = ledger.remove(id);
+        }
+        // The overlay's SOVEREIGN half (RSA-1): recover MakeSovereign's
+        // commitment insert, not only the hosted deletion.
+        for (id, c) in &overlay.sovereign_upserts {
+            if ledger.is_sovereign(id) {
+                let _ = ledger.update_sovereign_commitment(id, *c);
+            } else {
+                let _ = ledger.register_sovereign_cell(*id, *c);
+            }
+        }
+        for id in &overlay.sovereign_removed {
+            let _ = ledger.deregister_sovereign_cell(id);
         }
 
         // 3. Convergence FAIL-CLOSED: the reconstructed canonical root MUST equal

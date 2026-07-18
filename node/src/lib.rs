@@ -2257,8 +2257,20 @@ fn reseed_genesis_then_overlay(
     recovered_removed_cells: &[dregg_cell::CellId],
 ) -> GenesisCellLoadStats {
     // 1. Lift the recovered commit-log overlay (checkpoint ⊕ touched
-    //    post-states) out of the live ledger.
+    //    post-states) out of the live ledger — INCLUDING the sovereign side
+    //    maps (RSA-1: resetting the ledger below would silently wipe every
+    //    recovered sovereign commitment/registration; the genesis reseed never
+    //    re-creates them).
     let recovered_overlay: Vec<dregg_cell::Cell> = ledger.iter().map(|(_, c)| c.clone()).collect();
+    let recovered_sovereign: Vec<(dregg_cell::CellId, [u8; 32])> = ledger
+        .iter_sovereign_commitments()
+        .map(|(id, c)| (*id, *c))
+        .collect();
+    let recovered_registrations: Vec<(dregg_cell::CellId, dregg_cell::SovereignRegistration)> =
+        ledger
+            .iter_sovereign_registrations()
+            .map(|(id, r)| (*id, r.clone()))
+            .collect();
     *ledger = dregg_cell::Ledger::new();
 
     // 2. Genesis baseline on a FRESH ledger: genesis_moves apply EXACTLY ONCE
@@ -2279,6 +2291,24 @@ fn reseed_genesis_then_overlay(
     //    construction-time recovery from the durable removal table.)
     for id in recovered_removed_cells {
         let _ = ledger.remove(id);
+    }
+
+    // 5. Re-install the recovered SOVEREIGN side maps (RSA-1), lifted
+    //    wholesale in step 1 — checkpoint-restored entries plus the overlay's
+    //    post-checkpoint delta, applied AFTER the hosted removals so a
+    //    MakeSovereign target re-registers cleanly. Mirrors
+    //    `persist::ledger_store::checkpoint_to_ledger`'s restore order.
+    for (id, c) in recovered_sovereign {
+        let _ = ledger.register_sovereign_cell(id, c);
+    }
+    for (id, r) in recovered_registrations {
+        let _ = ledger.register_sovereign_cell_with_vk(
+            id,
+            r.commitment,
+            r.registered_at,
+            r.ttl_blocks,
+            r.verification_key_hash,
+        );
     }
 
     stats

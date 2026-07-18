@@ -179,6 +179,12 @@ pub struct IngressCommit {
     /// ingress time — the durable commit record's cell overlay for the prefix
     /// through this turn (NOT re-read from the live ledger at promotion).
     pub touched_post_cells: Vec<Cell>,
+    /// Sovereign side-map UPSERTS this turn produced (RSA-1): a touched id
+    /// with NO hosted post-state that IS sovereign in the ingress-time
+    /// snapshot left the hosted set via MakeSovereign — its `(id, commitment)`
+    /// pair is the transition's second half, carried so promotion persists it
+    /// durably (the ingress execution already applied it to the live ledger).
+    pub sovereign_upserts: Vec<(CellId, [u8; 32])>,
     /// `canonical_ledger_root` computed right after the in-place commit, under
     /// the ingress write lock — the AttestedRoot merkle root for the prefix
     /// through this turn. (Same O(ledger) hash the executed path pays per
@@ -198,15 +204,24 @@ impl IngressCommit {
         receipt: dregg_turn::TurnReceipt,
         touched_cells: Vec<CellId>,
     ) -> Self {
-        let touched_post_cells = touched_cells
+        let touched_post_cells: Vec<Cell> = touched_cells
             .iter()
             .filter_map(|id| ledger.get(id).cloned())
+            .collect();
+        // RSA-1: a touched id with no hosted post-state that IS sovereign in
+        // this snapshot transitioned hosted→sovereign this turn — capture the
+        // commitment (MakeSovereign's second half) for durable promotion.
+        let sovereign_upserts: Vec<(CellId, [u8; 32])> = touched_cells
+            .iter()
+            .filter(|id| ledger.get(id).is_none())
+            .filter_map(|id| ledger.get_sovereign_commitment(id).map(|c| (*id, *c)))
             .collect();
         let prefix_root = dregg_persist::canonical_ledger_root(ledger);
         Self {
             receipt,
             touched_cells,
             touched_post_cells,
+            sovereign_upserts,
             prefix_root,
         }
     }
@@ -982,6 +997,20 @@ impl NodeState {
                 for id in &overlay.removed {
                     let _ = ledger.remove(id);
                 }
+                // …and its SOVEREIGN half (RSA-1): MakeSovereign's commitment
+                // insert (and any post-checkpoint sovereign delta) is applied
+                // over the checkpoint's side maps — the whole transition
+                // recovers, not just the hosted deletion.
+                for (id, c) in &overlay.sovereign_upserts {
+                    if ledger.is_sovereign(id) {
+                        let _ = ledger.update_sovereign_commitment(id, *c);
+                    } else {
+                        let _ = ledger.register_sovereign_cell(*id, *c);
+                    }
+                }
+                for id in &overlay.sovereign_removed {
+                    let _ = ledger.deregister_sovereign_cell(id);
+                }
                 recovered_removed_cells = overlay.removed;
                 // The recovery-convergence verdict is DEFERRED to
                 // `verify_recovery_convergence`, which `run_node` calls AFTER it
@@ -1199,9 +1228,20 @@ impl NodeState {
             }
             // The overlay's REMOVAL half (F4-A): deletions included, so the
             // reconstruction — and the convergence check below — see the exact
-            // finalized ledger.
+            // finalized ledger. Its SOVEREIGN half (RSA-1) recovers the side
+            // maps the hosted-only canonical root cannot see.
             for id in &overlay.removed {
                 let _ = ledger.remove(id);
+            }
+            for (id, c) in &overlay.sovereign_upserts {
+                if ledger.is_sovereign(id) {
+                    let _ = ledger.update_sovereign_commitment(id, *c);
+                } else {
+                    let _ = ledger.register_sovereign_cell(*id, *c);
+                }
+            }
+            for id in &overlay.sovereign_removed {
+                let _ = ledger.deregister_sovereign_cell(id);
             }
             recovered_removed_cells = overlay.removed;
             // Convergence assertion, mirroring `new_with_key_file`: the

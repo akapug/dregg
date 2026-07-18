@@ -254,6 +254,29 @@ pub const COMMIT_COMPACTED_BLOCK_IDS: TableDefinition<&[u8; 32], ()> =
 pub const REMOVED_CELLS_BY_ORDINAL: TableDefinition<u64, &[u8]> =
     TableDefinition::new("removed_cells_by_ordinal");
 
+/// Sovereign side-map delta per commit ordinal — the OTHER half of
+/// `MakeSovereign` (RSA-1, cross-family refutation of 0396015ac).
+///
+/// `Ledger::make_sovereign` is a TWO-part transition: it removes the hosted
+/// cell AND inserts the cell's state commitment into the ledger's
+/// `sovereign_commitments` side map. The removal sidecar above carries the
+/// first half only; without this table a commitment created (or updated /
+/// removed) AFTER the latest checkpoint is silently lost on restart — the
+/// hosted deletion recovers but the sovereign registration does not, and the
+/// loss is invisible to `canonical_ledger_root` (hosted-cells-only).
+///
+/// Value: postcard `(Vec<([u8; 32], [u8; 32])>, Vec<[u8; 32]>)` =
+/// (upserts of (cell id, state commitment), removed ids). Written inside the
+/// SAME `commit_finalized_turn_*` transaction; joined by `cell_overlay_since`
+/// (the recovery/reseed/joiner consumers apply upserts via
+/// `register_sovereign_cell`/`update_sovereign_commitment` and removals via
+/// `deregister_sovereign_cell`); cleaned by compaction (checkpoints capture
+/// the full sovereign side maps, so a below-floor delta is subsumed) and by
+/// divergent-tail truncation. Absent table/entry = no sovereign delta — the
+/// shape every pre-RSA-1 store reads as.
+pub const SOVEREIGN_DELTA_BY_ORDINAL: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("sovereign_delta_by_ordinal");
+
 // ─── Forever-Digest Sets (restart-durable anti-replay carriers) ──────────────
 //
 // Several node registries carry "burned forever" digest sets whose refusal

@@ -4691,6 +4691,64 @@ async fn execute_finalized_turn(
         }
     }
 
+    // ── SOVEREIGN SIDE-MAP MERGE (RSA-1) ─────────────────────────────────────
+    // The hosted-cell loop above covers only `Ledger::iter()` — but the
+    // executor also mutates the ledger's SOVEREIGN side maps (MakeSovereign's
+    // commitment insert, sovereign commitment transitions, registration
+    // commitment updates), and without this merge those changes never reached
+    // the live ledger at all: the actor was gone from the hosted set but never
+    // became sovereign (the reviewer's live probe). Merge every side-map delta
+    // the executor produced, pre→post, onto the authoritative ledger. Runs
+    // AFTER the hosted install so a MakeSovereign target's hosted removal has
+    // already landed (register refuses a still-hosted id).
+    let sovereign_upserts: Vec<(dregg_cell::CellId, [u8; 32])> = exec_ledger
+        .iter_sovereign_commitments()
+        .filter(|(id, c)| pre_ledger.get_sovereign_commitment(id) != Some(*c))
+        .map(|(id, c)| (*id, *c))
+        .collect();
+    let sovereign_removed: Vec<dregg_cell::CellId> = pre_ledger
+        .iter_sovereign_commitments()
+        .filter(|(id, _)| exec_ledger.get_sovereign_commitment(id).is_none())
+        .map(|(id, _)| *id)
+        .collect();
+    for (id, c) in &sovereign_upserts {
+        if s.ledger.is_sovereign(id) {
+            let _ = s.ledger.update_sovereign_commitment(id, *c);
+        } else {
+            let _ = s.ledger.register_sovereign_cell(*id, *c);
+        }
+    }
+    for id in &sovereign_removed {
+        let _ = s.ledger.deregister_sovereign_cell(id);
+    }
+    // Ephemeral sovereign REGISTRATIONS (TTL side map): the executor can
+    // update an existing registration's commitment
+    // (`update_sovereign_registration_commitment`). Mirror those commitment
+    // changes onto the live map. (Registrations are TTL-ephemeral and fully
+    // captured by every full-ledger checkpoint; the durable per-turn sidecar
+    // deliberately carries only the `sovereign_commitments` delta — flagged
+    // as the honest scope cut in the RSA-1 commit.)
+    {
+        let reg_updates: Vec<(dregg_cell::CellId, [u8; 32], [u8; 32], u64)> = exec_ledger
+            .iter_sovereign_registrations()
+            .filter_map(|(id, post)| {
+                pre_ledger.get_sovereign_registration(id).and_then(|pre| {
+                    (pre.commitment != post.commitment).then_some((
+                        *id,
+                        pre.commitment,
+                        post.commitment,
+                        post.last_activity,
+                    ))
+                })
+            })
+            .collect();
+        for (id, old, new, height) in reg_updates {
+            let _ = s
+                .ledger
+                .update_sovereign_registration_commitment(&id, old, new, height);
+        }
+    }
+
     match exec_result {
         dregg_turn::TurnResult::Committed { receipt, .. } => {
             let receipt_hash_hex: String = receipt
@@ -5424,13 +5482,21 @@ async fn execute_finalized_turn(
                     block_executed_up_to,
                     touched_cells,
                 };
+                // The full overlay sidecar (F4-A removals + RSA-1 sovereign
+                // delta — the same pre→post side-map diff the live merge
+                // above applied, so durable and live state agree).
+                let sidecar = dregg_persist::OverlaySidecar {
+                    removed_cells,
+                    sovereign_upserts: sovereign_upserts.clone(),
+                    sovereign_removed: sovereign_removed.clone(),
+                };
                 let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
-                match s.store.commit_finalized_turn_with_root_notes_and_removals(
+                match s.store.commit_finalized_turn_with_root_notes_and_sidecar(
                     expected_ordinal,
                     &commit_record,
                     &stored,
                     &note_commitments,
-                    &removed_cells,
+                    &sidecar,
                 ) {
                     Ok(assigned) => {
                         // The turn's note commitments are durable (they landed
@@ -5630,6 +5696,7 @@ async fn promote_ingress_committed_turn(
         receipt,
         touched_cells: ingress_touched_ids,
         touched_post_cells,
+        sovereign_upserts: ingress_sovereign_upserts,
         prefix_root,
     } = ingress;
     let receipt_hash = receipt.receipt_hash();
@@ -5830,13 +5897,22 @@ async fn promote_ingress_committed_turn(
             block_executed_up_to,
             touched_cells: touched_post_cells,
         };
+        // The full overlay sidecar: hosted removals (F4-A) + the ingress-time
+        // sovereign upserts (RSA-1 — MakeSovereign's second half, captured in
+        // the retained snapshot; the live ledger already holds it, promotion
+        // makes it durable).
+        let sidecar = dregg_persist::OverlaySidecar {
+            removed_cells,
+            sovereign_upserts: ingress_sovereign_upserts,
+            sovereign_removed: Vec::new(),
+        };
         let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
-        match s.store.commit_finalized_turn_with_root_notes_and_removals(
+        match s.store.commit_finalized_turn_with_root_notes_and_sidecar(
             expected_ordinal,
             &commit_record,
             &stored,
             &note_commitments,
-            &removed_cells,
+            &sidecar,
         ) {
             Ok(assigned) => {
                 // The turn's note commitments are durable (same transaction
@@ -7951,6 +8027,13 @@ mod tests {
                 rec.touched_cells.iter().all(|c| c.id() != actor),
                 "no stale post-state for the removed cell in the overlay"
             );
+            // RSA-1: MakeSovereign is a TWO-part transition — the live ledger
+            // must hold the sovereign commitment after promotion.
+            assert!(
+                s.ledger.is_sovereign(&actor),
+                "RSA-1: the promoted MakeSovereign must leave the actor \
+                 SOVEREIGN on the live ledger (commitment registered)"
+            );
             assert!(s.ingress_commits.is_empty(), "entry consumed");
             (rec.ledger_root, rec.ordinal)
         };
@@ -7976,10 +8059,27 @@ mod tests {
         for id in &overlay.removed {
             let _ = recovered.remove(id);
         }
+        for (id, c) in &overlay.sovereign_upserts {
+            if recovered.is_sovereign(id) {
+                let _ = recovered.update_sovereign_commitment(id, *c);
+            } else {
+                let _ = recovered.register_sovereign_cell(*id, *c);
+            }
+        }
+        for id in &overlay.sovereign_removed {
+            let _ = recovered.deregister_sovereign_cell(id);
+        }
         assert!(
             recovered.get(&actor).is_none(),
             "the removed hosted cell must NOT be resurrected by \
              baseline ⊕ overlay (the F4-A invariant)"
+        );
+        // RSA-1: the OTHER half of MakeSovereign — the sovereign commitment —
+        // must survive restart recovery, not just the hosted deletion.
+        assert!(
+            recovered.is_sovereign(&actor),
+            "RSA-1: restart recovery must reconstruct the actor's SOVEREIGN \
+             commitment, not only delete its hosted cell"
         );
         assert!(
             recovered.get(&bystander).is_some(),
@@ -8067,6 +8167,15 @@ mod tests {
                 s.ledger.get(&actor).is_none(),
                 "distinguisher: the actor left the hosted set on the executed path"
             );
+            // RSA-1: the executed path's off-lock install must merge the
+            // sovereign side-map dimension too — the LIVE ledger must hold the
+            // commitment immediately after finalization (pre-fix the install
+            // loop only covered hosted cells and the insert never landed).
+            assert!(
+                s.ledger.is_sovereign(&actor),
+                "RSA-1: the executed MakeSovereign must leave the actor \
+                 SOVEREIGN on the LIVE ledger (side-map merge)"
+            );
             let rec = s
                 .store
                 .lookup_turn(&computed_hash)
@@ -8096,7 +8205,24 @@ mod tests {
         for id in &overlay.removed {
             let _ = recovered.remove(id);
         }
+        for (id, c) in &overlay.sovereign_upserts {
+            if recovered.is_sovereign(id) {
+                let _ = recovered.update_sovereign_commitment(id, *c);
+            } else {
+                let _ = recovered.register_sovereign_cell(*id, *c);
+            }
+        }
+        for id in &overlay.sovereign_removed {
+            let _ = recovered.deregister_sovereign_cell(id);
+        }
         assert!(recovered.get(&actor).is_none(), "no resurrection");
+        // RSA-1: the sovereign commitment must survive restart recovery on the
+        // executed path too.
+        assert!(
+            recovered.is_sovereign(&actor),
+            "RSA-1: executed-path restart recovery must reconstruct the \
+             actor's SOVEREIGN commitment"
+        );
         assert_eq!(
             canonical_ledger_root(&recovered),
             recorded_root,
