@@ -1857,6 +1857,14 @@ pub fn prove_wide_umem_welded_staged_with_fee(
         fee,
     )
     .map_err(|e| SdkError::InvalidWitness(format!("wide fee trace generation: {e}")))?;
+    // THE S2 DELETION (Epoch 1): match the committed compact fee member before the umem weld
+    // places its columns at the compact width.
+    let mut wide_trace = wide_trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+        &mut wide_trace,
+        "transferFeeVmDescriptor2R24",
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("S2 compact (fee): {e}")))?;
 
     // WELD: append the umem leg INTO the fee WIDE descriptor (keeps the wide PI vector + the 16 wide
     // commit PIs — the 8-felt anchors — INTACT; the first appended umem column is PAST the wide
@@ -2008,6 +2016,14 @@ pub fn prove_effect_vm_rotated_wide_with_fee(
         fee,
     )
     .map_err(|e| SdkError::InvalidWitness(format!("wide fee trace generation: {e}")))?;
+
+    // THE S2 DELETION (Epoch 1): match the committed compact fee member.
+    let mut trace = trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+        &mut trace,
+        "transferFeeVmDescriptor2R24",
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("S2 compact (fee): {e}")))?;
 
     let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &[])
         .map_err(|e| SdkError::InvalidWitness(format!("wide fee IR-v2 proof: {e}")))?;
@@ -3214,12 +3230,19 @@ fn build_effect_vm_cap_open_leg(
             // anchor at its LAST 16 PIs (the wide anchor `verify_full_turn_bound` binds) WHILE preserving
             // the #225 turn-identity pins at PI 38/39/40. Closes the ~31-bit waist for the cap-gated
             // (cross-vat / self) Transfer route — the route the deployed node cap path proves.
-            dregg_circuit::effect_vm::trace_rotated::append_wide_carriers_avail(
+            let wide_pis = dregg_circuit::effect_vm::trace_rotated::append_wide_carriers_avail(
                 &mut trace,
                 tb_pis,
                 CAP_OPEN_TB_WIDTH + avail_pad,
                 avail_pad,
-            )
+            );
+            // THE S2 DELETION (Epoch 1): drop the dead 1-felt chains so the rows match the
+            // committed compact TB member (single source: the Lean-emitted geometry table).
+            dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(&mut trace, route.key)
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("S2 compact ({}): {e}", route.key))
+                })?;
+            wide_pis
         } else {
             tb_pis
         }
@@ -3448,6 +3471,16 @@ fn build_effect_vm_cap_open_leg(
             )
             .map_err(|e| {
                 SdkError::InvalidWitness(format!("attenuate after-spine wide ({effective_key}): {e}"))
+            })
+            .and_then(|d| {
+                dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+                    &mut trace,
+                    effective_key,
+                )
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("S2 compact ({effective_key}): {e}"))
+                })?;
+                Ok(d)
             })?
         } else if go_wide {
             // THE WIDE LIFT: append the two 13×8 BEFORE/AFTER wide carriers PAST the cap-open
@@ -3459,12 +3492,21 @@ fn build_effect_vm_cap_open_leg(
             // PIs. The cap-open host constraints + membership crown carry UNCHANGED; the carriers
             // re-absorb the SAME limbs into the 8-felt commit. The leg now publishes the full
             // ~124-bit commit at its LAST 16 PIs (the wide anchor the verifier binds).
-            dregg_circuit::effect_vm::trace_rotated::append_wide_carriers_cap_open_avail(
-                &mut trace, dpis, avail_pad,
-            )
-            .map_err(|e| {
-                SdkError::InvalidWitness(format!("cap-open wide carriers ({effective_key}): {e}"))
-            })?
+            let wide_pis =
+                dregg_circuit::effect_vm::trace_rotated::append_wide_carriers_cap_open_avail(
+                    &mut trace, dpis, avail_pad,
+                )
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!(
+                        "cap-open wide carriers ({effective_key}): {e}"
+                    ))
+                })?;
+            // THE S2 DELETION (Epoch 1): match the committed compact cap-open member.
+            dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(&mut trace, effective_key)
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("S2 compact ({effective_key}): {e}"))
+                })?;
+            wide_pis
         } else {
             dpis
         }

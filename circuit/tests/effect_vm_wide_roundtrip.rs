@@ -315,14 +315,24 @@ fn wide_burn_transfer_shape_proves_verifies_and_executor_anchors() {
         &Default::default(),
     );
 
-    let (trace, dpis) = generate_rotated_transfer_shape_wide(
-        &st,
-        &effects,
-        &bridge(&before_w),
-        &bridge(&after_w),
-        &empty_caveat_manifest(),
-    )
-    .expect("wide burn producer");
+    // The deployed burn member is the AVAIL-hardened crown row: generate at ITS pad.
+    let burn_pad =
+        dregg_circuit::effect_vm::trace_rotated::avail_pad_for_descriptor_name(&desc.name);
+    let (trace, dpis) =
+        dregg_circuit::effect_vm::trace_rotated::generate_rotated_transfer_shape_wide_avail(
+            burn_pad,
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &empty_caveat_manifest(),
+        )
+        .expect("wide burn producer");
+    // THE S2 DELETION (Epoch 1): the raw family trace is old-geometry; drop the dead
+    // chain columns so the rows match the committed compact member.
+    let mut trace = trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(&mut trace, "burnVmDescriptor2R24")
+        .expect("S2 compaction must succeed on the raw wide trace");
     // wide-PI base = ROT_PI_COUNT (46) + DFA_RC_LEN (4 dsl rc, last-pre-wide) = 50; total 66
     // = the committed burnVmDescriptor2R24 public_input_count (wide pins at PI 50..65).
     assert_roundtrip(name, &desc, &trace, &dpis, &[], ROT_PI_COUNT + DFA_RC_LEN);
@@ -352,11 +362,11 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
     let desc = wide_desc(name);
     assert_eq!(
         desc.trace_width,
-        SET_FIELD_DYN_HOST_WIDTH + 2 * 8 * WIDE_NUM_CARRIERS + 48,
-        "setFieldDyn wide width = the committed narrow V1Face host (GRAD_ROT_WIDTH − four \
-         chip sites × 7 = 28) + the 2·8·WIDE_NUM_CARRIERS wide-carrier appendix (960) + the \
-         gentian capacity-floor refuse widening (3·REFUSE_STRIDE = 48, setFieldDyn is a bare \
-         cohort member)"
+        SET_FIELD_DYN_HOST_WIDTH + 2 * 8 * WIDE_NUM_CARRIERS + 48
+            - dregg_circuit::effect_vm::s2_compact_generated::S2_DELETED_COLS,
+        "setFieldDyn wide width = the committed narrow V1Face host + the wide-carrier appendix \
+         (960) + the gentian refuse widening (48) MINUS the deleted S2 stratum (960 — the two \
+         rotated 1-felt chains + their chip lanes, Epoch 1)"
     );
     assert_eq!(
         desc.public_input_count,
@@ -406,6 +416,14 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
         prev_value,
     )
     .expect("wide setFieldDyn producer");
+    // THE S2 DELETION (Epoch 1): the raw family trace is old-geometry; drop the dead
+    // chain columns so the rows match the committed compact member.
+    let mut trace = trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+        &mut trace,
+        "setFieldDynVmDescriptor2R24",
+    )
+    .expect("S2 compaction must succeed on the raw wide trace");
     // Grow + fill the gentian refuse aux (prove-time filled; setFieldDyn declares no capacity ⟹ floor=0).
     let mut trace = trace;
     if desc.trace_width > trace[0].len() {
@@ -496,6 +514,14 @@ fn wide_note_spend_grow_gate_proves_verifies_and_executor_anchors() {
         &before_nullifiers,
     )
     .expect("wide noteSpend producer");
+    // THE S2 DELETION (Epoch 1): the raw family trace is old-geometry; drop the dead
+    // chain columns so the rows match the committed compact member.
+    let mut trace = trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+        &mut trace,
+        "noteSpendVmDescriptor2R24",
+    )
+    .expect("S2 compaction must succeed on the raw wide trace");
     // wide-PI base = ROT_PI_COUNT (46) + 1 (nullifier pin PI[46]) + DFA_RC_LEN (4 dsl rc, PI 47..50)
     // = 51; total 67 — the wide twin of the LIVE noteSpendVmDescriptor2R24 (51 PIs, rc-wrapped).
     // NOTE: the committed wide row currently says 63 (EmitWideRegistryProbe.lean builds the §J′
@@ -567,6 +593,14 @@ fn wide_note_create_grow_gate_proves_verifies_and_executor_anchors() {
         &before_commitments,
     )
     .expect("wide noteCreate producer");
+    // THE S2 DELETION (Epoch 1): the raw family trace is old-geometry; drop the dead
+    // chain columns so the rows match the committed compact member.
+    let mut trace = trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+        &mut trace,
+        "noteCreateVmDescriptor2R24",
+    )
+    .expect("S2 compaction must succeed on the raw wide trace");
     // wide-PI base = ROT_PI_COUNT (46) + 1 (commitment pin PI[46]) + DFA_RC_LEN (4 dsl rc) = 51;
     // total 67 — the wide twin of the LIVE noteCreateVmDescriptor2R24 (51 PIs, rc-wrapped). The
     // committed wide row currently says 63 (the unwrapped-base wide-registry emit gap; see the
@@ -635,6 +669,14 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
         &before_accounts,
     )
     .expect("wide createCell producer");
+    // THE S2 DELETION (Epoch 1): the raw family trace is old-geometry; drop the dead
+    // chain columns so the rows match the committed compact member.
+    let mut trace = trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+        &mut trace,
+        "createCellVmDescriptor2R24",
+    )
+    .expect("S2 compaction must succeed on the raw wide trace");
     // wide-PI base = ROT_PI_COUNT (46) + 1 (new-cell-key pin PI[46]) + DFA_RC_LEN (4 dsl rc) = 51;
     // total 67 — the wide twin of the LIVE createCellVmDescriptor2R24 (51 PIs, rc-wrapped). The
     // committed wide row currently says 63 (the unwrapped-base wide-registry emit gap; see the
@@ -717,6 +759,14 @@ fn wide_factory_grow_gate_proves_verifies_and_executor_anchors() {
         &before_accounts,
     )
     .expect("wide factory producer");
+    // THE S2 DELETION (Epoch 1): the raw family trace is old-geometry; drop the dead
+    // chain columns so the rows match the committed compact member.
+    let mut trace = trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+        &mut trace,
+        "factoryVmDescriptor2R24",
+    )
+    .expect("S2 compaction must succeed on the raw wide trace");
     // wide-PI base = ROT_PI_COUNT (46) + 1 (grow pin PI[46]) + 16 (STEP-3 carrier-octet pins:
     // child_vk8 PI 47..54 + contract_hash8 PI 55..62) + DFA_RC_LEN (4 dsl rc, PI 63..66) = 67;
     // total 83 = the committed factoryVmDescriptor2R24 public_input_count (wide pins at PI 67..82).
@@ -754,6 +804,14 @@ fn wide_spawn_grow_gate_proves_verifies_and_executor_anchors() {
         &before_accounts,
     )
     .expect("wide spawn (accounts birth leg) producer");
+    // THE S2 DELETION (Epoch 1): the raw family trace is old-geometry; drop the dead
+    // chain columns so the rows match the committed compact member.
+    let mut trace = trace;
+    dregg_circuit::effect_vm::trace_rotated::compact_s2_columns(
+        &mut trace,
+        "spawnVmDescriptor2R24",
+    )
+    .expect("S2 compaction must succeed on the raw wide trace");
     // wide-PI base = ROT_PI_COUNT (46) + 1 (grow pin PI[46]) + DFA_RC_LEN (4 dsl rc, PI 47..50)
     // = 51; total 67 = the committed spawnVmDescriptor2R24 public_input_count (wide pins at 51..66).
     assert_roundtrip(

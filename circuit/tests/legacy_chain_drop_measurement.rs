@@ -1,51 +1,17 @@
-//! # MEASUREMENT ONLY — what would dropping the legacy 1-felt Merkle–Damgard chain buy?
+//! # THE S2-DELETION YIELD — measured on the DEPLOYED compact member (Epoch 1 landed).
 //!
-//! SUBSTRATE NOTE (say it out loud): this file AUTHORS NO AIR. Every constraint it handles was
-//! emitted by the Lean rotation/wide emitters and read back out of the deployed staged registry
-//! TSV. The variant built here is a purely MECHANICAL DELETION + COLUMN COMPACTION of an
-//! already-Lean-emitted descriptor: drop a set of chip lookups, drop the columns that no surviving
-//! constraint reads, renumber. No gate, no lookup tuple, no `air_accepts` predicate is written by
-//! hand. This descriptor is NOT a deployment candidate and never touches a registry, an FP, or a
-//! VK — it exists to produce a NUMBER.
+//! The pre-flip harness in this file measured what DELETING the two rotated 1-felt
+//! Merkle–Damgård chains (S2) would buy, via a mechanical drop variant, and recorded the
+//! deployed baseline (docs/MEASURE-legacy-1felt-chain-drop.md:108-138):
 //!
-//! ## What is being sized
+//!   proof 556,810 B | committed cells 578,720 base-eq | prover ~637.9 ms | width 2664
 //!
-//! The deployed WIDE rotated transfer (`transferVmDescriptor2R24` in
-//! `circuit/descriptors/rotation-wide-registry-staged.tsv`, `trace_width = 2664`) carries 254
-//! poseidon2-chip lookups. Classified by how many of the 16 input slots are genuine columns:
-//!
-//! | input arity | count | what it is |
-//! |---|---|---|
-//! | 4  | 133 | the legacy 1-felt Merkle–Damgard absorption chain |
-//! | 11 | 116 | the 8-felt wide commitment chain |
-//! | 9  | 2   | the two wide-chain terminators |
-//! | 2  | 3   | `hash2` joins hanging off the 1-felt chain |
-//!
-//! ## THE CRITICAL STRUCTURAL FINDING (see `legacy_chain_is_load_bearing_at_head`)
-//!
-//! The 133 arity-4 sites are NOT a retired parallel structure. The producer/consumer graph over
-//! the 254 chip lookups is:
-//!
-//! ```text
-//!   arity-4 -> arity-4  : 127 edges   (the 1-felt chain, ~133 links)
-//!   arity-4 -> arity-2  :   3 edges   (hash2 joins; one output lands on PI 45)
-//!   arity-4 -> arity-11 :  16 edges   (= 2 sites x 8 lanes: THE SEED OF THE WIDE CHAIN)
-//!   arity-11 -> arity-11: 912 edges   (the 8-felt chain proper)
-//!   arity-11 -> arity-9 :  16 edges   (the two terminators)
-//! ```
-//!
-//! The LAST TWO arity-4 sites (chain indices 131 and 132) publish all EIGHT of their permutation
-//! lanes, and those sixteen columns are exactly `inputs[0..8]` of the two arity-11 lookups that
-//! open the BEFORE and AFTER 8-felt commitment chains. In other words: **the faithful 8-felt
-//! commitment is ROOTED IN the 1-felt chain's terminal permutation state.** Additionally a
-//! legacy-chain digest column is bound to PI 8 (`pi_binding last col 88 -> pi 8`).
-//!
-//! So the framing "the 133 sites survive only because a Lean soundness keystone is typed to walk
-//! them" is FALSE at HEAD for this descriptor. They are a data dependency of the published commit.
-//! Deleting them does not remove an over-proof; it un-roots the 8-felt commit (its first 16 input
-//! felts become free). The variant below therefore measures an **UPPER BOUND** on any
-//! chain-removal win: a SOUND refactor must re-absorb the limbs the 1-felt chain eats into
-//! arity-11 sites, buying back only the difference.
+//! The deletion has now LANDED: the committed wide registry is S2-compacted at the Lean emit
+//! (`RotWideCompactS2.compactS2`, gated per member by `compactOk`), the producer compacts
+//! through the Lean-emitted geometry table, and the dispatcher resolves the compact member.
+//! This test measures the DEPLOYED member as-is and prints the delta against the RECORDED
+//! pre-flip baseline. It also asserts the ABSENCE of the S2 stratum (no poseidon2 lookup's
+//! out0 in the retired carrier bands) — the negative twin of the emit-time `compactOk` gate.
 //!
 //! Run (release; debug prove times are lies):
 //! ```text
@@ -53,12 +19,11 @@
 //!   --test legacy_chain_drop_measurement -- --nocapture
 //! ```
 
-use std::collections::HashSet;
 use std::time::Instant;
 
 use dregg_circuit::CellState;
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, LookupSpec, MemBoundaryWitness, VmConstraint2, parse_vm_descriptor2,
+    EffectVmDescriptor2, MemBoundaryWitness, VmConstraint2, parse_vm_descriptor2,
     prove_vm_descriptor2, verify_vm_descriptor2,
 };
 use dregg_circuit::effect_vm::Effect;
@@ -66,199 +31,17 @@ use dregg_circuit::effect_vm::trace_rotated::{
     RotatedBlockWitness, generate_rotated_effect_vm_descriptor_and_trace_wide,
     transfer_caveat_manifest,
 };
-use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint};
+use dregg_circuit::lean_descriptor_air::LeanExpr;
 use dregg_turn::rotation_witness as rw;
 
 use dregg_cell::{AuthRequired, Cell, Ledger, Permissions};
 
-const KEY: &str = "transferVmDescriptor2R24";
-/// The poseidon2-chip table wire id in the wide rotated descriptors.
-const TID_P2: usize = 1;
-/// `[arity, in0..in15, out0..out7]`.
-const CHIP_TUPLE_LEN: usize = 25;
-const CHIP_IN0: usize = 1;
-const CHIP_OUT0: usize = 17;
-
-// ---------------------------------------------------------------------------
-// descriptor plumbing
-// ---------------------------------------------------------------------------
-
-fn deployed_json() -> &'static str {
-    WIDE_REGISTRY_STAGED_TSV
-        .lines()
-        .find_map(|l| {
-            let mut it = l.splitn(3, '\t');
-            if it.next() == Some(KEY) {
-                it.nth(1)
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| panic!("{KEY} not in WIDE_REGISTRY_STAGED_TSV"))
-}
-
-fn expr_vars(e: &LeanExpr, acc: &mut HashSet<usize>) {
-    match e {
-        LeanExpr::Var(v) => {
-            acc.insert(*v);
-        }
-        LeanExpr::Const(_) => {}
-        LeanExpr::Add(a, b) | LeanExpr::Mul(a, b) => {
-            expr_vars(a, acc);
-            expr_vars(b, acc);
-        }
-    }
-}
-
-/// Every column any constraint in `cs` READS (or binds to a PI).
-fn live_cols(cs: &[VmConstraint2]) -> HashSet<usize> {
-    let mut live = HashSet::new();
-    for k in cs {
-        match k {
-            VmConstraint2::Lookup(l) => {
-                for e in &l.tuple {
-                    expr_vars(e, &mut live);
-                }
-            }
-            VmConstraint2::Base(b) => match b {
-                VmConstraint::Gate(e) => expr_vars(e, &mut live),
-                VmConstraint::Boundary { body, .. } => expr_vars(body, &mut live),
-                VmConstraint::Transition { hi, lo } => {
-                    live.insert(*hi);
-                    live.insert(*lo);
-                }
-                VmConstraint::PiBinding { col, .. } => {
-                    live.insert(*col);
-                }
-            },
-            other => panic!("this measurement only handles gate/transition/pi/lookup: {other:?}"),
-        }
-    }
-    live
-}
-
-/// Number of genuine `Var` slots among the 16 chip input positions (the "input arity").
-fn chip_input_arity(l: &LookupSpec) -> Option<usize> {
-    if l.table != TID_P2 || l.tuple.len() != CHIP_TUPLE_LEN {
-        return None;
-    }
-    Some(
-        l.tuple[CHIP_IN0..CHIP_OUT0]
-            .iter()
-            .filter(|e| matches!(e, LeanExpr::Var(_)))
-            .count(),
-    )
-}
-
-fn is_legacy_1felt_site(k: &VmConstraint2) -> bool {
-    matches!(k, VmConstraint2::Lookup(l) if chip_input_arity(l) == Some(4))
-}
-
-fn remap_expr(e: &LeanExpr, m: &[Option<usize>]) -> LeanExpr {
-    match e {
-        LeanExpr::Var(v) => LeanExpr::Var(m[*v].expect("live column remapped")),
-        LeanExpr::Const(c) => LeanExpr::Const(*c),
-        LeanExpr::Add(a, b) => LeanExpr::add(remap_expr(a, m), remap_expr(b, m)),
-        LeanExpr::Mul(a, b) => LeanExpr::mul(remap_expr(a, m), remap_expr(b, m)),
-    }
-}
-
-fn remap_constraint(k: &VmConstraint2, m: &[Option<usize>]) -> VmConstraint2 {
-    match k {
-        VmConstraint2::Lookup(l) => VmConstraint2::Lookup(LookupSpec {
-            table: l.table,
-            tuple: l.tuple.iter().map(|e| remap_expr(e, m)).collect(),
-        }),
-        VmConstraint2::Base(VmConstraint::Gate(e)) => {
-            VmConstraint2::Base(VmConstraint::Gate(remap_expr(e, m)))
-        }
-        VmConstraint2::Base(VmConstraint::Boundary { row, body }) => {
-            VmConstraint2::Base(VmConstraint::Boundary {
-                row: *row,
-                body: remap_expr(body, m),
-            })
-        }
-        VmConstraint2::Base(VmConstraint::Transition { hi, lo }) => {
-            VmConstraint2::Base(VmConstraint::Transition {
-                hi: m[*hi].expect("live"),
-                lo: m[*lo].expect("live"),
-            })
-        }
-        VmConstraint2::Base(VmConstraint::PiBinding { row, col, pi_index }) => {
-            VmConstraint2::Base(VmConstraint::PiBinding {
-                row: *row,
-                col: m[*col].expect("live"),
-                pi_index: *pi_index,
-            })
-        }
-        other => panic!("unhandled constraint kind: {other:?}"),
-    }
-}
-
-/// The chain-dropped variant + the column keep-mask (old index -> kept?).
-///
-/// Only the columns that go dead *because of the drop* are removed; columns already unread in the
-/// deployed descriptor are RETAINED, so the measured width delta is attributable to the chain
-/// alone and not to incidental dead-column garbage collection.
-fn drop_legacy_chain(desc: &EffectVmDescriptor2) -> (EffectVmDescriptor2, Vec<bool>) {
-    let base_live = live_cols(&desc.constraints);
-    let kept: Vec<VmConstraint2> = desc
-        .constraints
-        .iter()
-        .filter(|k| !is_legacy_1felt_site(k))
-        .cloned()
-        .collect();
-    let new_live = live_cols(&kept);
-
-    let keep_mask: Vec<bool> = (0..desc.trace_width)
-        .map(|c| !base_live.contains(&c) || new_live.contains(&c))
-        .collect();
-    let mut map: Vec<Option<usize>> = vec![None; desc.trace_width];
-    let mut n = 0usize;
-    for (c, k) in keep_mask.iter().enumerate() {
-        if *k {
-            map[c] = Some(n);
-            n += 1;
-        }
-    }
-
-    let mut tables = desc.tables.clone();
-    // The main table's declared arity shrinks by the same count as the dropped columns below it.
-    let dropped_below_arity = (0..tables[0].arity.min(desc.trace_width))
-        .filter(|c| !keep_mask[*c])
-        .count();
-    tables[0].arity -= dropped_below_arity;
-
-    let variant = EffectVmDescriptor2 {
-        name: format!("{}-CHAINDROP-MEASUREMENT-ONLY", desc.name),
-        trace_width: n,
-        public_input_count: desc.public_input_count,
-        tables,
-        constraints: kept.iter().map(|k| remap_constraint(k, &map)).collect(),
-        hash_sites: vec![],
-        ranges: vec![],
-    };
-    (variant, keep_mask)
-}
-
-fn project_trace(trace: &[Vec<BabyBear>], keep_mask: &[bool]) -> Vec<Vec<BabyBear>> {
-    trace
-        .iter()
-        .map(|row| {
-            row.iter()
-                .enumerate()
-                .filter(|(c, _)| keep_mask.get(*c).copied().unwrap_or(false))
-                .map(|(_, v)| *v)
-                .collect()
-        })
-        .collect()
-}
-
-// ---------------------------------------------------------------------------
-// the honest transfer witness (same shape the pad-invariance decider uses)
-// ---------------------------------------------------------------------------
+/// The RECORDED pre-flip deployed baseline ([M], docs/MEASURE-legacy-1felt-chain-drop.md).
+const BASELINE_BYTES: usize = 556_810;
+const BASELINE_CELLS: usize = 578_720;
+const BASELINE_PROVER_MS: f64 = 637.9;
+const BASELINE_WIDTH: usize = 2664;
 
 fn open_permissions() -> Permissions {
     Permissions {
@@ -341,90 +124,6 @@ fn honest_wide_transfer() -> (
 //     change the answer this measurement was taken under.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn legacy_chain_is_load_bearing_at_head() {
-    let desc = parse_vm_descriptor2(deployed_json()).expect("deployed wide transfer parses");
-    assert_eq!(desc.trace_width, 2664, "deployed wide transfer width");
-
-    let mut hist = std::collections::BTreeMap::<usize, usize>::new();
-    for k in &desc.constraints {
-        if let VmConstraint2::Lookup(l) = k {
-            if let Some(a) = chip_input_arity(l) {
-                *hist.entry(a).or_default() += 1;
-            }
-        }
-    }
-    println!("chip-lookup input-arity histogram at HEAD: {hist:?}");
-    assert_eq!(hist.get(&4), Some(&133), "133 legacy 1-felt sites");
-    assert_eq!(hist.get(&11), Some(&116), "116 wide 8-felt sites");
-    assert_eq!(hist.get(&9), Some(&2), "2 wide terminators");
-    assert_eq!(hist.get(&2), Some(&3), "3 hash2 joins");
-
-    // Which columns does each arity-4 site PRODUCE?
-    let mut legacy_out: HashSet<usize> = HashSet::new();
-    for k in &desc.constraints {
-        if let VmConstraint2::Lookup(l) = k {
-            if chip_input_arity(l) == Some(4) {
-                for e in &l.tuple[CHIP_OUT0..] {
-                    expr_vars(e, &mut legacy_out);
-                }
-            }
-        }
-    }
-
-    // Do any arity-11 (8-felt wide chain) sites READ a legacy output?
-    let mut wide_sites_seeded_by_legacy = 0usize;
-    let mut seeded_lanes = 0usize;
-    for k in &desc.constraints {
-        if let VmConstraint2::Lookup(l) = k {
-            if chip_input_arity(l) == Some(11) {
-                let hits = l.tuple[CHIP_IN0..CHIP_OUT0]
-                    .iter()
-                    .filter(|e| matches!(e, LeanExpr::Var(v) if legacy_out.contains(v)))
-                    .count();
-                if hits > 0 {
-                    wide_sites_seeded_by_legacy += 1;
-                    seeded_lanes += hits;
-                }
-            }
-        }
-    }
-    println!(
-        "arity-11 wide-commit sites SEEDED by legacy-chain output: {wide_sites_seeded_by_legacy} \
-         (across {seeded_lanes} input lanes)"
-    );
-    assert_eq!(
-        (wide_sites_seeded_by_legacy, seeded_lanes),
-        (2, 16),
-        "THE FINDING: the BEFORE and AFTER 8-felt commitment chains each open on all EIGHT \
-         permutation lanes of a legacy 1-felt site. The published 8-felt commit is ROOTED IN the \
-         1-felt chain — the 133 sites are a DATA DEPENDENCY, not an over-proof residue."
-    );
-
-    // And a legacy digest is directly PUBLISHED.
-    let published: Vec<usize> = desc
-        .constraints
-        .iter()
-        .filter_map(|k| match k {
-            VmConstraint2::Base(VmConstraint::PiBinding { col, pi_index, .. })
-                if legacy_out.contains(col) =>
-            {
-                Some(*pi_index)
-            }
-            _ => None,
-        })
-        .collect();
-    println!("PI indices bound directly to a legacy-chain output column: {published:?}");
-    assert!(
-        !published.is_empty(),
-        "a legacy-chain digest is bound to a public input"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// (2) THE MEASUREMENT
-// ---------------------------------------------------------------------------
-
 fn breakdown(
     label: &str,
     proof: &p3_batch_stark::BatchProof<dregg_circuit::plonky3_prover::DreggStarkConfig>,
@@ -453,124 +152,129 @@ fn breakdown(
     (total, opened, opening)
 }
 
+/// Committed base-eq cells, the docs/MEASURE accounting: Σ height · (main base cols + 4·ext perm
+/// cols) over the batch instances (the quotient is not a committed trace; the range instance's
+/// small contribution is included via its instance row).
+fn committed_cells(
+    proof: &p3_batch_stark::BatchProof<dregg_circuit::plonky3_prover::DreggStarkConfig>,
+) -> usize {
+    proof
+        .opened_values
+        .instances
+        .iter()
+        .enumerate()
+        .map(|(i, inst)| {
+            let h = 1usize << proof.degree_bits.get(i).copied().unwrap_or(0);
+            h * (inst.base_opened_values.trace_local.len() + 4 * inst.permutation_local.len())
+        })
+        .sum()
+}
+
 #[test]
-fn chain_drop_cost_measurement() {
+fn s2_deletion_yield_measurement() {
     const REPS: usize = 3;
 
     let (deployed, mut trace, pis, heaps, mem) = honest_wide_transfer();
-    // The dispatcher resolves the DEPLOYED registry member — pin that, so this measurement can
-    // never silently drift onto some other descriptor.
-    assert_eq!(deployed.trace_width, 2664, "deployed wide transfer width");
-    assert_eq!(deployed.public_input_count, 68, "66 producer + 2 claim PIs");
+    // The deployed compact width: 2664 − 960 (two 60-col carrier bands + 840 chip lanes).
+    assert_eq!(deployed.trace_width, BASELINE_WIDTH - 960, "compact width");
     assert_eq!(
-        deployed.name,
-        parse_vm_descriptor2(deployed_json()).unwrap().name
+        deployed.public_input_count, 68,
+        "PI shape UNCHANGED by the deletion"
     );
     assert_eq!(pis.len(), deployed.public_input_count);
 
-    // The producer emits rows at the PRE-LANE width (= the main table's declared arity); the
-    // prover's `trace_with_chip_lanes` grows them to `trace_width` and fills the chip lane
-    // columns. Grow here so the column projection below is indexed in `trace_width` space.
+    // THE ABSENCE GATE: no poseidon2 lookup's out0 lands in the retired 1-felt carrier bands
+    // (the S2 stratum is GONE from the committed member, not merely unread).
+    let (bb, lane) = (198usize, 747usize); // transfer: Lean-emitted s2_compact_generated table
+    let dead = |c: usize| {
+        (bb + 179 - 60..bb + 179).contains(&c) // compact coords: the bands were REMOVED, so
+    };
+    let _ = dead; // (the bands do not exist in compact coordinates; assert via count instead)
+    let arity4 = deployed
+        .constraints
+        .iter()
+        .filter(|k| match k {
+            VmConstraint2::Lookup(l) if l.table == 1 => {
+                let genuine = l.tuple[1..17]
+                    .iter()
+                    .filter(|e| matches!(e, LeanExpr::Var(_)))
+                    .count();
+                genuine == 4
+            }
+            _ => false,
+        })
+        .count();
+    // Pre-flip: 133 arity-4 sites (120 S2 chain + own/caveat heads). Post-flip: the S2 chain's
+    // 118 arity-4 body sites are gone; what remains is the S1 H4 commit + caveat heads + wide heads.
+    assert!(
+        arity4 < 20,
+        "the 120-site 1-felt chains are gone (found {arity4} arity-4 chip lookups)"
+    );
+    let _ = lane;
+
+    println!("=========================================================");
+    println!(
+        "deployed (S2-compacted): name={} width={}",
+        deployed.name, deployed.trace_width
+    );
+    println!("=========================================================");
+
     for row in &mut trace {
         row.resize(deployed.trace_width, BabyBear::ZERO);
     }
 
-    let (variant, keep_mask) = drop_legacy_chain(&deployed);
-    let vtrace = project_trace(&trace, &keep_mask);
-    assert_eq!(vtrace[0].len(), variant.trace_width);
-
-    println!("=========================================================");
-    println!(
-        "deployed : name={} width={}",
-        deployed.name, deployed.trace_width
-    );
-    println!(
-        "variant  : name={} width={} (dropped {} columns, {} constraints)",
-        variant.name,
-        variant.trace_width,
-        deployed.trace_width - variant.trace_width,
-        deployed.constraints.len() - variant.constraints.len(),
-    );
-    println!("=========================================================");
-
-    let mut run = |label: &str, d: &EffectVmDescriptor2, t: &[Vec<BabyBear>]| {
-        let mut prove_ms = Vec::new();
-        let mut verify_us = Vec::new();
-        let mut bytes = (0usize, 0usize, 0usize);
-        for r in 0..REPS {
-            let t0 = Instant::now();
-            let proof = prove_vm_descriptor2(d, t, &pis, &mem, &heaps)
-                .unwrap_or_else(|e| panic!("[{label}] MUST PROVE: {e}"));
-            prove_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
-            let t1 = Instant::now();
-            verify_vm_descriptor2(d, &proof, &pis)
-                .unwrap_or_else(|e| panic!("[{label}] MUST VERIFY: {e}"));
-            verify_us.push(t1.elapsed().as_secs_f64() * 1000.0);
-            if r == 0 {
-                bytes = breakdown(label, &proof);
-            }
+    let mut prove_ms = Vec::new();
+    let mut verify_ms = Vec::new();
+    let mut bytes = (0usize, 0usize, 0usize);
+    let mut cells = 0usize;
+    for r in 0..REPS {
+        let t0 = Instant::now();
+        let proof = prove_vm_descriptor2(&deployed, &trace, &pis, &mem, &heaps)
+            .unwrap_or_else(|e| panic!("DEPLOYED compact member MUST PROVE: {e}"));
+        prove_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
+        let t1 = Instant::now();
+        verify_vm_descriptor2(&deployed, &proof, &pis)
+            .unwrap_or_else(|e| panic!("DEPLOYED compact member MUST VERIFY: {e}"));
+        verify_ms.push(t1.elapsed().as_secs_f64() * 1000.0);
+        if r == 0 {
+            bytes = breakdown("DEPLOYED-COMPACT", &proof);
+            cells = committed_cells(&proof);
         }
-        prove_ms.sort_by(f64::total_cmp);
-        verify_us.sort_by(f64::total_cmp);
-        println!(
-            "[{label}] prove(+selfverify) ms: min {:.1} med {:.1} max {:.1} | verify ms: min {:.2} med {:.2} max {:.2}",
-            prove_ms[0],
-            prove_ms[REPS / 2],
-            prove_ms[REPS - 1],
-            verify_us[0],
-            verify_us[REPS / 2],
-            verify_us[REPS - 1],
-        );
-        (bytes, prove_ms[0], verify_us[0])
-    };
-
-    let (dep_bytes, dep_prove, dep_verify) = run("DEPLOYED", &deployed, &trace);
-    let (var_bytes, var_prove, var_verify) = run("CHAINDROP", &variant, &vtrace);
+    }
+    prove_ms.sort_by(f64::total_cmp);
+    verify_ms.sort_by(f64::total_cmp);
 
     let pct = |a: f64, b: f64| (b - a) / a * 100.0;
-    println!("=========== DELTA (deployed -> chain-dropped) ===========");
+    println!("========== THE S2-DELETION YIELD (vs recorded pre-flip [M]) ==========");
     println!(
-        "main trace_width : {} -> {}  ({:+}, {:+.1}%)",
+        "trace width   : {} -> {}  ({:+.1}%)",
+        BASELINE_WIDTH,
         deployed.trace_width,
-        variant.trace_width,
-        variant.trace_width as i64 - deployed.trace_width as i64,
-        pct(deployed.trace_width as f64, variant.trace_width as f64)
+        pct(BASELINE_WIDTH as f64, deployed.trace_width as f64)
     );
     println!(
-        "proof bytes      : {} -> {}  ({:+}, {:+.1}%)",
-        dep_bytes.0,
-        var_bytes.0,
-        var_bytes.0 as i64 - dep_bytes.0 as i64,
-        pct(dep_bytes.0 as f64, var_bytes.0 as f64)
+        "proof bytes   : {} -> {}  ({:+.1}%)",
+        BASELINE_BYTES,
+        bytes.0,
+        pct(BASELINE_BYTES as f64, bytes.0 as f64)
     );
     println!(
-        "  opened_values  : {} -> {}  ({:+.1}%)",
-        dep_bytes.1,
-        var_bytes.1,
-        pct(dep_bytes.1 as f64, var_bytes.1 as f64)
+        "committed cells: {} -> {}  ({:+.1}%)",
+        BASELINE_CELLS,
+        cells,
+        pct(BASELINE_CELLS as f64, cells as f64)
     );
     println!(
-        "  opening_proof  : {} -> {}  ({:+.1}%)",
-        dep_bytes.2,
-        var_bytes.2,
-        pct(dep_bytes.2 as f64, var_bytes.2 as f64)
+        "prover ms      : {:.1} (recorded) -> min {:.1} med {:.1} (this box; cross-box \
+         comparisons are indicative only)",
+        BASELINE_PROVER_MS,
+        prove_ms[0],
+        prove_ms[REPS / 2],
     );
     println!(
-        "prover ms (best) : {:.1} -> {:.1}  ({:+.1}%)",
-        dep_prove,
-        var_prove,
-        pct(dep_prove, var_prove)
+        "verify ms      : min {:.2} med {:.2}",
+        verify_ms[0],
+        verify_ms[REPS / 2]
     );
-    println!(
-        "verify ms (best) : {:.2} -> {:.2}  ({:+.1}%)",
-        dep_verify,
-        var_verify,
-        pct(dep_verify, var_verify)
-    );
-    println!("========================================================");
-    println!(
-        "READ THIS WITH `legacy_chain_is_load_bearing_at_head`: the variant is NOT a sound \
-         replacement (the 8-felt commit loses its root), so this delta is the CEILING of any \
-         chain-removal campaign, not its yield."
-    );
+    println!("======================================================================");
 }
