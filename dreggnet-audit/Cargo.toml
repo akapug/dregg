@@ -1,0 +1,13 @@
+[package]
+name = "dreggnet-audit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Interaction-envelope audit log shared by the dregg bot frontends (append-only JSONL, non-blocking, secret-free). Design: docs/BOT-AUDIT-LOGGING-DESIGN.md"
+
+[dependencies]
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
