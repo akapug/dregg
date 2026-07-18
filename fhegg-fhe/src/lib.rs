@@ -52,10 +52,14 @@ pub mod bfv_lean;
 /// over fhe.rs's `Multiplicator`, oracle-anchored in `tests/bfv_mul_oracle.rs`.
 pub mod bfv_mul;
 pub mod boundary;
+pub mod convex_engine;
 /// PRIVATE CONVEX ENGINE stone 1: one iteration of `x ← prox(x − τ·A·x)` over
 /// encrypted state — the public-matrix linear step stays ADDITIVE (no ct×ct),
 /// oracle-anchored in `tests/convex_step_oracle.rs`.
 pub mod convex_step;
+pub mod fhir;
+pub mod gpu_arena;
+pub mod threshold;
 
 /// The OUTPUT-BOUNDARY MPC crossing (BFV / fhe.rs → additive shares → secret-shared
 /// comparison) — codex Round-4 gold: adversarial no-viewer + the dissolved
