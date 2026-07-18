@@ -23,6 +23,12 @@ not survive:
    sequence — read the spine left to right, keep the first occurrence of each disjunct, delete every
    later duplicate. That is what `normalize` computes, and it is why `normalize_sim` goes through.
 
+   ⚑ This is now a THEOREM, not a model argument: `AciComplete.not_sim_alt_comm`
+   (`¬ Sim (.alt s7 s9) (.alt s9 s7)` for concrete distinct leaves) proves the sorted normal form is
+   UNREACHABLE against the ACTUAL `Sim`, derived from the key-invariance `AciComplete.sim_key` through
+   fragment completeness against a decided disequality — not against a free-LRB model *of* `Sim`. So
+   the design choice above is machine-checked necessary, not merely argued.
+
 2. **`Sim` is not a full congruence.** There is no `starCong`, and `catCong` rewrites the LEFT factor
    only. So `normalize` CANNOT recurse under `star` (nor under the right factor of `cat`) and still
    be sound. This slice normalizes the TOP-LEVEL `alt` spine only; disjuncts are left untouched.
