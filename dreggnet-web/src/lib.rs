@@ -49,6 +49,10 @@
 /// of the extension's `dregg.signOfferingTurn` — a JSON `SignedAction` wire verified into one real
 /// turn via `OfferingHost::advance_signed`. See [`act_signed`].
 pub mod act_signed;
+
+/// The audit emitter — the interaction envelope around every catalog/Mini-App decision
+/// (docs/BOT-AUDIT-LOGGING-DESIGN.md).
+pub mod audit;
 /// THE SPECTATOR / PROVENANCE surface for *The Descent* (the flagship's growth artifact): a
 /// stranger opens a URL and INDEPENDENTLY re-verifies a run — a re-verified no-cheat leaderboard
 /// (`GET /descent/leaderboard`) + a run-card that re-executes the recorded run to PASS/FAIL
@@ -1363,7 +1367,8 @@ async fn get_offering_session(
     let sid = SessionId::new(id);
     // The viewer's derived identity (the `dregg_user` cookie / `?user=` param) — the SAME identity a
     // POST attributes a turn to. A seated player renders their OWN hidden hand; a spectator sees fog.
-    let viewer = web_identity(&web_user(&headers, &query));
+    let user = web_user(&headers, &query);
+    let viewer = web_identity(&user);
     // Ensure the session is open (deploy on first touch), then render — LIFECYCLE-AWARE: the
     // viewer identity is the opener attribution (an ADVISORY `Asserted` quota lane — a forgeable
     // cookie; capacity + TTL are the real backstops), a policy refusal answers an honest 4xx
@@ -1380,6 +1385,24 @@ async fn get_offering_session(
         })
     };
     metrics::set_sessions_open(open_count as f64);
+    // AUDIT EMIT: the open decision (asserted-cookie attribution — the envelope names the
+    // grade; a policy refusal is the gate WORKING and is recorded as `gated`).
+    {
+        let (kind, reason) = match &opened {
+            Ok(_) => ("routed", String::new()),
+            Err(e) => open_audit_parts(e),
+        };
+        audit::log().emit(
+            audit::AuditEvent::new(
+                "web",
+                audit::Actor::asserted(&user).with_identity(viewer.0.clone()),
+                audit::Surface::Http,
+                audit::Input::new("GET /offerings/{key}/session/{id}", serde_json::Value::Null),
+            )
+            .in_session(Some(key.clone()), Some(sid.0.clone()))
+            .decided(kind, reason),
+        );
+    }
     match opened {
         Err(HostError::UnknownOffering(_)) => {
             return Html(catalog_missing_offering(&key)).into_response();
@@ -1435,7 +1458,8 @@ async fn post_offering_act(
     Form(form): Form<OfferingActForm>,
 ) -> Response {
     let sid = SessionId::new(id);
-    let actor = web_identity(&web_user(&headers, &query));
+    let user = web_user(&headers, &query);
+    let actor = web_identity(&user);
     // Ensure open first (so a POST to a fresh session still resolves against a live offering) —
     // lifecycle-aware exactly as the GET: the actor is the opener attribution, a policy refusal
     // is an honest 4xx, an evicted persisted session resumes.
@@ -1453,9 +1477,16 @@ async fn post_offering_act(
     metrics::set_sessions_open(open_count as f64);
     match opened {
         Err(HostError::UnknownOffering(_)) => {
+            audit::log().emit(
+                act_audit_event(&user, &actor, &key, &sid, &form)
+                    .decided("refused", "unknown_offering"),
+            );
             return Html(catalog_missing_offering(&key)).into_response();
         }
         Err(e @ (HostError::Policy(_) | HostError::ResumeFailed { .. })) => {
+            let (kind, reason) = open_audit_parts(&e);
+            audit::log()
+                .emit(act_audit_event(&user, &actor, &key, &sid, &form).decided(kind, reason));
             return refused_open_response(&sid, &e);
         }
         _ => {}
@@ -1487,6 +1518,29 @@ async fn post_offering_act(
             }
         })
     };
+
+    // AUDIT EMIT: the collected+resolved act — the `Landed` arm carries the receipt-chain
+    // join (`hex(TurnReceipt.turn_hash)`); an executor refusal is `routed` (the substrate was
+    // reached — the refusal is ITS decision), a not-offered/missing is the frontend's.
+    audit::log().emit(match &acted {
+        CatalogAct::Advanced(Outcome::Landed { receipt, ended }) => act_audit_event(
+            &user, &actor, &key, &sid, &form,
+        )
+        .with_outcome(audit::AuditOutcome::Landed {
+            turn_hash: audit::hex32(&receipt.turn_hash),
+            ended: *ended,
+        }),
+        CatalogAct::Advanced(Outcome::Refused(why)) => {
+            act_audit_event(&user, &actor, &key, &sid, &form)
+                .with_outcome(audit::AuditOutcome::Refused { why: why.clone() })
+        }
+        CatalogAct::NotOffered => {
+            act_audit_event(&user, &actor, &key, &sid, &form).decided("refused", "not_offered")
+        }
+        CatalogAct::Missing => {
+            act_audit_event(&user, &actor, &key, &sid, &form).decided("refused", "missing_session")
+        }
+    });
 
     let notice = match acted {
         CatalogAct::Advanced(Outcome::Landed { ended, .. }) => {
@@ -1565,6 +1619,47 @@ fn refused_open_response(id: &SessionId, err: &HostError) -> Response {
     resp
 }
 
+/// The unsigned `/act` twin's audit-envelope skeleton (asserted-cookie attribution; the
+/// caller stamps decision + outcome). The `{turn, arg}` IS the trail — user content, §8.
+fn act_audit_event(
+    user: &str,
+    actor: &DreggIdentity,
+    key: &str,
+    sid: &SessionId,
+    form: &OfferingActForm,
+) -> audit::AuditEvent {
+    audit::AuditEvent::new(
+        "web",
+        audit::Actor::asserted(user).with_identity(actor.0.clone()),
+        audit::Surface::Http,
+        audit::Input::new(
+            "POST /offerings/{key}/session/{id}/act",
+            serde_json::json!({ "turn": form.turn, "arg": form.arg }),
+        ),
+    )
+    .in_session(Some(key.to_string()), Some(sid.0.clone()))
+}
+
+/// The audit taxonomy for a refused/errored `ensure_open_as` — `(decision.kind, reason)`
+/// (docs/BOT-AUDIT-LOGGING-DESIGN.md §3: a policy gate is `gated`, a routing miss `refused`).
+pub(crate) fn open_audit_parts(e: &HostError) -> (&'static str, String) {
+    match e {
+        HostError::UnknownOffering(_) => ("refused", "unknown_offering".to_string()),
+        HostError::UnknownSession { .. } => ("refused", "unknown_session".to_string()),
+        HostError::Policy(p) => (
+            "gated",
+            match p {
+                PolicyRefusal::ActorQuota { .. } => "policy:actor_quota".to_string(),
+                PolicyRefusal::OpenRate { .. } => "policy:open_rate".to_string(),
+                PolicyRefusal::Capacity { .. } => "policy:capacity".to_string(),
+            },
+        ),
+        HostError::ResumeFailed { .. } => ("gated", "resume_failed".to_string()),
+        HostError::Signature(e) => ("gated", format!("sig:{e}")),
+        HostError::Deploy(_) => ("error", "deploy_failed".to_string()),
+    }
+}
+
 /// `GET /offerings/{key}/session/{id}/verify` — re-verify the committed chain by the offering's own
 /// proof, exposed over HTTP as JSON.
 async fn get_offering_verify(
@@ -1572,17 +1667,39 @@ async fn get_offering_verify(
     Path((key, id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let sid = SessionId::new(id);
+    let verify_event = || {
+        audit::AuditEvent::new(
+            "web",
+            audit::Actor::unattributed(),
+            audit::Surface::Http,
+            audit::Input::new(
+                "GET /offerings/{key}/session/{id}/verify",
+                serde_json::Value::Null,
+            ),
+        )
+        .in_session(Some(key.clone()), Some(sid.0.clone()))
+    };
     match state.verify(&key, &sid) {
-        Some(report) => Json(serde_json::json!({
-            "verified": report.verified,
-            "turns": report.turns,
-            "detail": report.detail,
-        })),
-        None => Json(serde_json::json!({
-            "verified": false,
-            "turns": 0,
-            "detail": "no such offering session",
-        })),
+        Some(report) => {
+            // AUDIT EMIT: a re-verification ran — the report verdict is the outcome.
+            audit::log().emit(verify_event().with_outcome(audit::AuditOutcome::Verified {
+                verified: report.verified,
+                turns: report.turns as u64,
+            }));
+            Json(serde_json::json!({
+                "verified": report.verified,
+                "turns": report.turns,
+                "detail": report.detail,
+            }))
+        }
+        None => {
+            audit::log().emit(verify_event().decided("refused", "missing_session"));
+            Json(serde_json::json!({
+                "verified": false,
+                "turns": 0,
+                "detail": "no such offering session",
+            }))
+        }
     }
 }
 

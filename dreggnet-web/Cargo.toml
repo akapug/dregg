@@ -34,6 +34,10 @@ path = "src/bin/dreggnet-web-server.rs"
 # `OfferingHost` (the registry the web catalog drives), DungeonOffering (offering #0),
 # Surface/Action/Outcome. This crate is a `Frontend` impl OVER it; it does NOT modify it.
 dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE INTERACTION-ENVELOPE AUDIT FACILITY (docs/BOT-AUDIT-LOGGING-DESIGN.md) — the shared
+# event shape + non-blocking JSONL writer all three frontends emit through; `src/audit.rs`
+# is only this deploy's log resolution over it.
+dreggnet-audit = { path = "../dreggnet-audit" }
 # THREE HETEROGENEOUS OFFERINGS registered in the web catalog beside the dungeon: the
 # collective-governance council (propose → vote → enact) and the sealed-bid market
 # (list → bid → settle). The web catalog drives all three through the ONE `OfferingHost`

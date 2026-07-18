@@ -36,6 +36,7 @@ use serde_json::{Value, json};
 use dreggnet_offerings::{FileResumeStore, OfferingHost, Outcome, VerifyReport};
 
 use crate::api::{decode_callback, encode_callback};
+use crate::audit::{self, Actor, AuditEvent, AuditOutcome, Input, Surface};
 use crate::host::{HostPress, TURN_VERIFY, TelegramHost, telegram_default_host};
 use crate::transport::{HttpPost, Transport, TransportError};
 use crate::{CallbackQuery, ChatId, TelegramFrontend, TelegramUserId};
@@ -287,17 +288,163 @@ pub fn parse_updates(result: &Value) -> (Vec<BotEvent>, Option<i64>) {
 // Routing (one event → the ONE TelegramHost router → a human ack)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// **The MACHINE account of a routed press** — what the audit envelope records (the human ack
+/// stays [`describe_press`]'s). Extracted from the [`HostPress`] BEFORE it is consumed, so the
+/// update loop emits [`AuditEvent`]s in the design's §3 taxonomy without re-deriving anything.
+#[derive(Debug, Clone)]
+pub enum PressDecision {
+    /// A menu press opened the named offering.
+    Opened(String),
+    /// A turn landed — carries THE receipt-chain join (`hex(TurnReceipt.turn_hash)`).
+    Landed {
+        /// The offering key the turn advanced.
+        key: String,
+        /// `hex(TurnReceipt.turn_hash)` — the join to the committed chain.
+        turn_hash: String,
+        /// Whether the session ended.
+        ended: bool,
+    },
+    /// The executor refused the move (anti-ghost: nothing committed).
+    ExecutorRefused {
+        /// The offering key.
+        key: String,
+        /// The executor's own reason.
+        why: String,
+    },
+    /// A [`TURN_VERIFY`](crate::host::TURN_VERIFY) press re-verified the chain.
+    Verified {
+        /// The offering key.
+        key: String,
+        /// The report verdict (`None` = the offering exposes no verifier).
+        verified: Option<bool>,
+        /// Turns replayed.
+        turns: u64,
+    },
+    /// Frontend-level refusal BEFORE the substrate (stale keyboard / unknown affordance).
+    NotOffered,
+    /// Nothing open in the chat (post-resume-retry).
+    NoSession,
+    /// The restart-resume path found a persisted offering but could not reopen it.
+    ReopenFailed(String),
+}
+
+impl PressDecision {
+    /// Read the machine decision off a [`HostPress`] (borrow — the press is still yours to
+    /// [`describe_press`]).
+    pub fn of(press: &HostPress) -> PressDecision {
+        match press {
+            HostPress::Opened(key) => PressDecision::Opened(key.clone()),
+            HostPress::Advanced {
+                key,
+                outcome: Outcome::Landed { receipt, ended },
+            } => PressDecision::Landed {
+                key: key.clone(),
+                turn_hash: audit::hex32(&receipt.turn_hash),
+                ended: *ended,
+            },
+            HostPress::Advanced {
+                key,
+                outcome: Outcome::Refused(why),
+            } => PressDecision::ExecutorRefused {
+                key: key.clone(),
+                why: why.clone(),
+            },
+            HostPress::Verified { key, report } => PressDecision::Verified {
+                key: key.clone(),
+                verified: report.as_ref().map(|r| r.verified),
+                turns: report.as_ref().map(|r| r.turns as u64).unwrap_or(0),
+            },
+            HostPress::NotOffered => PressDecision::NotOffered,
+            HostPress::NoSession => PressDecision::NoSession,
+        }
+    }
+
+    /// The §3 taxonomy mapping: `(decision.kind, decision.reason, outcome, offering)`.
+    pub fn audit_parts(&self) -> (&'static str, String, AuditOutcome, Option<String>) {
+        match self {
+            PressDecision::Opened(key) => (
+                "routed",
+                String::new(),
+                AuditOutcome::None,
+                Some(key.clone()),
+            ),
+            PressDecision::Landed {
+                key,
+                turn_hash,
+                ended,
+            } => (
+                "routed",
+                String::new(),
+                AuditOutcome::Landed {
+                    turn_hash: turn_hash.clone(),
+                    ended: *ended,
+                },
+                Some(key.clone()),
+            ),
+            PressDecision::ExecutorRefused { key, why } => (
+                "routed", // the substrate WAS reached; the refusal is the executor's
+                String::new(),
+                AuditOutcome::Refused { why: why.clone() },
+                Some(key.clone()),
+            ),
+            PressDecision::Verified {
+                key,
+                verified,
+                turns,
+            } => (
+                "routed",
+                String::new(),
+                AuditOutcome::Verified {
+                    verified: verified.unwrap_or(false),
+                    turns: *turns,
+                },
+                Some(key.clone()),
+            ),
+            PressDecision::NotOffered => (
+                "refused",
+                "not_offered".to_string(),
+                AuditOutcome::None,
+                None,
+            ),
+            PressDecision::NoSession => (
+                "refused",
+                "no_session".to_string(),
+                AuditOutcome::None,
+                None,
+            ),
+            PressDecision::ReopenFailed(key) => (
+                "error",
+                "resume_reopen_failed".to_string(),
+                AuditOutcome::None,
+                Some(key.clone()),
+            ),
+        }
+    }
+}
+
 /// **Route a button press through the host**, with the RESTART-RESUME path: if the chat answers
 /// [`HostPress::NoSession`] (this process never presented there) but the chat's session was
 /// durably RESUMED on boot, rebind it ([`TelegramHost::resume_chat`]), re-present the live
 /// surface ([`TelegramHost::open`] — idempotent, the resumed state is kept), and retry the press
 /// once against the fresh keyboard. Returns the human ack for `answerCallbackQuery`.
 pub fn route_callback<T: Transport>(host: &mut TelegramHost<T>, query: CallbackQuery) -> String {
+    route_callback_decided(host, query).0
+}
+
+/// [`route_callback`] plus the machine [`PressDecision`] — the audit-emitting caller's form
+/// (design §9: `route_*` expose the structured decision alongside the human string).
+pub fn route_callback_decided<T: Transport>(
+    host: &mut TelegramHost<T>,
+    query: CallbackQuery,
+) -> (String, PressDecision) {
     match host.press(query.clone()) {
         HostPress::NoSession => {
             let sid = TelegramFrontend::<T>::session_id(query.chat_id, query.message_thread_id);
             let Some(key) = host.resume_chat(&sid) else {
-                return "No session in this chat yet — send /offerings to pick one.".to_string();
+                return (
+                    "No session in this chat yet — send /offerings to pick one.".to_string(),
+                    PressDecision::NoSession,
+                );
             };
             if host
                 .open(
@@ -308,11 +455,19 @@ pub fn route_callback<T: Transport>(host: &mut TelegramHost<T>, query: CallbackQ
                 )
                 .is_err()
             {
-                return format!("Could not reopen {key} — send /offerings.");
+                return (
+                    format!("Could not reopen {key} — send /offerings."),
+                    PressDecision::ReopenFailed(key),
+                );
             }
-            describe_press(host.press(query))
+            let press = host.press(query);
+            let decision = PressDecision::of(&press);
+            (describe_press(press), decision)
         }
-        press => describe_press(press),
+        press => {
+            let decision = PressDecision::of(&press);
+            (describe_press(press), decision)
+        }
     }
 }
 
@@ -326,6 +481,61 @@ pub fn route_text<T: Transport>(
     uid: TelegramUserId,
     text: &str,
 ) -> Option<String> {
+    route_text_decided(host, chat_id, topic, uid, text).0
+}
+
+/// The machine account of a routed text message — the audit envelope's half of
+/// [`route_text_decided`]. `Ignored` (ordinary chatter) is deliberately NOT audited by the
+/// loop: no decision was made and group chatter is not an interaction with the bot.
+#[derive(Debug, Clone)]
+pub enum TextDecision {
+    /// `/start` `/help` — the help text answered.
+    Help,
+    /// `/offerings` `/menu` — the offerings menu presented.
+    Menu,
+    /// `/play` — the Mini App launch menu; `why` is the honest refusal when unserved.
+    PlayMenu {
+        /// Whether the launch menu was actually sent.
+        served: bool,
+        /// The human reason when it was not.
+        why: Option<String>,
+    },
+    /// `/open <key>` — `err` carries the host's refusal, if any.
+    Open {
+        /// The requested offering key.
+        key: String,
+        /// The open error, if the host refused.
+        err: Option<String>,
+    },
+    /// `/verify` / `/act` minted a synthetic press — the press's own decision.
+    Press {
+        /// Which command minted the press.
+        cmd: String,
+        /// The routed press's machine decision.
+        press: PressDecision,
+    },
+    /// A recognized command with unusable arguments.
+    Usage {
+        /// The command whose usage was answered.
+        cmd: String,
+    },
+    /// An unrecognized slash command.
+    Unknown {
+        /// The command word as typed.
+        cmd: String,
+    },
+    /// Ordinary chatter — no decision, no reply, no audit event.
+    Ignored,
+}
+
+/// [`route_text`] plus the machine [`TextDecision`] — the audit-emitting caller's form.
+pub fn route_text_decided<T: Transport>(
+    host: &mut TelegramHost<T>,
+    chat_id: ChatId,
+    topic: Option<i64>,
+    uid: TelegramUserId,
+    text: &str,
+) -> (Option<String>, TextDecision) {
     let text = text.trim();
     let (cmd, rest) = match text.split_once(char::is_whitespace) {
         Some((c, r)) => (c, r.trim()),
@@ -334,47 +544,95 @@ pub fn route_text<T: Transport>(
     // In a group, commands arrive suffixed with the bot's username: `/open@MyBot dungeon`.
     let cmd = cmd.split('@').next().unwrap_or(cmd);
     match cmd {
-        "/start" | "/help" => Some(HELP_TEXT.to_string()),
+        "/start" | "/help" => (Some(HELP_TEXT.to_string()), TextDecision::Help),
         "/offerings" | "/menu" => {
             host.present_offerings_menu(chat_id, topic);
-            None
+            (None, TextDecision::Menu)
         }
         // The Mini App launch tier: a menu of `web_app` buttons opening the rich web surface,
         // one per offering. `Err` is the honest human reply (tier unarmed / group chat —
         // Telegram only honors `web_app` inline buttons in DMs / a transport failure).
         "/play" | "/webapp" => match host.present_play_menu(chat_id, topic) {
-            Ok(()) => None, // the launch menu IS the reply
-            Err(why) => Some(why),
+            Ok(()) => (
+                None, // the launch menu IS the reply
+                TextDecision::PlayMenu {
+                    served: true,
+                    why: None,
+                },
+            ),
+            Err(why) => (
+                Some(why.clone()),
+                TextDecision::PlayMenu {
+                    served: false,
+                    why: Some(why),
+                },
+            ),
         },
         "/open" => {
             if rest.is_empty() {
-                return Some("Usage: /open <key> — see /offerings for the catalog.".to_string());
+                return (
+                    Some("Usage: /open <key> — see /offerings for the catalog.".to_string()),
+                    TextDecision::Usage {
+                        cmd: cmd.to_string(),
+                    },
+                );
             }
             match host.open(rest, chat_id, topic, uid) {
-                Ok(_) => None, // the opened surface IS the reply
-                Err(e) => Some(format!("Cannot open {rest}: {e}")),
+                Ok(_) => (
+                    None, // the opened surface IS the reply
+                    TextDecision::Open {
+                        key: rest.to_string(),
+                        err: None,
+                    },
+                ),
+                Err(e) => (
+                    Some(format!("Cannot open {rest}: {e}")),
+                    TextDecision::Open {
+                        key: rest.to_string(),
+                        err: Some(e.to_string()),
+                    },
+                ),
             }
         }
         // `/verify` and `/act` mint the same synthetic press a pinned button would — the ONE
         // router (with the restart-resume path) handles both.
-        "/verify" => Some(route_callback(
-            host,
-            CallbackQuery {
-                chat_id,
-                message_thread_id: topic,
-                from_user_id: uid,
-                data: encode_callback(TURN_VERIFY, 0),
-            },
-        )),
+        "/verify" => {
+            let (ack, press) = route_callback_decided(
+                host,
+                CallbackQuery {
+                    chat_id,
+                    message_thread_id: topic,
+                    from_user_id: uid,
+                    data: encode_callback(TURN_VERIFY, 0),
+                },
+            );
+            (
+                Some(ack),
+                TextDecision::Press {
+                    cmd: cmd.to_string(),
+                    press,
+                },
+            )
+        }
         "/act" => {
             let usage = "Usage: /act <turn> <arg> — e.g. /act bid 500".to_string();
             let Some((turn, arg)) = rest.split_once(char::is_whitespace) else {
-                return Some(usage);
+                return (
+                    Some(usage),
+                    TextDecision::Usage {
+                        cmd: cmd.to_string(),
+                    },
+                );
             };
             let Ok(arg) = arg.trim().parse::<i64>() else {
-                return Some(usage);
+                return (
+                    Some(usage),
+                    TextDecision::Usage {
+                        cmd: cmd.to_string(),
+                    },
+                );
             };
-            Some(route_callback(
+            let (ack, press) = route_callback_decided(
                 host,
                 CallbackQuery {
                     chat_id,
@@ -382,9 +640,89 @@ pub fn route_text<T: Transport>(
                     from_user_id: uid,
                     data: encode_callback(turn, arg),
                 },
-            ))
+            );
+            (
+                Some(ack),
+                TextDecision::Press {
+                    cmd: cmd.to_string(),
+                    press,
+                },
+            )
         }
-        _ => None,
+        _ if cmd.starts_with('/') => (
+            None,
+            TextDecision::Unknown {
+                cmd: cmd.to_string(),
+            },
+        ),
+        _ => (None, TextDecision::Ignored),
+    }
+}
+
+impl TextDecision {
+    /// The §3 taxonomy mapping: `(decision.kind, reason, outcome, offering, input.kind)`.
+    /// `None` = ordinary chatter — not an interaction, no audit event.
+    pub fn audit_parts(
+        &self,
+    ) -> Option<(&'static str, String, AuditOutcome, Option<String>, String)> {
+        match self {
+            TextDecision::Help => Some((
+                "routed",
+                String::new(),
+                AuditOutcome::None,
+                None,
+                "/help".to_string(),
+            )),
+            TextDecision::Menu => Some((
+                "routed",
+                String::new(),
+                AuditOutcome::None,
+                None,
+                "/offerings".to_string(),
+            )),
+            TextDecision::PlayMenu { served, why } => Some((
+                if *served { "routed" } else { "refused" },
+                if *served {
+                    String::new()
+                } else {
+                    format!(
+                        "webapp_unavailable: {}",
+                        why.as_deref().unwrap_or("unknown")
+                    )
+                },
+                AuditOutcome::None,
+                None,
+                "/play".to_string(),
+            )),
+            TextDecision::Open { key, err } => Some((
+                if err.is_none() { "routed" } else { "refused" },
+                err.as_ref()
+                    .map(|e| format!("open_failed: {e}"))
+                    .unwrap_or_default(),
+                AuditOutcome::None,
+                Some(key.clone()),
+                "/open".to_string(),
+            )),
+            TextDecision::Press { cmd, press } => {
+                let (kind, reason, outcome, offering) = press.audit_parts();
+                Some((kind, reason, outcome, offering, cmd.clone()))
+            }
+            TextDecision::Usage { cmd } => Some((
+                "refused",
+                "usage".to_string(),
+                AuditOutcome::None,
+                None,
+                cmd.clone(),
+            )),
+            TextDecision::Unknown { cmd } => Some((
+                "refused",
+                "unknown_command".to_string(),
+                AuditOutcome::None,
+                None,
+                cmd.clone(),
+            )),
+            TextDecision::Ignored => None,
+        }
     }
 }
 
@@ -403,8 +741,33 @@ pub fn route_web_app_data<T: Transport>(
     uid: TelegramUserId,
     data: &str,
 ) -> String {
+    route_web_app_data_decided(host, chat_id, topic, uid, data).0
+}
+
+/// The machine account of a routed `web_app_data` payload.
+#[derive(Debug, Clone)]
+pub enum WebAppDecision {
+    /// The payload decoded in the ONE affordance codec and routed as a synthetic press.
+    Press(PressDecision),
+    /// The payload decoded as nothing — acknowledged-and-dropped (client-authored, untrusted).
+    Dropped {
+        /// The payload length (the payload itself is client-authored noise; the length is the
+        /// honest record).
+        len: usize,
+    },
+}
+
+/// [`route_web_app_data`] plus the machine [`WebAppDecision`] — the audit-emitting caller's
+/// form.
+pub fn route_web_app_data_decided<T: Transport>(
+    host: &mut TelegramHost<T>,
+    chat_id: ChatId,
+    topic: Option<i64>,
+    uid: TelegramUserId,
+    data: &str,
+) -> (String, WebAppDecision) {
     if decode_callback(data).is_some() {
-        route_callback(
+        let (ack, press) = route_callback_decided(
             host,
             CallbackQuery {
                 chat_id,
@@ -412,12 +775,16 @@ pub fn route_web_app_data<T: Transport>(
                 from_user_id: uid,
                 data: data.to_string(),
             },
-        )
+        );
+        (ack, WebAppDecision::Press(press))
     } else {
-        format!(
-            "Mini App sent {} byte(s) — no affordance decoded, nothing landed. State-changing \
-             turns land through the app's own verified channel.",
-            data.len()
+        (
+            format!(
+                "Mini App sent {} byte(s) — no affordance decoded, nothing landed. State-changing \
+                 turns land through the app's own verified channel.",
+                data.len()
+            ),
+            WebAppDecision::Dropped { len: data.len() },
         )
     }
 }
@@ -498,6 +865,24 @@ pub fn durable_telegram_host(dir: Option<PathBuf>, council_members: Vec<[u8; 32]
                         log.key, log.id.0
                     );
                 }
+                // The boot-resume decision, durably (design §2.2: today stderr-only) — one
+                // `resume` event per persisted log, routed (resumed) or refused (fail-closed).
+                let ev = AuditEvent::new(
+                    "telegram",
+                    Actor::system("boot-resume"),
+                    Surface::Resume,
+                    Input::new("resume", json!({ "store": dir.display().to_string() })),
+                )
+                .in_session(Some(log.key.clone()), Some(log.id.0.clone()));
+                audit::log().emit(match outcome {
+                    Ok(_) => ev.decided("routed", ""),
+                    Err(e) => {
+                        ev.decided("refused", "resume_failed")
+                            .with_outcome(AuditOutcome::Error {
+                                what: e.to_string(),
+                            })
+                    }
+                });
             }
         }
         Err(e) => {
@@ -539,7 +924,28 @@ pub fn run_update_loop<T: Transport, H: HttpPost>(
             match ev {
                 BotEvent::Callback { callback_id, query } => {
                     let (chat, topic) = (query.chat_id, query.message_thread_id);
-                    let ack = route_callback(host, query);
+                    // AUDIT EMIT (ingress + outcome, one stack frame): the press's envelope —
+                    // who (custodial uid → derived identity), what (callback_data), the
+                    // decision taxonomy, and the receipt-chain join on a landed turn.
+                    let sid = TelegramFrontend::<T>::session_id(chat, topic);
+                    let actor = Actor::custodial(
+                        query.from_user_id.to_string(),
+                        host.identity(query.from_user_id).0,
+                    );
+                    let data = query.data.clone();
+                    let (ack, decision) = route_callback_decided(host, query);
+                    let (kind, reason, outcome, offering) = decision.audit_parts();
+                    audit::log().emit(
+                        AuditEvent::new(
+                            "telegram",
+                            actor,
+                            Surface::Callback,
+                            Input::new("callback", json!({ "callback_data": data })),
+                        )
+                        .in_session(offering, Some(sid.0.clone()))
+                        .decided(kind, reason)
+                        .with_outcome(outcome),
+                    );
                     if let Err(e) = api.answer_callback(&callback_id, &ack) {
                         eprintln!("answerCallbackQuery failed: {e}");
                     }
@@ -557,7 +963,28 @@ pub fn run_update_loop<T: Transport, H: HttpPost>(
                     uid,
                     text,
                 } => {
-                    if let Some(reply) = route_text(host, chat_id, topic, uid, &text) {
+                    let sid = TelegramFrontend::<T>::session_id(chat_id, topic);
+                    let actor = Actor::custodial(uid.to_string(), host.identity(uid).0);
+                    let (reply, decision) = route_text_decided(host, chat_id, topic, uid, &text);
+                    // AUDIT EMIT: every routed command (ordinary chatter maps to None — not an
+                    // interaction). User free text IS the trail (§8); no /key-class command
+                    // exists on this surface.
+                    if let Some((kind, reason, outcome, offering, input_kind)) =
+                        decision.audit_parts()
+                    {
+                        audit::log().emit(
+                            AuditEvent::new(
+                                "telegram",
+                                actor,
+                                Surface::Command,
+                                Input::new(&*input_kind, json!({ "text": text })),
+                            )
+                            .in_session(offering, Some(sid.0.clone()))
+                            .decided(kind, reason)
+                            .with_outcome(outcome),
+                        );
+                    }
+                    if let Some(reply) = reply {
                         if let Err(e) = api.send_text(chat_id, topic, &reply) {
                             eprintln!("sendMessage failed: {e}");
                         }
@@ -570,7 +997,32 @@ pub fn run_update_loop<T: Transport, H: HttpPost>(
                     data,
                     ..
                 } => {
-                    let reply = route_web_app_data(host, chat_id, topic, uid, &data);
+                    let sid = TelegramFrontend::<T>::session_id(chat_id, topic);
+                    let actor = Actor::custodial(uid.to_string(), host.identity(uid).0);
+                    let (reply, decision) =
+                        route_web_app_data_decided(host, chat_id, topic, uid, &data);
+                    // AUDIT EMIT: the Mini App sendData round-trip — routed as a synthetic
+                    // press, or acknowledged-and-dropped (client-authored, untrusted).
+                    let (kind, reason, outcome, offering) = match &decision {
+                        WebAppDecision::Press(p) => p.audit_parts(),
+                        WebAppDecision::Dropped { .. } => (
+                            "refused",
+                            "no_affordance_decoded".to_string(),
+                            AuditOutcome::None,
+                            None,
+                        ),
+                    };
+                    audit::log().emit(
+                        AuditEvent::new(
+                            "telegram",
+                            actor,
+                            Surface::WebAppData,
+                            Input::new("web_app_data", json!({ "data": data, "len": data.len() })),
+                        )
+                        .in_session(offering, Some(sid.0.clone()))
+                        .decided(kind, reason)
+                        .with_outcome(outcome),
+                    );
                     if let Err(e) = api.send_text(chat_id, topic, &reply) {
                         eprintln!("sendMessage (web_app_data reply) failed: {e}");
                     }

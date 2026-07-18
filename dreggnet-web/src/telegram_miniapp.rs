@@ -82,8 +82,8 @@ use dreggnet_offerings::{
 use dreggnet_telegram::cipherclerk::{TelegramCipherclerk, seed_for};
 
 use crate::{
-    CatalogState, live_session_count, metrics, refused_open_response, render_offering_response,
-    wants_fragment,
+    CatalogState, audit, live_session_count, metrics, open_audit_parts, refused_open_response,
+    render_offering_response, wants_fragment,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -343,7 +343,7 @@ pub fn validate_init_data_at(
     //    covers ALL of them, including pairs this server does not otherwise use.
     let mut covered: Vec<(String, String)> = pairs
         .iter()
-        .filter(|(k, _)| k != "hash" && k != "signature")
+        .filter(|(k, _)| k != "hash") // signature IS covered by the HMAC data-check-string (verified against real Telegram initData 2026-07-17)
         .cloned()
         .collect();
     covered.sort();
@@ -526,17 +526,62 @@ pub fn tg_miniapp_from_env(catalog: Arc<CatalogState>) -> Option<Router> {
 // Handlers.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The machine reason for a refused initData gate — `initdata:<gate>` (the audit design's §3
+/// taxonomy; each [`InitDataError`] variant is one named fail-closed gate).
+fn initdata_reason(e: &InitDataError) -> String {
+    let gate = match e {
+        InitDataError::Missing => "missing",
+        InitDataError::MalformedQuery => "malformed_query",
+        InitDataError::MissingHash => "missing_hash",
+        InitDataError::MalformedHash => "malformed_hash",
+        InitDataError::MissingAuthDate => "missing_auth_date",
+        InitDataError::MalformedAuthDate => "malformed_auth_date",
+        InitDataError::BadHmac => "bad_hmac",
+        InitDataError::Stale { .. } => "stale",
+        InitDataError::FromFuture { .. } => "from_future",
+        InitDataError::MissingUser => "missing_user",
+        InitDataError::MalformedUser => "malformed_user",
+    };
+    format!("initdata:{gate}")
+}
+
 /// Validate the request's `X-Telegram-Init-Data` header into a [`VerifiedTelegramUser`], or the
 /// honest refusal response (`401` missing / `400` malformed / `403` refused). The raw initData
 /// is never logged — the verified uid + `auth_date` are.
+///
+/// AUDIT EMIT (both polarities — this is the trail the live HMAC-mismatch debugging reads):
+/// every validation lands ONE `surface: "initdata"` event on `corr` — ACCEPT (`routed`, the
+/// verified uid + `auth_date` + derived identity) or REFUSE (`gated`, the NAMED gate via
+/// [`initdata_reason`] + the error text + status). The raw initData string never enters the
+/// record (§8 hard rule); the deep dcs/hash diagnostic stays on `validate_init_data_at`'s
+/// tracing warn.
 fn verified_user(
     state: &TgMiniAppState,
     headers: &HeaderMap,
+    corr: &str,
+    route: &str,
 ) -> Result<VerifiedTelegramUser, Response> {
+    let refused_event = |e: &InitDataError| {
+        audit::AuditEvent::new(
+            "tg-miniapp",
+            audit::Actor::unattributed(),
+            audit::Surface::InitData,
+            audit::Input::new(
+                route,
+                serde_json::json!({
+                    "error": e.to_string(),
+                    "status": e.http_status().as_u16(),
+                }),
+            ),
+        )
+        .correlated(corr)
+        .decided("gated", initdata_reason(e))
+    };
     let raw = match headers.get(INIT_DATA_HEADER).and_then(|v| v.to_str().ok()) {
         Some(r) if !r.is_empty() => r,
         _ => {
             let e = InitDataError::Missing;
+            audit::log().emit(refused_event(&e));
             return Err((
                 e.http_status(),
                 format!("initData refused: {e} — open this surface inside Telegram"),
@@ -551,10 +596,29 @@ fn verified_user(
                 auth_date = u.auth_date,
                 "initData verified"
             );
+            audit::log().emit(
+                audit::AuditEvent::new(
+                    "tg-miniapp",
+                    audit::Actor::initdata_verified(
+                        u.user_id.to_string(),
+                        Some(state.identity_for(u.user_id).0),
+                    ),
+                    audit::Surface::InitData,
+                    audit::Input::new(
+                        route,
+                        serde_json::json!({
+                            "auth_date": u.auth_date,
+                            "username": u.username,
+                        }),
+                    ),
+                )
+                .correlated(corr),
+            );
             Ok(u)
         }
         Err(e) => {
             tracing::debug!(error = %e, "initData refused");
+            audit::log().emit(refused_event(&e));
             Err((e.http_status(), format!("initData refused: {e}")).into_response())
         }
     }
@@ -573,7 +637,8 @@ async fn get_tg_offerings(
     State(state): State<Arc<TgMiniAppState>>,
     headers: HeaderMap,
 ) -> Response {
-    let user = match verified_user(&state, &headers) {
+    let corr = audit::correlation_id();
+    let user = match verified_user(&state, &headers, &corr, "GET /tg/offerings") {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -625,7 +690,9 @@ async fn get_tg_session(
         ))))
         .into_response();
     }
-    let user = match verified_user(&state, &headers) {
+    let corr = audit::correlation_id();
+    let route = "GET /tg/offerings/{key}/session/{id}";
+    let user = match verified_user(&state, &headers, &corr, route) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -644,6 +711,25 @@ async fn get_tg_session(
         })
     };
     metrics::set_sessions_open(open_count as f64);
+    // AUDIT EMIT: the open decision for the verified viewer, joined to the initData accept
+    // event by `corr`.
+    {
+        let (kind, reason) = match &opened {
+            Ok(_) => ("routed", String::new()),
+            Err(e) => open_audit_parts(e),
+        };
+        audit::log().emit(
+            audit::AuditEvent::new(
+                "tg-miniapp",
+                audit::Actor::initdata_verified(user.user_id.to_string(), Some(viewer.0.clone())),
+                audit::Surface::Http,
+                audit::Input::new(route, serde_json::Value::Null),
+            )
+            .correlated(&corr)
+            .in_session(Some(key.clone()), Some(sid.0.clone()))
+            .decided(kind, reason),
+        );
+    }
     match opened {
         Err(HostError::UnknownOffering(k)) => {
             return (
@@ -699,11 +785,20 @@ async fn post_tg_act(
     headers: HeaderMap,
     Form(form): Form<TgActForm>,
 ) -> Response {
-    let user = match verified_user(&state, &headers) {
+    let corr = audit::correlation_id();
+    let route = "POST /tg/offerings/{key}/session/{id}/act";
+    let user = match verified_user(&state, &headers, &corr, route) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
     let sid = SessionId::new(id);
+    // The PUBLIC audit substance, captured before `form` is consumed into the action: the
+    // `{turn, arg, text}` IS the trail (§8 — user content, no secrets on this wire).
+    let audit_detail = serde_json::json!({
+        "turn": form.turn,
+        "arg": form.arg,
+        "text": form.text,
+    });
 
     // The custodial signer for the VERIFIED uid — the same seed, therefore the same Ed25519
     // identity, as `TelegramCipherclerk::derive`. The transient seed copy is wiped after the
@@ -712,6 +807,16 @@ async fn post_tg_act(
     let signer = TurnSigner::from_seed(*seed);
     drop(seed);
     let viewer = signer.identity();
+    let act_event = |detail: serde_json::Value| {
+        audit::AuditEvent::new(
+            "tg-miniapp",
+            audit::Actor::initdata_verified(user.user_id.to_string(), Some(viewer.0.clone())),
+            audit::Surface::Http,
+            audit::Input::new(route, detail),
+        )
+        .correlated(&corr)
+        .in_session(Some(key.clone()), Some(sid.0.clone()))
+    };
 
     // Ensure open first (lazily, lifecycle-aware) — mirroring the act-signed twin.
     let opened = {
@@ -727,6 +832,7 @@ async fn post_tg_act(
     };
     match opened {
         Err(HostError::UnknownOffering(k)) => {
+            audit::log().emit(act_event(audit_detail).decided("refused", "unknown_offering"));
             return (
                 StatusCode::NOT_FOUND,
                 format!("no offering registered under key {k:?}"),
@@ -734,6 +840,8 @@ async fn post_tg_act(
                 .into_response();
         }
         Err(e @ (HostError::Policy(_) | HostError::ResumeFailed { .. })) => {
+            let (kind, reason) = open_audit_parts(&e);
+            audit::log().emit(act_event(audit_detail).decided(kind, reason));
             return refused_open_response(&sid, &e);
         }
         _ => {}
@@ -771,6 +879,43 @@ async fn post_tg_act(
             h.advance_signed(&key, &sid, sa)
         })
     };
+
+    // AUDIT EMIT: the custodial-Signed advance, joined to the initData accept by `corr` —
+    // `Landed` carries the receipt-chain join; a verifier refusal HERE is a server bug (the
+    // server signed for itself in the same atomic job) and is recorded as `error`.
+    {
+        let (kind, reason, out) = match &outcome {
+            Ok(Outcome::Landed { receipt, ended }) => (
+                "routed",
+                String::new(),
+                audit::AuditOutcome::Landed {
+                    turn_hash: audit::hex32(&receipt.turn_hash),
+                    ended: *ended,
+                },
+            ),
+            Ok(Outcome::Refused(why)) => (
+                "routed",
+                String::new(),
+                audit::AuditOutcome::Refused { why: why.clone() },
+            ),
+            Err(HostError::Signature(e)) => (
+                "error",
+                format!("custodial_verifier_refused: {e}"),
+                audit::AuditOutcome::Error {
+                    what: e.to_string(),
+                },
+            ),
+            Err(e) => {
+                let (kind, reason) = open_audit_parts(e);
+                (kind, reason, audit::AuditOutcome::None)
+            }
+        };
+        audit::log().emit(
+            act_event(audit_detail)
+                .decided(kind, reason)
+                .with_outcome(out),
+        );
+    }
 
     let claimed = viewer.0.clone();
     let notice = match outcome {
@@ -1027,18 +1172,53 @@ mod tests {
         assert_eq!(u.username.as_deref(), Some("emberian"));
     }
 
+    /// Build a VALID initData INCLUDING a `signature` field — the real-Telegram shape (2024+),
+    /// where the HMAC data-check-string COVERS the signature (sorted `auth_date < query_id <
+    /// signature < user`, excluding only `hash`).
+    fn fixture_init_data_with_signature(
+        token: &str,
+        uid: u64,
+        auth_date: u64,
+        signature: &str,
+    ) -> String {
+        let user_json = format!(r#"{{"id":{uid},"first_name":"Ember","username":"emberian"}}"#);
+        let dcs = format!(
+            "auth_date={auth_date}\nquery_id=AAtest\nsignature={signature}\nuser={user_json}"
+        );
+        let secret = webapp_secret_key(token);
+        let hash = hex32(&hmac_sha256(&secret, dcs.as_bytes()));
+        format!(
+            "query_id=AAtest&user={}&auth_date={auth_date}&signature={signature}&hash={hash}",
+            url_encode(&user_json)
+        )
+    }
+
+    /// REGRESSION (2026-07-17, ember's live @dreggnet_bot Mini App): real Telegram initData carries
+    /// a third-party Ed25519 `signature` field, and the HMAC `hash` COVERS it (the DCS excludes only
+    /// `hash`). The original code excluded `signature` too and rejected every real Mini App request.
+    /// This pins the fix from BOTH sides so it can never silently regress.
     #[test]
-    fn a_signature_pair_is_excluded_from_the_data_check_string() {
-        // The third-party Ed25519 `signature` field rides OUTSIDE the HMAC scheme: appending it
-        // must not break validation (it is excluded from the DCS, exactly like `hash`).
+    fn the_signature_field_is_covered_by_the_hmac() {
         let secret = webapp_secret_key(TOKEN);
-        let init = format!(
-            "{}&signature=irrelevant",
+        // (a) a signature that is part of the signed DCS validates — the real-Telegram acceptance
+        //     vector. If someone re-excludes `signature`, this line panics.
+        let good = fixture_init_data_with_signature(TOKEN, 7, 1_760_000_000, "sig-abc");
+        assert_eq!(
+            validate_init_data_at(&secret, &good, 1_760_000_100, 86_400)
+                .expect("signature IS covered by the HMAC data-check-string")
+                .user_id,
+            7
+        );
+        // (b) a `signature` APPENDED to a signature-less hash must be REFUSED — excluding signature
+        //     (the bug) would WRONGLY accept this.
+        let bad = format!(
+            "{}&signature=sig-abc",
             fixture_init_data(TOKEN, 7, 1_760_000_000)
         );
-        let u = validate_init_data_at(&secret, &init, 1_760_000_100, 86_400)
-            .expect("signature pair is not HMAC-covered");
-        assert_eq!(u.user_id, 7);
+        assert_eq!(
+            validate_init_data_at(&secret, &bad, 1_760_000_100, 86_400),
+            Err(InitDataError::BadHmac)
+        );
     }
 
     #[test]

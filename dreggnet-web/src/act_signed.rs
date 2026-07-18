@@ -62,7 +62,29 @@ use dreggnet_offerings::{
     Action, Attribution, DreggIdentity, HostError, Outcome, SessionId, SignedAction, SignedError,
 };
 
-use crate::{CatalogState, refused_open_response, render_offering_response, wants_fragment};
+use crate::{
+    CatalogState, audit, open_audit_parts, refused_open_response, render_offering_response,
+    wants_fragment,
+};
+
+/// The act-signed audit-envelope skeleton (`signed` attribution — the user-held-key grade).
+/// The caller stamps decision + outcome; `detail` carries the PUBLIC wire material only
+/// (turn/arg/counter — §8: the pubkey and even the signature are public, secrets never
+/// reach this route).
+fn signed_audit_event(
+    actor: audit::Actor,
+    key: &str,
+    sid: &SessionId,
+    detail: serde_json::Value,
+) -> audit::AuditEvent {
+    audit::AuditEvent::new(
+        "web",
+        actor,
+        audit::Surface::Http,
+        audit::Input::new("POST /offerings/{key}/session/{id}/act-signed", detail),
+    )
+    .in_session(Some(key.to_string()), Some(sid.0.clone()))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The wire → SignedAction decode.
@@ -214,6 +236,16 @@ pub async fn post_offering_act_signed(
     let wire: SignedActionWire = match serde_json::from_slice(&body) {
         Ok(w) => w,
         Err(e) => {
+            // AUDIT EMIT: the request never named a verifiable turn — refused at the shape.
+            audit::log().emit(
+                signed_audit_event(
+                    audit::Actor::unattributed(),
+                    &key,
+                    &sid,
+                    serde_json::json!({ "error": e.to_string() }),
+                )
+                .decided("refused", "malformed_body"),
+            );
             return (
                 StatusCode::BAD_REQUEST,
                 format!("malformed act-signed body: {e}"),
@@ -223,13 +255,32 @@ pub async fn post_offering_act_signed(
     };
     let sa = match decode(wire) {
         Ok(sa) => sa,
-        Err((status, reason)) => return (status, reason).into_response(),
+        Err((status, reason)) => {
+            audit::log().emit(
+                signed_audit_event(
+                    audit::Actor::unattributed(),
+                    &key,
+                    &sid,
+                    serde_json::json!({ "error": reason.clone() }),
+                )
+                .decided("refused", "malformed_envelope"),
+            );
+            return (status, reason).into_response();
+        }
     };
 
     // The claimed signer, canonicalized — the render viewer on success, and the ADVISORY opener
     // attribution (`Asserted`: nothing is verified yet; verification is advance_signed's job, and
     // the unsigned twin's cookie label is exactly as forgeable — capacity/TTL are the backstops).
     let claimed = sa.actor_pubkey_hex.to_ascii_lowercase();
+    // The PUBLIC wire material for the audit envelope (captured before `sa` moves into the
+    // host job): turn/arg/counter — the signature itself is public too, but the join needs
+    // only the signed intent.
+    let audit_detail = serde_json::json!({
+        "turn": sa.action.turn,
+        "arg": sa.action.arg,
+        "counter": sa.counter,
+    });
 
     // Ensure open first (lazily, lifecycle-aware) — mirroring the unsigned POST: a policy refusal
     // is an honest 4xx, an evicted persisted session resumes, an unknown offering is a 404.
@@ -245,6 +296,15 @@ pub async fn post_offering_act_signed(
     };
     match opened {
         Err(HostError::UnknownOffering(k)) => {
+            audit::log().emit(
+                signed_audit_event(
+                    audit::Actor::signed(claimed.clone(), claimed),
+                    &key,
+                    &sid,
+                    audit_detail,
+                )
+                .decided("refused", "unknown_offering"),
+            );
             return (
                 StatusCode::NOT_FOUND,
                 format!("no offering registered under key {k:?}"),
@@ -252,6 +312,16 @@ pub async fn post_offering_act_signed(
                 .into_response();
         }
         Err(e @ (HostError::Policy(_) | HostError::ResumeFailed { .. })) => {
+            let (kind, reason) = open_audit_parts(&e);
+            audit::log().emit(
+                signed_audit_event(
+                    audit::Actor::signed(claimed.clone(), claimed),
+                    &key,
+                    &sid,
+                    audit_detail,
+                )
+                .decided(kind, reason),
+            );
             return refused_open_response(&sid, &e);
         }
         _ => {}
@@ -265,6 +335,41 @@ pub async fn post_offering_act_signed(
         let sid = sid.clone();
         state.host.run(move |h| h.advance_signed(&key, &sid, sa))
     };
+
+    // AUDIT EMIT: the signature-verified advance — `Landed` carries the receipt-chain join;
+    // a verifier refusal (forged/tampered/replayed counter) is a `gated` envelope, nothing
+    // committed (anti-ghost).
+    {
+        let (kind, reason, out) = match &outcome {
+            Ok(Outcome::Landed { receipt, ended }) => (
+                "routed",
+                String::new(),
+                audit::AuditOutcome::Landed {
+                    turn_hash: audit::hex32(&receipt.turn_hash),
+                    ended: *ended,
+                },
+            ),
+            Ok(Outcome::Refused(why)) => (
+                "routed",
+                String::new(),
+                audit::AuditOutcome::Refused { why: why.clone() },
+            ),
+            Err(e) => {
+                let (kind, reason) = open_audit_parts(e);
+                (kind, reason, audit::AuditOutcome::None)
+            }
+        };
+        audit::log().emit(
+            signed_audit_event(
+                audit::Actor::signed(claimed.clone(), claimed.clone()),
+                &key,
+                &sid,
+                audit_detail,
+            )
+            .decided(kind, reason)
+            .with_outcome(out),
+        );
+    }
 
     let notice = match outcome {
         Ok(Outcome::Landed { ended, .. }) => {

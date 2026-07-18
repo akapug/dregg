@@ -36,6 +36,10 @@ dreggnet-offerings = { path = "../dreggnet-offerings" }
 # `src/seated.rs`), the eight do-once RPG feature surfaces, the five service offerings — from ONE
 # list instead of this crate's own hand-maintained copy (docs/BOT-SHARED-BACKEND-DESIGN.md).
 dreggnet-catalog = { path = "../dreggnet-catalog" }
+# THE INTERACTION-ENVELOPE AUDIT FACILITY (docs/BOT-AUDIT-LOGGING-DESIGN.md) — the shared
+# event shape + non-blocking JSONL writer all three frontends emit through; `src/audit.rs`
+# is only this deploy's log resolution over it.
+dreggnet-audit = { path = "../dreggnet-audit" }
 # THE DEOS SURFACE — `ViewNode`, the serializable affordance view-tree an offering's
 # `render` produces. The Telegram renderer walks it into message text + an inline
 # keyboard. `default-features = false` = the gpui-free view-tree model only; the

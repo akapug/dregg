@@ -34,6 +34,7 @@
 //! orchestrator's job, identical across frontends.
 
 pub mod api;
+pub mod audit;
 pub mod cipherclerk;
 pub mod host;
 pub mod render;

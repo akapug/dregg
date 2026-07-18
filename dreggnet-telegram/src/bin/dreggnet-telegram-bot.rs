@@ -77,6 +77,25 @@ fn main() {
         );
     }
 
+    // 3b. The audit log — the interaction envelope (docs/BOT-AUDIT-LOGGING-DESIGN.md): a
+    //     sibling `audit/` beside the session store unless `DREGG_AUDIT_DIR` overrides
+    //     (`DREGG_AUDIT_DIR=off` disables). Armed BEFORE the host build so boot-resume
+    //     decisions are the first recorded events.
+    let audit_default = session_dir
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.join("audit"))
+        .unwrap_or_else(|| std::path::PathBuf::from("audit"));
+    let audit_log = dreggnet_telegram::audit::init(Some(audit_default));
+    eprintln!(
+        "audit log {} (DREGG_AUDIT_DIR overrides; off disables)",
+        if audit_log.is_enabled() {
+            "ENABLED"
+        } else {
+            "disabled"
+        }
+    );
+
     // 4. The council electorate (derived member pubkeys from Telegram uids).
     let council_uids: Vec<u64> = std::env::var("TELEGRAM_COUNCIL_UIDS")
         .ok()
