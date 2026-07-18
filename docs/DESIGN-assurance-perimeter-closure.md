@@ -59,13 +59,22 @@ completeness; B depends on A.** Do not conflate them.
 - **B (recursive-default) is the apex, gated on A** — grow the inner AIR to the real `EffectVmAir`, force
   `NEW_COMMIT` in-circuit (#2), complete the inner AIRs (A) — THEN recurse. Still rests on the FRI floor.
 
-## 5. The hard-fork reality (state-commit)
+## 5. THIS IS GREENFIELD — build the right thing, delete the debt (no cutover theater)
 
-The gossiped/signed anchor is BLAKE3 `ledger.root()` (`execute.rs:640`); the proven-complete object is the
-Poseidon2 `wire_commit` (`rotation_witness.rs:335`, already byte-pinned to the circuit, staged behind IR-v2).
-Different bytes → the proven-complete route **requires the `ROTATION-CUTOVER` flag-day** (cut the anchor from
-BLAKE3 to Poseidon2; BLAKE3 tree survives as a non-consensus local index). The `←`-leg *theorem* is a 1-cycle
-beachhead; making it the *anchor* is the migration tail.
+Nothing is deployed: no live consensus, no persisted ledgers, no users whose state forks. So there is **no
+migration, no flag day, no byte-identical bar, no compat constraint** anywhere in this campaign. Do not
+perform production-gravity on pre-production work. Concretely:
+
+- **State-commit:** the Poseidon2 `wire_commit` (`rotation_witness.rs:335`) just **becomes** the commitment
+  (make `execute.rs:640` chain it, prove it complete); the BLAKE3 `ledger.root()` is **deleted** (or kept
+  only as a non-consensus local convenience). No "cutover."
+- **Note-tree:** the Lean accumulator **is** the accumulator; `poseidon2_tree.rs`'s hand-rolled math and the
+  byte-differential are **deleted**. There is no "existing tree" to stay byte-identical to.
+- **cap/heap:** the Phase-E sorted-tree splice descriptor **is** the descriptor; the prepend-digest form is
+  **deleted**, not kept "deployed."
+
+The only real constraint is correctness (the `⟺` proofs) and internal consistency of the tree at any instant
+— never backward-compat with a deployment that does not exist.
 
 ## 6. Multi-swarm cycle plan
 
@@ -75,8 +84,8 @@ beachhead; making it the *anchor* is the migration tail.
   - *Cheap Rust:* `TurnExecuted` accepts EffectVM-STARK-verify as an alternative to trusted-key (#3, no recursion).
 - **Cycle 2:** replicate the `⟺` schema to garbled-eval + note-spend; land `cells_root` Phase-E; deploy the
   authored-but-undeployed forced cap/heap descriptors.
-- **Cycle 3:** generalize transfer `⟺` to all effect tags; the `wire_commit` anchor cutover (flag-day);
-  discharge `hcanon` field-faithfulness.
+- **Cycle 3:** generalize transfer `⟺` to all effect tags; make `wire_commit` the chained commitment in
+  `execute.rs` and delete the BLAKE3 `ledger.root()`; discharge `hcanon` field-faithfulness.
 - **Apex (post-A):** recursive-proof-default (#3 → real recursion), then attack the FRI floor
   (`FriLdtExtractV3`, an adversary object) — a separate campaign.
 
