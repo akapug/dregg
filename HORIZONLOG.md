@@ -1,5 +1,22 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑⚑⚑⚑ AUTOMATAFL IN LEAN — A WHOLE TURN IS A THEOREM (2026-07-18)
+`resolve_step_sat_imp_applyTurn` (`082653fba`): Leg-R sat + Leg-A sat + two NAMED seam hypotheses ⇒ the decoded new
+board is `applyTurn(old,[ma,mb])` at every in-bounds cell. `resolve_sat_imp_resolveMid` is UNCONDITIONAL (no envelope);
+`astep_sat_imp_automatonStep` closed earlier. Both descriptors Lean-authored, byte-pinned, registered, drift PASS.
+⚑ **FIVE REAL DEFECTS the formalization found** (all invisible to the Rust, which compiled/tested/proved-on-a-box):
+  #1 `automataflStepDesc` never range-checked board cells ⇒ `cell ≥ 4` read as fake-vacuum, refinement FALSE (fixed);
+  #2 the not-auto gates baked `old.auto` at compile time (fixed → witnessed); #3 occlusion baked `is_vertical` (fixed
+  → witnessed, `iv = 1 ⟺ fx = tx`); #4 the SAME missing alphabet check in `automataflResolveDesc` (fixed);
+  #5 COMPLETENESS — `writeCellHead` double-subtracted on an identical-move turn (legal per the rules) making the leaf
+  UNSATISFIABLE on a legal move (fixed by shared-endpoint inclusion–exclusion; canary flipped three ways so the fix
+  moved the pin rather than widening the gate). Plus our OWN chain lemmas were caught non-exhaustive (2-cycle missing).
+⚑ **RESIDUAL = THE SEAM** (not an assembly gap): `hseamCell`/`hseamAuto` are hypotheses. Discharging needs the
+fold-level equality of Leg A's OLD `board_root8` PI with Leg R's MID PI, plus root-injectivity — which inherits the
+Poseidon2 chip-soundness floor, so it arrives as a hypothesis of that shape. Both ends exist; the plumbing does not.
+This is the SAME seam as the Rust leg-split's known soundness gap (ember-gated a/b: shared board-root weld vs
+cell-root-carries-board). Remaining after: reveal (Leg S), win-check, NN=2→11, DELETE THE RUST, freeze, ship.
+
 ## ⚑⚑⚑ AUTOMATAFL IN LEAN — Leg A (the automaton step) PROVEN, unconditionally (2026-07-18)
 The redo on the right substrate (`~/.claude/CLAUDE.md` law #1: AIR authored in LEAN, Rust calls in). Design:
 `docs/reference/AUTOMATAFL-11X11-DESIGN.md`. Reference = ember's `emberian/automatafl`. SCOPE two-player m=2.
