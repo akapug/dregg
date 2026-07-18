@@ -357,9 +357,20 @@ def charmScore (s : GState) (p : Player) : ℕ := ∑ g ∈ controlledBy s p, ch
 /-- Number of rows a player controls. -/
 def geishaScore (s : GState) (p : Player) : ℕ := (controlledBy s p).card
 
+/-- The charm win threshold (`≥ 11 charm`). A single source of truth: the model win predicate
+`Won` AND the deployed program's win-gate (`MultiwayTugProgram.lean`) both read THIS constant, so
+a threshold edit here moves the proven game and the emitted referee together (`abbrev` keeps it
+definitionally transparent, so every `decide`/`Iff.rfl`/`omega` proof below still discharges). -/
+abbrev charmWinThreshold : ℕ := 11
+
+/-- The guild-count win threshold (`≥ 4 rows`); the single-source twin of `charmWinThreshold`. -/
+abbrev guildWinThreshold : ℕ := 4
+
 /-- **`Won`** — the win predicate: ≥ 11 charm OR ≥ 4 rows (`update_control_and_score`'s two
-victory tests), stated as a `Good`-style state predicate. -/
-def Won (s : GState) (p : Player) : Prop := 11 ≤ charmScore s p ∨ 4 ≤ geishaScore s p
+victory tests), stated as a `Good`-style state predicate. Reads the shared `charmWinThreshold` /
+`guildWinThreshold` constants the deployed win-gate reads (single source). -/
+def Won (s : GState) (p : Player) : Prop :=
+  charmWinThreshold ≤ charmScore s p ∨ guildWinThreshold ≤ geishaScore s p
 
 /-- **`won_iff_threshold` (WIN-SAFETY — cannot win illegally).** Winning is EXACTLY meeting the
 threshold: there is no way to be a winner without ≥ 11 charm or ≥ 4 rows. -/
@@ -373,10 +384,10 @@ theorem won_needs_control (s : GState) (p : Player) (h : Won s p) :
     (controlledBy s p).Nonempty := by
   rcases h with hc | hg
   · rcases Finset.eq_empty_or_nonempty (controlledBy s p) with he | hne
-    · simp only [charmScore, he, Finset.sum_empty] at hc; omega
+    · simp only [charmScore, charmWinThreshold, he, Finset.sum_empty] at hc; omega
     · exact hne
   · rcases Finset.eq_empty_or_nonempty (controlledBy s p) with he | hne
-    · simp only [geishaScore, he, Finset.card_empty] at hg; omega
+    · simp only [geishaScore, guildWinThreshold, he, Finset.card_empty] at hg; omega
     · exact hne
 
 /-! ### The blank state and the winning witnesses (non-vacuity + teeth) -/
@@ -399,7 +410,8 @@ theorem not_won_blank (p : Player) : ¬ Won blankState p := by
     apply Finset.filter_eq_empty_iff.mpr
     intro g _
     simp [control, blankState, geishaCount]
-  simp only [Won, charmScore, geishaScore, hempty, Finset.sum_empty, Finset.card_empty]
+  simp only [Won, charmScore, geishaScore, charmWinThreshold, guildWinThreshold, hempty,
+    Finset.sum_empty, Finset.card_empty]
   omega
 
 /-- A concrete **winning state**: player 1 has placed on rows `3` (charm 3), `5` (charm 4) and `6`

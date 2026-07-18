@@ -1,17 +1,26 @@
 /-
 # Dregg2.Games.MultiwayTugAir — the ABSTRACT play-leaf AIR relation, refining `applyAction`.
 
-⚠ RESOLUTION (see `docs/audit/SEMANTIC-LEAN-BOUNDARY.md`, Class B). The word "CONNECTED" in this
-file's prose is NOT a machine-checked connection to the deployed program. What is PROVEN is about
-the ABSTRACT `airPlay` relation over an OPAQUE `MerkleScheme` and the Lean multiset model `GState`.
-The DEPLOYED object is hand-rolled Rust — `dregg-multiway-tug/src/{hidden_hand,fold}.rs` and
-`state.rs::program()` (a `CellProgram::Cases` over register counters + `SumEquals==21`) — which is
-NEVER modelled here (this file uses per-player `Multiset` + Merkle hand). There is no `@[export]`,
-no Rust loader, and no emitted artifact linking `airPlay` to `fold.rs::membership_leaf_for_play`;
-that "Lean shadow of fold.rs" link is PURE DOC-COMMENT PROSE. The claim "the deployed program IS
-this Lean object" is UNPROVEN future work (emit-the-program-from-its-proof — Step 1/T4 of the
-boundary doc). In the prose below, "CONNECTED"/"concrete" mean connected to the fold-leaf SHAPE at
-the abstract level, NOT to the deployed Rust circuit.
+⚠ RESOLUTION (see `docs/audit/SEMANTIC-LEAN-BOUNDARY.md`, Class B — UPDATED). The deployed tug
+play-teeth `CellProgram::Cases` (over register counters + `SumEquals==21`) is now LEAN-SOURCED:
+authored in `Dregg2.Games.MultiwayTugProgram` (`multiwayTugProgram`), emitted to a checked-in JSON
+artifact, and loaded by `dregg-multiway-tug/src/state.rs::Deployment::program()`. That file also
+CLOSES the counter↔multiset refinement: `Prog.program_admits_legal_play` proves the DEPLOYED
+counter program admits the abstraction (`Prog.abstract`) of every legal `applyAction` move —
+conservation reads `totalCards`, the write-once flags/monotone scores/strict sequencing/win-gate
+each pinned to a PROVEN model invariant. So the deployed program IS this Lean model at the
+COUNTER (cardinality) granularity it operates on — machine-checked, not prose.
+
+What THIS file proves is the OTHER layer: the membership play-leaf `airPlay` over the abstract
+`MerkleScheme`, which pins the CARD IDENTITY the counters abstract away (many `GState`s share a
+counter image; the leaf fixes WHICH card moved under the committed hand root). The two referees
+agree on every legal play and compose: `Prog.play_admitted_by_both` proves a membership-proven
+play is admitted by BOTH the counter program AND the leaf, together refining `applyAction`. The
+HONEST remainders are now narrow and named: (1) the abstract `MerkleScheme`'s `MerkleSound` (the
+deployed Poseidon2 STARK soundness — CARRIED, not re-proven), and (2) the full IVC fold
+composition over an arbitrary chain (§below). In the prose that follows, "CONNECTED"/"concrete"
+mean connected to the fold-leaf SHAPE; the counter-program connection to the deployed referee is
+the machine-checked one in `MultiwayTugProgram.lean`.
 
 `MultiwayTug.lean` states the game-level refinement obligation abstractly:
 `AirSpec air` says a HYPOTHESIZED transition AIR admits `(o, p, a, n)` iff
