@@ -28,6 +28,8 @@ use dregg_sdk::{AgentCipherclerk, Attenuation, AuthRequest, HeldToken};
 use crate::BotState;
 use crate::cipherclerk::UserCipherclerk;
 use crate::db::IdentityMode;
+use webauth_core::link_registry::LinkStore;
+
 use crate::embeds;
 
 /// The fixed set of macaroon services a custodial user may mint a root token
@@ -299,6 +301,48 @@ async fn handle_address(ctx: &Context, command: &CommandInteraction, state: &Bot
     // copyable Cell ID above is the always-works reference; never a dead link.
     if let Some(url) = crate::explorer_link::explorer_url("cell", &cell_id) {
         embed = embed.field("Explorer", format!("[View]({url})"), false);
+    }
+
+    // Cross-platform: resolve this identity's custodial key to its ROOT key (if linked via
+    // /link-prove), then list every platform bound to that same root — the "one you, everywhere".
+    let custodial = UserCipherclerk::derive(
+        &state.config.bot_secret,
+        command.user.id.get(),
+        state.federation_id_bytes,
+    );
+    let store = webauth_core::link_registry::FileLinkStore::new(
+        webauth_core::link_registry::default_store_path(),
+    );
+    match store.resolve_root(custodial.public_key_hex()) {
+        Ok(Some(root)) => {
+            let platforms = store.platforms_for_root(&root).unwrap_or_default();
+            let list = if platforms.is_empty() {
+                "• discord (this)".to_string()
+            } else {
+                platforms
+                    .iter()
+                    .map(|p| format!("• {} ({})", p.platform, p.platform_uid))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            embed = embed.field(
+                "🔗 One you, across platforms",
+                format!(
+                    "Root key `{}…` — the SAME human on:\n{list}",
+                    &root[..16.min(root.len())]
+                ),
+                false,
+            );
+        }
+        _ => {
+            embed = embed.field(
+                "🔗 Cross-platform link",
+                "Not linked to a root key yet. `/link-cipherclerk` + `/link-prove` binds this \
+                 identity to a key you hold — then link the same key from Telegram and you become \
+                 ONE human across platforms.",
+                false,
+            );
+        }
     }
 
     respond_ephemeral(ctx, command, embed).await;
