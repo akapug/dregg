@@ -2442,3 +2442,20 @@ target (`NodeApiCofactoredVerifyResidual`).
 the forgery pin FLIPS from commits→refused.
 **SESSION SECURITY TALLY: 9 forgery-class bugs.** Named residuals: BfvLatticeEstimator, NodeApiCofactoredVerify
 + the BFV later stones (keygen/threshold/smudging-proof).
+
+## ⚡ GPU BFV FOLD — WORKS (parity-proven on Metal, 2026-07-18) — pending gate-with-swarm
+Built MYSELF (ember: "do it yourself"): a wgpu compute shader (fhegg-fhe/src/shaders/bfv_fold.wgsl) + wrapper
+(bfv_gpu.rs) for the BFV RNS fold-add — the aggregation hot path ember correctly flagged as bandwidth-bound
+at scale (GPU ~TB/s vs CPU ~100GB/s). WGSL has no u64, so u64-via-u32 pairs: add-with-carry + one
+conditional-subtract, matching the CPU add_row bit-for-bit; summing residues mod q is order-independent so
+accumulate-then-reduce == the CPU pairwise fold. PORTABLE wgpu (Metal/Vulkan/AMD, NOT CUDA-locked like
+tfhe-rs gpu feature).
+**VERIFIED: `cargo test -p fhegg-fhe --lib bfv_gpu` → 2 passed on Metal** —
+`gpu_fold_matches_cpu_fold_bit_for_bit` (GPU == the oracle-validated CPU fold, every one of ~24.5k
+coefficient lanes on degree-4096 3-modulus ciphertexts — the tooth is its own bite: any carry/modulus/subtract
+error diverges → RED) + `gpu_fold_refuses_wrap_like_cpu` (wrap gate GPU-side). **First real GPU acceleration
+of the fhegg aggregation, parity-proven.**
+GATE DEFERRED: lib.rs is a shared-file contention point (the live fhegg-expand swarm already added mod
+bfv_mul + convex_step); gate the whole BFV Rust expansion together at swarm harvest to keep lib.rs coherent.
+And ember s CLAUDE.md rule HONORED: bfv_gpu.rs is 0 AIR signals — crypto arithmetic, not a hand-written Rust
+AIR (a fold-add is homomorphic encryption, not a circuit).
