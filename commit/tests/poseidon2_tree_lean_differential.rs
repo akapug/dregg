@@ -170,3 +170,90 @@ fn tooth2_empty_leaf_is_the_deployed_sentinel() {
     assert_eq!(EMPTY_LEAF.0, 0x0DEAD1EF);
     assert_eq!(EMPTY_LEAF.0, 233492975);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Tooth 3 — BYTE-IDENTICAL to the Lean root COMPUTED OVER THE REAL POSEIDON2 (the safety gate).
+//
+// `metatheory/Dregg2/Circuit/Emit/CommitmentTreeAppendEmit.lean` instantiates the chunk-1
+// accumulator `root` at the KAT-locked BabyBear Poseidon2-w16 permutation (`hash4to1Real` =
+// the real `hash_4_to_1`), so `rootReal depth (mkSeq n)` COMPUTES the deployed note-tree root
+// in Lean, and `#guard`-pins the EXACT integers below. Here we assert the DEPLOYED Rust tree
+// (`Poseidon2MerkleTree::root().0`) reproduces those same integers. Together:
+//     Lean  #guard (rootReal = g)   ∧   Rust  assert (deployed = g)
+//   ⇒ deployed = rootReal  byte-for-byte, on every empty/sparse/half/full case at depths 2–4
+//   and at every append prefix — the byte-identical gate a cutover MUST clear before any root
+//   computation changes. (The Rust root computation itself is HELD, not deleted: an
+//   `EffectVmDescriptor2` is an AIR acceptor, not a root evaluator — the deployed sorted-map
+//   heap root `heap_root.rs::compute_heap_root` is likewise hand-Rust; the emitted descriptor
+//   only CONSTRAINS the write. So the note-tree root stays Rust, now PROVEN byte-identical to its
+//   Lean author over the real hash.)
+// ---------------------------------------------------------------------------------------------
+
+/// `[1, 2, …, n]` as deployed leaves — the Lean `mkSeq n` mirror (`BabyBear::new(i)`).
+fn seq(n: u32) -> Vec<BabyBear> {
+    (1..=n).map(BabyBear::new).collect()
+}
+
+#[test]
+fn tooth3_deployed_root_equals_lean_real_poseidon2_golden() {
+    // KAT: the node hash agrees with Lean `hash4to1Real [0,1,2,3]`.
+    assert_eq!(
+        hash_4_to_1(&[
+            BabyBear::new(0),
+            BabyBear::new(1),
+            BabyBear::new(2),
+            BabyBear::new(3),
+        ])
+        .0,
+        319108099,
+        "hash_4_to_1 KAT diverged from Lean hash4to1Real"
+    );
+
+    // (depth, n, deployed golden) — each `= rootReal depth (mkSeq n)` #guard-pinned in Lean.
+    let cases: &[(usize, u32, u32)] = &[
+        (2, 0, 1354085513),
+        (2, 3, 1895531837),
+        (2, 4, 1834518077),
+        (2, 8, 198394206),
+        (2, 15, 983932440),
+        (2, 16, 1501679053),
+        (3, 0, 62072511),
+        (3, 3, 78377282),
+        (3, 32, 746309470),
+        (3, 63, 552841819),
+        (3, 64, 230905478),
+        (4, 0, 1331265460),
+        (4, 3, 1948100911),
+        (4, 128, 851116238),
+        (4, 256, 524603802),
+    ];
+    for &(depth, n, golden) in cases {
+        assert_eq!(
+            deployed_root(depth, &seq(n)).0,
+            golden,
+            "deployed root != Lean rootReal golden: depth={depth} n={n}"
+        );
+    }
+}
+
+#[test]
+fn tooth3_append_prefixes_equal_lean_golden() {
+    // Lean pins `rootReal 2` at each append prefix of `[1..5]`; the DEPLOYED incremental root must
+    // match at every prefix (the cached/incremental path never diverges from a from-scratch build).
+    let goldens = [
+        1354085513u32,
+        1206744973,
+        570831052,
+        1895531837,
+        1834518077,
+        895893929,
+    ];
+    let base = seq(5);
+    for (k, &g) in goldens.iter().enumerate() {
+        assert_eq!(
+            deployed_root(2, &base[..k]).0,
+            g,
+            "deployed prefix root != Lean golden at k={k}"
+        );
+    }
+}
