@@ -661,9 +661,22 @@ async fn get_tg_offerings(
             path = path,
         ));
     }
+    // THE LAB FRAMING (shared words: `dreggnet_catalog::{flagship_pointer, lab_intro}`) —
+    // The Descent featured first, then the catalog honestly labelled as the lab shelf.
+    let featured = format!(
+        "<div class=\"card\" style=\"margin:.6rem 0;padding:1rem;border:1px solid \
+         var(--border);border-radius:var(--r-md);background:var(--panel)\">\
+         <h3 style=\"margin:0 0 .35rem\">The Descent</h3>\
+         <p class=\"prose\" style=\"margin:0 0 .5rem\">{flagship}</p>\
+         <a class=\"btn btn-primary\" href=\"/descent\">Play today's descent</a>\
+         </div>\
+         <p class=\"prose\" style=\"margin:.8rem 0 .4rem\">{lab}</p>",
+        flagship = crate::esc(dreggnet_catalog::flagship_pointer()),
+        lab = crate::esc(dreggnet_catalog::lab_intro()),
+    );
     let body = format!(
         "<div class=\"notice ok\" role=\"status\">Verified via Telegram — playing as \
-         <code>{ident16}…</code> (the same identity as in-chat)</div>{cards}",
+         <code>{ident16}…</code> (the same identity as in-chat)</div>{featured}{cards}",
     );
     Html(body).into_response()
 }

@@ -486,7 +486,7 @@ async fn get_verify(
 /// right now*).
 fn page(id: &SessionId, notice: Option<&str>, fragment: &str, verify: &VerifyReport) -> String {
     let body = format!(
-        "<div class=\"crumb\"><a href=\"/offerings\">← all offerings</a>\
+        "<div class=\"crumb\"><a href=\"/offerings\">← the Lab</a>\
          <span class=\"sep\">·</span><strong>The Warden's Keep</strong>\
          <span class=\"sep\">·</span><span class=\"sid\">session {id}</span></div>\
          <main class=\"session\">{notice}{fragment}{receipt}</main>",
@@ -503,7 +503,7 @@ fn page_missing(id: &SessionId) -> String {
     let body = format!(
         "<main class=\"session\"><div class=\"notice refused\" role=\"status\">No such session — \
          GET /session/{id} to open it.</div>\
-         <p class=\"prose\"><a class=\"backlink\" href=\"/offerings\">← Browse the offerings</a></p>\
+         <p class=\"prose\"><a class=\"backlink\" href=\"/offerings\">← Browse the Lab</a></p>\
          </main>",
         id = esc(&id.0),
     );
@@ -934,10 +934,10 @@ fn topbar(active: &str) -> String {
     format!(
         "<header class=\"topbar\"><div class=\"topbar-in\">\
          <a class=\"brand\" href=\"/\">{MARK}<span class=\"brand-name\">DreggNet Cloud</span></a>\
-         <nav class=\"topnav\" aria-label=\"Surfaces\">{offerings}{descent}{gallery}</nav>\
+         <nav class=\"topnav\" aria-label=\"Surfaces\">{descent}{offerings}{gallery}</nav>\
          </div></header>",
         MARK = MARK,
-        offerings = item("/offerings", "offerings", "Offerings"),
+        offerings = item("/offerings", "offerings", "The Lab"),
         descent = item("/descent", "descent", "The Descent"),
         gallery = item("/gallery", "gallery", "Gallery"),
     )
@@ -1009,8 +1009,8 @@ const ENHANCE_SCRIPT: &str = r##"<script>
 /// The page footer — states the one property the whole product rests on, and repeats the nav.
 const FOOTER: &str = "<footer class=\"foot\">\
      <p>Verification is in-process re-execution — no node, no testnet.</p>\
-     <nav aria-label=\"Footer\"><a href=\"/offerings\">Offerings</a>\
-     <a href=\"/descent\">The Descent</a><a href=\"/gallery\">Gallery</a>\
+     <nav aria-label=\"Footer\"><a href=\"/descent\">The Descent</a>\
+     <a href=\"/offerings\">The Lab</a><a href=\"/gallery\">Gallery</a>\
      <a href=\"/health\">Status</a></nav></footer>";
 
 /// **Wrap a body fragment in the full product document** — head (charset / viewport / title / the
@@ -1038,7 +1038,7 @@ pub(crate) fn document(title: &str, active: &str, body: &str) -> String {
 /// mono voice (it is verifiable material, like a hash or a seed).
 fn crumb(title: &str, id: &SessionId) -> String {
     format!(
-        "<div class=\"crumb\"><a href=\"/offerings\">← all offerings</a>\
+        "<div class=\"crumb\"><a href=\"/offerings\">← the Lab</a>\
          <span class=\"sep\">·</span><strong>{title}</strong>\
          <span class=\"sep\">·</span><span class=\"sid\">session {id}</span></div>",
         title = esc(title),
@@ -1601,7 +1601,7 @@ fn refused_open_response(id: &SessionId, err: &HostError) -> Response {
     let body = format!(
         "<main class=\"session\"><div class=\"notice refused\" role=\"status\">Refused: {err}. \
          Nothing was opened.</div>\
-         <p class=\"prose\"><a class=\"backlink\" href=\"/offerings\">← Browse the offerings</a></p>\
+         <p class=\"prose\"><a class=\"backlink\" href=\"/offerings\">← Browse the Lab</a></p>\
          </main>",
         err = esc(&err.to_string()),
     );
@@ -2031,7 +2031,9 @@ fn catalog_form(key: &str, id: &str, it: &MenuItem) -> String {
     )
 }
 
-/// The `GET /offerings` catalog page — a card + "play" link per registered offering.
+/// The `GET /offerings` catalog page — The Descent featured on top (the flagship pointer), then
+/// the Lab shelf: a card + "play" link per registered offering, framed by the shared
+/// `dreggnet_catalog::{flagship_pointer, lab_intro}` copy.
 fn catalog_page(offerings: &[OfferingInfo]) -> String {
     // Group the catalog into coherent shelves so ~18 offerings read as three clear categories,
     // not one flat wall of look-alike cards: the GAMES (play to win / verify), the RPG FEATURE
@@ -2127,14 +2129,21 @@ fn catalog_page(offerings: &[OfferingInfo]) -> String {
         )
     };
 
+    // THE LAB FRAMING (shared words: `dreggnet_catalog::{flagship_pointer, lab_intro}`) — the
+    // featured game leads, and the 18-offering shelf below is honestly the lab, not the product.
     let body = format!(
         "<main class=\"catalog\"><div class=\"page-head\">\
-         <p class=\"eyebrow\">All offerings, any surface</p>\
-         <h1>Pick a thing and play it.</h1>\
-         <p class=\"deck\">Every offering is a confined, verifiable, per-session thing on the real \
-         dregg substrate. Each move is a real executor turn, refereed on the substrate — no node, \
-         no testnet: verification is in-process re-execution.</p></div>\
+         <p class=\"eyebrow\">DreggNet Cloud</p>\
+         <h1>One game, and a lab full of parts.</h1>\
+         <p class=\"deck\">{flagship}</p>\
+         <p class=\"prose\"><a class=\"play\" href=\"/descent\">Play today's descent \
+         <span class=\"arr\" aria-hidden=\"true\">→</span></a></p>\
+         <p class=\"deck\">{lab} Every offering below is a confined, verifiable, per-session \
+         thing on the real dregg substrate — no node, no testnet: verification is in-process \
+         re-execution.</p></div>\
          {games}{features}{services}{more}</main>",
+        flagship = esc(dreggnet_catalog::flagship_pointer()),
+        lab = esc(dreggnet_catalog::lab_intro()),
         games = group(
             "Games",
             "games",
@@ -2702,9 +2711,9 @@ async fn index() -> Html<String> {
          client JavaScript. Every move is a real executor turn, refereed on the substrate. Nothing \
          here is taken on trust: a run re-executes, or it fails.</p>\
          <div class=\"cta-row\">\
-         <a class=\"btn btn-primary\" href=\"/offerings\">Browse the offerings \
+         <a class=\"btn btn-primary\" href=\"/descent\">Play The Descent \
          <span class=\"arr\" aria-hidden=\"true\">→</span></a>\
-         <a class=\"btn btn-ghost\" href=\"/descent\">Open the leaderboard</a>\
+         <a class=\"btn btn-ghost\" href=\"/offerings\">Browse the Lab</a>\
          </div></div>\
          <div class=\"hero-art\">{board}\
          <div class=\"legend\">\
@@ -2729,15 +2738,15 @@ async fn index() -> Html<String> {
          <section class=\"catalog-group\">\
          <h2 class=\"group-h\">Start here</h2>\
          <div class=\"card-grid\">\
-         <div class=\"offering-card shelf-games\"><h3>All offerings</h3>\
-         <p class=\"tagline\">Five games, eight feature surfaces and five services — each one \
-         playable in the browser through the same verbs.</p>\
-         <a class=\"play\" href=\"/offerings\">Browse the catalog \
+         <div class=\"offering-card shelf-games\"><h3>The Descent</h3>\
+         <p class=\"tagline\">The featured game. One dungeon a day, seeded from a public beacon; \
+         one life, no reruns; every finished climb is proved onto the no-cheat board.</p>\
+         <a class=\"play\" href=\"/descent\">Play today's descent \
          <span class=\"arr\" aria-hidden=\"true\">→</span></a></div>\
-         <div class=\"offering-card shelf-services\"><h3>The Descent</h3>\
-         <p class=\"tagline\">A no-cheat leaderboard. Every run is re-executed on render — a \
-         forged one shows FAIL, not a fake pass.</p>\
-         <a class=\"play\" href=\"/descent\">Open the leaderboard \
+         <div class=\"offering-card shelf-services\"><h3>🧪 The Lab</h3>\
+         <p class=\"tagline\">Experimental engine surfaces — five games, eight feature surfaces, \
+         five services. The parts the game is built from, on the shelf for the curious.</p>\
+         <a class=\"play\" href=\"/offerings\">Browse the Lab \
          <span class=\"arr\" aria-hidden=\"true\">→</span></a></div>\
          <div class=\"offering-card shelf-features\"><h3>Sprite gallery</h3>\
          <p class=\"tagline\">Every asset's SVG sprite is a byte-identical function of its \

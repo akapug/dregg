@@ -213,6 +213,29 @@ pub const CATALOG_KEYS: [&str; 18] = [
     "hermes",
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE LAB FRAMING — the one place the catalog's product words live
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **The Lab intro** — the honest framing every catalog LISTING leads with, on every front
+/// door (web `GET /offerings`, the Mini App `/tg` fragment, Telegram `/offerings`, Discord
+/// `/play`). The 18 offerings are the engine's proving ground — real verifiable turns,
+/// deliberately rough — not the polished game. ONE string, so the three front doors cannot
+/// drift into three different stories about what the catalog is.
+pub fn lab_intro() -> &'static str {
+    "🧪 The Lab — experimental engine surfaces. Everything here runs real, verifiable \
+     turns on the dregg substrate; none of it is the polished game yet. These are the \
+     parts the game is built from, on the shelf for the curious."
+}
+
+/// **The flagship pointer** — where the polished game actually is. Every catalog listing
+/// features this ABOVE the lab shelf. The Descent is not IN the catalog: it is the
+/// dedicated flagship with its own surface (`/descent` on the web, `/descent` on Discord).
+pub fn flagship_pointer() -> &'static str {
+    "⚔️ The Descent — the featured game. One dungeon a day, seeded from a public beacon; \
+     one life, no reruns; every finished climb is proved onto the no-cheat board."
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

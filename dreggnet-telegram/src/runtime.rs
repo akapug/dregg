@@ -49,8 +49,13 @@ pub const POLL_TIMEOUT_SECS: u64 = 50;
 const CALLBACK_ANSWER_MAX: usize = 200;
 
 /// The `/help` (and `/start`) text — the shell's whole command surface, honestly enumerated.
+/// The Descent leads (the featured game — it lives on the web surface, not in this catalog);
+/// the offering catalog is framed as the Lab, matching `dreggnet_catalog::lab_intro`.
 pub const HELP_TEXT: &str = "DreggNet Cloud — every move is a real, verifiable executor turn.\n\
-    /offerings — list the catalog (press a button to open one)\n\
+    ⚔️ The featured game is The Descent — one dungeon a day, one life, a no-cheat board. \
+    It lives on the web surface, at /descent.\n\
+    🧪 The Lab — experimental engine surfaces, for the curious:\n\
+    /offerings — the lab shelf (press a button to open one)\n\
     /open <key> — open an offering in this chat (e.g. /open dungeon)\n\
     /play — Mini App launch buttons: the rich web surface, per offering (DMs only)\n\
     /verify — re-verify this chat's committed chain by replay\n\

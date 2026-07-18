@@ -275,13 +275,30 @@ impl<T: Transport> TelegramHost<T> {
             .enumerate()
             .map(|(i, o)| Action::new(format!("▶ Play {}", o.title), TURN_OPEN, i as i64, true))
             .collect();
+        // THE LAB FRAMING (shared words: `dreggnet_catalog::{flagship_pointer, lab_intro}`) —
+        // the flagship pointer leads (The Descent is NOT in this catalog; it lives on the web
+        // surface), then the keyboard below is honestly labelled as the lab shelf.
+        let descent = match self.webapp_base.as_deref() {
+            Some(base) => format!(
+                "{} Play it at {base}/descent.",
+                dreggnet_catalog::flagship_pointer()
+            ),
+            None => format!(
+                "{} It lives on the web surface, at /descent.",
+                dreggnet_catalog::flagship_pointer()
+            ),
+        };
         let surface = Surface(ViewNode::Section {
-            title: "DreggNet Cloud — all offerings, any surface".to_string(),
+            title: "🧪 The Lab — DreggNet Cloud".to_string(),
             tag: "accent".to_string(),
-            children: vec![ViewNode::Text(
-                "Pick an offering to play — each move is a real, verifiable executor turn."
-                    .to_string(),
-            )],
+            children: vec![
+                ViewNode::Text(descent),
+                ViewNode::Text(dreggnet_catalog::lab_intro().to_string()),
+                ViewNode::Text(
+                    "Pick an offering to poke — each move is a real, verifiable executor turn."
+                        .to_string(),
+                ),
+            ],
         });
         self.frontend.spin_session(sid.clone());
         self.frontend.present(&sid, &surface, &actions);
