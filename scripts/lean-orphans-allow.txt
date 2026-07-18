@@ -22,155 +22,152 @@
 # delete them from here; the staleness check will remind you.
 
 # --- in-flight Lean-authored circuit EMIT/REFINE/RUNG pipeline (AutomataflResolveEmit family); each lands in Dregg2.lean when its refinement rung is discharged ---
-Dregg2.Circuit.Emit.AccumulatorNonRevocationEmit
-Dregg2.Circuit.Emit.AccumulatorNonRevocationRefine
-Dregg2.Circuit.Emit.AdjacencyMembershipRefine
-Dregg2.Circuit.Emit.AdjacencyMembershipRefineAudit
-Dregg2.Circuit.Emit.AdjacencyMembershipRung2
-Dregg2.Circuit.Emit.AttestedFactMembershipEmit
-Dregg2.Circuit.Emit.AutomataflOcclusionBridge
-Dregg2.Circuit.Emit.AvailWideMembersNarrow
-Dregg2.Circuit.Emit.BilateralAggregationEmit
-Dregg2.Circuit.Emit.BilateralAggregationRefine
-Dregg2.Circuit.Emit.BilateralAggregationRung2
-Dregg2.Circuit.Emit.BlindedMembershipRung2
-Dregg2.Circuit.Emit.BoundPresentationEmit
-Dregg2.Circuit.Emit.BoundPresentationRefine
-Dregg2.Circuit.Emit.BoundPresentationRung2
-Dregg2.Circuit.Emit.BridgeActionEmit
-Dregg2.Circuit.Emit.BridgeActionRefine
-Dregg2.Circuit.Emit.CommittedThresholdEmit
-Dregg2.Circuit.Emit.CommittedThresholdRefine
-Dregg2.Circuit.Emit.DerivationEmit
-Dregg2.Circuit.Emit.DerivationRefine
-Dregg2.Circuit.Emit.DerivationRung2
-Dregg2.Circuit.Emit.DfaRoutingEmit
-Dregg2.Circuit.Emit.DfaRoutingGeneralEmit
-Dregg2.Circuit.Emit.DfaRoutingRefine
-Dregg2.Circuit.Emit.DfaRoutingRung2
-Dregg2.Circuit.Emit.EffectActionBindingEmit
-Dregg2.Circuit.Emit.EffectActionBindingRefine
-Dregg2.Circuit.Emit.EffectActionBindingRung2
-Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransition
-Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRefine
-Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2
-Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2Full
-Dregg2.Circuit.Emit.EmitAllJson
-Dregg2.Circuit.Emit.EmitGraduate
-Dregg2.Circuit.Emit.FoldEmit
-Dregg2.Circuit.Emit.FoldRefine
-Dregg2.Circuit.Emit.FoldRung2
-Dregg2.Circuit.Emit.GarbledEvalEmit
-Dregg2.Circuit.Emit.GarbledEvalRefine
-Dregg2.Circuit.Emit.GarbledEvalRung2
-Dregg2.Circuit.Emit.MembershipAuthRootEdge
-Dregg2.Circuit.Emit.MembershipDepthGeneralRung2
-Dregg2.Circuit.Emit.MerkleMembershipRung2
-Dregg2.Circuit.Emit.MultiStepChainEmit
-Dregg2.Circuit.Emit.MultiStepChainRefine
-Dregg2.Circuit.Emit.NonRevocationRefine
-Dregg2.Circuit.Emit.NonRevocationRefineComplete
-Dregg2.Circuit.Emit.NonRevocationRung2
-Dregg2.Circuit.Emit.NonRevocationRung2Full
-Dregg2.Circuit.Emit.NoteSpendingLeafEmit
-Dregg2.Circuit.Emit.NoteSpendingLeafRefine
-Dregg2.Circuit.Emit.NoteSpendingLeafRung2
-Dregg2.Circuit.Emit.PredicatesArithmeticEmit
-Dregg2.Circuit.Emit.PredicatesArithmeticRefine
-Dregg2.Circuit.Emit.PredicatesGtEmit
-Dregg2.Circuit.Emit.PredicatesGtRefine
-Dregg2.Circuit.Emit.PredicatesInRangeEmit
-Dregg2.Circuit.Emit.PredicatesInRangeRefine
-Dregg2.Circuit.Emit.PredicatesLeEmit
-Dregg2.Circuit.Emit.PredicatesLeRefine
-Dregg2.Circuit.Emit.PredicatesLtEmit
-Dregg2.Circuit.Emit.PredicatesLtRefine
-Dregg2.Circuit.Emit.PredicatesNeqEmit
-Dregg2.Circuit.Emit.PredicatesNeqRefine
-Dregg2.Circuit.Emit.PredicatesRelationalCompoundEmit
-Dregg2.Circuit.Emit.PredicatesRelationalCompoundRefine
-Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2
-Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2Full
-Dregg2.Circuit.Emit.PresentationEmit
-Dregg2.Circuit.Emit.PresentationRefine
-Dregg2.Circuit.Emit.QuantifiedAbsenceEmit
-Dregg2.Circuit.Emit.QuantifiedAbsenceRefine
-Dregg2.Circuit.Emit.QuantifiedAbsenceRefineAudit
-Dregg2.Circuit.Emit.QuantifiedAbsenceRung2
-Dregg2.Circuit.Emit.RotatedLayoutBridge
-Dregg2.Circuit.Emit.TemporalPredicateEmit
-Dregg2.Circuit.Emit.TemporalPredicateRefine
-Dregg2.Circuit.Emit.TemporalPredicateRung2
+Dregg2.Circuit.Emit.AccumulatorNonRevocationEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.AccumulatorNonRevocationRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.AdjacencyMembershipRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.AdjacencyMembershipRefineAudit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.AdjacencyMembershipRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.AttestedFactMembershipEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.GnarkVerifier.InputOpenEmit  # RED: max-recursion-depth @175, whnf-heartbeat-timeout @320, type-mismatch @228 — newly-appeared WIP (GnarkVerifier cluster), likely active-authoring churn; recheck before treating as a fixed break
+Dregg2.Circuit.Emit.AvailWideMembersNarrow  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BilateralAggregationEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BilateralAggregationRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BilateralAggregationRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BlindedMembershipRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BoundPresentationEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BoundPresentationRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BoundPresentationRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BridgeActionEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.BridgeActionRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.CommittedThresholdEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.CommittedThresholdRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.DerivationEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.DerivationRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.DerivationRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.DfaRoutingEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.DfaRoutingGeneralEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.DfaRoutingRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.DfaRoutingRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EffectActionBindingEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EffectActionBindingRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EffectActionBindingRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransition  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2Full  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EmitAllJson  # GREEN, NO self-check — asserts nothing on its own — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.EmitGraduate  # GREEN, NO self-check — asserts nothing on its own — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.FoldEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.FoldRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.FoldRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.GarbledEvalEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.GarbledEvalRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.GarbledEvalRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.MembershipAuthRootEdge  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.MembershipDepthGeneralRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.MerkleMembershipRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.MultiStepChainEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.MultiStepChainRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.NonRevocationRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.NonRevocationRung2Full  # RED: axiom-hygiene FAIL @98 — nonRevocation_full_discharge depends on sorryAx (app type-mismatch @95:45) — SILENTLY BROKEN, needs fix
+Dregg2.Circuit.Emit.NoteSpendingLeafEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.NoteSpendingLeafRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.NoteSpendingLeafRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesArithmeticEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesArithmeticRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesGtEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesGtRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesInRangeEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesInRangeRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesLeEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesLeRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesLtEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesLtRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesNeqEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesNeqRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesRelationalCompoundEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesRelationalCompoundRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2Full  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PresentationEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.PresentationRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.QuantifiedAbsenceEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.QuantifiedAbsenceRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.QuantifiedAbsenceRefineAudit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.QuantifiedAbsenceRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.RotatedLayoutBridge  # GREEN, NO self-check — asserts nothing on its own — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.TemporalPredicateEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.TemporalPredicateRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
+Dregg2.Circuit.Emit.TemporalPredicateRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 
 # --- circuit-soundness WIP (FRI/STARK proximity-gap, AlgoStark fanout, kernel-config, wrap-safety); several carry sorry and must NOT enter the default build until discharged ---
-Dregg2.Circuit.AcceptanceDischarge
-Dregg2.Circuit.AlgoStarkSoundFanoutMemFree
-Dregg2.Circuit.AlgoStarkSoundFanoutMemory
-Dregg2.Circuit.AlgoStarkSoundFanoutSetField
-Dregg2.Circuit.AlgoStarkSoundGeneral
-Dregg2.Circuit.AlgoStarkSoundKernel
-Dregg2.Circuit.AlgoStarkSoundKernelAvail
-Dregg2.Circuit.BlindedMembershipBindingFromFold
-Dregg2.Circuit.CustomLeafEncoding
-Dregg2.Circuit.DeltaProto
-Dregg2.Circuit.EffectsAsDataProto
-Dregg2.Circuit.FinBindsKernel
-Dregg2.Circuit.FinInjectivityCollapse
-Dregg2.Circuit.FriCorrelatedAgreementSharp
-Dregg2.Circuit.FriLdtJohnsonList
-Dregg2.Circuit.FriProximityGapListDecoding
-Dregg2.Circuit.FriProximityGapWitness
-Dregg2.Circuit.FriVerifierOracle
-Dregg2.Circuit.KernelConfigSoundness
-Dregg2.Circuit.KernelConfigSoundnessAvail
-Dregg2.Circuit.OodColumnLayout
-Dregg2.Circuit.PresentationBindingFromFold
-Dregg2.Circuit.RotatedKernelRefinementAvailWideNarrow
-Dregg2.Circuit.WrapSafetyStaticAnalyzer
+Dregg2.Circuit.AcceptanceDischarge  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.AlgoStarkSoundFanoutMemFree  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.AlgoStarkSoundFanoutMemory  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.AlgoStarkSoundFanoutSetField  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.AlgoStarkSoundGeneral  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.AlgoStarkSoundKernel  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.AlgoStarkSoundKernelAvail  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.BlindedMembershipBindingFromFold  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.CustomLeafEncoding  # GREEN, NO self-check — asserts nothing on its own — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.DeltaProto  # GREEN, #guard-only (no axiom self-check) — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.EffectsAsDataProto  # GREEN, #guard-only (no axiom self-check) — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.FinBindsKernel  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.FinInjectivityCollapse  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.FriCorrelatedAgreementSharp  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.FriLdtJohnsonList  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.FriProximityGapListDecoding  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.FriProximityGapWitness  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.FriVerifierOracle  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.KernelConfigSoundness  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.KernelConfigSoundnessAvail  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.OodColumnLayout  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.PresentationBindingFromFold  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.RotatedKernelRefinementAvailWideNarrow  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
+Dregg2.Circuit.WrapSafetyStaticAnalyzer  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit-soundness (FRI/STARK/kernel) cluster
 
 # --- PQ-crypto spec WIP (ML-DSA/ML-KEM codecs, VerifyCore/SignCore specs, ACVP KATs, NTT faithfulness); spec-in-progress, not yet CI-clean ---
-Dregg2.Crypto.AcvpKats
-Dregg2.Crypto.CodecRoundTrip
-Dregg2.Crypto.CryptoVerifyAll
-Dregg2.Crypto.EncapsCoreSpec
-Dregg2.Crypto.KemSoundnessQuant
-Dregg2.Crypto.MlDsaHintCodec
-Dregg2.Crypto.MlDsaSigCodecClosed
-Dregg2.Crypto.MlDsaSignReal
-Dregg2.Crypto.NttFaithful
-Dregg2.Crypto.SignCoreSpec
-Dregg2.Crypto.VerifyCoreEqSpec
-Dregg2.Crypto.VerifyCoreEqSpecW
-Dregg2.Crypto.VerifyCoreSpec
+Dregg2.Crypto.AcvpKats  # GREEN, #guard-only (no axiom self-check) — PQ-crypto spec cluster
+Dregg2.Crypto.CodecRoundTrip  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.CryptoVerifyAll  # RED (build-order): imports orphan Dregg2.Crypto.VerifyCoreEqSpecW whose .olean is never built — NOT a logic break; register the dep to check this aggregator
+Dregg2.Crypto.EncapsCoreSpec  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.KemSoundnessQuant  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.MlDsaHintCodec  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.MlDsaSigCodecClosed  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.MlDsaSignReal  # GREEN, #guard-only (no axiom self-check) — PQ-crypto spec cluster
+Dregg2.Crypto.NttFaithful  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.SignCoreSpec  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.VerifyCoreEqSpec  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.VerifyCoreEqSpecW  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
+Dregg2.Crypto.VerifyCoreSpec  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
 
 # --- light-client / proof-of-holdings bridge WIP (Eth/Tendermint/MPT clients, holding-fold tally) ---
-Dregg2.Bridge.HoldingFoldRecursive
-Dregg2.Bridge.HoldingWeightedTally
-Dregg2.Bridge.InterchainAdapterDecision
-Dregg2.Bridge.LightClientEth
-Dregg2.Bridge.LightClientMpt
-Dregg2.Bridge.LightClientTendermint
-Dregg2.Bridge.ProofOfHoldings
-Dregg2.Bridge.ProofOfHoldingsGeneric
-Dregg2.Bridge.VerifiedLightClient
+Dregg2.Bridge.HoldingFoldRecursive  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
+Dregg2.Bridge.HoldingWeightedTally  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
+Dregg2.Bridge.InterchainAdapterDecision  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
+Dregg2.Bridge.LightClientEth  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
+Dregg2.Bridge.LightClientMpt  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
+Dregg2.Bridge.LightClientTendermint  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
+Dregg2.Bridge.ProofOfHoldings  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
+Dregg2.Bridge.ProofOfHoldingsGeneric  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
+Dregg2.Bridge.VerifiedLightClient  # GREEN self-checked (#assert clean), REGISTERABLE — light-client / proof-of-holdings cluster
 
 # --- game AIRs authored in Lean, actively churning (Dungeon/MultiwayTug/Automatafl); carry sorry — not for the metatheory-no-sorry build ---
-Dregg2.Games.AutomataflAir
-Dregg2.Games.Dungeon
-Dregg2.Games.MultiwayTug
-Dregg2.Games.MultiwayTugAir
-Dregg2.Games.MultiwayTugProgram
+Dregg2.Games.AutomataflAir  # GREEN self-checked (#assert clean), REGISTERABLE — game-AIR cluster
+Dregg2.Games.MultiwayTug  # GREEN self-checked (#assert clean), REGISTERABLE — game-AIR cluster
+Dregg2.Games.MultiwayTugAir  # GREEN self-checked (#assert clean), REGISTERABLE — game-AIR cluster
+Dregg2.Games.MultiwayTugProgram  # GREEN self-checked (#assert clean), REGISTERABLE — game-AIR cluster
 
 # --- LoadBearing lint/audit META-tooling (not part of the theory build closure) ---
-Dregg2.Verify.LoadBearingAuditBroad
-Dregg2.Verify.LoadBearingAuditKey
-Dregg2.Verify.LoadBearingLint
+Dregg2.Verify.LoadBearingAuditBroad  # GREEN, NO self-check — asserts nothing on its own — LoadBearing lint/audit tooling
+Dregg2.Verify.LoadBearingAuditKey  # GREEN, NO self-check — asserts nothing on its own — LoadBearing lint/audit tooling
+Dregg2.Verify.LoadBearingLint  # GREEN, NO self-check — asserts nothing on its own — LoadBearing lint/audit tooling
 
 # --- app-demo WIP (ColonistJob) — carries sorry ---
-Dregg2.Apps.ColonistJob  # carries sorry
+Dregg2.Apps.ColonistJob  # GREEN self-checked (#assert clean), REGISTERABLE — app-demo cluster
 
 # --- direct-FFI variant (FFIDirect) outside the export closure ---
-Dregg2.Exec.FFIDirect
+Dregg2.Exec.FFIDirect  # GREEN, #guard-only (no axiom self-check) — FFI-direct variant
 
 # --- the Claims axiom-net — KNOWN 'ran nowhere' (see MEMORY: CI-meaningfulness audit); being wired on its own track ---
-Dregg2.Claims
+Dregg2.Claims  # GREEN self-checked (#assert clean), REGISTERABLE — Claims axiom-net
