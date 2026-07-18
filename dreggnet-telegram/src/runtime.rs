@@ -58,6 +58,7 @@ pub const HELP_TEXT: &str = "DreggNet Cloud — every move is a real, verifiable
     /offerings — the lab shelf (press a button to open one)\n\
     /open <key> — open an offering in this chat (e.g. /open dungeon)\n\
     /play — Mini App launch buttons: the rich web surface, per offering (DMs only)\n\
+    /link — bind this Telegram to your dregg root key (one you, across platforms; DMs only)\n\
     /verify — re-verify this chat's committed chain by replay\n\
     /act <turn> <arg> — fire a value-taking turn (e.g. /act bid 500)\n\
     /help — this text\n\
@@ -560,6 +561,22 @@ pub fn route_text_decided<T: Transport>(
         "/play" | "/webapp" => match host.present_play_menu(chat_id, topic) {
             Ok(()) => (
                 None, // the launch menu IS the reply
+                TextDecision::PlayMenu {
+                    served: true,
+                    why: None,
+                },
+            ),
+            Err(why) => (
+                Some(why.clone()),
+                TextDecision::PlayMenu {
+                    served: false,
+                    why: Some(why),
+                },
+            ),
+        },
+        "/link" => match host.present_link_menu(chat_id, topic) {
+            Ok(()) => (
+                None, // the link launch button IS the reply
                 TextDecision::PlayMenu {
                     served: true,
                     why: None,

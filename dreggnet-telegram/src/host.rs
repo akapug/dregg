@@ -336,6 +336,29 @@ impl<T: Transport> TelegramHost<T> {
             .map_err(|e| format!("Could not send the play menu: {e}"))
     }
 
+    /// Present the **`/link` identity-ceremony launch button** — a `web_app` button opening
+    /// `<base>/tg/link` where the user signs a cross-platform link claim with their root key.
+    /// Private chats only (Telegram honors `web_app` inline buttons only in DMs).
+    pub fn present_link_menu(&mut self, chat_id: ChatId, topic: Option<i64>) -> Result<(), String> {
+        let Some(base) = self.webapp_base.clone() else {
+            return Err(
+                "Linking needs the Mini App tier, which is not configured on this deploy."
+                    .to_string(),
+            );
+        };
+        if !crate::webapp::web_app_allowed(chat_id, topic) {
+            return Err(format!(
+                "Linking opens a web page, so it works in a private chat only (Telegram's rule) — \
+                 DM me and send /link. The page lives at {base}/tg/link."
+            ));
+        }
+        let req = crate::webapp::build_link_request(chat_id, topic, &base);
+        self.frontend
+            .send_raw(&req)
+            .map(|_| ())
+            .map_err(|e| format!("Could not send the link button: {e}"))
+    }
+
     /// **Open an offering session for `(key, chat)`** — ensure a host session is live under the
     /// chat-scoped [`SessionId`] (seeded deterministically from it) and present the offering's
     /// current [`Surface`] as the chat's inline keyboard, projected FOR the opening user `uid` (the

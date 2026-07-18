@@ -80,6 +80,7 @@ pub mod sprite;
 /// `advance_signed` on the host thread. Mounted iff `TELEGRAM_BOT_TOKEN` is set. See
 /// [`telegram_miniapp`] and `docs/TELEGRAM-MINIAPP-DESIGN.md`.
 pub mod telegram_miniapp;
+pub mod tg_link_page;
 
 pub use descent::{DescentState, descent_router, run_share_path};
 

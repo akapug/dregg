@@ -102,3 +102,22 @@ pub fn build_play_menu_request(
         message_thread_id: topic,
     }
 }
+
+/// The **`/link` control message** — a single `web_app` button opening the cross-platform identity
+/// link ceremony (`<base>/tg/link`). Private chats only (the caller gates on [`web_app_allowed`]).
+pub fn build_link_request(chat_id: ChatId, topic: Option<i64>, base: &str) -> SendMessageRequest {
+    SendMessageRequest {
+        chat_id,
+        text: "🔗 Link this Telegram account to your dregg root key — then Discord-you and \
+               Telegram-you are ONE human on boards + leaderboards. Sign a one-time claim with a \
+               passkey (or paste a signature you made elsewhere)."
+            .to_string(),
+        reply_markup: Some(InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton::web_app(
+                "🔗 Link my identity",
+                format!("{}/tg/link", base.trim_end_matches('/')),
+            )]],
+        }),
+        message_thread_id: topic,
+    }
+}

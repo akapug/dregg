@@ -496,7 +496,10 @@ pub fn tg_miniapp_router(state: Arc<TgMiniAppState>) -> Router {
         .route("/tg/offerings/{key}/session/{id}", get(get_tg_session))
         .route("/tg/offerings/{key}/session/{id}/act", post(post_tg_act))
         .route("/tg/link/challenge", get(get_tg_link_challenge))
-        .route("/tg/link", post(post_tg_link))
+        .route(
+            "/tg/link",
+            get(crate::tg_link_page::get_tg_link_page).post(post_tg_link),
+        )
         .with_state(state)
 }
 
