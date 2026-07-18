@@ -4692,11 +4692,7 @@ async fn execute_finalized_turn(
     }
 
     match exec_result {
-        dregg_turn::TurnResult::Committed {
-            receipt,
-            ref ledger_delta,
-            ..
-        } => {
+        dregg_turn::TurnResult::Committed { receipt, .. } => {
             let receipt_hash_hex: String = receipt
                 .turn_hash
                 .iter()
@@ -5382,32 +5378,40 @@ async fn execute_finalized_turn(
             // record it counts. See `dregg_persist::commit_log`.
             //
             // The touched-cell post-states are read from the just-committed
-            // ledger for exactly the cell ids the executor reported in
-            // `ledger_delta` (created ∪ updated ∪ computron_transfer endpoints) —
-            // the authoritative, complete, bounded set of cells this turn
-            // mutated. The cell-by-id index is therefore the durable
-            // last-writer-wins overlay on top of the periodic full ledger
-            // checkpoint, and recovery reconstructs the finalized ledger from
-            // (checkpoint ⊕ overlay) without re-executing.
+            // ledger for exactly the COMPLETE pre→post diff's cell ids (the
+            // authoritative, complete, bounded set of cells this turn mutated
+            // — see the sourcing note inside the block). The cell-by-id index
+            // is therefore the durable last-writer-wins overlay on top of the
+            // periodic full ledger checkpoint, and recovery reconstructs the
+            // finalized ledger from (checkpoint ⊕ overlay) — deletions
+            // included — without re-executing.
             {
-                let touched_ids = touched_cell_ids(ledger_delta);
+                // The durable overlay is sourced from the COMPLETE pre→post
+                // cell diff (`touched_ids` from `ledger_touched_diff` above —
+                // the same authoritative set the live-ledger install used),
+                // NOT from `touched_cell_ids(ledger_delta)`: the delta omits
+                // the heap-root / lifecycle / program / vk / delegation
+                // dimensions AND every cell provisioned outside the executor
+                // (`provision_signer_actor_cell` / `provision_transfer_
+                // destinations` materialize on the exec clone before the FFI
+                // runs), so a delta-only overlay could not reconstruct the
+                // recorded root on recovery (the ingress arms got this fix in
+                // the third pass — F-A; this closes the executed path).
+                //
+                // A diffed id ABSENT post-commit LEFT the hosted set this turn
+                // (destroyed, or removed hosted→sovereign by MakeSovereign)
+                // and goes in the durable REMOVED set (fifth-pass review
+                // F4-A, upstream emberian/dregg#57), landed atomically with
+                // the record: recovery's `checkpoint ⊕ overlay` DELETES these
+                // ids instead of resurrecting a pre-checkpoint cell.
                 let mut touched_cells: Vec<dregg_cell::Cell> =
                     Vec::with_capacity(touched_ids.len());
+                let mut removed_cells: Vec<dregg_cell::CellId> = Vec::new();
                 for id in &touched_ids {
-                    if let Some(cell) = s.ledger.get(id) {
-                        touched_cells.push(cell.clone());
+                    match s.ledger.get(id) {
+                        Some(cell) => touched_cells.push(cell.clone()),
+                        None => removed_cells.push(*id),
                     }
-                    // A touched id absent post-commit means the cell LEFT the
-                    // hosted set this turn (destroyed, or removed
-                    // hosted→sovereign by MakeSovereign). The commit-record
-                    // format is post-cells-only: it CANNOT represent the
-                    // removal, so a PRE-checkpoint cell removed here is
-                    // resurrected by recovery's checkpoint ⊕ overlay (a
-                    // checkpoint taken BEFORE the removal still contains the
-                    // stale cell). Fourth-pass review F4-A — the durable
-                    // removal/tombstone set is a pending format change; see
-                    // the ignored persist test
-                    // `hosted_cell_removal_survives_checkpoint_overlay_reconstruction`.
                 }
                 let commit_record = dregg_persist::CommitRecord {
                     ordinal: 0, // assigned by the store at the durable cursor
@@ -5421,11 +5425,12 @@ async fn execute_finalized_turn(
                     touched_cells,
                 };
                 let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
-                match s.store.commit_finalized_turn_with_root_and_notes(
+                match s.store.commit_finalized_turn_with_root_notes_and_removals(
                     expected_ordinal,
                     &commit_record,
                     &stored,
                     &note_commitments,
+                    &removed_cells,
                 ) {
                     Ok(assigned) => {
                         // The turn's note commitments are durable (they landed
@@ -5623,9 +5628,9 @@ async fn promote_ingress_committed_turn(
 
     let crate::state::IngressCommit {
         receipt,
+        touched_cells: ingress_touched_ids,
         touched_post_cells,
         prefix_root,
-        ..
     } = ingress;
     let receipt_hash = receipt.receipt_hash();
     let receipt_hash_hex: String = receipt
@@ -5801,6 +5806,19 @@ async fn promote_ingress_committed_turn(
     // re-delivered/retried finalized block retries the promotion at the SAME
     // height (guarded idempotent by the turn-by-hash check at the top).
     {
+        // The durable REMOVED-cell set (fifth-pass review F4-A, upstream
+        // emberian/dregg#57): every touched id (the COMPLETE ingress set —
+        // restore-journal ids ∪ delta ids; the journal records removals since
+        // rework 4 made make_sovereign journaled) with NO post-state in the
+        // ingress-time snapshot left the hosted set this turn (destroyed, or
+        // removed hosted→sovereign). It lands atomically with the record so
+        // recovery's `checkpoint ⊕ overlay` deletes these ids instead of
+        // resurrecting a pre-checkpoint cell.
+        let removed_cells: Vec<dregg_cell::CellId> = ingress_touched_ids
+            .iter()
+            .filter(|id| !touched_post_cells.iter().any(|c| c.id() == **id))
+            .copied()
+            .collect();
         let commit_record = dregg_persist::CommitRecord {
             ordinal: 0, // assigned by the store at the durable cursor
             height: new_height,
@@ -5813,11 +5831,12 @@ async fn promote_ingress_committed_turn(
             touched_cells: touched_post_cells,
         };
         let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
-        match s.store.commit_finalized_turn_with_root_and_notes(
+        match s.store.commit_finalized_turn_with_root_notes_and_removals(
             expected_ordinal,
             &commit_record,
             &stored,
             &note_commitments,
+            &removed_cells,
         ) {
             Ok(assigned) => {
                 // The turn's note commitments are durable (same transaction
@@ -7755,10 +7774,13 @@ mod tests {
             .expect("reopen store");
         let overlay = store.cell_overlay_since(0).expect("overlay");
         let mut recovered = baseline;
-        for cell in overlay {
+        for cell in overlay.cells {
             // Last-writer-wins upsert — exactly what recovery does.
             let _ = recovered.remove(&cell.id());
             let _ = recovered.insert_cell(cell);
+        }
+        for id in &overlay.removed {
+            let _ = recovered.remove(id);
         }
         assert_eq!(
             recovered
@@ -7793,6 +7815,292 @@ mod tests {
             recorded_root,
             "distinguisher: without the vk-target overlay entry the recovered \
              root DIVERGES — the exact pre-fix failure"
+        );
+    }
+
+    /// F4-A (fifth-pass review, upstream emberian/dregg#57) — the PROMOTION
+    /// producer emits the durable REMOVED-cell set: a finalized MakeSovereign
+    /// turn promoted from a retained ingress commit lands its removed id in
+    /// `removed_cells_by_ordinal` atomically with the `CommitRecord`, and
+    /// restart recovery (baseline ⊕ overlay, deletions included) reconstructs
+    /// the RECORDED root with the cell ABSENT. Pre-fix the removal was
+    /// unrepresentable: the overlay only inserted, so the pre-turn hosted cell
+    /// resurrected and the reconstruction diverged from the recorded root.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn promoted_make_sovereign_lands_the_durable_removed_set() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+        }
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+
+        let actor_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"f4a-removal:actor").as_bytes(),
+        ));
+        let actor_pk = actor_cclerk.public_key().0;
+        let actor = dregg_cell::CellId::derive_raw(&actor_pk, &[0u8; 32]);
+        let bystander_pk = *blake3::hash(b"f4a-removal:bystander").as_bytes();
+        let bystander = dregg_cell::CellId::derive_raw(&bystander_pk, &[0u8; 32]);
+
+        // Seed: the actor cell (which will make ITSELF sovereign — the only
+        // authorized shape) plus an untouched bystander.
+        let baseline = {
+            let mut s = state.write().await;
+            let actor_cell = dregg_cell::Cell::with_balance(actor_pk, [0u8; 32], 1_000_000);
+            let bystander_cell = dregg_cell::Cell::with_balance(bystander_pk, [0u8; 32], 42);
+            s.ledger.insert_cell(actor_cell).expect("actor cell");
+            s.ledger.insert_cell(bystander_cell).expect("bystander");
+            // The recovery baseline: the "checkpoint" state BEFORE the turn —
+            // it still CONTAINS the soon-to-be-removed hosted actor cell.
+            s.ledger.clone()
+        };
+
+        // The turn: the actor's only effect is MakeSovereign on itself.
+        let effect = dregg_turn::Effect::MakeSovereign { cell: actor };
+        let action =
+            actor_cclerk.make_action(actor, "make-sovereign", vec![effect], &federation_id);
+        let mut call_forest = dregg_turn::CallForest::new();
+        call_forest.add_root(action);
+        let mut turn = dregg_turn::Turn {
+            agent: actor,
+            nonce: 0,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            call_forest,
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: vec![],
+            cross_effect_dependencies: vec![],
+            effect_witness_index_map: vec![],
+        };
+        let est = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        turn.fee = est.estimate_cost(&turn);
+        let signed = actor_cclerk.sign_turn(&turn);
+        let computed_hash = signed.turn.hash();
+        let turn_data = postcard::to_stdvec(&signed).expect("encode");
+
+        // Ingress-mimic exactly as the arms do: restore journal armed across
+        // execution, retained snapshot from journal ∪ delta ids.
+        {
+            let mut s = state.write().await;
+            let executor = crate::executor_setup::new_submit_executor(&s);
+            let lean = s.lean_producer_enabled;
+            s.ledger.begin_restore_point();
+            let exec_result = crate::executor_setup::execute_via_producer(
+                &executor,
+                &signed.turn,
+                &mut s.ledger,
+                lean,
+            );
+            let dregg_turn::TurnResult::Committed {
+                receipt,
+                ledger_delta,
+                ..
+            } = exec_result
+            else {
+                panic!("MakeSovereign ingress must commit: {exec_result:?}");
+            };
+            let journal_ids = s.ledger.restore_point_touched_ids();
+            s.ledger.commit_restore_point();
+
+            // The must-fail-pre DISTINGUISHER: the actor cell LEFT the hosted
+            // set (journaled removal — rework 4), so it has an id in the
+            // touched set but NO post-state.
+            assert!(
+                s.ledger.get(&actor).is_none(),
+                "distinguisher: the actor cell must have LEFT the hosted set \
+                 (else this test no longer exercises F4-A)"
+            );
+            assert!(
+                journal_ids.contains(&actor),
+                "the journaled make_sovereign removal records the touched id"
+            );
+
+            let ids = complete_ingress_touched_ids(journal_ids, &ledger_delta);
+            let ingress = crate::state::IngressCommit::snapshot(&s.ledger, receipt, ids);
+            s.retain_ingress_commit(computed_hash, ingress);
+        }
+
+        // Promote through the production finalized path.
+        let self_key = [0x7Bu8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+        execute_finalized_turn(&state, &handle, BlockId([0x52u8; 32]), &turn_data, None, 0).await;
+
+        let (recorded_root, ordinal) = {
+            let s = state.read().await;
+            let rec = s
+                .store
+                .lookup_turn(&computed_hash)
+                .ok()
+                .flatten()
+                .expect("durable commit record for the promoted MakeSovereign turn");
+            assert!(
+                rec.touched_cells.iter().all(|c| c.id() != actor),
+                "no stale post-state for the removed cell in the overlay"
+            );
+            assert!(s.ingress_commits.is_empty(), "entry consumed");
+            (rec.ledger_root, rec.ordinal)
+        };
+
+        // STORE REOPEN: the removed set is durable, and recovery
+        // (baseline ⊕ overlay, deletions included) reconstructs the RECORDED
+        // root with the removed cell ABSENT.
+        drop(handle);
+        drop(state);
+        let store = dregg_persist::PersistentStore::open(&tmp.path().join("dregg.redb"))
+            .expect("reopen store");
+        assert_eq!(
+            store.removed_cells_at(ordinal).expect("removed set"),
+            vec![actor],
+            "the promotion producer emitted the durable removed-cell set"
+        );
+        let overlay = store.cell_overlay_since(0).expect("overlay");
+        let mut recovered = baseline;
+        for cell in overlay.cells {
+            let _ = recovered.remove(&cell.id());
+            let _ = recovered.insert_cell(cell);
+        }
+        for id in &overlay.removed {
+            let _ = recovered.remove(id);
+        }
+        assert!(
+            recovered.get(&actor).is_none(),
+            "the removed hosted cell must NOT be resurrected by \
+             baseline ⊕ overlay (the F4-A invariant)"
+        );
+        assert!(
+            recovered.get(&bystander).is_some(),
+            "the untouched bystander survives"
+        );
+        assert_eq!(
+            canonical_ledger_root(&recovered),
+            recorded_root,
+            "recovery reconstructs the RECORDED post-removal root — pre-fix \
+             the resurrected cell diverged it"
+        );
+    }
+
+    /// F4-A (fifth-pass review) — the EXECUTED-finalization producer emits the
+    /// durable REMOVED-cell set too: a finalized MakeSovereign turn executed
+    /// directly (no retained ingress commit — the multi-party/executed path)
+    /// sources its removed ids from the COMPLETE pre→post diff
+    /// (`ledger_touched_diff`), so the removal lands durably even though the
+    /// executor's `LedgerDelta` has no removal dimension at all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn executed_make_sovereign_lands_the_durable_removed_set() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+        }
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+
+        let actor_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"f4a-removal-executed:actor").as_bytes(),
+        ));
+        let actor_pk = actor_cclerk.public_key().0;
+        let actor = dregg_cell::CellId::derive_raw(&actor_pk, &[0u8; 32]);
+
+        let baseline = {
+            let mut s = state.write().await;
+            let actor_cell = dregg_cell::Cell::with_balance(actor_pk, [0u8; 32], 1_000_000);
+            s.ledger.insert_cell(actor_cell).expect("actor cell");
+            s.ledger.clone()
+        };
+
+        let effect = dregg_turn::Effect::MakeSovereign { cell: actor };
+        let action =
+            actor_cclerk.make_action(actor, "make-sovereign", vec![effect], &federation_id);
+        let mut call_forest = dregg_turn::CallForest::new();
+        call_forest.add_root(action);
+        let mut turn = dregg_turn::Turn {
+            agent: actor,
+            nonce: 0,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            call_forest,
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: vec![],
+            cross_effect_dependencies: vec![],
+            effect_witness_index_map: vec![],
+        };
+        let est = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        turn.fee = est.estimate_cost(&turn);
+        let signed = actor_cclerk.sign_turn(&turn);
+        let computed_hash = signed.turn.hash();
+        let turn_data = postcard::to_stdvec(&signed).expect("encode");
+
+        // NO ingress retention: the finalized block takes the EXECUTED path.
+        let self_key = [0x7Cu8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+        execute_finalized_turn(&state, &handle, BlockId([0x53u8; 32]), &turn_data, None, 0).await;
+
+        let (recorded_root, ordinal) = {
+            let s = state.read().await;
+            assert!(
+                s.ledger.get(&actor).is_none(),
+                "distinguisher: the actor left the hosted set on the executed path"
+            );
+            let rec = s
+                .store
+                .lookup_turn(&computed_hash)
+                .ok()
+                .flatten()
+                .expect("durable commit record for the executed MakeSovereign turn");
+            assert!(rec.touched_cells.iter().all(|c| c.id() != actor));
+            (rec.ledger_root, rec.ordinal)
+        };
+
+        drop(handle);
+        drop(state);
+        let store = dregg_persist::PersistentStore::open(&tmp.path().join("dregg.redb"))
+            .expect("reopen store");
+        assert_eq!(
+            store.removed_cells_at(ordinal).expect("removed set"),
+            vec![actor],
+            "the executed-path producer emitted the durable removed-cell set \
+             (sourced from the complete pre→post diff, not the LedgerDelta)"
+        );
+        let overlay = store.cell_overlay_since(0).expect("overlay");
+        let mut recovered = baseline;
+        for cell in overlay.cells {
+            let _ = recovered.remove(&cell.id());
+            let _ = recovered.insert_cell(cell);
+        }
+        for id in &overlay.removed {
+            let _ = recovered.remove(id);
+        }
+        assert!(recovered.get(&actor).is_none(), "no resurrection");
+        assert_eq!(
+            canonical_ledger_root(&recovered),
+            recorded_root,
+            "executed-path recovery reconstructs the RECORDED post-removal root"
         );
     }
 

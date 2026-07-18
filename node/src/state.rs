@@ -236,6 +236,12 @@ pub struct NodeStateInner {
     pub ledger: Ledger,
     /// Persistent storage backend.
     pub store: PersistentStore,
+    /// The REMOVAL half of the recovered commit-log overlay (fifth-pass review
+    /// F4-A): cell ids a post-checkpoint finalized turn removed, captured at
+    /// construction-time recovery. `reseed_genesis_then_overlay` re-applies
+    /// these deletions AFTER the genesis baseline reseed so a removed genesis
+    /// cell is not resurrected by the reseed.
+    pub recovered_removed_cells: Vec<CellId>,
     /// Federation peer addresses.
     pub peers: Vec<String>,
     /// Whether the cipherclerk is unlocked for signing operations.
@@ -960,12 +966,23 @@ impl NodeState {
                 (Ledger::new(), 0)
             }
         };
+        let mut recovered_removed_cells: Vec<CellId> = Vec::new();
         match store.cell_overlay_since(checkpoint_height) {
-            Ok(overlay) if !overlay.is_empty() => {
-                let overlay_len = overlay.len();
-                for cell in overlay {
+            Ok(overlay) if !overlay.cells.is_empty() || !overlay.removed.is_empty() => {
+                let overlay_len = overlay.cells.len();
+                for cell in overlay.cells {
                     upsert_cell(&mut ledger, cell);
                 }
+                // The overlay's REMOVAL half (fifth-pass review F4-A): a cell
+                // a post-checkpoint finalized turn removed is DELETED from the
+                // reconstruction — never resurrected from a stale checkpoint.
+                // Retained on the state so `reseed_genesis_then_overlay` can
+                // re-apply the deletions after the genesis baseline reseed
+                // (a removed genesis cell must not resurrect either).
+                for id in &overlay.removed {
+                    let _ = ledger.remove(id);
+                }
+                recovered_removed_cells = overlay.removed;
                 // The recovery-convergence verdict is DEFERRED to
                 // `verify_recovery_convergence`, which `run_node` calls AFTER it
                 // reconstructs the FULL finalized ledger in the SOUND order
@@ -1028,6 +1045,7 @@ impl NodeState {
                 cclerk,
                 ledger,
                 store,
+                recovered_removed_cells,
                 peers,
                 unlocked: false,
                 passphrase_hash,
@@ -1169,15 +1187,23 @@ impl NodeState {
             Ok(Some((height, restored_ledger))) => (restored_ledger, height),
             _ => (Ledger::new(), 0),
         };
+        let mut recovered_removed_cells: Vec<CellId> = Vec::new();
         if let Ok(overlay) = store.cell_overlay_since(checkpoint_height)
-            && !overlay.is_empty()
+            && (!overlay.cells.is_empty() || !overlay.removed.is_empty())
         {
-            for cell in overlay {
+            for cell in overlay.cells {
                 // Last-writer-wins point update (`CrashRecovery.upd`); a strict
                 // `insert_cell` would silently drop a post-checkpoint write to an
                 // already-checkpointed cell. See `new_with_key_file` / `upsert_cell`.
                 upsert_cell(&mut ledger, cell);
             }
+            // The overlay's REMOVAL half (F4-A): deletions included, so the
+            // reconstruction — and the convergence check below — see the exact
+            // finalized ledger.
+            for id in &overlay.removed {
+                let _ = ledger.remove(id);
+            }
+            recovered_removed_cells = overlay.removed;
             // Convergence assertion, mirroring `new_with_key_file`: the
             // reconstructed root MUST equal the root the committing node durably
             // recorded. A mismatch means serving a SILENTLY-WRONG ledger as truth
@@ -1220,6 +1246,7 @@ impl NodeState {
                 cclerk,
                 ledger,
                 store,
+                recovered_removed_cells,
                 peers,
                 unlocked: false,
                 passphrase_hash: None,
@@ -3346,7 +3373,8 @@ mod crash_recovery_overlay_tests {
         let genesis = issuer_well_genesis(well, faucet, alice, faucet_amount, alice_amount);
         {
             let mut s = state.write().await;
-            let stats = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+            let removed = s.recovered_removed_cells.clone();
+            let stats = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger, &removed);
             assert_eq!(
                 stats.invalid, 0,
                 "genesis baseline must materialize cleanly — the moves run ONCE on the \
@@ -3438,7 +3466,8 @@ mod crash_recovery_overlay_tests {
         let genesis = issuer_well_genesis(well, faucet, alice, faucet_amount, alice_amount);
         {
             let mut s = state.write().await;
-            let _ = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+            let removed = s.recovered_removed_cells.clone();
+            let _ = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger, &removed);
         }
 
         let err = state

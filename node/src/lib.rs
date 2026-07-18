@@ -1175,7 +1175,9 @@ async fn run_node(
                         // The old order (genesis reseed applied OVER the overlay)
                         // re-credited every move RECIPIENT already in the overlay
                         // — a double-credit that diverged the reconstructed root.
-                        let cell_load = reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+                        let removed = s.recovered_removed_cells.clone();
+                        let cell_load =
+                            reseed_genesis_then_overlay(&genesis, &mut s.ledger, &removed);
                         if cell_load.total() > 0 {
                             info!(
                                 inserted = cell_load.inserted,
@@ -2252,6 +2254,7 @@ fn materialize_genesis_cells(
 fn reseed_genesis_then_overlay(
     genesis: &serde_json::Value,
     ledger: &mut dregg_cell::Ledger,
+    recovered_removed_cells: &[dregg_cell::CellId],
 ) -> GenesisCellLoadStats {
     // 1. Lift the recovered commit-log overlay (checkpoint ⊕ touched
     //    post-states) out of the live ledger.
@@ -2267,6 +2270,15 @@ fn reseed_genesis_then_overlay(
     for cell in recovered_overlay {
         let _ = ledger.remove(&cell.id());
         let _ = ledger.insert_cell(cell);
+    }
+
+    // 4. Re-apply the overlay's REMOVAL half (fifth-pass review F4-A): a cell
+    //    a finalized turn REMOVED — including a genesis-established cell the
+    //    baseline in step 2 just re-materialized — is deleted again, so the
+    //    reseed cannot resurrect it. (The removed ids were captured at
+    //    construction-time recovery from the durable removal table.)
+    for id in recovered_removed_cells {
+        let _ = ledger.remove(id);
     }
 
     stats
