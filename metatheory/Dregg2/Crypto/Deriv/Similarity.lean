@@ -26,6 +26,13 @@ WELL-DEFINED ON THE `≅`-QUOTIENT — the bounded ingredient (c) of `SymbolicEm
 unbounded-emptiness rung. It does NOT close that rung: the pigeonhole/counting step and a decidable
 `≅` remain open there.
 
+The der-congruence half is **SEMANTICS-FREE**: `sim_null`, `sim_der` and `sim_derList` are proved by
+induction on the `Sim` derivation from the defining clauses of `null`/`der` alone, and `sim_null` is
+placed BEFORE the language-soundness section precisely so that independence is enforced by
+declaration order rather than merely asserted. Consequently `sim_derives_syntactic` is a genuinely
+independent route to the verdict-invariance that `sim_derives` gets denotationally. `sim_derives`
+itself is unchanged and still denotational — the two are separate routes, not one rewritten.
+
 `#assert_axioms`-clean, `sorry`-free.
 -/
 import Dregg2.Crypto.Deriv.Correctness
@@ -66,6 +73,33 @@ inductive Sim : PredRE → PredRE → Prop where
   | catCong   : Sim R₁ R₂ → Sim (.cat R₁ S) (.cat R₂ S)
 
 @[inherit_doc] infix:37 " ≅ " => Sim
+
+/-- **`sim_null`** — `≅`-invariance of nullability, PROVED SYNTACTICALLY: induction on the `Sim`
+derivation, discharging each case with `null`'s own defining clauses and Boolean algebra. NO appeal
+to `Matches` / `correctness` / `sim_sound` / `sim_derives` — this lemma does not touch the
+denotational tower at all.
+
+Why it goes through: `null` is a homomorphism from the syntax into `Bool` (`alt ↦ ||`, `inter ↦ &&`,
+`cat ↦ &&`, `neg ↦ !`, `ε`/`star ↦ true`, `sym ↦ false`), and every `Sim` law is a law that `||`
+satisfies in `Bool` — `assoc` is `Bool.or_assoc`, `idem` is `b || b = b`, `dedup` is
+`a || (b || a) = a || b`. So each case closes by case-splitting the finitely many `Bool`s. The
+congruences transport their IHs through the corresponding Boolean operation; `catCong` only rewrites
+the LEFT factor of a `cat`, and `null (cat l r) = null l && null r` is congruent in its left argument,
+so it transports too. -/
+theorem sim_null {R S : PredRE} (h : R ≅ S) : null R = null S := by
+  induction h with
+  | @assoc R₁ R₂ R₃ =>
+    simp only [null]; cases null R₁ <;> cases null R₂ <;> cases null R₃ <;> rfl
+  | @dedup R₁ R₂ =>
+    simp only [null]; cases null R₁ <;> cases null R₂ <;> rfl
+  | @idem R => simp only [null]; cases null R <;> rfl
+  | rfl => exact Eq.refl _
+  | sym _ ih => exact ih.symm
+  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
+  | negCong _ ih => simp only [null, ih]
+  | altCong _ _ ihR ihS => simp only [null, ihR, ihS]
+  | interCong _ _ ihR ihS => simp only [null, ihR, ihS]
+  | @catCong R₁ R₂ S _ ih => simp only [null, ih]
 
 /-! ## Language-soundness of `≅` — the fact that licenses the quotient.
 
@@ -138,11 +172,6 @@ instance of the SAME law (`der` distributes over `alt` verbatim), and every cong
 its IH. The one case with content is `catCong`: `der a (cat l r)` branches on `null l`, so the
 congruence only goes through once we know `≅` preserves NULLABILITY — hence `sim_null` first. -/
 
-/-- **`sim_null`** — `≅`-invariance of nullability. `null R = derives [] R`, so this is the empty-word
-instance of `sim_derives` (and hence, through `correctness`, of language-soundness). -/
-theorem sim_null {R S : PredRE} (h : R ≅ S) : null R = null S := by
-  simpa only [derives] using sim_derives h []
-
 /-- **`sim_der`** — THE der-congruence: similarity is preserved by the Brzozowski derivative, so
 `der` descends to the `≅`-quotient. Structural induction on the `Sim` derivation; the `catCong`
 case is the interesting one — it splits on the shared `null` value supplied by `sim_null`. -/
@@ -192,15 +221,32 @@ theorem sim_derList {R S : PredRE} (h : R ≅ S) (w : List Value) :
 /-- **`sim_derives_syntactic`** — `sim_derives` re-derived through the DERIVATIVE route: iterate
 `sim_der` along the word, then apply `sim_null` at the end.
 
-⚠ NOT semantics-free, despite the name's suggestion. This route still bottoms out in the
-denotational tower, because `sim_null` (above) is proved as the empty-word instance of `sim_derives`,
-i.e. via `sim_sound` → `correctness` → `Matches`. So this is a SECOND ROUTE to the same statement,
-not an independent (semantics-free) one, and it carries no extra logical strength.
+This route IS semantics-free, and the name is now earned. Its three ingredients — `sim_der`,
+`sim_derList`, `sim_null` — are each proved by induction on the `Sim` derivation using only the
+defining clauses of `null` and `der`; none of them mentions `Matches`, `correctness`, `sim_sound` or
+`sim_derives`. The independence is pinned STRUCTURALLY, not just by inspection: `sim_null` is
+declared ABOVE the language-soundness section in this file, so it typechecks in an environment where
+`sim_sound`/`sim_derives` do not yet exist and therefore cannot appeal to them. Moving it back below
+would be the mutation that detects a regression.
 
-To make it genuinely syntactic, `sim_null` must be re-proved by induction on the `Sim` derivation
-using `null`'s own clauses (`null (alt r r) = null r || null r`; `null (cat a b) = null a && null b`
-distributing over `assoc`; congruence cases transporting their IHs). That induction is bounded and
-is the named follow-up; until it lands, do NOT describe this lemma as semantics-independent. -/
+MEASURED, not asserted — and REPRODUCIBLY: walk the transitive constant-closure of each theorem's
+proof term in the BUILT environment (`ConstantInfo.value?` with `allowOpaque := true`, which is
+required for theorems; a probe that omits it, or that runs before `lake build Dregg2`, reads the
+STALE olean and can report the opposite). Under that method, the closures of `sim_null`, `sim_der`,
+`sim_derList` and `sim_derives_syntactic` contain NO occurrence of `Matches`, `correctness`,
+`sim_sound` or `denote` — `sim_null`'s is `Sim.rec` + `null` + `Bool` operations + `Eq` plumbing and
+nothing else — whereas the denotational `sim_derives` DOES close over the full `Matches`/`correctness`
+block (roughly an order of magnitude larger). That gap is the independence. Exact constant COUNTS are
+deliberately not quoted here: they drift with mathlib and with the probe's treatment of opaque
+definitions, so a stale figure would read as precision it does not have; re-run the probe rather than
+trusting a number in a comment.
+
+Scope, precisely: this does NOT retroactively make `sim_derives` syntactic — that theorem is
+unchanged and still goes through `sim_sound` → `correctness` → `Matches`, and it remains the
+LANGUAGE-level statement (it is what licenses the `≅`-quotient as a quotient of recognized
+languages). What is new is that a SECOND and genuinely independent route to the same *verdict*
+equation now exists: the derivative route needs no denotational semantics at all. The two routes
+agreeing is a TWO-GATES-PROVABLY-AGREE property of this file, not extra strength in either one. -/
 theorem sim_derives_syntactic {R S : PredRE} (h : R ≅ S) (w : List Value) :
     derives w R = derives w S := by
   rw [derives_eq_null_derList, derives_eq_null_derList]
