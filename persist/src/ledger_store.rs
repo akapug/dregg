@@ -372,7 +372,7 @@ const BOOT_BASELINE_CONFIG_KEY: &str = "boot_baseline_ledger";
 // =============================================================================
 
 /// Extract serializable data from a `Ledger` into a `LedgerCheckpoint`.
-fn ledger_to_checkpoint(ledger: &Ledger, height: u64) -> LedgerCheckpoint {
+pub(crate) fn ledger_to_checkpoint(ledger: &Ledger, height: u64) -> LedgerCheckpoint {
     let cells: Vec<Cell> = ledger.iter().map(|(_, cell)| cell.clone()).collect();
 
     let sovereign_commitments: Vec<([u8; 32], [u8; 32])> = ledger

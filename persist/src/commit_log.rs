@@ -67,7 +67,7 @@
 use redb::{ReadableTable, ReadableTableMetadata};
 use serde::{Deserialize, Serialize};
 
-use dregg_cell::{Cell, CellId};
+use dregg_cell::{Cell, CellId, SovereignRegistration, SovereignSideDelta};
 
 use crate::tables;
 use crate::{PersistentStore, Result, StoreError};
@@ -345,6 +345,45 @@ impl PersistentStore {
         self.commit_finalized_turn_with_burns(expected_ordinal, record, &[])
     }
 
+    /// [`Self::commit_finalized_turn_with_notes`] PLUS the turn's SOVEREIGN
+    /// side-map delta in the SAME redb transaction — the sovereign sidecar weld
+    /// (#57 residual).
+    ///
+    /// # Why this exists (durability bug #57, sovereign half)
+    ///
+    /// The sovereign side maps (`sovereign_commitments` + the TTL
+    /// `sovereign_registrations`) were persisted ONLY at checkpoint granularity,
+    /// and the per-turn [`CommitRecord`] cannot express a side-map change:
+    /// `touched_cells` is hosted post-states and `removed` is hosted tombstones.
+    /// So a MakeSovereign commitment insert, a verified commitment update on an
+    /// already-sovereign cell (which touches NO hosted cell), a TTL-registration
+    /// update, or a deregistration committed after the latest checkpoint was
+    /// silently lost on a pre-checkpoint reboot — invisible to the recovery
+    /// convergence check, because `canonical_ledger_root` folds hosted cells
+    /// only.
+    ///
+    /// This entry point lands the turn's [`SovereignSideDelta`] in the two
+    /// sidecar tables ([`tables::SOVEREIGN_DELTA_BY_ORDINAL`],
+    /// [`tables::SOVEREIGN_REGISTRATION_DELTA_BY_ORDINAL`]) atomically with the
+    /// record; recovery joins them back via [`Self::sovereign_overlay_since`].
+    /// The `CommitRecord` wire format is untouched, and an empty delta writes
+    /// nothing — byte-identical behavior to the pre-sidecar store.
+    pub fn commit_finalized_turn_with_notes_and_sovereign(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        note_commitments: &[[u8; 32]],
+        sovereign: &SovereignSideDelta,
+    ) -> Result<CommitOutcome> {
+        self.commit_finalized_turn_welded(
+            expected_ordinal,
+            record,
+            &[],
+            note_commitments,
+            sovereign,
+        )
+    }
+
     /// [`Self::commit_finalized_turn`] PLUS note commitments appended to the
     /// Poseidon2 note-tree table in the SAME redb transaction — the
     /// same-transaction NOTE weld.
@@ -377,7 +416,13 @@ impl PersistentStore {
         record: &CommitRecord,
         note_commitments: &[[u8; 32]],
     ) -> Result<CommitOutcome> {
-        self.commit_finalized_turn_welded(expected_ordinal, record, &[], note_commitments)
+        self.commit_finalized_turn_welded(
+            expected_ordinal,
+            record,
+            &[],
+            note_commitments,
+            &SovereignSideDelta::default(),
+        )
     }
 
     /// [`Self::commit_finalized_turn`] PLUS forever-digest burns in the SAME
@@ -397,23 +442,52 @@ impl PersistentStore {
         record: &CommitRecord,
         burns: &[(u8, [u8; 32], [u8; 32])],
     ) -> Result<u64> {
-        self.commit_finalized_turn_welded(expected_ordinal, record, burns, &[])
-            .map(|o| o.ordinal)
+        self.commit_finalized_turn_welded(
+            expected_ordinal,
+            record,
+            burns,
+            &[],
+            &SovereignSideDelta::default(),
+        )
+        .map(|o| o.ordinal)
     }
 
     /// The single atomic finalized-turn commit: record + secondary index +
-    /// forever-digest burns + note-tree leaves + cursor advance, all in ONE redb
-    /// transaction (one fsync boundary). Every public commit entry point routes
-    /// here; the burn and note welds keep those side-effects exactly-once with
-    /// the turn record across an arbitrary crash. Returns a [`CommitOutcome`]
-    /// distinguishing a fresh write from an idempotent replay.
+    /// forever-digest burns + note-tree leaves + sovereign side-map sidecar +
+    /// cursor advance, all in ONE redb transaction (one fsync boundary). Every
+    /// public commit entry point routes here; the burn, note, and sovereign
+    /// welds keep those side-effects exactly-once with the turn record across
+    /// an arbitrary crash. Returns a [`CommitOutcome`] distinguishing a fresh
+    /// write from an idempotent replay.
     fn commit_finalized_turn_welded(
         &self,
         expected_ordinal: u64,
         record: &CommitRecord,
         burns: &[(u8, [u8; 32], [u8; 32])],
         note_commitments: &[[u8; 32]],
+        sovereign: &SovereignSideDelta,
     ) -> Result<CommitOutcome> {
+        // A cell cannot be HOSTED post-turn (a `touched_cells` post-state) and
+        // simultaneously gain a sovereign commitment or TTL registration
+        // (no-double-custody) — refuse the ambiguous record outright,
+        // fail-closed, BEFORE opening the transaction. The converse
+        // (`sovereign.*_removed` ∩ `touched_cells`) is LEGAL: a sovereign cell
+        // re-hosted by migration removes its side-map entry AND gains a hosted
+        // post-state in one turn.
+        for id in sovereign
+            .commitment_upserts
+            .iter()
+            .map(|(id, _)| id)
+            .chain(sovereign.registration_upserts.iter().map(|(id, _)| id))
+        {
+            if record.touched_cells.iter().any(|c| c.id() == *id) {
+                return Err(StoreError::Integrity(format!(
+                    "commit_finalized_turn: sovereign upsert {} also appears in touched_cells \
+                     (a cell cannot be hosted and sovereign at once)",
+                    hex32(&id.0)
+                )));
+            }
+        }
         let write_txn = self.db.begin_write()?;
         let assigned;
         {
@@ -501,6 +575,54 @@ impl PersistentStore {
                 for id in &stored_record.removed {
                     idx_cell.remove(id)?;
                 }
+            }
+
+            // 2b. The turn's SOVEREIGN side-map delta — SAME transaction (#57
+            //     residual): MakeSovereign's second half (the commitment
+            //     insert) and any commitment update/removal land atomically
+            //     with the record, so `checkpoint ⊕ overlay` recovery
+            //     reconstructs the sovereign map, not only the hosted deletion.
+            //     The CommitRecord postcard wire shape is untouched — old
+            //     stores simply lack the (empty) table.
+            if !sovereign.commitment_upserts.is_empty() || !sovereign.commitment_removed.is_empty()
+            {
+                let upserts: Vec<([u8; 32], [u8; 32])> = sovereign
+                    .commitment_upserts
+                    .iter()
+                    .map(|(id, c)| (id.0, *c))
+                    .collect();
+                let removed: Vec<[u8; 32]> =
+                    sovereign.commitment_removed.iter().map(|id| id.0).collect();
+                let encoded = postcard::to_stdvec(&(upserts, removed))
+                    .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                let mut sov_tbl = write_txn.open_table(tables::SOVEREIGN_DELTA_BY_ORDINAL)?;
+                sov_tbl.insert(assigned, encoded.as_slice())?;
+            }
+
+            // 2c. The turn's EPHEMERAL-SOVEREIGN-REGISTRATION (TTL map) delta —
+            //     SAME transaction: a registration insert, a registration-
+            //     commitment/TTL update, or a deregistration are invisible to
+            //     2b's bare-commitment delta AND to the hosted-only canonical
+            //     root, so between checkpoints they reverted on restart.
+            //     Separate table so each table's wire format stays fixed.
+            if !sovereign.registration_upserts.is_empty()
+                || !sovereign.registration_removed.is_empty()
+            {
+                let upserts: Vec<([u8; 32], SovereignRegistration)> = sovereign
+                    .registration_upserts
+                    .iter()
+                    .map(|(id, r)| (id.0, r.clone()))
+                    .collect();
+                let removed: Vec<[u8; 32]> = sovereign
+                    .registration_removed
+                    .iter()
+                    .map(|id| id.0)
+                    .collect();
+                let encoded = postcard::to_stdvec(&(upserts, removed))
+                    .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                let mut reg_tbl =
+                    write_txn.open_table(tables::SOVEREIGN_REGISTRATION_DELTA_BY_ORDINAL)?;
+                reg_tbl.insert(assigned, encoded.as_slice())?;
             }
 
             // 3. Burn the turn's forever digests in the SAME transaction (the
@@ -724,6 +846,92 @@ impl PersistentStore {
                 CellOverlayOp::Upsert(_) => None,
             })
             .collect())
+    }
+
+    /// The last-event-wins SOVEREIGN side-map overlay committed since the most
+    /// recent full ledger checkpoint at `checkpoint_height` — the sovereign
+    /// sibling of [`Self::cell_overlay_since`] (#57 residual). Kept as a
+    /// PARALLEL query so `cell_overlay_since`'s `Vec<CellOverlayOp>` contract
+    /// (and every existing consumer) is untouched.
+    ///
+    /// Joins the two sidecar tables to the commit log by ordinal, considering
+    /// only records with `height > checkpoint_height` (the same cut as the
+    /// hosted overlay), and resolves last-event-wins in ordinal order: an id
+    /// upserted then removed ends removed; removed then re-upserted ends
+    /// upserted. Applying the result to the checkpoint-restored ledger
+    /// (`Ledger::apply_sovereign_side_delta`) reconstructs the exact finalized
+    /// sovereign side maps up to the commit cursor. Empty on a store written
+    /// before the sidecar tables existed (absent table = no delta).
+    pub fn sovereign_overlay_since(&self, checkpoint_height: u64) -> Result<SovereignSideDelta> {
+        use std::collections::BTreeMap;
+        let read_txn = self.db.begin_read()?;
+        let log = read_txn.open_table(tables::COMMIT_LOG)?;
+        let sov_tbl = open_sovereign_ro(&read_txn)?;
+        let reg_tbl = open_registration_ro(&read_txn)?;
+        if sov_tbl.is_none() && reg_tbl.is_none() {
+            return Ok(SovereignSideDelta::default());
+        }
+        // id -> Some(value) = live upsert; None = removed. BTreeMap keeps the
+        // resolved delta id-sorted (deterministic, matching the producer diff).
+        let mut commitments: BTreeMap<[u8; 32], Option<[u8; 32]>> = BTreeMap::new();
+        let mut registrations: BTreeMap<[u8; 32], Option<SovereignRegistration>> = BTreeMap::new();
+        for entry in log.iter()? {
+            let entry =
+                entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            let ordinal = entry.0.value();
+            let record = decode_commit_record(entry.1.value())?;
+            if record.height <= checkpoint_height {
+                continue;
+            }
+            let (sov_upserts, sov_removed) = sovereign_at(&sov_tbl, ordinal)?;
+            for (id, c) in sov_upserts {
+                commitments.insert(id.0, Some(c));
+            }
+            for id in sov_removed {
+                commitments.insert(id.0, None);
+            }
+            let (reg_upserts, reg_removed) = registration_at(&reg_tbl, ordinal)?;
+            for (id, r) in reg_upserts {
+                registrations.insert(id.0, Some(r));
+            }
+            for id in reg_removed {
+                registrations.insert(id.0, None);
+            }
+        }
+        let mut delta = SovereignSideDelta::default();
+        for (id, slot) in commitments {
+            match slot {
+                Some(c) => delta.commitment_upserts.push((CellId(id), c)),
+                None => delta.commitment_removed.push(CellId(id)),
+            }
+        }
+        for (id, slot) in registrations {
+            match slot {
+                Some(r) => delta.registration_upserts.push((CellId(id), r)),
+                None => delta.registration_removed.push(CellId(id)),
+            }
+        }
+        Ok(delta)
+    }
+
+    /// The sovereign bare-commitment delta the turn at `ordinal` committed:
+    /// `(upserts of (id, commitment), removed ids)`. Empty for a turn that
+    /// changed no sovereign entry, and for every record written before the
+    /// sovereign sidecar existed.
+    pub fn sovereign_delta_at(&self, ordinal: u64) -> Result<SovereignDelta> {
+        let read_txn = self.db.begin_read()?;
+        let table = open_sovereign_ro(&read_txn)?;
+        sovereign_at(&table, ordinal)
+    }
+
+    /// The ephemeral-sovereign-REGISTRATION delta the turn at `ordinal`
+    /// committed: `(upserts of (id, full registration), removed ids)`. Empty
+    /// for a turn that changed no registration, and for every record written
+    /// before the registration sidecar existed.
+    pub fn sovereign_registration_delta_at(&self, ordinal: u64) -> Result<RegistrationDelta> {
+        let read_txn = self.db.begin_read()?;
+        let table = open_registration_ro(&read_txn)?;
+        registration_at(&table, ordinal)
     }
 
     // =========================================================================
@@ -963,6 +1171,34 @@ impl PersistentStore {
             }
         }
 
+        // Sovereign sidecar hygiene: every sidecar entry's ordinal must resolve
+        // to a live log record (compaction and truncation both clean the
+        // sidecars in the same transaction that removes the record).
+        if let Some(sov_tbl) = open_sovereign_ro(&read_txn)? {
+            for entry in sov_tbl.iter()? {
+                let entry =
+                    entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+                let ordinal = entry.0.value();
+                if log.get(ordinal)?.is_none() {
+                    report.orphan_entries.push(format!(
+                        "sovereign_delta_by_ordinal -> missing ordinal {ordinal}"
+                    ));
+                }
+            }
+        }
+        if let Some(reg_tbl) = open_registration_ro(&read_txn)? {
+            for entry in reg_tbl.iter()? {
+                let entry =
+                    entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+                let ordinal = entry.0.value();
+                if log.get(ordinal)?.is_none() {
+                    report.orphan_entries.push(format!(
+                        "sovereign_registration_delta_by_ordinal -> missing ordinal {ordinal}"
+                    ));
+                }
+            }
+        }
+
         Ok(report)
     }
 
@@ -1181,6 +1417,9 @@ impl PersistentStore {
                 let mut idx_turn = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
                 let mut idx_hc = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
                 let mut compacted_ids = write_txn.open_table(tables::COMMIT_COMPACTED_BLOCK_IDS)?;
+                let mut sov_tbl = write_txn.open_table(tables::SOVEREIGN_DELTA_BY_ORDINAL)?;
+                let mut reg_tbl =
+                    write_txn.open_table(tables::SOVEREIGN_REGISTRATION_DELTA_BY_ORDINAL)?;
                 for d in &doomed {
                     log.remove(d.ordinal)?;
                     idx_receipt.remove(&d.receipt_hash)?;
@@ -1188,6 +1427,12 @@ impl PersistentStore {
                     idx_hc.remove(d.hc_key.as_slice())?;
                     // Carry the applied turn's id forward (no double-apply).
                     compacted_ids.insert(&d.block_id, ())?;
+                    // A compacted ordinal's sovereign side-map deltas FOLD into
+                    // the covering checkpoint (checkpoints capture the FULL
+                    // sovereign side maps), so the entries are spent — deleting
+                    // them keeps the sidecar tables orphan-free.
+                    sov_tbl.remove(d.ordinal)?;
+                    reg_tbl.remove(d.ordinal)?;
                 }
             }
 
@@ -1444,11 +1689,18 @@ impl PersistentStore {
                 let mut idx_receipt = write_txn.open_table(tables::IDX_RECEIPT_BY_HASH)?;
                 let mut idx_turn = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
                 let mut idx_hc = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
+                let mut sov_tbl = write_txn.open_table(tables::SOVEREIGN_DELTA_BY_ORDINAL)?;
+                let mut reg_tbl =
+                    write_txn.open_table(tables::SOVEREIGN_REGISTRATION_DELTA_BY_ORDINAL)?;
                 for d in &doomed {
                     log.remove(d.ordinal)?;
                     idx_receipt.remove(&d.receipt_hash)?;
                     idx_turn.remove(&d.turn_hash)?;
                     idx_hc.remove(d.hc_key.as_slice())?;
+                    // A truncated turn was never safely applied — its sovereign
+                    // side-map deltas go with it.
+                    sov_tbl.remove(d.ordinal)?;
+                    reg_tbl.remove(d.ordinal)?;
                 }
             }
 
@@ -1539,6 +1791,83 @@ impl PersistentStore {
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+/// A per-ordinal sovereign bare-commitment delta: upserts + removals.
+pub type SovereignDelta = (Vec<(CellId, [u8; 32])>, Vec<CellId>);
+
+/// A per-ordinal ephemeral-sovereign-REGISTRATION delta: registration upserts
+/// (full post-state) + removals.
+pub type RegistrationDelta = (Vec<(CellId, SovereignRegistration)>, Vec<CellId>);
+
+/// Open [`tables::SOVEREIGN_DELTA_BY_ORDINAL`] in a READ transaction,
+/// tolerating a store written before the table existed (backward
+/// compatibility: absent table = no sovereign delta anywhere).
+fn open_sovereign_ro(
+    txn: &redb::ReadTransaction,
+) -> Result<Option<redb::ReadOnlyTable<u64, &'static [u8]>>> {
+    match txn.open_table(tables::SOVEREIGN_DELTA_BY_ORDINAL) {
+        Ok(t) => Ok(Some(t)),
+        Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Open [`tables::SOVEREIGN_REGISTRATION_DELTA_BY_ORDINAL`] in a READ
+/// transaction, tolerating a store written before the table existed (mirrors
+/// [`open_sovereign_ro`]).
+fn open_registration_ro(
+    txn: &redb::ReadTransaction,
+) -> Result<Option<redb::ReadOnlyTable<u64, &'static [u8]>>> {
+    match txn.open_table(tables::SOVEREIGN_REGISTRATION_DELTA_BY_ORDINAL) {
+        Ok(t) => Ok(Some(t)),
+        Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Sovereign bare-commitment delta at `ordinal` through an optionally-present
+/// table (absent table/entry = no delta).
+fn sovereign_at(
+    table: &Option<redb::ReadOnlyTable<u64, &'static [u8]>>,
+    ordinal: u64,
+) -> Result<SovereignDelta> {
+    let Some(t) = table else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    match t.get(ordinal)? {
+        Some(g) => {
+            let (upserts, removed): (Vec<([u8; 32], [u8; 32])>, Vec<[u8; 32]>) =
+                postcard::from_bytes(g.value())?;
+            Ok((
+                upserts.into_iter().map(|(id, c)| (CellId(id), c)).collect(),
+                removed.into_iter().map(CellId).collect(),
+            ))
+        }
+        None => Ok((Vec::new(), Vec::new())),
+    }
+}
+
+/// Registration delta at `ordinal` through an optionally-present table
+/// (absent table/entry = no delta).
+fn registration_at(
+    table: &Option<redb::ReadOnlyTable<u64, &'static [u8]>>,
+    ordinal: u64,
+) -> Result<RegistrationDelta> {
+    let Some(t) = table else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    match t.get(ordinal)? {
+        Some(g) => {
+            let (upserts, removed): (Vec<([u8; 32], SovereignRegistration)>, Vec<[u8; 32]>) =
+                postcard::from_bytes(g.value())?;
+            Ok((
+                upserts.into_iter().map(|(id, r)| (CellId(id), r)).collect(),
+                removed.into_iter().map(CellId).collect(),
+            ))
+        }
+        None => Ok((Vec::new(), Vec::new())),
+    }
+}
 
 fn check_hash_index(
     index: &impl ReadableTable<&'static [u8; 32], u64>,
@@ -3051,5 +3380,209 @@ mod tests {
         let reopened = PersistentStore::open(&path).unwrap();
         assert_eq!(reopened.commit_cursor().unwrap(), 1);
         assert!(reopened.commit_record_at(0).unwrap().is_some());
+    }
+
+    // ── #57 residual: the sovereign side-map delta sidecar ───────────────────
+    //
+    // `touched_cells` (hosted post-states) and `removed` (hosted tombstones)
+    // cannot express a sovereign side-map change, so a MakeSovereign commitment
+    // insert / commitment update / TTL-registration update / deregistration
+    // committed after the latest checkpoint was silently lost on restart. The
+    // sidecar tables carry that missing half atomically with the record; these
+    // tests pin its lifecycle.
+
+    /// A full TTL registration post-state with `commitment`, anchored at `height`.
+    fn registration(commitment: [u8; 32], height: u64) -> SovereignRegistration {
+        SovereignRegistration {
+            commitment,
+            registered_at: height,
+            ttl_blocks: 1000,
+            last_activity: height,
+            verification_key_hash: None,
+            max_custom_effects: None,
+            owner_public_key: None,
+        }
+    }
+
+    /// The sovereign sidecar's own lifecycle: last-event-wins projection across
+    /// upsert → removal, per-ordinal accessors, orphan hygiene under compaction,
+    /// and the same-record hosted/sovereign double-custody guard.
+    #[test]
+    fn sovereign_delta_is_last_event_wins_and_cleaned_by_compaction() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let c = cell(0x71, 500);
+        let cid = c.id();
+        let commitment = [0x5c; 32];
+
+        // t0 (h1): hosted create. t1 (h2): MakeSovereign — the hosted removal
+        // travels in the record's `removed`; the commitment insert in the
+        // sidecar; both in ONE commit transaction.
+        let mut rec0 = record(0, 0, vec![c.clone()]);
+        rec0.turn_hash[1] = 0xe5;
+        store.commit_finalized_turn(0, &rec0).unwrap();
+        let mut rec1 = record(1, 1, Vec::new());
+        rec1.turn_hash[1] = 0xe6;
+        rec1.removed = vec![cid.0];
+        store
+            .commit_finalized_turn_with_notes_and_sovereign(
+                1,
+                &rec1,
+                &[],
+                &SovereignSideDelta {
+                    commitment_upserts: vec![(cid, commitment)],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let delta = store.sovereign_overlay_since(0).unwrap();
+        assert_eq!(delta.commitment_upserts, vec![(cid, commitment)]);
+        assert!(delta.commitment_removed.is_empty());
+        assert_eq!(
+            store.sovereign_delta_at(1).unwrap(),
+            (vec![(cid, commitment)], Vec::new())
+        );
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+
+        // The overlay cut respects the checkpoint height, same as the hosted
+        // overlay: at/below the MakeSovereign turn's height the delta is gone.
+        assert!(store.sovereign_overlay_since(2).unwrap().is_empty());
+
+        // t2 (h3): the sovereign entry is DEREGISTERED — the later event wins.
+        let mut rec2 = record(2, 2, Vec::new());
+        rec2.turn_hash[1] = 0xe7;
+        store
+            .commit_finalized_turn_with_notes_and_sovereign(
+                2,
+                &rec2,
+                &[],
+                &SovereignSideDelta {
+                    commitment_removed: vec![cid],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let delta = store.sovereign_overlay_since(0).unwrap();
+        assert!(delta.commitment_upserts.is_empty(), "removal supersedes");
+        assert_eq!(delta.commitment_removed, vec![cid]);
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+
+        // Same-record double custody is refused fail-closed: a hosted
+        // post-state AND a sovereign upsert for one id cannot land together.
+        let conflicted = cell(0x72, 10);
+        let conflicted_id = conflicted.id();
+        let mut bad = record(3, 3, vec![conflicted]);
+        bad.turn_hash[1] = 0xe8;
+        let err = store.commit_finalized_turn_with_notes_and_sovereign(
+            3,
+            &bad,
+            &[],
+            &SovereignSideDelta {
+                commitment_upserts: vec![(conflicted_id, [1u8; 32])],
+                ..Default::default()
+            },
+        );
+        assert!(matches!(err, Err(StoreError::Integrity(_))), "got {err:?}");
+        assert_eq!(store.commit_cursor().unwrap(), 3, "nothing landed");
+
+        // Compaction under a covering checkpoint cleans the spent sovereign
+        // entries in the same transaction (no orphans) — checkpoints capture
+        // the FULL sovereign side maps, so a below-floor delta is subsumed.
+        let mut rec3 = record(3, 3, vec![cell(0x73, 900)]);
+        rec3.turn_hash[1] = 0xe9;
+        store.commit_finalized_turn(3, &rec3).unwrap();
+        checkpoint_from_log_no_codrive(&store, 4);
+        assert_eq!(store.compact_below(4).unwrap(), 3, "h1..h3 compacted");
+        assert_eq!(
+            store.sovereign_delta_at(1).unwrap(),
+            (Vec::new(), Vec::new()),
+            "a compacted ordinal's sovereign delta is cleaned"
+        );
+        assert_eq!(
+            store.sovereign_delta_at(2).unwrap(),
+            (Vec::new(), Vec::new())
+        );
+        let report = store.verify_index_agrees_with_log().unwrap();
+        assert!(report.ok(), "audit after sovereign compaction: {report:?}");
+    }
+
+    /// The TTL-registration sidecar sibling: registration upserts carry the
+    /// FULL post-state (recovery SETS wholesale), removals win over earlier
+    /// upserts, the registration/commitment tables stay independent, and a
+    /// store that never wrote a sovereign delta reads both as empty
+    /// (backward compatibility with pre-sidecar stores).
+    #[test]
+    fn registration_delta_is_carried_independently_and_reads_empty_when_absent() {
+        // Backward compatibility first: a store with plain commits only has
+        // NO sidecar tables — every read resolves empty, and the audit is ok.
+        let plain = PersistentStore::open_in_memory().unwrap();
+        let mut rec = record(0, 0, vec![cell(0x11, 7)]);
+        rec.turn_hash[1] = 0xf0;
+        plain.commit_finalized_turn(0, &rec).unwrap();
+        assert!(plain.sovereign_overlay_since(0).unwrap().is_empty());
+        assert_eq!(
+            plain.sovereign_registration_delta_at(0).unwrap(),
+            (Vec::new(), Vec::new())
+        );
+        assert!(plain.verify_index_agrees_with_log().unwrap().ok());
+
+        let store = PersistentStore::open_in_memory().unwrap();
+        let cid = cell(0x74, 0).id();
+        let reg_v1 = registration([0xaa; 32], 1);
+        let reg_v2 = registration([0xbb; 32], 2);
+
+        // t0 (h1): registration insert. t1 (h2): registration-commitment
+        // update — the LAST full post-state must win in the overlay.
+        let mut rec0 = record(0, 0, Vec::new());
+        rec0.turn_hash[1] = 0xf1;
+        store
+            .commit_finalized_turn_with_notes_and_sovereign(
+                0,
+                &rec0,
+                &[],
+                &SovereignSideDelta {
+                    registration_upserts: vec![(cid, reg_v1)],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut rec1 = record(1, 1, Vec::new());
+        rec1.turn_hash[1] = 0xf2;
+        store
+            .commit_finalized_turn_with_notes_and_sovereign(
+                1,
+                &rec1,
+                &[],
+                &SovereignSideDelta {
+                    registration_upserts: vec![(cid, reg_v2.clone())],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let delta = store.sovereign_overlay_since(0).unwrap();
+        assert_eq!(delta.registration_upserts, vec![(cid, reg_v2.clone())]);
+        assert!(delta.commitment_upserts.is_empty(), "tables independent");
+        assert_eq!(
+            store.sovereign_registration_delta_at(1).unwrap(),
+            (vec![(cid, reg_v2)], Vec::new())
+        );
+
+        // t2 (h3): deregistration — the removal supersedes both upserts.
+        let mut rec2 = record(2, 2, Vec::new());
+        rec2.turn_hash[1] = 0xf3;
+        store
+            .commit_finalized_turn_with_notes_and_sovereign(
+                2,
+                &rec2,
+                &[],
+                &SovereignSideDelta {
+                    registration_removed: vec![cid],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let delta = store.sovereign_overlay_since(0).unwrap();
+        assert!(delta.registration_upserts.is_empty(), "removal supersedes");
+        assert_eq!(delta.registration_removed, vec![cid]);
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
     }
 }

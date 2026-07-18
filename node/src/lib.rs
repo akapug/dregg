@@ -2361,8 +2361,25 @@ fn reseed_genesis_then_overlay(
     removed_since_checkpoint: &[dregg_cell::CellId],
 ) -> GenesisCellLoadStats {
     // 1. Lift the recovered commit-log overlay (checkpoint ⊕ touched
-    //    post-states) out of the live ledger.
+    //    post-states) out of the live ledger — INCLUDING the sovereign side
+    //    maps (#57 residual): the fresh-ledger reset below would otherwise
+    //    silently WIPE the recovered `sovereign_commitments` +
+    //    `sovereign_registrations` (they are not hosted cells, so neither the
+    //    hosted lift nor the genesis baseline restores them, and the loss is
+    //    invisible to the hosted-only convergence root).
     let recovered_overlay: Vec<dregg_cell::Cell> = ledger.iter().map(|(_, c)| c.clone()).collect();
+    let recovered_sovereign = dregg_cell::SovereignSideDelta {
+        commitment_upserts: ledger
+            .iter_sovereign_commitments()
+            .map(|(id, c)| (*id, *c))
+            .collect(),
+        commitment_removed: Vec::new(),
+        registration_upserts: ledger
+            .iter_sovereign_registrations()
+            .map(|(id, r)| (*id, r.clone()))
+            .collect(),
+        registration_removed: Vec::new(),
+    };
     *ledger = dregg_cell::Ledger::new();
 
     // 2. Genesis baseline on a FRESH ledger: genesis_moves apply EXACTLY ONCE
@@ -2385,6 +2402,13 @@ fn reseed_genesis_then_overlay(
     for id in removed_since_checkpoint {
         let _ = ledger.remove(id);
     }
+
+    // 5. Re-install the lifted SOVEREIGN side maps wholesale (mirroring
+    //    `checkpoint_to_ledger`'s restore order: hosted cells first, sovereign
+    //    maps after). The recovered maps already reflect the post-checkpoint
+    //    sovereign overlay applied at state construction, so this is a pure
+    //    lift-and-put-back around the genesis reset.
+    ledger.apply_sovereign_side_delta(&recovered_sovereign);
 
     stats
 }

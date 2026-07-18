@@ -216,6 +216,50 @@ pub const META_COMMIT_COMPACTED: &str = "commit_compacted_floor";
 pub const COMMIT_COMPACTED_BLOCK_IDS: TableDefinition<&[u8; 32], ()> =
     TableDefinition::new("commit_compacted_block_ids");
 
+// ─── Sovereign Side-Map Delta Sidecars (#57 residual) ────────────────────────
+//
+// `MakeSovereign` is a TWO-part transition: it removes the hosted cell AND
+// inserts the cell's state commitment into the ledger's `sovereign_commitments`
+// side map. The `CommitRecord.removed` tombstone dimension carries the first
+// half only; the sovereign side maps themselves were persisted ONLY at
+// checkpoint granularity (`ledger_store::ledger_to_checkpoint`), so any
+// sovereign side-map change committed AFTER the latest checkpoint — the
+// MakeSovereign commitment insert, a verified commitment update on an
+// already-sovereign cell, a TTL-registration update, a deregistration — was
+// silently lost on a pre-checkpoint restart. Invisible to the recovery
+// convergence check, because `canonical_ledger_root` commits hosted cells only.
+//
+// These sidecar tables are the per-turn carriers for that missing half,
+// written inside the SAME `commit_finalized_turn_*` transaction as the record.
+// They are ADDITIVE: the `CommitRecord` postcard wire format is untouched, and
+// a store written before the tables existed reads them as absent (= no
+// sovereign delta) — old stores open unchanged.
+
+/// Sovereign bare-commitment delta per commit ordinal.
+///
+/// Value: postcard `(Vec<([u8; 32], [u8; 32])>, Vec<[u8; 32]>)` =
+/// (upserts of (cell id, state commitment), removed ids). Joined by
+/// `sovereign_overlay_since` (recovery/reseed/joiner consumers apply it via
+/// `Ledger::apply_sovereign_side_delta`); cleaned by compaction (checkpoints
+/// capture the FULL sovereign side maps, so a below-floor delta is subsumed)
+/// and by divergent-tail truncation. Absent table/entry = no sovereign delta.
+pub const SOVEREIGN_DELTA_BY_ORDINAL: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("sovereign_delta_by_ordinal");
+
+/// Ephemeral-sovereign-REGISTRATION (TTL side map) delta per commit ordinal —
+/// the sibling of [`SOVEREIGN_DELTA_BY_ORDINAL`] for the
+/// `sovereign_registrations` map: a registration insert, a
+/// registration-commitment/TTL update
+/// (`update_sovereign_registration_commitment`), or a deregistration are ALL
+/// invisible to the bare-commitment delta and to the hosted-only canonical
+/// root. Kept in a SEPARATE table so each table's wire format stays fixed.
+///
+/// Value: postcard `(Vec<([u8; 32], SovereignRegistration)>, Vec<[u8; 32]>)` =
+/// (upserts of (cell id, full registration post-state), removed ids). Same
+/// write/join/cleanup discipline as [`SOVEREIGN_DELTA_BY_ORDINAL`].
+pub const SOVEREIGN_REGISTRATION_DELTA_BY_ORDINAL: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("sovereign_registration_delta_by_ordinal");
+
 // ─── Forever-Digest Sets (restart-durable anti-replay carriers) ──────────────
 //
 // Several node registries carry "burned forever" digest sets whose refusal

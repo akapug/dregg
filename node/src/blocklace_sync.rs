@@ -4799,6 +4799,17 @@ async fn execute_finalized_turn(
     // no false positives.
     let touched_ids = ledger_touched_diff(&pre_ledger, &exec_ledger);
 
+    // The COMPLETE sovereign side-map delta this turn produced (#57 residual):
+    // MakeSovereign's commitment insert, a verified commitment update on an
+    // already-sovereign cell, a TTL-registration insert/update, a
+    // deregistration. `ledger_touched_diff` covers HOSTED cells only — a
+    // sovereign transition mutates only the side maps (no hosted post-state,
+    // no `removed` tombstone beyond MakeSovereign's), so without this diff the
+    // transition neither reaches the live authoritative ledger below nor the
+    // durable per-turn record (it silently reverted to the checkpoint value on
+    // a pre-checkpoint reboot, invisible to the hosted-only convergence root).
+    let sovereign_delta = dregg_cell::Ledger::sovereign_side_diff(&pre_ledger, &exec_ledger);
+
     // Re-acquire the global write lock BRIEFLY to install the result.
     let mut s = state.write().await;
 
@@ -4842,6 +4853,12 @@ async fn execute_finalized_turn(
             }
         }
     }
+    // Merge the SOVEREIGN side-map dimension onto the live ledger (#57
+    // residual): the loop above installs hosted post-states only, so without
+    // this a cell the executor made sovereign left the hosted set but never
+    // gained its commitment on the authoritative ledger (and a commitment/
+    // registration update on an already-sovereign cell never landed at all).
+    s.ledger.apply_sovereign_side_delta(&sovereign_delta);
 
     match exec_result {
         dregg_turn::TurnResult::Committed {
@@ -5603,11 +5620,18 @@ async fn execute_finalized_turn(
                 // Weld the NoteCreate commitments into this SAME atomic commit
                 // transaction (bug #58): the note leaves and the turn record land
                 // together-or-not-at-all in one fsync boundary, so a crash-retry
-                // can never double-append a note leaf.
-                match s.store.commit_finalized_turn_with_notes(
+                // can never double-append a note leaf. The turn's SOVEREIGN
+                // side-map delta rides the same transaction (#57 residual):
+                // `touched_cells`/`removed` are hosted-only, so this sidecar is
+                // the ONLY durable carrier of a MakeSovereign commitment insert
+                // or a commitment/registration update — without it the
+                // transition reverted to its checkpoint value on a
+                // pre-checkpoint reboot.
+                match s.store.commit_finalized_turn_with_notes_and_sovereign(
                     expected_ordinal,
                     &commit_record,
                     &note_commitments,
+                    &sovereign_delta,
                 ) {
                     Ok(outcome) => {
                         let assigned = outcome.ordinal;

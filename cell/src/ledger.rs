@@ -287,6 +287,51 @@ pub struct SovereignRegistration {
 /// Default TTL for sovereign cell registrations (in blocks).
 pub const DEFAULT_SOVEREIGN_TTL: u64 = 1000;
 
+/// The complete pre→post delta of a turn over the ledger's SOVEREIGN side maps
+/// (#57 residual): BOTH the bare `sovereign_commitments` map AND the ephemeral
+/// `sovereign_registrations` (TTL) map, each as upserts + removals.
+///
+/// The hosted-cell overlay (`touched_cells` / `LedgerDelta` / the `removed`
+/// tombstones) cannot express any of these — a sovereign transition mutates
+/// only the side maps, journals no `cells`-map entry, and leaves the
+/// hosted-only canonical root unchanged, so between full-ledger checkpoints a
+/// MakeSovereign commitment insert, a verified sovereign-commitment update, a
+/// TTL-registration update, or a deregistration was silently lost on restart
+/// (invisible to the recovery-convergence root check). The finalization
+/// producer computes this delta ([`Ledger::sovereign_side_diff`]) and persists
+/// it in the durable per-turn sidecar so `checkpoint ⊕ overlay` reconstructs
+/// the sovereign side maps exactly across a restart.
+///
+/// Last-event-wins across ordinals: an id present in `*_upserts` is live at
+/// its new value; an id in `*_removed` was deregistered and not re-inserted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SovereignSideDelta {
+    /// `(id, commitment)` inserted/updated in the bare `sovereign_commitments`
+    /// map (MakeSovereign's second half; a verified sovereign-commitment
+    /// transition on an already-sovereign cell). Sorted by id (deterministic).
+    pub commitment_upserts: Vec<(CellId, [u8; 32])>,
+    /// Ids removed from the bare `sovereign_commitments` map (deregistration).
+    pub commitment_removed: Vec<CellId>,
+    /// `(id, registration)` inserted/updated in the ephemeral TTL
+    /// `sovereign_registrations` map (registration, or a
+    /// registration-commitment/TTL update). Full post-state so recovery SETS
+    /// it wholesale (no CAS chaining across ordinals).
+    pub registration_upserts: Vec<(CellId, SovereignRegistration)>,
+    /// Ids removed from the ephemeral `sovereign_registrations` map.
+    pub registration_removed: Vec<CellId>,
+}
+
+impl SovereignSideDelta {
+    /// Whether the turn changed no sovereign side-map entry at all — the common
+    /// case (a plain hosted turn), for which the durable sidecar writes nothing.
+    pub fn is_empty(&self) -> bool {
+        self.commitment_upserts.is_empty()
+            && self.commitment_removed.is_empty()
+            && self.registration_upserts.is_empty()
+            && self.registration_removed.is_empty()
+    }
+}
+
 /// The accumulated, NOT-YET-MATERIALIZED Merkle work. A mutation records into
 /// this and returns immediately — no hashing. The tree materializes lazily on the
 /// first `root()`/`membership_proof()` after the mutation batch.
@@ -1552,6 +1597,81 @@ impl Ledger {
     /// Get the sovereign registration metadata for a cell.
     pub fn get_sovereign_registration(&self, id: &CellId) -> Option<&SovereignRegistration> {
         self.sovereign_registrations.get(id)
+    }
+
+    /// The COMPLETE pre→post delta over BOTH sovereign side maps (#57
+    /// residual) — the single diff the finalization producer routes the
+    /// durable per-turn sidecar off: `pre` is the pre-turn ledger snapshot,
+    /// `post` the executed post-turn ledger.
+    ///
+    /// Upserts carry every entry whose value CHANGED (or is newly present);
+    /// removals carry every id present pre- and absent post-. All four vectors
+    /// are sorted by id, so the delta (and its serialized sidecar bytes) is
+    /// deterministic regardless of `HashMap` iteration order.
+    pub fn sovereign_side_diff(pre: &Ledger, post: &Ledger) -> SovereignSideDelta {
+        let mut commitment_upserts: Vec<(CellId, [u8; 32])> = post
+            .sovereign_commitments
+            .iter()
+            .filter(|(id, c)| pre.sovereign_commitments.get(id) != Some(*c))
+            .map(|(id, c)| (*id, *c))
+            .collect();
+        let mut commitment_removed: Vec<CellId> = pre
+            .sovereign_commitments
+            .keys()
+            .filter(|id| !post.sovereign_commitments.contains_key(id))
+            .copied()
+            .collect();
+        let mut registration_upserts: Vec<(CellId, SovereignRegistration)> = post
+            .sovereign_registrations
+            .iter()
+            .filter(|(id, r)| pre.sovereign_registrations.get(id) != Some(*r))
+            .map(|(id, r)| (*id, r.clone()))
+            .collect();
+        let mut registration_removed: Vec<CellId> = pre
+            .sovereign_registrations
+            .keys()
+            .filter(|id| !post.sovereign_registrations.contains_key(id))
+            .copied()
+            .collect();
+        commitment_upserts.sort_unstable_by_key(|(id, _)| id.0);
+        commitment_removed.sort_unstable_by_key(|id| id.0);
+        registration_upserts.sort_unstable_by_key(|(id, _)| id.0);
+        registration_removed.sort_unstable_by_key(|id| id.0);
+        SovereignSideDelta {
+            commitment_upserts,
+            commitment_removed,
+            registration_upserts,
+            registration_removed,
+        }
+    }
+
+    /// Apply a resolved [`SovereignSideDelta`] to this ledger's sovereign side
+    /// maps — the RECOVERY/reseed/joiner apply of the durable per-turn sidecar
+    /// (#57 residual), the sovereign sibling of the hosted overlay's
+    /// last-writer-wins upsert/remove.
+    ///
+    /// Direct map SETS/DELETES, deliberately NOT the turn-path mutators:
+    /// recovery is not a turn (nothing is journaled), and the delta's upserts
+    /// must OVERWRITE the checkpoint-restored value wholesale — the refusal
+    /// semantics of `register_sovereign_cell` (already-exists) and
+    /// `update_sovereign_commitment` (not-yet-sovereign) are admission checks
+    /// for NEW transitions, not for replaying an already-finalized one. The
+    /// hosted map is untouched (the hosted overlay owns that dimension), so
+    /// the hosted-only canonical root is unaffected.
+    pub fn apply_sovereign_side_delta(&mut self, delta: &SovereignSideDelta) {
+        for (id, commitment) in &delta.commitment_upserts {
+            self.sovereign_commitments.insert(*id, *commitment);
+        }
+        for id in &delta.commitment_removed {
+            self.sovereign_commitments.remove(id);
+        }
+        for (id, registration) in &delta.registration_upserts {
+            self.sovereign_registrations
+                .insert(*id, registration.clone());
+        }
+        for id in &delta.registration_removed {
+            self.sovereign_registrations.remove(id);
+        }
     }
 
     /// Expire sovereign registrations that have exceeded their TTL.
