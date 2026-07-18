@@ -127,15 +127,17 @@ fn upsert_cell(ledger: &mut Ledger, cell: Cell) {
 
 /// The canonical ledger-root commitment used to bind a snapshot to the chain.
 ///
-/// This is `dregg_cell::Ledger::root()` — the cell crate's own deterministic
-/// Merkle commitment (cells sorted by id, hashed bottom-up). It is in-crate, so
-/// persist computes it without reaching into `node`, and it is order-independent
-/// so the rebuilt ledger commits identically regardless of overlay application
-/// order. The shipping side records this same root in the commit log
-/// (`CommitRecord::ledger_root`); a joiner that trusts that root verifies the
-/// whole snapshot against it.
-pub fn snapshot_ledger_root(ledger: &mut Ledger) -> [u8; 32] {
-    ledger.root()
+/// This is [`crate::canonical_ledger_root`] — THE shared production commitment
+/// the node's attested roots and every `CommitRecord::ledger_root` are written
+/// under (the domain-separated flat whole-hosted-cell fold). RSA-2 (cross-family
+/// refutation of 0396015ac): this function previously used the DISTINCT
+/// `dregg_cell::Ledger::root()` Merkle construction while claiming to match the
+/// commit log — under the production record contract `ship_snapshot`'s
+/// convergence guard could never pass (fail-closed on every removal-window
+/// snapshot) and the joiner compared unlike commitments. One byte-identical
+/// oracle now binds shipping node, commit log, and joiner.
+pub fn snapshot_ledger_root(ledger: &Ledger) -> [u8; 32] {
+    crate::canonical_ledger_root(ledger)
 }
 
 impl PersistentStore {
@@ -214,7 +216,7 @@ impl PersistentStore {
         for id in &full_overlay.removed {
             let _ = ledger.remove(id);
         }
-        let claimed_root = snapshot_ledger_root(&mut ledger);
+        let claimed_root = snapshot_ledger_root(&ledger);
 
         // ── The removal fold (F4-A, wire-compatible by construction) ────────
         // The `Snapshot` postcard shape is UNCHANGED: instead of adding a
@@ -295,7 +297,7 @@ impl PersistentStore {
         // The anti-substitution tooth: the reconstructed ledger MUST commit to
         // the claimed root. A tampered overlay/checkpoint yields a different
         // root and is refused.
-        let got = snapshot_ledger_root(&mut ledger);
+        let got = snapshot_ledger_root(&ledger);
         if got != snapshot.claimed_root {
             return Err(StoreError::Integrity(format!(
                 "apply_snapshot: reconstructed ledger root {} != claimed root {} \
@@ -423,7 +425,23 @@ mod tests {
             }
         }
         upsert_cell(&mut ledger, new_cell.clone());
-        ledger.root()
+        crate::canonical_ledger_root(&ledger)
+    }
+
+    /// Store a PARTIAL checkpoint (only records with ordinal < `covered` folded
+    /// in) with its exact RSA-3 ordinal cut. Production `checkpoint_ledger`
+    /// snapshots the LIVE full ledger (covered = cursor); these fixtures fold a
+    /// height prefix, so they must pin the true cut explicitly.
+    fn checkpoint_partial(store: &PersistentStore, ledger: &Ledger, height: u64, covered: u64) {
+        let cp = LedgerCheckpoint {
+            height,
+            cells: ledger.iter().map(|(_, c)| c.clone()).collect(),
+            sovereign_commitments: Vec::new(),
+            sovereign_registrations: Vec::new(),
+        };
+        store
+            .store_ledger_checkpoint_snapshot_covering(&cp, covered)
+            .unwrap();
     }
 
     /// The full genesis-replay ledger root (the reference recovery must reach),
@@ -448,7 +466,7 @@ mod tests {
         for id in overlay.removed {
             let _ = ledger.remove(&id);
         }
-        ledger.root()
+        crate::canonical_ledger_root(&ledger)
     }
 
     #[test]
@@ -475,7 +493,7 @@ mod tests {
                 }
             }
         }
-        store.checkpoint_ledger(&cp_ledger, 3).unwrap();
+        checkpoint_partial(&store, &cp_ledger, 3, 3); // folds ordinals 0..3 (h1..h3)
 
         // Ship from a joiner targeting height 0 (give it the smallest delta).
         let snap = store.ship_snapshot(0).unwrap();
@@ -488,7 +506,10 @@ mod tests {
 
         // Apply reconstructs the EXACT full-replay ledger.
         let mut rebuilt = store.apply_snapshot(&snap).unwrap();
-        assert_eq!(rebuilt.root(), full_replay_root(&store));
+        assert_eq!(
+            crate::canonical_ledger_root(&rebuilt),
+            full_replay_root(&store)
+        );
         // And the claimed root equals the full-replay root (chain-bound).
         assert_eq!(snap.claimed_root, full_replay_root(&store));
         // Spot-check a few reconstructed cell balances (last-writer-wins).
@@ -501,7 +522,7 @@ mod tests {
         commit_turns(&store, &[(1, 100, 1), (2, 200, 2), (3, 300, 3)]);
         let mut cp_ledger = Ledger::new();
         let _ = cp_ledger.insert_cell(cell(1, 100));
-        store.checkpoint_ledger(&cp_ledger, 1).unwrap();
+        checkpoint_partial(&store, &cp_ledger, 1, 1); // folds ordinal 0 only
 
         let mut snap = store.ship_snapshot(0).unwrap();
         // Tamper: replace one overlay cell's balance with a forged value.
@@ -521,7 +542,7 @@ mod tests {
         commit_turns(&store, &[(1, 100, 1), (2, 200, 2), (3, 300, 3)]);
         let mut cp_ledger = Ledger::new();
         let _ = cp_ledger.insert_cell(cell(1, 100));
-        store.checkpoint_ledger(&cp_ledger, 1).unwrap();
+        checkpoint_partial(&store, &cp_ledger, 1, 1); // folds ordinal 0 only
 
         let mut snap = store.ship_snapshot(0).unwrap();
         // Tamper the checkpoint base: forge a cell in the checkpoint half.
@@ -557,7 +578,10 @@ mod tests {
         );
         // Apply still reconstructs the exact ledger from the checkpoint alone.
         let mut rebuilt = store.apply_snapshot(&snap).unwrap();
-        assert_eq!(rebuilt.root(), full_replay_root(&store));
+        assert_eq!(
+            crate::canonical_ledger_root(&rebuilt),
+            full_replay_root(&store)
+        );
         assert_eq!(snap.claimed_root, full_replay_root(&store));
     }
 
@@ -574,7 +598,10 @@ mod tests {
         assert_eq!(snap.overlay_base_height, 0);
         // Apply reconstructs the full-replay ledger from genesis + full overlay.
         let mut rebuilt = store.apply_snapshot(&snap).unwrap();
-        assert_eq!(rebuilt.root(), full_replay_root(&store));
+        assert_eq!(
+            crate::canonical_ledger_root(&rebuilt),
+            full_replay_root(&store)
+        );
         assert_eq!(snap.claimed_root, full_replay_root(&store));
         // 3 distinct cells survive (seed 1 overwritten once).
         assert_eq!(rebuilt.iter().count(), 3);
@@ -622,14 +649,17 @@ mod tests {
                 }
             }
         }
-        shipper.checkpoint_ledger(&cp_ledger, 2).unwrap();
+        checkpoint_partial(&shipper, &cp_ledger, 2, 2); // folds ordinals 0..2
         let snap = shipper.ship_snapshot(0).unwrap();
         let trusted = snap.claimed_root;
 
         // Fresh joiner installs the snapshot.
         let joiner = PersistentStore::open_in_memory().unwrap();
         let mut ledger = joiner.install_snapshot(&snap, &trusted).unwrap();
-        assert_eq!(ledger.root(), full_replay_root(&shipper));
+        assert_eq!(
+            crate::canonical_ledger_root(&ledger),
+            full_replay_root(&shipper)
+        );
 
         // The joiner's durable state now reconstructs the same ledger from its
         // installed checkpoint ⊕ the overlay installed into its cell index.
@@ -641,7 +671,10 @@ mod tests {
         for c in joiner.installed_overlay_cells().unwrap() {
             upsert_cell(&mut joiner_rebuilt, c);
         }
-        assert_eq!(joiner_rebuilt.root(), full_replay_root(&shipper));
+        assert_eq!(
+            crate::canonical_ledger_root(&joiner_rebuilt),
+            full_replay_root(&shipper)
+        );
     }
 
     /// F4-A joiner bootstrap: a POST-checkpoint removal of a checkpoint-held
@@ -671,7 +704,7 @@ mod tests {
             turn_hash: [0xa1; 32],
             creator: [1u8; 32],
             receipt_hash: [0xb1; 32],
-            ledger_root: running.root(),
+            ledger_root: crate::canonical_ledger_root(&running),
             touched_cells: vec![doomed.clone(), survivor.clone()],
         };
         shipper.commit_finalized_turn(0, &rec0).unwrap();
@@ -695,7 +728,7 @@ mod tests {
             turn_hash: [0xa2; 32],
             creator: [1u8; 32],
             receipt_hash: [0xb2; 32],
-            ledger_root: running.root(),
+            ledger_root: crate::canonical_ledger_root(&running),
             touched_cells: Vec::new(),
         };
         shipper
@@ -722,7 +755,7 @@ mod tests {
         let mut rebuilt = joiner.install_snapshot(&snap, &snap.claimed_root).unwrap();
         assert!(rebuilt.get(&doomed_id).is_none(), "no resurrection");
         assert!(rebuilt.get(&survivor.id()).is_some());
-        assert_eq!(rebuilt.root(), rec1.ledger_root);
+        assert_eq!(crate::canonical_ledger_root(&rebuilt), rec1.ledger_root);
 
         // A removal-FREE window still ships the minimal split (no fold): a
         // creation-only turn above the fold point keeps the delta shape.
@@ -736,7 +769,7 @@ mod tests {
             turn_hash: [0xa3; 32],
             creator: [1u8; 32],
             receipt_hash: [0xb3; 32],
-            ledger_root: running.root(),
+            ledger_root: crate::canonical_ledger_root(&running),
             touched_cells: vec![extra],
         };
         shipper.commit_finalized_turn(2, &rec2).unwrap();
@@ -748,6 +781,6 @@ mod tests {
             .install_snapshot(&snap2, &snap2.claimed_root)
             .unwrap();
         assert!(rebuilt2.get(&doomed_id).is_none());
-        assert_eq!(rebuilt2.root(), rec2.ledger_root);
+        assert_eq!(crate::canonical_ledger_root(&rebuilt2), rec2.ledger_root);
     }
 }
