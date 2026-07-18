@@ -20,6 +20,7 @@ a trusted key. **Nothing trusted, nothing duplicated.**
 - **CI-wire every exemplar** — a proof the default `Dregg2` build never compiles is a green nobody runs
   (`776381e52` wired the first two). Import into the root aggregator.
 - **AIR is Lean-authored** (law #1). Rust computes witnesses / calls in; the CONSTRAINT is Lean.
+- **VERIFY AGAINST THE DEPLOYED DESCRIPTOR, not a study face** ([[feedback-reality-gate-first-not-internal-consistency]]). The audit/crux mis-classified cap (#4) as underconstrained by reading a SUPERSEDED `*Refine`/study module — the LIVE registry entry (`attenuateVmDescriptor2R24 = attenuateV3`) already forced the genuine `writesTo8`. Every value's status is confirmed against the deployed registry entry + its apex wiring (`Rfix _`, `ClosureFanoutGenuine`), NOT a `*Refine` peer. A lane that REFUSES to build a mirror + reports the deployed reality is the discipline HOLDING (cap lane, `c8f443e37`).
 
 ## Status board — the 11 perimeter values
 | # | value | class | status |
@@ -29,7 +30,7 @@ a trusted key. **Nothing trusted, nothing duplicated.**
 | 2 | state commitment (transfer) | technique | ✅ FLAGSHIP `c68c4f5a9` — `transferDescriptor_commit_iff`; CI-wired. TAIL: generalize to ALL effect tags; make `wire_commit` the chained commitment + delete BLAKE3 `ledger.root()` |
 | 5 | heap-root | ARCHITECTURE | ✅ `f7dd79db2` — genuine `Heap.set` forced, prepend-digest DELETED, MapOps carrier verified |
 | 3 | receipt `TurnExecuted` | trust→proof | 🔶 resolver DONE `26d3b1615` (HELD); COMPLETION = thread the produced finalized-turn STARK onto the receipt + migrate the 4 bare-receipt features (service_promise, shared_fork, cross-fed demo, full_pipeline) to `TurnProven`, then land coherent |
-| 4 | cap-root | ARCHITECTURE | ⏳ Cycle 2 — the cap Phase-E sorted-tree splice (heap is the worked example); greenfield: delete the free-`CAP_DIGEST_NEW` / prepend form |
+| 4 | cap-root | ~~ARCHITECTURE~~ **ALREADY CLOSED** | ✅ the DEPLOYED `attenuateV3` already forces the faithful 8-felt sorted-tree write `writesTo8` (`CapOpenEmit.effCapOpenWriteV3_forces_write8`, §11 keystone, `#assert_axioms`-clean, apex-wired via `Rfix 12` / `ClosureFanoutGenuine` CLASS A) — **STRONGER than heap** (full ~124-bit vs heap's lane-0 scalar). The audit/crux "prepend / free CAP_DIGEST_NEW" read a SUPERSEDED study face, not the deployed descriptor. Doc corrected `c8f443e37`. The cap lane correctly REFUSED to build the requested scalar splice (would be a weaker re-authored mirror — reality-gate held). RESIDUALS (tracked, NOT soundness gaps): (a) delete the superseded prepend/free-digest code across ~15 cap-family modules (own multi-session cutover + adversarial audit); (b) a `Satisfied2`-only forged-root canary needs the sorted-tree functional property from the trace (discharge the `SpineCommits` decode) + closes the arity-7 leaf other-field encoding residual. |
 | 6 | note-spend | structural | ⏳ Cycle 2 — replicate the schema; decode rides the same spine-faithfulness lemma as non-rev |
 | — | garbled-eval | technique | ⏳ Cycle 2 — replicate; honest witness `garbled_honest_satisfied2` exists, only the parametric reverse missing |
 | 1 | ledger root | trusted-Rust | ⏳ folds into #2 tail (`cells_root` = Lean-authored sorted-Poseidon2 fold, bound at the boundary) |
