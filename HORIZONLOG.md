@@ -9621,3 +9621,19 @@ MADE OF correlation (`dclass_eq_closure_of_matched_tensors`), ledger = common-kn
 quorum/C finality. ⚑ follow-up surfaced by the read: the §9 epistemic guard atoms
 (`knownBy/distributedAmong/commonAt/privateTo`) are DESIGN-ONLY — installation into the executor guard
 surface is owned by the temporal-algebra lane and has NOT happened (essay's resolution ledger says so).
+
+## 2026-07-18 — "The Federation Knows" REWRITTEN at depth (interchain + ZK + leaks)
+Max-effort rewrite of `docs/THE-FEDERATION-KNOWS.md` grounded in 4 more full-read lanes
+(CONSTRUCTIVE-KNOWLEDGE.md+Laws.lean · SelectiveDisclosure/PrivatePredicate/DV/note.rs ·
+PrivateLeg/census/ProofOfHoldings/Deco/25-lane ·
+Credential/FullForestAuth/SettlementSoundness/KeyLeak/FROST/ThresholdDecrypt). New sections: §5 the
+DISCLOSURE DIAL (accepts_invariant_under_dial — same knowledge, tunable revelation;
+private-conservation "enforcement without surveillance"; double-spend as WITNESS SCARCITY
+present_no_witness IsEmpty), §6 INTERCHAIN grade ladder (EVM knows the 25-lane ∃ + four not-knows incl.
+MessageRootNotProofBound refusal; grant_preserves_custody := rfl knowledge-without-possession;
+federation_id as epistemic border), §7 LEAKS ("you cannot un-know a secret; you can only make it stop
+being a key" — evidence monotone, revoke_blocks_verify flips only the negative leg,
+revoke_before_tip_unsettleable race with both-ways demo, shares: sub-threshold blind grace / t-cliff /
+"deletion is a party-local act no protocol can force"). Ledger carries: §9 atoms design-only, DV
+modeled-not-shipped, SelectivelyDisclosable=policy-label, HMAC fallback live, dev ceremony, FRI floor +
+witness-gen perimeter postures.
