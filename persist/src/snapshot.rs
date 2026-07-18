@@ -220,7 +220,29 @@ impl PersistentStore {
         for op in &overlay {
             apply_overlay_op(&mut ledger, op);
         }
+        // The post-checkpoint SOVEREIGN side-map delta (#57 residual): the
+        // hosted-cell wire overlay cannot express it (MakeSovereign's
+        // commitment insert, a commitment/registration update, a
+        // deregistration), so apply it to the reconstruction here…
+        let sovereign_delta = self.sovereign_overlay_since(base_height)?;
+        ledger.apply_sovereign_side_delta(&sovereign_delta);
         let claimed_root = snapshot_ledger_root(&mut ledger);
+
+        // …and whenever one exists, FOLD: ship the fully-reconstructed ledger
+        // as the snapshot's checkpoint half (a `LedgerCheckpoint` carries the
+        // complete sovereign side maps) with an EMPTY overlay, so the sovereign
+        // state crosses the wire without any change to the `Snapshot` shape. A
+        // joiner reconstructs the identical ledger — same hosted cells, same
+        // root (the canonical root folds hosted cells only), same sovereign
+        // side maps. Sovereign-delta-free snapshots keep the exact pre-fold
+        // {checkpoint + overlay} split (byte-identical behavior).
+        let (checkpoint, base_height, overlay) = if sovereign_delta.is_empty() {
+            (checkpoint, base_height, overlay)
+        } else {
+            let head_height = self.recovered_head_height()?.unwrap_or(base_height);
+            let folded = crate::ledger_store::ledger_to_checkpoint(&ledger, head_height);
+            (Some(folded), head_height, Vec::new())
+        };
 
         // A shipping node never ships a snapshot it cannot reconstruct to its
         // own recorded finalized root: if we have a recorded head root, the

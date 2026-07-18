@@ -141,7 +141,7 @@ pub use interface::{
 };
 pub use ledger::{
     CellStateDelta, DEFAULT_SOVEREIGN_TTL, Ledger, LedgerDelta, LedgerError, MembershipProof, Side,
-    SovereignHistory, SovereignRegistration, WitnessDiff,
+    SovereignHistory, SovereignRegistration, SovereignSideDelta, WitnessDiff,
 };
 pub use lifecycle::{
     ArchivalAttestation, CellLifecycle, DeathCertificate, DeathReason, LifecycleTransitionError,

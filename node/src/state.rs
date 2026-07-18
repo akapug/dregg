@@ -911,6 +911,30 @@ impl NodeState {
                 tracing::warn!(error = %e, "failed to apply durable commit-log overlay on recovery");
             }
         }
+        // The SOVEREIGN half of the overlay (#57 residual): the hosted overlay
+        // above carries post-states and tombstones only, so a post-checkpoint
+        // MakeSovereign commitment insert, commitment update, TTL-registration
+        // update, or deregistration lives in the per-turn sovereign sidecar —
+        // apply it here or the side maps silently revert to their checkpoint
+        // values (invisible to the hosted-only convergence root). Applied
+        // OUTSIDE the hosted-overlay arm: a sovereign-only turn contributes no
+        // hosted op at all.
+        match store.sovereign_overlay_since(checkpoint_height) {
+            Ok(delta) if !delta.is_empty() => {
+                tracing::info!(
+                    commitment_upserts = delta.commitment_upserts.len(),
+                    commitment_removed = delta.commitment_removed.len(),
+                    registration_upserts = delta.registration_upserts.len(),
+                    registration_removed = delta.registration_removed.len(),
+                    "applied durable sovereign side-map overlay on recovery"
+                );
+                ledger.apply_sovereign_side_delta(&delta);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to apply durable sovereign overlay on recovery");
+            }
+        }
         let (events_tx, _) = broadcast::channel(4096);
 
         // Derive the silo ID from the cipherclerk's public key.
@@ -1118,6 +1142,17 @@ impl NodeState {
                     dregg_types::hex_encode(&expected),
                 ));
             }
+        }
+        // The SOVEREIGN half of the overlay (#57 residual), mirroring
+        // `new_with_key_file`: apply the per-turn sovereign side-map deltas or
+        // a post-checkpoint sovereign transition silently reverts on restart.
+        // Applied unconditionally (a sovereign-only turn has no hosted op, so
+        // the hosted-overlay guard above never sees it); does not perturb the
+        // convergence check (the canonical root folds hosted cells only).
+        if let Ok(delta) = store.sovereign_overlay_since(checkpoint_height)
+            && !delta.is_empty()
+        {
+            ledger.apply_sovereign_side_delta(&delta);
         }
 
         let (events_tx, _) = broadcast::channel(4096);
@@ -2869,6 +2904,238 @@ mod crash_recovery_overlay_tests {
             recorded_root,
             "the resurrected ledger root must DIVERGE from the recorded finalized root — \
              the tombstone dimension is what makes recovery converge"
+        );
+    }
+
+    // ── #57 residual: sovereign side-map durability across a reboot ──────────
+    //
+    // The four falsifiers of the sovereign half: the sovereign side maps were
+    // persisted ONLY at checkpoint granularity, and `touched_cells`/`removed`
+    // are hosted-only, so each of these post-checkpoint transitions was
+    // silently lost (or reverted) on a pre-checkpoint reboot — invisible to
+    // the recovery-convergence check (`canonical_ledger_root` folds hosted
+    // cells only). Each test drives the REAL recovery path
+    // (`NodeState::with_cclerk`: torn-tail recovery → checkpoint → hosted
+    // overlay → sovereign overlay) against a store seeded the way the
+    // finalized-turn producer now commits (record + sovereign sidecar in one
+    // transaction).
+
+    /// The commit `ledger_root` the recovery convergence walk must reproduce:
+    /// the canonical root of the given HOSTED cells (the sovereign side maps
+    /// are invisible to it — exactly why this bug class needed its own carrier).
+    fn hosted_root(cells: &[Cell]) -> [u8; 32] {
+        let mut ledger = Ledger::new();
+        for c in cells {
+            ledger.insert_cell(c.clone()).expect("hosted cell");
+        }
+        crate::blocklace_sync::canonical_ledger_root(&ledger)
+    }
+
+    /// A finalized-turn record at height 2 (above the height-1 checkpoint).
+    fn sovereign_turn_record(
+        removed: Vec<[u8; 32]>,
+        ledger_root: [u8; 32],
+    ) -> dregg_persist::CommitRecord {
+        dregg_persist::CommitRecord {
+            ordinal: 0,
+            height: 2,
+            block_id: [0u8; 32],
+            block_executed_up_to: 0,
+            turn_hash: [0xe1; 32],
+            creator: [0u8; 32],
+            receipt_hash: [0xe2; 32],
+            ledger_root,
+            touched_cells: vec![],
+            removed,
+        }
+    }
+
+    /// A full TTL registration post-state with `commitment`.
+    fn registration(commitment: [u8; 32]) -> dregg_cell::SovereignRegistration {
+        dregg_cell::SovereignRegistration {
+            commitment,
+            registered_at: 1,
+            ttl_blocks: 1000,
+            last_activity: 1,
+            verification_key_hash: None,
+            max_custom_effects: None,
+            owner_public_key: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn make_sovereign_commitment_survives_pre_checkpoint_reboot() {
+        // (a) MakeSovereign AFTER the last checkpoint, reboot BEFORE the next
+        // one: the hosted removal must apply AND the cell must be SOVEREIGN
+        // with its commitment — not merely gone (the pre-fix state: tombstone
+        // recovered, commitment lost).
+        let seed = 0x75;
+        let commitment = [0x5c; 32];
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cid = cell(seed, 100).id();
+        {
+            let store = PersistentStore::open(&tmp.path().join("dregg.redb")).expect("open");
+            let mut checkpoint_ledger = Ledger::new();
+            checkpoint_ledger
+                .insert_cell(cell(seed, 100))
+                .expect("seed hosted cell");
+            store
+                .checkpoint_ledger(&checkpoint_ledger, 1)
+                .expect("checkpoint");
+            let rec = sovereign_turn_record(vec![cid.0], hosted_root(&[]));
+            store
+                .commit_finalized_turn_with_notes_and_sovereign(
+                    0,
+                    &rec,
+                    &[],
+                    &dregg_cell::SovereignSideDelta {
+                        commitment_upserts: vec![(cid, commitment)],
+                        ..Default::default()
+                    },
+                )
+                .expect("commit MakeSovereign turn");
+        }
+
+        let state = NodeState::with_cclerk(tmp.path(), vec![], [0x22u8; 32]).expect("recover");
+        let guard = state.read().await;
+        assert!(
+            guard.ledger.get(&cid).is_none(),
+            "the hosted half (tombstone) must still apply"
+        );
+        assert!(
+            guard.ledger.is_sovereign(&cid),
+            "a MakeSovereign committed after the last checkpoint must SURVIVE a \
+             pre-checkpoint reboot as sovereign — not be silently lost"
+        );
+        assert_eq!(
+            guard.ledger.get_sovereign_commitment(&cid),
+            Some(&commitment),
+            "the recovered sovereign commitment must be the committed one"
+        );
+    }
+
+    #[tokio::test]
+    async fn sovereign_commitment_update_survives_reboot_without_touched_cells() {
+        // (b) a verified commitment UPDATE on an ALREADY-sovereign cell: the
+        // turn touches NO hosted cell (`touched_cells` and `removed` both
+        // empty), so before the sidecar the update had NO durable carrier at
+        // all and reverted to the checkpoint value on reboot.
+        let cid = dregg_cell::CellId([0x33; 32]);
+        let old_commitment = [0x0a; 32];
+        let new_commitment = [0x0b; 32];
+        let tmp = tempfile::tempdir().expect("tempdir");
+        {
+            let store = PersistentStore::open(&tmp.path().join("dregg.redb")).expect("open");
+            let mut checkpoint_ledger = Ledger::new();
+            checkpoint_ledger
+                .register_sovereign_cell(cid, old_commitment)
+                .expect("seed sovereign cell");
+            store
+                .checkpoint_ledger(&checkpoint_ledger, 1)
+                .expect("checkpoint");
+            let rec = sovereign_turn_record(vec![], hosted_root(&[]));
+            store
+                .commit_finalized_turn_with_notes_and_sovereign(
+                    0,
+                    &rec,
+                    &[],
+                    &dregg_cell::SovereignSideDelta {
+                        commitment_upserts: vec![(cid, new_commitment)],
+                        ..Default::default()
+                    },
+                )
+                .expect("commit commitment-update turn");
+        }
+
+        let state = NodeState::with_cclerk(tmp.path(), vec![], [0x22u8; 32]).expect("recover");
+        let guard = state.read().await;
+        assert_eq!(
+            guard.ledger.get_sovereign_commitment(&cid),
+            Some(&new_commitment),
+            "a post-checkpoint sovereign-commitment UPDATE must survive reboot — \
+             not revert to the checkpoint value"
+        );
+    }
+
+    #[tokio::test]
+    async fn sovereign_registration_update_survives_reboot() {
+        // (c) a TTL-registration commitment update on an already-registered
+        // cell: same shape as (b) on the `sovereign_registrations` map.
+        let cid = dregg_cell::CellId([0x44; 32]);
+        let new_commitment = [0x0d; 32];
+        let tmp = tempfile::tempdir().expect("tempdir");
+        {
+            let store = PersistentStore::open(&tmp.path().join("dregg.redb")).expect("open");
+            let mut checkpoint_ledger = Ledger::new();
+            checkpoint_ledger
+                .register_sovereign_cell_with_vk(cid, [0x0c; 32], 1, 1000, None)
+                .expect("seed registration");
+            store
+                .checkpoint_ledger(&checkpoint_ledger, 1)
+                .expect("checkpoint");
+            let rec = sovereign_turn_record(vec![], hosted_root(&[]));
+            store
+                .commit_finalized_turn_with_notes_and_sovereign(
+                    0,
+                    &rec,
+                    &[],
+                    &dregg_cell::SovereignSideDelta {
+                        registration_upserts: vec![(cid, registration(new_commitment))],
+                        ..Default::default()
+                    },
+                )
+                .expect("commit registration-update turn");
+        }
+
+        let state = NodeState::with_cclerk(tmp.path(), vec![], [0x22u8; 32]).expect("recover");
+        let guard = state.read().await;
+        assert_eq!(
+            guard
+                .ledger
+                .get_sovereign_registration(&cid)
+                .map(|r| r.commitment),
+            Some(new_commitment),
+            "a post-checkpoint TTL-registration update must survive reboot — \
+             not revert to the checkpoint value"
+        );
+    }
+
+    #[tokio::test]
+    async fn sovereign_deregistration_survives_reboot() {
+        // (d) a DEREGISTRATION after the checkpoint: the checkpoint holds the
+        // sovereign entry, the removal's only carrier is the sidecar — without
+        // it the deregistered cell resurrected as sovereign on reboot.
+        let cid = dregg_cell::CellId([0x55; 32]);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        {
+            let store = PersistentStore::open(&tmp.path().join("dregg.redb")).expect("open");
+            let mut checkpoint_ledger = Ledger::new();
+            checkpoint_ledger
+                .register_sovereign_cell(cid, [0x0e; 32])
+                .expect("seed sovereign cell");
+            store
+                .checkpoint_ledger(&checkpoint_ledger, 1)
+                .expect("checkpoint");
+            let rec = sovereign_turn_record(vec![], hosted_root(&[]));
+            store
+                .commit_finalized_turn_with_notes_and_sovereign(
+                    0,
+                    &rec,
+                    &[],
+                    &dregg_cell::SovereignSideDelta {
+                        commitment_removed: vec![cid],
+                        ..Default::default()
+                    },
+                )
+                .expect("commit deregistration turn");
+        }
+
+        let state = NodeState::with_cclerk(tmp.path(), vec![], [0x22u8; 32]).expect("recover");
+        let guard = state.read().await;
+        assert!(
+            !guard.ledger.is_sovereign(&cid),
+            "a post-checkpoint deregistration must survive reboot — the entry \
+             must NOT resurrect from the checkpoint"
         );
     }
 
