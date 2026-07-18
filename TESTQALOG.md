@@ -1324,3 +1324,1685 @@ constructs (`membership_verified`, no `added_checks_commitment`) do not even mat
 untouched; the doc-hidden `MockProver` alias keeps it name-resolvable if that feature is ever turned on.
 
 **Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — fhegg-spike/lane5 — no-viewer trust-story scoping: the brief's map is one night stale; the real gap is a party runtime + t-of-n lattice keys, and mbfv already ships the partial-decrypt primitive
+
+Design lane (read-only, no code). Findings verified from CODE, not docs:
+
+- **The brief's seam map moved overnight.** `fhegg-fhe/src/boundary.rs` (commit `81cdaae11`,
+  2026-07-17 03:53 — AFTER the readiness doc `74ed9fed8`, 07-16 23:31) implements MASKED
+  decrypt-to-shares (mask-then-decrypt one-time pad over Z_t, enumeration-proven
+  `pad_is_exact_and_secret_independent`, KAT vs direct decrypt + plaintext reference), with a measured
+  envelope (`OUTPUT-BOUNDARY-MPC.md` §7.5: AGG→p* 17–76 ms). The "BFV+MPC path decrypts at the seam"
+  claim now applies only to the older `mpc_bench.rs:90` harness; `boundary_bench.rs` never opens a curve
+  coefficient. Line drift: the hard-coded BFV seed is `additive.rs:137` (brief said :119-124), plus a
+  second fixed seed `boundary.rs:248`.
+- **`fhe.rs 0.1.1` — already in the lockfile — ships `mbfv`** (Mouchet et al. ePrint 2020/304):
+  collective keygen (`PublicKeyShare`+`CommonRandomPoly`), collective decryption (`DecryptionShare`),
+  key-switch. So "threshold-committee decrypt ABSENT in code" is true of fhegg's code but the n-of-n
+  partial-decrypt primitive exists upstream in the exact dependency. Caveats verified in registry source:
+  n-of-n only (no t-of-n), and the smudging noise is a literal upstream TODO
+  (`mbfv/secret_key_switch.rs:76` "TODO this should be exponential in ciphertext noise!") — the
+  IND-CPA-D noise channel `boundary.rs:54-57` names is open UPSTREAM too.
+- **Doc-residual found (forgery-class if shipped):** `OUTPUT-BOUNDARY-MPC.md` §7.5/§8 says production
+  = "point the EXISTING federation threshold-decrypt at ct'". `federation/src/threshold_decrypt.rs` is a
+  SYMMETRIC-key Shamir prototype with a TRUSTED DEALER (`generate_epoch_key`), and `combine_shares`
+  RECONSTRUCTS the full key at the combiner. Pointed at a BFV secret key, the combiner would hold sk —
+  which decrypts EVERY submitted order ciphertext, i.e. exactly the standing master key §3 of that doc
+  claims does not exist. The correct production shape is mbfv-style partial decryption (sk never
+  reconstructed), which that stack cannot do. Doc needs the fix; no code edited (lane rule).
+- Decision memo (3 candidate paths + key-management story) returned to the supervisor as lane output.
+
+**Committed NOTHING — supervisor gates.** No files edited except this log.
+
+## 2026-07-17 — fhegg-spike/lane1 — allocation was already done (verified from code); built the missing wire half: versioned serde types + tick↔bucket map, 16 tests, 3 mutations bitten
+
+The brief asked for (a) per-order allocation + (b) wire types. **(a) already existed** — the
+readiness doc's "HALF DONE" claim verified from CODE, not the doc: `fhegg-solver/src/clearing.rs::
+{allocate, ration}` (short side fills fully, long side pro-rata largest-remainder) with
+`Allocation::validate` and the Lean golden vectors; all 11 clearing tests green on persvati. Did NOT
+duplicate it into `fhegg-fhe` (the brief's stated locus) — the settleable engine lives solver-side
+and the FHE crate's types stay wire-less by the doc's own §4.4 rule.
+
+**Built (b): `fhegg-solver/src/wire.rs`** (+ `pub mod wire` in `lib.rs`; nothing else touched):
+
+- `TickGrid` — bucket `j` ↔ integer price `base + j·tick` at scale `10^priceExponent`. Off-grid /
+  out-of-range prices REFUSED, never rounded (silent rounding fabricates willingness the trader
+  never expressed — the out-of-domain-ask bug class). Grid overflow / k=0 / k>2^20 refused.
+- `WireOrder`/`WireBook`/`WireFill`/`Settlement` — `version: 1` pinned (wrong version refused both
+  on parse and settle), `deny_unknown_fields` (a typo'd field in a settlement format is a money
+  bug), opaque unique order IDs (empty/duplicate refused), fills ID-keyed AND exhaustive
+  (zero fills listed), clearing price emitted as index AND real grid price, `null` when uncrossed.
+- `settle()` — validate → lower to buckets → the EXISTING `clear`+`allocate` (rule untouched) →
+  gate on `Allocation::validate` before emitting. Checked qty grand-total so the u64 curve fold
+  cannot wrap. `Settlement::verify(book)` re-derives everything and names the first divergence —
+  wire-level verify-not-find an SDK consumer can gate on.
+- Rationing convention NAMED in the module doc: pro-rata by qty across ALL active long-side orders
+  (the rule `FhEggAllocation.lean` proves), NOT price-priority/marginal-bucket-only; a policy change
+  is a new wire version, never a silent reinterpretation of v1.
+
+**Tests (16, all green; 91/91 crate lib total):** Lean workBook golden vector through the wire on
+real prices (105 = bucket 1, fills 5/3/3/5 by ID); a GOLDEN JSON SNAPSHOT pinning the exact v1
+field layout; book round-trip; refusal teeth (version, unknown field, dup/empty ID, off-grid ×3,
+zero qty, empty book, qty overflow, 4 malformed grids); uncrossed → null price + zero fills;
+verify-tamper (stolen unit, swapped IDs, price lie, volume lie, rebrand — all refused); a 300-book
+seeded property test asserting conservation + IR at the REAL price + per-order cap + byte-for-byte
+determinism FROM SCRATCH against the wire types (with generator-coverage asserts: ≥50 crossed,
+≥10 rationed); exact deterministic largest-remainder vectors for the rationed long side.
+
+**Mutations (rule 3, each red-then-restored on persvati):** (1) ration tie-break flipped to
+smallest-remainder → 5 tests red (both Lean golden vectors + 3 wire tests); (2) `bucket_of_price`
+exactness check removed (silent round-down) → 2 red; (3) `orderId` field renamed → snapshot red.
+
+Clippy: 0 new warnings (5 pre-existing in gpu.rs/pricecert.rs, untouched). `cargo check
+--all-targets` green. Doc updated: FHEGG-SDK-READINESS.md §1 row 1 + §4.1 marked DONE-both-halves.
+
+**Committed NOTHING — supervisor gates.** Files: `fhegg-solver/src/wire.rs` (new),
+`fhegg-solver/src/lib.rs` (+1 line), `docs/deos/FHEGG-SDK-READINESS.md`, this log.
+
+## 2026-07-17 — fhegg-spike/lane2 — Cert-F generalized past ring-3: generic emit-soundness, ε-budget bridge, market4 registered + REAL solve proven
+
+Roadmap §4.2, all three items, plus one found-and-fixed theorem gap.
+
+**(0) FOUND while generalizing (verify-from-code paid off):** the old `certFDescriptor_emit_sound`
+bundle exposed `g ≥ 0` but NEVER extracted the gap GATE congruence — so the keystone as stated
+never touched ε at all (`0 ≤ a gCol` over an unpinned column). The gate was in the descriptor and
+did vanish under `Satisfied2`; the theorem just didn't say it. Fixed: new
+`certFDescriptor_gap_gate_sound` (`g ≡ ε − (cᵀs − wᵀf)`) and `certFDescriptor_obj_gate_sound`
+(`obj ≡ wᵀf`) via two foldl-eval lemmas; the bundle now carries all gate pins (u, d, g, obj).
+
+**(a) Generic over the program (not a named family):** every §6 theorem in
+`metatheory/Market/CertFDescriptor.lean` is now quantified over `p : CertFProg` —
+`constTrace p`, `gate_vanishes`, `obj_pi_bound`, the six membership lemmas, the six family
+soundness theorems, and `certFDescriptor_emit_sound p`. Proofs went through essentially
+mechanically (the membership bookkeeping never depended on ring-3 shape). Kernel-clean:
+`#assert_all_clean` 10 keystones + `#assert_namespace_axioms` 35 theorems. Consequence stated in
+the file header: registering a new `(A,w,c,ε)` costs emission + byte-pin + registry entry, NO new
+proof. Scope unchanged and honest: field-level mod-p congruences under the canonicity hypothesis;
+integer lift rides the documented `VALUE_BITS` no-wrap side conditions.
+
+**(b) The ε trap fixed at the bridge:** `from_solution_json` set `ε := achieved gap`, which can
+never equal a registered budget unless the solve lands exactly tight — so even ring-3-shaped real
+solves were refused. New `from_solution_json_with_epsilon(json, scale, budget)` (circuit-prove
+`cert_f_air.rs`): ε is the PRESCRIPTIVE registered budget, bridge REFUSES achieved gap > budget
+(named error). Descriptive form kept and documented as tight-only. `CERT_F_REGISTRY` replaces
+`is_registered_ring3_program` (matches program constants INCLUDING the ε budget);
+`cert_f_prove` CLI takes `CERT_F_EPSILON`.
+
+**(c) First real market shape registered:** `market4Prog` (`CertFDescriptor.lean` §4b) — the
+3-asset/4-order DrEX trade-circulation batch under `fhegg_clear.rs`'s real mapping
+(nodes=assets, edge per order want→offer, cap=offerAmount, weight=priority), fixed-point scale
+100, ε budget 2000 (~1.1% of the 180000 optimum). Emitted via new `EmitCertFMarket4.lean`,
+committed at `circuit/descriptors/dregg-cert-f-market4-ir2.json` (140495 bytes), byte-pinned as
+`CERT_F_MARKET4_GOLDEN` (#guard) and wired into `scripts/emit_descriptors.py` (both Cert-F
+emitters re-verified BYTE-IDENTICAL to committed artifacts; ring-3 bytes unmoved by the
+generalization).
+
+**Tests (circuit-prove lib, 20/20 green, real BabyBear+FRI STARK):** new —
+`market4_check_is_valid_tight`, `stark_proves_and_verifies_market4` (width-497 artifact, pis =
+180000), `stark_market4_epsilon_budget_accepts_nonzero_gap` (a GENUINE gap-1000 cert proves under
+the 2000 budget; inline mutation tooth: same witness with old descriptive ε=1000 fails closed
+"not registered"), `stark_market4_refuses_gap_over_budget` (gap 5000 → STARK-refused),
+`stark_proves_real_market4_pdhg_solve` (REAL `solve_cpu` 8000 iters → `restore_feasibility` →
+CertF JSON → prescriptive bridge at scale 100 → prove → verify; public input = the solve's own
+wᵀf), `bridge_with_epsilon_refuses_over_budget_gap`. **Mutation run on the registry tooth:**
+market4 entry pointed at ring-3's artifact → 3 tests red (width 497 ≠ 381 caught at prove) →
+restored → 20/20 green.
+
+**Named residuals (honest):** (1) registration is per-program-CONSTANTS — every distinct live
+batch is a new emit+pin; arbitrary batches need a runtime Lean emitter or a verified Rust twin of
+`certFDescriptorOf` (now meaningful, since the generic theorem covers the twin's whole codomain).
+(2) The f64→integer bridge rounds entrywise; a degenerate solve can break exact integer
+conservation (bridge refuses honestly; a conserving integer-rounding pass is unbuilt).
+(3) `cert_f_descriptor_matches_lean` is now tautological (parses the same committed file twice) —
+retire-or-repoint candidate, left for the supervisor. (4) Witness-hiding remains named, not
+discharged (unchanged). (5) `scripts/emit_descriptors.py` FULL run is currently blocked by
+another lane's in-flight metatheory WIP (stale oleans mid-rebuild: `EffectVmEmitV2`,
+`QuantifiedAbsenceEmit`) — NOT caused by this lane; my two emitters verified in isolation.
+
+Docs: FHEGG-SDK-READINESS.md §1 Cert-F-verified row + §4.2 trued up. **Committed NOTHING —
+supervisor gates.** Files: `metatheory/Market/CertFDescriptor.lean`,
+`metatheory/Market/CertFGolden.lean` (+MARKET4 golden), `metatheory/EmitCertFMarket4.lean` (new),
+`circuit/descriptors/dregg-cert-f-market4-ir2.json` (new), `scripts/emit_descriptors.py`,
+`circuit-prove/src/cert_f_air.rs`, `circuit-prove/src/bin/cert_f_prove.rs`,
+`docs/deos/FHEGG-SDK-READINESS.md`, this log.
+
+## 2026-07-17 — 4swarm/bfv-sizing — Lean-first BFV costed: GO for fold+n-of-n (surface is ~1/3 of fhe.rs because NO multiplication ever rides this path); the "wrong params" observable is a noise-MARGIN meter, not decryption success
+
+Design/costing lane, read-mostly — NO code written, NO production files touched (this log only).
+Full decision memo returned to the supervisor. Facts verified from code/registry, not docs:
+
+- **The consumed fhe.rs surface is exactly 2 files**: `fhegg-fhe/src/additive.rs` +
+  `fhegg-fhe/src/boundary.rs` (rg over workspace). API surface used: `BfvParameters` /
+  `Plaintext::try_encode(SIMD)` / `PublicKey::try_encrypt` / `Ciphertext::zero`+`+=` /
+  `SecretKey::try_decrypt`+decode. NO mult, NO relin, NO rotations, NO key-switch, NO mod-switch —
+  and post-`boundary.rs` (masked-decrypt→MPC crossing, 0.9–7 ms replaces the 12–17 s TFHE crossing)
+  none are EVER needed on the no-viewer path. That kills ~4.5k LOC of fhe.rs's 13.8k
+  (mul/relin/galois/evaluation/rgsw/keyswitch/mod-chain) from the costing, and makes the noise
+  analysis LINEAR (additive-only, worst-case ℓ∞ — no canonical-embedding average-case machinery).
+- **fhe.rs ground truth** (unpacked 0.1.1 via lcrio): fhe+fhe-math = 13,792 LOC; smudging TODO
+  confirmed at `mbfv/secret_key_switch.rs:76` (smudge sampled at FRESH-noise variance
+  `par.variance=10` CBD, not exponential-in-ciphertext-noise); mbfv is n-of-n only, 2-element cts
+  only; params degree-4096 = HE-standard moduli {0xffffee001, 0xffffc4001, 0x1ffffe0001} = 109-bit q
+  (exactly the HE-standard 128-bit cap for n=4096 — ZERO slack for q growth); sk AND errors both
+  CBD(10) → bounded ±10 BY CONSTRUCTION (a verification gift: noise-bound hypotheses are syntactic).
+- **Headroom arithmetic (ESTIMATE, to be Lean-`decide`-pinned)**: Δ/2 = q/2t ≈ 2^88 (t=1,032,193 ≈
+  2^20 ≡ 1 mod 8192, verified); fresh pk-enc noise ~2^20, N=4096-deep fold ~2^32, +2^40 flooding
+  smudge ~2^72 < 2^88 ✓ — proper smudging FITS in the existing param set; no n=8192 forced.
+- **Silent-failure taxonomy for the memo's §2 deliverable** (each with an observable + a mutation
+  that goes red): (A) noise budget — the observable is measured noise-margin vs a Lean-emitted
+  bound (KAT pass/fail is a CLIFF, margin is a METER), production decrypt REFUSES at bound ≥ Δ/2;
+  (B) lattice security — NOT observable at runtime ever; pin an estimator artifact + build gate;
+  (C) plaintext-modulus wrap (bucket sums ≥ t fold WRAPS silently — t=2^20 vs u16 qtys means
+  N·qmax caps must be REFUSED at ingest, pinned `N_max·q_max < t` in Lean); (D) smudging — no
+  distinguisher test can show it; the observable is a fail-closed sampler gate (σ_smudge ≥
+  2^λ·noise_meter) + the classical flooding lemma in Lean (uniform case = easy, matches the repo's
+  enumeration-proof style); (E) slot-map bugs — benign for fold (slot-wise adds commute with any
+  fixed permutation) but named for the day rotations arrive.
+- Costing: Phase 1 (fold-only, single-key, drops fhe.rs from the fold path) ≈ 2.0–2.5k Rust +
+  2.5–4k Lean (±2×) — comparable to the existing FhEgg Lean corpus (4,051 LOC across 7 files).
+  Phase 2 (n-of-n threshold + PROPER smudging, the thing NO dependency offers) ≈ +500–700 Rust +
+  ~1k Lean. t-of-n = named design decision (Lagrange-coefficient noise blowup), not costed as
+  engineering. Phase 0 (noise meter + differential harness vs fhe.rs-as-test-oracle + estimator
+  pin) is no-regret and starts against fhe.rs TODAY.
+
+Files touched: /Users/ember/dev/breadstuffs/TESTQALOG.md (this entry) ONLY. Dirty-file rule
+respected: nothing edited. **Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — 4swarm/fic-sel4-captp — adversarial re-audit of the low-level trust boundaries: NO new forgery found; session's fixes re-verified from CODE and confirmed biting
+
+Read-only fiction hunt across `sel4/dregg-firmament/`, `captp/`, `cell-crypto/`, `wire/`.
+Hunted the session taxonomy (fail-open/rubber-stamp verify, structurally-can't-verify stubs,
+false-cognate `*_air`/`*_prover`/`*_verify` names, TOFU-presented-as-authenticated). Verdict:
+these crates are genuinely hardened — largely BECAUSE this session already found the forgery-class
+bugs here (peer_exchange x2, blocklace evidence). I independently re-verified each fix from code and
+found NO new forgery-class fiction. Nothing needed editing; per rule 2 the honest result is "the
+premise (that more fictions lurk here) did not hold for this lane."
+
+### Every signature/MAC/attestation verify checked against its trust model (all PASS)
+- **Ed25519 strictness (the session's highest-value invariant):** every first-party verify resolves
+  to `verify_strict`. `dregg_types::PublicKey::verify` (`types/src/lib.rs:70`) is `verify_strict`
+  internally — so `captp/src/handoff.rs` (`verify_signature`/`verify_recipient_signature`),
+  `captp/src/custody.rs:184 sig_verifies`, `captp/src/ocapn/session.rs:325 verify_location_sig`, and
+  `wire/src/server.rs` (`pk.verify`/`authority.verify`) are all strict despite calling bare `.verify`.
+  Raw `ed25519_dalek` uses are `verify_strict` directly: `cell-crypto/src/capability_proof.rs:523`,
+  `cell-crypto/src/note_bridge.rs:1170 verify_bridge_receipt`, `cell-crypto/src/lib.rs:62
+  verify_parent_signature`, `cell-crypto/src/peer_exchange.rs:266 verify_transition`. The ONLY
+  non-strict `vk.verify` in the lane is `peer_exchange.rs:798` — inside the
+  `small_order_pubkey_forgery_rejected_by_strict_verify` control test (deliberate, asserts the
+  forgery the strict path refuses). No fail-open.
+- **peer_exchange fail-OPEN fixes (session's) re-verified biting:** `verify_transition` (a) strict
+  verify on caller-supplied `peer_pubkey`, and (b) the `transition_proof` gate now REJECTS
+  unconditionally (was `#[cfg(feature="zkvm")]`-gated in a crate with no such feature ⇒ silently
+  ignored ⇒ fail-open). Both fixes present and correct at `cell-crypto/src/peer_exchange.rs:266-360`.
+- **Hybrid (ed25519 ∧ ML-DSA-65) authenticators all fail-CLOSED with identity-commitment binding:**
+  `capability_proof.rs:356 verify` (MissingPqPublicKey / IdentityCommitmentMismatch / MissingPqSignature
+  / InvalidPqSignature all reject), `handoff.rs:930 validate_handoff_hybrid`, wire member-auth
+  (`server.rs:1856`, `commit_ok` requires ML-DSA present ⇒ `None => false`, strictly hybrid, no
+  downgrade), wire revocation (`server.rs:2484`, fail-closed on empty authority list + whitelist +
+  hybrid). ML-DSA is real: `ml_dsa_cap_verify → dregg_pq::ml_dsa_verify` → `fips204` crate v0.4.6 +
+  Lean-verified core (`dregg-pq/src/mldsa.rs`), not a stub. The one documented downgrade
+  (revocation legacy authority `None => true`) is operator-config-gated staged rollout, not
+  attacker-reachable — honestly named in-code, not a fiction.
+- **`verify_portable_note` (`note_bridge.rs:1223`) closure contract traced to the DEPLOYED caller:**
+  the doc delegates nullifier/value/asset binding to the injected `verify_stark` closure; the deployed
+  path (`turn/src/executor/apply.rs:1944`) passes a closure that calls `verify_note_spend_descriptor2`
+  binding all 7 PI slots INCLUDING the full u64 value via two 30/34-bit limbs. Value-inflation /
+  nullifier-forgery is genuinely closed at deployment, not just in the doc.
+
+### False-cognate / stub scan — all names tell the truth
+- `captp/src/verified_gate.rs` is an HONEST seam (returns `None` when the Lean gate is unlinked, Rust
+  lattice decides) — not a rubber stamp. `captp/src/fraud_proof.rs:258 verify` delegates the honored-vs-
+  dropped decision to the real `adjudicate_from_inbox` referee after a real signature+deadline gate.
+- `wire/src/server.rs` default verifier is `StarkVerifier` (real p3 descriptor verify, action-binding +
+  fail-closed descriptor resolve). `NoopVerifier` appears ONLY in `#[cfg(test)]` configs, never as a
+  production default. `StarkVerifier` has a non-vacuous end-to-end round-trip + tamper-reject tests.
+- CapTP peer-role promotion (`server.rs:2133 authenticate_as_captp_peer` via `CapHello`) is NOT a TOFU
+  bypass: when auth is enforced, `check_role_permission` (`server.rs:2195`) rejects `CapHello` from an
+  Anonymous role BEFORE the promotion line, so `CapTpPeer` is only reachable in the no-auth backward-compat
+  mode (which already allows everything). Object-capability authority is verified per-invocation
+  (swiss/sturdyref `enliven`, `validate_handoff` non-amplification), not by connection role.
+- sel4 firmament capability gates use the REAL `dregg_cell::is_attenuation` (`process_kernel.rs:343
+  validate_for`, `distributed.rs:119 invoke`); `distributed.rs:145 delegate` builds a GrantCapability
+  effect and runs it through the REAL `TurnExecutor::execute`, so `granted ⊆ held` is enforced by the
+  deployed executor, not reinvented. `surface.rs:94 set_verification_key: AuthRequired::None` is a
+  demo-seed cell with honestly-labeled permissive permissions, not a trust-boundary fail-open.
+
+### Build
+`scripts/pbuild srot cargo check -p dregg-firmament -p dregg-captp -p dregg-cell-crypto` → exit 0
+(dead_code warnings only). Note: `sel4/dregg-firmament/Cargo.toml`'s header comment still calls it a
+"STANDALONE workspace ... NOT a member of the repo-root workspace", but it IS now a root
+`default-member` (root Cargo.toml lines 16/23, folded per the "formerly standalone" comment at line 49).
+STALE COMMENT, not a fiction, not security-relevant — NAMED for a later doc-truing (not edited: no code
+surface, and I touch nothing I do not have to).
+
+### Dirty-file rule respected
+SKIPPED (held dirty by other lanes, read-only): `wire/src/server.rs`, `sel4/dregg-pd/deos-image/src/view.rs`.
+Read them to verify claims; edited neither.
+
+Files touched: `/Users/ember/dev/breadstuffs/TESTQALOG.md` (this entry) ONLY. **Committed NOTHING —
+supervisor gates.**
+
+## 2026-07-17 — 4swarm/fic-crypto — ACTIVE grinding break: `dregg-dice` bare `ServerVrf`/`LbVrf` verifier never binds the VRF pubkey to the request (proven by execution: 32 verifying seeds for one event id)
+
+**Scope hunted:** `crypto-hermine`, `crypto-tanuki`, `crypto-traccoon`, `crypto-hashrand`,
+`crypto-xmvrf`, `pqvrf`, and their reverse deps (federation/hermine, dice/pqvrf).
+
+### THE FIVE crypto-* primitives + pqvrf: adversarially verified, HONEST (no fiction)
+Read the verify paths from CODE, not docs. All are careful reference implementations whose
+boundaries match their code:
+- `pqvrf::verify` (LB-VRF, Esgin Set I): STRICT — canonical pk (`< q`), canonical output (`< p`),
+  exact challenge weight + ternary range, response ∞-norm bound, then BOTH Fiat–Shamir relations
+  with `w1` RECOMPUTED (not supplied). Uniqueness reduces to MSIS as claimed. No bypass.
+- `crypto-xmvrf::verify`: Merkle-committed hash VRF; `hash_leaf`/`hash_node` domain-separated
+  (`0x01`/`0x02`), `verify_path` binds leaf to `epoch` as index and checks length/range. The
+  X-VRF uniqueness fix is REAL (CR commitment, not a WOTS+ chain). No small-order/identity analog.
+- `crypto-tanuki`/`crypto-traccoon`/`crypto-hermine` verifies: check ∞-norms then the challenge
+  hash equality; the non-security acceptance bounds are self-disclosed (not the derived `B`).
+- `crypto-hashrand` beacon: commit binds party+contribution (length-framed, injective); combine is
+  a fixed-width count-prefixed multiset hash. Binding/domain-sep hold.
+All are marked "reference, NOT deployment-grade" and their reverse-dep wirings honor it
+(federation's hermine hybrid is default-off ML-DSA-preferred; dice's Hybrid path is sound).
+
+### THE FIND (forgery/grinding-class, ACTIVE) — pqvrf-adjacent, in `dice` + `attested-dm`
+`ServerVrf::seed()` (`dice/src/source.rs:447-472`) reads the LB-VRF **public key from the evidence
+itself** and runs `pqvrf::verify(&pk_from_evidence, event_id, output, proof)` — it NEVER checks that
+pk against `req` or any commitment. LB-VRF uniqueness is per-`(pk, x)`; with pk unconstrained, an
+adversarial evidence producer GRINDS the outcome: mint many one-time key epochs, eval each over the
+SAME `event_id`, and present whichever `(pk, output, proof)` yields the seed it wants. Every one
+verifies.
+
+**Proven by execution** (`dice/tests/zzz_ficcrypto_probe.rs`, run on persvati `srot`, GREEN):
+`GRIND: 32 distinct verifying seeds for ONE event id — the server picks the outcome`.
+32/32 minted keys produced `ServerVrf::seed(&req, &ev) == Ok(<distinct seed>)`.
+
+**ACTIVE, not latent.** `attested_dm::game::verify_seed` (`attested-dm/src/game.rs:3342`) — doc'd as
+"the pure seed verifier — the trust surface a light client runs" — routes
+`EvidenceKind::LbVrf { .. } => ServerVrf::seed(request, evidence)`, and attested-dm ships a live
+producer `SessionRandomness::LbVrf` (`game.rs:3387/3405/3443`, `ServerVrf::from_key_seed` +
+`try_evidence`). So a cheating server in the LB-VRF "post-quantum verifiable randomness" session mode
+grinds loot/combat rolls and the light client ACCEPTS. (The `Hybrid` path is SOUND — it binds pk via a
+genesis-committed key-chain Merkle membership check, `Hybrid::seed`/`game.rs:1350`
+`genesis_binding(...) != req.game_binding`. The bare `ServerVrf` is the fictional one.)
+
+**The claims this falsifies (docs lie, verified from code):**
+- `dice/src/lib.rs` security table row 4: "VRF one-output-per-input — **Closed by ServerVrf**/Hybrid"
+  — FALSE for ServerVrf alone.
+- `dice/src/source.rs:331-336`: "a per-event key committed in the request ... the verifier checks the
+  proof under the key the request committed to and **the server cannot swap keys**" — FALSE; `seed()`
+  performs no such check.
+- `dungeon-on-dregg/src/lib.rs:87` + `src/combat.rs:75-76` describe "the **non-grindable** `ServerVrf`"
+  — it is grindable.
+
+**The teeth that appear to guard this test the WRONG thing (why ~all-green missed it):**
+- `dice/tests/randomness.rs::server_vrf_swapped_key_is_rejected` swaps ONLY the pk in evidence,
+  leaving the ORIGINAL proof — so it fails for the trivial reason the stale proof does not verify under
+  the new pk. It never tests a FRESH consistent `(pk, output, proof)` under an attacker key.
+- `...::server_vrf_key_commitment_binds_the_request` only asserts `key_commitment(pk)` is a
+  deterministic/injective hash; it never calls `ServerVrf::seed`. The `key_commitment()` helper
+  (`source.rs:398`) that the doc says binds the request has **ZERO callers on the verify path**.
+
+### MISSING CAPABILITY — NAMED, not hand-authored (per HARD RULE 1)
+`ServerVrf::seed` must bind the evidence pk to a request commitment before accepting, mirroring
+`Hybrid::seed`. The correct binding is `key_commitment(pk) ⊆ req.game_binding` (the helper exists;
+wire it into `seed()` and reject on mismatch). I did NOT implement it: `game_binding` is opaque
+`Vec<u8>` with no defined format for the bare path, so enforcing it requires DEFINING that format —
+a contract/design decision the supervisor gates (inventing it here would be exactly the
+"hand-author a constraint to close a gap" the goal forbids). Two honest resolutions for the
+supervisor: (a) make `ServerVrf::seed` enforce `key_commitment(pk) ⊆ game_binding` (contract change,
+attested-dm's LbVrf producer must commit the key into game_binding); or (b) drop the standalone bare
+`ServerVrf` source and route attested-dm's `SessionRandomness::LbVrf` through the sound `Hybrid`
+key-chain. The genuinely non-grindable source (`Hybrid`) ALREADY EXISTS — this is a wiring/claim gap,
+not a missing primitive.
+
+### Files touched (absolute paths)
+- `/Users/ember/dev/breadstuffs/dice/tests/zzz_ficcrypto_probe.rs` (NEW — characterization pin,
+  green-today-because-broken; flip `> 1` to `== 1` when the binding lands)
+- `/Users/ember/dev/breadstuffs/TESTQALOG.md` (this entry)
+
+Verified on persvati `srot` (`cargo test -p dregg-dice --test zzz_ficcrypto_probe`, 1 passed).
+No product code/docs edited (fix is a gated design decision + shared tree). **Committed NOTHING —
+supervisor gates.**
+
+
+## 2026-07-17 — 4swarm/fic-federation — dkg-ceremony slashing witness was COFACTORED (small-order key forges a slash); + latent chain false-cognate NAMED
+
+Lane: hunt fictions in `federation/` + `chain/`, `eth-lightclient/`, `cosmos-lightclient/`.
+
+### FIXED — forgery-class hardening: `federation/src/dkg_ceremony.rs:317` `SignedCeremonyMsg::verify`
+`SignedCeremonyMsg::verify` verified round-message signatures with the COFACTORED
+`ed25519_dalek::Verifier::verify` (not `verify_strict`), against a roster-declared `auth_pk`
+(`RosterEntry.auth_pk`, participant data validated only for index by `validate_roster`). Same species
+as this session's blocklace bug (`e3a8d17cf`/`forged_exhibit...`): under a small-order key
+`A = identity` (compressed `y=1`, a canonical decodable WEAK key), the signature `(R=identity, s=0)`
+satisfies `R == s·B + h·A` for EVERY message — so a party holding NO SECRET forges a "signature" that
+cofactored-verifies. Because two such forgeries over CONFLICTING dealings feed
+`EquivocationEvidence::verify` (`self.first.verify && self.second.verify && bodies differ`), which is
+the self-certifying witness the court/obligation lane SLASHES a bonded participant's obligation cell on,
+a cofactored verify makes the SLASHING WITNESS FORGEABLE.
+- FIX: `vk.verify_strict(...)` (RFC 8032 §5.1.7 — denies weak keys and small-order `R`), dropped the
+  now-unused module-top `Verifier` trait import (line 57). `verify_strict` is inherent, no trait needed.
+- Honest blast-radius: this is NOT a universal cross-party forgery. `verify_strict` only differs from
+  cofactored for a WEAK key; an honest participant's full-order `auth_pk` is unforgeable either way. The
+  live exposure requires the VICTIM's own roster slot to carry a small-order key — which a content-
+  addressed ceremony a victim bonded would only hold if the victim declared it. So: a real robustness/
+  invariant gap on the security-critical slashing surface, correctly and zero-cost closed by strictness
+  (honest ed25519 sigs always pass `verify_strict`), NOT a critical live theft against honest keys.
+- TOOTH (mutation-PROVEN to bite): `dkg_ceremony::tests::federation_dkg_ceremony_smallorder_key_cannot_forge_slashing`
+  — takes two GENUINE conflicting dealings from dealer 1 (control: they convict under the honest roster),
+  swaps dealer 1's roster slot to the identity point (asserts `is_weak()` for non-vacuity), forges
+  `(R=id, s=0)`, asserts BOTH a single forged `SignedCeremonyMsg::verify` AND the assembled
+  `EquivocationEvidence::verify` are REFUSED. MUTATION: reverted the fix to `vk.verify` (+ re-added the
+  `Verifier` import) → test RED at dkg_ceremony.rs:1328 ("a no-secret forgery under a small-order roster
+  key must NOT verify. A cofactored Verifier::verify accepts it."); restored → GREEN.
+- STRICT-GUARD: removed the now-STALE `federation/src/dkg_ceremony.rs` allowlist entry (was
+  GRANDFATHERED/HELD-DIRTY). The module no longer imports the `Verifier` trait, so the guard's rot-check
+  would flag the entry as stale. Guard re-run: `no_unallowlisted_...` + `detector_is_non_vacuous` both ok.
+- VERIFIED on persvati `srot`: `cargo test -p dregg-federation --lib dkg_ceremony` → 8 passed;
+  `cargo test -p dregg-tests --test ed25519_strict_guard` → 2 passed.
+
+### NAMED — latent false-cognate (SAFE today, no prod caller; a trap for a future one)
+`chain/src/credential.rs:187 verify_credential_proof_locally` and
+`chain/src/withdraw.rs:345 verify_withdrawal_proof_locally` are named `verify_*_proof_locally` but return
+the proof's OWN self-committed `values.valid` bit after checking only metadata CONSISTENCY (root/predicate,
+nullifier/amount/recipient/token) — they do NOT cryptographically verify the STARK. Grep confirms ZERO
+non-test callers (only their own `#[cfg(test)]` tests); the authoritative path is `chain/src/verify.rs::
+verify_on_chain` → the SP1 verifier contract, which fail-closes to `ChainError::VerifierMissing` with no
+feature. So SAFE today, but the name reads as authoritative — any future off-chain authorization gate that
+calls it as "verify" gets a rubber-stamp. NAMED, not fixed (lane rule for latent; no caller to protect,
+and a real fix is a local-STARK-verify CAPABILITY, not a one-liner). Suggest a doc `⚠` in the style of
+`types.rs::verify_via_receipt_chain` (which documents its structure-only cognate exemplarily).
+
+### VERIFIED CLEAN (adversarially, from CODE — no fiction)
+- `federation/src/types.rs` quorum verifies (`is_valid_with_keys`, `verify_with_keys`,
+  `HybridQuorumCertificate::verify_with_keys`): dedup signers (HashSet, rejects duplicate voter),
+  threshold checks, strict verify via `dregg_types::PublicKey::verify` (types/src/lib.rs:70 is ALREADY
+  `verify_strict`). PQ signer-set bound EXACTLY to the ed25519 voter set.
+- `federation/src/frost.rs::verify_frost_quorum` already `verify_strict`; `verify_pq_quorum_half` dedups,
+  refuses `threshold==0`, out-of-range index, any invalid sig rejects the whole set.
+- `federation/src/receipt.rs::verify_hybrid_quorum_sigs`: dedup, PQ key PINNED to enrolled roster
+  (self-carried key must byte-match enrolled), `threshold==0`/misaligned-roster refused.
+- `federation/src/beacon.rs::verify_partial`: fail-closed — unknown/zero index, identity point, wrong
+  subgroup, pairing mismatch all reject.
+- `federation/src/types.rs::verify_via_receipt_chain` vs `_strict`: the false-cognate is EXPLICITLY
+  documented (⚠ "checks STRUCTURE only... does not check any executor signature... anyone can fabricate")
+  — the honest pattern, not a bug.
+- `federation/src/threshold_decrypt.rs`: honestly self-labeled prototype / trusted-dealer, with a Lean
+  differential (`threshold_decrypt_diff.rs`); the doc-forgery calling it production BFV threshold-decrypt
+  was already fixed by spike lane 5 (`e3a8d17cf`).
+- `frost.rs` `FrostTestDealer`/`HybridTestDealer`: explicitly named + doc'd TEST-ONLY (good naming, no
+  false-cognate).
+- `chain/src/verify.rs::verify_on_chain`: real contract call; fail-closed to `VerifierMissing` without a
+  feature; `mock_verify_on_chain` documented meaningful ONLY for this crate's own mock proofs.
+- Fail-open grep across all four crate trees (`return true|Ok(true)|=> true|\|\| true`): every hit is
+  legit (real contract-accept, retention-policy predicate, or a test mutation), no rubber-stamp verify.
+
+### Files touched (absolute)
+- `/Users/ember/dev/breadstuffs/federation/src/dkg_ceremony.rs` (verify_strict + import + tooth)
+- `/Users/ember/dev/breadstuffs/tests/tests/ed25519_strict_guard.rs` (removed stale allowlist entry)
+- `/Users/ember/dev/breadstuffs/TESTQALOG.md` (this entry)
+
+Both touched code files were CLEAN before this lane (not in the ~30 dirty). **Committed NOTHING —
+supervisor gates.**
+
+## 2026-07-17 — 4swarm/fic-apps — privacy-voting tally is NOT ballot-bound (forgery PROVEN); sealed-auction on-ledger reveal is unbound; breadth triage of the app layer
+
+BREADTH sweep over the app layer. What I ACTUALLY looked at (verify-from-code): the 3 security-named
+starbridge apps (sealed-auction, privacy-voting, escrow-market), dregg-governance, collective-choice,
+commons-arbiter, auditable-fund, and a glance at dreggnet-trade. NOT reached (named below).
+
+### ⚑ FINDING 1 (MEDIUM security, PROVEN + rigged) — privacy-voting: the tally board is trusted operator bookkeeping, NOT executor-enforced from ballots
+`starbridge-apps/privacy-voting`. README top-line claims: *"monotone, **tamper-evident** tallies —
+**enforced by the verified executor**."* CONTRADICTED by code:
+- `service.rs::record_tally` / `lib.rs::build_record_tally_action` (line 396) write a caller-supplied
+  `new_tally: u64` STRAIGHT into the poll's `Monotonic` tally slot (`SetField`), gated ONLY by
+  `Signature` (the poll operator's own key) + `Monotonic` (which merely forbids a DECREASE).
+- There is NO on-ledger binding between a ballot's `VOTE` write (`WriteOnce`, one-vote-per-ballot-CELL)
+  and a tally increment. `WriteOnce(VOTE)` gives one-vote-per-ballot-cell but that does NOT compose into
+  "the tally equals the count of cast ballots". The `reactor.rs` `record_tally` producer is an
+  OFF-ledger convenience (watches `cast_vote` receipts), not enforcement — the executor never requires a
+  `record_tally` to be backed by a ballot.
+- **Attack:** the poll operator posts any tally >= current with ZERO ballots. **PROVEN** by
+  `starbridge-apps/privacy-voting/tests/tally_forgery.rs::poll_operator_forges_a_tally_with_zero_ballots_cast`
+  (NEW, PASSES on persvati): opens a poll, casts NO ballots, submits `record_tally(YES, 1_000_000)` — it
+  COMMITS, and the published board reads 1,000,000 YES that never happened.
+- **Cross-app confirmation the class is known:** the sibling app `collective-choice` fixed EXACTLY this
+  (`collective-choice/src/tests.rs::forged_quorum_single_actor_inflating_a_tally_slot_is_refused`; its
+  `lib.rs` uses `AffineLe` weight-quorum + `CountGe` over the DISTINCT approver set + a one-vote
+  nullifier). privacy-voting's tally has NONE of these. dregg-governance is likewise hardened
+  (in-cell `AffineLe` + `CountGe` + nullifier). privacy-voting is the outlier.
+- **MISSING CAPABILITY (named, not faked):** a ballot->tally binding — a nullifier / `CountGe`-over-
+  distinct-ballots gate so the executor REFUSES a tally increment not backed by a fresh, unconsumed
+  ballot's `VOTE`. Until that lands, the tally is operator-attested, not executor-enforced. I did NOT
+  hand-rewrite the tally model (that is a feature, not a one-liner, and HARD RULE 1 says NAME it). The
+  test pins the current insecure behavior and goes RED if a real binding fix lands — the tooth in reverse.
+- Note: privacy-voting DOES gate WHO can cast (eligibility-credential caveat on the ballot) and
+  double-cast on one ballot (`WriteOnce(VOTE)`). The gap is specifically tally<->ballot correspondence.
+
+### FINDING 2 (LOW/design, NAMED) — sealed-auction: the ON-LEDGER reveal path does not bind reveal to commit
+`starbridge-apps/sealed-auction`. The pure `Auction` model (`lib.rs::reveal`, line 267) correctly enforces
+`reveal_binds_committed` (`commitments.contains(&bid.seal())`). But the ON-LEDGER floor — the census
+payoff the crate advertises — does NOT: `reveal_bid_effects` (line 817) merely `EmitEvent(bidder, value)`
+with NO check that `seal(bidder,value,nonce)` matches a committed `WriteOnce` seal slot, and `resolve`
+writes an auctioneer-chosen `(WINNER, HIGH_BID)` with no on-ledger link to a revealed/committed bid. So
+the on-ledger commit slots are decorative w.r.t. reveal binding; the binding lives only in the in-process
+model. Lower blast radius than F1 (the model IS the tested core and the doc is careful — "records the
+revealed value"), but the "on-ledger commit-reveal CRYPTO" framing (lib.rs:64) overstates the ledger's
+role. NAMED, not fixed.
+
+### Triaged CLEAN / honest (verify-from-code)
+- `collective-choice` — HARDENED: `AffineLe` weight-quorum + `CountGe` distinct-approver witness +
+  one-vote nullifier; its own test refuses the single-actor tally-inflation forge. Good.
+- `dregg-governance` — quorum is an in-cell `AffineLe` (`substrate.rs` `quorum_m`) over
+  `dregg_blocklace::constitution::Constitution::n` + `CountGe` + nullifier double-vote. Solid (constitution
+  `n` itself out of app scope; audited elsewhere). Glanced, no red.
+- `commons-arbiter` — `⌊2n/3⌋+1` `supermajority_threshold` + attested `verify_turn` re-verification with
+  forged-receipt/tampered-attestation refusal tests. Glanced, no red.
+- `auditable-fund` — HONESTLY labeled `⚑ PAPER TRADING ONLY` (Cargo.toml header): no real-custody path;
+  fills simulated against attested prices. The honest pattern, not a fiction.
+- `escrow-market` — delegates its security to `cell/src/escrow_sealed.rs` (`check_claim` one-shot +
+  `> locked` over-claim reject + reclaim-by-depositor). That cell file is DIRTY (held by another lane) —
+  SKIPPED per rule 4, not deep-audited. The app-side `service.rs` is a thin driver.
+- `dreggnet-trade` — mint->escrow->buyer in ONE ledger, `credit_balance` overflow asserted. Glanced only.
+- Retired-API sweep (`ConstraintProver`/`MockProver`/`gen_plonky3`/`StateTransitionAir`/`Effect::CastVote`/
+  `Authorization::Unchecked`/`mint_from_block_witnesses`) across all lane crates: only COMMENTS/doc
+  negations ("no Authorization::Unchecked"), ZERO code usages. No non-compiling deleted-API apps (and the
+  app crates are all root-workspace members, so a co-tenant `cargo check --workspace` green already covers
+  the compile class).
+
+### NOT REACHED (honest — did not audit; ~24 starbridge apps + ~28 dreggnet-* game crates)
+starbridge-apps: agent-orchestration, agent-provenance, billing, bounty-board, branch-stitch-multiplayer,
+compartment-workflow-mandate, compute-exchange, domains, edge-mandate, execution-lease, first-room,
+gallery, governed-namespace, guard, identity, kvstore, nameservice, org, polis, site-host,
+storage-gateway-mandate, subscription (deep), supply-chain-provenance, swarm-orchestration,
+tool-access-delegation, tussle, vat. Most dreggnet-* game crates (adventure/asset/catalog/cheevo/
+companion/compute/council/craft/faction/gear/grain/guild/market/names/offerings/party/quest/saga/
+sprite/surfaces/tavern/tournament/... — only trade glanced). commons-arbiter + collective-choice deep.
+RANK for a follow-up: compute-exchange + execution-lease + billing + subscription (value-moving mandates,
+highest residual blast radius) > escrow-market deep (once cell/escrow_sealed.rs is quiet) > the game layer.
+
+**Files touched:** `/Users/ember/dev/breadstuffs/starbridge-apps/privacy-voting/tests/tally_forgery.rs`
+(NEW), `/Users/ember/dev/breadstuffs/TESTQALOG.md` (this entry). privacy-voting src was CLEAN before this
+lane. **Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — 4swarm/fhegg-siblingcerts — 5 sibling certs assessed from code (none is a rubber stamp); CertQp advanced with the exact-integer + Lean-pinned step of the Cert-F treatment
+
+Per-cert verdicts, verified from CODE not docs (all five have both polarities tested — accept on real
+solve AND reject on tamper — so none is the "prover that proves nothing" fiction):
+
+- **CertQp** (`fhegg-solver/src/qp.rs`): GENUINE. Recomputes all three residuals (primal, stationarity,
+  normal-cone) from `(x,y)`; the normal-cone projection check is load-bearing (the
+  `forged_wrong_sign_dual_is_rejected` test IS the Lean counterexample); fails closed on NaN/overflow.
+  ONLY sibling with a Lean model: `CertQp.lean` (`qp_certifies_epsilon_optimal` proven) +
+  `CertQpRustDenotation.lean` (exact-rational denotation, `rustExactKkt_optimal` = exact-KKT ⇒ GLOBAL
+  optimality, kernel-clean, #guard-executable golden vectors). Named hypothesis: PSD of P is
+  caller-pinned, not checked (a saddle certifies nothing) — same as the Lean `hP`.
+- **CertEq** (`fisher.rs`): GENUINE tolerance check (EG-KKT recomputed from `(x,p)`; zero-allocation
+  forgery rejected via β-blowup either through stationarity or clearing-CS; budget exhaustion is
+  DERIVED from stationarity+CS so reporting-not-gating it is mathematically sound). **Comment-vs-code
+  flag:** `fisher.rs:196` says "(mirrors what a Lean checker proves)" — NO Fisher/EG Lean file exists
+  in metatheory/. Aspirational comment, should say "would prove".
+- **CertRoute** (`cfmm.rs`): GENUINE (waterfill KKT recomputed; marginal `g'` re-derived from the public
+  pool curve; concavity of `g(δ)=Qγδ/(R+γδ)` is structural). Suboptimal + tampered routing rejected.
+- **CertPackage** (`package.rs`): GENUINE feasibility check (integrality/capacity/prices≥0 all recomputed;
+  partial-fill, over-capacity, negative-price rejected) BUT a **consumer footgun**: `valid` gates NO
+  ratio floor — an EMPTY clearing (W=0, α=0) reports `valid=true`, and `bound_sound` (W≤UB) is a
+  theorem that can only fail on a checker bug (the comment says so honestly). fhir's
+  `RunOutcome::certificate_valid()` returns `Some(true)` for it; anyone gating a package clearing on
+  that bit alone accepts α=0. The α claim lives in the REPORTED `ratio`; consumers must read it.
+- **CertGrad** (`smooth.rs`): GENUINE (∇f recomputed from the public program; far-from-stationary +
+  tampered rejected; μ>0 gate carries the convex caveat). Caveat: ε is prover-chosen, so `valid` means
+  "the claimed ε is met" — the certified content is the recomputed `suboptimality_bound`.
+- **Common gap vs Cert-F (all five):** each cert CARRIES ITS OWN program (P/q/A/…) — no program
+  binding/registry (Cert-F now matches registered constants INCLUDING the ε budget) and no
+  descriptor/STARK chain. ε is descriptive everywhere (the trap lane2 fixed for Cert-F).
+
+**Reachability (b):** NONE is deployed. Consumers: `fhir` (workspace lib + `fhir-demo` bin; NO reverse
+deps — no node/wire/dreggnet crate imports it) and fhegg-solver's own bins. The named deploy route
+(DREGGFI-DEVNET-OFFERINGS.md:141-145) — `portfolio_clear` runner + `/offering/portfolio` — is spec'd,
+NOT built; CertQp/CertEq/CertRoute sit one ~120-line wire from a devnet offering. CertPackage is the
+institutional surface behind that; CertGrad is research-breadth (verified-ML story), no deploy path named.
+
+**Advanced (c): CertQp** (highest-value: nearest deploy route + only sibling with a Lean model to pin
+against). Built `fhegg-solver/src/qp_exact.rs` (NEW) — the exact-integer first stone of the Cert-F
+treatment: `CertQpExact` (i128 fixed-point `v/10^scale`, NO stored residual fields — the Lean model
+proves they're dead, this carrier doesn't even carry them) whose `check()` decides EXACTLY
+`rustCertQpCheck` of `CertQpRustDenotation.lean` on denominator-`10^scale` rationals (scale-matched
+integer comparisons, zero float anywhere; overflow fails CLOSED via checked i128); + `lift_cert` f64
+bridge (entrywise round-nearest, REFUSES non-finite / |v·S|>2^53). Tests pin the Lean file's own
+#guard vectors with EXACT equalities: `rustApproxWitness` (dual residual == S², accepts at ε=1),
+`rustForgedDualWitness` (normal residual == S², REJECTED at ε=0), `rustExactWitness` (accepts at
+ε=0 — the zero-tolerance claim f64 can't honestly make), plus one-tick-below-ε rejection (pins the
+tol=ε·S scale bookkeeping), real ADMM Markowitz solve lifts+certifies, f64/exact verdict agreement,
+tamper/overflow/shape/crossed-bounds/negative-ε all fail closed. **13 new tests, 104/104 crate lib
+green (persvati srot). Mutations bitten:** (1) dropped the `+yS` dual shift from the normal-cone
+projection (= regress to the old two-residual checker) → `lean_pinned_forged_dual` RED; (2) tol
+mis-scaled to ε·S² → `tolerance_scale_is_exact_one_below_rejects` + `tampered_exact` RED; both
+restored → green. Clippy: 0 new warnings (5 pre-existing gpu.rs/pricecert.rs untouched). One real bug
+found by the tests mid-build: my `failed_closed` helper had the overflow flag INVERTED (overflow
+reported as false) — the `overflow_fails_closed_not_wrapped` test caught it before it shipped.
+
+**NAMED, not built (the rest of the CertQp chain — do NOT hand-author):** (1) **Lean statement**: a
+`CertQpProg`-parameterized descriptor emit-soundness bundle (the analogue of `certFDescriptor_emit_sound p`)
+whose gates pin stationarity/feasibility + the SPLIT normal cone (y=y⁺−y⁻, slack rows s_l,s_u≥0
+range-checked, product-zero complementarity gates y⁺·s_u=0, y⁻·s_l=0 — clamp is not field arithmetic),
+keystoned to the already-proven `rustExactKkt_optimal`; needs degree-2 gates + range checks in the IR2
+gate set and a doubled VALUE_BITS budget (quadratic terms scale as S²). (2) **Descriptor**: emitted+
+byte-pinned JSON + a `CERT_QP_REGISTRY` matching program constants INCLUDING the ε budget (lane2's
+prescriptive-ε lesson). (3) **Bridge**: `qp_exact` is its input half; needs the registry gate + a
+conserving rounding story for degenerate solves. Also nameable now: instantiating
+`CertQpRustF64Refines` at THIS integer carrier makes the decode exact (rounding envelope vanishes) —
+`CertQpRustF64RefinementResidual` becomes provable-by-mirror rather than an IEEE theorem.
+CertFDescriptor.lean/cert_f_air.rs are lane2-dirty — deliberately untouched.
+
+**Files touched:** `/Users/ember/dev/breadstuffs/fhegg-solver/src/qp_exact.rs` (NEW),
+`/Users/ember/dev/breadstuffs/fhegg-solver/src/lib.rs` (+1 line `pub mod qp_exact;`),
+`/Users/ember/dev/breadstuffs/TESTQALOG.md` (this entry). SKIPPED as dirty: `fhegg-solver/Cargo.toml`
+(another lane's `fhegg_settle` bin), `circuit-prove/src/cert_f_air.rs`, `metatheory/Market/CertFDescriptor.lean`,
+`metatheory/Market/CertFGolden.lean` (lane2). **Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — 4swarm/sdk-py — lag mapped + highest-value surface bound (reveal/on verbs, presentations, light-client verify); 3 mutations bitten; 2 premises corrected by the core
+
+### THE LAG TABLE (pyo3 `dregg` vs Rust `dregg-sdk`, from CODE on disk)
+**Was already bound:** Identity/profiles · TurnBuilder{transfer, transfer_from, write, write_u64, grant,
+increment_nonce, method, fee, memo, nonce, valid_until} · AuthorizedTurn/Receipt/ReceiptStream ·
+organs (Trustline/Channels/Mailbox, node-HTTP) · AttestedQuery · ServiceRuntime/Worker/Lease (in-process
+AgentRuntime: pay/invoke_service/lease) · program.* constraint atoms · deploy.check/lower · kernel().
+**CLOSED tonight:** (1) `TurnBuilder.reveal(preimage)` — witness blob UNDER the signature (py could
+already author `program.preimage_gate` cells but could not open them: a real hole). (2)
+`TurnBuilder.on(target)` — administered-cell targeting, matching Rust `TurnBuilder::on`; deliberate
+deviation: py refuses `.on()` AFTER verbs are staged (fail-closed on the stage-then-retarget footgun the
+Rust chain shape makes unlikely). (3) Presentations: `Identity.mint_token/attenuate/authorize` →
+`Token`/`Presentation` (postcard to_bytes/from_bytes) + `dregg.verify_disclosure_presentation` (the exact
+fail-closed Rust fn). (4) `dregg.lightclient.verify_history(envelope_bytes, expected_vk)` →
+AttestedHistory dict via `verify_history_bytes` + `RecursionVk` (new direct deps: dregg-lightclient,
+dregg-circuit-prove, dregg-trace).
+**STILL LAGGING (named, not guessed):** `as_cell` + `effect/effects` splice (needs a py Effect repr —
+prerequisite for binding factories/flashwell/polis plan builders) · delegate/receive_signed_delegation
+(see finding B) · DisclosureSpec predicate/committed-threshold modes · `verify_authorization_proof`
+(needs a federation-root argument story) · `verify_finalized_history` (BLOCKED upstream: no bytes-level
+entry; `FinalityCert`/`SignedVote` are not serde — needs an envelope codec or serde derives lightclient-side)
+· full_turn_proof prove/verify · council_seal/sealed_governance · device_pairing/guardian_rotation ·
+mnemonic export/from_mnemonic on Identity · committed_turn · tool_gateway.
+
+### PREMISES CORRECTED BY THE CORE (the frame working)
+- **(A) "trusted-mode deny on an attenuated token" — WRONG premise.** `attenuate` deliberately drops the
+  root forging key from the child (cipherclerk SECURITY comment + `HeldToken::new_attenuated`), so trusted
+  mode (HMAC verify under `token.root_key()`) on an attenuated token is a REFUSAL ("signature verification
+  failed"), not a Deny. Trusted mode is the root-key holder's mode. Pinned as a test, not "fixed".
+- **(B) "selective/private prove just works" — WRONG premise.** The STARK path needs a federation-membership
+  Merkle path; the synthetic builder is behind bridge `test-utils` (dev-only, correctly NOT in the wheel), so
+  a locally-minted token refuses with "issuer is not in the federation tree". CONSEQUENCE, named: until
+  delegate/receive bindings land, NO py user can produce a positive selective/private presentation — the
+  binding is faithful but the e2e path needs the delegation surface. Pinned as tests matching the refusal.
+- **(C) The executor answered on `.on()`:** signature-vs-target-owner is NOT enough — it also demands a held
+  c-list capability on the target (`CapabilityNotHeld`), the parent-gate the Rust docs name. Test fixture
+  grants the cap and isolates the owner-key check with a cap-holding-but-foreign-owned refusal leg.
+
+### TEETH + MUTATIONS (rule 3, all red-then-restored locally)
+Rust drift-killer (`sdk-py/tests/wire_drift_killer.rs`, 9/9 green): NEW
+`reveal_witness_opens_a_preimage_gate_through_the_real_executor` (correct preimage COMMITS through the real
+TurnExecutor; no witness REFUSED; wrong preimage REFUSED) and
+`on_target_acts_on_an_administered_cell_through_the_real_executor` (write lands on TARGET; foreign-owned
+target REFUSED even with a held cap). pytest (`tests/test_new_surface.py`, 10 new; full py suite 53/53 incl.
+old 43): presentation round-trips + fail-closed teeth + lightclient garbage/empty/bad-vk refusals + offline
+reveal/on signing shape. **Mutations:** (1) dropped the `unsigned.witness_blobs` attach in
+`build_signed_turn` → reveal tooth RED (legs b/c stayed green — the discriminating shape) → restored; (2)
+made `build_signed_turn` ignore `action_target` → on tooth RED → restored; (3) rebuilt the .so with
+`verify_disclosure_presentation` hardwired `true` → pytest wrong-kind tooth RED → restored, rebuilt, 53/53.
+NAMED test gap: no POSITIVE py light-client verify (needs a real recursion-prover envelope fixture; the
+positive path is covered Rust-side in lightclient's own tests) — the py teeth are refusal-legs only.
+
+### VERIFIED (local sdk-py workspace — own warm target, not the contended root one)
+`cargo check --all-targets` clean · `cargo test --test wire_drift_killer` 9/9 · clippy: 0 new warnings (the
+1 lib warning is the pre-existing SseJsonStream collapsible_if; the rest are upstream lanes' crates) ·
+release .so rebuilt + installed (`python/dregg/dregg.abi3.so`) · `uv run pytest` 53 passed (pg suites
+excluded, need live postgres). NOTE: built against the LIVE dirty tree, so the path-dep compile already
+includes the sdk-rust lane's WIP — no breakage from it as of this build.
+
+### THE CONCURRENT sdk-rust LANE (rule: bind what exists, name the rest)
+`sdk/src/turns.rs` is being grown (+~600 lines, dirty, unlanded) with 16 new verb builders: revoke,
+emit_event, create_cell, set_permissions, set_verification_key, note_spend, note_create,
+exercise_capability, make_sovereign, create_cell_from_factory, seal, unseal, destroy, receipt_archive,
+refuse, custom — plus a new `sdk/src/fhegg.rs` (feature `fhegg`). NOT bound tonight (racing a moving lane's
+signatures is how mirrors get built); each needs a py binding + a drift-killer executor leg once the Rust
+lane lands. SKIPPED as dirty: everything under `sdk/src/` and `sdk-ts/`.
+
+**Files touched (mine):** `/Users/ember/dev/breadstuffs/sdk-py/src/lib.rs`,
+`/Users/ember/dev/breadstuffs/sdk-py/Cargo.toml` (+3 path deps), `/Users/ember/dev/breadstuffs/sdk-py/Cargo.lock`,
+`/Users/ember/dev/breadstuffs/sdk-py/tests/wire_drift_killer.rs`,
+`/Users/ember/dev/breadstuffs/sdk-py/tests/test_new_surface.py` (NEW),
+`/Users/ember/dev/breadstuffs/sdk-py/python/dregg/__init__.pyi`,
+`/Users/ember/dev/breadstuffs/sdk-py/python/dregg/dregg.abi3.so` (rebuilt binary), this log.
+**Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — 4swarm/sdk-ts — Effect wire model 7/34 → 34/34, every variant PROVEN against the Rust oracle; PLUS a found live drift: program.ts constraint indexes decoded as DIFFERENT constraints on the node
+
+**The brief's premise, corrected:** `wire.ts:20` claimed "~27" variants with the TS union modeling 7.
+Real count verified from the enum body (`turn/src/action.rs:1027`, awk over declaration order, NOT the
+comment): **34 variants**, so TS was missing **27**, not "6+". Both numbers in the brief were
+undercounts of the undercount.
+
+### Built: all 27 missing variants modeled, byte- and hash-proven per variant
+- `sdk-ts/src/internal/wire.ts`: Effect union now covers declaration indexes 0..=33; postcard writers
+  for every nested type verified from the Rust declarations (NOT comments): `Permissions` (8×AuthRequired),
+  `VerificationKey`, `CellProgram` (None/Predicate/Circuit), `EventualRef` (federation_id Option IS emitted
+  — serde(default)-only), `RefusalReason`, `DeathCertificate`/`DeathReason`, `ArchivalAttestation`,
+  `CapTarget`/`CapGrant`/`FactoryCreationParams`/`CellMode`, the FULL 14-field `AttestedRoot`
+  (incl. the serde_32/serde_64 SLICE subtlety: PublicKey/Signature are length-prefixed, `FederationId`
+  is a bare [u8;32] — different postcard shapes for what look like the same bytes), `PortableNoteProof`,
+  `ResolutionCondition`/`ProofCondition`/`ConditionProof`, `ShieldedTransferPayload`+`ConservationProof`,
+  and nested `Box<Turn>`/`Box<Action>` reuse of the existing encoders.
+- `effectHash` extended to all 34 — mirroring `Effect::hash`'s HAND-ASSIGNED domain tags (SetProgram=54,
+  MakeSovereign=35, Refusal=47, ...), which are NOT the postcard indexes; plus TS twins of
+  `DeathCertificate::certificate_hash` and `ArchivalAttestation::checkpoint_hash` (blake3 derive-key).
+- Builder verbs for all new variants on `TurnBuilder` (`sdk-ts/src/turns.ts`); total readings for all 34
+  in `explain.ts` (its `never`-tooth forced totality); `raw.ts` exports the new types + `EFFECT_KIND_COUNT`.
+- The "~27" comment REPLACED with the real count + how it stays in sync (the per-variant differential +
+  the vocabulary gate + `EFFECT_KIND_COUNT` assert).
+- **Named sub-gaps (refused loudly via `UnmodeledWireError`, never guessed bytes):**
+  `CellProgram::Cases` (TransitionCase guards), `ConditionProof::Receipt` (full TurnReceipt), and nested
+  wake Turns beyond the default-proof-bundle shape. A test pins that these THROW.
+
+### Cross-language verification (the harness EXISTS and was used — no TS-only self-check)
+`test/wire-effects.test.mjs` (NEW): for EVERY kind, builds a real turn in TS and hands the serde-JSON
+form to the repo's own dregg-wasm oracle (`sign_turn_v3` = the actual Rust `dregg-turn` code re-encoding
+with real `postcard` + real `Turn::hash`), asserting (a) byte equality of the TS postcard turn vs Rust
+`postcard::to_allocvec`, and (b) `turnHash` == Rust `Turn::hash` v3 — which folds forest→action→effect
+hashes, so (b) verifies the TS `Effect::hash` preimage per variant. Actions ride a dummy classical
+signature so the oracle is a PURE re-encode (layout isolated from signing; the signing differentials in
+`wire.test.mjs` are untouched and still green). Sub-shape coverage: every Option branch, all enum reasons,
+both CellMode values, full-vs-minimal AttestedRoot, negative i64 timestamp (zigzag), recursion
+(ExerciseViaCapability, PipelinedSend, three wake-turn carriers), plus one mega-turn with all 34 at once.
+**4/4 test green; full sdk-ts suite 103/103 green** (`node --test test/*.test.mjs`, tsc --noEmit clean).
+
+### FOUND + FIXED while proving: program.ts constraint-index drift (forgery-adjacent, live)
+The setProgram differential went RED and exposed a PRE-EXISTING bug my lane didn't know about:
+`sdk-ts/src/program.ts::writeConstraint` wrote STALE postcard indexes for 6 of 12 `StateConstraint`
+variants — the Rust enum appended `MonotonicSequence`..`Custom` (27..42) over time, pushing everything
+after `PreimageGate`. TS wrote `senderIs`=38 (Rust decodes as **AffineLe**), `anyOf`=26 (decodes as
+**PreimageGate**), `preimageGate`=21 (decodes as **RateBound**), `senderInSlot`/`balanceGte`/`balanceLte`
+off by 5. So any TS-authored program carrying those constraints had a WRONG content address
+(`canonicalProgramVk`) AND would decode node-side as a DIFFERENT program — the silent-misprogram class.
+Fixed to 26/31/43/44/45/46 (verified against the CURRENT enum declaration order) and PROVEN through the
+oracle: the setProgram predicate fixture now carries senderIs+balanceGte+preimageGate+anyOf(+Not) and
+passes the real Rust decode byte-for-byte. `SimpleStateConstraint` indexes were checked too — correct.
+Also updated the stale MODELED/UNMODELED ledger + header prose in `test/protocol-vocabulary.test.mjs`
+(its DISCRIMINANT PIN went red on my new codec until the ledger told the truth — the gate works).
+
+### Mutations (rule 3 — each RED then restored, exact failure named)
+1. `refreshDelegation` wire field order swapped (child↔snapshot) → RED: "TS postcard layout diverged".
+2. `makeSovereign` hash domain tag 35→36 → RED on the HASH half only ("Turn::hash diverged") while bytes
+   stayed green — proves the two halves bite independently.
+3. `senderIs` index reverted 43→38 (the found drift re-introduced) → RED: setProgram layout diverged —
+   the drift fix is load-bearing and the tooth that caught it stays armed.
+
+### Rust-source smell found, NOT fixed (out of lane; consensus-affecting)
+`Effect::hash` in `turn/src/action.rs` uses domain tag **63 for BOTH `Mint` and `ShieldedTransfer`**
+(`hasher.update(&[63u8])` at both sites; Custom=64, so Mint likely meant 63 before ShieldedTransfer was
+appended reusing it). Preimage shapes differ in length so no practical collision today, but it is a
+domain-separation defect; TS mirrors it faithfully (with a comment) because the hash is
+consensus-critical. Flagged for a Rust-side decision.
+
+### Could NOT verify / named honestly
+- **wasm oracle NOT rebuilt**: `wasm/pkg` is from 2026-07-16 15:49. Verified from git log that NONE of
+  the wire-shape sources (turn/{action,turn,forest,eventual,pending,conditional}.rs, cell wire structs,
+  cell-crypto note_bridge/value_commitment, types/src/lib.rs) changed shape between that build and HEAD
+  (the 5 commits touching them were doc-path/dead-code/fn-signature only) — so the oracle is current FOR
+  THE SHAPES TESTED. I did not rebuild because ~40 co-tenant-dirty files (incl. `sdk/src/embed.rs`,
+  `cell/src/*.rs`) would be baked into a rebuild mid-flight. Re-run `npm run build:oracle` + this suite
+  on a quiet tree for belt-and-braces.
+- `npm run lint` — eslint not installed in this checkout (`command not found`); not run.
+- Node round-trip through a LIVE node (submit-signed ingress) not exercised — the oracle differential is
+  against the same Rust codec the node links, but no live node was driven.
+- `dist/index.{js,mjs}` are git-TRACKED build outputs and were regenerated by `npm run build` (needed:
+  tests import dist). Pre-existing oddity that only those two dist files are tracked.
+
+**Files touched (all under `/Users/ember/dev/breadstuffs/`):** `sdk-ts/src/internal/wire.ts`,
+`sdk-ts/src/program.ts` (drift fix), `sdk-ts/src/turns.ts`, `sdk-ts/src/explain.ts`, `sdk-ts/src/raw.ts`,
+`sdk-ts/test/wire-effects.test.mjs` (NEW), `sdk-ts/test/protocol-vocabulary.test.mjs` (ledger trued up),
+`sdk-ts/dist/index.js` + `sdk-ts/dist/index.mjs` (regenerated), this log.
+**Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — 4swarm/sdk-rust — 16 typed TurnBuilder verbs added (field-exact vs action.rs), 16 round-trip teeth, 2 mutations bitten; no compile-broken SDK surface found
+
+Ground truth re-verified from `turn/src/action.rs` (all 34 `Effect` variants read, field-by-field —
+no field names invented): pre-existing typed sugar covered 4 variants (SetField/Transfer/
+GrantCapability/IncrementNonce).
+
+**Added 16 typed verbs to `sdk/src/turns.rs`**, each lowering to the exact variant with the real
+field names: `revoke` (RevokeCapability), `emit_event` (EmitEvent, builds the `Event{topic,data}`),
+`create_cell`, `set_permissions`, `set_verification_key`, `note_spend` (all 6 fields incl.
+`value_commitment`), `note_create` (all 6 fields incl. `range_proof`), `exercise_capability`
+(ExerciseViaCapability), `make_sovereign`, `create_cell_from_factory`, `seal`/`unseal`/`destroy`
+(CellSeal/CellUnseal/CellDestroy — the sugar pins `target == acting_cell == action.target`, the
+variant's own doc invariant), `receipt_archive`, `refuse` (Refusal), `custom` (the NEW
+Effect::Custom, routed via `.on(sovereign)`). Docs carry the variants' security semantics
+(SetPermissions/SetVerificationKey applied LAST against pre-action permissions; Custom refused
+fail-closed off the proof-carrying path). The 14 still-raw-only variants are NAMED in
+`.effect()`'s doc (SetProgram, SpawnWithDelegation, RefreshDelegation, RevokeDelegation,
+BridgeMint, Introduce, PipelinedSend, Burn, Mint, AttenuateCapability, Promise, Notify, React,
+ShieldedTransfer) — 4 + 16 + 14 = 34 ✓.
+
+**Teeth (16, `turns::typed_verb_teeth`, all green on persvati srot):** each verb → staged Effect →
+postcard (the durable index-sensitive codec) → back, asserting the exact variant + every field on
+the ROUND-TRIPPED value, plus byte-stable re-serialization. **Mutations (rule 3, both
+red-then-restored):** (1) `revoke` staging `slot+1` → `revoke_lowers_to_revoke_capability` RED;
+(2) `custom` ignoring `.on()` (agent cell instead of acting cell) →
+`custom_lowers_to_custom_and_respects_on_target` RED. Restored → 16/16 green; 0 new warnings (the
+5 sdk lib-test warnings are pre-existing in cipherclerk/factories/flashwell/polis/trustline).
+
+**(2) Deleted-symbol sweep over sdk/ — no compile-broken surface:** `cipherclerk::
+export_state_proof` already removed (tombstone comment `sdk/src/cipherclerk.rs:2219` records it);
+zero `gen_plonky3` / `StateTransitionAir` / presentation-`ivc_proof` references. NAMED hollow (not
+deleted — it is an honest fail-closed refusal, documented in-code): `sdk/src/verify.rs:591
+verify_validated_ivc_proof` always returns `Ok(false)` since the hand-STARK validated-IVC engine
+was retired; zero callers.
+
+**NOT MY BREAKAGE (named):** full `cargo test -p dregg-sdk` = 269 passed / 29 FAILED, ALL in
+`full_turn_proof::tests` — plonky3 `check_constraints.rs:133: constraints not satisfied on row 0
+[#125]`, the full-turn AIR itself. `cell/src/commitment.rs` + `cell/src/state.rs` (upstream of
+that AIR) are held dirty by another lane; an additive builder method + test mod cannot alter
+constraint evaluation. All 16 of my tests plus the rest of the sdk suite pass.
+
+**SKIPPED as dirty (other lanes):** `sdk/src/embed.rs`, `sdk/src/lib.rs` + `sdk/Cargo.toml` +
+`sdk/src/fhegg.rs` (fhegg-wrap lane; lib.rs went dirty mid-session — I made no lib.rs edit, new
+verbs ride the existing `TurnBuilder` re-export).
+
+**Committed NOTHING — supervisor gates.** Files touched: `/Users/ember/dev/breadstuffs/sdk/src/turns.rs`, this log.
+
+## 2026-07-17 — 4swarm/fhegg-remeasure — the envelope is REAL again: current circuit re-measured end-to-end (2.3–2.7× the superseded table), docs cite our own numbers not literature
+
+REDO of stalled spike lane 3. `fhegg-fhe/MEASURED-ENVELOPE.md` reported numbers on a circuit that no
+longer existed (FheUint16 aggregates + sum-of-[D>=S]-bits crossing) while `lib.rs` computes FheUint32
+aggregates + the true uniform-price oblivious argmax. Re-ran the CURRENT circuit for real.
+
+**Inherited, not raced:** `fhegg-fhe/src/bin/bench.rs` was dirty with lane 3's own unfinished redo
+(FheUint32 per-op measurement, argmax crossing model, N=8/K=16 config) — this lane IS that redo, so I
+took it over rather than skipping; only further change was un-hardcoding the "Apple Silicon" host line
+(prints `FHEGG_HOST` + core count — it would have LIED on any non-Mac host).
+
+**What actually ran (persvati, 24-core AMD Ryzen AI 9 HX PRO 370, srot lane, release, tfhe-rs 1.6.3;
+box CONTENDED, load ~20–65 — numbers are an honest upper bound; EXIT:0, log in scratchpad
+`fhegg-remeasure-bench.log`):**
+- per-op FheUint32: encrypt 1.60 ms | seq add 281 ms | ge 161.8 ms | select 114.2 ms | sum-of-512
+  17.14 s => 33.5 ms/input-add.
+- REAL runs, every one MATCH=YES vs plaintext reference: **N=8/K=16 = 24.0 s** (agg 10.2 + cross 13.8);
+  **32/64 = 116.5 s** (84.0 + 32.4); **32/256 = 528.4 s** (325.1 + 203.3); **128/64 = 297.9 s**
+  (264.8 + 33.2).
+- NOT run (honest partials, exceeded the bench's 900 s per-config budget on the heavier circuit —
+  extrapolated from same-session per-op, labelled): 128/256 ~21 min, 512/64 ~19 min, 512/256 ~76 min.
+  On the superseded circuit the first two had been real runs; the current circuit priced them out.
+- Delta vs superseded table: **2.5× / 2.7× / 2.3×** at 32/64, 32/256, 128/64 — the brief's "plausibly
+  2–3×" band, now measured. Crossing alone is 3.3–5.0× (argmax = ~3× ops on a 2×-wide type); still
+  O(K) N-independent (33 s at K=64 for N=32 and N=128 alike).
+- **The correct rule pays real volume, shown live:** identical seeded book at 32/256 — superseded rule
+  cleared (p*=123, V*=490); the true argmax rule clears (p*=124, **V*=547**). At 32/64 same V*=383,
+  ties broken to lower p (12 vs 18). Correctness cost 2.7× and bought 11.6% more volume on that book.
+
+**Docs trued up:**
+- `fhegg-fhe/MEASURED-ENVELOPE.md` REWRITTEN: current-circuit tables primary (host + contention named,
+  what-ran-vs-extrapolated said plainly); the FheUint16-era tables kept under a dated **SUPERSEDED**
+  banner (their shape findings held; HBOX-24CORE measured that circuit); the circuit change named
+  explicitly (u16 wrap counter-example, argmax counter-witness). pdhg.rs section kept as-is — that
+  binary is UNCHANGED FheInt16, its old numbers still describe the code that exists (verified).
+- `docs/deos/FHEGG-KERNEL.md` §3.1: no longer grounds "tractable at minute cadence" in published CKKS
+  sort literature — now cites OUR OWN `MEASURED-ENVELOPE.md` (2026-07-17 re-measure),
+  `HBOX-24CORE-ENVELOPE.md`, `ADDITIVE-FOLD-ENVELOPE.md`, `OUTPUT-BOUNDARY-MPC.md` §7.5, and names
+  `DREX-NO-VIEWER-SURPASS.md` as the estimates/survey our measurements superseded. §6 "Dark FHE
+  clearing" row basis repointed the same way; §7 see-also line corrected (SURPASS is not "the measured
+  envelope").
+
+**Named, not claimed:** (1) the extrapolated rows are extrapolations — no 512-order clear ran tonight;
+(2) `ADDITIVE-FOLD-ENVELOPE.md`'s all-TFHE column (67.3 s agg / 17.45 s crossing at 32/64, M2) cannot
+be dated against the circuit change from squashed git history — its own fold-vs-fold verdict is
+unaffected, but its absolute TFHE column should not be cross-quoted with either envelope table;
+(3) contended-box numbers — a quiet re-run would likely shave 10–30%.
+
+**Committed NOTHING — supervisor gates.** Files touched:
+`/Users/ember/dev/breadstuffs/fhegg-fhe/src/bin/bench.rs` (inherited lane-3 WIP + host-line fix),
+`/Users/ember/dev/breadstuffs/fhegg-fhe/MEASURED-ENVELOPE.md`,
+`/Users/ember/dev/breadstuffs/docs/deos/FHEGG-KERNEL.md`, this log.
+
+## 2026-07-17 — 4swarm/fhegg-wrap — SDK surface over wire.rs shipped (clear-a-book + verify-a-settlement); the brief's CLI premise was WRONG (fhegg_clear is the Cert-F circulation CLI) — built `fhegg_settle` instead
+
+**(1) `sdk/src/fhegg.rs` (NEW, this lane owns it):** experimental plaintext-clearing surface over
+`fhegg_solver::wire` — `clear_book` / `clear_book_json` (settle) + `verify_settlement`
+(untrusted-solver re-derivation gate), plus re-exports of the wire types. Module doc states the
+scope bluntly: EXPERIMENTAL / PLAINTEXT / DEMO-SCALE / untrusted-solver-self-checkable; **NO FHE,
+NO privacy** despite the crate family's name; verify's authority is re-derivation by the same
+deterministic rule (catches a tampered/buggy PRODUCER, not a bug in the shared rule); the
+STARK-verified path is Cert-F ring-3+market4 in circuit-prove, not this. Wired into `sdk/src/lib.rs`
+behind `#[cfg(feature = "fhegg")]` with the same honest banner. `sdk/Cargo.toml`: `fhegg-solver`
+optional dep + default-on `fhegg` feature (house `exec-lean` pattern — `default-features = false`
+wasm/minimal builds stay solver-free; native cost ~0, wgpu 24 already in the graph via
+circuit-prove). `Cargo.lock` picked up the dregg-sdk→fhegg-solver edge.
+
+**(2) PREMISE CORRECTION (rule 2):** the brief said "`fhegg_clear.rs` (the JSON-in/JSON-out CLI)"
+should exercise `settle`+`verify`. FALSE from code: `fhegg_clear` is the **Cert-F circulation** CLI
+(multi-asset barter LP, PDHG + certificate + AIR) — its input shape (offerAsset/wantAsset) cannot
+feed `settle()`, and bolting wire-settle onto it would conflate two mechanisms. `fhegg_uniform`
+predates wire.rs (index-priced, unversioned, no `Settlement::verify`). The real gap: NO CLI
+exercised settle+verify. Closed with **NEW `fhegg-solver/src/bin/fhegg_settle.rs`**: settle mode
+(WireBook JSON in → settle → from-scratch self-verify ALWAYS → Settlement JSON out) and
+`fhegg_settle verify` mode (`{book, settlement}` in → accept `{"ok":true}` / refuse with the named
+divergent field, exit 1). E2E RUN (persvati, real binary): golden workbook settled (p*=105, V*=8,
+fills 5/3/3/5) → honest verify exit 0; clearedVolume 8→9 doctored → REFUSED "volumes" exit 1;
+stolen-unit (b1 5→4, b2 3→4, totals balanced) → REFUSED "fills" exit 1; off-grid price 103 book →
+settle refused with the named error, exit 1.
+
+**(3) Tests + mutation (rule 3):** `sdk::fhegg::tests` — SDK round-trip (typed + JSON paths agree,
+verify passes), tamper-refusal (stolen unit / price lie / volume lie all `Mismatch`-named, honest
+one still passes), version refusal through the SDK JSON path. **Bite proof:** mutated
+`verify_settlement` to swallow the verdict (`let _ = …; Ok(())`) → `sdk_verify_refuses_doctored_settlement`
+went RED (`left: Ok(()), right: Err(Mismatch("fills"))`) → restored → GREEN.
+
+**VERIFIED (persvati; srot lane turned out CO-TENANTED mid-session — another session's rsync temp
+files vanished under mine, exit 24 — finished on the quiet warm `entcompose` lane):**
+`cargo test -p fhegg-solver` → **104/104** lib (includes a co-tenant's new `qp_exact` tests, green)
++ all 11 bins compile incl. `fhegg_settle`; `cargo test -p dregg-sdk --lib fhegg` → **3/3**;
+`--doc fhegg` → **1/1** (module example compiles).
+
+**NOT MY BREAKAGE — PROVEN, not assumed:** the full `cargo test -p dregg-sdk --lib` shows
+**28 failures, all `full_turn_proof::tests`** (cap-root weld asserts + plonky3
+constraints-not-satisfied). Control experiment (scratch worktree = working tree + all co-tenant WIP,
+my 5 files reverted to HEAD; synced to entcompose): same tests FAIL identically without my diff →
+the failures ride the co-tenant in-flight effect-VM/cap-weld work, not this lane. Also: clean HEAD
+(5662b35c3) does not even build (`dregg-cell`: no `decode_i64` in `state`) — the dirty cell/* files
+are in-flight fixes, so HEAD-vs-tree bisecting is impossible right now; the minus-my-diff control is
+the strongest available evidence.
+
+**SKIPPED as dirty:** `sdk/src/embed.rs`, `sdk/src/turns.rs`, `fhegg-solver/src/lib.rs`+`qp_exact.rs`
+(co-tenant lanes; untouched — my lib.rs/Cargo.toml edits verified line-exact after the tree moved
+under the session).
+
+**Committed NOTHING — supervisor gates.** Files touched:
+`/Users/ember/dev/breadstuffs/sdk/src/fhegg.rs` (new),
+`/Users/ember/dev/breadstuffs/sdk/src/lib.rs` (+8 lines, module decl),
+`/Users/ember/dev/breadstuffs/sdk/Cargo.toml` (optional dep + `fhegg` feature),
+`/Users/ember/dev/breadstuffs/fhegg-solver/src/bin/fhegg_settle.rs` (new),
+`/Users/ember/dev/breadstuffs/fhegg-solver/Cargo.toml` ([[bin]] block),
+`/Users/ember/dev/breadstuffs/Cargo.lock` (dep edge), this log.
+
+## 2026-07-17 — acc/classify-A — 3 grandfathered ed25519 sites CLASSIFIED from code: 2 PINNED-KEY + 1 CONSENSUS-MIRROR (none exploitable, none converted); node/src/api.rs:6798 is the real wire-key non-strict site
+
+Audited the key source FROM CODE for the three GRANDFATHERED allowlist entries. Verdict: NONE is an
+attacker-chosen-key forgery site, so NONE converted (converting a pinned/mirror site is not the fix and a
+mirror conversion would DIVERGE from node — the solana_consensus trap). Re-filed all three under justified
+categories in `tests/tests/ed25519_strict_guard.rs` with code evidence; added `PINNED-KEY` and
+`CONSENSUS MIRROR` category definitions to the header.
+
+- **deco-prove/src/notary.rs → PINNED-KEY.** `verify_notary_attestation` (line 160) builds the vk from
+  `att.notary_pubkey` (line 173) but line 166 returns `WrongNotary` unless `att.notary_pubkey ==
+  expected_notary` (the caller-pinned anchor) BEFORE the verify. So the verified key is the pinned anchor,
+  never attacker-chosen — small-order forgery is out of reach. Commitment is separately recomputed (line
+  169), so signature malleability cannot re-point a sig at other facts. Pin bites: existing
+  `wrong_notary_anchor_refused`.
+- **deco-prove/src/tlsn_attest.rs → PINNED-KEY.** `verify_tlsn_presentation` (line 330) returns
+  `NotaryMismatch` unless `pres.verifying_key == config.expected_notary` (line 342) BEFORE building the vk
+  from those same bytes (line 353). Pinned anchor, not wire-chosen. Pin bites: existing
+  `wrong_notary_anchor_is_refused`.
+- **dregg-doc/src/ci_verdict.rs → CONSENSUS MIRROR (do NOT convert).** `verify_nullifier_update_signature`
+  (line 450) is an explicit faithful MIRROR of node's `post_update_commitment` acceptance check so a test
+  can predict node acceptance without depending on node (module comment lines 370-387). The key IS
+  wire-supplied — `cell_id` doubles as the ed25519 pubkey (line 468 builds vk from `req.cell_id`). BUT
+  node's REAL check `verify_ed25519_signature` (`node/src/api.rs:6789`) uses cofactored
+  `verifying_key.verify(...)` (line 6798, non-strict) — VERIFIED from code. Converting the mirror to strict
+  would make it MISPREDICT node acceptance (reject sigs node accepts) — the internal edition of the
+  solana_consensus.rs trap. The fix, if wanted, belongs in `node/src/api.rs:6798`, not the mirror.
+
+**THE REAL EXPLOITABLE SITE (out of my lane, reported for the node-side swarm):** `node/src/api.rs:6789
+verify_ed25519_signature` is a genuine attacker-key non-strict verify — the pubkey is `cell_id` read from
+the wire request (sovereign-cell convention, cell_id == owner pubkey). That is the site that owes a
+strict-conversion + small-order-key reachability review. `node/src/api.rs` is held DIRTY by another lane
+this session — NOT touched. This mirror will follow whatever node decides.
+
+**Guard test state:** `cargo test -p dregg-tests --test ed25519_strict_guard` is RED, but the failure is
+EXCLUSIVELY two STALE entries from a concurrent lane — `dregg-agent/src/cred.rs` and
+`dregg-auth/src/credential/chain.rs` — which that lane already converted to `verify_strict` (imports
+dropped, files held DIRTY) without yet removing their allowlist entries. My three re-filed files do NOT
+appear in the failure (they still import the trait AND are allowlisted → they pass both gate checks). I did
+NOT remove the two stale entries: their source files are held dirty by the active conversion lane
+(shared-tree rule) — that lane's cleanup on commit. My re-filing is validated by its absence from the
+failure list.
+
+**Files touched:** `/Users/ember/dev/breadstuffs/tests/tests/ed25519_strict_guard.rs` (re-filed 3 entries +
+2 new category defs), this log. **NO source-file conversions** (correct — no exploitable site among the
+three). **Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — acc/classify-B — realm-model/identity + sandstorm-bridge/bridge both PINNED-KEY (proven by execution); guard held dirty by another lane, re-filing reported not applied
+
+**LANE: classify the two grandfathered ed25519 sites. Both verdicts PINNED-KEY (defense-in-depth), NOT
+exploitable, NOT external mirrors. No source conversion. Proof-by-EXECUTION for each.**
+
+### Site 1 — `realm-model/src/identity.rs` `HybridSig::verify` (line 172) → PINNED-KEY
+- **Scheme:** FIRST-PARTY hybrid ed25519 ∧ ML-DSA-65 identity-succession envelope (our own, no external
+  chain). ed leg is cofactored `vk.verify(...)` on `self.ed_pk`; pq leg is `ml_dsa_verify`.
+- **Key source:** the envelope is self-contained — `verify()` reads `self.ed_pk` (wire-carried). BUT the two
+  and only callers (`world.rs:799` rotate, `world.rs:859-863` recover) FIRST gate on the signer's key
+  COMMITMENT: rotate rejects `sig.signer_commitment() != current_key_commit` (`WrongSuccessionKey`);
+  recover counts only `is_guardian(commit_hybrid(ed_pk,ml_pk))` co-signs. `commit_hybrid` = blake3 of
+  (ed_pk‖ml_pk); the committed current key is derived from a seed via clamped `SigningKey::from_bytes`, so a
+  minted key is never small-order and an attacker cannot find a small-order ed_pk whose blake3 commitment
+  equals it. Key is PINNED-BY-COMMITMENT at every caller.
+- **Verdict: PINNED-KEY.** Small-order forgery unreachable; cofactored is defense-in-depth debt only.
+- **PROVEN BY EXECUTION** (`realm-model/tests/classify_b_reachability_probe.rs`, NEW, 2/2 green):
+  (A) `hybrid_verify_accepts_a_small_order_forgery_in_isolation` — a small-order `ed_pk` + (R=point,s=0) +
+  the attacker's OWN real ML-DSA half makes `HybridSig::verify` return TRUE → the leg IS cofactored-weak in
+  isolation. (B) `rotate_identity_pins_the_key_and_blocks_a_wrong_key_forgery` — that forged sig's
+  `signer_commitment() != current`, so `rotate_identity` returns `Err(WrongSuccessionKey)` before verify is
+  ever consulted; positive control: the legit birth key (commitment == current) rotates `Ok`.
+
+### Site 2 — `sandstorm-bridge/src/bridge.rs` `RootAttestation::verify` (line 317) → PINNED-KEY (NOT external mirror)
+- **The DANGER classification resolved:** this is NOT a Bitcoin/BIP-340 (Schnorr) external-scheme mirror.
+  It is a FIRST-PARTY dregg grain-serve attestation — the grain OWNER signs `(grain_cell_id ‖ data_root)`
+  (`served_root_message`, ctx `grain-served-root-attestation:v1`). The "sandstorm/bitcoin" in the allowlist
+  note is misleading; the ed25519 leg here is our own owner-attestation, plain ed25519 not Schnorr.
+- **Key source:** `verify(&self, expected_owner)` verifies against **`expected_owner`**, supplied by the
+  CALLER from an INDEPENDENT channel (the ledger/federation) — never from the wire attestation. The
+  wire-carried `self.signer` is used ONLY as an equality guard (`self.signer == expected_owner.to_bytes()`),
+  never as the verifying key. All callers (`witnessed_authentic`, `verify_against_ledger`,
+  `verify_served_against_ledger`, and node/src call sites passing `admin_pk`/`operator_pk`/`owner_pk`) source
+  the key from the ledger, not the request. So an attacker cannot substitute a small-order VERIFYING key —
+  the cofactored-vs-strict distinction is INERT here.
+- **Verdict: PINNED-KEY (external-mirror ruled out).** NOT converted (converting an external mirror is the
+  documented consensus-break trap; this is not a mirror, but it is also not exploitable, so leave it).
+- **PROVEN BY EXECUTION** (`sandstorm-bridge/tests/classify_b_bridge_pinned_probe.rs`, NEW, 2/2 green):
+  `honest_owner_attestation_verifies` (positive control); `a_small_order_signer_substitution_is_rejected` —
+  a wire attestation declaring a small-order `signer` + no-secret sig is rejected at the signer-equality
+  guard, and even declaring `signer == real owner key` fails because the pinned (non-small-order) owner key
+  rejects the no-secret sig.
+
+### Builds
+`cargo test -p realm-model` from realm-model/ (standalone crate, NOT a workspace member): probe 2/2 green,
+crate builds. `cargo test -p sandstorm-bridge --test classify_b_bridge_pinned_probe`: 2/2 green, crate builds.
+
+### GUARD RE-FILING NEEDED (NOT applied — `tests/tests/ed25519_strict_guard.rs` is HELD DIRTY by another
+lane per live `git status --short`; a concurrent lane is mid-edit adding PINNED-KEY/CONSENSUS-MIRROR sections)
+Move BOTH entries out of GRANDFATHERED into the existing PINNED-KEY section (created by that lane, line ~119):
+- `realm-model/src/identity.rs` → `"PINNED-KEY (audited 2026-07-17): FIRST-PARTY hybrid ed25519∧ML-DSA
+  identity envelope. HybridSig::verify reads self.ed_pk (wire), but both callers (world.rs rotate/recover)
+  gate on commit_hybrid(ed_pk,ml_pk)==committed current key / guardian roster BEFORE verify; minted keys are
+  clamp-derived (never small-order) so a small-order ed_pk cannot match the blake3 commitment. Pin+forgery
+  proven by execution: realm-model/tests/classify_b_reachability_probe.rs. NOT converted."`
+- `sandstorm-bridge/src/bridge.rs` → `"PINNED-KEY (audited 2026-07-17): NOT a Bitcoin/BIP-340 mirror — a
+  FIRST-PARTY dregg grain-serve owner attestation (served_root_message). RootAttestation::verify verifies
+  against caller-supplied expected_owner (from the ledger, NOT the wire) and uses wire self.signer only as an
+  equality guard, so a small-order verifying key cannot be substituted. Proven by execution:
+  sandstorm-bridge/tests/classify_b_bridge_pinned_probe.rs. NOT converted."`
+(The sibling `sandstorm-bridge/src/grain.rs` and `spk.rs` entries are OTHER lanes' scope — grain.rs is
+grain-backup attestations, spk.rs is the sandstorm .spk libsodium ed25519 package-signature path; not audited
+here.)
+
+**Files touched:** `/Users/ember/dev/breadstuffs/realm-model/tests/classify_b_reachability_probe.rs` (NEW),
+`/Users/ember/dev/breadstuffs/sandstorm-bridge/tests/classify_b_bridge_pinned_probe.rs` (NEW), this log.
+**NO source conversions** (neither site exploitable). **Guard NOT edited** (held dirty — re-filing reported
+above). **Committed NOTHING — supervisor gates.**
+
+## 2026-07-17 — 4swarm/auth-chain — credential-chain ed25519 CONVERTED to verify_strict (3 sites); allowlist premise was WRONG (root is verifier-PINNED, not wire-presented) — defense-in-depth + future-proofing, NO live forgery, biting tooth rigged by execution
+
+**Site:** `dregg-auth/src/credential/chain.rs` — the `dga1_` biscuit/macaroon credential chain.
+Three cofactored `.verify` sites: `Credential::verify` (block-chain, L372), `Credential::verify_hybrid`
+(ed25519 half, L436), `Discharge::verify_against` (gateway sig, L617).
+
+### The brief's/allowlist's premise CORRECTED (rule 2 — verified from CODE, not the comment)
+The `ed25519_strict_guard` allowlist said "issuer key is presented (attacker-influenced) — likely
+convert-to-strict." **FALSE per code.** I traced every real (non-test) caller and where `root`/`host_pub`
+is sourced:
+- `dregg-auth/src/policy.rs::admit` (L432): `PublicKey::from_hex(&self.public_key_hex)` — the verifier's
+  OWN pinned config key.
+- `agent-platform/src/share.rs::derive_facets` (L268): `self.public()` — the `ShareAuthority`'s own key.
+- `sandstorm-bridge/src/webauth_rail.rs::derive_permissions` (L157): `host_pub` param, which its callers
+  (`bridge.rs::Session::permissions`, `grain-commons/src/hatchery.rs::granted_permissions` → `self.host.public()`)
+  feed from the host's own pinned key.
+The `dga1_` wire form carries the block chain + tail key; it does NOT embed the root. `verify(&self, root, ctx)`
+takes the root as a SEPARATE, verifier-supplied argument — **never read from the wire.** So the issuer/root
+key is PINNED, not attacker-chosen.
+
+### Exploitability verdict: NO live wire forgery under a pinned honest root (proven by structure)
+Block 0 must verify under the honest, full-order, pinned root — cofactored gives an attacker no advantage
+there (the small-order universal forgery needs an attacker-CHOSEN verifying key, and the root is not one).
+Every intermediate `block.next_pub` is authenticated transitively back to that root by the parent's signature,
+and attenuation can only NARROW (append caveats) — so there is no wire-reachable path where cofactored accepts
+and strict rejects a credential a pinned-root verifier would honor. This is the "pinned = defense-in-depth"
+class from the shared method, NOT the exploitable dkg class.
+
+### CONVERTED anyway (reasoned deviation from "don't convert pinned") + why it is the stronger outcome
+This is our OWN first-party ed25519 scheme (NOT an external chain mirror — no consensus/chain-parity concern),
+and the strict guard's invariant is UNIVERSAL over first-party production modules. `verify_strict` is
+behaviorally identical on every honest credential (mint/attenuate use `fresh_signing_key` → proper full-order
+keys, canonical sigs), so it breaks nothing, and it lets me DISCHARGE the grandfathered debt entirely (remove
+the allowlist entry) instead of re-filing it, while future-proofing the exact drift the guard exists to catch
+(a future caller that ever sourced the root from the wire is now strict-safe by construction). All three sites
+→ `verify_strict`; dropped the now-unused `Verifier` trait import (L35).
+
+### The biting tooth — a SELF-PROVING exhibit (proof by execution, rule 3)
+New `chain::strict_smallorder_tests::cofactored_verify_accepts_the_no_secret_forgery_strict_refuses_it`.
+Builds a one-block credential with the classic no-secret forgery under the edwards25519 identity point
+(root = `[1,0,…,0]`, sig = `R=identity ‖ s=0`; for small-order `A`, `h·A=identity` so the cofactored check
+`s·B = R + h·A` collapses to `identity = identity` for EVERY message). In ONE test it asserts:
+  (a) the COFACTORED trait `vkey.verify(...)` **ACCEPTS** the no-secret forgery (fn-local indented
+      `use ed25519_dalek::Verifier;` — the guard's column-0 detector ignores it) — proves the forgery is REAL;
+  (b) `vkey.verify_strict(...)` **REFUSES** it (dalek `is_small_order` on A and R, verifying.rs:370);
+  (c) end-to-end `cred.verify(&identity_root, &Context::new()) == Err(Refusal::BadSignature{block:0})`.
+**Mutation (rule 3):** reverted the block-0 site to cofactored `.verify` (+ re-added the import) → assertion
+(c) went RED with `left: Ok(())  right: Err(BadSignature{block:0})` — i.e. under cofactored the credential
+verify **returns Ok on the no-secret forgery**, printed at chain.rs:1044. Restored → GREEN.
+
+### Verified
+`cargo test -p dregg-auth` (persvati local): lib **8/8** (7 hybrid + the new tooth), grant **15/15**,
+third_party_discharge **8/8**, credential_cycle green, doctests **4/4**. No new warnings (only the unrelated
+pre-existing proc-macro-error2 future-incompat note). Honest hybrid + classical chains, attenuation, discharge
+binding, wire round-trip all unaffected by the strict flip.
+
+### REPORTED, not done (shared-tree rule 4 — `tests/tests/ed25519_strict_guard.rs` is HELD DIRTY by a
+concurrent lane, so I did NOT edit it):
+**The allowlist entry for `dregg-auth/src/credential/chain.rs` (currently ~L159–163) MUST be removed.**
+chain.rs L35 no longer names the `Verifier` trait, so the detector no longer trips on it; the guard's rot-check
+will flag the entry as STALE ("file no longer imports the trait — remove them") and go RED until it is deleted.
+Whichever lane settles the guard file should drop that one 5-line tuple. (This is a REMOVAL, not a re-file —
+the site is now strict-only.)
+
+**Committed NOTHING — supervisor gates.** Files touched (absolute):
+`/Users/ember/dev/breadstuffs/dregg-auth/src/credential/chain.rs` (3 verify→verify_strict, dropped Verifier
+import, new `strict_smallorder_tests` module), this log. Guard-file removal REPORTED above (dirty, not edited).
+
+## 2026-07-17 — acc/bfv-rust — Lean-first BFV STONE 1 laid: from-scratch RNS fold-add interops with fhe.rs at the BYTE level (7/7 oracle teeth, 3 mutations bitten incl. the wrap gate)
+
+**Built (all real, all oracle-anchored):** `fhegg-fhe/src/bfv_lean.rs` (NEW module, +1-line decl in
+`lib.rs`) — NOT a new crate: root `Cargo.lock` is held dirty by other lanes and the module needs ZERO
+new deps, so no Cargo.toml/lock was touched. Contents: (1) a from-scratch minimal proto3 codec
+(varint + length-delim, STRICT — unknown fields refused, not skipped) for fhe.rs's `Ciphertext`/`Rq`
+wire messages; (2) a from-scratch LSB-first bit-packer byte-identical to `fhe-util::transcode_*`;
+(3) the RNS fold-add itself — coefficient-wise residue add mod each of the 3 primes with one
+conditional subtract, over the POWER-BASIS rows fhe.rs serializes (wire format verified from
+`fhe-0.1.1`/`fhe-math-0.1.1` REGISTRY SOURCE, not docs: serializer INTTs to power basis before
+packing, `rq/convert.rs:19-26`; add commutes with NTT so this is exact); (4) the class-(C) wrap gate:
+every `LeanCiphertext` carries a declared per-slot `plain_bound`, `fold_add` REFUSES
+(`WrapRefused{bound_sum,t}`) when bounds could sum ≥ t, budget accumulates through `fold`.
+
+**THE ORACLE TEETH (`fhegg-fhe/tests/bfv_lean_oracle.rs`, params ASSERTED: degree-4096, moduli
+{0xffffee001,0xffffc4001,0x1ffffe0001}, 2^19<t<2^21):** fhe.rs encrypts real `order_increment`
+bucket vectors → MY add → fhe.rs decrypts:
+- `oracle_single_add_decrypts_to_plaintext_sum` — the load-bearing tooth;
+- `oracle_bytes_match_fhers_own_add` — my sum's bytes == `(&ct1 + &ct2).to_bytes()` EXACTLY;
+- `oracle_fold_of_book_matches_plaintext_reference_and_fhers_fold` — 32-order book, both sides,
+  vs plaintext curves AND vs fhe.rs's own fold at the byte level;
+- `wrap_is_real_and_refused_not_silently_wrapped` — 3-way: CONTROL proves (t-1)+2 decrypts to 1
+  under fhe.rs (silent wrap is REAL), the gate refuses it by name, and bounds summing to exactly
+  t-1 still pass (gate can fail in BOTH directions);
+- `reencode_roundtrip_is_byte_identical`, `seeded_ciphertext_refused_loudly` (sk-encrypted cts
+  carry a ChaCha8 c1-seed — REFUSED, named stone, not guessed), `incompatible_and_empty_folds_refused`.
+Plus 4 module unit tests (pack/unpack extremes per modulus, varint, canonical add, NON-CANONICAL
+residue refusal — parser rejects coeff ≥ q_i, which fhe.rs itself would silently accept).
+
+**Mutations (rule 3, each RED → restored, from the runs):** M1 reduction dropped in `add_row` → 4
+oracle tests RED (caught at pack-time canonicity assert); M2 wrong modulus `q-2` in the add → 4 RED
+(`byte-level divergence from fhe.rs's own add`); M3 wrap gate gutted (`if false &&`) → EXACTLY the
+wrap tooth RED (`expected WrapRefused, got Ok(..)`) with all 6 others green — independent bite.
+Restored: full `cargo test -p fhegg-fhe` = 19 lib + 7 oracle passed, 0 failed, all bins compile,
+0 warnings (local, cached tfhe/fhe artifacts — no pbuild needed).
+
+**NAMED, not built (next stones, in module doc):** from-scratch encode/encrypt/decrypt/keygen
+(this stone borrows them from fhe.rs — that is the DESIGNED anchor, not a shortcut); ChaCha8 seed
+expansion for sk-cts; n-of-n threshold decrypt with PROPER exponential smudging (fhe.rs mbfv's is
+the known-wrong fresh-noise TODO); noise-MARGIN meter + Lean-emitted bound (sizing memo (A));
+cryptographic binding of the declared `plain_bound` (today it is ingest-declared, enforceable via
+the deployed `N_max·q_max < t` rule with u16 qtys); the Lean model + Rust↔Lean equality gate;
+multiplication/relin/rotations NEVER ride this path (why the surface is ~1/3, per bfv-sizing).
+
+**Dirty-file rule:** `fhegg-fhe/` was clean at lane start; my only shared-file edit is the 4-line
+module decl in `fhegg-fhe/src/lib.rs`. **Committed NOTHING — supervisor gates.** Files touched:
+`/Users/ember/dev/breadstuffs/fhegg-fhe/src/bfv_lean.rs` (new),
+`/Users/ember/dev/breadstuffs/fhegg-fhe/tests/bfv_lean_oracle.rs` (new),
+`/Users/ember/dev/breadstuffs/fhegg-fhe/src/lib.rs` (+4-line module decl), this log.
+
+## 2026-07-17 — acc/cred — dregg-agent/src/cred.rs credential chain + discharge verify → verify_strict (2 sites); identity-key forgery PROVEN by execution and rejected; allowlist entry removed
+
+**The site:** `dregg-agent/src/cred.rs` — a wire-compatible port of the `dga1_`/`dgd1_` biscuit-style
+attenuable credential (ed25519 caveat-chain). Two cofactored `Verifier::verify` sites, both on
+CREDENTIAL-PRESENTED keys (the guard flagged it as "likely convert"):
+  - line 480 `Credential::verify` chain loop: block[i] verified under `block[i-1].next_pub` (or the
+    caller-pinned `root` for block 0) — the intermediate next_pub values are read straight out of the
+    decoded credential = attacker-chosen.
+  - line 620 `Discharge::verify_against`: gateway sig verified under `Caveat::ThirdParty{gateway}` —
+    also a wire-presented key.
+
+**Ground truth read from ed25519-dalek 2.2.0 source (not memory):** default features enforce canonical
+`S` in BOTH `verify` and `verify_strict` (`check_scalar` = `Scalar::from_canonical_bytes`), so there is
+NO S-malleability gap here (I hypothesized one, then falsified it from the source — the honest negative).
+The REAL residual difference is `verify_strict`'s `self.point.is_small_order() || signature_R.is_small_order()`
+rejection. Under the identity public key `A`, recompute-R gives `expected_R = s·B − k·A = s·B − k·id`,
+so `(R = identity, s = 0)` yields `expected_R = identity = R` → the cofactored `verify` ACCEPTS it for
+ANY message with no secret; `verify_strict` denies the small-order key.
+
+**PROOF BY EXECUTION (new in-module tooth `identity_key_chain_forgery_rejected_by_strict`):**
+builds the exact universal forgery `sig = [1,0,…,0]‖[0;32]` and, via a fn-local `use …Verifier`, asserts
+LIVE that `idk.verify(b"…unrelated…", &sig).is_ok()` (cofactored ACCEPTS the forgery) while
+`idk.verify_strict(...).is_err()` (strict DENIES) — the forgery is demonstrated real, not argued. Then it
+threads a two-block credential (block 0 root-signed but carrying `next_pub = identity`; block 1 forged
+under that identity key with no secret) through the real `Credential::verify` and asserts
+`Err(Refusal::BadSignature{ block: 1 })`. Green under strict.
+
+**MUTATION (rule 3, RED then restored):** flipped line 480 back to non-strict `verify` (re-adding the
+`Verifier` import so it compiles) → `identity_key_chain_forgery_rejected_by_strict` FAILED with
+`strict verify must reject the identity-key forgery at block 1, got Ok(())` (the forged block was
+accepted). Restored `verify_strict` + dropped the import → 5/5 cred tests green
+(`cargo test -p dregg-agent --lib cred::`, exit 0).
+
+**HONEST SCOPE — NOT a proven end-to-end authority forgery (unlike dkg).** I could NOT construct a full
+credential forgery: block 0 is anchored to the caller-PINNED, full-order `root`, so existential forgery of
+a whole credential is blocked; a small-order intermediate `next_pub` can only be introduced by APPENDING
+(the API has no block removal/splice, blocks are hash-chained over the parent signature, and intermediate
+signing secrets are ephemeral/discarded), and appending only NARROWS authority. Third-party gateway keys
+are committed by the restrictor, so a bearer can't swap one for a small-order key. So this conversion
+CLOSES an attacker-influenced weak-key acceptance surface (defense-in-depth-plus on a reusable port) rather
+than fixing a currently-reachable amplification. `verify_strict` is behavior-preserving on every honest
+input (legit ed25519 keys are full-order + canonical). Reported here rather than overclaimed.
+
+**Also named (out of lane, NOT fixed): tail-based revocation is defeatable independent of ed25519
+strictness.** A bearer can `attenuate([])` (empty-caveat block is explicitly allowed — "key rotation only")
+to mint a fresh `tail()` = blake3(new last-block sig) with IDENTICAL authority, evading any deny-set keyed
+on `tail_hex()` (cred.rs:435). This is a protocol-design issue in the revocation model, not a signature
+forgery, and `verify_strict` does not address it. Flagged for a design decision.
+
+**Allowlist:** removed the `dregg-agent/src/cred.rs` GRANDFATHERED entry from
+`tests/tests/ed25519_strict_guard.rs` (the guard's rot-check REQUIRES this once the module-top `Verifier`
+import is gone, else the entry goes STALE → RED). Verified the guard's exact predicate directly against the
+file text: no column-0 `use …Verifier` remains in cred.rs (the only `.verify(` calls are `Credential::verify`
+— the crate's own method — plus the indented fn-local `idk.verify` in the test), and 0 occurrences of the
+cred.rs path remain in the allowlist. The guard verdict is a deterministic function of that text.
+**Could NOT run the guard test binary to completion:** the shared box hit disk 100% full (ENOSPC) and heavy
+co-tenant build contention; I killed my own redundant `cargo test -p dregg-tests` to relieve pressure rather
+than thrash the shared disk. The guard's logic is a pure filesystem text-scan whose predicate I verified by
+hand above — re-run `cargo test -p dregg-tests --test ed25519_strict_guard` on a quiet tree for belt-and-braces.
+
+**SHARED-TREE:** both files (`dregg-agent/src/cred.rs`, `tests/tests/ed25519_strict_guard.rs`) were CLEAN
+at lane start (not in `git status --short`); no other lane held them dirty. **Committed NOTHING — supervisor
+gates.** Files touched: `/Users/ember/dev/breadstuffs/dregg-agent/src/cred.rs`,
+`/Users/ember/dev/breadstuffs/tests/tests/ed25519_strict_guard.rs`, this log.
+
+## 2026-07-17 — acc/pay — dregg-pay otc+swap ed25519 verify sites AUDITED: NOT exploitable (brief's "wire-supplied counterpart key" premise is FALSE); PINNED-KEY + EXTERNAL-SCHEME MIRROR, re-file needed (guard held dirty)
+
+**PREMISE CORRECTION (rule 2).** The brief and both `ed25519_strict_guard` GRANDFATHERED entries call
+these "OTC/swap **counterpart** signatures; counterpart key is **wire-supplied** (attacker-chosen)."
+FALSE from code: neither file verifies any counterpart/wire key. `dregg-pay` is operator-side treasury
+tooling; every verified key is operator-controlled (a pinned governance anchor, or the operator's OWN
+signer key). There is no counterpart party whose key an attacker presents. So NOT the dkg class — NOT
+converted.
+
+### otc.rs — the ONLY verify (line 234) is an operator SELF-signature; no counterpart key exists
+`otc_settle` (otc.rs:213) verifies `vk = VerifyingKey::from_bytes(signer.public_key())` against the
+signature `signer.sign(&otc_settle_message(...))` *the same operator signer just produced*, over a
+dregg-internal message (`b"dregg-pay/otc-settle/v1" ‖ buyer ‖ usdc_in ‖ dregg_out`). The buyer is a
+`DepositAddress` ([u8;32] address, NOT a verifying key). The `signer` is `&dyn Signer` supplied by the
+CALLER (operator KMS/HSM in prod, `MockSigner` in tests) — an attacker would already have to control the
+operator signer arg to influence this key, i.e. already be inside the trust boundary; there is no wire/
+consensus surface. The check even fails OPEN (skips if `from_bytes`/`from_slice` fail) — it is a custody
+sanity tooth, not the value gate (the pile→buyer move is gated by the caller's authority, not by this
+self-check). Not attacker-influenced ⇒ PINNED-KEY/SELF-SIG, defense-in-depth debt only. Not converted
+(converting the operator's own self-signature does not close any forgery, and there is none here).
+
+### swap.rs — TWO verify sites, both operator-controlled; neither convertible
+1. `SwapAuthorization::verify` (swap.rs:227,241) — cofactored `vk.verify` BUT against
+   `self.authority_pk`, the governance authority pubkey **pinned at `JupiterSwap::new`** (operator config
+   from `PayConfig`), NEVER a wire key. Doubly locked: `SwapAuthorization.signature` is a **private field**
+   (swap.rs:220) that only `GovernanceAuthority::authorize` (`pub(crate)`) fills — external code cannot
+   even construct a `SwapAuthorization`, let alone reach `verify` with an attacker-chosen key. The
+   small-order universal forgery needs an attacker-CHOSEN verifying key; here the key is pinned ⇒ out of
+   reach ⇒ **PINNED-KEY**.
+2. `verify_operator_signature` (swap.rs:985,996) — cofactored `vk.verify` over `unsigned.message`, which
+   on the real `JupiterVenue` path is the **Solana transaction message** the operator signs
+   (`solana_sign_target`). This is an **EXTERNAL-SCHEME MIRROR**: `verify_strict` here could reject an
+   operator/HSM signature that the Solana chain accepts — the documented `solana_consensus.rs` trap. Do
+   NOT convert. It is also secondary: `submit_signed`/`execute` gate on the pinned governance auth (Gate 1,
+   swap.rs:873/939) BEFORE this operator-sig check, so even a forged operator sig cannot move treasury
+   without the unforgeable governance authorization.
+
+### PROOF BY EXECUTION
+- The identity-point forgery `(R=identity, s=0)` my probe relies on is GENUINE and already proven green
+  in this tree: `cargo test -p dregg-agent --lib a_small_order_signer_cannot_forge_a_signature` → 1 passed
+  (cofactored `.verify` accepts the no-secret forgery; `verify_strict` refuses it).
+- **New biting tooth added** (swap.rs `#[cfg(test)] mod tests`, additive only):
+  `small_order_authority_forgery_is_out_of_reach_because_the_key_is_pinned` — constructs a
+  `SwapAuthorization` "signed" under the small-order identity key, asserts (a) it DOES verify against the
+  attacker-chosen key `forged_auth.verify(&identity)` (the vector is real), then (b)
+  `swap.execute(&forged_auth, &signer, &t) == Err(SwapError::Unauthorized)` with NOTHING moved, because
+  `check_auth` verifies against the PINNED `authority_pk`, not the attacker's key. Tooth (b) bites if the
+  pin is ever broken (verify against `auth`'s own embedded key = the dkg class) → execute would ACCEPT.
+
+### COULD NOT fully verify (named honestly)
+- **`cargo test -p dregg-pay` is BLOCKED by co-tenant breakage, NOT my change.** dregg-pay's dev-graph is
+  `dregg-pay → dregg-governance → collective-choice → starbridge-privacy-voting`, and another lane holds
+  `starbridge-apps/privacy-voting/src/{lib,service}.rs` DIRTY + currently BROKEN: `lib.rs:523` calls
+  `postcard::to_allocvec` with no `postcard` dep in its Cargo.toml (`error[E0433]`). So the whole
+  dregg-pay test target fails to link. BASELINE evidence dregg-pay itself is green: the pre-breakage run
+  (launched before the co-tenant edit landed) passed its integration suite
+  (`tests/liquidity_governance_e2e.rs` 3/3 incl. `otc_settle_moves_pile_and_refuses_when_short` +
+  `liquidity_vote_authorizes_a_signed_pile_to_fuel_swap`, doctests 1/1). My probe compile-audited by hand
+  (all symbols in scope; `SwapAuthorization` private-field literal legal in-crate). Re-run
+  `cargo test -p dregg-pay --lib small_order` once the voting lane restores `postcard` to fix
+  privacy-voting.
+
+### GUARD RE-FILE NEEDED (I did NOT touch the guard — `tests/tests/ed25519_strict_guard.rs` is HELD DIRTY
+by another lane this session; rule 4). Both entries should move from GRANDFATHERED to justified
+categories. Replace the two entries with:
+- `dregg-pay/src/otc.rs` → **PINNED-KEY** (audited 2026-07-17): "otc_settle verifies the operator's OWN
+  signer self-signature (`vk` from `signer.public_key()`) over a dregg-internal message; the buyer is a
+  DepositAddress, not a key. No counterpart/wire key exists — the brief's premise was wrong. Not
+  attacker-influenced (an attacker would have to supply the operator `signer` arg). Defense-in-depth debt
+  only; NOT converted."
+- `dregg-pay/src/swap.rs` → **PINNED-KEY + EXTERNAL-SCHEME MIRROR** (audited 2026-07-17):
+  "`SwapAuthorization::verify` checks the governance signature against `authority_pk` PINNED at
+  `JupiterSwap::new` (never wire); the `signature` field is private so a `SwapAuthorization` can't even be
+  built externally — PINNED-KEY, out of reach of the small-order forgery (tooth:
+  `small_order_authority_forgery_is_out_of_reach_because_the_key_is_pinned`). `verify_operator_signature`
+  verifies the operator's Solana transaction signature — EXTERNAL-SCHEME MIRROR (strict would reject sigs
+  Solana accepts). NOT converted."
+
+**Committed NOTHING — supervisor gates.** Files touched:
+`/Users/ember/dev/breadstuffs/dregg-pay/src/swap.rs` (additive test only), this log.
+NOT touched (held dirty by other lanes): `/Users/ember/dev/breadstuffs/tests/tests/ed25519_strict_guard.rs`
+(re-file text above), `/Users/ember/dev/breadstuffs/dregg-pay/src/otc.rs` (clean; no code change — not
+exploitable, re-file only).
+
+## 2026-07-17 — acc/bfv-lean — Lean-first BFV first stone LAID: both silent-failure guards are now THEOREMS on the real fhe.rs numbers (kernel-clean, mutation-bitten); the honest u16 bucket capacity is FIFTEEN
+
+New namespace `metatheory/Bfv/` (717 LOC: Params 120 / NoWrap 107 / Noise 193 / Fold 249 / root 48),
+registered as its own `lean_lib` + added to defaultTargets. `lake build Bfv` GREEN (828 jobs), run by
+me locally. 33 keystones `#assert_all_clean` + `#assert_namespace_axioms Bfv` pins **42 theorems
+kernel-clean** (propext/choice/Quot.sound only — no sorry, no fresh axiom, no native_decide).
+
+### (1) NO-WRAP — class (C), and the N bound stated HONESTLY
+- `fold_sum_no_wrap`: ≤ N quantities each ≤ qmax, `N·qmax < t` ⇒ true sum < t (readout faithful:
+  `fold_readout_faithful`). `wrap_misclears`: a sum in [t,2t) READS as sum−t ≠ sum — the wrap is a
+  well-formed WRONG number, not an error state.
+- **The honest bound: with full-range u16 quantities and the deployed t = 1032193, capacity is
+  N = 15.** FIFTEEN, not "N bounded". `u16_bucket_capacity` (15 safe) + `sixteen_exceeds_t` +
+  `sixteen_misclears` (the 16-order all-max bucket truly holds 1,048,560 and reads **16,367**,
+  decide-pinned both polarities). Practical alternative pinned tight too: 12-bit qtys ⇒ N = 252
+  (`u12_bucket_capacity`, 253 fails). Production ingest MUST enforce one of these; the Lean constant
+  is the thing to emit.
+### (2) NOISE BUDGET — class (A), the cliff becomes a METER
+- `decrypt_exact` (keystone): m < t ∧ `2t·|e| + 2(t−1)·r < q` ⇒ decryptPhase(Δm+e) = m EXACTLY.
+  The (t−1)·r cross-term (folklore "|e|<Δ/2" drops it; here it is ~2^41 vs fresh noise 2^20) is
+  PROVEN load-bearing by mutation (see below).
+- `decrypt_misses`: on the deployed params the phase q/(2t)+1 (m=0, just over budget) decrypts
+  CLEANLY to **1** — the failing side proved by kernel `decide` on the real 109-bit q, not asserted.
+- Noise algebra: `noiseAt_add` (noise adds EXACTLY under hom. add) + `abs_noise_add_le` +
+  K-fold `abs_sum_le_length_mul` (|Σe| ≤ K·B — the SOUND worst-case ℓ∞ bound; the memo's
+  "variance doubles" is the average-case heuristic and is NOT what is proved — named in-file).
+- END-TO-END: `fold_decrypts_exact` (the exact fhegg additive.rs shape: Ciphertext::zero then +=
+  per order) ⇒ decrypt(fold) = exact integer sum, both classes closed at once;
+  `deployed_fold_decrypts_exact` instantiates at the tight deployed values (u16, N=15, B=2^20).
+- **The OBSERVABLE**: `noiseMargin`/`marginHolds` (computable ℕ check) + `marginHolds_safe`
+  soundness ⇒ a Rust decrypt gated on the emitted margin enforces a theorem's hypothesis.
+  `deployed_margin_holds`: 4096 adds × B=2^20 SAFE (~2^56 slack). `margin_fails_big_noise`:
+  B=2^90 REFUSED — the meter can read empty.
+- Model-correspondence partly discharged: `decryptPhase_add_q` (+q phase wrap ⇒ +t readout, the
+  classical mod-q/mod-t fact) + `phase_lt_q`/`fold_phase_lt_q` (in-envelope the ℤ-phase model and
+  the mod-q machine coincide).
+
+### Mutations (rule 3 — four teeth bitten, each RED then restored)
+1. u16 capacity 15→16: `decide proved that the proposition ... is false` (NoWrap.lean:80) + hygiene
+   FAIL sorryAx. The tight bound bites.
+2. **SafeNoise's (t−1)·r term deleted** (the folklore-slogan mutation): `linarith failed to find a
+   contradiction` at the LOWER rounding bound (Noise.lean:126) — the cross-term is load-bearing in
+   the PROOF, not decorative.
+3. `margin_fails_big_noise` flipped false→true: decide RED (Fold.lean:220) — the meter's empty
+   reading is a real kernel evaluation.
+4. `decrypt_misses` claimed =0 instead of =1: decide RED (Noise.lean:149) — the over-budget
+   mis-decrypt witness is real.
+   Every mutation ALSO tripped `#assert_all_clean` on the resulting sorryAx — the hygiene pin is a
+   second independent tooth.
+
+### NOT proved — named plainly (the honesty ledger, also in Bfv.lean's root doc)
+- **Class (B) lattice security is NOT a Lean theorem and never will be** — estimator artifact +
+  build gate (Rust-side); nothing in Bfv/ pretends otherwise.
+- Scalar-phase model gap: 1 coefficient models n=4096 (adds are coefficient-wise; the polynomial
+  lift + encode/decode slot bijection NOT formalized). Fresh-noise B≈2^20 is an ASSUMPTION
+  (deriving it needs the ring-product expansion — Phase 2). Smudging/n-of-n (class D) not modeled
+  yet (the Phase-2 deliverable). No claim that deployed Rust ingest/decrypt currently enforces
+  these gates — wiring the emitted constants is named Rust-side work.
+- SIZE, honestly: 717 LOC vs the memo's 2.5–4k full-corpus estimate — this is the Phase-1
+  foundation (both named theorems + composition + observable + tight deployed pins), not padding;
+  Phase-2 (smudging lemma, n-of-n, polynomial lift) is where the rest of the estimate lives.
+
+### Environment hazard (named for the supervisor)
+Mid-mutation the box hit **ENOSPC** (/System/Volumes/Data 100%, ~130Mi free; /private/tmp/claude-501
+holds ~50G of OTHER sessions' scratchpads — breadstuffs 32G + DreggNet 18G, one session dir alone
+16G). I deleted nothing (co-tenant lanes may be live) and finished with untee'd builds. Someone
+should reap dead session scratchpads before the next heavy lane.
+
+**Committed NOTHING — supervisor gates.** Files touched (all under `/Users/ember/dev/breadstuffs/`):
+`metatheory/Bfv.lean` (new), `metatheory/Bfv/Params.lean` (new), `metatheory/Bfv/NoWrap.lean` (new),
+`metatheory/Bfv/Noise.lean` (new), `metatheory/Bfv/Fold.lean` (new), `metatheory/lakefile.toml`
+(additive: Bfv lean_lib + defaultTargets), this log. SKIPPED as dirty (other lanes): everything else —
+`metatheory/Market.lean`, `metatheory/Market/RecycleFlywheel.lean`, `metatheory/Dregg2/Exec/AuthTurn.lean`
+untouched.
+
+## 2026-07-17 — acc/voting-fix — privacy-voting tally FORGERY FIXED (collective-choice CountGe port): zero-ballot tally now a REAL executor refusal, pin FLIPPED + mutation-proven; the value-binding residual precisely NAMED + pinned
+
+**THE FIX (executor-enforced, not bookkeeping):** ported `collective-choice`'s `CountGe` quorum
+binding to privacy-voting's tally board, at collective-choice's own weighted-poll floor
+(threshold 1). Poll cells gain per-choice BALLOT-SET COMMITMENT slots (7/8/9 =
+`TALLY_{YES,NO,ABSTAIN}_BALLOTS_SLOT`) and the poll program (factory descriptor +
+`poll_cell_program`, 5 -> 11 constraints) gains, per tally slot:
+`AnyOf[Immutable(TALLY_X), CountGe{1, BALLOTS_X}]` (a MOVING tally must EXHIBIT, as the unique
+Cleartext witness blob, a postcard `Vec<[u8;32]>` of distinct ballot-cell ids opening the NEW
+commitment) plus `AnyOf[Immutable(BALLOTS_X), CountGe{1, BALLOTS_X}]` (the commitment slot only
+ever holds a value the same turn opened — no garbage roots). A witness-less or empty-set tally
+write is a fail-closed executor refusal; every counted-ballot claim is now an on-ledger-openable
+commitment (the tamper-EVIDENCE the crate docs promised).
+
+**PIN FLIPPED (the lane's mandate):** `tests/tally_forgery.rs::poll_operator_forges_a_tally_with_zero_ballots_cast`
+now proves the forgery REFUSED, both shapes: (a) empty-set exhibit + tally=1M -> refused
+("exhibited set has 0 distinct element(s) < threshold 1 (CountGe)"); (b) the ORIGINAL bare
+`SetField` witness-less write -> refused fail-closed (MissingContextField). Board stays 0. The
+honest half: a REAL cast ballot (seed_ballot + cast_vote) then a tally of 1 exhibiting that
+ballot's id COMMITS, and the on-ledger commitment equals `count_ge_set_commitment({ballot})`.
+
+**MUTATION (rule 3, bite proven by execution):** disabled the gate loop (`.take(0)` on the
+constraint push) -> `poll_operator_forges_a_tally_with_zero_ballots_cast` went RED exactly at the
+refusal expect (the 1M forgery COMMITTED, TurnReceipt in hand) -> restored -> full suite GREEN
+again. RED run: persvati entcompose, `MUT-EXIT:101`, 1 failed/1 passed.
+
+**RESIDUAL — NAMED PRECISELY, NOT PAPERED (new pin `residual_one_exhibited_ballot_still_admits_an_inflated_tally_value`,
+passes while open; flip it when closed):** the tally VALUE is NOT bound to the exhibited set's
+SIZE — an operator exhibiting ONE fabricated id can still post tally=1M in one turn.
+`StateConstraint::CountGe`'s threshold is a program-build-time CONSTANT and the executor has NO
+atom relating a slot's numeric value to the distinct-count of a committed/exhibited set. The
+missing primitive (verified against the FULL evaluator arm list in `cell/src/program/eval.rs` +
+`SimpleStateConstraint`): a slot-valued-threshold CountGe — `CountGeSlot { count_index,
+set_commitment_slot }` enforcing `|distinct exhibited set| >= u64(new[count_index])` — OR
+`SimpleStateConstraint::Witnessed` (Witnessed does NOT exist in Simple, so a `Custom{vk_hash}`
+dynamic-count predicate cannot compose under `AnyOf[Immutable, ...]`; unconditional top-level
+`Witnessed` would break every non-tally turn, and 3 per-choice Cleartext exhibits would collide
+with CountGe's unique-Cleartext discipline). Adding either variant is a consensus-vocabulary
+change (postcard append-only + Lean twin + sdk-ts discriminant pins) — NOT done mid-swarm in this
+lane, deliberately. DEEPER residual, same as collective-choice's own gate (its CountGe doc admits
+it): exhibited IDs are not verified to be REAL factory-born ballot cells that voted this choice —
+per-element ledger verification or the ZK tally tier is the full closure. Both residuals hold for
+collective-choice too; this port reaches fix-pattern parity, honestly labeled.
+
+**VERIFIED (persvati entcompose via scripts/pbuild — local target + persvati BOTH hit full disks
+tonight; freed 159G on persvati by pruning entcompose's 6h-stale deps, lane was idle):**
+`cargo test -p starbridge-privacy-voting` -> **53/53 green** (28 lib incl. 2 new
+evaluate_full-witness tests + constraint-shape assert 5->11; 8 card; 2 eligibility; 6 reexpress;
+7 service incl. shrink-refusal now witness-carrying so MONOTONIC still the refuser; 2
+tally_forgery = flipped tooth + residual pin), `PBUILD-EXIT:0`. `cargo test -p collective-choice`
+-> 23/23 (sibling untouched, framework additions don't disturb it). `cargo check -p starbridge-v2
+--features embedded-executor,app-registry` -> Finished 0 errors. `cargo check -p dregg-cli` ->
+Finished.
+
+**Framework additions (ADDITIVE ONLY — needed because no fire/invoke path could carry witness
+blobs):** `GatedAffordance::fire_through_executor_with_witnesses` +
+`DeosCell::fire_gated_through_executor_with_witnesses` (closure returns (effects, blobs); action
+re-signed AFTER blobs attach, the collective-choice sign_action discipline),
+`invoke_with_descriptor_with_witnesses` (+ re-export), and starbridge-v2
+`AppWorldSpine::commit_with_witnesses` (the witness-carrying twin of `commit`, sender-assert-free
+counterpart of `commit_as`).
+
+**Surface updates riding the gate:** `build_record_tally_action` now takes the counted-ballot set
+(+ `ballot_set_exhibit` helper, `ballots_slot_for_choice`); `fire_record_tally` +
+`VotingService::record_tally` exhibit + commit in the same turn; seed_poll zeroes slots 7-9;
+web_constants exports the new slots; starbridge-v2 registry demo now casts a REAL vote on the
+seeded companion ballot then records it (was: bare admin bump), World-spine + card-fire + bake
+paths carry exhibits (bake uses growing per-choice synthetic-ballot sets, labeled as such).
+
+**NOT MY BREAKAGE (named, evidence):** `cargo test -p dregg-app-framework --lib` -> 162 passed /
+**2 FAILED, both `service_promise::tests`** (`committed_terminal_moves_the_cell_commitment`,
+`committed_state_forbids_refund_after_release`) — the escrow/commitment weld, exactly the area of
+the co-tenant-dirty `cell/src/{commitment,escrow_sealed,ledger,state}.rs`; `service_promise.rs`
+is git-CLEAN, references NONE of my (purely additive) framework fns, and the entire
+privacy-voting + collective-choice + starbridge-v2 stack over the same framework is green.
+
+**KNOWN CONSUMER GAP (named, not faked):** `cli/src/commands/voting.rs` `voting tally` submits
+raw JSON effects — the node JSON submit path carries no witness blobs, so a tally move against a
+gated poll now refuses fail-closed from the CLI (correct but unusable for tallying);
+witness-blob support in the `/api/turns/submit` JSON schema is the fix, NOT touched because
+`node/src/api.rs` is another lane's dirty file. CLI refusal hint updated to say exactly this.
+`wasm/src/bindings_card.rs`'s "record_tally" is the collective-choice-shaped pollworld (own
+program) — unaffected.
+
+**BOX NOTE:** local mac disk hit 100% mid-session (ENOSPC broke shared-target builds; recovered),
+then every local cargo serialized behind a co-tenant release build holding the global
+package-cache lock through a ~40min lean-ffi leanc build — verification moved to persvati
+(entcompose lane; srot was the co-tenanted one earlier tonight). Persvati root was ALSO 100%
+full; freed by pruning entcompose target/debug/deps >6h (158G) + incremental + release (lane idle
+at the time, active botverify lane untouched).
+
+**Files touched (all under `/Users/ember/dev/breadstuffs/`):**
+`starbridge-apps/privacy-voting/src/lib.rs` (slots, gates, builders, fire, seed, docs, tests),
+`starbridge-apps/privacy-voting/src/service.rs`, `starbridge-apps/privacy-voting/Cargo.toml`
+(postcard), `starbridge-apps/privacy-voting/tests/tally_forgery.rs` (FLIPPED + residual pin),
+`starbridge-apps/privacy-voting/tests/deos_seam.rs`, `starbridge-apps/privacy-voting/tests/service.rs`,
+`app-framework/src/affordance.rs`, `app-framework/src/deos_app.rs`, `app-framework/src/invoke.rs`,
+`app-framework/src/lib.rs` (re-export line), `starbridge-v2/src/app_worldspine.rs`,
+`starbridge-v2/src/app_registry.rs`, `starbridge-v2/src/main.rs`, `cli/src/commands/voting.rs`,
+this log. `Cargo.lock` was already co-tenant-dirty; my dep edge rides it.
+**Committed NOTHING — supervisor gates.**
+
+**ADDENDUM (acc/voting-fix, verification boundary):** the two `starbridge-v2/src/main.rs` sites
+(voting_card_fire + the bake loop) are gated behind
+`render-capture+gpui-ui+card-pane+app-registry+embedded-executor` — mac-only GUI features that
+persvati (Linux) cannot build, and the local mac stayed lock-convoyed (co-tenant release build on
+the global cargo package-cache lock) through end of lane. Those two hunks are compiler-UNVERIFIED;
+they are mechanical ports of the file's own `commit_as` exemplar shape (app_registry.rs:1997/2103/2209).
+First `cargo check -p starbridge-v2 --features render-capture,gpui-ui,card-pane,app-registry,embedded-executor`
+on a quiet mac must gate them. Everything else in this entry is execution-verified as stated.
+
+## 2026-07-18 — fx/mult-noise-lean — the MULTIPLICATIVE Lean stone LAID: ct×ct multiply + relin noise bound + product no-wrap are THEOREMS on the real fhe.rs numbers (kernel-clean, 4 mutations bitten); the deployed per-operand cap is 1015 and a 1016² product READS AS 63
+
+New `metatheory/Bfv/Mul.lean` (403 LOC), imported by root `Bfv.lean`. `lake build Bfv` GREEN
+(834 jobs, run by me locally, twice around the mutation cycle). 16 new keystones
+`#assert_all_clean`; namespace pin now **58 theorems kernel-clean** (was 42) — propext/choice/
+Quot.sound only, 0 sorry, no fresh axiom. NO lakefile change needed (Bfv lib already registered;
+the dirty `metatheory/lakefile.toml` is the prior lane's, untouched).
+
+### (1) NOISE GROWTH for one multiply + relinearization — proved via an EXACT decomposition
+- `mulPhase_encrypt_eq` (the spine, an EQUATION not a bound): multiplying honest encryptions
+  gives phase `Δ·m₁m₂ + (m₁e₂ + m₂e₁) + ⌊(2·mulRemainder + q)/(2q)⌋` — the operand noises come
+  back AMPLIFIED BY THE MESSAGES (`m₁e₂+m₂e₁`, up to `(t−1)(B₁+B₂)` = the t·(e₁+e₂) shape
+  bfv_mul.rs's ledger predicted), plus the rescaled quadratic/r-cross residue, ONLY then rounding.
+- `mul_relin_noise_le` (THE KEYSTONE): |noise| ≤ `mulNoiseBound` = M₁B₂ + M₂B₁ +
+  (t·B₁B₂ + rΔ·M₁M₂ + r(M₁B₂+M₂B₁))/q + 1 + B_ks. SOUND upper bound; the NAMED slack: worst-case
+  ℓ∞ triangle inequality (no variance story), and NO ring-expansion factor n (scalar model).
+  Relin modeled AT ITS NOISE INTERFACE (`Ct.relin`, additive `|e_ks| ≤ B_ks` — an INPUT, like
+  B_fresh; deriving it needs the RNS gadget decomposition, named Phase-2).
+- `abs_mulRound_le`: the rounding term ≤ |E|/q + 1 — that `+1` is proven load-bearing (mutation 3).
+- `mul_relin_decrypts_exact` + `deployed_mul_relin_decrypts_exact`: operands ≤ 1015, fresh noise
+  ≤ 2^20, e_ks ≤ 2^40 ⇒ the relinearized product decrypts to EXACTLY m₁·m₂ on the deployed
+  109-bit q — the multiplicative twin of `deployed_fold_decrypts_exact`.
+- The OBSERVABLE: `mulNoiseBoundN` (ℕ, computable, the emit artifact) + `mulNoiseBoundN_cast`
+  (casts to the ℤ bound ON THE NOSE) + `mulMarginHolds`/`mulMarginHolds_safe` — a Rust multiply
+  gated on the emitted check enforces the theorem's hypothesis. `deployed_mul_margin_holds`:
+  the whole scalar bound (~2^41) sits ~2^47 under the ~2^89 budget.
+- **The n-gap, handled honestly instead of hidden**: real BFV mult noise carries the ring
+  expansion factor δ_R ≤ n = 4096 which the scalar model CANNOT see.
+  `deployed_mul_margin_survives_ring_expansion` pins (kernel decide) that even inflating the
+  ENTIRE proven bound ×4096, the deployed margin still holds — the scalar-scope theorem is
+  operationally honest for these parameters while the polynomial lift stays Phase-2.
+
+### (2) PRODUCT no-wrap — a DIFFERENT REGIME from the additive cap, and the honest numbers
+- `product_no_wrap`: `qmax₁·qmax₂ < t` ⇒ product exact — per-OPERAND √t scale, NOT the additive
+  per-count `N·qmax < t`. **Deployed tight cap: 1015 per operand** (`deployed_product_capacity`,
+  `product_capacity_tight`: 1016² = 1032256 ≥ t) — the Lean twin of
+  `bfv_mul.rs::square_safe_bound(1032193) = 1015`, proven independently (the two lanes AGREE).
+- `u16_product_misclears`: ADDING two full u16 is nowhere near wrap (131,070 ≪ t) but their
+  PRODUCT truly holds 4,294,836,225 and reads **913,345** — the task brief's "wraps much faster
+  than a sum" made a kernel-decided number.
+
+### FAILING SIDES (the tooth-bites discipline, in Lean)
+- `product_wraps`: the 1016² book truly holds 1,032,256 and READS AS **63** — well-formed,
+  error-free, catastrophically wrong; decide-pinned both polarities.
+- `mul_margin_fails_big_noise`: operand noise 2^80 REFUSED (M·B ≈ 2^90 crosses the ~2^89 budget).
+- `mul_amplifies_where_add_accepts`: THE CONTRAST PIN — the SAME 2^80 noise the ADDITIVE margin
+  accepts for one ct is REFUSED by the multiply margin. "Multiplication grows noise
+  multiplicatively" as a kernel-decided conjunction; a guard treating mul like add mis-decrypts.
+
+### Mutations (rule 3 — four teeth bitten, each RED then restored, each also tripping hygiene)
+1. `product_wraps` 63→64: decide proved-false (Mul.lean:305) + sorryAx hygiene FAIL.
+2. `mul_margin_fails_big_noise` false→true (and the twin conjunct): decide RED at BOTH sites
+   (362, 371).
+3. **The `+1` rounding unit deleted from `mulNoiseBound`** (the "rounding is free" mutation):
+   `linarith failed` in `mul_relin_noise_le` (:257) + cast lemma unsolved (:328) — the rounding
+   slack is load-bearing in the PROOF, not decorative.
+4. Deployed cap 1015→1016: decide RED (:296) AND the composite keystone type-mismatches (:398) —
+   the deployed theorem genuinely CONSUMES the tight cap.
+
+### Coordination with the bfv-multiply Rust lane (live co-tenant, its file READ not touched)
+`fhegg-fhe/src/bfv_mul.rs` pins `square_safe_bound = 1015` — matches my independently-proven cap
+exactly. Its `noise_growth_measured` oracle test is NOT YET on disk (tests/bfv_mul_oracle.rs
+absent) — the check to run when it lands: measured post-relin noise must fit
+`mulNoiseBound ×4096` (the n-inflated emitted bound) with B_ks ≤ 2^40; if measurement exceeds it,
+that is a REAL FINDING to report, not an allowance to widen silently. Its module doc predicted a
+"t·n·(e_a+e_b)-shape" lemma — delivered: t·(e₁+e₂) proven exactly (the m₁e₂+m₂e₁ cross-term),
+n named as the model gap + survival-pinned.
+
+### NOT proved — named plainly
+- The ring lift (δ_R ≤ n on cross-terms) — Phase-2; mitigated by the ×4096 pin, not discharged.
+- The mod-q correspondence does NOT carry over from the add path (phase products aren't
+  +q-shift-invariant; needs centered representatives) — a LARGER model gap than the additive
+  one, named in the module doc, undischarged.
+- B_ks = 2^40 is an allowance (assumption), B_fresh = 2^20 still an assumption.
+- Depth > 1 / multiplicative-depth budget (incl. the `product_sum` Σaᵢbᵢ chain shape) and
+  bootstrapping: OUT OF SCOPE, stated in-file. Class (B) lattice security: still not a Lean
+  theorem, never will be.
+
+**Committed NOTHING — supervisor gates.** Files touched (absolute):
+`/Users/ember/dev/breadstuffs/metatheory/Bfv/Mul.lean` (new),
+`/Users/ember/dev/breadstuffs/metatheory/Bfv.lean` (import + root-doc bullet + honesty-ledger
+addition), this log. SKIPPED as co-tenant-dirty: `metatheory/lakefile.toml` (not needed — Bfv lib
+already registered), `metatheory/Dregg2/*` (other lanes), `fhegg-fhe/*` (multiply lane, read-only).
+
+## 2026-07-18 — fx/gpu-saturate — GPU saturation MEASURED on both boxes: the STARK prover GPU is REAL (4/4 parity tests pass on real HW, PROVE 7.6–8.0x, byte-identical across two different GPUs); the BFV fold GPU had NEVER COMPILED (2 compile errors + reserved-keyword WGSL — the "parity test" could never have run) and once fixed it LOSES to the CPU 7x (host-bound, 10% busy); solver GPU exercised for real (PDHG residency 8.8x at 128k edges)
+
+**HARDWARE GROUND TRUTH (vulkaninfo, both boxes):** hbox = AMD Radeon RX 6750 XT, DISCRETE, 12 GB
+VRAM, amdvlk 2025.Q2.1 (spec mem BW ~432 GB/s — spec sheet, not measured) + an unused Intel UHD 770.
+persvati = Radeon 890M-class iGPU (RADV GFX1150, Strix), INTEGRATED — bandwidth is shared CPU
+LPDDR5X (the named iGPU caveat is real). Both have working Vulkan adapters; nothing was headless.
+
+### Path (1) fhegg-fhe/src/bfv_gpu.rs — FINDING FIRST: it had NEVER COMPILED ANYWHERE
+The compiler-oracle answered before any benchmark could: (a) `use crate::bfv_lean::Result` — that
+alias is module-PRIVATE (E0603); (b) wgpu 24 `request_adapter` returns `Option`, not `Result` —
+`.ok()?` is E0599. And once compiling, the shader itself never parsed on any device: `meta` is a
+RESERVED WGSL keyword (naga validation error at first `create_shader_module`). **The documented
+parity test `gpu_fold_matches_cpu_fold_bit_for_bit` could never have executed — module never built,
+shader never parsed.** This is exactly the mirror-class the frame names. Fixed minimally to make
+the lane measurable (local `Result` alias; `?` on the Option; `meta`→`params` in bfv_fold.wgsl —
+3 mechanical hunks, no semantic change), after which BOTH parity tests pass with a REAL adapter
+(persvati, 0.05 s, no skip line) — the first execution the tooth has ever had.
+
+**MEASURED (new bench-only bin `fhegg-fhe/src/bin/gpu_saturate.rs`, N-sweep 16→8192 full-shape
+cts, deg 4096 x 3 RNS x 2 polys, both boxes, GPU busy sampled from amdgpu sysfs at 2 ms):**
+- **hbox 6750 XT: GPU LOSES ~7x at every N** (N=8192: CPU 124 ms vs GPU 860 ms e2e; eff 1.85 GB/s
+  = 0.4% of the card's spec BW; busy MEAN ~10%, brief 99% spikes). Parity BIT-EXACT at every N.
+- **persvati iGPU: GPU loses ~5x** (N=8192: CPU 151 ms vs GPU 786 ms; busy mean 7%, max 14%).
+- **COST ATTRIBUTION (bench-side replicas, hbox N=8192, 1.61 GB):** host pack 485 ms (56%) +
+  create/upload 325 ms (37%) + dispatch/readback ~50 ms (7%). The CPU finishes the WHOLE fold
+  faster than the GPU path's serial u64→2xu32 pack loop alone. The dispatch is also thin: 24576
+  invocations total (one per output lane) regardless of N — 96 workgroups on a 40-WGP card.
+- **N=16384 PANICS** (3.2 GB buffer > wgpu max 2^31-1): `fold_gpu` dies in wgpu validation instead
+  of returning an error → hard per-call ceiling N≤~10922 and a panic-not-refusal defect.
+**VERDICT (1): does NOT saturate, is currently a de-optimization on both boxes.** The design that
+could win (named, NOT built — not this lane): stream/resident accumulation (upload once, add in
+place, never re-pack — the u64 LE layout is already (lo,hi) u32 pairs, the pack is an avoidable
+identity copy), chunked buffers, N-scaled dispatch. Until then the CPU fold is the right deploy.
+
+### Path (2) circuit-prove gpu_backend — the GPU STARK path is REAL on real HW, first confirmed run
+`--ignored` e2e suites run on BOTH boxes (`DREGG_REQUIRE_LEAN=0` for the test build only — the
+documented escape; these tests exercise the GPU PCS seams, not the Lean-linked executor):
+- **hbox 6750 XT: 4/4 PASS.** GpuDft 4.4–6.3x (h=2^16→2^20 w=256); GPU Merkle commit 23–29x
+  (2.6 Mhash/s at h=2^20); REAL recursion fold layer PROVE 11.64 s→1.53 s = **7.62x**, tower
+  large-regime top layer 14.14 s→1.78 s = **7.95x**; proofs BYTE-IDENTICAL to CPU (481014 /
+  480427 bytes) and verify under the untouched CPU verifier; tamper REJECTS.
+- **persvati iGPU: 4/4 PASS.** DFT 2.4–3.4x, Merkle 8.7–11x, PROVE 6.85x/7.56x — and the proof
+  bytes are IDENTICAL to hbox's (deterministic fold across two different GPUs/drivers, RADV vs
+  amdvlk — a stronger determinism fact than the tests themselves claim).
+**VERDICT (2): real, biting, and the speedups are of the load-bearing phase.** Saturation per se
+not instrumented for these suites (no busy window per phase); the 7.6–8x PROVE gain is the number
+that matters for the ~288 s recursive fold.
+
+### Path (3) fhegg-solver gpu.rs — "unexercised" (FHEGG-SDK-READINESS.md:41) is now STALE
+`fhegg-bench` built+ran on BOTH boxes (full output in scratchpad, exits 0):
+- hbox 6750 XT: histogram GPU wins at scale — N=100k: 3.56→1.86 ms; **N=1M: 38.9→3.4 ms (11.4x)**;
+  PDHG m=16384: 119→30.6 ms (3.9x); frontier (resident, 2000 iters one pass) **8.8x at m=131072**
+  (682→77 ms), still growing sublinearly. Small N loses exactly as the bin's own honesty note says.
+- persvati iGPU: same shape, smaller wins (N=1M 9.5x; frontier 2.4x then parity at 131k — the
+  shared-bandwidth iGPU ceiling shows exactly where expected).
+- Utilization, stated honestly: busy sampled across the WHOLE hbox bench run = mean 2.4%, p95 14%,
+  max 99% — the run is mostly CPU-only sections; per-phase windowed sampling was NOT done, so no
+  per-phase utilization claim is made. Even the winning configs are burst-y, not sustained.
+**VERDICT (3): exercised, runs, measures, wins where residency amortizes. Not saturating either —
+but its design (resident state, one encoded pass) is the shape path (1) should copy.**
+
+### The one-line answer to "is our GPU saturating hbox?"
+**No path sustains saturation.** (2) and (3) get real 7–11x wins in bursts; (1) is host-bound to
+~10% busy and slower than CPU. The hardware is fine — 6750 XT + working Vulkan; the ceilings are
+API-shape (re-pack + re-upload per call, thin dispatches), not silicon.
+
+**Mutation/tooth status:** no test was weakened; the parity tooth now actually RUNS (was: never
+compiled). The N=16384 panic and the never-compiled state are defects NAMED for the owning lane,
+fix of record here limited to the 3 mechanical compile/parse hunks that made measurement possible.
+
+**Files touched (all under `/Users/ember/dev/breadstuffs/`):** `fhegg-fhe/src/bin/gpu_saturate.rs`
+(NEW, bench-only harness), `fhegg-fhe/src/bfv_gpu.rs` (2 compile fixes: private-Result alias,
+Option-not-Result adapter), `fhegg-fhe/src/shaders/bfv_fold.wgsl` (`meta`→`params`, reserved
+keyword), this log. NOT touched: `fhegg-fhe/{Cargo.toml,src/lib.rs,src/bfv_mul.rs,src/convex_step.rs}`
+(multiply/convex lanes hold them), everything else dirty. Full outputs:
+`/private/tmp/claude-501/-Users-ember-dev-DreggNet/c18f4027-afe0-440b-80d8-d93b3b603adb/scratchpad/`
+`{hbox_gpu_saturate_full,hbox_stark_gpu_tests2,persvati_stark_gpu_tests,hbox_fhegg_bench_full,persvati_fhegg_bench_full}.txt`.
+Ran on: hbox `~/dregg-build/gpu-e2e` (swarm-build-contained), persvati `~/dregg-build/srot`, via
+pbuild rsync of this working tree. **Committed NOTHING — supervisor gates.**
+
+## 2026-07-18 — fx/independence-guard — `#assert_not_depends_on` FALSIFICATION RECORD: the guard bites the real mutation (the axiom gate does NOT), but its own self-protection was DECORATIVE — closed by a positive control
+
+Two experiments, both re-run locally on this tree (warm mathlib, `lake` local; whole-tree
+`lake build Dregg2` = **Build completed successfully (9779 jobs)** with the fix in).
+
+### (1) The mutation the guard is FOR — RED, as designed
+Mutation performed on `metatheory/Dregg2/Crypto/Deriv/Similarity.lean`: `PredRE.sim_null` deleted
+from its syntactic position and re-proved DENOTATIONALLY, moved BELOW `sim_derives`:
+
+    theorem sim_null {R S : PredRE} (h : R ≅ S) : null R = null S := by
+      simpa only [derives] using sim_derives h []
+
+Verbatim first error line observed (`lake env lean Dregg2/Crypto/Deriv/Similarity.lean`):
+
+    Dregg2/Crypto/Deriv/Similarity.lean:337:0: error: semantics-freedom FAIL: Dregg2.Crypto.Deriv.PredRE.sim_null DEPENDS on forbidden constant Dregg2.Crypto.Deriv.PredRE.sim_derives via [Dregg2.Crypto.Deriv.PredRE.sim_null,
+
+All four pins fired (`sim_null`, `sim_der`, `sim_derList`, `sim_derives_syntactic`).
+
+**The crucial datum: on that SAME mutant, `#assert_all_clean` still printed
+`#assert_all_clean: 7 keystones pinned kernel-clean`.** The pre-existing axiom-hygiene gate did NOT
+catch the mutation — the semantic re-proof is perfectly axiom-clean. Only the new guard caught it.
+That is the entire justification for the guard existing alongside `#assert_axioms`.
+
+### (2) The guard's OWN self-protection was FALSE — measured, not argued
+The shipped guard claimed its `scanned <= 1` check would catch a lost `allowOpaque := true`. It does
+NOT. Built with `info.value? (allowOpaque := false)` and run on the SAME mutant above, the walk
+reported the forbidden dependency as absent:
+
+    #assert_not_depends_on Dregg2.Crypto.Deriv.PredRE.sim_null: clean of [...Matches, correctness, sim_sound, sim_derives] (36 constants scanned)
+
+`hit = none` at **scanned = 36** — the dependency MISSED, the count far above any tripwire, because
+the root's TYPE constants are still walked when its VALUE is invisible. A count heuristic cannot
+detect blindness: had that flag ever been lost, EVERY `#assert_not_depends_on` in the tree would
+report clean, vacuously, and this file's four pins would all have gone green ON THE MUTANT.
+
+**Coverage now:** the false `scanned <= 1` claim is DELETED (not softened) from `Dregg2/Tactics.lean`
+and replaced by `#assert_depends_on <decl> [<expected>, ...]` — the exact dual rejector, sharing the
+same `Dregg2.findForbiddenPath` walk, so both go blind together or not at all. It errors unless every
+named constant IS reachable. Pinned positive control in `Similarity.lean`:
+
+    #assert_depends_on PredRE.sim_derives [PredRE.sim_sound]
+
+`sim_derives` reaches `sim_sound` ONLY through its proof term, so a value-blind walk cannot report it.
+Verified by flipping `allowOpaque := false` again with the control in place:
+
+    error: Dregg2/Crypto/Deriv/Similarity.lean:335:0: POSITIVE CONTROL FAIL: Dregg2.Crypto.Deriv.PredRE.sim_derives does NOT reach Dregg2.Crypto.Deriv.PredRE.sim_sound (542 constants scanned)
+
+— i.e. under blindness the four rejectors printed CLEAN and `#assert_all_clean` printed
+`7 keystones pinned kernel-clean`, and the ONLY red line in the file was the positive control. That
+is the tooth. `allowOpaque := true` restored; mutation reverted; both files back to their shipped text.

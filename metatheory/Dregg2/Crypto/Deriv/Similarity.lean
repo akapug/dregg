@@ -28,8 +28,12 @@ unbounded-emptiness rung. It does NOT close that rung: the pigeonhole/counting s
 
 The der-congruence half is **SEMANTICS-FREE**: `sim_null`, `sim_der` and `sim_derList` are proved by
 induction on the `Sim` derivation from the defining clauses of `null`/`der` alone, and `sim_null` is
-placed BEFORE the language-soundness section precisely so that independence is enforced by
-declaration order rather than merely asserted. Consequently `sim_derives_syntactic` is a genuinely
+placed BEFORE the language-soundness section so that independence holds by declaration order rather
+than merely by assertion. Order alone is fragile (a later edit can cite a denotational lemma proved
+in an earlier FILE and still build green), so the property is additionally pinned by
+`#assert_not_depends_on` at the bottom of this module: the transitive proof-term closure of each
+chain theorem is walked at build time and reaching `Matches`/`correctness`/`sim_sound`/`sim_derives`
+is a hard ERROR. Consequently `sim_derives_syntactic` is a genuinely
 independent route to the verdict-invariance that `sim_derives` gets denotationally. `sim_derives`
 itself is unchanged and still denotational — the two are separate routes, not one rewritten.
 
@@ -306,6 +310,34 @@ end PredRE
   PredRE.sim_null, PredRE.sim_der,
   PredRE.derives_eq_null_derList, PredRE.sim_derList, PredRE.sim_derives_syntactic
 ]
+
+/-! ## Semantics-freedom, CI-ENFORCED (not merely order-enforced).
+
+Declaration order makes the der-congruence chain independent of the denotational tower at the moment
+it is written; it does not KEEP it independent. A future edit could re-prove `sim_null` as
+`simpa only [derives] using sim_derives h []` — semantically fine, axiom-clean, GREEN — and the
+independence claim above would silently become false.
+
+`#assert_not_depends_on` (Dregg2/Tactics.lean) makes that edit a BUILD ERROR: it walks the transitive
+constant closure of each proof term (`ConstantInfo.value?`, `allowOpaque := true`) and errors, naming
+the dependency path, if any of the denotational constants is reachable. This is the probe described in
+the module header, promoted from a manual one-off to a standing gate. `sim_derives` is deliberately
+NOT pinned — it is the denotational route, and pinning it would fail (correctly).
+
+A rejector cannot detect its OWN blindness. The scanned-count once claimed that role and was
+MEASURED FALSE: with `allowOpaque := false`, a deliberately semantic re-proof of `sim_null` was
+reported `hit = none` at `scanned = 36` — the dependency MISSED, the count far above any tripwire,
+because the root's TYPE constants are walked even when its VALUE is invisible. So the gate below
+carries a POSITIVE CONTROL (`#assert_depends_on`, same walk): `sim_derives` reaches `sim_sound`
+ONLY through its proof term, so a value-blind walk fails THAT line loudly instead of silently
+green-lighting all four rejectors. -/
+
+#assert_depends_on PredRE.sim_derives [PredRE.sim_sound]
+
+#assert_not_depends_on PredRE.sim_null [PredRE.Matches, PredRE.correctness, PredRE.sim_sound, PredRE.sim_derives]
+#assert_not_depends_on PredRE.sim_der [PredRE.Matches, PredRE.correctness, PredRE.sim_sound, PredRE.sim_derives]
+#assert_not_depends_on PredRE.sim_derList [PredRE.Matches, PredRE.correctness, PredRE.sim_sound, PredRE.sim_derives]
+#assert_not_depends_on PredRE.sim_derives_syntactic [PredRE.Matches, PredRE.correctness, PredRE.sim_sound, PredRE.sim_derives]
 
 /-!
 ## Stage 3 (`der_finite`) — NOW CLOSED (this note records how `sim_sound` fits the closed proof).

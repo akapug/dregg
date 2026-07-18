@@ -74,6 +74,150 @@ elab "#assert_all_clean" "[" ids:ident,* "]" : command => do
     n := n + 1
   logInfo m!"#assert_all_clean: {n} keystones pinned kernel-clean"
 
+/-! ## `#assert_not_depends_on` — the SEMANTICS-FREEDOM tripwire (proof-term closure guard).
+
+`#assert_axioms` pins which AXIOMS a proof rests on. It says nothing about which DEFINITIONS a proof
+walks through — so a theorem advertised as "syntactic, independent of the denotational tower" can be
+re-proved through that tower and stay axiom-clean, hence green. Declaration ORDER makes the
+independence true at the moment of writing but does not KEEP it true: a later edit that moves the
+theorem, or that cites a denotational lemma proved earlier in some other file, restores the
+dependency silently.
+
+`#assert_not_depends_on foo [Bar, baz]` closes that hole. It walks the TRANSITIVE constant closure of
+`foo`'s proof term (`ConstantInfo.value?` with `allowOpaque := true` — required for theorems, whose
+values are opaque; a walk that omits it sees an EMPTY closure and passes everything) and throws a
+build-time ERROR, naming the full dependency PATH, if any forbidden constant is reachable.
+
+Anti-toothless conditions, each a hard ERROR rather than a pass:
+  * an EMPTY forbidden list — a guard forbidding nothing;
+  * a forbidden ident that does not resolve (`unknownConstant` from `realizeGlobalConst…`);
+  * a root that is not in the environment at all (a closure of 0 constants).
+A forbidden name MATCHES a reached constant if it is equal to it or a `Name` PREFIX of it, so
+generated companions (`Matches.eq_def`, `Matches._eq_2`, `Foo.match_1`) count as hits and cannot
+launder the dependency.
+
+**The scanned-count is NOT a blindness detector — MEASURED FALSE, do not reintroduce that claim.**
+An earlier revision asserted that a low `scanned` count would catch a lost `allowOpaque := true`.
+It does not. Built with `allowOpaque := false` and run against a deliberately SEMANTIC re-proof of
+`PredRE.sim_null` (`simpa only [derives] using sim_derives h []`), the walk reported `hit = none`
+with `scanned = 36`: the forbidden dependency was MISSED while the count sat far above any
+tripwire, because the root's TYPE constants are still walked even when its VALUE is invisible. A
+blind walk therefore reports every `#assert_not_depends_on` in the tree CLEAN, vacuously.
+
+Blindness is covered instead by `#assert_depends_on` — the exact DUAL rejector, sharing this same
+`findForbiddenPath` walk, so the two go blind together or not at all. Pinning a dependency that
+exists ONLY through a proof term (`#assert_depends_on PredRE.sim_derives [PredRE.sim_sound]`) makes
+a value-blind walk a BUILD FAILURE rather than a green vacuous pass. Every module that relies on
+`#assert_not_depends_on` should carry at least one such positive control. -/
+
+/-- Does forbidden name `f` match reached constant `n`? Equality, or `f` a component-wise `Name`
+prefix of `n` — so a proof reaching `Matches.eq_def` is caught by forbidding `Matches`, while
+`sim_der` does NOT spuriously match `sim_derives` (different final atoms). -/
+def Dregg2.forbiddenMatches (f n : Lean.Name) : Bool := f == n || f.isPrefixOf n
+
+open Lean Elab Command in
+/-- Walk the transitive constant closure of `root`'s proof term (and type), returning the first
+dependency PATH `root → … → hit` that reaches a forbidden constant, plus the number of constants
+visited. `allowOpaque := true` is REQUIRED: theorem values are opaque and a walk without it reports
+an empty closure (⇒ vacuous pass). -/
+def Dregg2.findForbiddenPath (root : Lean.Name) (forbidden : List Lean.Name) :
+    CommandElabM (Option (List Lean.Name) × Nat) := do
+  let env ← getEnv
+  let mut visited : NameSet := NameSet.empty.insert root
+  let mut parent : NameMap Name := {}
+  let mut queue : Array Name := #[root]
+  let mut head : Nat := 0
+  let mut count : Nat := 0
+  let rebuild : Name → NameMap Name → List Name := fun hit par => Id.run do
+    let mut path := [hit]
+    let mut cur := hit
+    while cur != root do
+      match par.find? cur with
+      | some p => path := p :: path; cur := p
+      | none => break
+    return path
+  while head < queue.size do
+    let cur := queue[head]!
+    head := head + 1
+    let some info := env.find? cur | continue
+    count := count + 1
+    let mut refs : Array Name := info.type.getUsedConstants
+    if let some v := info.value? (allowOpaque := true) then
+      refs := refs ++ v.getUsedConstants
+    for r in refs do
+      if visited.contains r then continue
+      visited := visited.insert r
+      parent := parent.insert r cur
+      if forbidden.any (fun f => Dregg2.forbiddenMatches f r) then
+        return (some (rebuild r parent), count)
+      queue := queue.push r
+  return (none, count)
+
+open Lean Elab Command in
+/-- `#assert_not_depends_on foo [Bar, baz]` — ERROR (build-time, not a warning) if any of the named
+forbidden constants is reachable in the transitive constant closure of `foo`'s proof term; the error
+names the full dependency PATH. The tripwire for a theorem whose VALUE is that it is independent of
+some other development (e.g. a syntactic proof that must never touch the denotational tower).
+An empty forbidden list, an unresolvable forbidden name, or a root absent from the environment are
+all ERRORS — a guard that can only pass is not a guard. Logs the constants scanned on success. Pure
+rejector; its blindness is covered by the dual `#assert_depends_on`, NOT by the scanned count. -/
+elab "#assert_not_depends_on" id:ident "[" bads:ident,* "]" : command => do
+  let root ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
+  let badIds := bads.getElems
+  if badIds.isEmpty then
+    throwError "#assert_not_depends_on {root}: EMPTY forbidden list — a guard that forbids nothing \
+      always passes; name the constants this proof must not reach."
+  let mut forbidden : List Name := []
+  for b in badIds do
+    -- A typo/renamed target is an `unknownConstant` error here: the guard cannot silently
+    -- degrade into forbidding a name that does not exist.
+    let n ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo b
+    forbidden := n :: forbidden
+  let (hit?, scanned) ← Dregg2.findForbiddenPath root forbidden
+  match hit? with
+  | some path =>
+    throwError "semantics-freedom FAIL: {root} DEPENDS on forbidden constant {path.getLast!} \
+      via {path} — this declaration is claimed independent of that development; a proof route \
+      through it silently restores the dependency the claim denies. Re-prove it without that \
+      route (or retract the independence claim); do NOT relax the guard."
+  | none =>
+    if scanned == 0 then
+      throwError "#assert_not_depends_on {root}: root not found in the environment (0 constants \
+        scanned) — nothing was walked, so this check passes vacuously."
+    logInfo m!"#assert_not_depends_on {root}: clean of {forbidden.reverse} \
+      ({scanned} constants scanned)"
+
+open Lean Elab Command in
+/-- `#assert_depends_on foo [Bar, baz]` — the POSITIVE CONTROL, exact dual of
+`#assert_not_depends_on`: ERROR unless EVERY named constant IS reachable in the transitive constant
+closure of `foo`'s proof term. Shares `findForbiddenPath`, so both commands see the same walk and go
+blind together or not at all.
+
+Its job is to fail LOUDLY when the walk stops seeing proof terms (a lost `allowOpaque := true`, a
+stale environment): pin a dependency that exists ONLY through a proof term, and a blind walk cannot
+report it clean. A rejector alone cannot detect its own blindness — a count heuristic was tried and
+MEASURED FALSE (see the module note above). -/
+elab "#assert_depends_on" id:ident "[" goods:ident,* "]" : command => do
+  let root ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
+  let goodIds := goods.getElems
+  if goodIds.isEmpty then
+    throwError "#assert_depends_on {root}: EMPTY expected list — a positive control that expects \
+      nothing detects nothing; name the constants this proof MUST reach."
+  let mut expected : List Name := []
+  for g in goodIds do
+    let n ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo g
+    expected := n :: expected
+  expected := expected.reverse
+  for e in expected do
+    let (hit?, scanned) ← Dregg2.findForbiddenPath root [e]
+    if hit?.isNone then
+      throwError "POSITIVE CONTROL FAIL: {root} does NOT reach {e} ({scanned} constants scanned). \
+        Either the dependency was really removed — then re-pin this control on a live one — or the \
+        closure walk has gone BLIND (a lost `allowOpaque := true`, a stale environment), in which \
+        case every `#assert_not_depends_on` in the tree is now passing VACUOUSLY. Do not delete \
+        this control to get green."
+  logInfo m!"#assert_depends_on {root}: reaches {expected} (walk is not blind)"
+
 /-! ## `@[gate_projection]` — the gate-EXTRACT marker (NOT an authority guarantee).
 
 A `@[gate_projection]` theorem has the shape `<step> = some _ → <the step def's OWN gate>` and is proved
