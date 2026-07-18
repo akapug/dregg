@@ -1,6 +1,18 @@
 # Sizing the legacy 1-felt chain in the deployed WIDE rotated descriptors
 
-**Status:** measurement note. Nothing here is deployed. No registry, FP, or VK was touched.
+> **2026-07-18 — SUPERSEDED: THE DELETION LANDED (Epoch 1).** The S2 stratum (the two rotated
+> 1-felt Merkle–Damgård chains) is DELETED from both wide registries at the Lean emit
+> (`RotWideCompactS2.compactS2`, per-member `compactOk` emit gate; ACK-gated regen). Measured on
+> the deployed compact `transferVmDescriptor2R24`: **proof 556,810 → 375,053 B (−32.6%),
+> committed cells 578,720 → 394,400 (−31.8%), width 2664 → 1704, chip table stays 256** —
+> the corrected E1 numbers of `docs/ARCH-REVIEW-rotated-commitment-chip.md` §3.0, not this
+> note's naive ceiling. ⚠ §5's re-root/orphan plan rests on a REFUTED premise (the "graft"
+> misreading — the review's §1.1 correction): the wide chain was already self-rooted in the raw
+> limb columns; the classifier below sweeps the two wide heads into "legacy". Do not execute §5.
+> The measurement harness in `circuit/tests/legacy_chain_drop_measurement.rs` now measures the
+> DEPLOYED compact member (the drop-variant machinery is gone with its subject).
+
+**Status:** measurement note. The deletion this note sized has since LANDED (banner above).
 **Artifact:** `circuit/tests/legacy_chain_drop_measurement.rs`
 **Substrate:** no AIR is authored here. The variant is a mechanical deletion + column compaction of
 an already-Lean-emitted descriptor (drop lookups, drop columns nothing reads, renumber). A real

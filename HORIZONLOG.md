@@ -1,5 +1,22 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑⚑⚑ THE DESCENT REIMAGINED NATIVELY IN LEAN — deployed, driven, canary FIRED (2026-07-18)
+`Dregg2/Games/Dungeon.lean` (the reimagined game: custody-ratchet relics w/ provenance-to-mint, capacity
+attenuation `pack+depth ≤ CAP`, the light-as-clock permadeath theorem, keys-as-exercised-capabilities, terminal
+banking — each a proved law) + `DungeonProgram.lean` (the deployed teeth as a Lean value over the LAW-#1 Exec
+algebra, WITH authored `slotChangedForMethods` riders retiring the stapleable-slot class; soundness inversions
+over ARBITRARY states; crowned-run-admitted + 9-attack `#guard` battery) → emitted `dungeon-on-dregg/program/
+dungeon_program.json` (regen.sh drift-gated, byte-reproducible) → loaded by `dungeon_on_dregg::descent`
+(schema→`allocate_checked`; ZERO hand-rolled teeth in the descent's path). 14 executor-driven tests green
+(crowned run = real receipt chain; dupe/keyless-way/staple/tomb/fake-flee/teleport/genesis-replay/unknown-method
+refused); Lean-is-source canary FIRED (way-rule deleted in Lean → keyless descent COMMITS → reverted, --check PASS).
+Follow-ups: ① extend `way2_flip_exhibits_key` to w=3,4 (same rider shape); ② the count↔custody bijection is a
+NAMED seam (the constraint vocabulary cannot count over heap keys — closure wants a sum-over-heap tooth or the
+AIR lowering); ③ ∀-completeness (every model-legal move admitted) is driven for the crowned script, not yet a
+theorem; ④ wire the reimagined descent as the daily Offering (the emit is a FUNCTION — per-seed worlds emit
+per-seed programs); ⑤ the OLD keep/salt-shore augmenter teeth stay Rust (40 dependents; porting them verbatim
+would be the mirror — if they move to Lean, author each game FRESH like this one).
+
 ## ⚑⚑⚑⚑ AUTOMATAFL IN LEAN — A WHOLE TURN IS A THEOREM (2026-07-18)
 `resolve_step_sat_imp_applyTurn` (`082653fba`): Leg-R sat + Leg-A sat + two NAMED seam hypotheses ⇒ the decoded new
 board is `applyTurn(old,[ma,mb])` at every in-bounds cell. `resolve_sat_imp_resolveMid` is UNCONDITIONAL (no envelope);
@@ -9637,3 +9654,28 @@ revoke_before_tip_unsettleable race with both-ways demo, shares: sub-threshold b
 "deletion is a party-local act no protocol can force"). Ledger carries: §9 atoms design-only, DV
 modeled-not-shipped, SelectivelyDisclosable=policy-label, HMAC fallback live, dev ceremony, FRI floor +
 witness-gen perimeter postures.
+
+## 2026-07-18 — S2 deletion (Epoch 1) LANDED; follow-ups
+- **LANDED**: the S2 dead stratum (two rotated 1-felt MD chains, 120 sites/960 cols per wide member)
+  DELETED from both wide registries end-to-end: Lean `RotWideCompactS2.compactS2` (+ the proven
+  master bridge `compactS2_expand` — Satisfied2 of the compact member expands to Satisfied2 of the
+  original, so every wide keystone speaks about the deployed bytes), per-member `compactOk` emit
+  gate (all 57×2 passed), ACK-gated regen, producer compaction via the Lean-emitted
+  `s2_compact_generated` table. Measured: 556,810→375,053 B (−32.6%), 578,720→394,400 cells
+  (−31.8%), width 2664→1704, chip stays 256, prover 638→471 ms (same box).
+- FOLLOW-UP (proof): per-member keystone COROLLARIES through `compactS2_expand` (the bridge is
+  proven + parametric; state the crown members' availability/capacity teeth over
+  `compactS2 member bb lane` with `compactOk` by native_decide, transporting the decode through
+  `expandTrace_shape`). Mechanical applications of the landed bridge.
+- FOLLOW-UP (debt, PRE-EXISTING at HEAD, exposed not caused by the flip): the heap-open LEAF
+  wound — Rust `HeapLeaf::digest8` absorbs arity-3 `[addr, value, next_addr]` but the emitted
+  heap-open leaf lookup is arity-2 `[addr, value]` (old registry, verified by old-world
+  reproduction: OLD descriptor + OLD trace fails identically). Every honest heap-open-appendix
+  path (noteSpend/noteCreate/createCell wide roundtrips, heapWrite honest verify) is red at HEAD
+  by this class. The F1/aafi leaf-encoding flip needs its Lean emit twin.
+- FOLLOW-UP (debt): the BARE V3 registry keeps the full 1-felt stratum (its members publish PIs
+  42/43 through it; consumed at HEAD by the SDK cap-open fallback, verifier/rotated_replay CLI
+  floor, joint-turn mint weld, ~30 tests). Retiring it = repoint those consumers at the wide
+  anchors, then delete the bare chains + `rotV3SitesAt` from `rotateV3`.
+- FOLLOW-UP (small): PI slots 42/43 remain as producer-zeroed unbound slots in the wide PI vector
+  (FS-absorbed, bind nothing); dropping them is a PI-map renumber across executor/SDK/fold.

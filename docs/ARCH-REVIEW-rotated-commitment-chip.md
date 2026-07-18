@@ -37,7 +37,7 @@ Four strata of commitment machinery coexist in every wide member. One is dead.
 | stratum | machinery | published at | status |
 |---|---|---|---|
 | S1 — v1 H4 CellState commit | 4 chip sites: `[76..79]→98`, `[80..83]→99`, `[84..87]→100`, `[98,99,100,186]→88` (`metatheory/Dregg2/Circuit/Emit/EffectVmEmit.lean:210-221`) | col 88 → PI 8 (`pi::NEW_COMMIT`, `circuit/src/effect_vm/pi.rs:29-40`), bound on **34/57 members** [P] | **BUILT, load-bearing** |
-| S2 — rotated 1-felt chains (v3) | 120 sites/member (2×59 arity-4 + 2 arity-2 finals), carriers 378..436 / 617..675, digests 377/616 (`EffectVmEmitRotationV3.lean:306-366`) | nothing — PIs 42/43 retired by `wideAppend` (`EffectVmEmitRotationWide.lean:883-924`), producer zeroes the slots for Fiat–Shamir alignment (`circuit/src/effect_vm/trace_rotated.rs:4103-4116`) | **DEAD** |
+| S2 — rotated 1-felt chains (v3) | 120 sites/member (2×59 arity-4 + 2 arity-2 finals), carriers 378..436 / 617..675, digests 377/616 (`EffectVmEmitRotationV3.lean:306-366`) | nothing — PIs 42/43 retired by `wideAppend` (`EffectVmEmitRotationWide.lean:883-924`), producer zeroes the slots for Fiat–Shamir alignment (`circuit/src/effect_vm/trace_rotated.rs:4103-4116`) | **DELETED 2026-07-18** — Epoch 1 landed: both wide registries S2-compacted at the Lean emit (`RotWideCompactS2.compactS2` + the per-member `compactOk` gate, which every one of the 57×2 members passed); measured −32.6% bytes / −31.8% cells; bare V3 KEEPS its chains (consumed at HEAD) |
 | S3 — caveat 1-felt chain | 10 sites, manifest cols 676..704, carriers 705..713 | col 714 → PI 45 (1 felt, ~31-bit) | **BUILT, alive** |
 | S4 — wide 8-felt chains | 2×60 carriers (cols 1657..2136 / 2137..2616), 116 arity-11 steps + 2 tag-11/9-var terminators (`trace_rotated.rs:3909-3925`) | PIs 52..59 (first row) / 60..67 (last row) — the real ~124-bit anchor | **BUILT, alive** |
 
@@ -386,7 +386,7 @@ exactly **two VK epochs**, with a bounded decider step first.
 | D6 | per-member chip-cliff table at rate-8 (noteSpend/capOpen family ≈ 70 perms → 128?) | honest per-member claims; registry-wide totals |
 | D7 | preprocessed-column spike behind the empty plonky3 hook (smallest possible: one constant column, one VK commit) | B-vs-F mechanism choice; if red, F's anchor-echo path or B's costed fallbacks |
 
-### Stage 1 — Epoch 1, immediately (runs in parallel with Stage 0; they contend on nothing)
+### Stage 1 — Epoch 1 — **LANDED 2026-07-18** (measured: −32.6% bytes, −31.8% cells, chip 256 ✓)
 
 Delete S2 at the emitter (`rotV3Appendix`'s two block chains; keep caveat chain, welds,
 wide heads), drop PI slots 42/43, regenerate 57×2 registries and FP/VK pins, stop
