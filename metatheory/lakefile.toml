@@ -1,5 +1,5 @@
 name = "Dregg2"
-defaultTargets = ["Dregg2", "Metatheory", "Polis", "Market"]
+defaultTargets = ["Dregg2", "Metatheory", "Polis", "Market", "Bfv"]
 
 # Pin mathlib to the exact revision matching v4.30.0
 # (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). This is a PORTABLE `git`+`rev`
@@ -56,3 +56,13 @@ root = "PolisGovernor"
 # whole-tree build covers it either way.
 [[lean_lib]]
 name = "Market"
+
+# Bfv/* — Lean-first BFV for the additive fold path (namespace `Bfv`): the two
+# silent-failure guards as theorems — class (C) plaintext-modulus wrap (`Bfv.NoWrap`,
+# honest tight capacity: 15 full-range u16 orders per bucket at t=1032193) and class (A)
+# noise budget (`Bfv.Noise.decrypt_exact` + the emitted `noiseMargin`/`marginHolds`
+# observable, `Bfv.Fold`), on the deployed fhe.rs degree-4096 parameters. Class (B)
+# lattice security is NOT a Lean theorem (estimator artifact) — named in the root doc.
+# Root module `Bfv` (./Bfv.lean) aggregates Bfv/* and pins the namespace kernel-clean.
+[[lean_lib]]
+name = "Bfv"

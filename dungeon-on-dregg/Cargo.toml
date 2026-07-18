@@ -105,11 +105,17 @@ dregg-turn = { path = "../turn" }
 # sibling) is one serial writer and cannot host distinct concurrent player identities. Same
 # `embedded-executor` core, gpui-free.
 starbridge-v2 = { path = "../starbridge-v2", default-features = false, features = ["embedded-executor"] }
-# The REAL confined Bedrock brain (gap #6) reads the assistant text out of the attested
-# Bedrock Converse response and builds the confined Converse request body — JSON, only on
-# the live path. Optional: pulled in ONLY by the `tlsn-live` feature (the default offline
-# build never links it, keeping the scripted-brain path light).
-serde_json = { workspace = true, optional = true }
+# THE VALIDATED ALLOCATOR (the `descent` module): the reimagined descent's 13-register +
+# 8-relic-collection state is declared as a `dregg_schema::Schema` and lowered by
+# `allocate_checked` (the RotatedLayout Legal discipline) — the name→slot binding the
+# Lean-sourced program loader resolves against is a CHECKED object, not hand-authored.
+dregg-schema = { path = "../dregg-schema" }
+# Deserialize the Lean-EMITTED descent program artifact (`program/dungeon_program.json`,
+# the checked-in cache of `metatheory/Dregg2/Games/DungeonProgram.lean::dungeonProgram`).
+# The loader is the ONLY Rust-side work in the descent's rule path: symbolic names →
+# allocator indices. Also used by the confined Bedrock brain on the live path.
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
 
 [features]
 # The REAL attested brain path (Phase E→B): links `dregg-zkoracle-prove`'s heavy MPC-TLS
@@ -118,7 +124,7 @@ serde_json = { workspace = true, optional = true }
 # `presentation.verify()` under the hosted pinned notary. OFF by default — the offline
 # scripted-brain tests + the confined-channel parser stay green and light without it. The
 # live test (`tests/bedrock_brain_live.rs`) is `#[ignore]`d (real network + paid call).
-tlsn-live = ["dregg-zkoracle-prove/tlsn-live", "dep:serde_json"]
+tlsn-live = ["dregg-zkoracle-prove/tlsn-live"]
 
 # A workspace MEMBER of the breadstuffs root (registered in `members`). The root
 # `[workspace]` + `[patch]` tables apply; no standalone `[workspace]`/`[patch]`.

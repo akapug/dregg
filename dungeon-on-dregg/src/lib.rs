@@ -96,6 +96,17 @@ pub mod dice_combat;
 /// lowering table and the named unsupported residuals.
 pub mod dsl;
 
+/// ⚑ THE DESCENT, REIMAGINED — the flagship descent rebuilt natively in Lean, its rules
+/// **authored as a Lean value** (`metatheory/Dregg2/Games/DungeonProgram.lean ::
+/// dungeonProgram`, design laws proved in `Dregg2/Games/Dungeon.lean`), emitted to
+/// `program/dungeon_program.json` and LOADED here against the translation-validated
+/// `dregg-schema` allocator. There is NO hand-rolled `CellProgram` in its path: edit a
+/// rule in the Lean source, re-emit via `program/regen.sh`, and the deployed game
+/// changes. Relics are owned objects with a custody ratchet (provenance to the mint),
+/// descent attenuates carrying rights, the light is the clock, keys are exercised
+/// capabilities, banking is terminal — each a theorem, each an executor tooth.
+pub mod descent;
+
 pub mod bloodgate;
 pub mod combat;
 /// LOOT-AS-ASSETS — a Descent reward is a real OWNED, TRANSFERABLE [`dreggnet_asset`] item,
