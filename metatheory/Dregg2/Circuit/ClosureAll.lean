@@ -826,27 +826,6 @@ theorem noteCreate_closedLog
 
 /-! ### heapWrite (56) — Satisfied2-style. Receipt is `{ actor, src:=target, dst:=target, amt:=0 }`. -/
 
-/-- heapWrite (tag 56). -/
-theorem heapWrite_closedLog
-    (hash : List ℤ → ℤ)
-    (pre post : RecChainedState) (actor target : CellId) (addr v newRoot : Int)
-    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
-    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
-    (hpub : pubLogPost
-      = LH ({ actor := actor, src := target, dst := target, amt := (0 : ℤ) } :: pre.log))
-    (logNeeds : post.log
-        = { actor := actor, src := target, dst := target, amt := (0 : ℤ) } :: pre.log →
-      Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteEncodes
-        hash pre post actor target addr v newRoot) :
-    kstepAll 56 pre post :=
-  closedLog_of_encode (.heapWriteA actor target addr v newRoot)
-    { actor := actor, src := target, dst := target, amt := (0 : ℤ) } hdec hpub rfl
-    (fun hadv => by
-      show fullActionStep pre (.heapWriteA actor target addr v newRoot) post
-      simp only [fullActionStep]
-      exact Dregg2.Circuit.RotatedKernelRefinementExercise.heapWrite_descriptorRefines
-        hash pre post actor target addr v newRoot (logNeeds hadv))
-
 /-- heapWrite (tag 56), CLASS A — forced from the DEPLOYED `heapWriteV3` (`= Rfix 56` by `rfl`) via
 `heapWrite_descriptorRefines_sat`: the new `heap_root` recompute is forced from the descriptor's own
 `Satisfied2` (plus the chip/range `RotTableSide`) and the realizable `HeapWriteTraceReadout`-minus-log
