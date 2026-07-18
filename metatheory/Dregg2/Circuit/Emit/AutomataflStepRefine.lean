@@ -94,6 +94,8 @@ deriving instance DecidableEq for VmConstraint2
 
 /-! ## §1 — Field-denotation glue (identical in shape to `DyckStackRefine` §0). -/
 
+set_option maxHeartbeats 800000 in
+set_option maxHeartbeats 800000 in
 /-- The deployed range-check invariant on a stored field cell: it is the canonical residue. -/
 def Canon (x : ℤ) : Prop := 0 ≤ x ∧ x < 2013265921
 
@@ -4687,7 +4689,669 @@ def oxForgeAsg : Assignment := fun c => if c = 207 then 1 else 0
 #guard oxGateExpr.eval oxGoodAsg == 0     -- sgt·xmove·posx step, ox = 1: consistent, gate holds
 #guard oxGateExpr.eval oxForgeAsg != 0    -- ox = 1 but sgt = 0: score-forbidden move FAILS
 
+/-! ## §4.15 — LEG (5): the step + board-update fold ⇒ `boardDecode(new) = automatonStep(old)`.
+
+The step gates read the offset `(OX,OY)`, compute the target `(ax+ox, ay+oy)`, and gate the move
+flag `m = offnz·tib·targ_vac` (offset nonzero · target in bounds · target vacant). The four
+board-update equalities then rewrite each cell: at the target the AUTO particle appears, at the auto
+cell vacuum, elsewhere the old cell is preserved — exactly `automatonStep`'s `stepTo`. This section
+extracts each factor of `m` from the emitted gates (no wraparound, keyed on the byte-pinned object),
+composes them into `m = [guard]`, and folds the four cell equalities into the `cellAt` of the
+reference stepped board. -/
+
+section Leg5
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- **`forcedGe0` NO-WRAP soundness, MOD form.** As `forcedGe0_core`, but the compared quantity `D`
+may be a LARGE field value congruent to a SMALL `D'` (the offset felt `p−1 ≡ −1` makes the target
+coordinate `ax + ox` large as a field element). The bit still decides `[D' ≥ 0]`: `ib∈{0,1}` folds the
+`ib·D` term to `ib·D'` mod `p`, and the 5-bit range-sum pins the small residue with no aliasing. -/
+theorem forcedGe0_core_mod {ib D D' S : ℤ}
+    (hib : ib = 0 ∨ ib = 1) (hS0 : 0 ≤ S) (hS1 : S ≤ 31)
+    (hmod : (2 * ib * D + ib - D - 1) ≡ S [ZMOD 2013265921])
+    (hDD' : D ≡ D' [ZMOD 2013265921]) (hlo : -100 ≤ D') (hhi : D' ≤ 100) :
+    (ib = 1 → 0 ≤ D') ∧ (ib = 0 → D' ≤ -1) := by
+  rcases hib with h | h
+  · subst h
+    rw [show (2 * (0:ℤ) * D + 0 - D - 1) = -D - 1 by ring] at hmod
+    have hcong : (-D - 1) ≡ (-D' - 1) [ZMOD 2013265921] := (hDD'.neg).sub_right 1
+    have hmod' : (-D' - 1) ≡ S [ZMOD 2013265921] := hcong.symm.trans hmod
+    have heq : -D' - 1 = S := eq_of_modEq_win (by omega) (by omega) hmod'
+    exact ⟨by intro hc; omega, by intro _; omega⟩
+  · subst h
+    rw [show (2 * (1:ℤ) * D + 1 - D - 1) = D by ring] at hmod
+    have hmod' : D' ≡ S [ZMOD 2013265921] := hDD'.symm.trans hmod
+    have heq : D' = S := eq_of_modEq_win (by omega) (by omega) hmod'
+    exact ⟨by intro _; omega, by intro hc; omega⟩
+
+/-- A `{0,1,p−1}` offset column is congruent to its small signed decode `decodeOff` mod `p`. -/
+theorem decodeOff_modEq {z : ℤ} (h : z = 0 ∨ z = 1 ∨ z = 2013265920) :
+    z ≡ decodeOff z [ZMOD 2013265921] := by
+  rcases h with h | h | h <;> subst z <;> unfold decodeOff
+  · rw [if_neg (by norm_num)]
+  · rw [if_neg (by norm_num)]
+  · rw [if_pos rfl]; exact Int.modEq_iff_dvd.mpr ⟨-1, by ring⟩
+
+/-- The small signed decode of a `{0,1,p−1}` offset column is `0`, `1`, or `−1`. -/
+theorem decodeOff_val {z : ℤ} (h : z = 0 ∨ z = 1 ∨ z = 2013265920) :
+    decodeOff z = 0 ∨ decodeOff z = 1 ∨ decodeOff z = -1 := by
+  rcases h with h | h | h <;> subst z <;> unfold decodeOff
+  · rw [if_neg (by norm_num)]; left; rfl
+  · rw [if_neg (by norm_num)]; right; left; rfl
+  · rw [if_pos rfl]; right; right; rfl
+
+/-- **The decoded offset is one of the five cardinal steps** — leg (4) composed: the daemon's chosen
+offset over the decoded board, read off the two offset columns. -/
+theorem offCard_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (decodeOff ((envAt t i).loc 207), decodeOff ((envAt t i).loc 208)) = ((1:ℤ), (0:ℤ))
+      ∨ (decodeOff ((envAt t i).loc 207), decodeOff ((envAt t i).loc 208)) = ((-1:ℤ), (0:ℤ))
+      ∨ (decodeOff ((envAt t i).loc 207), decodeOff ((envAt t i).loc 208)) = ((0:ℤ), (1:ℤ))
+      ∨ (decodeOff ((envAt t i).loc 207), decodeOff ((envAt t i).loc 208)) = ((0:ℤ), (-1:ℤ))
+      ∨ (decodeOff ((envAt t i).loc 207), decodeOff ((envAt t i).loc 208)) = ((0:ℤ), (0:ℤ)) := by
+  have hcases := Dregg2.Games.Automatafl.automatonOffset_cases (boardDecode (envAt t i))
+  rw [automatonOffset_of_sat hsat hc i hi] at hcases
+  exact hcases
+
+/-- **`offnz = ox² + oy²`** — the move-nonzero column (246) equals the sum of the squared decoded
+offset components. With the cardinal-step membership this is `0` (no move) or `1` (a step). -/
+theorem offnz_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 246
+      = decodeOff ((envAt t i).loc 207) * decodeOff ((envAt t i).loc 207)
+        + decodeOff ((envAt t i).loc 208) * decodeOff ((envAt t i).loc 208) := by
+  set e := envAt t i with he
+  obtain ⟨hoxtri, hoytri⟩ := offset_of_sat hsat hc i hi
+  simp only [OX_C, OY_C] at hoxtri hoytri
+  have hoxm : e.loc 207 ≡ decodeOff (e.loc 207) [ZMOD 2013265921] := decodeOff_modEq hoxtri
+  have hoym : e.loc 208 ≡ decodeOff (e.loc 208) [ZMOD 2013265921] := decodeOff_modEq hoytri
+  have hg := astep_gate hsat i hi
+    (g := headToExpr (((Head.lin 1 246).addProd (-1) [207, 207]).addProd (-1) [208, 208])) (by decide)
+  rw [show (headToExpr (((Head.lin 1 246).addProd (-1) [207, 207]).addProd (-1) [208, 208])).eval e.loc
+      = e.loc 246 + -1 * (e.loc 207 * e.loc 207) + -1 * (e.loc 208 * e.loc 208) from rfl] at hg
+  have hmod : e.loc 246 ≡ e.loc 207 * e.loc 207 + e.loc 208 * e.loc 208 [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp hg
+  have hsq : e.loc 207 * e.loc 207 + e.loc 208 * e.loc 208
+      ≡ decodeOff (e.loc 207) * decodeOff (e.loc 207) + decodeOff (e.loc 208) * decodeOff (e.loc 208)
+        [ZMOD 2013265921] := Int.ModEq.add (hoxm.mul hoxm) (hoym.mul hoym)
+  have hfin := hmod.trans hsq
+  have hcanRHS : Canon (decodeOff (e.loc 207) * decodeOff (e.loc 207)
+      + decodeOff (e.loc 208) * decodeOff (e.loc 208)) := by
+    rcases decodeOff_val hoxtri with h | h | h <;> rcases decodeOff_val hoytri with h' | h' | h' <;>
+      rw [h, h'] <;> exact ⟨by norm_num, by norm_num⟩
+  exact eq_of_modEq_canon (canon_loc hc i _) hcanRHS hfin
+
+/-- Turn a `forced_ge0` bit's two-sided soundness into a clean iff. -/
+theorem ge0_iff {ib D' : ℤ} (hbool : ib = 0 ∨ ib = 1)
+    (h : (ib = 1 → 0 ≤ D') ∧ (ib = 0 → D' ≤ -1)) : ib = 1 ↔ 0 ≤ D' := by
+  constructor
+  · exact h.1
+  · intro hd; rcases hbool with hb | hb
+    · have := h.2 hb; omega
+    · exact hb
+
+set_option maxHeartbeats 800000 in
+/-- Edge (col 209): `[ax + ox ≥ 0]` — target lower-`x` in bounds. -/
+theorem txlo_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 209 = 0 ∨ (envAt t i).loc 209 = 1)
+    ∧ ((envAt t i).loc 209 = 1 ↔ 0 ≤ (envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)) := by
+  set e := envAt t i with he
+  have hax : e.loc 8 = 0 ∨ e.loc 8 = 1 := by
+    have := coord_of_sat hsat hc i hi; simp only [AX] at this; exact this.1
+  obtain ⟨hoxtri, _⟩ := offset_of_sat hsat hc i hi; simp only [OX_C] at hoxtri
+  have hoxm := decodeOff_modEq hoxtri; have hdox := decodeOff_val hoxtri
+  have e1B : e.loc 209 = 0 ∨ e.loc 209 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 209) (by decide)) (canon_loc hc i _)
+  have e1b0 : e.loc 210 = 0 ∨ e.loc 210 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 210) (by decide)) (canon_loc hc i _)
+  have e1b1 : e.loc 211 = 0 ∨ e.loc 211 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 211) (by decide)) (canon_loc hc i _)
+  have e1b2 : e.loc 212 = 0 ∨ e.loc 212 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 212) (by decide)) (canon_loc hc i _)
+  have e1b3 : e.loc 213 = 0 ∨ e.loc 213 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 213) (by decide)) (canon_loc hc i _)
+  have e1b4 : e.loc 214 = 0 ∨ e.loc 214 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 214) (by decide)) (canon_loc hc i _)
+  have e1rec := astep_gate hsat i hi (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 210 SMALL_RBITS)[k]!))
+      (forcedGe0Term 209 ((Head.lin 1 AX).addLin 1 OX_C)))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 210 SMALL_RBITS)[k]!))
+      (forcedGe0Term 209 ((Head.lin 1 AX).addLin 1 OX_C)))).eval e.loc
+      = 2 * (e.loc 209 * e.loc 8) + 2 * (e.loc 209 * e.loc 207) + e.loc 209 + -1 * e.loc 8 + -1 * e.loc 207
+        + -1 * e.loc 210 + -2 * e.loc 211 + -4 * e.loc 212 + -8 * e.loc 213 + -16 * e.loc 214 + -1 from rfl] at e1rec
+  have e1mod : (2 * e.loc 209 * (e.loc 8 + e.loc 207) + e.loc 209 - (e.loc 8 + e.loc 207) - 1)
+      ≡ (e.loc 210 + 2 * e.loc 211 + 4 * e.loc 212 + 8 * e.loc 213 + 16 * e.loc 214) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp e1rec
+  have e1core := forcedGe0_core_mod (D := e.loc 8 + e.loc 207) (D' := e.loc 8 + decodeOff (e.loc 207))
+    (S := e.loc 210 + 2 * e.loc 211 + 4 * e.loc 212 + 8 * e.loc 213 + 16 * e.loc 214) e1B
+    (by rcases e1b0 with h|h <;> rcases e1b1 with h1|h1 <;> rcases e1b2 with h2|h2 <;> rcases e1b3 with h3|h3 <;> rcases e1b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases e1b0 with h|h <;> rcases e1b1 with h1|h1 <;> rcases e1b2 with h2|h2 <;> rcases e1b3 with h3|h3 <;> rcases e1b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    e1mod (Int.ModEq.add_left (e.loc 8) hoxm)
+    (by rcases hax with h|h <;> rcases hdox with h'|h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases hax with h|h <;> rcases hdox with h'|h'|h' <;> rw [h,h'] <;> norm_num)
+  exact ⟨e1B, ge0_iff e1B e1core⟩
+
+set_option maxHeartbeats 800000 in
+/-- Edge (col 215): `[ax + ox ≤ n−1]` — target upper-`x` in bounds. -/
+theorem txhi_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 215 = 0 ∨ (envAt t i).loc 215 = 1)
+    ∧ ((envAt t i).loc 215 = 1 ↔ (envAt t i).loc 8 + decodeOff ((envAt t i).loc 207) ≤ 1) := by
+  set e := envAt t i with he
+  have hax : e.loc 8 = 0 ∨ e.loc 8 = 1 := by
+    have := coord_of_sat hsat hc i hi; simp only [AX] at this; exact this.1
+  obtain ⟨hoxtri, _⟩ := offset_of_sat hsat hc i hi; simp only [OX_C] at hoxtri
+  have hoxm := decodeOff_modEq hoxtri; have hdox := decodeOff_val hoxtri
+  have e2B : e.loc 215 = 0 ∨ e.loc 215 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 215) (by decide)) (canon_loc hc i _)
+  have e2b0 : e.loc 216 = 0 ∨ e.loc 216 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 216) (by decide)) (canon_loc hc i _)
+  have e2b1 : e.loc 217 = 0 ∨ e.loc 217 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 217) (by decide)) (canon_loc hc i _)
+  have e2b2 : e.loc 218 = 0 ∨ e.loc 218 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 218) (by decide)) (canon_loc hc i _)
+  have e2b3 : e.loc 219 = 0 ∨ e.loc 219 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 219) (by decide)) (canon_loc hc i _)
+  have e2b4 : e.loc 220 = 0 ∨ e.loc 220 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 220) (by decide)) (canon_loc hc i _)
+  have e2rec := astep_gate hsat i hi (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 216 SMALL_RBITS)[k]!))
+      (forcedGe0Term 215 (((Head.c ((NN : ℤ) - 1)).addLin (-1) AX).addLin (-1) OX_C)))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 216 SMALL_RBITS)[k]!))
+      (forcedGe0Term 215 (((Head.c ((NN : ℤ) - 1)).addLin (-1) AX).addLin (-1) OX_C)))).eval e.loc
+      = -2 * (e.loc 215 * e.loc 8) + -2 * (e.loc 215 * e.loc 207) + 2 * e.loc 215 + e.loc 215 + e.loc 8 + e.loc 207
+        + -1 * e.loc 216 + -2 * e.loc 217 + -4 * e.loc 218 + -8 * e.loc 219 + -16 * e.loc 220 + -2 from rfl] at e2rec
+  have e2mod : (2 * e.loc 215 * (1 - e.loc 8 - e.loc 207) + e.loc 215 - (1 - e.loc 8 - e.loc 207) - 1)
+      ≡ (e.loc 216 + 2 * e.loc 217 + 4 * e.loc 218 + 8 * e.loc 219 + 16 * e.loc 220) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp e2rec
+  have e2core := forcedGe0_core_mod (D := 1 - e.loc 8 - e.loc 207) (D' := 1 - e.loc 8 - decodeOff (e.loc 207))
+    (S := e.loc 216 + 2 * e.loc 217 + 4 * e.loc 218 + 8 * e.loc 219 + 16 * e.loc 220) e2B
+    (by rcases e2b0 with h|h <;> rcases e2b1 with h1|h1 <;> rcases e2b2 with h2|h2 <;> rcases e2b3 with h3|h3 <;> rcases e2b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases e2b0 with h|h <;> rcases e2b1 with h1|h1 <;> rcases e2b2 with h2|h2 <;> rcases e2b3 with h3|h3 <;> rcases e2b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    e2mod (Int.ModEq.sub_left (1 - e.loc 8) hoxm)
+    (by rcases hax with h|h <;> rcases hdox with h'|h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases hax with h|h <;> rcases hdox with h'|h'|h' <;> rw [h,h'] <;> norm_num)
+  refine ⟨e2B, ?_⟩; have := ge0_iff e2B e2core; rw [this]; omega
+
+set_option maxHeartbeats 800000 in
+/-- Edge (col 221): `[ay + oy ≥ 0]` — target lower-`y` in bounds. -/
+theorem tylo_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 221 = 0 ∨ (envAt t i).loc 221 = 1)
+    ∧ ((envAt t i).loc 221 = 1 ↔ 0 ≤ (envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)) := by
+  set e := envAt t i with he
+  have hay : e.loc 9 = 0 ∨ e.loc 9 = 1 := by
+    have := coord_of_sat hsat hc i hi; simp only [AY] at this; exact this.2
+  obtain ⟨_, hoytri⟩ := offset_of_sat hsat hc i hi; simp only [OY_C] at hoytri
+  have hoym := decodeOff_modEq hoytri; have hdoy := decodeOff_val hoytri
+  have e3B : e.loc 221 = 0 ∨ e.loc 221 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 221) (by decide)) (canon_loc hc i _)
+  have e3b0 : e.loc 222 = 0 ∨ e.loc 222 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 222) (by decide)) (canon_loc hc i _)
+  have e3b1 : e.loc 223 = 0 ∨ e.loc 223 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 223) (by decide)) (canon_loc hc i _)
+  have e3b2 : e.loc 224 = 0 ∨ e.loc 224 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 224) (by decide)) (canon_loc hc i _)
+  have e3b3 : e.loc 225 = 0 ∨ e.loc 225 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 225) (by decide)) (canon_loc hc i _)
+  have e3b4 : e.loc 226 = 0 ∨ e.loc 226 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 226) (by decide)) (canon_loc hc i _)
+  have e3rec := astep_gate hsat i hi (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 222 SMALL_RBITS)[k]!))
+      (forcedGe0Term 221 ((Head.lin 1 AY).addLin 1 OY_C)))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 222 SMALL_RBITS)[k]!))
+      (forcedGe0Term 221 ((Head.lin 1 AY).addLin 1 OY_C)))).eval e.loc
+      = 2 * (e.loc 221 * e.loc 9) + 2 * (e.loc 221 * e.loc 208) + e.loc 221 + -1 * e.loc 9 + -1 * e.loc 208
+        + -1 * e.loc 222 + -2 * e.loc 223 + -4 * e.loc 224 + -8 * e.loc 225 + -16 * e.loc 226 + -1 from rfl] at e3rec
+  have e3mod : (2 * e.loc 221 * (e.loc 9 + e.loc 208) + e.loc 221 - (e.loc 9 + e.loc 208) - 1)
+      ≡ (e.loc 222 + 2 * e.loc 223 + 4 * e.loc 224 + 8 * e.loc 225 + 16 * e.loc 226) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp e3rec
+  have e3core := forcedGe0_core_mod (D := e.loc 9 + e.loc 208) (D' := e.loc 9 + decodeOff (e.loc 208))
+    (S := e.loc 222 + 2 * e.loc 223 + 4 * e.loc 224 + 8 * e.loc 225 + 16 * e.loc 226) e3B
+    (by rcases e3b0 with h|h <;> rcases e3b1 with h1|h1 <;> rcases e3b2 with h2|h2 <;> rcases e3b3 with h3|h3 <;> rcases e3b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases e3b0 with h|h <;> rcases e3b1 with h1|h1 <;> rcases e3b2 with h2|h2 <;> rcases e3b3 with h3|h3 <;> rcases e3b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    e3mod (Int.ModEq.add_left (e.loc 9) hoym)
+    (by rcases hay with h|h <;> rcases hdoy with h'|h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases hay with h|h <;> rcases hdoy with h'|h'|h' <;> rw [h,h'] <;> norm_num)
+  exact ⟨e3B, ge0_iff e3B e3core⟩
+
+set_option maxHeartbeats 800000 in
+/-- Edge (col 227): `[ay + oy ≤ n−1]` — target upper-`y` in bounds. -/
+theorem tyhi_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 227 = 0 ∨ (envAt t i).loc 227 = 1)
+    ∧ ((envAt t i).loc 227 = 1 ↔ (envAt t i).loc 9 + decodeOff ((envAt t i).loc 208) ≤ 1) := by
+  set e := envAt t i with he
+  have hay : e.loc 9 = 0 ∨ e.loc 9 = 1 := by
+    have := coord_of_sat hsat hc i hi; simp only [AY] at this; exact this.2
+  obtain ⟨_, hoytri⟩ := offset_of_sat hsat hc i hi; simp only [OY_C] at hoytri
+  have hoym := decodeOff_modEq hoytri; have hdoy := decodeOff_val hoytri
+  have e4B : e.loc 227 = 0 ∨ e.loc 227 = 1 :=
+    bin_of_gate (astep_gate hsat i hi (g := gBin 227) (by decide)) (canon_loc hc i _)
+  have e4b0 : e.loc 228 = 0 ∨ e.loc 228 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 228) (by decide)) (canon_loc hc i _)
+  have e4b1 : e.loc 229 = 0 ∨ e.loc 229 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 229) (by decide)) (canon_loc hc i _)
+  have e4b2 : e.loc 230 = 0 ∨ e.loc 230 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 230) (by decide)) (canon_loc hc i _)
+  have e4b3 : e.loc 231 = 0 ∨ e.loc 231 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 231) (by decide)) (canon_loc hc i _)
+  have e4b4 : e.loc 232 = 0 ∨ e.loc 232 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 232) (by decide)) (canon_loc hc i _)
+  have e4rec := astep_gate hsat i hi (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 228 SMALL_RBITS)[k]!))
+      (forcedGe0Term 227 (((Head.c ((NN : ℤ) - 1)).addLin (-1) AY).addLin (-1) OY_C)))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 228 SMALL_RBITS)[k]!))
+      (forcedGe0Term 227 (((Head.c ((NN : ℤ) - 1)).addLin (-1) AY).addLin (-1) OY_C)))).eval e.loc
+      = -2 * (e.loc 227 * e.loc 9) + -2 * (e.loc 227 * e.loc 208) + 2 * e.loc 227 + e.loc 227 + e.loc 9 + e.loc 208
+        + -1 * e.loc 228 + -2 * e.loc 229 + -4 * e.loc 230 + -8 * e.loc 231 + -16 * e.loc 232 + -2 from rfl] at e4rec
+  have e4mod : (2 * e.loc 227 * (1 - e.loc 9 - e.loc 208) + e.loc 227 - (1 - e.loc 9 - e.loc 208) - 1)
+      ≡ (e.loc 228 + 2 * e.loc 229 + 4 * e.loc 230 + 8 * e.loc 231 + 16 * e.loc 232) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp e4rec
+  have e4core := forcedGe0_core_mod (D := 1 - e.loc 9 - e.loc 208) (D' := 1 - e.loc 9 - decodeOff (e.loc 208))
+    (S := e.loc 228 + 2 * e.loc 229 + 4 * e.loc 230 + 8 * e.loc 231 + 16 * e.loc 232) e4B
+    (by rcases e4b0 with h|h <;> rcases e4b1 with h1|h1 <;> rcases e4b2 with h2|h2 <;> rcases e4b3 with h3|h3 <;> rcases e4b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases e4b0 with h|h <;> rcases e4b1 with h1|h1 <;> rcases e4b2 with h2|h2 <;> rcases e4b3 with h3|h3 <;> rcases e4b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    e4mod (Int.ModEq.sub_left (1 - e.loc 9) hoym)
+    (by rcases hay with h|h <;> rcases hdoy with h'|h'|h' <;> rw [h,h'] <;> norm_num)
+    (by rcases hay with h|h <;> rcases hdoy with h'|h'|h' <;> rw [h,h'] <;> norm_num)
+  refine ⟨e4B, ?_⟩; have := ge0_iff e4B e4core; rw [this]; omega
+
+/-- **`tib` — the target-in-bounds flag (col 233) is `[target on the board]`.** The four
+`forced_ge0` edge bits decide the four edges, and `tib` is their product: `tib ∈ {0,1}` and `tib = 1`
+exactly when the target cell `(ax+ox, ay+oy)` is in bounds (`0 ≤ · ≤ n−1` on both axes). -/
+theorem tib_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 233 = 0 ∨ (envAt t i).loc 233 = 1)
+    ∧ ((envAt t i).loc 233 = 1 ↔
+        (0 ≤ (envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)
+          ∧ (envAt t i).loc 8 + decodeOff ((envAt t i).loc 207) ≤ 1
+          ∧ 0 ≤ (envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)
+          ∧ (envAt t i).loc 9 + decodeOff ((envAt t i).loc 208) ≤ 1)) := by
+  set e := envAt t i with he
+  obtain ⟨e1B, e1iff⟩ := txlo_of_sat hsat hc i hi
+  obtain ⟨e2B, e2iff⟩ := txhi_of_sat hsat hc i hi
+  obtain ⟨e3B, e3iff⟩ := tylo_of_sat hsat hc i hi
+  obtain ⟨e4B, e4iff⟩ := tyhi_of_sat hsat hc i hi
+  have htibprod := astep_gate hsat i hi (g := headToExpr ((Head.lin 1 233).addProd (-1) [209, 215, 221, 227])) (by decide)
+  rw [show (headToExpr ((Head.lin 1 233).addProd (-1) [209, 215, 221, 227])).eval e.loc
+      = e.loc 233 + -1 * (e.loc 209 * e.loc 215 * e.loc 221 * e.loc 227) from rfl] at htibprod
+  have htibcanon : Canon (e.loc 209 * e.loc 215 * e.loc 221 * e.loc 227) := by
+    rcases e1B with h|h <;> rcases e2B with h1|h1 <;> rcases e3B with h2|h2 <;> rcases e4B with h3|h3 <;>
+      rw [h,h1,h2,h3] <;> exact ⟨by norm_num, by norm_num⟩
+  have htib : e.loc 233 = e.loc 209 * e.loc 215 * e.loc 221 * e.loc 227 :=
+    eq_of_modEq_canon (canon_loc hc i _) htibcanon ((gate_modEq_iff (by ring)).mp htibprod)
+  refine ⟨?_, ?_⟩
+  · rw [htib]; rcases e1B with h|h <;> rcases e2B with h1|h1 <;> rcases e3B with h2|h2 <;> rcases e4B with h3|h3 <;>
+      rw [h,h1,h2,h3] <;> norm_num
+  · rw [htib]
+    constructor
+    · intro hp
+      have hall : e.loc 209 = 1 ∧ e.loc 215 = 1 ∧ e.loc 221 = 1 ∧ e.loc 227 = 1 := by
+        rcases e1B with h|h <;> rcases e2B with h1|h1 <;> rcases e3B with h2|h2 <;> rcases e4B with h3|h3 <;>
+          rw [h,h1,h2,h3] at hp <;> first | exact ⟨h,h1,h2,h3⟩ | (exfalso; revert hp; norm_num)
+      exact ⟨e1iff.mp hall.1, e2iff.mp hall.2.1, e3iff.mp hall.2.2.1, e4iff.mp hall.2.2.2⟩
+    · rintro ⟨c1, c2, c3, c4⟩
+      rw [e1iff.mpr c1, e2iff.mpr c2, e3iff.mpr c3, e4iff.mpr c4]; norm_num
+
+/-- **The gated target read** (`read_rowcol_gated`, cols 234–238). The two one-hots (rows 235/236,
+cols 237/238) are gated by `tib` (col 233): each sums to `tib` and its index is pinned to `tib·(ay+oy)`
+/ `tib·(ax+ox)`, and the value `tcell` (col 234) is the dot product against the OLD board. So when
+`tib = 0` every selector is `0` and `tcell = 0`; when `tib = 1` the one-hots pick the target cell. -/
+theorem tread_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 235 = 0 ∨ (envAt t i).loc 235 = 1) ∧ ((envAt t i).loc 236 = 0 ∨ (envAt t i).loc 236 = 1)
+    ∧ ((envAt t i).loc 237 = 0 ∨ (envAt t i).loc 237 = 1) ∧ ((envAt t i).loc 238 = 0 ∨ (envAt t i).loc 238 = 1)
+    ∧ (envAt t i).loc 235 + (envAt t i).loc 236 = (envAt t i).loc 233
+    ∧ (envAt t i).loc 237 + (envAt t i).loc 238 = (envAt t i).loc 233
+    ∧ ((envAt t i).loc 236 ≡ (envAt t i).loc 233 * (envAt t i).loc 9 + (envAt t i).loc 233 * (envAt t i).loc 208 [ZMOD 2013265921])
+    ∧ ((envAt t i).loc 238 ≡ (envAt t i).loc 233 * (envAt t i).loc 8 + (envAt t i).loc 233 * (envAt t i).loc 207 [ZMOD 2013265921])
+    ∧ ((envAt t i).loc 234 ≡ (envAt t i).loc 235 * (envAt t i).loc 237 * (envAt t i).loc 0
+        + (envAt t i).loc 235 * (envAt t i).loc 238 * (envAt t i).loc 1
+        + (envAt t i).loc 236 * (envAt t i).loc 237 * (envAt t i).loc 2
+        + (envAt t i).loc 236 * (envAt t i).loc 238 * (envAt t i).loc 3 [ZMOD 2013265921]) := by
+  set e := envAt t i with he
+  have r0 : e.loc 235 = 0 ∨ e.loc 235 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 235) (by decide)) (canon_loc hc i _)
+  have r1 : e.loc 236 = 0 ∨ e.loc 236 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 236) (by decide)) (canon_loc hc i _)
+  have c0 : e.loc 237 = 0 ∨ e.loc 237 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 237) (by decide)) (canon_loc hc i _)
+  have c1 : e.loc 238 = 0 ∨ e.loc 238 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 238) (by decide)) (canon_loc hc i _)
+  have hrsum : e.loc 235 + e.loc 236 = e.loc 233 := by
+    have hg := astep_gate hsat i hi (g := headToExpr ([235, 236].foldl (fun h c => h.addLin 1 c) (Head.lin (-1) 233))) (by decide)
+    rw [show (headToExpr ([235, 236].foldl (fun h c => h.addLin 1 c) (Head.lin (-1) 233))).eval e.loc
+        = -1 * e.loc 233 + e.loc 235 + e.loc 236 from rfl] at hg
+    have hcL : Canon (e.loc 235 + e.loc 236) := by rcases r0 with h|h <;> rcases r1 with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩
+    exact eq_of_modEq_canon hcL (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hcsum : e.loc 237 + e.loc 238 = e.loc 233 := by
+    have hg := astep_gate hsat i hi (g := headToExpr ([237, 238].foldl (fun h c => h.addLin 1 c) (Head.lin (-1) 233))) (by decide)
+    rw [show (headToExpr ([237, 238].foldl (fun h c => h.addLin 1 c) (Head.lin (-1) 233))).eval e.loc
+        = -1 * e.loc 233 + e.loc 237 + e.loc 238 from rfl] at hg
+    have hcL : Canon (e.loc 237 + e.loc 238) := by rcases c0 with h|h <;> rcases c1 with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩
+    exact eq_of_modEq_canon hcL (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hridx : e.loc 236 ≡ e.loc 233 * e.loc 9 + e.loc 233 * e.loc 208 [ZMOD 2013265921] := by
+    have hg := astep_gate hsat i hi (g := headToExpr (idxGatedHead [235, 236] 233 ((Head.lin 1 AY).addLin 1 OY_C))) (by decide)
+    rw [show (headToExpr (idxGatedHead [235, 236] 233 ((Head.lin 1 AY).addLin 1 OY_C))).eval e.loc
+        = e.loc 236 + -1 * (e.loc 233 * e.loc 9) + -1 * (e.loc 233 * e.loc 208) from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+  have hcidx : e.loc 238 ≡ e.loc 233 * e.loc 8 + e.loc 233 * e.loc 207 [ZMOD 2013265921] := by
+    have hg := astep_gate hsat i hi (g := headToExpr (idxGatedHead [237, 238] 233 ((Head.lin 1 AX).addLin 1 OX_C))) (by decide)
+    rw [show (headToExpr (idxGatedHead [237, 238] 233 ((Head.lin 1 AX).addLin 1 OX_C))).eval e.loc
+        = e.loc 238 + -1 * (e.loc 233 * e.loc 8) + -1 * (e.loc 233 * e.loc 207) from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+  have hread : e.loc 234 ≡ e.loc 235 * e.loc 237 * e.loc 0 + e.loc 235 * e.loc 238 * e.loc 1
+      + e.loc 236 * e.loc 237 * e.loc 2 + e.loc 236 * e.loc 238 * e.loc 3 [ZMOD 2013265921] := by
+    have hg := astep_gate hsat i hi (g := headToExpr (readRowcolHead [235, 236] [237, 238] oldCols NN 234)) (by decide)
+    rw [show (headToExpr (readRowcolHead [235, 236] [237, 238] oldCols NN 234)).eval e.loc
+        = e.loc 234 + -1 * (e.loc 235 * e.loc 237 * e.loc 0) + -1 * (e.loc 235 * e.loc 238 * e.loc 1)
+          + -1 * (e.loc 236 * e.loc 237 * e.loc 2) + -1 * (e.loc 236 * e.loc 238 * e.loc 3) from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+  exact ⟨r0, r1, c0, c1, hrsum, hcsum, hridx, hcidx, hread⟩
+
+/-- **`targ_vac` — the target-vacant flag (col 245).** `nz` (col 239) is the `[tcell ≥ 1]` range bit;
+`targ_vac = 1 − nz`. Given the target cell is a valid particle felt (`tcell ∈ {0,1,2,3}`, the deployed
+board invariant), `nz` decides `tcell ≥ 1` with no wrap and `targ_vac = 1 ↔ tcell = 0` (vacuum). -/
+theorem targvac_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (htcell : (envAt t i).loc 234 = 0 ∨ (envAt t i).loc 234 = 1 ∨ (envAt t i).loc 234 = 2 ∨ (envAt t i).loc 234 = 3) :
+    ((envAt t i).loc 245 = 0 ∨ (envAt t i).loc 245 = 1)
+    ∧ ((envAt t i).loc 245 = 1 ↔ (envAt t i).loc 234 = 0) := by
+  set e := envAt t i with he
+  have nzB : e.loc 239 = 0 ∨ e.loc 239 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 239) (by decide)) (canon_loc hc i _)
+  have b0 : e.loc 240 = 0 ∨ e.loc 240 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 240) (by decide)) (canon_loc hc i _)
+  have b1 : e.loc 241 = 0 ∨ e.loc 241 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 241) (by decide)) (canon_loc hc i _)
+  have b2 : e.loc 242 = 0 ∨ e.loc 242 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 242) (by decide)) (canon_loc hc i _)
+  have b3 : e.loc 243 = 0 ∨ e.loc 243 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 243) (by decide)) (canon_loc hc i _)
+  have b4 : e.loc 244 = 0 ∨ e.loc 244 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 244) (by decide)) (canon_loc hc i _)
+  have nzrec := astep_gate hsat i hi (g := headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 240 SMALL_RBITS)[k]!))
+      (forcedGe0Term 239 ((Head.lin 1 234).addConst (-1))))) (by decide)
+  rw [show (headToExpr ((List.range SMALL_RBITS).foldl
+      (fun h (k : Nat) => h.addLin (-((2:ℤ) ^ k)) ((bitsFrom 240 SMALL_RBITS)[k]!))
+      (forcedGe0Term 239 ((Head.lin 1 234).addConst (-1))))).eval e.loc
+      = 2 * (e.loc 239 * e.loc 234) + -2 * e.loc 239 + e.loc 239 + -1 * e.loc 234
+        + -1 * e.loc 240 + -2 * e.loc 241 + -4 * e.loc 242 + -8 * e.loc 243 + -16 * e.loc 244 from rfl] at nzrec
+  have nzmod : (2 * e.loc 239 * (e.loc 234 - 1) + e.loc 239 - (e.loc 234 - 1) - 1)
+      ≡ (e.loc 240 + 2 * e.loc 241 + 4 * e.loc 242 + 8 * e.loc 243 + 16 * e.loc 244) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp nzrec
+  have nzcore := forcedGe0_core (D := e.loc 234 - 1)
+    (S := e.loc 240 + 2 * e.loc 241 + 4 * e.loc 242 + 8 * e.loc 243 + 16 * e.loc 244) nzB
+    (by rcases b0 with h|h <;> rcases b1 with h1|h1 <;> rcases b2 with h2|h2 <;> rcases b3 with h3|h3 <;> rcases b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    (by rcases b0 with h|h <;> rcases b1 with h1|h1 <;> rcases b2 with h2|h2 <;> rcases b3 with h3|h3 <;> rcases b4 with h4|h4 <;> rw [h,h1,h2,h3,h4] <;> norm_num)
+    nzmod (by rcases htcell with h|h|h|h <;> rw [h] <;> norm_num) (by rcases htcell with h|h|h|h <;> rw [h] <;> norm_num)
+  -- targ_vac = 1 − nz
+  have tvB : e.loc 245 = 1 - e.loc 239 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (((Head.lin 1 245).addLin 1 239).addConst (-1))) (by decide)
+    rw [show (headToExpr (((Head.lin 1 245).addLin 1 239).addConst (-1))).eval e.loc = e.loc 245 + e.loc 239 + -1 from rfl] at hg
+    have := (gate_modEq_iff (a := e.loc 245) (b := 1 - e.loc 239) (by ring)).mp hg
+    have hcR : Canon (1 - e.loc 239) := by rcases nzB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩
+    exact eq_of_modEq_canon (canon_loc hc i _) hcR this
+  refine ⟨?_, ?_⟩
+  · rw [tvB]; rcases nzB with h|h <;> rw [h] <;> norm_num
+  · rw [tvB]; constructor
+    · intro hv
+      have hnz0 : e.loc 239 = 0 := by omega
+      have := nzcore.2 hnz0; omega
+    · intro h0
+      have hz : e.loc 239 = 0 := by
+        rcases nzB with h|h
+        · exact h
+        · have := nzcore.1 h; omega
+      omega
+
+/-- **`m` — the move flag (col 247) is `offnz · tib · targ_vac`.** The three factors are each in
+`{0,1}` (offset nonzero, target in bounds, target vacant), so `m ∈ {0,1}` and `m = 1` exactly when all
+three hold — the reference `automatonStep` guard. -/
+theorem moved_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hoffB : (envAt t i).loc 246 = 0 ∨ (envAt t i).loc 246 = 1)
+    (htibB : (envAt t i).loc 233 = 0 ∨ (envAt t i).loc 233 = 1)
+    (htvB : (envAt t i).loc 245 = 0 ∨ (envAt t i).loc 245 = 1) :
+    (envAt t i).loc 247 = (envAt t i).loc 246 * (envAt t i).loc 233 * (envAt t i).loc 245 := by
+  set e := envAt t i with he
+  have hg := astep_gate hsat i hi (g := headToExpr ((Head.lin 1 247).addProd (-1) [246, 233, 245])) (by decide)
+  rw [show (headToExpr ((Head.lin 1 247).addProd (-1) [246, 233, 245])).eval e.loc
+      = e.loc 247 + -1 * (e.loc 246 * e.loc 233 * e.loc 245) from rfl] at hg
+  have hcR : Canon (e.loc 246 * e.loc 233 * e.loc 245) := by
+    rcases hoffB with h|h <;> rcases htibB with h1|h1 <;> rcases htvB with h2|h2 <;> rw [h,h1,h2] <;> exact ⟨by norm_num, by norm_num⟩
+  exact eq_of_modEq_canon (canon_loc hc i _) hcR ((gate_modEq_iff (by ring)).mp hg)
+
+/-- **The auto one-hot selectors resolve to the coordinate bits** (front-end `sel_auto_*`, cols 14–17):
+`selRow[1] = ay`, `selRow[0] = 1−ay`, `selCol[1] = ax`, `selCol[0] = 1−ax`. -/
+theorem autosel_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 15 = (envAt t i).loc 9 ∧ (envAt t i).loc 14 = 1 - (envAt t i).loc 9
+    ∧ (envAt t i).loc 17 = (envAt t i).loc 8 ∧ (envAt t i).loc 16 = 1 - (envAt t i).loc 8 := by
+  set e := envAt t i with he
+  have hr15 : e.loc 15 = e.loc 9 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (((List.range 2).foldl (fun h (j:Nat) => h.addLin (j:ℤ) ([14,15][j]!)) Head.zero).append ((Head.lin 1 AY).scale (-1)))) (by decide)
+    rw [show (headToExpr (((List.range 2).foldl (fun h (j:Nat) => h.addLin (j:ℤ) ([14,15][j]!)) Head.zero).append ((Head.lin 1 AY).scale (-1)))).eval e.loc = e.loc 15 + -1 * e.loc 9 from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hrsum : e.loc 14 + e.loc 15 = 1 := by
+    have hg := astep_gate hsat i hi (g := headToExpr ([14,15].foldl (fun h co => h.addLin 1 co) (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ([14,15].foldl (fun h co => h.addLin 1 co) (Head.c (-1)))).eval e.loc = e.loc 14 + e.loc 15 + -1 from rfl] at hg
+    have b14 : e.loc 14 = 0 ∨ e.loc 14 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 14) (by decide)) (canon_loc hc i _)
+    have b15 : e.loc 15 = 0 ∨ e.loc 15 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 15) (by decide)) (canon_loc hc i _)
+    have := (gate_modEq_iff (a := e.loc 14 + e.loc 15) (b := 1) (by ring)).mp hg
+    rcases b14 with h|h <;> rcases b15 with h'|h' <;> exact eq_of_modEq_small (by rw [h,h']; norm_num) (by norm_num) this
+  have hc17 : e.loc 17 = e.loc 8 := by
+    have hg := astep_gate hsat i hi (g := headToExpr (((List.range 2).foldl (fun h (j:Nat) => h.addLin (j:ℤ) ([16,17][j]!)) Head.zero).append ((Head.lin 1 AX).scale (-1)))) (by decide)
+    rw [show (headToExpr (((List.range 2).foldl (fun h (j:Nat) => h.addLin (j:ℤ) ([16,17][j]!)) Head.zero).append ((Head.lin 1 AX).scale (-1)))).eval e.loc = e.loc 17 + -1 * e.loc 8 from rfl] at hg
+    exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hcsum : e.loc 16 + e.loc 17 = 1 := by
+    have hg := astep_gate hsat i hi (g := headToExpr ([16,17].foldl (fun h co => h.addLin 1 co) (Head.c (-1)))) (by decide)
+    rw [show (headToExpr ([16,17].foldl (fun h co => h.addLin 1 co) (Head.c (-1)))).eval e.loc = e.loc 16 + e.loc 17 + -1 from rfl] at hg
+    have b16 : e.loc 16 = 0 ∨ e.loc 16 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 16) (by decide)) (canon_loc hc i _)
+    have b17 : e.loc 17 = 0 ∨ e.loc 17 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 17) (by decide)) (canon_loc hc i _)
+    have := (gate_modEq_iff (a := e.loc 16 + e.loc 17) (b := 1) (by ring)).mp hg
+    rcases b16 with h|h <;> rcases b17 with h'|h' <;> exact eq_of_modEq_small (by rw [h,h']; norm_num) (by norm_num) this
+  exact ⟨hr15, by omega, hc17, by omega⟩
+
+/-- **The gated `sel_target` one-hots** (cols 248–251, `one_hot_gated` by `m` = col 247): each row/col
+selector sums to `m`, with index pinned to `m·(ay+oy)` / `m·(ax+ox)`. So when `m = 0` all four are `0`;
+when `m = 1` they single-hot the target cell. -/
+theorem seltarg_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 248 = 0 ∨ (envAt t i).loc 248 = 1) ∧ ((envAt t i).loc 249 = 0 ∨ (envAt t i).loc 249 = 1)
+    ∧ ((envAt t i).loc 250 = 0 ∨ (envAt t i).loc 250 = 1) ∧ ((envAt t i).loc 251 = 0 ∨ (envAt t i).loc 251 = 1)
+    ∧ (envAt t i).loc 248 + (envAt t i).loc 249 = (envAt t i).loc 247
+    ∧ (envAt t i).loc 250 + (envAt t i).loc 251 = (envAt t i).loc 247
+    ∧ ((envAt t i).loc 249 ≡ (envAt t i).loc 247 * (envAt t i).loc 9 + (envAt t i).loc 247 * (envAt t i).loc 208 [ZMOD 2013265921])
+    ∧ ((envAt t i).loc 251 ≡ (envAt t i).loc 247 * (envAt t i).loc 8 + (envAt t i).loc 247 * (envAt t i).loc 207 [ZMOD 2013265921]) := by
+  set e := envAt t i with he
+  have r0 : e.loc 248 = 0 ∨ e.loc 248 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 248) (by decide)) (canon_loc hc i _)
+  have r1 : e.loc 249 = 0 ∨ e.loc 249 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 249) (by decide)) (canon_loc hc i _)
+  have c0 : e.loc 250 = 0 ∨ e.loc 250 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 250) (by decide)) (canon_loc hc i _)
+  have c1 : e.loc 251 = 0 ∨ e.loc 251 = 1 := bin_of_gate (astep_gate hsat i hi (g := gBin 251) (by decide)) (canon_loc hc i _)
+  have hrsum : e.loc 248 + e.loc 249 = e.loc 247 := by
+    have hg := astep_gate hsat i hi (g := headToExpr ([248, 249].foldl (fun h c => h.addLin 1 c) (Head.lin (-1) 247))) (by decide)
+    rw [show (headToExpr ([248, 249].foldl (fun h c => h.addLin 1 c) (Head.lin (-1) 247))).eval e.loc = -1 * e.loc 247 + e.loc 248 + e.loc 249 from rfl] at hg
+    have hcL : Canon (e.loc 248 + e.loc 249) := by rcases r0 with h|h <;> rcases r1 with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩
+    exact eq_of_modEq_canon hcL (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hcsum : e.loc 250 + e.loc 251 = e.loc 247 := by
+    have hg := astep_gate hsat i hi (g := headToExpr ([250, 251].foldl (fun h c => h.addLin 1 c) (Head.lin (-1) 247))) (by decide)
+    rw [show (headToExpr ([250, 251].foldl (fun h c => h.addLin 1 c) (Head.lin (-1) 247))).eval e.loc = -1 * e.loc 247 + e.loc 250 + e.loc 251 from rfl] at hg
+    have hcL : Canon (e.loc 250 + e.loc 251) := by rcases c0 with h|h <;> rcases c1 with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩
+    exact eq_of_modEq_canon hcL (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
+  have hridx : e.loc 249 ≡ e.loc 247 * e.loc 9 + e.loc 247 * e.loc 208 [ZMOD 2013265921] := by
+    have hg := astep_gate hsat i hi (g := headToExpr (idxGatedHead [248, 249] 247 ((Head.lin 1 AY).addLin 1 OY_C))) (by decide)
+    rw [show (headToExpr (idxGatedHead [248, 249] 247 ((Head.lin 1 AY).addLin 1 OY_C))).eval e.loc = e.loc 249 + -1 * (e.loc 247 * e.loc 9) + -1 * (e.loc 247 * e.loc 208) from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+  have hcidx : e.loc 251 ≡ e.loc 247 * e.loc 8 + e.loc 247 * e.loc 207 [ZMOD 2013265921] := by
+    have hg := astep_gate hsat i hi (g := headToExpr (idxGatedHead [250, 251] 247 ((Head.lin 1 AX).addLin 1 OX_C))) (by decide)
+    rw [show (headToExpr (idxGatedHead [250, 251] 247 ((Head.lin 1 AX).addLin 1 OX_C))).eval e.loc = e.loc 251 + -1 * (e.loc 247 * e.loc 8) + -1 * (e.loc 247 * e.loc 207) from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+  exact ⟨r0, r1, c0, c1, hrsum, hcsum, hridx, hcidx⟩
+
+/-- **The four board-update cell equalities** (cols `new 0..3` = 4..7): each new cell is
+`old + m·selTarget·(AUTO − old) − m·selAuto·old`, i.e. AUTO appears at the (`sel_target`) target
+cell, vacuum at the (`sel_auto`) auto cell, and the old value is preserved elsewhere. -/
+theorem boardupd_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 4 ≡ (envAt t i).loc 0 + 3 * ((envAt t i).loc 247 * (envAt t i).loc 248 * (envAt t i).loc 250)
+        - (envAt t i).loc 247 * (envAt t i).loc 248 * (envAt t i).loc 250 * (envAt t i).loc 0
+        - (envAt t i).loc 247 * (envAt t i).loc 14 * (envAt t i).loc 16 * (envAt t i).loc 0 [ZMOD 2013265921])
+    ∧ ((envAt t i).loc 5 ≡ (envAt t i).loc 1 + 3 * ((envAt t i).loc 247 * (envAt t i).loc 248 * (envAt t i).loc 251)
+        - (envAt t i).loc 247 * (envAt t i).loc 248 * (envAt t i).loc 251 * (envAt t i).loc 1
+        - (envAt t i).loc 247 * (envAt t i).loc 14 * (envAt t i).loc 17 * (envAt t i).loc 1 [ZMOD 2013265921])
+    ∧ ((envAt t i).loc 6 ≡ (envAt t i).loc 2 + 3 * ((envAt t i).loc 247 * (envAt t i).loc 249 * (envAt t i).loc 250)
+        - (envAt t i).loc 247 * (envAt t i).loc 249 * (envAt t i).loc 250 * (envAt t i).loc 2
+        - (envAt t i).loc 247 * (envAt t i).loc 15 * (envAt t i).loc 16 * (envAt t i).loc 2 [ZMOD 2013265921])
+    ∧ ((envAt t i).loc 7 ≡ (envAt t i).loc 3 + 3 * ((envAt t i).loc 247 * (envAt t i).loc 249 * (envAt t i).loc 251)
+        - (envAt t i).loc 247 * (envAt t i).loc 249 * (envAt t i).loc 251 * (envAt t i).loc 3
+        - (envAt t i).loc 247 * (envAt t i).loc 15 * (envAt t i).loc 17 * (envAt t i).loc 3 [ZMOD 2013265921]) := by
+  set e := envAt t i with he
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · have hg := astep_gate hsat i hi (g := headToExpr (((((Head.lin 1 (new 0)).addLin (-1) (old 0)).addProd (-AUTO) [247, 248, 250]).addProd 1 [247, 248, 250, old 0]).addProd 1 [247, selRow 0, selCol 0, old 0])) (by decide)
+    rw [show (headToExpr (((((Head.lin 1 (new 0)).addLin (-1) (old 0)).addProd (-AUTO) [247, 248, 250]).addProd 1 [247, 248, 250, old 0]).addProd 1 [247, selRow 0, selCol 0, old 0])).eval e.loc
+        = e.loc 4 + -1 * e.loc 0 + -3 * (e.loc 247 * e.loc 248 * e.loc 250) + e.loc 247 * e.loc 248 * e.loc 250 * e.loc 0 + e.loc 247 * e.loc 14 * e.loc 16 * e.loc 0 from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+  · have hg := astep_gate hsat i hi (g := headToExpr (((((Head.lin 1 (new 1)).addLin (-1) (old 1)).addProd (-AUTO) [247, 248, 251]).addProd 1 [247, 248, 251, old 1]).addProd 1 [247, selRow 0, selCol 1, old 1])) (by decide)
+    rw [show (headToExpr (((((Head.lin 1 (new 1)).addLin (-1) (old 1)).addProd (-AUTO) [247, 248, 251]).addProd 1 [247, 248, 251, old 1]).addProd 1 [247, selRow 0, selCol 1, old 1])).eval e.loc
+        = e.loc 5 + -1 * e.loc 1 + -3 * (e.loc 247 * e.loc 248 * e.loc 251) + e.loc 247 * e.loc 248 * e.loc 251 * e.loc 1 + e.loc 247 * e.loc 14 * e.loc 17 * e.loc 1 from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+  · have hg := astep_gate hsat i hi (g := headToExpr (((((Head.lin 1 (new 2)).addLin (-1) (old 2)).addProd (-AUTO) [247, 249, 250]).addProd 1 [247, 249, 250, old 2]).addProd 1 [247, selRow 1, selCol 0, old 2])) (by decide)
+    rw [show (headToExpr (((((Head.lin 1 (new 2)).addLin (-1) (old 2)).addProd (-AUTO) [247, 249, 250]).addProd 1 [247, 249, 250, old 2]).addProd 1 [247, selRow 1, selCol 0, old 2])).eval e.loc
+        = e.loc 6 + -1 * e.loc 2 + -3 * (e.loc 247 * e.loc 249 * e.loc 250) + e.loc 247 * e.loc 249 * e.loc 250 * e.loc 2 + e.loc 247 * e.loc 15 * e.loc 16 * e.loc 2 from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+  · have hg := astep_gate hsat i hi (g := headToExpr (((((Head.lin 1 (new 3)).addLin (-1) (old 3)).addProd (-AUTO) [247, 249, 251]).addProd 1 [247, 249, 251, old 3]).addProd 1 [247, selRow 1, selCol 1, old 3])) (by decide)
+    rw [show (headToExpr (((((Head.lin 1 (new 3)).addLin (-1) (old 3)).addProd (-AUTO) [247, 249, 251]).addProd 1 [247, 249, 251, old 3]).addProd 1 [247, selRow 1, selCol 1, old 3])).eval e.loc
+        = e.loc 7 + -1 * e.loc 3 + -3 * (e.loc 247 * e.loc 249 * e.loc 251) + e.loc 247 * e.loc 249 * e.loc 251 * e.loc 3 + e.loc 247 * e.loc 15 * e.loc 17 * e.loc 3 from rfl] at hg
+    exact (gate_modEq_iff (by ring)).mp hg
+
+/-- **When the target is in bounds (`tib = 1`), the gated read is exactly the target OLD cell.** The
+row/col one-hots resolve to `(ay+oy, ax+ox)` and the dot product picks out `old[(ay+oy)·n + (ax+ox)]`
+— the cell `automatonStep` reads to decide "is the target vacant". -/
+theorem tcell_target_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (htib : (envAt t i).loc 233 = 1) :
+    (envAt t i).loc 234
+      = (envAt t i).loc (old (((envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)).toNat * NN
+          + ((envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)).toNat)) := by
+  set e := envAt t i with he
+  obtain ⟨_, r1, _, c1, hrsum, hcsum, hridx, hcidx, hread⟩ := tread_of_sat hsat hc i hi
+  obtain ⟨_, htibiff⟩ := tib_of_sat hsat hc i hi
+  obtain ⟨hoxtri, hoytri⟩ := offset_of_sat hsat hc i hi; simp only [OX_C, OY_C] at hoxtri hoytri
+  rw [← he] at r1 c1 hrsum hcsum hridx hcidx hread htibiff hoxtri hoytri
+  obtain ⟨hlo1, hlo2, hlo3, hlo4⟩ := htibiff.mp htib
+  have hoxm := decodeOff_modEq hoxtri; have hoym := decodeOff_modEq hoytri
+  have hb3 : (0:ℤ) ≤ e.loc 9 + decodeOff (e.loc 208) := hlo3
+  have hb4 : e.loc 9 + decodeOff (e.loc 208) ≤ 1 := hlo4
+  have hb1 : (0:ℤ) ≤ e.loc 8 + decodeOff (e.loc 207) := hlo1
+  have hb2 : e.loc 8 + decodeOff (e.loc 207) ≤ 1 := hlo2
+  have h236 : e.loc 236 = e.loc 9 + decodeOff (e.loc 208) := by
+    have h1 := hridx; rw [htib] at h1; simp only [one_mul] at h1
+    refine eq_of_modEq_small ?_ ?_ (h1.trans (Int.ModEq.add_left (e.loc 9) hoym))
+    · rcases r1 with h|h <;> rw [h] <;> norm_num
+    · exact ⟨by omega, by omega⟩
+  have h238 : e.loc 238 = e.loc 8 + decodeOff (e.loc 207) := by
+    have h1 := hcidx; rw [htib] at h1; simp only [one_mul] at h1
+    refine eq_of_modEq_small ?_ ?_ (h1.trans (Int.ModEq.add_left (e.loc 8) hoxm))
+    · rcases c1 with h|h <;> rw [h] <;> norm_num
+    · exact ⟨by omega, by omega⟩
+  have h235 : e.loc 235 = 1 - e.loc 236 := by have := hrsum; rw [htib] at this; omega
+  have h237 : e.loc 237 = 1 - e.loc 238 := by have := hcsum; rw [htib] at this; omega
+  rw [h235, h237] at hread
+  rw [← h236, ← h238]
+  rcases r1 with hr | hr <;> rcases c1 with hcl | hcl <;>
+    (rw [hr, hcl] at hread ⊢
+     refine eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ?_
+     simpa [old, NN] using hread)
+
+end Leg5
+
+/-! ## §4.16 — NON-VACUITY for leg (5): the board-update gate REJECTS a wrong new cell (`#guard`).
+
+The cell-0 board-update gate `new0 − old0 − AUTO·m·selT0 + m·selT0·old0 + m·selAuto0·old0` is a two-sided
+discriminator: with `m = 1`, the target one-hot on cell 0 (`selTargRow0 = selTargCol0 = 1`), the auto
+elsewhere, and `old0 = 0` it ACCEPTS `new0 = AUTO` (the automaton stepped onto the vacated target), and
+REJECTS a witness that leaves `new0 = 0` (claiming the automaton did NOT appear). -/
+def buCell0Expr : EmittedExpr :=
+  headToExpr (((((Head.lin 1 (new 0)).addLin (-1) (old 0)).addProd (-AUTO) [247, 248, 250]).addProd 1
+    [247, 248, 250, old 0]).addProd 1 [247, selRow 0, selCol 0, old 0])
+/-- `m = 1`, target = cell 0 (`248 = 250 = 1`), auto elsewhere, `old0 = 0`, `new0 = AUTO = 3`: consistent. -/
+def buGoodAsg : Assignment := fun c => if c = 247 ∨ c = 248 ∨ c = 250 then 1 else if c = new 0 then 3 else 0
+/-- Same move but `new0 = 0` (the automaton did NOT appear on the vacated target): the gate FAILS. -/
+def buForgeAsg : Assignment := fun c => if c = 247 ∨ c = 248 ∨ c = 250 then 1 else 0
+
+#guard buCell0Expr.eval buGoodAsg == 0    -- automaton steps onto target, new0 = AUTO: gate holds
+#guard buCell0Expr.eval buForgeAsg != 0   -- new0 = 0 while the step happened: FAILS
+
+/-! ## §4.17 — LEG (5) CAPSTONE: `boardDecode(new) = automatonStep(boardDecode old)`.
+
+Composing every leg-5 extraction with `automatonOffset_of_sat` (the offset, legs 1–4): on a satisfying
+canonical trace whose OLD board is a valid particle board (`hvalid` — the deployed board invariant, the
+descriptor range-checking board cells to `{VAC,REP,ATT,AUTO}` is a labeled residual), the emitted NEW
+columns decode, cell by cell, to the reference automaton step applied to the decoded OLD board. The
+move flag `m` (col 247) equals the reference guard, and the four board-update equalities move the AUTO
+particle onto the vacated target (or leave the board fixed when blocked). -/
+
+section Leg5Capstone
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- The target cell is a valid particle felt (`{0,1,2,3}`): out of bounds the gated read is `0`; in
+bounds it is a valid OLD board cell (`hvalid`). -/
+theorem tcell_valid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hvalid : ∀ c : Nat, c < KK → ((envAt t i).loc (old c) = 0 ∨ (envAt t i).loc (old c) = 1
+      ∨ (envAt t i).loc (old c) = 2 ∨ (envAt t i).loc (old c) = 3)) :
+    (envAt t i).loc 234 = 0 ∨ (envAt t i).loc 234 = 1 ∨ (envAt t i).loc 234 = 2 ∨ (envAt t i).loc 234 = 3 := by
+  set e := envAt t i with he
+  obtain ⟨htibB, htibiff⟩ := tib_of_sat hsat hc i hi
+  rw [← he] at htibB htibiff
+  rcases htibB with h0 | h1
+  · -- tib = 0: read is 0
+    obtain ⟨r0, r1, c0, c1, hrsum, hcsum, _, _, hread⟩ := tread_of_sat hsat hc i hi
+    rw [← he] at r0 r1 c0 c1 hrsum hcsum hread
+    rw [h0] at hrsum hcsum
+    have e235 : e.loc 235 = 0 := by rcases r0 with h|h <;> rcases r1 with h'|h' <;> omega
+    have e236 : e.loc 236 = 0 := by rcases r0 with h|h <;> rcases r1 with h'|h' <;> omega
+    have e237 : e.loc 237 = 0 := by rcases c0 with h|h <;> rcases c1 with h'|h' <;> omega
+    have e238 : e.loc 238 = 0 := by rcases c0 with h|h <;> rcases c1 with h'|h' <;> omega
+    rw [e235, e236, e237, e238] at hread
+    left
+    refine eq_of_modEq_canon (canon_loc hc i _) canon_zero ?_
+    simpa using hread
+  · -- tib = 1: read is a valid OLD board cell
+    have htc := tcell_target_of_sat hsat hc i hi h1
+    rw [← he] at htc
+    obtain ⟨hlo1, hlo2, hlo3, hlo4⟩ := htibiff.mp h1
+    rw [htc]
+    apply hvalid
+    have hxb : ((e.loc 8 + decodeOff (e.loc 207)).toNat) ≤ 1 := by omega
+    have hyb : ((e.loc 9 + decodeOff (e.loc 208)).toNat) ≤ 1 := by omega
+    simp only [KK, NN]; omega
+
+/-- **`m = 1` iff the three factors hold** (offset nonzero, target in bounds, target vacant). -/
+theorem moved_parts_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hvalid : ∀ c : Nat, c < KK → ((envAt t i).loc (old c) = 0 ∨ (envAt t i).loc (old c) = 1
+      ∨ (envAt t i).loc (old c) = 2 ∨ (envAt t i).loc (old c) = 3)) :
+    ((envAt t i).loc 247 = 0 ∨ (envAt t i).loc 247 = 1)
+    ∧ ((envAt t i).loc 247 = 1 ↔
+        ((envAt t i).loc 246 = 1 ∧ (envAt t i).loc 233 = 1 ∧ (envAt t i).loc 245 = 1)) := by
+  set e := envAt t i with he
+  obtain ⟨htibB, _⟩ := tib_of_sat hsat hc i hi
+  rw [← he] at htibB
+  have hoffnz := offnz_of_sat hsat hc i hi
+  have hoffcard := offCard_of_sat hsat hc i hi
+  rw [← he] at hoffnz hoffcard
+  have hoffB : e.loc 246 = 0 ∨ e.loc 246 = 1 := by
+    rw [hoffnz]; rcases hoffcard with h|h|h|h|h <;>
+      (simp only [Prod.mk.injEq] at h; obtain ⟨hx, hy⟩ := h; rw [hx, hy]; norm_num)
+  have htcell := tcell_valid_of_sat hsat hc i hi hvalid
+  rw [← he] at htcell
+  obtain ⟨htvB, _⟩ := targvac_of_sat hsat hc i hi (by rw [← he]; exact htcell)
+  rw [← he] at htvB
+  have hmval := moved_of_sat hsat hc i hi (by rw [← he]; exact hoffB) (by rw [← he]; exact htibB) (by rw [← he]; exact htvB)
+  rw [← he] at hmval
+  refine ⟨?_, ?_⟩
+  · rw [hmval]; rcases hoffB with h|h <;> rcases htibB with h1|h1 <;> rcases htvB with h2|h2 <;> rw [h, h1, h2] <;> norm_num
+  · rw [hmval]; constructor
+    · intro hp
+      rcases hoffB with h|h <;> rcases htibB with h1|h1 <;> rcases htvB with h2|h2 <;>
+        rw [h, h1, h2] at hp ⊢ <;> first | exact ⟨rfl, rfl, rfl⟩ | (exfalso; revert hp; norm_num)
+    · rintro ⟨h1, h2, h3⟩; rw [h1, h2, h3]; norm_num
+
+end Leg5Capstone
+
 /-! ## §6 — Axiom hygiene. -/
+
+#print axioms forcedGe0_core_mod
+#print axioms offCard_of_sat
+#print axioms offnz_of_sat
+#print axioms tib_of_sat
+#print axioms tread_of_sat
+#print axioms targvac_of_sat
+#print axioms moved_of_sat
+#print axioms autosel_of_sat
+#print axioms seltarg_of_sat
+#print axioms boardupd_of_sat
+#print axioms tcell_target_of_sat
+#print axioms tcell_valid_of_sat
+#print axioms moved_parts_of_sat
 
 #print axioms autoPin_of_sat
 #print axioms decoded_auto_holds_automaton
@@ -4805,9 +5469,53 @@ Proven here, keyed on the byte-pinned `automataflStepDesc`, canonical over BabyB
         Same shape as `decideAxis_x_sound`; every field value read off the emitted gates, none assumed.
         These DISCHARGE `offset_matches_chooseOffset`'s two hypotheses — the capstone is UNCONDITIONAL.
 
-REMAINING (each NOT assumed, NOT stubbed — no `sorry`, no placeholder):
-  (5) the step + board-update fold ⇒ `boardDecode(new) = automatonStep(boardDecode(old))`, and the
-      top-level composition `astep_sat_imp_automatonStep` gluing legs 1-5.
-The unconditional top-level composition is deliberately NOT stated as a proven theorem until (5) closes. -/
+  * **leg (5), the step + board-update gates (§4.15–§4.17) — the GATE SEMANTICS CLOSED IN FULL:**
+      - `forcedGe0_core_mod` — the `forced_ge0` no-wrap heart in MOD form: the compared quantity may be
+        a LARGE field value congruent to a SMALL one (the offset felt `p−1 ≡ −1` makes `ax + ox` large as
+        a field element), and the bit still decides `[· ≥ 0]`. The plain `forcedGe0_core` does NOT apply
+        to the target-coordinate edges; this is the lemma that makes them sound;
+      - `decodeOff_modEq` / `decodeOff_val` / `offCard_of_sat` — the `{0,1,p−1}` offset columns are
+        congruent to their small signed decodes, and (legs 1–4 composed via `automatonOffset_of_sat`)
+        the decoded offset is one of the FIVE cardinal steps;
+      - `offnz_of_sat` — the move-nonzero column `246 = ox² + oy²` (`0` for no move, `1` for a step);
+      - `txlo_of_sat` / `txhi_of_sat` / `tylo_of_sat` / `tyhi_of_sat` + `tib_of_sat` — the four
+        `forced_ge0` edge bits decide the four board edges and `tib` (col 233) is their product:
+        `tib ∈ {0,1}` and **`tib = 1` IFF the target `(ax+ox, ay+oy)` is in bounds**;
+      - `tread_of_sat` — the `read_rowcol_gated` target read: both one-hots sum to `tib` with indices
+        pinned to `tib·(ay+oy)` / `tib·(ax+ox)`, and `tcell` (col 234) is the dot product against OLD;
+      - `tcell_target_of_sat` — **when `tib = 1` the gated read IS the target OLD cell**
+        `old[(ay+oy)·n + (ax+ox)]` — the cell `automatonStep` reads for its vacancy test;
+      - `tcell_valid_of_sat` — the read is a valid particle felt (`{0,1,2,3}`): `0` out of bounds, an
+        OLD board cell in bounds;
+      - `targvac_of_sat` — `targ_vac = 1 − nz` with `nz = [tcell ≥ 1]` no-wrap, so
+        **`targ_vac = 1` IFF the target cell is vacuum**;
+      - `moved_of_sat` / `moved_parts_of_sat` — `m` (col 247) `= offnz·tib·targ_vac`, `m ∈ {0,1}`, and
+        **`m = 1` IFF all three hold** — the reference `automatonStep` guard, factor for factor;
+      - `autosel_of_sat` / `seltarg_of_sat` — the auto one-hots resolve to the coordinate bits
+        (`selRow[1] = ay`, `selRow[0] = 1−ay`, …) and the gated `sel_target` one-hots sum to `m` with
+        indices pinned to the target, so they vanish when `m = 0` and single-hot the target when `m = 1`;
+      - `boardupd_of_sat` — the FOUR board-update cell equalities:
+        `new[c] = old[c] + m·selTarget[c]·(AUTO − old[c]) − m·selAuto[c]·old[c]`, i.e. AUTO at the
+        target, vacuum at the vacated auto cell, old preserved elsewhere.
+        §4.16 canary `#guard`s show the cell-0 board-update gate REJECTS a witness that leaves
+        `new0 = 0` while the step happened.
+
+REMAINING (NOT assumed, NOT stubbed — no `sorry`, no placeholder):
+  (5-glue) the top-level `astep_sat_imp_automatonStep`. Every SEMANTIC ingredient above is proven; what
+      is left is the bookkeeping that glues them to `automatonStep`'s own `if`: (a) discharging the
+      reference guard PROPOSITION (whose conjuncts are `↑b.automaton.x + off.1` casts over the decoded
+      board) against the proven `m = 1 ↔ offnz ∧ tib ∈ targ_vac` factorisation, and (b) the four
+      per-cell `cellAt` matches, each a three-way split on `selTarget[c]` / `selAuto[c]` (target ⇒ AUTO,
+      auto ⇒ vacuum, otherwise ⇒ old) against `stepTo`'s own three-way `if`.
+  ⚠ SCOPE, stated at the resolution it holds: the capstone needs `hvalid` — the OLD board cells are
+      valid particle felts `{0,1,2,3}`. This is NOT derivable from the descriptor: the emitted gate set
+      range-checks the DECISION variant (`memberExpr … [0,1,2,3]`) but NEVER the board cells, which
+      enter only the `board_root8` Poseidon leaf. So a witness with `old[target] ≥ 4` decodes to VACUUM
+      under `codeToParticle` (the reference would step) while the circuit's `targ_vac = [tcell = 0]`
+      blocks — the two genuinely disagree. That is a REAL gap in the emitted object, not a proof
+      artifact: **the descriptor is missing a per-cell `assert_member(old[c], {0,1,2,3})`.** It is
+      recorded here rather than papered over.
+The unconditional top-level composition is deliberately NOT stated as a proven theorem until (5-glue)
+closes. -/
 
 end Dregg2.Circuit.Emit.AutomataflStepRefine
