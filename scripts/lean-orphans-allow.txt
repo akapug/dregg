@@ -1,0 +1,176 @@
+# lean-orphans-allow.txt — modules under metatheory/Dregg2/ that are DELIBERATELY
+# not reachable from any default lake target (Dregg2/Metatheory/Polis/Market/Bfv).
+#
+# WHY THIS FILE EXISTS
+#   The `Dregg2` lean_lib has no `globs`, so `lake build` compiles only the modules
+#   transitively imported from metatheory/Dregg2.lean. A new metatheory/Dregg2/**.lean
+#   that nothing imports builds green under `lake env lean <file>`, passes its own
+#   #assert_all_clean / #assert_axioms / #guard, and is covered by NOTHING in CI — a
+#   downstream regression can silently break it and no gate goes red. That hole recurred
+#   (StepBridge, AciNormal, AciComplete) and was each time caught only by a human reviewer.
+#
+#   scripts/check-lean-orphans.sh FAILS if any Dregg2/**.lean is neither reachable nor listed
+#   here. So a NEW orphan reds CI and forces a decision: register it in Dregg2.lean, or add
+#   it here WITH A REASON. Registering a listed module and NOT removing it here is ALSO a
+#   failure (stale entry) — the allowlist cannot silently outlive the exclusion it records.
+#
+# FORMAT  one dotted module per line, optional `# reason` after it. `#`-only lines and blanks
+#         are comments. Every listed module MUST exist as a file and MUST be a genuine orphan.
+#
+# These entries are the CURRENT (2026-07-18) orphan census — WIP from this and other
+# terminals. As each cluster's work lands, register the finished modules in Dregg2.lean and
+# delete them from here; the staleness check will remind you.
+
+# --- in-flight Lean-authored circuit EMIT/REFINE/RUNG pipeline (AutomataflResolveEmit family); each lands in Dregg2.lean when its refinement rung is discharged ---
+Dregg2.Circuit.Emit.AccumulatorNonRevocationEmit
+Dregg2.Circuit.Emit.AccumulatorNonRevocationRefine
+Dregg2.Circuit.Emit.AdjacencyMembershipRefine
+Dregg2.Circuit.Emit.AdjacencyMembershipRefineAudit
+Dregg2.Circuit.Emit.AdjacencyMembershipRung2
+Dregg2.Circuit.Emit.AttestedFactMembershipEmit
+Dregg2.Circuit.Emit.AutomataflOcclusionBridge
+Dregg2.Circuit.Emit.AvailWideMembersNarrow
+Dregg2.Circuit.Emit.BilateralAggregationEmit
+Dregg2.Circuit.Emit.BilateralAggregationRefine
+Dregg2.Circuit.Emit.BilateralAggregationRung2
+Dregg2.Circuit.Emit.BlindedMembershipRung2
+Dregg2.Circuit.Emit.BoundPresentationEmit
+Dregg2.Circuit.Emit.BoundPresentationRefine
+Dregg2.Circuit.Emit.BoundPresentationRung2
+Dregg2.Circuit.Emit.BridgeActionEmit
+Dregg2.Circuit.Emit.BridgeActionRefine
+Dregg2.Circuit.Emit.CommittedThresholdEmit
+Dregg2.Circuit.Emit.CommittedThresholdRefine
+Dregg2.Circuit.Emit.DerivationEmit
+Dregg2.Circuit.Emit.DerivationRefine
+Dregg2.Circuit.Emit.DerivationRung2
+Dregg2.Circuit.Emit.DfaRoutingEmit
+Dregg2.Circuit.Emit.DfaRoutingGeneralEmit
+Dregg2.Circuit.Emit.DfaRoutingRefine
+Dregg2.Circuit.Emit.DfaRoutingRung2
+Dregg2.Circuit.Emit.EffectActionBindingEmit
+Dregg2.Circuit.Emit.EffectActionBindingRefine
+Dregg2.Circuit.Emit.EffectActionBindingRung2
+Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransition
+Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRefine
+Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2
+Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransitionRung2Full
+Dregg2.Circuit.Emit.EmitAllJson
+Dregg2.Circuit.Emit.EmitGraduate
+Dregg2.Circuit.Emit.FoldEmit
+Dregg2.Circuit.Emit.FoldRefine
+Dregg2.Circuit.Emit.FoldRung2
+Dregg2.Circuit.Emit.GarbledEvalEmit
+Dregg2.Circuit.Emit.GarbledEvalRefine
+Dregg2.Circuit.Emit.GarbledEvalRung2
+Dregg2.Circuit.Emit.MembershipAuthRootEdge
+Dregg2.Circuit.Emit.MembershipDepthGeneralRung2
+Dregg2.Circuit.Emit.MerkleMembershipRung2
+Dregg2.Circuit.Emit.MultiStepChainEmit
+Dregg2.Circuit.Emit.MultiStepChainRefine
+Dregg2.Circuit.Emit.NonRevocationRefine
+Dregg2.Circuit.Emit.NonRevocationRefineComplete
+Dregg2.Circuit.Emit.NonRevocationRung2
+Dregg2.Circuit.Emit.NonRevocationRung2Full
+Dregg2.Circuit.Emit.NoteSpendingLeafEmit
+Dregg2.Circuit.Emit.NoteSpendingLeafRefine
+Dregg2.Circuit.Emit.NoteSpendingLeafRung2
+Dregg2.Circuit.Emit.PredicatesArithmeticEmit
+Dregg2.Circuit.Emit.PredicatesArithmeticRefine
+Dregg2.Circuit.Emit.PredicatesGtEmit
+Dregg2.Circuit.Emit.PredicatesGtRefine
+Dregg2.Circuit.Emit.PredicatesInRangeEmit
+Dregg2.Circuit.Emit.PredicatesInRangeRefine
+Dregg2.Circuit.Emit.PredicatesLeEmit
+Dregg2.Circuit.Emit.PredicatesLeRefine
+Dregg2.Circuit.Emit.PredicatesLtEmit
+Dregg2.Circuit.Emit.PredicatesLtRefine
+Dregg2.Circuit.Emit.PredicatesNeqEmit
+Dregg2.Circuit.Emit.PredicatesNeqRefine
+Dregg2.Circuit.Emit.PredicatesRelationalCompoundEmit
+Dregg2.Circuit.Emit.PredicatesRelationalCompoundRefine
+Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2
+Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2Full
+Dregg2.Circuit.Emit.PresentationEmit
+Dregg2.Circuit.Emit.PresentationRefine
+Dregg2.Circuit.Emit.QuantifiedAbsenceEmit
+Dregg2.Circuit.Emit.QuantifiedAbsenceRefine
+Dregg2.Circuit.Emit.QuantifiedAbsenceRefineAudit
+Dregg2.Circuit.Emit.QuantifiedAbsenceRung2
+Dregg2.Circuit.Emit.RotatedLayoutBridge
+Dregg2.Circuit.Emit.TemporalPredicateEmit
+Dregg2.Circuit.Emit.TemporalPredicateRefine
+Dregg2.Circuit.Emit.TemporalPredicateRung2
+
+# --- circuit-soundness WIP (FRI/STARK proximity-gap, AlgoStark fanout, kernel-config, wrap-safety); several carry sorry and must NOT enter the default build until discharged ---
+Dregg2.Circuit.AcceptanceDischarge
+Dregg2.Circuit.AlgoStarkSoundFanoutMemFree
+Dregg2.Circuit.AlgoStarkSoundFanoutMemory
+Dregg2.Circuit.AlgoStarkSoundFanoutSetField
+Dregg2.Circuit.AlgoStarkSoundGeneral
+Dregg2.Circuit.AlgoStarkSoundKernel
+Dregg2.Circuit.AlgoStarkSoundKernelAvail
+Dregg2.Circuit.BlindedMembershipBindingFromFold
+Dregg2.Circuit.CustomLeafEncoding
+Dregg2.Circuit.DeltaProto
+Dregg2.Circuit.EffectsAsDataProto
+Dregg2.Circuit.FinBindsKernel
+Dregg2.Circuit.FinInjectivityCollapse
+Dregg2.Circuit.FriCorrelatedAgreementSharp
+Dregg2.Circuit.FriLdtJohnsonList
+Dregg2.Circuit.FriProximityGapListDecoding
+Dregg2.Circuit.FriProximityGapWitness
+Dregg2.Circuit.FriVerifierOracle
+Dregg2.Circuit.KernelConfigSoundness
+Dregg2.Circuit.KernelConfigSoundnessAvail
+Dregg2.Circuit.OodColumnLayout
+Dregg2.Circuit.PresentationBindingFromFold
+Dregg2.Circuit.RotatedKernelRefinementAvailWideNarrow
+Dregg2.Circuit.WrapSafetyStaticAnalyzer
+
+# --- PQ-crypto spec WIP (ML-DSA/ML-KEM codecs, VerifyCore/SignCore specs, ACVP KATs, NTT faithfulness); spec-in-progress, not yet CI-clean ---
+Dregg2.Crypto.AcvpKats
+Dregg2.Crypto.CodecRoundTrip
+Dregg2.Crypto.CryptoVerifyAll
+Dregg2.Crypto.EncapsCoreSpec
+Dregg2.Crypto.KemSoundnessQuant
+Dregg2.Crypto.MlDsaHintCodec
+Dregg2.Crypto.MlDsaSigCodecClosed
+Dregg2.Crypto.MlDsaSignReal
+Dregg2.Crypto.NttFaithful
+Dregg2.Crypto.SignCoreSpec
+Dregg2.Crypto.VerifyCoreEqSpec
+Dregg2.Crypto.VerifyCoreEqSpecW
+Dregg2.Crypto.VerifyCoreSpec
+
+# --- light-client / proof-of-holdings bridge WIP (Eth/Tendermint/MPT clients, holding-fold tally) ---
+Dregg2.Bridge.HoldingFoldRecursive
+Dregg2.Bridge.HoldingWeightedTally
+Dregg2.Bridge.InterchainAdapterDecision
+Dregg2.Bridge.LightClientEth
+Dregg2.Bridge.LightClientMpt
+Dregg2.Bridge.LightClientTendermint
+Dregg2.Bridge.ProofOfHoldings
+Dregg2.Bridge.ProofOfHoldingsGeneric
+Dregg2.Bridge.VerifiedLightClient
+
+# --- game AIRs authored in Lean, actively churning (Dungeon/MultiwayTug/Automatafl); carry sorry — not for the metatheory-no-sorry build ---
+Dregg2.Games.AutomataflAir
+Dregg2.Games.Dungeon
+Dregg2.Games.MultiwayTug
+Dregg2.Games.MultiwayTugAir
+Dregg2.Games.MultiwayTugProgram
+
+# --- LoadBearing lint/audit META-tooling (not part of the theory build closure) ---
+Dregg2.Verify.LoadBearingAuditBroad
+Dregg2.Verify.LoadBearingAuditKey
+Dregg2.Verify.LoadBearingLint
+
+# --- app-demo WIP (ColonistJob) — carries sorry ---
+Dregg2.Apps.ColonistJob  # carries sorry
+
+# --- direct-FFI variant (FFIDirect) outside the export closure ---
+Dregg2.Exec.FFIDirect
+
+# --- the Claims axiom-net — KNOWN 'ran nowhere' (see MEMORY: CI-meaningfulness audit); being wired on its own track ---
+Dregg2.Claims

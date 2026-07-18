@@ -638,6 +638,24 @@ jobs:
           lfs: true
       - run: bash scripts/check-independence-controls.sh
 
+  lean-orphans:
+    name: Lean orphan-module coverage gate (no Dregg2 module escapes the build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The `Dregg2` lean_lib has no `globs`, so `lake build` compiles only modules
+    # transitively imported from metatheory/Dregg2.lean. A new metatheory/Dregg2/**.lean
+    # that nothing imports builds green under `lake env lean <file>` and its
+    # #assert_all_clean / #assert_axioms / #guard checks run in NO CI target. This gate
+    # FAILS LOUD if any Dregg2 module is neither reachable nor deliberately allowlisted
+    # (scripts/lean-orphans-allow.txt, one reason per entry), and if it finds zero files —
+    # a coverage scan that scanned nothing is not a pass. Pure source-text scan: no Lean
+    # toolchain, no build.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - run: bash scripts/check-lean-orphans.sh
+
   no-degraded-felt:
     name: Faithful-commitment gate (no degraded felt)
     runs-on: ubuntu-latest
