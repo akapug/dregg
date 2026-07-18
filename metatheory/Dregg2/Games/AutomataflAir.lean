@@ -1,6 +1,17 @@
 /-
-# Dregg2.Games.AutomataflAir — the AIR-refinement obligation CONNECTED to the
-CONCRETE staged board-transition circuit.
+# Dregg2.Games.AutomataflAir — the ABSTRACT staged board-transition AIR relation, refining `applyTurn`.
+
+⚠ RESOLUTION (see `docs/audit/SEMANTIC-LEAN-BOUNDARY.md`, Class B). "CONNECTED" and "discharges
+`air.Refines` for the emitted circuit" below are NOT machine-checked connections to the deployed
+circuit. What is PROVEN is about the ABSTRACT `MoveGadget`/`StepGadget` structures (OPAQUE
+`resolve`/`step` functions). `MoveSound`/`StepSound` are discharged ONLY for the IDEAL gadgets
+(`idealMoveGadget`/`idealStepGadget`), which are LITERALLY the reference stages (sound by `rfl`) —
+NOT the deployed `dregg-automatafl/src/{air.rs::automaton_gadget, moves.rs}`, which is never shown
+to satisfy them. So `concreteAutomataflAIR_refines` / `automatafl_air_refines_applyTurn_concrete`
+discharge `Refines` PARAMETRICALLY over an abstract gadget pair, NOT for the emitted Rust circuit.
+The deployed AIR is hand-written Rust with no `@[export]`, no Rust loader, and no emitted artifact
+linking it to these Lean gadgets. "The deployed circuit IS this Lean object" is UNPROVEN future
+work (Step 1/T4 of the boundary doc).
 
 `Automatafl.lean` states the game-level refinement obligation abstractly (§7):
 `BoardTransitionAIR.Refines air` says a HYPOTHESIZED transition AIR admits
@@ -43,7 +54,8 @@ of `applyTurn` — the automatafl analogue of `MultiwayTug.airPlay_iff_applyActi
 `MoveSound` / `StepSound` bridges are LOAD-BEARING: drop either and the correspondence fails
 (it is not a `P → P` tautology). `concreteAutomataflAIR_refines` packages the concrete AIR as
 a `BoardTransitionAIR` satisfying `Refines`, and `automatafl_air_refines_applyTurn_concrete`
-FEEDS it into the upstream §7 obligation — discharging `air.Refines` for the emitted circuit
+FEEDS it into the upstream §7 obligation — discharging `air.Refines` for the abstract staged AIR
+(parametric in the gadgets; ⚠ NOT the emitted Rust circuit — see the resolution note atop the file)
 rather than leaving it a bare hypothesis. `conflictResolve_pair` proves the D3 selection
 truth table matches the reference resolution; `airAutomatafl_functional` inherits determinism;
 the `idealMoveGadget` / `idealStepGadget` correspondence witnesses (a legal resolved move IS an
@@ -108,7 +120,8 @@ def airAutomatafl (MG : MoveGadget) (SG : StepGadget)
     (old : Board) (moves : List Move) (new : Board) : Prop :=
   new = SG.step (MG.resolve old moves)
 
-/-- **`airAutomatafl_iff_applyTurn` (THE CONNECTED REFINEMENT).** The concrete staged circuit's
+/-- **`airAutomatafl_iff_applyTurn` (THE ABSTRACT STAGED REFINEMENT — ⚠ NOT connected to the deployed
+Rust circuit; see the resolution note atop this file).** The abstract staged circuit's
 admission relation is EXACTLY the graph of `applyTurn` — the automatafl analogue of
 `MultiwayTug.airPlay_iff_applyAction`. Both gadget-soundness bridges are LOAD-BEARING: the move
 gadget must compute the validity/conflict/apply stages and the automaton gadget must compute the
@@ -131,26 +144,30 @@ theorem airAutomatafl_functional (MG : MoveGadget) (SG : StepGadget)
   ((airAutomatafl_iff_applyTurn MG SG hM hS old moves n₁).mp h₁).trans
     ((airAutomatafl_iff_applyTurn MG SG hM hS old moves n₂).mp h₂).symm
 
-/-! ## 3. Connection to the §7 obligation — discharging `air.Refines` for the emitted circuit -/
+/-! ## 3. Connection to the §7 obligation — discharging `air.Refines` for the abstract staged AIR
+(parametric in the gadgets; ⚠ NOT the emitted Rust circuit — see the resolution note atop the file) -/
 
 /-- The concrete circuit packaged as a `BoardTransitionAIR` (§7): its `admits` is the staged
 `airAutomatafl`, NOT the monolithic `applyTurn`. -/
 def concreteAutomataflAIR (MG : MoveGadget) (SG : StepGadget) : BoardTransitionAIR where
   admits := airAutomatafl MG SG
 
-/-- **`concreteAutomataflAIR_refines`** — the emitted circuit SATISFIES the §7 contract
-`Refines`. Where `applyTurnAIR` (Automatafl.lean §7) trivially realizes the contract by
-`admits := applyTurn`, this proves the STAGED gadget circuit refines it, given the gadget
-soundness bridges. -/
+/-- **`concreteAutomataflAIR_refines`** — the abstract staged AIR (parametric in the gadgets)
+SATISFIES the §7 contract `Refines`. Where `applyTurnAIR` (Automatafl.lean §7) trivially realizes
+the contract by `admits := applyTurn`, this proves the STAGED gadget circuit refines it, given the
+gadget soundness bridges. ⚠ It is NOT shown for the deployed `air.rs`/`moves.rs` (only the IDEAL
+gadgets satisfy the bridges by `rfl`) — see the resolution note atop this file. -/
 theorem concreteAutomataflAIR_refines (MG : MoveGadget) (SG : StepGadget)
     (hM : MoveSound MG) (hS : StepSound SG) :
     (concreteAutomataflAIR MG SG).Refines :=
   fun b ms nb => airAutomatafl_iff_applyTurn MG SG hM hS b ms nb
 
 /-- **`automatafl_air_refines_applyTurn_concrete`** — the upstream §7 obligation
-(`automatafl_air_refines_applyTurn`), now DISCHARGED for the concrete circuit: it feeds
+(`automatafl_air_refines_applyTurn`), now DISCHARGED for the abstract staged AIR (⚠ parametric in
+the gadgets, NOT the emitted Rust circuit — see the resolution note atop this file): it feeds
 `concreteAutomataflAIR` + its proven `Refines` into the obligation, so `air.Refines` is no
-longer a bare hypothesis but a THEOREM for the emitted translation-validation AIR. -/
+longer a bare hypothesis but a THEOREM for the abstract staged AIR (instantiated only by the
+IDEAL/reference gadgets). -/
 theorem automatafl_air_refines_applyTurn_concrete (MG : MoveGadget) (SG : StepGadget)
     (hM : MoveSound MG) (hS : StepSound SG)
     (b : Board) (ms : List Move) (nb : Board) :

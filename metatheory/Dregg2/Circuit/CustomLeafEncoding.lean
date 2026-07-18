@@ -1,5 +1,18 @@
 /-
-# Dregg2.Circuit.CustomLeafEncoding — the faithful-encoding twin of `custom_leaf_adapter.rs`.
+# Dregg2.Circuit.CustomLeafEncoding — faithful encoding of a Lean MIRROR of `custom_leaf_adapter.rs`.
+
+⚠ RESOLUTION (see `docs/audit/SEMANTIC-LEAN-BOUNDARY.md`, Class B). This proves faithfulness of a
+RE-AUTHORED Lean model, NOT of the deployed Rust lowering. `CellLocal`/`gateBody` are a hand-copy
+of the Rust `gate_body` / `cellprogram_to_descriptor2` table (`circuit/src/custom_leaf_lowering.rs`,
+`circuit-prove/src/custom_leaf_adapter.rs`), connected to it by PROSE ("term-for-term the Rust")
+only — no `@[export]`, no emit, no differential/byte pin (cell/ carries no Lean ffi). It covers
+just the 9-of-21 PURE-LOCAL kinds; the cryptographically hard kinds (hash / lookup / table-function)
+are omitted (REFUSED by the Rust adapter, not encoded here). And `CellLocalHolds` is DEFINED as the
+same `gateBody` vanishing that the encoded gate denotes, so `encodeLocal_holdsAt_iff` /
+`cell_to_descriptor_faithful` are a CARRIER-REDUCTION over the Lean model (proving the `.gate`
+carrier loses no info) — NOT an independent comparison of the Lean `gateBody` to the deployed Rust
+`gate_body`. "The deployed lowering IS faithful" therefore remains UNPROVEN future work
+(author-the-lowering-in-Lean-and-emit — Step 4/T3 of the boundary doc).
 
 ## What this formalizes (the Lean side of Fork X / G2)
 
@@ -9,8 +22,9 @@ recursion-foldable IR-v2 leaf and folds into the SAME aggregate tree a light cli
 that re-proof to MEAN anything, the encoding must PRESERVE the constraint semantics: a trace
 satisfies the original `CellProgram`'s pure-local algebraic constraints IFF it satisfies the encoded
 `EffectVmDescriptor2` constraints. This module is that faithfulness statement, in Lean, over the
-EXACT denotations the deployed AIR carries (`Emit.EffectVmEmit.VmConstraint.holdsVm` and
-`DescriptorIR2.VmConstraint2.holdsAt`).
+Lean denotations `Emit.EffectVmEmit.VmConstraint.holdsVm` and `DescriptorIR2.VmConstraint2.holdsAt`
+— which are themselves Lean MIRRORS of the deployed AIR's evaluator, not the deployed AIR (see the
+resolution note atop this file).
 
 It is the encoding-side companion to `CustomApex.lean`: that file binds the Custom row's `proofBind`
 op to a VERIFYING sub-proof under the named `EngineBinding` carrier (the in-AIR recursion verifier);
@@ -203,7 +217,9 @@ abbrev CellProgramLocal := List CellLocal
 /-- The encoded IR-v2 constraint list. -/
 def encodeProgram (p : CellProgramLocal) : List VmConstraint2 := p.map encodeLocal
 
-/-- **Descriptor-level faithful encoding.** A multi-row trace satisfies every encoded gate on every
+/-- **Descriptor-level faithful encoding (of the Lean MIRROR — ⚠ NOT the deployed Rust lowering; see
+the resolution note atop this file; `CellLocalHolds` is defined as the encoded gate's own body
+vanishing, so this is a carrier-reduction).** A multi-row trace satisfies every encoded gate on every
 active row iff it satisfies every cell gate on every active row. The per-row equivalence is
 `encodeLocal_holdsAt_iff`; this is its row×constraint re-quantification over the trace. (The
 wrap-row `isLast` arm is not quantified: the deployed `.gate` is vacuously `True` on the last row —

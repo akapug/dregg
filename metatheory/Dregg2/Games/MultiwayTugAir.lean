@@ -1,6 +1,17 @@
 /-
-# Dregg2.Games.MultiwayTugAir — the AIR-refinement obligation CONNECTED to the
-concrete Phase-3 fold-leaf shape.
+# Dregg2.Games.MultiwayTugAir — the ABSTRACT play-leaf AIR relation, refining `applyAction`.
+
+⚠ RESOLUTION (see `docs/audit/SEMANTIC-LEAN-BOUNDARY.md`, Class B). The word "CONNECTED" in this
+file's prose is NOT a machine-checked connection to the deployed program. What is PROVEN is about
+the ABSTRACT `airPlay` relation over an OPAQUE `MerkleScheme` and the Lean multiset model `GState`.
+The DEPLOYED object is hand-rolled Rust — `dregg-multiway-tug/src/{hidden_hand,fold}.rs` and
+`state.rs::program()` (a `CellProgram::Cases` over register counters + `SumEquals==21`) — which is
+NEVER modelled here (this file uses per-player `Multiset` + Merkle hand). There is no `@[export]`,
+no Rust loader, and no emitted artifact linking `airPlay` to `fold.rs::membership_leaf_for_play`;
+that "Lean shadow of fold.rs" link is PURE DOC-COMMENT PROSE. The claim "the deployed program IS
+this Lean object" is UNPROVEN future work (emit-the-program-from-its-proof — Step 1/T4 of the
+boundary doc). In the prose below, "CONNECTED"/"concrete" mean connected to the fold-leaf SHAPE at
+the abstract level, NOT to the deployed Rust circuit.
 
 `MultiwayTug.lean` states the game-level refinement obligation abstractly:
 `AirSpec air` says a HYPOTHESIZED transition AIR admits `(o, p, a, n)` iff
@@ -108,7 +119,8 @@ def airPlay (M : MerkleScheme) (o : GState) (p : Player) (a : Action) (n : GStat
   o.used p a.kind = false ∧
   n = applyLegal o p a
 
-/-- **`airPlay_iff_applyAction` (THE CONNECTED REFINEMENT).** The concrete fold-leaf's admission
+/-- **`airPlay_iff_applyAction` (THE ABSTRACT PLAY-LEAF REFINEMENT — ⚠ NOT connected to the deployed
+Rust fold; see the resolution note atop this file).** The abstract play-leaf's admission
 relation is EXACTLY the graph of `applyAction` restricted to a legal, membership-proven play —
 the game-level analogue of `evalSimpleCtx_*_iff`, for the membership leaf. `MerkleSound` is
 load-bearing: membership under the committed root ⇒ the card is in the hand ⇒ the play is legal
