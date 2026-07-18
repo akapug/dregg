@@ -622,6 +622,22 @@ jobs:
           lfs: true
       - run: bash scripts/no-unchecked-auth.sh
 
+  independence-controls:
+    name: Independence-guard control gate (every rejector carries its control)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # `#assert_not_depends_on` is a REJECTOR: a closure walk gone blind reports the
+    # SAME green as a genuinely independent proof term. Its blindness is covered only
+    # by the dual `#assert_depends_on` positive control. This gate makes that pairing
+    # mechanical (rejector in a file => control in the SAME file) instead of social,
+    # and FAILS LOUD if it finds zero adopters — a scan that checked nothing is not a
+    # pass. Pure source-text scan: no Lean toolchain, no build.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - run: bash scripts/check-independence-controls.sh
+
   no-degraded-felt:
     name: Faithful-commitment gate (no degraded felt)
     runs-on: ubuntu-latest
