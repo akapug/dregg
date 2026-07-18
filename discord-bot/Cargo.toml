@@ -161,6 +161,10 @@ spween = { git = "https://github.com/emberian/spween", rev = "95980f7d1e10913849
 # root workspace member; its deps (spween-dregg, dungeon-on-dregg, deos-view) are
 # already in this graph, so it adds nothing new to the closure.
 dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE INTERACTION-ENVELOPE AUDIT FACILITY (docs/BOT-AUDIT-LOGGING-DESIGN.md) — the shared
+# event shape + non-blocking JSONL writer all three frontends emit through; `src/audit.rs`
+# is this bot's log resolution + Discord-side redaction helpers over it.
+dreggnet-audit = { path = "../dreggnet-audit" }
 # THE OFFERINGS THE GENERIC ADAPTER SERVES (`src/commands/offering.rs`): any
 # `dreggnet_offerings::Offering` becomes a Discord surface — its deos `ViewNode` render is the
 # embed, its cap-gated `Action`s are the buttons/modals, a press is ONE real `advance` attributed

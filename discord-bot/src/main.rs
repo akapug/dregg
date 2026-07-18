@@ -121,6 +121,14 @@ mod http_server;
 // state (the interactive half of the `deos_view` Discord backend, `69e15322`).
 pub mod viewnode_applet;
 
+// The interaction-envelope AUDIT LOG (docs/BOT-AUDIT-LOGGING-DESIGN.md): one
+// append-only JSONL line per interaction decision — who pressed/typed what, what
+// the frontend decided, and the landed `turn_hash` (the join to the receipt
+// chain) or the refusal reason (exactly what the receipt chain never records).
+// Thin local shim of the shared `dregg-audit` facility; secret-redacted at the
+// emit point, non-blocking (a turn never waits on the log).
+pub mod audit;
+
 use std::sync::Arc;
 
 use serenity::Client;
@@ -334,6 +342,29 @@ impl EventHandler for Handler {
         if let Interaction::Command(command) = interaction {
             let name = command.data.name.as_str();
 
+            // AUDIT ingress: one envelope line per slash interaction (options are
+            // secret-redacted by name; the advance seams refine the outcome with the
+            // landed `turn_hash` / the executor's refusal in their own lines).
+            {
+                let known = REGISTERED_COMMAND_NAMES.contains(&name);
+                audit::log().emit(
+                    audit::AuditEvent::new(
+                        "discord",
+                        audit::custodial_actor(&self.state, command.user.id.get()),
+                        audit::Surface::Command,
+                        audit::Input {
+                            kind: name.to_string(),
+                            detail: audit::options_detail(&command.data.options),
+                        },
+                    )
+                    .decided(
+                        if known { "routed" } else { "refused" },
+                        if known { "" } else { "unknown_command" },
+                    )
+                    .with_session(command.channel_id.get().to_string()),
+                );
+            }
+
             match name {
                 // The 13-command surface: each arm opens a menu or summons a
                 // world; the folded old commands re-nest through
@@ -371,6 +402,21 @@ impl EventHandler for Handler {
             //     cap gate in the deos handler;
             //   everything else is the dashboard's (`dregg:*`).
             let custom_id = &component.data.custom_id;
+            // AUDIT ingress: one envelope line per component press (custom ids are
+            // wire-format button routes — no secrets ride them). The offering/descent
+            // advance seams emit the outcome half with the landed `turn_hash`.
+            audit::log().emit(
+                audit::AuditEvent::new(
+                    "discord",
+                    audit::custodial_actor(&self.state, component.user.id.get()),
+                    audit::Surface::Component,
+                    audit::Input {
+                        kind: custom_id.split(':').next().unwrap_or("").to_string(),
+                        detail: serde_json::json!({ "custom_id": custom_id }),
+                    },
+                )
+                .with_session(component.channel_id.get().to_string()),
+            );
             if custom_id.starts_with("menu:") {
                 // A 13-command menu press: `menu:go:*` swaps the menu message in
                 // place; `menu:run:*` fires the module's real `execute_*` read;
@@ -417,6 +463,27 @@ impl EventHandler for Handler {
             // `offering:submit:<key>:<turn>` is a DreggNet-offering affordance whose arg the
             // user typed (a market reserve / a sealed bid) — the generic adapter fires it as
             // ONE real turn; everything else is the dashboard's.
+            // AUDIT ingress: one envelope line per modal submit. Typed values are
+            // redacted AT this emit point when the form or field is key/secret-shaped
+            // (the Set-key modal) — the denylist lives in `audit::sensitive_name`.
+            audit::log().emit(
+                audit::AuditEvent::new(
+                    "discord",
+                    audit::custodial_actor(&self.state, modal.user.id.get()),
+                    audit::Surface::Modal,
+                    audit::Input {
+                        kind: modal
+                            .data
+                            .custom_id
+                            .split(':')
+                            .next()
+                            .unwrap_or("")
+                            .to_string(),
+                        detail: audit::modal_detail(&modal),
+                    },
+                )
+                .with_session(modal.channel_id.get().to_string()),
+            );
             if modal.data.custom_id.starts_with("start:") {
                 commands::start::handle_modal(&ctx, &modal, &self.state).await;
             } else if modal.data.custom_id.starts_with("offering:") {
@@ -530,6 +597,26 @@ async fn main() {
         .await
         .expect("failed to connect to database");
     info!("Database connected");
+
+    // Open the interaction-envelope audit log: default = the `audit/` sibling of the
+    // sqlite db file; `DREGG_AUDIT_DIR` overrides, `DREGG_AUDIT_DIR=off` disables.
+    // Installed process-globally so every emit site (funnel + advance seams) reaches
+    // it without plumbing; a disabled log makes every emit a no-op.
+    {
+        let db_path = config
+            .database_url
+            .strip_prefix("sqlite:")
+            .unwrap_or(&config.database_url);
+        let default_dir = std::path::Path::new(db_path).parent().map(|p| {
+            if p.as_os_str().is_empty() {
+                std::path::PathBuf::from("audit")
+            } else {
+                p.join("audit")
+            }
+        });
+        audit::install(audit::AuditLog::from_env(default_dir, "discord"));
+        info!("Audit log ready (JSONL envelope; DREGG_AUDIT_DIR overrides, =off disables)");
+    }
 
     // Install the durable UGC-gallery store and load + re-verify the live registry from
     // it (every persisted completion re-executed on a fresh identically-seeded world).

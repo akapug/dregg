@@ -1054,6 +1054,29 @@ pub async fn handle_verify<O: DiscordOffering>(ctx: &Context, command: &CommandI
     let channel = command.channel_id.get();
     match verify_live::<O>(channel) {
         Some(report) => {
+            // AUDIT the verify: the report verdict is the outcome (read-only, but a
+            // failed re-verification is exactly the finding the envelope exists for).
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::Actor {
+                        platform_id: command.user.id.get().to_string(),
+                        dregg_identity: None,
+                        grade: "custodial".to_string(),
+                    },
+                    crate::audit::Surface::Command,
+                    crate::audit::Input {
+                        kind: format!("offering:verify:{}", O::KEY),
+                        detail: serde_json::Value::Null,
+                    },
+                )
+                .with_session(channel.to_string())
+                .with_offering(O::KEY)
+                .with_outcome(crate::audit::AuditOutcome::Verified {
+                    verified: report.verified,
+                    turns: u64::try_from(report.turns).unwrap_or(u64::MAX),
+                }),
+            );
             let embed = CreateEmbed::new()
                 .title(format!("{} — verify", O::TITLE))
                 .description(verify_note(&report))
@@ -1085,7 +1108,41 @@ pub async fn handle_component<O: DiscordOffering>(
         match parse_press(&component.data.custom_id) {
             Some(Press::Fire { arg, .. }) => {
                 ack::ack_component(ctx, component).await;
-                let cast = cast_vote::<O>(channel, actor, arg);
+                let cast = cast_vote::<O>(channel, actor.clone(), arg);
+                // AUDIT: a collective ballot is a decision too — record the cast verdict
+                // (the resolved crowd turn is enveloped by `handle_close`).
+                crate::audit::log().emit(
+                    crate::audit::AuditEvent::new(
+                        "discord",
+                        crate::audit::actor_of(component.user.id.get(), &actor),
+                        crate::audit::Surface::Component,
+                        crate::audit::Input {
+                            kind: format!("offering:vote:{}", O::KEY),
+                            detail: serde_json::json!({
+                                "custom_id": component.data.custom_id,
+                                "arg": arg,
+                                "cast": format!("{cast:?}"),
+                            }),
+                        },
+                    )
+                    .decided(
+                        if matches!(cast, Cast::Recorded) {
+                            "routed"
+                        } else {
+                            "refused"
+                        },
+                        match cast {
+                            Cast::Recorded => "",
+                            Cast::AlreadyVoted => "already_voted",
+                            Cast::NotEligible => "not_eligible",
+                            Cast::BadOption => "bad_option",
+                            Cast::NoRound => "no_round",
+                            Cast::NoSession => "no_session",
+                        },
+                    )
+                    .with_session(channel.to_string())
+                    .with_offering(O::KEY),
+                );
                 ack::followup_ephemeral(ctx, component, &cast_note(cast)).await;
             }
             // Never a silent drop: a non-ballot press on a collective surface says so.
@@ -1134,6 +1191,22 @@ pub async fn handle_component<O: DiscordOffering>(
                 .await;
         }
         Driven::Fired(outcome) => {
+            // AUDIT the resolved press: the landed `turn_hash` (the receipt-chain
+            // join) or the executor's own refusal reason — never laundered.
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::actor_of(component.user.id.get(), &actor),
+                    crate::audit::Surface::Component,
+                    crate::audit::Input {
+                        kind: format!("offering:advance:{}", O::KEY),
+                        detail: serde_json::json!({ "custom_id": component.data.custom_id }),
+                    },
+                )
+                .with_session(channel.to_string())
+                .with_offering(O::KEY)
+                .with_outcome(crate::audit::outcome_of(&outcome)),
+            );
             update_surface::<O>(
                 ctx,
                 component,
@@ -1152,6 +1225,20 @@ pub async fn handle_component<O: DiscordOffering>(
             }
         }
         Driven::NoSession => {
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::actor_of(component.user.id.get(), &actor),
+                    crate::audit::Surface::Component,
+                    crate::audit::Input {
+                        kind: format!("offering:advance:{}", O::KEY),
+                        detail: serde_json::json!({ "custom_id": component.data.custom_id }),
+                    },
+                )
+                .decided("refused", "no_session")
+                .with_session(channel.to_string())
+                .with_offering(O::KEY),
+            );
             if will_commit {
                 ack::followup_ephemeral(ctx, component, &no_session_text::<O>()).await;
             } else {
@@ -1159,6 +1246,20 @@ pub async fn handle_component<O: DiscordOffering>(
             }
         }
         Driven::NotOurs => {
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::actor_of(component.user.id.get(), &actor),
+                    crate::audit::Surface::Component,
+                    crate::audit::Input {
+                        kind: format!("offering:advance:{}", O::KEY),
+                        detail: serde_json::json!({ "custom_id": component.data.custom_id }),
+                    },
+                )
+                .decided("refused", "stale_surface")
+                .with_session(channel.to_string())
+                .with_offering(O::KEY),
+            );
             component_ephemeral(
                 ctx,
                 component,
@@ -1227,6 +1328,22 @@ async fn finish_modal<O: DiscordOffering>(
 ) {
     match driven {
         Driven::Fired(outcome) => {
+            // AUDIT the modal-driven advance (the typed value already rode the modal
+            // funnel line, secret-redacted): the landed `turn_hash` or the refusal.
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::actor_of(modal.user.id.get(), viewer),
+                    crate::audit::Surface::Modal,
+                    crate::audit::Input {
+                        kind: format!("offering:advance:{}", O::KEY),
+                        detail: serde_json::json!({ "custom_id": modal.data.custom_id }),
+                    },
+                )
+                .with_session(channel.to_string())
+                .with_offering(O::KEY)
+                .with_outcome(crate::audit::outcome_of(&outcome)),
+            );
             let note = outcome_note(&outcome);
             let viewer = viewer.clone();
             let rendered = with_live::<O, _>(channel, move |live| surface_for::<O>(live, &viewer));
@@ -1240,8 +1357,29 @@ async fn finish_modal<O: DiscordOffering>(
             let _ = modal
                 .create_response(&ctx.http, CreateInteractionResponse::Message(msg))
                 .await;
+            // 👑 THE CROWN (modal path): a crowned game's match ending on a modal-landed
+            // turn gets the same fold offer as the component path above.
+            if matches!(&outcome, Outcome::Landed { ended: true, .. })
+                && crate::commands::crown::foldable_key(O::KEY)
+            {
+                crate::commands::crown::offer_fold(ctx, modal.channel_id, O::KEY).await;
+            }
         }
         _ => {
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::actor_of(modal.user.id.get(), viewer),
+                    crate::audit::Surface::Modal,
+                    crate::audit::Input {
+                        kind: format!("offering:advance:{}", O::KEY),
+                        detail: serde_json::json!({ "custom_id": modal.data.custom_id }),
+                    },
+                )
+                .decided("refused", "no_session")
+                .with_session(channel.to_string())
+                .with_offering(O::KEY),
+            );
             let _ = modal
                 .create_response(
                     &ctx.http,
@@ -1293,6 +1431,34 @@ pub async fn handle_close<O: DiscordOffering>(ctx: &Context, command: &CommandIn
     let channel = command.channel_id.get();
     match close_round::<O>(channel) {
         CollectiveClose::Resolved(resolved) => {
+            // AUDIT the resolved crowd turn: the closer is the presser of record here;
+            // the substrate mover is the collective carrier, and the electorate + tally
+            // ride the detail (the receipt-chain join is the landed `turn_hash`).
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::Actor {
+                        platform_id: command.user.id.get().to_string(),
+                        dregg_identity: None,
+                        grade: "custodial".to_string(),
+                    },
+                    crate::audit::Surface::Command,
+                    crate::audit::Input {
+                        kind: format!("offering:close:{}", O::KEY),
+                        detail: serde_json::json!({
+                            "round": resolved.round,
+                            "winner": resolved.winner.label,
+                            "winning_votes": resolved.tally.winning_votes(),
+                            "total_votes": resolved.tally.total_votes(),
+                            "electorate": resolved.electorate.len(),
+                            "carrier": O::collective_carrier().0,
+                        }),
+                    },
+                )
+                .with_session(channel.to_string())
+                .with_offering(O::KEY)
+                .with_outcome(crate::audit::outcome_of(&resolved.outcome)),
+            );
             let note = close_note(&resolved);
             let rendered = with_live::<O, _>(channel, |live| surface_of::<O>(live));
             let msg = match rendered {

@@ -2343,6 +2343,7 @@ dependencies = [
  "dregg-storage",
  "dregg-turn",
  "dregg-types",
+ "dreggnet-audit",
  "dreggnet-catalog",
  "dreggnet-cheevo",
  "dreggnet-compute",
@@ -2648,6 +2649,8 @@ dependencies = [
  "dreggnet-offerings",
  "game-turn-slice",
  "procgen-dregg",
+ "serde",
+ "serde_json",
  "spween-dregg",
 ]
 
@@ -2787,6 +2790,7 @@ dependencies = [
  "dregg-turn",
  "dregg-types",
  "ed25519-dalek",
+ "fhegg-solver",
  "getrandom 0.3.4",
  "hex",
  "hmac 0.12.1",
@@ -2971,6 +2975,14 @@ dependencies = [
  "dregg-cell",
  "dregg-schema",
  "zeroize",
+]
+
+[[package]]
+name = "dreggnet-audit"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3454,6 +3466,19 @@ dependencies = [
  "bitvec",
  "rand_core 0.6.4",
  "subtle",
+]
+
+[[package]]
+name = "fhegg-solver"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "pollster",
+ "rand 0.8.6",
+ "rayon",
+ "serde",
+ "serde_json",
+ "wgpu",
 ]
 
 [[package]]
@@ -7708,6 +7733,7 @@ dependencies = [
  "dregg-cell",
  "dregg-turn",
  "dregg-types",
+ "postcard",
  "serde",
  "serde_json",
 ]

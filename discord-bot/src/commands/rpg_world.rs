@@ -57,7 +57,7 @@ use serenity::all::{
 
 use dreggnet_cheevo::{Achievement, Cheevo, CheevoLedger};
 use dreggnet_offerings::resume::{SessionMoveLog, SessionResumeStore};
-use dreggnet_offerings::{Action, DreggIdentity, OfferingHost, SessionId};
+use dreggnet_offerings::{Action, DreggIdentity, OfferingHost, SessionId, VerifyReport};
 use dreggnet_surfaces::{
     CheevoShowcase, CompanionOffering, CraftOffering, GuildPage, InventoryOffering, PartyOffering,
     TavernOffering, TradeOffering, register_surfaces,
@@ -502,6 +502,78 @@ pub async fn handle_play(ctx: &Context, command: &CommandInteraction, state: &Bo
             ack::edit_slash(ctx, command, embed, Vec::new()).await;
         }
     }
+}
+
+/// **Re-verify `key`'s chain in `player`'s persistent world** — the same `host.verify` replay
+/// check the surface footer counts, over the PLAYER's own singleton session. `None` if the
+/// player has never opened this surface (there is no chain of theirs to check).
+fn verify_core(
+    db: Database,
+    handle: tokio::runtime::Handle,
+    player: String,
+    key: String,
+) -> Option<VerifyReport> {
+    with_player_host(db, handle, player, move |host, _viewer| {
+        host.verify(&key, &session_id())
+    })
+}
+
+/// Route `/play <rpg-key> action:verify` — re-verify the chain of the INVOKER's persistent
+/// world session (the eight RPG keys no longer live in the per-channel generic store, so
+/// `offering::handle_verify` would honestly-but-uselessly report "no live session" for them).
+/// Defers first: a first-touch verify rebuilds the host by full replay, which can exceed
+/// Discord's 3s window.
+pub async fn handle_verify(
+    ctx: &Context,
+    command: &CommandInteraction,
+    state: &BotState,
+    key: &str,
+) {
+    ack::defer_slash(ctx, command, false).await;
+    let db = state.db.clone();
+    let handle = tokio::runtime::Handle::current();
+    let player = identity_of(state, command.user.id.get()).0;
+    let report = verify_core(db, handle, player, key.to_string());
+    let (title, color, _) = meta(key).unwrap_or(("Offering", 0xE63946, ""));
+    let embed = match &report {
+        Some(report) => {
+            // AUDIT the verify (the same envelope `offering::handle_verify` emits): the
+            // report verdict is the outcome — a failed re-verification is the finding.
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::Actor {
+                        platform_id: command.user.id.get().to_string(),
+                        dregg_identity: None,
+                        grade: "custodial".to_string(),
+                    },
+                    crate::audit::Surface::Command,
+                    crate::audit::Input {
+                        kind: format!("offering:verify:{key}"),
+                        detail: serde_json::Value::Null,
+                    },
+                )
+                .with_session(SESSION)
+                .with_offering(key)
+                .with_outcome(crate::audit::AuditOutcome::Verified {
+                    verified: report.verified,
+                    turns: u64::try_from(report.turns).unwrap_or(u64::MAX),
+                }),
+            );
+            CreateEmbed::new()
+                .title(format!("{title} — verify"))
+                .description(offering::verify_note(report))
+                .color(if report.verified { color } else { 0xE63946 })
+        }
+        None => CreateEmbed::new()
+            .title(format!("{title} — verify"))
+            .description(format!(
+                "You have not opened this surface yet, so there is no chain of yours to \
+                 re-verify. `/play offering:{key}` opens your persistent world."
+            ))
+            .color(0xE63946),
+    };
+    ack::edit_slash(ctx, command, embed, Vec::new()).await;
 }
 
 /// Route an `offering:` component press whose key is an RPG-world key: one real turn in the

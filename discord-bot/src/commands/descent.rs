@@ -451,6 +451,37 @@ fn open_core<S: CharacterStore>(
     Ok((run, uid))
 }
 
+/// AUDIT one descent move decision (the shared emit for [`advance_core`]'s sites): the
+/// actor is the run's player identity (PUBLIC derived hex, shortened for display), the
+/// offering is `descent`. A no-op until the process audit log is installed at boot —
+/// the driven tests never install one, so they stay side-effect free.
+fn audit_move(
+    player: &str,
+    choice: usize,
+    (kind, reason): (&str, &str),
+    outcome: Option<crate::audit::AuditOutcome>,
+) {
+    let mut ev = crate::audit::AuditEvent::new(
+        "discord",
+        crate::audit::Actor {
+            platform_id: player.to_string(),
+            dregg_identity: Some(player.to_string()),
+            grade: "custodial".to_string(),
+        },
+        crate::audit::Surface::Component,
+        crate::audit::Input {
+            kind: "descent:move".to_string(),
+            detail: serde_json::json!({ "choice": choice }),
+        },
+    )
+    .decided(kind, reason)
+    .with_offering("descent");
+    if let Some(o) = outcome {
+        ev = ev.with_outcome(o);
+    }
+    crate::audit::log().emit(ev);
+}
+
 /// **Advance the run by one move; settle a terminal outcome.** Applies `choice` as one real turn;
 /// EVERY landed move SAVES the character (persisting earned XP / a hardcore death mid-run, so a
 /// restart never rewinds a sheet), and a landed move that ENDED the run additionally, iff the run
@@ -464,20 +495,39 @@ fn advance_core<S: CharacterStore>(
     choice: usize,
 ) -> MoveResult {
     if run.is_ended() {
+        audit_move(player, choice, ("refused", "already_ended"), None);
         return MoveResult::AlreadyEnded(RunView::of(run));
     }
     match off.advance(run, choice) {
-        Outcome::Refused(why) => MoveResult::Refused {
-            why,
-            view: RunView::of(run),
-        },
-        Outcome::Landed { ended, .. } => {
+        Outcome::Refused(why) => {
+            audit_move(
+                player,
+                choice,
+                ("routed", ""),
+                Some(crate::audit::AuditOutcome::Refused { why: why.clone() }),
+            );
+            MoveResult::Refused {
+                why,
+                view: RunView::of(run),
+            }
+        }
+        Outcome::Landed { receipt, ended } => {
             // Persist the character after EVERY landed move, not only the terminal one — so a
             // mid-run bot restart cannot roll the character back to its pre-run sheet. (Before
             // this, progress saved only on the terminal move, so a doomed hardcore run could
             // dodge its death by simply waiting out a redeploy — backlog #34. The run session
             // itself is still in-process, a named seam; what is durable is the character.)
             off.save(run);
+            // AUDIT the landed move: the `turn_hash` is the receipt-chain join.
+            audit_move(
+                player,
+                choice,
+                ("routed", ""),
+                Some(crate::audit::AuditOutcome::Landed {
+                    turn_hash: hex::encode(&receipt.turn_hash[..]),
+                    ended,
+                }),
+            );
             let mut rank = None;
             let mut board_note = String::new();
             if ended {
@@ -1239,6 +1289,20 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
 
     // A descent is a SOLO permadeath run — only its owner may move it.
     if presser != owner {
+        // AUDIT the frontend-level refusal (never reaches the substrate).
+        crate::audit::log().emit(
+            crate::audit::AuditEvent::new(
+                "discord",
+                crate::audit::custodial_actor(state, presser),
+                crate::audit::Surface::Component,
+                crate::audit::Input {
+                    kind: "descent:move".to_string(),
+                    detail: serde_json::json!({ "custom_id": id.as_str(), "owner": owner.to_string() }),
+                },
+            )
+            .decided("refused", "not_owner")
+            .with_offering("descent"),
+        );
         let _ = component
             .create_response(
                 &ctx.http,
@@ -1280,6 +1344,20 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
 
     match result {
         MoveResult::NoRun => {
+            // AUDIT the expired-run refusal (advance_core was never reached).
+            crate::audit::log().emit(
+                crate::audit::AuditEvent::new(
+                    "discord",
+                    crate::audit::custodial_actor(state, presser),
+                    crate::audit::Surface::Component,
+                    crate::audit::Input {
+                        kind: "descent:move".to_string(),
+                        detail: serde_json::json!({ "custom_id": id.as_str() }),
+                    },
+                )
+                .decided("refused", "no_run")
+                .with_offering("descent"),
+            );
             // The press was already ACKed (deferred update), so this rides a followup — the
             // stale room message is left as-is, the presser gets the pointer privately.
             ack::followup_ephemeral(

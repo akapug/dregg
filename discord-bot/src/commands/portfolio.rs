@@ -404,11 +404,12 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     };
     let key = string_opt("offering").unwrap_or_default();
 
-    // `/play <offering> action:verify` — re-verify the channel's live session chain through
-    // the SAME generic verifier every bespoke offering command exposes (backlog Tier-2 #10).
-    // Runs BEFORE the deferred ACK: `offering::handle_verify` creates its own response.
+    // `/play <offering> action:verify` — re-verify the live session chain through the SAME
+    // generic verifier every bespoke offering command exposes (backlog Tier-2 #10). Runs
+    // BEFORE the deferred ACK: each verify route owns its own response (the generic path
+    // responds directly; the RPG path defers itself — a first-touch replay can exceed 3s).
     if string_opt("action").as_deref() == Some("verify") {
-        handle_play_verify(ctx, command, &key).await;
+        handle_play_verify(ctx, command, state, &key).await;
         return;
     }
 
@@ -493,24 +494,27 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     }
 }
 
-/// `/play <offering> action:verify` — dispatch the generic chain re-verifier for the chosen
-/// offering key (the SAME [`offering::handle_verify`] behind `/council verify` et al.), so the
-/// twelve portfolio offerings — the flagship games included — answer verify-don't-trust with a
-/// command, not a shrug (backlog Tier-2 #10).
-async fn handle_play_verify(ctx: &Context, command: &CommandInteraction, key: &str) {
+/// `/play <offering> action:verify` — dispatch the chain re-verifier for the chosen offering
+/// key, so the portfolio offerings — the flagship games included — answer verify-don't-trust
+/// with a command, not a shrug (backlog Tier-2 #10). The eight RPG keys verify the INVOKER's
+/// per-identity persistent world chain (`commands::rpg_world` — where their sessions actually
+/// live); the rest go through the generic per-channel verifier ([`offering::handle_verify`],
+/// the SAME one behind `/council verify` et al.).
+async fn handle_play_verify(
+    ctx: &Context,
+    command: &CommandInteraction,
+    state: &BotState,
+    key: &str,
+) {
+    if crate::commands::rpg_world::is_rpg_key(key) {
+        crate::commands::rpg_world::handle_verify(ctx, command, state, key).await;
+        return;
+    }
     match key {
         "tug" => offering::handle_verify::<SeatedTug>(ctx, command).await,
         "automatafl" => offering::handle_verify::<AutomataflOffering>(ctx, command).await,
         "names" => offering::handle_verify::<NamesOffering>(ctx, command).await,
         "compute" => offering::handle_verify::<ComputeOffering>(ctx, command).await,
-        "trade" => offering::handle_verify::<TradeOffering>(ctx, command).await,
-        "inventory" => offering::handle_verify::<InventoryOffering>(ctx, command).await,
-        "cheevos" => offering::handle_verify::<CheevoShowcase>(ctx, command).await,
-        "guild" => offering::handle_verify::<GuildPage>(ctx, command).await,
-        "craft" => offering::handle_verify::<CraftOffering>(ctx, command).await,
-        "companion" => offering::handle_verify::<CompanionOffering>(ctx, command).await,
-        "tavern" => offering::handle_verify::<TavernOffering>(ctx, command).await,
-        "party" => offering::handle_verify::<PartyOffering>(ctx, command).await,
         "gear" => offering::handle_verify::<dreggnet_gear::LoadoutOffering>(ctx, command).await,
         "talents" => {
             offering::handle_verify::<dreggnet_gear::TalentTreeOffering>(ctx, command).await

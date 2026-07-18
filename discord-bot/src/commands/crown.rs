@@ -345,25 +345,50 @@ fn reverify_fold(token: u64) -> Result<(Game, usize, Ranked), String> {
 
 /// The board read for `/crown board`: per game, the ranked entry lines + the
 /// stores-no-moves assertion (asserted alongside non-emptiness, per the API's own note).
+///
+/// Each fold pins the board to its OWN match anchor (the hand root / genesis differ per
+/// match), so ranked entries live across universes — one `open` per rank, and
+/// `GameBoard::leaderboard` would show only the LAST-opened universe. The board read here
+/// walks the fold records' pinned universes (deduped: publish is content-addressed, so
+/// same-anchor folds share one) and merges their entries, ranked by attested turns.
 fn board_lines(game: Game) -> (Vec<String>, bool) {
     run(move |core| {
-        let lines: Vec<String> = core
-            .board
-            .leaderboard(game)
+        let mut universes: Vec<UniverseId> = core
+            .folds
+            .values()
+            .filter(|r| r.game == game)
+            .filter_map(|r| r.ranked.as_ref().map(|f| f.universe))
+            .collect();
+        universes.sort_unstable();
+        universes.dedup();
+        let mut no_moves = true;
+        let mut entries: Vec<(usize, String, bool, bool)> = Vec::new();
+        for u in universes {
+            for e in core.board.registry().leaderboard(u) {
+                no_moves &= e.is_proof_backed() && !e.has_moves() && e.playthrough().is_none();
+                entries.push((
+                    e.turns,
+                    e.player.clone(),
+                    e.is_proof_backed(),
+                    e.has_moves(),
+                ));
+            }
+        }
+        entries.sort();
+        let lines: Vec<String> = entries
             .iter()
             .enumerate()
-            .map(|(i, e)| {
+            .map(|(i, (turns, player, proof_backed, has_moves))| {
                 format!(
                     "**#{}** `{}…` — {} turns attested · proof-backed: {} · moves stored: **{}**",
                     i + 1,
-                    &e.player[..e.player.len().min(12)],
-                    e.turns,
-                    e.is_proof_backed(),
-                    e.has_moves(),
+                    &player[..player.len().min(12)],
+                    turns,
+                    proof_backed,
+                    has_moves,
                 )
             })
             .collect();
-        let no_moves = core.board.stores_no_moves(game);
         (lines, no_moves)
     })
 }
