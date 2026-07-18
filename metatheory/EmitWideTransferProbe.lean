@@ -12,6 +12,9 @@ slice consumes — NOTHING on the live 1-felt wire path changes (`v3RegistryCapO
 are UNTOUCHED). SCRATCH executable: `lake env lean --run EmitWideTransferProbe.lean`.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitRotationWide
+-- THE S2 DELETION (Epoch 1): the probe line is compacted exactly like the registry row
+-- (bb = the bare transfer face width, checked by `compactOk`).
+import Dregg2.Circuit.Emit.WideCompactTable
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationWide (v3RegistryWide)
@@ -20,5 +23,14 @@ def main : IO Unit := do
   -- transfer is index 0 of the wide cohort (member-for-member with the live registry).
   match v3RegistryWide with
   | (_, d) :: _ =>
-      IO.println s!"transferVmDescriptor2R24Wide\t{d.name}\t{emitVmJson2 d}"
+      let bb := Dregg2.Circuit.Emit.EffectVmEmitTransfer.transferVmDescriptor.traceWidth
+      match Dregg2.Circuit.Emit.RotWideCompactS2.s2LaneBaseOf d bb with
+      | none => throw (IO.userError "wide transfer probe: no recognizable S2 stratum")
+      | some lb =>
+        if Dregg2.Circuit.Emit.RotWideCompactS2.compactOk d bb lb then
+          let cm := Dregg2.Circuit.Emit.RotWideCompactS2.compactS2 d bb lb
+          IO.println s!"transferVmDescriptor2R24Wide\t{cm.name}\t{emitVmJson2 cm}"
+        else
+          throw (IO.userError
+            "wide transfer probe: compactOk REFUSED — the S2 stratum is not the expected dead chains")
   | [] => IO.eprintln "v3RegistryWide is empty"

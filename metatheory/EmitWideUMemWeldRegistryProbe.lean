@@ -36,6 +36,11 @@ SCRATCH executable: `lake env lean --run EmitWideUMemWeldRegistryProbe.lean`.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
 import Dregg2.Deos.BareCohortFloorRefuseWide
+-- THE S2 DELETION (Epoch 1): the welded twins are compacted through the SAME verified
+-- `compactS2` at the SAME per-key `bb` as the bare wide registry (the umem/refuse welds append
+-- strictly PAST the S2 columns, so the geometry triple is identical), gated per member by
+-- `compactOk` — the emit fails closed on any surprise.
+import Dregg2.Circuit.Emit.WideCompactTable
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2 EffectVmDescriptor2)
 open Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
@@ -95,4 +100,6 @@ def weldedWideRegistryRefusedFirst : List (String × EffectVmDescriptor2) :=
 
 def main : IO Unit := do
   for (key, d) in weldedWideRegistryRefusedFirst do
-    IO.println s!"{key}\t{d.name}\t{emitVmJson2 d}"
+    match Dregg2.Circuit.Emit.WideCompactTable.compactForEmit key d with
+    | .ok (cm, _, _) => IO.println s!"{key}\t{cm.name}\t{emitVmJson2 cm}"
+    | .error e => throw (IO.userError e)
