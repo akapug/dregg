@@ -1,29 +1,33 @@
-//! `dregg-dyck-parse-v1`: the *parse-as-derivation* circuit
+//! `dregg-dyck-parse-v1`: the *parse-as-derivation* circuit's **witness side**
 //! (`docs/DESIGN-parse-as-derivation.md`, the zk-succinct path).
 //!
-//! This is the depth-bounded pushdown-stack extension of the deployed inter-row
-//! chain pattern. It is authored **line-for-line on the template**
-//! `crate::dsl::dfa_routing` (`dfa_routing_descriptor`): a threaded state column via
-//! `ConstraintExpr::Transition`, a `ChainedHash2to1` running commitment PI-seeded
-//! with `SeedHash2to1`, and a rule-membership check. The generalization the design
-//! names is: **thread `D` stack cells instead of one `CURRENT_STATE`, and let the
-//! "transition table" be the grammar's rule table.**
+//! The DEPLOYED descriptor is the Lean-emitted, byte-pinned `DyckStackEmit.dyckParseDesc`
+//! (`metatheory/Dregg2/Circuit/Emit/DyckStackEmit.lean`), served by
+//! [`crate::descriptor_by_name::descriptor_by_name`] as `dregg-dyck-parse-v1` and proven
+//! through the IR-v2 batch prover (`descriptor_ir2::prove_vm_descriptor2`). This module
+//! carries **no AIR constraints**: it is the column/PI layout, the symbol/rule alphabet,
+//! the honest trace builders ([`build_witness`] and the two bundled words), the rule-table
+//! commitment, and the [`lift_witness_to_v2`] lift onto the emitted 38-wide shape.
 //!
-//! # What it proves
+//! (History: the descriptor was first authored here in Rust IR-v1 — `dyck_parse_descriptor`
+//! plus the `dyck_satisfied` predicate — on the `dfa_routing` template. The loader flip
+//! moved authorship to Lean, and the v1 mirror was RETIRED once the per-tooth tamper
+//! canaries in `circuit-prove/tests/dyck_parse_tamper.rs` were ported to isolate the
+//! emitted `VmConstraint2` shapes directly. The teeth documented below now live in
+//! `DyckStackEmit.lean`; this header keeps the semantic story because the WITNESS builder
+//! must lay traces those teeth accept.)
 //!
-//! A trace satisfying this descriptor IS an accepting **leftmost pushdown replay**
+//! # What the deployed descriptor proves
+//!
+//! A trace satisfying it IS an accepting **leftmost pushdown replay**
 //! (`Dregg2.Crypto.CfgCompact.Replay`) of the one-bracket **Dyck** grammar
 //! `S → [ S ] | ε` (`CfgCompact.lean` `Reference`: `dyck`, rules `rBracket`/`rEmpty`)
 //! on its input word, with the parse's per-step commitments folded into a public
 //! `route_commitment`.
 //!
-//! # Slice 2: the variable-length RHS push with a remainder shift
+//! # The variable-length RHS push with a remainder shift
 //!
-//! Slice 1 wrote `rBracket`'s push as `next.STACK[0..3] = (op, S, cl)` and **ignored
-//! the stack below the popped `S`**. That was sound only while the remainder was
-//! empty — true for `"[]"`, false the moment a bracket nests under un-consumed stack.
-//! This slice implements the general form (`docs/DESIGN-parse-as-derivation.md` §2,
-//! hard-part #3): a production with RHS length `L` pops one cell and writes
+//! A production with RHS length `L` pops one cell and writes
 //!
 //! ```text
 //!   next.STACK[j] = rhs[j]                  for j < L          (the pushed RHS)
@@ -34,11 +38,11 @@
 //! The remainder shift is what makes a nested word verify: `"[[]]"`'s second
 //! `rBracket` fires with `cl` still sitting under the popped `S`, and that `cl` must
 //! reappear beneath the pushed RHS or the closing bracket has nothing to match.
-//!
 //! The overflow guard is the honest statement of the depth bound: a push whose
-//! remainder does not fit in the `D`-wide buffer **REJECTS**. It never silently drops
-//! a symbol — dropping is exactly the slice-1 unsoundness, and the guard converts it
-//! into a refusal.
+//! remainder does not fit in the `D`-wide buffer **REJECTS** — it never silently drops
+//! a symbol. Alongside them ride the depth-range vanishing polys (`0 ≤ depth ≤ D` as a
+//! real constraint, refusing a field-wrapped depth) and the depth↔occupancy tooth
+//! (`STACK_DEPTH` counts EXACTLY the non-`EMPTY` prefix of the stack cells).
 //!
 //! # Stack sizing (honest)
 //!
@@ -46,41 +50,17 @@
 //! spike pushes three symbols for one popped `S`, so bracket-nesting `k` bounds the
 //! stack at depth `2k + 1`. `D = 5` therefore covers `k ≤ 2` — enough for both
 //! bundled witnesses: `"[]"` (peak 3) and `"[[]]"` (peak 4). A word needing more
-//! nesting than `D` allows is not mis-proved; it fails the overflow guard.
+//! nesting than `D` allows is not mis-proved; it fails the overflow guard, and
+//! [`build_witness`] panics rather than emit such a truncated row.
 //!
 //! # Symbol / rule encoding
 //!
 //! `S = 1` (the sole nonterminal), `op = '[' = 2`, `cl = ']' = 3`.
 //! Rule ids: `0 = none` (term/done rows), `rBracket = 1` (`S → [ S ]`),
 //! `rEmpty = 2` (`S → ε`).
-//!
-//! # What is still out of slice
-//!
-//! The Lean inductive refinement (`parse_sat_imp_replay` — a satisfying trace
-//! *implies* a `CfgCompact.Replay`) is slice 3. So is the depth↔occupancy invariant
-//! (nothing yet ties `STACK_DEPTH` to *which* cells are nonzero); the boundaries, the
-//! per-action depth deltas, and the depth range pin the depth's VALUE on every row, not
-//! the identity of the occupied cells.
-//!
-//! # The depth range (the field-congruence hole, closed)
-//!
-//! The four depth deltas (`+2`/`−1`/`−1`/`0`) are polynomial gates, hence FIELD
-//! congruences: on their own they pin `STACK_DEPTH` mod `p` and nothing more, so a depth
-//! of `p − 1` reads as `−1` and a run could push past `D` and wrap. The two
-//! [`vanishing_on_grid`] pins `∏_{v=0}^{D} (depth − v) == 0` on `STACK_DEPTH` and
-//! `DEPTH_NEXT` are the design's `0 ≤ STACK_DEPTH ≤ D` column property emitted as a real
-//! constraint: over a field the degree-`(D+1)` product vanishes at exactly the `D + 1`
-//! grid points, so an off-grid (wrapped, negative, or overflowing) depth REJECTS.
-//! `circuit-prove/tests/dyck_parse_tamper.rs` fires a `p − 1` depth at the tooth and
-//! watches it bite.
 
-use crate::field::{BABYBEAR_P, BabyBear};
+use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
-
-use crate::dsl::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
-    PolyTerm,
-};
 
 // ============================================================================
 // Symbol / rule alphabet
@@ -193,661 +173,6 @@ pub const DYCK_WIDTH: usize = STACK_D + 18;
 
 /// Number of public inputs.
 pub const DYCK_PI_COUNT: usize = 4;
-
-// ============================================================================
-// Small constraint builders (local — read `local` only)
-// ============================================================================
-
-/// `col - constant == 0` as a `Polynomial` (reads `local[col]`).
-fn eq_const(c: usize, k: u32) -> ConstraintExpr {
-    ConstraintExpr::Polynomial {
-        terms: vec![
-            PolyTerm {
-                coeff: BabyBear::ONE,
-                col_indices: vec![c],
-            },
-            PolyTerm {
-                coeff: -BabyBear::new(k),
-                col_indices: vec![],
-            },
-        ],
-    }
-}
-
-/// `a - b - k == 0` as a `Polynomial` (reads `local[a]`, `local[b]`).
-fn diff_is(a: usize, b: usize, k: i64) -> ConstraintExpr {
-    let kf = if k >= 0 {
-        -BabyBear::new(k as u32)
-    } else {
-        BabyBear::new((-k) as u32)
-    };
-    ConstraintExpr::Polynomial {
-        terms: vec![
-            PolyTerm {
-                coeff: BabyBear::ONE,
-                col_indices: vec![a],
-            },
-            PolyTerm {
-                coeff: -BabyBear::ONE,
-                col_indices: vec![b],
-            },
-            PolyTerm {
-                coeff: kf,
-                col_indices: vec![],
-            },
-        ],
-    }
-}
-
-/// `sel * (rule_id - r) == 0` (a rule selector is pinned to its rule id).
-fn sel_pins_rule(sel: usize, r: u32) -> ConstraintExpr {
-    ConstraintExpr::Polynomial {
-        terms: vec![
-            PolyTerm {
-                coeff: BabyBear::ONE,
-                col_indices: vec![sel, col::RULE_ID],
-            },
-            PolyTerm {
-                coeff: -BabyBear::new(r),
-                col_indices: vec![sel],
-            },
-        ],
-    }
-}
-
-/// Reduce a signed integer coefficient into BabyBear (handles negatives via the field
-/// modulus). Twin of `dfa_routing::int_to_field`.
-fn int_to_field(c: i128) -> BabyBear {
-    let p = BABYBEAR_P as i128;
-    let r = ((c % p) + p) % p;
-    BabyBear::new(r as u32)
-}
-
-/// **The range constraint** pinning column `col` to the small grid `values`:
-/// `∏_{v ∈ values} (col − v) == 0`, expanded into monomial `PolyTerm`s over the repeated
-/// column index (degree `|values|`). This is the deployed small-domain-pin idiom, copied
-/// from `dfa_routing::vanishing_on_grid` (`dfa_routing.rs:287`), where it pins the
-/// `TableFunction` inputs to the state/symbol grids.
-///
-/// Why it is the RIGHT tooth for `STACK_DEPTH`: a `Polynomial` gate is a FIELD identity, so
-/// on its own the depth deltas (`+2`/`−1`/`−1`/`0`) only pin depth's residue class mod `p`.
-/// A vanishing product over `{0, …, D}` is the only thing that says the residue IS one of
-/// those `D + 1` integers — over a field, `∏ (x − v) = 0` iff `x ∈ {values}` exactly (a
-/// degree-`(D+1)` polynomial has no other roots). A wrapped depth (`p − 1` masquerading as
-/// `−1`, or `D + 1` after one push too many) is off-grid and therefore REJECTS.
-fn vanishing_on_grid(col: usize, values: &[u32]) -> ConstraintExpr {
-    // Expand ∏ (x − v) into ascending-degree coefficients [c_0, …, c_d], from the constant 1.
-    let mut coeffs: Vec<i128> = vec![1];
-    for &v in values {
-        let mut next = vec![0i128; coeffs.len() + 1];
-        for (k, &c) in coeffs.iter().enumerate() {
-            next[k + 1] += c; // x · c_k
-            next[k] -= c * v as i128; // −v · c_k
-        }
-        coeffs = next;
-    }
-    let terms: Vec<PolyTerm> = coeffs
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| **c != 0)
-        .map(|(k, &c)| PolyTerm {
-            coeff: int_to_field(c),
-            col_indices: vec![col; k],
-        })
-        .collect();
-    ConstraintExpr::Polynomial { terms }
-}
-
-/// The legal depth grid `{0, 1, …, D}` — the `D + 1` integers a `D`-cell stack's occupancy
-/// can take. `[`vanishing_on_grid`] over this grid IS the design's `0 ≤ STACK_DEPTH ≤ D`.
-fn depth_grid() -> Vec<u32> {
-    (0..=STACK_D as u32).collect()
-}
-
-/// The legal SYMBOL grid `{EMPTY, S, op, cl} = {0, 1, 2, 3}` — the ids a stack cell may hold.
-/// [`vanishing_on_grid`] over it pins each cell to a symbol, which is what makes the is-empty
-/// indicator in [`occupancy_tooth`] faithful (an unconstrained cell could hold a field value
-/// where `(x−1)(x−2)(x−3)` vanishes without `x` being one of the three symbols).
-fn symbol_grid() -> Vec<u32> {
-    vec![SYM_EMPTY, SYM_S, SYM_OP, SYM_CL]
-}
-
-/// A **product of factors expanded into monomial `PolyTerm`s** (the two-column generalization
-/// of [`vanishing_on_grid`], which is the single-column, single-grid case). `bare` are
-/// degree-1 `col` factors; `linear` are `(col, k)` factors meaning `(col − k)`. The
-/// `ConstraintExpr::Polynomial` carrier stores a sum of `coeff · ∏cols` monomials, so a product
-/// whose factors mix two columns (a stack cell and the depth pointer) must be expanded here
-/// rather than nested — exactly what `vanishing_on_grid` does for one column.
-fn monomial_product(bare: &[usize], linear: &[(usize, i128)]) -> ConstraintExpr {
-    // The running polynomial as a list of (sorted column multiset, integer coeff).
-    let mut poly: Vec<(Vec<usize>, i128)> = vec![(Vec::new(), 1)];
-    let push_col = |poly: &[(Vec<usize>, i128)], c: usize| -> Vec<(Vec<usize>, i128)> {
-        poly.iter()
-            .map(|(m, co)| {
-                let mut mm = m.clone();
-                mm.push(c);
-                mm.sort_unstable();
-                (mm, *co)
-            })
-            .collect()
-    };
-    for &c in bare {
-        poly = push_col(&poly, c);
-    }
-    for &(c, k) in linear {
-        let mut next: Vec<(Vec<usize>, i128)> = Vec::new();
-        for (m, co) in &poly {
-            let mut mm = m.clone();
-            mm.push(c);
-            mm.sort_unstable();
-            next.push((mm, *co)); // × col
-            next.push((m.clone(), *co * (-k))); // × (−k)
-        }
-        // Combine like monomials so any cancellation collapses.
-        let mut combined: Vec<(Vec<usize>, i128)> = Vec::new();
-        for (m, co) in next {
-            if let Some(slot) = combined.iter_mut().find(|(mm, _)| *mm == m) {
-                slot.1 += co;
-            } else {
-                combined.push((m, co));
-            }
-        }
-        poly = combined;
-    }
-    let terms = poly
-        .into_iter()
-        .filter(|(_, c)| *c != 0)
-        .map(|(m, c)| PolyTerm {
-            coeff: int_to_field(c),
-            col_indices: m,
-        })
-        .collect();
-    ConstraintExpr::Polynomial { terms }
-}
-
-/// **THE DEPTH↔OCCUPANCY TOOTH** — the constraint the design named as still owed: pin
-/// `STACK_DEPTH` to count EXACTLY the non-`EMPTY` prefix of the `STACK[·]` cells. Before this,
-/// "nothing tied `STACK_DEPTH` to which cells are nonzero" — the boundaries and per-action
-/// deltas pinned the depth's VALUE on every row but not the identity of the occupied cells, so
-/// a trace could claim depth 2 while only one cell was live (a hole below the pointer) and no
-/// gate saw it. That is exactly what blocks the general `decode`: it reads back the working
-/// stack as the first `STACK_DEPTH` cells, and a hole makes that read disagree with the
-/// threading equations.
-///
-/// Three families over the small domain, per stack cell `i`:
-///
-/// 1. **cell range** — `∏_{s∈{0,1,2,3}} (STACK[i] − s) == 0`: every cell holds a symbol id, so
-///    "non-`EMPTY`" is exactly "`∈ {1,2,3}`".
-/// 2. **empty above the pointer** — `STACK[i] · ∏_{v=i+1}^{D} (STACK_DEPTH − v) == 0`: the
-///    depth product vanishes iff `i < STACK_DEPTH`, so on the empty side (`i ≥ STACK_DEPTH`) it
-///    forces `STACK[i] == 0`.
-/// 3. **non-empty below the pointer** — `(STACK[i]−1)(STACK[i]−2)(STACK[i]−3) ·
-///    ∏_{v=0}^{i} (STACK_DEPTH − v) == 0`: the first factor is nonzero EXACTLY when
-///    `STACK[i] == 0` (the is-empty indicator, given the range), and the depth product vanishes
-///    iff `i ≥ STACK_DEPTH`; so an `EMPTY` hole strictly below the pointer (`i < STACK_DEPTH`)
-///    makes the whole product nonzero and REJECTS.
-///
-/// With the depth range `0 ≤ STACK_DEPTH ≤ D` already emitted, families 2+3 say cells
-/// `[0, STACK_DEPTH)` are precisely the non-`EMPTY` ones. This CANNOT weaken acceptance: an
-/// honest run lays cells `[0, depth)` = the live stack symbols (each `∈ {1,2,3}`) and
-/// `[depth, D)` = `EMPTY`, so all three families hold on every row of the shipped witnesses.
-fn occupancy_tooth() -> Vec<ConstraintExpr> {
-    let d = STACK_D as i128;
-    let mut out = Vec::new();
-    for i in 0..STACK_D {
-        // 1. cell range: STACK[i] ∈ {0, 1, 2, 3}.
-        out.push(vanishing_on_grid(col::stack(i), &symbol_grid()));
-        // 2. empty above the pointer: STACK[i] · ∏_{v=i+1}^{D} (STACK_DEPTH − v).
-        let above: Vec<(usize, i128)> = ((i as i128 + 1)..=d)
-            .map(|v| (col::STACK_DEPTH, v))
-            .collect();
-        out.push(monomial_product(&[col::stack(i)], &above));
-        // 3. non-empty below the pointer:
-        //    (STACK[i]−1)(STACK[i]−2)(STACK[i]−3) · ∏_{v=0}^{i} (STACK_DEPTH − v).
-        let mut linear: Vec<(usize, i128)> =
-            vec![(col::stack(i), 1), (col::stack(i), 2), (col::stack(i), 3)];
-        linear.extend((0..=i as i128).map(|v| (col::STACK_DEPTH, v)));
-        out.push(monomial_product(&[], &linear));
-    }
-    out
-}
-
-fn gated(selector_col: usize, inner: ConstraintExpr) -> ConstraintExpr {
-    ConstraintExpr::Gated {
-        selector_col,
-        inner: Box::new(inner),
-    }
-}
-
-/// A gated push/shift: `next[next_col] == local[local_col]` fires under `sel`.
-fn gated_thread(sel: usize, next_col: usize, local_col: usize) -> ConstraintExpr {
-    gated(
-        sel,
-        ConstraintExpr::Transition {
-            next_col,
-            local_col,
-        },
-    )
-}
-
-// ============================================================================
-// The stack-discipline constraint groups
-// ============================================================================
-
-/// The general **variable-length RHS push with remainder shift**, gated on `sel`.
-///
-/// A production `A → γ` fires by popping `local.STACK[0]` (the matched `A`) and
-/// writing `γ` over the top, with everything that sat under `A` shifted by
-/// `|γ| − 1` cells. `rhs_lanes` names the fixed lane columns holding `γ`'s symbols
-/// (they are pinned to constants by [`lane_fixes`]), so the push reads the RHS from
-/// the trace via plain `Transition`s — the same primitive `dfa_routing` threads its
-/// single `CURRENT_STATE` with.
-///
-/// Emits three groups:
-///
-/// 1. **push** — `next.STACK[j] == rhs_lanes[j]` for `j < |γ|`;
-/// 2. **remainder shift** — `next.STACK[j] == local.STACK[j − (|γ| − 1)]` for
-///    `|γ| ≤ j < D`. This is the tooth slice 1 lacked: the stack under the popped
-///    cell survives, reappearing beneath the pushed RHS.
-/// 3. **overflow guard** — `local.STACK[i] == 0` for every `i` whose shifted
-///    destination `i + (|γ| − 1)` falls outside the `D`-wide buffer. Without this the
-///    shift would silently DROP those symbols, which is precisely the slice-1 hole in
-///    a wider disguise. With it, a push that does not fit REJECTS.
-///
-/// Requires `|γ| ≥ 1` (a shrinking RHS is [`pop_shift`]'s job) and `|γ| ≤ D`.
-fn push_with_remainder_shift(sel: usize, rhs_lanes: &[usize]) -> Vec<ConstraintExpr> {
-    let l = rhs_lanes.len();
-    assert!((1..=STACK_D).contains(&l), "RHS must fit the D-wide buffer");
-    let shift = l - 1; // pop 1, push l  ⇒  the remainder moves up by l - 1
-    let mut out = Vec::new();
-
-    // 1. the pushed RHS occupies cells 0..l.
-    for (j, &lane) in rhs_lanes.iter().enumerate() {
-        out.push(gated_thread(sel, col::stack(j), lane));
-    }
-    // 2. the remainder (everything that was under the popped top) shifts up by `shift`.
-    for j in l..STACK_D {
-        out.push(gated_thread(sel, col::stack(j), col::stack(j - shift)));
-    }
-    // 3. cells whose shifted destination leaves the buffer must be EMPTY.
-    for i in (STACK_D - shift)..STACK_D {
-        out.push(gated(sel, eq_const(col::stack(i), SYM_EMPTY)));
-    }
-    out
-}
-
-/// The **pop / shift-down**, gated on `sel`: `next.STACK[j] == local.STACK[j + 1]`,
-/// with the vacated deepest cell forced EMPTY. Used by `rEmpty` (`S → ε`: pop 1,
-/// push 0) and by a `term` step (consume the matched terminal). This is
-/// [`push_with_remainder_shift`] at `|γ| = 0` — written out because there is no lane
-/// to read the (absent) RHS from and the shift runs the other direction.
-fn pop_shift(sel: usize) -> Vec<ConstraintExpr> {
-    let mut out = Vec::new();
-    for j in 0..STACK_D - 1 {
-        out.push(gated_thread(sel, col::stack(j), col::stack(j + 1)));
-    }
-    out.push(gated_thread(sel, col::stack(STACK_D - 1), col::LANE_ZERO));
-    out
-}
-
-/// The **hold**, gated on `sel`: every stack cell threads unchanged. `done` rows (and
-/// the `done` self-loop padding) take no action, so the stack must not move.
-fn hold_stack(sel: usize) -> Vec<ConstraintExpr> {
-    (0..STACK_D)
-        .map(|j| gated_thread(sel, col::stack(j), col::stack(j)))
-        .collect()
-}
-
-/// The fixed constant lanes (`Transition` sources for pushing constants).
-fn lane_fixes() -> Vec<ConstraintExpr> {
-    vec![
-        eq_const(col::LANE_OP, SYM_OP),
-        eq_const(col::LANE_CL, SYM_CL),
-        eq_const(col::LANE_S, SYM_S),
-        eq_const(col::LANE_ZERO, SYM_EMPTY),
-    ]
-}
-
-// ============================================================================
-// Descriptor
-// ============================================================================
-
-/// Build the `dregg-dyck-parse-v1` descriptor for the one-bracket Dyck grammar.
-///
-/// The constraints (all deployed `ConstraintExpr` variants; the `dfa_routing`
-/// template is cited per group):
-///
-/// - **selectors** — `IS_RULE`/`IS_TERM`/`IS_DONE` binary and partition (exactly one);
-///   the rule sub-selectors `SEL_BRACKET`/`SEL_EMPTY` binary, partition `IS_RULE`, and
-///   are pinned to their rule ids.
-/// - **rule membership** (`r ∈ g.rules`) — on a `rule` row, `RULE_ID ∈ {1, 2}` via a
-///   gated vanishing polynomial `(RULE_ID − 1)(RULE_ID − 2) == 0`. This is the
-///   spike's rule-table check, the analogue of `dfa_routing`'s `TableFunction`
-///   transition-table lookup (`dfa_routing.rs:164`) at 2 rules.
-/// - **top match** — `rule`: `STACK0 == S`; `term`: `STACK0 == INPUT_TOKEN` (both
-///   `Gated` equalities, the shape of the design §2 `rule`/`term` teeth).
-/// - **stack threading** (the heart) — the multi-cell generalization of
-///   `dfa_routing`'s single `Transition{CURRENT_STATE ← NEXT_STATE}`
-///   (`dfa_routing.rs:173`): `rBracket` fires [`push_with_remainder_shift`] with
-///   `γ = op S cl`; `rEmpty` and `term` fire [`pop_shift`]; `done` fires
-///   [`hold_stack`]. Depth threads through `DEPTH_NEXT`.
-/// - **input tape** — `term` advances `INPUT_POS` by one; every non-`term` step
-///   holds it (`Transition`s on the pointer).
-/// - **running commitment** — `ENTRY_HASH == hash_4_to_1(RULE_ID, STACK0,
-///   INPUT_TOKEN, 0)` (C1 shape), folded by `ChainedHash2to1` (`dfa_routing.rs:178`)
-///   and seeded on row 0 by `SeedHash2to1` against `pi[TABLE_COMMITMENT]`
-///   (`dfa_routing.rs:185`).
-pub fn dyck_parse_descriptor(name: &str) -> CircuitDescriptor {
-    let column = |name: &str, index: usize, kind: ColumnKind| ColumnDef {
-        name: name.to_string(),
-        index,
-        kind,
-    };
-
-    let mut constraints = vec![
-        // ---- selector booleans -------------------------------------------
-        ConstraintExpr::Binary { col: col::IS_RULE },
-        ConstraintExpr::Binary { col: col::IS_TERM },
-        ConstraintExpr::Binary { col: col::IS_DONE },
-        ConstraintExpr::Binary { col: col::IS_FIRST },
-        ConstraintExpr::Binary {
-            col: col::SEL_BRACKET,
-        },
-        ConstraintExpr::Binary {
-            col: col::SEL_EMPTY,
-        },
-        // exactly one action kind: IS_RULE + IS_TERM + IS_DONE == 1.
-        ConstraintExpr::Polynomial {
-            terms: vec![
-                PolyTerm {
-                    coeff: BabyBear::ONE,
-                    col_indices: vec![col::IS_RULE],
-                },
-                PolyTerm {
-                    coeff: BabyBear::ONE,
-                    col_indices: vec![col::IS_TERM],
-                },
-                PolyTerm {
-                    coeff: BabyBear::ONE,
-                    col_indices: vec![col::IS_DONE],
-                },
-                PolyTerm {
-                    coeff: -BabyBear::ONE,
-                    col_indices: vec![],
-                },
-            ],
-        },
-        // the rule sub-selectors partition IS_RULE: SEL_BRACKET + SEL_EMPTY == IS_RULE.
-        ConstraintExpr::Polynomial {
-            terms: vec![
-                PolyTerm {
-                    coeff: BabyBear::ONE,
-                    col_indices: vec![col::SEL_BRACKET],
-                },
-                PolyTerm {
-                    coeff: BabyBear::ONE,
-                    col_indices: vec![col::SEL_EMPTY],
-                },
-                PolyTerm {
-                    coeff: -BabyBear::ONE,
-                    col_indices: vec![col::IS_RULE],
-                },
-            ],
-        },
-        // rule sub-selectors pinned to their ids.
-        sel_pins_rule(col::SEL_BRACKET, RULE_BRACKET),
-        sel_pins_rule(col::SEL_EMPTY, RULE_EMPTY),
-        // ---- rule membership: on a rule row, RULE_ID ∈ {rBracket, rEmpty} --
-        // (RULE_ID - 1)(RULE_ID - 2) = RULE_ID^2 - 3 RULE_ID + 2 == 0, gated on IS_RULE.
-        gated(
-            col::IS_RULE,
-            ConstraintExpr::Polynomial {
-                terms: vec![
-                    PolyTerm {
-                        coeff: BabyBear::ONE,
-                        col_indices: vec![col::RULE_ID, col::RULE_ID],
-                    },
-                    PolyTerm {
-                        coeff: -BabyBear::new(3),
-                        col_indices: vec![col::RULE_ID],
-                    },
-                    PolyTerm {
-                        coeff: BabyBear::new(2),
-                        col_indices: vec![],
-                    },
-                ],
-            },
-        ),
-        // ---- top match ----------------------------------------------------
-        // rule step: the popped stack top is the nonterminal S.
-        gated(col::IS_RULE, eq_const(col::STACK0, SYM_S)),
-        // term step: the stack top is the terminal equal to the input token.
-        gated(
-            col::IS_TERM,
-            ConstraintExpr::Equality {
-                col_a: col::STACK0,
-                col_b: col::INPUT_TOKEN,
-            },
-        ),
-        // done step: stack empty (top == 0) and depth == 0.
-        gated(col::IS_DONE, eq_const(col::STACK0, SYM_EMPTY)),
-        gated(col::IS_DONE, eq_const(col::STACK_DEPTH, 0)),
-        // ---- input-pointer helper -----------------------------------------
-        diff_is(col::INPUT_POS_P1, col::INPUT_POS, 1), // INPUT_POS_P1 == INPUT_POS + 1
-        // ---- DEPTH RANGE: 0 <= STACK_DEPTH <= D, and the same for DEPTH_NEXT --
-        // The design (`DESIGN-parse-as-derivation.md` §2) specifies the depth bound as a
-        // COLUMN PROPERTY; without it emitted as a constraint the four depth deltas below
-        // are only congruences mod `p` and a WRAPPED depth is not excluded. These two
-        // vanishing polys are that property, in the `dfa_routing::vanishing_on_grid` idiom.
-        //
-        // BOTH columns are pinned, not just `STACK_DEPTH`: the `Transition{STACK_DEPTH <-
-        // DEPTH_NEXT}` below would carry the range from `STACK_DEPTH` back onto `DEPTH_NEXT`
-        // for rows `0..n-1` only, leaving the LAST row's `DEPTH_NEXT` free. Pinning both
-        // makes the bound hold on every row of both columns with no boundary reasoning.
-        vanishing_on_grid(col::STACK_DEPTH, &depth_grid()),
-        vanishing_on_grid(col::DEPTH_NEXT, &depth_grid()),
-        // ---- depth-delta helper (per action) ------------------------------
-        // rBracket: depth += 2 (pop 1, push 3).
-        gated(
-            col::SEL_BRACKET,
-            diff_is(
-                col::DEPTH_NEXT,
-                col::STACK_DEPTH,
-                RHS_LEN_BRACKET as i64 - 1,
-            ),
-        ),
-        // rEmpty: depth -= 1 (pop 1, push 0).
-        gated(
-            col::SEL_EMPTY,
-            diff_is(col::DEPTH_NEXT, col::STACK_DEPTH, -1),
-        ),
-        // term: depth -= 1 (pop 1).
-        gated(col::IS_TERM, diff_is(col::DEPTH_NEXT, col::STACK_DEPTH, -1)),
-        // done: depth unchanged.
-        gated(col::IS_DONE, diff_is(col::DEPTH_NEXT, col::STACK_DEPTH, 0)),
-        // ---- terminal-top: a term row consumes a TERMINAL, never the nonterminal S ----
-        // `IS_TERM · (STACK0 − op)(STACK0 − cl) == 0`, i.e. `STACK0^2 − 5·STACK0 + 6 == 0`.
-        // The `term` top-match (`STACK0 == INPUT_TOKEN`) only ties the top to the tape symbol; it
-        // does NOT forbid consuming the nonterminal `S`. This tooth does — which is what makes the
-        // parsed word DECODABLE from the trace (`DyckStackReplay.decodedWord` reads a genuine `Brk`
-        // terminal off every term row), the tape↔word correspondence a parser-soundness theorem
-        // must derive rather than assume.
-        gated(
-            col::IS_TERM,
-            ConstraintExpr::Polynomial {
-                terms: vec![
-                    PolyTerm {
-                        coeff: BabyBear::ONE,
-                        col_indices: vec![col::STACK0, col::STACK0],
-                    },
-                    PolyTerm {
-                        coeff: -BabyBear::new(5),
-                        col_indices: vec![col::STACK0],
-                    },
-                    PolyTerm {
-                        coeff: BabyBear::new(6),
-                        col_indices: vec![],
-                    },
-                ],
-            },
-        ),
-        // ---- per-step commitment ------------------------------------------
-        // ENTRY_HASH == hash_4_to_1(RULE_ID, STACK0, INPUT_TOKEN, 0).
-        ConstraintExpr::Hash4to1 {
-            output_col: col::ENTRY_HASH,
-            input_cols: [col::RULE_ID, col::STACK0, col::INPUT_TOKEN, col::LANE_ZERO],
-        },
-        // seed row 0: RUNNING_HASH == hash_2_to_1(pi[TABLE_COMMITMENT], ENTRY_HASH).
-        gated(
-            col::IS_FIRST,
-            ConstraintExpr::SeedHash2to1 {
-                output_col: col::RUNNING_HASH,
-                seed_pi_index: pi::TABLE_COMMITMENT,
-                input_col: col::ENTRY_HASH,
-            },
-        ),
-        // ================= cross-row (transition) constraints ==============
-        // running-hash accumulation: next.running == hash(this.running, next.entry).
-        ConstraintExpr::ChainedHash2to1 {
-            output_next_col: col::RUNNING_HASH,
-            seed_local_col: col::RUNNING_HASH,
-            input_next_col: col::ENTRY_HASH,
-        },
-        // depth threading: next.STACK_DEPTH == this.DEPTH_NEXT.
-        ConstraintExpr::Transition {
-            next_col: col::STACK_DEPTH,
-            local_col: col::DEPTH_NEXT,
-        },
-        // input-pointer threading: term advances by 1, every other step holds.
-        gated_thread(col::IS_TERM, col::INPUT_POS, col::INPUT_POS_P1),
-        ConstraintExpr::InvertedGated {
-            selector_col: col::IS_TERM,
-            inner: Box::new(ConstraintExpr::Transition {
-                next_col: col::INPUT_POS,
-                local_col: col::INPUT_POS,
-            }),
-        },
-    ];
-
-    // ---- lane fixes (constant push sources) -------------------------------
-    constraints.extend(lane_fixes());
-
-    // ---- depth↔occupancy tooth --------------------------------------------
-    // Pin STACK_DEPTH to count exactly the non-EMPTY prefix of the stack cells (cell range +
-    // empty-above-pointer + non-empty-below-pointer). The design named this as the missing
-    // tooth; without it a hole below the pointer is invisible and the general `decode` cannot
-    // read the working stack back out. See `occupancy_tooth`.
-    constraints.extend(occupancy_tooth());
-
-    // ---- stack threading ---------------------------------------------------
-    // rBracket: the general push `S → op S cl` with the remainder shift + overflow guard.
-    constraints.extend(push_with_remainder_shift(
-        col::SEL_BRACKET,
-        &[col::LANE_OP, col::LANE_S, col::LANE_CL],
-    ));
-    // rEmpty (`S → ε`) and term: pop the top, shift the rest down.
-    constraints.extend(pop_shift(col::SEL_EMPTY));
-    constraints.extend(pop_shift(col::IS_TERM));
-    // done: the machine has stopped; the stack holds.
-    constraints.extend(hold_stack(col::IS_DONE));
-
-    // Degree accounting: the two depth-range vanishing polys are degree `D + 1 = 6` (the grid
-    // size), and the depth↔occupancy tooth's non-empty-below family is the deepest —
-    // `(STACK[i]−1)(STACK[i]−2)(STACK[i]−3) · ∏_{v=0}^{i} (depth − v)` is degree `3 + (i + 1)`,
-    // maximised at `i = D − 1` to `3 + D = 8`. `MAX_CONSTRAINT_DEGREE` is 8, so it fits exactly.
-    let max_degree = (STACK_D + 3).max(4);
-
-    let boundaries = vec![
-        // first row starts at [initial]: STACK0 == pi[INITIAL_SYMBOL], depth 1.
-        BoundaryDef::PiBinding {
-            row: BoundaryRow::First,
-            col: col::STACK0,
-            pi_index: pi::INITIAL_SYMBOL,
-        },
-        BoundaryDef::Fixed {
-            row: BoundaryRow::First,
-            col: col::STACK_DEPTH,
-            value: BabyBear::ONE,
-        },
-        BoundaryDef::Fixed {
-            row: BoundaryRow::First,
-            col: col::INPUT_POS,
-            value: BabyBear::ZERO,
-        },
-        BoundaryDef::Fixed {
-            row: BoundaryRow::First,
-            col: col::IS_FIRST,
-            value: BabyBear::ONE,
-        },
-        // last row is an accepting `done`: depth 0, input fully consumed,
-        // route_commitment bound.
-        BoundaryDef::Fixed {
-            row: BoundaryRow::Last,
-            col: col::IS_DONE,
-            value: BabyBear::ONE,
-        },
-        BoundaryDef::Fixed {
-            row: BoundaryRow::Last,
-            col: col::STACK_DEPTH,
-            value: BabyBear::ZERO,
-        },
-        BoundaryDef::PiBinding {
-            row: BoundaryRow::Last,
-            col: col::INPUT_POS,
-            pi_index: pi::INPUT_LEN,
-        },
-        BoundaryDef::PiBinding {
-            row: BoundaryRow::Last,
-            col: col::RUNNING_HASH,
-            pi_index: pi::ROUTE_COMMITMENT,
-        },
-    ];
-
-    let mut columns = Vec::with_capacity(DYCK_WIDTH);
-    for i in 0..STACK_D {
-        columns.push(column(
-            &format!("stack{i}"),
-            col::stack(i),
-            ColumnKind::Value,
-        ));
-    }
-    columns.extend([
-        column("stack_depth", col::STACK_DEPTH, ColumnKind::Value),
-        column("depth_next", col::DEPTH_NEXT, ColumnKind::Value),
-        column("is_rule", col::IS_RULE, ColumnKind::Selector),
-        column("is_term", col::IS_TERM, ColumnKind::Selector),
-        column("is_done", col::IS_DONE, ColumnKind::Selector),
-        column("rule_id", col::RULE_ID, ColumnKind::Value),
-        column("input_token", col::INPUT_TOKEN, ColumnKind::Value),
-        column("input_pos", col::INPUT_POS, ColumnKind::Value),
-        column("input_pos_p1", col::INPUT_POS_P1, ColumnKind::Value),
-        column("sel_bracket", col::SEL_BRACKET, ColumnKind::Selector),
-        column("sel_empty", col::SEL_EMPTY, ColumnKind::Selector),
-        column("entry_hash", col::ENTRY_HASH, ColumnKind::Hash),
-        column("running_hash", col::RUNNING_HASH, ColumnKind::Hash),
-        column("is_first", col::IS_FIRST, ColumnKind::Selector),
-        column("lane_op", col::LANE_OP, ColumnKind::Value),
-        column("lane_cl", col::LANE_CL, ColumnKind::Value),
-        column("lane_s", col::LANE_S, ColumnKind::Value),
-        column("lane_zero", col::LANE_ZERO, ColumnKind::Value),
-    ]);
-
-    CircuitDescriptor {
-        name: name.to_string(),
-        trace_width: DYCK_WIDTH,
-        max_degree,
-        columns,
-        constraints,
-        boundaries,
-        public_input_count: DYCK_PI_COUNT,
-        lookup_tables: vec![],
-    }
-}
-
-/// Create a `DslCircuit` from the Dyck-parse descriptor.
-pub fn dyck_parse_circuit(name: &str) -> DslCircuit {
-    DslCircuit::new(dyck_parse_descriptor(name))
-}
 
 /// The rule-table commitment: `hash_2_to_1(enc(rBracket), enc(rEmpty))`, where each
 /// rule is encoded `hash_4_to_1(rule_id, lhs, rhs0, rhs1)`. This is the `pi[2]`
@@ -1127,7 +452,7 @@ pub const V2_ACC: usize = DYCK_WIDTH;
 /// `col` layout above) + [`V2_ACC`] + 2×7 exposed chip lanes (filled by the descriptor prover).
 pub const DYCK_V2_WIDTH: usize = DYCK_WIDTH + 1 + 14;
 
-/// Lift an IR-v1 witness (from [`build_witness`] / [`build_brackets_witness`] /
+/// Lift a base-width witness (from [`build_witness`] / [`build_brackets_witness`] /
 /// [`build_nested_witness`]) to the base trace of the Lean-emitted IR-v2 descriptor
 /// (`descriptor_by_name("dregg-dyck-parse-v1")`, authored in `DyckStackEmit.lean`).
 ///
@@ -1150,113 +475,11 @@ pub fn lift_witness_to_v2(trace: &[Vec<BabyBear>]) -> Vec<Vec<BabyBear>> {
         .collect()
 }
 
-// ============================================================================
-// Satisfaction predicate — the Rust `Satisfied2` driver
-// ============================================================================
-
-/// Does `expr` read the `next` row (a cross-row / transition constraint)? Such
-/// constraints are enforced only on the transition domain (rows `0..n-1`), matching
-/// the STARK transition vanishing polynomial that excludes the last row.
-fn references_next(expr: &ConstraintExpr) -> bool {
-    match expr {
-        ConstraintExpr::Transition { .. } | ConstraintExpr::ChainedHash2to1 { .. } => true,
-        ConstraintExpr::Gated { inner, .. }
-        | ConstraintExpr::InvertedGated { inner, .. }
-        | ConstraintExpr::Squared { inner } => references_next(inner),
-        _ => false,
-    }
-}
-
-/// **The descriptor-satisfaction predicate** — the Rust analogue of Lean `Satisfied2`:
-/// every constraint evaluates to zero across the trace domain, and every boundary
-/// holds. This DRIVES the deployed evaluator
-/// [`ConstraintExpr::evaluate_with_tables`] (it does not re-implement the constraint
-/// semantics), so a `true`/`false` here is the same accept/reject the audited
-/// prover's per-row check computes.
-///
-/// - transition constraints (`references_next`) are checked on rows `0..n-1` with
-///   `next = trace[i+1]`;
-/// - per-row constraints are checked on every row (`next` unused);
-/// - boundaries resolve `First`/`Last`/`Index` and check the pinned cell against
-///   the public input (`PiBinding`) or the literal (`Fixed`).
-pub fn dyck_satisfied(desc: &CircuitDescriptor, trace: &[Vec<BabyBear>], pi: &[BabyBear]) -> bool {
-    let n = trace.len();
-    if n == 0 {
-        return false;
-    }
-    for c in &desc.constraints {
-        if references_next(c) {
-            for i in 0..n - 1 {
-                if c.evaluate(&trace[i], &trace[i + 1], pi) != BabyBear::ZERO {
-                    return false;
-                }
-            }
-        } else {
-            for i in 0..n {
-                let next = &trace[(i + 1).min(n - 1)];
-                if c.evaluate(&trace[i], next, pi) != BabyBear::ZERO {
-                    return false;
-                }
-            }
-        }
-    }
-    for b in &desc.boundaries {
-        let (row, value) = match b {
-            BoundaryDef::PiBinding { row, col, pi_index } => {
-                let r = resolve_row(row, n);
-                (trace[r][*col], pi[*pi_index])
-            }
-            BoundaryDef::Fixed { row, col, value } => {
-                let r = resolve_row(row, n);
-                (trace[r][*col], *value)
-            }
-        };
-        if row != value {
-            return false;
-        }
-    }
-    true
-}
-
-fn resolve_row(row: &BoundaryRow, n: usize) -> usize {
-    match row {
-        BoundaryRow::First => 0,
-        BoundaryRow::Last => n - 1,
-        BoundaryRow::Index(i) => *i,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const NAME: &str = "dregg-dyck-parse-v1";
-
-    #[test]
-    fn descriptor_is_deployable() {
-        let desc = dyck_parse_descriptor(NAME);
-        desc.validate().expect("dyck descriptor must validate");
-    }
-
-    #[test]
-    fn brackets_accepts() {
-        let desc = dyck_parse_descriptor(NAME);
-        let (trace, pi) = build_brackets_witness();
-        assert!(
-            dyck_satisfied(&desc, &trace, &pi),
-            "the honest '[]' parse must satisfy the descriptor"
-        );
-    }
-
-    #[test]
-    fn nested_brackets_accepts() {
-        let desc = dyck_parse_descriptor(NAME);
-        let (trace, pi) = build_nested_witness();
-        assert!(
-            dyck_satisfied(&desc, &trace, &pi),
-            "the honest '[[]]' parse must satisfy the descriptor (the remainder shift)"
-        );
-    }
+    use crate::descriptor_by_name::descriptor_by_name;
+    use crate::descriptor_ir2::ir2_eval_accepts_i64;
 
     /// The nested run's stack really does carry a remainder under a pushed RHS: at the
     /// SECOND `rBracket` (row 2) the stack is `[S, cl]`, and the row after it is
@@ -1281,268 +504,75 @@ mod tests {
         assert_eq!(trace[3][col::STACK_DEPTH], BabyBear::new(4));
     }
 
-    /// The depth-range tooth EXISTS and is degree `D + 1` over the right column.
+    /// The v2 lift is the copy-forward accumulator chain the emitted descriptor's
+    /// single-row hash step reads: `acc[0] = table_commitment`, `acc[i+1] = running[i]`,
+    /// rows widened to the emitted 38 with the chip lanes left for the prover.
     #[test]
-    fn depth_range_constraint_is_wired() {
-        let desc = dyck_parse_descriptor(NAME);
-        for c in [col::STACK_DEPTH, col::DEPTH_NEXT] {
-            let found = desc
-                .constraints
-                .iter()
-                .find(|k| match k {
-                    ConstraintExpr::Polynomial { terms } => {
-                        terms.iter().any(|t| t.col_indices.len() == STACK_D + 1)
-                            && terms.iter().all(|t| t.col_indices.iter().all(|&i| i == c))
-                    }
-                    _ => false,
-                })
-                .unwrap_or_else(|| panic!("no depth-range vanishing poly on column {c}"));
-            assert_eq!(found.degree(), STACK_D + 1);
+    fn lift_carries_the_acc_chain() {
+        let (trace, pi_vals) = build_brackets_witness();
+        let v2 = lift_witness_to_v2(&trace);
+        assert_eq!(v2.len(), trace.len());
+        for row in &v2 {
+            assert_eq!(row.len(), DYCK_V2_WIDTH);
         }
-    }
-
-    /// **The tooth, evaluated directly**: the depth-range poly is zero at EVERY legal depth
-    /// `0..=D` and NONZERO everywhere else it is asked — including the wrapped values a
-    /// field congruence cannot distinguish from a legal one.
-    #[test]
-    fn depth_range_vanishes_exactly_on_the_grid() {
-        let range = vanishing_on_grid(col::STACK_DEPTH, &depth_grid());
-        let mut row = vec![BabyBear::ZERO; DYCK_WIDTH];
-        let pi: Vec<BabyBear> = vec![];
-
-        for d in 0..=STACK_D as u32 {
-            row[col::STACK_DEPTH] = BabyBear::new(d);
+        assert_eq!(
+            v2[0][V2_ACC],
+            pi_vals[pi::TABLE_COMMITMENT],
+            "the chain seeds at the rule-table commitment"
+        );
+        for i in 1..v2.len() {
             assert_eq!(
-                range.evaluate(&row, &row, &pi),
-                BabyBear::ZERO,
-                "the legal depth {d} must be ON the grid"
-            );
-        }
-        // D + 1 (one push too many) and D + 2 are off-grid.
-        for d in [STACK_D as u32 + 1, STACK_D as u32 + 2, 100] {
-            row[col::STACK_DEPTH] = BabyBear::new(d);
-            assert_ne!(
-                range.evaluate(&row, &row, &pi),
-                BabyBear::ZERO,
-                "the overflowing depth {d} must be OFF the grid"
-            );
-        }
-        // The WRAPPED depths: `-1` and `-2` as field elements. These satisfy the `-1` depth
-        // delta as congruences and are exactly what the range tooth exists to refuse.
-        for d in [BABYBEAR_P - 1, BABYBEAR_P - 2] {
-            row[col::STACK_DEPTH] = BabyBear::new(d);
-            assert_ne!(
-                range.evaluate(&row, &row, &pi),
-                BabyBear::ZERO,
-                "the WRAPPED depth {d} (= -{}) must be OFF the grid",
-                BABYBEAR_P - d
+                v2[i][V2_ACC],
+                trace[i - 1][col::RUNNING_HASH],
+                "acc[{i}] must carry the prior row's running hash"
             );
         }
     }
 
-    /// **The canary the gate is for**: a trace whose depth column WRAPS negative satisfies
-    /// every depth delta as a field congruence, yet the range tooth REJECTS it.
-    ///
-    /// The synthetic violation is built to be maximally sneaky: take the honest `"[]"` run
-    /// and subtract `p` from... nothing — instead drive the range poly at the wrapped value
-    /// the deltas would happily accept, and confirm the whole-descriptor predicate flips.
-    #[test]
-    fn wrapped_depth_rejects() {
-        let desc = dyck_parse_descriptor(NAME);
-        let (trace, pi) = build_brackets_witness();
-        assert!(dyck_satisfied(&desc, &trace, &pi), "honest baseline");
-
-        // Row 3 is `term ']'` at depth 1 -> 0. Rewrite it as depth `p - 1` (= -1) with
-        // DEPTH_NEXT `p - 2` (= -2): the `term` delta `DEPTH_NEXT - STACK_DEPTH + 1 == 0`
-        // STILL holds (-2 - (-1) + 1 = 0 over the field), and so does the threading into
-        // row 4 if we carry it. A pure-congruence circuit cannot see this.
-        let mut tampered = trace.clone();
-        tampered[3][col::STACK_DEPTH] = -BabyBear::ONE;
-        tampered[3][col::DEPTH_NEXT] = -BabyBear::new(2);
-
-        // The DELTA constraint the wrap was built to slip past: still satisfied.
-        let delta = gated(col::IS_TERM, diff_is(col::DEPTH_NEXT, col::STACK_DEPTH, -1));
-        assert_eq!(
-            delta.evaluate(&tampered[3], &tampered[4], &pi),
-            BabyBear::ZERO,
-            "the wrap is invisible to the depth DELTA — this is the hole the range closes"
-        );
-
-        // The RANGE tooth, isolated: honest zero, tampered nonzero.
-        let range = vanishing_on_grid(col::STACK_DEPTH, &depth_grid());
-        assert_eq!(
-            range.evaluate(&trace[3], &trace[4], &pi),
-            BabyBear::ZERO,
-            "the honest depth is on the grid"
-        );
-        assert_ne!(
-            range.evaluate(&tampered[3], &tampered[4], &pi),
-            BabyBear::ZERO,
-            "THE TOOTH: the wrapped depth is off the grid"
-        );
-
-        // And the whole descriptor rejects.
-        assert!(
-            !dyck_satisfied(&desc, &tampered, &pi),
-            "a wrapped STACK_DEPTH must REJECT"
-        );
-    }
-
-    /// The dual synthetic violation: an OVERFLOWING depth (`D + 1`) rejects. A run that
-    /// pushed once past the buffer would land here.
-    #[test]
-    fn overflowing_depth_rejects() {
-        let desc = dyck_parse_descriptor(NAME);
-        let (trace, pi) = build_brackets_witness();
-        let mut tampered = trace.clone();
-        tampered[0][col::STACK_DEPTH] = BabyBear::new(STACK_D as u32 + 1);
-        assert!(
-            !dyck_satisfied(&desc, &tampered, &pi),
-            "a depth of D + 1 must REJECT"
-        );
-    }
-
-    /// **THE OCCUPANCY TOOTH, isolated — a hole below the pointer.** The nested run's row 3 is
-    /// `[op, S, cl, cl]` at depth 4, so cell 1 (`S`) is live. Blank it to `EMPTY` while leaving
-    /// depth 4: `STACK_DEPTH` now claims 4 occupied cells but cell 1 is a hole. The
-    /// non-empty-below gate for cell 1 —
-    /// `(STACK[1]−1)(STACK[1]−2)(STACK[1]−3) · (STACK_DEPTH)(STACK_DEPTH−1)` — goes from zero
-    /// (honest) to nonzero (hole), so the reject is credited to the tooth, not a neighbour.
-    #[test]
-    fn occupancy_hole_below_pointer_rejects() {
-        let desc = dyck_parse_descriptor(NAME);
-        let (trace, pi) = build_nested_witness();
-        assert!(dyck_satisfied(&desc, &trace, &pi), "honest nested baseline");
-
-        // Reconstruct the non-empty-below gate for cell 1 (depth product over v = 0, 1).
-        let mut linear: Vec<(usize, i128)> =
-            vec![(col::stack(1), 1), (col::stack(1), 2), (col::stack(1), 3)];
-        linear.extend((0..=1i128).map(|v| (col::STACK_DEPTH, v)));
-        let gate = monomial_product(&[], &linear);
-
-        assert_eq!(
-            gate.evaluate(&trace[3], &trace[3], &pi),
-            BabyBear::ZERO,
-            "cell 1 is a live symbol below the pointer on the honest run"
-        );
-
-        let mut tampered = trace.clone();
-        tampered[3][col::stack(1)] = BabyBear::new(SYM_EMPTY);
-        assert_ne!(
-            gate.evaluate(&tampered[3], &tampered[3], &pi),
-            BabyBear::ZERO,
-            "THE TOOTH: an EMPTY hole below the pointer is off-occupancy"
-        );
-        assert!(
-            !dyck_satisfied(&desc, &tampered, &pi),
-            "a hole below the pointer must REJECT"
-        );
-    }
-
-    /// **THE OCCUPANCY TOOTH, isolated — a live symbol ABOVE the pointer.** The `"[]"` run's
-    /// row 3 is `[cl]` at depth 1, so cells 1..D must be `EMPTY`. Park a `cl` in cell 1
-    /// (`i = 1 ≥ STACK_DEPTH = 1`): the empty-above gate for cell 1 —
-    /// `STACK[1] · ∏_{v=2}^{D}(STACK_DEPTH − v)` — rejects it.
-    #[test]
-    fn occupancy_symbol_above_pointer_rejects() {
-        let desc = dyck_parse_descriptor(NAME);
-        let (trace, pi) = build_brackets_witness();
-        assert!(dyck_satisfied(&desc, &trace, &pi), "honest baseline");
-
-        let above: Vec<(usize, i128)> = (2i128..=STACK_D as i128)
-            .map(|v| (col::STACK_DEPTH, v))
+    /// Convert a lifted trace + PIs to the `i64` rows the row-local oracle takes.
+    fn to_i64(trace: &[Vec<BabyBear>], pi_vals: &[BabyBear]) -> (Vec<Vec<i64>>, Vec<i64>) {
+        let rows = trace
+            .iter()
+            .map(|r| r.iter().map(|x| x.as_u32() as i64).collect())
             .collect();
-        let gate = monomial_product(&[col::stack(1)], &above);
-
-        assert_eq!(
-            gate.evaluate(&trace[3], &trace[3], &pi),
-            BabyBear::ZERO,
-            "cell 1 is EMPTY above the pointer on the honest run"
-        );
-
-        let mut tampered = trace.clone();
-        tampered[3][col::stack(1)] = BabyBear::new(SYM_CL);
-        assert_ne!(
-            gate.evaluate(&tampered[3], &tampered[3], &pi),
-            BabyBear::ZERO,
-            "THE TOOTH: a live symbol above the pointer is off-occupancy"
-        );
-        assert!(
-            !dyck_satisfied(&desc, &tampered, &pi),
-            "a symbol above the pointer must REJECT"
-        );
+        let pis = pi_vals.iter().map(|x| x.as_u32() as i64).collect();
+        (rows, pis)
     }
 
-    /// **The wrapped-depth trace is REJECTED — and this test does NOT establish that the
-    /// range tooth is why.**
-    ///
-    /// It previously claimed to be a mutation canary ("with the range tooth removed the wrap
-    /// would be ACCEPTED"). That claim was false and untested: it never asserted
-    /// `dyck_satisfied(&weakened, ..)`, and that assert would FAIL — row 4 is the `done` row,
-    /// and `gated(IS_DONE, eq_const(STACK_DEPTH, 0))` is not stripped by the filter below
-    /// (it is `Gated`, not a bare `Polynomial`) and evaluates to -2 on the tampered depth. So
-    /// the weakened descriptor rejects the wrap too, and the canary canaried nothing.
-    ///
-    /// So this test shows two true things — the congruence-only depth teeth (deltas +
-    /// threading) do NOT catch a wrap, and the full descriptor DOES reject it — and it does
-    /// NOT show which tooth is responsible. Strip-and-hope is the wrong shape for that
-    /// question anyway: it can only isolate a tooth if every OTHER constraint is known to
-    /// pass, and here the `done` pin does not.
-    ///
-    /// The real evidence that the range poly bites lives in
-    /// `circuit-prove/tests/dyck_parse_tamper.rs`, which does it the right way: it ISOLATES
-    /// the single degree-`(D+1)` vanishing poly (`find_depth_range`) and fires a `p − 1`
-    /// depth directly at that constraint. That is a constraint-level fact and needs no
-    /// argument about what else might also reject.
+    /// Both honest witnesses satisfy the DEPLOYED (loaded, Lean-emitted) descriptor's
+    /// row-local constraints — the real `Ir2Air::Main` evaluator over the real dispatch,
+    /// not a hand mirror. (The bus arms — the two Poseidon2 chip lookups — are the batch
+    /// assembly's job; the full prove/verify teeth live in
+    /// `circuit-prove/tests/dyck_parse_tamper.rs`.)
     #[test]
-    fn the_full_descriptor_rejects_a_wrapped_depth() {
-        let desc = dyck_parse_descriptor(NAME);
-        let (trace, pi) = build_brackets_witness();
-        let mut tampered = trace.clone();
-        tampered[3][col::STACK_DEPTH] = -BabyBear::ONE;
-        tampered[3][col::DEPTH_NEXT] = -BabyBear::new(2);
-        tampered[4][col::STACK_DEPTH] = -BabyBear::new(2);
-        tampered[4][col::DEPTH_NEXT] = -BabyBear::new(2);
-
-        // Strip ONLY the two depth-range polys — the pure `∏ (depth − v)` over a single depth
-        // column (every term a power of `STACK_DEPTH` or `DEPTH_NEXT`). The depth↔occupancy
-        // tooth also carries degree-`(D+1)` monomials, but its terms mix in a stack cell, so
-        // requiring EVERY term to be a power of a depth column isolates the two range polys.
-        let grid_len = STACK_D + 1;
-        let mut weakened = desc.clone();
-        weakened.constraints.retain(|c| {
-            !matches!(c, ConstraintExpr::Polynomial { terms }
-                if terms.iter().any(|t| t.col_indices.len() == grid_len)
-                   && terms.iter().all(|t| t.col_indices.iter()
-                        .all(|&i| i == col::STACK_DEPTH || i == col::DEPTH_NEXT)))
-        });
-        assert_eq!(
-            weakened.constraints.len(),
-            desc.constraints.len() - 2,
-            "exactly the two range polys were stripped"
-        );
-
-        // The congruence-only depth teeth (deltas + threading) do NOT catch the wrap — this
-        // is true and is the part worth pinning. It is NOT sufficient to show the range tooth
-        // is load-bearing: the `done`-row pin (not stripped above) also rejects, per the doc.
-        for c in [
-            gated(col::IS_TERM, diff_is(col::DEPTH_NEXT, col::STACK_DEPTH, -1)),
-            ConstraintExpr::Transition {
-                next_col: col::STACK_DEPTH,
-                local_col: col::DEPTH_NEXT,
-            },
+    fn emitted_descriptor_accepts_the_honest_witnesses_row_locally() {
+        let desc = descriptor_by_name("dregg-dyck-parse-v1")
+            .expect("the deployed dispatch must serve the Dyck descriptor");
+        for (word, (trace, pi_vals)) in [
+            ("[]", build_brackets_witness()),
+            ("[[]]", build_nested_witness()),
         ] {
-            assert_eq!(
-                c.evaluate(&tampered[3], &tampered[4], &pi),
-                BabyBear::ZERO,
-                "the wrap slips past every congruence-only depth tooth"
+            let (rows, pis) = to_i64(&lift_witness_to_v2(&trace), &pi_vals);
+            assert!(
+                ir2_eval_accepts_i64(&desc, &rows, &pis),
+                "the honest '{word}' parse must satisfy the emitted descriptor row-locally"
             );
         }
+    }
 
-        // The FULL descriptor bites. (Which tooth bites first is NOT established here.)
+    /// ...and the acceptance is non-vacuous: a single mutated stack cell (the `term '['`
+    /// row's top flipped `op → cl`) fails the same row-local evaluator.
+    #[test]
+    fn emitted_descriptor_rejects_a_tampered_witness_row_locally() {
+        let desc = descriptor_by_name("dregg-dyck-parse-v1")
+            .expect("the deployed dispatch must serve the Dyck descriptor");
+        let (trace, pi_vals) = build_brackets_witness();
+        let mut v2 = lift_witness_to_v2(&trace);
+        v2[1][col::STACK0] = BabyBear::new(SYM_CL);
+        let (rows, pis) = to_i64(&v2, &pi_vals);
         assert!(
-            !dyck_satisfied(&desc, &tampered, &pi),
-            "the descriptor REJECTS the wrapped depth"
+            !ir2_eval_accepts_i64(&desc, &rows, &pis),
+            "a mutated stack cell must REJECT row-locally (the term top-match gate)"
         );
     }
 }

@@ -264,8 +264,8 @@ const BLINDED_MEMBERSHIP_JSON: &str =
 const DERIVATION_JSON: &str = include_str!("../descriptors/by-name/derivation.json");
 /// The **Dyck pushdown parse** family (`dregg-dyck-parse-v1`), authored in
 /// `metatheory/Dregg2/Circuit/Emit/DyckStackEmit.lean` (`dyckParseDesc`) and byte-pinned there by
-/// an `emitVmJson2` `#guard`. This is the loader-flip successor to the hand-authored IR-v1
-/// `dsl::dyck_stack::dyck_parse_descriptor`: the DEPLOYED dispatch serves the Lean-emitted
+/// an `emitVmJson2` `#guard`. The loader-flip retired the hand-authored IR-v1 Rust AIR: the
+/// DEPLOYED dispatch serves the Lean-emitted
 /// descriptor (38 wide: the 23 Rust `dyck_stack::col` base columns index for index, + the `ACC`
 /// copy-forward accumulator + 2×7 chip lanes), so the deployed object IS the one the
 /// `DyckStackRefine` theorems read. Its Rust witness lift is
