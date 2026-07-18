@@ -1,5 +1,35 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑⚑⚑ NOTE-TREE ACCUMULATOR → LEAN (retire the Rust) — chunk 1 DONE (2026-07-17)
+The note-COMMITMENT tree accumulator was hand-rolled RUST (`commit/src/poseidon2_tree.rs`) — AIR/circuit
+logic that slid into Rust (law #1 drift) — with only a TOY Lean model (`RotatedKernelRefinementNotes.
+noteListRoot`, a `List Nat` list-digest, a DIFFERENT object) and NO cross-check (akapug #58 alignment
+finding). CHUNK 1 LANDED (`56cbef9d5`): `metatheory/Dregg2/Circuit/CommitmentTreeAccumulator.lean` — the
+deployed append-only 4-ary Poseidon2 tree modeled faithfully (EMPTY_LEAF, empty-subtree shortcut,
+position-indexed nodeAt, root, additive append), `#assert_axioms`-clean; binding is HONEST (`root_distinct_
+extracts_collision` — a distinguishing leaf exhibits a genuine H-collision, since `compressNInjective` is
+VACUOUS at real BabyBear params — NOT assumed injectivity); `emptyHash_correct` (shortcut=recursion),
+`append_offpath_unchanged` (incremental), `append_length` (additive, never idempotent — exactly-once is the
+finalization layer). + a differential `commit/tests/poseidon2_tree_lean_differential.rs` (5/5) locking the
+Rust root to the Lean model over the real `hash_4_to_1`. REMAINING (the cutover, precise): (1) EMIT the Lean
+accumulator as a descriptor — `Dregg2/Circuit/Emit/CommitmentTreeAppendEmit.lean` (`EffectVmDescriptor2` +
+`emitVmJson2` + `#guard` byte-pin) → register in `EmitByName.lean` → `scripts/emit_descriptors.py` →
+`circuit/descriptors/by-name/commitment-tree-append.json` → Rust `include_str!` (the nullifier-accumulator
+path `SortedTreeNonMembershipHeap8`→`*Emit`→generic descriptor VM; NO FFI); (2) DELETE `poseidon2_tree.rs`'s
+hand-rolled `append`/`root`/`compute_node_at_level` for the call-in; (3) RETIRE the toy `noteListRoot`. This
+is the exemplar "shunt a Rust accumulator into Lean" — the pattern the whole storage/circuit-in-Lean thesis wants.
+
+## ⚑⚑ #57 make_sovereign — durable overlay is a Rust SHORTCUT drifted from proven re-execution (2026-07-17)
+`make_sovereign` is a REAL designed effect (circuit-modeled, `effect_vm/effect.rs`, WASM API). Its bug: the
+`checkpoint ⊕ overlay` reconstruction is a hand-rolled Rust SHORTCUT (avoid re-exec-from-genesis) that is
+INSERT-ONLY → can't represent a removal → a cell that goes sovereign after a checkpoint RESURRECTS as hosted
+on reopen (root ≠ recorded). AND `CrashRecovery.lean` MIRRORS the lossy Rust (insert-only), so `recover_eq_
+replay` is green-but-BLIND to removals (a co-conspirator, not a check). The align-fix (route make_sovereign
+through the journaled `Ledger::remove`; tombstone the overlay in `CommitRecord`; make `CrashRecovery`'s write
+type `Insert|Remove` so `recover_eq_replay` CATCHES the drift) is being LANDED with #58. DEEPER arc: make
+`replay` denote actual executor semantics (refine to `TurnExecutorFull` end-to-end) so the overlay shortcut is
+PROVABLY equal to re-execution — not a separately-authored Rust structure that can drift again.
+
 ## ⚑⚑⚑ #56 TIER-2 — MODEL agent-reach in the Lean KERNEL (retire the Rust authority divergence) (2026-07-17)
 The FENCE (`015d9ff67`) CLOSED the deployed loosening (the default producer no longer installs a cross-cell root
 write Rust rejects — agent≠target non-bearer roots fence to Rust as `AgentReach`, falsifier+canary green). But the
