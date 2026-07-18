@@ -1086,389 +1086,16 @@ async fn run_node(
         node_state.set_prove_pool(pool).await;
     }
 
-    // Load genesis.json if present in the data directory.
-    let mut starbridge_seeded_from_genesis = false;
-    let genesis_path = data_path.join("genesis.json");
-    if genesis_path.exists() {
-        match std::fs::read_to_string(&genesis_path) {
-            Ok(json_str) => {
-                match serde_json::from_str::<serde_json::Value>(&json_str) {
-                    Ok(genesis) => {
-                        let mut s = node_state.write().await;
-                        // Set committee_epoch BEFORE loading keys so the
-                        // first federation_id derivation uses the correct
-                        // epoch.
-                        if let Some(ce) = genesis["committee_epoch"].as_u64() {
-                            s.committee_epoch = ce;
-                        }
-                        // Extract validator public keys from genesis — the
-                        // ed25519 committee AND (HYBRID-PQ) each member's
-                        // published ML-DSA-65 key, INDEX-ALIGNED. If ANY
-                        // validator lacks a decodable `ml_dsa_public_key`, the
-                        // whole ML-DSA vec is left empty: hybrid is then
-                        // unconfigured and the vote collector counts no votes
-                        // (fail-closed — never a partial/misaligned committee).
-                        if let Some(validators) = genesis["validators"].as_array() {
-                            let mut fed_keys = Vec::new();
-                            let mut ml_dsa_keys = Vec::new();
-                            let mut ml_dsa_complete = true;
-                            for v in validators {
-                                if let Some(pk_hex) = v["public_key"].as_str()
-                                    && let Some(pk_bytes) = hex_decode_32(pk_hex)
-                                {
-                                    fed_keys.push(dregg_types::PublicKey(pk_bytes));
-                                    match v["ml_dsa_public_key"]
-                                        .as_str()
-                                        .and_then(parse_ml_dsa_public_key)
-                                    {
-                                        Some(k) => ml_dsa_keys.push(k),
-                                        None => ml_dsa_complete = false,
-                                    }
-                                }
-                            }
-                            if !fed_keys.is_empty() {
-                                let ml_dsa_keys = if ml_dsa_complete {
-                                    ml_dsa_keys
-                                } else {
-                                    tracing::warn!(
-                                        "genesis.json is missing (or has undecodable) \
-                                         ml_dsa_public_key entries — HYBRID-PQ finality is \
-                                         UNCONFIGURED and finalization votes will not count \
-                                         (fail-closed); re-mint genesis to enable it"
-                                    );
-                                    Vec::new()
-                                };
-                                info!(
-                                    key_count = fed_keys.len(),
-                                    ml_dsa_keys = ml_dsa_keys.len(),
-                                    "loaded federation keys from genesis.json"
-                                );
-                                s.set_federation_keys_hybrid(fed_keys, ml_dsa_keys);
-                            }
-                        }
-                        // Verify the genesis-declared federation_id matches the
-                        // committee-derived id (audit F1: the writer of
-                        // genesis.json doesn't get to pick an arbitrary id).
-                        if let Some(declared_id) = genesis["federation_id"].as_str() {
-                            let derived = dregg_types::hex_encode(&s.federation_id);
-                            if declared_id != derived {
-                                tracing::warn!(
-                                    declared = %declared_id,
-                                    derived = %derived,
-                                    "genesis.json federation_id does not match committee-derived id (audit F1); using derived id",
-                                );
-                            }
-                        }
-                        // Extract threshold from genesis.
-                        if let Some(threshold) = genesis["threshold"].as_u64() {
-                            s.decryption_threshold = threshold as usize;
-                        }
-                        // Extract checkpoint interval from genesis.
-                        if let Some(ci) = genesis["checkpoint_interval"].as_u64() {
-                            s.checkpoint_interval = ci;
-                        }
-                        // Recovery ordering (the issuer-well fix): reconstruct
-                        // the genesis BASELINE first on a fresh ledger (the
-                        // `genesis_moves` replay EXACTLY ONCE over value-empty
-                        // cells), THEN re-apply the recovered commit-log overlay
-                        // so every bot-touched cell's FINALIZED post-state wins.
-                        // The old order (genesis reseed applied OVER the overlay)
-                        // re-credited every move RECIPIENT already in the overlay
-                        // — a double-credit that diverged the reconstructed root.
-                        let cell_load = reseed_genesis_then_overlay(&genesis, &mut s.ledger);
-                        if cell_load.total() > 0 {
-                            info!(
-                                inserted = cell_load.inserted,
-                                existing = cell_load.existing,
-                                skipped = cell_load.skipped,
-                                invalid = cell_load.invalid,
-                                "processed genesis initial_cells"
-                            );
-                        }
-                        // THE EPOCH §5: pick up the genesis wells so every
-                        // executor (configure_turn_executor) runs fees and
-                        // burns as exact MOVES.
-                        if let Some(fee_well_hex) = genesis["fee_well"].as_str() {
-                            match hex_decode_32(fee_well_hex) {
-                                Some(id) => s.fee_well = Some(dregg_cell::CellId(id)),
-                                None => tracing::warn!(
-                                    "genesis fee_well is not a 32-byte hex cell id; fees will burn"
-                                ),
-                            }
-                        }
-                        if let Some(issuer_well_hex) = genesis["issuer_well"].as_str() {
-                            match hex_decode_32(issuer_well_hex) {
-                                // The devnet issuer well backs the DEFAULT
-                                // asset (all-zero token domain).
-                                Some(id) => {
-                                    s.issuer_wells.push(([0u8; 32], dregg_cell::CellId(id)))
-                                }
-                                None => tracing::warn!(
-                                    "genesis issuer_well is not a 32-byte hex cell id; burns stay non-conserving"
-                                ),
-                            }
-                        }
-                        let federation_id = s.federation_id;
-                        let operator_pubkey = s.cclerk.public_key().0;
-                        let seed_stats =
-                            starbridge_seed::seed_starbridge_factory_cells_with_operator(
-                                &genesis,
-                                &data_path,
-                                &mut s.ledger,
-                                federation_id,
-                                Some(operator_pubkey),
-                            );
-                        if seed_stats.total() > 0 {
-                            starbridge_seeded_from_genesis = true;
-                            info!(
-                                registered = seed_stats.registered_factories,
-                                created = seed_stats.created,
-                                existing = seed_stats.existing,
-                                skipped = seed_stats.skipped,
-                                failed = seed_stats.failed,
-                                "processed genesis starbridge_cells"
-                            );
-                        }
-                        info!(genesis = %genesis_path.display(), "genesis configuration loaded");
-                    }
-                    Err(e) => {
-                        error!(error = %e, "failed to parse genesis.json");
-                    }
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "failed to read genesis.json");
-            }
-        }
-    }
-
-    // Starbridge devnet backfill — idempotent on every boot. A devnet data dir
-    // that predates the starbridge seed (no genesis.json at all, or one without
-    // `starbridge_cells`) gains the default poll/bounty/nameservice/... factory
-    // cells on restart, insert-if-absent exactly like `materialize_genesis_cells`.
-    // Gated on `--enable-faucet` (the explicit devnet switch); production nodes
-    // seed only through genesis.
-    if enable_faucet && !starbridge_seeded_from_genesis {
-        let mut s = node_state.write().await;
-        let federation_id = s.federation_id;
-        let operator_pubkey = s.cclerk.public_key().0;
-        let stats = starbridge_seed::seed_default_starbridge_cells_devnet(
-            &data_path,
-            &mut s.ledger,
-            federation_id,
-            Some(operator_pubkey),
-        );
-        if stats.total() > 0 {
-            info!(
-                registered = stats.registered_factories,
-                created = stats.created,
-                existing = stats.existing,
-                skipped = stats.skipped,
-                failed = stats.failed,
-                "starbridge devnet backfill seeding complete (default cell set)"
-            );
-        }
-    }
-
-    // Demo execution-lease seed — the local-cloud loop's mint. An external
-    // provider decodes a lease off `GET /api/cell/{id}` only when the cell is
-    // program-bearing with the lease slots sealed (RENT/PERIOD/PROVIDER) and a
-    // funded balance — and program install is not a wire effect, so no HTTP
-    // client can create one. Dev-gated twice (`--enable-faucet` AND
-    // `DREGG_SEED_DEMO_LEASE=1`); insert-if-absent on every boot.
-    //
-    // FEDERATION-WIDE by construction: both the lease cell and its provider
-    // (rent beneficiary) derive from the FEDERATION_ID, not from this node's
-    // operator key. Every validator in the federation therefore seeds the
-    // IDENTICAL pair — same ids, same program, same sealed slots — so a
-    // settlement turn ordered by consensus applies on every replica. (Keying
-    // them off the per-node operator instead gave each validator its own private
-    // lease: consensus ran, but the workload was node-local state that the other
-    // replicas had never heard of.) The balance IS the prepaid budget the
-    // provider meters against; rent 1 per 60-block period, open-ended.
-    if enable_faucet && std::env::var("DREGG_SEED_DEMO_LEASE").as_deref() == Ok("1") {
-        use starbridge_execution_lease as lease_app;
-        let mut s = node_state.write().await;
-        let operator_pubkey = s.cclerk.public_key().0;
-        let native = [0u8; 32];
-        let federation_id = s.federation_id;
-        // The LEASE is OPERATOR-OWNED (per-node). The metered settlement is a plain
-        // operator-signed Transfer FROM the lease, so the operator must OWN it — a
-        // lease owned by some other key refuses the transfer ("Ed25519 signature
-        // half failed"). This makes the lease node-local; a genuinely
-        // federation-wide lease whose rent settles on every replica needs the
-        // lease PROGRAM's metered discharge (pay/advance) instead of a plain
-        // operator Transfer, which is a real integration step — see
-        // docs/FINDING-federation-wide-settlement.md.
-        let lease_pubkey = operator_pubkey;
-        // The PROVIDER (rent beneficiary) IS federation-wide: a real Ed25519 key
-        // derived deterministically from the federation id, so every replica seeds
-        // the identical cell and a settlement Transfer credits a cell they all hold.
-        let provider_pubkey = ed25519_dalek::SigningKey::from_bytes(&blake3::derive_key(
-            "dregg-demo-lease-provider-v1",
-            &federation_id,
-        ))
-        .verifying_key()
-        .to_bytes();
-        let lease_id = dregg_cell::CellId::derive_raw(&lease_pubkey, &native);
-        let provider_cell = dregg_cell::CellId::derive_raw(&provider_pubkey, &native);
-        if s.ledger.get(&lease_id).is_none() {
-            let operator_cell = dregg_cell::CellId::derive_raw(
-                &operator_pubkey,
-                blake3::hash(b"default").as_bytes(),
-            );
-            // The rent beneficiary — seeded empty, identical on every replica, so
-            // the metered settlement Transfer credits a cell all replicas hold.
-            if s.ledger.get(&provider_cell).is_none() {
-                let pcell = dregg_cell::Cell::with_balance(provider_pubkey, native, 0);
-                if let Err(e) = s.ledger.insert_cell(pcell) {
-                    warn!(error = %e, "demo lease provider cell insert failed");
-                }
-            }
-            let mut cell = dregg_cell::Cell::with_balance(lease_pubkey, native, 10_000);
-            cell.program = lease_app::lease_cell_program();
-            let terms = lease_app::LeaseTerms::new(
-                provider_cell,
-                lease_id,
-                dregg_cell::CellId(native),
-                1,
-                60,
-                0,
-                0,
-            );
-            match lease_app::open_lease(&mut cell, &terms, lease_app::field_from_u64(0)) {
-                Ok(()) => match s.ledger.insert_cell(cell) {
-                    Ok(id) => {
-                        // Give the operator c-list reach + set_state on the lease
-                        // so it can author the exec-lease GRANT turn an external
-                        // provider's verified read decodes (same as the starbridge
-                        // seeder does for its factory cells).
-                        starbridge_seed::grant_operator_reach(
-                            &mut s.ledger,
-                            operator_cell,
-                            operator_pubkey,
-                            id,
-                        );
-                        info!(
-                            lease = %dregg_types::hex_encode(&id.0),
-                            provider = %dregg_types::hex_encode(&provider_cell.0),
-                            budget = 10_000,
-                            "seeded demo execution-lease (funded, federation-wide, operator-reachable)"
-                        );
-                    }
-                    Err(e) => warn!(error = %e, "demo execution-lease insert failed"),
-                },
-                Err(e) => warn!(error = ?e, "demo execution-lease open refused"),
-            }
-        }
-    }
-
-    // Derive the committee from the persisted chain BEFORE the recovery anchor
-    // runs (`committee_replay`): a live epoch transition amends the committee
-    // ON-CHAIN without changing the `federation_id`, so (a) the signed-anchor
-    // check below must accept an attested-root quorum from any committee the
-    // constitution passed through, and (b) the consensus boot must seed the
-    // AMENDED constitution — not genesis — or a restart silently reverts the
-    // membership (the re-roll trap). A lace with no membership blocks makes
-    // this a cheap no-op.
+    // Genesis reconstruction + boot-baseline persistence + recovery verdict —
+    // the shared boot-completion routine (F59-B; also used by `run_mcp`).
+    if let Err(e) = complete_boot_recovery(
+        &node_state,
+        &data_path,
+        enable_faucet,
+        blocklace_wave_timeout_ms,
+    )
+    .await
     {
-        let mut s = node_state.write().await;
-        let sk_bytes = s.cclerk.gossip_signing_key().to_bytes();
-        let sk = ed25519_dalek::SigningKey::from_bytes(&sk_bytes);
-        let self_key: [u8; 32] = sk.verifying_key().to_bytes();
-        let genesis_committee: Vec<[u8; 32]> = if s.known_federation_keys.is_empty() {
-            vec![self_key]
-        } else {
-            s.known_federation_keys.iter().map(|k| k.0).collect()
-        };
-        let q = dregg_blocklace::supermajority_threshold(genesis_committee.len());
-        match s.store.load_blocklace(sk, q) {
-            Ok(Some((lace, _))) => {
-                let (derived, cm) = committee_replay::derive_from_lace(
-                    &lace,
-                    &genesis_committee,
-                    blocklace_wave_timeout_ms,
-                );
-                if derived.amendments > 0 {
-                    info!(
-                        amendments = derived.amendments,
-                        version = derived.version,
-                        participants = derived.participants.len(),
-                        threshold = derived.threshold,
-                        "committee derived from chain: finalized membership \
-                         amendments survive this restart (no genesis re-roll)"
-                    );
-                    s.derived_committee_history = derived
-                        .history
-                        .iter()
-                        .map(|c| c.iter().map(|k| dregg_types::PublicKey(*k)).collect())
-                        .collect();
-                    // The on-chain membership blocklace records only ed25519 keys,
-                    // so a chain-derived historical committee has NO enrolled
-                    // ML-DSA roster: populate the aligned twin with an EMPTY roster
-                    // per entry. The restart hybrid re-verify then REFUSES a root
-                    // signed by such a committee (no silent ed25519-only downgrade,
-                    // per `verify_finalization_quorum`'s roster-alignment bound).
-                    s.derived_committee_ml_dsa_history =
-                        derived.history.iter().map(|_| Vec::new()).collect();
-                }
-                s.boot_constitution = Some(cm);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "could not load the persisted lace for boot committee derivation — \
-                     falling back to the configured (genesis) committee"
-                );
-            }
-        }
-    }
-
-    // Boot baseline persistence (emberian/dregg#59). On a boot whose commit log
-    // is still EMPTY (no finalized turn ever committed — a fresh node, or one
-    // rebooted before its first turn) and with no ledger checkpoint, the ledger
-    // as seeded above (genesis cells + `genesis_moves`, wells, faucet,
-    // starbridge seed cells) IS the boot baseline every future commit record's
-    // `ledger_root` will commit over. Save it durably so a restart BELOW the
-    // first periodic ledger checkpoint reconstructs — and crash-recovers — over
-    // the baseline instead of an empty base: the empty-base recovery walk
-    // falsely refuses a healthy sub-checkpoint image ("NO commit-log prefix
-    // reconstructs to its recorded root"). Overwriting during the commit-free
-    // window is sound (no recorded root constrains the baseline yet) and tracks
-    // seeding-config changes; once a turn commits, the saved baseline is frozen
-    // as exactly the one the records were committed over. Once a checkpoint
-    // exists, recovery starts from the checkpoint and the baseline is inert.
-    {
-        let s = node_state.read().await;
-        let commit_free = s.store.commit_cursor().unwrap_or(u64::MAX) == 0;
-        let no_checkpoint = matches!(s.store.load_latest_ledger_checkpoint(), Ok(None));
-        if commit_free && no_checkpoint {
-            match s.store.save_boot_baseline(&s.ledger) {
-                Ok(()) => info!(
-                    cells = s.ledger.len(),
-                    "boot baseline saved — sub-checkpoint restarts recover over it (#59)"
-                ),
-                Err(e) => warn!(
-                    error = %e,
-                    "failed to save the boot baseline; a sub-checkpoint restart of this \
-                     image may be refused until the first ledger checkpoint"
-                ),
-            }
-        }
-    }
-
-    // Recovery-convergence verdict (DEFERRED from NodeState construction). The
-    // genesis/baseline cells are now (re)seeded on top of the recovered
-    // commit-log overlay, so the in-memory ledger is the FULL finalized ledger
-    // (genesis ⊕ touched). Verify its canonical root equals the durably recorded
-    // finalized root. A node that finalized turns BELOW the first ledger
-    // checkpoint converges HERE (the genesis baseline restores the untouched
-    // cells the overlay can't carry) — it no longer fail-closes on a clean
-    // restart. A genuinely corrupt/divergent store STILL fails closed: reseeding
-    // is insert-if-absent and cannot paper over a tampered touched cell. FAIL
-    // CLOSED on mismatch — refuse to serve wrong state.
-    if let Err(e) = node_state.verify_recovery_convergence().await {
         error!("{e}");
         std::process::exit(1);
     }
@@ -1920,6 +1547,436 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// Complete boot recovery for a freshly constructed [`state::NodeState`] — the
+/// single routine EVERY production entry point must run before serving (F59-B:
+/// no runtime may expose a `NodeState` until recovery is complete and its
+/// canonical root equals the durable finalized root).
+///
+/// In order: load `genesis.json` when present (federation keys, wells,
+/// genesis cells + `genesis_moves`, starbridge seed cells), devnet starbridge
+/// backfill + demo lease (both `enable_faucet`-gated), chain-derived committee
+/// replay (so the signed-anchor verdict accepts amended committees), boot
+/// baseline persistence in the commit-free window (emberian/dregg#59), and
+/// finally the recovery-convergence verdict. `Err` ⇒ the caller MUST refuse
+/// to serve this state.
+pub(crate) async fn complete_boot_recovery(
+    node_state: &state::NodeState,
+    data_path: &std::path::Path,
+    enable_faucet: bool,
+    blocklace_wave_timeout_ms: u64,
+) -> Result<(), String> {
+    // Load genesis.json if present in the data directory.
+    let mut starbridge_seeded_from_genesis = false;
+    let genesis_path = data_path.join("genesis.json");
+    if genesis_path.exists() {
+        match std::fs::read_to_string(&genesis_path) {
+            Ok(json_str) => {
+                match serde_json::from_str::<serde_json::Value>(&json_str) {
+                    Ok(genesis) => {
+                        let mut s = node_state.write().await;
+                        // Set committee_epoch BEFORE loading keys so the
+                        // first federation_id derivation uses the correct
+                        // epoch.
+                        if let Some(ce) = genesis["committee_epoch"].as_u64() {
+                            s.committee_epoch = ce;
+                        }
+                        // Extract validator public keys from genesis — the
+                        // ed25519 committee AND (HYBRID-PQ) each member's
+                        // published ML-DSA-65 key, INDEX-ALIGNED. If ANY
+                        // validator lacks a decodable `ml_dsa_public_key`, the
+                        // whole ML-DSA vec is left empty: hybrid is then
+                        // unconfigured and the vote collector counts no votes
+                        // (fail-closed — never a partial/misaligned committee).
+                        if let Some(validators) = genesis["validators"].as_array() {
+                            let mut fed_keys = Vec::new();
+                            let mut ml_dsa_keys = Vec::new();
+                            let mut ml_dsa_complete = true;
+                            for v in validators {
+                                if let Some(pk_hex) = v["public_key"].as_str()
+                                    && let Some(pk_bytes) = hex_decode_32(pk_hex)
+                                {
+                                    fed_keys.push(dregg_types::PublicKey(pk_bytes));
+                                    match v["ml_dsa_public_key"]
+                                        .as_str()
+                                        .and_then(parse_ml_dsa_public_key)
+                                    {
+                                        Some(k) => ml_dsa_keys.push(k),
+                                        None => ml_dsa_complete = false,
+                                    }
+                                }
+                            }
+                            if !fed_keys.is_empty() {
+                                let ml_dsa_keys = if ml_dsa_complete {
+                                    ml_dsa_keys
+                                } else {
+                                    tracing::warn!(
+                                        "genesis.json is missing (or has undecodable) \
+                                         ml_dsa_public_key entries — HYBRID-PQ finality is \
+                                         UNCONFIGURED and finalization votes will not count \
+                                         (fail-closed); re-mint genesis to enable it"
+                                    );
+                                    Vec::new()
+                                };
+                                info!(
+                                    key_count = fed_keys.len(),
+                                    ml_dsa_keys = ml_dsa_keys.len(),
+                                    "loaded federation keys from genesis.json"
+                                );
+                                s.set_federation_keys_hybrid(fed_keys, ml_dsa_keys);
+                            }
+                        }
+                        // Verify the genesis-declared federation_id matches the
+                        // committee-derived id (audit F1: the writer of
+                        // genesis.json doesn't get to pick an arbitrary id).
+                        if let Some(declared_id) = genesis["federation_id"].as_str() {
+                            let derived = dregg_types::hex_encode(&s.federation_id);
+                            if declared_id != derived {
+                                tracing::warn!(
+                                    declared = %declared_id,
+                                    derived = %derived,
+                                    "genesis.json federation_id does not match committee-derived id (audit F1); using derived id",
+                                );
+                            }
+                        }
+                        // Extract threshold from genesis.
+                        if let Some(threshold) = genesis["threshold"].as_u64() {
+                            s.decryption_threshold = threshold as usize;
+                        }
+                        // Extract checkpoint interval from genesis.
+                        if let Some(ci) = genesis["checkpoint_interval"].as_u64() {
+                            s.checkpoint_interval = ci;
+                        }
+                        // Recovery ordering (the issuer-well fix): reconstruct
+                        // the genesis BASELINE first on a fresh ledger (the
+                        // `genesis_moves` replay EXACTLY ONCE over value-empty
+                        // cells), THEN re-apply the recovered commit-log overlay
+                        // so every bot-touched cell's FINALIZED post-state wins.
+                        // The old order (genesis reseed applied OVER the overlay)
+                        // re-credited every move RECIPIENT already in the overlay
+                        // — a double-credit that diverged the reconstructed root.
+                        let cell_load = reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+                        if cell_load.total() > 0 {
+                            info!(
+                                inserted = cell_load.inserted,
+                                existing = cell_load.existing,
+                                skipped = cell_load.skipped,
+                                invalid = cell_load.invalid,
+                                "processed genesis initial_cells"
+                            );
+                        }
+                        // THE EPOCH §5: pick up the genesis wells so every
+                        // executor (configure_turn_executor) runs fees and
+                        // burns as exact MOVES.
+                        if let Some(fee_well_hex) = genesis["fee_well"].as_str() {
+                            match hex_decode_32(fee_well_hex) {
+                                Some(id) => s.fee_well = Some(dregg_cell::CellId(id)),
+                                None => tracing::warn!(
+                                    "genesis fee_well is not a 32-byte hex cell id; fees will burn"
+                                ),
+                            }
+                        }
+                        if let Some(issuer_well_hex) = genesis["issuer_well"].as_str() {
+                            match hex_decode_32(issuer_well_hex) {
+                                // The devnet issuer well backs the DEFAULT
+                                // asset (all-zero token domain).
+                                Some(id) => {
+                                    s.issuer_wells.push(([0u8; 32], dregg_cell::CellId(id)))
+                                }
+                                None => tracing::warn!(
+                                    "genesis issuer_well is not a 32-byte hex cell id; burns stay non-conserving"
+                                ),
+                            }
+                        }
+                        let federation_id = s.federation_id;
+                        let operator_pubkey = s.cclerk.public_key().0;
+                        let seed_stats =
+                            starbridge_seed::seed_starbridge_factory_cells_with_operator(
+                                &genesis,
+                                &data_path,
+                                &mut s.ledger,
+                                federation_id,
+                                Some(operator_pubkey),
+                            );
+                        if seed_stats.total() > 0 {
+                            starbridge_seeded_from_genesis = true;
+                            info!(
+                                registered = seed_stats.registered_factories,
+                                created = seed_stats.created,
+                                existing = seed_stats.existing,
+                                skipped = seed_stats.skipped,
+                                failed = seed_stats.failed,
+                                "processed genesis starbridge_cells"
+                            );
+                        }
+                        info!(genesis = %genesis_path.display(), "genesis configuration loaded");
+                    }
+                    Err(e) => {
+                        error!(error = %e, "failed to parse genesis.json");
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "failed to read genesis.json");
+            }
+        }
+    }
+
+    // Starbridge devnet backfill — idempotent on every boot. A devnet data dir
+    // that predates the starbridge seed (no genesis.json at all, or one without
+    // `starbridge_cells`) gains the default poll/bounty/nameservice/... factory
+    // cells on restart, insert-if-absent exactly like `materialize_genesis_cells`.
+    // Gated on `--enable-faucet` (the explicit devnet switch); production nodes
+    // seed only through genesis.
+    if enable_faucet && !starbridge_seeded_from_genesis {
+        let mut s = node_state.write().await;
+        let federation_id = s.federation_id;
+        let operator_pubkey = s.cclerk.public_key().0;
+        let stats = starbridge_seed::seed_default_starbridge_cells_devnet(
+            &data_path,
+            &mut s.ledger,
+            federation_id,
+            Some(operator_pubkey),
+        );
+        if stats.total() > 0 {
+            info!(
+                registered = stats.registered_factories,
+                created = stats.created,
+                existing = stats.existing,
+                skipped = stats.skipped,
+                failed = stats.failed,
+                "starbridge devnet backfill seeding complete (default cell set)"
+            );
+        }
+    }
+
+    // Demo execution-lease seed — the local-cloud loop's mint. An external
+    // provider decodes a lease off `GET /api/cell/{id}` only when the cell is
+    // program-bearing with the lease slots sealed (RENT/PERIOD/PROVIDER) and a
+    // funded balance — and program install is not a wire effect, so no HTTP
+    // client can create one. Dev-gated twice (`--enable-faucet` AND
+    // `DREGG_SEED_DEMO_LEASE=1`); insert-if-absent on every boot.
+    //
+    // FEDERATION-WIDE by construction: both the lease cell and its provider
+    // (rent beneficiary) derive from the FEDERATION_ID, not from this node's
+    // operator key. Every validator in the federation therefore seeds the
+    // IDENTICAL pair — same ids, same program, same sealed slots — so a
+    // settlement turn ordered by consensus applies on every replica. (Keying
+    // them off the per-node operator instead gave each validator its own private
+    // lease: consensus ran, but the workload was node-local state that the other
+    // replicas had never heard of.) The balance IS the prepaid budget the
+    // provider meters against; rent 1 per 60-block period, open-ended.
+    if enable_faucet && std::env::var("DREGG_SEED_DEMO_LEASE").as_deref() == Ok("1") {
+        use starbridge_execution_lease as lease_app;
+        let mut s = node_state.write().await;
+        let operator_pubkey = s.cclerk.public_key().0;
+        let native = [0u8; 32];
+        let federation_id = s.federation_id;
+        // The LEASE is OPERATOR-OWNED (per-node). The metered settlement is a plain
+        // operator-signed Transfer FROM the lease, so the operator must OWN it — a
+        // lease owned by some other key refuses the transfer ("Ed25519 signature
+        // half failed"). This makes the lease node-local; a genuinely
+        // federation-wide lease whose rent settles on every replica needs the
+        // lease PROGRAM's metered discharge (pay/advance) instead of a plain
+        // operator Transfer, which is a real integration step — see
+        // docs/FINDING-federation-wide-settlement.md.
+        let lease_pubkey = operator_pubkey;
+        // The PROVIDER (rent beneficiary) IS federation-wide: a real Ed25519 key
+        // derived deterministically from the federation id, so every replica seeds
+        // the identical cell and a settlement Transfer credits a cell they all hold.
+        let provider_pubkey = ed25519_dalek::SigningKey::from_bytes(&blake3::derive_key(
+            "dregg-demo-lease-provider-v1",
+            &federation_id,
+        ))
+        .verifying_key()
+        .to_bytes();
+        let lease_id = dregg_cell::CellId::derive_raw(&lease_pubkey, &native);
+        let provider_cell = dregg_cell::CellId::derive_raw(&provider_pubkey, &native);
+        if s.ledger.get(&lease_id).is_none() {
+            let operator_cell = dregg_cell::CellId::derive_raw(
+                &operator_pubkey,
+                blake3::hash(b"default").as_bytes(),
+            );
+            // The rent beneficiary — seeded empty, identical on every replica, so
+            // the metered settlement Transfer credits a cell all replicas hold.
+            if s.ledger.get(&provider_cell).is_none() {
+                let pcell = dregg_cell::Cell::with_balance(provider_pubkey, native, 0);
+                if let Err(e) = s.ledger.insert_cell(pcell) {
+                    warn!(error = %e, "demo lease provider cell insert failed");
+                }
+            }
+            let mut cell = dregg_cell::Cell::with_balance(lease_pubkey, native, 10_000);
+            cell.program = lease_app::lease_cell_program();
+            let terms = lease_app::LeaseTerms::new(
+                provider_cell,
+                lease_id,
+                dregg_cell::CellId(native),
+                1,
+                60,
+                0,
+                0,
+            );
+            match lease_app::open_lease(&mut cell, &terms, lease_app::field_from_u64(0)) {
+                Ok(()) => match s.ledger.insert_cell(cell) {
+                    Ok(id) => {
+                        // Give the operator c-list reach + set_state on the lease
+                        // so it can author the exec-lease GRANT turn an external
+                        // provider's verified read decodes (same as the starbridge
+                        // seeder does for its factory cells).
+                        starbridge_seed::grant_operator_reach(
+                            &mut s.ledger,
+                            operator_cell,
+                            operator_pubkey,
+                            id,
+                        );
+                        info!(
+                            lease = %dregg_types::hex_encode(&id.0),
+                            provider = %dregg_types::hex_encode(&provider_cell.0),
+                            budget = 10_000,
+                            "seeded demo execution-lease (funded, federation-wide, operator-reachable)"
+                        );
+                    }
+                    Err(e) => warn!(error = %e, "demo execution-lease insert failed"),
+                },
+                Err(e) => warn!(error = ?e, "demo execution-lease open refused"),
+            }
+        }
+    }
+
+    // Derive the committee from the persisted chain BEFORE the recovery anchor
+    // runs (`committee_replay`): a live epoch transition amends the committee
+    // ON-CHAIN without changing the `federation_id`, so (a) the signed-anchor
+    // check below must accept an attested-root quorum from any committee the
+    // constitution passed through, and (b) the consensus boot must seed the
+    // AMENDED constitution — not genesis — or a restart silently reverts the
+    // membership (the re-roll trap). A lace with no membership blocks makes
+    // this a cheap no-op.
+    {
+        let mut s = node_state.write().await;
+        let sk_bytes = s.cclerk.gossip_signing_key().to_bytes();
+        let sk = ed25519_dalek::SigningKey::from_bytes(&sk_bytes);
+        let self_key: [u8; 32] = sk.verifying_key().to_bytes();
+        let genesis_committee: Vec<[u8; 32]> = if s.known_federation_keys.is_empty() {
+            vec![self_key]
+        } else {
+            s.known_federation_keys.iter().map(|k| k.0).collect()
+        };
+        let q = dregg_blocklace::supermajority_threshold(genesis_committee.len());
+        match s.store.load_blocklace(sk, q) {
+            Ok(Some((lace, _))) => {
+                let (derived, cm) = committee_replay::derive_from_lace(
+                    &lace,
+                    &genesis_committee,
+                    blocklace_wave_timeout_ms,
+                );
+                if derived.amendments > 0 {
+                    info!(
+                        amendments = derived.amendments,
+                        version = derived.version,
+                        participants = derived.participants.len(),
+                        threshold = derived.threshold,
+                        "committee derived from chain: finalized membership \
+                         amendments survive this restart (no genesis re-roll)"
+                    );
+                    s.derived_committee_history = derived
+                        .history
+                        .iter()
+                        .map(|c| c.iter().map(|k| dregg_types::PublicKey(*k)).collect())
+                        .collect();
+                    // The on-chain membership blocklace records only ed25519 keys,
+                    // so a chain-derived historical committee has NO enrolled
+                    // ML-DSA roster: populate the aligned twin with an EMPTY roster
+                    // per entry. The restart hybrid re-verify then REFUSES a root
+                    // signed by such a committee (no silent ed25519-only downgrade,
+                    // per `verify_finalization_quorum`'s roster-alignment bound).
+                    s.derived_committee_ml_dsa_history =
+                        derived.history.iter().map(|_| Vec::new()).collect();
+                }
+                s.boot_constitution = Some(cm);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not load the persisted lace for boot committee derivation — \
+                     falling back to the configured (genesis) committee"
+                );
+            }
+        }
+    }
+
+    // Boot baseline persistence (emberian/dregg#59). On a boot whose commit log
+    // is still EMPTY (no finalized turn ever committed — a fresh node, or one
+    // rebooted before its first turn) and with no ledger checkpoint, the ledger
+    // as seeded above (genesis cells + `genesis_moves`, wells, faucet,
+    // starbridge seed cells) IS the boot baseline every future commit record's
+    // `ledger_root` will commit over. Save it durably so a restart BELOW the
+    // first periodic ledger checkpoint reconstructs — and crash-recovers — over
+    // the baseline instead of an empty base: the empty-base recovery walk
+    // falsely refuses a healthy sub-checkpoint image ("NO commit-log prefix
+    // reconstructs to its recorded root"). Overwriting during the commit-free
+    // window is sound (no recorded root constrains the baseline yet) and tracks
+    // seeding-config changes; once a turn commits, the saved baseline is frozen
+    // as exactly the one the records were committed over. Once a checkpoint
+    // exists, recovery starts from the checkpoint and the baseline is inert.
+    {
+        let s = node_state.read().await;
+        let commit_free = s.store.commit_cursor().unwrap_or(u64::MAX) == 0;
+        let no_checkpoint = matches!(s.store.load_latest_ledger_checkpoint(), Ok(None));
+        if commit_free && no_checkpoint {
+            match s.store.save_boot_baseline(&s.ledger) {
+                Ok(()) => info!(
+                    cells = s.ledger.len(),
+                    "boot baseline saved — sub-checkpoint restarts recover over it (#59)"
+                ),
+                Err(e) => warn!(
+                    error = %e,
+                    "failed to save the boot baseline; a sub-checkpoint restart of this \
+                     image may be refused until the first ledger checkpoint"
+                ),
+            }
+        }
+    }
+
+    // Recovery-convergence verdict (DEFERRED from NodeState construction). The
+    // genesis/baseline cells are now (re)seeded on top of the recovered
+    // commit-log overlay, so the in-memory ledger is the FULL finalized ledger
+    // (genesis ⊕ touched). Verify its canonical root equals the durably recorded
+    // finalized root. A node that finalized turns BELOW the first ledger
+    // checkpoint converges HERE (the genesis baseline restores the untouched
+    // cells the overlay can't carry) — it no longer fail-closes on a clean
+    // restart. A genuinely corrupt/divergent store STILL fails closed: reseeding
+    // is insert-if-absent and cannot paper over a tampered touched cell. FAIL
+    // CLOSED on mismatch — refuse to serve wrong state.
+    node_state.verify_recovery_convergence().await
+}
+
+/// Boot the `NodeState` for MCP stdio mode: construction plus the SAME boot
+/// completion the HTTP runtime performs (F59-B — a production entry point must
+/// never serve an incompletely recovered `NodeState`). `Err` ⇒ refuse to serve.
+pub(crate) async fn mcp_boot(
+    data_path: &std::path::Path,
+    peers: Vec<String>,
+) -> Result<state::NodeState, String> {
+    let node_state = state::NodeState::new(data_path, peers)?;
+    // The same completion `run_node` performs: genesis reseed + starbridge
+    // seeding (faucet-gated pieces off — MCP has no faucet switch), boot
+    // baseline persistence, committee replay, and the recovery-convergence
+    // verdict. Without this, a pre-#59 sub-checkpoint store was served as its
+    // bare touched-cell delta.
+    complete_boot_recovery(
+        &node_state,
+        data_path,
+        false,
+        DEFAULT_BLOCKLACE_WAVE_TIMEOUT_MS,
+    )
+    .await?;
+    Ok(node_state)
+}
+
+/// The `--blocklace-wave-timeout-ms` CLI default, shared with entry points
+/// that take no such flag (MCP stdio mode).
+const DEFAULT_BLOCKLACE_WAVE_TIMEOUT_MS: u64 = 10_000;
+
 /// Run the MCP server: initialize node state and serve over stdio.
 async fn run_mcp(data_dir: &str, peers: Vec<String>) {
     let data_path = expand_path(data_dir);
@@ -1932,7 +1989,7 @@ async fn run_mcp(data_dir: &str, peers: Vec<String>) {
         std::process::exit(1);
     }
 
-    let node_state = match state::NodeState::new(&data_path, peers) {
+    let node_state = match mcp_boot(&data_path, peers).await {
         Ok(s) => s,
         Err(e) => {
             error!("failed to initialize node state: {e}");

@@ -111,6 +111,20 @@ pub fn canonical_ledger_root_from_leaves(entries: &[([u8; 32], [u8; 32])]) -> [u
     *hasher.finalize().as_bytes()
 }
 
+/// The message marker carried by the `recover_to_last_consistent*` refusal
+/// when NO commit-log prefix reconstructs to its recorded root.
+///
+/// This is the ONE recovery failure that is ambiguous on a checkpoint-less
+/// store with no saved boot baseline: a genesis-seeded pre-#59 image can never
+/// converge over an empty base, so node boot may defer exactly this case to
+/// the post-reseed convergence verdict (F59-A). Every other recovery error —
+/// serialization, database, structural incompleteness — is authoritative and
+/// must refuse boot. Matching this constant (under
+/// [`StoreError::Integrity`]) is the supported way to detect the ambiguous
+/// case; matching on the variant alone is too broad.
+pub const RECOVERY_NO_CONVERGING_PREFIX: &str =
+    "NO commit-log prefix reconstructs to its recorded root";
+
 /// Errors that can occur during store operations.
 #[derive(Debug)]
 pub enum StoreError {

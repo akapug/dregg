@@ -580,7 +580,22 @@ impl PersistentStore {
         if cursor == 0 {
             return Ok(None);
         }
-        Ok(self.commit_record_at(cursor - 1)?.map(|r| r.ledger_root))
+        // F59-A: with the cursor ABOVE the compaction floor the head record
+        // must be live — its absence is structural corruption, not a fresh
+        // store. `None` here let a gutted commit log read as "nothing to
+        // converge to" and pass the boot verdict. A FULLY COMPACTED store
+        // (`cursor <= floor`: a covering checkpoint subsumed the head) has
+        // legally no live head and keeps returning `None`. Mirrors
+        // `recovered_block_cursor`'s missing-head classification.
+        match self.commit_record_at(cursor - 1)? {
+            Some(rec) => Ok(Some(rec.ledger_root)),
+            None if cursor <= self.commit_compacted_floor()? => Ok(None),
+            None => Err(StoreError::Integrity(format!(
+                "recovered_ledger_root: cursor {cursor} is above the compaction floor but \
+                 no record exists at {} — structural corruption",
+                cursor - 1
+            ))),
+        }
     }
 
     /// The finalized HEIGHT the node converged to: the `height` of the last
@@ -593,7 +608,18 @@ impl PersistentStore {
         if cursor == 0 {
             return Ok(None);
         }
-        Ok(self.commit_record_at(cursor - 1)?.map(|r| r.height))
+        // Missing-head classification mirrors `recovered_ledger_root` (F59-A):
+        // `None` above the compaction floor would silently skip the NODE-2
+        // anti-rollback comparison; a fully compacted head stays `None`.
+        match self.commit_record_at(cursor - 1)? {
+            Some(rec) => Ok(Some(rec.height)),
+            None if cursor <= self.commit_compacted_floor()? => Ok(None),
+            None => Err(StoreError::Integrity(format!(
+                "recovered_head_height: cursor {cursor} is above the compaction floor but \
+                 no record exists at {} — structural corruption",
+                cursor - 1
+            ))),
+        }
     }
 
     /// The last-writer-wins overlay of cell post-states committed since the most
@@ -1253,6 +1279,7 @@ impl PersistentStore {
         // Scan the live log in ordinal order, applying each record's touched cells
         // and remembering the last ordinal whose running root matches its claim.
         let mut last_good: Option<u64> = None;
+        let mut live_records: u64 = 0;
         {
             let read_txn = self.db.begin_read()?;
             let log = read_txn.open_table(tables::COMMIT_LOG)?;
@@ -1260,6 +1287,7 @@ impl PersistentStore {
                 let entry =
                     entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
                 let ordinal = entry.0.value();
+                live_records += 1;
                 let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
                 // Apply this record's touched cells last-writer-wins. A record above
                 // the checkpoint contributes the overlay; one at/below it merely
@@ -1277,16 +1305,33 @@ impl PersistentStore {
             }
         }
 
+        // STRUCTURAL check (F59-A): the live log must be DENSE in
+        // `[floor, cursor)` — compaction only ever removes at/below the floor
+        // and truncation regresses the cursor, so a gap (or a record past the
+        // cursor) is tampering/corruption, never a torn tail. This must be
+        // classified as its own integrity failure, NOT the ambiguous
+        // no-converging-prefix refusal below: an empty walk over missing
+        // records would otherwise masquerade as the deferrable baseline
+        // ambiguity and a structurally gutted store could read as fresh.
+        let expected = cursor - floor;
+        if live_records != expected {
+            return Err(StoreError::Integrity(format!(
+                "recover_to_last_consistent: commit log holds {live_records} live record(s) \
+                 where the cursor/floor claim {expected} — records are missing (or extra) in \
+                 [{floor}, {cursor}): structural corruption, refusing recovery"
+            )));
+        }
+
         // The new cursor: one past the last converging ordinal. If NOTHING
         // converged, the entire live log is divergent — there is no salvageable
         // last-good point in the records (the caller must start fresh; we do not
         // silently empty the log here, that is the caller's explicit choice).
         let Some(last_good) = last_good else {
-            return Err(StoreError::Integrity(
-                "recover_to_last_consistent: NO commit-log prefix reconstructs to its recorded \
-                 root — the image cannot be salvaged to a last-good point (start fresh)"
-                    .to_string(),
-            ));
+            return Err(StoreError::Integrity(format!(
+                "recover_to_last_consistent: {} — the image cannot be salvaged to a \
+                 last-good point (start fresh)",
+                crate::RECOVERY_NO_CONVERGING_PREFIX
+            )));
         };
         let new_cursor = last_good + 1;
         if new_cursor == cursor {

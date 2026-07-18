@@ -272,6 +272,25 @@ impl PersistentStore {
     /// baseline is exactly the one the recorded roots were committed over,
     /// immune to later seeding-config drift.
     pub fn save_boot_baseline(&self, ledger: &Ledger) -> Result<()> {
+        // F59-C: the freeze is enforced AT THE PERSISTENCE BOUNDARY, not by
+        // caller convention. Once a turn has committed, the recorded roots
+        // depend on the exact saved baseline; once a checkpoint exists,
+        // recovery starts from the checkpoint and a rewritten baseline could
+        // only shadow it. Either way an overwrite is refused.
+        if self.commit_cursor()? > 0 {
+            return Err(StoreError::Integrity(
+                "save_boot_baseline: the boot baseline is FROZEN once a turn has committed \
+                 (recorded roots were committed over it) — refusing the overwrite"
+                    .to_string(),
+            ));
+        }
+        if self.load_latest_ledger_checkpoint()?.is_some() {
+            return Err(StoreError::Integrity(
+                "save_boot_baseline: a ledger checkpoint exists — recovery starts from the \
+                 checkpoint and the boot baseline is frozen, refusing the overwrite"
+                    .to_string(),
+            ));
+        }
         let snapshot = ledger_to_checkpoint(ledger, 0);
         let bytes =
             postcard::to_stdvec(&snapshot).map_err(|e| StoreError::Serialization(e.to_string()))?;
@@ -469,5 +488,51 @@ mod boot_baseline_tests {
         later.insert_cell(cell(0xf3, 42)).unwrap();
         store.save_boot_baseline(&later).unwrap();
         assert_eq!(store.load_boot_baseline().unwrap().unwrap().len(), 4);
+    }
+
+    /// **F59-C boundary.** Once a turn has committed (or a checkpoint exists),
+    /// the baseline is FROZEN — it is exactly the one the recorded roots were
+    /// committed over, so the persistence layer itself refuses an overwrite
+    /// (the invariant is enforced where the data lives, not by caller
+    /// convention).
+    #[test]
+    fn boot_baseline_save_refused_once_frozen() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let mut baseline = Ledger::new();
+        baseline.insert_cell(cell(0xf0, 1_000)).unwrap();
+        store.save_boot_baseline(&baseline).unwrap();
+
+        // A turn commits over the baseline: frozen from here on.
+        let mut ledger = baseline.clone();
+        let touched = cell(0x10, 7);
+        ledger.insert_cell(touched.clone()).unwrap();
+        let rec = crate::CommitRecord {
+            ordinal: 0,
+            height: 1,
+            block_id: [0u8; 32],
+            block_executed_up_to: 0,
+            turn_hash: [0xc1; 32],
+            creator: [0u8; 32],
+            receipt_hash: [0xc2; 32],
+            ledger_root: crate::canonical_ledger_root(&ledger),
+            touched_cells: vec![touched],
+        };
+        store.commit_finalized_turn(0, &rec).unwrap();
+
+        assert!(
+            store.save_boot_baseline(&ledger).is_err(),
+            "a committed-over baseline must be immutable at the persistence boundary"
+        );
+        // The frozen baseline is untouched.
+        assert_eq!(store.load_boot_baseline().unwrap().unwrap().len(), 1);
+
+        // A checkpoint alone also freezes it (recovery starts from the
+        // checkpoint; a mutated baseline could silently shadow it).
+        let store2 = PersistentStore::open_in_memory().unwrap();
+        store2.checkpoint_ledger(&baseline, 1).unwrap();
+        assert!(
+            store2.save_boot_baseline(&baseline).is_err(),
+            "a checkpointed store must refuse a boot-baseline write"
+        );
     }
 }
