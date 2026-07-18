@@ -721,10 +721,25 @@ impl PersistentStore {
     /// incrementally, but this method re-derives it from the log + removal
     /// table so recovery never trusts the (rebuildable) index for correctness.
     ///
-    /// A removal at/below the checkpoint height contributes nothing (the
+    /// A removal at/below the checkpoint cut contributes nothing (the
     /// checkpoint already lacks the cell), exactly like a post-state there.
+    ///
+    /// # The cut (RSA-3, cross-family refutation of 0396015ac)
+    ///
+    /// The commit log supports MULTIPLE records at one height (normal for
+    /// ROUTE-level turns), so a height-only boundary is ambiguous: a record
+    /// committed at the SAME height AFTER the checkpoint was taken would be
+    /// skipped — hiding, e.g., a removal of a checkpoint-held cell
+    /// (resurrection). Checkpoints written by current code therefore pin their
+    /// exact COVERED COMMIT ORDINAL
+    /// ([`PersistentStore::ledger_checkpoint_covered_ordinal`]), and when the
+    /// checkpoint at `checkpoint_height` carries one, the overlay cuts by
+    /// ORDINAL: every record with `ordinal >= covered` applies regardless of
+    /// height. Pre-RSA-3 checkpoints (no recorded ordinal) fall back to the
+    /// legacy height cut.
     pub fn cell_overlay_since(&self, checkpoint_height: u64) -> Result<CellOverlay> {
         use std::collections::HashMap;
+        let covered = self.ledger_checkpoint_covered_ordinal(checkpoint_height)?;
         let read_txn = self.db.begin_read()?;
         let log = read_txn.open_table(tables::COMMIT_LOG)?;
         let removed_tbl = open_removed_ro(&read_txn)?;
@@ -738,7 +753,13 @@ impl PersistentStore {
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
             let ordinal = entry.0.value();
             let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
-            if record.height <= checkpoint_height {
+            let in_checkpoint = match covered {
+                // The exact cut: the checkpoint folds in ordinals < covered.
+                Some(covered) => ordinal < covered,
+                // Legacy height cut for checkpoints without a recorded ordinal.
+                None => record.height <= checkpoint_height,
+            };
+            if in_checkpoint {
                 continue;
             }
             for cell in record.touched_cells {
@@ -2475,6 +2496,107 @@ mod tests {
         assert!(store.verify_index_agrees_with_log().unwrap().ok());
     }
 
+    /// RSA-3 (cross-family refutation of 0396015ac) — the SAME-HEIGHT
+    /// checkpoint-cut probe: the commit log supports multiple records at one
+    /// height (normal for ROUTE-level turns), but a height-only overlay cut
+    /// (`record.height <= H` skipped) hides a removal committed at the SAME
+    /// height AFTER the checkpoint was taken — the checkpointed cell
+    /// resurrects. The checkpoint must record the commit ordinal it covers
+    /// (the cursor at checkpoint time) and the overlay must cut by ORDINAL.
+    /// Includes remove → recreate → remove across successive same-height cuts.
+    #[test]
+    fn same_height_removal_after_the_checkpoint_cut_is_not_skipped() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let doomed = cell(0x61, 500);
+        let doomed_id = doomed.id();
+
+        // Reconstruct exactly as recovery does: latest checkpoint ⊕ overlay.
+        let reconstruct = |store: &PersistentStore| -> Ledger {
+            let cp_h = store.latest_ledger_checkpoint_height().unwrap();
+            let mut ledger = store
+                .load_ledger_checkpoint_at(cp_h)
+                .unwrap()
+                .expect("checkpoint");
+            let overlay = store.cell_overlay_since(cp_h).unwrap();
+            for c in overlay.cells {
+                let _ = ledger.remove(&c.id());
+                let _ = ledger.insert_cell(c);
+            }
+            for id in overlay.removed {
+                let _ = ledger.remove(&id);
+            }
+            ledger
+        };
+
+        // Ordinal 0 at height 1 creates the cell; the checkpoint is taken NOW
+        // (covering ordinals [0, 1)) at that same height, exactly as a live
+        // node checkpoints its current ledger.
+        let mut rec0 = record(0, 0, vec![doomed.clone()]);
+        rec0.height = 1;
+        rec0.turn_hash[1] = 0xc1;
+        store.commit_finalized_turn(0, &rec0).unwrap();
+        let mut cp = Ledger::new();
+        cp.insert_cell(doomed.clone()).unwrap();
+        store
+            .store_ledger_checkpoint_snapshot(&crate::ledger_store::LedgerCheckpoint {
+                height: 1,
+                cells: cp.iter().map(|(_, c)| c.clone()).collect(),
+                sovereign_commitments: Vec::new(),
+                sovereign_registrations: Vec::new(),
+            })
+            .unwrap();
+
+        // Ordinal 1 REMOVES the cell at the SAME height 1 (a later same-height
+        // commit — supported by the log model, after the checkpoint cut).
+        let mut rec1 = record(1, 1, Vec::new());
+        rec1.height = 1;
+        rec1.turn_hash[1] = 0xc2;
+        store
+            .commit_finalized_turn_with_removals(1, &rec1, &[doomed_id])
+            .unwrap();
+
+        let ledger = reconstruct(&store);
+        assert!(
+            ledger.get(&doomed_id).is_none(),
+            "a same-height removal at the ordinal AFTER the checkpoint cut \
+             must NOT be hidden by a height-only overlay boundary (RSA-3)"
+        );
+
+        // remove → recreate → remove across a SECOND same-height cut: ordinal
+        // 2 recreates at height 1; a fresh checkpoint (covering [0, 3)) is
+        // taken; ordinal 3 removes again at height 1. Reconstruction must see
+        // the LAST event (removed), not the checkpoint's recreated cell.
+        let recreated = cell(0x61, 900);
+        let mut rec2 = record(2, 2, vec![recreated.clone()]);
+        rec2.height = 1;
+        rec2.turn_hash[1] = 0xc3;
+        store.commit_finalized_turn(2, &rec2).unwrap();
+        let mut cp2 = Ledger::new();
+        cp2.insert_cell(recreated).unwrap();
+        store
+            .store_ledger_checkpoint_snapshot(&crate::ledger_store::LedgerCheckpoint {
+                height: 1,
+                cells: cp2.iter().map(|(_, c)| c.clone()).collect(),
+                sovereign_commitments: Vec::new(),
+                sovereign_registrations: Vec::new(),
+            })
+            .unwrap();
+        let mut rec3 = record(3, 3, Vec::new());
+        rec3.height = 1;
+        rec3.turn_hash[1] = 0xc4;
+        store
+            .commit_finalized_turn_with_removals(3, &rec3, &[doomed_id])
+            .unwrap();
+
+        let ledger = reconstruct(&store);
+        assert!(
+            ledger.get(&doomed_id).is_none(),
+            "remove → recreate → remove across the same-height cut: the final \
+             removal (ordinal past the second checkpoint's cut) must apply"
+        );
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+    }
+
     /// F4-A × recover_to_last_consistent: the per-ordinal consistency walk
     /// applies removals, so a GENUINE removal turn (whose recorded root lacks
     /// the removed cell) converges and is NEVER falsely truncated as
@@ -2621,9 +2743,14 @@ mod tests {
     /// `compact_below` explicitly to isolate it.
     fn checkpoint_from_log_no_codrive(store: &PersistentStore, height: u64) {
         let mut ledger = Ledger::new();
+        // The PARTIAL fold: only records with height <= `height` — so the
+        // covered commit ordinal is the exact prefix cut, NOT the current
+        // cursor (RSA-3: the covering variant pins the true cut).
+        let mut covered = 0u64;
         for rec in store.commit_records_from(0).unwrap() {
             if rec.height <= height {
                 let ordinal = rec.ordinal;
+                covered = covered.max(ordinal + 1);
                 for c in rec.touched_cells {
                     let _ = ledger.remove(&c.id());
                     let _ = ledger.insert_cell(c);
@@ -2642,7 +2769,9 @@ mod tests {
             sovereign_commitments: Vec::new(),
             sovereign_registrations: Vec::new(),
         };
-        store.store_ledger_checkpoint_snapshot(&snapshot).unwrap();
+        store
+            .store_ledger_checkpoint_snapshot_covering(&snapshot, covered)
+            .unwrap();
     }
 
     /// Commit `n` turns at heights 1..=n (record(k).height == k+1, so turn k

@@ -88,6 +88,20 @@ impl PersistentStore {
             if height >= current_latest {
                 meta.insert(tables::META_LATEST_LEDGER_CHECKPOINT_HEIGHT, height)?;
             }
+            // RSA-3: pin the exact commit-ordinal cut — the caller checkpoints
+            // the LIVE full ledger, which reflects every record committed so
+            // far, so the covered ordinal is the current commit cursor. Same
+            // transaction as the checkpoint itself (never torn).
+            let covered = meta
+                .get(tables::META_COMMIT_CURSOR)?
+                .map(|g| g.value())
+                .unwrap_or(0);
+            let key = format!(
+                "{}{}",
+                tables::META_LEDGER_CHECKPOINT_COVERED_PREFIX,
+                height
+            );
+            meta.insert(key.as_str(), covered)?;
         }
         write_txn.commit()?;
 
@@ -191,7 +205,35 @@ impl PersistentStore {
     /// snapshot) at its own height, updating the latest-checkpoint-height
     /// metadata. The counterpart to [`Self::checkpoint_ledger`] for a checkpoint
     /// the node did not compute locally.
+    ///
+    /// The checkpoint's COVERED COMMIT ORDINAL (RSA-3) is recorded as the
+    /// current commit cursor — correct for every caller that checkpoints a
+    /// ledger reflecting ALL committed records so far (the live-ledger shape:
+    /// the node, the starbridge World, a joiner installing a shipped
+    /// snapshot). A caller checkpointing a PARTIAL reconstruction must use
+    /// [`Self::store_ledger_checkpoint_snapshot_covering`] with the exact cut.
     pub fn store_ledger_checkpoint_snapshot(&self, snapshot: &LedgerCheckpoint) -> Result<()> {
+        self.store_checkpoint_snapshot_inner(snapshot, None)
+    }
+
+    /// [`Self::store_ledger_checkpoint_snapshot`] with an EXPLICIT covered
+    /// commit ordinal: the checkpoint folds in exactly the records with
+    /// `ordinal < covered_ordinal` (RSA-3 — the commit log supports several
+    /// records at one height, so a height alone cannot identify the cut;
+    /// `cell_overlay_since` cuts by this ordinal when present).
+    pub fn store_ledger_checkpoint_snapshot_covering(
+        &self,
+        snapshot: &LedgerCheckpoint,
+        covered_ordinal: u64,
+    ) -> Result<()> {
+        self.store_checkpoint_snapshot_inner(snapshot, Some(covered_ordinal))
+    }
+
+    fn store_checkpoint_snapshot_inner(
+        &self,
+        snapshot: &LedgerCheckpoint,
+        covered_ordinal: Option<u64>,
+    ) -> Result<()> {
         let serialized =
             postcard::to_stdvec(snapshot).map_err(|e| StoreError::Serialization(e.to_string()))?;
         let write_txn = self.db.begin_write()?;
@@ -210,9 +252,40 @@ impl PersistentStore {
                     snapshot.height,
                 )?;
             }
+            // RSA-3: pin the exact commit-ordinal cut this checkpoint covers,
+            // in the SAME transaction (default: the current cursor — every
+            // record committed so far is folded in).
+            let covered = match covered_ordinal {
+                Some(c) => c,
+                None => meta
+                    .get(tables::META_COMMIT_CURSOR)?
+                    .map(|g| g.value())
+                    .unwrap_or(0),
+            };
+            let key = format!(
+                "{}{}",
+                tables::META_LEDGER_CHECKPOINT_COVERED_PREFIX,
+                snapshot.height
+            );
+            meta.insert(key.as_str(), covered)?;
         }
         write_txn.commit()?;
         Ok(())
+    }
+
+    /// The COVERED COMMIT ORDINAL recorded for the checkpoint at `height`
+    /// (RSA-3): the checkpoint folds in exactly the records with
+    /// `ordinal < covered`. `None` for a checkpoint written by pre-RSA-3 code
+    /// (consumers fall back to the legacy height cut).
+    pub fn ledger_checkpoint_covered_ordinal(&self, height: u64) -> Result<Option<u64>> {
+        let read_txn = self.db.begin_read()?;
+        let meta = read_txn.open_table(tables::METADATA)?;
+        let key = format!(
+            "{}{}",
+            tables::META_LEDGER_CHECKPOINT_COVERED_PREFIX,
+            height
+        );
+        Ok(meta.get(key.as_str())?.map(|g| g.value()))
     }
 
     /// Install a set of overlay cell post-states into the cell-by-id index (the
