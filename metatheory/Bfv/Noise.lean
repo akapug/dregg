@@ -49,6 +49,10 @@ worth). This is the scalar-coefficient model:
 Pure. No axioms beyond the kernel triple.
 -/
 import Mathlib.Tactic.Linarith
+import Mathlib.Data.Nat.Log
+import Mathlib.Algebra.Order.BigOperators.Group.Finset
+import Mathlib.Algebra.BigOperators.Ring.Finset
+import Mathlib.Algebra.Order.Ring.Abs
 import Bfv.Params
 
 namespace Bfv
@@ -189,5 +193,360 @@ theorem decryptPhase_add_q (P : Params) (p : ℤ) :
 
 #assert_all_clean [Bfv.decrypt_exact, Bfv.decrypt_misses, Bfv.encrypt_noiseAt,
   Bfv.noiseAt_add, Bfv.abs_noise_add_le, Bfv.decryptPhase_add_q]
+
+/-! ## 6. T-composition (contract 2b): the iterated public-linear step, its compounding noise,
+and the PROVEN T ceiling.
+
+**The engine shape this covers** (`fhegg-fhe/src/convex_step.rs` → `convex_engine.rs`): one
+first-order iteration `x ← x − τ·A·x` is homomorphically `w_i = tauDen·x_i − tauNum·Σ_j A_ij·x_j`
+— public-scalar-muls plus adds, i.e. one ℤ-linear map on phases with step matrix
+`S = tauDen·I − tauNum·A`. A public-scalar-mul by `c` multiplies phase (hence noise) by exactly
+`c`; a row of adds compounds them. So T fully-homomorphic iterations multiply the worst-case
+noise bound by `G^T`, where `G` bounds every row's absolute sum of `S`
+(`G = tauDen + tauNum·‖A‖∞`, exported as `iterGrowth`). This section proves:
+
+  * **`iter_noise_le`** — the ACTUAL iterated linear map (phase model, `matVecCt`) has
+    per-component noise `≤ G^T·B` from fresh noise `≤ B`. Not a slogan: the phase algebra.
+  * **`noise_after_T` (SAFE SIDE)** — for `T ≤ iterCeiling P G B`, the accumulated bound
+    `G^T·B` satisfies `SafeNoise` — decryption after T iterations is provably exact
+    (`iter_decrypts_exact` composes this with `decrypt_exact`).
+  * **`T_gt_ceiling_fails` (FAILING SIDE, required)** — for `T > iterCeiling P G B`, the
+    accumulated bound PROVABLY EXCEEDS the margin: `¬ SafeNoise`. The ceiling is EXACT
+    (`safeNoise_iff_le_ceiling`), not conservative slack. Deployed pins: at `G = 3 =
+    iterGrowth 1 1 2` (τ = 1, `‖A‖∞ ≤ 2`), `B = 2^20`, the ceiling is **42**; the T = 43 check
+    is kernel-`decide`d FALSE, and the T = 43 noise budget already ADMITS the
+    `decrypt_misses` cliff phase (a wrong message decrypting cleanly).
+
+**THE EXPORTED CEILING FORMULA** (what `convex_engine.rs::max_iterations_for_params` computes):
+
+    G        = tau_den + tau_num · maxᵢ Σⱼ |A_ij|          (`iterGrowth`)
+    headroom = (q − 2·(t−1)·r − 1) / (2·t·B)               (`depthHeadroom`, integer division)
+    T_max    = floor(log_G headroom) = Nat.log G headroom  (`iterCeiling`)
+
+equivalently: the largest `T` with `iterMarginHolds P G B T = true` (`iterMargin_iff` proves the
+check and the log formula agree exactly). `B` is the fresh-noise bound (the `B_fresh ≈ 2^20`
+assumption, same status as everywhere in this file).
+
+**Honesty notes (the model, stated so the gaps are NAMED):**
+
+  * This bounds the **fully-homomorphic composition** (`tau_den = 1` integer-step path): T linear
+    steps between one encrypt and one decrypt, prox applied at the decrypt boundary. The
+    boundary-assisted path (decrypt–prox–re-encrypt each iteration) RESETS noise to fresh `B`
+    per segment; each segment then re-obeys this same ceiling with T = segment depth — strictly
+    inside this bound. Either way the ceiling governs homomorphic depth between boundaries.
+  * **Where the prox bound enters:** the prox clamp bounds the MESSAGE, not the noise — it
+    guarantees the decoded value stays inside the plaintext window (class C), which is the
+    `mi < P.t` hypothesis of `iter_decrypts_exact`. The noise margin (class A) is `G`/`B`/`T`'s
+    job; the two gates are separate and both appear in the end-to-end statement.
+  * **Mod-q correspondence for the iterated path:** the step is ℤ-linear in phases with public
+    integer coefficients, and mod-q reduction commutes with such maps; a hypothetical `±q` wrap
+    shifts the readout by a multiple of `t` (`decryptPhase_add_q`), erased by the final mod-t
+    readout. Same NAMED model gap as the fold path, no worse.
+  * Intermediate messages are SIGNED (`ℤ`, the centered encoding); the final readout hypothesis
+    takes the intended message as `mi : ℕ` — the centered encode/decode bijection
+    (`encode_signed`/`center`, Rust side) is a named correspondence gap, as in `Bfv.Mul`. -/
+
+/-- Noise relative to a SIGNED intended message — the iterated step's intermediate messages are
+signed (centered encoding). Agrees with `Ct.noiseAt` on ℕ messages definitionally. -/
+def Ct.noiseAtInt (c : Ct P) (m : ℤ) : ℤ := c.phase - (P.Δ : ℤ) * m
+
+@[simp] theorem noiseAtInt_natCast (c : Ct P) (m : ℕ) :
+    c.noiseAtInt (m : ℤ) = c.noiseAt m := rfl
+
+/-- Triangle for a difference: `|a − b| ≤ |a| + |b|` (local helper). -/
+theorem abs_sub_le_abs_add_abs (a b : ℤ) : |a - b| ≤ |a| + |b| := by
+  calc |a - b| = |a + -b| := by rw [sub_eq_add_neg]
+    _ ≤ |a| + |-b| := abs_add_le _ _
+    _ = |a| + |b| := by rw [abs_neg]
+
+/-- One homomorphic public-linear step on a ciphertext vector: component `i` of `S·x`, computed
+exactly as the Rust loop does — public-scalar-muls (`S i j` times a phase) plus adds. -/
+def matVecCt {n : ℕ} (S : Fin n → Fin n → ℤ) (x : Fin n → Ct P) : Fin n → Ct P :=
+  fun i => ⟨∑ j, S i j * (x j).phase⟩
+
+/-- The same linear step on the intended (clear) messages. -/
+def matVecMsg {n : ℕ} (S : Fin n → Fin n → ℤ) (m : Fin n → ℤ) : Fin n → ℤ :=
+  fun i => ∑ j, S i j * m j
+
+/-- `G` bounds every row's absolute sum — the operator ℓ∞ bound the ceiling is stated over. -/
+def RowBound {n : ℕ} (S : Fin n → Fin n → ℤ) (G : ℤ) : Prop :=
+  ∀ i, (∑ j, |S i j|) ≤ G
+
+/-- The step's noise is the SAME linear map applied to the input noises — exact phase algebra,
+the T-composition analog of `noiseAt_add`. -/
+theorem matVec_noiseAtInt {n : ℕ} (S : Fin n → Fin n → ℤ) (x : Fin n → Ct P)
+    (m : Fin n → ℤ) (i : Fin n) :
+    (matVecCt S x i).noiseAtInt (matVecMsg S m i)
+      = ∑ j, S i j * (x j).noiseAtInt (m j) := by
+  simp only [Ct.noiseAtInt, matVecCt, matVecMsg, mul_sub, Finset.sum_sub_distrib,
+    Finset.mul_sum]
+  congr 1
+  exact Finset.sum_congr rfl fun j _ => by ring
+
+/-- **One step multiplies the noise bound by ≤ G**: from noises `≤ N` to noises `≤ G·N`. -/
+theorem step_noise_le {n : ℕ} {S : Fin n → Fin n → ℤ} {G : ℤ} (hS : RowBound S G)
+    {x : Fin n → Ct P} {m : Fin n → ℤ} (N : ℤ) (hN : 0 ≤ N)
+    (h : ∀ j, |(x j).noiseAtInt (m j)| ≤ N) (i : Fin n) :
+    |(matVecCt S x i).noiseAtInt (matVecMsg S m i)| ≤ G * N := by
+  rw [matVec_noiseAtInt]
+  calc |∑ j, S i j * (x j).noiseAtInt (m j)|
+      ≤ ∑ j, |S i j * (x j).noiseAtInt (m j)| := Finset.abs_sum_le_sum_abs _ _
+    _ = ∑ j, |S i j| * |(x j).noiseAtInt (m j)| := by simp only [abs_mul]
+    _ ≤ ∑ j, |S i j| * N :=
+        Finset.sum_le_sum fun j _ => mul_le_mul_of_nonneg_left (h j) (abs_nonneg _)
+    _ = (∑ j, |S i j|) * N := (Finset.sum_mul _ _ _).symm
+    _ ≤ G * N := mul_le_mul_of_nonneg_right (hS i) hN
+
+/-- T iterations of the homomorphic linear step (the `convex_solve` loop body, phase model). -/
+def iterCt {n : ℕ} (S : Fin n → Fin n → ℤ) (T : ℕ) (x : Fin n → Ct P) : Fin n → Ct P :=
+  (matVecCt S)^[T] x
+
+/-- T iterations on the clear messages. -/
+def iterMsg {n : ℕ} (S : Fin n → Fin n → ℤ) (T : ℕ) (m : Fin n → ℤ) : Fin n → ℤ :=
+  (matVecMsg S)^[T] m
+
+theorem iterCt_succ {n : ℕ} (S : Fin n → Fin n → ℤ) (T : ℕ) (x : Fin n → Ct P) :
+    iterCt S (T + 1) x = matVecCt S (iterCt S T x) :=
+  Function.iterate_succ_apply' _ _ _
+
+theorem iterMsg_succ {n : ℕ} (S : Fin n → Fin n → ℤ) (T : ℕ) (m : Fin n → ℤ) :
+    iterMsg S (T + 1) m = matVecMsg S (iterMsg S T m) :=
+  Function.iterate_succ_apply' _ _ _
+
+/-- **The compounding law, proved on the model:** T iterations from fresh noise `≤ B` leave every
+component's noise `≤ G^T·B`. This is the theorem `noise_after_T`'s bound is ABOUT — the actual
+iterated phase map, not a free-floating formula. -/
+theorem iter_noise_le {n : ℕ} {S : Fin n → Fin n → ℤ} {G N : ℤ} (hS : RowBound S G)
+    (hG : 0 ≤ G) (hN : 0 ≤ N) {x : Fin n → Ct P} {m : Fin n → ℤ}
+    (h : ∀ j, |(x j).noiseAtInt (m j)| ≤ N) (T : ℕ) :
+    ∀ i, |(iterCt S T x i).noiseAtInt (iterMsg S T m i)| ≤ G ^ T * N := by
+  induction T with
+  | zero => simpa [iterCt, iterMsg] using h
+  | succ T ih =>
+    intro i
+    rw [iterCt_succ, iterMsg_succ]
+    have hstep := step_noise_le hS (G ^ T * N) (mul_nonneg (pow_nonneg hG T) hN) ih i
+    calc |(matVecCt S (iterCt S T x) i).noiseAtInt (matVecMsg S (iterMsg S T m) i)|
+        ≤ G * (G ^ T * N) := hstep
+      _ = G ^ (T + 1) * N := by ring
+
+/-! ### The growth factor, derived from τ and ‖A‖∞ (the exported `G`). -/
+
+/-- **The exported growth factor** `G = tauDen + tauNum·normA`: the per-iteration noise
+multiplier of the scaled step `w = tauDen·x − tauNum·A·x`. -/
+def iterGrowth (tauDen tauNum normA : ℕ) : ℕ := tauDen + tauNum * normA
+
+/-- The scaled step matrix `S = tauDen·I − tauNum·A` — exactly what `convex_linear_step`
+applies (`acc = tauDen·x_i`, then `c = −tauNum·A_ij` scalar-muls). -/
+def stepMatrix {n : ℕ} (tauDen tauNum : ℕ) (A : Fin n → Fin n → ℤ) :
+    Fin n → Fin n → ℤ :=
+  fun i j => (if i = j then (tauDen : ℤ) else 0) - (tauNum : ℤ) * A i j
+
+/-- The step matrix's rows are bounded by `iterGrowth`: `‖A‖∞ ≤ normA` gives
+`Σ_j |S i j| ≤ tauDen + tauNum·normA`. This derives the ceiling's `G` from τ and the norm of A. -/
+theorem stepMatrix_rowBound {n : ℕ} (tauDen tauNum normA : ℕ) (A : Fin n → Fin n → ℤ)
+    (hA : ∀ i, (∑ j, |A i j|) ≤ (normA : ℤ)) :
+    RowBound (stepMatrix tauDen tauNum A) ((iterGrowth tauDen tauNum normA : ℕ) : ℤ) := by
+  intro i
+  have hstep : ∀ j, |stepMatrix tauDen tauNum A i j|
+      ≤ (if i = j then (tauDen : ℤ) else 0) + (tauNum : ℤ) * |A i j| := by
+    intro j
+    refine (abs_sub_le_abs_add_abs _ _).trans ?_
+    have h1 : |if i = j then (tauDen : ℤ) else 0| = if i = j then (tauDen : ℤ) else 0 := by
+      split <;> simp
+    have h2 : |(tauNum : ℤ) * A i j| = (tauNum : ℤ) * |A i j| := by
+      rw [abs_mul, abs_of_nonneg (by positivity : (0 : ℤ) ≤ (tauNum : ℤ))]
+    rw [h1, h2]
+  calc (∑ j, |stepMatrix tauDen tauNum A i j|)
+      ≤ ∑ j, ((if i = j then (tauDen : ℤ) else 0) + (tauNum : ℤ) * |A i j|) :=
+        Finset.sum_le_sum fun j _ => hstep j
+    _ = (tauDen : ℤ) + (tauNum : ℤ) * ∑ j, |A i j| := by
+        rw [Finset.sum_add_distrib, Finset.mul_sum]
+        congr 1
+        simp
+    _ ≤ (tauDen : ℤ) + (tauNum : ℤ) * (normA : ℤ) := by
+        have := mul_le_mul_of_nonneg_left (hA i) (by positivity : (0 : ℤ) ≤ (tauNum : ℤ))
+        linarith
+    _ = ((iterGrowth tauDen tauNum normA : ℕ) : ℤ) := by
+        unfold iterGrowth
+        push_cast
+        ring
+
+/-! ### The ceiling: headroom, log formula, computable check — and their exact agreement. -/
+
+/-- The noise headroom: how many multiples of `B` fit inside the decrypt margin.
+`(q − 2(t−1)r − 1) / (2tB)`, integer division. -/
+def depthHeadroom (P : Params) (B : ℕ) : ℕ :=
+  (P.q - 2 * (P.t - 1) * P.r - 1) / (2 * P.t * B)
+
+/-- **THE PROVEN T CEILING (the export `max_iterations_for_params` computes):**
+`T_max = floor(log_G headroom)`. Safe at every `T ≤` this (`noise_after_T`); the margin check
+FAILS at every `T >` this (`T_gt_ceiling_fails`). -/
+def iterCeiling (P : Params) (G B : ℕ) : ℕ :=
+  Nat.log G (depthHeadroom P B)
+
+/-- The computable per-T margin check (the `marginHolds` analog with `K·B` replaced by the
+compounded `G^T·B`) — what a Rust gate evaluates before agreeing to iterate depth T. -/
+def iterMarginHolds (P : Params) (G B T : ℕ) : Bool :=
+  decide (2 * P.t * (G ^ T * B) + 2 * (P.t - 1) * P.r < P.q)
+
+/-- `SafeNoise` at a ℕ bound is exactly the ℕ-side margin inequality (the cast bridge). -/
+theorem safeNoise_natCast_iff (P : Params) (N : ℕ) :
+    SafeNoise P (N : ℤ) ↔ 2 * P.t * N + 2 * (P.t - 1) * P.r < P.q := by
+  have h1 : 1 ≤ P.t := P.t_pos
+  unfold SafeNoise
+  constructor
+  · intro h
+    zify [h1]
+    linarith
+  · intro h
+    zify [h1] at h
+    linarith
+
+/-- **The check and the log formula agree EXACTLY:** the margin holds at depth T iff
+`G^T ≤ depthHeadroom`. This is the equivalence that makes `iterCeiling` the true maximum, and
+lets the Rust side compute either form. -/
+theorem iterMargin_iff (P : Params) (G B T : ℕ) (hG : 0 < G) (hB : 0 < B) :
+    (2 * P.t * (G ^ T * B) + 2 * (P.t - 1) * P.r < P.q)
+      ↔ G ^ T ≤ depthHeadroom P B := by
+  have hd : 0 < 2 * P.t * B := by
+    have := P.t_pos
+    positivity
+  rw [depthHeadroom, Nat.le_div_iff_mul_le hd]
+  have hkey : 2 * P.t * (G ^ T * B) = G ^ T * (2 * P.t * B) := by ring
+  rw [hkey]
+  have hx : 0 < G ^ T * (2 * P.t * B) := Nat.mul_pos (Nat.pow_pos hG) hd
+  omega
+
+/-- Soundness of the computable check: `iterMarginHolds = true` implies the keystone hypothesis
+`SafeNoise` at the compounded bound. A gate on this check enforces a theorem's hypothesis. -/
+theorem iterMarginHolds_safe (P : Params) (G B T : ℕ)
+    (h : iterMarginHolds P G B T = true) :
+    SafeNoise P ((G : ℤ) ^ T * (B : ℤ)) := by
+  have hnat := of_decide_eq_true h
+  have hcast : ((G : ℤ) ^ T * (B : ℤ)) = ((G ^ T * B : ℕ) : ℤ) := by push_cast; ring
+  rw [hcast, safeNoise_natCast_iff]
+  exact hnat
+
+/-! ### The two contract theorems: safe up to the ceiling, FAILS one past it. -/
+
+/-- **`noise_after_T` (contract 2b, SAFE SIDE):** for any `T ≤ iterCeiling P G B`, the
+accumulated worst-case noise bound `G^T·B` after T iterations satisfies the decrypt margin.
+Hypothesis `h0` is depth-0 sanity (fresh noise `B` is itself inside the margin — if even that
+fails, no ceiling exists). Combined with `iter_noise_le` (the model's noise really is `≤ G^T·B`)
+and `decrypt_exact`, this closes the T-composition: see `iter_decrypts_exact`. -/
+theorem noise_after_T (P : Params) (G B T : ℕ) (hG : 2 ≤ G) (hB : 0 < B)
+    (h0 : 2 * P.t * B + 2 * (P.t - 1) * P.r < P.q)
+    (hT : T ≤ iterCeiling P G B) :
+    SafeNoise P ((G : ℤ) ^ T * (B : ℤ)) := by
+  have hG1 : 0 < G := by omega
+  have h00 : 2 * P.t * (G ^ 0 * B) + 2 * (P.t - 1) * P.r < P.q := by simpa using h0
+  have hH : 1 ≤ depthHeadroom P B := by
+    simpa using (iterMargin_iff P G B 0 hG1 hB).mp h00
+  have hlog : G ^ iterCeiling P G B ≤ depthHeadroom P B :=
+    Nat.pow_log_le_self G (by omega)
+  have hpow : G ^ T ≤ depthHeadroom P B :=
+    le_trans (Nat.pow_le_pow_right (by omega) hT) hlog
+  have hnat : 2 * P.t * (G ^ T * B) + 2 * (P.t - 1) * P.r < P.q :=
+    (iterMargin_iff P G B T hG1 hB).mpr hpow
+  have hcast : ((G : ℤ) ^ T * (B : ℤ)) = ((G ^ T * B : ℕ) : ℤ) := by push_cast; ring
+  rw [hcast, safeNoise_natCast_iff]
+  exact hnat
+
+/-- **`T_gt_ceiling_fails` (contract 2b, FAILING SIDE — required):** ONE PAST THE CEILING (any
+`T > iterCeiling P G B`), the accumulated bound `G^T·B` PROVABLY EXCEEDS the decrypt margin:
+`SafeNoise` is FALSE. A ceiling theorem without this direction would be vacuously loose (any
+under-estimate of `T_max` would satisfy it); with it, the ceiling is exact. -/
+theorem T_gt_ceiling_fails (P : Params) (G B T : ℕ) (hG : 2 ≤ G) (hB : 0 < B)
+    (hT : iterCeiling P G B < T) :
+    ¬ SafeNoise P ((G : ℤ) ^ T * (B : ℤ)) := by
+  have hcast : ((G : ℤ) ^ T * (B : ℤ)) = ((G ^ T * B : ℕ) : ℤ) := by push_cast; ring
+  rw [hcast, safeNoise_natCast_iff, iterMargin_iff P G B T (by omega) hB]
+  intro hle
+  have h1 : depthHeadroom P B < G ^ (iterCeiling P G B + 1) :=
+    Nat.lt_pow_succ_log_self (by omega) _
+  have h2 : G ^ (iterCeiling P G B + 1) ≤ G ^ T :=
+    Nat.pow_le_pow_right (by omega) (by omega)
+  omega
+
+/-- The two sides as one exact characterization: the compounded bound is safe IFF
+`T ≤ iterCeiling`. -/
+theorem safeNoise_iff_le_ceiling (P : Params) (G B T : ℕ) (hG : 2 ≤ G) (hB : 0 < B)
+    (h0 : 2 * P.t * B + 2 * (P.t - 1) * P.r < P.q) :
+    SafeNoise P ((G : ℤ) ^ T * (B : ℤ)) ↔ T ≤ iterCeiling P G B := by
+  constructor
+  · intro h
+    by_contra hlt
+    exact T_gt_ceiling_fails P G B T hG hB (by omega) h
+  · exact noise_after_T P G B T hG hB h0
+
+/-! ### The end-to-end T-composition keystone. -/
+
+/-- **T iterations, then decrypt: EXACT.** Run `T ≤ iterCeiling` homomorphic public-linear steps
+(row bound `G`) from fresh state (noises `≤ B`); any component whose intended clear-iterated
+message lands at `mi ∈ [0, t)` (the prox clamp's job — the class-C gate) decrypts to EXACTLY
+`mi`. Both silent-failure classes closed for the T-deep convex engine, conditional on the same
+named assumptions as the fold path. -/
+theorem iter_decrypts_exact {n : ℕ} (P : Params) (S : Fin n → Fin n → ℤ)
+    (G B T : ℕ) (x : Fin n → Ct P) (m : Fin n → ℤ)
+    (hS : RowBound S ((G : ℕ) : ℤ)) (hG : 2 ≤ G) (hB : 0 < B)
+    (hfresh : ∀ j, |(x j).noiseAtInt (m j)| ≤ (B : ℤ))
+    (h0 : 2 * P.t * B + 2 * (P.t - 1) * P.r < P.q)
+    (hT : T ≤ iterCeiling P G B)
+    (i : Fin n) (mi : ℕ) (hmi : (mi : ℤ) = iterMsg S T m i) (hlt : mi < P.t) :
+    (iterCt S T x i).decrypt = mi := by
+  have hnoise : |(iterCt S T x i).noiseAtInt (iterMsg S T m i)| ≤ (G : ℤ) ^ T * (B : ℤ) :=
+    iter_noise_le hS (by positivity) (by positivity) hfresh T i
+  have hsafeN : SafeNoise P ((G : ℤ) ^ T * (B : ℤ)) := noise_after_T P G B T hG hB h0 hT
+  set e := (iterCt S T x i).noiseAtInt (iterMsg S T m i) with he
+  have hsafe_e : SafeNoise P |e| := by
+    unfold SafeNoise at hsafeN ⊢
+    have ht2 : (0 : ℤ) ≤ 2 * (P.t : ℤ) := by positivity
+    linarith [mul_le_mul_of_nonneg_left hnoise ht2]
+  have hphase : (iterCt S T x i).phase = (P.Δ : ℤ) * mi + e := by
+    rw [he]
+    unfold Ct.noiseAtInt
+    rw [hmi]
+    ring
+  show decryptPhase P (iterCt S T x i).phase = mi
+  rw [hphase]
+  exact decrypt_exact P mi e hlt hsafe_e
+
+/-! ### Deployed pins: the real ceiling on the real numbers, and the cliff past it. -/
+
+/-- The example growth factor of the deployed pins: τ = 1 (`tauDen = tauNum = 1`), `‖A‖∞ ≤ 2`
+gives `G = 3`. -/
+theorem iterGrowth_example : iterGrowth 1 1 2 = 3 := rfl
+
+/-- **The deployed T ceiling is 42**: on the fhe.rs degree-4096 parameters with `G = 3`,
+`B = 2^20`, `iterCeiling = 42` — kernel-checked via the log characterization
+(`3^42 ≤ headroom < 3^43` on the real 109-bit `q`). -/
+theorem deployed_iterCeiling : iterCeiling fheRs4096 3 (2 ^ 20) = 42 :=
+  Nat.log_eq_of_pow_le_of_lt_pow (by decide) (by decide)
+
+/-- The margin check HOLDS at the ceiling (T = 42), kernel-evaluated on the deployed numbers. -/
+theorem deployed_iterMargin_at_ceiling :
+    iterMarginHolds fheRs4096 3 (2 ^ 20) 42 = true := by decide
+
+/-- **The margin check FAILS one past the ceiling (T = 43)**, kernel-evaluated — the concrete
+one-past-the-ceiling failing side, on the real parameters. -/
+theorem deployed_iterMargin_past_ceiling :
+    iterMarginHolds fheRs4096 3 (2 ^ 20) 43 = false := by decide
+
+/-- **One past the ceiling, the cliff is REACHABLE:** the T = 43 noise budget `3^43·2^20`
+already ADMITS the `decrypt_misses` witness phase — an in-budget-at-43 noise that decrypts
+`m = 0` cleanly to `1`. The ceiling is not bookkeeping: one step past it, a silently wrong
+decrypt is inside the accumulated envelope. -/
+theorem deployed_past_ceiling_admits_misdecrypt :
+    ((q4096 : ℤ) / (2 * (t4096 : ℤ)) + 1 ≤ 3 ^ 43 * 2 ^ 20)
+      ∧ decryptPhase fheRs4096 ((q4096 : ℤ) / (2 * (t4096 : ℤ)) + 1) = 1 :=
+  ⟨by decide, decrypt_misses⟩
+
+#assert_all_clean [Bfv.matVec_noiseAtInt, Bfv.step_noise_le, Bfv.iter_noise_le,
+  Bfv.stepMatrix_rowBound, Bfv.safeNoise_natCast_iff, Bfv.iterMargin_iff,
+  Bfv.iterMarginHolds_safe, Bfv.noise_after_T, Bfv.T_gt_ceiling_fails,
+  Bfv.safeNoise_iff_le_ceiling, Bfv.iter_decrypts_exact, Bfv.deployed_iterCeiling,
+  Bfv.deployed_iterMargin_at_ceiling, Bfv.deployed_iterMargin_past_ceiling,
+  Bfv.deployed_past_ceiling_admits_misdecrypt]
 
 end Bfv
