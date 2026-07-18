@@ -22,6 +22,7 @@ The golden pin: `canonicityToyJson` (the `CanonicityToy` package — the toy end
 the same bytes are committed at `chain/gnark/emitted/canonicity_toy.json`.
 -/
 import Dregg2.Circuit.Emit.GnarkVerifier.CanonicityToy
+import Dregg2.Circuit.Emit.GnarkVerifier.EmitVerifier
 
 namespace Dregg2.Circuit.Emit.GnarkVerifier
 
@@ -104,5 +105,180 @@ def canonicityToyJson : String := emitGnarkJson canonicityData
 -- Structure pins: 62 booleanity asserts + 2 recompositions; deterministic gate count.
 #guard (flatAsserts (emit canonicityData).asserts [] []).2.length == 64
 #guard (flatAsserts (emit canonicityData).asserts [] []).1.length == 504
+
+/-! ## §4 The COMPACT full-verifier descriptor — `emitVerifierFullJson`.
+
+`emitGnarkJson` (§2) is the FLAT byte grammar: it materializes every constraint of a leaf
+as an op-DAG node. For the toy canonicity leaf that is 504 gates — fine. For the composed
+`emitVerifier` (`EmitVerifier.lean`) UNROLLED across the deployed apex-shrink fixture shape
+(38 queries × 15 FRI rounds, per-query Merkle openings of depth 17…3, four input-batch
+openings of depth 18, the batch-STARK constraint DAG over 6 instances) the flat form is the
+~12M-node dump we refuse to ship. This section emits, instead, a COMPACT DESCRIPTOR: the six
+leaf gadgets of `emitVerifier` (one per `verifyAlgoO` conjunct, in disjoint `Nat.pair`
+variable blocks) tagged with the fixture-shape MULTIPLICITIES by which the Go interpreter
+(`emitted_interp.go`) replicates each gadget's expansion. The heavy constraint content —
+poseidon2-bn254 compressions, babybear extension multiplies, 31-bit range checks, the
+Merkle-compress ladders — materializes at INTERP time from these records, not in the file.
+
+Faithfulness posture (named seam, not silent): the flat `emitGnarkJson` bytes are what
+`emit_faithful` covers (the renderer adds no constraint content). This compact descriptor is
+NOT covered by `emit_faithful`: it names each leaf gadget + the fixture multiplicity and
+DEFERS the heavy expansion to the interpreter, whose per-gadget expansion must reproduce the
+SAME constraints the Lean leaf `circuit` defines (`friFoldData`/`merklePathData`/… in the
+leaf modules). That expansion equivalence is the interpreter's obligation — the compact
+grammar below is the contract it expands against. The shape constants are the apex-shrink
+fixture's own (`chain/gnark/fixtures/apex_shrink_fri_real.json`, the `fri` block + derived
+Merkle depths); the gadget NAMES are cross-pinned below against the actual leaf `.gadgets`. -/
+
+/-- Fixture-shape constants for the deployed apex-shrink 2-turn proof, read verbatim from
+`chain/gnark/fixtures/apex_shrink_fri_real.json` (`fri` block). -/
+structure VShape where
+  logBlowup          : Nat
+  numQueries         : Nat
+  rounds             : Nat
+  logFinalPolyLen    : Nat
+  maxLogArity        : Nat
+  queryPowBits       : Nat
+  commitPowBits      : Nat
+  extraQueryIndexBits : Nat
+  logGlobalMaxHeight : Nat
+  numInstances       : Nat
+  inputRounds        : Nat
+  deriving Repr
+
+/-- The apex-shrink fixture shape (`degree_bits` has 6 entries → 6 batch instances; 4
+`input_rounds`). -/
+def apexShrinkShape : VShape :=
+  { logBlowup := 3, numQueries := 38, rounds := 15, logFinalPolyLen := 0, maxLogArity := 1,
+    queryPowBits := 16, commitPowBits := 0, extraQueryIndexBits := 0, logGlobalMaxHeight := 18,
+    numInstances := 6, inputRounds := 4 }
+
+/-- Commit-phase Merkle path depth per FRI round: `logGlobalMaxHeight-1-r` for round `r`,
+i.e. `[17,16,…,3]` for the apex-shrink shape — byte-identical to the fixture's per-round
+`merkle_paths` depths. -/
+def commitMerkleDepths (s : VShape) : List Nat :=
+  (List.range s.rounds).map (fun r => s.logGlobalMaxHeight - 1 - r)
+
+/-- One compact gadget-invocation record: the composition BLOCK (the `Nat.pair` variable
+block of `emitVerifier`), the gnark gadget NAME (the leaf's own `.gadgets` name), the
+primitive the interpreter EXPANDS it through, the fixture-shape MULTIPLICITY `count`, and
+the integer params the expansion needs. `params` is a flat assoc-list of `key → int list`. -/
+structure VGadget where
+  block  : Nat
+  gadget : String
+  expand : String
+  count  : Nat
+  params : List (String × List Nat)
+  deriving Repr
+
+/-- The six leaf gadgets of `emitVerifier`, in `verifyAlgoO` order, tagged with the
+apex-shrink multiplicities. Block `i` is the `Nat.pair i ·` variable block. -/
+def verifierGadgets (s : VShape) : List VGadget :=
+  let depths := commitMerkleDepths s
+  [ -- block 0: canonicity / VK-shape pin (canonicityData, "AssertIsCanonical")
+    ⟨0, "AssertIsCanonical", "rangecheck", 1,
+      [("limb_bits", [31, 31]), ("babybear_p", [2013265921])]⟩,
+    -- block 1: FRI commit-phase fold (friFoldData, "FriFoldRowArity2" + "ExtAssertIsEqual")
+    ⟨1, "FriFoldRowArity2", "babybear_ext_mul", s.numQueries * s.rounds,
+      [("ext_degree", [4]), ("arity", [2]), ("num_queries", [s.numQueries]),
+       ("rounds", [s.rounds])]⟩,
+    ⟨1, "ExtAssertIsEqual", "babybear_ext_eq", s.numQueries,
+      [("ext_degree", [4])]⟩,
+    -- block 2: commit-phase Merkle openings (merklePathData, "VerifyMerklePathBn254")
+    ⟨2, "VerifyMerklePathBn254", "poseidon2_bn254_compress", s.numQueries,
+      [("depths", depths), ("leaf_width", [4])]⟩,
+    -- block 2: input-batch openings (open_input paths, depth logGlobalMaxHeight)
+    ⟨2, "VerifyMerklePathBn254InputOpen", "poseidon2_bn254_compress",
+      s.numQueries * s.inputRounds,
+      [("depth", [s.logGlobalMaxHeight]), ("num_queries", [s.numQueries]),
+       ("input_rounds", [s.inputRounds])]⟩,
+    -- block 3: batch-STARK constraint algebra (batchTableData, "BatchTableInstance" ×n)
+    ⟨3, "BatchTableInstance", "stark_constraint_dag", s.numInstances,
+      [("degree_bits", [9, 9, 15, 14, 15, 0])]⟩,
+    ⟨3, "LogUpBalance", "logup_sum", 1, []⟩,
+    -- block 4: grinding-PoW query check (emitQueryPow, "SampleBitsDecomposed" + "AssertPowBitsZero")
+    ⟨4, "SampleBitsDecomposed", "rangecheck", 1, [("bits", [31])]⟩,
+    ⟨4, "AssertPowBitsZero", "zero_low_bits", 1, [("pow_bits", [s.queryPowBits])]⟩,
+    -- block 5: settlement segment bind (segmentData, "AssertIsEqual" × numPublicLanes)
+    ⟨5, "AssertIsEqual", "wire_eq", numPublicLanes, [("lane_base", [numPublicLanes])]⟩ ]
+
+/-! ## §4b Renderer for the compact descriptor. -/
+
+private def jStr (s : String) : String := "\"" ++ s ++ "\""
+
+private def jNatArr (xs : List Nat) : String := jArr (xs.map toString)
+
+private def jObj (kvs : List (String × String)) : String :=
+  "{" ++ String.intercalate "," (kvs.map fun p => jStr p.1 ++ ":" ++ p.2) ++ "}"
+
+private def paramsJson (ps : List (String × List Nat)) : String :=
+  jObj (ps.map fun p => (p.1, jNatArr p.2))
+
+def vgadgetJson (g : VGadget) : String :=
+  jObj [ ("block", toString g.block), ("gadget", jStr g.gadget),
+         ("expand", jStr g.expand), ("count", toString g.count),
+         ("params", paramsJson g.params) ]
+
+/-- The `var_blocks` map: block `i` ↔ its `Nat.pair` key ↔ its `verifyAlgoO` role. -/
+def varBlocksJson : String :=
+  jArr <| [(0, "canonicity"), (1, "fri_fold"), (2, "merkle"), (3, "batch_table"),
+           (4, "query_pow"), (5, "segment")].map fun p =>
+    jObj [("block", toString p.1), ("pair_key", toString p.1), ("role", jStr p.2)]
+
+def shapeJson (s : VShape) : String :=
+  jObj [ ("log_blowup", toString s.logBlowup), ("num_queries", toString s.numQueries),
+         ("rounds", toString s.rounds), ("log_final_poly_len", toString s.logFinalPolyLen),
+         ("max_log_arity", toString s.maxLogArity), ("query_pow_bits", toString s.queryPowBits),
+         ("commit_pow_bits", toString s.commitPowBits),
+         ("extra_query_index_bits", toString s.extraQueryIndexBits),
+         ("log_global_max_height", toString s.logGlobalMaxHeight),
+         ("digest_width", toString digestWidth), ("num_public_lanes", toString numPublicLanes),
+         ("ext_degree", "4"), ("fold_arity", "2"),
+         ("num_instances", toString s.numInstances), ("input_rounds", toString s.inputRounds) ]
+
+/-- Honest derived multiplicities (a parity oracle for the interpreter's unroll): total FRI
+fold rows, commit-phase / input-batch Merkle compressions, segment lane asserts. NO
+fabricated grand total — the interpreter multiplies each compression by its poseidon2-bn254
+per-permutation constraint count to reach the ~12M materialized constraints. -/
+def derivedJson (s : VShape) : String :=
+  jObj [ ("fold_rows", toString (s.numQueries * s.rounds)),
+         ("commit_merkle_compressions",
+            toString (s.numQueries * (commitMerkleDepths s).foldr (· + ·) 0)),
+         ("input_merkle_compressions",
+            toString (s.numQueries * s.inputRounds * s.logGlobalMaxHeight)),
+         ("segment_lane_asserts", toString numPublicLanes) ]
+
+/-- **`emitVerifierFullJson`** — the compact structured descriptor of the WHOLE composed
+`emitVerifier`, unrolled to the deployed apex-shrink fixture shape. Names each leaf gadget +
+its fixture multiplicity + expansion params; the ~12M constraints materialize at interp
+time. Deterministic, ~1.5 KB. -/
+def emitVerifierFullJson (s : VShape) : String :=
+  jObj [ ("schema", jStr "dregg.gnark.verifier_full.v1"),
+         ("name", jStr "gnark_fri_verifier_composed_v1"),
+         ("fixture", jStr "apex_shrink_fri_real"),
+         ("source", jStr "Dregg2/Circuit/Emit/GnarkVerifier/EmitVerifier.lean:emitVerifier"),
+         ("shape", shapeJson s),
+         ("var_blocks", varBlocksJson),
+         ("gadgets", jArr ((verifierGadgets s).map vgadgetJson)),
+         ("derived", derivedJson s) ]
+
+/-- The apex-shrink full-verifier descriptor bytes (committed at
+`chain/gnark/emitted/verifier_full.json`). -/
+def verifierFullJson : String := emitVerifierFullJson apexShrinkShape
+
+-- The byte-for-byte golden pin (the committed artifact `chain/gnark/emitted/verifier_full.json`).
+#guard verifierFullJson == r#"{"schema":"dregg.gnark.verifier_full.v1","name":"gnark_fri_verifier_composed_v1","fixture":"apex_shrink_fri_real","source":"Dregg2/Circuit/Emit/GnarkVerifier/EmitVerifier.lean:emitVerifier","shape":{"log_blowup":3,"num_queries":38,"rounds":15,"log_final_poly_len":0,"max_log_arity":1,"query_pow_bits":16,"commit_pow_bits":0,"extra_query_index_bits":0,"log_global_max_height":18,"digest_width":8,"num_public_lanes":25,"ext_degree":4,"fold_arity":2,"num_instances":6,"input_rounds":4},"var_blocks":[{"block":0,"pair_key":0,"role":"canonicity"},{"block":1,"pair_key":1,"role":"fri_fold"},{"block":2,"pair_key":2,"role":"merkle"},{"block":3,"pair_key":3,"role":"batch_table"},{"block":4,"pair_key":4,"role":"query_pow"},{"block":5,"pair_key":5,"role":"segment"}],"gadgets":[{"block":0,"gadget":"AssertIsCanonical","expand":"rangecheck","count":1,"params":{"limb_bits":[31,31],"babybear_p":[2013265921]}},{"block":1,"gadget":"FriFoldRowArity2","expand":"babybear_ext_mul","count":570,"params":{"ext_degree":[4],"arity":[2],"num_queries":[38],"rounds":[15]}},{"block":1,"gadget":"ExtAssertIsEqual","expand":"babybear_ext_eq","count":38,"params":{"ext_degree":[4]}},{"block":2,"gadget":"VerifyMerklePathBn254","expand":"poseidon2_bn254_compress","count":38,"params":{"depths":[17,16,15,14,13,12,11,10,9,8,7,6,5,4,3],"leaf_width":[4]}},{"block":2,"gadget":"VerifyMerklePathBn254InputOpen","expand":"poseidon2_bn254_compress","count":152,"params":{"depth":[18],"num_queries":[38],"input_rounds":[4]}},{"block":3,"gadget":"BatchTableInstance","expand":"stark_constraint_dag","count":6,"params":{"degree_bits":[9,9,15,14,15,0]}},{"block":3,"gadget":"LogUpBalance","expand":"logup_sum","count":1,"params":{}},{"block":4,"gadget":"SampleBitsDecomposed","expand":"rangecheck","count":1,"params":{"bits":[31]}},{"block":4,"gadget":"AssertPowBitsZero","expand":"zero_low_bits","count":1,"params":{"pow_bits":[16]}},{"block":5,"gadget":"AssertIsEqual","expand":"wire_eq","count":25,"params":{"lane_base":[25]}}],"derived":{"fold_rows":570,"commit_merkle_compressions":5700,"input_merkle_compressions":2736,"segment_lane_asserts":25}}"#
+
+/-! ## §4c Gadget-name drift pins — the descriptor's hardcoded gnark gadget names ARE the
+leaf packages' own `.gadgets` names (defends against a leaf renaming out from under us). -/
+
+#guard canonicityData.gadgets.map (·.gadget) == ["AssertIsCanonical"]
+#guard (Merkle.merklePathData 5).gadgets.map (·.gadget) == ["VerifyMerklePathBn254"]
+#guard (emitQueryPow 16).gadgets.map (·.gadget) == ["SampleBitsDecomposed", "AssertPowBitsZero"]
+#guard segmentData.gadgets.map (·.gadget) == List.replicate numPublicLanes "AssertIsEqual"
+#guard batchGadgets [] 0 == [(⟨"LogUpBalance", []⟩ : GadgetInvocation)]
+-- Commit-phase Merkle depths are exactly the fixture's per-round path depths [17,…,3].
+#guard commitMerkleDepths apexShrinkShape
+  == [17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3]
 
 end Dregg2.Circuit.Emit.GnarkVerifier
