@@ -174,9 +174,12 @@ fn an_unauthorized_cast_vote_is_refused_at_the_front_door() {
 fn record_tally_advances_but_a_shrink_is_refused_by_monotonic() {
     let (cclerk, executor, service) = deploy_voting(0x05);
 
-    // Advance the YES tally 0 -> 1: accepted (monotone increase).
+    // Advance the YES tally 0 -> 1, backed by the counted ballot's id (the
+    // ballot-binding CountGe gate demands the exhibit): accepted.
+    let counted: std::collections::BTreeSet<[u8; 32]> =
+        [service.ballot.as_bytes().to_owned()].into_iter().collect();
     let bump = service
-        .record_tally(&cclerk, VOTE_YES, 1, InvokeAuthority::Signature)
+        .record_tally(&cclerk, VOTE_YES, 1, &counted, InvokeAuthority::Signature)
         .expect("a Signature holder may build a record_tally invocation");
     executor.submit_turn(&bump).expect("the tally bump commits");
     let state = executor.cell_state(service.poll).unwrap();
@@ -186,9 +189,10 @@ fn record_tally_advances_but_a_shrink_is_refused_by_monotonic() {
         "the YES tally advanced to 1"
     );
 
-    // Attempt to shrink the YES tally 1 -> 0: refused by Monotonic(TALLY_YES).
+    // Attempt to shrink the YES tally 1 -> 0 (witness present, so MONOTONIC is
+    // what refuses): refused by Monotonic(TALLY_YES).
     let shrink = service
-        .record_tally(&cclerk, VOTE_YES, 0, InvokeAuthority::Signature)
+        .record_tally(&cclerk, VOTE_YES, 0, &counted, InvokeAuthority::Signature)
         .expect("the shrink invocation BUILDS (front door passes)");
     let rejected = executor.submit_turn(&shrink);
     assert!(rejected.is_err(), "a tally shrink must be refused");

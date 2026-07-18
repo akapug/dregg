@@ -243,11 +243,21 @@ fn the_executor_re_enforces_a_tally_rewind_is_refused() {
     let app = voting_app(&cclerk, &executor);
     let poll = cclerk.cell_id();
     seed_poll(&executor, "ship it?");
-    let _ = seed_ballot(&executor, &cclerk, poll);
+    let ballot = seed_ballot(&executor, &cclerk, poll);
 
-    // The ADMINISTRATOR (root) bumps the YES tally 0 -> 1 through the gated fire.
-    fire_record_tally(&app, &AuthRequired::None, VOTE_YES, &cclerk, &executor)
-        .expect("the administrator records a YES tally (0 -> 1)");
+    // The ADMINISTRATOR (root) bumps the YES tally 0 -> 1 through the gated fire,
+    // exhibiting the counted ballot's id (the ballot-binding CountGe gate).
+    let counted: std::collections::BTreeSet<[u8; 32]> =
+        [ballot.as_bytes().to_owned()].into_iter().collect();
+    fire_record_tally(
+        &app,
+        &AuthRequired::None,
+        VOTE_YES,
+        &counted,
+        &cclerk,
+        &executor,
+    )
+    .expect("the administrator records a YES tally (0 -> 1)");
     let mid = executor.cell_state(poll).unwrap();
     assert_eq!(
         mid.fields[TALLY_YES_SLOT],

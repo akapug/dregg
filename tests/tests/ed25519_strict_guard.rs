@@ -68,6 +68,15 @@ const SKIP_DIRS: &[&str] = &[
 ///   * `EXTERNAL-SCHEME MIRROR` — verifies signatures of an EXTERNAL chain whose
 ///     own runtime uses cofactored verification; making it strict would DIVERGE
 ///     from that chain (reject what the chain accepts). Strictness here is a bug.
+///   * `CONSENSUS MIRROR` — like EXTERNAL-SCHEME MIRROR, but mirrors a FIRST-PARTY
+///     verifier (node's own acceptance check) whose exact accept-set another crate
+///     must predict WITHOUT importing it. Diverging (strict here, cofactored in the
+///     verifier it mirrors) would mispredict acceptance. Fix belongs in the mirrored
+///     verifier, not the mirror.
+///   * `PINNED-KEY` — the verifying key is not attacker-chosen: the code refuses
+///     unless the wire key EQUALS a caller-pinned anchor/roster entry BEFORE the
+///     verify. The small-order forgery needs an attacker-chosen key, so it is out of
+///     reach; cofactored verify is defense-in-depth debt, not a live forgery vector.
 ///   * `TEST MODULE` — the file is `#[cfg(test)]` code compiled under `src/`.
 ///   * `HELD DIRTY` — another lane holds the file uncommitted this session; not
 ///     touched (shared-tree rule). Re-audit when it settles.
@@ -107,30 +116,41 @@ const ALLOWLIST: &[(&str, &str)] = &[
          (`peer_transition...`); the module-top import serves that in-crate control. \
          File is uncommitted by another lane — re-audit when it settles.",
     ),
-    // ── GRANDFATHERED: un-audited non-strict prod sites (debt, not endorsement) ──
+    // ── PINNED-KEY (audited 2026-07-17: key equals a caller-pinned anchor) ───────
     (
         "deco-prove/src/notary.rs",
-        "GRANDFATHERED: TLSNotary attestation signature. Audit whether the notary key \
-         is pinned (defense-in-depth only) or wire-supplied (convert to verify_strict).",
+        "PINNED-KEY (audited 2026-07-17): verify_notary_attestation builds the vk from \
+         att.notary_pubkey, but line ~166 returns WrongNotary unless \
+         `att.notary_pubkey == expected_notary` (the caller-pinned anchor) BEFORE the \
+         verify — so the verified key is the pinned anchor, never attacker-chosen. The \
+         commitment is separately recomputed (line ~169) so malleability cannot re-point \
+         a sig at other facts. Small-order forgery is out of reach; cofactored is \
+         defense-in-depth debt only. Pin bites: `wrong_notary_anchor_refused`. NOT \
+         converted (converting a pinned site is not the exploit fix).",
     ),
     (
         "deco-prove/src/tlsn_attest.rs",
-        "GRANDFATHERED: models a TLSNotary presentation signature leg. Audit key source.",
+        "PINNED-KEY (audited 2026-07-17): verify_tlsn_presentation returns NotaryMismatch \
+         unless `pres.verifying_key == config.expected_notary` (line ~342) BEFORE \
+         building the vk from those same bytes — the verified key is the pinned anchor, \
+         not wire-chosen. Small-order forgery needs an attacker-chosen key and is out of \
+         reach. Pin bites: `wrong_notary_anchor_is_refused`. NOT converted.",
     ),
-    (
-        "dregg-agent/src/cred.rs",
-        "GRANDFATHERED: macaroon-style credential chain verify; the verifying key is \
-         credential-presented (attacker-influenced) — a likely convert-to-strict site.",
-    ),
-    (
-        "dregg-auth/src/credential/chain.rs",
-        "GRANDFATHERED: credential-chain issuer signatures; issuer key is presented \
-         (attacker-influenced) — a likely convert-to-strict site.",
-    ),
+    // ── CONSENSUS MIRROR (audited 2026-07-17: must match node, do not diverge) ───
     (
         "dregg-doc/src/ci_verdict.rs",
-        "GRANDFATHERED: CI verdict signature verify. Audit key source.",
+        "CONSENSUS MIRROR (audited 2026-07-17): verify_nullifier_update_signature (line \
+         ~450) faithfully mirrors node's post_update_commitment acceptance check so a \
+         test can predict node acceptance WITHOUT depending on node. node's real check \
+         `verify_ed25519_signature` (node/src/api.rs:6789) uses cofactored \
+         `verifying_key.verify(...)` (line 6798). The key IS wire-supplied (cell_id \
+         doubles as the ed25519 pubkey), so node ITSELF is a genuine attacker-key \
+         non-strict site — but converting THIS mirror to strict would make it mispredict \
+         node acceptance (the solana_consensus.rs trap, internal edition). The fix, if \
+         any, belongs in node/src/api.rs:6789 (held dirty by another lane this session; \
+         reported for the node-side security swarm), and this mirror must follow node.",
     ),
+    // ── GRANDFATHERED: un-audited non-strict prod sites (debt, not endorsement) ──
     (
         "dregg-pay/src/otc.rs",
         "GRANDFATHERED: OTC counterpart signature; counterpart key is wire-supplied — \

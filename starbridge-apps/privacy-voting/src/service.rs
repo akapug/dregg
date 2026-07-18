@@ -32,7 +32,7 @@
 //! |----------------|--------|--------------------------|-------------|-------------|
 //! | `open_poll`    | poll   | [`Semantics::Replayable`]| `Signature` | `SetField(QUESTION_HASH)` + `EmitEvent(poll-opened)` |
 //! | `cast_vote`    | ballot | [`Semantics::Replayable`]| `Signature` | `SetField(POLL_REF, VOTE)` + `EmitEvent(vote-cast)` |
-//! | `record_tally` | poll   | [`Semantics::Replayable`]| `Signature` | `SetField(tally_slot)` + `EmitEvent(vote-cast)` |
+//! | `record_tally` | poll   | [`Semantics::Replayable`]| `Signature` | `SetField(tally_slot)` + `SetField(ballots_slot)` + ballot-set `Cleartext` witness + `EmitEvent(vote-cast)` |
 //! | `close_poll`   | poll   | [`Semantics::Replayable`]| `Signature` | `SetField(CLOSED)` + `EmitEvent(poll-closed)` |
 //! | `view`         | poll   | [`Semantics::Serviced`]  | `None`      | — (the named OFE seam: a pure read, no turn) |
 //!
@@ -229,14 +229,21 @@ impl VotingService {
 
     /// **Invoke `record_tally(choice, new_tally)`** on the POLL cell — set the
     /// matching tally slot ([`tally_slot_for_choice`]) to `new_tally` (the
-    /// post-increment count the caller read off the poll: old + 1), emit `vote-cast`.
+    /// post-increment count the caller read off the poll: old + 1), commit the
+    /// backing distinct ballot set into the choice's ballot-set commitment slot,
+    /// EXHIBIT it as the turn's `Cleartext` witness, and emit `vote-cast`.
     /// The poll's `Monotonic(TALLY_*)` caveat refuses any value below the current
-    /// tally — a stale/replayed value cannot shrink the board (EXECUTOR refusal).
+    /// tally, and the ballot-binding `CountGe` gate refuses a witness-less or
+    /// zero-ballot tally move (both EXECUTOR refusals, fail-closed).
+    ///
+    /// `ballots` is the FULL distinct set of ballot-cell ids counted into this
+    /// choice's tally so far, INCLUDING the newly-counted one.
     pub fn record_tally(
         &self,
         cipherclerk: &AppCipherclerk,
         choice: u64,
         new_tally: u64,
+        ballots: &std::collections::BTreeSet<[u8; 32]>,
         authority: InvokeAuthority,
     ) -> Result<Turn, VotingServiceError> {
         let choice_field = field_from_u64(choice);
@@ -244,19 +251,27 @@ impl VotingService {
         let slot = tally_slot_for_choice(choice);
         let effects = vec![
             set(self.poll, slot, tally),
+            set(
+                self.poll,
+                crate::ballots_slot_for_choice(choice),
+                dregg_cell::count_ge_set_commitment(ballots),
+            ),
             Effect::EmitEvent {
                 cell: self.poll,
                 event: Event::new(symbol("vote-cast"), vec![choice_field]),
             },
         ];
-        self.invoke(
+        dregg_app_framework::invoke_with_descriptor_with_witnesses(
             cipherclerk,
             self.poll,
+            &self.descriptor,
             METHOD_RECORD_TALLY,
             vec![choice_field, tally],
             effects,
             authority,
+            vec![crate::ballot_set_exhibit(ballots)],
         )
+        .map_err(VotingServiceError::Refused)
     }
 
     /// **Invoke `close_poll()`** on the POLL cell — set `CLOSED` (`WriteOnce`,

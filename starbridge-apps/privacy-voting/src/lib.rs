@@ -17,6 +17,16 @@
 //!    - `TALLY_YES` / `TALLY_NO` / `TALLY_ABSTAIN` slots are
 //!      [`StateConstraint::Monotonic`] — a tally can only ever **increase**.
 //!      An attacker cannot rewrite a tally downward to erase votes.
+//!    - each tally slot is additionally **ballot-bound** by a
+//!      `AnyOf[Immutable, CountGe]` gate (the `collective-choice` `CountGe`
+//!      port): a turn that MOVES a tally must EXHIBIT a non-empty distinct
+//!      ballot-cell-id set (`Cleartext` witness) opening the matching
+//!      ballot-set commitment slot ([`TALLY_YES_BALLOTS_SLOT`], …) — a
+//!      witness-less or zero-ballot tally write is a fail-closed executor
+//!      refusal, and every counted-ballot claim is on-ledger-openable
+//!      (tamper-evident). The tally VALUE is not yet bound to the exhibited
+//!      set's SIZE (a slot-valued `CountGe` threshold is a missing executor
+//!      primitive — see the residual pin in `tests/tally_forgery.rs`).
 //!    - `CLOSED` slot is [`StateConstraint::WriteOnce`] — a poll closes
 //!      exactly once and cannot be re-opened.
 //!
@@ -56,6 +66,8 @@
 //! - [`register`] — mounts the app's factories + inspectors on a
 //!   [`StarbridgeAppContext`].
 
+use std::collections::BTreeSet;
+
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellAffordance,
     CellId, CellMode, CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect,
@@ -63,6 +75,9 @@ use dregg_app_framework::{
     GatedAffordance, InspectorDescriptor, StarbridgeAppContext, StateConstraint, TurnReceipt,
     canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
+use dregg_cell::count_ge_set_commitment;
+use dregg_cell::program::SimpleStateConstraint;
+use dregg_turn::action::{WitnessBlob, WitnessKind};
 
 /// The deos-view CARD: the app's UI as a renderer-independent `deos.ui.*` view-tree.
 pub mod card;
@@ -87,6 +102,16 @@ pub const TALLY_NO_SLOT: usize = 4;
 pub const TALLY_ABSTAIN_SLOT: usize = 5;
 /// Poll cell slot: non-zero once the poll is closed. `WriteOnce`.
 pub const CLOSED_SLOT: usize = 6;
+/// Poll cell slot: [`count_ge_set_commitment`] over the DISTINCT ballot-cell-id
+/// set counted into `TALLY_YES` — the on-ledger root the tally-binding `CountGe`
+/// gate opens. A turn that MOVES the YES tally must exhibit (as its unique
+/// `Cleartext` witness blob, a postcard `Vec<[u8; 32]>`) a non-empty distinct
+/// ballot set whose canonical commitment equals this slot's NEW value.
+pub const TALLY_YES_BALLOTS_SLOT: usize = 7;
+/// Ballot-set commitment slot for `TALLY_NO` (see [`TALLY_YES_BALLOTS_SLOT`]).
+pub const TALLY_NO_BALLOTS_SLOT: usize = 8;
+/// Ballot-set commitment slot for `TALLY_ABSTAIN` (see [`TALLY_YES_BALLOTS_SLOT`]).
+pub const TALLY_ABSTAIN_BALLOTS_SLOT: usize = 9;
 
 // =============================================================================
 // Ballot-cell state schema
@@ -134,7 +159,7 @@ pub fn poll_cell_program() -> CellProgram {
 }
 
 fn poll_state_constraints() -> Vec<StateConstraint> {
-    vec![
+    let mut cs = vec![
         StateConstraint::WriteOnce {
             index: QUESTION_HASH_SLOT as u8,
         },
@@ -150,7 +175,59 @@ fn poll_state_constraints() -> Vec<StateConstraint> {
         StateConstraint::WriteOnce {
             index: CLOSED_SLOT as u8,
         },
-    ]
+    ];
+    // THE BALLOT→TALLY BINDING (ported from `collective-choice`'s `CountGe`
+    // quorum gate, at its weighted-poll floor of 1): a turn that MOVES a tally
+    // slot must EXHIBIT (as its unique `Cleartext` witness blob, a postcard
+    // `Vec<[u8; 32]>`) a NON-EMPTY set of distinct ballot-cell ids whose
+    // canonical sorted-set commitment ([`count_ge_set_commitment`]) opens the
+    // matching ballot-set commitment slot's NEW value. Distinctness is
+    // structural (`BTreeSet` — a duplicate-padded exhibit collapses), nothing
+    // accumulates in a fakeable counter, and a witness-less tally write is a
+    // fail-closed executor refusal. This kills the ZERO-ballot tally forgery
+    // (`tests/tally_forgery.rs`): an operator can no longer move the board
+    // without committing, on-ledger, to at least one counted ballot id.
+    //
+    // HONEST SCOPE (what this does NOT yet enforce — see the residual pin in
+    // `tests/tally_forgery.rs`): the tally VALUE is not bound to the SIZE of
+    // the exhibited set (CountGe's threshold is a program-time constant; a
+    // slot-valued threshold — "|exhibited set| >= new[TALLY_X]" — is a missing
+    // executor primitive), and set ELEMENTS are not verified to be real
+    // factory-born ballot cells that voted this choice (the same honest scope
+    // as `StateConstraint::CountGe` itself documents, and the same residual
+    // `collective-choice`'s quorum gate carries). The commitment slot makes
+    // every counted-ballot claim on-ledger-openable — tamper-EVIDENT — while
+    // value-exact tamper-REFUSAL awaits the named primitive.
+    for (tally, ballots) in [
+        (TALLY_YES_SLOT, TALLY_YES_BALLOTS_SLOT),
+        (TALLY_NO_SLOT, TALLY_NO_BALLOTS_SLOT),
+        (TALLY_ABSTAIN_SLOT, TALLY_ABSTAIN_BALLOTS_SLOT),
+    ] {
+        // A moving tally demands the ballot-set exhibit opening its NEW root.
+        cs.push(StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::Immutable { index: tally as u8 },
+                SimpleStateConstraint::CountGe {
+                    threshold: 1,
+                    set_commitment_slot: ballots as u8,
+                },
+            ],
+        });
+        // The commitment slot itself only ever holds a value the SAME turn
+        // opened with an exhibited set — no garbage/unopenable roots planted.
+        cs.push(StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::Immutable {
+                    index: ballots as u8,
+                },
+                SimpleStateConstraint::CountGe {
+                    threshold: 1,
+                    set_commitment_slot: ballots as u8,
+                },
+            ],
+        });
+    }
+    cs
 }
 
 /// The `CellProgram` installed on every ballot cell: poll-ref is write-once,
@@ -387,17 +464,30 @@ pub fn build_cast_vote_action(
     cipherclerk.make_action(ballot_cell, "cast_vote", effects)
 }
 
-/// Build the signed `Action` that bumps a poll tally on the *poll* cell.
+/// Build the signed `Action` that bumps a poll tally on the *poll* cell,
+/// **exhibiting the distinct ballot set that backs it**.
 ///
-/// Targets the poll cell directly and sets the matching tally slot to
-/// `new_tally` (the post-increment count the caller read off the poll cell:
-/// old + 1). The poll's `Monotonic` caveat rejects any value below the current
-/// tally, so a stale/replayed value cannot shrink the board. Emits `vote-cast`.
+/// Targets the poll cell directly and, in ONE turn:
+/// 1. sets the matching tally slot to `new_tally` (the post-increment count the
+///    caller read off the poll cell: old + 1) — the poll's `Monotonic` caveat
+///    rejects any value below the current tally, so a stale/replayed value
+///    cannot shrink the board;
+/// 2. writes the matching ballot-set commitment slot
+///    ([`ballots_slot_for_choice`]) to [`count_ge_set_commitment`]`(ballots)`;
+/// 3. carries `ballots` as the turn's unique `Cleartext` witness blob (a
+///    postcard `Vec<[u8; 32]>`) — the exhibit the poll program's `CountGe`
+///    gate opens against the commitment.
+///
+/// `ballots` is the FULL distinct set of ballot-cell ids counted into this
+/// choice's tally so far, INCLUDING the newly-counted one. An EMPTY set (or a
+/// witness-less hand-built tally write) is a fail-closed executor refusal —
+/// the zero-ballot tally forgery is dead (`tests/tally_forgery.rs`).
 pub fn build_record_tally_action(
     cipherclerk: &AppCipherclerk,
     poll_cell: CellId,
     choice: u64,
     new_tally: u64,
+    ballots: &BTreeSet<[u8; 32]>,
 ) -> Action {
     let choice_field = field_from_u64(choice);
     let tally_slot = tally_slot_for_choice(choice);
@@ -407,12 +497,30 @@ pub fn build_record_tally_action(
             index: tally_slot,
             value: field_from_u64(new_tally),
         },
+        Effect::SetField {
+            cell: poll_cell,
+            index: ballots_slot_for_choice(choice),
+            value: count_ge_set_commitment(ballots),
+        },
         Effect::EmitEvent {
             cell: poll_cell,
             event: Event::new(symbol("vote-cast"), vec![choice_field]),
         },
     ];
-    cipherclerk.make_action(poll_cell, "record_tally", effects)
+    let mut action = cipherclerk.make_action(poll_cell, "record_tally", effects);
+    action.witness_blobs = vec![ballot_set_exhibit(ballots)];
+    cipherclerk.sign_action(action)
+}
+
+/// The unique `Cleartext` witness blob exhibiting a distinct ballot set — the
+/// postcard `Vec<[u8; 32]>` the poll program's `CountGe` tally-binding gate
+/// decodes, dedups (structurally, into a `BTreeSet`) and opens against the
+/// choice's ballot-set commitment slot.
+pub fn ballot_set_exhibit(ballots: &BTreeSet<[u8; 32]>) -> WitnessBlob {
+    let elements: Vec<[u8; 32]> = ballots.iter().copied().collect();
+    let blob = postcard::to_allocvec(&elements)
+        .expect("postcard encode of a Vec<[u8; 32]> ballot set cannot fail");
+    WitnessBlob::new(WitnessKind::Cleartext, blob)
 }
 
 /// Build the signed `Action` that closes a poll (one-way `CLOSED` slot).
@@ -438,6 +546,16 @@ pub fn tally_slot_for_choice(choice: u64) -> usize {
         VOTE_YES => TALLY_YES_SLOT,
         VOTE_NO => TALLY_NO_SLOT,
         _ => TALLY_ABSTAIN_SLOT,
+    }
+}
+
+/// Which poll ballot-set commitment slot backs a choice's tally (the root the
+/// `CountGe` tally-binding gate opens — see [`TALLY_YES_BALLOTS_SLOT`]).
+pub fn ballots_slot_for_choice(choice: u64) -> usize {
+    match choice {
+        VOTE_YES => TALLY_YES_BALLOTS_SLOT,
+        VOTE_NO => TALLY_NO_BALLOTS_SLOT,
+        _ => TALLY_ABSTAIN_BALLOTS_SLOT,
     }
 }
 
@@ -467,6 +585,12 @@ pub fn web_constants() -> ConstantsModule {
         .slot("TALLY_NO_SLOT", TALLY_NO_SLOT as u64)
         .slot("TALLY_ABSTAIN_SLOT", TALLY_ABSTAIN_SLOT as u64)
         .slot("CLOSED_SLOT", CLOSED_SLOT as u64)
+        .slot("TALLY_YES_BALLOTS_SLOT", TALLY_YES_BALLOTS_SLOT as u64)
+        .slot("TALLY_NO_BALLOTS_SLOT", TALLY_NO_BALLOTS_SLOT as u64)
+        .slot(
+            "TALLY_ABSTAIN_BALLOTS_SLOT",
+            TALLY_ABSTAIN_BALLOTS_SLOT as u64,
+        )
         .slot("POLL_REF_SLOT", POLL_REF_SLOT as u64)
         .slot("VOTE_SLOT", VOTE_SLOT as u64)
         .string("POLL_FACTORY_VK_HEX", hex_encode_32(&POLL_FACTORY_VK))
@@ -758,6 +882,15 @@ pub fn seed_poll(executor: &EmbeddedExecutor, question: &str) -> FieldElement {
             cell.state.set_field(TALLY_NO_SLOT, field_from_u64(0));
             cell.state.set_field(TALLY_ABSTAIN_SLOT, field_from_u64(0));
             cell.state.set_field(CLOSED_SLOT, field_from_u64(0));
+            // Ballot-set commitment slots start zero (no ballots counted). The
+            // tally-binding `CountGe` gate's `Immutable` branch admits them
+            // unchanged; the first genuine bump writes the first real root.
+            cell.state
+                .set_field(TALLY_YES_BALLOTS_SLOT, field_from_u64(0));
+            cell.state
+                .set_field(TALLY_NO_BALLOTS_SLOT, field_from_u64(0));
+            cell.state
+                .set_field(TALLY_ABSTAIN_BALLOTS_SLOT, field_from_u64(0));
         }
     });
     q
@@ -852,13 +985,20 @@ pub fn fire_cast_vote(
 
 /// **Fire `record_tally`** — the deos cap∧state PRECONDITION gate (cap ⊇ root AND the poll is
 /// open), then the FULL tally-bump turn read from the poll's LIVE state: the matching tally
-/// slot is set to `live_tally + 1` (so the SAME published button advances each fire). The
-/// executor re-enforces `Monotonic(TALLY_*)` (a stale/replayed value cannot shrink the
-/// board). Use [`seed_poll`] first.
+/// slot is set to `live_tally + 1` (so the SAME published button advances each fire), the
+/// matching ballot-set commitment slot is set to [`count_ge_set_commitment`]`(ballots)`, and
+/// the turn EXHIBITS `ballots` as its `Cleartext` witness — the poll program's `CountGe`
+/// tally-binding gate refuses a witness-less or empty-set bump fail-closed. The executor
+/// also re-enforces `Monotonic(TALLY_*)` (a stale/replayed value cannot shrink the board).
+///
+/// `ballots` is the FULL distinct set of ballot-cell ids counted into this choice's tally,
+/// INCLUDING the newly-counted one (the caller-maintained twin of the on-ledger
+/// commitment — `collective-choice`'s `quorum_voters` pattern). Use [`seed_poll`] first.
 pub fn fire_record_tally(
     app: &DeosApp,
     held: &AuthRequired,
     choice: u64,
+    ballots: &BTreeSet<[u8; 32]>,
     cipherclerk: &AppCipherclerk,
     executor: &EmbeddedExecutor,
 ) -> Result<TurnReceipt, FireExecuteError> {
@@ -868,24 +1008,34 @@ pub fn fire_record_tally(
         .ok_or(FireExecuteError::Gate(FireError::NoSuchAffordance))?;
     let tally_slot = tally_slot_for_choice(choice);
     let choice_field = field_from_u64(choice);
-    cell.fire_gated_through_executor_with(
+    let commitment = count_ge_set_commitment(ballots);
+    let exhibit = ballot_set_exhibit(ballots);
+    cell.fire_gated_through_executor_with_witnesses(
         "record_tally",
         held,
         cipherclerk,
         executor,
         move |live| {
             let live_tally = field_to_u64(&live.fields[tally_slot]);
-            vec![
-                Effect::SetField {
-                    cell: poll,
-                    index: tally_slot,
-                    value: field_from_u64(live_tally.saturating_add(1)),
-                },
-                Effect::EmitEvent {
-                    cell: poll,
-                    event: Event::new(symbol("vote-cast"), vec![choice_field]),
-                },
-            ]
+            (
+                vec![
+                    Effect::SetField {
+                        cell: poll,
+                        index: tally_slot,
+                        value: field_from_u64(live_tally.saturating_add(1)),
+                    },
+                    Effect::SetField {
+                        cell: poll,
+                        index: ballots_slot_for_choice(choice),
+                        value: commitment,
+                    },
+                    Effect::EmitEvent {
+                        cell: poll,
+                        event: Event::new(symbol("vote-cast"), vec![choice_field]),
+                    },
+                ],
+                vec![exhibit],
+            )
         },
     )
 }
@@ -1004,7 +1154,34 @@ mod tests {
                 "expected Monotonic on slot {idx}"
             );
         }
-        assert_eq!(d.state_constraints.len(), 5);
+        // Each tally slot carries the ballot-binding `AnyOf[Immutable, CountGe]`
+        // gate opening its matching ballot-set commitment slot.
+        for (tally, ballots) in [
+            (TALLY_YES_SLOT, TALLY_YES_BALLOTS_SLOT),
+            (TALLY_NO_SLOT, TALLY_NO_BALLOTS_SLOT),
+            (TALLY_ABSTAIN_SLOT, TALLY_ABSTAIN_BALLOTS_SLOT),
+        ] {
+            assert!(
+                d.state_constraints.iter().any(|c| matches!(
+                    c,
+                    StateConstraint::AnyOf { variants }
+                        if matches!(
+                            variants.as_slice(),
+                            [
+                                SimpleStateConstraint::Immutable { index },
+                                SimpleStateConstraint::CountGe {
+                                    threshold: 1,
+                                    set_commitment_slot,
+                                },
+                            ] if *index == tally as u8
+                                && *set_commitment_slot == ballots as u8
+                        )
+                )),
+                "expected AnyOf[Immutable({tally}), CountGe(1, {ballots})]"
+            );
+        }
+        // 5 base caveats + (tally gate + commitment-slot gate) × 3 choices.
+        assert_eq!(d.state_constraints.len(), 11);
     }
 
     #[test]
@@ -1089,7 +1266,10 @@ mod tests {
     }
 
     #[test]
-    fn tally_increase_succeeds() {
+    fn tally_increase_succeeds_with_the_ballot_exhibit() {
+        // A tally advance is admitted when the turn EXHIBITS the distinct
+        // ballot set opening the choice's NEW ballot-set commitment slot (the
+        // ballot-binding CountGe gate).
         let program = poll_program();
         let mut old = empty();
         old.fields[QUESTION_HASH_SLOT] = question_hash("ship it?");
@@ -1097,7 +1277,46 @@ mod tests {
         old.set_nonce(1);
         let mut new = old.clone();
         new.fields[TALLY_YES_SLOT] = field_from_u64(6);
-        assert!(program.evaluate(&new, Some(&old), None).is_ok());
+        let ballots: BTreeSet<[u8; 32]> = [[0xb1u8; 32]].into_iter().collect();
+        new.fields[TALLY_YES_BALLOTS_SLOT] = count_ge_set_commitment(&ballots);
+        let blob = ballot_set_exhibit(&ballots);
+        let views = [dregg_cell::program::WitnessBlobView {
+            kind: dregg_cell::program::WitnessKindTag::Cleartext,
+            bytes: &blob.bytes,
+        }];
+        let bundle = dregg_cell::program::WitnessBundle {
+            blobs: &views,
+            registry: None,
+            finalized_roots: None,
+        };
+        assert!(
+            program
+                .evaluate_full(
+                    &new,
+                    Some(&old),
+                    None,
+                    &dregg_cell::program::TransitionMeta::wildcard(),
+                    &bundle,
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn tally_increase_without_the_ballot_exhibit_is_refused() {
+        // The SAME advance WITHOUT the witness is a fail-closed refusal — the
+        // ballot-binding gate, not Monotonic, is what demands the exhibit.
+        let program = poll_program();
+        let mut old = empty();
+        old.fields[QUESTION_HASH_SLOT] = question_hash("ship it?");
+        old.fields[TALLY_YES_SLOT] = field_from_u64(5);
+        old.set_nonce(1);
+        let mut new = old.clone();
+        new.fields[TALLY_YES_SLOT] = field_from_u64(6);
+        assert!(
+            program.evaluate(&new, Some(&old), None).is_err(),
+            "a witness-less tally move must be refused by the CountGe gate"
+        );
     }
 
     // ── Turn-builder shape ───────────────────────────────────────────────
@@ -1123,14 +1342,26 @@ mod tests {
     }
 
     #[test]
-    fn record_tally_action_bumps_poll_slot() {
+    fn record_tally_action_bumps_poll_slot_and_commits_the_ballot_set() {
         let cclerk = test_cipherclerk();
-        let action = build_record_tally_action(&cclerk, poll_cell(), VOTE_YES, 1);
+        let ballots: BTreeSet<[u8; 32]> =
+            [ballot_cell().as_bytes().to_owned()].into_iter().collect();
+        let action = build_record_tally_action(&cclerk, poll_cell(), VOTE_YES, 1, &ballots);
         assert!(matches!(
             &action.effects[0],
             Effect::SetField { index, value, .. }
                 if *index == TALLY_YES_SLOT && *value == field_from_u64(1)
         ));
+        // The ballot-set commitment rides the SAME turn…
+        assert!(matches!(
+            &action.effects[1],
+            Effect::SetField { index, value, .. }
+                if *index == TALLY_YES_BALLOTS_SLOT
+                    && *value == count_ge_set_commitment(&ballots)
+        ));
+        // …and the exhibited set rides as the unique Cleartext witness blob.
+        assert_eq!(action.witness_blobs.len(), 1);
+        assert_eq!(action.witness_blobs[0].kind, WitnessKind::Cleartext);
     }
 
     #[test]
@@ -1257,15 +1488,20 @@ mod tests {
         exec.submit_action(&cclerk, build_open_poll_action(&cclerk, poll, "ship it?"))
             .expect("open poll commits");
 
-        // Record a YES tally bump 0 -> 1: accepted (monotone increase).
+        // Record a YES tally bump 0 -> 1, backed by one counted ballot id (the
+        // ballot-binding gate demands the exhibit): accepted (monotone increase).
+        let ballots: BTreeSet<[u8; 32]> = [*blake3::hash(b"counted-ballot-1").as_bytes()]
+            .into_iter()
+            .collect();
         exec.submit_action(
             &cclerk,
-            build_record_tally_action(&cclerk, poll, VOTE_YES, 1),
+            build_record_tally_action(&cclerk, poll, VOTE_YES, 1, &ballots),
         )
         .expect("tally bump commits");
 
-        // Attempt to shrink the YES tally 1 -> 0: rejected by Monotonic caveat.
-        let shrink = build_record_tally_action(&cclerk, poll, VOTE_YES, 0);
+        // Attempt to shrink the YES tally 1 -> 0 (witness present, so the
+        // MONOTONIC caveat is what refuses): rejected.
+        let shrink = build_record_tally_action(&cclerk, poll, VOTE_YES, 0, &ballots);
         let err = exec
             .submit_action(&cclerk, shrink)
             .expect_err("tally decrease must be rejected");

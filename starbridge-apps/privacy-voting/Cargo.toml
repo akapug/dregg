@@ -27,6 +27,10 @@ dregg-turn = { path = "../../turn" }
 dregg-types = { path = "../../types" }
 
 blake3 = "1"
+# The ballot-set exhibit (the CountGe tally-binding witness) rides as a
+# postcard `Vec<[u8; 32]>` Cleartext blob — the same encoding the executor's
+# CountGe evaluator decodes (and collective-choice's quorum witness uses).
+postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
