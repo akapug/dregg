@@ -15,29 +15,40 @@ is assumed: every fact is extracted from a constraint proved to be a MEMBER of t
 The field glue (`Canon`, `bin_of_gate`, `eq_of_modEq_canon`, `forcedGe0_core`, `StepCanon`,
 `codeToParticle`) is REUSED from `AutomataflStepRefine`; it is descriptor-agnostic.
 
-## The DEFECT this refinement surfaced (§0.1) — the board cells are NOT range-checked
+## DEFECT #4, FOUND HERE AND NOW FIXED AT SOURCE — the board cells were NOT range-checked
 
 `automataflStepDesc` carries `boardRangeConstraints` — `assert_member(cell, {0,1,2,3})` on every
 OLD and NEW board column. That family is what let Leg A's capstone be UNCONDITIONAL.
 
-`automataflResolveDesc` HAS NO SUCH FAMILY. `resolveConstraints` is
-`onePin :: autoRead ++ validateMove×2 ++ validateOcclusion×2 ++ srcNonVac ++ patternBits ++
-selection ++ carry ++ flowThrough ++ writeMid ++ bindBoardRoots` — no membership gate on any
-`old c` or `mid c`.
+`automataflResolveDesc` HAD NO SUCH FAMILY, and that was LOAD-BEARING, not cosmetic. The
+source-non-vacuum bit is `anz = forced_ge0(fp − 1, SMALL_RBITS=5)`, so a witnessed source particle
+`fp = 4` satisfies `anz = 1` (the circuit treats the cell as CARRYING A PIECE) while
+`codeToParticle 4 = .vacuum` (the reference treats it as EMPTY) — and the 5-bit comparison supplies
+no a-priori window that would exclude it. A satisfying witness with an out-of-alphabet cell
+therefore made the capstone FALSE.
 
-This is LOAD-BEARING, not cosmetic. The source-non-vacuum bit is
-`anz = forced_ge0(fp − 1, SMALL_RBITS=5)`, so a witnessed source particle `fp = 4` satisfies
-`anz = 1` (the circuit treats the cell as CARRYING A PIECE), while `codeToParticle 4 = .vacuum`
-(the reference treats it as EMPTY). A satisfying witness with an out-of-alphabet cell therefore
-makes the naive capstone FALSE. §0.1 records this as an explicit `BoardAlphabet` envelope; the
-capstone (`resolve_sat_imp_resolveMid`) takes it as a hypothesis and NAMES it as the descriptor
-gap. The fix is to add `boardRangeConstraints`-for-`old`/`mid` to `automataflResolveEmit` and
-re-pin the wire golden — at which point `BoardAlphabet` becomes a theorem
-(`boardvalid_of_sat`-style) and the hypothesis drops. That change is NOT made here: the descriptor
-is byte-pinned and registered, so re-pinning it is a separate, deliberate edit.
+FIXED: `AutomataflResolveEmit.boardRangeConstraints` now emits `assert_member(cell, {0,1,2,3})` on
+every OLD and MID board column (constraints 371 → 379, wire golden re-pinned, descriptor
+regenerated). The `BoardAlphabet` envelope is consequently a THEOREM here — `boardvalid_of_sat` —
+extracted from the byte-pinned constraint list, and `srcNonVac_of_sat` no longer takes it as a
+hypothesis. Every result in this file is UNCONDITIONAL: there is no assumed envelope left.
 
-Every result BELOW the capstone (R1–R5, and the occlusion/geometry content of R6) is
-UNCONDITIONAL — it does not touch the particle alphabet at all.
+## What is CLOSED here, and what is NOT (the honest residual)
+
+CLOSED: R1 (auto pin) · R2 (`validate_move` ⇒ `MoveValid`, witnessed source read) · R3 (witnessed
+`is_vertical`, occlusion) · the R4 pattern bits, selection truth table and `srcNonVac`
+(now unconditional) · (a) `boardvalid_of_sat` · (b) `conflictResolve_pair`, the R4 corollary
+identifying the emitted `fork`/`collide`/`surv` selection with the reference `conflictResolve` on
+the 2-element move list · (c-reference) the `m = 2` caterpillar resolved on the reference side
+(`nextOf_pair`, `followChain_own`, `followChain_own_landing`, `followChain_flowThrough`).
+
+NOT CLOSED, precisely: the CIRCUIT half of R5 — extractors `carry_of_sat` / `ft_of_sat` tying the
+`cCarryA`/`cCarryB` and `cFtA`/`cFtB` columns to the conditions the three `followChain_*` lemmas
+branch on (pure gate algebra over `carryConstraints` / `flowThroughConstraints`, the same shape as
+`selection_of_sat`); R6, the `write_mid_witnessed` ⇒ decoded-mid-board equality (the `writeCellHead`
+one-hot polynomial with its swap-restore term, matched against `applyMoves`' journeys rewrite); and
+therefore THE CAPSTONE `resolve_sat_imp_resolveMid` itself. None of these is stated — there is no
+`sorry`, no assumed hypothesis, and no weakened or vacuous capstone standing in for them.
 
 ## Axiom hygiene
 
@@ -746,12 +757,19 @@ the reference `conflictResolve` (§5.4) additionally needs the source-non-vacuum
 "the source cell is non-vacuum", which is where the descriptor's MISSING board-alphabet range check
 (§0, the defect) becomes load-bearing: it is carried as the explicit `BoardAlphabet` envelope. -/
 
-/-- **THE DESCRIPTOR GAP, named.** `automataflResolveDesc` emits NO `assert_member(cell,{0,1,2,3})`
-family (contrast `AutomataflStepEmit.boardRangeConstraints`, which is exactly what made Leg A's
-capstone unconditional). Without it a satisfying witness may carry `old c = 4`, which
-`codeToParticle` decodes to VACUUM while the circuit's `anz = forced_ge0(fp − 1, 5)` reads as
-NON-VACUUM. Everything that reads the particle ALPHABET therefore carries this envelope, and it is
-a HYPOTHESIS, not a theorem — that is the defect to fix in the emitter. -/
+/-- **THE PARTICLE-ALPHABET ENVELOPE — now a THEOREM (`boardvalid_of_sat`), not a hypothesis.**
+
+DEFECT #4, as this refinement found it: `automataflResolveDesc` emitted NO
+`assert_member(cell,{0,1,2,3})` family (contrast `AutomataflStepEmit.boardRangeConstraints`, which is
+exactly what made Leg A's capstone unconditional). Without it a satisfying witness could carry
+`old c = 4`, which `codeToParticle` decodes to VACUUM while the circuit's
+`anz = forced_ge0(fp − 1, 5)` reads as NON-VACUUM — a genuine descriptor/reference DISAGREEMENT over
+the whole window `fp ∈ [4, p)`, which made the naive capstone FALSE.
+
+FIXED AT SOURCE: `AutomataflResolveEmit.boardRangeConstraints` now emits the `KK + KK` membership
+gates on every OLD and MID board column, the wire golden was re-pinned (371 → 379 constraints), and
+this predicate is DERIVED from the descriptor by `boardvalid_of_sat` below. It survives as a named
+`Prop` only because it is the convenient shape to thread through the alphabet-sensitive lemmas. -/
 def BoardAlphabet (e : VmRowEnv) : Prop :=
   ∀ c, c < KK →
     ((e.loc (old c) = 0 ∨ e.loc (old c) = 1 ∨ e.loc (old c) = 2 ∨ e.loc (old c) = 3)
@@ -779,6 +797,25 @@ structure EqCoordsGates (xa ya xb yb ec : Nat) : Prop where
 
 section Selection
 variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+/-- **(a) — `boardvalid_of_sat`: THE ALPHABET ENVELOPE IS A THEOREM.** Every OLD and MID board cell
+of a satisfying, canonical Leg-R trace lies in the particle alphabet `{VAC, REP, ATT, AUTO}`,
+because the descriptor now EMITS `assert_member(cell, {0,1,2,3})` on each of them
+(`AutomataflResolveEmit.boardRangeConstraints`). Each membership gate is proved a MEMBER of the
+byte-pinned constraint list by `decide`, so this is anchored to the emitted object — not assumed.
+With it, `srcNonVac_of_sat` (and everything above it) becomes UNCONDITIONAL. -/
+theorem boardvalid_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    BoardAlphabet (envAt t i) := by
+  intro c hcK
+  have hK : c < 4 := by simpa [KK, NN] using hcK
+  interval_cases c <;>
+    exact ⟨AutomataflStepRefine.mem4_of_gate
+             (rgate hsat i hi (g := memberExpr (old _) [0, 1, 2, 3]) (by decide))
+             (canon_loc hc i _),
+           AutomataflStepRefine.mem4_of_gate
+             (rgate hsat i hi (g := memberExpr (mid _) [0, 1, 2, 3]) (by decide))
+             (canon_loc hc i _)⟩
 
 /-- The 5-bit `forced_ge0` site extractor (the `anz`/`bnz` twin of `ge0_9_of_sat`). -/
 theorem ge0_5_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
@@ -963,16 +1000,17 @@ theorem selection_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
 
 /-- **R4c — `srcNonVac_of_sat`.** The source-non-vacuum bit is EXACTLY the reference predicate
 "the decoded OLD board carries a piece at this move's source". This is the ONE place where the
-missing board-alphabet range check bites: without `halpha` a witness may set `fp = 4`, satisfying
-`anz = 1` while `codeToParticle 4 = .vacuum`. See §0 — `halpha` is the named descriptor gap. -/
+board-alphabet range check is load-bearing: without it a witness may set `fp = 4`, satisfying
+`anz = 1` while `codeToParticle 4 = .vacuum`. That check is now EMITTED (DEFECT #4, fixed), so the
+envelope arrives from `boardvalid_of_sat` and this theorem is UNCONDITIONAL. -/
 theorem srcNonVac_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
     (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (which ib bit0 : Nat)
-    (mg : MoveGates (mvBase which)) (gg : Ge0Gates5 (cFp (mvBase which)) ib bit0)
-    (halpha : BoardAlphabet (envAt t i)) :
+    (mg : MoveGates (mvBase which)) (gg : Ge0Gates5 (cFp (mvBase which)) ib bit0) :
     ((envAt t i).loc ib = 0 ∨ (envAt t i).loc ib = 1)
       ∧ ((envAt t i).loc ib = 1 ↔
           ((boardDecodeOld (envAt t i)).cellAt (moveDecode (envAt t i) which).frm).isVacuum
             = false) := by
+  have halpha : BoardAlphabet (envAt t i) := boardvalid_of_sat hsat hc i hi
   set e := envAt t i with he
   obtain ⟨X, Y, hX, hY, hfx, hfy, hfp⟩ := sourceRead_of_sat hsat hc i hi (mvBase which) mg
   rw [← he] at hfx hfy hfp
@@ -1005,6 +1043,180 @@ theorem srcNonVac_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
       | (rcases hb with hz | ho
          · exact absurd (h0 hz) (by norm_num)
          · exact ho))
+
+/-! ## §5.5 — (b) R4 COROLLARY: the emitted selection IS the reference `conflictResolve`.
+
+The circuit's leg 4 computes three booleans (`fork`, `collide`, `surv`) out of four coordinate-pair
+equality bits and two source-non-vacuum bits. The reference computes a LIST: it filters `[ma, mb]`
+by "touches no conflicted source and no conflicted destination", where each conflict is an
+order-free `hasTwoDistinct` over a sub-list. These are different shapes; this section proves them
+the same object at `m = 2`.
+
+The key structural facts, both proved below by exhausting the four decidable equalities: at a
+2-element move list `frmConflict` and `toConflict` take the SAME value on `ma` as on `mb` — so the
+filter keeps BOTH moves or NEITHER — and those values are literally the circuit's `fork` and
+`collide` patterns. -/
+
+section ConflictPair
+
+/-- `frmConflict` at `m = 2` is the circuit's `fork` pattern `eq_ff ∧ ¬eq_tt`, on either move. -/
+theorem frmConflict_pair (ma mb : Move) :
+    (frmConflict [ma, mb] ma = true ↔ (ma.frm = mb.frm ∧ ma.to ≠ mb.to))
+      ∧ (frmConflict [ma, mb] mb = true ↔ (ma.frm = mb.frm ∧ ma.to ≠ mb.to)) := by
+  constructor <;>
+    (by_cases hf : ma.frm = mb.frm <;> by_cases ht : ma.to = mb.to <;>
+      simp [frmConflict, hasTwoDistinct, hf, ht, eq_comm])
+
+/-- `toConflict` at `m = 2` is the circuit's `collide` pattern
+`eq_tt ∧ ¬eq_ff ∧ anz ∧ bnz`, on either move. The two non-vacuum conjuncts enter because the
+reference's destination-conflict filter only counts sources that CARRY a piece — exactly the
+`anz`/`bnz` conjuncts of `selectionConstraints`. -/
+theorem toConflict_pair (bd : Board) (ma mb : Move) :
+    (toConflict bd [ma, mb] ma = true ↔
+        (ma.to = mb.to ∧ ma.frm ≠ mb.frm
+          ∧ (bd.cellAt ma.frm).isVacuum = false ∧ (bd.cellAt mb.frm).isVacuum = false))
+      ∧ (toConflict bd [ma, mb] mb = true ↔
+        (ma.to = mb.to ∧ ma.frm ≠ mb.frm
+          ∧ (bd.cellAt ma.frm).isVacuum = false ∧ (bd.cellAt mb.frm).isVacuum = false)) := by
+  constructor <;>
+    (by_cases hf : ma.frm = mb.frm <;> by_cases ht : ma.to = mb.to <;>
+      by_cases hva : (bd.cellAt ma.frm).isVacuum = true <;>
+      by_cases hvb : (bd.cellAt mb.frm).isVacuum = true <;>
+      simp_all [toConflict, hasTwoDistinct, Particle.isVacuum] <;>
+      first
+        | exact ⟨fun h => ht h.symm, fun h => absurd h.symm ht⟩
+        | exact fun h => absurd h.symm ht
+        | exact fun h => absurd h.symm hf
+        | tauto)
+
+/-- **(b) — `conflictResolve_pair`: THE R4 COROLLARY.** On the 2-element move list the reference
+conflict resolution is ALL-OR-NOTHING, and the "all" branch is precisely the circuit's `surv = 1`:
+
+    conflictResolve bd [ma, mb] = if fork ∨ collide then [] else [ma, mb]
+
+with `fork` and `collide` spelled in exactly the terms `selection_of_sat` delivers. -/
+theorem conflictResolve_pair (bd : Board) (ma mb : Move) :
+    conflictResolve bd [ma, mb]
+      = if (ma.frm = mb.frm ∧ ma.to ≠ mb.to)
+           ∨ (ma.to = mb.to ∧ ma.frm ≠ mb.frm
+               ∧ (bd.cellAt ma.frm).isVacuum = false ∧ (bd.cellAt mb.frm).isVacuum = false)
+        then [] else [ma, mb] := by
+  obtain ⟨hfa, hfb⟩ := frmConflict_pair ma mb
+  obtain ⟨hta, htb⟩ := toConflict_pair bd ma mb
+  by_cases hcond : (ma.frm = mb.frm ∧ ma.to ≠ mb.to)
+           ∨ (ma.to = mb.to ∧ ma.frm ≠ mb.frm
+               ∧ (bd.cellAt ma.frm).isVacuum = false ∧ (bd.cellAt mb.frm).isVacuum = false)
+  · rcases hcond with h | h
+    · simp [conflictResolve, List.filter, hfa.mpr h, hfb.mpr h,
+        if_pos (show (ma.frm = mb.frm ∧ ma.to ≠ mb.to)
+           ∨ (ma.to = mb.to ∧ ma.frm ≠ mb.frm
+               ∧ (bd.cellAt ma.frm).isVacuum = false
+               ∧ (bd.cellAt mb.frm).isVacuum = false) from Or.inl h)]
+    · simp [conflictResolve, List.filter, hta.mpr h, htb.mpr h,
+        if_pos (show (ma.frm = mb.frm ∧ ma.to ≠ mb.to)
+           ∨ (ma.to = mb.to ∧ ma.frm ≠ mb.frm
+               ∧ (bd.cellAt ma.frm).isVacuum = false
+               ∧ (bd.cellAt mb.frm).isVacuum = false) from Or.inr h)]
+  · have h1 : frmConflict [ma, mb] ma = false := by
+      simpa using fun h => hcond (Or.inl (hfa.mp h))
+    have h2 : frmConflict [ma, mb] mb = false := by
+      simpa using fun h => hcond (Or.inl (hfb.mp h))
+    have h3 : toConflict bd [ma, mb] ma = false := by
+      simpa using fun h => hcond (Or.inr (hta.mp h))
+    have h4 : toConflict bd [ma, mb] mb = false := by
+      simpa using fun h => hcond (Or.inr (htb.mp h))
+    simp [conflictResolve, List.filter, h1, h2, h3, h4, if_neg hcond]
+
+end ConflictPair
+
+/-! ## §5.6 — (c), the REFERENCE HALF of R5: the `m = 2` caterpillar, resolved.
+
+Leg 6 of the descriptor computes two flow-through bits and interpolates each piece's landing square
+between its own `to` and the other piece's `to`. The reference computes the same landing by
+`followChain` over the move graph `nextOf`. These four lemmas resolve the reference side completely
+at `n = 2`: the move graph is a two-entry lookup table (`nextOf_pair` — using `occluded_false_n2`,
+so no occlusion survives at this board size), and the chain terminates in exactly the three shapes
+the circuit's `ft` bit distinguishes:
+
+  * `followChain_own` — no chain relation (`to_a ≠ frm_b`): the piece lands on its OWN `to`;
+  * `followChain_own_landing` — the chain relation holds but the next square is a PIECE source
+    (`bnz`, the circuit's `¬ft` conjunct): the caterpillar STOPS there, again the piece's own `to`;
+  * `followChain_flowThrough` — the chain relation holds, the next square is VACATING (`¬bnz`) and
+    the 2-cycle is broken (`to_b ≠ frm_a`, the circuit's `¬eq_ba` conjunct): the piece flows
+    THROUGH to `to_b`. This is exactly `ft_a = 1 ⇒ dest_a = to_b`.
+
+The three cases are jointly exhaustive and pairwise exclusive on the same conditions the emitted
+`flowThroughConstraints` branch on, so the reference landing square is a function of precisely the
+circuit's `ft` bit. What is NOT yet proven here is the CIRCUIT half of R5 (an `ft_of_sat` extractor
+tying the `cFtA`/`cFtB` columns to those conditions) — see the file header for the residual. -/
+
+section Caterpillar
+
+open Dregg2.Games.Automatafl (nextOf followChain)
+
+/-- The `m = 2` move graph is a two-entry lookup: `frm_a ↦ to_a`, `frm_b ↦ to_b`, nothing else.
+At `n = 2` no rook move has a strictly-interior cell, so `occluded` never fires (`interior_nil_n2`)
+and the graph is unconditional in the board. -/
+theorem nextOf_pair (bd : Board) (ma mb : Move) (c : Coord)
+    (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
+    (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2) :
+    nextOf bd [ma, mb] [ma.frm, mb.frm] c
+      = if c = ma.frm then some ma.to else if c = mb.frm then some mb.to else none := by
+  have oa := occluded_false_n2 bd [ma.frm, mb.frm] ma h1 h2
+  have ob := occluded_false_n2 bd [ma.frm, mb.frm] mb h3 h4
+  by_cases ha : c = ma.frm
+  · subst ha; simp [nextOf, oa]
+  · by_cases hb : c = mb.frm
+    · subst hb; simp [nextOf, oa, ob, Ne.symm ha, ha]
+    · simp [nextOf, oa, ob, ha, hb, Ne.symm ha, Ne.symm hb]
+
+/-- NO chain relation (`to_a ≠ frm_b`) ⇒ the piece lands on its own destination. -/
+theorem followChain_own (bd : Board) (ma mb : Move) (ps : List Coord)
+    (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
+    (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
+    (hd : ma.frm ≠ ma.to) (hne : ma.to ≠ mb.frm) (f : Nat) :
+    followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1) = ma.to := by
+  rw [followChain, nextOf_pair bd ma mb ma.frm h1 h2 h3 h4, if_pos rfl]
+  dsimp only
+  rw [if_neg (by simp : ¬ ([] : List Coord).contains ma.to = true)]
+  by_cases hps : ps.contains ma.to = true
+  · rw [if_pos hps]
+  · rw [if_neg hps, nextOf_pair bd ma mb ma.to h1 h2 h3 h4, if_neg (Ne.symm hd), if_neg hne]
+
+/-- The next square is itself a PIECE source (the circuit's `bnz` conjunct, which NEGATES `ft`) ⇒
+the caterpillar STOPS: the piece still lands on its own destination. -/
+theorem followChain_own_landing (bd : Board) (ma mb : Move) (ps : List Coord)
+    (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
+    (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
+    (hd : ma.frm ≠ ma.to) (hps : ps.contains ma.to = true) (f : Nat) :
+    followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1) = ma.to := by
+  rw [followChain, nextOf_pair bd ma mb ma.frm h1 h2 h3 h4, if_pos rfl]
+  dsimp only
+  rw [if_neg (by simp : ¬ ([] : List Coord).contains ma.to = true), if_pos hps]
+
+/-- **THE FLOW-THROUGH CASE.** `to_a = frm_b` (the circuit's `eq_ab`), `frm_b` is NOT a piece source
+(`¬bnz`), and the 2-cycle is broken (`to_b ≠ frm_a`, the circuit's `¬eq_ba`) ⇒ the piece rides the
+vacating square and lands on `to_b`. This IS `ft_a = 1 ⇒ dest_a = to_b`, on the reference side. -/
+theorem followChain_flowThrough (bd : Board) (ma mb : Move) (ps : List Coord)
+    (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
+    (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
+    (hda : ma.frm ≠ ma.to) (hdb : mb.frm ≠ mb.to)
+    (hab : ma.to = mb.frm) (hba : mb.to ≠ ma.frm)
+    (hps : ps.contains mb.frm = false) (hpsb : ps.contains mb.to = false) (f : Nat) :
+    followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1 + 1) = mb.to := by
+  have hfrm : mb.frm ≠ ma.frm := by rw [← hab]; exact fun h => hda h.symm
+  rw [followChain, nextOf_pair bd ma mb ma.frm h1 h2 h3 h4, if_pos rfl]
+  dsimp only
+  rw [hab, if_neg (by simp : ¬ ([] : List Coord).contains mb.frm = true),
+    if_neg (by rw [hps]; exact Bool.false_ne_true),
+    nextOf_pair bd ma mb mb.frm h1 h2 h3 h4, if_neg hfrm, if_pos rfl]
+  dsimp only
+  rw [followChain, nextOf_pair bd ma mb mb.frm h1 h2 h3 h4, if_neg hfrm, if_pos rfl]
+  dsimp only
+  rw [if_neg (by simpa using hba), if_neg (by rw [hpsb]; exact Bool.false_ne_true),
+    nextOf_pair bd ma mb mb.to h1 h2 h3 h4, if_neg hba, if_neg (Ne.symm hdb)]
+
+end Caterpillar
 
 end Selection
 
@@ -1082,6 +1294,20 @@ def canonSegForge : Assignment := fun c => if c = cSeg (occBase 0) 0 then 1 else
 #guard canonSegExpr.eval canonSegGood == 0     -- seg = 0: the only satisfying value
 #guard canonSegExpr.eval canonSegForge != 0    -- forged interior cell: REJECTED
 
+/-- **THE DEFECT-#4 CANARY.** The newly emitted board-cell alphabet gate REJECTS exactly the witness
+that broke the capstone: `old[0] = 4`, which the circuit's `anz = forced_ge0(fp − 1, 5)` would have
+read as "carries a piece" while `codeToParticle 4 = .vacuum` reads it as empty. Two-sided: an
+in-alphabet cell passes, the out-of-alphabet cell that made the refinement FALSE does not. -/
+def canonAlphaExpr : EmittedExpr := memberExpr (old 0) [0, 1, 2, 3]
+def canonAlphaGood : Assignment := fun c => if c = old 0 then 2 else 0   -- ATTRACTOR: legal
+def canonAlphaForge : Assignment := fun c => if c = old 0 then 4 else 0  -- the DEFECT witness
+
+#guard canonAlphaExpr.eval canonAlphaGood == 0    -- in-alphabet cell: ACCEPTED
+#guard canonAlphaExpr.eval canonAlphaForge != 0   -- `old[0] = 4`: REJECTED (was accepted before)
+#guard (memberExpr (mid 0) [0, 1, 2, 3]).eval (fun c => if c = mid 0 then 4 else 0) != 0
+#guard cg (memberExpr (old 0) [0,1,2,3]) ∈ automataflResolveDesc.constraints
+#guard cg (memberExpr (mid 3) [0,1,2,3]) ∈ automataflResolveDesc.constraints
+
 /-! ## §8 — Axiom hygiene. Every exported theorem, kernel-clean. -/
 
 #print axioms rgate
@@ -1119,5 +1345,13 @@ def canonSegForge : Assignment := fun c => if c = cSeg (occBase 0) 0 then 1 else
 #print axioms eqGates_ba
 #print axioms anzGates
 #print axioms bnzGates
+#print axioms boardvalid_of_sat
+#print axioms frmConflict_pair
+#print axioms toConflict_pair
+#print axioms conflictResolve_pair
+#print axioms nextOf_pair
+#print axioms followChain_own
+#print axioms followChain_own_landing
+#print axioms followChain_flowThrough
 
 end Dregg2.Circuit.Emit.AutomataflResolveRefine

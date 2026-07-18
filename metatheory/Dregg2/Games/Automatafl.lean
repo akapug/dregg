@@ -526,6 +526,32 @@ conflict-resolve → apply-all → Automaton step.  (Win-check is a read-only pr
 def applyTurn (b : Board) (ms : List Move) : Board :=
   automatonStep (applyMoves b (conflictResolve b (ms.filter (moveValidB b))))
 
+/-- **`resolveMid` — THE `old → mid` HALF OF THE TURN, NAMED.**
+
+`applyTurn` is the composition of two halves, and the two Lean-authored automatafl AIRs refine one
+half each: `AutomataflResolveEmit` (Leg R) adjudicates `old → mid` and `AutomataflStepEmit` (Leg A)
+runs `mid → new`. Until now only the second half had a name (`automatonStep`), so Leg R's capstone
+had to spell its target out as an inline composition. This is that composition, named — the
+validity filter, the conflict resolution, and the (occlusion-aware, chain-following) rewrite:
+
+    resolveMid b ms = applyMoves b (conflictResolve b (ms.filter (moveValidB b)))
+
+It is DEFINITIONALLY the inner term of `applyTurn`; `applyTurn_factors` records that, so the two
+capstones compose: Leg R gives `boardDecode mid = resolveMid (boardDecode old) ms`, Leg A gives
+`boardDecode new = automatonStep (boardDecode mid)`, and the factorization closes them into
+`applyTurn`. `applyTurn`'s semantics are UNCHANGED — this def is introduced by `rfl`. -/
+def resolveMid (b : Board) (ms : List Move) : Board :=
+  applyMoves b (conflictResolve b (ms.filter (moveValidB b)))
+
+/-- **THE FACTORIZATION.** `applyTurn = automatonStep ∘ resolveMid` — the seam at which the Leg R
+and Leg A refinements meet. Definitional, so rewriting with it never changes what is proven. -/
+theorem applyTurn_factors (b : Board) (ms : List Move) :
+    applyTurn b ms = automatonStep (resolveMid b ms) := rfl
+
+/-- `resolveMid`, like `applyMoves`, never relocates the Automaton. -/
+theorem resolveMid_automaton (b : Board) (ms : List Move) :
+    (resolveMid b ms).automaton = b.automaton := rfl
+
 /-- `applyMoves` never relocates the Automaton (validity forbids `to = automaton`;
 sources are never the Automaton cell), so its location field is untouched. -/
 theorem applyMoves_automaton (b : Board) (ms : List Move) :
