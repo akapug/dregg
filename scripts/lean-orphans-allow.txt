@@ -28,7 +28,6 @@ Dregg2.Circuit.Emit.AdjacencyMembershipRefine  # GREEN self-checked (#assert cle
 Dregg2.Circuit.Emit.AdjacencyMembershipRefineAudit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.AdjacencyMembershipRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.AttestedFactMembershipEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
-Dregg2.Circuit.Emit.GnarkVerifier.InputOpenEmit  # RED: max-recursion-depth @175, whnf-heartbeat-timeout @320, type-mismatch @228 — newly-appeared WIP (GnarkVerifier cluster), likely active-authoring churn; recheck before treating as a fixed break
 Dregg2.Circuit.Emit.AvailWideMembersNarrow  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.BilateralAggregationEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.BilateralAggregationRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
@@ -69,7 +68,7 @@ Dregg2.Circuit.Emit.MerkleMembershipRung2  # GREEN self-checked (#assert clean),
 Dregg2.Circuit.Emit.MultiStepChainEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.MultiStepChainRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.NonRevocationRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
-Dregg2.Circuit.Emit.NonRevocationRung2Full  # RED: axiom-hygiene FAIL @98 — nonRevocation_full_discharge depends on sorryAx (app type-mismatch @95:45) — SILENTLY BROKEN, needs fix
+Dregg2.Circuit.Emit.NonRevocationRung2Full  # GREEN self-checked, REGISTERABLE — NonRevocation assurance keystone (nonRevocation_full_discharge). The prior "RED/sorryAx" was a STALE-OLEAN artifact of `lake env lean` (the mod-p lift added hcanon to nonRevocation_rung2; the dep olean predated it). `lake build` dep-ordered = EXIT 0, #assert_axioms clean.
 Dregg2.Circuit.Emit.NoteSpendingLeafEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.NoteSpendingLeafRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.NoteSpendingLeafRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
@@ -129,7 +128,7 @@ Dregg2.Circuit.WrapSafetyStaticAnalyzer  # GREEN self-checked (#assert clean), R
 # --- PQ-crypto spec WIP (ML-DSA/ML-KEM codecs, VerifyCore/SignCore specs, ACVP KATs, NTT faithfulness); spec-in-progress, not yet CI-clean ---
 Dregg2.Crypto.AcvpKats  # GREEN, #guard-only (no axiom self-check) — PQ-crypto spec cluster
 Dregg2.Crypto.CodecRoundTrip  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
-Dregg2.Crypto.CryptoVerifyAll  # RED (build-order): imports orphan Dregg2.Crypto.VerifyCoreEqSpecW whose .olean is never built — NOT a logic break; register the dep to check this aggregator
+Dregg2.Crypto.CryptoVerifyAll  # GREEN dep-ordered (lake build = EXIT 0, 8556 jobs). The prior "RED: missing VerifyCoreEqSpecW.olean" was a STALE-OLEAN artifact of `lake env lean` (orphan dep never built to olean); dep-ordered build compiles it. Crypto aggregator, unreachable from root.
 Dregg2.Crypto.EncapsCoreSpec  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
 Dregg2.Crypto.KemSoundnessQuant  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
 Dregg2.Crypto.MlDsaHintCodec  # GREEN self-checked (#assert clean), REGISTERABLE — PQ-crypto spec cluster
@@ -171,3 +170,6 @@ Dregg2.Exec.FFIDirect  # GREEN, #guard-only (no axiom self-check) — FFI-direct
 
 # --- the Claims axiom-net — KNOWN 'ran nowhere' (see MEMORY: CI-meaningfulness audit); being wired on its own track ---
 Dregg2.Claims  # GREEN self-checked (#assert clean), REGISTERABLE — Claims axiom-net
+Dregg2.Circuit.Emit.RotWideCompactS2  # unreachable from root — other-terminal rotated-compact WIP cluster (build status not re-verified dep-ordered).
+Dregg2.Circuit.Emit.WideCompactTable  # unreachable from root — other-terminal rotated-compact WIP cluster.
+Dregg2.Circuit.RotatedKernelRefinementAvailWideCompact  # unreachable from root — other-terminal rotated-compact WIP cluster.
