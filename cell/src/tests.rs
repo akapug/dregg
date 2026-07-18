@@ -619,6 +619,7 @@ fn ledger_delta_create_cells() {
         created: vec![cell1.clone(), cell2.clone()],
         updated: Vec::new(),
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta).unwrap();
@@ -637,6 +638,7 @@ fn ledger_delta_create_duplicate_fails() {
         created: vec![cell.clone()],
         updated: Vec::new(),
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     let err = ledger.apply_delta(&delta).unwrap_err();
@@ -663,6 +665,7 @@ fn ledger_delta_update_fields() {
             },
         )],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta).unwrap();
@@ -681,6 +684,7 @@ fn ledger_delta_update_nonexistent_cell_fails() {
         created: Vec::new(),
         updated: vec![(fake_id, CellStateDelta::empty())],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     let err = ledger.apply_delta(&delta).unwrap_err();
@@ -706,6 +710,7 @@ fn ledger_delta_invalid_field_index_fails() {
             },
         )],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     let err = ledger.apply_delta(&delta).unwrap_err();
@@ -739,6 +744,7 @@ fn ledger_delta_balance_deduction_insufficient_fails() {
             },
         )],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     let err = ledger.apply_delta(&delta).unwrap_err();
@@ -766,6 +772,7 @@ fn ledger_delta_computron_transfer() {
         created: Vec::new(),
         updated: Vec::new(),
         computron_transfers: vec![(sender_id, receiver_id, 300)],
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta).unwrap();
@@ -787,6 +794,7 @@ fn ledger_delta_transfer_insufficient_balance_fails() {
         created: Vec::new(),
         updated: Vec::new(),
         computron_transfers: vec![(sender_id, receiver_id, 200)],
+        removed: Vec::new(),
     };
 
     let err = ledger.apply_delta(&delta).unwrap_err();
@@ -815,6 +823,7 @@ fn ledger_delta_transfer_source_not_found() {
         created: Vec::new(),
         updated: Vec::new(),
         computron_transfers: vec![(fake_sender, receiver_id, 10)],
+        removed: Vec::new(),
     };
 
     let err = ledger.apply_delta(&delta).unwrap_err();
@@ -833,6 +842,7 @@ fn ledger_delta_transfer_dest_not_found() {
         created: Vec::new(),
         updated: Vec::new(),
         computron_transfers: vec![(sender_id, fake_dest, 10)],
+        removed: Vec::new(),
     };
 
     let err = ledger.apply_delta(&delta).unwrap_err();
@@ -859,6 +869,7 @@ fn ledger_delta_permission_changes() {
             },
         )],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta).unwrap();
@@ -901,6 +912,7 @@ fn ledger_delta_capability_grant_and_revoke() {
             },
         )],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta).unwrap();
@@ -924,6 +936,7 @@ fn ledger_delta_capability_grant_and_revoke() {
             },
         )],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta2).unwrap();
@@ -956,6 +969,7 @@ fn ledger_delta_complex_atomic_operation() {
             },
         )],
         computron_transfers: vec![(alice_id, bob_id, 500)],
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta).unwrap();
@@ -1311,6 +1325,7 @@ fn scenario_agent_lifecycle() {
         created: Vec::new(),
         updated: Vec::new(),
         computron_transfers: vec![(parent_id, child_id, 2000)],
+        removed: Vec::new(),
     };
     ledger.apply_delta(&delta).unwrap();
 
@@ -1441,6 +1456,7 @@ fn scenario_merkle_proof_after_mutations() {
             },
         )],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
     ledger.apply_delta(&delta).unwrap();
 
@@ -1466,6 +1482,7 @@ fn scenario_atomic_failure_no_partial_apply() {
         created: vec![new_cell],
         updated: Vec::new(),
         computron_transfers: vec![(sender_id, new_id, 9999)], // way too much
+        removed: Vec::new(),
     };
 
     let err = ledger.apply_delta(&delta);
@@ -1530,6 +1547,7 @@ fn cell_state_delta_empty_is_noop() {
         created: Vec::new(),
         updated: vec![(id, CellStateDelta::empty())],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta).unwrap();
@@ -1584,6 +1602,7 @@ fn ledger_incremental_root_matches_full_rebuild() {
             ),
         ],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     ledger.apply_delta(&delta).unwrap();
@@ -1601,6 +1620,7 @@ fn ledger_incremental_root_matches_full_rebuild() {
         created: vec![cell_a, cell_b],
         updated: Vec::new(),
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
     ledger.apply_delta(&delta2).unwrap();
     assert_eq!(ledger.root(), ledger.recompute_root_standalone());
@@ -1610,6 +1630,7 @@ fn ledger_incremental_root_matches_full_rebuild() {
         created: Vec::new(),
         updated: Vec::new(),
         computron_transfers: vec![(a_id, b_id, 2000)],
+        removed: Vec::new(),
     };
     ledger.apply_delta(&delta3).unwrap();
     assert_eq!(ledger.root(), ledger.recompute_root_standalone());
@@ -1885,6 +1906,7 @@ fn p2_2_apply_delta_rejects_nonce_overflow() {
             },
         )],
         computron_transfers: Vec::new(),
+        removed: Vec::new(),
     };
 
     let result = ledger.apply_delta(&delta);

@@ -42,7 +42,7 @@
 use std::path::Path;
 
 use dregg_cell::{Cell, Ledger};
-use dregg_persist::{CommitRecord, LedgerCheckpoint, PersistentStore, StoreError};
+use dregg_persist::{CellOverlayOp, CommitRecord, LedgerCheckpoint, PersistentStore, StoreError};
 use dregg_turn::turn::{Turn, TurnReceipt};
 
 // NOTE: the recovered committed turns are carried as plain input `Turn`s; the
@@ -268,12 +268,20 @@ impl WorldPersist {
         turn: &Turn,
     ) -> Result<(), StoreError> {
         // The exact change-set, already in hand: post-state of every touched cell
-        // that still exists post-commit (a cell DESTROYED this turn is gone from
-        // the ledger, so `filter_map` drops it — matching the node; its removal is
-        // carried by the next checkpoint, not the overlay, which only adds).
+        // that still exists post-commit. A cell REMOVED this turn (MakeSovereign:
+        // gone from the hosted set post-commit) is dropped from `touched_cells` and
+        // carried instead in `removed` — the tombstone the overlay DELETES on
+        // recovery. Post-states alone cannot represent an erasure, so without the
+        // tombstone `checkpoint ⊕ overlay` resurrects the cell as hosted and the
+        // reconstructed root diverges from the recorded `ledger_root`.
         let touched_cells: Vec<Cell> = touched
             .iter()
             .filter_map(|id| ledger.get(id).cloned())
+            .collect();
+        let removed: Vec<[u8; 32]> = touched
+            .iter()
+            .filter(|id| ledger.get(id).is_none())
+            .map(|id| id.0)
             .collect();
         let record = CommitRecord {
             ordinal: 0, // assigned by the store at the cursor
@@ -285,6 +293,7 @@ impl WorldPersist {
             receipt_hash: receipt.receipt_hash(),
             ledger_root: canonical_ledger_root(ledger),
             touched_cells,
+            removed,
         };
         // Persist the input turn FIRST (under the ordinal this commit will take),
         // so that if the commit txn lands, the turn is already durable; if the
@@ -349,8 +358,16 @@ impl WorldPersist {
         //    order, LAST-WRITER-WINS (remove-then-insert) — exactly
         //    node::upsert_cell. This is the `recover = checkpoint ⊕ overlay` half.
         let overlay = self.store.cell_overlay_since(checkpoint_height)?;
-        for cell in overlay {
-            upsert_cell(&mut ledger, cell);
+        for op in overlay {
+            match op {
+                // A removal (MakeSovereign tombstone) must DELETE, or the cell is
+                // resurrected as hosted and the root diverges — the bug the
+                // `removed` dimension closes.
+                CellOverlayOp::Upsert(cell) => upsert_cell(&mut ledger, cell),
+                CellOverlayOp::Remove(id) => {
+                    let _ = ledger.remove(&id);
+                }
+            }
         }
 
         // 3. Convergence FAIL-CLOSED: the reconstructed canonical root MUST equal
@@ -520,6 +537,7 @@ mod tests {
                 receipt_hash: [0x7f; 32],
                 ledger_root: [0xde; 32], // WRONG root — the tear.
                 touched_cells: vec![],
+                removed: Vec::new(),
             };
             bad.touched_cells = vec![]; // no cells → reconstruction unchanged, root mismatches
             store.commit_finalized_turn(cursor, &bad).unwrap();

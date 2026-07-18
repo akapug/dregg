@@ -529,6 +529,13 @@ impl TurnExecutor {
                         created_cells.insert(*cell);
                     }
                 }
+                JournalEntry::MakeSovereign { cell } => {
+                    // Erasure, not a post-state write: the cell left the hosted
+                    // set. Record it in the tombstone dimension so the durable
+                    // overlay DELETES it on recovery (otherwise `checkpoint ⊕
+                    // overlay` resurrects it as hosted and the root diverges).
+                    delta.removed.push(cell.id());
+                }
                 JournalEntry::SetField {
                     cell,
                     index,

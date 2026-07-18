@@ -303,6 +303,7 @@ pub fn apply_computron_refill(
         created: Vec::new(),
         updated: Vec::new(),
         computron_transfers: vec![(operator_cell, voucher.recipient, credit)],
+        removed: Vec::new(),
     };
     ledger
         .apply_delta(&full)

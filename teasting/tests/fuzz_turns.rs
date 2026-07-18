@@ -202,6 +202,7 @@ fn test_fuzz_turns_conservation_and_nonce() {
                     created: Vec::new(),
                     updated: Vec::new(),
                     computron_transfers: vec![(from_id, to_id, *amount)],
+                    removed: Vec::new(),
                 };
                 ledger.apply_delta(&delta)
             }
@@ -221,6 +222,7 @@ fn test_fuzz_turns_conservation_and_nonce() {
                         },
                     )],
                     computron_transfers: Vec::new(),
+                    removed: Vec::new(),
                 };
                 ledger.apply_delta(&delta)
             }
@@ -240,6 +242,7 @@ fn test_fuzz_turns_conservation_and_nonce() {
                         },
                     )],
                     computron_transfers: Vec::new(),
+                    removed: Vec::new(),
                 };
                 ledger.apply_delta(&delta)
             }
@@ -275,6 +278,7 @@ fn test_fuzz_turns_conservation_and_nonce() {
                         },
                     )],
                     computron_transfers: Vec::new(),
+                    removed: Vec::new(),
                 };
                 ledger.apply_delta(&ldelta)
             }
@@ -337,6 +341,7 @@ fn test_fuzz_transfers_only() {
             created: Vec::new(),
             updated: Vec::new(),
             computron_transfers: vec![(from_id, to_id, amount)],
+            removed: Vec::new(),
         };
 
         if ledger.apply_delta(&delta).is_ok() {
@@ -385,6 +390,7 @@ fn test_fuzz_nonce_never_decreases() {
                 },
             )],
             computron_transfers: Vec::new(),
+            removed: Vec::new(),
         };
 
         ledger.apply_delta(&delta).unwrap();
@@ -465,6 +471,7 @@ fn test_fuzz_mixed_effects_500_turns() {
                     created: Vec::new(),
                     updated: Vec::new(),
                     computron_transfers: vec![(from_id, to_id, *amount)],
+                    removed: Vec::new(),
                 })
             }
             FuzzEffect::SetField { cell, index, value } => {
@@ -483,6 +490,7 @@ fn test_fuzz_mixed_effects_500_turns() {
                         },
                     )],
                     computron_transfers: Vec::new(),
+                    removed: Vec::new(),
                 })
             }
             FuzzEffect::IncrementNonce { cell } => {
@@ -501,6 +509,7 @@ fn test_fuzz_mixed_effects_500_turns() {
                         },
                     )],
                     computron_transfers: Vec::new(),
+                    removed: Vec::new(),
                 })
             }
             FuzzEffect::CreateCell { balance } => {
@@ -533,6 +542,7 @@ fn test_fuzz_mixed_effects_500_turns() {
                         },
                     )],
                     computron_transfers: Vec::new(),
+                    removed: Vec::new(),
                 })
             }
         };

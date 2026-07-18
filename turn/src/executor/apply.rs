@@ -298,7 +298,7 @@ impl TurnExecutor {
                 self.apply_revoke_delegation(ledger, path, action_target, journal, child)
             }
             Effect::MakeSovereign { cell } => {
-                self.apply_make_sovereign(ledger, path, action_target, cell)
+                self.apply_make_sovereign(ledger, path, action_target, journal, cell)
             }
             Effect::CreateCellFromFactory {
                 factory_vk,
@@ -2576,6 +2576,7 @@ impl TurnExecutor {
         ledger: &mut Ledger,
         path: &[usize],
         action_target: &CellId,
+        journal: &mut LedgerJournal,
         cell: &CellId,
     ) -> Result<(), (TurnError, Vec<usize>)> {
         // Only the cell itself (as action target) can make itself sovereign.
@@ -2607,8 +2608,13 @@ impl TurnExecutor {
                 ));
             }
         }
-        // Transition the cell from hosted to sovereign.
-        ledger.make_sovereign(cell).map_err(|e| {
+        // Transition the cell from hosted to sovereign. `make_sovereign` routes
+        // through the journaled deletion (rollback-reinstates + maintains the
+        // pubkey index). Journal the removed cell so (a) a rejected turn reinstates
+        // it via the executor undo journal and (b) the committed LedgerDelta
+        // carries the removal as a tombstone (`compute_delta_from_journal`), which
+        // the durable overlay applies as a deletion on recovery.
+        let removed = ledger.make_sovereign(cell).map_err(|e| {
             (
                 TurnError::InvalidEffect {
                     reason: format!("MakeSovereign failed: {e}"),
@@ -2616,6 +2622,7 @@ impl TurnExecutor {
                 path.to_vec(),
             )
         })?;
+        journal.record_make_sovereign(removed);
         Ok(())
     }
 

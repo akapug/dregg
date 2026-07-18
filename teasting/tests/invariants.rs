@@ -117,6 +117,7 @@ fn test_conservation_invariant_transfers() {
             created: Vec::new(),
             updated: Vec::new(),
             computron_transfers: vec![(from_id, to_id, amount)],
+            removed: Vec::new(),
         };
 
         ledger.apply_delta(&delta).unwrap();
@@ -191,6 +192,7 @@ fn test_nonce_monotonicity_basic() {
                 },
             )],
             computron_transfers: Vec::new(),
+            removed: Vec::new(),
         };
 
         ledger.apply_delta(&delta).unwrap();

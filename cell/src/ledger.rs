@@ -70,6 +70,18 @@ pub struct LedgerDelta {
     pub updated: Vec<(CellId, CellStateDelta)>,
     /// Computron transfers: (from, to, amount).
     pub computron_transfers: Vec<(CellId, CellId, u64)>,
+    /// Cells REMOVED from the hosted set this turn — the tombstone dimension.
+    ///
+    /// A hosted cell that a turn REMOVES (today: `MakeSovereign`, which lifts the
+    /// full cell state out of the ledger and keeps only its sovereign commitment)
+    /// is NOT a post-state write: it is an ERASURE. `created`/`updated` carry
+    /// post-states only, so without this list a removal is structurally
+    /// invisible to the durable overlay (`CommitRecord`/`cell_overlay_since`) and
+    /// the removed cell is RESURRECTED as hosted on `checkpoint ⊕ overlay`
+    /// recovery. The overlay reconstruction applies these as deletions so the
+    /// reconstructed root matches the recorded finalized root.
+    #[serde(default)]
+    pub removed: Vec<CellId>,
 }
 
 impl LedgerDelta {
@@ -79,6 +91,7 @@ impl LedgerDelta {
             created: Vec::new(),
             updated: Vec::new(),
             computron_transfers: Vec::new(),
+            removed: Vec::new(),
         }
     }
 }
@@ -546,18 +559,6 @@ impl Ledger {
         }
     }
 
-    /// Rebuild the reverse pubkey index from the current cell set. Used after a
-    /// wholesale `cells` replacement (e.g. `apply_delta`), where per-entry
-    /// maintenance would be more error-prone than a single O(N) rebuild (the
-    /// caller already pays O(N) to clone/swap the map).
-    fn rebuild_pubkey_index(&mut self) {
-        let mut index: HashMap<[u8; 32], Vec<CellId>> = HashMap::new();
-        for (id, cell) in &self.cells {
-            index.entry(*cell.public_key()).or_default().push(*id);
-        }
-        self.pubkey_index = index;
-    }
-
     /// Resolve a public key to a cell it backs, in O(1) via the reverse index.
     ///
     /// When a pubkey backs several cells (distinct token_ids) the first is
@@ -697,34 +698,87 @@ impl Ledger {
 
     /// Apply a delta to the ledger atomically.
     /// If any operation fails, the ledger is left unchanged.
+    ///
+    /// Applies mutations IN PLACE against an O(cells-touched) undo journal,
+    /// rather than deep-cloning the whole `cells` map (each `Cell` deep-copies
+    /// its capability `Vec`/state) and rebuilding the entire pubkey index on
+    /// every delta. Both were O(total ledger cells) regardless of how few cells
+    /// the delta actually touched; a single computron transfer paid to copy the
+    /// entire ledger. The undo journal records each touched cell's prior image
+    /// on its FIRST mutation, so a mid-apply failure restores the exact
+    /// pre-delta state (`validate_delta` above makes that unreachable in
+    /// practice, but the rollback keeps the total-atomicity contract intact).
+    /// The pubkey index is maintained incrementally: a cell's `public_key` is a
+    /// sealed identity field that no update/transfer can change, so only the
+    /// `created` cells add index entries.
     pub fn apply_delta(&mut self, delta: &LedgerDelta) -> Result<(), LedgerError> {
         // Validate with cumulative balance tracking.
         self.validate_delta(delta)?;
 
-        // Clone the cells map — all mutations go to the clone.
-        let mut new_cells = self.cells.clone();
-
-        // Apply creations.
-        for cell in &delta.created {
-            new_cells.insert(cell.id, cell.clone());
+        // cell_id -> its prior whole image (`None` = ABSENT pre-delta, so a
+        // rollback removes it). Recorded on the FIRST touch of each cell.
+        let mut undo: HashMap<CellId, Option<Cell>> = HashMap::new();
+        if let Err(e) = self.apply_delta_in_place(delta, &mut undo) {
+            self.rollback_delta_from_undo(undo);
+            return Err(e);
         }
 
-        // Apply updates.
+        // TRULY LAZY: do NO tree work here — just record what changed. The tree
+        // materializes (minimally) on the next `root()`/`membership_proof()`.
+        // Creations shift leaf positions ⇒ a full rebuild is owed (structural);
+        // pure updates/transfers only change values ⇒ a batched leaf update.
+        if !delta.created.is_empty() || !delta.removed.is_empty() {
+            // Creations and removals both shift leaf positions ⇒ structural.
+            self.pending.touch_structural();
+        } else {
+            for (id, _) in &delta.updated {
+                self.pending.touch_value(*id);
+            }
+            for &(from_id, to_id, _) in &delta.computron_transfers {
+                self.pending.touch_value(from_id);
+                self.pending.touch_value(to_id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply a validated delta's mutations directly to `self.cells`, journaling
+    /// each cell's prior image into `undo` before its first mutation. On the
+    /// (validate-unreachable) error paths the caller restores from `undo`.
+    fn apply_delta_in_place(
+        &mut self,
+        delta: &LedgerDelta,
+        undo: &mut HashMap<CellId, Option<Cell>>,
+    ) -> Result<(), LedgerError> {
+        // Creations: prior image is ABSENT (`None`); add the pubkey-index entry.
+        for cell in &delta.created {
+            undo.entry(cell.id).or_insert(None);
+            let pk = *cell.public_key();
+            self.cells.insert(cell.id, cell.clone());
+            self.pubkey_index_add(pk, cell.id);
+        }
+
+        // Updates.
         for (cell_id, state_delta) in &delta.updated {
-            let cell = new_cells
+            undo.entry(*cell_id)
+                .or_insert_with(|| self.cells.get(cell_id).cloned());
+            let cell = self
+                .cells
                 .get_mut(cell_id)
                 .ok_or(LedgerError::CellNotFound(*cell_id))?;
             Self::apply_cell_delta(cell, state_delta, cell_id)?;
         }
 
-        // Apply transfers (on the already-modified clone). Transfers are
-        // ORDINARY moves: the source may not go below zero (signed-well
-        // discipline lives on the issuer-move verbs, not here).
+        // Transfers. ORDINARY moves: the source may not go below zero (signed-
+        // well discipline lives on the issuer-move verbs, not here).
         for &(from_id, to_id, amount) in &delta.computron_transfers {
             let amt = i64::try_from(amount)
                 .map_err(|_| LedgerError::BalanceOverflow { cell_id: from_id })?;
+            undo.entry(from_id)
+                .or_insert_with(|| self.cells.get(&from_id).cloned());
             let from_balance = {
-                let from_cell = new_cells
+                let from_cell = self
+                    .cells
                     .get(&from_id)
                     .ok_or(LedgerError::TransferSourceNotFound(from_id))?;
                 if from_cell.state.balance < amt {
@@ -737,13 +791,16 @@ impl Ledger {
                 from_cell.state.balance - amt
             };
             {
-                let from_cell = new_cells.get_mut(&from_id).unwrap();
+                let from_cell = self.cells.get_mut(&from_id).unwrap();
                 // INVALIDATE: this writes `state.balance` directly (pub field).
                 from_cell.invalidate_leaf_cache();
                 from_cell.state.balance = from_balance;
             }
 
-            let to_cell = new_cells
+            undo.entry(to_id)
+                .or_insert_with(|| self.cells.get(&to_id).cloned());
+            let to_cell = self
+                .cells
                 .get_mut(&to_id)
                 .ok_or(LedgerError::TransferDestNotFound(to_id))?;
             // INVALIDATE: this writes `state.balance` directly (pub field).
@@ -755,28 +812,42 @@ impl Ledger {
                 .ok_or(LedgerError::BalanceOverflow { cell_id: to_id })?;
         }
 
-        // All succeeded — swap in the new state atomically.
-        self.cells = new_cells;
-        // The cell set changed wholesale; rebuild the reverse pubkey index. This
-        // is O(N), but the map clone/swap above is already O(N).
-        self.rebuild_pubkey_index();
-
-        // TRULY LAZY: do NO tree work here — just record what changed. The tree
-        // materializes (minimally) on the next `root()`/`membership_proof()`.
-        // Creations shift leaf positions ⇒ a full rebuild is owed (structural);
-        // pure updates/transfers only change values ⇒ a batched leaf update.
-        if !delta.created.is_empty() {
-            self.pending.touch_structural();
-        } else {
-            for (id, _) in &delta.updated {
-                self.pending.touch_value(*id);
-            }
-            for &(from_id, to_id, _) in &delta.computron_transfers {
-                self.pending.touch_value(from_id);
-                self.pending.touch_value(to_id);
+        // Removals LAST (infallible): drop each hosted cell and its pubkey-index
+        // entry, journaling the prior image. Placing them last means an earlier
+        // fallible op that errors rolls back BEFORE any removal ran, so a removed
+        // cell's undo entry is never replayed (its pubkey re-add is therefore not
+        // owed). The removed dimension mirrors `make_sovereign`'s erasure so an
+        // authoritative in-memory `apply_delta` matches the durable overlay.
+        for id in &delta.removed {
+            undo.entry(*id)
+                .or_insert_with(|| self.cells.get(id).cloned());
+            if let Some(removed) = self.cells.remove(id) {
+                self.pubkey_index_remove(removed.public_key(), id);
             }
         }
+
         Ok(())
+    }
+
+    /// Restore the exact pre-delta state from an [`apply_delta_in_place`] undo
+    /// journal (O(cells-touched)). A `None` prior image marks a cell the delta
+    /// CREATED — drop it and its pubkey-index entry; a `Some` prior is an
+    /// updated/transferred cell whose `public_key` is invariant under the delta,
+    /// so its index entry stays valid and only the whole-cell image is reinstated.
+    fn rollback_delta_from_undo(&mut self, undo: HashMap<CellId, Option<Cell>>) {
+        for (id, prior) in undo {
+            match prior {
+                None => {
+                    if let Some(removed) = self.cells.remove(&id) {
+                        let pk = *removed.public_key();
+                        self.pubkey_index_remove(&pk, &id);
+                    }
+                }
+                Some(cell) => {
+                    self.cells.insert(id, cell);
+                }
+            }
+        }
     }
 
     /// Validate that a delta can be applied without errors.
@@ -1352,15 +1423,39 @@ impl Ledger {
     /// and removes the full cell state from the hosted store.
     ///
     /// Returns the removed cell on success.
+    ///
+    /// The hosted-cell removal routes through [`Ledger::remove`] — the JOURNALED
+    /// deletion primitive — NOT a bare `self.cells.remove(id)`. That is
+    /// load-bearing: `remove` (a) journals the prior whole-cell image into the
+    /// active restore point so a rejected turn REINSTATES it (bare removal left a
+    /// rollback hole), (b) drops the cell's `(public_key, id)` reverse-index entry
+    /// (bare removal left a DANGLING pubkey-index entry pointing at a
+    /// no-longer-hosted cell), and (c) marks the Merkle tree structural.
     pub fn make_sovereign(&mut self, id: &CellId) -> Result<Cell, LedgerError> {
-        let cell = self
-            .cells
-            .remove(id)
-            .ok_or(LedgerError::CellNotFound(*id))?;
+        // Journaled deletion: reinstates on rollback + maintains the pubkey index
+        // + touches structural. Only the sovereign-commitment insert is bespoke.
+        let cell = self.remove(id).ok_or(LedgerError::CellNotFound(*id))?;
         let commitment = cell.state_commitment();
         self.sovereign_commitments.insert(*id, commitment);
-        self.pending.touch_structural(); // the cell left the hosted leaf set
         Ok(cell)
+    }
+
+    /// Undo a [`make_sovereign`](Self::make_sovereign): drop the sovereign
+    /// commitment and REINSTATE the removed hosted cell (whole prior image),
+    /// re-establishing its pubkey-index entry via [`insert_cell`](Self::insert_cell).
+    ///
+    /// The turn executor's undo journal (`dregg_turn::LedgerJournal`) records the
+    /// removed cell and calls this on a rejected turn so a MakeSovereign effect is
+    /// atomically reversible on that path (the cell reappears hosted, the sovereign
+    /// registration is gone) — the executor-journal sibling of the ledger's own
+    /// restore-point rollback.
+    pub fn undo_make_sovereign(&mut self, cell: Cell) {
+        let id = cell.id;
+        self.sovereign_commitments.remove(&id);
+        // insert_cell is a strict insert; a prior stale entry cannot exist (the
+        // cell was removed by make_sovereign), so this reinstates cleanly and
+        // re-adds the pubkey index + marks the tree structural.
+        let _ = self.insert_cell(cell);
     }
 
     // =========================================================================

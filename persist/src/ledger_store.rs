@@ -220,14 +220,27 @@ impl PersistentStore {
     /// by the overlay's own ordering — the overlay is already a last-writer-wins
     /// projection). Used by [`PersistentStore::install_snapshot`] so a joiner's
     /// `lookup_cell` / `cell_overlay_since` resolve the post-checkpoint deltas.
-    pub fn install_overlay_into_cell_index(&self, overlay: &[Cell]) -> Result<()> {
+    pub fn install_overlay_into_cell_index(
+        &self,
+        overlay: &[crate::commit_log::CellOverlayOp],
+    ) -> Result<()> {
+        use crate::commit_log::CellOverlayOp;
         let write_txn = self.db.begin_write()?;
         {
             let mut idx_cell = write_txn.open_table(tables::IDX_CELL_BY_ID)?;
-            for cell in overlay {
-                let bytes = postcard::to_stdvec(cell)
-                    .map_err(|e| StoreError::Serialization(e.to_string()))?;
-                idx_cell.insert(&cell.id().0, bytes.as_slice())?;
+            for op in overlay {
+                match op {
+                    CellOverlayOp::Upsert(cell) => {
+                        let bytes = postcard::to_stdvec(cell)
+                            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                        idx_cell.insert(&cell.id().0, bytes.as_slice())?;
+                    }
+                    // A tombstone drops the id from the index — else `lookup_cell`
+                    // resurrects the removed (MakeSovereign) cell as hosted.
+                    CellOverlayOp::Remove(id) => {
+                        idx_cell.remove(&id.0)?;
+                    }
+                }
             }
         }
         write_txn.commit()?;

@@ -22,11 +22,16 @@ reason the CRDT merge is — it is a fold of point updates whose observable is t
 
 * A ledger is a total map `Ledger := CellId → Option CellSt` (the `HashMap<CellId, Cell>` keyset+values
   of `dregg_cell::Ledger`, here keyed values; absence = `none`).
-* A turn's durable record contributes a list of `(CellId × CellSt)` **writes** = the post-states of the
-  cells it touched (`CommitRecord.touched_cells`, taken from the executor's `LedgerDelta`:
-  `created ∪ updated ∪ transfer-endpoints` — the complete bounded touched set).
-* `applyWrites` = `foldl` point-update — applying a turn's writes to the ledger (later write to the
-  same id wins, exactly `Ledger::insert_cell`'s overwrite, `commit_log.rs` last-writer-wins).
+* A turn's durable record contributes a list of **writes** over the alphabet `Write = insert (CellId ×
+  CellSt) | remove CellId`: the post-states of the cells it touched (`CommitRecord.touched_cells`,
+  from `LedgerDelta.created ∪ updated`) AND the cells it ERASED (`CommitRecord.removed`, from
+  `LedgerDelta.removed` — today `MakeSovereign`). Modelling writes as insert-ONLY (the old
+  `List (CellId × CellSt)`) makes a removal unrepresentable, so the theorem would hold vacuously for a
+  removing turn; the `remove` leg is what makes recovery a REAL catch (see `overlayInsertOnly` /
+  `insert_only_overlay_resurrects`).
+* `applyWrites` = `foldl applyWrite` point-update — an `insert` overwrites (`Ledger::insert_cell`), a
+  `remove` erases (`Ledger::remove`); later write to the same id wins (`commit_log.rs`
+  last-writer-wins, `state.rs::apply_overlay_op`).
 * `replay base log` = fold every record's writes from `base` (the full deterministic ledger
   reconstruction = what a node that re-executed from genesis would hold).
 * `checkpoint` at a cut = `replay genesis (log.take k)` (the persisted full snapshot is exactly the
@@ -47,9 +52,11 @@ fully-replayed ledger, independent of WHERE the checkpoint fell. The crash-consi
 ## SCOPE.
 
 FAITHFUL (matches `commit_log.rs` / `state.rs` recovery as a pure function of the write stream):
-* `applyWrites` = last-writer-wins point update = `Ledger::insert_cell` overwrite.
+* `applyWrites` = last-writer-wins point update over `Write = insert | remove` = `apply_overlay_op`
+  (`Upsert` → `insert_cell` overwrite, `Remove` → `remove` erase).
 * `checkpoint = replay genesis (take k)` = `checkpoint_ledger` snapshots the live fold.
-* `overlay = concat writes of (drop k)` = `cell_overlay_since(checkpoint_height)` last-writer-wins.
+* `overlay = concat writes of (drop k)` = `cell_overlay_since(checkpoint_height)` last-writer-wins,
+  CARRYING removals (`CellOverlayOp::Remove`) — not insert-only.
 * `recover = applyWrites checkpoint overlay` = `state.rs` (checkpoint ⊕ overlay).
 
 SIMPLIFIED (a faithful PROJECTION, stated, not hidden):
@@ -121,14 +128,44 @@ overwrites). Decidable on `CellId = Nat`. -/
 def upd (m : Ledger CellSt) (id : CellId) (s : CellSt) : Ledger CellSt :=
   fun j => if j = id then some s else m j
 
-/-- Apply a turn's list of writes left-to-right: later write to the same id wins. This is the
-executor's `LedgerDelta` applied to the ledger, and (folded over records) the last-writer-wins
-overlay of `commit_log.rs`. -/
-def applyWrites (m : Ledger CellSt) (ws : List (CellId × CellSt)) : Ledger CellSt :=
-  ws.foldl (fun acc w => upd acc w.1 w.2) m
+/-- Point ERASURE: set `id` to `none`. This is `Ledger::remove` (drops the hosted cell), the
+recovery denotation of a `MakeSovereign` tombstone — `CellOverlayOp::Remove` / the durable
+`CommitRecord.removed`. Decidable on `CellId = Nat`. -/
+def rem (m : Ledger CellSt) (id : CellId) : Ledger CellSt :=
+  fun j => if j = id then none else m j
 
-/-- A durable commit record contributes its touched-cell post-states as writes. -/
-abbrev Record (CellSt : Type u) := List (CellId × CellSt)
+/-- **A write is an INSERT or a REMOVE** — the durable overlay's alphabet.
+
+This is THE fix that makes the model FAITHFUL rather than a mirror of the buggy insert-only Rust: a
+committed turn contributes not only post-state installs (`created ∪ updated`, `CommitRecord
+.touched_cells`) but also ERASURES (`CommitRecord.removed`: a cell lifted out of the hosted set by
+`MakeSovereign`). Modelling writes as insert-only (`List (CellId × CellSt)`) makes a removal
+structurally unrepresentable — the recovered map would resurrect the removed cell as hosted, and the
+convergence theorem would hold VACUOUSLY for a MakeSovereign turn (no write on either side). With
+`Remove` in the alphabet the theorem is a REAL catch: an overlay that drops removals recovers a
+DIFFERENT ledger than replay (see `overlayInsertOnly` / `insert_only_overlay_resurrects`). -/
+inductive Write (CellSt : Type u) where
+  /-- Install/overwrite `id ↦ s` (a created/updated post-state; `CellOverlayOp::Upsert`). -/
+  | insert : CellId → CellSt → Write CellSt
+  /-- Erase `id` (a tombstone; `CellOverlayOp::Remove`, from `CommitRecord.removed`). -/
+  | remove : CellId → Write CellSt
+
+/-- Apply ONE write to the ledger: an insert installs, a remove erases. The per-op denotation of
+`node/src/state.rs::apply_overlay_op`. -/
+def applyWrite (m : Ledger CellSt) : Write CellSt → Ledger CellSt
+  | .insert id s => upd m id s
+  | .remove id => rem m id
+
+/-- Apply a turn's list of writes left-to-right: later write to the same id wins (an install
+overwrites, a later remove erases, a later install after a remove re-creates). This is the executor's
+`LedgerDelta` (`created ∪ updated`, MINUS `removed`) applied to the ledger, and (folded over records)
+the last-writer-wins overlay of `commit_log.rs::cell_overlay_since`. -/
+def applyWrites (m : Ledger CellSt) (ws : List (Write CellSt)) : Ledger CellSt :=
+  ws.foldl applyWrite m
+
+/-- A durable commit record contributes its touched-cell post-states (inserts) AND its tombstones
+(removes) as writes. -/
+abbrev Record (CellSt : Type u) := List (Write CellSt)
 
 /-- Replay the whole log from `base`: the fully-reconstructed ledger a node that re-executed every
 finalized turn from genesis would hold. -/
@@ -142,7 +179,7 @@ def checkpoint (genesis : Ledger CellSt) (log : List (Record CellSt)) (k : Nat) 
 
 /-- The overlay above cut `k`: the concatenated writes of the records past the checkpoint
 (`commit_log.rs::cell_overlay_since`). Folded with last-writer-wins by `applyWrites`. -/
-def overlay (log : List (Record CellSt)) (k : Nat) : List (CellId × CellSt) :=
+def overlay (log : List (Record CellSt)) (k : Nat) : List (Write CellSt) :=
   (log.drop k).flatten
 
 /-- Recovery: rebuild the ledger as `checkpoint ⊕ overlay` (`node/src/state.rs`). -/
@@ -152,7 +189,7 @@ def recover (genesis : Ledger CellSt) (log : List (Record CellSt)) (k : Nat) : L
 /-! ### Core algebra of the fold. -/
 
 /-- `applyWrites` over a concatenation is the composite fold (the split law). -/
-theorem applyWrites_append (m : Ledger CellSt) (a b : List (CellId × CellSt)) :
+theorem applyWrites_append (m : Ledger CellSt) (a b : List (Write CellSt)) :
     applyWrites m (a ++ b) = applyWrites (applyWrites m a) b := by
   simp [applyWrites, List.foldl_append]
 
@@ -234,8 +271,8 @@ namespace Dregg2.Distributed.CrashRecovery
 * turn 0 writes cell 7 := 100 and cell 8 := 5,
 * turn 1 writes cell 7 := 999 (overwrites cell 7), cell 9 := 1. -/
 def demoLog : List (Record Nat) :=
-  [ [(7, 100), (8, 5)]
-  , [(7, 999), (9, 1)] ]
+  [ [Write.insert 7 100, Write.insert 8 5]
+  , [Write.insert 7 999, Write.insert 9 1] ]
 
 def g0 : Ledger Nat := fun _ => none
 
@@ -262,6 +299,66 @@ def g0 : Ledger Nat := fun _ => none
 #guard (replay g0 (demoLog.take 1) 9 == none)        -- lost: should be some 1
 #guard (replay g0 (demoLog.take 1) 7 == some 100)    -- stale: should be some 999
 #guard decide (replay g0 (demoLog.take 1) 7 ≠ replay g0 demoLog 7)
+
+/-! ### THE REMOVAL CATCH — the overlay must carry tombstones (the durable-bug canary).
+
+A two-turn log where turn 1 REMOVES a cell (a `MakeSovereign(7)` tombstone) — the exact shape of the
+Rust bug (`Ledger::make_sovereign`'s bare remove + insert-only `CommitRecord.touched_cells` /
+`cell_overlay_since`). `demoRemLog` checkpoints AFTER turn 0 (`k = 1`, cell 7 held at 100), so the
+removal lives in the overlay. The FAITHFUL recovery (`recover`, whose overlay carries the removal)
+erases 7 — matching full replay. An INSERT-ONLY overlay (`overlayInsertOnly`, dropping the removal —
+the bug) RESURRECTS 7 as hosted, recovering a ledger that DIFFERS from replay. This is why
+`recover_eq_replay` is a real gate over the `Write = insert | remove` alphabet, not a vacuous
+`P → P`: substitute `overlayInsertOnly` for `overlay` and it fails to close. -/
+
+/-- turn 0 installs 7:=100, 8:=5; turn 1 REMOVES 7 (MakeSovereign). Checkpoint at `k=1`. -/
+def demoRemLog : List (Record Nat) :=
+  [ [Write.insert 7 100, Write.insert 8 5]
+  , [Write.remove 7] ]
+
+-- Full replay: 7 is GONE (the removal is honoured), 8 survives.
+#guard (replay g0 demoRemLog 7 == none)
+#guard (replay g0 demoRemLog 8 == some 5)
+-- FAITHFUL recovery (overlay carries the removal) matches replay at every cut — 7 erased, 8 kept.
+#guard (recover g0 demoRemLog 1 7 == none)
+#guard (recover g0 demoRemLog 1 8 == some 5)
+#guard (recover g0 demoRemLog 0 7 == recover g0 demoRemLog 2 7)
+
+/-- Is this write an install? (Filter predicate for the bugged insert-only overlay.) -/
+def Write.isInsert {CellSt : Type _} : Write CellSt → Bool
+  | .insert _ _ => true
+  | .remove _ => false
+
+/-- **The BUGGED overlay**: drop every removal (insert-only). This is a durable overlay of
+post-states with NO tombstone dimension — `CommitRecord.touched_cells : Vec<Cell>` /
+`cell_overlay_since` BEFORE the `removed` field. -/
+def overlayInsertOnly {CellSt : Type _} (log : List (Record CellSt)) (k : Nat) :
+    List (Write CellSt) :=
+  (overlay log k).filter Write.isInsert
+
+/-- Recovery under the bugged insert-only overlay. -/
+def recoverInsertOnly {CellSt : Type _} (genesis : Ledger CellSt) (log : List (Record CellSt))
+    (k : Nat) : Ledger CellSt :=
+  applyWrites (checkpoint genesis log k) (overlayInsertOnly log k)
+
+-- THE CANARY, executed: the insert-only overlay RESURRECTS cell 7 (some 100) where the faithful
+-- recovery and full replay have it GONE (none). Dropping the tombstone re-hosts the sovereign cell.
+#guard (recoverInsertOnly g0 demoRemLog 1 7 == some 100)   -- RESURRECTED (the bug)
+#guard decide (recoverInsertOnly g0 demoRemLog 1 7 ≠ replay g0 demoRemLog 7)
+
+/-- **`insert_only_overlay_resurrects`** — an insert-only overlay is NOT a faithful recovery: there
+is a log and a checkpoint cut at which it recovers a ledger DIFFERENT from full replay (it resurrects
+a removed cell). This is the standing falsifier for the Rust `removed`/`CellOverlayOp::Remove`
+dimension: were the overlay reverted to insert-only, recovery would diverge from the recorded
+finalized root — exactly what this theorem exhibits and what `recover_eq_replay` (over the full
+`Write` alphabet) forbids. -/
+theorem insert_only_overlay_resurrects :
+    ∃ (log : List (Record Nat)) (k : Nat),
+      recoverInsertOnly g0 log k ≠ replay g0 log := by
+  refine ⟨demoRemLog, 1, fun h => ?_⟩
+  exact absurd (congrFun h 7) (by decide)
+
+#assert_axioms insert_only_overlay_resurrects
 
 end Dregg2.Distributed.CrashRecovery
 
@@ -363,7 +460,7 @@ def tlCell : CellId := 0
 /-- The durable record of trustline step `i`: write = the post-state of the trustline cell,
 burns = the step's committed draw digest (if any). -/
 def tlRecord (s₀ : SLine) (sched : SSched) (i : Nat) : BRecord SLine :=
-  ([(tlCell, trajS s₀ sched (i + 1))], tlStepBurns (trajS s₀ sched i) (sched i))
+  ([Write.insert tlCell (trajS s₀ sched (i + 1))], tlStepBurns (trajS s₀ sched i) (sched i))
 
 /-- The durable commit log of the first `n` trustline steps. -/
 def tlLog (s₀ : SLine) (sched : SSched) (n : Nat) : List (BRecord SLine) :=
@@ -521,7 +618,7 @@ theorem tlLog_recover (s₀ : SLine) (sched : SSched) (g : Ledger SLine) {n : Na
   show replay g ((tlLog s₀ sched (m + 1)).map Prod.fst) tlCell = _
   rw [tlLog_succ, List.map_append, replay_append]
   -- the last record writes the trustline cell: the point update wins.
-  simp [tlRecord, replay, applyWrites, upd, tlCell]
+  simp [tlRecord, replay, applyWrites, applyWrite, upd, tlCell]
 
 /-- **THE KEYSTONE — `draw_replay_refused_across_crash`.** A draw digest durably burned before
 the crash (`hburn`: it is in the durable forever table the boot reload rebuilds from) is REFUSED

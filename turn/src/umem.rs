@@ -1672,6 +1672,16 @@ fn touches_of_entry(e: &JournalEntry) -> Vec<Touch> {
         | JournalEntry::NoteCommitmentInserted { .. }
         | JournalEntry::RevocationInserted { .. } => vec![],
         JournalEntry::EventEmitted { .. } => vec![],
+        // NAMED SEAM: a MakeSovereign REMOVES a hosted cell (lifts its whole state
+        // out of the ledger). That is a multi-key erasure (every UKey of the cell
+        // goes absent) with no single-`Touch` representation, and hosted-cell
+        // removal is not yet a umem-projected domain — like the note-accumulator
+        // markers above. No touch is emitted (matching the pre-tombstone behavior,
+        // where make_sovereign journaled nothing at all), so the umem agreement
+        // square does not cover MakeSovereign turns. The durable-recovery soundness
+        // of the removal is carried by `CommitRecord.removed` / `cell_overlay_since`
+        // (bug #57), independent of the umem projection.
+        JournalEntry::MakeSovereign { .. } => vec![],
     }
 }
 

@@ -109,6 +109,105 @@ pub struct CommitRecord {
     /// Post-state snapshots of every cell this turn touched (created/mutated).
     /// These feed the cell-by-id index. Serialized `dregg_cell::Cell`s.
     pub touched_cells: Vec<Cell>,
+    /// Cell ids this turn REMOVED from the hosted set — the tombstone dimension
+    /// (today: `MakeSovereign`, which lifts a cell out of the hosted ledger and
+    /// keeps only its sovereign commitment). `touched_cells` is post-states only,
+    /// so a removal is otherwise structurally invisible: the durable overlay
+    /// (`cell_overlay_since`) and the cell-by-id index would RESURRECT the removed
+    /// cell as hosted on `checkpoint ⊕ overlay` recovery, diverging the
+    /// reconstructed root from `ledger_root`. The reconstruction applies these as
+    /// deletions.
+    ///
+    /// BACK-COMPAT: this field was appended after the original layout. Postcard is
+    /// non-self-describing, so a pre-`removed` durable record has no bytes for it;
+    /// [`decode_commit_record`] falls back to the legacy layout and lifts such a
+    /// record with an empty `removed`.
+    #[serde(default)]
+    pub removed: Vec<[u8; 32]>,
+}
+
+/// The pre-`removed` durable layout of [`CommitRecord`], for back-compatible
+/// decode of records written before the tombstone dimension existed. Field order
+/// mirrors `CommitRecord` exactly up to (but excluding) `removed`, so postcard
+/// decodes a legacy blob into this and [`decode_commit_record`] lifts it.
+#[derive(Deserialize)]
+struct CommitRecordV0 {
+    ordinal: u64,
+    height: u64,
+    block_id: [u8; 32],
+    block_executed_up_to: u64,
+    turn_hash: [u8; 32],
+    creator: [u8; 32],
+    receipt_hash: [u8; 32],
+    ledger_root: [u8; 32],
+    touched_cells: Vec<Cell>,
+}
+
+impl From<CommitRecordV0> for CommitRecord {
+    fn from(v: CommitRecordV0) -> Self {
+        CommitRecord {
+            ordinal: v.ordinal,
+            height: v.height,
+            block_id: v.block_id,
+            block_executed_up_to: v.block_executed_up_to,
+            turn_hash: v.turn_hash,
+            creator: v.creator,
+            receipt_hash: v.receipt_hash,
+            ledger_root: v.ledger_root,
+            touched_cells: v.touched_cells,
+            removed: Vec::new(),
+        }
+    }
+}
+
+/// Back-compatible decode of a durable [`CommitRecord`].
+///
+/// Tries the CURRENT layout first; new records always decode this way. A legacy
+/// record (written before `removed`) lacks the trailing tombstone bytes and fails
+/// the current decode with a short-buffer error — postcard is non-self-describing
+/// — so we fall back to [`CommitRecordV0`] and lift it with an empty `removed`. A
+/// legacy record can NEVER spuriously decode as current: the missing trailing
+/// `Vec` length varint forces the shortfall, so the ordering is unambiguous.
+fn decode_commit_record(bytes: &[u8]) -> Result<CommitRecord> {
+    match postcard::from_bytes::<CommitRecord>(bytes) {
+        Ok(rec) => Ok(rec),
+        Err(_) => {
+            let legacy: CommitRecordV0 = postcard::from_bytes(bytes)?;
+            Ok(legacy.into())
+        }
+    }
+}
+
+/// One resolved cell-overlay operation for recovery: the durable last-writer-wins
+/// effect on a single cell id since the checkpoint. Mirrors the Lean
+/// `Dregg2.Distributed.CrashRecovery.Write` alphabet (`insert | remove`): the
+/// recovery overlay is NOT insert-only, so a removal is carried, not dropped.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CellOverlayOp {
+    /// Install/overwrite the cell (a created/updated post-state). Applied as
+    /// `Ledger::insert_cell` (last-writer-wins, remove-then-insert on recovery).
+    Upsert(Cell),
+    /// Delete the cell — a tombstone (it was removed from the hosted set, e.g.
+    /// `MakeSovereign`). Applied as `Ledger::remove` on recovery, so the cell does
+    /// not survive `checkpoint ⊕ overlay`.
+    Remove(CellId),
+}
+
+/// Outcome of a welded finalized-turn commit.
+///
+/// Distinguishes a FRESH durable write (the record and its welded notes/burns
+/// were just written in this transaction) from an IDEMPOTENT REPLAY (the turn
+/// was already durably committed; this call wrote nothing). The caller needs
+/// this to advance purely-in-RAM derived state (e.g. the node's in-RAM
+/// Poseidon2 note tree) exactly once: only on a fresh write, never on a replay
+/// (whose leaves the boot-time rebuild from the durable table already holds).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommitOutcome {
+    /// The commit ordinal the record occupies.
+    pub ordinal: u64,
+    /// True iff this call freshly wrote the record (and its welded notes/burns).
+    /// False on an idempotent replay of an already-committed turn (no writes).
+    pub freshly_committed: bool,
 }
 
 impl CommitRecord {
@@ -246,6 +345,41 @@ impl PersistentStore {
         self.commit_finalized_turn_with_burns(expected_ordinal, record, &[])
     }
 
+    /// [`Self::commit_finalized_turn`] PLUS note commitments appended to the
+    /// Poseidon2 note-tree table in the SAME redb transaction — the
+    /// same-transaction NOTE weld.
+    ///
+    /// # Why this exists (crash-consistency bug #58)
+    ///
+    /// The node used to append a `NoteCreate` effect's durable commitment in its
+    /// OWN redb transaction (`store_note_commitment`), EARLY in the finalized-turn
+    /// handler, ~hundreds of lines BEFORE the crash-consistent commit boundary.
+    /// A crash after the note append but before [`Self::commit_finalized_turn`]
+    /// left the note leaf durable while the turn record was absent from the
+    /// commit log — so recovery re-applied the turn and appended the SAME
+    /// commitment a SECOND time (two leaves, two positions). Because the boot
+    /// path rebuilds the note tree from this table (`load_all_note_commitments`),
+    /// the double leaf was PERMANENT and the note-tree root diverged from an
+    /// exactly-once peer.
+    ///
+    /// Welding the note append into the commit transaction closes the window: the
+    /// leaf and the turn record land together-or-not-at-all in ONE fsync
+    /// boundary. On an idempotent replay of an already-committed turn, the notes
+    /// were written by the original commit and are NOT re-appended (the returned
+    /// [`CommitOutcome::freshly_committed`] is `false`).
+    ///
+    /// Positions are assigned sequentially from the current durable note-tree
+    /// size, exactly as [`PersistentStore::store_note_commitment`] does; the
+    /// cached note-tree root is invalidated within the same transaction.
+    pub fn commit_finalized_turn_with_notes(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        note_commitments: &[[u8; 32]],
+    ) -> Result<CommitOutcome> {
+        self.commit_finalized_turn_welded(expected_ordinal, record, &[], note_commitments)
+    }
+
     /// [`Self::commit_finalized_turn`] PLUS forever-digest burns in the SAME
     /// redb transaction — the same-transaction burn weld (.docs-history-noclaude/PERSISTENCE.md
     /// §3): a turn that burns an anti-replay digest (a trustline draw, a court
@@ -263,6 +397,23 @@ impl PersistentStore {
         record: &CommitRecord,
         burns: &[(u8, [u8; 32], [u8; 32])],
     ) -> Result<u64> {
+        self.commit_finalized_turn_welded(expected_ordinal, record, burns, &[])
+            .map(|o| o.ordinal)
+    }
+
+    /// The single atomic finalized-turn commit: record + secondary index +
+    /// forever-digest burns + note-tree leaves + cursor advance, all in ONE redb
+    /// transaction (one fsync boundary). Every public commit entry point routes
+    /// here; the burn and note welds keep those side-effects exactly-once with
+    /// the turn record across an arbitrary crash. Returns a [`CommitOutcome`]
+    /// distinguishing a fresh write from an idempotent replay.
+    fn commit_finalized_turn_welded(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        burns: &[(u8, [u8; 32], [u8; 32])],
+        note_commitments: &[[u8; 32]],
+    ) -> Result<CommitOutcome> {
         let write_txn = self.db.begin_write()?;
         let assigned;
         {
@@ -279,10 +430,16 @@ impl PersistentStore {
                     let log = write_txn.open_table(tables::COMMIT_LOG)?;
                     match log.get(expected_ordinal)? {
                         Some(guard) => {
-                            let existing: CommitRecord = postcard::from_bytes(guard.value())?;
+                            let existing = decode_commit_record(guard.value())?;
                             if existing.turn_hash == record.turn_hash {
-                                // Already durably committed; nothing to do.
-                                return Ok(expected_ordinal);
+                                // Already durably committed; nothing to do. The
+                                // welded notes/burns were written by the original
+                                // commit; signal a replay so the caller does NOT
+                                // re-apply purely-in-RAM derived state.
+                                return Ok(CommitOutcome {
+                                    ordinal: expected_ordinal,
+                                    freshly_committed: false,
+                                });
                             }
                             return Err(StoreError::Integrity(format!(
                                 "commit_finalized_turn: ordinal {expected_ordinal} already holds a \
@@ -339,6 +496,11 @@ impl PersistentStore {
                         .map_err(|e| StoreError::Serialization(e.to_string()))?;
                     idx_cell.insert(&cell.id().0, cell_bytes.as_slice())?;
                 }
+                // A removed cell (MakeSovereign) must DROP its cell-by-id entry, or
+                // a point `lookup_cell` would resurrect the stale hosted snapshot.
+                for id in &stored_record.removed {
+                    idx_cell.remove(id)?;
+                }
             }
 
             // 3. Burn the turn's forever digests in the SAME transaction (the
@@ -352,11 +514,40 @@ impl PersistentStore {
                 }
             }
 
+            // 3b. Append note-tree leaves in the SAME transaction (the
+            //     same-transaction NOTE weld, bug #58): the record and every
+            //     `NoteCreate` commitment it produced are one atomic durability
+            //     event, so a crash can never leave a note leaf durable without
+            //     its turn (the double-apply that permanently diverged the
+            //     note-tree root). Positions are assigned sequentially from the
+            //     current durable size, mirroring `store_note_commitment`.
+            if !note_commitments.is_empty() {
+                let mut size = meta
+                    .get(tables::META_NOTE_TREE_SIZE)?
+                    .map(|g| g.value())
+                    .unwrap_or(0);
+                {
+                    let mut notes = write_txn.open_table(tables::NOTE_COMMITMENTS)?;
+                    for cm in note_commitments {
+                        notes.insert(size, cm)?;
+                        size += 1;
+                    }
+                }
+                meta.insert(tables::META_NOTE_TREE_SIZE, size)?;
+                // Invalidate the cached note-tree root within the same txn, so
+                // the next `note_tree_root()` recomputes over the new leaves.
+                let mut meta_bytes = write_txn.open_table(tables::METADATA_BYTES)?;
+                meta_bytes.remove(tables::META_NOTE_TREE_ROOT_CACHE)?;
+            }
+
             // 4. Advance the durable cursor LAST within the txn (still atomic).
             meta.insert(tables::META_COMMIT_CURSOR, assigned + 1)?;
         }
         write_txn.commit()?;
-        Ok(assigned)
+        Ok(CommitOutcome {
+            ordinal: assigned,
+            freshly_committed: true,
+        })
     }
 
     // =========================================================================
@@ -368,7 +559,7 @@ impl PersistentStore {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(tables::COMMIT_LOG)?;
         match table.get(ordinal)? {
-            Some(guard) => Ok(Some(postcard::from_bytes(guard.value())?)),
+            Some(guard) => Ok(Some(decode_commit_record(guard.value())?)),
             None => Ok(None),
         }
     }
@@ -397,7 +588,7 @@ impl PersistentStore {
         for entry in table.range(0u64..)? {
             let entry =
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
-            let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+            let record = decode_commit_record(entry.1.value())?;
             out.push(record.block_id);
         }
         // Then the ids of turns whose records were compacted away — still
@@ -423,7 +614,7 @@ impl PersistentStore {
         for entry in table.range(start..)? {
             let entry =
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
-            out.push(postcard::from_bytes(entry.1.value())?);
+            out.push(decode_commit_record(entry.1.value())?);
         }
         Ok(out)
     }
@@ -488,24 +679,51 @@ impl PersistentStore {
     /// re-executing — the cell-by-id index is exactly this overlay maintained
     /// incrementally, but this method re-derives it from the log so recovery
     /// never trusts the (rebuildable) index for correctness.
-    pub fn cell_overlay_since(&self, checkpoint_height: u64) -> Result<Vec<Cell>> {
+    pub fn cell_overlay_since(&self, checkpoint_height: u64) -> Result<Vec<CellOverlayOp>> {
         use std::collections::HashMap;
         let read_txn = self.db.begin_read()?;
         let log = read_txn.open_table(tables::COMMIT_LOG)?;
-        // ordinal-ascending iteration → later writers overwrite earlier ones.
-        let mut latest: HashMap<[u8; 32], Cell> = HashMap::new();
+        // ordinal-ascending iteration → later writers/removals overwrite earlier
+        // ops for the same id (last-writer-wins over the resolved op). A cell
+        // upserted then later removed ends REMOVED; removed then re-created ends
+        // upserted — the resolution mirrors the Lean `Write = insert | remove`
+        // fold whose observable is the final map.
+        let mut latest: HashMap<[u8; 32], CellOverlayOp> = HashMap::new();
         for entry in log.iter()? {
             let entry =
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
-            let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+            let record = decode_commit_record(entry.1.value())?;
             if record.height <= checkpoint_height {
                 continue;
             }
+            // Within a record: upserts first, then removals (a removal wins if a
+            // cell were somehow both — MakeSovereign only removes, never touches).
             for cell in record.touched_cells {
-                latest.insert(cell.id().0, cell);
+                latest.insert(cell.id().0, CellOverlayOp::Upsert(cell));
+            }
+            for id in record.removed {
+                latest.insert(id, CellOverlayOp::Remove(CellId(id)));
             }
         }
         Ok(latest.into_values().collect())
+    }
+
+    /// The cell ids REMOVED (net) from the hosted set since the checkpoint —
+    /// the tombstones of [`cell_overlay_since`] resolved last-writer-wins (a cell
+    /// removed then re-created is NOT reported). The node's genesis-baseline
+    /// reconstruction (`reseed_genesis_then_overlay`) re-materializes ALL genesis
+    /// cells on a fresh ledger, so a genesis cell removed post-checkpoint (e.g.
+    /// made sovereign) must be deleted AGAIN after the baseline is laid down, or
+    /// the fresh genesis copy resurrects it (and the convergence check fails).
+    pub fn removed_cell_ids_since(&self, checkpoint_height: u64) -> Result<Vec<CellId>> {
+        Ok(self
+            .cell_overlay_since(checkpoint_height)?
+            .into_iter()
+            .filter_map(|op| match op {
+                CellOverlayOp::Remove(id) => Some(id),
+                CellOverlayOp::Upsert(_) => None,
+            })
+            .collect())
     }
 
     // =========================================================================
@@ -535,7 +753,7 @@ impl PersistentStore {
         };
         let log = read_txn.open_table(tables::COMMIT_LOG)?;
         match log.get(ordinal)? {
-            Some(guard) => Ok(Some(postcard::from_bytes(guard.value())?)),
+            Some(guard) => Ok(Some(decode_commit_record(guard.value())?)),
             None => Err(StoreError::Integrity(format!(
                 "index points at ordinal {ordinal} but commit log has no record there"
             ))),
@@ -579,7 +797,7 @@ impl PersistentStore {
             if key.len() == 48 && &key[8..40] == creator.as_slice() {
                 let ordinal = entry.1.value();
                 if let Some(guard) = log.get(ordinal)? {
-                    out.push(postcard::from_bytes(guard.value())?);
+                    out.push(decode_commit_record(guard.value())?);
                 }
             }
         }
@@ -606,7 +824,7 @@ impl PersistentStore {
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
             let ordinal = entry.1.value();
             if let Some(guard) = log.get(ordinal)? {
-                out.push(postcard::from_bytes(guard.value())?);
+                out.push(decode_commit_record(guard.value())?);
             }
         }
         Ok(out)
@@ -649,7 +867,7 @@ impl PersistentStore {
             let entry =
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
             let ordinal = entry.0.value();
-            let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+            let record = decode_commit_record(entry.1.value())?;
             report.records += 1;
 
             check_hash_index(
@@ -769,7 +987,7 @@ impl PersistentStore {
                 for entry in log.iter()? {
                     let entry = entry
                         .map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
-                    v.push(postcard::from_bytes::<CommitRecord>(entry.1.value())?);
+                    v.push(decode_commit_record(entry.1.value())?);
                 }
                 v
             };
@@ -925,7 +1143,7 @@ impl PersistentStore {
                     let entry = entry
                         .map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
                     let ordinal = entry.0.value();
-                    let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+                    let record = decode_commit_record(entry.1.value())?;
                     if prefix_open && record.height < height {
                         let hc_key = CommitRecord::height_creator_key(
                             record.height,
@@ -989,12 +1207,17 @@ impl PersistentStore {
                     idx_cell.remove(&k)?;
                 }
                 // Survivors are already in ascending ordinal order → later
-                // writers overwrite earlier ones (last-writer-wins).
+                // writers/removals overwrite earlier ones (last-writer-wins).
                 for record in &survivors {
                     for cell in &record.touched_cells {
                         let cell_bytes = postcard::to_stdvec(cell)
                             .map_err(|e| StoreError::Serialization(e.to_string()))?;
                         idx_cell.insert(&cell.id().0, cell_bytes.as_slice())?;
+                    }
+                    // A survivor that REMOVED a cell drops it from the index (a
+                    // later removal wins over an earlier survivor's upsert).
+                    for id in &record.removed {
+                        idx_cell.remove(id)?;
                     }
                 }
             }
@@ -1143,7 +1366,7 @@ impl PersistentStore {
                 let entry =
                     entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
                 let ordinal = entry.0.value();
-                let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+                let record = decode_commit_record(entry.1.value())?;
                 // Apply this record's touched cells last-writer-wins. A record above
                 // the checkpoint contributes the overlay; one at/below it merely
                 // re-asserts cells the checkpoint already folded in (idempotent —
@@ -1153,6 +1376,13 @@ impl PersistentStore {
                 for cell in &record.touched_cells {
                     let _ = ledger.remove(&cell.id());
                     let _ = ledger.insert_cell(cell.clone());
+                }
+                // Apply this record's tombstones (MakeSovereign) as deletions, in
+                // ordinal order, so the running root matches the finalized root a
+                // record that removed a cell recorded (else the prefix would never
+                // converge and a recoverable image would be falsely truncated).
+                for id in &record.removed {
+                    let _ = ledger.remove(&CellId(*id));
                 }
                 if crate::canonical_ledger_root(&ledger) == record.ledger_root {
                     last_good = Some(ordinal);
@@ -1195,7 +1425,7 @@ impl PersistentStore {
                     let entry = entry
                         .map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
                     let ordinal = entry.0.value();
-                    let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+                    let record = decode_commit_record(entry.1.value())?;
                     let hc_key =
                         CommitRecord::height_creator_key(record.height, &record.creator, ordinal);
                     doomed.push(Doomed {
@@ -1232,7 +1462,7 @@ impl PersistentStore {
                     for entry in log.range(floor..)? {
                         let entry = entry
                             .map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
-                        v.push(postcard::from_bytes::<CommitRecord>(entry.1.value())?);
+                        v.push(decode_commit_record(entry.1.value())?);
                     }
                     v
                 };
@@ -1398,6 +1628,7 @@ mod tests {
             ledger_root: [n as u8; 32],
             block_executed_up_to,
             touched_cells: cells,
+            removed: Vec::new(),
         }
     }
 
@@ -1406,6 +1637,200 @@ mod tests {
     // converts at the boundary.
     fn cell(seed: u8, balance: u64) -> Cell {
         Cell::with_balance([seed; 32], [seed.wrapping_add(7); 32], balance as i64)
+    }
+
+    /// A distinct 32-byte note commitment for seed `k`.
+    fn note_cm(k: u8) -> [u8; 32] {
+        let mut cm = [0u8; 32];
+        cm[0] = 0xc0;
+        cm[1] = k;
+        cm
+    }
+
+    // ── bug #58: crash-consistent note-tree weld ─────────────────────────────
+    //
+    // A `NoteCreate` finalized turn appends a durable note-tree leaf. Before the
+    // fix, that leaf was written in its OWN redb transaction, EARLY in the node's
+    // finalized-turn handler — hundreds of lines before the crash-consistent
+    // `commit_finalized_turn` boundary. A crash after the note append but before
+    // the commit record left the leaf durable while the turn was absent from the
+    // commit log, so recovery re-applied the turn and appended the SAME leaf a
+    // SECOND time. The boot path rebuilds the note tree from the durable table
+    // (`load_all_note_commitments`), so the double leaf — and the diverged root —
+    // was PERMANENT. The fix welds the note append into the commit transaction
+    // (`commit_finalized_turn_with_notes`).
+
+    /// FALSIFIER (RED before the fix, documenting the buggy SEQUENCING): a note
+    /// leaf written in its OWN transaction, then a crash BEFORE the commit
+    /// record, then recovery re-applies → the leaf lands at TWO positions and the
+    /// note-tree root diverges from an exactly-once application.
+    ///
+    /// This models the pre-fix ordering directly (separate `store_note_commitment`
+    /// + `commit_finalized_turn`) to prove the exactly-once test below is
+    /// non-vacuous: it is exactly what regresses if the weld is reverted.
+    #[test]
+    fn crash_recovery_separate_note_txn_double_applies_the_leaf() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let cm = note_cm(1);
+        let mut rec = record(0, 0, vec![]);
+        rec.turn_hash[0] = 0x58;
+
+        // First apply (pre-fix ordering): durable note append in its own txn …
+        store
+            .store_note_commitment(&dregg_cell::note::NoteCommitment(cm))
+            .unwrap();
+        // … then CRASH — `commit_finalized_turn` never runs, so the cursor stays 0
+        // and the turn is absent from the durable commit log.
+        assert_eq!(store.commit_cursor().unwrap(), 0);
+        assert_eq!(store.note_count().unwrap(), 1);
+
+        // Recovery: cursor is 0, so the turn is re-applied — and the pre-fix
+        // ordering appends the SAME commitment AGAIN in its own txn.
+        store
+            .store_note_commitment(&dregg_cell::note::NoteCommitment(cm))
+            .unwrap();
+        store.commit_finalized_turn(0, &rec).unwrap();
+
+        // The bug: two leaves for one note, a permanently diverged root.
+        assert_eq!(
+            store.note_count().unwrap(),
+            2,
+            "pre-fix sequencing double-appends across a crash-retry (this is the bug the weld fixes)"
+        );
+        let commitments = store.load_all_note_commitments().unwrap();
+        assert_eq!(
+            commitments,
+            vec![
+                dregg_cell::note::NoteCommitment(cm),
+                dregg_cell::note::NoteCommitment(cm)
+            ]
+        );
+    }
+
+    /// GREEN after the fix: the note append is WELDED into the commit
+    /// transaction, so a crash-retry lands the leaf at EXACTLY ONE position and
+    /// the note-tree root matches an exactly-once application.
+    ///
+    /// Two crash shapes are covered:
+    ///   (a) crash BEFORE the welded commit → nothing durable → recovery
+    ///       re-applies fresh → exactly one leaf.
+    ///   (b) crash AFTER the welded commit → the leaf AND the record are durable
+    ///       together → an idempotent replay writes nothing → still one leaf.
+    #[test]
+    fn crash_recovery_welded_note_append_is_exactly_once() {
+        let cm = note_cm(1);
+        let mut rec = record(0, 0, vec![]);
+        rec.turn_hash[0] = 0x58;
+
+        // The CANONICAL note accumulator is the POSITION-INDEXED, append-only
+        // Poseidon2 tree (`commit/src/poseidon2_tree.rs`), authored in Lean as
+        // `Dregg2.Circuit.CommitmentTreeAccumulator` — which proves append is
+        // genuinely ADDITIVE, so `root [cm] ≠ root [cm, cm]` (its §7
+        // NON-IDEMPOTENCE guard: `root (append [1] 2) ≠ root (append (append [1] 2) 2)`).
+        // A crash-retry double-apply lands TWO positional leaves, diverging that
+        // root — the divergence the exactly-once weld prevents. We assert on THAT
+        // root (built from the durable table via the same `commitment_to_field`
+        // the node uses), plus the durable positional facts (count + ordered
+        // commitment list). NOTE (surfaced finding): the store's durable
+        // `note_tree_root()` is a BLAKE3 SET-tree (`dregg_commit::merkle::MerkleTree`,
+        // keyed by leaf hash), so it COLLAPSES a duplicate — `root([cm]) ==
+        // root([cm,cm])` — and is INSENSITIVE to a duplicate double-apply; the
+        // corruption shows only in count/positions and the positional root. That
+        // is exactly why the fix is transactional PREVENTION, not root-based
+        // detection.
+        let positional_root = |cms: &[[u8; 32]]| -> dregg_circuit::field::BabyBear {
+            crate::Poseidon2NoteTree::from_blake3_commitments(cms, 4).root()
+        };
+        let single_leaf_root = positional_root(&[cm]);
+        let double_leaf_root = positional_root(&[cm, cm]);
+        assert_ne!(
+            single_leaf_root, double_leaf_root,
+            "positional (Lean-modeled) note-tree root MUST distinguish one leaf \
+             from a double-applied duplicate (append is additive, not idempotent)"
+        );
+
+        // ── Shape (a): crash BEFORE the welded commit returns ────────────────
+        let store = PersistentStore::open_in_memory().unwrap();
+        // The welded commit is ONE txn. A crash before it commits leaves NOTHING
+        // durable — neither the leaf nor the record — so the note is not durable
+        // and the cursor is unmoved (modeled by simply not calling it).
+        assert_eq!(store.note_count().unwrap(), 0);
+        assert_eq!(store.commit_cursor().unwrap(), 0);
+
+        // Recovery re-applies fresh: the welded commit writes the leaf and the
+        // record together.
+        let out = store
+            .commit_finalized_turn_with_notes(0, &rec, &[cm])
+            .unwrap();
+        assert!(out.freshly_committed);
+        assert_eq!(out.ordinal, 0);
+        assert_eq!(
+            store.note_count().unwrap(),
+            1,
+            "shape (a): exactly one leaf"
+        );
+
+        // ── Shape (b): the turn is FULLY committed, then re-applied (replay) ──
+        // e.g. the node re-enters the handler for an already-committed turn.
+        let replay = store
+            .commit_finalized_turn_with_notes(0, &rec, &[cm])
+            .unwrap();
+        assert!(
+            !replay.freshly_committed,
+            "an already-committed turn must be an idempotent replay, NOT a fresh write"
+        );
+        assert_eq!(
+            store.note_count().unwrap(),
+            1,
+            "shape (b): a replay must NOT re-append the note leaf"
+        );
+
+        // The durable table holds exactly ONE leaf, in order.
+        let durable = store.load_all_note_commitments().unwrap();
+        assert_eq!(durable, vec![dregg_cell::note::NoteCommitment(cm)]);
+
+        // The POSITIONAL (Lean-modeled) root rebuilt from the durable table
+        // equals the exactly-once single-leaf root — and NOT the double-leaf root
+        // the bug produces.
+        let durable_bytes: Vec<[u8; 32]> = durable.iter().map(|c| c.0).collect();
+        let recovered_root = positional_root(&durable_bytes);
+        assert_eq!(
+            recovered_root, single_leaf_root,
+            "welded exactly-once positional note-tree root must equal the single-application reference"
+        );
+        assert_ne!(
+            recovered_root, double_leaf_root,
+            "the exactly-once positional root must NOT match the double-leaf (bug) root"
+        );
+    }
+
+    /// NO-REGRESSION: the normal (no-crash) path appends each turn's note exactly
+    /// once, positions dense and in order, and the welded commit advances the
+    /// cursor exactly as the plain path does.
+    #[test]
+    fn welded_note_append_normal_path_appends_once_per_turn() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        for n in 0..4u64 {
+            let mut rec = record(n, n, vec![]);
+            rec.turn_hash[0] = 0x77;
+            rec.turn_hash[1] = n as u8;
+            let cm = note_cm(n as u8);
+            let out = store
+                .commit_finalized_turn_with_notes(n, &rec, &[cm])
+                .unwrap();
+            assert!(out.freshly_committed);
+            assert_eq!(out.ordinal, n);
+            assert_eq!(store.commit_cursor().unwrap(), n + 1);
+            assert_eq!(store.note_count().unwrap(), n + 1);
+        }
+        let commitments = store.load_all_note_commitments().unwrap();
+        let expected: Vec<_> = (0..4u8)
+            .map(|k| dregg_cell::note::NoteCommitment(note_cm(k)))
+            .collect();
+        assert_eq!(
+            commitments, expected,
+            "one leaf per turn, dense and in order"
+        );
     }
 
     #[test]
@@ -1747,10 +2172,10 @@ mod tests {
         // (bal 104).
         let bal = |seed: u8, b: u64| {
             let target = cell(seed, b).id();
-            overlay
-                .iter()
-                .find(|c| c.id() == target)
-                .map(|c| c.state.balance())
+            overlay.iter().find_map(|op| match op {
+                CellOverlayOp::Upsert(c) if c.id() == target => Some(c.state.balance()),
+                _ => None,
+            })
         };
         assert_eq!(bal(1, 105), Some(105));
         assert_eq!(bal(0, 104), Some(104));
@@ -1762,6 +2187,21 @@ mod tests {
 
     use dregg_cell::Ledger;
 
+    /// Apply a resolved overlay op to a reconstructing ledger in a test:
+    /// last-writer-wins upsert / tombstone remove (mirrors `node::apply_overlay_op`
+    /// over the `Write = insert | remove` alphabet).
+    fn apply_overlay_op_test(ledger: &mut Ledger, op: CellOverlayOp) {
+        match op {
+            CellOverlayOp::Upsert(c) => {
+                let _ = ledger.remove(&c.id());
+                let _ = ledger.insert_cell(c);
+            }
+            CellOverlayOp::Remove(id) => {
+                let _ = ledger.remove(&id);
+            }
+        }
+    }
+
     /// Reconstruct the finalized ledger AS RECOVERY DOES: the latest ledger
     /// checkpoint ⊕ `cell_overlay_since(checkpoint_height)` (last-writer-wins).
     /// This is `CrashRecovery.recover`; its root is what a recovered node
@@ -1772,10 +2212,8 @@ mod tests {
             Some(l) => l,
             None => Ledger::new(),
         };
-        for c in store.cell_overlay_since(cp_height).unwrap() {
-            // last-writer-wins overwrite (the overlay is already LWW-projected).
-            let _ = ledger.remove(&c.id());
-            let _ = ledger.insert_cell(c);
+        for op in store.cell_overlay_since(cp_height).unwrap() {
+            apply_overlay_op_test(&mut ledger, op);
         }
         ledger.root()
     }
@@ -1820,6 +2258,79 @@ mod tests {
             rec.block_id = [0xb0u8.wrapping_add(k as u8); 32];
             store.commit_finalized_turn(k, &rec).unwrap();
         }
+    }
+
+    /// **Bug #57 falsifier (persist level).** A checkpoint holds hosted cell C; a
+    /// finalized turn REMOVES it (a `MakeSovereign` tombstone in `CommitRecord
+    /// .removed`, no post-state). Recovery — `checkpoint ⊕ cell_overlay_since` —
+    /// MUST erase C (not resurrect it as hosted) and reconstruct the recorded
+    /// finalized root. The insert-only counterfactual (drop the tombstone, the
+    /// pre-fix shape) RESURRECTS C and diverges from the recorded root — proving
+    /// the tombstone dimension is load-bearing (the Rust twin of the Lean
+    /// `insert_only_overlay_resurrects` canary).
+    #[test]
+    fn make_sovereign_removal_survives_recovery_not_resurrected() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let c = cell(0x71, 100);
+
+        // Checkpoint at height 1 holds C HOSTED.
+        let cp = crate::ledger_store::LedgerCheckpoint {
+            height: 1,
+            cells: vec![c.clone()],
+            sovereign_commitments: Vec::new(),
+            sovereign_registrations: Vec::new(),
+        };
+        store.store_ledger_checkpoint_snapshot(&cp).unwrap();
+
+        // The finalized root the removing turn records commits C GONE.
+        let removed_root = crate::canonical_ledger_root(&Ledger::new());
+
+        // A committed turn at height 2 that REMOVES C — tombstone, no post-states.
+        let mut rec = record(1, 0, vec![]); // record(1,..).height == 2
+        rec.removed = vec![c.id().0];
+        rec.ledger_root = removed_root;
+        rec.turn_hash[0] = 0x57;
+        store.commit_finalized_turn(0, &rec).unwrap();
+
+        // ── GREEN pole: the overlay carries the removal → C erased, root matches.
+        let mut ledger = store.load_ledger_checkpoint_at(1).unwrap().unwrap();
+        assert!(
+            ledger.get(&c.id()).is_some(),
+            "checkpoint holds C before overlay"
+        );
+        for op in store.cell_overlay_since(1).unwrap() {
+            apply_overlay_op_test(&mut ledger, op);
+        }
+        assert!(
+            ledger.get(&c.id()).is_none(),
+            "a MakeSovereign-removed cell must NOT be resurrected as hosted by checkpoint ⊕ overlay"
+        );
+        assert_eq!(
+            crate::canonical_ledger_root(&ledger),
+            removed_root,
+            "reconstructed root must MATCH the recorded finalized root once the removal is applied"
+        );
+
+        // ── RED pole (mutation canary): an INSERT-ONLY overlay drops the tombstone
+        //    → C is resurrected as hosted and the reconstructed root DIVERGES.
+        let mut insert_only = store.load_ledger_checkpoint_at(1).unwrap().unwrap();
+        for op in store.cell_overlay_since(1).unwrap() {
+            if let CellOverlayOp::Upsert(cell) = op {
+                let _ = insert_only.remove(&cell.id());
+                let _ = insert_only.insert_cell(cell);
+            }
+            // CellOverlayOp::Remove DROPPED — the pre-fix insert-only bug.
+        }
+        assert!(
+            insert_only.get(&c.id()).is_some(),
+            "dropping the tombstone RESURRECTS the removed cell (the bug this dimension closes)"
+        );
+        assert_ne!(
+            crate::canonical_ledger_root(&insert_only),
+            removed_root,
+            "the resurrected ledger root DIVERGES from the recorded finalized root — the tombstone \
+             is what makes recovery converge"
+        );
     }
 
     /// THE SAFETY TOOTH (refuse without a covering checkpoint): with NO ledger
@@ -2208,9 +2719,8 @@ mod tests {
         // THE CONVERGENCE CHECK NOW PASSES at the recovered point: the head's
         // recorded root equals the reconstruction (this is what `recover` asserts).
         let mut ledger = Ledger::new();
-        for c in store.cell_overlay_since(0).unwrap() {
-            let _ = ledger.remove(&c.id());
-            let _ = ledger.insert_cell(c);
+        for op in store.cell_overlay_since(0).unwrap() {
+            apply_overlay_op_test(&mut ledger, op);
         }
         assert_eq!(
             crate::canonical_ledger_root(&ledger),
@@ -2390,9 +2900,8 @@ mod tests {
         // genesis ⊕ overlay (the SOUND `reseed_genesis_then_overlay` order)
         // equals the head's recorded root, so the node opens instead of stranding.
         let mut ledger = genesis.clone();
-        for c in store.cell_overlay_since(0).unwrap() {
-            let _ = ledger.remove(&c.id());
-            let _ = ledger.insert_cell(c);
+        for op in store.cell_overlay_since(0).unwrap() {
+            apply_overlay_op_test(&mut ledger, op);
         }
         assert_eq!(
             crate::canonical_ledger_root(&ledger),

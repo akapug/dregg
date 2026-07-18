@@ -542,6 +542,26 @@ fn upsert_cell(ledger: &mut Ledger, cell: Cell) {
     let _ = ledger.insert_cell(cell);
 }
 
+/// Apply one resolved durable-overlay operation to the recovering ledger — the
+/// Rust denotation of the Lean `CrashRecovery.applyWrites` step over the
+/// `Write = insert | remove` alphabet.
+///
+/// * `Upsert` is last-writer-wins ([`upsert_cell`], remove-then-insert): a
+///   post-checkpoint write must OVERWRITE the checkpoint value, never be dropped.
+/// * `Remove` is a tombstone ([`Ledger::remove`]): a cell the finalized turn
+///   stream removed from the hosted set (MakeSovereign) must NOT survive
+///   `checkpoint ⊕ overlay`. Dropping the removal (an insert-only overlay) would
+///   RESURRECT it as hosted and diverge the reconstructed root — the bug this
+///   dimension closes, and exactly what the Lean `recover_eq_replay` catch forbids.
+fn apply_overlay_op(ledger: &mut Ledger, op: dregg_persist::CellOverlayOp) {
+    match op {
+        dregg_persist::CellOverlayOp::Upsert(cell) => upsert_cell(ledger, cell),
+        dregg_persist::CellOverlayOp::Remove(id) => {
+            let _ = ledger.remove(&id);
+        }
+    }
+}
+
 fn load_witnessed_receipts(
     store: &PersistentStore,
 ) -> (HashMap<[u8; 32], Vec<WitnessedReceipt>>, VecDeque<[u8; 32]>) {
@@ -857,8 +877,8 @@ impl NodeState {
         match store.cell_overlay_since(checkpoint_height) {
             Ok(overlay) if !overlay.is_empty() => {
                 let overlay_len = overlay.len();
-                for cell in overlay {
-                    upsert_cell(&mut ledger, cell);
+                for op in overlay {
+                    apply_overlay_op(&mut ledger, op);
                 }
                 // The recovery-convergence verdict is DEFERRED to
                 // `verify_recovery_convergence`, which `run_node` calls AFTER it
@@ -1064,11 +1084,14 @@ impl NodeState {
         if let Ok(overlay) = store.cell_overlay_since(checkpoint_height)
             && !overlay.is_empty()
         {
-            for cell in overlay {
-                // Last-writer-wins point update (`CrashRecovery.upd`); a strict
-                // `insert_cell` would silently drop a post-checkpoint write to an
-                // already-checkpointed cell. See `new_with_key_file` / `upsert_cell`.
-                upsert_cell(&mut ledger, cell);
+            for op in overlay {
+                // Last-writer-wins point update (`CrashRecovery.applyWrites` over
+                // the `Write = insert | remove` alphabet): an Upsert overwrites
+                // (a strict `insert_cell` would silently drop a post-checkpoint
+                // write to an already-checkpointed cell); a Remove DELETES (a
+                // dropped removal would resurrect the cell as hosted). See
+                // `new_with_key_file` / `apply_overlay_op`.
+                apply_overlay_op(&mut ledger, op);
             }
             // Convergence assertion, mirroring `new_with_key_file`: the
             // reconstructed root MUST equal the root the committing node durably
@@ -2731,6 +2754,7 @@ mod crash_recovery_overlay_tests {
             receipt_hash: [0xc2; 32],
             ledger_root: record_root,
             touched_cells: vec![cell(seed, overlay_balance)],
+            removed: Vec::new(),
         };
         store
             .commit_finalized_turn(0, &rec)
@@ -2745,6 +2769,107 @@ mod crash_recovery_overlay_tests {
             .insert_cell(cell(seed, overlay_balance))
             .expect("post-overlay cell");
         crate::blocklace_sync::canonical_ledger_root(&ledger)
+    }
+
+    /// Build a store whose checkpoint at height 1 holds `cell(seed)` HOSTED, then
+    /// a finalized turn at height 2 that REMOVES it (a `MakeSovereign` tombstone).
+    /// `removed` carries the tombstone iff `carry_removal`; the recorded
+    /// `ledger_root` is always the genuine post-removal root (an empty ledger).
+    /// With the tombstone, `checkpoint ⊕ overlay` erases the cell and converges;
+    /// WITHOUT it (the pre-fix insert-only overlay) the cell is resurrected as
+    /// hosted and the root diverges — the falsifier's two poles.
+    fn seed_store_with_removal(dir: &Path, seed: u8, carry_removal: bool) -> [u8; 32] {
+        let db_path = dir.join("dregg.redb");
+        let store = PersistentStore::open(&db_path).expect("open store");
+
+        let mut checkpoint_ledger = Ledger::new();
+        checkpoint_ledger
+            .insert_cell(cell(seed, 100))
+            .expect("seed hosted cell");
+        store
+            .checkpoint_ledger(&checkpoint_ledger, 1)
+            .expect("write checkpoint");
+
+        // The finalized root the removing turn recorded commits the cell GONE.
+        let removed_root = crate::blocklace_sync::canonical_ledger_root(&Ledger::new());
+
+        let removed = if carry_removal {
+            vec![cell(seed, 0).id().0]
+        } else {
+            Vec::new()
+        };
+        let rec = dregg_persist::CommitRecord {
+            ordinal: 0,
+            height: 2,
+            block_id: [0u8; 32],
+            block_executed_up_to: 0,
+            turn_hash: [0xd1; 32],
+            creator: [0u8; 32],
+            receipt_hash: [0xd2; 32],
+            ledger_root: removed_root,
+            touched_cells: vec![], // a removal is NOT a post-state write
+            removed,
+        };
+        store
+            .commit_finalized_turn(0, &rec)
+            .expect("commit removal turn");
+        removed_root
+    }
+
+    #[tokio::test]
+    async fn make_sovereign_removal_is_not_resurrected_on_recovery() {
+        // Bug #57 falsifier (GREEN pole): a checkpoint holds hosted C; a finalized
+        // MakeSovereign(C) turn commits above it, carrying C in the `removed`
+        // tombstone. Recovery from checkpoint ⊕ overlay MUST erase C (not
+        // resurrect it as hosted) AND reconstruct the recorded finalized root.
+        let seed = 0x71;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let recorded_root = seed_store_with_removal(tmp.path(), seed, /*carry_removal=*/ true);
+
+        let key_bytes = [0x22u8; 32];
+        let state = NodeState::with_cclerk(tmp.path(), vec![], key_bytes)
+            .expect("recovery with a converging removal overlay must succeed");
+        let guard = state.read().await;
+        assert!(
+            guard.ledger.get(&cell(seed, 0).id()).is_none(),
+            "a cell REMOVED (MakeSovereign) post-checkpoint must NOT be resurrected as \
+             hosted by checkpoint ⊕ overlay recovery"
+        );
+        assert_eq!(
+            crate::blocklace_sync::canonical_ledger_root(&guard.ledger),
+            recorded_root,
+            "the reconstructed ledger root must MATCH the durably recorded finalized \
+             root once the removal is applied"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropped_removal_resurrects_and_diverges_the_root() {
+        // Bug #57 falsifier (RED pole / mutation canary): the SAME scenario with
+        // the `removed` tombstone DROPPED (an insert-only overlay — the pre-fix
+        // shape). The overlay carries no erasure, so C is resurrected as hosted
+        // from the checkpoint and the reconstructed root DIVERGES from the recorded
+        // finalized root. This proves the `removed` dimension is load-bearing: were
+        // it absent, recovery would serve a silently-wrong (over-populated) ledger.
+        let seed = 0x71;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let recorded_root =
+            seed_store_with_removal(tmp.path(), seed, /*carry_removal=*/ false);
+
+        let key_bytes = [0x22u8; 32];
+        let state = NodeState::with_cclerk(tmp.path(), vec![], key_bytes)
+            .expect("construction reconstructs the overlay (verdict is a separate step)");
+        let guard = state.read().await;
+        assert!(
+            guard.ledger.get(&cell(seed, 0).id()).is_some(),
+            "without the tombstone the removed cell is RESURRECTED as hosted — the bug"
+        );
+        assert_ne!(
+            crate::blocklace_sync::canonical_ledger_root(&guard.ledger),
+            recorded_root,
+            "the resurrected ledger root must DIVERGE from the recorded finalized root — \
+             the tombstone dimension is what makes recovery converge"
+        );
     }
 
     #[tokio::test]
@@ -2982,6 +3107,7 @@ mod crash_recovery_overlay_tests {
             receipt_hash: [0xa2; 32],
             ledger_root: record_root,
             touched_cells: vec![touched.clone()],
+            removed: Vec::new(),
         };
         store
             .commit_finalized_turn(0, &rec)
@@ -3207,7 +3333,7 @@ mod crash_recovery_overlay_tests {
         let genesis = issuer_well_genesis(well, faucet, alice, faucet_amount, alice_amount);
         {
             let mut s = state.write().await;
-            let stats = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+            let stats = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger, &[]);
             assert_eq!(
                 stats.invalid, 0,
                 "genesis baseline must materialize cleanly — the moves run ONCE on the \
@@ -3299,7 +3425,7 @@ mod crash_recovery_overlay_tests {
         let genesis = issuer_well_genesis(well, faucet, alice, faucet_amount, alice_amount);
         {
             let mut s = state.write().await;
-            let _ = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+            let _ = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger, &[]);
         }
 
         let err = state

@@ -332,7 +332,10 @@ fn build_cell(spec: &CellSpec, factory: &FactoryDescriptor) -> Cell {
 /// wants to BOOT the image.
 pub fn build_image(manifest: &ImageManifest) -> Result<ImageArtifact, BuildError> {
     let mut ledger = Ledger::new();
-    let mut overlay: Vec<Cell> = Vec::with_capacity(manifest.cells.len());
+    // A built image is a pure genesis GRAPH (only creations), so every overlay op
+    // is an Upsert; the removal leg of `CellOverlayOp` never occurs here.
+    let mut overlay: Vec<crate::commit_log::CellOverlayOp> =
+        Vec::with_capacity(manifest.cells.len());
     let mut provenance: Vec<CellProvenance> = Vec::with_capacity(manifest.cells.len());
     let mut seen_ids = std::collections::BTreeSet::new();
 
@@ -365,7 +368,7 @@ pub fn build_image(manifest: &ImageManifest) -> Result<ImageArtifact, BuildError
         // Insert into the real ledger (strict insert; duplicate ids already
         // refused above) and keep a copy for the snapshot overlay.
         let _ = ledger.insert_cell(cell.clone());
-        overlay.push(cell);
+        overlay.push(crate::commit_log::CellOverlayOp::Upsert(cell));
     }
 
     let claimed_root = snapshot_ledger_root(&mut ledger);
@@ -518,9 +521,16 @@ pub fn verify_image(artifact: &ImageArtifact) -> Result<ImageFacts, VerifyError>
         Some(cp) => crate::ledger_store::checkpoint_to_ledger_snapshot(cp),
         None => Ledger::new(),
     };
-    for cell in &artifact.snapshot.overlay {
-        let _ = ledger.remove(&cell.id());
-        let _ = ledger.insert_cell(cell.clone());
+    for op in &artifact.snapshot.overlay {
+        match op {
+            crate::commit_log::CellOverlayOp::Upsert(cell) => {
+                let _ = ledger.remove(&cell.id());
+                let _ = ledger.insert_cell(cell.clone());
+            }
+            crate::commit_log::CellOverlayOp::Remove(id) => {
+                let _ = ledger.remove(id);
+            }
+        }
     }
     let rebuilt_root = snapshot_ledger_root(&mut ledger);
     if rebuilt_root != att.claimed_root {
@@ -733,7 +743,13 @@ mod tests {
         let artifact = build_image(&manifest).unwrap();
         let vf_hash = value_factory().hash();
         let rf_hash = record_factory().hash();
-        for cell in &artifact.snapshot.overlay {
+        for op in &artifact.snapshot.overlay {
+            let cell = match op {
+                crate::commit_log::CellOverlayOp::Upsert(c) => c,
+                crate::commit_log::CellOverlayOp::Remove(_) => {
+                    panic!("a built image graph carries only Upserts")
+                }
+            };
             // find the provenance for this cell
             let prov = artifact
                 .attestation
@@ -775,8 +791,13 @@ mod tests {
         let mut artifact = build_image(&manifest).unwrap();
         // Tamper a cell's balance in the overlay WITHOUT updating the root —
         // the reconstruct tooth must trip (the rebuilt root no longer matches).
-        let forged = artifact.snapshot.overlay[1].state.balance() + 1;
-        artifact.snapshot.overlay[1].state.set_balance(forged);
+        let crate::commit_log::CellOverlayOp::Upsert(overlay_cell) =
+            &mut artifact.snapshot.overlay[1]
+        else {
+            panic!("a built image graph carries only Upserts")
+        };
+        let forged = overlay_cell.state.balance() + 1;
+        overlay_cell.state.set_balance(forged);
         let err = verify_image(&artifact).unwrap_err();
         assert!(
             matches!(err, VerifyError::RootReconstructMismatch { .. }),

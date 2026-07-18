@@ -48,7 +48,7 @@ use std::path::Path;
 use redb::{Database, ReadableTable};
 
 pub use blocklace_store::BlocklaceMeta;
-pub use commit_log::{CommitRecord, IndexAuditReport};
+pub use commit_log::{CellOverlayOp, CommitRecord, IndexAuditReport};
 pub use federation::{QuorumSignature, StoredAttestedRoot};
 pub use image_builder::{
     BuildError, CellSpec, ImageArtifact, ImageAttestation, ImageFacts, ImageManifest, VerifyError,

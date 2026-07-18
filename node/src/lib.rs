@@ -1193,7 +1193,17 @@ async fn run_node(
                         // The old order (genesis reseed applied OVER the overlay)
                         // re-credited every move RECIPIENT already in the overlay
                         // — a double-credit that diverged the reconstructed root.
-                        let cell_load = reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+                        // Post-checkpoint removals (MakeSovereign tombstones) that
+                        // the genesis baseline would otherwise resurrect.
+                        let removed_since_checkpoint = {
+                            let cp_h = s.store.latest_ledger_checkpoint_height().unwrap_or(0);
+                            s.store.removed_cell_ids_since(cp_h).unwrap_or_default()
+                        };
+                        let cell_load = reseed_genesis_then_overlay(
+                            &genesis,
+                            &mut s.ledger,
+                            &removed_since_checkpoint,
+                        );
                         if cell_load.total() > 0 {
                             info!(
                                 inserted = cell_load.inserted,
@@ -2315,6 +2325,7 @@ fn materialize_genesis_cells(
 fn reseed_genesis_then_overlay(
     genesis: &serde_json::Value,
     ledger: &mut dregg_cell::Ledger,
+    removed_since_checkpoint: &[dregg_cell::CellId],
 ) -> GenesisCellLoadStats {
     // 1. Lift the recovered commit-log overlay (checkpoint ⊕ touched
     //    post-states) out of the live ledger.
@@ -2330,6 +2341,16 @@ fn reseed_genesis_then_overlay(
     for cell in recovered_overlay {
         let _ = ledger.remove(&cell.id());
         let _ = ledger.insert_cell(cell);
+    }
+
+    // 4. Re-apply the post-checkpoint REMOVALS (MakeSovereign tombstones): the
+    //    fresh genesis baseline re-materialized every genesis cell, so a genesis
+    //    cell removed after the checkpoint must be deleted AGAIN — the surviving
+    //    overlay (step 1/3) carries only cells that still exist, never the erasure.
+    //    Without this the reconstructed root diverges and `verify_recovery_
+    //    convergence` fails closed on a genesis-cell-made-sovereign restart.
+    for id in removed_since_checkpoint {
+        let _ = ledger.remove(id);
     }
 
     stats

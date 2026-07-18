@@ -51,6 +51,7 @@ use serde::{Deserialize, Serialize};
 
 use dregg_cell::{Cell, Ledger};
 
+use crate::commit_log::CellOverlayOp;
 use crate::ledger_store::LedgerCheckpoint;
 use crate::{PersistentStore, Result, StoreError};
 
@@ -91,8 +92,11 @@ pub struct Snapshot {
     pub overlay_base_height: u64,
     /// The cell overlay: `cell_overlay_since(overlay_base_height)`. Overlaying
     /// these on the checkpoint ledger reconstructs the finalized ledger up to
-    /// the head, last-writer-wins (applied via [`upsert_cell`], keyed by id).
-    pub overlay: Vec<Cell>,
+    /// the head, last-writer-wins (applied via [`apply_overlay_op`], keyed by id).
+    /// Carries REMOVALS (`CellOverlayOp::Remove`, MakeSovereign tombstones) as
+    /// well as upserts — an insert-only overlay would resurrect a removed cell as
+    /// hosted on the joiner and diverge from `claimed_root`.
+    pub overlay: Vec<CellOverlayOp>,
     /// The head pointer (commit cursor + block cursor) at snapshot time.
     pub head: SnapshotHead,
     /// The root commitment: the canonical ledger root of the reconstructed
@@ -123,6 +127,20 @@ impl Snapshot {
 fn upsert_cell(ledger: &mut Ledger, cell: Cell) {
     let _ = ledger.remove(&cell.id());
     let _ = ledger.insert_cell(cell);
+}
+
+/// Apply one resolved overlay op to the reconstructing ledger — the snapshot-side
+/// denotation of the Lean `CrashRecovery.applyWrites` over the `Write = insert |
+/// remove` alphabet: `Upsert` overwrites ([`upsert_cell`]), `Remove` erases
+/// ([`Ledger::remove`]). A dropped removal would resurrect the cell as hosted and
+/// diverge the reconstructed root from `claimed_root`.
+fn apply_overlay_op(ledger: &mut Ledger, op: &CellOverlayOp) {
+    match op {
+        CellOverlayOp::Upsert(cell) => upsert_cell(ledger, cell.clone()),
+        CellOverlayOp::Remove(id) => {
+            let _ = ledger.remove(id);
+        }
+    }
 }
 
 /// The canonical ledger-root commitment used to bind a snapshot to the chain.
@@ -199,8 +217,8 @@ impl PersistentStore {
             Some(cp) => crate::ledger_store::checkpoint_to_ledger_snapshot(cp),
             None => Ledger::new(),
         };
-        for cell in &overlay {
-            upsert_cell(&mut ledger, cell.clone());
+        for op in &overlay {
+            apply_overlay_op(&mut ledger, op);
         }
         let claimed_root = snapshot_ledger_root(&mut ledger);
 
@@ -257,8 +275,8 @@ impl PersistentStore {
         // upsert_cell: the overlay is already a last-writer-wins projection, and
         // upsert OVERWRITES any same-id cell the checkpoint already held — the
         // `CrashRecovery.upd` point update, NOT insert_cell's strict insert).
-        for cell in &snapshot.overlay {
-            upsert_cell(&mut ledger, cell.clone());
+        for op in &snapshot.overlay {
+            apply_overlay_op(&mut ledger, op);
         }
 
         // The anti-substitution tooth: the reconstructed ledger MUST commit to
@@ -376,6 +394,7 @@ mod tests {
                 receipt_hash,
                 ledger_root,
                 touched_cells: vec![c],
+                removed: Vec::new(),
             };
             store.commit_finalized_turn(n, &rec).unwrap();
         }
@@ -411,8 +430,8 @@ mod tests {
             None => Ledger::new(),
         };
         let overlay = store.cell_overlay_since(cp_height).unwrap();
-        for c in overlay {
-            upsert_cell(&mut ledger, c);
+        for op in &overlay {
+            apply_overlay_op(&mut ledger, op);
         }
         ledger.root()
     }
@@ -472,7 +491,7 @@ mod tests {
         let mut snap = store.ship_snapshot(0).unwrap();
         // Tamper: replace one overlay cell's balance with a forged value.
         assert!(!snap.overlay.is_empty());
-        snap.overlay[0] = cell(2, 99_999); // wrong balance for the same id family
+        snap.overlay[0] = CellOverlayOp::Upsert(cell(2, 99_999)); // forged balance, same id family
 
         let err = store.apply_snapshot(&snap);
         assert!(

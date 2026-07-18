@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 
 use dregg_cell::{
-    CapabilityRef, CellId, CellProgram, CommitmentSet, DelegatedRef, Ledger, NoteCommitment,
+    CapabilityRef, Cell, CellId, CellProgram, CommitmentSet, DelegatedRef, Ledger, NoteCommitment,
     Nullifier, Permissions, RevokedSet, VerificationKey,
     lifecycle::CellLifecycle,
     nullifier_set::NullifierSet,
@@ -46,6 +46,14 @@ pub(crate) enum JournalEntry {
     },
     /// A new cell was created. Records the cell ID so we can remove it on rollback.
     CreateCell { cell: CellId },
+    /// A hosted cell was made SOVEREIGN — lifted out of the hosted set, only its
+    /// state commitment retained (`Ledger::make_sovereign`). Records the whole
+    /// removed cell so rollback REINSTATES it (`Ledger::undo_make_sovereign`: drop
+    /// the sovereign commitment, re-insert the cell) and so the committed
+    /// `LedgerDelta` carries the removal in its `removed` tombstone dimension
+    /// (`compute_delta_from_journal`). Without the tombstone the durable overlay
+    /// resurrects the cell as hosted on `checkpoint ⊕ overlay` recovery.
+    MakeSovereign { cell: Box<Cell> },
     /// A cell's proved_state flag was changed. Records the old value.
     SetProvedState { cell: CellId, old_value: bool },
     /// A cell's permissions were changed. Records the old permissions.
@@ -208,6 +216,11 @@ impl LedgerJournal {
                 | JournalEntry::SetLifecycle { cell, .. }
                 | JournalEntry::SetHeap { cell, .. }
                 | JournalEntry::AttenuateCapability { cell, .. } => *cell,
+                // A made-sovereign cell WAS mutated (removed from the hosted set):
+                // include its id so a diff-based durable consumer (starbridge
+                // `dual_write` unions this into its write-set) sees it absent
+                // post-commit and records it as a `removed` tombstone.
+                JournalEntry::MakeSovereign { cell } => cell.id(),
                 JournalEntry::NoteSpend
                 | JournalEntry::NoteCreate
                 | JournalEntry::BridgedNullifierInserted { .. }
@@ -283,6 +296,15 @@ impl LedgerJournal {
     /// Record a cell creation (so it can be removed on rollback).
     pub fn record_create_cell(&mut self, cell: CellId) {
         self.entries.push(JournalEntry::CreateCell { cell });
+    }
+
+    /// Record a hosted→sovereign transition (`Ledger::make_sovereign`), carrying
+    /// the removed cell so rollback reinstates it and the delta carries the
+    /// removal tombstone.
+    pub fn record_make_sovereign(&mut self, cell: Cell) {
+        self.entries.push(JournalEntry::MakeSovereign {
+            cell: Box::new(cell),
+        });
     }
 
     /// Record a proved_state change.
@@ -466,6 +488,12 @@ impl LedgerJournal {
                 }
                 JournalEntry::CreateCell { cell } => {
                     ledger.remove(&cell);
+                }
+                JournalEntry::MakeSovereign { cell } => {
+                    // Undo the hosted→sovereign transition: drop the sovereign
+                    // commitment and reinstate the removed cell (whole prior
+                    // image), re-establishing its pubkey-index entry.
+                    ledger.undo_make_sovereign(*cell);
                 }
                 JournalEntry::SetProvedState { cell, old_value } => {
                     if let Some(c) = ledger.get_mut(&cell) {

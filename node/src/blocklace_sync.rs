@@ -4866,15 +4866,28 @@ async fn execute_finalized_turn(
                 dregg_turn::ResolutionOutcome::Resolved(receipt.clone()),
             );
 
-            // Process note commitments from NoteCreate effects.
-            for tree in &signed_turn.turn.call_forest.roots {
-                for effect in &tree.action.effects {
-                    if let dregg_turn::Effect::NoteCreate { commitment, .. } = effect {
-                        s.note_tree_append_commitment(&commitment.0);
-                        let _ = s.store.store_note_commitment(commitment);
-                    }
-                }
-            }
+            // Collect note commitments from NoteCreate effects. Bug #58: the
+            // DURABLE append is DEFERRED and WELDED into the crash-consistent
+            // commit transaction below (`commit_finalized_turn_with_notes`), so
+            // the note leaf and the turn record land in ONE fsync boundary —
+            // exactly-once across a crash. Appending here (in its own redb txn,
+            // hundreds of lines before the atomic barrier) is what let a crash
+            // leave the note leaf durable without the turn record, so recovery
+            // re-applied the turn and appended the SAME commitment a second time
+            // (a permanent double leaf, since the boot path rebuilds the tree
+            // from the durable table). The in-RAM Poseidon2 tree is advanced only
+            // AFTER durable success, in the commit block below.
+            let note_commitments: Vec<[u8; 32]> = signed_turn
+                .turn
+                .call_forest
+                .roots
+                .iter()
+                .flat_map(|tree| &tree.action.effects)
+                .filter_map(|effect| match effect {
+                    dregg_turn::Effect::NoteCreate { commitment, .. } => Some(commitment.0),
+                    _ => None,
+                })
+                .collect();
 
             // FRESHNESS: record this turn's spent note nullifiers into the node's
             // CANONICAL persisted nullifier set, so subsequent turns' freshness
@@ -5545,10 +5558,16 @@ async fn execute_finalized_turn(
                     if let Some(cell) = s.ledger.get(id) {
                         touched_cells.push(cell.clone());
                     }
-                    // A touched id absent post-commit means the cell was
-                    // destroyed this turn; its removal is reflected by the
-                    // checkpoint, and the overlay carries no stale entry.
+                    // A touched id absent post-commit is not carried here — a
+                    // genuine REMOVAL travels in `removed` (below), the authoritative
+                    // tombstone the overlay deletes on recovery.
                 }
+                // The tombstone dimension: cells this turn REMOVED from the hosted
+                // set (MakeSovereign). Post-states alone (`touched_cells`) cannot
+                // represent an erasure, so without this the durable overlay
+                // resurrects the removed cell as hosted on recovery and the
+                // reconstructed root diverges from `ledger_root`.
+                let removed: Vec<[u8; 32]> = ledger_delta.removed.iter().map(|id| id.0).collect();
                 let commit_record = dregg_persist::CommitRecord {
                     ordinal: 0, // assigned by the store at the durable cursor
                     height: new_height,
@@ -5559,13 +5578,32 @@ async fn execute_finalized_turn(
                     ledger_root: merkle_root,
                     block_executed_up_to,
                     touched_cells,
+                    removed,
                 };
                 let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
-                match s
-                    .store
-                    .commit_finalized_turn(expected_ordinal, &commit_record)
-                {
-                    Ok(assigned) => {
+                // Weld the NoteCreate commitments into this SAME atomic commit
+                // transaction (bug #58): the note leaves and the turn record land
+                // together-or-not-at-all in one fsync boundary, so a crash-retry
+                // can never double-append a note leaf.
+                match s.store.commit_finalized_turn_with_notes(
+                    expected_ordinal,
+                    &commit_record,
+                    &note_commitments,
+                ) {
+                    Ok(outcome) => {
+                        let assigned = outcome.ordinal;
+                        // Advance the in-RAM Poseidon2 note tree ONLY after the
+                        // durable append succeeded, and ONLY when THIS call
+                        // freshly wrote the leaves. On an idempotent replay of an
+                        // already-committed turn the leaves are already durable,
+                        // and the boot-time rebuild from `load_all_note_commitments`
+                        // already holds them — re-appending here would double the
+                        // in-RAM tree.
+                        if outcome.freshly_committed {
+                            for cm in &note_commitments {
+                                s.note_tree_append_commitment(cm);
+                            }
+                        }
                         debug!(
                             turn_hash = %turn_hash_hex,
                             ordinal = assigned,
