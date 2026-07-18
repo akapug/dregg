@@ -9610,3 +9610,14 @@ invariant, and chains witness/never author (sovereign 32-byte commitment, offlin
   instantiate `StateEqv` at `CrossCellBisim.xeq` (import direction blocked the lane; congruence lemmas exist).
 - ⚠ `Boundary.Later` (`Boundary.lean:87`) = identity placeholder for ▷ (labeled in-tree; productivity not
   machine-enforced). Named, not yet worked.
+
+## 2026-07-18 — "The Federation Knows" essay (emergence-as-theorem)
+`docs/THE-FEDERATION-KNOWS.md` — quote-tweet essay #2, from a full read of `Authority/Epistemic.lean`
+(1112 lines) + the BiorthRelational Ep front: D-without-K on the real Shamir/GF(256) algebra
+(`distributed_without_individual`), sub-threshold blindness as the entity's BIRTH CONDITION, the knower
+MADE OF correlation (`dclass_eq_closure_of_matched_tensors`), ledger = common-knowledge prosthesis
+(`finality_is_common`, E⇏C `no_common_for_private_pockets`), one-"we"-per-wave
+(`no_conflicting_common_per_wave`), partition-safe `commonAt` bridge settlement, price list K free/D
+quorum/C finality. ⚑ follow-up surfaced by the read: the §9 epistemic guard atoms
+(`knownBy/distributedAmong/commonAt/privateTo`) are DESIGN-ONLY — installation into the executor guard
+surface is owned by the temporal-algebra lane and has NOT happened (essay's resolution ledger says so).
