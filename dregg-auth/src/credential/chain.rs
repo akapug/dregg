@@ -32,7 +32,7 @@
 //! — the no-cross-root-replay tooth that defeats "strip caveats, reuse the old
 //! approval").
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
 
 use super::caveat::{Caveat, Context};
@@ -369,7 +369,7 @@ impl Credential {
                 }
             };
             let sig = Signature::from_bytes(&block.sig);
-            vkey.verify(&msg, &sig)
+            vkey.verify_strict(&msg, &sig)
                 .map_err(|_| Refusal::BadSignature { block: i })?;
             vkey = VerifyingKey::from_bytes(&block.next_pub)
                 .map_err(|_| Refusal::MalformedKey { block: i })?;
@@ -433,7 +433,7 @@ impl Credential {
                 }
             };
             let sig = Signature::from_bytes(&block.sig);
-            vkey.verify(&msg, &sig)
+            vkey.verify_strict(&msg, &sig)
                 .map_err(|_| Refusal::BadSignature { block: i })?;
             // The PQ half over the SAME digest, under the parent-pinned key.
             if !pq::ml_dsa_verify(&pq_vkey, &msg, &block.sig_ml_dsa) {
@@ -614,7 +614,7 @@ impl Discharge {
         let vkey = VerifyingKey::from_bytes(gateway).map_err(|_| Refusal::MalformedGatewayKey)?;
         let msg = discharge_digest(&self.caveat_id, &self.caveats, self.binding.as_ref());
         let sig = Signature::from_bytes(&self.sig);
-        vkey.verify(&msg, &sig)
+        vkey.verify_strict(&msg, &sig)
             .map_err(|_| Refusal::DischargeBadSignature {
                 caveat_id: hex(&self.caveat_id),
             })?;
@@ -953,6 +953,97 @@ mod hybrid_pq_tests {
         assert_eq!(
             decoded.verify_hybrid(&root.public_hybrid(), &ok_ctx()),
             Ok(())
+        );
+    }
+}
+
+#[cfg(test)]
+mod strict_smallorder_tests {
+    //! The strictness tooth for the credential-chain ed25519 verify.
+    //!
+    //! `Credential::verify` roots the chain at the ISSUER key the *verifier*
+    //! supplies (pinned config: `Policy::public_key_hex`, `HostAuthority::public`,
+    //! `ShareAuthority::public` — never read from the wire), so under an honest
+    //! pinned root this is defense-in-depth, not a live wire forgery. But the
+    //! chain verify feeds an ATTACKER-CHOSEN verifying key into `dalek` at every
+    //! block after the root (each `block.next_pub` is credential bytes), and a
+    //! future caller that ever sourced the root from the wire would inherit the
+    //! full small-order universal-forgery vector. This tooth pins that the verify
+    //! path is `verify_strict` — fail-closed on a small-order key with NO secret —
+    //! by EXHIBITING the forgery both ways in one place.
+    use super::*;
+
+    /// The edwards25519 identity point, compressed: `y = 1`, sign bit 0. Order 1,
+    /// hence small-order — the canonical weak key `verify_strict` must reject.
+    fn identity_point() -> [u8; 32] {
+        let mut b = [0u8; 32];
+        b[0] = 1;
+        b
+    }
+
+    /// The no-secret universal forgery under a small-order key: `R = identity`,
+    /// `s = 0`. For a small-order `A`, `h·A = identity`, so the cofactored check
+    /// `s·B = R + h·A` becomes `identity = identity` for EVERY message.
+    fn forged_sig() -> [u8; 64] {
+        let mut sig = [0u8; 64];
+        sig[0] = 1; // R = compressed identity; s stays all-zero.
+        sig
+    }
+
+    /// Build a one-block credential whose block-0 signature is the no-secret
+    /// forgery above, presentable (possession passes: `next_pub` is our own key)
+    /// and caveat-free (so only the signature gate decides).
+    fn forged_credential() -> Credential {
+        let proof = SigningKey::from_bytes(&[7u8; 32]);
+        let next_pub = proof.verifying_key().to_bytes();
+        Credential {
+            nonce: [0u8; 32],
+            blocks: vec![Block {
+                caveats: Vec::new(),
+                next_pub,
+                next_pub_ml_dsa: Vec::new(),
+                sig: forged_sig(),
+                sig_ml_dsa: Vec::new(),
+            }],
+            proof,
+        }
+    }
+
+    #[test]
+    fn cofactored_verify_accepts_the_no_secret_forgery_strict_refuses_it() {
+        // The exhibit: exactly what `Credential::verify` computes for block 0.
+        let root = identity_point();
+        let cred = forged_credential();
+        let msg = block_digest(
+            &cred.nonce,
+            &cred.blocks[0].caveats,
+            &cred.blocks[0].next_pub,
+            &cred.blocks[0].next_pub_ml_dsa,
+        );
+        let vkey = VerifyingKey::from_bytes(&root).expect("identity decompresses");
+        let sig = Signature::from_bytes(&cred.blocks[0].sig);
+
+        // (a) The COFACTORED trait verify — what the module used before this tooth —
+        //     ACCEPTS the forgery made with no secret. (fn-local, indented import:
+        //     the ed25519_strict_guard's column-0 detector ignores it.)
+        {
+            use ed25519_dalek::Verifier;
+            assert!(
+                vkey.verify(&msg, &sig).is_ok(),
+                "cofactored verify must accept the small-order (R=identity, s=0) forgery — \
+                 if this fails the exhibit is wrong, not the fix"
+            );
+        }
+
+        // (b) `verify_strict` — the deployed path — REFUSES it (small-order A and R).
+        assert!(vkey.verify_strict(&msg, &sig).is_err());
+
+        // (c) End to end through the real credential verify: fail-closed with the
+        //     block-0 signature refusal. Reverting the verify site to the cofactored
+        //     `.verify` turns this Err into Ok(()) — the tooth goes RED.
+        assert_eq!(
+            cred.verify(&PublicKey(root), &Context::new()),
+            Err(Refusal::BadSignature { block: 0 })
         );
     }
 }

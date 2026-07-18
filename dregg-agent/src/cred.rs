@@ -27,7 +27,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -477,7 +477,14 @@ impl Credential {
                 Some(ps) => block_digest(&ps, &block.caveats, &block.next_pub),
             };
             let sig = Signature::from_bytes(&block.sig);
-            vkey.verify(&msg, &sig)
+            // STRICT verify: `block.next_pub` (the key each non-root block is checked
+            // under) is CREDENTIAL-PRESENTED — an attacker chooses it when crafting a
+            // chain. The cofactored `Verifier::verify` accepts small-order / identity
+            // verifying keys, under which `(R = s·B, s)` forges a signature for ANY
+            // message with no secret. `verify_strict` denies small-order `A`/`R`,
+            // closing that door. Honest ed25519 keys are full-order + canonical, so
+            // this rejects nothing a legitimate credential ever presents.
+            vkey.verify_strict(&msg, &sig)
                 .map_err(|_| Refusal::BadSignature { block: i })?;
             vkey = VerifyingKey::from_bytes(&block.next_pub)
                 .map_err(|_| Refusal::MalformedKey { block: i })?;
@@ -617,7 +624,10 @@ impl Discharge {
         let vkey = VerifyingKey::from_bytes(gateway).map_err(|_| Refusal::MalformedGatewayKey)?;
         let msg = discharge_digest(&self.caveat_id, &self.caveats, self.binding.as_ref());
         let sig = Signature::from_bytes(&self.sig);
-        vkey.verify(&msg, &sig)
+        // STRICT verify: `gateway` is read out of the `Caveat::ThirdParty` wire value
+        // (credential-presented), so it is an attacker-influenceable verifying key —
+        // same reasoning as the chain verify above. Deny small-order/identity keys.
+        vkey.verify_strict(&msg, &sig)
             .map_err(|_| Refusal::DischargeBadSignature {
                 caveat_id: hex(&self.caveat_id),
             })?;
@@ -957,6 +967,84 @@ mod tests {
             cred.verify(&attacker.public(), &Context::new()),
             Err(Refusal::BadSignature { .. })
         ));
+    }
+
+    /// Biting tooth for the strict-verify conversion (proof by EXECUTION, not prose).
+    ///
+    /// An attacker crafts a chain whose intermediate verifying key (`block[0].next_pub`,
+    /// the key `block[1]` is checked under) is the Ed25519 **identity point**. Under the
+    /// identity key `A`, the recompute-`R` check gives `expected_R = s·B − k·A = −k·id =
+    /// id`, so the signature `(R = id, s = 0)` verifies for EVERY message with no secret.
+    /// The cofactored `Verifier::verify` accepts it; `verify_strict` denies small-order
+    /// `A`/`R` and rejects it. Because the chain re-derives the verifying key from the
+    /// credential itself, this is exactly the attacker-influenced-key surface the guard
+    /// flagged.
+    ///
+    /// MUTATION (rule 3): flip either `verify_strict` back to `verify` in `Credential::
+    /// verify` / `Discharge::verify_against` and this test goes RED — the forged block is
+    /// accepted and the expected `BadSignature { block: 1 }` refusal never fires.
+    #[test]
+    fn identity_key_chain_forgery_rejected_by_strict() {
+        // The Ed25519 identity point, compressed: y = 1, sign = 0.
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+
+        // The universal forgery valid under A = identity for ANY message: R = identity, s = 0.
+        let mut forged_sig = [0u8; 64];
+        forged_sig[0] = 1; // R = identity encoding; the low 32 bytes (s) stay zero.
+
+        // Prove the forgery is REAL by execution: cofactored verify ACCEPTS it under the
+        // identity key for an arbitrary message; strict DENIES it. (fn-local, indented
+        // import — the strict-guard keys on column-0 imports, so this does not trip it.)
+        {
+            use ed25519_dalek::Verifier;
+            let idk = VerifyingKey::from_bytes(&identity).expect("identity is a valid point");
+            let sig = Signature::from_bytes(&forged_sig);
+            assert!(
+                idk.verify(b"a totally unrelated message", &sig).is_ok(),
+                "cofactored verify must ACCEPT the identity-key forgery (that is the bug)"
+            );
+            assert!(
+                idk.verify_strict(b"a totally unrelated message", &sig)
+                    .is_err(),
+                "verify_strict must DENY the identity-key forgery"
+            );
+        }
+
+        // Build a two-block credential: block 0 legitimately signed by a real root but
+        // carrying next_pub = identity (a malicious/naive intermediate key); block 1
+        // forged under that identity key with NO secret.
+        let root = RootKey::from_seed([42u8; 32]);
+        let nonce = [5u8; 32];
+        let caveats0 = vec![Caveat::FirstParty(Pred::True)];
+        let msg0 = block_digest(&nonce, &caveats0, &identity);
+        let sig0 = root.key.sign(&msg0).to_bytes();
+        let block0 = Block {
+            caveats: caveats0,
+            next_pub: identity,
+            sig: sig0,
+        };
+
+        let tail = SigningKey::from_bytes(&[9u8; 32]);
+        let tail_pub = tail.verifying_key().to_bytes();
+        let block1 = Block {
+            caveats: vec![Caveat::FirstParty(Pred::True)],
+            next_pub: tail_pub,
+            sig: forged_sig,
+        };
+
+        let cred = Credential {
+            nonce,
+            blocks: vec![block0, block1],
+            proof: tail, // proof-of-possession matches block1.next_pub, so PoP passes
+        };
+
+        // Sanity: block 0 alone (root-signed) is genuine — the forgery is entirely in block 1.
+        let res = cred.verify(&root.public(), &Context::new());
+        assert!(
+            matches!(res, Err(Refusal::BadSignature { block: 1 })),
+            "strict verify must reject the identity-key forgery at block 1, got {res:?}"
+        );
     }
 
     #[test]
