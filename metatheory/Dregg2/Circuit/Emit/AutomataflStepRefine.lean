@@ -4010,6 +4010,464 @@ theorem decodeDecision_delta_y_fst (v posy att rep : ℤ) :
     ((decodeDecision v posy att rep).delta (0, 1)).1 = 0 := by
   unfold decodeDecision; split_ifs <;> simp only [Decision.delta] <;> first | rfl | (split_ifs <;> rfl)
 
+/-! ## §4.12b — LEG (4′): the score-field DETERMINATION (`xScoreEval` / `yScoreEval`).
+
+The `decide_axis` `assert_case` gates pin the raw `(variant, att, rep)` witness columns so that the
+felt score head `sx = 100000·variant − 100·att − rep` equals `decScore` of the DECODED decision, and
+the `att`/`rep` columns are the `n = 2` distance envelope (`≤ 2`). This DISCHARGES the two hypotheses
+`offset_matches_chooseOffset` was stated conditional on. Same 9-case shape as `decideAxis_*`; nothing
+assumed — every field value is read off the byte-pinned object. -/
+
+/-- **Pure**: `attRep2` of a decoded decision follows from the raw `att`/`rep ≤ 2` envelope (the score
+distance columns are `n = 2` step counts). `decScore`/`attRep2` never read a distance beyond the used
+tier, so `att, rep ∈ [0,2]` suffices. -/
+theorem attRep2_of_env {v pos att rep : ℤ} (ha : att ≤ 2) (hr : rep ≤ 2)
+    (ha0 : 0 ≤ att) (hr0 : 0 ≤ rep) : attRep2 (decodeDecision v pos att rep) := by
+  unfold decodeDecision
+  split_ifs <;> simp only [attRep2] <;> first | trivial | omega | (constructor <;> omega)
+
+/-- **Pure**: the felt score head equals `decScore` of the decoded decision, on a witness whose UNUSED
+fields are pinned to `0` (`assert_case`): `att = 0` for `fromRepulsor`, `rep = 0` for `towardAttractor`,
+both for `none`. The used-field tiers reproduce `decScore` exactly (`att, rep ≥ 0 ⇒ toNat` is the
+identity). -/
+theorem decScore_of_fields {v pos att rep : ℤ}
+    (hv : v = 0 ∨ v = 1 ∨ v = 2 ∨ v = 3) (hatt0 : 0 ≤ att) (hrep0 : 0 ≤ rep)
+    (h2 : v = 2 → att = 0) (h1 : v = 1 → rep = 0) (h0 : v = 0 → att = 0 ∧ rep = 0) :
+    100000 * v - 100 * att - rep = decScore (decodeDecision v pos att rep) := by
+  have hta : (att.toNat : ℤ) = att := Int.toNat_of_nonneg hatt0
+  have htr : (rep.toNat : ℤ) = rep := Int.toNat_of_nonneg hrep0
+  rcases hv with h|h|h|h <;> subst h
+  · obtain ⟨ha, hr⟩ := h0 rfl; subst ha hr; simp [decodeDecision, decScore]
+  · rw [h1 rfl]; simp only [decodeDecision, decScore]; norm_num [hta]
+  · rw [h2 rfl]; simp only [decodeDecision, decScore]; norm_num [htr]
+  · simp only [decodeDecision, decScore]; norm_num [hta, htr]
+
+section ScoreEval
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+set_option maxHeartbeats 800000 in
+/-- **LEG (4′), X axis: the score-field determination.** On a satisfying canonical trace, the `xdec`
+score head equals `decScore` of the decoded X decision, and the `att`/`rep` columns are the `n = 2`
+envelope (`≤ 2`). Discharges `offset_matches_chooseOffset`'s two X hypotheses. Same 9-case shape as
+`decideAxis_x_sound`. -/
+theorem xScoreEval (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 60 ≤ 2 ∧ (envAt t i).loc 61 ≤ 2
+    ∧ attRep2 (decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61))
+    ∧ 100000 * (envAt t i).loc 58 - 100 * (envAt t i).loc 60 - (envAt t i).loc 61
+        = decScore (decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)) := by
+  set e := envAt t i with he
+  have hv58 : e.loc 58 = 0 ∨ e.loc 58 = 1 ∨ e.loc 58 = 2 ∨ e.loc 58 = 3 :=
+    mem4_of_gate (astep_gate hsat i hi (g := memberExpr 58 [0,1,2,3]) (by decide)) (canon_loc hc i _)
+  have ca60 : 0 ≤ e.loc 60 := (canon_loc hc i _).1
+  have ca61 : 0 ≤ e.loc 61 := (canon_loc hc i _).1
+  -- the two ray what-codes drive the 9-case split.
+  have hpwm : e.loc (rWhat 0) = 0 ∨ e.loc (rWhat 0) = 1 ∨ e.loc (rWhat 0) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 0) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+  have hnwm : e.loc (rWhat 1) = 0 ∨ e.loc (rWhat 1) = 1 ∨ e.loc (rWhat 1) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+  -- ipw/inw one-hots pick the active case's gate columns.
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
+  rw [← he] at iidx nidx isum nsum ib0 ib1 ib2 nb0 nb1 nb2
+  -- guard soundness (distances ∈ {1,2}; the comparison bits decide the ordering, no wrap).
+  obtain ⟨gpdB, gpd1, gpd0⟩ := xdec_gpd_sound hsat hc i hi
+  obtain ⟨gndB, gnd1, gnd0⟩ := xdec_gnd_sound hsat hc i hi
+  obtain ⟨ltB, lt1, lt0⟩ := xdec_lt_sound hsat hc i hi
+  obtain ⟨gtB, gt1, gt0⟩ := xdec_gt_sound hsat hc i hi
+  obtain ⟨leB, le1, le0⟩ := xdec_le_sound hsat hc i hi
+  obtain ⟨gmB, gm1, gm0⟩ := xdec_gm_sound hsat hc i hi
+  have hmineq := xdec_min_sound hsat hc i hi
+  have pdMem := xdec_pd_mem hsat hc i hi
+  have ndMem := xdec_nd_mem hsat hc i hi
+  rw [← he] at gpdB gpd1 gpd0 gndB gnd1 gnd0 ltB lt1 lt0 gtB gt1 gt0 leB le1 le0 gmB gm1 gm0 hmineq pdMem ndMem
+  have minMem : e.loc 98 = 1 ∨ e.loc 98 = 2 := by
+    rw [hmineq]; rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+      rw [h, hp, hn] <;> norm_num
+  -- helper to close a branch once (att,rep) columns are extracted (loc60,loc61 concrete-linear).
+  rcases hpwm with hp|hp|hp <;> rcases hnwm with hn|hn|hn
+  · -- (vac, vac) → none
+    have hip0 : e.loc 62 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin0 : e.loc 65 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [62,65,58])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [62,65,58])).eval e.loc = e.loc 62 * e.loc 65 * e.loc 58 from rfl, hip0, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 58) (b := 0) (by ring)).mp hg)
+    have ha : e.loc 60 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [62,65,60])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [62,65,60])).eval e.loc = e.loc 62 * e.loc 65 * e.loc 60 from rfl, hip0, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 60) (b := 0) (by ring)).mp hg)
+    have hr : e.loc 61 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [62,65,61])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [62,65,61])).eval e.loc = e.loc 62 * e.loc 65 * e.loc 61 from rfl, hip0, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 61) (b := 0) (by ring)).mp hg)
+    exact ⟨by omega, by omega, attRep2_of_env (by omega) (by omega) ca60 ca61,
+      decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (vac, rep) → vacRep : var=2gpd, att=0, rep=gpd·nd
+    have hip0 : e.loc 62 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin1 : e.loc 66 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = 2 * e.loc 68 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [62,66,58]).addProd (-2) [62,66,68])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [62,66,58]).addProd (-2) [62,66,68])).eval e.loc = e.loc 62 * e.loc 66 * e.loc 58 + -2 * (e.loc 62 * e.loc 66 * e.loc 68) from rfl, hip0, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 58) (b := 2 * e.loc 68) (by ring)).mp hg)
+    have ha : e.loc 60 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [62,66,60])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [62,66,60])).eval e.loc = e.loc 62 * e.loc 66 * e.loc 60 from rfl, hip0, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 60) (b := 0) (by ring)).mp hg)
+    have hr : e.loc 61 = e.loc 68 * e.loc (rDist 1) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [62,66,61]).addProd (-1) [62,66,68, rDist 1])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [62,66,61]).addProd (-1) [62,66,68, rDist 1])).eval e.loc = e.loc 62 * e.loc 66 * e.loc 61 + -1 * (e.loc 62 * e.loc 66 * e.loc 68 * e.loc (rDist 1)) from rfl, hip0, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> rcases ndMem with hn2|hn2 <;> rw [hn2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 61) (b := e.loc 68 * e.loc (rDist 1)) (by ring)).mp hg)
+    rcases gpdB with hg|hg <;> rw [hg] at hav hr <;>
+      exact ⟨by omega, by rcases ndMem with h|h <;> omega, attRep2_of_env (by rcases ndMem with h|h <;> omega) (by omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (vac, att) → vacAtt : var=gnd, att=gnd·nd, rep=0
+    have hip0 : e.loc 62 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin2 : e.loc 67 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = e.loc 74 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [62,67,58]).addProd (-1) [62,67,74])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [62,67,58]).addProd (-1) [62,67,74])).eval e.loc = e.loc 62 * e.loc 67 * e.loc 58 + -1 * (e.loc 62 * e.loc 67 * e.loc 74) from rfl, hip0, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (a := e.loc 58) (b := e.loc 74) (by ring)).mp hg)
+    have ha : e.loc 60 = e.loc 74 * e.loc (rDist 1) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [62,67,60]).addProd (-1) [62,67,74, rDist 1])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [62,67,60]).addProd (-1) [62,67,74, rDist 1])).eval e.loc = e.loc 62 * e.loc 67 * e.loc 60 + -1 * (e.loc 62 * e.loc 67 * e.loc 74 * e.loc (rDist 1)) from rfl, hip0, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> rcases ndMem with hn2|hn2 <;> rw [hn2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 60) (b := e.loc 74 * e.loc (rDist 1)) (by ring)).mp hg)
+    have hr : e.loc 61 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [62,67,61])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [62,67,61])).eval e.loc = e.loc 62 * e.loc 67 * e.loc 61 from rfl, hip0, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 61) (b := 0) (by ring)).mp hg)
+    rcases gndB with hg|hg <;> rw [hg] at hav ha <;>
+      exact ⟨by rcases ndMem with h|h <;> omega, by omega, attRep2_of_env (by rcases ndMem with h|h <;> omega) (by omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (rep, vac) → repVac : var=2gnd, att=0, rep=gnd·pd
+    have hip1 : e.loc 63 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin0 : e.loc 65 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = 2 * e.loc 74 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [63,65,58]).addProd (-2) [63,65,74])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [63,65,58]).addProd (-2) [63,65,74])).eval e.loc = e.loc 63 * e.loc 65 * e.loc 58 + -2 * (e.loc 63 * e.loc 65 * e.loc 74) from rfl, hip1, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 58) (b := 2 * e.loc 74) (by ring)).mp hg)
+    have ha : e.loc 60 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [63,65,60])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [63,65,60])).eval e.loc = e.loc 63 * e.loc 65 * e.loc 60 from rfl, hip1, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 60) (b := 0) (by ring)).mp hg)
+    have hr : e.loc 61 = e.loc 74 * e.loc (rDist 0) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [63,65,61]).addProd (-1) [63,65,74, rDist 0])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [63,65,61]).addProd (-1) [63,65,74, rDist 0])).eval e.loc = e.loc 63 * e.loc 65 * e.loc 61 + -1 * (e.loc 63 * e.loc 65 * e.loc 74 * e.loc (rDist 0)) from rfl, hip1, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> rcases pdMem with hp2|hp2 <;> rw [hp2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 61) (b := e.loc 74 * e.loc (rDist 0)) (by ring)).mp hg)
+    rcases gndB with hg|hg <;> rw [hg] at hav hr <;>
+      exact ⟨by omega, by rcases pdMem with h|h <;> omega, attRep2_of_env (by rcases pdMem with h|h <;> omega) (by omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (rep, rep) → repRep : var=2lt+2gt, att=0, rep=lt·min+gt·min
+    have hip1 : e.loc 63 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin1 : e.loc 66 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = 2 * e.loc 80 + 2 * e.loc 86 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (((Head.zero.addProd 1 [63,66,58]).addProd (-2) [63,66,80]).addProd (-2) [63,66,86])) (by decide)
+      rw [show (headToExpr (((Head.zero.addProd 1 [63,66,58]).addProd (-2) [63,66,80]).addProd (-2) [63,66,86])).eval e.loc = e.loc 63 * e.loc 66 * e.loc 58 + -2 * (e.loc 63 * e.loc 66 * e.loc 80) + -2 * (e.loc 63 * e.loc 66 * e.loc 86) from rfl, hip1, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 58) (b := 2 * e.loc 80 + 2 * e.loc 86) (by ring)).mp hg)
+    have ha : e.loc 60 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [63,66,60])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [63,66,60])).eval e.loc = e.loc 63 * e.loc 66 * e.loc 60 from rfl, hip1, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 60) (b := 0) (by ring)).mp hg)
+    have hr : e.loc 61 = e.loc 80 * e.loc 98 + e.loc 86 * e.loc 98 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (((Head.zero.addProd 1 [63,66,61]).addProd (-1) [63,66,80,98]).addProd (-1) [63,66,86,98])) (by decide)
+      rw [show (headToExpr (((Head.zero.addProd 1 [63,66,61]).addProd (-1) [63,66,80,98]).addProd (-1) [63,66,86,98])).eval e.loc = e.loc 63 * e.loc 66 * e.loc 61 + -1 * (e.loc 63 * e.loc 66 * e.loc 80 * e.loc 98) + -1 * (e.loc 63 * e.loc 66 * e.loc 86 * e.loc 98) from rfl, hip1, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases minMem with hm|hm <;> rw [h,h',hm] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 61) (b := e.loc 80 * e.loc 98 + e.loc 86 * e.loc 98) (by ring)).mp hg)
+    rcases ltB with hl|hl <;> rcases gtB with hg2|hg2 <;> rw [hl, hg2] at hav hr <;>
+      first
+      | exact ⟨by omega, by rcases minMem with h|h <;> omega, attRep2_of_env (by omega) (by rcases minMem with h|h <;> omega) ca60 ca61,
+          decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+      | (exfalso; have := lt1 hl; have := gt1 hg2; omega)
+  · -- (rep, att) → repAtt : var=3gnd, att=gnd·nd, rep=gnd·pd
+    have hip1 : e.loc 63 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin2 : e.loc 67 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = 3 * e.loc 74 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [63,67,58]).addProd (-3) [63,67,74])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [63,67,58]).addProd (-3) [63,67,74])).eval e.loc = e.loc 63 * e.loc 67 * e.loc 58 + -3 * (e.loc 63 * e.loc 67 * e.loc 74) from rfl, hip1, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 58) (b := 3 * e.loc 74) (by ring)).mp hg)
+    have ha : e.loc 60 = e.loc 74 * e.loc (rDist 1) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [63,67,60]).addProd (-1) [63,67,74, rDist 1])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [63,67,60]).addProd (-1) [63,67,74, rDist 1])).eval e.loc = e.loc 63 * e.loc 67 * e.loc 60 + -1 * (e.loc 63 * e.loc 67 * e.loc 74 * e.loc (rDist 1)) from rfl, hip1, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> rcases ndMem with hn2|hn2 <;> rw [hn2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 60) (b := e.loc 74 * e.loc (rDist 1)) (by ring)).mp hg)
+    have hr : e.loc 61 = e.loc 74 * e.loc (rDist 0) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [63,67,61]).addProd (-1) [63,67,74, rDist 0])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [63,67,61]).addProd (-1) [63,67,74, rDist 0])).eval e.loc = e.loc 63 * e.loc 67 * e.loc 61 + -1 * (e.loc 63 * e.loc 67 * e.loc 74 * e.loc (rDist 0)) from rfl, hip1, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> rcases pdMem with hp2|hp2 <;> rw [hp2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 61) (b := e.loc 74 * e.loc (rDist 0)) (by ring)).mp hg)
+    rcases gndB with hg|hg <;> rw [hg] at hav ha hr <;>
+      exact ⟨by rcases ndMem with h|h <;> omega, by rcases pdMem with h|h <;> omega,
+        attRep2_of_env (by rcases ndMem with h|h <;> omega) (by rcases pdMem with h|h <;> omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (att, vac) → attVac : var=gpd, att=gpd·pd, rep=0
+    have hip2 : e.loc 64 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin0 : e.loc 65 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = e.loc 68 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [64,65,58]).addProd (-1) [64,65,68])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [64,65,58]).addProd (-1) [64,65,68])).eval e.loc = e.loc 64 * e.loc 65 * e.loc 58 + -1 * (e.loc 64 * e.loc 65 * e.loc 68) from rfl, hip2, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (a := e.loc 58) (b := e.loc 68) (by ring)).mp hg)
+    have ha : e.loc 60 = e.loc 68 * e.loc (rDist 0) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [64,65,60]).addProd (-1) [64,65,68, rDist 0])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [64,65,60]).addProd (-1) [64,65,68, rDist 0])).eval e.loc = e.loc 64 * e.loc 65 * e.loc 60 + -1 * (e.loc 64 * e.loc 65 * e.loc 68 * e.loc (rDist 0)) from rfl, hip2, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> rcases pdMem with hp2|hp2 <;> rw [hp2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 60) (b := e.loc 68 * e.loc (rDist 0)) (by ring)).mp hg)
+    have hr : e.loc 61 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [64,65,61])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [64,65,61])).eval e.loc = e.loc 64 * e.loc 65 * e.loc 61 from rfl, hip2, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 61) (b := 0) (by ring)).mp hg)
+    rcases gpdB with hg|hg <;> rw [hg] at hav ha <;>
+      exact ⟨by rcases pdMem with h|h <;> omega, by omega, attRep2_of_env (by rcases pdMem with h|h <;> omega) (by omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (att, rep) → attRep : var=3gpd, att=gpd·pd, rep=gpd·nd
+    have hip2 : e.loc 64 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin1 : e.loc 66 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = 3 * e.loc 68 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [64,66,58]).addProd (-3) [64,66,68])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [64,66,58]).addProd (-3) [64,66,68])).eval e.loc = e.loc 64 * e.loc 66 * e.loc 58 + -3 * (e.loc 64 * e.loc 66 * e.loc 68) from rfl, hip2, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 58) (b := 3 * e.loc 68) (by ring)).mp hg)
+    have ha : e.loc 60 = e.loc 68 * e.loc (rDist 0) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [64,66,60]).addProd (-1) [64,66,68, rDist 0])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [64,66,60]).addProd (-1) [64,66,68, rDist 0])).eval e.loc = e.loc 64 * e.loc 66 * e.loc 60 + -1 * (e.loc 64 * e.loc 66 * e.loc 68 * e.loc (rDist 0)) from rfl, hip2, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> rcases pdMem with hp2|hp2 <;> rw [hp2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 60) (b := e.loc 68 * e.loc (rDist 0)) (by ring)).mp hg)
+    have hr : e.loc 61 = e.loc 68 * e.loc (rDist 1) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [64,66,61]).addProd (-1) [64,66,68, rDist 1])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [64,66,61]).addProd (-1) [64,66,68, rDist 1])).eval e.loc = e.loc 64 * e.loc 66 * e.loc 61 + -1 * (e.loc 64 * e.loc 66 * e.loc 68 * e.loc (rDist 1)) from rfl, hip2, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> rcases ndMem with hn2|hn2 <;> rw [hn2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 61) (b := e.loc 68 * e.loc (rDist 1)) (by ring)).mp hg)
+    rcases gpdB with hg|hg <;> rw [hg] at hav ha hr <;>
+      exact ⟨by rcases pdMem with h|h <;> omega, by rcases ndMem with h|h <;> omega,
+        attRep2_of_env (by rcases pdMem with h|h <;> omega) (by rcases ndMem with h|h <;> omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (att, att) → attAtt : var=lt·gm+gt·gm, att=lt·gm·min+gt·gm·min, rep=0
+    have hip2 : e.loc 64 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin2 : e.loc 67 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 58 = e.loc 80 * e.loc 99 + e.loc 86 * e.loc 99 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (((Head.zero.addProd 1 [64,67,58]).addProd (-1) [64,67,80,99]).addProd (-1) [64,67,86,99])) (by decide)
+      rw [show (headToExpr (((Head.zero.addProd 1 [64,67,58]).addProd (-1) [64,67,80,99]).addProd (-1) [64,67,86,99])).eval e.loc = e.loc 64 * e.loc 67 * e.loc 58 + -1 * (e.loc 64 * e.loc 67 * e.loc 80 * e.loc 99) + -1 * (e.loc 64 * e.loc 67 * e.loc 86 * e.loc 99) from rfl, hip2, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases gmB with hg3|hg3 <;> rw [h,h',hg3] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 58) (b := e.loc 80 * e.loc 99 + e.loc 86 * e.loc 99) (by ring)).mp hg)
+    have ha : e.loc 60 = e.loc 80 * e.loc 99 * e.loc 98 + e.loc 86 * e.loc 99 * e.loc 98 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (((Head.zero.addProd 1 [64,67,60]).addProd (-1) [64,67,80,99,98]).addProd (-1) [64,67,86,99,98])) (by decide)
+      rw [show (headToExpr (((Head.zero.addProd 1 [64,67,60]).addProd (-1) [64,67,80,99,98]).addProd (-1) [64,67,86,99,98])).eval e.loc = e.loc 64 * e.loc 67 * e.loc 60 + -1 * (e.loc 64 * e.loc 67 * e.loc 80 * e.loc 99 * e.loc 98) + -1 * (e.loc 64 * e.loc 67 * e.loc 86 * e.loc 99 * e.loc 98) from rfl, hip2, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases gmB with hg3|hg3 <;> rcases minMem with hm|hm <;> rw [h,h',hg3,hm] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 60) (b := e.loc 80 * e.loc 99 * e.loc 98 + e.loc 86 * e.loc 99 * e.loc 98) (by ring)).mp hg)
+    have hr : e.loc 61 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [64,67,61])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [64,67,61])).eval e.loc = e.loc 64 * e.loc 67 * e.loc 61 from rfl, hip2, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 61) (b := 0) (by ring)).mp hg)
+    rcases ltB with hl|hl <;> rcases gtB with hg2|hg2 <;> rcases gmB with hgm|hgm <;> rw [hl, hg2, hgm] at hav ha <;>
+      first
+      | exact ⟨by rcases minMem with h|h <;> omega, by omega,
+          attRep2_of_env (by rcases minMem with h|h <;> omega) (by omega) ca60 ca61,
+          decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+      | (exfalso; have := lt1 hl; have := gt1 hg2; omega)
+
+
+set_option maxHeartbeats 800000 in
+/-- **LEG (4′), Y axis: the score-field determination.** On a satisfying canonical trace, the `ydec`
+score head equals `decScore` of the decoded X decision, and the `att`/`rep` columns are the `n = 2`
+envelope (`≤ 2`). Discharges `offset_matches_chooseOffset`'s two Y hypotheses. Same 9-case shape as
+`decideAxis_y_sound`. -/
+theorem yScoreEval (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc 107 ≤ 2 ∧ (envAt t i).loc 108 ≤ 2
+    ∧ attRep2 (decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108))
+    ∧ 100000 * (envAt t i).loc 105 - 100 * (envAt t i).loc 107 - (envAt t i).loc 108
+        = decScore (decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)) := by
+  set e := envAt t i with he
+  have hv58 : e.loc 105 = 0 ∨ e.loc 105 = 1 ∨ e.loc 105 = 2 ∨ e.loc 105 = 3 :=
+    mem4_of_gate (astep_gate hsat i hi (g := memberExpr 105 [0,1,2,3]) (by decide)) (canon_loc hc i _)
+  have ca60 : 0 ≤ e.loc 107 := (canon_loc hc i _).1
+  have ca61 : 0 ≤ e.loc 108 := (canon_loc hc i _).1
+  -- the two ray what-codes drive the 9-case split.
+  have hpwm : e.loc (rWhat 2) = 0 ∨ e.loc (rWhat 2) = 1 ∨ e.loc (rWhat 2) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+  have hnwm : e.loc (rWhat 3) = 0 ∨ e.loc (rWhat 3) = 1 ∨ e.loc (rWhat 3) = 2 :=
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+  -- ipw/inw one-hots pick the active case's gate columns.
+  obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
+  obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
+  rw [← he] at iidx nidx isum nsum ib0 ib1 ib2 nb0 nb1 nb2
+  -- guard soundness (distances ∈ {1,2}; the comparison bits decide the ordering, no wrap).
+  obtain ⟨gpdB, gpd1, gpd0⟩ := ydec_gpd_sound hsat hc i hi
+  obtain ⟨gndB, gnd1, gnd0⟩ := ydec_gnd_sound hsat hc i hi
+  obtain ⟨ltB, lt1, lt0⟩ := ydec_lt_sound hsat hc i hi
+  obtain ⟨gtB, gt1, gt0⟩ := ydec_gt_sound hsat hc i hi
+  obtain ⟨leB, le1, le0⟩ := ydec_le_sound hsat hc i hi
+  obtain ⟨gmB, gm1, gm0⟩ := ydec_gm_sound hsat hc i hi
+  have hmineq := ydec_min_sound hsat hc i hi
+  have pdMem := ydec_pd_mem hsat hc i hi
+  have ndMem := ydec_nd_mem hsat hc i hi
+  rw [← he] at gpdB gpd1 gpd0 gndB gnd1 gnd0 ltB lt1 lt0 gtB gt1 gt0 leB le1 le0 gmB gm1 gm0 hmineq pdMem ndMem
+  have minMem : e.loc 145 = 1 ∨ e.loc 145 = 2 := by
+    rw [hmineq]; rcases leB with h|h <;> rcases pdMem with hp|hp <;> rcases ndMem with hn|hn <;>
+      rw [h, hp, hn] <;> norm_num
+  -- helper to close a branch once (att,rep) columns are extracted (loc60,loc61 concrete-linear).
+  rcases hpwm with hp|hp|hp <;> rcases hnwm with hn|hn|hn
+  · -- (vac, vac) → none
+    have hip0 : e.loc 109 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin0 : e.loc 112 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,112,105])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [109,112,105])).eval e.loc = e.loc 109 * e.loc 112 * e.loc 105 from rfl, hip0, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 105) (b := 0) (by ring)).mp hg)
+    have ha : e.loc 107 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,112,107])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [109,112,107])).eval e.loc = e.loc 109 * e.loc 112 * e.loc 107 from rfl, hip0, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 107) (b := 0) (by ring)).mp hg)
+    have hr : e.loc 108 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,112,108])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [109,112,108])).eval e.loc = e.loc 109 * e.loc 112 * e.loc 108 from rfl, hip0, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 108) (b := 0) (by ring)).mp hg)
+    exact ⟨by omega, by omega, attRep2_of_env (by omega) (by omega) ca60 ca61,
+      decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (vac, rep) → vacRep : var=2gpd, att=0, rep=gpd·nd
+    have hip0 : e.loc 109 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin1 : e.loc 113 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = 2 * e.loc 115 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [109,113,105]).addProd (-2) [109,113,115])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [109,113,105]).addProd (-2) [109,113,115])).eval e.loc = e.loc 109 * e.loc 113 * e.loc 105 + -2 * (e.loc 109 * e.loc 113 * e.loc 115) from rfl, hip0, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 105) (b := 2 * e.loc 115) (by ring)).mp hg)
+    have ha : e.loc 107 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,113,107])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [109,113,107])).eval e.loc = e.loc 109 * e.loc 113 * e.loc 107 from rfl, hip0, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 107) (b := 0) (by ring)).mp hg)
+    have hr : e.loc 108 = e.loc 115 * e.loc (rDist 3) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [109,113,108]).addProd (-1) [109,113,115, rDist 3])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [109,113,108]).addProd (-1) [109,113,115, rDist 3])).eval e.loc = e.loc 109 * e.loc 113 * e.loc 108 + -1 * (e.loc 109 * e.loc 113 * e.loc 115 * e.loc (rDist 3)) from rfl, hip0, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> rcases ndMem with hn2|hn2 <;> rw [hn2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 108) (b := e.loc 115 * e.loc (rDist 3)) (by ring)).mp hg)
+    rcases gpdB with hg|hg <;> rw [hg] at hav hr <;>
+      exact ⟨by omega, by rcases ndMem with h|h <;> omega, attRep2_of_env (by rcases ndMem with h|h <;> omega) (by omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (vac, att) → vacAtt : var=gnd, att=gnd·nd, rep=0
+    have hip0 : e.loc 109 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin2 : e.loc 114 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = e.loc 121 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [109,114,105]).addProd (-1) [109,114,121])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [109,114,105]).addProd (-1) [109,114,121])).eval e.loc = e.loc 109 * e.loc 114 * e.loc 105 + -1 * (e.loc 109 * e.loc 114 * e.loc 121) from rfl, hip0, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (a := e.loc 105) (b := e.loc 121) (by ring)).mp hg)
+    have ha : e.loc 107 = e.loc 121 * e.loc (rDist 3) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [109,114,107]).addProd (-1) [109,114,121, rDist 3])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [109,114,107]).addProd (-1) [109,114,121, rDist 3])).eval e.loc = e.loc 109 * e.loc 114 * e.loc 107 + -1 * (e.loc 109 * e.loc 114 * e.loc 121 * e.loc (rDist 3)) from rfl, hip0, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> rcases ndMem with hn2|hn2 <;> rw [hn2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 107) (b := e.loc 121 * e.loc (rDist 3)) (by ring)).mp hg)
+    have hr : e.loc 108 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [109,114,108])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [109,114,108])).eval e.loc = e.loc 109 * e.loc 114 * e.loc 108 from rfl, hip0, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 108) (b := 0) (by ring)).mp hg)
+    rcases gndB with hg|hg <;> rw [hg] at hav ha <;>
+      exact ⟨by rcases ndMem with h|h <;> omega, by omega, attRep2_of_env (by rcases ndMem with h|h <;> omega) (by omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (rep, vac) → repVac : var=2gnd, att=0, rep=gnd·pd
+    have hip1 : e.loc 110 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin0 : e.loc 112 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = 2 * e.loc 121 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [110,112,105]).addProd (-2) [110,112,121])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [110,112,105]).addProd (-2) [110,112,121])).eval e.loc = e.loc 110 * e.loc 112 * e.loc 105 + -2 * (e.loc 110 * e.loc 112 * e.loc 121) from rfl, hip1, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 105) (b := 2 * e.loc 121) (by ring)).mp hg)
+    have ha : e.loc 107 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [110,112,107])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [110,112,107])).eval e.loc = e.loc 110 * e.loc 112 * e.loc 107 from rfl, hip1, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 107) (b := 0) (by ring)).mp hg)
+    have hr : e.loc 108 = e.loc 121 * e.loc (rDist 2) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [110,112,108]).addProd (-1) [110,112,121, rDist 2])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [110,112,108]).addProd (-1) [110,112,121, rDist 2])).eval e.loc = e.loc 110 * e.loc 112 * e.loc 108 + -1 * (e.loc 110 * e.loc 112 * e.loc 121 * e.loc (rDist 2)) from rfl, hip1, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> rcases pdMem with hp2|hp2 <;> rw [hp2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 108) (b := e.loc 121 * e.loc (rDist 2)) (by ring)).mp hg)
+    rcases gndB with hg|hg <;> rw [hg] at hav hr <;>
+      exact ⟨by omega, by rcases pdMem with h|h <;> omega, attRep2_of_env (by rcases pdMem with h|h <;> omega) (by omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (rep, rep) → repRep : var=2lt+2gt, att=0, rep=lt·min+gt·min
+    have hip1 : e.loc 110 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin1 : e.loc 113 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = 2 * e.loc 127 + 2 * e.loc 133 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (((Head.zero.addProd 1 [110,113,105]).addProd (-2) [110,113,127]).addProd (-2) [110,113,133])) (by decide)
+      rw [show (headToExpr (((Head.zero.addProd 1 [110,113,105]).addProd (-2) [110,113,127]).addProd (-2) [110,113,133])).eval e.loc = e.loc 110 * e.loc 113 * e.loc 105 + -2 * (e.loc 110 * e.loc 113 * e.loc 127) + -2 * (e.loc 110 * e.loc 113 * e.loc 133) from rfl, hip1, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rw [h,h'] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 105) (b := 2 * e.loc 127 + 2 * e.loc 133) (by ring)).mp hg)
+    have ha : e.loc 107 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [110,113,107])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [110,113,107])).eval e.loc = e.loc 110 * e.loc 113 * e.loc 107 from rfl, hip1, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 107) (b := 0) (by ring)).mp hg)
+    have hr : e.loc 108 = e.loc 127 * e.loc 145 + e.loc 133 * e.loc 145 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (((Head.zero.addProd 1 [110,113,108]).addProd (-1) [110,113,127,145]).addProd (-1) [110,113,133,145])) (by decide)
+      rw [show (headToExpr (((Head.zero.addProd 1 [110,113,108]).addProd (-1) [110,113,127,145]).addProd (-1) [110,113,133,145])).eval e.loc = e.loc 110 * e.loc 113 * e.loc 108 + -1 * (e.loc 110 * e.loc 113 * e.loc 127 * e.loc 145) + -1 * (e.loc 110 * e.loc 113 * e.loc 133 * e.loc 145) from rfl, hip1, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases minMem with hm|hm <;> rw [h,h',hm] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 108) (b := e.loc 127 * e.loc 145 + e.loc 133 * e.loc 145) (by ring)).mp hg)
+    rcases ltB with hl|hl <;> rcases gtB with hg2|hg2 <;> rw [hl, hg2] at hav hr <;>
+      first
+      | exact ⟨by omega, by rcases minMem with h|h <;> omega, attRep2_of_env (by omega) (by rcases minMem with h|h <;> omega) ca60 ca61,
+          decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+      | (exfalso; have := lt1 hl; have := gt1 hg2; omega)
+  · -- (rep, att) → repAtt : var=3gnd, att=gnd·nd, rep=gnd·pd
+    have hip1 : e.loc 110 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin2 : e.loc 114 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = 3 * e.loc 121 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [110,114,105]).addProd (-3) [110,114,121])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [110,114,105]).addProd (-3) [110,114,121])).eval e.loc = e.loc 110 * e.loc 114 * e.loc 105 + -3 * (e.loc 110 * e.loc 114 * e.loc 121) from rfl, hip1, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 105) (b := 3 * e.loc 121) (by ring)).mp hg)
+    have ha : e.loc 107 = e.loc 121 * e.loc (rDist 3) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [110,114,107]).addProd (-1) [110,114,121, rDist 3])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [110,114,107]).addProd (-1) [110,114,121, rDist 3])).eval e.loc = e.loc 110 * e.loc 114 * e.loc 107 + -1 * (e.loc 110 * e.loc 114 * e.loc 121 * e.loc (rDist 3)) from rfl, hip1, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> rcases ndMem with hn2|hn2 <;> rw [hn2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 107) (b := e.loc 121 * e.loc (rDist 3)) (by ring)).mp hg)
+    have hr : e.loc 108 = e.loc 121 * e.loc (rDist 2) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [110,114,108]).addProd (-1) [110,114,121, rDist 2])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [110,114,108]).addProd (-1) [110,114,121, rDist 2])).eval e.loc = e.loc 110 * e.loc 114 * e.loc 108 + -1 * (e.loc 110 * e.loc 114 * e.loc 121 * e.loc (rDist 2)) from rfl, hip1, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gndB with h|h <;> rw [h] <;> rcases pdMem with hp2|hp2 <;> rw [hp2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 108) (b := e.loc 121 * e.loc (rDist 2)) (by ring)).mp hg)
+    rcases gndB with hg|hg <;> rw [hg] at hav ha hr <;>
+      exact ⟨by rcases ndMem with h|h <;> omega, by rcases pdMem with h|h <;> omega,
+        attRep2_of_env (by rcases ndMem with h|h <;> omega) (by rcases pdMem with h|h <;> omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (att, vac) → attVac : var=gpd, att=gpd·pd, rep=0
+    have hip2 : e.loc 111 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin0 : e.loc 112 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = e.loc 115 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [111,112,105]).addProd (-1) [111,112,115])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [111,112,105]).addProd (-1) [111,112,115])).eval e.loc = e.loc 111 * e.loc 112 * e.loc 105 + -1 * (e.loc 111 * e.loc 112 * e.loc 115) from rfl, hip2, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (a := e.loc 105) (b := e.loc 115) (by ring)).mp hg)
+    have ha : e.loc 107 = e.loc 115 * e.loc (rDist 2) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [111,112,107]).addProd (-1) [111,112,115, rDist 2])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [111,112,107]).addProd (-1) [111,112,115, rDist 2])).eval e.loc = e.loc 111 * e.loc 112 * e.loc 107 + -1 * (e.loc 111 * e.loc 112 * e.loc 115 * e.loc (rDist 2)) from rfl, hip2, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> rcases pdMem with hp2|hp2 <;> rw [hp2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 107) (b := e.loc 115 * e.loc (rDist 2)) (by ring)).mp hg)
+    have hr : e.loc 108 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [111,112,108])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [111,112,108])).eval e.loc = e.loc 111 * e.loc 112 * e.loc 108 from rfl, hip2, hin0] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 108) (b := 0) (by ring)).mp hg)
+    rcases gpdB with hg|hg <;> rw [hg] at hav ha <;>
+      exact ⟨by rcases pdMem with h|h <;> omega, by omega, attRep2_of_env (by rcases pdMem with h|h <;> omega) (by omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (att, rep) → attRep : var=3gpd, att=gpd·pd, rep=gpd·nd
+    have hip2 : e.loc 111 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin1 : e.loc 113 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = 3 * e.loc 115 := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [111,113,105]).addProd (-3) [111,113,115])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [111,113,105]).addProd (-3) [111,113,115])).eval e.loc = e.loc 111 * e.loc 113 * e.loc 105 + -3 * (e.loc 111 * e.loc 113 * e.loc 115) from rfl, hip2, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 105) (b := 3 * e.loc 115) (by ring)).mp hg)
+    have ha : e.loc 107 = e.loc 115 * e.loc (rDist 2) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [111,113,107]).addProd (-1) [111,113,115, rDist 2])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [111,113,107]).addProd (-1) [111,113,115, rDist 2])).eval e.loc = e.loc 111 * e.loc 113 * e.loc 107 + -1 * (e.loc 111 * e.loc 113 * e.loc 115 * e.loc (rDist 2)) from rfl, hip2, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> rcases pdMem with hp2|hp2 <;> rw [hp2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 107) (b := e.loc 115 * e.loc (rDist 2)) (by ring)).mp hg)
+    have hr : e.loc 108 = e.loc 115 * e.loc (rDist 3) := by
+      have hg := astep_gate hsat i hi (g := headToExpr ((Head.zero.addProd 1 [111,113,108]).addProd (-1) [111,113,115, rDist 3])) (by decide)
+      rw [show (headToExpr ((Head.zero.addProd 1 [111,113,108]).addProd (-1) [111,113,115, rDist 3])).eval e.loc = e.loc 111 * e.loc 113 * e.loc 108 + -1 * (e.loc 111 * e.loc 113 * e.loc 115 * e.loc (rDist 3)) from rfl, hip2, hin1] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases gpdB with h|h <;> rw [h] <;> rcases ndMem with hn2|hn2 <;> rw [hn2] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 108) (b := e.loc 115 * e.loc (rDist 3)) (by ring)).mp hg)
+    rcases gpdB with hg|hg <;> rw [hg] at hav ha hr <;>
+      exact ⟨by rcases pdMem with h|h <;> omega, by rcases ndMem with h|h <;> omega,
+        attRep2_of_env (by rcases pdMem with h|h <;> omega) (by rcases ndMem with h|h <;> omega) ca60 ca61,
+        decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+  · -- (att, att) → attAtt : var=lt·gm+gt·gm, att=lt·gm·min+gt·gm·min, rep=0
+    have hip2 : e.loc 111 = 1 := by rcases ib1 with h|h <;> rcases ib2 with h'|h' <;> rw [hp] at iidx <;> omega
+    have hin2 : e.loc 114 = 1 := by rcases nb1 with h|h <;> rcases nb2 with h'|h' <;> rw [hn] at nidx <;> omega
+    have hav : e.loc 105 = e.loc 127 * e.loc 146 + e.loc 133 * e.loc 146 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (((Head.zero.addProd 1 [111,114,105]).addProd (-1) [111,114,127,146]).addProd (-1) [111,114,133,146])) (by decide)
+      rw [show (headToExpr (((Head.zero.addProd 1 [111,114,105]).addProd (-1) [111,114,127,146]).addProd (-1) [111,114,133,146])).eval e.loc = e.loc 111 * e.loc 114 * e.loc 105 + -1 * (e.loc 111 * e.loc 114 * e.loc 127 * e.loc 146) + -1 * (e.loc 111 * e.loc 114 * e.loc 133 * e.loc 146) from rfl, hip2, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases gmB with hg3|hg3 <;> rw [h,h',hg3] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 105) (b := e.loc 127 * e.loc 146 + e.loc 133 * e.loc 146) (by ring)).mp hg)
+    have ha : e.loc 107 = e.loc 127 * e.loc 146 * e.loc 145 + e.loc 133 * e.loc 146 * e.loc 145 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (((Head.zero.addProd 1 [111,114,107]).addProd (-1) [111,114,127,146,145]).addProd (-1) [111,114,133,146,145])) (by decide)
+      rw [show (headToExpr (((Head.zero.addProd 1 [111,114,107]).addProd (-1) [111,114,127,146,145]).addProd (-1) [111,114,133,146,145])).eval e.loc = e.loc 111 * e.loc 114 * e.loc 107 + -1 * (e.loc 111 * e.loc 114 * e.loc 127 * e.loc 146 * e.loc 145) + -1 * (e.loc 111 * e.loc 114 * e.loc 133 * e.loc 146 * e.loc 145) from rfl, hip2, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) (by rcases ltB with h|h <;> rcases gtB with h'|h' <;> rcases gmB with hg3|hg3 <;> rcases minMem with hm|hm <;> rw [h,h',hg3,hm] <;> exact ⟨by norm_num, by norm_num⟩) ((gate_modEq_iff (a := e.loc 107) (b := e.loc 127 * e.loc 146 * e.loc 145 + e.loc 133 * e.loc 146 * e.loc 145) (by ring)).mp hg)
+    have hr : e.loc 108 = 0 := by
+      have hg := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [111,114,108])) (by decide)
+      rw [show (headToExpr (Head.zero.addProd 1 [111,114,108])).eval e.loc = e.loc 111 * e.loc 114 * e.loc 108 from rfl, hip2, hin2] at hg
+      exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (a := e.loc 108) (b := 0) (by ring)).mp hg)
+    rcases ltB with hl|hl <;> rcases gtB with hg2|hg2 <;> rcases gmB with hgm|hgm <;> rw [hl, hg2, hgm] at hav ha <;>
+      first
+      | exact ⟨by rcases minMem with h|h <;> omega, by omega,
+          attRep2_of_env (by rcases minMem with h|h <;> omega) (by omega) ca60 ca61,
+          decScore_of_fields hv58 ca60 ca61 (by omega) (by omega) (by omega)⟩
+      | (exfalso; have := lt1 hl; have := gt1 hg2; omega)
+
+end ScoreEval
+
 section MoveBits
 variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
 
@@ -4093,20 +4551,15 @@ reference `chooseOffset` of the two decoded axis decisions, with the column rule
 hypotheses `hsx`/`hsy` (the raw score head equals `decScore` of the decoded decision) and the
 `att`/`rep ≤ 2` envelope are the §4.13 residual — the `decide_axis` field-value determination. -/
 theorem offset_matches_chooseOffset (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
-    (h60 : (envAt t i).loc 60 ≤ 2) (h61 : (envAt t i).loc 61 ≤ 2)
-    (h107 : (envAt t i).loc 107 ≤ 2) (h108 : (envAt t i).loc 108 ≤ 2)
-    (hxe : attRep2 (decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)))
-    (hye : attRep2 (decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108)))
-    (hsx : 100000 * (envAt t i).loc 58 - 100 * (envAt t i).loc 60 - (envAt t i).loc 61
-      = decScore (decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61)))
-    (hsy : 100000 * (envAt t i).loc 105 - 100 * (envAt t i).loc 107 - (envAt t i).loc 108
-      = decScore (decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108))) :
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
     (decodeOff ((envAt t i).loc 207), decodeOff ((envAt t i).loc 208))
       = chooseOffset
           (decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61))
           (decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108))
           true := by
+  -- LEG (4′) DISCHARGES the score-field determination — the capstone is UNCONDITIONAL.
+  obtain ⟨h60, h61, hxe, hsx⟩ := xScoreEval hsat hc i hi
+  obtain ⟨h107, h108, hye, hsy⟩ := yScoreEval hsat hc i hi
   set dx := decodeDecision ((envAt t i).loc 58) ((envAt t i).loc 59) ((envAt t i).loc 60) ((envAt t i).loc 61) with hdx
   set dy := decodeDecision ((envAt t i).loc 105) ((envAt t i).loc 106) ((envAt t i).loc 107) ((envAt t i).loc 108) with hdy
   -- field ranges
@@ -4187,6 +4640,31 @@ theorem offset_matches_chooseOffset (hsat : Satisfied2 hash automataflStepDesc m
     · rw [hoxv, hsgt1, hdeltax]; ring
     · rw [hoyv, hsgt1, decodeDecision_delta_x_snd]; ring
 
+/-! ## §4.13b — LEGS (1)-(4) COMPOSED: the offset columns ARE the reference `automatonOffset`.
+
+Gluing the closed sub-lemmas: the four `raycast_*_of_sat` (leg 2) turn each `evaluateAxis` argument
+into the true `Board.raycast` of the decoded board; `decideAxis_x/y_sound` (leg 3) fold the two axes
+into `decodeDecision`; `offset_matches_chooseOffset` (leg 4, UNCONDITIONAL after leg 4′) equates the
+decoded offset to `chooseOffset`. The result: the witnessed `(decodeOff ox, decodeOff oy)` IS
+`automatonOffset (boardDecode e)` — the reference daemon's chosen step over the decoded OLD board.
+This is the whole front half of the automaton step (position → rays → decision → offset), proven
+UNCONDITIONALLY over the byte-pinned emitted object. The only piece left for the full capstone is
+leg (5) — the board-update fold moving the automaton by this offset. -/
+theorem automatonOffset_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    Dregg2.Games.Automatafl.automatonOffset (boardDecode (envAt t i))
+      = (decodeOff ((envAt t i).loc 207), decodeOff ((envAt t i).loc 208)) := by
+  have hxp := raycast_xp_of_sat hsat hc i hi
+  have hxn := raycast_xn_of_sat hsat hc i hi
+  have hyp := raycast_yp_of_sat hsat hc i hi
+  have hyn := raycast_yn_of_sat hsat hc i hi
+  have hx := decideAxis_x_sound hsat hc i hi
+  have hy := decideAxis_y_sound hsat hc i hi
+  have hoff := offset_matches_chooseOffset hsat hc i hi
+  unfold Dregg2.Games.Automatafl.automatonOffset
+  rw [show (boardDecode (envAt t i)).useColumnRule = true from rfl, hxp, hxn, hyp, hyn, ← hx, ← hy]
+  exact hoff.symm
+
 end MoveBits
 
 /-! ## §4.14 — NON-VACUITY for leg (4): the `ox` gate REJECTS a score-forbidden move (`#guard`).
@@ -4248,7 +4726,12 @@ def oxForgeAsg : Assignment := fun c => if c = 207 then 1 else 0
 #print axioms xmove_of_sat
 #print axioms ymove_of_sat
 #print axioms decodeDecision_delta_x_fst
+#print axioms attRep2_of_env
+#print axioms decScore_of_fields
+#print axioms xScoreEval
+#print axioms yScoreEval
 #print axioms offset_matches_chooseOffset
+#print axioms automatonOffset_of_sat
 
 /-! ## §7 — THE NAMED RESIDUAL (what remains for the full composition).
 
@@ -4307,21 +4790,24 @@ Proven here, keyed on the byte-pinned `automataflStepDesc`, canonical over BabyB
         [decision ≠ none]` (no wrap, `variant ∈ {0,1,2,3}`); `colPin_of_sat` pins the column rule
         `true`; `ox_of_sat` / `oy_of_sat` extract the two offset equalities (the `push_f` `oy`
         expansion collapsing to `ymove·(2·posy−1)·(1−sgt)` under `col = 1`);
-      - `offset_matches_chooseOffset` — the CAPSTONE: `(decodeOff ox, decodeOff oy) =
-        chooseOffset (decode xdec) (decode ydec) true`, keyed on the byte-pinned object. §4.14 canary
-        `#guard`s show the `ox` gate REJECTS a score-forbidden move (`ox = 1` with `sgt = 0`).
-      The capstone is CONDITIONAL on two hypotheses = the leg-(4) RESIDUAL: `sx = decScore (decode
-      xdec)` and the `att`/`rep ≤ 2` envelope (cols `60/61/107/108`). These are the `decide_axis`
-      score-field DETERMINATION — the raw `variant/att/rep` columns feed the score, and while
-      `decideAxis_x_sound` proves the DECODED decision equals `evaluateAxis`, it does NOT pin the raw
-      score columns (unused `att`/`rep` are `0` by the `assert_case` formulas, a 9-case ×2 extraction
-      NOT yet done). They are threaded as hypotheses, NOT asserted — the capstone is the conditional it is.
+      - **`offset_matches_chooseOffset` — the CAPSTONE, NOW UNCONDITIONAL:** `(decodeOff ox,
+        decodeOff oy) = chooseOffset (decode xdec) (decode ydec) true`, keyed on the byte-pinned object.
+        §4.14 canary `#guard`s show the `ox` gate REJECTS a score-forbidden move (`ox = 1` with
+        `sgt = 0`).
+
+  * **leg (4′), NOW CLOSED IN FULL — the score-field DETERMINATION (§4.12b):**
+      - `attRep2_of_env` / `decScore_of_fields` — PURE: `attRep2` of the decoded decision follows from
+        the raw `att, rep ∈ [0,2]` envelope, and the felt score head `100000·variant − 100·att − rep`
+        equals `decScore` of the decoded decision on a witness whose UNUSED fields are `0` (`assert_case`);
+      - `xScoreEval` / `yScoreEval` — the 9-case ×2 `assert_case` field extraction against the
+        byte-pinned object: on a satisfying canonical trace the raw `(variant, att, rep)` columns are
+        the `n = 2` envelope (`att, rep ≤ 2`) AND the score head equals `decScore (decode xdec/ydec)`.
+        Same shape as `decideAxis_x_sound`; every field value read off the emitted gates, none assumed.
+        These DISCHARGE `offset_matches_chooseOffset`'s two hypotheses — the capstone is UNCONDITIONAL.
 
 REMAINING (each NOT assumed, NOT stubbed — no `sorry`, no placeholder):
-  (4′) the score-field DETERMINATION discharging `offset_matches_chooseOffset`'s two hypotheses —
-       `xScoreEval`/`yScoreEval`: `sx = decScore (decode xdec)` + the `att`/`rep ≤ 2` envelope, by the
-       `decide_axis` `assert_case` 9-case field extraction (the same shape `decideAxis_*` already run);
-  (5) the step + board-update fold ⇒ `boardDecode(new) = automatonStep(boardDecode(old))`.
-The unconditional top-level composition is deliberately NOT stated as a proven theorem until (4′)-(5) close. -/
+  (5) the step + board-update fold ⇒ `boardDecode(new) = automatonStep(boardDecode(old))`, and the
+      top-level composition `astep_sat_imp_automatonStep` gluing legs 1-5.
+The unconditional top-level composition is deliberately NOT stated as a proven theorem until (5) closes. -/
 
 end Dregg2.Circuit.Emit.AutomataflStepRefine
