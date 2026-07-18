@@ -86,12 +86,26 @@ staging boundary:
     root flows through `state_before → state_after → state_commit` transparently. The descriptors
     stay coherent with the new runtime: nothing here assumes `cap_root = 0` (the concrete witness
     `goodCapRow` uses an arbitrary `old_cap_root = 1000`, NOT 0).
-  * **The per-effect ADVANCE this module models stays PINNED-AS-DIGEST for Phase A**: the circuit
-    pins the executor's computed new root (the `hash[edge_leaf, old_root]` prepend-accumulator
-    advance proven below), and does NOT yet recompute the sorted-TREE update in-row. The genuine
-    in-row sorted-tree-update recompute (membership-open + sorted-key range-checks, mirroring the
-    revocation circuit's C6/C7/C10/C11) is **Phase E**, out of scope here. Phase B adds the
-    in-circuit non-amplification / authority gates that OPEN this root.
+  * **⚑ SUPERSEDED — the §2 prepend advance is NOT the deployed cap-root forcing (Phase E is DONE).**
+    The `hash[edge_leaf, old_root]` prepend-accumulator advance proven below (`capRootAdvance_forced`)
+    is a Phase-A FELT-ACCUMULATOR study: it pins WHICH edge mutated a `cap_root` felt, but does NOT
+    force the genuine sorted-tree update of the committed `CanonicalCapTree` (§0). It is EMPHATICALLY
+    NOT what the deployed attenuate descriptor advances the root by. The DEPLOYED cap-root forcing is
+    the faithful 8-felt sorted-tree write `writesTo8` — a `Satisfied2` of the deployed write descriptor
+    (`effCapOpenWriteV3 attenuateV3`, apex `Rfix 12 = attenuateCapOpenEffV3`) TRACE-FORCES the
+    membership-open of the addressed OLD leaf against the committed BEFORE cap-root group and the
+    genuine narrowed AFTER root over the SHARED path (`CapOpenEmit.effCapOpenWriteV3_forces_write8`,
+    forced from `Satisfied2` — "NEVER from `henc`'s `SpineCommits`"), consumed by
+    `RotatedKernelRefinementCapFamily.attenuate_descriptorRefines_capOpenSat` and wired into the live
+    apex (`ClosureFanoutGenuine`, attenuate tag 12). The deployed base
+    (`attenuateVmDescriptorGenuineNoRecomputeTick`) carries NEITHER this prepend advance NOR a free
+    `CAP_DIGEST_NEW` gate — "the cap-write map-op is what FORCES that root." So this §2 prepend + the
+    free-`CAP_DIGEST_NEW` face (`EffectVmEmitAttenuateA.gCapMove`) + the VALUE_PARTIAL study over them
+    (`RotatedKernelRefinementAttenuate`, its own header) are SUPERSEDED felt-accumulator DEBT, retained
+    only because ~15 cap-family emit / Argus modules still transitively reference `capAdvanceOf` /
+    `capRecomputeSites` / `edgeLeafOf`; their deletion is a tracked cross-family cutover, NOT a
+    soundness gap. Phase B (the in-circuit sorted open + non-amp leg) adds the authority gates that OPEN
+    this root.
 
 This module is therefore ONE layer of a SINGLE cap-root story, not a competing model — read it
 alongside its two siblings rather than as a standalone "cap_root = digest" emit:
