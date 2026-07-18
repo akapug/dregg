@@ -2459,3 +2459,18 @@ GATE DEFERRED: lib.rs is a shared-file contention point (the live fhegg-expand s
 bfv_mul + convex_step); gate the whole BFV Rust expansion together at swarm harvest to keep lib.rs coherent.
 And ember s CLAUDE.md rule HONORED: bfv_gpu.rs is 0 AIR signals — crypto arithmetic, not a hand-written Rust
 AIR (a fold-add is homomorphic encryption, not a circuit).
+
+## ★★ FHEGG PROTOTYPE — ALL 5 VISION-CRITICAL BUILDS, first cuts (`9ac2d8314`, 2026-07-18)
+Built the way ember demanded after naming our swarm-coordination failures: DISJOINT file ownership + FROZEN
+interfaces (docs/deos/FHEGG-PROTOTYPE-INTERFACES.md, supervisor-prebuilt substrate 44abcf41d) + pre-warmed
+deps + an OPUS REVIEW LAYER. Result: 7 impl lanes, ZERO shared-file tangles, 67 fhegg-fhe tests + lake Bfv
+960 jobs kernel-clean. **The opus layer caught 3 real insufficiencies fable self-reports called green** —
+exactly its purpose.
+- CLEAN (opus-verified from artifact): Smudging.lean (no-viewer security, 48-bit hiding TIGHT, exact TV
+  bound), Noise.lean T-composition, gpu_arena (genuinely resident, not a round-trip).
+- FIRST-CUT + NAMED RESIDUAL (the NEXT FIX PASS): threshold (ThresholdNoViewerToothVacuous — combine works,
+  but the smudge tooth is masked by the ~2^109 key term, passes at zero smudge); fhir (FhirCompileOverreach —
+  admissible does not imply runnable, single-step no-wrap); convex_engine (ConvexNoiseGuardUntested — noise
+  ceiling always preempted by the window ceiling, so unvalidated).
+**The keystone (real no-viewer) is now a MODULE with a PROVEN smudging bound, not a modeled seam.** The 3
+residuals are well-scoped review-driven hardenings — the clean next pass.
