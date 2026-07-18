@@ -1425,6 +1425,39 @@ async fn run_node(
         }
     }
 
+    // Boot baseline persistence (emberian/dregg#59). On a boot whose commit log
+    // is still EMPTY (no finalized turn ever committed — a fresh node, or one
+    // rebooted before its first turn) and with no ledger checkpoint, the ledger
+    // as seeded above (genesis cells + `genesis_moves`, wells, faucet,
+    // starbridge seed cells) IS the boot baseline every future commit record's
+    // `ledger_root` will commit over. Save it durably so a restart BELOW the
+    // first periodic ledger checkpoint reconstructs — and crash-recovers — over
+    // the baseline instead of an empty base: the empty-base recovery walk
+    // falsely refuses a healthy sub-checkpoint image ("NO commit-log prefix
+    // reconstructs to its recorded root"). Overwriting during the commit-free
+    // window is sound (no recorded root constrains the baseline yet) and tracks
+    // seeding-config changes; once a turn commits, the saved baseline is frozen
+    // as exactly the one the records were committed over. Once a checkpoint
+    // exists, recovery starts from the checkpoint and the baseline is inert.
+    {
+        let s = node_state.read().await;
+        let commit_free = s.store.commit_cursor().unwrap_or(u64::MAX) == 0;
+        let no_checkpoint = matches!(s.store.load_latest_ledger_checkpoint(), Ok(None));
+        if commit_free && no_checkpoint {
+            match s.store.save_boot_baseline(&s.ledger) {
+                Ok(()) => info!(
+                    cells = s.ledger.len(),
+                    "boot baseline saved — sub-checkpoint restarts recover over it (#59)"
+                ),
+                Err(e) => warn!(
+                    error = %e,
+                    "failed to save the boot baseline; a sub-checkpoint restart of this \
+                     image may be refused until the first ledger checkpoint"
+                ),
+            }
+        }
+    }
+
     // Recovery-convergence verdict (DEFERRED from NodeState construction). The
     // genesis/baseline cells are now (re)seeded on top of the recovered
     // commit-log overlay, so the in-memory ledger is the FULL finalized ledger

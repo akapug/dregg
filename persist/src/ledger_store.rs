@@ -248,6 +248,53 @@ impl PersistentStore {
         Ok(out)
     }
 
+    // =========================================================================
+    // Boot baseline (emberian/dregg#59)
+    // =========================================================================
+
+    /// Durably record the BOOT BASELINE: the fully-seeded ledger exactly as
+    /// boot left it BEFORE any turn committed (genesis cells + `genesis_moves`,
+    /// the fee/issuer wells, the faucet, starbridge seed cells — every cell
+    /// established by boot seeding rather than by a committed turn).
+    ///
+    /// Why (emberian/dregg#59): every commit record's `ledger_root` commits the
+    /// FULL ledger (baseline ⊕ touched cells), but BELOW the first periodic
+    /// ledger checkpoint there is no checkpoint to restore the untouched
+    /// baseline cells from, and the commit-log overlay carries only touched
+    /// cells. Boot recovery must therefore reconstruct over this baseline
+    /// ([`PersistentStore::recover_to_last_consistent_from_base`]) or the
+    /// empty-base walk falsely refuses a healthy sub-checkpoint image as
+    /// unsalvageable. The node saves the baseline on any boot whose commit log
+    /// is still EMPTY (`run_node`, after seeding and before the recovery
+    /// verdict); overwriting during that commit-free window is sound — no
+    /// recorded root constrains the baseline until the first turn commits over
+    /// it. Once a turn commits, the caller must not overwrite it: the saved
+    /// baseline is exactly the one the recorded roots were committed over,
+    /// immune to later seeding-config drift.
+    pub fn save_boot_baseline(&self, ledger: &Ledger) -> Result<()> {
+        let snapshot = ledger_to_checkpoint(ledger, 0);
+        let bytes =
+            postcard::to_stdvec(&snapshot).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        self.set_config(BOOT_BASELINE_CONFIG_KEY, &bytes)
+    }
+
+    /// Load the saved boot baseline, if this store ever recorded one.
+    ///
+    /// `None` on stores written before the baseline existed (their
+    /// sub-checkpoint recovery keeps the historical empty-base behavior) and on
+    /// stores with genuinely no boot seeding — every cell established by a
+    /// committed turn (e.g. a starbridge World) — for which the empty base IS
+    /// the correct reconstruction.
+    pub fn load_boot_baseline(&self) -> Result<Option<Ledger>> {
+        match self.get_config(BOOT_BASELINE_CONFIG_KEY)? {
+            Some(bytes) => {
+                let snapshot: LedgerCheckpoint = postcard::from_bytes(&bytes)?;
+                Ok(Some(checkpoint_to_ledger(snapshot)))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Remove old ledger checkpoints, keeping only the most recent `keep_last_n`.
     ///
     /// This bounds storage growth: each checkpoint is O(cells) in size, so keeping
@@ -287,6 +334,10 @@ impl PersistentStore {
         Ok(to_remove.len() as u64)
     }
 }
+
+/// METADATA_BYTES key for the boot baseline ledger
+/// ([`PersistentStore::save_boot_baseline`]).
+const BOOT_BASELINE_CONFIG_KEY: &str = "boot_baseline_ledger";
 
 // =============================================================================
 // Conversion helpers
@@ -368,4 +419,55 @@ fn checkpoint_to_ledger(snapshot: LedgerCheckpoint) -> Ledger {
     }
 
     ledger
+}
+
+// =============================================================================
+// Boot baseline round-trip (emberian/dregg#59)
+// =============================================================================
+#[cfg(test)]
+mod boot_baseline_tests {
+    use super::*;
+
+    fn cell(seed: u8, balance: i64) -> Cell {
+        Cell::with_balance([seed; 32], [seed.wrapping_add(7); 32], balance)
+    }
+
+    /// The saved baseline round-trips cell-exactly, and its canonical root is
+    /// preserved — the property `recover_to_last_consistent_from_base` depends
+    /// on (a drifted root would strand or falsely truncate a healthy image).
+    #[test]
+    fn boot_baseline_round_trips_with_canonical_root() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        assert!(
+            store.load_boot_baseline().unwrap().is_none(),
+            "a fresh store has no boot baseline (the true-empty path)"
+        );
+
+        let mut baseline = Ledger::new();
+        for seed in [0xf0u8, 0xf1, 0xf2] {
+            baseline.insert_cell(cell(seed, 1_000_000)).unwrap();
+        }
+        store.save_boot_baseline(&baseline).unwrap();
+
+        let loaded = store.load_boot_baseline().unwrap().expect("baseline saved");
+        assert_eq!(loaded.len(), baseline.len());
+        for (id, cell) in baseline.iter() {
+            assert_eq!(
+                loaded.get(id).map(|c| c.state.balance()),
+                Some(cell.state.balance()),
+                "baseline cell must round-trip exactly"
+            );
+        }
+        assert_eq!(
+            crate::canonical_ledger_root(&loaded),
+            crate::canonical_ledger_root(&baseline),
+            "the canonical root the recovery walk reconstructs against must survive the round-trip"
+        );
+
+        // Overwriting during the commit-free window is allowed and last-writer-wins.
+        let mut later = baseline.clone();
+        later.insert_cell(cell(0xf3, 42)).unwrap();
+        store.save_boot_baseline(&later).unwrap();
+        assert_eq!(store.load_boot_baseline().unwrap().unwrap().len(), 4);
+    }
 }

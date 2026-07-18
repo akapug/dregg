@@ -818,6 +818,26 @@ impl NodeState {
         let db_path = data_dir.join("dregg.redb");
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
+        // Boot baseline (emberian/dregg#59): the fully-seeded ledger a first
+        // boot durably recorded BEFORE any turn committed (genesis cells +
+        // `genesis_moves`, fee/issuer wells, faucet, starbridge seed cells —
+        // `run_node` saves it right before the recovery-convergence verdict).
+        // Every commit record's `ledger_root` commits the FULL ledger
+        // (baseline ⊕ touched cells), so BELOW the first periodic ledger
+        // checkpoint both the crash-recovery walk and the ledger
+        // reconstruction below must start from this baseline: the commit-log
+        // overlay alone can never reproduce a recorded root, and the
+        // empty-base walk falsely refused a healthy sub-checkpoint image as
+        // unsalvageable. Absent on pre-#59 stores and on true-empty nodes
+        // (every cell established by a committed turn), where the empty base
+        // remains the correct reconstruction.
+        let boot_baseline = store.load_boot_baseline().unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                "could not load the saved boot baseline; recovering over an empty base"
+            );
+            None
+        });
         // Boot crash-recovery: a torn/poisoned commit-log tail (e.g. a process
         // killed between the input-turn config write and the commit-record txn, or
         // an unclean power-cycle) leaves the log's head inconsistent with its
@@ -827,9 +847,15 @@ impl NodeState {
         // whose reconstructed root matches; peers backfill the dropped turn(s) via
         // normal blocklace sync. No-op (returns 0) when already consistent; a
         // genuinely divergent image with NO matching prefix still Errs (fail-closed
-        // on tampering). Uses the existing `PersistentStore::recover_to_last_consistent`
+        // on tampering). Uses `PersistentStore::recover_to_last_consistent[_from_base]`
         // (persist/src/commit_log.rs); mirrors starbridge `World::open_recovering`.
-        match store.recover_to_last_consistent() {
+        // A store with a saved boot baseline reconstructs over it (#59) — the
+        // empty-base walk cannot converge on any genesis-seeded image.
+        let recovery = match &boot_baseline {
+            Some(base) => store.recover_to_last_consistent_from_base(base),
+            None => store.recover_to_last_consistent(),
+        };
+        match recovery {
             Ok(0) => {}
             Ok(n) => tracing::warn!(
                 truncated = n,
@@ -837,9 +863,30 @@ impl NodeState {
                  last-consistent ordinal (torn-tail crash recovery); peers will backfill"
             ),
             Err(e) => {
-                return Err(format!(
-                    "boot recovery (recover_to_last_consistent) failed: {e}"
-                ));
+                // With NO saved baseline and NO checkpoint, a genesis-seeded
+                // image (a pre-#59 store below its first checkpoint)
+                // reconstructs to NO recorded root over the empty base —
+                // indistinguishable HERE from genuine corruption. Defer the
+                // verdict to `verify_recovery_convergence` (run after the boot
+                // baseline is reseeded, see `run_node`), which still FAILS
+                // CLOSED on genuine divergence with the complete ledger in
+                // hand. With a saved baseline or a checkpoint the walk was
+                // exact, so its refusal is authoritative: fail now.
+                let baseline_unknowable = boot_baseline.is_none()
+                    && matches!(store.load_latest_ledger_checkpoint(), Ok(None));
+                if baseline_unknowable {
+                    tracing::warn!(
+                        error = %e,
+                        "boot recovery found no converging prefix over an EMPTY base and no \
+                         checkpoint exists (#59: likely a genesis-seeded image without a saved \
+                         boot baseline) — deferring the verdict to the post-reseed \
+                         recovery-convergence check"
+                    );
+                } else {
+                    return Err(format!(
+                        "boot recovery (recover_to_last_consistent) failed: {e}"
+                    ));
+                }
             }
         }
 
@@ -948,16 +995,29 @@ impl NodeState {
                 );
                 (restored_ledger, height)
             }
-            Ok(None) => {
-                tracing::info!("no ledger checkpoint found, starting with empty ledger");
-                (Ledger::new(), 0)
-            }
+            Ok(None) => match &boot_baseline {
+                // #59: no checkpoint yet — the saved boot baseline carries the
+                // untouched genesis-seeded cells the overlay below cannot, so
+                // the sub-checkpoint reconstruction is baseline ⊕ overlay (the
+                // same order `recover_to_last_consistent_from_base` walked).
+                Some(base) => {
+                    tracing::info!(
+                        cells = base.len(),
+                        "no ledger checkpoint found, starting from the saved boot baseline"
+                    );
+                    (base.clone(), 0)
+                }
+                None => {
+                    tracing::info!("no ledger checkpoint found, starting with empty ledger");
+                    (Ledger::new(), 0)
+                }
+            },
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "failed to load ledger checkpoint, starting with empty ledger"
+                    "failed to load ledger checkpoint, starting from the boot baseline (or empty)"
                 );
-                (Ledger::new(), 0)
+                (boot_baseline.clone().unwrap_or_else(Ledger::new), 0)
             }
         };
         match store.cell_overlay_since(checkpoint_height) {
@@ -977,14 +1037,17 @@ impl NodeState {
                 // A node that finalized turns BELOW the first ledger checkpoint
                 // has NO checkpoint to restore its UNTOUCHED genesis cells from,
                 // and `cell_overlay_since` carries only the cells a turn TOUCHED.
-                // So the ledger reconstructed HERE is the touched-cell delta on
-                // an empty base — NOT yet the full finalized ledger. The recorded
-                // finalized root commits the FULL ledger (genesis ⊕ touched);
-                // comparing against it before the genesis baseline is rebuilt
-                // would fail-close every legitimate sub-checkpoint restart (the
-                // node would need a redb wipe to rejoin). The verdict still runs,
-                // still fail-CLOSED on genuine divergence — just once the
-                // baseline is in place and the root is meaningful.
+                // With a saved boot baseline (#59) the ledger above already
+                // started from those untouched cells and the overlay completes
+                // it; WITHOUT one (a pre-#59 store), the ledger reconstructed
+                // HERE is the touched-cell delta on an empty base — NOT yet the
+                // full finalized ledger. The recorded finalized root commits
+                // the FULL ledger (genesis ⊕ touched); comparing against it
+                // before the genesis baseline is rebuilt would fail-close every
+                // legitimate sub-checkpoint restart (the node would need a redb
+                // wipe to rejoin). The verdict still runs, still fail-CLOSED on
+                // genuine divergence — just once the baseline is in place and
+                // the root is meaningful.
                 tracing::info!(
                     overlaid_cells = overlay_len,
                     commit_cursor = store.commit_cursor().unwrap_or(0),
@@ -1128,18 +1191,22 @@ impl NodeState {
         let db_path = data_dir.join("dregg.redb");
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
-        // Boot crash-recovery: a torn/poisoned commit-log tail (e.g. a process
-        // killed between the input-turn config write and the commit-record txn, or
-        // an unclean power-cycle) leaves the log's head inconsistent with its
-        // durably-recorded finalized root, so the convergence check below would
-        // REFUSE the whole image and strand the node (observed 2026-06-29 after a
-        // homelab PSU swap). Truncate any divergent tail to the last commit ordinal
-        // whose reconstructed root matches; peers backfill the dropped turn(s) via
-        // normal blocklace sync. No-op (returns 0) when already consistent; a
-        // genuinely divergent image with NO matching prefix still Errs (fail-closed
-        // on tampering). Uses the existing `PersistentStore::recover_to_last_consistent`
-        // (persist/src/commit_log.rs); mirrors starbridge `World::open_recovering`.
-        match store.recover_to_last_consistent() {
+        // Boot baseline (emberian/dregg#59) + crash-recovery — the same walk as
+        // `new_with_key_file` (see its comments): a saved boot baseline makes
+        // the sub-checkpoint recovery walk exact; a torn tail truncates to the
+        // last converging ordinal; a genuinely divergent image still Errs.
+        let boot_baseline = store.load_boot_baseline().unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                "could not load the saved boot baseline; recovering over an empty base"
+            );
+            None
+        });
+        let recovery = match &boot_baseline {
+            Some(base) => store.recover_to_last_consistent_from_base(base),
+            None => store.recover_to_last_consistent(),
+        };
+        match recovery {
             Ok(0) => {}
             Ok(n) => tracing::warn!(
                 truncated = n,
@@ -1147,9 +1214,24 @@ impl NodeState {
                  last-consistent ordinal (torn-tail crash recovery); peers will backfill"
             ),
             Err(e) => {
-                return Err(format!(
-                    "boot recovery (recover_to_last_consistent) failed: {e}"
-                ));
+                // Mirror `new_with_key_file` (#59): with no saved baseline and
+                // no checkpoint the empty-base walk cannot converge on a
+                // genesis-seeded image, so its refusal is not authoritative —
+                // defer to the convergence check below (which fails closed on
+                // genuine divergence). Otherwise the walk was exact: fail now.
+                let baseline_unknowable = boot_baseline.is_none()
+                    && matches!(store.load_latest_ledger_checkpoint(), Ok(None));
+                if baseline_unknowable {
+                    tracing::warn!(
+                        error = %e,
+                        "boot recovery found no converging prefix over an EMPTY base and no \
+                         checkpoint exists (#59) — deferring to the recovery-convergence check"
+                    );
+                } else {
+                    return Err(format!(
+                        "boot recovery (recover_to_last_consistent) failed: {e}"
+                    ));
+                }
             }
         }
 
@@ -1163,11 +1245,15 @@ impl NodeState {
         let trustlines = crate::trustline_service::TrustlineRegistry::load(&store);
         let equivocation_court = crate::equivocation_court_service::CourtLedger::load(&store);
 
-        // Restore ledger from the latest checkpoint, then apply the durable
-        // commit-log overlay (crash-consistent recovery; see `new_with_key_file`).
+        // Restore ledger from the latest checkpoint — or, below the first
+        // checkpoint, from the saved boot baseline (#59) — then apply the
+        // durable commit-log overlay (crash-consistent recovery; see
+        // `new_with_key_file`). Starting from the baseline is what makes the
+        // convergence assertion below meaningful on a sub-checkpoint image:
+        // the recorded root commits baseline ⊕ touched, never the bare overlay.
         let (mut ledger, checkpoint_height) = match store.load_latest_ledger_checkpoint() {
             Ok(Some((height, restored_ledger))) => (restored_ledger, height),
-            _ => (Ledger::new(), 0),
+            _ => (boot_baseline.clone().unwrap_or_else(Ledger::new), 0),
         };
         if let Ok(overlay) = store.cell_overlay_since(checkpoint_height)
             && !overlay.is_empty()
@@ -2914,9 +3000,14 @@ mod crash_recovery_overlay_tests {
     #[tokio::test]
     async fn convergence_root_mismatch_refuses_to_start() {
         // Same overlay, but the durably recorded finalized root is WRONG (does
-        // not match the reconstructed root). The convergence verdict
-        // (`verify_recovery_convergence`, deferred out of construction so the
-        // genesis baseline can be reseeded first) MUST fail closed.
+        // not match the reconstructed root). Boot MUST fail closed. With a
+        // CHECKPOINT present the boot crash-recovery walk is exact (the
+        // checkpoint carries every untouched cell), so since the torn-tail
+        // recovery gate landed the refusal fires at CONSTRUCTION — no prefix
+        // reconstructs to the bogus recorded root, and that verdict is
+        // authoritative. (Only a checkpoint-less, baseline-less image defers to
+        // the post-reseed `verify_recovery_convergence`, #59 — covered by
+        // `sub_checkpoint_corrupt_overlay_still_fails_closed_after_reseed`.)
         let seed = 0x3c;
         let tmp = tempfile::tempdir().expect("tempdir");
         seed_store_with_overlay(
@@ -2927,19 +3018,25 @@ mod crash_recovery_overlay_tests {
             [0xde; 32], // deliberately NOT the post-overlay root
         );
 
-        // Construction itself succeeds (it reconstructs the overlay); the verdict
-        // is the separate fail-closed step.
-        let state = NodeState::new_with_key_file(tmp.path(), vec![], "node.key")
-            .expect("construction reconstructs the overlay; the verdict is a separate step");
-        let err = state
-            .verify_recovery_convergence()
-            .await
-            .err()
-            .expect("a convergence-root mismatch must FAIL CLOSED, not log-and-continue");
-        assert!(
-            err.contains("convergence"),
-            "the refusal must name the convergence failure; got: {err}"
-        );
+        match NodeState::new_with_key_file(tmp.path(), vec![], "node.key") {
+            Err(err) => assert!(
+                err.contains("boot recovery"),
+                "the construction refusal must name boot recovery; got: {err}"
+            ),
+            Ok(state) => {
+                // If a future recovery policy re-defers this case, the verdict
+                // must still fail closed — never log-and-continue.
+                let err = state
+                    .verify_recovery_convergence()
+                    .await
+                    .err()
+                    .expect("a convergence-root mismatch must FAIL CLOSED somewhere");
+                assert!(
+                    err.contains("convergence"),
+                    "the refusal must name the convergence failure; got: {err}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -3250,6 +3347,190 @@ mod crash_recovery_overlay_tests {
             err.contains("convergence"),
             "the refusal must name the convergence failure; got: {err}"
         );
+    }
+
+    // ---- Saved boot baseline (emberian/dregg#59) ----
+    //
+    // A solo node stopped CLEANLY before its first periodic ledger checkpoint
+    // must boot on its own healthy image. Every commit record's `ledger_root`
+    // commits the FULL ledger (boot baseline ⊕ touched cells), but the
+    // commit-log overlay carries only touched cells and there is no checkpoint
+    // to restore the untouched baseline cells from — so boot recovery and the
+    // ledger reconstruction must start from the boot baseline `run_node` saves
+    // on the first (commit-free) boot. Pre-fix, both boot paths ran the
+    // EMPTY-base recovery walk, which mismatches every record's full-ledger
+    // root and refused construction with "NO commit-log prefix reconstructs to
+    // its recorded root" — a FALSE store-integrity fatal on a healthy image.
+
+    /// The boot baseline a solo node's first boot seeds and saves (fee well,
+    /// issuer well, faucet — cells NO turn ever touches). High seeds so they
+    /// never collide with the per-turn `cell(0x10 + k, …)` ids.
+    fn boot_baseline() -> Ledger {
+        let mut b = Ledger::new();
+        for seed in [0xe0u8, 0xe1, 0xe2] {
+            b.insert_cell(cell(seed, 1_000_000)).expect("baseline cell");
+        }
+        b
+    }
+
+    /// Seed `dir` as a first boot left it after `n` finalized turns, all BELOW
+    /// the first ledger checkpoint: the saved boot baseline (as `run_node`
+    /// records on the commit-free boot) plus `n` commit records and NO
+    /// checkpoint. Each record's `ledger_root` is the canonical root over
+    /// baseline ⊕ touched-through-k — the full-ledger root a real node
+    /// records. Returns the head's recorded root (the expected recovered state).
+    fn seed_saved_baseline_store(dir: &Path, n: u64) -> [u8; 32] {
+        let store = PersistentStore::open(&dir.join("dregg.redb")).expect("open store");
+        let baseline = boot_baseline();
+        store
+            .save_boot_baseline(&baseline)
+            .expect("save boot baseline");
+        let mut ledger = baseline;
+        let mut head_root = [0u8; 32];
+        for k in 0..n {
+            let c = cell(0x10 + k as u8, 100 + k as i64);
+            let _ = ledger.remove(&c.id());
+            ledger.insert_cell(c.clone()).expect("turn cell");
+            head_root = crate::blocklace_sync::canonical_ledger_root(&ledger);
+            let mut rec = dregg_persist::CommitRecord {
+                ordinal: k,
+                height: k + 1,
+                block_id: [0u8; 32],
+                block_executed_up_to: 0,
+                turn_hash: [0u8; 32],
+                creator: [0u8; 32],
+                receipt_hash: [0u8; 32],
+                ledger_root: head_root,
+                touched_cells: vec![c],
+            };
+            rec.turn_hash[0] = 0xa0;
+            rec.turn_hash[1] = k as u8;
+            rec.receipt_hash[0] = 0xb0;
+            rec.receipt_hash[1] = k as u8;
+            store.commit_finalized_turn(k, &rec).expect("commit turn");
+        }
+        head_root
+    }
+
+    /// **emberian/dregg#59, the must-fail-pre.** A solo node with a saved boot
+    /// baseline, stopped cleanly after 3 finalized turns (« the checkpoint
+    /// interval, so NO checkpoint exists), reopens on its own image: boot
+    /// succeeds, the verdict converges, and the reconstructed state IS the
+    /// recorded head state. Pre-fix this refused at construction with
+    /// "boot recovery (recover_to_last_consistent) failed: … NO commit-log
+    /// prefix reconstructs to its recorded root".
+    #[tokio::test]
+    async fn sub_checkpoint_clean_restart_boots_over_saved_boot_baseline() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let head_root = seed_saved_baseline_store(tmp.path(), 3);
+
+        let state = NodeState::new_with_key_file(tmp.path(), vec![], "node.key")
+            .expect("a clean sub-checkpoint image must boot on its saved boot baseline (#59)");
+        state
+            .verify_recovery_convergence()
+            .await
+            .expect("baseline ⊕ overlay reconstructs the recorded finalized root");
+
+        let guard = state.read().await;
+        assert_eq!(
+            guard
+                .ledger
+                .get(&cell(0xe0, 0).id())
+                .map(|c| c.state.balance()),
+            Some(1_000_000),
+            "an UNTOUCHED baseline cell survives the restart at its baseline value"
+        );
+        assert_eq!(
+            guard
+                .ledger
+                .get(&cell(0x12, 0).id())
+                .map(|c| c.state.balance()),
+            Some(102),
+            "a touched cell surfaces its finalized post-state"
+        );
+        assert_eq!(
+            crate::blocklace_sync::canonical_ledger_root(&guard.ledger),
+            head_root,
+            "the reconstructed ledger is exactly the recorded head state"
+        );
+        assert_eq!(
+            guard.store.recovered_ledger_root().expect("recorded root"),
+            Some(head_root)
+        );
+    }
+
+    /// #59, the secondary boot path: `with_cclerk` runs the same baseline-aware
+    /// recovery AND its own inline convergence assertion — a sub-checkpoint
+    /// image must pass both.
+    #[tokio::test]
+    async fn sub_checkpoint_clean_restart_boots_via_with_cclerk() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let head_root = seed_saved_baseline_store(tmp.path(), 3);
+
+        let state = NodeState::with_cclerk(tmp.path(), vec![], [0x11u8; 32])
+            .expect("with_cclerk must boot a clean sub-checkpoint image (#59)");
+        let guard = state.read().await;
+        assert_eq!(
+            guard
+                .ledger
+                .get(&cell(0xe1, 0).id())
+                .map(|c| c.state.balance()),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            crate::blocklace_sync::canonical_ledger_root(&guard.ledger),
+            head_root
+        );
+    }
+
+    /// #59 regression pin, the ≥-interval shape: once a ledger checkpoint
+    /// exists, recovery starts from the checkpoint (baseline inert) and a
+    /// restart boots exactly as before the fix.
+    #[tokio::test]
+    async fn post_checkpoint_restart_unchanged_by_saved_baseline() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        seed_saved_baseline_store(tmp.path(), 3);
+
+        // The periodic checkpoint fires: a FULL snapshot (baseline ⊕ touched)
+        // at the head height, exactly what `checkpoint_and_prune` persists.
+        let head_root;
+        {
+            let store = PersistentStore::open(&tmp.path().join("dregg.redb")).expect("open store");
+            let mut full = boot_baseline();
+            for k in 0..3u64 {
+                let c = cell(0x10 + k as u8, 100 + k as i64);
+                let _ = full.remove(&c.id());
+                full.insert_cell(c).expect("turn cell");
+            }
+            head_root = crate::blocklace_sync::canonical_ledger_root(&full);
+            store.checkpoint_ledger(&full, 3).expect("write checkpoint");
+        }
+
+        let state = NodeState::new_with_key_file(tmp.path(), vec![], "node.key")
+            .expect("a checkpointed image must keep booting");
+        state
+            .verify_recovery_convergence()
+            .await
+            .expect("checkpoint ⊕ overlay converges as before");
+        let guard = state.read().await;
+        assert_eq!(
+            crate::blocklace_sync::canonical_ledger_root(&guard.ledger),
+            head_root
+        );
+    }
+
+    /// #59 regression pin, the true-empty shape: a brand-new data dir (no
+    /// baseline, no records, no checkpoint) still boots and passes the verdict.
+    #[tokio::test]
+    async fn fresh_empty_store_still_boots_without_baseline() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new_with_key_file(tmp.path(), vec![], "node.key")
+            .expect("a fresh empty store must boot");
+        state
+            .verify_recovery_convergence()
+            .await
+            .expect("nothing to converge to on a fresh store");
+        assert_eq!(state.read().await.ledger.len(), 0);
     }
 
     // ---- Issuer-well genesis recovery (the genesis_moves ordering fix) ----
