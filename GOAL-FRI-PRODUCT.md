@@ -202,6 +202,27 @@ check always catches it. Remaining REAL work (cutover lane's actionable): (a) mo
 phases, (b) expose Publics, (c) an assignment mapping the real proof into the witness = emit the FULL
 SettlementCircuit, not the leaf abstraction, with emit_faithful covering it. THAT is "replace the hand-Go".
 
+
+## ⚑ FUNCTIONAL-EMIT CYCLE 1 — MEASURED gap (9f418bb0e; differential RUNNABLE against the real proof)
+The emit-driven circuit now GENUINELY ingests the real fixture proof (assignVerifierFull) + verifies the
+commit-phase FRI Merkle openings IN-CIRCUIT, then REJECTS at block 2b (input-open Merkle placeholder leaf).
+MEASURED (not guessed): 1 of ~5 verification phases genuinely binds; the rest are PLACEHOLDER (input-open
+leaf=0, STARK-DAG=zero, PoW=0) or TAUTOLOGY (fold ext-eq x,x; statement claim-vs-claim). Canary rejection
+VACUOUS (dies upstream of statement bind). Deployed = 12.87M/8 phases; emit = 2.56M/~20%.
+RANKED remaining (measured): (1) input-open Merkle leaf-hash+root binding [first divergence]; (2) batch-STARK
+DAG real inputs + open_input seed binding [inert=zero today]; (3) FRI fold real arithmetic [tautology today];
+(4) ⚑ TRANSCRIPT REPLAY / challenger duplex — ENTIRELY ABSENT, the DEEPEST soundness gap: challenges fed
+from the fixture PINNED values, never derived in-circuit → a prover supplies ARBITRARY challenges; (5)
+statement bind + VK-pins [present-but-unreachable / absent].
+⚑⚑ SUBSTRATE LIMITATION (flag to ember): this is NOT AIR-in-Lean. The Lean side emits a STRUCTURAL
+DESCRIPTOR over 6 leaves; the constraint MUSCLE is hand-Go gadgets (poseidon2_bn254.go etc.). emit_faithful
+does NOT cover the descriptor. So even a COMPLETE functional emit = Lean-composition + Go-gadget-constraints,
+differential-equivalent to hand-Go but NOT constraints-authored-in-Lean. True AIR-in-Lean needs the GADGET
+constraints emitted from Lean too (bigger). RECALIBRATION: ~5 phases (maybe ~5 descriptor-emit cycles, the
+transcript one deep) to a DIFFERENTIAL-PASSING cutover — but the AIR-in-Lean goal is NOT met by this approach.
+DECISION for ember: continue descriptor-emit (toward differential-passing cutover, Go-gadget constraints) OR
+reconsider the approach.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
