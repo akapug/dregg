@@ -56,3 +56,30 @@ This touches discord-bot + dreggnet-telegram + dreggnet-offerings/webauth-core �
 the in-flight audit-logging swarm edits. Land + commit the audit swarm (and the initData
 signature-fix) FIRST for a clean base, THEN swarm the link build — two big overlapping swarms
 gridlock on the shared files (the build-lock-contention lesson).
+
+## Session pause state (2026-07-17 ~20:00) — the queued batch
+COMMITTED + green (churn-independent): the identity-link LIBRARY LAYER —
+webauth-core `link_claim` (8d2b3cd91) + `link_registry` (9cc263d78), 12/12 on persvati.
+
+HELD in the working tree, blocked on `dregg-turn`/`dregg-cell` churn (another terminal made
+`Cell.id` private + added a `MakeSovereign` journal variant — dregg-turn won't compile, so
+discord-bot + dreggnet-web can't be gated):
+- B+C depth wins: real per-identity RPG worlds (#15, an earlier lane reportedly already built it —
+  VERIFY) + the crown user-facing (crown.rs). Files: discord-bot/src/commands/{crown,portfolio,
+  offering,descent,rpg_world}.rs + main.rs. Workflow wf_1a97b900-2cf; repair did NOT confirm green.
+- AUDIT LOGGING swarm (wf_c5cf9e56-576): HALF-DONE — emit points added (discord-bot/src/audit.rs +
+  imports in telegram_miniapp.rs/etc.) but its repair+report FAILED on the Fable credit limit, so
+  it is NOT reconciled/built. telegram_miniapp.rs has unresolved `crate::audit`/`open_audit_parts`
+  imports. RESOLUTION: main-loop (Fable exhausted) — either COMPLETE the facility (build audit.rs +
+  wire the emit points) OR back out the incomplete audit edits and keep just the initData fix.
+- initData `signature` fix: LIVE in prod (the funnel serves a clean-fix binary), but its COMMIT is
+  in the churn-blocked + audit-broken telegram_miniapp.rs. The one-line fix: the dcs filter is
+  `k != "hash"` (signature IS covered by the HMAC — verified against ember's real initData). Add a
+  REGRESSION TEST: the fixture MUST include a `signature` field so this exact bug cannot return.
+
+RESUME PLAN: when `dregg-turn` greens → (1) reconcile/back-out the audit swarm so
+telegram_miniapp.rs builds, (2) re-gate discord-bot (its own workspace) + dreggnet-web, (3) commit
+B+C + audit + the initData fix with its regression test, (4) then lane A's platform wiring
+(Discord: store root_pubkey at /link-prove + swap to webauth challenge; Telegram: the Mini App
+link ceremony; wire resolve_root into the offerings actor-comparison). Fable credits: exhausted —
+main-loop or a non-Fable model until reset.
