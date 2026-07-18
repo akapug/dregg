@@ -80,6 +80,7 @@ use dreggnet_offerings::{
     Action, Attribution, DreggIdentity, HostError, Outcome, SessionId, SignedError, TurnSigner,
 };
 use dreggnet_telegram::cipherclerk::{TelegramCipherclerk, seed_for};
+use webauth_core::link_registry::LinkStore;
 
 use crate::{
     CatalogState, audit, live_session_count, metrics, open_audit_parts, refused_open_response,
@@ -276,6 +277,19 @@ fn decode_hex_32(s: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut out = [0u8; 32];
+    for (i, chunk) in bytes.chunks_exact(2).enumerate() {
+        out[i] = (hex_nib(chunk[0])? << 4) | hex_nib(chunk[1])?;
+    }
+    Some(out)
+}
+
+/// Decode exactly 128 hex chars into 64 bytes (an Ed25519 signature); `None` on any other shape.
+fn decode_hex_64(s: &str) -> Option<[u8; 64]> {
+    let bytes = s.trim().as_bytes();
+    if bytes.len() != 128 {
+        return None;
+    }
+    let mut out = [0u8; 64];
     for (i, chunk) in bytes.chunks_exact(2).enumerate() {
         out[i] = (hex_nib(chunk[0])? << 4) | hex_nib(chunk[1])?;
     }
@@ -481,6 +495,8 @@ pub fn tg_miniapp_router(state: Arc<TgMiniAppState>) -> Router {
         .route("/tg/offerings", get(get_tg_offerings))
         .route("/tg/offerings/{key}/session/{id}", get(get_tg_session))
         .route("/tg/offerings/{key}/session/{id}/act", post(post_tg_act))
+        .route("/tg/link/challenge", get(get_tg_link_challenge))
+        .route("/tg/link", post(post_tg_link))
         .with_state(state)
 }
 
@@ -1120,6 +1136,169 @@ fn shell_page(boot: Option<&str>) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The cross-platform LINK ceremony (`/tg/link/*`) — bind this Telegram account to a
+// user-held root key K, recorded in the shared registry so Discord-you and Telegram-you
+// resolve to ONE human. The SERVER half; the client (passkey / extension-relay) signs the
+// claim with K and POSTs it here. initData authenticates WHICH Telegram uid; K's signature
+// attests the human — the same two-sided trust the Discord `/link-prove` ceremony makes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The stable server key for link-challenge freshness, domain-separated from the initData HMAC
+/// and derived from the identity master secret so it survives restarts without a separate env.
+fn link_challenge_key(bot_secret: &[u8; 32]) -> [u8; 32] {
+    hmac_sha256(b"dregg-tg-link-challenge-v1", bot_secret)
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The link-claim submission wire: root key K signed a [`webauth_core::link_claim`] message
+/// binding (`telegram`, this uid, this custodial pubkey, K, the challenge) — the client sends the
+/// root pubkey, the signature, and the challenge it signed over.
+#[derive(Debug, Clone, Deserialize)]
+struct TgLinkForm {
+    root_pubkey_hex: String,
+    signature_hex: String,
+    challenge: String,
+}
+
+/// `GET /tg/link/challenge` — initData-authenticated. Returns a fresh nonce'd challenge plus the
+/// EXACT fields the link_claim must bind (platform, uid, this Telegram account's custodial pubkey),
+/// so the client can build + sign the canonical message with root key K.
+async fn get_tg_link_challenge(
+    State(state): State<Arc<TgMiniAppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let corr = audit::correlation_id();
+    let route = "GET /tg/link/challenge";
+    let user = match verified_user(&state, &headers, &corr, route) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let custodial = state.identity_for(user.user_id).0;
+    let challenge = webauth_core::challenge::issue(
+        &link_challenge_key(&state.bot_secret),
+        now_unix_secs(),
+        300,
+    );
+    audit::log().emit(
+        audit::AuditEvent::new(
+            "tg-miniapp",
+            audit::Actor::initdata_verified(user.user_id.to_string(), Some(custodial.clone())),
+            audit::Surface::Http,
+            audit::Input::new(route, serde_json::Value::Null),
+        )
+        .correlated(&corr)
+        .decided("routed", "link_challenge_issued"),
+    );
+    axum::Json(serde_json::json!({
+        "platform": "telegram",
+        "platform_uid": user.user_id.to_string(),
+        "custodial_pubkey_hex": custodial,
+        "challenge": challenge,
+        "link_domain": webauth_core::link_claim::LINK_CLAIM_DOMAIN,
+    }))
+    .into_response()
+}
+
+/// `POST /tg/link` — verify a root-key-signed link claim for this initData-authenticated Telegram
+/// account and record `(telegram custodial → root K)` in the shared registry. Fail-closed:
+/// missing/stale/forged claim → refused, nothing recorded.
+async fn post_tg_link(
+    State(state): State<Arc<TgMiniAppState>>,
+    headers: HeaderMap,
+    Form(form): Form<TgLinkForm>,
+) -> Response {
+    let corr = audit::correlation_id();
+    let route = "POST /tg/link";
+    let user = match verified_user(&state, &headers, &corr, route) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let uid_str = user.user_id.to_string();
+    let custodial = state.identity_for(user.user_id).0;
+    let ev = |kind: &'static str, reason: &'static str| {
+        audit::AuditEvent::new(
+            "tg-miniapp",
+            audit::Actor::initdata_verified(uid_str.clone(), Some(custodial.clone())),
+            audit::Surface::Http,
+            audit::Input::new(route, serde_json::Value::Null),
+        )
+        .correlated(&corr)
+        .decided(kind, reason)
+    };
+
+    let Some(root_pubkey) = decode_hex_32(form.root_pubkey_hex.trim()) else {
+        audit::log().emit(ev("refused", "bad_root_pubkey"));
+        return (
+            StatusCode::BAD_REQUEST,
+            "root_pubkey_hex must be 64 hex chars",
+        )
+            .into_response();
+    };
+    let Some(signature) = decode_hex_64(&form.signature_hex) else {
+        audit::log().emit(ev("refused", "bad_signature"));
+        return (
+            StatusCode::BAD_REQUEST,
+            "signature_hex must be 128 hex chars",
+        )
+            .into_response();
+    };
+
+    match webauth_core::link_claim::verify_link_claim(
+        &link_challenge_key(&state.bot_secret),
+        "telegram",
+        &uid_str,
+        &custodial,
+        &root_pubkey,
+        &form.challenge,
+        &signature,
+        now_unix_secs(),
+    ) {
+        Ok(()) => {
+            let root_hex = form.root_pubkey_hex.trim().to_lowercase();
+            let recorded = webauth_core::link_registry::FileLinkStore::new(
+                webauth_core::link_registry::default_store_path(),
+            )
+            .record(&webauth_core::link_registry::LinkRecord {
+                root_pubkey_hex: root_hex.clone(),
+                platform: "telegram".to_string(),
+                platform_uid: uid_str.clone(),
+                custodial_pubkey_hex: custodial.clone(),
+                verified_at: now_unix_secs(),
+            })
+            .is_ok();
+            audit::log().emit(ev(
+                "routed",
+                if recorded {
+                    "linked"
+                } else {
+                    "linked_unrecorded"
+                },
+            ));
+            axum::Json(serde_json::json!({
+                "ok": true,
+                "root_pubkey_hex": root_hex,
+                "recorded": recorded,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            audit::log().emit(ev("refused", "link_claim_invalid"));
+            (
+                StatusCode::FORBIDDEN,
+                format!("link claim did not verify: {e:?}"),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests — the three families the design pins: vector+tamper, identity parity,
 // end-to-end custodial Signed turn.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1386,6 +1565,65 @@ mod tests {
             .await
             .unwrap();
         (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    /// The cross-platform link ceremony: an initData-authenticated Telegram account presents a
+    /// claim signed by root key K binding it to K — it verifies + records; a forged signature is
+    /// refused. (The registry write is redirected to a temp dir so the test does not touch the
+    /// real shared store.)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_tg_link_ceremony_verifies_a_root_claim_and_refuses_a_forgery() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let tmp = std::env::temp_dir().join(format!("dregg-linktest-{}", std::process::id()));
+        unsafe { std::env::set_var("DREGG_LINK_DIR", &tmp) };
+
+        let (state, _catalog, bot_secret) = test_state();
+        let app = tg_miniapp_router(state);
+        let uid = 555_000_111u64;
+        let init = header_for(uid);
+        let custodial = TelegramCipherclerk::derive(&bot_secret, uid).identity().0;
+        let challenge =
+            webauth_core::challenge::issue(&link_challenge_key(&bot_secret), unix_now(), 300);
+
+        let root = SigningKey::from_bytes(&[5u8; 32]);
+        let root_hex = hex32(&root.verifying_key().to_bytes());
+        let msg = webauth_core::link_claim::link_claim_message(
+            "telegram",
+            &uid.to_string(),
+            &custodial,
+            &root_hex,
+            &challenge,
+        )
+        .unwrap();
+        let sig_hex = |sk: &SigningKey| -> String {
+            sk.sign(&msg)
+                .to_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        };
+
+        // (a) a genuine root-key claim links.
+        let body = format!(
+            "root_pubkey_hex={root_hex}&signature_hex={}&challenge={}",
+            sig_hex(&root),
+            url_encode(&challenge)
+        );
+        let (st, out) = send(&app, "POST", "/tg/link", Some(&init), Some(&body)).await;
+        assert_eq!(st, StatusCode::OK, "genuine link claim verifies: {out}");
+        assert!(out.contains("\"ok\":true"), "{out}");
+
+        // (b) a forged signature (a different key over the same message) is refused.
+        let attacker = SigningKey::from_bytes(&[9u8; 32]);
+        let forged = format!(
+            "root_pubkey_hex={root_hex}&signature_hex={}&challenge={}",
+            sig_hex(&attacker),
+            url_encode(&challenge)
+        );
+        let (st2, _) = send(&app, "POST", "/tg/link", Some(&init), Some(&forged)).await;
+        assert_eq!(st2, StatusCode::FORBIDDEN, "a forged claim is refused");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[tokio::test(flavor = "multi_thread")]
