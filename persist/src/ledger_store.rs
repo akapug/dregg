@@ -299,7 +299,73 @@ impl PersistentStore {
 
         Ok(to_remove.len() as u64)
     }
+
+    // =========================================================================
+    // Boot baseline (#59)
+    // =========================================================================
+
+    /// Persist the ledger a node was seeded with at genesis — its BOOT BASELINE.
+    ///
+    /// Every finalized commit record's `ledger_root` commits the FULL ledger
+    /// (the genesis-seeded baseline ⊕ the cells that turn touched), NOT the
+    /// commit-log overlay in isolation. BELOW the first periodic ledger
+    /// checkpoint there is no full snapshot to reconstruct over, so the crash-
+    /// recovery walk must start from this baseline: the empty-base walk
+    /// ([`recover_to_last_consistent`](PersistentStore::recover_to_last_consistent))
+    /// can never reproduce a recorded root over a genesis-seeded image and would
+    /// falsely REFUSE a healthy sub-checkpoint node as unsalvageable (issue #59:
+    /// a solo node stopped before its first checkpoint could not restart on its
+    /// own healthy image). The node calls this ONCE, on the first boot whose
+    /// commit log is still empty, after it has seeded genesis into the ledger.
+    ///
+    /// The baseline is FROZEN once a turn has committed: the recorded roots were
+    /// computed over the exact saved baseline, so a rewrite (e.g. after a
+    /// seeding-config drift) would silently invalidate them. It is likewise
+    /// frozen once a ledger checkpoint exists — recovery then starts from the
+    /// checkpoint and a rewritten baseline could only shadow it. Either overwrite
+    /// is refused at this persistence boundary, not left to caller convention.
+    pub fn save_boot_baseline(&self, ledger: &Ledger) -> Result<()> {
+        if self.commit_cursor()? > 0 {
+            return Err(StoreError::Integrity(
+                "save_boot_baseline: the boot baseline is FROZEN once a turn has committed \
+                 (recorded roots were committed over it) — refusing the overwrite"
+                    .to_string(),
+            ));
+        }
+        if self.load_latest_ledger_checkpoint()?.is_some() {
+            return Err(StoreError::Integrity(
+                "save_boot_baseline: a ledger checkpoint exists — recovery starts from the \
+                 checkpoint and the boot baseline is frozen, refusing the overwrite"
+                    .to_string(),
+            ));
+        }
+        let snapshot = ledger_to_checkpoint(ledger, 0);
+        let bytes =
+            postcard::to_stdvec(&snapshot).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        self.set_config(BOOT_BASELINE_CONFIG_KEY, &bytes)
+    }
+
+    /// Load the saved boot baseline, if this store ever recorded one.
+    ///
+    /// Returns `None` on stores written before the baseline existed (their
+    /// sub-checkpoint recovery keeps the historical empty-base behavior) and on
+    /// stores with genuinely no boot seeding — every cell established by a
+    /// committed turn — for which the empty base IS the correct reconstruction.
+    pub fn load_boot_baseline(&self) -> Result<Option<Ledger>> {
+        match self.get_config(BOOT_BASELINE_CONFIG_KEY)? {
+            Some(bytes) => {
+                let snapshot: LedgerCheckpoint = postcard::from_bytes(&bytes)
+                    .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                Ok(Some(checkpoint_to_ledger(snapshot)))
+            }
+            None => Ok(None),
+        }
+    }
 }
+
+/// Config-table key under which [`PersistentStore::save_boot_baseline`] stores
+/// the genesis boot baseline (a height-0 [`LedgerCheckpoint`]).
+const BOOT_BASELINE_CONFIG_KEY: &str = "boot_baseline_ledger";
 
 // =============================================================================
 // Conversion helpers

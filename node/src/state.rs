@@ -741,9 +741,29 @@ impl NodeState {
         // whose reconstructed root matches; peers backfill the dropped turn(s) via
         // normal blocklace sync. No-op (returns 0) when already consistent; a
         // genuinely divergent image with NO matching prefix still Errs (fail-closed
-        // on tampering). Uses the existing `PersistentStore::recover_to_last_consistent`
+        // on tampering). Uses `PersistentStore::recover_to_last_consistent[_from_base]`
         // (persist/src/commit_log.rs); mirrors starbridge `World::open_recovering`.
-        match store.recover_to_last_consistent() {
+        //
+        // #59: BELOW the first periodic ledger checkpoint, every recorded
+        // `ledger_root` commits the genesis-seeded baseline ⊕ the overlay, so the
+        // empty-base walk can never reproduce it and would falsely refuse a
+        // healthy sub-checkpoint image. When this store saved a boot baseline
+        // (`save_boot_baseline`, in `run_node` after genesis seeding), reconstruct
+        // over it. A store WITHOUT a saved baseline keeps the exact prior
+        // behavior (empty-base walk) — no regression for pre-#59 or turn-only
+        // images, where the empty base is the correct reconstruction.
+        let boot_baseline = store.load_boot_baseline().unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                "could not load the saved boot baseline; recovering over an empty base"
+            );
+            None
+        });
+        let recovery = match &boot_baseline {
+            Some(base) => store.recover_to_last_consistent_from_base(base),
+            None => store.recover_to_last_consistent(),
+        };
+        match recovery {
             Ok(0) => {}
             Ok(n) => tracing::warn!(
                 truncated = n,
@@ -1049,9 +1069,29 @@ impl NodeState {
         // whose reconstructed root matches; peers backfill the dropped turn(s) via
         // normal blocklace sync. No-op (returns 0) when already consistent; a
         // genuinely divergent image with NO matching prefix still Errs (fail-closed
-        // on tampering). Uses the existing `PersistentStore::recover_to_last_consistent`
+        // on tampering). Uses `PersistentStore::recover_to_last_consistent[_from_base]`
         // (persist/src/commit_log.rs); mirrors starbridge `World::open_recovering`.
-        match store.recover_to_last_consistent() {
+        //
+        // #59: BELOW the first periodic ledger checkpoint, every recorded
+        // `ledger_root` commits the genesis-seeded baseline ⊕ the overlay, so the
+        // empty-base walk can never reproduce it and would falsely refuse a
+        // healthy sub-checkpoint image. When this store saved a boot baseline
+        // (`save_boot_baseline`, in `run_node` after genesis seeding), reconstruct
+        // over it. A store WITHOUT a saved baseline keeps the exact prior
+        // behavior (empty-base walk) — no regression for pre-#59 or turn-only
+        // images, where the empty base is the correct reconstruction.
+        let boot_baseline = store.load_boot_baseline().unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                "could not load the saved boot baseline; recovering over an empty base"
+            );
+            None
+        });
+        let recovery = match &boot_baseline {
+            Some(base) => store.recover_to_last_consistent_from_base(base),
+            None => store.recover_to_last_consistent(),
+        };
+        match recovery {
             Ok(0) => {}
             Ok(n) => tracing::warn!(
                 truncated = n,

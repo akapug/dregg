@@ -1267,6 +1267,29 @@ async fn run_node(
                                 "processed genesis starbridge_cells"
                             );
                         }
+                        // #59: freeze the genesis boot baseline so a restart BELOW
+                        // the first ledger checkpoint reconstructs over it (the
+                        // recorded roots commit baseline ⊕ overlay, never the
+                        // overlay alone). On the first boot the commit log is
+                        // still empty, so `s.ledger` here is exactly the seeded
+                        // baseline (no overlay applied yet) and the save succeeds;
+                        // on every later boot the persistence-boundary freeze
+                        // (`commit_cursor > 0`, or a checkpoint exists) refuses the
+                        // overwrite, keeping the ORIGINAL baseline the recorded
+                        // roots were committed over. A refused overwrite is the
+                        // expected steady state, not an error to surface.
+                        match s.store.save_boot_baseline(&s.ledger) {
+                            Ok(()) => info!(
+                                cells = s.ledger.len(),
+                                "saved the genesis boot baseline (#59: sub-checkpoint restart \
+                                 reconstructs over it)"
+                            ),
+                            Err(e) => tracing::debug!(
+                                error = %e,
+                                "boot baseline not (re)saved — already frozen by a prior commit \
+                                 or checkpoint (expected on restart)"
+                            ),
+                        }
                         info!(genesis = %genesis_path.display(), "genesis configuration loaded");
                     }
                     Err(e) => {

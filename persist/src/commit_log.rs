@@ -2333,6 +2333,77 @@ mod tests {
         );
     }
 
+    /// **Bug #59 falsifier (persist level).** A solo node seeded a genesis
+    /// baseline (a well cell) and committed ONE finalized turn — creating a cell
+    /// — BELOW its first ledger checkpoint. Every recorded `ledger_root` commits
+    /// the FULL ledger (baseline ⊕ the turn's cells), so:
+    ///
+    /// - RED pole — the empty-base walk (`recover_to_last_consistent`) cannot
+    ///   reproduce the recorded root (it is missing the genesis well) and REFUSES
+    ///   the whole image as unsalvageable. This is the bug: a healthy
+    ///   sub-checkpoint node is stranded, unable to restart on its own image.
+    /// - GREEN pole — reconstructing over the SAVED boot baseline
+    ///   (`load_boot_baseline` ⊕ overlay) converges to the recorded root, so the
+    ///   node restarts clean (`Ok(0)`, no tail truncated).
+    ///
+    /// Also pins the persistence-boundary FREEZE: once a turn has committed, the
+    /// baseline the recorded roots were built over is immutable — a re-save is
+    /// refused.
+    #[test]
+    fn boot_baseline_lets_a_subcheckpoint_node_recover_its_own_image() {
+        let store = PersistentStore::open_in_memory().unwrap();
+
+        // Genesis boot baseline: one well cell, NO ledger checkpoint yet.
+        let well = cell(0x91, 1_000);
+        let mut baseline = Ledger::new();
+        baseline.insert_cell(well.clone()).unwrap();
+
+        // Freeze the baseline before the first turn commits (cursor == 0).
+        store.save_boot_baseline(&baseline).unwrap();
+        let loaded = store
+            .load_boot_baseline()
+            .unwrap()
+            .expect("a saved baseline loads back");
+        assert_eq!(loaded.len(), 1, "the saved baseline round-trips its cells");
+
+        // One finalized turn CREATES a cell over the baseline. The recorded root
+        // commits baseline ⊕ {created} — the full ledger, well included.
+        let created = cell(0x42, 50);
+        let mut full = baseline.clone();
+        full.insert_cell(created.clone()).unwrap();
+        let recorded_root = crate::canonical_ledger_root(&full);
+
+        let mut rec = record(1, 0, vec![created.clone()]); // record(1,..).height == 2
+        rec.ledger_root = recorded_root;
+        rec.turn_hash[0] = 0x59;
+        store.commit_finalized_turn(0, &rec).unwrap();
+
+        // ── RED pole: the empty-base walk cannot reproduce the genesis-seeded
+        //    root, so NO prefix converges and the image is (falsely) refused.
+        assert!(
+            store.recover_to_last_consistent().is_err(),
+            "empty-base recovery must REFUSE a genesis-seeded sub-checkpoint image (bug #59): \
+             the overlay alone can never reproduce a root committed over the baseline"
+        );
+
+        // ── GREEN pole: reconstructing over the saved baseline converges — the
+        //    head is already consistent, nothing is truncated.
+        let base = store.load_boot_baseline().unwrap().unwrap();
+        assert_eq!(
+            store.recover_to_last_consistent_from_base(&base).unwrap(),
+            0,
+            "recovery over the saved boot baseline CONVERGES to the recorded root — the node \
+             restarts on its own healthy sub-checkpoint image"
+        );
+
+        // ── FREEZE: the baseline is immutable once a turn has committed over it.
+        assert!(
+            store.save_boot_baseline(&baseline).is_err(),
+            "re-saving the boot baseline after a commit must be REFUSED (the recorded roots were \
+             committed over the original baseline)"
+        );
+    }
+
     /// THE SAFETY TOOTH (refuse without a covering checkpoint): with NO ledger
     /// checkpoint at/above the requested height, `compact_below` deletes NOTHING
     /// — a record a checkpoint does not subsume is never removed (no lost
