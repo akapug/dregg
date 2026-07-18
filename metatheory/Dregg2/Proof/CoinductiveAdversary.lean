@@ -13,9 +13,12 @@ Lifts `ContendedCrossCell`'s finite two-turn dichotomy to an infinite adversaria
     `StepInv`-preserved predicate `Good` along the whole infinite trajectory.
 
   * **General case (`obsBisim_of_uptoComm`, §8)**: derives `ObsBisim` without a global
-    `IsBisim` witness, via the ported `Dregg2.Paco` `gupaco`/`gpaco_clo` up-to closure. Native
-    coinduction cannot thread per-step commutation rewrites under its recursive occurrence; Paco
-    does, sound by `commClo_compatible`.
+    `IsBisim` witness, from a bisimulation UP TO endpoint-rewriting along a SUPPLIED congruent
+    state equivalence (`StateEqv`, the `xeq` shape), via the ported `Dregg2.Paco` `gpaco_clo`
+    up-to closure. Native coinduction cannot thread the rewrite under its recursive occurrence;
+    Paco does, sound by `commClo_compatible` (= the congruence laws of the equivalence). §8b
+    witnesses strictness: the closure relates pairs the bare relation does not, and discharges
+    an `ObsBisim` that bare post-fixpoint coinduction on the same relation cannot.
 
 Deps: `Dregg2.Boundary`, `Dregg2.Confluence`,
 `Dregg2.Paco` (MIT, ported). The CG-5 / binding stays a hypothesis. Every keystone
@@ -263,32 +266,43 @@ theorem obsBisim_refl (Impl : TurnCoalg Obs AdmissibleTurn) (x : Impl.Carrier)
     ties the supplied relation back to `Confluence.IConfluent`.
 
   * **General case (`obsBisim_of_uptoComm`, §8):** derives `ObsBisim` WITHOUT being handed a
-    global `IsBisim` witness, by threading the per-step commutation rewrite through the ported
-    `Dregg2.Paco` `gupaco`/`gpaco_clo` up-to closure, sound by `commClo_compatible`.
+    global `IsBisim` witness, by threading a per-step endpoint rewrite along a SUPPLIED
+    congruent state equivalence (`StateEqv`) through the ported `Dregg2.Paco` `gpaco_clo`
+    up-to closure, sound by `commClo_compatible`; strictness of the closure witnessed in §8b.
 -/
 
-/-! ## §8 — CLOSING the §7 OPEN: the GENERAL case via the ported Paco `gupaco` up-to closure.
+/-! ## §8 — the GENERAL case via the ported Paco `gpaco_clo` up-to closure.
 
 §7 named the residue precisely: *deriving* `ObsBisim` for two coalgebras NOT handed a global
 witness `R`, where the per-step dichotomy only re-establishes the successor relatedness AFTER a
-finite commutation rewrite (`applyHalfOut_comm_disjoint`-shaped: the two disjoint commits yield
-PROVABLY-EQUAL successor states). Native `ObsBisim.coinduct` accepts only a bare post-fixpoint —
-the recursive occurrence must be *literally* `pred (n+1) (next …) (next …)`, never `pred` of a
-*commuted/rewritten* successor. The ported `Dregg2.Paco` supplies exactly the missing engine:
-parametrized coinduction (`paco`) plus an **up-to closure** (`gpaco_clo`) whose soundness is the
-companion/compatibility meta-theorem (`gpaco_clo_final` for a `Compatible` closure). We:
+rewrite of the endpoints (`applyHalfOut_comm_disjoint`-shaped: the two disjoint commit orders
+yield successor states that are provably EQUIVALENT — extensionally-equal ledgers, the
+`CrossCellBisim.xeq` shape — not syntactically identical). Native `ObsBisim.coinduct` accepts
+only a bare post-fixpoint — the recursive occurrence must be *literally*
+`pred (n+1) (next …) (next …)`, never `pred` of a *rewritten* successor. The ported
+`Dregg2.Paco` supplies exactly the missing engine: parametrized coinduction (`paco`) plus an
+**up-to closure** (`gpaco_clo`) whose soundness is the compatibility meta-theorem
+(`gpaco_clo_final` for a `Compatible` closure). We:
 
   1. re-present `ObsBisim` along a fixed schedule as a `paco` greatest fixpoint over the diagonal
      encoding `α = ℕ × Impl.Carrier × Spec.Carrier` (`obsGen`), and bridge `paco obsGen ⊥ ⇒ ObsBisim`
      (`obsBisim_of_paco`, via `ObsBisim.coinduct`);
-  2. define the **up-to-commutation closure** `commClo` — "rewrite either endpoint by a provable
-     state-equality (the finite commutation) before re-invoking the coinductive hypothesis" — and
-     prove it `Compatible` with `obsGen` (`commClo_compatible`): the closure native coinduction
-     cannot thread but `gpaco_clo` can;
-  3. CLOSE the general case (`obsBisim_of_uptoComm`): a relation that is a bisimulation *up to the
-     commutation closure* (successors related only after a commuting state-rewrite) derives the full
-     `ObsBisim` — threaded through `gpaco_clo`/`gpaco_clo_final` (sound by `commClo`'s compatibility),
-     NOT through a bare post-fixpoint. -/
+  2. define the **up-to-equivalence closure** `commClo E` — rewrite either endpoint along a
+     SUPPLIED congruent state equivalence `E : StateEqv` (reflexive, obs- and next-respecting;
+     e.g. `xeq` with `total_of_xeq`/`xcellNext_xeq_congr`) before re-invoking the coinductive
+     hypothesis — and prove it `Compatible` with `obsGen` (`commClo_compatible`): compatibility
+     is EXACTLY the two congruence laws of `E` pushed through one generator step;
+  3. derive the general case (`obsBisim_of_uptoComm`): a relation that is a bisimulation *up to
+     `commClo E`* (successors related only after an `E`-rewrite) yields the full `ObsBisim` —
+     threaded through `gpaco_clo`/`gpaco_clo_final`, NOT through a bare post-fixpoint.
+
+Strength, honestly: the principle is up-to-EQUIVALENCE, exactly as strong as the supplied `E` —
+with `E := Eq` it degenerates to the plain `paco` bridge, adding nothing (an earlier revision
+shipped precisely that degenerate syntactic-equality closure under this name; found vacuous
+2026-07-18 and replaced). It is NOT up-to-context or up-to-full-bisimilarity. §8b examines the
+strength: for a genuine `E`, `commClo E` relates pairs the bare relation does not
+(`commClo_proper`) and closes an `ObsBisim` bare coinduction is stuck on
+(`R0_not_postfixpoint` / `uptoComm_toy_obsBisim`). -/
 
 /-- The diagonal carrier for the Paco re-presentation: an indexed implementation/spec state pair. -/
 abbrev DiagPt (Impl Spec : TurnCoalg Obs AdmissibleTurn) : Type u :=
@@ -333,63 +347,121 @@ theorem obsBisim_of_paco
     · exact absurd hbot (by intro h; exact h.elim)
   · exact hp
 
-/-- **`commClo` — the up-to-commutation closure** on `DiagPt` relations. `commClo Q p q` holds iff
-`p, q` are reachable from a `Q`-related pair by rewriting each endpoint along a PROVABLE state
-equality (the `applyHalfOut_comm_disjoint`-shaped finite commutation: two disjoint commits produce
-equal successor states). This is the semantic closure native `coinductive` cannot wrap the recursive
-occurrence in; Paco threads it through `gpaco_clo`. It is monotone and reflexive (`Q ≤ commClo Q`). -/
-def commClo (Impl Spec : TurnCoalg Obs AdmissibleTurn) :
-    Rel (DiagPt Impl Spec) → Rel (DiagPt Impl Spec) :=
-  fun Q p q => ∃ p' q', p = p' ∧ q = q' ∧ Q p' q'
+/-- **`StateEqv` — a congruent state equivalence the coalgebra pair respects.** The rewrite
+relation the up-to closure is allowed to apply to endpoints: reflexive on each carrier, and
+respected by BOTH components of the behaviour functor — equivalent states emit EQUAL
+observations (`obs*_congr`) and step to equivalent successors on EVERY turn (`next*_congr`).
+This is precisely the data the executable kernel provides for extensional ledger equality
+(`Metatheory.Open.CrossCellBisim.xeq`: `xeq_refl` / `total_of_xeq` / `xcellNext_xeq_congr`).
+The congruence fields quantify over all states and turns — a `StateEqv` is a real congruence
+for the machine, not a per-point patch; its two congruence laws are exactly what
+`commClo_compatible` consumes. -/
+structure StateEqv (Impl Spec : TurnCoalg Obs AdmissibleTurn) where
+  /-- The equivalence on implementation states. -/
+  eqI : Rel Impl.Carrier
+  /-- The equivalence on spec states. -/
+  eqS : Rel Spec.Carrier
+  eqI_refl : ∀ a, eqI a a
+  eqS_refl : ∀ b, eqS b b
+  /-- Equivalent implementation states emit equal observations. -/
+  obsI_congr : ∀ {a a'}, eqI a a' → Impl.obs a = Impl.obs a'
+  /-- Equivalent spec states emit equal observations. -/
+  obsS_congr : ∀ {b b'}, eqS b b' → Spec.obs b = Spec.obs b'
+  /-- The implementation transition is a congruence for `eqI`, on every turn. -/
+  nextI_congr : ∀ {a a'} (t : AdmissibleTurn), eqI a a' → eqI (Impl.next a t) (Impl.next a' t)
+  /-- The spec transition is a congruence for `eqS`, on every turn. -/
+  nextS_congr : ∀ {b b'} (t : AdmissibleTurn), eqS b b' → eqS (Spec.next b t) (Spec.next b' t)
 
-theorem commClo_mono (Impl Spec : TurnCoalg Obs AdmissibleTurn) :
-    CloMono (commClo Impl Spec) := by
+/-- `E` lifted to diagonal points: SAME schedule index, componentwise `eqI`/`eqS`. -/
+def diagEqv {Impl Spec : TurnCoalg Obs AdmissibleTurn} (E : StateEqv Impl Spec) :
+    Rel (DiagPt Impl Spec) :=
+  fun p p' => p.1 = p'.1 ∧ E.eqI p.2.1 p'.2.1 ∧ E.eqS p.2.2 p'.2.2
+
+theorem diagEqv_refl {Impl Spec : TurnCoalg Obs AdmissibleTurn} (E : StateEqv Impl Spec)
+    (p : DiagPt Impl Spec) : diagEqv E p p :=
+  ⟨rfl, E.eqI_refl _, E.eqS_refl _⟩
+
+/-- One schedule tick is a congruence for `diagEqv`: the lifted equivalence survives `diagSucc`
+(the `next*_congr` fields pushed through the guarded successor; equal indices keep the two
+points on the same schedule turn). The lemma `commClo_compatible` leans on. -/
+theorem diagEqv_diagSucc {Impl Spec : TurnCoalg Obs AdmissibleTurn} (E : StateEqv Impl Spec)
+    (s : Sched AdmissibleTurn) {p p' : DiagPt Impl Spec} (h : diagEqv E p p') :
+    diagEqv E (diagSucc Impl Spec s p) (diagSucc Impl Spec s p') := by
+  obtain ⟨n, x, y⟩ := p
+  obtain ⟨n', x', y'⟩ := p'
+  obtain ⟨hn, hI, hS⟩ := h
+  dsimp only at hn
+  subst hn
+  exact ⟨rfl, E.nextI_congr (s n) hI, E.nextS_congr (s n) hS⟩
+
+/-- **`commClo E` — the up-to-equivalence (commutation) closure** on `DiagPt` relations.
+`commClo E Q p q` holds iff `p, q` are `diagEqv E`-rewrites of a `Q`-related pair: rewrite each
+endpoint along the supplied congruent state equivalence `E` (the residence of the
+`applyHalfOut_comm_disjoint`-shaped commutation: disjoint commit orders land in EQUIVALENT — not
+syntactically equal — ledgers) before re-invoking the coinductive hypothesis. This is the
+closure native `coinductive` cannot wrap the recursive occurrence in; Paco threads it through
+`gpaco_clo`. Monotone (`commClo_mono`), reflexive (`le_commClo`), and STRICTLY stronger than
+the identity closure for a genuine `E` (`commClo_proper`, §8b). -/
+def commClo {Impl Spec : TurnCoalg Obs AdmissibleTurn} (E : StateEqv Impl Spec) :
+    Rel (DiagPt Impl Spec) → Rel (DiagPt Impl Spec) :=
+  fun Q p q => ∃ p' q', diagEqv E p p' ∧ diagEqv E q q' ∧ Q p' q'
+
+theorem commClo_mono {Impl Spec : TurnCoalg Obs AdmissibleTurn} (E : StateEqv Impl Spec) :
+    CloMono (commClo E) := by
   intro Q Q' hQ p q ⟨p', q', hp, hq, hQpq⟩
   exact ⟨p', q', hp, hq, hQ _ _ hQpq⟩
 
-/-- `Q ≤ commClo Q` (the closure is reflexive: the trivial rewrite is identity). -/
-theorem le_commClo (Impl Spec : TurnCoalg Obs AdmissibleTurn) (Q : Rel (DiagPt Impl Spec)) :
-    Q ≤ commClo Impl Spec Q :=
-  fun p q hQ => ⟨p, q, rfl, rfl, hQ⟩
+/-- `Q ≤ commClo E Q` (the trivial rewrite is the reflexivity of `E`). -/
+theorem le_commClo {Impl Spec : TurnCoalg Obs AdmissibleTurn} (E : StateEqv Impl Spec)
+    (Q : Rel (DiagPt Impl Spec)) : Q ≤ commClo E Q :=
+  fun p q hQ => ⟨p, q, diagEqv_refl E p, diagEqv_refl E q, hQ⟩
 
-/-- **`commClo_compatible` — the up-to-commutation closure is `Compatible` with `obsGen`.**
-`commClo (obsGen Q) ≤ obsGen (commClo Q)`: rewriting the endpoints of an `obsGen`-step by state
-equalities preserves obs-agreement (equal states ⇒ equal observations) and lands the successor in
-`commClo Q` (the same equalities push through the guarded successor). This is the soundness
-meta-theorem the §7 OPEN said native coinduction lacked; it makes `gpaco_clo` with `commClo` sound. -/
-theorem commClo_compatible (Impl Spec : TurnCoalg Obs AdmissibleTurn) (s : Sched AdmissibleTurn) :
-    Compatible (obsGen Impl Spec s) (commClo Impl Spec) := by
+/-- **`commClo_compatible` — the up-to-equivalence closure is `Compatible` with `obsGen`:**
+`commClo E (obsGen Q) ≤ obsGen (commClo E Q)`. Rewriting the endpoints of a generator step
+along `E` preserves the observation agreement (the `obs*_congr` fields: equivalent states emit
+equal observations) and lands the successors back in `commClo E Q` (the `next*_congr` fields
+pushed through `diagSucc` — `diagEqv_diagSucc`). The soundness of the up-to technique reduces
+to exactly the two congruence laws of `E`; this is the meta-theorem the §7 OPEN said native
+coinduction lacked, and it makes `gpaco_clo` with `commClo E` sound. -/
+theorem commClo_compatible {Impl Spec : TurnCoalg Obs AdmissibleTurn} (E : StateEqv Impl Spec)
+    (s : Sched AdmissibleTurn) :
+    Compatible (obsGen Impl Spec s) (commClo E) := by
   intro Q p q ⟨p', q', hp, hq, hobs, hsucc⟩
-  -- `hp : p = p'`, `hq : q = q'`; rewrite the goal endpoints to `p'`, `q'`.
-  subst hp; subst hq
-  -- Goal: obsGen (commClo Q) p q = obs-agree(p,q) ∧ commClo Q (diagSucc p) (diagSucc q).
-  refine ⟨hobs, ?_⟩
-  -- successor lands in commClo Q via the reflexive (identity) rewrite.
-  exact ⟨diagSucc Impl Spec s p, diagSucc Impl Spec s q, rfl, rfl, hsucc⟩
+  -- Goal: obsGen (commClo E Q) p q = obs-agree(p,q) ∧ commClo E Q (diagSucc p) (diagSucc q).
+  refine ⟨?_, ?_⟩
+  · -- obs-agreement transports along the endpoint rewrites (equivalent states ⇒ equal obs).
+    exact (E.obsI_congr hp.2.1).trans (hobs.trans (E.obsS_congr hq.2.2).symm)
+  · -- successors: rewrite by the SAME equivalence pushed one tick (`diagEqv_diagSucc`).
+    exact ⟨diagSucc Impl Spec s p', diagSucc Impl Spec s q',
+      diagEqv_diagSucc E s hp, diagEqv_diagSucc E s hq, hsucc⟩
 
-/-- **`obsBisim_of_uptoComm` — THE GENERAL CASE, the §7 OPEN CLOSED.**
+/-- **`obsBisim_of_uptoComm` — the GENERAL case, up to a supplied congruent equivalence.**
 
-We are NOT handed a global `Boundary.IsBisim`. We are handed only a *bisimulation up to the
-commutation closure* `R`: for `R`-related diagonal points, (i) the observations agree now, and
-(ii) the guarded successors are related *only after the finite commutation rewrite* —
-`commClo … R`-related, NOT `R`-related directly. Native `ObsBisim.coinduct` cannot consume this
-(the recursive occurrence is wrapped in `commClo`, not bare). We DERIVE the full `ObsBisim` by
-threading `R` through the ported Paco up-to machinery: `R` is a post-fixpoint of
-`obsGen ∘ commClo`, so it lands in `gpaco_clo (obsGen…) (commClo…) ⊥ ⊥`, which `gpaco_clo_final`
-collapses to `gfp = paco (obsGen…) ⊥` BECAUSE `commClo` is `Compatible` (`commClo_compatible`);
-then `obsBisim_of_paco` bridges to `ObsBisim`. The up-to closure is applied *under* the greatest
-fixpoint while soundness is preserved by compatibility — exactly the `gupaco`-shaped principle the
-OPEN required. -/
+We are NOT handed a global `Boundary.IsBisim`. We are handed a congruent state equivalence
+`E : StateEqv Impl Spec` (obs- and next-respecting — e.g. extensional ledger equality `xeq`)
+and a relation `R` that is a *bisimulation up to `commClo E`*: for `R`-related diagonal points,
+(i) the observations agree now, and (ii) the guarded successors are related *only after an
+`E`-rewrite of the endpoints* — `commClo E R`-related, NOT `R`-related directly. Native
+`ObsBisim.coinduct` cannot consume this (the recursive occurrence is wrapped in `commClo E`,
+not bare; `R0_not_postfixpoint` in §8b is a concrete refusal). We DERIVE the full `ObsBisim`
+by threading `R` through the ported Paco up-to machinery: `R` is a post-fixpoint of
+`obsGen ∘ commClo E`, so it lands in `gpaco_clo (obsGen…) (commClo E) ⊥ ⊥`, which
+`gpaco_clo_final` collapses to `gfp = paco (obsGen…) ⊥` BECAUSE `commClo E` is `Compatible`
+(`commClo_compatible` — the congruence laws of `E`); then `obsBisim_of_paco` bridges to
+`ObsBisim`. Scope, honestly: this is up-to-EQUIVALENCE — exactly as strong as the supplied `E`
+(with `E := Eq` it degenerates to the plain paco bridge) — not up-to-context or
+up-to-full-bisimilarity; it closes the §7 OPEN precisely for commutations that land in an
+equivalence the machine respects. -/
 theorem obsBisim_of_uptoComm
     (Impl Spec : TurnCoalg Obs AdmissibleTurn) (s : Sched AdmissibleTurn)
-    (R : Rel (DiagPt Impl Spec))
+    (E : StateEqv Impl Spec) (R : Rel (DiagPt Impl Spec))
     (hstep : ∀ p q, R p q →
       Impl.obs p.2.1 = Spec.obs q.2.2 ∧
-        commClo Impl Spec R (diagSucc Impl Spec s p) (diagSucc Impl Spec s q))
+        commClo E R (diagSucc Impl Spec s p) (diagSucc Impl Spec s q))
     {n : ℕ} {x : Impl.Carrier} {y : Spec.Carrier} (hxy : R (n, x, y) (n, x, y)) :
     ObsBisim Impl Spec s s n x y := by
   set G := obsGen Impl Spec s with hG
-  set clo := commClo Impl Spec with hclo
+  set clo := commClo E with hclo
   -- (a) `gfp G = paco G ⊥` (paco with the empty parameter is the plain greatest fixpoint).
   have hpaco_bot : paco G ⊥ = G.toOrderHom.gfp := Paco.paco_bot G
   -- (b) `R` is a post-fixpoint of `G ∘ clo`: R ≤ G (clo R).  (obs now + successor in clo R.)
@@ -422,18 +494,124 @@ theorem obsBisim_of_uptoComm
       exact ⟨a', b', haa, hbb, Or.inl hRab'⟩
   -- (d) `gpaco_clo G clo ⊥ ⊥ ≤ gfp G` by compatibility of clo (`gpaco_clo_final`).
   have hfinal : gpaco_clo G clo ⊥ ⊥ ≤ G.toOrderHom.gfp :=
-    Paco.gpaco_clo_final G clo (commClo_mono Impl Spec) (commClo_compatible Impl Spec s)
+    Paco.gpaco_clo_final G clo (commClo_mono E) (commClo_compatible E s)
       ⊥ ⊥ (by intro p q h; exact h.elim) (by intro p q h; exact h.elim)
   -- (e) chain: R ≤ gpaco_clo ≤ gfp G = paco G ⊥, then bridge to ObsBisim.
   have hR_le_paco : R ≤ paco G ⊥ := by
     rw [hpaco_bot]; exact Rel.le_trans hR_le_gpaco hfinal
   exact obsBisim_of_paco Impl Spec s n x y (hR_le_paco _ _ hxy)
 
-/-! ## §9 — Axiom-hygiene tripwires for the CLOSED general case (all clean). -/
+/-! ## §8b — STRICTNESS EXAMINED: the closure is genuinely stronger than identity, and the
+up-to principle discharges a goal no bare post-fixpoint on the same relation can.
+
+Never ship a closure whose strength is unexamined. An earlier revision of `commClo` rewrote
+endpoints by *syntactic equality* — logically the identity closure (`∃ p' q', p = p' ∧ q = q' ∧
+Q p' q'` ⟺ `Q p q`) — so `commClo_compatible` was trivial and `obsBisim_of_uptoComm` added no
+proving power over the bare `obsBisim_of_paco`. Concrete witness that the present closure is not
+that: a two-counter toy machine whose observation is the SUM and whose step SWAPS the counters.
+`(1,2)` and `(2,1)` are extensionally equivalent (`sumEq`: equal sums — respected by obs and by
+the swap step) but NOT equal, so:
+
+  * `commClo_proper` — `commClo sumEqv R0` relates a pair the bare `R0` does not (the identity
+    closure provably relates exactly what `Q` relates, so it can never do this);
+  * `R0_not_postfixpoint` — `R0` is NOT a post-fixpoint of the bare generator (its successor
+    swaps out of `R0`): native/plain-paco coinduction on `R0` is stuck;
+  * `uptoComm_toy_obsBisim` — yet `obsBisim_of_uptoComm` derives the full `ObsBisim` from `R0`,
+    because the swapped successors re-enter via the `sumEq` endpoint rewrite. The up-to path
+    does real work. -/
+
+/-- Toy two-counter machine: observation = the sum, transition = SWAP the counters. `(1,2)` and
+`(2,1)` are observationally interchangeable but syntactically distinct — the minimal
+`xeq`-shaped situation (extensionally equal, not defeq). -/
+def swapCoalg : TurnCoalg ℕ Unit where
+  Carrier := ℕ × ℕ
+  step p := (p.1 + p.2, fun _ => (p.2, p.1))
+
+@[simp] theorem swapCoalg_obs (p : ℕ × ℕ) : swapCoalg.obs p = p.1 + p.2 := rfl
+@[simp] theorem swapCoalg_next (p : ℕ × ℕ) (t : Unit) : swapCoalg.next p t = (p.2, p.1) := rfl
+
+/-- Extensional equality for the toy machine: equal sums. A GENUINE equivalence, strictly
+coarser than `Eq`, that the machine respects. -/
+def sumEq : Rel (ℕ × ℕ) := fun a a' => a.1 + a.2 = a'.1 + a'.2
+
+/-- `sumEq` is a `StateEqv` for the toy machine: the observation IS the sum, and the swap step
+maps equal sums to equal sums (`Nat.add_comm`). -/
+def sumEqv : StateEqv swapCoalg swapCoalg where
+  eqI := sumEq
+  eqS := sumEq
+  eqI_refl _ := rfl
+  eqS_refl _ := rfl
+  obsI_congr h := h
+  obsS_congr h := h
+  nextI_congr _ h := by simp only [sumEq, swapCoalg_next] at h ⊢; omega
+  nextS_congr _ h := by simp only [sumEq, swapCoalg_next] at h ⊢; omega
+
+/-- The base relation of the demonstration: exactly the diagonal points sitting at state
+`((1,2),(1,2))` (any index). Its generator-successor SWAPS to `(2,1)` — leaving `R0` — but the
+successor is `sumEq`-equivalent to `(1,2)`, so it re-enters `commClo sumEqv R0`. -/
+def R0 : Rel (DiagPt swapCoalg swapCoalg) :=
+  fun p q => p.2 = ((1, 2), (1, 2)) ∧ q.2 = ((1, 2), (1, 2))
+
+/-- **`commClo_proper` — STRICTNESS WITNESS: the closure relates a pair the bare relation does
+not.** `(0, (2,1), (2,1))` is `sumEq`-equivalent (but NOT equal) to the `R0` point, so it is in
+`commClo sumEqv R0` while `R0` itself rejects it. The earlier identity closure could not relate
+anything beyond `Q`; this one does — its strength is exactly the supplied equivalence. -/
+theorem commClo_proper :
+    commClo sumEqv R0 (0, (2, 1), (2, 1)) (0, (1, 2), (1, 2)) ∧
+      ¬ R0 (0, (2, 1), (2, 1)) (0, (1, 2), (1, 2)) := by
+  constructor
+  · -- `sumEq (2,1) (1,2)` is `2+1 = 1+2`, closed by literal reduction (both are `3`).
+    exact ⟨(0, (1, 2), (1, 2)), (0, (1, 2), (1, 2)),
+      ⟨rfl, rfl, rfl⟩, diagEqv_refl _ _, rfl, rfl⟩
+  · rintro ⟨h, -⟩
+    -- `((2,1),(2,1)) = ((1,2),(1,2))` is false: project out the first counter (`2 = 1`).
+    have h21 : (2 : ℕ) = 1 := congrArg (fun z => z.1.1) h
+    omega
+
+/-- **`R0_not_postfixpoint` — the bare route is stuck:** the generator-successor of the `R0`
+start point swaps the counters out of `R0` (for ANY schedule), so `R0` is not a post-fixpoint
+of `obsGen` and neither native `ObsBisim.coinduct` nor plain `paco` coinduction accepts it.
+Together with `uptoComm_toy_obsBisim` this shows the up-to path is not a re-statement of the
+bare one. -/
+theorem R0_not_postfixpoint (s : Sched Unit) :
+    ¬ R0 (diagSucc swapCoalg swapCoalg s (0, (1, 2), (1, 2)))
+        (diagSucc swapCoalg swapCoalg s (0, (1, 2), (1, 2))) := by
+  have hsucc : diagSucc swapCoalg swapCoalg s (0, (1, 2), (1, 2)) = (1, (2, 1), (2, 1)) := rfl
+  rintro ⟨h, -⟩
+  rw [hsucc] at h
+  -- the successor state is the SWAP `((2,1),(2,1))`, not `((1,2),(1,2))`: project `2 = 1`.
+  have h21 : (2 : ℕ) = 1 := congrArg (fun z => z.1.1) h
+  omega
+
+/-- The up-to step: `R0` is a bisimulation UP TO `commClo sumEqv` — observations agree (both
+sides emit `3`), and the swapped successors re-enter via the `sumEq` endpoint rewrite. -/
+theorem R0_uptoStep (s : Sched Unit) : ∀ p q, R0 p q →
+    swapCoalg.obs p.2.1 = swapCoalg.obs q.2.2 ∧
+      commClo sumEqv R0 (diagSucc swapCoalg swapCoalg s p) (diagSucc swapCoalg swapCoalg s q) := by
+  rintro ⟨np, xp⟩ ⟨nq, xq⟩ ⟨hp, hq⟩
+  dsimp only at hp hq
+  subst hp; subst hq
+  -- the swapped successors `(2,1)` rewrite to `(1,2)` by `sumEq` (both sums are `3`, `rfl`).
+  exact ⟨rfl, (np + 1, (1, 2), (1, 2)), (nq + 1, (1, 2), (1, 2)),
+    ⟨rfl, rfl, rfl⟩, ⟨rfl, rfl, rfl⟩, rfl, rfl⟩
+
+/-- **`uptoComm_toy_obsBisim` — the up-to principle does REAL work:** from `R0` — on which bare
+coinduction is stuck (`R0_not_postfixpoint`) — `obsBisim_of_uptoComm` with the genuine
+equivalence `sumEqv` derives the full coinductive `ObsBisim` for the toy machine, along every
+schedule. -/
+theorem uptoComm_toy_obsBisim (s : Sched Unit) :
+    ObsBisim swapCoalg swapCoalg s s 0 (1, 2) (1, 2) :=
+  obsBisim_of_uptoComm swapCoalg swapCoalg s sumEqv R0 (R0_uptoStep s) ⟨rfl, rfl⟩
+
+/-! ## §9 — Axiom-hygiene tripwires for the general case + strictness witnesses (all clean). -/
 
 #assert_axioms obsGen
 #assert_axioms obsBisim_of_paco
+#assert_axioms diagEqv_diagSucc
 #assert_axioms commClo_compatible
 #assert_axioms obsBisim_of_uptoComm
+#assert_axioms commClo_proper
+#assert_axioms R0_not_postfixpoint
+#assert_axioms uptoComm_toy_obsBisim
 
 end Dregg2.Proof.CoinductiveAdversary

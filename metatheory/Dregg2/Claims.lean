@@ -397,8 +397,14 @@ So this §23 claim is about kernel/Merkle emission on the v1 rail; it asserts NO
 first-party Rust-authored DSL circuits (`dsl/{revocation,derivation,note_spending,fold,...}.rs`), whose
 constraints have no Lean model. `#assert_namespace_axioms` below checks AXIOM HYGIENE only — it cannot
 notice a claim pointing at a dead system with a different grammar.
-`Proof.CoinductiveAdversary` (`obsBisim_of_uptoComm`) closes the coinductive open via
-vendored Paco (gupaco up-to-context closure). -/
+`Proof.CoinductiveAdversary` (`obsBisim_of_uptoComm`) derives the coinductive `ObsBisim` from a
+bisimulation up to `commClo E` — endpoint rewriting along a SUPPLIED congruent state equivalence
+`E : StateEqv` (obs/next-respecting, the `xeq` shape) — via vendored Paco (`gpaco_clo` +
+compatibility). Up-to-EQUIVALENCE strength only (exactly as strong as the supplied `E`; closure
+strictness witnessed in-file by `commClo_proper`/`uptoComm_toy_obsBisim`), NOT
+up-to-context/up-to-bisimilarity. An earlier revision's closure was syntactic equality — the
+identity closure, zero added power over the plain paco bridge — found vacuous and replaced
+2026-07-18. -/
 #assert_namespace_axioms Dregg2.Exec.TurnExecutor
 #assert_namespace_axioms Dregg2.Exec.Forest
 #assert_namespace_axioms Dregg2.Exec.CircuitEmit
