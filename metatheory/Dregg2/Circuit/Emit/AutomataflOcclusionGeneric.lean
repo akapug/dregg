@@ -46,16 +46,20 @@ are the semantics of the emitted heads, not a re-authored model of them:
     line; `OsrcIsOtherSource`: `osrc` is the passable-mask indicator of the other moving source),
     the emitted threshold bit equals the reference `occluded` — at any `n`, for any rook move.
 
-## The honest seam
+## The honest seam — NOW DISCHARGED (see `AutomataflOcclusionBridge`)
 
 These hypotheses (`LineReadsVert`, `OsrcIsOtherSource`, the one-hot pins) are exactly what
 `AutomataflResolveEmit.lineHead` / `oneHotGatedConstraints` / `efromHead` / `etoHead` emit gates FOR.
-Discharging them FROM `Satisfied2 automataflResolveDescN …` requires the descriptor itself to be
-n-parametric; today `automataflResolveDesc` is the `NN = 2` instance with a byte-pinned wire golden,
-and its column layout bakes 2-wide sub-blocks. So this file proves the MATHEMATICAL content that was
-previously vacuous, and the remaining work is the descriptor-parametrisation + re-derivation of the
-`_of_sat` glue, NOT the occlusion argument. Nothing here is stated at `n = 11` as though the
-capstone reached it.
+`AutomataflResolveEmit.automataflResolveDesc` is now `NN`-PARAMETRIC (every column offset and gadget
+family a function of `NN`, instantiated at `NN = 2` with the byte golden UNCHANGED), and
+`AutomataflOcclusionBridge` discharges EVERY hypothesis of `occ_eq_occluded_vert/horiz` from
+`Satisfied2 automataflResolveDesc`: `efrom_oneHot` / `eto_oneHot` (the `iv`-gated selection IS a
+genuine along-axis one-hot), `lineReadsVert/Horiz_of_sat`, `osrcMeansVert/Horiz_of_sat`,
+`lineRange_of_sat`, `occ_col_iff_msumVal`. The assembled `occ_iff_occluded_of_sat` is the emitted
+`cOcc` = reference `occluded`, UNCONDITIONAL off `Satisfied2`, at the instantiated `NN = 2`. At that
+board size both sides are `false` — but through THIS generic threshold/mask/one-hot machinery, not
+`interior_nil_n2` vacuity; a contentful occlusion leg needs `NN ≥ 3`. Nothing here or there is stated
+at `n = 11` as though the capstone reached it.
 
 Axiom hygiene: definitions + theorems, no `sorry`, no `native_decide`. Imports the reference game
 module only.
@@ -411,13 +415,22 @@ def LineReadsVert (line : Nat → ℤ) (b : Board) (x n : Nat) : Prop :=
 def LineReadsHoriz (line : Nat → ℤ) (b : Board) (y n : Nat) : Prop :=
   ∀ k, k < n → (line k = 0 ↔ (b.cellAt ⟨k, y⟩).isVacuum = true)
 
-/-- The gated other-source mask marks exactly the along-indices occupied by a moving source on this
-line (`mark_passable`): `osrc k = 1` iff the coordinate at along-index `k` is in `srcs`. -/
-def OsrcIsOtherSourceVert (osrc : Nat → ℤ) (srcs : List Coord) (x n : Nat) : Prop :=
-  ∀ k, k < n → (osrc k = 1 ↔ srcs.contains ⟨x, k⟩ = true)
+/-- The gated other-source mask marks exactly the STRICTLY-INTERIOR along-indices occupied by a
+moving source on this line (`mark_passable`): for `k` strictly between the endpoints, `osrc k = 1`
+iff the coordinate at along-index `k` is in `srcs`.
 
-def OsrcIsOtherSourceHoriz (osrc : Nat → ℤ) (srcs : List Coord) (y n : Nat) : Prop :=
-  ∀ k, k < n → (osrc k = 1 ↔ srcs.contains ⟨k, y⟩ = true)
+**The interior restriction is not a convenience, it is the emitted truth.** The descriptor's
+`oneHotGatedConstraints` marks the OTHER move's source only, so at `k = m.frm.y` (this move's own
+source, which IS in `srcs`) the mask reads `0` while `srcs.contains` is `true`. An unrestricted
+version of this predicate is therefore FALSE of the emitted columns and could never be discharged.
+Restricting to `Between` weakens the hypothesis — strengthening the theorem — and loses nothing:
+`occluded` only ever inspects the interior, and the endpoints are excluded from `interior` by
+construction. -/
+def OsrcIsOtherSourceVert (osrc : Nat → ℤ) (srcs : List Coord) (x n af at_ : Nat) : Prop :=
+  ∀ k, k < n → Between af at_ k → (osrc k = 1 ↔ srcs.contains ⟨x, k⟩ = true)
+
+def OsrcIsOtherSourceHoriz (osrc : Nat → ℤ) (srcs : List Coord) (y n af at_ : Nat) : Prop :=
+  ∀ k, k < n → Between af at_ k → (osrc k = 1 ↔ srcs.contains ⟨k, y⟩ = true)
 
 /-- **THE OCCLUSION REFINEMENT, VERTICAL, AT ARBITRARY BOARD SIZE.**
 
@@ -436,7 +449,7 @@ theorem occ_eq_occluded_vert {efrom eto osrc line : Nat → ℤ} {n : Nat}
     (hosrc : ∀ k, k < n → osrc k = 0 ∨ osrc k = 1)
     (hlineRange : ∀ k, k < n → 0 ≤ line k ∧ line k ≤ 3)
     (hlineRead : LineReadsVert line b m.frm.x n)
-    (hosrcMeans : OsrcIsOtherSourceVert osrc srcs m.frm.x n) :
+    (hosrcMeans : OsrcIsOtherSourceVert osrc srcs m.frm.x n m.frm.y m.to.y) :
     (1 ≤ msumVal (segVal efrom eto n) osrc line n) ↔ occluded b srcs m = true := by
   rw [msum_ge_one_iff hf ht hosrc hlineRange, occluded_vert_iff b srcs m hvert]
   constructor
@@ -447,18 +460,19 @@ theorem occ_eq_occluded_vert {efrom eto osrc line : Nat → ℤ} {n : Nat}
     · intro hvac
       exact hne ((hlineRead k hk).mpr hvac)
     · intro hcon
-      have : osrc k = 1 := (hosrcMeans k hk).mpr hcon
+      have : osrc k = 1 := (hosrcMeans k hk hb).mpr hcon
       omega
   · rintro ⟨y, hlo, hhi, hv, hs⟩
     have hyn : y < n := by omega
-    refine ⟨y, hyn, ?_, ?_, ?_⟩
-    · unfold Between
+    have hbet : Between m.frm.y m.to.y y := by
+      unfold Between
       rcases Nat.lt_or_ge m.frm.y m.to.y with h | h
       · left; constructor <;> omega
       · right; constructor <;> omega
+    refine ⟨y, hyn, hbet, ?_, ?_⟩
     · rcases hosrc y hyn with h0 | h1
       · exact h0
-      · exact absurd ((hosrcMeans y hyn).mp h1) hs
+      · exact absurd ((hosrcMeans y hyn hbet).mp h1) hs
     · intro hz
       exact hv ((hlineRead y hyn).mp hz)
 
@@ -472,7 +486,7 @@ theorem occ_eq_occluded_horiz {efrom eto osrc line : Nat → ℤ} {n : Nat}
     (hosrc : ∀ k, k < n → osrc k = 0 ∨ osrc k = 1)
     (hlineRange : ∀ k, k < n → 0 ≤ line k ∧ line k ≤ 3)
     (hlineRead : LineReadsHoriz line b m.frm.y n)
-    (hosrcMeans : OsrcIsOtherSourceHoriz osrc srcs m.frm.y n) :
+    (hosrcMeans : OsrcIsOtherSourceHoriz osrc srcs m.frm.y n m.frm.x m.to.x) :
     (1 ≤ msumVal (segVal efrom eto n) osrc line n) ↔ occluded b srcs m = true := by
   rw [msum_ge_one_iff hf ht hosrc hlineRange, occluded_horiz_iff b srcs m hhoriz]
   constructor
@@ -483,18 +497,19 @@ theorem occ_eq_occluded_horiz {efrom eto osrc line : Nat → ℤ} {n : Nat}
     · intro hvac
       exact hne ((hlineRead k hk).mpr hvac)
     · intro hcon
-      have : osrc k = 1 := (hosrcMeans k hk).mpr hcon
+      have : osrc k = 1 := (hosrcMeans k hk hb).mpr hcon
       omega
   · rintro ⟨x, hlo, hhi, hv, hs⟩
     have hxn : x < n := by omega
-    refine ⟨x, hxn, ?_, ?_, ?_⟩
-    · unfold Between
+    have hbet : Between m.frm.x m.to.x x := by
+      unfold Between
       rcases Nat.lt_or_ge m.frm.x m.to.x with h | h
       · left; constructor <;> omega
       · right; constructor <;> omega
+    refine ⟨x, hxn, hbet, ?_, ?_⟩
     · rcases hosrc x hxn with h0 | h1
       · exact h0
-      · exact absurd ((hosrcMeans x hxn).mp h1) hs
+      · exact absurd ((hosrcMeans x hxn hbet).mp h1) hs
     · intro hz
       exact hv ((hlineRead x hxn).mp hz)
 

@@ -109,10 +109,20 @@ set_option autoImplicit false
 
 /-! ## §1 — Constants (`reference.rs`). The board is `n×n`; the auto is a compile-time coord. -/
 
-/-- The board dimension. `validate_move`'s families are `NN`-generic; this file emits `n = 2`. -/
+/-- The board dimension. EVERY gadget family and EVERY column offset below is a function of `NN`;
+this file INSTANTIATES `n = 2` (the minimal complete instance, kept so the emitted artifact stays
+byte-comparable with the pinned golden). Changing this single definition re-lays the whole trace:
+the coordinate bit-widths (`COORD_RBITS`), the per-move block (`MV_BLOCK_WIDTH`), the occlusion
+block (`OCC_BLOCK_WIDTH`), the adjudication base (`RES0`) and the total width (`R_WIDTH`) all move
+with it. -/
 def NN : Nat := 2
 /-- `k = n²`, the number of board cells. -/
 def KK : Nat := NN * NN
+
+/-- `decompose_coord_le`'s bit width — `ceil(log2 n)`, the number of bits needed to hold a
+coordinate in `[0, n)`. `1` at `n = 2`, `4` at `n = 11`. Both edges of the range decomposition
+(`coord = Σ 2^k b_k` and `(n−1) − coord = Σ 2^k b'_k`) carry this many bits. -/
+def COORD_RBITS : Nat := if NN ≤ 1 then 1 else Nat.log2 (NN - 1) + 1
 /-- The automaton particle felt code (`reference.rs::AUTO`). The NOT-AUTO gates gate the move's
 `frm`/`to` against the WITNESSED auto position — the cell where `old == AUTO`, read from the board
 by a row×column one-hot (`autoReadConstraints`), exactly as `AutomataflStepEmit`'s auto pin — NOT a
@@ -144,20 +154,28 @@ product `AUTO == Σ selRow·selCol·old` forcing `(ax, ay)` to be the cell holdi
 /-- The witnessed automaton x/y coordinate columns. -/
 def AX_C : Nat := 2 * KK + 1
 def AY_C : Nat := 2 * KK + 2
-/-- `decompose_coord_le` bits for `ax` / `ay` at `n = 2` (`rbits = 1`): lower then upper edge. -/
+/-- `decompose_coord_le` bit runs for `ax` / `ay`, each `COORD_RBITS` wide, lower then upper edge
+(at `n = 2`, `COORD_RBITS = 1`, so these are the single columns `2k+3 … 2k+6`). -/
 def axLo : Nat := 2 * KK + 3
-def axHi : Nat := 2 * KK + 4
-def ayLo : Nat := 2 * KK + 5
-def ayHi : Nat := 2 * KK + 6
-/-- The auto ROW one-hot (pinned to `ay`) and COLUMN one-hot (pinned to `ax`). -/
-def selAutoRow (y : Nat) : Nat := 2 * KK + 7 + y
-def selAutoCol (x : Nat) : Nat := 2 * KK + 7 + NN + x
-/-- Width of the shared auto-read block: `ax`/`ay` (2) + coord bits (4) + `2n` one-hot selectors. -/
-def AUTO_BLOCK_WIDTH : Nat := 6 + 2 * NN
+def axHi : Nat := 2 * KK + 3 + COORD_RBITS
+def ayLo : Nat := 2 * KK + 3 + 2 * COORD_RBITS
+def ayHi : Nat := 2 * KK + 3 + 3 * COORD_RBITS
+/-- The auto ROW one-hot (pinned to `ay`) and COLUMN one-hot (pinned to `ax`), `n` selectors each. -/
+def selAutoRow (y : Nat) : Nat := 2 * KK + 3 + 4 * COORD_RBITS + y
+def selAutoCol (x : Nat) : Nat := 2 * KK + 3 + 4 * COORD_RBITS + NN + x
+/-- Width of the shared auto-read block: `ax`/`ay` (2) + `4·COORD_RBITS` coord bits + `2n` one-hot
+selectors. `6 + 2n` at `COORD_RBITS = 1`. -/
+def AUTO_BLOCK_WIDTH : Nat := 2 + 4 * COORD_RBITS + 2 * NN
 
-/-- The first column of a move's 23-column `validate_move` block. Move A: base `2k+1+autoBlock`;
-move B: that `+ 23`. (The auto-read block sits between `one` and the moves.) -/
-def mvBase (which : Nat) : Nat := 2 * KK + 1 + AUTO_BLOCK_WIDTH + 23 * which
+/-- Width of one `validate_move` block: 4 coordinate columns + `8·COORD_RBITS` range bits (two edges
+on each of four coordinates) + `dsq`/`inv`/`fa`/`inv`/`ta`/`inv` (6) + the source particle (1) +
+`2n` source one-hot selectors. `23` at `n = 2`. -/
+def MV_BLOCK_WIDTH : Nat := 4 + 8 * COORD_RBITS + 6 + 1 + 2 * NN
+
+/-- The first column of a move's `MV_BLOCK_WIDTH`-column `validate_move` block. Move A: base
+`2k+1+autoBlock`; move B: that `+ MV_BLOCK_WIDTH`. (The auto-read block sits between `one` and the
+moves.) -/
+def mvBase (which : Nat) : Nat := 2 * KK + 1 + AUTO_BLOCK_WIDTH + MV_BLOCK_WIDTH * which
 
 /-! ### §2.1 — The per-move column block, at base `b`. -/
 
@@ -166,31 +184,37 @@ def cFx (b : Nat) : Nat := b + 0
 def cFy (b : Nat) : Nat := b + 1
 def cTx (b : Nat) : Nat := b + 2
 def cTy (b : Nat) : Nat := b + 3
-/-- `decompose_coord_le` bits (lower edge / upper edge) for each coordinate at `rbits = 1`. -/
+/-- `decompose_coord_le` bit runs (lower edge / upper edge) for each coordinate, `COORD_RBITS` wide
+each, laid out `fx.lo fx.hi fy.lo fy.hi tx.lo tx.hi ty.lo ty.hi`. -/
 def cFxLo (b : Nat) : Nat := b + 4
-def cFxHi (b : Nat) : Nat := b + 5
-def cFyLo (b : Nat) : Nat := b + 6
-def cFyHi (b : Nat) : Nat := b + 7
-def cTxLo (b : Nat) : Nat := b + 8
-def cTxHi (b : Nat) : Nat := b + 9
-def cTyLo (b : Nat) : Nat := b + 10
-def cTyHi (b : Nat) : Nat := b + 11
+def cFxHi (b : Nat) : Nat := b + 4 + COORD_RBITS
+def cFyLo (b : Nat) : Nat := b + 4 + 2 * COORD_RBITS
+def cFyHi (b : Nat) : Nat := b + 4 + 3 * COORD_RBITS
+def cTxLo (b : Nat) : Nat := b + 4 + 4 * COORD_RBITS
+def cTxHi (b : Nat) : Nat := b + 4 + 5 * COORD_RBITS
+def cTyLo (b : Nat) : Nat := b + 4 + 6 * COORD_RBITS
+def cTyHi (b : Nat) : Nat := b + 4 + 7 * COORD_RBITS
+/-- The first column after the coordinate range bits. -/
+def mvPost (b : Nat) : Nat := b + 4 + 8 * COORD_RBITS
 /-- Distinctness squared distance + its `cond_nonzero` witnessed inverse. -/
-def cDsq (b : Nat) : Nat := b + 12
-def cDistinctInv (b : Nat) : Nat := b + 13
+def cDsq (b : Nat) : Nat := mvPost b + 0
+def cDistinctInv (b : Nat) : Nat := mvPost b + 1
 /-- The `frm ≠ auto` squared distance + inverse. -/
-def cFa (b : Nat) : Nat := b + 14
-def cFnaInv (b : Nat) : Nat := b + 15
+def cFa (b : Nat) : Nat := mvPost b + 2
+def cFnaInv (b : Nat) : Nat := mvPost b + 3
 /-- The `to ≠ auto` squared distance + inverse. -/
-def cTa (b : Nat) : Nat := b + 16
-def cTnaInv (b : Nat) : Nat := b + 17
+def cTa (b : Nat) : Nat := mvPost b + 4
+def cTnaInv (b : Nat) : Nat := mvPost b + 5
 /-- The witnessed source particle `fp == old[n·fy + fx]`. -/
-def cFp (b : Nat) : Nat := b + 18
-/-- The source row×column one-hot pair (pinned to `fy` / `fx`). -/
-def cSelRow0 (b : Nat) : Nat := b + 19
-def cSelRow1 (b : Nat) : Nat := b + 20
-def cSelCol0 (b : Nat) : Nat := b + 21
-def cSelCol1 (b : Nat) : Nat := b + 22
+def cFp (b : Nat) : Nat := mvPost b + 6
+/-- The source row / column one-hots (pinned to `fy` / `fx`), `n` selectors each. -/
+def cSelRow (b j : Nat) : Nat := mvPost b + 7 + j
+def cSelCol (b j : Nat) : Nat := mvPost b + 7 + NN + j
+/-- The `n = 2` names, retained for the refinement's gate-membership fields. -/
+def cSelRow0 (b : Nat) : Nat := cSelRow b 0
+def cSelRow1 (b : Nat) : Nat := cSelRow b 1
+def cSelCol0 (b : Nat) : Nat := cSelCol b 0
+def cSelCol1 (b : Nat) : Nat := cSelCol b 1
 
 /-! ### §2.2 — The per-move OCCLUSION block (leg 2), at base `o`.
 
@@ -218,51 +242,68 @@ fixes. This Lean author emits a WITNESSED `is_vertical` BIT instead:
 
 Costs width, buys generality: the descriptor covers ANY rook move, not one shape. -/
 
-/-- `DIFF_RBITS` (moves.rs) — the range width for the squared-distance is-zero / `msum` threshold. -/
+/-- `DIFF_RBITS` (moves.rs) — the range width for the squared-distance is-zero / `msum` threshold.
+Independent of the column LAYOUT but not of `n`: it must hold `2·(n−1)²` (the largest squared
+coordinate distance) and `3n` (the largest masked interior sum). `9` bits covers both through
+`n = 16`, so `n = 2` and the `n = 11` target share this width. -/
 def RBITS : Nat := 9
-/-- `SMALL_RBITS` (moves.rs) — the narrow range width, used by the source-non-vacuum bits. -/
+/-- `SMALL_RBITS` (moves.rs) — the narrow range width, used by the source-non-vacuum bits (it ranges
+over the particle alphabet `{0,1,2,3}` only, so it is `n`-independent). -/
 def SMALL_RBITS : Nat := 5
+
+/-- One `eq_scalar` / `forced_ge0` sub-block: `dsq`, the `neq` bit, its `RBITS` range bits, and the
+`eq` bit. `12` columns at `RBITS = 9`. -/
+def EQ_BLOCK_WIDTH : Nat := 3 + RBITS
+
+/-- Width of one occlusion block: the `iv` `eq_scalar` pin (`EQ_BLOCK_WIDTH`) + six `n`-wide vectors
+(`line`, `ety`, `etx`, `efrom`, `eto`, `seg`) + the two passable `eq_scalar`s (`2·EQ_BLOCK_WIDTH`) +
+`og` (1) + the `n`-wide `osrc` + `msum`/`occ` and its `RBITS` range bits. `62` at `n = 2`. -/
+def OCC_BLOCK_WIDTH : Nat := 3 * EQ_BLOCK_WIDTH + 7 * NN + 3 + RBITS
 
 /-- The first column of a move's `OCC_BLOCK_WIDTH`-column occlusion block. The occlusion blocks
 follow BOTH `validate_move` blocks, exactly as `emit_resolution` orders the allocation. -/
-def occBase (which : Nat) : Nat := 2 * KK + 1 + AUTO_BLOCK_WIDTH + 23 * 2 + 62 * which
+def occBase (which : Nat) : Nat :=
+  2 * KK + 1 + AUTO_BLOCK_WIDTH + MV_BLOCK_WIDTH * 2 + OCC_BLOCK_WIDTH * which
 
 /-- The witnessed `is_vertical` pin: `dxsq == (fx−tx)²`, its `forced_ge0` bit + range bits, and the
 boolean `iv == 1 − [dxsq ≥ 1]`. -/
 def cIvDsq (o : Nat) : Nat := o + 0
 def cIvNeq (o : Nat) : Nat := o + 1
 def ivNeqBit (o k : Nat) : Nat := o + 2 + k
-def cIv (o : Nat) : Nat := o + 11
+def cIv (o : Nat) : Nat := o + 2 + RBITS
+/-- The first column after the `iv` pin — the base of the six `n`-wide vectors. -/
+def occVec (o : Nat) : Nat := o + EQ_BLOCK_WIDTH
 /-- The gated line-extract `line[k]`. -/
-def cLine (o k : Nat) : Nat := o + 12 + k
+def cLine (o k : Nat) : Nat := occVec o + k
 /-- The `to`-endpoint one-hots: `ety` (pinned to `ty`, the vertical branch) and `etx` (`tx`). -/
-def cEty (o j : Nat) : Nat := o + 14 + j
-def cEtx (o j : Nat) : Nat := o + 16 + j
+def cEty (o j : Nat) : Nat := occVec o + NN + j
+def cEtx (o j : Nat) : Nat := occVec o + 2 * NN + j
 /-- The gated along-axis endpoint one-hots feeding the between-mask. -/
-def cEfrom (o j : Nat) : Nat := o + 18 + j
-def cEto (o j : Nat) : Nat := o + 20 + j
+def cEfrom (o j : Nat) : Nat := occVec o + 3 * NN + j
+def cEto (o j : Nat) : Nat := occVec o + 4 * NN + j
 /-- The strictly-between mask. -/
-def cSeg (o k : Nat) : Nat := o + 22 + k
+def cSeg (o k : Nat) : Nat := occVec o + 5 * NN + k
+/-- The base of the two passable-comparison `eq_scalar` blocks. -/
+def occEq (o : Nat) : Nat := occVec o + 6 * NN
 /-- `eqx == [other.fx == fx]` (the vertical branch's passable comparison). -/
-def cEqxDsq (o : Nat) : Nat := o + 24
-def cEqxNeq (o : Nat) : Nat := o + 25
-def eqxBit (o k : Nat) : Nat := o + 26 + k
-def cEqx (o : Nat) : Nat := o + 35
+def cEqxDsq (o : Nat) : Nat := occEq o + 0
+def cEqxNeq (o : Nat) : Nat := occEq o + 1
+def eqxBit (o k : Nat) : Nat := occEq o + 2 + k
+def cEqx (o : Nat) : Nat := occEq o + 2 + RBITS
 /-- `eqy == [other.fy == fy]` (the horizontal branch's passable comparison). -/
-def cEqyDsq (o : Nat) : Nat := o + 36
-def cEqyNeq (o : Nat) : Nat := o + 37
-def eqyBit (o k : Nat) : Nat := o + 38 + k
-def cEqy (o : Nat) : Nat := o + 47
+def cEqyDsq (o : Nat) : Nat := occEq o + EQ_BLOCK_WIDTH + 0
+def cEqyNeq (o : Nat) : Nat := occEq o + EQ_BLOCK_WIDTH + 1
+def eqyBit (o k : Nat) : Nat := occEq o + EQ_BLOCK_WIDTH + 2 + k
+def cEqy (o : Nat) : Nat := occEq o + EQ_BLOCK_WIDTH + 2 + RBITS
+/-- The base of the mask/threshold tail. -/
+def occTail (o : Nat) : Nat := occEq o + 2 * EQ_BLOCK_WIDTH
 /-- The gated other-source mask: its gate `og` and its gated one-hot. -/
-def cOg (o : Nat) : Nat := o + 48
-def cOsrc (o j : Nat) : Nat := o + 49 + j
+def cOg (o : Nat) : Nat := occTail o + 0
+def cOsrc (o j : Nat) : Nat := occTail o + 1 + j
 /-- The masked interior sum and the `occ = [msum ≥ 1]` threshold bit + its range bits. -/
-def cMsum (o : Nat) : Nat := o + 51
-def cOcc (o : Nat) : Nat := o + 52
-def occBit (o k : Nat) : Nat := o + 53 + k
-/-- Width of one occlusion block: `iv` pin (12) + line (2) + endpoint one-hots (8) + seg (2) +
-passable masks (27) + `msum`/`occ` (11). -/
-def OCC_BLOCK_WIDTH : Nat := 62
+def cMsum (o : Nat) : Nat := occTail o + 1 + NN
+def cOcc (o : Nat) : Nat := occTail o + 2 + NN
+def occBit (o k : Nat) : Nat := occTail o + 3 + NN + k
 
 /-! ### §2.3 — The ADJUDICATION columns (legs 3–8), continuing the `emit_resolution` alloc order.
 
@@ -279,24 +320,27 @@ the `is_vertical` branch (§2.2) there is nothing here to convert: the gates alr
 board and any move shape. -/
 
 /-- The first adjudication column — the end of the validity+occlusion prefix. -/
-def RES0 : Nat := 2 * KK + 1 + AUTO_BLOCK_WIDTH + 23 * 2 + OCC_BLOCK_WIDTH * 2
+def RES0 : Nat := 2 * KK + 1 + AUTO_BLOCK_WIDTH + MV_BLOCK_WIDTH * 2 + OCC_BLOCK_WIDTH * 2
 
 /-- Leg 3 — `anz`/`bnz`, each a `forced_ge0(fp − 1, SMALL_RBITS)` source-non-vacuum bit. -/
 def cAnz : Nat := RES0
 def anzBit (k : Nat) : Nat := RES0 + 1 + k
-def cBnz : Nat := RES0 + 6
-def bnzBit (k : Nat) : Nat := RES0 + 7 + k
+def cBnz : Nat := RES0 + 1 + SMALL_RBITS
+def bnzBit (k : Nat) : Nat := RES0 + 2 + SMALL_RBITS + k
 
-/-- Leg 4 — the four `eq_coords` blocks (`eq_ff`, `eq_tt`, `eq_ab`, `eq_ba`), 12 columns each:
-`dsq`, the `forced_ge0` bit + its `DIFF_RBITS` range bits, and the `eq` bit. -/
-def eqBase (i : Nat) : Nat := RES0 + 12 + 12 * i
+/-- The first column after the two non-vacuum bits. -/
+def NZ_WIDTH : Nat := 2 * (1 + SMALL_RBITS)
+
+/-- Leg 4 — the four `eq_coords` blocks (`eq_ff`, `eq_tt`, `eq_ab`, `eq_ba`), `EQ_BLOCK_WIDTH`
+columns each: `dsq`, the `forced_ge0` bit + its `DIFF_RBITS` range bits, and the `eq` bit. -/
+def eqBase (i : Nat) : Nat := RES0 + NZ_WIDTH + EQ_BLOCK_WIDTH * i
 def cEqDsq (e : Nat) : Nat := e + 0
 def cEqNeq (e : Nat) : Nat := e + 1
 def eqBitAt (e k : Nat) : Nat := e + 2 + k
-def cEqBit (e : Nat) : Nat := e + 11
+def cEqBit (e : Nat) : Nat := e + 2 + RBITS
 
 /-- Leg 4 (cont.) — the selection truth table: `fork`, `¬eq_ff`, the collide product chain, `surv`. -/
-def SEL0 : Nat := RES0 + 60
+def SEL0 : Nat := RES0 + NZ_WIDTH + 4 * EQ_BLOCK_WIDTH
 def cFork : Nat := SEL0 + 0
 def cNeqFf : Nat := SEL0 + 1
 def cCol1 : Nat := SEL0 + 2
@@ -332,13 +376,16 @@ def cFtB : Nat := FT0 + 13
 pieces, a source row/column one-hot pair then a destination row/column one-hot pair (`2n` selectors
 per endpoint, `8` columns per piece, in `one_hot_rowcol`'s row-then-column order). -/
 def WR0 : Nat := FT0 + 14
-def wSrcRow (i j : Nat) : Nat := WR0 + 8 * i + j
-def wSrcCol (i j : Nat) : Nat := WR0 + 8 * i + 2 + j
-def wDstRow (i j : Nat) : Nat := WR0 + 8 * i + 4 + j
-def wDstCol (i j : Nat) : Nat := WR0 + 8 * i + 6 + j
+/-- Four `n`-wide one-hots per piece: source row, source column, destination row, destination
+column. `8` columns per piece at `n = 2`. -/
+def WR_PIECE_WIDTH : Nat := 4 * NN
+def wSrcRow (i j : Nat) : Nat := WR0 + WR_PIECE_WIDTH * i + j
+def wSrcCol (i j : Nat) : Nat := WR0 + WR_PIECE_WIDTH * i + NN + j
+def wDstRow (i j : Nat) : Nat := WR0 + WR_PIECE_WIDTH * i + 2 * NN + j
+def wDstCol (i j : Nat) : Nat := WR0 + WR_PIECE_WIDTH * i + 3 * NN + j
 
 /-- Leg 8 — `bind_board_roots`: the shared `mh8_zero` pad column and the two 8-felt roots. -/
-def MH0 : Nat := WR0 + 16
+def MH0 : Nat := WR0 + WR_PIECE_WIDTH * 2
 def MH8_ZERO : Nat := MH0
 def oldRootCols : List Nat := (List.range 8).map (MH0 + 1 + ·)
 def midRootCols : List Nat := (List.range 8).map (MH0 + 9 + ·)
@@ -411,29 +458,48 @@ lowering of `ConditionalNonzero`; a fresh witnessed inverse column `inv`). -/
 def gCondNonzero (sel val inv : Nat) : EmittedExpr :=
   .mul (.var sel) (.add (.mul (.var val) (.var inv)) (.const (-1)))
 
+/-! ### §3.1 — The `n`-generic range primitive (hoisted: `decomposeConstraints` uses it).
+
+`Builder::range_nonneg(head, rbits)` with bits at `bit0 ..< bit0+rbits`: each bit boolean, then the
+recomposition `head − Σ 2^k·b_k == 0`. A negative/over-range head has no satisfying bits, so the leaf
+is UNSAT — the genuine non-negativity proof. -/
+def rangeNonnegConstraints (h : Head) (bit0 rbits : Nat) : List VmConstraint2 :=
+  (List.range rbits).map (fun k => cg (gBin (bit0 + k)))
+  ++ [ cgH ((List.range rbits).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k)) h) ]
+
 /-! ## §4 — `validate_move` (moves.rs), the per-move validity gate block at base `b`. -/
 
-/-- `decompose_coord_le(col, n−1)` at `n = 2` (`rbits = 1`): the lower edge `col = b_lo` and the
-upper edge `(n−1) − col = b_hi`, each a boolean bit + its recomposition gate. -/
-def decomposeConstraints (col loBit hiBit : Nat) : List VmConstraint2 :=
-  [ cg (gBin loBit)
-  , cgH ((Head.lin 1 col).addLin (-1) loBit)                              -- col − b_lo == 0
-  , cg (gBin hiBit)
-  , cgH (((Head.c ((NN : ℤ) - 1)).addLin (-1) col).addLin (-1) hiBit) ]   -- (n−1) − col − b_hi == 0
+/-- `decompose_coord_le(col, n−1)` — the `COORD_RBITS`-bit range decomposition of BOTH edges: the
+lower edge `col = Σ 2^k b_k` and the upper edge `(n−1) − col = Σ 2^k b'_k`, each bit boolean plus its
+recomposition gate. At `n = 2` (`COORD_RBITS = 1`) this is the old two-bit form verbatim; at
+`n = 11` it is four bits per edge. -/
+def decomposeConstraints (col loBit0 hiBit0 : Nat) : List VmConstraint2 :=
+  rangeNonnegConstraints (Head.lin 1 col) loBit0 COORD_RBITS
+  ++ rangeNonnegConstraints ((Head.c ((NN : ℤ) - 1)).addLin (-1) col) hiBit0 COORD_RBITS
 
-/-- A one-hot's two gates (`Builder::one_hot`): `Σ selⱼ == 1` and `Σ j·selⱼ == indexHead`. Written
-for the `n = 2` pair `[sel0, sel1]` pinned to `idxCol` (a bare coordinate column). -/
-def oneHotConstraints (sel0 sel1 idxCol : Nat) : List VmConstraint2 :=
-  [ cg (gBin sel0)
-  , cg (gBin sel1)
-  , cgH (((Head.c (-1)).addLin 1 sel0).addLin 1 sel1)               -- sel0 + sel1 − 1 == 0
-  , cgH ((Head.lin 1 sel1).addLin (-1) idxCol) ]                    -- (0·sel0 + 1·sel1) − idx == 0
+/-- A one-hot's gates (`Builder::one_hot`), `n`-generically over a selector LIST and a general index
+HEAD (the `AutomataflStepEmit.oneHotConstraints` shape): every selector boolean, `Σ selⱼ == 1`, and
+`Σ j·selⱼ == idx`. The `j = 0` term carries coefficient `0` and is dropped by `headToExpr`, so at
+`n = 2` this emits byte-identically to the old hand-written pair. -/
+def oneHotConstraints (sels : List Nat) (idx : Head) : List VmConstraint2 :=
+  sels.map (fun s => cg (gBin s))
+  ++ [ cgH (sels.foldl (fun acc s => acc.addLin 1 s) (Head.c (-1))) ]
+  ++ [ cgH (((sels.zipIdx.foldl (fun acc p => acc.addLin (p.2 : ℤ) p.1) Head.zero)).append
+              (idx.scale (-1))) ]
 
-/-- The witnessed source read `fp − Σ_y Σ_x selRow[y]·selCol[x]·old[y·n+x] == 0` at `n = 2`. -/
+/-- The one-hot pinned to a bare coordinate COLUMN — the common case. -/
+def oneHotAtCol (sels : List Nat) (idxCol : Nat) : List VmConstraint2 :=
+  oneHotConstraints sels (Head.lin 1 idxCol)
+
+/-- The source row / column selector lists for the move at base `b`. -/
+def selRowCols (b : Nat) : List Nat := (List.range NN).map (cSelRow b)
+def selColCols (b : Nat) : List Nat := (List.range NN).map (cSelCol b)
+
+/-- The witnessed source read `fp − Σ_y Σ_x selRow[y]·selCol[x]·old[y·n+x] == 0`, an `n×n` fold. -/
 def sourceReadHead (b : Nat) : Head :=
-  ((((Head.lin 1 (cFp b)).addProd (-1) [cSelRow0 b, cSelCol0 b, old 0]).addProd (-1)
-      [cSelRow0 b, cSelCol1 b, old 1]).addProd (-1) [cSelRow1 b, cSelCol0 b, old 2]).addProd (-1)
-      [cSelRow1 b, cSelCol1 b, old 3]
+  (List.range NN).foldl (fun h y =>
+    (List.range NN).foldl (fun h2 x =>
+      h2.addProd (-1) [cSelRow b y, cSelCol b x, old (y * NN + x)]) h) (Head.lin 1 (cFp b))
 
 /-- The squared-distance definition `dsq − (fx−tx)² − (fy−ty)²`, expanded exactly as moves.rs
 `validate_move`'s distinctness head. -/
@@ -464,8 +530,8 @@ one-hot @ `ax`, the auto pin). -/
 def autoReadConstraints : List VmConstraint2 :=
   decomposeConstraints AX_C axLo axHi
   ++ decomposeConstraints AY_C ayLo ayHi
-  ++ oneHotConstraints (selAutoRow 0) (selAutoRow 1) AY_C     -- auto row one-hot @ ay
-  ++ oneHotConstraints (selAutoCol 0) (selAutoCol 1) AX_C     -- auto col one-hot @ ax
+  ++ oneHotAtCol ((List.range NN).map selAutoRow) AY_C        -- auto row one-hot @ ay
+  ++ oneHotAtCol ((List.range NN).map selAutoCol) AX_C        -- auto col one-hot @ ax
   ++ [ cgH autoPinHead ]
 
 /-- The rook-alignment gate `(fx−tx)(fy−ty) == 0`, expanded as
@@ -487,19 +553,12 @@ def validateMove (b : Nat) : List VmConstraint2 :=
   ++ [ cg (gCondNonzero ONE (cFa b) (cFnaInv b)) ]                  -- frm ≠ auto
   ++ [ cgH (autoDistHead (cTa b) (cTx b) (cTy b)) ]                 -- ta = |to − auto|²
   ++ [ cg (gCondNonzero ONE (cTa b) (cTnaInv b)) ]                  -- to ≠ auto
-  ++ oneHotConstraints (cSelRow0 b) (cSelRow1 b) (cFy b)            -- source row one-hot @ fy
-  ++ oneHotConstraints (cSelCol0 b) (cSelCol1 b) (cFx b)            -- source col one-hot @ fx
+  ++ oneHotAtCol (selRowCols b) (cFy b)                             -- source row one-hot @ fy
+  ++ oneHotAtCol (selColCols b) (cFx b)                             -- source col one-hot @ fx
   ++ [ cgH (sourceReadHead b) ]                                     -- fp == old[n·fy + fx]
 
 /-! ## §4.5 — The `builder.rs` range primitives, in Lean (`range_nonneg` / `forced_ge0` /
 `eq_scalar` / `one_hot_gated`), then `validate_occlusion` with the WITNESSED direction bit. -/
-
-/-- `Builder::range_nonneg(head, rbits)` with bits at `bit0 ..< bit0+rbits`: each bit boolean, then
-the recomposition `head − Σ 2^k·b_k == 0`. A negative/over-range head has no satisfying bits, so the
-leaf is UNSAT — the genuine non-negativity proof. -/
-def rangeNonnegConstraints (h : Head) (bit0 rbits : Nat) : List VmConstraint2 :=
-  (List.range rbits).map (fun k => cg (gBin (bit0 + k)))
-  ++ [ cgH ((List.range rbits).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k)) h) ]
 
 /-- `Builder::forced_ge0`'s range head `2·ib·d + ib − d − 1` (verbatim term order). -/
 def forcedGe0Term (d : Head) (ib : Nat) : Head :=
@@ -523,14 +582,14 @@ def eqScalarConstraints (a c dsqCol neqCol bit0 eqCol : Nat) : List VmConstraint
   ++ forcedGe0Constraints ((Head.lin 1 dsqCol).addConst (-1)) neqCol bit0
   ++ [ cgH (((Head.lin 1 eqCol).addLin 1 neqCol).addConst (-1)) ]
 
-/-- `Builder::one_hot_gated` at `n = 2`: selectors boolean, `Σ sel == gate`, and
+/-- `Builder::one_hot_gated`, `n`-generically: selectors boolean, `Σ sel == gate`, and
 `Σ j·selⱼ == gate·indexHead` (the index head multiplied THROUGH the gate, term by term). -/
-def oneHotGatedConstraints (sel0 sel1 gate : Nat) (idx : Head) : List VmConstraint2 :=
-  [ cg (gBin sel0)
-  , cg (gBin sel1)
-  , cgH (((Head.lin (-1) gate).addLin 1 sel0).addLin 1 sel1)
-  , cgH ((idx.terms.foldl (fun acc t => acc.addProd (-t.1) (gate :: t.2))
-            ((Head.lin 0 sel0).addLin 1 sel1)).addProd (-idx.const) [gate]) ]
+def oneHotGatedConstraints (sels : List Nat) (gate : Nat) (idx : Head) : List VmConstraint2 :=
+  sels.map (fun s => cg (gBin s))
+  ++ [ cgH (sels.foldl (fun acc s => acc.addLin 1 s) (Head.lin (-1) gate)) ]
+  ++ [ cgH ((idx.terms.foldl (fun acc t => acc.addProd (-t.1) (gate :: t.2))
+              (sels.zipIdx.foldl (fun acc p => acc.addLin (p.2 : ℤ) p.1) Head.zero)).addProd
+              (-idx.const) [gate]) ]
 
 /-- The WITNESSED `is_vertical` bit: `iv == [fx == tx]`, by `eq_scalar` over the move's own
 witnessed coordinate columns. THIS is the pin to the real geometry — the bit cannot disagree with
@@ -542,16 +601,16 @@ def isVerticalConstraints (b o : Nat) : List VmConstraint2 :=
 old[y·n+k])` — BOTH scans emitted, the column-scan gated by `iv`, the row-scan by `1−iv`. -/
 def lineHead (b o k : Nat) : Head :=
   let hv := (List.range NN).foldl (fun h x =>
-    h.addProd (-1) [cIv o, cSelCol0 b + x, old (k * NN + x)]) (Head.lin 1 (cLine o k))
+    h.addProd (-1) [cIv o, cSelCol b x, old (k * NN + x)]) (Head.lin 1 (cLine o k))
   (List.range NN).foldl (fun h y =>
-    (h.addProd (-1) [cSelRow0 b + y, old (y * NN + k)]).addProd 1
-      [cIv o, cSelRow0 b + y, old (y * NN + k)]) hv
+    (h.addProd (-1) [cSelRow b y, old (y * NN + k)]).addProd 1
+      [cIv o, cSelRow b y, old (y * NN + k)]) hv
 
 /-- `efrom[j] == iv·selRow[j] + (1−iv)·selCol[j]` — the along-axis SOURCE one-hot, selected by the
 witnessed bit from `validate_move`'s two source one-hots (vertical ⇒ the row index `fy`). -/
 def efromHead (b o j : Nat) : Head :=
-  (((Head.lin 1 (cEfrom o j)).addProd (-1) [cIv o, cSelRow0 b + j]).addLin (-1)
-      (cSelCol0 b + j)).addProd 1 [cIv o, cSelCol0 b + j]
+  (((Head.lin 1 (cEfrom o j)).addProd (-1) [cIv o, cSelRow b j]).addLin (-1)
+      (cSelCol b j)).addProd 1 [cIv o, cSelCol b j]
 
 /-- `eto[j] == iv·ety[j] + (1−iv)·etx[j]` — the along-axis DESTINATION one-hot, selected from the
 two unconditionally-pinned endpoint one-hots. -/
@@ -589,15 +648,15 @@ mask, passable mask, masked sum + threshold). -/
 def validateOcclusion (b o ob : Nat) : List VmConstraint2 :=
   isVerticalConstraints b o
   ++ (List.range NN).map (fun k => cgH (lineHead b o k))
-  ++ oneHotConstraints (cEty o 0) (cEty o 1) (cTy b)              -- e_to (vertical) @ ty
-  ++ oneHotConstraints (cEtx o 0) (cEtx o 1) (cTx b)              -- e_to (horizontal) @ tx
+  ++ oneHotAtCol ((List.range NN).map (cEty o)) (cTy b)           -- e_to (vertical) @ ty
+  ++ oneHotAtCol ((List.range NN).map (cEtx o)) (cTx b)           -- e_to (horizontal) @ tx
   ++ (List.range NN).map (fun j => cgH (efromHead b o j))
   ++ (List.range NN).map (fun j => cgH (etoHead o j))
   ++ (List.range NN).map (fun k => cgH (segHead o k))
   ++ eqScalarConstraints (cFx ob) (cFx b) (cEqxDsq o) (cEqxNeq o) (eqxBit o 0) (cEqx o)
   ++ eqScalarConstraints (cFy ob) (cFy b) (cEqyDsq o) (cEqyNeq o) (eqyBit o 0) (cEqy o)
   ++ [ cgH (ogHead o) ]
-  ++ oneHotGatedConstraints (cOsrc o 0) (cOsrc o 1) (cOg o)
+  ++ oneHotGatedConstraints ((List.range NN).map (cOsrc o)) (cOg o)
        ((((Head.zero.addProd 1 [cIv o, cFy ob]).addLin 1 (cFx ob)).addProd (-1) [cIv o, cFx ob]))
   ++ [ cgH (msumHead o) ]
   ++ forcedGe0Constraints ((Head.lin 1 (cMsum o)).addConst (-1)) (cOcc o) (occBit o 0)
@@ -702,14 +761,6 @@ def destHead (own other ft : Nat) : Head :=
 
 /-! ### Leg 7 — `write_mid_witnessed`, the per-cell one-hot board rewrite. -/
 
-/-- `Builder::one_hot` at `n = 2` pinned to a general index HEAD (the `oneHotConstraints` twin used
-by the rewrite, whose destination indices are the interpolated `destHead`s, not bare columns). -/
-def oneHotHeadConstraints (sel0 sel1 : Nat) (idx : Head) : List VmConstraint2 :=
-  [ cg (gBin sel0)
-  , cg (gBin sel1)
-  , cgH (((Head.c (-1)).addLin 1 sel0).addLin 1 sel1)
-  , cgH (((Head.lin 0 sel0).addLin 1 sel1).append (idx.scale (-1))) ]
-
 /-- The carry column of piece `i`. -/
 def carryCol (i : Nat) : Nat := if i == 0 then cCarryA else cCarryB
 /-- The witnessed source particle of piece `i` (`validate_move`'s bound `fp`). -/
@@ -721,10 +772,10 @@ destination column @ `dest_x`). -/
 def writeEndpointConstraints : List VmConstraint2 :=
   (List.range 2).flatMap (fun i =>
     let b := mvBase i; let ob := mvBase (1 - i); let ft := if i == 0 then cFtA else cFtB
-    oneHotHeadConstraints (wSrcRow i 0) (wSrcRow i 1) (Head.lin 1 (cFy b))
-    ++ oneHotHeadConstraints (wSrcCol i 0) (wSrcCol i 1) (Head.lin 1 (cFx b))
-    ++ oneHotHeadConstraints (wDstRow i 0) (wDstRow i 1) (destHead (cTy b) (cTy ob) ft)
-    ++ oneHotHeadConstraints (wDstCol i 0) (wDstCol i 1) (destHead (cTx b) (cTx ob) ft))
+    oneHotConstraints ((List.range NN).map (wSrcRow i)) (Head.lin 1 (cFy b))
+    ++ oneHotConstraints ((List.range NN).map (wSrcCol i)) (Head.lin 1 (cFx b))
+    ++ oneHotConstraints ((List.range NN).map (wDstRow i)) (destHead (cTy b) (cTy ob) ft)
+    ++ oneHotConstraints ((List.range NN).map (wDstCol i)) (destHead (cTx b) (cTx ob) ft))
 
 /-- The per-cell rewrite head. With `keep[c] = (1 − is_src[c])·(1 − land[c])`,
 `mid[c] == keep[c]·old[c] + Σ_i carry_i·sel_dst_i[c]·particle_i`, expanded exactly as moves.rs:
@@ -789,7 +840,10 @@ EQUALITY-CONSTRAINED to the very board columns the rewrite proves over, so a for
 and the published PI is a genuine ~124-bit commitment to `old` and to `mid`. -/
 def bindBoardRootsConstraints : List VmConstraint2 :=
   let zeroLeaf := List.replicate 8 MH8_ZERO
-  let leaf (cells : List Nat) : List Nat := cells ++ List.replicate 4 MH8_ZERO
+  -- At `k ≤ 8` the whole board packs into ONE zero-padded leaf. This is the ONE place the layout is
+  -- not yet `n`-generic in the sense of covering `n = 11` (`k = 121`), which needs a real
+  -- `board_root8` Merkle TREE rather than a single padded leaf; the padding width itself is `8 − k`.
+  let leaf (cells : List Nat) : List Nat := cells ++ List.replicate (8 - KK) MH8_ZERO
   [ cgH (Head.lin 1 MH8_ZERO) ]
   ++ [ node8Lookup (leaf ((List.range KK).map old)) zeroLeaf oldRootCols ]
   ++ (List.range 8).map (fun i =>
@@ -873,6 +927,31 @@ def automataflResolveDesc : EffectVmDescriptor2 :=
 #guard occBase 0 == 65
 #guard occBase 1 == occBase 0 + OCC_BLOCK_WIDTH
 #guard occBit (occBase 1) 8 + 1 == RES0
+-- the PARAMETRIC widths agree with the n=2 instance they replaced (the re-derivation canary: these
+-- are now computed from NN / COORD_RBITS / RBITS, not written down)
+#guard COORD_RBITS == 1
+#guard MV_BLOCK_WIDTH == 23
+#guard OCC_BLOCK_WIDTH == 62
+#guard EQ_BLOCK_WIDTH == 12
+#guard AUTO_BLOCK_WIDTH == 10
+#guard WR_PIECE_WIDTH == 8
+#guard NZ_WIDTH == 12
+-- the per-move block tiles: the last source-column selector is the block's final column
+#guard cSelCol (mvBase 0) (NN - 1) + 1 == mvBase 1
+#guard cSelCol (mvBase 1) (NN - 1) + 1 == occBase 0
+-- the coordinate bit runs tile the block without overlap
+#guard cTyHi (mvBase 0) + COORD_RBITS == mvPost (mvBase 0)
+-- the occlusion sub-blocks tile
+#guard cIv (occBase 0) + 1 == occVec (occBase 0)
+#guard cSeg (occBase 0) (NN - 1) + 1 == occEq (occBase 0)
+#guard cEqy (occBase 0) + 1 == occTail (occBase 0)
+#guard occBit (occBase 0) (RBITS - 1) + 1 == occBase 1
+-- the adjudication sub-blocks tile
+#guard bnzBit (SMALL_RBITS - 1) + 1 == eqBase 0
+#guard cEqBit (eqBase 3) + 1 == SEL0
+#guard wDstCol 1 (NN - 1) + 1 == MH0
+-- COORD_RBITS is the real ceil(log2 n): it holds n−1 and no fewer bits would
+#guard NN - 1 < 2 ^ COORD_RBITS
 -- the witnessed direction bit is pinned by an eq_scalar over the move's OWN coordinate columns
 #guard (isVerticalConstraints (mvBase 0) (occBase 0)).length == 13
 -- the ADJUDICATION legs (3-8) tile the trace tail exactly: they start where the occlusion blocks
