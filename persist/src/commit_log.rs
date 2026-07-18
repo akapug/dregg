@@ -129,6 +129,26 @@ impl CommitRecord {
     }
 }
 
+/// The two-sided cell overlay a `checkpoint ⊕ overlay` reconstruction applies:
+/// the last-writer-wins POST-STATES of every cell a post-checkpoint committed
+/// turn touched, AND the ids such a turn REMOVED (destroyed, or removed
+/// hosted→sovereign by MakeSovereign) whose removal no later turn superseded
+/// with a re-creation (fifth-pass review F4-A, upstream emberian/dregg#57).
+///
+/// Consumers apply `cells` (upsert, any order — already a last-writer-wins
+/// projection) and then DELETE every id in `removed`. The two sets are disjoint
+/// by construction (a re-created cell is in `cells`, not `removed`), so the
+/// application order between them does not matter.
+#[derive(Clone, Debug, Default)]
+pub struct CellOverlay {
+    /// Last-writer-wins post-states of post-checkpoint touched cells.
+    pub cells: Vec<Cell>,
+    /// Ids removed by a post-checkpoint turn and never re-created afterwards.
+    /// An id absent from the checkpoint base too (created and removed both
+    /// above it) is a harmless no-op delete.
+    pub removed: Vec<CellId>,
+}
+
 /// Report from [`PersistentStore::verify_index_agrees_with_log`].
 ///
 /// `ok()` is true exactly when the secondary index is in perfect agreement with
@@ -243,7 +263,32 @@ impl PersistentStore {
         expected_ordinal: u64,
         record: &CommitRecord,
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None, &[])
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None, &[], &[])
+    }
+
+    /// [`Self::commit_finalized_turn`] PLUS the turn's REMOVED-cell id set in
+    /// the SAME redb transaction — the durable removal weld (fifth-pass review
+    /// F4-A, upstream emberian/dregg#57).
+    ///
+    /// `removed_cells` is every id this finalized turn removed from the hosted
+    /// ledger (destroyed, or removed hosted→sovereign by MakeSovereign):
+    /// present pre-turn, absent post-turn. It lands in
+    /// [`tables::REMOVED_CELLS_BY_ORDINAL`] atomically with the record, and the
+    /// same transaction deletes the ids' cell-by-id index entries — so the
+    /// index stays the exact (removal-aware) last-writer-wins projection of the
+    /// log. Overlay reconstruction (`checkpoint ⊕ [`Self::cell_overlay_since`]`)
+    /// then deletes these ids instead of resurrecting a pre-checkpoint cell.
+    ///
+    /// A `removed_cells` id that ALSO appears in `record.touched_cells` is an
+    /// integrity error (a cell cannot both have a post-state and be removed by
+    /// the same turn). Idempotent replay matches [`Self::commit_finalized_turn`].
+    pub fn commit_finalized_turn_with_removals(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        removed_cells: &[CellId],
+    ) -> Result<u64> {
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], None, &[], removed_cells)
     }
 
     /// [`Self::commit_finalized_turn`] PLUS the turn's attested root in the
@@ -274,7 +319,7 @@ impl PersistentStore {
         record: &CommitRecord,
         root: &crate::StoredAttestedRoot,
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), &[])
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), &[], &[])
     }
 
     /// [`Self::commit_finalized_turn_with_root`] PLUS the turn's NoteCreate
@@ -298,7 +343,30 @@ impl PersistentStore {
         root: &crate::StoredAttestedRoot,
         notes: &[dregg_cell::note::NoteCommitment],
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), notes)
+        self.commit_finalized_turn_inner(expected_ordinal, record, &[], Some(root), notes, &[])
+    }
+
+    /// [`Self::commit_finalized_turn_with_root_and_notes`] PLUS the turn's
+    /// REMOVED-cell id set in the SAME redb transaction (fifth-pass review
+    /// F4-A; see [`Self::commit_finalized_turn_with_removals`]). This is the
+    /// full finalization-path commit: record + root + notes + removals, one
+    /// atomic durability event.
+    pub fn commit_finalized_turn_with_root_notes_and_removals(
+        &self,
+        expected_ordinal: u64,
+        record: &CommitRecord,
+        root: &crate::StoredAttestedRoot,
+        notes: &[dregg_cell::note::NoteCommitment],
+        removed_cells: &[CellId],
+    ) -> Result<u64> {
+        self.commit_finalized_turn_inner(
+            expected_ordinal,
+            record,
+            &[],
+            Some(root),
+            notes,
+            removed_cells,
+        )
     }
 
     /// [`Self::commit_finalized_turn`] PLUS forever-digest burns in the SAME
@@ -318,7 +386,7 @@ impl PersistentStore {
         record: &CommitRecord,
         burns: &[(u8, [u8; 32], [u8; 32])],
     ) -> Result<u64> {
-        self.commit_finalized_turn_inner(expected_ordinal, record, burns, None, &[])
+        self.commit_finalized_turn_inner(expected_ordinal, record, burns, None, &[], &[])
     }
 
     /// The ONE atomic finalized-turn commit transaction behind
@@ -327,7 +395,7 @@ impl PersistentStore {
     /// [`Self::commit_finalized_turn_with_root`] /
     /// [`Self::commit_finalized_turn_with_root_and_notes`]: record + indexes +
     /// optional burns + optional attested root + optional note-commitment
-    /// appends + cursor advance, all-or-nothing.
+    /// appends + optional removed-cell ids + cursor advance, all-or-nothing.
     fn commit_finalized_turn_inner(
         &self,
         expected_ordinal: u64,
@@ -335,7 +403,20 @@ impl PersistentStore {
         burns: &[(u8, [u8; 32], [u8; 32])],
         root: Option<&crate::StoredAttestedRoot>,
         notes: &[dregg_cell::note::NoteCommitment],
+        removed_cells: &[CellId],
     ) -> Result<u64> {
+        // A cell cannot both carry a post-state and be removed by the SAME
+        // turn — refuse the ambiguous record outright (fail-closed) before
+        // opening the transaction.
+        for removed in removed_cells {
+            if record.touched_cells.iter().any(|c| c.id() == *removed) {
+                return Err(StoreError::Integrity(format!(
+                    "commit_finalized_turn: removed cell {} also appears in touched_cells \
+                     (a turn cannot both post-state and remove the same cell)",
+                    hex32(&removed.0)
+                )));
+            }
+        }
         let write_txn = self.db.begin_write()?;
         let assigned;
         {
@@ -412,6 +493,26 @@ impl PersistentStore {
                         .map_err(|e| StoreError::Serialization(e.to_string()))?;
                     idx_cell.insert(&cell.id().0, cell_bytes.as_slice())?;
                 }
+                // A removed cell's index entry is DELETED in the same txn (the
+                // index is the removal-aware last-writer-wins projection of the
+                // log — the latest event for these ids is now a removal).
+                for removed in removed_cells {
+                    idx_cell.remove(&removed.0)?;
+                }
+            }
+
+            // 2b. The turn's REMOVED-cell id set — SAME transaction (the F4-A
+            //     durable removal weld): the sidecar removal table entry lands
+            //     atomically with the record, so `checkpoint ⊕ overlay`
+            //     reconstruction deletes these ids instead of resurrecting a
+            //     pre-checkpoint cell. The CommitRecord postcard shape is
+            //     untouched — old stores simply lack the (empty) table.
+            if !removed_cells.is_empty() {
+                let ids: Vec<[u8; 32]> = removed_cells.iter().map(|id| id.0).collect();
+                let encoded = postcard::to_stdvec(&ids)
+                    .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                let mut removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
+                removed_tbl.insert(assigned, encoded.as_slice())?;
             }
 
             // 3. Burn the turn's forever digests in the SAME transaction (the
@@ -488,6 +589,16 @@ impl PersistentStore {
             Some(guard) => Ok(Some(postcard::from_bytes(guard.value())?)),
             None => Ok(None),
         }
+    }
+
+    /// The cell ids the turn at `ordinal` REMOVED from the hosted ledger
+    /// (empty for a turn that removed nothing, and for every record written
+    /// before the removal table existed — old stores read as removal-free,
+    /// which is exactly what they durably claimed).
+    pub fn removed_cells_at(&self, ordinal: u64) -> Result<Vec<CellId>> {
+        let read_txn = self.db.begin_read()?;
+        let table = open_removed_ro(&read_txn)?;
+        removed_at(&table, ordinal)
     }
 
     /// The blocklace `block_id` of every durably committed turn this node has
@@ -596,33 +707,53 @@ impl PersistentStore {
         Ok(self.commit_record_at(cursor - 1)?.map(|r| r.height))
     }
 
-    /// The last-writer-wins overlay of cell post-states committed since the most
-    /// recent full ledger checkpoint at `checkpoint_height`.
+    /// The last-writer-wins overlay committed since the most recent full ledger
+    /// checkpoint at `checkpoint_height` — post-states AND removals.
     ///
     /// Returns the post-state of every cell touched by a committed turn whose
-    /// `height > checkpoint_height`. Overlaying these on the checkpoint ledger
+    /// `height > checkpoint_height`, plus the ids such a turn REMOVED whose
+    /// removal no later turn superseded ([`CellOverlay`]). Applying `cells`
+    /// (upsert) and then deleting `removed` over the checkpoint ledger
     /// reconstructs the finalized ledger up to the commit cursor WITHOUT
-    /// re-executing — the cell-by-id index is exactly this overlay maintained
-    /// incrementally, but this method re-derives it from the log so recovery
-    /// never trusts the (rebuildable) index for correctness.
-    pub fn cell_overlay_since(&self, checkpoint_height: u64) -> Result<Vec<Cell>> {
+    /// re-executing — deletions included (fifth-pass review F4-A): a
+    /// pre-checkpoint cell removed by a post-checkpoint turn is deleted, never
+    /// resurrected. The cell-by-id index is exactly this overlay maintained
+    /// incrementally, but this method re-derives it from the log + removal
+    /// table so recovery never trusts the (rebuildable) index for correctness.
+    ///
+    /// A removal at/below the checkpoint height contributes nothing (the
+    /// checkpoint already lacks the cell), exactly like a post-state there.
+    pub fn cell_overlay_since(&self, checkpoint_height: u64) -> Result<CellOverlay> {
         use std::collections::HashMap;
         let read_txn = self.db.begin_read()?;
         let log = read_txn.open_table(tables::COMMIT_LOG)?;
-        // ordinal-ascending iteration → later writers overwrite earlier ones.
+        let removed_tbl = open_removed_ro(&read_txn)?;
+        // ordinal-ascending iteration → later writers overwrite earlier ones,
+        // a later removal deletes an earlier post-state, and a later re-creation
+        // supersedes an earlier removal.
         let mut latest: HashMap<[u8; 32], Cell> = HashMap::new();
+        let mut removed: std::collections::BTreeSet<[u8; 32]> = std::collections::BTreeSet::new();
         for entry in log.iter()? {
             let entry =
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            let ordinal = entry.0.value();
             let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
             if record.height <= checkpoint_height {
                 continue;
             }
             for cell in record.touched_cells {
+                removed.remove(&cell.id().0);
                 latest.insert(cell.id().0, cell);
             }
+            for id in removed_at(&removed_tbl, ordinal)? {
+                latest.remove(&id.0);
+                removed.insert(id.0);
+            }
         }
-        Ok(latest.into_values().collect())
+        Ok(CellOverlay {
+            cells: latest.into_values().collect(),
+            removed: removed.into_iter().map(CellId).collect(),
+        })
     }
 
     // =========================================================================
@@ -755,12 +886,16 @@ impl PersistentStore {
         let idx_turn = read_txn.open_table(tables::IDX_TURN_BY_HASH)?;
         let idx_hc = read_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
         let idx_cell = read_txn.open_table(tables::IDX_CELL_BY_ID)?;
+        let removed_tbl = open_removed_ro(&read_txn)?;
 
         // Forward direction: every log record has its index entries.
-        // Also track the latest ordinal that touched each cell so we can check
-        // the cell index is the correct last-writer-wins projection.
+        // Also track the latest EVENT (write OR removal — F4-A) per cell so we
+        // can check the cell index is the correct removal-aware
+        // last-writer-wins projection: `Some(cell)` = the latest event is a
+        // post-state write (the index must hold exactly it); `None` = the
+        // latest event is a removal (the index must have NO entry).
         use std::collections::HashMap;
-        let mut latest_cell_writer: HashMap<[u8; 32], (u64, Cell)> = HashMap::new();
+        let mut latest_cell_writer: HashMap<[u8; 32], (u64, Option<Cell>)> = HashMap::new();
 
         for entry in log.iter()? {
             let entry =
@@ -802,10 +937,21 @@ impl PersistentStore {
                     .entry(cell.id().0)
                     .and_modify(|slot| {
                         if ordinal >= slot.0 {
-                            *slot = (ordinal, cell.clone());
+                            *slot = (ordinal, Some(cell.clone()));
                         }
                     })
-                    .or_insert((ordinal, cell.clone()));
+                    .or_insert((ordinal, Some(cell.clone())));
+            }
+            // This ordinal's removals supersede its (and any earlier) writes.
+            for id in removed_at(&removed_tbl, ordinal)? {
+                latest_cell_writer
+                    .entry(id.0)
+                    .and_modify(|slot| {
+                        if ordinal >= slot.0 {
+                            *slot = (ordinal, None);
+                        }
+                    })
+                    .or_insert((ordinal, None));
             }
         }
 
@@ -833,18 +979,22 @@ impl PersistentStore {
             }
         }
 
-        // Cell index: must equal the last-writer-wins projection of the log.
-        let mut cell_index_count = 0u64;
+        // Cell index: must equal the removal-aware last-writer-wins projection
+        // of the log — an entry exists iff the cell's LATEST event is a write
+        // (a removal legitimately deletes an earlier record's entry, F4-A).
         for entry in idx_cell.iter()? {
             let entry =
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
-            cell_index_count += 1;
             let cell_id = *entry.0.value();
             let stored: Cell = postcard::from_bytes(entry.1.value())?;
             match latest_cell_writer.get(&cell_id) {
-                Some((_, expected)) if *expected == stored => {}
-                Some(_) => report.mismatched_entries.push(format!(
+                Some((_, Some(expected))) if *expected == stored => {}
+                Some((_, Some(_))) => report.mismatched_entries.push(format!(
                     "cell_by_id({}) != latest log writer",
+                    hex32(&cell_id)
+                )),
+                Some((_, None)) => report.orphan_entries.push(format!(
+                    "cell_by_id({}) present but the latest log event is a REMOVAL",
                     hex32(&cell_id)
                 )),
                 None => report
@@ -852,12 +1002,26 @@ impl PersistentStore {
                     .push(format!("cell_by_id({}) has no log writer", hex32(&cell_id))),
             }
         }
-        if (cell_index_count as usize) < latest_cell_writer.len() {
-            for cell_id in latest_cell_writer.keys() {
-                if idx_cell.get(cell_id)?.is_none() {
-                    report
-                        .missing_entries
-                        .push(format!("cell_by_id({}) missing", hex32(cell_id)));
+        for (cell_id, (_, latest)) in &latest_cell_writer {
+            if latest.is_some() && idx_cell.get(cell_id)?.is_none() {
+                report
+                    .missing_entries
+                    .push(format!("cell_by_id({}) missing", hex32(cell_id)));
+            }
+        }
+
+        // Removal-table hygiene: every removal entry must belong to a LIVE log
+        // record (compaction and truncation clean their ordinals' entries in
+        // the same transaction that removes the records).
+        if let Some(removed_tbl) = &removed_tbl {
+            for entry in removed_tbl.iter()? {
+                let entry =
+                    entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+                let ordinal = entry.0.value();
+                if log.get(ordinal)?.is_none() {
+                    report.orphan_entries.push(format!(
+                        "removed_cells_by_ordinal -> missing ordinal {ordinal}"
+                    ));
                 }
             }
         }
@@ -919,6 +1083,7 @@ impl PersistentStore {
             let mut idx_hc = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
             let mut idx_cell = write_txn.open_table(tables::IDX_CELL_BY_ID)?;
 
+            let removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
             for record in &records {
                 idx_receipt.insert(&record.receipt_hash, record.ordinal)?;
                 idx_turn.insert(&record.turn_hash, record.ordinal)?;
@@ -932,6 +1097,11 @@ impl PersistentStore {
                     let cell_bytes = postcard::to_stdvec(cell)
                         .map_err(|e| StoreError::Serialization(e.to_string()))?;
                     idx_cell.insert(&cell.id().0, cell_bytes.as_slice())?;
+                }
+                // Replay this ordinal's removals too (F4-A): the rebuilt cell
+                // index is the removal-aware last-writer-wins projection.
+                for id in decode_removed(removed_tbl.get(record.ordinal)?)? {
+                    idx_cell.remove(&id.0)?;
                 }
                 replayed += 1;
             }
@@ -1080,6 +1250,7 @@ impl PersistentStore {
                 let mut idx_turn = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
                 let mut idx_hc = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
                 let mut compacted_ids = write_txn.open_table(tables::COMMIT_COMPACTED_BLOCK_IDS)?;
+                let mut removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
                 for d in &doomed {
                     log.remove(d.ordinal)?;
                     idx_receipt.remove(&d.receipt_hash)?;
@@ -1087,6 +1258,11 @@ impl PersistentStore {
                     idx_hc.remove(d.hc_key.as_slice())?;
                     // Carry the applied turn's id forward (no double-apply).
                     compacted_ids.insert(&d.block_id, ())?;
+                    // A compacted ordinal's removal entry FOLDS into the
+                    // covering checkpoint (F4-A): the checkpointed baseline
+                    // already lacks the removed cell, so the entry is spent —
+                    // deleting it keeps the removal table orphan-free.
+                    removed_tbl.remove(d.ordinal)?;
                 }
             }
 
@@ -1106,12 +1282,18 @@ impl PersistentStore {
                     idx_cell.remove(&k)?;
                 }
                 // Survivors are already in ascending ordinal order → later
-                // writers overwrite earlier ones (last-writer-wins).
+                // writers overwrite earlier ones (last-writer-wins), and a
+                // surviving ordinal's REMOVALS delete earlier survivors'
+                // entries (removal-aware projection, F4-A).
+                let removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
                 for record in &survivors {
                     for cell in &record.touched_cells {
                         let cell_bytes = postcard::to_stdvec(cell)
                             .map_err(|e| StoreError::Serialization(e.to_string()))?;
                         idx_cell.insert(&cell.id().0, cell_bytes.as_slice())?;
+                    }
+                    for id in decode_removed(removed_tbl.get(record.ordinal)?)? {
+                        idx_cell.remove(&id.0)?;
                     }
                 }
             }
@@ -1256,6 +1438,7 @@ impl PersistentStore {
         {
             let read_txn = self.db.begin_read()?;
             let log = read_txn.open_table(tables::COMMIT_LOG)?;
+            let removed_tbl = open_removed_ro(&read_txn)?;
             for entry in log.range(floor..)? {
                 let entry =
                     entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
@@ -1270,6 +1453,13 @@ impl PersistentStore {
                 for cell in &record.touched_cells {
                     let _ = ledger.remove(&cell.id());
                     let _ = ledger.insert_cell(cell.clone());
+                }
+                // …and this record's REMOVALS (F4-A): a turn that removed a
+                // cell recorded a post-state root WITHOUT it, so the walk must
+                // delete it too — else a legitimate removal turn would read as
+                // divergent and be falsely truncated.
+                for id in removed_at(&removed_tbl, ordinal)? {
+                    let _ = ledger.remove(&id);
                 }
                 if crate::canonical_ledger_root(&ledger) == record.ledger_root {
                     last_good = Some(ordinal);
@@ -1325,17 +1515,21 @@ impl PersistentStore {
             }
             truncated = doomed.len() as u64;
 
-            // Remove the doomed records + their receipt / turn / (h,c) index entries.
+            // Remove the doomed records + their receipt / turn / (h,c) index
+            // entries + their removal-table entries (a truncated turn was never
+            // safely applied — its removals go with it).
             {
                 let mut log = write_txn.open_table(tables::COMMIT_LOG)?;
                 let mut idx_receipt = write_txn.open_table(tables::IDX_RECEIPT_BY_HASH)?;
                 let mut idx_turn = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
                 let mut idx_hc = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
+                let mut removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
                 for d in &doomed {
                     log.remove(d.ordinal)?;
                     idx_receipt.remove(&d.receipt_hash)?;
                     idx_turn.remove(&d.turn_hash)?;
                     idx_hc.remove(d.hc_key.as_slice())?;
+                    removed_tbl.remove(d.ordinal)?;
                 }
             }
 
@@ -1361,11 +1555,17 @@ impl PersistentStore {
                 for k in keys {
                     idx_cell.remove(&k)?;
                 }
+                let removed_tbl = write_txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL)?;
                 for record in &survivors {
                     for cell in &record.touched_cells {
                         let cell_bytes = postcard::to_stdvec(cell)
                             .map_err(|e| StoreError::Serialization(e.to_string()))?;
                         idx_cell.insert(&cell.id().0, cell_bytes.as_slice())?;
+                    }
+                    // Removal-aware projection (F4-A): a surviving removal
+                    // deletes any earlier survivor's entry.
+                    for id in decode_removed(removed_tbl.get(record.ordinal)?)? {
+                        idx_cell.remove(&id.0)?;
                     }
                 }
             }
@@ -1426,6 +1626,44 @@ impl PersistentStore {
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+/// Decode a [`tables::REMOVED_CELLS_BY_ORDINAL`] entry (absent = no removals —
+/// the shape every pre-F4-A record and every removal-free turn reads as).
+fn decode_removed(guard: Option<redb::AccessGuard<'_, &'static [u8]>>) -> Result<Vec<CellId>> {
+    match guard {
+        Some(g) => {
+            let ids: Vec<[u8; 32]> = postcard::from_bytes(g.value())?;
+            Ok(ids.into_iter().map(CellId).collect())
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Open [`tables::REMOVED_CELLS_BY_ORDINAL`] in a READ transaction, tolerating
+/// a store written before the table existed (F4-A backward compatibility): a
+/// redb read transaction cannot create tables, and an old durable store simply
+/// has no removal table — which reads as "no removals anywhere", exactly what
+/// that store durably claimed. Write transactions create the table implicitly.
+fn open_removed_ro(
+    txn: &redb::ReadTransaction,
+) -> Result<Option<redb::ReadOnlyTable<u64, &'static [u8]>>> {
+    match txn.open_table(tables::REMOVED_CELLS_BY_ORDINAL) {
+        Ok(t) => Ok(Some(t)),
+        Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Removals at `ordinal` through an optionally-present removal table.
+fn removed_at(
+    table: &Option<redb::ReadOnlyTable<u64, &'static [u8]>>,
+    ordinal: u64,
+) -> Result<Vec<CellId>> {
+    match table {
+        Some(t) => decode_removed(t.get(ordinal)?),
+        None => Ok(Vec::new()),
+    }
+}
 
 fn check_hash_index(
     index: &impl ReadableTable<&'static [u8; 32], u64>,
@@ -2015,22 +2253,21 @@ mod tests {
         assert_eq!(store.load_all_note_commitments().unwrap(), vec![note]);
     }
 
-    /// F4-A (fourth-pass review) — the DURABLE REMOVAL invariant:
+    /// F4-A (fourth-pass review; fifth-pass tracked residual, upstream
+    /// emberian/dregg#57) — the DURABLE REMOVAL invariant:
     /// `checkpoint ⊕ commit overlay` must reconstruct the EXACT finalized
     /// ledger, deletions included. A pre-checkpoint hosted cell removed by a
     /// post-checkpoint finalized turn (MakeSovereign) must stay absent on
     /// reopen and the reconstructed root must equal the recorded
     /// `CommitRecord::ledger_root`.
     ///
-    /// IGNORED: the commit-record format has no removal/tombstone
-    /// representation yet (`touched_cells` is post-cells-only and
-    /// `cell_overlay_since` only inserts). Implementing it ripples beyond the
-    /// sanctioned rework-4 scope (commit-record wire format, bootstrap
-    /// `Snapshot` wire format + joiner apply, starbridge-v2 overlay consumer,
-    /// index-audit semantics, compaction interplay) — see the rework-4 blast
-    /// radius report. Un-ignore when the durable removal set lands.
+    /// UN-IGNORED with the durable removal set: the removing turn commits its
+    /// removed-id set through [`PersistentStore::commit_finalized_turn_with_
+    /// removals`] (the sidecar `removed_cells_by_ordinal` table, written in the
+    /// same transaction as the record — the `CommitRecord` postcard shape is
+    /// untouched), and `cell_overlay_since` returns removals the
+    /// reconstruction deletes.
     #[test]
-    #[ignore = "F4-A durable removal-set piece pending (blast radius exceeds rework-4 scope)"]
     fn hosted_cell_removal_survives_checkpoint_overlay_reconstruction() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("removal.redb");
@@ -2053,7 +2290,9 @@ mod tests {
             let mut rec1 = record(1, 1, Vec::new());
             rec1.turn_hash[1] = 0xa2;
             rec1.ledger_root = post.root();
-            store.commit_finalized_turn(1, &rec1).unwrap();
+            store
+                .commit_finalized_turn_with_removals(1, &rec1, &[doomed_id])
+                .unwrap();
             rec1.ledger_root
         };
 
@@ -2064,9 +2303,13 @@ mod tests {
             .load_ledger_checkpoint_at(cp_height)
             .unwrap()
             .expect("checkpoint");
-        for c in store.cell_overlay_since(cp_height).unwrap() {
+        let overlay = store.cell_overlay_since(cp_height).unwrap();
+        for c in overlay.cells {
             let _ = ledger.remove(&c.id());
             let _ = ledger.insert_cell(c);
+        }
+        for id in overlay.removed {
+            let _ = ledger.remove(&id);
         }
         assert!(
             ledger.get(&doomed_id).is_none(),
@@ -2078,6 +2321,211 @@ mod tests {
             recorded_root,
             "reconstructed root must equal the recorded post-turn ledger_root"
         );
+        // The removal-aware index projection holds: the doomed cell's
+        // cell-by-id entry is gone, the audit is clean, and the removal is
+        // durable across the reopen.
+        assert!(store.lookup_cell(&doomed_id).unwrap().is_none());
+        assert_eq!(store.removed_cells_at(1).unwrap(), vec![doomed_id]);
+        let report = store.verify_index_agrees_with_log().unwrap();
+        assert!(report.ok(), "audit after a removal commit: {report:?}");
+    }
+
+    /// F4-A ordering, both directions: a removal followed by a RE-CREATION
+    /// resurfaces the cell (the later writer supersedes the removal), while a
+    /// creation followed by a removal leaves the cell in the overlay's removed
+    /// set — and never in its cells. The cell-by-id index tracks the same
+    /// removal-aware last-writer-wins projection at every step.
+    #[test]
+    fn removal_ordering_is_last_event_wins_in_overlay_and_index() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let c_v1 = cell(0x11, 500);
+        let cid = c_v1.id();
+
+        // t0 (h1): create. t1 (h2): remove. t2 (h3): re-create at a new value.
+        let mut rec0 = record(0, 0, vec![c_v1]);
+        rec0.turn_hash[1] = 0xd1;
+        store.commit_finalized_turn(0, &rec0).unwrap();
+
+        let mut rec1 = record(1, 1, Vec::new());
+        rec1.turn_hash[1] = 0xd2;
+        store
+            .commit_finalized_turn_with_removals(1, &rec1, &[cid])
+            .unwrap();
+        // After the removal: gone from index AND overlay-cells, present in
+        // overlay-removed.
+        assert!(store.lookup_cell(&cid).unwrap().is_none());
+        let overlay = store.cell_overlay_since(0).unwrap();
+        assert!(!overlay.cells.iter().any(|c| c.id() == cid));
+        assert_eq!(overlay.removed, vec![cid]);
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+
+        let c_v2 = cell(0x11, 900);
+        let mut rec2 = record(2, 2, vec![c_v2]);
+        rec2.turn_hash[1] = 0xd3;
+        store.commit_finalized_turn(2, &rec2).unwrap();
+        // After the re-creation: the later writer wins — back in the index and
+        // overlay-cells at the NEW value, no longer removed.
+        assert_eq!(
+            store.lookup_cell(&cid).unwrap().unwrap().state.balance(),
+            900
+        );
+        let overlay = store.cell_overlay_since(0).unwrap();
+        assert_eq!(
+            overlay
+                .cells
+                .iter()
+                .find(|c| c.id() == cid)
+                .unwrap()
+                .state
+                .balance(),
+            900
+        );
+        assert!(overlay.removed.is_empty(), "the re-creation supersedes");
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+
+        // The rebuilt-from-log index reproduces the same projection.
+        assert_eq!(store.rebuild_index_from_log().unwrap(), 3);
+        assert_eq!(
+            store.lookup_cell(&cid).unwrap().unwrap().state.balance(),
+            900
+        );
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+    }
+
+    /// F4-A guard: a record that both post-states AND removes the same cell is
+    /// ambiguous and refused outright (integrity error, nothing written).
+    #[test]
+    fn removal_of_a_touched_cell_in_the_same_record_is_refused() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let c = cell(0x31, 100);
+        let cid = c.id();
+        let mut rec = record(0, 0, vec![c]);
+        rec.turn_hash[1] = 0xd4;
+        let err = store.commit_finalized_turn_with_removals(0, &rec, &[cid]);
+        assert!(matches!(err, Err(StoreError::Integrity(_))), "got {err:?}");
+        assert_eq!(store.commit_cursor().unwrap(), 0, "nothing landed");
+    }
+
+    /// F4-A × compaction: a removal at an ordinal BELOW the compaction floor
+    /// FOLDS into the covering checkpoint — the checkpointed baseline already
+    /// lacks the cell, so compaction must not resurrect it (reconstruction is
+    /// invariant), the spent removal entry is cleaned (no orphans), and the
+    /// whole state survives a reopen.
+    #[test]
+    fn compaction_after_a_removal_does_not_resurrect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("removal-compact.redb");
+        let doomed = cell(0x41, 500);
+        let doomed_id = doomed.id();
+        let survivor = cell(0x42, 700);
+
+        {
+            let store = PersistentStore::open(&path).unwrap();
+            // t0 (h1): create doomed + survivor. t1 (h2): remove doomed.
+            // t2 (h3): touch a third cell so a record survives compaction.
+            let mut rec0 = record(0, 0, vec![doomed.clone(), survivor.clone()]);
+            rec0.turn_hash[1] = 0xe1;
+            store.commit_finalized_turn(0, &rec0).unwrap();
+            let mut rec1 = record(1, 1, Vec::new());
+            rec1.turn_hash[1] = 0xe2;
+            store
+                .commit_finalized_turn_with_removals(1, &rec1, &[doomed_id])
+                .unwrap();
+            let mut rec2 = record(2, 2, vec![cell(0x43, 900)]);
+            rec2.turn_hash[1] = 0xe3;
+            store.commit_finalized_turn(2, &rec2).unwrap();
+
+            let root_before = recovered_root(&store);
+
+            // A covering checkpoint at height 3 (removal-aware fold: the
+            // checkpoint already lacks the doomed cell), then compact below it:
+            // ordinals 0 and 1 (heights 1, 2) — including the REMOVING turn —
+            // are compacted away.
+            checkpoint_from_log_no_codrive(&store, 3);
+            assert_eq!(store.compact_below(3).unwrap(), 2);
+
+            // No resurrection: the reconstruction is invariant and the doomed
+            // cell stays absent even though its removal record is gone.
+            assert_eq!(recovered_root(&store), root_before);
+            let overlay = store.cell_overlay_since(3).unwrap();
+            assert!(!overlay.cells.iter().any(|c| c.id() == doomed_id));
+            let cp = store
+                .load_ledger_checkpoint_at(store.latest_ledger_checkpoint_height().unwrap())
+                .unwrap()
+                .unwrap();
+            assert!(
+                cp.get(&doomed_id).is_none(),
+                "the covering checkpoint folded the removal in"
+            );
+            // The compacted ordinal's removal entry is SPENT and cleaned.
+            assert!(store.removed_cells_at(1).unwrap().is_empty());
+            let report = store.verify_index_agrees_with_log().unwrap();
+            assert!(report.ok(), "audit after removal compaction: {report:?}");
+            drop(store);
+        }
+
+        // Reopen: the fold is durable.
+        let store = PersistentStore::open(&path).unwrap();
+        let cp = store
+            .load_ledger_checkpoint_at(store.latest_ledger_checkpoint_height().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(cp.get(&doomed_id).is_none());
+        assert!(store.lookup_cell(&doomed_id).unwrap().is_none());
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+    }
+
+    /// F4-A × recover_to_last_consistent: the per-ordinal consistency walk
+    /// applies removals, so a GENUINE removal turn (whose recorded root lacks
+    /// the removed cell) converges and is NEVER falsely truncated as
+    /// divergent — while fail-closed on real divergence is untouched.
+    #[test]
+    fn recover_walk_applies_removals_without_false_truncation() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let c0 = cell(0x51, 100);
+        let c0_id = c0.id();
+        let mut running = Ledger::new();
+
+        // t0: create c0, root committed WITH the cell.
+        let _ = running.insert_cell(c0.clone());
+        let mut rec0 = record(0, 0, vec![c0]);
+        rec0.turn_hash[1] = 0xf1;
+        rec0.ledger_root = crate::canonical_ledger_root(&running);
+        store.commit_finalized_turn(0, &rec0).unwrap();
+
+        // t1: REMOVE c0 — the recorded root is the post-removal (empty) root.
+        let _ = running.remove(&c0_id);
+        let mut rec1 = record(1, 1, Vec::new());
+        rec1.turn_hash[1] = 0xf2;
+        rec1.ledger_root = crate::canonical_ledger_root(&running);
+        store
+            .commit_finalized_turn_with_removals(1, &rec1, &[c0_id])
+            .unwrap();
+
+        // The image is CONSISTENT: the removal-aware walk converges at the
+        // head and truncates NOTHING (pre-fix the walk missed the removal, saw
+        // a root mismatch at ordinal 1, and falsely truncated it).
+        assert_eq!(store.recover_to_last_consistent().unwrap(), 0);
+        assert_eq!(store.commit_cursor().unwrap(), 2, "no false truncation");
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+
+        // A TORN tail that itself carries a removal is truncated normally and
+        // its removal entry goes with it (a never-safely-applied removal must
+        // not survive as an orphan that deletes a live cell on reconstruction).
+        let c2 = cell(0x52, 200);
+        let mut rec2 = record(2, 2, vec![c2.clone()]);
+        rec2.turn_hash[1] = 0xf3;
+        rec2.ledger_root = [0xde; 32]; // the tear
+        store
+            .commit_finalized_turn_with_removals(2, &rec2, &[cell(0x53, 0).id()])
+            .unwrap();
+        assert_eq!(store.recover_to_last_consistent().unwrap(), 1);
+        assert_eq!(store.commit_cursor().unwrap(), 2);
+        assert!(
+            store.removed_cells_at(2).unwrap().is_empty(),
+            "a truncated ordinal's removal entry is cleaned with its record"
+        );
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
     }
 
     /// Route-level turns commit several records at the SAME (height, creator)
@@ -2127,12 +2575,14 @@ mod tests {
         let bal = |seed: u8, b: u64| {
             let target = cell(seed, b).id();
             overlay
+                .cells
                 .iter()
                 .find(|c| c.id() == target)
                 .map(|c| c.state.balance())
         };
         assert_eq!(bal(1, 105), Some(105));
         assert_eq!(bal(0, 104), Some(104));
+        assert!(overlay.removed.is_empty(), "no removal committed here");
     }
 
     // =========================================================================
@@ -2151,10 +2601,14 @@ mod tests {
             Some(l) => l,
             None => Ledger::new(),
         };
-        for c in store.cell_overlay_since(cp_height).unwrap() {
+        let overlay = store.cell_overlay_since(cp_height).unwrap();
+        for c in overlay.cells {
             // last-writer-wins overwrite (the overlay is already LWW-projected).
             let _ = ledger.remove(&c.id());
             let _ = ledger.insert_cell(c);
+        }
+        for id in overlay.removed {
+            let _ = ledger.remove(&id);
         }
         ledger.root()
     }
@@ -2169,9 +2623,15 @@ mod tests {
         let mut ledger = Ledger::new();
         for rec in store.commit_records_from(0).unwrap() {
             if rec.height <= height {
+                let ordinal = rec.ordinal;
                 for c in rec.touched_cells {
                     let _ = ledger.remove(&c.id());
                     let _ = ledger.insert_cell(c);
+                }
+                // Removal-aware fold (F4-A): a removal at/below the checkpoint
+                // height is absent from the checkpointed baseline.
+                for id in store.removed_cells_at(ordinal).unwrap() {
+                    let _ = ledger.remove(&id);
                 }
             }
         }
@@ -2587,7 +3047,7 @@ mod tests {
         // THE CONVERGENCE CHECK NOW PASSES at the recovered point: the head's
         // recorded root equals the reconstruction (this is what `recover` asserts).
         let mut ledger = Ledger::new();
-        for c in store.cell_overlay_since(0).unwrap() {
+        for c in store.cell_overlay_since(0).unwrap().cells {
             let _ = ledger.remove(&c.id());
             let _ = ledger.insert_cell(c);
         }
@@ -2769,7 +3229,7 @@ mod tests {
         // genesis ⊕ overlay (the SOUND `reseed_genesis_then_overlay` order)
         // equals the head's recorded root, so the node opens instead of stranding.
         let mut ledger = genesis.clone();
-        for c in store.cell_overlay_since(0).unwrap() {
+        for c in store.cell_overlay_since(0).unwrap().cells {
             let _ = ledger.remove(&c.id());
             let _ = ledger.insert_cell(c);
         }

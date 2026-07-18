@@ -216,6 +216,28 @@ pub const META_COMMIT_COMPACTED: &str = "commit_compacted_floor";
 pub const COMMIT_COMPACTED_BLOCK_IDS: TableDefinition<&[u8; 32], ()> =
     TableDefinition::new("commit_compacted_block_ids");
 
+/// Removed-cell ids per commit ordinal — the durable REMOVAL half of the cell
+/// overlay (fifth-pass review F4-A, upstream emberian/dregg#57).
+///
+/// `CommitRecord.touched_cells` is post-cells-only: it can assert what a cell
+/// BECAME but not that a cell CEASED (destroyed, or removed hosted→sovereign by
+/// MakeSovereign). A checkpoint taken BEFORE such a removal still contains the
+/// stale hosted cell, and an insert-only overlay resurrects it on every
+/// `checkpoint ⊕ overlay` reconstruction. This sidecar table carries the
+/// removal dimension WITHOUT changing the `CommitRecord` postcard shape (redb
+/// tables are independent — an old store simply lacks the table, which reads as
+/// empty): ordinal → the postcard-serialized `Vec<[u8; 32]>` of cell ids this
+/// turn REMOVED from the hosted ledger.
+///
+/// Written inside the SAME `commit_finalized_turn_*` transaction as the record
+/// (all-or-nothing with the cursor advance), joined by every overlay consumer
+/// (`cell_overlay_since`, `rebuild_index_from_log`,
+/// `verify_index_agrees_with_log`, `recover_to_last_consistent*`), cleaned up
+/// by `compact_below` (a removal below the compaction floor is already folded
+/// into the covering checkpoint) and by divergent-tail truncation.
+pub const REMOVED_CELLS_BY_ORDINAL: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("removed_cells_by_ordinal");
+
 // ─── Forever-Digest Sets (restart-durable anti-replay carriers) ──────────────
 //
 // Several node registries carry "burned forever" digest sets whose refusal
