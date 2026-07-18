@@ -43,7 +43,19 @@ use tfhe::{ClientKey, FheUint32};
 /// The CARRY-FREE ADDITIVE fold (BFV / fhe.rs) — codex Round-3 Q1's Tier-0 speed
 /// lever, measured head-to-head against the exact-integer TFHE fold above.
 pub mod additive;
+pub mod bfv_gpu;
+/// Lean-first BFV stone 1: a FROM-SCRATCH RNS fold-add over fhe.rs's own wire
+/// format, differentially anchored to fhe.rs as the oracle
+/// (`tests/bfv_lean_oracle.rs`).
+pub mod bfv_lean;
+/// The MULTIPLICATIVE stone: wrap-guarded BFV ct×ct multiply + relinearization
+/// over fhe.rs's `Multiplicator`, oracle-anchored in `tests/bfv_mul_oracle.rs`.
+pub mod bfv_mul;
 pub mod boundary;
+/// PRIVATE CONVEX ENGINE stone 1: one iteration of `x ← prox(x − τ·A·x)` over
+/// encrypted state — the public-matrix linear step stays ADDITIVE (no ct×ct),
+/// oracle-anchored in `tests/convex_step_oracle.rs`.
+pub mod convex_step;
 
 /// The OUTPUT-BOUNDARY MPC crossing (BFV / fhe.rs → additive shares → secret-shared
 /// comparison) — codex Round-4 gold: adversarial no-viewer + the dissolved
