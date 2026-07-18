@@ -230,7 +230,7 @@ descriptors. This is the current price of one representation change, and it is r
 |---|---|---|---|
 | 1 | **S2 dead stratum** (120 sites, 120 carriers, 840 lanes, their aux) | ~182–196K committed cells (~32% of prover time at elasticity 1); ~180 KB wire (960 cols × 188 B/col) | [A] from [M] elasticity; corrected from the refuted 202.6K/-43% figures |
 | 2 | **940 witnessed-dead columns** (35.3% of width; 917 = legacy lanes) | subsumed mostly by #1; residual ~100 lane cols after S2 deletion | [P] |
-| 3 | **In-row absorption tax** — 254 row-constant interactions | 292,864 cells = 50.6% of the whole proof, the single largest line item | [M+P] |
+| 3 | **In-row absorption tax** — 254 row-constant interactions | ~~292,864 cells = 50.6%, the single largest line item~~ **ERRATA (D2, `ed7ddded6`): 4×-overcounted** — one interaction = ONE ext aux col, flattened ×4 to base only at commit (prover.rs:269). Corrected: **73,216 cells = 20.9%, THIRD** behind main base width (49.9%) and chip (29.1%). Wire-byte figures unaffected; the three designs' committed-cells tables need re-derivation before Epoch-2 commitments are made | [M, corrected] |
 | 4 | **Absorb-as-width habit** — 76% of width is hash plumbing at ~188 B/col | ~380 KB of the 557 KB wire is width-proportional | [M]/[A] |
 | 5 | **Chip arity encoding** — 4 constraint families at frozen degree 7 | zero degree headroom: +1 arity = 4 families → deg 8; 10th value → 16 quotient chunks; no per-shape tuples → the #2 class was inevitable | [P, CONFIRMED] |
 | 6 | **~31-bit waists** — PI 8 (cap-open residual, 34/57 members) and PI 45 (caveat commit, 1 felt) | security posture, not bytes; both below the ~124-bit wide anchors | [P] |
