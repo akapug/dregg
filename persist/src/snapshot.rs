@@ -191,18 +191,49 @@ impl PersistentStore {
             }
         };
 
-        // The overlay above the chosen base height.
-        let overlay = self.cell_overlay_since(base_height)?;
+        // The overlay above the chosen base height — post-states AND removals
+        // (fifth-pass review F4-A).
+        let full_overlay = self.cell_overlay_since(base_height)?;
 
-        // Reconstruct {checkpoint ⊕ overlay} to compute the binding root.
+        // Reconstruct {checkpoint ⊕ overlay ⊖ removals} to compute the binding
+        // root — the exact finalized ledger, deletions included.
         let mut ledger = match &checkpoint {
             Some(cp) => crate::ledger_store::checkpoint_to_ledger_snapshot(cp),
             None => Ledger::new(),
         };
-        for cell in &overlay {
+        // Does any post-checkpoint REMOVAL delete a cell the shipped base
+        // still holds? The wire overlay (`Vec<Cell>`) is insert-only and
+        // cannot express that deletion, so such a snapshot must FOLD (below).
+        let removal_hits_base = full_overlay
+            .removed
+            .iter()
+            .any(|id| ledger.get(id).is_some());
+        for cell in &full_overlay.cells {
             upsert_cell(&mut ledger, cell.clone());
         }
+        for id in &full_overlay.removed {
+            let _ = ledger.remove(id);
+        }
         let claimed_root = snapshot_ledger_root(&mut ledger);
+
+        // ── The removal fold (F4-A, wire-compatible by construction) ────────
+        // The `Snapshot` postcard shape is UNCHANGED: instead of adding a
+        // removal field to the wire (a decode break for every existing
+        // consumer), a snapshot whose overlay window removed a base-held cell
+        // ships a SYNTHESIZED full checkpoint of the reconstructed ledger at
+        // the head height with an EMPTY overlay — removals are folded into the
+        // base exactly as `compact_below` folds them into a covering
+        // checkpoint. A joiner applies it with the existing insert-only logic
+        // and reconstructs the exact finalized ledger, deletions included.
+        // Removal-free windows (the overwhelmingly common case) ship the
+        // original minimal {checkpoint ⊕ delta} split unchanged.
+        let (checkpoint, base_height, overlay) = if removal_hits_base {
+            let head_height = self.recovered_head_height()?.unwrap_or(base_height);
+            let folded = crate::ledger_store::ledger_to_checkpoint(&ledger, head_height);
+            (Some(folded), head_height, Vec::new())
+        } else {
+            (checkpoint, base_height, full_overlay.cells)
+        };
 
         // A shipping node never ships a snapshot it cannot reconstruct to its
         // own recorded finalized root: if we have a recorded head root, the
@@ -411,8 +442,11 @@ mod tests {
             None => Ledger::new(),
         };
         let overlay = store.cell_overlay_since(cp_height).unwrap();
-        for c in overlay {
+        for c in overlay.cells {
             upsert_cell(&mut ledger, c);
+        }
+        for id in overlay.removed {
+            let _ = ledger.remove(&id);
         }
         ledger.root()
     }
@@ -608,5 +642,112 @@ mod tests {
             upsert_cell(&mut joiner_rebuilt, c);
         }
         assert_eq!(joiner_rebuilt.root(), full_replay_root(&shipper));
+    }
+
+    /// F4-A joiner bootstrap: a POST-checkpoint removal of a checkpoint-held
+    /// cell is folded into the shipped snapshot (a synthesized full checkpoint
+    /// with an empty overlay — the `Snapshot` postcard/wire shape is
+    /// unchanged), so a joiner reconstructs the EXACT finalized ledger with
+    /// the removed cell ABSENT. Pre-fix, `ship_snapshot` refused to ship at
+    /// all (the insert-only reconstruction could not reach the recorded root —
+    /// a fail-closed liveness hole), and an overlay-only fix would have
+    /// resurrected the cell on the joiner.
+    #[test]
+    fn ship_after_a_removal_folds_and_the_joiner_excludes_the_removed_cell() {
+        let shipper = PersistentStore::open_in_memory().unwrap();
+        let doomed = cell(1, 500);
+        let doomed_id = doomed.id();
+        let survivor = cell(2, 700);
+
+        // Height-1 turn creates both cells; checkpoint covers height 1.
+        let mut running = Ledger::new();
+        upsert_cell(&mut running, doomed.clone());
+        upsert_cell(&mut running, survivor.clone());
+        let rec0 = CommitRecord {
+            ordinal: 0,
+            height: 1,
+            block_id: [0u8; 32],
+            block_executed_up_to: 0,
+            turn_hash: [0xa1; 32],
+            creator: [1u8; 32],
+            receipt_hash: [0xb1; 32],
+            ledger_root: running.root(),
+            touched_cells: vec![doomed.clone(), survivor.clone()],
+        };
+        shipper.commit_finalized_turn(0, &rec0).unwrap();
+        // NON-compacting checkpoint (isolate the fold from compaction).
+        shipper
+            .store_ledger_checkpoint_snapshot(&LedgerCheckpoint {
+                height: 1,
+                cells: running.iter().map(|(_, c)| c.clone()).collect(),
+                sovereign_commitments: Vec::new(),
+                sovereign_registrations: Vec::new(),
+            })
+            .unwrap();
+
+        // Height-2 finalized turn REMOVES the doomed cell.
+        let _ = running.remove(&doomed_id);
+        let rec1 = CommitRecord {
+            ordinal: 1,
+            height: 2,
+            block_id: [1u8; 32],
+            block_executed_up_to: 10,
+            turn_hash: [0xa2; 32],
+            creator: [1u8; 32],
+            receipt_hash: [0xb2; 32],
+            ledger_root: running.root(),
+            touched_cells: Vec::new(),
+        };
+        shipper
+            .commit_finalized_turn_with_removals(1, &rec1, &[doomed_id])
+            .unwrap();
+
+        // Ship: succeeds (pre-fix: Integrity refusal), folded to a synthesized
+        // full checkpoint with an empty overlay — the wire shape is unchanged.
+        let snap = shipper.ship_snapshot(0).unwrap();
+        assert!(snap.overlay.is_empty(), "removals fold into the checkpoint");
+        assert!(
+            snap.checkpoint
+                .as_ref()
+                .unwrap()
+                .cells
+                .iter()
+                .all(|c| c.id() != doomed_id),
+            "the folded checkpoint already lacks the removed cell"
+        );
+
+        // A fresh joiner reconstructs the exact finalized ledger: the removed
+        // cell is ABSENT and the root matches the recorded head root.
+        let joiner = PersistentStore::open_in_memory().unwrap();
+        let mut rebuilt = joiner.install_snapshot(&snap, &snap.claimed_root).unwrap();
+        assert!(rebuilt.get(&doomed_id).is_none(), "no resurrection");
+        assert!(rebuilt.get(&survivor.id()).is_some());
+        assert_eq!(rebuilt.root(), rec1.ledger_root);
+
+        // A removal-FREE window still ships the minimal split (no fold): a
+        // creation-only turn above the fold point keeps the delta shape.
+        let extra = cell(3, 900);
+        let _ = running.insert_cell(extra.clone());
+        let rec2 = CommitRecord {
+            ordinal: 2,
+            height: 3,
+            block_id: [2u8; 32],
+            block_executed_up_to: 20,
+            turn_hash: [0xa3; 32],
+            creator: [1u8; 32],
+            receipt_hash: [0xb3; 32],
+            ledger_root: running.root(),
+            touched_cells: vec![extra],
+        };
+        shipper.commit_finalized_turn(2, &rec2).unwrap();
+        let snap2 = shipper.ship_snapshot(0).unwrap();
+        // The removal still hits the (height-1) base, so the fold re-applies —
+        // and the joiner again reconstructs the exact ledger.
+        let joiner2 = PersistentStore::open_in_memory().unwrap();
+        let mut rebuilt2 = joiner2
+            .install_snapshot(&snap2, &snap2.claimed_root)
+            .unwrap();
+        assert!(rebuilt2.get(&doomed_id).is_none());
+        assert_eq!(rebuilt2.root(), rec2.ledger_root);
     }
 }
