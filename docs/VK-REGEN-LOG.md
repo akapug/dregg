@@ -26,3 +26,4 @@ Rows are never edited or removed; git history is the tamper-evidence.
 | 2026-07-18T09:08:01Z | ember@nextop.local | emit | c76bd0761bd1eef3016088fce8427451441db148 | f52207f3314a48151862405e0059775837bd6dd5 | YES | by-name/automatafl-resolve.json |
 | 2026-07-18T09:42:37Z | ember@nextop.local | emit | e1c97ee0955da92301ef4494af4dea347b8d94cb | c1cabd139867d67014da8c0d4808931b98e21714 | YES | by-name/automatafl-resolve.json |
 | 2026-07-18T10:36:54Z | ember@nextop.local | emit | c52f7821b037ba0ed5ce666ce64ab1244ef355d2 | d4b8e7e7b42a1e32bc9b7b07b8e385f274573b69 | YES | by-name/automatafl-resolve.json |
+| 2026-07-18T21:51:29Z | ember@nextop.local | emit | 7aac2659f4ccd7f04a7921bc5dcf725d4f05c7a0 | 649788aae2b2a875e3d3dd1026185246b6c79dc7 | YES | rotation-wide-registry-staged.tsv, rotation-wide-transfer-staged.tsv, rotation-wide-umem-welded-registry-staged.tsv, circuit/src/effect_vm_descriptors.rs |

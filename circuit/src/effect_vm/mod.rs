@@ -175,6 +175,10 @@ pub mod columns;
 /// producer wrote limb 38, silently making every honest setPermissions/setVerificationKey turn UNSAT.
 pub mod layout_generated;
 pub mod pi;
+/// THE S2 DELETION GEOMETRY (Epoch 1) — Lean-emitted `(key, bb, lane_base)` per wide member; the
+/// producer's `trace_rotated::compact_s2_columns` drops exactly the columns the Lean emit deleted
+/// from the committed wide descriptors. Same law as `layout_generated`: never hand-edit.
+pub mod s2_compact_generated;
 
 mod air;
 pub mod authority_digest_weld;

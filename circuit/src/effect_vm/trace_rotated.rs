@@ -4068,6 +4068,45 @@ pub fn generate_rotated_transfer_wide(
 ///     land STRICTLY PAST the host's columns + gates (the appendix is purely additive), member-uniform
 ///     because `BEFORE_BASE`/`AFTER_BASE` (187/238) are uniform across the cohort. The number of base
 ///     PIs is preserved (the grow-gate families carry an extra PI[38]); the 16 wide PIs append after.
+/// **THE S2 DELETION (Epoch 1).** Drop the two rotated 1-felt Merkle-Damgard chain carrier
+/// bands and their 840 graduated chip-lane columns from an OLD-geometry wide trace, so the rows
+/// match the committed S2-COMPACTED wide descriptor (Lean `RotWideCompactS2.compactS2`; every
+/// member passed the `compactOk` emit gate). Geometry comes from the Lean-emitted single source
+/// (`s2_compact_generated::S2_COMPACT_TABLE`); the three dropped bands per member are
+/// `[bb+179, bb+239) ∪ [bb+418, bb+478) ∪ [lane_base, lane_base+840)`. Every published PI is
+/// UNCHANGED (the retired 1-felt commit slots stay zeroed). Fails closed on an unknown key or a
+/// row too short to span the lane band (a mis-staged producer, never a silent misalignment).
+pub fn compact_s2_columns(trace: &mut [Vec<BabyBear>], registry_key: &str) -> Result<(), String> {
+    use super::s2_compact_generated::{
+        S2_CARRIER_OFF, S2_CARRIER_SPAN, S2_COMPACT_TABLE, S2_LANE_SPAN,
+    };
+    let (_, bb, lane_base) = S2_COMPACT_TABLE
+        .iter()
+        .find(|(k, _, _)| *k == registry_key)
+        .ok_or_else(|| format!("compact_s2_columns: {registry_key} not in S2_COMPACT_TABLE"))?;
+    let (bb, lane_base) = (*bb, *lane_base);
+    if bb + 478 > lane_base {
+        return Err(format!(
+            "compact_s2_columns: {registry_key} geometry inconsistent (bb={bb}, lane_base={lane_base})"
+        ));
+    }
+    for row in trace.iter_mut() {
+        if row.len() < lane_base + S2_LANE_SPAN {
+            return Err(format!(
+                "compact_s2_columns: {registry_key} row width {} < lane band end {} — the trace \
+                 is not the full old-geometry wide row (compact AFTER the wide append)",
+                row.len(),
+                lane_base + S2_LANE_SPAN
+            ));
+        }
+        // descending order, so earlier drains do not shift later band positions
+        row.drain(lane_base..lane_base + S2_LANE_SPAN);
+        row.drain(bb + 239 + S2_CARRIER_OFF..bb + 239 + S2_CARRIER_OFF + S2_CARRIER_SPAN);
+        row.drain(bb + S2_CARRIER_OFF..bb + S2_CARRIER_OFF + S2_CARRIER_SPAN);
+    }
+    Ok(())
+}
+
 pub fn append_wide_carriers(
     trace: &mut [Vec<BabyBear>],
     base_pis: Vec<BabyBear>,
@@ -4660,6 +4699,7 @@ pub fn generate_rotated_heap_write_wide(
         HEAP_WRITE_HOST_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
     ); // 3065 (HEAP_WRITE_HOST_WIDTH + WIDE_CARRIER_APPENDIX — OPTION I after-spine host)
     debug_assert_eq!(dpis.len(), 20); // 4 base (2 retired) + 16 wide
+    compact_s2_columns(&mut trace, "heapWriteVmDescriptor2R24")?;
     Ok((trace, dpis, vec![heap_leaves.to_vec()]))
 }
 
@@ -4713,6 +4753,7 @@ pub fn generate_rotated_transfer_cap_open_tb_wide(
         CAP_OPEN_TB_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
     ); // 2824
     debug_assert_eq!(dpis.len(), CAP_OPEN_TB_PI_BASE + 3 + 16); // 65
+    compact_s2_columns(&mut trace, "transferCapOpenTBVmDescriptor2R24")?;
     Ok((trace, dpis))
 }
 
@@ -5766,6 +5807,11 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
     } else {
         MemBoundaryWitness::default()
     };
+
+    // THE S2 DELETION (Epoch 1): the committed wide registry rows are S2-COMPACTED — drop the
+    // same 960 columns the Lean emit deleted, BEFORE the descriptor-derived tail pairing below
+    // (which reasons in the committed compact geometry).
+    compact_s2_columns(&mut trace, name)?;
 
     // THE POST-REGEN REGISTRY TAIL (hoisted from `rotation_witness::mint_rotated_participant_leg`
     // so EVERY route through this spine emits the committed shape): the committed row may carry

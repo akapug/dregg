@@ -1,8 +1,8 @@
 {
   "version": 1,
   "mode": "emit",
-  "dregg2_tree_hash": "c52f7821b037ba0ed5ce666ce64ab1244ef355d2",
-  "repo_head": "d4b8e7e7b42a1e32bc9b7b07b8e385f274573b69",
+  "dregg2_tree_hash": "7aac2659f4ccd7f04a7921bc5dcf725d4f05c7a0",
+  "repo_head": "649788aae2b2a875e3d3dd1026185246b6c79dc7",
   "source_dirty": true,
   "lean_toolchain": "leanprover/lean4:v4.30.0",
   "emitters": [
@@ -22,7 +22,7 @@
     "EmitCertF.lean",
     "EmitCertFMarket4.lean"
   ],
-  "generated_utc": "2026-07-18T10:36:54Z",
+  "generated_utc": "2026-07-18T21:51:29Z",
   "operator": "ember@nextop.local",
   "descriptor_sha256": {
     "dregg-bilateral-aggregation-v2.json": "47222a8cbc3e7809e3a6dc15e5c01faa09eba3bd244f52eb45003fc5fb77277d",
@@ -96,9 +96,9 @@
     "rotation-layout-v3-staged.json": "17d4d1097a020bc389fb8e3b584e44ffc4eb5a7438d47b810db1e7ad1954a7b4",
     "rotation-v3-setfield-value8-staged-registry.tsv": "2bd6bb0bcd646a50f665f0fd738ba36de208ba718b22926261431d03a62ac322",
     "rotation-v3-staged-registry.tsv": "609bf2698679e648d5c9a0359e5748706901f5f42ed9789436f2bec6e44f45cb",
-    "rotation-wide-registry-staged.tsv": "07fa7e870bbf227f75c0648ed6b4e9ceb34f771339c90723a2300e93d1fc7d86",
-    "rotation-wide-transfer-staged.tsv": "23041ae81e380a2ad923feaa014c899eecab6f1f6718f745ea0a0f5be1cf2652",
-    "rotation-wide-umem-welded-registry-staged.tsv": "427b8155ed0fdcc44f2768cbc965cff9f51d662cc3b96fd85efe746f5bd59ccb",
+    "rotation-wide-registry-staged.tsv": "32fdf108c0e2ba97c95ee4f44db29965f24638baef1a0c184cbc8484461e4951",
+    "rotation-wide-transfer-staged.tsv": "32d022303cdfe5c30a46cba00f3c8d0dd08e6eb6fab6975e4f49ccaa35a1a572",
+    "rotation-wide-umem-welded-registry-staged.tsv": "02d5d73b2df36eed2c025266b93b7ae2669c8f66829dcd7d77ba33cea6363049",
     "umem-cohort-multidomain-v1-staged-registry.tsv": "89574dbb90269e908911a7f920be691af7e24a6dc4802e5da035feec44867775",
     "umem-cohort-v1-staged-registry.tsv": "97a4d13edb173a831b81c4cb3cab84c2ee03baf2a45593d000dfa239d6bf4cfb"
   },
@@ -138,7 +138,7 @@
     "circuit/src/bilateral_aggregation_air.rs": "dc75ef5362eca39d32aa672c3ed9184d671bfc1feb6a5019773c7f8796763b91",
     "circuit/src/cap_delegation_nonamp_descriptor.rs": "f634f39e6d96cec52c1cfea9851611a0e77de73f3bf28b6dad5f41c2ed17bd85",
     "circuit/src/cap_reshape_descriptor.rs": "58cfdabae8f78b683d60dd90da1a4b587992b4498f8d63722653ed7343fd2873",
-    "circuit/src/effect_vm_descriptors.rs": "5101b1b56ff5d13fb23c5d83de01f732df65e90803ab618a5057b91d46381116",
+    "circuit/src/effect_vm_descriptors.rs": "da7aebe03cd5dda4282e821772946989587685b16657e0d87a86f4478e1b0410",
     "circuit/src/lean_descriptor_air.rs": "aceffe54c45a905a2f34e333214b9b0e30606b40c0f8fd460726b0067d20ddb2"
   }
 }
