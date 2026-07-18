@@ -9593,3 +9593,17 @@ authoritative file:line record).
 - GOAL A (codex take-home, `docs/CODEX-BRIEF-allocator-single-source.md`): make producer+circuit+emit DERIVE
   from the one verified layout (byte-preserving, NO regen) + tidy the parallel-layout cruft. GOAL B: deploy the
   proven optimizer (regen; a deliberate campaign, out of codex scope).
+
+## 2026-07-18 — "The Cell Is Not the Box" essay + coalgebra-corner audit findings
+Wrote `docs/THE-CELL-IS-NOT-THE-BOX.md` — the quote-tweet companion essay: a cell is pinned between TWO
+fixpoints (behaviour = unique unfold into the PROVEN final coalgebra `nuF`, carrier `List Adm → Obs`,
+`FinalCoalgebra.lean:162`; interface = biorthogonal fixed point `Adm(g)=Adm(g)^⊥⊥`, gate weld `Iff.rfl`),
+the turn's SHAPE is ontology-relative (`verb_minimality_is_ontology_relative`) while the LAWS are the
+invariant, and chains witness/never author (sovereign 32-byte commitment, offline private cells,
+`modality_price_is_tier`). Full-read audit of the coalgebra corner surfaced two flags:
+- ⚠ `commClo` (`Dregg2/Proof/CoinductiveAdversary.lean:341`) is extensionally the IDENTITY closure — the one
+  deployed use of the Paco/gpaco up-to machinery is vacuous as an up-to technique; `Claims.lean:400`
+  over-claims it "closes the coinductive open"; `obsBisim_of_uptoComm` has zero callers. FIX LANE DISPATCHED
+  2026-07-18 (genuine Eqv-parametric closure + non-vacuity witness + Claims fix, or honest deletion).
+- ⚠ `Boundary.Later` (`Boundary.lean:87`) = identity placeholder for ▷ (labeled in-tree; productivity not
+  machine-enforced). Named, not yet worked.
