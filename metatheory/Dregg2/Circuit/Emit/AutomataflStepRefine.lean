@@ -5259,24 +5259,77 @@ def buForgeAsg : Assignment := fun c => if c = 247 ∨ c = 248 ∨ c = 250 then 
 #guard buCell0Expr.eval buGoodAsg == 0    -- automaton steps onto target, new0 = AUTO: gate holds
 #guard buCell0Expr.eval buForgeAsg != 0   -- new0 = 0 while the step happened: FAILS
 
+/-! ## §4.16b — NON-VACUITY for the board-cell RANGE gate (the newly-added family, `#guard`).
+
+The `assert_member(old[c], {VAC,REP,ATT,AUTO})` gate is a two-sided discriminator: it ACCEPTS a real
+particle code and REJECTS the `4` that used to be witnessable — the exact value that made the
+reference decode VACUUM while the circuit's vacancy test blocked, i.e. the gap this family closed. -/
+
+/-- The cell-0 membership gate body `old0·(old0−1)·(old0−2)·(old0−3)`. -/
+def boardMemExpr : EmittedExpr := memberExpr (old 0) [0, 1, 2, 3]
+/-- `old0 = ATT = 2` — a genuine particle: the gate HOLDS. -/
+def boardMemGoodAsg : Assignment := fun c => if c = old 0 then 2 else 0
+/-- `old0 = 4` — the out-of-alphabet cell the old descriptor admitted: the gate FAILS. -/
+def boardMemForgeAsg : Assignment := fun c => if c = old 0 then 4 else 0
+
+#guard boardMemExpr.eval boardMemGoodAsg == 0     -- a real particle code: accepted
+#guard boardMemExpr.eval boardMemForgeAsg != 0    -- old0 = 4 (decodes VACUUM, blocks the circuit): REJECTED
+
 /-! ## §4.17 — LEG (5) CAPSTONE: `boardDecode(new) = automatonStep(boardDecode old)`.
 
 Composing every leg-5 extraction with `automatonOffset_of_sat` (the offset, legs 1–4): on a satisfying
-canonical trace whose OLD board is a valid particle board (`hvalid` — the deployed board invariant, the
-descriptor range-checking board cells to `{VAC,REP,ATT,AUTO}` is a labeled residual), the emitted NEW
-columns decode, cell by cell, to the reference automaton step applied to the decoded OLD board. The
-move flag `m` (col 247) equals the reference guard, and the four board-update equalities move the AUTO
-particle onto the vacated target (or leave the board fixed when blocked). -/
+canonical trace the emitted NEW columns decode, cell by cell, to the reference automaton step applied
+to the decoded OLD board. The move flag `m` (col 247) equals the reference guard, and the four
+board-update equalities move the AUTO particle onto the vacated target (or leave the board fixed when
+blocked). The OLD-board particle-validity envelope is NOT a hypothesis here: the descriptor's
+`boardRangeConstraints` assert it and `boardvalid_of_sat` reads it off the emitted gates. -/
 
 section Leg5Capstone
 variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
 
+/-- **The OLD board columns are valid particle felts** — read straight off the descriptor's
+`boardRangeConstraints` (`assert_member(old[c], {0,1,2,3})`, §4 of the emitter). This is the lemma
+that closes the leg-5 GAP: earlier drafts carried this envelope as an `hvalid` HYPOTHESIS because the
+emitted gate set range-checked only the decision variant, never the board cells — which made the
+refinement FALSE over satisfying witnesses (a cell `≥ 4` decodes to VACUUM while the circuit's
+vacancy test blocks). The descriptor now asserts it, so it is a THEOREM about the emitted object. -/
+theorem boardvalid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (c : Nat) (hcK : c < KK) :
+    ((envAt t i).loc (old c) = 0 ∨ (envAt t i).loc (old c) = 1
+      ∨ (envAt t i).loc (old c) = 2 ∨ (envAt t i).loc (old c) = 3) := by
+  have h4 : c < 4 := by simpa [KK, NN] using hcK
+  interval_cases c
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 0) [0, 1, 2, 3]) (by decide))
+      (canon_loc hc i _)
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 1) [0, 1, 2, 3]) (by decide))
+      (canon_loc hc i _)
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 2) [0, 1, 2, 3]) (by decide))
+      (canon_loc hc i _)
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 3) [0, 1, 2, 3]) (by decide))
+      (canon_loc hc i _)
+
+/-- **The NEW board columns are valid particle felts** — the same `assert_member` family on the
+CLAIMED next board, so `boardDecode`ing the `new` columns is total-and-faithful (the refinement's
+conclusion is a statement about the decoded NEW board). -/
+theorem newvalid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (c : Nat) (hcK : c < KK) :
+    ((envAt t i).loc (new c) = 0 ∨ (envAt t i).loc (new c) = 1
+      ∨ (envAt t i).loc (new c) = 2 ∨ (envAt t i).loc (new c) = 3) := by
+  have h4 : c < 4 := by simpa [KK, NN] using hcK
+  interval_cases c
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 0) [0, 1, 2, 3]) (by decide))
+      (canon_loc hc i _)
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 1) [0, 1, 2, 3]) (by decide))
+      (canon_loc hc i _)
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 2) [0, 1, 2, 3]) (by decide))
+      (canon_loc hc i _)
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 3) [0, 1, 2, 3]) (by decide))
+      (canon_loc hc i _)
+
 /-- The target cell is a valid particle felt (`{0,1,2,3}`): out of bounds the gated read is `0`; in
-bounds it is a valid OLD board cell (`hvalid`). -/
+bounds it is a valid OLD board cell (`boardvalid_of_sat`, off the descriptor). -/
 theorem tcell_valid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
-    (hvalid : ∀ c : Nat, c < KK → ((envAt t i).loc (old c) = 0 ∨ (envAt t i).loc (old c) = 1
-      ∨ (envAt t i).loc (old c) = 2 ∨ (envAt t i).loc (old c) = 3)) :
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
     (envAt t i).loc 234 = 0 ∨ (envAt t i).loc 234 = 1 ∨ (envAt t i).loc 234 = 2 ∨ (envAt t i).loc 234 = 3 := by
   set e := envAt t i with he
   obtain ⟨htibB, htibiff⟩ := tib_of_sat hsat hc i hi
@@ -5299,16 +5352,14 @@ theorem tcell_valid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin
     rw [← he] at htc
     obtain ⟨hlo1, hlo2, hlo3, hlo4⟩ := htibiff.mp h1
     rw [htc]
-    apply hvalid
+    apply boardvalid_of_sat hsat hc i hi
     have hxb : ((e.loc 8 + decodeOff (e.loc 207)).toNat) ≤ 1 := by omega
     have hyb : ((e.loc 9 + decodeOff (e.loc 208)).toNat) ≤ 1 := by omega
     simp only [KK, NN]; omega
 
 /-- **`m = 1` iff the three factors hold** (offset nonzero, target in bounds, target vacant). -/
 theorem moved_parts_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
-    (hvalid : ∀ c : Nat, c < KK → ((envAt t i).loc (old c) = 0 ∨ (envAt t i).loc (old c) = 1
-      ∨ (envAt t i).loc (old c) = 2 ∨ (envAt t i).loc (old c) = 3)) :
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
     ((envAt t i).loc 247 = 0 ∨ (envAt t i).loc 247 = 1)
     ∧ ((envAt t i).loc 247 = 1 ↔
         ((envAt t i).loc 246 = 1 ∧ (envAt t i).loc 233 = 1 ∧ (envAt t i).loc 245 = 1)) := by
@@ -5321,7 +5372,7 @@ theorem moved_parts_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin
   have hoffB : e.loc 246 = 0 ∨ e.loc 246 = 1 := by
     rw [hoffnz]; rcases hoffcard with h|h|h|h|h <;>
       (simp only [Prod.mk.injEq] at h; obtain ⟨hx, hy⟩ := h; rw [hx, hy]; norm_num)
-  have htcell := tcell_valid_of_sat hsat hc i hi hvalid
+  have htcell := tcell_valid_of_sat hsat hc i hi
   rw [← he] at htcell
   obtain ⟨htvB, _⟩ := targvac_of_sat hsat hc i hi (by rw [← he]; exact htcell)
   rw [← he] at htvB
@@ -5334,6 +5385,331 @@ theorem moved_parts_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin
       rcases hoffB with h|h <;> rcases htibB with h1|h1 <;> rcases htvB with h2|h2 <;>
         rw [h, h1, h2] at hp ⊢ <;> first | exact ⟨rfl, rfl, rfl⟩ | (exfalso; revert hp; norm_num)
     · rintro ⟨h1, h2, h3⟩; rw [h1, h2, h3]; norm_num
+
+/-! ### §4.17b — the reference GUARD discharged, and the LEG-A CAPSTONE. -/
+
+/-- **PURE**: one decoded board-update cell. `A` is the (0/1) target-selector product for this cell
+and `B` the (0/1) auto-selector product (never both — the step is a nonzero offset, so the target is
+not the vacated cell): the new cell decodes to AUTO at the target, VACUUM at the vacated auto cell,
+and the old particle everywhere else — exactly `stepTo`'s three-way `if`. -/
+theorem cell_update_pure {oldc newc A B : ℤ}
+    (hold : oldc = 0 ∨ oldc = 1 ∨ oldc = 2 ∨ oldc = 3)
+    (hA : A = 0 ∨ A = 1) (hB : B = 0 ∨ B = 1) (hAB : A = 1 → B = 0) (hcn : Canon newc)
+    (h : newc ≡ oldc + 3 * A - A * oldc - B * oldc [ZMOD 2013265921]) :
+    codeToParticle newc
+      = if A = 1 then Particle.automaton
+        else if B = 1 then Particle.vacuum else codeToParticle oldc := by
+  have hb : 0 ≤ oldc ∧ oldc ≤ 3 := by rcases hold with h0|h0|h0|h0 <;> omega
+  rcases hA with hA | hA
+  · rcases hB with hB | hB
+    · rw [hA, hB] at h
+      rw [show oldc + 3 * (0:ℤ) - 0 * oldc - 0 * oldc = oldc from by ring] at h
+      have hv : newc = oldc := eq_of_modEq_canon hcn ⟨hb.1, by omega⟩ h
+      rw [hv, hA, hB]; norm_num
+    · rw [hA, hB] at h
+      rw [show oldc + 3 * (0:ℤ) - 0 * oldc - 1 * oldc = 0 from by ring] at h
+      have hv : newc = 0 := eq_of_modEq_canon hcn canon_zero h
+      rw [hv, hA, hB]; norm_num [codeToParticle]
+  · have hB0 : B = 0 := hAB hA
+    rw [hA, hB0] at h
+    rw [show oldc + 3 * (1:ℤ) - 1 * oldc - 0 * oldc = 3 from by ring] at h
+    have hv : newc = 3 := eq_of_modEq_canon hcn canon_three h
+    rw [hv, hA, hB0]; norm_num [codeToParticle]
+
+/-- **The move flag IS the reference guard.** `m` (col 247) `= 1` exactly when `automatonStep`'s own
+`if` fires on the DECODED board: the target is in bounds on both axes, the offset is nonzero, and the
+target cell is vacuum. Every conjunct comes off the emitted gates (`tib_of_sat`, `offnz_of_sat`,
+`targvac_of_sat` ▸ `tcell_target_of_sat`), with the board-cell validity now DERIVED from the
+descriptor's `boardRangeConstraints` — no `hvalid` envelope. -/
+theorem moved_iff_guard_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    ((envAt t i).loc 247 = 1) ↔
+      (0 ≤ ((boardDecode (envAt t i)).automaton.x : ℤ) + decodeOff ((envAt t i).loc 207)
+        ∧ ((boardDecode (envAt t i)).automaton.x : ℤ) + decodeOff ((envAt t i).loc 207)
+            < ((boardDecode (envAt t i)).size : ℤ)
+        ∧ 0 ≤ ((boardDecode (envAt t i)).automaton.y : ℤ) + decodeOff ((envAt t i).loc 208)
+        ∧ ((boardDecode (envAt t i)).automaton.y : ℤ) + decodeOff ((envAt t i).loc 208)
+            < ((boardDecode (envAt t i)).size : ℤ)
+        ∧ (decodeOff ((envAt t i).loc 207) ≠ 0 ∨ decodeOff ((envAt t i).loc 208) ≠ 0)
+        ∧ (boardDecode (envAt t i)).cellAt
+            ⟨(((boardDecode (envAt t i)).automaton.x : ℤ) + decodeOff ((envAt t i).loc 207)).toNat,
+              (((boardDecode (envAt t i)).automaton.y : ℤ) + decodeOff ((envAt t i).loc 208)).toNat⟩
+            = Particle.vacuum) := by
+  obtain ⟨hax, hay⟩ := coord_of_sat hsat hc i hi
+  have hax' : (envAt t i).loc 8 = 0 ∨ (envAt t i).loc 8 = 1 := hax
+  have hay' : (envAt t i).loc 9 = 0 ∨ (envAt t i).loc 9 = 1 := hay
+  have hbx : ((boardDecode (envAt t i)).automaton.x : ℤ) = (envAt t i).loc 8 := by
+    show (((envAt t i).loc 8).toNat : ℤ) = (envAt t i).loc 8
+    rcases hax' with h | h <;> rw [h] <;> rfl
+  have hby : ((boardDecode (envAt t i)).automaton.y : ℤ) = (envAt t i).loc 9 := by
+    show (((envAt t i).loc 9).toNat : ℤ) = (envAt t i).loc 9
+    rcases hay' with h | h <;> rw [h] <;> rfl
+  have hsz : ((boardDecode (envAt t i)).size : ℤ) = 2 := rfl
+  rw [hbx, hby, hsz]
+  obtain ⟨_, hmiff⟩ := moved_parts_of_sat hsat hc i hi
+  obtain ⟨_, htibiff⟩ := tib_of_sat hsat hc i hi
+  have hoffnz := offnz_of_sat hsat hc i hi
+  have hcard := offCard_of_sat hsat hc i hi
+  have htcv := tcell_valid_of_sat hsat hc i hi
+  obtain ⟨_, htviff⟩ := targvac_of_sat hsat hc i hi htcv
+  -- the offset-nonzero factor
+  have hnziff : (envAt t i).loc 246 = 1 ↔
+      (decodeOff ((envAt t i).loc 207) ≠ 0 ∨ decodeOff ((envAt t i).loc 208) ≠ 0) := by
+    rw [hoffnz]
+    rcases hcard with h | h | h | h | h <;> simp only [Prod.mk.injEq] at h <;>
+      obtain ⟨hx, hy⟩ := h <;> rw [hx, hy] <;> norm_num
+  -- the target-vacuum factor, under the in-bounds factor
+  have hvaciff : (envAt t i).loc 233 = 1 →
+      ((envAt t i).loc 245 = 1 ↔
+        (boardDecode (envAt t i)).cellAt
+          ⟨((envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)).toNat,
+            ((envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)).toNat⟩ = Particle.vacuum) := by
+    intro htib
+    obtain ⟨b1, b2, b3, b4⟩ := htibiff.mp htib
+    have htc := tcell_target_of_sat hsat hc i hi htib
+    have hcell : (boardDecode (envAt t i)).cellAt
+        ⟨((envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)).toNat,
+          ((envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)).toNat⟩
+        = codeToParticle ((envAt t i).loc 234) := by
+      rw [htc]
+      have hin : ((envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)).toNat < 2
+          ∧ ((envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)).toNat < 2 := ⟨by omega, by omega⟩
+      unfold Dregg2.Games.Automatafl.Board.cellAt
+      split
+      · rfl
+      · next hbad => exact absurd hin hbad
+    rw [hcell, htviff]
+    rcases htcv with h | h | h | h <;> rw [h] <;> simp [codeToParticle]
+  rw [hmiff]
+  constructor
+  · rintro ⟨h246, h233, h245⟩
+    obtain ⟨b1, b2, b3, b4⟩ := htibiff.mp h233
+    exact ⟨by omega, by omega, by omega, by omega, hnziff.mp h246, (hvaciff h233).mp h245⟩
+  · rintro ⟨g1, g2, g3, g4, g5, g6⟩
+    have h233 : (envAt t i).loc 233 = 1 := htibiff.mpr ⟨by omega, by omega, by omega, by omega⟩
+    exact ⟨hnziff.mpr g5, h233, (hvaciff h233).mpr g6⟩
+
+/-- The `n = 2` gated one-hot's `j`-th selector value for a target index `v ∈ {0,1}`: the emitted
+`sel[0] = gate − sel[1]`, `sel[1] = v` pair, gate `= 1`. -/
+def selv (v : ℤ) (j : Nat) : ℤ := if j = 0 then 1 - v else v
+
+/-- **PURE, the per-cell three-way match.** With the target one-hot at `(TX, TY)` and the auto
+one-hot at `(AX, AY)` (all four in `{0,1}`, target ≠ auto because the step is nonzero), the decoded
+new cell at `(x, y)` is AUTO at the target, VACUUM at the vacated auto cell, and the old particle
+elsewhere — `stepTo`'s own three-way `if`, cell for cell. -/
+theorem cell_of_data {oldc newc TX TY AX AY : ℤ} {x y : Nat}
+    (hx : x < 2) (hy : y < 2)
+    (hTX : TX = 0 ∨ TX = 1) (hTY : TY = 0 ∨ TY = 1)
+    (hAX : AX = 0 ∨ AX = 1) (hAY : AY = 0 ∨ AY = 1)
+    (hne : TX ≠ AX ∨ TY ≠ AY)
+    (hold : oldc = 0 ∨ oldc = 1 ∨ oldc = 2 ∨ oldc = 3) (hcn : Canon newc)
+    (h : newc ≡ oldc + 3 * (selv TY y * selv TX x) - selv TY y * selv TX x * oldc
+          - selv AY y * selv AX x * oldc [ZMOD 2013265921]) :
+    codeToParticle newc
+      = if (⟨x, y⟩ : Coord) = ⟨TX.toNat, TY.toNat⟩ then Particle.automaton
+        else if (⟨x, y⟩ : Coord) = ⟨AX.toNat, AY.toNat⟩ then Particle.vacuum
+        else codeToParticle oldc := by
+  have hAv : selv TY y * selv TX x = 1 ↔ ((⟨x, y⟩ : Coord) = ⟨TX.toNat, TY.toNat⟩) := by
+    interval_cases x <;> interval_cases y <;> rcases hTX with h1 | h1 <;> rcases hTY with h2 | h2 <;>
+      subst h1 <;> subst h2 <;> simp [selv, Coord.mk.injEq]
+  have hBv : selv AY y * selv AX x = 1 ↔ ((⟨x, y⟩ : Coord) = ⟨AX.toNat, AY.toNat⟩) := by
+    interval_cases x <;> interval_cases y <;> rcases hAX with h1 | h1 <;> rcases hAY with h2 | h2 <;>
+      subst h1 <;> subst h2 <;> simp [selv, Coord.mk.injEq]
+  have hA01 : selv TY y * selv TX x = 0 ∨ selv TY y * selv TX x = 1 := by
+    interval_cases x <;> interval_cases y <;> rcases hTX with h1 | h1 <;> rcases hTY with h2 | h2 <;>
+      subst h1 <;> subst h2 <;> norm_num [selv]
+  have hB01 : selv AY y * selv AX x = 0 ∨ selv AY y * selv AX x = 1 := by
+    interval_cases x <;> interval_cases y <;> rcases hAX with h1 | h1 <;> rcases hAY with h2 | h2 <;>
+      subst h1 <;> subst h2 <;> norm_num [selv]
+  have hAB : selv TY y * selv TX x = 1 → selv AY y * selv AX x = 0 := by
+    intro hA1
+    rcases hB01 with hb | hb
+    · exact hb
+    · exfalso
+      have h1 := hAv.mp hA1
+      have h2 := hBv.mp hb
+      rw [h1, Coord.mk.injEq] at h2
+      rcases hTX with e1 | e1 <;> rcases hTY with e2 | e2 <;> rcases hAX with e3 | e3 <;>
+        rcases hAY with e4 | e4 <;> subst e1 <;> subst e2 <;> subst e3 <;> subst e4 <;>
+        revert hne h2 <;> decide
+  rw [cell_update_pure hold hA01 hB01 hAB hcn h]
+  by_cases hc1 : (⟨x, y⟩ : Coord) = ⟨TX.toNat, TY.toNat⟩
+  · rw [if_pos hc1, if_pos (hAv.mpr hc1)]
+  · rw [if_neg hc1, if_neg (fun hh => hc1 (hAv.mp hh))]
+    by_cases hc2 : (⟨x, y⟩ : Coord) = ⟨AX.toNat, AY.toNat⟩
+    · rw [if_pos hc2, if_pos (hBv.mpr hc2)]
+    · rw [if_neg hc2, if_neg (fun hh => hc2 (hBv.mp hh))]
+
+/-- **LEG A, CLOSED — the capstone.** On a satisfying, canonical trace of the byte-pinned
+`automataflStepDesc`, the emitted NEW board columns ARE the reference automaton step applied to the
+decoded OLD board: the size is preserved, the automaton sits on the witnessed target exactly when the
+move flag fires, and every in-bounds cell of the decoded NEW board equals the corresponding cell of
+`automatonStep (boardDecode …)`. UNCONDITIONAL — no `hvalid` envelope: the OLD/NEW board cells are
+range-checked by the descriptor itself (`boardvalid_of_sat` / `newvalid_of_sat`), which is the gap the
+`boardRangeConstraints` family closed. -/
+theorem astep_sat_imp_automatonStep (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (Dregg2.Games.Automatafl.automatonStep (boardDecode (envAt t i))).size = NN
+    ∧ (Dregg2.Games.Automatafl.automatonStep (boardDecode (envAt t i))).automaton
+        = (if (envAt t i).loc 247 = 1
+            then (⟨((envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)).toNat,
+                   ((envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)).toNat⟩ : Coord)
+            else ⟨((envAt t i).loc 8).toNat, ((envAt t i).loc 9).toNat⟩)
+    ∧ (∀ x y : Nat, x < NN → y < NN →
+        codeToParticle ((envAt t i).loc (new (y * NN + x)))
+          = (Dregg2.Games.Automatafl.automatonStep (boardDecode (envAt t i))).cellAt ⟨x, y⟩) := by
+  obtain ⟨hax0, hay0⟩ := coord_of_sat hsat hc i hi
+  have hax' : (envAt t i).loc 8 = 0 ∨ (envAt t i).loc 8 = 1 := hax0
+  have hay' : (envAt t i).loc 9 = 0 ∨ (envAt t i).loc 9 = 1 := hay0
+  have hbx : ((boardDecode (envAt t i)).automaton.x : ℤ) = (envAt t i).loc 8 := by
+    show (((envAt t i).loc 8).toNat : ℤ) = (envAt t i).loc 8
+    rcases hax' with h | h <;> rw [h] <;> rfl
+  have hby : ((boardDecode (envAt t i)).automaton.y : ℤ) = (envAt t i).loc 9 := by
+    show (((envAt t i).loc 9).toNat : ℤ) = (envAt t i).loc 9
+    rcases hay' with h | h <;> rw [h] <;> rfl
+  -- the reference step, with its guard discharged against the move flag
+  have hstep : Dregg2.Games.Automatafl.automatonStep (boardDecode (envAt t i))
+      = if (envAt t i).loc 247 = 1
+        then Dregg2.Games.Automatafl.stepTo (boardDecode (envAt t i))
+              ⟨((envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)).toNat,
+               ((envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)).toNat⟩
+        else boardDecode (envAt t i) := by
+    simp only [Dregg2.Games.Automatafl.automatonStep, automatonOffset_of_sat hsat hc i hi]
+    by_cases hm : (envAt t i).loc 247 = 1
+    · rw [if_pos hm, if_pos ((moved_iff_guard_of_sat hsat hc i hi).mp hm), hbx, hby]
+    · rw [if_neg hm, if_neg (fun hg => hm ((moved_iff_guard_of_sat hsat hc i hi).mpr hg))]
+  -- every in-bounds cell of `stepTo`/`boardDecode` reads through `cellAt`
+  have hcellStep : ∀ (nc : Coord) (x y : Nat), x < 2 → y < 2 →
+      (Dregg2.Games.Automatafl.stepTo (boardDecode (envAt t i)) nc).cellAt ⟨x, y⟩
+        = if (⟨x, y⟩ : Coord) = nc then Particle.automaton
+          else if (⟨x, y⟩ : Coord) = (boardDecode (envAt t i)).automaton then Particle.vacuum
+          else codeToParticle ((envAt t i).loc (old (y * NN + x))) := by
+    intro nc x y hx hy
+    unfold Dregg2.Games.Automatafl.Board.cellAt
+    split
+    · rfl
+    · next hbad => exact absurd (⟨hx, hy⟩ : x < NN ∧ y < NN) hbad
+  have hcellOld : ∀ (x y : Nat), x < 2 → y < 2 →
+      (boardDecode (envAt t i)).cellAt ⟨x, y⟩
+        = codeToParticle ((envAt t i).loc (old (y * NN + x))) := by
+    intro x y hx hy
+    unfold Dregg2.Games.Automatafl.Board.cellAt
+    split
+    · rfl
+    · next hbad => exact absurd (⟨hx, hy⟩ : x < NN ∧ y < NN) hbad
+  obtain ⟨hmB, hmiff⟩ := moved_parts_of_sat hsat hc i hi
+  refine ⟨by rw [Dregg2.Games.Automatafl.automatonStep_size]; rfl, ?_, ?_⟩
+  · rw [hstep]
+    by_cases hm : (envAt t i).loc 247 = 1
+    · rw [if_pos hm, if_pos hm]; rfl
+    · rw [if_neg hm, if_neg hm]; rfl
+  · intro x y hx hy
+    rw [hstep]
+    by_cases hm : (envAt t i).loc 247 = 1
+    · -- THE MOVE FIRED
+      rw [if_pos hm]
+      obtain ⟨h246, h233, h245⟩ := hmiff.mp hm
+      obtain ⟨_, r1, _, c1, hrsum, hcsum, hridx, hcidx⟩ := seltarg_of_sat hsat hc i hi
+      obtain ⟨h15, h14, h17, h16⟩ := autosel_of_sat hsat hc i hi
+      obtain ⟨hoxtri, hoytri⟩ := offset_of_sat hsat hc i hi
+      simp only [OX_C, OY_C] at hoxtri hoytri
+      -- the target one-hot resolves to the target coordinates
+      have h249 : (envAt t i).loc 249 = (envAt t i).loc 9 + decodeOff ((envAt t i).loc 208) := by
+        have h1 := hridx; rw [hm] at h1; simp only [one_mul] at h1
+        refine eq_of_modEq_small ?_ ?_ (h1.trans (Int.ModEq.add_left ((envAt t i).loc 9) (decodeOff_modEq hoytri)))
+        · rcases r1 with h | h <;> rw [h] <;> norm_num
+        · rcases hay' with h | h <;> rcases decodeOff_val hoytri with h' | h' | h' <;>
+            rw [h, h'] <;> norm_num
+      have h251 : (envAt t i).loc 251 = (envAt t i).loc 8 + decodeOff ((envAt t i).loc 207) := by
+        have h1 := hcidx; rw [hm] at h1; simp only [one_mul] at h1
+        refine eq_of_modEq_small ?_ ?_ (h1.trans (Int.ModEq.add_left ((envAt t i).loc 8) (decodeOff_modEq hoxtri)))
+        · rcases c1 with h | h <;> rw [h] <;> norm_num
+        · rcases hax' with h | h <;> rcases decodeOff_val hoxtri with h' | h' | h' <;>
+            rw [h, h'] <;> norm_num
+      have h248 : (envAt t i).loc 248 = 1 - (envAt t i).loc 249 := by rw [hm] at hrsum; omega
+      have h250 : (envAt t i).loc 250 = 1 - (envAt t i).loc 251 := by rw [hm] at hcsum; omega
+      have h14' : (envAt t i).loc 14 = 1 - (envAt t i).loc 15 := by rw [h14, h15]
+      have h16' : (envAt t i).loc 16 = 1 - (envAt t i).loc 17 := by rw [h16, h17]
+      -- target ≠ auto: the offset is nonzero
+      have hnz : decodeOff ((envAt t i).loc 207) ≠ 0 ∨ decodeOff ((envAt t i).loc 208) ≠ 0 := by
+        have hoffnz := offnz_of_sat hsat hc i hi
+        rcases offCard_of_sat hsat hc i hi with h | h | h | h | h <;>
+          simp only [Prod.mk.injEq] at h <;> obtain ⟨hx', hy'⟩ := h
+        · left; rw [hx']; norm_num
+        · left; rw [hx']; norm_num
+        · right; rw [hy']; norm_num
+        · right; rw [hy']; norm_num
+        · exfalso; rw [hoffnz, hx', hy'] at h246; norm_num at h246
+      have hne : (envAt t i).loc 251 ≠ (envAt t i).loc 17 ∨ (envAt t i).loc 249 ≠ (envAt t i).loc 15 := by
+        rcases hnz with h | h
+        · left; rw [h251, h17]; omega
+        · right; rw [h249, h15]; omega
+      have hTXb : (envAt t i).loc 251 = 0 ∨ (envAt t i).loc 251 = 1 := c1
+      have hTYb : (envAt t i).loc 249 = 0 ∨ (envAt t i).loc 249 = 1 := r1
+      have hAXb : (envAt t i).loc 17 = 0 ∨ (envAt t i).loc 17 = 1 := by rw [h17]; exact hax'
+      have hAYb : (envAt t i).loc 15 = 0 ∨ (envAt t i).loc 15 = 1 := by rw [h15]; exact hay'
+      -- the target / auto coordinates, in one-hot form
+      have htgt : (⟨((envAt t i).loc 8 + decodeOff ((envAt t i).loc 207)).toNat,
+                    ((envAt t i).loc 9 + decodeOff ((envAt t i).loc 208)).toNat⟩ : Coord)
+          = ⟨((envAt t i).loc 251).toNat, ((envAt t i).loc 249).toNat⟩ := by rw [h249, h251]
+      have hauto : (boardDecode (envAt t i)).automaton
+          = (⟨((envAt t i).loc 17).toNat, ((envAt t i).loc 15).toNat⟩ : Coord) := by
+        rw [h15, h17]; rfl
+      -- the shape shim: with `m = 1` the move flag drops out of the board-update equalities
+      have hshape : ∀ nc oc s1 s2 a1 a2 : ℤ,
+          nc ≡ oc + 3 * ((envAt t i).loc 247 * s1 * s2) - (envAt t i).loc 247 * s1 * s2 * oc
+                - (envAt t i).loc 247 * a1 * a2 * oc [ZMOD 2013265921] →
+          nc ≡ oc + 3 * (s1 * s2) - s1 * s2 * oc - a1 * a2 * oc [ZMOD 2013265921] := by
+        intro nc oc s1 s2 a1 a2 hh
+        rw [hm] at hh
+        rw [show oc + 3 * (s1 * s2) - s1 * s2 * oc - a1 * a2 * oc
+            = oc + 3 * (1 * s1 * s2) - 1 * s1 * s2 * oc - 1 * a1 * a2 * oc from by ring]
+        exact hh
+      have s0y : selv ((envAt t i).loc 249) 0 = (envAt t i).loc 248 := by simp [selv, h248]
+      have s1y : selv ((envAt t i).loc 249) 1 = (envAt t i).loc 249 := by simp [selv]
+      have s0x : selv ((envAt t i).loc 251) 0 = (envAt t i).loc 250 := by simp [selv, h250]
+      have s1x : selv ((envAt t i).loc 251) 1 = (envAt t i).loc 251 := by simp [selv]
+      have a0y : selv ((envAt t i).loc 15) 0 = (envAt t i).loc 14 := by simp [selv, h14']
+      have a1y : selv ((envAt t i).loc 15) 1 = (envAt t i).loc 15 := by simp [selv]
+      have a0x : selv ((envAt t i).loc 17) 0 = (envAt t i).loc 16 := by simp [selv, h16']
+      have a1x : selv ((envAt t i).loc 17) 1 = (envAt t i).loc 17 := by simp [selv]
+      obtain ⟨hb0, hb1, hb2, hb3⟩ := boardupd_of_sat hsat hc i hi
+      have hxx : x < 2 := hx
+      have hyy : y < 2 := hy
+      rw [hcellStep _ x y hxx hyy, htgt, hauto]
+      interval_cases x <;> interval_cases y
+      · exact cell_of_data (by norm_num) (by norm_num) hTXb hTYb hAXb hAYb hne
+          (boardvalid_of_sat hsat hc i hi 0 (by decide)) (canon_loc hc i _)
+          (by rw [s0y, s0x, a0y, a0x]; exact hshape _ _ _ _ _ _ hb0)
+      · exact cell_of_data (by norm_num) (by norm_num) hTXb hTYb hAXb hAYb hne
+          (boardvalid_of_sat hsat hc i hi 2 (by decide)) (canon_loc hc i _)
+          (by rw [s1y, s0x, a1y, a0x]; exact hshape _ _ _ _ _ _ hb2)
+      · exact cell_of_data (by norm_num) (by norm_num) hTXb hTYb hAXb hAYb hne
+          (boardvalid_of_sat hsat hc i hi 1 (by decide)) (canon_loc hc i _)
+          (by rw [s0y, s1x, a0y, a1x]; exact hshape _ _ _ _ _ _ hb1)
+      · exact cell_of_data (by norm_num) (by norm_num) hTXb hTYb hAXb hAYb hne
+          (boardvalid_of_sat hsat hc i hi 3 (by decide)) (canon_loc hc i _)
+          (by rw [s1y, s1x, a1y, a1x]; exact hshape _ _ _ _ _ _ hb3)
+    · -- NO MOVE: the board is unchanged, cell for cell
+      rw [if_neg hm, hcellOld x y hx hy]
+      have hm0 : (envAt t i).loc 247 = 0 := hmB.resolve_right hm
+      have hnomove : ∀ (cn co : Nat) (s1 s2 a1 a2 : ℤ),
+          (envAt t i).loc cn ≡ (envAt t i).loc co + 3 * ((envAt t i).loc 247 * s1 * s2)
+                - (envAt t i).loc 247 * s1 * s2 * (envAt t i).loc co
+                - (envAt t i).loc 247 * a1 * a2 * (envAt t i).loc co [ZMOD 2013265921] →
+          (envAt t i).loc cn = (envAt t i).loc co := by
+        intro cn co s1 s2 a1 a2 hh
+        rw [hm0, show (envAt t i).loc co + 3 * ((0:ℤ) * s1 * s2) - 0 * s1 * s2 * (envAt t i).loc co
+              - 0 * a1 * a2 * (envAt t i).loc co = (envAt t i).loc co from by ring] at hh
+        exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) hh
+      obtain ⟨hb0, hb1, hb2, hb3⟩ := boardupd_of_sat hsat hc i hi
+      have hxx : x < 2 := hx
+      have hyy : y < 2 := hy
+      interval_cases x <;> interval_cases y
+      · exact congrArg codeToParticle (hnomove (new 0) (old 0) _ _ _ _ hb0)
+      · exact congrArg codeToParticle (hnomove (new 2) (old 2) _ _ _ _ hb2)
+      · exact congrArg codeToParticle (hnomove (new 1) (old 1) _ _ _ _ hb1)
+      · exact congrArg codeToParticle (hnomove (new 3) (old 3) _ _ _ _ hb3)
 
 end Leg5Capstone
 
@@ -5352,6 +5728,12 @@ end Leg5Capstone
 #print axioms tcell_target_of_sat
 #print axioms tcell_valid_of_sat
 #print axioms moved_parts_of_sat
+#print axioms boardvalid_of_sat
+#print axioms newvalid_of_sat
+#print axioms cell_update_pure
+#print axioms cell_of_data
+#print axioms moved_iff_guard_of_sat
+#print axioms astep_sat_imp_automatonStep
 
 #print axioms autoPin_of_sat
 #print axioms decoded_auto_holds_automaton
@@ -5500,22 +5882,34 @@ Proven here, keyed on the byte-pinned `automataflStepDesc`, canonical over BabyB
         §4.16 canary `#guard`s show the cell-0 board-update gate REJECTS a witness that leaves
         `new0 = 0` while the step happened.
 
+  * **LEG A CLOSED — the top-level composition (§4.16b–§4.17b):**
+      - the DESCRIPTOR GAP is FIXED at the source. `AutomataflStepEmit.boardRangeConstraints` now
+        emits `assert_member(cell, {VAC,REP,ATT,AUTO})` for all `2k` board columns (OLD and NEW), so
+        `boardvalid_of_sat` / `newvalid_of_sat` are THEOREMS about the emitted object and the `hvalid`
+        envelope is gone from every leg-5 statement. Before the fix a witness could carry `old[c] ≥ 4`,
+        which decodes to VACUUM under `codeToParticle` (the reference steps) while the circuit's
+        `targ_vac = [tcell = 0]` blocks — the refinement was FALSE over satisfying witnesses on the
+        whole window `tcell ∈ [4, p)`. §4.16b's `#guard`s show the new gate REJECTS exactly that `4`;
+      - `cell_update_pure` / `cell_of_data` — PURE: one board-update cell equality, decoded. Given the
+        `{0,1}` target/auto selector products (never both — the step is a nonzero offset), the new cell
+        is AUTO at the target, VACUUM at the vacated auto cell and the old particle elsewhere: the
+        three-way match against `stepTo`'s own three-way `if`;
+      - `moved_iff_guard_of_sat` — the reference GUARD PROPOSITION discharged: `m` (col 247) `= 1` IFF
+        `automatonStep`'s `if` fires on the DECODED board (both target edges in bounds, offset nonzero,
+        target cell vacuum), factor for factor against the proven `m = offnz·tib·targ_vac`;
+      - **`astep_sat_imp_automatonStep` — THE CAPSTONE, UNCONDITIONAL** (no `hvalid`, no assumed
+        arithmetization): on a satisfying canonical trace the reference step of the decoded OLD board
+        has size `NN`, has its automaton exactly at the witnessed target when the move flag fires (and
+        at the old position otherwise), and agrees CELL BY CELL, on every in-bounds coordinate, with the
+        decode of the emitted NEW board columns.
+
 REMAINING (NOT assumed, NOT stubbed — no `sorry`, no placeholder):
-  (5-glue) the top-level `astep_sat_imp_automatonStep`. Every SEMANTIC ingredient above is proven; what
-      is left is the bookkeeping that glues them to `automatonStep`'s own `if`: (a) discharging the
-      reference guard PROPOSITION (whose conjuncts are `↑b.automaton.x + off.1` casts over the decoded
-      board) against the proven `m = 1 ↔ offnz ∧ tib ∈ targ_vac` factorisation, and (b) the four
-      per-cell `cellAt` matches, each a three-way split on `selTarget[c]` / `selAuto[c]` (target ⇒ AUTO,
-      auto ⇒ vacuum, otherwise ⇒ old) against `stepTo`'s own three-way `if`.
-  ⚠ SCOPE, stated at the resolution it holds: the capstone needs `hvalid` — the OLD board cells are
-      valid particle felts `{0,1,2,3}`. This is NOT derivable from the descriptor: the emitted gate set
-      range-checks the DECISION variant (`memberExpr … [0,1,2,3]`) but NEVER the board cells, which
-      enter only the `board_root8` Poseidon leaf. So a witness with `old[target] ≥ 4` decodes to VACUUM
-      under `codeToParticle` (the reference would step) while the circuit's `targ_vac = [tcell = 0]`
-      blocks — the two genuinely disagree. That is a REAL gap in the emitted object, not a proof
-      artifact: **the descriptor is missing a per-cell `assert_member(old[c], {0,1,2,3})`.** It is
-      recorded here rather than papered over.
-The unconditional top-level composition is deliberately NOT stated as a proven theorem until (5-glue)
-closes. -/
+  (leg R) the `board_root8` leg: the two `MerkleHash8` chip lookups bind the OLD/NEW cell columns to
+      the PI digests `[16..32)`, so the capstone is stated over the trace columns, not yet transported
+      to the public inputs. That transport is the remaining composition step.
+  (n) the descriptor instantiates `NN = 2`. The gadget families are `NN`-generic and the deployed
+      leaves run `n = 5` / `n = 11`; every proof here is keyed to the `n = 2` emission and re-pins
+      mechanically at the larger counts (a follow-up, not a hole in this one).
+The Leg-A composition is now a proven theorem. -/
 
 end Dregg2.Circuit.Emit.AutomataflStepRefine
