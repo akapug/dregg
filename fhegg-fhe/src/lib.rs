@@ -57,6 +57,7 @@ pub mod convex_engine;
 /// encrypted state — the public-matrix linear step stays ADDITIVE (no ct×ct),
 /// oracle-anchored in `tests/convex_step_oracle.rs`.
 pub mod convex_step;
+pub mod dark_amm;
 pub mod fhir;
 pub mod gpu_arena;
 pub mod threshold;
