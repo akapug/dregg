@@ -34,13 +34,17 @@ PROVED here (finite `Sym` grid, no `sorry`):
                               function, not an `em` phrasing.
     decidableEquivOfComplements : decidable template equivalence assembled from intersection +
                               emptiness, with the complement machines (and their correctness) as
-                              the ONE explicit remaining hypothesis.
-
-NAMED (precisely stated, NOT proved — the remaining step toward UNCONDITIONAL decidability):
-    ComplementClosure       : complement on the FINITE fragment, relative to the non-empty
-                              well-matched universe (see the def's docstring for why each guard is
-                              forced). `decidableEquivOfComplements` consumes exactly its
-                              conclusion — nothing else is missing.
+                              the one explicit hypothesis — the seam-parametric form.
+    detVpa / det_invariant  : the Alur–Madhusudan DETERMINIZATION — subset construction over
+                              summary sets, with the reachability invariant proved for every
+                              start/end state and end stack simultaneously
+    detVpa_complement       : COMPLEMENT by accept-flip on the determinized machine, relative to
+                              the non-empty well-matched universe — determinism is load-bearing
+    complement_closure      : the once-named `ComplementClosure` residual, DISCHARGED by the
+                              construction above
+    decidable_template_equivalence : UNCONDITIONAL, COMPUTABLE decidable equivalence — the
+                              headline. Kernel-`#guard`ed on concrete machine pairs (equal →
+                              true, distinct → false).
 
 Honest scope: this is the FINITE-alphabet fragment (the `Sym = {op, cl, dat}` bracket grid the Dyck
 circuit pins). The templater's infinite `Value` data alphabet is out of scope here — classical VPL
@@ -508,7 +512,7 @@ theorem equiv_iff_symmDiff_empty (P₁ P₂ : List Sym → Prop) :
 
 #assert_axioms equiv_iff_symmDiff_empty
 
-/-! ## NAMED SEAM 1 — complement on the finite fragment.
+/-! ## The complement target — stated here, DISCHARGED below (`complement_closure`).
 
 Each guard in the statement is FORCED, not stylistic:
   * `Fintype S`/`Fintype G` on BOTH sides — over unrestricted (infinite-state, `Prop`-transition)
@@ -521,12 +525,12 @@ Each guard in the statement is FORCED, not stylistic:
   * `w ≠ []` — `lang_not_nil`: NO machine accepts the empty word (runs are non-empty), and `[]` is
     well-matched, so the empty word must be exempted or the target is falsified at `w = []`. -/
 
-/-- **`ComplementClosure`** (NOT proved here) — the precisely-stated complement target: for every
-finite-fragment VPA there is a finite-fragment VPA recognizing exactly the non-empty well-matched
-words the original rejects. The known route is determinization (subset construction over summary
-pairs, Alur–Madhusudan) + accept-flip relative to the well-matched universe; that construction is
-the genuinely remaining work toward decidable equivalence, together with the emptiness decision
-(see the closing note). -/
+/-- **`ComplementClosure`** — the precisely-stated complement target: for every finite-fragment
+VPA there is a finite-fragment VPA recognizing exactly the non-empty well-matched words the
+original rejects. DISCHARGED below (`complement_closure`) by the Alur–Madhusudan route: subset
+construction over summary sets (`detVpa`, deterministic by construction) + accept-flip
+(`compAcc`), with `detVpa_complement` proving exactly this conclusion. The def is kept as the
+named statement `decidableEquivOfComplements` was scoped against. -/
 def ComplementClosure : Prop :=
   ∀ (S G : Type) (_ : Fintype S) (_ : Fintype G) (M : Vpa S G) (q₀ : S) (acc : S → Prop),
     ∃ (S' G' : Type) (_ : Fintype S') (_ : Fintype G') (M' : Vpa S' G') (q₀' : S')
@@ -1117,22 +1121,559 @@ instance : ∀ (q : Fin 1) (s : Sym) (q' : Fin 1), Decidable (deadVpa.int q s q'
 
 end ComputeReference
 
-/-! ## Residual (recap)
+/-! ## THE COMPLEMENT — Alur–Madhusudan determinize-then-flip, PROVED.
+
+This discharges `ComplementClosure`. The construction is the real subset construction over
+SUMMARY SETS: the determinized machine's control state is a `Finset (S × S)` — the exact set of
+summaries `(q, q')` = "the original machine can go from `(q, ⊥)` to `(q', ⊥)` reading the current
+top-level well-matched segment" — and its stack symbol is again a `Finset (S × S)` (the summary
+set suspended at the innermost pending call). The stack discipline keeps this DETERMINISTIC
+because the stack action is class-driven (`stack_height_input_determined` acting constructively,
+again): on a call the machine pushes its current summary set and restarts at the diagonal; on the
+matching return it pops and composes through the call/return wrap. The pieces:
+
+    `PathW`            — word-indexed (possibly-empty) valid path; `lang_iff_pathW` ties it to `Lang`
+    `detVpa`           — the summary-set subset construction (transitions are FUNCTIONS of the
+                         pre-state, written as their graphs)
+    `DChain`           — the level-by-level decomposition invariant: what "the original machine
+                         reaches `(p, σ)` from `(q, ⊥)` on this input" looks like against the
+                         determinized config `(R, Γ)`
+    `det_invariant`    — THE determinization theorem, by snoc induction on the word: after any
+                         determinized run, `M`-reachability ↔ `DChain` against the reached config
+    `det_progress` / `pathW_height` — the determinized machine RUNS on every well-matched word and
+                         ends at the empty stack (totality of the subset construction)
+    `detVpa_complement`— accept-flip correctness: `Lang (detVpa M) = WellMatched ∖ Lang M` on
+                         non-empty words. Determinism is load-bearing exactly here: the flip is
+                         sound because the reached summary set is the SAME for every run.
+    `complement_closure` / `decidable_template_equivalence` — the discharged seam and the
+                         UNCONDITIONAL decidable equivalence, kernel-`#guard`ed below. -/
+
+section WordPaths
+
+variable {S G : Type u}
+
+/-- **`PathW M c w c'`** — a possibly-EMPTY sequence of `stepValid` steps from `c` to `c'` reading
+exactly the word `w`. The word-indexed face of `Path`: the determinization invariant is a
+statement about "all configs reachable on THIS word", so the word must ride the derivation.
+Allowing the empty path (unlike `Path`/`WM`) makes the call/return wrap subsume the empty-body
+case (`wrap0`) for free. -/
+inductive PathW (M : Vpa S G) : Config S G → List Sym → Config S G → Prop
+  | nil (c : Config S G) : PathW M c [] c
+  | cons {c c' c'' : Config S G} {w : List Sym} (sym : Sym) (h : stepValid M ⟨c, sym, c'⟩)
+      (tail : PathW M c' w c'') : PathW M c (sym :: w) c''
+
+theorem pathW_nil_inv {M : Vpa S G} {c c' : Config S G} (h : PathW M c [] c') : c' = c := by
+  cases h; rfl
+
+theorem PathW.append {M : Vpa S G} {c c' : Config S G} {u : List Sym}
+    (h₁ : PathW M c u c') : ∀ {v : List Sym} {c'' : Config S G},
+      PathW M c' v c'' → PathW M c (u ++ v) c'' := by
+  induction h₁ with
+  | nil => intro v c'' h₂; exact h₂
+  | cons sym h t ih => intro v c'' h₂; exact .cons sym h (ih h₂)
+
+/-- Splitting one step off the RIGHT end — the elimination the snoc induction needs. -/
+theorem pathW_snoc {M : Vpa S G} : ∀ {u : List Sym} {c c'' : Config S G} {s : Sym},
+    PathW M c (u ++ [s]) c'' → ∃ mid, PathW M c u mid ∧ stepValid M ⟨mid, s, c''⟩ := by
+  intro u
+  induction u with
+  | nil =>
+    intro c c'' s h
+    rw [List.nil_append] at h
+    cases h with
+    | cons sym hs tail =>
+      have he := pathW_nil_inv tail
+      subst he
+      exact ⟨c, .nil c, hs⟩
+  | cons a u' ih =>
+    intro c c'' s h
+    rw [List.cons_append] at h
+    cases h with
+    | cons sym hs tail =>
+      obtain ⟨mid, hp, hst⟩ := ih tail
+      exact ⟨mid, .cons a hs hp, hst⟩
+
+theorem pathW_snoc_iff {M : Vpa S G} {c c'' : Config S G} {u : List Sym} {s : Sym} :
+    PathW M c (u ++ [s]) c'' ↔ ∃ mid, PathW M c u mid ∧ stepValid M ⟨mid, s, c''⟩ := by
+  constructor
+  · exact pathW_snoc
+  · rintro ⟨mid, hp, hs⟩
+    exact hp.append (.cons s hs (.nil c''))
+
+/-- The stack height along ANY `PathW` is the start height plus the word's `wordDelta` —
+`run_height` restated on the word-indexed paths (and, applied to `detVpa` below, the reason the
+determinized run of a well-matched word ends at the empty stack). -/
+theorem pathW_height {M : Vpa S G} : ∀ {c c' : Config S G} {w : List Sym},
+    PathW M c w c' → (c'.stack.length : ℤ) = (c.stack.length : ℤ) + wordDelta w := by
+  intro c c' w h
+  induction h with
+  | nil => simp [wordDelta]
+  | cons sym hs t ih =>
+    have hstep := step_stack_length M _ hs
+    dsimp only at hstep
+    simp only [wordDelta]
+    omega
+
+/-- A `VpaAccepts`-shaped run is a `PathW` reading its word. -/
+theorem run_pathW (M : Vpa S G) : ∀ (run : List (VStep S G)) (first last : VStep S G),
+    run.head? = some first → run.getLast? = some last →
+    (∀ s ∈ run, stepValid M s) → vchained run →
+    PathW M first.pre (run.map (fun s => s.sym)) last.post := by
+  intro run
+  induction run with
+  | nil => intro first last hh _ _ _; simp at hh
+  | cons a t ih =>
+    intro first last hh hl hval hch
+    simp only [List.head?_cons, Option.some.injEq] at hh
+    subst hh
+    cases t with
+    | nil =>
+      simp only [List.getLast?_singleton, Option.some.injEq] at hl
+      subst hl
+      exact .cons a.sym (hval a (by simp)) (.nil a.post)
+    | cons b u =>
+      obtain ⟨hR, htail⟩ := hch
+      have hl' : (b :: u).getLast? = some last := by
+        rw [List.getLast?_cons_cons] at hl; exact hl
+      have hp := ih b last rfl hl' (fun s hs => hval s (List.mem_cons_of_mem a hs)) htail
+      have hbp : b.pre = a.post := hR
+      rw [hbp] at hp
+      exact .cons a.sym (hval a (by simp)) hp
+
+/-- Conversely, a non-empty `PathW` is realized by a `VpaAccepts`-shaped run reading its word. -/
+theorem pathW_run (M : Vpa S G) : ∀ {c c' : Config S G} {w : List Sym},
+    PathW M c w c' → w ≠ [] →
+    ∃ (run : List (VStep S G)) (first last : VStep S G),
+      run.head? = some first ∧ run.getLast? = some last ∧ first.pre = c ∧ last.post = c' ∧
+      (∀ s ∈ run, stepValid M s) ∧ vchained run ∧ run.map (fun s => s.sym) = w := by
+  intro c c' w h
+  induction h with
+  | nil => intro hne; exact absurd rfl hne
+  | @cons a b c₂ w' sym hs tail ih =>
+    intro _
+    cases w' with
+    | nil =>
+      have he := pathW_nil_inv tail
+      subst he
+      refine ⟨[⟨a, sym, c₂⟩], ⟨a, sym, c₂⟩, ⟨a, sym, c₂⟩, rfl, List.getLast?_singleton, rfl, rfl,
+        ?_, trivial, rfl⟩
+      intro s hs'
+      rw [List.mem_singleton] at hs'
+      subst hs'
+      exact hs
+    | cons s₂ w'' =>
+      obtain ⟨run', f', l', hh', hl', hfp', hlp', hv', hc', hm'⟩ := ih (by simp)
+      cases run' with
+      | nil => simp at hm'
+      | cons r₀ rt =>
+        simp only [List.head?_cons, Option.some.injEq] at hh'
+        subst hh'
+        refine ⟨⟨a, sym, b⟩ :: r₀ :: rt, ⟨a, sym, b⟩, l', rfl, ?_, rfl, hlp', ?_, ?_, ?_⟩
+        · rw [List.getLast?_cons_cons]; exact hl'
+        · intro s hs'
+          rcases List.mem_cons.mp hs' with rfl | hmem
+          · exact hs
+          · exact hv' s hmem
+        · exact ⟨hfp', hc'⟩
+        · simp only [List.map_cons] at hm' ⊢
+          rw [hm']
+
+/-- **`lang_iff_pathW`** — `Lang` in path form: a non-empty word is accepted iff a `PathW` reads
+it from `(q₀, ⊥)` to an accepting empty-stack config. -/
+theorem lang_iff_pathW (M : Vpa S G) (q₀ : S) (acc : S → Prop) (w : List Sym) (hne : w ≠ []) :
+    Lang M q₀ acc w ↔ ∃ q' : S, acc q' ∧ PathW M ⟨q₀, []⟩ w ⟨q', []⟩ := by
+  constructor
+  · rintro ⟨run, ⟨first, last, hh, hl, hq0, hs0, hacc, hsf, hval, hch⟩, hw⟩
+    refine ⟨last.post.state, hacc, ?_⟩
+    have hp := run_pathW M run first last hh hl hval hch
+    have e₁ : first.pre = (⟨q₀, []⟩ : Config S G) := by rw [← hq0, ← hs0]
+    have e₂ : last.post = (⟨last.post.state, []⟩ : Config S G) := by rw [← hsf]
+    rw [hw, e₁, e₂] at hp
+    exact hp
+  · rintro ⟨q', hacc, hp⟩
+    obtain ⟨run, first, last, hh, hl, hfp, hlp, hval, hch, hmap⟩ := pathW_run M hp hne
+    exact ⟨run, ⟨first, last, hh, hl, by rw [hfp], by rw [hfp], by rw [hlp]; exact hacc,
+      by rw [hlp], hval, hch⟩, hmap⟩
+
+/-- **`DChain M R Γ σ q p`** — the determinization INVARIANT, as a level-by-level decomposition:
+against determinized control state `R` and determinized stack `Γ` (top first), the original
+machine can go from `(q, ⊥)` to `(p, σ)` — reaching the segment-summary in `R` at the top level,
+with each deeper `Γ`-level contributing its suspended summary set plus the pending call that
+pushed the matching `σ`-symbol. `det_invariant` proves this IS `M`-reachability on the word the
+determinized machine read. -/
+inductive DChain (M : Vpa S G) : Finset (S × S) → List (Finset (S × S)) → List G → S → S → Prop
+  | base {R : Finset (S × S)} {q p : S} (h : (q, p) ∈ R) : DChain M R [] [] q p
+  | step {R D : Finset (S × S)} {Γ : List (Finset (S × S))} {g : G} {σ : List G} {q x t p : S}
+      (hc : DChain M D Γ σ q x) (hcall : M.call x Sym.op t g) (hR : (t, p) ∈ R) :
+      DChain M R (D :: Γ) (g :: σ) q p
+
+theorem dchain_nil_inv {M : Vpa S G} {R : Finset (S × S)} {σ : List G} {q p : S}
+    (h : DChain M R [] σ q p) : σ = [] ∧ (q, p) ∈ R := by
+  cases h with | base h => exact ⟨rfl, h⟩
+
+theorem dchain_cons_inv {M : Vpa S G} {R D : Finset (S × S)} {Γ : List (Finset (S × S))}
+    {σ : List G} {q p : S} (h : DChain M R (D :: Γ) σ q p) :
+    ∃ (g : G) (σ' : List G) (x t : S),
+      σ = g :: σ' ∧ DChain M D Γ σ' q x ∧ M.call x Sym.op t g ∧ (t, p) ∈ R := by
+  cases h with | step hc hcall hR => exact ⟨_, _, _, _, rfl, hc, hcall, hR⟩
+
+end WordPaths
+
+section Determinize
+
+variable {S G : Type u} [DecidableEq S] [Fintype S] [Fintype G] (M : Vpa S G)
+variable [∀ q s q' γ, Decidable (M.call q s q' γ)]
+variable [∀ q s q' γ, Decidable (M.ret q s q' γ)]
+variable [∀ q s q', Decidable (M.int q s q')]
+
+/-- The diagonal relation, as a `Finset` — the determinized machine's initial state and its
+post-call restart (a fresh top-level segment summarizes to the identity: the empty path). -/
+def diagRel : Finset (S × S) := Finset.univ.filter fun qq => qq.1 = qq.2
+
+/-- Relation composition on the `Finset (S × S)` grid. -/
+def relComp (X Y : Finset (S × S)) : Finset (S × S) :=
+  Finset.univ.filter fun qq => ∃ m, (qq.1, m) ∈ X ∧ (m, qq.2) ∈ Y
+
+/-- The one-internal-step relation of `M`. -/
+def relInt : Finset (S × S) := Finset.univ.filter fun qq => M.int qq.1 Sym.dat qq.2
+
+/-- The call/return WRAP of a summary set: one matching `op … cl` pair around an inner segment
+summarized by `X`. Because `X` contains the diagonal whenever the inner segment can be empty,
+this subsumes the `wrap0` case of `WM` with no extra disjunct. -/
+def relWrap (X : Finset (S × S)) : Finset (S × S) :=
+  Finset.univ.filter fun qq =>
+    ∃ p p' γ, M.call qq.1 Sym.op p γ ∧ (p, p') ∈ X ∧ M.ret p' Sym.cl qq.2 γ
+
+theorem mem_diagRel {a b : S} : (a, b) ∈ (diagRel : Finset (S × S)) ↔ a = b := by
+  simp [diagRel]
+
+theorem mem_relComp {X Y : Finset (S × S)} {a b : S} :
+    (a, b) ∈ relComp X Y ↔ ∃ m, (a, m) ∈ X ∧ (m, b) ∈ Y := by
+  simp [relComp]
+
+omit [DecidableEq S] [Fintype G] [∀ q s q' γ, Decidable (M.call q s q' γ)]
+    [∀ q s q' γ, Decidable (M.ret q s q' γ)] in
+theorem mem_relInt {a b : S} : (a, b) ∈ relInt M ↔ M.int a Sym.dat b := by
+  simp [relInt]
+
+omit [∀ q s q', Decidable (M.int q s q')] in
+theorem mem_relWrap {X : Finset (S × S)} {a b : S} :
+    (a, b) ∈ relWrap M X ↔
+      ∃ p p' γ, M.call a Sym.op p γ ∧ (p, p') ∈ X ∧ M.ret p' Sym.cl b γ := by
+  simp [relWrap]
+
+/-- **`detVpa M`** — the Alur–Madhusudan DETERMINIZATION: states and stack symbols are summary
+sets. Every transition relation is the GRAPH of a function of the pre-state (and, on returns, the
+popped symbol) — determinism is syntactic, not a side condition. A call suspends the current
+summary set on the stack and restarts at the diagonal; a return pops the suspended set and
+composes it through the call/return wrap of the finished inner segment; an internal composes the
+one-step relation on the right. -/
+def detVpa : Vpa (Finset (S × S)) (Finset (S × S)) where
+  call R _ R' γ := R' = diagRel ∧ γ = R
+  ret R _ R' γ := R' = relComp γ (relWrap M R)
+  int R _ R' := R' = relComp R (relInt M)
+
+instance detCallDecidable (R : Finset (S × S)) (s : Sym) (R' γ : Finset (S × S)) :
+    Decidable ((detVpa M).call R s R' γ) :=
+  inferInstanceAs (Decidable (R' = diagRel ∧ γ = R))
+
+instance detRetDecidable (R : Finset (S × S)) (s : Sym) (R' γ : Finset (S × S)) :
+    Decidable ((detVpa M).ret R s R' γ) :=
+  inferInstanceAs (Decidable (R' = relComp γ (relWrap M R)))
+
+instance detIntDecidable (R : Finset (S × S)) (s : Sym) (R' : Finset (S × S)) :
+    Decidable ((detVpa M).int R s R') :=
+  inferInstanceAs (Decidable (R' = relComp R (relInt M)))
+
+omit [Fintype G] [∀ q s q' γ, Decidable (M.call q s q' γ)]
+    [∀ q s q' γ, Decidable (M.ret q s q' γ)] [∀ q s q', Decidable (M.int q s q')] in
+/-- Composing on the right of the TOP summary set commutes with `DChain` — the top level is the
+only place the control state acts, so the composition peels off as a final relational step. -/
+theorem dchain_comp {X R : Finset (S × S)} {Γ : List (Finset (S × S))} {σ : List G} {q p : S} :
+    DChain M (relComp R X) Γ σ q p ↔ ∃ m, DChain M R Γ σ q m ∧ (m, p) ∈ X := by
+  constructor
+  · intro h
+    cases h with
+    | base hmem =>
+      obtain ⟨m, h₁, h₂⟩ := mem_relComp.mp hmem
+      exact ⟨m, .base h₁, h₂⟩
+    | step hc hcall hR =>
+      obtain ⟨m, h₁, h₂⟩ := mem_relComp.mp hR
+      exact ⟨m, .step hc hcall h₁, h₂⟩
+  · rintro ⟨m, hd, hmem⟩
+    cases hd with
+    | base h₁ => exact .base (mem_relComp.mpr ⟨m, h₁, hmem⟩)
+    | step hc hcall hR => exact .step hc hcall (mem_relComp.mpr ⟨m, hR, hmem⟩)
+
+/-- **`det_invariant`** — THE determinization theorem. After the determinized machine reads `w`
+(from the diagonal, empty stack) and sits at `(R, Γ)`, the original machine's reachability on `w`
+is EXACTLY the `DChain` decomposition against `(R, Γ)` — for every start state, end state, and
+end stack simultaneously. Snoc induction on the word; each symbol class is one algebraic step
+(`dchain_comp`, the `DChain` constructors, and their inversions). This is where
+`stack_height_input_determined` pays out as a construction: the determinized stack moves in
+lockstep with EVERY run of the original machine at once. -/
+theorem det_invariant : ∀ (w : List Sym) {R : Finset (S × S)} {Γ : List (Finset (S × S))},
+    PathW (detVpa M) ⟨diagRel, []⟩ w ⟨R, Γ⟩ →
+    ∀ (q p : S) (σ : List G), PathW M ⟨q, []⟩ w ⟨p, σ⟩ ↔ DChain M R Γ σ q p := by
+  intro w
+  induction w using List.reverseRecOn with
+  | nil =>
+    intro R Γ hdet q p σ
+    have h0 := pathW_nil_inv hdet
+    rw [Config.mk.injEq] at h0
+    obtain ⟨rfl, rfl⟩ := h0
+    constructor
+    · intro hp
+      have h1 := pathW_nil_inv hp
+      rw [Config.mk.injEq] at h1
+      obtain ⟨rfl, rfl⟩ := h1
+      exact .base (mem_diagRel.mpr rfl)
+    · intro hd
+      obtain ⟨rfl, hmem⟩ := dchain_nil_inv hd
+      rw [mem_diagRel] at hmem
+      subst hmem
+      exact .nil _
+  | append_singleton u s ih =>
+    intro R Γ hdet q p σ
+    obtain ⟨⟨R₀, Γ₀⟩, hu, hstep⟩ := pathW_snoc hdet
+    rw [pathW_snoc_iff]
+    cases s with
+    | dat =>
+      simp only [stepValid, classOf, detVpa] at hstep
+      obtain ⟨rfl, rfl⟩ := hstep
+      rw [dchain_comp]
+      constructor
+      · rintro ⟨⟨m, σm⟩, hpm, hsm⟩
+        simp only [stepValid, classOf] at hsm
+        obtain ⟨hint, rfl⟩ := hsm
+        exact ⟨m, (ih hu q m σ).mp hpm, (mem_relInt M).mpr hint⟩
+      · rintro ⟨m, hd, hmem⟩
+        exact ⟨⟨m, σ⟩, (ih hu q m σ).mpr hd, ⟨(mem_relInt M).mp hmem, rfl⟩⟩
+    | op =>
+      simp only [stepValid, classOf, detVpa] at hstep
+      obtain ⟨γ, ⟨rfl, rfl⟩, rfl⟩ := hstep
+      constructor
+      · rintro ⟨⟨m, σm⟩, hpm, hsm⟩
+        simp only [stepValid, classOf] at hsm
+        obtain ⟨g, hcall, rfl⟩ := hsm
+        exact .step ((ih hu q m σm).mp hpm) hcall (mem_diagRel.mpr rfl)
+      · intro hd
+        obtain ⟨g, σ', x, t, rfl, hc, hcall, htp⟩ := dchain_cons_inv hd
+        rw [mem_diagRel] at htp
+        subst htp
+        exact ⟨⟨x, σ'⟩, (ih hu q x σ').mpr hc, ⟨g, hcall, rfl⟩⟩
+    | cl =>
+      simp only [stepValid, classOf, detVpa] at hstep
+      obtain ⟨γ, rest, rfl, rfl, rfl⟩ := hstep
+      rw [dchain_comp]
+      constructor
+      · rintro ⟨⟨m, σm⟩, hpm, hsm⟩
+        simp only [stepValid, classOf] at hsm
+        obtain ⟨g, rest', hretM, rfl, rfl⟩ := hsm
+        have hd := (ih hu q m (g :: σ)).mp hpm
+        obtain ⟨g', σ'', x, t, heq, hc, hcall, htm⟩ := dchain_cons_inv hd
+        injection heq with h₁ h₂
+        subst h₁
+        subst h₂
+        exact ⟨x, hc, (mem_relWrap M).mpr ⟨t, m, g, hcall, htm, hretM⟩⟩
+      · rintro ⟨x, hch, hxp⟩
+        obtain ⟨t, m, g, hcall, htm, hretM⟩ := (mem_relWrap M).mp hxp
+        exact ⟨⟨m, g :: σ⟩, (ih hu q m (g :: σ)).mpr (.step hch hcall htm),
+          ⟨g, σ, hretM, rfl, rfl⟩⟩
+
+/-- **`det_progress`** — TOTALITY of the subset construction: the determinized machine runs on
+ANY word whose prefixes never take the (input-determined) height negative. Every transition is a
+total function of the pre-state, so the only obstruction would be a return on the empty stack —
+excluded by the prefix condition. This is the existence half that makes the accept-FLIP sound:
+the flipped machine must actually ACCEPT the words the original rejects, not merely fail to
+accept the ones it accepts. -/
+theorem det_progress : ∀ (w : List Sym) (c : Config (Finset (S × S)) (Finset (S × S))),
+    (∀ p : List Sym, p <+: w → 0 ≤ (c.stack.length : ℤ) + wordDelta p) →
+    ∃ c', PathW (detVpa M) c w c' := by
+  intro w
+  induction w with
+  | nil => intro c _; exact ⟨c, .nil c⟩
+  | cons s w' ih =>
+    intro c h
+    cases s with
+    | op =>
+      have hnext : ∀ p : List Sym, p <+: w' →
+          0 ≤ ((c.state :: c.stack).length : ℤ) + wordDelta p := by
+        intro p hp
+        obtain ⟨t, ht⟩ := hp
+        have := h (Sym.op :: p) ⟨t, by rw [List.cons_append, ht]⟩
+        simp only [wordDelta, heightDelta, List.length_cons] at this ⊢
+        push_cast at this ⊢
+        omega
+      obtain ⟨c', hp'⟩ := ih ⟨diagRel, c.state :: c.stack⟩ hnext
+      exact ⟨c', .cons (c' := ⟨diagRel, c.state :: c.stack⟩) Sym.op
+        ⟨c.state, ⟨rfl, rfl⟩, rfl⟩ hp'⟩
+    | cl =>
+      have h1 := h [Sym.cl] ⟨w', rfl⟩
+      simp only [wordDelta, heightDelta] at h1
+      cases hst : c.stack with
+      | nil =>
+        rw [hst] at h1
+        simp only [List.length_nil, Nat.cast_zero] at h1
+        omega
+      | cons γ rest =>
+        have hnext : ∀ p : List Sym, p <+: w' →
+            0 ≤ ((rest.length : ℤ)) + wordDelta p := by
+          intro p hp
+          obtain ⟨t, ht⟩ := hp
+          have := h (Sym.cl :: p) ⟨t, by rw [List.cons_append, ht]⟩
+          rw [hst] at this
+          simp only [wordDelta, heightDelta, List.length_cons] at this
+          push_cast at this
+          omega
+        obtain ⟨c', hp'⟩ := ih ⟨relComp γ (relWrap M c.state), rest⟩ hnext
+        exact ⟨c', .cons (c' := ⟨relComp γ (relWrap M c.state), rest⟩) Sym.cl
+          ⟨γ, rest, rfl, hst, rfl⟩ hp'⟩
+    | dat =>
+      have hnext : ∀ p : List Sym, p <+: w' →
+          0 ≤ ((c.stack.length : ℤ)) + wordDelta p := by
+        intro p hp
+        obtain ⟨t, ht⟩ := hp
+        have := h (Sym.dat :: p) ⟨t, by rw [List.cons_append, ht]⟩
+        simp only [wordDelta, heightDelta] at this
+        omega
+      obtain ⟨c', hp'⟩ := ih ⟨relComp c.state (relInt M), c.stack⟩ hnext
+      exact ⟨c', .cons (c' := ⟨relComp c.state (relInt M), c.stack⟩) Sym.dat
+        ⟨rfl, rfl⟩ hp'⟩
+
+/-- The FLIPPED acceptance: reject exactly when the original machine would accept from `q₀` —
+sound to state on the determinized control state because that state is the same for every run
+(determinism), so "the summary set reached" is a function of the word. -/
+def compAcc (q₀ : S) (acc : S → Prop) : Finset (S × S) → Prop :=
+  fun R => ¬ ∃ q' : S, acc q' ∧ (q₀, q') ∈ R
+
+instance compAccDecidable (q₀ : S) (acc : S → Prop) [DecidablePred acc] :
+    DecidablePred (compAcc q₀ acc) := fun R =>
+  inferInstanceAs (Decidable (¬ ∃ q' : S, acc q' ∧ (q₀, q') ∈ R))
+
+/-- **`detVpa_complement`** — COMPLEMENT correctness, the conclusion `ComplementClosure`
+promises: on non-empty words the flipped determinized machine accepts EXACTLY the well-matched
+words the original machine rejects. Forward: any accepted word is well-matched
+(`lang_wellMatched`), and by `det_invariant` an original accepting path would put an accepting
+summary in the reached set, contradicting the flip. Backward: `det_progress` + `pathW_height` run
+the determinized machine to the empty stack on any well-matched word, and the flip holds at the
+reached set because an accepting summary would (again by `det_invariant`) yield an original
+accepting run. Determinism is load-bearing in BOTH directions: there is ONE reached summary set,
+so flipping it cannot lose or invent runs. -/
+theorem detVpa_complement (q₀ : S) (acc : S → Prop) :
+    ∀ w : List Sym, w ≠ [] →
+      (Lang (detVpa M) diagRel (compAcc q₀ acc) w ↔ (WellMatched w ∧ ¬ Lang M q₀ acc w)) := by
+  intro w hne
+  constructor
+  · intro h
+    refine ⟨lang_wellMatched _ _ _ w h, ?_⟩
+    obtain ⟨R, hR, hpath⟩ := (lang_iff_pathW (detVpa M) diagRel (compAcc q₀ acc) w hne).mp h
+    intro hM
+    obtain ⟨q', hacc, hpM⟩ := (lang_iff_pathW M q₀ acc w hne).mp hM
+    have hd := (det_invariant M w hpath q₀ q' []).mp hpM
+    exact hR ⟨q', hacc, (dchain_nil_inv hd).2⟩
+  · rintro ⟨hwm, hnot⟩
+    obtain ⟨c', hpath⟩ := det_progress M w ⟨diagRel, []⟩ (by
+      intro p hp
+      simpa using hwm.2 p hp)
+    obtain ⟨R, Γ⟩ := c'
+    have hΓ : Γ = [] := by
+      have hlen := pathW_height hpath
+      simp only [List.length_nil, Nat.cast_zero, zero_add, hwm.1] at hlen
+      cases Γ with
+      | nil => rfl
+      | cons a t =>
+        simp only [List.length_cons] at hlen
+        push_cast at hlen
+        omega
+    subst hΓ
+    have hcomp : compAcc q₀ acc R := by
+      intro hc
+      obtain ⟨q', hacc, hmem⟩ := hc
+      exact hnot ((lang_iff_pathW M q₀ acc w hne).mpr
+        ⟨q', hacc, (det_invariant M w hpath q₀ q' []).mpr (.base hmem)⟩)
+    exact (lang_iff_pathW (detVpa M) diagRel (compAcc q₀ acc) w hne).mpr ⟨R, hcomp, hpath⟩
+
+end Determinize
+
+/-- **`complement_closure`** — the named residual, DISCHARGED: the witness is the real
+determinize-then-flip (`detVpa` + `compAcc`), with `detVpa_complement` as its correctness proof.
+The statement carries no decidability hypotheses, so the (undecidable, `Prop`-valued) transition
+relations are lifted into the subset construction classically — `Classical.choice` supplies
+`Decidable` for the filter predicates, nothing else; the construction and every step of its
+correctness proof are the genuine Alur–Madhusudan argument, and the COMPUTABLE face of the very
+same construction is exercised by kernel `#guard`s below (a vacuous `em`-complement could not
+be). -/
+theorem complement_closure : ComplementClosure := by
+  intro S G fS fG M q₀ acc
+  haveI := fS
+  haveI := fG
+  classical
+  exact ⟨Finset (S × S), Finset (S × S), inferInstance, inferInstance, detVpa M, diagRel,
+    compAcc q₀ acc, detVpa_complement M q₀ acc⟩
+
+#assert_axioms complement_closure
+
+/-- **`decidable_template_equivalence`** — the HEADLINE, now UNCONDITIONAL: decidable language
+equivalence of two finite-fragment VPAs with decidable transitions. No complement hypotheses —
+`decidableEquivOfComplements` is fed the determinize-then-flip machines and their proved
+correctness (`detVpa_complement`). Computable end to end: the decision is two summary
+saturations on the product machines `M₁ ⊗ ∁M₂` and `M₂ ⊗ ∁M₁` (kernel-`#guard`ed below on
+concrete machines, both answers). The state-space cost is the Alur–Madhusudan exponential
+(`Finset (S × S)`), as it must be — VPL equivalence is EXPTIME-complete. -/
+def decidable_template_equivalence
+    [DecidableEq S₁] [Fintype S₁] [Fintype G₁] [DecidableEq S₂] [Fintype S₂] [Fintype G₂]
+    (M₁ : Vpa S₁ G₁) (q₁ : S₁) (acc₁ : S₁ → Prop) [DecidablePred acc₁]
+    (M₂ : Vpa S₂ G₂) (q₂ : S₂) (acc₂ : S₂ → Prop) [DecidablePred acc₂]
+    [∀ q s q' γ, Decidable (M₁.call q s q' γ)] [∀ q s q' γ, Decidable (M₁.ret q s q' γ)]
+    [∀ q s q', Decidable (M₁.int q s q')]
+    [∀ q s q' γ, Decidable (M₂.call q s q' γ)] [∀ q s q' γ, Decidable (M₂.ret q s q' γ)]
+    [∀ q s q', Decidable (M₂.int q s q')] :
+    Decidable (∀ w, Lang M₁ q₁ acc₁ w ↔ Lang M₂ q₂ acc₂ w) :=
+  decidableEquivOfComplements M₁ q₁ acc₁ M₂ q₂ acc₂
+    (detVpa M₁) diagRel (compAcc q₁ acc₁)
+    (detVpa M₂) diagRel (compAcc q₂ acc₂)
+    (detVpa_complement M₁ q₁ acc₁)
+    (detVpa_complement M₂ q₂ acc₂)
+
+#assert_axioms det_invariant
+#assert_axioms detVpa_complement
+#assert_axioms decidable_template_equivalence
+
+/-! ### The unconditional decider COMPUTES — kernel-evaluated, both answers. -/
+
+namespace ComputeReference
+
+-- Equal pair: the same machine against itself — the decider must answer TRUE (both product
+-- saturations find no symmetric-difference witness).
+#guard @decide (∀ w, Lang finChainVpa 0 (· = 0) w ↔ Lang finChainVpa 0 (· = 0) w)
+  (decidable_template_equivalence finChainVpa 0 (· = 0) finChainVpa 0 (· = 0))
+
+-- Distinct pair: the bracket machine against the transitionless machine — the decider must
+-- answer FALSE (`op cl` witnesses the difference, found by the saturation on `M₁ ⊗ ∁M₂`).
+#guard !(@decide (∀ w, Lang finChainVpa 0 (· = 0) w ↔ Lang deadVpa 0 (· = 0) w)
+  (decidable_template_equivalence finChainVpa 0 (· = 0) deadVpa 0 (· = 0)))
+
+end ComputeReference
+
+/-! ## Recap — the pipeline is CLOSED.
 
 PROVED: intersection (`prodVpa_lang`, both directions, finiteness-preserving since
 `Fintype (S₁ × S₂)` is automatic) · the acceptance universe (`lang_wellMatched`,
 `lang_wordDelta_zero`, `lang_not_nil`) · the equivalence→emptiness reduction
 (`equiv_iff_symmDiff_empty`) · **the COMPUTABLE emptiness decision** (`sat` saturation, sound +
 complete: `wm_iff_mem_sat`, `lang_nonempty_iff_wm`, `decidableLangNonempty` /
-`decidableLangEmpty`, kernel-`#guard`ed on concrete machines) · **decidable equivalence up to the
-one seam** (`decidableEquivOfComplements`: complement machines in, decision out, computable).
+`decidableLangEmpty`, kernel-`#guard`ed on concrete machines) · **COMPLEMENT**
+(`detVpa` determinization over summary sets + `det_invariant` + accept-flip:
+`detVpa_complement`, discharging the once-named `ComplementClosure` as `complement_closure`) ·
+**UNCONDITIONAL decidable equivalence** (`decidable_template_equivalence`, kernel-`#guard`ed on
+an equal and a distinct pair of concrete machines).
 
-NAMED, with the precise statement and the known route: `ComplementClosure` alone (determinization
-+ accept-flip, relative to non-empty `WellMatched`, finite fragment — the Alur–Madhusudan subset
-construction over summary pairs). It is the ONLY remaining piece: `decidableEquivOfComplements`
-consumes exactly its conclusion. Union needs no separate seam: `∁(∁L₁ ∩ ∁L₂)`, or directly by a
-disjoint-sum construction. All of this is the FINITE `Sym` fragment; the templater's infinite
-`Value` alphabet stays out of scope, exactly as in `VpaAsCert`'s honest-scope note.
+No named seam remains in this file. Union needs no separate construction: `∁(∁L₁ ∩ ∁L₂)`, or
+directly by a disjoint sum. Honest scope, unchanged: this is the FINITE `Sym` fragment; the
+templater's infinite `Value` data alphabet stays out of scope, exactly as in `VpaAsCert`'s
+honest-scope note — and the decider's state space is the Alur–Madhusudan exponential, as
+EXPTIME-completeness demands.
 -/
 
 end Dregg2.Crypto.VpaDecidable
