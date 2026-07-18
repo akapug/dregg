@@ -20,6 +20,12 @@ This is the load-bearing SEMANTIC half of Stage 3. The remaining half — the CO
 purely syntactic (no semantics) and is the ~2000-line `Permute`/`Pieces` development the design §3.3
 rates months-scale.
 
+It also carries the **DER-CONGRUENCE** `sim_der : R ≅ S → der a R ≅ der a S` (and its supporting
+`sim_null : R ≅ S → null R = null S`, plus the word-iterated `sim_derList`). This is what makes `der`
+WELL-DEFINED ON THE `≅`-QUOTIENT — the bounded ingredient (c) of `SymbolicEmptiness.lean`'s
+unbounded-emptiness rung. It does NOT close that rung: the pigeonhole/counting step and a decidable
+`≅` remain open there.
+
 `#assert_axioms`-clean, `sorry`-free.
 -/
 import Dregg2.Crypto.Deriv.Correctness
@@ -120,6 +126,86 @@ theorem sim_derives {R S : PredRE} (h : R ≅ S) (w : List Value) :
   have := sim_sound h w
   rw [Bool.eq_iff_iff, correctness w R, correctness w S]; exact this
 
+/-! ## DER-CONGRUENCE — `≅` is preserved by the derivative.
+
+`Sim` as defined above is a congruence for the SYNTAX constructors, but nothing in its definition
+says the DERIVATIVE respects it. That is the ingredient every route to the `n`-free emptiness
+decision needs: to search the `≅`-quotient state space one must know `der` is well-defined ON the
+quotient, i.e. `R ≅ S → der a R ≅ der a S`.
+
+The proof is structural induction on the `Sim` derivation. Every ACI law's `der`-image is an
+instance of the SAME law (`der` distributes over `alt` verbatim), and every congruence transports
+its IH. The one case with content is `catCong`: `der a (cat l r)` branches on `null l`, so the
+congruence only goes through once we know `≅` preserves NULLABILITY — hence `sim_null` first. -/
+
+/-- **`sim_null`** — `≅`-invariance of nullability. `null R = derives [] R`, so this is the empty-word
+instance of `sim_derives` (and hence, through `correctness`, of language-soundness). -/
+theorem sim_null {R S : PredRE} (h : R ≅ S) : null R = null S := by
+  simpa only [derives] using sim_derives h []
+
+/-- **`sim_der`** — THE der-congruence: similarity is preserved by the Brzozowski derivative, so
+`der` descends to the `≅`-quotient. Structural induction on the `Sim` derivation; the `catCong`
+case is the interesting one — it splits on the shared `null` value supplied by `sim_null`. -/
+theorem sim_der {R S : PredRE} (h : R ≅ S) (a : Value) : der a R ≅ der a S := by
+  induction h with
+  | assoc => exact Sim.assoc
+  | dedup => exact Sim.dedup
+  | idem => exact Sim.idem
+  | rfl => exact Sim.rfl
+  | sym _ ih => exact Sim.sym ih
+  | trans _ _ ih₁ ih₂ => exact Sim.trans ih₁ ih₂
+  | negCong _ ih => exact Sim.negCong ih
+  | altCong _ _ ihR ihS => exact Sim.altCong ihR ihS
+  | interCong _ _ ihR ihS => exact Sim.interCong ihR ihS
+  | @catCong R₁ R₂ S hsim ih =>
+    -- `der a (cat Rᵢ S)` branches on `null Rᵢ`; `sim_null hsim` says the two branches agree.
+    have hnull : null R₁ = null R₂ := sim_null hsim
+    simp only [der, hnull]
+    cases hn : null R₂ with
+    | false => simpa using Sim.catCong ih
+    | true => simpa using Sim.altCong (Sim.catCong ih) Sim.rfl
+
+/-! ## Iterating the der-congruence along a whole word. -/
+
+/-- **`derList w R`** — the derivative iterated along the word `w` (the state `derives` reaches
+before its final `null` check). Exposed so the SYNTACTIC congruence below can be stated on the
+regex itself, not only on the Boolean verdict. -/
+@[simp] def derList : List Value → PredRE → PredRE
+  | [],      R => R
+  | a :: as, R => derList as (der a R)
+
+/-- `derives` is `null ∘ derList` — the two agree by construction. -/
+theorem derives_eq_null_derList (w : List Value) (R : PredRE) :
+    derives w R = null (derList w R) := by
+  induction w generalizing R with
+  | nil => rfl
+  | cons a as ih => simpa only [derives, derList] using ih (der a R)
+
+/-- **`sim_derList`** — the der-congruence iterated: similar regexes stay similar after reading any
+word. This is `sim_der` folded along `w`. -/
+theorem sim_derList {R S : PredRE} (h : R ≅ S) (w : List Value) :
+    derList w R ≅ derList w S := by
+  induction w generalizing R S with
+  | nil => exact h
+  | cons a as ih => exact ih (sim_der h a)
+
+/-- **`sim_derives_syntactic`** — `sim_derives` re-derived through the DERIVATIVE route: iterate
+`sim_der` along the word, then apply `sim_null` at the end.
+
+⚠ NOT semantics-free, despite the name's suggestion. This route still bottoms out in the
+denotational tower, because `sim_null` (above) is proved as the empty-word instance of `sim_derives`,
+i.e. via `sim_sound` → `correctness` → `Matches`. So this is a SECOND ROUTE to the same statement,
+not an independent (semantics-free) one, and it carries no extra logical strength.
+
+To make it genuinely syntactic, `sim_null` must be re-proved by induction on the `Sim` derivation
+using `null`'s own clauses (`null (alt r r) = null r || null r`; `null (cat a b) = null a && null b`
+distributing over `assoc`; congruence cases transporting their IHs). That induction is bounded and
+is the named follow-up; until it lands, do NOT describe this lemma as semantics-independent. -/
+theorem sim_derives_syntactic {R S : PredRE} (h : R ≅ S) (w : List Value) :
+    derives w R = derives w S := by
+  rw [derives_eq_null_derList, derives_eq_null_derList]
+  exact sim_null (sim_derList h w)
+
 /-! ## Non-vacuity — `≅` is a NON-trivial congruence (relates distinct syntax, separates languages).
 
 The dregg discipline: pin the quotient relation is neither empty nor universal. -/
@@ -143,6 +229,26 @@ example : ¬ Matches [fr7] (PredRE.ε) := by
 example : Matches [fr7] (.sym p7) := by
   rw [Matches]; exact ⟨fr7, rfl, by simp only [leaf, p7, fr7, Pred.eval]; decide⟩
 
+-- DER-CONGRUENCE, on a concrete pair: the `catCong` case with a NULLABLE left factor (so the
+-- `null`-guarded branch of `der` is the one actually exercised).
+example : (PredRE.cat (.alt (.star (.sym p7)) (.star (.sym p7))) (.sym p7))
+        ≅ (PredRE.cat (.star (.sym p7)) (.sym p7)) := Sim.catCong Sim.idem
+
+example : PredRE.der fr7 (.cat (.alt (.star (.sym p7)) (.star (.sym p7))) (.sym p7))
+        ≅ PredRE.der fr7 (.cat (.star (.sym p7)) (.sym p7)) :=
+  sim_der (Sim.catCong Sim.idem) fr7
+
+-- …and the two agree on a concrete word, decided by the executable matcher (both `true`).
+#guard PredRE.derives [fr7, fr7] (.cat (.alt (.star (.sym p7)) (.star (.sym p7))) (.sym p7)) = true
+#guard PredRE.derives [fr7, fr7] (.cat (.star (.sym p7)) (.sym p7)) = true
+-- …and reject the same word (both `false`) — the invariance is not vacuously "everything accepts".
+#guard PredRE.derives [] (.cat (.alt (.star (.sym p7)) (.star (.sym p7))) (.sym p7)) = false
+#guard PredRE.derives [] (.cat (.star (.sym p7)) (.sym p7)) = false
+
+-- `null` invariance, on a pair whose two sides are syntactically distinct.
+#guard PredRE.null (.alt (.star (PredRE.sym p7)) (.star (.sym p7))) = true
+#guard PredRE.null (.star (PredRE.sym p7)) = true
+
 end Guards
 
 end PredRE
@@ -150,7 +256,9 @@ end PredRE
 /-! ## Axiom hygiene. -/
 
 #assert_all_clean [
-  PredRE.sim_sound, PredRE.sim_derives
+  PredRE.sim_sound, PredRE.sim_derives,
+  PredRE.sim_null, PredRE.sim_der,
+  PredRE.derives_eq_null_derList, PredRE.sim_derList, PredRE.sim_derives_syntactic
 ]
 
 /-!

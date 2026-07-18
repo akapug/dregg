@@ -63,14 +63,17 @@ THREE unbanked ingredients (the earlier "`der_finite` + `DecidableEq PredRE`" re
   (b) a BRIDGE from `satStep`/`der`-reachability into `Finiteness.der_finite`'s `steps` — `der_finite`
       bounds the sat-FREE symbolic `step`, not the concrete `der` reachability used here, and the
       `step ↔ der` relation is not banked.
-  (c) pigeonhole excision (an accepting word implies one of length `< N`, the finite `≅`-class count)
-      plus `≅`-invariance of `null` (derivable from `sim_sound`), and `der`-congruence under `≅`
-      (`Sim R S → Sim (der a R) (der a S)`), which `Similarity.lean` does not yet carry.
+  (c) pigeonhole excision (an accepting word implies one of length `< N`, the finite `≅`-class count).
+      STILL OPEN. Its two SUPPORTING lemmas are now BANKED in `Similarity.lean`: `≅`-invariance of
+      `null` (`PredRE.sim_null`) and the `der`-congruence `Sim R S → Sim (der a R) (der a S)`
+      (`PredRE.sim_der`), iterated along a word by `PredRE.sim_derList`. So `der` is now known to
+      descend to the `≅`-quotient; what (c) still lacks is the pigeonhole/counting step itself.
 -/
 import Dregg2.Crypto.Deriv.SatOracle
 import Dregg2.Crypto.Deriv.SymbolicDerivative
 import Dregg2.Crypto.Deriv.Finiteness
 import Dregg2.Crypto.Deriv.Correctness
+import Dregg2.Crypto.Deriv.Similarity
 import Dregg2.Tactics
 
 namespace Dregg2.Crypto.Deriv
@@ -79,7 +82,8 @@ open Dregg2.Exec
 open Dregg2.Exec.PredAlgebra
 open Dregg2.Crypto.HandlebarsGuarded (braceP braceVal dataVal leaf_braceP_brace leaf_braceP_data
   noDoubleBraceRE BB)
-open PredRE (der null derives leaf bot Matches correctness step derivative)
+open PredRE (der null derives leaf bot Matches correctness step derivative derList
+  derives_eq_null_derList)
 
 /-! ## §1 The deployed minterm witnesses and the sat-filtered step. -/
 
@@ -103,26 +107,18 @@ theorem candidate_minterm_witnesses :
     leaf braceP braceVal = true ∧ leaf braceP dataVal = false :=
   ⟨leaf_braceP_brace, leaf_braceP_data⟩
 
-/-! ## §2 `derList` — the concrete derivative along a word (the accepting-path re-executor). -/
+/-! ## §2 `derList` — the concrete derivative along a word (the accepting-path re-executor).
 
-/-- **`derList w R`** — iterate `der` along `w`. `derives w R = null (derList w R)`: a residual
-reachable by `derList w` is exactly the Brzozowski state after reading `w`. -/
-def derList : List Value → PredRE → PredRE
-  | [],      R => R
-  | a :: as, R => derList as (der a R)
+`derList` and `derives_eq_null_derList` are DEFINED ONCE, in the lower `Similarity.lean`
+(`PredRE` namespace), and opened above — this module previously carried byte-identical copies,
+which survived only because the two sat in different namespaces. Only `derList_append`, which
+`Similarity` does not carry, lives here. -/
 
 theorem derList_append (w v : List Value) (R : PredRE) :
     derList (w ++ v) R = derList v (derList w R) := by
   induction w generalizing R with
   | nil => rfl
   | cons a as ih => simp only [List.cons_append, derList]; exact ih (der a R)
-
-/-- `derives` is `null` of the concrete-derivative re-executor. -/
-theorem derives_eq_null_derList (w : List Value) (R : PredRE) :
-    derives w R = null (derList w R) := by
-  induction w generalizing R with
-  | nil => rfl
-  | cons a as ih => simp only [derives, derList]; exact ih (der a R)
 
 /-! ## §3 Bounded sat-filtered reachability + the decision function. -/
 
