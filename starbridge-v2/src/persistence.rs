@@ -268,12 +268,19 @@ impl WorldPersist {
         turn: &Turn,
     ) -> Result<(), StoreError> {
         // The exact change-set, already in hand: post-state of every touched cell
-        // that still exists post-commit (a cell DESTROYED this turn is gone from
-        // the ledger, so `filter_map` drops it — matching the node; its removal is
-        // carried by the next checkpoint, not the overlay, which only adds).
+        // that still exists post-commit. A touched cell ABSENT post-commit was
+        // REMOVED this turn (destroyed, or removed hosted→sovereign) and goes in
+        // the durable removed set below (fifth-pass review F4-A) — the overlay
+        // deletes it on reconstruction instead of waiting for the next
+        // checkpoint (which a pre-removal checkpoint would resurrect it from).
         let touched_cells: Vec<Cell> = touched
             .iter()
             .filter_map(|id| ledger.get(id).cloned())
+            .collect();
+        let removed_cells: Vec<dregg_cell::CellId> = touched
+            .iter()
+            .filter(|id| ledger.get(id).is_none())
+            .copied()
             .collect();
         let record = CommitRecord {
             ordinal: 0, // assigned by the store at the cursor
@@ -292,7 +299,9 @@ impl WorldPersist {
         let bytes =
             postcard::to_stdvec(turn).map_err(|e| StoreError::Serialization(e.to_string()))?;
         self.store.set_config(&turn_key(self.cursor), &bytes)?;
-        let assigned = self.store.commit_finalized_turn(self.cursor, &record)?;
+        let assigned =
+            self.store
+                .commit_finalized_turn_with_removals(self.cursor, &record, &removed_cells)?;
         self.cursor = assigned + 1;
         Ok(())
     }
@@ -347,10 +356,16 @@ impl WorldPersist {
 
         // 2. Apply the durable commit-log overlay since the checkpoint, in ordinal
         //    order, LAST-WRITER-WINS (remove-then-insert) — exactly
-        //    node::upsert_cell. This is the `recover = checkpoint ⊕ overlay` half.
+        //    node::upsert_cell — then DELETE the overlay's removed ids
+        //    (fifth-pass review F4-A: deletions included, so a cell a
+        //    post-checkpoint turn removed is never resurrected from the
+        //    checkpoint). This is the `recover = checkpoint ⊕ overlay` half.
         let overlay = self.store.cell_overlay_since(checkpoint_height)?;
-        for cell in overlay {
+        for cell in overlay.cells {
             upsert_cell(&mut ledger, cell);
+        }
+        for id in &overlay.removed {
+            let _ = ledger.remove(id);
         }
 
         // 3. Convergence FAIL-CLOSED: the reconstructed canonical root MUST equal
