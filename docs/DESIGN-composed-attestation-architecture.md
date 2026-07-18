@@ -1,134 +1,208 @@
-# Composed Attestation Architecture — one substrate, an efficiency dial, Lean-authored witnesses
+# Composed Attestation Architecture — one substrate, four rungs, an efficiency dial
 
-How to get a **maximally flexible AND extremely efficient** attestation/witness/proof
-setup by composing the regular/DFA layer with the CFG/graph-rewrite layer. Grounded in
-three read-only sweeps (2026-07-16); the substrate is ~80% built and the composition is
-*unassembled*, not *unbuilt*.
+How the regular/DFA layer, the visibly-pushdown layer, and the CFG/graph-rewrite layer
+compose on **one certificate substrate**. Originally written (2026-07-16) as a proposal;
+the substrate, the linchpin, and the parse-as-derivation circuit are now **built and
+committed**. This doc describes what exists, with `file:line` anchors, and marks what
+remains proposed.
 
-## 1. The unification — one certificate substrate (already exists)
+## 1. The substrate — `Cert R` for ANY relation (BUILT)
 
-`metatheory/Dregg2/Crypto/Hypergraph.lean` factors out a **relation-parametric certificate**:
-`chain R` (`:39`), `Cert R start goal c` (`:46`), and `bridge R : (∃c, Cert R start goal c) ↔
-ReflTransGen R start goal` (`:88`) — for ANY relation `R`. It already unifies:
-- **CFG** — `cfg_parse_via_reduction` (`:134`, `R := g.Produces`),
-- **hyperedge replacement** — `hypergraph_reduction_bridge` (`:125`),
-- **DPO graph rewriting** — `GraphRewrite.lean::graphRewrite_bridge` (`:93`, `R := RewriteStep`).
+`metatheory/Dregg2/Crypto/Chain.lean` is the **leaf module** (Mathlib + `Dregg2.Tactics`
+only) carrying the relation-parametric certificate every instance rides on:
 
-**A DFA run is exactly `chain` over the transition relation δ, and `Dfa.lean::dfa_bridge`
-(`:142`) is exactly `Hypergraph.bridge` specialized** — but `Dfa.lean` does not import
-`Hypergraph` and is not expressed as `Cert δ`.
+- `chain R c` (`Chain.lean:35`) — every consecutive pair of `c` is one `R`-step;
+- `Cert R start goal c` (`Chain.lean:42`) — a non-empty chain with pinned endpoints;
+- `bridge R : (∃ c, Cert R start goal c) ↔ ReflTransGen R start goal` (`Chain.lean:84`);
+- `Cert.map` (`Chain.lean:111`) — certificates are functorial along relation-preserving maps;
+- `Cert.foldSound` (`Chain.lean:125`) — the generic "walk the chain, accumulate output,
+  carry a semantic invariant" induction (see §4).
 
-**THE LINCHPIN LEMMA (the whole architecture's keystone): re-express `Dfa.DfaAccepts`
-(`Dfa.lean:73`) as an instance of `Hypergraph.Cert δ` / `Hypergraph.bridge`.** Then regular
-recognition and CF derivation — and hyperedge replacement, and DPO rewriting — are provably
-the *same certificate object*, differing only in the relation `R` (δ vs `Produces` vs
-`RewriteStep`). One lemma makes "distinction = recognition = derivation = rewrite" a formal
-fact, not a slogan. Everything below builds on it.
+`Crypto/Hypergraph.lean` sits above it (imports `Chain`, `Hypergraph.lean:21`) with the
+generic instances: `hypergraph_reduction_bridge` (`:60`, hyperedge replacement) and
+`cfg_parse_via_reduction` (`:69`, `R := g.Produces` ⇒ grammar membership; `Cfg.cfg_bridge`
+is literally an alias of it, not a second induction). `GraphRewrite.lean::graphRewrite_bridge`
+is the DPO instance. All declarations live in the `Dregg2.Crypto.Hypergraph` namespace, so
+downstream references are unchanged.
 
-## 2. The efficiency dial — cheapest circuit per certificate
+## 2. The four rungs — one `Hypergraph.bridge`, four relations (BUILT)
+
+The design's linchpin — "re-express `DfaAccepts` as `Hypergraph.Cert δ`" — is landed, and
+the ladder grew two rungs beyond it:
+
+| Rung | Relation `R` | File | Keystone |
+|---|---|---|---|
+| REGULAR (DFA) | `delta` (`DfaAsCert.lean:55`) — stackless step chaining | `Crypto/DfaAsCert.lean` | `dfaAccepts_as_cert` (`:76`) |
+| VISIBLY-PUSHDOWN (VPA) | `R_vpa` (`VpaAsCert.lean:138`) — class-driven stack action | `Crypto/VpaAsCert.lean` | `vpaAccepts_as_cert` (`:183`) |
+| CONTEXT-FREE grammar | `g.Produces` | `Crypto/Hypergraph.lean` | `cfg_parse_via_reduction` (`:69`) |
+| CONTEXT-FREE machine | `ReplayStep g` (`ReplayAsCert.lean:72`) — one pushdown-replay move | `Crypto/ReplayAsCert.lean` | `replay_as_cert` (`:117`) |
+
+The identifications are definitional where it matters: since the chain-dedup refactor,
+`Dfa.chained` (`Dfa.lean:67`) is *defined as* `Hypergraph.chain (fun a b => b.state = a.next)`,
+so `chained_iff_chain` (`DfaAsCert.lean:62`) is `Iff.rfl`. Acceptance = the `Cert` conjunct
+plus machine-specific boundary/validity side-conditions (initial state, accepting state,
+per-step `δ`-validity) riding alongside, the same way CFG's start-symbol/goal-word are its
+`Cert`'s fixed endpoints.
+
+The unification is stated as a theorem, not a slogan:
+
+- `regular_and_cf_share_substrate` (`DfaAsCert.lean:123`) — DFA and CFG acceptance are the
+  same `Hypergraph.bridge` at two relations, side by side;
+- `three_rungs_share_substrate` (`VpaAsCert.lean:228`) — regular ⊗ visibly-pushdown ⊗
+  context-free, one bridge, three relations, with the VPL rung slotted between.
+
+All rungs are `#assert_axioms`-clean with concrete non-vacuity runs (the `a⁺b` DFA's `"aab"`
+trace through the `Cert` form, the bracket-chain VPA, the bracket-pair replay).
+
+## 3. The parse-as-derivation circuit — COMPLETE and UNCONDITIONAL (BUILT)
+
+The CF rung is not only metatheory: the Dyck pushdown-parse circuit is deployed and its
+soundness chain is unconditional, keyed on the byte-pinned descriptor the loader serves.
+
+- **Circuit**: `circuit/src/dsl/dyck_stack.rs` — `dyck_parse_descriptor` (`:540`),
+  `dyck_parse_circuit` (`:848`), the honest witness builder (`build_nested_witness`, `:917`),
+  and the IR-v2 lift (`lift_witness_to_v2`, `:1139`) onto the Lean-emitted descriptor. A
+  trace satisfying the descriptor IS an accepting leftmost pushdown replay.
+- **Lean authoring + byte pin**: `metatheory/Dregg2/Circuit/Emit/DyckStackEmit.lean` —
+  `dyckParseDesc` (`:446`) with a `#guard` byte-pinning its exact wire form (`:461`); any
+  drift on either side breaks the Lean `#guard` or the on-disk drift gate.
+- **The loader LOADS it**: `circuit/src/descriptor_by_name.rs:151` registers
+  `dregg-dyck-parse-v1` → the Lean-emitted golden (`DYCK_PARSE_JSON`, `:274`,
+  `include_str!` of `descriptors/by-name/dyck-parse.json`); the loader-flip test (`:508`)
+  checks the deployed dispatch serves the emitted, byte-pinned shape. Prove-path teeth:
+  `circuit-prove/tests/dyck_parse_tamper.rs`.
+- **Refinement + capstone**: `Circuit/Emit/DyckStackRefine.lean` (row-level refinement) and
+  `Circuit/Emit/DyckStackReplay.lean`, culminating in
+  `parse_sat_imp_replay_emit_unconditional` (`DyckStackReplay.lean:934`): a trace satisfying
+  the deployed, emit-authored descriptor has its **read-off** word (`decodedWord`, defined
+  *from the trace*) accepted by the Dyck replay — no tape↔word hypothesis anywhere. Fired on
+  the shipped witness by `witTrace_replays_unconditional` (`:954`) with every hypothesis
+  discharged by computation.
+
+## 4. `Cert.foldSound` — the multi-month induction, subsumed and paying forward (BUILT)
+
+The design named one hard multi-row induction: "forward trace of per-row-valid pushdown
+steps ⇒ backward `Replay`, certificate reconstructed by `rulesOf`". That induction exists
+(`AbstractMachine.lean:122`, `mrun_imp_replay`; the machine layer was extracted down from
+the circuit module so Crypto never imports Circuit) — and the generic `Cert.foldSound`
+**subsumes** it:
+
+- `mrun_imp_replay_via_fold` (`ReplayAsCert.lean:216`) re-derives the identical statement as
+  one `Cert.foldSound` application: the bespoke content splits into `mrun_cert` (`:200`, the
+  run IS a chain certificate over `MStep`) + `mstep_step` (`:172`, one local step prepends
+  soundly), and the fold supplies the whole assembly. `subsumption_stmt_eq` (`:233`)
+  elaborates only because the statement types coincide.
+- `Crypto/CertFoldForward.lean` demonstrates the **forward** direction on a machine the
+  substrate never saw (a depth-counter bracket acceptor): two whole-run theorems
+  (`run_closes` `:106`, `run_decode` `:114`, composed as `accept_sound` `:121`, plus the
+  refusal pole `cl_no_cert` `:164`) each fall out of a single `Cert.foldSound` application —
+  no `induction` keyword in the file. Net: ~40 lines of chain-walking induction per future
+  machine → ~10 lines of per-step content.
+
+## 5. The VPL rung — honest verdict, and the one real win in progress
+
+Per `docs/DESIGN-visibly-pushdown-reframe.md`: the visibly-pushdown reframe **names** the
+templater's `Separated`/`Excludes` class as the visibly-nested boundary — it does **not
+dissolve** the uniqueness/inverse wall. VPA determinism yields a unique *run*; unique *data*
+recovery still needs the boundary-at-forced-position argument (`split_unique`), whose
+precondition — the delimiter is a genuine return symbol, never hole content — IS `Excludes`,
+renamed not removed.
+
+What the rung genuinely buys, beyond the substrate slot itself: the root VPL property is
+proved — `run_height` (`VpaAsCert.lean:289`) / `stack_height_input_determined` (`:324`), the
+stack height at every position is a function of the input word alone — and it opens the one
+capability the general-CFG rung provably cannot have: **decidable template
+equivalence/inclusion** on the finite visibly-nested fragment (CFL equivalence is
+undecidable; VPL equivalence is EXPTIME-decidable, Alur–Madhusudan).
+
+That route is **in progress** in `Crypto/VpaDecidable.lean`:
+
+- PROVED: `Lang` (the nested-word language), **intersection** via the product VPA
+  (`prodVpa` `:95`, `prodVpa_lang` `:326`, both directions — the zip direction is the
+  constructive face of input-determined stack height), `lang_wellMatched` (`:450`, pinning
+  the universe for relative complement), and the pure-logic reduction
+  `equiv_iff_symmDiff_empty` (`:488`).
+- NAMED, not proved: `ComplementClosure` (`:523`) and the emptiness decision — the latter
+  deliberately not stated as a `Prop`, because every Prop-level phrasing found so far is a
+  classical tautology; the genuine artifact must be a decision *procedure*.
+
+## 6. Lean-authored witnesses — exported (Lean side BUILT; the bridge is next)
+
+The `renderWithProof` generator lives in Lean and is now **exported**:
+`Crypto/HandlebarsFFI.lean` exposes, over the `String → String @[export]` ABI (the
+`dregg_grain_r3_verify` precedent):
+
+- `@[export dregg_render_with_proof]` (`HandlebarsFFI.lean:322`) — prover side; runs the
+  computable `render`/`renderRules` (`HandlebarsWitness.lean:77`), whose output is proven to
+  be the accepting witness for every `safe` input (`renderRules_accepts`,
+  `HandlebarsWitness.lean:186`);
+- `@[export dregg_replay_check]` (`:335`) — verifier side, backed by `replayCheckB`
+  (`:166`), a **computable decider** for the `Prop` `Replay` with `replayCheckB_iff` (`:172`)
+  proving it decides `Replay` exactly, on fuel provably equal to the exact step count. Both
+  fail closed on malformed wires.
+
+**Still proposed**: the C-bridge registration (`dregg-lean-ffi/src/lean_init.c` +
+`lean_string_bridge`) and the Rust/wasm consumer — today no Rust caller invokes these two
+exports, so `zkoracle-prove/src/cfg.rs` remains a hand-written twin until the consumer
+lands. The marshalling machinery is general and already carries three verdict exports; the
+remaining work is wiring, not new machinery.
+
+## 7. The efficiency dial (deployed leaves; composition PROPOSED)
 
 Each `Cert R` compiles to a circuit; use the cheapest that suffices:
-- **Regular (δ, stackless) → `dfa_routing` STARK** (`circuit/src/dsl/dfa_routing.rs:126`):
-  **7 columns, degree ≤ 6, deployed and already parametric** over an arbitrary transition
-  table (`TableFunction` interpolation). A token — e.g. a hole's no-brace data — is a linear
-  DFA scan: no stack, no substitution, no bit-decomposition.
-- **CF (Produces, stack) → the derivation circuit** (`circuit/src/dsl/derivation.rs`, C1–C28,
-  stack-extended per `docs/DESIGN-parse-as-derivation.md`): **371–384 columns, degree 8** —
-  it pays for general Horn-rule power (unification, membership, 30-bit comparisons) a regular
-  token never needs.
-- **Quantified: the regular leaf is ~50× narrower** (7 vs 371). That is the concrete reason to
-  push flat/leaf recognition down to the DFA circuit and reserve the derivation circuit for
-  genuine nesting.
 
-**CF cites a regular leaf by committed hash — no new primitive.** The derivation row already
-binds a body atom to "a committed hash proven elsewhere" (the body↔membership-leaf gate,
-`derivation.rs:153,900`). The DFA circuit already exposes exactly such a commitment for a
-recognized span (`dfa_routing.rs:52` `route_commitment`, the Lean
-`route_commitment_binds_trace` pivot). So a CF row carries a leaf field "this terminal-span's
-DFA `route_commitment = C`", the cheap `dfa_routing` proof attests `C` for that span, and the
-CF proof cites `C` as a committed side-condition — **the same committed-hash gate, pointed at
-a DFA route commitment instead of a Merkle leaf.** A sub-proof cited by hash, not a lookup.
+- **Regular (δ, stackless) → `dfa_routing`** (`circuit/src/dsl/dfa_routing.rs:126`):
+  7 columns, deployed, parametric over an arbitrary transition table; public
+  `route_commitment` binds the trace (the Lean `route_commitment_binds_trace` pivot).
+- **CF (stack) → the derivation circuit** (`circuit/src/dsl/derivation.rs`, C1–C28) and the
+  Dyck pushdown-parse circuit (§3): they pay for stack/unification power a regular token
+  never needs. The regular leaf is ~50× narrower by column count — the structural reason to
+  push flat recognition down to the DFA circuit and reserve derivation for genuine nesting.
+- **CF cites a regular leaf by committed hash** — the derivation row's body↔membership-leaf
+  gate (`derivation.rs:153,900`) pointed at a DFA `route_commitment` instead of a Merkle
+  leaf. No new primitive; still unassembled (below).
 
-**The fold composes a mix of leaf kinds into one root.** `ivc_turn_chain.rs::aggregate_tree`
-(`:3643`) folds via `merge_two_segment_proofs` on each child's exposed segment claim + an
-in-band per-child VK pin — the combine is *circuit-agnostic* (it does not require both children
-to be the same circuit). Delta to mix DFA-leaf + CF-structure proofs: (a) redefine segment
-endpoints as **token-span offsets** (so a DFA leaf over `[i,j)` and a CF leaf over `[0,n)`
-compose by continuity), (b) add a **leaf-kind tag**, (c) widen the root VK pin
-(`verify_turn_chain_recursive:3696`) to admit an **enumerated set** of leaf VKs. The engine,
-segment algebra, and VK-pinning are already generic.
+**PROPOSED — fold heterogeneity.** The fold engine
+(`circuit-prove/src/ivc_turn_chain.rs::aggregate_tree` `:3752`, via
+`merge_two_segment_proofs` `:3687` with in-band per-child VK pins) is circuit-agnostic.
+Mixing DFA-leaf + CF-structure proofs under one root still needs: (a) token-span segment
+endpoints, (b) a leaf-kind tag, (c) the root VK pin (`verify_turn_chain_recursive` `:3805`)
+widened to an enumerated leaf-VK set.
 
-## 3. Lean-authored witnesses, exported to Rust/wasm
+**PROPOSED — grammar generalization.** The deployed parse circuit is the one-bracket Dyck
+grammar; the Lean chain (§3) is stated against that grammar's descriptor. Arbitrary-grammar
+emission is the generalization axis.
 
-Today trace/witness generation is **hand-rolled Rust** (`circuit/src/*_witness.rs`,
-`effect_vm/trace.rs`; the CFG-cert twin `zkoracle-prove/src/cfg.rs` is hand-written, JSON-only,
-not wasm-exposed) — the last dual-authoring gap the census warned about. The
-`renderWithProof`/`Cert` *generator* now lives in Lean (`HandlebarsWitness.renderRules`, proven
-by `renderRules_accepts`) but is **not exported**.
+**PROPOSED — the efficiency-dial benchmark.** The ~50× is a column-count estimate, not a
+measurement. The meaningful benchmark exercises the dial — plaintext re-check vs DFA-leaf
+STARK vs CF-derivation STARK vs the folded composed form — on the deployed FRI config, real
+Poseidon2 params, a realistic schema (mostly regular-guard holes, some nesting), measuring
+prove/verify/proof-size and the fold's per-leaf recursion cost against the leaf savings.
+(Security is a separate axis: see the deployed-FRI-bits reality in
+`memory/project-fri-soundness-reality.md`; a fast proof at a weak soundness radius is a
+different product.)
 
-The export machinery is fully general and already carries non-crypto *verdicts*
-(`dregg_grain_r3_verify`, `dregg_holding_grant_weight`, `dregg_blocklace_finalize`): the
-`String→String @[export]` ABI + the `dregg-lean-ffi/src/lean_init.c` C-bridge + the
-`lean_string_bridge` grow-and-retry marshaller (`dregg-lean-ffi/src/lib.rs:1031`) + the
-`OnceLock<Fn>` install seam (`dregg-pq/src/mldsa.rs`). **A `renderWithProof`-style witness
-generator returning a serialized `(output, ruleSeq)` fits the same ABI with no new machinery.**
-Missing: (i) an `@[export]` on a serializing wrapper + an executable `Bool` `replayCheck`
-(today `Replay` is a `Prop`), (ii) a Rust/wasm consumer. Then Rust and wasm *call the
-Lean-authored witness* instead of reimplementing it — the ML-KEM pattern, applied to witnesses.
+## 8. The extension (PROPOSED, unchanged)
 
-## 4. The extension participates in networks
+`extension/src/netlayer.ts` verifies federation receipt-stream attestations client-side;
+`offering-sign.ts` produces Ed25519 attestations; `wasm/src/lib.rs` proves/verifies
+predicate/threshold/membership in-browser. Wiring the §6 exports through a wasm-bindgen
+`render_with_proof` / `verify_rewrite_cert` would let a browser produce and verify
+rewrite-attestations natively. Depends on the §6 bridge landing first.
 
-`extension/src/netlayer.ts` already verifies federation receipt-stream attestations client-side
-(4-gate fail-closed); `offering-sign.ts` already produces Ed25519 attestations. The extension
-loads the full 50 MB proving wasm (`background.ts:238`) but calls only 4 trivial functions.
-`wasm/src/lib.rs` can already prove/verify predicate/threshold/membership in-browser — but has
-**no CFG/DFA recognizer or render-with-proof**. Wire the (3)-exported witness + a wasm-bindgen
-`render_with_proof` / `verify_rewrite_cert` into the extension → a **browser produces and
-verifies rewrite-attestations natively**, and networks of them form. Every render a receipt,
-in the browser, on the witness the kernel trusts.
+## Honest limits
 
-## First slice (highest leverage) + honest gaps
+- **Infinite data alphabet**: classical VPL theory (and the §5 decidability route) transfers
+  cleanly only to the finite fragment (the `{op, cl, dat}` bracket grid the circuit pins).
+  The templater's infinite `Value` alphabet is out of VPL scope.
+- **The uniqueness wall is real**: unique data recovery rests on the delimiter-guarded
+  class (`Excludes`), not on VPA determinism (§5).
+- **The `Value↪Nat` weld** (`Deriv/Determinize.lean:171`) — the faithfulness-carrying
+  encoding lemma connecting the verified `Matches`-faithful DFA to the AIR table — remains
+  open, as does verified-emitter parametricity for `dfa_routing` (per-DFA today).
 
-**First slice: the linchpin lemma** — `Dfa.DfaAccepts` as `Hypergraph.Cert δ`. Small, isolated,
-and it unifies the entire grammar/rewrite/recognition stack onto one certificate object; the
-efficiency dial, circuit embedding, witness export, and extension all build on it.
-
-Localized gaps (each named, none blocking a capability):
-- **The `Value↪Nat` weld** — one faithfulness-carrying encoding lemma closes both the
-  powerset-table-equality gap (`Deriv/Determinize.lean:171`) and the compiler-table↔AIR-table
-  gap, connecting the verified `Matches`-faithful DFA to the cryptographically-bound AIR table.
-- **Verified-emitter parametricity** — the deployed Rust `dfa_routing` is generic, but no Lean
-  proof yet says "arbitrary table ⇒ interpolant = step" (verified emitters are per-DFA today).
-- **Witness export** — the `@[export]` + `Bool replayCheck` + Rust/wasm consumer.
-- **Fold heterogeneity** — token-span segment endpoints + leaf-kind tag + multi-VK root
-  admission.
-
-## Performance — the named post-convergence deliverable
-
-The efficiency claims here are **estimates from column counts and structure, not measured**.
-Before this is called production-ready, benchmark a realistic/production-like schema on the
-deployed config — because the numbers are *entirely layer-dependent* and the two that matter
-most do not exist yet:
-
-- **What exists now** (plaintext `CompactCert` / per-hole `derives` re-check): verify is O(tokens),
-  the "receipt" is derivation-sized — cheap to check, but **not succinct**. Measuring *this* would
-  give a profile that does not reflect the intended product.
-- **What determines the real story** (unbuilt — the parse-as-derivation circuit): STARK prove
-  (expensive, ~seconds), STARK verify (fast, ~ms), proof size (succinct, ~KB). The perf question
-  is meaningful only *after the zk-succinct path lands*, which is exactly why "after it converges."
-
-The benchmark must **exercise the efficiency dial**, or it proves nothing: a realistic schema is
-mostly simple regular-guard holes (cheap DFA leaves) with *some* nested/CF structure. Measure
-prove/verify/proof-size across the layers — plaintext re-check vs DFA-leaf STARK vs CF-derivation
-STARK vs the *folded composed* form — on the deployed FRI config (`ir2_config`, `log_blowup=6`),
-real Poseidon2 params, real prover hardware, over a realistic document size + hole count + guard
-(regex→DFA) complexity. The headline number to confirm-or-refute: **does pushing regular leaves to
-the 7-column DFA circuit and reserving the 371-column derivation circuit for genuine nesting
-actually buy the ~50× on a real workload** — and how the fold's per-leaf recursion cost trades
-against it. (Security is a *separate* axis with its own asterisk — see the deployed-FRI-bits
-reality; a fast proof at a weak soundness radius is not the same product.)
-
-**The through-line, as engineering:** distinction = recognition = derivation = rewrite — one
-certificate substrate (`Cert R`), an efficiency dial across circuits (cheap regular leaves, CF
-structure, folded to one root), Lean-authored witnesses exported to Rust/wasm, the browser
-participating. The philosophy made into an architecture.
+**The through-line, as shipped:** distinction = recognition = derivation = rewrite is a
+theorem (`three_rungs_share_substrate`), the CF rung runs unconditionally against the
+byte-pinned deployed descriptor, and every future machine's whole-run induction is one
+`Cert.foldSound` application. The remaining work is composition (fold heterogeneity),
+generalization (arbitrary grammars), the FFI bridge, and the measurement.

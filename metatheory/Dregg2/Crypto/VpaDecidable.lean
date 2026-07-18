@@ -26,14 +26,21 @@ PROVED here (finite `Sym` grid, no `sorry`):
                               `VpaAccepts`) — which is why the complement target below carries a
                               `w ≠ []` guard
     equiv_iff_symmDiff_empty: the (pure-logic) reduction of equivalence to two emptiness checks
+    sat / wm_iff_mem_sat    : the COMPUTABLE emptiness decision — reachable-summary saturation
+                              over the finite `S × S` grid as a `Finset` fixpoint, proved sound
+                              AND complete against `Lang` (`lang_nonempty_iff_wm`), packaged as
+                              genuinely-evaluating `Decidable` instances and kernel-`#guard`ed on
+                              concrete machines. The artifact the vacuity note demands: a
+                              function, not an `em` phrasing.
+    decidableEquivOfComplements : decidable template equivalence assembled from intersection +
+                              emptiness, with the complement machines (and their correctness) as
+                              the ONE explicit remaining hypothesis.
 
-NAMED (precisely stated, NOT proved — the remaining steps toward decidable equivalence):
+NAMED (precisely stated, NOT proved — the remaining step toward UNCONDITIONAL decidability):
     ComplementClosure       : complement on the FINITE fragment, relative to the non-empty
                               well-matched universe (see the def's docstring for why each guard is
-                              forced)
-    emptiness decision      : deliberately NOT stated as a `Prop` — every Prop-level phrasing we
-                              found is a classical tautology; see the closing note for the analysis
-                              and for what the genuine artifact must be.
+                              forced). `decidableEquivOfComplements` consumes exactly its
+                              conclusion — nothing else is missing.
 
 Honest scope: this is the FINITE-alphabet fragment (the `Sym = {op, cl, dat}` bracket grid the Dyck
 circuit pins). The templater's infinite `Value` data alphabet is out of scope here — classical VPL
@@ -539,15 +546,412 @@ stating one and later "proving" it would launder vacuity as progress:
   * even `∃ f : ℕ → ℕ → ℕ, ∀ M, …bound by f (card S) (card G)…` — for fixed finite cards there
     are (classically) only finitely many transition relations, so a sup exists without content.
 
-The genuine remaining artifact is therefore one of:
+The genuine artifact is therefore one of:
   (a) a CONCRETE bound function `f` (from the VPA→CFG translation's derivation-length pumping
       bound) with its proof — real combinatorial content, usable with a bounded search; or
   (b) a COMPUTABLE `Decidable` instance for `∃ w, Lang M q₀ acc w` (for `DecidableEq`/decidable-
       transition machines), via the standard reachable-summary saturation — real algorithmic
       content.
-Either, combined with `prodVpa_lang` (proved) + `ComplementClosure` (named) +
-`equiv_iff_symmDiff_empty` (proved), yields DECIDABLE TEMPLATE EQUIVALENCE on the finite
-visibly-nested fragment — the capability the general-CFG rung provably cannot have. -/
+Route (b) is DELIVERED below (`sat` / `wm_iff_mem_sat` / `decidableLangNonempty`): the
+reachable-summary relation `WM` is computed by finite `Finset` saturation — a function you can run
+(`#guard`-exercised on concrete machines in `ComputeReference`) — and is proved sound AND complete
+against `Lang`. No `em`, no `by_cases` on the language: the decision is the saturation's output.
+Combined with `prodVpa_lang` (proved) + `equiv_iff_symmDiff_empty` (proved), it yields
+`decidableEquivOfComplements` — decidable template equivalence with `ComplementClosure` as the ONE
+remaining explicit hypothesis (taken as an ARGUMENT, never asserted). -/
+
+/-! ## THE EMPTINESS DECISION — computable, by well-matched summary saturation.
+
+Everything from here to `decidableLangNonempty` is route (b) of the analysis above. The shape:
+
+    `Path`   — non-empty valid step sequences between configs (the structural face of a run)
+    `WM`     — the SUMMARY relation: `WM M q q'` = the machine can go from `(q, [])` to `(q', [])`
+               reading some (necessarily non-empty, well-matched) word. Its four rules are the
+               Alur–Madhusudan saturation rules: internal step / call-return wrap (empty or
+               summarized inner) / composition.
+    `Unw`    — the STRENGTHENED induction target for completeness: what a path from `(q, l)` down
+               to empty stack looks like, level by level. This is the trick that eliminates the
+               "find the matching return" list surgery: generalizing over the stack makes the
+               decomposition fall out of the step case analysis.
+    `sat`    — the COMPUTATION: iterate one saturation round `card (S × S)` times from `∅` over
+               `Finset (S × S)`. Inflationary on a finite lattice ⇒ fixpoint (`iterate_fixpoint`,
+               a cardinality pigeonhole — no choice of witness, just arithmetic).
+    `wm_iff_mem_sat` / `lang_nonempty_iff_wm` — soundness + completeness, tying the computed set
+               to the actual `Lang`.
+
+The `Decidable` instance at the end is `decidable_of_iff` off a `Finset` membership — a value the
+kernel can (and, in `ComputeReference`, does) evaluate. -/
+
+section Emptiness
+
+variable {S G : Type u}
+
+/-- **`Path M c c'`** — a NON-EMPTY sequence of `stepValid` steps from config `c` to config `c'`,
+as a structural recursion (one step, or a step followed by a path). `path_run` / `run_path` prove
+it equivalent to the list-of-`VStep` runs `VpaAccepts` quantifies over; the structural form is what
+the emptiness induction wants. -/
+inductive Path (M : Vpa S G) : Config S G → Config S G → Prop
+  | single {c c' : Config S G} (sym : Sym) (h : stepValid M ⟨c, sym, c'⟩) : Path M c c'
+  | cons {c c' c'' : Config S G} (sym : Sym) (h : stepValid M ⟨c, sym, c'⟩)
+      (tail : Path M c' c'') : Path M c c''
+
+/-- Paths concatenate. -/
+theorem Path.trans {M : Vpa S G} : ∀ {c c' c'' : Config S G},
+    Path M c c' → Path M c' c'' → Path M c c''
+  | _, _, _, .single sym h, h₂ => .cons sym h h₂
+  | _, _, _, .cons sym h tail, h₂ => .cons sym h (tail.trans h₂)
+
+/-- Append `γ` at the BOTTOM of a config's stack. -/
+def liftConfig (γ : G) (c : Config S G) : Config S G := ⟨c.state, c.stack ++ [γ]⟩
+
+/-- The class-driven discipline only ever touches the TOP of the stack, so validity survives
+appending a symbol at the BOTTOM — the per-step face of running a well-matched segment one level
+down inside an open call. -/
+theorem stepValid_lift {M : Vpa S G} (γ : G) {c c' : Config S G} {sym : Sym}
+    (h : stepValid M ⟨c, sym, c'⟩) :
+    stepValid M ⟨liftConfig γ c, sym, liftConfig γ c'⟩ := by
+  cases sym with
+  | op =>
+    simp only [stepValid, classOf] at h ⊢
+    obtain ⟨γ', hc, hst⟩ := h
+    exact ⟨γ', hc, by simp [liftConfig, hst]⟩
+  | cl =>
+    simp only [stepValid, classOf] at h ⊢
+    obtain ⟨γ', rest, hr, hpre, hpost⟩ := h
+    exact ⟨γ', rest ++ [γ], hr, by simp [liftConfig, hpre], by simp [liftConfig, hpost]⟩
+  | dat =>
+    simp only [stepValid, classOf] at h ⊢
+    exact ⟨h.1, by simp [liftConfig, h.2]⟩
+
+/-- Lift a whole path one stack level down. -/
+theorem Path.lift {M : Vpa S G} (γ : G) : ∀ {c c' : Config S G},
+    Path M c c' → Path M (liftConfig γ c) (liftConfig γ c')
+  | _, _, .single sym h => .single sym (stepValid_lift γ h)
+  | _, _, .cons sym h tail => .cons sym (stepValid_lift γ h) (Path.lift γ tail)
+
+/-- **`WM M q q'`** — the well-matched SUMMARY relation: state `q'` is reachable from state `q`
+across some non-empty well-matched word (empty stack to empty stack). The four constructors are
+exactly the Alur–Madhusudan reachable-summary saturation rules; `wm_iff_mem_sat` below shows the
+relation is COMPUTED by finite fixpoint iteration, and `lang_nonempty_iff_wm` that it decides
+language non-emptiness. -/
+inductive WM (M : Vpa S G) : S → S → Prop
+  | int {q q' : S} (h : M.int q Sym.dat q') : WM M q q'
+  | wrap0 {q p q' : S} {γ : G} (hc : M.call q Sym.op p γ) (hr : M.ret p Sym.cl q' γ) :
+      WM M q q'
+  | wrap {q p p' q' : S} {γ : G} (hc : M.call q Sym.op p γ) (hi : WM M p p')
+      (hr : M.ret p' Sym.cl q' γ) : WM M q q'
+  | comp {q m q' : S} (h₁ : WM M q m) (h₂ : WM M m q') : WM M q q'
+
+/-- SOUNDNESS of the summaries: every `WM M q q'` is realized by an actual path from `(q, [])` to
+`(q', [])` — internal rule = one step; wrap = call, (lifted) inner path, return; composition =
+concatenation. -/
+theorem WM.toPath {M : Vpa S G} {q q' : S} (h : WM M q q') :
+    Path M ⟨q, []⟩ ⟨q', []⟩ := by
+  induction h with
+  | int h => exact .single Sym.dat ⟨h, rfl⟩
+  | @wrap0 q p q' γ hc hr =>
+    exact .cons (c' := ⟨p, [γ]⟩) Sym.op ⟨γ, hc, rfl⟩
+      (.single Sym.cl ⟨γ, [], hr, rfl, rfl⟩)
+  | @wrap q p p' q' γ hc hi hr ih =>
+    exact .cons (c' := ⟨p, [γ]⟩) Sym.op ⟨γ, hc, rfl⟩
+      ((ih.lift γ).trans (.single Sym.cl ⟨γ, [], hr, rfl, rfl⟩))
+  | comp h₁ h₂ ih₁ ih₂ => exact ih₁.trans ih₂
+
+/-- **`Unw M q l q'`** — the strengthened completeness target: from state `q` with stack `l` the
+machine reaches `(q', [])` by a NON-EMPTY valid path, described level-by-level — either the stack
+is already empty and the whole path is one well-matched summary, or the top symbol is eventually
+popped (after optional well-matched activity) and the rest of the stack unwinds recursively
+(`pop`), possibly with the path ending exactly at the final pop (`popLast`). -/
+inductive Unw (M : Vpa S G) : S → List G → S → Prop
+  | wm {q q' : S} (h : WM M q q') : Unw M q [] q'
+  | popLast {q p q' : S} {γ : G} (hpre : q = p ∨ WM M q p) (hr : M.ret p Sym.cl q' γ) :
+      Unw M q [γ] q'
+  | pop {q p q₁ q' : S} {γ : G} {l : List G} (hpre : q = p ∨ WM M q p)
+      (hr : M.ret p Sym.cl q₁ γ) (htail : Unw M q₁ l q') : Unw M q (γ :: l) q'
+
+/-- Prefixing a summary onto an unwind. -/
+theorem Unw.prepend {M : Vpa S G} {q p : S} {l : List G} {q' : S}
+    (hqp : WM M q p) (h : Unw M p l q') : Unw M q l q' := by
+  cases h with
+  | wm h' => exact .wm (hqp.comp h')
+  | popLast hpre hr =>
+    exact .popLast (Or.inr (hpre.elim (fun e => e ▸ hqp) fun w => hqp.comp w)) hr
+  | pop hpre hr htail =>
+    exact .pop (Or.inr (hpre.elim (fun e => e ▸ hqp) fun w => hqp.comp w)) hr htail
+
+/-- COMPLETENESS core: any path that ends at empty stack unwinds its start stack level-by-level.
+Induction on the path, case analysis on the first symbol's class: an internal step prepends a
+summary; a call step's pushed symbol must be popped by the induction hypothesis' unwind, and the
+call + (summarized) inner + return REASSEMBLE into a `WM` wrap — the matching-return decomposition
+with no list surgery; a return step is literally a `pop` node. -/
+theorem path_unw {M : Vpa S G} {c c' : Config S G} (h : Path M c c') :
+    c'.stack = [] → Unw M c.state c.stack c'.state := by
+  induction h with
+  | @single a a' sym hs =>
+    intro hend
+    cases sym with
+    | op =>
+      simp only [stepValid, classOf] at hs
+      obtain ⟨γ, _, hst⟩ := hs
+      rw [hend] at hst
+      simp at hst
+    | cl =>
+      simp only [stepValid, classOf] at hs
+      obtain ⟨γ, rest, hr, hpre, hpost⟩ := hs
+      have hrest : rest = [] := hpost.symm.trans hend
+      subst hrest
+      rw [hpre]
+      exact .popLast (Or.inl rfl) hr
+    | dat =>
+      simp only [stepValid, classOf] at hs
+      have hcs : a.stack = ([] : List G) := hs.2.symm.trans hend
+      rw [hcs]
+      exact .wm (.int hs.1)
+  | @cons a amid a'' sym hs tail ih =>
+    intro hend
+    have iht := ih hend
+    cases sym with
+    | op =>
+      simp only [stepValid, classOf] at hs
+      obtain ⟨γ, hc, hst⟩ := hs
+      rw [hst] at iht
+      revert iht
+      generalize a.stack = cs
+      intro iht
+      cases iht with
+      | popLast hpre hr =>
+        exact .wm (hpre.elim (fun e => WM.wrap0 (e ▸ hc) hr) fun w => WM.wrap hc w hr)
+      | pop hpre hr htail =>
+        exact Unw.prepend
+          (hpre.elim (fun e => WM.wrap0 (e ▸ hc) hr) fun w => WM.wrap hc w hr) htail
+    | cl =>
+      simp only [stepValid, classOf] at hs
+      obtain ⟨γ, rest, hr, hpre, hpost⟩ := hs
+      rw [hpost] at iht
+      rw [hpre]
+      exact .pop (Or.inl rfl) hr iht
+    | dat =>
+      simp only [stepValid, classOf] at hs
+      rw [hs.2] at iht
+      exact Unw.prepend (WM.int hs.1) iht
+
+/-- COMPLETENESS: a path from `(q, [])` to `(q', [])` yields a summary — with the EMPTY start
+stack, `Unw` has only its `wm` constructor, and non-emptiness of the path is what makes the
+summary strict (no `q = q'` escape hatch: `lang_not_nil` stays true of the decision). -/
+theorem path_wm {M : Vpa S G} {q q' : S} (h : Path M ⟨q, []⟩ ⟨q', []⟩) : WM M q q' := by
+  have hu := path_unw h rfl
+  cases hu with
+  | wm h => exact h
+
+/-- A non-empty, valid, chained run (the `VpaAccepts` shape) is a `Path` from its first `pre` to
+its last `post`. -/
+theorem run_path (M : Vpa S G) :
+    ∀ (run : List (VStep S G)) (first last : VStep S G),
+      run.head? = some first → run.getLast? = some last →
+      (∀ s ∈ run, stepValid M s) → vchained run → Path M first.pre last.post := by
+  intro run
+  induction run with
+  | nil => intro first last hh _ _ _; simp at hh
+  | cons a t ih =>
+    intro first last hh hl hval hch
+    simp only [List.head?_cons, Option.some.injEq] at hh
+    subst hh
+    cases t with
+    | nil =>
+      simp only [List.getLast?_singleton, Option.some.injEq] at hl
+      subst hl
+      exact .single a.sym (hval a (by simp))
+    | cons b u =>
+      obtain ⟨hR, htail⟩ := hch
+      have hl' : (b :: u).getLast? = some last := by
+        rw [List.getLast?_cons_cons] at hl; exact hl
+      have hb : Path M b.pre last.post :=
+        ih b last rfl hl' (fun s hs => hval s (List.mem_cons_of_mem a hs)) htail
+      have hbp : b.pre = a.post := hR
+      rw [hbp] at hb
+      exact .cons a.sym (hval a (by simp)) hb
+
+/-- Conversely, a `Path` is realized by a run of the `VpaAccepts` shape. -/
+theorem path_run {M : Vpa S G} {c c' : Config S G} (h : Path M c c') :
+    ∃ (run : List (VStep S G)) (first last : VStep S G),
+      run.head? = some first ∧ run.getLast? = some last ∧ first.pre = c ∧ last.post = c' ∧
+      (∀ s ∈ run, stepValid M s) ∧ vchained run := by
+  induction h with
+  | @single a a' sym hs =>
+    refine ⟨[⟨a, sym, a'⟩], ⟨a, sym, a'⟩, ⟨a, sym, a'⟩, rfl, List.getLast?_singleton, rfl, rfl,
+      ?_, trivial⟩
+    intro s hs'
+    rw [List.mem_singleton] at hs'
+    subst hs'
+    exact hs
+  | @cons a amid a'' sym hs tail ih =>
+    obtain ⟨run, first, last, hh, hl, hfp, hlp, hval, hch⟩ := ih
+    cases run with
+    | nil => simp at hh
+    | cons r t =>
+      simp only [List.head?_cons, Option.some.injEq] at hh
+      subst hh
+      refine ⟨⟨a, sym, amid⟩ :: r :: t, ⟨a, sym, amid⟩, last, rfl, ?_, rfl, hlp, ?_, ?_⟩
+      · rw [List.getLast?_cons_cons]; exact hl
+      · intro s hs'
+        rcases List.mem_cons.mp hs' with rfl | hmem
+        · exact hs
+        · exact hval s hmem
+      · exact ⟨hfp, hch⟩
+
+/-- **`lang_nonempty_iff_wm`** — the language is non-empty iff a summary reaches an accepting
+state. This is the REDUCTION that makes emptiness decidable: the left side quantifies over all
+words and runs; the right side is a relation on the FINITE `S × S` grid. -/
+theorem lang_nonempty_iff_wm (M : Vpa S G) (q₀ : S) (acc : S → Prop) :
+    (∃ w, Lang M q₀ acc w) ↔ ∃ q' : S, acc q' ∧ WM M q₀ q' := by
+  constructor
+  · rintro ⟨w, run, ⟨first, last, hh, hl, hq0, hs0, hacc, hsf, hval, hch⟩, -⟩
+    refine ⟨last.post.state, hacc, ?_⟩
+    have hp := run_path M run first last hh hl hval hch
+    have e₁ : first.pre = (⟨q₀, []⟩ : Config S G) := by rw [← hq0, ← hs0]
+    have e₂ : last.post = (⟨last.post.state, []⟩ : Config S G) := by rw [← hsf]
+    rw [e₁, e₂] at hp
+    exact path_wm hp
+  · rintro ⟨q', hacc, hwm⟩
+    obtain ⟨run, first, last, hh, hl, hfp, hlp, hval, hch⟩ := path_run hwm.toPath
+    exact ⟨run.map (fun s => s.sym), run,
+      ⟨first, last, hh, hl, by rw [hfp], by rw [hfp], by rw [hlp]; exact hacc, by rw [hlp],
+        hval, hch⟩, rfl⟩
+
+#assert_axioms path_wm
+#assert_axioms lang_nonempty_iff_wm
+
+/-! ### The computation — `Finset` saturation to a provable fixpoint. -/
+
+section Saturation
+
+variable [DecidableEq S] [Fintype S] [Fintype G] (M : Vpa S G)
+variable [∀ q s q' γ, Decidable (M.call q s q' γ)]
+variable [∀ q s q' γ, Decidable (M.ret q s q' γ)]
+variable [∀ q s q', Decidable (M.int q s q')]
+
+/-- One saturation round: keep everything, add every pair derivable by one `WM` rule from the
+current set. A plain computable `Finset` function — the quantifiers range over the FINITE state
+and stack-symbol grids, decided by enumeration. -/
+def satStep (X : Finset (S × S)) : Finset (S × S) :=
+  X ∪ Finset.univ.filter fun qq : S × S =>
+    M.int qq.1 Sym.dat qq.2
+      ∨ (∃ (p p' : S) (γ : G), M.call qq.1 Sym.op p γ ∧ (p = p' ∨ (p, p') ∈ X)
+          ∧ M.ret p' Sym.cl qq.2 γ)
+      ∨ (∃ m : S, (qq.1, m) ∈ X ∧ (m, qq.2) ∈ X)
+
+/-- The saturation: iterate the round `card (S × S)` times from `∅`. Enough by the pigeonhole
+below — each non-fixpoint round strictly grows a subset of the `card (S × S)`-element grid. -/
+def sat : Finset (S × S) := (satStep M)^[Fintype.card (S × S)] ∅
+
+theorem subset_satStep (X : Finset (S × S)) : X ⊆ satStep M X := Finset.subset_union_left
+
+/-- Cardinality pigeonhole: iterating an inflationary `Finset` map on a `Fintype` for
+`card α` steps lands on a fixpoint. Pure counting — no choice, no excluded middle on the
+underlying predicate. -/
+theorem iterate_fixpoint {α : Type u} [DecidableEq α] [Fintype α] (f : Finset α → Finset α)
+    (hf : ∀ X, X ⊆ f X) : f (f^[Fintype.card α] ∅) = f^[Fintype.card α] ∅ := by
+  have hstab : ∀ k, f (f^[k] ∅) = f^[k] ∅ → ∀ m, f^[k + m] ∅ = f^[k] ∅ := by
+    intro k hfix m
+    induction m with
+    | zero => rfl
+    | succ m ih =>
+      have he : k + (m + 1) = (k + m) + 1 := by omega
+      rw [he, Function.iterate_succ_apply', ih, hfix]
+  have hex : ∃ k, k ≤ Fintype.card α ∧ f (f^[k] ∅) = f^[k] ∅ := by
+    by_contra hnone
+    push Not at hnone
+    have hgrow : ∀ k, k ≤ Fintype.card α + 1 → k ≤ (f^[k] ∅).card := by
+      intro k
+      induction k with
+      | zero => intro _; exact Nat.zero_le _
+      | succ k ih =>
+        intro hk
+        have h₁ : k ≤ (f^[k] ∅).card := ih (by omega)
+        have hss : f^[k] ∅ ⊂ f^[k + 1] ∅ := by
+          rw [Function.iterate_succ_apply']
+          exact (hf _).ssubset_of_ne (Ne.symm (hnone k (by omega)))
+        have := Finset.card_lt_card hss
+        omega
+    have hbig := hgrow (Fintype.card α + 1) le_rfl
+    have hle : (f^[Fintype.card α + 1] ∅).card ≤ Fintype.card α := Finset.card_le_univ _
+    omega
+  obtain ⟨k, hkN, hfix⟩ := hex
+  have hNk : f^[Fintype.card α] ∅ = f^[k] ∅ := by
+    have h := hstab k hfix (Fintype.card α - k)
+    rwa [Nat.add_sub_cancel' hkN] at h
+  rw [hNk, hfix]
+
+theorem satStep_sat_eq : satStep M (sat M) = sat M :=
+  iterate_fixpoint (satStep M) (subset_satStep M)
+
+/-- Saturation SOUNDNESS: everything the iteration puts in is a real summary. -/
+theorem wm_of_mem_satIter :
+    ∀ (n : ℕ) (qq : S × S), qq ∈ (satStep M)^[n] ∅ → WM M qq.1 qq.2 := by
+  intro n
+  induction n with
+  | zero => intro qq h; simp at h
+  | succ n ih =>
+    intro qq h
+    rw [Function.iterate_succ_apply'] at h
+    simp only [satStep] at h
+    rcases Finset.mem_union.mp h with h | h
+    · exact ih qq h
+    · rcases (Finset.mem_filter.mp h).2 with hint | ⟨p, p', γ, hc, hmid, hr⟩ | ⟨m, h₁, h₂⟩
+      · exact .int hint
+      · rcases hmid with rfl | hX
+        · exact .wrap0 hc hr
+        · exact .wrap hc (ih (p, p') hX) hr
+      · exact .comp (ih (qq.1, m) h₁) (ih (m, qq.2) h₂)
+
+/-- Saturation COMPLETENESS: every summary is in the computed fixpoint — each `WM` rule is one
+round of `satStep`, and `sat` absorbs a round. -/
+theorem mem_sat_of_wm {q q' : S} (h : WM M q q') : (q, q') ∈ sat M := by
+  induction h with
+  | int h =>
+    rw [← satStep_sat_eq M]
+    simp only [satStep]
+    exact Finset.mem_union_right _ (Finset.mem_filter.mpr ⟨Finset.mem_univ _, Or.inl h⟩)
+  | @wrap0 q p q' γ hc hr =>
+    rw [← satStep_sat_eq M]
+    simp only [satStep]
+    exact Finset.mem_union_right _ (Finset.mem_filter.mpr
+      ⟨Finset.mem_univ _, Or.inr (Or.inl ⟨p, p, γ, hc, Or.inl rfl, hr⟩)⟩)
+  | @wrap q p p' q' γ hc hi hr ih =>
+    rw [← satStep_sat_eq M]
+    simp only [satStep]
+    exact Finset.mem_union_right _ (Finset.mem_filter.mpr
+      ⟨Finset.mem_univ _, Or.inr (Or.inl ⟨p, p', γ, hc, Or.inr ih, hr⟩)⟩)
+  | @comp q m q' h₁ h₂ ih₁ ih₂ =>
+    rw [← satStep_sat_eq M]
+    simp only [satStep]
+    exact Finset.mem_union_right _ (Finset.mem_filter.mpr
+      ⟨Finset.mem_univ _, Or.inr (Or.inr ⟨m, ih₁, ih₂⟩)⟩)
+
+/-- **`wm_iff_mem_sat`** — the summary relation IS the computed `Finset`. -/
+theorem wm_iff_mem_sat (q q' : S) : WM M q q' ↔ (q, q') ∈ sat M :=
+  ⟨mem_sat_of_wm M, fun h => wm_of_mem_satIter M _ (q, q') h⟩
+
+#assert_axioms wm_iff_mem_sat
+
+/-- **THE ARTIFACT** — a COMPUTABLE `Decidable` instance for language non-emptiness on the finite
+fragment: run the saturation, scan the accepting states. `decidable_of_iff` off a `Finset`
+membership — the kernel evaluates it (see `ComputeReference`). Not an `em` phrasing: the closing
+note's vacuity analysis is answered by a function, not a tautology. -/
+instance decidableLangNonempty (q₀ : S) (acc : S → Prop) [DecidablePred acc] :
+    Decidable (∃ w, Lang M q₀ acc w) :=
+  decidable_of_iff (∃ q' : S, acc q' ∧ (q₀, q') ∈ sat M) <| by
+    rw [lang_nonempty_iff_wm M q₀ acc]
+    exact exists_congr fun q' => and_congr_right fun _ => (wm_iff_mem_sat M q₀ q').symm
+
+/-- The EMPTINESS decision, in the form the boolean-closure pipeline consumes. -/
+instance decidableLangEmpty (q₀ : S) (acc : S → Prop) [DecidablePred acc] :
+    Decidable (∀ w, ¬ Lang M q₀ acc w) :=
+  decidable_of_iff (¬ ∃ w, Lang M q₀ acc w) not_exists
+
+end Saturation
+
+end Emptiness
 
 /-! ## Non-vacuity — the intersection theorem on the concrete Dyck reference machine. -/
 
@@ -575,17 +979,158 @@ theorem word2_components :
 
 end Reference
 
+/-! ## Decidable equivalence, assembled to the ONE remaining seam.
+
+`prodVpa` preserves decidability of transitions (conjunctions of decidable components), so the
+emptiness decision above applies to the product machines the symmetric-difference pipeline
+builds. What follows assembles `equiv_iff_symmDiff_empty` + `prodVpa_lang` + `sat` into a
+DECIDABLE equivalence — with the complement machines taken as explicit ARGUMENTS carrying their
+correctness proofs. That is precisely the `ComplementClosure` seam and nothing else: supply the
+Alur–Madhusudan determinize-and-flip construction and `decidableEquivOfComplements` finishes the
+job computably. -/
+
+section ProdDecidable
+
+variable {M₁ : Vpa S₁ G₁} {M₂ : Vpa S₂ G₂}
+
+instance [∀ q s q' γ, Decidable (M₁.call q s q' γ)] [∀ q s q' γ, Decidable (M₂.call q s q' γ)]
+    (q : S₁ × S₂) (s : Sym) (q' : S₁ × S₂) (γ : G₁ × G₂) :
+    Decidable ((prodVpa M₁ M₂).call q s q' γ) :=
+  inferInstanceAs (Decidable (_ ∧ _))
+
+instance [∀ q s q' γ, Decidable (M₁.ret q s q' γ)] [∀ q s q' γ, Decidable (M₂.ret q s q' γ)]
+    (q : S₁ × S₂) (s : Sym) (q' : S₁ × S₂) (γ : G₁ × G₂) :
+    Decidable ((prodVpa M₁ M₂).ret q s q' γ) :=
+  inferInstanceAs (Decidable (_ ∧ _))
+
+instance [∀ q s q', Decidable (M₁.int q s q')] [∀ q s q', Decidable (M₂.int q s q')]
+    (q : S₁ × S₂) (s : Sym) (q' : S₁ × S₂) :
+    Decidable ((prodVpa M₁ M₂).int q s q') :=
+  inferInstanceAs (Decidable (_ ∧ _))
+
+end ProdDecidable
+
+/-- **`decidableEquivOfComplements`** — decidable template equivalence, modulo EXACTLY the
+`ComplementClosure` seam: given complement machines `C₁`, `C₂` (with their correctness proofs
+`hC₁`, `hC₂` — the conclusion `ComplementClosure` promises, taken here as hypotheses), language
+equivalence of `M₁` and `M₂` is DECIDED by running the summary saturation on the two product
+machines `M₁ ⊗ C₂` and `M₂ ⊗ C₁`. The `w ≠ []` and `WellMatched` guards in the complement
+statement are discharged by `lang_not_nil` / `lang_wellMatched`: any symmetric-difference witness
+is automatically non-empty and well-matched, so the guarded complement suffices. Computable end to
+end — the only non-computational content is the two correctness proofs, which live in `Prop`. -/
+def decidableEquivOfComplements {T₁ H₁ T₂ H₂ : Type u}
+    [DecidableEq S₁] [Fintype S₁] [Fintype G₁] [DecidableEq S₂] [Fintype S₂] [Fintype G₂]
+    [DecidableEq T₁] [Fintype T₁] [Fintype H₁] [DecidableEq T₂] [Fintype T₂] [Fintype H₂]
+    (M₁ : Vpa S₁ G₁) (q₁ : S₁) (acc₁ : S₁ → Prop) [DecidablePred acc₁]
+    (M₂ : Vpa S₂ G₂) (q₂ : S₂) (acc₂ : S₂ → Prop) [DecidablePred acc₂]
+    (C₁ : Vpa T₁ H₁) (c₁ : T₁) (accC₁ : T₁ → Prop) [DecidablePred accC₁]
+    (C₂ : Vpa T₂ H₂) (c₂ : T₂) (accC₂ : T₂ → Prop) [DecidablePred accC₂]
+    [∀ q s q' γ, Decidable (M₁.call q s q' γ)] [∀ q s q' γ, Decidable (M₁.ret q s q' γ)]
+    [∀ q s q', Decidable (M₁.int q s q')]
+    [∀ q s q' γ, Decidable (M₂.call q s q' γ)] [∀ q s q' γ, Decidable (M₂.ret q s q' γ)]
+    [∀ q s q', Decidable (M₂.int q s q')]
+    [∀ q s q' γ, Decidable (C₁.call q s q' γ)] [∀ q s q' γ, Decidable (C₁.ret q s q' γ)]
+    [∀ q s q', Decidable (C₁.int q s q')]
+    [∀ q s q' γ, Decidable (C₂.call q s q' γ)] [∀ q s q' γ, Decidable (C₂.ret q s q' γ)]
+    [∀ q s q', Decidable (C₂.int q s q')]
+    (hC₁ : ∀ w, w ≠ [] → (Lang C₁ c₁ accC₁ w ↔ (WellMatched w ∧ ¬ Lang M₁ q₁ acc₁ w)))
+    (hC₂ : ∀ w, w ≠ [] → (Lang C₂ c₂ accC₂ w ↔ (WellMatched w ∧ ¬ Lang M₂ q₂ acc₂ w))) :
+    Decidable (∀ w, Lang M₁ q₁ acc₁ w ↔ Lang M₂ q₂ acc₂ w) :=
+  haveI : DecidablePred fun p : S₁ × T₂ => acc₁ p.1 ∧ accC₂ p.2 := fun _ =>
+    inferInstanceAs (Decidable (_ ∧ _))
+  haveI : DecidablePred fun p : S₂ × T₁ => acc₂ p.1 ∧ accC₁ p.2 := fun _ =>
+    inferInstanceAs (Decidable (_ ∧ _))
+  decidable_of_iff
+    ((¬ ∃ w, Lang (prodVpa M₁ C₂) (q₁, c₂) (fun p => acc₁ p.1 ∧ accC₂ p.2) w) ∧
+      (¬ ∃ w, Lang (prodVpa M₂ C₁) (q₂, c₁) (fun p => acc₂ p.1 ∧ accC₁ p.2) w)) <| by
+    have iff₁ : (∃ w, Lang (prodVpa M₁ C₂) (q₁, c₂) (fun p => acc₁ p.1 ∧ accC₂ p.2) w) ↔
+        ∃ w, Lang M₁ q₁ acc₁ w ∧ ¬ Lang M₂ q₂ acc₂ w := by
+      constructor
+      · rintro ⟨w, hw⟩
+        obtain ⟨h₁, hc⟩ := (prodVpa_lang M₁ C₂ q₁ c₂ acc₁ accC₂ w).mp hw
+        have hne : w ≠ [] := fun e => lang_not_nil M₁ q₁ acc₁ (e ▸ h₁)
+        exact ⟨w, h₁, ((hC₂ w hne).mp hc).2⟩
+      · rintro ⟨w, h₁, h₂⟩
+        have hne : w ≠ [] := fun e => lang_not_nil M₁ q₁ acc₁ (e ▸ h₁)
+        exact ⟨w, (prodVpa_lang M₁ C₂ q₁ c₂ acc₁ accC₂ w).mpr
+          ⟨h₁, (hC₂ w hne).mpr ⟨lang_wellMatched M₁ q₁ acc₁ w h₁, h₂⟩⟩⟩
+    have iff₂ : (∃ w, Lang (prodVpa M₂ C₁) (q₂, c₁) (fun p => acc₂ p.1 ∧ accC₁ p.2) w) ↔
+        ∃ w, Lang M₂ q₂ acc₂ w ∧ ¬ Lang M₁ q₁ acc₁ w := by
+      constructor
+      · rintro ⟨w, hw⟩
+        obtain ⟨h₂, hc⟩ := (prodVpa_lang M₂ C₁ q₂ c₁ acc₂ accC₁ w).mp hw
+        have hne : w ≠ [] := fun e => lang_not_nil M₂ q₂ acc₂ (e ▸ h₂)
+        exact ⟨w, h₂, ((hC₁ w hne).mp hc).2⟩
+      · rintro ⟨w, h₂, h₁⟩
+        have hne : w ≠ [] := fun e => lang_not_nil M₂ q₂ acc₂ (e ▸ h₂)
+        exact ⟨w, (prodVpa_lang M₂ C₁ q₂ c₁ acc₂ accC₁ w).mpr
+          ⟨h₂, (hC₁ w hne).mpr ⟨lang_wellMatched M₂ q₂ acc₂ w h₂, h₁⟩⟩⟩
+    rw [equiv_iff_symmDiff_empty (Lang M₁ q₁ acc₁) (Lang M₂ q₂ acc₂)]
+    exact and_congr (not_congr iff₁) (not_congr iff₂)
+
+/-! ## The decision COMPUTES — kernel-evaluated on concrete machines.
+
+The `#guard`s below are the teeth: they force the kernel to actually RUN the saturation and the
+full non-emptiness decision. A vacuous (`em`-laundered) "decision" cannot pass a `#guard` — there
+is nothing to evaluate. -/
+
+namespace ComputeReference
+
+/-- The bracket-chain VPA re-hosted on `Fin 1` states (the `Nat`-state `chainVpa` above is the
+same machine; `Fin 1` gives the `Fintype` the computation needs). -/
+def finChainVpa : Vpa (Fin 1) Unit where
+  call := fun _ s _ _ => s = Sym.op
+  ret := fun _ s _ _ => s = Sym.cl
+  int := fun _ _ _ => False
+
+instance : ∀ (q : Fin 1) (s : Sym) (q' : Fin 1) (γ : Unit), Decidable (finChainVpa.call q s q' γ) :=
+  fun _ s _ _ => inferInstanceAs (Decidable (s = Sym.op))
+instance : ∀ (q : Fin 1) (s : Sym) (q' : Fin 1) (γ : Unit), Decidable (finChainVpa.ret q s q' γ) :=
+  fun _ s _ _ => inferInstanceAs (Decidable (s = Sym.cl))
+instance : ∀ (q : Fin 1) (s : Sym) (q' : Fin 1), Decidable (finChainVpa.int q s q') :=
+  fun _ _ _ => inferInstanceAs (Decidable False)
+
+/-- A machine with NO transitions — its language is empty, and the decision must SAY so (this is
+the case a vacuity-laundered `q = q'` escape hatch would get wrong; cf. `lang_not_nil`). -/
+def deadVpa : Vpa (Fin 1) Unit where
+  call := fun _ _ _ _ => False
+  ret := fun _ _ _ _ => False
+  int := fun _ _ _ => False
+
+instance : ∀ (q : Fin 1) (s : Sym) (q' : Fin 1) (γ : Unit), Decidable (deadVpa.call q s q' γ) :=
+  fun _ _ _ _ => inferInstanceAs (Decidable False)
+instance : ∀ (q : Fin 1) (s : Sym) (q' : Fin 1) (γ : Unit), Decidable (deadVpa.ret q s q' γ) :=
+  fun _ _ _ _ => inferInstanceAs (Decidable False)
+instance : ∀ (q : Fin 1) (s : Sym) (q' : Fin 1), Decidable (deadVpa.int q s q') :=
+  fun _ _ _ => inferInstanceAs (Decidable False)
+
+-- The saturation COMPUTES: the bracket machine's single summary pair is found ...
+#guard ((0, 0) : Fin 1 × Fin 1) ∈ sat finChainVpa
+-- ... and the transitionless machine saturates to nothing.
+#guard sat deadVpa = ∅
+
+-- The full decision runs end-to-end through `decidableLangNonempty`: the bracket language is
+-- inhabited (`op cl` is a witness); the dead machine's language is empty — and `decide` is
+-- evaluation, not `em`.
+#guard decide (∃ w, Lang finChainVpa 0 (· = 0) w)
+#guard decide (∀ w, ¬ Lang deadVpa 0 (· = 0) w)
+
+end ComputeReference
+
 /-! ## Residual (recap)
 
 PROVED: intersection (`prodVpa_lang`, both directions, finiteness-preserving since
 `Fintype (S₁ × S₂)` is automatic) · the acceptance universe (`lang_wellMatched`,
 `lang_wordDelta_zero`, `lang_not_nil`) · the equivalence→emptiness reduction
-(`equiv_iff_symmDiff_empty`).
+(`equiv_iff_symmDiff_empty`) · **the COMPUTABLE emptiness decision** (`sat` saturation, sound +
+complete: `wm_iff_mem_sat`, `lang_nonempty_iff_wm`, `decidableLangNonempty` /
+`decidableLangEmpty`, kernel-`#guard`ed on concrete machines) · **decidable equivalence up to the
+one seam** (`decidableEquivOfComplements`: complement machines in, decision out, computable).
 
-NAMED, with the precise statement and the known route: `ComplementClosure` (determinization +
-accept-flip, relative to non-empty `WellMatched`, finite fragment) and the emptiness decision (a
-concrete pumping bound or a computable `Decidable` instance — NOT a Prop, per the vacuity analysis
-above). Union needs no separate seam: `∁(∁L₁ ∩ ∁L₂)` via the two named pieces, or directly by a
+NAMED, with the precise statement and the known route: `ComplementClosure` alone (determinization
++ accept-flip, relative to non-empty `WellMatched`, finite fragment — the Alur–Madhusudan subset
+construction over summary pairs). It is the ONLY remaining piece: `decidableEquivOfComplements`
+consumes exactly its conclusion. Union needs no separate seam: `∁(∁L₁ ∩ ∁L₂)`, or directly by a
 disjoint-sum construction. All of this is the FINITE `Sym` fragment; the templater's infinite
 `Value` alphabet stays out of scope, exactly as in `VpaAsCert`'s honest-scope note.
 -/
