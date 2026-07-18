@@ -246,10 +246,15 @@ def split_layout(stdout: str, _written):
     """The layout emitter prints a COMPLETE Rust module on stdout. Route it verbatim (it is the
     file's exact bytes). Sanity-gate the shape so a broken emit cannot silently install an empty
     or non-Rust layout module — this file is load-bearing for soundness, not decoration."""
-    if "@generated" not in stdout or "pub const EFFECT_VM_WIDTH" not in stdout:
+    if (
+        "@generated" not in stdout
+        or "pub const EFFECT_VM_WIDTH" not in stdout
+        or "pub const NUM_PRE_LIMBS" not in stdout
+        or "pub const ROTATED_GROUP_TABLE" not in stdout
+    ):
         sys.exit(
             "emit_descriptors: layout emitter output does not look like the generated Rust layout "
-            "module (missing @generated header or EFFECT_VM_WIDTH)"
+            "module (missing header, scalar spine, or verified group table)"
         )
     GENERATED_RS[LAYOUT_RS] = stdout if stdout.endswith("\n") else stdout + "\n"
 
@@ -746,8 +751,9 @@ def compute_fp_rewrites(written: dict[str, str]) -> tuple[dict[Path, str], int]:
 
 def install_and_stamp(written: dict[str, str]) -> None:
     """The INSTALL phase: diff the buffered emission against disk; a byte-changing
-    install is ack-gated, provenance-stamped, and audit-logged. A byte-identical
-    emission is a silent no-op (nothing written, no ack needed)."""
+    descriptor install is ack-gated, provenance-stamped, and audit-logged. A generated-Rust-only
+    change is byte-safe (it cannot re-key a descriptor) and installs without a VK-regeneration
+    acknowledgement. A byte-identical emission is a silent no-op."""
     fp_changes, n_fp = compute_fp_rewrites(written)
 
     changed_desc = sorted(
@@ -768,6 +774,21 @@ def install_and_stamp(written: dict[str, str]) -> None:
         print(
             f"emit_descriptors: NO-OP — all {len(written)} descriptor files and "
             f"{n_fp} FP constants are byte-identical to the Lean emission."
+        )
+        return
+
+    # A Lean-authored Rust projection is not a VK regeneration. Requiring the federation-rekey ACK
+    # for a generated-module-only change made the safe half of a layout refactor impossible to run
+    # through the canonical emitter. Geometry changes remain protected: because the Lean descriptor
+    # emit reads the same RotatedLayout, moving a consumed group column also changes descriptor bytes
+    # and therefore enters the ack-gated branch below.
+    if not changed_desc and not fp_changes:
+        for p, content in changed_gen.items():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        print(
+            f"emit_descriptors: GENERATED-RUST UPDATE — installed {len(changed_gen)} Lean-authored "
+            "module(s); descriptor bytes and FP constants are unchanged (no VK regen)."
         )
         return
 

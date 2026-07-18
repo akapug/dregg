@@ -82,6 +82,7 @@ cohort member against the rotated 25+…-limb state block — as ONE parametric 
 `Poseidon2SpongeCR` hypothesis.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitRotationCaveat
+import Dregg2.Circuit.Emit.RotatedLayout
 -- The mod-p gate-denotation toolkit (field-faithful `holdsVm ≡ 0 [ZMOD p]`): positive
 -- glue `eqToModEq`/`gate_modEq_iff`, negative-tooth glue `not_modEq_zero_of_canon`. Transfer
 -- imports only `EffectVmEmit`, already in this closure; no cycle.
@@ -136,11 +137,16 @@ open Dregg2.Circuit.DeployedFieldsTree (Fields8Scheme)
 
 set_option linter.unusedVariables false
 set_option autoImplicit false
--- v13 fields-octet grow: the rotated appendix is 124 sites (was 86); the `rfl` reductions
+-- The rotated appendix is 134 sites; the `rfl` reductions
 -- over the widened `rotateV3` structure need more kernel recursion depth.
 set_option maxRecDepth 16000
 
 /-! ## §1 — the appended geometry (R = 24, offsets relative to a block base). -/
+
+/-- Project a named faithful-8 group lane from the verified layout. `Legal.groupCoverage` and
+`Legal.groupWidth` make every lane total; `getD 0` stays only at this raw-data projection boundary. -/
+def layoutGroupCol (name : GroupName) (i : Fin 8) : Nat :=
+  (rotated178.groupCol name i).getD 0
 
 -- ── THE MODE/FIELDS-ROOT FLAG-DAY (NUM_PRE_LIMBS 35→37) — WAVE 3 (the mover tail) ────────────────
 -- On TOP of the perms/VK flag-day (limbs 33,34), the deployed rotated block now carries TWO more
@@ -163,50 +169,40 @@ set_option maxRecDepth 16000
 -- AFTER fields_root sub-limb to the declared post-`fields_root` param column (the perms/VK weld shape,
 -- declared-param anchored).
 
-/-- The per-block span: 169 pre-iroot limbs + iroot + state_commit + 56 chain carriers (v13:
-NUM_PRE_LIMBS 112→169 — the FIELDS-OCTET geometry grow appends the 56 fields[0..7] COMPLETION
-lanes at offsets 112..167 (fields[i] lanes 1..7 → `112 + 7·i .. 112 + 7·i + 6`; lane 0 of each
-field stays at its existing WELDED limb `4 + i` = r3..r10, where the faithful
-`field_limbs8(fields[i])[0]` REPLACES the Horner `fold_bytes32_to_bb` — the v13 lane-0 route
-closing the LAST degraded-felt residual) plus ONE zero PAD limb at 168 (so the body
-`[4..168]` = 165 limbs = fifty-five 3-wide groups, NO arity-2 leftover — the padded-N
-discipline that picked 112 for v12). The shared projection + the encoding audit (why lane 0
-is the u64-lane lo32, NOT the LE bytes-0..4 chunk) live at
-`circuit/src/effect_vm/helpers.rs::field_limbs8`. This rides on the v12 carrier-material
-octets 88..111 and the v11 accumulator completion limbs 67..87. -/
-def B_SPAN : Nat := 239
+/-- The current per-block span: 178 pre-iroot limbs, iroot, state_commit, and 59 chain carriers. -/
+def B_SPAN : Nat := rotatedNumPreLimbs + 3 + (rotatedNumPreLimbs - 4) / 3
 /-- lifecycle-disc offset inside a block (limb 32 — the WAVE-1 flag-day committed discriminant limb,
 committed BESIDE the opaque `lifecycle_felt` at 29; UNCHANGED by the perms/VK + mode/fields-root flag-days). -/
 def B_DISC : Nat := 32
 /-- committed-permissions digest offset inside a block (limb 33 — the WAVE-2 flag-day committed
 perms-digest limb; the deployed `params[0]` felt for a setPermissions row, `= permsHash[0]`). -/
-def B_PERMS : Nat := 33
+def B_PERMS : Nat := layoutGroupCol .perms 0
 /-- committed-verification-key digest offset inside a block (limb 34 — the WAVE-2 flag-day committed
 vk-digest limb; the deployed `params[0]` felt for a setVK row, `= vkHash[0]`). -/
-def B_VK : Nat := 34
+def B_VK : Nat := layoutGroupCol .vk 0
 /-- committed cell-MODE offset inside a block (limb 35 — the WAVE-3 flag-day committed mode byte,
 `Hosted=0 / Sovereign=1`; the makeSovereign CONSTANT-force limb). -/
 def B_MODE : Nat := 35
 /-- committed `fields_root` digest offset inside a block (limb 36 — the WAVE-3 flag-day committed
 overflow named-field map root; the setFieldDyn / refusal declared-param weld limb). -/
-def B_FIELDS_ROOT : Nat := 36
+def B_FIELDS_ROOT : Nat := layoutGroupCol .fields 0
 /-- committed `revoked_root` lane-0 offset inside a block (limb 37 — the REVOKED-ROOT flag-day NEW
 base limb, right after `fields_root` at 36; the credential-revocation accumulator's openable
 sorted-Poseidon2 root, lane 0 of the 8-felt `revokedRootGroupCol` whose completion limbs ride 82..88). -/
-def B_REVOKED_ROOT : Nat := 37
-/-- iroot offset inside a block (limb 170 — the REVOKED-ROOT geometry, absorbed ALONE last). -/
-def B_IROOT : Nat := 178
-/-- state-commit offset inside a block (carrier at `base + 171`, the chain's final digest). -/
-def B_STATE_COMMIT : Nat := 179
+def B_REVOKED_ROOT : Nat := layoutGroupCol .revoked 0
+/-- iroot offset inside a block: exactly past the verified pre-limb layout, absorbed ALONE last. -/
+def B_IROOT : Nat := rotatedNumPreLimbs
+/-- State-commit offset inside a block, immediately after iroot. -/
+def B_STATE_COMMIT : Nat := B_IROOT + 1
 /-- committed-height offset inside a block (limb 31, after the `commitments_root` shift — UNCHANGED
 by the disc / perms-VK flag-days, which append PAST it). -/
 def B_COMMITTED_HEIGHT : Nat := 31
 /-- cap-root offset inside a block (unshifted — `commitments_root` rides AFTER nullifier_root). -/
-def B_CAP_ROOT : Nat := 25
+def B_CAP_ROOT : Nat := layoutGroupCol .cap 0
 /-- nullifier-root offset inside a block (unshifted, limb 26). -/
-def B_NULLIFIER_ROOT_OFF : Nat := 26
+def B_NULLIFIER_ROOT_OFF : Nat := layoutGroupCol .nullifier 0
 /-- commitments-root offset inside a block (limb 27 — the flag-day new committed shielded-set root). -/
-def B_COMMITMENTS_ROOT : Nat := 27
+def B_COMMITMENTS_ROOT : Nat := layoutGroupCol .commitments 0
 /-- delegation-epoch offset inside a block (limb 30 — the committed per-cell `delegation_epoch`,
 `commitment.rs::compute_rotated_pre_limbs` `pre[30]`; absorption order cells_root · r0..r23 · cap_root ·
 nullifier_root · commitments_root · heap_root · lifecycle · **epoch** · committed_height). The forced
@@ -225,8 +221,8 @@ commit at 38 — the `caveatCommit` fold over the 29 manifest felts is untouched
 absent sentinel; the region is producer-filled uniformly on every row). Rust twin
 `trace_rotated::C_DFA_RC_OFF`. Published as 4 TAIL PIs by `withDfaRcPins`. -/
 def C_RC_OFF : Nat := 39
-/-- The whole appendix width: two rotated blocks + the caveat region (2·229 + 43 = 501). -/
-def APPENDIX_SPAN : Nat := 521
+/-- The whole appendix width: two rotated blocks plus the caveat region. -/
+def APPENDIX_SPAN : Nat := 2 * B_SPAN + C_SPAN
 
 -- The map-root offsets ride past the R=24 probe's named columns (cap_root at probe `capRootCol 24`);
 -- the `commitments_root` limb is the +1 over the bare R=24 register shape.
@@ -237,10 +233,11 @@ def APPENDIX_SPAN : Nat := 521
 #guard B_VK == 34                    -- WAVE-2 committed vk-digest limb
 #guard B_MODE == 35                  -- WAVE-3 committed mode byte limb
 #guard B_FIELDS_ROOT == 36           -- WAVE-3 committed fields_root digest limb
-#guard B_IROOT == 178                -- 170 pre-iroot limbs (REVOKED-ROOT base widen), then iroot
+#guard B_IROOT == 178                -- verified pre-iroot layout, then iroot
+#guard B_IROOT == rotated178.numPreLimbs
 #guard B_STATE_COMMIT == B_IROOT + 1
 #guard B_COMMITTED_HEIGHT == 31      -- last SCALAR pre-iroot limb (disc/perms/vk/mode/fields-root ride past it)
-#guard B_SPAN == B_IROOT + 61        -- 170 pre-iroot + iroot + state_commit + 57 chain carriers = 229
+#guard B_SPAN == B_IROOT + 61        -- 178 pre-iroot + iroot + state_commit + 59 chain carriers = 239
 #guard APPENDIX_SPAN == 2 * B_SPAN + C_SPAN
 #guard C_RC_OFF == C_COMMIT + 1      -- the DFA rc carrier rides PAST the caveat commit
 #guard C_SPAN == C_RC_OFF + 4        -- 4 rc felts close the region
@@ -1481,16 +1478,16 @@ def afterCapRootCol (w : Nat) : Nat := w + 239 + B_CAP_ROOT
 
 The scalar `writesTo` on the lane-0 cap-root limb (`beforeCapRootCol`/`afterCapRootCol`, limb 25) is only
 the ~31-bit lane-0 PROJECTION of the deployed 8-felt cap root. v10 commits the FULL 8-felt root: limb 25
-(lane 0) ‖ the seven completion limbs 51..57 (lanes 1..7) — both blocks — absorbed into the wide state
+(lane 0) ‖ the seven completion limbs 52..58 (lanes 1..7) — both blocks — absorbed into the wide state
 commit. The GROUP readers below pin those eight columns to a `Digest8`; `writesTo8` is the native
 arity-16 `node8` UPDATE-AT-KEY over the FULL 8-felt root (`recomposeUp8`, ~124-bit), NEVER a lane-0
 squeeze (the soundness downgrade the GENTIAN tooth closes). The anti-forge tooth is the recompose
 injectivity (`recomposeUp8_inj_of_path`): a forged high-felt post-root forces a different post-leaf. -/
 
 /-- The cap-root 8-felt column at lane `i` in the block based at `blockBase` (limb `B_CAP_ROOT` = 25 for
-lane 0; the seven completion limbs 51..57 for lanes 1..7). `blockBase = w` (BEFORE) / `w + 239` (AFTER). -/
+lane 0; the seven completion limbs 52..58 for lanes 1..7). `blockBase = w` (BEFORE) / `w + 239` (AFTER). -/
 def capRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
-  blockBase + (if i = 0 then B_CAP_ROOT else 51 + (i : Nat)) -- lanes 1..7 → 52..58 (REVOKED-ROOT +1)
+  blockBase + layoutGroupCol .cap i
 
 /-- The BEFORE-block 8-felt cap-root digest read off the row env (lane 0 = `beforeCapRootCol`). -/
 def beforeCapRootCols (env : VmRowEnv) : Digest8 :=
@@ -1504,12 +1501,12 @@ def afterCapRootCols (env : VmRowEnv) : Digest8 :=
 forces) — so the 8-felt relation REFINES the lane-0 write rather than replacing it. -/
 theorem beforeCapRootCols_lane0 (env : VmRowEnv) :
     beforeCapRootCols env 0 = env.loc (beforeCapRootCol EFFECT_VM_WIDTH) := by
-  simp [beforeCapRootCols, capRootGroupCol, beforeCapRootCol]
+  rfl
 
 /-- Lane 0 of the AFTER group IS the existing scalar post cap-root limb. -/
 theorem afterCapRootCols_lane0 (env : VmRowEnv) :
     afterCapRootCols env 0 = env.loc (afterCapRootCol EFFECT_VM_WIDTH) := by
-  simp [afterCapRootCols, capRootGroupCol, afterCapRootCol]
+  rfl
 
 /-- **`writesTo8 S8 oldRoot k v newRoot`** — the native-`node8` cap-tree UPDATE-AT-KEY over the FULL
 8-felt root: some sibling/direction `path` recomposes `oldRoot` from a leaf keyed `k`, and recomposes
@@ -1534,7 +1531,7 @@ theorem writesTo8_forces_postleaf (S8 : Cap8Scheme) (path : List (StepG Digest8)
 
 The scalar heap `writesTo` on the lane-0 heap-root limb (limb `B_HEAP_ROOT = 28`) is only the ~31-bit
 lane-0 PROJECTION of the deployed 8-felt heap root. v10 commits the FULL 8-felt root: limb 28 (lane 0) ‖
-the seven completion limbs 58..64 (lanes 1..7) — both blocks — absorbed into the wide state commit. The
+the seven completion limbs 59..65 (lanes 1..7) — both blocks — absorbed into the wide state commit. The
 GROUP readers below pin those eight columns to a `Digest8`; `heapWritesTo8` is the native arity-16 `node8`
 UPDATE-AT-KEY over the FULL 8-felt heap root (`Heap8Scheme.recomposeUp8`, ~124-bit), NEVER a lane-0 squeeze
 (the soundness downgrade the heap GENTIAN tooth closes). The anti-forge tooth is the recompose injectivity
@@ -1542,7 +1539,7 @@ UPDATE-AT-KEY over the FULL 8-felt heap root (`Heap8Scheme.recomposeUp8`, ~124-b
 
 /-- The heap-root limb in the rotated block (the fourth faithful-root limb, after `cap_root`=25,
 `nullifier_root`=26, `commitments_root`=27). Lane 0 of the 8-felt heap-root group. -/
-def B_HEAP_ROOT : Nat := 28
+def B_HEAP_ROOT : Nat := layoutGroupCol .heap 0
 
 /-- The BEFORE-block scalar heap-root column (lane 0 = limb `B_HEAP_ROOT` = 28). -/
 def beforeHeapRootCol (w : Nat) : Nat := w + B_HEAP_ROOT
@@ -1551,10 +1548,10 @@ def beforeHeapRootCol (w : Nat) : Nat := w + B_HEAP_ROOT
 def afterHeapRootCol (w : Nat) : Nat := w + 239 + B_HEAP_ROOT
 
 /-- The heap-root 8-felt column at lane `i` in the block based at `blockBase` (limb `B_HEAP_ROOT` = 28 for
-lane 0; the seven completion limbs 58..64 for lanes 1..7 — the cap completions 51..57 shifted by 7). The
+lane 0; the seven completion limbs 59..65 for lanes 1..7 — the cap completions 52..58 shifted by 7). The
 cap/heap/fields groups SHARE the ONE `node8` lane by design; heap's completions sit ABOVE cap's. -/
 def heapRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
-  blockBase + (if i = 0 then B_HEAP_ROOT else 51 + (i : Nat) + 7) -- lanes 1..7 → 59..65 (REVOKED-ROOT +1)
+  blockBase + layoutGroupCol .heap i
 
 /-- The BEFORE-block 8-felt heap-root digest read off the row env (lane 0 = `beforeHeapRootCol`). -/
 def beforeHeapRootCols (env : VmRowEnv) : Digest8 :=
@@ -1575,14 +1572,14 @@ campaign) the group is the scalar limb CARRIED across all 8 lanes (`scalarRootGr
 still a single ~31-bit felt, denotation is lane 0, and no keystone forces the extra lanes. -/
 
 /-- The BEFORE-block cap-root 8-felt column group (lane 0 = `beforeCapRootCol`, lanes 1..7 the cap
-completion limbs 51..57). -/
+completion limbs 52..58). -/
 def beforeCapRootGroup : Fin 8 → EmittedExpr := fun i => .var (capRootGroupCol EFFECT_VM_WIDTH i)
 
 /-- The AFTER-block cap-root 8-felt column group (lane 0 = `afterCapRootCol`). -/
 def afterCapRootGroup : Fin 8 → EmittedExpr := fun i => .var (capRootGroupCol (EFFECT_VM_WIDTH + 239) i)
 
 /-- The BEFORE-block heap-root 8-felt column group (lane 0 = `beforeHeapRootCol`, lanes 1..7 the heap
-completion limbs 58..64). -/
+completion limbs 59..65). -/
 def beforeHeapRootGroup : Fin 8 → EmittedExpr := fun i => .var (heapRootGroupCol EFFECT_VM_WIDTH i)
 
 /-- The AFTER-block heap-root 8-felt column group (lane 0 = `afterHeapRootCol`). -/
@@ -1597,12 +1594,12 @@ def scalarRootGroup (col : Nat) : Fin 8 → EmittedExpr := fun _ => .var col
 `writesTo` forces) — the 8-felt relation REFINES the lane-0 write rather than replacing it. -/
 theorem beforeHeapRootCols_lane0 (env : VmRowEnv) :
     beforeHeapRootCols env 0 = env.loc (beforeHeapRootCol EFFECT_VM_WIDTH) := by
-  simp [beforeHeapRootCols, heapRootGroupCol, beforeHeapRootCol]
+  rfl
 
 /-- Lane 0 of the AFTER heap group IS the existing scalar post heap-root limb. -/
 theorem afterHeapRootCols_lane0 (env : VmRowEnv) :
     afterHeapRootCols env 0 = env.loc (afterHeapRootCol EFFECT_VM_WIDTH) := by
-  simp [afterHeapRootCols, heapRootGroupCol, afterHeapRootCol]
+  rfl
 
 /-- **`heapWritesTo8 S8 oldRoot k v newRoot`** — the native-`node8` heap-tree UPDATE-AT-KEY over the FULL
 8-felt root: some sibling/direction `path` recomposes `oldRoot` from the heap leaf `(k, oldVal)`, and
@@ -1626,7 +1623,7 @@ theorem heapWritesTo8_forces_postleaf (S8 : Heap8Scheme) (path : List (StepG Dig
 
 The scalar fields `writesTo` on the lane-0 fields-root limb (limb `B_FIELDS_ROOT = 36`) is only the
 ~31-bit lane-0 PROJECTION of the deployed 8-felt user-field-map root. v10 commits the FULL 8-felt root:
-limb 36 (lane 0) ‖ the seven completion limbs 65,66,19,20,21,22,23 (lanes 1..7 — NON-contiguous: 65,66
+limb 36 (lane 0) ‖ the seven completion limbs 66,67,19,20,21,22,23 (lanes 1..7 — NON-contiguous: 66,67
 are past the heap completions, 19..23 are the repurposed register-headroom limbs) — both blocks —
 absorbed into the wide state commit. The GROUP readers below pin those eight columns to a `Digest8`;
 `fieldsWritesTo8` is the native arity-16 `node8` UPDATE-AT-KEY over the FULL 8-felt fields root
@@ -1635,19 +1632,11 @@ GENTIAN tooth `circuit/tests/fields_root_gentian_weld.rs` closes). The anti-forg
 injectivity (`recomposeUp8_inj_of_path`): a forged high-felt post-root forces a different post-leaf. -/
 
 /-- The fields-root 8-felt column at lane `i` in the block based at `blockBase`: lane 0 = limb
-`B_FIELDS_ROOT` = 36; the seven completion limbs are NON-contiguous — 65,66 (past heap's 58..64) for
+`B_FIELDS_ROOT` = 36; the seven completion limbs are NON-contiguous — 66,67 (past heap's 59..65) for
 lanes 1,2 and the repurposed register-headroom limbs 19,20,21,22,23 for lanes 3..7. The cap/heap/fields
 groups SHARE the ONE `node8` lane by design. -/
 def fieldsRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
-  blockBase + (match i with
-    | 0 => B_FIELDS_ROOT
-    | 1 => 66  -- REVOKED-ROOT +1 shift (was 65)
-    | 2 => 67  -- REVOKED-ROOT +1 shift (was 66)
-    | 3 => 19
-    | 4 => 20
-    | 5 => 21
-    | 6 => 22
-    | 7 => 23)
+  blockBase + layoutGroupCol .fields i
 
 /-- The BEFORE-block 8-felt fields-root digest read off the row env (lane 0 = limb `B_FIELDS_ROOT`=36). -/
 def beforeFieldsRootCols (env : VmRowEnv) : Digest8 :=
@@ -1658,7 +1647,7 @@ def afterFieldsRootCols (env : VmRowEnv) : Digest8 :=
   fun i => env.loc (fieldsRootGroupCol (EFFECT_VM_WIDTH + 239) i)
 
 /-- The BEFORE-block fields-root 8-felt column group (lane 0 = limb 36, lanes 1..7 the fields completion
-limbs 65,66,19..23). -/
+limbs 66,67,19..23). -/
 def beforeFieldsRootGroup : Fin 8 → EmittedExpr := fun i => .var (fieldsRootGroupCol EFFECT_VM_WIDTH i)
 
 /-- The AFTER-block fields-root 8-felt column group (lane 0 at the AFTER block base). -/
@@ -1668,29 +1657,29 @@ def afterFieldsRootGroup : Fin 8 → EmittedExpr := fun i => .var (fieldsRootGro
 the projection the scalar `writesTo` forces — the 8-felt relation REFINES the lane-0 write. -/
 theorem beforeFieldsRootCols_lane0 (env : VmRowEnv) :
     beforeFieldsRootCols env 0 = env.loc (EFFECT_VM_WIDTH + B_FIELDS_ROOT) := by
-  simp [beforeFieldsRootCols, fieldsRootGroupCol]
+  rfl
 
 /-- Lane 0 of the AFTER fields group IS the existing scalar post fields-root limb. -/
 theorem afterFieldsRootCols_lane0 (env : VmRowEnv) :
     afterFieldsRootCols env 0 = env.loc (EFFECT_VM_WIDTH + 239 + B_FIELDS_ROOT) := by
-  simp [afterFieldsRootCols, fieldsRootGroupCol]
+  rfl
 
 /-! ### v11 — the FAITHFUL 8-felt ACCUMULATOR root column GROUPS (nullifier@26 · commitments@27 ·
 cells@0), the exact twins of the cap/heap/fields groups above, over the 21 NEW DEDICATED completion
-limbs 67..87 (never shared with another family — a shared block would break OLD/NEW commit continuity
+limbs 68..88 (never shared with another family — a shared block would break OLD/NEW commit continuity
 cross-turn). Each accumulator's genuine node8 `root8` rides lane 0 (its historical scalar limb) ‖ 7
 dedicated completion limbs. The deployed Rust producer fills all 8 lanes via `CanonicalHeapTree8`, and
 the map-op node8 AIR binds them lane-for-lane (deployed-faithful, ~124-bit — NEVER the lane-0 squeeze). -/
 
 /-- The nullifier-root 8-felt column at lane `i` (lane 0 = limb `B_NULLIFIER_ROOT_OFF` = 26; the seven
-DEDICATED completion limbs 67..73 for lanes 1..7). -/
+DEDICATED completion limbs 68..74 for lanes 1..7). -/
 def nullifierRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
-  blockBase + (if i = 0 then B_NULLIFIER_ROOT_OFF else 67 + (i : Nat)) -- lanes 1..7 → 68..74 (REVOKED-ROOT +1)
+  blockBase + layoutGroupCol .nullifier i
 
 /-- The commitments-root 8-felt column at lane `i` (lane 0 = limb `B_COMMITMENTS_ROOT` = 27; the seven
 DEDICATED completion limbs 75..81 for lanes 1..7, REVOKED-ROOT +1 shift from 74..80). -/
 def commitmentsRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
-  blockBase + (if i = 0 then B_COMMITMENTS_ROOT else 74 + (i : Nat)) -- lanes 1..7 → 75..81 (REVOKED-ROOT +1)
+  blockBase + layoutGroupCol .commitments i
 
 /-- The cells-root 8-felt column at lane `i` (lane 0 = limb 0 = accounts root; the seven completion
 limbs 169..175 for lanes 1..7 — RELOCATED off revoked's 82..88 by the revoked-root flag-day so the
@@ -1698,14 +1687,14 @@ two groups are now DISJOINT, not shared). The producer leaves 169..175 zero (cir
 completion); `revoked_root` is the committed-limb-only faithful root (hole #139), sourced from
 `V9RotationContext.revoked_root`. -/
 def cellsRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
-  blockBase + (if i = 0 then 0 else 168 + (i : Nat)) -- lanes 1..7 → 169..175 (relocated off revoked 82..88)
+  blockBase + layoutGroupCol .cells i
 
 /-- The revoked-root 8-felt column at lane `i` (lane 0 = limb `B_REVOKED_ROOT` = 37; the seven
 completion limbs 82..88 for lanes 1..7 — the shifted-free slots the base widen opened). The exact
 twin of `nullifierRootGroupCol` / `commitmentsRootGroupCol`; the credential-revocation accumulator's
 committed faithful 8-felt root (hole #139), sourced from `V9RotationContext.revoked_root`. -/
 def revokedRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
-  blockBase + (if i = 0 then B_REVOKED_ROOT else 81 + (i : Nat)) -- lanes 1..7 → 82..88
+  blockBase + layoutGroupCol .revoked i
 
 /-- The BEFORE/AFTER-block nullifier-root 8-felt column groups (lane 0 = the scalar limb 26). -/
 def beforeNullifierRootGroup : Fin 8 → EmittedExpr :=
@@ -1734,16 +1723,16 @@ def afterRevokedRootGroup : Fin 8 → EmittedExpr :=
 /-- Lane 0 of each accumulator group IS the existing scalar limb (the projection the scalar `writesTo`
 forces) — the 8-felt group REFINES the lane-0 write. -/
 theorem nullifierRootGroupCol_lane0 (bb : Nat) :
-    nullifierRootGroupCol bb 0 = bb + B_NULLIFIER_ROOT_OFF := by simp [nullifierRootGroupCol]
+    nullifierRootGroupCol bb 0 = bb + B_NULLIFIER_ROOT_OFF := by rfl
 theorem commitmentsRootGroupCol_lane0 (bb : Nat) :
-    commitmentsRootGroupCol bb 0 = bb + B_COMMITMENTS_ROOT := by simp [commitmentsRootGroupCol]
+    commitmentsRootGroupCol bb 0 = bb + B_COMMITMENTS_ROOT := by rfl
 theorem cellsRootGroupCol_lane0 (bb : Nat) :
-    cellsRootGroupCol bb 0 = bb + 0 := by simp [cellsRootGroupCol]
+    cellsRootGroupCol bb 0 = bb + 0 := by rfl
 theorem revokedRootGroupCol_lane0 (bb : Nat) :
-    revokedRootGroupCol bb 0 = bb + B_REVOKED_ROOT := by simp [revokedRootGroupCol]
+    revokedRootGroupCol bb 0 = bb + B_REVOKED_ROOT := by rfl
 
 /-- The BEFORE/AFTER-block 8-felt accumulator-root digests read off the row env (lane 0 = the scalar limb;
-lanes 1..7 the dedicated completion limbs 67..87). The `Digest8` twins of `beforeFieldsRootCols`, one per
+lanes 1..7 the dedicated completion limbs 68..88). The `Digest8` twins of `beforeFieldsRootCols`, one per
 accumulator family — the `AccumulatorOpenEmit` after-spine keystone forces `heapWritesTo8` over exactly
 these committed groups (the assurance-case reads the consumer trio quantifies over). -/
 def beforeNullifierRootCols (env : VmRowEnv) : Digest8 :=
@@ -3032,10 +3021,10 @@ def B_LIFECYCLE : Nat := 29
 /-- In-block offset of the `authority_digest` / `record_digest` limb (limb 24 = r23 in `preLimbsAt`):
 the single felt folding ALL authority-bearing cell state including the `permissions` / `verification_key`
 slots (`trace_rotated.rs::B_AUTHORITY_DIGEST`). The forced limb for `setPermissions` / `setVK`. -/
-def B_RECORD_DIGEST : Nat := 24
+def B_RECORD_DIGEST : Nat := layoutGroupCol .authority 0
 
-/-- The rotated AFTER-block base offset (past the v1 layout + the BEFORE block, `B_SPAN = 91`). -/
-def AFTER_BLOCK_OFF : Nat := 239
+/-- The rotated AFTER-block base offset: exactly one verified block span past BEFORE. -/
+def AFTER_BLOCK_OFF : Nat := B_SPAN
 
 /-- **H1: the 7 headroom authority limb offsets** (offsets 12..=18 = r11..r17) carrying limb-1..7 of
 the faithful 8-felt authority digest (`compute_authority_digest_8`), beside limb-0 at
@@ -3048,7 +3037,7 @@ def authorityHeadroomFreezes (w : Nat) : List VmConstraint :=
   authorityHeadroomOffs.map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off))
 
 /-- **v10: the 14 faithful-8-felt completion-limb offsets** — the 7 perms extras (pre-iroot limbs
-37..=43 = `permsHash[1..7]`) and the 7 vk extras (44..=50 = `vkHash[1..7]`). For a VALUE turn the
+38..=44 = `permsHash[1..7]`) and the 7 vk extras (45..=51 = `vkHash[1..7]`). For a VALUE turn the
 permissions / VK are UNCHANGED, so each completion limb is frozen BEFORE↔AFTER — closing the GENTIAN
 fail-open for the perms/vk halves (no unwelded wide-open limb can smuggle a ~31-bit-colliding authority
 into NEW_COMMIT during an innocuous value move). -/
@@ -3059,8 +3048,8 @@ def permsVKCompletionOffs : List Nat :=
 def permsVKCompletionFreezes (w : Nat) : List VmConstraint :=
   permsVKCompletionOffs.map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off))
 
-/-- **All 56 fields[0..7] completion-lane offsets** (`112..167`) — the eight flat fields' lanes 1..7
-of the faithful `field_limbs8` split (`fields[j]` lanes 1..7 → `112 + 7·j .. +6`; lane 0 rides the
+/-- **All 56 fields[0..7] completion-lane offsets** (`113..168`) — the eight flat fields' lanes 1..7
+of the faithful `field_limbs8` split (`fields[j]` lanes 1..7 → `113 + 7·j .. +6`; lane 0 rides the
 welded limb `4 + j`). These previously-absent lanes now carry the genuine higher bytes of each 32-byte
 record field, so the deployed state commitment binds ALL 32 bytes of every field (the v13 fields-octet
 grow closing the LAST degraded-felt residual). An explicit literal list (like `permsVKCompletionOffs`)
@@ -3080,7 +3069,7 @@ def fieldsCompletionFreezes (w : Nat) : List VmConstraint :=
   fieldsCompletionOffs.map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off))
 
 /-- The fields completion freezes EXCLUDING the written slot `slot`'s 7 lanes — setField[0..7]'s 49
-freezes (the SEVEN OTHER flat fields × 7 completion lanes each; the written slot's block is `112 + 7·slot
+freezes (the SEVEN OTHER flat fields × 7 completion lanes each; the written slot's block is `113 + 7·slot
 .. +6`). The written slot's lane 0 is FORCED by `gFieldWriteP1`; its seven completion lanes 1..7 are the
 ONE named residual (the setField VALUE8 weld — forcing them to the declared value8 params — is the
 deliberately-gated follow-on). Freezing them here would be UNSOUND: a large-value write
@@ -3891,10 +3880,10 @@ def declaredParamCol : Nat := prmCol 0
 (`turn::rotation_witness`, `write_lanes([B_PERMS, 38..=44])`) reads it from the generated layout, so
 the constraint and the witness CANNOT disagree. They did once: this weld sat at 37 (i.e. ON
 `revoked_root` lane-0) while the producer wrote at 38, and every honest setPermissions turn was UNSAT. -/
-def B_PERMS_COMPLETION : Nat := 38
+def B_PERMS_COMPLETION : Nat := layoutGroupCol .perms 1
 /-- The FIRST vk-digest COMPLETION limb; the 7 felts `vkHash[1..7]` ride limbs 45..=51 (committed lane-0
 stays at `B_VK`). Same single-source contract as `B_PERMS_COMPLETION`. -/
-def B_VK_COMPLETION : Nat := 45
+def B_VK_COMPLETION : Nat := layoutGroupCol .vk 1
 
 /-- **v10**: the FIRST faithful-8-felt completion COLUMN for the perms digest in the AFTER block. -/
 def afterPermsExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + B_PERMS_COMPLETION
@@ -4532,7 +4521,7 @@ theorem satisfied2_of_withRecordPin8Headroom2 (hash : List ℤ → ℤ) (g : Eff
 /-- **v10 PERMS/VK FAITHFUL-8-FELT WELD — `withPermsVK8Weld` (post-graduation).** The limb-0 perms/vk
 weld (`rotateV3WithPermsVKGate`) forces ONLY `B_PERMS`/`B_VK` (limb-0 of the deployed `hash_to_8`
 `permissions_hash`/`vk_hash`) to `prmCol 0`. This appends the SEVEN completion-felt welds: the AFTER-block
-faithful-8-felt extras (`extra0 .. extra0+6`, the new pre-iroot limbs 37..=43 for perms / 44..=50 for vk,
+faithful-8-felt extras (`extra0 .. extra0+6`, the pre-iroot limbs 38..=44 for perms / 45..=51 for vk,
 carrying `permsHash[1..7]` / `vkHash[1..7]`) are EACH welded to `prmCol 1..7` — the remaining 7 felts of
 the deployed 8-felt declared param, ALL already PI-anchored through the SAME `effects_hash` chain (so
 `piCount` is UNCHANGED — NO new verifier PI, which is why perms/vk are the TRACTABLE pair). With the
@@ -5262,7 +5251,7 @@ committed `state_commit`). Structurally identical to `withRecordPin8Headroom2` (
 authority-limb pins), so the apex consumes the `rotV3_publishes`-shape forcing below. -/
 
 /-- In-block base of the v12 `child_vk` carrier octet (limbs 89..=96 — REVOKED-ROOT +1: the
-fields completion lanes 112..167 + pad 168 ride PAST it, so it no longer tracks `B_IROOT`). Rust
+fields completion lanes 113..168 ride PAST it, so it no longer tracks `B_IROOT`). Rust
 twin `trace_rotated::B_CHILD_VK_OCTET`. The hatchery-INVARIANT carrier rides this octet
 (`invariant_digest === child_vk`), so it consumes the SAME pins. -/
 def B_CHILD_VK_OCTET : Nat := 89

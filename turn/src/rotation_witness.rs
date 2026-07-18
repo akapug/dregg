@@ -51,6 +51,12 @@
 use crate::action::Effect;
 use dregg_cell::commitment::compute_authority_digest_8;
 use dregg_cell::{Cell, Ledger, lifecycle::CellLifecycle};
+pub use dregg_circuit::effect_vm::layout_generated::NUM_PRE_LIMBS;
+use dregg_circuit::effect_vm::layout_generated::{
+    AUTHORITY_DIGEST_GROUP, B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, B_PUBKEY_OCTET,
+    CAP_ROOT_GROUP, COMMITMENTS_ROOT_GROUP, FIELDS_ROOT_GROUP, HEAP_ROOT_GROUP,
+    NULLIFIER_ROOT_GROUP, PERMS_GROUP, REVOKED_ROOT_GROUP, VK_GROUP,
+};
 use dregg_circuit::effect_vm::split_u64;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::{compute_heap_root_entries, empty_heap_root};
@@ -67,18 +73,16 @@ pub const NUM_REGISTERS: usize = 24;
 /// carrier 89..=112, fields 113..=168). The tail 169..=177 is the clean-alignment region: circuit-only
 /// `cells_root` completion 169..=175 (ZERO here; filled by the createCell trace generator, kept off
 /// `revoked_root`'s 82..=88 group) + pads 176..=177, landing body `[4..177]` = 174 = 58×3 (clean).
-pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 6 + 75 + 65; // 178 (base widened 37→38: revoked_root = limb 37; fields 113..=168; cells-completion reservation 169..=175; pads 176..=177 → body 174 = 58×3 clean)
-
 /// The collection id under which a present-cell existence leaf is keyed in the cells tree.
 const CELLS_COLLECTION: u32 = 0;
 
 /// One turn's rotated state-block witness for a single cell's before/after RecordKernelState.
 ///
-/// `pre_limbs` is the 32-limb absorption vector in the Lean-pinned order; `iroot` is the
+/// `pre_limbs` is the 178-limb absorption vector in the Lean-pinned order; `iroot` is the
 /// MMR root absorbed LAST. `state_commit = wireCommitR(pre_limbs, iroot)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RotationWitness {
-    /// The 32 pre-iroot limbs, in absorption order.
+    /// The 178 pre-iroot limbs, in absorption order.
     pub pre_limbs: Vec<BabyBear>,
     /// The receipt-index MMR root (absorbed last).
     pub iroot: BabyBear,
@@ -389,8 +393,8 @@ pub fn produce(
     pre_limbs[1] = balance_lo_felt(cell.state.balance()); // r0
     pre_limbs[2] = nonce_felt(cell.state.nonce()); // r1
     pre_limbs[3] = balance_hi_felt(cell.state.balance()); // r2
-    // r3..r10 ↔ fields[0..7] lane 0 (limbs 4..=11) ‖ the 56 fields COMPLETION lanes 112..=167
-    // (fields[i] lanes 1..7 → `112 + 7·i .. +6`). THE v13 FAITHFUL FIELDS OCTET (producer twin of
+    // r3..r10 ↔ fields[0..7] lane 0 (limbs 4..=11) ‖ the 56 fields COMPLETION lanes 113..=168
+    // (fields[i] lanes 1..7 → `113 + 7·i .. +6`). THE v13 FAITHFUL FIELDS OCTET (producer twin of
     // `cell::commitment::compute_rotated_pre_limbs`): each field's 32 bytes ride a full
     // `field_limbs8` 8-lane split (lane 0 = the u64-lane lo32, the faithful ~124-bit binding),
     // REPLACING the eight ~31-bit `fold_bytes32_to_bb` Horner folds that rode one
@@ -423,39 +427,39 @@ pub fn produce(
     // Byte-identical to the cell-side `commitment::compute_rotated_pre_limbs` so the three-way
     // agreement holds; the chained `wireCommitR` binds all 8, the record-pin / continuity freezes
     // WELD them (GENTIAN law). r18..r22 (limbs 19..=23): remaining headroom — zero for this turn.
-    compute_authority_digest_8(cell).write_lanes(&mut pre_limbs, [24, 12, 13, 14, 15, 16, 17, 18]);
-    // limb 25: cap_root lane-0 (welded) ‖ extras 51..=57: the SEVEN cap-root completion felts
+    compute_authority_digest_8(cell).write_lanes(&mut pre_limbs, AUTHORITY_DIGEST_GROUP);
+    // limb 25: cap_root lane-0 (welded) ‖ lanes 52..=58: the SEVEN cap-root completion felts
     // (lanes 1..7) — THE FAITHFUL 8-FELT CAP ROOT the circuit's 8-felt `cap_root` column GROUP
     // carries (`EffectVmEmitRotationV3.capRootGroupCol`: lane 0 = limb 25, lanes 1..7 = limbs
-    // 51..57). Cell and circuit fold through the SAME impl (the A2 / GENTIAN differentials guard
+    // 52..58). Cell and circuit fold through the SAME impl (the A2 / GENTIAN differentials guard
     // it), so the `cap_root ↔ cap_root` weld holds lane-for-lane by construction. Byte-identical
     // to `commitment::compute_rotated_pre_limbs`.
     dregg_cell::commitment::compute_canonical_capability_root_8(&cell.capabilities)
-        .write_lanes(&mut pre_limbs, [25, 52, 53, 54, 55, 56, 57, 58]);
-    // limb 26: nullifier_root lane-0 (welded) ‖ extras 67..=73: the SEVEN nullifier-root completion
+        .write_lanes(&mut pre_limbs, CAP_ROOT_GROUP);
+    // limb 26: nullifier_root lane-0 (welded) ‖ lanes 68..=74: the SEVEN nullifier-root completion
     // felts. THE FAITHFUL 8-FELT NULLIFIER ROOT — the native `CanonicalHeapTree8` node8 (arity-16)
     // sorted-Poseidon2 accumulator root the circuit's 8-felt `nullifier_root` column GROUP carries
-    // (lane 0 = limb 26, lanes 1..7 = limbs 67..73). The producer feeds the SAME `Faithful8` the cell
-    // twin's `V9RotationContext.nullifier_root` carries, so limbs [26,67..73] are byte-identical to
+    // (lane 0 = limb 26, lanes 1..7 = limbs 68..74). The producer feeds the SAME `Faithful8` the cell
+    // twin's `V9RotationContext.nullifier_root` carries, so limbs [26,68..74] are byte-identical to
     // `commitment::compute_rotated_pre_limbs`. This REPLACES the lossy 1-felt `root_felt(nullifier_root)`
     // — the degraded-felt gate is satisfied for nullifier_root (the nullifier GENTIAN law).
-    nullifier_root.write_lanes(&mut pre_limbs, [26, 68, 69, 70, 71, 72, 73, 74]);
-    // limb 27: commitments_root lane-0 (welded) ‖ extras 74..=80: the SEVEN commitments-root
+    nullifier_root.write_lanes(&mut pre_limbs, NULLIFIER_ROOT_GROUP);
+    // limb 27: commitments_root lane-0 (welded) ‖ lanes 75..=81: the SEVEN commitments-root
     // completion felts. THE FAITHFUL 8-FELT COMMITMENTS ROOT — the native `CanonicalHeapTree8` node8
     // (arity-16) sorted-Poseidon2 accumulator root the circuit's 8-felt `commitments_root` column
-    // GROUP carries (lane 0 = limb 27, lanes 1..7 = limbs 74..80). The producer feeds the SAME
-    // `Faithful8` the cell twin's `V9RotationContext.commitments_root` carries, so limbs [27,74..80]
+    // GROUP carries (lane 0 = limb 27, lanes 1..7 = limbs 75..81). The producer feeds the SAME
+    // `Faithful8` the cell twin's `V9RotationContext.commitments_root` carries, so limbs [27,75..81]
     // are byte-identical to `commitment::compute_rotated_pre_limbs`. This REPLACES the lossy 1-felt
     // `root_felt(commitments_root)`.
-    commitments_root.write_lanes(&mut pre_limbs, [27, 75, 76, 77, 78, 79, 80, 81]);
-    // limb 28: heap_root lane-0 (welded) ‖ extras 58..=64: the SEVEN heap-root completion felts
+    commitments_root.write_lanes(&mut pre_limbs, COMMITMENTS_ROOT_GROUP);
+    // limb 28: heap_root lane-0 (welded) ‖ lanes 59..=65: the SEVEN heap-root completion felts
     // (Phase H-HEAP-8). The faithful native-`heap_node8` (arity-16) 8-felt sorted-Merkle root over
     // the cell's heap map — cell and circuit fold through the SAME impl (`compute_canonical_heap_root_8`),
     // so the `heap_root ↔ heap_root` weld holds lane-for-lane by construction (the heap GENTIAN tooth
     // guards it). Byte-identical to `commitment::compute_rotated_pre_limbs`. This REPLACES the lossy
     // 1-felt `root_felt(&cell.state.heap_root)` — the degraded-felt gate is satisfied for heap_root.
     dregg_cell::state::compute_canonical_heap_root_8(&cell.state.heap_map)
-        .write_lanes(&mut pre_limbs, [28, 59, 60, 61, 62, 63, 64, 65]);
+        .write_lanes(&mut pre_limbs, HEAP_ROOT_GROUP);
     // limbs 29,30,31: lifecycle (opaque felt), epoch, committed_height.
     pre_limbs[29] = lifecycle_felt(&cell.lifecycle);
     pre_limbs[30] = epoch_felt(cell.state.delegation_epoch());
@@ -469,14 +473,14 @@ pub fn produce(
     // 45..=51 (vk) — see `write_lanes` below and Lean `afterPermsExtraCol`/`afterVKExtraCol`.
     // v10 perms/vk faithful 8-felt completion (byte-identical to `commitment::compute_rotated_pre_limbs`).
     dregg_cell::commitment::perms_digest_8(&cell.permissions)
-        .write_lanes(&mut pre_limbs, [33, 38, 39, 40, 41, 42, 43, 44]);
+        .write_lanes(&mut pre_limbs, PERMS_GROUP);
     dregg_cell::commitment::vk_digest_8(&cell.verification_key)
-        .write_lanes(&mut pre_limbs, [34, 45, 46, 47, 48, 49, 50, 51]);
+        .write_lanes(&mut pre_limbs, VK_GROUP);
     // limbs 35,36: mode, fields_root (the WAVE-3 flag-day committed authority sub-limbs — the
     // makeSovereign mode CONSTANT-force limb and the setFieldDyn / refusal fields-root weld limb, the
     // NEW LAST pre-iroot limbs).
     pre_limbs[35] = mode_felt(&cell.mode);
-    // limb 36: fields_root lane-0 (welded) ‖ extras 65,66,19,20,21,22,23: the SEVEN fields-root
+    // limb 36: fields_root lane-0 (welded) ‖ lanes 66,67,19,20,21,22,23: the SEVEN fields-root
     // completion felts (Phase H-FIELDS-8). The faithful native-`node8` (arity-16) 8-felt sorted-Merkle
     // root over the cell's user-field map — cell and circuit fold through the SAME impl
     // (`compute_canonical_fields_root_8`), so the `fields_root ↔ fields_root` weld holds lane-for-lane by
@@ -484,7 +488,7 @@ pub fn produce(
     // `commitment::compute_rotated_pre_limbs`. This REPLACES the lossy 1-felt
     // `fields_root_felt(&cell.state.fields_root)` — the degraded-felt gate is satisfied for fields_root.
     dregg_cell::state::compute_canonical_fields_root_8(&cell.state.fields_map)
-        .write_lanes(&mut pre_limbs, [36, 66, 67, 19, 20, 21, 22, 23]);
+        .write_lanes(&mut pre_limbs, FIELDS_ROOT_GROUP);
     // limb 37: revoked_root lane-0 (the NEW base limb, REVOKED-ROOT flag-day) ‖ extras 82..=88: the
     // SEVEN revoked-root completion felts. THE FAITHFUL 8-FELT CREDENTIAL-REVOCATION ROOT the circuit's
     // 8-felt `revoked_root` column GROUP carries (lane 0 = limb 37, lanes 1..7 = limbs 82..88 — the
@@ -492,27 +496,24 @@ pub fn produce(
     // cell twin's `V9RotationContext.revoked_root` carries, so limbs [37,82..88] are byte-identical to
     // `commitment::compute_rotated_pre_limbs`. The credential-revocation NON-membership gate opens
     // against this COMMITTED root (not a wire-supplied one — hole #139).
-    revoked_root.write_lanes(&mut pre_limbs, [37, 82, 83, 84, 85, 86, 87, 88]);
+    revoked_root.write_lanes(&mut pre_limbs, REVOKED_ROOT_GROUP);
 
     // v12 CARRIER-MATERIAL octets (limbs 89..=112 after the REVOKED-ROOT +1 shift) — the SAT
     // foundation. Byte-identical to the cell-side twin `commitment::compute_rotated_pre_limbs`; the
     // octet base constants (`B_CHILD_VK_OCTET` etc.) are the circuit-side source of truth, so this
     // fill picks up the shift symbolically once the circuit lane bumps them (88→89, 96→97, 104→105).
     // The trace generator (`fill_block`) carries them by copy. Absent material → ZERO.
-    use dregg_circuit::effect_vm::trace_rotated::{
-        B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, B_PUBKEY_OCTET,
-    };
-    // 88..=95: child_vk8 iff the block's effect is `CreateCellFromFactory`, else ZERO.
+    // 89..=96: child_vk8 iff the block's effect is `CreateCellFromFactory`, else ZERO.
     if let Some(child_vk) = material.child_vk {
         dregg_circuit::Faithful8::from_bytes32(&child_vk)
             .write_octet(&mut pre_limbs, B_CHILD_VK_OCTET);
     }
-    // 96..=103: contract_hash8 iff the block's effect is the hatchery mint, else ZERO.
+    // 97..=104: contract_hash8 iff the block's effect is the hatchery mint, else ZERO.
     if let Some(contract_hash) = material.contract_hash {
         dregg_circuit::Faithful8::from_bytes32(&contract_hash)
             .write_octet(&mut pre_limbs, B_CONTRACT_HASH_OCTET);
     }
-    // 104..=111: pubkey8 UNCONDITIONALLY — the operated cell's owner key, the 30-bit canonical form
+    // 105..=112: pubkey8 UNCONDITIONALLY — the operated cell's owner key, the 30-bit canonical form
     // that matches the executor's KEY_COMMIT teeth (byte-identical to the cell twin's
     // `canonical_to_babybear_pi`).
     let pk8 = dregg_commit::typed::canonical_32_to_felts_8(cell.public_key());

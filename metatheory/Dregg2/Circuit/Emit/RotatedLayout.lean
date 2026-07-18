@@ -3,21 +3,19 @@ import Mathlib.Data.List.Nodup
 /-
 # RotatedLayout — the verified column allocator (Phase 1–2 of the verified-snarky foundation)
 
-THE DISEASE (paid for in the revoked-root 178 migration, 2026-07): the rotated-block column layout is
+THE DISEASE (paid for in the revoked-root 178 migration, 2026-07): the rotated-block column layout was
 a pile of hand-carried integers spread across ~14 emit files + two byte-identical Rust producers, and
-the invariant that makes a layout *legal* — no two things write the same column — is an UNCHECKED
-comment (the only `Nodup` in the emit today is `memAddrsNodup`, which is about memory addresses, not
-columns). So a flag-day is a 14-file act of faith that plonky3 audits *after* a VK regen instead of the
+the invariant that makes a layout *legal* — no two things write the same column — was an UNCHECKED
+comment. So a flag-day was a 14-file act of faith that plonky3 audited *after* a VK regen instead of the
 type system at construction.
 
-THE CURE: make the layout a first-class object whose CONSTRUCTOR carries the invariants, and whose
+THE CURE: make the layout a first-class object with an explicit machine-checked legality witness, whose
 `groupCol` projection is the SINGLE SOURCE the emit reads its positions from. A flag-day becomes a new
 `def` + `native_decide`; an ill-aligned / overlapping layout becomes UNCONSTRUCTABLE.
 
-`rotated178` is the current geometry, read lane-for-lane from the authoritative producer
-`cell/src/commitment.rs::compute_rotated_pre_limbs` (HEAD). Phase 2 wires `EffectVmEmitRotationV3`'s
-`*GroupCol` defs to DERIVE from `rotated178.groupCol` (this file's projection), so producer + circuit +
-emit share ONE source, killing the drift class that caused the carrier bug.
+`rotated178` is the current geometry. `EffectVmEmitRotationV3` projects its group columns from this
+object; `EmitLayoutManifest.lean` emits its `groupTable` to Rust; and both Rust producers plus the
+circuit trace generator consume that generated table. The concrete integers therefore live here once.
 -/
 
 namespace Dregg2.Circuit.Emit
@@ -58,12 +56,18 @@ def RotatedLayout.occupied (L : RotatedLayout) : List Nat :=
     the scalar limb; lanes 1..7 index the completion list. `none` = the group/lane is absent. -/
 def RotatedLayout.groupCol (L : RotatedLayout) (name : GroupName) (i : Fin 8) : Option Nat :=
   match L.groups.find? (fun p => p.1 = name) with
-  | some p => if h : (i : Nat) = 0 then some p.2.lane0 else p.2.completion[(i : Nat) - 1]?
+  | some p => if (i : Nat) = 0 then some p.2.lane0 else p.2.completion[(i : Nat) - 1]?
   | none   => none
 
-/-- **THE THREE LEGALITY OBLIGATIONS** — all decidable, so a concrete layout discharges them by
+/-- **THE LEGALITY OBLIGATIONS** — all decidable, so a concrete layout discharges them by
     `native_decide`, and an illegal layout cannot be constructed. -/
 structure Legal (L : RotatedLayout) : Prop where
+  /-- Every named digest really is faithful-8: lane 0 plus exactly seven completion lanes. -/
+  groupWidth  : ∀ p ∈ L.groups, p.2.completion.length = 7
+  /-- Names are keys, not labels: `groupCol` must never silently select the first duplicate. -/
+  groupNames  : (L.groups.map Prod.fst).Nodup
+  /-- Every semantic group exists, so a consumer projection can never fall through `Option.getD`. -/
+  groupCoverage : ∀ name : GroupName, name ∈ L.groups.map Prod.fst
   /-- Disjointness: no two things write the same column. THE invariant that was a comment. -/
   disjoint    : L.occupied.Nodup
   /-- Bounds: every occupied column is a real pre-iroot limb. -/
@@ -73,10 +77,14 @@ structure Legal (L : RotatedLayout) : Prop where
       refuse the chip rejects — the exact 170-leftover fork we hit. -/
   bodyAligned : (L.numPreLimbs - 4) % 3 = 0
 
-/-- The CURRENT deployed rotated geometry (178 pre-iroot limbs), grounded lane-for-lane in
-    `compute_rotated_pre_limbs`. This enumeration is a complete tiling of `0..177` (every column once). -/
+/-- The current pre-iroot extent. Keeping this scalar beside the instance avoids unfolding the full
+layout through descriptor reduction while leaving a count flag-day in this one verified source file. -/
+def rotatedNumPreLimbs : Nat := 178
+
+/-- The CURRENT deployed rotated geometry (178 pre-iroot limbs). This enumeration is a complete
+tiling of `0..177` (every column once). -/
 def rotated178 : RotatedLayout where
-  numPreLimbs := 178
+  numPreLimbs := rotatedNumPreLimbs
   singles := [1, 2, 3,                       -- r0/r1/r2 = bal_lo/nonce/bal_hi (cells lane-0 is a group)
               4, 5, 6, 7, 8, 9, 10, 11,      -- r3..r10 = fields[0..7] lane-0 (welded)
               29, 30, 31, 32, 35]            -- lifecycle, epoch, committed_height, disc, mode
@@ -96,9 +104,12 @@ def rotated178 : RotatedLayout where
   cellsCompletion := []                      -- (cells is now a group; kept for structural symmetry)
   pads := [176, 177]
 
-/-- The current layout is LEGAL — disjoint, in-bounds, body-aligned. The disjointness invariant that
-    lived as a stale hand-comment is now a machine-checked theorem. -/
+/-- The current layout is LEGAL — every semantic group exists exactly once at width eight, and the
+    complete tiling is disjoint, in-bounds, and body-aligned. -/
 theorem rotated178_legal : Legal rotated178 where
+  groupWidth  := by native_decide
+  groupNames  := by native_decide
+  groupCoverage := by intro name; cases name <;> native_decide
   disjoint    := by native_decide
   inBounds    := by native_decide
   bodyAligned := by native_decide
@@ -114,19 +125,20 @@ example : rotated178.groupCol .nullifier 1 = some 68 := by native_decide
 example : rotated178.groupCol .fields 1 = some 66 := by native_decide  -- the non-contiguous case
 
 /-- **EMIT-READY group table** — each group as `[lane0, completion_1 .. completion_7]`, in exactly the
-    shape the Rust `[[usize; 8]; N]` layout wants. Because it is a projection of a `Legal` layout, the
-    emitted Rust group table is disjoint-by-construction. This is the intended SOURCE for the rotated
-    group positions in the Lean→Rust layout emit (`EmitLayoutManifest` / `layout_generated.rs`), which
-    today emits the scalar constants (B_SPAN, octet bases, …) but NOT the group position lists — those
-    are still hand-duplicated across producer + circuit. Importing this closes that gap with a proof. -/
+    shape the Rust `[[usize; 8]; N]` layout wants. `EmitLayoutManifest.lean` exports this value into
+    `layout_generated.rs`; Rust names are projections of the emitted table, never another data copy. -/
 def RotatedLayout.groupTable (L : RotatedLayout) : List (List Nat) :=
   L.groups.map (fun p => p.2.lane0 :: p.2.completion)
 
 /-- The emit-ready table for the current geometry, with its length pinned (10 faithful-8-felt groups). -/
 theorem rotated178_groupTable_len : rotated178.groupTable.length = 10 := by native_decide
 
-/-- The group table's flattened columns are a sublist of the (proven-`Legal`, disjoint) occupied set —
-    so emitting `groupTable` can never introduce an overlap the layout doesn't already forbid. -/
-theorem rotated178_groupTable_columns : rotated178.groupTable.flatten.length = 80 := by native_decide
+/-- Every emitted row has the Rust type's exact width. This is a `Legal` obligation, not an emitter
+    convention that could fail only after generation. -/
+theorem rotated178_groupTable_row_width :
+    ∀ row ∈ rotated178.groupTable, row.length = 8 := by native_decide
+
+/-- Ten faithful-8 groups contribute exactly 80 occupied columns. -/
+theorem rotated178_groupTable_flatten_len : rotated178.groupTable.flatten.length = 80 := by native_decide
 
 end Dregg2.Circuit.Emit

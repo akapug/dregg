@@ -237,7 +237,7 @@ pub fn compute_canonical_state_commitment(cell: &Cell) -> [u8; 32] {
     // The openable sorted-Poseidon2 capability root (cap Phase A), absorbed as
     // its FAITHFUL 8-felt (~124-bit) encoding so the cell's full-state commitment
     // binds the SAME wide `cap_root` value the EffectVM circuit carries at the
-    // rotated cap_root column group (limb 25 ‖ 51..57). The lane-0 encoding is
+    // rotated cap_root column group (limb 25 ‖ 52..58). The lane-0 encoding is
     // forgeable off-chain (two c-lists colliding on lane 0 → same commitment);
     // the wide encoding closes it, exactly as heap_root / fields_root do.
     let cap_root = compute_canonical_capability_root_wide(&cell.capabilities);
@@ -602,7 +602,7 @@ pub fn compute_canonical_capability_root_felt(
 /// 8-felt `cap_root` column GROUP carries (lane 0 ‖ lanes 1..7). Lane 0 is
 /// byte-identical to [`compute_canonical_capability_root_felt`] (the historical
 /// scalar root); lanes 1..7 are the ~124-bit completion the v10 weld commits at the
-/// rotated-block extras 51..57 (`EffectVmEmitRotationV3.capRootGroupCol`). This is the
+/// rotated-block completion lanes 52..58 (`EffectVmEmitRotationV3.capRootGroupCol`). This is the
 /// faithful root — NEVER a lane-0 squeeze, the soundness downgrade the GENTIAN tooth
 /// closes. Cell and circuit fold through the SAME implementation, so they agree
 /// lane-for-lane (the A2 / GENTIAN differentials guard it).
@@ -651,7 +651,7 @@ pub fn compute_canonical_capability_root(caps: &CapabilitySet) -> [u8; 32] {
 /// This is the value the off-chain BLAKE3 state commitment
 /// ([`compute_canonical_state_commitment`]) absorbs, so it carries the SAME
 /// ~124-bit collision floor the circuit binds at the rotated `cap_root` column
-/// group (limb 25 ‖ 51..57, GENTIAN-welded). It closes the ~31-bit lane-0
+/// group (limb 25 ‖ 52..58, GENTIAN-welded). It closes the ~31-bit lane-0
 /// cap-root forge off-chain, exactly as the wide `heap_root` / `fields_root`
 /// (`state::compute_heap_root` / `state::compute_fields_root`) do for their
 /// planes. Bytes `[0..4]` still equal the historical lane-0
@@ -754,7 +754,9 @@ pub const V9_NUM_REGISTERS: usize = 24;
 /// `revoked_root`'s committed group at 82..=88), and 176..=177 are the two zero pad limbs that land
 /// the body `[4..177]` = 174 = 58×3 (clean 3-grouping, NO arity-2 leftover — the wide 8-felt path's
 /// clean-grouping discipline). Lean `preLimbsAt_length = 178`.
-pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 6 + 75 + 65; // 178 (base widened 37→38: revoked_root = limb 37; fields octet 113..=168; cells-completion reservation 169..=175; pads 176..=177 → body 174 = 58×3 clean)
+/// Compatibility name for the cell commitment API. The value itself is emitted from the verified
+/// Lean `RotatedLayout`; it is not recomputed in this producer.
+pub const V9_NUM_PRE_LIMBS: usize = dregg_circuit::effect_vm::layout_generated::NUM_PRE_LIMBS;
 
 /// The turn-level context the rotated commitment absorbs that is NOT cell-local: the
 /// boundary `cells_root` (the sorted-Poseidon2 root over present cells), the cell's committed
@@ -767,14 +769,14 @@ pub struct V9RotationContext {
     /// The turn-level boundary `cells_root` felt (limb 0).
     pub cells_root: dregg_circuit::field::BabyBear,
     /// The cell's committed FAITHFUL 8-felt nullifier-accumulator root (limb 26 lane-0 ‖ completion
-    /// lanes 67..=73). The native `CanonicalHeapTree8` node8 (arity-16) sorted-Poseidon2 accumulator
+    /// lanes 68..=74). The native `CanonicalHeapTree8` node8 (arity-16) sorted-Poseidon2 accumulator
     /// root the noteSpend grow-gate opens against (`EffectVmEmitRotationV3` writesTo8), sourced from
     /// `dregg_cell::nullifier_set::NullifierSet::root8` (the live (nf, value) map). The empty-accumulator
     /// default is `dregg_turn::rotation_witness::empty_nullifier_root_8` (=
     /// `dregg_circuit::heap_root::empty_heap_root_8`).
     pub nullifier_root: dregg_circuit::Faithful8,
     /// The committed FAITHFUL 8-felt note-COMMITMENTS-accumulator root (limb 27 lane-0 ‖ completion
-    /// lanes 74..=80). The native `CanonicalHeapTree8` node8 (arity-16) sorted-Poseidon2 accumulator
+    /// lanes 75..=81). The native `CanonicalHeapTree8` node8 (arity-16) sorted-Poseidon2 accumulator
     /// root the noteCreate grow-gate opens against (`EffectVmEmitRotationV3.commitmentsInsertOp`,
     /// `commitmentsRootGroupCol`), sourced from `dregg_cell::commitment_set::CommitmentSet::root8`
     /// (the live (commitment, value) map). A turn-level set root, like `nullifier_root`. The
@@ -793,20 +795,20 @@ pub struct V9RotationContext {
     pub revoked_root: dregg_circuit::Faithful8,
     /// The receipt-index MMR root, absorbed LAST.
     pub iroot: dregg_circuit::field::BabyBear,
-    /// The v12 per-effect CARRIER MATERIAL for the child-vk / contract-hash octets (limbs 88..103).
+    /// The v12 per-effect CARRIER MATERIAL for the child-vk / contract-hash octets (limbs 89..104).
     /// `None`/`None` (the `Default`) on a generic turn — only a `CreateCellFromFactory` turn carries
     /// `child_vk` (the executor's captured `effective_vk`) and a hatchery mint carries
-    /// `contract_hash`. The pubkey octet (104..111) is cell-derived and needs no material.
+    /// `contract_hash`. The pubkey octet (105..112) is cell-derived and needs no material.
     pub material: RotationCarrierMaterial,
 }
 
-/// The v12 per-effect CARRIER MATERIAL that fills the child-vk (88..95) and contract-hash (96..103)
+/// The v12 per-effect CARRIER MATERIAL that fills the child-vk (89..96) and contract-hash (97..104)
 /// rotated carrier octets. Both are `Option`s so a generic turn defaults to ZERO-filled octets; the
 /// executor captures the REAL material at its source (`apply.rs`'s `effective_vk` for factory turns,
 /// `HpresProof::Attested{contract_hash}` for hatchery mints) and threads it in so the honest turn's
 /// `state_commit` carries it — the SAT foundation the STEP-3 `CarrierOctetGates` welds ride.
 ///
-/// The pubkey octet (104..111) is DERIVED from the cell (`cell.public_key()`), so it needs no
+/// The pubkey octet (105..112) is DERIVED from the cell (`cell.public_key()`), so it needs no
 /// material threading — every producer fills it unconditionally.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RotationCarrierMaterial {
@@ -1055,13 +1057,18 @@ pub fn authority_residue_bytes(cell: &Cell) -> Vec<u8> {
     bytes
 }
 
-/// Build the 32 pre-iroot rotated limbs for a cell + turn-context, in the Lean-pinned
+/// Build the 178 pre-iroot rotated limbs for a cell + turn-context, in the Lean-pinned
 /// absorption order (`EffectVmEmitRotationV3.preLimbsAt`). Byte-identical to the producer
 /// `dregg_turn::rotation_witness::produce`'s `pre_limbs`.
 pub fn compute_rotated_pre_limbs(
     cell: &Cell,
     ctx: &V9RotationContext,
 ) -> Vec<dregg_circuit::field::BabyBear> {
+    use dregg_circuit::effect_vm::layout_generated::{
+        AUTHORITY_DIGEST_GROUP, B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, B_PUBKEY_OCTET,
+        CAP_ROOT_GROUP, COMMITMENTS_ROOT_GROUP, FIELDS_ROOT_GROUP, HEAP_ROOT_GROUP,
+        NULLIFIER_ROOT_GROUP, PERMS_GROUP, REVOKED_ROOT_GROUP, VK_GROUP,
+    };
     use dregg_circuit::effect_vm::split_u64;
     use dregg_circuit::field::BabyBear;
 
@@ -1074,8 +1081,8 @@ pub fn compute_rotated_pre_limbs(
     pre[1] = bal_lo; // r0 ↔ balance_lo
     pre[2] = BabyBear::new((cell.state.nonce() & 0x7FFF_FFFF) as u32); // r1 ↔ nonce
     pre[3] = bal_hi; // r2 ↔ balance_hi
-    // r3..r10 ↔ fields[0..7] lane 0 (limbs 4..=11) ‖ the 56 fields COMPLETION lanes 112..=167
-    // (fields[i] lanes 1..7 → `112 + 7·i .. +6`). THE v13 FAITHFUL FIELDS OCTET: each field's
+    // r3..r10 ↔ fields[0..7] lane 0 (limbs 4..=11) ‖ the 56 fields COMPLETION lanes 113..=168
+    // (fields[i] lanes 1..7 → `113 + 7·i .. +6`). THE v13 FAITHFUL FIELDS OCTET: each field's
     // 32 bytes ride a full `field_limbs8` 8-lane split (lane 0 = the u64-lane lo32, the faithful
     // ~124-bit binding), REPLACING the eight ~31-bit `fold_bytes32_to_bb` Horner folds that rode
     // one `from_lossy_31bit_DANGER` octet. This CLOSES the last degraded-felt residual: the whole
@@ -1109,44 +1116,43 @@ pub fn compute_rotated_pre_limbs(
     // existing absorption chain (no vector growth, `rotV3SitesAt` unchanged) and are WELDED by the
     // record-pin / continuity freezes so a 31-bit-colliding authority cannot survive (GENTIAN law).
     // r18..r22 (limbs 19..=23): remaining app-register headroom — zero for a kernel turn.
-    compute_authority_digest_8(cell).write_lanes(&mut pre, [24, 12, 13, 14, 15, 16, 17, 18]);
-    // limb 25: cap_root lane-0 (welded) ‖ extras 51..=57: the SEVEN cap-root completion felts
+    compute_authority_digest_8(cell).write_lanes(&mut pre, AUTHORITY_DIGEST_GROUP);
+    // limb 25: cap_root lane-0 (welded) ‖ lanes 52..=58: the SEVEN cap-root completion felts
     // (lanes 1..7). THE FAITHFUL 8-FELT CAP ROOT — the native `node8` arity-16 sorted-Poseidon2
     // root the circuit's 8-felt `cap_root` column GROUP carries (`EffectVmEmitRotationV3.
-    // capRootGroupCol`: lane 0 = limb 25, lanes 1..7 = limbs 51..57). The in-circuit cap-write
+    // capRootGroupCol`: lane 0 = limb 25, lanes 1..7 = limbs 52..58). The in-circuit cap-write
     // gate FORCES the AFTER group to the `writesTo8` native update (`*_forces_write8`), so a
     // ~31-bit collision at lane-0 differing in any completion felt is UNSAT (the GENTIAN law,
     // ledgerless). Byte-identical to `rotation_witness`'s producer fill.
-    compute_canonical_capability_root_8(&cell.capabilities)
-        .write_lanes(&mut pre, [25, 52, 53, 54, 55, 56, 57, 58]);
-    // limb 26: nullifier_root lane-0 (welded) ‖ extras 67..=73: the SEVEN nullifier-root completion
+    compute_canonical_capability_root_8(&cell.capabilities).write_lanes(&mut pre, CAP_ROOT_GROUP);
+    // limb 26: nullifier_root lane-0 (welded) ‖ lanes 68..=74: the SEVEN nullifier-root completion
     // felts. THE FAITHFUL 8-FELT NULLIFIER ROOT — the native `CanonicalHeapTree8` node8 (arity-16)
     // sorted-Poseidon2 accumulator root the circuit's 8-felt `nullifier_root` column GROUP carries
-    // (lane 0 = limb 26, lanes 1..7 = limbs 67..73). The in-circuit noteSpend grow-gate FORCES the
+    // (lane 0 = limb 26, lanes 1..7 = limbs 68..74). The in-circuit noteSpend grow-gate FORCES the
     // AFTER group to the `writesTo8` native insert, so a ~31-bit collision at lane-0 differing in any
     // completion felt is UNSAT (the nullifier GENTIAN law). This REPLACES the lossy 1-felt
     // `hash_bytes(&ctx.nullifier_root)`. Byte-identical to `rotation_witness::produce`.
     ctx.nullifier_root
-        .write_lanes(&mut pre, [26, 68, 69, 70, 71, 72, 73, 74]);
-    // limb 27: commitments_root lane-0 (welded) ‖ extras 74..=80: the SEVEN commitments-root
+        .write_lanes(&mut pre, NULLIFIER_ROOT_GROUP);
+    // limb 27: commitments_root lane-0 (welded) ‖ lanes 75..=81: the SEVEN commitments-root
     // completion felts. THE FAITHFUL 8-FELT COMMITMENTS ROOT — the native `CanonicalHeapTree8`
     // node8 (arity-16) sorted-Poseidon2 accumulator root the circuit's 8-felt `commitments_root`
-    // column GROUP carries (lane 0 = limb 27, lanes 1..7 = limbs 74..80, matching
+    // column GROUP carries (lane 0 = limb 27, lanes 1..7 = limbs 75..81, matching
     // `trace_rotated.rs::commitments_group_col`). The in-circuit noteCreate grow-gate FORCES the
     // AFTER group to the `commitmentsInsertOp` native insert, so a ~31-bit collision at lane-0
     // differing in any completion felt is UNSAT. This REPLACES the lossy 1-felt
     // `hash_bytes(&ctx.commitments_root)`. Byte-identical to `rotation_witness::produce`.
     ctx.commitments_root
-        .write_lanes(&mut pre, [27, 75, 76, 77, 78, 79, 80, 81]);
-    // limb 28: heap_root lane-0 (welded) ‖ extras 58..=64: the SEVEN heap-root completion felts
+        .write_lanes(&mut pre, COMMITMENTS_ROOT_GROUP);
+    // limb 28: heap_root lane-0 (welded) ‖ lanes 59..=65: the SEVEN heap-root completion felts
     // (Phase H-HEAP-8). The faithful native-`heap_node8` (arity-16) 8-felt sorted-Merkle root over the
     // cell's heap map — the circuit's 8-felt `heap_root` column GROUP carries lane 0 = limb 28, lanes
-    // 1..7 = limbs 58..64. The in-circuit heap-write map_op FORCES the AFTER group to the `writesTo8`
+    // 1..7 = limbs 59..65. The in-circuit heap-write map_op FORCES the AFTER group to the `writesTo8`
     // native update, so a ~31-bit collision at lane-0 differing in any completion felt is UNSAT (the
     // heap GENTIAN law). This REPLACES the lossy 1-felt `hash_bytes(&cell.state.heap_root)`.
     // Byte-identical to `rotation_witness::compute_rotated_pre_limbs`.
     crate::state::compute_canonical_heap_root_8(&cell.state.heap_map)
-        .write_lanes(&mut pre, [28, 59, 60, 61, 62, 63, 64, 65]);
+        .write_lanes(&mut pre, HEAP_ROOT_GROUP);
     // limbs 29,30,31: lifecycle (opaque felt), epoch, committed_height.
     pre[29] = v9_lifecycle_felt(&cell.lifecycle);
     pre[30] = BabyBear::new((cell.state.delegation_epoch() & 0x7FFF_FFFF) as u32);
@@ -1156,27 +1162,27 @@ pub fn compute_rotated_pre_limbs(
     pre[32] = BabyBear::new(cell.lifecycle.discriminant() as u32);
     // limbs 33,34: perms_digest, vk_digest (the WAVE-2 flag-day committed authority sub-limbs — the
     // declared-param felts the setPerms / setVK welds force). limb-0 stays here (historical); the
-    // v10 weld lands the SEVEN completion felts at the new extras 37..=43 (perms) / 44..=50 (vk).
-    // v10 perms/vk faithful 8-felt completion: extras 37..=43 = perms8[1..8], 44..=50 = vk8[1..8].
+    // v10 weld lands the SEVEN completion felts at extras 38..=44 (perms) / 45..=51 (vk).
+    // v10 perms/vk faithful 8-felt completion: 38..=44 = perms8[1..7], 45..=51 = vk8[1..7].
     // The 8-wide permsVKWeldGate forces EACH to its declared param, so a ~31-bit collision at limb-0
     // that differs in any completion felt is UNSAT (GENTIAN law). Byte-identical to
     // `rotation_witness`'s producer fill.
-    perms_digest_8(&cell.permissions).write_lanes(&mut pre, [33, 38, 39, 40, 41, 42, 43, 44]);
-    vk_digest_8(&cell.verification_key).write_lanes(&mut pre, [34, 45, 46, 47, 48, 49, 50, 51]);
+    perms_digest_8(&cell.permissions).write_lanes(&mut pre, PERMS_GROUP);
+    vk_digest_8(&cell.verification_key).write_lanes(&mut pre, VK_GROUP);
     // limbs 35,36: mode, fields_root (the WAVE-3 flag-day committed authority sub-limbs — the
     // makeSovereign mode CONSTANT-force limb and the setFieldDyn / refusal fields-root weld limb, the
     // NEW LAST pre-iroot limbs). Byte-identical to `rotation_witness::{mode_felt,fields_root_felt}`.
     pre[35] = mode_felt(&cell.mode);
-    // limb 36: fields_root lane-0 (welded) ‖ extras 65,66,19,20,21,22,23: the SEVEN fields-root
+    // limb 36: fields_root lane-0 (welded) ‖ lanes 66,67,19,20,21,22,23: the SEVEN fields-root
     // completion felts (Phase H-FIELDS-8). The faithful native-`node8` (arity-16) 8-felt sorted-Merkle
     // root over the cell's user-field map — the circuit's 8-felt `fields_root` column GROUP carries lane
-    // 0 = limb 36, lanes 1..7 = limbs 65,66,19,20,21,22,23. The in-circuit refusal fields-write map_op
+    // 0 = limb 36, lanes 1..7 = limbs 66,67,19,20,21,22,23. The in-circuit refusal fields-write map_op
     // FORCES the AFTER group to the `writesTo8` native update, so a ~31-bit collision at lane-0 differing
     // in any completion felt is UNSAT (the fields GENTIAN law). This REPLACES the lossy 1-felt
     // `fields_root_felt(&cell.state.fields_root)`. Byte-identical to
     // `rotation_witness::compute_rotated_pre_limbs`.
     crate::state::compute_canonical_fields_root_8(&cell.state.fields_map)
-        .write_lanes(&mut pre, [36, 66, 67, 19, 20, 21, 22, 23]);
+        .write_lanes(&mut pre, FIELDS_ROOT_GROUP);
     // limb 37: revoked_root lane-0 (the NEW base limb, REVOKED-ROOT flag-day) ‖ extras 82..=88: the
     // SEVEN revoked-root completion felts. THE FAITHFUL 8-FELT CREDENTIAL-REVOCATION ROOT — the native
     // `CanonicalHeapTree8` node8 (arity-16) sorted-Poseidon2 accumulator root the circuit's 8-felt
@@ -1186,8 +1192,7 @@ pub fn compute_rotated_pre_limbs(
     // an empty/stale revocation set: a light client verifies the revocation was honoured from the
     // commitment alone. Sourced from `V9RotationContext.revoked_root` (the live `RevokedSet::root8`).
     // Byte-identical to `rotation_witness::produce`.
-    ctx.revoked_root
-        .write_lanes(&mut pre, [37, 82, 83, 84, 85, 86, 87, 88]);
+    ctx.revoked_root.write_lanes(&mut pre, REVOKED_ROOT_GROUP);
 
     // v12 CARRIER-MATERIAL octets (limbs 89..=112 after the REVOKED-ROOT +1 shift) — the SAT
     // foundation for the four octet carriers. The octet base constants (`B_CHILD_VK_OCTET` etc.)
@@ -1195,20 +1200,17 @@ pub fn compute_rotated_pre_limbs(
     // circuit lane bumps them (88→89, 96→97, 104→105).
     // Byte-identical to the producer twin `dregg_turn::rotation_witness::produce`; the trace generator
     // (`fill_block`) carries them by copy. Absent material → ZERO (the vector is ZERO-initialised).
-    use dregg_circuit::effect_vm::trace_rotated::{
-        B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, B_PUBKEY_OCTET,
-    };
-    // 88..=95: child_vk8 iff the block's effect is `CreateCellFromFactory` (material carries the
+    // 89..=96: child_vk8 iff the block's effect is `CreateCellFromFactory` (material carries the
     // REAL installed child VK), else ZERO.
     if let Some(child_vk) = ctx.material.child_vk {
         dregg_circuit::Faithful8::from_bytes32(&child_vk).write_octet(&mut pre, B_CHILD_VK_OCTET);
     }
-    // 96..=103: contract_hash8 iff the block's effect is the hatchery mint, else ZERO.
+    // 97..=104: contract_hash8 iff the block's effect is the hatchery mint, else ZERO.
     if let Some(contract_hash) = ctx.material.contract_hash {
         dregg_circuit::Faithful8::from_bytes32(&contract_hash)
             .write_octet(&mut pre, B_CONTRACT_HASH_OCTET);
     }
-    // 104..=111: pubkey8 UNCONDITIONALLY — the operated cell's owner key in the 30-bit canonical form
+    // 105..=112: pubkey8 UNCONDITIONALLY — the operated cell's owner key in the 30-bit canonical form
     // (`canonical_to_babybear_pi`, byte-identical to `dregg_commit::typed::canonical_32_to_felts_8`),
     // the EXACT match to the executor's KEY_COMMIT teeth.
     let pk8 = canonical_to_babybear_pi(cell.public_key()).map(BabyBear::new);
@@ -1259,7 +1261,7 @@ pub fn perms_digest_felt(
 /// The FAITHFUL 8-felt permissions digest (v10 perms weld). BYTE-IDENTICAL to the deployed
 /// `permissions_hash = hash_to_8(...)` a setPermissions row carries (`effect_vm_bridge.rs:160`):
 /// `bytes32_to_8_limbs(blake3(postcard(permissions)))`. `[0]` is the historical limb-33 digest;
-/// `[1..8]` are the seven completion felts the v10 weld lands at extras 37..=43, each forced by the
+/// `[1..8]` are the seven completion felts the v10 weld lands at lanes 38..=44, each forced by the
 /// 8-wide `permsVKWeldGate` to the declared param (`effects_hash`-bound, NO new verifier PI). A
 /// ~31-bit collision at `[0]` differing in `[1..8]` is now caught — the GENTIAN law.
 pub fn perms_digest_8(perms: &crate::permissions::Permissions) -> dregg_circuit::Faithful8 {
@@ -1280,7 +1282,7 @@ pub fn vk_digest_felt(vk: &Option<crate::cell::VerificationKey>) -> dregg_circui
 /// `vk_hash` 8-felt a setVK row carries: `bytes32_to_8_limbs(blake3(postcard(vk)))`, with `None`
 /// (revoke) mapping to the all-zero 8-felt (the deployed `vk_hash == [0; 8]` convention). `[0]` is
 /// the historical limb-34 digest; `[1..8]` are the seven completion felts the v10 weld lands at
-/// extras 44..=50, each forced by the 8-wide `permsVKWeldGate`. CANONICAL.
+/// lanes 45..=51, each forced by the 8-wide `permsVKWeldGate`. CANONICAL.
 pub fn vk_digest_8(vk: &Option<crate::cell::VerificationKey>) -> dregg_circuit::Faithful8 {
     match vk {
         Some(v) => {
@@ -1512,7 +1514,7 @@ mod tests {
     }
 
     /// VK-EPOCH RUST GHOST MIRROR — the nullifier accumulator root is committed FAITHFULLY across
-    /// all 8 rotated lanes ([26, 67..73]), not squeezed to the old lossy 1-felt, and it DISTINGUISHES
+    /// all 8 rotated lanes ([26, 68..74]), not squeezed to the old lossy 1-felt, and it DISTINGUISHES
     /// different nullifier frontiers. This is the cross-node anti-replay property that makes the whole
     /// flip worth doing: two nodes with different spent-nullifier sets commit DIFFERENT state roots, so
     /// a double-spend cannot finalize (an honest node's re-execution diverges → consensus rejects it).
@@ -1577,7 +1579,7 @@ mod tests {
     }
 
     /// VK-EPOCH RUST GHOST MIRROR (commitments dual) — the commitments accumulator root is committed
-    /// FAITHFULLY across all 8 rotated lanes ([27, 74..80]), not squeezed to the old lossy 1-felt, and
+    /// FAITHFULLY across all 8 rotated lanes ([27, 75..81]), not squeezed to the old lossy 1-felt, and
     /// it DISTINGUISHES different commitment frontiers. The CREATE-side dual of the nullifier tooth:
     /// two nodes with different created-commitment sets commit DIFFERENT state roots, so the published
     /// commitment binds the grown shielded-note set an honest re-executor reproduces.
