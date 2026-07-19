@@ -59,9 +59,6 @@ Dregg2.Circuit.Emit.EmitGraduate  # GREEN, NO self-check — asserts nothing on 
 Dregg2.Circuit.Emit.FoldEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.FoldRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.FoldRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
-Dregg2.Circuit.Emit.GarbledEvalEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
-Dregg2.Circuit.Emit.GarbledEvalRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
-Dregg2.Circuit.Emit.GarbledEvalRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.MembershipAuthRootEdge  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.MembershipDepthGeneralRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.MerkleMembershipRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
@@ -170,6 +167,3 @@ Dregg2.Exec.FFIDirect  # GREEN, #guard-only (no axiom self-check) — FFI-direct
 
 # --- the Claims axiom-net — KNOWN 'ran nowhere' (see MEMORY: CI-meaningfulness audit); being wired on its own track ---
 Dregg2.Claims  # GREEN self-checked (#assert clean), REGISTERABLE — Claims axiom-net
-Dregg2.Circuit.Emit.RotWideCompactS2  # unreachable from root — other-terminal rotated-compact WIP cluster (build status not re-verified dep-ordered).
-Dregg2.Circuit.Emit.WideCompactTable  # unreachable from root — other-terminal rotated-compact WIP cluster.
-Dregg2.Circuit.RotatedKernelRefinementAvailWideCompact  # unreachable from root — other-terminal rotated-compact WIP cluster.

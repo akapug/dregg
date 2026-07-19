@@ -9665,8 +9665,19 @@ witness-gen perimeter postures.
   (−31.8%), width 2664→1704, chip stays 256, prover 638→471 ms (same box).
 - FOLLOW-UP (proof): per-member keystone COROLLARIES through `compactS2_expand` (the bridge is
   proven + parametric; state the crown members' availability/capacity teeth over
-  `compactS2 member bb lane` with `compactOk` by native_decide, transporting the decode through
-  `expandTrace_shape`). Mechanical applications of the landed bridge.
+  `compactS2 member bb lane`, transporting the decode through `expandTrace_shape`). Mechanical
+  applications of the landed bridge. **TRANSFER CROWN LANDED** (2026-07-18):
+  `Dregg2/Circuit/RotatedKernelRefinementAvailWideCompact.lean` — rooted in Dregg2.lean +
+  orphan-gate de-listed (with `Emit.RotWideCompactS2` + `Emit.WideCompactTable`, previously
+  CI-orphans); `compactOk`/`planOk` at (198,747) discharged by KERNEL `decide +kernel` (~2 min
+  kernel compute; NOT native_decide — `Lean.ofReduceBool` fails the `#assert_axioms` pin), so
+  `availability_and_exact_move_forced_deployedCompact` + `deployedCompact_rejects_overdebit`
+  hold on `compactS2 transferAvailWideRefused 198 747` = the deployed transferVmDescriptor2R24
+  bytes, axiom-print {propext, Classical.choice, Quot.sound}. REMAINING: the sibling crown
+  members (burn / fee / cap-open-EFF / TB + welded twins), same shape; and the field-wise
+  transport of the `rotatedEncodesAvail` decode structure itself across `expandTrace` (the
+  corollary states the decode over the EXPANDED trace, pinned row-for-row by
+  `expandTrace_shape`).
 - FOLLOW-UP (debt, PRE-EXISTING at HEAD, exposed not caused by the flip): the heap-open LEAF
   wound — Rust `HeapLeaf::digest8` absorbs arity-3 `[addr, value, next_addr]` but the emitted
   heap-open leaf lookup is arity-2 `[addr, value]` (old registry, verified by old-world
