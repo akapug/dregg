@@ -78,6 +78,10 @@ pub mod descent_store;
 /// the Activity shell are the named follow-up (they need `DISCORD_CLIENT_SECRET`). See
 /// [`discord_activity`] and `docs/DISCORD-ACTIVITIES-DESIGN.md`.
 pub mod discord_activity;
+/// One hosted fhEgg settlement operation shared by the web, Telegram Mini App,
+/// and Discord Activity authentication wrappers.
+#[cfg(feature = "fhegg-settlement")]
+pub mod fhegg_operation;
 /// Prometheus metrics for the web surface (the `node/src/metrics.rs` pattern): the idempotent
 /// process-global recorder + the `GET /metrics` handler + the named emit helpers this surface's
 /// call sites bump (session opens/evictions, policy refusals, executor refusals, anchor + resume
@@ -200,9 +204,16 @@ impl WebFrontend {
     /// crafted POST of it). This is the HTML analogue of the native cockpit painting the SAME
     /// tree to gpui widgets / the Discord renderer painting it to an embed.
     pub fn render(&self, session: &SessionId, surface: &Surface) -> String {
-        // Render through the deos-view server-form backend (the moved-in `view_html`): one POST
-        // form per affordance, containers recursed so a nested affordance is never dropped. The
-        // frontend no longer maintains its own subset walker.
+        // The single-session route renders through the shared deos-view server-form backend (the
+        // moved-in `view_html`): one POST form per affordance, containers recursed so a nested
+        // affordance is never dropped. This route maintains NO walker of its own.
+        //
+        // The multi-offering CATALOG route ([`render_catalog_forms`]) does keep its own walker,
+        // because it POSTs to a different action (`/offerings/{key}/session/{id}/act`) and adds an
+        // editable-arg input + the sprite-tile swap. That walker is NOT a silent subset: it is
+        // compiler-EXHAUSTIVE over `ViewNode` (no `_ => {}`), so it cannot drop a variant, and it
+        // renders the SAME affordance set as this route — the two web routes are proven to agree by
+        // `tests/two_web_routes_agree.rs` (against the canonical `deos_view::actuations` carrier).
         SessionFormBackend {
             session_id: session.0.clone(),
         }
@@ -2066,7 +2077,28 @@ fn catalog_node(node: &ViewNode, key: &str, id: &str, out: &mut String) {
                 catalog_node(c, key, id, out);
             }
         }
-        ViewNode::Tabs { panels, .. } => {
+        // TABS (the affordance-loss cure — the catalog route was recursing panels but DROPPING the
+        // tab-switch): each tab label is one POST form firing `select_turn` with `arg = the tab
+        // index`, THEN the panels recurse — so the tab-switch is reachable, matching the session route.
+        ViewNode::Tabs {
+            tabs,
+            select_turn,
+            panels,
+            ..
+        } => {
+            if !select_turn.is_empty() {
+                out.push_str("<div class=\"affordances tabs\">");
+                for (i, label) in tabs.iter().enumerate() {
+                    let it = MenuItem {
+                        label: label.clone(),
+                        turn: select_turn.clone(),
+                        arg: i as i64,
+                        enabled: true,
+                    };
+                    out.push_str(&catalog_form(key, id, &it));
+                }
+                out.push_str("</div>");
+            }
             for p in panels {
                 catalog_node(p, key, id, out);
             }
@@ -2085,7 +2117,122 @@ fn catalog_node(node: &ViewNode, key: &str, id: &str, out: &mut String) {
             )),
         },
         ViewNode::Divider => out.push_str("<hr>"),
-        _ => {}
+        // HALO (the affordance-loss cure): each handle in the direct-manipulation ring → one POST
+        // form (a refused handle dimmed + disabled — the cap tooth SHOWN, not hidden), so a halo
+        // handle FIRES on the catalog route too instead of silently doing nothing.
+        ViewNode::Halo { handles, .. } => {
+            out.push_str("<div class=\"affordances halo\">");
+            for h in handles {
+                let it = MenuItem {
+                    label: h.glyph.clone(),
+                    turn: h.turn.clone(),
+                    arg: h.arg,
+                    enabled: h.enabled,
+                };
+                out.push_str(&catalog_form(key, id, &it));
+            }
+            out.push_str("</div>");
+        }
+        // BREADCRUMB (the affordance-loss cure): the nav path; a crumb with a non-empty `turn` is a
+        // clickable POST form, an inert crumb a plain label.
+        ViewNode::Breadcrumb { items } => {
+            out.push_str("<nav class=\"breadcrumb\">");
+            for (i, c) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str("<span class=\"crumb-sep\">&rarr;</span>");
+                }
+                if c.turn.is_empty() {
+                    out.push_str(&format!("<span class=\"crumb\">{}</span>", esc(&c.label)));
+                } else {
+                    let it = MenuItem {
+                        label: c.label.clone(),
+                        turn: c.turn.clone(),
+                        arg: c.arg,
+                        enabled: true,
+                    };
+                    out.push_str(&catalog_form(key, id, &it));
+                }
+            }
+            out.push_str("</nav>");
+        }
+        // An `input` whose committed draft parses into `fire_turn`'s `arg` (a value-taking turn) is a
+        // real editable-arg POST — the turn is reachable on the no-JS catalog route; a draft-only
+        // input (empty `fire_turn`) is a plain field with no actuation.
+        ViewNode::Input {
+            bind_view,
+            fire_turn,
+            submit_label,
+        } => {
+            if fire_turn.is_empty() {
+                out.push_str(&format!(
+                    "<span class=\"deos-input\">&lsaquo;{}&rsaquo;</span>",
+                    esc(bind_view)
+                ));
+            } else {
+                let label = if submit_label.is_empty() {
+                    "submit"
+                } else {
+                    submit_label.as_str()
+                };
+                let it = MenuItem {
+                    label: label.to_string(),
+                    turn: fire_turn.clone(),
+                    arg: 0,
+                    enabled: true,
+                };
+                out.push_str(&catalog_form(key, id, &it));
+            }
+        }
+        // ── STATIC-PROJECTION leaves — DISPLAYED (visible, matching the session route), never a
+        //    fireable affordance on the no-JS catalog route (it carries no live bind values). ──
+        ViewNode::Bind { slot, label, .. } => {
+            out.push_str(&format!(
+                "<span class=\"deos-bind\" data-slot=\"{slot}\">{}</span>",
+                esc(label)
+            ));
+        }
+        ViewNode::Gauge { slot, max, label } => {
+            out.push_str(&format!(
+                "<div class=\"gauge\" data-slot=\"{slot}\">{}(/{max})</div>",
+                esc(label)
+            ));
+        }
+        ViewNode::Progress { value, max, label } => {
+            out.push_str(&format!(
+                "<div class=\"progress\">{}{}/{}</div>",
+                esc(label),
+                value,
+                max
+            ));
+        }
+        // VALUE-DEPENDENT controls (declared exception): a `slider`'s fired `arg` is the DRAGGED
+        // value and a `toggle`'s fired turn depends on the LIVE slot — neither a fixed `{turn, arg}`
+        // press a no-JS POST can express (the reason `deos_view::actuations` excludes them). Shown
+        // as a display; live actuation is on the client-JS path only.
+        ViewNode::Slider { slot, min, max, .. } => {
+            out.push_str(&format!(
+                "<div class=\"slider\" data-slot=\"{slot}\">&lsaquo;slider {min}&ndash;{max} (live surface)&rsaquo;</div>"
+            ));
+        }
+        ViewNode::Toggle {
+            slot,
+            glyph_off,
+            label,
+            ..
+        } => {
+            out.push_str(&format!(
+                "<div class=\"toggle\" data-slot=\"{slot}\">{} {} (live surface)</div>",
+                esc(glyph_off),
+                esc(label)
+            ));
+        }
+        // An UNRESOLVED mount → an honest placeholder (the client-JS path re-reads the cell heap).
+        ViewNode::Host { view: None, cell } => {
+            out.push_str(&format!(
+                "<div class=\"deos-host-unresolved\">&lsaquo;mount cell {}: unresolved&rsaquo;</div>",
+                esc(cell)
+            ));
+        }
     }
 }
 
@@ -2445,6 +2592,105 @@ pub fn resolve_web_policy() -> SessionPolicy {
     web_policy_from(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
 }
 
+/// Comma-separated, ordered Ed25519 verifier public keys (64 hex chars each)
+/// for the hosted fhEgg settlement operation. The upload never supplies this
+/// roster: it is a relying-party deployment policy.
+#[cfg(feature = "fhegg-settlement")]
+pub const FHEGG_QUORUM_KEYS_ENV: &str = "DREGG_FHEGG_QUORUM_PUBLIC_KEYS";
+/// Required signatures from [`FHEGG_QUORUM_KEYS_ENV`].
+#[cfg(feature = "fhegg-settlement")]
+pub const FHEGG_QUORUM_THRESHOLD_ENV: &str = "DREGG_FHEGG_QUORUM_THRESHOLD";
+
+#[cfg(feature = "fhegg-settlement")]
+fn decode_fhegg_key(value: &str) -> Option<[u8; 32]> {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bytes = value.trim().as_bytes();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (index, pair) in bytes.chunks_exact(2).enumerate() {
+        out[index] = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+    }
+    Some(out)
+}
+
+/// Parse the host-selected fhEgg quorum from an injected env-shaped getter.
+/// Both values absent means disabled; a partial or malformed policy is refused
+/// as configuration rather than weakened to a smaller/default quorum.
+#[cfg(feature = "fhegg-settlement")]
+pub fn fhegg_quorum_from(
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<Option<(Vec<[u8; 32]>, usize)>, String> {
+    let keys = get(FHEGG_QUORUM_KEYS_ENV).filter(|value| !value.trim().is_empty());
+    let threshold = get(FHEGG_QUORUM_THRESHOLD_ENV).filter(|value| !value.trim().is_empty());
+    match (keys, threshold) {
+        (None, None) => Ok(None),
+        (None, Some(_)) | (Some(_), None) => Err(format!(
+            "{FHEGG_QUORUM_KEYS_ENV} and {FHEGG_QUORUM_THRESHOLD_ENV} must be set together"
+        )),
+        (Some(keys), Some(threshold)) => {
+            let keys = keys
+                .split(',')
+                .map(|key| {
+                    decode_fhegg_key(key).ok_or_else(|| {
+                        format!("{FHEGG_QUORUM_KEYS_ENV} contains a non-32-byte hex key")
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let threshold = threshold
+                .parse::<usize>()
+                .map_err(|_| format!("{FHEGG_QUORUM_THRESHOLD_ENV} is not a positive integer"))?;
+            if keys.is_empty() || threshold == 0 || threshold > keys.len() {
+                return Err(format!(
+                    "{FHEGG_QUORUM_THRESHOLD_ENV} must be in 1..={} for the configured roster",
+                    keys.len()
+                ));
+            }
+            Ok(Some((keys, threshold)))
+        }
+    }
+}
+
+#[cfg(feature = "fhegg-settlement")]
+fn demo_host_with_resolved_fhegg() -> OfferingHost {
+    let mut host = demo_host();
+    match fhegg_quorum_from(|key| std::env::var(key).ok()) {
+        Ok(Some((keys, threshold))) => {
+            match dreggnet_market::DarkBazaarOffering::with_fhegg_quorum(keys, threshold) {
+                Ok(bazaar) => {
+                    host.register(
+                        dreggnet_market::DarkBazaarOffering::KEY,
+                        "The Dark Bazaar — playable CRAWL (sealed bids · verified settlement)",
+                        bazaar,
+                    );
+                    tracing::info!(
+                        threshold,
+                        "fhEgg settlement operation enabled with host-selected quorum"
+                    );
+                }
+                Err(error) => tracing::error!(
+                    error = %error,
+                    "fhEgg quorum policy refused; settlement upload remains disabled"
+                ),
+            }
+        }
+        Ok(None) => tracing::info!("fhEgg settlement upload disabled — quorum policy env is unset"),
+        Err(error) => tracing::error!(
+            error = %error,
+            "fhEgg quorum policy malformed; settlement upload remains disabled"
+        ),
+    }
+    host
+}
+
 /// **Resolve the demo host from the environment** — the session-durability switch, mirroring
 /// [`resolve_demo_descent`], PLUS the session-lifecycle policy ([`resolve_web_policy`]: capacity /
 /// TTL / per-user quota / open rate). With `DREGGNET_WEB_SESSION_DIR` set (non-empty), the host is
@@ -2457,7 +2703,11 @@ pub fn resolve_demo_host() -> OfferingHost {
         .ok()
         .filter(|d| !d.is_empty())
         .map(std::path::PathBuf::from);
-    demo_host_over(dir, resolve_web_policy())
+    #[cfg(feature = "fhegg-settlement")]
+    let base = demo_host_with_resolved_fhegg();
+    #[cfg(not(feature = "fhegg-settlement"))]
+    let base = demo_host();
+    assemble_demo_host(base, dir, resolve_web_policy())
 }
 
 /// **Resolve the per-identity RPG worlds registry** from the environment — the per-player half of
@@ -2522,7 +2772,15 @@ pub fn demo_host_resumed_from(dir: impl Into<std::path::PathBuf>) -> OfferingHos
 ///   - an **unopenable** `dir` logs a warning and falls back to the store-less host (the server
 ///     still boots, sessions stay in-memory) — the same degrade-not-refuse posture as
 ///     [`resolve_demo_descent`].
-pub fn demo_host_over(dir: Option<std::path::PathBuf>, mut policy: SessionPolicy) -> OfferingHost {
+pub fn demo_host_over(dir: Option<std::path::PathBuf>, policy: SessionPolicy) -> OfferingHost {
+    assemble_demo_host(demo_host(), dir, policy)
+}
+
+fn assemble_demo_host(
+    base: OfferingHost,
+    dir: Option<std::path::PathBuf>,
+    mut policy: SessionPolicy,
+) -> OfferingHost {
     if dir.is_none() && !policy.is_unbounded() {
         policy.evict_unpersisted = true;
         tracing::info!(
@@ -2530,7 +2788,7 @@ pub fn demo_host_over(dir: Option<std::path::PathBuf>, mut policy: SessionPolicy
              ephemeral either way; shedding the coldest beats unbounded growth)"
         );
     }
-    let mut host = demo_host().with_policy(policy, SystemClock);
+    let mut host = base.with_policy(policy, SystemClock);
     let Some(dir) = dir else {
         return host;
     };
@@ -2778,6 +3036,8 @@ pub fn make_app_parts_with_descent(descent: Arc<DescentState>) -> (Router, Arc<C
         // `overlay::YouTubePoller` (authenticated) and/or the token-gated POST, and drives a
         // close→resolve→advance timer via `OverlayState::close_tick`.
         .merge(overlay::overlay_router(overlay::demo_state_from_env()));
+    #[cfg(feature = "fhegg-settlement")]
+    let app = app.merge(fhegg_operation::router(Arc::clone(&catalog)));
     // THE TELEGRAM MINI APP surface — mounted iff `TELEGRAM_BOT_TOKEN` is set (the same ops gate
     // as the bot itself; `tg_miniapp_from_env` logs one line either way). It drives the SAME
     // catalog host, but through initData-verified identities landing Signed turns.
