@@ -26,6 +26,7 @@
 package friverifier
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -210,7 +211,47 @@ func assignVerifierFullWithTranscript(t *testing.T, fx *shrinkRealFixture, ex *s
 	c.TxPow = []frontend.Variable{ac.PowWitness}
 	c.TxFinalPoly = ac.FinalPoly
 	c.TxQueries = ac.Queries
+	fillSelectorWitness(t, c)
 	return c
+}
+
+// fillSelectorWitness threads the HONEST selector-derivation intermediate bits into
+// the ζ-selector replay's witness bank (VerifierFullCircuit.SelectorWitness). The
+// bind (bindBlockZeta -> replaySelectorsWitness) feeds these to the Lean-emitted
+// selector template as its free internal witnesses; their honest values are the
+// Lean-generated assignment selectorsAsg (SelectorEmit.lean), dumped var-index-ordered
+// to emitted/selectors_witness_db{db}.json — committed at katZeta, which IS the real
+// fixture ζ (SelectorEmit.lean §8), so the honest fixture's transcript-squeezed ζ
+// gives a satisfiable emitted R1CS. The per-db layout mirrors the structural circuit's
+// AllocVerifierFullCircuitWithTranscript so the assignment schema aligns.
+func fillSelectorWitness(t *testing.T, c *VerifierFullCircuit) {
+	t.Helper()
+	plan, err := loadSelectorReplayPlan(c.vf)
+	if err != nil {
+		t.Fatalf("selector replay plan: %v", err)
+	}
+	sw := make([]frontend.Variable, plan.total)
+	for db, e := range plan.entries {
+		witPath := selectorWitnessPath(db)
+		vals, verr := loadWitnessValues(witPath)
+		if verr != nil {
+			t.Fatalf("load %s: %v", witPath, verr)
+		}
+		if len(vals) != e.tpl.NumVars() {
+			t.Fatalf("%s: %d witness values, template db%d has %d variables",
+				witPath, len(vals), db, e.tpl.NumVars())
+		}
+		for k, idx := range e.witnessIdx {
+			sw[e.offset+k] = vals[idx]
+		}
+	}
+	c.SelectorWitness = sw
+}
+
+// selectorWitnessPath is the committed Lean-dumped honest assignment for the selector
+// template at degree bits db (SelectorEmit.lean selectorsAsg, var-index-ordered).
+func selectorWitnessPath(db int) string {
+	return fmt.Sprintf("emitted/selectors_witness_db%d.json", db)
 }
 
 // TestEmittedVerifierFullTranscriptRederivesChallenges runs the MAIN emit-driven
@@ -459,9 +500,10 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	// (F1) zeta — CLOSED (was: RESIDUAL, hole partly open). Block 3 consumes zeta
 	// only INDIRECTLY, through the Lagrange selectors and the openings-at-zeta, so
 	// the block-challenge link has no zeta slot to equate. bindBlockZeta closes it
-	// by RE-DERIVATION instead: it recomputes the selectors in-circuit from the
-	// squeeze-asserted zeta (computeStarkSelectorsNative at each instance's
-	// degree_bits) and asserts the block's supplied selectors equal them.
+	// by RE-DERIVATION instead: it re-derives the selectors in-circuit from the
+	// squeeze-asserted zeta by REPLAYING the Lean-emitted selector template
+	// (replaySelectorsWitness at each instance's degree_bits) and asserts the block's
+	// supplied selectors equal the replayed outputs.
 	//
 	// The canary below is the exact favorable-zeta forgery: pick a zeta the
 	// transcript never sampled, supply the matching selector triple AND the matching
@@ -512,10 +554,10 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	// stage-ON circuit (zeta bind ON) on the untampered real proof — without it, a
 	// bind that rejected EVERYTHING would pass the reject polarity above vacuously.
 	t.Logf("zeta: CLOSED (stage-OFF ACCEPT / stage-ON+bind-OFF ACCEPT / stage-ON+bind-ON REJECT) — " +
-		"the rejection is attributable to bindBlockZeta alone: the selectors are forced to be " +
-		"computeStarkSelectorsNative at the squeeze-asserted zeta, so a selector set at any other " +
-		"point is UNSAT; the openings-at-zeta are additionally equated against the transcript-observed " +
-		"opened stream (bindBlockZeta tooth 2).")
+		"the rejection is attributable to bindBlockZeta alone: the selectors are forced to be the " +
+		"Lean-emitted selector template's replayed derivation at the squeeze-asserted zeta, so a " +
+		"selector set at any other point is UNSAT; the openings-at-zeta are additionally equated " +
+		"against the transcript-observed opened stream (bindBlockZeta tooth 2).")
 
 	// (F2) FRI betas / query indices: the descriptor consumes a SINGLE representative
 	// of each — one fold-beta operand and one query-index sample — so only betas[0]

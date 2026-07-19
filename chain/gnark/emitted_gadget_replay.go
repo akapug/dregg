@@ -247,6 +247,215 @@ func templateArgInt(a json.Number) (int, error) {
 }
 
 // ---------------------------------------------------------------------------
+// §1b  Variable classification — inputs vs FREE WITNESSES vs derived.
+// ---------------------------------------------------------------------------
+//
+// A template with FREE INTERNAL WITNESS VARIABLES (booleanity bits, hinted field
+// inverses, range-checked minted intermediates — the SelectorEmit.lean STARK
+// selector derivation is the motivating case) is not I/O-solvable and not
+// solvable by ReplayTemplate/ReplayClosed's define-chain alone: an assert like the
+// booleanity `mul(b,b) == var(b)` has the fresh variable `b` on one side while the
+// OTHER side (`mul(b,b)`) reads `b` itself, so there is nothing to define it from —
+// `b` is a value the PROVER chooses, pinned by the constraint, not derived. The
+// classification below distinguishes, for a chosen input arity, three disjoint
+// roles every template variable falls into:
+//
+//   - INPUT   — one of the leading `numInputs` public-input variables the caller binds.
+//   - DERIVED — a variable the define-chain SOLVES: it is the bare `var(v)` side of
+//               some assert whose other side reads only already-determined wires and
+//               does not itself read `v`. The trailing public-input outputs are here.
+//   - WITNESS — everything else: a free internal witness the caller must SUPPLY (its
+//               honest value), whose asserts (booleanity / recomposition / the
+//               `a·inv = 1` inverse pin / the `m = a·b` minted-product pin) then apply
+//               as REAL constraints on the supplied value.
+//
+// The rule matches, exactly, what ReplayTemplateWithWitness needs pre-bound for its
+// single forward pass to complete: a variable is WITNESS iff, walking the asserts in
+// emitted (solved) order, it first appears in an assert that is NOT a clean bare-var
+// definition — i.e. a constraint referencing it before it could be defined.
+
+// wireCones computes, for every gate, the set of template variables its cone
+// transitively reads. Gates are wire-indexed with children strictly earlier (see
+// Validate), so a single forward pass suffices; cones are small (op nodes combine a
+// handful of already-minted variable leaves), so sorted-slice sets are cheap.
+func (t *Template) wireCones() ([][]int, error) {
+	cones := make([][]int, len(t.Gates))
+	for i := range t.Gates {
+		g := &t.Gates[i]
+		switch g.Op {
+		case "var":
+			v, err := templateArgInt(g.Args[0])
+			if err != nil {
+				return nil, err
+			}
+			cones[i] = []int{v}
+		case "const":
+			cones[i] = nil
+		default:
+			// Merge the (sorted, deduped) cones of the argument wires.
+			acc := []int(nil)
+			for _, a := range g.Args {
+				w, err := templateArgInt(a)
+				if err != nil {
+					return nil, err
+				}
+				acc = mergeSortedInts(acc, cones[w])
+			}
+			cones[i] = acc
+		}
+	}
+	return cones, nil
+}
+
+// mergeSortedInts unions two sorted-deduped int slices.
+func mergeSortedInts(a, b []int) []int {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	out := make([]int, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		switch {
+		case a[i] < b[j]:
+			out = append(out, a[i])
+			i++
+		case a[i] > b[j]:
+			out = append(out, b[j])
+			j++
+		default:
+			out = append(out, a[i])
+			i++
+			j++
+		}
+	}
+	out = append(out, a[i:]...)
+	out = append(out, b[j:]...)
+	return out
+}
+
+// coneSubset reports whether every variable in a (sorted) cone is determined.
+func coneSubset(cone []int, determined []bool) bool {
+	for _, v := range cone {
+		if !determined[v] {
+			return false
+		}
+	}
+	return true
+}
+
+// coneContains reports whether v is in a sorted cone.
+func coneContains(cone []int, v int) bool {
+	lo, hi := 0, len(cone)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if cone[mid] < v {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo < len(cone) && cone[lo] == v
+}
+
+// TemplateVarClass is the disjoint input / free-witness / derived partition of a
+// template's variable space against a chosen input arity. Inputs ∪ Witness ∪ Derived
+// covers [0, NumVars) with no overlap.
+type TemplateVarClass struct {
+	Inputs  []int // the leading numInputs public-input variables (caller-bound)
+	Witness []int // free internal witnesses the caller must supply, ascending
+	Derived []int // variables the define-chain solves (the trailing outputs are here)
+}
+
+// ClassifyVars partitions the template's variables into input / free-witness /
+// derived for the given input arity (a PREFIX of public_inputs bound as inputs, the
+// SUFFIX solved as outputs). It walks the asserts in emitted order; see the §1b
+// commentary for the rule. The returned Witness slice is exactly the set of indices
+// ReplayTemplateWithWitness needs supplied.
+func (t *Template) ClassifyVars(numInputs int) (*TemplateVarClass, error) {
+	if t.numVars == 0 && len(t.Gates) > 0 {
+		if err := t.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if numInputs < 0 || numInputs > len(t.PublicInputs) {
+		return nil, fmt.Errorf("template %q: numInputs %d out of range [0,%d]",
+			t.Name, numInputs, len(t.PublicInputs))
+	}
+	cones, err := t.wireCones()
+	if err != nil {
+		return nil, err
+	}
+
+	determined := make([]bool, t.numVars)
+	inputs := make([]int, 0, numInputs)
+	for _, p := range t.PublicInputs[:numInputs] {
+		if !determined[p.Var] {
+			inputs = append(inputs, p.Var)
+			determined[p.Var] = true
+		}
+	}
+
+	isDerived := make([]bool, t.numVars)
+	isWitness := make([]bool, t.numVars)
+	bareVarOf := func(w int) (int, bool) {
+		g := &t.Gates[w]
+		if g.Op != "var" {
+			return 0, false
+		}
+		v, e := templateArgInt(g.Args[0])
+		if e != nil {
+			return 0, false
+		}
+		return v, true
+	}
+
+	for _, a := range t.Asserts {
+		lv, lIsVar := bareVarOf(a.L)
+		rv, rIsVar := bareVarOf(a.R)
+		lDef := lIsVar && !determined[lv] && coneSubset(cones[a.R], determined) && !coneContains(cones[a.R], lv)
+		rDef := rIsVar && !determined[rv] && coneSubset(cones[a.L], determined) && !coneContains(cones[a.L], rv)
+		switch {
+		case rDef && !lDef:
+			determined[rv], isDerived[rv] = true, true
+		case lDef && !rDef:
+			determined[lv], isDerived[lv] = true, true
+		case lDef && rDef:
+			// Both sides definable (a var==var equality of two undetermined
+			// variables). Solved order should preclude this; resolve deterministically
+			// by defining the right side so classification stays total.
+			determined[rv], isDerived[rv] = true, true
+		default:
+			// A constraint: any variable it reads that is still undetermined is a free
+			// witness (pinned here, not derived).
+			for _, v := range cones[a.L] {
+				if !determined[v] {
+					determined[v], isWitness[v] = true, true
+				}
+			}
+			for _, v := range cones[a.R] {
+				if !determined[v] {
+					determined[v], isWitness[v] = true, true
+				}
+			}
+		}
+	}
+
+	cls := &TemplateVarClass{Inputs: inputs}
+	for v := 0; v < t.numVars; v++ {
+		switch {
+		case isWitness[v]:
+			cls.Witness = append(cls.Witness, v)
+		case isDerived[v]:
+			cls.Derived = append(cls.Derived, v)
+		}
+	}
+	return cls, nil
+}
+
+// ---------------------------------------------------------------------------
 // §2  The replayer.
 // ---------------------------------------------------------------------------
 
@@ -394,6 +603,120 @@ func ReplayClosed(api frontend.API, tpl Template, bindings map[int]frontend.Vari
 		}
 	}
 	return nil
+}
+
+// ReplayTemplateWithWitness drives a Lean-emitted template that carries FREE
+// INTERNAL WITNESS VARIABLES — booleanity bits, hinted field inverses, range-checked
+// minted intermediates: variables the PROVER chooses, pinned by constraints rather
+// than derived from the boundary. It is the witness-aware sibling of ReplayTemplate:
+// it binds a PREFIX of the public inputs to `in`, binds every FREE WITNESS to the
+// value the caller supplies in `witnessValues` (by variable index — allocated as a
+// SECRET witness in the caller's gnark circuit), replays every assert, and returns
+// the SUFFIX public inputs (the outputs) that the define-chain solved.
+//
+// Why the plain ReplayTemplate/ReplayClosed cannot do this. Both walk the asserts as
+// a SOLVER: each assert either DEFINES a fresh bare `var(v)` from its already-solved
+// other side, or, if both sides are already determined, is a kept AssertIsEqual. A
+// FREE-WITNESS assert fits neither in that solver: the booleanity `mul(b,b) == var(b)`
+// puts `b` fresh on one side while the other side (`mul(b,b)`) READS `b`, so the
+// solver would try to define `b` from an expression that reads `b` itself and fail
+// ("wire reads var b before the replay determined it"). The fix is to PRE-BIND those
+// witnesses (from the honest assignment) so the assert lands on the AssertIsEqual
+// branch and applies as the REAL constraint the emitted R1CS intends — the
+// booleanity bites, the recomposition bites, the `a·inv = 1` inverse pin bites. Every
+// OTHER assert (the trailing output pins, the last-level product defs) still SOLVES,
+// so the outputs are reconstructed and returned.
+//
+// Which indices are witnesses vs derived is Template.ClassifyVars(len(in)) — the
+// caller supplies exactly ClassifyVars.Witness. Supplying the wrong or an incomplete
+// witness set fail-closes: a missing witness surfaces as a define reading it before
+// it is determined, or as an undetermined variable at the completeness check; a wrong
+// witness VALUE is caught not here but by the gnark backend — the pinning constraints
+// (booleanity/range/inverse) are unsatisfiable, so the proof/solve fails (UNSAT).
+//
+// The replayer still knows NOTHING about what the template computes; the honest
+// witness values come from the caller (the Lean-generated assignment / gnark's hint
+// solver), never from this file.
+func ReplayTemplateWithWitness(api frontend.API, tpl Template, in []frontend.Variable,
+	witnessValues map[int]frontend.Variable) ([]frontend.Variable, error) {
+	if tpl.numVars == 0 && len(tpl.Gates) > 0 {
+		// Constructed by hand rather than through ParseTemplate/LoadTemplate.
+		if err := tpl.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if len(in) > len(tpl.PublicInputs) {
+		return nil, fmt.Errorf("template %q: %d inputs supplied but only %d boundary variables",
+			tpl.Name, len(in), len(tpl.PublicInputs))
+	}
+
+	st := &replayState{
+		api:     api,
+		tpl:     &tpl,
+		modulus: api.Compiler().Field(),
+		vars:    make([]frontend.Variable, tpl.numVars),
+		varSet:  make([]bool, tpl.numVars),
+		wire:    make([]frontend.Variable, len(tpl.Gates)),
+		wireSet: make([]bool, len(tpl.Gates)),
+	}
+
+	// Bind the supplied inputs to the leading boundary variables.
+	inputVar := make([]bool, tpl.numVars)
+	for i, v := range in {
+		p := tpl.PublicInputs[i]
+		if st.varSet[p.Var] {
+			return nil, fmt.Errorf("template %q: boundary variable %d (%q) bound twice",
+				tpl.Name, p.Var, p.Name)
+		}
+		st.vars[p.Var], st.varSet[p.Var], inputVar[p.Var] = v, true, true
+	}
+
+	// Bind the free witnesses by index. These are the prover-chosen internals the
+	// caller allocated as SECRET; every binding lands before any assert is replayed.
+	for idx, v := range witnessValues {
+		if idx < 0 || idx >= tpl.numVars {
+			return nil, fmt.Errorf("template %q: witness for variable %d is out of range [0,%d)",
+				tpl.Name, idx, tpl.numVars)
+		}
+		if inputVar[idx] {
+			return nil, fmt.Errorf("template %q: variable %d is a bound input, not a witness", tpl.Name, idx)
+		}
+		if st.varSet[idx] {
+			return nil, fmt.Errorf("template %q: witness variable %d supplied twice", tpl.Name, idx)
+		}
+		st.vars[idx], st.varSet[idx] = v, true
+	}
+
+	// Replay the asserts in emitted order: define-chain solves the derived variables
+	// (the outputs), every free-witness assert applies as a real constraint.
+	for i, a := range tpl.Asserts {
+		if err := st.replayAssert(i, a); err != nil {
+			return nil, err
+		}
+	}
+
+	// The trailing boundary variables are the outputs; every one must have been
+	// determined (solved by the define-chain) — else the caller mis-supplied the
+	// witness set.
+	out := make([]frontend.Variable, 0, len(tpl.PublicInputs)-len(in))
+	for _, p := range tpl.PublicInputs[len(in):] {
+		if !st.varSet[p.Var] {
+			return nil, fmt.Errorf("template %q: output %q (var %d) was never determined by the replay",
+				tpl.Name, p.Name, p.Var)
+		}
+		out = append(out, st.vars[p.Var])
+	}
+
+	// Fail-closed completeness: every template variable must be an input, a supplied
+	// witness, or a solved derived variable. A leftover means the caller omitted a
+	// free witness — refuse rather than emit a partial constraint system.
+	for v := 0; v < tpl.numVars; v++ {
+		if !st.varSet[v] {
+			return nil, fmt.Errorf("template %q: variable %d was neither an input, a supplied "+
+				"witness, nor solved by the replay (missing witness — see ClassifyVars)", tpl.Name, v)
+		}
+	}
+	return out, nil
 }
 
 // freshVarOf reports whether wire w is a bare `var` gate naming a variable

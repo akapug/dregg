@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"sort"
 
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
@@ -545,14 +546,35 @@ type VerifierFullCircuit struct {
 	// no zeta slot to equate — the bind is a RE-DERIVATION instead. expand()
 	// records, per instance, the three selector witnesses (+ that instance's trace
 	// degree_bits, the descriptor's `degree_bits` param) and the opened-value /
-	// cumulative-sum / public-value witnesses it consumed; Define
-	// (bindBlockSelectorsToZeta) recomputes the selectors from the
-	// transcript-squeezed zeta with computeStarkSelectorsNative — the SAME routine
-	// the deployed VerifyShrinkStarkAlgebra runs — and asserts equality, and equates
-	// the opened values against the transcript-observed stream. Captured
-	// unconditionally; only USED when txMeta != nil.
+	// cumulative-sum / public-value witnesses it consumed; Define (bindBlockZeta)
+	// re-derives the selectors from the transcript-squeezed zeta by REPLAYING the
+	// Lean-emitted selector template (replaySelectorsWitness — the SAME rational form
+	// the deployed VerifyShrinkStarkAlgebra runs, now authored in Lean) and asserts
+	// equality, and equates the opened values against the transcript-observed stream.
+	// Captured unconditionally; only USED when txMeta != nil.
 	block3Selectors []block3SelectorSlot
 	block3Opened    []block3OpenedSlot
+
+	// --- THE ζ-SELECTOR REPLAY (Lean-emitted, not hand-Go). ---
+	//
+	// bindBlockZeta re-derives the Lagrange selectors at the transcript-squeezed ζ
+	// NOT by calling the hand-Go computeStarkSelectorsNative, but by REPLAYING the
+	// Lean-emitted selector template (SelectorEmit.lean, emitted/selectors_db{N}.json)
+	// through ReplayTemplateWithWitness: ζ (4 limbs) is the input boundary, the free
+	// internal witnesses (the honest selector-derivation intermediate bits — the
+	// 31-bit canonicity decompositions, the two ExtInv hinted inverses, the minted
+	// ζ-squaring products) are supplied from the assignment in SelectorWitness, and
+	// the replay SOLVES {isFirstRow,isLastRow,isTransition} as its output boundary.
+	// So no constraint in the ζ-selector path is authored in Go — Go allocates the
+	// emitted template's witnesses and replays its asserts.
+	//
+	// selectorReplay is the per-db layout (template + free-witness indices + offset
+	// into SelectorWitness), keyed by trace degree_bits; nil (replay OFF) unless the
+	// transcript stage is attached (AllocVerifierFullCircuitWithTranscript builds it).
+	// SelectorWitness is the flat prover-supplied secret witness bank, one block per
+	// distinct db in the plan's layout order; empty on the plain skeleton.
+	selectorReplay  *selectorReplayPlan
+	SelectorWitness []frontend.Variable
 
 	// --- THE STATEMENT BIND + VK PINS (settlement_circuit.go:241-285). ---
 	//
@@ -794,20 +816,27 @@ func (c *VerifierFullCircuit) bindBlockChallengesToTranscript(bb *BBApi, betas [
 // both against the transcript stage's own bound streams:
 //
 //   - THE SELECTOR DERIVATION (m.zetaSampleOff). zeta is the prefix squeeze the
-//     stage already squeeze-asserts onto TxPrefixSamp. This recomputes the Lagrange
-//     selectors IN-CIRCUIT at that zeta with computeStarkSelectorsNative — the SAME
-//     routine the deployed VerifyShrinkStarkAlgebra runs (stark_verify_native.go:379,
-//     domain.rs:262-271): E = zeta^(2^db), Z_H = E - 1, isTransition = zeta - g^{-1},
-//     isFirstRow = Z_H·(zeta-1)^{-1}, isLastRow = Z_H·isTransition^{-1} — and asserts
-//     the block's three supplied selector witnesses equal it, per instance, at that
-//     instance's degree_bits. A selector set at ANY other point is now UNSAT: the
-//     favorable-zeta forgery (pick a zeta the transcript never sampled, supply the
-//     matching selectors and the matching `out`) has no satisfying assignment.
-//     Derivations are memoized per degree_bits (the fixture's 6 instances carry 4
-//     distinct trace degrees), so the zeta-squaring chains are shared, not repeated.
-//     Note the ExtInv teeth: gnark's ExtInv constrains inv·x == 1, so zeta == 1 or
-//     zeta == g^{-1} (the degenerate points where the multiplicative form would leave
-//     a selector free) are themselves UNSAT rather than silently unconstrained.
+//     stage already squeeze-asserts onto TxPrefixSamp. This re-derives the Lagrange
+//     selectors IN-CIRCUIT at that zeta by REPLAYING the Lean-emitted selector
+//     template (SelectorEmit.lean, emitted/selectors_db{N}.json) through
+//     ReplayTemplateWithWitness (replaySelectorsWitness): ζ is the emitted template's
+//     4-limb input boundary, the honest selector-derivation intermediate bits (the
+//     31-bit canonicity decompositions, the two ExtInv hinted inverses, the minted
+//     ζ-squaring products) ride in SelectorWitness, and the replay SOLVES the emitted
+//     output boundary {isFirstRow,isLastRow,isTransition}. The emitted template
+//     computes the SAME rational form the deployed VerifyShrinkStarkAlgebra runs
+//     (domain.rs:262-271): E = zeta^(2^db), Z_H = E - 1, isTransition = zeta - g^{-1},
+//     isFirstRow = Z_H·(zeta-1)^{-1}, isLastRow = Z_H·isTransition^{-1} — and this
+//     asserts the block's three supplied selector witnesses equal the replayed
+//     outputs, per instance, at that instance's degree_bits. A selector set at ANY
+//     other point is UNSAT: the favorable-zeta forgery (pick a zeta the transcript
+//     never sampled, supply the matching selectors and the matching `out`) has no
+//     satisfying assignment. Replays are memoized per degree_bits (the fixture's 6
+//     instances carry 4 distinct trace degrees), so each emitted template is replayed
+//     once, shared across instances. Note the emitted ExtInv pins: the template
+//     constrains inv·x == 1, so zeta == 1 or zeta == g^{-1} (the degenerate points
+//     where the multiplicative form would leave a selector free) are themselves UNSAT
+//     rather than silently unconstrained.
 //
 //   - THE OPENINGS BIND (m.openedObsOff / cumObsOff / pubObsOff). The values block 3
 //     evaluates the DAG on were free witness. The transcript ABSORBS them: the
@@ -823,29 +852,31 @@ func (c *VerifierFullCircuit) bindBlockChallengesToTranscript(bb *BBApi, betas [
 //     the transcript committed to — the ones zeta and every downstream challenge were
 //     drawn over — not a favorable re-authored set.
 //
-// THE SUBSTRATE, SAID OUT LOUD: these constraints are GO-SIDE, hand-written. They
-// are not emitted from Lean. computeStarkSelectorsNative (stark_verify_native.go:379)
-// is a hand-Go gadget and this function calls it — so the zeta bind carries the same
-// posture as the rest of the hand-Go verifier lane, NOT the machine-checked
-// refinement the Lean-emitted leaves (Poseidon2Emit, InputOpenBatchEmit,
-// ChallengerReplayEmit) carry. That is debt, and it is the SMALL half of a seam Lean
-// already names: BatchTablesSingleAir.lean §80-92 already specs and BatchTableEmit
-// already EMITS the vanishing recompute Z_H(ζ)+1 = ζ^{2^db} and the genuine-inverse
-// pin Z_H·invZ_H = 1 at the Fr layer; what it does NOT author is (a) the ζ-rational
-// recompute of the two Lagrange selectors isFirstRow = Z_H/(ζ-1), isLastRow =
-// Z_H/(ζ-g^{-1}), and (b) the transcript bind of ζ itself — literally the follow-up
-// BatchTablesSingleAir.lean §272 item 3 names ("Bind alpha and zeta to the
-// transcript") and BatchTableEmit's header §residual names ("ζ, α and the Lagrange
-// selectors ride as witness inputs of this leaf; binding them to the challenger
-// replay (and the selectors to their ζ-rational recompute) is the transcript-bind
-// composition seam"). The Lean route is TRACTABLE and small: the BabyBearFr gadget
-// lane already has proven gExtMul/gExtSub/gExtMulBase (FriFoldEmit.lean
-// gExtMul_spec: out.vals = extMulV a.vals b.vals), so a SelectorEmit leaf is the
-// ζ-squaring chain those already build plus two inverse pins, with a refinement
-// theorem `gHolds (selectorsData db) asg ↔ sel = selectorsAtPoint ζ db`, JSON-pinned
-// and replayed here through ReplayClosed against these same witness slots. Until
-// that lands, the constraints below are Go-side and prove nothing about all inputs
-// beyond what the canaries in emitted_challenger_full_test.go exercise.
+// THE SUBSTRATE, SAID OUT LOUD — the two teeth now sit at DIFFERENT resolutions:
+//
+//   - The SELECTOR tooth is LEAN-EMITTED. Its constraints are no longer authored in
+//     Go: replaySelectorsWitness allocates the emitted template's witnesses and
+//     replays its asserts (ReplayTemplateWithWitness), the same generic replayer the
+//     Poseidon2 / input-open / challenger leaves use. The template is SelectorEmit.lean
+//     (`emitSelectors db`), byte-pinned there (§8 #guard length + FNV-1a), and it
+//     carries a machine-checked refinement over the ACTUAL emitted object:
+//     `selectorTemplate_refines` (both polarities, #assert_axioms-clean) proves
+//     gHolds(selectorsData db …) ↔ the selector triple is the true Lagrange derivation
+//     at ζ, and `selectorTemplate_refines_emitted` lifts it to the serialized wire
+//     form. So the wrong-zeta selector forgery is now closed by a Lean-authored AIR,
+//     not a hand-Go gadget. computeStarkSelectorsNative (stark_verify_native.go:379)
+//     is NO LONGER on this emit path — it survives only as the differential ORACLE +
+//     KAT reference (its *_ref twin computeStarkSelectorsRef pins the replay outputs
+//     bit-exact in emitted_gadget_replay_witness_test.go).
+//
+//   - The OPENINGS tooth (below) is still GO-SIDE, hand-written — not emitted from
+//     Lean. It equates the opened-value / cumulative-sum / public-value witnesses with
+//     the transcript-observed stream through hand-Go ExtAssertIsEqual /
+//     ExtFromBasisCoefficients. That is the remaining debt of this function; it carries
+//     the hand-Go verifier lane's posture, NOT the machine-checked refinement, and
+//     proves nothing about all inputs beyond what the canaries in
+//     emitted_challenger_full_test.go exercise. Lifting it is the transcript-bind
+//     composition seam BatchTablesSingleAir.lean §272 item 3 names.
 //
 // NAMED RESIDUAL, at current resolution: this binds the openings to the TRANSCRIPT,
 // not to the claim that they ARE the committed polynomials' evaluations at zeta.
@@ -868,11 +899,24 @@ func (c *VerifierFullCircuit) bindBlockZeta(bb *BBApi) error {
 	}
 
 	// --- tooth 1: the selectors ARE the derivation at the transcript zeta. ---
+	// The derivation is the WITNESS-AWARE REPLAY of the Lean-emitted selector template
+	// (selectorReplay / replaySelectorsWitness), NOT the hand-Go computeStarkSelectorsNative:
+	// ζ is the emitted template's input boundary, the honest selector-derivation
+	// intermediate bits ride in SelectorWitness, and the replay SOLVES the three
+	// selectors as its output boundary. Memoized per db (one replay per distinct trace
+	// degree, shared across instances) exactly as the native derivation was.
+	if c.selectorReplay == nil {
+		return fmt.Errorf("zeta bind: the ζ-selector replay plan is not attached " +
+			"(AllocVerifierFullCircuitWithTranscript builds it; the bind cannot re-derive the selectors)")
+	}
 	derived := make(map[int]starkSelectorsNative, len(c.block3Selectors))
 	for _, s := range c.block3Selectors {
 		d, ok := derived[s.db]
 		if !ok {
-			d = computeStarkSelectorsNative(bb, zeta, s.db)
+			var err error
+			if d, err = c.replaySelectorsWitness(bb, zeta, s.db); err != nil {
+				return err
+			}
 			derived[s.db] = d
 		}
 		bb.ExtAssertIsEqual(s.sel.isFirstRow, d.isFirstRow)
@@ -990,6 +1034,16 @@ func AllocVerifierFullCircuitWithTranscript(vf *VerifierFull, sym *SymbolicConst
 	if err != nil {
 		return nil, err
 	}
+	// The ζ-selector replay plan: the Lean-emitted selector templates + the flat
+	// free-witness bank the zeta bind replays instead of calling the hand-Go
+	// computeStarkSelectorsNative. Only present with the transcript stage attached
+	// (the zeta bind is off otherwise).
+	plan, err := loadSelectorReplayPlan(vf)
+	if err != nil {
+		return nil, err
+	}
+	c.selectorReplay = plan
+	c.SelectorWitness = make([]frontend.Variable, plan.total)
 	c.txMeta = meta
 	c.TxPrefixObs = make([]frontend.Variable, nPrefixObs)
 	c.TxPrefixDig = make([]frontend.Variable, nPrefixDig)
@@ -1225,6 +1279,107 @@ type block3SelectorSlot struct {
 	sel starkSelectorsNative
 }
 
+// selectorReplayEntry is one distinct trace degree_bits' slice of the ζ-selector
+// replay: the parsed Lean-emitted template (emitted/selectors_db{db}.json), the free
+// internal witness variable indices ClassifyVars(4).Witness names (the honest
+// selector-derivation intermediate bits the prover supplies), and the offset of this
+// db's witness block in the flat SelectorWitness bank.
+type selectorReplayEntry struct {
+	tpl        *Template
+	witnessIdx []int
+	offset     int
+}
+
+// selectorReplayPlan is the per-db ζ-selector replay layout (see the field doc on
+// VerifierFullCircuit.selectorReplay). entries is keyed by db; total is the sum of
+// every db's free-witness count — the length of SelectorWitness.
+type selectorReplayPlan struct {
+	entries map[int]*selectorReplayEntry
+	total   int
+}
+
+// selectorTemplatePath is the committed Lean-emitted selector template for degree
+// bits db (SelectorEmit.lean §8, byte-pinned there).
+func selectorTemplatePath(db int) string {
+	return fmt.Sprintf("emitted/selectors_db%d.json", db)
+}
+
+// loadSelectorReplayPlan reads the Lean-emitted selector templates for every distinct
+// trace degree_bits the descriptor's BatchTableInstance carries, classifies each into
+// its ζ inputs / free witnesses / solved outputs (ClassifyVars with the 4-limb ζ input
+// boundary), and lays out the flat SelectorWitness bank. It fail-closes if a template
+// is missing, does not classify to exactly 4 ζ input variables, or a db repeats — the
+// same posture as loadInputBatchTemplates for the batch-opening leaves.
+func loadSelectorReplayPlan(vf *VerifierFull) (*selectorReplayPlan, error) {
+	seen := map[int]bool{}
+	var dbs []int
+	for i := range vf.Gadgets {
+		g := &vf.Gadgets[i]
+		if g.Gadget != "BatchTableInstance" {
+			continue
+		}
+		for _, db := range g.Params["degree_bits"] {
+			if !seen[db] {
+				seen[db] = true
+				dbs = append(dbs, db)
+			}
+		}
+	}
+	sort.Ints(dbs)
+	plan := &selectorReplayPlan{entries: make(map[int]*selectorReplayEntry, len(dbs))}
+	for _, db := range dbs {
+		path := selectorTemplatePath(db)
+		tpl, err := LoadTemplate(path)
+		if err != nil {
+			return nil, fmt.Errorf("load selector template %s: %w", path, err)
+		}
+		cls, err := tpl.ClassifyVars(4)
+		if err != nil {
+			return nil, fmt.Errorf("selector template db%d: classify: %w", db, err)
+		}
+		if len(cls.Inputs) != 4 {
+			return nil, fmt.Errorf("selector template db%d: %d ζ input variables, want 4 "+
+				"(the emitted boundary is [zeta] over 4 limbs)", db, len(cls.Inputs))
+		}
+		plan.entries[db] = &selectorReplayEntry{tpl: tpl, witnessIdx: cls.Witness, offset: plan.total}
+		plan.total += len(cls.Witness)
+	}
+	return plan, nil
+}
+
+// replaySelectorsWitness replays the Lean-emitted selector template for trace degree
+// bits db at the transcript-squeezed ζ, feeding the honest free-witness bits this db's
+// SelectorWitness block carries, and packs the three solved output extension elements
+// into a starkSelectorsNative. It is the Lean-authored replacement for the hand-Go
+// computeStarkSelectorsNative on the EMIT path (that routine survives as the
+// differential oracle + KAT reference, stark_verify_native.go / the *_ref twin).
+func (c *VerifierFullCircuit) replaySelectorsWitness(bb *BBApi, zeta BBExt, db int) (starkSelectorsNative, error) {
+	e, ok := c.selectorReplay.entries[db]
+	if !ok {
+		return starkSelectorsNative{}, fmt.Errorf("zeta bind: no emitted selector template loaded for "+
+			"degree_bits %d (the replay plan does not cover this instance's trace degree)", db)
+	}
+	wmap := make(map[int]frontend.Variable, len(e.witnessIdx))
+	for k, idx := range e.witnessIdx {
+		wmap[idx] = c.SelectorWitness[e.offset+k]
+	}
+	outs, err := ReplayTemplateWithWitness(bb.API(), *e.tpl, zeta[:], wmap)
+	if err != nil {
+		return starkSelectorsNative{}, fmt.Errorf("zeta bind: selector template db%d replay: %w", db, err)
+	}
+	if len(outs) != 12 {
+		return starkSelectorsNative{}, fmt.Errorf("zeta bind: selector template db%d solved %d outputs, "+
+			"want 12 (3 extension selectors)", db, len(outs))
+	}
+	// outs = [isFirstRow_0..3, isLastRow_0..3, isTransition_0..3] — the emitted output
+	// boundary order (SelectorEmit.lean selectorsData).
+	return starkSelectorsNative{
+		isFirstRow:   BBExt{outs[0], outs[1], outs[2], outs[3]},
+		isLastRow:    BBExt{outs[4], outs[5], outs[6], outs[7]},
+		isTransition: BBExt{outs[8], outs[9], outs[10], outs[11]},
+	}, nil
+}
+
 // block3OpenedSlot is one instance's openings-at-zeta witness feed, in the order
 // starkInstance consumed it. `inst` indexes the shape list so the binder can slice
 // the flat transcript-observed opened stream with buildStarkOpenedSpans.
@@ -1297,8 +1452,9 @@ func (c *VerifierFullCircuit) starkInstance(bb *BBApi, cur *varCursor, inst *Sym
 	c.block3Alpha = append(c.block3Alpha, alpha)
 	// THE ZETA BIND capture: the three Lagrange selectors (+ this instance's
 	// degree_bits) and every value the instance opened AT zeta, so Define can force
-	// the selectors to BE computeStarkSelectorsNative(transcript zeta, db) and the
-	// openings to BE the transcript-observed opened stream.
+	// the selectors to BE the Lean-emitted selector template's replayed outputs at the
+	// transcript zeta (replaySelectorsWitness, db) and the openings to BE the
+	// transcript-observed opened stream.
 	c.block3Selectors = append(c.block3Selectors, block3SelectorSlot{db: db, sel: in.Sel})
 	c.block3Opened = append(c.block3Opened, block3OpenedSlot{
 		inst:       idx,
