@@ -14,8 +14,8 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::extract::DefaultBodyLimit;
 use axum::http::Request;
 use axum::http::{HeaderValue, Method, header};
-use axum::response::Response;
 use axum::response::sse::{Event, Sse};
+use axum::response::{IntoResponse, Response};
 use axum::{
     Json, Router,
     extract::ConnectInfo,
@@ -1427,6 +1427,29 @@ impl RateLimiter {
     async fn check_request(&self, socket_ip: IpAddr, headers: &axum::http::HeaderMap) -> bool {
         let key = self.client_ip(socket_ip, headers);
         self.check(key).await
+    }
+
+    /// Refund one attempt for this client. The unlock endpoint calls this on a
+    /// CORRECT passphrase: a successful verification is proof-of-operator, not
+    /// a brute-force guess, so it must not consume the guessing budget — only
+    /// failures accumulate. The up-front `check` still caps how much Argon2
+    /// work an unauthenticated caller can trigger per window.
+    async fn refund_request(&self, socket_ip: IpAddr, headers: &axum::http::HeaderMap) {
+        let key = self.client_ip(socket_ip, headers);
+        let mut map = self.state.lock().await;
+        if let Some(entry) = map.get_mut(&key) {
+            entry.0 = entry.0.saturating_sub(1);
+        }
+    }
+
+    /// Seconds until this client's current window expires (for `Retry-After`).
+    async fn retry_after_secs(&self, socket_ip: IpAddr, headers: &axum::http::HeaderMap) -> u64 {
+        let key = self.client_ip(socket_ip, headers);
+        let map = self.state.lock().await;
+        map.get(&key).map_or(self.window_secs, |(_, start)| {
+            self.window_secs
+                .saturating_sub(start.elapsed().as_secs())
+        })
     }
 }
 
@@ -4548,10 +4571,27 @@ async fn post_cclerk_unlock(
     State(state): State<NodeState>,
     Json(req): Json<UnlockRequest>,
     limiter: RateLimiter,
-) -> Result<Json<UnlockResponse>, StatusCode> {
+) -> Result<Response, StatusCode> {
     // Rate limit check (F-1: per-real-client, XFF-aware behind trusted proxy).
+    // A limited request still answers in the endpoint's JSON contract, plus
+    // `Retry-After`: a bare-status 429 has an EMPTY body, which JSON clients
+    // surface as an inscrutable "EOF while parsing a value at line 1 column 0"
+    // (found live: meld re-unlocks on every invocation and its 6th send inside
+    // a minute hit exactly this).
     if !limiter.check_request(addr.ip(), &headers).await {
-        return Err(StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = limiter.retry_after_secs(addr.ip(), &headers).await;
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after.to_string())],
+            Json(UnlockResponse {
+                success: false,
+                bearer_token: None,
+                error: Some(format!(
+                    "rate limited: too many unlock attempts; retry after {retry_after}s"
+                )),
+            }),
+        )
+            .into_response());
     }
 
     // F-CRIT-1: during pre-passphrase setup, only loopback callers may set the
@@ -4570,7 +4610,8 @@ async fn post_cclerk_unlock(
             success: false,
             bearer_token: None,
             error: Some("passphrase must not be empty".to_string()),
-        }));
+        })
+        .into_response());
     }
 
     let mut s = state.write().await;
@@ -4588,15 +4629,22 @@ async fn post_cclerk_unlock(
                     success: false,
                     bearer_token: None,
                     error: Some("invalid passphrase".to_string()),
-                }));
+                })
+                .into_response());
             }
             s.unlocked = true;
             let bearer_token = s.bearer_seed.map(api_bearer_token);
+            // Correct passphrase = the operator, not a guess: give the attempt
+            // back so legitimate unlock bursts (e.g. a client that re-unlocks
+            // per invocation) can never lock the operator out. Failed guesses
+            // still accumulate, so brute-force protection is unchanged.
+            limiter.refund_request(addr.ip(), &headers).await;
             Ok(Json(UnlockResponse {
                 success: true,
                 bearer_token,
                 error: None,
-            }))
+            })
+            .into_response())
         }
         None => {
             // First unlock sets the passphrase using Argon2id.
@@ -4606,11 +4654,14 @@ async fn post_cclerk_unlock(
             let _ = s.store.set_config("passphrase_hash", phc_string.as_bytes());
             let _ = s.store.set_config("bearer_seed", &bearer_seed);
             s.unlocked = true;
+            // First-set is loopback-gated (F-CRIT-1 above): also the operator.
+            limiter.refund_request(addr.ip(), &headers).await;
             Ok(Json(UnlockResponse {
                 success: true,
                 bearer_token: Some(api_bearer_token(bearer_seed)),
                 error: None,
-            }))
+            })
+            .into_response())
         }
     }
 }
@@ -10750,6 +10801,135 @@ mod tests {
             "F-1 regressed: a second proxied client was throttled by another's quota (shared global bucket)"
         );
         eprintln!("[API ATTACK / F-1] real limiter isolates proxied clients: DEFENDED");
+    }
+
+    // ---- unlock 429 contract (the meld dogfood bug) ----------------------
+
+    /// Helper: a loopback `POST /api/cipherclerk/unlock` request.
+    fn unlock_request(addr: std::net::SocketAddr, passphrase: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/cipherclerk/unlock")
+            .header("content-type", "application/json")
+            .extension(ConnectInfo(addr))
+            .body(Body::from(
+                serde_json::json!({ "passphrase": passphrase }).to_string(),
+            ))
+            .expect("unlock request")
+    }
+
+    /// THE MELD DOGFOOD BUG, half 1 (operator lockout): clients that re-unlock
+    /// on every invocation (meld does) burn the 5/60s passphrase budget with
+    /// CORRECT passphrases, and the 6th call inside a minute got a 429.
+    /// DEFENDED: a successful verification refunds its attempt — only failed
+    /// guesses accumulate — so a legitimate unlock burst can never lock the
+    /// operator out, while brute-force protection is unchanged.
+    #[tokio::test]
+    async fn unlock_correct_passphrase_burst_never_locks_out_operator() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+        let addr: std::net::SocketAddr = "127.0.0.1:4321".parse().unwrap();
+
+        // 12 rapid unlocks with the correct passphrase (the first one sets it):
+        // more than double the 5/60s budget. Every one must succeed — pre-fix,
+        // attempt 6 came back as an empty-body 429.
+        for attempt in 1..=12u32 {
+            let response = app
+                .clone()
+                .oneshot(unlock_request(addr, "cavepass"))
+                .await
+                .expect("response");
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "unlock attempt {attempt} with the CORRECT passphrase must not be rate-limited"
+            );
+            let bytes = response
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes();
+            let json: serde_json::Value = serde_json::from_slice(&bytes).expect("unlock json");
+            assert_eq!(json["success"], true, "attempt {attempt}: {json}");
+        }
+    }
+
+    /// THE MELD DOGFOOD BUG, half 2 (empty-body 429): when the limiter DOES
+    /// fire, the pre-fix handler returned a bare `StatusCode` — status 429,
+    /// EMPTY body — which JSON clients surface as "EOF while parsing a value
+    /// at line 1 column 0". DEFENDED: the refusal stays in the endpoint's JSON
+    /// contract (`success:false` + `error`) and carries `Retry-After`; and
+    /// wrong-passphrase guesses still consume the budget (brute-force
+    /// protection intact).
+    #[tokio::test]
+    async fn unlock_rate_limited_response_is_json_with_retry_after() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+        let addr: std::net::SocketAddr = "127.0.0.1:4322".parse().unwrap();
+
+        // Set the passphrase (first unlock, loopback; refunded), then burn the
+        // whole guessing budget with WRONG passphrases — failures still count.
+        let response = app
+            .clone()
+            .oneshot(unlock_request(addr, "cavepass"))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        for guess in 1..=5u32 {
+            let response = app
+                .clone()
+                .oneshot(unlock_request(addr, "wrong-guess"))
+                .await
+                .expect("response");
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "failed guess {guess} answers in-band until the budget is spent"
+            );
+        }
+
+        // Budget exhausted: even the correct passphrase is refused now — but
+        // the refusal must be IN-CONTRACT: JSON body + Retry-After, never the
+        // empty body that produced the client-side EOF parse error.
+        let response = app
+            .clone()
+            .oneshot(unlock_request(addr, "cavepass"))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .expect("429 must carry a numeric Retry-After");
+        assert!(retry_after <= 60, "Retry-After within the window: {retry_after}");
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        assert!(
+            !bytes.is_empty(),
+            "429 body must not be empty (the EOF-at-line-1-column-0 bug)"
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("429 body must be JSON in the unlock contract");
+        assert_eq!(json["success"], false, "{json}");
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("rate limited"),
+            "{json}"
+        );
+        eprintln!("[API ATTACK / unlock-429] limited unlock answers in-contract: DEFENDED");
     }
 
     // ---- F-8: /status private-activity metadata leak ---------------------
