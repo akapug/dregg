@@ -21,8 +21,9 @@
 //!    `Action` targets), the `args_schema` it expects, the `auth_required` to
 //!    invoke it, and its `semantics`.
 //! 3. [`InterfaceDescriptor`] — a named set of methods, **content-addressed** by
-//!    its `interface_id` (the sorted-Poseidon2 root over the method leaves, the
-//!    SAME machinery the cap-root uses).
+//!    its `interface_id` (the sorted-Poseidon2 **8-felt** root over the method
+//!    leaf digests — full-width leaves, chain accumulator, and tail, the same
+//!    wide `hash_many_8` machinery the faithful state-commitment planes use).
 //! 4. [`InterfaceRef`] — the on-cell reference the [`crate::Cell`] carries and the
 //!    commitment binds: the `interface_id` plus the method count (so a verifier
 //!    sees WHICH interfaces a cell exposes and HOW MANY methods each declares).
@@ -155,37 +156,58 @@ impl MethodSig {
         }
     }
 
-    /// The 7-felt-equivalent canonical leaf of this method as a single Poseidon2
-    /// felt — the SAME sorted-Poseidon2 machinery the cap-root uses. The leaf
-    /// absorbs `[symbol_limbs(8), args_tag, args_n, auth_tag, semantics_tag]` so
-    /// any change to ANY field (symbol, arity, auth, replay-vs-service) moves the
-    /// leaf — and therefore the interface_id, and therefore the cell commitment.
-    pub fn leaf_felt(&self) -> dregg_circuit::field::BabyBear {
+    /// The canonical leaf of this method as a FULL **8-felt** (~248-bit,
+    /// ~124-bit-collision) Poseidon2 digest, via
+    /// [`dregg_circuit::poseidon2::hash_many_8`] — the same wide primitive the
+    /// faithful state commitment planes use. The leaf absorbs the fixed 20-felt
+    /// layout `[symbol_limbs(8), args_tag, args_n, auth_tier, auth_vk_limbs(8),
+    /// semantics_tag]`, so any change to ANY field (symbol, arity, auth tier, a
+    /// `Custom` auth's vk_hash, replay-vs-service) moves the leaf — and
+    /// therefore the interface_id, and therefore the cell commitment.
+    ///
+    /// Two width facts, both load-bearing:
+    /// - the OUTPUT is the full 8-felt digest. The pre-widening leaf was ONE
+    ///   ~31-bit felt, birthday-collidable at ~2^15.5 by grinding method names;
+    /// - a `Custom` auth's vk_hash is absorbed as its 8 limbs DIRECTLY, not
+    ///   pre-folded through a 1-felt tag (the pre-widening encoding), so no
+    ///   ~31-bit interior carrier survives inside the leaf either.
+    ///
+    /// Non-`Custom` auth absorbs zero vk limbs; that cannot alias a `Custom`
+    /// whose vk_hash encodes to zero limbs, because the `auth_tier` lane
+    /// differs (`Custom` = 5).
+    pub fn leaf_digest8(&self) -> [dregg_circuit::field::BabyBear; 8] {
         use dregg_circuit::field::BabyBear;
-        use dregg_circuit::poseidon2::hash_many;
+        use dregg_circuit::poseidon2::hash_many_8;
 
-        let mut inputs: Vec<BabyBear> = Vec::with_capacity(12);
+        let mut inputs: Vec<BabyBear> = Vec::with_capacity(20);
         // 8 limbs of the method symbol (the dispatch key).
         inputs.extend_from_slice(&BabyBear::encode_hash(&self.symbol));
         // args schema (tag + arity).
         let [args_tag, args_n] = self.args_schema.commitment_bytes();
         inputs.push(BabyBear::new(args_tag as u32));
         inputs.push(BabyBear::new(args_n as u32));
-        // auth tag (the tier byte; Custom additionally folds its vk_hash).
-        inputs.push(auth_tag_felt(&self.auth_required));
+        // auth: the tier lane, then the FULL 8 vk limbs (zeros unless Custom).
+        let (auth_tier, auth_vk_limbs) = auth_leaf_lanes(&self.auth_required);
+        inputs.push(auth_tier);
+        inputs.extend_from_slice(&auth_vk_limbs);
         // replay-vs-service.
         inputs.push(BabyBear::new(self.semantics.tag() as u32));
-        hash_many(&inputs)
+        hash_many_8(&inputs)
     }
 }
 
-/// Encode an [`AuthRequired`] into a single auth-tag felt, mirroring the cell
-/// commitment's `auth_required_to_tag` (the tier byte for built-ins; for
-/// `Custom { vk_hash }` the tier byte folded with the 8 vk_hash limbs, so two
-/// `Custom`s with distinct vk_hashes yield distinct tags).
-fn auth_tag_felt(auth: &AuthRequired) -> dregg_circuit::field::BabyBear {
+/// Encode an [`AuthRequired`] into its leaf lanes: the tier felt, plus the FULL
+/// 8-limb vk_hash for `Custom` (zero limbs otherwise). The pre-widening
+/// encoding folded a `Custom` vk_hash through ONE Poseidon2 felt — a ~31-bit
+/// carrier an adversary could birthday-collide by grinding verification keys;
+/// absorbing the limbs directly removes that carrier.
+fn auth_leaf_lanes(
+    auth: &AuthRequired,
+) -> (
+    dregg_circuit::field::BabyBear,
+    [dregg_circuit::field::BabyBear; 8],
+) {
     use dregg_circuit::field::BabyBear;
-    use dregg_circuit::poseidon2::hash_many;
     let tier = match auth {
         AuthRequired::None => 0u32,
         AuthRequired::Signature => 1,
@@ -194,15 +216,11 @@ fn auth_tag_felt(auth: &AuthRequired) -> dregg_circuit::field::BabyBear {
         AuthRequired::Impossible => 4,
         AuthRequired::Custom { .. } => 5,
     };
-    match auth {
-        AuthRequired::Custom { vk_hash } => {
-            let mut inputs = Vec::with_capacity(9);
-            inputs.push(BabyBear::new(tier));
-            inputs.extend_from_slice(&BabyBear::encode_hash(vk_hash));
-            hash_many(&inputs)
-        }
-        _ => BabyBear::new(tier),
-    }
+    let vk_limbs = match auth {
+        AuthRequired::Custom { vk_hash } => BabyBear::encode_hash(vk_hash),
+        _ => [BabyBear::ZERO; 8],
+    };
+    (BabyBear::new(tier), vk_limbs)
 }
 
 /// **A first-class, typed, content-addressed interface descriptor.**
@@ -213,10 +231,12 @@ fn auth_tag_felt(auth: &AuthRequired) -> dregg_circuit::field::BabyBear {
 /// change to any method changes the id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InterfaceDescriptor {
-    /// The content address: the sorted-Poseidon2 root over the method leaves
-    /// (32-byte felt encoding). Recomputable from `methods` via
-    /// [`InterfaceDescriptor::compute_interface_id`]; carried so a holder of the
-    /// descriptor need not re-fold to identify it.
+    /// The content address: the sorted-Poseidon2 **8-felt** root over the
+    /// method leaf digests, packed via the injective
+    /// `digest8_to_bytes32` (~124-bit collision floor; the pre-widening
+    /// encoding carried ~31 bits in the low 4 bytes). Recomputable from
+    /// `methods` via [`InterfaceDescriptor::compute_interface_id`]; carried so
+    /// a holder of the descriptor need not re-fold to identify it.
     pub interface_id: [u8; 32],
     /// The methods this interface declares.
     pub methods: Vec<MethodSig>,
@@ -232,29 +252,41 @@ impl InterfaceDescriptor {
         }
     }
 
-    /// Compute the content-address of a method set: the 32-byte encoding of the
-    /// sorted-Poseidon2 root over the per-method leaves ([`MethodSig::leaf_felt`]).
-    /// Order-independent (the leaves are SORTED before folding, exactly like the
-    /// cap-root), so the id is canonical regardless of the order methods were
-    /// declared in.
+    /// Compute the content-address of a method set: the 32-byte packing
+    /// ([`crate::commitment::digest8_to_bytes32`], injective on the full
+    /// digest) of the sorted-Poseidon2 **8-felt** root over the per-method leaf
+    /// digests ([`MethodSig::leaf_digest8`]). Order-independent (the leaves are
+    /// SORTED before folding, exactly like the cap-root), so the id is
+    /// canonical regardless of the order methods were declared in.
     ///
-    /// The fold is a domain-separated Poseidon2 chain over the sorted leaves
-    /// (`hash_many([acc, leaf])` per step from a fixed seed), the same Poseidon2
-    /// machinery the cap-root and the v9 authority digest use. Sorting makes it
-    /// canonical; the leaf-count seed binds the arity so `{a}` and `{a, a}` (were
-    /// dedup ever bypassed) cannot collide.
+    /// The fold is a domain-separated Poseidon2 chain whose accumulator is
+    /// **8 felts at EVERY step**: seed `acc8 = hash_many_8([0x1FACE, len])`,
+    /// then `acc8 = hash_many_8(acc8 ‖ leaf8)` (16 felts in) per sorted leaf,
+    /// tail `digest8_to_bytes32(acc8)`. No 1-felt carrier appears anywhere —
+    /// leaves, chain accumulator, and tail are all full-width, per the
+    /// `hash_many_8` law that widening ONLY the final squeeze over a narrow
+    /// chain is a laundered widening. (The pre-widening fold was 1-felt end to
+    /// end: a ~31-bit id, birthday-forgeable at ~2^15.5 by grinding method
+    /// sets — and colliding ids share a service-factory VK downstream.)
+    /// Sorting is by the FULL 8-lane digest (lexicographic over the `as_u32`
+    /// lanes — NOT lane 0 alone, which would re-admit a narrow projection into
+    /// canonicalization); the leaf-count seed binds the arity so `{a}` and
+    /// `{a, a}` (were dedup ever bypassed) cannot collide.
     pub fn compute_interface_id(methods: &[MethodSig]) -> [u8; 32] {
         use dregg_circuit::field::BabyBear;
-        use dregg_circuit::poseidon2::hash_many;
-        let mut leaves: Vec<BabyBear> = methods.iter().map(MethodSig::leaf_felt).collect();
-        leaves.sort_by_key(|f| f.as_u32());
+        use dregg_circuit::poseidon2::hash_many_8;
+        let mut leaves: Vec<[BabyBear; 8]> = methods.iter().map(MethodSig::leaf_digest8).collect();
+        leaves.sort_by(|a, b| a.map(|f| f.as_u32()).cmp(&b.map(|f| f.as_u32())));
         // Seed with a domain tag + the leaf count so the fold is arity-bound and
         // domain-separated from a bare cap/heap root.
-        let mut acc = hash_many(&[BabyBear::new(0x1FACE), BabyBear::new(leaves.len() as u32)]);
+        let mut acc8 = hash_many_8(&[BabyBear::new(0x1FACE), BabyBear::new(leaves.len() as u32)]);
         for leaf in &leaves {
-            acc = hash_many(&[acc, *leaf]);
+            let mut step = [BabyBear::ZERO; 16];
+            step[0..8].copy_from_slice(&acc8);
+            step[8..16].copy_from_slice(leaf);
+            acc8 = hash_many_8(&step);
         }
-        crate::commitment::felt_to_bytes32(acc)
+        crate::commitment::digest8_to_bytes32(acc8)
     }
 
     /// Recompute the `interface_id` from the current `methods` and confirm it
