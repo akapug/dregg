@@ -338,6 +338,22 @@ cycles later it binds the real proof through every block with Lean-authored cons
 every over-claim caught + corrected by the differential, lanes reporting BLOCKED-not-faked. Honesty produced
 a real result. The gnark-lean AIR-in-Lean thread is COMPLETE (modulo the named trust-references).
 
+
+## ⚑ AIR-in-Lean CYCLE 10 — SelectorEmit Lean-authored (d9992968c) but substrate swap BLOCKED (real wall)
+SelectorEmit.lean landed: the STARK Lagrange-selector derivation as Lean-authored R1CS, refinement-proven,
+KAT bit-exact vs computeStarkSelectorsNative. BUT the swap (bindBlockZeta:875 → ReplayTemplate) is BLOCKED —
+the swap lane compiled a throwaway probe and got the exact wall: `ReplayTemplate` is a BOUNDARY-SOLVER (walks
+asserts defining each wire from determined inputs); the selector template's assert 0 is mul(v1,v1)==v1, a
+BOOLEANITY constraint on a NON-DETERMINISTIC witness bit (internal range-check bit, prover-chosen, not
+derivable from ζ). Boundary-solver reads v1 before it's defined → COMPILE FAIL. Poseidon2/Merkle replayed
+fine because straight-line I/O, no free internal witnesses; selectors have them.
+⚑ ζ SOUNDNESS UNAFFECTED: hand-Go binding still bites, canary still CLOSED (verified). Both lanes REFUSED to
+fake (swap: BLOCKED not broken; gate: "canary green ≠ substrate swapped"). CYCLE 11 = teach the generic
+replayer to accept templates with FREE WITNESS VARIABLES (allocate internal wires as secret witnesses +
+constrain them, not boundary-solve them) — a REUSABLE unlock for every gadget with range-checks/hints (most).
+Then the selector swap (+ retro Poseidon2/Merkle if they hand-alloc). The 8055470a6 hand-Go ζ-binding stands
+until the replayer can consume the Lean template.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
