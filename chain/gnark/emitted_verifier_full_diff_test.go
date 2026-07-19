@@ -1,8 +1,8 @@
 // THE DIFFERENTIAL GATE, MADE RUNNABLE.
 //
 // emitted_verifier_full.go's VerifierFullCircuit is the emit-driven structural
-// skeleton (~20% of the verifier: canonicity, FRI fold ext-muls, commit-phase
-// Merkle openings, input-open Merkle openings, batch-STARK DAG instances, the
+// skeleton (canonicity, FRI fold ext-muls, commit-phase Merkle openings, the REAL
+// multi-height MMCS input-open batch openings, batch-STARK DAG instances, the
 // LogUp balance, the query-PoW sample, and the 25-lane segment binding). It now
 // EXPOSES the same 25-lane public settlement statement (Publics) the hand-Go
 // SettlementCircuit does, and this file makes the gate RUNNABLE: assignVerifierFull
@@ -11,12 +11,24 @@
 // path (assignSettlementCircuit in stark_algebra_real_fixture_test.go) as the
 // reference for which proof field feeds which witness.
 //
+// Block 2b (input-open) BINDS the real proof: its openings are replayed through
+// the Lean-emitted batchData templates (one per input-round shape), so the
+// emit-driven circuit clears every input-batch opening on real data. Block 3 now
+// BINDS TOO: the batch-table constraint eval is fed the REAL opened rows/columns
+// at zeta (assignVerifierFull -> starkInstanceWitness) and evaluated through the
+// emitted constraint DAG (stark_constraint_interp.go, READ-ONLY), so the
+// in-circuit folded == quotient(zeta)·Z_H check and the global LogUp balance run
+// on real data — replacing the former all-zero inert feed. The DAG SOURCE
+// (fixtures/shrink_symbolic_constraints.json) is Rust-emitted from the AIRs'
+// symbolic path (emit_shrink_symbolic.rs), NOT Lean — a NAMED residual (the
+// stark-kill convergence); the emit-driven verifier CHECKS it, it does not
+// re-author it.
+//
 // TestEmittedVerifierFullDifferential runs BOTH circuits on the real fixture via
-// test.IsSolved and records the RAW result of each. It does NOT require the
-// emit-driven skeleton to accept — the skeleton is deliberately partial, and the
-// measurement is exactly WHERE it diverges from the hand-Go reference. The
-// hand-Go circuit is asserted to accept (a sanity floor); the emit-driven result
-// is logged, not gated.
+// test.IsSolved and records the RAW result of each; the hand-Go circuit is
+// asserted to accept (a sanity floor). TestEmittedVerifierFullBlock3BindsRealProof
+// is the block-3 gate: the honest proof SOLVES the whole emit-driven circuit and a
+// block-3 tamper is rejected.
 package friverifier
 
 import (
@@ -138,20 +150,31 @@ func appendExtVars(e bbExtRef, w *[]frontend.Variable) {
 //   - block 2 (commit Merkle): the REAL per-query per-round openings (leaf via the
 //     replayed fold chain, real path nodes, real index bits, real commit root) —
 //     the values the reference verifier's verifyFriNativeRefImpl walks;
-//   - block 2 (input-open Merkle): the real input-batch path nodes + input root +
-//     index bits, with a PLACEHOLDER leaf (the input MMCS leaf hash and the true
-//     per-round tree depth are NOT modeled by the fixed-depth-18 skeleton — the
-//     designed seam);
-//   - block 3 (batch-STARK DAG, LogUp): real cumulative sums where shaped;
-//     otherwise zero fillers sized to the DAG's per-instance budget;
+//   - block 2b (input-open batch): the REAL multi-height MMCS batch openings —
+//     the class-concatenated (tallest-first) opened row limbs, the committed
+//     input root, and the per-step path node + index bit, per (query, round) —
+//     bound into the Lean-emitted batchData template (ReplayClosed solves the
+//     per-class MultiField leaf hashes + injection-interleaved path walk and
+//     keeps the recomputed-root == root check). A native openInputBatchRootRef
+//     self-check guarantees these values reproduce the committed root, so a
+//     circuit rejection here is a real divergence, never a wiring bug;
+//   - block 3 (batch-STARK DAG): the REAL opened trace/preprocessed/permutation
+//     rows at zeta, evaluated through the emitted constraint DAG, with `out` =
+//     the host-recomposed quotient(zeta)·Z_H so folded == out is the quotient
+//     identity (starkInstanceWitness); (LogUp) per-instance partial cumulative
+//     sums whose total is the real global balance == 0;
 //   - block 4 (query-PoW sample / pow-bits-zero): the real query index sample;
 //   - block 5 (segment): the real 25 claim lanes, equated against the EXPOSED
 //     public statement (assignSettlementPublics' pinned order).
 //
-// Blocks the skeleton under-models (input-open leaf, the STARK DAG output binding)
-// are filled with real-where-available + zero placeholders so the assignment is
-// COMPLETE and the circuit RUNS end-to-end; the differential test then records
-// where the first constraint diverges.
+// Block 2b BINDS the real proof with Lean-authored constraints (see
+// emitted_input_batch_real_test.go for the isolated accept + tamper-reject
+// teeth). Block 3 now BINDS the real proof too: the batch-table DAG is evaluated
+// on the real opened values at zeta and the quotient identity + LogUp balance are
+// checked in-circuit (replacing the former zero fill). The named residual is that
+// the quotient recomposition + selector derivation are host-side inputs here (the
+// emit-driven skeleton's structural abstraction, seam #2), and the DAG SOURCE is
+// Rust-emitted (the stark-kill convergence), not Lean.
 func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtract, sym *SymbolicConstraints) *VerifierFullCircuit {
 	t.Helper()
 	vf := loadVerifierFullT(t)
@@ -168,6 +191,15 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 	qms := make([]realQueryMerkle, len(fx.Queries))
 	for qi := range fx.Queries {
 		qms[qi] = computeRealQueryMerkle(t, fx, qi)
+	}
+
+	// Block 3 consumes the per-instance opened-value spans (the deployed
+	// stark_verify_native.go slicing — buildStarkOpenedSpans, the exact order
+	// verify_batch builds coms_to_verify) to feed the batch-table constraint DAG
+	// the REAL opened rows/columns at zeta.
+	spans, _ := buildStarkOpenedSpans(ex.shapes)
+	if len(spans) != len(sym.Instances) {
+		t.Fatalf("shape has %d instances, symbolic DAG has %d", len(spans), len(sym.Instances))
 	}
 
 	logMax := fx.Fri.LogGlobalMaxHeight
@@ -211,63 +243,117 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 			}
 
 		case "VerifyMerklePathBn254InputOpen":
-			// block 2 — input-batch openings, fixed depth 18. Real path nodes +
-			// real input-round root + real index bits, PLACEHOLDER leaf (0): the
-			// input MMCS leaf hash and the true per-round depth are the designed,
-			// un-modeled seam of the skeleton.
-			d := firstParam(g, "depth")
-			ir := len(fx.InputRounds)
-			for i := 0; i < g.Count; i++ {
-				qi := i / ir
-				round := i % ir
-				w = append(w, big.NewInt(0)) // placeholder leaf
-				batch := fx.Queries[qi].InputOpenings[round]
-				for l := 0; l < d; l++ {
-					if l < len(batch.Path) {
-						w = append(w, frToBig(parseBn254Hex(t, batch.Path[l])))
-					} else {
-						w = append(w, big.NewInt(0))
-					}
+			// block 2b — the REAL multi-height MMCS batch openings. For each
+			// (query, input-round): the class-concatenated (tallest-first) opened
+			// row limbs (== batchData var 0..R-1), the committed input root (var
+			// R), then per path step the sibling node (var R+1+2s) and the index
+			// bit (var R+1+2s+1). This is the exact witness the Lean-emitted
+			// batchData template binds. The native openInputBatchRootRef
+			// self-check below guarantees these values reproduce the committed
+			// input root, so a circuit rejection is a REAL divergence, never a
+			// wiring bug masquerading as one.
+			rw, maxLh, werr := inputOpenRoundWidths(g)
+			if werr != nil {
+				t.Fatalf("input-open round widths: %v", werr)
+			}
+			nq := firstParam(g, "num_queries")
+			roots := shrinkInputRootsRef(t, fx, ex.loc)
+			shapes := make([]OpenInputRoundShape, len(fx.InputRounds))
+			for ri, rr := range fx.InputRounds {
+				for _, m := range rr.Matrices {
+					shapes[ri].Matrices = append(shapes[ri].Matrices,
+						OpenInputMatrixShape{m.LogHeight, m.Width, m.NumPoints, m.NextPointBits})
 				}
-				domainIndex := uint(fx.Queries[qi].ExpectedIndex)
-				for l := 0; l < d; l++ {
-					if l < logMax {
-						w = append(w, uint32((domainIndex>>uint(l))&1))
-					} else {
-						w = append(w, 0)
+			}
+			if len(rw) != len(shapes) {
+				t.Fatalf("descriptor carries %d input rounds, fixture has %d", len(rw), len(shapes))
+			}
+			for q := 0; q < nq; q++ {
+				for ri := range rw {
+					round := shapes[ri]
+					groups := openInputHeightGroupsOf(round)
+					opRef := shrinkInputOpeningsRef(t, fx, q)[ri]
+					gotRoot, rerr := openInputBatchRootRef(round, opRef,
+						fx.Queries[q].ExpectedIndex, logMax)
+					if rerr != nil {
+						t.Fatalf("query %d round %d: native batch root: %v", q, ri, rerr)
 					}
-				}
-				root := fx.Queries[qi].InputOpenings[round].Path
-				if len(root) > 0 {
-					w = append(w, frToBig(parseBn254Hex(t, root[len(root)-1])))
-				} else {
-					w = append(w, big.NewInt(0))
+					if !gotRoot.Equal(&roots[ri]) {
+						t.Fatalf("query %d round %d: native batch root != committed input root "+
+							"(row-order/fold replication bug, NOT an emit-circuit divergence)", q, ri)
+					}
+					// R row limbs, class-concatenated tallest-first (batchData var 0..R-1).
+					nRows := 0
+					for _, grp := range groups {
+						for _, mi := range grp.mats {
+							for _, v := range fx.Queries[q].InputOpenings[ri].Rows[mi] {
+								w = append(w, big.NewInt(int64(v)))
+								nRows++
+							}
+						}
+					}
+					if nRows != sumInts(rw[ri]) {
+						t.Fatalf("query %d round %d: %d opened row limbs != descriptor width sum %d",
+							q, ri, nRows, sumInts(rw[ri]))
+					}
+					// committed input root (batchData var R).
+					w = append(w, frToBig(roots[ri]))
+					// (sibling, path bit) per step (batchData var R+1+2s / +1).
+					reduced := fx.Queries[q].ExpectedIndex >> uint(logMax-maxLh)
+					path := fx.Queries[q].InputOpenings[ri].Path
+					if len(path) != maxLh {
+						t.Fatalf("query %d round %d: path depth %d != maxLh %d",
+							q, ri, len(path), maxLh)
+					}
+					for s := 0; s < maxLh; s++ {
+						w = append(w, frToBig(parseBn254Hex(t, path[s])))
+						w = append(w, uint32((reduced>>uint(s))&1))
+					}
 				}
 			}
 
 		case "BatchTableInstance":
-			// block 3 — the batch-STARK DAG instances. The DAG-input↔witness map
-			// is intricate; since the emit-circuit already diverges upstream (the
-			// input-open seam), these slots are zero fillers sized to the exact
-			// per-instance budget so the assignment is COMPLETE and RUNS.
-			for i := range c.sym.Instances {
-				n := symInstanceVars(&c.sym.Instances[i])
-				for k := 0; k < n; k++ {
-					w = append(w, big.NewInt(0))
-				}
+			// block 3 — the batch-STARK constraint algebra, REAL. For each of the
+			// 6 instances, the opened trace/preprocessed/permutation rows at the
+			// sampled zeta are evaluated through the emitted constraint DAG
+			// (VerifierFullCircuit.starkInstance -> evalSymbolicFoldedNative,
+			// stark_constraint_interp.go, READ-ONLY), and the `out` slot carries
+			// the host-recomposed quotient(zeta)·Z_H so the in-circuit
+			// folded == out check IS the quotient identity on the real openings.
+			// Which fixture field feeds which DAG input mirrors the deployed
+			// stark_verify_native.go assignment (shrinkSymInputsNative /
+			// VerifyShrinkStarkAlgebra). starkInstanceWitness natively self-checks
+			// that identity per instance (a wiring/extraction bug fails LOUDLY
+			// there, never as a silent emit-circuit divergence).
+			for i := range spans {
+				w = append(w, starkInstanceWitness(t, ex, sym, spans, i)...)
 			}
 
 		case "LogUpBalance":
-			// block 3 — one ext per instance summed to zero: real cumulative sums
-			// where the count lines up, else zero (sum stays zero).
+			// block 3 — the global WitnessChecks balance (mod.rs:623-643),
+			// decomposed per instance: slot i is instance i's PARTIAL cumulative
+			// sum (the sum of its own global lookups' cumulative sums), so the
+			// NumInstances-wide in-circuit sum equals the true global sum == 0.
+			// Real and with teeth (tampering any cumulative sum breaks its
+			// instance's partial and the total). Native self-check: the real
+			// cumulative sums must already balance globally.
+			globalSum := bbExtRef{}
+			for _, cs := range ex.cumSums {
+				globalSum = bbExtAddRef(globalSum, cs)
+			}
+			if globalSum != (bbExtRef{}) {
+				t.Fatalf("block 3 LogUp: real cumulative sums do not balance natively (%v) — "+
+					"extraction bug, NOT an emit-circuit divergence", globalSum)
+			}
 			for i := 0; i < c.vf.Shape.NumInstances; i++ {
-				if i < len(ex.cumSums) {
-					appendExtVars(ex.cumSums[i], &w)
-				} else {
-					for k := 0; k < 4; k++ {
-						w = append(w, big.NewInt(0))
+				partial := bbExtRef{}
+				if i < len(spans) {
+					sp := spans[i]
+					for k := 0; k < sp.cumSums.len; k++ {
+						partial = bbExtAddRef(partial, ex.cumSums[sp.cumSums.off+k])
 					}
 				}
+				appendExtVars(partial, &w)
 			}
 
 		case "SampleBitsDecomposed":
@@ -322,6 +408,132 @@ func assignVerifierFullPublics(c *VerifierFullCircuit, claim []uint32) {
 	}
 }
 
+// starkInstanceWitness produces block 3's REAL per-instance witness feed for one
+// batch-STARK instance, in the EXACT order VerifierFullCircuit.starkInstance
+// consumes it (TraceLocal, TraceNext, PreLocal, PreNext, PermLocal, PermNext,
+// Challenges, PermValues, selectors, PublicValues, alpha, out). It reuses the
+// deployed stark_verify_native.go assignment shape (shrinkSymInputsNative /
+// VerifyShrinkStarkAlgebra) for which fixture field feeds which DAG input:
+//
+//   - trace/preprocessed local rows = the real opened values at zeta
+//     (openedEF sliced by the instance's spans); the NEXT rows are the real
+//     opened next-row values when the AIR opens them, else the verifier's ZERO
+//     substitution (mod.rs:563-581);
+//   - permutation columns = the opened flattened columns recomposed on the ext
+//     basis (bbExtFromBasisRef, mod.rs:543-556);
+//   - challenges = the shared WitnessChecks bus (permAlpha, permBeta) repeated
+//     per lookup (transcript.rs:86-101);
+//   - PermValues = the instance's global cumulative sums;
+//   - selectors = the Lagrange selectors at zeta (computeStarkSelectorsRef);
+//   - PublicValues = the real claim lanes (base-field; only expose_claim);
+//   - alpha = the constraint-folding alpha; out = quotient(zeta)·Z_H, the
+//     host-recomposed identity RHS.
+//
+// It NATIVELY self-checks the quotient identity (host folded == quotient·Z_H)
+// so a wiring/extraction bug fails LOUDLY here, never masquerading as an
+// emit-circuit divergence — mirroring computeRealQueryMerkle's Merkle self-check
+// and expandInputOpenBatch's openInputBatchRootRef self-check.
+//
+// NAMED RESIDUAL (stated honestly): the emit-driven skeleton evaluates the DAG
+// on these opened values and binds folded == out, but it does NOT recompose the
+// quotient from the opened chunks nor derive the selectors from zeta IN-CIRCUIT
+// (the deployed VerifyShrinkStarkAlgebra does — recomposeQuotientNative /
+// computeStarkSelectorsNative); those, and the cross-phase binding of block-3
+// inputs to the transcript/openings, are the structural-abstraction residual
+// (named seam #2, emitted_verifier_full.go). The constraint DAG SOURCE itself
+// (fixtures/shrink_symbolic_constraints.json) is Rust-emitted from the AIRs'
+// symbolic path (emit_shrink_symbolic.rs), NOT Lean-emitted — the stark-kill
+// convergence residual. The emit-driven verifier here CHECKS that DAG on the
+// real proof; it does not re-author it.
+func starkInstanceWitness(t *testing.T, ex *shrinkStarkExtract, sym *SymbolicConstraints,
+	spans []starkInstanceSpans, i int) []frontend.Variable {
+	t.Helper()
+	sh := ex.shapes[i]
+	sp := spans[i]
+	inst := &sym.Instances[i]
+	slice := func(s efSpan) []bbExtRef { return ex.openedEF[s.off : s.off+s.len] }
+
+	sel, err := computeStarkSelectorsRef(ex.ch.zeta, sh.DegreeBits)
+	if err != nil {
+		t.Fatalf("instance %d selectors: %v", i, err)
+	}
+
+	// Native self-check: the quotient identity must hold on the real openings.
+	chunks := make([][4]bbExtRef, len(sp.quotientChunks))
+	for c, qs := range sp.quotientChunks {
+		copy(chunks[c][:], slice(qs))
+	}
+	quotient := recomposeQuotientRef(sel.zetaPow2Db, chunks,
+		shrinkQuotientDomainConsts(sh.DegreeBits, sh.NumQuotientChunks))
+	rhs := bbExtMulRef(quotient, sel.zH)
+	folded, ferr := evalSymbolicFoldedRef(inst,
+		shrinkSymInputsRef(sh, sp, slice, ex.cumSums, ex.pubVals[i], ex.ch, sel), ex.ch.alpha)
+	if ferr != nil {
+		t.Fatalf("instance %d: host symbolic eval: %v", i, ferr)
+	}
+	if folded != rhs {
+		t.Fatalf("instance %d (%s): native quotient identity FAILED "+
+			"(folded %v != quotient·Z_H %v) — extraction/DAG bug, NOT an emit divergence",
+			i, inst.Name, folded, rhs)
+	}
+
+	w := make([]frontend.Variable, 0)
+	appendExts := func(es []bbExtRef) {
+		for _, e := range es {
+			appendExtVars(e, &w)
+		}
+	}
+	appendZeroExts := func(n int) {
+		for k := 0; k < n; k++ {
+			appendExtVars(bbExtRef{}, &w)
+		}
+	}
+	recompose := func(flat []bbExtRef) []bbExtRef {
+		out := make([]bbExtRef, len(flat)/4)
+		for c := range out {
+			out[c] = bbExtFromBasisRef([4]bbExtRef(flat[4*c : 4*c+4]))
+		}
+		return out
+	}
+
+	// TraceLocal / TraceNext / PreLocal / PreNext (zero-substituted when the AIR
+	// opens no next row, matching the verifier's mod.rs:563-581).
+	appendExts(slice(sp.traceLocal))
+	if sh.HasTraceNext {
+		appendExts(slice(sp.traceNext))
+	} else {
+		appendZeroExts(sh.Width)
+	}
+	appendExts(slice(sp.preLocal))
+	if sh.HasPreNext {
+		appendExts(slice(sp.preNext))
+	} else {
+		appendZeroExts(sh.PreWidth)
+	}
+	// PermLocal / PermNext (recomposed ext columns).
+	appendExts(recompose(slice(sp.permLocal)))
+	appendExts(recompose(slice(sp.permNext)))
+	// Challenges: the WitnessChecks bus (alpha, beta) repeated per lookup.
+	for l := 0; l < sh.NumLookups; l++ {
+		appendExtVars(ex.ch.permAlpha, &w)
+		appendExtVars(ex.ch.permBeta, &w)
+	}
+	// PermValues: the instance's global cumulative sums.
+	appendExts(ex.cumSums[sp.cumSums.off : sp.cumSums.off+sp.cumSums.len])
+	// Selectors at zeta.
+	appendExtVars(sel.isFirstRow, &w)
+	appendExtVars(sel.isLastRow, &w)
+	appendExtVars(sel.isTransition, &w)
+	// Public values (base-field claim lanes; only expose_claim has them).
+	for _, v := range ex.pubVals[i] {
+		w = append(w, v)
+	}
+	// alpha, out = quotient(zeta)·Z_H.
+	appendExtVars(ex.ch.alpha, &w)
+	appendExtVars(rhs, &w)
+	return w
+}
+
 // TestEmittedVerifierFullDifferential runs the emit-driven skeleton and the
 // hand-Go SettlementCircuit on the SAME real fixture proof via test.IsSolved and
 // records the raw result of each. The hand-Go circuit must accept (sanity floor);
@@ -363,5 +575,66 @@ func TestEmittedVerifierFullDifferential(t *testing.T) {
 		t.Logf("emit-driven on TAMPERED statement (num_turns+1): ACCEPT (canary NOT caught)")
 	} else {
 		t.Logf("emit-driven on TAMPERED statement (num_turns+1): REJECT — %v", canaryErr)
+	}
+}
+
+// TestEmittedVerifierFullBlock3BindsRealProof is the block-3 gate. Block 3 (the
+// batch-table STARK constraint eval) is now fed the REAL opened rows/columns at
+// zeta through the emitted constraint DAG (replacing the former all-zero inert
+// feed), so:
+//
+//  1. ACCEPT: the honest proof SOLVES the whole emit-driven circuit — the
+//     quotient identity folded == quotient(zeta)·Z_H holds for all 6 instances
+//     and the per-instance partial cumulative sums balance to zero;
+//  2. REJECT: flipping one felt of block 3's first opened trace value (with the
+//     `out` = quotient·Z_H slot left honest) makes the in-circuit folded diverge
+//     from out, so the quotient-identity constraint fires — proving block 3
+//     genuinely binds the DAG evaluation to the opened values, not a tautology.
+//
+// The tamper flips the assembled witness bank directly (past starkInstanceWitness's
+// native self-check), which is the point: the CIRCUIT, not the host, must reject.
+func TestEmittedVerifierFullBlock3BindsRealProof(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	ex := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
+	field := ecc.BN254.ScalarField()
+
+	vf := loadVerifierFullT(t)
+	emitAlloc, err := AllocVerifierFullCircuit(vf, sym)
+	if err != nil {
+		t.Fatalf("alloc emit-driven circuit: %v", err)
+	}
+
+	// ACCEPT: block 3 now clears on the real proof (as does every block).
+	if err := test.IsSolved(emitAlloc, assignVerifierFull(t, fx, ex, sym), field); err != nil {
+		t.Fatalf("emit-driven circuit REJECTED the honest proof after wiring block 3: %v", err)
+	}
+
+	// Locate the start of the block-3 BatchTableInstance feed in the flat bank:
+	// the exact witness budget of every gadget the interpreter consumes BEFORE
+	// BatchTableInstance (WitnessLen over the truncated descriptor).
+	prefix := &VerifierFull{Schema: vf.Schema, Shape: vf.Shape}
+	for _, g := range vf.Gadgets {
+		if g.Gadget == "BatchTableInstance" {
+			break
+		}
+		prefix.Gadgets = append(prefix.Gadgets, g)
+	}
+	block3Start, err := prefix.WitnessLen(sym)
+	if err != nil {
+		t.Fatalf("block-3 offset: %v", err)
+	}
+
+	// CANARY: flip the first felt of block 3's first opened trace value; the
+	// `out` (quotient·Z_H) slot is untouched, so folded must diverge from out.
+	canary := assignVerifierFull(t, fx, ex, sym)
+	orig, ok := canary.W[block3Start].(uint32)
+	if !ok {
+		t.Fatalf("block-3 witness slot %d is not a base-field felt (%T)", block3Start, canary.W[block3Start])
+	}
+	canary.W[block3Start] = bbAddRef(orig, 1)
+	if err := test.IsSolved(emitAlloc, canary, field); err == nil {
+		t.Fatal("emit-driven circuit ACCEPTED a tampered block-3 opened value — the " +
+			"quotient-identity constraint does not bind the DAG evaluation")
 	}
 }

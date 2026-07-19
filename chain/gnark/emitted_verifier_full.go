@@ -135,6 +135,120 @@ var knownVFGadgets = map[[2]string]bool{
 	{"AssertIsEqual", "wire_eq"}:                                   true,
 }
 
+// inputBatchTemplatePaths maps a round's per-class row-width signature to the
+// committed Lean-emitted multi-height MMCS batch-opening template
+// (InputOpenBatchEmit.lean `batchData widths 18 katMask`, §12). The apex-shrink
+// fixture's four input rounds (trace / quotient / preprocessed / permutation)
+// share the height classes {18,17,12,3} and the {0,5,14} injection schedule but
+// differ in per-class row widths; each shape has its own emitted template. Round
+// 1 ([16,8,16,8]) is the originally-committed template; the other three shapes
+// are emitted from the SAME `batchData` (proven by `inputOpenBatch_refines`,
+// parametric over widths) at the deployed round widths.
+var inputBatchTemplatePaths = map[string]string{
+	"16,8,16,8":    "emitted/inputopen_batch_template.json",
+	"80,300,8,132": "emitted/inputopen_batch_r0.json",
+	"61,24,4,66":   "emitted/inputopen_batch_r2.json",
+	"76,28,8,132":  "emitted/inputopen_batch_r3.json",
+}
+
+// widthsSig is the comma-joined per-class width signature used to key the batch
+// templates and the descriptor round shapes.
+func widthsSig(widths []int) string {
+	s := ""
+	for i, w := range widths {
+		if i > 0 {
+			s += ","
+		}
+		s += fmt.Sprintf("%d", w)
+	}
+	return s
+}
+
+// inputOpenRoundWidths reads the per-round per-class row widths from the
+// input-open gadget's descriptor params: `round_widths` is the class widths of
+// every input round flattened in round order, `class_heights` gives the shared
+// (tallest-first) height classes — so its length is the per-round class count and
+// its head is the batch-tree max log-height (maxLh = path depth). Returns
+// [round][class] widths and maxLh.
+func inputOpenRoundWidths(g VFGadget) ([][]int, int, error) {
+	classHeights := g.Params["class_heights"]
+	if len(classHeights) == 0 {
+		return nil, 0, fmt.Errorf("VerifyMerklePathBn254InputOpen: missing class_heights param " +
+			"(descriptor not extended with per-round height-class + row widths)")
+	}
+	nClasses := len(classHeights)
+	maxLh := classHeights[0]
+	flat := g.Params["round_widths"]
+	if len(flat) == 0 || len(flat)%nClasses != 0 {
+		return nil, 0, fmt.Errorf("VerifyMerklePathBn254InputOpen: round_widths length %d "+
+			"is not a positive multiple of the class count %d", len(flat), nClasses)
+	}
+	nr := len(flat) / nClasses
+	rw := make([][]int, nr)
+	for r := 0; r < nr; r++ {
+		rw[r] = flat[r*nClasses : (r+1)*nClasses]
+	}
+	return rw, maxLh, nil
+}
+
+// checkBatchTemplateShape fail-closes if a loaded batch template's own gadget
+// provenance / boundary does not match the round it is being used for: the
+// template's `VerifyOpenInputBatchBn254 [R, maxLh]` record and its single root
+// boundary at var R must agree with the descriptor's round widths sum R and
+// maxLh. This ties the emitted artifact to the shape the interpreter replays it
+// at (an emitter/interpreter drift would be caught here, not silently wired).
+func checkBatchTemplateShape(tpl *Template, R, maxLh int) error {
+	if len(tpl.Gadgets) != 1 || tpl.Gadgets[0].Gadget != "VerifyOpenInputBatchBn254" {
+		return fmt.Errorf("batch template %q: unexpected gadget provenance %v "+
+			"(want a single VerifyOpenInputBatchBn254)", tpl.Name, tpl.Gadgets)
+	}
+	args := tpl.Gadgets[0].Args
+	if len(args) != 2 || args[0] != R || args[1] != maxLh {
+		return fmt.Errorf("batch template %q gadget args %v != expected [R=%d, maxLh=%d]",
+			tpl.Name, args, R, maxLh)
+	}
+	if len(tpl.PublicInputs) != 1 || tpl.PublicInputs[0].Var != R {
+		return fmt.Errorf("batch template %q: root boundary %v != single root at var %d",
+			tpl.Name, tpl.PublicInputs, R)
+	}
+	return nil
+}
+
+// loadInputBatchTemplates loads (once per distinct round-widths shape) the
+// Lean-emitted batch templates block 2b replays, cross-checking each against the
+// descriptor's round shape.
+func loadInputBatchTemplates(vf *VerifierFull) (map[string]*Template, error) {
+	g, ok := vf.gadget("VerifyMerklePathBn254InputOpen")
+	if !ok {
+		return nil, nil
+	}
+	rw, maxLh, err := inputOpenRoundWidths(g)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*Template{}
+	for _, widths := range rw {
+		sig := widthsSig(widths)
+		if _, done := out[sig]; done {
+			continue
+		}
+		path, ok := inputBatchTemplatePaths[sig]
+		if !ok {
+			return nil, fmt.Errorf("no emitted batch template for input-round widths [%s] "+
+				"(emit batchData %v 18 katMask from InputOpenBatchEmit.lean)", sig, widths)
+		}
+		tpl, err := LoadTemplate(path)
+		if err != nil {
+			return nil, fmt.Errorf("load batch template %s: %w", path, err)
+		}
+		if err := checkBatchTemplateShape(tpl, sumInts(widths), maxLh); err != nil {
+			return nil, err
+		}
+		out[sig] = tpl
+	}
+	return out, nil
+}
+
 // LoadVerifierFull reads and fail-closed-validates the compact descriptor.
 func LoadVerifierFull(path string) (*VerifierFull, error) {
 	raw, err := os.ReadFile(path)
@@ -292,8 +406,21 @@ func (vf *VerifierFull) WitnessLen(sym *SymbolicConstraints) (int, error) {
 				}
 			}
 		case "VerifyMerklePathBn254InputOpen":
-			d := firstParam(g, "depth")
-			n += g.Count * (2 + 2*d)
+			// Block 2b: one Lean-emitted multi-height MMCS batch opening per
+			// (query, input-round). Each binds R = sum(round widths) opened row
+			// limbs, the input root, and maxLh (sibling, path-bit) pairs; the
+			// Poseidon leaf hashes + path walk are SOLVED by ReplayClosed (not in
+			// the bank). Rounds have different widths, so sum per round.
+			rw, maxLh, err := inputOpenRoundWidths(g)
+			if err != nil {
+				return 0, err
+			}
+			nq := firstParam(g, "num_queries")
+			for q := 0; q < nq; q++ {
+				for r := range rw {
+					n += sumInts(rw[r]) + 1 + 2*maxLh
+				}
+			}
 		case "BatchTableInstance":
 			if sym == nil {
 				return 0, errBlock3NeedsSym
@@ -349,6 +476,13 @@ type VerifierFullCircuit struct {
 
 	vf  *VerifierFull
 	sym *SymbolicConstraints
+
+	// batchTpls holds the Lean-emitted multi-height MMCS batch-opening templates
+	// (InputOpenBatchEmit.lean `batchData`) keyed by a round's per-class
+	// row-width signature. Block 2b replays these through ReplayClosed to bind
+	// the real input openings to the committed input roots. Loaded by
+	// AllocVerifierFullCircuit from the committed emitted/ artifacts.
+	batchTpls map[string]*Template
 }
 
 // publicLane returns the i-th lane of the pinned 25-lane public statement in the
@@ -374,10 +508,15 @@ func AllocVerifierFullCircuit(vf *VerifierFull, sym *SymbolicConstraints) (*Veri
 	if err != nil {
 		return nil, err
 	}
+	batchTpls, err := loadInputBatchTemplates(vf)
+	if err != nil {
+		return nil, err
+	}
 	return &VerifierFullCircuit{
-		W:   make([]frontend.Variable, n),
-		vf:  vf,
-		sym: sym,
+		W:         make([]frontend.Variable, n),
+		vf:        vf,
+		sym:       sym,
+		batchTpls: batchTpls,
 	}, nil
 }
 
@@ -445,13 +584,17 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 			}
 		}
 
-	// block 2 — input-batch openings: `count` = num_queries*input_rounds paths,
-	// each of depth `depth`. Materializes derived.input_merkle_compressions.
+	// block 2b — input-batch openings, the REAL deployed multi-height MMCS batch
+	// tree (verifyOpenInputBatchNative). For each (query, input-round) this
+	// replays the Lean-emitted `batchData` template (InputOpenBatchEmit.lean) via
+	// ReplayClosed: it binds the class-concatenated opened row limbs, the
+	// committed input root, and the (sibling, path-bit) pairs by the template's
+	// index layout, and the replay SOLVES the per-class MultiField leaf hashes +
+	// the injection-interleaved arity-2 path walk and KEEPS the real
+	// recomputed-root == root check. This is the Lean-authored input-open AIR,
+	// NOT the placeholder-leaf plain path the skeleton previously carried.
 	case "VerifyMerklePathBn254InputOpen":
-		d := firstParam(g, "depth")
-		for i := 0; i < g.Count; i++ {
-			c.merklePath(api, cur, d)
-		}
+		return c.expandInputOpenBatch(api, cur, g)
 
 	// block 3 — batch-STARK constraint algebra: for each of the `count`
 	// instances, evaluate the emitted symbolic DAG at zeta and bind the folded
@@ -471,7 +614,9 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 
 	// block 3 — global LogUp balance: all cumulative sums add to zero
 	// (stark_verify_native.go global WitnessChecks balance). Modeled as the
-	// ext-sum-to-zero over one fresh cumulative sum per instance.
+	// ext-sum-to-zero over one accumulator per instance — the assignment feeds
+	// each instance's PARTIAL cumulative sum, so this NumInstances-wide sum is
+	// the true global balance (assignVerifierFull, block 3).
 	case "LogUpBalance":
 		sum := BBExt{0, 0, 0, 0}
 		for i := 0; i < c.vf.Shape.NumInstances; i++ {
@@ -508,6 +653,45 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 	case "AssertIsEqual":
 		for i := 0; i < g.Count; i++ {
 			api.AssertIsEqual(cur.next(), c.publicLane(i))
+		}
+	}
+	return nil
+}
+
+// expandInputOpenBatch replays the Lean-emitted multi-height MMCS batch-opening
+// template for every (query, input-round). It consumes the flat witness bank in
+// lock-step with WitnessLen and assignVerifierFull: per (query, round), R row
+// limbs (class-concatenated, tallest-first), then the root, then maxLh
+// (sibling, path-bit) pairs. Each opening is bound into its round's template BY
+// INDEX (rows at 0..R-1, root at R, sibling s at R+1+2s, bit s at R+1+2s+1 —
+// InputOpenBatchEmit.lean §9) and ReplayClosed solves the Poseidon internals and
+// keeps the batch-walk recomputed-root == root check.
+func (c *VerifierFullCircuit) expandInputOpenBatch(api frontend.API, cur *varCursor, g VFGadget) error {
+	rw, maxLh, err := inputOpenRoundWidths(g)
+	if err != nil {
+		return err
+	}
+	nq := firstParam(g, "num_queries")
+	for q := 0; q < nq; q++ {
+		for r := range rw {
+			R := sumInts(rw[r])
+			tpl := c.batchTpls[widthsSig(rw[r])]
+			if tpl == nil {
+				return fmt.Errorf("no batch template loaded for input-round widths [%s]", widthsSig(rw[r]))
+			}
+			b := make(map[int]frontend.Variable, R+1+2*maxLh)
+			for i := 0; i < R; i++ {
+				b[i] = cur.next() // opened row limb i (class-concatenated)
+			}
+			b[R] = cur.next() // committed input root
+			for s := 0; s < maxLh; s++ {
+				b[R+1+2*s] = cur.next()   // sibling s
+				b[R+1+2*s+1] = cur.next() // path bit s
+			}
+			if err := ReplayClosed(api, *tpl, b); err != nil {
+				return fmt.Errorf("query %d input-round %d batch open (Lean template %q): %w",
+					q, r, tpl.Name, err)
+			}
 		}
 	}
 	return nil
