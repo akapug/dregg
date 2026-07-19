@@ -14,9 +14,9 @@ constraints, canonical over BabyBear, is shown to force the reference machine's 
 `Satisfied2 hash automataflStepDesc` — the deployed acceptance predicate — exactly as
 `DyckStackRefine.dyck_sat_imp_row_valid` is keyed on the byte-pinned `dyckParseDesc`.
 
-The single automaton-step gate set is enormous (410 constraints: the front-end ray-scan, the
-`decide_axis` truth table ×2, `choose_offset`, the step + board-update, the two `board_root8`
-lookups). The full composition `boardDecode(new) = automatonStep(boardDecode(old))` decomposes into
+The single automaton-step gate set is enormous (405 constraints: the front-end ray-scan, the
+`decide_axis` truth table ×2, `choose_offset`, the step + board-update, the packed board
+commitment). The full composition `boardDecode(new) = automatonStep(boardDecode(old))` decomposes into
 the five design sub-lemmas (`Automatafl.lean` §3):
 
   (1) auto one-hot + dot-product pin   ⇒ the decoded auto position holds the AUTO particle;
@@ -169,11 +169,18 @@ preserved. The Stage-1b BACK-END (`decide_axis`/`choose_offset`/step/board-updat
 family (`bindBoardRootsConstraints`) are frozen at their absolute `n = 2` layout and keep `decide`. -/
 
 theorem constraintsN_eq (n : Nat) :
-    (automataflStepDescN n).constraints = NGen.frontEndConstraints n ++ backEndConstraints := rfl
+    (automataflStepDescN n).constraints
+      = (NGen.frontEndConstraints n ++ backEndConstraints) ++ commitBoardsConstraints n := rfl
 
 theorem mem_constraintsN_of_frontEnd {n : Nat} {x : VmConstraint2}
     (h : x ∈ NGen.frontEndConstraints n) : x ∈ (automataflStepDescN n).constraints := by
-  rw [constraintsN_eq]; exact List.mem_append_left _ h
+  rw [constraintsN_eq]; exact List.mem_append_left _ (List.mem_append_left _ h)
+
+/-- The COMMITMENT family is emitted LAST, so its membership is one `mem_append_right` — and every
+membership above it keeps its position. `n`-generic (no `decide` over a variable-length list). -/
+theorem mem_constraintsN_of_commit {n : Nat} {x : VmConstraint2}
+    (h : x ∈ commitBoardsConstraints n) : x ∈ (automataflStepDescN n).constraints := by
+  rw [constraintsN_eq]; exact List.mem_append_right _ h
 
 /- Front-end segment injectors: `NGen.frontEndConstraints n = S0 ++ … ++ S9` (left-associated),
 climbed by explicit `List.mem_append_left`/`mem_append_right` (no `simp`/`tauto` — those `whnf` the
@@ -5990,7 +5997,23 @@ theorem astep_sat_imp_automatonStep (hsat : Satisfied2 hash automataflStepDesc m
 
 end Leg5Capstone
 
-/-! ## LEG R — transport to the committed board-root public inputs. -/
+/-! ## LEG A — the PACKED board commitment, and where its transport lives.
+
+The `board_root8` / `MerkleHash8` commitment this section used to transport is RETIRED
+(`AutomataflStepEmit` §4b.6 / §4d). It folded ONE zero-padded 8-lane leaf, so it was well-defined
+only for `k = n² ≤ 8` (`n ≤ 2`) — it committed 8 of 121 cells at the deployed `n = 11` — and its
+transport carried a `ChipTableSoundN permOut` hypothesis: a Poseidon2 wide-soundness ASSUMPTION on
+the prover-supplied chip table, sitting underneath every root claim.
+
+The replacement is `AutomataflCommit`'s packed base-4 commitment, emitted by
+`AutomataflStepEmit.commitBoardsConstraints`: `⌈n²/15⌉` degree-1 pack gates per board plus one
+`.piBinding` per packed felt, plus the two automaton-coordinate bindings. Its transport
+(`astep_oldPack_pi_of_sat` / `astep_newPack_pi_of_sat`) is proved in
+`Dregg2.Circuit.Emit.AutomataflCommitRefine`, which imports THIS file — the packed transport needs
+`pack_pi_of_mem`, and the import runs Commit → StepRefine → CommitRefine, so it cannot be stated
+here. It carries NO chip-soundness hypothesis and NO hash at all.
+
+The pieces below are the descriptor-side glue that transport still uses. -/
 
 /-- The canonical particle → felt code (the inverse of `codeToParticle` on `{0,1,2,3}`). -/
 def particleToCode : Particle → ℤ
@@ -6000,27 +6023,8 @@ theorem particleToCode_codeToParticle {z : ℤ}
     (h : z = 0 ∨ z = 1 ∨ z = 2 ∨ z = 3) : particleToCode (codeToParticle z) = z := by
   rcases h with h | h | h | h <;> subst h <;> rfl
 
-/-- The 16-felt `node8` absorb seed of a board: the four cell codes packed into ONE leaf
-(`cells ++ 4 zeros`) folded against the all-zero sibling leaf. -/
-def boardAbsorb (b : Board) : List ℤ :=
-  [particleToCode (b.cellAt ⟨0, 0⟩), particleToCode (b.cellAt ⟨1, 0⟩),
-   particleToCode (b.cellAt ⟨0, 1⟩), particleToCode (b.cellAt ⟨1, 1⟩)] ++ List.replicate 12 0
-
-/-- `board_root8 b` — the 8-felt board root: the wide squeeze of the `node8` absorb seed. -/
-def boardRoot8 (permOut : List ℤ → List ℤ) (b : Board) : List ℤ := permOut (boardAbsorb b)
-
-section LegR
+section LegA
 variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-
-set_option maxRecDepth 40000 in
-/-- The shared `mh8_zero` column IS zero (the `assert_zero` pin of `bind_board_roots`). -/
-theorem mh8zero_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
-    (envAt t i).loc MH8_ZERO = 0 := by
-  have hg := astep_gate hsat i hi (g := headToExpr (Head.lin 1 MH8_ZERO)) (by decide)
-  have : (envAt t i).loc MH8_ZERO ≡ 0 [ZMOD 2013265921] := by
-    simpa [headToExpr, Head.lin, termToExpr, varsProd, EmittedExpr.eval] using hg
-  exact eq_of_modEq_canon (canon_loc hc i _) canon_zero this
 
 /-- A first-row `.piBinding` of the byte-pinned descriptor IS its PI congruence. -/
 theorem astep_piFirst (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
@@ -6031,6 +6035,8 @@ theorem astep_piFirst (hsat : Satisfied2 hash automataflStepDesc minit mfin madd
   have hrc := hsat.rowConstraints 0 h0 _ hg
   simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt] using hrc
 
+end LegA
+
 /-- The decoded OLD board reads cell `(x,y)` off column `old (y·n+x)`. -/
 theorem boardDecode_cellAt (e : VmRowEnv) (x y : Nat) (hx : x < 2) (hy : y < 2) :
     (boardDecode e).cellAt ⟨x, y⟩ = codeToParticle (e.loc (old (y * NN + x))) := by
@@ -6038,209 +6044,6 @@ theorem boardDecode_cellAt (e : VmRowEnv) (x y : Nat) (hx : x < 2) (hy : y < 2) 
   split
   · rfl
   · next hbad => exact absurd (⟨hx, hy⟩ : x < NN ∧ y < NN) hbad
-
-/-- The OLD-board `node8` absorb seed IS the four OLD cell columns, zero-padded. -/
-theorem boardAbsorb_old_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
-    boardAbsorb (boardDecode (envAt t i))
-      = [(envAt t i).loc (old 0), (envAt t i).loc (old 1), (envAt t i).loc (old 2),
-         (envAt t i).loc (old 3)] ++ List.replicate 12 0 := by
-  have hv := fun c hcK => boardvalid_of_sat hsat hc i hi c hcK
-  have h00 := boardDecode_cellAt (envAt t i) 0 0 (by norm_num) (by norm_num)
-  have h10 := boardDecode_cellAt (envAt t i) 1 0 (by norm_num) (by norm_num)
-  have h01 := boardDecode_cellAt (envAt t i) 0 1 (by norm_num) (by norm_num)
-  have h11 := boardDecode_cellAt (envAt t i) 1 1 (by norm_num) (by norm_num)
-  norm_num [NN] at h00 h10 h01 h11
-  simp only [boardAbsorb, h00, h10, h01, h11,
-    particleToCode_codeToParticle (hv 0 (by norm_num [KK, NN])),
-    particleToCode_codeToParticle (hv 1 (by norm_num [KK, NN])),
-    particleToCode_codeToParticle (hv 2 (by norm_num [KK, NN])),
-    particleToCode_codeToParticle (hv 3 (by norm_num [KK, NN]))]
-
-/-! ### The chip-lookup → digest lemma. -/
-
-/-- **The `node8` lookup FORCES the digest block.** A satisfied `MerkleHash8` node8 chip lookup,
-against a wide-sound Poseidon2 chip table, forces its 8 output columns to be the genuine wide
-squeeze of the absorbed leaf `cells ‖ 4 zeros ‖ 8 zeros` — the arity tag + equal-length padding pin
-the row decomposition (`chip_lookup_sound_N`), and the `mh8_zero` pin collapses the padding to
-literal zeros. -/
-theorem root_of_lookupMem (permOut : List ℤ → List ℤ)
-    (hSound : ChipTableSoundN permOut (t.tf TableId.poseidon2)) (i : Nat)
-    (cells outCols : List Nat) (hcells : cells.length = 4)
-    (hz : (envAt t i).loc MH8_ZERO = 0)
-    (hmem : (chipLookupTupleN
-        ((((cells ++ List.replicate 4 MH8_ZERO) ++ List.replicate 8 MH8_ZERO)).map
-          (fun c => EmittedExpr.var c)) outCols).map (·.eval (envAt t i).loc)
-        ∈ t.tf TableId.poseidon2) :
-    outCols.map (envAt t i).loc
-      = permOut ((cells.map (envAt t i).loc) ++ List.replicate 12 0) := by
-  have hlen : (((cells ++ List.replicate 4 MH8_ZERO) ++ List.replicate 8 MH8_ZERO).map
-      (fun c => EmittedExpr.var c)).length ≤ CHIP_RATE := by
-    simp [hcells, CHIP_RATE]
-  have h := chip_lookup_sound_N permOut (t.tf TableId.poseidon2) hSound (envAt t i).loc _ outCols
-    hlen hmem
-  rw [h]
-  congr 1
-  simp only [List.map_append, List.map_replicate, List.map_map, Function.comp_def,
-    EmittedExpr.eval, hz, List.append_assoc]
-  norm_num [List.replicate_add]
-
-set_option maxRecDepth 40000 in
-/-- The OLD-board `node8` chip lookup HOLDS: its evaluated tuple is a row of the chip table. -/
-theorem oldRoot_lookupMem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
-    (chipLookupTupleN
-        (((([0, 1, 2, 3] ++ List.replicate 4 MH8_ZERO)) ++ List.replicate 8 MH8_ZERO).map
-          (fun c => EmittedExpr.var c)) oldRootCols).map (·.eval (envAt t i).loc)
-      ∈ t.tf TableId.poseidon2 := by
-  have hrc := hsat.rowConstraints i hi _
-    (show node8Lookup ([0, 1, 2, 3] ++ List.replicate 4 MH8_ZERO)
-        (List.replicate 8 MH8_ZERO) oldRootCols ∈ automataflStepDesc.constraints by decide)
-  simpa [node8Lookup, VmConstraint2.holdsAt, Lookup.holdsAt] using hrc
-
-set_option maxRecDepth 40000 in
-/-- The NEW-board `node8` chip lookup HOLDS. -/
-theorem newRoot_lookupMem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
-    (chipLookupTupleN
-        (((([4, 5, 6, 7] ++ List.replicate 4 MH8_ZERO)) ++ List.replicate 8 MH8_ZERO).map
-          (fun c => EmittedExpr.var c)) newRootCols).map (·.eval (envAt t i).loc)
-      ∈ t.tf TableId.poseidon2 := by
-  have hrc := hsat.rowConstraints i hi _
-    (show node8Lookup ([4, 5, 6, 7] ++ List.replicate 4 MH8_ZERO)
-        (List.replicate 8 MH8_ZERO) newRootCols ∈ automataflStepDesc.constraints by decide)
-  simpa [node8Lookup, VmConstraint2.holdsAt, Lookup.holdsAt] using hrc
-
-/-- The STEPPED board's `node8` absorb seed IS the four NEW cell columns, zero-padded — the
-capstone (`astep_sat_imp_automatonStep`) read through the canonical particle encoding. -/
-theorem boardAbsorb_new_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
-    boardAbsorb (Dregg2.Games.Automatafl.automatonStep (boardDecode (envAt t i)))
-      = [(envAt t i).loc (new 0), (envAt t i).loc (new 1), (envAt t i).loc (new 2),
-         (envAt t i).loc (new 3)] ++ List.replicate 12 0 := by
-  obtain ⟨_, _, hcell⟩ := astep_sat_imp_automatonStep hsat hc i hi
-  have hv := fun c hcK => newvalid_of_sat hsat hc i hi c hcK
-  have h00 := (hcell 0 0 (by norm_num [NN]) (by norm_num [NN])).symm
-  have h10 := (hcell 1 0 (by norm_num [NN]) (by norm_num [NN])).symm
-  have h01 := (hcell 0 1 (by norm_num [NN]) (by norm_num [NN])).symm
-  have h11 := (hcell 1 1 (by norm_num [NN]) (by norm_num [NN])).symm
-  norm_num [NN] at h00 h10 h01 h11
-  simp only [boardAbsorb, h00, h10, h01, h11,
-    particleToCode_codeToParticle (hv 0 (by norm_num [KK, NN])),
-    particleToCode_codeToParticle (hv 1 (by norm_num [KK, NN])),
-    particleToCode_codeToParticle (hv 2 (by norm_num [KK, NN])),
-    particleToCode_codeToParticle (hv 3 (by norm_num [KK, NN]))]
-
-/-! ### The two root-column transports. -/
-
-/-- **The OLD root columns ARE `board_root8` of the decoded OLD board.** -/
-theorem oldRootCols_of_sat (permOut : List ℤ → List ℤ)
-    (hSound : ChipTableSoundN permOut (t.tf TableId.poseidon2))
-    (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
-    oldRootCols.map (envAt t i).loc = boardRoot8 permOut (boardDecode (envAt t i)) := by
-  rw [root_of_lookupMem permOut hSound i [0, 1, 2, 3] oldRootCols (by norm_num)
-        (mh8zero_of_sat hsat hc i hi) (oldRoot_lookupMem hsat i (by omega)),
-      boardRoot8, boardAbsorb_old_of_sat hsat hc i hi]
-  norm_num [old]
-
-/-- **The NEW root columns ARE `board_root8` of the STEPPED board.** -/
-theorem newRootCols_of_sat (permOut : List ℤ → List ℤ)
-    (hSound : ChipTableSoundN permOut (t.tf TableId.poseidon2))
-    (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
-    newRootCols.map (envAt t i).loc
-      = boardRoot8 permOut (Dregg2.Games.Automatafl.automatonStep (boardDecode (envAt t i))) := by
-  rw [root_of_lookupMem permOut hSound i [4, 5, 6, 7] newRootCols (by norm_num)
-        (mh8zero_of_sat hsat hc i hi) (newRoot_lookupMem hsat i (by omega)),
-      boardRoot8, boardAbsorb_new_of_sat hsat hc i hi]
-  norm_num [new, KK, NN]
-
-set_option maxRecDepth 40000 in
-/-- **THE PI-LEVEL TRANSPORT, OLD SIDE.** The committed public inputs `[16..24)` ARE the
-`board_root8` of the DECODED OLD board. -/
-theorem oldRoot_pi_of_sat (permOut : List ℤ → List ℤ)
-    (hSound : ChipTableSoundN permOut (t.tf TableId.poseidon2))
-    (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (h1 : 1 < t.rows.length) (j : Nat) (hj : j < 8) :
-    t.pub (16 + j)
-      ≡ (boardRoot8 permOut (boardDecode (envAt t 0)))[j]! [ZMOD 2013265921] := by
-  have hcols := oldRootCols_of_sat permOut hSound hsat hc 0 (by omega)
-  have hget : (boardRoot8 permOut (boardDecode (envAt t 0)))[j]!
-      = (envAt t 0).loc (oldRootCols[j]!) := by
-    rw [← hcols]; interval_cases j <;> simp [oldRootCols]
-  rw [hget]
-  refine (astep_piFirst hsat (by omega) ?_).symm
-  interval_cases j
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-
-set_option maxRecDepth 40000 in
-/-- **THE PI-LEVEL CAPSTONE — Leg A transported to the COMMITTED ROOT.** On a satisfying,
-canonical trace of the byte-pinned `automataflStepDesc`, against a wide-sound Poseidon2 chip table,
-the public inputs `[24..32)` — the root the fold and the light client actually read — ARE the
-`board_root8` of `automatonStep` applied to the DECODED OLD board. A forged new root fails: the
-`node8` lookup forces the digest columns and the first-row `bind_pi`s force the PIs to them. -/
-theorem newRoot_pi_of_sat (permOut : List ℤ → List ℤ)
-    (hSound : ChipTableSoundN permOut (t.tf TableId.poseidon2))
-    (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
-    (hc : StepCanon t) (h1 : 1 < t.rows.length) (j : Nat) (hj : j < 8) :
-    t.pub (24 + j)
-      ≡ (boardRoot8 permOut
-          (Dregg2.Games.Automatafl.automatonStep (boardDecode (envAt t 0))))[j]!
-        [ZMOD 2013265921] := by
-  have hcols := newRootCols_of_sat permOut hSound hsat hc 0 (by omega)
-  have hget : (boardRoot8 permOut
-      (Dregg2.Games.Automatafl.automatonStep (boardDecode (envAt t 0))))[j]!
-      = (envAt t 0).loc (newRootCols[j]!) := by
-    rw [← hcols]; interval_cases j <;> simp [newRootCols]
-  rw [hget]
-  refine (astep_piFirst hsat (by omega) ?_).symm
-  interval_cases j
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-  · exact (by decide)
-
-end LegR
-
-/-! ### The forgery canary — the `node8` lookup really BITES.
-
-A concrete wide-sound chip table over a concrete `permOut`: the genuine absorb row is in it, and a
-row carrying a FORGED digest lane is NOT. So a prover claiming a wrong `board_root8` has no table
-row to look up — the transport above is not a vacuous implication. -/
-
-/-- A concrete stand-in wide squeeze (structure only — no crypto claim). -/
-def canaryPerm : List ℤ → List ℤ := fun xs => (List.range 8).map (fun k => xs.headD 0 + (k : ℤ))
-
-/-- The absorb seed of the board `[AUTO, VAC, VAC, VAC]` in one leaf against a zero sibling. -/
-def canaryIns : List ℤ := [3, 0, 0, 0] ++ List.replicate 12 0
-
-/-- A chip table holding exactly the genuine row for `canaryIns`. -/
-def canaryTbl : Table := [chipRowN canaryPerm canaryIns]
-
-theorem canary_sound : ChipTableSoundN canaryPerm canaryTbl := by
-  intro r hr
-  refine ⟨canaryIns, by norm_num [canaryIns, CHIP_RATE], ?_⟩
-  simpa [canaryTbl] using hr
-
-/-- The genuine row IS a table row. -/
-theorem canary_genuine_mem : chipRowN canaryPerm canaryIns ∈ canaryTbl := by decide
-
-/-- A row whose FIRST digest lane is forged is NOT a table row: the lookup fails, so no satisfying
-witness can commit that root. -/
-theorem canary_forged_not_mem :
-    (chipRowN canaryPerm canaryIns).set 17 999 ∉ canaryTbl := by decide
 
 
 /-! ## §6 — Axiom hygiene. -/
@@ -6265,23 +6068,11 @@ theorem canary_forged_not_mem :
 #print axioms moved_iff_guard_of_sat
 #print axioms astep_sat_imp_automatonStep
 
--- LEG R: the `board_root8` transport to the committed public inputs.
+-- LEG A: the descriptor-side glue the PACKED commitment transport uses
+-- (the transport itself is in AutomataflCommitRefine).
 #print axioms particleToCode_codeToParticle
-#print axioms mh8zero_of_sat
 #print axioms astep_piFirst
 #print axioms boardDecode_cellAt
-#print axioms boardAbsorb_old_of_sat
-#print axioms boardAbsorb_new_of_sat
-#print axioms root_of_lookupMem
-#print axioms oldRoot_lookupMem
-#print axioms newRoot_lookupMem
-#print axioms oldRootCols_of_sat
-#print axioms newRootCols_of_sat
-#print axioms oldRoot_pi_of_sat
-#print axioms newRoot_pi_of_sat
-#print axioms canary_sound
-#print axioms canary_genuine_mem
-#print axioms canary_forged_not_mem
 
 #print axioms autoPin_of_sat
 #print axioms decoded_auto_holds_automaton
@@ -6452,40 +6243,31 @@ Proven here, keyed on the byte-pinned `automataflStepDesc`, canonical over BabyB
         decode of the emitted NEW board columns.
 
   * **LEG R CLOSED — the capstone TRANSPORTED to the committed public inputs (§5r):**
-      - `root_of_lookupMem` — the LOOKUP-SEMANTICS lemma: a satisfied `MerkleHash8` node8 chip
-        lookup (arity-16 `Poseidon2Chip`), against a wide-sound chip table, forces its 8 output
-        columns to be the genuine wide squeeze of the absorbed leaf `cells ‖ 4 zeros ‖ 8 zeros`.
-        Direct `chip_lookup_sound_N` (arity tag + equal-length padding pin the decomposition); the
-        `bind_board_roots` `assert_zero(mh8_zero)` pin (`mh8zero_of_sat`) collapses the padding
-        columns to LITERAL zeros, so the seed is a function of the board cells alone;
-      - `astep_piFirst` — the `.piBinding VmRow.first` gates of `bind_board_roots` ARE the PI
-        congruences on row 0 (`isFirst = true`);
-      - `oldRootCols_of_sat` / `newRootCols_of_sat` — the two root-column blocks equal
-        `board_root8` of the decoded OLD board / of `automatonStep` applied to it (the latter IS
-        the capstone, read through the canonical particle encoding `particleToCode`, whose
-        round-trip is licensed by the descriptor's own `assert_member` board range gates);
-      - **`newRoot_pi_of_sat` — THE PI-LEVEL STATEMENT the fold / light client needs**: on a
-        satisfying canonical trace, against a wide-sound Poseidon2 chip table,
-        `PI[24 + j] ≡ (board_root8 (automatonStep (boardDecode …)))[j]` for every `j < 8` — the
-        COMMITTED new root IS the root of the correctly-stepped board (and `oldRoot_pi_of_sat` the
-        same for `PI[16..24)` and the decoded OLD board). The congruence is mod `p` because the PI
-        binding is a field equality; a root forged mod `p` fails.
-        `canary_forged_not_mem` exhibits a concrete wide-sound chip table whose genuine absorb row
-        is present and whose digest-forged row is ABSENT — the lookup bites, so the transport is
-        not a vacuous implication.
+      - `astep_oldPack_pi_of_sat` / `astep_newPack_pi_of_sat` (in `AutomataflCommitRefine`) —
+        THE PI-LEVEL TRANSPORT the fold / light client needs: on a satisfying, canonical trace the
+        committed public inputs ARE the base-4 pack of the decoded OLD board and of the decoded NEW
+        board. Since the capstone above proves the NEW columns ARE `automatonStep` of the OLD ones,
+        the committed NEW pack IS the commitment of the correctly-stepped board. Its predecessor
+        (`root_of_lookupMem` / `oldRoot_pi_of_sat` / `newRoot_pi_of_sat`, over two `MerkleHash8`
+        node8 chip lookups) is RETIRED: it was well-defined only at `k = n² ≤ 8` and it carried a
+        `ChipTableSoundN` Poseidon2 wide-soundness ASSUMPTION. The packed transport carries none,
+        and `astep_forge_rejected` is its two-sided bite.
+
+CLOSED BY THE COMMITMENT SWAP (both were commitment-leg residuals of the Merkle form):
+  (leg R-crypto, CLOSED) the `ChipTableSoundN permOut (t.tf .poseidon2)` chip-table faithfulness
+      hypothesis is GONE with the lookups. The packed transport is a degree-1 gate plus a boundary
+      binding, and its injectivity is `pack_injective` — a base-4 positional-decode THEOREM, not a
+      collision-resistance assumption. Distinct boards DO have distinct commitments, proved.
+  (leg R-decl, CLOSED) `automataflStepDesc.tables = []` was inconsistent with two lookups naming
+      `TableId.poseidon2`. The descriptor now emits NO lookup at all (pinned by a `#guard` in
+      `AutomataflStepEmit` §5), so the empty table list is correct.
 
 REMAINING (NOT assumed, NOT stubbed — no `sorry`, no placeholder):
-  (leg R-crypto) the chip-table faithfulness `ChipTableSoundN permOut (t.tf .poseidon2)` is a NAMED
-      HYPOTHESIS (the deployed chip AIR's own faithfulness at full squeeze width) and `permOut` is a
-      parameter — exactly the carrier `HeapOpenEmit` / `NoteSpendingLeafRefine` ride. Nothing here
-      claims collision resistance: the transport says the PI digest IS `permOut` of the genuine
-      board seed, not that distinct boards have distinct roots.
-  (leg R-decl) `automataflStepDesc.tables` is `[]` while the two lookups name `TableId.poseidon2`;
-      `Satisfied2`'s lookup semantics read `t.tf` directly, so the proofs are unaffected, but the
-      descriptor should DECLARE the chip table (an emitter fix, surfaced not laundered).
-  (n) the descriptor instantiates `NN = 2`. The gadget families are `NN`-generic and the deployed
-      leaves run `n = 5` / `n = 11`; every proof here is keyed to the `n = 2` emission and re-pins
-      mechanically at the larger counts (a follow-up, not a hole in this one).
+  (n) the descriptor instantiates `NN = 2`. The COMMITMENT is now `n`-generic and its `n = 11` shape
+      is pinned (`AutomataflStepEmit` §6), but the Stage-1b BACK-END is still authored at frozen
+      `n = 2` absolute column offsets, and every refinement proof here is keyed to the `n = 2`
+      emission. Re-deriving the back-end layout as functions of `n` is the next step (a follow-up,
+      not a hole in this one).
 The Leg-A composition is now a proven theorem. -/
 
 end Dregg2.Circuit.Emit.AutomataflStepRefine

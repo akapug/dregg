@@ -140,6 +140,14 @@ theorem mem_resolve_of_mem_writeMid
   rw [descN_constraints, NGen.resolveConstraints]
   exact List.mem_cons_of_mem _ (List.mem_append_left _ (List.mem_append_right _ h))
 
+/-- The COMMITMENT family (`F₁₂`, the packed board commitment) is emitted LAST: one
+`mem_append_right`. Because it is last, every family lemma above keeps its exact spine position —
+which is why the commitment swap did not disturb a single structured membership proof. -/
+theorem mem_resolve_of_mem_commit
+    (h : g ∈ NGen.commitBoardsConstraints n) : g ∈ (automataflResolveDescN n).constraints := by
+  rw [descN_constraints, NGen.resolveConstraints]
+  exact List.mem_cons_of_mem _ (List.mem_append_right _ h)
+
 /-! ## §2a — Combinator membership. Where a specific gate sits INSIDE a `builder.rs` combinator.
 
 Each family is an append of the shared `builder.rs` combinators (`rangeNonnegConstraints`,

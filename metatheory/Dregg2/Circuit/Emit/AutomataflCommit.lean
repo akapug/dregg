@@ -336,23 +336,53 @@ def COMMIT_PI_BASE : Nat := 16
 def boardRangeCells (n : Nat) : List VmConstraint2 :=
   (List.range (n * n)).map (fun c => (.base (.gate (memberExpr (PACK_CELL c) [0, 1, 2, 3])) : VmConstraint2))
 
+/-! ### §6.1b — THE RE-POINTED FAMILY: the same gates at ARBITRARY cell / felt column bases.
+
+A host descriptor (Leg A / Leg R) carries SEVERAL boards in one row — `old` at one base, `new`/`mid`
+at another — so the commitment family has to be emitted once per board at that board's own column
+base, and bound to its own PI window. `cellCol` / `feltCol` / `piBase` are exactly those three
+degrees of freedom; the standalone `§6.1` family is the instance at `PACK_CELL` / `PACK_FELT n` /
+`COMMIT_PI_BASE`. Re-pointing is a PURE RE-INDEX: nothing about the base-4 pack, the alphabet
+precondition or the injectivity argument mentions where the cells live. -/
+
+/-- The linear terms of pack gate `j` at an arbitrary cell base:
+`felt_j − Σ_{i, 15j+i < n²} 4^i·cell[15j+i]`. Padding cells (`15j+i ≥ n²`) contribute `0` — matching
+`boardCode`'s pad convention. -/
+def packTermsAt (n j : Nat) (cellCol : Nat → Nat) (feltCol : Nat → Nat) : List (ℤ × Nat) :=
+  (1, feltCol j) :: ((List.range 15).filterMap (fun i =>
+    let idx := 15 * j + i
+    if idx < n * n then some (-(4 : ℤ) ^ i, cellCol idx) else none))
+
+/-- The `⌈n²/15⌉` degree-1 pack gates over the board at `cellCol`, packing into `feltCol`. -/
+def packBoardConstraintsAt (n : Nat) (cellCol feltCol : Nat → Nat) : List VmConstraint2 :=
+  (List.range (feltCount n)).map (fun j => linGate (packTermsAt n j cellCol feltCol) 0)
+
+/-- Bind the `⌈n²/15⌉` packed felts at `feltCol` to the PI window `[piBase, piBase + ⌈n²/15⌉)`. -/
+def commitBoardConstraintsAt (n : Nat) (feltCol : Nat → Nat) (piBase : Nat) : List VmConstraint2 :=
+  (List.range (feltCount n)).map (fun j =>
+    (.base (.piBinding VmRow.first (feltCol j) (piBase + j)) : VmConstraint2))
+
+/-- The AUTOMATON-COORDINATE half of the commitment: the two witnessed coordinate columns bound to
+`PI[piBase]` / `PI[piBase+1]`. The packed felts commit the CELLS; a `Board` also carries the
+automaton coordinate, and cell-agreement alone cannot recover it (nothing in the gate set forbids a
+second `AUTO`-coded cell), so the coordinate is published too. Two `.piBinding`s, no gate. -/
+def autoCoordCommitConstraints (axCol ayCol piBase : Nat) : List VmConstraint2 :=
+  [ (.base (.piBinding VmRow.first axCol piBase) : VmConstraint2)
+  , (.base (.piBinding VmRow.first ayCol (piBase + 1)) : VmConstraint2) ]
+
 /-- The linear terms of pack gate `j`: `packed_j − Σ_{i, 15j+i < n²} 4^i·cell[15j+i]`. Padding cells
 (`15j+i ≥ n²`) contribute `0` — matching `boardCode`'s pad convention. -/
-def packTerms (n j : Nat) : List (ℤ × Nat) :=
-  (1, PACK_FELT n j) :: ((List.range 15).filterMap (fun i =>
-    let idx := 15 * j + i
-    if idx < n * n then some (-(4 : ℤ) ^ i, PACK_CELL idx) else none))
+def packTerms (n j : Nat) : List (ℤ × Nat) := packTermsAt n j PACK_CELL (PACK_FELT n)
 
 /-- **`packBoardConstraints n`** — the `⌈n²/15⌉` degree-1 pack gates `packed_j − Σ 4^i·cell = 0`. -/
 def packBoardConstraints (n : Nat) : List VmConstraint2 :=
-  (List.range (feltCount n)).map (fun j => linGate (packTerms n j) 0)
+  packBoardConstraintsAt n PACK_CELL (PACK_FELT n)
 
 /-- **`commitBoardConstraints n` — Option A (recommended).** Bind each packed felt DIRECTLY to a PI
 (`[16 …)`). No hash, no root columns, no crypto assumption: the packed felts ARE the (injective,
 degree-1) board commitment, and root-injectivity is the `pack_injective` theorem. -/
 def commitBoardConstraints (n : Nat) : List VmConstraint2 :=
-  (List.range (feltCount n)).map (fun j =>
-    (.base (.piBinding VmRow.first (PACK_FELT n j) (COMMIT_PI_BASE + j)) : VmConstraint2))
+  commitBoardConstraintsAt n (PACK_FELT n) COMMIT_PI_BASE
 
 /-- **Option B — single hash-to-8-lanes (adapter, NOT primary).** One arity-16 Poseidon2 over the
 `⌈n²/15⌉ ≤ 16` packed felts (padded to `CHIP_RATE`), output 8 lanes — the fixed-width digest the door
@@ -396,6 +426,16 @@ def demoCells11 : Nat → ℤ := fun i => ((i % 4 : Nat) : ℤ)
 #guard packCell demoCells11 0 = horner4 [0,1,2,3,0,1,2,3,0,1,2,3,0,1,2]
 #guard packCell demoCells11 8 = horner4 [0,1,2,3,0,1,2,3,0,1,2,3,0,1,2]
 #guard packCell demoCells11 0 = 618980580
+
+/-- `demoCells11` with the LAST cell of an 11×11 board (linear index `120`) flipped `VAC → REP`. -/
+def demoCells11' : Nat → ℤ := fun i => if i = 120 then 1 else demoCells11 i
+-- THE CANARY FOR THIS WHOLE RUNG: a change to cell 120 CHANGES the commitment. The retired
+-- `board_root8` leaf absorbed cells `[0..8)` only, so it was BLIND to this flip — two different
+-- 11×11 boards shared one committed root. The pack separates them (felt 8 differs).
+#guard packCells demoCells11 (feltCount 11) ≠ packCells demoCells11' (feltCount 11)
+#guard packCell demoCells11 8 ≠ packCell demoCells11' 8
+-- and the felts BELOW the change are untouched — the difference is localized, not a hash smear.
+#guard packCell demoCells11 0 = packCell demoCells11' 0
 
 -- The reference `Board` pack agrees with the code pack, and separates a one-cell change.
 /-- `n=2` board: REP@(0,0), ATT@(1,0), AUTO@(0,1), VAC@(1,1) ⇒ codes `[1,2,3,0]`, `packed_0 = 57`. -/
