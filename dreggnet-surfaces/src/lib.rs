@@ -160,11 +160,38 @@ pub(crate) fn short_hex(bytes: &[u8]) -> String {
 /// cheevo/guild/tavern are read-surfaces over other substrates, party has no asset ledger, and
 /// companion mints into its own `CompanionRoost` (the named next graduation).
 ///
-/// One world per registration, so every session of these three shares it — a single-player demo
-/// world. Per-player worlds want a `SessionConfig` that carries the viewer's identity (today it
-/// carries only a seed); named, not faked.
+/// **Anonymous/demo only.** This mounts ONE world named for [`DEMO_PLAYER`], shared by every
+/// session on the host — right for a single-player demo host, and WRONG for any host serving more
+/// than one person (every viewer would read and write the same ledger, as "Adventurer"). A frontend
+/// with identified viewers mounts one host per identity through [`register_surfaces_for`] — see
+/// `dreggnet_catalog::PlayerWorlds`, the shared per-identity host registry.
 pub fn register_surfaces(host: &mut OfferingHost) {
-    let world = SharedWorld::demo("Adventurer");
+    register_surfaces_for(host, DEMO_PLAYER);
+}
+
+/// The canonical anonymous player label — the shelf [`register_surfaces`] mounts when there is no
+/// identified viewer (a single-player demo host).
+pub const DEMO_PLAYER: &str = "Adventurer";
+
+/// **Register all eight surfaces on a world owned by `player`** — the per-identity mount.
+///
+/// Identical to [`register_surfaces`] except that the ONE [`SharedWorld`] carrying trade / craft /
+/// inventory is seeded for `player` (their bench, their shelf, their stock), so the shelf label
+/// every surface keys on is the viewer's own derived identity rather than a shared `"Adventurer"`.
+///
+/// **Isolation comes from the HOST, not from the label**: two identities are disjoint because they
+/// are mounted on two hosts, each with its own world, forge, ledger and registry. Give each viewer
+/// their own [`OfferingHost`] (as `dreggnet_catalog::PlayerWorlds` does, and as the Discord bot's
+/// `build_player_host` does) — mounting two `register_surfaces_for` calls on ONE host would simply
+/// have the second registration replace the first under the same eight keys.
+pub fn register_surfaces_for(host: &mut OfferingHost, player: &str) {
+    register_surfaces_in_world(host, SharedWorld::demo(player));
+}
+
+/// **Register all eight surfaces onto a caller-supplied [`SharedWorld`]** — the primitive behind
+/// [`register_surfaces`] and [`register_surfaces_for`], for a frontend that wants to seed the
+/// world itself (a different starting stock, a world it also reads directly).
+pub fn register_surfaces_in_world(host: &mut OfferingHost, world: SharedWorld) {
     host.register(
         "trade",
         "DreggNet Trade — a player market (list · settle an atomic asset swap)",

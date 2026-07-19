@@ -201,6 +201,9 @@ trait OfferingSlot {
     /// Render session `id`'s surface AS `viewer` sees it (`None` if absent) — threads the viewer to
     /// [`Offering::render_for`] across the erasure boundary (the hidden-hand / fog-of-war projection).
     fn render_for(&self, id: &SessionId, viewer: &DreggIdentity) -> Option<Surface>;
+    /// Whether this offering's per-viewer projection carries PRIVATE state
+    /// ([`Offering::hidden_information`]) — a property of the offering, so no session is named.
+    fn hidden_information(&self) -> bool;
     /// Re-verify session `id`'s committed chain (`None` if absent).
     fn verify(&self, id: &SessionId) -> Option<VerifyReport>;
     /// What `input` would cost in session `id` (`None` if absent).
@@ -279,6 +282,10 @@ impl<O: Offering> OfferingSlot for Hosted<O> {
     fn render_for(&self, id: &SessionId, viewer: &DreggIdentity) -> Option<Surface> {
         let s = self.sessions.get(id)?;
         Some(self.offering.render_for(s, viewer))
+    }
+
+    fn hidden_information(&self) -> bool {
+        self.offering.hidden_information()
     }
 
     fn verify(&self, id: &SessionId) -> Option<VerifyReport> {
@@ -1033,6 +1040,17 @@ impl OfferingHost {
         Some(surface)
     }
 
+    /// **Does the offering under `key` hide per-viewer state?** ([`Offering::hidden_information`],
+    /// threaded through the erasure boundary.) `None` if no offering is registered under `key`.
+    ///
+    /// A frontend asks this BEFORE opening a session, to decide whether the surface it is about to
+    /// paint on is a fit host: a per-viewer projection ([`render_for`](OfferingHost::render_for))
+    /// belongs on a single-reader surface, never in a message a whole group reads. Answered without
+    /// a session precisely because the decision comes first.
+    pub fn hidden_information(&self, key: &str) -> Option<bool> {
+        Some(self.slots.get(key)?.hidden_information())
+    }
+
     /// Re-verify session `(key, id)`'s committed chain (`None` if absent).
     pub fn verify(&self, key: &str, id: &SessionId) -> Option<VerifyReport> {
         self.slots.get(key)?.verify(id)
@@ -1138,8 +1156,9 @@ impl OfferingHost {
     }
 
     /// **Boot-resume every session recorded in the attached [`SessionResumeStore`]** — the restart
-    /// path. Loads every stored move-log and [`resume`](OfferingHost::resume)s it, reopening each live
-    /// session to its identical committed state. Returns each log paired with its resume result
+    /// path. Loads every stored move-log and [`resume`](OfferingHost::resume)s it **in a
+    /// dependency-respecting order** ([`resume_logs`](OfferingHost::resume_logs)), reopening each
+    /// live session to its identical committed state. Returns each log paired with its resume result
     /// (`Ok(id)` reopened, `Err` a tampered / undeployable / already-open log). A no-op returning
     /// empty if no store is attached. Register the offerings BEFORE calling this (a log for an
     /// unregistered key resolves to [`ResumeError::UnknownOffering`]).
@@ -1148,13 +1167,101 @@ impl OfferingHost {
             Some(store) => store.all(),
             None => Vec::new(),
         };
+        self.resume_logs(logs)
+    }
+
+    /// **Replay `logs` in a DEPENDENCY-RESPECTING order** — the general fix for the fail-closed
+    /// restart brick.
+    ///
+    /// Sessions that share substrate (the `trade` / `craft` / `inventory` surfaces mounted on ONE
+    /// `SharedWorld`) are **order-dependent** on replay: a `trade` listing of a note the `craft`
+    /// session MINTED cannot re-drive before that craft has been replayed — the executor honestly
+    /// refuses it ([`ResumeError::Refused`]). A [`SessionResumeStore`] enumerates in whatever order
+    /// it stores (the [`FileResumeStore`](crate::resume::FileResumeStore) enumerates by
+    /// blake3-hashed file name — i.e. ARBITRARY), so a naive one-pass replay could refuse a
+    /// perfectly authentic log. Because a refusal is fail-closed and the durable record is KEPT,
+    /// that refusal then repeated on **every subsequent boot**: a permanently dead session with no
+    /// recovery path.
+    ///
+    /// The host cannot know which offering mints for which other one, so the ordering here is not a
+    /// hard-coded name list — it is a **fixpoint**:
+    ///
+    /// 1. Attempt every not-yet-resumed log, in a deterministic `(key, id)` order (so a rebuild is
+    ///    reproducible).
+    /// 2. Any pass that resumes at least one log may have unblocked others — repeat.
+    /// 3. Stop when a pass makes no progress. The remaining logs report their LAST refusal, which
+    ///    is then a genuine one: no ordering of these logs makes them re-drive.
+    ///
+    /// A log is only re-attempted if its failure applied **nothing** to shared substrate:
+    /// [`ResumeError::Deploy`] (the fresh session never opened) or a
+    /// [`ResumeError::Refused`] **at move index 0** (not one logged advance re-landed). A log that
+    /// refused mid-way has already re-driven a prefix into the shared ledger, so re-driving it
+    /// again would double-apply that prefix — it is reported as it stands, never retried.
+    ///
+    /// Every input log appears exactly once in the result, in the caller's original order.
+    pub fn resume_logs(
+        &mut self,
+        logs: Vec<SessionMoveLog>,
+    ) -> Vec<(SessionMoveLog, Result<SessionId, ResumeError>)> {
+        // Deterministic attempt order (the store's own enumeration order is arbitrary), while the
+        // RESULT keeps the caller's order — `pos` carries each log back to its input slot.
+        let mut order: Vec<usize> = (0..logs.len()).collect();
+        order.sort_by(|&a, &b| (&logs[a].key, &logs[a].id.0).cmp(&(&logs[b].key, &logs[b].id.0)));
+
+        let mut results: Vec<Option<Result<SessionId, ResumeError>>> =
+            (0..logs.len()).map(|_| None).collect();
+        let mut pending: Vec<usize> = order;
+
+        while !pending.is_empty() {
+            let mut progressed = false;
+            let mut still_pending: Vec<usize> = Vec::new();
+            for pos in pending {
+                match self.resume(&logs[pos]) {
+                    Ok(id) => {
+                        results[pos] = Some(Ok(id));
+                        progressed = true;
+                    }
+                    Err(e) if retryable_resume_error(&e) => {
+                        // Nothing was applied — hold it for a later pass, remembering this refusal
+                        // as the verdict should no pass ever unblock it.
+                        results[pos] = Some(Err(e));
+                        still_pending.push(pos);
+                    }
+                    Err(e) => results[pos] = Some(Err(e)),
+                }
+            }
+            if !progressed {
+                break;
+            }
+            pending = still_pending;
+        }
+
         logs.into_iter()
-            .map(|log| {
-                let outcome = self.resume(&log);
-                (log, outcome)
+            .zip(results)
+            .map(|(log, r)| {
+                let r = r.expect("every log was attempted at least once");
+                (log, r)
             })
             .collect()
     }
+}
+
+/// Whether a failed [`resume`](OfferingHost::resume) applied **nothing** to shared substrate, and
+/// so may safely be re-attempted after other logs have replayed (see
+/// [`resume_logs`](OfferingHost::resume_logs)).
+///
+/// * [`ResumeError::Deploy`] — the fresh session never opened; no advance re-drove.
+/// * [`ResumeError::Refused`] at index 0 — the FIRST logged advance was refused, so not one move
+///   re-landed and the rolled-back session left the shared ledger untouched.
+///
+/// Everything else is terminal: a mid-log refusal already re-drove a prefix into the shared ledger
+/// (re-driving it again would double-apply), an [`ResumeError::AlreadyOpen`] id will not free
+/// itself, and an [`ResumeError::UnknownOffering`] key will not appear mid-replay.
+fn retryable_resume_error(e: &ResumeError) -> bool {
+    matches!(
+        e,
+        ResumeError::Deploy(_) | ResumeError::Refused { index: 0, .. }
+    )
 }
 
 /// A deterministic session seed from a session id — `blake3(id)`'s low 8 bytes as a `u64`. The
@@ -1323,5 +1430,237 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ORDERED REPLAY — `resume_logs`'s fixpoint over order-dependent sessions.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Two offerings sharing ONE cell — the minimal shape of the `craft` → `trade` dependency the
+    /// live surfaces have (mounted on one `SharedWorld`): `Minter`'s landed turn MINTS into the
+    /// shared cell, and `Spender` can only land a turn while the cell holds something. So a
+    /// `Spender` log replayed BEFORE its `Minter` log is honestly refused by the executor — the
+    /// exact refusal that, replayed in an arbitrary store order, used to brick a session forever.
+    #[derive(Clone, Default)]
+    struct SharedCell(std::rc::Rc<std::cell::Cell<i64>>);
+
+    struct Minter(SharedCell);
+    struct Spender(SharedCell);
+
+    /// A landed synthetic receipt (the offerings here test ORDER, not the executor).
+    fn landed() -> Outcome {
+        Outcome::Landed {
+            receipt: dregg_app_framework::TurnReceipt::default(),
+            ended: false,
+        }
+    }
+
+    impl Offering for Minter {
+        type Session = ();
+        fn open(&self, _cfg: SessionConfig) -> Result<(), OfferingError> {
+            Ok(())
+        }
+        fn actions(&self, _s: &()) -> Vec<Action> {
+            vec![Action::new("mint", "mint", 1, true)]
+        }
+        fn advance(&self, _s: &mut (), input: Action, _actor: DreggIdentity) -> Outcome {
+            if input.turn != "mint" {
+                return Outcome::Refused("unknown".into());
+            }
+            self.0.0.set(self.0.0.get() + input.arg);
+            landed()
+        }
+        fn verify(&self, _s: &()) -> VerifyReport {
+            VerifyReport::ok(0)
+        }
+        fn render(&self, _s: &()) -> Surface {
+            Surface(deos_view::ViewNode::Text(format!(
+                "minted {}",
+                self.0.0.get()
+            )))
+        }
+        fn price(&self, _input: &Action) -> RunCost {
+            RunCost::free()
+        }
+    }
+
+    impl Offering for Spender {
+        type Session = ();
+        fn open(&self, _cfg: SessionConfig) -> Result<(), OfferingError> {
+            Ok(())
+        }
+        fn actions(&self, _s: &()) -> Vec<Action> {
+            vec![Action::new("spend", "spend", 1, self.0.0.get() > 0)]
+        }
+        fn advance(&self, _s: &mut (), input: Action, _actor: DreggIdentity) -> Outcome {
+            if input.turn != "spend" {
+                return Outcome::Refused("unknown".into());
+            }
+            if self.0.0.get() < input.arg {
+                // THE ORDER-DEPENDENT REFUSAL: nothing has been minted yet.
+                return Outcome::Refused("nothing to spend — the note does not exist".into());
+            }
+            self.0.0.set(self.0.0.get() - input.arg);
+            landed()
+        }
+        fn verify(&self, _s: &()) -> VerifyReport {
+            VerifyReport::ok(0)
+        }
+        fn render(&self, _s: &()) -> Surface {
+            Surface(deos_view::ViewNode::Text("spender".into()))
+        }
+        fn price(&self, _input: &Action) -> RunCost {
+            RunCost::free()
+        }
+    }
+
+    fn mover() -> DreggIdentity {
+        DreggIdentity("p".to_string())
+    }
+
+    /// A fresh host over `cell`, with both order-dependent offerings mounted. The keys are chosen
+    /// so the DEPENDENT one sorts FIRST (`aa-spender` < `zz-minter`): the deterministic `(key, id)`
+    /// attempt order is therefore the WRONG order here, so the recovery below can only come from
+    /// the fixpoint's re-attempt — never from the sort happening to be lucky.
+    fn dependent_host(cell: &SharedCell) -> OfferingHost {
+        let mut host = OfferingHost::new();
+        host.register("zz-minter", "Minter", Minter(cell.clone()));
+        host.register("aa-spender", "Spender", Spender(cell.clone()));
+        host
+    }
+
+    /// **THE BRICK, AND ITS RECOVERY.** A store enumerating the SPENDER's log before the MINTER's
+    /// (a `FileResumeStore` enumerates by blake3-hashed file name — arbitrary) used to refuse the
+    /// spend fail-closed, keep the file, and refuse identically on every subsequent boot.
+    /// `resume_logs` re-attempts the log after the pass that unblocked it, so BOTH reopen.
+    #[test]
+    fn an_out_of_order_replay_recovers_instead_of_bricking_the_session() {
+        // Drive the two sessions for real, recording their logs.
+        let store = crate::resume::InMemoryResumeStore::new();
+        let live = SharedCell::default();
+        let id = SessionId::new("primary");
+        {
+            let mut host = dependent_host(&live).with_resume_store(Box::new(store.clone()));
+            host.ensure_open("zz-minter", &id).expect("minter opens");
+            host.ensure_open("aa-spender", &id).expect("spender opens");
+            assert!(
+                host.advance(
+                    "zz-minter",
+                    &id,
+                    Action::new("mint", "mint", 1, true),
+                    mover()
+                )
+                .expect("live")
+                .landed()
+            );
+            assert!(
+                host.advance(
+                    "aa-spender",
+                    &id,
+                    Action::new("spend", "spend", 1, true),
+                    mover()
+                )
+                .expect("live")
+                .landed(),
+                "the spend lands once the note exists"
+            );
+        }
+
+        // The adversarial enumeration: the DEPENDENT log first.
+        let all = store.all();
+        let spend_log = all
+            .iter()
+            .find(|l| l.key == "aa-spender")
+            .expect("the spender log persisted")
+            .clone();
+        let mint_log = all
+            .iter()
+            .find(|l| l.key == "zz-minter")
+            .expect("the minter log persisted")
+            .clone();
+        let adversarial = vec![spend_log.clone(), mint_log.clone()];
+
+        // A ONE-PASS replay in that order genuinely refuses — the pathology this fixes.
+        {
+            let mut host = dependent_host(&SharedCell::default());
+            let naive: Vec<_> = adversarial
+                .iter()
+                .map(|log| host.resume(log).is_ok())
+                .collect();
+            assert_eq!(
+                naive,
+                vec![false, true],
+                "a naive in-order replay refuses the dependent log (the brick)"
+            );
+        }
+
+        // `resume_logs` recovers it: both sessions reopen, whatever order they arrive in.
+        let mut host = dependent_host(&SharedCell::default());
+        let results = host.resume_logs(adversarial);
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0].0.key, "aa-spender",
+            "the result keeps the caller's order"
+        );
+        assert!(
+            results.iter().all(|(_, r)| r.is_ok()),
+            "both order-dependent logs reopened: {:?}",
+            results.iter().map(|(l, r)| (&l.key, r)).collect::<Vec<_>>()
+        );
+        assert!(host.is_open("zz-minter", &id) && host.is_open("aa-spender", &id));
+
+        // …and the previously-BRICKED session recovers on the very next boot: the durable logs
+        // were kept, so a fresh host over the same store simply resumes them both.
+        let mut rebooted =
+            dependent_host(&SharedCell::default()).with_resume_store(Box::new(store));
+        let boot = rebooted.resume_all();
+        assert_eq!(boot.len(), 2);
+        assert!(
+            boot.iter().all(|(_, r)| r.is_ok()),
+            "resume_all replays in dependency order too: {:?}",
+            boot.iter().map(|(l, r)| (&l.key, r)).collect::<Vec<_>>()
+        );
+    }
+
+    /// A log that is refused for a REAL reason (a tampered move no ordering can rescue) still
+    /// fails closed — the fixpoint terminates and reports the executor's own refusal, and the
+    /// authentic sibling still reopens.
+    #[test]
+    fn a_genuinely_tampered_log_still_fails_closed_under_ordered_replay() {
+        let mut host = dependent_host(&SharedCell::default());
+        let id = SessionId::new("s");
+        let mut mint = SessionMoveLog::new("zz-minter", id.clone(), SessionConfig::default());
+        mint.record(Action::new("mint", "mint", 1, true), mover());
+        let mut forged = SessionMoveLog::new("aa-spender", id.clone(), SessionConfig::default());
+        // Spends 9 against a world that only ever minted 1 — no replay order makes this land.
+        forged.record(Action::new("spend", "spend", 9, true), mover());
+
+        let results = host.resume_logs(vec![forged, mint]);
+        assert!(
+            matches!(results[0].1, Err(ResumeError::Refused { index: 0, .. })),
+            "the tampered log is refused, fail-closed: {:?}",
+            results[0].1
+        );
+        assert!(results[1].1.is_ok(), "the authentic sibling still reopened");
+        assert!(
+            !host.is_open("aa-spender", &id),
+            "nothing forged is left live"
+        );
+        assert!(host.is_open("zz-minter", &id));
+    }
+
+    /// The result is a permutation of the input: every log appears exactly once, in the caller's
+    /// order, whatever order the fixpoint attempted them in.
+    #[test]
+    fn resume_logs_returns_every_log_once_in_the_callers_order() {
+        let mut host = dependent_host(&SharedCell::default());
+        let logs: Vec<SessionMoveLog> = ["aa-spender", "zz-minter", "nonesuch"]
+            .iter()
+            .map(|k| SessionMoveLog::new(*k, SessionId::new("s"), SessionConfig::default()))
+            .collect();
+        let results = host.resume_logs(logs);
+        let keys: Vec<&str> = results.iter().map(|(l, _)| l.key.as_str()).collect();
+        assert_eq!(keys, vec!["aa-spender", "zz-minter", "nonesuch"]);
+        assert!(matches!(results[2].1, Err(ResumeError::UnknownOffering(_))));
     }
 }

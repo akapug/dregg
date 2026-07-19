@@ -19,6 +19,17 @@
 //! `dreggnet-telegram/src/host.rs` `HostThread`) is unchanged — this crate never spawns a
 //! thread and never holds a session.
 //!
+//! ## Shared tables vs. per-player worlds
+//!
+//! [`build_full_catalog`] builds ONE host: right for the shared tables (a council, a market, a
+//! tug board — several identities acting on one object), and WRONG for the eight RPG feature
+//! surfaces, which are per-player by nature. Mounted globally they give every viewer the SAME
+//! inventory (one `SharedWorld::demo("Adventurer")`, one ledger, one shelf label). [`PlayerWorlds`]
+//! is the per-identity half: one [`OfferingHost`] per derived identity, each with its own world,
+//! built and boot-resumed on first touch. A frontend routes [`is_rpg_key`] keys there and
+//! everything else to its catalog host — the split the Discord bot already runs
+//! (`discord-bot/src/commands/rpg_world.rs`).
+//!
 //! ## State (Phase A + B-for-Telegram of docs/BOT-SHARED-BACKEND-DESIGN.md)
 //! The registrars are complete ports of the (byte-identical) web/telegram registrations, and the
 //! [`seated`] adapter is the complete port of `dreggnet-web/src/seated.rs` (the source of the four
@@ -33,7 +44,10 @@ use dregg_automatafl::AutomataflOffering;
 use dreggnet_council::{CandidateProposal, CouncilOffering};
 use dreggnet_market::{DarkBazaarOffering, MarketOffering};
 
+pub mod player_worlds;
 pub mod seated;
+
+pub use player_worlds::{PlayerWorlds, RPG_KEYS, build_player_host, is_rpg_key};
 
 /// **The platform-independent inputs a catalog registration needs** — everything a frontend
 /// must decide before the shared list can be registered. All plain `Send` data (raw pubkeys,
@@ -150,10 +164,14 @@ pub fn register_games(host: &mut OfferingHost, cfg: &CatalogConfig) {
 }
 
 /// **The eight do-once RPG feature surfaces** — trade · inventory · cheevos · guild · craft ·
-/// companion · tavern · party. This delegation IS the already-shared registrar
-/// (`dreggnet-surfaces/src/lib.rs:166`): it mounts ONE `SharedWorld` across
-/// trade/inventory/craft, which is exactly the composition Discord's per-open
-/// `SharedWorld::demo(…)` stores sever today (`discord-bot/src/commands/portfolio.rs:403`).
+/// companion · tavern · party, on ONE `SharedWorld` (so craft → inventory → trade compose over one
+/// ledger).
+///
+/// ⚠ **ANONYMOUS / SINGLE-PLAYER ONLY.** The world this mounts belongs to
+/// [`dreggnet_surfaces::DEMO_PLAYER`] and is shared by every session on the host, so on a host
+/// serving more than one viewer *every player shares one inventory*. A frontend with identified
+/// viewers routes the eight [`is_rpg_key`] keys to a per-identity host from [`PlayerWorlds`]
+/// instead, and keeps this global host for the shared tables (the games + services).
 pub fn register_feature_surfaces(host: &mut OfferingHost) {
     dreggnet_surfaces::register_surfaces(host);
 }

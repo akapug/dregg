@@ -709,3 +709,100 @@ fn register_surfaces_mounts_all_eight_on_an_offering_host() {
         );
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 10. PER-IDENTITY WORLDS — `register_surfaces_for` mounts a world that belongs to ONE player,
+//     so two identities' hosts are disjoint ledgers (the fix for one shared "Adventurer").
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+/// One identity's host: the eight surfaces on a world seeded for `player`.
+fn host_for(player: &str) -> OfferingHost {
+    let mut host = OfferingHost::new();
+    dreggnet_surfaces::register_surfaces_for(&mut host, player);
+    host
+}
+
+/// Render `key`'s surface as text, for a substring assertion.
+fn rendered(host: &OfferingHost, key: &str, id: &dreggnet_offerings::SessionId) -> String {
+    format!(
+        "{:?}",
+        host.render(key, id)
+            .unwrap_or_else(|| panic!("`{key}` renders"))
+            .view()
+    )
+}
+
+/// **THE ISOLATION FALSIFIER.** Alice forges a Greatblade in her own world; Bob's inventory does
+/// NOT list it. Before the per-identity mount, both stood on the ONE `SharedWorld::demo("Adventurer")`
+/// `register_surfaces` built, so every web/Telegram viewer read the same ledger.
+#[test]
+fn two_identities_worlds_are_isolated() {
+    let mut alice = host_for("alice");
+    let mut bob = host_for("bob");
+    let id = dreggnet_offerings::SessionId::new("primary");
+
+    for host in [&mut alice, &mut bob] {
+        host.ensure_open("craft", &id).expect("craft opens");
+        host.ensure_open("inventory", &id).expect("inventory opens");
+        host.ensure_open("trade", &id).expect("trade opens");
+    }
+
+    // Nobody holds a Greatblade — it is never seeded, only forged.
+    assert!(!rendered(&alice, "inventory", &id).contains("Greatblade"));
+    assert!(!rendered(&bob, "inventory", &id).contains("Greatblade"));
+
+    // Alice forges one (recipe 0 — the safe Greatblade bench).
+    let out = alice
+        .advance("craft", &id, act("craft", 0), actor())
+        .expect("alice's craft is live");
+    assert!(out.landed(), "the greatblade craft lands: {out:?}");
+
+    // Her OWN composition still holds: the note is in her inventory and listable on her stall.
+    assert!(
+        rendered(&alice, "inventory", &id).contains("Greatblade"),
+        "alice's forged note is on her own shelf (one ledger per identity, no re-mint)"
+    );
+    assert!(
+        alice
+            .actions("trade", &id)
+            .expect("live")
+            .iter()
+            .any(|a| a.turn == "list" && a.label.contains("Greatblade") && a.enabled),
+        "alice can list what alice forged"
+    );
+
+    // …and BOB sees nothing of it — a disjoint world, forge, ledger and registry.
+    let bob_inventory = rendered(&bob, "inventory", &id);
+    assert!(
+        !bob_inventory.contains("Greatblade"),
+        "bob's inventory holds no note alice forged: {bob_inventory}"
+    );
+    assert!(
+        !bob.actions("trade", &id)
+            .expect("live")
+            .iter()
+            .any(|a| a.label.contains("Greatblade")),
+        "bob cannot list a note alice forged"
+    );
+}
+
+/// The shelf each world keys on is the VIEWER's label, not a shared `"Adventurer"` — the per-identity
+/// world renders the identity it was mounted for, and the anonymous mount still renders the demo one.
+#[test]
+fn a_per_identity_world_carries_the_viewers_own_label() {
+    let id = dreggnet_offerings::SessionId::new("primary");
+    let mut carol = host_for("carol");
+    carol.ensure_open("inventory", &id).expect("opens");
+    let text = rendered(&carol, "inventory", &id);
+    assert!(text.contains("carol"), "carol's own shelf label: {text}");
+    assert!(
+        !text.contains(dreggnet_surfaces::DEMO_PLAYER),
+        "the shared demo label is gone from an identified world: {text}"
+    );
+
+    // The anonymous path is explicit and still works (a single-player demo host).
+    let mut demo = OfferingHost::new();
+    register_surfaces(&mut demo);
+    demo.ensure_open("inventory", &id).expect("opens");
+    assert!(rendered(&demo, "inventory", &id).contains(dreggnet_surfaces::DEMO_PLAYER));
+}
