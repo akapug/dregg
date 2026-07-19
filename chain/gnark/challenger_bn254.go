@@ -47,6 +47,25 @@ type ChallengerBn254 struct {
 	state  [bn254SpongeWidth]frontend.Variable
 	inBuf  []frontend.Variable
 	outBuf []frontend.Variable
+
+	// perm, when non-nil, REPLACES the hand-Go Poseidon2Bn254 permutation for
+	// this sponge's duplexings. It exists so the emit-driven verifier can drive
+	// the SAME transcript adapter (pack/split/tag/flush) through the LEAN-EMITTED
+	// permutation (ReplayTemplate over emitted/poseidon2_template.json,
+	// emitted_challenger.go) instead of the hand-Go gadget — a differential over
+	// the permutation ALONE. When nil the behavior is byte-identical to the
+	// deployed oracle (the default path every existing caller takes).
+	perm func(frontend.API, *[bn254SpongeWidth]frontend.Variable)
+}
+
+// applyPerm runs this sponge's permutation over its state: the Lean-emitted
+// replay when a perm hook is installed, else the hand-Go Poseidon2Bn254.
+func (c *ChallengerBn254) applyPerm() {
+	if c.perm != nil {
+		c.perm(c.api, &c.state)
+	} else {
+		Poseidon2Bn254(c.api, &c.state)
+	}
 }
 
 // NewChallengerBn254 builds a fresh native challenger (state = [0; 3], empty
@@ -70,7 +89,7 @@ func (c *ChallengerBn254) duplexing() {
 		c.state[i] = v
 	}
 	c.inBuf = c.inBuf[:0]
-	Poseidon2Bn254(c.api, &c.state)
+	c.applyPerm()
 	c.outBuf = append(c.outBuf[:0], c.state[:bn254SpongeRate]...)
 }
 

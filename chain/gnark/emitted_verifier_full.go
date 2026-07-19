@@ -483,6 +483,31 @@ type VerifierFullCircuit struct {
 	// the real input openings to the committed input roots. Loaded by
 	// AllocVerifierFullCircuit from the committed emitted/ artifacts.
 	batchTpls map[string]*Template
+
+	// --- Optional emitted-permutation transcript re-derivation stage. ---
+	//
+	// The compact descriptor's blocks (1/3/4) consume their challenges as
+	// host-fed witness (assignVerifierFull maps fx.ExpectedBetas / ex.ch.* into
+	// the flat bank W) — the fixture-pinned feed. This stage, when attached,
+	// ADDS an in-circuit re-derivation of every one of those challenges: it
+	// drives the deployed MultiField transcript adapter through the LEAN-EMITTED
+	// Poseidon2 permutation (emitted_challenger.go) over the REAL transcript and
+	// binds each squeezed challenge (PermAlpha/PermBeta/alpha/zeta/FRI-alpha, the
+	// per-round FRI betas, the per-query indices) to the commitment roots — so a
+	// prover can no longer supply an arbitrary challenge for given roots.
+	//
+	// txMeta is nil (stage OFF) in the plain structural skeleton
+	// (AllocVerifierFullCircuit); AllocVerifierFullCircuitWithTranscript attaches
+	// it. All witness content lives in the exported Tx* SLICES, empty by default,
+	// so the schema of the stage-off circuit is byte-identical to before.
+	txMeta        *shrinkTranscriptMeta
+	TxPrefixObs   []frontend.Variable
+	TxPrefixDig   []frontend.Variable
+	TxPrefixSamp  []frontend.Variable
+	TxCommitRoots []frontend.Variable
+	TxPow         []frontend.Variable // 0 or 1 element (the query-PoW witness)
+	TxFinalPoly   []BBExt
+	TxQueries     []FriNativeQueryOpening
 }
 
 // publicLane returns the i-th lane of the pinned 25-lane public statement in the
@@ -536,7 +561,60 @@ func (c *VerifierFullCircuit) Define(api frontend.API) error {
 	if cur.pos != len(c.W) {
 		return fmt.Errorf("witness-budget drift: Define consumed %d, bank has %d", cur.pos, len(c.W))
 	}
+
+	// Emitted-permutation transcript re-derivation stage (off when unattached).
+	// Re-derives EVERY challenge the verifier consumes in-circuit through the
+	// Lean-emitted Poseidon2 permutation and binds it to the commitment roots —
+	// replacing the "trust the fixture-pinned challenge" posture of the blocks
+	// above with "the challenge IS the sponge squeeze of the real roots".
+	if c.txMeta != nil {
+		var pow frontend.Variable = frontend.Variable(0)
+		if len(c.TxPow) > 0 {
+			pow = c.TxPow[0]
+		}
+		c.txMeta.rederive(bb, &shrinkTranscriptInputs{
+			PrefixObs:     c.TxPrefixObs,
+			PrefixDigests: c.TxPrefixDig,
+			PrefixSamples: c.TxPrefixSamp,
+			CommitRoots:   c.TxCommitRoots,
+			FinalPoly:     c.TxFinalPoly,
+			PowWitness:    pow,
+			Queries:       c.TxQueries,
+		})
+	}
 	return nil
+}
+
+// AllocVerifierFullCircuitWithTranscript builds the emit-driven circuit WITH the
+// emitted-permutation transcript re-derivation stage attached: alongside the
+// compact-descriptor blocks it re-derives every consumed challenge in-circuit
+// through the Lean-emitted Poseidon2 permutation and binds it to the real
+// commitment roots. `meta` carries the structural replay script + the emitted
+// permutation template; the Tx* witness slices are sized to the fixture shape and
+// filled by the caller. The plain AllocVerifierFullCircuit leaves the stage OFF.
+func AllocVerifierFullCircuitWithTranscript(vf *VerifierFull, sym *SymbolicConstraints,
+	meta *shrinkTranscriptMeta, nPrefixObs, nPrefixDig, nPrefixSamp, rounds, nQueries, logMax int) (*VerifierFullCircuit, error) {
+	c, err := AllocVerifierFullCircuit(vf, sym)
+	if err != nil {
+		return nil, err
+	}
+	c.txMeta = meta
+	c.TxPrefixObs = make([]frontend.Variable, nPrefixObs)
+	c.TxPrefixDig = make([]frontend.Variable, nPrefixDig)
+	c.TxPrefixSamp = make([]frontend.Variable, nPrefixSamp)
+	c.TxCommitRoots = make([]frontend.Variable, rounds)
+	c.TxPow = make([]frontend.Variable, 1)
+	c.TxFinalPoly = make([]BBExt, 1)
+	c.TxQueries = make([]FriNativeQueryOpening, nQueries)
+	for qi := range c.TxQueries {
+		c.TxQueries[qi].RollIns = make([]BBExt, len(meta.rollInAfterRound))
+		c.TxQueries[qi].Siblings = make([]BBExt, rounds)
+		c.TxQueries[qi].MerkleProofs = make([][]frontend.Variable, rounds)
+		for r := 0; r < rounds; r++ {
+			c.TxQueries[qi].MerkleProofs[r] = make([]frontend.Variable, logMax-r-1)
+		}
+	}
+	return c, nil
 }
 
 func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Rangechecker,

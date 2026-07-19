@@ -151,6 +151,19 @@ func NewMultiFieldChallenger(bb *BBApi) *MultiFieldChallenger {
 	}
 }
 
+// NewMultiFieldChallengerWithPerm builds a challenger whose inner sponge
+// duplexings run through `perm` instead of the hand-Go Poseidon2Bn254. Every
+// other layer — the radix-2^31 8-limb PACK, the length-tagged rate-padded
+// absorb, the 7-limb base-p SPLIT and its canonicity/lex soundness, and the
+// observe/sample flush discipline — is the SAME deployed adapter (this is the
+// deployed oracle with its permutation swapped for the Lean-emitted replay).
+func NewMultiFieldChallengerWithPerm(bb *BBApi,
+	perm func(frontend.API, *[bn254SpongeWidth]frontend.Variable)) *MultiFieldChallenger {
+	c := NewMultiFieldChallenger(bb)
+	c.inner.perm = perm
+	return c
+}
+
 // absorbRatePaddedWithTag mirrors duplex_challenger.rs:113: overwrite the rate
 // slots with values (zero-padded), ADD the length tag to the capacity slot
 // state[RATE], permute, refill the inner output buffer. Inner input/output
@@ -168,7 +181,7 @@ func (c *MultiFieldChallenger) absorbRatePaddedWithTag(values []frontend.Variabl
 		c.inner.state[i] = frontend.Variable(0)
 	}
 	c.inner.state[bn254SpongeRate] = c.api.Add(c.inner.state[bn254SpongeRate], lengthTag)
-	Poseidon2Bn254(c.api, &c.inner.state)
+	c.inner.applyPerm()
 	c.inner.outBuf = append(c.inner.outBuf, c.inner.state[:bn254SpongeRate]...)
 }
 
