@@ -1335,29 +1335,49 @@ theorem nextOf_pair (bd : Board) (ma mb : Move) (c : Coord)
     · subst hb; simp [nextOf, oa, ob, Ne.symm ha, ha]
     · simp [nextOf, oa, ob, ha, hb, Ne.symm ha, Ne.symm hb]
 
-/-- NO chain relation (`to_a ≠ frm_b`) ⇒ the piece lands on its own destination. -/
+/-- NO chain relation (`to_a ≠ frm_b`) and the destination is not a carrying source ⇒ the piece
+lands on its own destination. -/
 theorem followChain_own (bd : Board) (ma mb : Move) (ps : List Coord)
     (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
     (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
-    (hd : ma.frm ≠ ma.to) (hne : ma.to ≠ mb.frm) (f : Nat) :
+    (hd : ma.frm ≠ ma.to) (hne : ma.to ≠ mb.frm) (hps : ps.contains ma.to = false) (f : Nat) :
     followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1) = ma.to := by
   rw [followChain, nextOf_pair bd ma mb ma.frm h1 h2 h3 h4, if_pos rfl]
   dsimp only
-  rw [if_neg (by simp : ¬ ([] : List Coord).contains ma.to = true)]
-  by_cases hps : ps.contains ma.to = true
-  · rw [if_pos hps]
-  · rw [if_neg hps, nextOf_pair bd ma mb ma.to h1 h2 h3 h4, if_neg (Ne.symm hd), if_neg hne]
+  rw [if_neg (by simp : ¬ ([] : List Coord).contains ma.to = true),
+    if_neg (by rw [hps]; exact Bool.false_ne_true),
+    nextOf_pair bd ma mb ma.to h1 h2 h3 h4, if_neg (Ne.symm hd), if_neg hne]
 
-/-- The next square is itself a PIECE source (the circuit's `bnz` conjunct, which NEGATES `ft`) ⇒
-the caterpillar STOPS: the piece still lands on its own destination. -/
+/-- **DEFECT #8'S CASE, AT `n = 2`.** The destination is a CARRYING source with no move of its own
+(`to_a ≠ frm_b`, so no edge leaves it): the piece there does NOT vacate, so A's move FAILS TO EXECUTE
+and A stays on `frm_a` keeping its particle. The pre-fix chain landed A on `to_a` regardless, which
+put two journeys on one square and dropped a piece. NOT a conflict — nothing is flagged. -/
+theorem followChain_blocked (bd : Board) (ma mb : Move) (ps : List Coord)
+    (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
+    (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
+    (hd : ma.frm ≠ ma.to) (hne : ma.to ≠ mb.frm) (hps : ps.contains ma.to = true) (f : Nat) :
+    followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1) = ma.frm := by
+  rw [followChain, nextOf_pair bd ma mb ma.frm h1 h2 h3 h4, if_pos rfl]
+  dsimp only
+  rw [if_neg (by simp : ¬ ([] : List Coord).contains ma.to = true), if_pos hps,
+    nextOf_pair bd ma mb ma.to h1 h2 h3 h4, if_neg (Ne.symm hd), if_neg hne]
+  simp
+
+/-- The next square is itself a PIECE source (the circuit's `bnz` conjunct, which NEGATES `ft`) AND
+it is the OTHER MOVE'S source, so it has an edge and vacates ⇒ the caterpillar STOPS there: the piece
+lands on its own destination. (The `ma.to = mb.frm` hypothesis is what defect #8's fix demands —
+without an edge out of `to_a` the move fails instead, `followChain_blocked`.) -/
 theorem followChain_own_landing (bd : Board) (ma mb : Move) (ps : List Coord)
     (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
     (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
-    (hd : ma.frm ≠ ma.to) (hps : ps.contains ma.to = true) (f : Nat) :
+    (hd : ma.frm ≠ ma.to) (hab : ma.to = mb.frm) (hps : ps.contains ma.to = true) (f : Nat) :
     followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1) = ma.to := by
+  have hfrm : mb.frm ≠ ma.frm := by rw [← hab]; exact fun h => hd h.symm
   rw [followChain, nextOf_pair bd ma mb ma.frm h1 h2 h3 h4, if_pos rfl]
   dsimp only
-  rw [if_neg (by simp : ¬ ([] : List Coord).contains ma.to = true), if_pos hps]
+  rw [if_neg (by simp : ¬ ([] : List Coord).contains ma.to = true), if_pos hps, hab,
+    nextOf_pair bd ma mb mb.frm h1 h2 h3 h4, if_neg hfrm, if_pos rfl]
+  simp
 
 /-- **THE FLOW-THROUGH CASE.** `to_a = frm_b` (the circuit's `eq_ab`), `frm_b` is NOT a piece source
 (`¬bnz`), and the 2-cycle is broken (`to_b ≠ frm_a`, the circuit's `¬eq_ba`) ⇒ the piece rides the
@@ -1406,9 +1426,16 @@ theorem followChain_twoCycle (bd : Board) (ma mb : Move) (ps : List Coord)
   dsimp only
   rw [hba, if_pos (by simp : ([ma.frm] : List Coord).contains ma.frm = true)]
 
-/-- **THE A-SIDE LANDING, ALL FOUR CASES.** The reference chain destination from `frm_a` is `to_b`
+/-- **THE A-SIDE LANDING, ALL FIVE CASES.** The reference chain destination from `frm_a` is `to_b`
 EXACTLY on the circuit's `ft_a` pattern (`eq_ab ∧ ¬bnz ∧ ¬eq_ba`, with `surv`/`¬occ` already
-discharged), and the piece's own `to_a` otherwise. This is the reference half of R5, complete. -/
+discharged); it is `frm_a` — the move FAILS TO EXECUTE, defect #8's fix — when `to_a` holds a
+carrying piece with no move of its own; and the piece's own `to_a` otherwise. This is the reference
+half of R5, complete.
+
+The MIDDLE branch is the one the pre-fix reference got wrong (it landed on `to_a` and dropped the
+piece standing there). It is EMPTY at the descriptor's call sites — see the two uses in §C, where
+`ps` is `[frm_a]` / `[frm_b]` / `[frm_a, frm_b]` and the conjunct is unsatisfiable — which is why
+the emitted `ft` gates still match the reference at `NN = 2`. -/
 theorem chainDest_a (bd : Board) (ma mb : Move) (ps : List Coord)
     (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
     (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
@@ -1416,9 +1443,14 @@ theorem chainDest_a (bd : Board) (ma mb : Move) (ps : List Coord)
     (hpsb : ma.to = mb.frm → ps.contains mb.frm = false → mb.to ≠ ma.frm →
       ps.contains mb.to = false) (f : Nat) :
     followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1 + 1)
-      = if ma.to = mb.frm ∧ ps.contains mb.frm = false ∧ mb.to ≠ ma.frm then mb.to else ma.to := by
+      = if ma.to = mb.frm ∧ ps.contains mb.frm = false ∧ mb.to ≠ ma.frm then mb.to
+        else if ps.contains ma.to = true ∧ ma.to ≠ mb.frm then ma.frm
+        else ma.to := by
   by_cases hab : ma.to = mb.frm
-  · by_cases hbnz : ps.contains mb.frm = false
+  · have hmid : ¬ (ps.contains ma.to = true ∧ ma.to ≠ mb.frm) := by
+      rintro ⟨-, h⟩; exact h hab
+    rw [if_neg hmid]
+    by_cases hbnz : ps.contains mb.frm = false
     · by_cases hba : mb.to = ma.frm
       · rw [if_neg (by rintro ⟨_, _, h⟩; exact h hba)]
         exact followChain_twoCycle bd ma mb ps h1 h2 h3 h4 hda hab hba hbnz f
@@ -1426,10 +1458,14 @@ theorem chainDest_a (bd : Board) (ma mb : Move) (ps : List Coord)
         exact followChain_flowThrough bd ma mb ps h1 h2 h3 h4 hda hdb hab hba hbnz
           (hpsb hab hbnz hba) f
     · rw [if_neg (by rintro ⟨_, h, _⟩; exact hbnz h)]
-      exact followChain_own_landing bd ma mb ps h1 h2 h3 h4 hda
+      exact followChain_own_landing bd ma mb ps h1 h2 h3 h4 hda hab
         (by rw [hab]; simpa using hbnz) (f + 1)
   · rw [if_neg (by rintro ⟨h, _, _⟩; exact hab h)]
-    exact followChain_own bd ma mb ps h1 h2 h3 h4 hda hab (f + 1)
+    by_cases hps : ps.contains ma.to = true
+    · rw [if_pos ⟨hps, hab⟩]
+      exact followChain_blocked bd ma mb ps h1 h2 h3 h4 hda hab hps (f + 1)
+    · rw [if_neg (by rintro ⟨h, -⟩; exact hps h)]
+      exact followChain_own bd ma mb ps h1 h2 h3 h4 hda hab (by simpa using hps) (f + 1)
 
 /-! ### The B-SIDE mirrors. `nextOf`'s lookup table is scanned in list order, so the B-side chain
 needs the sources DISTINCT (`frm_a ≠ frm_b`) for `frm_b`'s edge to be reachable — which is exactly
@@ -1438,23 +1474,39 @@ the configuration the capstone establishes whenever piece B carries. -/
 theorem followChain_ownB (bd : Board) (ma mb : Move) (ps : List Coord)
     (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
     (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
-    (hne : ma.frm ≠ mb.frm) (hd : mb.frm ≠ mb.to) (hnb : mb.to ≠ ma.frm) (f : Nat) :
+    (hne : ma.frm ≠ mb.frm) (hd : mb.frm ≠ mb.to) (hnb : mb.to ≠ ma.frm)
+    (hps : ps.contains mb.to = false) (f : Nat) :
     followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1) = mb.to := by
   rw [followChain, nextOf_pair bd ma mb mb.frm h1 h2 h3 h4, if_neg (Ne.symm hne), if_pos rfl]
   dsimp only
-  rw [if_neg (by simp : ¬ ([] : List Coord).contains mb.to = true)]
-  by_cases hps : ps.contains mb.to = true
-  · rw [if_pos hps]
-  · rw [if_neg hps, nextOf_pair bd ma mb mb.to h1 h2 h3 h4, if_neg hnb, if_neg (Ne.symm hd)]
+  rw [if_neg (by simp : ¬ ([] : List Coord).contains mb.to = true),
+    if_neg (by rw [hps]; exact Bool.false_ne_true),
+    nextOf_pair bd ma mb mb.to h1 h2 h3 h4, if_neg hnb, if_neg (Ne.symm hd)]
+
+/-- **DEFECT #8'S CASE, B SIDE.** `to_b` carries a piece with no move of its own ⇒ B's move fails to
+execute and B stays on `frm_b`. -/
+theorem followChain_blockedB (bd : Board) (ma mb : Move) (ps : List Coord)
+    (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
+    (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
+    (hne : ma.frm ≠ mb.frm) (hd : mb.frm ≠ mb.to) (hnb : mb.to ≠ ma.frm)
+    (hps : ps.contains mb.to = true) (f : Nat) :
+    followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1) = mb.frm := by
+  rw [followChain, nextOf_pair bd ma mb mb.frm h1 h2 h3 h4, if_neg (Ne.symm hne), if_pos rfl]
+  dsimp only
+  rw [if_neg (by simp : ¬ ([] : List Coord).contains mb.to = true), if_pos hps,
+    nextOf_pair bd ma mb mb.to h1 h2 h3 h4, if_neg hnb, if_neg (Ne.symm hd)]
+  simp
 
 theorem followChain_own_landingB (bd : Board) (ma mb : Move) (ps : List Coord)
     (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
     (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
-    (hne : ma.frm ≠ mb.frm) (hps : ps.contains mb.to = true) (f : Nat) :
+    (hne : ma.frm ≠ mb.frm) (hba : mb.to = ma.frm) (hps : ps.contains mb.to = true) (f : Nat) :
     followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1) = mb.to := by
   rw [followChain, nextOf_pair bd ma mb mb.frm h1 h2 h3 h4, if_neg (Ne.symm hne), if_pos rfl]
   dsimp only
-  rw [if_neg (by simp : ¬ ([] : List Coord).contains mb.to = true), if_pos hps]
+  rw [if_neg (by simp : ¬ ([] : List Coord).contains mb.to = true), if_pos hps, hba,
+    nextOf_pair bd ma mb ma.frm h1 h2 h3 h4, if_pos rfl]
+  simp
 
 theorem followChain_flowThroughB (bd : Board) (ma mb : Move) (ps : List Coord)
     (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
@@ -1491,7 +1543,7 @@ theorem followChain_twoCycleB (bd : Board) (ma mb : Move) (ps : List Coord)
   dsimp only
   rw [hab, if_pos (by simp : ([mb.frm] : List Coord).contains mb.frm = true)]
 
-/-- **THE B-SIDE LANDING, ALL FOUR CASES** — the mirror of `chainDest_a`, under distinct sources. -/
+/-- **THE B-SIDE LANDING, ALL FIVE CASES** — the mirror of `chainDest_a`, under distinct sources. -/
 theorem chainDest_b (bd : Board) (ma mb : Move) (ps : List Coord)
     (h1 : ma.frm.x < 2 ∧ ma.frm.y < 2) (h2 : ma.to.x < 2 ∧ ma.to.y < 2)
     (h3 : mb.frm.x < 2 ∧ mb.frm.y < 2) (h4 : mb.to.x < 2 ∧ mb.to.y < 2)
@@ -1499,9 +1551,14 @@ theorem chainDest_b (bd : Board) (ma mb : Move) (ps : List Coord)
     (hpsa : mb.to = ma.frm → ps.contains ma.frm = false → ma.to ≠ mb.frm →
       ps.contains ma.to = false) (f : Nat) :
     followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1 + 1)
-      = if mb.to = ma.frm ∧ ps.contains ma.frm = false ∧ ma.to ≠ mb.frm then ma.to else mb.to := by
+      = if mb.to = ma.frm ∧ ps.contains ma.frm = false ∧ ma.to ≠ mb.frm then ma.to
+        else if ps.contains mb.to = true ∧ mb.to ≠ ma.frm then mb.frm
+        else mb.to := by
   by_cases hba : mb.to = ma.frm
-  · by_cases hanz : ps.contains ma.frm = false
+  · have hmid : ¬ (ps.contains mb.to = true ∧ mb.to ≠ ma.frm) := by
+      rintro ⟨-, h⟩; exact h hba
+    rw [if_neg hmid]
+    by_cases hanz : ps.contains ma.frm = false
     · by_cases hab : ma.to = mb.frm
       · rw [if_neg (by rintro ⟨_, _, h⟩; exact h hab)]
         exact followChain_twoCycleB bd ma mb ps h1 h2 h3 h4 hne hdb hba hab hanz f
@@ -1509,10 +1566,14 @@ theorem chainDest_b (bd : Board) (ma mb : Move) (ps : List Coord)
         exact followChain_flowThroughB bd ma mb ps h1 h2 h3 h4 hne hda hdb hba hab hanz
           (hpsa hba hanz hab) f
     · rw [if_neg (by rintro ⟨_, h, _⟩; exact hanz h)]
-      exact followChain_own_landingB bd ma mb ps h1 h2 h3 h4 hne
+      exact followChain_own_landingB bd ma mb ps h1 h2 h3 h4 hne hba
         (by rw [hba]; simpa using hanz) (f + 1)
   · rw [if_neg (by rintro ⟨h, _, _⟩; exact hba h)]
-    exact followChain_ownB bd ma mb ps h1 h2 h3 h4 hne hdb hba (f + 1)
+    by_cases hps : ps.contains mb.to = true
+    · rw [if_pos ⟨hps, hba⟩]
+      exact followChain_blockedB bd ma mb ps h1 h2 h3 h4 hne hdb hba hps (f + 1)
+    · rw [if_neg (by rintro ⟨h, -⟩; exact hps h)]
+      exact followChain_ownB bd ma mb ps h1 h2 h3 h4 hne hdb hba (by simpa using hps) (f + 1)
 
 end Caterpillar
 
@@ -2623,7 +2684,10 @@ theorem midCell_of_facts (F : ResolveFacts e) (x y c : Nat)
         gA1 gA2 gB1 gB2 hne hdA hdB (by intro _ _ h3; simp [h3]) 1
       have hfc : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [mb.frm] mb.frm [] 3
           = destB := by
-        rw [show (3 : Nat) = 1 + 1 + 1 from rfl, hchain, hcont, hdestB]
+        -- defect #8's STAY branch is empty here: `to_b` is never `frm_b`.
+        have hmid : ¬ (([mb.frm] : List Coord).contains mb.to = true ∧ mb.to ≠ ma.frm) := by
+          rintro ⟨h, -⟩; simp at h; first | exact hdB h | exact hdB h.symm
+        rw [show (3 : Nat) = 1 + 1 + 1 from rfl, hchain, hcont, if_neg hmid, hdestB]
         by_cases hf : e.loc cFtB = 1
         · obtain ⟨h1, -, -, h4⟩ := F.ftBIff.mp hf
           rw [if_pos hf, if_pos ⟨h1, rfl, h4⟩]
@@ -2648,7 +2712,10 @@ theorem midCell_of_facts (F : ResolveFacts e) (x y c : Nat)
         gA1 gA2 gB1 gB2 hdA hdB (by intro _ _ h3; simp [h3]) 1
       have hfc : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm] ma.frm [] 3
           = destA := by
-        rw [show (3 : Nat) = 1 + 1 + 1 from rfl, hchain, hdestA]
+        -- defect #8's STAY branch is empty here: `to_a` is never `frm_a`.
+        have hmid : ¬ (([ma.frm] : List Coord).contains ma.to = true ∧ ma.to ≠ mb.frm) := by
+          rintro ⟨h, -⟩; simp at h; first | exact hdA h | exact hdA h.symm
+        rw [show (3 : Nat) = 1 + 1 + 1 from rfl, hchain, if_neg hmid, hdestA]
         by_cases hf : e.loc cFtA = 1
         · obtain ⟨h1, -, -, h4⟩ := F.ftAIff.mp hf
           have hcont : ([ma.frm] : List Coord).contains mb.frm = false := by
@@ -2681,8 +2748,16 @@ theorem midCell_of_facts (F : ResolveFacts e) (x y c : Nat)
         [ma.frm, mb.frm] gA1 gA2 gB1 gB2 hdA hdB (by intro _ h2 _; simp at h2) 1
       have hfcA : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm, mb.frm] ma.frm [] 3
           = ma.to := by
-        rw [show (3 : Nat) = 1 + 1 + 1 from rfl, hchainA, if_neg]
-        rintro ⟨-, h2, -⟩; simp at h2
+        -- defect #8's STAY branch is empty here: `to_a ∈ {frm_a, frm_b}` is refuted either by
+        -- `frm_a ≠ to_a` or by the branch's own `to_a ≠ frm_b`.
+        have hmid : ¬ (([ma.frm, mb.frm] : List Coord).contains ma.to = true ∧ ma.to ≠ mb.frm) := by
+          rintro ⟨h, h2⟩
+          simp at h
+          rcases h with h | h
+          · first | exact hdA h | exact hdA h.symm
+          · first | exact h2 h | exact h2 h.symm
+        rw [show (3 : Nat) = 1 + 1 + 1 from rfl, hchainA,
+          if_neg (by rintro ⟨-, h2, -⟩; simp at h2), if_neg hmid]
       have hfcB : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) [ma.frm, mb.frm] mb.frm [] 3
           = mb.to := by
         by_cases hne : ma.frm = mb.frm
@@ -2696,8 +2771,15 @@ theorem midCell_of_facts (F : ResolveFacts e) (x y c : Nat)
           rw [← hswap, hfcA, hto]
         · have hchainB := Dregg2.Circuit.Emit.AutomataflResolveRefine.chainDest_b bd ma mb
             [ma.frm, mb.frm] gA1 gA2 gB1 gB2 hne hdA hdB (by intro _ h2 _; simp at h2) 1
-          rw [show (3 : Nat) = 1 + 1 + 1 from rfl, hchainB, if_neg]
-          rintro ⟨-, h2, -⟩; simp at h2
+          have hmid : ¬ (([ma.frm, mb.frm] : List Coord).contains mb.to = true
+              ∧ mb.to ≠ ma.frm) := by
+            rintro ⟨h, h2⟩
+            simp at h
+            rcases h with h | h
+            · first | exact h2 h | exact h2 h.symm
+            · first | exact hdB h | exact hdB h.symm
+          rw [show (3 : Nat) = 1 + 1 + 1 from rfl, hchainB,
+            if_neg (by rintro ⟨-, h2, -⟩; simp at h2), if_neg hmid]
       have oA : (ma.to = (⟨x, y⟩ : Coord)) = ((⟨x, y⟩ : Coord) = ma.to) :=
         propext ⟨Eq.symm, Eq.symm⟩
       have oB : (mb.to = (⟨x, y⟩ : Coord)) = ((⟨x, y⟩ : Coord) = mb.to) :=

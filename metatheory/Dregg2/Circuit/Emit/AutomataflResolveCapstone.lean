@@ -854,228 +854,60 @@ carry (`surv ∧ nz ∧ ¬occ`) and the flow-through bit (`… ∧ ¬occ_other`)
 
 section Caterpillar
 
-/-- **THE `m = 2` MOVE GRAPH, UNCONDITIONALLY.** Each source maps to its own destination exactly when
-its own move is not occluded; `find?` scans in list order, so A's entry shadows B's on a shared
-source. NO board-size hypothesis: this is the `nextOf`/`find?` computation itself. -/
-theorem nextOf_pairN (bd : Board) (ma mb : Move) (srcs : List Coord) (c : Coord) :
-    nextOf bd [ma, mb] srcs c
-      = if c = ma.frm ∧ occluded bd srcs ma = false then some ma.to
-        else if c = mb.frm ∧ occluded bd srcs mb = false then some mb.to else none := by
-  by_cases h1 : c = ma.frm ∧ occluded bd srcs ma = false
-  · have e1 : (decide (ma.frm = c ∧ ¬ occluded bd srcs ma = true)) = true := by
-      simp [h1.1.symm, h1.2]
-    rw [if_pos h1]
-    simp only [nextOf, List.find?_cons, List.find?_nil, e1, Option.map_some, decide_eq_true_eq,
-      Option.map_eq_some_iff, List.mem_cons, List.not_mem_nil, or_false]
-  · have e1 : (decide (ma.frm = c ∧ ¬ occluded bd srcs ma = true)) = false := by
-      simp only [decide_eq_false_iff_not, not_and, Decidable.not_not]
-      intro q
-      cases hocc : occluded bd srcs ma
-      · exact absurd ⟨q.symm, hocc⟩ h1
-      · rfl
-    rw [if_neg h1]
-    by_cases h2 : c = mb.frm ∧ occluded bd srcs mb = false
-    · have e2 : (decide (mb.frm = c ∧ ¬ occluded bd srcs mb = true)) = true := by
-        simp [h2.1.symm, h2.2]
-      rw [if_pos h2]
-      simp only [nextOf, List.find?_cons, List.find?_nil, e1, e2, Option.map_some,
-        decide_eq_true_eq, Option.map_eq_some_iff, List.mem_cons, List.not_mem_nil, or_false]
-    · have e2 : (decide (mb.frm = c ∧ ¬ occluded bd srcs mb = true)) = false := by
-        simp only [decide_eq_false_iff_not, not_and, Decidable.not_not]
-        intro q
-        cases hocc : occluded bd srcs mb
-        · exact absurd ⟨q.symm, hocc⟩ h2
-        · rfl
-      rw [if_neg h2]
-      simp only [nextOf, List.find?_cons, List.find?_nil, e1, e2, Option.map_none,
-        decide_eq_true_eq, Option.map_eq_none_iff, List.find?_eq_none, List.mem_cons,
-        List.not_mem_nil, or_false, not_and, Decidable.not_not]
+/-! The `m = 2` move graph and the occlusion-aware caterpillar are PURE REFERENCE SEMANTICS — no
+descriptor, no trace — so they live with the reference, in `Dregg2.Games.Automatafl` §8d, next to the
+conservation theorem that consumes them. They are re-exported here under their original names so
+Leg R's assembly (and the `#assert_axioms` block below) reads unchanged. -/
 
-/-- **THE A-SIDE LANDING, ALL FOUR CASES, OCCLUSION-AWARE.** Piece A's chain destination is the
-OTHER piece's `to` exactly on the circuit's `ft_a` pattern — `to_a = frm_b`, `frm_b` NOT occluded (so
-the edge exists), `frm_b` not a carrying source, and the 2-cycle broken — and A's own `to` otherwise.
-The caterpillar is at most two hops because the graph has two edges and both self-loops are excluded
-by `frm ≠ to`. -/
-theorem chainDest_aN (bd : Board) (ma mb : Move) (ps : List Coord)
-    (hoa : occluded bd [ma.frm, mb.frm] ma = false)
-    (hda : ma.frm ≠ ma.to) (hdb : mb.frm ≠ mb.to) (f : Nat) :
-    followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1 + 1)
-      = if ma.to = mb.frm ∧ occluded bd [ma.frm, mb.frm] mb = false
-             ∧ ps.contains mb.frm = false ∧ mb.to ≠ ma.frm
-        then mb.to else ma.to := by
-  have hstart : nextOf bd [ma, mb] [ma.frm, mb.frm] ma.frm = some ma.to := by
-    rw [nextOf_pairN, if_pos ⟨rfl, hoa⟩]
-  have hnil : ¬ ([] : List Coord).contains ma.to = true := by simp
-  by_cases hab : ma.to = mb.frm ∧ occluded bd [ma.frm, mb.frm] mb = false
-  · have hnext : nextOf bd [ma, mb] [ma.frm, mb.frm] ma.to = some mb.to := by
-      rw [nextOf_pairN, if_neg (by rintro ⟨q, -⟩; exact hda q.symm), if_pos ⟨hab.1, hab.2⟩]
-    by_cases hps : ps.contains ma.to = true
-    · have hL : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1 + 1)
-          = ma.to := by
-        rw [followChain, hstart]
-        dsimp only
-        rw [if_neg hnil, if_pos hps]
-      have hno : ¬ (ma.to = mb.frm ∧ occluded bd [ma.frm, mb.frm] mb = false
-          ∧ ps.contains mb.frm = false ∧ mb.to ≠ ma.frm) := by
-        rintro ⟨h1, -, h3, -⟩
-        rw [h1, h3] at hps
-        exact Bool.false_ne_true hps
-      rw [hL, if_neg hno]
-    · by_cases hcy : mb.to = ma.frm
-      · have hL : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1 + 1)
-            = ma.to := by
-          rw [followChain, hstart]
-          dsimp only
-          rw [if_neg hnil, if_neg hps, hnext]
-          dsimp only
-          rw [followChain, hnext]
-          dsimp only
-          rw [if_pos (show ([ma.frm] : List Coord).contains mb.to = true by simp [hcy])]
-        have hno : ¬ (ma.to = mb.frm ∧ occluded bd [ma.frm, mb.frm] mb = false
-            ∧ ps.contains mb.frm = false ∧ mb.to ≠ ma.frm) := by
-          rintro ⟨-, -, -, h4⟩; exact h4 hcy
-        rw [hL, if_neg hno]
-      · have hnextB : nextOf bd [ma, mb] [ma.frm, mb.frm] mb.to = none := by
-          rw [nextOf_pairN, if_neg (by rintro ⟨q, -⟩; exact hcy q),
-            if_neg (by rintro ⟨q, -⟩; exact hdb q.symm)]
-        have hL : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1 + 1)
-            = mb.to := by
-          rw [followChain, hstart]
-          dsimp only
-          rw [if_neg hnil, if_neg hps, hnext]
-          dsimp only
-          rw [followChain, hnext]
-          dsimp only
-          rw [if_neg (show ¬ ([ma.frm] : List Coord).contains mb.to = true by simp [hcy])]
-          by_cases hpsb : ps.contains mb.to = true
-          · rw [if_pos hpsb]
-          · rw [if_neg hpsb, hnextB]
-        have hyes : ma.to = mb.frm ∧ occluded bd [ma.frm, mb.frm] mb = false
-            ∧ ps.contains mb.frm = false ∧ mb.to ≠ ma.frm :=
-          ⟨hab.1, hab.2, by rw [← hab.1]; simpa using hps, hcy⟩
-        rw [hL, if_pos hyes]
-  · have hnext : nextOf bd [ma, mb] [ma.frm, mb.frm] ma.to = none := by
-      rw [nextOf_pairN, if_neg (by rintro ⟨q, -⟩; exact hda q.symm),
-        if_neg (by rintro ⟨q1, q2⟩; exact hab ⟨q1, q2⟩)]
-    have hL : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps ma.frm [] (f + 1 + 1)
-        = ma.to := by
-      rw [followChain, hstart]
-      dsimp only
-      rw [if_neg hnil]
-      by_cases hps : ps.contains ma.to = true
-      · rw [if_pos hps]
-      · rw [if_neg hps, hnext]
-    have hno : ¬ (ma.to = mb.frm ∧ occluded bd [ma.frm, mb.frm] mb = false
-        ∧ ps.contains mb.frm = false ∧ mb.to ≠ ma.frm) := by
-      rintro ⟨h1, h2, -, -⟩; exact hab ⟨h1, h2⟩
-    rw [hL, if_neg hno]
-
-/-- **THE B-SIDE LANDING, ALL FOUR CASES, OCCLUSION-AWARE** — the mirror of `chainDest_aN`, under
-distinct sources (which is what makes B's own edge reachable past A's in `find?` order). -/
-theorem chainDest_bN (bd : Board) (ma mb : Move) (ps : List Coord)
-    (hne : ma.frm ≠ mb.frm) (hob : occluded bd [ma.frm, mb.frm] mb = false)
-    (hda : ma.frm ≠ ma.to) (hdb : mb.frm ≠ mb.to) (f : Nat) :
-    followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1 + 1)
-      = if mb.to = ma.frm ∧ occluded bd [ma.frm, mb.frm] ma = false
-             ∧ ps.contains ma.frm = false ∧ ma.to ≠ mb.frm
-        then ma.to else mb.to := by
-  have hstart : nextOf bd [ma, mb] [ma.frm, mb.frm] mb.frm = some mb.to := by
-    rw [nextOf_pairN, if_neg (by rintro ⟨q, -⟩; exact hne q.symm), if_pos ⟨rfl, hob⟩]
-  have hnil : ¬ ([] : List Coord).contains mb.to = true := by simp
-  by_cases hba : mb.to = ma.frm ∧ occluded bd [ma.frm, mb.frm] ma = false
-  · have hnext : nextOf bd [ma, mb] [ma.frm, mb.frm] mb.to = some ma.to := by
-      rw [nextOf_pairN, if_pos ⟨hba.1, hba.2⟩]
-    by_cases hps : ps.contains mb.to = true
-    · have hL : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1 + 1)
-          = mb.to := by
-        rw [followChain, hstart]
-        dsimp only
-        rw [if_neg hnil, if_pos hps]
-      have hno : ¬ (mb.to = ma.frm ∧ occluded bd [ma.frm, mb.frm] ma = false
-          ∧ ps.contains ma.frm = false ∧ ma.to ≠ mb.frm) := by
-        rintro ⟨h1, -, h3, -⟩
-        rw [h1, h3] at hps
-        exact Bool.false_ne_true hps
-      rw [hL, if_neg hno]
-    · by_cases hcy : ma.to = mb.frm
-      · have hL : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1 + 1)
-            = mb.to := by
-          rw [followChain, hstart]
-          dsimp only
-          rw [if_neg hnil, if_neg hps, hnext]
-          dsimp only
-          rw [followChain, hnext]
-          dsimp only
-          rw [if_pos (show ([mb.frm] : List Coord).contains ma.to = true by simp [hcy])]
-        have hno : ¬ (mb.to = ma.frm ∧ occluded bd [ma.frm, mb.frm] ma = false
-            ∧ ps.contains ma.frm = false ∧ ma.to ≠ mb.frm) := by
-          rintro ⟨-, -, -, h4⟩; exact h4 hcy
-        rw [hL, if_neg hno]
-      · have hnextA : nextOf bd [ma, mb] [ma.frm, mb.frm] ma.to = none := by
-          rw [nextOf_pairN, if_neg (by rintro ⟨q, -⟩; exact hda q.symm),
-            if_neg (by rintro ⟨q, -⟩; exact hcy q)]
-        have hL : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1 + 1)
-            = ma.to := by
-          rw [followChain, hstart]
-          dsimp only
-          rw [if_neg hnil, if_neg hps, hnext]
-          dsimp only
-          rw [followChain, hnext]
-          dsimp only
-          rw [if_neg (show ¬ ([mb.frm] : List Coord).contains ma.to = true by simp [hcy])]
-          by_cases hpsa : ps.contains ma.to = true
-          · rw [if_pos hpsa]
-          · rw [if_neg hpsa, hnextA]
-        have hyes : mb.to = ma.frm ∧ occluded bd [ma.frm, mb.frm] ma = false
-            ∧ ps.contains ma.frm = false ∧ ma.to ≠ mb.frm :=
-          ⟨hba.1, hba.2, by rw [← hba.1]; simpa using hps, hcy⟩
-        rw [hL, if_pos hyes]
-  · have hnext : nextOf bd [ma, mb] [ma.frm, mb.frm] mb.to = none := by
-      rw [nextOf_pairN, if_neg (by rintro ⟨q1, q2⟩; exact hba ⟨q1, q2⟩),
-        if_neg (by rintro ⟨q, -⟩; exact hdb q.symm)]
-    have hL : followChain (nextOf bd [ma, mb] [ma.frm, mb.frm]) ps mb.frm [] (f + 1 + 1)
-        = mb.to := by
-      rw [followChain, hstart]
-      dsimp only
-      rw [if_neg hnil]
-      by_cases hps : ps.contains mb.to = true
-      · rw [if_pos hps]
-      · rw [if_neg hps, hnext]
-    have hno : ¬ (mb.to = ma.frm ∧ occluded bd [ma.frm, mb.frm] ma = false
-        ∧ ps.contains ma.frm = false ∧ ma.to ≠ mb.frm) := by
-      rintro ⟨h1, h2, -, -⟩; exact hba ⟨h1, h2⟩
-    rw [hL, if_neg hno]
+export Dregg2.Games.Automatafl (nextOf_pairN chainDest_aN chainDest_bN)
 
 end Caterpillar
 
-/-! ## §6 — THE OCCLUDED-STAYER WOUND: why the capstone does NOT hold at `n ≥ 3`.
+/-! ## §6 — THE OCCLUDED-STAYER SEAM: why the capstone is NOT restated at `n ≥ 3`, and WHICH SIDE
+IS NOW WRONG.
 
 Assembling §1–§5 into `resolve_sat_imp_resolveMid` at arbitrary `n` FAILS, and not for want of
 plumbing: at `n ≥ 3` the emitted descriptor and the reference DISAGREE on one configuration class,
 which `NN = 2` could not express because occlusion never fires there.
 
-THE CLASS. Piece A's source is NON-VACUUM and its move is OCCLUDED. The reference still lists
-`ma.frm` in `pieceSrcs` (that list is filtered by VACUUM, not by occlusion), so A gets a journey —
-`nextOf` has no edge out of an occluded move, so `followChain` returns `ma.frm` itself and A STAYS,
-keeping its particle and NOT vacating its square. If piece B carries (`surv ∧ bnz ∧ ¬occ_b`) and its
-landing square IS `ma.frm`, then:
+THE CLASS.  Piece A's source is NON-VACUUM and its move is OCCLUDED, so A STAYS on its square,
+keeping its particle and NOT vacating.  Piece B carries (`surv ∧ bnz ∧ ¬occ_b`) and its move TARGETS
+`ma.frm`.  Then:
 
-  * the REFERENCE places A's particle there — `journeys.find?` scans in source order and A's journey
-    (dest `ma.frm`) precedes B's, so B's particle is DROPPED (`stayer_keeps_cell`);
-  * the EMITTED gate places B's particle there — `carry_a = 0` erases every A term from the cell
-    polynomial, and the surviving `carry_b · dst_b · particle_b` term forces `mid[ma.frm] = p_b`
-    (`writeCell_forces_other`).
+  * the REFERENCE (since defect #8's fix) has B's move FAIL TO EXECUTE — `followChain` sees that
+    `ma.frm` is a carrying source with no edge out of it, so B stays on `mb.frm` and BOTH particles
+    survive.  This is the author's rule: "designating a move to an occupied square is fine, it just
+    fails to execute, it doesn't generate a conflict and shouldn't."
+  * the EMITTED gate still places B's particle on `ma.frm` — `carry_a = 0` erases every A term from
+    the cell polynomial and the surviving `carry_b · dst_b · particle_b` term forces
+    `mid[ma.frm] = p_b` (`writeCell_forces_other`) — while `mid[mb.frm]` is written vacuum.  **The
+    DESCRIPTOR destroys A's particle** (it overwrites the stayer) and, before the fix, so did the
+    reference (it dropped B's instead: `journeys.find?` scanned in source order).
 
 `occludedStayer_witness_n3` exhibits the configuration at `n = 3` with `p_a ≠ p_b`, computed by
 `decide` on the reference semantics — so the class is NOT empty, and the disagreement is real.
 
-WHAT THIS MEANS. `resolve_sat_imp_resolveMid` is NOT restatable at arbitrary `n` for the descriptor
-as emitted; it is false on this class. The descriptor needs a FIX (the honest options: treat an
-occluded move's source as non-passable AND non-carrying on the reference side too, or emit a gate
-forbidding a carrying landing on a non-carrying non-vacuum source, or make the reference drop
-occluded moves before `pieceSrcs`). Everything else this file lands — the indicator glue, the facts,
-the per-cell gate and the occlusion-aware caterpillar — is the assembly that closes the moment the
-seam agrees, and none of it is stated past what it proves. -/
+WHAT THIS MEANS NOW.  The wound has MOVED SIDES.  It used to be a reference bug AND a descriptor
+bug; the reference half is fixed (`Dregg2.Games.Automatafl.followChain`, defect #8) and is now
+covered by a conservation theorem (`applyMoves_conserves_pieces`, with `buggy_refutes_conservation`
+showing the pre-fix chain violates it).  `resolve_sat_imp_resolveMid` is therefore still NOT
+restatable at arbitrary `n` — it is false on this class — but the FIX IS OWED BY THE DESCRIPTOR, not
+by the reference:
+
+  * `carry_b` must be forced to 0 (equivalently `dest_b := frm_b`) whenever B's landing square holds
+    a NON-CARRYING piece — the emitted gate needs a "landing square is occupied by a non-mover" bit,
+    computed from the OLD board's cell at the landing square and the other piece's carry bit, and
+    ANDed into `carry`;
+  * that same bit closes defect #8's LABELLED RESIDUAL on the reference side (a target held by a
+    piece that never proposed a move), which is why the conservation theorem still carries the
+    `hland` hypothesis.
+
+At `NN = 2` the descriptor and the fixed reference STILL AGREE — the stay branch of `chainDest_a` is
+empty at every call site of the frozen assembly (see the three `hmid` discharges in
+`AutomataflResolveRefine` §C) — so `resolve_sat_imp_resolveMid` at `NN = 2` is UNCHANGED and no
+golden was re-pinned.  Everything else this file lands — the indicator glue, the facts, the per-cell
+gate and the occlusion-aware caterpillar — is the assembly that closes the moment the descriptor
+grows that bit. -/
 
 section Wound
 

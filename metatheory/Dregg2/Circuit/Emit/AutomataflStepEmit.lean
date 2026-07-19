@@ -341,7 +341,38 @@ The decision derivation (`decide_axis` ×2, `choose_offset`), the step, the boar
 front-end used, continuing the Rust `alloc` order from column 58. -/
 
 /-- Score-compare constants (`reference.rs::SCORE_PRI`/`SCORE_ATT`) and the range widths
-(`air.rs::SCORE_RBITS`/`SMALL_RBITS`). -/
+(`air.rs::SCORE_RBITS`/`SMALL_RBITS`).
+
+## ⚠ TWO BOARD-SIZE CEILINGS, AND THE COUPLING BETWEEN THEM
+
+Both are DOCUMENTED AND ACCEPTED (author's call: a 34×34 automatafl board is absurd).  They are
+recorded here because the second one is a SOUNDNESS ceiling, not a capacity ceiling, and because
+lifting the first one WITHOUT the second converts a harmless failure into a silent one.
+
+**CEILING 1 — `SMALL_RBITS = 5` ⇒ `decide_axis` is UNSATISFIABLE at `n ≥ 34`.**  Every small range
+gadget decomposes its value into `SMALL_RBITS` bits, so it can only certify `0 ≤ v ≤ 2^5 − 1 = 31`.
+The coordinate/distance bounds fed through those gadgets grow with the board (`tx ≤ n−1`,
+`ty ≤ n−1`, ray distances, `min`), so from `n = 34` on there is NO satisfying assignment: the
+descriptor simply cannot be proved against.  This FAILS CLOSED — no proof exists, nothing is
+accepted — which is why it is tolerable.
+
+**CEILING 2 — `SCORE_ATT = 100` is a RADIX, so the score embedding stops matching `decisionCmp` at
+distance ≥ 100 (defect #9).**  The comparison is arithmetised as the single integer
+`SCORE_PRI·variant − SCORE_ATT·attDist − repDist`, i.e. a base-`SCORE_ATT` positional number with
+`repDist` in the ones place.  That is order-isomorphic to the lexicographic `decisionCmp`
+(priority, then reversed `attDist`, then reversed `repDist`) ONLY while `repDist < SCORE_ATT = 100`.
+At `repDist ≥ 100` the ones place CARRIES into the `attDist` place and the emitted comparison ranks
+two decisions differently from the reference `decisionCmp` — the circuit accepts an Automaton step
+the reference does not take.  This FAILS OPEN.
+
+**⚑ THE COUPLING — widening `SMALL_RBITS` ALONE IS A SOUNDNESS HOLE.**  Ceiling 1 currently caps
+the board at `n ≤ 33`, and every distance on such a board is `< 34 < 100`, so ceiling 2 is
+UNREACHABLE: defect #9 is masked by the satisfiability ceiling, and only by it.  Widening
+`SMALL_RBITS` to support larger boards pushes `n` past 99, at which point distances reach 100, the
+radix carries, and the masked defect #9 becomes LIVE — a fail-closed capacity limit turned into a
+fail-open soundness hole, with every proof still verifying.  **`SCORE_ATT` (and `SCORE_PRI`, which
+must stay above `SCORE_ATT · maxAttDist`) MUST be widened in the SAME change, with the reference
+`decisionCmp` agreement re-proved at the new radix.**  Do not treat `SMALL_RBITS` as a lone knob. -/
 def SCORE_PRI : ℤ := 100000
 def SCORE_ATT : ℤ := 100
 def SMALL_RBITS : Nat := 5
