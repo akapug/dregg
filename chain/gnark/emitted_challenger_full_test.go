@@ -328,22 +328,23 @@ func gadgetWitnessStartT(t *testing.T, vf *VerifierFull, sym *SymbolicConstraint
 //   - block4-query-index: block 4 (SampleBitsDecomposed) is a bare 31-bit range
 //     check — any well-formed index passes as-is;
 //   - block3-folding-alpha / block3-permAlpha / block3-permBeta: block 3 consumes
-//     these as witness but ALSO feeds them into its folded == out quotient identity,
-//     so a LONE bump is rejected by the block itself. Keeping the tamper
-//     otherwise-valid therefore requires recomputing `out` at the tampered challenge
-//     (instFolded, the host twin of the in-circuit fold) — which is EXACTLY the
-//     favorable-challenge forgery the link prevents: pick a challenge the transcript
-//     never sampled and supply the matching out. The block accepts that consistent
-//     pair (stage OFF); only the link rejects it (stage ON).
+//     these as witness. They feed the alpha-folded constraint value, but that value
+//     is no longer bound to a fresh `out` inside the block (the placeholder is gone;
+//     the folded == quotient·Z_H identity lives in bindBlockZeta tooth 3 on the
+//     transcript side). So a LONE bump is otherwise-valid stage OFF — the block
+//     leaves folded unconstrained — and only the transcript LINK, asserting the
+//     block's alpha/permAlpha/permBeta equal the squeeze, rejects it (stage ON). No
+//     `out` recompute is needed to keep the tamper otherwise-valid.
 //
 // FINDINGS (named, not skipped) — challenge types NOT closed by the block link:
 //
 //   - zeta: block 3 never consumes zeta as a challenge witness; it consumes
-//     host-derived Lagrange selectors + openings AT zeta (seam #2). Demonstrated
-//     below: a self-consistent wrong-zeta selector/out set is accepted with the
-//     stage ON too (the stage-ON-REJECT polarity FAILS — the tell of an unbound
-//     challenge). The zeta SAMPLE is squeeze-asserted by the stage, but block 3's
-//     zeta-derived inputs are not linked to it. The hole is partly open for zeta;
+//     Lean-emitted Lagrange selectors + openings AT zeta. The block CHALLENGE link
+//     has no zeta slot to equate, so zeta is not closed by THAT link; it is closed
+//     separately by bindBlockZeta (selector replay + openings/quotient bind).
+//     Demonstrated below: a self-consistent wrong-zeta selector set is accepted with
+//     the block link alone (and with bindBlockZeta disabled), and rejected only once
+//     bindBlockZeta is on — the attribution the three-polarity zeta canary asserts;
 //   - the FRI batch-combination alpha is a prefix sample bound by the stage
 //     squeeze-assert but consumed by no block — outside the block link;
 //   - only betas[0] and query-index[0] are block witnesses; the other 14 FRI betas
@@ -369,11 +370,13 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	betaStart := gadgetWitnessStartT(t, vf, sym, "FriFoldRowArity2")
 	idxStart := gadgetWitnessStartT(t, vf, sym, "SampleBitsDecomposed")
 
-	// block 3 per-instance start offsets + the challenge / selector / out slots
-	// (the per-instance witness order VerifierFullCircuit.starkInstance consumes:
+	// block 3 per-instance start offsets + the challenge / selector slots (the
+	// per-instance witness order VerifierFullCircuit.starkInstance consumes:
 	// Trace/Pre/Perm rows, the WitnessChecks Challenges bus, PermValues, selectors,
-	// PublicValues, alpha, out — symInstanceVars).
-	spans, _ := buildStarkOpenedSpans(ex.shapes)
+	// PublicValues, alpha — symInstanceVars). There is NO `out` slot any more: the
+	// folded value is bound to quotient(zeta)·Z_H by bindBlockZeta tooth 3, not to a
+	// fresh output, so a block-3 challenge/selector/opening tamper needs no `out`
+	// recompute to stay otherwise-valid — the block alone leaves folded unconstrained.
 	block3Start := gadgetWitnessStartT(t, vf, sym, "BatchTableInstance")
 	instStart := make([]int, len(ex.shapes))
 	acc := block3Start
@@ -387,43 +390,7 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	chStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+2*sh0.NumLookups)  // permAlpha lane 0
 	selStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+5*sh0.NumLookups) // isFirstRow lane 0
 	alphaStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+5*sh0.NumLookups+3) + sh0.NumPublicValues
-	outStart0 := alphaStart0 + 4
 
-	// instFolded recomputes instance i0's alpha-folded constraint value under a
-	// mutated challenge / selector set — the host twin (evalSymbolicFoldedRef) of the
-	// block's in-circuit folded == out identity. Used to recompute `out` so a block-3
-	// challenge tamper stays OTHERWISE-VALID (the block alone still accepts it) and the
-	// differential isolates the transcript LINK, not the block's own quotient identity.
-	// `openMut`, when non-nil, mutates a COPY of the flat opened-values stream first —
-	// the twin used by the openings canary (tooth 2 of the zeta bind).
-	instFolded := func(chMut func(*shrinkStarkChallengesRef), selMut func(*starkSelectorsRef),
-		openMut func([]bbExtRef)) bbExtRef {
-		sp := spans[i0]
-		inst := &sym.Instances[i0]
-		ef := ex.openedEF
-		if openMut != nil {
-			ef = append([]bbExtRef(nil), ex.openedEF...)
-			openMut(ef)
-		}
-		slice := func(s efSpan) []bbExtRef { return ef[s.off : s.off+s.len] }
-		chc := ex.ch
-		if chMut != nil {
-			chMut(&chc)
-		}
-		sel, serr := computeStarkSelectorsRef(chc.zeta, sh0.DegreeBits)
-		if serr != nil {
-			t.Fatalf("instance %d selectors: %v", i0, serr)
-		}
-		if selMut != nil {
-			selMut(&sel)
-		}
-		folded, ferr := evalSymbolicFoldedRef(inst,
-			shrinkSymInputsRef(sh0, sp, slice, ex.cumSums, ex.pubVals[i0], chc, sel), chc.alpha)
-		if ferr != nil {
-			t.Fatalf("instance %d host fold: %v", i0, ferr)
-		}
-		return folded
-	}
 	putExt := func(w []frontend.Variable, base int, e bbExtRef) {
 		for k := 0; k < 4; k++ {
 			w[base+k] = e[k]
@@ -449,31 +416,25 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 		{"block4-query-index", func(w []frontend.Variable) { bumpLane(w, idxStart) }},
 		{"block3-folding-alpha", func(w []frontend.Variable) {
 			bumpLane(w, alphaStart0)
-			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.alpha[0] = bbAddRef(c.alpha[0], 1) }, nil, nil))
 		}},
 		{"block3-permAlpha", func(w []frontend.Variable) {
 			for l := 0; l < sh0.NumLookups; l++ { // every lookup's permAlpha the link binds
 				bumpLane(w, chStart0+8*l)
 			}
-			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.permAlpha[0] = bbAddRef(c.permAlpha[0], 1) }, nil, nil))
 		}},
 		{"block3-permBeta", func(w []frontend.Variable) {
 			for l := 0; l < sh0.NumLookups; l++ { // every lookup's permBeta the link binds
 				bumpLane(w, chStart0+8*l+4)
 			}
-			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.permBeta[0] = bbAddRef(c.permBeta[0], 1) }, nil, nil))
 		}},
-		// THE OPENINGS BIND (bindBlockZeta tooth 2): bump the first felt of instance
-		// i0's first opened trace value and recompute `out` at the tampered opening, so
-		// the block's own folded == out identity still holds. Stage OFF that is a valid
-		// witness — the openings were free. Stage ON the opened-value bind equates it
-		// with the transcript-observed opened stream, so it is UNSAT.
+		// THE OPENINGS BIND (bindBlockZeta tooth 2 + tooth 3): bump the first felt of
+		// instance i0's first opened trace value. Stage OFF that is a valid witness —
+		// the block leaves folded unconstrained (no `out`, no in-circuit identity). Stage
+		// ON the opened-value bind equates it with the transcript-observed opened stream
+		// (tooth 2) and the tampered opening also diverges folded from quotient·Z_H
+		// (tooth 3), so it is UNSAT.
 		{"block3-opened-trace-at-zeta", func(w []frontend.Variable) {
 			bumpLane(w, instStart[i0]) // TraceLocal[0] lane 0 — the first ext starkInstance draws
-			putExt(w, outStart0, instFolded(nil, nil, func(ef []bbExtRef) {
-				o := spans[i0].traceLocal.off
-				ef[o][0] = bbAddRef(ef[o][0], 1)
-			}))
 		}},
 	}
 	for _, tc := range linked {
@@ -508,9 +469,11 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	// supplied selectors equal the replayed outputs.
 	//
 	// The canary below is the exact favorable-zeta forgery: pick a zeta the
-	// transcript never sampled, supply the matching selector triple AND the matching
-	// `out`, so the block's own quotient identity is satisfied. Stage OFF the block
-	// accepts it (nothing local objects); stage ON it must be UNSAT. Both polarities
+	// transcript never sampled and supply the matching selector triple. Stage OFF the
+	// block accepts it (the selectors feed only the now-unconstrained folded value —
+	// no `out`, no local identity); stage ON it must be UNSAT (tooth 1 asserts the
+	// block's selectors equal the Lean-template replay at the squeeze-asserted zeta,
+	// and tooth 3's quotient identity diverges under the wrong zH). Both polarities
 	// are ASSERTED, so a regression that drops the bind fails here.
 	zetaTamper := func(w []frontend.Variable) {
 		badZeta := bbExtRef{bbAddRef(ex.ch.zeta[0], 1), ex.ch.zeta[1], ex.ch.zeta[2], ex.ch.zeta[3]}
@@ -521,7 +484,6 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 		putExt(w, selStart0, sel.isFirstRow)
 		putExt(w, selStart0+4, sel.isLastRow)
 		putExt(w, selStart0+8, sel.isTransition)
-		putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.zeta[0] = bbAddRef(c.zeta[0], 1) }, nil, nil))
 	}
 	offZ := assignVerifierFull(t, fx, ex, sym)
 	zetaTamper(offZ.W)
@@ -586,4 +548,173 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 		"non-representative FRI betas / query indices (stage-bound). Residual on zeta, at current " +
 		"resolution: the openings are bound to the TRANSCRIPT, not proven to BE the committed " +
 		"polynomials' evaluations at zeta — that is the DEEP/PCS reduction, still seam #2.")
+}
+
+// TestEmittedVerifierFullQuotientIdentityIsLoadBearing is the mutation canary that
+// proves bindBlockZeta TOOTH 3 — the DEEP quotient identity folded ==
+// quotient(zeta)·Z_H(zeta) (emitted_verifier_full.go:1190) — is LOAD-BEARING, i.e.
+// that it genuinely CLOSED the former vacuous placeholder. The placeholder bound
+// folded to a fresh `out` witness (folded == out), which any prover satisfied by
+// setting out := folded — the recomposed quotient never entered the circuit, so the
+// constraint algebra was never forced to match the committed quotient. Tooth 3 now
+// asserts folded equals quotient(zeta)·Z_H(zeta), with quotient(zeta) recomposed
+// in-circuit from the transcript-observed opened chunks. This canary shows that
+// equality is not vacuous: a folded value that does NOT equal the recomposed
+// quotient·Z_H is UNSAT.
+//
+// THE ISOLATION SUBTLETY (why a naive quotient-CHUNK tamper is NOT the proof): the
+// quotient CHUNKS tooth 3 recomposes are read from the transcript-OBSERVED opened
+// stream (event n-2, observed BEFORE the FRI batch-alpha squeeze at n-1). So a
+// tampered chunk moves the sponge and is rejected by the PREFIX SQUEEZE regardless of
+// tooth 3 — over-determined, it re-proves the transcript bind, not the identity.
+// (Measured below: bind-ON and bind-OFF both reject a chunk tamper at
+// rederiveShrinkChallenges' squeeze, not at the tooth-3 assert.) To isolate tooth 3 we
+// free the FOLDED side instead: the isolateQuotientIdentity structural probe (the
+// deployed lane leaves it false, like zetaSampleOff<0's cost differential) runs tooth 1
+// (the selector re-derivation, needed for Z_H) and tooth 3 with tooth 2 (the
+// opened-value equality binds) OFF. With the block-3 trace witness no longer pinned to
+// the transcript, the ONLY remaining constraint on folded is the quotient identity, so
+// a folded-side tamper is attributable to tooth 3 alone.
+//
+// NATIVE GROUND TRUTH: on the honest proof folded == quotient(zeta)·Z_H(zeta) for
+// instance 0 (the deployed VerifyShrinkStarkAlgebra identity), and bumping instance 0's
+// first opened trace value moves the symbolic-folded value (evalSymbolicFoldedRef) away
+// from that honest quotient·Z_H — so the tamper genuinely violates the identity, not
+// some incidental constraint. A circuit rejection is therefore the identity firing.
+//
+// THREE-POLARITY ISOLATION (tooth 3):
+//
+//  1. ISOLATE-HONEST (floor): tooth3 ON / tooth2 OFF, honest proof → ACCEPT — so a
+//     bind that rejected everything cannot pass the reject polarity vacuously;
+//  2. ISOLATE-TAMPER: tooth3 ON / tooth2 OFF, folded-side tamper → REJECT, at the
+//     quotient-identity assert (emitted_verifier_full.go:1190) — the wrong folded is
+//     UNSAT with tooth 3 as the sole remaining constraint on folded;
+//  3. ATTRIBUTION: tooth3 OFF (shapes=nil ⇒ tooth 2+3 off, tooth 1 stays on), the SAME
+//     folded-side tamper → ACCEPT — with the identity removed, folded is free again
+//     (exactly the vacuous placeholder behaviour), so the reject in (2) IS tooth 3.
+//
+// DEFENSE IN DEPTH: a quotient-CHUNK tamper in the transcript-observed opened stream is
+// ALSO rejected (bind-ON) — but by the prefix squeeze (over-determined), demonstrated
+// below to reject even bind-OFF; it is reported as defense in depth, not the isolation.
+//
+// RESIDUAL (named, NOT closed): tooth 3 binds folded to the quotient recomposed from
+// the transcript-observed chunks; it does not prove those chunks ARE the committed
+// polynomials' low-degree evaluations at zeta. That is the FRI/PCS low-degree
+// (openings = evaluations) floor — seam #2 — still the named crypto assumption.
+func TestEmittedVerifierFullQuotientIdentityIsLoadBearing(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	ex := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
+	field := ecc.BN254.ScalarField()
+	vf := loadVerifierFullT(t)
+
+	// --- NATIVE GROUND TRUTH: the honest identity holds, and the folded-side tamper
+	// moves folded off quotient·Z_H (so the circuit reject below IS the identity). ---
+	spans, _ := buildStarkOpenedSpans(ex.shapes)
+	const i0 = 0
+	sp0, sh0, inst0 := spans[i0], ex.shapes[i0], &sym.Instances[i0]
+	sel0, err := computeStarkSelectorsRef(ex.ch.zeta, sh0.DegreeBits)
+	if err != nil {
+		t.Fatalf("instance %d selectors: %v", i0, err)
+	}
+	slice := func(s efSpan) []bbExtRef { return ex.openedEF[s.off : s.off+s.len] }
+	chunks := make([][4]bbExtRef, len(sp0.quotientChunks))
+	for c, qs := range sp0.quotientChunks {
+		copy(chunks[c][:], slice(qs))
+	}
+	rhs := bbExtMulRef(recomposeQuotientRef(sel0.zetaPow2Db, chunks,
+		shrinkQuotientDomainConsts(sh0.DegreeBits, sh0.NumQuotientChunks)), sel0.zH)
+	foldHonest, err := evalSymbolicFoldedRef(inst0,
+		shrinkSymInputsRef(sh0, sp0, slice, ex.cumSums, ex.pubVals[i0], ex.ch, sel0), ex.ch.alpha)
+	if err != nil {
+		t.Fatalf("instance %d host folded: %v", i0, err)
+	}
+	if foldHonest != rhs {
+		t.Fatalf("native ground truth: honest folded %v != quotient·Z_H %v for instance %d — "+
+			"the identity does not hold on the real proof (extraction bug, not a bind result)", foldHonest, rhs, i0)
+	}
+	saved := ex.openedEF[sp0.traceLocal.off][0]
+	ex.openedEF[sp0.traceLocal.off][0] = bbAddRef(saved, 1)
+	foldTamper, err := evalSymbolicFoldedRef(inst0,
+		shrinkSymInputsRef(sh0, sp0, slice, ex.cumSums, ex.pubVals[i0], ex.ch, sel0), ex.ch.alpha)
+	ex.openedEF[sp0.traceLocal.off][0] = saved
+	if err != nil {
+		t.Fatalf("instance %d tampered folded: %v", i0, err)
+	}
+	if foldTamper == rhs {
+		t.Fatalf("native ground truth: bumping the first opened trace value left folded == quotient·Z_H "+
+			"(instance %d column 0 is unconstrained) — pick a folded-moving tamper, the isolation is malformed", i0)
+	}
+	t.Logf("native: honest folded == quotient·Z_H; folded-side tamper moves folded off it (%v -> %v) — "+
+		"the reject below is the identity firing", foldHonest, foldTamper)
+
+	// The folded-side tamper target in the flat bank: instance 0's TraceLocal[0] lane 0
+	// (the first ext starkInstance draws for block 3) — a folded INPUT, not a quotient chunk.
+	block3Start := gadgetWitnessStartT(t, vf, sym, "BatchTableInstance")
+	foldedTamper := func(w []frontend.Variable) {
+		v, ok := w[block3Start].(uint32)
+		if !ok {
+			t.Fatalf("block-3 slot %d is not a base-field felt (%T)", block3Start, w[block3Start])
+		}
+		w[block3Start] = bbAddRef(v, 1)
+	}
+
+	// (1) ISOLATE-HONEST floor: tooth 3 ON, tooth 2 OFF — the honest proof still solves.
+	isoAlloc := allocVerifierFullWithTranscript(t, fx, sym)
+	isoAlloc.txMeta.isolateQuotientIdentity = true
+	if err := test.IsSolved(isoAlloc, assignVerifierFullWithTranscript(t, fx, ex, sym), field); err != nil {
+		t.Fatalf("ISOLATE-HONEST: tooth3-on/tooth2-off circuit REJECTED the honest proof — the quotient "+
+			"identity does not hold in isolation, so the reject polarity would be vacuous: %v", err)
+	}
+	t.Logf("(1) ISOLATE-HONEST: tooth3 ON / tooth2 OFF accepts the honest proof (identity holds in isolation)")
+
+	// (2) ISOLATE-TAMPER: same circuit, folded-side tamper → UNSAT at the quotient identity.
+	isoBad := assignVerifierFullWithTranscript(t, fx, ex, sym)
+	foldedTamper(isoBad.W)
+	if err := test.IsSolved(isoAlloc, isoBad, field); err == nil {
+		t.Fatal("ISOLATE-TAMPER: tooth3-on/tooth2-off circuit ACCEPTED a folded value that does not equal " +
+			"quotient(zeta)·Z_H(zeta) — TOOTH 3 IS VACUOUS (the fresh-out placeholder is not closed)")
+	}
+	t.Logf("(2) ISOLATE-TAMPER: a folded != quotient·Z_H is UNSAT with tooth 3 the sole constraint on folded")
+
+	// (3) ATTRIBUTION: tooth 3 OFF (shapes=nil) — the SAME folded tamper is now ACCEPTED,
+	// because folded is free again. So the reject in (2) is attributable to tooth 3 alone.
+	offAlloc := allocVerifierFullWithTranscript(t, fx, sym)
+	offAlloc.txMeta.shapes = nil // tooth 2 + tooth 3 off; tooth 1 (selectors) unaffected
+	offBad := assignVerifierFullWithTranscript(t, fx, ex, sym)
+	foldedTamper(offBad.W)
+	if err := test.IsSolved(offAlloc, offBad, field); err != nil {
+		t.Fatalf("ATTRIBUTION: with tooth 3 OFF the folded-side tamper was still REJECTED — the reject in "+
+			"(2) is NOT attributable to tooth 3 (something else constrains folded): %v", err)
+	}
+	t.Logf("(3) ATTRIBUTION: with tooth 3 OFF the same folded tamper is ACCEPTED — the reject IS tooth 3 " +
+		"(quotient identity, emitted_verifier_full.go:1190), not the transcript or another block")
+
+	// --- DEFENSE IN DEPTH: a quotient-CHUNK tamper in the transcript-observed opened
+	// stream. Rejected bind-ON — but ALSO bind-OFF (the transcript prefix squeeze catches
+	// it), so this is over-determined and does NOT isolate tooth 3; recorded as defense in
+	// depth, and as the reason the folded-side isolation above is the actual identity proof. ---
+	chunkFelt := ex.loc.openedObsOff + 4*sp0.quotientChunks[0].off // first limb of instance 0's chunk 0
+	onAlloc := allocVerifierFullWithTranscript(t, fx, sym)
+	onChunk := assignVerifierFullWithTranscript(t, fx, ex, sym)
+	onChunk.TxPrefixObs[chunkFelt] = bbAddRef(ex.openedEF[sp0.quotientChunks[0].off][0], 1)
+	if err := test.IsSolved(onAlloc, onChunk, field); err == nil {
+		t.Fatal("DEFENSE-IN-DEPTH: a tampered quotient chunk in the observed opened stream was ACCEPTED bind-ON")
+	}
+	bindOffAlloc := allocVerifierFullWithTranscript(t, fx, sym)
+	bindOffAlloc.txMeta.zetaSampleOff = -1 // whole zeta bind (teeth 1/2/3) OFF
+	offChunk := assignVerifierFullWithTranscript(t, fx, ex, sym)
+	offChunk.TxPrefixObs[chunkFelt] = bbAddRef(ex.openedEF[sp0.quotientChunks[0].off][0], 1)
+	if err := test.IsSolved(bindOffAlloc, offChunk, field); err == nil {
+		t.Fatal("DEFENSE-IN-DEPTH: a tampered quotient chunk was ACCEPTED with the whole zeta bind OFF — the " +
+			"transcript prefix squeeze does not absorb the opened chunks (the over-determination claim is false)")
+	}
+	t.Logf("DEFENSE IN DEPTH: a quotient-chunk tamper is rejected bind-ON AND bind-OFF — over-determined by " +
+		"the transcript prefix squeeze (the chunks are transcript-observed), so it is NOT the identity proof.")
+
+	t.Logf("VERDICT: bindBlockZeta tooth 3 (folded == quotient(zeta)·Z_H(zeta)) is LOAD-BEARING — a wrong " +
+		"folded is UNSAT with the identity ON and SAT with it OFF (tooth 3 alone, isolated from tooth 2 and the " +
+		"transcript). The vacuous fresh-out placeholder is CLOSED. RESIDUAL (named, open): the opened chunks are " +
+		"bound to the transcript, NOT proven to be the committed polynomials' low-degree evaluations at zeta — " +
+		"the FRI/PCS openings=evaluations floor (seam #2), still the named crypto assumption.")
 }

@@ -16,9 +16,12 @@
 // emit-driven circuit clears every input-batch opening on real data. Block 3 now
 // BINDS TOO: the batch-table constraint eval is fed the REAL opened rows/columns
 // at zeta (assignVerifierFull -> starkInstanceWitness) and evaluated through the
-// emitted constraint DAG (stark_constraint_interp.go, READ-ONLY), so the
-// in-circuit folded == quotient(zeta)·Z_H check and the global LogUp balance run
-// on real data — replacing the former all-zero inert feed. The DAG SOURCE
+// emitted constraint DAG (stark_constraint_interp.go, READ-ONLY); the folded value
+// is bound to quotient(zeta)·Z_H IN-CIRCUIT by bindBlockZeta tooth 3 (transcript
+// path, TestEmittedVerifierFullTranscriptRederivesChallenges) over the
+// transcript-observed opened chunks, and the global LogUp balance runs on real
+// data — replacing the former all-zero inert feed and the free-`out` placeholder.
+// The DAG SOURCE
 // (fixtures/shrink_symbolic_constraints.json) is Rust-emitted from the AIRs'
 // symbolic path (emit_shrink_symbolic.rs), NOT Lean — a NAMED residual (the
 // stark-kill convergence); the emit-driven verifier CHECKS it, it does not
@@ -161,10 +164,11 @@ func appendExtVars(e bbExtRef, w *[]frontend.Variable) {
 //     self-check guarantees these values reproduce the committed root, so a
 //     circuit rejection here is a real divergence, never a wiring bug;
 //   - block 3 (batch-STARK DAG): the REAL opened trace/preprocessed/permutation
-//     rows at zeta, evaluated through the emitted constraint DAG, with `out` =
-//     the host-recomposed quotient(zeta)·Z_H so folded == out is the quotient
-//     identity (starkInstanceWitness); (LogUp) per-instance partial cumulative
-//     sums whose total is the real global balance == 0;
+//     rows at zeta, evaluated through the emitted constraint DAG; the folded value
+//     is bound to quotient(zeta)·Z_H IN-CIRCUIT (bindBlockZeta tooth 3, transcript
+//     path) over the transcript-observed opened chunks — starkInstanceWitness
+//     natively self-checks the same identity; (LogUp) per-instance partial
+//     cumulative sums whose total is the real global balance == 0;
 //   - block 4 (query-PoW sample / pow-bits-zero): the real query index sample;
 //   - block 5 (segment): the real 25 claim lanes, equated against the EXPOSED
 //     public statement (assignSettlementPublics' pinned order).
@@ -333,9 +337,10 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 			// 6 instances, the opened trace/preprocessed/permutation rows at the
 			// sampled zeta are evaluated through the emitted constraint DAG
 			// (VerifierFullCircuit.starkInstance -> evalSymbolicFoldedNative,
-			// stark_constraint_interp.go, READ-ONLY), and the `out` slot carries
-			// the host-recomposed quotient(zeta)·Z_H so the in-circuit
-			// folded == out check IS the quotient identity on the real openings.
+			// stark_constraint_interp.go, READ-ONLY) and the folded value recorded.
+			// The quotient identity itself is asserted IN-CIRCUIT by bindBlockZeta
+			// tooth 3 (transcript path): folded == quotient(zeta)·Z_H recomposed from
+			// the transcript-observed opened chunks — no `out` witness is fed here.
 			// Which fixture field feeds which DAG input mirrors the deployed
 			// stark_verify_native.go assignment (shrinkSymInputsNative /
 			// VerifyShrinkStarkAlgebra). starkInstanceWitness natively self-checks
@@ -492,25 +497,25 @@ func assignVerifierFullPublics(c *VerifierFullCircuit, claim []uint32) {
 //   - PermValues = the instance's global cumulative sums;
 //   - selectors = the Lagrange selectors at zeta (computeStarkSelectorsRef);
 //   - PublicValues = the real claim lanes (base-field; only expose_claim);
-//   - alpha = the constraint-folding alpha; out = quotient(zeta)·Z_H, the
-//     host-recomposed identity RHS.
+//   - alpha = the constraint-folding alpha. There is NO `out` slot: the quotient
+//     identity RHS is no longer a free witness (see below).
 //
 // It NATIVELY self-checks the quotient identity (host folded == quotient·Z_H)
 // so a wiring/extraction bug fails LOUDLY here, never masquerading as an
 // emit-circuit divergence — mirroring computeRealQueryMerkle's Merkle self-check
 // and expandInputOpenBatch's openInputBatchRootRef self-check.
 //
-// NAMED RESIDUAL (stated honestly): the emit-driven skeleton evaluates the DAG
-// on these opened values and binds folded == out, but it does NOT recompose the
-// quotient from the opened chunks nor derive the selectors from zeta IN-CIRCUIT
-// (the deployed VerifyShrinkStarkAlgebra does — recomposeQuotientNative /
-// computeStarkSelectorsNative); those, and the cross-phase binding of block-3
-// inputs to the transcript/openings, are the structural-abstraction residual
-// (named seam #2, emitted_verifier_full.go). The constraint DAG SOURCE itself
-// (fixtures/shrink_symbolic_constraints.json) is Rust-emitted from the AIRs'
-// symbolic path (emit_shrink_symbolic.rs), NOT Lean-emitted — the stark-kill
-// convergence residual. The emit-driven verifier here CHECKS that DAG on the
-// real proof; it does not re-author it.
+// QUOTIENT IDENTITY — now IN-CIRCUIT (was named seam #2's zeta-quotient reduction):
+// bindBlockZeta tooth 3 recomposes quotient(zeta) from the transcript-observed
+// opened chunks (recomposeQuotientNative) and asserts folded == quotient·Z_H(zeta),
+// with Z_H derived by EF glue from the Lean-emitted selectors. The old placeholder
+// fed this RHS as the free `out` witness (vacuous); it is gone. What REMAINS of
+// seam #2 is the low-degree half of the DEEP/PCS argument (FRI over the batch-
+// combined quotient — that the opened chunks ARE the committed poly's evaluations).
+// The constraint DAG SOURCE itself (fixtures/shrink_symbolic_constraints.json) is
+// Rust-emitted from the AIRs' symbolic path (emit_shrink_symbolic.rs), NOT
+// Lean-emitted — the stark-kill convergence residual. The emit-driven verifier here
+// CHECKS that DAG on the real proof; it does not re-author it.
 func starkInstanceWitness(t *testing.T, ex *shrinkStarkExtract, sym *SymbolicConstraints,
 	spans []starkInstanceSpans, i int) []frontend.Variable {
 	t.Helper()
@@ -594,9 +599,12 @@ func starkInstanceWitness(t *testing.T, ex *shrinkStarkExtract, sym *SymbolicCon
 	for _, v := range ex.pubVals[i] {
 		w = append(w, v)
 	}
-	// alpha, out = quotient(zeta)·Z_H.
+	// alpha. There is NO `out` slot any more: the in-circuit quotient identity
+	// (bindBlockZeta tooth 3) recomposes quotient(zeta)·Z_H from the transcript-
+	// observed opened chunks and asserts folded == quotient·Z_H, so the RHS is no
+	// longer fed as a free witness. `rhs` above is retained only as the NATIVE
+	// self-check that the real openings satisfy that identity.
 	appendExtVars(ex.ch.alpha, &w)
-	appendExtVars(rhs, &w)
 	return w
 }
 
@@ -648,17 +656,23 @@ func TestEmittedVerifierFullDifferential(t *testing.T) {
 }
 
 // TestEmittedVerifierFullBlock3BindsRealProof is the block-3 gate. Block 3 (the
-// batch-table STARK constraint eval) is now fed the REAL opened rows/columns at
-// zeta through the emitted constraint DAG (replacing the former all-zero inert
-// feed), so:
+// batch-table STARK constraint eval) is fed the REAL opened rows/columns at zeta
+// through the emitted constraint DAG (replacing the former all-zero inert feed),
+// and its quotient identity is bound IN-CIRCUIT by bindBlockZeta (the transcript
+// stage) — so this gate runs on the transcript circuit, NOT the structural-only
+// skeleton. On the structural skeleton block 3's folded value is unconstrained (the
+// former free `out` placeholder is gone); the identity has teeth only where the
+// opened chunks ARE the transcript-observed stream.
 //
-//  1. ACCEPT: the honest proof SOLVES the whole emit-driven circuit — the
-//     quotient identity folded == quotient(zeta)·Z_H holds for all 6 instances
-//     and the per-instance partial cumulative sums balance to zero;
-//  2. REJECT: flipping one felt of block 3's first opened trace value (with the
-//     `out` = quotient·Z_H slot left honest) makes the in-circuit folded diverge
-//     from out, so the quotient-identity constraint fires — proving block 3
-//     genuinely binds the DAG evaluation to the opened values, not a tautology.
+//  1. ACCEPT: the honest proof SOLVES the whole emit-driven circuit — the quotient
+//     identity folded == quotient(zeta)·Z_H(zeta) holds for all 6 instances (tooth 3,
+//     over the transcript-observed opened chunks) and the per-instance partial
+//     cumulative sums balance to zero;
+//  2. REJECT: flipping one felt of block 3's first opened trace value diverges it
+//     from the transcript-observed opened stream (tooth 2) AND makes the in-circuit
+//     folded diverge from quotient·Z_H (tooth 3), so the constraint fires — proving
+//     block 3 genuinely binds the DAG evaluation to the committed openings, not a
+//     tautology over a free output.
 //
 // The tamper flips the assembled witness bank directly (past starkInstanceWitness's
 // native self-check), which is the point: the CIRCUIT, not the host, must reject.
@@ -667,17 +681,13 @@ func TestEmittedVerifierFullBlock3BindsRealProof(t *testing.T) {
 	ex := extractShrinkStark(t, fx)
 	sym := loadShrinkSymbolicConstraints(t)
 	field := ecc.BN254.ScalarField()
-
 	vf := loadVerifierFullT(t)
-	emitAlloc, err := AllocVerifierFullCircuit(vf, sym)
-	if err != nil {
-		t.Fatalf("alloc emit-driven circuit: %v", err)
-	}
-	// Bake the VK pins onto the STRUCTURAL circuit so they are compiled + solved.
-	bakeVerifierFullVkPins(t, emitAlloc, fx, ex)
 
-	// ACCEPT: block 3 now clears on the real proof (as does every block).
-	if err := test.IsSolved(emitAlloc, assignVerifierFull(t, fx, ex, sym), field); err != nil {
+	alloc := allocVerifierFullWithTranscript(t, fx, sym)
+
+	// ACCEPT: block 3 (and every block) clears on the real proof, with the quotient
+	// identity now asserted in-circuit over the transcript-observed chunks.
+	if err := test.IsSolved(alloc, assignVerifierFullWithTranscript(t, fx, ex, sym), field); err != nil {
 		t.Fatalf("emit-driven circuit REJECTED the honest proof after wiring block 3: %v", err)
 	}
 
@@ -696,17 +706,18 @@ func TestEmittedVerifierFullBlock3BindsRealProof(t *testing.T) {
 		t.Fatalf("block-3 offset: %v", err)
 	}
 
-	// CANARY: flip the first felt of block 3's first opened trace value; the
-	// `out` (quotient·Z_H) slot is untouched, so folded must diverge from out.
-	canary := assignVerifierFull(t, fx, ex, sym)
+	// CANARY: flip the first felt of block 3's first opened trace value. The
+	// transcript path binds it to the observed opened stream (tooth 2) and feeds it
+	// into the quotient identity (tooth 3), so a lone-flipped opened value is UNSAT.
+	canary := assignVerifierFullWithTranscript(t, fx, ex, sym)
 	orig, ok := canary.W[block3Start].(uint32)
 	if !ok {
 		t.Fatalf("block-3 witness slot %d is not a base-field felt (%T)", block3Start, canary.W[block3Start])
 	}
 	canary.W[block3Start] = bbAddRef(orig, 1)
-	if err := test.IsSolved(emitAlloc, canary, field); err == nil {
+	if err := test.IsSolved(alloc, canary, field); err == nil {
 		t.Fatal("emit-driven circuit ACCEPTED a tampered block-3 opened value — the " +
-			"quotient-identity constraint does not bind the DAG evaluation")
+			"openings bind / quotient identity does not bind the DAG evaluation")
 	}
 }
 

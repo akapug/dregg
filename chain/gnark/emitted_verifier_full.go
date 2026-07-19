@@ -404,12 +404,14 @@ func (c *varCursor) nextExt() BBExt {
 
 // symInstanceVars is the witness budget of one batch-STARK instance's DAG
 // evaluation (all rows opened as fresh witness: TraceLocal/Next, PreLocal/Next,
-// PermLocal/Next, Challenges, PermValues, PublicValues, 3 selectors, alpha,
-// out).
+// PermLocal/Next, Challenges, PermValues, 3 selectors, PublicValues, alpha).
+// There is NO longer an `out` slot: the folded value is bound to the
+// quotient(zeta)·Z_H(zeta) recomposed from the transcript-observed opened
+// chunks (bindBlockZeta tooth 3), not to a fresh witness output.
 func symInstanceVars(inst *SymInstance) int {
 	ext := 2*inst.Width + 2*inst.PreWidth + inst.NumLookups /*PermLocal*/ +
 		inst.NumLookups /*PermNext*/ + 2*inst.NumLookups /*Challenges*/ +
-		inst.NumLookups /*PermValues*/ + 3 /*selectors*/ + 1 /*alpha*/ + 1 /*out*/
+		inst.NumLookups /*PermValues*/ + 3 /*selectors*/ + 1 /*alpha*/
 	return 4*ext + inst.NumPublicValues
 }
 
@@ -1003,15 +1005,25 @@ func (c *VerifierFullCircuit) bindBlockChallengesToTranscript(bb *BBApi, betas [
 //     emitted_challenger_full_test.go exercise. Lifting it is the transcript-bind
 //     composition seam BatchTablesSingleAir.lean §272 item 3 names.
 //
-// NAMED RESIDUAL, at current resolution: this binds the openings to the TRANSCRIPT,
-// not to the claim that they ARE the committed polynomials' evaluations at zeta.
-// That last step is the DEEP/PCS argument (recompose the quotient from the opened
-// chunks, then FRI over the batch-combined quotient) — the emit skeleton models the
-// FRI fold rows and the input-batch Merkle openings but not the zeta-quotient
-// reduction, so "the openings are the true evaluations at zeta" remains seam #2.
-// What is CLOSED here is the wrong-zeta selector forgery and the free-openings
-// forgery; what is OPEN is the evaluation-correctness of a transcript-consistent
-// opening set.
+// TOOTH 3 — the DEEP quotient identity — CLOSES the constraint/quotient reduction:
+// folded == quotient(zeta)·Z_H(zeta), with quotient(zeta) recomposed IN-CIRCUIT
+// (recomposeQuotientNative — pure EF-basis linear glue) from the transcript-OBSERVED
+// opened quotient chunks and Z_H(zeta) = zeta^(2^db) - 1 derived by EF glue from the
+// Lean-emitted, transcript-zeta-bound selectors (isLastRow·isTransition = zH). The
+// former placeholder bound folded to a FRESH `out` witness — vacuous. So the openings
+// no longer merely FEED an unconstrained evaluator: the constraint algebra is forced
+// to equal the recomposed quotient over the committed chunks.
+//
+// NAMED RESIDUAL, at current resolution: this binds the openings to the TRANSCRIPT
+// and now enforces the zeta-quotient identity over them, but not the remaining half
+// of the DEEP/PCS argument — that this transcript-consistent chunk set IS the
+// low-degree committed quotient polynomial's evaluation (FRI over the batch-combined
+// quotient). The emit skeleton models the FRI fold rows and the input-batch Merkle
+// openings but not that low-degree reduction, so "the opened chunks are the true
+// committed evaluations at zeta" remains seam #2. What is CLOSED here is the
+// wrong-zeta selector forgery, the free-openings forgery, and the free-folded
+// (quotient-identity) forgery; what is OPEN is the low-degree/commitment-consistency
+// of a transcript-consistent opening set.
 func (c *VerifierFullCircuit) bindBlockZeta(bb *BBApi) error {
 	api := bb.API()
 	m := c.txMeta
@@ -1102,37 +1114,85 @@ func (c *VerifierFullCircuit) bindBlockZeta(bb *BBApi) error {
 	}
 	for _, o := range c.block3Opened {
 		sh, sp := m.shapes[o.inst], spans[o.inst]
-		for _, e := range []error{
-			bindRow(o.traceLocal, sp.traceLocal, true),
-			bindRow(o.traceNext, sp.traceNext, sh.HasTraceNext),
-			bindRow(o.preLocal, sp.preLocal, sh.PreWidth > 0),
-			bindRow(o.preNext, sp.preNext, sh.PreWidth > 0 && sh.HasPreNext),
-			bindPerm(o.permLocal, sp.permLocal),
-			bindPerm(o.permNext, sp.permNext),
-		} {
-			if e != nil {
-				return fmt.Errorf("instance %d openings: %w", o.inst, e)
-			}
-		}
-		// The LogUp cumulative sums block 3 folds are the ones the transcript absorbed
-		// before the constraint-folding alpha was drawn.
-		if m.cumObsOff >= 0 {
-			if len(o.permValues) != sp.cumSums.len {
-				return fmt.Errorf("instance %d: %d cumulative-sum witnesses for a stream span of %d",
-					o.inst, len(o.permValues), sp.cumSums.len)
-			}
-			for k, v := range o.permValues {
-				var e BBExt
-				for i := 0; i < 4; i++ {
-					e[i] = c.TxPrefixObs[m.cumObsOff+4*(sp.cumSums.off+k)+i]
+		// tooth 2's opened-value / cumulative-sum equality binds. Skipped under the
+		// isolateQuotientIdentity structural probe so a folded-side tamper is caught
+		// by tooth 3 (the quotient identity) alone; on the deployed lane it always runs.
+		if !m.isolateQuotientIdentity {
+			for _, e := range []error{
+				bindRow(o.traceLocal, sp.traceLocal, true),
+				bindRow(o.traceNext, sp.traceNext, sh.HasTraceNext),
+				bindRow(o.preLocal, sp.preLocal, sh.PreWidth > 0),
+				bindRow(o.preNext, sp.preNext, sh.PreWidth > 0 && sh.HasPreNext),
+				bindPerm(o.permLocal, sp.permLocal),
+				bindPerm(o.permNext, sp.permNext),
+			} {
+				if e != nil {
+					return fmt.Errorf("instance %d openings: %w", o.inst, e)
 				}
-				bb.ExtAssertIsEqual(v, e)
+			}
+			// The LogUp cumulative sums block 3 folds are the ones the transcript absorbed
+			// before the constraint-folding alpha was drawn.
+			if m.cumObsOff >= 0 {
+				if len(o.permValues) != sp.cumSums.len {
+					return fmt.Errorf("instance %d: %d cumulative-sum witnesses for a stream span of %d",
+						o.inst, len(o.permValues), sp.cumSums.len)
+				}
+				for k, v := range o.permValues {
+					var e BBExt
+					for i := 0; i < 4; i++ {
+						e[i] = c.TxPrefixObs[m.cumObsOff+4*(sp.cumSums.off+k)+i]
+					}
+					bb.ExtAssertIsEqual(v, e)
+				}
 			}
 		}
+
+		// --- tooth 3: the DEEP quotient identity folded == quotient(zeta)·Z_H(zeta). ---
+		// The former placeholder bound folded to a fresh `out` witness — vacuous, since a
+		// prover could set out := folded and the recomposed quotient never entered the
+		// circuit. Here folded (evalSymbolicFoldedNative over the emitted DAG, recorded in
+		// starkInstance) is asserted equal to quotient(zeta)·Z_H(zeta), where the quotient
+		// is recomposed IN-CIRCUIT (recomposeQuotientNative, uni-stark verifier.rs:59-96 —
+		// pure EF-basis linear glue over already-opened values, no crypto/hint gadget) from
+		// the REAL opened quotient chunks. Those chunks are the transcript-OBSERVED opened
+		// stream (obsExt over buildStarkOpenedSpans' quotient-round span — the same flat
+		// stream zeta and every downstream challenge were drawn over), so folded is now a
+		// bound quantity, not free. Z_H(zeta) and zeta^(2^db) are derived by EF glue from the
+		// LEAN-EMITTED, transcript-zeta-bound selectors this bind already replayed
+		// (SelectorEmit.lean): isLastRow = zH·isTransition^{-1}, so zH = isLastRow·isTransition
+		// and zeta^(2^db) = zH + 1 (computeStarkSelectorsRef, stark_verify_native_ref.go:65-86).
+		// This mirrors the deployed VerifyShrinkStarkAlgebra per-instance quotient block
+		// (stark_verify_native.go:567-594), sourcing the chunks from the transcript instead
+		// of a fresh witness. Quotient-domain constants (kPow / zpsConst) are baked host-side
+		// (shrinkQuotientDomainConsts). The residual DEEP step — that this transcript-
+		// consistent opening set IS the committed polynomials' low-degree evaluation (FRI
+		// over the batch-combined quotient) — is orthogonal and stays open (seam #2 below).
+		// db is the trace degree the selectors were REPLAYED at (block3Selectors is
+		// instance-ordered, parallel to the caller's starkInstance loop), so derived[db]
+		// is guaranteed populated by tooth 1 and the quotient-domain constants share the
+		// exact degree the selectors (hence zetaPow2Db) were derived at.
+		db := c.block3Selectors[o.inst].db
+		d := derived[db] // Lean-emitted selectors at the squeeze-asserted zeta
+		one := BBExt{1, 0, 0, 0}
+		zH := bb.ExtMul(d.isLastRow, d.isTransition)
+		zetaPow2Db := bb.ExtAdd(zH, one)
+		chunks := make([][4]BBExt, len(sp.quotientChunks))
+		for cIdx, qs := range sp.quotientChunks {
+			if qs.len != 4 {
+				return fmt.Errorf("instance %d: quotient chunk %d span len %d != 4", o.inst, cIdx, qs.len)
+			}
+			for b := 0; b < 4; b++ {
+				chunks[cIdx][b] = obsExt(qs.off + b)
+			}
+		}
+		quotient := recomposeQuotientNative(bb, zetaPow2Db, chunks,
+			shrinkQuotientDomainConsts(db, sh.NumQuotientChunks))
+		bb.ExtAssertIsEqual(o.folded, bb.ExtMul(quotient, zH))
 	}
 	// The per-instance public values (base-field), flattened in instance order in the
 	// head publics block — the claim channel block 5 and the apex-VK pin ride on.
-	if m.pubObsOff >= 0 {
+	// Part of tooth 2; skipped under the isolateQuotientIdentity probe.
+	if m.pubObsOff >= 0 && !m.isolateQuotientIdentity {
 		flat := m.pubObsOff
 		for i, sh := range m.shapes {
 			for k := 0; k < sh.NumPublicValues; k++ {
@@ -1889,12 +1949,24 @@ type block3OpenedSlot struct {
 	traceLocal, traceNext, preLocal, preNext, permLocal, permNext []BBExt
 	permValues                                                    []BBExt
 	publicVals                                                    []BBExt
+	// folded is this instance's alpha-folded constraint value at zeta
+	// (evalSymbolicFoldedNative over the emitted DAG). The zeta bind's quotient
+	// identity (bindBlockZeta tooth 3) asserts it equals quotient(zeta)·Z_H(zeta)
+	// recomposed from the transcript-observed opened chunks — so folded is no
+	// longer bound to a fresh, prover-chosen output.
+	folded BBExt
 }
 
 // starkInstance materializes one batch-STARK instance's DAG evaluation over
-// fresh witness inputs, binding the folded value to a fresh output — the same
-// shape as settlement_profile_test.go's symEvalProfileCircuit, driven by the
-// emitted symbolic DAG (stark_constraint_interp.go).
+// fresh witness inputs and RECORDS the alpha-folded constraint value at zeta —
+// the same shape as settlement_profile_test.go's symEvalProfileCircuit, driven
+// by the emitted symbolic DAG (stark_constraint_interp.go). It no longer binds
+// folded to a fresh `out` witness (which left the quotient identity vacuous —
+// any prover could set out := folded). The bind is now the DEEP quotient
+// identity in bindBlockZeta tooth 3: folded == quotient(zeta)·Z_H(zeta),
+// recomposed from the transcript-observed opened quotient chunks. So this
+// function captures folded; the identity is asserted where the real openings
+// live.
 // `db` is the instance's trace degree_bits (the descriptor's BatchTableInstance
 // `degree_bits` param) — recorded with the selector witnesses so the zeta bind can
 // re-derive Z_H(zeta) and the Lagrange selectors at the transcript zeta.
@@ -1943,12 +2015,15 @@ func (c *VerifierFullCircuit) starkInstance(bb *BBApi, cur *varCursor, inst *Sym
 		}
 	}
 	alpha := cur.nextExt()
-	out := cur.nextExt()
+	// The alpha-folded constraint value at zeta over the emitted DAG. Recorded (not
+	// bound to a fresh output here) so bindBlockZeta tooth 3 can assert it equals the
+	// quotient(zeta)·Z_H(zeta) recomposed from the transcript-observed opened chunks.
+	folded := evalSymbolicFoldedNative(bb, inst, in, alpha)
 	// LOAD-BEARING LINK: record this instance's WitnessChecks bus (permAlpha/permBeta
 	// per lookup) and constraint-folding alpha so Define binds each to the
 	// transcript-re-derived challenge (TxPrefixSamp at permChSampleOff / alphaSampleOff).
-	// Without this, the DAG folded == out identity could be satisfied with a favorable
-	// alpha/permAlpha/permBeta the transcript never sampled.
+	// Without this, the DAG folded == quotient·Z_H identity could be satisfied with a
+	// favorable alpha/permAlpha/permBeta the transcript never sampled.
 	c.block3Challenges = append(c.block3Challenges, in.Challenges)
 	c.block3Alpha = append(c.block3Alpha, alpha)
 	// THE ZETA BIND capture: the three Lagrange selectors (+ this instance's
@@ -1967,7 +2042,6 @@ func (c *VerifierFullCircuit) starkInstance(bb *BBApi, cur *varCursor, inst *Sym
 		permNext:   in.PermNext,
 		permValues: in.PermValues,
 		publicVals: in.PublicValues,
+		folded:     folded,
 	})
-	folded := evalSymbolicFoldedNative(bb, inst, in, alpha)
-	bb.ExtAssertIsEqual(folded, out)
 }
