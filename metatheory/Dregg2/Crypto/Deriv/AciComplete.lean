@@ -41,16 +41,41 @@ makes `key` a HOMOMORPHISM into the order-preserving-union monoid (`key_alt`). T
   fragment simply does not contain those leaves, and `key` says so rather than guessing.
 * `rfl`/`sym`/`trans` — the closure, for free, because the invariant is an EQUALITY of keys.
 
+## THE WIDENING (second half of this file)
+
+`Sim` is now a FULL congruence: `Similarity.lean` carries `catCongR` and `starCong`, and
+`sim_null`/`sim_der`/`sim_sound` cover them. The obstruction that capped the first half — "recursing
+would be UNSOUND without `starCong` and a right `catCong`" — is therefore GONE, and the second half of
+this file takes the widening:
+
+4. **`nrm`** — a RECURSIVE normalizer (`nlist` flattens the spine with every leaf normalized
+   recursively; `nrm = foldList ∘ ddf ∘ nlist`), with **`nrm_sim : Sim (nrm R) R`** on ALL of
+   `PredRE`.
+
+5. **`sim_nkey`** — the recursive key `nkey R = ddf (nlist R)` (rigidity-gated) is a `Sim`-invariant.
+   Where `sim_key` discharged `negCong`/`interCong`/`catCong` by `none = none` (the blind spot), every
+   structural congruence now TRANSPORTS ITS IH through a key equation
+   (`nkey_star`/`nkey_cat`/`nkey_inter`/`nkey_neg`, into `Option.map`/`bind`).
+
+6. **`sim_nrm_eq`** — WIDENED COMPLETENESS on **`RigidFull`**: every ATOMIC LEAF is `reEq`-decidable,
+   the STRUCTURE IS ARBITRARY (`star`/`cat`/`inter`/`neg` nodes are IN). `rigidFull_of_frag` proves
+   this strictly contains `Frag`; the `#guard`s exhibit `star (a ⋓ a) ≅ star a`, which is `RigidFull`
+   and not `Frag`, being collapsed by `nrm` and NOT by `normalize`.
+
+7. **`simDecide_correct`** — hence `simDecide R S := reEq (nrm R) (nrm S)` is a genuine computable
+   DECISION PROCEDURE for `≅` whenever the left argument is `RigidFull`.
+
 ## Scope, stated exactly (no laundering)
 
-This is NOT full `PredRE` completeness and does not approach it. `Sim` is not a full congruence
-(`altCong` can hold because two DISJUNCTS are similar-but-unequal, e.g.
-`alt (star (alt a a)) b ≅ alt (star a) b`), and a non-recursive `normalize` cannot see through that
-— recursing would be UNSOUND without `starCong` and a right `catCong`. Under `key` those terms are
-`none`, i.e. explicitly OUT of the proven fragment; the residual is unchanged and is restated at the
-bottom of this file. Leaves outside `predBEq`'s decidable fragment (`atom`, `symMemberOf`, …) are
-likewise out — `rigidLeaf` is fail-closed on them, by the same one-sided-`reEq` discipline as
-`AciNormal`.
+This is still NOT full `PredRE` completeness. What remains is ONE axis, not two: leaves outside
+`predBEq`'s decidable fragment (`atom`, `symMemberOf`, `digFieldEq`, …), on which `rigidRE` is
+fail-closed by the same one-sided-`reEq` discipline as `AciNormal`. That boundary widens exactly as
+far as `predBEq` does, and every theorem below transports unchanged. The STRUCTURAL axis — the one
+`AciNormal`'s residual §2 named as blocked — is closed. The residual is restated precisely at the
+bottom of this file.
+
+`normalize` itself is UNCHANGED (other modules depend on its shape); `nrm` is a new function beside
+it, and the pure-`alt` results (1)–(3) stand on `normalize` exactly as before.
 
 `Similarity.lean` is NOT edited (its `#assert_not_depends_on` pins stand). `sorry`-free.
 -/
@@ -410,6 +435,398 @@ fragment hypothesis — it is `normalize_sim` plus `sym`/`trans`). -/
 theorem normalize_eq_sim {R S : PredRE} (h : normalize R = normalize S) : Sim R S :=
   Sim.trans (Sim.sym (normalize_sim R)) (h ▸ normalize_sim S)
 
+/-! # THE WIDENING — a RECURSIVE normalizer, complete on the FULL rigid fragment.
+
+`Sim` is now a FULL congruence (`Similarity.lean` carries `catCongR` and `starCong`, and
+`sim_null`/`sim_der`/`sim_sound` cover them). The obstruction named in `AciNormal`'s residual §2 —
+"recursing is UNSOUND under the present `Sim`: there is no `starCong` and `catCong` covers the left
+factor only" — is therefore GONE. This section takes the widening.
+
+`normalize` itself is left exactly as it is (it is `AciNormal`'s, and other modules depend on its
+shape). The recursive normalizer is a NEW function `nrm`, built from the SAME two pieces:
+
+* `nlist R` — the `alt` spine of `R`, flattened, with every non-`alt` LEAF normalized RECURSIVELY
+  (`star r ↦ star (nrm r)`, `cat a b ↦ cat (nrm a) (nrm b)`, …). `ddf` is deliberately NOT applied
+  at `alt` nodes: applying it there would force `mergeR`-ASSOCIATIVITY into the `assoc` case, whereas
+  leaving the spine raw makes `assoc` `List.append_assoc` again — the same trick that keeps the
+  pure-`alt` argument short.
+* `nrm R := foldList (ddf (nlist R))` — dedup once, at the top of each spine.
+
+and the canonical key becomes `nkey R = ddf (nlist R)` (gated by rigidity), which is a homomorphism
+for `alt` (`nkey_alt`, into `mergeR` — unchanged) AND is now DETERMINED-BY-THE-KEY at every other
+constructor (`nkey_star`/`nkey_cat`/`nkey_inter`/`nkey_neg`, into `Option.map`/`bind`). That second
+family is what the new congruences buy: `starCong`/`catCongR` become one-line rewrites instead of
+`key = none` on both sides.
+
+The fragment widens from `Frag` (pure-`alt` over rigid leaves) to **`RigidFull`**: EVERY ATOMIC LEAF
+is `reEq`-decidable, the STRUCTURE IS ARBITRARY — `star`, `cat`, `inter`, `neg` nodes are now IN.
+`rigidFull_of_frag` proves this is a genuine superset. -/
+
+/-! ## `RigidFull` — rigidity at the leaves, arbitrary structure. -/
+
+/-- **`rigidRE R`** — every atomic leaf of `R` is `reEq`-decidable. Unlike `rigidLeaf` this RECURSES
+through `star`/`cat`/`inter`/`neg`, because `normalize`'s successor does too. -/
+def rigidRE : PredRE → Bool
+  | .ε         => true
+  | .sym p     => predBEq p p
+  | .alt a b   => rigidRE a && rigidRE b
+  | .inter a b => rigidRE a && rigidRE b
+  | .cat a b   => rigidRE a && rigidRE b
+  | .star a    => rigidRE a
+  | .neg a     => rigidRE a
+
+/-- **`RigidFull R`** — the widened fragment. -/
+def RigidFull (R : PredRE) : Prop := rigidRE R = true
+
+/-- On the widened fragment `reEq` is REFLEXIVE — the half `reEq_sound` does not give. -/
+theorem reEq_refl_of_rigidRE : ∀ {R : PredRE}, rigidRE R = true → reEq R R = true := by
+  intro R
+  induction R with
+  | ε => intro _; rfl
+  | sym p => intro h; simpa [reEq] using h
+  | alt a b iha ihb =>
+    intro h; simp only [rigidRE, Bool.and_eq_true] at h; simp [reEq, iha h.1, ihb h.2]
+  | inter a b iha ihb =>
+    intro h; simp only [rigidRE, Bool.and_eq_true] at h; simp [reEq, iha h.1, ihb h.2]
+  | cat a b iha ihb =>
+    intro h; simp only [rigidRE, Bool.and_eq_true] at h; simp [reEq, iha h.1, ihb h.2]
+  | star a iha => intro h; simp only [rigidRE] at h; simp [reEq, iha h]
+  | neg a iha => intro h; simp only [rigidRE] at h; simp [reEq, iha h]
+
+/-- The widened fragment CONTAINS the old one: every pure-`alt` term over `rigidLeaf`s is
+`RigidFull`. (The converse fails — see the `#guard`s: `star (a ⋓ a)` is `RigidFull`, not `Frag`.) -/
+theorem rigidFull_of_frag : ∀ {R : PredRE}, Frag R → RigidFull R := by
+  intro R
+  induction R with
+  | ε => intro _; rfl
+  | sym p => intro h; simpa [RigidFull, rigidRE, Frag, altList, allRigid, rigidLeaf] using h
+  | alt a b iha ihb =>
+    intro h
+    simp only [Frag, altList_alt, allRigid, List.all_append, Bool.and_eq_true] at h
+    simp only [RigidFull, rigidRE, Bool.and_eq_true]
+    exact ⟨iha h.1, ihb h.2⟩
+  | inter a b _ _ => intro h; simp [Frag, altList, allRigid, rigidLeaf] at h
+  | cat a b _ _ => intro h; simp [Frag, altList, allRigid, rigidLeaf] at h
+  | star a _ => intro h; simp [Frag, altList, allRigid, rigidLeaf] at h
+  | neg a _ => intro h; simp [Frag, altList, allRigid, rigidLeaf] at h
+
+/-! ## The recursive normalizer. -/
+
+/-- **`nlist R`** — `R`'s `alt` spine, flattened, with every LEAF normalized RECURSIVELY. Structural
+recursion; `ddf` is applied inside the leaves (once per spine) but NOT at the `alt` nodes. -/
+def nlist : PredRE → List PredRE
+  | .ε         => [.ε]
+  | .sym p     => [.sym p]
+  | .alt a b   => nlist a ++ nlist b
+  | .inter a b => [.inter (foldList (ddf (nlist a))) (foldList (ddf (nlist b)))]
+  | .cat a b   => [.cat (foldList (ddf (nlist a))) (foldList (ddf (nlist b)))]
+  | .star a    => [.star (foldList (ddf (nlist a)))]
+  | .neg a     => [.neg (foldList (ddf (nlist a)))]
+
+/-- **`nrm R`** — the RECURSIVE ACI normal form: normalize the leaves, flatten the spine, keep the
+first occurrence of each disjunct, refold. -/
+def nrm (R : PredRE) : PredRE := foldList (ddf (nlist R))
+
+theorem nlist_ne_nil (R : PredRE) : nlist R ≠ [] := by
+  induction R with
+  | alt a b iha _ =>
+    simp only [nlist]; intro h; exact iha (List.append_eq_nil_iff.mp h).1
+  | _ => simp [nlist]
+
+theorem ddf_ne_nil : ∀ {l : List PredRE}, l ≠ [] → ddf l ≠ [] := by
+  intro l h
+  cases l with
+  | nil => exact absurd rfl h
+  | cons x xs => simp [ddf]
+
+theorem nlist_star (R : PredRE) : nlist (.star R) = [.star (nrm R)] := rfl
+theorem nlist_neg (R : PredRE) : nlist (.neg R) = [.neg (nrm R)] := rfl
+theorem nlist_cat (R S : PredRE) : nlist (.cat R S) = [.cat (nrm R) (nrm S)] := rfl
+theorem nlist_inter (R S : PredRE) : nlist (.inter R S) = [.inter (nrm R) (nrm S)] := rfl
+theorem nlist_alt (R S : PredRE) : nlist (.alt R S) = nlist R ++ nlist S := rfl
+
+/-! ## SOUNDNESS — `Sim (nrm R) R`, now THROUGH the leaves.
+
+Same two-step shape as `AciNormal.normalize_sim`, but the leaf steps use the NEW congruences:
+`starCong` for `star`, `catCong`+`catCongR` for `cat`, `interCong`, `negCong`. -/
+
+/-- Refolding a `ddf`'d spine is `AciNormal`'s `dedupFirst` fold — the bridge. -/
+theorem foldList_ddf_cons (x : PredRE) (xs : List PredRE) :
+    foldList (ddf (x :: xs)) = foldAlt x (dedupFirst (dropEq x xs)) := by
+  rw [← dedupFirst_eq_ddf' (x :: xs), dedupFirst]; rfl
+
+/-- From the head-form spine soundness, the `ddf` pass is `Sim`-neutral on top. -/
+private theorem nrm_sim_of_head {R : PredRE}
+    (h2 : ∀ x xs, nlist R = x :: xs → Sim (foldAlt x xs) R) : Sim (nrm R) R := by
+  unfold nrm
+  cases hl : nlist R with
+  | nil => exact absurd hl (nlist_ne_nil R)
+  | cons x xs =>
+    rw [foldList_ddf_cons]
+    refine Sim.trans (foldAlt_dedupFirst (dropEq x xs) x) ?_
+    exact Sim.trans (foldAlt_dropEq x xs x Sim.idem) (h2 x xs hl)
+
+private theorem nlist_singleton_sim {R t : PredRE} (hnl : nlist R = [t]) (ht : Sim t R) :
+    (∀ h, Sim (foldAlt h (nlist R)) (.alt h R))
+      ∧ (∀ x xs, nlist R = x :: xs → Sim (foldAlt x xs) R) := by
+  constructor
+  · intro h; rw [hnl]; exact Sim.altCong Sim.rfl ht
+  · intro x xs hx
+    rw [hnl] at hx
+    simp only [List.cons.injEq] at hx
+    obtain ⟨rfl, rfl⟩ := hx
+    exact ht
+
+/-- **`nlist_fold_sim`** — the spine of `nlist` refolds back to the original, in both the
+prefixed and the head form. Structural induction on `R`; the leaf cases are exactly the `Sim`
+congruences, one per constructor. -/
+theorem nlist_fold_sim : ∀ R : PredRE,
+    (∀ h, Sim (foldAlt h (nlist R)) (.alt h R))
+      ∧ (∀ x xs, nlist R = x :: xs → Sim (foldAlt x xs) R) := by
+  intro R
+  induction R with
+  | ε => exact nlist_singleton_sim rfl Sim.rfl
+  | sym p => exact nlist_singleton_sim rfl Sim.rfl
+  | alt a b iha ihb =>
+    constructor
+    · intro h
+      rw [nlist_alt, foldAlt_append]
+      refine Sim.trans (ihb.1 (foldAlt h (nlist a))) ?_
+      exact Sim.trans (Sim.altCong (iha.1 h) Sim.rfl) Sim.assoc
+    · intro x xs hx
+      rw [nlist_alt] at hx
+      cases hla : nlist a with
+      | nil => exact absurd hla (nlist_ne_nil a)
+      | cons y ys =>
+        rw [hla] at hx
+        simp only [List.cons_append, List.cons.injEq] at hx
+        obtain ⟨rfl, rfl⟩ := hx
+        rw [foldAlt_append]
+        exact Sim.trans (ihb.1 (foldAlt y ys)) (Sim.altCong (iha.2 y ys hla) Sim.rfl)
+  | inter a b iha ihb =>
+    exact nlist_singleton_sim (nlist_inter a b)
+      (Sim.interCong (nrm_sim_of_head iha.2) (nrm_sim_of_head ihb.2))
+  | cat a b iha ihb =>
+    refine nlist_singleton_sim (nlist_cat a b) ?_
+    exact Sim.trans (Sim.catCong (nrm_sim_of_head iha.2))
+      (Sim.catCongR (nrm_sim_of_head ihb.2))
+  | star a iha =>
+    exact nlist_singleton_sim (nlist_star a) (Sim.starCong (nrm_sim_of_head iha.2))
+  | neg a iha =>
+    exact nlist_singleton_sim (nlist_neg a) (Sim.negCong (nrm_sim_of_head iha.2))
+
+/-- **`nrm_sim`** — SOUNDNESS of the recursive normalizer, on ALL of `PredRE` (no fragment
+hypothesis; rigidity only ever costs dedup POWER, never soundness). -/
+theorem nrm_sim (R : PredRE) : Sim (nrm R) R := nrm_sim_of_head (nlist_fold_sim R).2
+
+/-- Language-soundness, transported. -/
+theorem nrm_derives (R : PredRE) (w : List Value) : derives w (nrm R) = derives w R :=
+  sim_derives_syntactic (nrm_sim R) w
+
+/-! ## Rigidity is preserved by normalization. -/
+
+theorem rigidRE_foldAlt : ∀ (l : List PredRE) (h : PredRE), rigidRE h = true →
+    (∀ y ∈ l, rigidRE y = true) → rigidRE (foldAlt h l) = true := by
+  intro l
+  induction l with
+  | nil => intro h hh _; exact hh
+  | cons a as ih =>
+    intro h hh hl
+    refine ih (.alt h a) ?_ (fun y hy => hl y (List.mem_cons_of_mem _ hy))
+    simp [rigidRE, hh, hl a (List.mem_cons_self ..)]
+
+theorem rigidRE_foldList {l : List PredRE} (hne : l ≠ []) (h : ∀ y ∈ l, rigidRE y = true) :
+    rigidRE (foldList l) = true := by
+  cases l with
+  | nil => exact absurd rfl hne
+  | cons x xs =>
+    exact rigidRE_foldAlt xs x (h x (List.mem_cons_self ..))
+      (fun y hy => h y (List.mem_cons_of_mem _ hy))
+
+/-- **`rigid_nlist`** — on the widened fragment, every normalized disjunct is itself rigid. This is
+what lets the left-regular-band deletion laws fire on the RECURSIVELY normalized leaves. -/
+theorem rigid_nlist : ∀ {R : PredRE}, rigidRE R = true → ∀ y ∈ nlist R, rigidRE y = true := by
+  intro R
+  have step : ∀ (a : PredRE), (∀ y ∈ nlist a, rigidRE y = true) → rigidRE (nrm a) = true := by
+    intro a ha
+    exact rigidRE_foldList (ddf_ne_nil (nlist_ne_nil a)) (fun y hy => ha y (ddf_subset hy))
+  induction R with
+  | ε => intro _ y hy; simp only [nlist, List.mem_singleton] at hy; simp [hy, rigidRE]
+  | sym p =>
+    intro h y hy
+    simp only [nlist, List.mem_singleton] at hy
+    simpa [hy, rigidRE] using h
+  | alt a b iha ihb =>
+    intro h y hy
+    simp only [rigidRE, Bool.and_eq_true] at h
+    rw [nlist_alt] at hy
+    rcases List.mem_append.mp hy with hy | hy
+    · exact iha h.1 y hy
+    · exact ihb h.2 y hy
+  | inter a b iha ihb =>
+    intro h y hy
+    simp only [rigidRE, Bool.and_eq_true] at h
+    simp only [nlist_inter, List.mem_singleton] at hy
+    simp [hy, rigidRE, step a (iha h.1), step b (ihb h.2)]
+  | cat a b iha ihb =>
+    intro h y hy
+    simp only [rigidRE, Bool.and_eq_true] at h
+    simp only [nlist_cat, List.mem_singleton] at hy
+    simp [hy, rigidRE, step a (iha h.1), step b (ihb h.2)]
+  | star a iha =>
+    intro h y hy
+    simp only [rigidRE] at h
+    simp only [nlist_star, List.mem_singleton] at hy
+    simp [hy, rigidRE, step a (iha h)]
+  | neg a iha =>
+    intro h y hy
+    simp only [rigidRE] at h
+    simp only [nlist_neg, List.mem_singleton] at hy
+    simp [hy, rigidRE, step a (iha h)]
+
+theorem rigidRE_nrm {R : PredRE} (h : rigidRE R = true) : rigidRE (nrm R) = true :=
+  rigidRE_foldList (ddf_ne_nil (nlist_ne_nil R)) (fun y hy => rigid_nlist h y (ddf_subset hy))
+
+/-! ## The RECURSIVE key, and its `Sim`-invariance. -/
+
+/-- **`nkey R`** — the recursive canonical key: the first-occurrence sequence of the spine of `R`
+with every leaf recursively normalized, when `R` is `RigidFull`; `none` otherwise. -/
+def nkey (R : PredRE) : Option (List PredRE) :=
+  if rigidRE R then some (ddf (nlist R)) else none
+
+theorem nkey_eq_some_of_rigid {R : PredRE} (h : RigidFull R) : nkey R = some (ddf (nlist R)) :=
+  if_pos h
+
+theorem rigid_of_nkey_some {R : PredRE} {l} (h : nkey R = some l) : RigidFull R := by
+  unfold nkey at h; split at h
+  · assumption
+  · exact absurd h (by simp)
+
+theorem nkey_rigid_elems {R : PredRE} {l : List PredRE} (h : nkey R = some l) :
+    ∀ y ∈ l, reEq y y = true := by
+  have hr : RigidFull R := rigid_of_nkey_some h
+  have hl : l = ddf (nlist R) := by
+    rw [nkey_eq_some_of_rigid hr] at h; exact (Option.some.inj h).symm
+  intro y hy
+  subst hl
+  exact reEq_refl_of_rigidRE (rigid_nlist hr y (ddf_subset hy))
+
+/-- `nkey` is a HOMOMORPHISM from `alt` into `mergeR` — the pure-`alt` half, unchanged. -/
+theorem nkey_alt (R S : PredRE) :
+    nkey (.alt R S) = (nkey R).bind (fun l => (nkey S).bind (fun m => some (mergeR l m))) := by
+  unfold nkey
+  rw [nlist_alt, ddf_append]
+  cases hR : rigidRE R <;> cases hS : rigidRE S <;> simp [rigidRE, hR, hS]
+
+/-! The NEW half: at every non-`alt` constructor the key is a FUNCTION OF THE SUB-KEYS. This is
+exactly what `starCong` / `catCongR` buy — previously all four of these were `none`. -/
+
+theorem nkey_star (R : PredRE) :
+    nkey (.star R) = (nkey R).map (fun l => [PredRE.star (foldList l)]) := by
+  unfold nkey
+  cases hR : rigidRE R <;> simp [rigidRE, hR, nlist_star, nrm, ddf]
+
+theorem nkey_neg (R : PredRE) :
+    nkey (.neg R) = (nkey R).map (fun l => [PredRE.neg (foldList l)]) := by
+  unfold nkey
+  cases hR : rigidRE R <;> simp [rigidRE, hR, nlist_neg, nrm, ddf]
+
+theorem nkey_cat (R S : PredRE) :
+    nkey (.cat R S)
+      = (nkey R).bind (fun l => (nkey S).map (fun m => [PredRE.cat (foldList l) (foldList m)])) := by
+  unfold nkey
+  cases hR : rigidRE R <;> cases hS : rigidRE S <;>
+    simp [rigidRE, hR, hS, nlist_cat, nrm, ddf]
+
+theorem nkey_inter (R S : PredRE) :
+    nkey (.inter R S)
+      = (nkey R).bind (fun l =>
+          (nkey S).map (fun m => [PredRE.inter (foldList l) (foldList m)])) := by
+  unfold nkey
+  cases hR : rigidRE R <;> cases hS : rigidRE S <;>
+    simp [rigidRE, hR, hS, nlist_inter, nrm, ddf]
+
+/-- **`sim_nkey`** — THE WIDENED INVARIANCE THEOREM. The recursive first-occurrence key is constant
+on `≅`-classes, for EVERY `R S : PredRE`. Compare `sim_key`: there the four structural congruence
+cases were discharged by `none = none` (the blind spot); here every one of them TRANSPORTS ITS IH
+through the corresponding key equation. -/
+theorem sim_nkey {R S : PredRE} (h : Sim R S) : nkey R = nkey S := by
+  induction h with
+  | @assoc R₁ R₂ R₃ =>
+    -- `nlist` does NOT `ddf` at `alt` nodes, so associativity is `List.append_assoc` and no
+    -- `mergeR`-associativity is ever needed.
+    simp only [nkey, rigidRE, nlist_alt, List.append_assoc, Bool.and_assoc]
+  | @dedup R₁ R₂ =>
+    by_cases h1 : rigidRE R₁ = true
+    · by_cases h2 : rigidRE R₂ = true
+      · have hrig : ∀ y ∈ ddf (nlist R₁), reEq y y = true := fun y hy =>
+          reEq_refl_of_rigidRE (rigid_nlist h1 y (ddf_subset hy))
+        simp only [nkey, rigidRE, nlist_alt, h1, h2, Bool.and_self]
+        rw [ddf_append, ddf_append, ddf_append, mergeR_dedup hrig]
+      · simp only [Bool.not_eq_true] at h2
+        simp [nkey, rigidRE, h1, h2]
+    · simp only [Bool.not_eq_true] at h1
+      simp [nkey, rigidRE, h1]
+  | @idem R =>
+    by_cases h1 : rigidRE R = true
+    · have hrig : ∀ y ∈ ddf (nlist R), reEq y y = true := fun y hy =>
+        reEq_refl_of_rigidRE (rigid_nlist h1 y (ddf_subset hy))
+      simp only [nkey, rigidRE, nlist_alt, h1, Bool.and_self]
+      rw [ddf_append, mergeR_self hrig]
+    · simp only [Bool.not_eq_true] at h1
+      simp [nkey, rigidRE, h1]
+  | rfl => rfl
+  | sym _ ih => exact ih.symm
+  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
+  | negCong _ ih => rw [nkey_neg, nkey_neg, ih]
+  | altCong _ _ ih₁ ih₂ => rw [nkey_alt, nkey_alt, ih₁, ih₂]
+  | interCong _ _ ih₁ ih₂ => rw [nkey_inter, nkey_inter, ih₁, ih₂]
+  | catCong _ ih => rw [nkey_cat, nkey_cat, ih]
+  | catCongR _ ih => rw [nkey_cat, nkey_cat, ih]
+  | starCong _ ih => rw [nkey_star, nkey_star, ih]
+
+/-- The widened fragment is `Sim`-CLOSED — again a consequence, not a hypothesis. -/
+theorem sim_rigidFull {R S : PredRE} (h : Sim R S) (hR : RigidFull R) : RigidFull S :=
+  rigid_of_nkey_some ((sim_nkey h) ▸ nkey_eq_some_of_rigid hR)
+
+/-- **`sim_nrm_eq`** — WIDENED COMPLETENESS. On `RigidFull` — every atomic leaf `reEq`-decidable,
+STRUCTURE ARBITRARY — the recursive normal form is a COMPLETE invariant of `≅`. This strictly
+subsumes `sim_normalize_eq` (`rigidFull_of_frag`), and it is the case `AciNormal`'s residual §2 said
+was blocked on `Sim` becoming a full congruence. -/
+theorem sim_nrm_eq {R S : PredRE} (h : Sim R S) (hR : RigidFull R) : nrm R = nrm S := by
+  have hk : some (ddf (nlist R)) = some (ddf (nlist S)) := by
+    rw [← nkey_eq_some_of_rigid hR, ← nkey_eq_some_of_rigid (sim_rigidFull h hR)]
+    exact sim_nkey h
+  unfold nrm; rw [Option.some.inj hk]
+
+/-- The `←` direction, unconditional (soundness plus `sym`/`trans`). -/
+theorem nrm_eq_sim {R S : PredRE} (h : nrm R = nrm S) : Sim R S :=
+  Sim.trans (Sim.sym (nrm_sim R)) (h ▸ nrm_sim S)
+
+/-! ## …hence a genuine DECISION PROCEDURE for `≅` on the widened fragment. -/
+
+/-- **`simDecide R S`** — computable: normalize both recursively, compare with the one-sided `reEq`. -/
+def simDecide (R S : PredRE) : Bool := reEq (nrm R) (nrm S)
+
+/-- **`simDecide_correct`** — `simDecide` DECIDES `≅` whenever the left argument is `RigidFull`.
+`→` is unconditional (`reEq_sound` + `nrm_eq_sim`); `←` is the widened completeness plus reflexivity
+of `reEq` on the normalized (hence still rigid) term. -/
+theorem simDecide_correct {R S : PredRE} (hR : RigidFull R) :
+    simDecide R S = true ↔ Sim R S := by
+  constructor
+  · intro h; exact nrm_eq_sim (reEq_sound h)
+  · intro h
+    have he : nrm R = nrm S := sim_nrm_eq h hR
+    unfold simDecide
+    rw [← he]
+    exact reEq_refl_of_rigidRE (rigidRE_nrm hR)
+
+/-- NON-VACUITY of the widened decision: it answers `false` on a genuinely non-similar RIGID pair
+(the `alt`-commutativity falsifier survives the widening), and `true` on a similarity that lives
+STRICTLY OUTSIDE the old `Frag` (under a `star`). Both are `#guard`ed below. -/
+theorem not_sim_of_nrm_ne {R S : PredRE} (hR : RigidFull R) (h : nrm R ≠ nrm S) : ¬ Sim R S :=
+  fun hs => h (sim_nrm_eq hs hR)
+
 /-! ## THE FALSIFIER — `alt` is NOT commutative under `≅`.
 
 The prose claim of `AciNormal.lean` ("the free left regular band on two generators has `ab ≠ ba`,
@@ -504,6 +921,101 @@ private def keyBEq : Option (List PredRE) → Option (List PredRE) → Bool
 
 end Guards
 
+/-! ## `#guard`s for the WIDENING — `nrm` collapses ACI redundancy UNDER `star` and `cat`, which
+`normalize` provably cannot. -/
+
+section WideGuards
+
+-- The fragment REALLY widened: `star (g7 ⋓ g7)` is `RigidFull` but is NOT `Frag` (its whole spine is
+-- one `star` leaf, which `rigidLeaf` rejects).
+#guard rigidRE (.star (.alt g7 g7)) = true
+#guard allRigid (altList (.star (.alt g7 g7))) = false
+#guard rigidRE (.cat (.alt (.alt g7 g9) g7) (.star (.alt g9 g9))) = true
+#guard allRigid (altList (.cat (.alt (.alt g7 g9) g7) (.star (.alt g9 g9)))) = false
+
+-- UNDER A STAR: `star (g7 ⋓ g7)` ↦ `star g7`. `normalize` leaves it ALONE (it cannot recurse);
+-- `nrm` collapses it. This pair is the whole point of the widening, in two lines.
+#guard reEq (nrm (.star (.alt g7 g7))) (.star g7) = true
+#guard reEq (normalize (.star (.alt g7 g7))) (.star g7) = false
+
+-- UNDER A CAT, both factors at once (the `catCong` AND `catCongR` directions):
+-- `((g7 ⋓ g9) ⋓ g7) · star (g9 ⋓ g9)` ↦ `(g7 ⋓ g9) · star g9`.
+#guard reEq (nrm (.cat (.alt (.alt g7 g9) g7) (.star (.alt g9 g9))))
+            (.cat (.alt g7 g9) (.star g9)) = true
+#guard reEq (normalize (.cat (.alt (.alt g7 g9) g7) (.star (.alt g9 g9))))
+            (.cat (.alt g7 g9) (.star g9)) = false
+
+-- MIXED: dedup of two spine disjuncts that are similar-but-UNEQUAL as written — exactly the
+-- `altCong` blind spot `AciNormal`'s residual §2 named. `star (g7 ⋓ g7) ⋓ star g7` ↦ `star g7`.
+#guard reEq (nrm (.alt (.star (.alt g7 g7)) (.star g7))) (.star g7) = true
+#guard reEq (normalize (.alt (.star (.alt g7 g7)) (.star g7)))
+            (.alt (.star (.alt g7 g7)) (.star g7)) = true
+
+-- …and under `neg` / `inter` too.
+#guard reEq (nrm (.neg (.alt g7 g7))) (.neg g7) = true
+#guard reEq (nrm (.inter (.alt g7 g7) (.alt (.alt g9 g7) g9))) (.inter g7 (.alt g9 g7)) = true
+
+-- NOT over-collapsing: order is still PRESERVED under the recursion (no sort), and distinct
+-- disjuncts still survive.
+#guard reEq (nrm (.star (.alt g7 g9))) (.star (.alt g7 g9)) = true
+#guard reEq (nrm (.star (.alt g9 g7))) (.star (.alt g7 g9)) = false
+#guard reEq (nrm (.star g7)) (.star g9) = false
+
+-- The DECISION PROCEDURE, both polarities, on terms outside the old fragment.
+#guard simDecide (.star (.alt g7 g7)) (.star g7) = true
+#guard simDecide (.star (.alt g7 g9)) (.star (.alt g9 g7)) = false
+#guard simDecide (.cat (.alt g7 g7) (.star g9)) (.cat g7 (.star g9)) = true
+
+-- FAIL-CLOSED at the leaves, unchanged: an `atom` leaf is still outside `predBEq`'s fragment, so
+-- `rigidRE` says `false` rather than guessing, and `nrm` under-dedups (sound, not complete).
+#guard rigidRE (.star (.alt gAtom gAtom)) = false
+#guard rigidRE (.alt gAtom gAtom) = false
+-- The under-dedup, witnessed by a DECIDABLE invariant rather than by the one-sided `reEq` (a
+-- `reEq _ _ = false` proves nothing — that is the fail-closed direction). Spine LENGTH after `ddf`:
+-- the rigid pair collapses to 1, the `atom` pair does NOT (stays 2), so `nrm (a ⋓ a) ≠ a` for the
+-- `atom` leaf — it is still a two-disjunct `alt`. THAT is the open residual, exhibited.
+#guard (ddf (nlist (.alt g7 g7))).length = 1
+#guard (ddf (nlist (.alt gAtom gAtom))).length = 2
+#guard (ddf (nlist (.star (.alt gAtom gAtom)))).length = 1
+
+/-! ### NON-VACUITY of the widening, as THEOREMS (not only as computed guards).
+
+`sim_nrm_eq` would be uninteresting if its hypothesis were unsatisfiable outside `Frag`. It is not:
+here is a real `Sim` derivation whose two sides live STRICTLY outside `Frag` (both are single `star`
+leaves, which `rigidLeaf` rejects), whose normal forms completeness therefore equates — and, in the
+other polarity, a `RigidFull` pair under a `star` that is provably NOT similar. -/
+
+/-- A similarity that only exists because `Sim` gained `starCong`. -/
+theorem sim_star_dedup_witness : Sim (.star (.alt g7 g7)) (.star g7) := Sim.starCong Sim.idem
+
+theorem rigidFull_star_g7g7 : RigidFull (.star (.alt g7 g7)) := by
+  unfold RigidFull; decide
+
+/-- …and this pair is OUTSIDE the old fragment: `sim_normalize_eq` cannot be applied to it. -/
+theorem not_frag_star_g7g7 : ¬ Frag (.star (.alt g7 g7)) := by
+  unfold Frag; decide
+
+/-- WIDENED COMPLETENESS, fired on that witness — a case the pure-`alt` theorem cannot reach. -/
+theorem nrm_star_dedup_witness : nrm (.star (.alt g7 g7)) = nrm (.star g7) :=
+  sim_nrm_eq sim_star_dedup_witness rigidFull_star_g7g7
+
+theorem g7_ne_g9 : g7 ≠ g9 := by intro h; simp [g7, g9] at h
+
+theorem nrm_star_alt_79 : nrm (.star (.alt g7 g9)) = .star (.alt g7 g9) := rfl
+theorem nrm_star_alt_97 : nrm (.star (.alt g9 g7)) = .star (.alt g9 g7) := rfl
+
+/-- The OTHER polarity, UNDER A STAR: `alt` is not commutative under `≅` even beneath a congruence
+that `Sim` only just gained. A real disequality (constructor injection), not a `reEq = false`. -/
+theorem not_sim_star_alt_comm : ¬ Sim (.star (.alt g7 g9)) (.star (.alt g9 g7)) := by
+  refine not_sim_of_nrm_ne (by unfold RigidFull; decide) ?_
+  rw [nrm_star_alt_79, nrm_star_alt_97]
+  intro h
+  injection h with h1
+  injection h1 with h2 _
+  exact g7_ne_g9 h2
+
+end WideGuards
+
 end PredRE
 
 /-! ## Axiom hygiene. -/
@@ -520,30 +1032,63 @@ end PredRE
   PredRE.normalize_alt_comm_ne, PredRE.not_sim_alt_comm, PredRE.not_sim_of_normalize_ne
 ]
 
+/-! The WIDENING's keystones. -/
+
+#assert_all_clean [
+  PredRE.reEq_refl_of_rigidRE, PredRE.rigidFull_of_frag,
+  PredRE.nlist_ne_nil, PredRE.ddf_ne_nil, PredRE.foldList_ddf_cons,
+  PredRE.nlist_fold_sim, PredRE.nrm_sim, PredRE.nrm_derives,
+  PredRE.rigidRE_foldAlt, PredRE.rigidRE_foldList, PredRE.rigid_nlist, PredRE.rigidRE_nrm,
+  PredRE.nkey_rigid_elems, PredRE.nkey_alt,
+  PredRE.nkey_star, PredRE.nkey_neg, PredRE.nkey_cat, PredRE.nkey_inter,
+  PredRE.sim_nkey, PredRE.sim_rigidFull, PredRE.sim_nrm_eq, PredRE.nrm_eq_sim,
+  PredRE.simDecide_correct, PredRE.not_sim_of_nrm_ne,
+  PredRE.sim_star_dedup_witness, PredRE.rigidFull_star_g7g7, PredRE.not_frag_star_g7g7,
+  PredRE.nrm_star_dedup_witness, PredRE.not_sim_star_alt_comm
+]
+
 /-!
-## THE RESIDUAL — what is still NOT proved (unchanged by this module, restated exactly).
+## THE RESIDUAL — what is still NOT proved, after the widening.
 
-`normalize_complete` on FULL `PredRE` — `∀ R S, Sim R S → normalize R = normalize S` — remains open,
-and this module does not narrow it in the two places `AciNormal` named:
+`AciNormal`'s residual named TWO obstructions. **§2 (structural) is now CLOSED**; §3 (leaf equality)
+is not, and is the only one left.
 
-1. **Non-rigid leaves.** `key` is `none` on any spine containing a `star`/`cat`/`inter`/`neg` leaf,
-   because `Sim` can relate two such leaves without them being EQUAL (`altCong` + `interCong` +
-   `catCong`), and a non-recursive `normalize` cannot see it. Closing this needs `Sim` to become a
-   FULL congruence (`starCong`, a right `catCong`) and `normalize` to recurse — an edit to
-   `Similarity.lean` that must re-prove `sim_null`/`sim_der`/`sim_sound` for the new constructors and
-   keep its `#assert_not_depends_on` pins passing. NOT attempted here.
-2. **Fail-closed leaf equality.** `rigidLeaf` demands `predBEq p p = true`, so `atom`,
-   `symMemberOf`, `digFieldEq`, … leaves are outside the fragment even though they are perfectly good
-   non-`alt` leaves. This is the SAME one-sided-`reEq` boundary as `AciNormal`, and it widens exactly
-   as far as `predBEq` does: a real `DecidableEq StateConstraint` (an edit to `Exec/Program.lean`)
-   would extend `rigidLeaf`, and every theorem above transports unchanged — the invariance argument
-   uses only `reEq_sound` plus reflexivity on the fragment.
+**CLOSED — the structural axis.** `sim_nrm_eq : Sim R S → RigidFull R → nrm R = nrm S` is completeness
+on a fragment whose STRUCTURE IS ARBITRARY: `star`, `cat`, `inter` and `neg` nodes are inside it, at
+any depth, and the `altCong` blind spot §2 named (`alt (star (alt a a)) b ≅ alt (star a) b`, two
+disjuncts similar-but-unequal) is decided correctly — `#guard`ed. What paid for it is `Similarity`'s
+`catCongR`/`starCong`: with a full congruence the recursion is SOUND (`nrm_sim`, unconditional), and
+with the recursion the key determines itself at every constructor (`nkey_star`/`nkey_cat`/…), so the
+four congruence cases of `sim_nkey` transport instead of collapsing to `none = none`.
 
-What IS closed: the design question. The order-preserving first-occurrence normal form is a COMPLETE
-invariant of `≅` on the pure-`alt` fragment (`sim_normalize_eq`), and the SORTED normal form is
-UNREACHABLE (`not_sim_alt_comm`) — not merely unproved. The "months-scale `Permute`/`Pieces`"
-estimate was priced against the sorting picture; the theorem above says that price bought nothing,
-because the commutativity it needs is false.
+**OPEN — the leaf axis, and ONLY that.** `rigidRE` demands `predBEq p p = true` at every atomic leaf,
+so `atom`, `symMemberOf`, `digFieldEq`, … terms are outside `RigidFull` even though they are perfectly
+good leaves. Named precisely:
+
+    `∀ R S, Sim R S → nrm R = nrm S`   -- FULL `PredRE`, no rigidity side condition
+
+This is FALSE as stated for the CURRENT `predBEq`, not merely unproved: `predBEq` answers `false` on
+equal `atom` leaves, so `ddf` under-dedups and `nrm (alt a a) = alt a a ≠ a = nrm a` for `a` an `atom`
+leaf, while `Sim.idem : alt a a ≅ a` holds. The `#guard`s at the end of the guard block exhibit this
+with a DECIDABLE invariant — the post-`ddf` spine length is 1 for a rigid duplicate pair and 2 for the
+`atom` pair, so the normal form really is still a two-disjunct `alt`. It becomes provable — with
+every theorem in this file transporting UNCHANGED, since the invariance argument uses only
+`reEq_sound` plus reflexivity on the fragment — as soon as `predBEq` is total, which needs a real
+`DecidableEq StateConstraint` (`ClearanceGraph`/`Label`/`BoundBranch` carry no instance today; an edit
+to `Exec/Program.lean`, mechanical, NOT attempted here).
+
+**NOT a residual, but stated so it is not misread.** `≅` here is `Sim`, the ACI congruence on `alt`
+plus the structural congruences. It contains NO unit/annihilator/star laws — `cat ε R ≅ R`,
+`star (star R) ≅ star R`, `alt R (neg R) ≅ …` are not `Sim`-derivable and `nrm` does not attempt them.
+"Complete for `≅`" therefore means complete for `Sim`, which is exactly the relation the Brzozowski
+finiteness quotient is taken by (`Similarity.sim_sound`, `Finiteness.der_finite`) — it is the relation
+`SymbolicEmptiness`'s unbounded rung needs decided, and `simDecide` now decides it on `RigidFull`.
+
+What IS closed, restated: the order-preserving first-occurrence normal form is a COMPLETE invariant of
+`≅` on the pure-`alt` fragment (`sim_normalize_eq`) and, recursively, on the whole rigid fragment
+(`sim_nrm_eq`); and the SORTED normal form is UNREACHABLE (`not_sim_alt_comm`) — not merely unproved.
+The "months-scale `Permute`/`Pieces`" estimate was priced against the sorting picture; the theorems
+above say that price bought nothing, because the commutativity it needs is false.
 -/
 
 end Dregg2.Crypto.Deriv
