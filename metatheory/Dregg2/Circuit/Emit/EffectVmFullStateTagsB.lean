@@ -308,6 +308,46 @@ theorem wreads_newcommit {env : VmRowEnv} {SEL : Nat} {hash : List ℤ → ℤ} 
     env.pub pi.NEW_COMMIT = env.loc (saCol state.STATE_COMMIT) := by
   rw [h.pNew, h.saC]
 
+/-- The last-row boundary pins are VACUOUS on the active window (`isLast = false`). -/
+theorem wreads_last_vac (env : VmRowEnv) (c : VmConstraint) (hc : c ∈ boundaryLastPins) :
+    c.holdsVm env true false := by
+  simp only [boundaryLastPins, List.mem_cons, List.not_mem_nil, or_false] at hc
+  rcases hc with rfl | rfl | rfl <;> exact fun hcon => absurd hcon (by decide)
+
+/-- **`canonical_active`** — the ACTIVE-window (`true false`) satisfaction for the CANONICAL descriptor
+shape `rowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins ++ selectorGates SEL`, given
+the tag's rowGates on the witness. -/
+theorem canonical_active {env : VmRowEnv} {SEL : Nat} {hash : List ℤ → ℤ} {pre post : CellState}
+    (h : WReads env SEL hash pre post) (rowGates : List VmConstraint)
+    (hrg : ∀ c ∈ rowGates, c.holdsVm env true false)
+    (c : VmConstraint)
+    (hc : c ∈ rowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins ++ selectorGates SEL) :
+    c.holdsVm env true false := by
+  simp only [List.mem_append] at hc
+  rcases hc with ((((hc | hc) | hc) | hc) | hc)
+  · exact hrg c hc
+  · exact wreads_trans h true c hc
+  · exact wreads_first h false c hc
+  · exact wreads_last_vac env c hc
+  · exact wreads_sel h true c hc
+
+/-- **`canonical_last`** — the LAST-window (`true true`) satisfaction for the canonical shape, given the
+rowGates VACUOUS on the wrap row (they are all `.gate`). -/
+theorem canonical_last {env : VmRowEnv} {SEL : Nat} {hash : List ℤ → ℤ} {pre post : CellState}
+    (h : WReads env SEL hash pre post) (rowGates : List VmConstraint)
+    (hrgVac : ∀ c ∈ rowGates, c.holdsVm env true true)
+    (c : VmConstraint)
+    (hc : c ∈ rowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins ++ selectorGates SEL) :
+    c.holdsVm env true true := by
+  simp only [List.mem_append] at hc
+  rcases hc with ((((hc | hc) | hc) | hc) | hc)
+  · exact hrgVac c hc
+  · simp only [transitionAll, List.mem_map, List.mem_range] at hc
+    obtain ⟨i, hi, rfl⟩ := hc; exact trivial
+  · exact wreads_first h true c hc
+  · exact wreads_last h true c hc
+  · simp only [selectorGates, List.mem_singleton] at hc; subst hc; exact trivial
+
 /-! ## §B — createCell (born-empty; constraints = row-gates only). -/
 
 section CreateCell
@@ -452,5 +492,497 @@ theorem createCell_canary_clause :
 #assert_axioms createCell_canary_clause
 
 end CreateCell
+
+/-! ## §C — createCellFromFactory (born-empty; constraints = row-gates only). -/
+
+section Factory
+
+open Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory
+  (SEL_CREATECELLFROMFACTORY factoryRowGates factoryVmDescriptor BornEmptyRowIntent factoryVm_faithful gZero)
+open Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactoryFullState
+  (factoryVmDescriptorWide factoryWide_constraints_eq IsFactoryRow RowEncodesFactory ZeroBlockSpec
+   FactoryFullClause factoryRunnableSpec factoryPre factoryPost factoryPreRoots factory_clause_not_trivial)
+
+def factoryRow (hash : List ℤ → ℤ) (pre post : CellState) : VmRowEnv :=
+  mkRow SEL_CREATECELLFROMFACTORY hash pre post (fun _ => 0)
+
+theorem factoryRow_reads (hash : List ℤ → ℤ) (pre post : CellState) :
+    WReads (factoryRow hash pre post) SEL_CREATECELLFROMFACTORY hash pre post :=
+  mkRow_reads SEL_CREATECELLFROMFACTORY (by decide) (by decide) hash pre post _
+
+theorem factory_intent (hash : List ℤ → ℤ) (pre post : CellState) (hz : ZeroBlockSpec post) :
+    BornEmptyRowIntent (factoryRow hash pre post) := by
+  have h := factoryRow_reads hash pre post
+  obtain ⟨hzLo, hzHi, hzN, hzF, hzCap, hzRes⟩ := hz
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [h.saLo]; exact hzLo
+  · rw [h.saHi]; exact hzHi
+  · rw [h.saN]; exact hzN
+  · rw [h.saCap]; exact hzCap
+  · rw [h.saRes]; exact hzRes
+  · intro i hi; rw [h.saF ⟨i, hi⟩]; exact hzF ⟨i, hi⟩
+
+theorem factory_gates (hash : List ℤ → ℤ) (pre post : CellState) (hz : ZeroBlockSpec post) (b : Bool)
+    (c : VmConstraint) (hc : c ∈ factoryRowGates) :
+    c.holdsVm (factoryRow hash pre post) b false := by
+  have hg := (factoryVm_faithful (factoryRow hash pre post)).mpr (factory_intent hash pre post hz)
+  have hcc := hg c hc
+  simp only [factoryRowGates, gZero, List.mem_append, List.mem_cons, List.not_mem_nil, or_false,
+    List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using hcc
+
+def factoryRunnableCompleteSpec (preRoots : SysRoots) : RunnableFullStateCompleteSpec CellState where
+  toRunnableFullStateSpec := factoryRunnableSpec preRoots
+  buildRow := fun hash pre post _sr => factoryRow hash pre post
+  absorbsTo := cellAbsorbsTo preRoots
+  build_isRow := fun hash pre post _sr => (factoryRow_reads hash pre post).selHot
+  build_decode := by
+    intro hash pre post sr habsorb
+    exact ⟨⟨(factoryRow_reads hash pre post).saLo, (factoryRow_reads hash pre post).saHi,
+            (factoryRow_reads hash pre post).saN, (factoryRow_reads hash pre post).saF,
+            (factoryRow_reads hash pre post).saCap, (factoryRow_reads hash pre post).saRes⟩,
+           habsorb.2.1⟩
+  build_carrier := by
+    intro hash pre post sr habsorb
+    exact wreads_carrier (factoryRow_reads hash pre post) habsorb.1
+  build_active := by
+    intro hash pre post sr hclause habsorb c hc
+    obtain ⟨hz, _⟩ := hclause
+    have hc2 : c ∈ factoryRowGates := hc
+    exact factory_gates hash pre post hz true c hc2
+  build_last := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ factoryRowGates := hc
+    simp only [factoryRowGates, gZero, List.mem_append, List.mem_cons, List.not_mem_nil, or_false,
+      List.mem_map, List.mem_range] at hc2
+    rcases hc2 with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;> exact trivial
+  build_ranges := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ [(⟨saCol state.BALANCE_LO, 30⟩ : VmRange), ⟨saCol state.BALANCE_HI, 30⟩] := hc
+    exact wreads_ranges (factoryRow_reads hash pre post) habsorb.2.2.1 habsorb.2.2.2 c hc2
+  build_newcommit := by
+    intro hash pre post sr
+    exact wreads_newcommit (factoryRow_reads hash pre post)
+
+/-- **`factory_commit_iff` — the per-tag `⟺`.** -/
+theorem factory_commit_iff (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState) (sr : SysRoots)
+    (habsorb : cellAbsorbsTo preRoots hash pre post sr) :
+    (satisfiedVm hash (factoryRunnableCompleteSpec preRoots).descriptor
+        ((factoryRunnableCompleteSpec preRoots).buildRow hash pre post sr) true false
+      ∧ satisfiedVm hash (factoryRunnableCompleteSpec preRoots).descriptor
+        ((factoryRunnableCompleteSpec preRoots).buildRow hash pre post sr) true true)
+    ↔ ((factoryRunnableCompleteSpec preRoots).fullClause pre post sr
+        ∧ ((factoryRunnableCompleteSpec preRoots).buildRow hash pre post sr).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash ((factoryRunnableCompleteSpec preRoots).buildRow hash pre post sr)) :=
+  runnable_full_commit_iff (factoryRunnableCompleteSpec preRoots) hash pre post sr habsorb
+
+def factoryDemoPost (hash : List ℤ → ℤ) : CellState :=
+  { factoryPost with commit := cellWideCommit hash factoryPost }
+
+theorem factory_demo_absorbs (hash : List ℤ → ℤ) :
+    cellAbsorbsTo factoryPreRoots hash factoryPre (factoryDemoPost hash) factoryPreRoots := by
+  refine ⟨rfl, rfl, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> norm_num [factoryDemoPost, factoryPost]
+
+theorem factory_commit_iff_demo (hash : List ℤ → ℤ) :
+    (satisfiedVm hash (factoryRunnableCompleteSpec factoryPreRoots).descriptor
+        (factoryRow hash factoryPre (factoryDemoPost hash)) true false
+      ∧ satisfiedVm hash (factoryRunnableCompleteSpec factoryPreRoots).descriptor
+        (factoryRow hash factoryPre (factoryDemoPost hash)) true true)
+    ↔ ((factoryRunnableCompleteSpec factoryPreRoots).fullClause factoryPre (factoryDemoPost hash) factoryPreRoots
+        ∧ (factoryRow hash factoryPre (factoryDemoPost hash)).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash (factoryRow hash factoryPre (factoryDemoPost hash))) :=
+  factory_commit_iff factoryPreRoots hash factoryPre (factoryDemoPost hash) factoryPreRoots
+    (factory_demo_absorbs hash)
+
+theorem factory_canary_clause :
+    ¬ (factoryRunnableCompleteSpec factoryPreRoots).fullClause factoryPre
+        { factoryPost with balLo := 999 } factoryPreRoots :=
+  factory_clause_not_trivial
+
+#assert_axioms factoryRow_reads
+#assert_axioms factory_commit_iff
+#assert_axioms factory_commit_iff_demo
+#assert_axioms factory_canary_clause
+
+end Factory
+
+/-! ## §D — emitEvent (freeze + nonce tick; canonical descriptor). -/
+
+section EmitEvent
+
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gFieldPassAll gFieldPass)
+open Dregg2.Circuit.Emit.EffectVmEmitEmitEvent
+  (SEL_EMIT_EVENT emitTickRowGates emitEventVmDescriptor EmitTickRowIntent emitTickVm_faithful
+   RowEncodes EmitTickCellSpec)
+open Dregg2.Circuit.Emit.EffectVmEmitEmitEventWide
+  (emitEventVmDescriptorWide emitEventWide_constraints_eq EmitEventFullClause emitEventRunnableSpec
+   emitPre emitPost goodPreRoots emitEvent_clause_not_trivial)
+open Dregg2.Circuit.Emit.EffectVmEmitEmitEvent (IsEmitRow)
+
+def emitEventRow (hash : List ℤ → ℤ) (pre post : CellState) : VmRowEnv :=
+  mkRow SEL_EMIT_EVENT hash pre post (fun _ => 0)
+
+theorem emitEventRow_reads (hash : List ℤ → ℤ) (pre post : CellState) :
+    WReads (emitEventRow hash pre post) SEL_EMIT_EVENT hash pre post :=
+  mkRow_reads SEL_EMIT_EVENT (by decide) (by decide) hash pre post _
+
+theorem emitEvent_intent (hash : List ℤ → ℤ) (pre post : CellState) (hspec : EmitTickCellSpec pre post) :
+    EmitTickRowIntent (emitEventRow hash pre post) := by
+  have h := emitEventRow_reads hash pre post
+  obtain ⟨hLo, hHi, hN, hFld, hCap, hRes⟩ := hspec
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [h.saLo, h.sbLo]; exact hLo
+  · rw [h.saHi, h.sbHi]; exact hHi
+  · rw [h.saN, h.sbN, h.noopCold]; simpa using hN
+  · rw [h.saCap, h.sbCap]; exact hCap
+  · rw [h.saRes, h.sbRes]; exact hRes
+  · intro i hi; rw [h.saF ⟨i, hi⟩, h.sbF ⟨i, hi⟩]; exact hFld ⟨i, hi⟩
+
+theorem emitEvent_gates (hash : List ℤ → ℤ) (pre post : CellState) (hspec : EmitTickCellSpec pre post)
+    (b : Bool) (c : VmConstraint) (hc : c ∈ emitTickRowGates) :
+    c.holdsVm (emitEventRow hash pre post) b false := by
+  have hg := (emitTickVm_faithful (emitEventRow hash pre post)).mpr (emitEvent_intent hash pre post hspec)
+  have hcc := hg c hc
+  simp only [emitTickRowGates, gFieldPassAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using hcc
+
+theorem emitEvent_gates_vac (hash : List ℤ → ℤ) (pre post : CellState) (c : VmConstraint)
+    (hc : c ∈ emitTickRowGates) : c.holdsVm (emitEventRow hash pre post) true true := by
+  simp only [emitTickRowGates, gFieldPassAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;> exact trivial
+
+def emitEventRunnableCompleteSpec (preRoots : SysRoots) : RunnableFullStateCompleteSpec CellState where
+  toRunnableFullStateSpec := emitEventRunnableSpec preRoots
+  buildRow := fun hash pre post _sr => emitEventRow hash pre post
+  absorbsTo := cellAbsorbsTo preRoots
+  build_isRow := fun hash pre post _sr =>
+    ⟨(emitEventRow_reads hash pre post).selHot, (emitEventRow_reads hash pre post).noopCold⟩
+  build_decode := by
+    intro hash pre post sr habsorb
+    have h := emitEventRow_reads hash pre post
+    exact ⟨⟨h.sbLo, h.sbHi, h.sbN, h.sbF, h.sbCap, h.sbRes, h.sbC, h.saLo, h.saHi, h.saN, h.saF,
+            h.saCap, h.saRes, h.saC, h.pOld, h.pNew⟩, habsorb.2.1⟩
+  build_carrier := by
+    intro hash pre post sr habsorb
+    exact wreads_carrier (emitEventRow_reads hash pre post) habsorb.1
+  build_active := by
+    intro hash pre post sr hclause habsorb c hc
+    obtain ⟨hspec, _⟩ := hclause
+    have hc2 : c ∈ emitTickRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates SEL_EMIT_EVENT := hc
+    exact canonical_active (emitEventRow_reads hash pre post) emitTickRowGates
+      (emitEvent_gates hash pre post hspec true) c hc2
+  build_last := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ emitTickRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates SEL_EMIT_EVENT := hc
+    exact canonical_last (emitEventRow_reads hash pre post) emitTickRowGates
+      (emitEvent_gates_vac hash pre post) c hc2
+  build_ranges := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ [(⟨saCol state.BALANCE_LO, 30⟩ : VmRange), ⟨saCol state.BALANCE_HI, 30⟩] := hc
+    exact wreads_ranges (emitEventRow_reads hash pre post) habsorb.2.2.1 habsorb.2.2.2 c hc2
+  build_newcommit := by
+    intro hash pre post sr
+    exact wreads_newcommit (emitEventRow_reads hash pre post)
+
+/-- **`emitEvent_commit_iff` — the per-tag `⟺`.** -/
+theorem emitEvent_commit_iff (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState) (sr : SysRoots)
+    (habsorb : cellAbsorbsTo preRoots hash pre post sr) :
+    (satisfiedVm hash (emitEventRunnableCompleteSpec preRoots).descriptor
+        ((emitEventRunnableCompleteSpec preRoots).buildRow hash pre post sr) true false
+      ∧ satisfiedVm hash (emitEventRunnableCompleteSpec preRoots).descriptor
+        ((emitEventRunnableCompleteSpec preRoots).buildRow hash pre post sr) true true)
+    ↔ ((emitEventRunnableCompleteSpec preRoots).fullClause pre post sr
+        ∧ ((emitEventRunnableCompleteSpec preRoots).buildRow hash pre post sr).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash ((emitEventRunnableCompleteSpec preRoots).buildRow hash pre post sr)) :=
+  runnable_full_commit_iff (emitEventRunnableCompleteSpec preRoots) hash pre post sr habsorb
+
+def emitEventDemoPost (hash : List ℤ → ℤ) : CellState :=
+  { emitPost with commit := cellWideCommit hash emitPost }
+
+theorem emitEvent_demo_absorbs (hash : List ℤ → ℤ) :
+    cellAbsorbsTo goodPreRoots hash emitPre (emitEventDemoPost hash) goodPreRoots := by
+  refine ⟨rfl, rfl, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> norm_num [emitEventDemoPost, emitPost, emitPre]
+
+theorem emitEvent_commit_iff_demo (hash : List ℤ → ℤ) :
+    (satisfiedVm hash (emitEventRunnableCompleteSpec goodPreRoots).descriptor
+        (emitEventRow hash emitPre (emitEventDemoPost hash)) true false
+      ∧ satisfiedVm hash (emitEventRunnableCompleteSpec goodPreRoots).descriptor
+        (emitEventRow hash emitPre (emitEventDemoPost hash)) true true)
+    ↔ ((emitEventRunnableCompleteSpec goodPreRoots).fullClause emitPre (emitEventDemoPost hash) goodPreRoots
+        ∧ (emitEventRow hash emitPre (emitEventDemoPost hash)).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash (emitEventRow hash emitPre (emitEventDemoPost hash))) :=
+  emitEvent_commit_iff goodPreRoots hash emitPre (emitEventDemoPost hash) goodPreRoots
+    (emitEvent_demo_absorbs hash)
+
+theorem emitEvent_canary_clause :
+    ¬ (emitEventRunnableCompleteSpec goodPreRoots).fullClause emitPre
+        { emitPost with balLo := 999 } goodPreRoots :=
+  emitEvent_clause_not_trivial
+
+#assert_axioms emitEventRow_reads
+#assert_axioms emitEvent_commit_iff
+#assert_axioms emitEvent_commit_iff_demo
+#assert_axioms emitEvent_canary_clause
+
+end EmitEvent
+
+/-! ## §E — exercise (hold layer: freeze + nonce tick; canonical descriptor). -/
+
+section Exercise
+
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gFieldPassAll gFieldPass)
+open Dregg2.Circuit.Emit.EffectVmEmitExercise
+  (SEL_EXERCISE exerciseRowGates exerciseVmDescriptor ExerciseRowIntent exerciseVm_faithful
+   RowEncodesExercise ExerciseCellSpec IsExerciseRow)
+open Dregg2.Circuit.Emit.EffectVmEmitExerciseWide
+  (exerciseVmDescriptorWide exerciseWide_constraints_eq ExerciseFullClause exerciseRunnableSpec
+   exPre exPost goodPreRoots exercise_clause_not_trivial)
+
+def exerciseRow (hash : List ℤ → ℤ) (pre post : CellState) : VmRowEnv :=
+  mkRow SEL_EXERCISE hash pre post (fun _ => 0)
+
+theorem exerciseRow_reads (hash : List ℤ → ℤ) (pre post : CellState) :
+    WReads (exerciseRow hash pre post) SEL_EXERCISE hash pre post :=
+  mkRow_reads SEL_EXERCISE (by decide) (by decide) hash pre post _
+
+theorem exercise_intent (hash : List ℤ → ℤ) (pre post : CellState) (hspec : ExerciseCellSpec pre post) :
+    ExerciseRowIntent (exerciseRow hash pre post) := by
+  have h := exerciseRow_reads hash pre post
+  obtain ⟨hLo, hHi, hN, hFld, hCap, hRes⟩ := hspec
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [h.saLo, h.sbLo]; exact hLo
+  · rw [h.saHi, h.sbHi]; exact hHi
+  · rw [h.saN, h.sbN, h.noopCold]; simpa using hN
+  · rw [h.saCap, h.sbCap]; exact hCap
+  · rw [h.saRes, h.sbRes]; exact hRes
+  · intro i hi; rw [h.saF ⟨i, hi⟩, h.sbF ⟨i, hi⟩]; exact hFld ⟨i, hi⟩
+
+theorem exercise_gates (hash : List ℤ → ℤ) (pre post : CellState) (hspec : ExerciseCellSpec pre post)
+    (b : Bool) (c : VmConstraint) (hc : c ∈ exerciseRowGates) :
+    c.holdsVm (exerciseRow hash pre post) b false := by
+  have hg := (exerciseVm_faithful (exerciseRow hash pre post)).mpr (exercise_intent hash pre post hspec)
+  have hcc := hg c hc
+  simp only [exerciseRowGates, gFieldPassAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using hcc
+
+theorem exercise_gates_vac (hash : List ℤ → ℤ) (pre post : CellState) (c : VmConstraint)
+    (hc : c ∈ exerciseRowGates) : c.holdsVm (exerciseRow hash pre post) true true := by
+  simp only [exerciseRowGates, gFieldPassAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;> exact trivial
+
+def exerciseRunnableCompleteSpec (preRoots : SysRoots) : RunnableFullStateCompleteSpec CellState where
+  toRunnableFullStateSpec := exerciseRunnableSpec preRoots
+  buildRow := fun hash pre post _sr => exerciseRow hash pre post
+  absorbsTo := cellAbsorbsTo preRoots
+  build_isRow := fun hash pre post _sr =>
+    ⟨(exerciseRow_reads hash pre post).selHot, (exerciseRow_reads hash pre post).noopCold⟩
+  build_decode := by
+    intro hash pre post sr habsorb
+    have h := exerciseRow_reads hash pre post
+    exact ⟨⟨h.sbLo, h.sbHi, h.sbN, h.sbF, h.sbCap, h.sbRes, h.sbC, h.saLo, h.saHi, h.saN, h.saF,
+            h.saCap, h.saRes, h.saC, h.pOld, h.pNew⟩, habsorb.2.1⟩
+  build_carrier := by
+    intro hash pre post sr habsorb
+    exact wreads_carrier (exerciseRow_reads hash pre post) habsorb.1
+  build_active := by
+    intro hash pre post sr hclause habsorb c hc
+    obtain ⟨hspec, _⟩ := hclause
+    have hc2 : c ∈ exerciseRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates SEL_EXERCISE := hc
+    exact canonical_active (exerciseRow_reads hash pre post) exerciseRowGates
+      (exercise_gates hash pre post hspec true) c hc2
+  build_last := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ exerciseRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates SEL_EXERCISE := hc
+    exact canonical_last (exerciseRow_reads hash pre post) exerciseRowGates
+      (exercise_gates_vac hash pre post) c hc2
+  build_ranges := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ [(⟨saCol state.BALANCE_LO, 30⟩ : VmRange), ⟨saCol state.BALANCE_HI, 30⟩] := hc
+    exact wreads_ranges (exerciseRow_reads hash pre post) habsorb.2.2.1 habsorb.2.2.2 c hc2
+  build_newcommit := by
+    intro hash pre post sr
+    exact wreads_newcommit (exerciseRow_reads hash pre post)
+
+theorem exercise_commit_iff (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState) (sr : SysRoots)
+    (habsorb : cellAbsorbsTo preRoots hash pre post sr) :
+    (satisfiedVm hash (exerciseRunnableCompleteSpec preRoots).descriptor
+        ((exerciseRunnableCompleteSpec preRoots).buildRow hash pre post sr) true false
+      ∧ satisfiedVm hash (exerciseRunnableCompleteSpec preRoots).descriptor
+        ((exerciseRunnableCompleteSpec preRoots).buildRow hash pre post sr) true true)
+    ↔ ((exerciseRunnableCompleteSpec preRoots).fullClause pre post sr
+        ∧ ((exerciseRunnableCompleteSpec preRoots).buildRow hash pre post sr).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash ((exerciseRunnableCompleteSpec preRoots).buildRow hash pre post sr)) :=
+  runnable_full_commit_iff (exerciseRunnableCompleteSpec preRoots) hash pre post sr habsorb
+
+def exerciseDemoPost (hash : List ℤ → ℤ) : CellState :=
+  { exPost with commit := cellWideCommit hash exPost }
+
+theorem exercise_demo_absorbs (hash : List ℤ → ℤ) :
+    cellAbsorbsTo goodPreRoots hash exPre (exerciseDemoPost hash) goodPreRoots := by
+  refine ⟨rfl, rfl, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> norm_num [exerciseDemoPost, exPost, exPre]
+
+theorem exercise_commit_iff_demo (hash : List ℤ → ℤ) :
+    (satisfiedVm hash (exerciseRunnableCompleteSpec goodPreRoots).descriptor
+        (exerciseRow hash exPre (exerciseDemoPost hash)) true false
+      ∧ satisfiedVm hash (exerciseRunnableCompleteSpec goodPreRoots).descriptor
+        (exerciseRow hash exPre (exerciseDemoPost hash)) true true)
+    ↔ ((exerciseRunnableCompleteSpec goodPreRoots).fullClause exPre (exerciseDemoPost hash) goodPreRoots
+        ∧ (exerciseRow hash exPre (exerciseDemoPost hash)).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash (exerciseRow hash exPre (exerciseDemoPost hash))) :=
+  exercise_commit_iff goodPreRoots hash exPre (exerciseDemoPost hash) goodPreRoots
+    (exercise_demo_absorbs hash)
+
+theorem exercise_canary_clause :
+    ¬ (exerciseRunnableCompleteSpec goodPreRoots).fullClause exPre
+        { exPost with nonce := 9 } goodPreRoots :=
+  exercise_clause_not_trivial
+
+#assert_axioms exerciseRow_reads
+#assert_axioms exercise_commit_iff
+#assert_axioms exercise_commit_iff_demo
+#assert_axioms exercise_canary_clause
+
+end Exercise
+
+/-! ## §F — receiptArchive (field[1] set to 1 + frame freeze; no last-pins / selector). -/
+
+section ReceiptArchive
+
+open Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive
+  (archiveRowGates receiptArchiveVmDescriptor ArchiveRowIntent archiveVm_faithful ArchiveRowEncodes
+   ArchiveCellSpec IsArchiveRow gFieldFixRest LIFE_FIELD selRA.RECEIPT_ARCHIVE)
+open Dregg2.Circuit.Emit.EffectVmEmitReceiptArchiveWide
+  (archiveVmDescriptorWide archiveWide_constraints_eq ReceiptArchiveFullClause archiveRunnableSpec
+   arPre arPost goodPreRoots archive_clause_not_trivial)
+
+def archiveRow (hash : List ℤ → ℤ) (pre post : CellState) : VmRowEnv :=
+  mkRow selRA.RECEIPT_ARCHIVE hash pre post (fun _ => 0)
+
+theorem archiveRow_reads (hash : List ℤ → ℤ) (pre post : CellState) :
+    WReads (archiveRow hash pre post) selRA.RECEIPT_ARCHIVE hash pre post :=
+  mkRow_reads selRA.RECEIPT_ARCHIVE (by decide) (by decide) hash pre post _
+
+theorem archive_intent (hash : List ℤ → ℤ) (pre post : CellState) (hspec : ArchiveCellSpec pre post) :
+    ArchiveRowIntent (archiveRow hash pre post) := by
+  have h := archiveRow_reads hash pre post
+  obtain ⟨hlife, hlo, hhi, hnon, hfld, hcap, hres⟩ := hspec
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [LIFE_FIELD]; rw [h.saF1]; exact hlife
+  · rw [h.saLo, h.sbLo]; exact hlo
+  · rw [h.saHi, h.sbHi]; exact hhi
+  · rw [h.saN, h.sbN]; exact hnon
+  · rw [h.saCap, h.sbCap]; exact hcap
+  · rw [h.saRes, h.sbRes]; exact hres
+  · intro i hi1 hi8
+    rw [h.saF ⟨i, hi8⟩, h.sbF ⟨i, hi8⟩]
+    exact hfld ⟨i, hi8⟩ (fun hc => hi1 (congrArg Fin.val hc))
+
+theorem archive_gates (hash : List ℤ → ℤ) (pre post : CellState) (hspec : ArchiveCellSpec pre post)
+    (b : Bool) (c : VmConstraint) (hc : c ∈ archiveRowGates) :
+    c.holdsVm (archiveRow hash pre post) b false := by
+  have hg := (archiveVm_faithful (archiveRow hash pre post)).mpr (archive_intent hash pre post hspec)
+  have hcc := hg c hc
+  simp only [archiveRowGates, gFieldFixRest, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using hcc
+
+theorem archive_gates_vac (hash : List ℤ → ℤ) (pre post : CellState) (c : VmConstraint)
+    (hc : c ∈ archiveRowGates) : c.holdsVm (archiveRow hash pre post) true true := by
+  simp only [archiveRowGates, gFieldFixRest, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;> exact trivial
+
+def archiveRunnableCompleteSpec (preRoots : SysRoots) : RunnableFullStateCompleteSpec CellState where
+  toRunnableFullStateSpec := archiveRunnableSpec preRoots
+  buildRow := fun hash pre post _sr => archiveRow hash pre post
+  absorbsTo := cellAbsorbsTo preRoots
+  build_isRow := fun hash pre post _sr =>
+    ⟨(archiveRow_reads hash pre post).selHot, (archiveRow_reads hash pre post).noopCold⟩
+  build_decode := by
+    intro hash pre post sr habsorb
+    have h := archiveRow_reads hash pre post
+    exact ⟨⟨h.sbLo, h.sbHi, h.sbN, h.sbF, h.sbCap, h.sbRes, h.saLo, h.saHi, h.saN, h.saF,
+            h.saCap, h.saRes⟩, habsorb.2.1⟩
+  build_carrier := by
+    intro hash pre post sr habsorb
+    exact wreads_carrier (archiveRow_reads hash pre post) habsorb.1
+  build_active := by
+    intro hash pre post sr hclause habsorb c hc
+    obtain ⟨hspec, _⟩ := hclause
+    have hc2 : c ∈ archiveRowGates ++ transitionAll ++ boundaryFirstPins := hc
+    simp only [List.mem_append] at hc2
+    rcases hc2 with (hc2 | hc2) | hc2
+    · exact archive_gates hash pre post hspec true c hc2
+    · exact wreads_trans (archiveRow_reads hash pre post) true c hc2
+    · exact wreads_first (archiveRow_reads hash pre post) false c hc2
+  build_last := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ archiveRowGates ++ transitionAll ++ boundaryFirstPins := hc
+    simp only [List.mem_append] at hc2
+    rcases hc2 with (hc2 | hc2) | hc2
+    · exact archive_gates_vac hash pre post c hc2
+    · simp only [transitionAll, List.mem_map, List.mem_range] at hc2
+      obtain ⟨i, hi, rfl⟩ := hc2; exact trivial
+    · exact wreads_first (archiveRow_reads hash pre post) true c hc2
+  build_ranges := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ ([] : List VmRange) := hc
+    cases hc2
+  build_newcommit := by
+    intro hash pre post sr
+    exact wreads_newcommit (archiveRow_reads hash pre post)
+
+theorem receiptArchive_commit_iff (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState) (sr : SysRoots)
+    (habsorb : cellAbsorbsTo preRoots hash pre post sr) :
+    (satisfiedVm hash (archiveRunnableCompleteSpec preRoots).descriptor
+        ((archiveRunnableCompleteSpec preRoots).buildRow hash pre post sr) true false
+      ∧ satisfiedVm hash (archiveRunnableCompleteSpec preRoots).descriptor
+        ((archiveRunnableCompleteSpec preRoots).buildRow hash pre post sr) true true)
+    ↔ ((archiveRunnableCompleteSpec preRoots).fullClause pre post sr
+        ∧ ((archiveRunnableCompleteSpec preRoots).buildRow hash pre post sr).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash ((archiveRunnableCompleteSpec preRoots).buildRow hash pre post sr)) :=
+  runnable_full_commit_iff (archiveRunnableCompleteSpec preRoots) hash pre post sr habsorb
+
+def archiveDemoPost (hash : List ℤ → ℤ) : CellState :=
+  { arPost with commit := cellWideCommit hash arPost }
+
+theorem archive_demo_absorbs (hash : List ℤ → ℤ) :
+    cellAbsorbsTo goodPreRoots hash arPre (archiveDemoPost hash) goodPreRoots := by
+  refine ⟨rfl, rfl, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> norm_num [archiveDemoPost, arPost]
+
+theorem receiptArchive_commit_iff_demo (hash : List ℤ → ℤ) :
+    (satisfiedVm hash (archiveRunnableCompleteSpec goodPreRoots).descriptor
+        (archiveRow hash arPre (archiveDemoPost hash)) true false
+      ∧ satisfiedVm hash (archiveRunnableCompleteSpec goodPreRoots).descriptor
+        (archiveRow hash arPre (archiveDemoPost hash)) true true)
+    ↔ ((archiveRunnableCompleteSpec goodPreRoots).fullClause arPre (archiveDemoPost hash) goodPreRoots
+        ∧ (archiveRow hash arPre (archiveDemoPost hash)).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash (archiveRow hash arPre (archiveDemoPost hash))) :=
+  receiptArchive_commit_iff goodPreRoots hash arPre (archiveDemoPost hash) goodPreRoots
+    (archive_demo_absorbs hash)
+
+theorem receiptArchive_canary_clause :
+    ¬ (archiveRunnableCompleteSpec goodPreRoots).fullClause arPre
+        { arPost with fields := fun _ => 999 } goodPreRoots :=
+  archive_clause_not_trivial
+
+#assert_axioms archiveRow_reads
+#assert_axioms receiptArchive_commit_iff
+#assert_axioms receiptArchive_commit_iff_demo
+#assert_axioms receiptArchive_canary_clause
+
+end ReceiptArchive
 
 end Dregg2.Circuit.Emit.EffectVmFullStateTagsB
