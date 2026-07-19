@@ -985,4 +985,139 @@ theorem receiptArchive_canary_clause :
 
 end ReceiptArchive
 
+/-! ## §G — burn (balance debit by the amount param + nonce tick; canonical descriptor). -/
+
+section Burn
+
+open Dregg2.Circuit.Emit.EffectVmEmitBurn
+  (burnRowGates burnVmDescriptor BurnRowIntent burnVm_faithful RowEncodes CellBurnSpec IsBurnRow gFieldFixAll)
+open Dregg2.Circuit.Emit.EffectVmEmitBurnRunnable
+  (burnVmDescriptorWide burnWide_constraints_eq BurnFullClause burnRunnableSpec
+   goodBurnPre goodBurnPost goodBurnPreRoots burnFullClause_not_trivial)
+
+/-- The burn amount lives in the `BURN_AMOUNT_LO` param column. -/
+def burnPA (amt : ℤ) : Nat → ℤ :=
+  fun i => if i = Dregg2.Circuit.Emit.EffectVmEmitBurn.param.BURN_AMOUNT_LO then amt else 0
+
+def burnRow (amt : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) : VmRowEnv :=
+  mkRow Dregg2.Circuit.Emit.EffectVmEmitBurn.selB.BURN hash pre post (burnPA amt)
+
+theorem burnRow_reads (amt : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) :
+    WReads (burnRow amt hash pre post) Dregg2.Circuit.Emit.EffectVmEmitBurn.selB.BURN hash pre post :=
+  mkRow_reads Dregg2.Circuit.Emit.EffectVmEmitBurn.selB.BURN (by decide) (by decide) hash pre post _
+
+theorem burnRow_amt (amt : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) :
+    (burnRow amt hash pre post).loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitBurn.param.BURN_AMOUNT_LO) = amt := by
+  show (mkRow Dregg2.Circuit.Emit.EffectVmEmitBurn.selB.BURN hash pre post (burnPA amt)).loc
+      (prmCol Dregg2.Circuit.Emit.EffectVmEmitBurn.param.BURN_AMOUNT_LO) = amt
+  rw [mkRow_locGe Dregg2.Circuit.Emit.EffectVmEmitBurn.selB.BURN hash pre post (burnPA amt) _ (by decide)]
+  rfl
+
+theorem burn_intent (amt : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) (hspec : CellBurnSpec pre amt post) :
+    BurnRowIntent (burnRow amt hash pre post) := by
+  have h := burnRow_reads amt hash pre post
+  have hamt := burnRow_amt amt hash pre post
+  obtain ⟨hLo, hHi, hN, hFld, hCap, hRes⟩ := hspec
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [h.saLo, h.sbLo, hamt]; exact hLo
+  · rw [h.saHi, h.sbHi]; exact hHi
+  · rw [h.saN, h.sbN]; exact hN
+  · rw [h.saCap, h.sbCap]; exact hCap
+  · rw [h.saRes, h.sbRes]; exact hRes
+  · intro i hi; rw [h.saF ⟨i, hi⟩, h.sbF ⟨i, hi⟩]; exact hFld ⟨i, hi⟩
+
+theorem burn_gates (amt : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) (hspec : CellBurnSpec pre amt post)
+    (b : Bool) (c : VmConstraint) (hc : c ∈ burnRowGates) :
+    c.holdsVm (burnRow amt hash pre post) b false := by
+  have h := burnRow_reads amt hash pre post
+  have hg := (burnVm_faithful (burnRow amt hash pre post) ⟨h.selHot, h.noopCold⟩).mpr
+    (burn_intent amt hash pre post hspec)
+  have hcc := hg c hc
+  simp only [burnRowGates, gFieldFixAll, List.mem_append, List.mem_cons, List.not_mem_nil, or_false,
+    List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using hcc
+
+theorem burn_gates_vac (amt : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) (c : VmConstraint)
+    (hc : c ∈ burnRowGates) : c.holdsVm (burnRow amt hash pre post) true true := by
+  simp only [burnRowGates, gFieldFixAll, List.mem_append, List.mem_cons, List.not_mem_nil, or_false,
+    List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;> exact trivial
+
+def burnRunnableCompleteSpec (amt : ℤ) (preRoots : SysRoots) : RunnableFullStateCompleteSpec CellState where
+  toRunnableFullStateSpec := burnRunnableSpec amt preRoots
+  buildRow := fun hash pre post _sr => burnRow amt hash pre post
+  absorbsTo := cellAbsorbsTo preRoots
+  build_isRow := fun hash pre post _sr =>
+    ⟨(burnRow_reads amt hash pre post).selHot, (burnRow_reads amt hash pre post).noopCold⟩
+  build_decode := by
+    intro hash pre post sr habsorb
+    have h := burnRow_reads amt hash pre post
+    exact ⟨⟨h.sbLo, h.sbHi, h.sbN, h.sbF, h.sbCap, h.sbRes, h.sbC, burnRow_amt amt hash pre post,
+            h.saLo, h.saHi, h.saN, h.saF, h.saCap, h.saRes, h.saC, h.pOld, h.pNew⟩, habsorb.2.1⟩
+  build_carrier := by
+    intro hash pre post sr habsorb
+    exact wreads_carrier (burnRow_reads amt hash pre post) habsorb.1
+  build_active := by
+    intro hash pre post sr hclause habsorb c hc
+    obtain ⟨hspec, _⟩ := hclause
+    have hc2 : c ∈ burnRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates Dregg2.Circuit.Emit.EffectVmEmitBurn.selB.BURN := hc
+    exact canonical_active (burnRow_reads amt hash pre post) burnRowGates
+      (burn_gates amt hash pre post hspec true) c hc2
+  build_last := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ burnRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates Dregg2.Circuit.Emit.EffectVmEmitBurn.selB.BURN := hc
+    exact canonical_last (burnRow_reads amt hash pre post) burnRowGates
+      (burn_gates_vac amt hash pre post) c hc2
+  build_ranges := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ [(⟨saCol state.BALANCE_LO, 30⟩ : VmRange), ⟨saCol state.BALANCE_HI, 30⟩] := hc
+    exact wreads_ranges (burnRow_reads amt hash pre post) habsorb.2.2.1 habsorb.2.2.2 c hc2
+  build_newcommit := by
+    intro hash pre post sr
+    exact wreads_newcommit (burnRow_reads amt hash pre post)
+
+theorem burn_commit_iff (amt : ℤ) (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState) (sr : SysRoots)
+    (habsorb : cellAbsorbsTo preRoots hash pre post sr) :
+    (satisfiedVm hash (burnRunnableCompleteSpec amt preRoots).descriptor
+        ((burnRunnableCompleteSpec amt preRoots).buildRow hash pre post sr) true false
+      ∧ satisfiedVm hash (burnRunnableCompleteSpec amt preRoots).descriptor
+        ((burnRunnableCompleteSpec amt preRoots).buildRow hash pre post sr) true true)
+    ↔ ((burnRunnableCompleteSpec amt preRoots).fullClause pre post sr
+        ∧ ((burnRunnableCompleteSpec amt preRoots).buildRow hash pre post sr).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash ((burnRunnableCompleteSpec amt preRoots).buildRow hash pre post sr)) :=
+  runnable_full_commit_iff (burnRunnableCompleteSpec amt preRoots) hash pre post sr habsorb
+
+def burnDemoPost (hash : List ℤ → ℤ) : CellState :=
+  { goodBurnPost with commit := cellWideCommit hash goodBurnPost }
+
+theorem burn_demo_absorbs (hash : List ℤ → ℤ) :
+    cellAbsorbsTo goodBurnPreRoots hash goodBurnPre (burnDemoPost hash) goodBurnPreRoots := by
+  refine ⟨rfl, rfl, ⟨?_, ?_⟩, ⟨?_, ?_⟩⟩ <;> norm_num [burnDemoPost, goodBurnPost]
+
+theorem burn_commit_iff_demo (hash : List ℤ → ℤ) :
+    (satisfiedVm hash (burnRunnableCompleteSpec 30 goodBurnPreRoots).descriptor
+        (burnRow 30 hash goodBurnPre (burnDemoPost hash)) true false
+      ∧ satisfiedVm hash (burnRunnableCompleteSpec 30 goodBurnPreRoots).descriptor
+        (burnRow 30 hash goodBurnPre (burnDemoPost hash)) true true)
+    ↔ ((burnRunnableCompleteSpec 30 goodBurnPreRoots).fullClause goodBurnPre (burnDemoPost hash) goodBurnPreRoots
+        ∧ (burnRow 30 hash goodBurnPre (burnDemoPost hash)).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash (burnRow 30 hash goodBurnPre (burnDemoPost hash))) :=
+  burn_commit_iff 30 goodBurnPreRoots hash goodBurnPre (burnDemoPost hash) goodBurnPreRoots
+    (burn_demo_absorbs hash)
+
+theorem burn_canary_clause :
+    ¬ (burnRunnableCompleteSpec 30 goodBurnPreRoots).fullClause goodBurnPre
+        { goodBurnPost with balLo := 999 } goodBurnPreRoots :=
+  burnFullClause_not_trivial
+
+#assert_axioms burnRow_reads
+#assert_axioms burn_commit_iff
+#assert_axioms burn_commit_iff_demo
+#assert_axioms burn_canary_clause
+
+end Burn
+
 end Dregg2.Circuit.Emit.EffectVmFullStateTagsB
