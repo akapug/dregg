@@ -1,0 +1,42 @@
+# `dreggnet-discord-identity` — the ONE Discord custodial-seed derivation, extracted.
+#
+# The single source of truth for `seed = BLAKE3_derive_key("dregg-discord-bot-v1",
+# bot_secret ‖ discord_user_id_le)` (`seed_for`) and the per-user op token
+# (`op_token`), formerly living in `discord-bot/src/cipherclerk.rs`.
+#
+# WHY A SEPARATE CRATE: `dreggnet-web` (a ROOT-workspace member, serving the Discord
+# Activity `/da` surface) must derive byte-for-byte the SAME identity the Discord bot
+# attributes — but it CANNOT depend on `dregg-discord-bot`: the bot is an EXCLUDED
+# standalone workspace (its sqlx → libsqlite3-sys 0.30 `links = "sqlite3"` conflicts
+# with the root's rusqlite). And a MIRROR of `seed_for` in `dreggnet-web` is exactly
+# the identity-drift class the frontends were built to avoid ("CALLED, never
+# mirrored"). So the derivation moves HERE: one impl, two callers (the bot re-exports
+# it; the web Activity surface calls it), zero identity drift. The mirror of the
+# `dreggnet-telegram` extraction pattern, minus any transport.
+#
+# LIGHT ON PURPOSE: only `blake3` + `hex`. No `dregg-sdk` / `dregg-app-framework`, so
+# depending on this crate pulls NONE of the heavy signing/prover graph into a caller.
+# The public-key/`TurnSigner` construction stays with each caller (they already have
+# it); this crate hands back the raw 32-byte seed, the reproducible root of both.
+#
+# A breadstuffs workspace MEMBER (root `members`). Its `blake3`/`hex` are plain
+# crates.io deps (not `workspace = true`), so it resolves identically inside BOTH the
+# root workspace AND the standalone `discord-bot` workspace that path-depends on it.
+[package]
+name = "dreggnet-discord-identity"
+version = "0.1.0"
+edition = "2024"
+description = "The ONE Discord custodial-seed derivation (seed_for / op_token) extracted from discord-bot into a light root-workspace crate, so dreggnet-web's Discord Activity surface derives byte-for-byte the SAME identity the in-chat bot attributes — CALLED by both, never mirrored."
+
+[dependencies]
+# The BLAKE3 derive-key primitive — the seed + op-token derivation, byte-for-byte the
+# discord bot's historical scheme (the domain string + LE-u64 uid layout are pinned).
+blake3 = "1"
+# Hex-encode the op token (the discord bot's `hex::encode(blake3::derive_key(...))`).
+hex = "0.4"
+
+[lints]
+workspace = true
+
+# A workspace MEMBER of the breadstuffs root (registered in `members`). The root
+# `[workspace]`/`[workspace.lints]` apply; no standalone `[workspace]`/`[patch]` here.
