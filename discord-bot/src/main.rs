@@ -70,7 +70,13 @@ pub mod bot_reactor;
 // reveal core is driven by tests over an in-memory store (a new day rolls a new dungeon).
 mod devnet;
 pub mod discord_caps;
+// Discord roles as dregg capabilities — the native-Discord deepening of `discord_caps`.
+// Two directions with one honest boundary: role → cap GATES a surface (a convenience
+// filter), and proof → role GRANTS a badge after a verification already passed. A role is
+// an ATTESTATION BY THIS SERVER, never the cryptographic authority — the executor and the
+// macaroon keychain stay the referee. Surfaced as `/identity roles {show,unlock,grant}`.
 mod embeds;
+pub mod roles_caps;
 // The shared DREGG_EXPLORER_BASE link helper — every former fg-goose.online URL site
 // now renders a link only when the operator configured a base, and the full id
 // (copyable) otherwise. One pattern, all surfaces (`explorer_link`).

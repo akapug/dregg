@@ -331,6 +331,31 @@ pub async fn handle_redeem(ctx: &Context, command: &CommandInteraction, state: &
                     format!("`{}`", &hex::encode(acceptance.routing_token)[..16]),
                     false,
                 );
+
+            // PROOF → ROLE. This is the point where a real cryptographic check about
+            // THIS member has just passed: canonical `validate_handoff` accepted an
+            // Ed25519-signed certificate an introducer minted naming this member's
+            // recipient key, at the current chain height. That is an attestation the
+            // server can stand behind, so reflect it into the mapped Discord role.
+            //
+            // The role is the BADGE, not the authority — `/identity roles unlock` gates
+            // on it as a convenience, while anything that must survive a forged client
+            // still re-checks on the executor / the macaroon chain. Fail-graceful: an
+            // unconfigured guild says nothing, a missing Manage Roles permission adds a
+            // legible line, and neither can turn a successful redemption into an error.
+            // Idempotent: redeeming twice re-reports the held role, it does not re-grant.
+            let embed = match crate::roles_caps::grant_and_describe(
+                &ctx.http,
+                command.guild_id,
+                command.user.id,
+                crate::roles_caps::Achievement::IdentityVerified,
+            )
+            .await
+            {
+                Some((title, body)) => embed.field(title, body, false),
+                None => embed,
+            };
+
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;

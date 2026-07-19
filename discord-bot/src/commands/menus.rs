@@ -201,6 +201,9 @@ pub fn global_commands() -> Vec<Value> {
                 fold(commands::federation::register_unlink(), None),
                 fold(commands::link_proof::register(), None),
                 fold(commands::key::register(), None),
+                // Discord roles as caps — folds as a GROUP (`show`/`unlock`/`grant`
+                // ride along), not a 14th top-level: the global surface stays 13.
+                fold(crate::roles_caps::register(), None),
             ],
         ),
         // 10. /hermes — the confined agent, plus the confined grain + shared doc.
@@ -334,6 +337,9 @@ pub const OLD_COMMAND_REACH: &[(&str, Reach)] = &[
     ("crown", Reach::Under("verify")),
     ("export", Reach::Under("verify")),
     ("link-prove", Reach::Under("identity")),
+    // Never a flat command — folded straight in as `/identity roles`. Listed here so
+    // the coverage test holds the path open the same way it does for the retired ones.
+    ("roles", Reach::Under("identity")),
 ];
 
 /// The subcommand / group names a registered top-level exposes (test + boot aid).
@@ -535,6 +541,9 @@ pub async fn handle_identity(ctx: &Context, command: &CommandInteraction, state:
         }
         Some(("key", inner)) => {
             commands::key::handle(ctx, &as_command(command, "key", inner), state).await
+        }
+        Some(("roles", inner)) => {
+            crate::roles_caps::handle(ctx, &as_command(command, "roles", inner), state).await
         }
         _ => respond_menu(ctx, command, identity_view()).await,
     }
@@ -849,6 +858,12 @@ fn identity_view() -> (CreateEmbed, Vec<CreateActionRow>) {
         .field(
             "Your LLM key",
             "`/identity key set|rotate|revoke|status` — sealed at rest, never echoed",
+            false,
+        )
+        .field(
+            "Roles as capabilities",
+            "`/identity roles show|unlock|grant` — a server role can GATE a surface, but it \
+             is an attestation by this server, never the cryptographic authority",
             false,
         );
     let rows = vec![

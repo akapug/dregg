@@ -451,6 +451,53 @@ pub async fn revoke_cap_role(
     }
 }
 
+/// Whether a grant outcome is worth telling the member about at an automatic seam.
+///
+/// The automatic grant rides along on someone ELSE's success embed, so it must not
+/// turn a clean "handoff redeemed" into noise about server configuration the member
+/// cannot fix. [`GrantOutcome::NoMapping`] — the guild simply has not wired
+/// [`RoleCapMap::ENV_VAR`] — is therefore silent: the feature is *inert*, not broken.
+/// Everything else IS said: a grant, an idempotent no-op, and above all a missing
+/// **Manage Roles** permission, which an admin reading the channel can actually fix.
+pub fn worth_surfacing(outcome: &GrantOutcome) -> bool {
+    !matches!(outcome, GrantOutcome::NoMapping { .. })
+}
+
+/// Fire the proof→role grant at a verified seam and render it as an embed FIELD.
+///
+/// The one call a verified seam makes. `None` means "say nothing": the interaction
+/// carried no guild (a DM — there is no role to grant), or the guild has wired no role
+/// for this cap. `Some((title, body))` is a field to hang on the embed the seam was
+/// already sending, so the badge is legible in the same breath as the verification that
+/// earned it, and a missing **Manage Roles** permission surfaces as an actionable line
+/// rather than a silent failure. Never panics; every Discord error is classified into a
+/// [`GrantOutcome`] first.
+///
+/// The caller is responsible for the honest part: call this ONLY after the real
+/// verification has already passed. This function grants a badge for a proof; it does
+/// not check one.
+pub async fn grant_and_describe(
+    http: &Http,
+    guild_id: Option<GuildId>,
+    user_id: UserId,
+    achievement: Achievement,
+) -> Option<(&'static str, String)> {
+    let guild_id = guild_id?;
+    let map = RoleCapMap::from_env();
+    let outcome = grant_cap_role(http, &map, guild_id, user_id, achievement).await;
+    if !worth_surfacing(&outcome) {
+        return None;
+    }
+    tracing::info!(
+        user_id = user_id.get(),
+        guild_id = guild_id.get(),
+        cap = achievement.granted_cap().tag(),
+        outcome = ?outcome,
+        "proof→role grant fired at a verified seam"
+    );
+    Some(("Capability Role", outcome.message()))
+}
+
 /// Read the invoking member's caps straight off a serenity [`Member`] — the ergonomic
 /// entry a slash handler uses (`map.member_caps(command.member.as_deref())`).
 impl RoleCapMap {
@@ -463,7 +510,7 @@ impl RoleCapMap {
     }
 }
 
-/// The honest-boundary blurb, surfaced verbatim in `/roles show` so a user reads it in
+/// The honest-boundary blurb, surfaced verbatim in `/identity roles show` so a user reads it in
 /// the product, not just the source.
 pub fn attestation_boundary() -> &'static str {
     "A Discord role here is an **attestation by this server** — convenient, revocable, \
@@ -474,22 +521,27 @@ pub fn attestation_boundary() -> &'static str {
      `AgentCipherclerk::verify_token`) — never the role."
 }
 
-// ─── The `/roles` slash command — the first use ──────────────────────────────
+// ─── The `roles` surface — folded under `/identity` ──────────────────────────
 //
 // One surface that shows both directions honestly:
-//   `/roles show`    — the caps you hold via your Discord roles, plus the boundary.
-//   `/roles unlock`  — the DEMO GATE: a cap-gated offering that refuses legibly
-//                      without `DreggCap::VerifiedHolder`, and reveals it with.
-//   `/roles grant`   — admin-only DEMO of proof→role: assign an achievement's role
-//                      to a member. In production this fires automatically from the
-//                      verified seam ([`grant_cap_role`]); the admin command is the
-//                      manual trigger so the flow is exercisable without a full run.
+//   `/identity roles show`    — the caps you hold via your Discord roles, plus the
+//                               boundary, verbatim.
+//   `/identity roles unlock`  — the DEMO GATE: a cap-gated offering that refuses
+//                               legibly without `DreggCap::VerifiedHolder`, and
+//                               reveals it with.
+//   `/identity roles grant`   — admin-only manual trigger of proof→role: assign an
+//                               achievement's role to a member, for the achievements
+//                               whose automatic seam is not wired yet.
 //
-// The command is not registered here — central integration (the `mod` line, the
-// `REGISTERED_COMMAND_NAMES` entry, the `menus::global_commands()` builder, and the
-// router arm) is applied by the main loop (see this task's report). The map is read
-// from the environment on demand (`RoleCapMap::from_env`); a production wiring would
-// cache it on `BotState`.
+// NOT a top-level command: the global slash surface is EXACTLY 13 (`/dregg` + 12), so
+// [`register`] is folded into `/identity` — the granting-authority command — as a
+// subcommand GROUP by `menus::global_commands`, dispatched by `menus::handle_identity`
+// through the same `as_command` re-nesting every other fold uses. The map is read from
+// the environment on demand (`RoleCapMap::from_env`); a production wiring would cache
+// it on `BotState`.
+//
+// The automatic (non-admin) grant seam is live for [`Achievement::IdentityVerified`],
+// fired from the canonical `validate_handoff` acceptance in `commands::handoff`.
 
 use serenity::all::{
     CommandDataOptionValue, CommandInteraction, CommandOptionType, Context, CreateCommand,
@@ -552,7 +604,7 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     }
 }
 
-/// `/roles show` — the caps the invoking member holds, plus the honest boundary.
+/// `/identity roles show` — the caps the invoking member holds, plus the honest boundary.
 async fn handle_show(ctx: &Context, command: &CommandInteraction) {
     defer_ephemeral(ctx, command).await;
     let map = RoleCapMap::from_env();
@@ -592,7 +644,7 @@ async fn handle_show(ctx: &Context, command: &CommandInteraction) {
         .await;
 }
 
-/// `/roles unlock` — the DEMO GATE. A cap-gated offering: refuse legibly without the
+/// `/identity roles unlock` — the DEMO GATE. A cap-gated offering: refuse legibly without the
 /// Verified Holder cap, reveal it with. This is the *convenience* gate; a real
 /// cryptographic effect behind this button would re-check on the executor / a macaroon
 /// (the role only decides whether to SHOW it).
@@ -620,7 +672,7 @@ async fn handle_unlock(ctx: &Context, command: &CommandInteraction) {
         .await;
 }
 
-/// `/roles grant` — admin-only demo of the proof→role flow.
+/// `/identity roles grant` — admin-only demo of the proof→role flow.
 async fn handle_grant(ctx: &Context, command: &CommandInteraction, _state: &BotState) {
     defer_ephemeral(ctx, command).await;
 
@@ -915,6 +967,27 @@ mod tests {
             cap: Achievement::VerifiedDescentWin.granted_cap(),
         };
         assert!(outcome.message().contains(RoleCapMap::ENV_VAR));
+    }
+
+    #[test]
+    fn the_automatic_seam_is_quiet_when_inert_and_loud_when_fixable() {
+        let role = RoleId::new(200);
+        // An unconfigured guild is INERT, not broken — the automatic grant rides on
+        // someone else's success embed and must not nag about config nobody asked for.
+        assert!(!worth_surfacing(&GrantOutcome::NoMapping {
+            cap: DreggCap::VerifiedHolder
+        }));
+        // Everything else is said. A missing Manage Roles permission especially: it is
+        // the one outcome an admin reading the channel can actually act on.
+        assert!(worth_surfacing(&GrantOutcome::MissingManageRoles {
+            role,
+            detail: "50013: Missing Permissions".into(),
+        }));
+        assert!(worth_surfacing(&GrantOutcome::Granted { role }));
+        assert!(worth_surfacing(&GrantOutcome::AlreadyHeld { role }));
+        assert!(worth_surfacing(&GrantOutcome::Failed {
+            detail: "boom".into()
+        }));
     }
 
     #[test]
