@@ -325,10 +325,23 @@ async fn handle_address(ctx: &Context, command: &CommandInteraction, state: &Bot
                     .collect::<Vec<_>>()
                     .join("\n")
             };
+            // THE JOIN KEY the boards group you under: the rotation-ready ACCOUNT ID (byte-identical
+            // to the identity cell's id), not the raw root pubkey. Shown beside the root so the id a
+            // leaderboard merges your platforms under is the id you can read here — the two must not
+            // be different-looking answers to "who am I". `platforms_for_root` still keys on the raw
+            // pubkey (that is the record's own field), which is why both appear.
+            let account = webauth_core::link_registry::account_id_of_root(&root);
+            let account_line = match &account {
+                Some(a) => format!(
+                    "\nAccount `{}…` — the id boards rank you under.",
+                    &a[..16.min(a.len())]
+                ),
+                None => String::new(),
+            };
             embed = embed.field(
                 "🔗 One you, across platforms",
                 format!(
-                    "Root key `{}…` — the SAME human on:\n{list}",
+                    "Root key `{}…` — the SAME human on:\n{list}{account_line}",
                     &root[..16.min(root.len())]
                 ),
                 false,

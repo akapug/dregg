@@ -37,6 +37,9 @@ pub mod challenge;
 pub mod config;
 pub mod credext;
 pub mod grant;
+/// The board-render resolver: ONE link-store scan, the account-id join key, and prefix-tolerant
+/// resolution for boards that stored a truncated identity. See [`identity_resolve`].
+pub mod identity_resolve;
 pub mod json;
 pub mod link_claim;
 pub mod link_kel;

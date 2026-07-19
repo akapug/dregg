@@ -80,13 +80,9 @@ const PLAY_CSP: &str = "default-src 'none'; \
 /// same-origin-asset routes use).
 const JS_CT: &str = "text/javascript; charset=utf-8";
 
-/// The canonical descent day URI the served element opens. `defaultResolveDescent` derives a
-/// STABLE, byte-identical day from a well-formed `dregg://descent/b3_<hex>` addr (the same
-/// deterministic stand-in the fixture + poll/doc/story engines use), so this page opens a real,
-/// fully-playable Descent run without a network fetch. The production seam that swaps this for
-/// TODAY's live drand round (`DescentWorld.fromBeacon`) is `defaultResolveDescent`'s documented
-/// beacon-client path — a follow-up, orthogonal to this mount.
-const DEFAULT_DAY_URI: &str = "dregg://descent/b3_de5ce0";
+/// The route serving TODAY's resolved day as JSON — the same-origin descriptor the bootstrap reads
+/// so the page opens the day the BOARD is keeping score on, not a fixture.
+const DAY_JSON_PATH: &str = "/descent/play/static/day.json";
 
 /// **Build the playable-Descent router.** Additive + state-free — merge it onto the same app as
 /// [`descent_router`](crate::descent_router) / [`router`](crate::router). Serves:
@@ -99,6 +95,7 @@ pub fn descent_play_router() -> Router {
     Router::new()
         .route("/descent/play", get(get_descent_play))
         .route("/descent/play/static/app.js", get(get_play_app_js))
+        .route(DAY_JSON_PATH, get(get_play_day_json))
         .route("/descent/play/static/client.js", get(get_play_client_js))
         .route(
             "/descent/play/static/dregg_wasm.js",
@@ -125,6 +122,42 @@ async fn get_descent_play() -> Response {
 /// forbids inline script (a CDN swap / XSS of the mount glue has no foothold).
 async fn get_play_app_js() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, JS_CT)], PLAY_APP_JS)
+}
+
+/// `GET /descent/play/static/day.json` — **TODAY'S REAL DAY**, as the descriptor the in-page
+/// resolver opens the world from.
+///
+/// This closes the third joint of the funnel. The page used to open a FIXED demo day: a hardcoded
+/// `dregg://descent/b3_de5ce0` whose epoch the client derived by hashing the addr tail, so the
+/// served game was a fixture world decoupled from the board's — you could play it, but your run
+/// belonged to no day anyone was scoring. The day is now resolved from
+/// [`crate::descent::todays_day`] — the SAME [`procgen_dregg::descent_day`] helper the board and the
+/// Discord bot resolve — and its committed EPOCH is published here, so the in-tab wasm
+/// `DescentWorld` draws the byte-identical world.
+///
+/// `no-store`: the day rolls at UTC midnight, and a cached descriptor would pin a stale world.
+async fn get_play_day_json() -> Response {
+    let day = crate::descent::todays_day();
+    let body = serde_json::json!({
+        "key": day.key,
+        "uri": day.descent_uri(),
+        // The committed epoch the browser opens the day from: `DescentWorld::new(epochHex)` folds it
+        // through the same `daily_seed` this server drew the board's world with.
+        "epochHex": day.epoch_hex(),
+        "seedTag": day.seed_tag(),
+        "utcDay": day.utc_day,
+        // HONEST PROVENANCE, carried so the surface can never render the offline day as a fresh
+        // reveal: `beacon` = a BLS-verified live drand round, `offline-date` = the date-derived day.
+        "source": if day.source.is_live_beacon() { "beacon" } else { "offline-date" },
+    });
+    (
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body.to_string(),
+    )
+        .into_response()
 }
 
 /// `GET /descent/play/static/client.js` — the vendored element+engine+port ESM bundle. Absent →
@@ -196,6 +229,11 @@ fn read_play_asset(name: &str) -> Option<Vec<u8>> {
 /// just the mount root and the same-origin bootstrap module. The `<dregg-descent>` carries a
 /// board-link as fallback content (shown pre-boot / on a fail-closed run).
 fn shell_page() -> String {
+    // TODAY'S REAL DAY (the board's world, and the bot's) — its content address is the element's
+    // `src`, and its committed epoch rides in a data attribute so the in-page resolver opens the
+    // byte-identical world with no extra round-trip. The bootstrap re-fetches `day.json` as the
+    // authority (the page may be cached past midnight); the attribute is the no-network floor.
+    let day = crate::descent::todays_day();
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
@@ -207,7 +245,8 @@ fn shell_page() -> String {
          is one cap-gated verified turn on the in-tab executor; the run stays private (the moves \
          never leave your device) and a stranger can replay the whole receipt chain. Reach the \
          drowned king&#39;s hoard, or fall to the warden.</p>\
-         <div id=\"descent-play-root\">\
+         <div id=\"descent-play-root\" data-day-key=\"{day_key}\" \
+         data-day-epoch=\"{day_epoch}\" data-day-source=\"{day_source}\">\
          <dregg-descent id=\"descent-run\" src=\"{day}\">\
          <a class=\"btn btn-ghost\" href=\"/descent\">See today&#39;s no-cheat board \
          <span class=\"arr\" aria-hidden=\"true\">&rarr;</span></a>\
@@ -221,7 +260,14 @@ fn shell_page() -> String {
          </body></html>",
         style = crate::STYLE,
         topbar = crate::topbar("descent"),
-        day = DEFAULT_DAY_URI,
+        day = day.descent_uri(),
+        day_key = crate::esc(&day.key),
+        day_epoch = day.epoch_hex(),
+        day_source = if day.source.is_live_beacon() {
+            "beacon"
+        } else {
+            "offline-date"
+        },
         footer = crate::FOOTER,
     )
 }
@@ -282,12 +328,35 @@ async function boot() {
 
   const { DescentEngine, defaultResolveDescent, setDescentPortFactory, registerDescentElement } = client;
 
-  // (3) One engine owns the real wasm world per day. Play + verify are the FREE, PRIVATE, in-tab
-  //     tier; settle (the opt-in publish-to-leaderboard hook) is left unwired here, so a run stays
-  //     private and the element's publish button degrades to its honest "opt-in named hook" note.
+  // (3) TODAY'S REAL DAY. `defaultResolveDescent` derives a day by HASHING THE ADDR TAIL — a stable
+  //     fixture world, decoupled from the day the board is scoring and the day the Discord bot
+  //     plays. The server resolves the real day (procgen_dregg::descent_day, the same helper the
+  //     board and the bot use) and publishes its committed EPOCH; this resolver hands that epoch to
+  //     the wasm DescentWorld, which folds it through the identical daily_seed. So the tab plays the
+  //     world today is actually about. Fail-closed: no epoch ⇒ fall back to the stand-in resolver
+  //     rather than opening nothing.
+  let today = null;
+  try {
+    const r = await fetch("/descent/play/static/day.json", { cache: "no-store" });
+    if (r.ok) today = await r.json();
+  } catch (e) { /* offline / blocked — the data attribute below is the floor */ }
+  if (!today && root) {
+    const ep = root.getAttribute("data-day-epoch");
+    if (ep) today = { epochHex: ep, key: root.getAttribute("data-day-key") };
+  }
+  const resolveToday = function (uri) {
+    if (today && typeof today.epochHex === "string" && /^[0-9a-f]{64}$/i.test(today.epochHex)) {
+      return { kind: "descent", addr: String(uri).split("/").pop(), epochHex: today.epochHex };
+    }
+    return defaultResolveDescent(uri);
+  };
+
+  // One engine owns the real wasm world per day. Play + verify are the FREE, PRIVATE, in-tab
+  // tier; settle (the opt-in publish-to-leaderboard hook) is left unwired here, so a run stays
+  // private and the element's publish button degrades to its honest "opt-in named hook" note.
   const engine = new DescentEngine({
     DescentWorld: DescentWorld,
-    resolveDescent: defaultResolveDescent,
+    resolveDescent: resolveToday,
     settle: null,
   });
 
@@ -360,9 +429,19 @@ mod tests {
 
         let html = super::shell_page();
         assert!(html.contains("<dregg-descent"), "the element is mounted");
+        // It opens TODAY'S REAL day — the same world `descent::todays_day` gives the board and the
+        // bot — not a hardcoded fixture. NON-VACUOUS: the addr and the published epoch are both the
+        // resolved day's, and the epoch re-derives that day's seed.
+        let day = crate::descent::todays_day();
+        assert!(html.contains(&day.descent_uri()), "opens today's real day");
         assert!(
-            html.contains(super::DEFAULT_DAY_URI),
-            "opens a concrete day"
+            html.contains(&day.epoch_hex()),
+            "publishes today's committed epoch for the in-tab world"
+        );
+        assert_eq!(
+            procgen_dregg::daily_seed(&day.epoch).as_bytes(),
+            day.seed.as_bytes(),
+            "the published epoch derives the day's seed"
         );
         assert!(
             html.contains("/descent/play/static/app.js"),
@@ -393,9 +472,38 @@ mod tests {
             "engine.handle(req, location.origin)",
             "/descent/play/static/client.js",
             "/descent/play/static/dregg_wasm.js",
+            // The real-day resolver (never the addr-hashing stand-in as the primary path).
+            "/descent/play/static/day.json",
+            "resolveDescent: resolveToday",
         ] {
             assert!(js.contains(needle), "bootstrap references {needle}");
         }
+    }
+
+    /// `day.json` serves TODAY'S day — the same world the board opens — with its committed epoch and
+    /// an honest provenance label, uncached (the day rolls at UTC midnight).
+    #[tokio::test]
+    async fn the_day_route_serves_todays_real_day() {
+        let resp = super::get_play_day_json().await;
+        assert_eq!(
+            resp.headers().get("cache-control").unwrap(),
+            "no-store",
+            "a cached descriptor would pin a stale day"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let day = crate::descent::todays_day();
+        assert_eq!(v["key"], day.key, "the cross-process day key");
+        assert_eq!(v["epochHex"], day.epoch_hex());
+        // The provenance is REPORTED, never assumed live.
+        assert!(v["source"] == "beacon" || v["source"] == "offline-date");
+        // THE WELD: the epoch this page hands the browser draws the SAME world the board scores.
+        assert_eq!(
+            procgen_dregg::daily_seed(&day.epoch).as_bytes(),
+            day.seed.as_bytes()
+        );
     }
 
     #[tokio::test]

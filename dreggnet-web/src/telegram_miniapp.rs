@@ -699,9 +699,14 @@ async fn get_tg_offerings(
          var(--border);border-radius:var(--r-md);background:var(--panel)\">\
          <h3 style=\"margin:0 0 .35rem\">The Descent</h3>\
          <p class=\"prose\" style=\"margin:0 0 .5rem\">{flagship}</p>\
-         <a class=\"btn btn-primary\" href=\"/descent\">Play today's descent</a>\
+         <a class=\"btn btn-primary\" href=\"{play}\">Play today's descent</a>\
+         <a class=\"btn btn-ghost\" href=\"/descent\">See today's no-cheat board</a>\
          </div>\
          <p class=\"prose\" style=\"margin:.8rem 0 .4rem\">{lab}</p>",
+        // The button SAYS "Play today's descent" — so it must LAND on the game. It pointed at
+        // `/descent`, the no-cheat BOARD, so every Telegram player who took the flagship's own CTA
+        // arrived at a leaderboard. The board keeps its own (honestly labelled) link beside it.
+        play = crate::DESCENT_PLAY_PATH,
         flagship = crate::esc(dreggnet_catalog::flagship_pointer()),
         lab = crate::esc(dreggnet_catalog::lab_intro()),
     );

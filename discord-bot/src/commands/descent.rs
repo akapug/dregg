@@ -72,11 +72,13 @@ use dreggnet_offerings::{DreggIdentity, OfferingError, Outcome};
 use dungeon_on_dregg::progression::{MAGE, ROGUE, WARRIOR};
 use procgen_dregg::CommittedSeed;
 use procgen_dregg::beacon::DailyBeacon;
+use procgen_dregg::descent_day::DescentDay;
 use ugc_dregg::{Completion, Registry, Universe, UniverseId, record_playthrough};
 
 use crate::BotState;
 use crate::commands::ack;
 use crate::commands::offering::identity_of;
+use webauth_core::identity_resolve::RootResolver;
 
 /// The Descent brand colour (a deep permadeath crimson-violet, distinct from `/dungeon`'s teal).
 const DESCENT_COLOR: u32 = 0x9D174D;
@@ -204,48 +206,46 @@ pub fn todays_beacon_status() -> BeaconStatus {
     resolve_todays_seed().1
 }
 
-/// Domain tag for the OFFLINE, date-derived fallback seed (H6) — distinct from every live path so a
-/// date-seeded day can never alias a beacon-seeded one.
-const OFFLINE_DATE_SEED_DOMAIN: &[u8] = b"dregg-descent-offline-date-seed-v1";
-
-/// **The offline, date-derived fallback seed (H6).** With no live/verified beacon cached for today,
-/// the daily world still ROTATES BY CALENDAR DAY: the UTC day number is folded (with the pinned
-/// published reveal as a fixed anchor) into a domain-tagged epoch value, then through
-/// [`procgen_dregg::daily_seed`] — so tomorrow's offline dungeon differs from today's. This is the
-/// seed SELECTION (the daily loop), never a claim of a fresh beacon reveal (the footer says
-/// "offline date-seeded ... not beacon-verified fresh"). It does NOT touch `daily_scene`'s move math.
-fn date_seeded_fallback(utc_day: u64) -> CommittedSeed {
-    let mut h = blake3::Hasher::new();
-    h.update(OFFLINE_DATE_SEED_DOMAIN);
-    h.update(&hex::decode(DRAND_QUICKNET_SIG_HEX).expect("the pinned drand signature decodes"));
-    h.update(&utc_day.to_le_bytes());
-    let epoch = h.finalize();
-    procgen_dregg::daily_seed(epoch.as_bytes())
-}
-
-/// **Resolve today's daily SEED + its provenance** — the SINGLE seed-selection the live `/descent`
-/// surfaces (play / board / today) share, so the played world, the board universe, and the shown
-/// seed always agree. Serves the cached live beacon's verified seed when the reveal cron has fetched
-/// today's round (`BeaconStatus::Live`); otherwise the offline, date-derived fallback
-/// ([`date_seeded_fallback`]) labeled `BeaconStatus::PinnedFallback` (honestly "not beacon-verified
-/// fresh"). [`resolve_todays_beacon`] remains the beacon-verifying anchor the tests + `open_core`
-/// drive; production play resolves the served seed here.
-fn resolve_todays_seed() -> (CommittedSeed, BeaconStatus) {
+/// **Resolve today's DAY — the world, and the key that names it across the process boundary.**
+///
+/// This is the SINGLE seed-selection the live `/descent` surfaces (play / board / today / share)
+/// share, so the played world, the board universe, the shown seed, and the world the WEB re-executes
+/// a shared run in all agree. It is [`procgen_dregg::descent_day`] — the same helper `dreggnet-web`
+/// resolves its day from — so the two processes agree by construction rather than by coincidence:
+///
+/// * the reveal cron has fetched + BLS-verified today's live drand round ⇒ that beacon's day
+///   ([`BeaconStatus::Live`]), keyed `d{utc_day}-r{round}` (the web re-derives it by fetching and
+///   re-verifying that exact round);
+/// * otherwise the OFFLINE, date-derived day ([`procgen_dregg::descent_day::offline_day`]) labeled
+///   [`BeaconStatus::PinnedFallback`] — honestly "not beacon-verified fresh" — keyed
+///   `d{utc_day}-off`, which the web re-derives purely.
+///
+/// [`resolve_todays_beacon`] remains the beacon-verifying anchor the tests + `open_core` drive;
+/// production play resolves the served day here.
+fn resolve_todays_day() -> (DescentDay, BeaconStatus) {
     let today = procgen_dregg::beacon::current_utc_day();
     let cached = live_beacon_cell().lock().expect("live beacon lock").clone();
     if let Some((day, beacon)) = cached {
         if day == today {
-            if let Ok(seed) = beacon.seed() {
-                return (
-                    seed,
-                    BeaconStatus::Live {
-                        round: beacon.round,
-                    },
-                );
+            // `beacon_day` derives the seed through `DailyBeacon::seed`, which runs the BLS pairing
+            // check FIRST — a cached beacon that no longer verifies falls through to the offline day
+            // rather than seeding a run.
+            if let Ok(resolved) = procgen_dregg::descent_day::beacon_day(today, &beacon) {
+                let round = beacon.round;
+                return (resolved, BeaconStatus::Live { round });
             }
         }
     }
-    (date_seeded_fallback(today), BeaconStatus::PinnedFallback)
+    (
+        procgen_dregg::descent_day::offline_day(today),
+        BeaconStatus::PinnedFallback,
+    )
+}
+
+/// Today's seed + its provenance — [`resolve_todays_day`] for the surfaces that only need the seed.
+fn resolve_todays_seed() -> (CommittedSeed, BeaconStatus) {
+    let (day, status) = resolve_todays_day();
+    (day.seed, status)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -639,18 +639,51 @@ struct BoardView {
     reverify: Vec<(usize, String)>,
 }
 
-/// The current no-cheat leaderboard for today's world.
-fn board_core(board: &Registry, universe_id: UniverseId, day_title: &str) -> BoardView {
+/// The current no-cheat leaderboard for today's world, **grouped per human**.
+///
+/// Identity resolution (backlog cluster 1): the board's stored key is the player's derived custodial
+/// identity, so a Discord-you and a Telegram-you that both linked to the same root key are TWO rows
+/// for ONE person. Every row is resolved through a [`RootResolver`] snapshot — loaded ONCE for the
+/// whole render, on the account-id join key — and rows resolving to the same human are MERGED,
+/// keeping that human's best (fewest-turns) entry. An unlinked player resolves to itself, so an
+/// un-linked board is byte-identical to before.
+///
+/// RESIDUAL (named, not forced): the board's stored player is the 12-hex `short_player` truncation
+/// of the custodial identity, because that string is bound into the completion PK
+/// (`blake3(universe ‖ player ‖ moves)`), the persisted board rows, the `/export` NFT commitment,
+/// and the replay key — widening it would invalidate every existing completion id. The resolver
+/// therefore matches the stored prefix against the linked custodial keys and REFUSES an ambiguous
+/// prefix (see [`RootResolver::resolve_opt`]) rather than merging two humans on a 48-bit collision.
+fn board_core(
+    board: &Registry,
+    universe_id: UniverseId,
+    day_title: &str,
+    resolver: &RootResolver,
+) -> BoardView {
     let ranked = board.leaderboard(universe_id);
-    let entries = ranked
+    // Merge per resolved human, keeping the best (fewest-turns) entry and ITS re-verify handle.
+    // `leaderboard` is already turns-ordered, so the FIRST sighting of a human is their best.
+    let mut seen: Vec<String> = Vec::new();
+    let mut merged: Vec<(String, usize, String)> = Vec::new(); // (label, turns, completion hex)
+    for e in &ranked {
+        let stored = short_player(&e.player);
+        // The GROUPING key: the human's account id when linked, else the row's own stored identity.
+        let human = resolver.resolve(&stored);
+        if seen.iter().any(|h| h == &human) {
+            continue; // a second platform of a human already on the board — one row per human
+        }
+        seen.push(human);
+        merged.push((stored, e.turns, hex32(&e.completion_id)));
+    }
+    let entries = merged
         .iter()
         .enumerate()
-        .map(|(i, e)| (i + 1, short_player(&e.player), e.turns))
+        .map(|(i, (label, turns, _))| (i + 1, label.clone(), *turns))
         .collect();
-    let reverify = ranked
+    let reverify = merged
         .iter()
         .enumerate()
-        .map(|(i, e)| (i + 1, hex32(&e.completion_id)))
+        .map(|(i, (_, _, cid))| (i + 1, cid.clone()))
         .collect();
     BoardView {
         day_title: day_title.to_string(),
@@ -1408,6 +1441,9 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
     // The presser is the run's owner here (a non-owner press was refused above), so their Discord
     // display name is the owner's — the H4 render-only label for their own result.
     let player_name = display_name_of(&component.user);
+    // WHICH WORLD this run is being played in — resolved from the SAME helper the web resolves its
+    // day from, and carried on the share so the web re-executes in it (see `ShareInput::day`).
+    let day_key = resolve_todays_day().0.key;
     let (result, share) = store().run(move |w| {
         let Some(slot) = w.slots.get_mut(&owner) else {
             return (MoveResult::NoRun, None);
@@ -1426,6 +1462,7 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
         // run-card link (the web board re-executes it). Read straight off the committed playthrough.
         let share = match &outcome {
             MoveResult::Landed { view, .. } if view.ended => Some(ShareInput {
+                day: day_key.clone(),
                 moves: slot
                     .run
                     .playthrough()
@@ -1631,7 +1668,10 @@ async fn handle_board(ctx: &Context, command: &CommandInteraction, state: &BotSt
     // (the reported H4 data-model seam); every other row stays the short hash.
     let me_short = short_player(&identity_of(state, command.user.id.get()).0);
     let me_name = display_name_of(&command.user);
-    let view = store().run(move |w| board_core(&w.board, uid, &day_title));
+    // ONE link-store scan for the whole board render (the old per-row `resolve_display_root`
+    // re-scanned the shared TSV for every row), on the account-id join key.
+    let resolver = RootResolver::load();
+    let view = store().run(move |w| board_core(&w.board, uid, &day_title, &resolver));
     let rows = reverify_rows(&view.reverify);
     respond(
         ctx,
@@ -1829,6 +1869,12 @@ fn result_embed(
 /// embed (rendered on the Discord worker) can ingest it to the web board off-thread.
 #[derive(Clone, Debug)]
 struct ShareInput {
+    /// **WHICH WORLD the run was played in** — the cross-process day key
+    /// ([`procgen_dregg::descent_day`]). Without it the web fell back to whatever day it had open
+    /// and re-executed the moves in a DIFFERENT world, so the run never verified and the share link
+    /// never emitted. With it the web re-derives this exact seed (purely for an offline day; by
+    /// fetching + BLS-verifying the round for a live one) and re-executes in the SAME world.
+    day: String,
     /// The move sequence (choice indices) the web re-executes.
     moves: Vec<usize>,
     /// The player label the board is keyed by (the SAME short derived-identity the bot submits).
@@ -1867,6 +1913,9 @@ async fn share_terminal_run(si: &ShareInput) -> Option<String> {
         return None;
     }
     let body = serde_json::json!({
+        // THE DAY — the weld that makes this ingest possible at all: the web re-derives this key to
+        // the byte-identical seed and re-executes the moves in the world they were played in.
+        "day": si.day,
         "player": si.player,
         "level": si.level,
         "class": si.class,
@@ -2275,6 +2324,84 @@ mod tests {
         DreggIdentity(name.to_string())
     }
 
+    /// **THE CROSS-PROCESS WELD.** The day key this bot stamps onto a shared run re-derives — by a
+    /// receiver that has only the key — to the EXACT seed the run was played in. Without this the
+    /// web re-executed a Discord run against its own unrelated day, the run never verified, and the
+    /// share link never emitted.
+    #[test]
+    fn the_day_the_bot_plays_is_re_derivable_from_the_key_it_shares() {
+        let (day, status) = resolve_todays_day();
+        // The seed actually served to `/descent play` IS this day's seed (one selection, not two).
+        assert_eq!(resolve_todays_seed().0.as_bytes(), day.seed.as_bytes());
+        // A receiver holding only the key re-derives the identical world.
+        let (utc_day, source) =
+            procgen_dregg::descent_day::parse_day_key(&day.key).expect("the shared key parses");
+        assert_eq!(utc_day, day.utc_day);
+        match (source, status) {
+            (procgen_dregg::descent_day::DaySource::OfflineDate, BeaconStatus::PinnedFallback) => {
+                assert_eq!(
+                    procgen_dregg::descent_day::offline_date_seed(utc_day).as_bytes(),
+                    day.seed.as_bytes(),
+                    "the offline day re-derives purely from its key"
+                );
+            }
+            (
+                procgen_dregg::descent_day::DaySource::Beacon { round },
+                BeaconStatus::Live { round: r },
+            ) => {
+                // The key names the very round a receiver fetches + BLS-verifies to re-derive it.
+                assert_eq!(round, r);
+            }
+            (s, st) => panic!("the key's provenance must match the served status: {s:?} vs {st:?}"),
+        }
+        // NON-VACUOUS: a different day is a different key AND a different world.
+        let other = procgen_dregg::descent_day::offline_day(day.utc_day + 1);
+        assert_ne!(other.key, day.key);
+        assert_ne!(other.seed.as_bytes(), day.seed.as_bytes());
+    }
+
+    /// The board MERGES a person's platforms instead of showing them twice. Driven on the pure
+    /// `board_core` with a resolver snapshot, so no link file / env is touched.
+    #[test]
+    fn the_board_shows_one_row_per_human_not_one_per_platform() {
+        use webauth_core::link_registry::{InMemoryLinkStore, LinkRecord, LinkStore};
+
+        // Two custodial keys, ONE linked root — a Discord-you and a Telegram-you.
+        let root = "aa".repeat(32);
+        let cust_a = "11".repeat(32);
+        let cust_b = "22".repeat(32);
+        let mut store = InMemoryLinkStore::default();
+        for (i, c) in [&cust_a, &cust_b].iter().enumerate() {
+            store
+                .record(&LinkRecord {
+                    root_pubkey_hex: root.clone(),
+                    platform: if i == 0 {
+                        "discord".into()
+                    } else {
+                        "telegram".into()
+                    },
+                    platform_uid: format!("{i}"),
+                    custodial_pubkey_hex: (*c).clone(),
+                    verified_at: 100 + i as u64,
+                })
+                .unwrap();
+        }
+        let resolver = RootResolver::from_store(&store);
+        // The board stores the 12-hex TRUNCATION of the identity (the completion PK shape) — the
+        // resolver still finds the human behind it.
+        assert_eq!(
+            resolver.resolve(&short_player(&cust_a)),
+            resolver.resolve(&short_player(&cust_b)),
+            "both platforms resolve to one human even from the stored 12-hex prefix"
+        );
+        // NON-VACUOUS: an unlinked identity is its own human, so an unlinked board never merges.
+        let stranger = short_player(&"99".repeat(32));
+        assert_ne!(
+            resolver.resolve(&stranger),
+            resolver.resolve(&short_player(&cust_a))
+        );
+    }
+
     /// **The staleness is visible at the surface.** With no cached live round (or a stale one)
     /// the pinned fallback is served and the rendered footer SAYS so; with today's live round
     /// cached, the footer names the live round instead. (The pure resolution core is driven
@@ -2547,7 +2674,7 @@ mod tests {
         .expect("open");
         drive_win(&mut off, &mut run, &mut board, uid, "presser");
 
-        let view = board_core(&board, uid, "today");
+        let view = board_core(&board, uid, "today", &RootResolver::default());
         assert_eq!(view.entries.len(), 1, "the win ranks");
         assert_eq!(
             view.reverify.len(),

@@ -45,10 +45,12 @@ use serde::Deserialize;
 use dregg_node_target::{Landed, NodeError, NodeTarget, SubmittedTurn};
 use dreggnet_offerings::daily_descent::{DAILY_DEPLOY_SEED, DailyDescent, HOARD_GOLD, daily_scene};
 use procgen_dregg::CommittedSeed;
+use procgen_dregg::descent_day::{self, DescentDay};
 use spween_dregg::{
     PASSAGE_ENDED, PASSAGE_SLOT, Playthrough, Scene, WorldCell, compile_scene, parse, verify,
 };
 use ugc_dregg::{Completion, Universe, record_playthrough, verify_completion};
+use webauth_core::identity_resolve::RootResolver;
 
 use crate::descent_store::{DescentRunStore, StoredDay, StoredRun};
 use crate::{document, esc};
@@ -56,6 +58,22 @@ use crate::{document, esc};
 /// The author label the day's world is published under (a stable content-address input; the daily
 /// world is anonymous-authored on the no-cheat board).
 const DAY_AUTHOR: &str = "the-descent";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// THE DAY — resolved from the SAME helper the Discord bot resolves its day from.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// **Today's descent day** — [`procgen_dregg::descent_day`], the one seed selection this process and
+/// the Discord bot share. Every surface here (the board, `/descent/play`, the submit ingest) opens
+/// THIS world, so a run played in Discord re-executes here instead of failing against a fixture day.
+///
+/// This process has no drand reveal cron, so it resolves the OFFLINE date-derived day — a real daily
+/// rotation, honestly not a fresh beacon reveal. When the bot's cron HAS a live round, the bot sends
+/// that day's key and [`resolve_submitted_day`] re-derives it by fetching and BLS-verifying the very
+/// round the key names, so the two still meet in one world.
+pub fn todays_day() -> DescentDay {
+    descent_day::todays_offline_day()
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // The recorded, re-verifiable material.
@@ -369,6 +387,65 @@ impl DescentState {
         }
     }
 
+    /// The key of an already-open day whose world is drawn from `seed`, if any.
+    ///
+    /// **The day key is a LABEL; the SEED is the world.** Two keys naming the same seed (the demo's
+    /// `"today"` and the bot's `d{utc_day}-off`) are the SAME board, and a submitted run must land
+    /// on the one that is already open rather than splitting the day in two.
+    pub fn day_key_for_seed(&self, seed: &CommittedSeed) -> Option<String> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .days
+            .values()
+            .find(|d| d.seed.as_bytes() == seed.as_bytes())
+            .map(|d| d.key.clone())
+    }
+
+    /// **Ensure a day's world is open and return the key it lives under.** If some day is already
+    /// open on this seed, that key is returned untouched (see [`day_key_for_seed`](Self::day_key_for_seed));
+    /// otherwise the day is opened under `preferred_key`. Idempotent.
+    ///
+    /// THE DAY-ROLL: opening a *canonical* day key for the CURRENT UTC day also makes it the default
+    /// board. So the first run submitted after UTC midnight rolls a long-lived deployment onto the
+    /// new world instead of leaving `/descent` serving yesterday's forever. A hand-picked key (a
+    /// fixture day, the demo's `"today"`) is never promoted this way.
+    pub fn ensure_day(&self, preferred_key: &str, seed: CommittedSeed) -> String {
+        if let Some(existing) = self.day_key_for_seed(&seed) {
+            return existing;
+        }
+        self.open_day(preferred_key, seed);
+        if let Some((utc_day, _)) = descent_day::parse_day_key(preferred_key) {
+            if utc_day == procgen_dregg::beacon::current_utc_day() {
+                self.set_today(preferred_key);
+            }
+        }
+        preferred_key.to_string()
+    }
+
+    /// **Open today's world if this process has none, and return the day to render by default.**
+    ///
+    /// Called on the dayless board render and the dayless submit. Two rules, both deliberate:
+    ///
+    /// * **No day designated at all** ⇒ open today's ([`todays_day`]) and designate it, so a bare
+    ///   deployment serves a real, current world instead of an empty board.
+    /// * **A day already designated** ⇒ keep it, UNLESS it is a canonical `d{utc_day}-…` key for a
+    ///   PAST day (then roll). A caller-designated day — a test fixture, the demo's `"today"` — is
+    ///   never yanked out from under the caller that opened it; the roll for those comes from
+    ///   [`ensure_day`] promoting the new canonical day when the first run of it is submitted.
+    pub fn ensure_today(&self) -> String {
+        let day = todays_day();
+        if let Some(cur) = self.today() {
+            match descent_day::parse_day_key(&cur) {
+                // A canonical key for a past day — stale, roll to today's world.
+                Some((utc_day, _)) if utc_day < day.utc_day => {}
+                _ => return cur,
+            }
+        }
+        let key = self.ensure_day(&day.key, day.seed);
+        self.set_today(&key);
+        key
+    }
+
     /// Set which opened day `GET /descent/leaderboard` shows by default.
     pub fn set_today(&self, key: &str) {
         self.inner.lock().unwrap().today = Some(key.to_string());
@@ -378,6 +455,11 @@ impl DescentState {
     /// first opened day), if any.
     pub fn today(&self) -> Option<String> {
         self.inner.lock().unwrap().today.clone()
+    }
+
+    /// Whether a day is open under exactly this key.
+    pub fn has_day(&self, key: &str) -> bool {
+        self.inner.lock().unwrap().days.contains_key(key)
     }
 
     /// **Ingest a recorded run** for a day — store the (untrusted) playthrough + display metadata
@@ -489,14 +571,15 @@ async fn post_submit(
     State(state): State<Arc<DescentState>>,
     Json(body): Json<SubmitRun>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let day = match body.day.clone().or_else(|| state.today()) {
-        Some(d) => d,
-        None => {
+    let day = match resolve_submitted_day(&state, body.day.clone()).await {
+        Ok(d) => d,
+        Err(why) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
                     "ranked": false,
-                    "error": "no day is open",
+                    "error": why,
+                    "detail": "the submitted day could not be re-derived to a world — nothing ingested",
                 })),
             );
         }
@@ -571,6 +654,50 @@ async fn post_submit(
     }
 }
 
+/// **Resolve the day a submitted run claims, RE-DERIVING its world rather than trusting the key.**
+///
+/// This is the receiving half of the cross-process weld. The order is:
+///
+/// 1. **No `day`** ⇒ today's world ([`DescentState::ensure_today`]). (The bot always sends one now;
+///    this is the browser/manual-submit path, and it also rolls the day at UTC midnight.)
+/// 2. **A day already open under that exact key** ⇒ use it. This keeps hand-picked keys (the demo's
+///    `"today"`, a test's fixture day) working exactly as before.
+/// 3. **A key [`procgen_dregg::descent_day`] can re-derive** ⇒ re-derive the SEED here — purely for
+///    an offline day, and for a live-beacon day by FETCHING that round and running the BLS pairing
+///    check — then land the run on whatever board already holds that world (or open it). The key is
+///    never believed: it only names a world this process derives for itself, and the helper refuses a
+///    malformed key, an out-of-window day, and an off-schedule round BEFORE any network touch, so
+///    this endpoint cannot be steered into fetching arbitrary rounds.
+/// 4. **Anything else** ⇒ refused (`Err`), fail-closed — never silently re-executed against a
+///    different day's world, which is exactly the failure this whole weld exists to remove.
+async fn resolve_submitted_day(
+    state: &Arc<DescentState>,
+    requested: Option<String>,
+) -> Result<String, String> {
+    let Some(key) = requested else {
+        return Ok(state.ensure_today());
+    };
+    if state.has_day(&key) {
+        return Ok(key);
+    }
+    // Re-derive the world the key names. The offline half is pure; only a live-beacon key touches
+    // the network, and it is fetched + BLS-verified off the async worker.
+    let today = procgen_dregg::beacon::current_utc_day();
+    let k = key.clone();
+    let resolved = tokio::task::spawn_blocking(move || {
+        descent_day::resolve_day_key(
+            &procgen_dregg::beacon::HttpRoundFetch,
+            procgen_dregg::beacon::DRAND_API_BASE,
+            &k,
+            today,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("day resolution task join: {e}"))??;
+    Ok(state.ensure_day(&resolved.key, resolved.seed))
+}
+
 /// A content-addressed, shareable run id for a submitted run — `sub-` + short hex of
 /// `blake3(day ‖ player ‖ moves_json)`. Deterministic, so a resubmission of the same run maps to
 /// the same id (idempotent ingest).
@@ -605,6 +732,14 @@ async fn get_leaderboard(
     State(state): State<Arc<DescentState>>,
     Query(q): Query<DayQuery>,
 ) -> Html<String> {
+    // Open today's world if the process has not yet (and roll it at UTC midnight) — but only when no
+    // explicit `?day=` was asked for, so a link to a past day still renders that day.
+    if q.day.is_none() {
+        state.ensure_today();
+    }
+    // ONE link-store scan for the whole render (never per row), on the account-id join key.
+    let resolver = RootResolver::load();
+
     let inner = state.inner.lock().unwrap();
     let key = q.day.clone().or_else(|| inner.today.clone());
     let Some(key) = key else {
@@ -623,6 +758,8 @@ async fn get_leaderboard(
         let completion = Completion {
             universe: day.universe.id(),
             player: run.player.clone(),
+            // The completion is built over the run's OWN stored player label — the resolution below
+            // is a display/rank concern and must never move what is verified.
             play: run.play.clone(),
             claimed_turns: run.play.steps.len(),
         };
@@ -633,6 +770,11 @@ async fn get_leaderboard(
             rows.push(Row {
                 run_id: rid.clone(),
                 player: run.player.clone(),
+                // CROSS-PLATFORM IDENTITY: which HUMAN this row belongs to. A Discord-you and a
+                // Telegram-you (different custodial keys, one linked root) resolve to the same
+                // account id and merge below; an unlinked player resolves to its own label, so an
+                // un-linked board is byte-identical to before.
+                human: resolver.resolve(&run.player),
                 turns,
                 depth,
             });
@@ -640,8 +782,26 @@ async fn get_leaderboard(
     }
     // Rank by verified turns-to-win (lower first); stable for ties.
     rows.sort_by(|a, b| a.turns.cmp(&b.turns).then_with(|| a.player.cmp(&b.player)));
+    merge_per_human(&mut rows);
 
     Html(leaderboard_page(day, &rows))
+}
+
+/// **One row per HUMAN, their best verified run.** `rows` must already be ranked (best first), so
+/// the first sighting of a human is the run that ranks for them.
+///
+/// Resolving identities WITHOUT this step only RELABELS — two platforms of one person still occupy
+/// two board rows, which is exactly the defect the review caught on the crown board. An unlinked
+/// player's `human` is their own label, so a board with no links is untouched.
+fn merge_per_human(rows: &mut Vec<Row>) {
+    let mut seen: Vec<String> = Vec::new();
+    rows.retain(|r| {
+        if seen.iter().any(|h| h == &r.human) {
+            return false;
+        }
+        seen.push(r.human.clone());
+        true
+    });
 }
 
 /// `GET /descent/run/{id}` — render a run-card: the run's summary + the independent-verification
@@ -704,7 +864,12 @@ fn final_var(day: &Day, play: &Playthrough, name: &str) -> u64 {
 /// One ranked, re-verified leaderboard row.
 struct Row {
     run_id: String,
+    /// The run's own stored player label (what is displayed, and what the completion verified under).
     player: String,
+    /// WHICH HUMAN this row belongs to — the resolved account id when the player's custodial key is
+    /// linked, else the player label itself. Used to merge a person's platforms into one row; never
+    /// part of any verification.
+    human: String,
     turns: usize,
     depth: u64,
 }
@@ -799,7 +964,7 @@ fn leaderboard_page(day: &Day, rows: &[Row]) -> String {
     );
     document(
         &format!("The Descent — {} · leaderboard", day.day.title),
-        "descent",
+        "descent-board",
         &body,
     )
 }
@@ -905,7 +1070,7 @@ fn run_card_page(
     );
     document(
         &format!("The Descent — {}'s run", run.player),
-        "descent",
+        "descent-board",
         &body,
     )
 }
@@ -921,7 +1086,7 @@ fn leaderboard_missing(key: Option<&str>) -> String {
          <p class=\"prose\"><a class=\"backlink\" href=\"/\">← Back to DreggNet Cloud</a></p>\
          </main>",
     );
-    document("The Descent — leaderboard", "descent", &body)
+    document("The Descent — leaderboard", "descent-board", &body)
 }
 
 /// The page shown for an unknown run id.
@@ -933,5 +1098,106 @@ fn run_missing(id: &str) -> String {
          </p></main>",
         id = esc(id),
     );
-    document("The Descent — unknown run", "descent", &body)
+    document("The Descent — unknown run", "descent-board", &body)
+}
+
+#[cfg(test)]
+mod funnel_tests {
+    use super::*;
+
+    fn row(run_id: &str, player: &str, human: &str, turns: usize) -> Row {
+        Row {
+            run_id: run_id.into(),
+            player: player.into(),
+            human: human.into(),
+            turns,
+            depth: 1,
+        }
+    }
+
+    /// A person's two platforms MERGE to one row keeping their best run — the board shows humans,
+    /// not custodial keys. NON-VACUOUS: a genuinely different human keeps their own row.
+    #[test]
+    fn a_humans_two_platforms_become_one_row() {
+        let mut rows = vec![
+            row("r1", "discord-key", "acct-ada", 7),
+            row("r2", "telegram-key", "acct-ada", 9), // the SAME human, a worse run
+            row("r3", "someone-else", "acct-bo", 8),
+        ];
+        merge_per_human(&mut rows);
+        assert_eq!(rows.len(), 2, "one row per human, not one per platform");
+        assert_eq!(
+            rows[0].run_id, "r1",
+            "the human's BEST run is the one that ranks"
+        );
+        assert_eq!(
+            rows[1].human, "acct-bo",
+            "a different human keeps their row"
+        );
+    }
+
+    /// An UNLINKED board is byte-identical to before resolution: every player is their own human, so
+    /// nothing merges.
+    #[test]
+    fn an_unlinked_board_is_unchanged_by_the_merge() {
+        let mut rows = vec![
+            row("r1", "alice", "alice", 5),
+            row("r2", "bob", "bob", 6),
+            row("r3", "carol", "carol", 7),
+        ];
+        merge_per_human(&mut rows);
+        assert_eq!(rows.len(), 3);
+    }
+
+    /// THE CROSS-PROCESS WELD: the day key this process publishes re-derives to the SAME seed a
+    /// receiver computes for itself — the property the share link stands on.
+    #[test]
+    fn todays_day_key_re_derives_to_todays_seed() {
+        let day = todays_day();
+        let (utc_day, source) = descent_day::parse_day_key(&day.key).expect("the key parses");
+        assert_eq!(utc_day, day.utc_day);
+        assert_eq!(source, descent_day::DaySource::OfflineDate);
+        assert_eq!(
+            descent_day::offline_date_seed(utc_day).as_bytes(),
+            day.seed.as_bytes(),
+            "a receiver re-derives the identical world from the key alone"
+        );
+    }
+
+    /// A day key naming a world ALREADY OPEN under another label lands on THAT board — the demo's
+    /// `"today"` and the bot's `d{utc_day}-off` are one day, never two split boards.
+    #[test]
+    fn a_second_key_for_the_same_world_does_not_split_the_board() {
+        let day = todays_day();
+        let state = DescentState::new();
+        state.open_day("today", day.seed);
+        assert_eq!(
+            state.ensure_day(&day.key, day.seed),
+            "today",
+            "the canonical key resolves onto the already-open board"
+        );
+        assert!(!state.has_day(&day.key), "no second board was opened");
+        // A genuinely DIFFERENT world does open its own board.
+        let other = descent_day::offline_day(day.utc_day + 5);
+        assert_eq!(state.ensure_day(&other.key, other.seed), other.key);
+        assert!(state.has_day(&other.key));
+    }
+
+    /// `ensure_today` never yanks a CALLER-designated day (a fixture / the demo alias) out from
+    /// under it, but does open + designate one when the process has none.
+    #[test]
+    fn ensure_today_respects_a_pinned_day_and_seeds_an_empty_one() {
+        let pinned = DescentState::new();
+        pinned.open_day("a-fixture-day", procgen_dregg::daily_seed(&[9; 32]));
+        assert_eq!(pinned.ensure_today(), "a-fixture-day");
+
+        let empty = DescentState::new();
+        let key = empty.ensure_today();
+        assert_eq!(
+            key,
+            todays_day().key,
+            "a bare process serves today's real world"
+        );
+        assert_eq!(empty.today().as_deref(), Some(key.as_str()));
+    }
 }

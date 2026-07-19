@@ -73,6 +73,11 @@ pub use dregg_dice::{self, Deterministic, Seed};
 /// by re-derivation). See [`beacon::DailyBeacon`].
 pub mod beacon;
 
+/// **The ONE `(day_key, seed)` resolution The Descent's processes share** — the bot and the web
+/// both resolve today's world here (and re-derive each other's day from its key), so a run played
+/// in one re-executes in the other. See [`descent_day`].
+pub mod descent_day;
+
 /// Domain tag folded into a committed seed's `game_binding`, so a procgen draw
 /// stream can never collide with any other `dregg-dice` consumer's stream.
 pub const DOMAIN_PROCGEN: &[u8] = b"procgen-dregg/dungeon/v1";

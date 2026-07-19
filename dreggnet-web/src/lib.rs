@@ -930,6 +930,11 @@ form.in-flight button[disabled]{cursor:progress}
 // Purely presentational: no route, no game logic, no POST contract is touched.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// **The playable front door** — the served, in-tab, beacon-seeded Descent run
+/// ([`descent_play`]). Named once, so every "Play" CTA on the product points at the SAME place and
+/// none of them can silently drift back to the board.
+pub const DESCENT_PLAY_PATH: &str = "/descent/play";
+
 /// The brand mark — four squares, one lit: a board where a move landed. Inline SVG (no external
 /// asset, no request), `aria-hidden` because the adjacent brand text is the accessible name.
 const MARK: &str = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\">\
@@ -938,8 +943,14 @@ const MARK: &str = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"
      <rect x=\"1.5\" y=\"13\" width=\"9.5\" height=\"9.5\" rx=\"2.6\"></rect>\
      <rect class=\"lit\" x=\"13\" y=\"13\" width=\"9.5\" height=\"9.5\" rx=\"2.6\"></rect></svg>";
 
-/// The sticky top bar — the product mark plus the three real surfaces. `active` names the current
-/// one (`""` for none) so it can carry `aria-current="page"`.
+/// The sticky top bar — the product mark plus the real surfaces. `active` names the current one
+/// (`""` for none) so it can carry `aria-current="page"`.
+///
+/// THE FRONT DOOR IS THE GAME. `/descent/play` (the in-tab, beacon-seeded, wasm-backed run) was
+/// built and mounted but **nothing on the product linked to it** — every "The Descent" affordance
+/// landed on `/descent`, the no-cheat *board*, so a stranger could read a leaderboard and never find
+/// the game. The flagship nav item now points at the playable surface; the board keeps its own item
+/// beside it (both keys light the `descent` nav group).
 fn topbar(active: &str) -> String {
     let item = |href: &str, key: &str, label: &str| -> String {
         let cur = if active == key {
@@ -952,11 +963,12 @@ fn topbar(active: &str) -> String {
     format!(
         "<header class=\"topbar\"><div class=\"topbar-in\">\
          <a class=\"brand\" href=\"/\">{MARK}<span class=\"brand-name\">DreggNet Cloud</span></a>\
-         <nav class=\"topnav\" aria-label=\"Surfaces\">{descent}{offerings}{gallery}</nav>\
+         <nav class=\"topnav\" aria-label=\"Surfaces\">{play}{board}{offerings}{gallery}</nav>\
          </div></header>",
         MARK = MARK,
         offerings = item("/offerings", "offerings", "The Lab"),
-        descent = item("/descent", "descent", "The Descent"),
+        play = item(DESCENT_PLAY_PATH, "descent", "The Descent"),
+        board = item("/descent", "descent-board", "Board"),
         gallery = item("/gallery", "gallery", "Gallery"),
     )
 }
@@ -1987,19 +1999,39 @@ fn catalog_form(key: &str, id: &str, it: &MenuItem) -> String {
     )
 }
 
-/// The Descent's TRUE play path, when one is configured (H1): a Discord deep link — the game plays
-/// live in Discord. Rendered as an `<a class="{class}">` ONLY when `DESCENT_DISCORD_INVITE` is set,
-/// so a "Play" CTA never points nowhere; the served in-browser wasm play page is a separate lane.
-/// Empty string when no invite is configured (the caller then shows the board link alone).
+/// **The Descent's play path** — the served, in-tab, beacon-seeded wasm run at
+/// [`DESCENT_PLAY_PATH`], plus the Discord deep link beside it when `DESCENT_DISCORD_INVITE` is
+/// configured.
+///
+/// This used to emit ONLY the Discord link (and nothing at all when the invite was unset), which is
+/// why `/descent/play` was unreachable from the product: every "Play" affordance either pointed into
+/// Discord or vanished, while the board link stood in for a game. The served page is now the primary
+/// CTA — it always exists, so a "Play" CTA never points nowhere — and Discord is the secondary path
+/// for people who want the game in chat.
 fn descent_play_cta(class: &str) -> String {
-    match std::env::var("DESCENT_DISCORD_INVITE") {
-        Ok(link) if !link.trim().is_empty() => format!(
-            "<a class=\"{class}\" href=\"{href}\">Play in Discord \
-             <span class=\"arr\" aria-hidden=\"true\">→</span></a>",
-            href = esc(link.trim()),
-        ),
-        _ => String::new(),
+    let mut out = format!(
+        "<a class=\"{class}\" href=\"{href}\">Play The Descent \
+         <span class=\"arr\" aria-hidden=\"true\">→</span></a>",
+        href = DESCENT_PLAY_PATH,
+    );
+    if let Ok(link) = std::env::var("DESCENT_DISCORD_INVITE") {
+        if !link.trim().is_empty() {
+            // The secondary path gets the QUIET variant of whatever register the caller asked for
+            // (a hero button → ghost button; an inline card link → the same inline link style), so
+            // the two CTAs never render as two competing primaries.
+            let quiet = if class.contains("btn") {
+                "btn btn-ghost"
+            } else {
+                class
+            };
+            out.push_str(&format!(
+                "<a class=\"{quiet}\" href=\"{href}\">Play in Discord \
+                 <span class=\"arr\" aria-hidden=\"true\">→</span></a>",
+                href = esc(link.trim()),
+            ));
+        }
     }
+    out
 }
 
 /// The `GET /offerings` catalog page — The Descent featured on top (the flagship pointer), then
@@ -2109,16 +2141,18 @@ fn catalog_page(offerings: &[OfferingInfo]) -> String {
 
     // THE LAB FRAMING (shared words: `dreggnet_catalog::{flagship_pointer, lab_intro}`) — the
     // featured game leads, and the 19-offering shelf below is honestly the lab, not the product.
-    // H1: the `/descent` link is the no-cheat BOARD (not play) — label it honestly; a true Play CTA
-    // (Discord) rides alongside when configured.
+    // THE FUNNEL: the PLAY CTA leads (the served in-tab run at `/descent/play`) and the no-cheat
+    // board is the secondary link. Previously this page offered the BOARD as its only always-present
+    // affordance, so the flagship's front door on the catalog was a leaderboard.
     let descent_play = descent_play_cta("play");
     let body = format!(
         "<main class=\"catalog\"><div class=\"page-head\">\
          <p class=\"eyebrow\">DreggNet Cloud</p>\
          <h1>One game, and a lab full of parts.</h1>\
          <p class=\"deck\">{flagship}</p>\
-         <p class=\"prose\"><a class=\"play\" href=\"/descent\">See today's no-cheat board \
-         <span class=\"arr\" aria-hidden=\"true\">→</span></a>{descent_play}</p>\
+         <p class=\"prose\">{descent_play}<a class=\"play\" href=\"/descent\">\
+         See today's no-cheat board \
+         <span class=\"arr\" aria-hidden=\"true\">→</span></a></p>\
          <p class=\"deck\">{lab} Every offering below is a confined, verifiable, per-session \
          thing on the real dregg substrate — no node, no testnet: verification is in-process \
          re-execution.</p></div>\
@@ -2379,8 +2413,9 @@ pub fn demo_host_over(dir: Option<std::path::PathBuf>, mut policy: SessionPolicy
     host
 }
 
-/// **The seeded no-cheat Descent leaderboard state** for the demo — opens today's beacon-seeded day
-/// (a fixed seed standing in for the live drand beacon) and ingests a real, driven-to-the-hoard
+/// **The seeded no-cheat Descent leaderboard state** for the demo — opens TODAY'S day (the one
+/// [`descent::todays_day`] resolves, which is the same day the Discord bot plays and submits
+/// against) and ingests a real, driven-to-the-hoard
 /// winning run PLUS a forged one. Both are UNTRUSTED records; the leaderboard re-verifies each on
 /// render, so the honest winner ranks and the forgery is excluded (`GET /descent/leaderboard`), and
 /// the forgery's run-card shows FAIL (`GET /descent/run/demo-forgery`). This is the growth artifact
@@ -2404,10 +2439,13 @@ pub fn build_demo_descent(
     use dreggnet_offerings::DreggIdentity;
     use dreggnet_offerings::character::InMemoryCharacterStore;
     use dreggnet_offerings::daily_descent::{DailyDescentOffering, GATE_RECKLESS};
-    use procgen_dregg::daily_seed;
 
-    // warden HP 45 (no field-dressing needed) -> a replay-clean honest win.
-    let seed = daily_seed(&[3; 32]);
+    // TODAY'S REAL WORLD, not a hardcoded demo epoch. This board used to open
+    // `daily_seed(&[3; 32])` — a fixed fixture day — while the Discord bot played the day
+    // `procgen_dregg::descent_day` resolves. Two different worlds: the bot's submitted moves could
+    // never re-execute here, so `ranked` was always false and the share link never emitted. Both
+    // processes now resolve their day from the SAME helper.
+    let seed = crate::descent::todays_day().seed;
     let (win_moves, win_level, win_class) = demo_win();
     let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
     let mut win = off
@@ -2452,7 +2490,7 @@ pub fn build_demo_descent(
 }
 
 /// **Drive the honest demo winning line** — the choice-index sequence that provably reaches the
-/// hoard on the demo day (`daily_seed(&[3; 32])`), plus the winner's character level + class. The
+/// hoard on TODAY'S real day ([`descent::todays_day`]), plus the winner's character level + class. The
 /// same careful line `dreggnet-offerings`' own driven board test uses (works for any beacon-drawn
 /// warden HP / depth). Exposed so the demo state and the persistence/ingest tests share ONE source
 /// of the winning moves.
@@ -2463,9 +2501,11 @@ pub fn demo_win() -> (Vec<usize>, u64, u64) {
         CORRIDOR_ON, DailyDescentOffering, GATE_HEAL, GATE_MEASURED, GATE_PRESS, HOARD_FORCE,
         HOARD_SEIZE, KEY_TAKE,
     };
-    use procgen_dregg::daily_seed;
 
-    let seed = daily_seed(&[3; 32]);
+    // The winning line is drawn on TODAY'S real world (the same day `build_demo_descent` opens),
+    // not a fixed fixture day. The line below is world-agnostic — it reads the live room + vitals at
+    // each step — so it reaches the hoard for any beacon-drawn warden HP / depth.
+    let seed = crate::descent::todays_day().seed;
     let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
     let mut run = off
         .open_from_seed(DreggIdentity("ember".to_string()), seed)
@@ -2700,14 +2740,12 @@ fn hero_board() -> String {
 /// receipt), **what it looks like** (a real board mid-turn, with its colour language labelled), and
 /// **why it is different** (play → commit → re-verify), then the three surfaces.
 async fn index() -> Html<String> {
-    // H1: the `/descent` links are the no-cheat BOARD, not a play surface — label them honestly. A
-    // true Play CTA (Discord) leads the hero when configured; the board is then the secondary action.
+    // THE FUNNEL: the PLAY CTA always leads (the served in-tab run at `/descent/play`, plus Discord
+    // when configured) and the no-cheat BOARD is the secondary action. Before this the landing's
+    // only always-present Descent affordance was the board — the flagship's front door on the front
+    // page was a leaderboard, and the built play surface was reachable from nowhere.
     let hero_play = descent_play_cta("btn btn-primary");
-    let hero_board_class = if hero_play.is_empty() {
-        "btn btn-primary"
-    } else {
-        "btn btn-ghost"
-    };
+    let hero_board_class = "btn btn-ghost";
     let card_play = descent_play_cta("play");
     let body = format!(
         "<section class=\"hero\">\
@@ -2749,8 +2787,8 @@ async fn index() -> Html<String> {
          <div class=\"offering-card shelf-games\"><h3>The Descent</h3>\
          <p class=\"tagline\">The featured game. One dungeon a day, seeded from a public beacon; \
          one life, no reruns; every finished climb is proved onto the no-cheat board.</p>\
-         <a class=\"play\" href=\"/descent\">See today's no-cheat board \
-         <span class=\"arr\" aria-hidden=\"true\">→</span></a>{card_play}</div>\
+         {card_play}<a class=\"play\" href=\"/descent\">See today's no-cheat board \
+         <span class=\"arr\" aria-hidden=\"true\">→</span></a></div>\
          <div class=\"offering-card shelf-services\"><h3>🧪 The Lab</h3>\
          <p class=\"tagline\">Experimental engine surfaces — six games, eight feature surfaces, \
          five services. The parts the game is built from, on the shelf for the curious.</p>\

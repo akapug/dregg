@@ -72,6 +72,7 @@ use dreggnet_prove_service::{
 
 use crate::BotState;
 use crate::commands::offering::{self, identity_of, truncate};
+use webauth_core::identity_resolve::RootResolver;
 
 /// The custom-id namespace every crown press lives in (`main.rs` routes on `crown:`).
 pub const PREFIX: &str = "crown";
@@ -363,24 +364,39 @@ fn board_lines(game: Game) -> (Vec<String>, bool) {
         universes.dedup();
         let mut no_moves = true;
         let mut entries: Vec<(usize, String, bool, bool)> = Vec::new();
+        // DISPLAY/RANK cross-platform resolution: the board stores the FULL custodial pubkey hex
+        // `identity_of` submits under, so resolve it to the human's stable ACCOUNT ID before
+        // grouping — a Discord-you and a Telegram-you bound to the same root rank under ONE human.
+        // Attribution is untouched (the proof is signed by the custodial key); an unlinked entry
+        // resolves to itself, so the board is unchanged for it. The snapshot is loaded ONCE for the
+        // whole render (the previous `resolve_display_root` re-scanned the shared TSV PER ROW).
+        let resolver = RootResolver::load();
         for u in universes {
             for e in core.board.registry().leaderboard(u) {
                 no_moves &= e.is_proof_backed() && !e.has_moves() && e.playthrough().is_none();
-                // DISPLAY/RANK cross-platform resolution: the board stores the FULL custodial
-                // pubkey hex `identity_of` submits under, so resolve it to its linked ROOT key
-                // before grouping — a Discord-you and a Telegram-you bound to the same K rank
-                // under ONE human. Attribution is untouched (the proof is signed by the custodial
-                // key); an unlinked entry resolves to itself, so the board is unchanged for it.
                 entries.push((
                     e.turns,
-                    offering::resolve_display_root(&e.player),
+                    resolver.resolve(&e.player),
                     e.is_proof_backed(),
                     e.has_moves(),
                 ));
             }
         }
         entries.sort();
-        let lines: Vec<String> = entries
+        // MERGE, don't just relabel. Resolving and then sorting still left one ROW PER CUSTODIAL
+        // KEY — two rows for one human, which is exactly the thing the resolution was supposed to
+        // fix. Group by the resolved human and keep their BEST (fewest-turns) fold; `entries` is
+        // already turns-ordered, so the first sighting of a human IS their best.
+        let mut seen: Vec<&String> = Vec::new();
+        let mut per_human: Vec<&(usize, String, bool, bool)> = Vec::new();
+        for e in &entries {
+            if seen.iter().any(|h| *h == &e.1) {
+                continue;
+            }
+            seen.push(&e.1);
+            per_human.push(e);
+        }
+        let lines: Vec<String> = per_human
             .iter()
             .enumerate()
             .map(|(i, (turns, player, proof_backed, has_moves))| {
