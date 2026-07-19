@@ -29,9 +29,6 @@ Dregg2.Circuit.Emit.AdjacencyMembershipRefineAudit  # GREEN self-checked (#asser
 Dregg2.Circuit.Emit.AdjacencyMembershipRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.AttestedFactMembershipEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.AvailWideMembersNarrow  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
-Dregg2.Circuit.Emit.BilateralAggregationEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
-Dregg2.Circuit.Emit.BilateralAggregationRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
-Dregg2.Circuit.Emit.BilateralAggregationRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.BlindedMembershipRung2  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.BoundPresentationEmit  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
 Dregg2.Circuit.Emit.BoundPresentationRefine  # GREEN self-checked (#assert clean), REGISTERABLE — Circuit.Emit refine/rung cluster
