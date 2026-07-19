@@ -50,7 +50,9 @@ the pow-16 set" premise is FALSE — `create_recursion_config` (lb 3/38q/pow 14)
 (`gpu_backend.rs:4459` + the inner-FRI prove/verify wrappers), and `recursive_witness_bundle` is
 referenced from `node/src/mcp/proof.rs`; it is not a zero-production-caller dead stratum, so the
 gate re-pin would launder a gap. E11 is downgraded to HELD-VERIFICATION pending a production-path
-read; it is NOT a clean deletion lane.
+read; it is NOT a clean deletion lane. *(RESOLVED 2026-07-19 by the E11-prodread deep read — see
+E11: pow-14 is NOT live-necessary; the three cited edges are config-inert / producer-less /
+stale-comment. E11 re-scopes as an accept-surface retirement, not a dead-code deletion.)*
 
 **Lanes that died (contended, no landing):** E15 (CCC route-or-retire) and E17-docs.
 
@@ -203,7 +205,8 @@ Proofs are NOT interchangeable across the flip — this defines the FS epoch. Re
 - **E17 regen riders** — tables-decl sync, welded-placeholder filter, PI-layout normalization,
   duplicate-gate / arity-3 drop, strata quarantine.
 
-**Not in this bundle:** **E11** (premise REFUTED — needs a production-path read, not a deletion) and
+**Not in this bundle:** **E11** (production-path read DONE 07-19: retire-able — re-scoped as an
+accept-surface retirement cutover with its own bundled gate re-pin; see E11) and
 **E15** (lane died this round). E9(a), E10-falsifier, E16(a)(c)(d) are byte-safe and run OUTSIDE the
 regen window.
 
@@ -221,7 +224,7 @@ regen window.
 | 8 | E8 bilateral-v2 expected-block deletion | 35 duplicated cols+gates, live per multi-cell turn | width 87→52 + closes middle-row identity gap | 1 lane | semantic-change | independent |
 | 9 | E9 joint-turn binding leaf | free-witness digest + 1 uni-STARK + 1 wrap per joint turn | delete a layer or make it real | 0.5–1 lane | semantic-change | rides tag retype if (b) |
 | 10 | E10 frozen-authority falsifier + 83-col dedup | 83 duplicate cols ≈ 15.6 KB (16 members); 41 members unprobed | falsifier answer + 15.6 KB + 5.3K cells | hours + 1 lane | byte-safe then regen | dedup rides regen |
-| 11 | E11 Golden-v1 stratum deletion | ~900 lines; pow-14 config sets the gate's weakest column | REFUTED premise (pow-14 config is production-live) — HELD-VERIFICATION | production read first | unknown | independent |
+| 11 | E11 Golden-v1 accept-surface retirement | ~900 lines; pow-14 config sets the gate's weakest column | read DONE: pow-14 NOT live-necessary; gate floor un-pins 71→73 WITH surface removal | 1 lane + canary | accept-surface cutover (no regen) | independent; never split surface removal from re-pin |
 | 12 | E12 pinned children on wide/joint trees | 2 of 3 tree folds fold unpinned children | closes the foreign-child seam pre-flip | 0.5–1 lane | semantic-change | BEFORE wide flip |
 | 13 | E13 Memory-table retirement + degree-8 kill | 2 AIRs + 3 buses for one member's 2 ops; lone deg-8 gate | main degree uniformly ≤2; whole subsystem deleted | 1–2 lanes | regen | ride the regen |
 | 14 | E14 umem cohort boundary flip | 29 extra cols + byte sends × 57 welded proofs | ~2–3 KB × 57 | 0.5 lane | regen | independent |
@@ -530,31 +533,71 @@ lane below (BUNDLED-CUTOVER §E7).**
 - **Effort:** falsifier hours; dedup ~1 lane. **Risk:** falsifier byte-safe; dedup regen.
   **Dependencies:** dedup rides the Epoch-2 emit; falsifier independent, run early.
 
-### E11 — delete the Golden-v1 shape stratum; re-pin the gate floor (rank 11)
+### E11 — retire the Golden-v1 accept surfaces; then re-pin the gate floor (rank 11)
 
-**STATUS 2026-07-19: HELD-VERIFICATION — the load-bearing premise is REFUTED by census.** The
-2026-07-18 claim "routed by zero production callers → floor rises to the pow-16 set" is FALSE:
-`create_recursion_config()` (lb 3/38q/pow 14) is production-live —
-`circuit-prove/src/gpu_backend.rs:4459` plus the inner-FRI prove/verify wrappers in
-`plonky3_recursion_impl.rs` — and `recursive_witness_bundle` is referenced from
-`node/src/mcp/proof.rs`. This is NOT a zero-production-caller dead stratum, so re-pinning the
-ledger gate over "the surviving configs" would launder a gap (the pow-14 config that pins the
-weakest column would still be live). E11 is NOT a clean deletion lane; it needs a careful
-production-path read before ANY deletion, not a swarm deletion lane. The width/line-count facts
-below are retained descriptively but the deletion + re-pin recipe is withdrawn.
+**STATUS 2026-07-19 (late, E11-prodread): PRODUCTION-PATH READ DONE — pow-14 is NOT necessary on
+the live prove/verify path; the suspended lever un-sticks, re-scoped as an ACCEPT-SURFACE
+RETIREMENT (not a dead-code deletion).** Full-depth read of every `create_recursion_config`
+(lb 3/38q/pow 14) edge at HEAD `f4e7f871f`:
 
-- **What/where:** `recursive_witness_bundle.rs` (590 lines) proves `EffectVmShapeAir`
-  (`effect_vm_p3_air.rs`, 296 lines), a self-described non-soundness-equivalent structural subset.
-  It is a user of `create_recursion_config()` (lb 3/38q/**pow 14**) — the config that pins the FRI
-  ledger's weakest Johnson column at 71 and sits at exactly 128 capacity. ~~Routed by zero
-  production callers~~ REFUTED (see STATUS): production-live via `gpu_backend.rs` + `mcp/proof.rs`.
-- **Verified cost today:** unresolved — the "config no production proof uses" framing is refuted;
-  the real question is whether the pow-14 configuration is *necessary* on the live path or can be
-  retired there. [P] refuted, needs a production-path read.
-- **Fix sketch:** WITHDRAWN pending the production-path read. Do not delete the stratum or re-pin
-  the gate until the live callers are understood.
-- **Effort:** production-path read first (hours), then re-scope. **Risk:** unknown until the read.
-  **Dependencies:** independent.
+- **The live finalized-turn path never touches pow-14.** Node commit pipeline
+  (`node/src/turn_proving.rs:1082` — "the live capability-gated node turn proves ROTATED") →
+  rotated tree + joint aggregation run wall-to-wall at `ir2_leaf_wrap_config()` =
+  `(6,19q,pow 16, arity 2)` (`ivc_turn_chain.rs:941-957/2173/2602/2913`,
+  `joint_turn_aggregation.rs` HEAD `:780/:908/:1047/:1154`); GPU dispatch at
+  `create_gpu_ir2_leaf_wrap_config()` (`gpu_backend.rs:4522/:4583`); root verify =
+  `verify_recursive_batch_proof_with_config(root, &ir2_leaf_wrap_config())`
+  (`ivc_turn_chain.rs:2661/:3898`). The 07-19 refutation's three "production-live" edges dissolve
+  under reading: (1) `gpu_backend.rs:4459` passes `create_recursion_config()` into a parameter
+  literally named `_cpu_config` — IGNORED (pure postcard re-tag, `:4468-4484`), and its sole
+  callers are `tests/gpu_recursion_fold_e2e.rs:159/:357` (production dispatch calls
+  `_with_lookups` directly); (2) the pow-14-defaulted inner-FRI wrappers' only non-test
+  reachability is the Golden-v1 chain below, which has NO producer; (3) the
+  `node/src/mcp/proof.rs` "reference" is one stale comment (`:426`) naming a DELETED demo command
+  (`cmd_make_recursive_witness`), inside a function that unconditionally errors — the v1
+  standalone effect-vm material is hard-retired (`proof.rs:431-440`).
+- **The Golden-v1 producer is caller-less.** `RecursiveProofProducer::produce` is reached only via
+  `turn::from_components_with_compression(.., true)` / `from_components_strict_recursive` —
+  ZERO callers of either in the tree (the one caller passes `false`,
+  `turn/src/witnessed_receipt.rs:403`). Its inner AIR `EffectVmShapeAir` is self-described
+  NON-soundness-equivalent (structural subset; `recursive_witness_bundle.rs:51-58`).
+- **What IS still live at pow-14: verify-only ACCEPT surfaces for a producer-less artifact class.**
+  `dregg-verifier scope-recursive` (`verifier/src/main.rs:49/:369`) →
+  `replay_chain_recursive` → `verify_recursive_proof_variant` →
+  `verify_recursive_layer_bytes` → `verify_recursive_batch_proof` (default pow-14 engine); plus
+  exported-but-uncalled `verifier::verify_recursive_replay` (its named producer type
+  `RecursiveIvcStep` does not exist in the tree) and the `cross_fed.rs:601-614` passthrough
+  transcode (field always `None` in production). This is why the re-pin was rightly HELD: until
+  these accept surfaces are removed, a field verifier still ACCEPTS proofs at the 71-Johnson
+  knobs, and re-pinning the gate over "surviving configs" would launder exactly that gap. The
+  honest order is: retire the accept surfaces and re-pin the gate IN THE SAME CUTOVER.
+- **What/where (scoped stratum, ~900 core lines + plumbing):** `recursive_witness_bundle.rs`
+  (590) + `effect_vm_p3_air.rs` (296); turn-side constructors/`RecursiveProofVariant`/
+  `WitnessBundle.recursive_proof`; verifier-side `scope-recursive` +
+  `verify_recursive_replay{,_from_bundle}` + `replay_chain_recursive` + DTOs + cross_fed arm;
+  `create_recursion_config` + its default-config wrappers (keep `_with_config` forms);
+  `create_gpu_recursion_config` (`gpu_backend.rs:3970-3986`) + the `gpu_recursion_proof_to_cpu`
+  default wrapper; demo scope-recursive checks. Tests that need a FOREIGN config for rejection
+  teeth (`ivc_turn_chain_rotated.rs:617-673` VK-pin tooth, `descriptor_leaf_recursion.rs`) keep
+  minting from a TEST-LOCAL `create_recursion_config_with_fri(3,0,1,38,0,14)` — they need *a*
+  foreign config, not *the shipped* one.
+- **Verified cost today:** 0 proof bytes (this was never a wire lever) — the payoff is the gate
+  floor un-pin: Johnson 71 → 73 (the (6,19,16) set becomes weakest), capacity 128-exact-zero-
+  headroom → 130, commit-column weakest moves off `recursionConfig` (Lean ledger:
+  `FriLedgerSound.lean:385-389/:696/:714-716`); plus ~900-line TCB shrink; plus retiring a
+  non-soundness-equivalent shape-AIR accept surface (soundness-positive). [M] census at HEAD.
+- **Fix sketch (STAGED — an FS/accept-surface cutover, NOT a descriptor regen):** no descriptor,
+  member VK, or staged TSV byte moves (`compute_recursive_vk_hash` is its own VK universe and
+  dies with the stratum). One cutover lane: delete stratum + accept surfaces; re-pin
+  `fri_params_soundness_budget.rs` (`shipped()` 7→6, `DEPLOYED_JOHNSON_FLOOR` 71→73 read FROM the
+  Lean ledger, not asserted) and move the `recursionConfig` FriLedgerSound theorems to a
+  retired/historical section; canary = a stored Golden-v1 fixture chain flips VERIFIED →
+  REJECTED. Wire decision at cutover: keep `WitnessBundle.recursive_proof` field but reject
+  `Some` (postcard/witness_hash-stable) vs remove field (shape change).
+- **Effort:** 1 lane + canary. **Risk:** accept-surface change to the shipped `dregg-verifier`
+  CLI (subcommand removal is user-visible); zero regen risk. **Dependencies:** independent of the
+  Epoch-2 regen bundle, but MUST bundle its own gate re-pin with the surface removal (never
+  split them).
 
 ### E12 — pin children on the wide and joint tree folds (rank 12)
 
@@ -700,6 +743,10 @@ below are retained descriptively but the deletion + re-pin recipe is withdrawn.
   launder a live weakest-column gap. E11 is downgraded to HELD-VERIFICATION (production-path read
   first); the width/line-count facts survive descriptively, the deletion + re-pin recipe is
   withdrawn. Unlike the F1 entry, no aggregate thesis survives here — the lever itself is suspended.
+  *(Superseded 2026-07-19 late: the E11-prodread deep read resolved the suspension — the grep-census's
+  three edges are config-inert (`_cpu_config` ignored at `gpu_backend.rs:4468`), producer-less, and a
+  stale comment; pow-14 is NOT live-necessary. The lever un-sticks as an accept-surface retirement —
+  see E11 for the honest ordering: surfaces and gate re-pin in ONE cutover.)*
 
 Corrections absorbed into confirmed items (adjusted, not refuted):
 
