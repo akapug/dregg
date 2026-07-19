@@ -48,6 +48,12 @@ description = "Discord bot for the dregg devnet — custodial AppCipherclerk han
 
 [dependencies]
 blake3 = "1"
+# THE ONE Discord custodial-seed derivation (`seed_for` / `op_token`), extracted into a light
+# root-workspace crate so `dreggnet-web`'s Discord Activity surface derives the SAME identity
+# without depending on this excluded workspace and without mirroring the derivation. This bot
+# RE-EXPORTS it from `src/cipherclerk.rs` (behaviour unchanged). A root workspace member; its
+# only deps (blake3/hex) resolve identically in this standalone workspace.
+dreggnet-discord-identity = { path = "../dreggnet-discord-identity" }
 # Verified author identity for `/gallery publish`: the publisher's custodial cclerk
 # (an ed25519 key) signs the universe's content commitment, and `ugc-dregg` binds that
 # key into the content address. Same `ed25519-dalek` the SDK cclerk derives from, so the

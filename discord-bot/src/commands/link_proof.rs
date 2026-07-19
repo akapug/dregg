@@ -79,6 +79,13 @@ pub enum LinkProofCheck {
 
 /// Check one ownership proof: does `public_key` account for `cell_id_hex`, and does
 /// `signature` verify over the EXACT `challenge` string under it?
+/// The stable server key for the nonce'd link challenge (`webauth_core::challenge`), derived from
+/// the bot secret so it survives restarts without a separate env, domain-separated from every
+/// other use of the secret. Shared by `/link-cipherclerk` (issue) and `/link-prove` (verify).
+pub fn link_challenge_key(bot_secret: &[u8; 32]) -> [u8; 32] {
+    blake3::derive_key("dregg-discord-link-challenge-v1", bot_secret)
+}
+
 pub fn check_link_proof(
     cell_id_hex: &str,
     challenge: &str,
@@ -215,6 +222,32 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
         )
         .await;
     };
+
+    // Freshness gate — the challenge is a nonce'd, TTL'd webauth token issued by /link-cipherclerk.
+    // A signature REPLAYED over a stale challenge dies here, closing the deterministic-challenge
+    // replay wound. check_link_proof below verifies the signature ITSELF over the challenge bytes.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if webauth_core::challenge::verify(
+        &link_challenge_key(&state.config.bot_secret),
+        &challenge,
+        now_secs,
+    )
+    .is_err()
+    {
+        return edit(
+            ctx,
+            command,
+            embeds::warning_embed(
+                "Challenge Expired",
+                "This link challenge is expired or invalid — challenges are time-limited and \
+                 single-use now. Run `/link-cipherclerk` again for a fresh one, then `/link-prove`.",
+            ),
+        )
+        .await;
+    }
 
     match check_link_proof(&identity.cell_id, &challenge, &public_key, &signature) {
         LinkProofCheck::Verified { key_is_address } => {
@@ -395,6 +428,28 @@ mod tests {
 
     /// A signature over the exact challenge, under a key that DERIVES the linked cell id
     /// (the canonical derivation), verifies.
+    /// The link challenge is now NONCE'D and TTL'd — closing the deterministic-challenge replay
+    /// wound (the old blake3(discord_id:address) was identical forever, so a captured signature
+    /// replayed across unlink/relink). Two issuances differ; a fresh one verifies; a stale one does not.
+    #[test]
+    fn a_link_challenge_is_nonced_fresh_and_expires() {
+        let key = super::link_challenge_key(&[7u8; 32]);
+        let c = webauth_core::challenge::issue(&key, 1_000, 900);
+        assert!(
+            webauth_core::challenge::verify(&key, &c, 1_005).is_ok(),
+            "fresh challenge verifies"
+        );
+        assert!(
+            webauth_core::challenge::verify(&key, &c, 1_000 + 10_000).is_err(),
+            "a challenge past its TTL is refused (a replayed old signature dies here)"
+        );
+        assert_ne!(
+            c,
+            webauth_core::challenge::issue(&key, 1_000, 900),
+            "each issuance is a fresh nonce — never the old deterministic string"
+        );
+    }
+
     #[test]
     fn a_real_proof_over_the_derived_cell_verifies() {
         let (sk, pk) = keypair();

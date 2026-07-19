@@ -366,9 +366,14 @@ fn board_lines(game: Game) -> (Vec<String>, bool) {
         for u in universes {
             for e in core.board.registry().leaderboard(u) {
                 no_moves &= e.is_proof_backed() && !e.has_moves() && e.playthrough().is_none();
+                // DISPLAY/RANK cross-platform resolution: the board stores the FULL custodial
+                // pubkey hex `identity_of` submits under, so resolve it to its linked ROOT key
+                // before grouping — a Discord-you and a Telegram-you bound to the same K rank
+                // under ONE human. Attribution is untouched (the proof is signed by the custodial
+                // key); an unlinked entry resolves to itself, so the board is unchanged for it.
                 entries.push((
                     e.turns,
-                    e.player.clone(),
+                    offering::resolve_display_root(&e.player),
                     e.is_proof_backed(),
                     e.has_moves(),
                 ));

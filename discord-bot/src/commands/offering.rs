@@ -325,6 +325,27 @@ pub fn public_key_of(state: &BotState, discord_user_id: u64) -> [u8; 32] {
     .0
 }
 
+/// **Display-time cross-platform identity resolution.** Map a custodial pubkey hex to the ROOT key
+/// K it linked to (via `/link-prove`, recorded in the shared `$DREGG_LINK_DIR/links.tsv`), falling
+/// back to the custodial key ITSELF when it was never linked. So a Discord-you and a Telegram-you
+/// (different custodial keys) that both linked to the same K collapse to ONE human wherever a
+/// board / leaderboard groups or shows players.
+///
+/// This is a DISPLAY / RANK concern only. Attribution is UNCHANGED: the turn (and its proof /
+/// receipt) is still signed by, and attributed to, the custodial key — only the label a board
+/// groups and shows under resolves to the root. Additive by construction: an unlinked key resolves
+/// to itself (`resolve_root` → `None`), so the common unlinked case is byte-identical to today.
+pub fn resolve_display_root(custodial_pubkey_hex: &str) -> String {
+    use webauth_core::link_registry::LinkStore;
+    let store = webauth_core::link_registry::FileLinkStore::new(
+        webauth_core::link_registry::default_store_path(),
+    );
+    match store.resolve_root(custodial_pubkey_hex) {
+        Ok(Some(root)) => root,
+        _ => custodial_pubkey_hex.to_string(),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COLLECTIVE MODE — an optional per-offering write-once ballot.
 //
@@ -1600,7 +1621,7 @@ pub fn truncate(s: &str, max: usize) -> String {
 /// drift into three (the old shape: two hand-maintained 15-ish-arm matches plus a folklore
 /// count). The offering SET itself is pinned to the shared registrar: the parity test below
 /// checks this table (plus the rpg-world route and the bespoke `/dungeon` crowd surface)
-/// serves exactly the LIVE `dreggnet_catalog::full_catalog_host` — the same 18 web, Telegram,
+/// serves exactly the LIVE `dreggnet_catalog::full_catalog_host` — the same 19 web, Telegram,
 /// and WeChat register (docs/BOT-SHARED-BACKEND-DESIGN.md).
 ///
 /// Component presses for the eight RPG feature-surface keys never reach this table's arms
@@ -1612,6 +1633,7 @@ macro_rules! for_each_generic_offering {
     ($per:ident) => {
         $per!(dreggnet_council::CouncilOffering);
         $per!(dreggnet_market::MarketOffering);
+        $per!(dreggnet_market::DarkBazaarOffering);
         $per!(dreggnet_hermes::HermesOffering);
         $per!(dreggnet_grain::GrainOffering);
         $per!(dreggnet_doc::DocOffering);

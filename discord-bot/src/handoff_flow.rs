@@ -234,13 +234,13 @@ impl HandoffBroker {
 mod tests {
     use super::*;
 
-    /// Derive a user's 32-byte seed exactly as `UserCipherclerk::derive` does,
-    /// so this test exercises the same key material the bot would use.
+    /// Derive a user's 32-byte seed exactly as `UserCipherclerk::derive` does — by CALLING the one
+    /// shared derivation (`dreggnet_discord_identity::seed_for`, re-exported at
+    /// `crate::cipherclerk::seed_for`) instead of mirroring it inline. A mirror here passed even
+    /// when it had drifted from the real derivation, so the test proved nothing about the key
+    /// material the bot actually uses; calling it makes the claim in this doc comment true.
     fn user_seed(bot_secret: &[u8; 32], discord_user_id: u64) -> [u8; 32] {
-        let mut input = Vec::with_capacity(40);
-        input.extend_from_slice(bot_secret);
-        input.extend_from_slice(&discord_user_id.to_le_bytes());
-        blake3::derive_key("dregg-discord-bot-v1", &input)
+        crate::cipherclerk::seed_for(bot_secret, discord_user_id)
     }
 
     fn pubkey_hex(seed: &[u8; 32]) -> String {

@@ -60,7 +60,7 @@ use serenity::all::{
     ButtonStyle, CommandDataOptionValue, CommandInteraction, CommandOptionType,
     ComponentInteraction, Context, CreateActionRow, CreateButton, CreateCommand,
     CreateCommandOption, CreateEmbed, CreateEmbedFooter, CreateInteractionResponse,
-    CreateInteractionResponseMessage,
+    CreateInteractionResponseMessage, User,
 };
 
 use dreggnet_offerings::character::CharacterStore;
@@ -114,10 +114,11 @@ pub fn set_live_beacon(utc_day: u64, beacon: DailyBeacon) {
     *live_beacon_cell().lock().expect("live beacon lock") = Some((utc_day, beacon));
 }
 
-/// Which beacon [`resolve_todays_beacon`] serves — surfaced honestly in every `/descent` footer
-/// (mirrors the [`NarratorKind`] idiom): the reveal cron's LIVE round for the current UTC day, or
-/// the pinned published fallback. Both are genuine BLS-verified reveals, but the fallback is NOT
-/// today's — every fallback day plays the SAME dungeon, and the surface must say so.
+/// Which day the served seed came from — surfaced honestly in every `/descent` footer (mirrors the
+/// [`NarratorKind`] idiom): the reveal cron's LIVE round for the current UTC day, or the offline
+/// fallback. The live round is a genuine BLS-verified fresh reveal; the fallback is NOT — it is the
+/// offline date-seeded world (rotates by UTC day, but not beacon-verified fresh), and the surface
+/// must say so.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BeaconStatus {
     /// The reveal cron fetched + verified today's live drand round; the day is genuinely fresh.
@@ -125,8 +126,9 @@ pub enum BeaconStatus {
         /// The live round number being served.
         round: u64,
     },
-    /// The pinned published round stands in (offline, before today's reveal fires, or under
-    /// test) — the daily world repeats until the reveal cron reaches drand.
+    /// No live/verified beacon for today: the OFFLINE, date-seeded fallback stands in (the world
+    /// rotates by UTC day via [`resolve_todays_seed`], but is not a fresh beacon reveal). Named
+    /// `PinnedFallback` for the shared beacon-verify path [`resolve_beacon_for`] still exercises.
     PinnedFallback,
 }
 
@@ -135,8 +137,9 @@ impl BeaconStatus {
     fn label(self) -> String {
         match self {
             BeaconStatus::Live { round } => format!("beacon: live round {round}"),
-            BeaconStatus::PinnedFallback => "beacon: PINNED fallback (not today's) — daily \
-                 world repeats until the reveal cron reaches drand"
+            BeaconStatus::PinnedFallback => "beacon: offline date-seeded fallback (not \
+                 beacon-verified fresh) — the world rotates by UTC day, but is not today's live \
+                 drand reveal"
                 .to_string(),
         }
     }
@@ -195,11 +198,54 @@ pub fn resolve_todays_beacon() -> DailyBeacon {
 }
 
 /// Today's [`BeaconStatus`] — the live-vs-pinned verdict every `/descent` footer reports beside
-/// the narrator kind.
+/// the narrator kind. Reports the status of the SEED actually served ([`resolve_todays_seed`]), so
+/// a footer never labels a day "live" while the offline date-seeded fallback is what played.
 pub fn todays_beacon_status() -> BeaconStatus {
+    resolve_todays_seed().1
+}
+
+/// Domain tag for the OFFLINE, date-derived fallback seed (H6) — distinct from every live path so a
+/// date-seeded day can never alias a beacon-seeded one.
+const OFFLINE_DATE_SEED_DOMAIN: &[u8] = b"dregg-descent-offline-date-seed-v1";
+
+/// **The offline, date-derived fallback seed (H6).** With no live/verified beacon cached for today,
+/// the daily world still ROTATES BY CALENDAR DAY: the UTC day number is folded (with the pinned
+/// published reveal as a fixed anchor) into a domain-tagged epoch value, then through
+/// [`procgen_dregg::daily_seed`] — so tomorrow's offline dungeon differs from today's. This is the
+/// seed SELECTION (the daily loop), never a claim of a fresh beacon reveal (the footer says
+/// "offline date-seeded ... not beacon-verified fresh"). It does NOT touch `daily_scene`'s move math.
+fn date_seeded_fallback(utc_day: u64) -> CommittedSeed {
+    let mut h = blake3::Hasher::new();
+    h.update(OFFLINE_DATE_SEED_DOMAIN);
+    h.update(&hex::decode(DRAND_QUICKNET_SIG_HEX).expect("the pinned drand signature decodes"));
+    h.update(&utc_day.to_le_bytes());
+    let epoch = h.finalize();
+    procgen_dregg::daily_seed(epoch.as_bytes())
+}
+
+/// **Resolve today's daily SEED + its provenance** — the SINGLE seed-selection the live `/descent`
+/// surfaces (play / board / today) share, so the played world, the board universe, and the shown
+/// seed always agree. Serves the cached live beacon's verified seed when the reveal cron has fetched
+/// today's round (`BeaconStatus::Live`); otherwise the offline, date-derived fallback
+/// ([`date_seeded_fallback`]) labeled `BeaconStatus::PinnedFallback` (honestly "not beacon-verified
+/// fresh"). [`resolve_todays_beacon`] remains the beacon-verifying anchor the tests + `open_core`
+/// drive; production play resolves the served seed here.
+fn resolve_todays_seed() -> (CommittedSeed, BeaconStatus) {
     let today = procgen_dregg::beacon::current_utc_day();
     let cached = live_beacon_cell().lock().expect("live beacon lock").clone();
-    resolve_beacon_for(today, cached).1
+    if let Some((day, beacon)) = cached {
+        if day == today {
+            if let Ok(seed) = beacon.seed() {
+                return (
+                    seed,
+                    BeaconStatus::Live {
+                        round: beacon.round,
+                    },
+                );
+            }
+        }
+    }
+    (date_seeded_fallback(today), BeaconStatus::PinnedFallback)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -437,7 +483,25 @@ fn open_core<S: CharacterStore>(
     beacon: &DailyBeacon,
     class: Option<u64>,
 ) -> Result<(DailyRun, UniverseId), OfferingError> {
-    let run = off.open(who, beacon)?;
+    // The beacon-verifying wrapper: a forged reveal yields no seed (fail-closed) and thus no run.
+    let seed = beacon
+        .seed()
+        .map_err(|e| OfferingError::Deploy(format!("beacon did not verify: {e:?}")))?;
+    open_core_seeded(off, board, who, seed, class)
+}
+
+/// **Open today's run from an ALREADY-RESOLVED daily seed** and PUBLISH today's world to `board`.
+/// The seed-based core the live handlers drive after [`resolve_todays_seed`] (the live
+/// beacon-verified seed, or the offline date-seeded fallback); [`open_core`] is the beacon-verifying
+/// wrapper the tests + the forged-beacon fail-closed path use.
+fn open_core_seeded<S: CharacterStore>(
+    off: &DailyDescentOffering<S>,
+    board: &mut Registry,
+    who: DreggIdentity,
+    seed: CommittedSeed,
+    class: Option<u64>,
+) -> Result<(DailyRun, UniverseId), OfferingError> {
+    let run = off.open_from_seed(who, seed)?;
     // A new player may pick a class (frozen `WriteOnce`; a re-class / a dead character is refused —
     // ignored, the run still opens).
     if let Some(class_id) = class {
@@ -598,6 +662,16 @@ fn board_core(board: &Registry, universe_id: UniverseId, day_title: &str) -> Boa
 /// A short, legible player tag (the first 12 chars of the identity/label).
 fn short_player(p: &str) -> String {
     p.chars().take(12).collect()
+}
+
+/// A Discord user's human display name (global display name, else the username) — the RENDER-ONLY
+/// label H4 shows for a player the bot can resolve. It never changes what is stored (the board's
+/// provenance key stays the derived-identity hash); it only makes the surface a stranger reads say
+/// "Ada", not a hash.
+fn display_name_of(user: &User) -> String {
+    user.global_name
+        .clone()
+        .unwrap_or_else(|| user.name.clone())
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1176,13 +1250,13 @@ async fn handle_play(ctx: &Context, command: &CommandInteraction, state: &BotSta
     }
 
     let store_clone = state.characters.clone();
-    let beacon = resolve_todays_beacon();
+    let (seed, _status) = resolve_todays_seed();
 
-    // Open today's run on the store thread (verifies the beacon, deploys the world, loads the
-    // carried character, publishes today's world to the board). `Send` in, a `Send` `RunView` out.
+    // Open today's run on the store thread (deploys the day's world from the resolved seed, loads
+    // the carried character, publishes today's world to the board). `Send` in, a `Send` `RunView` out.
     let opened: Result<RunView, String> = store().run(move |w| {
         let off = DailyDescentOffering::new(store_clone);
-        match open_core(&off, &mut w.board, who, &beacon, class) {
+        match open_core_seeded(&off, &mut w.board, who, seed, class) {
             Ok((run, uid)) => {
                 // Durable: persist today's day-world (its committed seed) so the board can
                 // reconstruct it on boot before replaying any completion against it.
@@ -1248,7 +1322,12 @@ async fn handle_room(ctx: &Context, command: &CommandInteraction) {
             respond(ctx, command, embed, vec![], true).await;
         }
         Some(view) if view.ended => {
-            let embed = result_embed(&view, None, "This descent has already ended.");
+            let embed = result_embed(
+                &view,
+                None,
+                "This descent has already ended.",
+                Some(&display_name_of(&command.user)),
+            );
             respond(ctx, command, embed, vec![], true).await;
         }
         Some(view) => {
@@ -1326,9 +1405,12 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
 
     let store_clone = state.characters.clone();
     let player = short_player(&identity_of(state, owner).0);
-    let result = store().run(move |w| {
+    // The presser is the run's owner here (a non-owner press was refused above), so their Discord
+    // display name is the owner's — the H4 render-only label for their own result.
+    let player_name = display_name_of(&component.user);
+    let (result, share) = store().run(move |w| {
         let Some(slot) = w.slots.get_mut(&owner) else {
-            return MoveResult::NoRun;
+            return (MoveResult::NoRun, None);
         };
         let mut off = DailyDescentOffering::new(store_clone);
         let uid = slot.universe_id;
@@ -1339,7 +1421,26 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
         if let MoveResult::Landed { rank: Some(_), .. } = &outcome {
             persist_completion_row(&slot.run, &player);
         }
-        outcome
+        // H2: capture the reproducible public input of a TERMINAL run (its move sequence + player +
+        // profile), so the outcome embed can hand back a shareable, independently-verifiable
+        // run-card link (the web board re-executes it). Read straight off the committed playthrough.
+        let share = match &outcome {
+            MoveResult::Landed { view, .. } if view.ended => Some(ShareInput {
+                moves: slot
+                    .run
+                    .playthrough()
+                    .steps
+                    .iter()
+                    .map(|s| s.choice_index)
+                    .collect(),
+                player: player.clone(),
+                level: slot.run.character().level(),
+                class: slot.run.character().class(),
+                won: view.won,
+            }),
+            _ => None,
+        };
+        (outcome, share)
     });
 
     match result {
@@ -1378,7 +1479,12 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
             update_message(ctx, component, embed, move_rows(owner, &view.options)).await;
         }
         MoveResult::AlreadyEnded(view) => {
-            let embed = result_embed(&view, None, "This descent has already ended.");
+            let embed = result_embed(
+                &view,
+                None,
+                "This descent has already ended.",
+                Some(&player_name),
+            );
             update_message(ctx, component, embed, vec![]).await;
         }
         MoveResult::Landed {
@@ -1387,7 +1493,16 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
             board_note,
         } => {
             if view.ended {
-                let embed = result_embed(&view, rank, &board_note);
+                let mut embed = result_embed(&view, rank, &board_note, Some(&player_name));
+                // H2 viral loop: ingest this terminal run to the web board and hand back the
+                // shareable, independently-verifiable run-card link. Won runs go through the web's
+                // win-gated `/descent/submit`; a lost run has no ingest path today (a named seam),
+                // so `share_terminal_run` returns `None` rather than a link that would 404.
+                if let Some(si) = &share {
+                    if let Some(url) = share_terminal_run(si).await {
+                        embed = embed.field("🔗 Share this verified run", url, false);
+                    }
+                }
                 update_message(ctx, component, embed, vec![]).await;
             } else {
                 // Narrate the NEXT room OFF the store thread, then re-render.
@@ -1493,11 +1608,12 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
 
 // ─── /descent board ───────────────────────────────────────────────────────────
 
-async fn handle_board(ctx: &Context, command: &CommandInteraction, _state: &BotState) {
-    // Today's board id is derived from the beacon-drawn world (published on any `/descent play`).
-    // Compute it purely (no state needed) so the board renders even before this process's first run.
-    let beacon = resolve_todays_beacon();
-    let (day_title, uid) = match today_universe(&beacon) {
+async fn handle_board(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    // Today's board id is derived from the day's world (published on any `/descent play`). Resolve
+    // the SAME seed the play surface serves (the live beacon, or the offline date-seeded fallback)
+    // so the board renders even before this process's first run — and matches the played world.
+    let (seed, _status) = resolve_todays_seed();
+    let (day_title, uid) = match today_universe_from_seed(&seed) {
         Ok(v) => v,
         Err(why) => {
             let embed = error_embed("Today's board is unavailable", &why);
@@ -1506,18 +1622,26 @@ async fn handle_board(ctx: &Context, command: &CommandInteraction, _state: &BotS
         }
     };
     // The exact PUBLIC inputs a stranger needs to verify OUTSIDE the bot (backlog #9): the
-    // day-universe's content address + the committed beacon seed the world regenerates from.
+    // day-universe's content address + the committed seed the world regenerates from.
     let universe_hex = id_hex(&uid);
-    let seed_hex_str = beacon
-        .seed()
-        .map(|s| hex32(s.as_bytes()))
-        .unwrap_or_else(|_| "(the beacon did not verify)".to_string());
+    let seed_hex_str = hex32(seed.as_bytes());
+    // H4 (render-only): resolve the INVOKER's own row to their Discord display name (else the short
+    // hash). The board stores the derived-identity hex — the provenance/verify key, also carrying
+    // web-submitted runs — so only the viewer's own row can be named without changing what is stored
+    // (the reported H4 data-model seam); every other row stays the short hash.
+    let me_short = short_player(&identity_of(state, command.user.id.get()).0);
+    let me_name = display_name_of(&command.user);
     let view = store().run(move |w| board_core(&w.board, uid, &day_title));
     let rows = reverify_rows(&view.reverify);
     respond(
         ctx,
         command,
-        board_embed(&view, &universe_hex, &seed_hex_str),
+        board_embed(
+            &view,
+            &universe_hex,
+            &seed_hex_str,
+            Some((&me_short, &me_name)),
+        ),
         rows,
         false,
     )
@@ -1527,14 +1651,27 @@ async fn handle_board(ctx: &Context, command: &CommandInteraction, _state: &BotS
 // ─── /descent today ─────────────────────────────────────────────────────────────
 
 async fn handle_today(ctx: &Context, command: &CommandInteraction) {
-    let beacon = resolve_todays_beacon();
-    let title = today_universe(&beacon)
+    let (seed, status) = resolve_todays_seed();
+    let title = today_universe_from_seed(&seed)
         .map(|(t, _)| t)
         .unwrap_or_else(|_| "today's descent".to_string());
+    // Status-aware provenance: a live round is a fresh beacon reveal; the offline fallback is
+    // honestly date-seeded (it rotates by day, but is NOT a fresh beacon-verified reveal).
+    let reveal_line = match status {
+        BeaconStatus::Live { round } => format!(
+            "today's dungeon is a pure function of a beacon-verified drand `quicknet` reveal \
+             (round {round}). Everyone plays the byte-identical world; a different day's verified \
+             round gives a different dungeon."
+        ),
+        BeaconStatus::PinnedFallback => {
+            "today's dungeon is seeded OFFLINE from the calendar day — no live drand reveal has \
+             reached this host yet. The world still rotates each UTC day and everyone plays the \
+             byte-identical world, but it is NOT a fresh beacon-verified reveal."
+                .to_string()
+        }
+    };
     let desc = format!(
-        "**{title}** — today's dungeon is a pure function of a beacon-verified drand `quicknet` \
-         reveal (round {round}). Everyone plays the byte-identical world; a different day's \
-         verified round gives a different dungeon.\n\n\
+        "**{title}** — {reveal_line}\n\n\
          Every move is one cap-bounded turn the verified executor admits:\n\
          • **the warden** — a blow you could not survive is refused: the executor will not \
          let your HP fall below 1\n\
@@ -1547,20 +1684,17 @@ async fn handle_today(ctx: &Context, command: &CommandInteraction) {
          Descend with `/descent play`.\n\n\
          **{status}**\n\n\
          _Named seams: the midnight auto-reveal; a web spectator page._",
-        round = beacon.round,
-        status = todays_beacon_status().label(),
+        status = status.label(),
     );
     let embed = base_embed(&format!("{title} — the day's reveal")).description(desc);
     respond(ctx, command, embed, vec![], true).await;
 }
 
-/// Today's world title + its content-addressed board id, computed purely from the verified beacon
-/// (no live run needed). Fails closed if the beacon does not verify.
-fn today_universe(beacon: &DailyBeacon) -> Result<(String, UniverseId), String> {
-    let seed = beacon
-        .seed()
-        .map_err(|e| format!("the beacon did not verify: {e:?}"))?;
-    let day = dreggnet_offerings::daily_descent::daily_scene(&seed);
+/// Today's world title + its content-addressed board id, from an ALREADY-RESOLVED daily seed (the
+/// live surfaces drive this off [`resolve_todays_seed`], so the board universe matches the played
+/// world byte-for-byte — including the offline date-seeded fallback).
+fn today_universe_from_seed(seed: &CommittedSeed) -> Result<(String, UniverseId), String> {
+    let day = dreggnet_offerings::daily_descent::daily_scene(seed);
     let universe: Universe =
         Universe::authored(&day.title, BOARD_AUTHOR, &day.source, day.win_condition())
             .map_err(|e| format!("could not author today's world: {e:?}"))?;
@@ -1629,8 +1763,15 @@ fn room_embed(view: &RunView, narration: &str, kind: NarratorKind) -> CreateEmbe
 }
 
 /// The final result embed — depth, alive/dead, the win/loss verdict, board rank, and a
-/// `/descent verify`-able receipt note.
-fn result_embed(view: &RunView, rank: Option<usize>, board_note: &str) -> CreateEmbed {
+/// `/descent verify`-able receipt note. `player_name` (H4, render-only) names the ranked player
+/// when the bot can resolve them (their own outcome); `None` keeps the rank line nameless. The
+/// board's stored provenance key is untouched — this is display only.
+fn result_embed(
+    view: &RunView,
+    rank: Option<usize>,
+    board_note: &str,
+    player_name: Option<&str>,
+) -> CreateEmbed {
     let (title, verdict) = if view.won {
         (
             "🏆 The hoard is seized — the descent is SURVIVED",
@@ -1649,8 +1790,13 @@ fn result_embed(view: &RunView, rank: Option<usize>, board_note: &str) -> Create
             "The run ended without the hoard.".to_string(),
         )
     };
+    let as_name = player_name
+        .map(|n| format!(" as **{}**", truncate(n, 60)))
+        .unwrap_or_default();
     let rank_line = match rank {
-        Some(r) => format!("\n\n**Leaderboard: ranked #{r}** on today's no-cheat board."),
+        Some(r) => {
+            format!("\n\n**Leaderboard: ranked #{r}**{as_name} on today's no-cheat board.")
+        }
         None => String::new(),
     };
     let body = format!(
@@ -1671,14 +1817,104 @@ fn result_embed(view: &RunView, rank: Option<usize>, board_note: &str) -> Create
         .footer(footer(NarratorKind::Scripted))
 }
 
-/// The no-cheat leaderboard embed.
-fn board_embed(view: &BoardView, universe_hex: &str, seed_hex_str: &str) -> CreateEmbed {
+// ─────────────────────────────────────────────────────────────────────────────
+// H2 — the viral loop: hand a landed run its shareable, independently-verifiable
+// run-card link. The reproducible input (the move sequence + player + profile) is
+// POSTed to the web board's verify-gated ingest (`POST /descent/submit`); the web
+// re-executes it on a fresh identically-seeded world and, on the WIN, returns the
+// `sub-…` run id whose `/descent/run/{id}` page re-proves the run to any stranger.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The reproducible public input of a TERMINAL run, captured on the store thread so the outcome
+/// embed (rendered on the Discord worker) can ingest it to the web board off-thread.
+#[derive(Clone, Debug)]
+struct ShareInput {
+    /// The move sequence (choice indices) the web re-executes.
+    moves: Vec<usize>,
+    /// The player label the board is keyed by (the SAME short derived-identity the bot submits).
+    player: String,
+    /// The player's persistent character level (web display metadata).
+    level: u64,
+    /// The player's class id (web display metadata; `0` = unset).
+    class: u64,
+    /// Whether the run reached the hoard — the web ingest is win-gated, so only a win yields a link.
+    won: bool,
+}
+
+/// The web board's base URL (`DESCENT_WEB_BASE`, e.g. `https://dregg.net`) — the host whose
+/// `/descent/run/{id}` page re-proves a shared run. `None` (unset/empty) disables the share link
+/// entirely: a "Share" field never points at a host that is not there.
+fn descent_web_base() -> Option<String> {
+    std::env::var("DESCENT_WEB_BASE")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// **Ingest a terminal run to the web board and return its shareable run-card URL.** POSTs the
+/// reproducible input to `{DESCENT_WEB_BASE}/descent/submit`; the web re-executes + no-cheat-verifies
+/// it and, on the WIN, returns the `sub-…` run id whose `/descent/run/{id}` page re-proves it to a
+/// stranger. Returns `None` (no link, never a lying one) when: the web base is unset; the run lost
+/// (the web ingest is win-gated — a lost run has no ingest path today, a NAMED seam); the POST fails
+/// or is refused; or the day did not match the web's open day (a cross-process coordination seam —
+/// the web must have opened today's world from the same seed).
+async fn share_terminal_run(si: &ShareInput) -> Option<String> {
+    let base = descent_web_base()?;
+    // The web `/descent/submit` ingest requires a WIN (it re-verifies to the hoard). A lost run
+    // cannot be ingested there — its shareable run-card is a named seam (a loss-tolerant ingest
+    // endpoint), so we hand back no link rather than a `/descent/run/{id}` that 404s.
+    if !si.won {
+        return None;
+    }
+    let body = serde_json::json!({
+        "player": si.player,
+        "level": si.level,
+        "class": si.class,
+        "moves": si.moves,
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let url = format!("{base}/descent/submit");
+    let resp = client.post(&url).json(&body).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    if v.get("ranked").and_then(|r| r.as_bool()) != Some(true) {
+        return None;
+    }
+    // `share` is the site-relative run-card path (`/descent/run/sub-…`) — the shape `run_share_path`
+    // mints; prefix the configured host for a clickable absolute link.
+    let share = v.get("share").and_then(|s| s.as_str())?;
+    Some(format!("{base}{share}"))
+}
+
+/// The no-cheat leaderboard embed. `me` (H4, render-only) is the VIEWER's own `(short-identity,
+/// display-name)` — the one row the bot can name without changing what is stored; every other row
+/// stays the short derived-identity hash (the provenance/verify key, also carrying web-submitted
+/// runs). See the reported H4 data-model seam for full board-name resolution.
+fn board_embed(
+    view: &BoardView,
+    universe_hex: &str,
+    seed_hex_str: &str,
+    me: Option<(&str, &str)>,
+) -> CreateEmbed {
     let body = if view.entries.is_empty() {
         "No verified survivors yet today. Be the first — `/descent play`.".to_string()
     } else {
         let mut lines = String::new();
         for (rank, player, turns) in view.entries.iter().take(20) {
-            lines.push_str(&format!("{rank:>2}. {player:<14} {turns} turns\n"));
+            // H4 (render-only): the VIEWER's own row shows their Discord display name + a "you"
+            // marker; every other row stays the short derived-identity hash (the provenance key).
+            let is_me = me.map(|(id, _)| id == player.as_str()).unwrap_or(false);
+            let label = match me {
+                Some((_, name)) if is_me => truncate(name, 14),
+                _ => player.clone(),
+            };
+            let you = if is_me { "  ← you" } else { "" };
+            lines.push_str(&format!("{rank:>2}. {label:<14} {turns} turns{you}\n"));
         }
         format!("```{}```", truncate(&lines, 1800))
     };
@@ -2051,8 +2287,8 @@ mod tests {
         assert_eq!(beacon.round, DRAND_QUICKNET_ROUND);
         assert_eq!(status, BeaconStatus::PinnedFallback);
         let f = footer_text(NarratorKind::Scripted, status);
-        assert!(f.contains("beacon: PINNED fallback (not today's)"), "{f}");
-        assert!(f.contains("daily world repeats"), "{f}");
+        assert!(f.contains("offline date-seeded fallback"), "{f}");
+        assert!(f.contains("not beacon-verified fresh"), "{f}");
         assert!(f.contains(TAGLINE), "the tagline still footers: {f}");
 
         // A cached round for a DIFFERENT day is stale → still the pinned fallback.

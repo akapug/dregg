@@ -247,7 +247,18 @@ pub async fn handle_link(ctx: &Context, command: &CommandInteraction, state: &Bo
         _ => {}
     }
 
-    let challenge = ownership_challenge(&discord_id, &address);
+    // A NONCE'D, TTL'd challenge (webauth_core::challenge) — not the old deterministic
+    // blake3(discord_id:address), which was replayable across unlink/relink. Each issuance is a
+    // fresh single-use token; /link-prove enforces its freshness.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let challenge = webauth_core::challenge::issue(
+        &crate::commands::link_proof::link_challenge_key(&state.config.bot_secret),
+        now_secs,
+        900, // a 15-minute window to sign the challenge and submit /link-prove
+    );
 
     // Store as pending only. A later verifier can promote this record after a
     // signature proof over the challenge; until then the bot will not sign for it.
@@ -476,14 +487,6 @@ async fn edit_embed(ctx: &Context, command: &CommandInteraction, embed: CreateEm
     let _ = command
         .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
         .await;
-}
-
-fn ownership_challenge(discord_id: &str, address: &str) -> String {
-    let input = format!("dregg-discord-link-v1:{discord_id}:{address}");
-    format!(
-        "dregg-discord-link-v1:{}",
-        blake3::hash(input.as_bytes()).to_hex()
-    )
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

@@ -128,39 +128,16 @@ impl UserCipherclerk {
     }
 }
 
-/// The deterministic 32-byte custodial seed for a Discord user — the SINGLE
-/// source of truth for `seed = BLAKE3_derive_key("dregg-discord-bot-v1",
-/// bot_secret || discord_user_id)`. This seed IS the Ed25519 secret fed to
-/// `AgentCipherclerk::from_key_bytes`, so reconstructing the same user's
-/// cipherclerk (e.g. to generate a selective-disclosure proof on their behalf in
-/// `identity_proof.rs`) uses this exact value — the identity is reproducible.
-pub fn seed_for(bot_secret: &[u8; 32], discord_user_id: u64) -> [u8; 32] {
-    let user_id_bytes = discord_user_id.to_le_bytes();
-    let mut input = Vec::with_capacity(32 + 8);
-    input.extend_from_slice(bot_secret);
-    input.extend_from_slice(&user_id_bytes);
-    blake3::derive_key("dregg-discord-bot-v1", &input)
-}
-
-/// Derive the **per-user op token** — the capability that proves a caller
-/// controls a given Discord user when driving a custodial op over HTTP
-/// (`POST /api/op`). Keyed by the bot's master secret, so it is unforgeable
-/// without that secret, yet deterministically reproducible by the bot for a
-/// Discord-AUTHENTICATED user (the bot hands it back in an authenticated
-/// interaction — e.g. a `/link`/DM reply). The HTTP surface then verifies the
-/// presented token equals this value *for the `user_id` in the request body*
-/// before custodially signing as that user — closing the GW-4a hole where a
-/// bare, unproven `user_id` was enough to sign as anyone.
-///
-/// Domain-separated from the signing seed (`-op-token-v1` vs `-v1`) so the token
-/// is NOT the signing key: leaking it lets a holder drive ops as that one user,
-/// never recover their Ed25519 secret.
-pub fn op_token(bot_secret: &[u8; 32], discord_user_id: u64) -> String {
-    let mut input = Vec::with_capacity(32 + 8);
-    input.extend_from_slice(bot_secret);
-    input.extend_from_slice(&discord_user_id.to_le_bytes());
-    hex::encode(blake3::derive_key("dregg-discord-bot-op-token-v1", &input))
-}
+// THE ONE DERIVATION, EXTRACTED. `seed_for` (the custodial seed) and `op_token` (the
+// per-user op capability) moved byte-for-byte into the light root-workspace crate
+// `dreggnet-discord-identity` so `dreggnet-web`'s Discord Activity surface can derive the SAME
+// identity WITHOUT depending on this excluded workspace and WITHOUT mirroring the derivation
+// (the drift class). Re-exported here so every existing caller (`crate::cipherclerk::seed_for`,
+// `crate::cipherclerk::op_token`, `UserCipherclerk::derive` above) is unchanged: one impl, two
+// callers, zero identity drift. See docs/DISCORD-ACTIVITIES-DESIGN.md §3.
+pub use dreggnet_discord_identity::{
+    DISCORD_OP_TOKEN_DOMAIN, DISCORD_SEED_DOMAIN, op_token, seed_for,
+};
 
 /// Sign a string action using the legacy BLAKE3-MAC scheme accepted by
 /// old devnet endpoints. Returns a hex-encoded 32-byte MAC.
@@ -174,4 +151,61 @@ pub fn sign_legacy(cclerk: &UserCipherclerk, action_bytes: &[u8]) -> String {
     msg.extend_from_slice(cclerk.legacy_secret());
     let sig = blake3::hash(&msg);
     hex::encode(sig.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dreggnet_offerings::TurnSigner;
+
+    /// **The parity pin — bot side.** The extracted [`seed_for`] must remain the historical
+    /// `BLAKE3_derive_key("dregg-discord-bot-v1", secret ‖ uid_le)`; the pinned algorithm is
+    /// recomputed inline, so a drift in the shared crate (domain string or byte layout) diverges
+    /// from this literal and fails HERE (the in-chat side). Its twin lives in
+    /// `dreggnet-web/src/discord_activity.rs`, hardcoding the same literal on the web side.
+    #[test]
+    fn seed_for_is_pinned_byte_for_byte() {
+        let secret = [7u8; 32];
+        let uid = 42_424_242u64;
+        let mut input = Vec::new();
+        input.extend_from_slice(&secret);
+        input.extend_from_slice(&uid.to_le_bytes());
+        let expected = blake3::derive_key("dregg-discord-bot-v1", &input);
+        assert_eq!(seed_for(&secret, uid), expected);
+        assert_eq!(DISCORD_SEED_DOMAIN, "dregg-discord-bot-v1");
+    }
+
+    /// **The identity parity.** The pubkey the bot attributes (`UserCipherclerk`, via
+    /// `AgentCipherclerk::from_key_bytes`) is byte-for-byte the pubkey the web Activity surface
+    /// signs turns under (`TurnSigner::from_seed`), because BOTH construct an Ed25519 identity from
+    /// the SAME [`seed_for`] output — one human, one key, two callers. (The `UserCipherclerk`
+    /// public key is derived before federation binding, so the `federation_id` argument does not
+    /// affect it.)
+    #[test]
+    fn the_cipherclerk_pubkey_equals_the_seed_signer_identity() {
+        let secret = [42u8; 32];
+        let uid = 555_000_111u64;
+        let bot_pubkey = UserCipherclerk::derive(&secret, uid, [0u8; 32])
+            .public_key_hex()
+            .to_string();
+        let web_pubkey = TurnSigner::from_seed(seed_for(&secret, uid)).identity().0;
+        assert_eq!(
+            bot_pubkey, web_pubkey,
+            "the in-chat cipherclerk and the Activity signer are ONE identity"
+        );
+    }
+
+    /// The op token stays deterministic, per-user, and domain-separated from the signing seed
+    /// after the extraction (the `http_server.rs` GW-4a gate depends on all three).
+    #[test]
+    fn op_token_is_deterministic_and_domain_separated() {
+        let secret = [5u8; 32];
+        assert_eq!(op_token(&secret, 1), op_token(&secret, 1));
+        assert_ne!(op_token(&secret, 1), op_token(&secret, 2));
+        assert_ne!(op_token(&secret, 1), op_token(&[8u8; 32], 1));
+        assert_ne!(
+            hex::decode(op_token(&secret, 1)).unwrap().as_slice(),
+            seed_for(&secret, 1).as_slice()
+        );
+    }
 }
