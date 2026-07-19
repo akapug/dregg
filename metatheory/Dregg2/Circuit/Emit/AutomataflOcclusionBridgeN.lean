@@ -886,7 +886,7 @@ theorem osrc_arithN (n : Nat) (hn : (n : ℤ) < 2013265921)
     (∀ j, j < n → (envAt t i).loc (NGen.cOsrc n o j) = 0 ∨ (envAt t i).loc (NGen.cOsrc n o j) = 1)
       ∧ ((List.range n).map (fun j => (envAt t i).loc (NGen.cOsrc n o j))).sum
           = (envAt t i).loc (NGen.cOg n o)
-      ∧ ((List.range n).map (fun j => (j : ℤ) * (envAt t i).loc (NGen.cOsrc n o j))).sum
+      ∧ ((List.range n).map (fun j : Nat => (j : ℤ) * (envAt t i).loc (NGen.cOsrc n o j))).sum
           ≡ (envAt t i).loc (NGen.cOg n o)
               * ((envAt t i).loc (NGen.cIv n o) * (envAt t i).loc (NGen.cFy n ob)
                  + (envAt t i).loc (NGen.cFx n ob)
@@ -915,11 +915,11 @@ theorem osrc_arithN (n : Nat) (hn : (n : ℤ) < 2013265921)
         [NGen.cIv n o, NGen.cFx n ob]))))
   rw [headToExpr_eval] at hg
   refine (gate_modEq_iff
-    (a := ((List.range n).map (fun j => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum)
+    (a := ((List.range n).map (fun j : Nat => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum)
     (b := e.loc (NGen.cOg n o)
       * (e.loc (NGen.cIv n o) * e.loc (NGen.cFy n ob) + e.loc (NGen.cFx n ob)
          - e.loc (NGen.cIv n o) * e.loc (NGen.cFx n ob))) ?_).mp hg
-  show evalH (((((((List.range n).map (NGen.cOsrc n o)).zipIdx).foldl
+  show evalH (((((((List.range n).map (NGen.cOsrc n o)).zipIdx.foldl
         (fun acc p => acc.addLin (p.2 : ℤ) p.1) Head.zero).addProd (-1)
           [NGen.cOg n o, NGen.cIv n o, NGen.cFy n ob]).addProd (-1)
           [NGen.cOg n o, NGen.cFx n ob]).addProd 1
@@ -952,14 +952,17 @@ theorem osrcMeansVertN (n : Nat) (hn : (n : ℤ) < 2013265921)
   set e := envAt t i with he
   obtain ⟨hbool, hsum, hwsum⟩ := osrc_arithN n hn hsat hc i hi b o ob hlift
   rw [← he] at hbool hsum hwsum
-  obtain ⟨_, hogV, _⟩ := ogN_of_sat n hn hsq hsat hc i hi b o ob hlift fx fy fxOb fyOb
+  obtain ⟨hogb, hogV, _⟩ := ogN_of_sat n hn hsq hsat hc i hi b o ob hlift fx fy fxOb fyOb
     hfx hfy hfxOb hfyOb hfxN hfyN hfxObN hfyObN hivb
-  rw [← he] at hogV
+  rw [← he] at hogb hogV
   -- specialise the weighted-sum congruence to iv = 1: Σⱼ j·osrc j ≡ og·fyOb
-  have hwv : ((List.range n).map (fun j => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum
+  have hwv : ((List.range n).map (fun j : Nat => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum
       ≡ e.loc (NGen.cOg n o) * (fyOb : ℤ) [ZMOD 2013265921] := by
-    refine hwsum.trans ?_
-    rw [hiv, hfyOb, hfxOb]; ring_nf; rfl
+    have heq : e.loc (NGen.cOg n o)
+        * (e.loc (NGen.cIv n o) * e.loc (NGen.cFy n ob) + e.loc (NGen.cFx n ob)
+           - e.loc (NGen.cIv n o) * e.loc (NGen.cFx n ob))
+        = e.loc (NGen.cOg n o) * (fyOb : ℤ) := by rw [hiv, hfyOb, hfxOb]; ring
+    exact heq ▸ hwsum
   intro k hk hbet
   have hfy_ne_k : fy ≠ k := by rintro rfl; unfold Between at hbet; omega
   have hmem : (List.contains [(⟨fx, fy⟩ : Coord), ⟨fxOb, fyOb⟩] (⟨fx, k⟩ : Coord) = true)
@@ -968,9 +971,9 @@ theorem osrcMeansVertN (n : Nat) (hn : (n : ℤ) < 2013265921)
     simp only [Coord.mk.injEq]
     constructor
     · rintro (⟨_, h⟩ | ⟨h1, h2⟩)
-      · exact absurd h hfy_ne_k
-      · exact ⟨h1, h2⟩
-    · rintro ⟨h1, h2⟩; right; exact ⟨h1, h2⟩
+      · exact absurd h.symm hfy_ne_k
+      · exact ⟨h1.symm, h2.symm⟩
+    · rintro ⟨h1, h2⟩; right; exact ⟨h1.symm, h2.symm⟩
   show (e.loc (NGen.cOsrc n o k) = 1) ↔ _
   rw [hmem]
   by_cases hog1 : e.loc (NGen.cOg n o) = 1
@@ -980,33 +983,32 @@ theorem osrcMeansVertN (n : Nat) (hn : (n : ℤ) < 2013265921)
       rw [hsum, hog1]
     obtain ⟨af, hone⟩ := oneHot_exists hbool hsum1
     have hafeq : (af : ℤ) = (fyOb : ℤ) := by
-      have hdot : ((List.range n).map (fun j => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum = (af : ℤ) := by
-        have hcomm : ((List.range n).map (fun j => (j : ℤ) * e.loc (NGen.cOsrc n o j)))
-            = (List.range n).map (fun j => (fun j => e.loc (NGen.cOsrc n o j)) j * (j : ℤ)) := by
+      have hdot : ((List.range n).map (fun j : Nat => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum = (af : ℤ) := by
+        have hcomm : ((List.range n).map (fun j : Nat => (j : ℤ) * e.loc (NGen.cOsrc n o j)))
+            = (List.range n).map (fun j : Nat => (fun j => e.loc (NGen.cOsrc n o j)) j * (j : ℤ)) := by
           apply List.map_congr_left; intro j _; ring
         rw [hcomm, dot_oneHot hone (fun j => (j : ℤ))]
       have hcong : (af : ℤ) ≡ (fyOb : ℤ) [ZMOD 2013265921] := by
         have := hwv; rw [hdot, hog1, one_mul] at this; exact this
-      exact eq_of_modEq_canon ⟨by positivity, by exact_mod_cast lt_of_lt_of_le hone.1 (le_of_lt hn)⟩
-        ⟨by positivity, by exact_mod_cast lt_of_lt_of_le hfyObN (le_of_lt hn)⟩ hcong
+      exact eq_of_modEq_canon ⟨by positivity, lt_trans (by exact_mod_cast hone.1) hn⟩
+        ⟨by positivity, lt_trans (by exact_mod_cast hfyObN) hn⟩ hcong
     have hafN : af = fyOb := by exact_mod_cast hafeq
-    subst hafN
-    rw [show (fun k => e.loc (NGen.cOsrc n o k)) k = e.loc (NGen.cOsrc n o k) from rfl,
-      hone.2 k hk]
+    have hok : e.loc (NGen.cOsrc n o k) = if k = fyOb then (1 : ℤ) else 0 := hafN ▸ hone.2 k hk
+    rw [hok]
     constructor
-    · intro h; by_cases hkeq : k = af
+    · intro h; by_cases hkeq : k = fyOb
       · exact ⟨hfxeq, hkeq.symm⟩
       · rw [if_neg hkeq] at h; norm_num at h
     · rintro ⟨_, h2⟩; rw [if_pos h2.symm]
   · -- og = 0: osrc ≡ 0 and fxOb ≠ fx
     have hog0 : e.loc (NGen.cOg n o) = 0 := by
-      rcases (osrc_arithN n hn hsat hc i hi b o ob hlift).1 with _
-      by_contra hne
-      exact hne hog1
+      rcases hogb with h | h
+      · exact h
+      · exact absurd h hog1
     have hall : ∀ j, j < n → e.loc (NGen.cOsrc n o j) = 0 :=
       allZero_of_sum_zero hbool (by rw [hsum, hog0])
     have hfxne : fxOb ≠ fx := fun h => hog1 ((hogV hiv).mpr h)
-    rw [show (fun k => e.loc (NGen.cOsrc n o k)) k = e.loc (NGen.cOsrc n o k) from rfl, hall k hk]
+    rw [hall k hk]
     constructor
     · intro h; norm_num at h
     · rintro ⟨h1, _⟩; exact absurd h1 hfxne
@@ -1031,14 +1033,17 @@ theorem osrcMeansHorizN (n : Nat) (hn : (n : ℤ) < 2013265921)
   set e := envAt t i with he
   obtain ⟨hbool, hsum, hwsum⟩ := osrc_arithN n hn hsat hc i hi b o ob hlift
   rw [← he] at hbool hsum hwsum
-  obtain ⟨_, _, hogH⟩ := ogN_of_sat n hn hsq hsat hc i hi b o ob hlift fx fy fxOb fyOb
+  obtain ⟨hogb, _, hogH⟩ := ogN_of_sat n hn hsq hsat hc i hi b o ob hlift fx fy fxOb fyOb
     hfx hfy hfxOb hfyOb hfxN hfyN hfxObN hfyObN hivb
-  rw [← he] at hogH
+  rw [← he] at hogb hogH
   -- specialise the weighted-sum congruence to iv = 0: Σⱼ j·osrc j ≡ og·fxOb
-  have hwv : ((List.range n).map (fun j => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum
+  have hwv : ((List.range n).map (fun j : Nat => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum
       ≡ e.loc (NGen.cOg n o) * (fxOb : ℤ) [ZMOD 2013265921] := by
-    refine hwsum.trans ?_
-    rw [hiv, hfyOb, hfxOb]; ring_nf; rfl
+    have heq : e.loc (NGen.cOg n o)
+        * (e.loc (NGen.cIv n o) * e.loc (NGen.cFy n ob) + e.loc (NGen.cFx n ob)
+           - e.loc (NGen.cIv n o) * e.loc (NGen.cFx n ob))
+        = e.loc (NGen.cOg n o) * (fxOb : ℤ) := by rw [hiv, hfxOb]; ring
+    exact heq ▸ hwsum
   intro k hk hbet
   have hfx_ne_k : fx ≠ k := by rintro rfl; unfold Between at hbet; omega
   have hmem : (List.contains [(⟨fx, fy⟩ : Coord), ⟨fxOb, fyOb⟩] (⟨k, fy⟩ : Coord) = true)
@@ -1047,9 +1052,9 @@ theorem osrcMeansHorizN (n : Nat) (hn : (n : ℤ) < 2013265921)
     simp only [Coord.mk.injEq]
     constructor
     · rintro (⟨h, _⟩ | ⟨h1, h2⟩)
-      · exact absurd h hfx_ne_k
-      · exact ⟨h1, h2⟩
-    · rintro ⟨h1, h2⟩; right; exact ⟨h1, h2⟩
+      · exact absurd h.symm hfx_ne_k
+      · exact ⟨h1.symm, h2.symm⟩
+    · rintro ⟨h1, h2⟩; right; exact ⟨h1.symm, h2.symm⟩
   show (e.loc (NGen.cOsrc n o k) = 1) ↔ _
   rw [hmem]
   by_cases hog1 : e.loc (NGen.cOg n o) = 1
@@ -1058,33 +1063,134 @@ theorem osrcMeansHorizN (n : Nat) (hn : (n : ℤ) < 2013265921)
       rw [hsum, hog1]
     obtain ⟨af, hone⟩ := oneHot_exists hbool hsum1
     have hafeq : (af : ℤ) = (fxOb : ℤ) := by
-      have hdot : ((List.range n).map (fun j => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum = (af : ℤ) := by
-        have hcomm : ((List.range n).map (fun j => (j : ℤ) * e.loc (NGen.cOsrc n o j)))
-            = (List.range n).map (fun j => (fun j => e.loc (NGen.cOsrc n o j)) j * (j : ℤ)) := by
+      have hdot : ((List.range n).map (fun j : Nat => (j : ℤ) * e.loc (NGen.cOsrc n o j))).sum = (af : ℤ) := by
+        have hcomm : ((List.range n).map (fun j : Nat => (j : ℤ) * e.loc (NGen.cOsrc n o j)))
+            = (List.range n).map (fun j : Nat => (fun j => e.loc (NGen.cOsrc n o j)) j * (j : ℤ)) := by
           apply List.map_congr_left; intro j _; ring
         rw [hcomm, dot_oneHot hone (fun j => (j : ℤ))]
       have hcong : (af : ℤ) ≡ (fxOb : ℤ) [ZMOD 2013265921] := by
         have := hwv; rw [hdot, hog1, one_mul] at this; exact this
-      exact eq_of_modEq_canon ⟨by positivity, by exact_mod_cast lt_of_lt_of_le hone.1 (le_of_lt hn)⟩
-        ⟨by positivity, by exact_mod_cast lt_of_lt_of_le hfxObN (le_of_lt hn)⟩ hcong
+      exact eq_of_modEq_canon ⟨by positivity, lt_trans (by exact_mod_cast hone.1) hn⟩
+        ⟨by positivity, lt_trans (by exact_mod_cast hfxObN) hn⟩ hcong
     have hafN : af = fxOb := by exact_mod_cast hafeq
-    subst hafN
-    rw [show (fun k => e.loc (NGen.cOsrc n o k)) k = e.loc (NGen.cOsrc n o k) from rfl,
-      hone.2 k hk]
+    have hok : e.loc (NGen.cOsrc n o k) = if k = fxOb then (1 : ℤ) else 0 := hafN ▸ hone.2 k hk
+    rw [hok]
     constructor
-    · intro h; by_cases hkeq : k = af
+    · intro h; by_cases hkeq : k = fxOb
       · exact ⟨hkeq.symm, hfyeq⟩
       · rw [if_neg hkeq] at h; norm_num at h
     · rintro ⟨h1, _⟩; rw [if_pos h1.symm]
   · have hog0 : e.loc (NGen.cOg n o) = 0 := by
-      by_contra hne; exact hne hog1
+      rcases hogb with h | h
+      · exact h
+      · exact absurd h hog1
     have hall : ∀ j, j < n → e.loc (NGen.cOsrc n o j) = 0 :=
       allZero_of_sum_zero hbool (by rw [hsum, hog0])
     have hfyne : fyOb ≠ fy := fun h => hog1 ((hogH hiv).mpr h)
-    rw [show (fun k => e.loc (NGen.cOsrc n o k)) k = e.loc (NGen.cOsrc n o k) from rfl, hall k hk]
+    rw [hall k hk]
     constructor
     · intro h; norm_num at h
     · rintro ⟨_, h2⟩; exact absurd h2 hfyne
+
+/-! ### §D.6 — `occ_iff_occluded_of_sat`, ASSEMBLED at ARBITRARY `n`.
+
+The whole occlusion bridge, composed: the emitted threshold bit `cOcc` equals the reference
+`Automatafl.occluded` of the decoded board, sources and move, off `Satisfied2 (automataflResolveDescN
+n)` at ANY board size. Every hypothesis of the generic `occ_eq_occluded_vert/horiz` is now a
+`Satisfied2`-discharged n-generic fact (`efrom_oneHotN`, `eto_oneHotN`, `lineReadsVertN/HorizN`,
+`lineRangeN`, `occ_col_iff_msumValN`, `osrcMeansVertN/HorizN`). NON-VACUOUS at `n = 3`: the interior
+of a 3-line genuinely holds a cell the occlusion sum inspects. This is the n-generic twin of
+`AutomataflOcclusionBridge.occ_iff_occluded_of_sat`, which was frozen at `NN = 2` (both sides `false`).
+
+The membership lifts are taken as hypotheses (the caller supplies them from the descriptor's
+`validateOcclusion`/`validateMove` navigators); the board-size windows are explicit board arithmetic. -/
+theorem occ_iff_occluded_of_sat (n which : Nat) (hn : (n : ℤ) < 2013265921)
+    (hsq : ((n : ℤ) - 1) * ((n : ℤ) - 1) ≤ 511) (hwin : 3 * (n : ℤ) ≤ 999)
+    (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hlift : ∀ {g : VmConstraint2},
+        g ∈ NGen.validateOcclusion n (NGen.mvBase n which) (NGen.occBase n which)
+              (NGen.mvBase n (1 - which))
+          → g ∈ (automataflResolveDescN n).constraints)
+    (hmv : ∀ {g : VmConstraint2}, g ∈ NGen.validateMove n (NGen.mvBase n which)
+            → g ∈ (automataflResolveDescN n).constraints)
+    (hmvo : ∀ {g : VmConstraint2}, g ∈ NGen.validateMove n (NGen.mvBase n (1 - which))
+            → g ∈ (automataflResolveDescN n).constraints) :
+    ((envAt t i).loc (NGen.cOcc n (NGen.occBase n which)) = 1)
+      ↔ occluded (boardDecodeOldN n (envAt t i))
+          [(moveDecodeN n (envAt t i) which).frm, (moveDecodeN n (envAt t i) (1 - which)).frm]
+          (moveDecodeN n (envAt t i) which) = true := by
+  set e := envAt t i with he
+  set b := NGen.mvBase n which with hb
+  set o := NGen.occBase n which with ho
+  set ob := NGen.mvBase n (1 - which) with hob
+  -- source row/column one-hots (move under test)
+  obtain ⟨afy, hafyN, hfyE, hrowOH⟩ :=
+    readOneHotN n hn hsat hc i hi (NGen.cSelRow n b) (NGen.cFy n b)
+      (fun h => hmv (vmN_srcRow_fam n b h))
+  obtain ⟨afx, hafxN, hfxE, hcolOH⟩ :=
+    readOneHotN n hn hsat hc i hi (NGen.cSelCol n b) (NGen.cFx n b)
+      (fun h => hmv (vmN_srcCol_fam n b h))
+  -- destination endpoint one-hots (ety at ty, etx at tx)
+  obtain ⟨aty, hatyN, htyE, hetyOH⟩ :=
+    readOneHotN n hn hsat hc i hi (NGen.cEty n o) (NGen.cTy n b)
+      (fun h => hlift (voN_ety_fam n b o ob h))
+  obtain ⟨atx, hatxN, htxE, hetxOH⟩ :=
+    readOneHotN n hn hsat hc i hi (NGen.cEtx n o) (NGen.cTx n b)
+      (fun h => hlift (voN_etx_fam n b o ob h))
+  -- the OTHER move's source coordinates
+  obtain ⟨fyOb, hfyObN, hfyObE, _⟩ :=
+    readOneHotN n hn hsat hc i hi (NGen.cSelRow n ob) (NGen.cFy n ob)
+      (fun h => hmvo (vmN_srcRow_fam n ob h))
+  obtain ⟨fxOb, hfxObN, hfxObE, _⟩ :=
+    readOneHotN n hn hsat hc i hi (NGen.cSelCol n ob) (NGen.cFx n ob)
+      (fun h => hmvo (vmN_srcCol_fam n ob h))
+  -- the witnessed direction bit and its geometric meaning
+  obtain ⟨hivb, hivM⟩ := ivN_of_sat n hn hsq hsat hc i hi b o ob hlift afx atx hfxE htxE hafxN hatxN
+  -- shared: osrc booleanity, line range, alphabets
+  obtain ⟨hosrcB, _, _⟩ := osrc_arithN n hn hsat hc i hi b o ob hlift
+  have halph4 : ∀ c, c < NGen.KK n → ((e.loc (NGen.old n c) = 0 ∨ e.loc (NGen.old n c) = 1
+      ∨ e.loc (NGen.old n c) = 2 ∨ e.loc (NGen.old n c) = 3)) := oldAlphabetN n hsat hc i hi
+  have halph : ∀ c, c < NGen.KK n → 0 ≤ e.loc (NGen.old n c) ∧ e.loc (NGen.old n c) ≤ 3 :=
+    fun c hcK => oldBoundN n hsat hc i hi c hcK
+  have hlineRange := lineRangeN n hsat hc i hi b o ob hlift afx afy hafxN hafyN hcolOH hrowOH halph hivb
+  -- toNat facts and the decoded move / other source
+  have hfxNat : (e.loc (NGen.cFx n b)).toNat = afx := by rw [hfxE]; simp
+  have hfyNat : (e.loc (NGen.cFy n b)).toNat = afy := by rw [hfyE]; simp
+  have htxNat : (e.loc (NGen.cTx n b)).toNat = atx := by rw [htxE]; simp
+  have htyNat : (e.loc (NGen.cTy n b)).toNat = aty := by rw [htyE]; simp
+  have hmwhich : moveDecodeN n e which = Move.mk 0 ⟨afx, afy⟩ ⟨atx, aty⟩ := by
+    simp only [moveDecodeN, ← hb]; rw [hfxNat, hfyNat, htxNat, htyNat]
+  have hotherfrm : (moveDecodeN n e (1 - which)).frm = (⟨fxOb, fyOb⟩ : Coord) := by
+    simp only [moveDecodeN, ← hob]
+    rw [show (e.loc (NGen.cFx n ob)).toNat = fxOb by rw [hfxObE]; simp,
+      show (e.loc (NGen.cFy n ob)).toNat = fyOb by rw [hfyObE]; simp]
+  rw [hmwhich, hotherfrm]
+  by_cases hivv : e.loc (NGen.cIv n o) = 1
+  · -- VERTICAL branch (afx = atx)
+    have hvert : afx = atx := hivM.mp hivv
+    have hfoh := (efrom_oneHotN n hsat hc i hi b o ob hlift afx afy hrowOH hcolOH hivb).1 hivv
+    have htoh := (eto_oneHotN n hsat hc i hi b o ob hlift atx aty hetyOH hetxOH hivb).1 hivv
+    have hlineRead := lineReadsVertN n hsat hc i hi b o ob hlift afx hafxN hcolOH halph4 hivv
+    have hosrcMeans := osrcMeansVertN n hn hsq hsat hc i hi b o ob hlift afx afy aty fxOb fyOb
+      hfxE hfyE hfxObE hfyObE hafxN hafyN hfxObN hfyObN hivb hivv
+    rw [occ_col_iff_msumValN n hsat hc i hi b o ob hlift hwin hfoh htoh hosrcB hlineRange]
+    exact occ_eq_occluded_vert (m := Move.mk 0 ⟨afx, afy⟩ ⟨atx, aty⟩)
+      (b := boardDecodeOldN n e) (srcs := [⟨afx, afy⟩, ⟨fxOb, fyOb⟩])
+      hvert hafyN hatyN hfoh htoh hosrcB hlineRange hlineRead hosrcMeans
+  · -- HORIZONTAL branch (afx ≠ atx)
+    have hiv0 : e.loc (NGen.cIv n o) = 0 := by rcases hivb with h | h; exact h; exact absurd h hivv
+    have hhoriz : afx ≠ atx := by
+      intro h; rw [hivM.mpr h] at hiv0; exact absurd hiv0 (by norm_num)
+    have hfoh := (efrom_oneHotN n hsat hc i hi b o ob hlift afx afy hrowOH hcolOH hivb).2 hiv0
+    have htoh := (eto_oneHotN n hsat hc i hi b o ob hlift atx aty hetyOH hetxOH hivb).2 hiv0
+    have hlineRead := lineReadsHorizN n hsat hc i hi b o ob hlift afy hafyN hrowOH halph4 hiv0
+    have hosrcMeans := osrcMeansHorizN n hn hsq hsat hc i hi b o ob hlift afx afy atx fxOb fyOb
+      hfxE hfyE hfxObE hfyObE hafxN hafyN hfxObN hfyObN hivb hiv0
+    rw [occ_col_iff_msumValN n hsat hc i hi b o ob hlift hwin hfoh htoh hosrcB hlineRange]
+    exact occ_eq_occluded_horiz (m := Move.mk 0 ⟨afx, afy⟩ ⟨atx, aty⟩)
+      (b := boardDecodeOldN n e) (srcs := [⟨afx, afy⟩, ⟨fxOb, fyOb⟩])
+      hhoriz hafxN hatxN hfoh htoh hosrcB hlineRange hlineRead hosrcMeans
 
 /-! ## §E — Axiom hygiene for the discharged (n-generic) bridge hypotheses. -/
 
@@ -1105,6 +1211,7 @@ theorem osrcMeansHorizN (n : Nat) (hn : (n : ℤ) < 2013265921)
 #assert_axioms osrc_arithN
 #assert_axioms osrcMeansVertN
 #assert_axioms osrcMeansHorizN
+#assert_axioms occ_iff_occluded_of_sat
 
 end OccN
 
