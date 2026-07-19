@@ -194,6 +194,15 @@ wechat = []
 # THE WEB-PROJECTION BAKE — render the SAME counter card view-tree (the EXACT JSON the
 # SpiderMonkey engine produces) to a browser-loadable `.html`, gpui-free. Build + run:
 #   cd deos-view && cargo run --no-default-features --features web --example web_render_card
+# The cross-surface affordance differential needs THREE backends compiled in. Without this
+# `[[test]]` declaration cargo auto-discovers it, the file-level
+# `#![cfg(all(feature="web",feature="wechat",feature="discord"))]` gates the whole body off,
+# and it compiles to ZERO tests reporting "ok" — a green that ran nothing. `required-features`
+# makes cargo SKIP it with a visible note when the triple is absent, instead of faking a pass.
+[[test]]
+name = "cross_surface_affordance_differential"
+required-features = ["web", "wechat", "discord"]
+
 [[example]]
 name = "web_render_card"
 required-features = ["web"]
