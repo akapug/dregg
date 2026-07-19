@@ -390,6 +390,21 @@ class 6 quotient placeholder + trusted-ref DAG = seam #2 (SOUNDNESS depth, not s
 ⚑ TWO DISTINCT ENDPOINTS, not laundered: SUBSTRATE (crypto Lean-authored) = DONE for gadgets; SOUND
 (seam #2 + FRI floor) = separate deeper goal. "Basically done" is TRUE for the crypto-substrate axis.
 
+
+## ⚑ SUBSTRATE VERDICT: crypto-substrate DONE (glue RULED acceptable); cycle 14 = seam-#2 quotient bind
+GLUE RULING (a decision, not a deferral): hand-Go structural glue (equality-links between Lean-emitted wires,
+wire routing, loop scaffolding) is NOT a substrate violation. The AIR-in-Lean law protects CRYPTO CONSTRAINT
+AUTHORSHIP (hashes/field-arith/soundness constraints) — all of which are now Lean-template replays on the emit
+path. Glue authors no crypto (AssertIsEqual(leanWireA,leanWireB) is plumbing). So the CRYPTO-SUBSTRATE IS DONE.
+(A full structural-emit templating the glue too is possible — SegmentEmit does it for block-5 links — but
+gilding, not repair; not required.)
+CYCLE 14 (firing): close the seam-#2 QUOTIENT PLACEHOLDER — block-3 binds folded==fresh-out (vacuous); wire
+the real folded==quotient(ζ)·Z_H(ζ) over recomposeQuotientNative, canary a WRONG quotient must REJECT.
+⚑ TWO ENDPOINTS, KEPT DISTINCT: SUBSTRATE (crypto Lean-authored) = DONE. SOUND: quotient-placeholder closeable
+(cycle 14), but openings-ARE-committed-poly-evaluations = the FriLowDegreeSound PCS/FRI floor (named crypto
+assumption, NOT a wiring gap, NOT closed by wiring). "Basically done" is TRUE for the substrate axis; the FRI
+floor is the deepest remaining SOUNDNESS thing (a crypto reduction, its own campaign).
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
