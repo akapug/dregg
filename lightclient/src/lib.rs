@@ -273,15 +273,28 @@ pub fn fold_and_attest(
 /// (`dregg_blocklace::ordering::supermajority_threshold = 2n/3 + 1`).
 ///
 /// The domain-separated message each validator's Ed25519 vote signs to certify a finalization. It
-/// binds BOTH the finalized root AND the participant count the supermajority is taken over, so a
-/// signature is meaningful only for one `(root, committee-size)` pair: an adversary cannot replay a
-/// genuine vote over root `R` in a committee of `N` as a vote over a different root, nor shrink the
-/// claimed `participant_count` to lower the `2n/3+1` threshold (the count is inside what was signed).
-/// The leading domain tag prevents cross-protocol signature reuse.
-pub fn finality_signing_message(finalized_root: BabyBear, participant_count: usize) -> Vec<u8> {
-    let mut m = Vec::with_capacity(23 + 4 + 8);
-    m.extend_from_slice(b"dregg-finality-cert-v1\0");
-    m.extend_from_slice(&finalized_root.as_u32().to_le_bytes());
+/// binds BOTH the FULL 8-felt (~124-bit) wide finalized root AND the participant count the
+/// supermajority is taken over, so a signature is meaningful only for one `(root, committee-size)`
+/// pair: an adversary cannot replay a genuine vote over root `R` in a committee of `N` as a vote
+/// over a different root, nor shrink the claimed `participant_count` to lower the `2n/3+1`
+/// threshold (the count is inside what was signed).
+///
+/// ALL EIGHT LANES of the wide root are absorbed. The v1 message absorbed only lane 0 (~31 bits),
+/// which let an attacker grind a DIFFERENT wide root `W'` with `W'[0] == W[0]` (~2^31 offline
+/// `wire_commit_8` hashes) and replay the committee's genuine signatures over it — the
+/// finality-substitution attack. The domain tag is BUMPED to v2 because the signed shape changed:
+/// a v1 (lane-0-only) certificate must never verify under this message. The leading domain tag
+/// prevents cross-protocol signature reuse.
+pub fn finality_signing_message(
+    finalized_root: [BabyBear; SEG_ANCHOR_WIDTH],
+    participant_count: usize,
+) -> Vec<u8> {
+    let mut m = Vec::with_capacity(23 + 4 * SEG_ANCHOR_WIDTH + 8);
+    m.extend_from_slice(b"dregg-finality-cert-v2\0");
+    // ALL 8 lanes — never lane 0 alone (a lane-0-only absorption IS the ~31-bit hole).
+    for f in finalized_root {
+        m.extend_from_slice(&f.as_u32().to_le_bytes());
+    }
     m.extend_from_slice(&(participant_count as u64).to_le_bytes());
     m
 }
@@ -356,9 +369,10 @@ pub struct FinalityCert {
     /// The total number of participants in the finalizing group — the `n` the supermajority
     /// threshold `2n/3 + 1` is computed against.
     pub participant_count: usize,
-    /// The finalized state root this certificate attests a quorum super-ratified. Must equal the
-    /// aggregate's `final_root` (the root seam) for the cert to bind the proven history.
-    pub finalized_root: BabyBear,
+    /// The finalized state root this certificate attests a quorum super-ratified — the FULL 8-felt
+    /// (~124-bit) wide anchor, every lane inside the signed message. Must equal the aggregate's
+    /// `final_root` (the root seam, an ALL-LANES compare) for the cert to bind the proven history.
+    pub finalized_root: [BabyBear; SEG_ANCHOR_WIDTH],
 }
 
 impl FinalityCert {
@@ -508,19 +522,22 @@ pub enum FinalizedError {
     AggregateInvalid(TurnChainError),
     /// The root seam broke: the aggregate's proven `final_root` is not the shown `finalized_root`
     /// (a valid proof of history A cannot be paired with a finality cert for a different root).
+    /// The seam compares ALL EIGHT LANES of the wide anchor; the carried lanes here are DISPLAY
+    /// ONLY, never a security compare.
     AggregateRootMismatch {
-        /// The root the aggregate proves.
-        proven: u32,
-        /// The root the client was shown.
-        shown: u32,
+        /// The full 8-felt root the aggregate proves (display).
+        proven: [u32; SEG_ANCHOR_WIDTH],
+        /// The full 8-felt root the client was shown (display).
+        shown: [u32; SEG_ANCHOR_WIDTH],
     },
     /// The root seam broke on the cert side: the certificate finalized a DIFFERENT root than the one
-    /// shown (the cert does not certify this history's endpoint).
+    /// shown (the cert does not certify this history's endpoint). Full-array seam; display-only
+    /// carried lanes, exactly as [`Self::AggregateRootMismatch`].
     CertRootMismatch {
-        /// The root the certificate finalized.
-        certified: u32,
-        /// The root the client was shown.
-        shown: u32,
+        /// The full 8-felt root the certificate finalized (display).
+        certified: [u32; SEG_ANCHOR_WIDTH],
+        /// The full 8-felt root the client was shown (display).
+        shown: [u32; SEG_ANCHOR_WIDTH],
     },
     /// **THE GENESIS ANCHOR broke** — the EXACT DUAL of the final-root seam. The client supplied its
     /// trusted `expected_genesis` (its genesis/checkpoint anchor, held exactly like the VK + committee
@@ -559,11 +576,11 @@ impl core::fmt::Display for FinalizedError {
             }
             FinalizedError::AggregateRootMismatch { proven, shown } => write!(
                 f,
-                "finalized light-client: aggregate proves root {proven} but was shown {shown}"
+                "finalized light-client: aggregate proves root {proven:?} but was shown {shown:?}"
             ),
             FinalizedError::CertRootMismatch { certified, shown } => write!(
                 f,
-                "finalized light-client: cert finalized root {certified} but was shown {shown}"
+                "finalized light-client: cert finalized root {certified:?} but was shown {shown:?}"
             ),
             FinalizedError::GenesisMismatch { expected, proven } => write!(
                 f,
@@ -599,8 +616,9 @@ impl std::error::Error for FinalizedError {}
 pub struct FinalizedAttestation {
     /// Legs 1+2: the whole-history attestation (every turn correct, correctly ordered, genuine fold).
     pub history: AttestedHistory,
-    /// Leg 3: the finalized root the quorum certified (== `history.final_root`, the seam).
-    pub finalized_root: BabyBear,
+    /// Leg 3: the FULL 8-felt finalized root the quorum certified (== `history.final_root`, the
+    /// all-lanes seam).
+    pub finalized_root: [BabyBear; SEG_ANCHOR_WIDTH],
     /// The number of DISTINCT participants whose quorum finalized the root (≥ `2n/3 + 1`).
     pub quorum_signers: usize,
 }
@@ -652,7 +670,7 @@ pub struct FinalizedAttestation {
 pub fn verify_finalized_history(
     agg: &WholeChainProof,
     expected_vk: &RecursionVk,
-    finalized_root: BabyBear,
+    finalized_root: [BabyBear; SEG_ANCHOR_WIDTH],
     cert: &FinalityCert,
     committee: &[[u8; 32]],
     ml_dsa_committee: &[Vec<u8>],
@@ -683,22 +701,24 @@ pub fn verify_finalized_history(
         }
     }
 
-    // Leg 2 (seam, aggregate side): the proven endpoint must be the shown root. The BFT quorum
-    // signs the single-felt head STATE root (the rotated commit the node finalizes), which is lane
-    // 0 of the 8-felt FAITHFUL-FLOOR final anchor (all eight lanes equal it for a narrow leg's
-    // broadcast); the seam binds that head felt. The full 8-felt anchor is bound by the segment
-    // tooth inside `verify_history` above — this seam only ties the finality cert to the head.
-    if agg.final_root[0] != finalized_root {
+    // Leg 2 (seam, aggregate side): the proven endpoint must be the shown root — ALL EIGHT LANES
+    // of the 8-felt (~124-bit) FAITHFUL-FLOOR final anchor. The BFT quorum signs this full wide
+    // anchor (`finality_signing_message` v2) and the seam compares the full arrays. Comparing (or
+    // signing) lane 0 alone was the ~31-bit finality-substitution hole: an attacker grinds a
+    // DIFFERENT wide root `W'` with `W'[0] == W[0]` (~2^31 offline hashes), folds a genuine
+    // aggregate for the fork, and replays the committee's genuine signatures.
+    if agg.final_root != finalized_root {
         return Err(FinalizedError::AggregateRootMismatch {
-            proven: agg.final_root[0].as_u32(),
-            shown: finalized_root.as_u32(),
+            proven: agg.final_root.map(|f| f.as_u32()),
+            shown: finalized_root.map(|f| f.as_u32()),
         });
     }
-    // Leg 2 (seam, cert side): the certificate must finalize the shown root.
+    // Leg 2 (seam, cert side): the certificate must finalize the shown root — same full-array
+    // compare, never a head-lane shortcut.
     if cert.finalized_root != finalized_root {
         return Err(FinalizedError::CertRootMismatch {
-            certified: cert.finalized_root.as_u32(),
-            shown: finalized_root.as_u32(),
+            certified: cert.finalized_root.map(|f| f.as_u32()),
+            shown: finalized_root.map(|f| f.as_u32()),
         });
     }
 
@@ -749,9 +769,21 @@ mod tests {
         (key.public_bytes(), key)
     }
 
+    /// A non-trivial 8-felt wide-root fixture (distinct non-zero lanes) for the fold-free unit
+    /// teeth — the certs sign and compare the FULL wide anchor, never a broadcast of one felt.
+    fn wide_root(seed: u32) -> [BabyBear; SEG_ANCHOR_WIDTH] {
+        core::array::from_fn(|i| {
+            BabyBear::new(seed.wrapping_add(16_777_259u32.wrapping_mul(i as u32 + 1)))
+        })
+    }
+
     /// A genuine HYBRID vote: validator `i` signs THIS cert's `(root, participant_count)` message with
     /// BOTH its ed25519 key and its ML-DSA-65 key (over [`HYBRID_PQ_CTX`]).
-    fn signed_vote(i: u8, root: BabyBear, participant_count: usize) -> SignedVote {
+    fn signed_vote(
+        i: u8,
+        root: [BabyBear; SEG_ANCHOR_WIDTH],
+        participant_count: usize,
+    ) -> SignedVote {
         let sk = validator_key(i);
         let msg = finality_signing_message(root, participant_count);
         let sig = sk.sign(&msg);
@@ -773,7 +805,7 @@ mod tests {
     /// (`finalized_light_client_rejects_unbound_finality_cert`) ride the same logic through a real fold.
     #[test]
     fn finality_cert_quorum_is_signature_bound() {
-        let root = BabyBear::new(123_456);
+        let root = wide_root(123_456);
         let n = 4usize; // supermajority threshold 2*4/3 + 1 = 3
 
         // Honest: 3 distinct validators sign THIS root + committee size → genuine quorum.
@@ -809,7 +841,8 @@ mod tests {
 
         // (b) WRONG-ROOT: real signatures by real validators, but over a DIFFERENT root — the
         // sig→root binding fails, so they do not verify over THIS cert's root.
-        let other = root + BabyBear::ONE;
+        let other = wide_root(777_777);
+        assert_ne!(other, root);
         let wrong_root = FinalityCert {
             votes: (0..3u8).map(|i| signed_vote(i, other, n)).collect(),
             participant_count: n,
@@ -854,7 +887,7 @@ mod tests {
     /// fold.
     #[test]
     fn committee_anchored_quorum_counts_only_trusted_keys() {
-        let root = BabyBear::new(987_654);
+        let root = wide_root(987_654);
         let n = 4usize; // supermajority threshold over the committee = 2*4/3 + 1 = 3
         let trusted: Vec<[u8; 32]> = (0..n as u8)
             .map(|i| validator_key(i).verifying_key().to_bytes())
@@ -943,7 +976,7 @@ mod tests {
     /// adversary that has broken ed25519 alone cannot mint a finalized root the light client accepts.
     #[test]
     fn hybrid_finality_quorum_requires_the_pq_half() {
-        let root = BabyBear::new(424_242);
+        let root = wide_root(424_242);
         let n = 4usize; // committee supermajority = 2*4/3 + 1 = 3
         let trusted: Vec<[u8; 32]> = (0..n as u8)
             .map(|i| validator_key(i).verifying_key().to_bytes())
@@ -1046,7 +1079,7 @@ mod tests {
     /// roster counts NO signer (fail-closed, never ed25519-only).
     #[test]
     fn quantum_forged_pq_key_is_rejected() {
-        let root = BabyBear::new(0xDEAD_BEEF);
+        let root = wide_root(0xDEAD_BEEF);
         let n = 4usize; // committee supermajority = 3
         let trusted = committee(n);
         let enrolled = committee_ml_dsa(n);
@@ -1152,9 +1185,9 @@ mod tests {
         .expect("rotated transfer leg mints + self-verifies");
         // H0 DEPLOYED-WIDE: the deployed leg is now WIDE-anchored — the single-felt rotated roots
         // (PI 42/43) are RETIRED to zero, so the chain genesis/final/continuity bind the GENUINE
-        // 8-felt (~124-bit) wide anchors. Report their HEAD felt (lane 0) as the scalar root the
-        // finality seam (`agg.final_root[0]`) compares; the full 8-felt array is read off the leg
-        // where the whole-history anchor itself is asserted.
+        // 8-felt (~124-bit) wide anchors. Report their HEAD felt (lane 0) as a scalar convenience
+        // for continuity assertions; the finality seam itself compares the FULL 8-felt anchor
+        // (`agg.final_root`), read off the leg where the whole-history anchor is asserted.
         let old8 = leg
             .wide_old_root8()
             .expect("deployed transfer leg is wide-anchored (8-felt before commit)");
@@ -1202,12 +1235,29 @@ mod tests {
         (turns, genesis, final_root)
     }
 
+    // ========================================================================
+    // REAL-FOLD TEETH — `#[ignore]`, same convention as the `circuit-prove`
+    // fold suites. Every test below that calls `fold_and_attest` on an honest
+    // chain runs a FULL debug-mode recursion-prover fold (minutes, multi-GB
+    // RSS) even though the chains are only 2–3 turns — the `1000` in
+    // `make_chain(1000, 0, 7, k)` is the STARTING BALANCE, never a turn count.
+    // The default suite ran ~14 of these folds in PARALLEL (one per test
+    // thread), which is the ~70 GB laptop OOM of 2026-07. Run them on
+    // persvati / a RAM-box:
+    //     cargo test -p dregg-lightclient -- --ignored --test-threads=1
+    // The rejection teeth whose refusal fires HOST-SIDE (`TurnProofInvalid`
+    // at admission, `ChainBreak` at the continuity check — both BEFORE any
+    // recursion proving) stay un-ignored: they only mint leaf legs (seconds
+    // each), exactly like `circuit-prove`'s un-ignored rejection teeth.
+    // ========================================================================
+
     /// **THE LIGHT-CLIENT HEADLINE (Rust witness).** Fold a real K=3 finalized-turn chain — REAL
     /// descriptor leaves verified in-circuit — into ONE aggregate, then verify it AS A LIGHT CLIENT
     /// — re-witnessing nothing — and obtain an `AttestedHistory` whose endpoints are the genuine
     /// genesis/final roots and whose `num_turns` is the whole history. This is
     /// `light_client_verifies_whole_history` run on real proofs.
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn light_client_attests_whole_history() {
         let (turns, genesis, final_root) = make_chain(1000, 0, 7, 3);
 
@@ -1284,6 +1334,7 @@ mod tests {
     /// CIRCUIT, not merely different data — the refusal is the from-scratch-prover tooth, never a
     /// false positive on honest history.)
     #[test]
+    #[ignore = "HEAVY: TWO real recursion folds in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn vk_anchor_is_circuit_shape_not_history_content() {
         // Two DIFFERENT 2-turn histories (different balances, nonces, step sizes, hence different
         // roots/digests) of the same window shape.
@@ -1311,8 +1362,13 @@ mod tests {
     }
 
     /// Build a finality cert with `k_signers` DISTINCT participants over `participant_count` total,
-    /// certifying `root`. With `k_signers >= 2*participant_count/3 + 1` this is a genuine quorum.
-    fn make_cert(k_signers: usize, participant_count: usize, root: BabyBear) -> FinalityCert {
+    /// certifying the full 8-felt wide `root`. With `k_signers >= 2*participant_count/3 + 1` this
+    /// is a genuine quorum.
+    fn make_cert(
+        k_signers: usize,
+        participant_count: usize,
+        root: [BabyBear; SEG_ANCHOR_WIDTH],
+    ) -> FinalityCert {
         let votes: Vec<SignedVote> = (0..k_signers)
             .map(|i| signed_vote(i as u8, root, participant_count))
             .collect();
@@ -1347,9 +1403,15 @@ mod tests {
     /// nothing and never seeing the lace. This is `light_client_accepts_finalized_history` on real
     /// proofs + a real quorum.
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_accepts_finalized_history() {
-        let (turns, _genesis, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _genesis, final_head) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("a continuous 2-turn chain must fold");
+
+        // The committee ratifies the FULL 8-felt wide final anchor (its head lane is the scalar
+        // the chain fixture reports).
+        let final_root = agg.final_root;
+        assert_eq!(final_root[0], final_head, "head-lane sanity");
 
         // n=4 ⇒ supermajority threshold = 2*4/3 + 1 = 3. A 3-signer quorum finalizes.
         let cert = make_cert(3, 4, final_root);
@@ -1389,12 +1451,14 @@ mod tests {
     /// (`GenesisMismatch`), accepts the true-genesis one, and `None` preserves the honest
     /// "from the attested genesis" behavior.
     #[test]
+    #[ignore = "HEAVY: TWO real recursion folds in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_anchors_genesis() {
         // History A — the TRUE history the client trusts. Its genuine 8-felt genesis anchor IS the
         // client's trusted genesis/checkpoint.
-        let (turns_a, _ga, final_a) = make_chain(1000, 0, 7, 2);
+        let (turns_a, _ga, _head_a) = make_chain(1000, 0, 7, 2);
         let (agg_a, _att) = fold_and_attest(&turns_a).expect("history A folds");
         let vk = agg_a.root_vk_fingerprint();
+        let final_a = agg_a.final_root;
         let cert_a = make_cert(3, 4, final_a);
         let com = committee(4);
         let true_genesis = agg_a.genesis_root;
@@ -1456,12 +1520,13 @@ mod tests {
         // head, yet B does not start at the client's trusted genesis. WITHOUT the anchor B verifies
         // (exactly the LANE 2c residual); WITH `Some(true_genesis)` it is REJECTED — the prefix is no
         // longer hideable. (Same K=2 window ⇒ same VK anchor, per the shape-not-content property.)
-        let (turns_b, _gb, final_b) = make_chain(5000, 9, 13, 2);
+        let (turns_b, _gb, _head_b) = make_chain(5000, 9, 13, 2);
         let (agg_b, _attb) = fold_and_attest(&turns_b).expect("history B folds");
         assert_ne!(
             agg_b.genesis_root, true_genesis,
             "B genuinely starts at a different genesis"
         );
+        let final_b = agg_b.final_root;
         let cert_b = make_cert(3, 4, final_b);
         // Unanchored: B is a perfectly valid finalized history (from ITS OWN genesis) — the residual.
         verify_finalized_history(
@@ -1498,24 +1563,26 @@ mod tests {
     /// root happened to differ. And the seam itself still bites for an UNtampered aggregate shown
     /// the wrong root: a valid quorum for root B cannot launder a proof of root A either way.
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_rejects_tampered_aggregate() {
-        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
         let (mut agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
         let vk = agg.root_vk_fingerprint();
 
         // (a) Tamper: claim a DIFFERENT public final root than the one the aggregate proves.
         let honest_final8 = agg.final_root;
-        let other_final = final_root + BabyBear::ONE;
-        assert_ne!(other_final, final_root, "the foreign root must differ");
-        agg.final_root = [other_final; SEG_ANCHOR_WIDTH];
+        let mut other_final = honest_final8;
+        other_final[0] += BabyBear::ONE;
+        assert_ne!(other_final, honest_final8, "the foreign root must differ");
+        agg.final_root = other_final;
 
         // A genuine quorum for the ORIGINAL finalized root — the relabeled aggregate must be
         // refused outright (the carried publics no longer verify against the binding proof).
-        let cert = make_cert(3, 4, final_root);
+        let cert = make_cert(3, 4, honest_final8);
         match verify_finalized_history(
             &agg,
             &vk,
-            final_root,
+            honest_final8,
             &cert,
             &committee(4),
             &committee_ml_dsa(4),
@@ -1535,7 +1602,8 @@ mod tests {
 
         // (b) The seam still bites for an HONEST aggregate shown a wrong finalized root: the
         // aggregate verifies, but its proven endpoint is not the root the client was shown.
-        let shown = final_root + BabyBear::ONE;
+        let mut shown = honest_final8;
+        shown[0] += BabyBear::ONE;
         let cert_b = make_cert(3, 4, shown);
         match verify_finalized_history(
             &agg,
@@ -1547,11 +1615,138 @@ mod tests {
             None,
         ) {
             Err(FinalizedError::AggregateRootMismatch { proven, shown: s }) => {
-                assert_eq!(proven, final_root.as_u32());
-                assert_eq!(s, shown.as_u32());
+                assert_eq!(proven, honest_final8.map(|f| f.as_u32()));
+                assert_eq!(s, shown.map(|f| f.as_u32()));
             }
             other => panic!("a wrong shown root must be rejected at the seam; got {other:?}"),
         }
+    }
+
+    /// **THE FINALITY-SUBSTITUTION FORGE TOOTH (the ~31-bit cert hole, closed).** The attack the
+    /// full-root cert closes: the committee finalizes a wide root `W = [w0, …, w7]`; the v1 cert
+    /// signed and the old seam compared ONLY lane 0 (~31 bits), so an attacker could grind a
+    /// DIFFERENT wide root `W'` with `W'[0] == w0` (~2^31 offline `wire_commit_8` hashes), fold a
+    /// genuine aggregate for the fork, present `W'` as finalized, and REPLAY the committee's
+    /// genuine signatures — the light client accepted a fork the committee never finalized.
+    ///
+    /// The genuinely-verifying fork aggregate is the 2^31 grind, so the test presents the same
+    /// lane-0 collision at the seam from the cheap side: the HONEST aggregate (leg 1 genuinely
+    /// passes) shown the colliding fork root `W'` with the replayed committee signatures. What is
+    /// asserted is exactly what the fix changes: the seam compares ALL EIGHT LANES (the old lane-0
+    /// compare accepts this presentation — `proven[0] == shown[0]` — and the assertion proves it),
+    /// and the v2 signed message binds all eight lanes (the v1 message for `W` and `W'` is
+    /// byte-identical, so the replay VERIFIED under v1; under v2 the replayed signatures are dead).
+    #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
+    fn finality_cert_rejects_lane0_colliding_fork() {
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
+        let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+        let vk = agg.root_vk_fingerprint();
+
+        // The committee genuinely finalized the honest wide root W — every vote signs ALL 8 lanes.
+        let w = agg.final_root;
+        assert!(
+            w[1..].iter().any(|f| *f != BabyBear::ZERO),
+            "the genuine wide anchor must be non-trivial beyond lane 0 for this tooth to bite"
+        );
+        let honest_cert = make_cert(3, 4, w);
+
+        // THE FORK: same lane 0, different elsewhere — the shape a ~2^31 offline grind buys.
+        let mut w_fork = w;
+        w_fork[1] += BabyBear::ONE;
+        assert_eq!(w_fork[0], w[0], "lane 0 collides by construction");
+        assert_ne!(w_fork, w, "the fork differs beyond lane 0");
+
+        // THE REPLAY: the fork presented as finalized, carrying the SAME committee signatures the
+        // committee cast for W.
+        let replayed_cert = FinalityCert {
+            votes: honest_cert.votes.clone(),
+            participant_count: 4,
+            finalized_root: w_fork,
+        };
+
+        // The replay PREMISE, at the byte level: under the v1 (lane-0-only) message W and W' sign
+        // IDENTICAL bytes — so the committee's genuine signatures verified over the fork. Under
+        // the v2 full-root message they differ, so the replayed signatures are dead.
+        let v1_message = |root: [BabyBear; SEG_ANCHOR_WIDTH], n: usize| -> Vec<u8> {
+            let mut m = Vec::new();
+            m.extend_from_slice(b"dregg-finality-cert-v1\0");
+            m.extend_from_slice(&root[0].as_u32().to_le_bytes());
+            m.extend_from_slice(&(n as u64).to_le_bytes());
+            m
+        };
+        assert_eq!(
+            v1_message(w, 4),
+            v1_message(w_fork, 4),
+            "v1 signed only lane 0: the two roots' messages are byte-identical (the replay hole)"
+        );
+        assert_ne!(
+            finality_signing_message(w, 4),
+            finality_signing_message(w_fork, 4),
+            "v2 signs all 8 lanes: the fork's message differs, killing the replay"
+        );
+        assert_eq!(
+            replayed_cert.distinct_committee_signers(&committee(4), &committee_ml_dsa(4)),
+            0,
+            "the committee's signatures over W do not verify over the fork W' (quorum-leg bite)"
+        );
+
+        // THE SEAM BITE: presenting the lane-0-colliding fork as the finalized root is REJECTED at
+        // the full-array aggregate seam — where the old `final_root[0]` compare ACCEPTED it.
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            w_fork,
+            &replayed_cert,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
+            Err(FinalizedError::AggregateRootMismatch { proven, shown }) => {
+                assert_eq!(proven, w.map(|f| f.as_u32()));
+                assert_eq!(shown, w_fork.map(|f| f.as_u32()));
+                assert_eq!(
+                    proven[0], shown[0],
+                    "lane 0 ALONE agrees — exactly the compare the old seam reduced to, so the \
+                     old client accepted this presentation"
+                );
+            }
+            other => panic!(
+                "a lane-0-colliding fork must be rejected at the wide root seam; got {other:?}"
+            ),
+        }
+
+        // CERT-SIDE seam too: the honest root shown, but the cert claims the colliding fork.
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            w,
+            &replayed_cert,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
+            Err(FinalizedError::CertRootMismatch { certified, shown }) => {
+                assert_eq!(certified, w_fork.map(|f| f.as_u32()));
+                assert_eq!(shown, w.map(|f| f.as_u32()));
+            }
+            other => {
+                panic!("a cert certifying a lane-0-colliding fork must be rejected; got {other:?}")
+            }
+        }
+
+        // HONEST PATH stays green: the genuine W with its genuine cert still finalizes.
+        let att = verify_finalized_history(
+            &agg,
+            &vk,
+            w,
+            &honest_cert,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        )
+        .expect("the genuine wide root + genuine committee quorum must still verify");
+        assert_eq!(att.finalized_root, w);
     }
 
     /// **REJECTION TOOTH 2 — sub-quorum finality cert (FORGED finality).** A cert with only 2 of 4
@@ -1560,9 +1755,11 @@ mod tests {
     /// `NoQuorum`. You cannot obtain a finalized attestation without a genuine BFT quorum — the
     /// fork-attack defense. (Rust mirror of `not_final_leader_invalidates` / sub-quorum rejection.)
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_rejects_sub_quorum_cert() {
-        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+        let final_root = agg.final_root;
 
         // 2 of 4 signers — below the supermajority threshold of 3. A forged/insufficient finality cert.
         let weak_cert = make_cert(2, 4, final_root);
@@ -1597,12 +1794,15 @@ mod tests {
     /// a real proof of history A with a real finality cert for history B. The finalized client REJECTS
     /// with `CertRootMismatch`. (Rust mirror of `root_mismatch_unbinds`.)
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_rejects_cert_for_other_root() {
-        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+        let final_root = agg.final_root;
 
         // A genuine quorum — but it finalized a DIFFERENT root.
-        let foreign_root = final_root + BabyBear::ONE;
+        let mut foreign_root = final_root;
+        foreign_root[0] += BabyBear::ONE;
         assert_ne!(foreign_root, final_root);
         let cert = make_cert(3, 4, foreign_root);
         assert!(cert.has_quorum(), "the cert itself carries a real quorum");
@@ -1618,8 +1818,8 @@ mod tests {
             None,
         ) {
             Err(FinalizedError::CertRootMismatch { certified, shown }) => {
-                assert_eq!(certified, foreign_root.as_u32());
-                assert_eq!(shown, final_root.as_u32());
+                assert_eq!(certified, foreign_root.map(|f| f.as_u32()));
+                assert_eq!(shown, final_root.map(|f| f.as_u32()));
             }
             other => panic!("a cert finalizing a different root must be rejected; got {other:?}"),
         }
@@ -1630,9 +1830,11 @@ mod tests {
     /// 3. `distinct_signers` dedups (mirroring the node's `ratifyingCreators.dedup`), so a forged cert
     /// padded with repeats is rejected as sub-quorum. Sybil-by-repeat does not finalize.
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_dedups_repeated_signers() {
-        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+        let final_root = agg.final_root;
 
         // Validator 0 is IN the trusted committee(4) — so the repeats collapse to ONE
         // committee signer (still far below the threshold of 3), exercising the dedup, not the
@@ -1678,10 +1880,12 @@ mod tests {
     /// the trusted committee), so the client REJECTS with `NoQuorum`. Only the REAL committee's keys
     /// can finalize.
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_rejects_fork_by_foreign_committee() {
-        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("the honest (forked) chain must fold");
         let vk = agg.root_vk_fingerprint();
+        let final_root = agg.final_root;
 
         // The light client's TRUSTED committee: validators 0..4 (genesis-distributed).
         let trusted = committee(4);
@@ -1760,10 +1964,12 @@ mod tests {
     /// configured with no trusted validator set has nothing to anchor finality against; it must fail
     /// closed rather than fall back to a count-only quorum (red-team LC-2 / "reject unanchored").
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_refuses_when_unanchored() {
-        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
         let vk = agg.root_vk_fingerprint();
+        let final_root = agg.final_root;
 
         // A genuine 3-of-4 quorum — but the client holds NO committee.
         let cert = make_cert(3, 4, final_root);
@@ -1781,10 +1987,12 @@ mod tests {
     /// so `distinct_signers` (the `CertValid` binding leg) counts ZERO and the client REJECTS with
     /// `NoQuorum`. A forged finality cert is unbound — exactly `FinalizedLightClient.CertValid`.
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_rejects_unbound_finality_cert() {
-        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
         let vk = agg.root_vk_fingerprint();
+        let final_root = agg.final_root;
 
         // (a) UNSIGNED: 3-of-4 distinct, well-formed validator keys but ZERO signatures. Under the old
         // count-only check this was a "quorum"; now no vote verifies, so it is sub-quorum.
@@ -1829,7 +2037,8 @@ mod tests {
         // (b) WRONG-ROOT: a genuine 3-of-4 quorum, but every signature is over a DIFFERENT root. The
         // signatures are real Ed25519 sigs by real validators — just not over THIS cert's root — so the
         // sig→root binding fails and the cert is rejected (no replay of a cert for root B onto root A).
-        let other_root = final_root + BabyBear::ONE;
+        let mut other_root = final_root;
+        other_root[0] += BabyBear::ONE;
         let wrong_root = FinalityCert {
             votes: (0..3u8)
                 .map(|i| signed_vote(i, other_root, 4)) // signed over other_root, presented as final_root
@@ -1880,10 +2089,12 @@ mod tests {
     /// happy path (both halves valid) is exercised by `finalized_light_client_accepts_finalized_history`,
     /// whose votes are now hybrid.
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn finalized_light_client_rejects_classical_only_quorum() {
-        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (turns, _g, _head) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
         let vk = agg.root_vk_fingerprint();
+        let final_root = agg.final_root;
 
         // FORGED PQ: 3-of-4 real committee members, every ed25519 half valid over the finalized root,
         // but each ML-DSA half corrupted. The classical quorum is complete; the hybrid gate refuses.
@@ -1971,6 +2182,7 @@ mod tests {
     /// repeated the lie. Now the lie itself is refused.) Mirror of the Lean
     /// `tampered_aggregate_cannot_bind`: a broken aggregate cannot attest.
     #[test]
+    #[ignore = "HEAVY: real recursion fold in debug (~minutes, multi-GB); run with --ignored on persvati/a RAM-box"]
     fn light_client_rejects_corrupted_aggregate() {
         let (turns, _g, _f) = make_chain(1000, 0, 7, 2);
         let (mut agg, _attested) = fold_and_attest(&turns).expect("the honest chain must fold");
