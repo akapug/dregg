@@ -9758,6 +9758,29 @@ witness-gen perimeter postures.
   reproduction: OLD descriptor + OLD trace fails identically). Every honest heap-open-appendix
   path (noteSpend/noteCreate/createCell wide roundtrips, heapWrite honest verify) is red at HEAD
   by this class. The F1/aafi leaf-encoding flip needs its Lean emit twin.
+  - **CLOSED 2026-07-19 (REFINEMENT-STORY WOUND, now healed).** Classification: the Lean spec
+    proved a DIFFERENT leaf function than deployed — `heapLeafDigest8`/`fieldsLeafDigest8` and the
+    emitted `heapLeafInputs`/`fieldsLeafInputs` were arity-2 `[addr,value]` while the deployed
+    `HeapLeaf::digest8` (the fields tree IS a `CanonicalHeapTree8`) absorbs arity-3
+    `[addr,value,next_addr]`. The keystones (`heapOpen_writesTo8`, `effHeapWriteV3_forces_write8`,
+    fields/accumulator twins) were sound about a hash the deployment does NOT compute, and the
+    honest producer went RED (chip request `(2,[addr,value])` never matches the `digest8` provide
+    `(3,[addr,value,next])`). NOT a forgeable-leaf soundness hole — the arity-2 proof was internally
+    honest, just about the wrong function. FIX (Lean-first): flipped the leaf digest scheme +
+    membership + write relations to the arity-3 IMT triple `(addr,value,nextAddr)` in
+    `DeployedHeapTree`/`DeployedFieldsTree` (`heapLeafDigest8 : ℤ×ℤ×ℤ`), `MapMerkleRoot` (added
+    `linkHeap` = the `relink_next_addrs` model so `mapRoot8` digests LINKED leaves, injective via
+    `linkHeap_injective`), `EffectVmEmitRotationV3.{heap,fields}WritesTo8` (pointer held fixed on a
+    value update), `HeapOpenEmit`/`FieldsOpenEmit`/`AccumulatorOpenEmit`/`AccumulatorInsertEmit`/
+    `CarrierOctetGates` (arity-3 leaf lookup + a leaf-2 pointer weld in the after-spine); map-level
+    `MembersAt8`/`fieldsReadAt8` keep the `(addr,value)` pair with the pointer EXISTENTIAL (the map
+    speaks key→value; the IMT pointer is sorted-chain plumbing). Producer twin: `fill_heap_open_read`
+    /`fill_heap_after_spine` now lay leaf col 2 = the real `next_addr` (they served both heap AND
+    fields). Regenerated the 2 wide TSVs (arity-2→3, ACK+ALLOW_DIRTY, provenance eyes-open dirty).
+    Regression tooth: `#guard` pins `{heap,fields}LeafInputs.length == 3` at emit time. `#assert_axioms`
+    clean, no sorry, full `Dregg2` green except the PRE-EXISTING `AutomataflStepRefine` WIP (unrelated,
+    doesn't import heap). SCALAR §2-§5 `MapMerkleRoot` `opensTo`/`writesTo` (the 1-felt lane-0
+    DENOTATION) still folds arity-2 `leafOf` — NAMED residue of the IMT cutover, banner added.
 - FOLLOW-UP (debt): the BARE V3 registry keeps the full 1-felt stratum (its members publish PIs
   42/43 through it; consumed at HEAD by the SDK cap-open fallback, verifier/rotated_replay CLI
   floor, joint-turn mint weld, ~30 tests). Retiring it = repoint those consumers at the wide
@@ -9842,3 +9865,90 @@ threaded) is NOT matched, so its nullifier read is SKIPPED (zero sentinel ⇒ no
 non-revocation leg). Adding the welded arm is acceptance-strengthening but touches the double-spend
 gate: verify blast radius (honest welded noteSpend turns must still carry the matching legs) before
 firing.
+
+## 2026-07-18 — E7 by-name zoo: census CONFIRMED + narrowing bridge LANDED (byte-safe; regen staged)
+Circuit-minimality item E7. Full per-column parse of all 30 by-name descriptors + the 2 registry
+members at `ea75575c0` — hunt figures reproduced on 8/9 (note-spend-leaf = 126 lookup-only + 8
+unref, hunt said 125; cross-side-v2 = 18/24, hunt said 17; rest exact). KEY REFINEMENT: lookup-only
+is NOT the kill-set — tuple-INPUT-position witnesses (34 cols on note-spend-leaf) must stay
+committed; the mechanical kill = lane-positions-18..24-only + unreferenced = **387 of 1,857
+committed cols (21%)**; note-spend-leaf 149→57 (−62%), full per-member table + regen recipe in
+`docs/EFFICIENCY-BACKLOG-circuit-minimality.md` §E7.
+- LANDED (`metatheory/Dregg2/Circuit/ChipNarrowLookup.lean`, rooted in Dregg2.lean,
+  #assert_axioms-clean, zero descriptor bytes touched): `narrowTable_sound` — the 18-PREFIX of the
+  deployed wide chip table IS `ChipTableSoundNarrow` (models Rust `narrow_hist`: one physical chip
+  serves both buses) — the hypothesis every `NarrowChip`/`GraduateNarrow` lever previously assumed;
+  + `chip_lookup_narrow_sound_of_wide_table` (identical digest equation forced) +
+  `narrow_served_by_same_rows`/holdsAt twins (completeness both directions). NO new combinator —
+  `NarrowChip.lean::chipLookupTupleNarrow`/`poseidon2narrow` (wire 8 = TID_P2_NARROW) already
+  existed; duplication avoided by importing it.
+- STAGED (the later bundled cutover, sequenced AFTER Epoch-2 chip retype, ONE mechanical regen
+  lane, cannot parallel other regens): per-module wide→narrow lookup swap + lane-col deletion +
+  dense renumber (+ note-spend-leaf's 8 unref cols {15,55-61} + derivation col 0) → Refine/Rung2
+  proofs re-point at the narrow levers (same conclusion) → GOLDEN regen via emitVmJson2 + by-name
+  re-emit → Rust twin layout consts (membership_descriptor_4ary WIDTH 18→11) → honest+forge
+  canaries per member. Prover-side narrow serving ALREADY live (descriptor_ir2.rs). Exact step list
+  in the backlog §E7.
+
+## 2026-07-19 — E2 fold-arity recompose probe: GO (measured; per-turn double-prove is deletable)
+
+**The question** (EFFICIENCY-BACKLOG E2, rank 2): every IVC-bound turn is proven TWICE — production
+mint at `ir2_config` (lb 6, 19q, fold-by-8) then a full re-prove at `ir2_leaf_wrap_config()`
+(fold-by-2, `INNER_FRI_MAX_LOG_ARITY = 1`, `turn/src/rotation_witness.rs:749-762`) — because the
+arity-2 choice was a DIAGNOSTIC (`plonky3_recursion_impl.rs:401-411`) that fossilized into every
+recursion layer. The in-circuit verifier reads count/arity from the proof, so arity-8 consumption
+was plausible but UNEXERCISED by any dregg leaf.
+
+**The probe** (`circuit-prove/tests/e2_fold_arity_recompose_probe.rs`, byte-safe: exercises only, no
+regen / no descriptor bytes / no VK): mint the real rotated `transferVmDescriptor2R24` leaf (bare-V3
+fixture at HEAD geometry — avail pad 10, gentian-refuse-welded, 50 PIs) under a
+`DreggRecursionConfig` at the FULL production `ir2_config` knobs (lb 6, `max_log_arity 3`, 19q,
+16 qPoW) via `create_recursion_config_with_fri`, then (1) leaf-wrap with the UNCHANGED
+`prove_descriptor_leaf_rotated_with_config` + in-circuit self-verify, and (2) aggregate two such
+wrapped leaves at the probe config. Non-vacuity teeth: proof schedule must contain `log_arity ≥ 2`,
+all queries walk one schedule, arity-8 mint must have FEWER commit phases than arity-2 of the SAME
+trace.
+
+**RESULT: GO — 2/2 GREEN on first run (190.8 s total).**
+- inner mint, same trace both ways: arity-2 402,539 B / 8 commit phases (all-[1]) vs arity-8
+  373,951 B / **4 commit phases, schedule [2,2,3,1]** — `log_arity = 3` present, so the in-circuit
+  arity-8 reconstruct arm (`one_hot_from_three_bits`) demonstrably ran; −28.6 KB (−7.1%) on the
+  leaf wire as a free rider.
+- wrap of the arity-8 leaf: GREEN, ~50.1 s, wrapped root 229,594 B, verifies in-circuit.
+- aggregation of two arity-8 leaves at the probe config: GREEN, ~52.1 s, root verifies in-circuit.
+- Commit-phase count HALVED (8→4) at this fixture height (2^8-ish); at the deployed 2^19 wrap
+  height the backlog's ~18→~6 rounds (~3.8× commit-phase Merkle-path term) applies — that
+  measurement is the cutover lane's to confirm at height.
+
+**Soundness side (ALREADY Lean-proven at HEAD, no new obligations):** arity is a soundness lever —
+`FriLedgerSound.arity8_costs_seven_times_arity2_at_logBlowup6` (goodCount ×7, perFoldBits 112→109,
+`#assert_axioms` clean) and hΦ is discharged unconditionally at the deployed arity-8 setup
+(`FriArityFiberDischarge.arity8_perFold_soundness_unconditional`, ~109.84 bits, no hypothesis). The
+cutover spends ~3 per-fold bits, priced through `dregg_fri_ledger`, not a comment.
+
+**STAGED RECIPE for the E2 cutover (semantic-change, HELD — needs its own FS-epoch/bundle window):**
+1. Flip `INNER_FRI_MAX_LOG_ARITY` 1→3 (`circuit-prove/src/plonky3_recursion_impl.rs:116`) so
+   `ir2_leaf_wrap_config()` ≡ production `ir2_config` knobs; retire the :401-411 PROBE comment.
+2. Delete the per-turn re-mint: `finalized_turn_from_full_turn` consumes the node's served
+   `Ir2BatchProof` directly (`turn/src/rotation_witness.rs:749-762` re-prove + :685-687 mint
+   self-verify die); KEEP the fail-closed 8-felt anchor tie.
+3. Collapse the `DreggStarkConfig`/`DreggRecursionConfig` split ("SIDESTEP option a" fossil,
+   `ivc_turn_chain.rs:927-935`, ~15 leaf adapters) so the production mint IS the fold input type.
+4. Re-pin the posture: the rotated chain leaves the ONE config the ~112.6-bit per-fold posture
+   describes (`ir2LeafWrapRotatedConfig`, arity-2 lb-6) for the 109-bit arity-8 ledger row —
+   `fri_params_soundness_budget.rs` expectations move via `dregg_fri_ledger` (numbers already
+   exported); FS-epoch: proofs are NOT interchangeable across the flip.
+5. gnark long pole: add an arity-8 `fold_row` beside `friFoldRowArity2`
+   (`chain/gnark/fri_verify_native.go:228`); note `dregg_outer_config.rs:139-142` (ETH-wrap OUTER
+   shrink, arity-2 lb-3, 118-bit row) is a SEPARATE knob and may stay. Bundle with apex lever B so
+   the ETH wrap re-lands once.
+6. Gates after the flip: `e2_fold_arity_recompose_probe` (becomes the standing regression gate),
+   `rotation_batchstark_leaf_smoke` (⚠ ALREADY RED at HEAD on stale geometry pins —
+   `GRAD_ROT_WIDTH`/46-PI asserts predate the avail+refuse-weld regen; repoint alongside),
+   `ivc_turn_chain` chain tests, `fri_params_soundness_budget`.
+
+**⚠ DISCOVERED (pre-existing, not mine, not fixed here):** `rotation_batchstark_leaf_smoke.rs` is
+red at HEAD — its fixture asserts `desc.trace_width == GRAD_ROT_WIDTH` (1647) and 46 PIs against
+the committed bare-V3 transfer member (1702 wide, 50 PIs, avail+refuse-welded). Same class as the
+HORIZONLOG bare-V3 stratum entry's "FIXTURES pinned to bare geometry". The E2 probe already carries
+the geometry-neutral form (pad from `avail_pad_for_descriptor_name`, prover-side graduation).
