@@ -33,6 +33,8 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
+use dreggnet_catalog::PlayerWorlds;
+use dreggnet_offerings::resume::SessionResumeStore;
 use dreggnet_offerings::{FileResumeStore, OfferingHost, Outcome, VerifyReport};
 
 use crate::api::{decode_callback, encode_callback};
@@ -1004,6 +1006,36 @@ pub fn durable_telegram_host(dir: Option<PathBuf>, council_members: Vec<[u8; 32]
         }
     }
     host
+}
+
+/// **The per-identity RPG worlds registry over a durable session store** — the per-player half of
+/// the catalog (the eight `is_rpg_key` surfaces), the companion to [`durable_telegram_host`]. With
+/// a `dir`: each identity's world attaches a durable [`FileResumeStore`] under a PER-IDENTITY
+/// subdirectory (`<dir>/players/<blake3(identity)>`), so a player's forge / inventory / trade
+/// survive a restart by move-log replay — the same durability the shared game sessions get, and the
+/// same per-player scoping Discord's `SqliteRpgResumeStore` gives (there by SQL row, here by
+/// directory). The subdirectory is the ONE thing the isolation guarantee rests on: no identity's
+/// host ever sees another's logs. `None` (or an unopenable dir) → that world stays in memory.
+pub fn durable_player_worlds(dir: Option<PathBuf>) -> PlayerWorlds {
+    let Some(root) = dir else {
+        return PlayerWorlds::new();
+    };
+    let players_root = root.join("players");
+    PlayerWorlds::with_store(move |identity| {
+        // A per-identity subdirectory, named by a hash of the identity so any identity string maps
+        // to a safe, collision-resistant directory.
+        let sub = players_root.join(blake3::hash(identity.as_bytes()).to_hex().as_str());
+        match FileResumeStore::open(&sub) {
+            Ok(store) => Some(Box::new(store) as Box<dyn SessionResumeStore>),
+            Err(e) => {
+                eprintln!(
+                    "WARN: cannot open per-identity RPG world store {}: {e} — that world stays IN-MEMORY",
+                    sub.display()
+                );
+                None
+            }
+        }
+    })
 }
 
 /// **The forever loop**: long-poll `getUpdates`, decode, route every event through the ONE

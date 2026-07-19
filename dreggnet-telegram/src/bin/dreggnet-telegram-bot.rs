@@ -31,7 +31,9 @@ use std::path::PathBuf;
 
 use dreggnet_telegram::host::TelegramHost;
 use dreggnet_telegram::reqwest_transport::ReqwestHttpPost;
-use dreggnet_telegram::runtime::{BotApi, durable_telegram_host, run_update_loop};
+use dreggnet_telegram::runtime::{
+    BotApi, durable_player_worlds, durable_telegram_host, run_update_loop,
+};
 use dreggnet_telegram::transport::RawBotApi;
 
 /// The concrete transport the running bot presents surfaces through.
@@ -143,9 +145,15 @@ fn main() {
     let webapp_base = dreggnet_telegram::webapp::webapp_base_from_env();
     eprintln!("mini-app launch tier armed at {webapp_base} (TELEGRAM_WEBAPP_BASE overrides)");
     let dir_for_host = session_dir.clone();
-    let mut host = TelegramHost::with_host(bot_secret, transport, move || {
-        durable_telegram_host(Some(dir_for_host), members)
-    })
+    let dir_for_players = session_dir.clone();
+    let mut host = TelegramHost::with_hosts(
+        bot_secret,
+        transport,
+        move || durable_telegram_host(Some(dir_for_host), members),
+        // The per-identity RPG worlds, durable under the SAME session dir (one subdir per player)
+        // — so trade / inventory / craft are isolated AND survive a restart, exactly like Discord.
+        move || durable_player_worlds(Some(dir_for_players)),
+    )
     .with_webapp_base(webapp_base);
 
     // 8. The long-poll loop, with the consumed-updates offset persisted beside the sessions so a

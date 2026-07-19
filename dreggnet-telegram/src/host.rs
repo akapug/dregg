@@ -60,7 +60,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::{SyncSender, sync_channel};
 
 use deos_view::ViewNode;
-use dreggnet_catalog::CatalogConfig;
+use dreggnet_catalog::{CatalogConfig, PlayerWorlds, is_rpg_key};
 use dreggnet_offerings::{
     Action, DreggIdentity, Frontend, HostError, OfferingHost, OfferingInfo, Outcome, SessionId,
     Surface, VerifyReport,
@@ -129,6 +129,51 @@ impl HostThread {
             .expect("the telegram offering host thread is alive");
         rx.recv()
             .expect("the telegram offering host thread answered")
+    }
+}
+
+/// A unit of work run ON the per-identity RPG worlds' owning thread, against the live
+/// [`PlayerWorlds`] registry.
+type PlayerJob = Box<dyn FnOnce(&mut PlayerWorlds) + Send + 'static>;
+
+/// **A thread-confined [`PlayerWorlds`] handle** — the [`HostThread`] pattern for the per-identity
+/// RPG worlds. A [`PlayerWorlds`] owns one `!Send` [`OfferingHost`] per derived identity, so it
+/// lives on ONE owning thread and every access is a job shipped to it; only the (`Send`) result
+/// crosses back. The handle is just a channel sender — `Send + Sync`.
+pub struct PlayerHostThread {
+    jobs: SyncSender<PlayerJob>,
+}
+
+impl PlayerHostThread {
+    /// Spawn the owning thread and BUILD the registry on it (`build` runs on the thread, so every
+    /// per-identity host and its `!Send` sessions are born there and never cross a boundary).
+    pub fn spawn(build: impl FnOnce() -> PlayerWorlds + Send + 'static) -> PlayerHostThread {
+        let (jobs, rx) = sync_channel::<PlayerJob>(64);
+        std::thread::Builder::new()
+            .name("telegram-player-worlds".to_string())
+            .spawn(move || {
+                let mut worlds = build();
+                while let Ok(job) = rx.recv() {
+                    job(&mut worlds);
+                }
+            })
+            .expect("spawn the telegram player-worlds thread");
+        PlayerHostThread { jobs }
+    }
+
+    /// Run `f` against the registry on the owning thread and hand back its (`Send`) result.
+    pub fn run<R: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut PlayerWorlds) -> R + Send + 'static,
+    ) -> R {
+        let (tx, rx) = sync_channel::<R>(1);
+        self.jobs
+            .send(Box::new(move |worlds| {
+                let _ = tx.send(f(worlds));
+            }))
+            .expect("the telegram player-worlds thread is alive");
+        rx.recv()
+            .expect("the telegram player-worlds thread answered")
     }
 }
 
@@ -241,8 +286,15 @@ pub struct TelegramHost<T: Transport> {
     /// The bot master secret — the root of every user's derived identity (and of the council
     /// electorate this host registers).
     bot_secret: [u8; 32],
-    /// The offering registry, confined to its owning thread.
+    /// The offering registry, confined to its owning thread. The SHARED tables — the games and
+    /// service offerings — live here (a council with one voter per host is not a council).
     host: HostThread,
+    /// The per-identity RPG worlds, confined to their own owning thread. The eight [`is_rpg_key`]
+    /// surfaces (trade / inventory / craft / …) are per-player by nature, so every RPG-key session
+    /// operation routes to the PRESSER's own [`OfferingHost`] here
+    /// ([`run_offering`](Self::run_offering)), keyed by their derived identity — two Telegram users
+    /// therefore have ISOLATED inventories. The shared-layer form of the split Discord already runs.
+    players: PlayerHostThread,
     /// The Telegram affordance-renderer over the transport (records what each chat last presented).
     frontend: TelegramFrontend<T>,
     /// **The chat's MOST RECENT surface's offering** (or [`MENU_KEY`] while browsing) — keyed by
@@ -288,6 +340,7 @@ impl<T: Transport> TelegramHost<T> {
         TelegramHost {
             bot_secret,
             host,
+            players: PlayerHostThread::spawn(PlayerWorlds::new),
             frontend: TelegramFrontend::new(bot_secret, transport),
             active: HashMap::new(),
             armed: HashMap::new(),
@@ -296,19 +349,54 @@ impl<T: Transport> TelegramHost<T> {
     }
 
     /// Build a host over a caller-provided offering registry (the offerings are registered inside
-    /// `build`, which runs on the owning thread). Lets a deployment register its own offering set.
+    /// `build`, which runs on the owning thread), with an IN-MEMORY per-identity RPG worlds
+    /// registry. Lets a deployment register its own shared offering set; the RPG worlds stay
+    /// in-memory (the tests' path — see [`with_hosts`](Self::with_hosts) for the durable pair).
     pub fn with_host(
         bot_secret: [u8; 32],
         transport: T,
         build: impl FnOnce() -> OfferingHost + Send + 'static,
     ) -> Self {
+        Self::with_hosts(bot_secret, transport, build, PlayerWorlds::new)
+    }
+
+    /// Build a host over a caller-built shared registry AND a caller-built per-identity RPG worlds
+    /// registry — the durable production seam (the bin passes the `TELEGRAM_SESSION_DIR`-resolved
+    /// pair, so both the shared game sessions and each player's RPG world survive a restart by
+    /// move-log replay). Both `build` closures run on their own owning threads.
+    pub fn with_hosts(
+        bot_secret: [u8; 32],
+        transport: T,
+        build: impl FnOnce() -> OfferingHost + Send + 'static,
+        build_players: impl FnOnce() -> PlayerWorlds + Send + 'static,
+    ) -> Self {
         TelegramHost {
             bot_secret,
             host: HostThread::spawn(build),
+            players: PlayerHostThread::spawn(build_players),
             frontend: TelegramFrontend::new(bot_secret, transport),
             active: HashMap::new(),
             armed: HashMap::new(),
             webapp_base: None,
+        }
+    }
+
+    /// **Route a `(key, session)`-scoped host job to the host that OWNS it for `viewer`.** An
+    /// [`is_rpg_key`] offering runs against the viewer's own per-identity RPG world (their isolated
+    /// inventory); everything else — the shared games + services — runs against the ONE catalog
+    /// host. This ONE routing decision is why two Telegram users never share an inventory while a
+    /// council / tug stays a single shared table.
+    fn run_offering<R: Send + 'static>(
+        &self,
+        key: &str,
+        viewer: &DreggIdentity,
+        f: impl FnOnce(&mut OfferingHost) -> R + Send + 'static,
+    ) -> R {
+        if is_rpg_key(key) {
+            let id = viewer.0.clone();
+            self.players.run(move |worlds| f(worlds.host_mut(&id)))
+        } else {
+            self.host.run(f)
         }
     }
 
@@ -553,7 +641,9 @@ impl<T: Transport> TelegramHost<T> {
         {
             let k = key.to_string();
             let s = sid.clone();
-            self.host.run(move |h| h.ensure_open(&k, &s))?;
+            // RPG keys open in the VIEWER's own per-identity world (isolated inventory); the shared
+            // tables (games + services) open on the ONE catalog host.
+            self.run_offering(key, viewer, move |h| h.ensure_open(&k, &s))?;
         }
         // Spin THIS offering's surface slot, not a bare chat-level one — a stray chat-keyed slot
         // would shadow the offering's own surface for every caller that looks a chat up.
@@ -590,6 +680,11 @@ impl<T: Transport> TelegramHost<T> {
             return;
         };
         let shared = ChatKind::classify(chat_id, topic).is_collective();
+        // An RPG world is inherently the viewer's own (their inventory), so it is ALWAYS projected
+        // per-viewer — a press acts in the presser's own world and re-renders as theirs (the
+        // Discord model). A shared table keeps the who-can-read-this rule: viewer-blind in a
+        // collective chat, per-viewer in a DM.
+        let per_viewer = !shared || is_rpg_key(key);
         let surface_sid = TelegramFrontend::<T>::surface_id(chat_id, topic, key);
         // The surface is (re)painted fresh — any previously-armed text slot is now stale
         // (the affordance moved on), so drop it. Arming a text slot ([`Self::press`]) returns
@@ -599,11 +694,11 @@ impl<T: Transport> TelegramHost<T> {
             let k = key.to_string();
             let s = sid.clone();
             let v = viewer.clone();
-            self.host.run(move |h| {
-                if shared {
-                    (h.render(&k, &s), h.actions(&k, &s))
-                } else {
+            self.run_offering(key, viewer, move |h| {
+                if per_viewer {
                     (h.render_for(&k, &s, &v), h.actions_for(&k, &s, &v))
+                } else {
+                    (h.render(&k, &s), h.actions(&k, &s))
                 }
             })
         };
@@ -689,7 +784,13 @@ impl<T: Transport> TelegramHost<T> {
             if active == MENU_KEY {
                 return HostPress::NotOffered;
             }
-            let report = self.verify(&active, &sid);
+            // Re-verify the PRESSER's own chain — for an RPG key that is a session in their own
+            // world, so verify must route to the same world its turns landed in.
+            let report = {
+                let k = active.clone();
+                let s = sid.clone();
+                self.run_offering(&active, &viewer, move |h| h.verify(&k, &s))
+            };
             return HostPress::Verified {
                 key: active,
                 report,
@@ -753,13 +854,14 @@ impl<T: Transport> TelegramHost<T> {
         }
 
         // A non-text move: the CORE resolves the typed action on the real substrate — one turn.
-        // Label + enabled are decoration; the executor resolves the typed (turn, arg).
+        // Label + enabled are decoration; the executor resolves the typed (turn, arg). Routed to
+        // the presser's own world for an RPG key.
         let actor = viewer.clone();
         let action = Action::new(turn.clone(), turn, arg, true);
         let outcome = {
             let k = key.clone();
             let s = sid.clone();
-            self.host.run(move |h| h.advance(&k, &s, action, actor))
+            self.run_offering(&key, &viewer, move |h| h.advance(&k, &s, action, actor))
         };
         match outcome {
             Some(outcome) => {
@@ -842,7 +944,8 @@ impl<T: Transport> TelegramHost<T> {
         let outcome = {
             let k = key.clone();
             let s = sid.clone();
-            self.host.run(move |h| h.advance(&k, &s, action, actor))
+            // Routed to the acting user's own world for an RPG key (a per-player document/craft edit).
+            self.run_offering(&key, &viewer, move |h| h.advance(&k, &s, action, actor))
         };
         match outcome {
             Some(outcome) => {
