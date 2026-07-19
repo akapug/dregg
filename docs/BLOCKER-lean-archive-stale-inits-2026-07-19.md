@@ -36,3 +36,23 @@ mid-rename / possibly non-compiling.
 Several commits from 2026-07-19 are **type-checked, not observed passing** (each says so in its
 message): the telegram hidden-hand fix, the weighted-council restore, names+hermes label fix.
 They need one clean `cargo test` run once the metatheory build settles.
+
+## WORKAROUND (found 2026-07-19, verified)
+Crates that do not themselves use Lean can run their tests right through this blocker:
+
+```
+CARGO_TARGET_DIR=/tmp/verify-tgt \
+  cargo test -p <crate> --features dregg-sdk/no-lean-link
+```
+
+A scratch `CARGO_TARGET_DIR` keeps the differing feature set from churning the shared target
+(and from fighting co-tenant builds). Verified: `dreggnet-names` 9/0 and `dreggnet-hermes` 11/0
+RAN this way — including the runtime refusal assertions a type-check cannot speak to — while
+`cargo test -p dreggnet-names` still fails to link.
+
+Feature path matters: `no-lean-link` is declared on `dregg-verifier`/`dregg-sdk`, NOT on
+`dregg-lean-ffi`, and `-p X --features dep/feat` needs `dep` to be a dependency of X
+(dreggnet-names/hermes dep dregg-sdk; dreggnet-council does not — it needs another route).
+
+Still outstanding under this workaround: dreggnet-telegram (hidden-hand), dreggnet-council
+(weighted), dreggnet-web (descent_funnel) — worth a pass each.
