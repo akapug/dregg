@@ -304,6 +304,18 @@ stark-kill), statement/VK-pins (the last blocks), full per-challenge link-covera
 with me falsely calling the whole verifier redundant; it ends with the SOUNDNESS HEART closed + verified by
 my own hand-run of a mutation test. The reality-gate discipline held every cycle.
 
+
+## ✅ block-3 DAG residual RESOLVED (07-19 scout) — PERMANENT trusted-reference, not a gap
+The shrink DAG = plonky3-recursion's IN-CIRCUIT VERIFIER tables (~/dev/plonky3-recursion, field-generic,
+separate repo) — a wrapped third-party object, same class as the deployed p3 prover. dregg supplies only
+CONFIG. "Author it in Lean" = re-implement a third-party recursion verifier = out of scope. The CHECK is
+Lean-authored (batchTable_refines ∀ every DAG); the DAG's PROVENANCE is a trusted reference, faithfulness
+discharged empirically by the real-fixture ~124-bit quotient identity. STARK-KILL does NOT converge on it
+(it authors dregg's OWN effect-vm AIRs, not the p3-recursion verifier tables — the plan-doc aside was
+inaccurate, corrected). So residual 1 is NOT a to-do — it's an honest trust-boundary, correctly named
+(docs fixed). The 383cfdad5 split stands. Standing lesson: not every residual is work; some are honest
+trust-references (like the deployed prover). Cycle 8 (statement/VK + full canary) still running.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
