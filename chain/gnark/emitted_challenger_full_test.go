@@ -174,11 +174,19 @@ func allocVerifierFullWithTranscript(t *testing.T, fx *shrinkRealFixture, sym *S
 	if err != nil {
 		t.Fatalf("anchored prefix location (for the block-3 challenge link offsets): %v", err)
 	}
+	shapes := shrinkShapesFromFixture(t, fx)
 	meta := &shrinkTranscriptMeta{
 		script: a.script, cfg: a.cfg, r: a.r, rollInAfterRound: a.rollInAfterRound,
 		tpl:             loadPoseidon2TemplateT(t),
 		permChSampleOff: loc.permChSampleOff,
 		alphaSampleOff:  loc.alphaSampleOff,
+		// THE ZETA BIND: the squeeze-asserted zeta the selectors are re-derived at,
+		// and the observed streams the openings-at-zeta are equated against.
+		zetaSampleOff: loc.zetaSampleOff,
+		openedObsOff:  loc.openedObsOff,
+		cumObsOff:     loc.cumObsOff,
+		pubObsOff:     loc.pubObsOff,
+		shapes:        shapes,
 	}
 	c, err := AllocVerifierFullCircuitWithTranscript(loadVerifierFullT(t), sym, meta,
 		len(a.PrefixObs), len(a.PrefixDigests), len(a.PrefixSamples),
@@ -333,8 +341,8 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	// Instance 0 (const): the smallest instance carrying the LogUp bus (NL=1, NPV=0).
 	const i0 = 0
 	sh0 := ex.shapes[i0]
-	chStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+2*sh0.NumLookups)   // permAlpha lane 0
-	selStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+5*sh0.NumLookups)  // isFirstRow lane 0
+	chStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+2*sh0.NumLookups)  // permAlpha lane 0
+	selStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+5*sh0.NumLookups) // isFirstRow lane 0
 	alphaStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+5*sh0.NumLookups+3) + sh0.NumPublicValues
 	outStart0 := alphaStart0 + 4
 
@@ -343,10 +351,18 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	// block's in-circuit folded == out identity. Used to recompute `out` so a block-3
 	// challenge tamper stays OTHERWISE-VALID (the block alone still accepts it) and the
 	// differential isolates the transcript LINK, not the block's own quotient identity.
-	instFolded := func(chMut func(*shrinkStarkChallengesRef), selMut func(*starkSelectorsRef)) bbExtRef {
+	// `openMut`, when non-nil, mutates a COPY of the flat opened-values stream first —
+	// the twin used by the openings canary (tooth 2 of the zeta bind).
+	instFolded := func(chMut func(*shrinkStarkChallengesRef), selMut func(*starkSelectorsRef),
+		openMut func([]bbExtRef)) bbExtRef {
 		sp := spans[i0]
 		inst := &sym.Instances[i0]
-		slice := func(s efSpan) []bbExtRef { return ex.openedEF[s.off : s.off+s.len] }
+		ef := ex.openedEF
+		if openMut != nil {
+			ef = append([]bbExtRef(nil), ex.openedEF...)
+			openMut(ef)
+		}
+		slice := func(s efSpan) []bbExtRef { return ef[s.off : s.off+s.len] }
 		chc := ex.ch
 		if chMut != nil {
 			chMut(&chc)
@@ -390,19 +406,31 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 		{"block4-query-index", func(w []frontend.Variable) { bumpLane(w, idxStart) }},
 		{"block3-folding-alpha", func(w []frontend.Variable) {
 			bumpLane(w, alphaStart0)
-			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.alpha[0] = bbAddRef(c.alpha[0], 1) }, nil))
+			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.alpha[0] = bbAddRef(c.alpha[0], 1) }, nil, nil))
 		}},
 		{"block3-permAlpha", func(w []frontend.Variable) {
 			for l := 0; l < sh0.NumLookups; l++ { // every lookup's permAlpha the link binds
 				bumpLane(w, chStart0+8*l)
 			}
-			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.permAlpha[0] = bbAddRef(c.permAlpha[0], 1) }, nil))
+			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.permAlpha[0] = bbAddRef(c.permAlpha[0], 1) }, nil, nil))
 		}},
 		{"block3-permBeta", func(w []frontend.Variable) {
 			for l := 0; l < sh0.NumLookups; l++ { // every lookup's permBeta the link binds
 				bumpLane(w, chStart0+8*l+4)
 			}
-			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.permBeta[0] = bbAddRef(c.permBeta[0], 1) }, nil))
+			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.permBeta[0] = bbAddRef(c.permBeta[0], 1) }, nil, nil))
+		}},
+		// THE OPENINGS BIND (bindBlockZeta tooth 2): bump the first felt of instance
+		// i0's first opened trace value and recompute `out` at the tampered opening, so
+		// the block's own folded == out identity still holds. Stage OFF that is a valid
+		// witness — the openings were free. Stage ON the opened-value bind equates it
+		// with the transcript-observed opened stream, so it is UNSAT.
+		{"block3-opened-trace-at-zeta", func(w []frontend.Variable) {
+			bumpLane(w, instStart[i0]) // TraceLocal[0] lane 0 — the first ext starkInstance draws
+			putExt(w, outStart0, instFolded(nil, nil, func(ef []bbExtRef) {
+				o := spans[i0].traceLocal.off
+				ef[o][0] = bbAddRef(ef[o][0], 1)
+			}))
 		}},
 	}
 	for _, tc := range linked {
@@ -428,12 +456,18 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	// FINDINGS — challenge types the block-challenge link does NOT close.
 	// -----------------------------------------------------------------------
 
-	// (F1) zeta — RESIDUAL, the hole partly open. Tamper instance 0's Lagrange
-	// selectors to those of a zeta the transcript never sampled and recompute out:
-	// the block accepts (stage OFF), and — since no link binds the selectors — the
-	// stage-ON circuit accepts too. The stage-ON-REJECT polarity FAILS, the tell of
-	// an unbound challenge (seam #2: block 3's zeta-derived selectors/openings are
-	// not tied to the squeeze-asserted zeta sample).
+	// (F1) zeta — CLOSED (was: RESIDUAL, hole partly open). Block 3 consumes zeta
+	// only INDIRECTLY, through the Lagrange selectors and the openings-at-zeta, so
+	// the block-challenge link has no zeta slot to equate. bindBlockZeta closes it
+	// by RE-DERIVATION instead: it recomputes the selectors in-circuit from the
+	// squeeze-asserted zeta (computeStarkSelectorsNative at each instance's
+	// degree_bits) and asserts the block's supplied selectors equal them.
+	//
+	// The canary below is the exact favorable-zeta forgery: pick a zeta the
+	// transcript never sampled, supply the matching selector triple AND the matching
+	// `out`, so the block's own quotient identity is satisfied. Stage OFF the block
+	// accepts it (nothing local objects); stage ON it must be UNSAT. Both polarities
+	// are ASSERTED, so a regression that drops the bind fails here.
 	zetaTamper := func(w []frontend.Variable) {
 		badZeta := bbExtRef{bbAddRef(ex.ch.zeta[0], 1), ex.ch.zeta[1], ex.ch.zeta[2], ex.ch.zeta[3]}
 		sel, serr := computeStarkSelectorsRef(badZeta, sh0.DegreeBits)
@@ -443,7 +477,7 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 		putExt(w, selStart0, sel.isFirstRow)
 		putExt(w, selStart0+4, sel.isLastRow)
 		putExt(w, selStart0+8, sel.isTransition)
-		putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.zeta[0] = bbAddRef(c.zeta[0], 1) }, nil))
+		putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.zeta[0] = bbAddRef(c.zeta[0], 1) }, nil, nil))
 	}
 	offZ := assignVerifierFull(t, fx, ex, sym)
 	zetaTamper(offZ.W)
@@ -451,17 +485,37 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 		t.Fatalf("zeta finding: stage-OFF rejected a self-consistent wrong-zeta selector set "+
 			"(the demonstration is malformed, not a real result): %v", err)
 	}
+	// ATTRIBUTION polarity. `offAlloc` carries no transcript stage AT ALL, so the
+	// stage-OFF/stage-ON pair alone only shows "some constraint in the stage" rejects
+	// the tamper — it does not pin WHICH. This third polarity runs the SAME tamper on
+	// the SAME stage-ON circuit with only bindBlockZeta disabled (zetaSampleOff < 0,
+	// the early return), and requires it to ACCEPT. That isolates the rejection to
+	// bindBlockZeta specifically: with every other stage constraint present and only
+	// the zeta bind removed, the wrong-zeta selector forgery goes through again.
+	bindOffAlloc := allocVerifierFullWithTranscript(t, fx, sym)
+	bindOffAlloc.txMeta.zetaSampleOff = -1
+	bindOffZ := assignVerifierFullWithTranscript(t, fx, ex, sym)
+	zetaTamper(bindOffZ.W)
+	if err := test.IsSolved(bindOffAlloc, bindOffZ, field); err != nil {
+		t.Fatalf("zeta: stage-ON with the zeta bind DISABLED rejected the wrong-zeta selector set — "+
+			"the rejection below is therefore NOT attributable to bindBlockZeta, and this canary "+
+			"does not prove the zeta forgery vector is what closed it: %v", err)
+	}
 	onZ := assignVerifierFullWithTranscript(t, fx, ex, sym)
 	zetaTamper(onZ.W)
-	if err := test.IsSolved(onAlloc, onZ, field); err != nil {
-		t.Logf("zeta: stage-ON REJECTED the wrong-zeta selector set — zeta IS bound after all "+
-			"(seam #2 appears closed; update this finding): %v", err)
-	} else {
-		t.Logf("FINDING zeta (RESIDUAL, hole partly open): stage-ON ACCEPTS a self-consistent " +
-			"wrong-zeta selector/out set — block 3 consumes zeta only through host-derived selectors + " +
-			"openings-at-zeta (seam #2), which the block-challenge link does NOT bind. The zeta SAMPLE is " +
-			"squeeze-asserted by the stage, but block 3's zeta-derived inputs are not linked to it.")
+	if err := test.IsSolved(onAlloc, onZ, field); err == nil {
+		t.Fatal("zeta: stage-ON ACCEPTED a self-consistent wrong-zeta selector/out set — " +
+			"bindBlockZeta does not bind block 3's selectors to the transcript-squeezed zeta")
 	}
+	// The ACCEPT half of the honest path is asserted by
+	// TestEmittedVerifierFullTranscriptRederivesChallenges, which solves this same
+	// stage-ON circuit (zeta bind ON) on the untampered real proof — without it, a
+	// bind that rejected EVERYTHING would pass the reject polarity above vacuously.
+	t.Logf("zeta: CLOSED (stage-OFF ACCEPT / stage-ON+bind-OFF ACCEPT / stage-ON+bind-ON REJECT) — " +
+		"the rejection is attributable to bindBlockZeta alone: the selectors are forced to be " +
+		"computeStarkSelectorsNative at the squeeze-asserted zeta, so a selector set at any other " +
+		"point is UNSAT; the openings-at-zeta are additionally equated against the transcript-observed " +
+		"opened stream (bindBlockZeta tooth 2).")
 
 	// (F2) FRI betas / query indices: the descriptor consumes a SINGLE representative
 	// of each — one fold-beta operand and one query-index sample — so only betas[0]
@@ -482,7 +536,10 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 		"block consumes it, so it is outside the block-challenge link (stage-bound, not block-linked).")
 
 	t.Logf("VERDICT: block-linked challenges proven load-bearing (stage-OFF ACCEPT / stage-ON REJECT): " +
-		"block1-fold-beta, block4-query-index, block3-folding-alpha, block3-permAlpha, block3-permBeta. " +
-		"Residual (not block-linked): zeta + FRI-batch-alpha (prefix samples, no block witness; zeta's " +
-		"selectors/openings are seam #2) and the non-representative FRI betas / query indices (stage-bound).")
+		"block1-fold-beta, block4-query-index, block3-folding-alpha, block3-permAlpha, block3-permBeta, " +
+		"and zeta (bound by RE-DERIVATION, not equality: the selectors ARE the derivation at the squeeze). " +
+		"Residual (not block-linked): FRI-batch-alpha (prefix sample, no block witness) and the " +
+		"non-representative FRI betas / query indices (stage-bound). Residual on zeta, at current " +
+		"resolution: the openings are bound to the TRANSCRIPT, not proven to BE the committed " +
+		"polynomials' evaluations at zeta — that is the DEEP/PCS reduction, still seam #2.")
 }

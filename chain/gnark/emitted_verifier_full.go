@@ -538,6 +538,22 @@ type VerifierFullCircuit struct {
 	block3Alpha      []BBExt             // block 3 per-instance constraint-folding alpha
 	block4QueryIdx   []frontend.Variable // block 4 SampleBitsDecomposed query-index witness
 
+	// --- THE ZETA BIND capture (block 3's zeta-derived inputs). ---
+	//
+	// Block 3 never consumes zeta as a challenge witness: zeta enters through the
+	// Lagrange SELECTORS and the OPENINGS AT ZETA. So the challenge link above has
+	// no zeta slot to equate — the bind is a RE-DERIVATION instead. expand()
+	// records, per instance, the three selector witnesses (+ that instance's trace
+	// degree_bits, the descriptor's `degree_bits` param) and the opened-value /
+	// cumulative-sum / public-value witnesses it consumed; Define
+	// (bindBlockSelectorsToZeta) recomputes the selectors from the
+	// transcript-squeezed zeta with computeStarkSelectorsNative — the SAME routine
+	// the deployed VerifyShrinkStarkAlgebra runs — and asserts equality, and equates
+	// the opened values against the transcript-observed stream. Captured
+	// unconditionally; only USED when txMeta != nil.
+	block3Selectors []block3SelectorSlot
+	block3Opened    []block3OpenedSlot
+
 	// --- THE STATEMENT BIND + VK PINS (settlement_circuit.go:241-285). ---
 	//
 	// claimChannel is the block-3 ExposeClaim instance's public-value lanes — the
@@ -649,6 +665,14 @@ func (c *VerifierFullCircuit) Define(api frontend.API) error {
 		// (captured during expand) to the transcript-re-derived challenge. After this,
 		// no block can use a challenge that is not the sponge squeeze of the real roots.
 		c.bindBlockChallengesToTranscript(bb, betas, queryIdxBits)
+		// THE ZETA BIND: block 3 consumes zeta only through its zeta-DERIVED inputs,
+		// so the link above cannot reach it. Re-derive the Lagrange selectors
+		// in-circuit from the squeeze-asserted zeta and force block 3's supplied
+		// selectors to equal them, and equate the openings-at-zeta against the
+		// transcript-observed opened stream.
+		if err := c.bindBlockZeta(bb); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -716,14 +740,13 @@ func (c *VerifierFullCircuit) bindVkPins(api frontend.API) error {
 //   - block 4 (query_pow): the range-checked query index == the transcript's
 //     live-sampled query index.
 //
-// NAMED RESIDUAL (described at current resolution): block 3 does not consume zeta as
-// a challenge WITNESS — zeta enters only through the host-derived Lagrange selectors
-// and the openings-at-zeta, which the emit skeleton takes as inputs rather than
-// deriving in-circuit (the open_input structural abstraction, seam #2). So there is
-// no zeta slot to bind here; the zeta-boundness of the selectors/openings remains the
-// pre-existing seam-#2 residual, orthogonal to this challenge link. The scope is the
-// pinned fixture shape (extra_query_index_bits == 0, so the sampled domain index is
-// the full query index block 4 range-checks).
+// ZETA is handled SEPARATELY, by bindBlockZeta: block 3 does not consume zeta as a
+// challenge WITNESS — zeta enters only through the Lagrange selectors and the
+// openings-at-zeta — so there is no zeta slot to equate here. That function binds it
+// by RE-DERIVATION instead (selectors recomputed in-circuit at the squeezed zeta) plus
+// an equality against the transcript-observed opened stream. The scope is the pinned
+// fixture shape (extra_query_index_bits == 0, so the sampled domain index is the full
+// query index block 4 range-checks).
 func (c *VerifierFullCircuit) bindBlockChallengesToTranscript(bb *BBApi, betas []BBExt,
 	queryIdxBits [][]frontend.Variable) {
 	api := bb.API()
@@ -764,6 +787,194 @@ func (c *VerifierFullCircuit) bindBlockChallengesToTranscript(bb *BBApi, betas [
 			api.AssertIsEqual(v, idx)
 		}
 	}
+}
+
+// bindBlockZeta closes the zeta residual the challenge link above names: block 3
+// consumes zeta only INDIRECTLY, so there is no zeta witness to equate. Two teeth,
+// both against the transcript stage's own bound streams:
+//
+//   - THE SELECTOR DERIVATION (m.zetaSampleOff). zeta is the prefix squeeze the
+//     stage already squeeze-asserts onto TxPrefixSamp. This recomputes the Lagrange
+//     selectors IN-CIRCUIT at that zeta with computeStarkSelectorsNative — the SAME
+//     routine the deployed VerifyShrinkStarkAlgebra runs (stark_verify_native.go:379,
+//     domain.rs:262-271): E = zeta^(2^db), Z_H = E - 1, isTransition = zeta - g^{-1},
+//     isFirstRow = Z_H·(zeta-1)^{-1}, isLastRow = Z_H·isTransition^{-1} — and asserts
+//     the block's three supplied selector witnesses equal it, per instance, at that
+//     instance's degree_bits. A selector set at ANY other point is now UNSAT: the
+//     favorable-zeta forgery (pick a zeta the transcript never sampled, supply the
+//     matching selectors and the matching `out`) has no satisfying assignment.
+//     Derivations are memoized per degree_bits (the fixture's 6 instances carry 4
+//     distinct trace degrees), so the zeta-squaring chains are shared, not repeated.
+//     Note the ExtInv teeth: gnark's ExtInv constrains inv·x == 1, so zeta == 1 or
+//     zeta == g^{-1} (the degenerate points where the multiplicative form would leave
+//     a selector free) are themselves UNSAT rather than silently unconstrained.
+//
+//   - THE OPENINGS BIND (m.openedObsOff / cumObsOff / pubObsOff). The values block 3
+//     evaluates the DAG on were free witness. The transcript ABSORBS them: the
+//     prefix event stream is `sample(zeta), observe_bb(opened values at zeta),
+//     sample(FRI alpha)` (locateShrinkStarkPrefix), plus `observe_bb(cumulative
+//     sums)` before the folding alpha and the publics block at the head. This slices
+//     the flat opened stream with buildStarkOpenedSpans — the SAME layout walk the
+//     deployed verifier uses — and equates every opened-value witness with its
+//     transcript-observed felt: trace/preprocessed rows directly, the permutation
+//     columns through ExtFromBasisCoefficients (the verifier's basis recomposition,
+//     mod.rs:543-556), and the verifier's ZERO SUBSTITUTION for AIRs that open no
+//     next row (mod.rs:563-581) as an assert-zero. So block 3 evaluates the openings
+//     the transcript committed to — the ones zeta and every downstream challenge were
+//     drawn over — not a favorable re-authored set.
+//
+// THE SUBSTRATE, SAID OUT LOUD: these constraints are GO-SIDE, hand-written. They
+// are not emitted from Lean. computeStarkSelectorsNative (stark_verify_native.go:379)
+// is a hand-Go gadget and this function calls it — so the zeta bind carries the same
+// posture as the rest of the hand-Go verifier lane, NOT the machine-checked
+// refinement the Lean-emitted leaves (Poseidon2Emit, InputOpenBatchEmit,
+// ChallengerReplayEmit) carry. That is debt, and it is the SMALL half of a seam Lean
+// already names: BatchTablesSingleAir.lean §80-92 already specs and BatchTableEmit
+// already EMITS the vanishing recompute Z_H(ζ)+1 = ζ^{2^db} and the genuine-inverse
+// pin Z_H·invZ_H = 1 at the Fr layer; what it does NOT author is (a) the ζ-rational
+// recompute of the two Lagrange selectors isFirstRow = Z_H/(ζ-1), isLastRow =
+// Z_H/(ζ-g^{-1}), and (b) the transcript bind of ζ itself — literally the follow-up
+// BatchTablesSingleAir.lean §272 item 3 names ("Bind alpha and zeta to the
+// transcript") and BatchTableEmit's header §residual names ("ζ, α and the Lagrange
+// selectors ride as witness inputs of this leaf; binding them to the challenger
+// replay (and the selectors to their ζ-rational recompute) is the transcript-bind
+// composition seam"). The Lean route is TRACTABLE and small: the BabyBearFr gadget
+// lane already has proven gExtMul/gExtSub/gExtMulBase (FriFoldEmit.lean
+// gExtMul_spec: out.vals = extMulV a.vals b.vals), so a SelectorEmit leaf is the
+// ζ-squaring chain those already build plus two inverse pins, with a refinement
+// theorem `gHolds (selectorsData db) asg ↔ sel = selectorsAtPoint ζ db`, JSON-pinned
+// and replayed here through ReplayClosed against these same witness slots. Until
+// that lands, the constraints below are Go-side and prove nothing about all inputs
+// beyond what the canaries in emitted_challenger_full_test.go exercise.
+//
+// NAMED RESIDUAL, at current resolution: this binds the openings to the TRANSCRIPT,
+// not to the claim that they ARE the committed polynomials' evaluations at zeta.
+// That last step is the DEEP/PCS argument (recompose the quotient from the opened
+// chunks, then FRI over the batch-combined quotient) — the emit skeleton models the
+// FRI fold rows and the input-batch Merkle openings but not the zeta-quotient
+// reduction, so "the openings are the true evaluations at zeta" remains seam #2.
+// What is CLOSED here is the wrong-zeta selector forgery and the free-openings
+// forgery; what is OPEN is the evaluation-correctness of a transcript-consistent
+// opening set.
+func (c *VerifierFullCircuit) bindBlockZeta(bb *BBApi) error {
+	api := bb.API()
+	m := c.txMeta
+	if m.zetaSampleOff < 0 {
+		return nil // zeta bind off (the constraint-cost differential; never a deployed path)
+	}
+	zeta := BBExt{}
+	for i := 0; i < 4; i++ {
+		zeta[i] = c.TxPrefixSamp[m.zetaSampleOff+i]
+	}
+
+	// --- tooth 1: the selectors ARE the derivation at the transcript zeta. ---
+	derived := make(map[int]starkSelectorsNative, len(c.block3Selectors))
+	for _, s := range c.block3Selectors {
+		d, ok := derived[s.db]
+		if !ok {
+			d = computeStarkSelectorsNative(bb, zeta, s.db)
+			derived[s.db] = d
+		}
+		bb.ExtAssertIsEqual(s.sel.isFirstRow, d.isFirstRow)
+		bb.ExtAssertIsEqual(s.sel.isLastRow, d.isLastRow)
+		bb.ExtAssertIsEqual(s.sel.isTransition, d.isTransition)
+	}
+
+	// --- tooth 2: the openings ARE the transcript-observed stream. ---
+	if m.shapes == nil {
+		return nil // openings bind off (structural probes that carry no shape list)
+	}
+	if len(m.shapes) != len(c.block3Opened) {
+		return fmt.Errorf("zeta bind: %d instance shapes for %d block-3 instances", len(m.shapes), len(c.block3Opened))
+	}
+	spans, totalEF := buildStarkOpenedSpans(m.shapes)
+	if want := m.openedObsOff + 4*totalEF; want > len(c.TxPrefixObs) {
+		return fmt.Errorf("zeta bind: opened stream needs %d observed felts, prefix has %d", want, len(c.TxPrefixObs))
+	}
+	// obsExt reads EF element j of the flat opened stream (4 base felts per EF).
+	obsExt := func(j int) BBExt {
+		var e BBExt
+		for i := 0; i < 4; i++ {
+			e[i] = c.TxPrefixObs[m.openedObsOff+4*j+i]
+		}
+		return e
+	}
+	zero := BBExt{0, 0, 0, 0}
+	bindRow := func(w []BBExt, sp efSpan, opened bool) error {
+		if !opened {
+			// The AIR opens no next row: the verifier substitutes ZERO.
+			for _, v := range w {
+				bb.ExtAssertIsEqual(v, zero)
+			}
+			return nil
+		}
+		if len(w) != sp.len {
+			return fmt.Errorf("zeta bind: %d witness exts for a span of %d", len(w), sp.len)
+		}
+		for k, v := range w {
+			bb.ExtAssertIsEqual(v, obsExt(sp.off+k))
+		}
+		return nil
+	}
+	// bindPerm equates each permutation column against the BASIS RECOMPOSITION of
+	// its 4 flattened opened EF values (mod.rs:543-556).
+	bindPerm := func(w []BBExt, sp efSpan) error {
+		if 4*len(w) != sp.len {
+			return fmt.Errorf("zeta bind: %d perm columns for a flattened span of %d", len(w), sp.len)
+		}
+		for k, v := range w {
+			var basis [4]BBExt
+			for b := 0; b < 4; b++ {
+				basis[b] = obsExt(sp.off + 4*k + b)
+			}
+			bb.ExtAssertIsEqual(v, bb.ExtFromBasisCoefficients(basis))
+		}
+		return nil
+	}
+	for _, o := range c.block3Opened {
+		sh, sp := m.shapes[o.inst], spans[o.inst]
+		for _, e := range []error{
+			bindRow(o.traceLocal, sp.traceLocal, true),
+			bindRow(o.traceNext, sp.traceNext, sh.HasTraceNext),
+			bindRow(o.preLocal, sp.preLocal, sh.PreWidth > 0),
+			bindRow(o.preNext, sp.preNext, sh.PreWidth > 0 && sh.HasPreNext),
+			bindPerm(o.permLocal, sp.permLocal),
+			bindPerm(o.permNext, sp.permNext),
+		} {
+			if e != nil {
+				return fmt.Errorf("instance %d openings: %w", o.inst, e)
+			}
+		}
+		// The LogUp cumulative sums block 3 folds are the ones the transcript absorbed
+		// before the constraint-folding alpha was drawn.
+		if m.cumObsOff >= 0 {
+			if len(o.permValues) != sp.cumSums.len {
+				return fmt.Errorf("instance %d: %d cumulative-sum witnesses for a stream span of %d",
+					o.inst, len(o.permValues), sp.cumSums.len)
+			}
+			for k, v := range o.permValues {
+				var e BBExt
+				for i := 0; i < 4; i++ {
+					e[i] = c.TxPrefixObs[m.cumObsOff+4*(sp.cumSums.off+k)+i]
+				}
+				bb.ExtAssertIsEqual(v, e)
+			}
+		}
+	}
+	// The per-instance public values (base-field), flattened in instance order in the
+	// head publics block — the claim channel block 5 and the apex-VK pin ride on.
+	if m.pubObsOff >= 0 {
+		flat := m.pubObsOff
+		for i, sh := range m.shapes {
+			for k := 0; k < sh.NumPublicValues; k++ {
+				if k < len(c.block3Opened[i].publicVals) {
+					api.AssertIsEqual(c.block3Opened[i].publicVals[k][0], c.TxPrefixObs[flat+k])
+				}
+			}
+			flat += sh.NumPublicValues
+		}
+	}
+	return nil
 }
 
 // AllocVerifierFullCircuitWithTranscript builds the emit-driven circuit WITH the
@@ -872,8 +1083,16 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 			return fmt.Errorf("BatchTableInstance count %d != companion DAG instances %d",
 				g.Count, len(c.sym.Instances))
 		}
+		// The descriptor's `degree_bits` param is the per-instance trace degree —
+		// the VK-side datum the Lagrange selectors are derived from. Fail-closed:
+		// the zeta bind cannot re-derive a selector whose domain it does not know.
+		dbs := g.Params["degree_bits"]
+		if len(dbs) != g.Count {
+			return fmt.Errorf("BatchTableInstance carries %d degree_bits for %d instances — "+
+				"the zeta bind needs one trace degree per instance", len(dbs), g.Count)
+		}
 		for i := range c.sym.Instances {
-			c.starkInstance(bb, cur, &c.sym.Instances[i])
+			c.starkInstance(bb, cur, &c.sym.Instances[i], i, dbs[i])
 		}
 
 	// block 3 — global LogUp balance: all cumulative sums add to zero
@@ -998,11 +1217,32 @@ func (c *VerifierFullCircuit) merklePath(api frontend.API, cur *varCursor, d int
 	VerifyMerklePathBn254(api, leaf, sibs, bits, root)
 }
 
+// block3SelectorSlot is one instance's Lagrange-selector witness triple paired
+// with the trace degree_bits that determines the vanishing polynomial — the input
+// to the zeta bind's in-circuit re-derivation.
+type block3SelectorSlot struct {
+	db  int
+	sel starkSelectorsNative
+}
+
+// block3OpenedSlot is one instance's openings-at-zeta witness feed, in the order
+// starkInstance consumed it. `inst` indexes the shape list so the binder can slice
+// the flat transcript-observed opened stream with buildStarkOpenedSpans.
+type block3OpenedSlot struct {
+	inst                                                          int
+	traceLocal, traceNext, preLocal, preNext, permLocal, permNext []BBExt
+	permValues                                                    []BBExt
+	publicVals                                                    []BBExt
+}
+
 // starkInstance materializes one batch-STARK instance's DAG evaluation over
 // fresh witness inputs, binding the folded value to a fresh output — the same
 // shape as settlement_profile_test.go's symEvalProfileCircuit, driven by the
 // emitted symbolic DAG (stark_constraint_interp.go).
-func (c *VerifierFullCircuit) starkInstance(bb *BBApi, cur *varCursor, inst *SymInstance) {
+// `db` is the instance's trace degree_bits (the descriptor's BatchTableInstance
+// `degree_bits` param) — recorded with the selector witnesses so the zeta bind can
+// re-derive Z_H(zeta) and the Lagrange selectors at the transcript zeta.
+func (c *VerifierFullCircuit) starkInstance(bb *BBApi, cur *varCursor, inst *SymInstance, idx, db int) {
 	extVec := func(n int) []BBExt {
 		out := make([]BBExt, n)
 		for i := range out {
@@ -1055,6 +1295,22 @@ func (c *VerifierFullCircuit) starkInstance(bb *BBApi, cur *varCursor, inst *Sym
 	// alpha/permAlpha/permBeta the transcript never sampled.
 	c.block3Challenges = append(c.block3Challenges, in.Challenges)
 	c.block3Alpha = append(c.block3Alpha, alpha)
+	// THE ZETA BIND capture: the three Lagrange selectors (+ this instance's
+	// degree_bits) and every value the instance opened AT zeta, so Define can force
+	// the selectors to BE computeStarkSelectorsNative(transcript zeta, db) and the
+	// openings to BE the transcript-observed opened stream.
+	c.block3Selectors = append(c.block3Selectors, block3SelectorSlot{db: db, sel: in.Sel})
+	c.block3Opened = append(c.block3Opened, block3OpenedSlot{
+		inst:       idx,
+		traceLocal: in.TraceLocal,
+		traceNext:  in.TraceNext,
+		preLocal:   in.PreLocal,
+		preNext:    in.PreNext,
+		permLocal:  in.PermLocal,
+		permNext:   in.PermNext,
+		permValues: in.PermValues,
+		publicVals: in.PublicValues,
+	})
 	folded := evalSymbolicFoldedNative(bb, inst, in, alpha)
 	bb.ExtAssertIsEqual(folded, out)
 }
