@@ -203,6 +203,21 @@
 //! than a *tree*. The 2-step inductive core of that loop is [`fold_two_turns`]
 //! (`running ∘ next_turn -> new_running`); see its docs for what the unbounded
 //! driver still needs.
+//!
+//! ## Prover memory: the resident tree vs the streaming fold
+//!
+//! The K-fold has two SCHEDULES over the SAME balanced tree (same DAG ⇒ same root segment /
+//! chain digest — the ordered digest is shape-sensitive, so shape identity is load-bearing):
+//!
+//!   * **RESIDENT** (default): mint all K leaf proofs, then fold ([`aggregate_tree`], or the
+//!     parallel merge-pool scan-state driver under `DREGG_MERGE_WORKERS`). Peak resident
+//!     recursion proofs O(K) — latency-optimal for a prover farm, pathological in RAM on a
+//!     long chain.
+//!   * **STREAMING** ([`prove_turn_chain_recursive_streaming`], or `DREGG_STREAM_FOLD_WINDOW`
+//!     for the default entries): interleave leaf proving with folding through a window + a
+//!     binary-counter carry stack ([`aggregate_tree_streaming`]). Peak resident proofs
+//!     O(W + log2(K/W)), independent of K; the root exposes the identical segment and verifies
+//!     via the unchanged [`verify_turn_chain_recursive`].
 
 use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
@@ -799,18 +814,12 @@ pub(crate) fn combine_seg(l: HostSeg, r: HostSeg) -> HostSeg {
     }
 }
 
-/// Fold the per-turn leaf segments into the ROOT segment using the SAME pairwise
-/// left-to-right binary tree (with odd-element carry) that [`aggregate_tree`] runs
-/// in-circuit — so the host-computed root `[first_old8, last_new8, count, acc]`
-/// equals what the root proof exposes.
-fn compute_root_segment(turns: &[&FinalizedTurn]) -> HostSeg {
-    let mut level: Vec<HostSeg> = turns
-        .iter()
-        .map(|t| {
-            let (o8, n8) = turn_anchors8(t);
-            leaf_seg(o8, n8)
-        })
-        .collect();
+/// Fold one LEVEL VECTOR of host segments through EXACTLY [`aggregate_tree`]'s balanced loop
+/// (pair adjacent left-to-right; odd tail promoted unchanged to the END of the next level) —
+/// extracted so the balanced root-segment mirror AND the streaming mirror's window fold share
+/// the ONE loop shape the in-circuit tree runs.
+fn fold_host_segs_balanced(mut level: Vec<HostSeg>) -> HostSeg {
+    debug_assert!(!level.is_empty());
     while level.len() > 1 {
         let mut next: Vec<HostSeg> = Vec::with_capacity(level.len().div_ceil(2));
         let mut i = 0;
@@ -824,6 +833,48 @@ fn compute_root_segment(turns: &[&FinalizedTurn]) -> HostSeg {
         level = next;
     }
     level[0]
+}
+
+/// The per-turn leaf segments in chain order — the level-0 vector both root-segment mirrors fold.
+fn turn_leaf_segs(turns: &[&FinalizedTurn]) -> Vec<HostSeg> {
+    turns
+        .iter()
+        .map(|t| {
+            let (o8, n8) = turn_anchors8(t);
+            leaf_seg(o8, n8)
+        })
+        .collect()
+}
+
+/// Fold the per-turn leaf segments into the ROOT segment using the SAME pairwise
+/// left-to-right binary tree (with odd-element carry) that [`aggregate_tree`] runs
+/// in-circuit — so the host-computed root `[first_old8, last_new8, count, acc]`
+/// equals what the root proof exposes.
+fn compute_root_segment(turns: &[&FinalizedTurn]) -> HostSeg {
+    fold_host_segs_balanced(turn_leaf_segs(turns))
+}
+
+/// The host mirror of [`aggregate_tree_streaming`]'s schedule over [`HostSeg`]s. Because the
+/// streaming schedule reproduces the balanced tree's EXACT shape (witnessed exhaustively by the
+/// `streaming_fold_tests`), this equals [`fold_host_segs_balanced`] — and the streaming prover
+/// asserts exactly that, fail-closed, before proving a single leaf.
+fn fold_host_segs_streaming(segs: &[HostSeg], window: usize) -> HostSeg {
+    let folded: Result<HostSeg, core::convert::Infallible> = streaming_fold_schedule(
+        segs.len(),
+        window,
+        |i| Ok(segs[i]),
+        |buf| Ok(fold_host_segs_balanced(buf)),
+        |l, r| Ok(combine_seg(l, r)),
+    );
+    match folded {
+        Ok(seg) => seg,
+    }
+}
+
+/// [`compute_root_segment`]'s streaming twin: the root segment the STREAMING fold's root will
+/// expose, computed host-side through the same schedule.
+fn compute_root_segment_streaming(turns: &[&FinalizedTurn], window: usize) -> HostSeg {
+    fold_host_segs_streaming(&turn_leaf_segs(turns), window)
 }
 
 /// Build the Lean-emitted turn-chain descriptor witness from the scalar projection returned by
@@ -1897,6 +1948,33 @@ pub fn prove_turn_chain_recursive_rotated(
     prove_chain_core_rotated(&refs, &selectors)
 }
 
+/// **THE BOUNDED-MEMORY streaming sibling of [`prove_turn_chain_recursive`].** Same host
+/// admission, same root claim, same verifier — but leaf PROVING is interleaved with FOLDING
+/// ([`aggregate_tree_streaming`]), so peak resident recursion proofs are O(W + log2(K/W))
+/// instead of O(K). `window` is the memory budget W in leaf proofs (floored to a power of two,
+/// min 2; [`DEFAULT_STREAM_FOLD_WINDOW`] is the recommended small constant): `2` degenerates to
+/// an (almost) pure sequential fold, a large window approaches the resident tree's parallelism
+/// window. The root exposes the IDENTICAL segment as the resident fold — the streaming schedule
+/// reproduces `aggregate_tree`'s tree shape exactly, which is load-bearing because the ordered
+/// chain digest is shape-sensitive — so artifacts from either path verify interchangeably
+/// against the same [`RecursionVk`] anchor.
+///
+/// The default entries take this path too when `DREGG_STREAM_FOLD_WINDOW` is set
+/// ([`STREAM_FOLD_WINDOW_ENV`]); this function is the programmatic, explicit-window twin.
+pub fn prove_turn_chain_recursive_streaming(
+    turns: &[FinalizedTurn],
+    window: usize,
+) -> Result<WholeChainProof, TurnChainError> {
+    let mut selectors = Vec::with_capacity(turns.len());
+    for (i, t) in turns.iter().enumerate() {
+        let s = verify_descriptor_participant(&t.participant)
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+        selectors.push(s);
+    }
+    let refs: Vec<&FinalizedTurn> = turns.iter().collect();
+    prove_chain_core_rotated_with_fold(&refs, &selectors, ChainFoldStrategy::Streaming { window })
+}
+
 /// The host-side whole-chain summary the staged welded fold computes: the four chain claims the
 /// in-circuit root segment exposes, derived from the welded legs' rotated `(old_root, new_root)`
 /// (PI 34/35 — intact through the weld) folded through the SAME ordered binary tree the recursion
@@ -2867,11 +2945,70 @@ fn carrier_claim_pins_admitted(
     Ok(())
 }
 
-/// The rotated fold core: like [`prove_chain_core`] but mints rotated native-batch leaves and
-/// runs the whole tree at [`ir2_leaf_wrap_config`].
+/// The env knob that opts the DEFAULT chain-fold entries ([`prove_turn_chain_recursive`] and its
+/// `_rotated` / `_without_host_gate` siblings — all of which route through
+/// [`prove_chain_core_rotated`]) into the bounded-memory STREAMING fold. Unset ⇒ the resident
+/// collect-then-fold path, byte-for-byte today's behavior. Set to an integer `>= 2` ⇒ streaming
+/// with that window; set to anything else (empty, `0`, `1`, garbage) ⇒ streaming with
+/// [`DEFAULT_STREAM_FOLD_WINDOW`]. The programmatic twin is
+/// [`prove_turn_chain_recursive_streaming`], which takes the window explicitly.
+pub const STREAM_FOLD_WINDOW_ENV: &str = "DREGG_STREAM_FOLD_WINDOW";
+
+/// The default streaming window W. Peak resident proofs on the streaming path are about
+/// `1.5 * W` (the window fold's per-level transient) plus `log2(K / W)` carry-stack sub-roots;
+/// W = 8 keeps that around a dozen fat recursion proofs on ANY chain length while still letting
+/// the window-internal tree amortize.
+pub const DEFAULT_STREAM_FOLD_WINDOW: usize = 8;
+
+/// How the whole-chain fold schedules leaf proving + tree aggregation. Both strategies fold the
+/// IDENTICAL balanced-tree DAG (same pairing, same odd-tail promotion, same per-node
+/// [`merge_two_segment_proofs`]), so both roots expose the SAME ordered segment — shape identity
+/// is load-bearing because the ordered digest is NOT associative (see
+/// [`aggregate_tree_streaming`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChainFoldStrategy {
+    /// Mint ALL K leaves, then fold the tree (today's path; the merge-pool scan-state driver
+    /// when `DREGG_MERGE_WORKERS` is set). Peak resident proofs O(K) — latency-optimal on a
+    /// prover farm, pathological in RAM on a long chain.
+    Resident,
+    /// The bounded-memory streaming fold: prove leaves in windows of `window` (floored to a
+    /// power of two, min 2), fold each window to ONE sub-root, carry sub-roots in a
+    /// binary-counter stack. Peak resident proofs O(window + log2(K/window)), independent of K.
+    Streaming { window: usize },
+}
+
+impl ChainFoldStrategy {
+    /// Read the operator opt-in ([`STREAM_FOLD_WINDOW_ENV`]); unset keeps [`Self::Resident`].
+    pub fn from_env() -> Self {
+        match std::env::var(STREAM_FOLD_WINDOW_ENV) {
+            Err(_) => ChainFoldStrategy::Resident,
+            Ok(v) => ChainFoldStrategy::Streaming {
+                window: v
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|&n| n >= 2)
+                    .unwrap_or(DEFAULT_STREAM_FOLD_WINDOW),
+            },
+        }
+    }
+}
+
+/// The rotated fold core at the OPERATOR-DEFAULT fold strategy ([`ChainFoldStrategy::from_env`]:
+/// resident unless `DREGG_STREAM_FOLD_WINDOW` opts into streaming).
 fn prove_chain_core_rotated(
     turns: &[&FinalizedTurn],
     selectors: &[usize],
+) -> Result<WholeChainProof, TurnChainError> {
+    prove_chain_core_rotated_with_fold(turns, selectors, ChainFoldStrategy::from_env())
+}
+
+/// The rotated fold core: like [`prove_chain_core`] but mints rotated native-batch leaves and
+/// runs the whole tree at [`ir2_leaf_wrap_config`], scheduling leaf proving + aggregation per the
+/// given [`ChainFoldStrategy`].
+fn prove_chain_core_rotated_with_fold(
+    turns: &[&FinalizedTurn],
+    selectors: &[usize],
+    strategy: ChainFoldStrategy,
 ) -> Result<WholeChainProof, TurnChainError> {
     if selectors.len() != turns.len() {
         return Err(TurnChainError::RecursionFailed {
@@ -2920,9 +3057,86 @@ fn prove_chain_core_rotated(
     // the root's exposed segment is what binds the claim now). It is NOT folded into the root.
     let binding_inner = prove_chain_binding_descriptor_rotated(turns)?;
 
-    let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> =
-        Vec::with_capacity(turns.len());
+    // — THE FOLD DISPATCH: two memory shapes over the SAME tree ------------------------------
+    //
+    // Both strategies fold the identical balanced-tree DAG, so both roots expose the SAME
+    // ordered segment. The shape matters: the ordered digest `acc = H(L.acc ++ R.acc)` is NOT
+    // associative — the digest encodes the tree SHAPE (pinned by the
+    // `ordered_digest_combine_is_not_associative` test) — so a fold of a different shape would
+    // expose a DIFFERENT chain digest and fail the verifier's segment tooth.
+    //
+    //   * RESIDENT (default — unchanged behavior): mint ALL K leaf proofs, then fold. Serial
+    //     `aggregate_tree`, or the parallel merge-pool scan-state driver when
+    //     `DREGG_MERGE_WORKERS` is set (independent merges farmed to N workers — byte-identical
+    //     root; the operator THROUGHPUT knob). Peak resident proofs O(K).
+    //   * STREAMING (opt-in: `DREGG_STREAM_FOLD_WINDOW` / [`prove_turn_chain_recursive_streaming`]
+    //     — the operator MEMORY knob): interleave leaf PROVING with folding via
+    //     [`aggregate_tree_streaming`]. Peak resident proofs O(W + log2(K/W)), independent of K.
+    let root = match strategy {
+        ChainFoldStrategy::Streaming { window } => {
+            // FAIL-CLOSED SCHEDULE GUARD (host math, BEFORE any proving): fold the host
+            // segments through the SAME streaming schedule and require equality with the
+            // balanced-tree root segment (the carried claim). If the streaming schedule ever
+            // diverged from `aggregate_tree`'s shape, the root would expose a different
+            // (shape-sensitive) digest and the verifier's segment tooth would refuse it — this
+            // guard surfaces that in milliseconds instead of after hours of proving.
+            let streamed_seg = compute_root_segment_streaming(turns, window);
+            if streamed_seg != root_seg {
+                return Err(TurnChainError::RecursionFailed {
+                    reason: format!(
+                        "streaming fold schedule (window {window}) diverged from the balanced \
+                         aggregate_tree segment — the ordered digest is shape-sensitive; \
+                         refusing to prove a root that could not verify against the carried \
+                         claim"
+                    ),
+                });
+            }
+            aggregate_tree_streaming(
+                turns.len(),
+                window,
+                |i| mint_rotated_turn_leaf(i, turns[i], &config),
+                &config,
+                &backend,
+                &params,
+            )?
+        }
+        ChainFoldStrategy::Resident => {
+            let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> =
+                Vec::with_capacity(turns.len());
+            for (i, t) in turns.iter().enumerate() {
+                batch_leaves.push(mint_rotated_turn_leaf(i, t, &config)?);
+            }
+            // Aggregate the segment-carrying descriptor leaves to ONE root, COMBINING the
+            // segments in-circuit at each node (continuity + count + ordered-digest fold). The
+            // root's exposed segment is the whole-chain `[genesis_root, final_root, num_turns,
+            // chain_digest]`.
+            if crate::merge_pool::parallel_aggregation_enabled() {
+                crate::merge_pool::aggregate_tree_scan_state_configured(batch_leaves)?
+            } else {
+                aggregate_tree(batch_leaves, &config, &backend, &params)?
+            }
+        }
+    };
 
+    Ok(WholeChainProof {
+        root,
+        binding_proof: binding_inner,
+        genesis_root,
+        final_root,
+        chain_digest,
+        num_turns: turns.len(),
+    })
+}
+
+/// Mint the ONE segment-carrying recursion leaf for finalized turn `t` at chain position `i`
+/// (`i` is error attribution only) — the per-turn body of the fold, extracted so the RESIDENT
+/// path (collect-then-fold) and the bounded-memory STREAMING path
+/// ([`aggregate_tree_streaming`]) prove leaves through the SAME carrier-arm dispatch below.
+fn mint_rotated_turn_leaf(
+    i: usize,
+    t: &FinalizedTurn,
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, TurnChainError> {
     // One rotated descriptor leaf per finalized turn, EACH carrying its ordered segment
     // (first_old/last_new bound to the descriptor's real roots, count=1, acc=H(old,new)).
     //
@@ -2972,541 +3186,593 @@ fn prove_chain_core_rotated(
     // re-exec rung carries `carrier_witness: None` (the sanctioned path, identical to today's
     // non-carrier turns). There is deliberately NO wildcard arm, so a new variant is a compile
     // error here (the wave must decide its fold branch).
-    for (i, t) in turns.iter().enumerate() {
-        let leg = &t.participant.rotated;
-        let wrapped = match &leg.carrier_witness {
-            Some(CarrierWitness::Custom(bundle)) => {
-                // THE PROOF-BIND COMMITMENT VERSION BOUNDARY (flag-day v2, blocker #2): a leg
-                // whose descriptor publishes the RETIRED 4-felt custom commitment exposure is
-                // refused HERE with the TYPED `CustomCommitVersionError::RetiredV1` — old custom
-                // artifacts cannot re-enter at the upgraded ~124-bit assurance rung, and are
-                // never silently widened or zero-padded. The detector is structural (the leg's
-                // own exposure pins), the exact custom twin of the wide-carrier geometry
-                // boundary in `admit_welded_leg`.
-                dregg_circuit::effect_vm_descriptors::require_custom_commit_teeth_v2(
-                    &leg.descriptor,
-                )
+    let leg = &t.participant.rotated;
+    Ok(match &leg.carrier_witness {
+        Some(CarrierWitness::Custom(bundle)) => {
+            // THE PROOF-BIND COMMITMENT VERSION BOUNDARY (flag-day v2, blocker #2): a leg
+            // whose descriptor publishes the RETIRED 4-felt custom commitment exposure is
+            // refused HERE with the TYPED `CustomCommitVersionError::RetiredV1` — old custom
+            // artifacts cannot re-enter at the upgraded ~124-bit assurance rung, and are
+            // never silently widened or zero-padded. The detector is structural (the leg's
+            // own exposure pins), the exact custom twin of the wide-carrier geometry
+            // boundary in `admit_welded_leg`.
+            dregg_circuit::effect_vm_descriptors::require_custom_commit_teeth_v2(&leg.descriptor)
                 .map_err(|e| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("custom proof-bind commitment version boundary: {e}"),
-                })?;
-                // THE ARM RE-POINT (the deployed keystone): a custom turn that DECLARES an
-                // app-root weld (`bundle.app_root_binding = Some(binding)`) mints the APP-ROOT
-                // node + the app-root leaf, NOT the state-only pair. MANDATORY, not a conditional
-                // connect: the app-root node itself REQUIRES the wide field-exposure claim, so a
-                // forging prover cannot dodge the weld by minting the narrow state leaf (a custom
-                // turn with an app-root binding whose published `R != field_K` has NO satisfying
-                // fold — UNSAT, no root). A custom turn with `None` is byte-identical to before
-                // (the state node), so a no-app-root custom turn is UNAFFECTED.
-                match &bundle.app_root_binding {
-                    None => {
-                        let dual = prove_descriptor_leaf_dual_expose(
-                            &leg.descriptor,
-                            &leg.proof,
-                            &leg.public_inputs,
-                            &config,
-                        )
-                        .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                        // THE STATE-BINDING LEAF (the deployed default for a no-app-root custom
-                        // turn). The 24-lane claim `[commitment(8) ‖ pis[0..16]]` — NOT the 8-lane
-                        // commitment-only leaf. A sub-program that cannot express the
-                        // `custom_state_binding` ABI prefix (< 16 PIs) is REFUSED here, fail-closed,
-                        // never zero-padded into a false prefix. That refusal is not new reach: the
-                        // deployed EXECUTOR already refuses such a turn at
-                        // `enforce_custom_proof_state_binding` (`PublicInputsTooShort`), so a chain
-                        // the old prover happily minted was one no executor would accept. The prover
-                        // now agrees with the verifier.
-                        let custom_leaf =
-                            crate::custom_leaf_adapter::prove_custom_leaf_with_state_commitment(
-                                &bundle.program,
-                                &bundle.witness_values,
-                                bundle.num_rows,
-                                &bundle.public_inputs,
-                                &config,
-                            )
-                            .map_err(|reason| {
-                                TurnChainError::TurnProofInvalid {
-                                    index: i,
-                                    reason: format!(
-                                        "custom state-binding sub-proof leaf mint failed: {reason}"
-                                    ),
-                                }
-                            })?;
-                        crate::joint_turn_recursive::prove_custom_binding_node_state_segmented(
-                            &dual,
-                            &custom_leaf,
-                            &config,
-                        )
-                        .map_err(|e| TurnChainError::TurnProofInvalid {
-                            index: i,
-                            reason: format!("state-binding custom-binding node failed: {e:?}"),
-                        })?
-                    }
-                    Some(binding) => {
-                        if !binding.is_well_formed() {
-                            return Err(TurnChainError::TurnProofInvalid {
-                                index: i,
-                                reason: format!(
-                                    "custom app-root binding {binding:?} is ill-formed (R must sit \
-                                     strictly past the 16-felt state prefix and have nonzero width)"
-                                ),
-                            });
-                        }
-                        // WHERE THE LEG PUBLISHES field_K: the wide custom descriptor exposes the
-                        // cell's committed field octet (the faithfully-carried `fields[0..8]` the
-                        // `new8` commitment absorbs) as PIs immediately BEFORE the 16 wide anchors
-                        // — at `[n - 2*SEG_ANCHOR_WIDTH - CUSTOM_APP_FIELD_OCTET_LEN .. n -
-                        // 2*SEG_ANCHOR_WIDTH)` (the `generate_rotated_custom_wide` field-K exposure
-                        // / Lean `customFieldKExposure`). `field_key` selects the lane within that
-                        // octet; the claim is `L = app_root_len` felts wide starting there.
-                        let n = leg.public_inputs.len();
-                        let octet_lo = n
-                            .checked_sub(2 * SEG_ANCHOR_WIDTH + CUSTOM_APP_FIELD_OCTET_LEN)
-                            .ok_or_else(|| TurnChainError::TurnProofInvalid {
-                                index: i,
-                                reason: format!(
-                                    "custom app-root leg publishes {n} PIs — too few to carry the \
-                                     field octet ahead of the {} wide anchors; the wide custom \
-                                     descriptor must expose field_K (leg-emit not present)",
-                                    2 * SEG_ANCHOR_WIDTH
-                                ),
-                            })?;
-                        if binding.field_key + binding.app_root_len > CUSTOM_APP_FIELD_OCTET_LEN {
-                            return Err(TurnChainError::TurnProofInvalid {
-                                index: i,
-                                reason: format!(
-                                    "custom app-root binding {binding:?}: field_key + app_root_len \
-                                     exceeds the {CUSTOM_APP_FIELD_OCTET_LEN}-felt exposed field \
-                                     octet"
-                                ),
-                            });
-                        }
-                        let field_k_pi_lo = octet_lo + binding.field_key;
-                        let dual = prove_descriptor_leaf_expose_segment_and_claims(
-                            &leg.descriptor,
-                            &leg.proof,
-                            &leg.public_inputs,
-                            &config,
-                            &[
-                                (
-                                    crate::joint_turn_recursive::CUSTOM_COMMIT_PI_LO,
-                                    crate::joint_turn_recursive::CUSTOM_COMMIT_LEN,
-                                ),
-                                (field_k_pi_lo, binding.app_root_len),
-                            ],
-                        )
-                        .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                        // THE APP-ROOT LEAF: `[commitment(8) ‖ old8 ‖ new8 ‖ R(L)]` — re-exposes
-                        // the sub-proof's published root R for the fold to connect. Fail-closed on
-                        // a sub-program that cannot carry the binding.
-                        let custom_leaf =
-                            crate::custom_leaf_adapter::prove_custom_leaf_with_app_root_commitment(
-                                &bundle.program,
-                                &bundle.witness_values,
-                                bundle.num_rows,
-                                &bundle.public_inputs,
-                                binding,
-                                &config,
-                            )
-                            .map_err(|reason| {
-                                TurnChainError::TurnProofInvalid {
-                                    index: i,
-                                    reason: format!(
-                                        "custom app-root sub-proof leaf mint failed: {reason}"
-                                    ),
-                                }
-                            })?;
-                        crate::joint_turn_recursive::prove_custom_binding_node_app_root_segmented(
-                            &dual,
-                            &custom_leaf,
-                            &config,
-                            binding.app_root_len,
-                        )
-                        .map_err(|e| TurnChainError::TurnProofInvalid {
-                            index: i,
-                            reason: format!("app-root custom-binding node failed: {e:?}"),
-                        })?
-                    }
-                }
-            }
-            // THE BRIDGE FOLD ARM (the 7th carrier) — the named residual CLOSED by the
-            // felt-domain mint_hash thread: (STEP 1) the executor re-aligned `mint_hash` to
-            // the FELT-domain `note_spend_mint_hash_felt` (the `687601953` precedent — over
-            // the six compressed felts `apply_bridge_mint` enforces the REAL note-spend STARK
-            // against); (STEP 2/3/4) the deployed `mintVmDescriptor2R24` (`mintV3BridgeHash`)
-            // pins the mint row's `param0` at PI 46, producer-filled. The arm mirrors the
-            // factory shape: (1) ADMIT the leg's claim slot (fail-closed on a pin-less or
-            // wrong-column descriptor — the regen tie; the expected pin is the FIRST-row
-            // `prmCol 0`, never a free column), (2) mint the DUAL-EXPOSE leaf (segment ++ the
-            // published mint identity), (3) re-prove the REAL foreign note-spend STARK as the
-            // G2 backing leaf (`prove_note_spend_leaf_with_claim` — spending-key knowledge +
-            // Merkle membership + full-width commitment, with the mint identity recomputed
-            // IN-AIR at lane 6; the binding-only `bridge_action_air` was REFUSED as backing),
-            // (4) fold under the mint-hash binding node — the in-circuit `connect` makes a
-            // published mint identity no verifying note-spend backs UNSAT.
-            Some(CarrierWitness::Bridge(bundle)) => {
-                use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
-                use dregg_circuit::lean_descriptor_air::VmRow;
-                carrier_claim_pins_admitted(
-                    &leg.descriptor,
-                    &leg.public_inputs,
-                    BRIDGE_MINT_HASH_PI,
-                    BRIDGE_MINT_HASH_CLAIM_LEN,
-                    "bridge",
-                    Some((PARAM_BASE + param::MINT_HASH, VmRow::First)),
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let dual = prove_descriptor_leaf_dual_expose_at(
-                    &leg.descriptor,
-                    &leg.proof,
-                    &leg.public_inputs,
-                    &config,
-                    BRIDGE_MINT_HASH_PI,
-                    BRIDGE_MINT_HASH_CLAIM_LEN,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let backing = crate::note_spend_leaf_adapter::prove_note_spend_leaf_with_claim(
-                    &bundle.note_spend,
-                    &bundle.public_inputs,
-                    &config,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("bridge note-spend backing leaf mint failed: {reason}"),
-                })?;
-                crate::note_spend_leaf_adapter::prove_note_spend_mint_binding_node_segmented(
-                    &dual, &backing, &config,
-                )
-                .map_err(|e| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("segmented bridge mint-hash binding node failed: {e:?}"),
-                })?
-            }
-            // THE DECO/Stripe money-in FOLD ARM (the 8th carrier) — the fiat twin of the
-            // bridge arm (`DECO-CARRIER-PLAN.md` Option B, the bridge-style commitment fold):
-            // (1) ADMIT the leg's payment-hash claim slot (fail-closed on a pin-less or
-            // wrong-column descriptor — the expected pin is the FIRST-row `prmCol 0`, the
-            // deployed `stripeMint` twin of `withMintHashPin`; until the descriptor regen
-            // lands a Stripe `Effect::Mint` leg has no such pin and is REFUSED), (2) mint the
-            // DUAL-EXPOSE leaf (segment ++ the published payment identity), (3) re-prove the
-            // DECO commitment leaf (`prove_deco_leaf_with_claim` — a Poseidon2-only AIR
-            // recomputing the felt identity IN-AIR from PI-pinned PaymentFacts; ed25519/HMAC/
-            // SHA-256 stay OFF-AIR as named §8 carriers, mirroring bridge's ed25519), (4) fold
-            // under the payment-hash binding node — the in-circuit `connect` makes a published
-            // payment identity no verifying DECO commitment backs UNSAT.
-            Some(CarrierWitness::Deco(bundle)) => {
-                use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
-                use dregg_circuit::lean_descriptor_air::VmRow;
-                carrier_claim_pins_admitted(
-                    &leg.descriptor,
-                    &leg.public_inputs,
-                    DECO_PAYMENT_HASH_PI,
-                    DECO_PAYMENT_HASH_CLAIM_LEN,
-                    "deco",
-                    Some((PARAM_BASE + param::MINT_HASH, VmRow::First)),
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let dual = prove_descriptor_leaf_dual_expose_at(
-                    &leg.descriptor,
-                    &leg.proof,
-                    &leg.public_inputs,
-                    &config,
-                    DECO_PAYMENT_HASH_PI,
-                    DECO_PAYMENT_HASH_CLAIM_LEN,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let backing = crate::deco_leaf_adapter::prove_deco_leaf_with_claim(
-                    &bundle.witness,
-                    &bundle.public_inputs,
-                    &config,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("deco payment backing leaf mint failed: {reason}"),
-                })?;
-                crate::deco_leaf_adapter::prove_deco_payment_binding_node_segmented(
-                    &dual, &backing, &config,
-                )
-                .map_err(|e| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("segmented deco payment-binding node failed: {e:?}"),
-                })?
-            }
-            // THE DSL/Dfa FOLD ARM (the 6th carrier) — mirrors the Custom arm term-for-term
-            // (the dsl adapter REUSES custom's leaf + binding-node machinery; the claim shape
-            // is the SAME 4-felt PI-commitment). Differences, both fail-closed:
-            //
-            //   * the rc claim slots are DERIVED per member from the leg's committed
-            //     descriptor ([`dsl_rc_claim_pi_lo`] — the `withDfaRcPins` pins ride at fixed
-            //     COLUMNS but per-member PI indices), then admitted through
-            //     `carrier_claim_pins_admitted` with the rc columns as the expected pins;
-            //   * the ZERO SENTINEL is REFUSED: a turn without a Dfa caveat publishes rc = 0
-            //     (`RotatedCaveatManifest::dfa_rc` default) — folding a witness against it
-            //     would bind a vacuous claim no predicate gated. Such a turn takes the
-            //     re-exec rung (`carrier_witness: None`), never a fabricated fold.
-            Some(CarrierWitness::Dsl(bundle)) => {
-                use dregg_circuit::effect_vm::trace_rotated::{
-                    C_DFA_RC_OFF, CAVEAT_BASE, DFA_RC_LEN, avail_pad_for_descriptor_name,
-                };
-                use dregg_circuit::lean_descriptor_air::VmRow;
-                let rc_lo = dsl_rc_claim_pi_lo(&leg.descriptor)
+                index: i,
+                reason: format!("custom proof-bind commitment version boundary: {e}"),
+            })?;
+            // THE ARM RE-POINT (the deployed keystone): a custom turn that DECLARES an
+            // app-root weld (`bundle.app_root_binding = Some(binding)`) mints the APP-ROOT
+            // node + the app-root leaf, NOT the state-only pair. MANDATORY, not a conditional
+            // connect: the app-root node itself REQUIRES the wide field-exposure claim, so a
+            // forging prover cannot dodge the weld by minting the narrow state leaf (a custom
+            // turn with an app-root binding whose published `R != field_K` has NO satisfying
+            // fold — UNSAT, no root). A custom turn with `None` is byte-identical to before
+            // (the state node), so a no-app-root custom turn is UNAFFECTED.
+            match &bundle.app_root_binding {
+                None => {
+                    let dual = prove_descriptor_leaf_dual_expose(
+                        &leg.descriptor,
+                        &leg.proof,
+                        &leg.public_inputs,
+                        config,
+                    )
                     .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                // The rc carrier column shifts by the avail pad on the hardened `…-v1-avail`
-                // transfer/burn members (the caveat region rides past the widened v1 face).
-                let rc_col0 = CAVEAT_BASE
-                    + avail_pad_for_descriptor_name(&leg.descriptor.name)
-                    + C_DFA_RC_OFF;
-                carrier_claim_pins_admitted(
-                    &leg.descriptor,
-                    &leg.public_inputs,
-                    rc_lo,
-                    DFA_RC_LEN,
-                    "dsl",
-                    Some((rc_col0, VmRow::Last)),
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                if leg.public_inputs[rc_lo..rc_lo + DFA_RC_LEN]
-                    .iter()
-                    .all(|f| *f == BabyBear::ZERO)
-                {
-                    return Err(TurnChainError::TurnProofInvalid {
-                        index: i,
-                        reason: format!(
-                            "dsl: the leg's published route-commitment at PI {rc_lo}..{} is the \
-                             ZERO sentinel (no Dfa caveat gated this turn) — refusing to fold a \
-                             vacuous claim; detach the witness (carrier_witness: None) to take \
-                             the re-exec rung",
-                            rc_lo + DFA_RC_LEN
-                        ),
-                    });
-                }
-                let dual = prove_descriptor_leaf_dual_expose_at(
-                    &leg.descriptor,
-                    &leg.proof,
-                    &leg.public_inputs,
-                    &config,
-                    rc_lo,
-                    DFA_RC_LEN,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let dsl_leaf = crate::dsl_leaf_adapter::prove_dsl_leaf_with_commitment(
-                    &bundle.program,
-                    &bundle.witness_values,
-                    bundle.num_rows,
-                    &bundle.public_inputs,
-                    &config,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("dsl sub-proof leaf mint failed: {reason}"),
-                })?;
-                crate::dsl_leaf_adapter::prove_dsl_binding_node_segmented(&dual, &dsl_leaf, &config)
+                    // THE STATE-BINDING LEAF (the deployed default for a no-app-root custom
+                    // turn). The 24-lane claim `[commitment(8) ‖ pis[0..16]]` — NOT the 8-lane
+                    // commitment-only leaf. A sub-program that cannot express the
+                    // `custom_state_binding` ABI prefix (< 16 PIs) is REFUSED here, fail-closed,
+                    // never zero-padded into a false prefix. That refusal is not new reach: the
+                    // deployed EXECUTOR already refuses such a turn at
+                    // `enforce_custom_proof_state_binding` (`PublicInputsTooShort`), so a chain
+                    // the old prover happily minted was one no executor would accept. The prover
+                    // now agrees with the verifier.
+                    let custom_leaf =
+                        crate::custom_leaf_adapter::prove_custom_leaf_with_state_commitment(
+                            &bundle.program,
+                            &bundle.witness_values,
+                            bundle.num_rows,
+                            &bundle.public_inputs,
+                            config,
+                        )
+                        .map_err(|reason| {
+                            TurnChainError::TurnProofInvalid {
+                                index: i,
+                                reason: format!(
+                                    "custom state-binding sub-proof leaf mint failed: {reason}"
+                                ),
+                            }
+                        })?;
+                    crate::joint_turn_recursive::prove_custom_binding_node_state_segmented(
+                        &dual,
+                        &custom_leaf,
+                        config,
+                    )
                     .map_err(|e| TurnChainError::TurnProofInvalid {
                         index: i,
-                        reason: format!("segmented dsl-binding node failed: {e:?}"),
+                        reason: format!("state-binding custom-binding node failed: {e:?}"),
                     })?
-            }
-            // THE FOUR v12 CARRIER FOLD ARMS (factory · hatchery · sovereign · membership) —
-            // each mirrors the Custom arm: (1) ADMIT the leg's claim slots through
-            // `carrier_claim_pins_admitted` (fail-closed until the STEP-3 pinned descriptor is
-            // the leg's descriptor — the big-bang regen tie), (2) mint the DUAL-EXPOSE leaf
-            // (segment ++ the leg's claimed carrier teeth) at the carrier's claim PI slots,
-            // (3) re-prove the carrier's backing tuple as its adapter leaf, (4) fold both
-            // under the segment-preserving binding node — the in-circuit `connect` makes a
-            // forged claim (no backing leaf binds it) UNSAT, and the node re-exposes the
-            // chain segment so it folds into `aggregate_tree` like any per-turn leaf.
-            Some(CarrierWitness::Factory(bundle)) => {
-                use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, B_CHILD_VK_OCTET};
-                use dregg_circuit::lean_descriptor_air::VmRow;
-                carrier_claim_pins_admitted(
-                    &leg.descriptor,
-                    &leg.public_inputs,
-                    FACTORY_CHILD_VK_PI_LO,
-                    crate::factory_leaf_adapter::FACTORY_CHILD_VK_CLAIM_LEN,
-                    "factory",
-                    Some((AFTER_BASE + B_CHILD_VK_OCTET, VmRow::Last)),
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let dual = prove_descriptor_leaf_dual_expose_at(
-                    &leg.descriptor,
-                    &leg.proof,
-                    &leg.public_inputs,
-                    &config,
-                    FACTORY_CHILD_VK_PI_LO,
-                    crate::factory_leaf_adapter::FACTORY_CHILD_VK_CLAIM_LEN,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let backing = crate::factory_leaf_adapter::prove_factory_leaf_with_child_vk_claim(
-                    &bundle.backing,
-                    &bundle.public_inputs,
-                    &config,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("factory backing leaf mint failed: {reason}"),
-                })?;
-                crate::factory_leaf_adapter::prove_factory_binding_node_segmented(
-                    &dual, &backing, &config,
-                )
-                .map_err(|e| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("segmented factory-binding node failed: {e:?}"),
-                })?
-            }
-            Some(CarrierWitness::Hatchery(bundle)) => {
-                use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, B_CONTRACT_HASH_OCTET};
-                use dregg_circuit::lean_descriptor_air::VmRow;
-                carrier_claim_pins_admitted(
-                    &leg.descriptor,
-                    &leg.public_inputs,
-                    HATCHERY_CONTRACT_HASH_PI_LO,
-                    crate::hatchery_leaf_adapter::HATCHERY_CONTRACT_CLAIM_LEN,
-                    "hatchery",
-                    Some((AFTER_BASE + B_CONTRACT_HASH_OCTET, VmRow::Last)),
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let dual = prove_descriptor_leaf_dual_expose_at(
-                    &leg.descriptor,
-                    &leg.proof,
-                    &leg.public_inputs,
-                    &config,
-                    HATCHERY_CONTRACT_HASH_PI_LO,
-                    crate::hatchery_leaf_adapter::HATCHERY_CONTRACT_CLAIM_LEN,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let attestation =
-                    crate::hatchery_leaf_adapter::prove_hatchery_leaf_with_contract_claim(
-                        &bundle.attestation,
-                        &bundle.public_inputs,
-                        &config,
+                }
+                Some(binding) => {
+                    if !binding.is_well_formed() {
+                        return Err(TurnChainError::TurnProofInvalid {
+                            index: i,
+                            reason: format!(
+                                "custom app-root binding {binding:?} is ill-formed (R must sit \
+                                 strictly past the 16-felt state prefix and have nonzero width)"
+                            ),
+                        });
+                    }
+                    // WHERE THE LEG PUBLISHES field_K: the wide custom descriptor exposes the
+                    // cell's committed field octet (the faithfully-carried `fields[0..8]` the
+                    // `new8` commitment absorbs) as PIs immediately BEFORE the 16 wide anchors
+                    // — at `[n - 2*SEG_ANCHOR_WIDTH - CUSTOM_APP_FIELD_OCTET_LEN .. n -
+                    // 2*SEG_ANCHOR_WIDTH)` (the `generate_rotated_custom_wide` field-K exposure
+                    // / Lean `customFieldKExposure`). `field_key` selects the lane within that
+                    // octet; the claim is `L = app_root_len` felts wide starting there.
+                    let n = leg.public_inputs.len();
+                    let octet_lo = n
+                        .checked_sub(2 * SEG_ANCHOR_WIDTH + CUSTOM_APP_FIELD_OCTET_LEN)
+                        .ok_or_else(|| TurnChainError::TurnProofInvalid {
+                            index: i,
+                            reason: format!(
+                                "custom app-root leg publishes {n} PIs — too few to carry the \
+                                 field octet ahead of the {} wide anchors; the wide custom \
+                                 descriptor must expose field_K (leg-emit not present)",
+                                2 * SEG_ANCHOR_WIDTH
+                            ),
+                        })?;
+                    if binding.field_key + binding.app_root_len > CUSTOM_APP_FIELD_OCTET_LEN {
+                        return Err(TurnChainError::TurnProofInvalid {
+                            index: i,
+                            reason: format!(
+                                "custom app-root binding {binding:?}: field_key + app_root_len \
+                                 exceeds the {CUSTOM_APP_FIELD_OCTET_LEN}-felt exposed field \
+                                 octet"
+                            ),
+                        });
+                    }
+                    let field_k_pi_lo = octet_lo + binding.field_key;
+                    let dual = prove_descriptor_leaf_expose_segment_and_claims(
+                        &leg.descriptor,
+                        &leg.proof,
+                        &leg.public_inputs,
+                        config,
+                        &[
+                            (
+                                crate::joint_turn_recursive::CUSTOM_COMMIT_PI_LO,
+                                crate::joint_turn_recursive::CUSTOM_COMMIT_LEN,
+                            ),
+                            (field_k_pi_lo, binding.app_root_len),
+                        ],
                     )
-                    .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                    // THE APP-ROOT LEAF: `[commitment(8) ‖ old8 ‖ new8 ‖ R(L)]` — re-exposes
+                    // the sub-proof's published root R for the fold to connect. Fail-closed on
+                    // a sub-program that cannot carry the binding.
+                    let custom_leaf =
+                        crate::custom_leaf_adapter::prove_custom_leaf_with_app_root_commitment(
+                            &bundle.program,
+                            &bundle.witness_values,
+                            bundle.num_rows,
+                            &bundle.public_inputs,
+                            binding,
+                            config,
+                        )
+                        .map_err(|reason| {
+                            TurnChainError::TurnProofInvalid {
+                                index: i,
+                                reason: format!(
+                                    "custom app-root sub-proof leaf mint failed: {reason}"
+                                ),
+                            }
+                        })?;
+                    crate::joint_turn_recursive::prove_custom_binding_node_app_root_segmented(
+                        &dual,
+                        &custom_leaf,
+                        config,
+                        binding.app_root_len,
+                    )
+                    .map_err(|e| TurnChainError::TurnProofInvalid {
                         index: i,
-                        reason: format!("hatchery attestation leaf mint failed: {reason}"),
-                    })?;
-                crate::hatchery_leaf_adapter::prove_hatchery_binding_node_segmented(
-                    &dual,
-                    &attestation,
-                    &config,
-                )
-                .map_err(|e| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("segmented hatchery-binding node failed: {e:?}"),
-                })?
+                        reason: format!("app-root custom-binding node failed: {e:?}"),
+                    })?
+                }
             }
-            Some(CarrierWitness::Sovereign(bundle)) => {
-                carrier_claim_pins_admitted(
-                    &leg.descriptor,
-                    &leg.public_inputs,
-                    SOVEREIGN_KEY_COMMIT_PI_LO,
-                    crate::sovereign_leaf_adapter::SOVEREIGN_KEY_CLAIM_LEN,
-                    "sovereign",
-                    // The teeth columns are pinned by the regen (the KEY_COMMIT teeth cols;
-                    // `CarrierComposed` keeps them parametric until the emit), so the
-                    // admission requires a genuine PiBinding at every claim slot without
-                    // fixing the column base.
-                    None,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let dual = prove_descriptor_leaf_dual_expose_at(
-                    &leg.descriptor,
-                    &leg.proof,
-                    &leg.public_inputs,
-                    &config,
-                    SOVEREIGN_KEY_COMMIT_PI_LO,
-                    crate::sovereign_leaf_adapter::SOVEREIGN_KEY_CLAIM_LEN,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let authority = crate::sovereign_leaf_adapter::prove_sovereign_leaf_with_key_claim(
-                    &bundle.authority,
-                    &bundle.public_inputs,
-                    &config,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid {
+        }
+        // DIRECT IR2 CUSTOM ARM: the relation is already an emitted
+        // `EffectVmDescriptor2` (for example the Lean private-preference
+        // cell descriptor), so retain/re-prove that exact descriptor and
+        // trace instead of lowering a second Rust `CellProgram` relation.
+        // The binding node and leg-side claims are identical to the
+        // deployed custom app-root arm.
+        Some(CarrierWitness::CustomIr2(bundle)) => {
+            dregg_circuit::effect_vm_descriptors::require_custom_commit_teeth_v2(&leg.descriptor)
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("direct-IR2 custom proof-bind commitment version boundary: {e}"),
+            })?;
+
+            let binding = &bundle.app_root_binding;
+            if !binding.is_well_formed() {
+                return Err(TurnChainError::TurnProofInvalid {
                     index: i,
-                    reason: format!("sovereign authority leaf mint failed: {reason}"),
+                    reason: format!("direct-IR2 custom app-root binding {binding:?} is ill-formed"),
+                });
+            }
+
+            let n = leg.public_inputs.len();
+            let octet_lo = n
+                .checked_sub(2 * SEG_ANCHOR_WIDTH + CUSTOM_APP_FIELD_OCTET_LEN)
+                .ok_or_else(|| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!(
+                        "direct-IR2 custom app-root leg publishes {n} PIs — too few to \
+                             carry the field octet ahead of the wide anchors"
+                    ),
                 })?;
-                crate::joint_turn_recursive::prove_sovereign_binding_node_segmented(
-                    &dual, &authority, &config,
-                )
-                .map_err(|e| TurnChainError::TurnProofInvalid {
+            if binding.field_key + binding.app_root_len > CUSTOM_APP_FIELD_OCTET_LEN {
+                return Err(TurnChainError::TurnProofInvalid {
                     index: i,
-                    reason: format!("segmented sovereign-binding node failed: {e:?}"),
-                })?
+                    reason: format!(
+                        "direct-IR2 custom app-root binding {binding:?} exceeds the \
+                             {CUSTOM_APP_FIELD_OCTET_LEN}-felt exposed field octet"
+                    ),
+                });
             }
-            Some(CarrierWitness::Membership(bundle)) => {
-                carrier_claim_pins_admitted(
-                    &leg.descriptor,
-                    &leg.public_inputs,
-                    MEMBERSHIP_CLAIM_PI_LO,
-                    crate::membership_leaf_adapter::MEMBERSHIP_CLAIM_LEN,
-                    "membership",
-                    // The (sender_leaf, authorized_root) tooth columns are parametric until
-                    // the regen pins them (`MembershipAuthRootEdge` builds the edge over a
-                    // parametric base) — same column-free admission as sovereign.
-                    None,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let dual = prove_descriptor_leaf_dual_expose_at(
-                    &leg.descriptor,
-                    &leg.proof,
-                    &leg.public_inputs,
-                    &config,
-                    MEMBERSHIP_CLAIM_PI_LO,
-                    crate::membership_leaf_adapter::MEMBERSHIP_CLAIM_LEN,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let membership = crate::membership_leaf_adapter::prove_membership_leaf_with_claim(
-                    &bundle.membership,
-                    &bundle.public_inputs,
-                    &config,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("membership leaf mint failed: {reason}"),
-                })?;
-                crate::membership_leaf_adapter::prove_membership_binding_node_segmented(
-                    &dual,
-                    &membership,
-                    &config,
-                )
-                .map_err(|e| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("segmented membership-binding node failed: {e:?}"),
-                })?
-            }
-            None => prove_descriptor_leaf_rotated_with_segment(
+            let field_k_pi_lo = octet_lo + binding.field_key;
+            let dual = prove_descriptor_leaf_expose_segment_and_claims(
                 &leg.descriptor,
                 &leg.proof,
                 &leg.public_inputs,
                 &config,
+                &[
+                    (
+                        crate::joint_turn_recursive::CUSTOM_COMMIT_PI_LO,
+                        crate::joint_turn_recursive::CUSTOM_COMMIT_LEN,
+                    ),
+                    (field_k_pi_lo, binding.app_root_len),
+                ],
             )
-            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?,
-        };
-        batch_leaves.push(wrapped);
-    }
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
 
-    // Aggregate the segment-carrying descriptor leaves to ONE root, COMBINING the segments
-    // in-circuit at each node (continuity + count + ordered-digest fold). The root's exposed
-    // segment is the whole-chain `[genesis_root, final_root, num_turns, chain_digest]`.
-    //
-    // DEFAULT = the serial `aggregate_tree` (unchanged proving path). When `DREGG_MERGE_WORKERS` is
-    // set, the PARALLEL scan-state driver folds the SAME DAG through the merge-pool (independent
-    // merge nodes farmed to N workers) — byte-identical root, parallel path. This is the operator
-    // throughput knob (aggregation was the serial cap; the merge is the farm-able unit).
-    let root = if crate::merge_pool::parallel_aggregation_enabled() {
-        crate::merge_pool::aggregate_tree_scan_state_configured(batch_leaves)?
-    } else {
-        aggregate_tree(batch_leaves, &config, &backend, &params)?
-    };
-
-    Ok(WholeChainProof {
-        root,
-        binding_proof: binding_inner,
-        genesis_root,
-        final_root,
-        chain_digest,
-        num_turns: turns.len(),
+            let custom_leaf =
+                crate::custom_leaf_adapter::prove_direct_ir2_leaf_with_app_root_commitment(
+                    &bundle.descriptor,
+                    &bundle.base_trace,
+                    &bundle.public_inputs,
+                    binding,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!(
+                        "direct-IR2 custom app-root sub-proof leaf mint failed: {reason}"
+                    ),
+                })?;
+            crate::joint_turn_recursive::prove_custom_binding_node_app_root_segmented(
+                &dual,
+                &custom_leaf,
+                &config,
+                binding.app_root_len,
+            )
+            .map_err(|e| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("direct-IR2 app-root custom-binding node failed: {e:?}"),
+            })?
+        }
+        // THE BRIDGE FOLD ARM (the 7th carrier) — the named residual CLOSED by the
+        // felt-domain mint_hash thread: (STEP 1) the executor re-aligned `mint_hash` to
+        // the FELT-domain `note_spend_mint_hash_felt` (the `687601953` precedent — over
+        // the six compressed felts `apply_bridge_mint` enforces the REAL note-spend STARK
+        // against); (STEP 2/3/4) the deployed `mintVmDescriptor2R24` (`mintV3BridgeHash`)
+        // pins the mint row's `param0` at PI 46, producer-filled. The arm mirrors the
+        // factory shape: (1) ADMIT the leg's claim slot (fail-closed on a pin-less or
+        // wrong-column descriptor — the regen tie; the expected pin is the FIRST-row
+        // `prmCol 0`, never a free column), (2) mint the DUAL-EXPOSE leaf (segment ++ the
+        // published mint identity), (3) re-prove the REAL foreign note-spend STARK as the
+        // G2 backing leaf (`prove_note_spend_leaf_with_claim` — spending-key knowledge +
+        // Merkle membership + full-width commitment, with the mint identity recomputed
+        // IN-AIR at lane 6; the binding-only `bridge_action_air` was REFUSED as backing),
+        // (4) fold under the mint-hash binding node — the in-circuit `connect` makes a
+        // published mint identity no verifying note-spend backs UNSAT.
+        Some(CarrierWitness::Bridge(bundle)) => {
+            use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
+            use dregg_circuit::lean_descriptor_air::VmRow;
+            carrier_claim_pins_admitted(
+                &leg.descriptor,
+                &leg.public_inputs,
+                BRIDGE_MINT_HASH_PI,
+                BRIDGE_MINT_HASH_CLAIM_LEN,
+                "bridge",
+                Some((PARAM_BASE + param::MINT_HASH, VmRow::First)),
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let dual = prove_descriptor_leaf_dual_expose_at(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                config,
+                BRIDGE_MINT_HASH_PI,
+                BRIDGE_MINT_HASH_CLAIM_LEN,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let backing = crate::note_spend_leaf_adapter::prove_note_spend_leaf_with_claim(
+                &bundle.note_spend,
+                &bundle.public_inputs,
+                config,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("bridge note-spend backing leaf mint failed: {reason}"),
+            })?;
+            crate::note_spend_leaf_adapter::prove_note_spend_mint_binding_node_segmented(
+                &dual, &backing, config,
+            )
+            .map_err(|e| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("segmented bridge mint-hash binding node failed: {e:?}"),
+            })?
+        }
+        // THE DECO/Stripe money-in FOLD ARM (the 8th carrier) — the fiat twin of the
+        // bridge arm (`DECO-CARRIER-PLAN.md` Option B, the bridge-style commitment fold):
+        // (1) ADMIT the leg's payment-hash claim slot (fail-closed on a pin-less or
+        // wrong-column descriptor — the expected pin is the FIRST-row `prmCol 0`, the
+        // deployed `stripeMint` twin of `withMintHashPin`; until the descriptor regen
+        // lands a Stripe `Effect::Mint` leg has no such pin and is REFUSED), (2) mint the
+        // DUAL-EXPOSE leaf (segment ++ the published payment identity), (3) re-prove the
+        // DECO commitment leaf (`prove_deco_leaf_with_claim` — a Poseidon2-only AIR
+        // recomputing the felt identity IN-AIR from PI-pinned PaymentFacts; ed25519/HMAC/
+        // SHA-256 stay OFF-AIR as named §8 carriers, mirroring bridge's ed25519), (4) fold
+        // under the payment-hash binding node — the in-circuit `connect` makes a published
+        // payment identity no verifying DECO commitment backs UNSAT.
+        Some(CarrierWitness::Deco(bundle)) => {
+            use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
+            use dregg_circuit::lean_descriptor_air::VmRow;
+            carrier_claim_pins_admitted(
+                &leg.descriptor,
+                &leg.public_inputs,
+                DECO_PAYMENT_HASH_PI,
+                DECO_PAYMENT_HASH_CLAIM_LEN,
+                "deco",
+                Some((PARAM_BASE + param::MINT_HASH, VmRow::First)),
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let dual = prove_descriptor_leaf_dual_expose_at(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                config,
+                DECO_PAYMENT_HASH_PI,
+                DECO_PAYMENT_HASH_CLAIM_LEN,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let backing = crate::deco_leaf_adapter::prove_deco_leaf_with_claim(
+                &bundle.witness,
+                &bundle.public_inputs,
+                config,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("deco payment backing leaf mint failed: {reason}"),
+            })?;
+            crate::deco_leaf_adapter::prove_deco_payment_binding_node_segmented(
+                &dual, &backing, config,
+            )
+            .map_err(|e| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("segmented deco payment-binding node failed: {e:?}"),
+            })?
+        }
+        // THE DSL/Dfa FOLD ARM (the 6th carrier) — mirrors the Custom arm term-for-term
+        // (the dsl adapter REUSES custom's leaf + binding-node machinery; the claim shape
+        // is the SAME 4-felt PI-commitment). Differences, both fail-closed:
+        //
+        //   * the rc claim slots are DERIVED per member from the leg's committed
+        //     descriptor ([`dsl_rc_claim_pi_lo`] — the `withDfaRcPins` pins ride at fixed
+        //     COLUMNS but per-member PI indices), then admitted through
+        //     `carrier_claim_pins_admitted` with the rc columns as the expected pins;
+        //   * the ZERO SENTINEL is REFUSED: a turn without a Dfa caveat publishes rc = 0
+        //     (`RotatedCaveatManifest::dfa_rc` default) — folding a witness against it
+        //     would bind a vacuous claim no predicate gated. Such a turn takes the
+        //     re-exec rung (`carrier_witness: None`), never a fabricated fold.
+        Some(CarrierWitness::Dsl(bundle)) => {
+            use dregg_circuit::effect_vm::trace_rotated::{
+                C_DFA_RC_OFF, CAVEAT_BASE, DFA_RC_LEN, avail_pad_for_descriptor_name,
+            };
+            use dregg_circuit::lean_descriptor_air::VmRow;
+            let rc_lo = dsl_rc_claim_pi_lo(&leg.descriptor)
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            // The rc carrier column shifts by the avail pad on the hardened `…-v1-avail`
+            // transfer/burn members (the caveat region rides past the widened v1 face).
+            let rc_col0 =
+                CAVEAT_BASE + avail_pad_for_descriptor_name(&leg.descriptor.name) + C_DFA_RC_OFF;
+            carrier_claim_pins_admitted(
+                &leg.descriptor,
+                &leg.public_inputs,
+                rc_lo,
+                DFA_RC_LEN,
+                "dsl",
+                Some((rc_col0, VmRow::Last)),
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            if leg.public_inputs[rc_lo..rc_lo + DFA_RC_LEN]
+                .iter()
+                .all(|f| *f == BabyBear::ZERO)
+            {
+                return Err(TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!(
+                        "dsl: the leg's published route-commitment at PI {rc_lo}..{} is the \
+                         ZERO sentinel (no Dfa caveat gated this turn) — refusing to fold a \
+                         vacuous claim; detach the witness (carrier_witness: None) to take \
+                         the re-exec rung",
+                        rc_lo + DFA_RC_LEN
+                    ),
+                });
+            }
+            let dual = prove_descriptor_leaf_dual_expose_at(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                config,
+                rc_lo,
+                DFA_RC_LEN,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let dsl_leaf = crate::dsl_leaf_adapter::prove_dsl_leaf_with_commitment(
+                &bundle.program,
+                &bundle.witness_values,
+                bundle.num_rows,
+                &bundle.public_inputs,
+                config,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("dsl sub-proof leaf mint failed: {reason}"),
+            })?;
+            crate::dsl_leaf_adapter::prove_dsl_binding_node_segmented(&dual, &dsl_leaf, config)
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented dsl-binding node failed: {e:?}"),
+                })?
+        }
+        // THE FOUR v12 CARRIER FOLD ARMS (factory · hatchery · sovereign · membership) —
+        // each mirrors the Custom arm: (1) ADMIT the leg's claim slots through
+        // `carrier_claim_pins_admitted` (fail-closed until the STEP-3 pinned descriptor is
+        // the leg's descriptor — the big-bang regen tie), (2) mint the DUAL-EXPOSE leaf
+        // (segment ++ the leg's claimed carrier teeth) at the carrier's claim PI slots,
+        // (3) re-prove the carrier's backing tuple as its adapter leaf, (4) fold both
+        // under the segment-preserving binding node — the in-circuit `connect` makes a
+        // forged claim (no backing leaf binds it) UNSAT, and the node re-exposes the
+        // chain segment so it folds into `aggregate_tree` like any per-turn leaf.
+        Some(CarrierWitness::Factory(bundle)) => {
+            use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, B_CHILD_VK_OCTET};
+            use dregg_circuit::lean_descriptor_air::VmRow;
+            carrier_claim_pins_admitted(
+                &leg.descriptor,
+                &leg.public_inputs,
+                FACTORY_CHILD_VK_PI_LO,
+                crate::factory_leaf_adapter::FACTORY_CHILD_VK_CLAIM_LEN,
+                "factory",
+                Some((AFTER_BASE + B_CHILD_VK_OCTET, VmRow::Last)),
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let dual = prove_descriptor_leaf_dual_expose_at(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                config,
+                FACTORY_CHILD_VK_PI_LO,
+                crate::factory_leaf_adapter::FACTORY_CHILD_VK_CLAIM_LEN,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let backing = crate::factory_leaf_adapter::prove_factory_leaf_with_child_vk_claim(
+                &bundle.backing,
+                &bundle.public_inputs,
+                config,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("factory backing leaf mint failed: {reason}"),
+            })?;
+            crate::factory_leaf_adapter::prove_factory_binding_node_segmented(
+                &dual, &backing, config,
+            )
+            .map_err(|e| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("segmented factory-binding node failed: {e:?}"),
+            })?
+        }
+        Some(CarrierWitness::Hatchery(bundle)) => {
+            use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, B_CONTRACT_HASH_OCTET};
+            use dregg_circuit::lean_descriptor_air::VmRow;
+            carrier_claim_pins_admitted(
+                &leg.descriptor,
+                &leg.public_inputs,
+                HATCHERY_CONTRACT_HASH_PI_LO,
+                crate::hatchery_leaf_adapter::HATCHERY_CONTRACT_CLAIM_LEN,
+                "hatchery",
+                Some((AFTER_BASE + B_CONTRACT_HASH_OCTET, VmRow::Last)),
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let dual = prove_descriptor_leaf_dual_expose_at(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                config,
+                HATCHERY_CONTRACT_HASH_PI_LO,
+                crate::hatchery_leaf_adapter::HATCHERY_CONTRACT_CLAIM_LEN,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let attestation =
+                crate::hatchery_leaf_adapter::prove_hatchery_leaf_with_contract_claim(
+                    &bundle.attestation,
+                    &bundle.public_inputs,
+                    config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("hatchery attestation leaf mint failed: {reason}"),
+                })?;
+            crate::hatchery_leaf_adapter::prove_hatchery_binding_node_segmented(
+                &dual,
+                &attestation,
+                config,
+            )
+            .map_err(|e| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("segmented hatchery-binding node failed: {e:?}"),
+            })?
+        }
+        Some(CarrierWitness::Sovereign(bundle)) => {
+            carrier_claim_pins_admitted(
+                &leg.descriptor,
+                &leg.public_inputs,
+                SOVEREIGN_KEY_COMMIT_PI_LO,
+                crate::sovereign_leaf_adapter::SOVEREIGN_KEY_CLAIM_LEN,
+                "sovereign",
+                // The teeth columns are pinned by the regen (the KEY_COMMIT teeth cols;
+                // `CarrierComposed` keeps them parametric until the emit), so the
+                // admission requires a genuine PiBinding at every claim slot without
+                // fixing the column base.
+                None,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let dual = prove_descriptor_leaf_dual_expose_at(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                config,
+                SOVEREIGN_KEY_COMMIT_PI_LO,
+                crate::sovereign_leaf_adapter::SOVEREIGN_KEY_CLAIM_LEN,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let authority = crate::sovereign_leaf_adapter::prove_sovereign_leaf_with_key_claim(
+                &bundle.authority,
+                &bundle.public_inputs,
+                config,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("sovereign authority leaf mint failed: {reason}"),
+            })?;
+            crate::joint_turn_recursive::prove_sovereign_binding_node_segmented(
+                &dual, &authority, config,
+            )
+            .map_err(|e| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("segmented sovereign-binding node failed: {e:?}"),
+            })?
+        }
+        Some(CarrierWitness::Membership(bundle)) => {
+            carrier_claim_pins_admitted(
+                &leg.descriptor,
+                &leg.public_inputs,
+                MEMBERSHIP_CLAIM_PI_LO,
+                crate::membership_leaf_adapter::MEMBERSHIP_CLAIM_LEN,
+                "membership",
+                // The (sender_leaf, authorized_root) tooth columns are parametric until
+                // the regen pins them (`MembershipAuthRootEdge` builds the edge over a
+                // parametric base) — same column-free admission as sovereign.
+                None,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let dual = prove_descriptor_leaf_dual_expose_at(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                config,
+                MEMBERSHIP_CLAIM_PI_LO,
+                crate::membership_leaf_adapter::MEMBERSHIP_CLAIM_LEN,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let membership = crate::membership_leaf_adapter::prove_membership_leaf_with_claim(
+                &bundle.membership,
+                &bundle.public_inputs,
+                config,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("membership leaf mint failed: {reason}"),
+            })?;
+            crate::membership_leaf_adapter::prove_membership_binding_node_segmented(
+                &dual,
+                &membership,
+                config,
+            )
+            .map_err(|e| TurnChainError::TurnProofInvalid {
+                index: i,
+                reason: format!("segmented membership-binding node failed: {e:?}"),
+            })?
+        }
+        None => prove_descriptor_leaf_rotated_with_segment(
+            &leg.descriptor,
+            &leg.proof,
+            &leg.public_inputs,
+            config,
+        )
+        .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?,
     })
 }
 
@@ -3785,6 +4051,134 @@ fn aggregate_tree(
     Ok(proofs.pop().unwrap())
 }
 
+/// The largest power of two `<= w`, floored at 2 — the EFFECTIVE streaming window. Powers of two
+/// are REQUIRED for shape identity: a window sub-root must cover exactly one balanced-tree
+/// level-k node span `[j*2^k, min((j+1)*2^k, K))`, which only aligns when the window is `2^k`.
+/// Rounding DOWN respects the caller's memory budget (never proves more leaves at once than
+/// asked).
+fn floor_pow2_window(w: usize) -> usize {
+    let w = w.max(2);
+    1usize << (usize::BITS - 1 - w.leading_zeros())
+}
+
+/// **THE BOUNDED-MEMORY STREAMING FOLD SCHEDULE** — generic over the folded value, so the PROOF
+/// driver ([`aggregate_tree_streaming`]), the HOST segment mirror ([`fold_host_segs_streaming`]),
+/// and the shape/residency tests all run the ONE schedule.
+///
+/// The schedule reproduces [`aggregate_tree`]'s balanced tree EXACTLY (same node set, same
+/// pairing, same odd-tail promotion) while keeping only O(W + log2(K/W)) values live:
+///
+///   1. **Window**: materialize leaves `[start, start+W)` (the ONLY place leaves are resident —
+///      at most W at once) and fold them to ONE sub-root via `fold_window`. A full window of
+///      `W = 2^k` leaves is a PERFECT dyadic subtree = the balanced tree's level-k node; the
+///      final partial window is the balanced tree's clipped tail node (its internal balanced
+///      fold matches the global one because `start` is always a multiple of `2^k`).
+///   2. **Carry (binary counter / Merkle-mountain-range)**: push the sub-root onto a stack of
+///      `(weight, value)`; while the top has EQUAL weight, pop it and merge `(popped, incoming)`
+///      — the popped subtree is the one immediately LEFT of the incoming. Weights double, so the
+///      stack holds at most `log2(#windows) + 1` sub-roots (the binary decomposition of the
+///      window count).
+///   3. **Finalize (suffix fold, right-to-left)**: fold the stack from the TOP (rightmost)
+///      down, each popped entry merged as the LEFT child. This reproduces the balanced loop's
+///      odd-tail promotion (the leftover is promoted to the END of the next level, so trailing
+///      partial subtrees combine rightmost-first).
+///
+/// Shape identity is witnessed EXHAUSTIVELY (every `n <= 300` x window set, against the free —
+/// maximally shape-sensitive — combine) by `streaming_schedule_matches_balanced_tree_shape`;
+/// it is LOAD-BEARING because the segment digest `acc = H(L.acc ++ R.acc)` is not associative
+/// (`ordered_digest_combine_is_not_associative`): identical shape is the ONLY way a
+/// streaming root exposes the identical chain digest.
+fn streaming_fold_schedule<T, E>(
+    num_leaves: usize,
+    window: usize,
+    mut leaf: impl FnMut(usize) -> Result<T, E>,
+    mut fold_window: impl FnMut(Vec<T>) -> Result<T, E>,
+    mut merge: impl FnMut(T, T) -> Result<T, E>,
+) -> Result<T, E> {
+    assert!(num_leaves >= 1, "streaming fold requires at least one leaf");
+    let w = floor_pow2_window(window);
+    let mut stack: Vec<(usize, T)> = Vec::new();
+    let mut start = 0usize;
+    while start < num_leaves {
+        let end = (start + w).min(num_leaves);
+        // (1) THE WINDOW: prove/materialize <= W leaves ...
+        let mut buf = Vec::with_capacity(end - start);
+        for i in start..end {
+            buf.push(leaf(i)?);
+        }
+        // ... and fold them to ONE sub-root. `buf` is MOVED in and fully consumed — THIS is
+        // where the window's leaf values are dropped; they never coexist with the next window.
+        let sub = if buf.len() == 1 {
+            buf.pop().expect("single-leaf window")
+        } else {
+            fold_window(buf)?
+        };
+        // (2) THE CARRY: merge equal-weight neighbors eagerly (popped = LEFT of incoming).
+        let mut cur = sub;
+        let mut weight = 1usize;
+        while stack
+            .last()
+            .is_some_and(|(top_weight, _)| *top_weight == weight)
+        {
+            let (_, left) = stack.pop().expect("equal-weight top just observed");
+            cur = merge(left, cur)?;
+            weight *= 2;
+        }
+        stack.push((weight, cur));
+        start = end;
+    }
+    // (3) THE SUFFIX FINALIZE: right-to-left; each popped entry is LEFT of the accumulator.
+    let (_, mut acc) = stack.pop().expect("at least one window was folded");
+    while let Some((_, left)) = stack.pop() {
+        acc = merge(left, acc)?;
+    }
+    Ok(acc)
+}
+
+/// **THE BOUNDED-MEMORY STREAMING sibling of [`aggregate_tree`].** Interleaves leaf PROVING with
+/// folding via [`streaming_fold_schedule`]: prove a window of `<= W` leaves (`mint_leaf`), fold
+/// it to ONE sub-root with [`aggregate_tree`] itself, fold the sub-root into the binary-counter
+/// carry stack via [`merge_two_segment_proofs`], and DROP the window before the next leaf is
+/// proven.
+///
+/// Peak resident recursion proofs are `~1.5*W` (the window fold's per-level transient: a level
+/// vector stays alive while its `next_level` is built) plus `log2(K/W) + 1` carry-stack
+/// sub-roots plus one merge in flight — **independent of K**, versus O(K) for the resident
+/// collect-then-fold path. `W = 2` degenerates to an (almost) pure sequential fold; a large `W`
+/// approaches the resident tree.
+///
+/// Because the schedule reproduces the balanced tree's exact shape and every node runs the SAME
+/// [`merge_two_segment_proofs`], the streaming root exposes the IDENTICAL segment
+/// `[first_old, last_new, count, acc]` as [`aggregate_tree`]'s root (and is expected
+/// byte-identical, deterministic proving being what `scan_state_root_equals_serial_root`
+/// already witnesses across execution orders) — so it verifies against the same
+/// [`RecursionVk`] anchor via the unchanged [`verify_turn_chain_recursive`].
+fn aggregate_tree_streaming(
+    num_leaves: usize,
+    window: usize,
+    mint_leaf: impl FnMut(usize) -> Result<RecursionOutput<DreggRecursionConfig>, TurnChainError>,
+    config: &DreggRecursionConfig,
+    backend: &p3_recursion::FriRecursionBackendForExt<D, 16, 8, p3_recursion::ops::Poseidon2Config>,
+    params: &ProveNextLayerParams,
+) -> Result<RecursionOutput<DreggRecursionConfig>, TurnChainError> {
+    if num_leaves == 0 {
+        return Err(TurnChainError::RecursionFailed {
+            reason: "no leaves to aggregate".to_string(),
+        });
+    }
+    streaming_fold_schedule(
+        num_leaves,
+        window,
+        mint_leaf,
+        |buf| aggregate_tree(buf, config, backend, params),
+        |left, right| {
+            // A carry/suffix merge consumes BOTH children (owned; dropped on return) and yields
+            // the fresh parent — never more than one extra proof in flight.
+            merge_two_segment_proofs(&left.0, &right.0, config, backend, params)
+        },
+    )
+}
+
 /// Verify the whole-chain artifact against a caller-held trust anchor.
 /// Cost is independent of the number of folded turns. Three teeth, in order
 /// (see the module docs for what each one guarantees, precisely):
@@ -3996,3 +4390,206 @@ pub fn fold_two_turns(
 // `circuit/tests/ivc_turn_chain_rotated.rs`, which can mint the mandatory ROTATED
 // participant through `dregg_turn::rotation_witness::mint_rotated_participant_leg`
 // (the circuit lib cannot — it has no `dregg-cell` / `dregg-turn` dependency, the cycle).
+//
+// The `streaming_fold_tests` below are DIFFERENT in kind: pure host math over the fold
+// SCHEDULE and the host segment combine — no proving, no rotated participant minting — so
+// they live in-lib (the Bucket-F relocation applied only to teeth that must mint legs).
+
+#[cfg(test)]
+mod streaming_fold_tests {
+    use super::*;
+
+    /// The FREE combine: a symbolic tree that records shape and nothing else — maximally
+    /// shape-sensitive. If the streaming schedule builds the same symbolic tree as the balanced
+    /// loop, then ANY per-node combine (including the non-associative ordered Poseidon digest)
+    /// produces identical values on both schedules.
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    enum ShapeTree {
+        Leaf(usize),
+        Br(Box<ShapeTree>, Box<ShapeTree>),
+    }
+
+    fn br(l: ShapeTree, r: ShapeTree) -> ShapeTree {
+        ShapeTree::Br(Box::new(l), Box::new(r))
+    }
+
+    /// [`aggregate_tree`]'s loop, transcribed verbatim over symbolic trees (pair adjacent
+    /// left-to-right; odd tail promoted unchanged to the END of the next level).
+    fn balanced_reference(mut level: Vec<ShapeTree>) -> ShapeTree {
+        assert!(!level.is_empty());
+        while level.len() > 1 {
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut i = 0;
+            while i + 1 < level.len() {
+                next.push(br(level[i].clone(), level[i + 1].clone()));
+                i += 2;
+            }
+            if i < level.len() {
+                next.push(level.pop().expect("odd tail"));
+            }
+            level = next;
+        }
+        level.pop().expect("root")
+    }
+
+    /// THE SHAPE-IDENTITY WITNESS (exhaustive): for every chain length `n <= 300` and a window
+    /// sweep (including non-powers-of-two, which floor), the streaming schedule builds EXACTLY
+    /// the balanced tree. This is what licenses the streaming root exposing the identical
+    /// (shape-sensitive) chain digest.
+    #[test]
+    fn streaming_schedule_matches_balanced_tree_shape() {
+        for n in 1..=300usize {
+            let reference = balanced_reference((0..n).map(ShapeTree::Leaf).collect());
+            for window in [2usize, 3, 4, 5, 6, 7, 8, 12, 16, 32, 64, 128, 300] {
+                let streamed: Result<ShapeTree, core::convert::Infallible> =
+                    streaming_fold_schedule(
+                        n,
+                        window,
+                        |i| Ok(ShapeTree::Leaf(i)),
+                        |buf| Ok(balanced_reference(buf)),
+                        |l, r| Ok(br(l, r)),
+                    );
+                let streamed = match streamed {
+                    Ok(t) => t,
+                };
+                assert_eq!(
+                    streamed, reference,
+                    "shape diverged at n={n} window={window}"
+                );
+            }
+        }
+    }
+
+    fn synthetic_seg(i: usize) -> HostSeg {
+        let felt = |k: usize| {
+            BabyBear::new(
+                (i as u32)
+                    .wrapping_mul(0x9e37)
+                    .wrapping_add(k as u32 * 131 + 7)
+                    % BABY_BEAR_MODULUS,
+            )
+        };
+        let old8 = core::array::from_fn(felt);
+        let new8 = core::array::from_fn(|k| felt(k + SEG_ANCHOR_WIDTH));
+        leaf_seg(old8, new8)
+    }
+
+    /// The segment-level witness over the REAL combine ([`combine_seg`], Poseidon2 acc): the
+    /// streaming host mirror equals the balanced host mirror. Because the digest is NOT
+    /// associative, this equality holds ONLY via exact shape identity — a schedule bug would
+    /// flip `acc` and fail here (and, in production, at the prover's fail-closed schedule
+    /// guard before any proving).
+    #[test]
+    fn streaming_host_segment_equals_balanced_host_segment() {
+        for n in 1..=96usize {
+            let segs: Vec<HostSeg> = (0..n).map(synthetic_seg).collect();
+            let reference = fold_host_segs_balanced(segs.clone());
+            for window in [2usize, 3, 4, 8, 16, 96] {
+                assert_eq!(
+                    fold_host_segs_streaming(&segs, window),
+                    reference,
+                    "host segment diverged at n={n} window={window}"
+                );
+            }
+        }
+    }
+
+    /// THE STANDING FINDING pinned as a test: [`combine_seg`] is associative in the endpoints
+    /// and the count but NOT in the ordered digest `acc = H(L.acc ++ R.acc)` — `(a∘b)∘c` and
+    /// `a∘(b∘c)` expose different digests. This is WHY the streaming fold must reproduce the
+    /// balanced tree's shape instead of left-folding window sub-roots into one running
+    /// accumulator (which WOULD change the whole-chain digest).
+    #[test]
+    fn ordered_digest_combine_is_not_associative() {
+        let (a, b, c) = (synthetic_seg(1), synthetic_seg(2), synthetic_seg(3));
+        let left = combine_seg(combine_seg(a, b), c);
+        let right = combine_seg(a, combine_seg(b, c));
+        assert_eq!(left.first_old8, right.first_old8);
+        assert_eq!(left.last_new8, right.last_new8);
+        assert_eq!(left.count, right.count);
+        assert_ne!(
+            left.acc, right.acc,
+            "if acc were associative the shape constraint would be moot"
+        );
+    }
+
+    /// THE O(W)-NOT-O(K) WITNESS: live-instance tokens through the schedule. Peak residency at
+    /// n=512, W=8 must stay within the window + carry-stack bound (window W, carry stack
+    /// log2(n/W) = 6, +1 in flight) — decisively sublinear in n. (The proof driver adds the
+    /// window fold's internal ~W/2 per-level transient on top; still O(W).)
+    #[test]
+    fn streaming_schedule_peak_residency_is_window_bounded() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Token {
+            live: Rc<Cell<(usize, usize)>>,
+        }
+        impl Token {
+            fn new(live: &Rc<Cell<(usize, usize)>>) -> Self {
+                let (current, peak) = live.get();
+                let current = current + 1;
+                live.set((current, peak.max(current)));
+                Token { live: live.clone() }
+            }
+        }
+        impl Drop for Token {
+            fn drop(&mut self) {
+                let (current, peak) = self.live.get();
+                self.live.set((current - 1, peak));
+            }
+        }
+
+        let (n, w) = (512usize, 8usize);
+        let live = Rc::new(Cell::new((0usize, 0usize)));
+        let folded: Result<Token, core::convert::Infallible> = streaming_fold_schedule(
+            n,
+            w,
+            |_i| Ok(Token::new(&live)),
+            |buf| {
+                drop(buf); // the window fold consumes its window
+                Ok(Token::new(&live))
+            },
+            |l, r| {
+                drop((l, r)); // a merge consumes both children
+                Ok(Token::new(&live))
+            },
+        );
+        let root = match folded {
+            Ok(t) => t,
+        };
+        let (_, peak) = live.get();
+        drop(root);
+        assert_eq!(live.get().0, 0, "every token dropped");
+        // window (8) + carry stack (<= log2(512/8) = 6) + 1 in flight = 15; allow slack but
+        // stay decisively sublinear.
+        assert!(
+            peak <= w + 7 + 1,
+            "peak {peak} exceeded the O(W + log2(n/W)) bound"
+        );
+        assert!(peak * 8 < n, "peak {peak} is not sublinear in n={n}");
+    }
+
+    #[test]
+    fn floor_pow2_window_floors() {
+        for (input, expect) in [
+            (0usize, 2usize),
+            (1, 2),
+            (2, 2),
+            (3, 2),
+            (4, 4),
+            (5, 4),
+            (7, 4),
+            (8, 8),
+            (9, 8),
+            (1023, 512),
+            (1024, 1024),
+        ] {
+            assert_eq!(
+                floor_pow2_window(input),
+                expect,
+                "floor_pow2_window({input})"
+            );
+        }
+    }
+}
