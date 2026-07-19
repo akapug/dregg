@@ -11,16 +11,20 @@
 //!                     refund are mutually-exclusive one-shots.
 //!   4. CONSERVATION — the payment asset's total is preserved across every path.
 
+//! Assurance-perimeter #3: fulfillment is a VERIFIED EffectVM STARK (a
+//! `ProvenReceipt`), NOT a trusted signature. The provider commits to the exact
+//! state-commitment transition (`expected_pre/post_commitment`) at promise time; a
+//! genuine proof of THAT transition fills the hole, a forged/wrong-transition proof
+//! does not.
+
 use dregg_app_framework::service_promise::{
     EscrowStatus, ServiceId, ServicePromise, ServicePromiseError, ServicePromiseExchange,
     ServiceRequest, fulfillment_proof,
 };
 use dregg_intent::CommitmentId;
 use dregg_intent::exchange::AssetId;
-use dregg_turn::TurnReceipt;
-use dregg_turn::conditional::ConditionProof;
+use dregg_turn::conditional::{ConditionProof, ProvenReceipt};
 use dregg_types::CellId;
-use ed25519_dalek::{Signer, SigningKey};
 
 fn cid(b: u8) -> CommitmentId {
     CommitmentId([b; 32])
@@ -37,37 +41,19 @@ const CONSUMER: u8 = 1;
 const PROVIDER: u8 = 2;
 const ESCROW: u8 = 9;
 const PRICE: u64 = 100;
+const SERVICE_TURN_HASH: [u8; 32] = [0xAB; 32];
 
-/// Build a signed receipt that the named service turn executed, by a trusted
-/// executor — the proof the provider presents to FILL the promise hole.
-fn signed_receipt(service_turn_hash: [u8; 32], executor: &SigningKey) -> ConditionProof {
-    let mut receipt = TurnReceipt {
-        turn_hash: service_turn_hash,
-        agent: CellId::from_bytes([PROVIDER; 32]),
-        ..Default::default()
-    };
-    let sig = executor.sign(&receipt.receipt_hash());
-    receipt.executor_signature = Some(sig.to_bytes().to_vec());
-    fulfillment_proof(receipt)
-}
-
-fn setup() -> (
-    ServicePromiseExchange,
-    ServicePromise,
-    ServiceRequest,
-    [u8; 32],
-    SigningKey,
-) {
-    let executor = SigningKey::from_bytes(&[7u8; 32]);
-    let trusted = vec![executor.verifying_key().to_bytes()];
-    let exchange = ServicePromiseExchange::new(4, 0, cid(ESCROW), trusted);
-
+/// A cheap exchange + promise/request whose committed transition endpoints are
+/// arbitrary placeholders — for the refund path, which never verifies a proof.
+fn setup() -> (ServicePromiseExchange, ServicePromise, ServiceRequest) {
+    let exchange = ServicePromiseExchange::new(4, 0, cid(ESCROW), vec![]);
     let service = ServiceId::of(CellId::from_bytes([0x5e; 32]), "render-report");
-    let service_turn_hash = [0xAB; 32];
     let promise = ServicePromise {
         provider: cid(PROVIDER),
         service,
-        service_turn_hash,
+        service_turn_hash: SERVICE_TURN_HASH,
+        expected_pre_commitment: [0x11; 32],
+        expected_post_commitment: [0x22; 32],
         payment_asset: asset(7),
         price: PRICE,
         timeout_height: 50,
@@ -78,7 +64,39 @@ fn setup() -> (
         payment_asset: asset(7),
         offer: PRICE,
     };
-    (exchange, promise, request, service_turn_hash, executor)
+    (exchange, promise, request)
+}
+
+/// An exchange + promise/request bound to a GENUINE minted proof: the promise's
+/// committed endpoints ARE the proof's wide anchors, so `proven`'s
+/// [`fulfillment_proof`] resolves the escrow. Heavy: mints one real wide rotated
+/// EffectVM STARK.
+fn setup_proven() -> (
+    ServicePromiseExchange,
+    ServicePromise,
+    ServiceRequest,
+    ProvenReceipt,
+) {
+    let proven = dregg_turn::mint_transfer_proven_receipt(SERVICE_TURN_HASH, 7);
+    let exchange = ServicePromiseExchange::new(4, 0, cid(ESCROW), vec![]);
+    let service = ServiceId::of(CellId::from_bytes([0x5e; 32]), "render-report");
+    let promise = ServicePromise {
+        provider: cid(PROVIDER),
+        service,
+        service_turn_hash: SERVICE_TURN_HASH,
+        expected_pre_commitment: proven.pre_commitment,
+        expected_post_commitment: proven.post_commitment,
+        payment_asset: asset(7),
+        price: PRICE,
+        timeout_height: 50,
+    };
+    let request = ServiceRequest {
+        consumer: cid(CONSUMER),
+        service,
+        payment_asset: asset(7),
+        offer: PRICE,
+    };
+    (exchange, promise, request, proven)
 }
 
 /// (1) HAPPY PATH + (4) CONSERVATION.
@@ -86,7 +104,7 @@ fn setup() -> (
 /// payment asset is conserved at every step.
 #[test]
 fn happy_path_service_performed_then_paid() {
-    let (exchange, promise, request, service_turn_hash, executor) = setup();
+    let (exchange, promise, request, proven) = setup_proven();
     let pay = asset(7);
 
     let m = exchange
@@ -107,11 +125,11 @@ fn happy_path_service_performed_then_paid() {
         "conserved after escrow"
     );
 
-    // The provider performs the service turn and presents the signed receipt.
-    let proof = signed_receipt(service_turn_hash, &executor);
+    // The provider performs the service turn and presents the VERIFIED proof.
+    let proof = fulfillment_proof(&proven);
     let k2 = exchange
         .fulfill(&mut escrow, &k1, &proof, 10)
-        .expect("a conforming receipt releases the payment");
+        .expect("a genuine proof releases the payment");
 
     assert_eq!(escrow.status, EscrowStatus::Released);
     assert_eq!(
@@ -129,7 +147,7 @@ fn happy_path_service_performed_then_paid() {
 /// the consumer; conserved throughout.
 #[test]
 fn refund_path_unfulfilled_then_refunded() {
-    let (exchange, promise, request, _, _) = setup();
+    let (exchange, promise, request) = setup();
     let pay = asset(7);
 
     let m = exchange.match_one(&promise, &request).unwrap();
@@ -162,24 +180,27 @@ fn refund_path_unfulfilled_then_refunded() {
 }
 
 /// (3) ATOMICITY — no half-settle.
-/// A forged fulfillment (a receipt NOT signed by a trusted executor) does not
+/// A forged fulfillment (no verified proof, or a proof of a DIFFERENT turn) does not
 /// release the payment: the escrow stays fully funded, nothing splits, and the
 /// consumer can still refund the WHOLE amount once the window lapses.
 #[test]
 fn forged_fulfillment_never_half_pays() {
-    let (exchange, promise, request, service_turn_hash, _trusted_executor) = setup();
+    let (exchange, promise, request, proven) = setup_proven();
     let pay = asset(7);
 
     let m = exchange.match_one(&promise, &request).unwrap();
     let k0 = exchange.seed_ledger(&m, PRICE);
     let (mut escrow, k1) = exchange.fund(&m, &k0).unwrap();
 
-    // An UNTRUSTED party signs a receipt for the right turn hash.
-    let impostor = SigningKey::from_bytes(&[42u8; 32]);
-    let forged = signed_receipt(service_turn_hash, &impostor);
+    // A proofless EffectVmProof (a receipt without a proof is not a trust root).
+    let proofless = ConditionProof::EffectVmProof {
+        receipt: Box::new(proven.receipt.clone()),
+        proof_bytes: vec![],
+        public_inputs: proven.effect_vm_public_inputs.clone(),
+    };
     let err = exchange
-        .fulfill(&mut escrow, &k1, &forged, 10)
-        .expect_err("an untrusted receipt must not release payment");
+        .fulfill(&mut escrow, &k1, &proofless, 10)
+        .expect_err("a proofless fulfillment must not release payment");
     assert!(matches!(err, ServicePromiseError::Unfulfilled(_)));
 
     // No half-settle: every felt is still held in escrow, status unchanged.
@@ -188,9 +209,10 @@ fn forged_fulfillment_never_half_pays() {
     assert_eq!(k1.get(cid(PROVIDER).0, &pay), 0);
     assert_eq!(k1.total_asset(&pay), PRICE as i128);
 
-    // A receipt for the WRONG turn also fails to fill the hole.
-    let trusted = SigningKey::from_bytes(&[7u8; 32]);
-    let wrong_turn = signed_receipt([0x00; 32], &trusted);
+    // A GENUINE proof of a DIFFERENT turn (its PI[TURN_HASH] / endpoints do not match
+    // the promised transition) also fails to fill the hole.
+    let other = dregg_turn::mint_transfer_proven_receipt([0x00; 32], 7);
+    let wrong_turn = fulfillment_proof(&other);
     assert!(matches!(
         exchange.fulfill(&mut escrow, &k1, &wrong_turn, 10),
         Err(ServicePromiseError::Unfulfilled(_))
@@ -209,13 +231,13 @@ fn forged_fulfillment_never_half_pays() {
 /// is refused. The held payment is taken by exactly one exit, exactly once.
 #[test]
 fn release_and_refund_are_one_shot_exclusive() {
-    let (exchange, promise, request, service_turn_hash, executor) = setup();
+    let (exchange, promise, request, proven) = setup_proven();
+    let proof = fulfillment_proof(&proven);
 
     // Released escrow cannot also refund.
     let m = exchange.match_one(&promise, &request).unwrap();
     let k0 = exchange.seed_ledger(&m, PRICE);
     let (mut escrow, k1) = exchange.fund(&m, &k0).unwrap();
-    let proof = signed_receipt(service_turn_hash, &executor);
     let k2 = exchange.fulfill(&mut escrow, &k1, &proof, 10).unwrap();
     assert_eq!(escrow.status, EscrowStatus::Released);
     assert_eq!(
@@ -236,9 +258,8 @@ fn release_and_refund_are_one_shot_exclusive() {
     let (mut escrow2, k1b) = exchange.fund(&m2, &k0b).unwrap();
     let _ = exchange.refund(&mut escrow2, &k1b, 51).unwrap();
     assert_eq!(escrow2.status, EscrowStatus::Refunded);
-    let proof2 = signed_receipt(service_turn_hash, &executor);
     assert_eq!(
-        exchange.fulfill(&mut escrow2, &k1b, &proof2, 10),
+        exchange.fulfill(&mut escrow2, &k1b, &proof, 10),
         Err(ServicePromiseError::AlreadySettled),
         "a refunded escrow cannot release"
     );

@@ -180,22 +180,29 @@ fn main() {
     let timeout_height = 200; // 100 blocks to complete the swap
     let deposit_amount = compute_conditional_deposit(timeout_height, current_height);
 
-    // Alice's conditional: "Execute my payment IFF Bob's NFT transfer happened"
+    // Alice's conditional: "Execute my payment IFF a VERIFIED proof of Bob's NFT
+    // transfer is presented" (assurance-perimeter #3: the trust root is a proof, not a
+    // bare receipt). The endpoints are the transition Bob's finalized turn commits to.
     let alice_conditional = ConditionalTurn {
         turn: alice_turn,
-        condition: ProofCondition::TurnExecuted {
+        condition: ProofCondition::TurnProven {
             turn_hash: bob_turn_hash,
+            expected_pre_commitment: [0u8; 32],
+            expected_post_commitment: [0u8; 32],
         },
         timeout_height,
         submitted_at: current_height,
         deposit_amount,
     };
 
-    // Bob's conditional: "Execute my NFT transfer IFF Alice's payment happened"
+    // Bob's conditional: "Execute my NFT transfer IFF a verified proof of Alice's
+    // payment is presented."
     let bob_conditional = ConditionalTurn {
         turn: bob_turn,
-        condition: ProofCondition::TurnExecuted {
+        condition: ProofCondition::TurnProven {
             turn_hash: alice_turn_hash,
+            expected_pre_commitment: [0u8; 32],
+            expected_post_commitment: [0u8; 32],
         },
         timeout_height,
         submitted_at: current_height,
@@ -347,8 +354,10 @@ fn main() {
 
     let charlie_conditional = ConditionalTurn {
         turn: charlie_turn,
-        condition: ProofCondition::TurnExecuted {
+        condition: ProofCondition::TurnProven {
             turn_hash: nonexistent_hash,
+            expected_pre_commitment: [0u8; 32],
+            expected_post_commitment: [0u8; 32],
         },
         timeout_height: 150,
         submitted_at: 100,
@@ -384,11 +393,17 @@ fn main() {
         consumed_capabilities: vec![],
     };
 
-    // Use resolve_condition to demonstrate the timeout logic
+    // Use resolve_condition to demonstrate the timeout logic. Past the timeout the
+    // proof is never even inspected (Expired short-circuits) — the fake receipt rides in
+    // a proofless EffectVmProof, the proof-carrying shape.
     let mut nullifiers_gamma = HashSet::new();
     let expired_result = dregg_turn::resolve_condition(
         &charlie_conditional.condition,
-        &ConditionProof::Receipt(fake_receipt),
+        &ConditionProof::EffectVmProof {
+            receipt: Box::new(fake_receipt),
+            proof_bytes: vec![],
+            public_inputs: vec![],
+        },
         160, // past timeout!
         charlie_conditional.timeout_height,
         &[],
@@ -453,8 +468,10 @@ fn main() {
     let required_hash = *blake3::hash(b"specific-turn-required").as_bytes();
     let charlie_conditional2 = ConditionalTurn {
         turn: charlie_turn2,
-        condition: ProofCondition::TurnExecuted {
+        condition: ProofCondition::TurnProven {
             turn_hash: required_hash,
+            expected_pre_commitment: [0u8; 32],
+            expected_post_commitment: [0u8; 32],
         },
         timeout_height: 200,
         submitted_at: 100,
@@ -462,9 +479,15 @@ fn main() {
     };
 
     let mut nullifiers_gamma2 = HashSet::new();
+    // A receipt carrying NO verified proof is not a trust root (assurance-perimeter #3):
+    // within the window it is REJECTED for want of a proof.
     let rejected_result = dregg_turn::resolve_condition(
         &charlie_conditional2.condition,
-        &ConditionProof::Receipt(wrong_receipt),
+        &ConditionProof::EffectVmProof {
+            receipt: Box::new(wrong_receipt),
+            proof_bytes: vec![],
+            public_inputs: vec![],
+        },
         110, // within timeout
         charlie_conditional2.timeout_height,
         &[],
@@ -587,7 +610,7 @@ fn main() {
     println!("  Proof conditions are STRICTLY MORE GENERAL than hash locks:");
     println!("    HashPreimage is just ONE variant of ProofCondition.");
     println!("    You can also condition on:");
-    println!("    - TurnExecuted (receipt-based, this demo)");
+    println!("    - TurnProven (verified EffectVM STARK, this demo)");
     println!("    - RemoteProof (STARK-based, cross-federation)");
     println!("    - NullifierRevealed (note-based, privacy-preserving)");
     println!("    - ANY future condition type (extensible enum)");

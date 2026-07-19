@@ -26,15 +26,16 @@
 //!     conserving move the ring already proves. [`ServicePromiseExchange::fund`].
 //!
 //!  3. **Fulfill** — the promise is a guarded hole. The provider commits, at
-//!     match time, to performing a specific verified turn (the service effect);
-//!     its hash is the hole. The held payment is bound by a
-//!     [`ProofCondition::TurnExecuted`] naming that hash — the exact promise-hole
-//!     shape `turn/src/{eventual,conditional}.rs` defines (a one-shot
-//!     continuation whose fill is the receipt the service turn executed). When the
-//!     provider performs the turn it presents the signed [`TurnReceipt`]; the
-//!     receipt FILLS the hole ([`resolve_condition`] → `Resolved`) and the escrow
-//!     RELEASES the payment escrow → provider, again through the verified executor.
-//!     [`ServicePromiseExchange::fulfill`].
+//!     match time, to performing a specific verified turn (the service effect) — its
+//!     hash AND the state-commitment transition (`expected_pre/post_commitment`) it
+//!     moves through. The held payment is bound by a [`ProofCondition::TurnProven`]
+//!     naming that hash + those endpoints — the exact promise-hole shape
+//!     `turn/src/{eventual,conditional}.rs` defines (a one-shot continuation whose
+//!     fill is a VERIFIED proof the service turn executed). When the provider performs
+//!     the turn the commit pipeline produces a [`ProvenReceipt`] (the verified rotated
+//!     EffectVM STARK); presenting its [`ConditionProof::EffectVmProof`] FILLS the hole
+//!     ([`resolve_condition`] → `Resolved`) and the escrow RELEASES the payment escrow
+//!     → provider, through the verified executor. [`ServicePromiseExchange::fulfill`].
 //!
 //!  4. **Refund** — if the promise lapses (the timeout passes with no conforming
 //!     receipt) the held payment REFUNDS escrow → consumer.
@@ -56,14 +57,18 @@
 //! effect the provider will exercise on a target. The provider's commitment to
 //! perform it is the `service_turn_hash` it posts: the content-addressed
 //! [`dregg_turn::Turn::hash`] of the exact verified turn that performs the
-//! service. Fulfillment is proven the way the kernel already proves "a turn ran":
-//! a [`TurnReceipt`] whose `turn_hash` matches AND whose `executor_signature`
-//! verifies against a trusted executor key (the [`ProofCondition::TurnExecuted`]
-//! resolution path). This module does NOT itself decide what counts as the
-//! service being "done well" — it binds payment to the FACT that the named turn
-//! executed under a trusted executor. Richer fulfillment (a STARK proof of an
-//! outcome predicate) is the `ProofCondition::LocalProof` / `RemoteProof` path,
-//! pluggable through the same [`ServiceEscrow::condition`] field.
+//! service. Fulfillment is proven the way the kernel proves "a turn ran" AFTER the
+//! trusted-key retirement (assurance-perimeter #3): a VERIFIED rotated EffectVM STARK
+//! ([`ConditionProof::EffectVmProof`]) whose bound turn hash matches the promise AND
+//! whose wide state-commitment anchors equal the promised `expected_pre/post_commitment`
+//! (the [`ProofCondition::TurnProven`] resolution path). No executor SIGNATURE is
+//! consulted — the trust root is the PROOF. HONEST SCOPE: the proof attests the
+//! state-commitment DELTA `pre -> post`, not the full state, and rests on the FRI floor
+//! (`project-fri-soundness-reality`). This module does NOT decide what counts as the
+//! service being "done well" — it binds payment to a PROVEN state transition. Richer
+//! fulfillment (a STARK proof of an outcome predicate) is the
+//! `ProofCondition::LocalProof` / `RemoteProof` path, pluggable through the same
+//! [`ServiceEscrow::condition`] field.
 
 use std::collections::HashSet;
 
@@ -75,9 +80,8 @@ use dregg_intent::solver::{ExchangeSpec, IntentNode, RingSolver, RingTrade};
 use dregg_intent::verified_settle::{
     VerifiedSettleError, WideLedger, WideLeg, settle_ring_wide_verified,
 };
-use dregg_turn::TurnReceipt;
 use dregg_turn::conditional::{
-    ConditionProof, ConditionalResult, ProofCondition, resolve_condition,
+    ConditionProof, ConditionalResult, ProofCondition, ProvenReceipt, resolve_condition,
 };
 use dregg_types::CellId;
 
@@ -128,9 +132,20 @@ pub struct ServicePromise {
     /// The service promised.
     pub service: ServiceId,
     /// The content-addressed [`dregg_turn::Turn::hash`] of the exact verified turn
-    /// the provider will perform to fulfill — the fulfillment hole. A
-    /// [`TurnReceipt`] for THIS turn (signed by a trusted executor) fills it.
+    /// the provider will perform to fulfill — the fulfillment hole. A VERIFIED
+    /// EffectVM STARK for THIS turn (a [`ProvenReceipt`], assurance-perimeter #3)
+    /// fills it — NOT a trusted signature.
     pub service_turn_hash: [u8; 32],
+    /// The pre-state circuit commitment the service turn is expected to move FROM
+    /// (32-byte `commitment_8bb_to_bytes` form). The provider COMMITS to the exact
+    /// state transition at promise time; a fulfilling proof's wide OLD anchor must
+    /// equal this. This is the escrow's TRUSTED pre endpoint (never taken from the
+    /// prover-controlled proof).
+    pub expected_pre_commitment: [u8; 32],
+    /// The post-state circuit commitment the service turn is expected to move TO. A
+    /// fulfilling proof's wide NEW anchor must equal this — the escrow's TRUSTED post
+    /// endpoint.
+    pub expected_post_commitment: [u8; 32],
     /// The asset the provider wants to be paid in.
     pub payment_asset: AssetId,
     /// The price the provider asks.
@@ -165,6 +180,12 @@ pub struct ServiceMatch {
     pub service: ServiceId,
     /// The fulfillment hole (the promised service turn's hash).
     pub service_turn_hash: [u8; 32],
+    /// The pre-state commitment the service turn is committed to move FROM (the
+    /// escrow's TRUSTED pre endpoint, carried from the promise).
+    pub expected_pre_commitment: [u8; 32],
+    /// The post-state commitment the service turn is committed to move TO (the
+    /// escrow's TRUSTED post endpoint, carried from the promise).
+    pub expected_post_commitment: [u8; 32],
     /// The asset payment settles in.
     pub payment_asset: AssetId,
     /// The matched price (the verified ring leg's amount).
@@ -189,6 +210,8 @@ impl ServiceMatch {
         h.update(&self.consumer.0);
         h.update(self.service.as_bytes());
         h.update(&self.service_turn_hash);
+        h.update(&self.expected_pre_commitment);
+        h.update(&self.expected_post_commitment);
         h.update(&self.payment_asset);
         h.update(&self.price.to_le_bytes());
         h.update(&self.timeout_height.to_le_bytes());
@@ -340,9 +363,10 @@ pub struct ServiceEscrow {
     /// [`CommittedEscrow`]). The [`status`](Self::status) field is its in-memory
     /// mirror.
     pub escrow_cell: Cell,
-    /// The fulfillment condition (the promise hole): a [`ProofCondition::TurnExecuted`]
-    /// naming the promised service turn. Swap this for a `LocalProof`/`RemoteProof`
-    /// to gate release on an outcome predicate instead of mere execution.
+    /// The fulfillment condition (the promise hole): a [`ProofCondition::TurnProven`]
+    /// naming the promised service turn + its committed pre/post endpoints. Swap this
+    /// for a `LocalProof`/`RemoteProof` to gate release on an outcome predicate instead
+    /// of a proven execution.
     pub condition: ProofCondition,
     /// In-memory mirror of the committed lifecycle status. The committed cell
     /// ([`escrow_cell`](Self::escrow_cell)) is authoritative.
@@ -418,11 +442,11 @@ impl std::error::Error for ServicePromiseError {}
 
 /// **The service-promise exchange.**
 ///
-/// Holds the ring bound, the wall-clock `now` intents are judged against, the
-/// escrow holding account, and the executor keys whose signatures count as proof
-/// a service turn ran. It owns no value — value lives in the verified ledger; the
+/// Holds the ring bound, the wall-clock `now` intents are judged against, and the
+/// escrow holding account. It owns no value — value lives in the verified ledger; the
 /// exchange MATCHES promises and drives the held-payment lifecycle through the
-/// verified executor.
+/// verified executor. Fulfillment is a VERIFIED EffectVM STARK (a [`ProvenReceipt`]),
+/// not a trusted signature (assurance-perimeter #3).
 #[derive(Clone, Debug)]
 pub struct ServicePromiseExchange {
     /// Largest cycle the ring matcher searches (≥ 2; a service pair is a 2-cycle).
@@ -431,11 +455,13 @@ pub struct ServicePromiseExchange {
     pub now: u64,
     /// The account that holds escrowed payments between fund and release/refund.
     pub escrow: CommitmentId,
-    /// Executor verifying-keys (32-byte ed25519) whose signature on a
-    /// [`TurnReceipt`] proves the named service turn executed.
+    /// RETIRED as a trust root (assurance-perimeter #3): a trusted executor SIGNATURE
+    /// no longer resolves the default fulfillment path (that path now requires a
+    /// verified EffectVM STARK). Retained for API stability and the `RemoteProof`/
+    /// `LocalProof` fulfillment variants; the default `TurnProven` path ignores it.
     pub trusted_executor_keys: Vec<[u8; 32]>,
     /// Maximum age (in blocks) a federation root may be for a `RemoteProof`
-    /// fulfillment; unused by the default `TurnExecuted` path.
+    /// fulfillment; unused by the default `TurnProven` path.
     pub max_root_age: u64,
 }
 
@@ -546,6 +572,8 @@ impl ServicePromiseExchange {
             consumer: request.consumer,
             service: promise.service,
             service_turn_hash: promise.service_turn_hash,
+            expected_pre_commitment: promise.expected_pre_commitment,
+            expected_post_commitment: promise.expected_post_commitment,
             payment_asset: promise.payment_asset,
             price: pay.amount,
             timeout_height: promise.timeout_height,
@@ -578,23 +606,27 @@ impl ServicePromiseExchange {
             matched: matched.clone(),
             escrow: self.escrow,
             escrow_cell,
-            condition: ProofCondition::TurnExecuted {
+            condition: ProofCondition::TurnProven {
                 turn_hash: matched.service_turn_hash,
+                expected_pre_commitment: matched.expected_pre_commitment,
+                expected_post_commitment: matched.expected_post_commitment,
             },
             status: EscrowStatus::Funded,
         };
         Ok((escrow, post))
     }
 
-    /// **Fulfill**: the provider presents the proof its promised service turn ran
-    /// (a signed [`TurnReceipt`], as a [`ConditionProof::Receipt`]). The receipt
-    /// FILLS the promise hole via [`resolve_condition`]; on `Resolved` the held
-    /// payment RELEASES escrow → provider through the verified executor and the
-    /// escrow becomes [`EscrowStatus::Released`].
+    /// **Fulfill**: the provider presents the VERIFIED proof its promised service turn
+    /// ran (a [`ConditionProof::EffectVmProof`] from its [`ProvenReceipt`], built via
+    /// [`fulfillment_proof`]). The proof FILLS the promise hole via [`resolve_condition`]
+    /// — a real EffectVM STARK bound to the promised turn hash + pre/post endpoints, no
+    /// signature consulted; on `Resolved` the held payment RELEASES escrow → provider
+    /// through the verified executor and the escrow becomes [`EscrowStatus::Released`].
     ///
-    /// If the proof does not resolve (wrong receipt, untrusted executor, expired
-    /// window) NOTHING moves and the escrow stays funded — there is no half-settle.
-    /// A released or refunded escrow refuses ([`ServicePromiseError::AlreadySettled`]).
+    /// If the proof does not resolve (wrong/forged/tampered proof, a proof of a different
+    /// transition, expired window) NOTHING moves and the escrow stays funded — there is no
+    /// half-settle. A released or refunded escrow refuses
+    /// ([`ServicePromiseError::AlreadySettled`]).
     pub fn fulfill(
         &self,
         escrow: &mut ServiceEscrow,
@@ -705,15 +737,17 @@ fn intent_id(creator: &CommitmentId, role: &[u8], asset: &AssetId, amount: u64) 
     *h.finalize().as_bytes()
 }
 
-/// Build a fulfillment proof from a service turn's hash + a signed executor
-/// receipt — the [`ConditionProof::Receipt`] the provider presents to fill the
-/// promise hole. The receipt's `turn_hash` must equal the promised
-/// `service_turn_hash`, and `executor_signature` must be a 64-byte signature (by a
-/// trusted executor) over `receipt.receipt_hash()`. Exposed as a helper because
-/// "the provider performed the turn, here is the receipt" is the whole fulfillment
-/// gesture.
-pub fn fulfillment_proof(receipt: TurnReceipt) -> ConditionProof {
-    ConditionProof::Receipt(receipt)
+/// Build a fulfillment proof from the provider's [`ProvenReceipt`] — the
+/// [`ConditionProof::EffectVmProof`] the provider presents to fill the promise hole
+/// (assurance-perimeter #3). The provider performed the service turn through the
+/// commit pipeline, which produced the VERIFIED rotated EffectVM STARK bundled in the
+/// `ProvenReceipt`; that PROOF (not a trusted signature) is what resolves the escrow's
+/// [`ProofCondition::TurnProven`] — the proof's turn hash must equal the promised
+/// `service_turn_hash` and its wide anchors must equal the promised pre/post
+/// endpoints. Exposed as a helper because "the provider performed the turn, here is
+/// the proof" is the whole fulfillment gesture.
+pub fn fulfillment_proof(proven: &ProvenReceipt) -> ConditionProof {
+    proven.effect_vm_proof()
 }
 
 #[cfg(test)]
@@ -741,6 +775,8 @@ mod tests {
             provider: cid(2),
             service,
             service_turn_hash,
+            expected_pre_commitment: [0x11; 32],
+            expected_post_commitment: [0x22; 32],
             payment_asset: asset(7),
             price: 100,
             timeout_height: 50,
@@ -852,6 +888,8 @@ mod tests {
             provider,
             service,
             service_turn_hash: [0xAB; 32],
+            expected_pre_commitment: [0x11; 32],
+            expected_post_commitment: [0x22; 32],
             payment_asset: asset(7),
             price: 100,
             timeout_height: 50,
@@ -887,16 +925,20 @@ mod tests {
     /// in-memory flag) and show the committed status is `Released` AND that the
     /// committed state itself REFUSES a refund. The exclusion is bound into the
     /// commitment, not the coordinator's memory.
-    fn fund_one() -> (ServicePromiseExchange, ServiceEscrow, WideLedger, [u8; 32]) {
-        use ed25519_dalek::SigningKey;
-        let executor = SigningKey::from_bytes(&[7u8; 32]);
-        let trusted = vec![executor.verifying_key().to_bytes()];
+    ///
+    /// The provider's committed transition is a GENUINE minted [`ProvenReceipt`]: its
+    /// wide endpoints ARE what the provider promises (`expected_pre/post_commitment`),
+    /// and its verified EffectVM STARK is what fulfills. Heavy: mints one real proof.
+    fn fund_one() -> (ServicePromiseExchange, ServiceEscrow, WideLedger, ProvenReceipt) {
         let service = ServiceId::of(CellId::from_bytes([0x5e; 32]), "render-report");
         let service_turn_hash = [0xAB; 32];
+        let proven = dregg_turn::mint_transfer_proven_receipt(service_turn_hash, 7);
         let promise = ServicePromise {
             provider: cid(2),
             service,
             service_turn_hash,
+            expected_pre_commitment: proven.pre_commitment,
+            expected_post_commitment: proven.post_commitment,
             payment_asset: asset(7),
             price: 100,
             timeout_height: 50,
@@ -907,33 +949,20 @@ mod tests {
             payment_asset: asset(7),
             offer: 100,
         };
-        let exchange = ServicePromiseExchange::new(4, 0, cid(9), trusted);
+        let exchange = ServicePromiseExchange::new(4, 0, cid(9), vec![]);
         let m = exchange.match_one(&promise, &request).unwrap();
         let k0 = exchange.seed_ledger(&m, 100);
         let (escrow, k1) = exchange.fund(&m, &k0).unwrap();
-        (exchange, escrow, k1, service_turn_hash)
-    }
-
-    fn signed_proof(turn_hash: [u8; 32]) -> ConditionProof {
-        use ed25519_dalek::{Signer, SigningKey};
-        let executor = SigningKey::from_bytes(&[7u8; 32]);
-        let mut receipt = TurnReceipt {
-            turn_hash,
-            agent: CellId::from_bytes([2u8; 32]),
-            ..Default::default()
-        };
-        let sig = executor.sign(&receipt.receipt_hash());
-        receipt.executor_signature = Some(sig.to_bytes().to_vec());
-        fulfillment_proof(receipt)
+        (exchange, escrow, k1, proven)
     }
 
     #[test]
     fn committed_state_forbids_refund_after_release() {
-        let (exchange, mut escrow, k1, turn_hash) = fund_one();
-        let proof = signed_proof(turn_hash);
+        let (exchange, mut escrow, k1, proven) = fund_one();
+        let proof = fulfillment_proof(&proven);
         exchange
             .fulfill(&mut escrow, &k1, &proof, 10)
-            .expect("a conforming receipt releases");
+            .expect("a verified proof releases");
 
         // The commitment moved (a light client sees the terminal state).
         let committed = CommittedEscrow::read(&escrow.escrow_cell).expect("binding");
@@ -975,9 +1004,9 @@ mod tests {
 
     #[test]
     fn committed_terminal_moves_the_cell_commitment() {
-        let (exchange, mut escrow, k1, turn_hash) = fund_one();
+        let (exchange, mut escrow, k1, proven) = fund_one();
         let before = escrow.escrow_cell.state_commitment();
-        let proof = signed_proof(turn_hash);
+        let proof = fulfillment_proof(&proven);
         exchange.fulfill(&mut escrow, &k1, &proof, 10).unwrap();
         let after = escrow.escrow_cell.state_commitment();
         assert_ne!(

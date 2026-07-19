@@ -258,6 +258,80 @@ pub enum ConditionProof {
     },
 }
 
+/// The proof-carrying witness of a finalized turn (assurance-perimeter #3): a turn's
+/// [`TurnReceipt`] bundled with the rotated EffectVM STARK that attests its
+/// state-commitment DELTA `pre -> post`, plus the wide pre/post commitment endpoints
+/// the proof binds (packed to the 32-byte `commitment_8bb_to_bytes` form).
+///
+/// This is the "/witness" the finalized-turn commit pipeline produces so a condition
+/// site can build a [`ProofCondition::TurnProven`] + a [`ConditionProof::EffectVmProof`]
+/// WITHOUT re-proving — the trust root moved off the bare signature onto a VERIFIED
+/// proof. It deliberately does NOT live inside [`TurnReceipt`]: the (multi-MB) proof
+/// rides ALONGSIDE the receipt, exactly as [`ConditionProof::EffectVmProof`] carries
+/// the receipt and the proof as separate fields, so the consensus receipt hash/chain
+/// is unchanged and no receipt-hash domain bump ripples through the ledger.
+///
+/// Producers:
+/// * the node commit pipeline extracts one from the already-produced
+///   `dregg_sdk::FullTurnProof` (`node::turn_proving` — the `"effect-vm-rotated"`
+///   sub-proof + the leg's wide anchors), reusing `prove_full_turn`'s output; and
+/// * [`mint_transfer_proven_receipt`] (behind the `prover` feature) mints a genuine
+///   one directly for tests/demos via the same `rotation_witness` machinery.
+///
+/// HONEST SCOPE (carried from [`ProofCondition::TurnProven`]): a verified proof attests
+/// the state-commitment DELTA, NOT the full state, and rests on the undischarged FRI
+/// floor (`project-fri-soundness-reality`). The advance is real: the receipt is bound
+/// to a PROOF, not a trusted signer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProvenReceipt {
+    /// The finalized turn's receipt (identity + metadata). Its `executor_signature`,
+    /// if any, is NOT the trust root here — the STARK is.
+    pub receipt: TurnReceipt,
+    /// `postcard(Ir2BatchProof<DreggStarkConfig>)` — the rotated multi-table EffectVM
+    /// batch proof (the `"effect-vm-rotated"` leg the finalized turn's commit pipeline
+    /// emits). Carried verbatim into [`ConditionProof::EffectVmProof::proof_bytes`].
+    pub effect_vm_proof_bytes: Vec<u8>,
+    /// The public inputs the proof binds, as canonical `u32` BabyBear values (the
+    /// rotated leg's `sub_public_inputs`). Carried into
+    /// [`ConditionProof::EffectVmProof::public_inputs`].
+    pub effect_vm_public_inputs: Vec<u32>,
+    /// The pre-state wide commitment the proof's OLD anchor binds, packed to 32 bytes
+    /// (`commitment_8bb_to_bytes`). The `TurnProven` condition's TRUSTED pre endpoint.
+    pub pre_commitment: [u8; 32],
+    /// The post-state wide commitment the proof's NEW anchor binds, packed to 32 bytes.
+    /// The `TurnProven` condition's TRUSTED post endpoint.
+    pub post_commitment: [u8; 32],
+}
+
+impl ProvenReceipt {
+    /// The [`ProofCondition::TurnProven`] this proof satisfies, binding the turn hash
+    /// and the wide pre/post endpoints the proof carries.
+    ///
+    /// Convenience for tests/demos/self-attestation: it uses the endpoints the PRODUCER
+    /// bound. A verifier that INDEPENDENTLY knows the transition it expects (e.g. an
+    /// escrow holder trusting a provider's committed endpoints) must build the condition
+    /// from ITS OWN trusted endpoints instead — the resolver's guarantee is only that the
+    /// proof's anchors EQUAL the condition's endpoints, so trusting the prover's endpoints
+    /// here trusts the prover about WHICH transition it proved.
+    pub fn turn_proven_condition(&self) -> ProofCondition {
+        ProofCondition::TurnProven {
+            turn_hash: self.receipt.turn_hash,
+            expected_pre_commitment: self.pre_commitment,
+            expected_post_commitment: self.post_commitment,
+        }
+    }
+
+    /// The [`ConditionProof::EffectVmProof`] to present against a [`ProofCondition::TurnProven`]
+    /// condition — the receipt paired with the verified rotated EffectVM STARK.
+    pub fn effect_vm_proof(&self) -> ConditionProof {
+        ConditionProof::EffectVmProof {
+            receipt: Box::new(self.receipt.clone()),
+            proof_bytes: self.effect_vm_proof_bytes.clone(),
+            public_inputs: self.effect_vm_public_inputs.clone(),
+        }
+    }
+}
+
 /// Resolve a conditional turn by presenting a proof.
 ///
 /// Checks timeout, proof nullifier (reuse prevention), proof type matching,
@@ -748,6 +822,140 @@ fn verify_effect_vm_turn_proof(
     }
 
     Ok(())
+}
+
+/// Mint a GENUINE [`ProvenReceipt`] for a Transfer DEBIT of `amount` bound to `turn_hash`
+/// — a real (non-recursive, DEFAULT-config) wide rotated EffectVM STARK the resolver
+/// accepts, NOT a mock. The `PI[TURN_HASH]` slot is filled with the canonical projection
+/// of `turn_hash` (the honest producer's job — the AIR does not constrain that slot), and
+/// the wide 8-felt endpoints are packed to the condition's 32-byte commitment form.
+///
+/// This is the SAME proving recipe `rotation_witness::mint_rotated_participant_leg` runs,
+/// proved under the deployed non-recursive `prove_vm_descriptor2` (the verify floor) so the
+/// resolver's self-detecting `verify_vm_descriptor2` accepts it. It is the single place the
+/// downstream proof-carrying features (`service_promise`, `shared_fork`, the cross-fed atomic
+/// demos, `full_pipeline`) obtain a genuine `EffectVmProof` for tests/demos, instead of each
+/// re-implementing the proving. (The PRODUCTION producer is the node commit pipeline extracting
+/// the `"effect-vm-rotated"` leg from `dregg_sdk::FullTurnProof` — see [`ProvenReceipt`].)
+///
+/// Behind the `prover` feature (the wide rotated PRODUCER); the resolver's verify floor is
+/// unconditional. Heavy: mints one real wide rotated proof.
+#[cfg(feature = "prover")]
+pub fn mint_transfer_proven_receipt(turn_hash: [u8; 32], amount: u64) -> ProvenReceipt {
+    use crate::rotation_witness::{empty_revoked_root_8, produce, sender_membership_teeth};
+    use dregg_cell::commitment::RotationCarrierMaterial;
+    use dregg_cell::{AuthRequired, Ledger, Permissions};
+    use dregg_circuit::descriptor_ir2::prove_vm_descriptor2;
+    use dregg_circuit::effect_vm::pi as p;
+    use dregg_circuit::effect_vm::trace_rotated::{
+        RotatedBlockWitness, generate_rotated_effect_vm_descriptor_and_trace_wide,
+        transfer_caveat_manifest,
+    };
+    use dregg_circuit::effect_vm::{CellState, Effect};
+    use dregg_commit::typed::canonical_32_to_felts_4;
+
+    // A producer cell that admits the actor without auth gating (the rotated producer recipe).
+    let open = Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    let mut pk = [0u8; 32];
+    pk[0] = 7;
+    let balance = 1000i64;
+    let make_cell = |bal: i64| {
+        let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], bal);
+        cell.permissions = open.clone();
+        cell
+    };
+    let before_cell = make_cell(balance);
+    let after_cell = make_cell(balance - amount as i64);
+
+    let state = CellState::new(balance as u64, 0);
+    let effects = vec![Effect::Transfer {
+        amount,
+        direction: 1,
+    }];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
+    let commitments_root = dregg_circuit::heap_root::empty_heap_root_8();
+    let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+
+    let mut ledger = Ledger::new();
+    ledger
+        .insert_cell(after_cell.clone())
+        .expect("seed ledger for the proven-receipt mint");
+    let carrier = RotationCarrierMaterial::default();
+    let before_w = produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &empty_revoked_root_8(),
+        &receipt_log,
+        &carrier,
+    );
+    let after_w = produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &empty_revoked_root_8(),
+        &receipt_log,
+        &carrier,
+    );
+    let before_block = RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot)
+        .expect("before block witness");
+    let after_block = RotatedBlockWitness::new(after_w.pre_limbs.clone(), after_w.iroot)
+        .expect("after block witness");
+    let caveat = transfer_caveat_manifest();
+    let (desc, trace, mut dpis, map_heaps, mem_boundary) =
+        generate_rotated_effect_vm_descriptor_and_trace_wide(
+            &state,
+            &effects,
+            &before_block,
+            &after_block,
+            &caveat,
+            None,
+            None,
+            None,
+            Some(sender_membership_teeth(&before_cell)),
+        )
+        .expect("wide rotated transfer producer");
+
+    // Honest producer: fill the (AIR-unconstrained) TURN_HASH slot with the canonical
+    // projection of the turn identity, so the proof binds THIS turn.
+    let th = canonical_32_to_felts_4(&turn_hash);
+    dpis[p::TURN_HASH_BASE..p::TURN_HASH_BASE + p::TURN_HASH_LEN].copy_from_slice(&th);
+
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .expect("default-config wide effect-vm prove");
+    verify_vm_descriptor2(&desc, &proof, &dpis).expect("minted proof self-verifies");
+
+    let effect_vm_proof_bytes =
+        postcard::to_allocvec(&proof).expect("postcard-encode the rotated Ir2BatchProof");
+    let effect_vm_public_inputs: Vec<u32> = dpis.iter().map(|f| f.as_u32()).collect();
+    let n = dpis.len();
+    let wide_old: [BabyBear; 8] = dpis[n - 16..n - 8].try_into().unwrap();
+    let wide_new: [BabyBear; 8] = dpis[n - 8..n].try_into().unwrap();
+    let pre_commitment = crate::executor::TurnExecutor::commitment_8bb_to_bytes(wide_old);
+    let post_commitment = crate::executor::TurnExecutor::commitment_8bb_to_bytes(wide_new);
+
+    let receipt = TurnReceipt {
+        turn_hash,
+        ..Default::default()
+    };
+    ProvenReceipt {
+        receipt,
+        effect_vm_proof_bytes,
+        effect_vm_public_inputs,
+        pre_commitment,
+        post_commitment,
+    }
 }
 
 /// Validate a ConditionalTurn at submission time.
@@ -1243,130 +1451,41 @@ mod tests {
         );
     }
 
-    /// The producer-cell recipe for a rotated Transfer leg (mirrors
-    /// `circuit-prove/tests/ivc_turn_chain_rotated.rs`): open permissions so the rotated producer
-    /// admits the actor cell without auth gating.
-    #[cfg(feature = "prover")]
-    fn open_permissions() -> dregg_cell::Permissions {
-        use dregg_cell::AuthRequired;
-        dregg_cell::Permissions {
-            send: AuthRequired::None,
-            receive: AuthRequired::None,
-            set_state: AuthRequired::None,
-            set_permissions: AuthRequired::None,
-            set_verification_key: AuthRequired::None,
-            increment_nonce: AuthRequired::None,
-            delegate: AuthRequired::None,
-            access: AuthRequired::None,
-        }
-    }
-
-    #[cfg(feature = "prover")]
-    fn producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
-        let mut pk = [0u8; 32];
-        pk[0] = 7;
-        let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], balance);
-        cell.permissions = open_permissions();
-        for _ in 0..nonce {
-            let _ = cell.state.increment_nonce();
-        }
-        cell
-    }
-
-    /// Mint a GENUINE (non-recursive, DEFAULT-config) wide rotated EffectVM STARK for a Transfer
-    /// DEBIT of `amount`, with `PI[TURN_HASH]` filled to the canonical projection of `turn_hash`
-    /// (the honest producer's job — the AIR does not constrain that slot). Returns exactly the
-    /// material an `EffectVmProof` carries plus the wide 8-felt endpoints packed to the condition's
-    /// 32-byte commitment form. This is the same recipe `rotation_witness::mint_rotated_participant_leg`
-    /// runs, but proved under the deployed non-recursive `prove_vm_descriptor2` (the verify floor)
-    /// instead of the recursion leaf-wrap config, so the resolver's `verify_vm_descriptor2` accepts it.
+    /// Mint the genuine wide rotated EffectVM STARK material for the adversarial gate, via the
+    /// production-shared [`mint_transfer_proven_receipt`] (the SINGLE proving recipe the downstream
+    /// proof-carrying features reuse). Returns the raw material for the per-forgery mutations.
     #[cfg(feature = "prover")]
     fn genuine_effect_vm_turn_proof(
         turn_hash: [u8; 32],
         amount: u64,
     ) -> (Vec<u8>, Vec<u32>, [u8; 32], [u8; 32]) {
-        use crate::rotation_witness::{empty_revoked_root_8, produce, sender_membership_teeth};
-        use dregg_cell::Ledger;
-        use dregg_cell::commitment::RotationCarrierMaterial;
-        use dregg_circuit::descriptor_ir2::prove_vm_descriptor2;
-        use dregg_circuit::effect_vm::pi as p;
-        use dregg_circuit::effect_vm::trace_rotated::{
-            RotatedBlockWitness, generate_rotated_effect_vm_descriptor_and_trace_wide,
-            transfer_caveat_manifest,
-        };
-        use dregg_circuit::effect_vm::{CellState, Effect};
-        use dregg_commit::typed::canonical_32_to_felts_4;
+        let pr = mint_transfer_proven_receipt(turn_hash, amount);
+        (
+            pr.effect_vm_proof_bytes,
+            pr.effect_vm_public_inputs,
+            pr.pre_commitment,
+            pr.post_commitment,
+        )
+    }
 
-        let balance = 1000i64;
-        let nonce = 0u64;
-        let state = CellState::new(balance as u64, nonce as u32);
-        let effects = vec![Effect::Transfer {
-            amount,
-            direction: 1,
-        }];
-        let before_cell = producer_cell(balance, nonce);
-        let after_cell = producer_cell(balance - amount as i64, nonce);
-        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
-        let commitments_root = dregg_circuit::heap_root::empty_heap_root_8();
-        let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
-
-        let mut ledger = Ledger::new();
-        ledger.insert_cell(after_cell.clone()).expect("seed ledger");
-        let carrier = RotationCarrierMaterial::default();
-        let before_w = produce(
-            &before_cell,
-            &ledger,
-            &nullifier_root,
-            &commitments_root,
-            &empty_revoked_root_8(),
-            &receipt_log,
-            &carrier,
+    /// The [`ProvenReceipt`] convenience API is coherent end-to-end: a minted proof's
+    /// `turn_proven_condition()` is RESOLVED by its own `effect_vm_proof()` on the real resolver.
+    /// (Heavy: mints one real wide rotated proof.)
+    #[cfg(feature = "prover")]
+    #[test]
+    fn proven_receipt_condition_resolves_its_own_proof() {
+        let turn_hash = [0x77u8; 32];
+        let proven = mint_transfer_proven_receipt(turn_hash, 5);
+        let condition = proven.turn_proven_condition();
+        let proof = proven.effect_vm_proof();
+        assert!(matches!(condition, ProofCondition::TurnProven { .. }));
+        assert!(matches!(proof, ConditionProof::EffectVmProof { .. }));
+        let mut n = nullifiers();
+        assert_eq!(
+            resolve_condition(&condition, &proof, 10, 100, &[], DEFAULT_MAX_ROOT_AGE, &mut n, &[]),
+            ConditionalResult::Resolved,
+            "a ProvenReceipt's own condition must resolve its own proof"
         );
-        let after_w = produce(
-            &after_cell,
-            &ledger,
-            &nullifier_root,
-            &commitments_root,
-            &empty_revoked_root_8(),
-            &receipt_log,
-            &carrier,
-        );
-        let before_block = RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot)
-            .expect("before block witness");
-        let after_block = RotatedBlockWitness::new(after_w.pre_limbs.clone(), after_w.iroot)
-            .expect("after block witness");
-        let caveat = transfer_caveat_manifest();
-        let (desc, trace, mut dpis, map_heaps, mem_boundary) =
-            generate_rotated_effect_vm_descriptor_and_trace_wide(
-                &state,
-                &effects,
-                &before_block,
-                &after_block,
-                &caveat,
-                None,
-                None,
-                None,
-                Some(sender_membership_teeth(&before_cell)),
-            )
-            .expect("wide rotated transfer producer");
-
-        // Honest producer: fill the (AIR-unconstrained) TURN_HASH slot with the canonical projection
-        // of the turn identity, so the proof binds THIS turn.
-        let th = canonical_32_to_felts_4(&turn_hash);
-        dpis[p::TURN_HASH_BASE..p::TURN_HASH_BASE + p::TURN_HASH_LEN].copy_from_slice(&th);
-
-        let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
-            .expect("default-config wide effect-vm prove");
-        verify_vm_descriptor2(&desc, &proof, &dpis).expect("minted proof self-verifies");
-
-        let proof_bytes = postcard::to_allocvec(&proof).expect("postcard-encode proof");
-        let public_inputs: Vec<u32> = dpis.iter().map(|f| f.as_u32()).collect();
-        let n = dpis.len();
-        let wide_old: [BabyBear; 8] = dpis[n - 16..n - 8].try_into().unwrap();
-        let wide_new: [BabyBear; 8] = dpis[n - 8..n].try_into().unwrap();
-        let expected_pre = crate::executor::TurnExecutor::commitment_8bb_to_bytes(wide_old);
-        let expected_post = crate::executor::TurnExecutor::commitment_8bb_to_bytes(wide_new);
-        (proof_bytes, public_inputs, expected_pre, expected_post)
     }
 
     /// THE GATE, adversarial: a `TurnProven` condition RESOLVES for a genuine EffectVM STARK bound

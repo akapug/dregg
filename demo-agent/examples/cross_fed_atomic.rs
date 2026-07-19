@@ -145,22 +145,28 @@ fn main() {
     let timeout_height = 100;
     let current_height = 50;
 
-    // Alice's conditional: execute IFF Bob's turn was executed
+    // The trust root is a VERIFIED EffectVM STARK, not a bare receipt (assurance-perimeter
+    // #3): Bob's finalized turn produces a ProvenReceipt (here minted directly), whose
+    // committed pre/post endpoints Alice's condition binds.
+    let bob_proven = dregg_turn::mint_transfer_proven_receipt(bob_turn_hash, 100);
+
+    // Alice's conditional: execute IFF a verified proof bound to Bob's turn is presented.
     let alice_conditional = ConditionalTurn {
         turn: alice_turn_a,
-        condition: ProofCondition::TurnExecuted {
-            turn_hash: bob_turn_hash,
-        },
+        condition: bob_proven.turn_proven_condition(),
         timeout_height,
         submitted_at: current_height,
         deposit_amount: compute_conditional_deposit(timeout_height, current_height),
     };
 
-    // Bob's conditional: execute IFF Alice's turn was executed
+    // Bob's conditional: execute IFF a verified proof bound to Alice's turn is presented.
+    // (In this demo only Bob's turn is bootstrapped; the condition is illustrative.)
     let bob_conditional = ConditionalTurn {
         turn: bob_turn_b,
-        condition: ProofCondition::TurnExecuted {
+        condition: ProofCondition::TurnProven {
             turn_hash: alice_turn_hash,
+            expected_pre_commitment: [0u8; 32],
+            expected_post_commitment: [0u8; 32],
         },
         timeout_height,
         submitted_at: current_height,
@@ -208,7 +214,9 @@ fn main() {
 
     println!("\n--- Step 4: Alice resolves her conditional in Fed A ---\n");
 
-    let proof = ConditionProof::Receipt(bob_receipt);
+    // Bob presents the VERIFIED EffectVM proof (not the bare receipt) to Fed A.
+    let _ = &bob_receipt; // bob's execution receipt (identity checked above)
+    let proof = bob_proven.effect_vm_proof();
     let executor_a = TurnExecutor::new(ComputronCosts::zero());
 
     let mut null_a = HashSet::new();
@@ -438,7 +446,7 @@ fn main() {
 
     println!("\n=== Cross-Federation Atomic Swap: SUCCESS ===\n");
     println!("Demonstrated:");
-    println!("  1. ConditionalTurn with TurnExecuted condition (receipt-based)");
+    println!("  1. ConditionalTurn with TurnProven condition (verified EffectVM STARK)");
     println!("  2. Timeout expiry (no state change, no fee)");
     println!("  3. Invalid proof rejection (condition not met)");
     println!("  4. Successful preimage reveal (HTLC-style)");

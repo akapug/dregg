@@ -2369,17 +2369,22 @@ mod tests {
     }
 
     #[test]
-    fn networkboundary_resolves_on_a_signed_consent_and_fires_once() {
-        // THE KEYSTONE (resolution shape): a signed grant-receipt is the
-        // ConditionProof that satisfies the pending TurnExecuted condition. We build
-        // a genuine signed receipt exactly as the proven `conditional.rs`
-        // TurnExecuted arm checks it (the executor signs `receipt_hash()` with a key
-        // in the trusted set), and assert it RESOLVES — then assert a REPLAY is
-        // rejected by the proof nullifier (the boundary fires exactly once). This
-        // proves the GENERIC `resolve_condition` one-shot shape directly;
-        // `networkboundary_resolves_against_a_real_world_grant` (below) proves the
-        // SAME property end-to-end against a real `World`-grant receipt through
-        // `SharedFork::resolve_consent` — the closed finding.
+    fn networkboundary_generic_bare_receipt_arm_is_retired() {
+        // Assurance-perimeter #3: the GENERIC `resolve_condition` bare-receipt arm —
+        // which this consent surface once leaned on — is RETIRED. Even a receipt signed
+        // by a trusted executor key (the exact input the old path accepted) is REJECTED,
+        // because a trusted signature is no longer a trust root. That retirement is
+        // PRECISELY why `SharedFork` verifies consent in the executor's OWN signing
+        // domain via [`verify_consent_witness`] (binding + authenticity + one-shot over
+        // `canonical_executor_signed_message`), tested end-to-end against a real
+        // `World`-grant receipt by `networkboundary_resolves_against_a_real_world_grant_and_fires_once`.
+        //
+        // RESIDUAL (#3, this surface): shared-fork owner-consent still rests on the
+        // executor SIGNATURE via `verify_consent_witness`, not a verified EffectVM proof.
+        // Moving it onto a proof-carrying consent (the powerbox grant emitting a
+        // `ProvenReceipt` bound with `TurnProven`) is a distinct follow-up — the World
+        // executor does not yet PRODUCE a turn proof — and does not route through the
+        // retired arm this test guards.
         use ed25519_dalek::{Signer, SigningKey};
         use std::collections::HashSet;
 
@@ -2411,32 +2416,15 @@ mod tests {
             was_burn: false,
             consumed_capabilities: vec![],
         };
+        // Sign it in the exact way the retired arm expected (over `receipt_hash()`), with
+        // a trusted key — and confirm it is STILL rejected as retired.
         let receipt_hash = receipt.receipt_hash();
         receipt.executor_signature = Some(exec_key.sign(&receipt_hash).to_bytes().to_vec());
 
         let proof = ConditionProof::Receipt(receipt);
         let mut used: HashSet<[u8; 32]> = HashSet::new();
 
-        // First resolution: the owner's signed consent fires the boundary.
-        let r1 = resolve_condition(
-            &condition,
-            &proof,
-            10,
-            100,
-            &[],
-            DEFAULT_MAX_ROOT_AGE,
-            &mut used,
-            &[exec_pub],
-        );
-        assert_eq!(
-            r1,
-            ConditionalResult::Resolved,
-            "owner's signed consent resolves the boundary"
-        );
-
-        // Replay: the SAME consent cannot fire the boundary twice (one-shot — the
-        // proof-hole-is-a-nullifier). This is the linear/one-shot consent property.
-        let r2 = resolve_condition(
+        let r = resolve_condition(
             &condition,
             &proof,
             10,
@@ -2447,8 +2435,12 @@ mod tests {
             &[exec_pub],
         );
         assert!(
-            matches!(r2, ConditionalResult::InvalidProof(_)),
-            "a consent fires the boundary exactly ONCE (nullifier rejects replay): {r2:?}"
+            matches!(r, ConditionalResult::InvalidProof(ref m) if m.contains("RETIRED")),
+            "a trusted-key bare-receipt TurnExecuted must be REJECTED as retired (#3): {r:?}"
+        );
+        assert!(
+            used.is_empty(),
+            "a rejected bare receipt records NO nullifier (nothing fired)"
         );
     }
 

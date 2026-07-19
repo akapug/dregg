@@ -684,8 +684,8 @@ fn test_full_cross_federation_conditional_swap() {
     let bob_turn_hash = bob_turn.hash();
 
     let bob_result = executor_b.execute(&bob_turn, &mut ledger_b);
-    let bob_receipt = match bob_result {
-        TurnResult::Committed { receipt, .. } => receipt,
+    match bob_result {
+        TurnResult::Committed { .. } => {}
         TurnResult::Rejected { reason, .. } => panic!("Bob's turn rejected: {reason}"),
         _ => panic!("unexpected result"),
     };
@@ -698,7 +698,8 @@ fn test_full_cross_federation_conditional_swap() {
     );
 
     // --- Step 2: Alice creates ConditionalTurn on Fed A ---
-    // Alice's transfer executes IFF Bob's turn receipt is presented
+    // Alice's transfer executes IFF a VERIFIED EffectVM proof bound to Bob's turn is
+    // presented (assurance-perimeter #3: the trust root is a proof, not a bare receipt).
     let mut alice_turn_builder = TurnBuilder::new(alice_id, 0);
     alice_turn_builder.set_fee(1000);
     let action = ActionBuilder::new_unchecked_for_tests(target_a_id, "transfer", alice_id)
@@ -712,18 +713,20 @@ fn test_full_cross_federation_conditional_swap() {
     alice_turn_builder.add_action(action);
     let alice_turn = alice_turn_builder.build();
 
+    // Bob performed his turn; the commit pipeline produced a ProvenReceipt (the verified
+    // rotated EffectVM STARK bound to bob_turn_hash). Alice's condition is TurnProven,
+    // bound to Bob's turn hash + the proof's committed pre/post endpoints.
+    let bob_proven = dregg_turn::mint_transfer_proven_receipt(bob_turn_hash, 7);
     let conditional = ConditionalTurn {
         turn: alice_turn.clone(),
-        condition: ProofCondition::TurnExecuted {
-            turn_hash: bob_turn_hash,
-        },
+        condition: bob_proven.turn_proven_condition(),
         timeout_height: 100, // expires at height 100
         submitted_at: 10,    // submitted at height 10
         deposit_amount: compute_conditional_deposit(100, 10),
     };
 
-    // --- Step 3: Bob presents receipt as ConditionProof to Fed A ---
-    let proof = ConditionProof::Receipt(bob_receipt.clone());
+    // --- Step 3: Bob presents the VERIFIED EffectVM proof as ConditionProof to Fed A ---
+    let proof = bob_proven.effect_vm_proof();
 
     let mut used_proofs: HashSet<[u8; 32]> = HashSet::new();
     let trusted_roots: Vec<TrustedRoot> = vec![];
@@ -742,7 +745,7 @@ fn test_full_cross_federation_conditional_swap() {
     assert_eq!(
         resolution,
         ConditionalResult::Resolved,
-        "Bob's receipt should satisfy Alice's condition"
+        "Bob's verified EffectVM proof should satisfy Alice's condition"
     );
 
     // --- Step 4: After condition resolves, execute Alice's turn ---
@@ -770,8 +773,10 @@ fn test_full_cross_federation_conditional_swap() {
     // --- Step 6: Timeout case: condition not presented before deadline ---
     let conditional_timeout = ConditionalTurn {
         turn: alice_turn.clone(),
-        condition: ProofCondition::TurnExecuted {
+        condition: ProofCondition::TurnProven {
             turn_hash: [0xFF; 32], // will never be satisfied
+            expected_pre_commitment: [0u8; 32],
+            expected_post_commitment: [0u8; 32],
         },
         timeout_height: 100,
         submitted_at: 10,
