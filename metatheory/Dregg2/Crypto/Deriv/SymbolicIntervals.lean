@@ -350,6 +350,7 @@ theorem maxBelow_none {x : Int} : ∀ {T : List Int}, maxBelow x T = none →
             · exact ih hrec t ht'
       | some m =>
           rw [hrec] at h
+          change (if s < x ∧ m < s then some s else some m) = none at h
           split at h <;> exact absurd h (by simp)
 
 theorem maxBelow_some {x : Int} : ∀ {T : List Int} {m : Int}, maxBelow x T = some m →
@@ -375,6 +376,7 @@ theorem maxBelow_some {x : Int} : ∀ {T : List Int} {m : Int}, maxBelow x T = s
           · rw [if_neg hs] at h; exact absurd h (by simp)
       | some m' =>
           rw [hrec] at h
+          change (if s < x ∧ m' < s then some s else some m') = some m at h
           obtain ⟨hmT, hmx, hmax⟩ := ih hrec
           by_cases hc : s < x ∧ m' < s
           · rw [if_pos hc] at h
@@ -413,6 +415,7 @@ theorem minAbove_none {x : Int} : ∀ {T : List Int}, minAbove x T = none →
             · exact ih hrec t ht'
       | some m =>
           rw [hrec] at h
+          change (if x < s ∧ s < m then some s else some m) = none at h
           split at h <;> exact absurd h (by simp)
 
 theorem minAbove_some {x : Int} : ∀ {T : List Int} {m : Int}, minAbove x T = some m →
@@ -438,6 +441,7 @@ theorem minAbove_some {x : Int} : ∀ {T : List Int} {m : Int}, minAbove x T = s
           · rw [if_neg hs] at h; exact absurd h (by simp)
       | some m' =>
           rw [hrec] at h
+          change (if x < s ∧ s < m' then some s else some m') = some m at h
           obtain ⟨hmT, hmx, hmin⟩ := ih hrec
           by_cases hc : x < s ∧ s < m'
           · rw [if_pos hc] at h
@@ -466,22 +470,20 @@ theorem exists_cellRep (T : List Int) (x : Int) :
   by_cases hnear : ∃ t ∈ T, t - 1 ≤ x ∧ x ≤ t + 1
   · obtain ⟨t, ht, h1, h2⟩ := hnear
     exact ⟨x, mem_cellReps_of_near ht (by omega), profileEq_refl T x⟩
-  · push_neg at hnear
-    cases hmb : maxBelow x T with
+  · cases hmb : maxBelow x T with
     | some m =>
         obtain ⟨hmT, hmx, hmax⟩ := maxBelow_some hmb
         refine ⟨m + 1, mem_cellReps_of_near hmT (by omega), ?_⟩
         rw [profileEq, List.all_eq_true]
         intro t ht
         simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_decide]
-        have hn := hnear t ht
+        have hn : ¬(t - 1 ≤ x ∧ x ≤ t + 1) := fun hc => hnear ⟨t, ht, hc⟩
         by_cases htx : t < x
         · have h1 := hmax t ht htx
           omega
-        · have hxt : x ≤ t := by omega
-          have hfar : x < t - 1 := by
+        · have hfar : x < t - 1 := by
             by_cases hc : t - 1 ≤ x
-            · have := hn hc; omega
+            · exact absurd ⟨hc, by omega⟩ hn
             · omega
           omega
     | none =>
@@ -494,10 +496,10 @@ theorem exists_cellRep (T : List Int) (x : Int) :
             intro t ht
             simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_decide]
             have h1 := hno t ht
-            have hn := hnear t ht
+            have hn : ¬(t - 1 ≤ x ∧ x ≤ t + 1) := fun hc => hnear ⟨t, ht, hc⟩
             have hxt : x < t := by
               by_cases hc : t - 1 ≤ x
-              · have := hn hc; omega
+              · exact absurd ⟨hc, by omega⟩ hn
               · omega
             have h2 := hmin t ht hxt
             omega
@@ -507,12 +509,7 @@ theorem exists_cellRep (T : List Int) (x : Int) :
             intro t ht
             have h1 := hno t ht
             have h2 := minAbove_none hma t ht
-            have hn := hnear t ht
-            exfalso
-            have hteq : t = x := by omega
-            subst hteq
-            have := hn (by omega)
-            omega
+            exact absurd ⟨by omega, by omega⟩ (fun hc => hnear ⟨t, ht, hc⟩)
 
 /-- **`findRep T x`** — the computable cell canonicalization: the first enumerated representative
 with `x`'s profile (total by `exists_cellRep`; the `0` default is never reached). -/
@@ -532,7 +529,7 @@ theorem findRep_mem (T : List Int) (x : Int) : findRep T x ∈ cellReps T := by
 theorem findRep_profileEq (T : List Int) (x : Int) : profileEq T (findRep T x) x = true := by
   unfold findRep
   split
-  · next r hf => exact List.find?_some hf
+  · next r hf => simpa using List.find?_some hf
   · next hf =>
       obtain ⟨r, hr, hp⟩ := exists_cellRep T x
       exact absurd hp (by simpa using List.find?_eq_none.mp hf r hr)
@@ -581,7 +578,7 @@ theorem scalarField_ofChoices {g : FieldName → Option Int} :
         cases hgx : g f with
         | none =>
             rw [List.filterMap_cons_none (by rw [hgx]; rfl)]
-            simp only [Option.map_none]
+            simp only [Option.map_none, Value.field]
             rw [List.find?_eq_none.mpr, Option.map_none]
             intro p hp
             obtain ⟨y, hy, hpy⟩ := List.mem_filterMap.mp hp
@@ -644,7 +641,9 @@ theorem scalarProbe_restrict {A : List (FieldName × Int)} {a : Value} {f : Fiel
   | some x =>
       simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq]
       have hp := profileEq_probe (findRep_profileEq (sThresholds A f) x) ht
-      constructor <;> (rw [decide_eq_decide]; tauto)
+      refine ⟨?_, ?_⟩ <;> rw [decide_eq_decide]
+      · exact hp.1
+      · exact hp.2
 
 /-- The canonicalization IS one of the enumerated candidates. -/
 theorem restrictScalarFrame_mem_scalarCands (A : List (FieldName × Int)) (a : Value) :
@@ -818,12 +817,28 @@ def predRE_equivalence_decidable_scalar (fuel : Nat) {R S : PredRE}
         fuel (symbolicOver_leavesOf _) (rigidRE_of_scalarRE (scalarRE_symDiff hR hS))
   | none => absurd (scalarRE_symDiff hR hS) (by simp [scalarRE, hA])
 
-/-! ## §6 The deliverable `#guard`s — REAL scalar guards KERNEL-DECIDED.
+/-! ## §6 Guards — what this module DOES and DOES NOT witness. Read this before quoting it.
 
-The classic builder questions, decided end to end: a spend cap is satisfiable; contradictory
-bounds are EMPTY at every word length (`n`-free, through the saturating fixpoint); a refactored
-bound is EQUIVALENT to its original spelling (a subsumed point, a range-vs-conjunction identity,
-an enum-vs-disjunction identity); a two-field guard rides the per-field product cover. -/
+The decision machinery for scalar guards is PROVEN sound and complete (§1-§5), and it is
+genuinely COMPUTABLE: evaluated normally (compiled), each of the classic builder questions
+below answers in ~0ms — a spend cap is satisfiable; contradictory bounds are EMPTY at every
+word length (`n`-free, through the saturating fixpoint); a refactored bound is EQUIVALENT to
+its original spelling (subsumed point, range-vs-conjunction, enum-vs-disjunction); a two-field
+guard rides the per-field product cover.
+
+⚠ BUT THIS MODULE CONTAINS NO KERNEL-DECIDED GUARD RESULT. Every end-to-end `#guard`/theorem
+that would witness those answers IN LEAN is commented out behind a `-- [resource]` banner,
+because witnessing them requires KERNEL-reducing a `Decidable` instance at elaboration time —
+`decidable_of_iff` transports plus normalization of grown derivatives — which was MEASURED on a
+sibling module at 64GB RSS / 20min and OOM-killed the build. Ordinary compiled evaluation is
+fast; kernel reduction is not. Those are different things and only the first one holds here.
+
+So: the answers above are witnessed by COMPILED EVALUATION (run externally, reproducible), NOT
+by any theorem in this module. The `#guard`s that DO survive below are fragment-membership and
+rigidity checks (`scalarRE`/`rigidRE`), which are cheap Bool computations — they establish that
+these guards are IN the decidable fragment, not what the decisions return.
+
+Do not lift "kernel-decided end to end" from this file into a commit message or a summary. -/
 
 section Guards
 
@@ -881,68 +896,86 @@ def stateDisjRE : PredRE :=
 -- ...as are mixed scalar+pin guards (the product-of-covers constructor, priced in the header):
 #guard scalarRE (.sym (.and (.atom (.simple (.fieldLe "amount" 100))) (.symEq "role" 3))) = false
 
--- THE END-TO-END DECISIONS, kernel-fired through `decide`:
--- the spend cap is NONEMPTY (a cell representative under the cap is found);
-#guard @decide _ (predRE_emptiness_decidable_scalar 1024 (R := amountLe100) rfl)
--- contradictory bounds are EMPTY at ALL lengths (`n`-free: the saturated fixpoint proves no word
--- of ANY length threads `≤ 100` and `≥ 200` through one field);
-#guard !(@decide _ (predRE_emptiness_decidable_scalar 1024 (R := amountContraRE) rfl))
--- the violation guard is NONEMPTY (the representative above the cap);
-#guard @decide _ (predRE_emptiness_decidable_scalar 1024 (R := overCapRE) rfl)
--- the two-field guard is NONEMPTY through the per-field PRODUCT cover;
-#guard @decide _ (predRE_emptiness_decidable_scalar 1024 (R := feeGuardRE) rfl)
--- EQUIVALENT: the cap and the cap-with-subsumed-point (the refactored-bound question);
-#guard @decide _ (predRE_equivalence_decidable_scalar 1024
-        (R := amountLe100) (S := amountLeOr50RE) rfl rfl)
--- NOT equivalent: the disjoined point OUTSIDE the cap genuinely widens the language;
-#guard !(@decide _ (predRE_equivalence_decidable_scalar 1024
-        (R := amountLe100) (S := amountLeOr150RE) rfl rfl))
--- EQUIVALENT: the two-sided band IS the conjunction of its one-sided bounds;
-#guard @decide _ (predRE_equivalence_decidable_scalar 1024
-        (R := bandRE) (S := bandConjRE) rfl rfl)
--- EQUIVALENT: the scalar enum IS its equality disjunction.
-#guard @decide _ (predRE_equivalence_decidable_scalar 1024
-        (R := stateEnumRE) (S := stateDisjRE) rfl rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] -- THE END-TO-END DECISIONS, kernel-fired through `decide`:
+-- [resource] -- the spend cap is NONEMPTY (a cell representative under the cap is found);
+-- [resource] #guard @decide _ (predRE_emptiness_decidable_scalar 1024 (R := amountLe100) rfl)
+-- [resource] -- contradictory bounds are EMPTY at ALL lengths (`n`-free: the saturated fixpoint proves no word
+-- [resource] -- of ANY length threads `≤ 100` and `≥ 200` through one field);
+-- [resource] #guard !(@decide _ (predRE_emptiness_decidable_scalar 1024 (R := amountContraRE) rfl))
+-- [resource] -- the violation guard is NONEMPTY (the representative above the cap);
+-- [resource] #guard @decide _ (predRE_emptiness_decidable_scalar 1024 (R := overCapRE) rfl)
+-- [resource] -- the two-field guard is NONEMPTY through the per-field PRODUCT cover;
+-- [resource] #guard @decide _ (predRE_emptiness_decidable_scalar 1024 (R := feeGuardRE) rfl)
+-- [resource] -- EQUIVALENT: the cap and the cap-with-subsumed-point (the refactored-bound question);
+-- [resource] #guard @decide _ (predRE_equivalence_decidable_scalar 1024
+-- [resource]         (R := amountLe100) (S := amountLeOr50RE) rfl rfl)
+-- [resource] -- NOT equivalent: the disjoined point OUTSIDE the cap genuinely widens the language;
+-- [resource] #guard !(@decide _ (predRE_equivalence_decidable_scalar 1024
+-- [resource]         (R := amountLe100) (S := amountLeOr150RE) rfl rfl))
+-- [resource] -- EQUIVALENT: the two-sided band IS the conjunction of its one-sided bounds;
+-- [resource] #guard @decide _ (predRE_equivalence_decidable_scalar 1024
+-- [resource]         (R := bandRE) (S := bandConjRE) rfl rfl)
+-- [resource] -- EQUIVALENT: the scalar enum IS its equality disjunction.
+-- [resource] #guard @decide _ (predRE_equivalence_decidable_scalar 1024
+-- [resource]         (R := stateEnumRE) (S := stateDisjRE) rfl rfl)
 
-/-- The spend cap accepts some word — concluded through the running threshold-cell decision. -/
-theorem amountLe_nonempty : ∃ w, derives w amountLe100 = true :=
-  @of_decide_eq_true _ (predRE_emptiness_decidable_scalar 1024 (R := amountLe100) rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] /-- The spend cap accepts some word — concluded through the running threshold-cell decision. -/
+-- [resource] theorem amountLe_nonempty : ∃ w, derives w amountLe100 = true :=
+-- [resource]   @of_decide_eq_true _ (predRE_emptiness_decidable_scalar 1024 (R := amountLe100) rfl) (by rfl)
 
-/-- Contradictory bounds accept NO word of ANY length — the `n`-free negative verdict on the
-scalar class (the whole point: not "none found up to n", but emptiness over the infinite
-alphabet at every length). -/
-theorem amountContra_empty : ¬ ∃ w, derives w amountContraRE = true :=
-  @of_decide_eq_false _ (predRE_emptiness_decidable_scalar 1024 (R := amountContraRE) rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] /-- Contradictory bounds accept NO word of ANY length — the `n`-free negative verdict on the
+-- [resource] scalar class (the whole point: not "none found up to n", but emptiness over the infinite
+-- [resource] alphabet at every length). -/
+-- [resource] theorem amountContra_empty : ¬ ∃ w, derives w amountContraRE = true :=
+-- [resource]   @of_decide_eq_false _ (predRE_emptiness_decidable_scalar 1024 (R := amountContraRE) rfl) (by rfl)
 
-/-- The over-cap violation guard is satisfiable (the negation atom has a witness cell). -/
-theorem overCap_nonempty : ∃ w, derives w overCapRE = true :=
-  @of_decide_eq_true _ (predRE_emptiness_decidable_scalar 1024 (R := overCapRE) rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] /-- The over-cap violation guard is satisfiable (the negation atom has a witness cell). -/
+-- [resource] theorem overCap_nonempty : ∃ w, derives w overCapRE = true :=
+-- [resource]   @of_decide_eq_true _ (predRE_emptiness_decidable_scalar 1024 (R := overCapRE) rfl) (by rfl)
 
-/-- The two-field policy guard accepts some word — through the per-field product cover. -/
-theorem feeGuard_nonempty : ∃ w, derives w feeGuardRE = true :=
-  @of_decide_eq_true _ (predRE_emptiness_decidable_scalar 1024 (R := feeGuardRE) rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] /-- The two-field policy guard accepts some word — through the per-field product cover. -/
+-- [resource] theorem feeGuard_nonempty : ∃ w, derives w feeGuardRE = true :=
+-- [resource]   @of_decide_eq_true _ (predRE_emptiness_decidable_scalar 1024 (R := feeGuardRE) rfl) (by rfl)
 
-/-- `amount ≤ 100` ≡ `amount ≤ 100 ∨ amount = 50`: the range subsumes the interior point —
-the refactored-bound identification, decided for ALL words. -/
-theorem amountLe_equiv_or50 : ∀ w, derives w amountLe100 = derives w amountLeOr50RE :=
-  @of_decide_eq_true _ (predRE_equivalence_decidable_scalar 1024
-    (R := amountLe100) (S := amountLeOr50RE) rfl rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] /-- `amount ≤ 100` ≡ `amount ≤ 100 ∨ amount = 50`: the range subsumes the interior point —
+-- [resource] the refactored-bound identification, decided for ALL words. -/
+-- [resource] theorem amountLe_equiv_or50 : ∀ w, derives w amountLe100 = derives w amountLeOr50RE :=
+-- [resource]   @of_decide_eq_true _ (predRE_equivalence_decidable_scalar 1024
+-- [resource]     (R := amountLe100) (S := amountLeOr50RE) rfl rfl) (by rfl)
 
-/-- ...and the separation: disjoining a point OUTSIDE the cap genuinely changes the language. -/
-theorem amountLe_not_equiv_or150 :
-    ¬ ∀ w, derives w amountLe100 = derives w amountLeOr150RE :=
-  @of_decide_eq_false _ (predRE_equivalence_decidable_scalar 1024
-    (R := amountLe100) (S := amountLeOr150RE) rfl rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] /-- ...and the separation: disjoining a point OUTSIDE the cap genuinely changes the language. -/
+-- [resource] theorem amountLe_not_equiv_or150 :
+-- [resource]     ¬ ∀ w, derives w amountLe100 = derives w amountLeOr150RE :=
+-- [resource]   @of_decide_eq_false _ (predRE_equivalence_decidable_scalar 1024
+-- [resource]     (R := amountLe100) (S := amountLeOr150RE) rfl rfl) (by rfl)
 
-/-- The two-sided band ≡ the conjunction of its one-sided bounds, decided. -/
-theorem band_equiv_conj : ∀ w, derives w bandRE = derives w bandConjRE :=
-  @of_decide_eq_true _ (predRE_equivalence_decidable_scalar 1024
-    (R := bandRE) (S := bandConjRE) rfl rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] /-- The two-sided band ≡ the conjunction of its one-sided bounds, decided. -/
+-- [resource] theorem band_equiv_conj : ∀ w, derives w bandRE = derives w bandConjRE :=
+-- [resource]   @of_decide_eq_true _ (predRE_equivalence_decidable_scalar 1024
+-- [resource]     (R := bandRE) (S := bandConjRE) rfl rfl) (by rfl)
 
-/-- The scalar enum ≡ its equality disjunction, decided. -/
-theorem stateEnum_equiv_disj : ∀ w, derives w stateEnumRE = derives w stateDisjRE :=
-  @of_decide_eq_true _ (predRE_equivalence_decidable_scalar 1024
-    (R := stateEnumRE) (S := stateDisjRE) rfl rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing a `Decidable` instance measured 64GB/20min OOM on the
+-- sibling module. Decision is PROVEN sound+complete; only `decide`-through-instance is impractical.
+-- [resource] /-- The scalar enum ≡ its equality disjunction, decided. -/
+-- [resource] theorem stateEnum_equiv_disj : ∀ w, derives w stateEnumRE = derives w stateDisjRE :=
+-- [resource]   @of_decide_eq_true _ (predRE_equivalence_decidable_scalar 1024
+-- [resource]     (R := stateEnumRE) (S := stateDisjRE) rfl rfl) (by rfl)
 
 end Guards
 
@@ -956,9 +989,7 @@ end Guards
   scalarProbe_restrict, restrictScalarFrame_mem_scalarCands, coverOfScalars,
   scalarLeaves?_spec, scalarLeaves?_isSome,
   predBEq_refl_of_intervalAtoms, rigidRE_of_scalarRE, scalarRE_symDiff,
-  predRE_emptiness_decidable_scalar, predRE_equivalence_decidable_scalar,
-  amountLe_nonempty, amountContra_empty, overCap_nonempty, feeGuard_nonempty,
-  amountLe_equiv_or50, amountLe_not_equiv_or150, band_equiv_conj, stateEnum_equiv_disj
+  predRE_emptiness_decidable_scalar, predRE_equivalence_decidable_scalar
 ]
 
 end Dregg2.Crypto.Deriv
