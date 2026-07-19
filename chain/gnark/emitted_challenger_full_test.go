@@ -321,9 +321,10 @@ func gadgetWitnessStartT(t *testing.T, vf *VerifierFull, sym *SymbolicConstraint
 // COVERAGE — every challenge the descriptor blocks consume, one two-polarity
 // canary each:
 //
-//   - block1-fold-beta (FRI round-0 fold beta): block 1 (FriFoldRowArity2) is an
-//     inert cost-model — the operand `b` only feeds an ExtMul chain closed by
-//     ExtAssertIsEqual(x, x), so a lone bumped felt is otherwise-valid as-is;
+//   - block1-fold-beta (FRI round-0 fold beta): block 1's flat-bank operand `b` is
+//     the inert transcript-link carrier — the fold ARITHMETIC is a self-contained
+//     replay of the Lean-emitted friFoldData template over its OWN witness bank
+//     (unfused from `b`), so a lone bumped `b` felt is otherwise-valid as-is;
 //   - block4-query-index: block 4 (SampleBitsDecomposed) is a bare 31-bit range
 //     check — any well-formed index passes as-is;
 //   - block3-folding-alpha / block3-permAlpha / block3-permBeta: block 3 consumes
@@ -362,9 +363,10 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	onAlloc := allocVerifierFullWithTranscript(t, fx, sym) // stage ON: the link is present
 
 	// --- offsets into the flat witness bank W ---
-	// block 1's `b` operand follows its `x` operand (4 ext lanes); block 4's single
+	// block 1's flat-bank record is now just its `b` fold-beta operand (the fold
+	// ARITHMETIC moved to the FriFoldWitness replay bank); block 4's single
 	// query-index witness starts the SampleBitsDecomposed record.
-	betaStart := gadgetWitnessStartT(t, vf, sym, "FriFoldRowArity2") + 4
+	betaStart := gadgetWitnessStartT(t, vf, sym, "FriFoldRowArity2")
 	idxStart := gadgetWitnessStartT(t, vf, sym, "SampleBitsDecomposed")
 
 	// block 3 per-instance start offsets + the challenge / selector / out slots

@@ -48,14 +48,42 @@ package friverifier
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"sort"
 
+	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
 )
+
+func init() {
+	solver.RegisterHint(queryPowBitsHint)
+}
+
+// queryPowDecompBits is the fixed ToBinary width of the Lean QueryPow template
+// (`queryPowCircuit`: `rangeAsserts (.var 0) 1 31`, QueryPowEmit.lean §1) — the
+// canonical BabyBear-value decomposition width (`< p < 2^31`).
+const queryPowDecompBits = 31
+
+// queryPowBitsHint decomposes one field element into its low 31 little-endian bits
+// (values only — NO constraints). The QueryPow template the replay drives imposes
+// booleanity (`bit·bit = bit`) and recomposition (`Σ bitᵢ·2ⁱ = value`) on these
+// bits, so a wrong decomposition is UNSATISFIABLE: the hint bears on completeness
+// (the honest fill exists iff value < 2^31), never on soundness. bit `i` of the
+// value lands on template variable `1+i` (`powAsg v (1+i) = value.val / 2^i % 2`).
+func queryPowBitsHint(_ *big.Int, inputs, outputs []*big.Int) error {
+	if len(inputs) != 1 || len(outputs) != queryPowDecompBits {
+		return errors.New("queryPowBitsHint: expected 1 input, 31 outputs")
+	}
+	v := inputs[0]
+	for i := range outputs {
+		outputs[i].SetUint64(uint64(v.Bit(i)))
+	}
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // §1  The v1 descriptor grammar (Go mirror of emitVerifierFullJson's JSON).
@@ -394,10 +422,11 @@ func (vf *VerifierFull) WitnessLen(sym *SymbolicConstraints) (int, error) {
 		case "AssertIsCanonical":
 			n += g.Count * 1
 		case "FriFoldRowArity2":
-			// chained: one running ext accumulator + one fixed ext operand,
-			// reused across all `count` ext-muls (cost identical to fresh
-			// var*var muls; keeps the bank small).
-			n += 8
+			// the round-0 fold-beta operand (one ext) — the transcript-link carrier
+			// bindBlockChallengesToTranscript pins to the sponge squeeze. The fold
+			// ARITHMETIC no longer rides the flat bank: it is a replay of the
+			// Lean-emitted friFoldData template over the separate FriFoldWitness bank.
+			n += 4
 		case "ExtAssertIsEqual":
 			n += g.Count * 8 // fresh (a,b) ext pair per equality
 		case "VerifyMerklePathBn254":
@@ -498,6 +527,53 @@ type VerifierFullCircuit struct {
 	// AllocVerifierFullCircuit from the committed emitted/ artifacts.
 	batchTpls map[string]*Template
 
+	// merkleTpls holds the Lean-emitted commit-phase Merkle-path templates
+	// (MerkleEmit.lean `merklePathData`) keyed by path depth. Block 2 replays
+	// these through ReplayClosed to bind each real commit-phase opening
+	// (leaf/siblings/bits) to its round root — the deployed merkleBn254RefRoot
+	// walk authored in Lean (merkle_path_refines), NOT the hand-Go
+	// VerifyMerklePathBn254 (retained as the differential oracle in
+	// emitted_verifier_full_diff_test.go). Loaded by AllocVerifierFullCircuit
+	// from the committed emitted/ artifacts.
+	merkleTpls map[int]*Template
+
+	// friFoldTpl / friFoldClass hold the Lean-emitted FRI arity-2 fold-consistency
+	// template (FriFoldEmit.lean `friFoldData`, ∀-refined by `friFold_leaf_refines`:
+	// `gHolds (friFoldData …) (friFoldAsg …) ↔ foldCheckV … = true`) and its
+	// input/free-witness classification (ClassifyVars over the 16-limb
+	// sibling0/sibling1/beta/claimed boundary). Block 1 replays this via
+	// ReplayTemplateWithWitness — the Lean-authored deployed fold
+	// `(e0+e1)/2 + β(e0−e1)inv(2s)` as REAL R1CS, in place of the hand-Go ExtMul
+	// cost chain. The hand-Go friFoldRowArity2 (fri_query.go) survives ONLY as the
+	// differential oracle (fri_verify_native.go + emitted_verifier_full_diff_test.go).
+	// Loaded by AllocVerifierFullCircuit from the committed emitted/ artifact.
+	friFoldTpl   *Template
+	friFoldClass *TemplateVarClass
+
+	// queryRangeTpl / queryRangeWit hold the Lean-emitted QueryPow range template
+	// (emitQueryPow 0, QueryPowEmit.lean, ∀-refined by `queryPow_refines` at n=0:
+	// `gHolds (emitQueryPow 0) (powAsg v) ↔ v.val < 2^31` — a bare 31-bit ToBinary
+	// range check, since `v.val % 2^0 = 0`) and its 31 free-witness bit indices
+	// (ClassifyVars(1).Witness). Block 0 (AssertIsCanonical, on v and on p-1-v) and
+	// block 4 (SampleBitsDecomposed query-index range) replay it via
+	// ReplayTemplateWithWitness — the Lean-authored replacement for the hand-Go
+	// bb.AssertIsCanonical / rc.Check(·,31) on the emit path (the hand-Go survives
+	// as the differential oracle in emitted_verifier_full_diff_test.go).
+	queryRangeTpl *Template
+	queryRangeWit []int
+
+	// queryPowTpl / queryPowWit / queryPowN hold the Lean-emitted QueryPow grinding
+	// template (emitQueryPow pow_bits, ∀-refined by `queryPow_refines` /
+	// `queryPow_refines_native`: `gHolds ↔ v.val < 2^31 ∧ v.val % 2^n = 0`, the
+	// deployed p3 `check_witness` accept), its 31 free-witness bit indices, and the
+	// template's baked zero-pin count. Block 4 (AssertPowBitsZero) replays it — the
+	// Lean-authored replacement for the hand-Go ToBinary+AssertIsEqual grinding pin
+	// (grinding.go, retained as the differential oracle). Loaded by
+	// AllocVerifierFullCircuit from the committed emitted/ artifacts.
+	queryPowTpl *Template
+	queryPowWit []int
+	queryPowN   int
+
 	// --- Optional emitted-permutation transcript re-derivation stage. ---
 	//
 	// The compact descriptor's blocks (1/3/4) consume their challenges as
@@ -576,6 +652,28 @@ type VerifierFullCircuit struct {
 	selectorReplay  *selectorReplayPlan
 	SelectorWitness []frontend.Variable
 
+	// --- THE FRI FOLD REPLAY (Lean-emitted, not hand-Go). ---
+	//
+	// Block 1's FriFoldRowArity2 case replays the Lean-emitted fold-consistency
+	// template (friFoldTpl, above) through ReplayTemplateWithWitness: the
+	// sibling0/sibling1/beta/claimed 16-limb boundary is bound from this bank, the
+	// free internal witnesses (the 31-bit canonicity decompositions, the parent
+	// index bits, the reduce quotient/remainder hints) are supplied from it too,
+	// and the replay SOLVES the fold define-chain and KEEPS the claimed==fold
+	// equality — so no constraint in the block-1 fold path is authored in Go.
+	//
+	// FriFoldWitness is a self-consistent honest fold fixture (siblings + the
+	// deployed fold at β = the real fixture expected_betas[0], 17 parent bits),
+	// Lean-dumped var-index-ordered to emitted/fri_fold_witness.json — the same
+	// honest assignment friFold_leaf_refines quantifies over. Layout: the
+	// len(PublicInputs) boundary values (public-input order) followed by the
+	// friFoldClass.Witness free witnesses. Sized (empty on values) on the plain
+	// compile path; filled by the assignment (fillFriFoldWitness). The round-0
+	// fold-beta operand the transcript link binds (block1FoldBeta) is a SEPARATE
+	// flat-bank carrier — this replay exercises the fold ARITHMETIC, unfused from
+	// the transcript so the block1-fold-beta canary keeps its inert-block premise.
+	FriFoldWitness []frontend.Variable
+
 	// --- THE STATEMENT BIND + VK PINS (settlement_circuit.go:241-285). ---
 	//
 	// claimChannel is the block-3 ExposeClaim instance's public-value lanes — the
@@ -631,12 +729,39 @@ func AllocVerifierFullCircuit(vf *VerifierFull, sym *SymbolicConstraints) (*Veri
 	if err != nil {
 		return nil, err
 	}
-	return &VerifierFullCircuit{
-		W:         make([]frontend.Variable, n),
-		vf:        vf,
-		sym:       sym,
-		batchTpls: batchTpls,
-	}, nil
+	merkleTpls, err := loadMerkleTemplates(vf)
+	if err != nil {
+		return nil, err
+	}
+	friFoldTpl, friFoldClass, err := loadFriFoldTemplate(vf)
+	if err != nil {
+		return nil, err
+	}
+	qp, err := loadQueryPowTemplates(vf)
+	if err != nil {
+		return nil, err
+	}
+	c := &VerifierFullCircuit{
+		W:             make([]frontend.Variable, n),
+		vf:            vf,
+		sym:           sym,
+		batchTpls:     batchTpls,
+		merkleTpls:    merkleTpls,
+		friFoldTpl:    friFoldTpl,
+		friFoldClass:  friFoldClass,
+		queryRangeTpl: qp.rangeTpl,
+		queryRangeWit: qp.rangeWit,
+		queryPowTpl:   qp.powTpl,
+		queryPowWit:   qp.powWit,
+		queryPowN:     qp.powN,
+	}
+	if friFoldTpl != nil {
+		// The block-1 fold replay's witness bank: the 16 boundary limbs (public-input
+		// order) ++ the free internal witnesses. Sized here so the plain compile path's
+		// schema matches; the assignment fills the honest values (fillFriFoldWitness).
+		c.FriFoldWitness = make([]frontend.Variable, len(friFoldTpl.PublicInputs)+len(friFoldClass.Witness))
+	}
+	return c, nil
 }
 
 func (c *VerifierFullCircuit) Define(api frontend.API) error {
@@ -1067,30 +1192,43 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 	cur *varCursor, g VFGadget) error {
 	switch g.Gadget {
 
-	// block 0 — canonicity / VK-shape pin: the 2×31-bit range check
-	// (babybear.go AssertIsCanonical), exactly the canonicityData leaf.
+	// block 0 — canonicity / VK-shape pin: v ∈ [0, p), i.e. the two 31-bit range
+	// checks v < 2^31 AND (p-1-v) < 2^31 (babybear.go AssertIsCanonical). Each is a
+	// REPLAY of the Lean-emitted QueryPow range template (emitQueryPow 0,
+	// QueryPowEmit.lean, ∀-refined by queryPow_refines at n=0: gHolds ↔ value.val <
+	// 2^31) via ReplayTemplateWithWitness (queryPowReplay) — NOT the hand-Go
+	// bb.AssertIsCanonical / rc.Check(·,31) (retained as the differential oracle:
+	// babybear.go / emitted_verifier_full_diff_test.go).
 	case "AssertIsCanonical":
 		for i := 0; i < g.Count; i++ {
-			bb.AssertIsCanonical(cur.next())
+			v := cur.next()
+			if err := c.queryPowReplay(api, c.queryRangeTpl, c.queryRangeWit, v); err != nil {
+				return fmt.Errorf("block 0 canonicity (v < 2^31): %w", err)
+			}
+			if err := c.queryPowReplay(api, c.queryRangeTpl, c.queryRangeWit,
+				api.Sub(BabyBearP-1, v)); err != nil {
+				return fmt.Errorf("block 0 canonicity (p-1-v < 2^31): %w", err)
+			}
 		}
 
-	// block 1 — FRI commit-phase fold rows: `count` degree-4 extension
-	// multiplies (babybear_ext.go ExtMul), the dominant nonlinear op of
-	// friFoldRowArity2. Chained on a running accumulator (var*var cost is
-	// operand-independent).
+	// block 1 — FRI commit-phase fold. The fold ARITHMETIC is the Lean-emitted
+	// friFoldData template (FriFoldEmit.lean, ∀-refined by friFold_leaf_refines)
+	// REPLAYED as real R1CS via ReplayTemplateWithWitness (friFoldReplay): the
+	// deployed fold `(e0+e1)/2 + β(e0−e1)inv(2s)` and its claimed==fold check,
+	// authored in Lean — NOT the hand-Go friFoldRowArity2 ExtMul cost chain (which
+	// survives only as the differential oracle: fri_query.go / fri_verify_native.go
+	// / emitted_verifier_full_diff_test.go). The block still reads the round-0
+	// fold-beta operand off the flat bank for the transcript link (unchanged glue).
 	case "FriFoldRowArity2":
-		x := cur.nextExt()
+		// LOAD-BEARING LINK (UNCHANGED glue): `b` is the block's fold-beta operand
+		// (assignment feeds ExpectedBetas[0]); record it so Define binds it to the
+		// transcript's round-0 fold beta (the sponge squeeze), not a free witness.
 		b := cur.nextExt()
-		// LOAD-BEARING LINK: `b` is the block's fold-beta operand (assignment feeds
-		// ExpectedBetas[0]); record it so Define binds it to the transcript's
-		// round-0 fold beta (the sponge squeeze), not a free witness.
 		beta := b
 		c.block1FoldBeta = &beta
-		for i := 0; i < g.Count; i++ {
-			x = bb.ExtMul(x, b)
+		if err := c.friFoldReplay(bb); err != nil {
+			return fmt.Errorf("block 1 FRI fold replay: %w", err)
 		}
-		// pin the accumulator so it is not dead-code-eliminated.
-		bb.ExtAssertIsEqual(x, x)
 
 	// block 1 — the fold's claimed==folded equality: `count` extension
 	// equalities (babybear_ext.go ExtAssertIsEqual).
@@ -1102,14 +1240,18 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 		}
 
 	// block 2 — commit-phase Merkle openings: for each of `count` queries, a
-	// depth-d authentication-path verification per round depth d (merkle_bn254.go
-	// VerifyMerklePathBn254 → d Poseidon2Bn254 compressions). Materializes
+	// depth-d authentication-path verification per round depth d. Each opening
+	// REPLAYS the Lean-emitted `merklePathData d` template (MerkleEmit.lean) via
+	// ReplayClosed — the deployed merkleBn254RefRoot walk authored in Lean
+	// (merkle_path_refines), not the hand-Go VerifyMerklePathBn254. Materializes
 	// derived.commit_merkle_compressions = count*sum(depths).
 	case "VerifyMerklePathBn254":
 		depths := g.Params["depths"]
 		for q := 0; q < g.Count; q++ {
 			for _, d := range depths {
-				c.merklePath(api, cur, d)
+				if err := c.merklePath(api, cur, d); err != nil {
+					return fmt.Errorf("query %d: %w", q, err)
+				}
 			}
 		}
 
@@ -1161,28 +1303,41 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 		}
 		bb.ExtAssertIsEqual(sum, BBExt{0, 0, 0, 0})
 
-	// block 4 — grinding-PoW query index sample: a 31-bit range check
-	// (challenger SampleBitsDecomposed's canonical-decomposition cost).
+	// block 4 — grinding-PoW query index sample: a 31-bit range check (challenger
+	// SampleBitsDecomposed's canonical-decomposition cost). REPLAYS the Lean-emitted
+	// QueryPow range template (emitQueryPow 0) via ReplayTemplateWithWitness
+	// (queryPowReplay) — NOT the hand-Go rc.Check(idx, bits) (retained as the
+	// differential oracle). The template's fixed 31-bit width is enforced at load
+	// (loadQueryPowTemplates asserts the descriptor's bits == 31).
 	case "SampleBitsDecomposed":
-		bits := firstParam(g, "bits")
 		for i := 0; i < g.Count; i++ {
 			idx := cur.next()
 			// LOAD-BEARING LINK: record the query-index witness so Define binds it to
 			// the transcript's live-sampled query index (the sponge squeeze), not a
 			// free witness.
 			c.block4QueryIdx = append(c.block4QueryIdx, idx)
-			rc.Check(idx, bits)
+			if err := c.queryPowReplay(api, c.queryRangeTpl, c.queryRangeWit, idx); err != nil {
+				return fmt.Errorf("block 4 query-index range: %w", err)
+			}
 		}
 
-	// block 4 — the PoW target: the low `pow_bits` bits of the sample are zero
-	// (grinding.go CheckWitness's sample_bits(bits)==0). Decompose to 31 bits,
-	// assert the low pow_bits are 0.
+	// block 4 — the PoW target: the low `pow_bits` bits of the grinding sample are
+	// zero (grinding.go CheckWitness's sample_bits(bits)==0). REPLAYS the Lean-emitted
+	// QueryPow grinding template (emitQueryPow pow_bits, ∀-refined by queryPow_refines /
+	// queryPow_refines_native: gHolds ↔ value.val < 2^31 ∧ value.val % 2^n = 0 — the
+	// deployed p3 check_witness accept) via ReplayTemplateWithWitness (queryPowReplay):
+	// the 31-bit ToBinary decomposition + the low-n zero-pins, NOT the hand-Go
+	// api.ToBinary + AssertIsEqual (retained as the differential oracle). The template's
+	// baked n is pinned == pow_bits at load.
 	case "AssertPowBitsZero":
 		powBits := firstParam(g, "pow_bits")
+		if powBits != c.queryPowN {
+			return fmt.Errorf("block 4: AssertPowBitsZero pow_bits=%d but the loaded QueryPow "+
+				"template pins %d bits", powBits, c.queryPowN)
+		}
 		for i := 0; i < g.Count; i++ {
-			decomp := api.ToBinary(cur.next(), 31)
-			for k := 0; k < powBits && k < len(decomp); k++ {
-				api.AssertIsEqual(decomp[k], 0)
+			if err := c.queryPowReplay(api, c.queryPowTpl, c.queryPowWit, cur.next()); err != nil {
+				return fmt.Errorf("block 4 grinding zero-pins: %w", err)
 			}
 		}
 
@@ -1254,21 +1409,356 @@ func (c *VerifierFullCircuit) expandInputOpenBatch(api frontend.API, cur *varCur
 	return nil
 }
 
-// merklePath verifies one depth-d authentication path against a fresh root,
-// wiring d fresh siblings + d fresh path bits + a fresh leaf (d Poseidon2Bn254
-// compressions). This is exactly VerifyMerklePathBn254 (merkle_bn254.go).
-func (c *VerifierFullCircuit) merklePath(api frontend.API, cur *varCursor, d int) {
-	leaf := cur.next()
+// merklePath verifies one depth-d commit-phase authentication path by REPLAYING
+// the Lean-emitted `merklePathData d` template (MerkleEmit.lean), proven by
+// `merkle_path_refines`: gHolds (merklePathData d) (pathAsg leaf root sibs bits) ↔
+// refRoot leaf (sibs.zip bits) = root — the deployed merkleBn254RefRoot walk
+// (bottom-up 2-to-1 Poseidon2 compress), quantified over every leaf/root/sibling/
+// bit. It consumes the flat witness bank in the SAME order as before (leaf,
+// sibs…, bits…, root — the diff-oracle layout in emitted_verifier_full_diff_test.go)
+// and binds each into the template's canonical layout: leaf@0, root@1, sibling i
+// @2+2i, path bit i @2+2i+1 (MerkleEmit.lean §5). ReplayClosed solves the Poseidon
+// internals from the define-chain and keeps the REAL checks the emitted R1CS
+// carries — the per-level booleanity `bit·bit = bit` and the final recomputed-root
+// == root. The hand-Go VerifyMerklePathBn254 (merkle_bn254.go) is retained as the
+// differential oracle; it is no longer on this emit path.
+func (c *VerifierFullCircuit) merklePath(api frontend.API, cur *varCursor, d int) error {
+	tpl := c.merkleTpls[d]
+	if tpl == nil {
+		return fmt.Errorf("no Lean-emitted Merkle-path template for depth %d "+
+			"(emit merklePathData %d from MerkleEmit.lean via scripts/gen_merkle_templates.lean)", d, d)
+	}
+	b := make(map[int]frontend.Variable, 2+2*d)
+	b[0] = cur.next() // leaf → template var 0
 	sibs := make([]frontend.Variable, d)
-	bits := make([]frontend.Variable, d)
 	for i := 0; i < d; i++ {
 		sibs[i] = cur.next()
 	}
+	bits := make([]frontend.Variable, d)
 	for i := 0; i < d; i++ {
 		bits[i] = cur.next()
 	}
-	root := cur.next()
-	VerifyMerklePathBn254(api, leaf, sibs, bits, root)
+	b[1] = cur.next() // root → template var 1
+	for i := 0; i < d; i++ {
+		b[2+2*i] = sibs[i]   // sibling i → template var 2+2i
+		b[2+2*i+1] = bits[i] // path bit i → template var 2+2i+1
+	}
+	if err := ReplayClosed(api, *tpl, b); err != nil {
+		return fmt.Errorf("commit-phase depth-%d Merkle open (Lean template %q): %w", d, tpl.Name, err)
+	}
+	return nil
+}
+
+// merkleTemplatePath is the committed Lean-emitted commit-phase Merkle-path
+// template for depth d (emitGnarkJson (Merkle.merklePathData d), MerkleEmit.lean;
+// regenerated by metatheory/scripts/gen_merkle_templates.lean).
+func merkleTemplatePath(d int) string {
+	return fmt.Sprintf("emitted/merkle_path_bn254_d%d.json", d)
+}
+
+// checkMerkleTemplateShape fail-closes if a loaded merkle-path template does not
+// match the depth it is replayed at: its gadget provenance must be a single
+// VerifyMerklePathBn254 over [leaf, root], its boundary the two public inputs
+// (leaf@0, root@1), and its structural signature the depth-d merklePathData —
+// 241*d multiplication gates (240 per Poseidon2Bn254 compression + one per-level
+// booleanity) over 437*d+2 variables. This ties the emitted artifact to the depth
+// the interpreter binds it at, so an emitter/interpreter drift is caught here, not
+// silently wired.
+func checkMerkleTemplateShape(tpl *Template, d int) error {
+	if len(tpl.Gadgets) != 1 || tpl.Gadgets[0].Gadget != "VerifyMerklePathBn254" {
+		return fmt.Errorf("merkle template %q: unexpected gadget provenance %v "+
+			"(want a single VerifyMerklePathBn254)", tpl.Name, tpl.Gadgets)
+	}
+	if len(tpl.PublicInputs) != 2 ||
+		tpl.PublicInputs[0].Var != 0 || tpl.PublicInputs[1].Var != 1 {
+		return fmt.Errorf("merkle template %q: boundary %v != [leaf@0, root@1]",
+			tpl.Name, tpl.PublicInputs)
+	}
+	if got := tpl.NumMulGates(); got != 241*d {
+		return fmt.Errorf("merkle template %q: %d mul gates != expected 241*%d=%d "+
+			"(not the depth-%d merklePathData shape)", tpl.Name, got, d, 241*d, d)
+	}
+	if got := tpl.NumVars(); got != 437*d+2 {
+		return fmt.Errorf("merkle template %q: %d vars != expected 437*%d+2=%d",
+			tpl.Name, got, d, 437*d+2)
+	}
+	return nil
+}
+
+// loadMerkleTemplates loads (once per distinct depth) the Lean-emitted
+// commit-phase Merkle-path templates block 2 replays, cross-checking each against
+// the depth it is used at.
+func loadMerkleTemplates(vf *VerifierFull) (map[int]*Template, error) {
+	g, ok := vf.gadget("VerifyMerklePathBn254")
+	if !ok {
+		return nil, nil
+	}
+	out := map[int]*Template{}
+	for _, d := range g.Params["depths"] {
+		if _, done := out[d]; done {
+			continue
+		}
+		path := merkleTemplatePath(d)
+		tpl, err := LoadTemplate(path)
+		if err != nil {
+			return nil, fmt.Errorf("load merkle template %s: %w", path, err)
+		}
+		if err := checkMerkleTemplateShape(tpl, d); err != nil {
+			return nil, err
+		}
+		out[d] = tpl
+	}
+	return out, nil
+}
+
+// friFoldTemplatePath is the committed Lean-emitted FRI arity-2 fold-consistency
+// template (emitGnarkJson (FriFold.friFoldData …), FriFoldEmit.lean; regenerated
+// by metatheory/scripts/gen_fri_fold_template.lean, alongside its honest witness
+// dump fri_fold_witness.json).
+func friFoldTemplatePath() string { return "emitted/fri_fold_template.json" }
+
+func friFoldWitnessPath() string { return "emitted/fri_fold_witness.json" }
+
+// friFoldParentBits is the parent-index-bit count the committed template is emitted
+// at — the apex-shrink round-0 fold's |parentBits| = logGlobalMaxHeight − 1
+// (= 18 − 1). It fixes the invS selection chain length, hence the template shape.
+const friFoldParentBits = 17
+
+// checkFriFoldTemplateShape fail-closes if the loaded fold template does not match
+// the friFoldData shape: its gadget provenance must be [FriFoldRowArity2,
+// ExtAssertIsEqual], its boundary the 16 sibling0/sibling1/beta/claimed limbs in
+// that order, one api.Select per parent bit (the invS bit-selection chain), and its
+// var/mul counts the friFoldParentBits-parameterized friFoldData counts. This ties
+// the emitted artifact to the shape the interpreter binds it at, so an
+// emitter/interpreter drift is caught here, not silently wired.
+func checkFriFoldTemplateShape(tpl *Template) error {
+	if len(tpl.Gadgets) != 2 ||
+		tpl.Gadgets[0].Gadget != "FriFoldRowArity2" || tpl.Gadgets[1].Gadget != "ExtAssertIsEqual" {
+		return fmt.Errorf("fri fold template %q: unexpected gadget provenance %v "+
+			"(want [FriFoldRowArity2, ExtAssertIsEqual])", tpl.Name, tpl.Gadgets)
+	}
+	if len(tpl.PublicInputs) != 16 {
+		return fmt.Errorf("fri fold template %q: %d public inputs != 16 "+
+			"(sibling0/sibling1/beta/claimed, 4 limbs each)", tpl.Name, len(tpl.PublicInputs))
+	}
+	wantNames := []string{
+		"sibling0_0", "sibling0_1", "sibling0_2", "sibling0_3",
+		"sibling1_0", "sibling1_1", "sibling1_2", "sibling1_3",
+		"beta_0", "beta_1", "beta_2", "beta_3",
+		"folded_claim_0", "folded_claim_1", "folded_claim_2", "folded_claim_3",
+	}
+	for i, want := range wantNames {
+		if tpl.PublicInputs[i].Name != want {
+			return fmt.Errorf("fri fold template %q: public input %d is %q, want %q",
+				tpl.Name, i, tpl.PublicInputs[i].Name, want)
+		}
+	}
+	nSel := 0
+	for i := range tpl.Gates {
+		if tpl.Gates[i].Op == "select" {
+			nSel++
+		}
+	}
+	if nSel != friFoldParentBits {
+		return fmt.Errorf("fri fold template %q: %d select gates != %d parent bits "+
+			"(the invS bit-selection chain length)", tpl.Name, nSel, friFoldParentBits)
+	}
+	// Deterministic friFoldData shape at friFoldParentBits=17 (the committed emit).
+	if got := tpl.NumVars(); got != 4721 {
+		return fmt.Errorf("fri fold template %q: %d vars != 4721 (not the |bits|=%d "+
+			"friFoldData shape)", tpl.Name, got, friFoldParentBits)
+	}
+	if got := tpl.NumMulGates(); got != 9374 {
+		return fmt.Errorf("fri fold template %q: %d mul gates != 9374 (not the |bits|=%d "+
+			"friFoldData shape)", tpl.Name, got, friFoldParentBits)
+	}
+	return nil
+}
+
+// loadFriFoldTemplate loads the Lean-emitted FRI fold-consistency template block 1
+// replays, shape-checks it, and classifies its 16-limb boundary into inputs /
+// free witnesses (ClassifyVars(16)). Returns (nil, nil, nil) if the descriptor
+// carries no FriFoldRowArity2 gadget (nothing to replay).
+func loadFriFoldTemplate(vf *VerifierFull) (*Template, *TemplateVarClass, error) {
+	if _, ok := vf.gadget("FriFoldRowArity2"); !ok {
+		return nil, nil, nil
+	}
+	tpl, err := LoadTemplate(friFoldTemplatePath())
+	if err != nil {
+		return nil, nil, fmt.Errorf("load fri fold template %s: %w", friFoldTemplatePath(), err)
+	}
+	if err := checkFriFoldTemplateShape(tpl); err != nil {
+		return nil, nil, err
+	}
+	cls, err := tpl.ClassifyVars(len(tpl.PublicInputs))
+	if err != nil {
+		return nil, nil, fmt.Errorf("fri fold template: classify: %w", err)
+	}
+	if len(cls.Inputs) != 16 {
+		return nil, nil, fmt.Errorf("fri fold template: %d classified inputs, want 16 "+
+			"(the sibling0/sibling1/beta/claimed boundary)", len(cls.Inputs))
+	}
+	return tpl, cls, nil
+}
+
+// friFoldReplay instantiates the Lean-emitted FRI arity-2 fold-consistency template
+// as real R1CS: it binds the 16-limb sibling0/sibling1/beta/claimed boundary and the
+// free internal witnesses (canonicity bit decompositions, parent index bits, reduce
+// quotient/remainder hints) from FriFoldWitness, and replays every assert — the fold
+// define-chain SOLVES the intermediates, and the per-parent-bit booleanity + the
+// 31-bit canonicity range checks + the claimed==fold equality all bite. This is the
+// Lean-authored replacement for the hand-Go friFoldRowArity2 on the emit path (that
+// routine survives as the differential oracle).
+func (c *VerifierFullCircuit) friFoldReplay(bb *BBApi) error {
+	if c.friFoldTpl == nil || c.friFoldClass == nil {
+		return fmt.Errorf("block 1: FriFoldRowArity2 gadget present but no fold template loaded")
+	}
+	tpl := c.friFoldTpl
+	nb := len(tpl.PublicInputs)
+	want := nb + len(c.friFoldClass.Witness)
+	if len(c.FriFoldWitness) != want {
+		return fmt.Errorf("block 1: FriFoldWitness has %d entries, want %d "+
+			"(%d boundary limbs + %d free witnesses)",
+			len(c.FriFoldWitness), want, nb, len(c.friFoldClass.Witness))
+	}
+	in := make([]frontend.Variable, nb)
+	for i := 0; i < nb; i++ {
+		in[i] = c.FriFoldWitness[i]
+	}
+	wmap := make(map[int]frontend.Variable, len(c.friFoldClass.Witness))
+	for k, idx := range c.friFoldClass.Witness {
+		wmap[idx] = c.FriFoldWitness[nb+k]
+	}
+	if _, err := ReplayTemplateWithWitness(bb.API(), *tpl, in, wmap); err != nil {
+		return fmt.Errorf("fri fold template %q replay: %w", tpl.Name, err)
+	}
+	return nil
+}
+
+// queryPowTemplatePath is the committed Lean-emitted QueryPow template for zero-pin
+// count n (emitGnarkJson (emitQueryPow n), QueryPowEmit.lean; regenerated by
+// metatheory/scripts/gen_query_pow_templates.lean). n=0 is the bare 31-bit range
+// check; n=pow_bits (deployed 16) adds the low-n grinding zero-pins.
+func queryPowTemplatePath(n int) string {
+	return fmt.Sprintf("emitted/query_pow_n%d.json", n)
+}
+
+// queryPowZeroPinCount reads the zero-pin count the template BAKES in — the arg count
+// of its AssertPowBitsZero gadget (emitQueryPow n records `(List.range n).map (1+·)`),
+// so the Go side can fail-close if the loaded template's n disagrees with the
+// descriptor's pow_bits.
+func queryPowZeroPinCount(tpl *Template) int {
+	for i := range tpl.Gadgets {
+		if tpl.Gadgets[i].Gadget == "AssertPowBitsZero" {
+			return len(tpl.Gadgets[i].Args)
+		}
+	}
+	return 0
+}
+
+// loadQueryPowTemplate loads the QueryPow template for zero-pin count n, classifies its
+// single-value input boundary + 31 free-witness ToBinary bits (ClassifyVars(1)), and
+// shape-checks it fail-closed: exactly 1 input (the checked value, public var 0),
+// exactly 31 free-witness bits (the ToBinary decomposition the queryPowBitsHint
+// supplies), and a baked zero-pin count equal to n. Returns the template and its
+// ascending free-witness bit indices (var 1+k holds bit k).
+func loadQueryPowTemplate(n int) (*Template, []int, error) {
+	tpl, err := LoadTemplate(queryPowTemplatePath(n))
+	if err != nil {
+		return nil, nil, fmt.Errorf("load query-pow template %s: %w", queryPowTemplatePath(n), err)
+	}
+	cls, err := tpl.ClassifyVars(1)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query-pow template n%d: classify: %w", n, err)
+	}
+	if len(cls.Inputs) != 1 {
+		return nil, nil, fmt.Errorf("query-pow template n%d: %d input variables, want 1 "+
+			"(the checked value, public var 0)", n, len(cls.Inputs))
+	}
+	if len(cls.Witness) != queryPowDecompBits {
+		return nil, nil, fmt.Errorf("query-pow template n%d: %d free-witness bits, want %d "+
+			"(the 31-bit ToBinary decomposition)", n, len(cls.Witness), queryPowDecompBits)
+	}
+	if got := queryPowZeroPinCount(tpl); got != n {
+		return nil, nil, fmt.Errorf("query-pow template n%d pins %d low bits (AssertPowBitsZero gadget), want %d",
+			n, got, n)
+	}
+	return tpl, cls.Witness, nil
+}
+
+// queryPowTemplates is the per-descriptor QueryPow replay layout: the n=0 range
+// template (block 0 canonicity + block 4 query-index range) and the n=pow_bits PoW
+// template (block 4 grinding). Either half is nil if the descriptor carries no gadget
+// that needs it.
+type queryPowTemplates struct {
+	rangeTpl *Template
+	rangeWit []int
+	powTpl   *Template
+	powWit   []int
+	powN     int
+}
+
+// loadQueryPowTemplates loads the Lean-emitted QueryPow templates the descriptor needs:
+// the n=0 range template if AssertIsCanonical (block 0) or SampleBitsDecomposed (block
+// 4) is present, and the n=pow_bits PoW template if AssertPowBitsZero (block 4) is
+// present. It fail-closes if a needed template is missing or misshapen, or if the
+// descriptor's SampleBitsDecomposed range is not the template's fixed 31-bit width.
+func loadQueryPowTemplates(vf *VerifierFull) (*queryPowTemplates, error) {
+	qp := &queryPowTemplates{}
+	_, needCanon := vf.gadget("AssertIsCanonical")
+	rangeG, needRange := vf.gadget("SampleBitsDecomposed")
+	if needRange {
+		if bits := firstParam(rangeG, "bits"); bits != queryPowDecompBits {
+			return nil, fmt.Errorf("block 4: SampleBitsDecomposed bits=%d, but the QueryPow "+
+				"template is a fixed %d-bit range check", bits, queryPowDecompBits)
+		}
+	}
+	if needCanon || needRange {
+		tpl, wit, err := loadQueryPowTemplate(0)
+		if err != nil {
+			return nil, err
+		}
+		qp.rangeTpl, qp.rangeWit = tpl, wit
+	}
+	if powG, ok := vf.gadget("AssertPowBitsZero"); ok {
+		powBits := firstParam(powG, "pow_bits")
+		tpl, wit, err := loadQueryPowTemplate(powBits)
+		if err != nil {
+			return nil, err
+		}
+		qp.powTpl, qp.powWit, qp.powN = tpl, wit, powBits
+	}
+	return qp, nil
+}
+
+// queryPowReplay instantiates a Lean-emitted QueryPow template (emitQueryPow n,
+// QueryPowEmit.lean) as real R1CS at `value`: it hint-decomposes value into its low 31
+// bits (queryPowBitsHint — values only), binds value as the single template input and
+// the bits as the template's free internal witnesses (`wit`, by variable index), and
+// replays every assert through the generic ReplayTemplateWithWitness. The template's
+// booleanity + recomposition PIN the bits (the ∀-refinement `queryPow_refines`: the
+// system is satisfiable iff value.val < 2^31 and — for the PoW template — its low n
+// bits are zero), so this carries the range/canonicity/grinding constraint content
+// with NO hand-Go range check, ToBinary, or AssertIsCanonical on the emit path.
+func (c *VerifierFullCircuit) queryPowReplay(api frontend.API, tpl *Template, wit []int,
+	value frontend.Variable) error {
+	if tpl == nil {
+		return fmt.Errorf("query-pow replay: template not loaded")
+	}
+	bitsVals, err := api.Compiler().NewHint(queryPowBitsHint, queryPowDecompBits, value)
+	if err != nil {
+		return fmt.Errorf("query-pow bit hint: %w", err)
+	}
+	wmap := make(map[int]frontend.Variable, len(wit))
+	for k, idx := range wit {
+		// wit is ascending [1..31]; wit[k] = 1+k holds bit k (powAsg), and bitsVals[k]
+		// is bit k — so the k-th witness index takes the k-th hint output.
+		wmap[idx] = bitsVals[k]
+	}
+	if _, err := ReplayTemplateWithWitness(api, *tpl, []frontend.Variable{value}, wmap); err != nil {
+		return fmt.Errorf("query-pow template %q replay: %w", tpl.Name, err)
+	}
+	return nil
 }
 
 // block3SelectorSlot is one instance's Lagrange-selector witness triple paired

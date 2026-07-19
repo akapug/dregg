@@ -144,7 +144,9 @@ func appendExtVars(e bbExtRef, w *[]frontend.Variable) {
 //
 //   - block 0 (canonicity): a real claim lane (SettlementCircuit's AssertIsCanonical
 //     over the public statement);
-//   - block 1 (fri_fold ext-muls): a real (initial eval, beta) ext pair;
+//   - block 1 (fri_fold): the round-0 fold-beta operand (ExpectedBetas[0], the
+//     transcript-link carrier); the fold ARITHMETIC is the Lean-emitted friFoldData
+//     template replayed over the separate FriFoldWitness bank (fillFriFoldWitness);
 //   - block 1 (ext-eq): per query, both operands = the real final-poly evaluation
 //     (the FRI closure value the reference verifier checks folded == finalEval);
 //   - block 2 (commit Merkle): the REAL per-query per-round openings (leaf via the
@@ -220,9 +222,10 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 			}
 
 		case "FriFoldRowArity2":
-			// block 1 — the chained accumulator (x) + fixed operand (b): a real
-			// (initial eval, beta) ext pair. No failing constraint (ExtAssertIsEqual(x,x)).
-			appendExtVars(bbExtRef(fx.Queries[0].InitialEval), &w)
+			// block 1 — the round-0 fold-beta operand (the transcript-link carrier
+			// block1FoldBeta pins to ExpectedBetas[0]). The fold ARITHMETIC no longer
+			// rides the flat bank: it is the Lean-emitted friFoldData template replayed
+			// over the separate FriFoldWitness bank (fillFriFoldWitness, below).
 			appendExtVars(bbExtRef(fx.ExpectedBetas[0]), &w)
 
 		case "ExtAssertIsEqual":
@@ -396,7 +399,42 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 			"(consumption drift vs Define)", len(w), len(c.W))
 	}
 	c.W = w
+
+	// Block 1's fold arithmetic is a replay of the Lean-emitted friFoldData template
+	// over the separate FriFoldWitness bank — fed the committed honest fold witness
+	// (fri_fold_witness.json), a self-consistent round-0 fold at β=ExpectedBetas[0].
+	fillFriFoldWitness(t, c)
 	return c
+}
+
+// fillFriFoldWitness threads the HONEST fold-consistency witness into block 1's
+// replay bank (VerifierFullCircuit.FriFoldWitness). Its values are the Lean-generated
+// assignment friFoldAsg (FriFoldEmit.lean) — the same object friFold_leaf_refines
+// quantifies over — dumped var-index-ordered to emitted/fri_fold_witness.json. The
+// bank layout mirrors friFoldReplay: the len(PublicInputs) boundary limbs
+// (public-input order) followed by the friFoldClass.Witness free witnesses.
+func fillFriFoldWitness(t *testing.T, c *VerifierFullCircuit) {
+	t.Helper()
+	if c.friFoldTpl == nil {
+		return
+	}
+	vals, err := loadWitnessValues(friFoldWitnessPath())
+	if err != nil {
+		t.Fatalf("load %s: %v", friFoldWitnessPath(), err)
+	}
+	if len(vals) != c.friFoldTpl.NumVars() {
+		t.Fatalf("%s: %d witness values, fold template has %d variables",
+			friFoldWitnessPath(), len(vals), c.friFoldTpl.NumVars())
+	}
+	nb := len(c.friFoldTpl.PublicInputs)
+	bank := make([]frontend.Variable, nb+len(c.friFoldClass.Witness))
+	for i, p := range c.friFoldTpl.PublicInputs {
+		bank[i] = vals[p.Var]
+	}
+	for k, idx := range c.friFoldClass.Witness {
+		bank[nb+k] = vals[idx]
+	}
+	c.FriFoldWitness = bank
 }
 
 // bakeVerifierFullVkPins sets the shrink-VK + apex-VK pin constants on an

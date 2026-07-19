@@ -113,6 +113,38 @@ type shrinkTranscriptMeta struct {
 	// then permBeta[0..3]; alphaSampleOff is the constraint-folding alpha[0..3]).
 	permChSampleOff int
 	alphaSampleOff  int
+
+	// THE ZETA BIND (shrinkStarkPrefixLoc.zetaSampleOff): the flat prefix-sample
+	// offset of the out-of-domain point zeta[0..3]. Block 3 consumes zeta only
+	// INDIRECTLY — through the Lagrange selectors and the openings-at-zeta — so
+	// there is no zeta witness to equate; instead bindBlockSelectorsToZeta
+	// RE-DERIVES the selectors in-circuit from THIS squeeze (the same
+	// computeStarkSelectorsNative the deployed verifier runs) and asserts the
+	// block's supplied selectors equal that derivation. A selector set at any
+	// other zeta is UNSAT. NEGATIVE disables the whole zeta bind (the cost
+	// differential only; never a deployed path) — an attached stage that leaves
+	// this at its zero value binds zeta to prefix-sample lane 0 and the honest
+	// proof goes UNSAT, loudly, rather than silently unbound.
+	zetaSampleOff int
+
+	// THE OPENINGS BIND (shrinkStarkPrefixLoc.openedObsOff / cumObsOff / the
+	// publics block at obs event 2): flat offsets into the prefix OBSERVATION
+	// stream (== TxPrefixObs indices) of the three base-field blocks block 3
+	// consumes as free witness — the opened values at zeta (observed AFTER the
+	// zeta squeeze, before the FRI batch alpha), the LogUp cumulative sums, and
+	// the per-instance public values. Binding block 3's witnesses to these makes
+	// the values block 3 evaluates the ones the transcript ABSORBED, i.e. the ones
+	// zeta itself and every downstream challenge were drawn over. Negative = that
+	// block's bind is off.
+	openedObsOff int
+	cumObsOff    int
+	pubObsOff    int
+
+	// shapes is the VK-side per-instance shape list (buildStarkOpenedSpans's
+	// input) that determines how the flat opened-values stream slices per
+	// instance. Needed to bind each block-3 opened-value witness to its slot in
+	// the transcript-observed stream. nil = the openings bind is off.
+	shapes []StarkInstanceShape
 }
 
 // rederive runs the emitted-permutation transcript re-derivation: it builds a
