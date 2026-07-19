@@ -49,6 +49,7 @@ package friverifier
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 
 	"github.com/consensys/gnark/frontend"
@@ -437,9 +438,9 @@ func (vf *VerifierFull) WitnessLen(sym *SymbolicConstraints) (int, error) {
 		case "AssertPowBitsZero":
 			n += g.Count * 1
 		case "AssertIsEqual":
-			// block 5: one fresh claim-lane witness per public lane, each equated
-			// against the exposed public-statement lane (not a fresh pair).
-			n += g.Count * 1
+			// block 5: the settlement segment bind consumes NO fresh witness — Define
+			// equates the block-3 ExposeClaim claim channel (captured during block 3)
+			// against the exposed public statement, so no bank variable is drawn here.
 		}
 	}
 	return n, nil
@@ -460,6 +461,18 @@ var errBlock3NeedsSym = fmt.Errorf("block 3 (BatchTableInstance/stark_constraint
 // ---------------------------------------------------------------------------
 // §4  The circuit — replay each gadget record through the hand-Go gadget.
 // ---------------------------------------------------------------------------
+
+// preprocessedPcsRound is the PCS round index carrying the shrink proof's
+// preprocessed (VK-core / op-list) commitment. The input-open rounds are emitted
+// in PCS round order — trace(main)=0, quotient=1, preprocessed=2, permutation=3 —
+// the SAME order shrinkInputRootsRef reads the anchored inputRootDigOff and the
+// descriptor's round_widths list (EmitJson.lean apexShrinkShape.inputRoundWidths:
+// trace [80,300,8,132], quotient [16,8,16,8], preprocessed [61,24,4,66],
+// permutation [76,28,8,132]). So block 2b's opened root at THIS round is the
+// shrink proof's preprocessed commitment — the value SettlementCircuit pins as
+// c.PrefixDigests[c.loc.preDigOff] (settlement_circuit.go:268-270), which the
+// shrink-VK pin asserts equals the baked vkPreprocessedRoot.
+const preprocessedPcsRound = 2
 
 // VerifierFullCircuit materializes the compact descriptor. It EXPOSES the same
 // 25-lane public settlement statement the hand-Go SettlementCircuit does
@@ -524,6 +537,33 @@ type VerifierFullCircuit struct {
 	block3Challenges [][]BBExt           // block 3 per-instance WitnessChecks bus (permAlpha,permBeta per lookup)
 	block3Alpha      []BBExt             // block 3 per-instance constraint-folding alpha
 	block4QueryIdx   []frontend.Variable // block 4 SampleBitsDecomposed query-index witness
+
+	// --- THE STATEMENT BIND + VK PINS (settlement_circuit.go:241-285). ---
+	//
+	// claimChannel is the block-3 ExposeClaim instance's public-value lanes — the
+	// 25 settlement claim lanes ++ the 8 apex VK-core lanes (NumPublicInputs +
+	// ApexVkLanes) — captured (base-field) during block 3's DAG evaluation, where
+	// the ExposeClaimAir `public_value[lane] == v_0` identity binds each lane to
+	// the COMMITTED expose_claim trace cell (through the quotient identity at
+	// zeta). Block 5 equates lanes 0..NumPublicInputs against the exposed public
+	// statement (publicLane), and the apex-VK pin equates the tail lanes against
+	// apexPreprocessedCommit — so BOTH the statement and the apex VK-core are bound
+	// to the REAL proof's exposed-claim channel, not to fresh, proof-free witness.
+	claimChannel []frontend.Variable
+	// preprocessedRoots are block 2b's opened input roots of the preprocessed PCS
+	// round (preprocessedPcsRound), one per query — the shrink proof's VK-core
+	// commitment (each is constrained by that query's ReplayClosed recomputed-root
+	// == root check). The shrink-VK pin asserts each equals vkPreprocessedRoot.
+	preprocessedRoots []frontend.Variable
+	// vkPreprocessedRoot, when non-nil, bakes the shrink proof's preprocessed
+	// (op-list) commitment root as a circuit CONSTANT (shrink-VK pin, tooth 1) —
+	// the twin of SettlementCircuit.vkPreprocessedRoot (settlement_circuit.go:268).
+	vkPreprocessedRoot *big.Int
+	// apexPreprocessedCommit, when non-nil, bakes the DEPLOYED apex's preprocessed
+	// commitment (ApexVkLanes lanes) as circuit constants against the claim
+	// channel's re-exposed VK-core lanes (apex-VK pin, tooth 2) — the twin of
+	// SettlementCircuit.apexPreprocessedCommit (settlement_circuit.go:278).
+	apexPreprocessedCommit []*big.Int
 }
 
 // publicLane returns the i-th lane of the pinned 25-lane public statement in the
@@ -578,6 +618,14 @@ func (c *VerifierFullCircuit) Define(api frontend.API) error {
 		return fmt.Errorf("witness-budget drift: Define consumed %d, bank has %d", cur.pos, len(c.W))
 	}
 
+	// THE VK PINS (settlement_circuit.go:266-285): the shrink-VK and apex-VK
+	// fingerprint pins, asserted against the baked constants over the values block
+	// 2b / block 3 already bound to the real proof. Nil-guarded (skipped on the
+	// plain compile path), exactly as SettlementCircuit.Define guards them.
+	if err := c.bindVkPins(api); err != nil {
+		return err
+	}
+
 	// Emitted-permutation transcript re-derivation stage (off when unattached).
 	// Re-derives EVERY challenge the verifier consumes in-circuit through the
 	// Lean-emitted Poseidon2 permutation and binds it to the commitment roots —
@@ -601,6 +649,53 @@ func (c *VerifierFullCircuit) Define(api frontend.API) error {
 		// (captured during expand) to the transcript-re-derived challenge. After this,
 		// no block can use a challenge that is not the sponge squeeze of the real roots.
 		c.bindBlockChallengesToTranscript(bb, betas, queryIdxBits)
+	}
+	return nil
+}
+
+// bindVkPins asserts the shrink-VK and apex-VK fingerprint pins against the baked
+// constants — the emit-driven twins of SettlementCircuit.Define:266-285:
+//
+//   - shrink-VK (tooth 1): the block-2b preprocessed-round input root (the shrink
+//     proof's preprocessed / op-list commitment, its VK-core) equals the baked
+//     vkPreprocessedRoot — asserted for EVERY query's opened root, since the emit
+//     skeleton opens each (query, round) against its own root variable (the
+//     structural-abstraction residual, seam #2, replaces the deployed circuit's
+//     single transcript-observed cap). A shrink proof from a DIFFERENT circuit
+//     carries a different preprocessed commitment and fails here.
+//   - apex-VK (tooth 2): the claim channel's re-exposed VK-core lanes
+//     (NumPublicInputs..NumPublicInputs+ApexVkLanes) equal apexPreprocessedCommit
+//     — a shrink minted over a NON-deployed apex has different VK-core lanes (they
+//     are transcript-absorbed + ExposeClaimAir-bound in block 3), and cannot be
+//     swapped without re-proving.
+//
+// Both pins are nil-guarded (skipped on the plain compile path
+// AllocVerifierFullCircuit, which leaves the constants unset), materializing only
+// when the assignment bakes the deployed constants — exactly as the settlement
+// circuit's `if c.vkPreprocessedRoot != nil` / `if c.apexPreprocessedCommit != nil`.
+func (c *VerifierFullCircuit) bindVkPins(api frontend.API) error {
+	if c.vkPreprocessedRoot != nil {
+		if len(c.preprocessedRoots) == 0 {
+			return fmt.Errorf("shrink-VK pin set but no block-2b preprocessed-round (PCS round %d) "+
+				"root was captured (the descriptor's input rounds do not reach it)", preprocessedPcsRound)
+		}
+		for _, root := range c.preprocessedRoots {
+			api.AssertIsEqual(root, c.vkPreprocessedRoot)
+		}
+	}
+	if c.apexPreprocessedCommit != nil {
+		if len(c.apexPreprocessedCommit) != ApexVkLanes {
+			return fmt.Errorf("apex-VK pin must carry exactly ApexVkLanes (%d) lanes, got %d",
+				ApexVkLanes, len(c.apexPreprocessedCommit))
+		}
+		if len(c.claimChannel) != NumPublicInputs+ApexVkLanes {
+			return fmt.Errorf("apex-VK pin: claim channel has %d lanes, want %d "+
+				"(the 25 statement lanes ++ the 8 apex VK-core lanes — block 3 ExposeClaim capture)",
+				len(c.claimChannel), NumPublicInputs+ApexVkLanes)
+		}
+		for i, want := range c.apexPreprocessedCommit {
+			api.AssertIsEqual(c.claimChannel[NumPublicInputs+i], want)
+		}
 	}
 	return nil
 }
@@ -819,14 +914,22 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 		}
 
 	// block 5 — settlement segment bind: `count` = num_public_lanes wire
-	// equalities (segmentData's AssertIsEqual per lane). Each transcript-absorbed
-	// claim lane (a fresh witness — the expose_claim public value) is equated
-	// against the corresponding EXPOSED public-statement lane, in the pinned
-	// genesis8 ++ final8 ++ numTurns ++ chainDigest8 order — the same 25-lane
-	// settlement binding SettlementCircuit.Define performs.
+	// equalities (segmentData's AssertIsEqual per lane). Each claim lane is the
+	// block-3 ExposeClaim channel (captured in starkInstance where the
+	// ExposeClaimAir pv==v_0 identity binds it to the committed expose_claim trace),
+	// equated against the corresponding EXPOSED public-statement lane in the pinned
+	// genesis8 ++ final8 ++ numTurns ++ chainDigest8 order — the SettlementCircuit
+	// 25-lane binding (settlement_circuit.go:251-264). This draws NO fresh witness:
+	// the LHS is the real, proof-bound claim channel, so it is a binding and not a
+	// claim-vs-claim tautology over an unconstrained wire.
 	case "AssertIsEqual":
+		if len(c.claimChannel) < g.Count {
+			return fmt.Errorf("block 5: claim channel has %d lanes, need >= %d "+
+				"(block 3 ExposeClaim capture missing — is block 3 before block 5?)",
+				len(c.claimChannel), g.Count)
+		}
 		for i := 0; i < g.Count; i++ {
-			api.AssertIsEqual(cur.next(), c.publicLane(i))
+			api.AssertIsEqual(c.claimChannel[i], c.publicLane(i))
 		}
 	}
 	return nil
@@ -857,7 +960,14 @@ func (c *VerifierFullCircuit) expandInputOpenBatch(api frontend.API, cur *varCur
 			for i := 0; i < R; i++ {
 				b[i] = cur.next() // opened row limb i (class-concatenated)
 			}
-			b[R] = cur.next() // committed input root
+			root := cur.next() // committed input root
+			b[R] = root
+			// SHRINK-VK CAPTURE: the preprocessed PCS round's opened root is the
+			// shrink proof's VK-core commitment; record it so bindVkPins asserts it
+			// equals the baked vkPreprocessedRoot (settlement_circuit.go:268-270).
+			if r == preprocessedPcsRound {
+				c.preprocessedRoots = append(c.preprocessedRoots, root)
+			}
 			for s := 0; s < maxLh; s++ {
 				b[R+1+2*s] = cur.next()   // sibling s
 				b[R+1+2*s+1] = cur.next() // path bit s
@@ -921,6 +1031,20 @@ func (c *VerifierFullCircuit) starkInstance(bb *BBApi, cur *varCursor, inst *Sym
 			pv[i] = BBExt{cur.next(), 0, 0, 0} // base-field public value lifted
 		}
 		in.PublicValues = pv
+		// CLAIM-CHANNEL CAPTURE: the ExposeClaim instance is the ONLY one carrying
+		// public values, and it carries exactly the 25 settlement claim lanes ++ the
+		// 8 apex VK-core lanes. Record them (base-field) as the claim channel: block
+		// 5 binds lanes 0..25 to the public statement and the apex-VK pin binds lanes
+		// 25..33 to the pinned apex commitment. The eval below (evalSymbolicFoldedNative)
+		// runs the ExposeClaimAir `pv == v_0` identity, binding each captured lane to
+		// the committed expose_claim trace cell — so these are proof-bound, not free.
+		if inst.NumPublicValues == NumPublicInputs+ApexVkLanes {
+			lanes := make([]frontend.Variable, inst.NumPublicValues)
+			for i := range pv {
+				lanes[i] = pv[i][0]
+			}
+			c.claimChannel = lanes
+		}
 	}
 	alpha := cur.nextExt()
 	out := cur.nextExt()
