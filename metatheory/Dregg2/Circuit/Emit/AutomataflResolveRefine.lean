@@ -3005,6 +3005,361 @@ theorem resolve_step_sat_imp_applyTurn
 #print axioms resolve_forge_rejected
 #print axioms boardDecodeMid_commit_cellAt
 
+/-! ## §D.7 — THE OCCLUSION-INDEPENDENT ADJUDICATION CORE, AT ARBITRARY BOARD SIZE `n`.
+
+Everything above is keyed at the frozen `NN = 2` (`automataflResolveDesc`). This section re-proves the
+part of Leg R's argument that is *occlusion-independent and coordinate-independent* — the
+`fork`/`collide`/`survive` selection truth-table (Leg 4), the carries (Leg 5) and the flow-through
+bits (Leg 6) — as ARGUMENTS OVER AN ARBITRARY `n`, off `Satisfied2 (automataflResolveDescN n)`.
+
+WHY THESE AND NOT THE WHOLE CAPSTONE. Legs 4/5/6 compute booleans out of the pattern bits and the
+non-vacuum bits by PURE GATE ALGEBRA — no coordinate window, no board enumeration, no occlusion. So
+their proofs port verbatim from the `NN = 2` originals with only the descriptor swapped
+(`automataflResolveDescN n`) and the membership drawn from the already-`n`-generic
+`AutomataflResolveMembership` (`mem_selection_idx` / `mem_carry_idx` / `mem_flowThrough_idx`, whose
+families are fixed-length lists whose positions do NOT move with `n`). `selectionConstraints n`,
+`carryConstraints n` and `flowThroughConstraints n` are literally the same 6 / 4 / 14 gates as the
+frozen ones, so every polynomial-shape `rfl` and every `norm_num` closes unchanged.
+
+WHAT IS NOT HERE, AND WHY (the honest residual). The rest of the chain — auto pin, `validate_move`
+(`MoveValid`), the witnessed `is_vertical` + occlusion, `eq_coords`, the source read, `write_mid`,
+and hence `resolve_sat_imp_resolveMid` — needs one of two things this lane cannot supply:
+  • the `[0, n)` COORDINATE window (the frozen proofs pin coordinates to `{0,1}` via `coord01_of_sat`
+    / `interval_cases` / `sqdist_pure`; at `n > 2` the `decompose_coord_le` UPPER-edge bits and a
+    wider no-wrap window are required), and/or
+  • a NON-VACUOUS OCCLUSION discharge. The generic occlusion MATH exists
+    (`AutomataflOcclusionGeneric.occ_eq_occluded_vert/horiz`), but the discharge of its hypotheses off
+    `Satisfied2` — `occ_iff_occluded_of_sat` — lives in `AutomataflOcclusionBridge` (a file this lane
+    may not touch) and is itself stated at `NN = 2` (built on `coord01_of_sat` + `NN = 2`). The
+    capstone's occlusion leg here runs through `occ_of_sat` / `occluded_false_n2` VACUITY, and the
+    caterpillar (`nextOf_pair` / `followChain_*` / `chainDest_*`) is stated with `.x < 2 ∧ .y < 2`.
+So `resolve_sat_imp_resolveMid` remains at `NN = 2`; it is NOT restated at an `n` its proof cannot
+reach. -/
+
+section AdjudicationCoreN
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
+  {t : VmTrace} {n : Nat}
+
+/-- `rgate`, n-generically: a per-row gate of `automataflResolveDescN n` forces its body to vanish
+mod `p` on a non-last row. The proof is n-independent — identical to the frozen `rgate` with the
+descriptor a variable. -/
+theorem rgateN (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t) (i : Nat)
+    (hi : i + 1 < t.rows.length) {g : EmittedExpr}
+    (hg : cg g ∈ (automataflResolveDescN n).constraints) :
+    g.eval (envAt t i).loc ≡ 0 [ZMOD 2013265921] := by
+  have hrc := hsat.rowConstraints i (by omega) _ hg
+  have hlf : (i + 1 == t.rows.length) = false := by
+    have h : i + 1 ≠ t.rows.length := by omega
+    simpa using h
+  simpa only [cg, VmConstraint2.holdsAt, VmConstraint.holdsVm, hlf] using hrc
+
+/-- The `Head` form of `rgateN`. -/
+theorem rgateHN (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t) (i : Nat)
+    (hi : i + 1 < t.rows.length) {h : Head}
+    (hg : cgH h ∈ (automataflResolveDescN n).constraints) :
+    (headToExpr h).eval (envAt t i).loc ≡ 0 [ZMOD 2013265921] :=
+  rgateN hsat i hi hg
+
+/-- `Builder::alloc_prod`, n-generically. -/
+theorem prodN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (out a b : Nat)
+    (hg : cgH ((Head.lin (-1) out).addProd 1 [a, b]) ∈ (automataflResolveDescN n).constraints)
+    (ha : (envAt t i).loc a = 0 ∨ (envAt t i).loc a = 1)
+    (hb : (envAt t i).loc b = 0 ∨ (envAt t i).loc b = 1) :
+    (envAt t i).loc out = (envAt t i).loc a * (envAt t i).loc b := by
+  set e := envAt t i with he
+  have hgg := rgateHN hsat i hi hg
+  have hE : (headToExpr ((Head.lin (-1) out).addProd 1 [a, b])).eval e.loc
+      = (-1) * e.loc out + e.loc a * e.loc b := rfl
+  rw [hE] at hgg
+  refine (eq_of_modEq_canon ?_ (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hgg)).symm
+  rcases ha with h | h <;> rcases hb with h' | h' <;> rw [h, h'] <;>
+    exact ⟨by norm_num, by norm_num⟩
+
+/-- `not_bit`, n-generically. -/
+theorem notBitN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (out col : Nat)
+    (hg : notBitPin out col ∈ (automataflResolveDescN n).constraints)
+    (hb : (envAt t i).loc col = 0 ∨ (envAt t i).loc col = 1) :
+    (envAt t i).loc out = 1 - (envAt t i).loc col := by
+  set e := envAt t i with he
+  have hgg := rgateHN hsat i hi hg
+  have hE : (headToExpr (((Head.lin 1 out).addLin 1 col).addConst (-1))).eval e.loc
+      = e.loc out + e.loc col + (-1) := rfl
+  rw [hE] at hgg
+  refine eq_of_modEq_canon (canon_loc hc i _) ?_ ((gate_modEq_iff (by ring)).mp hgg)
+  rcases hb with h | h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩
+
+/-- **Leg 4 — `selectionN_of_sat`: THE SELECTION TRUTH TABLE, AT ARBITRARY `n`.** The `n`-generic
+twin of `selection_of_sat`: the emitted `fork`, `collide` and `surv` columns are booleans, each
+EXACTLY its reference condition as a function of the four pattern bits and the two non-vacuum bits.
+Pure gate algebra over columns already known boolean — occlusion- and coordinate-independent. -/
+theorem selectionN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hff : (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 0)) = 0
+        ∨ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 0)) = 1)
+    (htt : (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 1)) = 0
+        ∨ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 1)) = 1)
+    (hanz : (envAt t i).loc (NGen.cAnz n) = 0 ∨ (envAt t i).loc (NGen.cAnz n) = 1)
+    (hbnz : (envAt t i).loc (NGen.cBnz n) = 0 ∨ (envAt t i).loc (NGen.cBnz n) = 1) :
+    ((envAt t i).loc (NGen.cFork n) = 1 ↔
+        ((envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 0)) = 1
+          ∧ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 1)) = 0))
+    ∧ ((envAt t i).loc (NGen.cCollide n) = 1 ↔
+        ((envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 1)) = 1
+          ∧ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 0)) = 0
+          ∧ (envAt t i).loc (NGen.cAnz n) = 1 ∧ (envAt t i).loc (NGen.cBnz n) = 1))
+    ∧ ((envAt t i).loc (NGen.cSurv n) = 0 ∨ (envAt t i).loc (NGen.cSurv n) = 1)
+    ∧ ((envAt t i).loc (NGen.cSurv n) = 1 ↔
+        ((envAt t i).loc (NGen.cFork n) = 0 ∧ (envAt t i).loc (NGen.cCollide n) = 0)) := by
+  set e := envAt t i with he
+  have hforkv : e.loc (NGen.cFork n)
+      = e.loc (NGen.cEqBit n (NGen.eqBase n 0))
+        - e.loc (NGen.cEqBit n (NGen.eqBase n 0)) * e.loc (NGen.cEqBit n (NGen.eqBase n 1)) := by
+    have hg := rgateHN hsat i hi
+      (h := ((Head.lin 1 (NGen.cFork n)).addLin (-1) (NGen.cEqBit n (NGen.eqBase n 0))).addProd 1
+              [NGen.cEqBit n (NGen.eqBase n 0), NGen.cEqBit n (NGen.eqBase n 1)])
+      (mem_selection_idx n 0 (show (0:Nat) < 6 by decide))
+    have hE : (headToExpr (((Head.lin 1 (NGen.cFork n)).addLin (-1)
+          (NGen.cEqBit n (NGen.eqBase n 0))).addProd 1
+          [NGen.cEqBit n (NGen.eqBase n 0), NGen.cEqBit n (NGen.eqBase n 1)])).eval e.loc
+        = e.loc (NGen.cFork n) + (-1) * e.loc (NGen.cEqBit n (NGen.eqBase n 0))
+          + e.loc (NGen.cEqBit n (NGen.eqBase n 0)) * e.loc (NGen.cEqBit n (NGen.eqBase n 1)) := rfl
+    rw [hE] at hg
+    refine eq_of_modEq_canon (canon_loc hc i _) ?_ ((gate_modEq_iff (by ring)).mp hg)
+    rcases hff with a | a <;> rcases htt with b | b <;> rw [a, b] <;>
+      exact ⟨by norm_num, by norm_num⟩
+  have hnff : e.loc (NGen.cNeqFf n) = 1 - e.loc (NGen.cEqBit n (NGen.eqBase n 0)) := by
+    have hg := rgateHN hsat i hi
+      (h := ((Head.lin 1 (NGen.cNeqFf n)).addLin 1 (NGen.cEqBit n (NGen.eqBase n 0))).addConst (-1))
+      (mem_selection_idx n 1 (show (1:Nat) < 6 by decide))
+    have hE : (headToExpr (((Head.lin 1 (NGen.cNeqFf n)).addLin 1
+        (NGen.cEqBit n (NGen.eqBase n 0))).addConst (-1))).eval e.loc
+        = e.loc (NGen.cNeqFf n) + e.loc (NGen.cEqBit n (NGen.eqBase n 0)) + (-1) := rfl
+    rw [hE] at hg
+    refine eq_of_modEq_canon (canon_loc hc i _) ?_ ((gate_modEq_iff (by ring)).mp hg)
+    rcases hff with a | a <;> rw [a] <;> exact ⟨by norm_num, by norm_num⟩
+  have hcol1 : e.loc (NGen.cCol1 n)
+      = e.loc (NGen.cEqBit n (NGen.eqBase n 1)) * e.loc (NGen.cNeqFf n) := by
+    have hg := rgateHN hsat i hi
+      (h := (Head.lin (-1) (NGen.cCol1 n)).addProd 1 [NGen.cEqBit n (NGen.eqBase n 1), NGen.cNeqFf n])
+      (mem_selection_idx n 2 (show (2:Nat) < 6 by decide))
+    have hE : (headToExpr ((Head.lin (-1) (NGen.cCol1 n)).addProd 1
+        [NGen.cEqBit n (NGen.eqBase n 1), NGen.cNeqFf n])).eval e.loc
+        = (-1) * e.loc (NGen.cCol1 n)
+          + e.loc (NGen.cEqBit n (NGen.eqBase n 1)) * e.loc (NGen.cNeqFf n) := rfl
+    rw [hE] at hg
+    refine (eq_of_modEq_canon ?_ (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)).symm
+    rcases hff with a | a <;> rcases htt with b | b <;> rw [hnff, a, b] <;>
+      exact ⟨by norm_num, by norm_num⟩
+  have hcol2 : e.loc (NGen.cCol2 n) = e.loc (NGen.cCol1 n) * e.loc (NGen.cAnz n) := by
+    have hg := rgateHN hsat i hi
+      (h := (Head.lin (-1) (NGen.cCol2 n)).addProd 1 [NGen.cCol1 n, NGen.cAnz n])
+      (mem_selection_idx n 3 (show (3:Nat) < 6 by decide))
+    have hE : (headToExpr ((Head.lin (-1) (NGen.cCol2 n)).addProd 1
+        [NGen.cCol1 n, NGen.cAnz n])).eval e.loc
+        = (-1) * e.loc (NGen.cCol2 n) + e.loc (NGen.cCol1 n) * e.loc (NGen.cAnz n) := rfl
+    rw [hE] at hg
+    refine (eq_of_modEq_canon ?_ (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)).symm
+    rcases hff with a | a <;> rcases htt with b | b <;> rcases hanz with c | c <;>
+      rw [hcol1, hnff, a, b, c] <;> exact ⟨by norm_num, by norm_num⟩
+  have hcollv : e.loc (NGen.cCollide n) = e.loc (NGen.cCol2 n) * e.loc (NGen.cBnz n) := by
+    have hg := rgateHN hsat i hi
+      (h := (Head.lin (-1) (NGen.cCollide n)).addProd 1 [NGen.cCol2 n, NGen.cBnz n])
+      (mem_selection_idx n 4 (show (4:Nat) < 6 by decide))
+    have hE : (headToExpr ((Head.lin (-1) (NGen.cCollide n)).addProd 1
+        [NGen.cCol2 n, NGen.cBnz n])).eval e.loc
+        = (-1) * e.loc (NGen.cCollide n) + e.loc (NGen.cCol2 n) * e.loc (NGen.cBnz n) := rfl
+    rw [hE] at hg
+    refine (eq_of_modEq_canon ?_ (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)).symm
+    rcases hff with a | a <;> rcases htt with b | b <;> rcases hanz with c | c <;>
+      rcases hbnz with d | d <;> rw [hcol2, hcol1, hnff, a, b, c, d] <;>
+      exact ⟨by norm_num, by norm_num⟩
+  have hsurvv : e.loc (NGen.cSurv n)
+      = 1 - e.loc (NGen.cFork n) - e.loc (NGen.cCollide n)
+        + e.loc (NGen.cFork n) * e.loc (NGen.cCollide n) := by
+    have hg := rgateHN hsat i hi
+      (h := ((((Head.lin 1 (NGen.cSurv n)).addConst (-1)).addLin 1 (NGen.cFork n)).addLin 1
+              (NGen.cCollide n)).addProd (-1) [NGen.cFork n, NGen.cCollide n])
+      (mem_selection_idx n 5 (show (5:Nat) < 6 by decide))
+    have hE : (headToExpr (((((Head.lin 1 (NGen.cSurv n)).addConst (-1)).addLin 1
+        (NGen.cFork n)).addLin 1 (NGen.cCollide n)).addProd (-1)
+        [NGen.cFork n, NGen.cCollide n])).eval e.loc
+        = e.loc (NGen.cSurv n) + e.loc (NGen.cFork n) + e.loc (NGen.cCollide n)
+          + (-1) * (e.loc (NGen.cFork n) * e.loc (NGen.cCollide n)) + (-1) := rfl
+    rw [hE] at hg
+    refine eq_of_modEq_canon (canon_loc hc i _) ?_ ((gate_modEq_iff (by ring)).mp hg)
+    rcases hff with a | a <;> rcases htt with b | b <;> rcases hanz with c | c <;>
+      rcases hbnz with d | d <;> rw [hforkv, hcollv, hcol2, hcol1, hnff, a, b, c, d] <;>
+      exact ⟨by norm_num, by norm_num⟩
+  rcases hff with a | a <;> rcases htt with b | b <;> rcases hanz with c | c <;>
+    rcases hbnz with d | d <;>
+    rw [hcollv, hcol2, hcol1, hnff] at hsurvv ⊢ <;> rw [hforkv] at hsurvv ⊢ <;>
+    rw [a, b, c, d] at hsurvv ⊢ <;> norm_num at hsurvv ⊢ <;>
+    simp_all
+
+/-- **Leg 5 — `carryN_of_sat`, AT ARBITRARY `n`.** The `n`-generic twin of `carry_of_sat`: the carry
+column is EXACTLY `surv ∧ nz ∧ ¬occ`. Column-parametric; the proof is the frozen one with the
+descriptor a variable and `prod_of_sat`/`rgateH` replaced by their `n`-generic twins. -/
+theorem carryN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (sa1 carry surv nz occ : Nat)
+    (hp : cgH ((Head.lin (-1) sa1).addProd 1 [surv, nz]) ∈ (automataflResolveDescN n).constraints)
+    (hq : cgH (((Head.lin 1 carry).addProd (-1) [sa1]).addProd 1 [sa1, occ])
+            ∈ (automataflResolveDescN n).constraints)
+    (hsurv : (envAt t i).loc surv = 0 ∨ (envAt t i).loc surv = 1)
+    (hnz : (envAt t i).loc nz = 0 ∨ (envAt t i).loc nz = 1)
+    (hocc : (envAt t i).loc occ = 0 ∨ (envAt t i).loc occ = 1) :
+    ((envAt t i).loc carry = 0 ∨ (envAt t i).loc carry = 1)
+      ∧ ((envAt t i).loc carry = 1 ↔
+          ((envAt t i).loc surv = 1 ∧ (envAt t i).loc nz = 1 ∧ (envAt t i).loc occ = 0)) := by
+  set e := envAt t i with he
+  have hsa : e.loc sa1 = e.loc surv * e.loc nz :=
+    prodN_of_sat hsat hc i hi sa1 surv nz hp hsurv hnz
+  have hcv : e.loc carry = e.loc sa1 - e.loc sa1 * e.loc occ := by
+    have hgg := rgateHN hsat i hi hq
+    have hE : (headToExpr (((Head.lin 1 carry).addProd (-1) [sa1]).addProd 1 [sa1, occ])).eval e.loc
+        = e.loc carry + (-1) * e.loc sa1 + e.loc sa1 * e.loc occ := rfl
+    rw [hE] at hgg
+    refine eq_of_modEq_canon (canon_loc hc i _) ?_ ((gate_modEq_iff (by ring)).mp hgg)
+    rcases hsurv with a | a <;> rcases hnz with b | b <;> rcases hocc with c | c <;>
+      rw [hsa, a, b, c] <;> exact ⟨by norm_num, by norm_num⟩
+  rcases hsurv with a | a <;> rcases hnz with b | b <;> rcases hocc with c | c <;>
+    rw [hsa, a, b, c] at hcv <;> norm_num at hcv <;> rw [hcv, a, b, c] <;> norm_num
+
+/-- **Leg 6 — `ftN_of_sat`, AT ARBITRARY `n`.** The `n`-generic twin of `ft_of_sat`: the
+flow-through bit is EXACTLY the five-way conjunction the emitted chain computes. Column-parametric;
+proof identical modulo the `n`-generic descriptor and `prod`/`notBit`/`rgate` twins. -/
+theorem ftN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (nB nO nE f1 f2 f3 ft eqAb bnz occB eqBa surv : Nat)
+    (g1 : notBitPin nB bnz ∈ (automataflResolveDescN n).constraints)
+    (g2 : notBitPin nO occB ∈ (automataflResolveDescN n).constraints)
+    (g3 : notBitPin nE eqBa ∈ (automataflResolveDescN n).constraints)
+    (g4 : cgH ((Head.lin (-1) f1).addProd 1 [eqAb, nB]) ∈ (automataflResolveDescN n).constraints)
+    (g5 : cgH ((Head.lin (-1) f2).addProd 1 [f1, surv]) ∈ (automataflResolveDescN n).constraints)
+    (g6 : cgH ((Head.lin (-1) f3).addProd 1 [f2, nO]) ∈ (automataflResolveDescN n).constraints)
+    (g7 : cgH ((Head.lin (-1) ft).addProd 1 [f3, nE]) ∈ (automataflResolveDescN n).constraints)
+    (hab : (envAt t i).loc eqAb = 0 ∨ (envAt t i).loc eqAb = 1)
+    (hbnz : (envAt t i).loc bnz = 0 ∨ (envAt t i).loc bnz = 1)
+    (hocc : (envAt t i).loc occB = 0 ∨ (envAt t i).loc occB = 1)
+    (hba : (envAt t i).loc eqBa = 0 ∨ (envAt t i).loc eqBa = 1)
+    (hsurv : (envAt t i).loc surv = 0 ∨ (envAt t i).loc surv = 1) :
+    ((envAt t i).loc ft = 0 ∨ (envAt t i).loc ft = 1)
+      ∧ ((envAt t i).loc ft = 1 ↔
+          ((envAt t i).loc eqAb = 1 ∧ (envAt t i).loc bnz = 0 ∧ (envAt t i).loc surv = 1
+            ∧ (envAt t i).loc occB = 0 ∧ (envAt t i).loc eqBa = 0)) := by
+  set e := envAt t i with he
+  have hnB : e.loc nB = 1 - e.loc bnz := notBitN_of_sat hsat hc i hi nB bnz g1 hbnz
+  have hnO : e.loc nO = 1 - e.loc occB := notBitN_of_sat hsat hc i hi nO occB g2 hocc
+  have hnE : e.loc nE = 1 - e.loc eqBa := notBitN_of_sat hsat hc i hi nE eqBa g3 hba
+  have bnB : e.loc nB = 0 ∨ e.loc nB = 1 := by rcases hbnz with h | h <;> rw [hnB, h] <;> norm_num
+  have bnO : e.loc nO = 0 ∨ e.loc nO = 1 := by rcases hocc with h | h <;> rw [hnO, h] <;> norm_num
+  have bnE : e.loc nE = 0 ∨ e.loc nE = 1 := by rcases hba with h | h <;> rw [hnE, h] <;> norm_num
+  have hf1 : e.loc f1 = e.loc eqAb * e.loc nB := prodN_of_sat hsat hc i hi f1 eqAb nB g4 hab bnB
+  have bf1 : e.loc f1 = 0 ∨ e.loc f1 = 1 := by
+    rcases hab with a | a <;> rcases bnB with b | b <;> rw [hf1, a, b] <;> norm_num
+  have hf2 : e.loc f2 = e.loc f1 * e.loc surv := prodN_of_sat hsat hc i hi f2 f1 surv g5 bf1 hsurv
+  have bf2 : e.loc f2 = 0 ∨ e.loc f2 = 1 := by
+    rcases bf1 with a | a <;> rcases hsurv with b | b <;> rw [hf2, a, b] <;> norm_num
+  have hf3 : e.loc f3 = e.loc f2 * e.loc nO := prodN_of_sat hsat hc i hi f3 f2 nO g6 bf2 bnO
+  have bf3 : e.loc f3 = 0 ∨ e.loc f3 = 1 := by
+    rcases bf2 with a | a <;> rcases bnO with b | b <;> rw [hf3, a, b] <;> norm_num
+  have hft : e.loc ft = e.loc f3 * e.loc nE := prodN_of_sat hsat hc i hi ft f3 nE g7 bf3 bnE
+  rcases hab with a | a <;> rcases hbnz with b | b <;> rcases hsurv with c | c <;>
+    rcases hocc with d | d <;> rcases hba with f | f <;>
+    rw [hft, hf3, hf2, hf1, hnB, hnO, hnE, a, b, c, d, f] <;> norm_num
+
+/-- The Leg-5 carry INSTANCE for move A, at arbitrary `n` (`n`-generic twin of `carryA_of_sat`). -/
+theorem carryAN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hsurv : (envAt t i).loc (NGen.cSurv n) = 0 ∨ (envAt t i).loc (NGen.cSurv n) = 1)
+    (hnz : (envAt t i).loc (NGen.cAnz n) = 0 ∨ (envAt t i).loc (NGen.cAnz n) = 1)
+    (hocc : (envAt t i).loc (NGen.cOcc n (NGen.occBase n 0)) = 0
+        ∨ (envAt t i).loc (NGen.cOcc n (NGen.occBase n 0)) = 1) :
+    ((envAt t i).loc (NGen.cCarryA n) = 0 ∨ (envAt t i).loc (NGen.cCarryA n) = 1)
+      ∧ ((envAt t i).loc (NGen.cCarryA n) = 1 ↔
+          ((envAt t i).loc (NGen.cSurv n) = 1 ∧ (envAt t i).loc (NGen.cAnz n) = 1
+            ∧ (envAt t i).loc (NGen.cOcc n (NGen.occBase n 0)) = 0)) :=
+  carryN_of_sat hsat hc i hi (NGen.cSa1 n) (NGen.cCarryA n) (NGen.cSurv n) (NGen.cAnz n)
+    (NGen.cOcc n (NGen.occBase n 0))
+    (mem_carry_idx n 0 (show (0:Nat) < 4 by decide)) (mem_carry_idx n 1 (show (1:Nat) < 4 by decide)) hsurv hnz hocc
+
+/-- The Leg-5 carry INSTANCE for move B, at arbitrary `n`. -/
+theorem carryBN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hsurv : (envAt t i).loc (NGen.cSurv n) = 0 ∨ (envAt t i).loc (NGen.cSurv n) = 1)
+    (hnz : (envAt t i).loc (NGen.cBnz n) = 0 ∨ (envAt t i).loc (NGen.cBnz n) = 1)
+    (hocc : (envAt t i).loc (NGen.cOcc n (NGen.occBase n 1)) = 0
+        ∨ (envAt t i).loc (NGen.cOcc n (NGen.occBase n 1)) = 1) :
+    ((envAt t i).loc (NGen.cCarryB n) = 0 ∨ (envAt t i).loc (NGen.cCarryB n) = 1)
+      ∧ ((envAt t i).loc (NGen.cCarryB n) = 1 ↔
+          ((envAt t i).loc (NGen.cSurv n) = 1 ∧ (envAt t i).loc (NGen.cBnz n) = 1
+            ∧ (envAt t i).loc (NGen.cOcc n (NGen.occBase n 1)) = 0)) :=
+  carryN_of_sat hsat hc i hi (NGen.cSb1 n) (NGen.cCarryB n) (NGen.cSurv n) (NGen.cBnz n)
+    (NGen.cOcc n (NGen.occBase n 1))
+    (mem_carry_idx n 2 (show (2:Nat) < 4 by decide)) (mem_carry_idx n 3 (show (3:Nat) < 4 by decide)) hsurv hnz hocc
+
+/-- The Leg-6 flow-through INSTANCE for move A, at arbitrary `n` (`n`-generic twin of `ftA_of_sat`). -/
+theorem ftAN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hab : (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 2)) = 0
+        ∨ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 2)) = 1)
+    (hbnz : (envAt t i).loc (NGen.cBnz n) = 0 ∨ (envAt t i).loc (NGen.cBnz n) = 1)
+    (hocc : (envAt t i).loc (NGen.cOcc n (NGen.occBase n 1)) = 0
+        ∨ (envAt t i).loc (NGen.cOcc n (NGen.occBase n 1)) = 1)
+    (hba : (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 3)) = 0
+        ∨ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 3)) = 1)
+    (hsurv : (envAt t i).loc (NGen.cSurv n) = 0 ∨ (envAt t i).loc (NGen.cSurv n) = 1) :
+    ((envAt t i).loc (NGen.cFtA n) = 0 ∨ (envAt t i).loc (NGen.cFtA n) = 1)
+      ∧ ((envAt t i).loc (NGen.cFtA n) = 1 ↔
+          ((envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 2)) = 1 ∧ (envAt t i).loc (NGen.cBnz n) = 0
+            ∧ (envAt t i).loc (NGen.cSurv n) = 1
+            ∧ (envAt t i).loc (NGen.cOcc n (NGen.occBase n 1)) = 0
+            ∧ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 3)) = 0)) :=
+  ftN_of_sat hsat hc i hi (NGen.cNBnz n) (NGen.cNOccb n) (NGen.cNEqba n) (NGen.cFa1 n) (NGen.cFa2 n)
+    (NGen.cFa3 n) (NGen.cFtA n) (NGen.cEqBit n (NGen.eqBase n 2)) (NGen.cBnz n)
+    (NGen.cOcc n (NGen.occBase n 1)) (NGen.cEqBit n (NGen.eqBase n 3)) (NGen.cSurv n)
+    (mem_flowThrough_idx n 0 (show (0:Nat) < 14 by decide)) (mem_flowThrough_idx n 1 (show (1:Nat) < 14 by decide))
+    (mem_flowThrough_idx n 2 (show (2:Nat) < 14 by decide)) (mem_flowThrough_idx n 3 (show (3:Nat) < 14 by decide))
+    (mem_flowThrough_idx n 4 (show (4:Nat) < 14 by decide)) (mem_flowThrough_idx n 5 (show (5:Nat) < 14 by decide))
+    (mem_flowThrough_idx n 6 (show (6:Nat) < 14 by decide)) hab hbnz hocc hba hsurv
+
+/-- The Leg-6 flow-through INSTANCE for move B, at arbitrary `n`. -/
+theorem ftBN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
+    (hba : (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 3)) = 0
+        ∨ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 3)) = 1)
+    (hanz : (envAt t i).loc (NGen.cAnz n) = 0 ∨ (envAt t i).loc (NGen.cAnz n) = 1)
+    (hocc : (envAt t i).loc (NGen.cOcc n (NGen.occBase n 0)) = 0
+        ∨ (envAt t i).loc (NGen.cOcc n (NGen.occBase n 0)) = 1)
+    (hab : (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 2)) = 0
+        ∨ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 2)) = 1)
+    (hsurv : (envAt t i).loc (NGen.cSurv n) = 0 ∨ (envAt t i).loc (NGen.cSurv n) = 1) :
+    ((envAt t i).loc (NGen.cFtB n) = 0 ∨ (envAt t i).loc (NGen.cFtB n) = 1)
+      ∧ ((envAt t i).loc (NGen.cFtB n) = 1 ↔
+          ((envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 3)) = 1 ∧ (envAt t i).loc (NGen.cAnz n) = 0
+            ∧ (envAt t i).loc (NGen.cSurv n) = 1
+            ∧ (envAt t i).loc (NGen.cOcc n (NGen.occBase n 0)) = 0
+            ∧ (envAt t i).loc (NGen.cEqBit n (NGen.eqBase n 2)) = 0)) :=
+  ftN_of_sat hsat hc i hi (NGen.cNAnz n) (NGen.cNOcca n) (NGen.cNEqab n) (NGen.cFb1 n) (NGen.cFb2 n)
+    (NGen.cFb3 n) (NGen.cFtB n) (NGen.cEqBit n (NGen.eqBase n 3)) (NGen.cAnz n)
+    (NGen.cOcc n (NGen.occBase n 0)) (NGen.cEqBit n (NGen.eqBase n 2)) (NGen.cSurv n)
+    (mem_flowThrough_idx n 7 (show (7:Nat) < 14 by decide)) (mem_flowThrough_idx n 8 (show (8:Nat) < 14 by decide))
+    (mem_flowThrough_idx n 9 (show (9:Nat) < 14 by decide)) (mem_flowThrough_idx n 10 (show (10:Nat) < 14 by decide))
+    (mem_flowThrough_idx n 11 (show (11:Nat) < 14 by decide)) (mem_flowThrough_idx n 12 (show (12:Nat) < 14 by decide))
+    (mem_flowThrough_idx n 13 (show (13:Nat) < 14 by decide)) hba hanz hocc hab hsurv
+
+end AdjudicationCoreN
+
+#print axioms rgateN
+#print axioms selectionN_of_sat
+#print axioms carryN_of_sat
+#print axioms ftN_of_sat
+#print axioms carryAN_of_sat
+#print axioms carryBN_of_sat
+#print axioms ftAN_of_sat
+#print axioms ftBN_of_sat
+
 /-! ## §E — TWO-SIDED CANARIES for the assembly's reference side (`resolveMid` at `n = 2`).
 
 Each verdict the capstone routes through is exercised in BOTH polarities on a concrete 2×2 board

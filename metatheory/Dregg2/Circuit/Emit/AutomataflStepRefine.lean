@@ -170,7 +170,7 @@ family (`bindBoardRootsConstraints`) are frozen at their absolute `n = 2` layout
 
 theorem constraintsN_eq (n : Nat) :
     (automataflStepDescN n).constraints
-      = (NGen.frontEndConstraints n ++ backEndConstraints) ++ commitBoardsConstraints n := rfl
+      = (NGen.frontEndConstraints n ++ NGen.backEndConstraints n) ++ commitBoardsConstraints n := rfl
 
 theorem mem_constraintsN_of_frontEnd {n : Nat} {x : VmConstraint2}
     (h : x ∈ NGen.frontEndConstraints n) : x ∈ (automataflStepDescN n).constraints := by
@@ -6263,11 +6263,17 @@ CLOSED BY THE COMMITMENT SWAP (both were commitment-leg residuals of the Merkle 
       `AutomataflStepEmit` §5), so the empty table list is correct.
 
 REMAINING (NOT assumed, NOT stubbed — no `sorry`, no placeholder):
-  (n) the descriptor instantiates `NN = 2`. The COMMITMENT is now `n`-generic and its `n = 11` shape
-      is pinned (`AutomataflStepEmit` §6), but the Stage-1b BACK-END is still authored at frozen
-      `n = 2` absolute column offsets, and every refinement proof here is keyed to the `n = 2`
-      emission. Re-deriving the back-end layout as functions of `n` is the next step (a follow-up,
-      not a hole in this one).
-The Leg-A composition is now a proven theorem. -/
+  (n) the descriptor COLUMN LAYOUT is now fully `n`-parametric: the front-end (incl. the ray blocks,
+      `RAY_W n = 3n+4`), the Stage-1b BACK-END (`NGen.backEndConstraints`, every offset derived from
+      `A_FRONT_WIDTH n`) AND the commitment all tile without overlap at every `n`, pinned by the
+      `maxCol` tiling `#guard`s at `n = 2` and `n = 11` (`AutomataflStepEmit` §6). What is still keyed
+      to `n = 2` is the REFINEMENT PROOF STACK in THIS file (the `SAT ⇒ automatonStep` semantics is
+      discharged over the concrete `n = 2` emission). The Leg-A capstones that remain are: (i) lift
+      these refinement proofs to `∀ n` over `automataflStepDescN n`; (ii) two SEMANTIC gadgets whose
+      column layout tiles at `n = 11` but whose CONSTRAINT is still `n ≤ 2`-specific — the coordinate
+      decomposition (`decomposeConstraints` uses a single-bit range, not `COORD_RBITS n` bits, so at
+      `n ≥ 3` a coordinate wider than 1 bit is unconstrained) and the fixed `SMALL_RBITS`/`SCORE_RBITS`
+      range widths (sound at `n = 11`, but not derived from `n`).
+The Leg-A composition is now a proven theorem, and its LAYOUT is `n`-parametric. -/
 
 end Dregg2.Circuit.Emit.AutomataflStepRefine
