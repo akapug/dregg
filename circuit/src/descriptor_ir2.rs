@@ -5825,10 +5825,16 @@ where
     // THIS one is pinned to the deployed `BYTE_TABLE_HEIGHT`.
     if presence.byte {
         let byte_idx = 1 + usize::from(presence.chip);
-        if proof.degree_bits[byte_idx] != LIMB_BITS {
+        // `HidingFriPcs` doubles every trace with random rows, so the committed
+        // domain is one log-height larger while the constrained real prefix is
+        // still exactly the 2^LIMB_BITS byte table.  Pin the PCS-adjusted
+        // degree; accepting only `LIMB_BITS` accidentally rejected every
+        // hiding descriptor that used the graduated range table.
+        let expected_byte_degree = LIMB_BITS + config.is_zk();
+        if proof.degree_bits[byte_idx] != expected_byte_degree {
             return Err(format!(
                 "range-table instance committed at 2^{} rows; the deployed table is \
-                 2^{LIMB_BITS} (a taller table widens the limb range)",
+                 2^{expected_byte_degree} under this PCS (a taller table widens the limb range)",
                 proof.degree_bits[byte_idx]
             ));
         }

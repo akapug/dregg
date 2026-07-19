@@ -1,5 +1,15 @@
 # Does the finite-alphabet VPL decidability lift to the templater's real guards? — symbolic VPA over `Pred`, adjudicated
 
+> **Superseded implementation-status note (2026-07-19).** The conditional feasibility argument in
+> this document has since been realized for the *regular* `PredRE` rung: registered modules now
+> provide general symbolic minterm covers, unbounded emptiness and language-equivalence decisions,
+> and runnable adaptive fixpoints over the infinite `Value` alphabet.  The useful leaf fragment has
+> also widened through `symMemberOf`, `allOf`/`anyOf`, and scoped `digFieldEq` covers.  Thus the
+> passages below saying that `PredSat`, `PredRE` emptiness, or infinite-alphabet equivalence are
+> absent describe the earlier audit state, not HEAD.  The genuinely remaining campaign described
+> here is the *symbolic VPA* lift for visibly nested protocols (plus each explicitly fail-closed
+> predicate-cover frontier), not the already-landed flat symbolic-DFA decision.
+
 A feasibility assessment, not advocacy. `Crypto/VpaDecidable.lean` just proved **unconditional,
 computable, decidable template equivalence** on the finite `Sym = {op, cl, dat}` fragment
 (`decidable_template_equivalence`, `VpaDecidable.lean:1624-1637`, kernel-`#guard`ed both answers).

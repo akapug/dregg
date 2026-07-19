@@ -214,8 +214,8 @@
 //! teeth.
 
 use dregg_circuit::descriptor_ir2::{
-    Ir2Air, MemBoundaryWitness, UMemBoundaryWitness, ir2_airs_and_common_for_config,
-    prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness,
+    ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::dsl::circuit::CellProgram;
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
@@ -874,6 +874,119 @@ pub fn prove_custom_leaf_with_app_root_commitment(
     .map_err(|e| format!("custom-leaf app-root-commitment leaf-wrap failed: {e:?}"))
 }
 
+/// Re-prove an already-authored [`EffectVmDescriptor2`] relation as the custom
+/// recursion leaf, exposing
+/// `[PI-commitment8 || old8 || new8 || app-root || canonical-program-vk8]`.
+///
+/// This is the direct-IR2 twin of [`prove_custom_leaf_with_app_root_commitment`].
+/// It exists for relations whose source of truth is a Lean-emitted IR2
+/// descriptor (for example the private-preference cell descriptor): lowering a
+/// second Rust [`CellProgram`] would re-author the relation and create a second
+/// semantics.  The retained base trace is re-proved under the recursion config;
+/// the executor may separately verify a hiding proof of the *same* descriptor.
+///
+/// The current direct carrier deliberately accepts the memory-free shape only:
+/// default flat/umem boundaries and no map heaps.  A descriptor requiring a
+/// non-empty memory witness fails in the general IR2 prover rather than being
+/// supplied fabricated boundary material.
+pub fn prove_direct_ir2_leaf_with_app_root_commitment(
+    desc2: &EffectVmDescriptor2,
+    base_trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    vk_recipe: &crate::joint_turn_aggregation::CustomIr2VkRecipe,
+    binding: &dregg_circuit::effect_vm::custom_state_binding::AppRootBinding,
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    use dregg_circuit::effect_vm::custom_state_binding::CUSTOM_PI_STATE_PREFIX_LEN;
+
+    vk_recipe.require_exact_descriptor(desc2)?;
+    if !binding.is_well_formed() {
+        return Err(format!(
+            "direct-IR2 custom app-root leaf: ill-formed AppRootBinding {binding:?}"
+        ));
+    }
+    let need = binding.app_root_pi_end().max(CUSTOM_PI_STATE_PREFIX_LEN);
+    if public_inputs.len() < need {
+        return Err(format!(
+            "direct-IR2 custom app-root leaf: descriptor publishes {} public input(s), but \
+             binding {binding:?} needs at least {need}",
+            public_inputs.len()
+        ));
+    }
+    if desc2.public_input_count != public_inputs.len() {
+        return Err(format!(
+            "direct-IR2 custom app-root leaf: descriptor PI count {} != retained PI count {}",
+            desc2.public_input_count,
+            public_inputs.len()
+        ));
+    }
+    if base_trace.is_empty() || base_trace.iter().any(|row| row.len() != desc2.trace_width) {
+        return Err(format!(
+            "direct-IR2 custom app-root leaf: retained trace must be non-empty and every row \
+             must have exact descriptor width {}",
+            desc2.trace_width
+        ));
+    }
+
+    let inner = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+        desc2,
+        base_trace,
+        public_inputs,
+        &MemBoundaryWitness::default(),
+        &[],
+        &UMemBoundaryWitness::default(),
+        config,
+    )
+    .map_err(|e| format!("direct-IR2 custom inner prove failed: {e}"))?;
+
+    let (airs, table_public_inputs, common) =
+        ir2_airs_and_common_for_config(desc2, &inner, public_inputs, config)
+            .map_err(|e| format!("direct-IR2 custom verify-triple build failed: {e}"))?;
+    let input: RecursionInput<'_, DreggRecursionConfig, Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof: &inner,
+            common_data: &common,
+            table_public_inputs,
+        };
+
+    let backend = create_recursion_backend_with_coeff_lookups();
+    let num_pi = public_inputs.len();
+    let j = binding.app_root_pi_offset;
+    let l = binding.app_root_len;
+    let vk_felts = vk_recipe.canonical_vk_felts();
+    let claim_len = custom_app_root_claim_len(l) + vk_felts.len();
+    let expose = move |cb: &mut CircuitBuilder<RecursionChallenge>, apt: &[Vec<Target>]| {
+        let main = apt
+            .first()
+            .expect("direct IR2 custom leaf has a main instance carrying descriptor PIs");
+        debug_assert!(main.len() >= num_pi);
+        let pis: Vec<Target> = (0..num_pi).map(|k| main[k]).collect();
+        let commit = incircuit_custom_pi_commitment(cb, &pis)
+            .expect("direct IR2 custom PI commitment builds from bound descriptor PIs");
+        let mut claim: Vec<Target> = Vec::with_capacity(claim_len);
+        claim.extend_from_slice(&commit);
+        claim.extend_from_slice(&pis[..CUSTOM_PI_STATE_PREFIX_LEN]);
+        claim.extend_from_slice(&pis[j..j + l]);
+        claim.extend(
+            vk_felts
+                .iter()
+                .map(|felt| embed_base_const(cb, felt.as_u32())),
+        );
+        debug_assert_eq!(claim.len(), claim_len);
+        cb.expose_as_public_output(&claim);
+    };
+
+    build_and_prove_next_layer_with_expose::<DreggRecursionConfig, Ir2Air, _, D>(
+        &input,
+        config,
+        &backend,
+        &ProveNextLayerParams::default(),
+        Some(&expose),
+    )
+    .map_err(|e| format!("direct-IR2 custom app-root leaf-wrap failed: {e:?}"))
+}
+
 /// Read the published app root `R` (of width `app_root_len`) a
 /// [`prove_custom_leaf_with_app_root_commitment`] leaf exposes — lanes
 /// `[CUSTOM_STATE_CLAIM_LEN .. CUSTOM_STATE_CLAIM_LEN + app_root_len)` of its `expose_claim`.
@@ -898,6 +1011,26 @@ pub fn read_exposed_app_root(
         return None;
     }
     Some(claims[CUSTOM_STATE_CLAIM_LEN..want].to_vec())
+}
+
+/// Read the faithful canonical-v2 program VK carried by a direct-IR2 leaf.
+/// The octet follows the ordinary app-root claim, so legacy custom leaves
+/// cannot be misread as identity-bearing direct leaves.
+pub fn read_exposed_direct_ir2_vk(
+    output: &RecursionOutput<DreggRecursionConfig>,
+    app_root_len: usize,
+) -> Option<[BabyBear; 8]> {
+    let lo = custom_app_root_claim_len(app_root_len);
+    let claims: Vec<BabyBear> = output
+        .0
+        .non_primitives
+        .iter()
+        .find(|e| e.op_type.as_str() == "expose_claim")?
+        .public_values
+        .iter()
+        .map(|&v| BabyBear::new(v.as_canonical_u32()))
+        .collect();
+    claims.get(lo..lo + 8)?.try_into().ok()
 }
 
 /// Read the `[old_commit8, new_commit8]` state prefix a
@@ -930,7 +1063,7 @@ pub fn read_exposed_state_prefix(
 /// [`prove_custom_leaf_with_commitment`] leaf exposes through its
 /// `expose_claim` table. Returns `None` if the proof carries no exposed claim
 /// or exposes fewer than the full commitment width (a truncated/old 4-felt
-/// artifact is refused here, matching `require_custom_commit_teeth_v2`'s
+/// artifact is refused here, matching `require_custom_carrier_vk8`'s
 /// never-silently-widen rule).
 pub fn read_exposed_pi_commitment(
     output: &RecursionOutput<DreggRecursionConfig>,

@@ -1,9 +1,10 @@
 //! # dregg-epoch — the explicit, discoverable epoch handshake
 //!
 //! The dregg upgrade story is GIT-LOCKSTEP + FAIL-CLOSED: the light-client
-//! descriptors, the registry fingerprint ([`V3_STAGED_REGISTRY_FP`]), the
-//! effect-VM geometry, and the slot-caveat tag vocabulary are all compile-time
-//! constants. A client's "epoch" is *implicitly* whatever git HEAD it compiled
+//! descriptors, the registry fingerprints ([`WIDE_REGISTRY_STAGED_FP`] +
+//! [`WIDE_UMEM_WELD_REGISTRY_FP`] — the two registries the deployed
+//! prover/verifiers actually run), the effect-VM geometry, and the
+//! slot-caveat tag vocabulary are all compile-time constants. A client's "epoch" is *implicitly* whatever git HEAD it compiled
 //! against. When a client and a node were built from different HEADs, the only
 //! symptom today is a silent verification mismatch: the client cannot tell
 //! *whether* it can talk to a node, or *which* caveat tags that node will use,
@@ -56,7 +57,7 @@ use dregg_circuit::effect_vm::pi::{
     SLOT_CAVEAT_TAG_STRICT_MONOTONIC, SLOT_CAVEAT_TAG_TEMPORAL_GATE, SLOT_CAVEAT_TAG_UNTIL_EVENT,
     SLOT_CAVEAT_TAG_VAULT_DEPOSIT, SLOT_CAVEAT_TAG_WRITE_ONCE,
 };
-use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_FP;
+use dregg_circuit::effect_vm_descriptors::{WIDE_REGISTRY_STAGED_FP, WIDE_UMEM_WELD_REGISTRY_FP};
 
 /// The wire-protocol version of the epoch handshake ITSELF (the shape of the
 /// [`EpochManifest`] on the wire), independent of any circuit rotation. Bump
@@ -113,11 +114,16 @@ pub fn known_caveat_tags() -> BTreeSet<u32> {
 /// the same struct over the wire (the transport is a named seam).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EpochManifest {
-    /// The registry fingerprint — the sha256 of the deployed effect-VM
-    /// descriptor registry ([`V3_STAGED_REGISTRY_FP`]). This is the LOAD-BEARING
-    /// identity: two binaries can verify each other's proofs iff their
-    /// `registry_fp` match (same VK-epoch). A geometry-widen or any descriptor
-    /// change moves this string.
+    /// The registry fingerprint — the sha256 fingerprints of the DEPLOYED
+    /// effect-VM descriptor registries, `<wide>+<wide-umem-welded>`
+    /// ([`WIDE_REGISTRY_STAGED_FP`] + [`WIDE_UMEM_WELD_REGISTRY_FP`] — the two
+    /// registries the live producer mints from and the wire/executor verifiers
+    /// iterate). This is the LOAD-BEARING identity: two binaries can verify
+    /// each other's proofs iff their `registry_fp` match (same VK-epoch). A
+    /// geometry-widen or any descriptor change moves this string. (It
+    /// previously pinned the bare 1-felt `V3_STAGED_REGISTRY_FP`, which the
+    /// deployed proof path no longer resolves from — an S2-class wide flag-day
+    /// was INVISIBLE to the handshake while the bare TSV stayed byte-stable.)
     pub registry_fp: String,
     /// The human-readable cohort name plus the effect-VM geometry it was built
     /// with (width + rotation register count), e.g. `"v13-geom/w188/r24"`. The
@@ -135,7 +141,7 @@ pub struct EpochManifest {
 /// Build the local binary's manifest from the real baked constants.
 pub fn local_manifest() -> EpochManifest {
     EpochManifest {
-        registry_fp: V3_STAGED_REGISTRY_FP.to_string(),
+        registry_fp: format!("{WIDE_REGISTRY_STAGED_FP}+{WIDE_UMEM_WELD_REGISTRY_FP}"),
         descriptor_set_tag: format!("{DESCRIPTOR_SET_COHORT}/w{EFFECT_VM_WIDTH}/r{ROTATION_R}"),
         known_caveat_tags: known_caveat_tags(),
         wire_version: EPOCH_WIRE_VERSION,
@@ -228,13 +234,23 @@ mod tests {
     #[test]
     fn local_manifest_registry_fp_is_the_baked_const() {
         // A future registry regeneration (new VK-epoch) changes the baked
-        // fingerprint; this asserts the manifest tracks it rather than a copy.
-        assert_eq!(local_manifest().registry_fp, V3_STAGED_REGISTRY_FP);
-        // And the deployed value is the sha256 hex we expect at this HEAD, so a
-        // silent fingerprint drift is caught here.
+        // fingerprints; this asserts the manifest tracks them rather than a copy.
         assert_eq!(
-            V3_STAGED_REGISTRY_FP,
-            "bf263dd41c5b32de9d027de361d87f7242d91198608fa88c8780cfde7c4ed51a"
+            local_manifest().registry_fp,
+            format!("{WIDE_REGISTRY_STAGED_FP}+{WIDE_UMEM_WELD_REGISTRY_FP}")
+        );
+        // And the deployed values are the sha256 hexes we expect at this HEAD
+        // (the S2-compacted wide regen `329de7420`), so a silent fingerprint
+        // drift is caught here. (The manifest previously pinned the bare
+        // 1-felt V3 FP — and this test's stale pin proved that gate never
+        // re-armed after a bare regen; the wide pins are the deployed truth.)
+        assert_eq!(
+            WIDE_REGISTRY_STAGED_FP,
+            "32fdf108c0e2ba97c95ee4f44db29965f24638baef1a0c184cbc8484461e4951"
+        );
+        assert_eq!(
+            WIDE_UMEM_WELD_REGISTRY_FP,
+            "02d5d73b2df36eed2c025266b93b7ae2669c8f66829dcd7d77ba33cea6363049"
         );
     }
 
@@ -297,7 +313,10 @@ mod tests {
                 local: l,
                 remote: r,
             } => {
-                assert_eq!(l, V3_STAGED_REGISTRY_FP);
+                assert_eq!(
+                    l,
+                    format!("{WIDE_REGISTRY_STAGED_FP}+{WIDE_UMEM_WELD_REGISTRY_FP}")
+                );
                 assert_eq!(r, "deadbeef".repeat(8));
             }
             other => panic!("expected RegistryFpMismatch, got {other:?}"),

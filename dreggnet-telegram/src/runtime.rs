@@ -326,6 +326,12 @@ pub enum PressDecision {
         /// Turns replayed.
         turns: u64,
     },
+    /// A press ARMED a free-text affordance ([`HostPress::TextArmed`]) — a deliberate selection,
+    /// not a committed turn; the next plain-text message fills it.
+    TextArmed {
+        /// The offering key whose text slot was armed.
+        key: String,
+    },
     /// Frontend-level refusal BEFORE the substrate (stale keyboard / unknown affordance).
     NotOffered,
     /// Nothing open in the chat (post-resume-retry).
@@ -360,6 +366,7 @@ impl PressDecision {
                 verified: report.as_ref().map(|r| r.verified),
                 turns: report.as_ref().map(|r| r.turns as u64).unwrap_or(0),
             },
+            HostPress::TextArmed { key, .. } => PressDecision::TextArmed { key: key.clone() },
             HostPress::NotOffered => PressDecision::NotOffered,
             HostPress::NoSession => PressDecision::NoSession,
         }
@@ -404,6 +411,12 @@ impl PressDecision {
                     verified: verified.unwrap_or(false),
                     turns: *turns,
                 },
+                Some(key.clone()),
+            ),
+            PressDecision::TextArmed { key } => (
+                "routed",
+                "text_armed".to_string(),
+                AuditOutcome::None,
                 Some(key.clone()),
             ),
             PressDecision::NotOffered => (
@@ -686,14 +699,24 @@ pub fn route_text_decided<T: Transport>(
                 cmd: cmd.to_string(),
             },
         ),
-        // FREE TEXT (a non-command message). If — and ONLY if — the chat has an open offering
-        // whose surface is SOLICITING text (a document session presenting an insert / title
-        // template, [`TelegramHost::pending_text_action`]), route the whole message as that
-        // affordance's text input; the executor referees what lands. Otherwise it is ordinary
-        // chatter and stays `Ignored` (never swallow arbitrary group talk — text is only claimed
-        // when a text affordance is genuinely pending for this chat's session).
+        // FREE TEXT (a non-command message). If — and ONLY if — the chat has ARMED a text
+        // affordance (a deliberate press on a `wants_text` template, recorded per chat/session by
+        // [`TelegramHost::press`]), route the whole message as that affordance's text input; the
+        // executor referees what lands. Otherwise it is ordinary chatter and stays `Ignored`
+        // (never swallow arbitrary group talk — text is claimed only when a slot is genuinely
+        // armed for this chat's session).
         _ => {
             let sid = TelegramFrontend::<T>::session_id(chat_id, topic);
+            // Restart-resume: after a restart this process never bound the chat's durably-resumed
+            // session, so `active_offering` is empty and any subsequent text would fall through.
+            // Rebind + re-present the live surface first (idempotent — the resumed state is kept),
+            // so the chat is live again and the presented text buttons reappear for the user to
+            // arm; without this a text-only user after a restart is stranded with no session.
+            if host.active_offering(&sid).is_none() {
+                if let Some(key) = host.resume_chat(&sid) {
+                    let _ = host.open(&key, chat_id, topic, uid);
+                }
+            }
             if host.pending_text_action(&sid).is_some() {
                 let press = host.press_text(chat_id, topic, uid, text);
                 let decision = PressDecision::of(&press);
@@ -863,6 +886,10 @@ pub fn describe_press(press: HostPress) -> String {
             ..
         } => format!("Refused by the executor: {why}"),
         HostPress::Verified { key, report } => describe_verify(&key, report.as_ref()),
+        HostPress::TextArmed { action, .. } => format!(
+            "Selected \"{}\" — now send your text and I will fill it in.",
+            action.label
+        ),
         HostPress::NotOffered => {
             "That button is not on the current surface (a stale keyboard?).".to_string()
         }

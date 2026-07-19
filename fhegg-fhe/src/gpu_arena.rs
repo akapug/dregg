@@ -27,17 +27,26 @@
 //! it would not fit the `plain_bound: u64` field, never silently truncates. A test proves the carried bound
 //! still bites downstream.
 //!
-//! FAIL-LOUD POLICY: the frozen signatures have no error channel on `upload`/`fold_resident`/`download`
-//! (only `arena()` is fallible, for the headless case). Shape violations (empty set, mixed shapes, a
-//! non-3-moduli set the shader does not support) therefore PANIC with a named message — fail closed, never
-//! a silent wrong answer. Known inherited ceiling: a single upload > the adapter's max buffer size dies in
-//! wgpu validation (same defect class as fold_gpu's N=16384 panic, named in TESTQALOG 2026-07-18).
+//! PRODUCTION CUTOVER: [`Arena::fold_streaming`] is the bounded resident entry point. It derives the exact
+//! per-adapter ciphertext capacity from both wgpu buffer limits, uploads an arbitrarily large batch in
+//! bounded chunks, folds every chunk on-device, concatenates only the one-ciphertext chunk results by
+//! device-to-device copies, and reduces those recursively without an intermediate readback. The batch
+//! limit that killed the one-shot path is therefore not a correctness cliff anymore. Only the irreducible
+//! case where *one* ciphertext cannot fit is refused. [`FoldEngine`] keeps this path reusable and falls
+//! back to the bit-exact CPU fold only when no arena exists or the shape is outside this three-modulus GPU
+//! stone; validation/capacity failures are returned, never hidden by a fallback.
+//!
+//! The original low-level `upload`/`fold_resident`/`download` signatures remain for callers that manage
+//! residency directly. They have no error channel, so misuse still panics with a named message. Production
+//! batch callers should use `fold_streaming` or `FoldEngine` instead.
 //!
 //! Pool lifetime: resident buffers live in the arena's pool for the arena's lifetime (prototype — no free
 //! list; a `ResidentHandle` is an index into the pool, never dangling).
 
-use crate::bfv_lean::{LeanCiphertext, RnsPoly};
+use crate::bfv_lean::{fold, BfvLeanError, LeanCiphertext, RnsPoly};
 use std::sync::Mutex;
+
+type Result<T> = std::result::Result<T, BfvLeanError>;
 
 #[cfg(target_endian = "big")]
 compile_error!(
@@ -64,12 +73,25 @@ impl Shape {
         }
     }
     /// Coefficient lanes per ciphertext: polys × rns-rows × degree.
-    fn n_lanes(&self) -> usize {
-        self.n_polys * self.moduli.len() * self.degree
+    fn checked_n_lanes(&self) -> Option<usize> {
+        self.n_polys
+            .checked_mul(self.moduli.len())?
+            .checked_mul(self.degree)
     }
     /// Bytes per resident ciphertext (8 bytes per coefficient lane).
+    fn checked_ct_bytes(&self) -> Option<u64> {
+        let lanes = u64::try_from(self.checked_n_lanes()?).ok()?;
+        lanes.checked_mul(8)
+    }
+    /// Low-level methods have frozen infallible signatures; production callers pass through the checked
+    /// capacity/preflight path before reaching this convenience.
+    fn n_lanes(&self) -> usize {
+        self.checked_n_lanes()
+            .expect("gpu_arena: ciphertext lane-count overflow")
+    }
     fn ct_bytes(&self) -> u64 {
-        (self.n_lanes() * 8) as u64
+        self.checked_ct_bytes()
+            .expect("gpu_arena: ciphertext byte-size overflow")
     }
 }
 
@@ -84,12 +106,15 @@ pub struct Arena {
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     bgl: wgpu::BindGroupLayout,
+    /// min(max_buffer_size, max_storage_buffer_binding_size), the actual input-binding ceiling.
+    max_storage_bytes: u64,
     pool: Mutex<Vec<PoolEntry>>,
 }
 
 /// An on-device ciphertext-set — a buffer id into the arena pool, NEVER downloaded until `download`.
 /// Scalar bookkeeping (plaintext bounds, variable-time flag, shape) rides host-side, exactly as it does on
 /// `LeanCiphertext` itself; the polynomial data stays on the device.
+#[derive(Clone)]
 pub struct ResidentHandle {
     id: usize,
     n_cts: usize,
@@ -99,6 +124,125 @@ pub struct ResidentHandle {
     bounds: Vec<u128>,
 }
 
+/// Adapter-derived capacity for this exact ciphertext shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FoldCapacity {
+    pub max_storage_bytes: u64,
+    pub ciphertext_bytes: u64,
+    /// Maximum input ciphertexts per resident upload/fold dispatch. Always nonzero on success.
+    pub ciphertexts_per_chunk: usize,
+}
+
+/// Auditable execution plan returned with a bounded resident fold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResidentFoldPlan {
+    pub input_ciphertexts: usize,
+    pub ciphertexts_per_chunk: usize,
+    pub upload_chunks: usize,
+    /// Number of device-resident reduction layers after each upload chunk's first fold.
+    pub reduction_rounds: usize,
+}
+
+/// Which path actually produced an accelerated-fold result. CPU fallback is explicit, never silent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FoldBackend {
+    GpuResident(ResidentFoldPlan),
+    CpuNoArena,
+    CpuUnsupportedShape,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct FoldExecution {
+    pub ciphertext: LeanCiphertext,
+    pub backend: FoldBackend,
+}
+
+/// Reusable production adapter: one GPU device/pipeline for many folds, or an explicit CPU fallback when
+/// this process cannot obtain an arena. A GPU computation error is returned; it never silently retries on
+/// CPU and masks a residency bug.
+pub struct FoldEngine {
+    gpu: Option<Arena>,
+    /// One arena pool backs the engine; serialize whole calls so per-call reclamation cannot invalidate a
+    /// concurrent call's handles. The underlying queue is one device queue anyway.
+    run_lock: Mutex<()>,
+}
+
+impl FoldEngine {
+    pub fn new() -> Self {
+        Self {
+            gpu: arena(),
+            run_lock: Mutex::new(()),
+        }
+    }
+
+    /// Construct an explicitly CPU-only engine. This is useful for deployments that disable GPU use
+    /// by policy and for consumers that must exercise/report the headless fallback deterministically.
+    pub fn cpu_only() -> Self {
+        Self {
+            gpu: None,
+            run_lock: Mutex::new(()),
+        }
+    }
+
+    pub fn has_gpu_arena(&self) -> bool {
+        self.gpu.is_some()
+    }
+
+    /// Exact adapter capacity for a ciphertext shape, or `None` when this engine is explicitly/headlessly
+    /// CPU-only. This is observation only; execution still validates the complete batch in [`Self::fold`].
+    pub fn capacity(&self, ct: &LeanCiphertext) -> Option<Result<FoldCapacity>> {
+        self.gpu.as_ref().map(|gpu| gpu.capacity(ct))
+    }
+
+    pub fn fold(&self, cts: &[LeanCiphertext], plaintext_modulus: u64) -> Result<FoldExecution> {
+        let _run = self.run_lock.lock().unwrap();
+        let Some(first) = cts.first() else {
+            return Err(BfvLeanError::EmptyFold);
+        };
+        let Some(gpu) = &self.gpu else {
+            return Ok(FoldExecution {
+                ciphertext: fold(cts, plaintext_modulus)?,
+                backend: FoldBackend::CpuNoArena,
+            });
+        };
+        if first.moduli.len() != 3 {
+            return Ok(FoldExecution {
+                ciphertext: fold(cts, plaintext_modulus)?,
+                backend: FoldBackend::CpuUnsupportedShape,
+            });
+        }
+        let (resident, plan) = gpu.fold_streaming(cts, plaintext_modulus)?;
+        let mut downloaded = gpu.download(&resident);
+        debug_assert_eq!(downloaded.len(), 1);
+        let execution = FoldExecution {
+            ciphertext: downloaded
+                .pop()
+                .expect("resident fold returns one ciphertext"),
+            backend: FoldBackend::GpuResident(plan),
+        };
+        // FoldEngine owns its arena privately, so no external ResidentHandle can alias these entries.
+        // download waited for the queue; reclaim all per-call buffers instead of growing the reusable
+        // engine's pool forever.
+        gpu.clear_pool();
+        Ok(execution)
+    }
+}
+
+impl Default for FoldEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One-call convenience. Latency-sensitive repeated callers should retain a [`FoldEngine`] so device and
+/// pipeline initialization are amortized.
+pub fn fold_resident_or_cpu(
+    cts: &[LeanCiphertext],
+    plaintext_modulus: u64,
+) -> Result<FoldExecution> {
+    FoldEngine::new().fold(cts, plaintext_modulus)
+}
+
 /// None if there is no wgpu adapter (headless).
 pub fn arena() -> Option<Arena> {
     let instance = wgpu::Instance::default();
@@ -106,11 +250,15 @@ pub fn arena() -> Option<Arena> {
         power_preference: wgpu::PowerPreference::HighPerformance,
         ..Default::default()
     }))?;
+    let limits = adapter.limits();
+    let max_storage_bytes = limits
+        .max_buffer_size
+        .min(u64::from(limits.max_storage_buffer_binding_size));
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: Some("bfv-arena"),
             required_features: wgpu::Features::empty(),
-            required_limits: adapter.limits(),
+            required_limits: limits,
             memory_hints: Default::default(),
         },
         None,
@@ -147,6 +295,7 @@ pub fn arena() -> Option<Arena> {
         queue,
         pipeline,
         bgl,
+        max_storage_bytes,
         pool: Mutex::new(Vec::new()),
     })
 }
@@ -164,7 +313,236 @@ fn buffer_entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLay
     }
 }
 
+fn capacity_from_limits(max_storage_bytes: u64, ciphertext_bytes: u64) -> Result<FoldCapacity> {
+    if ciphertext_bytes == 0 {
+        return Err(BfvLeanError::Incompatible(
+            "resident fold: zero-byte ciphertext shape",
+        ));
+    }
+    let ciphertexts_per_chunk =
+        usize::try_from(max_storage_bytes / ciphertext_bytes).unwrap_or(usize::MAX);
+    if ciphertexts_per_chunk == 0 {
+        return Err(BfvLeanError::GpuCiphertextExceedsCapacity {
+            ciphertext_bytes,
+            max_storage_bytes,
+        });
+    }
+    Ok(FoldCapacity {
+        max_storage_bytes,
+        ciphertext_bytes,
+        // Shader metadata counts ciphertexts in u32. Current adapters are far below this limit, but clamp
+        // explicitly rather than allowing a future adapter to truncate the dispatch count.
+        ciphertexts_per_chunk: ciphertexts_per_chunk.min(u32::MAX as usize),
+    })
+}
+
+fn validate_storage_layout(ct: &LeanCiphertext) -> Result<()> {
+    if ct.polys.len() != 2 {
+        return Err(BfvLeanError::Incompatible(
+            "resident fold: fold-path ciphertext must have exactly two polynomials",
+        ));
+    }
+    for poly in &ct.polys {
+        if poly.rows.len() != ct.moduli.len() {
+            return Err(BfvLeanError::Incompatible(
+                "resident fold: polynomial RNS row count differs from modulus count",
+            ));
+        }
+        for (modulus_index, (row, &q)) in poly.rows.iter().zip(&ct.moduli).enumerate() {
+            if row.len() != ct.degree {
+                return Err(BfvLeanError::Incompatible(
+                    "resident fold: RNS row length differs from ciphertext degree",
+                ));
+            }
+            if row.iter().any(|&coefficient| coefficient >= q) {
+                return Err(BfvLeanError::NonCanonical { modulus_index });
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Arena {
+    fn clear_pool(&self) {
+        self.pool.lock().unwrap().clear();
+    }
+
+    /// Exact adapter capacity for one ciphertext shape. This is the public replacement for benchmark-side
+    /// limit probing: callers can report and plan against the same ceiling the production path enforces.
+    pub fn capacity(&self, ct: &LeanCiphertext) -> Result<FoldCapacity> {
+        self.capacity_for_shape(&Shape::of(ct))
+    }
+
+    fn capacity_for_shape(&self, shape: &Shape) -> Result<FoldCapacity> {
+        let ciphertext_bytes = shape.checked_ct_bytes().ok_or(BfvLeanError::Incompatible(
+            "resident fold: ciphertext shape size overflows host/GPU address space",
+        ))?;
+        capacity_from_limits(self.max_storage_bytes, ciphertext_bytes)
+    }
+
+    /// Bounded resident fold for production batches.
+    ///
+    /// Every input is validated and the plaintext-wrap budget is checked before any GPU submission. A
+    /// batch larger than one storage binding is split into adapter-sized uploads. Each chunk is folded on
+    /// device; its one-ciphertext output is copied into a bounded resident reduction buffer, recursively if
+    /// needed. There is no intermediate readback. The returned handle remains resident for another kernel
+    /// or a single final [`download`](Self::download).
+    pub fn fold_streaming(
+        &self,
+        cts: &[LeanCiphertext],
+        plaintext_modulus: u64,
+    ) -> Result<(ResidentHandle, ResidentFoldPlan)> {
+        self.fold_streaming_with_limit(cts, plaintext_modulus, None)
+    }
+
+    fn fold_streaming_with_limit(
+        &self,
+        cts: &[LeanCiphertext],
+        plaintext_modulus: u64,
+        chunk_limit: Option<usize>,
+    ) -> Result<(ResidentHandle, ResidentFoldPlan)> {
+        let first = cts.first().ok_or(BfvLeanError::EmptyFold)?;
+        let shape = Shape::of(first);
+        if shape.moduli.len() != 3 {
+            return Err(BfvLeanError::GpuUnsupportedShape);
+        }
+        let n_lanes = shape.checked_n_lanes().ok_or(BfvLeanError::Incompatible(
+            "resident fold: ciphertext lane count overflows host address space",
+        ))?;
+        if n_lanes == 0 {
+            return Err(BfvLeanError::Incompatible(
+                "resident fold: zero-degree or zero-polynomial ciphertext",
+            ));
+        }
+        if n_lanes > u32::MAX as usize {
+            return Err(BfvLeanError::Incompatible(
+                "resident fold: ciphertext lane count exceeds shader u32 metadata",
+            ));
+        }
+        validate_storage_layout(first)?;
+        for ct in &cts[1..] {
+            if Shape::of(ct) != shape {
+                return Err(BfvLeanError::Incompatible(
+                    "resident fold: ciphertexts disagree on degree/moduli/polys/level",
+                ));
+            }
+            validate_storage_layout(ct)?;
+        }
+        let mut bound_sum = 0u128;
+        for ct in cts {
+            bound_sum = bound_sum
+                .checked_add(u128::from(ct.plain_bound))
+                .unwrap_or(u128::MAX);
+            if bound_sum >= u128::from(plaintext_modulus) {
+                return Err(BfvLeanError::WrapRefused {
+                    bound_sum,
+                    plaintext_modulus,
+                });
+            }
+        }
+
+        let capacity = self.capacity_for_shape(&shape)?;
+        let per_chunk = chunk_limit
+            .unwrap_or(capacity.ciphertexts_per_chunk)
+            .min(capacity.ciphertexts_per_chunk)
+            .max(1);
+        if cts.len() > 1 && per_chunk < 2 {
+            return Err(BfvLeanError::GpuReductionExceedsCapacity {
+                pair_bytes: capacity.ciphertext_bytes.saturating_mul(2),
+                max_storage_bytes: capacity.max_storage_bytes,
+            });
+        }
+        let upload_chunks = cts.len().div_ceil(per_chunk);
+        let mut folded: Vec<ResidentHandle> = cts
+            .chunks(per_chunk)
+            .map(|chunk| self.fold_resident(&self.upload(chunk)))
+            .collect();
+
+        let mut reduction_rounds = 0usize;
+        while folded.len() > 1 {
+            let mut next = Vec::with_capacity(folded.len().div_ceil(per_chunk));
+            for group in folded.chunks(per_chunk) {
+                if group.len() == 1 {
+                    next.push(group[0].clone());
+                } else {
+                    next.push(self.fold_resident(&self.concat_resident(group)));
+                }
+            }
+            folded = next;
+            reduction_rounds += 1;
+        }
+        let resident = folded
+            .pop()
+            .expect("nonempty input produces at least one resident fold");
+        debug_assert_eq!(resident.bounds, vec![bound_sum]);
+        Ok((
+            resident,
+            ResidentFoldPlan {
+                input_ciphertexts: cts.len(),
+                ciphertexts_per_chunk: per_chunk,
+                upload_chunks,
+                reduction_rounds,
+            },
+        ))
+    }
+
+    /// Device-to-device concatenation of compatible resident results. Production streaming calls this only
+    /// with one-ciphertext fold outputs, but keeping the primitive general makes recursive reduction exact.
+    fn concat_resident(&self, handles: &[ResidentHandle]) -> ResidentHandle {
+        let first = handles.first().expect("gpu_arena concat: empty handle set");
+        let shape = first.shape.clone();
+        let n_cts: usize = handles.iter().map(|h| h.n_cts).sum();
+        assert!(
+            handles.iter().all(|h| h.shape == shape),
+            "gpu_arena concat: resident shapes disagree"
+        );
+        let size = shape
+            .ct_bytes()
+            .checked_mul(n_cts as u64)
+            .expect("gpu_arena concat: buffer-size overflow");
+        assert!(
+            size <= self.max_storage_bytes,
+            "gpu_arena concat: {size}-byte reduction buffer exceeds adapter capacity {}",
+            self.max_storage_bytes
+        );
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("arena-concat"),
+            size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        {
+            let pool = self.pool.lock().unwrap();
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            let mut offset = 0u64;
+            for h in handles {
+                let entry = &pool[h.id];
+                let bytes = shape.ct_bytes() * h.n_cts as u64;
+                enc.copy_buffer_to_buffer(&entry.buf, 0, &buf, offset, bytes);
+                offset += bytes;
+            }
+            debug_assert_eq!(offset, size);
+            self.queue.submit([enc.finish()]);
+        }
+        let id = {
+            let mut pool = self.pool.lock().unwrap();
+            pool.push(PoolEntry { buf, n_cts });
+            pool.len() - 1
+        };
+        ResidentHandle {
+            id,
+            n_cts,
+            shape,
+            variable_time: handles.iter().any(|h| h.variable_time),
+            bounds: handles
+                .iter()
+                .flat_map(|h| h.bounds.iter().copied())
+                .collect(),
+        }
+    }
+
     /// The ONE upload transfer. Writes every ciphertext's rows straight into a mapped resident STORAGE
     /// buffer (row-granular memcpy; the u64 LE byte layout IS the shader's (lo,hi) u32 layout — no pack
     /// loop, the one-shot path's dominant cost never happens). Panics (fail-loud, no error channel in the
@@ -186,7 +564,15 @@ impl Arena {
                 "gpu_arena upload: ciphertext {i} disagrees on fold shape (degree/moduli/polys/level)"
             );
         }
-        let size = shape.ct_bytes() * cts.len() as u64;
+        let size = shape
+            .ct_bytes()
+            .checked_mul(cts.len() as u64)
+            .expect("gpu_arena upload: buffer-size overflow");
+        assert!(
+            size <= self.max_storage_bytes,
+            "gpu_arena upload: {size}-byte input exceeds adapter capacity {}; use fold_streaming for bounded chunks",
+            self.max_storage_bytes
+        );
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("arena-resident"),
             size,
@@ -231,6 +617,10 @@ impl Arena {
     /// read back here and the submit is not waited on (the single `download` at the end synchronizes).
     pub fn fold_resident(&self, h: &ResidentHandle) -> ResidentHandle {
         let n_lanes = h.shape.n_lanes();
+        assert!(
+            h.n_cts <= u32::MAX as usize && n_lanes <= u32::MAX as usize,
+            "gpu_arena fold: shader u32 metadata capacity exceeded"
+        );
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("arena-fold-out"),
             size: h.shape.ct_bytes(),
@@ -290,7 +680,10 @@ impl Arena {
         // The fold's plaintext-bound bookkeeping: the exact sum, u128 so it cannot wrap silently. The
         // frozen signature carries no plaintext modulus, so the wrap REFUSAL itself lives downstream
         // (fold_add / decrypt margin) on the downloaded plain_bound — which this sum preserves exactly.
-        let bound_sum: u128 = h.bounds.iter().sum();
+        let bound_sum = h.bounds.iter().copied().fold(0u128, |acc, bound| {
+            acc.checked_add(bound)
+                .expect("gpu_arena fold: plaintext-bound sum exceeds u128 (fail closed)")
+        });
         let id = {
             let mut pool = self.pool.lock().unwrap();
             pool.push(PoolEntry {
@@ -414,6 +807,112 @@ mod tests {
             polys,
             plain_bound,
         }
+    }
+
+    #[test]
+    fn capacity_math_is_bounded_exact_and_fail_closed() {
+        let cap = capacity_from_limits(1_000, 100).expect("ten exact ciphertexts fit");
+        assert_eq!(
+            cap,
+            FoldCapacity {
+                max_storage_bytes: 1_000,
+                ciphertext_bytes: 100,
+                ciphertexts_per_chunk: 10,
+            }
+        );
+        assert!(matches!(
+            capacity_from_limits(99, 100),
+            Err(BfvLeanError::GpuCiphertextExceedsCapacity {
+                ciphertext_bytes: 100,
+                max_storage_bytes: 99,
+            })
+        ));
+        assert!(matches!(
+            capacity_from_limits(1_000, 0),
+            Err(BfvLeanError::Incompatible(
+                "resident fold: zero-byte ciphertext shape"
+            ))
+        ));
+
+        // Shape arithmetic itself must fail before either usize multiplication or u64 conversion wraps.
+        let overflowing = Shape {
+            moduli: vec![1, 2, 3],
+            degree: usize::MAX,
+            level: 0,
+            n_polys: 2,
+        };
+        assert_eq!(overflowing.checked_n_lanes(), None);
+        assert_eq!(overflowing.checked_ct_bytes(), None);
+    }
+
+    #[test]
+    fn explicit_cpu_fallback_preserves_parity_and_refusals() {
+        let t = 1u64 << 20;
+        let cts: Vec<_> = (0..7).map(|i| synth_ct(i + 1, 3)).collect();
+        let expected = fold(&cts, t).expect("cpu reference");
+        let engine = FoldEngine {
+            gpu: None,
+            run_lock: Mutex::new(()),
+        };
+        let got = engine.fold(&cts, t).expect("explicit no-arena fallback");
+        assert_eq!(got.ciphertext, expected);
+        assert_eq!(got.backend, FoldBackend::CpuNoArena);
+
+        let wrapping = vec![synth_ct(1, t - 1), synth_ct(2, 1)];
+        assert!(matches!(
+            engine.fold(&wrapping, t),
+            Err(BfvLeanError::WrapRefused { .. })
+        ));
+        assert!(matches!(engine.fold(&[], t), Err(BfvLeanError::EmptyFold)));
+    }
+
+    /// Force a tiny upload limit even on a large adapter so CI on a real GPU exercises the exact seam the
+    /// production adapter limit triggers: multiple bounded uploads, device-to-device concatenate, and two
+    /// recursive reduction layers before the only readback. The plan and bound carry are part of parity.
+    #[test]
+    fn forced_small_chunks_reduce_recursively_and_match_cpu() {
+        let Some(a) = arena() else {
+            eprintln!("no wgpu adapter — forced streaming parity SKIPPED (headless runner)");
+            return;
+        };
+        let t = 1u64 << 20;
+        let cts: Vec<_> = (0..17).map(|i| synth_ct(i + 1, 3)).collect();
+        let expected = fold(&cts, t).expect("cpu reference");
+        let (resident, plan) = a
+            .fold_streaming_with_limit(&cts, t, Some(3))
+            .expect("bounded resident fold");
+        assert_eq!(
+            plan,
+            ResidentFoldPlan {
+                input_ciphertexts: 17,
+                ciphertexts_per_chunk: 3,
+                upload_chunks: 6,
+                reduction_rounds: 2,
+            }
+        );
+        let got = a.download(&resident);
+        assert_eq!(got, vec![expected]);
+        assert_eq!(got[0].plain_bound, 51);
+
+        // A real arena plus a shape outside this three-modulus stone takes the explicitly labelled CPU
+        // path. This is a capability fallback, not a catch-all: GPU execution errors still propagate.
+        let mut unsupported: Vec<_> = (0..3).map(|i| synth_ct(i + 41, 2)).collect();
+        for ct in &mut unsupported {
+            ct.moduli.pop();
+            for poly in &mut ct.polys {
+                poly.rows.pop();
+            }
+        }
+        let unsupported_expected = fold(&unsupported, t).expect("two-modulus CPU reference");
+        let engine = FoldEngine {
+            gpu: Some(a),
+            run_lock: Mutex::new(()),
+        };
+        let fallback = engine
+            .fold(&unsupported, t)
+            .expect("unsupported shape falls back explicitly");
+        assert_eq!(fallback.ciphertext, unsupported_expected);
+        assert_eq!(fallback.backend, FoldBackend::CpuUnsupportedShape);
     }
 
     /// THE PARITY TOOTH: resident upload → fold_resident → download must equal the oracle-validated CPU

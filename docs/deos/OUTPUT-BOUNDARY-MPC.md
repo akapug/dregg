@@ -1,7 +1,8 @@
-# Output-Boundary MPC — the ADVERSARIAL No-Viewer Crossing
+# Output-Boundary MPC — the No-Viewer Crossing PoC
 
-*Codex Round-4's highest-value gold, built. The construction that makes Tier-0
-"no viewer" a **cryptographic threshold bound** instead of a policy claim, and
+*Codex Round-4's highest-value construction, now built through a process-shaped
+party-thread runtime at semi-honest PoC scope. It targets a
+Tier-0 "no viewer" **cryptographic threshold bound**, and
 **dissolves the BFV→TFHE scheme-switch seam** the fold-envelope flagged as the
 crux. What-is, present tense; every edge names its grade; the honest threshold
 caveat is stated, not buried. The PoC is real and cited (§7).*
@@ -19,26 +20,26 @@ additive fold + the named un-measured scheme-switch seam), `MEASURED-ENVELOPE.md
 1. **The crossing's nonlinearity is irreducible; paying for it inside TFHE is
    not.** `p*` is deliberately public, so the comparison need not run under FHE at
    all. Keep the aggregate curve under the exact RLWE/BFV fold; at the OUTPUT
-   BOUNDARY the `n` federation parties partial-decrypt only the aggregate into
-   additive secret shares and run the crossing in MPC, revealing only `p*` + `V*`.
-2. **This dissolves the scheme-switch seam.** Threshold-BFV partial decryption
-   INTO additive shares is native to the scheme (each party applies its key
-   share). There is no CHIMERA/PEGASUS BFV→TFHE adapter — the one un-measured seam
-   of `ADDITIVE-FOLD-ENVELOPE.md` is replaced by an operation the threshold stack
-   already has.
-3. **The no-viewer becomes ADVERSARIAL.** Below the threshold `t`, no coalition of
-   parties learns any order or any curve coefficient — a cryptographic bound, not
-   a promise. No standing master decryption key exists (unlike threshold-FHE,
-   where a colluding key-share subset can decrypt any submitted *order* forever).
-4. **The revealed function is fixed to `p*` by the protocol.** The monotone sign
-   vector `c[p]=[D[p]≥S[p]]` is a single downward step whose flip index *is* `p*`,
-   so a simulator given only `p*` reproduces `c`: revealing it leaks nothing more.
-5. **The honest caveat.** It is `t`-of-`n`: `≥ t` colluding parties CAN
-   reconstruct. "Nobody ever, even if all collude" is impossible for clearing over
-   hidden data. Output-boundary MPC shrinks trust to its minimum — a threshold,
-   one clearing, reveal-only-`p*`, no standing key. **Grade: PoC built + measured
-   (§7); the production partial-decrypt-into-shares + malicious security are the
-   named frontier (§8).**
+   BOUNDARY the `n` parties collectively decrypt a one-time-padded aggregate,
+   derive additive shares locally, and run the crossing in MPC, revealing only
+   `p*` + `V*`.
+2. **This dissolves the scheme-switch seam architecturally.** Mask + collective
+   BFV decrypt + local re-sharing needs no CHIMERA/PEGASUS BFV→TFHE adapter. The
+   algebraic boundary, n-of-n BFV custody, party-owned arithmetic ingress, and
+   boolean-MPC party runtime are built and composed in-process. Authenticated
+   isolated-process deployment is not yet one production protocol.
+3. **The implemented key custody is n-of-n, not t-of-n.** The Rust threshold API
+   gives each party an opaque BFV secret share and refuses an `n−1` combine. It is
+   now party-shaped and wire-framed, but the tests still run locally and do not
+   establish authenticated distributed or malicious security.
+4. **The sign vector stays shared.** The circuit computes every per-bucket minimum
+   and a balanced, lowest-index-stable argmax under sharing, then opens only
+   `(p*,V*)`. The sign-flip shortcut is not equivalent to this volume-argmax rule.
+5. **The honest caveat.** All `n` BFV parties together can decrypt, and their key
+   shares are reusable. "Nobody ever, even if all collude" is impossible for
+   clearing over hidden data. **Grade: the algebra, n-of-n BFV threshold path,
+   party-owned mod-t ingress, direct-peer A2B, and party-thread crossing are built
+   and tested; an authenticated malicious no-viewer protocol remains §8's frontier.**
 
 ---
 
@@ -81,48 +82,51 @@ the server only ever sums ciphertexts.
 
 ### (b) The output-boundary MPC crossing
 
-The `n` parties (= the federation nodes, §5) hold key shares of the threshold-BFV
-key. At the boundary they **partial-decrypt the aggregate curve INTO additive
-shares** — each party `i` applies its key share to `Enc(D[p])`, producing a share
-`⟦D[p]⟧_i` such that `Σ_i ⟦D[p]⟧_i = D[p]`; likewise `S[p]`. No party holds `D[p]`.
-(This is the standard threshold-FHE partial-decryption, redirected to output
-shares rather than a cleartext — the seam-dissolving move.)
+The target `n` parties hold shares of the collective BFV key. At the boundary
+they add secret random masks under BFV, collectively decrypt only the padded
+value `y = D[p] + Σr_i (mod t)`, then locally derive additive shares whose sum is
+`D[p]`; likewise for `S[p]`. Section §7.5 pins that algebra. `threshold.rs` pins
+the n-of-n BFV operations, while `mpc_party.rs` takes each party's local mod-t
+rows directly, peer-distributes fresh boolean shares, performs exact A2B/mod-t
+reduction, and executes the crossing without sending input rows to the coordinator.
 
 They then run the crossing in a secret-shared MPC:
 
-1. **Sign vector.** For each bucket, securely compute `c[p] = [D[p] ≥ S[p]]` and
-   OPEN it. `c` is the monotone crossing indicator.
-2. **`p*`.** `p* = (Σ_p c[p]) − 1` — the largest `p` at which demand still meets
-   supply = `argmax_j min(D[j], S[j])` under monotonicity. Public arithmetic on the
-   opened, `p*`-determined bits.
-3. **`V*`.** At the now-public `p*`, securely compute `V* = min(D[p*], S[p*])` and
-   OPEN only the min — never the two curve heights individually.
+1. **Per-bucket volumes.** Securely compute `v[p] = min(D[p],S[p])`; the comparison
+   bits and minima remain shared.
+2. **`p*`.** Run a balanced secure argmax tournament over `v`, selecting the lower
+   index on equality. Only the winning index is opened.
+3. **`V*`.** Open the winning shared minimum — never the sign vector, the losing
+   minima, or either curve height individually.
 
 The public transcript is `{batch root, p*, V*}` plus the one-time-pad-masked MPC
-messages. The STARK receipt then proves the two boundary inequalities
-(`¬Clears(p*+1) ∧ Clears(p*)`) against the committed aggregate — the comparator is
-untrusted search the proof re-checks (the `FHEGG-CODEX-ROUND4.md` §Q2
-verified-core-boundary point), so an MPC comparator fault yields a wrong `p*` that
-cannot receive a valid proof, never a soundness break.
+messages. A receipt for the current rule must prove that `V* = min(D[p*],S[p*])`,
+that every bucket's executable volume is at most `V*`, and that no lower index
+ties it. The older pair of crossing-boundary inequalities proves a different
+largest-crossing rule and does **not** certify the volume argmax (the named
+counter-witness has its volume peak away from that boundary). Binding this exact
+max-selection relation to the committed aggregate remains a proof-layer
+obligation; this MPC circuit alone is the untrusted finder.
 
-### (c) Why the sign vector leaks nothing beyond `p*` (the leakage argument)
+### (c) Why the sign vector is not opened
 
-Because `D` is non-increasing and `S` non-decreasing, `c[p] = [D[p] ≥ S[p]]` is a
-**single downward step** `1…1 0…0` whose flip index is exactly `p*`. So `c` is a
-*deterministic function of `p*`*: the simulator `c[p] = [p ≤ p*]` reproduces it
-with no other input. Revealing `c` (equivalently `p*`) therefore reveals no more
-than `p*` itself. This is the codex "monotone sign vector is `p*`-determined under
-a fixed tie rule" observation, and the PoC demonstrates it directly (§7B): two
-different books with the same `p*` produce the identical opened sign vector.
+An earlier shortcut proposed opening `c[p] = [D[p] ≥ S[p]]`. The current rule is
+instead `argmax_p min(D[p],S[p])`: its lowest volume maximizer need not equal the
+sign-vector flip index, so opening `c` is neither required nor justified as a
+function of the published result. The current circuit keeps every comparison bit
+shared, performs the balanced argmax with secret MUXes, and opens only `(p*,V*)`.
+Section §7B pins the actual three-field transcript; there is no sign-vector
+leakage argument in the current protocol.
 
 ---
 
-## 3. The security model — adversarial no-viewer, stated precisely
+## 3. The target security model — and what the PoC establishes
 
-**Adversary.** A coalition `C ⊂ {1..n}` of parties, `|C| < t`, plus the public
-(everyone sees the batch root, the ciphertexts, the STARK, and `(p*, V*)`).
+**Target adversary.** A coalition `C ⊂ {1..n}` of parties, `|C| < t`, plus the
+public transcript (batch root, ciphertexts, proof, and `(p*,V*)`). The deployed
+Rust threshold construction currently has `t=n`; it is not a general t-of-n scheme.
 
-**Guarantee (the no-viewer bound).** The joint view of `C` — its key shares, its
+**Desired guarantee.** The joint view of `C` — its key shares, its
 additive shares of every curve coefficient, and every MPC message — is
 *computationally independent of every individual order and of every curve
 coefficient*, conditioned on the public output `(p*, V*)`. Concretely:
@@ -132,40 +136,43 @@ coefficient*, conditioned on the public output `(p*, V*)`. Concretely:
 - Every message opened in the online phase is a **one-time-pad-masked bit** (`x ⊕
   a`, `a` a fresh uniform Beaver-triple bit), so the message stream is uniform and
   input-independent.
-- The only non-masked opened values are the sign vector (`= p*`) and `V*` — the
-  intended public output.
+- The only non-masked opened values are `p*` and `V*` — the intended public output.
 
-Formally this is the semi-honest MPC guarantee: there is a **simulator** that,
-given only `(p*, V*)`, produces a view identically distributed to the real one
-(§7B implements and checks it). Hence the coalition learns *exactly* `(p*, V*)` and
-nothing else — a cryptographic threshold bound.
+For the online MPC circuit, fresh Beaver masks give the usual semi-honest
+simulation argument. Section §7B implements a schedule/correspondence simulator;
+`mpc_party.rs` additionally runs the protocol in distinct party threads and
+strictly checks the distributed public transcript schema. It still does not model
+authenticated network transport, maliciously corrupted processes, or the complete
+computational-security hybrid from BFV through MPC. Therefore the repository does
+not yet prove that an adversarial coalition learns exactly `(p*,V*)` and nothing else.
 
-**No standing master decryption key.** This is the load-bearing contrast with
-plain threshold-FHE. A threshold-FHE committee holds shares of a decryption key
-that can be applied to *any* ciphertext — so a colluding `≥ t` subset can decrypt
-any submitted ORDER ciphertext, forever, and "nobody sees an order" is a *policy*
-statement (they choose not to), not a cryptographic one. In output-boundary MPC
-the parties partial-decrypt only the SELECTED aggregate coefficients into shares
-for one clearing; there is no reusable key operation against order ciphertexts, and
-the protocol's revealed function is fixed to `(p*, V*)` by its structure.
+**Reusable-key caveat.** BFV collective keygen avoids constructing one master
+secret key, but the parties retain reusable secret shares. All `n` cooperating
+parties can produce decrypt shares for any compatible ciphertext; selecting only
+aggregate ciphertexts is a protocol/API obligation, not an impossibility theorem.
+Output-boundary MPC narrows the intended reveal to `(p*,V*)`; it does not erase
+the custody risk of long-lived threshold-FHE shares.
 
-**What integrity requires (stated separately).** Privacy is unconditional below
-`t`. *Correctness* is not: a malicious party can push a wrong `p*`/`V*` — caught by
+**What integrity requires (stated separately).** Both the one-process circuit and
+party-thread runtime assume semi-honest execution. A malicious party can push a
+wrong `p*`/`V*` — eventually caught by
 the STARK boundary check (the comparator is outside the soundness TCB). Malicious
 *privacy* (a party deviating to learn more) needs the maliciously-secure online
 phase of §8; the semi-honest bound is what the PoC establishes.
 
 ### The honest caveat (no overclaim, no undersell)
 
-- It **is** adversarial and cryptographic: below `t`, the bound holds by the math,
-  not by trust. This is strictly stronger than the threshold-FHE Tier-0 posture.
-- It is **`t`-of-`n`**: `≥ t` colluding parties reconstruct the shares and see the
-  curve (and, with the key shares, could partial-decrypt orders). "Nobody even if
+- The additive/Beaver masks give a real semi-honest algebraic privacy argument,
+  and the checked artifact now includes party-owned input/triple state plus
+  channel-routed execution. In-memory unauthenticated channels are not a
+  distributed adversarial theorem.
+- It is currently **n-of-n**: all `n` parties can combine shares and see the
+  curve (and could partial-decrypt orders). "Nobody even if
   all collude" is **impossible** for clearing over hidden data — the clearing is a
   function of the orders, so *someone* able to compute it can, in coalition,
   recompute its inputs' aggregate. Output-boundary MPC does not claim to escape
-  that; it shrinks the trust to its irreducible minimum: a threshold, one
-  clearing, reveal-only-`p*`, no standing key.
+  that. The intended protocol narrows the normal reveal to `(p*,V*)`; hardening
+  that intention against malicious parties is named work.
 
 ---
 
@@ -173,44 +180,41 @@ phase of §8; the semi-honest bound is what the PoC establishes.
 
 | | Pure-FHE crossing (`ADDITIVE-FOLD-ENVELOPE.md`) | Output-boundary MPC (this note) |
 |---|---|---|
-| Comparison carrier | TFHE `ge`+select, O(K) | secret-shared Beaver-triple `≥`, O(K) gates, O(b) rounds |
-| Measured crossing cost | ~12–17 s (CPU) | **~1–7 ms** (§7C) |
-| BFV→TFHE scheme-switch | **needed, un-measured seam** | **none** — partial-decrypt-into-shares is native |
-| Who can see a coefficient | nobody (stays encrypted); committee holds a reusable order-decryption key | nobody below `t`; **no reusable order-decryption key** |
-| Latency driver | PBS throughput (FPGA target) | network rounds ≈ `b · RTT` (bit-width, K-independent) |
-| Online liveness | 1 threshold decrypt of `p*` | `t` parties online for one MPC (the added dependency) |
+| Comparison carrier | TFHE `ge`+select, O(K) | secret-shared Beaver-triple `≥`, O(K·b) gates, O(b log K) modeled depth |
+| Measured crossing cost | ~12–17 s (CPU) | historical pre-tournament CPU run: ~1–7 ms; rebench required (§7C) |
+| BFV→TFHE scheme-switch | **needed, un-measured seam** | **none** — masked collective BFV decrypt + local re-sharing + party-thread MPC ingress are composed |
+| Who can see a coefficient | nobody (stays encrypted); committee holds reusable key shares | fewer than `n` cannot combine the current BFV shares; all `n` hold a reusable decryption capability |
+| Latency driver | PBS throughput (FPGA target) | modeled opening depth = `(max(b,2)+1)(1+⌈log₂K⌉)` |
+| Online liveness | 1 threshold decrypt of `p*` | all `n` parties online in the current threshold and MPC paths; `n−1` is refused |
 
-The cost is an **online `t`-party MPC dependency** for one clearing — which the
+The target adds an **online multi-party MPC dependency** for one clearing — which the
 public-`p*`, threshold-decrypt posture already implies. In exchange the presumed
 crossing bottleneck AND the scheme-switch both disappear.
 
 ---
 
-## 5. The federation IS the MPC party set
+## 5. Candidate party set: the federation (infrastructure reuse, not crypto reuse)
 
-The `n` parties are not a new committee — they are the **federation nodes** that
-already run the threshold layer:
+The natural deployment candidate is the **federation nodes**, but today's
+federation threshold module is not the BFV scheme used here:
 
-- `federation/src/threshold_decrypt.rs` is the built threshold stack: real Shamir
-  secret sharing over **GF(256)** (`shamir_split_byte` / `shamir_reconstruct_byte`,
-  Lagrange interpolation, MAC-verified shares), `t`-of-`n` `KeyShare`s, and a
-  `ThresholdCiphertext` the validators jointly decrypt. `intent/src/trustless.rs`
-  wires it into the batch: intents are threshold-encrypted, validators hold Shamir
-  shares, `t`-of-`n` reconstruct. The party model, the sharing, and the
-  reconstruction already exist.
-- The natural `n` is the **live federation** — ember's `n=4` devnet and the
-  five-validator C3 (memory: DEVNET). `t = ⌊n/2⌋+1` (honest majority) is the
-  natural threshold, matching the existing threshold-decrypt configuration
-  (`decrypt_threshold` / `num_validators` in `trustless.rs`).
-- Output-boundary MPC **upgrades** this layer: today `trustless.rs` is threshold-
+- `federation/src/threshold_decrypt.rs` Shamir-shares a symmetric AEAD key over
+  GF(256). It can inform membership, messaging, and operational ceremony, but it
+  cannot decrypt BFV ciphertexts or supply BFV/GMW shares.
+- `fhegg-fhe/src/threshold.rs` is the actual collective-BFV path. It is n-of-n and
+  now exposes opaque party state plus framed public key/decrypt-share messages.
+  Threshold conversion to `t<n` would require a different protocol, not a config
+  change to the federation AEAD stack.
+- Output-boundary MPC would **add a different cryptographic layer**: today `trustless.rs` is threshold-
   *decrypt* (the committee sees the book after batch close — `DREX-NO-VIEWER-
   SURPASS.md` rung 3 names this exactly). The MPC crossing makes it threshold-
   *compute*: the parties compute the clearing on shares and open only `(p*, V*)`,
   so no party ever sees the book. This is the rung-3→"no single viewer" jump the
-  ladder flagged as real work — and it reuses the Shamir/party infrastructure.
+  ladder flagged as real work. Only the party/transport scaffolding is plausibly reusable.
 
-The additive shares of the curve coefficients are a re-sharing at the boundary; the
-Beaver-triple online phase runs among the same `t` online validators.
+The additive shares of the curve coefficients are a re-sharing at the boundary.
+The current party-thread Beaver phase runs among the selected BFV/MPC parties over
+direct in-memory channels; authenticated external transport remains deployment work.
 
 ---
 
@@ -219,25 +223,26 @@ Beaver-triple online phase runs among the same `t` online validators.
 **Chosen: boolean (GF(2)) additive secret sharing + a GMW/Beaver-triple secure
 comparator**, over a garbled circuit. The justification:
 
-- **The circuit is tiny and comparison-shaped.** The crossing is K independent
-  `b`-bit `≥` comparisons (K∈{64,256}, `b≈16`) + one `min`. A `≥` is a ~3`b`-AND
-  bit ripple; the whole crossing is ~`K·3b` ≈ 3k–12k AND gates. This is squarely
-  in the cheap regime for secret-sharing MPC.
+- **The circuit is comparison-shaped.** The crossing is K mutually independent secure
+  minima followed by a balanced `K`-way argmax tournament. A `≥` is a ~3`b`-AND
+  bit ripple. The exact gate ledger is
+  `K·4b + (K−1)·(4b+⌈log₂K⌉)`: 8,506 ANDs at K=64 and 34,744 at K=256
+  for `b=16`. This is still in the cheap regime for secret-sharing MPC.
 - **Multi-party by default.** The federation is `n=3–5` parties, not 2. GMW/SPDZ-
   style secret sharing is natively n-party; garbled circuits are cleanest for 2
   parties and need extra machinery (BMR) for n>2. The party set decides the tool.
-- **The online phase is information-theoretically secure and non-interactive per
-  gate up to the opens.** Given Beaver triples (offline/preprocessing), each AND is
-  one opening round; XOR is free. The K comparisons are INDEPENDENT, so their AND
-  gates **batch by circuit depth** — the whole crossing is **O(b) communication
-  rounds regardless of K** (measured: 48 rounds = 3·16, K-independent, §7). Latency
-  is `≈ b · RTT`, not `K · RTT`.
-- **The masked opens are one-time pads**, which is exactly what makes the leakage
-  argument (§3) clean: the message stream is uniform, so the simulator is trivial
-  and the reveal-only-`p*` property is by construction.
-- **Reveal-only-`V*` for the volume.** A `secure_min` at the public `p*` opens only
-  the min, never the two heights — the sign-vector leakage argument does not cover
-  the heights, so `min` is computed in MPC and only its result opens.
+- **The online phase is information-theoretically secure given the masked
+  openings.** Given Beaver triples (offline/preprocessing), each dependency layer
+  of independent ANDs can share one batched opening; XOR is free. The K secure
+  minima batch by circuit depth; the
+  balanced argmax then has `⌈log₂K⌉` levels whose nodes batch independently.
+  The exact modeled depth is `(max(b,2)+1)(1+⌈log₂K⌉)`: 119 rounds at
+  `(b=16,K=64)` and 153 at K=256, rather than the sequential scan's thousands.
+- **The masked opens are one-time pads**, which makes the public-transcript
+  argument (§3) clean: the recorded message stream is uniform, so the transcript
+  simulator is direct and the circuit opens only `(p*,V*)` by construction.
+- **Reveal-only-`V*` for the volume.** All per-bucket minima remain shared through
+  the tournament; only the winning min opens, never either curve height.
 
 Garbled circuits would be a reasonable alternative for a **2-party** boundary
 (e.g., a solver ⊕ a single custody node); for the n-party federation, secret
@@ -249,80 +254,99 @@ preprocessing among the parties (§8) — the online phase carries the security.
 
 ## 7. The PoC — real MPC, measured (cited run)
 
-`fhegg-fhe/src/mpc.rs` (the protocol) + `src/bin/mpc_bench.rs` (the harness). Real
+`fhegg-fhe/src/mpc.rs` (the circuit oracle), `src/mpc_party.rs` (party runtime),
+and `src/bin/mpc_bench.rs` (the historical harness). Real
 GF(2) secret sharing, real Beaver-triple AND gates (one-time-pad opens), a real
-bit-sliced secure `≥`, the monotone crossing, a real secure `min`. **No mock, no
-plaintext-pretending:** no party ever holds a plaintext curve coefficient; only
-`(p*, V*)` open. Reproduce: `cargo run --release --bin fhe-mpc-bench` from
-`fhegg-fhe/`. The run below is real (Apple M2 Max, CPU; the `n` parties are
-simulated in one process, so the ms is compute, and the network-round count is
-reported separately as the real-deployment latency driver).
+bit-sliced secure `≥`, a balanced secure argmax, and a real secure `min`. The
+The legacy one-process harness receives clear curves to create its simulated
+shares. The party runtime does not: each `PartyArithmeticInput` receives only one
+party's mod-t rows, and the triple dealer receives public session shape only.
+Only `(p*,V*)` are recorded as unmasked circuit openings. Reproduce the historical
+harness with `cargo run --release --bin fhe-mpc-bench` from
+`fhegg-fhe/`. The captured CPU run below predates the balanced-tournament
+cutover. Its correctness witnesses remain regression tests, but its wall times
+are retained only as historical baselines; rerun the harness before citing
+current timings. The numeric `Transcript::rounds` column and the corrected
+harness footer report the authoritative modeled circuit-depth ledger.
 
 ### (A) Correctness — MPC `(p*,V*)` == the plaintext crossing, over REAL BFV curves
 
-Every config runs the **real `bfv_fold`** (additive fold) → shares the folded
-curves (models partial-decrypt-into-shares) → runs the MPC crossing, and checks
-against `reference_clear`. All 12 configs match:
+The current exact circuit ledger at `b=16` is:
 
-| N | K | n | BFV fold | MPC crossing | triples/ANDs | rounds | result |
-|---|---|---|---|---|---|---|---|
-| 32 | 64 | 3 | 0.0004 s | **1.15 ms** | 3136 | 48 | ✅ p*=14 V*=32 |
-| 32 | 256 | 4 | 0.0003 s | **3.84 ms** | 12352 | 48 | ✅ p*=156 V*=29 |
-| 128 | 64 | 4 | 0.0013 s | **0.99 ms** | 3136 | 48 | ✅ p*=31 V*=160 |
-| 128 | 256 | 3 | 0.0031 s | **7.01 ms** | 12352 | 48 | ✅ p*=109 V*=138 |
-| 512 | 64 | 3 | 0.0050 s | **0.90 ms** | 3136 | 48 | ✅ p*=31 V*=587 |
-| 512 | 256 | 4 | 0.0051 s | **3.71 ms** | 12352 | 48 | ✅ p*=134 V*=584 |
+| K | secure-min + tournament ANDs/triples | modeled opening depth |
+|---:|---:|---:|
+| 64 | 8,506 | 119 |
+| 256 | 34,744 | 153 |
 
-(Full 12-row sweep in the run output.) `correctness across ALL configs: ALL MATCH
-(MPC == plaintext)`.
+The unit regression spans power-of-two and non-power-of-two shapes through K=256,
+checks every result against `reference_clear`, and carries explicit adversarial
+tie witnesses across odd tournament brackets.
 
-### (B) Privacy — reveal-only-`(p*,V*)`: same-`(p*,V*)` → indistinguishable views
+### (B) Privacy schedule — reveal only `(p*,V*)`
 
-The harness searches random books for **two distinct aggregate curves with the
-identical `(p*, V*)`** and compares party views over 200 fresh runs each:
+The current `Transcript` has exactly three message classes:
 
-```
-found two DISTINCT aggregate curves with identical (p*,V*) = (Some(17), 10):
-  book1 demand[..8]=[25,25,25,25,25,25,19,19]  supply[..8]=[0,0,0,0,0,5,10,10]
-  book2 demand[..8]=[38,34,27,27,27,27,23,23]  supply[..8]=[0,0,0,0,0,8,8,8]
-  (curves DIFFER: confirmed), yet both clear at the same (p*,V*).
+- `masked`: `d=x⊕a` and `e=y⊕b` Beaver openings, each one-time-padded by a
+  fresh uniform triple bit;
+- `revealed_pstar`: the winning index bits;
+- `revealed_vstar`: the winning volume bits.
 
-party view over 200 fresh runs each (4 parties, K=32):
-  P[opened protocol bit = 1]:  book1 = 0.4997   book2 = 0.5011   (uniform = 0.5)
-  |bias1 - bias2|           =  0.0014
-  opened sign vector equal  :  true
-  revealed V* bits equal    :  true
+There is no opened sign vector and no opened per-bucket minimum. The balanced
+tournament's pair/carry schedule, AND count, masked-opening count, and modeled
+depth depend only on public `(K,b)`. The regression runs different secret curves
+at the same shape and checks all four schedule quantities are equal; it also
+checks that `simulate`, given only the public result and `(K,b)`, produces the
+same gate/opening/depth ledger. Distributional simulation follows directly from
+the fresh uniform Beaver masks. The party runtime adds strict per-session ordering,
+full-quorum refusal, and channel-level transcript teeth; these do not claim
+authenticated or maliciously secure transport.
 
-simulator (given ONLY (p*,V*), no curves):
-  P[simulated bit = 1]      =  0.4998
-  simulated sign vector = real sign vector : true
-  simulated V* bits     = real V* bits     : true
+### (B2) Party-owned mod-t ingress and execution
 
-privacy verdict: views are STATISTICALLY INDISTINGUISHABLE -> the MPC reveals ONLY (p*,V*).
-```
+`fhegg-fhe/src/mpc_party.rs` removes the clear-curve dealer from the online path:
 
-The two books' curves differ, but their party views are indistinguishable (opened
-messages uniform and equal-biased to within 0.0014; sign vector and `V*` identical)
-— the **same-leakage-as-reveal-nothing** property. The simulator, given only
-`(p*,V*)`, reproduces the view distribution — the crisp statement that the view
-reveals nothing beyond `(p*, V*)`.
+- each party constructs an opaque `PartyArithmeticInput` from only its own demand
+  and supply mod-t rows (the output shape of `MaskedBoundaryParty`);
+- that party independently XOR-shares every bit to its peers over direct channels;
+  the coordinator has no peer-channel endpoint and never receives an input row;
+- each coefficient's source shares are summed in an actual balanced adder tree,
+  with public odd carries, then reduced mod `t` by `n−1` oblivious conditional
+  subtractions before entering the unchanged balanced crossing;
+- the trusted triple dealer remains explicit, but its API accepts only the public
+  session shape. It cannot be passed aggregate curves or party input rows;
+- the coordinator requires all `n` gate and output messages, rejects cross-session,
+  duplicate, malformed, and non-canonical messages, and reconstructs only
+  `(p*,V*)`.
 
-### (C) Latency — the MPC crossing is MILLISECONDS
+The truncation from the exact mod-t result to the declared output width relies on
+the upstream fold/wrap-bound promise that every reconstructed curve coefficient is
+`< 2^b`. The semi-honest circuit does not secretly range-check malicious inputs;
+that validity condition remains explicit rather than being smuggled into the claim.
+The composed integration passes real `MaskedBoundaryParty`-derived rows into this
+runtime and pins `n−1` refusal, odd/non-power-of-two tournaments, lowest-index ties,
+session/shape rejection, and the reveal-only schema.
 
-**0.9–7 ms** across all configs, vs the **~12–17 s** TFHE O(K) crossing it replaces
-(`ADDITIVE-FOLD-ENVELOPE.md`) — ~**3–4 orders of magnitude** faster on the
-comparison, and the BFV→TFHE scheme-switch cost is gone entirely. Rounds are **O(b)
-= 48**, K-independent (the K comparisons batch by depth), so real-network latency is
-`≈ b · RTT` — a handful of round-trips, not one per bucket.
+### (C) Latency — logarithmic tournament depth
 
-**Honest PoC scope.** (i) the parties are simulated in one process — the ms is
-compute; deployment latency is `b` network rounds among the `t` online validators
-(each an all-to-all open). (ii) Beaver triples come from a simulated offline dealer
-(SPDZ offline phase); the ONLINE phase is real and IT-secure given the triples.
-(iii) the threshold-BFV partial-decrypt-INTO-shares is modelled by sharing the true
-committed coefficients — the novel part (the MPC comparison on real shares) is what
-runs; the RLWE→shares step is native threshold-FHE, not built here. (iv) semi-honest
-security; malicious-secure online phase is §8.
+The captured pre-tournament one-process run was **0.9–7 ms**, versus the
+**~12–17 s** TFHE O(K) crossing it replaced (`ADDITIVE-FOLD-ENVELOPE.md`). That
+CPU timing is not yet a post-cutover benchmark. The load-bearing network ledger
+is an exact, tested circuit-depth model for the crossing: **119 batched opening
+layers for K=64 and 153 for K=256 at b=16**. This is `O(b log K)`, not the false
+K-independent 48-layer claim, and not the sequential argmax formerly implemented.
+The current party runtime executes scalar gate openings and reports that physical
+count separately. Its strict modeled depth includes the implemented balanced A2B
+tree, `n−1` mod-t reductions, and crossing; it does not mislabel modeled batching
+as measured network behavior.
+
+**Honest PoC scope.** (i) `mpc.rs` remains a one-process oracle/harness;
+`mpc_party.rs` uses distinct party threads but still one host and unauthenticated
+in-memory channels. (ii) Beaver triples come from a trusted offline dealer (SPDZ
+offline phase); its new API sees only public shape, and the online phase is real
+given those triples. (iii) the boundary integration now passes party-local mod-t
+rows into the distributed A2B/crossing runtime; it does not establish isolated
+process custody or an authenticated wire protocol. (iv) semi-honest circuit
+reasoning only; malicious-secure online execution is §8.
 
 ### §7.5 MASKED DECRYPT-TO-SHARES — the decrypt-into-shares step, made real (measured)
 
@@ -369,59 +393,71 @@ reference; `AGG→p*` = mask + decrypt + a2b + crossing — the R4 decisive metr
 | 512 | 64 | 3 | 5.8 ms | 5.1 ms | 1.1 ms | 8.8 ms | 2.0 ms | **16.9 ms** |
 | 128 | 256 | 4 | 1.4 ms | 6.5 ms | 1.0 ms | 59.4 ms | 8.7 ms | **75.6 ms** |
 
-The Tier-0 value channel now has **no modelled step**: fold (carry-free BFV) →
-masked opening (one-time pad) → mod-t shares → a2b → Beaver crossing → `(p*,V*)`,
-all measured, tens of milliseconds of compute end-to-end after order encryption.
-Honest scope: the PoC decrypts `ct'` with the in-process key (production = the
-existing federation threshold decrypt); the decryption NOISE channel (IND-CPA-D)
-still wants standard smudging noise in the threshold decrypt — named below.
+The PoC measures the full **one-process value computation**: fold (carry-free BFV)
+→ masked opening (one-time pad) → mod-t shares → a2b → Beaver crossing →
+`(p*,V*)`, in tens of milliseconds after order encryption. The historical boundary
+harness decrypts `ct'` in-process. The newer party-shaped path composes real n-of-n
+BFV keygen, independently retained masks, framed encrypted-mask contributions, and
+smudged threshold decrypt shares without constructing a joint secret key
+(`threshold_masked_boundary_channels`). Its channels and party threads are a custody/API
+tooth, not authenticated transport. That same integration now passes the locally
+derived rows into `mpc_party.rs`: parties peer-share them, run distributed exact
+A2B/mod-t reduction, and complete the crossing without a clear-curve input dealer.
+The symmetric federation decryptor cannot be used for this step.
 
 ---
 
 ## 8. The named frontier (honest residuals)
 
-- **Threshold-BFV partial-decrypt-into-shares — CLOSED at PoC scope (§7.5).** The
-  masked-decrypt construction removes the need for a dedicated primitive: masking
-  makes the decryption's output a one-time-padded value, so the EXISTING
-  threshold-decrypt stack (the in-house `federation/threshold_decrypt` pointed at
-  BFV, or Zama TKMS) is the whole production requirement. Remaining: run that
-  existing stack against `ct'` (deployment wiring, not a new primitive), and add
-  smudging noise for the decryption-noise channel (below). **Grade: value channel
-  built + measured + KAT'd; threshold wiring + noise smudging named.**
+- **Threshold-BFV boundary deployment.** `boundary.rs` now composes §7.5's exact
+  mask/decrypt/re-share algebra with `threshold.rs`'s real n-of-n BFV collective
+  keygen and smudged decrypt shares. The channel integration keeps both threshold
+  shares and masks in party-owned state, carries only strict framed public messages,
+  refuses `n−1`, mixed-ciphertext shares, and even a self-consistent full quorum for
+  the wrong ciphertext, and never constructs a joint secret key. Its local rows now
+  feed the party-thread MPC runtime. What remains is
+  authenticated isolated-process transport, malicious-share validity, persistent
+  zeroized custody, and replay/crash recovery. Moving to
+  `t<n` is a protocol change. **Grade: process-shaped composition built and KAT'd;
+  adversarial distributed deployment named.**
 - **Malicious security.** The PoC online phase is semi-honest. Malicious security
   (a deviating party cannot learn more than `(p*,V*)` nor force an undetected wrong
   result beyond what the STARK catches) needs authenticated shares (SPDZ MACs) +
-  verifiable partial decryption + noise smudging on the boundary shares. The
-  building blocks exist (`threshold_decrypt.rs` already MAC-verifies shares).
+  verifiable partial decryption + transcript-level smudging composition. The
+  symmetric federation module's MAC framing may inspire transport engineering,
+  but it is not a malicious-security proof or BFV share authenticator.
 - **Real preprocessing.** Beaver triples from OT/HE preprocessing among the parties
   (MASCOT/Overdrive), not a dealer. Standard; offline; off the latency path.
-- **STARK boundary binding.** The receipt proves `¬Clears(p*+1) ∧ Clears(p*)` and
-  `V* = min(D[p*],S[p*])` against the committed aggregate, binding `(p*,V*)` to the
-  batch — the comparator stays outside the soundness TCB (`FHEGG-CODEX-ROUND4.md`
-  §Q2). **Grade: the relation is the existing kernel; instantiating it for the
-  boundary is named work.**
+- **STARK boundary binding.** The current rule needs a proof that
+  `V*=min(D[p*],S[p*])`, every bucket's volume is at most `V*`, and no lower index
+  ties it. The older adjacent crossing inequalities certify a different rule and
+  are insufficient. Instantiating the exact volume-argmax/tie relation against the
+  committed aggregate is named work; the MPC remains an untrusted finder.
 
 None of these overturn the construction; they sharpen the PoC toward deployment on
-the labelled trajectory. The core claim — adversarial no-viewer via a `t`-of-`n`
-threshold bound, seam dissolved, ms crossing — is real and measured today.
+the labelled trajectory. What is real today is the n-of-n collective-BFV algebra,
+the exact mask/decrypt/share identities, the one-process circuit oracle, and a
+party-thread runtime from local mod-t rows through A2B and crossing. An adversarial
+no-viewer deployment still needs isolated party processes, authenticated
+transport, malicious-protocol hardening, and the scalar-smudging-to-full-transcript
+hybrid correspondence; it is not a measured production property of this PoC.
 
 ---
 
 ## 9. The claim, stated exactly
 
-> **Tier-0's no-viewer is ADVERSARIAL, not a policy claim.** The aggregate demand/
-> supply curve is folded under exact RLWE/BFV; at the output boundary the `n`
-> federation parties partial-decrypt only the aggregate into additive secret
-> shares and compute the crossing `p* = argmax_j min(D[j],S[j])` in a secret-shared
-> MPC that reveals only `p*` and the cleared volume `V*`. Below the threshold `t`,
-> **no coalition of parties learns any order or any curve coefficient** — a
-> cryptographic bound, with no standing master decryption key and the revealed
-> function fixed to `(p*,V*)` by the protocol. The honest caveat: it is `t`-of-`n`
-> — `≥ t` colluding parties can reconstruct, because "nobody even if all collude"
-> is impossible for clearing over hidden data. Output-boundary MPC shrinks the
-> trust to its minimum, and it **dissolves the BFV→TFHE scheme-switch seam**: the
-> comparison leaves FHE for a millisecond MPC, and partial-decrypt-into-shares
-> replaces the exotic scheme adapter.
+> **Tier-0's no-viewer is the target; this PoC establishes its algebraic spine.**
+> The aggregate demand/supply curve is folded under exact RLWE/BFV. The current
+> n-of-n threshold module computes smudged partial decryptions, and the current
+> secret-shared circuit computes `p* = argmax_j min(D[j],S[j])` while opening only
+> `(p*,V*)`. Tests pin both against the plaintext and fhe.rs oracles. The party
+> runtime accepts only party-local mod-t rows, peer-shares them, and composes with
+> the masked-boundary integration. Today those parties are hosted as threads in
+> one process, triple preprocessing is trusted, transport is unauthenticated, and the full
+> transcript-security bridge is conditional. Thus the code does not yet justify
+> an adversarial distributed no-viewer headline. It does eliminate the need for a
+> BFV→TFHE scheme switch: the intended boundary is masked collective BFV
+> decryption, local re-sharing, then the MPC comparison.
 
 ---
 
@@ -429,12 +465,17 @@ threshold bound, seam dissolved, ms crossing — is real and measured today.
 
 - `fhegg-fhe/src/mpc.rs` — the protocol (secret sharing, Beaver-triple `≥`,
   crossing, `min`, simulator).
+- `fhegg-fhe/src/mpc_party.rs` — party-owned mod-t ingress, direct-peer boolean
+  sharing, exact A2B/mod-t reduction, full-quorum Beaver routing, and crossing.
+- `fhegg-fhe/tests/threshold_masked_boundary_channels.rs` — the composed
+  threshold-mask → local rows → party MPC integration tooth.
 - `fhegg-fhe/src/bin/mpc_bench.rs` — the cited PoC harness.
 - `fhegg-fhe/ADDITIVE-FOLD-ENVELOPE.md` — the additive fold + the (now dissolved)
   scheme-switch seam.
 - `fhegg-fhe/src/additive.rs` — the real BFV fold this composes with.
-- `federation/src/threshold_decrypt.rs`, `intent/src/trustless.rs` — the federation
-  Shamir/threshold party set the MPC reuses and upgrades.
+- `federation/src/threshold_decrypt.rs`, `intent/src/trustless.rs` — the distinct
+  symmetric threshold stack whose membership/transport scaffolding may be reused,
+  but whose cryptography cannot process BFV.
 - `docs/deos/FHEGG-CODEX-ROUND4.md` §Q1.3.4 — the reframe + the threshold-trust
   correction this note builds.
 - `docs/deos/DREGGFI-PRIVACY-TIERS.md`, `docs/deos/DREX-NO-VIEWER-SURPASS.md` — the

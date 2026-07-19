@@ -24,6 +24,10 @@
 //!   (committed-once, VK-side) matrix through the pinned `p3-batch-stark` prove/verify path,
 //!   plus the two adoption probes: tamper rejection and a LogUp interaction whose field READS
 //!   a preprocessed column.
+//! * `e3_mutable_last_limb_schedule_rate8_sim` — E3 (backlog rank 3, PRE-FREEZE): the D1
+//!   rate-8 simulator re-run under the two mutable-LAST candidate v10 absorption schedules,
+//!   measuring the BEFORE/AFTER cross-chain chip dedup the deployed mutable-FIRST order
+//!   (`cell/src/commitment.rs:1075-1083`) forfeits, and the resulting Epoch-2 chip heights.
 //!
 //! Run (release; debug prove times and heights are still valid but slow):
 //! ```text
@@ -946,6 +950,362 @@ fn d6_per_member_chip_cliff_census() {
     }
     println!("D6: members = {n_members}");
     assert_eq!(n_members, 57, "the wide staged registry carries 57 members");
+}
+
+// ===========================================================================
+// E3 — mutable-last limb schedule: the rate-8 sim re-run (pre-freeze decision)
+// ===========================================================================
+
+/// E3 (`docs/EFFICIENCY-BACKLOG-circuit-minimality.md` rank 3) — MEASUREMENT ONLY; no
+/// emitted/deployed descriptor byte is touched. The v10 absorption order is being frozen in
+/// the Epoch-2 bundle. The deployed (v9) schedule absorbs the transfer-mutated scalars FIRST
+/// (`pre[1]=balance_lo, pre[2]=nonce, pre[3]=balance_hi`, `cell/src/commitment.rs:1075-1083`),
+/// so D1's rate-8 simulation measured ZERO cross-chain dedup: the BEFORE/AFTER 179-felt
+/// streams diverge in the head step and every subsequent chained step differs (46/46 unique
+/// -> chip height 64). This test re-runs the SAME simulator under the two mutable-LAST
+/// candidate schedules — a schedule is a static position permutation applied identically to
+/// both chains — and reports the shared-step count, the unique-tuple count, and the Epoch-2
+/// A/B/C chip heights. Because 179 = 22*8 + 3, the two candidates differ by ONE shared step:
+///
+///   M1: mutable scalars last among the PRE-limbs, iroot kept absolutely last (preserves the
+///       v9 "iroot absorbed last" invariant) — balance_lo lands in step 21 of 23.
+///   M2: mutable scalars absolutely last (after the iroot) — all divergence in step 22 of 23.
+#[test]
+fn e3_mutable_last_limb_schedule_rate8_sim() {
+    let (desc, mut trace, _pis, _heaps, _mem) = honest_wide_transfer();
+    for row in &mut trace {
+        row.resize(desc.trace_width, BabyBear::ZERO);
+    }
+    for row in &mut trace {
+        fill_chip_lanes(&desc, row);
+    }
+    let sites = chip_sites(&desc);
+    let dead = dead_sites(&desc, &sites);
+    let live_sites: Vec<&ChipSite> = sites.iter().filter(|s| !dead.contains(&s.idx)).collect();
+
+    // -- harvest the two wide fresh streams (the identical walk to D1's) --
+    let wide_out_vars: HashSet<usize> = live_sites
+        .iter()
+        .filter(|s| s.tag == Some(11))
+        .flat_map(|s| s.out_vars.iter().copied())
+        .collect();
+    let wide_in_vars: HashSet<usize> = live_sites
+        .iter()
+        .filter(|s| s.tag == Some(11))
+        .flat_map(|s| s.in_vars.iter().copied())
+        .collect();
+    let heads: Vec<&&ChipSite> = live_sites
+        .iter()
+        .filter(|s| s.tag == Some(4) && s.out_vars.iter().any(|v| wide_in_vars.contains(v)))
+        .collect();
+    assert_eq!(heads.len(), 2, "one BEFORE and one AFTER wide head");
+    let head_out: HashSet<usize> = heads
+        .iter()
+        .flat_map(|s| s.out_vars.iter().copied())
+        .collect();
+    let mut chains: Vec<Vec<BabyBear>> = Vec::new();
+    for head in &heads {
+        let mut stream: Vec<BabyBear> = head.ins.iter().take(4).map(|e| ev(e, &trace[0])).collect();
+        let mut cur: &ChipSite = head;
+        loop {
+            let next = live_sites.iter().find(|s| {
+                s.tag == Some(11)
+                    && s.idx != cur.idx
+                    && s.in_vars.iter().any(|v| cur.out_vars.contains(v))
+            });
+            let Some(next) = next else { break };
+            for (k, e) in next.ins.iter().enumerate() {
+                if k < 8 {
+                    continue; // state lanes
+                }
+                if let LeanExpr::Var(v) = e {
+                    if !wide_out_vars.contains(v) && !head_out.contains(v) {
+                        stream.push(ev(e, &trace[0]));
+                    }
+                }
+            }
+            cur = next;
+        }
+        chains.push(stream);
+    }
+    assert_eq!(chains.len(), 2);
+    for (i, c) in chains.iter().enumerate() {
+        assert_eq!(c.len(), 179, "chain {i}: 178 pre-limbs + iroot");
+    }
+
+    // -- the empirical divergence set: WHERE do the two streams actually differ? --
+    // The E3 premise is that a transfer's divergence is confined to the three mutable
+    // scalars r0/r1/r2 (stream positions 1..=3); cells_root (0) and the iroot (178) are
+    // turn-level, everything else (fields, authority digest, roots) is untouched by a
+    // transfer. If this assert ever fires, the reorder win is smaller than projected.
+    let divergent: Vec<usize> = (0..179)
+        .filter(|&i| chains[0][i].as_u32() != chains[1][i].as_u32())
+        .collect();
+    println!("E3: BEFORE/AFTER divergent stream positions = {divergent:?} (of 179)");
+    assert!(!divergent.is_empty(), "a transfer must move the balance");
+    assert!(
+        divergent.iter().all(|&i| (1..=3).contains(&i)),
+        "transfer divergence must be confined to the mutable scalars at stream positions \
+         1..=3 (balance_lo/nonce/balance_hi, cell/src/commitment.rs:1075-1083); got \
+         {divergent:?}"
+    );
+
+    // -- the same rate-8 simulator as D1 (state8 ‖ 8 fresh felts, arity-16, domain-seeded) --
+    let simulate = |seed_tag: u32, stream: &[BabyBear]| -> Vec<Vec<u32>> {
+        let mut tuples = Vec::new();
+        let mut state: [BabyBear; 8] =
+            chip_absorb_all_lanes(4, &[BabyBear::new(0xD05EED), BabyBear::new(seed_tag)]);
+        for block in stream.chunks(8) {
+            let mut ins: Vec<BabyBear> = state.to_vec();
+            ins.extend_from_slice(block);
+            ins.resize(16, BabyBear::ZERO);
+            let outs = chip_absorb_all_lanes(16, &ins);
+            let mut t = Vec::with_capacity(CHIP_TUPLE_LEN);
+            t.push(16u32);
+            for v in &ins {
+                t.push(v.as_u32());
+            }
+            for v in &outs {
+                t.push(v.as_u32());
+            }
+            tuples.push(t);
+            state = outs;
+        }
+        tuples
+    };
+
+    // -- the candidate schedules: static position permutations, applied to BOTH chains --
+    let identity: Vec<usize> = (0..179).collect();
+    let mut m1: Vec<usize> = vec![0];
+    m1.extend(4..178);
+    m1.extend([1, 2, 3]);
+    m1.push(178);
+    let mut m2: Vec<usize> = vec![0];
+    m2.extend(4..178);
+    m2.push(178);
+    m2.extend([1, 2, 3]);
+    for (name, p) in [("M1", &m1), ("M2", &m2)] {
+        assert_eq!(p.len(), 179, "{name}: schedule length");
+        let mut seen = vec![false; 179];
+        for &i in p.iter() {
+            assert!(!seen[i], "{name}: position {i} scheduled twice");
+            seen[i] = true;
+        }
+    }
+
+    // Run one schedule under the SHARED-seed discipline; returns (unique, shared steps).
+    let run = |perm: &[usize]| -> (usize, usize) {
+        let per_chain: Vec<Vec<Vec<u32>>> = chains
+            .iter()
+            .map(|c| {
+                let reordered: Vec<BabyBear> = perm.iter().map(|&i| c[i]).collect();
+                simulate(0, &reordered)
+            })
+            .collect();
+        assert_eq!(per_chain[0].len(), 23, "179 felts -> 23 rate-8 steps");
+        assert_eq!(per_chain[1].len(), 23);
+        let shared = per_chain[0]
+            .iter()
+            .zip(per_chain[1].iter())
+            .filter(|(a, b)| a == b)
+            .count();
+        let uniq: BTreeSet<&Vec<u32>> = per_chain.iter().flatten().collect();
+        (uniq.len(), shared)
+    };
+
+    let (base_uniq, base_shared) = run(&identity);
+    println!(
+        "E3: DEPLOYED order (mutable-FIRST): shared steps = {base_shared}/23, unique = \
+         {base_uniq}/46"
+    );
+    assert_eq!(
+        (base_uniq, base_shared),
+        (46, 0),
+        "D1 calibration: the deployed order has ZERO cross-chain dedup"
+    );
+
+    let (m1_uniq, m1_shared) = run(&m1);
+    let (m2_uniq, m2_shared) = run(&m2);
+    println!(
+        "E3: M1 (mutable-last, iroot last): shared steps = {m1_shared}/23, unique = {m1_uniq}/46"
+    );
+    println!(
+        "E3: M2 (mutable absolute-last):    shared steps = {m2_shared}/23, unique = {m2_uniq}/46"
+    );
+    // Divergence is chained: once a step differs, every later step differs. balance_lo sits
+    // at reordered position 175 under M1 (step 21: two divergent steps) and 176 under M2
+    // (step 22: one divergent step). The counts are pinned so any drift SPEAKS.
+    assert_eq!(
+        (m1_shared, m1_uniq),
+        (21, 25),
+        "M1: 21/23 shared -> 23 + 2 unique"
+    );
+    assert_eq!(
+        (m2_shared, m2_uniq),
+        (22, 24),
+        "M2: 22/23 shared -> 23 + 1 unique"
+    );
+
+    // -- the seed coupling: a per-object domain seed kills the entire win --
+    let perobj: Vec<Vec<u32>> = chains
+        .iter()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            let reordered: Vec<BabyBear> = m1.iter().map(|&j| c[j]).collect();
+            simulate(i as u32 + 1, &reordered)
+        })
+        .collect();
+    let perobj_uniq: BTreeSet<&Vec<u32>> = perobj.iter().collect();
+    println!(
+        "E3: M1 under PER-OBJECT seeds: unique = {}/46 — the dedup exists ONLY under the \
+         shared-seed discipline; the design-B per-object seed choice forfeits it",
+        perobj_uniq.len()
+    );
+    assert_eq!(perobj_uniq.len(), 46);
+
+    // -- Epoch-2 A/B/C projections (the same bundle arithmetic as D1) --
+    let head_idx: HashSet<usize> = heads.iter().map(|s| s.idx).collect();
+    let mut survivor_tuples: BTreeSet<Vec<u32>> = BTreeSet::new();
+    for s in live_sites
+        .iter()
+        .filter(|s| s.tag != Some(11) && !head_idx.contains(&s.idx))
+    {
+        let mut t = Vec::with_capacity(CHIP_TUPLE_LEN);
+        t.push(s.tag.unwrap() as u32);
+        for e in &s.ins {
+            t.push(ev(e, &trace[0]).as_u32());
+        }
+        for e in &s.outs {
+            t.push(ev(e, &trace[0]).as_u32());
+        }
+        survivor_tuples.insert(t);
+    }
+    let survivors = survivor_tuples.len();
+    assert_eq!(survivors, 14, "D1's non-wide survivor count");
+
+    let pi8_col: Option<usize> = desc.constraints.iter().find_map(|k| match k {
+        VmConstraint2::Base(VmConstraint::PiBinding {
+            col, pi_index: 8, ..
+        }) => Some(*col),
+        _ => None,
+    });
+    let h4_root: Option<&&ChipSite> = live_sites.iter().find(|s| {
+        s.tag == Some(4) && matches!(&s.outs[0], LeanExpr::Var(v) if Some(*v) == pi8_col)
+    });
+    let h4_sites: HashSet<usize> = match h4_root {
+        Some(root) => {
+            let mut set: HashSet<usize> = live_sites
+                .iter()
+                .filter(|s| s.out_vars.iter().any(|v| root.in_vars.contains(v)))
+                .map(|s| s.idx)
+                .collect();
+            set.insert(root.idx);
+            set
+        }
+        None => HashSet::new(),
+    };
+    let caveat_sites: Vec<&&ChipSite> = live_sites
+        .iter()
+        .filter(|s| {
+            (s.tag == Some(4) || s.tag == Some(2))
+                && !head_idx.contains(&s.idx)
+                && !h4_sites.contains(&s.idx)
+        })
+        .collect();
+    let all_chip_out: HashSet<usize> = sites
+        .iter()
+        .flat_map(|s| s.out_vars.iter().copied())
+        .collect();
+    let caveat_fresh: usize = caveat_sites
+        .iter()
+        .flat_map(|s| s.ins.iter())
+        .filter(|e| matches!(e, LeanExpr::Var(v) if !all_chip_out.contains(v)))
+        .count();
+    assert_eq!(
+        (caveat_sites.len(), caveat_fresh, h4_sites.len()),
+        (10, 29, 4),
+        "D1's caveat/H4 strata"
+    );
+
+    let project = |name: &str, wide_uniq: usize| -> (usize, usize, usize) {
+        let v_a = survivors + wide_uniq;
+        let v_b = v_a - caveat_sites.len() + caveat_fresh.div_ceil(8);
+        let v_c = v_b - h4_sites.len();
+        println!(
+            "E3: {name}: EPOCH-2-A ~= {v_a} -> h {} | EPOCH-2-B ~= {v_b} -> h {} | \
+             EPOCH-2-C ~= {v_c} -> h {}",
+            next_pow2(v_a),
+            next_pow2(v_b),
+            next_pow2(v_c)
+        );
+        (v_a, v_b, v_c)
+    };
+    let (_, b0, c0) = project("DEPLOYED order", base_uniq);
+    let (_, b1, c1) = project("M1            ", m1_uniq);
+    let (_, b2, c2) = project("M2            ", m2_uniq);
+    assert_eq!(
+        next_pow2(c0),
+        64,
+        "mutable-first: the bundle is stuck at 64"
+    );
+    assert_eq!(next_pow2(b0), 64);
+    assert_eq!(
+        next_pow2(c1),
+        32,
+        "M1 lands the full Epoch-2 bundle (C) at chip height 32"
+    );
+    assert_eq!(next_pow2(c2), 32);
+    assert_eq!(
+        next_pow2(b1),
+        64,
+        "M1 leaves EPOCH-2-B at 64 (one step of dedup short: 33 > 32)"
+    );
+    assert_eq!(
+        next_pow2(b2),
+        32,
+        "M2's extra shared step moves EPOCH-2-B across the 32 cliff too"
+    );
+
+    // -- registry-wide projection: the wide skeleton (118 tag-11 sites + 2 heads, 179 fresh
+    //    felts/chain) is IDENTICAL on all 57 members (D6), so the wide-step dedup transposes
+    //    as rate8_C' = rate8_C - 46 + unique. HONEST SCOPE: the FULL dedup applies to verbs
+    //    whose BEFORE/AFTER mutation set rides the reordered tail (balance/nonce verbs:
+    //    transfer/burn/mint/fee/supplyMint/...). Verbs mutating mid-schedule limb groups
+    //    (setField -> field lanes, setPerms/setVK -> their groups, capOpen writes ->
+    //    cap_root at pre-limb 25) diverge from that group's step onward, and map-op members
+    //    additionally carry unmeasured witness node8 rows. --
+    println!("E3: registry projection at M1 (rate8_C' = rate8_C - 46 + {m1_uniq}):");
+    for (class, n, rate8_c) in [
+        ("transfer-core verbs", 33usize, 49usize),
+        ("makeSovereign", 1, 51),
+        ("noteSpend/noteCreate/createCell", 3, 65),
+        ("capOpen family", 16, 66),
+        ("refusal/heapWrite", 2, 82),
+        ("attenuateCapOpenEff/refreshDelegationWCO", 2, 83),
+    ] {
+        let v = rate8_c - 46 + m1_uniq;
+        println!(
+            "E3:   {class} ({n} members): rate8_C {rate8_c} -> {v} -> chip height {}",
+            next_pow2(v)
+        );
+    }
+    // The closed form for the freeze decision (transfer-family constants: survivors 14 -
+    // caveat 10 + caveat-steps 4 - H4 4 = +4): v_C = wide_unique + 4, so chip-32 needs
+    // wide_unique <= 28, i.e. at most 5 divergent after-chain steps, i.e. the verb's whole
+    // mutation set confined to the LAST 5 rate-8 steps = the last 35 schedule positions.
+    println!(
+        "E3: tail window — chip-32 holds for any verb whose BEFORE/AFTER mutation set fits \
+         the last 35 schedule positions (divergence confined to the final 5 of 23 steps)"
+    );
+    println!(
+        "E3: cell arithmetic at the D2-corrected chip shape (398 base cols): h=64 = {} \
+         cells, h=32 = {} cells; the 64->32 halving saves {} committed cells (~{:.1}% of \
+         the 82,720-cell floor)",
+        398 * 64,
+        398 * 32,
+        398 * 32,
+        100.0 * (398.0 * 32.0) / 82_720.0
+    );
 }
 
 // ===========================================================================

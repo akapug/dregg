@@ -83,6 +83,19 @@ The suite covers descriptor shape, every slot caveat in isolation, and the
 factory-birth executor path: a ballot spent twice is refused, a tally lowered is refused,
 a poll re-closed is refused.
 
+## Private scored-decision proof seam
+
+For four-person/four-option guild votes, party choices, matchmaking, or quest
+branches, `dregg-circuit-prove::private_preference` supplies a Lean-authored
+winner-only hiding proof over private bounded-score ballots. It deliberately is
+not a dependency of this wasm-clean app crate: the host verifies through
+`verify_decision_zk`, checks the receipt session/root against its poll source,
+then maps `VerifiedDecision.winner` to the poll's canonical option ordering.
+The ballot cells here continue to provide eligibility/one-vote lifecycle teeth;
+the proof organ provides private exact aggregation. See
+`../../docs/deos/PRIVATE-PREFERENCE-N4K4.md` for the exact composition and its
+Tier-1-not-Tier-0 boundary.
+
 ## See also
 
 - `../nameservice/README.md` — the anchor starbridge-app and exemplar.

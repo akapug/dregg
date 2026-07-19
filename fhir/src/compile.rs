@@ -22,8 +22,8 @@ use crate::ast::{
 };
 use crate::tier::Tier;
 use crate::types::{
-    CertKind, Cone, Curvature, IntegerFeature, MatrixFlag, MatrixRole, ProgramKind, ProgramType,
-    TypeError, Visibility,
+    CertKind, Cone, Curvature, IntegerFeature, MatrixFlag, MatrixRole, PortfolioQpViolation,
+    ProgramKind, ProgramType, TypeError, Visibility,
 };
 
 use crate::ast::PoolSpec;
@@ -101,7 +101,7 @@ pub fn most_private_admissible(shape: &ProgramType) -> Tier {
 /// Compile a product: lower it, infer the most-private honest tier, and reject
 /// an over-claim with the precise reason.
 pub fn compile(p: &Product) -> Result<Compiled, TypeError> {
-    let Lowered { shape, program } = lower(p);
+    let Lowered { shape, program } = lower(p)?;
     let honest = most_private_admissible(&shape);
 
     if let Some(claimed) = p.claim {
@@ -129,9 +129,259 @@ pub fn compile(p: &Product) -> Result<Compiled, TypeError> {
     })
 }
 
+/// Absolute and relative terms for fhIR's deterministic floating-point
+/// covariance gate. This is a numerical admission check, not a formal PSD proof.
+const QP_MATRIX_ABS_TOL: f64 = 1.0e-12;
+const QP_MATRIX_REL_TOL: f64 = 1.0e-10;
+
+/// Fixed-point scale shared by fhIR's exact PSD admission and the runner's exact
+/// CertQp translation validator. Both denote the rounded `10^-9` public problem.
+pub const QP_CERT_EXACT_SCALE: u32 = 9;
+
+/// `f64` is an exact integer carrier only through 2^53. This is the same lift
+/// envelope enforced by `fhegg_solver::qp_exact::lift_cert`.
+const F64_EXACT_INTEGER_BOUND: f64 = 9_007_199_254_740_992.0;
+
+fn invalid_portfolio(violation: PortfolioQpViolation) -> TypeError {
+    TypeError::InvalidPortfolioQp { violation }
+}
+
+/// Fail-closed input gate for a Markowitz QP.
+///
+/// Acceptance is a sufficient exact certificate on the runner's rounded 10^-9
+/// problem: symmetric, nonnegative-diagonal diagonal dominance implies PSD. The
+/// following f64 LDLᵀ is an additional fail-closed numeric diagnostic, not the
+/// proof. Thus a valid PSD matrix outside the supported SDD family is refused.
+fn validate_portfolio_qp(
+    cov: &MatrixData,
+    mu: &[f64],
+    lambda: f64,
+    w_max: f64,
+) -> Result<Vec<f64>, TypeError> {
+    let n = mu.len();
+    if n == 0 {
+        return Err(invalid_portfolio(PortfolioQpViolation::Empty));
+    }
+    let expected_len = n
+        .checked_mul(n)
+        .ok_or_else(|| invalid_portfolio(PortfolioQpViolation::DimensionOverflow))?;
+    cov.rows
+        .checked_mul(cov.cols)
+        .ok_or_else(|| invalid_portfolio(PortfolioQpViolation::DimensionOverflow))?;
+    if cov.rows != n || cov.cols != n || cov.data.len() != expected_len {
+        return Err(invalid_portfolio(PortfolioQpViolation::DimensionMismatch {
+            rows: cov.rows,
+            cols: cov.cols,
+            data_len: cov.data.len(),
+            expected_n: n,
+        }));
+    }
+    if let Some(index) = cov.data.iter().position(|x| !x.is_finite()) {
+        return Err(invalid_portfolio(
+            PortfolioQpViolation::NonFiniteCovariance { index },
+        ));
+    }
+    if let Some(index) = mu.iter().position(|x| !x.is_finite()) {
+        return Err(invalid_portfolio(
+            PortfolioQpViolation::NonFiniteExpectedReturn { index },
+        ));
+    }
+    if !lambda.is_finite() {
+        return Err(invalid_portfolio(PortfolioQpViolation::NonFiniteLambda));
+    }
+    if !w_max.is_finite() {
+        return Err(invalid_portfolio(PortfolioQpViolation::NonFiniteWeightCap));
+    }
+    if w_max <= 0.0 {
+        return Err(invalid_portfolio(
+            PortfolioQpViolation::NonPositiveWeightCap { value: w_max },
+        ));
+    }
+    let minimum_weight_cap = 1.0 / n as f64;
+    if w_max < minimum_weight_cap {
+        return Err(invalid_portfolio(
+            PortfolioQpViolation::InfeasibleWeightCap {
+                value: w_max,
+                minimum: minimum_weight_cap,
+            },
+        ));
+    }
+    if let Some(index) = mu.iter().position(|value| !(-lambda * value).is_finite()) {
+        return Err(invalid_portfolio(
+            PortfolioQpViolation::NonFiniteLinearTerm { index },
+        ));
+    }
+
+    for row in 0..n {
+        for col in 0..row {
+            let left = cov.data[row * n + col];
+            let right = cov.data[col * n + row];
+            let tolerance = QP_MATRIX_ABS_TOL + QP_MATRIX_REL_TOL * left.abs().max(right.abs());
+            let difference = (left - right).abs();
+            if difference > tolerance {
+                return Err(invalid_portfolio(PortfolioQpViolation::Asymmetric {
+                    row,
+                    col,
+                    difference,
+                    tolerance,
+                }));
+            }
+        }
+    }
+
+    // Acceptance tooth: lift the canonical symmetric matrix into exactly the
+    // same 10^-9 fixed-point problem the runner validates, then require the
+    // conservative SDD certificate. Symmetric diagonal dominance with a
+    // nonnegative diagonal implies PSD (Gershgorin); matrices outside this
+    // sufficient family are refused even when a numerical eigensolver might
+    // consider them PSD.
+    let exact_factor = 10_i128.pow(QP_CERT_EXACT_SCALE);
+    let exact_factor_f64 = exact_factor as f64;
+    let mut exact = vec![0_i128; expected_len];
+    for row in 0..n {
+        for col in 0..=row {
+            let canonical = symmetric_covariance_entry(cov, n, row, col);
+            let scaled = canonical * exact_factor_f64;
+            if !scaled.is_finite() || scaled.abs() > F64_EXACT_INTEGER_BOUND {
+                return Err(invalid_portfolio(
+                    PortfolioQpViolation::ExactPsdLiftOutOfRange { row, col },
+                ));
+            }
+            let lifted = scaled.round() as i128;
+            exact[row * n + col] = lifted;
+            exact[col * n + row] = lifted;
+        }
+    }
+    for row in 0..n {
+        let diagonal = exact[row * n + row];
+        let mut off_diagonal_sum = 0_i128;
+        for col in 0..n {
+            if col == row {
+                continue;
+            }
+            let magnitude = exact[row * n + col].checked_abs().ok_or_else(|| {
+                invalid_portfolio(PortfolioQpViolation::ExactPsdArithmeticOverflow { row })
+            })?;
+            off_diagonal_sum = off_diagonal_sum.checked_add(magnitude).ok_or_else(|| {
+                invalid_portfolio(PortfolioQpViolation::ExactPsdArithmeticOverflow { row })
+            })?;
+        }
+        if diagonal < 0 || diagonal < off_diagonal_sum {
+            return Err(invalid_portfolio(
+                PortfolioQpViolation::ExactPsdNotDiagonallyDominant {
+                    row,
+                    diagonal,
+                    off_diagonal_sum,
+                },
+            ));
+        }
+    }
+
+    // The backend receives this exact rounded problem (converted back to f64),
+    // not the tolerance-accepted source matrix. That keeps compiler admission,
+    // optimization, and exact certificate checking on one public P.
+    let canonical_cov: Vec<f64> = exact
+        .into_iter()
+        .map(|entry| entry as f64 / exact_factor_f64)
+        .collect();
+
+    // Additional diagnostic/conservative tooth on the actual backend f64 data.
+    // Exact SDD above is the proof-bearing acceptance rule; LDLᵀ catches numeric
+    // factorization pathologies and fails closed on any non-finite intermediate.
+    validate_portfolio_ldlt(&canonical_cov, n)?;
+
+    Ok(canonical_cov)
+}
+
+fn validate_portfolio_ldlt(cov: &[f64], n: usize) -> Result<(), TypeError> {
+    let expected_len = n * n;
+    let matrix_scale = cov.iter().copied().map(f64::abs).fold(0.0_f64, f64::max);
+    let psd_tol = QP_MATRIX_ABS_TOL + QP_MATRIX_REL_TOL * matrix_scale * n as f64;
+    if !psd_tol.is_finite() {
+        return Err(invalid_portfolio(
+            PortfolioQpViolation::NumericalValidationFailure { pivot: 0, row: 0 },
+        ));
+    }
+
+    // Unit-lower L plus diagonal D, both densely stored for this small admission
+    // check. Read the lower triangle only after symmetry validation above.
+    let mut l = vec![0.0_f64; expected_len];
+    let mut d = vec![0.0_f64; n];
+    for row in 0..n {
+        l[row * n + row] = 1.0;
+    }
+    for pivot in 0..n {
+        let mut diagonal = cov[pivot * n + pivot];
+        for k in 0..pivot {
+            let entry = l[pivot * n + k];
+            diagonal -= entry * entry * d[k];
+        }
+        if !diagonal.is_finite() {
+            return Err(invalid_portfolio(
+                PortfolioQpViolation::NumericalValidationFailure { pivot, row: pivot },
+            ));
+        }
+        if diagonal < -psd_tol {
+            return Err(invalid_portfolio(
+                PortfolioQpViolation::NotPositiveSemidefinite {
+                    pivot,
+                    residual: diagonal,
+                    tolerance: psd_tol,
+                },
+            ));
+        }
+        d[pivot] = if diagonal > psd_tol { diagonal } else { 0.0 };
+
+        for row in (pivot + 1)..n {
+            let mut residual = cov[row * n + pivot];
+            for k in 0..pivot {
+                residual -= l[row * n + k] * l[pivot * n + k] * d[k];
+            }
+            if !residual.is_finite() {
+                return Err(invalid_portfolio(
+                    PortfolioQpViolation::NumericalValidationFailure { pivot, row },
+                ));
+            }
+            if d[pivot] == 0.0 {
+                if residual.abs() > psd_tol {
+                    return Err(invalid_portfolio(
+                        PortfolioQpViolation::NotPositiveSemidefinite {
+                            pivot,
+                            // A coupled null pivot implies an indefinite 2×2
+                            // principal block; preserve the signed Schur residual.
+                            residual,
+                            tolerance: psd_tol,
+                        },
+                    ));
+                }
+                l[row * n + pivot] = 0.0;
+            } else {
+                l[row * n + pivot] = residual / d[pivot];
+                if !l[row * n + pivot].is_finite() {
+                    return Err(invalid_portfolio(
+                        PortfolioQpViolation::NumericalValidationFailure { pivot, row },
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Canonicalize a tolerance-accepted covariance to an exactly symmetric backend
+/// matrix. `0.5a + 0.5b` avoids overflowing when both finite entries are large.
+fn symmetric_covariance_entry(cov: &MatrixData, n: usize, row: usize, col: usize) -> f64 {
+    if row == col {
+        cov.data[row * n + col]
+    } else {
+        0.5 * cov.data[row * n + col] + 0.5 * cov.data[col * n + row]
+    }
+}
+
 /// Lower one product form to `(shape, program)`.
-fn lower(p: &Product) -> Lowered {
-    match &p.body {
+fn lower(p: &Product) -> Result<Lowered, TypeError> {
+    Ok(match &p.body {
         ProductBody::UniformPrice { orders, k } => lower_uniform_price(orders, *k),
         ProductBody::FlowClearing { nodes, edges } => lower_flow(*nodes, edges),
         ProductBody::Portfolio {
@@ -139,7 +389,7 @@ fn lower(p: &Product) -> Lowered {
             mu,
             lambda,
             w_max,
-        } => lower_portfolio(cov, mu, *lambda, *w_max),
+        } => return lower_portfolio(cov, mu, *lambda, *w_max),
         ProductBody::Derivative {
             instruments,
             marks,
@@ -160,7 +410,7 @@ fn lower(p: &Product) -> Lowered {
             supply,
             bids,
         } => lower_package(*n_items, supply, bids),
-    }
+    })
 }
 
 fn lower_uniform_price(orders: &[OrderSpec], k: usize) -> Lowered {
@@ -237,8 +487,16 @@ fn lower_flow(nodes: usize, edges: &[EdgeSpec]) -> Lowered {
     }
 }
 
-fn lower_portfolio(cov: &MatrixData, mu: &[f64], lambda: f64, w_max: f64) -> Lowered {
-    let prob: QpProblem = markowitz(&cov.data, mu, lambda, w_max);
+fn lower_portfolio(
+    cov: &MatrixData,
+    mu: &[f64],
+    lambda: f64,
+    w_max: f64,
+) -> Result<Lowered, TypeError> {
+    // Validate and canonicalize before the backend constructor can assert/panic
+    // and before fhIR attaches the semantic `Convex` label.
+    let symmetric_cov = validate_portfolio_qp(cov, mu, lambda, w_max)?;
+    let prob: QpProblem = markowitz(&symmetric_cov, mu, lambda, w_max);
     let shape = ProgramType {
         kind: ProgramKind::Qp,
         curvature: Curvature::Convex, // ½xᵀΣx — quadratic
@@ -260,10 +518,10 @@ fn lower_portfolio(cov: &MatrixData, mu: &[f64], lambda: f64, w_max: f64) -> Low
         size: mu.len(),
         cert: CertKind::CertQp,
     };
-    Lowered {
+    Ok(Lowered {
         shape,
         program: ConvexProgram::Qp(prob),
-    }
+    })
 }
 
 fn lower_derivative(instruments: &MatrixData, marks: &[f64], payoff: &[f64]) -> Lowered {
@@ -481,6 +739,18 @@ mod tests {
     use super::*;
     use crate::products;
 
+    fn portfolio_with_cov(cov: MatrixData, mu: Vec<f64>) -> Product {
+        Product::infer(
+            "portfolio-validation-probe",
+            ProductBody::Portfolio {
+                cov,
+                mu,
+                lambda: 1.0,
+                w_max: 1.0,
+            },
+        )
+    }
+
     #[test]
     fn uniform_price_is_dark_aggregation() {
         let c = compile(&products::uniform_price_clearing()).unwrap();
@@ -501,6 +771,242 @@ mod tests {
         let c = compile(&products::portfolio_qp_public()).unwrap();
         assert_eq!(c.tier, Tier::Shielded);
         assert_eq!(c.cert, CertKind::CertQp);
+    }
+
+    #[test]
+    fn portfolio_malformed_covariance_is_rejected_before_backend_lowering() {
+        let p = portfolio_with_cov(MatrixData::public(2, 3, vec![1.0; 6]), vec![0.1, 0.2]);
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::DimensionMismatch {
+                    rows: 2,
+                    cols: 3,
+                    data_len: 6,
+                    expected_n: 2,
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn portfolio_nonfinite_data_is_rejected() {
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![1.0, 0.0, 0.0, f64::NAN]),
+            vec![0.1, 0.2],
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::NonFiniteCovariance { index: 3 }
+            })
+        ));
+
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![1.0, 0.0, 0.0, 1.0]),
+            vec![0.1, f64::INFINITY],
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::NonFiniteExpectedReturn { index: 1 }
+            })
+        ));
+        let p = Product::infer(
+            "portfolio-nonfinite-lambda",
+            ProductBody::Portfolio {
+                cov: MatrixData::public(1, 1, vec![1.0]),
+                mu: vec![0.1],
+                lambda: f64::NEG_INFINITY,
+                w_max: 1.0,
+            },
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::NonFiniteLambda
+            })
+        ));
+
+        let p = Product::infer(
+            "portfolio-nonfinite-cap",
+            ProductBody::Portfolio {
+                cov: MatrixData::public(1, 1, vec![1.0]),
+                mu: vec![0.1],
+                lambda: 1.0,
+                w_max: f64::INFINITY,
+            },
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::NonFiniteWeightCap
+            })
+        ));
+
+        let p = Product::infer(
+            "portfolio-overflowing-linear-term",
+            ProductBody::Portfolio {
+                cov: MatrixData::public(1, 1, vec![1.0]),
+                mu: vec![2.0],
+                lambda: f64::MAX,
+                w_max: 1.0,
+            },
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::NonFiniteLinearTerm { index: 0 }
+            })
+        ));
+    }
+
+    #[test]
+    fn portfolio_invalid_or_infeasible_weight_cap_is_rejected() {
+        let covariance = || MatrixData::public(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
+        for cap in [0.0, -1.0] {
+            let p = Product::infer(
+                "portfolio-nonpositive-cap",
+                ProductBody::Portfolio {
+                    cov: covariance(),
+                    mu: vec![0.1, 0.2],
+                    lambda: 1.0,
+                    w_max: cap,
+                },
+            );
+            assert!(matches!(
+                compile(&p),
+                Err(TypeError::InvalidPortfolioQp {
+                    violation: PortfolioQpViolation::NonPositiveWeightCap { .. }
+                })
+            ));
+        }
+        let p = Product::infer(
+            "portfolio-infeasible-cap",
+            ProductBody::Portfolio {
+                cov: covariance(),
+                mu: vec![0.1, 0.2],
+                lambda: 1.0,
+                w_max: 0.49,
+            },
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::InfeasibleWeightCap { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn portfolio_asymmetric_covariance_is_rejected() {
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![1.0, 0.25, 0.5, 1.0]),
+            vec![0.1, 0.2],
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::Asymmetric { row: 1, col: 0, .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn portfolio_tolerance_accepted_covariance_is_canonicalized_symmetric() {
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![1.0, 0.25, 0.250_000_000_01, 1.0]),
+            vec![0.1, 0.2],
+        );
+        let compiled = compile(&p).unwrap();
+        let ConvexProgram::Qp(prob) = compiled.program else {
+            panic!("portfolio must lower to QP")
+        };
+        assert_eq!(prob.p[1], prob.p[2]);
+    }
+
+    #[test]
+    fn portfolio_symmetric_indefinite_covariance_is_rejected() {
+        // Eigenvalues 3 and -1: symmetric, finite, and unmistakably non-convex.
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![1.0, 2.0, 2.0, 1.0]),
+            vec![0.1, 0.2],
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::ExactPsdNotDiagonallyDominant { .. }
+            })
+        ));
+
+        // A zero diagonal coupled to another variable is also indefinite. This
+        // exercises the semidefinite/null-pivot branch rather than negative D.
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![0.0, 1.0, 1.0, 0.0]),
+            vec![0.1, 0.2],
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::ExactPsdNotDiagonallyDominant { row: 0, .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn portfolio_near_indefinite_tolerance_attack_fails_exact_sdd() {
+        // The old global relative LDLᵀ tolerance can mask this -5e-5 eigenvalue
+        // at scale 10^6. It remains visible after the exact 10^-9 lift and the
+        // SDD admission refuses it.
+        let diagonal = 1_000_000.0;
+        let off_diagonal = diagonal + 0.000_05;
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![diagonal, off_diagonal, off_diagonal, diagonal]),
+            vec![0.1, 0.2],
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::ExactPsdNotDiagonallyDominant { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn portfolio_large_finite_matrix_outside_exact_envelope_is_rejected() {
+        let p = portfolio_with_cov(MatrixData::public(1, 1, vec![f64::MAX]), vec![0.1]);
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::ExactPsdLiftOutOfRange { row: 0, col: 0 }
+            })
+        ));
+    }
+
+    #[test]
+    fn portfolio_psd_outside_supported_sdd_family_is_refused() {
+        // [1,2;2,4] = [1,2]ᵀ[1,2] is PSD but row 0 is not diagonally
+        // dominant. Refusal is intentional: fhIR's exact PSD certificate is
+        // sufficient, conservative, and fail-closed rather than a full LDL proof.
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![1.0, 2.0, 2.0, 4.0]),
+            vec![0.1, 0.2],
+        );
+        assert!(matches!(
+            compile(&p),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::ExactPsdNotDiagonallyDominant { row: 0, .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn portfolio_positive_semidefinite_with_null_pivot_compiles() {
+        let p = portfolio_with_cov(
+            MatrixData::public(2, 2, vec![1.0, 0.0, 0.0, 0.0]),
+            vec![0.1, 0.2],
+        );
+        assert!(compile(&p).is_ok());
     }
 
     #[test]

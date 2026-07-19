@@ -1,96 +1,57 @@
-//! Cross-cell joint-turn aggregation: ONE proof binding N per-cell whole-turn
-//! proofs of a SINGLE shared turn (the Silver -> Gold step).
+//! Per-cell DESCRIPTOR PARTICIPANTS: the rotated whole-turn leg the recursion core folds,
+//! the generalized carrier-witness socket, and host-side admission.
 //!
-//! ## What this is, and how it differs from `proof_forest`
+//! What lives here:
 //!
-//! [`proof_forest`](dregg_circuit::proof_forest) links per-step proofs *sequentially*
-//! inside one cell (`prev.NEW_COMMIT == next.OLD_COMMIT`). That is the
-//! happened-before chain *within* a cell's history. It explicitly does **not**
-//! do cross-cell binding (its own docs: "no cross-cell `Σδ = 0` family
-//! binding").
+//! - [`DescriptorParticipant`] / [`RotatedParticipantLeg`] — one cell's whole-turn ROTATED
+//!   multi-table `Ir2BatchProof` over its R=24 cohort descriptor, plus the 38-PI vector it
+//!   attests. The whole-chain recursion core ([`crate::ivc_turn_chain`]) mints its in-circuit
+//!   leaf from this leg via `prove_descriptor_leaf_rotated_with_config`.
+//! - [`CarrierWitness`] and the per-carrier witness bundles — the prover-side re-provable
+//!   sub-proof inputs the chain prover folds against a leg's claimed carrier tuple (the
+//!   fail-closed socket; see the enum docs).
+//! - [`verify_descriptor_participant`] — host admission: the rotated proof re-verifies
+//!   SELECTOR-BOUND against its carried descriptor before any fold. An admission discipline,
+//!   not the soundness boundary (the leaf is re-verified in-circuit at the wrap).
+//! - [`JointAggError`] — the shared error type of the binding-node fold-wires and leaf
+//!   adapters ([`crate::joint_turn_recursive`], the `*_leaf_adapter` modules).
 //!
-//! This module does the **orthogonal** thing the metatheory calls the
-//! *hyperedge* / `SharedTurnId` pullback (`Dregg2.Spec.JointViaHyper`,
-//! `Dregg2.Hyperedge`): take 2+ per-cell whole-turn proofs that all claim to be
-//! participants of the **same** turn, and produce ONE aggregated proof that
-//! verifies them together **and** binds their shared turn identity (CG-2 of the
-//! hyperedge: every leg agrees on `tid`). Per-cell soundness alone cannot supply
-//! this — two individually-valid proofs from *different* turns must be rejected.
-//! That rejection is exactly the cross-cell binding's load-bearing content.
-//!
-//! ## The aggregation AIR
-//!
-//! [`JointTurnAggregationAir`] is a uni-STARK AIR over a width-4 trace, one row
-//! per participating cell:
-//!
-//! - col 0: `shared_turn_id`  — the turn identity this cell's proof attests
-//!   (the `TURN_HASH` public input, projected to one felt). The wide-pullback
-//!   apex: **every row must carry the same value** (CG-2).
-//! - col 1: `cell_commit`     — this cell's post-state commitment (`NEW_COMMIT`
-//!   position 0), the per-cell content folded into the bundle digest.
-//! - col 2: `acc_in`          — commitment hash-chain state before this row.
-//! - col 3: `acc_out = hash_4_to_1([acc_in, shared_turn_id, cell_commit, idx])`
-//!   — the running bundle digest.
-//!
-//! Public inputs `[shared_turn_id, initial_acc(=0), final_acc]`.
-//!
-//! Constraints:
-//!   1. (CG-2, the cross-cell binding) **every** row's `shared_turn_id` equals
-//!      the published `shared_turn_id` public input.  ← rejects mismatched turns
-//!   2. first row `acc_in == initial_acc (== 0)`.
-//!   3. last row `acc_out == final_acc`.
-//!   4. chain continuity `acc_out[i] == acc_in[i+1]`.
-//!
-//! Constraint 1 is the tooth: a bundle whose cells disagree on the turn id (or
-//! disagree with the published id) is UNSAT, even when every per-cell proof is
-//! individually valid. That is precisely "validity != joint membership" — the
-//! `SharedTurnId` pullback enforced at the apex.
-//!
-//! ## The recursive (Gold) binding
-//!
-//! [`JointTurnAggregationAir`] binds the shared-turn-id agreement (CG-2) + the commitment
-//! digest over the N descriptor participants. Under the `recursion` feature it is wrapped in
-//! ONE recursive in-circuit STARK layer via the emberian `plonky3-recursion` fork (driven by
-//! [`crate::joint_turn_recursive`]), so the verifier checks a single succinct recursive proof
-//! instead of re-running the aggregation prover. Each per-cell leaf is the ROTATED multi-table
-//! `Ir2BatchProof` ([`DescriptorParticipant`]), verified in-circuit at the wrap.
-
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-use p3_baby_bear::BabyBear as P3BabyBear;
-use p3_field::PrimeCharacteristicRing;
-use p3_matrix::dense::RowMajorMatrix;
+//! HISTORY (E9, 2026-07-18): this module previously also hosted `JointTurnAggregationAir` —
+//! a hand-written Rust uni-STARK AIR binding N per-cell proofs' shared turn id and folding a
+//! `bundle_digest` — plus its Silver host path (`check_descriptor_joint_preconditions`) and
+//! the Gold recursive fold's binding trace. DELETED as dead scaffolding: the `hash_4_to_1`
+//! digest fold ran host-side only (the published `bundle_digest` was a FREE WITNESS in-AIR),
+//! the `cell_commit` column was read by zero constraints, nothing tied binding rows to the
+//! folded leaves in-circuit, and the layer had zero production callers. The deployed
+//! cross-cell object is the Lean-emitted bilateral aggregation
+//! (`turn/src/aggregate_bilateral_prover.rs`, `EffectVmEmitBilateralAgg.lean`); the abstract
+//! hyperedge/CG-2 spec is `Dregg2.Spec.JointViaHyper`.
 
 use dregg_circuit::effect_vm::pi;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::plonky3_prover::to_p3;
-use dregg_circuit::poseidon2::hash_4_to_1;
 
 // ============================================================================
-// DESCRIPTOR-BACKED PARTICIPANT — the per-cell leaf the recursion/aggregation cores fold.
+// DESCRIPTOR-BACKED PARTICIPANT — the per-cell leaf the whole-chain recursion core folds.
 // ============================================================================
 //
-// The joint-turn consumer's per-cell admission is the verified-by-construction ROTATED
-// multi-table IR-v2 leaf: a descriptor participant carries an `Ir2BatchProof` over its
-// rotated R=24 cohort descriptor, verified SELECTOR-BOUND through the descriptor verifier
-// (the Lean `selectorGate s` tooth makes a sound proof verify under EXACTLY ONE selector —
-// the differential harness's `descriptor_proof_binds_to_its_selector`). The CG-2
-// shared-turn-id binding and the bundle-digest aggregation read PI projections off the
-// rotated leg's prefix, so the cross-cell tooth holds identically.
+// The per-cell admission is the verified-by-construction ROTATED multi-table IR-v2 leaf: a
+// descriptor participant carries an `Ir2BatchProof` over its rotated R=24 cohort descriptor,
+// verified SELECTOR-BOUND through the descriptor verifier (the Lean `selectorGate s` tooth
+// makes a sound proof verify under EXACTLY ONE selector — the differential harness's
+// `descriptor_proof_binds_to_its_selector`).
 
-/// A single cell's whole-turn ROTATED-DESCRIPTOR proof as a joint-turn participant. The leaf the
-/// recursion path folds is the ROTATED multi-table `Ir2BatchProof` (the [`RotatedParticipantLeg`]),
-/// MANDATORY — the participant carries exactly one rotated leg. Host admission
-/// ([`verify_descriptor_participant`]) and the PI projections the aggregator reads
-/// ([`pi::TURN_HASH_BASE`], [`pi::NEW_COMMIT_BASE`]) read the rotated leg's PI prefix (the
-/// rotated 38-PI vector carries the v1 prefix `[0..34)` unchanged — `trace_rotated.rs:233`).
+/// A single cell's whole-turn ROTATED-DESCRIPTOR proof. The leaf the recursion path folds is
+/// the ROTATED multi-table `Ir2BatchProof` (the [`RotatedParticipantLeg`]), MANDATORY — the
+/// participant carries exactly one rotated leg. Host admission
+/// ([`verify_descriptor_participant`]) and the chain-root projections read the rotated leg's
+/// PI vector (the rotated 38-PI vector carries the v1 prefix `[0..34)` unchanged —
+/// `trace_rotated.rs:233` — plus the rotated commit pins at PI 34/35).
 ///
-/// This whole descriptor-participant surface is `recursion`-gated: it feeds the recursion/aggregation
-/// cores ([`crate::ivc_turn_chain`] / [`crate::joint_turn_recursive`]), which compile only under
-/// `recursion`.
+/// This whole descriptor-participant surface is `recursion`-gated: it feeds the whole-chain
+/// recursion core ([`crate::ivc_turn_chain`]), which compiles only under `recursion`.
 pub struct DescriptorParticipant {
-    /// THE ROTATED LEG (Bucket-F mandatory leaf). The recursion cores
-    /// ([`crate::ivc_turn_chain::prove_chain_core_rotated`] /
-    /// [`crate::joint_turn_recursive::prove_joint_core_rotated`]) mint the in-circuit leaf from
+    /// THE ROTATED LEG (Bucket-F mandatory leaf). The recursion core
+    /// ([`crate::ivc_turn_chain::prove_chain_core_rotated`]) mints the in-circuit leaf from
     /// this rotated multi-table `Ir2BatchProof` via
     /// [`crate::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config`]. All PI projections
     /// read its `public_inputs` prefix. `serde`-free (proofs are not serialized on this struct).
@@ -152,6 +113,12 @@ pub enum CarrierWitness {
     /// [`CustomWitnessBundle`]. THE FIRST VARIANT: nothing regresses; the custom fold arm in
     /// `prove_chain_core_rotated` consumes exactly this.
     Custom(CustomWitnessBundle),
+    /// FOLD-WIRED direct-IR2 custom relation.  Unlike [`Self::Custom`], this
+    /// carries an already-authored `EffectVmDescriptor2` + base trace and never
+    /// lowers or re-authors a Rust `CellProgram`.  The chain re-proves that exact
+    /// descriptor under the recursion config and routes it through the same
+    /// state/app-root binding node.
+    CustomIr2(CustomIr2WitnessBundle),
     /// FOLD-WIRED (the 7th, LAST carrier): the bridge carrier's re-provable witness — the
     /// REAL foreign note-spend witness (per the carrier-deployment spec: folding the
     /// binding-only `bridge_action_witness` alone is NOT the sound deployed path — a prover-chosen
@@ -206,6 +173,7 @@ impl CarrierWitness {
     pub fn carrier_name(&self) -> &'static str {
         match self {
             CarrierWitness::Custom(_) => "custom",
+            CarrierWitness::CustomIr2(_) => "custom-ir2",
             CarrierWitness::Bridge(_) => "bridge",
             CarrierWitness::Sovereign(_) => "sovereign",
             CarrierWitness::Factory(_) => "factory",
@@ -229,6 +197,12 @@ impl CarrierWitness {
 impl From<CustomWitnessBundle> for CarrierWitness {
     fn from(bundle: CustomWitnessBundle) -> Self {
         CarrierWitness::Custom(bundle)
+    }
+}
+
+impl From<CustomIr2WitnessBundle> for CarrierWitness {
+    fn from(bundle: CustomIr2WitnessBundle) -> Self {
+        CarrierWitness::CustomIr2(bundle)
     }
 }
 
@@ -261,6 +235,97 @@ pub struct CustomWitnessBundle {
     /// leg's wide descriptor to publish the field octet as a PI (`generate_rotated_custom_wide`'s
     /// field-K exposure / Lean `customFieldKExposure`).
     pub app_root_binding: Option<dregg_circuit::effect_vm::custom_state_binding::AppRootBinding>,
+}
+
+/// Prover-side retention for a Lean-emitted/direct IR2 custom relation.
+///
+/// The normal custom bundle retains a `CellProgram` and named witness map, then
+/// lowers that program to IR2 inside the fold.  This bundle starts at the IR2
+/// source of truth: descriptor + exact base trace + PIs.  It is prover-side only
+/// and is never serialized into the light-client artifact.
+#[derive(Clone, Debug)]
+pub struct CustomIr2VkRecipe {
+    program_bytes: Vec<u8>,
+    air_fingerprint: [u8; 32],
+    verifier_fingerprint_canonical: [u8; 32],
+    proving_system_canonical: Vec<u8>,
+}
+
+impl CustomIr2VkRecipe {
+    /// Build the canonical-v2 recipe used by the custom registry for a
+    /// `VerifierFingerprint::SourceHash` verifier.
+    pub fn source_hash(
+        program_bytes: Vec<u8>,
+        air_fingerprint: [u8; 32],
+        verifier_source_hash: [u8; 32],
+        proving_system_canonical: Vec<u8>,
+    ) -> Self {
+        let mut verifier = blake3::Hasher::new_derive_key("dregg-verifier-fingerprint-v1");
+        verifier.update(&[0]);
+        verifier.update(&verifier_source_hash);
+        Self {
+            program_bytes,
+            air_fingerprint,
+            verifier_fingerprint_canonical: *verifier.finalize().as_bytes(),
+            proving_system_canonical,
+        }
+    }
+
+    /// Parse the recipe's exact program bytes and require byte-authored IR2
+    /// semantics to equal the descriptor that the recursion leaf re-proves.
+    pub fn require_exact_descriptor(
+        &self,
+        descriptor: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    ) -> Result<(), String> {
+        let json = std::str::from_utf8(&self.program_bytes)
+            .map_err(|e| format!("direct-IR2 canonical program bytes are not UTF-8 JSON: {e}"))?;
+        let recipe_descriptor = dregg_circuit::descriptor_ir2::parse_vm_descriptor2(json)
+            .map_err(|e| format!("direct-IR2 canonical program bytes do not parse: {e}"))?;
+        if &recipe_descriptor != descriptor {
+            return Err(
+                "direct-IR2 descriptor differs from canonical-v2 program bytes".to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Canonical `dregg-vk-v2` registry identity, byte-identical to
+    /// `dregg_cell::vk_v2::canonical_vk_v2` for the retained recipe.
+    pub fn canonical_vk_hash(&self) -> [u8; 32] {
+        let mut h = blake3::Hasher::new_derive_key("dregg-vk-v2");
+        h.update(&(self.program_bytes.len() as u64).to_le_bytes());
+        h.update(&self.program_bytes);
+        h.update(&self.air_fingerprint);
+        h.update(&self.verifier_fingerprint_canonical);
+        h.update(&(self.proving_system_canonical.len() as u64).to_le_bytes());
+        h.update(&self.proving_system_canonical);
+        *h.finalize().as_bytes()
+    }
+
+    /// Faithful 8-felt projection used by `Effect::Custom` and the eventual
+    /// full-width leg-to-leaf correlation node.
+    pub fn canonical_vk_felts(&self) -> [BabyBear; 8] {
+        dregg_circuit::effect_vm::bytes32_to_8_limbs(&self.canonical_vk_hash())
+    }
+}
+
+#[derive(Clone)]
+pub struct CustomIr2WitnessBundle {
+    /// Exact emitted descriptor the executor's custom VK identifies.
+    pub descriptor: dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    /// Base rows for the exact descriptor; chip tables are derived by the
+    /// general IR2 prover under the recursion config.
+    pub base_trace: Vec<Vec<BabyBear>>,
+    /// Canonical descriptor public inputs.  Must start `[old8 || new8]`.
+    pub public_inputs: Vec<BabyBear>,
+    /// Exact canonical-v2 registry recipe.  The direct recursion leaf parses
+    /// these bytes back to `descriptor` before proving and exposes the full
+    /// faithful 8-felt VK identity under its recursion root anchor.
+    pub vk_recipe: CustomIr2VkRecipe,
+    /// Mandatory app-root weld.  Direct IR2 is introduced for a sovereign
+    /// decision relation, so silently degrading it to the state-only node is
+    /// not an available construction.
+    pub app_root_binding: dregg_circuit::effect_vm::custom_state_binding::AppRootBinding,
 }
 
 /// FOLD-WIRED (the 7th carrier) bridge-carrier bundle — the prover-side inputs
@@ -1098,7 +1163,7 @@ impl RotatedParticipantLeg {
         before: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
         after: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
         turn_id: Option<BabyBear>,
-        bundle: CustomWitnessBundle,
+        bundle: impl Into<CarrierWitness>,
     ) -> Result<RotatedParticipantLeg, String> {
         use crate::ivc_turn_chain::ir2_leaf_wrap_config;
         use crate::joint_turn_recursive::{CUSTOM_COMMIT_LEN, CUSTOM_COMMIT_PI_LO};
@@ -1136,7 +1201,7 @@ impl RotatedParticipantLeg {
 
         // THE PROOF-BIND COMMITMENT VERSION BOUNDARY (flag-day v2): refuse minting against a
         // registry descriptor still carrying the RETIRED 4-felt exposure (typed, never widened).
-        dregg_circuit::effect_vm_descriptors::require_custom_commit_teeth_v2(&desc)
+        dregg_circuit::effect_vm_descriptors::require_custom_carrier_vk8(&desc)
             .map_err(|e| format!("mint_custom_wide: commitment version boundary: {e}"))?;
 
         if dpis.len() < commit_pi_hi {
@@ -1170,7 +1235,7 @@ impl RotatedParticipantLeg {
             proof,
             descriptor: desc,
             public_inputs: dpis,
-            carrier_witness: Some(CarrierWitness::Custom(bundle)),
+            carrier_witness: Some(bundle.into()),
         })
     }
 
@@ -1204,33 +1269,11 @@ impl RotatedParticipantLeg {
     pub fn new_root(&self) -> BabyBear {
         self.public_inputs[dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT + 1]
     }
-    /// The shared turn identity (the v1 `TURN_HASH` slot, carried in the rotated prefix).
-    pub fn shared_turn_id(&self) -> BabyBear {
-        self.public_inputs[pi::TURN_HASH_BASE]
-    }
-    /// This cell's post-state commitment (`NEW_COMMIT` position 0 — the v1-prefix carrier,
-    /// distinct from `new_root()` which is the rotated v9 commitment at PI 35). The joint
-    /// bundle-digest content reads this v1-prefix slot to stay byte-identical with the Silver
-    /// path's projection.
-    pub fn cell_commit(&self) -> BabyBear {
-        self.public_inputs[pi::NEW_COMMIT_BASE]
-    }
 }
 
 impl DescriptorParticipant {
-    /// The shared turn identity this participant claims (`TURN_HASH` position 0 of the rotated
-    /// leg's carried prefix).
-    pub fn shared_turn_id(&self) -> BabyBear {
-        self.rotated.shared_turn_id()
-    }
-
-    /// This cell's post-state commitment (`NEW_COMMIT` position 0 of the rotated leg's prefix).
-    pub fn cell_commit(&self) -> BabyBear {
-        self.rotated.cell_commit()
-    }
-
     /// Construct a participant from its mandatory ROTATED leg (Bucket-F: the rotated leaf is the
-    /// sole leg the recursion cores fold).
+    /// sole leg the recursion core folds).
     pub fn rotated(rotated: RotatedParticipantLeg) -> Self {
         Self { rotated }
     }
@@ -1284,16 +1327,24 @@ pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize,
 /// selector's rotated descriptor name against `name`. Returns `None` for a name no graduated
 /// selector resolves to (a non-cohort or unknown descriptor).
 ///
-/// **The two-name subtlety (Bucket-F fix).** The staged registry TSV row is
+/// **The two-name subtlety (Bucket-F fix).** The registry TSV row is
 /// `WIRE-name \t DISPLAY-name \t json`, and the parsed descriptor's `.name` is the *DISPLAY*
 /// name (the json's internal `"name"` field, e.g. `"dregg-effectvm-transfer-v1-rot24-v3-staged"`),
 /// NOT the wire name [`rotated_descriptor_name`] returns (`"transferVmDescriptor2R24"`). So this
 /// maps a selector → its wire name → the TSV row → that row's DISPLAY name, and compares THAT to
 /// the leg's `desc.name`. (The earlier version compared the wire name directly to `desc.name` and
 /// therefore rejected every valid rotated leg.)
+///
+/// **The map reads the WIDE registry** — the registry participant legs are actually minted from
+/// (`dregg_turn::rotation_witness::mint_rotated_participant_leg` dispatches the WIDE producer, and
+/// the node retention path encodes/decodes wide). It previously read the bare 1-felt
+/// `V3_STAGED_REGISTRY_TSV`, which happened to work only because 52 of the 57 shared members carry
+/// byte-identical DISPLAY names in both registries — the 5 heap-open/fields-open flip members
+/// (`createCell`/`heapWrite`/`noteCreate`/`noteSpend`/`refusal`) have DIFFERENT wide display names,
+/// so their (wide-minted) legs were silently inadmissible through this gate.
 fn rotated_descriptor_selector(name: &str) -> Option<usize> {
     use dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name;
-    use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
+    use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
     for &s in dregg_circuit::proof_forest::CUTOVER_READY_SELECTORS {
         let wire = match rotated_descriptor_name(s) {
             Some(w) => w,
@@ -1301,7 +1352,7 @@ fn rotated_descriptor_selector(name: &str) -> Option<usize> {
         };
         // Find the registry row keyed by this selector's WIRE name; its DISPLAY name (field 1) is
         // the json-internal `name` the parsed descriptor carries.
-        let display = V3_STAGED_REGISTRY_TSV.lines().find_map(|line| {
+        let display = WIDE_REGISTRY_STAGED_TSV.lines().find_map(|line| {
             let mut it = line.splitn(3, '\t');
             if it.next() == Some(wire) {
                 it.next() // the DISPLAY name (== desc.name)
@@ -1316,246 +1367,19 @@ fn rotated_descriptor_selector(name: &str) -> Option<usize> {
     None
 }
 
-/// CG-2 host check + per-cell descriptor soundness over descriptor participants. Verifies
-/// (1) `>= 2` participants, (2) each per-cell ROTATED proof verifies standalone +
-/// selector-binds through [`verify_descriptor_participant`], (3) all participants agree on the
-/// shared turn id. Returns the agreed shared turn id. (The aggregation trace/proof is produced
-/// from the same PI projections the recursive binding leaf folds.)
-pub fn check_descriptor_joint_preconditions(
-    participants: &[DescriptorParticipant],
-) -> Result<BabyBear, JointAggError> {
-    if participants.len() < 2 {
-        return Err(JointAggError::TooFewParticipants {
-            count: participants.len(),
-        });
-    }
-    for (i, p) in participants.iter().enumerate() {
-        verify_descriptor_participant(p).map_err(|e| JointAggError::ParticipantProofInvalid {
-            index: i,
-            reason: e,
-        })?;
-    }
-    let shared_tid = participants[0].shared_turn_id();
-    for (i, p) in participants.iter().enumerate() {
-        if p.shared_turn_id() != shared_tid {
-            return Err(JointAggError::SharedTurnIdMismatch {
-                index: i,
-                expected: shared_tid.0,
-                found: p.shared_turn_id().0,
-            });
-        }
-    }
-    Ok(shared_tid)
-}
-
-// ============================================================================
-// JointTurnAggregationAir
-// ============================================================================
-
-/// AIR binding the shared-turn-id agreement (CG-2) across N per-cell proofs and
-/// folding their commitments into a single bundle digest.
-///
-/// Width 4: `[shared_turn_id, cell_commit, acc_in, acc_out]`.
-/// Public inputs: `[shared_turn_id, initial_acc, final_acc]`.
-pub struct JointTurnAggregationAir;
-
-impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for JointTurnAggregationAir {
-    fn width(&self) -> usize {
-        4
-    }
-
-    fn num_public_values(&self) -> usize {
-        3 // [shared_turn_id, initial_acc, final_acc]
-    }
-
-    fn main_next_row_columns(&self) -> Vec<usize> {
-        (0..4).collect()
-    }
-}
-
-impl<AB: AirBuilder> Air<AB> for JointTurnAggregationAir {
-    fn eval(&self, builder: &mut AB) {
-        let main = builder.main();
-        let local = main.current_slice();
-        let next = main.next_slice();
-
-        let row_tid: AB::Expr = local[0].into();
-        let acc_in: AB::Expr = local[2].into();
-        let acc_out: AB::Expr = local[3].into();
-        let next_acc_in: AB::Expr = next[2].into();
-
-        let public_values = builder.public_values();
-        let pub_tid: AB::Expr = public_values[0].into();
-        let initial_acc: AB::Expr = public_values[1].into();
-        let final_acc: AB::Expr = public_values[2].into();
-
-        // Constraint 1 (CG-2, THE cross-cell binding): EVERY row's shared_turn_id
-        // equals the published shared turn id. A bundle whose any cell disagrees
-        // on the turn id is UNSAT, regardless of per-cell validity. This is the
-        // `SharedTurnId` pullback / hyperedge apex agreement.
-        builder.assert_zero(row_tid - pub_tid);
-
-        // Constraint 2: first row accumulator is the initial value.
-        builder
-            .when_first_row()
-            .assert_zero(acc_in.clone() - initial_acc);
-
-        // Constraint 3: last row accumulator_out is the final digest.
-        builder
-            .when_last_row()
-            .assert_zero(acc_out.clone() - final_acc);
-
-        // Constraint 4: chain continuity (acc_out[i] == acc_in[i+1]).
-        builder.when_transition().assert_zero(acc_out - next_acc_in);
-    }
-}
-
-// ============================================================================
-// Trace generation
-// ============================================================================
-
-/// The pair-level core of the joint binding trace: one row per
-/// `(shared_turn_id, cell_commit)` pair. The descriptor-participant Gold path
-/// ([`recursion_binding_trace_descriptor_rotated`]) builds it from each rotated leg's
-/// PI projections.
-fn generate_joint_trace_pairs_unchecked(
-    pairs: &[(BabyBear, BabyBear)],
-    published_tid: BabyBear,
-) -> (Vec<[BabyBear; 4]>, Vec<BabyBear>) {
-    let n = pairs.len();
-    let padded_len = n.next_power_of_two().max(2);
-    let mut trace: Vec<[BabyBear; 4]> = Vec::with_capacity(padded_len);
-    let mut accumulator = BabyBear::ZERO;
-
-    for (i, &(tid, commit)) in pairs.iter().enumerate() {
-        let idx = BabyBear::new(i as u32);
-        let acc_out = hash_4_to_1(&[accumulator, tid, commit, idx]);
-        trace.push([tid, commit, accumulator, acc_out]);
-        accumulator = acc_out;
-    }
-
-    // Pad to power of two. Padding rows carry the published turn id (so
-    // constraint 1 still holds on them) with zero commitment, continuing the
-    // chain.
-    for i in n..padded_len {
-        let idx = BabyBear::new(i as u32);
-        let acc_out = hash_4_to_1(&[accumulator, published_tid, BabyBear::ZERO, idx]);
-        trace.push([published_tid, BabyBear::ZERO, accumulator, acc_out]);
-        accumulator = acc_out;
-    }
-
-    let final_acc = trace.last().unwrap()[3];
-    let pis = vec![published_tid, BabyBear::ZERO, final_acc];
-    (trace, pis)
-}
-
-fn trace_to_matrix(trace: &[[BabyBear; 4]]) -> RowMajorMatrix<P3BabyBear> {
-    let values: Vec<P3BabyBear> = trace
-        .iter()
-        .flat_map(|row| row.iter().map(|&v| to_p3(v)))
-        .collect();
-    RowMajorMatrix::new(values, 4)
-}
-
-// ============================================================================
-// Shared seams reused by the Gold (recursive) path.
-// ============================================================================
-
-/// Build the [`JointTurnAggregationAir`] binding trace + public inputs for the Gold recursive path's
-/// DESCRIPTOR-backed per-cell ROTATED proofs. Same host-side CG-2 rejection (a disagreeing turn
-/// id errors here), same trace recipe — reads each cell's ROTATED post-state commitment
-/// (PI 35, `new_root()`) as the bundle-digest content and the rotated leg's `shared_turn_id`
-/// (carried in the rotated prefix). Used by
-/// [`crate::joint_turn_recursive::prove_joint_core_rotated`].
-///
-/// (Bucket-F: the v1 `recursion_binding_trace_descriptor` — which read the v1-prefix
-/// `cell_commit` — was deleted with the v1 joint core; the rotated commitment is the chain root
-/// the in-circuit fold binds.)
-pub fn recursion_binding_trace_descriptor_rotated(
-    participants: &[&DescriptorParticipant],
-) -> Result<(RowMajorMatrix<P3BabyBear>, Vec<BabyBear>), JointAggError> {
-    if participants.len() < 2 {
-        return Err(JointAggError::TooFewParticipants {
-            count: participants.len(),
-        });
-    }
-    let legs: Vec<&RotatedParticipantLeg> = participants.iter().map(|p| &p.rotated).collect();
-    let shared_tid = legs[0].shared_turn_id();
-    for (i, leg) in legs.iter().enumerate() {
-        if leg.shared_turn_id() != shared_tid {
-            return Err(JointAggError::SharedTurnIdMismatch {
-                index: i,
-                expected: shared_tid.0,
-                found: leg.shared_turn_id().0,
-            });
-        }
-    }
-    let pairs: Vec<(BabyBear, BabyBear)> = legs
-        .iter()
-        .map(|leg| (leg.shared_turn_id(), leg.new_root()))
-        .collect();
-    let (trace, pis) = generate_joint_trace_pairs_unchecked(&pairs, shared_tid);
-    Ok((trace_to_matrix(&trace), pis))
-}
-
 // ============================================================================
 // Errors
 // ============================================================================
 
-/// Why a joint-turn aggregation failed.
+/// Why an in-circuit binding-node aggregation (or a leaf-adapter mint) failed — the shared
+/// error type of [`crate::joint_turn_recursive`]'s `prove_*_binding_node*` fold-wires and the
+/// `*_leaf_adapter` modules. (The joint-turn-fold-specific variants died with the joint layer —
+/// E9, see the module header.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JointAggError {
-    /// Fewer than 2 participants — a joint turn needs at least 2 cells.
-    TooFewParticipants {
-        /// How many were supplied.
-        count: usize,
-    },
-    /// A participant's PI vector is too short to carry the turn-id / commit
-    /// projections.
-    MalformedPublicInputs {
-        /// The malformed participant.
-        index: usize,
-        /// Its PI length.
-        len: usize,
-    },
-    /// **The load-bearing rejection.** Participant `index` claims a different
-    /// shared turn id than the others — it is NOT a participant of this joint
-    /// turn. Per-cell validity does not make it one.
-    SharedTurnIdMismatch {
-        /// The disagreeing participant.
-        index: usize,
-        /// The turn id the bundle agreed on (felt as u32).
-        expected: u32,
-        /// The turn id this participant carried (felt as u32).
-        found: u32,
-    },
-    /// A participant's per-cell proof failed to verify against its public
-    /// inputs.
-    ParticipantProofInvalid {
-        /// The participant whose proof failed.
-        index: usize,
-        /// The underlying verification error.
-        reason: String,
-    },
-    /// The aggregation STARK proof failed to verify.
+    /// The aggregation STARK proof failed to verify (or a combine/expose precondition failed).
     AggregationProofInvalid {
         /// The verification error.
-        reason: String,
-    },
-    /// **The VK pin refused the root** (Gold recursive path): the root proof's
-    /// verifier-key fingerprint does not match the caller's trust anchor — a
-    /// proof of a DIFFERENT circuit (the from-scratch-prover route).
-    VkFingerprintMismatch {
-        /// The anchor fingerprint the caller expected (hex).
-        expected: String,
-        /// The fingerprint the presented root actually has (hex).
-        found: String,
-    },
-    /// **The claimed joint publics are unattested** (Gold recursive path): the
-    /// carried `shared_turn_id`/`bundle_digest` failed to verify as the public
-    /// inputs of the carried binding proof — a relabeled public claim.
-    ClaimedPublicsUnattested {
-        /// The underlying verification error.
         reason: String,
     },
 }
@@ -1563,37 +1387,9 @@ pub enum JointAggError {
 impl core::fmt::Display for JointAggError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            JointAggError::TooFewParticipants { count } => {
-                write!(f, "joint turn needs >= 2 participants, got {count}")
-            }
-            JointAggError::MalformedPublicInputs { index, len } => {
-                write!(f, "participant {index} PI malformed: len {len}")
-            }
-            JointAggError::SharedTurnIdMismatch {
-                index,
-                expected,
-                found,
-            } => write!(
-                f,
-                "participant {index} shared turn id {found} != bundle turn id {expected} \
-                 (not a participant of this joint turn)"
-            ),
-            JointAggError::ParticipantProofInvalid { index, reason } => {
-                write!(f, "participant {index} proof invalid: {reason}")
-            }
             JointAggError::AggregationProofInvalid { reason } => {
                 write!(f, "aggregation proof invalid: {reason}")
             }
-            JointAggError::VkFingerprintMismatch { expected, found } => write!(
-                f,
-                "joint root verifier-key fingerprint {found} != trust anchor {expected} \
-                 (a proof of a different circuit — refused)"
-            ),
-            JointAggError::ClaimedPublicsUnattested { reason } => write!(
-                f,
-                "claimed joint publics are not attested by the carried binding proof \
-                 (relabeled shared_turn_id/bundle_digest): {reason}"
-            ),
         }
     }
 }

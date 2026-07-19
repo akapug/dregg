@@ -84,6 +84,8 @@ futures-channel = { version = "0.3", default-features = false, features = ["allo
 [dev-dependencies]
 dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
+fhegg-solver = { path = "../fhegg-solver" }
+fhir = { path = "../fhir" }
 # THE FRI SOUNDNESS LEDGER (tests/fri_params_soundness_budget.rs): links the compiled Lean archive so
 # the params gate CALLS `@[export] dregg_fri_ledger` (the verified `Dregg2.Circuit.FriLedger.friLedger`)
 # for each shipped config's soundness numbers, instead of re-deriving the capacity/Johnson/per-fold
@@ -97,7 +99,6 @@ dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 # protocol deps) — we consume its `clearing::{Order, clear, allocate}` here, never add a
 # note/Poseidon dep to it. Dev-dep-scoped so the library's normal + wasm32 builds are
 # untouched (tests are native-only).
-fhegg-solver = { path = "../fhegg-solver" }
 # The recursion/shielded integration tests (moved from circuit/tests/) build real
 # turns. dev-dep cycle (turn → circuit-prove) is permitted by Cargo.
 dregg-turn = { path = "../turn" }

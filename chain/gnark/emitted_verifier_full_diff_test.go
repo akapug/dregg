@@ -187,6 +187,11 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 	claim := fx.TablePublics[fx.ClaimInstance]
 	assignVerifierFullPublics(c, claim)
 
+	// Bake the VK pins (the twins of allocSettlementCircuit's) so Define's shrink-VK
+	// and apex-VK pins solve against the real proof; the block-2b self-check below
+	// uses c.vkPreprocessedRoot.
+	bakeVerifierFullVkPins(t, c, fx, ex)
+
 	// Precompute the real per-query commit-phase Merkle openings + final evals.
 	qms := make([]realQueryMerkle, len(fx.Queries))
 	for qi := range fx.Queries {
@@ -296,7 +301,15 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 						t.Fatalf("query %d round %d: %d opened row limbs != descriptor width sum %d",
 							q, ri, nRows, sumInts(rw[ri]))
 					}
-					// committed input root (batchData var R).
+					// committed input root (batchData var R). NATIVE SELF-CHECK: the
+					// preprocessed-round root the shrink-VK pin binds must equal the baked
+					// constant, so a circuit rejection of the pin is a REAL divergence.
+					if ri == preprocessedPcsRound {
+						if got := frToBig(roots[ri]); got.Cmp(c.vkPreprocessedRoot) != 0 {
+							t.Fatalf("query %d: preprocessed-round (PCS round %d) input root != baked "+
+								"shrink-VK pin constant — extraction bug, NOT an emit-circuit divergence", q, ri)
+						}
+					}
 					w = append(w, frToBig(roots[ri]))
 					// (sibling, path bit) per step (batchData var R+1+2s / +1).
 					reduced := fx.Queries[q].ExpectedIndex >> uint(logMax-maxLh)
@@ -370,12 +383,11 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 			}
 
 		case "AssertIsEqual":
-			// block 5 — the real 25 claim lanes; block-5 Define equates each
-			// against the exposed public-statement lane (both = claim), so this
-			// segment binding holds.
-			for i := 0; i < g.Count; i++ {
-				w = append(w, claim[i])
-			}
+			// block 5 — NO witness consumed. Define binds the block-3 ExposeClaim
+			// claim channel (captured during block 3, ExposeClaimAir-bound to the
+			// committed trace) to the exposed public statement; the claim lanes live
+			// in block 3's public-value feed, not a fresh bank slot, so nothing is
+			// appended here (WitnessLen agrees: block 5 draws zero variables).
 		}
 	}
 
@@ -385,6 +397,22 @@ func assignVerifierFull(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtr
 	}
 	c.W = w
 	return c
+}
+
+// bakeVerifierFullVkPins sets the shrink-VK + apex-VK pin constants on an
+// emit-driven circuit — the twins of allocSettlementCircuit's vkPreprocessedRoot /
+// apexPreprocessedCommit. The shrink-VK constant is the fixture's preprocessed
+// (VK-core) commitment root (shrinkPreprocessedRoot); the apex-VK constants are
+// the DERIVED deployed apex identity (apexPreprocessedCommitConstants →
+// loadApexVkIdentity, whose RecursionVk fingerprint is asserted equal to the
+// governance-pinned DreggApexRecursionVk anchor at load — NOT read from the proof
+// fixture). Both the structural (compiled) circuit and the witness circuit carry
+// them (test.IsSolved compiles the first arg), so the pins are compiled in and
+// solved against the real proof.
+func bakeVerifierFullVkPins(t *testing.T, c *VerifierFullCircuit, fx *shrinkRealFixture, ex *shrinkStarkExtract) {
+	t.Helper()
+	c.vkPreprocessedRoot = shrinkPreprocessedRoot(t, fx, ex.loc)
+	c.apexPreprocessedCommit = apexPreprocessedCommitConstants(t)
 }
 
 // assignVerifierFullPublics fills the exposed 25-lane statement in the pinned
@@ -558,6 +586,9 @@ func TestEmittedVerifierFullDifferential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("alloc emit-driven circuit: %v", err)
 	}
+	// Bake the VK pins onto the STRUCTURAL circuit (test.IsSolved compiles the first
+	// arg) so the shrink-VK + apex-VK pins are part of the compiled constraint system.
+	bakeVerifierFullVkPins(t, emitAlloc, fx, ex)
 	emitErr := test.IsSolved(emitAlloc, assignVerifierFull(t, fx, ex, sym), field)
 	if emitErr == nil {
 		t.Logf("emit-driven VerifierFullCircuit on real proof: ACCEPT")
@@ -604,6 +635,8 @@ func TestEmittedVerifierFullBlock3BindsRealProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("alloc emit-driven circuit: %v", err)
 	}
+	// Bake the VK pins onto the STRUCTURAL circuit so they are compiled + solved.
+	bakeVerifierFullVkPins(t, emitAlloc, fx, ex)
 
 	// ACCEPT: block 3 now clears on the real proof (as does every block).
 	if err := test.IsSolved(emitAlloc, assignVerifierFull(t, fx, ex, sym), field); err != nil {
@@ -636,5 +669,71 @@ func TestEmittedVerifierFullBlock3BindsRealProof(t *testing.T) {
 	if err := test.IsSolved(emitAlloc, canary, field); err == nil {
 		t.Fatal("emit-driven circuit ACCEPTED a tampered block-3 opened value — the " +
 			"quotient-identity constraint does not bind the DAG evaluation")
+	}
+}
+
+// TestEmittedVerifierFullStatementAndVkPinsBind is the LAST-BLOCK gate: block 5's
+// 25-lane settlement statement bind and the shrink-VK + apex-VK fingerprint pins
+// now bind the REAL proof, and each is load-bearing (not the fresh-wire /
+// tautology / absent form the cycle-1 measure found). Three mutation teeth, each
+// with every OTHER block honest:
+//
+//  1. STATEMENT (block 5): a public statement that disagrees with the proof's
+//     exposed claim (num_turns+1) is REJECTED. Block 5 equates the block-3
+//     ExposeClaim claim channel — not a forgeable fresh witness (block 5 draws
+//     ZERO bank variables) — against the public lanes, so a settled statement the
+//     proof does not attest cannot pass.
+//  2. SHRINK-VK pin (tooth 1): a WRONG baked preprocessed-commitment root rejects
+//     the honest proof — the block-2b preprocessed-round root the pin binds is the
+//     real proof's VK-core, so the pin genuinely constrains it (were the pin absent,
+//     a wrong constant would be inert and the proof would still ACCEPT).
+//  3. APEX-VK pin (tooth 2): a WRONG baked apex VK-core lane rejects the honest
+//     proof — the claim channel's re-exposed VK-core lanes (25..33) are bound to
+//     the pinned apex commitment, so a same-shape non-deployed apex cannot settle.
+//
+// The floor (honest proof + honest pins ACCEPTs) is asserted by
+// TestEmittedVerifierFullBlock3BindsRealProof; here the teeth are the point.
+func TestEmittedVerifierFullStatementAndVkPinsBind(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	ex := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
+	field := ecc.BN254.ScalarField()
+	vf := loadVerifierFullT(t)
+
+	// --- tooth 1: statement bind. Honest structural circuit; tampered public. ---
+	stmtAlloc, err := AllocVerifierFullCircuit(vf, sym)
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	bakeVerifierFullVkPins(t, stmtAlloc, fx, ex)
+	badStmt := assignVerifierFull(t, fx, ex, sym)
+	badStmt.NumTurns = uint32(fx.TablePublics[fx.ClaimInstance][2*DigestWidth]) + 1
+	if err := test.IsSolved(stmtAlloc, badStmt, field); err == nil {
+		t.Fatal("STATEMENT BIND: a public statement (num_turns+1) the proof does not attest " +
+			"was ACCEPTED — block 5 does not bind the exposed-claim channel to the public lanes")
+	}
+
+	// --- tooth 2: shrink-VK pin. Wrong baked preprocessed root; honest witness. ---
+	vkAlloc, err := AllocVerifierFullCircuit(vf, sym)
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	bakeVerifierFullVkPins(t, vkAlloc, fx, ex)
+	vkAlloc.vkPreprocessedRoot = new(big.Int).Add(vkAlloc.vkPreprocessedRoot, big.NewInt(1))
+	if err := test.IsSolved(vkAlloc, assignVerifierFull(t, fx, ex, sym), field); err == nil {
+		t.Fatal("SHRINK-VK PIN: a WRONG baked preprocessed-commitment root ACCEPTED the honest " +
+			"proof — the shrink-VK pin is absent or does not constrain the block-2b preprocessed root")
+	}
+
+	// --- tooth 3: apex-VK pin. Wrong baked apex VK-core lane; honest witness. ---
+	apexAlloc, err := AllocVerifierFullCircuit(vf, sym)
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	bakeVerifierFullVkPins(t, apexAlloc, fx, ex)
+	apexAlloc.apexPreprocessedCommit[0] = new(big.Int).Add(apexAlloc.apexPreprocessedCommit[0], big.NewInt(1))
+	if err := test.IsSolved(apexAlloc, assignVerifierFull(t, fx, ex, sym), field); err == nil {
+		t.Fatal("APEX-VK PIN: a WRONG baked apex VK-core lane ACCEPTED the honest proof — the " +
+			"apex-VK pin is absent or does not bind the claim channel's re-exposed VK-core lanes")
 	}
 }

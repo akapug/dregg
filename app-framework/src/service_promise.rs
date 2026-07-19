@@ -929,7 +929,12 @@ mod tests {
     /// The provider's committed transition is a GENUINE minted [`ProvenReceipt`]: its
     /// wide endpoints ARE what the provider promises (`expected_pre/post_commitment`),
     /// and its verified EffectVM STARK is what fulfills. Heavy: mints one real proof.
-    fn fund_one() -> (ServicePromiseExchange, ServiceEscrow, WideLedger, ProvenReceipt) {
+    fn fund_one() -> (
+        ServicePromiseExchange,
+        ServiceEscrow,
+        WideLedger,
+        ProvenReceipt,
+    ) {
         let service = ServiceId::of(CellId::from_bytes([0x5e; 32]), "render-report");
         let service_turn_hash = [0xAB; 32];
         let proven = dregg_turn::mint_transfer_proven_receipt(service_turn_hash, 7);

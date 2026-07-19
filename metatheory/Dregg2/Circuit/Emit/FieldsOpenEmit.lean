@@ -14,9 +14,10 @@ GENTIAN tooth (`circuit/tests/fields_root_gentian_weld.rs`) refutes.
 REUSE: the node-recompose spine is leaf-AGNOSTIC (`DeployedCapOpen.nodeLookup`/`nodeInputs`/
 `nodeInputs_eval`/`dir_zero_or_one` over `CapOpenCols`, rides the ONE `node8` chip), so the fields
 membership reuses it verbatim and re-instantiates the digest scheme at `Fields8Scheme` (`fieldsNodeOf8`,
-`fieldsLeafDigest8`). The SOLE fields-specific material is the arity-2 leaf absorb (`fieldsLeafLookup`,
-`fieldsLeafDigest_sound8`) — the fields leaf is `(addr, value)`, not a 7-field `CapLeaf` — and the
-CONSTANT-key bind (`constEqGate`, the audit slot is keyed at `refusalAuditKeyFelt`, not a runtime column).
+`fieldsLeafDigest8`). The SOLE fields-specific material is the arity-3 IMT leaf absorb (`fieldsLeafLookup`,
+`fieldsLeafDigest_sound8`) — the fields leaf is the gap-#5 IMT `(addr, value, nextAddr)`, not a 7-field
+`CapLeaf` — and the CONSTANT-key bind (`constEqGate`, the audit slot is keyed at `refusalAuditKeyFelt`,
+not a runtime column).
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY through the named WIDE
@@ -50,30 +51,40 @@ open Dregg2.Circuit.DescriptorIR2 (VmTrace envAt)
 
 set_option autoImplicit false
 
-/-! ## §0 — the fields leaf columns + the arity-2 leaf absorb (the SOLE fields-specific chip lookup). -/
+/-! ## §0 — the fields leaf columns + the arity-3 IMT leaf absorb (the SOLE fields-specific chip lookup). -/
 
-/-- The `(addr, value)` fields leaf pair read off the row's leaf columns 0/1. -/
-def fieldsLeafPairOf (c : CapOpenCols) (env : VmRowEnv) : ℤ × ℤ :=
-  (env.loc (c.leaf 0), env.loc (c.leaf 1))
+/-- The LINKED `(addr, value, nextAddr)` fields leaf read off the row's leaf columns 0/1/2. -/
+def fieldsLeafTripleOf (c : CapOpenCols) (env : VmRowEnv) : ℤ × ℤ × ℤ :=
+  (env.loc (c.leaf 0), env.loc (c.leaf 1), env.loc (c.leaf 2))
 
-/-- The 2 fields-leaf column EXPRESSIONS `[addr, value]` (the arity-2 chip absorb's input tuple). -/
+/-- The 3 fields-leaf column EXPRESSIONS `[addr, value, nextAddr]` (the arity-3 chip absorb's input
+tuple). -/
 def fieldsLeafInputs (c : CapOpenCols) : List EmittedExpr :=
-  [EmittedExpr.var (c.leaf 0), EmittedExpr.var (c.leaf 1)]
+  [EmittedExpr.var (c.leaf 0), EmittedExpr.var (c.leaf 1), EmittedExpr.var (c.leaf 2)]
 
-/-- The fields leaf inputs evaluate to exactly `[addr, value]` of the decoded pair. -/
+/-- The fields leaf inputs evaluate to exactly `[addr, value, nextAddr]` of the decoded triple. -/
 theorem fieldsLeafInputs_eval (c : CapOpenCols) (env : VmRowEnv) :
     (fieldsLeafInputs c).map (·.eval env.loc)
-      = [(fieldsLeafPairOf c env).1, (fieldsLeafPairOf c env).2] := by
-  simp [fieldsLeafInputs, fieldsLeafPairOf, EmittedExpr.eval]
+      = [(fieldsLeafTripleOf c env).1, (fieldsLeafTripleOf c env).2.1,
+         (fieldsLeafTripleOf c env).2.2] := by
+  simp [fieldsLeafInputs, fieldsLeafTripleOf, EmittedExpr.eval]
 
 /-- **`fieldsPermOut S8`** — the WIDE permutation output the shared `node8` chip realizes for the fields
 scheme: the 8 squeezed lanes of `S8.chipAbsorb8` read as a `List ℤ`. -/
 def fieldsPermOut (S8 : Fields8Scheme) : List ℤ → List ℤ := fun xs => List.ofFn (S8.chipAbsorb8 xs)
 
-/-- The 8-felt fields-leaf chip lookup tuple: absorb the 2 fields-leaf columns, output = the 8 bound
+/-- The 8-felt fields-leaf chip lookup tuple: absorb the 3 fields-leaf columns, output = the 8 bound
 leaf-digest columns. -/
 def fieldsLeafLookup (c : CapOpenCols) : Lookup :=
   { table := .poseidon2, tuple := chipLookupTupleN (fieldsLeafInputs c) (digestCols c.leafDigest) }
+
+-- REGRESSION TOOTH (gap-#5 IMT arity): the emitted fields-leaf lookup absorbs EXACTLY 3 inputs —
+-- the deployed `HeapLeaf::digest8` (the fields tree IS a `CanonicalHeapTree8`) absorbs
+-- `[addr, value, next_addr]` (arity 3). An arity-2 emit would request a chip row the digest8 provide
+-- never has, reddening the honest refusal fields-write path. Pins the arity at emit time.
+#guard (fieldsLeafInputs (capOpenCols 100)).length == 3
+#guard (fieldsLeafInputs (capOpenCols 100)) == [EmittedExpr.var ((capOpenCols 100).leaf 0),
+  EmittedExpr.var ((capOpenCols 100).leaf 1), EmittedExpr.var ((capOpenCols 100).leaf 2)]
 
 /-- A constant-key equality gate: `col − k = 0`, i.e. the column HOLDS the compile-time constant `k`. The
 fields audit slot is keyed at the CONSTANT `refusalAuditKeyFelt`, so its key-bind uses this gate (heap used
@@ -88,7 +99,7 @@ theorem constEqGate_eval (col : Nat) (k : ℤ) (env : VmRowEnv) :
 /-! ## §1 — the fields membership core + the node/leaf digest soundness (re-instantiated at `Fields8Scheme`). -/
 
 /-- **`FieldsMembershipCore tf c env`** — the four facts the 8-felt fields Merkle fold consumes: the
-arity-2 leaf absorb, the per-level `node8` absorbs (SHARED with cap — the same `nodeLookup`), direction
+arity-3 leaf absorb, the per-level `node8` absorbs (SHARED with cap — the same `nodeLookup`), direction
 booleanity, and the (8-lane) root pin. The fields twin of `DeployedCapOpen.MembershipCore`. -/
 structure FieldsMembershipCore (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv) : Prop where
   leafHashed : (fieldsLeafLookup c).holdsAt tf env
@@ -97,12 +108,13 @@ structure FieldsMembershipCore (tf : TraceFamily) (c : CapOpenCols) (env : VmRow
   rootPinned : ∀ i : Fin 8, (rootPinGate c i).eval env.loc = 0
 
 /-- **`fieldsLeafDigest_sound8`** — under a SOUND WIDE chip table, the 8 leaf-digest columns carry the
-genuine native-8-felt `fieldsLeafDigest8 S8 (addr, value)`. The fields twin of `heapLeafDigest_sound8`. -/
+genuine native-8-felt `fieldsLeafDigest8 S8 (addr, value, nextAddr)`. The fields twin of
+`heapLeafDigest_sound8` (arity-3 IMT leaf). -/
 theorem fieldsLeafDigest_sound8 (S8 : Fields8Scheme)
     (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv)
     (hChip : ChipTableSoundN (fieldsPermOut S8) (tf .poseidon2))
     (hcore : FieldsMembershipCore tf c env) :
-    groupVal env c.leafDigest = fieldsLeafDigest8 S8 (fieldsLeafPairOf c env) := by
+    groupVal env c.leafDigest = fieldsLeafDigest8 S8 (fieldsLeafTripleOf c env) := by
   have hlen : (fieldsLeafInputs c).length ≤ CHIP_RATE := by
     simp [fieldsLeafInputs, CHIP_RATE]
   have hmem : (chipLookupTupleN (fieldsLeafInputs c) (digestCols c.leafDigest)).map (·.eval env.loc)
@@ -113,8 +125,9 @@ theorem fieldsLeafDigest_sound8 (S8 : Fields8Scheme)
   have h := chip_lookup_sound_N (fieldsPermOut S8) (tf .poseidon2) hChip env.loc (fieldsLeafInputs c)
     (digestCols c.leafDigest) hlen hmem
   rw [digestCols_map, fieldsLeafInputs_eval] at h
-  have hreal : fieldsPermOut S8 [(fieldsLeafPairOf c env).1, (fieldsLeafPairOf c env).2]
-      = List.ofFn (fieldsLeafDigest8 S8 (fieldsLeafPairOf c env)) := rfl
+  have hreal : fieldsPermOut S8 [(fieldsLeafTripleOf c env).1, (fieldsLeafTripleOf c env).2.1,
+      (fieldsLeafTripleOf c env).2.2]
+      = List.ofFn (fieldsLeafDigest8 S8 (fieldsLeafTripleOf c env)) := rfl
   rw [hreal] at h
   exact List.ofFn_inj.mp h
 
@@ -196,7 +209,7 @@ theorem fieldsOpen_recompose8 (S8 : Fields8Scheme)
     (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv)
     (hChip : ChipTableSoundN (fieldsPermOut S8) (tf .poseidon2))
     (hcore : FieldsMembershipCore tf c env) :
-    recomposeUp8 S8 (fieldsLeafDigest8 S8 (fieldsLeafPairOf c env)) (pathOf8 c env DEPTH)
+    recomposeUp8 S8 (fieldsLeafDigest8 S8 (fieldsLeafTripleOf c env)) (pathOf8 c env DEPTH)
       = groupVal env c.capRoot := by
   have hfold := fieldsRecompose_reaches_cur8 S8 tf c env hChip hcore DEPTH (le_refl _)
   have hleaf := fieldsLeafDigest_sound8 S8 tf c env hChip hcore
@@ -222,22 +235,25 @@ theorem fieldsOpen_writesTo8 (S8 : Fields8Scheme)
     (hAfter  : FieldsMembershipCore tf cAfter env)
     (hsib : cAfter.sib = cBefore.sib)
     (hdir : cAfter.dir = cBefore.dir)
-    (hkey : (fieldsLeafPairOf cAfter env).1 = (fieldsLeafPairOf cBefore env).1) :
+    (hkey : (fieldsLeafTripleOf cAfter env).1 = (fieldsLeafTripleOf cBefore env).1)
+    (hnext : (fieldsLeafTripleOf cAfter env).2.2 = (fieldsLeafTripleOf cBefore env).2.2) :
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.fieldsWritesTo8 S8
         (groupVal env cBefore.capRoot)
-        ((fieldsLeafPairOf cBefore env).1) ((fieldsLeafPairOf cAfter env).2)
+        ((fieldsLeafTripleOf cBefore env).1) ((fieldsLeafTripleOf cAfter env).2.1)
         (groupVal env cAfter.capRoot) := by
-  refine ⟨(fieldsLeafPairOf cBefore env).2, pathOf8 cBefore env DEPTH, ?_, ?_⟩
+  refine ⟨(fieldsLeafTripleOf cBefore env).2.1, (fieldsLeafTripleOf cBefore env).2.2,
+    pathOf8 cBefore env DEPTH, ?_, ?_⟩
   · have hrec := fieldsOpen_recompose8 S8 tf cBefore env hChip hBefore
     simpa using hrec
   · have hpath : pathOf8 cAfter env DEPTH = pathOf8 cBefore env DEPTH := by
       simp only [pathOf8, dirBoolVal, hsib, hdir]
     have hrec := fieldsOpen_recompose8 S8 tf cAfter env hChip hAfter
     rw [hpath] at hrec
-    have hpair : fieldsLeafPairOf cAfter env
-        = ((fieldsLeafPairOf cBefore env).1, (fieldsLeafPairOf cAfter env).2) := by
-      rw [← hkey]
-    rw [hpair] at hrec
+    have htriple : fieldsLeafTripleOf cAfter env
+        = ((fieldsLeafTripleOf cBefore env).1, (fieldsLeafTripleOf cAfter env).2.1,
+           (fieldsLeafTripleOf cBefore env).2.2) := by
+      rw [← hkey, ← hnext]
+    rw [htriple] at hrec
     exact hrec
 
 #assert_axioms fieldsLeafDigest_sound8
@@ -248,7 +264,7 @@ theorem fieldsOpen_writesTo8 (S8 : Fields8Scheme)
 
 /-! ## §3 — the fields-open READ appendix + the before-membership core (`effFieldsOpenV3`). -/
 
-/-- **`fieldsOpenConstraints w`** — the fields-open read constraint list: the arity-2 leaf lookup, the 16
+/-- **`fieldsOpenConstraints w`** — the fields-open read constraint list: the arity-3 leaf lookup, the 16
 node lookups (SHARED with cap — the same `nodeLookup`), the 16 dir gates, and the 8 root-pin gates. -/
 def fieldsOpenConstraints (w : Nat) : List VmConstraint2 :=
   .lookup (fieldsLeafLookup (capOpenCols w))
@@ -349,12 +365,14 @@ theorem afterSpineF_capRoot_after (w : Nat) (env : VmRowEnv) :
     groupVal env (afterSpineColsF w).capRoot
       = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.afterFieldsRootCols env := rfl
 
-/-- The 2 narrowed-leaf weld gates: after leaf 0 (addr) = the read's addr; after leaf 1 (value) =
-`REFUSAL_AUDIT_FELT_COL` (the audit felt the write inserts). -/
+/-- The 3 narrowed-leaf weld gates: after leaf 0 (addr) = the read's addr; after leaf 1 (value) =
+`REFUSAL_AUDIT_FELT_COL` (the audit felt the write inserts); after leaf 2 (IMT `nextAddr`) = the read's
+pointer (the value update HOLDS the sorted-chain pointer fixed). -/
 def afterLeafWeldsF (w : Nat) : List VmConstraint2 :=
   [ .base (.gate (eqGate ((afterSpineColsF w).leaf 0) ((capOpenCols w).leaf 0)))
   , .base (.gate (eqGate ((afterSpineColsF w).leaf 1)
-      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.REFUSAL_AUDIT_FELT_COL)) ]
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.REFUSAL_AUDIT_FELT_COL))
+  , .base (.gate (eqGate ((afterSpineColsF w).leaf 2) ((capOpenCols w).leaf 2))) ]
 
 /-- The 8 BEFORE fields-root weld gates: the read's appendix `capRoot` group equals the committed BEFORE
 fields-root block. -/
@@ -611,6 +629,16 @@ theorem effFieldsWriteV3_forces_write8 (S8 : Fields8Scheme)
       simp [afterLeafWeldsF]
     exact afterSpineF_eqGate_forces base name hash minit mfin maddrs t hsat i hi hnotlast hcells
       _ _ hin
+  -- weld: after leaf 2 (IMT nextAddr) = read leaf 2 (the value update HOLDS the pointer).
+  have hnextw : e.loc ((afterSpineColsF base.traceWidth).leaf 2)
+      = e.loc ((capOpenCols base.traceWidth).leaf 2) := by
+    have hin : VmConstraint2.base (.gate (eqGate ((afterSpineColsF base.traceWidth).leaf 2)
+        ((capOpenCols base.traceWidth).leaf 2))) ∈ afterSpineConstraintsF base.traceWidth := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_))
+      simp [afterLeafWeldsF]
+    exact afterSpineF_eqGate_forces base name hash minit mfin maddrs t hsat i hi hnotlast hcells
+      _ _ hin
   -- key bind: read leaf 0 = refusalAuditKeyFelt (const).
   have hkeyb : e.loc ((capOpenCols base.traceWidth).leaf 0)
       = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalAuditKeyFelt := by
@@ -642,16 +670,18 @@ theorem effFieldsWriteV3_forces_write8 (S8 : Fields8Scheme)
     have := afterSpineF_eqGate_forces base name hash minit mfin maddrs t hsat i hi hnotlast hcells
       _ _ hin
     simpa [groupVal, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.beforeFieldsRootCols] using this
-  -- assemble the §11 keystone over the two cores along the SHARED path.
-  have hkey : (fieldsLeafPairOf (afterSpineColsF base.traceWidth) e).1
-      = (fieldsLeafPairOf (capOpenCols base.traceWidth) e).1 := hslot
+  -- assemble the §11 keystone over the two cores along the SHARED path (+ the held pointer).
+  have hkey : (fieldsLeafTripleOf (afterSpineColsF base.traceWidth) e).1
+      = (fieldsLeafTripleOf (capOpenCols base.traceWidth) e).1 := hslot
+  have hnext : (fieldsLeafTripleOf (afterSpineColsF base.traceWidth) e).2.2
+      = (fieldsLeafTripleOf (capOpenCols base.traceWidth) e).2.2 := hnextw
   have hw := fieldsOpen_writesTo8 S8 t.tf (capOpenCols base.traceWidth)
-    (afterSpineColsF base.traceWidth) e hChip hbeforeCore hafterCore rfl rfl hkey
+    (afterSpineColsF base.traceWidth) e hChip hbeforeCore hafterCore rfl rfl hkey hnext
   rw [hbroot] at hw
   rw [afterSpineF_capRoot_after] at hw
-  have hkeyb' : (fieldsLeafPairOf (capOpenCols base.traceWidth) e).1
+  have hkeyb' : (fieldsLeafTripleOf (capOpenCols base.traceWidth) e).1
       = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalAuditKeyFelt := hkeyb
-  have hvalw' : (fieldsLeafPairOf (afterSpineColsF base.traceWidth) e).2
+  have hvalw' : (fieldsLeafTripleOf (afterSpineColsF base.traceWidth) e).2.1
       = e.loc Dregg2.Circuit.Emit.EffectVmEmitRotationV3.REFUSAL_AUDIT_FELT_COL := hvalw
   rw [hkeyb', hvalw'] at hw
   exact hw

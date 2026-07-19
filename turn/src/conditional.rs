@@ -1482,7 +1482,16 @@ mod tests {
         assert!(matches!(proof, ConditionProof::EffectVmProof { .. }));
         let mut n = nullifiers();
         assert_eq!(
-            resolve_condition(&condition, &proof, 10, 100, &[], DEFAULT_MAX_ROOT_AGE, &mut n, &[]),
+            resolve_condition(
+                &condition,
+                &proof,
+                10,
+                100,
+                &[],
+                DEFAULT_MAX_ROOT_AGE,
+                &mut n,
+                &[]
+            ),
             ConditionalResult::Resolved,
             "a ProvenReceipt's own condition must resolve its own proof"
         );

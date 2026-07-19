@@ -472,7 +472,8 @@ pub mod rotation {
 ///   param2 = value_hi
 ///
 /// Custom (CellProgram dispatch):
-///   param0..param3 = custom_program_vk_hash (low 4 of the 8-felt program identity)
+///   param0..param3 = custom_program_vk_hash limbs 0..4 (limbs 4..8 ride the
+///                    exact VK-teeth columns in `trace_rotated`)
 ///   param4..param7 = custom_proof_commitment limbs 0..4 (of the 8-felt proof-bind
 ///                    commitment — flag-day rotation; limbs 4..8 ride the rotated
 ///                    member's commit-teeth columns, `trace_rotated::CUSTOM_COMMIT_TEETH_BASE`,
@@ -506,7 +507,8 @@ pub mod param {
     pub const FACTORY_VK_HASH: usize = 0;
     pub const CHILD_VK_DERIVED: usize = 1;
     // Custom cell program dispatch params.
-    /// VK hash identifying the custom program (4 elements = 4*30 = 120 bits).
+    /// Low four limbs of the 8-felt VK hash identifying the custom program.
+    /// The high four are trace-carried at `trace_rotated::CUSTOM_VK_TEETH_BASE`.
     pub const CUSTOM_VK_HASH_BASE: usize = 0;
     /// Custom proof commitment limbs 0..4 (the param union carries only the low
     /// half of the 8-felt rotated commitment; limbs 4..8 ride the commit-teeth

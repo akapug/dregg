@@ -11,7 +11,9 @@
 //! entry points automatically (a) double the trace with random rows, (b) commit
 //! a random FRI batch codeword, and (c) salt every Merkle leaf, so query
 //! openings reveal nothing about the witness beyond the public inputs.
-//! See [`create_zk_config`] / [`prove_zk`] / [`verify_zk`].
+//! See [`create_zk_config`]; concrete hiding prove/verify entry points live beside
+//! the AIRs they instantiate (for example `dsl_p3_air::prove_dsl_zk` and
+//! `cert_f_air::prove_cert_f_zk`).
 //!
 //! **Decision: adopt Plonky3's hiding PCS, do not hand-roll masking.**
 //! Rationale: (i) the masking/blinding and random-codeword machinery already
@@ -38,15 +40,11 @@ mod zk_plonky3 {
     use p3_field::Field;
     use p3_field::extension::BinomialExtensionField;
     use p3_fri::{FriParameters, HidingFriPcs};
-    use p3_matrix::dense::RowMajorMatrix;
     use p3_merkle_tree::MerkleTreeHidingMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use p3_uni_stark::{Proof, StarkConfig, prove, verify};
+    use p3_uni_stark::{Proof, StarkConfig};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
-
-    use crate::field::BabyBear;
-    use crate::plonky3_prover::to_p3;
 
     /// The SHIELDED/HIDING lane's FRI knobs ([`create_zk_config`]), exported so
     /// `circuit-prove/tests/fri_params_soundness_budget.rs` can hand them to the VERIFIED Lean ledger
@@ -155,14 +153,5 @@ mod zk_plonky3 {
 
         let challenger = ZkChallenger::new(perm16);
         StarkConfig::new(pcs, challenger)
-    }
-
-    fn trace_to_matrix(trace: &[Vec<BabyBear>]) -> RowMajorMatrix<P3BabyBear> {
-        let width = trace[0].len();
-        let values: Vec<P3BabyBear> = trace
-            .iter()
-            .flat_map(|row| row.iter().map(|&v| to_p3(v)))
-            .collect();
-        RowMajorMatrix::new(values, width)
     }
 }

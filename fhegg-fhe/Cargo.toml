@@ -39,6 +39,12 @@ rand_09 = { package = "rand", version = "0.9" }
 wgpu = "24"
 pollster = "0.4"
 bytemuck = "1"
+sha2 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# Authenticated computation-integrity quorum: strict Ed25519 signatures from the
+# declared ordered party roster over the exact canonical clearing-claim digest.
+ed25519-dalek = { version = "2", features = ["std"] }
 
 [[bin]]
 name = "smoke"

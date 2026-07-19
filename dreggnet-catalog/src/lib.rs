@@ -1,12 +1,12 @@
 //! # `dreggnet-catalog` — the ONE statement of what the DreggNet offering catalog is.
 //!
-//! [`build_full_catalog`] registers the full 18-offering portfolio — the five games
-//! (dungeon · council · market · multiway-tug · automatafl), the eight do-once RPG feature
-//! surfaces ([`dreggnet_surfaces::register_surfaces`]: trade · inventory · cheevos · guild ·
-//! craft · companion · tavern · party), and the five service offerings (doc · names · compute ·
-//! grain · hermes) — into a caller-supplied [`OfferingHost`]. Every frontend builds its host
-//! through this one function, so "which offerings exist" stops being four hand-maintained lists
-//! (`dreggnet_web::catalog_default_host` + `register_non_game_offerings`,
+//! [`build_full_catalog`] registers the full 19-offering portfolio — the six games
+//! (dungeon · council · market · Dark Bazaar · multiway-tug · automatafl), the eight do-once RPG
+//! feature surfaces ([`dreggnet_surfaces::register_surfaces`]: trade · inventory · cheevos ·
+//! guild · craft · companion · tavern · party), and the five service offerings (doc · names ·
+//! compute · grain · hermes) — into a caller-supplied [`OfferingHost`]. Every frontend builds its
+//! host through this one function, so "which offerings exist" stops being four hand-maintained
+//! lists (`dreggnet_web::catalog_default_host` + `register_non_game_offerings`,
 //! `dreggnet_telegram::host::telegram_default_host`, `dreggnet_wechat::host::wechat_default_host`,
 //! and discord-bot's bespoke per-type stores) that can silently disagree.
 //!
@@ -23,15 +23,15 @@
 //! The registrars are complete ports of the (byte-identical) web/telegram registrations, and the
 //! [`seated`] adapter is the complete port of `dreggnet-web/src/seated.rs` (the source of the four
 //! byte-peers). `dreggnet-telegram` builds its host through [`full_catalog_host`] and re-exports
-//! [`seated::SeatedTug`]; web/wechat delegation and Discord's cutover onto `OfferingHost` are the
-//! design doc's Phases B (rest) and C.
+//! [`seated::SeatedTug`]; web now delegates too, while WeChat delegation and Discord's cutover onto
+//! `OfferingHost` are the design doc's remaining Phases B and C.
 
 use dreggnet_offerings::OfferingHost;
 use dreggnet_offerings::dungeon::DungeonOffering;
 
 use dregg_automatafl::AutomataflOffering;
 use dreggnet_council::{CandidateProposal, CouncilOffering};
-use dreggnet_market::MarketOffering;
+use dreggnet_market::{DarkBazaarOffering, MarketOffering};
 
 pub mod seated;
 
@@ -87,8 +87,8 @@ impl CatalogConfig {
     }
 }
 
-/// **THE seam: register the full DreggNet portfolio into `host`.** Five games + eight RPG
-/// feature surfaces + five service offerings = the 18 every frontend exposes. Call it inside
+/// **THE seam: register the full DreggNet portfolio into `host`.** Six games + eight RPG
+/// feature surfaces + five service offerings = the 19 every frontend exposes. Call it inside
 /// the frontend's host-build closure (on the host's owning thread) so `!Send` offering
 /// internals are born confined, exactly as the four per-frontend registrars do today.
 pub fn build_full_catalog(host: &mut OfferingHost, cfg: &CatalogConfig) {
@@ -105,7 +105,7 @@ pub fn full_catalog_host(cfg: &CatalogConfig) -> OfferingHost {
     host
 }
 
-/// **The five portfolio games** — dungeon · council · market · tug · automatafl.
+/// **The six portfolio games** — dungeon · council · market · Dark Bazaar · tug · automatafl.
 /// Port source (titles + shapes, byte-identical across the three existing copies):
 /// `dreggnet-web/src/lib.rs:1232-1282` / `dreggnet-telegram/src/host.rs:419-451`.
 pub fn register_games(host: &mut OfferingHost, cfg: &CatalogConfig) {
@@ -127,6 +127,11 @@ pub fn register_games(host: &mut OfferingHost, cfg: &CatalogConfig) {
         "market",
         "DreggNet Market — a sealed-bid auction (list · bid · settle)",
         MarketOffering::new(),
+    );
+    host.register(
+        DarkBazaarOffering::KEY,
+        "The Dark Bazaar — playable CRAWL (sealed bids · verified settlement)",
+        DarkBazaarOffering::new(),
     );
     // `tug` needs the seat-claiming adapter: `TugOffering` names its two seats by fixed
     // canonical strings while every frontend's user identity is a derived key, so the ONE
@@ -185,15 +190,16 @@ pub fn register_services(host: &mut OfferingHost, cfg: &CatalogConfig) {
     );
 }
 
-/// The 18 catalog keys, in registration order — the parity contract. Every frontend's
+/// The 19 catalog keys, in registration order — the parity contract. Every frontend's
 /// "which offerings exist" question resolves to this ONE list; the test below pins
 /// `full_catalog_host` to it, and a frontend cutover test can pin its old registrar against
 /// the same constant before deleting it.
-pub const CATALOG_KEYS: [&str; 18] = [
+pub const CATALOG_KEYS: [&str; 19] = [
     // games
     "dungeon",
     "council",
     "market",
+    "bazaar",
     "tug",
     "automatafl",
     // feature surfaces (dreggnet_surfaces::register_surfaces order)
@@ -219,7 +225,7 @@ pub const CATALOG_KEYS: [&str; 18] = [
 
 /// **The Lab intro** — the honest framing every catalog LISTING leads with, on every front
 /// door (web `GET /offerings`, the Mini App `/tg` fragment, Telegram `/offerings`, Discord
-/// `/play`). The 18 offerings are the engine's proving ground — real verifiable turns,
+/// `/play`). The 19 offerings are the engine's proving ground — real verifiable turns,
 /// deliberately rough — not the polished game. ONE string, so the three front doors cannot
 /// drift into three different stories about what the catalog is.
 pub fn lab_intro() -> &'static str {
@@ -240,7 +246,7 @@ pub fn flagship_pointer() -> &'static str {
 mod tests {
     use super::*;
 
-    /// The parity contract: the full catalog registers exactly [`CATALOG_KEYS`] — the same 18
+    /// The parity contract: the full catalog registers exactly [`CATALOG_KEYS`] — the same 19
     /// `dreggnet_web::demo_host()` serves today. (Once the frontends delegate here, this is the
     /// single test that "add an offering" must update, and drift is a compile-time/test failure
     /// instead of a fourfold folklore.)

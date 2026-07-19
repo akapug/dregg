@@ -21,7 +21,7 @@ use std::time::Instant;
 
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
-use dregg_circuit_prove::ivc_turn_chain::FinalizedTurn;
+use dregg_circuit_prove::ivc_turn_chain::{FinalizedTurn, SEG_ANCHOR_WIDTH};
 use dregg_circuit_prove::joint_turn_aggregation::{DescriptorParticipant, RotatedParticipantLeg};
 use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 
@@ -32,11 +32,11 @@ use dregg_lightclient::{
 use ed25519_dalek::{Signer, SigningKey};
 
 /// A genuine signed ratification vote for validator `i` over `(root, participant_count)` — the demo's
-/// validators sign the finalized root, so the light client's signature-bound quorum check (the
-/// `CertValid` binding leg) accepts them.
+/// validators sign the FULL 8-felt wide finalized root (every lane inside the signed message), so
+/// the light client's signature-bound quorum check (the `CertValid` binding leg) accepts them.
 fn demo_signed_vote(
     i: u8,
-    root: dregg_circuit::field::BabyBear,
+    root: [dregg_circuit::field::BabyBear; SEG_ANCHOR_WIDTH],
     participant_count: usize,
 ) -> SignedVote {
     let mut seed = [0u8; 32];
@@ -387,13 +387,17 @@ fn main() {
 
     // --- 6. The THIRD leg — finality (a correct history must also be FINALIZED) ------------------
     rule("6. FINALITY LEG — the trusted root was QUORUM-finalized (three-leg client)");
+    // The committee ratifies the FULL 8-felt wide final anchor — every lane is inside each signed
+    // vote, and the client's root seam compares all eight lanes (lane 0 alone was the ~31-bit
+    // finality-substitution hole).
+    let final_root8 = agg.final_root;
     // n=4 participants ⇒ supermajority threshold 2*4/3 + 1 = 3. A genuine 3-of-4 quorum.
     let cert = FinalityCert {
         votes: (0..3u8)
-            .map(|i| demo_signed_vote(i, final_root, 4))
+            .map(|i| demo_signed_vote(i, final_root8, 4))
             .collect(),
         participant_count: 4,
-        finalized_root: final_root,
+        finalized_root: final_root8,
     };
     // The client also holds its trusted GENESIS anchor (like the VK + committee anchors) and pins the
     // aggregate's genesis to it — the exact dual of the final-root seam, closing the whole-history
@@ -401,7 +405,7 @@ fn main() {
     let finalized = verify_finalized_history(
         &agg,
         &vk_anchor,
-        final_root,
+        final_root8,
         &cert,
         &demo_committee(4),
         &demo_ml_dsa_committee(4),
@@ -409,12 +413,12 @@ fn main() {
     )
     .expect("aggregate + root-seam + genesis-anchor + 3-of-4 quorum cert all hold");
     println!(
-        "  four legs hold: aggregate verifies, root seam binds, GENESIS anchored, {} of 4 distinct signers ratify.",
+        "  four legs hold: aggregate verifies, root seam binds (all 8 lanes), GENESIS anchored, {} of 4 distinct signers ratify.",
         finalized.quorum_signers
     );
     println!(
-        "  FinalizedAttestation: the trusted root {} is the genuine fold of {} correct turns",
-        finalized.finalized_root.as_u32(),
+        "  FinalizedAttestation: the trusted root {:?} is the genuine fold of {} correct turns",
+        lanes(&finalized.finalized_root),
         finalized.history.num_turns
     );
     println!(
@@ -424,15 +428,15 @@ fn main() {
     // Sub-quorum is refused (the fork-attack defense).
     let weak = FinalityCert {
         votes: (0..2u8)
-            .map(|i| demo_signed_vote(i, final_root, 4))
+            .map(|i| demo_signed_vote(i, final_root8, 4))
             .collect(), // 2 of 4 — below the threshold of 3
         participant_count: 4,
-        finalized_root: final_root,
+        finalized_root: final_root8,
     };
     match verify_finalized_history(
         &agg,
         &vk_anchor,
-        final_root,
+        final_root8,
         &weak,
         &demo_committee(4),
         &demo_ml_dsa_committee(4),
@@ -448,7 +452,7 @@ fn main() {
     match verify_finalized_history(
         &agg,
         &vk_anchor,
-        final_root,
+        final_root8,
         &cert,
         &demo_committee(4),
         &demo_ml_dsa_committee(4),

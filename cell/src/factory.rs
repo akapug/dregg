@@ -14,7 +14,10 @@ use crate::cell::CellMode;
 use crate::id::CellId;
 use crate::permissions::AuthRequired;
 use crate::program::CellProgram;
-use crate::vk_v2::{ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2};
+use crate::vk_v2::{
+    ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2,
+    canonical_vk_v2_from_canonical_parts,
+};
 
 /// Compute the **program-bytes layer** of a cell-program VK hash.
 ///
@@ -114,6 +117,28 @@ pub fn canonical_program_vk_v2(
     })
 }
 
+/// Compute a layered program VK from a fully serializable v2 recipe.
+///
+/// `proving_system_bytes` must be the result of
+/// [`ProvingSystemId::canonical_bytes`] (or an equivalently specified future
+/// proving-system identifier). Keeping these bytes in a factory strategy avoids
+/// serializing the `&'static str` carried by current [`ProvingSystemId`] variants
+/// while preserving the exact v2 commitment.
+pub fn canonical_program_vk_v2_from_recipe(
+    program: &CellProgram,
+    air_fingerprint: [u8; 32],
+    verifier_fingerprint: &VerifierFingerprint,
+    proving_system_bytes: &[u8],
+) -> [u8; 32] {
+    let program_bytes = canonical_program_bytes(program);
+    canonical_vk_v2_from_canonical_parts(
+        &program_bytes,
+        air_fingerprint,
+        verifier_fingerprint,
+        proving_system_bytes,
+    )
+}
+
 /// Strategy for determining the child cell's program VK at creation time.
 ///
 /// This enables "computable child VK" — factories that derive the child's program
@@ -134,6 +159,22 @@ pub enum ChildVkStrategy {
     FromSet {
         /// The set of approved child VKs (order-independent Merkle tree).
         approved_vks: Vec<[u8; 32]>,
+    },
+    /// Fixed executable program — all children are born with this exact
+    /// [`CellProgram`], and the only admissible claimed VK is its canonical
+    /// layered v2 content address. Unlike [`Self::Fixed`], this carries the full
+    /// re-execution recipe so the executor can weld installed program bytes to
+    /// the VK.
+    ///
+    /// Appended after the legacy variants to preserve their postcard indices.
+    FixedProgram {
+        program: CellProgram,
+        air_fingerprint: [u8; 32],
+        verifier_fingerprint: VerifierFingerprint,
+        /// Canonical proving-system identifier bytes (see
+        /// [`ProvingSystemId::canonical_bytes`]). Stored as owned bytes because
+        /// `ProvingSystemId` itself contains process-static string references.
+        proving_system_bytes: Vec<u8>,
     },
 }
 
@@ -161,6 +202,20 @@ impl ChildVkStrategy {
                 for vk in &sorted_vks {
                     hasher.update(vk);
                 }
+            }
+            ChildVkStrategy::FixedProgram {
+                program,
+                air_fingerprint,
+                verifier_fingerprint,
+                proving_system_bytes,
+            } => {
+                hasher.update(&[4u8]);
+                hasher.update(&canonical_program_vk_v2_from_recipe(
+                    program,
+                    *air_fingerprint,
+                    verifier_fingerprint,
+                    proving_system_bytes,
+                ));
             }
         }
         *hasher.finalize().as_bytes()
@@ -266,6 +321,26 @@ impl ChildVkStrategy {
                     set_size: approved_vks.len(),
                 }),
             },
+            ChildVkStrategy::FixedProgram {
+                program,
+                air_fingerprint,
+                verifier_fingerprint,
+                proving_system_bytes,
+            } => {
+                let expected = Some(canonical_program_vk_v2_from_recipe(
+                    program,
+                    *air_fingerprint,
+                    verifier_fingerprint,
+                    proving_system_bytes,
+                ));
+                if *claimed_vk != expected {
+                    return Err(FactoryError::ProgramMismatch {
+                        expected,
+                        got: *claimed_vk,
+                    });
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -1598,6 +1673,82 @@ mod tests {
         assert_ne!(fixed.hash(), derived.hash());
         assert_ne!(derived.hash(), from_set.hash());
         assert_ne!(fixed.hash(), from_set.hash());
+    }
+
+    #[test]
+    fn fixed_program_welds_exact_v2_recipe_and_refuses_wrong_vk_or_component() {
+        use crate::program::StateConstraint;
+
+        let program = CellProgram::Predicate(vec![StateConstraint::WriteOnce { index: 3 }]);
+        let air_fingerprint = [0xA1; 32];
+        let verifier_fingerprint = VerifierFingerprint::SourceHash([0xB2; 32]);
+        let proving_system_bytes = ProvingSystemId::Custom {
+            id: "factory-fixed-program-test-v1",
+        }
+        .canonical_bytes();
+        let expected_vk = canonical_program_vk_v2_from_recipe(
+            &program,
+            air_fingerprint,
+            &verifier_fingerprint,
+            &proving_system_bytes,
+        );
+        let strategy = ChildVkStrategy::FixedProgram {
+            program: program.clone(),
+            air_fingerprint,
+            verifier_fingerprint: verifier_fingerprint.clone(),
+            proving_system_bytes: proving_system_bytes.clone(),
+        };
+        let mut params = FactoryCreationParams {
+            mode: CellMode::Sovereign,
+            program_vk: Some(expected_vk),
+            initial_fields: vec![],
+            initial_caps: vec![],
+            owner_pubkey: [0xC3; 32],
+        };
+        strategy
+            .validate_child_vk(&params.program_vk, &params)
+            .expect("the exact v2 recipe must admit its canonical VK");
+        let encoded = postcard::to_allocvec(&strategy).expect("recipe must serialize");
+        let decoded: ChildVkStrategy =
+            postcard::from_bytes(&encoded).expect("recipe must deserialize");
+        assert_eq!(
+            decoded, strategy,
+            "factory transport must preserve the recipe"
+        );
+
+        params.program_vk = Some([0xDD; 32]);
+        assert!(matches!(
+            strategy.validate_child_vk(&params.program_vk, &params),
+            Err(FactoryError::ProgramMismatch {
+                expected: Some(vk),
+                got: Some(got),
+            }) if vk == expected_vk && got == [0xDD; 32]
+        ));
+
+        let wrong_component = ChildVkStrategy::FixedProgram {
+            program: program.clone(),
+            air_fingerprint,
+            verifier_fingerprint: VerifierFingerprint::SourceHash([0xB3; 32]),
+            proving_system_bytes,
+        };
+        params.program_vk = Some(expected_vk);
+        assert!(matches!(
+            wrong_component.validate_child_vk(&params.program_vk, &params),
+            Err(FactoryError::ProgramMismatch { .. })
+        ));
+        assert_ne!(strategy.hash(), wrong_component.hash());
+
+        let wrong_proving_system = ChildVkStrategy::FixedProgram {
+            program: program.clone(),
+            air_fingerprint,
+            verifier_fingerprint,
+            proving_system_bytes: ProvingSystemId::Sp1V6.canonical_bytes(),
+        };
+        assert!(matches!(
+            wrong_proving_system.validate_child_vk(&params.program_vk, &params),
+            Err(FactoryError::ProgramMismatch { .. })
+        ));
+        assert_ne!(strategy.hash(), wrong_proving_system.hash());
     }
 
     #[test]

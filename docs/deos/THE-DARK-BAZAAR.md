@@ -66,10 +66,14 @@ on encrypted data. Not "the server hides it" — *mathematically* hidden, from o
 The genius of the game framing (ember's four reasons + a fifth): the FRONTIER halls can ship **rough** and
 harden under real load, because a bug costs a virtual helm, not a spectrum license.
 
-1. **CRAWL — The Sealed Exchange, single-unit first** (this Season): rewire `dreggnet-market`'s sealed-bid
-   clearing to call fhEgg **Tier-0 uniform-price** (built + certified today) — bids FHE-encrypted, cleared
-   dark, `Cert-F` receipt on the winner/price. This is the maturity-roadmap pillar #5 *deployed*, and it is
-   buildable NOW. Real players, real load, zero fund risk.
+1. **CRAWL — The Sealed Exchange, single-unit first** (this Season): mount a distinct Dark Bazaar game over
+   `dreggnet-market`'s real LIST → sealed BID → SETTLE executor path on web, Telegram, and Discord. The first
+   playable cut is explicitly **operator-visible at settlement**: it commits bids during play, reveals them
+   to settle, replays the winner and ledger conservation, and makes no Tier-0/ZK/source-bound claim. Next,
+   weld the existing native Cert-F check-level clearing into that same session and receipt. In parallel,
+   replace plaintext ingestion with the collective BFV → masked-boundary MPC path only when the exact order
+   source → `(p*,V*)` → settlement integrity join is installed. Real players and load start at the honest
+   low-resolution cut; the cryptographically dark carrier hardens underneath it without a fake badge.
 2. **WALK — The Dark Pool** (multiply → hidden-reserve AMM) and **N-way trade** (`dreggnet-trade` →
    `settleRing`): both lean on prototyped machinery; harden the noise/perf under real swaps. The busy
    in-game AH is the realistic N that finally validates the **GPU-resident** thesis (histogram 11× at scale)
@@ -83,19 +87,89 @@ harden under real load, because a bug costs a virtual helm, not a spectrum licen
 
 ## 4. The honest ledger (grading is the brand)
 
-- **PROVED/WORKING today:** Tier-0 uniform-price clearing + `Cert-F` (ring-3 → market4), the LP convex
-  linear step, ct×ct multiply (oracle-anchored), the no-viewer keystone with a **proven smudging bound**,
-  `settleRing` conservation/atomicity, non-inflatable reserves (`stripe_reserve_solvent_forever`).
-- **PROTOTYPE (first cuts, named residuals):** the convex engine at `T>1`, the GPU-resident pipeline, fhIR.
+- **PROVED/WORKING today:** the plaintext uniform-price rule/allocation/wire settlement; registered ring3 +
+  market4 Cert-F integer optimality and a real hiding proof path; the LP convex linear step; ct×ct multiply
+  (oracle-anchored); and `settleRing` conservation/atomicity. These are real components, not yet one Tier-0
+  product execution.
+- **PROTOTYPE (first cuts, named residuals):** local semi-honest no-viewer BFV → masked-boundary MPC; retained
+  GPU additive fold; convex engine at `T>1`; and the broader fhIR family. One exact two-coordinate rebalance
+  family is now Lean-authoritative end to end (typed plan + admission/no-wrap/noise proofs → canonical emitted
+  artifact → strict Rust interpreter); the legacy Rust compiler still owns the other product families. The
+  canonical runtime envelope now has a strict Ed25519 threshold-roster verifier and an opt-in certified-market
+  co-endorsement weld. This authenticates who endorsed the exact combined claim, but does not prove the
+  ciphertext-opening/source relation or malicious MPC correctness.
+- **ENGINE INTEGRATION (working seam, not yet the live flagship route):** a settled Bazaar session now exposes
+  the exact winning `DreggIdentity` and can cross an existing provenance-carrying `AssetId` for the winning
+  `$DREGG` amount through `dreggnet-trade`'s sealed-escrow atomic swap. The end-to-end gate begins with a real
+  fair-drawn Descent `LootVault` drop, adopts the exact same `AssetWorld` (no remint), and re-verifies the
+  `mint → escrow → winner` lineage. An unfunded winner is refused and the loot returns to its seller. The
+  auction-resolve turn and the asset/value cross are still two committed operations rather than one atomic
+  multi-cell turn, and the dedicated Descent frontend has not yet passed its durable player world into the
+  catalog Bazaar session.
 - **FRONTIER (unbuilt, the reach — and the point):** combinatorial/integer clearing with a certificate,
   quadratic prediction pricing, no-viewer multilateral compression, general encrypted-state resolution.
 
 The Dark Bazaar is not a demo of what is done — it is a **live crucible for the frontier**, run at real load
 with virtual stakes, every mechanic carrying the grade of what it actually is.
 
+Its player-facing acceptance gate is one offering key and one session protocol consumed by all surfaces:
+`bazaar` must list, open, advance, render, and verify through the shared catalog on `arcade.dregg.net`, the
+Telegram host, and Discord's generic `/play` adapter. A surface-specific reimplementation is not the game.
+
 ---
 
-## 5. The pitch, one breath
+## 5. The private-game organ is larger than the market
+
+The reusable primitive is not “an auction.” It is:
+
+> evaluate a proved rule over hidden player state, reveal only the permitted outcome, and bind that outcome
+> to the cells/receipts that enact it.
+
+That organ belongs throughout the game engine:
+
+- **guild and party governance:** private approval/ranked ballots, revealing only winner/quorum;
+- **matchmaking and raid formation:** private rating, role, latency, blocklist, and preference inputs;
+  reveal only the selected roster/partition, with a proof that the published compatibility and role rules held;
+- **loot and encounter resolution:** sealed need/greed or DKP comparisons, private loot councils, and
+  no-duplicate shuffled deals;
+- **quests and shared-world predicates:** prove that a party satisfies a hidden inventory/reputation/history
+  predicate without revealing which member or item witnesses it;
+- **inter-party coordination:** private bargaining, coalition selection, and season-end netting that reveal
+  only accepted terms or final net obligations.
+
+Existing `dreggnet-party`, `collective-choice`, `starbridge-privacy-voting`, guild/tavern surfaces, asset
+custody, cell predicates, and receipts are composition material—not automatically privacy-grade rule cores.
+Where their semantics and leakage match, reuse them. Where an older crate is Rust-authored, operator-private,
+or models the wrong rule, keep its identity/cell/surface organ and replace the decision relation with a fresh
+Lean-authored descriptor. The first reusable instance is now built: fixed `N=4,K=4` private score aggregation,
+scores in `0..3`, with only `(session, rule, ballot_root8, lowest-index aggregate winner)` public. It is
+Lean-authored and byte-emitted; Rust supplies strict witness filling, `HidingFriPcs`, and a small
+`VerifiedDecision` application seam. The emitted relation is now closed from actual `Satisfied2` descriptor
+acceptance to semantic `Accepts`: exact score/total decoding, faithful packing, lowest-index argmax,
+public-input identity, and all eight Poseidon output lanes are in the theorem. As with the private Bazaar
+family, the hiding PCS shields inputs from proof consumers; a threshold FHE/MPC or distributed-prover producer
+is still required before the house itself is blind.
+
+The current reuse boundary is concrete:
+
+- `dreggnet-party`, guild governance, council, and `starbridge-privacy-voting` already provide useful
+  eligibility, custody signatures, single-use ballots, quorum, capabilities, and committed enactment. Their
+  existing ballot/tally paths are public, however; the privacy-voting crate explicitly disclaims mixnet-style
+  ballot secrecy. Reuse the electorate and enactment organs, not the leakage semantics.
+- `dreggnet-game-board` already proves that a played card belonged to a hidden committed hand and was not
+  replayed. The new fixed-N=8 private shuffle organ now supplies the missing exact-permutation half: eight
+  independently blinded, per-seat leaves under a faithful root8, a Lean proof of no duplicates/no omissions,
+  and depth-three selective openings. It still does not prove that the chosen permutation was unbiased or
+  coordinator-independent; compose it with joint entropy or a threshold mix before claiming fairness.
+- the custom-effect turn path already welds a sub-proof's public inputs to the exact pre/post cell roots, and
+  its app-root binding can connect a published winner/root to the committed field that enacts it. The strongest
+  retained recursion-fold path currently consumes the older circuit-DSL `CellProgram`, not an arbitrary
+  Lean-emitted IR2 descriptor. A generic Lean-descriptor→custom-VK retained-witness adapter is therefore a real
+  substrate weld, not something an app should paper over with a host-side `if proof.verify()`.
+
+---
+
+## 6. The pitch, one breath
 
 **The Dark Bazaar: a game economy where the market is combinatorial, the book is cryptographically dark, the
 house is blind, and every clearing carries a proof it was fair — the hardest, most-private market mechanisms

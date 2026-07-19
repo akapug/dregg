@@ -1,6 +1,7 @@
 //! OUTPUT-BOUNDARY MPC crossing — the working PoC benchmark (codex Round-4 gold).
 //!
-//! Runs the real construction end to end and reports the GATE evidence:
+//! Runs the one-process PoC and reports the GATE evidence. The BFV fold and MPC
+//! circuit are real; threshold partial-decrypt-into-shares remains modelled:
 //!   (A) CORRECTNESS — the MPC (p*,V*) equals the plaintext crossing, over the
 //!       REAL BFV-folded curves (additive fold → additive shares → MPC), across
 //!       N∈{32,128,512}, K∈{64,256}, n∈{3,4} parties. No plaintext-pretending: a
@@ -96,7 +97,7 @@ fn correctness_and_latency() {
 
                 let ok = cross.p_star == reference.p_star
                     && cross.v_star as u32 == reference.v_star
-                    && tr.is_reveal_only(k);
+                    && tr.is_reveal_only(k, B);
                 all_ok &= ok;
 
                 println!(
@@ -134,8 +135,9 @@ fn correctness_and_latency() {
     assert!(all_ok, "MPC crossing must equal the plaintext crossing");
     println!(
         "latency: the MPC crossing is milliseconds; the comparison it replaces is the\n\
-         ~12-17 s O(K) TFHE crossing (ADDITIVE-FOLD-ENVELOPE.md). Rounds = O(b) network\n\
-         round-trips (bit-width), K-independent (buckets batch by depth).\n"
+         ~12-17 s O(K) TFHE crossing (ADDITIVE-FOLD-ENVELOPE.md). The modeled batched\n\
+         opening depth is (max(b,2)+1)*(1+ceil(log2 K)): 119 layers at b=16,K=64\n\
+         and 153 at K=256. A distributed scheduler/runtime for those layers is not built.\n"
     );
 }
 
@@ -354,7 +356,7 @@ fn pure_mpc_correctness_and_latency() {
 
                 let ok = run.cross.p_star == reference.p_star
                     && run.cross.v_star as u32 == reference.v_star
-                    && run.transcript.is_reveal_only(k);
+                    && run.transcript.is_reveal_only(k, B);
                 all_ok &= ok;
 
                 println!(

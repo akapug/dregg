@@ -114,18 +114,19 @@ The theorem is general (any ordered commutative ring), instantiated at `ℤ` on 
 with teeth (`leakF_infeasible`, `zeroFlow_not_certifiable`, `zeroFlow_gap_refused`: an
 unsound or non-optimal triple is refused). The check emits as linear circuit `Constraint`s of
 size `O(m + nnz A)` — **not** `O(T·m)` (proving the `T` solver iterations) — with `certCircuit_sound`
-the emit bridge. `circuit-prove/src/cert_f_air.rs` (`prove_cert_f`) carries those rows into a
-real production STARK (`EffectVmDescriptor2`, BabyBear + FRI): the only PUBLIC input exposed is the
-cleared volume `wᵀf` (`cert_f_air.rs:246`), and the private `(f, π, s)` live in the trace, not the
-public inputs.
+the emit bridge. `circuit-prove/src/cert_f_air.rs` carries those rows into a real production STARK
+(`EffectVmDescriptor2`, BabyBear + FRI): `prove_cert_f` is the plain compatibility path and
+`prove_cert_f_zk` is the hiding path. The only descriptor public input is the cleared volume `wᵀf`;
+the private `(f, π, s)` live in the trace rather than the public-input vector.
 
-**Privacy scope, stated honestly (corrected 2026-07-16):** "not a public input" is NOT "hidden." The
-deployed Cert-F path proves through `descriptor_ir2`'s `ir2_config`, whose PCS is `TwoAdicFriPcs` — the
-PLAIN, NON-hiding Plonky3 PCS (`HidingFriPcs` appears zero times in that path); a non-ZK STARK's FRI
-openings can leak trace information. `cert_f_air.rs:58-63`'s own "Honest scope" says the witness-hiding
-theorem ("the proof leaks nothing beyond `wᵀf`") is the sibling ZK lane, **named, not discharged**.
-Witness-hiding requires routing Cert-F through the `HidingFriPcs`/ZK uni-STARK lane (as the shielded
-note-spend below does) — a NAMED, unbuilt step, not a deployed property.
+**Privacy scope, stated honestly (updated 2026-07-19):** "not a public input" is NOT "hidden."
+The compatibility `prove_cert_f` path still uses `descriptor_ir2::ir2_config` and its plain
+`TwoAdicFriPcs`; it must not carry a privacy claim. The distinct `prove_cert_f_zk` /
+`verify_cert_f_zk` path now passes the same registered descriptor to `DreggZkStarkConfig` and
+`HidingFriPcs`. Its focused ring3 tooth mints/verifies the real batch proof, asserts the ZK random
+commitment/openings exist, and rejects a changed public objective. What remains named is the formal
+simulator theorem for the complete batch-STARK transcript, not the construction itself. The public
+descriptor still exposes `(A,w,c,ε)`, so putting bids in `w` does not make those bids private.
 
 The solver that produces `(f, π, s)` is an **untrusted search** and out of the trusted base.
 `fhegg-solver/` is that search: `pdhg.rs` is a fixed-`T`, topology-only-preconditioned PDHG for
@@ -195,10 +196,9 @@ posture; only the privacy carrier, mechanism-generality, and cost move.
   reveals nothing else. Value, owner, key, path, offer/want, and allocation live only in the
   STARK witness under the hiding PCS (Poseidon2/FRI), and only `[nullifier, merkle_root,
   value_binding]` per leg plus the price is exposed. Fast (GPU), PQ hash-commitment. This is realized
-  by the shielded note-spend circuit — the **hiding** uni-STARK path (`dregg_circuit::dsl::dsl_p3_air::
-  prove_dsl_zk`, `HidingFriPcs`, `ZK = true`; `circuit-prove/src/shielded/mod.rs:24-25`), NOT
-  `cert_f_air.rs` (the Cert-F certificate rides the plain non-hiding PCS — see §above). The two are
-  different circuits; earlier prose conflated them.
+  by the shielded note-spend circuit's **hiding** uni-STARK path and, for registered Cert-F programs,
+  by `cert_f_air::prove_cert_f_zk`'s hiding batch-STARK path. They are different AIRs sharing the
+  `HidingFriPcs` construction; neither turns a public Cert-F program coefficient into a private bid.
 - **Open (public).** The book is public; the clearing is a STARK of correctness over it. Widest
   generality (the full matcher), cheapest.
 

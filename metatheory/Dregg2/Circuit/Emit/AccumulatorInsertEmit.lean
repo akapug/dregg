@@ -51,7 +51,7 @@ open Dregg2.Circuit.DeployedHeapTree (Heap8Scheme)
 open Dregg2.Circuit.DeployedHeapTree.Heap8Scheme (MembersAt8)
 open Dregg2.Circuit.Emit.CapOpenEmit (capOpenCols eqGate eqGate_eval diffGate_exact)
 open Dregg2.Circuit.Emit.HeapOpenEmit
-  (heapLeafPairOf heapPermOut HeapMembershipCore heapOpen_recompose8
+  (heapLeafPairOf heapLeafTripleOf heapPermOut HeapMembershipCore heapOpen_recompose8
    effHeapOpenV3 effHeapOpenV3_core)
 open Dregg2.Circuit.SortedTreeNonMembershipHeap8
   (SpineCommits8 keysOf8 GapOpen8 keyOfH nonMembership_sound8 update_sound8)
@@ -357,8 +357,10 @@ theorem effAccumInsertV3_forces_afterMembership (S8 : Heap8Scheme)
   have hcore : HeapMembershipCore t.tf (capOpenCols w) e :=
     effHeapOpenV3_core base name hash minit mfin maddrs t hopenSat i hi hnotlast hcells
   have hrec := heapOpen_recompose8 S8 t.tf (capOpenCols w) e hChip hcore
+  -- The map-level membership provides the IMT pointer (leaf col 2) as the existential `next` witness;
+  -- `(pair.1, pair.2, leaf2) = heapLeafTripleOf`, so `hrec`'s recompose is exactly the opened leaf.
   have hmem0 : MembersAt8 S8 (groupVal e (capOpenCols w).capRoot) (heapLeafPairOf (capOpenCols w) e) :=
-    ⟨_, hrec⟩
+    ⟨(heapLeafTripleOf (capOpenCols w) e).2.2, _, hrec⟩
   -- weld: the read capRoot group IS the committed AFTER accumulator group.
   have hroot : groupVal e (capOpenCols w).capRoot
       = (fun k => e.loc (groupCol (EFFECT_VM_WIDTH + 239) k)) := by

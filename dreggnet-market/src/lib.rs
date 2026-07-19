@@ -38,6 +38,22 @@
 //! SCOPE]` note at the bottom for what a fuller market (a continuous order book, multi-asset
 //! baskets, a live escrow-market clearing organ) adds.
 
+/// Deterministic fhEgg clearing + hiding Cert-F receipt integration.  This is a
+/// deliberately opt-in heavy proving surface; enable Cargo feature
+/// `certified-clearing` to compile it.
+#[cfg(feature = "certified-clearing")]
+pub mod certified_clearing;
+
+/// Authenticated co-endorsement weld between the complete certified market
+/// receipt and fhegg-fhe's exact canonical MPC claim. This does not prove that
+/// the ciphertexts open to the certified book. It is an opt-in heavy surface.
+#[cfg(feature = "authenticated-clearing")]
+pub mod authenticated_receipt;
+
+/// Owner-gated settlement of a real provenance-carrying asset (for example a
+/// Descent loot note) to the sealed auction's already-verified winner.
+pub mod asset_backed;
+
 use dreggnet_offerings::{
     Action, DreggIdentity, Offering, OfferingError, Outcome, RunCost, SessionConfig, Surface,
     VerifyReport,
@@ -72,6 +88,29 @@ pub const TURN_BID: &str = "bid";
 /// The affordance verb the **auctioneer** fires to close the commit phase, reveal, and clear to the
 /// winning sealed bid (the value moves, conservation-checked). `arg` is unused.
 pub const TURN_SETTLE: &str = "settle";
+
+/// Stable host/catalog key for the distinct Dark Bazaar crawl offering.
+///
+/// [`Offering`] deliberately does not prescribe registry keys; hosts register an
+/// offering under a key of their choice.  Exporting this value keeps the web,
+/// Telegram, Discord, and native catalog registrations on one canonical route.
+pub const DARK_BAZAAR_OFFERING_KEY: &str = "bazaar";
+
+/// The product-grade disclosure every Dark Bazaar crawl surface paints.
+///
+/// Keep this blunt: the current crawl consumes the real sealed-auction executor
+/// and conservation-checked settlement, but it does not yet consume the optional
+/// fhEgg proof/FHE work.
+pub const DARK_BAZAAR_CRAWL_DISCLOSURE: &str = "CRAWL grade: operator-visible-at-settle / check-level. NOT Tier0 house-blind; NOT a STARK/ZK proof; NOT source-bound.";
+
+/// Stable exact-tie policy inherited from the sealed-auction substrate.
+///
+/// Reveals live in a `BTreeMap<seal, Bid>` and `winner()` returns the last maximum,
+/// so equal-value bids resolve to the lexicographically greatest committed seal.
+/// That is opaque but deterministic and replayable; it is not an iteration-order
+/// accident.
+pub const DARK_BAZAAR_TIE_POLICY: &str =
+    "Highest bid wins; exact ties resolve by lexicographically greatest committed bid seal.";
 
 /// The seller / awarding party's in-process auction-ledger handle (the low byte the verified
 /// per-asset ledger indexes by). Receives the winner's payment.
@@ -763,10 +802,283 @@ impl Offering for MarketOffering {
     }
 }
 
+/// A distinct, catalog-key-capable **Dark Bazaar CRAWL** offering.
+///
+/// This first playable whole-system slice deliberately delegates the real
+/// [`MarketOffering`] executor, commit/reveal protocol, verified settlement, and
+/// replay verifier.  It is a separate offering type and surface so a host can
+/// register it under [`DARK_BAZAAR_OFFERING_KEY`] without pretending the ordinary
+/// market has acquired privacy/proof properties it does not have.
+///
+/// # Honest grade
+///
+/// Bids are sealed during commit and become visible to the operator at SETTLE.
+/// Verification is the existing check-level replay plus conservation gate. This
+/// crawl is **not** Tier0 house-blind, does **not** carry a STARK/ZK proof, and is
+/// **not** source-bound. The optional `certified-clearing` feature remains wholly
+/// outside this default offering.
+pub struct DarkBazaarOffering {
+    market: MarketOffering,
+}
+
+impl DarkBazaarOffering {
+    /// Canonical host/catalog key for this offering.
+    pub const KEY: &'static str = DARK_BAZAAR_OFFERING_KEY;
+
+    /// Open the free-tier Dark Bazaar crawl.
+    pub fn new() -> Self {
+        Self {
+            market: MarketOffering::new(),
+        }
+    }
+
+    /// A paid-tier crawl whose BID affordance costs `credits` run-credits.
+    pub fn paid_bids(credits: u64) -> Self {
+        Self {
+            market: MarketOffering::paid_bids(credits),
+        }
+    }
+
+    /// The canonical key a heterogeneous [`dreggnet_offerings::OfferingHost`] can
+    /// register this offering under.
+    pub const fn key(&self) -> &'static str {
+        Self::KEY
+    }
+}
+
+impl Default for DarkBazaarOffering {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Session wrapper keeping the Dark Bazaar route/type distinct while retaining
+/// the real market's executor-backed state.
+pub struct DarkBazaarSession {
+    market: MarketSession,
+}
+
+impl DarkBazaarSession {
+    /// Read the underlying real market session for low-level inspection.
+    pub fn market(&self) -> &MarketSession {
+        &self.market
+    }
+
+    /// Whether a real factory-born listing exists.
+    pub fn is_listed(&self) -> bool {
+        self.market.is_listed()
+    }
+
+    /// Whether the verified settlement has landed.
+    pub fn is_settled(&self) -> bool {
+        self.market.is_settled()
+    }
+
+    /// Number of sealed bids committed through the real executor.
+    pub fn bid_count(&self) -> usize {
+        self.market.bid_count()
+    }
+
+    /// The real conservation-checked clearing, once settled.
+    pub fn clearing(&self) -> Option<&Clearing> {
+        self.market.clearing()
+    }
+
+    /// The frontend-agnostic identity whose sealed bid won the verified clear.
+    pub fn winning_actor(&self) -> Option<&DreggIdentity> {
+        self.market.winning_actor()
+    }
+
+    /// Atomically cross an existing owned asset to this Bazaar session's verified
+    /// winner for the winning amount of `$DREGG`.
+    ///
+    /// This is the cross-game seam: a caller can hand in an `AssetId` minted by The
+    /// Descent (or craft/inventory) in the SAME `TradeWorld`; no remint or synthetic
+    /// `GOOD` token is involved. The asset layer re-checks seller ownership, sealed
+    /// escrow binds both legs, and provenance is re-verified after the cross.
+    pub fn settle_winning_asset(
+        &self,
+        world: &mut dreggnet_trade::TradeWorld,
+        asset: dreggnet_trade::AssetId,
+    ) -> Result<asset_backed::AssetBackedClearing, asset_backed::AssetBackedError> {
+        self.market.settle_winning_asset(world, asset)
+    }
+}
+
+impl Offering for DarkBazaarOffering {
+    type Session = DarkBazaarSession;
+
+    fn open(&self, cfg: SessionConfig) -> Result<Self::Session, OfferingError> {
+        self.market
+            .open(cfg)
+            .map(|market| DarkBazaarSession { market })
+    }
+
+    fn actions(&self, session: &Self::Session) -> Vec<Action> {
+        self.market
+            .actions(&session.market)
+            .into_iter()
+            .map(|mut action| {
+                action.label = match action.turn.as_str() {
+                    TURN_LIST => "Open a Dark Bazaar listing (real auction cell)".into(),
+                    TURN_BID => "Place a sealed bid (operator sees it at SETTLE)".into(),
+                    TURN_SETTLE => "SETTLE — reveal to operator and clear check-level".into(),
+                    _ => action.label,
+                };
+                action
+            })
+            .collect()
+    }
+
+    fn advance(&self, session: &mut Self::Session, input: Action, actor: DreggIdentity) -> Outcome {
+        self.market.advance(&mut session.market, input, actor)
+    }
+
+    fn verify(&self, session: &Self::Session) -> VerifyReport {
+        let mut report = self.market.verify(&session.market);
+        report.detail = format!(
+            "Dark Bazaar CRAWL check-level replay (not Tier0/STARK/ZK/source-bound): {}",
+            report.detail
+        );
+        report
+    }
+
+    fn render(&self, session: &Self::Session) -> Surface {
+        let market_surface = self.market.render(&session.market).0;
+        Surface(ViewNode::Section {
+            title: "The Dark Bazaar — playable CRAWL".into(),
+            tag: "accent".into(),
+            children: vec![
+                ViewNode::Section {
+                    title: format!("Offering key: {}", Self::KEY),
+                    tag: "muted".into(),
+                    children: vec![
+                        ViewNode::Text(DARK_BAZAAR_CRAWL_DISCLOSURE.into()),
+                        ViewNode::Text(
+                            "Real now: sealed commit/reveal executor turns and conservation-checked value settlement.".into(),
+                        ),
+                        ViewNode::Text(DARK_BAZAAR_TIE_POLICY.into()),
+                    ],
+                },
+                market_surface,
+            ],
+        })
+    }
+
+    fn price(&self, input: &Action) -> RunCost {
+        self.market.price(input)
+    }
+}
+
 /// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
 /// [`field_from_u64`] for the phase / winner / bid-value registers the auction cell stores).
 fn field_to_u64(f: &[u8; 32]) -> u64 {
     let mut b = [0u8; 8];
     b.copy_from_slice(&f[24..32]);
     u64::from_be_bytes(b)
+}
+
+#[cfg(test)]
+mod dark_bazaar_tests {
+    use super::*;
+
+    fn identity(name: &str) -> DreggIdentity {
+        DreggIdentity(name.to_string())
+    }
+
+    fn land(
+        offering: &DarkBazaarOffering,
+        session: &mut DarkBazaarSession,
+        turn: &str,
+        arg: i64,
+        actor: &str,
+    ) {
+        let outcome =
+            offering.advance(session, Action::new(turn, turn, arg, true), identity(actor));
+        assert!(outcome.landed(), "{turn} should land, got {outcome:?}");
+    }
+
+    #[test]
+    fn dark_bazaar_is_distinct_keyed_and_honestly_disclosed() {
+        let offering = DarkBazaarOffering::new();
+        assert_eq!(offering.key(), "bazaar");
+        assert_eq!(DarkBazaarOffering::KEY, DARK_BAZAAR_OFFERING_KEY);
+
+        let session = offering
+            .open(SessionConfig::with_seed(710))
+            .expect("crawl opens");
+        let painted = format!("{:?}", offering.render(&session).view());
+        for required in [
+            "operator-visible-at-settle / check-level",
+            "NOT Tier0 house-blind",
+            "NOT a STARK/ZK proof",
+            "NOT source-bound",
+            "conservation-checked value settlement",
+        ] {
+            assert!(
+                painted.contains(required),
+                "surface must disclose {required:?}: {painted}"
+            );
+        }
+        assert!(
+            offering
+                .actions(&session)
+                .iter()
+                .any(|a| a.turn == TURN_LIST && a.label.contains("Dark Bazaar"))
+        );
+    }
+
+    #[test]
+    fn dark_bazaar_crawl_lands_real_settlement_and_check_level_verify() {
+        let offering = DarkBazaarOffering::new();
+        let mut session = offering
+            .open(SessionConfig::with_seed(711))
+            .expect("crawl opens");
+
+        land(&offering, &mut session, TURN_LIST, 25, "seller");
+        land(&offering, &mut session, TURN_BID, 30, "alice");
+        land(&offering, &mut session, TURN_BID, 50, "bob");
+        land(&offering, &mut session, TURN_BID, 40, "carol");
+        land(&offering, &mut session, TURN_SETTLE, 0, "seller");
+
+        let clearing = session.clearing().expect("real settlement landed");
+        assert_eq!(clearing.price(), 50);
+        assert!(clearing.conserved(), "the real value move conserves");
+        assert!(session.is_settled());
+
+        let report = offering.verify(&session);
+        assert!(report.verified, "real chain re-verifies: {}", report.detail);
+        assert!(report.detail.contains("check-level replay"));
+        assert!(report.detail.contains("not Tier0/STARK/ZK/source-bound"));
+    }
+
+    #[test]
+    fn dark_bazaar_exact_ties_follow_the_deterministic_seal_policy() {
+        fn run(seed: u64) -> AuctionCellId {
+            let offering = DarkBazaarOffering::new();
+            let mut session = offering
+                .open(SessionConfig::with_seed(seed))
+                .expect("crawl opens");
+            land(&offering, &mut session, TURN_LIST, 0, "seller");
+            land(&offering, &mut session, TURN_BID, 50, "alice");
+            land(&offering, &mut session, TURN_BID, 50, "bob");
+            land(&offering, &mut session, TURN_SETTLE, 0, "seller");
+            session.clearing().expect("tie settles").winner.bidder
+        }
+
+        let expected = [
+            Bid::new(BIDDER_BASE, 50, 1),
+            Bid::new(BIDDER_BASE + 1, 50, 2),
+        ]
+        .into_iter()
+        .max_by_key(Bid::seal)
+        .expect("two tied bids")
+        .bidder;
+        assert_eq!(run(712), expected);
+        assert_eq!(
+            run(713),
+            expected,
+            "tie result is independent of session seed"
+        );
+    }
 }

@@ -3129,12 +3129,14 @@ pub fn fill_cap_open(row: &mut [BabyBear], base: usize, w: &CapOpenWitness) {
 
 /// **`fill_heap_open_read`** — lay the heap-open READ membership appendix at `base` (the Lean
 /// `effHeapOpenV3`'s `capOpenCols base` layout, SHARED byte-for-byte with cap's [`fill_cap_open`] but
-/// with the arity-2 heap leaf `(addr, value)` + `heap_node8`/`digest8` instead of the 7-field
-/// `CapLeaf`). The 7-field leaf slot carries `(addr, value, 0, 0, 0, 0, 0)` — the heap leaf carries NO
-/// authority, so the `src`/`effBit`/mask-bit columns (`base + 295..`) are UNUSED (`heapOpenConstraints`
-/// reads only leaf/leafDigest/sib/dir/node/rootPin). The `capRoot` group (`base + 287..294`) is the
-/// committed BEFORE heap `root8` (the top `node8` fold reaches it, and the after-spine's
-/// `beforeRootWeldsH` pins it to the rotated BEFORE heap limb).
+/// with the arity-3 IMT heap leaf `(addr, value, next_addr)` + `heap_node8`/`digest8` instead of the
+/// 7-field `CapLeaf`). The 7-field leaf slot carries `(addr, value, next_addr, 0, 0, 0, 0)` — the leaf
+/// carries NO authority, so the `src`/`effBit`/mask-bit columns (`base + 295..`) are UNUSED
+/// (`heapOpenConstraints` reads only leaf(3)/leafDigest/sib/dir/node/rootPin). Leaf col 2 IS the gap-#5
+/// IMT `next_addr` pointer the arity-3 `digest8` absorbs (`heapLeafInputs = [leaf0, leaf1, leaf2]`), so
+/// the emitted arity-3 chip lookup's request matches the `digest8()` provide. The `capRoot` group
+/// (`base + 287..294`) is the committed BEFORE heap `root8` (the top `node8` fold reaches it, and the
+/// after-spine's `beforeRootWeldsH` pins it to the rotated BEFORE heap limb).
 fn fill_heap_open_read(
     row: &mut [BabyBear],
     base: usize,
@@ -3144,9 +3146,12 @@ fn fill_heap_open_read(
     heap_root8: [BabyBear; crate::heap_root::HEAP_DIGEST_W],
 ) {
     use crate::heap_root::heap_node8;
-    // arity-2 heap leaf: addr @ base+0, value @ base+1; leaf cols 2..6 unused (zero).
+    // arity-3 IMT heap leaf: addr @ base+0, value @ base+1, next_addr @ base+2; leaf cols 3..6 unused
+    // (zero). Leaf col 2 = the linked-list pointer the arity-3 `digest8` absorbs — the emitted arity-3
+    // chip lookup reads exactly [leaf0, leaf1, leaf2], so the request matches the digest8 provide.
     row[base] = leaf.addr;
     row[base + 1] = leaf.value;
+    row[base + 2] = leaf.next_addr;
     // 8-felt leaf digest at base + 7..14.
     let leaf_digest = leaf.digest8();
     for (j, &d) in leaf_digest.iter().enumerate() {
@@ -3201,6 +3206,9 @@ fn fill_heap_after_spine(
     use crate::heap_root::{HEAP_DIGEST_W, HeapLeaf, heap_node8};
     row[base_as] = addr;
     row[base_as + 1] = new_value;
+    // Leaf col 2 = the IMT `next_addr` pointer the arity-3 `digest8` absorbs (the `afterLeafWeldsH`
+    // pointer weld pins after-leaf 2 == read-leaf 2 — a value update HOLDS the pointer fixed).
+    row[base_as + 2] = next_addr;
     // The UPDATED leaf's arity-3 IMT digest `hash[addr, new_value, next_addr]` — a value update
     // holds the pointer fixed, so `next_addr` is the committed leaf's pointer.
     let leaf_digest = HeapLeaf {
@@ -5321,6 +5329,11 @@ pub const CUSTOM_HOST_WIDTH: usize = GRAD_ROT_WIDTH - 28; // 1647 − 4·7 sites
 pub const CUSTOM_COMMIT_TEETH_BASE: usize = CUSTOM_HOST_WIDTH; // 1619..1623
 /// The number of commit-teeth columns (commitment limbs 4..8).
 pub const CUSTOM_COMMIT_TEETH_LEN: usize = 4;
+/// Faithful program-VK teeth: limbs 4..8 of `Effect::Custom.program_vk_hash`.
+/// The param union carries limbs 0..4; these exact columns complete VK8 without
+/// folding, truncation, or zero-extension.
+pub const CUSTOM_VK_TEETH_BASE: usize = CUSTOM_COMMIT_TEETH_BASE + CUSTOM_COMMIT_TEETH_LEN;
+pub const CUSTOM_VK_TEETH_LEN: usize = 4;
 
 /// **THE APP-ROOT WELD FIELD OCTET (the wide custom leg-emit).** The wide custom descriptor
 /// additionally PUBLISHES the AFTER-block committed `fields[0..8]` octet — the cell's
@@ -5336,27 +5349,26 @@ pub const CUSTOM_COMMIT_TEETH_LEN: usize = 4;
 /// [`AFTER_BASE`] `+ CUSTOM_APP_FIELD_ROT_BASE + i`) are Lean-emitted — read from `layout_generated`
 /// (`pub use` above), Lean `EffectVmEmitRotationV3.{CUSTOM_APP_FIELD_OCTET_LEN, CUSTOM_APP_FIELD_ROT_BASE}`.
 /// The custom member's host width INCLUDING the commit teeth — the base the wide
-/// carrier appendix is appended at (wide trace = 1623 + 960 = 2583; the deployed
+/// carrier appendix is appended at (wide trace = 1627 + 960 = 2587; the deployed
 /// wide member additionally carries the gentian bare-refuse block past that).
-pub const CUSTOM_HOST_WIDTH_TEETH: usize = CUSTOM_HOST_WIDTH + CUSTOM_COMMIT_TEETH_LEN; // 1623
+pub const CUSTOM_HOST_WIDTH_TEETH: usize =
+    CUSTOM_HOST_WIDTH + CUSTOM_COMMIT_TEETH_LEN + CUSTOM_VK_TEETH_LEN; // 1627
 
-/// **THE WIDE custom trace generator (`customVmDescriptor2R24`, host 1623 incl the
-/// commit teeth / 70 base PIs [46 rot + 12 exposure + 4 rc + 8 app-root field octet] + 16 wide
-/// anchors = 86).**
+/// **THE WIDE custom trace generator (`customVmDescriptor2R24`, host 1627 incl the
+/// commitment/VK teeth / 74 base PIs [46 rot + 16 exposure + 4 rc + 8 app-root field octet] +
+/// 16 wide anchors = 90).**
 ///
 /// Lay the wide custom row for a [`Effect::Custom`] lead. The descriptor's
 /// `proof_bind` op names two row columns, and (the VK epoch + the proof-bind
-/// flag-day rotation) TWELVE `.piBinding` pins PUBLISH the full binding as the
+/// flag-day rotation) SIXTEEN `.piBinding` pins PUBLISH the full binding as the
 /// descriptor's own public inputs (Lean `EffectVmEmitRotationV3.customPiExposure`):
 ///   * col 72 (`PARAM_BASE + CUSTOM_PROOF_COMMIT_BASE`) ← the sub-proof's 8-felt PI
 ///     commitment, limbs 0..4 (cols 72..76 — IR2 PI slots 46..49);
 ///   * cols 1619..1623 ([`CUSTOM_COMMIT_TEETH_BASE`]) ← commitment limbs 4..8 (the
 ///     genuine second squeeze block — IR2 PI slots 50..53);
-///   * col 68 (`PARAM_BASE + CUSTOM_VK_HASH_BASE`) ← the program VK handle (the
-///     v1 builder writes `program_vk_hash[0..4]` into cols 68..72; the full 8-felt
-///     VK binds through the wide-host PI (`pi::CUSTOM_PROOFS_BASE`) / turn-hash
-///     layer, so the descriptor exposes the four vk-hash limbs that exist as
-///     columns — IR2 PI slots 54..57).
+///   * cols 68..72 (`PARAM_BASE + CUSTOM_VK_HASH_BASE`) ← program VK limbs 0..4
+///     at IR2 PI 54..57;
+///   * [`CUSTOM_VK_TEETH_BASE`]..+4 ← program VK limbs 4..8 at IR2 PI 58..61.
 ///
 /// The `Effect::Custom`'s `(program_vk_hash, proof_commitment)` MUST be the
 /// genuine values a verifying [`crate::custom_proof_bind::BoundCustomProof`]
@@ -5403,10 +5415,17 @@ pub fn generate_rotated_custom_wide(
     // SQUEEZE BLOCK (limbs 4..8, straight from the lead `Effect::Custom.proof_commitment`)
     // into the four member-local teeth columns at the end of the host, on EVERY row (the
     // `.piBinding .first` pins read row 0; a uniform fill keeps padding rows consistent).
-    let commit_hi: [BabyBear; CUSTOM_COMMIT_TEETH_LEN] = match effects.first() {
+    let (commit_hi, vk_hi): (
+        [BabyBear; CUSTOM_COMMIT_TEETH_LEN],
+        [BabyBear; CUSTOM_VK_TEETH_LEN],
+    ) = match effects.first() {
         Some(Effect::Custom {
-            proof_commitment, ..
-        }) => core::array::from_fn(|k| proof_commitment[4 + k]),
+            proof_commitment,
+            program_vk_hash,
+        }) => (
+            core::array::from_fn(|k| proof_commitment[4 + k]),
+            core::array::from_fn(|k| program_vk_hash[4 + k]),
+        ),
         _ => unreachable!("guarded above: the lead effect is Effect::Custom"),
     };
     for row in trace.iter_mut() {
@@ -5416,14 +5435,18 @@ pub fn generate_rotated_custom_wide(
         for k in 0..CUSTOM_COMMIT_TEETH_LEN {
             row[CUSTOM_COMMIT_TEETH_BASE + k] = commit_hi[k];
         }
+        for k in 0..CUSTOM_VK_TEETH_LEN {
+            row[CUSTOM_VK_TEETH_BASE + k] = vk_hi[k];
+        }
     }
     // VK epoch + proof-bind rotation: PUBLISH the `proof_bind` op's bound columns as the
-    // descriptor's own public inputs (Lean `EffectVmEmitRotationV3.customPiExposure`, TWELVE
-    // `.piBinding .first` pins at IR2 PI slots 46..57). The first (lead Custom) row carries the
+    // descriptor's own public inputs (Lean `EffectVmEmitRotationV3.customPiExposure`, SIXTEEN
+    // `.piBinding .first` pins at IR2 PI slots 46..61). The first (lead Custom) row carries the
     // bound `(commit, vk)`: the four low `custom_proof_commitment` limbs (cols 72..75) at slots
     // 46..49, the four HIGH commitment limbs (the commit-teeth cols 1619..1623) at slots 50..53,
-    // then the four low `custom_program_vk_hash` limbs (cols 68..71) at slots 54..57. Exposing
-    // them is what lets the per-turn FOLD connect the custom sub-proof leaf's 8-felt
+    // then the eight `custom_program_vk_hash` limbs at slots 54..61 (low4 in params, high4 in
+    // exact VK-teeth columns). Exposing them is what lets the per-turn FOLD connect the custom
+    // sub-proof leaf's full canonical program identity and 8-felt
     // PI-commitment to this descriptor; the in-AIR `proof_bind` op stays a declaration (the
     // binding is at the fold, not a row gate).
     let mut base_pis = base_pis;
@@ -5431,8 +5454,8 @@ pub fn generate_rotated_custom_wide(
         use super::columns::{PARAM_BASE, param};
         let r0 = &trace[0];
         // The dsl rc tail rides LAST on the wrapped member (`withDfaRcPins customV3`: exposure at
-        // 46..57, rc at 58..61) — the base generator appended rc at 46..49, so lift it off, lay
-        // the 12 exposure PIs, then re-append it.
+        // 46..61, rc at 62..65) — the base generator appended rc at 46..49, so lift it off, lay
+        // the 16 exposure PIs, then re-append it.
         let rc_tail: Vec<BabyBear> = base_pis.split_off(base_pis.len() - DFA_RC_LEN);
         for k in 0..4 {
             base_pis.push(r0[PARAM_BASE + param::CUSTOM_PROOF_COMMIT_BASE + k]); // PI 46..49
@@ -5443,11 +5466,14 @@ pub fn generate_rotated_custom_wide(
         for k in 0..4 {
             base_pis.push(r0[PARAM_BASE + param::CUSTOM_VK_HASH_BASE + k]); // PI 54..57
         }
-        base_pis.extend_from_slice(&rc_tail); // PI 58..61: the dsl rc tail
+        for k in 0..CUSTOM_VK_TEETH_LEN {
+            base_pis.push(r0[CUSTOM_VK_TEETH_BASE + k]); // PI 58..61 (VK limbs 4..8)
+        }
+        base_pis.extend_from_slice(&rc_tail); // PI 62..65: the dsl rc tail
 
         // THE APP-ROOT WELD LEG-EMIT (Lean `withAfterOctetPins customV3 4`): publish the AFTER-block
         // committed `fields[0..8]` octet — the faithfully-carried field lane-0 limbs the `new8`
-        // commitment absorbs — as 8 TAIL PIs (slots 62..69), AHEAD of the 16 wide anchors. These are
+        // commitment absorbs — as 8 TAIL PIs (slots 66..73), AHEAD of the 16 wide anchors. These are
         // `.piBinding .last` pins, so read the AFTER rotated block's field registers r3..r10
         // (`AFTER_BASE + CUSTOM_APP_FIELD_ROT_BASE + k`, cols 431..438) on the LAST row (the rotated
         // block is producer-filled uniformly). The fold's app-root arm reads `field[field_key]` from
@@ -5456,13 +5482,13 @@ pub fn generate_rotated_custom_wide(
             .last()
             .expect("custom wide trace has at least one row");
         for k in 0..CUSTOM_APP_FIELD_OCTET_LEN {
-            base_pis.push(last[AFTER_BASE + CUSTOM_APP_FIELD_ROT_BASE + k]); // PI 62..69
+            base_pis.push(last[AFTER_BASE + CUSTOM_APP_FIELD_ROT_BASE + k]); // PI 66..73
         }
     }
-    // 46 base + 12 custom exposure + 4 rc + 8 app-root field octet = 70
+    // 46 base + 16 custom exposure + 4 rc + 8 app-root field octet = 74
     debug_assert_eq!(
         base_pis.len(),
-        ROT_PI_COUNT + 12 + DFA_RC_LEN + CUSTOM_APP_FIELD_OCTET_LEN
+        ROT_PI_COUNT + 16 + DFA_RC_LEN + CUSTOM_APP_FIELD_OCTET_LEN
     );
     let dpis = append_wide_carriers(&mut trace, base_pis, CUSTOM_HOST_WIDTH_TEETH);
     debug_assert_eq!(

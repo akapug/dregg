@@ -75,6 +75,12 @@
 
 use std::fmt;
 
+pub mod clearing_plan;
+pub use clearing_plan::{
+    decode_canonical_clearing_plan, lean_rebalance_plan_v1, ClearingPlan, ClearingPlanError,
+    NoWrapCertificate, ResourceCertificate, LEAN_REBALANCE_V1_JSON,
+};
+
 // ---------------------------------------------------------------------------
 // The three axes
 // ---------------------------------------------------------------------------

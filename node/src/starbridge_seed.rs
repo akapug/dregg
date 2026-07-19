@@ -494,6 +494,17 @@ fn register_starbridge_factory_descriptors() -> Vec<FactoryDescriptor> {
 fn program_vk_for_descriptor(descriptor: &FactoryDescriptor) -> Option<[u8; 32]> {
     match &descriptor.child_vk_strategy {
         Some(ChildVkStrategy::Fixed(vk)) => *vk,
+        Some(ChildVkStrategy::FixedProgram {
+            program,
+            air_fingerprint,
+            verifier_fingerprint,
+            proving_system_bytes,
+        }) => Some(dregg_cell::factory::canonical_program_vk_v2_from_recipe(
+            program,
+            *air_fingerprint,
+            verifier_fingerprint,
+            proving_system_bytes,
+        )),
         _ => descriptor.child_program_vk,
     }
 }

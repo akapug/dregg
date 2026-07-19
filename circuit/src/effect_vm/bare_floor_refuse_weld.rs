@@ -604,8 +604,8 @@ mod tests {
         };
         // The distinct-geometry V1Face members (setFieldDyn / custom) carry four fewer chip
         // sites than the standard graduated member. setFieldDyn rides the bare distinct base;
-        // custom additionally carries its 4-felt custom_proof_commitment teeth, so its own base is
-        // `CUSTOM_HOST_WIDTH_TEETH = DISTINCT_BASE(1619) + CUSTOM_COMMIT_TEETH_LEN(4) = 1623`.
+        // custom additionally carries 8 exact carrier teeth (commit high4 + VK high4), so its
+        // own base is `CUSTOM_HOST_WIDTH_TEETH = DISTINCT_BASE(1619) + 8 = 1627`.
         const DISTINCT_BASE: usize = GRAD_ROT_WIDTH - 28; // 1619
 
         let mut cohort_rows = 0usize;
@@ -651,7 +651,7 @@ mod tests {
                 standard_rows += 1;
             } else if base == DISTINCT_BASE || base == CUSTOM_HOST_WIDTH_TEETH {
                 // setFieldDyn rides the bare distinct base (1619); custom rides that base PLUS its
-                // 4-felt custom_proof_commitment teeth (CUSTOM_HOST_WIDTH_TEETH = 1623). Both are
+                // 8 exact carrier teeth (CUSTOM_HOST_WIDTH_TEETH = 1627). Both are
                 // the two distinct-geometry (four-fewer-chip-site) V1Face members.
                 distinct_rows += 1;
             } else {

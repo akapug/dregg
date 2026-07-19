@@ -8,7 +8,7 @@
 //! certificate report — the untrusted solver's output, checked by the
 //! certificate (translation validation), exactly as the engine intends.
 
-use crate::compile::{Compiled, ConvexProgram};
+use crate::compile::{Compiled, ConvexProgram, QP_CERT_EXACT_SCALE};
 use fhegg_solver::cert::{CertF, CertReport};
 use fhegg_solver::cfmm::{solve_waterfill, CertRoute, CertRouteReport};
 use fhegg_solver::clearing::{allocate, clear, Allocation, Clearing};
@@ -21,6 +21,33 @@ use fhegg_solver::pricecert::{
     PriceOutcome,
 };
 use fhegg_solver::qp::{solve_admm, CertQp, CertQpReport};
+use fhegg_solver::qp_exact::{lift_cert, CertQpExact, CertQpExactReport, LiftError};
+
+/// Fixed-point scale used by the product runner's exact CertQp acceptance gate.
+/// The exact checker certifies the rounded `10^-9` problem; the f64 report is
+/// retained only as a diagnostic twin, never as the acceptance decision.
+/// Exact CertQp translation-validation result. A failed f64→fixed lift is an
+/// in-band certificate refusal, not a panic or a fallback to the f64 verdict.
+#[derive(Clone, Debug)]
+pub enum ExactCertQpVerdict {
+    Checked {
+        cert: CertQpExact,
+        report: CertQpExactReport,
+    },
+    Refused(LiftError),
+}
+
+impl ExactCertQpVerdict {
+    pub fn valid(&self) -> bool {
+        matches!(
+            self,
+            Self::Checked {
+                report: CertQpExactReport { valid: true, .. },
+                ..
+            }
+        )
+    }
+}
 
 /// The outcome of running a compiled product through the engine — the certificate
 /// and whether it validates.
@@ -34,8 +61,13 @@ pub enum RunOutcome {
     },
     /// Flow-LP: the Cert-F primal-dual certificate + its check report.
     CertF { cert: CertF, report: CertReport },
-    /// QP: the CertQp KKT-residual certificate + its check report.
-    CertQp { cert: CertQp, report: CertQpReport },
+    /// QP: the original f64 certificate/report for diagnostics plus the exact
+    /// fixed-point checker verdict that exclusively decides acceptance.
+    CertQp {
+        cert: CertQp,
+        report: CertQpReport,
+        exact: ExactCertQpVerdict,
+    },
     /// Discriminatory / pay-as-bid: the winner-determination Cert-F certificate +
     /// the clearing (fills + both settlement schemes).
     Discriminatory {
@@ -85,7 +117,7 @@ impl RunOutcome {
         match self {
             RunOutcome::Aggregation { allocation, .. } => Some(allocation.conserves()),
             RunOutcome::CertF { report, .. } => Some(report.valid),
-            RunOutcome::CertQp { report, .. } => Some(report.valid),
+            RunOutcome::CertQp { exact, .. } => Some(exact.valid()),
             RunOutcome::Discriminatory { report, .. } => Some(report.valid),
             RunOutcome::CertEq { report, .. } => Some(report.valid),
             RunOutcome::CertRoute { report, .. } => Some(report.valid),
@@ -116,15 +148,31 @@ impl RunOutcome {
                 "Cert-F: valid={} gap={:.3e} (ε={:.1e}) feas_residual={:.3e} primal_obj={:.4}",
                 report.valid, report.gap, cert.epsilon, report.feas_residual, cert.primal_obj,
             ),
-            RunOutcome::CertQp { report, cert } => format!(
-                "CertQp: valid={} prim_res={:.3e} dual_res={:.3e} normal_res={:.3e} (ε={:.1e}) objective={:.4}",
-                report.valid,
-                report.prim_res,
-                report.dual_res,
-                report.normal_res,
-                cert.epsilon,
-                cert.objective,
-            ),
+            RunOutcome::CertQp {
+                report,
+                cert,
+                exact,
+            } => match exact {
+                ExactCertQpVerdict::Checked {
+                    cert: exact_cert,
+                    report: exact_report,
+                } => format!(
+                    "CertQp-exact: valid={} scale=1e-{} prim={:?} dual={:?} normal={:?} tol={:?}; f64 diagnostic valid={} (ε={:.1e}) objective={:.4}",
+                    exact_report.valid,
+                    exact_cert.scale,
+                    exact_report.prim_res,
+                    exact_report.dual_res,
+                    exact_report.normal_res,
+                    exact_report.tol,
+                    report.valid,
+                    cert.epsilon,
+                    cert.objective,
+                ),
+                ExactCertQpVerdict::Refused(error) => format!(
+                    "CertQp-exact: REFUSED lift={error:?}; f64 diagnostic valid={} (not an acceptance gate)",
+                    report.valid,
+                ),
+            },
             RunOutcome::Discriminatory {
                 report, clearing, ..
             } => format!(
@@ -221,7 +269,21 @@ pub fn run(compiled: &Compiled) -> RunOutcome {
             let res = solve_admm(prob, 6000, 1.0, 1e-6, 1.6);
             let cert = CertQp::from_solution(prob, &res, 1e-3);
             let report = cert.check();
-            RunOutcome::CertQp { cert, report }
+            let exact = match lift_cert(&cert, QP_CERT_EXACT_SCALE) {
+                Ok(exact_cert) => {
+                    let exact_report = exact_cert.check();
+                    ExactCertQpVerdict::Checked {
+                        cert: exact_cert,
+                        report: exact_report,
+                    }
+                }
+                Err(error) => ExactCertQpVerdict::Refused(error),
+            };
+            RunOutcome::CertQp {
+                cert,
+                report,
+                exact,
+            }
         }
         ConvexProgram::Discriminatory { orders, prices } => {
             let (clearing, cert) = clear_discriminatory(orders, prices, 8000);
@@ -299,8 +361,33 @@ mod tests {
     #[test]
     fn portfolio_qp_runs_and_certifies() {
         let c = compile(&products::portfolio_qp_public()).unwrap();
-        let out = run(&c);
+        let mut out = run(&c);
         assert_eq!(out.certificate_valid(), Some(true), "{}", out.summary());
+        match &mut out {
+            RunOutcome::CertQp {
+                report: f64_report,
+                exact:
+                    ExactCertQpVerdict::Checked {
+                        cert,
+                        report: exact_report,
+                    },
+                ..
+            } => {
+                assert_eq!(cert.scale, QP_CERT_EXACT_SCALE);
+                assert!(f64_report.valid, "the legacy diagnostic starts true");
+                assert!(
+                    exact_report.valid,
+                    "exact checker is the gate: {exact_report:?}"
+                );
+                exact_report.valid = false;
+            }
+            other => panic!("expected exact CertQp verdict, got {other:?}"),
+        }
+        assert_eq!(
+            out.certificate_valid(),
+            Some(false),
+            "an invalid exact verdict must dominate the retained f64 diagnostic"
+        );
     }
 
     #[test]

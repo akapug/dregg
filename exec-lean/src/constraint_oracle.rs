@@ -115,7 +115,8 @@ fn build_wire(
     let old_present = old_state.is_some();
     let mut wire = format!(
         "{} {} {hop} {hov} {hnp} {hnv}",
-        old_present as u8, new_state.nonce
+        old_present as u8,
+        new_state.nonce()
     );
     // 16 old regs (zeros if old absent — the `oldPresent` flag tells Lean not to read them).
     for i in 0..16 {

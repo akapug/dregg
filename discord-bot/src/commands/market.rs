@@ -28,7 +28,9 @@ use serenity::all::{
     CreateEmbed, CreateInteractionResponse, CreateInteractionResponseMessage,
 };
 
-use dreggnet_market::{MarketOffering, MarketSession, TURN_BID, TURN_LIST};
+use dreggnet_market::{
+    DarkBazaarOffering, DarkBazaarSession, MarketOffering, MarketSession, TURN_BID, TURN_LIST,
+};
 use dreggnet_offerings::SessionConfig;
 
 use crate::BotState;
@@ -82,6 +84,62 @@ impl DiscordOffering for MarketOffering {
             session.bid_count(),
             state,
             session.receipts_len()
+        )
+    }
+}
+
+/// The distinct Dark Bazaar CRAWL surface. It deliberately reuses the generic offering adapter:
+/// no second slash command and no Discord-side market logic. The title/tagline keep the current
+/// grade visible — sealed during commit, operator-visible at settlement, check-level replay.
+impl DiscordOffering for DarkBazaarOffering {
+    const KEY: &'static str = "bazaar";
+    const TITLE: &'static str = "The Dark Bazaar — playable CRAWL";
+    const COLOR: u32 = 0x5B3A8E;
+    const TAGLINE: &'static str =
+        "CRAWL · sealed during commit · operator-visible at settle · replay + conservation checked";
+
+    fn store() -> &'static Store<Self> {
+        static SESSIONS: OnceLock<Store<DarkBazaarOffering>> = OnceLock::new();
+        SESSIONS.get_or_init(Store::spawn)
+    }
+
+    fn value_prompt(turn: &str) -> Option<ValuePrompt> {
+        match turn {
+            TURN_LIST => Some(ValuePrompt {
+                title: "Open a Dark Bazaar listing",
+                label: "Reserve price (bids reveal to the operator at settle)",
+                placeholder: "100",
+            }),
+            TURN_BID => Some(ValuePrompt {
+                title: "Place a sealed crawl bid",
+                label: "Your bid (sealed until settle; operator-visible then)",
+                placeholder: "250",
+            }),
+            _ => None,
+        }
+    }
+
+    fn open_hint() -> String {
+        "/play offering:bazaar".to_string()
+    }
+
+    fn status_line(&self, session: &DarkBazaarSession) -> String {
+        if !session.is_listed() {
+            return "CRAWL · nothing listed yet · 0 verified turns · operator-visible at settle"
+                .to_string();
+        }
+        let market = session.market();
+        let state = if session.is_settled() {
+            "SETTLED"
+        } else {
+            "open"
+        };
+        format!(
+            "CRAWL · reserve {} · {} sealed bid(s) · {} · {} verified turns · check-level, not Tier0/ZK",
+            market.reserve(),
+            session.bid_count(),
+            state,
+            market.receipts_len()
         )
     }
 }
@@ -230,6 +288,58 @@ mod tests {
             SessionConfig::with_seed(channel),
         )
         .expect("the market session deploys");
+    }
+
+    #[test]
+    fn dark_bazaar_mount_is_catalog_play_with_honest_crawl_prompts() {
+        let channel = 91_050;
+        close_in::<DarkBazaarOffering>(channel);
+        offering::open_in(
+            channel,
+            DarkBazaarOffering::new,
+            SessionConfig::with_seed(channel),
+        )
+        .expect("the Dark Bazaar crawl deploys");
+
+        assert_eq!(
+            <DarkBazaarOffering as DiscordOffering>::KEY,
+            DarkBazaarOffering::KEY
+        );
+        assert_eq!(DarkBazaarOffering::open_hint(), "/play offering:bazaar");
+        assert!(
+            DarkBazaarOffering::TAGLINE.contains("operator-visible at settle"),
+            "the current privacy grade is player-visible"
+        );
+        let list_prompt = DarkBazaarOffering::value_prompt(TURN_LIST).expect("LIST asks a reserve");
+        let bid_prompt = DarkBazaarOffering::value_prompt(TURN_BID).expect("BID asks a value");
+        assert!(list_prompt.label.contains("operator"));
+        assert!(bid_prompt.label.contains("operator-visible"));
+
+        let actions = with_live::<DarkBazaarOffering, _>(channel, |live| {
+            live.offering.actions(&live.session)
+        })
+        .expect("a live Dark Bazaar crawl");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].turn, TURN_LIST);
+        assert_eq!(
+            offering::parse_press(&ask_id(DarkBazaarOffering::KEY, TURN_LIST)),
+            Some(offering::Press::Ask {
+                key: "bazaar".into(),
+                turn: TURN_LIST.into(),
+            })
+        );
+
+        match offering::drive_value::<DarkBazaarOffering>(channel, TURN_LIST, 100, who("db")) {
+            Driven::Fired(Outcome::Landed { .. }) => {}
+            other => panic!("the generic modal path must land the real LIST turn, got {other:?}"),
+        }
+        let status = with_live::<DarkBazaarOffering, _>(channel, |live| {
+            live.offering.status_line(&live.session)
+        })
+        .expect("the crawl remains live");
+        assert!(status.contains("CRAWL"), "{status}");
+        assert!(status.contains("not Tier0/ZK"), "{status}");
+        close_in::<DarkBazaarOffering>(channel);
     }
 
     /// The modal-submit path: fire `turn` with the typed value the user entered.

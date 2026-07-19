@@ -283,7 +283,8 @@ func VerifyFriNative(
 	rollInAfterRound []int,
 	ch *MultiFieldChallenger,
 ) [][]frontend.Variable {
-	return verifyFriNativeImpl(bb, cfg, R, commitRoots, finalPoly, powWitness, queries, rollInAfterRound, ch, false)
+	_, queryBits := verifyFriNativeImpl(bb, cfg, R, commitRoots, finalPoly, powWitness, queries, rollInAfterRound, ch, false)
+	return queryBits
 }
 
 // verifyFriNativeImpl is VerifyFriNative with the same test-only order flag as
@@ -302,7 +303,7 @@ func verifyFriNativeImpl(
 	rollInAfterRound []int,
 	ch *MultiFieldChallenger,
 	swapOrder bool,
-) [][]frontend.Variable {
+) ([]BBExt, [][]frontend.Variable) {
 	if len(finalPoly) != (1 << cfg.LogFinalPolyLen) {
 		panic("VerifyFriNative: len(finalPoly) must equal 2^LogFinalPolyLen")
 	}
@@ -358,5 +359,9 @@ func verifyFriNativeImpl(
 		VerifyFriQueryNative(bb, R, logMaxHeight, commitRoots, betas, q.Siblings, q.MerkleProofs,
 			domainBits, q.InitialEval, rollInAfterRound, q.RollIns, finalEval) // verifier.rs:298 verify_query
 	}
-	return queryBits
+	// The per-round fold betas (live-sampled from `ch`) are returned alongside the
+	// query index bits so a caller re-deriving the transcript can BIND the
+	// challenges the descriptor blocks consume (block 1's fold beta, block 4's
+	// query index) to the sponge squeeze — not just verify the fold chain here.
+	return betas, queryBits
 }

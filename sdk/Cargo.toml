@@ -59,6 +59,10 @@ dregg-intent = { path = "../intent" }
 dregg-macaroon = { workspace = true, features = ["crypto"] }
 dregg-token = { path = "../token", default-features = false, features = ["macaroon", "biscuit", "rand-deps"] }
 dregg-trace = { path = "../trace" }
+# Experimental plaintext fhEgg wire surface (`sdk::fhegg`).  Kept behind its
+# named feature even though that feature is default-on, so verifier/minimal SDK
+# builds can still exclude the solver explicitly.
+fhegg-solver = { path = "../fhegg-solver", optional = true }
 
 # council_seal (the threshold-seal organ sealed_governance welds) drives the
 # HINTS BLS pairing directly (G1/G2/G_T over BLS12-381), so the arkworks traits
@@ -98,12 +102,14 @@ zeroize = { workspace = true }
 # `prover` is in the DEFAULT set: native builds compile the rotated IR-v2
 # (R=24) producer + verifier (the cutover's target path; `descriptor_ir2` is
 # present via `dregg-circuit`'s own default `prover`).
-default = ["prover", "exec-lean"]
+default = ["prover", "exec-lean", "fhegg"]
 # THE SWAP producer cluster (native): pulls `dregg-exec-lean` so `AgentRuntime::run_turn` drives
 # the verified Lean executor as the authoritative state producer. ON by default; a
 # `default-features = false` (wasm / no-lean-link) build leaves it off and falls back to the Rust
 # producer. The platform boundary is this dep, not a core-gating flag.
 exec-lean = ["dep:dregg-exec-lean"]
+# Plaintext uniform-price clear + self-verifying settlement demo surface.
+fhegg = ["dep:fhegg-solver"]
 # COMPAT NO-OP: the wire-free `DreggEngine` (the former `embed-core` surface) is
 # now UNCONDITIONAL in the offline core, so this feature gates nothing. Kept as
 # an empty alias so existing consumers (e.g. starbridge-v2) that request

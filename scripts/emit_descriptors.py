@@ -119,10 +119,14 @@ CERT_F_MARKET4_FILE = "dregg-cert-f-market4-ir2.json"
 # whitespace change. We reproduce each file's existing convention exactly instead, which keeps the
 # emit a true no-op on a clean tree. Retire this set only as part of a deliberate regen.
 BY_NAME_NEWLINE_TERMINATED = frozenset({
+    "dark-bazaar-private-n4k4.json",
     "field-delta-result-range.json",
     "merkle-membership-4ary-general.json",
     "non-revocation-adjacency.json",
     "poseidon2-hash-arity2.json",
+    "private-preference-n4k4.json",
+    "private-preference-cell-n4k4.json",
+    "private-shuffle-n8.json",
     "turn-chain-binding.json",
 })
 

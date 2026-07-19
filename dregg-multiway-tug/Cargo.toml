@@ -80,6 +80,9 @@ procgen-dregg = { path = "../procgen-dregg" }
 # Domain-separated hashing for the pack-seed derivation + the card content/traits/mint
 # commitments (the same blake3 1.x resolved workspace-wide).
 blake3 = "1"
+# Lean-emitted symbolic program artifact loader (`src/program_loader.rs`).
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

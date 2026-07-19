@@ -784,6 +784,9 @@ impl Offering for HermesOffering {
         ToolKind::ALL
             .iter()
             .map(|&kind| {
+                // A PROMPT is a free-text affordance: presented as a template (no content yet),
+                // it SOLICITS the user's message (`taking_text`), so a chat frontend routes the
+                // typed reply into it as the [`Action::text`] payload the brain then classifies.
                 Action::new(
                     format!(
                         "{} — {} calls / {} budget left",
@@ -795,6 +798,7 @@ impl Offering for HermesOffering {
                     kind.tool_id(),
                     session.has_headroom(kind),
                 )
+                .taking_text()
             })
             .collect()
     }
@@ -815,7 +819,12 @@ impl Offering for HermesOffering {
         if input.turn != TURN_PROMPT {
             return Outcome::Refused(format!("unknown affordance: {}", input.turn));
         }
-        self.drive(session, &input.label)
+        // The prompt rides the first-class [`Action::text`] payload (what a chat frontend routes
+        // a typed reply into); a programmatic caller that carries the prompt on the label still
+        // works (the fallback). Either way the brain classifies the real user input, never the
+        // affordance's verb.
+        let prompt = input.text.as_deref().unwrap_or(&input.label);
+        self.drive(session, prompt)
     }
 
     /// **Re-verify the confinement chain by REPLAY** — re-derive a fresh

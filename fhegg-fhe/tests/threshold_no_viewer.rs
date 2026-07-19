@@ -15,8 +15,8 @@
 //!
 //! Craft a meter ciphertext with `c1 = 0` (LeanCiphertext fields are public). Then the published
 //! partial-decrypt share is `h = s·c1 + e = e` — the smudge ALONE, key term held identically at
-//! zero. `h` is the protocol's WIRE object (what a coalition actually observes), read here through
-//! the derived `Debug` (the minimal clean accessor threshold.rs should add is named in TESTQALOG).
+//! zero. `h` is the protocol's WIRE object (what a coalition actually observes), read through the
+//! production message accessor.
 //!
 //! Against those isolated samples we pin the EXACT distribution `metatheory/Bfv/Smudging.lean`
 //! proves about — uniform on the integer interval `[-2^b, 2^b]`, `smudgeBits = 80` ("the theorems
@@ -48,7 +48,7 @@
 
 use fhegg_fhe::bfv_lean::{LeanCiphertext, RnsPoly};
 use fhegg_fhe::threshold::{
-    collective_keygen, combine, partial_decrypt, BfvParams, DecryptShare, MIN_SMUDGE_BITS,
+    combine, BfvParams, DecryptShare, KeygenSession, ThresholdParty, MIN_SMUDGE_BITS,
 };
 
 // ---------------------------------------------------------------------------
@@ -79,32 +79,11 @@ fn q_product(params: &BfvParams) -> u128 {
 }
 
 // ---------------------------------------------------------------------------
-// reading the coalition's view: the share h (the wire object) via Debug
+// reading the coalition's view: the share h (the public wire object)
 // ---------------------------------------------------------------------------
-// DecryptShare's `h` is exactly what a party PUBLISHES in the protocol — the
-// coalition sees it by construction. The field is module-private in Rust, so
-// this test reads it through the derived `Debug` representation (loud parse
-// failures, never silent). The clean accessor is named in TESTQALOG.
 
 fn h_rows_of(share: &DecryptShare, n_rows: usize, degree: usize) -> Vec<Vec<u64>> {
-    let s = format!("{share:?}");
-    let start = s.find("h: [[").expect("Debug shape changed: no `h: [[`") + 5;
-    let end = s[start..]
-        .find("]], ct:")
-        .expect("Debug shape changed: no `]], ct:` terminator")
-        + start;
-    let rows: Vec<Vec<u64>> = s[start..end]
-        .split("], [")
-        .map(|row| {
-            row.split(", ")
-                .map(|n| {
-                    n.trim()
-                        .parse::<u64>()
-                        .expect("h coefficient parses as u64")
-                })
-                .collect()
-        })
-        .collect();
+    let rows = share.h_rows().to_vec();
     assert_eq!(rows.len(), n_rows, "h must have one row per RNS modulus");
     for r in &rows {
         assert_eq!(
@@ -228,9 +207,13 @@ fn smudge_is_the_exact_lean_distribution() {
         assert_eq!(crt.centered(&neg), -5, "CRT negative/centering pin");
     }
 
-    let (_cpk, key_shares) = collective_keygen(1, &params);
+    let session = KeygenSession::random(1).expect("session");
+    let (party, _public_contribution) =
+        ThresholdParty::join(&session, 0, &params).expect("party joins");
     let ct = meter_ct(&params, 0);
-    let share = partial_decrypt(&key_shares[0], &ct, MIN_SMUDGE_BITS);
+    let share = party
+        .partial_decrypt(&ct, MIN_SMUDGE_BITS)
+        .expect("valid smudge width");
     let u = smudge_samples(&share, &params, &crt);
     assert_eq!(u.len(), 4096);
 
@@ -301,13 +284,17 @@ fn smudge_moves_the_public_combine_output_at_the_cliff() {
         "meter placement sanity"
     );
 
-    let (_cpk, key_shares) = collective_keygen(1, &params);
+    let session = KeygenSession::random(1).expect("session");
+    let (party, _public_contribution) =
+        ThresholdParty::join(&session, 0, &params).expect("party joins");
     let ct = meter_ct(&params, cliff - d);
 
     let runs = 32usize;
     let mut flips = 0usize;
     for _ in 0..runs {
-        let share = partial_decrypt(&key_shares[0], &ct, MIN_SMUDGE_BITS);
+        let share = party
+            .partial_decrypt(&ct, MIN_SMUDGE_BITS)
+            .expect("valid smudge width");
         let slots = combine(&[share], &params).expect("1-of-1 combine over the meter ciphertext");
         // A single power-basis meter coefficient decodes to a CONSTANT slot vector (the
         // plaintext poly is b·X^0), so the flip bit is domain-robustly readable from any slot.

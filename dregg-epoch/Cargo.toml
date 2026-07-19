@@ -7,7 +7,8 @@ authors.workspace = true
 
 # The epoch-manifest + handshake core. A PURE, transport-agnostic library:
 # it derives an `EpochManifest` from the real baked circuit constants
-# (`V3_STAGED_REGISTRY_FP`, the `SLOT_CAVEAT_TAG_*` set, the effect-VM geometry)
+# (the deployed `WIDE_REGISTRY_STAGED_FP`+`WIDE_UMEM_WELD_REGISTRY_FP` pins, the
+# `SLOT_CAVEAT_TAG_*` set, the effect-VM geometry)
 # and answers `check_compatibility(local, remote)` with a typed verdict. The
 # actual HTTP serve / fetch of the manifest is a NAMED SEAM (like the
 # receipt_stream / indexer pure cores) — not built here.

@@ -108,6 +108,8 @@ pub(crate) mod journal;
 pub mod pending;
 pub mod pq;
 pub mod presence_discharge;
+#[cfg(feature = "prover")]
+pub mod private_preference_custom;
 pub mod reactive;
 pub mod reversible;
 pub mod rotation_witness;
@@ -137,14 +139,15 @@ pub use collapse::{
     CollapseResult, DEFERRED_STATE_HASH, WitnessMode, collapse, collapse_with, is_deferred,
 };
 pub use composer::{ComposeError, ComposedTurn, SignedFragment, TurnComposer};
-pub use conditional::{
-    BASE_CONDITIONAL_DEPOSIT, ConditionProof, ConditionalResult, ConditionalTurn,
-    DEFAULT_MAX_ROOT_AGE, MAX_CONDITIONAL_DEADLINE, PER_BLOCK_DEPOSIT, ProofCondition, ProvenReceipt,
-    TrustedRoot, burn_conditional_deposit, compute_conditional_deposit, compute_proof_hash,
-    refund_conditional_deposit, resolve_condition, validate_conditional_submission,
-};
 #[cfg(feature = "prover")]
 pub use conditional::mint_transfer_proven_receipt;
+pub use conditional::{
+    BASE_CONDITIONAL_DEPOSIT, ConditionProof, ConditionalResult, ConditionalTurn,
+    DEFAULT_MAX_ROOT_AGE, MAX_CONDITIONAL_DEADLINE, PER_BLOCK_DEPOSIT, ProofCondition,
+    ProvenReceipt, TrustedRoot, burn_conditional_deposit, compute_conditional_deposit,
+    compute_proof_hash, refund_conditional_deposit, resolve_condition,
+    validate_conditional_submission,
+};
 pub use conflict::{ConflictSet, build_conflict_set, extract_access_sets};
 pub use economics::{EpochMinter, MintResult, MintingPolicy};
 pub use encrypted::{

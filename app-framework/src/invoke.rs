@@ -91,7 +91,40 @@ pub fn invoke_with_descriptor(
     effects: Vec<Effect>,
     authority: InvokeAuthority,
 ) -> Result<Turn, InvokeRefused> {
+    invoke_with_descriptor_with_witnesses(
+        cipherclerk,
+        target,
+        descriptor,
+        method,
+        args,
+        effects,
+        authority,
+        Vec::new(),
+    )
+}
+
+/// [`invoke_with_descriptor`] with canonical action witness blobs attached
+/// **before** the action is signed.
+///
+/// Witness-attached cell predicates (for example a `CountGe` exhibit) are
+/// executor inputs, not userspace metadata. The action hash covers
+/// `witness_blobs`, so callers must not build/sign first and append them later.
+/// This builder keeps the ordinary method-resolution/authentication path and
+/// changes only the signed action payload.
+#[allow(clippy::too_many_arguments)]
+pub fn invoke_with_descriptor_with_witnesses(
+    cipherclerk: &AppCipherclerk,
+    target: CellId,
+    descriptor: &InterfaceDescriptor,
+    method: &str,
+    args: Vec<dregg_cell::state::FieldElement>,
+    effects: Vec<Effect>,
+    authority: InvokeAuthority,
+    witness_blobs: Vec<dregg_turn::action::WitnessBlob>,
+) -> Result<Turn, InvokeRefused> {
     let (action, _sig) = resolve_against(target, descriptor, method, args, effects, authority)?;
+    let mut action = action;
+    action.witness_blobs = witness_blobs;
     let signed = cipherclerk.sign_action(action);
     Ok(cipherclerk.make_turn(signed))
 }

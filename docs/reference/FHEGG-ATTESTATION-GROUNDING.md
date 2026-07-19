@@ -1,8 +1,8 @@
 # fhEgg Attestation Grounding — what actually attests the clearing, and why the receipt stack does not
 
-*Read-only grounding (2026-07-17) to resolve one conflation and ground the Market-#4 optimality
-repair in what the code/Lean/docs ACTUALLY say. Cited to `file:line` at HEAD. No mechanism is
-invented here; where the honest answer is "model-level Lean only, no runtime cert," it says so.*
+*Grounding updated 2026-07-19. It resolves the receipt/clearing conflation and records the
+current Cert-F, hiding-proof, output-MPC, and settlement boundaries. Verify named artifacts at
+HEAD; exact line numbers from the earlier review have intentionally been removed where the code moved.*
 
 ---
 
@@ -11,17 +11,22 @@ invented here; where the honest answer is "model-level Lean only, no runtime cer
 **Claim (made, then caught):** the dregg proof-carrying / turn-RECEIPT infrastructure (turn-attestation
 over the ledger) attests that the fhEgg confidential-clearing algorithm's steps were run.
 
-**Verdict: FALSE — the two stacks are separate.** The turn receipt attests *settlement* (balance
-movements over ledger state), never *how the clearing was computed*. The clearing computation's honesty
-rests on a DIFFERENT object — the **Cert-F** primal-dual certificate and its own AIR/STARK — which shares
-only the STARK *backend* with the receipt stack and meets it only at settlement. ember is correct.
+**Verdict: FALSE — the two proof stacks are separate.** The turn receipt attests *settlement* (balance
+movements over ledger state), never *how the clearing was computed*. A canonical fhEgg runtime envelope now
+binds roster, inputs/ciphertexts, BFV identity, rule, transcript, output, and replay context into one claim
+digest, but binding is not computation integrity: its binding-only grade is categorically rejected by full
+verification. A production-shaped Ed25519 threshold-roster `ComputationIntegrityVerifier` now authenticates
+which exact quorum endorsed that claim, and an opt-in market module co-endorses the complete certified
+settlement. That is authenticated attribution, not a proof that ciphertexts open to the certified order book
+or that a malicious-secure MPC produced it; the live default offering does not yet consume the weld.
 
 ---
 
 ## 1. What actually attests the fhEgg clearing computation
 
-There are **three distinct layers at three resolutions**. Only one of them is a runtime attestation of a
-given execution, and it covers the convex route — not the uniform-price fold, and not yet at optimality.
+There are **three distinct layers at three resolutions**. Registered convex programs have a runtime
+optimality proof. The no-viewer uniform-price path computes only `(p*,V*)` but still lacks an attestation
+binding that output to the committed/encrypted source orders.
 
 ### 1a. Model-level Lean proofs — about the algorithm as SPECIFIED, not about any execution
 
@@ -62,39 +67,34 @@ own scope note (`:553-559`) says it is explicitly **NOT** a circuit for the volu
 clearing (the "fhEgg confidential clearing" the conflation is about), optimality is **model-level Lean
 only**; the only runtime-emittable gate is conservation.
 
-### 1c. The runtime STARK — real backend, but the deployed descriptor attests conservation, not optimality
+### 1c. The runtime STARK — registered convex optimality is real and has a hiding path
 
-`circuit-prove/src/cert_f_air.rs` lowers the Cert-F AIR to an `EffectVmDescriptor2` and proves it in the
-**production STARK** (`prove_vm_descriptor2`, BabyBear + FRI, `prove_cert_f` `:334`), witness `(f,π,s)` in
-the trace, only `wᵀf` public (`public_inputs` `:248`). This IS, in principle, a runtime attestation that a
-valid Cert-F certificate exists for `(A,w,c,ε)` with cleared volume `wᵀf`. But four deployed caveats gut
-the optimality half:
+`circuit-prove/src/cert_f_air.rs` lowers the full Cert-F relation to an
+`EffectVmDescriptor2`. The descriptor now enforces conservation, box bounds, slack sign,
+dual feasibility, and the ε-gap link, with explicit field-to-integer admission ranges. Lean proves
+the generic emit theorem plus unconditional integer admissions for two byte-pinned programs:
 
-1. **Registered for ONE toy program only.** `is_registered_ring3_program` (`:299`) hardcodes the unit
-   3-cycle (`n=3, edges [(0,1),(1,2),(2,0)], w=c=[1,1,1], ε=0`) and refuses everything else (`:311-317`).
-2. **The descriptor does NOT force the ε-gap.** Per `docs/reference/MARKET-METATHEORY-REVIEW.md` Finding on
-   `CertFDescriptor`, `certFDescriptor_emit_sound` (`CertFDescriptor.lean:547`) is OVER-NAMED: the
-   gap-linking gate `g == ε−(cᵀs−wᵀf)` is extracted NOWHERE; the descriptor delivers ~2.5 of 5 certificate
-   families (conservation `≡0`, `0≤f`, `0≤s`, and bare `0≤u,0≤d,0≤g` — the nonneg of slack columns WITHOUT
-   the gates linking them to the gap). So the deployed AIR forces **conservation + box**, NOT the
-   ε-optimality clause — the whole point of a certificate.
-3. **ε=0 registration vs achieved-gap mismatch.** The solver bridge `from_solution_json` sets `ε := achieved
-   gap` (generally `>0`, `:491`), but registration requires `ε=0` — so even a ring-3-shaped real solve is
-   refused unless exactly tight (`FHEGG-SDK-READINESS.md §3`).
-4. **Non-hiding PCS.** The deployed path rides plain `TwoAdicFriPcs` (`descriptor_ir2::ir2_config`);
-   witness-hiding is `cert_f_air.rs:58-64`'s own "named, not discharged." `fhegg_clear` evaluates the AIR
-   natively but does NOT run the STARK ("NAMED, not run in this demo", `fhegg_clear.rs:312`).
+1. unit ring3 (`ε=0`), width 465 / 482 constraints;
+2. market4 (`ε=2000`), width 581 / 602 constraints.
 
-**Honest picture (1):** the fhEgg clearing's *optimality* is attested at MODEL LEVEL only. A real runtime
-certificate object (Cert-F) exists for the convex route and its AIR is Lean-proven sound in the abstract,
-but the DEPLOYED STARK descriptor currently attests only conservation + box for one toy program, on a
-non-hiding PCS; the uniform-price fold has no optimality cert at all (conservation gate only).
+Unregistered programs fail closed. `prove_cert_f` remains the plain non-hiding compatibility
+entry point. `prove_cert_f_zk` / `verify_cert_f_zk` run the identical registered AIR through
+`DreggZkStarkConfig` and `HidingFriPcs`; the focused ring3 tooth mints/verifies the proof, asserts
+the ZK random commitment/openings exist, and refuses a changed public objective.
+
+**Honest picture (1):** registered convex Cert-F optimality is runtime-attested, including a real
+hiding PCS construction. This does **not** yet attest the no-viewer uniform-price MPC execution:
+the Cert-F public program exposes `(A,w,c,ε)`, and no proof currently binds the MPC's `(p*,V*)`
+to the committed/encrypted source orders. A complete batch-STARK simulator theorem and full FRI
+decode/soundness floor also remain separate from the working construction.
 
 ---
 
 ## 2. The receipt/turn stack vs the fhEgg stack — separation confirmed
 
-They are **separate stacks that share the STARK backend and meet only at settlement.**
+They are **separate proof stacks.** A runtime claim envelope and authenticated quorum now name and endorse
+both sides precisely, but the installed verifier does not prove that the named ciphertexts open to the named
+orders or that those orders produced the clearing and settlement.
 
 - **Turn-receipt stack** — "a turn is the exercise of an attenuable proof-carrying token over owned state,
   leaving a receipt." Attests state transitions / balance movements on the ledger (the `EffectVmDescriptor2`
@@ -103,7 +103,7 @@ They are **separate stacks that share the STARK backend and meet only at settlem
 - **fhEgg clearing stack** — fold → crossing (or PDHG) → `(p*,V*)` / `f` → Cert-F cert → Cert-F AIR. This is
   the clearing computation and its (convex-route) optimality certificate.
 
-**Where they meet — three points, none of which make the receipt attest the clearing math:**
+**Where they meet — four points, none of which make the receipt attest the clearing math:**
 
 1. **Settlement (the real meeting point).** `metatheory/Market/FhEggLedgerBinding.lean` lowers the fhEgg
    output `(p*,V*)` to a bilateral `MatchNode` cycle (`fhEggMatchNodes` `:49`) that settles through the SAME
@@ -118,10 +118,24 @@ They are **separate stacks that share the STARK backend and meet only at settlem
 3. **Order LINKAGE (product frontier).** `FHEGG-PRODUCT-ORDER-FRONTIER.md §R2.2` compiles integer/disjunctive
    ORDER semantics (OCO, bracket, if-then) onto the turn-kernel's nullifier/receipt sequencing — the receipt
    sequences ORDERS, still not the clearing computation.
+4. **Canonical runtime claim envelope + authenticated co-endorsement.** `fhegg-fhe/src/attestation.rs`
+   domain-separates the exact protocol/session, ordered roster and input digests, BFV identity, rule shape,
+   strict transcript, `(p*,V*)`, output bits, and replay context. `verify_full` additionally requires an
+   external computation-integrity verifier over that exact digest; `OutputOnlySelfAssertion` can never pass.
+   `AuthenticatedQuorumVerifier` enforces an exact ordered Ed25519 key roster, a threshold, canonical signer
+   order, strict signatures, and exact roster equality. The opt-in `dreggnet-market::authenticated_receipt`
+   module commits the full `CertifiedClearing` once inside that claim and checks the output crossing and replay
+   gate from scratch. Its executable negative tooth is load-bearing: old quorum evidence fails after changing
+   a ciphertext digest, but a quorum may sign a new arbitrary ciphertext/settlement pair and it passes. Thus
+   this layer proves exact co-endorsement and attribution—not the missing ciphertext-opening/source relation.
+   The provided replay guard remains process-local; durable deployment needs transactional persistence.
 
-**Honest picture (2):** genuinely independent stacks. The receipt/turn STARK (circuit-soundness) does NOT
-touch the fhEgg clearing computation; it attests settlement of the RESULT. The clearing's own attestation
-is the separate Cert-F object. The conflation — that the receipt infra attests the clearing steps — is wrong.
+**Honest picture (2):** genuinely independent proof stacks with an explicit envelope and authenticated
+co-endorsement between their statements. The receipt/turn STARK does NOT touch the fhEgg clearing
+computation; it attests settlement of the result. Cert-F attests registered convex optimality. Threshold
+signatures attest who endorsed the combined claim. The no-viewer uniform-price execution still needs a
+proof/MAC relation from exact encrypted inputs through computation to the committed order book; an honest
+verifier-in-every-accepted-quorum policy is currently an assumption, not a cryptographic source theorem.
 
 ---
 
@@ -129,45 +143,41 @@ is the separate Cert-F object. The conflation — that the receipt infra attests
 
 Ranked from strongest-honest to weakest, with what is proven vs. runtime-attested:
 
-- **Conservation / value-neutrality / individual-rationality (weak uniform-price optimality)** — the
-  STRONGEST honest claim. PROVEN model-level (`clearedBatch_optimal` via `uniform_price_optimal`, at any
-  `V≥0`) AND the one property runtime-enforceable end-to-end: the conservation gate is emitted in both the
-  uniform-price bridge (`clearingCircuit_sound`) and the Cert-F AIR, and the deployed Cert-F STARK descriptor
-  DOES force the conservation rows. Say this without qualification.
-- **Volume-maximization (the argmax IS the volume peak) / Cert-F ε-optimality** — PROVEN MODEL-LEVEL,
-  NOT runtime-attested. `clearedVolume_optimal` (∀ q<K) and `certifies_epsilon_optimal` are real,
-  non-vacuous theorems, but (a) the uniform-price emit bridge omits the argmax selection by its own scope
-  note, and (b) the deployed Cert-F descriptor does not extract the ε-gap gate (Review: ~2.5 of 5 families).
-  So optimality is a property of the SPECIFIED algorithm, not a checked property of a given execution. The
-  MPC "joined theorem" further reveals the SUBOPTIMAL balance-threshold and calls the WEAK sense "optimal" —
-  OVER-NAMED (Review Finding #1).
+- **Conservation / value-neutrality / individual-rationality** — proven model-level and enforced by the
+  settlement/turn path. This says the recorded transfers are coherent; it does not identify the order
+  source from which a clearing output was computed.
+- **Cert-F ε-optimality for registered convex programs** — proven in Lean and runtime-attested by the full
+  descriptor, with integer admission and optional hiding PCS. This is a checked property of the registered
+  public program and private certificate witness.
+- **Uniform-price volume-maximization from committed no-viewer orders** — the rule and Rust/Lean denotation
+  are proved/model-tested, and the party MPC computes reveal-minimal `(p*,V*)`; the missing statement is the
+  runtime binding from those exact committed/encrypted inputs through the distributed computation to the
+  settlement receipt.
 - **A PDHG / per-optimizer-step certificate** — does NOT exist, and BY DESIGN must not. Verify-not-find puts
   the `T` solver iterations OUT of the trusted base (`CertF.lean` scope note `:36-41`); the Cert-F certificate
   is the intended substitute for a step-trace. Do not claim or seek one.
 
-**The strongest HONEST Market-#4 sentence:** *"The cleared batch conserves value (no mint/burn) and is
-uniform-price value-neutral / individually-rational — proven at model level AND runtime-enforced by the
-conservation AIR gate. Its volume-maximization / ε-optimality is proven at model level (`clearedVolume_optimal`,
-`certifies_epsilon_optimal`) but is NOT yet runtime-attested: the uniform-price bridge omits the argmax
-selection and the deployed Cert-F descriptor does not force the ε-gap."*
+**The strongest HONEST Market-#4 sentence:** *"Registered convex clearings have full integer-sound Cert-F
+optimality proofs and a real hiding batch-STARK path; the no-viewer uniform-price engine computes only
+`(p*,V*)`, and a strict threshold roster can authenticate the exact combined input/output/settlement claim,
+but the ciphertext-opening and malicious-computation relation joining those fields is still missing."*
 
 **The real path to strengthen (no invented mechanism — each already named in the tree):**
 
-1. **Extract the CertFDescriptor gap-gate.** Prove `g == ε−(cᵀs−wᵀf)` at descriptor level and compose the
-   box-upper/dual-feas sub-lemmas into `certFDescriptor_emit_sound`, so the AIR forces the ε-optimality
-   clause it currently only names (Review improvement #8). Then the Cert-F STARK attests optimality, not just
-   conservation.
-2. **Generalize Cert-F beyond ring-3.** Prove `certFDescriptor_emit_sound` generically over `p : CertFProg`,
-   emit + byte-pin descriptors for real market program shapes, and fix the ε=0-vs-achieved-gap registration
-   mismatch so a real (`ε>0`) solve can register (`FHEGG-SDK-READINESS.md §4.2`).
-3. **Attest the uniform-price argmax, or route it through Cert-F.** Emit the argmax-selection AIR (a witness
-   that no other bucket executes strictly more — the "separate AIR obligation, not modeled" of
-   `FhEggClearing.lean §7`), OR clear uniform-price through the Cert-F convex descriptor (it is the
-   linear-utility floor of the circulation LP, `FHEGG-KERNEL.md §2`).
-4. **Mechanize the Rust↔Lean denotation.** Discharge `FhEggTfheSourceRefinementResidual` /
+1. **Bind the uniform-price output to committed orders.** The attestation must name the exact roster,
+   order commitments/ciphertexts, clearing rule/version, `(p*,V*)`, and settlement receipt; output-only
+   attestation is insufficient.
+2. **Choose the Tier-0 integrity construction.** Authenticated malicious-secure MPC with transcript/MAC
+   verification, distributed ZK from shares, or verifiable FHE can close this without creating a plaintext
+   prover. A conventional single-prover ZK witness would itself violate no-viewer.
+3. **Handle private coefficients honestly.** Cert-F hides `(f,π,s)` but treats `(A,w,c,ε)` as public
+   descriptor algebra. Dynamic bid weights therefore require a different fixed AIR/input-commitment
+   relation rather than per-book public descriptor specialization.
+4. **Mechanize the Rust↔Lean denotation and settlement join.** Discharge `FhEggTfheSourceRefinementResidual` /
    `FhEggLedgerSourceBinding` with extracted-Rust differential tests, so "the deployed Rust computes the Lean
    argmax and routes it to the exact node list" stops being trust-by-reading (Review Finding #3).
-5. **Route Cert-F through `HidingFriPcs`** so the witness `(f,π,s)` is actually hidden (currently plain PCS).
+5. **Discharge the remaining proof floors.** Prove the complete hiding batch-STARK simulator statement and
+   the full FRI decode/soundness theorem rather than treating the working PCS configuration as those theorems.
 
 ---
 
@@ -176,6 +186,6 @@ selection and the deployed Cert-F descriptor does not force the ε-gap."*
 - **The conflation itself:** that the receipt/turn-attestation infrastructure attests the fhEgg clearing
   computation. It does not — it attests settlement of the result; the clearing's attestor is the separate
   Cert-F object. Separate stacks, sharing only the STARK backend and meeting at settlement.
-- **Implicit over-read to avoid:** "the fhEgg clearing is STARK-attested optimal." The DEPLOYED Cert-F STARK
-  attests conservation + box for one toy program on a non-hiding PCS; it does not currently force optimality,
-  and the uniform-price fold has no optimality cert at all. Optimality is model-level Lean today.
+- **Implicit over-read to avoid:** "the no-viewer fhEgg clearing is source-bound and STARK-attested optimal."
+  Registered convex Cert-F programs now have real optimality and hiding proofs; the distributed uniform-price
+  path still lacks the exact committed-input → `(p*,V*)` → settlement attestation join.

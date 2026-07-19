@@ -210,14 +210,35 @@ pub struct VkComponents<'a> {
 /// mismatched components compute a different vk_hash and reject the
 /// claim — a soundness signal, not a soundness loss.
 pub fn canonical_vk_v2(components: &VkComponents<'_>) -> [u8; 32] {
+    let proving_system_bytes = components.proving_system_id.canonical_bytes();
+    canonical_vk_v2_from_canonical_parts(
+        components.program_bytes,
+        components.air_fingerprint,
+        &components.verifier_fingerprint,
+        &proving_system_bytes,
+    )
+}
+
+/// Compute the canonical VK v2 hash from already-canonical component bytes.
+///
+/// This is the owned/serializable counterpart to [`canonical_vk_v2`]: constructor
+/// recipes can persist the proving-system identifier's canonical bytes without
+/// attempting to deserialize the `&'static str` fields in [`ProvingSystemId`].
+/// The encoding and domain separation are exactly the same as
+/// [`canonical_vk_v2`].
+pub fn canonical_vk_v2_from_canonical_parts(
+    program_bytes: &[u8],
+    air_fingerprint: [u8; 32],
+    verifier_fingerprint: &VerifierFingerprint,
+    proving_system_bytes: &[u8],
+) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key("dregg-vk-v2");
-    hasher.update(&(components.program_bytes.len() as u64).to_le_bytes());
-    hasher.update(components.program_bytes);
-    hasher.update(&components.air_fingerprint);
-    hasher.update(&components.verifier_fingerprint.canonical_bytes());
-    let ps_bytes = components.proving_system_id.canonical_bytes();
-    hasher.update(&(ps_bytes.len() as u64).to_le_bytes());
-    hasher.update(&ps_bytes);
+    hasher.update(&(program_bytes.len() as u64).to_le_bytes());
+    hasher.update(program_bytes);
+    hasher.update(&air_fingerprint);
+    hasher.update(&verifier_fingerprint.canonical_bytes());
+    hasher.update(&(proving_system_bytes.len() as u64).to_le_bytes());
+    hasher.update(proving_system_bytes);
     *hasher.finalize().as_bytes()
 }
 
@@ -241,6 +262,21 @@ mod tests {
         let a = canonical_vk_v2(&sample_components(b"prog-a"));
         let b = canonical_vk_v2(&sample_components(b"prog-b"));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn canonical_parts_encoder_is_byte_identical_to_typed_recipe() {
+        let components = sample_components(b"program");
+        let proving_system_bytes = components.proving_system_id.canonical_bytes();
+        assert_eq!(
+            canonical_vk_v2(&components),
+            canonical_vk_v2_from_canonical_parts(
+                components.program_bytes,
+                components.air_fingerprint,
+                &components.verifier_fingerprint,
+                &proving_system_bytes,
+            )
+        );
     }
 
     #[test]

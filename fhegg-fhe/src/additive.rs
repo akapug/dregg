@@ -26,13 +26,14 @@
 //! carry-free poly add that updates all K buckets at once. O(N) carry-free adds
 //! vs O(N·K) PBS adds.
 //!
-//! The crossing (`D[p] ≥ S[p]`) is a comparison, and — codex's hard boundary —
-//! "there is no comparison from additive homomorphism alone." So the crossing is
-//! NOT done here; it stays on TFHE (the measured ~10 s O(K) crossing) via a
-//! scheme-switch (CHIMERA/PEGASUS). The correctness harness below recovers p*/V*
-//! from the decrypted curves purely to CHECK the fold against the plaintext
-//! reference — that clear-domain crossing is not part of the measured additive
-//! cost and is labelled as such.
+//! The crossing is a comparison, and there is no comparison from additive
+//! homomorphism alone. It is deliberately NOT done here. The production-shaped
+//! path returns strict [`LeanCiphertext`] curves from [`CollectiveOrderFoldEngine`]
+//! and feeds them to `crate::boundary`: the parties mask and threshold-open only
+//! a one-time-padded value, locally derive shares, and run the boolean MPC crossing.
+//! No scheme switch or clear curve is required. The older [`bfv_fold`] harness
+//! below still recovers p*/V* from decrypted curves solely as a single-key oracle;
+//! that clear-domain crossing is not part of the additive protocol cost.
 //!
 //! Mint-safety: the fold's quantization is the deployable floor/ceil quantizer
 //! proven mint-safe in `metatheory/Market/MintSafeQuantization.lean`
@@ -41,13 +42,421 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{fmt, mem};
 
 use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey, SecretKey};
-use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
+use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter, Serialize as FheSerialize};
 use rand_09::rngs::StdRng as StdRng09;
 use rand_09::SeedableRng as SeedableRng09;
 
+use crate::bfv_lean::{BfvLeanError, LeanCiphertext};
+use crate::gpu_arena::{FoldBackend, FoldCapacity, FoldEngine, ResidentFoldPlan};
+use crate::threshold::{BfvParams, CollectivePublicKey};
 use crate::{order_increment, Order, Side};
+
+/// Fail-closed errors from the collective-key order-fold consumer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CollectiveFoldError {
+    InvalidBucketCount { k: usize, degree: usize },
+    EmptySide(&'static str),
+    Crypto(&'static str),
+    Fold(BfvLeanError),
+}
+
+impl fmt::Display for CollectiveFoldError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidBucketCount { k, degree } => {
+                write!(f, "K={k} is outside the BFV SIMD degree 1..={degree}")
+            }
+            Self::EmptySide(side) => write!(f, "collective order row batch has no {side} row"),
+            Self::Crypto(phase) => write!(f, "fhe.rs failed during collective-key {phase}"),
+            Self::Fold(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for CollectiveFoldError {}
+
+impl From<BfvLeanError> for CollectiveFoldError {
+    fn from(value: BfvLeanError) -> Self {
+        Self::Fold(value)
+    }
+}
+
+pub type CollectiveFoldResult<T> = std::result::Result<T, CollectiveFoldError>;
+
+/// One encrypted unary order row accepted by the collective-key fold.
+///
+/// [`encrypt_collective_order_rows`] constructs these under a [`CollectivePublicKey`].
+/// [`CollectiveOrderRow::from_lean`] is the transport ingress for an already parsed row: it checks
+/// slot capacity, while [`CollectiveOrderFoldEngine::fold_rows`] validates the complete batch shape.
+/// BFV ciphertexts do not carry a verifiable public-key identity or a range proof. Authenticating the
+/// submitting party and binding `plain_bound` to the encrypted row remain host/range-proof obligations.
+#[derive(Clone, Debug)]
+pub struct CollectiveOrderRow {
+    side: Side,
+    ciphertext: LeanCiphertext,
+}
+
+impl CollectiveOrderRow {
+    pub fn from_lean(
+        side: Side,
+        ciphertext: LeanCiphertext,
+        k: usize,
+    ) -> CollectiveFoldResult<Self> {
+        if k == 0 || k > ciphertext.degree {
+            return Err(CollectiveFoldError::InvalidBucketCount {
+                k,
+                degree: ciphertext.degree,
+            });
+        }
+        validate_collective_lean(&ciphertext)?;
+        Ok(Self { side, ciphertext })
+    }
+
+    pub fn side(&self) -> Side {
+        self.side
+    }
+
+    pub fn ciphertext(&self) -> &LeanCiphertext {
+        &self.ciphertext
+    }
+
+    pub fn into_ciphertext(self) -> LeanCiphertext {
+        self.ciphertext
+    }
+}
+
+/// Costs paid once while turning plaintext trader-side unary rows into strict `LeanCiphertext` ingress.
+///
+/// The serialization bridge is explicit because `fhe.rs::Ciphertext` keeps its coefficient storage
+/// crate-private. Its public API offers no coefficient-row borrow from which `LeanCiphertext` could be
+/// built zero-copy. `wire_ingress` therefore measures `Ciphertext::to_bytes` plus the strict canonical
+/// [`LeanCiphertext::from_fhe_bytes`] parse; it is not folded into the GPU timing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CollectiveIngressTiming {
+    pub rows: usize,
+    pub encode: Duration,
+    pub encrypt: Duration,
+    pub wire_ingress: Duration,
+}
+
+/// Backend, adapter-capacity, execution-plan, and wall-clock metadata for one side of the book.
+#[derive(Clone, Copy, Debug)]
+pub struct CollectiveFoldPhase {
+    pub input_ciphertexts: usize,
+    /// Raw resident payload bytes per ciphertext (2 polys × RNS rows × degree × 8).
+    pub ciphertext_bytes: u64,
+    /// Exact adapter capacity for this ciphertext shape when GPU ran; `None` on a labelled CPU fallback.
+    pub capacity: Option<FoldCapacity>,
+    /// Exact upload/reduction plan when GPU ran; `None` on a labelled CPU fallback.
+    pub plan: Option<ResidentFoldPlan>,
+    pub backend: FoldBackend,
+    /// Whole FoldEngine call: validation + upload/dispatch/readback, or CPU arithmetic on fallback.
+    pub elapsed: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CollectiveFoldTiming {
+    pub n_rows: usize,
+    pub k: usize,
+    /// Host-only vector partitioning. Ciphertext row allocations are moved, not cloned.
+    pub partition: Duration,
+}
+
+/// Collective-key folded curves, still encrypted and directly consumable by
+/// [`crate::boundary::MaskedDecryptSession`]. No joint [`SecretKey`] is constructed or returned.
+#[derive(Debug)]
+pub struct CollectiveFoldedBook {
+    pub d_ct: LeanCiphertext,
+    pub s_ct: LeanCiphertext,
+    pub timing: CollectiveFoldTiming,
+    pub demand: CollectiveFoldPhase,
+    pub supply: CollectiveFoldPhase,
+}
+
+/// Retained order-fold consumer. Its [`FoldEngine`] owns/reuses one wgpu device and pipeline; repeated
+/// books therefore do not pay adapter/pipeline initialization on every call.
+pub struct CollectiveOrderFoldEngine {
+    fold_engine: FoldEngine,
+}
+
+impl CollectiveOrderFoldEngine {
+    pub fn new() -> Self {
+        Self {
+            fold_engine: FoldEngine::new(),
+        }
+    }
+
+    /// Explicit policy/headless path whose output is still byte-identical to the CPU fold oracle.
+    pub fn cpu_only() -> Self {
+        Self {
+            fold_engine: FoldEngine::cpu_only(),
+        }
+    }
+
+    pub fn has_gpu_arena(&self) -> bool {
+        self.fold_engine.has_gpu_arena()
+    }
+
+    /// Fold already-ingressed rows. Ownership is consumed so the demand/supply partition moves each
+    /// `LeanCiphertext`; it does not clone the large RNS row allocations.
+    pub fn fold_rows(
+        &self,
+        rows: Vec<CollectiveOrderRow>,
+        k: usize,
+        plaintext_modulus: u64,
+    ) -> CollectiveFoldResult<CollectiveFoldedBook> {
+        let n_rows = rows.len();
+        let t0 = Instant::now();
+        let mut demand_rows = Vec::new();
+        let mut supply_rows = Vec::new();
+        for row in rows {
+            if k == 0 || k > row.ciphertext.degree {
+                return Err(CollectiveFoldError::InvalidBucketCount {
+                    k,
+                    degree: row.ciphertext.degree,
+                });
+            }
+            match row.side {
+                Side::Bid => demand_rows.push(row.ciphertext),
+                Side::Ask => supply_rows.push(row.ciphertext),
+            }
+        }
+        let partition = t0.elapsed();
+        if demand_rows.is_empty() {
+            return Err(CollectiveFoldError::EmptySide("demand"));
+        }
+        if supply_rows.is_empty() {
+            return Err(CollectiveFoldError::EmptySide("supply"));
+        }
+
+        let (d_ct, demand) = fold_one_side(&self.fold_engine, &demand_rows, plaintext_modulus)?;
+        let (s_ct, supply) = fold_one_side(&self.fold_engine, &supply_rows, plaintext_modulus)?;
+        Ok(CollectiveFoldedBook {
+            d_ct,
+            s_ct,
+            timing: CollectiveFoldTiming {
+                n_rows,
+                k,
+                partition,
+            },
+            demand,
+            supply,
+        })
+    }
+
+    /// Complete producer/consumer call: collective-key encryption → one strict wire parse at ingress →
+    /// retained resident GPU fold (or explicitly reported CPU fallback). The output contains no secret key.
+    pub fn fold_orders(
+        &self,
+        orders: &[Order],
+        k: usize,
+        params: &BfvParams,
+        public_key: &CollectivePublicKey,
+    ) -> CollectiveFoldResult<(CollectiveFoldedBook, CollectiveIngressTiming)> {
+        let (rows, ingress) = encrypt_collective_order_rows(orders, k, params, public_key)?;
+        let folded = self.fold_rows(rows, k, params.plaintext_modulus())?;
+        Ok((folded, ingress))
+    }
+}
+
+impl Default for CollectiveOrderFoldEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn ciphertext_bytes(ct: &LeanCiphertext) -> CollectiveFoldResult<u64> {
+    let lanes = ct
+        .polys
+        .len()
+        .checked_mul(ct.moduli.len())
+        .and_then(|n| n.checked_mul(ct.degree))
+        .and_then(|n| n.checked_mul(mem::size_of::<u64>()))
+        .ok_or(BfvLeanError::Incompatible(
+            "collective fold: ciphertext shape byte count overflows host address space",
+        ))?;
+    u64::try_from(lanes)
+        .map_err(|_| {
+            BfvLeanError::Incompatible("collective fold: ciphertext shape byte count exceeds u64")
+        })
+        .map_err(CollectiveFoldError::from)
+}
+
+fn validate_collective_lean(ct: &LeanCiphertext) -> CollectiveFoldResult<()> {
+    if ct.moduli.is_empty() || ct.degree == 0 || ct.polys.len() != 2 {
+        return Err(BfvLeanError::Incompatible(
+            "collective fold: ciphertext is not a nonempty two-polynomial fold shape",
+        )
+        .into());
+    }
+    for poly in &ct.polys {
+        if poly.rows.len() != ct.moduli.len() {
+            return Err(BfvLeanError::Incompatible(
+                "collective fold: polynomial RNS row count differs from modulus count",
+            )
+            .into());
+        }
+        for (modulus_index, (row, &modulus)) in poly.rows.iter().zip(ct.moduli.iter()).enumerate() {
+            if modulus == 0 || row.len() != ct.degree {
+                return Err(BfvLeanError::Incompatible(
+                    "collective fold: invalid modulus or RNS row length",
+                )
+                .into());
+            }
+            if row.iter().any(|&coefficient| coefficient >= modulus) {
+                return Err(BfvLeanError::NonCanonical { modulus_index }.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fold_one_side(
+    engine: &FoldEngine,
+    rows: &[LeanCiphertext],
+    plaintext_modulus: u64,
+) -> CollectiveFoldResult<(LeanCiphertext, CollectiveFoldPhase)> {
+    let bytes = ciphertext_bytes(&rows[0])?;
+    // `bfv_lean::fold` checks wrap at each *addition*, so a one-row CPU fallback would otherwise skip
+    // the gate. Preflight the complete side here so CPU and GPU refuse the exact same envelope.
+    let bound_sum = rows.iter().fold(Some(0u128), |sum, row| {
+        sum.and_then(|value| value.checked_add(u128::from(row.plain_bound)))
+    });
+    if bound_sum.map_or(true, |sum| sum >= u128::from(plaintext_modulus)) {
+        return Err(BfvLeanError::WrapRefused {
+            bound_sum: bound_sum.unwrap_or(u128::MAX),
+            plaintext_modulus,
+        }
+        .into());
+    }
+    let t0 = Instant::now();
+    let execution = engine.fold(rows, plaintext_modulus)?;
+    let elapsed = t0.elapsed();
+    let (capacity, plan) = match execution.backend {
+        FoldBackend::GpuResident(plan) => {
+            let capacity = engine
+                .capacity(&rows[0])
+                .expect("GPU execution implies retained arena")?;
+            debug_assert_eq!(capacity.ciphertexts_per_chunk, plan.ciphertexts_per_chunk);
+            (Some(capacity), Some(plan))
+        }
+        FoldBackend::CpuNoArena | FoldBackend::CpuUnsupportedShape => (None, None),
+    };
+    let phase = CollectiveFoldPhase {
+        input_ciphertexts: rows.len(),
+        ciphertext_bytes: bytes,
+        capacity,
+        plan,
+        backend: execution.backend,
+        elapsed,
+    };
+    Ok((execution.ciphertext, phase))
+}
+
+/// Encrypt trader-side unary order rows under the n-of-n collective public key.
+///
+/// A zero row is inserted only for an otherwise empty side so both encrypted aggregate curves remain
+/// representable without a secret key. The row has `plain_bound = 0`, so it consumes no wrap budget.
+pub fn encrypt_collective_order_rows(
+    orders: &[Order],
+    k: usize,
+    params: &BfvParams,
+    public_key: &CollectivePublicKey,
+) -> CollectiveFoldResult<(Vec<CollectiveOrderRow>, CollectiveIngressTiming)> {
+    if k == 0 || k > params.degree() {
+        return Err(CollectiveFoldError::InvalidBucketCount {
+            k,
+            degree: params.degree(),
+        });
+    }
+
+    let mut timing = CollectiveIngressTiming::default();
+    let mut rng = rand_09::rng();
+    let mut rows = Vec::with_capacity(orders.len() + 2);
+    let mut have_demand = false;
+    let mut have_supply = false;
+
+    for order in orders {
+        match order.side {
+            Side::Bid => have_demand = true,
+            Side::Ask => have_supply = true,
+        }
+        let slots = order_increment(order, k)
+            .into_iter()
+            .map(u64::from)
+            .collect::<Vec<_>>();
+        rows.push(encrypt_collective_row(
+            order.side,
+            &slots,
+            u64::from(order.qty),
+            params,
+            public_key,
+            &mut rng,
+            &mut timing,
+        )?);
+    }
+    let zero = vec![0u64; k];
+    if !have_demand {
+        rows.push(encrypt_collective_row(
+            Side::Bid,
+            &zero,
+            0,
+            params,
+            public_key,
+            &mut rng,
+            &mut timing,
+        )?);
+    }
+    if !have_supply {
+        rows.push(encrypt_collective_row(
+            Side::Ask,
+            &zero,
+            0,
+            params,
+            public_key,
+            &mut rng,
+            &mut timing,
+        )?);
+    }
+    timing.rows = rows.len();
+    Ok((rows, timing))
+}
+
+fn encrypt_collective_row(
+    side: Side,
+    live_slots: &[u64],
+    plain_bound: u64,
+    params: &BfvParams,
+    public_key: &CollectivePublicKey,
+    rng: &mut impl rand_09::CryptoRng,
+    timing: &mut CollectiveIngressTiming,
+) -> CollectiveFoldResult<CollectiveOrderRow> {
+    let mut slots = vec![0u64; params.degree()];
+    slots[..live_slots.len()].copy_from_slice(live_slots);
+    let t0 = Instant::now();
+    let plaintext = Plaintext::try_encode(&slots, Encoding::simd(), params.arc())
+        .map_err(|_| CollectiveFoldError::Crypto("SIMD encode"))?;
+    timing.encode += t0.elapsed();
+
+    let t0 = Instant::now();
+    let ciphertext: Ciphertext = public_key
+        .pk
+        .try_encrypt(&plaintext, rng)
+        .map_err(|_| CollectiveFoldError::Crypto("encryption"))?;
+    timing.encrypt += t0.elapsed();
+
+    // Necessary one-time representation bridge. `fhe.rs::Ciphertext` exposes no public coefficient-row
+    // borrow; the strict parser also checks canonical residues, fresh two-poly shape, and degree.
+    let t0 = Instant::now();
+    let wire = ciphertext.to_bytes();
+    let ciphertext =
+        LeanCiphertext::from_fhe_bytes(&wire, params.moduli(), params.degree(), plain_bound)?;
+    timing.wire_ingress += t0.elapsed();
+    CollectiveOrderRow::from_lean(side, ciphertext, live_slots.len())
+}
 
 /// Per-phase timing + op counts from one BFV additive fold (the honest envelope,
 /// apples-to-apples with `crate::FheTiming` for the TFHE clear).
@@ -91,11 +500,11 @@ pub fn pick_params(plaintext_nbits: usize) -> Arc<BfvParameters> {
         .expect("degree-4096 parameter set")
 }
 
-/// The folded book with its curves still ENCRYPTED — the object the output
-/// boundary consumes. `bfv_fold` decrypts this to check against the plaintext
-/// reference; `crate::boundary::masked_decrypt_to_shares` instead opens only a
-/// one-time-pad-MASKED plaintext and hands mod-t shares to the MPC crossing, so
-/// no curve coefficient is ever decrypted in the clear.
+/// Legacy single-key folded book with its curves still encrypted. `bfv_fold`
+/// decrypts this to check against the plaintext reference, and the legacy
+/// `crate::boundary::masked_decrypt_to_shares` benchmark can mask it first.
+/// Production callers use [`CollectiveFoldedBook`], which carries no secret key
+/// and feeds the party-owned `crate::boundary::MaskedDecryptSession` path.
 pub struct BfvFoldedBook {
     /// Encrypted aggregate demand curve (K slots live, rest zero).
     pub d_ct: Ciphertext,

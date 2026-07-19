@@ -101,7 +101,7 @@ open Dregg2.Circuit.CapMerkleGeneric (StepG)
 open Dregg2.Circuit.Emit.CapOpenEmit (capOpenCols eqGate eqGate_eval diffGate_exact CAP_OPEN_SPAN)
 open Dregg2.Circuit.Emit.FieldsOpenEmit
   (fieldsOpenConstraints effFieldsOpenV3 effFieldsOpenV3_core fieldsOpen_recompose8
-   FieldsMembershipCore fieldsPermOut fieldsLeafPairOf beforeRootWeldsF)
+   FieldsMembershipCore fieldsPermOut fieldsLeafTripleOf beforeRootWeldsF)
 
 set_option autoImplicit false
 
@@ -723,12 +723,12 @@ committed BEFORE `fields_root` block (`beforeRootWeldsF`, reused verbatim), the 
 == the declared `set_root_index` column, and the read leaf's VALUE == the published root-teeth
 column. -/
 
-/-- **`fieldsReadAt8 S8 root k v`** — the faithful 8-felt fields-map READ: some path
-membership-authenticates the `(k, v)` leaf under the ~124-bit `root`. The read twin of
-`fieldsWritesTo8`. -/
+/-- **`fieldsReadAt8 S8 root k v`** — the faithful 8-felt fields-map READ: some LINKED IMT leaf
+`(k, v, next)` membership-authenticates the `(k, v)` map entry under the ~124-bit `root` (the IMT
+pointer is existential at the map level). The read twin of `fieldsWritesTo8`. -/
 def fieldsReadAt8 (S8 : Fields8Scheme) (root : Digest8) (k v : ℤ) : Prop :=
-  ∃ path : List (StepG Digest8),
-    recomposeUp8 S8 (fieldsLeafDigest8 S8 (k, v)) path = root
+  ∃ (next : ℤ) (path : List (StepG Digest8)),
+    recomposeUp8 S8 (fieldsLeafDigest8 S8 (k, v, next)) path = root
 
 /-- The three read-open welds: 8 before-root pins (reused `beforeRootWeldsF`) + the key bind
 (`leaf 0 == idxCol`, the declared `set_root_index` column) + the value expose (`leaf 1 ==
@@ -888,13 +888,14 @@ theorem effFieldsReadOpenV3_forces_read8 (S8 : Fields8Scheme)
       simp
     exact fieldsReadOpen_eqGate_forces base name idxCol rootTeethCol hash minit mfin maddrs t
       hsat i hi hnotlast hcells _ _ hin
-  -- assemble the read.
-  have hpair : fieldsLeafPairOf (capOpenCols base.traceWidth) e
-      = (e.loc idxCol, e.loc rootTeethCol) := by
-    unfold Dregg2.Circuit.Emit.FieldsOpenEmit.fieldsLeafPairOf
+  -- assemble the read: the IMT pointer (leaf col 2) is the existential `next` witness.
+  have htriple : fieldsLeafTripleOf (capOpenCols base.traceWidth) e
+      = (e.loc idxCol, e.loc rootTeethCol, e.loc ((capOpenCols base.traceWidth).leaf 2)) := by
+    unfold Dregg2.Circuit.Emit.FieldsOpenEmit.fieldsLeafTripleOf
     rw [hidx, hval]
-  rw [hpair, hroot] at hrec
-  exact ⟨pathOf8 (capOpenCols base.traceWidth) e DEPTH, hrec⟩
+  rw [htriple, hroot] at hrec
+  exact ⟨e.loc ((capOpenCols base.traceWidth).leaf 2),
+    pathOf8 (capOpenCols base.traceWidth) e DEPTH, hrec⟩
 
 /-- **TOOTH — `effFieldsReadOpenV3_rejects_nonmember`.** If NO path authenticates the published
 `(set_root_index, root-teeth)` pair under the committed fields root, the descriptor is UNSAT. -/

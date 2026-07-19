@@ -8,9 +8,16 @@ denoted a FLAT SPONGE `Dregg2.Substrate.Heap.root hash h = hash (h.map leafOf)` 
 the sorted leaf list. The DEPLOYED map-op (`circuit/src/heap_root.rs`, `circuit/src/descriptor_ir2.rs`
 `Ir2Air::MapOps`) commits a **depth-`d` BINARY MERKLE** root instead:
 
-    leaf = hash[addr, value]                       -- arity-2 `hash_many` (`HeapLeaf::digest`)
+    leaf = hash[addr, value]                       -- ⚠ the PRE-IMT leaf (see below)
     node = hash[left, right]                       -- arity-2 `hash_fact(l, [r])` (the `mix` fold)
     root = the perfect binary fold of the (padded) sorted leaf-digest list, depth `HEAP_TREE_DEPTH = 16`
+
+⚠ ARITY NOTE (gap-#5 IMT, 2026-07): the DEPLOYED `HeapLeaf::digest`/`digest8` is now the LINKED
+arity-3 `hash[addr, value, next_addr]` (`IndexedMerkleTree.imtLeafHash`). The FAITHFUL 8-felt §5b
+section below models exactly that (`linkHeap` + the arity-3 `heapLeafDigest8`). The SCALAR §2-§5
+model in THIS section still folds the historical arity-2 `leafOf` — it is the lane-0/1-felt
+DENOTATION layer (`DescriptorIR2.opensTo`/`writesTo`), a NAMED residue of the IMT cutover: its
+`writesTo` describes the pre-IMT leaf function, pending the denotation rewire onto `ImtLeaf`.
 
 This module models EXACTLY that binary fold (`mapNode`/`foldLevel`/`perfectRoot`) and proves it
 INJECTIVE on the padded leaf-digest vector under the single named Poseidon2-CR floor
@@ -329,10 +336,12 @@ theorem perfectRoot8_injective :
     have hfold := ih hfl_x hfl_y hroot
     exact foldLevel8_injective S8 (2 ^ d) (by omega) (by omega) hfold
 
-/-- The `heapLeafDigest8` map is INJECTIVE on heaps (the `node8` twin of `Heap.map_leaf_injective`):
-distinct sorted entry lists yield distinct 8-felt leaf-digest lists, by `heapLeafDigest8_injective`. -/
+/-- The `heapLeafDigest8` map is INJECTIVE on LINKED leaf lists (the `node8` twin of
+`Heap.map_leaf_injective`): distinct linked entry lists yield distinct 8-felt leaf-digest lists, by
+`heapLeafDigest8_injective` (the arity-3 IMT digest binds addr, value, AND pointer). -/
 theorem map_leaf8_injective :
-    ∀ (l₁ l₂ : Heap.FeltHeap), l₁.map (heapLeafDigest8 S8) = l₂.map (heapLeafDigest8 S8) → l₁ = l₂ := by
+    ∀ (l₁ l₂ : List (ℤ × ℤ × ℤ)),
+      l₁.map (heapLeafDigest8 S8) = l₂.map (heapLeafDigest8 S8) → l₁ = l₂ := by
   intro l₁
   induction l₁ with
   | nil => intro l₂ h; cases l₂ with
@@ -347,10 +356,47 @@ theorem map_leaf8_injective :
       obtain ⟨hleaf, htail⟩ := h
       rw [heapLeafDigest8_injective S8 hleaf, ih t₂ htail]
 
-/-- **`mapRoot8 S8 d h`** — the depth-`d` 8-felt binary-Merkle root of the sorted heap `h` (the `node8`
-twin of `mapRoot`). BYTE-IDENTICAL to `heap_root.rs`'s `CanonicalHeapTree8::root`. -/
+/-- The deployed TERMINAL pointer (`circuit/src/dsl/revocation.rs::SENTINEL_MAX = p − 1 =
+2013265920`): the largest linked leaf points at it (the sorted chain's end). -/
+def SENTINEL_MAX8 : ℤ := 2013265920
+
+/-- **`linkHeap h`** — the gap-#5 IMT LINKING of a sorted pair-heap: each `(addr, value)` entry gains
+the POINTER to its successor's `addr` (the last leaf → `SENTINEL_MAX8`). The model twin of
+`heap_root.rs::relink_next_addrs` — the deployed commitment hashes LINKED `(addr, value, next)`
+leaves (`HeapLeaf::digest8`, arity 3), while the map MEANING (`Heap.get`/`Heap.set`) stays the pair
+list. -/
+def linkHeap : Heap.FeltHeap → List (ℤ × ℤ × ℤ)
+  | [] => []
+  | (a, v) :: rest => (a, v, (rest.head?.map Prod.fst).getD SENTINEL_MAX8) :: linkHeap rest
+
+/-- Dropping the pointers recovers the pair-heap: `linkHeap` loses nothing. -/
+theorem linkHeap_unlink : ∀ h : Heap.FeltHeap,
+    (linkHeap h).map (fun t => (t.1, t.2.1)) = h := by
+  intro h
+  induction h with
+  | nil => rfl
+  | cons hd rest ih => cases hd with
+    | mk a v => simp only [linkHeap, List.map_cons, ih]
+
+/-- `linkHeap` is INJECTIVE (unlink is a retraction). -/
+theorem linkHeap_injective {h₁ h₂ : Heap.FeltHeap} (h : linkHeap h₁ = linkHeap h₂) : h₁ = h₂ := by
+  have := congrArg (List.map (fun t : ℤ × ℤ × ℤ => (t.1, t.2.1))) h
+  rwa [linkHeap_unlink, linkHeap_unlink] at this
+
+/-- `linkHeap` preserves length. -/
+theorem linkHeap_length : ∀ h : Heap.FeltHeap, (linkHeap h).length = h.length := by
+  intro h
+  induction h with
+  | nil => rfl
+  | cons hd rest ih => cases hd with
+    | mk a v => simp only [linkHeap, List.length_cons, ih]
+
+/-- **`mapRoot8 S8 d h`** — the depth-`d` 8-felt binary-Merkle root of the sorted heap `h`: LINK the
+pointers (`linkHeap` — `relink_next_addrs`), digest each linked leaf (arity-3 `heapLeafDigest8` —
+`HeapLeaf::digest8`), fold the perfect `node8` tree. BYTE-IDENTICAL to `heap_root.rs`'s
+`CanonicalHeapTree8::root` over the padded sorted vector. -/
 def mapRoot8 (d : Nat) (h : Heap.FeltHeap) : Digest8 :=
-  perfectRoot8 S8 d (h.map (heapLeafDigest8 S8))
+  perfectRoot8 S8 d ((linkHeap h).map (heapLeafDigest8 S8))
 
 /-- **`mapRoot8_injective` — the 8-felt root BINDS the whole heap.** Two depth-`d` `2^d`-leaf heaps
 publishing the same 8-felt root are EQUAL, re-proved against `perfectRoot8_injective` / `heapNodeOf8`,
@@ -358,10 +404,10 @@ NOT the 1-felt sponge. -/
 theorem mapRoot8_injective (d : Nat) {h₁ h₂ : Heap.FeltHeap}
     (hlen₁ : h₁.length = 2 ^ d) (hlen₂ : h₂.length = 2 ^ d)
     (h : mapRoot8 S8 d h₁ = mapRoot8 S8 d h₂) : h₁ = h₂ := by
-  have hmap : (h₁.map (heapLeafDigest8 S8)) = (h₂.map (heapLeafDigest8 S8)) :=
-    perfectRoot8_injective S8 d (by rw [List.length_map, hlen₁])
-      (by rw [List.length_map, hlen₂]) h
-  exact map_leaf8_injective S8 h₁ h₂ hmap
+  have hmap : ((linkHeap h₁).map (heapLeafDigest8 S8)) = ((linkHeap h₂).map (heapLeafDigest8 S8)) :=
+    perfectRoot8_injective S8 d (by rw [List.length_map, linkHeap_length, hlen₁])
+      (by rw [List.length_map, linkHeap_length, hlen₂]) h
+  exact linkHeap_injective (map_leaf8_injective S8 _ _ hmap)
 
 /-- **`opensToMerkle8 S8 d r k o`** — some depth-`d` `2^d`-leaf sorted heap behind the 8-felt binary root
 `r` reads `o` at `k`. The faithful `node8` replacement of `opensToMerkle`. -/

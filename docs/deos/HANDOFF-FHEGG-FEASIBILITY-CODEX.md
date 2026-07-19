@@ -1,21 +1,26 @@
-# HANDOFF — adversarial feasibility review of fhEgg + The Dark Bazaar (drive with codex gpt-5.6-sol, xhigh)
+# HANDOFF — adversarial implementation of fhEgg + The Dark Bazaar
 
-*For an interactive session: ember drives, codex analyzes. Codex runs `codex exec --sandbox read-only` inside
-`/Users/ember/dev/breadstuffs`, so it CAN and MUST verify claims against the actual files/theorems/commits —
-do not accept this doc's summaries; check them. This is a REVIEW brief, deliberately written to invite the
-harshest critique. The house style is honest grading (PROVED / WORKING / PROTOTYPE / FRONTIER-unbuilt); your
-job is to test whether those grades are earned and whether the FRONTIER is reachable or a dead end.*
+*For an implementation swarm: ember drives, agents inspect and change the real tree at
+`/Users/ember/dev/breadstuffs`. Verify claims against files, theorems, tests, and captured artifacts; do not
+accept this doc's summaries. The house style is honest grading (PROVED / WORKING / PROTOTYPE /
+FRONTIER-unbuilt), but the purpose is not to stop at a verdict: turn every tractable objection into code,
+proofs, protocol teeth, or an exact residual.*
 
 ---
 
 ## 0. YOUR MISSION (read this first, adopt this stance)
 
-You are an **adversarial feasibility analyst** — a skeptical cryptographer + optimization theorist + systems
-engineer. Your job is **NOT** to help build it and **NOT** to cheerlead. It is to answer, per component, with
-evidence: **is this actually achievable, or is it hand-waving that compiles?** Find the fatal flaws. Where a
-claim is sound, say so and say *why* (a clean bill from a hostile reviewer is valuable). Where it is
-overreach, name the obstruction precisely and rate it: **BLOCKED (theoretical impossibility) / HARD (real but
-surmountable, name the cost) / ROUTINE (just engineering)**.
+You are an **adversarial builder** — a skeptical cryptographer + optimization theorist + systems engineer.
+Pressure-test every claim, then implement the strongest honest next layer. Find fatal flaws before they reach
+the product; when a flaw is tractable, repair it in the same campaign and add both-polarity teeth. Where a
+claim is sound, say why. Where it overreaches, name the precise theorem, protocol boundary, or missing wire:
+**BLOCKED** means a real impossibility; **OPEN** means a concrete construction or proof remains; **BUILT**
+means the artifact exists and its narrow gate is green.
+
+Do not import conventional team-size/calendar estimates into this project. Dregg itself is evidence that
+the local distribution is swarm-scale (the full project was a six-week build), and independent lanes are
+expected to move concurrently. Unless ember explicitly asks for scheduling, report **technical dependency
+edges and executable exit gates**, not weeks, quarters, staffing, dollar cost, or a sequential roadmap.
 
 Bias check for yourself: this repo has a documented habit of honest self-audit and a session that just found
 9 forgery-class bugs with exactly your stance. Do NOT soften because the docs are candid — candor is not
@@ -90,11 +95,13 @@ multiply (noise SQUARES) → threshold decrypt (smudge adds). `Bfv/{Noise,Mul,Sm
 ### E. The dependency + soundness substrate.
 - `fhe.rs 0.1.1` is stalled research-grade with an upstream smudging `TODO` (`FheggBfvDependencyResidual`).
   Is building the no-viewer keystone on it defensible even short-term, or does it taint every privacy claim
-  until the Lean-first BFV replaces it? Is Lean-first BFV (fold=addition-only prototyped; multiply + full
-  keygen/threshold = the reach) a credible multi-quarter build or a boil-the-ocean?
-- The STARK floor: Cert-F proofs inherit an undischarged FRI/STARK soundness floor and (deployed) the
-  NON-hiding PCS (`FHEGG-KERNEL.md` correction). Does "provably fair" survive that the *deployed* Cert-F is
-  not witness-hiding (the hiding lane is named-not-discharged)? For a Tier-0 DARK game does that matter?
+  until the Lean-first BFV replaces it? For Lean-first BFV, identify the exact remaining primitives and
+  proof/code gates after the existing addition, multiplication-oracle, noise, key-custody, and threshold work;
+  then build independent pieces in parallel rather than turning their count into a calendar estimate.
+- The STARK floor: Cert-F proofs inherit an undischarged FRI/STARK soundness floor.  The compatibility
+  `prove_cert_f` entry point remains non-hiding, while `prove_cert_f_zk` now proves the same registered
+  descriptor through `HidingFriPcs` and has a real mint/verify/tamper tooth.  Verify the remaining formal
+  simulator floor, and do not confuse Tier-1 solver-sees witness hiding with Tier-0 no-viewer attestation.
 
 ### F. Economic / mechanism soundness (the game as an adversary).
 - Does cryptographic hiding create NEW attack surfaces? (E.g., can a player submit a malformed encrypted bid
@@ -105,21 +112,25 @@ multiply (noise SQUARES) → threshold decrypt (smudge adds). `Bfv/{Noise,Mul,Sm
 
 ---
 
-## 3. HOW EMBER DRIVES THIS (interactive protocol)
-- Ember pastes/points you at one component at a time; you verify against the artifact and return a verdict +
-  evidence (cite file:line / theorem name / the exact obstruction).
-- When you claim BLOCKED, give the theorem/impossibility. When HARD, give the concrete cost + the least-bad
-  path. When ROUTINE, say what to build.
-- Ember may ask you to rank the 5 pillars + 4 halls by achievability, or to red-team a single hall, or to
-  propose the *minimum viable Dark Bazaar* that is fully achievable today with no FRONTIER dependency.
-- Push back on ember too. If the crawl-slice (rewire `dreggnet-market` → Tier-0 uniform-price + Cert-F) has a
-  hidden blocker, say so.
+## 3. HOW EMBER DRIVES THIS (interactive swarm protocol)
+- Ember may point at one component or ask for the whole frontier. Verify against the artifact, state the exact
+  obstruction, and keep working through the strongest safe implementation step.
+- When you claim BLOCKED, give the theorem/impossibility. When OPEN, give the concrete missing relation or
+  protocol wire and attack it. When BUILT, cite the changed artifact and its narrow green gate.
+- Swarm independent hard pieces concurrently: hiding proof path, attested clearing/source binding, no-viewer
+  transport and preprocessing, Dark Bazaar market integration, Lean refinement, and adversarial teeth do not
+  need to wait in a single-file queue.
+- Push back on ember too. If the crawl slice (`dreggnet-market` → Tier-0 clearing → hiding Cert-F → exact
+  settlement receipt) has a hidden blocker, expose it precisely; do not replace it with a smaller claim under
+  the same name.
 
 ## 4. THE DELIVERABLE (what to converge on)
-1. A per-component achievability verdict (BLOCKED / HARD / ROUTINE) with evidence, for the 5 pillars + 4 halls.
+1. A per-component state (BLOCKED / OPEN / BUILT) with evidence, for the 5 pillars + 4 halls.
 2. The **precise boundary** of the achievable Dark Bazaar — specifically the combinatorial-certificate line
    (question A), because that determines whether the flagship is real or must be scoped to gross-substitutes.
 3. The **fatal-flaw list**, if any — the things that, unaddressed, make the vision hand-waving.
-4. A **recommended sequencing** — what to build first that is fully sound, and what research bets (combinatorial
-   certificate, bootstrap-free budget, t-of-n threshold, Lean-first BFV) gate the frontier — with rough cost.
-5. The one honest sentence: **is this attainable, and on what horizon?**
+4. **Landed implementation artifacts** for every tractable frontier: code/proofs, positive and negative
+   teeth, exact security scope, and narrow verification output. Parallel dependency edges may be recorded;
+   calendar/team/cost projections are not a default deliverable.
+5. The one honest sentence: **what works end-to-end now, and what exact cryptographic statement is still
+   missing?**

@@ -292,6 +292,32 @@ pub const SEG_ANCHOR_WIDTH: usize = 8;
 /// `customFieldKExposure` emit / the Rust `generate_rotated_custom_wide` field exposure.
 pub const CUSTOM_APP_FIELD_OCTET_LEN: usize = 8;
 
+/// Faithful custom-wide ABI: all eight canonical program-VK felts are trace-carried
+/// and pinned at PI 54..61 (low4 params + four exact VK teeth).
+pub const CUSTOM_PROGRAM_VK_PI_LO: usize = 54;
+pub const DEPLOYED_CUSTOM_PROGRAM_VK_PI_LEN: usize = 8;
+pub const DIRECT_IR2_VK8_REFUSAL: &str =
+    "direct-IR2 custom fold requires an exact 8-felt leg-to-leaf program-VK correlation";
+
+/// The exact correlation boundary the future full-width binding node consumes.
+/// Length is checked before equality so a low4 prefix can never masquerade as
+/// a faithful program identity.
+pub(crate) fn require_direct_ir2_leg_vk8(
+    leg_program_vk: &[BabyBear],
+    direct_leaf_program_vk: [BabyBear; 8],
+) -> Result<(), String> {
+    let leg_program_vk: [BabyBear; 8] = leg_program_vk
+        .try_into()
+        .map_err(|_| DIRECT_IR2_VK8_REFUSAL.to_string())?;
+    if leg_program_vk != direct_leaf_program_vk {
+        return Err(
+            "direct-IR2 custom fold: leg program VK8 differs from the anchored direct leaf VK8"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Segment field lanes (the order they are exposed in the `expose_claim` table). The two
 /// 8-felt state anchors come first, then the count, then the multi-felt digest.
 pub const SEG_FIRST_OLD: usize = 0;
@@ -3196,11 +3222,11 @@ fn mint_rotated_turn_leaf(
             // never silently widened or zero-padded. The detector is structural (the leg's
             // own exposure pins), the exact custom twin of the wide-carrier geometry
             // boundary in `admit_welded_leg`.
-            dregg_circuit::effect_vm_descriptors::require_custom_commit_teeth_v2(&leg.descriptor)
+            dregg_circuit::effect_vm_descriptors::require_custom_carrier_vk8(&leg.descriptor)
                 .map_err(|e| TurnChainError::TurnProofInvalid {
-                index: i,
-                reason: format!("custom proof-bind commitment version boundary: {e}"),
-            })?;
+                    index: i,
+                    reason: format!("custom proof-bind commitment version boundary: {e}"),
+                })?;
             // THE ARM RE-POINT (the deployed keystone): a custom turn that DECLARES an
             // app-root weld (`bundle.app_root_binding = Some(binding)`) mints the APP-ROOT
             // node + the app-root leaf, NOT the state-only pair. MANDATORY, not a conditional
@@ -3340,85 +3366,78 @@ fn mint_rotated_turn_leaf(
                 }
             }
         }
-        // DIRECT IR2 CUSTOM ARM: the relation is already an emitted
-        // `EffectVmDescriptor2` (for example the Lean private-preference
-        // cell descriptor), so retain/re-prove that exact descriptor and
-        // trace instead of lowering a second Rust `CellProgram` relation.
-        // The binding node and leg-side claims are identical to the
-        // deployed custom app-root arm.
+        // DIRECT IR2 CUSTOM ARM: re-prove the exact Lean-authored descriptor and
+        // connect commitment8, state roots, app root, and canonical program VK8
+        // to the faithful custom-wide leg inside one binding node.
         Some(CarrierWitness::CustomIr2(bundle)) => {
-            dregg_circuit::effect_vm_descriptors::require_custom_commit_teeth_v2(&leg.descriptor)
-                .map_err(|e| TurnChainError::TurnProofInvalid {
-                index: i,
-                reason: format!("direct-IR2 custom proof-bind commitment version boundary: {e}"),
-            })?;
+            bundle
+                .vk_recipe
+                .require_exact_descriptor(&bundle.descriptor)
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            let direct_vk8 = bundle.vk_recipe.canonical_vk_felts();
+            let leg_vk8 = leg
+                .public_inputs
+                .get(
+                    CUSTOM_PROGRAM_VK_PI_LO
+                        ..CUSTOM_PROGRAM_VK_PI_LO + DEPLOYED_CUSTOM_PROGRAM_VK_PI_LEN,
+                )
+                .ok_or_else(|| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: DIRECT_IR2_VK8_REFUSAL.to_string(),
+                })?;
+            require_direct_ir2_leg_vk8(leg_vk8, direct_vk8)
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
 
             let binding = &bundle.app_root_binding;
-            if !binding.is_well_formed() {
+            if !binding.is_well_formed()
+                || binding.field_key + binding.app_root_len > CUSTOM_APP_FIELD_OCTET_LEN
+            {
                 return Err(TurnChainError::TurnProofInvalid {
                     index: i,
                     reason: format!("direct-IR2 custom app-root binding {binding:?} is ill-formed"),
                 });
             }
-
             let n = leg.public_inputs.len();
             let octet_lo = n
                 .checked_sub(2 * SEG_ANCHOR_WIDTH + CUSTOM_APP_FIELD_OCTET_LEN)
                 .ok_or_else(|| TurnChainError::TurnProofInvalid {
                     index: i,
-                    reason: format!(
-                        "direct-IR2 custom app-root leg publishes {n} PIs — too few to \
-                             carry the field octet ahead of the wide anchors"
-                    ),
+                    reason: format!("direct-IR2 custom leg publishes only {n} PIs"),
                 })?;
-            if binding.field_key + binding.app_root_len > CUSTOM_APP_FIELD_OCTET_LEN {
-                return Err(TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!(
-                        "direct-IR2 custom app-root binding {binding:?} exceeds the \
-                             {CUSTOM_APP_FIELD_OCTET_LEN}-felt exposed field octet"
-                    ),
-                });
-            }
-            let field_k_pi_lo = octet_lo + binding.field_key;
             let dual = prove_descriptor_leaf_expose_segment_and_claims(
                 &leg.descriptor,
                 &leg.proof,
                 &leg.public_inputs,
-                &config,
+                config,
                 &[
                     (
                         crate::joint_turn_recursive::CUSTOM_COMMIT_PI_LO,
                         crate::joint_turn_recursive::CUSTOM_COMMIT_LEN,
                     ),
-                    (field_k_pi_lo, binding.app_root_len),
+                    (octet_lo + binding.field_key, binding.app_root_len),
+                    (CUSTOM_PROGRAM_VK_PI_LO, DEPLOYED_CUSTOM_PROGRAM_VK_PI_LEN),
                 ],
             )
             .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-
-            let custom_leaf =
+            let direct_leaf =
                 crate::custom_leaf_adapter::prove_direct_ir2_leaf_with_app_root_commitment(
                     &bundle.descriptor,
                     &bundle.base_trace,
                     &bundle.public_inputs,
+                    &bundle.vk_recipe,
                     binding,
-                    &config,
+                    config,
                 )
-                .map_err(|reason| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!(
-                        "direct-IR2 custom app-root sub-proof leaf mint failed: {reason}"
-                    ),
-                })?;
-            crate::joint_turn_recursive::prove_custom_binding_node_app_root_segmented(
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+            crate::joint_turn_recursive::prove_direct_ir2_binding_node_app_root_segmented(
                 &dual,
-                &custom_leaf,
-                &config,
+                &direct_leaf,
+                config,
                 binding.app_root_len,
             )
             .map_err(|e| TurnChainError::TurnProofInvalid {
                 index: i,
-                reason: format!("direct-IR2 app-root custom-binding node failed: {e:?}"),
+                reason: format!("direct-IR2 custom binding node failed: {e:?}"),
             })?
         }
         // THE BRIDGE FOLD ARM (the 7th carrier) — the named residual CLOSED by the
@@ -4398,6 +4417,25 @@ pub fn fold_two_turns(
 #[cfg(test)]
 mod streaming_fold_tests {
     use super::*;
+
+    #[test]
+    fn direct_ir2_vk_correlation_refuses_low4_and_wrong_leg_vk8() {
+        // SAME direct descriptor/leaf identity in both cases.  The deployed
+        // leg's low4 prefix is insufficient even when it agrees, and a future
+        // full-width leg with one changed lane is also refused.
+        let direct_vk8 = core::array::from_fn(|i| BabyBear::new(100 + i as u32));
+        let low4 = &direct_vk8[..DEPLOYED_CUSTOM_PROGRAM_VK_PI_LEN];
+        let err = require_direct_ir2_leg_vk8(low4, direct_vk8).unwrap_err();
+        assert_eq!(err, DIRECT_IR2_VK8_REFUSAL);
+
+        let mut wrong_leg_vk8 = direct_vk8;
+        wrong_leg_vk8[7] += BabyBear::ONE;
+        let err = require_direct_ir2_leg_vk8(&wrong_leg_vk8, direct_vk8).unwrap_err();
+        assert!(err.contains("leg program VK8 differs"));
+
+        require_direct_ir2_leg_vk8(&direct_vk8, direct_vk8)
+            .expect("the full-width exact identity is the only admitted boundary");
+    }
 
     /// The FREE combine: a symbolic tree that records shape and nothing else — maximally
     /// shape-sensitive. If the streaming schedule builds the same symbolic tree as the balanced

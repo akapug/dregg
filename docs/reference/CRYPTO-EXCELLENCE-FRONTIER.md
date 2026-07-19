@@ -45,22 +45,21 @@ AGG→p\* = 17–76ms) → Cert-F convex ε-optimality certificate (`metatheory/
    unified scheme** end-to-end? The remaining perf frontier is the PDHG convex engine
    (`MEASURED-ENVELOPE.md` — matvec ~50% of the bill) — reapproach the convex solve on the additive
    carrier (proposed), or a different optimizer entirely?
-2. **The crossing + minimal reveal.** Per the grounded Market-#4 resolution: the MPC must reveal
-   ONLY the balance-threshold / clearing price — nothing else (currently `FhEggRustDenotation` reveals
-   the *argmax*, which leaks more). Redesign the crossing reveal-minimal, and reconsider the protocol:
-   Beaver-triple crossing + sequential K−1 argmax scan (~3.4k rounds) vs a **tournament-tree argmax**
-   (log₂K depth) vs function-secret-sharing / garbled-circuit crossing. Round complexity is the driver
-   once it's networked.
-3. **⚑ Hiding commitment (CROSS-CUTTING — see §V).** `HidingFriPcs` is a *named floor*, not proved.
-   A PCS with hiding built in discharges it — and the *same* redesign serves the FRI soundness (§III)
-   and connects to the ArkLib KZG work (KZG is a PCS). Route Cert-F through a genuinely-hiding PCS.
-4. **Runtime optimality certificate.** Extend Cert-F beyond ring-3 to the uniform-price fold + extract
-   the descriptor gap-gate (`certFDescriptor_emit_sound` delivers ~2.5/5 — `MARKET-METATHEORY-REVIEW.md`)
-   → a real runtime ε-optimality attestation of the *actual* clearing. This is "attested optimality"
-   done right (Cert-F, verify-not-find — NOT per-step, NOT the receipt stack; that conflation is
-   corrected in `FHEGG-ATTESTATION-GROUNDING.md`).
-5. **Threshold decrypt.** Wire real threshold-BFV + smudging at the masked boundary (the noise-channel
-   is currently named); the last networked seam to a live Tier-0 clear.
+2. **The crossing + minimal reveal.** The rule is the volume argmax, ties to the lowest bucket, and the
+   party runtime now uses a balanced tournament rather than the old sequential scan. It reconstructs only
+   `(p*,V*)`. `MpcClearingSecurity.lean` now models that exact leakage and proves the obsolete balance
+   threshold/sign vector is both wrong and not simulable from the actual view. The remaining problem is
+   authenticated malicious-secure deployment, not changing the economic rule to leak less by mis-clearing.
+3. **⚑ Hiding commitment (CROSS-CUTTING — see §V).** Cert-F now has a real batch-STARK path through
+   `HidingFriPcs`; its focused tooth asserts the random commitment/openings and refuses a public-output
+   mutation. The open floor is the complete transcript-simulator theorem (plus FRI soundness), not routing.
+4. **Runtime optimality certificate.** The full Cert-F descriptor relation and integer admission now hold
+   for byte-pinned ring3 and market4, and the latter admits nonzero `ε`. The uniform-price/Tier-0 frontier
+   is source binding: prove that the exact committed/encrypted order roster produced `(p*,V*)` and the
+   settlement receipt without creating a plaintext prover.
+5. **Threshold decrypt.** Party-owned n-of-n BFV, smudged masked opening, direct-peer arithmetic ingress,
+   A2B/mod-t reduction, and the balanced crossing compose at local process scope. Authentication,
+   malicious share/input validity, auditable/dealer-free triples, crash recovery, and `t<n` remain.
 
 ## II. DrEX — the trading cryptosystem
 
@@ -89,31 +88,31 @@ and which links are still trusted vs proved?
 
 ## IV. Market metatheory — the 4 confidential-layer wounds (grounded repairs)
 
-Per `MARKET-METATHEORY-REVIEW.md` + `FHEGG-ATTESTATION-GROUNDING.md`: (1) `FhIRAdmissible` mirror/vacuous
-→ build a real syntactic⇒semantic bridge or drop the claim; (2) `InterchainCustody` laundered/vacuous
-→ real cross-boundary conservation; (3) `CertFDescriptor` over-named → extract the ε-gap gate;
-(4) **marquee `MpcClearingSecurity`** → reveal aligned DOWN to balance-threshold, headline =
-conservation/value-neutral (runtime-attested), ε-optimality named model-level, strengthen via §I.4.
+The older review findings must be checked against HEAD before reuse: the Cert-F gap/integer-admission
+defects and the `MpcClearingSecurity` balance-threshold/sign-vector mismatch have been repaired. The live
+frontier is the exact committed-source → private computation → `(p*,V*)` → settlement receipt join, plus
+the remaining distributed-protocol and cryptographic proof floors.
 
 ## V. ⚑ CROSS-CUTTING EXCELLENCE — the hiding PCS
 
-The single redesign that serves the most: a **genuinely-hiding polynomial commitment scheme** would
-(a) discharge fhegg's `HidingFriPcs` confidentiality floor, (b) give the FRI word↔proof bridge a
-*hiding* decode, (c) connect directly to the ArkLib KZG line we just proved. One commitment scheme,
-three payoffs. This is the highest-leverage architectural question in the whole subproject.
+The common construction is now concrete: Plonky3 `HidingFriPcs` serves the DSL uni-STARK and the Cert-F
+batch STARK. The remaining cross-cutting proof obligation is to establish the complete simulator/view
+statement for the deployed batch transcript and compose it with the FRI decode/soundness theorem. That
+same statement must stay distinct from Tier-0 no-viewer integrity, where no single plaintext witness-holder
+exists to run an ordinary prover.
 
 ---
 
-## Setup — unleashing codex (interactive, separate terminal)
+## Setup — unleashing codex in the live swarm
 
-- **Isolation: a separate CLONE, not a worktree** (the tree's discipline is NO WORKTREES, and codex
-  may run big destructive redesign experiments). Suggested: a fresh clone (`~/dev/breadstuffs-codex`,
-  or on persvati/hbox) so codex's experiments + builds never clobber the live swarm tree or contend
-  the one cargo/lake target lock. ember merges the good deltas back surgically (pathspec, never `-A`).
-- **Build/verify commands:** Lean → pinned toolchains (`metatheory/lean-toolchain` = v4.30.0; the
-  ArkLib line is v4.31.0), `swarm-build` on hbox (MemoryMax cgroup — bare cargo/lake OOMs it), NEVER
-  two concurrent `lake build`s. Rust fhegg → `cargo test --release` in `fhegg-fhe/`; KATs are the
-  gate (every perf/scheme change proves equivalence to a plaintext reference).
+- **Shared-tree discipline:** work in the real `/Users/ember/dev/breadstuffs` tree and integrate active
+  WIP when the lane requires it. No worktrees, stash, or branch switching; segregate files where possible
+  and preserve unrelated edits. A separate clone is optional for genuinely destructive experiments, not
+  the default place where useful work must later be hand-carried back.
+- **Build/verify commands:** keep Lean local and run the narrow file/module gate. Use `cargo nextest` for
+  focused Rust crates/tests; offload heavy crypto builds through a warm `scripts/pbuild` lane. The default
+  nextest profile is the fast set; proof/recursion heavies run deliberately in the heavy/release lane, not
+  as a per-edit tax. KATs remain the semantic gate for every performance or scheme change.
 - **The discipline codex inherits (non-negotiable, even mid-redesign):** the sufficient test (a
   redesign that is vacuous is worse than the honest floor); no named-carrier laundering; additive
   where possible; `#assert_axioms`-clean for Lean; verify from committed source (the day's two misses

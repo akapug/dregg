@@ -1602,14 +1602,16 @@ theorem afterHeapRootCols_lane0 (env : VmRowEnv) :
   rfl
 
 /-- **`heapWritesTo8 S8 oldRoot k v newRoot`** — the native-`node8` heap-tree UPDATE-AT-KEY over the FULL
-8-felt root: some sibling/direction `path` recomposes `oldRoot` from the heap leaf `(k, oldVal)`, and
-recomposes `newRoot` from the in-place-updated leaf `(k, v)` along the SAME path. The faithful 8-felt twin
-of the scalar heap `writesTo` (which is the lane-0 projection). Heap leaves are `(addr, value)`, so the
-key IS the address and the written value is the leaf's second field — no `CapLeaf` re-encoding residual. -/
+8-felt root: some sibling/direction `path` recomposes `oldRoot` from the LINKED heap leaf
+`(k, oldVal, next)`, and recomposes `newRoot` from the in-place-updated leaf `(k, v, next)` along the
+SAME path with the SAME pointer (a value update HOLDS the IMT `nextAddr` fixed — it never re-links the
+sorted chain; `heap_root.rs::apply_value_update`). The faithful 8-felt twin of the scalar heap
+`writesTo`. Heap leaves are the gap-#5 IMT `(addr, value, nextAddr)`, so the key IS the address and
+the written value is the leaf's second field — no `CapLeaf` re-encoding residual. -/
 def heapWritesTo8 (S8 : Heap8Scheme) (oldRoot : Digest8) (k v : ℤ) (newRoot : Digest8) : Prop :=
-  ∃ (oldVal : ℤ) (path : List (StepG Digest8)),
-    Heap8Scheme.recomposeUp8 S8 (Heap8Scheme.heapLeafDigest8 S8 (k, oldVal)) path = oldRoot ∧
-    Heap8Scheme.recomposeUp8 S8 (Heap8Scheme.heapLeafDigest8 S8 (k, v)) path = newRoot
+  ∃ (oldVal next : ℤ) (path : List (StepG Digest8)),
+    Heap8Scheme.recomposeUp8 S8 (Heap8Scheme.heapLeafDigest8 S8 (k, oldVal, next)) path = oldRoot ∧
+    Heap8Scheme.recomposeUp8 S8 (Heap8Scheme.heapLeafDigest8 S8 (k, v, next)) path = newRoot
 
 /-- **The 8-felt heap anti-forge tooth.** Along a FIXED sibling path the post-root pins the post-leaf digest
 (`Heap8Scheme.recomposeUp8` injective at the full ~124-bit width). A forged `newRoot` cannot be reached with
@@ -1759,9 +1761,9 @@ twin of the scalar fields `writesTo` (which is the lane-0 projection). Fields le
 (addr = `field_key_hash key`), so the key IS the address and the written value is the leaf's second
 field — no re-encoding residual. -/
 def fieldsWritesTo8 (S8 : Fields8Scheme) (oldRoot : Digest8) (k v : ℤ) (newRoot : Digest8) : Prop :=
-  ∃ (oldVal : ℤ) (path : List (StepG Digest8)),
-    Fields8Scheme.recomposeUp8 S8 (Fields8Scheme.fieldsLeafDigest8 S8 (k, oldVal)) path = oldRoot ∧
-    Fields8Scheme.recomposeUp8 S8 (Fields8Scheme.fieldsLeafDigest8 S8 (k, v)) path = newRoot
+  ∃ (oldVal next : ℤ) (path : List (StepG Digest8)),
+    Fields8Scheme.recomposeUp8 S8 (Fields8Scheme.fieldsLeafDigest8 S8 (k, oldVal, next)) path = oldRoot ∧
+    Fields8Scheme.recomposeUp8 S8 (Fields8Scheme.fieldsLeafDigest8 S8 (k, v, next)) path = newRoot
 
 /-- **The 8-felt fields anti-forge tooth.** Along a FIXED sibling path the post-root pins the post-leaf
 digest (`Fields8Scheme.recomposeUp8` injective at the full ~124-bit width). A forged `newRoot` cannot be
@@ -2083,14 +2085,16 @@ Rust twin: `trace_rotated::CUSTOM_COMMIT_TEETH_BASE` (`#guard`-pinned to 1619 be
 def CUSTOM_COMMIT_TEETH_COL : Nat :=
   (v3OfWith customV1Face [.proofBind customProofBind]).traceWidth
 
-/-- **The VK-epoch PI exposure for the rotated Custom member — the PROOF-BIND FLAG-DAY ROTATION
-(4 → 8 commitment felts, ~62-bit → ~124-bit birthday).** Twelve `.piBinding .first` constraints
+/-- **The VK-epoch PI exposure for the rotated Custom member — the faithful carrier flag day.**
+Sixteen `.piBinding .first` constraints
 publishing the `proofBind` op's bound binding as PUBLIC INPUTS of the descriptor:
 the four LOW `custom_proof_commitment` limbs (`prmCol (CUSTOM_COMMIT + k)` = cols 72..75) at IR2
 PI slots `46..49` (the first slots past the four rotated commit pins, `rotateV3` produces
 `piCount = 46`), the four HIGH commitment limbs — the second squeeze block, on the member-local
-COMMIT-TEETH columns (`CUSTOM_COMMIT_TEETH_COL + k`) — at slots `50..53`, and the four low
-`custom_program_vk_hash` limbs (`prmCol (CUSTOM_VK + k)` = cols 68..71) at slots `54..57`, all
+COMMIT-TEETH columns (`CUSTOM_COMMIT_TEETH_COL + k`) — at slots `50..53`, the four LOW
+`custom_program_vk_hash` limbs (`prmCol (CUSTOM_VK + k)` = cols 68..71) at slots `54..57`, and
+the four HIGH vk limbs on member-local VK-TEETH columns (`CUSTOM_VK_TEETH_COL + k`) at slots
+`58..61`, all
 pinned on the FIRST (the lead Custom) row — the row the `generate_rotated_custom_wide` generator
 lays the bound `(vk, commit)` on. Exposing these columns as PIs is THE change that lets the
 per-turn FOLD connect the custom sub-proof leaf's 8-felt PI-commitment to the descriptor: the
@@ -2098,11 +2102,11 @@ binding (a verifying sub-proof of `E` whose PI commitment EQUALS these columns) 
 the FOLD via these PIs + the custom-leaf recursion (`StarkSoundCustom` / `EngineBinding`, the
 Lean model in `CustomApex`, axiom-clean), NOT by a row-local in-AIR gate — so the per-row
 `proofBind` denotation stays `True` like `memOp`/`umemOp`
-(`DescriptorIR2.VmConstraint2.holdsAt`). The full 8-felt `vk_hash` is carried by the wide host
-PI (`pi.rs::CUSTOM_PROOFS_BASE`) / the turn hash; the descriptor exposes only the four vk-hash
-limbs that exist as trace columns (`columns.rs::CUSTOM_VK_HASH_BASE = 4 elements`). A legacy
-4-felt (eight-pin) custom artifact is refused at the Rust versioned boundary
-(`effect_vm_descriptors::require_custom_commit_teeth_v2`), never silently widened. -/
+(`DescriptorIR2.VmConstraint2.holdsAt`). The descriptor now trace-carries and publishes the FULL
+faithful VK8; a legacy low4 carrier is refused at the Rust versioned boundary
+(`effect_vm_descriptors::require_custom_carrier_vk8`), never folded, padded, or silently widened. -/
+def CUSTOM_VK_TEETH_COL : Nat := CUSTOM_COMMIT_TEETH_COL + 4
+
 def customPiExposure : List VmConstraint2 :=
   (List.range 4).map (fun k =>
     .base (.piBinding .first (prmCol (CUSTOM_COMMIT + k)) (46 + k)))
@@ -2110,6 +2114,8 @@ def customPiExposure : List VmConstraint2 :=
     .base (.piBinding .first (CUSTOM_COMMIT_TEETH_COL + k) (50 + k)))
   ++ (List.range 4).map (fun k =>
     .base (.piBinding .first (prmCol (CUSTOM_VK + k)) (54 + k)))
+  ++ (List.range 4).map (fun k =>
+    .base (.piBinding .first (CUSTOM_VK_TEETH_COL + k) (58 + k)))
 
 /-- The rotated CUSTOM (sel 8) WITH the recursive-proof-binding leg: the runtime passthrough face
 lifted through `rotateV3`, carrying the `proofBind` op (`customProofBind`) that ties the row's
@@ -2123,15 +2129,16 @@ This is THE last rotation-cohort member: with it the HONEST RESIDUE is EMPTY. -/
 def customV3 : EffectVmDescriptor2 :=
   let d := v3OfWith customV1Face [.proofBind customProofBind]
   { d with
-    traceWidth  := d.traceWidth + 4
-    piCount     := d.piCount + 12
+    traceWidth  := d.traceWidth + 8
+    piCount     := d.piCount + 16
     constraints := d.constraints ++ customPiExposure }
 
 -- The commit-teeth base is the PRE-TEETH graduated host width — byte-pinned to the Rust twin
 -- (`trace_rotated::CUSTOM_COMMIT_TEETH_BASE = CUSTOM_HOST_WIDTH = 1619`) and to the widened
--- member geometry (host 1623 = 1619 + 4).
+-- member geometry (host 1627 = 1619 + 4 commit teeth + 4 VK teeth).
 #guard CUSTOM_COMMIT_TEETH_COL == 1619
-#guard customV3.traceWidth == CUSTOM_COMMIT_TEETH_COL + 4
+#guard CUSTOM_VK_TEETH_COL == 1623
+#guard customV3.traceWidth == CUSTOM_COMMIT_TEETH_COL + 8
 
 /-! ### The note-spend nullifier PI weld (the C4 last-flip-gate close).
 
@@ -5826,12 +5833,12 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   w.piCount == b.piCount + 4 && w.traceWidth == b.traceWidth
     && w.tables.length == b.tables.length && w.hashSites.length == b.hashSites.length
 -- The deployed transfer publishes rc at slots 46..49 (piCount 46 → 50); the STEP-3 factory
--- (piCount 63) at 63..66; the custom exposure member (piCount 58 — the proof-bind flag day's
--- twelve exposure pins at 46..57) at 58..61; the bridge-mint felt mint-hash member (piCount 47 —
+-- (piCount 63) at 63..66; the custom exposure member (piCount 62 — the faithful carrier's
+-- sixteen exposure pins at 46..61) at 62..65; the bridge-mint felt mint-hash member (piCount 47 —
 -- the mint-hash pin at 46) at 47..50.
 #guard (v3Registry.lookup "transferVmDescriptor2R24").any (·.piCount == 50)
 #guard (v3Registry.lookup "factoryVmDescriptor2R24").any (·.piCount == 67)
-#guard (v3Registry.lookup "customVmDescriptor2R24").any (·.piCount == 62)
+#guard (v3Registry.lookup "customVmDescriptor2R24").any (·.piCount == 66)
 #guard (v3Registry.lookup "mintVmDescriptor2R24").any (·.piCount == 51)
 
 #guard v3Registry.length == 36
@@ -5843,10 +5850,10 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 -- Phase B-GATE: each graduated registry descriptor's width is the rotated base PLUS `7·n_sites`
 -- lane columns (n_sites varies by v1 face), so the width is `≥ base` and the surplus is a
 -- multiple of 7 (`CHIP_OUT_LANES - 1`) — EXCEPT the custom member, whose surplus additionally
--- carries the 4 COMMIT-TEETH columns (the proof-bind flag-day rotation; `CUSTOM_COMMIT_TEETH_COL`).
+-- carries 8 teeth columns (4 commitment + 4 VK; the faithful custom-carrier flag day).
 -- Concrete per-descriptor widths are pinned by the emit goldens + the Rust registry fingerprints.
 #guard v3Registry.all fun (k, d) =>
-  let teeth := if k == "customVmDescriptor2R24" then 4 else 0
+  let teeth := if k == "customVmDescriptor2R24" then 8 else 0
   EFFECT_VM_WIDTH + APPENDIX_SPAN ≤ d.traceWidth
     && (d.traceWidth - (EFFECT_VM_WIDTH + APPENDIX_SPAN) - teeth) % (CHIP_OUT_LANES - 1) == 0
 #guard v3Registry.all fun (_, d) => d.tables.length == 5
@@ -5910,11 +5917,10 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 -- spawn keeps EXACTLY its 2 cells-tree grow-gate map-ops (limb 0); the 2 cap-tree map-ops (limb 25)
 -- are DROPPED (the INSERT-shaped after-spine deploy — the cap handoff rides `effCapInsertV3`).
 #guard (mapOpsOf spawnWriteV3).length == 2
--- The rotated Custom carries EXACTLY its one proof-binding op + the twelve `customPiExposure`
+-- The rotated Custom carries EXACTLY its one proof-binding op + the sixteen `customPiExposure`
 -- PI pins past the rotated passthrough base (no mem/map ops — the recursive-proof binding is
--- Custom's only NEWLY-EXPRESSIBLE leg; the twelve pins publish its bound 8-felt commitment —
--- both squeeze blocks, the proof-bind flag day — plus the four low vk-hash limbs).
-#guard customV3.constraints.length == (v3Of customV1Face).constraints.length + 1 + 12
+-- Custom's only NEWLY-EXPRESSIBLE leg; the sixteen pins publish commitment8 + canonical VK8).
+#guard customV3.constraints.length == (v3Of customV1Face).constraints.length + 1 + 16
 #guard (proofBindsOf customV3).length == 1
 #guard (memOpsOf customV3).length == 0
 #guard (mapOpsOf customV3).length == 0

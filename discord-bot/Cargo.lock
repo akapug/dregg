@@ -2273,6 +2273,7 @@ dependencies = [
  "dregg-cell",
  "dregg-circuit",
  "dregg-commit",
+ "dregg-macaroon",
  "dregg-token",
  "dregg-trace",
  "serde",
@@ -2348,6 +2349,7 @@ dependencies = [
  "dreggnet-cheevo",
  "dreggnet-compute",
  "dreggnet-council",
+ "dreggnet-discord-identity",
  "dreggnet-doc",
  "dreggnet-game-board",
  "dreggnet-gear",
@@ -3063,6 +3065,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-discord-identity"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "hex",
+]
+
+[[package]]
 name = "dreggnet-doc"
 version = "0.1.0"
 dependencies = [
@@ -3153,6 +3163,7 @@ dependencies = [
  "dregg-intent",
  "dregg-types",
  "dreggnet-offerings",
+ "dreggnet-trade",
  "starbridge-sealed-auction",
 ]
 

@@ -3,18 +3,18 @@
 
 The exact twin of `CapOpenEmit.lean` §11/§12 for the `heap_root` (the second faithful 8-felt Merkle root).
 Where the cap-open read authenticates a HELD capability's authority (7-field `CapLeaf`, facet/mask gates),
-the heap open authenticates a `(addr, value)` leaf against the committed 8-felt heap root — no authority
-machinery, just membership. The keystone `heapOpen_writesTo8` reduces the faithful 8-felt heap-write to TWO
-`HeapMembershipCore` witnesses sharing a path (before = old leaf against the BEFORE heap-root group; after =
-in-place-updated leaf, SAME address, new value, against the AFTER heap-root group), FORCING
-`EffectVmEmitRotationV3.heapWritesTo8` over the FULL ~124-bit root — NEVER the lane-0 squeeze the heap
-GENTIAN tooth (`circuit/tests/heap_root_gentian_weld.rs`) refutes.
+the heap open authenticates a LINKED IMT leaf `(addr, value, nextAddr)` against the committed 8-felt heap
+root — no authority machinery, just membership. The keystone `heapOpen_writesTo8` reduces the faithful
+8-felt heap-write to TWO `HeapMembershipCore` witnesses sharing a path (before = old leaf against the
+BEFORE heap-root group; after = in-place-updated leaf, SAME address, new value, SAME pointer, against the
+AFTER heap-root group), FORCING `EffectVmEmitRotationV3.heapWritesTo8` over the FULL ~124-bit root — NEVER
+the lane-0 squeeze the heap GENTIAN tooth (`circuit/tests/heap_root_gentian_weld.rs`) refutes.
 
 REUSE: the node-recompose spine is leaf-AGNOSTIC (`DeployedCapOpen.nodeLookup`/`nodeInputs`/`nodeInputs_eval`/
 `dir_zero_or_one` over `CapOpenCols`, rides the ONE `node8` chip), so the heap membership reuses it verbatim
 and re-instantiates the digest scheme at `Heap8Scheme` (`heapNodeOf8`, `heapLeafDigest8`). The SOLE
-heap-specific material is the arity-2 leaf absorb (`heapLeafLookup`, `heapLeafDigest_sound8`) — the heap leaf
-is `(addr, value)`, not a 7-field `CapLeaf`.
+heap-specific material is the arity-3 leaf absorb (`heapLeafLookup`, `heapLeafDigest_sound8`) — the heap leaf
+is the gap-#5 IMT `(addr, value, nextAddr)` (`heap_root.rs::HeapLeaf::digest8`), not a 7-field `CapLeaf`.
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY through the named WIDE
@@ -50,41 +50,59 @@ open Dregg2.Circuit.DescriptorIR2 (VmTrace envAt)
 
 set_option autoImplicit false
 
-/-! ## §0 — the heap leaf columns + the arity-2 leaf absorb (the SOLE heap-specific chip lookup).
+/-! ## §0 — the heap leaf columns + the arity-3 IMT leaf absorb (the SOLE heap-specific chip lookup).
 
-The heap membership reuses the `CapOpenCols` layout, reading leaf column 0 as the `addr` and leaf column 1
-as the `value` (columns 2..6, and the facet/mask machinery, are UNUSED — the heap leaf carries no authority).
-The leaf absorb is arity-2 (`heapLeafDigest8 S8 (addr, value) = S8.chipAbsorb8 [addr, value]`), NOT the cap
-arity-7 `leafFields`. -/
+The heap membership reuses the `CapOpenCols` layout, reading leaf column 0 as the `addr`, leaf column 1
+as the `value`, and leaf column 2 as the IMT `nextAddr` POINTER (columns 3..6, and the facet/mask
+machinery, are UNUSED — the heap leaf carries no authority). The leaf absorb is arity-3
+(`heapLeafDigest8 S8 (addr, value, next) = S8.chipAbsorb8 [addr, value, next]` — the deployed
+`HeapLeaf::digest8`, gap-#5 IMT), NOT the cap arity-7 `leafFields`. -/
 
-/-- The `(addr, value)` heap leaf pair read off the row's leaf columns 0/1. -/
+/-- The LINKED `(addr, value, nextAddr)` heap leaf read off the row's leaf columns 0/1/2. -/
+def heapLeafTripleOf (c : CapOpenCols) (env : VmRowEnv) : ℤ × ℤ × ℤ :=
+  (env.loc (c.leaf 0), env.loc (c.leaf 1), env.loc (c.leaf 2))
+
+/-- The `(addr, value)` MAP-LEVEL heap leaf pair (leaf cols 0/1) — the projection the sorted-tree
+`MembersAt8` consumers (accumulator insert/open) read, where the IMT pointer is existential at the
+map level. Equals the first two components of `heapLeafTripleOf`. -/
 def heapLeafPairOf (c : CapOpenCols) (env : VmRowEnv) : ℤ × ℤ :=
   (env.loc (c.leaf 0), env.loc (c.leaf 1))
 
-/-- The 2 heap-leaf column EXPRESSIONS `[addr, value]` (the arity-2 chip absorb's input tuple). -/
+/-- The 3 heap-leaf column EXPRESSIONS `[addr, value, nextAddr]` (the arity-3 chip absorb's input
+tuple). -/
 def heapLeafInputs (c : CapOpenCols) : List EmittedExpr :=
-  [EmittedExpr.var (c.leaf 0), EmittedExpr.var (c.leaf 1)]
+  [EmittedExpr.var (c.leaf 0), EmittedExpr.var (c.leaf 1), EmittedExpr.var (c.leaf 2)]
 
-/-- The heap leaf inputs evaluate to exactly `[addr, value]` of the decoded pair. -/
+/-- The heap leaf inputs evaluate to exactly `[addr, value, nextAddr]` of the decoded triple. -/
 theorem heapLeafInputs_eval (c : CapOpenCols) (env : VmRowEnv) :
     (heapLeafInputs c).map (·.eval env.loc)
-      = [(heapLeafPairOf c env).1, (heapLeafPairOf c env).2] := by
-  simp [heapLeafInputs, heapLeafPairOf, EmittedExpr.eval]
+      = [(heapLeafTripleOf c env).1, (heapLeafTripleOf c env).2.1,
+         (heapLeafTripleOf c env).2.2] := by
+  simp [heapLeafInputs, heapLeafTripleOf, EmittedExpr.eval]
 
 /-- **`heapPermOut S8`** — the WIDE permutation output the shared `node8` chip realizes for the heap
-scheme: the 8 squeezed lanes of `S8.chipAbsorb8` read as a `List ℤ`. `heapPermOut S8 [addr,value] =
-List.ofFn (heapLeafDigest8 S8 (addr,value))` and `heapPermOut S8 (pack8 l r) = List.ofFn (heapNodeOf8 S8
-l r)` — both by `rfl` (`List.ofFn ∘ chipAbsorb8` of the input block). -/
+scheme: the 8 squeezed lanes of `S8.chipAbsorb8` read as a `List ℤ`. `heapPermOut S8 [addr,value,next] =
+List.ofFn (heapLeafDigest8 S8 (addr,value,next))` and `heapPermOut S8 (pack8 l r) = List.ofFn
+(heapNodeOf8 S8 l r)` — both by `rfl` (`List.ofFn ∘ chipAbsorb8` of the input block). -/
 def heapPermOut (S8 : Heap8Scheme) : List ℤ → List ℤ := fun xs => List.ofFn (S8.chipAbsorb8 xs)
 
-/-- The 8-felt heap-leaf chip lookup tuple: absorb the 2 heap-leaf columns, output = the 8 bound
+/-- The 8-felt heap-leaf chip lookup tuple: absorb the 3 heap-leaf columns, output = the 8 bound
 leaf-digest columns (the whole `node8` leaf block). -/
 def heapLeafLookup (c : CapOpenCols) : Lookup :=
   { table := .poseidon2, tuple := chipLookupTupleN (heapLeafInputs c) (digestCols c.leafDigest) }
 
+-- REGRESSION TOOTH (gap-#5 IMT arity): the emitted heap-leaf lookup absorbs EXACTLY 3 inputs —
+-- the deployed `HeapLeaf::digest8` absorbs `[addr, value, next_addr]` (arity 3). An arity-2 emit
+-- (the pre-flip wound) would request a `(2, [addr,value])` chip row the digest8 provide never has,
+-- so every honest heap-open-appendix path would go RED. Pinning the arity here catches the drift at
+-- emit time, before the producer/descriptor differential. (Inputs read consecutive leaf cols 0/1/2.)
+#guard (heapLeafInputs (capOpenCols 100)).length == 3
+#guard (heapLeafInputs (capOpenCols 100)) == [EmittedExpr.var ((capOpenCols 100).leaf 0),
+  EmittedExpr.var ((capOpenCols 100).leaf 1), EmittedExpr.var ((capOpenCols 100).leaf 2)]
+
 /-! ## §1 — the heap membership core + the node/leaf digest soundness (re-instantiated at `Heap8Scheme`). -/
 
-/-- **`HeapMembershipCore tf c env`** — the four facts the 8-felt heap Merkle fold consumes: the arity-2
+/-- **`HeapMembershipCore tf c env`** — the four facts the 8-felt heap Merkle fold consumes: the arity-3
 leaf absorb, the per-level `node8` absorbs (SHARED with cap — the same `nodeLookup`), direction booleanity,
 and the (8-lane) root pin. The heap twin of `DeployedCapOpen.MembershipCore`. -/
 structure HeapMembershipCore (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv) : Prop where
@@ -94,13 +112,13 @@ structure HeapMembershipCore (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEn
   rootPinned : ∀ i : Fin 8, (rootPinGate c i).eval env.loc = 0
 
 /-- **`heapLeafDigest_sound8`** — under a SOUND WIDE chip table, the 8 leaf-digest columns carry the genuine
-native-8-felt `heapLeafDigest8 S8 (addr, value)`. The whole 8-felt block is bound, not just lane-0. The heap
-twin of `leafDigest_sound8` (arity-2 leaf). -/
+native-8-felt `heapLeafDigest8 S8 (addr, value, nextAddr)`. The whole 8-felt block is bound, not just
+lane-0. The heap twin of `leafDigest_sound8` (arity-3 IMT leaf). -/
 theorem heapLeafDigest_sound8 (S8 : Heap8Scheme)
     (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv)
     (hChip : ChipTableSoundN (heapPermOut S8) (tf .poseidon2))
     (hcore : HeapMembershipCore tf c env) :
-    groupVal env c.leafDigest = heapLeafDigest8 S8 (heapLeafPairOf c env) := by
+    groupVal env c.leafDigest = heapLeafDigest8 S8 (heapLeafTripleOf c env) := by
   have hlen : (heapLeafInputs c).length ≤ CHIP_RATE := by
     simp [heapLeafInputs, CHIP_RATE]
   have hmem : (chipLookupTupleN (heapLeafInputs c) (digestCols c.leafDigest)).map (·.eval env.loc)
@@ -111,9 +129,10 @@ theorem heapLeafDigest_sound8 (S8 : Heap8Scheme)
   have h := chip_lookup_sound_N (heapPermOut S8) (tf .poseidon2) hChip env.loc (heapLeafInputs c)
     (digestCols c.leafDigest) hlen hmem
   rw [digestCols_map, heapLeafInputs_eval] at h
-  -- `heapPermOut S8 [addr,value] = List.ofFn (heapLeafDigest8 S8 (addr,value))` by `rfl`.
-  have hreal : heapPermOut S8 [(heapLeafPairOf c env).1, (heapLeafPairOf c env).2]
-      = List.ofFn (heapLeafDigest8 S8 (heapLeafPairOf c env)) := rfl
+  -- `heapPermOut S8 [addr,value,next] = List.ofFn (heapLeafDigest8 S8 (addr,value,next))` by `rfl`.
+  have hreal : heapPermOut S8 [(heapLeafTripleOf c env).1, (heapLeafTripleOf c env).2.1,
+      (heapLeafTripleOf c env).2.2]
+      = List.ofFn (heapLeafDigest8 S8 (heapLeafTripleOf c env)) := rfl
   rw [hreal] at h
   exact List.ofFn_inj.mp h
 
@@ -198,7 +217,7 @@ theorem heapOpen_recompose8 (S8 : Heap8Scheme)
     (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv)
     (hChip : ChipTableSoundN (heapPermOut S8) (tf .poseidon2))
     (hcore : HeapMembershipCore tf c env) :
-    recomposeUp8 S8 (heapLeafDigest8 S8 (heapLeafPairOf c env)) (pathOf8 c env DEPTH)
+    recomposeUp8 S8 (heapLeafDigest8 S8 (heapLeafTripleOf c env)) (pathOf8 c env DEPTH)
       = groupVal env c.capRoot := by
   have hfold := heapRecompose_reaches_cur8 S8 tf c env hChip hcore DEPTH (le_refl _)
   have hleaf := heapLeafDigest_sound8 S8 tf c env hChip hcore
@@ -216,10 +235,12 @@ theorem heapOpen_recompose8 (S8 : Heap8Scheme)
 
 /-- **`heapOpen_writesTo8` — THE STEP-A KEYSTONE.** Two `HeapMembershipCore` witnesses sharing the sibling
 path (before = old leaf membership against the BEFORE heap-root group; after = updated-leaf membership, SAME
-address, new value, against the AFTER heap-root group) FORCE the faithful 8-felt `heapWritesTo8` over the FULL
-~124-bit root — NOT the lane-0 projection. The post root cannot be forged: a colliding heap tree (different
-leaves, same lane-0) yields a different `node8` fold top and FAILS ≥1 of the 8 `rootPinGate` lanes of the
-after core. Trace-forced: the witnesses come from `Satisfied2`, never from `henc`'s `SpineCommits`. -/
+address, new value, SAME IMT pointer, against the AFTER heap-root group) FORCE the faithful 8-felt
+`heapWritesTo8` over the FULL ~124-bit root — NOT the lane-0 projection. The post root cannot be forged: a
+colliding heap tree (different leaves, same lane-0) yields a different `node8` fold top and FAILS ≥1 of the
+8 `rootPinGate` lanes of the after core. The pointer weld (`hnext`) is the IMT value-update discipline — a
+value update never re-links the sorted chain. Trace-forced: the witnesses come from `Satisfied2`, never
+from `henc`'s `SpineCommits`. -/
 theorem heapOpen_writesTo8 (S8 : Heap8Scheme)
     (tf : TraceFamily) (cBefore cAfter : CapOpenCols) (env : VmRowEnv)
     (hChip : ChipTableSoundN (heapPermOut S8) (tf .poseidon2))
@@ -227,26 +248,29 @@ theorem heapOpen_writesTo8 (S8 : Heap8Scheme)
     (hAfter  : HeapMembershipCore tf cAfter env)
     (hsib : cAfter.sib = cBefore.sib)
     (hdir : cAfter.dir = cBefore.dir)
-    (hkey : (heapLeafPairOf cAfter env).1 = (heapLeafPairOf cBefore env).1) :
+    (hkey : (heapLeafTripleOf cAfter env).1 = (heapLeafTripleOf cBefore env).1)
+    (hnext : (heapLeafTripleOf cAfter env).2.2 = (heapLeafTripleOf cBefore env).2.2) :
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.heapWritesTo8 S8
         (groupVal env cBefore.capRoot)
-        ((heapLeafPairOf cBefore env).1) ((heapLeafPairOf cAfter env).2)
+        ((heapLeafTripleOf cBefore env).1) ((heapLeafTripleOf cAfter env).2.1)
         (groupVal env cAfter.capRoot) := by
-  refine ⟨(heapLeafPairOf cBefore env).2, pathOf8 cBefore env DEPTH, ?_, ?_⟩
-  · -- before: recomposeUp8 (heapLeafDigest8 (k, oldVal)) path = groupVal cBefore.capRoot
+  refine ⟨(heapLeafTripleOf cBefore env).2.1, (heapLeafTripleOf cBefore env).2.2,
+    pathOf8 cBefore env DEPTH, ?_, ?_⟩
+  · -- before: recomposeUp8 (heapLeafDigest8 (k, oldVal, next)) path = groupVal cBefore.capRoot
     have hrec := heapOpen_recompose8 S8 tf cBefore env hChip hBefore
-    -- (heapLeafPairOf cBefore env) = ((·).1, (·).2) definitionally, so the digest arg matches.
+    -- (heapLeafTripleOf cBefore env) = ((·).1, (·).2.1, (·).2.2) definitionally (Prod eta).
     simpa using hrec
-  · -- after: recomposeUp8 (heapLeafDigest8 (k, v)) path = groupVal cAfter.capRoot along the SAME path
+  · -- after: recomposeUp8 (heapLeafDigest8 (k, v, next)) path = groupVal cAfter.capRoot, SAME path
     have hpath : pathOf8 cAfter env DEPTH = pathOf8 cBefore env DEPTH := by
       simp only [pathOf8, dirBoolVal, hsib, hdir]
     have hrec := heapOpen_recompose8 S8 tf cAfter env hChip hAfter
     rw [hpath] at hrec
-    -- rewrite the after leaf's addr to the shared key: (pairAfter).1 = (pairBefore).1.
-    have hpair : heapLeafPairOf cAfter env
-        = ((heapLeafPairOf cBefore env).1, (heapLeafPairOf cAfter env).2) := by
-      rw [← hkey]
-    rw [hpair] at hrec
+    -- rewrite the after leaf's addr to the shared key and its pointer to the shared (held) pointer.
+    have htriple : heapLeafTripleOf cAfter env
+        = ((heapLeafTripleOf cBefore env).1, (heapLeafTripleOf cAfter env).2.1,
+           (heapLeafTripleOf cBefore env).2.2) := by
+      rw [← hkey, ← hnext]
+    rw [htriple] at hrec
     exact hrec
 
 #assert_axioms heapLeafDigest_sound8
@@ -257,12 +281,12 @@ theorem heapOpen_writesTo8 (S8 : Heap8Scheme)
 
 /-! ## §3 — the heap-open READ appendix + the before-membership core (`effHeapOpenV3`).
 
-Mirrors `CapOpenEmit.effCapOpenV3` but WITHOUT the authority machinery — a heap leaf `(addr, value)`
-carries no facet/tier, so the read appendix is just the arity-2 leaf absorb, the 16 shared `node8`
-lookups, the 16 dir-boolean gates, and the 8-lane root pin. A `Satisfied2` witness rebuilds
-`HeapMembershipCore` on every active row. -/
+Mirrors `CapOpenEmit.effCapOpenV3` but WITHOUT the authority machinery — a heap leaf
+`(addr, value, nextAddr)` carries no facet/tier, so the read appendix is just the arity-3 IMT leaf
+absorb, the 16 shared `node8` lookups, the 16 dir-boolean gates, and the 8-lane root pin. A
+`Satisfied2` witness rebuilds `HeapMembershipCore` on every active row. -/
 
-/-- **`heapOpenConstraints w`** — the heap-open read constraint list: the arity-2 leaf lookup, the 16
+/-- **`heapOpenConstraints w`** — the heap-open read constraint list: the arity-3 leaf lookup, the 16
 node lookups (SHARED with cap — the same `nodeLookup`), the 16 dir gates, and the 8 root-pin gates. -/
 def heapOpenConstraints (w : Nat) : List VmConstraint2 :=
   .lookup (heapLeafLookup (capOpenCols w))
@@ -363,12 +387,15 @@ theorem afterSpineH_capRoot_after (w : Nat) (env : VmRowEnv) :
     groupVal env (afterSpineColsH w).capRoot
       = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.afterHeapRootCols env := rfl
 
-/-- The 2 narrowed-leaf weld gates: after leaf 0 (addr) = the read's addr; after leaf 1 (value) =
-`param[VALUE]` (the written value). -/
+/-- The 3 narrowed-leaf weld gates: after leaf 0 (addr) = the read's addr; after leaf 1 (value) =
+`param[VALUE]` (the written value); after leaf 2 (IMT `nextAddr`) = the read's pointer — a value
+update HOLDS the pointer fixed (`heap_root.rs::apply_value_update` never re-links the sorted
+chain). -/
 def afterLeafWeldsH (w : Nat) : List VmConstraint2 :=
   [ .base (.gate (eqGate ((afterSpineColsH w).leaf 0) ((capOpenCols w).leaf 0)))
   , .base (.gate (eqGate ((afterSpineColsH w).leaf 1)
-      (prmCol Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.hp.VALUE))) ]
+      (prmCol Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.hp.VALUE)))
+  , .base (.gate (eqGate ((afterSpineColsH w).leaf 2) ((capOpenCols w).leaf 2))) ]
 
 /-- The 8 BEFORE heap-root weld gates: the read's appendix `capRoot` group equals the committed BEFORE
 heap-root block — so `groupVal env (capOpenCols w).capRoot = beforeHeapRootCols env`. -/
@@ -384,8 +411,8 @@ def keyBindGateH (w : Nat) : EmittedExpr :=
   eqGate ((capOpenCols w).leaf 0) Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.HEAP_ADDR
 
 /-- The after-spine constraint list (appended past the heap-open appendix): the after-leaf absorb, the 16
-after-node absorbs, the 8 after root-pins, the 2 narrowed-leaf welds, the 8 before heap-root welds, and the
-key bind. -/
+after-node absorbs, the 8 after root-pins, the 3 narrowed-leaf welds (addr/value/pointer), the 8 before
+heap-root welds, and the key bind. -/
 def afterSpineConstraintsH (w : Nat) : List VmConstraint2 :=
   .lookup (heapLeafLookup (afterSpineColsH w))
   :: ((List.range DEPTH).map (fun lvl => VmConstraint2.lookup (nodeLookup (afterSpineColsH w) lvl)))
@@ -644,6 +671,16 @@ theorem effHeapWriteV3_forces_write8 (S8 : Heap8Scheme)
       simp [afterLeafWeldsH]
     exact afterSpineH_eqGate_forces base name hash minit mfin maddrs t hsat i hi hnotlast hcells
       _ _ hin
+  -- weld: after leaf 2 (IMT nextAddr) = read leaf 2 (the value update HOLDS the pointer).
+  have hnextw : e.loc ((afterSpineColsH base.traceWidth).leaf 2)
+      = e.loc ((capOpenCols base.traceWidth).leaf 2) := by
+    have hin : VmConstraint2.base (.gate (eqGate ((afterSpineColsH base.traceWidth).leaf 2)
+        ((capOpenCols base.traceWidth).leaf 2))) ∈ afterSpineConstraintsH base.traceWidth := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_))
+      simp [afterLeafWeldsH]
+    exact afterSpineH_eqGate_forces base name hash minit mfin maddrs t hsat i hi hnotlast hcells
+      _ _ hin
   -- key bind: read leaf 0 = HEAP_ADDR.
   have hkeyb : e.loc ((capOpenCols base.traceWidth).leaf 0)
       = e.loc Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.HEAP_ADDR := by
@@ -667,17 +704,19 @@ theorem effHeapWriteV3_forces_write8 (S8 : Heap8Scheme)
     have := afterSpineH_eqGate_forces base name hash minit mfin maddrs t hsat i hi hnotlast hcells
       _ _ hin
     simpa [groupVal, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.beforeHeapRootCols] using this
-  -- assemble the §11 keystone over the two cores along the SHARED path.
-  have hkey : (heapLeafPairOf (afterSpineColsH base.traceWidth) e).1
-      = (heapLeafPairOf (capOpenCols base.traceWidth) e).1 := hslot
+  -- assemble the §11 keystone over the two cores along the SHARED path (+ the held pointer).
+  have hkey : (heapLeafTripleOf (afterSpineColsH base.traceWidth) e).1
+      = (heapLeafTripleOf (capOpenCols base.traceWidth) e).1 := hslot
+  have hnext : (heapLeafTripleOf (afterSpineColsH base.traceWidth) e).2.2
+      = (heapLeafTripleOf (capOpenCols base.traceWidth) e).2.2 := hnextw
   have hw := heapOpen_writesTo8 S8 t.tf (capOpenCols base.traceWidth)
-    (afterSpineColsH base.traceWidth) e hChip hbeforeCore hafterCore rfl rfl hkey
+    (afterSpineColsH base.traceWidth) e hChip hbeforeCore hafterCore rfl rfl hkey hnext
   rw [hbroot] at hw
   rw [afterSpineH_capRoot_after] at hw
   -- rewrite key (before addr → HEAP_ADDR) and value (after value → param VALUE).
-  have hkeyb' : (heapLeafPairOf (capOpenCols base.traceWidth) e).1
+  have hkeyb' : (heapLeafTripleOf (capOpenCols base.traceWidth) e).1
       = e.loc Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.HEAP_ADDR := hkeyb
-  have hvalw' : (heapLeafPairOf (afterSpineColsH base.traceWidth) e).2
+  have hvalw' : (heapLeafTripleOf (afterSpineColsH base.traceWidth) e).2.1
       = e.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.hp.VALUE) := hvalw
   rw [hkeyb', hvalw'] at hw
   exact hw

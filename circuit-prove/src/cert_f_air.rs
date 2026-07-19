@@ -26,14 +26,15 @@
 //! `(A, w, c, ε)` rides as descriptor constants. Because those constants are
 //! algebra, each public program must be emitted from Lean and byte-pinned; Rust
 //! refuses an unregistered program rather than specializing constraints at runtime.
-//! (The emit-soundness proof `certFDescriptor_emit_sound` is GENERIC over the
-//! program, so registration costs emission + pinning only — never a new proof.)
-//! [`prove_cert_f`] proves the AIR in
-//! the production IR-v2 STARK ([`prove_vm_descriptor2`], BabyBear + FRI); the
-//! witness `(f, π, s)` — the private flows/allocations — lives ONLY in the trace
-//! (hidden under the hiding PCS), and the only public value exposed is the cleared
-//! volume `wᵀf`. That is the Tier-1 posture (`docs/deos/DREGGFI-PRIVACY-TIERS.md`):
-//! solver-sees, PRIVATE-FROM-THE-WORLD, PQ.
+//! (The field-level emit-soundness proof `certFDescriptor_emit_sound` is GENERIC over the
+//! program. Integer registration additionally chooses proved flow/slack range policies; the
+//! deployed ring3 and market4 policies are discharged by `ring3Prog_integerAdmission` and
+//! `market4Prog_integerAdmission`.)
+//! [`prove_cert_f`] proves the AIR in the production non-hiding IR-v2 STARK
+//! ([`prove_vm_descriptor2`], BabyBear + FRI).  [`prove_cert_f_zk`] proves the
+//! identical descriptor through Plonky3's `HidingFriPcs`; that is the Tier-1 path
+//! whose witness `(f, π, s)` stays private from proof consumers while the public
+//! program `(A, w, c, ε)` and cleared volume `wᵀf` remain visible.
 //!
 //! ## The rows, and how each is enforced in-AIR
 //!
@@ -60,19 +61,22 @@
 //!
 //! Tier-1 = STARK-ZK, private-from-the-WORLD (the world learns the public clearing
 //! `wᵀf` + the program `(A,w,c,ε)`, not the individual orders `f, π, s`). It is NOT
-//! Tier-0 no-viewer: the SOLVER sees plaintext orders. The ZK-hiding of the witness
-//! rests on the STARK's zero-knowledge (the reveal-nothing floor — the formal
-//! "the proof leaks nothing beyond `wᵀf`" theorem is the sibling ZK lane, named, not
-//! discharged here). The range gadget closes integer conservation for values below
-//! `2^VALUE_BITS`; larger amounts ride a wider decomposition or the off-AIR range
-//! proof (the same BabyBear field cap the shielded-ring AIR documents).
+//! Tier-0 no-viewer: the SOLVER sees plaintext orders.  Callers making the Tier-1
+//! claim must use [`prove_cert_f_zk`], not the compatibility [`prove_cert_f`] path.
+//! The construction uses the repository's OS-seeded hiding PCS; a formal simulator
+//! theorem for the complete batch-STARK transcript remains a separate proof floor.
+//! The range gadget closes integer conservation for values below `2^VALUE_BITS`;
+//! larger amounts ride a wider decomposition or the off-AIR range proof (the same
+//! BabyBear field cap the shielded-ring AIR documents).
 
 use dregg_circuit::descriptor_ir2::DreggStarkConfig;
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, Ir2BatchProof, MemBoundaryWitness, parse_vm_descriptor2,
-    prove_vm_descriptor2, verify_vm_descriptor2,
+    EffectVmDescriptor2, Ir2BatchProof, MemBoundaryWitness, UMemBoundaryWitness,
+    parse_vm_descriptor2, prove_vm_descriptor2, prove_vm_descriptor2_for_config,
+    verify_vm_descriptor2, verify_vm_descriptor2_with_config,
 };
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
+use dregg_circuit::stark_zk::{DreggZkStarkConfig, create_zk_config};
 
 /// The in-AIR range-gadget bit-width. A range target is bit-decomposed into this
 /// many booleans that recompose to it, forcing it into `[0, 2^VALUE_BITS)`. `28`
@@ -240,9 +244,17 @@ impl CertFWitness {
     fn range_bit_col(&self, target: usize, j: usize) -> usize {
         self.bit_base() + target * VALUE_BITS + j
     }
-    /// Full trace width: scalars + the `(4m+1)·VALUE_BITS` range bits.
-    fn width(&self) -> usize {
+    /// Historical scalar + `f,u,s,d,g` range-bit prefix.
+    fn core_width(&self) -> usize {
         self.bit_base() + (4 * self.m() + 1) * VALUE_BITS
+    }
+    /// Dedicated potential range bits appended by the integer-admission descriptor revision.
+    fn potential_range_bit_col(&self, i: usize, j: usize) -> usize {
+        self.core_width() + i * VALUE_BITS + j
+    }
+    /// Full trace width: historical prefix plus one 28-bit decomposition per potential.
+    fn width(&self) -> usize {
+        self.core_width() + self.n_nodes * VALUE_BITS
     }
 
     /// The public inputs the STARK exposes: `[wᵀf]` (the cleared volume). The witness
@@ -257,6 +269,12 @@ impl CertFWitness {
     /// `[0, 2^VALUE_BITS)` has no recomposing bits ⇒ the recompose gate is violated
     /// (the soundness tooth).
     pub fn base_trace(&self) -> Vec<Vec<BabyBear>> {
+        if let Some(program) = registered_program(self) {
+            assert!(
+                program.flow_bits <= VALUE_BITS && program.slack_bits <= VALUE_BITS,
+                "registered Cert-F tight-range policy exceeds its 28-bit source decomposition"
+            );
+        }
         let m = self.m();
         let mut row = vec![BabyBear::ZERO; self.width()];
         for e in 0..m {
@@ -271,7 +289,7 @@ impl CertFWitness {
         row[self.obj_col()] = fe(self.objective());
         row[self.g_col()] = fe(self.gap_slack());
 
-        // Range bits: low `VALUE_BITS` bits of each target's value (as an unsigned
+        // Core range bits: low `VALUE_BITS` bits of each target's value (as an unsigned
         // canonical residue). For an in-range nonneg target these recompose to it; a
         // wrapped/negative/out-of-range target's low bits do NOT recompose to the
         // canonical field value, so the recompose gate rejects it.
@@ -280,6 +298,15 @@ impl CertFWitness {
             let v = row[col].as_u32();
             for j in 0..VALUE_BITS {
                 row[self.range_bit_col(t, j)] = BabyBear::new((v >> j) & 1);
+            }
+        }
+        // Potentials were unrestricted in descriptor v1.  The integer-admission revision appends
+        // a real 28-bit range gadget for every π cell.  A negative/wrapped/out-of-range potential
+        // cannot recompose from these low bits and is rejected by the AIR.
+        for i in 0..self.n_nodes {
+            let v = row[self.pi_col(i)].as_u32();
+            for j in 0..VALUE_BITS {
+                row[self.potential_range_bit_col(i, j)] = BabyBear::new((v >> j) & 1);
             }
         }
         vec![row; TRACE_HEIGHT]
@@ -314,13 +341,17 @@ struct RegisteredCertFProgram {
     w: &'static [i64],
     c: &'static [i64],
     epsilon: i64,
+    /// Enforced descriptor policy.  The tight recompose gates reuse the low portion of the
+    /// historical 28-bit flow/slack decomposition.
+    flow_bits: usize,
+    slack_bits: usize,
     descriptor_json: &'static str,
 }
 
-/// The Cert-F program registry. Since `Market.CertFDescriptor.certFDescriptor_emit_sound` is
-/// GENERIC over the public program, registering a new `(A,w,c,ε)` costs only emission
-/// (`emitVmJson2 (certFDescriptorOf p)`), a byte pin in `Market.CertFGolden`, a committed
-/// artifact under `circuit/descriptors/`, and an entry here — NO new proof.
+/// The Cert-F program registry. `certFDescriptor_emit_sound` supplies the generic field theorem,
+/// but integer registration also chooses flow/slack bounds and proves that those enforced bounds
+/// keep the program's complete weighted residuals from wrapping. Ring3 and market4 have the
+/// unconditional admissions `ring3Prog_integerAdmission` / `market4Prog_integerAdmission`.
 const CERT_F_REGISTRY: &[RegisteredCertFProgram] = &[
     RegisteredCertFProgram {
         n_nodes: 3,
@@ -328,6 +359,8 @@ const CERT_F_REGISTRY: &[RegisteredCertFProgram] = &[
         w: &[1, 1, 1],
         c: &[1, 1, 1],
         epsilon: 0,
+        flow_bits: 28,
+        slack_bits: 28,
         descriptor_json: CERT_F_RING3_DESCRIPTOR_JSON,
     },
     RegisteredCertFProgram {
@@ -336,6 +369,8 @@ const CERT_F_REGISTRY: &[RegisteredCertFProgram] = &[
         w: &[100, 100, 100, 300],
         c: &[500, 500, 500, 300],
         epsilon: 2000,
+        flow_bits: 21,
+        slack_bits: 19,
         descriptor_json: CERT_F_MARKET4_DESCRIPTOR_JSON,
     },
 ];
@@ -352,14 +387,14 @@ fn registered_program(cert: &CertFWitness) -> Option<&'static RegisteredCertFPro
 
 /// Resolve a Cert-F public program to a Lean-emitted, byte-pinned artifact. New
 /// `(A,w,c,epsilon)` programs must first be emitted from `CertFDescriptor.lean`
-/// (`certFDescriptorOf p`), byte-pinned, committed, and registered here — the
-/// emit-soundness proof already covers them generically.
+/// (`certFDescriptorOf p`), given sufficient proved range policies, byte-pinned, committed, and
+/// registered here. The field theorem is generic; integer admission is deliberately fail-closed.
 pub fn try_cert_f_descriptor(cert: &CertFWitness) -> Result<EffectVmDescriptor2, String> {
     let Some(prog) = registered_program(cert) else {
         return Err(
             "Cert-F public program is not registered as a Lean-emitted descriptor; \
-             emit certFDescriptorOf(program), byte-pin, and register it before proving \
-             (no new proof needed: certFDescriptor_emit_sound is generic over the program)"
+             choose and prove sufficient integer range policies, emit certFDescriptorOf(program), \
+             byte-pin, and register it before proving"
                 .into(),
         );
     };
@@ -374,8 +409,10 @@ pub fn cert_f_descriptor(cert: &CertFWitness) -> EffectVmDescriptor2 {
 
 /// **Prove a Cert-F certificate in a real dregg STARK.** Lowers the certificate to
 /// the IR-v2 AIR and proves it in the production prover ([`prove_vm_descriptor2`],
-/// BabyBear + FRI, `ir2_config`). The witness `(f, π, s)` is hidden in the trace; only
-/// `wᵀf` is public. A witness violating any Cert-F row (non-conserving, out-of-box,
+/// BabyBear + FRI, `ir2_config`). The witness `(f, π, s)` lives in the trace and is
+/// absent from the public-input vector, but this compatibility path's PCS is binding,
+/// **not hiding**; use [`prove_cert_f_zk`] when witness privacy is a protocol
+/// requirement. A witness violating any Cert-F row (non-conserving, out-of-box,
 /// negative slack, dual-infeasible, gap > ε) has no satisfying trace — the prover's
 /// self-verify refuses it (returns `Err` or panics; use [`prove_cert_f_refused`] for
 /// the negative polarity).
@@ -409,6 +446,50 @@ pub fn verify_cert_f(
     pis: &[BabyBear],
 ) -> Result<(), String> {
     verify_vm_descriptor2(desc, proof, pis)
+}
+
+/// Prove the same Lean-emitted Cert-F descriptor through Plonky3's hiding PCS.
+///
+/// The AIR, public program registration, public inputs, and trace construction are
+/// byte-for-byte the same as [`prove_cert_f`].  Only the caller-supplied STARK
+/// configuration changes: `DreggZkStarkConfig` uses OS-seeded salted Merkle leaves,
+/// random trace rows, and random FRI codewords.  The proof therefore exposes the
+/// registered public program and `wᵀf`, but not raw openings of `(f, π, s)`.
+pub fn prove_cert_f_zk(
+    cert: &CertFWitness,
+) -> Result<
+    (
+        EffectVmDescriptor2,
+        Ir2BatchProof<DreggZkStarkConfig>,
+        Vec<BabyBear>,
+    ),
+    String,
+> {
+    let desc = try_cert_f_descriptor(cert)?;
+    let pis = cert.public_inputs();
+    let base_trace = cert.base_trace();
+    let config = create_zk_config();
+    let proof = prove_vm_descriptor2_for_config(
+        &desc,
+        &base_trace,
+        &pis,
+        &MemBoundaryWitness::default(),
+        &[],
+        &UMemBoundaryWitness::default(),
+        &config,
+    )?;
+    Ok((desc, proof, pis))
+}
+
+/// Verify a hiding Cert-F proof against its Lean-emitted descriptor and public
+/// cleared value.  Verification needs no witness and no prover RNG state.
+pub fn verify_cert_f_zk(
+    desc: &EffectVmDescriptor2,
+    proof: &Ir2BatchProof<DreggZkStarkConfig>,
+    pis: &[BabyBear],
+) -> Result<(), String> {
+    let config = create_zk_config();
+    verify_vm_descriptor2_with_config(desc, proof, pis, &config)
 }
 
 /// The negative-polarity gate: return `true` iff a bad certificate CANNOT produce a
@@ -593,7 +674,10 @@ fn bridge_solution_json(json: &str, scale: i64) -> Result<CertFWitness, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dregg_circuit::descriptor_ir2::{ir2_eval_accepts_i64, parse_vm_descriptor2};
+    use dregg_circuit::descriptor_ir2::{
+        VmConstraint2, eval_lean_expr, ir2_eval_accepts_i64, parse_vm_descriptor2,
+    };
+    use dregg_circuit::lean_descriptor_air::VmConstraint;
 
     /// **THE LEAN-AUTHORED DESCRIPTOR (byte-twin discipline).** `metatheory/Market/CertFDescriptor.lean`
     /// AUTHORS the Cert-F `EffectVmDescriptor2` (`certFDescriptorOf`) and PROVES the emit-soundness
@@ -621,6 +705,76 @@ mod tests {
         );
     }
 
+    /// The integer-admission revision is a deliberate descriptor compatibility break.  These
+    /// shape teeth turn RED if a flow/slack tight recompose or any potential range gadget is
+    /// removed from either registered wire.
+    #[test]
+    fn registered_descriptors_carry_integer_admission_policy() {
+        let ring = cert_f_descriptor(&ring3_cert());
+        assert_eq!(ring.trace_width, 465);
+        assert_eq!(ring.constraints.len(), 482);
+
+        let market = try_cert_f_descriptor(&market4_cert()).expect("market4 is registered");
+        assert_eq!(market.trace_width, 581);
+        assert_eq!(market.constraints.len(), 602);
+
+        let ring_policy = registered_program(&ring3_cert()).unwrap();
+        assert_eq!((ring_policy.flow_bits, ring_policy.slack_bits), (28, 28));
+        let market_policy = registered_program(&market4_cert()).unwrap();
+        assert_eq!(
+            (market_policy.flow_bits, market_policy.slack_bits),
+            (21, 19)
+        );
+    }
+
+    /// RED-WHEN-BROKEN: shifting every potential by `2^28` preserves every integer certificate
+    /// equation (only potential differences are used), so the native Cert-F check still accepts.
+    /// Descriptor v1 also accepted because π was unrestricted; the appended π range gadgets must
+    /// reject this otherwise-valid representative.
+    #[test]
+    fn air_rejects_unranged_potential_shift() {
+        let mut cert = ring3_cert();
+        for pi in &mut cert.pi {
+            *pi += 1 << VALUE_BITS;
+        }
+        assert!(
+            cert.check().valid,
+            "a common potential shift preserves Cert-F"
+        );
+        let desc = cert_f_descriptor(&cert);
+        let pis: Vec<i64> = cert
+            .public_inputs()
+            .iter()
+            .map(|b| b.as_u32() as i64)
+            .collect();
+        assert!(
+            !ir2_eval_accepts_i64(&desc, &i64_trace(&cert), &pis),
+            "an otherwise-valid 2^28 potential shift must hit the deployed range tooth"
+        );
+        // ring3: core 389 + 3 flow + 3 slack + π₀'s 28 boolean gates, then recompose.
+        let row = cert.base_trace();
+        assert_ne!(gate_value(&desc, 423, &row[0]), BabyBear::ZERO);
+    }
+
+    /// The two market-specific tight recomposes reuse the original boolean bands but bind only
+    /// their low 21 / 19 bits. These direct gate teeth isolate the exact policy constraints from
+    /// the other certificate families, so deleting either append turns this test RED.
+    #[test]
+    fn market4_tight_flow_and_slack_gates_bite() {
+        let mut flow = market4_cert();
+        flow.f[0] = 1 << 21;
+        let desc = try_cert_f_descriptor(&flow).expect("public program remains registered");
+        let row = flow.base_trace();
+        // market4 core ends at 507; the first appended gate is f₀ < 2²¹.
+        assert_ne!(gate_value(&desc, 507, &row[0]), BabyBear::ZERO);
+
+        let mut slack = market4_cert();
+        slack.s[0] = 1 << 19;
+        let row = slack.base_trace();
+        // Four flow guards occupy 507..510; s₀ < 2¹⁹ is constraint 511.
+        assert_ne!(gate_value(&desc, 511, &row[0]), BabyBear::ZERO);
+    }
+
     /// The i64 base-trace as the native evaluator wants it (single row is enough — every
     /// row is identical, but we hand it the real height).
     fn i64_trace(cert: &CertFWitness) -> Vec<Vec<i64>> {
@@ -628,6 +782,13 @@ mod tests {
         felt.iter()
             .map(|r| r.iter().map(|c| c.as_u32() as i64).collect())
             .collect()
+    }
+
+    fn gate_value(desc: &EffectVmDescriptor2, constraint: usize, row: &[BabyBear]) -> BabyBear {
+        match &desc.constraints[constraint] {
+            VmConstraint2::Base(VmConstraint::Gate(body)) => eval_lean_expr(body, row),
+            other => panic!("constraint {constraint} is not an admission gate: {other:?}"),
+        }
     }
 
     #[test]
@@ -729,9 +890,9 @@ mod tests {
     // (Native-eval above is the fast pre-check; THESE mint + verify actual proofs.)
     // ========================================================================
 
-    /// POSITIVE: a valid certificate is proven in a REAL dregg STARK and the proof
-    /// VERIFIES. The witness `(f, π, s)` lives only in the trace (hidden under the
-    /// FRI/PCS commitment); the sole public value is the cleared volume `wᵀf`.
+    /// POSITIVE: a valid certificate is proven in the production, binding IR-v2
+    /// STARK and the proof VERIFIES.  This compatibility proof is not witness-hiding;
+    /// the hiding polarity is pinned separately below.
     #[test]
     fn stark_proves_and_verifies_ring3() {
         let cert = ring3_cert();
@@ -742,6 +903,42 @@ mod tests {
         assert_eq!(pis, cert.public_inputs());
         assert_eq!(pis[0].as_u32(), 3);
         verify_cert_f(&desc, &proof, &pis).expect("the minted Cert-F STARK proof must verify");
+    }
+
+    /// HIDING POSITIVE + BINDING NEGATIVE: the same Cert-F AIR proves under
+    /// `HidingFriPcs`, verifies without the witness, and refuses a changed public
+    /// cleared volume.  The config's randomness comes from fresh OS entropy; this
+    /// tooth exercises the actual batch-STARK ZK path rather than merely type-checking
+    /// the config.
+    #[test]
+    fn hiding_stark_proves_and_binds_public_volume_ring3() {
+        let cert = ring3_cert();
+        assert!(cert.check().valid);
+        let (desc, proof, pis) =
+            prove_cert_f_zk(&cert).expect("valid ring3 must prove through HidingFriPcs");
+        assert_eq!(pis, cert.public_inputs());
+        assert_eq!(pis[0].as_u32(), 3);
+        assert!(
+            proof.commitments.random.is_some(),
+            "the batch proof must carry the ZK random-polynomial commitment"
+        );
+        assert!(
+            proof
+                .opened_values
+                .instances
+                .iter()
+                .all(|instance| instance.base_opened_values.random.is_some()),
+            "every present AIR instance must carry its ZK random opening"
+        );
+        verify_cert_f_zk(&desc, &proof, &pis)
+            .expect("the hiding Cert-F proof must verify without its witness");
+
+        let mut forged_pis = pis.clone();
+        forged_pis[0] = BabyBear::new(4);
+        assert!(
+            verify_cert_f_zk(&desc, &proof, &forged_pis).is_err(),
+            "a hiding proof for volume 3 must not verify as volume 4"
+        );
     }
 
     /// The proving surface also fails closed for an unregistered public program.
@@ -865,8 +1062,8 @@ mod tests {
         let cert = market4_cert();
         let desc = try_cert_f_descriptor(&cert).expect("market4 is Lean-registered");
         assert_eq!(
-            desc.trace_width, 497,
-            "the market4 descriptor (m=4), not ring-3's 381"
+            desc.trace_width, 581,
+            "the market4 descriptor (m=4), not ring-3's 465"
         );
         let (desc, proof, pis) =
             prove_cert_f(&cert).expect("the worked market4 certificate must prove");

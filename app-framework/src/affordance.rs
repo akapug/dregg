@@ -733,6 +733,47 @@ impl GatedAffordance {
             .submit_turn(&turn)
             .map_err(FireExecuteError::Executor)
     }
+
+    /// [`Self::fire_through_executor_with`] with witness blobs produced beside
+    /// the live-state-derived effects and attached before the final signature.
+    ///
+    /// The closure returns `(effects, witnesses)` atomically from the same live
+    /// state read. This is load-bearing for witnessed state predicates: the
+    /// executor checks the blobs, while `Action::hash` binds them to the signer.
+    /// A missing cell or failed cap/state gate still submits nothing.
+    pub fn fire_through_executor_with_witnesses<F>(
+        &self,
+        held: &AuthRequired,
+        cipherclerk: &AppCipherclerk,
+        executor: &EmbeddedExecutor,
+        produce: F,
+    ) -> Result<dregg_turn::TurnReceipt, FireExecuteError>
+    where
+        F: FnOnce(&CellState) -> (Vec<Effect>, Vec<dregg_turn::action::WitnessBlob>),
+    {
+        let actor = cipherclerk.cell_id();
+        let surface_cell = self.affordance_cell_or(actor);
+        let live = executor.cell_state(surface_cell).ok_or_else(|| {
+            FireExecuteError::Gate(FireError::StateConditionUnmet {
+                affordance: self.affordance.name.clone(),
+                reason: "cell has no live state in the embedded ledger (fail-closed)".to_string(),
+            })
+        })?;
+        self.fire(actor, held, &live, &live)
+            .map_err(FireExecuteError::Gate)?;
+
+        let (effects, witness_blobs) = produce(&live);
+        // `make_action` signs the ordinary payload. Mutating witnesses afterward
+        // invalidates that signature, so re-sign the complete action before the
+        // turn is wrapped/submitted.
+        let mut action = cipherclerk.make_action(surface_cell, self.name(), effects);
+        action.witness_blobs = witness_blobs;
+        let signed = cipherclerk.sign_action(action);
+        let turn = cipherclerk.make_turn(signed);
+        executor
+            .submit_turn(&turn)
+            .map_err(FireExecuteError::Executor)
+    }
 }
 
 /// A cell's published **gated affordance surface** — affordances each carrying BOTH a

@@ -36,6 +36,22 @@ pub type FieldElement = [u8; 32];
 /// The zero field element.
 pub const FIELD_ZERO: FieldElement = [0u8; 32];
 
+/// Encode an `i64` as a 32-byte heap [`FieldElement`] (little-endian, low 8
+/// bytes). Round-trips with [`decode_i64`]. THE canonical `i64` <-> field codec
+/// every ledger shares (`allowance` re-exports it so the encoding cannot drift).
+pub fn encode_i64(value: i64) -> FieldElement {
+    let mut f = [0u8; 32];
+    f[0..8].copy_from_slice(&value.to_le_bytes());
+    f
+}
+
+/// Decode a heap field back to the `i64` it encodes (low 8 bytes).
+pub fn decode_i64(f: &FieldElement) -> i64 {
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&f[0..8]);
+    i64::from_le_bytes(buf)
+}
+
 /// Number of user-defined state slots per cell.
 pub const STATE_SLOTS: usize = 16;
 

@@ -174,7 +174,7 @@ pub use dregg_cell::CapabilityRef;
 // interface is resolved in userspace and resolves to existing effects).
 pub use invoke::{
     InterfaceRegistry, InvokeAuthority, InvokeRefused, invoke, invoke_with_descriptor,
-    resolve_against, resolve_invocation,
+    invoke_with_descriptor_with_witnesses, resolve_against, resolve_invocation,
 };
 
 // The reactive twin of `invoke()`: a service DECLARES what cells/ops it watches

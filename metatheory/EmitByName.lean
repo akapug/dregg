@@ -58,6 +58,10 @@ import Dregg2.Circuit.Emit.PredicatesNeqEmit
 import Dregg2.Circuit.Emit.PresentationEmit
 import Dregg2.Circuit.Emit.QuantifiedAbsenceEmit
 import Dregg2.Circuit.Emit.TemporalPredicateEmit
+import Dregg2.Games.PrivatePreferenceDescriptor
+import Dregg2.Games.PrivatePreferenceCellDescriptor
+import Dregg2.Games.PrivateShuffleDescriptor
+import Market.DarkBazaarPrivateDescriptor
 
 open Dregg2.Circuit.DescriptorIR2 (EffectVmDescriptor2 emitVmJson2)
 
@@ -143,13 +147,21 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
       Dregg2.Circuit.Emit.TemporalPredicateEmit.temporalPredicateDesc)
   , ("turn-chain-binding.json",
       Dregg2.Circuit.Emit.EffectVmEmitTurnChainBinding.turnChainBindingDescriptor)
+  , ("dark-bazaar-private-n4k4.json",
+      Market.DarkBazaarPrivateDescriptor.darkBazaarPrivateN4K4Descriptor)
+  , ("private-preference-n4k4.json",
+      Dregg2.Games.PrivatePreferenceDescriptor.privatePreferenceN4K4Descriptor)
+  , ("private-preference-cell-n4k4.json",
+      Dregg2.Games.PrivatePreferenceCellDescriptor.privatePreferenceCellN4K4Descriptor)
+  , ("private-shuffle-n8.json",
+      Dregg2.Games.PrivateShuffleDescriptor.privateShuffleN8Descriptor)
   ]
 
-/- The routing table covers the checked-in directory exactly (30 artifacts). A bare count is a
+/- The routing table covers the checked-in directory exactly (34 artifacts). A bare count is a
 weak guard, but it is the one this file can state without IO: the STRONG guard is
 `emit_descriptors.py`'s recursive coverage check, which fails on any by-name file this table does
 not reproduce. -/
-#guard byNameDescriptors.length == 30
+#guard byNameDescriptors.length == 34
 
 def main : IO Unit := do
   for (file, d) in byNameDescriptors do

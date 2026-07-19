@@ -1276,6 +1276,8 @@ dependencies = [
  "solana-stake-interface",
  "solana-vote-interface",
  "subtle",
+ "tar",
+ "zstd",
 ]
 
 [[package]]
@@ -1649,6 +1651,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-ipfs"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dregg-lean-ffi"
 version = "0.1.0"
 dependencies = [
@@ -1703,6 +1714,8 @@ dependencies = [
  "dreggnet-offerings",
  "game-turn-slice",
  "procgen-dregg",
+ "serde",
+ "serde_json",
  "spween-dregg",
 ]
 
@@ -1737,6 +1750,10 @@ dependencies = [
  "curve25519-dalek",
  "dregg-bridge",
  "dregg-governance",
+ "dregg-intent",
+ "dregg-payable",
+ "dregg-turn",
+ "dregg-types",
  "ed25519-dalek",
  "hmac 0.12.1",
  "serde_json",
@@ -1839,6 +1856,7 @@ dependencies = [
  "dregg-turn",
  "dregg-types",
  "ed25519-dalek",
+ "fhegg-solver",
  "getrandom 0.3.4",
  "hex",
  "hmac 0.12.1",
@@ -2044,6 +2062,7 @@ dependencies = [
  "dregg-app-framework",
  "dregg-node-target",
  "dregg-pay",
+ "dregg-types",
  "dreggnet-tournament",
  "dungeon-on-dregg",
  "procgen-dregg",
@@ -2078,11 +2097,14 @@ dependencies = [
  "dregg-app-framework",
  "dregg-cell",
  "dregg-dice",
+ "dregg-schema",
  "dregg-turn",
  "dregg-types",
  "dregg-zkoracle-prove",
  "dreggnet-asset",
  "procgen-dregg",
+ "serde",
+ "serde_json",
  "spween",
  "spween-dregg",
  "starbridge-v2",
@@ -2236,6 +2258,19 @@ dependencies = [
  "bitvec",
  "rand_core 0.6.4",
  "subtle",
+]
+
+[[package]]
+name = "fhegg-solver"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "pollster",
+ "rand 0.8.6",
+ "rayon",
+ "serde",
+ "serde_json",
+ "wgpu",
 ]
 
 [[package]]
@@ -5423,6 +5458,7 @@ dependencies = [
  "dregg-cell",
  "dregg-turn",
  "dregg-types",
+ "postcard",
  "serde",
  "serde_json",
 ]
@@ -5911,6 +5947,7 @@ dependencies = [
  "blake3",
  "dregg-circuit",
  "dregg-circuit-prove",
+ "dregg-ipfs",
  "dregg-lightclient",
  "dungeon-on-dregg",
  "ed25519-dalek",

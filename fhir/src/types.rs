@@ -331,7 +331,155 @@ impl ProgramType {
 /// The precise reason a product fails to type-check at a tier. Every variant
 /// names the *structural* obstruction — the compiler never rejects vaguely.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum PortfolioQpViolation {
+    /// A zero-variable portfolio does not define the required budget simplex.
+    Empty,
+    /// The covariance storage must be exactly `n × n`, where `n = mu.len()`.
+    DimensionMismatch {
+        rows: usize,
+        cols: usize,
+        data_len: usize,
+        expected_n: usize,
+    },
+    /// `rows * cols` or `n * n` overflowed `usize`; do not attempt to lower it.
+    DimensionOverflow,
+    /// Every covariance entry must be finite before numeric validation/lowering.
+    NonFiniteCovariance { index: usize },
+    /// Every expected-return entry must be finite before lowering.
+    NonFiniteExpectedReturn { index: usize },
+    /// The risk/return tradeoff scalar must be finite.
+    NonFiniteLambda,
+    /// The public box upper bound must be finite.
+    NonFiniteWeightCap,
+    /// A zero/negative cap makes the box bound invalid or the budget simplex
+    /// infeasible before the backend reaches `f64::clamp`.
+    NonPositiveWeightCap { value: f64 },
+    /// Even a positive per-asset cap can make `sum(x)=1` impossible.
+    InfeasibleWeightCap { value: f64, minimum: f64 },
+    /// Finite inputs may still overflow while forming `q = -lambda · mu`.
+    NonFiniteLinearTerm { index: usize },
+    /// The canonical symmetric entry cannot be lifted losslessly enough to the
+    /// runner's fixed-point problem (`|p · 10^scale| <= 2^53`).
+    ExactPsdLiftOutOfRange { row: usize, col: usize },
+    /// The rounded exact matrix is not in the supported PSD certificate family:
+    /// symmetric, nonnegative-diagonal, diagonally dominant matrices.
+    ExactPsdNotDiagonallyDominant {
+        row: usize,
+        diagonal: i128,
+        off_diagonal_sum: i128,
+    },
+    /// Checked exact row-sum arithmetic overflowed. This should be unreachable
+    /// inside the 2^53 entry envelope, but remains a fail-closed guard.
+    ExactPsdArithmeticOverflow { row: usize },
+    /// The supplied covariance is not symmetric within the compiler's explicit
+    /// absolute-plus-relative numeric tolerance.
+    Asymmetric {
+        row: usize,
+        col: usize,
+        difference: f64,
+        tolerance: f64,
+    },
+    /// Deterministic floating-point LDLᵀ found a negative pivot (or a coupled
+    /// null pivot), so the compiler must not label the objective convex.
+    NotPositiveSemidefinite {
+        pivot: usize,
+        residual: f64,
+        tolerance: f64,
+    },
+    /// Floating-point factorization itself overflowed/produced NaN. The gate
+    /// refuses rather than interpreting an unordered NaN as a successful pivot.
+    NumericalValidationFailure { pivot: usize, row: usize },
+}
+
+impl fmt::Display for PortfolioQpViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PortfolioQpViolation::Empty => {
+                f.write_str("portfolio has no variables (the budget simplex would be empty)")
+            }
+            PortfolioQpViolation::DimensionMismatch {
+                rows,
+                cols,
+                data_len,
+                expected_n,
+            } => write!(
+                f,
+                "covariance shape/storage is {rows}×{cols} with {data_len} entries; expected {expected_n}×{expected_n} with exactly n² entries"
+            ),
+            PortfolioQpViolation::DimensionOverflow => {
+                f.write_str("portfolio covariance dimensions overflow addressable storage")
+            }
+            PortfolioQpViolation::NonFiniteCovariance { index } => {
+                write!(f, "covariance entry {index} is not finite")
+            }
+            PortfolioQpViolation::NonFiniteExpectedReturn { index } => {
+                write!(f, "expected-return entry {index} is not finite")
+            }
+            PortfolioQpViolation::NonFiniteLambda => f.write_str("portfolio lambda is not finite"),
+            PortfolioQpViolation::NonFiniteWeightCap => {
+                f.write_str("portfolio weight cap is not finite")
+            }
+            PortfolioQpViolation::NonPositiveWeightCap { value } => {
+                write!(f, "portfolio weight cap {value:e} must be positive")
+            }
+            PortfolioQpViolation::InfeasibleWeightCap { value, minimum } => write!(
+                f,
+                "portfolio weight cap {value:e} makes sum(x)=1 infeasible; need at least 1/n = {minimum:e}"
+            ),
+            PortfolioQpViolation::NonFiniteLinearTerm { index } => write!(
+                f,
+                "forming q[{index}] = -lambda · mu[{index}] produced a non-finite value"
+            ),
+            PortfolioQpViolation::ExactPsdLiftOutOfRange { row, col } => write!(
+                f,
+                "canonical covariance entry ({row},{col}) is outside the exact 10^-9 / 2^53 lift envelope"
+            ),
+            PortfolioQpViolation::ExactPsdNotDiagonallyDominant {
+                row,
+                diagonal,
+                off_diagonal_sum,
+            } => write!(
+                f,
+                "rounded exact covariance row {row} lacks the supported PSD certificate: diagonal {diagonal} < off-diagonal absolute sum {off_diagonal_sum}"
+            ),
+            PortfolioQpViolation::ExactPsdArithmeticOverflow { row } => write!(
+                f,
+                "checked exact diagonal-dominance sum overflowed on covariance row {row}"
+            ),
+            PortfolioQpViolation::Asymmetric {
+                row,
+                col,
+                difference,
+                tolerance,
+            } => write!(
+                f,
+                "covariance entries ({row},{col}) and ({col},{row}) differ by {difference:e}, exceeding tolerance {tolerance:e}"
+            ),
+            PortfolioQpViolation::NotPositiveSemidefinite {
+                pivot,
+                residual,
+                tolerance,
+            } => write!(
+                f,
+                "covariance fails numeric PSD validation at LDLᵀ pivot {pivot}: residual {residual:e} is below -{tolerance:e} (or couples to a null pivot beyond tolerance)"
+            ),
+            PortfolioQpViolation::NumericalValidationFailure { pivot, row } => write!(
+                f,
+                "floating-point LDLᵀ validation produced a non-finite intermediate at pivot {pivot}, row {row}; refusing the PSD label"
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum TypeError {
+    /// Portfolio/QP lowering is fail-closed: malformed/non-finite/asymmetric or
+    /// numerically non-PSD covariance input is never labeled `Convex`.
+    ///
+    /// The PSD check is deterministic floating-point validation with an explicit
+    /// tolerance, not a formal/exact proof. Exact certificate checking remains a
+    /// separate downstream obligation.
+    InvalidPortfolioQp { violation: PortfolioQpViolation },
     /// A matrix is private → the FHE matvec needs public structure → not
     /// admissible at this (Dark) tier.
     PrivateMatrix { role: MatrixRole, tier: Tier },
@@ -371,6 +519,9 @@ pub enum TypeError {
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            TypeError::InvalidPortfolioQp { violation } => {
+                write!(f, "invalid portfolio QP: {violation}")
+            }
             TypeError::PrivateMatrix { role, tier } => write!(
                 f,
                 "requires a private {role} → the FHE matvec needs PUBLIC matrices → not {}-admissible",
@@ -401,15 +552,24 @@ impl fmt::Display for TypeError {
                 "uses {feature} — an integer/disjunctive constraint that breaks the continuous oblivious regime → not {}-admissible (Tier 2 Open only)",
                 tier.short(),
             ),
-            TypeError::SizeExceedsEnvelope { size, envelope, tier } => write!(
+            TypeError::SizeExceedsEnvelope {
+                size,
+                envelope,
+                tier,
+            } => write!(
                 f,
                 "size {size} exceeds the FHE {} envelope ({envelope}) → runs at the next tier (scale is the FHE frontier)",
                 tier.short(),
             ),
-            TypeError::OverClaimsTier { claimed, honest, because } => write!(
+            TypeError::OverClaimsTier {
+                claimed,
+                honest,
+                because,
+            } => write!(
                 f,
                 "OVER-CLAIMS PRIVACY: promises {} but the math only delivers {} — {because}",
-                claimed.short(), honest.short(),
+                claimed.short(),
+                honest.short(),
             ),
         }
     }

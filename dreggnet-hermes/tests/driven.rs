@@ -293,6 +293,39 @@ fn a_mixed_session_renders_a_surface_and_re_verifies() {
     assert_eq!(report.turns, 5);
 }
 
+/// **The free-text migration — the brain classifies the TEXT payload, not the button verb.** A
+/// chat frontend presses a `prompt` template: the host synthesizes the affordance VERB ("prompt")
+/// as the label and rides the user's real words on [`Action::text`]. `advance` must drive the
+/// brain on the TEXT ("run ls" → Execute), never the label verb ("prompt" → Chat) — before the
+/// migration it read `input.label`, so every typed reply was silently classified as the verb.
+#[test]
+fn a_prompt_drives_the_brain_on_the_text_payload_not_the_button_verb() {
+    let off = HermesOffering::scripted();
+    let mut s = off.open(SessionConfig::with_seed(101)).expect("open");
+
+    let armed = Action::new(TURN_PROMPT, TURN_PROMPT, ToolKind::Execute.tool_id(), true)
+        .with_text("run ls -la");
+    assert!(
+        off.advance(&mut s, armed, user()).landed(),
+        "the typed prompt lands one confined turn"
+    );
+
+    // The Execute class metered — the brain classified the TEXT "run ls", not the verb "prompt".
+    assert_eq!(
+        s.rate_remaining(ToolKind::Execute),
+        ToolKind::Execute.default_rate() - 1,
+        "the text 'run ls' classified as Execute (the text drove the brain)"
+    );
+    // The label verb "prompt" would have classified as Chat — Chat is untouched, proving the
+    // label was NOT what drove the turn.
+    assert_eq!(
+        s.rate_remaining(ToolKind::Chat),
+        ToolKind::Chat.default_rate(),
+        "the label verb 'prompt' did NOT drive a Chat turn"
+    );
+    assert!(off.verify(&s).verified, "the chain re-verifies");
+}
+
 /// **The default swap — the offering wires the REAL `deos_hermes::ResidentBrain`.**
 /// `HermesOffering::new()` (the DEPLOY constructor) resolves the real resident brain
 /// seam (on-box by default, a live BYO-key brain when a provider key is set), while

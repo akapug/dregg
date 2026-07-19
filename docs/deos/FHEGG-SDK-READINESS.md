@@ -1,7 +1,8 @@
 # fhEgg SDK-Readiness — the honest state, for the next dev spike
 
-*Written 2026-07-16 from a 3-lane code-level analysis (not the docs) — "is fhegg actually ready for
-SDK-level integration?" The answer is **not yet**, and this file is the actionable why + the roadmap.
+*Written 2026-07-16 from a 3-lane code-level analysis (not the docs), corrected at HEAD 2026-07-19 —
+"is fhegg actually ready for SDK-level integration?" The plaintext answer is **experimental yes**;
+the production-private answer is **not yet**. This file is the actionable why + the roadmap.
 Companion: `FHEGG-KERNEL.md` (the model-scope kernel doc — accurate post-de-staling but has two named
 doc-residuals, see §5). Everything below is cited to `file:line` at HEAD so the spike can jump straight in.
 Grading vocabulary: **PROVEN** (Lean, model-scope) · **WORKING** (real Rust, tested, real perf) ·
@@ -12,21 +13,34 @@ Grading vocabulary: **PROVEN** (Lean, model-scope) · **WORKING** (real Rust, te
 
 ## 0. TL;DR verdict
 
-**fhegg is NOT SDK-ready.** It is high-quality research with real crypto on every path and unusually candid
-envelope docs — but there is **zero SDK surface** for it today (nothing in `sdk/`, `sdk-py/`, `sdk-ts/`
-touches fhegg), and no capability is a callable third-party API:
+**fhEgg has a working experimental plaintext Rust SDK surface, but is NOT production-private SDK-ready.**
+`sdk/src/fhegg.rs` exposes versioned `clear_book` settlement through `fhegg-solver`, and the SDK's default
+features include it. Python/TypeScript bindings and the private FHE/MPC service surface remain absent.
 
-- The **FHE clearing** (`fhe_clear`) is real homomorphic clearing but **minutes-slow, single-key, no key
-  mgmt / serialization**, and the "no-viewer" privacy property is prose + a modeled seam, not code.
-- The **plaintext clearing** (`reference_clear`) is a **correct price rule** but has **no per-order
-  allocation** and no wire-stable types — you cannot settle a market from its output.
+- The all-TFHE **FHE clearing** (`fhe_clear`) remains **minutes-slow and single-key**. A separate
+  collective-BFV → masked threshold boundary → party-MPC path now implements the no-single-viewer
+  composition locally, but it is not yet an authenticated/malicious-secure SDK service.
+- The **plaintext clearing** has versioned, ID-bearing wire types, deterministic per-order allocation,
+  settlement verification, an honest CLI, and the experimental Rust SDK adapter. It is callable today,
+  but deliberately makes no privacy claim.
 - The **verify-not-find loop** (solver → Cert-F certificate → native check) is **real, tested, honest** and
-  is the **single nearest SDK target** — but only as an *experimental plaintext* engine; its "Lean-verified
-  / STARK" trust story works end-to-end for exactly **one hardcoded toy program** (a unit 3-cycle).
+  tested. Its Lean-pinned STARK path works for two fixed registered programs (ring3 and
+  market4), not arbitrary live books. A fixed `N<=4,K=4` Dark Bazaar family now moves order
+  side/limit/quantity out of public coefficients and into a `HidingFriPcs` witness, commits them with
+  a faithful 8-felt root, and publishes only `(session,rule,root8,p*,V*)`; see
+  `DARK-BAZAAR-PRIVATE-N4K4.md`. It is operator/prover-visible, not yet no-single-viewer, and its final
+  Lean `Satisfied2 → Accepts` integer-decode lift is a named residual.
+- The canonical FHE/MPC claim now has a strict Ed25519 threshold-roster verifier and an opt-in market
+  co-endorsement weld. It authenticates an exact combined ciphertext/output/settlement claim; it does not
+  prove that the ciphertexts open to that settlement's orders or upgrade the local MPC to malicious security.
+- fhIR now has one concrete Lean-authoritative family: a proved two-coordinate rebalance plan emits canonical
+  bytes that Rust strictly validates and dispatches to the real exact-integer engine. Other fhIR product
+  families remain under the broader legacy Rust compiler and are not covered by that cutover.
 
-**Nearest real SDK target:** the `fhegg_clear` plaintext CLI shape (JSON orders in → cleared flows +
-Cert-F certificate + native check out), labeled EXPERIMENTAL / plaintext / demo-scale / untrusted-solver-
-self-checkable. Even that needs the three items in §4 first.
+**Current SDK target:** keep `sdk::fhegg::clear_book` explicitly EXPERIMENTAL / plaintext / demo-scale and
+self-checking, then grow it toward the Cert-F CLI shape. Do not relabel the local collective-BFV/MPC path as
+a production-private API until authenticated malicious execution, resilient custody, and source-bound
+attestation close.
 
 ---
 
@@ -36,12 +50,15 @@ self-checkable. Even that needs the three items in §4 first.
 |---|---|---|---|
 | `reference_clear` (plaintext uniform-price) | WORKING (rule) | PROTOTYPE | ~~no per-order allocation/fill; no serde/IDs/versioning; price is an abstract bucket index, no tick map~~ ALL THREE CLOSED 2026-07-17 on the SOLVER side: `fhegg-solver::clearing::{allocate,ration}` (verified, Lean-bound) + `fhegg-solver::wire` (versioned/ID-bearing serde types, tick↔bucket map, `Settlement::verify`). `fhegg-fhe`'s own types stay serde-less BY DESIGN (§4.4: don't surface the FHE path) |
 | `fhe_clear` (TFHE homomorphic) | RESEARCH (honest) | NOT READY | minutes-slow; single-key (caller decrypts all); no keygen/serialization API; no-viewer decrypt ABSENT |
-| `additive::bfv_fold` (BFV carry-free fold) | RESEARCH harness | NOT READY | decrypts internally with a **hard-coded-seed** key; measurement harness, not a pipeline component |
-| `mpc` output-boundary crossing | RESEARCH PoC | NOT READY | single-process simulation; trusted-dealer triples; decrypt-and-reshare at the seam; semi-honest only |
-| solver (PDHG on the circulation LP) | WORKING | usable (plaintext) | demo-scale perf (n=256/m=4096/T=4000); no verified large-scale numbers; GPU path unexercised |
-| Cert-F certificate (emit + native check) | WORKING | usable (plaintext) | ε is descriptive not prescriptive on the bridge; `VALUE_BITS=28` caps amounts < 2^28 |
-| Cert-F **verified** (Lean-pinned STARK) | RESEARCH | NOT READY (closer) | emit-soundness now GENERIC over the program + ε-budget bridge fixed + a real market shape (`market4Prog`) registered and proven from a live PDHG solve (§4.2); residual: registration is per-program-constants (each batch needs emit+pin), so live arbitrary batches need a runtime/twin emitter |
-| the 5 sibling certs (CertEq/Route/Qp/Package/Grad) | WORKING (f64) | NOT READY | Rust f64 check only; none have the descriptor/STARK chain Cert-F has |
+| collective BFV carry-free fold | RESEARCH pipeline | NOT READY | party-owned n-of-n key custody + retained GPU fold + masked boundary are composed; fhe.rs remains a research dependency and the path is not an authenticated service |
+| `mpc_party` output-boundary crossing | RESEARCH PoC | NOT READY | party-thread direct-peer arithmetic ingress and exact A2B/crossing are built; trusted-dealer triples, unauthenticated in-memory channels, n-of-n liveness, semi-honest only |
+| solver (PDHG on the circulation LP) | WORKING | usable (plaintext) | CPU path is real; GPU PDHG has measured large-shape wins, but whole private-solver residency and at-scale product throughput are not established |
+| Cert-F certificate (emit + native check) | WORKING | usable (plaintext) | prescriptive ε bridge is built; exact integer admission/range bounds remain program-specific |
+| Cert-F **verified** (Lean-pinned STARK) | RESEARCH | NOT READY (closer) | full generic emit-soundness + integer admissions for ring3/market4 + real hiding proof path; residual: registration is per-program-constants, so live arbitrary private books need a fixed-shape committed-input relation, not public per-book weights |
+| Dark Bazaar private N4K4 | RESEARCH (real hiding proof) | NOT READY (beachhead) | fixed `N<=4,K=4,qty<16`; 8-felt committed private orders + exact output AIR + hiding prover are built; final Lean descriptor→`Accepts` decode/no-wrap theorem, no-viewer producer, ingestion and ledger/allocation weld remain |
+| canonical clearing attestation | RESEARCH | NOT READY | strict Ed25519 threshold roster + full claim/settlement co-endorsement and replay teeth are built; ciphertext-opening/source relation, honest-verifier enforcement, and durable replay are not |
+| Lean-authored fhIR ClearingPlan | WORKING for one family | PROTOTYPE | exact rebalance-v1 plan/no-wrap/noise proof + canonical artifact + strict Rust interpreter are built; general product compiler/refinement is not |
+| sibling certs (CertQp/Eq/Route/Package/Grad) | MIXED | NOT READY | CertQp now has an exact fixed-point KKT checker and fhIR product acceptance uses it (the rounded problem, PSD pinned separately); Eq/Route/Package/Grad remain f64-native, and none yet has Cert-F's general descriptor/STARK chain |
 | `fhegg-rtl` | RESEARCH scaffolding | N/A | FPGA netlist-DSL→Verilog spine + a proven full-adder; gates nothing in the software path — ignore for SDK |
 
 ---
@@ -86,28 +103,39 @@ self-checkable. Even that needs the three items in §4 first.
 `solve → certify` (CertF + JSON) → `certify → native verify` (`bin/e2e.rs` runs both polarities;
 `bin/fhegg_clear.rs` is a working JSON-in/JSON-out CLI). **This is what an SDK could wrap today.**
 
-**Verified (Lean-pinned STARK) verify** — REAL FOR RING-3 ONLY. `prove_cert_f` (`cert_f_air.rs:334`) routes
-through `try_cert_f_descriptor` (`:310`), which hardcodes `is_registered_ring3_program`
-(`:299-305`: `n_nodes==3, edges==[(0,1),(1,2),(2,0)], w==c==[1,1,1], ε==0`) and refuses everything else
-("must first be added to `CertFDescriptor.lean`, proved, emitted, byte-pinned, registered"). The committed
-descriptor `circuit/descriptors/dregg-cert-f-ir2.json` (389 constraints, traceWidth 381) is the ring-3
-instance only. The Lean emit-soundness theorem `certFDescriptor_emit_sound` (`CertFDescriptor.lean:559`) is
-stated for `ring3Prog`, not generically over `p : CertFProg`. **Extra trap:** registration requires ε=0,
-but the solver bridge `from_solution_json` sets `ε := achieved gap` (generally >0) (`cert_f_air.rs:491`) —
-so even a ring-3-shaped real solve is refused unless it lands exactly tight.
+**Verified (Lean-pinned STARK) verify** — REAL FOR TWO FIXED REGISTRIES. `prove_cert_f` routes through
+`try_cert_f_descriptor`, whose fail-closed registry contains the unit ring3 and the 3-asset/4-order
+market4 program (including its prescriptive `ε=2000` budget). The AIR is authored by the total Lean
+function `certFDescriptorOf`; `certFDescriptor_emit_sound` is generic over `p : CertFProg`. Integer
+interpretation is now closed separately and honestly: the descriptors enforce `π<2²⁸` on both programs
+and market4 additionally enforces `f<2²¹`, `s<2¹⁹`; Lean proves the unconditional uniform admissions
+`ring3Prog_integerAdmission` and `market4Prog_integerAdmission`, then the direct deployed
+`Market.Certified` corollaries. The deliberate descriptor compatibility break changed ring3 from
+381/389 to **465 columns / 482 constraints** and market4 from 497/507 to **581 / 602**; both committed
+JSON artifacts and exact Lean byte goldens were re-keyed. Old Cert-F proofs/VKs do not verify against
+these descriptor bytes. Unregistered public programs remain refused until they choose sufficient
+range policies, are emitted, byte-pinned, and entered in the registry.
 
-**Private (witness-hidden) clearing** — the deployed Cert-F rides the **plain non-hiding PCS**
-(`descriptor_ir2::ir2_config` → `TwoAdicFriPcs`; `HidingFriPcs` = 0 hits in that path). Witness-hiding is
-`cert_f_air.rs:58-63`'s own "named, not discharged." (The shielded *note-spend* DOES use `HidingFriPcs` via
-`prove_dsl_zk` — `shielded/mod.rs:24-25` — but that's a different circuit.) The ZK-leakage claim rests on a
-sibling-lane theorem the code marks "named, not discharged" (`cert_f_air.rs:62-64`).
+**Private (witness-hidden) clearing** — REAL FOR THE SAME TWO FIXED REGISTRIES.
+`prove_cert_f_zk` / `verify_cert_f_zk` pass the identical Lean-emitted IR-v2 AIR to
+`DreggZkStarkConfig` (`HidingFriPcs` with fresh OS-seeded salts, random trace rows, and random FRI
+codewords). The focused ring3 test mints and verifies the batch proof, asserts its random commitment
+and per-instance random openings are present, and refuses a changed public volume. The old
+`prove_cert_f` entry point remains as an explicitly **non-hiding** compatibility path; callers making a
+privacy claim must not use it. The construction is built, while the formal simulator theorem for the
+complete batch-STARK transcript remains a separate floor. Also, `(A,w,c,ε)` is public descriptor
+algebra: if bid values live in `w`, this hides the certificate witness, not those bids.
 
-**No-viewer FHE clearing** — no code path exists where encrypted orders go fold → crossing → (p*,V*) with
-nobody able to see the curves: the all-TFHE path is single-key (caller decrypts anything, `lib.rs:172-176`
-names the threshold-committee decrypt, absent); the BFV+MPC path decrypts at the seam
-(`mpc_bench.rs:85-94` literally decrypts + re-shares cleartext); the BFV+TFHE path lacks the scheme-switch
-(NAMED-RESIDUAL, `ADDITIVE-FOLD-ENVELOPE.md:86-96`). Each stage is real in isolation; the composition — the
-actual product property — is prose plus a modeled seam.
+**No-viewer FHE clearing** — a process-shaped composition now exists:
+party-owned n-of-n collective BFV keygen → retained carry-free GPU fold → encrypted party masks →
+smudged threshold opening of only `y = m + Σr_i mod t` → each party's private mod-t row → direct-peer
+boolean sharing and exact A2B/mod-t reduction → balanced volume-argmax MPC → only `(p*,V*)`.
+`threshold_masked_boundary_channels` drives the real masked-boundary rows through `mpc_party.rs`; the
+coordinator has no peer-input endpoint and the triple dealer receives public shape only. This closes the
+old cleartext decrypt-and-reshare seam and removes any BFV→TFHE scheme switch from the selected architecture.
+It is still a **local semi-honest PoC**, not the product property: channels are unauthenticated/in-memory,
+triples come from a trusted dealer, all `n` parties must be live, the current BFV custody is n-of-n, and no
+malicious-input/share proof or isolated-process deployment exists.
 
 ---
 
@@ -149,8 +177,10 @@ Prioritized. The nearest real target is the plaintext verify-not-find engine, NO
    GATE, so it never actually touched ε; the generic bundle now carries the gate pins
    `g ≡ ε − (cᵀs − wᵀf)`, `u ≡ c − f`, `d ≡ Aᵀπ + s − w`, `obj ≡ wᵀf`
    (`certFDescriptor_gap_gate_sound`/`_obj_gate_sound`, all `#assert_all_clean`-pinned; field-level
-   mod-p congruences under the canonicity hypothesis, as before). Registering a new `(A,w,c,ε)` now
-   costs emission + byte-pin + registry entry ONLY — no new proof.
+   mod-p congruences under the canonicity hypothesis, as before). The field theorem needs no
+   per-program re-proof. Integer registration additionally chooses enforced flow/slack/potential
+   ranges and proves the complete weighted residuals cannot wrap; ring3 and market4 now have those
+   unconditional admission theorems, while unknown programs fail closed.
    (b) The ε trap is fixed: `from_solution_json_with_epsilon` (cert_f_air.rs) is the PRESCRIPTIVE
    bridge (ε := the registered budget, refuses gap > budget); the registry (`CERT_F_REGISTRY`)
    matches programs including their pinned ε budget; `cert_f_prove` takes `CERT_F_EPSILON`.
@@ -171,21 +201,26 @@ Prioritized. The nearest real target is the plaintext verify-not-find engine, NO
 3. **Re-measure the current FHE circuit.** The `MEASURED-ENVELOPE.md` table is on the SUPERSEDED FheUint16 /
    sum-of-sign-bits circuit; current code is FheUint32 (2× radix) + the heavier argmax crossing (~3× ops/bucket),
    so it is plausibly 2–3× slower than documented. Re-run the current circuit end-to-end before any perf claim.
-4. **Decide the FHE trust story (bigger).** Either wire the BFV→TFHE scheme-switch (no clean Rust impl
-   exists today) or commit to the pure-MPC fold with a REAL multi-party runtime (network layer, party
-   abstraction, real triples — today it's a single-process semi-honest sim). And a real key API: injected
-   keys (not hard-coded seeds), serialized ciphertexts, the threshold-committee decrypt implemented.
+4. **Harden the selected BFV → output-boundary-MPC trust story (bigger).** The architecture decision and
+   process-shaped composition now exist: injected party-owned collective keys, strict ciphertext/share
+   framing, masked threshold opening, direct-peer arithmetic ingress, exact A2B/mod-t reduction, and the
+   party-thread balanced crossing. Remaining product work is authenticated isolated-process transport,
+   roster/replay binding, malicious-share/input validity, dealer-free or auditable triple preprocessing,
+   crash/recovery behavior, and a real `t<n` threshold construction. A BFV→TFHE scheme switch is not part
+   of this selected path.
 
-**Do NOT** surface `fhe_clear`/`bfv_fold`/`mpc` in an SDK until (4) — they'd ship a minutes-slow, single-key
-research prototype as a "private clearing" product.
+**Do NOT** surface `fhe_clear`/the collective-BFV path/`mpc_party` as a production-private SDK until the
+remaining items in (4) close. The first is still minutes-slow and single-key; the second is a fast,
+party-shaped but local semi-honest research composition.
 
 ---
 
 ## 5. Doc-residuals in FHEGG-KERNEL.md (partially fixed 2026-07-16)
 
-- **FIXED (`91c3c63bd`):** the privacy OVERSTATEMENT — the doc claimed Cert-F's `(f,π,s)` "live under the
-  hiding PCS." The deployed path uses the plain `TwoAdicFriPcs`; witness-hiding is a named unbuilt step.
-  Also fixed a conflation attributing the shielded note-spend's hiding to `cert_f_air.rs`.
+- **FIXED, then BUILT:** the privacy overstatement was first corrected because `prove_cert_f` used the
+  plain `TwoAdicFriPcs`. Cert-F now has a distinct real `prove_cert_f_zk` path through `HidingFriPcs`;
+  the plain compatibility entry point remains non-hiding. The complete transcript-simulator theorem is
+  still named rather than silently inferred from "not a public input."
 - **NAMED-RESIDUAL `FheggEnvelopeDocResidual`:** the §3.1/§6 "measured" FHE envelope cites LITERATURE
   numbers (ePrint 2025/1170, etc.) while the repo's OWN measurements (`fhegg-fhe/MEASURED-ENVELOPE.md`,
   `HBOX-24CORE-ENVELOPE.md`, `ADDITIVE-FOLD-ENVELOPE.md`, `docs/deos/OUTPUT-BOUNDARY-MPC.md`) sit UNCITED,

@@ -636,27 +636,35 @@ impl Offering for NamesOffering {
     /// generic register affordance. `enabled` is the cap tooth SHOWN (transfer is offered to
     /// all; the executor is the sole referee — a non-owner still refuses on `advance`).
     fn actions(&self, session: &NamesSession) -> Vec<Action> {
-        let mut out = vec![Action::new("register a free name", TURN_REGISTER, -1, true)];
+        // Each naming affordance carries a NAME string, not an index — so it SOLICITS free text
+        // (`taking_text`): a chat frontend routes the bare name the user types into the
+        // affordance's [`Action::text`] payload, and `advance` reads THAT (never the decorated
+        // button label, which would register the literal prompt string).
+        let mut out =
+            vec![Action::new("register a free name", TURN_REGISTER, -1, true).taking_text()];
         for (name, _owner) in session.registered() {
-            out.push(Action::new(
-                format!("resolve {name}"),
-                TURN_RESOLVE,
-                -1,
-                true,
-            ));
-            out.push(Action::new(
-                format!("transfer {name} (owner only)"),
-                TURN_TRANSFER,
-                -1,
-                true,
-            ));
+            out.push(Action::new(format!("resolve {name}"), TURN_RESOLVE, -1, true).taking_text());
+            out.push(
+                Action::new(
+                    format!("transfer {name} (owner only)"),
+                    TURN_TRANSFER,
+                    -1,
+                    true,
+                )
+                .taking_text(),
+            );
         }
         out
     }
 
     fn advance(&self, session: &mut NamesSession, input: Action, actor: DreggIdentity) -> Outcome {
+        // The name rides the first-class [`Action::text`] payload (what a chat frontend routes a
+        // typed name into); a programmatic caller that carries the bare name on the label still
+        // works (the fallback). The button's DECORATED label ("register a free name") is never
+        // the name.
+        let name = input.text.as_deref().unwrap_or(&input.label);
         match input.turn.as_str() {
-            TURN_REGISTER => session.do_register(&input.label, &actor, self.initial_expiry),
+            TURN_REGISTER => session.do_register(name, &actor, self.initial_expiry),
             TURN_TRANSFER => {
                 if input.arg < 0 {
                     return Outcome::Refused(
@@ -666,9 +674,9 @@ impl Offering for NamesOffering {
                 let Some(to) = session.order.get(input.arg as usize).cloned() else {
                     return Outcome::Refused(format!("no enrolled actor at index {}", input.arg));
                 };
-                session.do_transfer(&input.label, &actor, &to)
+                session.do_transfer(name, &actor, &to)
             }
-            TURN_RESOLVE => session.do_resolve(&input.label, &actor),
+            TURN_RESOLVE => session.do_resolve(name, &actor),
             other => Outcome::Refused(format!("unknown affordance: {other}")),
         }
     }

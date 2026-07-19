@@ -368,6 +368,30 @@ impl DeosCell {
             .ok_or(FireExecuteError::Gate(FireError::NoSuchAffordance))?;
         ga.fire_through_executor_with(held, cipherclerk, executor, effects)
     }
+
+    /// Witness-bearing twin of [`Self::fire_gated_through_executor_with`].
+    /// Effects and action witness blobs are derived from one live-state read;
+    /// the underlying affordance builder attaches the blobs before the final
+    /// signature and the executor rechecks them in-band.
+    pub fn fire_gated_through_executor_with_witnesses<F>(
+        &self,
+        name: &str,
+        held: &AuthRequired,
+        cipherclerk: &AppCipherclerk,
+        executor: &EmbeddedExecutor,
+        produce: F,
+    ) -> Result<dregg_turn::TurnReceipt, FireExecuteError>
+    where
+        F: FnOnce(
+            &dregg_cell::state::CellState,
+        ) -> (Vec<crate::Effect>, Vec<dregg_turn::action::WitnessBlob>),
+    {
+        let ga = self
+            .gated
+            .get(name)
+            .ok_or(FireExecuteError::Gate(FireError::NoSuchAffordance))?;
+        ga.fire_through_executor_with_witnesses(held, cipherclerk, executor, produce)
+    }
 }
 
 // =============================================================================

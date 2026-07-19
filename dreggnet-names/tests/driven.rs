@@ -4,8 +4,8 @@
 //! passes; a transfer is admitted IFF the owner-authorization caveats bind `ctx.sender`
 //! to the current owner.
 
-use dreggnet_names::{NameOp, NamesOffering};
-use dreggnet_offerings::{Offering, Outcome, SessionConfig};
+use dreggnet_names::{NameOp, NamesOffering, TURN_REGISTER};
+use dreggnet_offerings::{Action, Offering, Outcome, SessionConfig};
 
 /// A free name commits a real `TurnReceipt` and resolves to the claimant; registering a
 /// TAKEN name — by the SAME actor OR a different one — is refused by the WriteOnce
@@ -206,6 +206,35 @@ fn verify_holds_forged_claim_fails_replay() {
         !report.verified,
         "a forged non-owner transfer must fail replay: {}",
         report.detail
+    );
+}
+
+/// **The free-text migration — the name comes from the TEXT payload, not the button label.** A
+/// chat frontend presses the register affordance: the host synthesizes the affordance VERB
+/// ("register") as the label and rides the user's typed name on [`Action::text`]. `advance` must
+/// register the TEXT ("alice.dregg"), never the decorated button label — before the migration it
+/// registered `input.label`, so a press registered the literal string "register a free name".
+#[test]
+fn advance_reads_the_name_from_text_not_the_button_label() {
+    let off = NamesOffering::new();
+    let mut s = off
+        .open(SessionConfig::with_seed(41))
+        .expect("registry opens");
+    let alice = s.enroll();
+
+    // The pressed-button shape: label = the affordance verb, the real name on `text`.
+    let armed = Action::new("register", TURN_REGISTER, -1, true).with_text("alice.dregg");
+    let out = off.advance(&mut s, armed, alice.clone());
+    assert!(out.landed(), "the typed name registers, got {out:?}");
+
+    assert_eq!(
+        s.resolve_owner("alice.dregg").as_ref(),
+        Some(&alice),
+        "the bare typed name is registered (read from Action::text)"
+    );
+    assert!(
+        !s.is_registered("register"),
+        "the button verb/label was NOT registered as a literal name"
     );
 }
 

@@ -444,12 +444,18 @@ impl Offering for ComputeOffering {
                     0,
                     true,
                 ),
+                // SETTLE carries the worker's RESULT on its [`Action::text`] payload (the SUBMIT
+                // step folded in — [`do_settle`] hard-refuses on a `None` result). It SOLICITS
+                // that text (`taking_text`) so a chat frontend can route the typed result into
+                // it; without this the result is always `None` and an in-chat settle is
+                // impossible.
                 Action::new(
                     "Settle — release the escrow to the worker",
                     TURN_SETTLE,
                     0,
                     false,
-                ),
+                )
+                .taking_text(),
             ];
         }
         vec![
@@ -459,7 +465,8 @@ impl Offering for ComputeOffering {
                 TURN_SETTLE,
                 0,
                 true,
-            ),
+            )
+            .taking_text(),
         ]
     }
 

@@ -1,9 +1,9 @@
-//! `/play <offering>` — **the full-portfolio reach**: the twelve DreggNet Cloud offerings that did
+//! `/play <offering>` — **the full-portfolio reach**: the catalog offerings that did
 //! NOT yet have a bespoke Discord slash command, mounted through the SAME generic
 //! [`crate::commands::offering`] adapter as `/council` / `/market` / `/doc`, so Discord reaches
 //! offering parity with the web catalog ([`dreggnet_web::demo_host`]).
 //!
-//! Before this module Discord served six of the eighteen portfolio offerings (dungeon, council,
+//! Before this module Discord served six of the nineteen portfolio offerings (dungeon, council,
 //! market, hermes, grain, doc). This adds the rest via one uniform `/play` command:
 //!
 //! * **the two portfolio games** — `automatafl` (the simultaneous-move board) and `tug`
@@ -38,6 +38,7 @@ use serenity::all::{
 use dregg_automatafl::AutomataflOffering;
 use dregg_multiway_tug::Player;
 use dreggnet_compute::ComputeOffering;
+use dreggnet_market::DarkBazaarOffering;
 use dreggnet_names::NamesOffering;
 use dreggnet_offerings::{DreggIdentity, Offering, OfferingError, SessionConfig};
 use dreggnet_surfaces::{
@@ -432,6 +433,10 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     }
 
     let opened: Result<(), OfferingError> = match key.as_str() {
+        "bazaar" => {
+            open_and_post::<DarkBazaarOffering>(ctx, command, DarkBazaarOffering::new, &viewer, cfg)
+                .await
+        }
         "tug" => open_and_post::<SeatedTug>(ctx, command, SeatedTug::new, &viewer, cfg).await,
         "automatafl" => {
             open_and_post::<AutomataflOffering>(ctx, command, || AutomataflOffering, &viewer, cfg)
@@ -511,6 +516,7 @@ async fn handle_play_verify(
         return;
     }
     match key {
+        "bazaar" => offering::handle_verify::<DarkBazaarOffering>(ctx, command).await,
         "tug" => offering::handle_verify::<SeatedTug>(ctx, command).await,
         "automatafl" => offering::handle_verify::<AutomataflOffering>(ctx, command).await,
         "names" => offering::handle_verify::<NamesOffering>(ctx, command).await,
@@ -623,7 +629,7 @@ mod tests {
         format!("{:?}", surface.view())
     }
 
-    /// **Every one of the twelve `/play` offerings OPENS and renders a NON-EMPTY surface** — the
+    /// **Every catalog `/play` offering OPENS and renders a NON-EMPTY surface** — the
     /// exact gap the audit found (automatafl, tug, and the eight RPG surfaces were absent on
     /// Discord). Each opens over its real substrate through the generic adapter and its
     /// viewer-projected surface carries renderable content (no silent empty).
@@ -673,6 +679,7 @@ mod tests {
         // (the `Rc`-shared world is not `Send`; it is born on the store's thread) — matching the
         // module HONEST SCOPE note: each opens over its own world on this per-type surface.
         check!(SeatedTug, SeatedTug::new(), "tug");
+        check!(DarkBazaarOffering, DarkBazaarOffering::new(), "bazaar");
         check!(AutomataflOffering, AutomataflOffering, "automatafl");
         check!(NamesOffering, NamesOffering::new(), "names");
         check!(ComputeOffering, ComputeOffering::new(), "compute");
@@ -711,6 +718,19 @@ mod tests {
     #[test]
     fn the_play_keys_are_derived_from_the_shared_catalog() {
         let keys = play_keys();
+        assert!(
+            keys.contains(&"bazaar"),
+            "the Dark Bazaar crawl is derived from the shared catalog"
+        );
+        assert!(
+            offering::generic_offering_keys().contains(&"bazaar"),
+            "the catalog-derived choice is mounted in the generic component/modal router"
+        );
+        assert_eq!(
+            DarkBazaarOffering::open_hint(),
+            "/play offering:bazaar",
+            "stale Bazaar presses point to the real catalog-derived opener"
+        );
         for k in dreggnet_catalog::CATALOG_KEYS {
             assert!(
                 BESPOKE_COMMAND_KEYS.contains(&k) || keys.contains(&k),
@@ -799,7 +819,7 @@ mod tests {
         );
     }
 
-    /// `/play` registers the `action:verify` choice (backlog Tier-2 #10) — the twelve
+    /// `/play` registers the `action:verify` choice (backlog Tier-2 #10) — the
     /// portfolio offerings, the flagship games included, expose the chain re-verifier as a
     /// pressable command, not test-only capability.
     #[test]

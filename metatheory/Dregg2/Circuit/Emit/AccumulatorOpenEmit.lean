@@ -58,7 +58,7 @@ open Dregg2.Circuit.Emit.CapOpenEmit
    diffGate_exact
    CAP_OPEN_SPAN AFTER_SPINE_SPAN AFTER_SPINE_BASE)
 open Dregg2.Circuit.Emit.HeapOpenEmit
-  (heapLeafLookup heapLeafPairOf heapPermOut HeapMembershipCore heapOpen_writesTo8
+  (heapLeafLookup heapLeafPairOf heapLeafTripleOf heapPermOut HeapMembershipCore heapOpen_writesTo8
    heapOpenConstraints effHeapOpenV3 effHeapOpenV3_core effHeapOpenV3_satisfied2_strips_to_base
    effHeapOpenV3_mapLog effHeapOpenV3_memLog)
 
@@ -94,11 +94,13 @@ theorem afterSpineA_capRoot_after (groupCol : Nat → Fin 8 → Nat) (w : Nat) (
     groupVal env (afterSpineColsA groupCol w).capRoot
       = (fun i => env.loc (groupCol (EFFECT_VM_WIDTH + 239) i)) := rfl
 
-/-- The 2 narrowed-leaf weld gates: after leaf 0 (key) = the read's key; after leaf 1 (value) = the
-accumulator's published VALUE column (`valueCol`). -/
+/-- The 3 narrowed-leaf weld gates: after leaf 0 (key) = the read's key; after leaf 1 (value) = the
+accumulator's published VALUE column (`valueCol`); after leaf 2 (IMT `nextAddr`) = the read's pointer
+(the value update HOLDS the sorted-chain pointer fixed). -/
 def afterLeafWeldsA (valueCol : Nat) (w : Nat) : List VmConstraint2 :=
   [ .base (.gate (eqGate ((afterSpineColsA (fun _ _ => 0) w).leaf 0) ((capOpenCols w).leaf 0)))
-  , .base (.gate (eqGate ((afterSpineColsA (fun _ _ => 0) w).leaf 1) valueCol)) ]
+  , .base (.gate (eqGate ((afterSpineColsA (fun _ _ => 0) w).leaf 1) valueCol))
+  , .base (.gate (eqGate ((afterSpineColsA (fun _ _ => 0) w).leaf 2) ((capOpenCols w).leaf 2))) ]
 
 /-- The 8 BEFORE accumulator-root weld gates: the read's appendix `capRoot` group equals the committed
 BEFORE accumulator block (`groupCol EFFECT_VM_WIDTH`). -/
@@ -294,12 +296,13 @@ theorem accumOpen_writesTo8 (S8 : Heap8Scheme)
     (hAfter  : HeapMembershipCore tf cAfter env)
     (hsib : cAfter.sib = cBefore.sib)
     (hdir : cAfter.dir = cBefore.dir)
-    (hkey : (heapLeafPairOf cAfter env).1 = (heapLeafPairOf cBefore env).1) :
+    (hkey : (heapLeafTripleOf cAfter env).1 = (heapLeafTripleOf cBefore env).1)
+    (hnext : (heapLeafTripleOf cAfter env).2.2 = (heapLeafTripleOf cBefore env).2.2) :
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.heapWritesTo8 S8
         (groupVal env cBefore.capRoot)
-        ((heapLeafPairOf cBefore env).1) ((heapLeafPairOf cAfter env).2)
+        ((heapLeafTripleOf cBefore env).1) ((heapLeafTripleOf cAfter env).2.1)
         (groupVal env cAfter.capRoot) :=
-  heapOpen_writesTo8 S8 tf cBefore cAfter env hChip hBefore hAfter hsib hdir hkey
+  heapOpen_writesTo8 S8 tf cBefore cAfter env hChip hBefore hAfter hsib hdir hkey hnext
 
 /-- **`effAccumWriteV3_forces_write8` — THE STEP-A DELIVERABLE (assurance layer, per accumulator family).**
 A `Satisfied2` of the after-spine accumulator-write descriptor TRACE-FORCES the faithful 8-felt write over
@@ -352,6 +355,17 @@ theorem effAccumWriteV3_forces_write8 (S8 : Heap8Scheme)
       simp [afterLeafWeldsA, afterSpineColsA]
     exact afterSpineA_eqGate_forces groupCol keyCol valueCol base name hash minit mfin maddrs t hsat
       i hi hnotlast hcells _ _ hin
+  -- weld: after leaf 2 (IMT nextAddr) = read leaf 2 (the value update HOLDS the pointer).
+  have hnextw : e.loc ((afterSpineColsA groupCol base.traceWidth).leaf 2)
+      = e.loc ((capOpenCols base.traceWidth).leaf 2) := by
+    have hin : VmConstraint2.base (.gate (eqGate ((afterSpineColsA groupCol base.traceWidth).leaf 2)
+        ((capOpenCols base.traceWidth).leaf 2)))
+        ∈ afterSpineConstraintsA groupCol keyCol valueCol base.traceWidth := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_))
+      simp [afterLeafWeldsA, afterSpineColsA]
+    exact afterSpineA_eqGate_forces groupCol keyCol valueCol base name hash minit mfin maddrs t hsat
+      i hi hnotlast hcells _ _ hin
   -- key bind: read leaf 0 = keyCol.
   have hkeyb : e.loc ((capOpenCols base.traceWidth).leaf 0) = e.loc keyCol := by
     have hin : VmConstraint2.base (.gate (keyBindGateA keyCol base.traceWidth))
@@ -374,16 +388,18 @@ theorem effAccumWriteV3_forces_write8 (S8 : Heap8Scheme)
     have := afterSpineA_eqGate_forces groupCol keyCol valueCol base name hash minit mfin maddrs t hsat
       i hi hnotlast hcells _ _ hin
     simpa [groupVal] using this
-  -- assemble the shared §11 keystone over the two cores along the SHARED path.
-  have hkey : (heapLeafPairOf (afterSpineColsA groupCol base.traceWidth) e).1
-      = (heapLeafPairOf (capOpenCols base.traceWidth) e).1 := hslot
+  -- assemble the shared §11 keystone over the two cores along the SHARED path (+ the held pointer).
+  have hkey : (heapLeafTripleOf (afterSpineColsA groupCol base.traceWidth) e).1
+      = (heapLeafTripleOf (capOpenCols base.traceWidth) e).1 := hslot
+  have hnext : (heapLeafTripleOf (afterSpineColsA groupCol base.traceWidth) e).2.2
+      = (heapLeafTripleOf (capOpenCols base.traceWidth) e).2.2 := hnextw
   have hw := accumOpen_writesTo8 S8 t.tf (capOpenCols base.traceWidth)
-    (afterSpineColsA groupCol base.traceWidth) e hChip hbeforeCore hafterCore rfl rfl hkey
+    (afterSpineColsA groupCol base.traceWidth) e hChip hbeforeCore hafterCore rfl rfl hkey hnext
   rw [hbroot] at hw
   rw [afterSpineA_capRoot_after] at hw
   -- rewrite key (read leaf 0 → keyCol) and value (after leaf 1 → valueCol).
-  have hkeyb' : (heapLeafPairOf (capOpenCols base.traceWidth) e).1 = e.loc keyCol := hkeyb
-  have hvalw' : (heapLeafPairOf (afterSpineColsA groupCol base.traceWidth) e).2 = e.loc valueCol := hvalw
+  have hkeyb' : (heapLeafTripleOf (capOpenCols base.traceWidth) e).1 = e.loc keyCol := hkeyb
+  have hvalw' : (heapLeafTripleOf (afterSpineColsA groupCol base.traceWidth) e).2.1 = e.loc valueCol := hvalw
   rw [hkeyb', hvalw'] at hw
   exact hw
 

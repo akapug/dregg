@@ -46,13 +46,13 @@
 //! The original commit phase was an in-process `BTreeMap` of seals — the anti-front-running
 //! guarantee lived in a Rust check, not in the executor. The deos floor LIFTS the commit board
 //! ON-LEDGER: an auction is a **factory-born sovereign cell** ([`auction_factory_descriptor`])
-//! whose installed [`CellProgram`] ([`auction_cell_program`]) IS the auction policy, re-checked
-//! by the verified executor on every turn that touches it:
+//! whose exact installed [`CellProgram`] ([`auction_factory_cell_program`]) is content-addressed
+//! by [`auction_child_program_vk`] and re-checked by the verified executor on every touching turn:
 //!
 //!   * [`PHASE_SLOT`] — the lifecycle phase code (`COMMIT=0 → REVEAL=1 → RESOLVED=2`).
-//!     `StrictMonotonic` (scoped to the phase-advancing methods `close_commit` / `resolve`) — the
-//!     phase only ADVANCES, never rewinds, and never re-fires (the anti-replay / anti-rollback
-//!     tooth: even a no-advance bites, because `StrictMonotonic` is strict).
+//!     `AllowedTransitions` admits only self-pairs and the two adjacent advances, refusing
+//!     rewinds, skipped phases, and out-of-range phases. The exact factory-installed
+//!     [`auction_cell_program`] also binds `StrictMonotonic` to phase-advancing methods.
 //!   * `COMMIT_BASE + i` — the i-th bidder's sealed commitment. Each `WriteOnce` — a sealed bid
 //!     is FROZEN the instant it is committed: you cannot overwrite a committed bid (the
 //!     anti-front-running tooth, now an EXECUTOR REFUSAL, not a `BTreeMap` membership check). The
@@ -70,10 +70,11 @@ use std::collections::{BTreeMap, HashSet};
 use dregg_app_framework::CellId as DeosCellId;
 use dregg_app_framework::{
     AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect, EmbeddedExecutor, Event,
-    FactoryDescriptor, FieldElement, FireExecuteError, GatedAffordance, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, TurnReceipt,
-    canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32, symbol,
+    ChildVkStrategy, ConstantsModule, DEFAULT_PROVING_SYSTEM, DeosApp, DeosCell, Effect,
+    EmbeddedExecutor, Event, FactoryDescriptor, FieldElement, FireExecuteError, GatedAffordance,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard,
+    TurnReceipt, canonical_program_vk, effect_vm_air_fingerprint, effect_vm_verifier_fingerprint,
+    field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 
 use dregg_intent::verified_settle::{
@@ -360,13 +361,13 @@ pub fn fund_ledger(rows: &[(CellId, AssetId, i128)]) -> VerifiedLedger {
 // Here the auction is a factory-born cell whose installed `CellProgram` IS the
 // auction policy, re-checked by the verified executor on EVERY touching turn — so
 // "you cannot overwrite a committed bid" becomes an EXECUTOR REFUSAL (`WriteOnce`),
-// and "the phase only advances" becomes an EXECUTOR REFUSAL (`StrictMonotonic`).
+// and phase rewind/skip becomes an EXECUTOR REFUSAL (`AllowedTransitions`).
 
 /// Slot 0 — `PHASE`. The auction lifecycle phase code (`COMMIT=0 → REVEAL=1 →
-/// RESOLVED=2`). `StrictMonotonic`, scoped to the phase-advancing methods
-/// (`close_commit` / `resolve`) — the phase only ADVANCES, never rewinds, never
-/// re-fires (the anti-replay / anti-rollback tooth; strict, so even a no-advance
-/// bites). The on-ledger image of the in-process [`Phase`].
+/// RESOLVED=2`). The factory program's explicit transition table refuses rewinds,
+/// skips, and unknown phases while admitting same-phase commit/reveal turns. The
+/// exact factory-installed method-dispatch program additionally requires strict
+/// advances on `close_commit` / `resolve`. The on-ledger image of [`Phase`].
 pub const PHASE_SLOT: usize = 0;
 
 /// Slot 1 — `SELLER`. The awarding party's identity scalar. `WriteOnce` — bound at
@@ -416,16 +417,12 @@ pub const AUCTION_FACTORY_VK: [u8; 32] = *b"starbridge-sealed-auction-factry";
 ///     REFUSED, the headline tooth);
 ///   * `SELLER` / `HIGH_BID` / `WINNER` are `WriteOnce` — the seller is bound once at
 ///     seed; the result freezes once announced;
-///   * the **anti-rollback** phase floor: `Monotonic(PHASE)` — the phase may never
-///     REWIND (`REVEAL → COMMIT` is REFUSED) on ANY method, so the lifecycle is
-///     one-way even on the factory-born cell (whose installed program is exactly this
-///     flat `state_constraints` predicate). This is the NON-strict floor: a method
-///     that legitimately leaves PHASE unchanged (every `commit_bid` during COMMIT)
-///     still passes (`new >= old`). The STRICTLY-increasing advance — even a
-///     no-advance bites — is the phase-advancing methods' extra clause
-///     (`StrictMonotonic(PHASE)` in the `close_commit` / `resolve` cases of
-///     [`auction_cell_program`]); it cannot live here because it would refuse the
-///     PHASE-unchanged `commit_bid`.
+///   * the **anti-rollback/anti-skip** phase floor: `AllowedTransitions(PHASE)`
+///     admits only self-transitions and the adjacent `COMMIT → REVEAL →
+///     RESOLVED` advances. A rewind, skip, or out-of-range phase is refused on ANY
+///     method. Self-transitions are necessary because commits/reveals legitimately
+///     leave PHASE unchanged. The stricter method-to-advance binding remains an
+///     additive clause of the locally installed [`auction_cell_program`].
 fn auction_invariants() -> Vec<StateConstraint> {
     let mut cs = Vec::with_capacity(4 + COMMIT_CAPACITY);
     cs.push(StateConstraint::WriteOnce {
@@ -437,11 +434,20 @@ fn auction_invariants() -> Vec<StateConstraint> {
     cs.push(StateConstraint::WriteOnce {
         index: WINNER_SLOT as u8,
     });
-    // the anti-rollback phase floor — the phase may never rewind (non-strict, so a
-    // PHASE-unchanged commit_bid still passes). The strict no-advance bite lives in
-    // the phase-advancing method cases.
-    cs.push(StateConstraint::Monotonic {
-        index: PHASE_SLOT as u8,
+    // The factory-installable lifecycle floor: no rewind, skip, or phase outside
+    // COMMIT/REVEAL/RESOLVED. Self-pairs admit methods that do not advance phase.
+    cs.push(StateConstraint::AllowedTransitions {
+        slot_index: PHASE_SLOT as u8,
+        allowed: vec![
+            (field_from_u64(PHASE_COMMIT), field_from_u64(PHASE_COMMIT)),
+            (field_from_u64(PHASE_COMMIT), field_from_u64(PHASE_REVEAL)),
+            (field_from_u64(PHASE_REVEAL), field_from_u64(PHASE_REVEAL)),
+            (field_from_u64(PHASE_REVEAL), field_from_u64(PHASE_RESOLVED)),
+            (
+                field_from_u64(PHASE_RESOLVED),
+                field_from_u64(PHASE_RESOLVED),
+            ),
+        ],
     });
     // the anti-front-running commit board — every commit slot is write-once.
     for i in 0..COMMIT_CAPACITY {
@@ -469,6 +475,8 @@ fn auction_invariants() -> Vec<StateConstraint> {
 ///     value; the phase is not advanced.
 ///   * **`resolve`**: `StrictMonotonic(PHASE)` — advance `REVEAL → RESOLVED`, writing
 ///     `WINNER` / `HIGH_BID` (frozen by the `Always` `WriteOnce`).
+///   * **`factory_create`**: constructor dispatch used only by the birth turn; the
+///     `Always` invariants validate the newborn state.
 ///
 /// The program is method-dispatching, so an unknown method is default-denied
 /// (`NoTransitionCaseMatched`). `StrictMonotonic(PHASE)` is scoped to the
@@ -513,37 +521,57 @@ pub fn auction_cell_program() -> CellProgram {
                 index: PHASE_SLOT as u8,
             }],
         },
+        // ── factory_create: allow the constructor turn to validate the newborn
+        // through the Always invariants instead of default-denying its dispatch. ──
+        TransitionCase {
+            guard: TransitionGuard::MethodIs {
+                method: symbol("factory_create"),
+            },
+            constraints: vec![],
+        },
     ])
 }
 
-/// The descriptor's flat `state_constraints` — exactly the predicate the executor
-/// installs as the born cell's `CellProgram` and re-checks **unconditionally** on
-/// every turn (`apply.rs::apply_create_cell_from_factory` installs
-/// `CellProgram::Predicate(state_constraints)`). These are the `Always`-true
-/// invariants only — the `WriteOnce` commit board + result registers (the
-/// anti-front-running tooth). The phase-scoped `StrictMonotonic(PHASE)` is
-/// method-scoped (it would be false on a `commit_bid` that leaves PHASE unchanged),
-/// so it lives in the `close_commit` / `resolve` cases of [`auction_cell_program`]
-/// (the canonical `child_program_vk` recipe).
+/// The descriptor's flat `state_constraints`: a transparent projection of the
+/// exact program's `Always` invariants for descriptor inspection and legacy
+/// consumers. [`ChildVkStrategy::FixedProgram`] makes the full method-dispatched
+/// [`auction_factory_cell_program`] authoritative for installation. These are the
+/// `WriteOnce` commit/result registers and the explicit adjacent phase-transition
+/// table.
 fn auction_state_constraints() -> Vec<StateConstraint> {
     auction_invariants()
 }
 
-/// Canonical child-program VK for auction cells.
+/// The exact program installed by factory birth.
+///
+/// The descriptor uses [`ChildVkStrategy::FixedProgram`] so the executor installs
+/// these exact method-dispatched bytes, and validates the claimed VK against their
+/// canonical content address. The descriptor's flat `state_constraints` remains a
+/// transparent projection of the `Always` invariants, not a substitute program.
+pub fn auction_factory_cell_program() -> CellProgram {
+    auction_cell_program()
+}
+
+/// Canonical child-program VK for the exact factory-installed program.
 pub fn auction_child_program_vk() -> [u8; 32] {
-    canonical_program_vk(&auction_cell_program())
+    canonical_program_vk(&auction_factory_cell_program())
 }
 
 /// Build the sealed-auction-cell [`FactoryDescriptor`]. The cell is born empty; the
 /// seed turn binds `SELLER` and sets `PHASE = COMMIT`; bidders then commit sealed bids
 /// into the `WriteOnce` board, the auctioneer closes the commit phase, bidders reveal,
-/// and the auctioneer resolves — every step gated by the auction policy installed here
-/// FOR LIFE.
+/// and the auctioneer resolves — every step gated by the exact advertised
+/// [`auction_factory_cell_program`] installed here FOR LIFE.
 pub fn auction_factory_descriptor() -> FactoryDescriptor {
     FactoryDescriptor {
         factory_vk: AUCTION_FACTORY_VK,
         child_program_vk: Some(auction_child_program_vk()),
-        child_vk_strategy: Some(ChildVkStrategy::Fixed(Some(auction_child_program_vk()))),
+        child_vk_strategy: Some(ChildVkStrategy::FixedProgram {
+            program: auction_factory_cell_program(),
+            air_fingerprint: effect_vm_air_fingerprint(),
+            verifier_fingerprint: effect_vm_verifier_fingerprint(),
+            proving_system_bytes: DEFAULT_PROVING_SYSTEM.canonical_bytes(),
+        }),
         allowed_cap_templates: vec![CapTemplate {
             target: CapTarget::SelfCell,
             max_permissions: AuthRequired::Signature,
@@ -604,10 +632,9 @@ pub const BIDDER_RIGHTS: AuthRequired = AuthRequired::Either;
 /// The auctioneer rights tier (root — close + resolve + all). See [`OBSERVER_RIGHTS`].
 pub const AUCTIONEER_RIGHTS: AuthRequired = AuthRequired::None;
 
-/// The **life-of-cell auction program** the executor re-enforces on every touching turn
-/// — the canonical method-dispatched [`auction_cell_program`]. This is the SAME program a
-/// factory-born auction cell carries FOR LIFE (the one `tests/factory_birth.rs` proves
-/// bites on the executor); installed by [`seed_auction`] so the gated fires re-enforce it.
+/// The method-dispatched auction program installed by [`seed_auction`] on its
+/// pre-existing local cell. It is exactly the same program factory birth installs
+/// through [`ChildVkStrategy::FixedProgram`].
 pub fn auction_program() -> CellProgram {
     auction_cell_program()
 }
@@ -1080,12 +1107,26 @@ mod floor_tests {
 
     #[test]
     fn child_program_vk_is_canonical_recipe() {
-        let expected = canonical_program_vk(&auction_cell_program());
+        let expected = canonical_program_vk(&auction_factory_cell_program());
         assert_eq!(auction_child_program_vk(), expected);
         assert_eq!(
             auction_factory_descriptor().child_program_vk,
             Some(expected)
         );
+        assert_eq!(auction_factory_cell_program(), auction_cell_program());
+        assert!(matches!(
+            auction_factory_descriptor().child_vk_strategy,
+            Some(ChildVkStrategy::FixedProgram {
+                program,
+                air_fingerprint,
+                verifier_fingerprint,
+                proving_system_bytes,
+            })
+                if canonical_program_vk(&program) == expected
+                    && air_fingerprint == effect_vm_air_fingerprint()
+                    && verifier_fingerprint == effect_vm_verifier_fingerprint()
+                    && proving_system_bytes == DEFAULT_PROVING_SYSTEM.canonical_bytes()
+        ));
     }
 
     #[test]
@@ -1174,12 +1215,13 @@ mod floor_tests {
             err,
             dregg_cell::ProgramError::ConstraintViolated {
                 constraint: StateConstraint::StrictMonotonic { index }
-                    | StateConstraint::Monotonic { index }, ..
+                    | StateConstraint::Monotonic { index }
+                    | StateConstraint::AllowedTransitions { slot_index: index, .. }, ..
             } if index == PHASE_SLOT as u8
         ));
         // a resolve that does NOT advance (REVEAL → REVEAL) is also refused (strict). The
-        // non-strict `Monotonic` floor ADMITS the equal phase, so this bite is uniquely
-        // the resolve case's `StrictMonotonic(PHASE)`.
+        // universal transition table ADMITS the equal phase, so this bite is uniquely the
+        // resolve case's `StrictMonotonic(PHASE)`.
         let stall = old.clone();
         let err = eval_for(&program, "resolve", &stall, Some(&old))
             .expect_err("a no-advance phase must be rejected — StrictMonotonic is strict");

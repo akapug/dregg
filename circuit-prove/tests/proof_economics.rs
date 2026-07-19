@@ -423,18 +423,17 @@ fn t3_ivc_root_k3() {
 }
 
 // ============================================================================
-// T4: the joint-turn (cross-cell, one shared turn) aggregation proof.
+// T4: per-participant (per-cell descriptor proof) artifact sizes.
 // ============================================================================
+// (The joint-turn aggregation layer this section once measured — the Silver
+// `check_descriptor_joint_preconditions` host path + the width-4 binding-leaf
+// apex — was DELETED as dead scaffolding, E9. Cross-cell aggregation in
+// production is the Lean-emitted bilateral aggregator, measured in `turn`.)
 
 #[test]
-fn t4_joint_turn_aggregation_size() {
-    use dregg_circuit_prove::joint_turn_aggregation::{
-        check_descriptor_joint_preconditions, verify_descriptor_participant,
-    };
+fn t4_participant_artifact_size() {
+    use dregg_circuit_prove::joint_turn_aggregation::verify_descriptor_participant;
 
-    // Two cells executing the SAME shared turn id is the joint-turn shape; the
-    // aggregation API here measures the per-participant artifacts plus the
-    // aggregation binding trace the apex proof commits to.
     let (turn_a, _, _) = make_turn(1000, 0, 7);
     let (turn_b, _, _) = make_turn(500, 3, 2);
 
@@ -442,21 +441,13 @@ fn t4_joint_turn_aggregation_size() {
     let pb = postcard::to_allocvec(&turn_b.participant.rotated.proof).unwrap();
     verify_descriptor_participant(&turn_a.participant).expect("a verifies");
     verify_descriptor_participant(&turn_b.participant).expect("b verifies");
-    // Shared-turn preconditions differ (these are independent turns), so only
-    // report sizes — the joint apex proof is the same BatchProof shape again.
-    let _ = check_descriptor_joint_preconditions(&[turn_a.participant, turn_b.participant]);
 
-    println!("== T4 joint-turn participants (per-cell descriptor proofs) ==");
+    println!("== T4 participants (per-cell descriptor proofs) ==");
     println!(
         "participant A: {} bytes ({:.1} KiB) | participant B: {} bytes ({:.1} KiB)",
         pa.len(),
         kib(pa.len()),
         pb.len(),
         kib(pb.len()),
-    );
-    println!(
-        "joint apex (Silver, non-recursive) adds ONE more BatchProof of the \
-         width-4 aggregation AIR — same FRI shape, so ≈ the smaller of the above; \
-         the recursive joint apex is the same recursion machinery as T3."
     );
 }

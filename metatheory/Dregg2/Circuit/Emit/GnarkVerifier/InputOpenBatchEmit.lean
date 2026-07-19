@@ -1008,6 +1008,19 @@ def leafHashTemplateJson : String :=
 def batchTemplateJson : String :=
   Dregg2.Circuit.Emit.GnarkVerifier.emitGnarkJson (batchData [16, 8, 16, 8] 18 katMask)
 
+/-- The three OTHER deployed input-round batch templates — the SAME `batchData` at the real
+apex-shrink per-round opened-row widths (trace / preprocessed / permutation rounds; the
+quotient round is `batchTemplateJson` above). All four rounds open the height classes
+{18,17,12,3} with the {0,5,14} injection schedule at depth 18, so they share `katMask` and
+differ only in the per-class row widths; every instance is covered by the parametric
+`inputOpenBatch_refines`. Committed at `chain/gnark/emitted/inputopen_batch_r{0,2,3}.json`. -/
+def batchTemplateR0Json : String :=
+  Dregg2.Circuit.Emit.GnarkVerifier.emitGnarkJson (batchData [80, 300, 8, 132] 18 katMask)
+def batchTemplateR2Json : String :=
+  Dregg2.Circuit.Emit.GnarkVerifier.emitGnarkJson (batchData [61, 24, 4, 66] 18 katMask)
+def batchTemplateR3Json : String :=
+  Dregg2.Circuit.Emit.GnarkVerifier.emitGnarkJson (batchData [76, 28, 8, 132] 18 katMask)
+
 -- Structure pins for the leaf-hash template: one sponge block (width 8 = one rate slot) is
 -- 435 emitted round-schedule asserts + the leaf pin; the ReplayTemplate boundary is 8 rows
 -- + 1 leaf, with NO select gate (a pure sponge).
@@ -1025,5 +1038,11 @@ def batchTemplateJson : String :=
 #guard fnv1a leafHashTemplateJson == 6822594251786242841
 #guard batchTemplateJson.length == 3966872
 #guard fnv1a batchTemplateJson == 10048758642377789676
+#guard batchTemplateR0Json.length == 9384598
+#guard fnv1a batchTemplateR0Json == 17146023565816985036
+#guard batchTemplateR2Json.length == 5360833
+#guard fnv1a batchTemplateR2Json == 11431238223898258167
+#guard batchTemplateR3Json.length == 6281989
+#guard fnv1a batchTemplateR3Json == 10236309978567012609
 
 end Dregg2.Circuit.Emit.GnarkVerifier.InputOpenBatch

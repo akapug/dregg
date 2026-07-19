@@ -34,6 +34,7 @@ import Market.ShieldedClearing
 import Market.CrossChainSettlement
 import Market.InterchainCustody
 import Market.FhEggClearing
+import Market.DarkBazaarPrivateDescriptor
 import Market.FhEggLedgerBinding
 import Market.CertF
 import Market.CertFDescriptor
@@ -50,8 +51,10 @@ import Market.FhEggAllocation
 import Market.ProtocolAssurance
 import Market.CertQp
 import Market.CertQpRustDenotation
+import Market.CertQpDescriptor
 import Market.PriceCert
 import Market.FhIRAdmissible
+import Market.FhIRClearingPlan
 import Market.ZKOpenRel
 import Market.WideCommitBoundary
 import Market.ShieldedRingEndpointDescriptor

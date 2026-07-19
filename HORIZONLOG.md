@@ -10066,8 +10066,14 @@ every gate, arbitrary external PI binding, and genuine chip output from actual `
 slack bit is honest integer `0/1` from canonical `Satisfied2`, using BabyBear primality; and
 `semantic_gate_exact` closes the generic complete-residual no-wrap→exact-integer rung;
 `score_recompose_exact`/`four_bit_recompose_exact` close every score/difference/slack recompose over
-the integers. Thirteen keystones are kernel-clean. The AIR recomputes all 16 score decompositions, totals, one-hot select,
-global max, and lowest-index slack. `HidingFriPcs` APIs rejection-sample the source blind, randomize
+the integers. `total_column_exact`, `packed_columns_decode`, `column_winner_semantic`,
+`root_input_decoded`, and `column_root_semantic` finish the bounded affine decode, semantic
+lowest-index winner, exact 16-lane Poseidon seed, and all eight digest lanes.
+`privatePreferenceN4K4_descriptor_to_accepts` closes the whole functional chain: actual
+`Satisfied2` + canonical trace cells + canonical external PI representatives + wide-chip soundness
+implies semantic `Accepts` for the decoded witness. Nineteen keystones are kernel-clean. The AIR
+recomputes all 16 score decompositions, totals, one-hot select, global max, and lowest-index slack.
+`HidingFriPcs` APIs rejection-sample the source blind, randomize
 every proof, verify winner-only statements, and refuse changed roots/winners. A changed private score
 that preserves the winner changes the root and cannot verify against the old statement.
 
@@ -10083,11 +10089,11 @@ NARROW GATES: module Lean check/build GREEN; fresh emitter SHA
 faithful-commitment scan GREEN; persvati focused nextest GREEN 3/3 (225 skipped, hiding test 0.204s
 after build). No workspace/heavy gauntlet was run.
 
-**NAMED RESIDUAL — `PrivatePreferenceDescriptorToAccepts`:** bithood and all 2/4-bit recompositions
-are closed. Finish the bounded total/pack/select/max affine equalities, identify the four aggregate
-columns and unique selector/root with the semantic witness, then use the already-proved
-`winner_eq_of_optimal_and_lowest` endpoint. Afterward weld authenticated/censorship-resistant ballot
-ingestion to the committed root, add Tier-0 FHE/MPC production, and widen N/K/rule families. Current
+**CLOSED — `PrivatePreferenceDescriptorToAccepts`:** the bounded total/pack/select/max affine
+equalities, aggregate/winner identification, semantic root preimage, all eight chip-output lanes,
+and canonical external PIs now end in exact `Accepts`; this is no longer a named residual.
+**NEXT RESIDUALS:** weld authenticated/censorship-resistant ballot ingestion to the committed root,
+add Tier-0 FHE/MPC production, and widen N/K/rule families. Current
 privacy is Tier 1: hidden from proof consumers, visible to the one trace-building process. Authorized
 provenance/VK installation remains a separate epoch act. Durable detail:
 `docs/deos/PRIVATE-PREFERENCE-N4K4.md`.
@@ -10223,3 +10229,68 @@ S2/E1; independent of the map/IMT/rotation cluster and of E9's joint_turn file):
    dregg-circuit-prove bilateral` + the `multi_cell_cross_fed_binding` gauntlet; MEASURE the
    proof-byte delta at cutover (main-trace committed columns −35/87 = −40.2%; opening felts per
    FRI query scale with width — the byte number is a measurement, not a projection).
+
+## 2026-07-19 — E10-FREEZE-FALSIFIER RESOLVED: cellSeal's AFTER owner limb is UNFORCED (witness-gen hole, member-precise)
+
+FALSIFIER (byte-safe probe, NO regen — item E10 of the circuit-minimality campaign): forge a
+changed owner-limb on the LIVE `cellSealVmDescriptor2R24` and observe what rejects it. RESULT:
+**NOTHING at the AIR/verifier level.** A self-consistent seal whose AFTER owner octet
+(`B_PUBKEY_OCTET = 105..112`, `canonical_32_to_felts_8(cell.public_key())`) is moved off the
+pre-state owner — lifecycle record-pin still satisfied (PI[46] = Sealed), economic frame frozen,
+`wireCommitR` chain + NEW_COMMIT self-consistent — PROVES + VERIFIES through the deployed
+per-descriptor verifier (`prove_vm_descriptor2` / `verify_vm_descriptor2`). Control: the
+lifecycle-freeze forgery on the same trace is REJECTED (harness is live, so the owner-accept is a
+real gap, not a dead green). Standing witness: `circuit/tests/zzz_e10_freeze_owner_falsifier.rs`
+(green; flips red when the owner-freeze gate lands — canary the fix).
+
+WHY unforced (member-precise, verified by reading the emit + the verifier):
+- `cellSealVmDescriptor2R24 = v3Of (rotateV3WithRecordPin B_LIFECYCLE …)` — it appends ONLY the
+  lifecycle record-pin + the lifecycle-payload hash gate. It is NOT `v3OfFrozen`, so it carries
+  NONE of `frozenAuthorityColEqs` (`EffectVmEmitRotationV3.lean:3088`). And `frozenAuthorityColEqs`
+  freezes r23·lifecycle·perms·vk·mode·fields_root + the 7 headroom + 14 perms/vk completion + 56
+  fields[0..7] completion limbs — the **pubkey octet (105..112) is in NONE of them, for ANY
+  member** (so even the value cohort does not freeze the owner). No PI pin on the plain-seal path
+  either (the sovereign KEY_COMMIT rider reads the BEFORE octet and only fires on `makeSovereign`
+  wide).
+- The one candidate compensator — verifier-side PI reconstruction — does NOT compensate.
+  `turn/src/executor/proof_verify.rs:523-526`: PI[42] (OLD_COMMIT) ← the ledger's stored pre-state
+  commitment (so the BEFORE owner IS pinned to the true pre-state), but PI[43] (NEW_COMMIT) ←
+  `turn.execution_proof_new_commitment` — the prover's CLAIMED post, tied by `pi_binding` to the
+  trace's AFTER `B_STATE_COMMIT`. It is NOT independently re-derived by re-executing `apply` on the
+  pre-state (that would defeat the STARK). So a self-consistent forged-owner AFTER block yields a
+  self-consistent NEW_COMMIT the verifier accepts as the new ledger root.
+
+Severity: a witness-gen FAITHFULNESS hole — the AIR admits a sealed post whose owner differs from
+the pre-state owner, which faithful `apply_cell_seal` (turn/src/executor/apply.rs:2929, `c.seal`
+touches only lifecycle) never produces. Authorization binds the pre-state owner as the turn
+authorizer, so the immediate exploit is an owner-mutation the seal spec forbids (not a third-party
+theft on this member alone); but the SAME free-AFTER-owner shape is shared by the 41 no-freeze
+members and is the class the E10 dedup will ride — so it must be CLOSED, not carried.
+
+FIX (the real close, Lean-authored — do NOT hand-write in Rust): add an owner-freeze `colEq`
+`gPubkeyFreeze` welding AFTER `B_PUBKEY_OCTET+i == BEFORE B_PUBKEY_OCTET+i` (i=0..8) into the
+cohort emit for every member that does not legitimately move the owner (i.e. all but a future
+`transferOwnership`). Cheapest as an 8-`colEq` block appended in `EffectVmEmitRotationV3` beside
+`frozenAuthorityColEqs`/the record-pin, mirroring `authorityHeadroomFreezes`.
+
+STAGED DEPLOY RECIPE (bundled cutover — a REGEN; must NOT run in this byte-safe swarm, and NOT in
+parallel with another regen or a live descriptor-editing lane):
+1. Lean: add `pubkeyFreezeColEqs (w) := (List.range 8).map (fun i => colEq (w+B_PUBKEY_OCTET+i)
+   (w+AFTER_BLOCK_OFF+B_PUBKEY_OCTET+i))` in `EffectVmEmitRotationV3.lean`; append it (single `++`
+   right-operand, v1 stays left) to the constraint list of every non-owner-moving member's rotate
+   wrapper (both `v3Of` movers like cellSeal/…, and `v3OfFrozen` value members). Prove the
+   companion `pubkeyFreeze_freezes` (AFTER octet == BEFORE octet on a satisfying transition row) and
+   keep `graduable`/keystone composition verbatim (it is `.gate`s past `rotateV3`, so the existing
+   refinement keystones compose unchanged); `#assert_axioms` clean.
+2. Emit: regenerate the staged registry TSV(s) (`rotation-wide-registry-staged.tsv` +
+   `…-umem-welded-…`) and the by-name descriptor JSONs — this MINTS new per-member VK + proof
+   bytes (regen; the byte-safe half stops here).
+3. Rust: no hand-AIR edits — `descriptor_ir2`/`ir2_eval_accepts`/`prove_vm_descriptor2` pick up the
+   new colEqs from the parsed descriptor automatically.
+4. Canary: `circuit/tests/zzz_e10_freeze_owner_falsifier.rs` must FLIP — the owner-forge
+   `prove/verify` verdict ACCEPTED → REJECTED (the final assert inverts; update it to assert
+   rejection + control still-honest-accepts); the honest seal still proves+verifies; the
+   lifecycle/economic teeth in `effect_vm_rotation_flip.rs` stay green.
+5. E10 DEDUP (the byte-safe emit-tuple sharing on the 16 carriers, ~83 dup cols ≈ 15.6KB + 5.3K
+   cells/proof) rides the SAME regen — greenlit now that the no-freeze class is proven a real gap.
+   MEASURE proof-byte delta at cutover.

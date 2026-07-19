@@ -1,5 +1,16 @@
 # Symbolic decidability at HEAD — does the Deriv/VPA tower COMPOSE? (full-closure audit)
 
+> **Superseded status note (2026-07-19).** This file is a historical closure audit, not the
+> current verdict.  The seams it identified were subsequently closed by the registered modules
+> `SymbolicEquivalence`, `SymbolicMinterms`, `SymbolicFixpoint`, `EquivalenceFixpoint`, and
+> `SymbolicMintermsPlus`: language emptiness and equivalence over the infinite `Value` alphabet
+> are decidable on the symbolic fragment, and the adaptive `Sim`-deduplicated fixpoint makes the
+> decision kernel-runnable on the checked examples.  `PredicateLibrary` is the current usable
+> authoring surface.  In particular, the statements below that equivalence is absent, that
+> `simDecide` is unused, or that only the hard-coded `braceP` fragment composes are preserved as
+> dated audit findings and must not be copied forward as HEAD status.  The live module headers and
+> their `#assert_all_clean` / `#guard` gates are authoritative for the present frontier.
+
 Status audit of the symbolic-VPA / derivative decidability ladder, produced by reading the whole
 theory closure: `Dregg2/Crypto/Deriv/{Core,Correctness,SymbolicDerivative,Finiteness,Similarity,
 AciNormal,AciComplete,SatOracle,SymbolicEmptiness,StepBridge,SymbolicEmptinessUnbounded}.lean`,

@@ -1,11 +1,12 @@
-//! E2E INTEGRATION PROOF — one REAL private derivative, end to end.
+//! E2E INTEGRATION PROOF — one REAL private derivative, end to end, plus the
+//! active-prox frontier biting fail-closed.
 //! Contract: `docs/deos/FHEGG-PROTOTYPE-INTERFACES.md` §5 (this file is the north-star test).
 //! OWNED by the `e2e` lane. Codes against the FROZEN signatures of §1 (threshold),
-//! §2 (convex_engine), §4 (fhir). While those modules are `todo!()` stubs, the
-//! integration test PANICS at the first unimplemented call — expected; it goes
-//! green as the lanes land. The PLAINTEXT REFERENCE is a standalone passing
-//! test TODAY (see `reference_*` below), so the ground truth is verified before
-//! the FHE path exists.
+//! §2 (convex_engine), §4 (fhir). All three implementations now exist. This file
+//! therefore has TWO honest jaws: the requested rebalance whose first clamp is
+//! active is rejected by fhIR, because additive BFV cannot compare; the same
+//! derivative with a certified-inactive outer box runs all the way through the
+//! collective key and threshold combine. No shim or single-key fallback remains.
 //!
 //! # The derivative: a 2-asset portfolio rebalance (a real small convex program)
 //!
@@ -24,14 +25,16 @@
 //!   A = I + ρ·11ᵀ  =  [[2,1],[1,2]]  for d = 2, ρ = 1
 //! ```
 //!
-//! and iterate the contract's kernel `y ← prox(y − τ·A·y)` with `prox` the box
-//! clamp `[LO, HI] = [−15, 15]` (position limit: |x_i − w*_i| ≤ 15). Constants:
+//! and iterate the contract's kernel `y ← prox(y − τ·A·y)`. The original
+//! hand-check uses the position-limit box `[−15,15]` and `τ=1/4`:
 //!
 //! * `τ = TAU_NUM/TAU_DEN = 1/4` — eigenvalues of A are {1, 3}; τ < 2/3 converges.
 //! * start `h = (84, 16)`, target `w* = (60, 40)` ⇒ `y0 = (24, −24)`, along the
 //!   eigenvector `(1,−1)` (eigenvalue 1 ⇒ exact contraction 1 − τ = 3/4 per step),
-//!   and OUTSIDE the box, so the prox genuinely clamps at iteration 1. The whole
-//!   trajectory is hand-computable and asserted exactly (see the hand-check test).
+//!   and OUTSIDE the box, so the prox genuinely clamps at iteration 1. That is the
+//!   frontier/refusal jaw. For the runnable jaw, fhIR selects `τ=1/3 = 1/‖A‖∞`
+//!   and a public outer box `[−100,100]`; the prox is proved inactive and the exact
+//!   scaled result after six steps is `(1536,-1536)` at scale `3^6`.
 //!
 //! # The scaling convention (pinned here for the convex_engine lane)
 //!
@@ -44,19 +47,25 @@
 //!                   LO·TAU_DEN^{k+1}, HI·TAU_DEN^{k+1})
 //! ```
 //!
-//! `s_T / TAU_DEN^T` IS the rational PDHG iterate `y_T`, exactly — no rounding
-//! anywhere. The FHE path must decrypt to `s_T` bit-for-bit (`convex_step`'s
+//! `s_T / tau_den^T` IS the rational proximal-gradient iterate `y_T`, exactly — no rounding
+//! anywhere. The runnable FHE path must decrypt to `s_T` bit-for-bit (`convex_step`'s
 //! T=1 oracle test already pins this convention for one step; `prox_lo/prox_hi`
 //! in `convex_solve` are therefore UNSCALED original units, the engine scales
 //! the clamp bounds internally per iteration).
 //!
-//! T_E2E = 6 is chosen so every intermediate fits the signed centered window of
-//! t = 1_032_193 (proved by `reference_window_feasibility_for_t` below).
+//! T_E2E = 6 is chosen so both trajectories fit the signed centered window of
+//! t = 1_032_193 (the tighter active trajectory is proved by
+//! `reference_window_feasibility_for_t`; fhIR certifies the runnable sibling).
+
+use fhe::bfv::{Encoding, Plaintext};
+use fhe_traits::{FheEncoder, FheEncrypter, Serialize};
 
 use fhegg_fhe::bfv_lean::LeanCiphertext;
 use fhegg_fhe::convex_engine::{self, ConvexEngineError};
 use fhegg_fhe::convex_step::{center, centered_window, PublicLinearStep, SignedCt};
-use fhegg_fhe::fhir::{self, Program, Tier};
+use fhegg_fhe::fhir::{
+    self, AffineExpr, Coeff, Constraint, Expr, Phase, Program, RejectKind, Tier, Visibility,
+};
 use fhegg_fhe::threshold::{self, BfvParams, CollectivePublicKey, ThresholdError};
 
 // ---------------------------------------------------------------------------
@@ -82,10 +91,14 @@ const Y0: [i64; 2] = [24, -24];
 const T_E2E: u32 = 6;
 /// n-of-n quorum size for the collective key.
 const QUORUM_N: usize = 3;
-/// Smudging noise bits for partial decrypts. PLACEHOLDER pending the exported
-/// bound from `metatheory/Bfv/Smudging.lean` (§1b) — the REAL value must be the
-/// proven bound for these params, not this constant. Named in TESTQALOG.
-const SMUDGE_BITS: u32 = 64;
+/// Smudging noise bits pinned to the deployed Lean export through the Rust gate.
+const SMUDGE_BITS: u32 = threshold::MIN_SMUDGE_BITS;
+
+/// The runnable sibling's deliberately loose box. The compiler proves the prox
+/// is the identity for the whole trajectory; the active [-15,15] box below is
+/// separately required to refuse.
+const RUNNABLE_BOX_LO: i64 = -100;
+const RUNNABLE_BOX_HI: i64 = 100;
 
 fn rebalance_step() -> PublicLinearStep {
     PublicLinearStep {
@@ -96,7 +109,7 @@ fn rebalance_step() -> PublicLinearStep {
 }
 
 // ---------------------------------------------------------------------------
-// THE PLAINTEXT REFERENCE — exact scaled-integer PDHG, verified standalone NOW.
+// THE PLAINTEXT REFERENCE — exact scaled-integer proximal gradient.
 // ---------------------------------------------------------------------------
 
 /// T iterations of `y ← clamp(y − τ·A·y, lo, hi)` carried EXACTLY at scale
@@ -248,68 +261,81 @@ fn reference_window_feasibility_for_t() {
 }
 
 // ---------------------------------------------------------------------------
-// CONTRACT-GAP SHIMS — named precisely; each panics with its gap until the
-// owning lane / supervisor closes it. (TESTQALOG 2026-07-18 proto/e2e names all
-// three for the supervisor.) NO fake fallback paths: the e2e is honest-red.
+// THE PROGRAMS + COLLECTIVE INGRESS — all former contract gaps are real calls.
 // ---------------------------------------------------------------------------
 
-/// GAP 1 (fhir lane, expected): the frozen contract fixes `admissible`/`compile`
-/// but `Program`'s AST shape is lane-defined and today has no constructors. The
-/// program to express here: 2-asset CONVEX rebalance — objective ½yᵀ[[2,1],[1,2]]y
-/// (tracking error + budget penalty, committed visibility, clear phase), box
-/// constraint y ∈ [−15,15]², i.e. Tier0-dark FHE-tractable. Replace this body
-/// with the real AST construction when fhir lands.
-fn express_rebalance_in_fhir() -> Program {
-    unimplemented!(
-        "e2e GAP 1: fhir::Program has no constructors yet (AST is fhir-lane-defined); \
-         build the 2-asset convex rebalance AST here when fhir lands"
-    )
+fn rebalance_program(prox_lo: i64, prox_hi: i64) -> Program {
+    let mut p = Program::new(Phase::Clear);
+    // The ingress interval honestly contains y0=(24,-24). The prox is a
+    // separate constraint; using [-15,15] therefore exposes the active clamp
+    // instead of laundering y0 into a false declared range.
+    let x = p.var("asset_0_shift", Visibility::Committed, -24, 24);
+    let y = p.var("asset_1_shift", Visibility::Committed, -24, 24);
+    p.minimize(Expr::Sum(vec![
+        Expr::Square(AffineExpr::var(x)),
+        Expr::Square(AffineExpr::var(y)),
+        // The budget PENALTY advertised by the module contract. Encoding this
+        // as an EqZero row happens to assemble the same E^T E matrix, but would
+        // falsely turn the soft penalty into a hard semantic constraint.
+        Expr::Square(AffineExpr::var(x).term(Coeff::Public(1), y)),
+    ]));
+    p.subject_to(Constraint::Box {
+        var: x,
+        lo: prox_lo,
+        hi: prox_hi,
+    });
+    p.subject_to(Constraint::Box {
+        var: y,
+        lo: prox_lo,
+        hi: prox_hi,
+    });
+    p.with_plaintext_modulus(PLAINTEXT_MODULUS)
+        .with_iterations(T_E2E);
+    p
 }
 
-/// GAP 2 (contract, NAMED for the supervisor): `threshold::BfvParams` has no
-/// constructor in the frozen interface — the e2e cannot instantiate the fold
-/// parameter set (degree 4096 / fold moduli / t = 1_032_193). Needs e.g.
-/// `BfvParams::fold_default()` in threshold.rs.
 fn fold_params() -> BfvParams {
-    unimplemented!(
-        "e2e GAP 2: no BfvParams constructor in the frozen contract \
-         (need threshold::BfvParams::fold_default() or equivalent)"
-    )
+    BfvParams::fold_set()
 }
 
-/// GAP 3 (contract, NAMED for the supervisor): the frozen interface has keygen /
-/// partial_decrypt / combine but NO encrypt-under-the-collective-key, so state
-/// cannot enter the system. Needs e.g.
-/// `threshold::encrypt_collective(&CollectivePublicKey, &[u64], &BfvParams) -> LeanCiphertext`
-/// (all 4096 slots of one coordinate carry the same centered-encoded value here).
 fn encrypt_to_collective(
-    _pk: &CollectivePublicKey,
-    _params: &BfvParams,
-    _slot_value: u64,
+    pk: &CollectivePublicKey,
+    params: &BfvParams,
+    slot_value: u64,
 ) -> LeanCiphertext {
-    unimplemented!(
-        "e2e GAP 3: no encrypt-under-CollectivePublicKey signature in the frozen contract"
-    )
+    let slots = vec![slot_value; params.degree()];
+    let pt = Plaintext::try_encode(&slots, Encoding::simd(), params.arc())
+        .expect("collective SIMD plaintext encoding");
+    let mut rng = rand_09::rng();
+    let ct = pk
+        .pk
+        .try_encrypt(&pt, &mut rng)
+        .expect("collective-key encryption");
+    LeanCiphertext::from_fhe_bytes(&ct.to_bytes(), params.moduli(), params.degree(), slot_value)
+        .expect("collective ciphertext parses into the Lean-first representation")
 }
 
 // ---------------------------------------------------------------------------
 // THE INTEGRATION PROOF — fhir → collective key → convex_solve → threshold.
 // ---------------------------------------------------------------------------
 
-/// The end-to-end private derivative: express the rebalance in fhir, compile to
-/// a ClearingSpec, encrypt y0 to a 3-party collective key, run T_E2E convex
-/// iterations at Tier 0 over the encrypted state, threshold-combine the n
-/// partial decrypts, and assert the cleared allocation equals the plaintext
-/// reference EXACTLY (bit-for-bit in the scaled domain, every slot).
-///
-/// Ignored until threshold + convex_engine + fhir land (their bodies are
-/// `todo!()` stubs today, and gaps 1–3 above are open): run un-ignored, it
-/// panics at the first unimplemented call — that red is honest and expected.
 #[test]
-#[ignore = "waits on threshold/convex_engine/fhir lanes + contract gaps 1-3 (no Program ctor, no BfvParams ctor, no collective encrypt); reference path is verified by the passing tests above"]
+fn active_prox_rebalance_is_refused_at_the_fhir_boundary() {
+    let program = rebalance_program(BOX_LO, BOX_HI);
+    let err = fhir::compile(&program).expect_err(
+        "y0's honest [-24,24] interval can make the [-15,15] prox bind; additive BFV must refuse",
+    );
+    assert_eq!(err.kind(), Some(RejectKind::ProxNotCertifiedIdentity));
+}
+
+/// The end-to-end private derivative over the class the additive engine really
+/// implements today: fhIR → collective key → exact T>1 affine solve → smudged
+/// n-of-n partial decrypt. The outer box is certified inactive; the sibling
+/// test above pins the active-prox frontier rather than silently skipping it.
+#[test]
 fn e2e_private_rebalance_matches_plaintext_reference() {
-    // 1. Express the derivative in fhir and compile it. [waits: fhir lane, GAP 1]
-    let program = express_rebalance_in_fhir();
+    // 1. Express the derivative in fhIR and compile it.
+    let program = rebalance_program(RUNNABLE_BOX_LO, RUNNABLE_BOX_HI);
     let tier = fhir::admissible(&program).expect("the convex rebalance must be admissible");
     assert_eq!(
         tier,
@@ -324,13 +350,28 @@ fn e2e_private_rebalance_matches_plaintext_reference() {
         "the compiled public matrix must be I + ρ·11ᵀ"
     );
 
-    // 2. n-of-n collective keygen — no party ever holds sk. [waits: threshold lane]
-    let params = fold_params(); // [GAP 2]
-    let (cpk, key_shares) = threshold::collective_keygen(QUORUM_N, &params);
-    assert_eq!(key_shares.len(), QUORUM_N);
+    // 2. n-of-n collective keygen over the real mbfv public-key shares. The
+    // coordinator API receives only public contributions; each ThresholdParty retains its
+    // opaque secret state. A separate process-shaped integration tooth exercises actual channels.
+    let params = fold_params();
+    assert_eq!(params.plaintext_modulus(), PLAINTEXT_MODULUS);
+    let session = threshold::KeygenSession::random(QUORUM_N).expect("keygen session");
+    let mut coordinator = threshold::KeygenCoordinator::new(session.clone(), params.clone());
+    let parties = (0..QUORUM_N)
+        .map(|party| {
+            let (party_state, contribution) =
+                threshold::ThresholdParty::join(&session, party, &params).expect("party keygen");
+            coordinator
+                .accept(contribution)
+                .expect("public contribution");
+            party_state
+        })
+        .collect::<Vec<_>>();
+    let cpk = coordinator.finish().expect("collective public key");
+    assert_eq!(parties.len(), QUORUM_N);
 
     // 3. Encrypt the SHIFTED state y0 = holdings − target to the collective key,
-    //    centered-encoded, one ciphertext per coordinate. [GAP 3]
+    //    centered-encoded, one ciphertext per coordinate.
     let x0: Vec<SignedCt> = Y0
         .iter()
         .map(|&y| {
@@ -344,39 +385,59 @@ fn e2e_private_rebalance_matches_plaintext_reference() {
         })
         .collect();
 
-    // 4. The convex engine at T > 1, using the COMPILED matrix. [waits: convex_engine lane]
+    // 4. The convex engine at T > 1, using the COMPILED matrix.
     let step = PublicLinearStep {
         a: spec.a.clone(),
-        tau_num: TAU_NUM,
-        tau_den: TAU_DEN,
+        tau_num: spec.tau_num,
+        tau_den: spec.tau_den,
     };
+    assert_eq!((step.tau_num, step.tau_den), (1, 3));
     let ceiling = convex_engine::max_iterations_for_params(&step, PLAINTEXT_MODULUS);
     assert!(
         ceiling >= T_E2E,
-        "the proven-safe ceiling ({ceiling}) must admit T_E2E = {T_E2E} \
-         (window feasibility is proven by reference_window_feasibility_for_t)"
+        "the proven-safe ceiling ({ceiling}) must admit T_E2E = {T_E2E}; \
+         fhIR's successful T-step compile is the runnable-path window certificate"
     );
     // Fail-closed tooth: one past the ceiling must REFUSE, never silently mis-clear.
     assert!(
         matches!(
-            convex_engine::convex_solve(&x0, &step, BOX_LO, BOX_HI, ceiling + 1, PLAINTEXT_MODULUS),
+            convex_engine::convex_solve(
+                &x0,
+                &step,
+                spec.prox_lo,
+                spec.prox_hi,
+                ceiling + 1,
+                PLAINTEXT_MODULUS,
+            ),
             Err(ConvexEngineError::NoiseBudgetExceeded { .. })
         ),
         "T = ceiling+1 must fail CLOSED with NoiseBudgetExceeded"
     );
-    let x_t = convex_engine::convex_solve(&x0, &step, BOX_LO, BOX_HI, T_E2E, PLAINTEXT_MODULUS)
-        .expect("T_E2E is within the proven ceiling");
+    let x_t = convex_engine::convex_solve(
+        &x0,
+        &step,
+        spec.prox_lo,
+        spec.prox_hi,
+        T_E2E,
+        PLAINTEXT_MODULUS,
+    )
+    .expect("T_E2E is within the proven ceiling");
     assert_eq!(x_t.len(), Y0.len());
 
-    // 5. Threshold decrypt: all n parties partial-decrypt, combine, decode.
-    let expected = reference_solve_scaled(&Y0, &step, BOX_LO, BOX_HI, T_E2E); // (14580, −14580)·(scale 4096)
+    // 5. Simulate all n party actions in-process: partial-decrypt, combine, decode.
+    let expected = reference_solve_scaled(&Y0, &step, spec.prox_lo, spec.prox_hi, T_E2E);
+    assert_eq!(expected, vec![1536, -1536]); // scale 3^6; unscaled y = ±512/243.
     for (i, ct) in x_t.iter().enumerate() {
-        let shares: Vec<_> = key_shares
+        let shares: Vec<_> = parties
             .iter()
-            .map(|ks| threshold::partial_decrypt(ks, ct.ciphertext(), SMUDGE_BITS))
+            .map(|party| {
+                party
+                    .partial_decrypt(ct.ciphertext(), SMUDGE_BITS)
+                    .expect("valid smudged share")
+            })
             .collect();
 
-        // Quorum tooth: k < n shares must REFUSE — no sub-quorum ever clears.
+        // API tooth: combine refuses an n−1 share set.
         assert!(
             matches!(
                 threshold::combine(&shares[..QUORUM_N - 1], &params),
@@ -396,9 +457,9 @@ fn e2e_private_rebalance_matches_plaintext_reference() {
         }
     }
 
-    // 6. The cleared allocation: x_T = target + s_T/scale ≈ (63.56, 36.44),
+    // 6. The cleared allocation: x_T = target + s_T/scale ≈ (62.11, 37.89),
     //    within the position limits, budget preserved (Σ s_T = 0 exactly).
-    let scale = i128::from(TAU_DEN).pow(T_E2E);
+    let scale = i128::from(step.tau_den).pow(T_E2E);
     assert_eq!(expected.iter().sum::<i128>(), 0, "budget-neutral rebalance");
     for (i, &si) in expected.iter().enumerate() {
         let dev = si.abs();

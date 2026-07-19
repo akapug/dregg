@@ -405,7 +405,7 @@ mod interchain_adapter_tests {
                 chain_digest: [BabyBear::ZERO; SEG_DIGEST_WIDTH],
                 num_turns: 1,
             },
-            finalized_root: BabyBear::ZERO,
+            finalized_root: [BabyBear::ZERO; SEG_ANCHOR_WIDTH],
             quorum_signers,
         }
     }

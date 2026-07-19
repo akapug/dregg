@@ -227,23 +227,16 @@ fn main() {
         );
     }
 
-    section("7. Silver joint-turn AGGREGATION (N-cell private joint turn)");
-    println!("  (RETIRED: the v1 silver aggregation re-verified per-cell v1 hand-AIR proofs");
+    section("7. Cross-cell aggregation");
+    println!("  (DELETED, E9 2026-07-18: the joint-turn layer — the Silver aggregation and the");
+    println!("   N-cell recursive fold over the `JointTurnAggregationAir` binding leaf — was");
+    println!("   dead scaffolding (free-witness bundle digest, zero production callers) and is");
+    println!("   gone. Cross-cell aggregation in production is the Lean-emitted BILATERAL");
+    println!("   aggregator (`turn/src/aggregate_bilateral_prover.rs`); per-cell legs remain");
     println!(
-        "   proofs via `prove_joint_turn`. The rotated cohort now carries `DescriptorParticipant`"
+        "   `DescriptorParticipant` minted by `rotation_witness::mint_rotated_participant_leg`"
     );
-    println!(
-        "   legs (minted by `dregg_turn::rotation_witness::mint_rotated_participant_leg`), verified"
-    );
-    println!(
-        "   by `joint_turn_aggregation::verify_descriptor_participant`; the recursive fold is"
-    );
-    println!(
-        "   `joint_turn_recursive::prove_joint_turn_recursive_rotated`. Wiring an N-cell rotated"
-    );
-    println!(
-        "   joint bench needs the full per-cell rotation witness set — tracked, not measured here.)"
-    );
+    println!("   and admitted by `joint_turn_aggregation::verify_descriptor_participant`.)");
 
     println!();
     rule();

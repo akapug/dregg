@@ -6,6 +6,13 @@ the substrate, the linchpin, and the parse-as-derivation circuit are now **built
 committed**. This doc describes what exists, with `file:line` anchors, and marks what
 remains proposed.
 
+> **Status correction (2026-07-19).** Sections 5 and “Honest limits” predate the symbolic
+> derivative closure.  Flat `PredRE` emptiness and language equivalence over the infinite `Value`
+> alphabet are now decidable and runnable on the registered symbolic fragment
+> (`SymbolicMinterms` → `SymbolicFixpoint` → `EquivalenceFixpoint`, widened by
+> `SymbolicMintermsPlus`).  What remains proposed is the *visibly-pushdown* symbolic lift and the
+> deployed heterogeneous-circuit composition, not infinite-alphabet regular equivalence itself.
+
 ## 1. The substrate — `Cert R` for ANY relation (BUILT)
 
 `metatheory/Dregg2/Crypto/Chain.lean` is the **leaf module** (Mathlib + `Dregg2.Tactics`
@@ -192,9 +199,12 @@ rewrite-attestations natively. Depends on the §6 bridge landing first.
 
 ## Honest limits
 
-- **Infinite data alphabet**: classical VPL theory (and the §5 decidability route) transfers
-  cleanly only to the finite fragment (the `{op, cl, dat}` bracket grid the circuit pins).
-  The templater's infinite `Value` alphabet is out of VPL scope.
+- **Infinite data alphabet**: the flat symbolic-regular rung is now built: `PredRE` emptiness and
+  equivalence are decidable over the infinite `Value` alphabet on the registered symbolic
+  predicate-cover fragment, and the adaptive `Sim` fixpoint runs the checked examples.  The
+  remaining boundary is the symbolic **VPA** lift for visibly nested protocols, plus the explicitly
+  fail-closed predicate classes not yet supplied with finite witness covers; it is no longer honest
+  to call the infinite alphabet categorically “out of VPL scope.”
 - **The uniqueness wall is real**: unique data recovery rests on the delimiter-guarded
   class (`Excludes`), not on VPA determinism (§5).
 - **The `Value↪Nat` weld** (`Deriv/Determinize.lean:171`) — the faithfulness-carrying

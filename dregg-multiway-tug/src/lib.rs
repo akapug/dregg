@@ -58,6 +58,7 @@ pub mod fold;
 pub mod game;
 pub mod hidden_hand;
 pub mod packs;
+mod program_loader;
 pub mod reference;
 pub mod state;
 /// Phase 5 — the [`dreggnet_offerings::Offering`] + the per-player HIDDEN-HAND surface (the

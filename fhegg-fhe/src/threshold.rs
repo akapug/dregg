@@ -6,10 +6,14 @@
 //!
 //! ## What is anchored where (read before touching)
 //!
-//! * **Collective keygen** rides fhe.rs `mbfv` DIRECTLY: `CommonRandomPoly` + one `PublicKeyShare`
-//!   per party, aggregated into a real fhe.rs `PublicKey` ("Protocol 1: EncKeyGen" of
-//!   [Mouchet et al. 2020](https://eprint.iacr.org/2020/304.pdf)). No dealer: each party samples its
-//!   own ternary secret share; the collective secret key `s = Σ sᵢ` never exists anywhere.
+//! * **Collective keygen** rides fhe.rs `mbfv` DIRECTLY: a public CRP seed + one
+//!   `PublicKeyShare` per party, aggregated into a real fhe.rs `PublicKey` ("Protocol 1:
+//!   EncKeyGen" of [Mouchet et al. 2020](https://eprint.iacr.org/2020/304.pdf)). The production
+//!   API is party-owned: each [`ThresholdParty`] independently samples and retains its ternary
+//!   secret share, while the [`KeygenCoordinator`] receives only [`PublicKeyContribution`] wire
+//!   objects. The collective secret key `s = Σ sᵢ` is never constructed by that API.
+//!   This is process-shaped custody, not a network protocol: authenticating the public seed and
+//!   messages, persistent secret storage, and malicious-party defenses remain host obligations.
 //! * **Partial decryption is OURS**, because fhe.rs `mbfv::DecryptionShare` samples its share error at
 //!   the FRESH-noise variance with the literal source comment "TODO this should be exponential in
 //!   ciphertext noise!" (`fhe-0.1.1/src/mbfv/secret_key_switch.rs`) — the exact hole this module exists
@@ -34,8 +38,8 @@
 //!
 //! Deployed numbers, PINNED to `metatheory/Bfv/Smudging.lean`'s export (lane 1b, landed mid-swarm):
 //! `Bfv.Smudging.smudgeBits = 80` — the smudge is uniform on `[-2^80, 2^80]` (the EXACT distribution
-//! [`partial_decrypt`] samples; the theorems are about that distribution and no other). Both jaws are
-//! proved on the real degree-4096 parameters:
+//! [`ThresholdParty::partial_decrypt`] samples; the theorems are about that distribution and no
+//! other). Both jaws are proved on the real degree-4096 parameters:
 //! * hiding (`deployed_smudge_hides`): against the deployed fold envelope's ciphertext noise
 //!   `≤ 2^32` (4096 orders × `B_fresh ≈ 2^20`), a `2^80` smudge hides the secret term to
 //!   statistical distance `≤ 2^-48`;
@@ -48,8 +52,9 @@ use std::sync::Arc;
 
 use fhe::bfv::{BfvParameters, Ciphertext, Encoding, PublicKey, SecretKey};
 use fhe::mbfv::{Aggregate, CommonRandomPoly, PublicKeyShare};
-use fhe_traits::{DeserializeParametrized, FheDecoder, FheDecrypter};
-use rand_09::Rng;
+use fhe_traits::{DeserializeParametrized, FheDecoder, FheDecrypter, Serialize as FheSerialize};
+use rand_09::rngs::StdRng;
+use rand_09::{Rng, RngCore, SeedableRng};
 
 use crate::additive::pick_params;
 use crate::bfv_lean::{LeanCiphertext, RnsPoly};
@@ -61,6 +66,9 @@ pub enum ThresholdError {
     QuorumTooSmall { have: usize, need: usize },
     ParamMismatch,
     SmudgeTooSmall,
+    SmudgeTooLarge,
+    InvalidParty { party: usize, n_parties: usize },
+    MalformedWire,
 }
 
 /// SMUDGE-BOUND-PIN: minimum admissible smudging bit-width `b` (noise uniform on `[-2^b, 2^b]`),
@@ -71,14 +79,19 @@ pub const MIN_SMUDGE_BITS: u32 = 80;
 
 /// Correctness ceiling: `Bfv.Smudging.deployed_smudged_decrypt_exact` proves the decrypt margin
 /// holds for TOTAL smudge `≤ 2^84` (= 16 parties × `2^80`) plus the `2^32` fold envelope.
-/// [`partial_decrypt`] enforces the per-party form `smudge_bits + ceil(log2(n)) ≤ 84`.
+/// [`ThresholdParty::partial_decrypt`] enforces the per-party form
+/// `smudge_bits + ceil(log2(n)) ≤ 84`.
 pub const MAX_SMUDGE_BITS_TOTAL: u32 = 84;
 
-/// One party's share of the collective secret key (no dealer ever holds the whole key).
+fn ceil_log2_parties(n: usize) -> Option<u32> {
+    (n != 0).then(|| usize::BITS - (n - 1).leading_zeros())
+}
+
+/// One party's share of the collective secret key (party-local in the production API).
 ///
 /// `coeffs` (ternary, self-sampled) is the secret; it is deliberately private to this module.
 /// NAMED GAP: no zeroize-on-drop (the crate has no `zeroize` dep and lanes may not add deps).
-pub struct KeyShare {
+struct KeyShare {
     coeffs: Vec<i64>,
     /// This party's index in `0..n_parties`.
     pub party: usize,
@@ -99,6 +112,124 @@ pub struct DecryptShare {
     smudge_bits: u32,
 }
 
+impl DecryptShare {
+    /// Party identifier carried by this public decryption-share message.
+    pub fn party(&self) -> usize {
+        self.party
+    }
+
+    /// n-of-n quorum size carried by this public decryption-share message.
+    pub fn n_parties(&self) -> usize {
+        self.n_parties
+    }
+
+    /// Smudging width claimed by this share; [`combine`] enforces the Lean-pinned floor.
+    pub fn smudge_bits(&self) -> u32 {
+        self.smudge_bits
+    }
+
+    /// Exact public ciphertext this share was computed over. Boundary protocols
+    /// use this to bind a full quorum to their session target; equality among the
+    /// shares alone is not sufficient.
+    pub fn ciphertext(&self) -> &LeanCiphertext {
+        &self.ct
+    }
+
+    /// Public RNS rows `hᵢ = sᵢ·c1 + eᵢ` transmitted to the coordinator.
+    pub fn h_rows(&self) -> &[Vec<u64>] {
+        &self.h
+    }
+
+    /// Encode the complete public decryption-share message for an external transport.
+    /// This is a framing codec only: it does not authenticate the sender or prove share validity.
+    pub fn to_wire_bytes(&self) -> Vec<u8> {
+        let ct_bytes = self.ct.to_fhe_bytes();
+        let coefficient_count = self.h.iter().map(Vec::len).sum::<usize>();
+        let mut out = Vec::with_capacity(64 + ct_bytes.len() + coefficient_count * 8);
+        out.extend_from_slice(b"FHDSv001");
+        out.extend_from_slice(&(self.party as u64).to_le_bytes());
+        out.extend_from_slice(&(self.n_parties as u64).to_le_bytes());
+        out.extend_from_slice(&self.smudge_bits.to_le_bytes());
+        out.extend_from_slice(&self.ct.plain_bound.to_le_bytes());
+        out.extend_from_slice(&(ct_bytes.len() as u64).to_le_bytes());
+        out.extend_from_slice(&ct_bytes);
+        for row in &self.h {
+            for &coefficient in row {
+                out.extend_from_slice(&coefficient.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Parse a public decryption-share message after transport.
+    ///
+    /// Structural and parameter checks happen here; quorum, duplicate-party, ciphertext equality,
+    /// and the Lean smudging floor remain fail-closed in [`combine`].
+    pub fn from_wire_bytes(bytes: &[u8], params: &BfvParams) -> Result<Self> {
+        let mut i = 0usize;
+        if take_wire::<8>(bytes, &mut i)? != *b"FHDSv001" {
+            return Err(ThresholdError::MalformedWire);
+        }
+        let party = usize::try_from(u64::from_le_bytes(take_wire::<8>(bytes, &mut i)?))
+            .map_err(|_| ThresholdError::MalformedWire)?;
+        let n_parties = usize::try_from(u64::from_le_bytes(take_wire::<8>(bytes, &mut i)?))
+            .map_err(|_| ThresholdError::MalformedWire)?;
+        let smudge_bits = u32::from_le_bytes(take_wire::<4>(bytes, &mut i)?);
+        let plain_bound = u64::from_le_bytes(take_wire::<8>(bytes, &mut i)?);
+        let ct_len = usize::try_from(u64::from_le_bytes(take_wire::<8>(bytes, &mut i)?))
+            .map_err(|_| ThresholdError::MalformedWire)?;
+        let ct_end = i
+            .checked_add(ct_len)
+            .filter(|&end| end <= bytes.len())
+            .ok_or(ThresholdError::MalformedWire)?;
+        let ct = LeanCiphertext::from_fhe_bytes(
+            &bytes[i..ct_end],
+            params.moduli(),
+            params.degree(),
+            plain_bound,
+        )
+        .map_err(|_| ThresholdError::MalformedWire)?;
+        i = ct_end;
+
+        if n_parties == 0 || party >= n_parties {
+            return Err(ThresholdError::InvalidParty { party, n_parties });
+        }
+        let expected_coefficients = params
+            .moduli()
+            .len()
+            .checked_mul(params.degree())
+            .ok_or(ThresholdError::MalformedWire)?;
+        let expected_bytes = expected_coefficients
+            .checked_mul(8)
+            .ok_or(ThresholdError::MalformedWire)?;
+        if bytes.len().checked_sub(i) != Some(expected_bytes) {
+            return Err(ThresholdError::MalformedWire);
+        }
+        let mut h = Vec::with_capacity(params.moduli().len());
+        for &q in params.moduli() {
+            let mut row = Vec::with_capacity(params.degree());
+            for _ in 0..params.degree() {
+                let coefficient = u64::from_le_bytes(take_wire::<8>(bytes, &mut i)?);
+                if coefficient >= q {
+                    return Err(ThresholdError::MalformedWire);
+                }
+                row.push(coefficient);
+            }
+            h.push(row);
+        }
+        if i != bytes.len() {
+            return Err(ThresholdError::MalformedWire);
+        }
+        Ok(Self {
+            h,
+            ct,
+            party,
+            n_parties,
+            smudge_bits,
+        })
+    }
+}
+
 /// The collective public key everyone encrypts to — a REAL fhe.rs `PublicKey`, aggregated from
 /// per-party mbfv `PublicKeyShare`s.
 pub struct CollectivePublicKey {
@@ -110,6 +241,268 @@ pub struct CollectivePublicKey {
 #[derive(Clone)]
 pub struct BfvParams {
     arc: Arc<BfvParameters>,
+}
+
+/// Public key-generation session data.
+///
+/// The seed deterministically expands to the common random polynomial through the pinned
+/// `rand_09::rngs::StdRng` implementation. It is public and safe to broadcast. A real deployment
+/// must agree/authenticate this value; this module does not provide a beacon or transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeygenSession {
+    n_parties: usize,
+    crp_seed: [u8; 32],
+}
+
+impl KeygenSession {
+    /// Start a key-generation session with an OS-random public CRP seed.
+    pub fn random(n_parties: usize) -> Result<Self> {
+        if n_parties == 0 {
+            return Err(ThresholdError::QuorumTooSmall { have: 0, need: 1 });
+        }
+        if MIN_SMUDGE_BITS + ceil_log2_parties(n_parties).expect("nonzero") > MAX_SMUDGE_BITS_TOTAL
+        {
+            return Err(ThresholdError::SmudgeTooLarge);
+        }
+        let mut crp_seed = [0u8; 32];
+        rand_09::rng().fill_bytes(&mut crp_seed);
+        Ok(Self {
+            n_parties,
+            crp_seed,
+        })
+    }
+
+    /// Re-enter a session from public wire data.
+    pub fn from_seed(n_parties: usize, crp_seed: [u8; 32]) -> Result<Self> {
+        if n_parties == 0 {
+            return Err(ThresholdError::QuorumTooSmall { have: 0, need: 1 });
+        }
+        if MIN_SMUDGE_BITS + ceil_log2_parties(n_parties).expect("nonzero") > MAX_SMUDGE_BITS_TOTAL
+        {
+            return Err(ThresholdError::SmudgeTooLarge);
+        }
+        Ok(Self {
+            n_parties,
+            crp_seed,
+        })
+    }
+
+    pub fn n_parties(&self) -> usize {
+        self.n_parties
+    }
+
+    pub fn crp_seed(&self) -> [u8; 32] {
+        self.crp_seed
+    }
+
+    fn common_random_poly(&self, params: &BfvParams) -> CommonRandomPoly {
+        let mut rng = StdRng::from_seed(self.crp_seed);
+        CommonRandomPoly::new(params.arc(), &mut rng).expect("CRP sampling from public seed")
+    }
+}
+
+/// Public contribution emitted by one party during key generation.
+///
+/// `public_key_bytes` is a singleton fhe.rs public key whose `c0` is this party's EncKeyGen
+/// share and whose `c1` is the session CRP. It contains no secret-key coefficients.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicKeyContribution {
+    session: KeygenSession,
+    party: usize,
+    public_key_bytes: Vec<u8>,
+}
+
+impl PublicKeyContribution {
+    pub fn session(&self) -> &KeygenSession {
+        &self.session
+    }
+
+    pub fn party(&self) -> usize {
+        self.party
+    }
+
+    /// Canonical fhe.rs `PublicKey` bytes carrying this public contribution.
+    pub fn public_key_bytes(&self) -> &[u8] {
+        &self.public_key_bytes
+    }
+
+    /// Encode this public contribution for an external transport.
+    /// This framing is not an authentication mechanism.
+    pub fn to_wire_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(64 + self.public_key_bytes.len());
+        out.extend_from_slice(b"FHPKv001");
+        out.extend_from_slice(&(self.party as u64).to_le_bytes());
+        out.extend_from_slice(&(self.session.n_parties as u64).to_le_bytes());
+        out.extend_from_slice(&self.session.crp_seed);
+        out.extend_from_slice(&(self.public_key_bytes.len() as u64).to_le_bytes());
+        out.extend_from_slice(&self.public_key_bytes);
+        out
+    }
+
+    /// Decode the public contribution framing after transport.
+    pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self> {
+        let mut i = 0usize;
+        if take_wire::<8>(bytes, &mut i)? != *b"FHPKv001" {
+            return Err(ThresholdError::MalformedWire);
+        }
+        let party = usize::try_from(u64::from_le_bytes(take_wire::<8>(bytes, &mut i)?))
+            .map_err(|_| ThresholdError::MalformedWire)?;
+        let n_parties = usize::try_from(u64::from_le_bytes(take_wire::<8>(bytes, &mut i)?))
+            .map_err(|_| ThresholdError::MalformedWire)?;
+        let crp_seed = take_wire::<32>(bytes, &mut i)?;
+        let pk_len = usize::try_from(u64::from_le_bytes(take_wire::<8>(bytes, &mut i)?))
+            .map_err(|_| ThresholdError::MalformedWire)?;
+        let end = i
+            .checked_add(pk_len)
+            .filter(|&end| end == bytes.len())
+            .ok_or(ThresholdError::MalformedWire)?;
+        Self::from_wire_parts(
+            KeygenSession::from_seed(n_parties, crp_seed)?,
+            party,
+            bytes[i..end].to_vec(),
+        )
+    }
+
+    /// Reconstruct the public message after transport. Cryptographic/parameter validation is
+    /// performed by [`KeygenCoordinator::finish`].
+    pub fn from_wire_parts(
+        session: KeygenSession,
+        party: usize,
+        public_key_bytes: Vec<u8>,
+    ) -> Result<Self> {
+        if party >= session.n_parties {
+            return Err(ThresholdError::InvalidParty {
+                party,
+                n_parties: session.n_parties,
+            });
+        }
+        if public_key_bytes.is_empty() {
+            return Err(ThresholdError::MalformedWire);
+        }
+        Ok(Self {
+            session,
+            party,
+            public_key_bytes,
+        })
+    }
+}
+
+fn take_wire<const N: usize>(bytes: &[u8], i: &mut usize) -> Result<[u8; N]> {
+    let end = i
+        .checked_add(N)
+        .filter(|&end| end <= bytes.len())
+        .ok_or(ThresholdError::MalformedWire)?;
+    let out = bytes[*i..end]
+        .try_into()
+        .map_err(|_| ThresholdError::MalformedWire)?;
+    *i = end;
+    Ok(out)
+}
+
+/// A party-local threshold state. It intentionally has no `Clone`, `Debug`, or secret accessor.
+/// Construct this inside the party process and keep it there.
+pub struct ThresholdParty {
+    key_share: KeyShare,
+}
+
+impl ThresholdParty {
+    /// Independently sample this party's secret share and emit only its public EncKeyGen message.
+    pub fn join(
+        session: &KeygenSession,
+        party: usize,
+        params: &BfvParams,
+    ) -> Result<(Self, PublicKeyContribution)> {
+        if party >= session.n_parties {
+            return Err(ThresholdError::InvalidParty {
+                party,
+                n_parties: session.n_parties,
+            });
+        }
+
+        let mut rng = rand_09::rng();
+        let coeffs = (0..params.degree())
+            .map(|_| rng.random_range(-1i64..=1))
+            .collect::<Vec<_>>();
+        let key_share = KeyShare {
+            coeffs,
+            party,
+            n_parties: session.n_parties,
+        };
+        let sk = sk_from_coeffs(&key_share.coeffs, params.arc());
+        let pk_share = PublicKeyShare::new(&sk, session.common_random_poly(params), &mut rng)
+            .expect("mbfv PublicKeyShare");
+        // A singleton aggregation is a public wire container for (p0_i, CRP). The coordinator
+        // later sums only p0_i and keeps one CRP, exactly matching mbfv's Aggregate impl.
+        let singleton_pk =
+            PublicKey::from_shares([pk_share]).expect("singleton public contribution");
+        let contribution = PublicKeyContribution {
+            session: session.clone(),
+            party,
+            public_key_bytes: singleton_pk.to_bytes(),
+        };
+        Ok((Self { key_share }, contribution))
+    }
+
+    pub fn party(&self) -> usize {
+        self.key_share.party
+    }
+
+    /// Produce the only secret-dependent object that leaves this party after keygen.
+    /// The exact Lean-pinned smudging floor and total correctness ceiling are both enforced here.
+    pub fn partial_decrypt(&self, ct: &LeanCiphertext, smudge_bits: u32) -> Result<DecryptShare> {
+        if smudge_bits < MIN_SMUDGE_BITS {
+            return Err(ThresholdError::SmudgeTooSmall);
+        }
+        let log2_n =
+            ceil_log2_parties(self.key_share.n_parties).ok_or(ThresholdError::ParamMismatch)?;
+        if smudge_bits
+            .checked_add(log2_n)
+            .map_or(true, |total| total > MAX_SMUDGE_BITS_TOTAL)
+        {
+            return Err(ThresholdError::SmudgeTooLarge);
+        }
+        Ok(partial_decrypt_inner(&self.key_share, ct, smudge_bits))
+    }
+}
+
+/// Coordinator state for the public half of n-of-n key generation.
+///
+/// This type has no method capable of accepting a [`KeyShare`] or [`ThresholdParty`].
+pub struct KeygenCoordinator {
+    session: KeygenSession,
+    params: BfvParams,
+    contributions: Vec<PublicKeyContribution>,
+}
+
+impl KeygenCoordinator {
+    pub fn new(session: KeygenSession, params: BfvParams) -> Self {
+        Self {
+            session,
+            params,
+            contributions: Vec::new(),
+        }
+    }
+
+    /// Accept one public contribution. Duplicate, out-of-session, and out-of-range parties fail.
+    pub fn accept(&mut self, contribution: PublicKeyContribution) -> Result<()> {
+        if contribution.session != self.session || contribution.party >= self.session.n_parties {
+            return Err(ThresholdError::ParamMismatch);
+        }
+        if self
+            .contributions
+            .iter()
+            .any(|c| c.party == contribution.party)
+        {
+            return Err(ThresholdError::ParamMismatch);
+        }
+        self.contributions.push(contribution);
+        Ok(())
+    }
+
+    /// Finish only after every party contributed exactly once.
+    pub fn finish(self) -> Result<CollectivePublicKey> {
+        aggregate_public_contributions(&self.session, &self.contributions, &self.params)
+    }
 }
 
 impl BfvParams {
@@ -229,36 +622,148 @@ fn ternary_negacyclic_mul(s: &[i64], c: &[u64], q: u64) -> Vec<u64> {
 // the protocol
 // ---------------------------------------------------------------------------
 
-/// n-of-n collective keygen (each party contributes; NO dealer). Anchored to mbfv PublicKeyShare + CommonRandomPoly.
-pub fn collective_keygen(n: usize, params: &BfvParams) -> (CollectivePublicKey, Vec<KeyShare>) {
-    assert!(n >= 1, "collective keygen needs at least one party");
+/// Extract the single Ciphertext field from fhe.rs's `PublicKey` protobuf.
+fn public_key_ciphertext_bytes(public_key_bytes: &[u8]) -> Result<&[u8]> {
+    let mut i = 0usize;
+    let tag = read_varint(public_key_bytes, &mut i)?;
+    if tag != 0x0a {
+        return Err(ThresholdError::MalformedWire);
+    }
+    let len = usize::try_from(read_varint(public_key_bytes, &mut i)?)
+        .map_err(|_| ThresholdError::MalformedWire)?;
+    let end = i
+        .checked_add(len)
+        .filter(|&end| end == public_key_bytes.len())
+        .ok_or(ThresholdError::MalformedWire)?;
+    Ok(&public_key_bytes[i..end])
+}
+
+fn read_varint(bytes: &[u8], i: &mut usize) -> Result<u64> {
+    let mut value = 0u64;
+    let mut shift = 0u32;
+    loop {
+        let byte = *bytes.get(*i).ok_or(ThresholdError::MalformedWire)?;
+        *i += 1;
+        if shift >= 64 {
+            return Err(ThresholdError::MalformedWire);
+        }
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+        shift += 7;
+    }
+}
+
+fn public_key_as_lean(public_key_bytes: &[u8], params: &BfvParams) -> Result<LeanCiphertext> {
+    // First let fhe.rs validate the outer key and its parameter/context invariants.
+    PublicKey::from_bytes(public_key_bytes, params.arc())
+        .map_err(|_| ThresholdError::MalformedWire)?;
+    let ct_bytes = public_key_ciphertext_bytes(public_key_bytes)?;
+    LeanCiphertext::from_fhe_bytes(ct_bytes, params.moduli(), params.degree(), 0)
+        .map_err(|_| ThresholdError::MalformedWire)
+}
+
+fn wrap_public_key_ciphertext(ciphertext_bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ciphertext_bytes.len() + 8);
+    out.push(0x0a); // PublicKey field 1, length-delimited Ciphertext
+    push_varint(&mut out, ciphertext_bytes.len() as u64);
+    out.extend_from_slice(ciphertext_bytes);
+    out
+}
+
+/// Aggregate only public EncKeyGen messages. This reproduces fhe.rs's
+/// `Aggregate<PublicKeyShare>`: sum each p0_i while retaining exactly one shared CRP as c1.
+fn aggregate_public_contributions(
+    session: &KeygenSession,
+    contributions: &[PublicKeyContribution],
+    params: &BfvParams,
+) -> Result<CollectivePublicKey> {
+    if contributions.len() < session.n_parties {
+        return Err(ThresholdError::QuorumTooSmall {
+            have: contributions.len(),
+            need: session.n_parties,
+        });
+    }
+    if contributions.len() > session.n_parties {
+        return Err(ThresholdError::ParamMismatch);
+    }
+
+    let mut parties = contributions.iter().map(|c| c.party).collect::<Vec<_>>();
+    parties.sort_unstable();
+    parties.dedup();
+    if parties != (0..session.n_parties).collect::<Vec<_>>() {
+        return Err(ThresholdError::ParamMismatch);
+    }
+
+    // Derive the expected public CRP independently. A zero-secret singleton contribution is a
+    // convenient public fhe.rs container whose c1 is exactly that CRP; its randomized c0 is
+    // discarded. This binds every contribution to the advertised session seed.
+    let zero_sk = sk_from_coeffs(&vec![0; params.degree()], params.arc());
     let mut rng = rand_09::rng();
-    let par = params.arc.clone();
-    let degree = par.degree();
+    let expected_share =
+        PublicKeyShare::new(&zero_sk, session.common_random_poly(params), &mut rng)
+            .expect("zero-secret CRP witness");
+    let expected_pk =
+        PublicKey::from_shares([expected_share]).expect("zero-secret singleton public key");
+    let expected = public_key_as_lean(&expected_pk.to_bytes(), params)?;
+    let expected_crp = &expected.polys[1];
 
-    // Each party samples its own uniform-ternary secret share (HE-standard secret distribution;
-    // ternary is what keeps the share convolution in partial_decrypt multiplication-free).
-    let key_shares: Vec<KeyShare> = (0..n)
-        .map(|party| KeyShare {
-            coeffs: (0..degree).map(|_| rng.random_range(-1i64..=1)).collect(),
-            party,
-            n_parties: n,
-        })
-        .collect();
-
-    // Protocol 1 (EncKeyGen) over REAL fhe.rs mbfv: shared CRP, one PublicKeyShare per party,
-    // aggregated into the collective PublicKey.
-    let crp = CommonRandomPoly::new(&par, &mut rng).expect("CRP sampling");
-    let pk_shares: Vec<PublicKeyShare> = key_shares
+    let mut c0 = params
+        .moduli()
         .iter()
-        .map(|ks| {
-            let sk = sk_from_coeffs(&ks.coeffs, &par);
-            PublicKeyShare::new(&sk, crp.clone(), &mut rng).expect("mbfv PublicKeyShare")
-        })
-        .collect();
-    let pk = PublicKey::from_shares(pk_shares).expect("mbfv public key aggregation");
+        .map(|_| vec![0u64; params.degree()])
+        .collect::<Vec<_>>();
+    for contribution in contributions {
+        if contribution.session != *session {
+            return Err(ThresholdError::ParamMismatch);
+        }
+        let share = public_key_as_lean(&contribution.public_key_bytes, params)?;
+        if share.level != 0 || share.polys[1] != *expected_crp {
+            return Err(ThresholdError::ParamMismatch);
+        }
+        for (row, (share_row, &q)) in c0
+            .iter_mut()
+            .zip(share.polys[0].rows.iter().zip(params.moduli().iter()))
+        {
+            for (coefficient, &share_coefficient) in row.iter_mut().zip(share_row.iter()) {
+                *coefficient = add_mod(*coefficient, share_coefficient, q);
+            }
+        }
+    }
 
-    (CollectivePublicKey { pk }, key_shares)
+    let aggregate = LeanCiphertext {
+        moduli: params.moduli().to_vec(),
+        degree: params.degree(),
+        level: 0,
+        variable_time: false,
+        polys: vec![RnsPoly { rows: c0 }, expected_crp.clone()],
+        plain_bound: 0,
+    };
+    let public_key_bytes = wrap_public_key_ciphertext(&aggregate.to_fhe_bytes());
+    let pk = PublicKey::from_bytes(&public_key_bytes, params.arc())
+        .map_err(|_| ThresholdError::MalformedWire)?;
+    Ok(CollectivePublicKey { pk })
+}
+
+/// Unit-test oracle helper only. Production callers must keep each [`ThresholdParty`] in its own
+/// custody domain and pass public contributions through [`KeygenCoordinator`].
+#[cfg(test)]
+fn collective_keygen_for_test(
+    n: usize,
+    params: &BfvParams,
+) -> (CollectivePublicKey, Vec<KeyShare>) {
+    let session = KeygenSession::random(n).expect("test keygen session");
+    let mut coordinator = KeygenCoordinator::new(session.clone(), params.clone());
+    let mut key_shares = Vec::with_capacity(n);
+    for party in 0..n {
+        let (party_state, contribution) =
+            ThresholdParty::join(&session, party, params).expect("test party joins");
+        coordinator.accept(contribution).expect("test contribution");
+        key_shares.push(party_state.key_share);
+    }
+    let cpk = coordinator.finish().expect("test public key aggregation");
+    (cpk, key_shares)
 }
 
 /// One party's SMUDGED partial decrypt; smudge_bits ≥ the Bfv/Smudging.lean bound or it is unsound.
@@ -270,10 +775,12 @@ pub fn collective_keygen(n: usize, params: &BfvParams) -> (CollectivePublicKey, 
 /// sampled) and refused at [`combine`], which is the enforcement point ([`ThresholdError::SmudgeTooSmall`]).
 /// Widths whose n-party TOTAL would breach the proven `2^84` decrypt-margin budget
 /// (`Bfv.Smudging.deployed_smudged_decrypt_exact`) panic loudly instead of silently mis-clearing.
-pub fn partial_decrypt(share: &KeyShare, ct: &LeanCiphertext, smudge_bits: u32) -> DecryptShare {
-    let log2_n = usize::BITS - share.n_parties.next_power_of_two().leading_zeros() - 1;
+fn partial_decrypt_inner(share: &KeyShare, ct: &LeanCiphertext, smudge_bits: u32) -> DecryptShare {
+    let log2_n = ceil_log2_parties(share.n_parties).expect("key share has nonzero quorum");
     assert!(
-        smudge_bits + log2_n <= MAX_SMUDGE_BITS_TOTAL,
+        smudge_bits
+            .checked_add(log2_n)
+            .is_some_and(|total| total <= MAX_SMUDGE_BITS_TOTAL),
         "smudge_bits {smudge_bits} with n={} parties exceeds the proven 2^{MAX_SMUDGE_BITS_TOTAL} \
          total-smudge decrypt-margin budget",
         share.n_parties
@@ -331,7 +838,14 @@ pub fn combine(shares: &[DecryptShare], params: &BfvParams) -> Result<Vec<u64>> 
 
     // Every share must be over the SAME ciphertext, quorum and parameter set.
     for s in shares {
-        if s.n_parties != need || s.ct != first.ct || s.h.len() != s.ct.moduli.len() {
+        if s.n_parties != need
+            || s.ct != first.ct
+            || s.h.len() != s.ct.moduli.len()
+            || s.h
+                .iter()
+                .zip(s.ct.moduli.iter())
+                .any(|(row, &q)| row.len() != s.ct.degree || row.iter().any(|&x| x >= q))
+        {
             return Err(ThresholdError::ParamMismatch);
         }
     }
@@ -358,6 +872,14 @@ pub fn combine(shares: &[DecryptShare], params: &BfvParams) -> Result<Vec<u64>> 
     // The no-viewer property is only as strong as the weakest smudge (module doc / Smudging.lean).
     if shares.iter().any(|s| s.smudge_bits < MIN_SMUDGE_BITS) {
         return Err(ThresholdError::SmudgeTooSmall);
+    }
+    let log2_n = ceil_log2_parties(need).ok_or(ThresholdError::ParamMismatch)?;
+    if shares.iter().any(|s| {
+        s.smudge_bits
+            .checked_add(log2_n)
+            .map_or(true, |total| total > MAX_SMUDGE_BITS_TOTAL)
+    }) {
+        return Err(ThresholdError::SmudgeTooLarge);
     }
 
     // c0' = c0 + Σ hᵢ (our RNS arithmetic, same add discipline as bfv_lean::fold_add).
@@ -424,6 +946,141 @@ mod tests {
         .expect("parse")
     }
 
+    /// The public-message coordinator must be byte-identical to fhe.rs's native
+    /// `Aggregate<PublicKeyShare>` over the same shares, not merely self-consistent.
+    #[test]
+    fn public_contribution_aggregation_matches_native_mbfv() {
+        let params = BfvParams::fold_set();
+        let session = KeygenSession::from_seed(3, [0x5a; 32]).expect("session");
+        let mut rng = rand_09::rng();
+        let mut native_shares = Vec::new();
+        let mut contributions = Vec::new();
+
+        for party in 0..session.n_parties() {
+            let mut coeffs = vec![0i64; params.degree()];
+            coeffs[party] = 1;
+            coeffs[params.degree() - 1 - party] = -1;
+            let sk = sk_from_coeffs(&coeffs, params.arc());
+            let share = PublicKeyShare::new(&sk, session.common_random_poly(&params), &mut rng)
+                .expect("native public-key share");
+            native_shares.push(share.clone());
+            let singleton = PublicKey::from_shares([share]).expect("singleton contribution");
+            contributions.push(PublicKeyContribution {
+                session: session.clone(),
+                party,
+                public_key_bytes: singleton.to_bytes(),
+            });
+        }
+
+        let native = PublicKey::from_shares(native_shares).expect("native mbfv aggregate");
+        // `PublicKeyShare::new` leaves its internal p0 variable-time flag enabled; the public
+        // `PublicKey::from_bytes` boundary (used by the coordinator) deliberately disables it.
+        // Normalize the native oracle through that same public boundary before byte comparison.
+        let native = PublicKey::from_bytes(&native.to_bytes(), params.arc())
+            .expect("native aggregate normalizes through public codec");
+        let ours = aggregate_public_contributions(&session, &contributions, &params)
+            .expect("public-message aggregate");
+        assert_eq!(
+            ours.pk.to_bytes(),
+            native.to_bytes(),
+            "coordinator aggregation must be exactly fhe.rs mbfv aggregation"
+        );
+    }
+
+    /// Both objects that cross a process boundary have canonical round-tripping codecs, and
+    /// malformed/session/duplicate/CRP-confused inputs fail closed.
+    #[test]
+    fn public_wire_roundtrips_and_keygen_refusals_have_teeth() {
+        let params = BfvParams::fold_set();
+        let session = KeygenSession::from_seed(2, [7; 32]).expect("session");
+        let (party0, contribution0) = ThresholdParty::join(&session, 0, &params).expect("party 0");
+        let (_party1, contribution1) = ThresholdParty::join(&session, 1, &params).expect("party 1");
+
+        let contribution_wire = contribution0.to_wire_bytes();
+        let contribution0_roundtrip =
+            PublicKeyContribution::from_wire_bytes(&contribution_wire).expect("PK wire roundtrip");
+        assert_eq!(contribution0_roundtrip, contribution0);
+        assert_eq!(
+            PublicKeyContribution::from_wire_bytes(
+                &contribution_wire[..contribution_wire.len() - 1]
+            ),
+            Err(ThresholdError::MalformedWire)
+        );
+
+        let mut incomplete = KeygenCoordinator::new(session.clone(), params.clone());
+        incomplete
+            .accept(contribution0.clone())
+            .expect("first contribution");
+        assert!(matches!(
+            incomplete.finish(),
+            Err(ThresholdError::QuorumTooSmall { have: 1, need: 2 })
+        ));
+
+        let mut duplicate = KeygenCoordinator::new(session.clone(), params.clone());
+        duplicate
+            .accept(contribution0.clone())
+            .expect("first contribution");
+        assert_eq!(
+            duplicate.accept(contribution0.clone()),
+            Err(ThresholdError::ParamMismatch),
+            "duplicate party must not count twice"
+        );
+
+        let other_session = KeygenSession::from_seed(2, [8; 32]).expect("other session");
+        let (_other_party, other_contribution) =
+            ThresholdParty::join(&other_session, 1, &params).expect("other-session party");
+        let mut session_mismatch = KeygenCoordinator::new(session.clone(), params.clone());
+        assert_eq!(
+            session_mismatch.accept(other_contribution.clone()),
+            Err(ThresholdError::ParamMismatch)
+        );
+
+        // Stronger CRP mutation: forge the public envelope's session label to the accepted one,
+        // while retaining public-key bytes generated under the other CRP. `accept` can only check
+        // metadata; `finish` derives the advertised CRP and refuses the cryptographic mismatch.
+        let mut crp_mismatch = KeygenCoordinator::new(session.clone(), params.clone());
+        crp_mismatch.accept(contribution0.clone()).expect("party 0");
+        crp_mismatch
+            .accept(PublicKeyContribution {
+                session: session.clone(),
+                party: 1,
+                public_key_bytes: other_contribution.public_key_bytes,
+            })
+            .expect("metadata is superficially in-session");
+        assert!(matches!(
+            crp_mismatch.finish(),
+            Err(ThresholdError::ParamMismatch)
+        ));
+
+        // Decrypt-share wire roundtrip uses a real secret-dependent message and preserves every
+        // public field byte-for-byte. Truncation and non-canonical RNS residues are rejected.
+        let cpk =
+            aggregate_public_contributions(&session, &[contribution0, contribution1], &params)
+                .expect("collective key");
+        let ct = encrypt_slots(&cpk, &params, &vec![11; params.degree()], 11);
+        let share = party0
+            .partial_decrypt(&ct, MIN_SMUDGE_BITS)
+            .expect("valid decrypt share");
+        let share_wire = share.to_wire_bytes();
+        assert_eq!(
+            DecryptShare::from_wire_bytes(&share_wire, &params).expect("share wire roundtrip"),
+            share
+        );
+        assert_eq!(
+            DecryptShare::from_wire_bytes(&share_wire[..share_wire.len() - 1], &params),
+            Err(ThresholdError::MalformedWire)
+        );
+
+        let mut noncanonical = share_wire;
+        let coefficient_offset = noncanonical.len() - params.moduli().len() * params.degree() * 8;
+        noncanonical[coefficient_offset..coefficient_offset + 8]
+            .copy_from_slice(&params.moduli()[0].to_le_bytes());
+        assert_eq!(
+            DecryptShare::from_wire_bytes(&noncanonical, &params),
+            Err(ThresholdError::MalformedWire)
+        );
+    }
+
     /// Our zigzag/packed-sint64 SecretKey proto must round-trip through fhe.rs's OWN codec:
     /// build from chosen coeffs, serialize with fhe.rs, byte-compare to our encoding.
     #[test]
@@ -486,7 +1143,7 @@ mod tests {
         let params = BfvParams::fold_set();
         let t = params.plaintext_modulus();
         let n = 3;
-        let (cpk, key_shares) = collective_keygen(n, &params);
+        let (cpk, key_shares) = collective_keygen_for_test(n, &params);
 
         // Three bucket-increment style vectors, folded homomorphically.
         let k = 16;
@@ -508,7 +1165,7 @@ mod tests {
         // n smudged partial decrypts + combine.
         let shares: Vec<DecryptShare> = key_shares
             .iter()
-            .map(|ks| partial_decrypt(ks, &folded, 80))
+            .map(|ks| partial_decrypt_inner(ks, &folded, 80))
             .collect();
         let got = combine(&shares, &params).expect("full quorum combines");
         let expected: Vec<u64> = v1
@@ -558,11 +1215,11 @@ mod tests {
     fn quorum_below_n_refused() {
         let params = BfvParams::fold_set();
         let n = 3;
-        let (cpk, key_shares) = collective_keygen(n, &params);
+        let (cpk, key_shares) = collective_keygen_for_test(n, &params);
         let ct = encrypt_slots(&cpk, &params, &vec![5u64; params.degree()], 5);
         let shares: Vec<DecryptShare> = key_shares
             .iter()
-            .map(|ks| partial_decrypt(ks, &ct, MIN_SMUDGE_BITS))
+            .map(|ks| partial_decrypt_inner(ks, &ct, MIN_SMUDGE_BITS))
             .collect();
 
         assert_eq!(
@@ -587,14 +1244,14 @@ mod tests {
     #[test]
     fn smudge_below_lean_bound_refused() {
         let params = BfvParams::fold_set();
-        let (cpk, key_shares) = collective_keygen(2, &params);
+        let (cpk, key_shares) = collective_keygen_for_test(2, &params);
         let ct = encrypt_slots(&cpk, &params, &vec![9u64; params.degree()], 9);
         let mut shares: Vec<DecryptShare> = key_shares
             .iter()
-            .map(|ks| partial_decrypt(ks, &ct, MIN_SMUDGE_BITS))
+            .map(|ks| partial_decrypt_inner(ks, &ct, MIN_SMUDGE_BITS))
             .collect();
         // One under-smudged share poisons the quorum.
-        shares[1] = partial_decrypt(&key_shares[1], &ct, MIN_SMUDGE_BITS - 1);
+        shares[1] = partial_decrypt_inner(&key_shares[1], &ct, MIN_SMUDGE_BITS - 1);
         assert_eq!(
             combine(&shares, &params),
             Err(ThresholdError::SmudgeTooSmall)
@@ -605,12 +1262,12 @@ mod tests {
     #[test]
     fn cross_ciphertext_shares_refused() {
         let params = BfvParams::fold_set();
-        let (cpk, key_shares) = collective_keygen(2, &params);
+        let (cpk, key_shares) = collective_keygen_for_test(2, &params);
         let ct_a = encrypt_slots(&cpk, &params, &vec![1u64; params.degree()], 1);
         let ct_b = encrypt_slots(&cpk, &params, &vec![2u64; params.degree()], 2);
         let shares = vec![
-            partial_decrypt(&key_shares[0], &ct_a, MIN_SMUDGE_BITS),
-            partial_decrypt(&key_shares[1], &ct_b, MIN_SMUDGE_BITS),
+            partial_decrypt_inner(&key_shares[0], &ct_a, MIN_SMUDGE_BITS),
+            partial_decrypt_inner(&key_shares[1], &ct_b, MIN_SMUDGE_BITS),
         ];
         assert_eq!(
             combine(&shares, &params),
@@ -736,7 +1393,7 @@ mod tests {
         let params = BfvParams::fold_set();
         let t = params.plaintext_modulus();
         let n = 3;
-        let (cpk, key_shares) = collective_keygen(n, &params);
+        let (cpk, key_shares) = collective_keygen_for_test(n, &params);
         let crt = Crt::new(params.moduli());
         // CRT sanity pin: a small integer reconstructs to itself.
         {
@@ -756,7 +1413,7 @@ mod tests {
         let mk_shares = |ct: &LeanCiphertext, bits: u32| -> Vec<DecryptShare> {
             key_shares
                 .iter()
-                .map(|ks| partial_decrypt(ks, ct, bits))
+                .map(|ks| partial_decrypt_inner(ks, ct, bits))
                 .collect()
         };
         let sh_zero_min = mk_shares(&ct_zero, MIN_SMUDGE_BITS);

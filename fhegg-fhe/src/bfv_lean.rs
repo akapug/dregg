@@ -96,6 +96,18 @@ pub enum BfvLeanError {
     GpuUnavailable,
     /// GPU fold: this first stone only handles the fresh-fold shape (3 RNS moduli); other shapes go to CPU.
     GpuUnsupportedShape,
+    /// GPU resident fold: one ciphertext does not fit in a storage-buffer binding on this adapter.
+    /// Larger *batches* are streamed in bounded chunks; this is only the irreducible one-ct case.
+    GpuCiphertextExceedsCapacity {
+        ciphertext_bytes: u64,
+        max_storage_bytes: u64,
+    },
+    /// GPU resident fold: one ciphertext fits, but the adapter cannot bind even a pair for the final
+    /// resident reduction. Falling back here could mask an adapter-dependent correctness cliff.
+    GpuReductionExceedsCapacity {
+        pair_bytes: u64,
+        max_storage_bytes: u64,
+    },
 }
 
 impl fmt::Display for BfvLeanError {
@@ -125,6 +137,22 @@ impl fmt::Display for BfvLeanError {
             Self::GpuUnsupportedShape => {
                 write!(f, "gpu fold handles the 3-modulus fresh-fold shape only")
             }
+            Self::GpuCiphertextExceedsCapacity {
+                ciphertext_bytes,
+                max_storage_bytes,
+            } => write!(
+                f,
+                "one GPU-resident ciphertext is {ciphertext_bytes} bytes, larger than this adapter's \
+                 {max_storage_bytes}-byte storage-buffer binding limit"
+            ),
+            Self::GpuReductionExceedsCapacity {
+                pair_bytes,
+                max_storage_bytes,
+            } => write!(
+                f,
+                "a two-ciphertext GPU-resident reduction needs {pair_bytes} bytes, larger than this \
+                 adapter's {max_storage_bytes}-byte storage-buffer binding limit"
+            ),
         }
     }
 }

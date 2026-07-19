@@ -43,6 +43,10 @@ use tfhe::{ClientKey, FheUint32};
 /// The CARRY-FREE ADDITIVE fold (BFV / fhe.rs) — codex Round-3 Q1's Tier-0 speed
 /// lever, measured head-to-head against the exact-integer TFHE fold above.
 pub mod additive;
+/// Canonical, fail-closed binding of a public clearing result to the BFV/MPC
+/// session that produced it. Computation-integrity evidence remains explicit:
+/// transcript/output self-assertion alone is never a full attestation.
+pub mod attestation;
 pub mod bfv_gpu;
 /// Lean-first BFV stone 1: a FROM-SCRATCH RNS fold-add over fhe.rs's own wire
 /// format, differentially anchored to fhe.rs as the oracle
@@ -63,9 +67,13 @@ pub mod gpu_arena;
 pub mod threshold;
 
 /// The OUTPUT-BOUNDARY MPC crossing (BFV / fhe.rs → additive shares → secret-shared
-/// comparison) — codex Round-4 gold: adversarial no-viewer + the dissolved
-/// scheme-switch seam. See `docs/deos/OUTPUT-BOUNDARY-MPC.md`.
+/// comparison): the semi-honest algebraic spine of the no-viewer target and the
+/// dissolved scheme-switch seam. See `docs/deos/OUTPUT-BOUNDARY-MPC.md`.
 pub mod mpc;
+/// Process-shaped distributed execution of the output-boundary boolean MPC.
+/// Party threads retain input/triple shares; the coordinator routes only masked
+/// Beaver openings and reconstructs the public `(p*, V*)` result.
+pub mod mpc_party;
 
 pub type Qty = u16;
 

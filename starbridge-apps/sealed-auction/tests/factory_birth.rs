@@ -6,8 +6,10 @@
 //!   - ANTI-FRONT-RUNNING — overwriting a committed sealed bid is REFUSED
 //!     (`WriteOnce(COMMIT_BASE + i)`), now an EXECUTOR refusal, not a `BTreeMap`
 //!     membership check.
-//!   - LIFECYCLE — rewinding / stalling the phase is REFUSED
-//!     (`StrictMonotonic(PHASE)`, strict).
+//!   - LIFECYCLE — rewinding/skipping the phase is REFUSED by the exact
+//!     factory-installed `AllowedTransitions(PHASE)` table.
+//!   - PROGRAM IDENTITY — the born cell's installed program, advertised VK, and
+//!     every subsequent Bazaar-shaped transition remain one exact identity.
 //!
 //! This is the `#95` factory-birth pattern: deploy → signed
 //! `CreateCellFromFactory` → the born cell carries the caveats FOR LIFE →
@@ -15,13 +17,14 @@
 
 use dregg_app_framework::{
     AgentCipherclerk, AppCipherclerk, AuthRequired, CellId, CellMode, Effect, EmbeddedExecutor,
-    field_from_u64,
+    canonical_program_vk, field_from_u64,
 };
 use dregg_cell::FactoryCreationParams;
 use starbridge_sealed_auction::{
     AUCTION_FACTORY_VK, Bid, COMMIT_BASE, PHASE_COMMIT, PHASE_RESOLVED, PHASE_REVEAL, PHASE_SLOT,
-    SELLER_SLOT, WINNER_SLOT, auction_child_program_vk, auction_factory_descriptor,
-    close_commit_effects, commit_bid_effects, commit_slot, resolve_effects,
+    SELLER_SLOT, WINNER_SLOT, auction_child_program_vk, auction_factory_cell_program,
+    auction_factory_descriptor, close_commit_effects, commit_bid_effects, commit_slot,
+    resolve_effects, reveal_bid_effects,
 };
 
 fn make_cipherclerk() -> AppCipherclerk {
@@ -66,6 +69,72 @@ fn birth_auction_cell(
     born
 }
 
+/// Factory birth must install exactly the program whose content address it
+/// advertises. Checking only `!program.is_none()` would miss the Cases-vs-Predicate
+/// substitution this regression guards.
+fn assert_factory_program_identity(exec: &EmbeddedExecutor, auction: CellId) {
+    let advertised = auction_factory_cell_program();
+    let advertised_vk = auction_child_program_vk();
+    assert_eq!(canonical_program_vk(&advertised), advertised_vk);
+    exec.with_ledger_mut(|ledger| {
+        let cell = ledger.get(&auction).expect("factory-born auction exists");
+        assert_eq!(
+            cell.program, advertised,
+            "born auction must execute the exact advertised CellProgram"
+        );
+        assert_eq!(
+            cell.verification_key.as_ref().map(|vk| vk.hash),
+            Some(advertised_vk),
+            "born auction VK must identify its actually installed program"
+        );
+    });
+}
+
+#[test]
+fn factory_refuses_program_bytes_only_or_other_vk() {
+    let cclerk = make_cipherclerk();
+    let exec = EmbeddedExecutor::new(&cclerk, "default");
+    exec.deploy_factory(auction_factory_descriptor());
+    exec.with_ledger_mut(|ledger| {
+        ledger
+            .get_mut(&cclerk.cell_id())
+            .expect("agent cell")
+            .state
+            .set_balance(100_000_000);
+    });
+
+    let program = auction_factory_cell_program();
+    let legacy_program_bytes_vk = dregg_cell::canonical_program_vk(&program);
+    assert_ne!(
+        legacy_program_bytes_vk,
+        auction_child_program_vk(),
+        "the old v1 program-bytes hash is not the layered v2 recipe"
+    );
+    let owner = cclerk.public_key().0;
+    let token = *blake3::hash(b"sale-wrong-program-vk").as_bytes();
+    let params = FactoryCreationParams {
+        mode: CellMode::Sovereign,
+        program_vk: Some(legacy_program_bytes_vk),
+        initial_fields: vec![],
+        initial_caps: vec![],
+        owner_pubkey: owner,
+    };
+    let turn = cclerk.create_from_factory(AUCTION_FACTORY_VK, owner, token, params);
+    let err = exec
+        .submit_turn(&turn)
+        .expect_err("factory must reject a VK that does not match the full v2 recipe");
+    assert!(
+        format!("{err}").to_lowercase().contains("program vk")
+            || format!("{err}").to_lowercase().contains("mismatch"),
+        "wrong-VK refusal must name the mismatch: {err}"
+    );
+    let born = CellId::derive_raw(&owner, &token);
+    assert!(
+        exec.with_ledger_mut(|ledger| ledger.get(&born).is_none()),
+        "a refused mismatched-VK birth must not leave a ghost cell"
+    );
+}
+
 /// Set PHASE = COMMIT on the born (empty) cell so the lifecycle has a baseline.
 fn seed_phase_commit(exec: &EmbeddedExecutor, cclerk: &AppCipherclerk, auction: CellId) {
     let set_phase = cclerk.make_action(
@@ -92,15 +161,10 @@ fn factory_born_auction_runs_the_whole_sale() {
     let exec = EmbeddedExecutor::new(&cclerk, "default");
     let auction = birth_auction_cell(&exec, &cclerk, b"sale-compute-1");
 
-    let has_program = exec.with_ledger_mut(|ledger| {
-        ledger
-            .get(&auction)
-            .map(|c| !c.program.is_none())
-            .unwrap_or(false)
-    });
-    assert!(has_program, "factory-born auction must carry a CellProgram");
+    assert_factory_program_identity(&exec, auction);
 
     seed_phase_commit(&exec, &cclerk, auction);
+    assert_factory_program_identity(&exec, auction);
 
     // Two bidders commit sealed bids into fresh WriteOnce slots.
     let bid_a = Bid::new(10, 30, 7);
@@ -114,6 +178,7 @@ fn factory_born_auction_runs_the_whole_sale() {
         ),
     )
     .expect("first sealed commit must commit");
+    assert_factory_program_identity(&exec, auction);
     exec.submit_action(
         &cclerk,
         cclerk.make_action(
@@ -123,6 +188,7 @@ fn factory_born_auction_runs_the_whole_sale() {
         ),
     )
     .expect("second sealed commit must commit");
+    assert_factory_program_identity(&exec, auction);
 
     // The two commit slots hold the seals; PHASE is still COMMIT.
     let (c0, c1, phase) = exec.with_ledger_mut(|ledger| {
@@ -142,7 +208,21 @@ fn factory_born_auction_runs_the_whole_sale() {
         &cclerk,
         cclerk.make_action(auction, "close_commit", close_commit_effects(auction)),
     )
-    .expect("close_commit must commit (StrictMonotonic 0 -> 1)");
+    .expect("close_commit must commit (allowed adjacent phase 0 -> 1)");
+    assert_factory_program_identity(&exec, auction);
+
+    // A Bazaar reveal is event-only, but still touches the target and therefore
+    // runs the same installed program against the REVEAL -> REVEAL self-pair.
+    exec.submit_action(
+        &cclerk,
+        cclerk.make_action(
+            auction,
+            "reveal_bid",
+            reveal_bid_effects(auction, field_from_u64(11), 50),
+        ),
+    )
+    .expect("reveal_bid must commit under the advertised program");
+    assert_factory_program_identity(&exec, auction);
 
     // Resolve: announce the winner B with the top bid 50 (REVEAL → RESOLVED).
     let winner_id = field_from_u64(11);
@@ -150,7 +230,8 @@ fn factory_born_auction_runs_the_whole_sale() {
         &cclerk,
         cclerk.make_action(auction, "resolve", resolve_effects(auction, winner_id, 50)),
     )
-    .expect("resolve must commit (StrictMonotonic 1 -> 2)");
+    .expect("resolve must commit (allowed adjacent phase 1 -> 2)");
+    assert_factory_program_identity(&exec, auction);
 
     let (phase, winner) = exec.with_ledger_mut(|ledger| {
         let c = ledger.get(&auction).unwrap();
@@ -216,13 +297,11 @@ fn factory_born_auction_refuses_overwriting_a_committed_bid() {
 }
 
 /// LIFECYCLE tooth: REWINDING the phase is REFUSED on the real executor path. The
-/// factory-born cell carries the flat `state_constraints` predicate (the WriteOnce
-/// commit board + the `Monotonic(PHASE)` anti-rollback floor), so a phase that
-/// REWINDS (`REVEAL → COMMIT`) is an EXECUTOR refusal on the born cell. (The STRICT
-/// no-advance bite — `StrictMonotonic(PHASE)` — is the phase-advancing methods' extra
-/// clause in the `Cases` program installed by `seed_auction`; it bites on the seeded
-/// deos cell, proved in `tests/deos_seam.rs`. The born cell's universal floor is the
-/// non-strict `Monotonic(PHASE)`, which is what refuses the rewind here.)
+/// factory-born cell carries the exact advertised flat predicate (the WriteOnce
+/// commit board + the explicit adjacent `AllowedTransitions(PHASE)` table), so a
+/// phase that REWINDS (`REVEAL → COMMIT`) is an EXECUTOR refusal on the born cell.
+/// The method-scoped strict no-advance tooth is part of that same factory-installed
+/// `Cases` program through `ChildVkStrategy::FixedProgram`.
 #[test]
 fn factory_born_auction_refuses_phase_rewind() {
     let cclerk = make_cipherclerk();
@@ -238,7 +317,7 @@ fn factory_born_auction_refuses_phase_rewind() {
     .expect("close_commit commits (0 -> 1)");
 
     // A resolve that REWINDS the phase (REVEAL → COMMIT) is refused — the born cell's
-    // universal `Monotonic(PHASE)` floor (a decrease is rejected).
+    // universal `AllowedTransitions(PHASE)` floor (the pair is absent).
     let rewind = cclerk.make_action(
         auction,
         "resolve",
@@ -249,13 +328,15 @@ fn factory_born_auction_refuses_phase_rewind() {
         }],
     );
     let err = exec.submit_action(&cclerk, rewind).expect_err(
-        "rewinding the phase must be refused — the Monotonic(PHASE) anti-rollback floor",
+        "rewinding the phase must be refused — pair absent from AllowedTransitions(PHASE)",
     );
     assert!(
-        format!("{err}").to_lowercase().contains("monotonic")
+        format!("{err}").to_lowercase().contains("allowed")
+            || format!("{err}").to_lowercase().contains("transition")
+            || format!("{err}").to_lowercase().contains("monotonic")
             || format!("{err}").to_lowercase().contains("strict")
             || format!("{err}").to_lowercase().contains("program"),
-        "refusal must cite Monotonic(PHASE), got: {err}"
+        "refusal must cite the phase program, got: {err}"
     );
 
     // The phase did NOT change — the refused turn committed nothing (anti-ghost).
@@ -267,8 +348,8 @@ fn factory_born_auction_refuses_phase_rewind() {
         "the refused rewind committed nothing — still REVEAL"
     );
 
-    // The honest advance (REVEAL → RESOLVED) DOES commit on the born cell (Monotonic admits
-    // the increase; the result registers are written through the WriteOnce floor).
+    // The honest adjacent advance (REVEAL → RESOLVED) DOES commit; the result
+    // registers are written through the WriteOnce floor.
     exec.submit_action(
         &cclerk,
         cclerk.make_action(

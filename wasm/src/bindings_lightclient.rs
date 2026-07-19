@@ -44,6 +44,7 @@
 //! UI, NOT hidden. The verification IS the trust: IF the aggregate verifies (engine
 //! sound), THEN the whole history is attested.
 
+use dregg_circuit_prove::ivc_turn_chain::SEG_ANCHOR_WIDTH;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -264,9 +265,11 @@ pub struct FinalityCertJson {
     /// The group size the producer claims the supermajority was taken over (diagnostic only — the
     /// verifier anchors the threshold to its OWN committee size, never this field).
     pub participant_count: usize,
-    /// The head state root (lane-0 felt, decimal) the cert claims a quorum finalized. Must equal the
-    /// aggregate's proven head for the seam to bind.
-    pub finalized_root: u32,
+    /// The FULL 8-felt wide head state root (decimal BabyBear lanes) the cert claims a quorum
+    /// finalized. Must equal the aggregate's byte-verified 8-felt final anchor for the seam to bind
+    /// — ALL lanes are compared and ALL lanes are inside each vote's signed message (a lane-0-only
+    /// `u32` here was the ~31-bit finality-substitution hole).
+    pub finalized_root: [u32; SEG_ANCHOR_WIDTH],
 }
 
 /// One ratification vote in a [`FinalityCertJson`].
@@ -537,8 +540,8 @@ pub fn verify_finalized_devnet_history(
         }
     };
 
-    // (5) Leg 3 — finality. The cert must be present and certify the proven head with a committee
-    // supermajority. The proven head is lane 0 of the byte-verified final anchor.
+    // (5) Leg 3 — finality. The cert must be present and certify the proven root with a committee
+    // supermajority. The proven root is the byte-verified FULL 8-felt final anchor (all lanes).
     let Some(cert_json) = env.finality_cert.clone() else {
         return finalized_refusal(
             &env,
@@ -552,8 +555,8 @@ pub fn verify_finalized_devnet_history(
         Ok(c) => c,
         Err(e) => return finalized_refusal(&env, format!("REFUSED: malformed finality cert: {e}")),
     };
-    let proven_head = attested.final_root[0].as_u32();
-    if let Err(reason) = finality_leg(proven_head, &cert, &committee, &ml_dsa_committee) {
+    let proven_root = attested.final_root;
+    if let Err(reason) = finality_leg(proven_root, &cert, &committee, &ml_dsa_committee) {
         return finalized_refusal(
             &env,
             format!("REFUSED at the finality leg (leg 3): {reason}"),
@@ -580,8 +583,10 @@ pub fn verify_finalized_devnet_history(
 
 /// The pure finality leg (host-testable, no `JsValue`): the root seam + the COMMITTEE-ANCHORED
 /// quorum, mirroring `dregg_lightclient::verify_finalized_history`'s legs 2+3 for the byte path.
-/// `proven_head` is lane 0 of the byte-verified final anchor (what tooth 2 re-attested). Returns the
-/// distinct trusted-committee signer count on success, or a precise refusal reason.
+/// `proven_root` is the byte-verified FULL 8-felt final anchor (what tooth 2 re-attested); the
+/// seam compares ALL EIGHT LANES against the cert's finalized root (comparing lane 0 alone was the
+/// ~31-bit finality-substitution hole). Returns the distinct trusted-committee signer count on
+/// success, or a precise refusal reason.
 ///
 /// `ml_dsa_committee` is the client's TRUSTED, genesis-ENROLLED ML-DSA-65 roster, aligned
 /// index-for-index with `committee` (config, exactly like the ed25519 committee — NEVER assembled
@@ -590,7 +595,7 @@ pub fn verify_finalized_devnet_history(
 /// A misaligned/empty roster counts NO signer (fail-closed sub-quorum) — never an ed25519-only
 /// downgrade.
 fn finality_leg(
-    proven_head: u32,
+    proven_root: [dregg_circuit::field::BabyBear; SEG_ANCHOR_WIDTH],
     cert: &dregg_lightclient::FinalityCert,
     committee: &[[u8; 32]],
     ml_dsa_committee: &[Vec<u8>],
@@ -602,12 +607,13 @@ fn finality_leg(
                 .to_string(),
         );
     }
-    // Root seam: the cert must finalize the SAME head the aggregate proves.
-    let shown = cert.finalized_root.as_u32();
-    if shown != proven_head {
+    // Root seam: the cert must finalize the SAME wide root the aggregate proves — ALL EIGHT
+    // LANES compared (the formatted lanes below are display-only, never the compare).
+    if cert.finalized_root != proven_root {
         return Err(format!(
-            "root seam broke: the cert finalizes head {shown} but the aggregate proved head \
-             {proven_head}"
+            "root seam broke: the cert finalizes root {:?} but the aggregate proved {:?}",
+            cert.finalized_root.map(|f| f.as_u32()),
+            proven_root.map(|f| f.as_u32())
         ));
     }
     // Committee-anchored quorum — threshold over the TRUSTED committee size, not the cert's count.
@@ -654,7 +660,7 @@ fn reconstruct_finality_cert(
     Ok(dregg_lightclient::FinalityCert {
         votes,
         participant_count: json.participant_count,
-        finalized_root: BabyBear::new(json.finalized_root),
+        finalized_root: core::array::from_fn(|i| BabyBear::new(json.finalized_root[i])),
     })
 }
 
@@ -1245,8 +1251,10 @@ mod tests {
             .map(|k| MlDsaKey::from_ed25519_seed(&k.to_bytes()).public_bytes())
             .collect();
 
-        let root_felt = 555_123u32;
-        let root = BabyBear::new(root_felt);
+        // A non-trivial FULL 8-felt wide root (distinct non-zero lanes) — the cert signs and the
+        // seam compares every lane, never a lane-0 scalar.
+        let root_lanes: [u32; SEG_ANCHOR_WIDTH] = core::array::from_fn(|i| 555_123 + 71 * i as u32);
+        let root: [BabyBear; SEG_ANCHOR_WIDTH] = root_lanes.map(BabyBear::new);
         // A genuine HYBRID vote: the ed25519 half AND an ML-DSA-65 half, both over the SAME
         // `finality_signing_message`. The PQ key is derived deterministically from the same 32-byte
         // seed as the ed25519 identity (mirroring `MlDsaTurnKey::from_ed25519_seed`), and its public
@@ -1273,14 +1281,14 @@ mod tests {
             finalized_root: root,
         };
         assert_eq!(
-            finality_leg(root_felt, &honest, &committee, &ml_dsa_committee),
+            finality_leg(root, &honest, &committee, &ml_dsa_committee),
             Ok(3),
-            "a genuine committee quorum over the proven head finalizes"
+            "a genuine committee quorum over the proven root finalizes"
         );
 
         // (b) UNANCHORED — no committee configured accepts nothing.
         assert!(
-            finality_leg(root_felt, &honest, &[], &ml_dsa_committee)
+            finality_leg(root, &honest, &[], &ml_dsa_committee)
                 .unwrap_err()
                 .contains("unanchored"),
             "an unanchored client refuses outright"
@@ -1308,19 +1316,47 @@ mod tests {
             "the forged keys are genuinely outside the trusted committee"
         );
         assert!(
-            finality_leg(root_felt, &forged, &committee, &ml_dsa_committee)
+            finality_leg(root, &forged, &committee, &ml_dsa_committee)
                 .unwrap_err()
                 .contains("sub-quorum"),
             "a fork signed by foreign keys does not finalize"
         );
 
-        // (d) ROOT-SEAM break — a genuine committee quorum, but over a DIFFERENT head than the
+        // (d) ROOT-SEAM break — a genuine committee quorum, but over a DIFFERENT root than the
         // aggregate proved. The seam must break before the quorum even matters.
+        let mut other_lanes = root_lanes;
+        other_lanes[0] += 1;
         assert!(
-            finality_leg(root_felt + 1, &honest, &committee, &ml_dsa_committee)
-                .unwrap_err()
-                .contains("root seam"),
-            "a cert finalizing a different head than the proven aggregate is refused"
+            finality_leg(
+                other_lanes.map(BabyBear::new),
+                &honest,
+                &committee,
+                &ml_dsa_committee
+            )
+            .unwrap_err()
+            .contains("root seam"),
+            "a cert finalizing a different root than the proven aggregate is refused"
+        );
+        // (d') THE LANE-0-COLLIDING FORK — SAME lane 0, different lane 1. The old scalar seam
+        // compared only the head felt and ACCEPTED this (the ~31-bit finality-substitution hole:
+        // grind a W' with W'[0] == W[0], replay the genuine committee signatures). The full-array
+        // seam refuses it.
+        let mut fork_lanes = root_lanes;
+        fork_lanes[1] += 1;
+        assert_eq!(
+            fork_lanes[0], root_lanes[0],
+            "lane 0 collides by construction"
+        );
+        assert!(
+            finality_leg(
+                fork_lanes.map(BabyBear::new),
+                &honest,
+                &committee,
+                &ml_dsa_committee
+            )
+            .unwrap_err()
+            .contains("root seam"),
+            "a lane-0-colliding fork root is refused by the ALL-LANES seam"
         );
 
         // (e) reconstruct_finality_cert roundtrips the JSON wire form back to a verifying cert.
@@ -1336,11 +1372,11 @@ mod tests {
                 })
                 .collect(),
             participant_count: n,
-            finalized_root: root_felt,
+            finalized_root: root_lanes,
         };
         let back = reconstruct_finality_cert(&json).expect("the wire cert reconstructs");
         assert_eq!(
-            finality_leg(root_felt, &back, &committee, &ml_dsa_committee),
+            finality_leg(root, &back, &committee, &ml_dsa_committee),
             Ok(3),
             "the reconstructed wire cert verifies identically"
         );

@@ -100,7 +100,7 @@ pub const PROOF_BIND_COMMIT_WIDTH: usize = 8;
 /// block's 4 limbs ride the member-local commit-teeth columns past the wide
 /// carriers, and all 8 are published as descriptor PIs the per-turn fold binds.
 /// Old 4-felt custom artifacts are REFUSED at the versioned admission boundary
-/// (`require_custom_commit_teeth_v2`) — never silently widened or zero-padded.
+/// (`require_custom_carrier_vk8`) — never silently widened or zero-padded.
 pub type ProofBindCommitment = [BabyBear; PROOF_BIND_COMMIT_WIDTH];
 
 /// The canonical commitment to a custom sub-proof's public inputs — the value

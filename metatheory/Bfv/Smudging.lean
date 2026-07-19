@@ -37,9 +37,13 @@ noise-flooding bound, both directions:
   * **The smudge distribution must be UNIFORM on `[-S, S]`.** The theorem is about exactly that
     distribution; a Gaussian (or fhe.rs's fresh-noise stand-in) needs its own bound. The Rust
     threshold lane must sample uniformly on the integer interval — the fail-closed sampler gate.
-  * **Single-share bound.** The bound is per honest share against the full coalition of the
-    other n−1 parties (the worst case for n-of-n). TV-subadditivity across multiple protocol
-    rounds is NOT formalized here.
+  * **Scalar-share theorem, conditional transcript ledger.** The distribution theorem is per
+    coefficient of one honest share against the full coalition of the other n−1 parties (the
+    worst case for n-of-n). Section 6 formalizes the deterministic hybrid/union accounting across
+    coefficients, parties, and repeated decrypt sessions: `degree · parties · sessions` scalar
+    steps each bounded by `2^-48` cost at most their sum. It deliberately does NOT derive the
+    joint-view hybrid steps from the scalar theorem: that needs a product-distribution / adaptive-
+    conditioning theorem for the real RLWE/RNS transcript. No independence is assumed here.
   * **Out of scope, named:** a full UC/simulation-security proof (this stone is the concrete
     noise-flooding bound that such a proof consumes); the ring lift; RLWE hardness (class B — an
     estimator artifact, never a Lean theorem); the `CommonRandomPoly` honesty assumption.
@@ -55,6 +59,11 @@ noise-flooding bound, both directions:
     margin (~`2^88`), so smudging at the hiding bound does NOT break correctness. Both jaws
     proved on the real fhe.rs degree-4096 parameters; the meter can also read empty
     (`deployed_smudge_floor_leaks`: a `2^15` smudge against the same envelope leaks TOTALLY).
+  * **`deployed_transcript_hides_of_hybrid`**: once the real transcript supplies the named
+    hybrid certificate, 4096 coefficients × at most 16 parties spends 16 bits of the scalar
+    ledger per decrypt: `2^-32` per session, `2^-24` across 256 sessions, and `2^-16` across
+    65,536 sessions. At `2^32` full sessions the union bound reaches 1 and is vacuous; the session
+    count is a load-bearing security parameter, not free reuse of the scalar 48-bit headline.
 
 Pure. No axioms beyond the kernel triple.
 -/
@@ -385,6 +394,148 @@ theorem deployed_smudge_floor_leaks (pub : ℤ) :
   rw [habs]
   push_cast
 
+/-! ## 6. Honest transcript composition: a conditional hybrid ledger.
+
+`deployed_smudge_hides` is a scalar theorem. A threshold-decrypt transcript exposes a polynomial
+for every publishing party, and a long-lived federation publishes such transcripts repeatedly.
+Calling the scalar `2^-48` bound "48-bit transcript security" would therefore be false.
+
+The accounting below uses only the triangle/union shape of a hybrid proof: if a real-to-simulated
+transcript path has one scalar replacement per `(session, party, coefficient)`, every replacement
+costs at most `2^-48`, and the transcript distance is at most the sum of those step distances, then
+the whole view costs at most
+
+`degree · parties · sessions · 2^-48`.
+
+This theorem assumes neither independence nor a product distribution. That honesty has a price:
+`TranscriptHybridLedger` is an explicit correspondence obligation. `deployed_smudge_hides` alone
+does NOT construct it. The missing bridge must show, for the real RLWE/RNS partial-decrypt view,
+that each adaptively conditioned hybrid step is represented by the scalar `shareMass` experiment
+(or prove a different conditional step bound), that fresh uniform smudges are used for every
+coordinate/session, and that revealing the CRT limbs is just a faithful encoding of one ring
+coefficient rather than extra observations. Until that bridge exists, the numbers below are a
+sound budget consumed by a future transcript proof, not a claim that the deployed protocol has
+already obtained joint-view simulation security.
+-/
+
+/-- The proved worst-case scalar distinguishing budget consumed by one hybrid replacement. -/
+def deployedScalarEpsilon : ℚ := 1 / (2 : ℚ) ^ 48
+
+/-- One scalar replacement for every coefficient of every published share in every decrypt
+session. `sessions` may count batches, decrypt calls inside a batch, or any other transcript reuse;
+the ledger intentionally makes the caller account for the chosen protocol boundary. -/
+def transcriptCoordinateCount (degree parties sessions : ℕ) : ℕ :=
+  degree * parties * sessions
+
+/-- The deterministic union/hybrid budget. It is allowed to exceed one: that is the explicit
+vacuity cliff, rather than a silently truncated number that still looks like a security claim. -/
+def transcriptAdvBudget (degree parties sessions : ℕ) : ℚ :=
+  (transcriptCoordinateCount degree parties sessions : ℚ) * deployedScalarEpsilon
+
+/-- The exact missing bridge between scalar smudging and a joint transcript. A producer supplies
+the real-to-simulated transcript distance, one conditional distance per hybrid replacement, the
+triangle/union inequality for its hybrid path, and the scalar bound for every step.
+
+No field asserts independence. Correlated/adaptive transcripts are admissible when their
+*conditional* hybrid steps meet `step_le`; transcripts for which this cannot be proved do not get
+a certificate. -/
+structure TranscriptHybridLedger (degree parties sessions : ℕ) where
+  /-- Statistical distance between the real and simulated full views. -/
+  transcriptDistance : ℚ
+  /-- Distance of each consecutive conditional hybrid replacement. -/
+  stepDistance : Fin (transcriptCoordinateCount degree parties sessions) → ℚ
+  /-- Distances are nonnegative (kept in the certificate so its fields retain metric meaning). -/
+  transcript_nonneg : 0 ≤ transcriptDistance
+  /-- Every step is a nonnegative distance. -/
+  step_nonneg : ∀ i, 0 ≤ stepDistance i
+  /-- The transcript hybrid telescopes by triangle inequality. -/
+  hybrid_le : transcriptDistance ≤ ∑ i, stepDistance i
+  /-- Every adaptively conditioned scalar replacement meets the deployed `2^-48` bound. -/
+  step_le : ∀ i, stepDistance i ≤ deployedScalarEpsilon
+
+namespace TranscriptHybridLedger
+
+/-- **Generic composition theorem.** A certified transcript hybrid costs at most the number of
+scalar observations times the deployed scalar epsilon. This is deterministic accounting; it does
+not need or invent independence. -/
+theorem sound {degree parties sessions : ℕ}
+    (L : TranscriptHybridLedger degree parties sessions) :
+    L.transcriptDistance ≤ transcriptAdvBudget degree parties sessions := by
+  calc
+    L.transcriptDistance ≤ ∑ i, L.stepDistance i := L.hybrid_le
+    _ ≤ ∑ _i : Fin (transcriptCoordinateCount degree parties sessions),
+          deployedScalarEpsilon := Finset.sum_le_sum fun i _ => L.step_le i
+    _ = transcriptAdvBudget degree parties sessions := by
+      simp [transcriptAdvBudget]
+
+end TranscriptHybridLedger
+
+/-- Monotonicity pins the admitted deployed shape: at most 4096 coefficients and 16 parties.
+Sessions remain visible because every repeated decrypt spends the budget again. -/
+theorem transcriptAdvBudget_deployed_le (degree parties sessions : ℕ)
+    (hdegree : degree ≤ 4096) (hparties : parties ≤ maxPartiesPinned) :
+    transcriptAdvBudget degree parties sessions
+      ≤ transcriptAdvBudget 4096 maxPartiesPinned sessions := by
+  unfold transcriptAdvBudget transcriptCoordinateCount deployedScalarEpsilon
+  have hcount : degree * parties * sessions ≤ 4096 * maxPartiesPinned * sessions :=
+    Nat.mul_le_mul (Nat.mul_le_mul hdegree hparties) (le_refl sessions)
+  gcongr
+
+/-- At the full degree-4096, 16-party envelope, each decrypt session costs exactly `2^-32` in
+the deterministic ledger: the 4096 coefficients spend 12 bits and the 16 parties spend 4. -/
+theorem deployed_max_transcript_budget_eq (sessions : ℕ) :
+    transcriptAdvBudget 4096 maxPartiesPinned sessions = (sessions : ℚ) / 2 ^ 32 := by
+  norm_num [transcriptAdvBudget, transcriptCoordinateCount, deployedScalarEpsilon,
+    maxPartiesPinned]
+  ring
+
+/-- **Deployed conditional transcript theorem.** Given the explicit real-transcript hybrid
+certificate, any degree-at-most-4096, at-most-16-party transcript over `sessions` decrypts is
+within `sessions / 2^32` of its simulator. The hybrid certificate is load-bearing. -/
+theorem deployed_transcript_hides_of_hybrid {degree parties sessions : ℕ}
+    (L : TranscriptHybridLedger degree parties sessions)
+    (hdegree : degree ≤ 4096) (hparties : parties ≤ maxPartiesPinned) :
+    L.transcriptDistance ≤ (sessions : ℚ) / 2 ^ 32 := by
+  calc
+    L.transcriptDistance ≤ transcriptAdvBudget degree parties sessions := L.sound
+    _ ≤ transcriptAdvBudget 4096 maxPartiesPinned sessions :=
+      transcriptAdvBudget_deployed_le degree parties sessions hdegree hparties
+    _ = (sessions : ℚ) / 2 ^ 32 := deployed_max_transcript_budget_eq sessions
+
+/-! ### Numerical teeth: residual bits after repeated full-size decrypts. -/
+
+/-- One full 4096-coefficient, 16-party decrypt has transcript budget exactly `2^-32`. -/
+theorem deployed_one_session_residual :
+    transcriptAdvBudget 4096 maxPartiesPinned 1 = 1 / (2 : ℚ) ^ 32 := by
+  norm_num [deployed_max_transcript_budget_eq]
+
+/-- 256 full decrypt sessions spend another 8 bits: the residual ledger is exactly `2^-24`. -/
+theorem deployed_256_session_residual :
+    transcriptAdvBudget 4096 maxPartiesPinned 256 = 1 / (2 : ℚ) ^ 24 := by
+  norm_num [transcriptAdvBudget, transcriptCoordinateCount, deployedScalarEpsilon,
+    maxPartiesPinned]
+
+/-- 65,536 full decrypt sessions spend 16 bits: the residual ledger is exactly `2^-16`. -/
+theorem deployed_65536_session_residual :
+    transcriptAdvBudget 4096 maxPartiesPinned 65536 = 1 / (2 : ℚ) ^ 16 := by
+  norm_num [transcriptAdvBudget, transcriptCoordinateCount, deployedScalarEpsilon,
+    maxPartiesPinned]
+
+/-- **The composition failing side.** At `2^32` full-size decrypt sessions the honest union/hybrid
+budget is exactly 1, hence vacuous as a statistical-security claim. Repeating a scalar theorem
+does not preserve its 48-bit headline. -/
+theorem deployed_composition_vacuous_at_2pow32 :
+    transcriptAdvBudget 4096 maxPartiesPinned (2 ^ 32) = 1 := by
+  norm_num [transcriptAdvBudget, transcriptCoordinateCount, deployedScalarEpsilon,
+    maxPartiesPinned]
+
+/-- Past the cliff the untruncated accounting budget is strictly greater than 1. This tooth
+prevents treating `transcriptAdvBudget` itself as a normalized statistical distance. -/
+theorem deployed_composition_unsafe_past_cliff :
+    1 < transcriptAdvBudget 4096 maxPartiesPinned (2 ^ 32 + 1) := by
+  norm_num [transcriptAdvBudget, transcriptCoordinateCount, deployedScalarEpsilon,
+    maxPartiesPinned]
+
 #assert_all_clean [Bfv.Smudging.card_supp, Bfv.Smudging.sum_shareMass,
   Bfv.Smudging.l1_window_free, Bfv.Smudging.card_supp_inter, Bfv.Smudging.l1_eq,
   Bfv.Smudging.sd_eq, Bfv.Smudging.sd_nonneg, Bfv.Smudging.sd_le_one,
@@ -392,6 +543,15 @@ theorem deployed_smudge_floor_leaks (pub : ℤ) :
   Bfv.Smudging.partial_decrypt_hides_exp, Bfv.Smudging.share_simulatable,
   Bfv.Smudging.smudge_too_small_leaks, Bfv.Smudging.smudge_too_small_distinguishes,
   Bfv.Smudging.deployed_smudge_hides, Bfv.Smudging.deployed_smudge_margin,
-  Bfv.Smudging.deployed_smudged_decrypt_exact, Bfv.Smudging.deployed_smudge_floor_leaks]
+  Bfv.Smudging.deployed_smudged_decrypt_exact, Bfv.Smudging.deployed_smudge_floor_leaks,
+  Bfv.Smudging.TranscriptHybridLedger.sound,
+  Bfv.Smudging.transcriptAdvBudget_deployed_le,
+  Bfv.Smudging.deployed_max_transcript_budget_eq,
+  Bfv.Smudging.deployed_transcript_hides_of_hybrid,
+  Bfv.Smudging.deployed_one_session_residual,
+  Bfv.Smudging.deployed_256_session_residual,
+  Bfv.Smudging.deployed_65536_session_residual,
+  Bfv.Smudging.deployed_composition_vacuous_at_2pow32,
+  Bfv.Smudging.deployed_composition_unsafe_past_cliff]
 
 end Bfv.Smudging

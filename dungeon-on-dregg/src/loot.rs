@@ -319,6 +319,16 @@ impl LootVault {
         }
     }
 
+    /// Hand the exact live owned-note world to another engine organ.
+    ///
+    /// This is the Descent → inventory/trade/Bazaar bridge: every minted loot
+    /// [`AssetId`] keeps its existing note lineage and current owner. Consumers such
+    /// as `dreggnet_trade::TradeWorld::with_assets` adopt this world directly; they
+    /// must not re-mint the item from display metadata.
+    pub fn into_assets(self) -> AssetWorld {
+        self.world
+    }
+
     /// The deterministic pubkey of a player label (creating the identity if new).
     pub fn pubkey_of(&mut self, label: &str) -> [u8; 32] {
         self.world.pubkey_of(label)

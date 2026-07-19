@@ -144,6 +144,18 @@ pub enum HostPress {
         /// The re-verification report, replayed just now on the host thread.
         report: Option<VerifyReport>,
     },
+    /// A press SELECTED a free-text affordance (one whose [`Action::wants_text`] is set, e.g. a
+    /// document INSERT/set-title, a Hermes prompt, a names register, a compute settle) — it ARMS
+    /// the chat's text slot instead of advancing (a text affordance carries no content on a bare
+    /// press). The NEXT plain-text message the chat receives is routed into THIS armed affordance
+    /// as its [`Action::text`] payload ([`TelegramHost::press_text`]). Nothing committed yet — the
+    /// arm is a pure selection.
+    TextArmed {
+        /// The offering key the armed affordance belongs to.
+        key: String,
+        /// The armed affordance (its `{turn, arg}` + human label — the text slot now selected).
+        action: Action,
+    },
     /// The press did not match any affordance currently on the chat's surface — an honest
     /// frontend-level refusal, BEFORE the substrate (the executor is never reached).
     NotOffered,
@@ -168,6 +180,13 @@ pub struct TelegramHost<T: Transport> {
     /// Which offering each chat's session is currently playing (or [`MENU_KEY`] while browsing).
     /// Keyed by the chat-scoped [`SessionId`]; a press routes to this offering.
     active: HashMap<SessionId, String>,
+    /// **The chat's ARMED free-text affordance, if one is selected.** A press on a
+    /// [`Action::wants_text`] affordance records it here (see [`HostPress::TextArmed`]); the next
+    /// plain-text message routes into it ([`Self::pending_text_action`] / [`Self::press_text`]).
+    /// This is the gate that keeps free-text capture DELIBERATE — with nothing armed, a chat's
+    /// plain messages are ordinary chatter (never swallowed into an offering). Cleared on any
+    /// advance / re-present (the surface moved on).
+    armed: HashMap<SessionId, Action>,
     /// The Mini App base URL (the public funnel), when the deploy arms the `web_app` launch
     /// tier ([`Self::with_webapp_base`]). `None` = launch buttons off; the inline-button tier
     /// is unaffected either way.
@@ -194,6 +213,7 @@ impl<T: Transport> TelegramHost<T> {
             host,
             frontend: TelegramFrontend::new(bot_secret, transport),
             active: HashMap::new(),
+            armed: HashMap::new(),
             webapp_base: None,
         }
     }
@@ -210,6 +230,7 @@ impl<T: Transport> TelegramHost<T> {
             host: HostThread::spawn(build),
             frontend: TelegramFrontend::new(bot_secret, transport),
             active: HashMap::new(),
+            armed: HashMap::new(),
             webapp_base: None,
         }
     }
@@ -405,6 +426,10 @@ impl<T: Transport> TelegramHost<T> {
     /// hidden-hand tug, a per-region document cap) paints the surface for the specific Telegram user
     /// who is looking — not the viewer-blind projection everyone otherwise shared.
     fn present_offering(&mut self, key: &str, sid: &SessionId, viewer: &DreggIdentity) {
+        // The surface is (re)painted fresh — any previously-armed text slot is now stale
+        // (the affordance moved on), so drop it. Arming a text slot ([`Self::press`]) returns
+        // BEFORE this, so the arm survives until the next advance / open / re-present.
+        self.armed.remove(sid);
         let (surface, actions) = {
             let k = key.to_string();
             let s = sid.clone();
@@ -496,9 +521,32 @@ impl<T: Transport> TelegramHost<T> {
             return HostPress::Opened(key);
         }
 
-        // A play press: the CORE resolves the typed action on the real substrate — one turn.
-        // Label + enabled are decoration; the executor resolves the typed (turn, arg).
         let key = active;
+
+        // A play press on a FREE-TEXT affordance (a `wants_text` template — a document
+        // insert/set-title, a Hermes prompt, a names register, a compute settle) carries no
+        // content, so it does not advance: it ARMS the chat's text slot, and the next plain-text
+        // message fills it ([`Self::press_text`]). Matched on the EXACT (turn, arg) the press
+        // names, so a document's four distinct text templates are each selectable — not just the
+        // first (the old `find(wants_text)` made the doc silently append-only).
+        // Bound to a `let` first so the immutable `self.frontend` borrow ends before the mutable
+        // `self.armed` insert below.
+        let text_affordance = self.frontend.session(&sid).and_then(|slot| {
+            slot.presented
+                .iter()
+                .find(|a| a.turn == turn && a.arg == arg && a.wants_text && a.text.is_none())
+                .cloned()
+        });
+        if let Some(text_affordance) = text_affordance {
+            self.armed.insert(sid.clone(), text_affordance.clone());
+            return HostPress::TextArmed {
+                key,
+                action: text_affordance,
+            };
+        }
+
+        // A non-text move: the CORE resolves the typed action on the real substrate — one turn.
+        // Label + enabled are decoration; the executor resolves the typed (turn, arg).
         let actor = viewer.clone();
         let action = Action::new(turn.clone(), turn, arg, true);
         let outcome = {
@@ -518,23 +566,31 @@ impl<T: Transport> TelegramHost<T> {
         }
     }
 
-    /// **The chat's PENDING text affordance, if one is on offer** — the "this slot wants text"
-    /// signal the free-text router keys on. Returns the presented affordance the chat's active
-    /// offering solicits free text for ([`Action::wants_text`]), or `None` when the chat has no
-    /// active offering (or is browsing the menu), or its surface offers no text-taking affordance.
+    /// **The chat's ARMED text affordance, if one is selected** — the "this slot wants text"
+    /// signal the free-text router keys on. Returns the affordance the chat has ARMED (by a
+    /// button press on a [`Action::wants_text`] template — see [`HostPress::TextArmed`]), or
+    /// `None` when the chat has no active offering (or is browsing the menu), or nothing is armed.
     ///
-    /// The detection is HONEST and offering-agnostic: it reads the [`Action::wants_text`]
-    /// discriminator off the affordances the offering actually presented (a document INSERT /
-    /// set-title marks it; a scene choice, a delete, a bid does not) — never a hard-coded verb
-    /// list in this surface layer. If several text affordances are on offer (a document offers
-    /// insert-at-tip, insert-at-start, set-title), the FIRST in the offering's own presented
-    /// order is chosen — for the document that is "…continue the document" (append at the tip,
-    /// the always-clean position), the intuitive home for a chat user's free prose.
+    /// The selection is DELIBERATE, not automatic: a press RECORDS the chosen `(turn, arg)`
+    /// text affordance ([`Self::press`]), and only THEN does a plain-text message route into it.
+    /// This is what keeps free-text capture honest — with nothing armed, a chat's plain messages
+    /// are ordinary chatter, never swallowed into an offering (the old `find(wants_text)`
+    /// captured EVERY message the moment any text offering was open, and always into the FIRST
+    /// text affordance — making a document silently append-only and a group chat's every message
+    /// an offering input). A stale arm (the surface moved on, so the affordance is no longer
+    /// presented) is dropped.
     pub fn pending_text_action(&self, sid: &SessionId) -> Option<Action> {
         // Only a real offering (not the offerings menu) solicits text.
         self.active_offering(sid)?;
+        // The chat must have ARMED a text affordance (a deliberate press).
+        let armed = self.armed.get(sid)?;
+        // Belt-and-suspenders: the armed affordance must still be the presented surface's own
+        // (a stale arm — after a re-present that changed the affordances — is not honoured).
         let slot = self.frontend.session(sid)?;
-        slot.presented.iter().find(|a| a.wants_text).cloned()
+        slot.presented
+            .iter()
+            .any(|a| a.turn == armed.turn && a.arg == armed.arg && a.wants_text)
+            .then(|| armed.clone())
     }
 
     /// **Route free text into the chat's pending text affordance** — the in-chat driver for a

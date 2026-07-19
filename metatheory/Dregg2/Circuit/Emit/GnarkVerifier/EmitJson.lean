@@ -144,14 +144,28 @@ structure VShape where
   logGlobalMaxHeight : Nat
   numInstances       : Nat
   inputRounds        : Nat
+  -- The multi-height MMCS batch input-open shape (verifyOpenInputBatchNative): the
+  -- tallest-first HEIGHT CLASSES a query opens (shared across the input rounds of this
+  -- fixture) and the per-round per-class opened-row WIDTHS. `inputClassHeights.head` is the
+  -- batch-tree max log-height (= the path depth); `inputRoundWidths` is one width list per
+  -- input round (in round order), each aligned with `inputClassHeights`. These let the Go
+  -- interpreter pick + bind the Lean-emitted `batchData` template per round shape.
+  inputClassHeights  : List Nat
+  inputRoundWidths   : List (List Nat)
   deriving Repr
 
 /-- The apex-shrink fixture shape (`degree_bits` has 6 entries → 6 batch instances; 4
-`input_rounds`). -/
+`input_rounds`). The input-open batch shape is read verbatim from the fixture's per-round
+matrix log-heights/widths (`chain/gnark/fixtures/apex_shrink_fri_real.json` `input_rounds`,
+grouped tallest-first): all four rounds open height classes {18,17,12,3}; the per-class
+opened-row widths are trace [80,300,8,132], quotient [16,8,16,8], preprocessed [61,24,4,66],
+permutation [76,28,8,132]. -/
 def apexShrinkShape : VShape :=
   { logBlowup := 3, numQueries := 38, rounds := 15, logFinalPolyLen := 0, maxLogArity := 1,
     queryPowBits := 16, commitPowBits := 0, extraQueryIndexBits := 0, logGlobalMaxHeight := 18,
-    numInstances := 6, inputRounds := 4 }
+    numInstances := 6, inputRounds := 4,
+    inputClassHeights := [18, 17, 12, 3],
+    inputRoundWidths := [[80, 300, 8, 132], [16, 8, 16, 8], [61, 24, 4, 66], [76, 28, 8, 132]] }
 
 /-- Commit-phase Merkle path depth per FRI round: `logGlobalMaxHeight-1-r` for round `r`,
 i.e. `[17,16,…,3]` for the apex-shrink shape — byte-identical to the fixture's per-round
@@ -187,11 +201,16 @@ def verifierGadgets (s : VShape) : List VGadget :=
     -- block 2: commit-phase Merkle openings (merklePathData, "VerifyMerklePathBn254")
     ⟨2, "VerifyMerklePathBn254", "poseidon2_bn254_compress", s.numQueries,
       [("depths", depths), ("leaf_width", [4])]⟩,
-    -- block 2: input-batch openings (open_input paths, depth logGlobalMaxHeight)
+    -- block 2b: input-batch openings — the REAL multi-height MMCS batch tree
+    -- (verifyOpenInputBatchNative), one per (query, input-round). Carries the shared
+    -- tallest-first height classes + the per-round per-class opened-row widths so the
+    -- interpreter picks + binds the Lean-emitted `batchData` template per round shape.
     ⟨2, "VerifyMerklePathBn254InputOpen", "poseidon2_bn254_compress",
       s.numQueries * s.inputRounds,
       [("depth", [s.logGlobalMaxHeight]), ("num_queries", [s.numQueries]),
-       ("input_rounds", [s.inputRounds])]⟩,
+       ("input_rounds", [s.inputRounds]),
+       ("class_heights", s.inputClassHeights),
+       ("round_widths", s.inputRoundWidths.flatten)]⟩,
     -- block 3: batch-STARK constraint algebra (batchTableData, "BatchTableInstance" ×n)
     ⟨3, "BatchTableInstance", "stark_constraint_dag", s.numInstances,
       [("degree_bits", [9, 9, 15, 14, 15, 0])]⟩,
@@ -267,7 +286,7 @@ def emitVerifierFullJson (s : VShape) : String :=
 def verifierFullJson : String := emitVerifierFullJson apexShrinkShape
 
 -- The byte-for-byte golden pin (the committed artifact `chain/gnark/emitted/verifier_full.json`).
-#guard verifierFullJson == r#"{"schema":"dregg.gnark.verifier_full.v1","name":"gnark_fri_verifier_composed_v1","fixture":"apex_shrink_fri_real","source":"Dregg2/Circuit/Emit/GnarkVerifier/EmitVerifier.lean:emitVerifier","shape":{"log_blowup":3,"num_queries":38,"rounds":15,"log_final_poly_len":0,"max_log_arity":1,"query_pow_bits":16,"commit_pow_bits":0,"extra_query_index_bits":0,"log_global_max_height":18,"digest_width":8,"num_public_lanes":25,"ext_degree":4,"fold_arity":2,"num_instances":6,"input_rounds":4},"var_blocks":[{"block":0,"pair_key":0,"role":"canonicity"},{"block":1,"pair_key":1,"role":"fri_fold"},{"block":2,"pair_key":2,"role":"merkle"},{"block":3,"pair_key":3,"role":"batch_table"},{"block":4,"pair_key":4,"role":"query_pow"},{"block":5,"pair_key":5,"role":"segment"}],"gadgets":[{"block":0,"gadget":"AssertIsCanonical","expand":"rangecheck","count":1,"params":{"limb_bits":[31,31],"babybear_p":[2013265921]}},{"block":1,"gadget":"FriFoldRowArity2","expand":"babybear_ext_mul","count":570,"params":{"ext_degree":[4],"arity":[2],"num_queries":[38],"rounds":[15]}},{"block":1,"gadget":"ExtAssertIsEqual","expand":"babybear_ext_eq","count":38,"params":{"ext_degree":[4]}},{"block":2,"gadget":"VerifyMerklePathBn254","expand":"poseidon2_bn254_compress","count":38,"params":{"depths":[17,16,15,14,13,12,11,10,9,8,7,6,5,4,3],"leaf_width":[4]}},{"block":2,"gadget":"VerifyMerklePathBn254InputOpen","expand":"poseidon2_bn254_compress","count":152,"params":{"depth":[18],"num_queries":[38],"input_rounds":[4]}},{"block":3,"gadget":"BatchTableInstance","expand":"stark_constraint_dag","count":6,"params":{"degree_bits":[9,9,15,14,15,0]}},{"block":3,"gadget":"LogUpBalance","expand":"logup_sum","count":1,"params":{}},{"block":4,"gadget":"SampleBitsDecomposed","expand":"rangecheck","count":1,"params":{"bits":[31]}},{"block":4,"gadget":"AssertPowBitsZero","expand":"zero_low_bits","count":1,"params":{"pow_bits":[16]}},{"block":5,"gadget":"AssertIsEqual","expand":"wire_eq","count":25,"params":{"lane_base":[25]}}],"derived":{"fold_rows":570,"commit_merkle_compressions":5700,"input_merkle_compressions":2736,"segment_lane_asserts":25}}"#
+#guard verifierFullJson == r#"{"schema":"dregg.gnark.verifier_full.v1","name":"gnark_fri_verifier_composed_v1","fixture":"apex_shrink_fri_real","source":"Dregg2/Circuit/Emit/GnarkVerifier/EmitVerifier.lean:emitVerifier","shape":{"log_blowup":3,"num_queries":38,"rounds":15,"log_final_poly_len":0,"max_log_arity":1,"query_pow_bits":16,"commit_pow_bits":0,"extra_query_index_bits":0,"log_global_max_height":18,"digest_width":8,"num_public_lanes":25,"ext_degree":4,"fold_arity":2,"num_instances":6,"input_rounds":4},"var_blocks":[{"block":0,"pair_key":0,"role":"canonicity"},{"block":1,"pair_key":1,"role":"fri_fold"},{"block":2,"pair_key":2,"role":"merkle"},{"block":3,"pair_key":3,"role":"batch_table"},{"block":4,"pair_key":4,"role":"query_pow"},{"block":5,"pair_key":5,"role":"segment"}],"gadgets":[{"block":0,"gadget":"AssertIsCanonical","expand":"rangecheck","count":1,"params":{"limb_bits":[31,31],"babybear_p":[2013265921]}},{"block":1,"gadget":"FriFoldRowArity2","expand":"babybear_ext_mul","count":570,"params":{"ext_degree":[4],"arity":[2],"num_queries":[38],"rounds":[15]}},{"block":1,"gadget":"ExtAssertIsEqual","expand":"babybear_ext_eq","count":38,"params":{"ext_degree":[4]}},{"block":2,"gadget":"VerifyMerklePathBn254","expand":"poseidon2_bn254_compress","count":38,"params":{"depths":[17,16,15,14,13,12,11,10,9,8,7,6,5,4,3],"leaf_width":[4]}},{"block":2,"gadget":"VerifyMerklePathBn254InputOpen","expand":"poseidon2_bn254_compress","count":152,"params":{"depth":[18],"num_queries":[38],"input_rounds":[4],"class_heights":[18,17,12,3],"round_widths":[80,300,8,132,16,8,16,8,61,24,4,66,76,28,8,132]}},{"block":3,"gadget":"BatchTableInstance","expand":"stark_constraint_dag","count":6,"params":{"degree_bits":[9,9,15,14,15,0]}},{"block":3,"gadget":"LogUpBalance","expand":"logup_sum","count":1,"params":{}},{"block":4,"gadget":"SampleBitsDecomposed","expand":"rangecheck","count":1,"params":{"bits":[31]}},{"block":4,"gadget":"AssertPowBitsZero","expand":"zero_low_bits","count":1,"params":{"pow_bits":[16]}},{"block":5,"gadget":"AssertIsEqual","expand":"wire_eq","count":25,"params":{"lane_base":[25]}}],"derived":{"fold_rows":570,"commit_merkle_compressions":5700,"input_merkle_compressions":2736,"segment_lane_asserts":25}}"#
 
 /-! ## §4c Gadget-name drift pins — the descriptor's hardcoded gnark gadget names ARE the
 leaf packages' own `.gadgets` names (defends against a leaf renaming out from under us). -/

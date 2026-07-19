@@ -1,5 +1,4 @@
-//! MASKED DECRYPT-TO-SHARES — the last un-built seam of the output-boundary
-//! pipeline, made real (the §8 frontier item of `docs/deos/OUTPUT-BOUNDARY-MPC.md`).
+//! MASKED DECRYPT-TO-SHARES — the BFV-to-MPC value-channel seam.
 //!
 //! ## The seam this closes
 //!
@@ -18,13 +17,14 @@
 //!      and homomorphically adds `Enc(r_i)` to the folded curve ciphertext:
 //!      `ct' = ct ⊞ Enc(r_0) ⊞ … ⊞ Enc(r_{n-1})` — n more carry-free adds on a
 //!      noise budget sized for millions.
-//!   2. The network decrypts `ct'` (in production: the EXISTING federation
-//!      threshold-decrypt stack — `federation/src/threshold_decrypt.rs`'s
-//!      t-of-n Shamir machinery pointed at the BFV key; here: the PoC keypair).
-//!      What opens is `y = (m + Σ r_i) mod t` — **a one-time-padded value**,
-//!      uniform on `Z_t` and EXACTLY independent of the curve `m` (proven by
-//!      enumeration in `pad_is_exact_and_secret_independent`). Decrypting it in
-//!      public is safe; nobody learns a curve coefficient.
+//!   2. Every [`ThresholdParty`](crate::threshold::ThresholdParty) emits a
+//!      smudged n-of-n decrypt share over `ct'`; the coordinator combines the
+//!      framed public shares. What opens is
+//!      `y = (m + Σ r_i) mod t` — **a one-time-padded value**,
+//!      uniform on `Z_t` and EXACTLY independent of the curve `m` for any view
+//!      missing at least one honest party's mask (proven by enumeration in
+//!      `pad_is_exact_and_secret_independent`). Decrypting it does not reveal a
+//!      curve coefficient to that view.
 //!   3. The mod-t additive shares of `m` are then LOCAL: party 0 takes
 //!      `σ_0 = (y − r_0) mod t`, party `i>0` takes `σ_i = (−r_i) mod t`, so
 //!      `Σ σ_i ≡ m (mod t)` — each party's share is a function of its own mask
@@ -35,41 +35,52 @@
 //!      conditional subtractions of the public `t` — and the UNCHANGED
 //!      Beaver-triple crossing (`mpc_crossing`) runs and reveals only `(p*,V*)`.
 //!
-//! So the seam dissolves the same way the BFV→TFHE scheme-switch did (R4's
-//! move): not by building the exotic adapter, but by restructuring so only
-//! already-safe openings happen. The threshold-decrypt that production needs is
-//! the one the federation already runs; what this module adds is the masking
-//! protocol that makes its OUTPUT safe to open, plus the mod-t → boolean bridge.
+//! [`MaskedDecryptSession`], [`MaskedBoundaryParty`], and
+//! [`MaskedDecryptCoordinator`] are the production-shaped composition: a party
+//! retains both its threshold secret and its plaintext mask, while only an
+//! [`EncryptedMaskContribution`] and a framed threshold decrypt share cross the
+//! coordinator. [`masked_decrypt_to_shares`] and [`masked_boundary_clear`] are
+//! retained as legacy single-key benchmarks/oracles; they are not the deployment
+//! entry point.
 //!
 //! ## Honest scope (stated like the sibling PoCs)
 //!
-//! - **REAL:** the value channel. The mask is an exact one-time pad over `Z_t`
+//! - **REAL:** the value-channel algebra and its composition with the real
+//!   party-owned threshold API. The mask is an exact one-time pad over `Z_t`
 //!   (enumeration-proven); the opened `y` carries zero information about the
 //!   curve; the mod-t share algebra and the `a2b_mod_t` bridge are real MPC on
 //!   real shares; the crossing is the unchanged measured protocol; correctness
 //!   is KAT-checked against direct decryption and the plaintext reference.
-//! - **PoC-scoped:** the decrypt of `ct'` uses the in-process secret key (the
-//!   same PoC posture as `bfv_fold`); production points the existing federation
-//!   threshold-decrypt at it. The parties are simulated in one process.
-//! - **NAMED, not built:** the decryption NOISE channel. A decryption's noise
-//!   term can leak beyond the plaintext (the IND-CPA-D caveat); production
-//!   threshold decryption adds smudging noise to the partial decryptions —
-//!   standard, orthogonal to the value-channel construction here.
+//! - **Process-shaped, not a network protocol:** the integration tooth uses
+//!   channels and party threads, but this module does not authenticate session
+//!   nonces, public-key contributions, mask contributions, or decrypt shares.
+//!   It also does not prove malicious shares well formed or provide replay,
+//!   crash-recovery, or persistent secret-storage policy. The threshold module's
+//!   Lean-pinned smudging floor closes the named decryption-noise channel for the
+//!   honest-party model; malicious robustness remains open.
+//! - **Still separate:** locally derived mod-t shares must enter an authenticated
+//!   distributed MPC transport. [`a2b_mod_t`] and [`mpc_crossing`] implement the
+//!   algebra in one process; they do not supply that transport.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey, SecretKey};
-use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
+use fhe_traits::{
+    DeserializeParametrized, FheDecoder, FheDecrypter, FheEncoder, FheEncrypter,
+    Serialize as FheSerialize,
+};
 use rand::Rng;
 use rand_09::rngs::StdRng as StdRng09;
 use rand_09::SeedableRng as SeedableRng09;
 
 use crate::additive::{bfv_fold_encrypted, BfvFoldedBook};
+use crate::bfv_lean::LeanCiphertext;
 use crate::mpc::{
     const_int, geq, mpc_crossing, secure_add, select_int, share_int, triples_needed, Crossing,
     SharedInt, Transcript, TriplePool,
 };
+use crate::threshold::{self, BfvParams, CollectivePublicKey, DecryptShare, ThresholdError};
 use crate::Order;
 
 /// Bits needed to hold `x` (`⌈log₂(x+1)⌉`, min 1).
@@ -80,6 +91,442 @@ fn bits_for(x: u64) -> usize {
 /// The mod-t share vector of ONE slot: `shares[i]` is party `i`'s additive share,
 /// `Σ_i shares[i] ≡ m (mod t)`.
 pub type ModTShares = Vec<u64>;
+
+/// Fail-closed errors for the party-owned masked-decrypt composition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundaryError {
+    InvalidParty { party: usize, n_parties: usize },
+    InvalidLiveSlots { have: usize, degree: usize },
+    QuorumTooSmall { have: usize, need: usize },
+    DuplicateParty { party: usize },
+    SessionMismatch,
+    ParamMismatch,
+    MalformedWire,
+    Crypto,
+    Threshold(ThresholdError),
+}
+
+impl From<ThresholdError> for BoundaryError {
+    fn from(value: ThresholdError) -> Self {
+        Self::Threshold(value)
+    }
+}
+
+pub type BoundaryResult<T> = std::result::Result<T, BoundaryError>;
+
+/// Public context binding one mask/decrypt round to one exact ciphertext.
+///
+/// The nonce is an unauthenticated replay-domain tag, not a signature or a
+/// randomness beacon. Hosts must authenticate it together with the target
+/// ciphertext and party roster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaskedDecryptSession {
+    nonce: [u8; 32],
+    n_parties: usize,
+    live_slots: usize,
+    target: LeanCiphertext,
+}
+
+impl MaskedDecryptSession {
+    /// Create a fresh public session around the ciphertext to be masked.
+    pub fn random(
+        n_parties: usize,
+        live_slots: usize,
+        target: LeanCiphertext,
+        params: &BfvParams,
+    ) -> BoundaryResult<Self> {
+        let mut nonce = [0u8; 32];
+        rand_09::RngCore::fill_bytes(&mut rand_09::rng(), &mut nonce);
+        Self::from_public(nonce, n_parties, live_slots, target, params)
+    }
+
+    /// Reconstruct the session from public transport state.
+    pub fn from_public(
+        nonce: [u8; 32],
+        n_parties: usize,
+        live_slots: usize,
+        target: LeanCiphertext,
+        params: &BfvParams,
+    ) -> BoundaryResult<Self> {
+        if n_parties == 0 {
+            return Err(BoundaryError::QuorumTooSmall { have: 0, need: 1 });
+        }
+        if live_slots == 0 || live_slots > params.degree() {
+            return Err(BoundaryError::InvalidLiveSlots {
+                have: live_slots,
+                degree: params.degree(),
+            });
+        }
+        if target.moduli != params.moduli()
+            || target.degree != params.degree()
+            || target.polys.len() != 2
+        {
+            return Err(BoundaryError::ParamMismatch);
+        }
+        Ciphertext::from_bytes(&target.to_fhe_bytes(), params.arc())
+            .map_err(|_| BoundaryError::MalformedWire)?;
+        Ok(Self {
+            nonce,
+            n_parties,
+            live_slots,
+            target,
+        })
+    }
+
+    pub fn nonce(&self) -> [u8; 32] {
+        self.nonce
+    }
+
+    pub fn n_parties(&self) -> usize {
+        self.n_parties
+    }
+
+    pub fn live_slots(&self) -> usize {
+        self.live_slots
+    }
+
+    pub fn target(&self) -> &LeanCiphertext {
+        &self.target
+    }
+}
+
+/// The only mask-phase message a party sends to the coordinator.
+///
+/// It contains the exact public session context and `Enc(r_i)`, never `r_i`.
+/// The framing below is strict but deliberately unauthenticated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedMaskContribution {
+    session: MaskedDecryptSession,
+    party: usize,
+    encrypted_mask: LeanCiphertext,
+}
+
+impl EncryptedMaskContribution {
+    pub fn party(&self) -> usize {
+        self.party
+    }
+
+    pub fn session(&self) -> &MaskedDecryptSession {
+        &self.session
+    }
+
+    pub fn encrypted_mask(&self) -> &LeanCiphertext {
+        &self.encrypted_mask
+    }
+
+    /// Strict public-message framing. Authentication is a host responsibility.
+    pub fn to_wire_bytes(&self) -> Vec<u8> {
+        let target = self.session.target.to_fhe_bytes();
+        let mask = self.encrypted_mask.to_fhe_bytes();
+        let mut out = Vec::with_capacity(96 + target.len() + mask.len());
+        out.extend_from_slice(b"FHBMv001");
+        out.extend_from_slice(&(self.party as u64).to_le_bytes());
+        out.extend_from_slice(&(self.session.n_parties as u64).to_le_bytes());
+        out.extend_from_slice(&(self.session.live_slots as u64).to_le_bytes());
+        out.extend_from_slice(&self.session.nonce);
+        out.extend_from_slice(&self.session.target.plain_bound.to_le_bytes());
+        out.extend_from_slice(&(target.len() as u64).to_le_bytes());
+        out.extend_from_slice(&target);
+        out.extend_from_slice(&(mask.len() as u64).to_le_bytes());
+        out.extend_from_slice(&mask);
+        out
+    }
+
+    pub fn from_wire_bytes(bytes: &[u8], params: &BfvParams) -> BoundaryResult<Self> {
+        let mut i = 0usize;
+        if take_boundary_wire::<8>(bytes, &mut i)? != *b"FHBMv001" {
+            return Err(BoundaryError::MalformedWire);
+        }
+        let party = boundary_wire_usize(bytes, &mut i)?;
+        let n_parties = boundary_wire_usize(bytes, &mut i)?;
+        let live_slots = boundary_wire_usize(bytes, &mut i)?;
+        let nonce = take_boundary_wire::<32>(bytes, &mut i)?;
+        let target_bound = u64::from_le_bytes(take_boundary_wire::<8>(bytes, &mut i)?);
+        let target_len = boundary_wire_usize(bytes, &mut i)?;
+        let target_bytes = take_boundary_slice(bytes, &mut i, target_len)?;
+        let target = LeanCiphertext::from_fhe_bytes(
+            target_bytes,
+            params.moduli(),
+            params.degree(),
+            target_bound,
+        )
+        .map_err(|_| BoundaryError::MalformedWire)?;
+        let session =
+            MaskedDecryptSession::from_public(nonce, n_parties, live_slots, target, params)?;
+        if party >= n_parties {
+            return Err(BoundaryError::InvalidParty { party, n_parties });
+        }
+        let mask_len = boundary_wire_usize(bytes, &mut i)?;
+        let mask_bytes = take_boundary_slice(bytes, &mut i, mask_len)?;
+        if i != bytes.len() {
+            return Err(BoundaryError::MalformedWire);
+        }
+        let encrypted_mask = LeanCiphertext::from_fhe_bytes(
+            mask_bytes,
+            params.moduli(),
+            params.degree(),
+            params.plaintext_modulus() - 1,
+        )
+        .map_err(|_| BoundaryError::MalformedWire)?;
+        Ok(Self {
+            session,
+            party,
+            encrypted_mask,
+        })
+    }
+}
+
+/// Party-local mask custody for one round. This intentionally has no `Clone`,
+/// serialization, or mask accessor.
+pub struct MaskedBoundaryParty {
+    session: MaskedDecryptSession,
+    party: usize,
+    mask: Vec<u64>,
+}
+
+impl MaskedBoundaryParty {
+    /// Independently sample and retain `r_i`, emitting only `Enc(r_i)`.
+    pub fn prepare(
+        session: &MaskedDecryptSession,
+        party: usize,
+        params: &BfvParams,
+        public_key: &CollectivePublicKey,
+    ) -> BoundaryResult<(Self, EncryptedMaskContribution)> {
+        if party >= session.n_parties {
+            return Err(BoundaryError::InvalidParty {
+                party,
+                n_parties: session.n_parties,
+            });
+        }
+        let t = params.plaintext_modulus();
+        let mut rng = rand_09::rng();
+        let mask = (0..session.live_slots)
+            .map(|_| rand_09::Rng::random_range(&mut rng, 0..t))
+            .collect::<Vec<_>>();
+        let mut padded_mask = vec![0u64; params.degree()];
+        padded_mask[..session.live_slots].copy_from_slice(&mask);
+        let plaintext = Plaintext::try_encode(&padded_mask, Encoding::simd(), params.arc())
+            .map_err(|_| BoundaryError::Crypto)?;
+        let ciphertext = public_key
+            .pk
+            .try_encrypt(&plaintext, &mut rng)
+            .map_err(|_| BoundaryError::Crypto)?;
+        let encrypted_mask = LeanCiphertext::from_fhe_bytes(
+            &ciphertext.to_bytes(),
+            params.moduli(),
+            params.degree(),
+            t - 1,
+        )
+        .map_err(|_| BoundaryError::MalformedWire)?;
+        let state = Self {
+            session: session.clone(),
+            party,
+            mask,
+        };
+        let contribution = EncryptedMaskContribution {
+            session: session.clone(),
+            party,
+            encrypted_mask,
+        };
+        Ok((state, contribution))
+    }
+
+    pub fn party(&self) -> usize {
+        self.party
+    }
+
+    /// Locally derive this party's row of mod-t shares from the public padded
+    /// opening. The mask itself never leaves this object.
+    pub fn derive_mod_t_share(&self, opening: &MaskedOpening) -> BoundaryResult<Vec<u64>> {
+        if opening.session != self.session {
+            return Err(BoundaryError::SessionMismatch);
+        }
+        let t = opening.plaintext_modulus;
+        Ok(opening
+            .y
+            .iter()
+            .zip(self.mask.iter())
+            .map(|(&y, &r)| {
+                if self.party == 0 {
+                    (y + t - r) % t
+                } else {
+                    (t - r) % t
+                }
+            })
+            .collect())
+    }
+}
+
+/// Coordinator for the public mask contributions. It cannot accept a plaintext
+/// mask or a [`MaskedBoundaryParty`].
+pub struct MaskedDecryptCoordinator {
+    session: MaskedDecryptSession,
+    params: BfvParams,
+    contributions: Vec<EncryptedMaskContribution>,
+}
+
+impl MaskedDecryptCoordinator {
+    pub fn new(session: MaskedDecryptSession, params: BfvParams) -> Self {
+        Self {
+            session,
+            params,
+            contributions: Vec::new(),
+        }
+    }
+
+    pub fn accept(&mut self, contribution: EncryptedMaskContribution) -> BoundaryResult<()> {
+        if contribution.session != self.session {
+            return Err(BoundaryError::SessionMismatch);
+        }
+        if self
+            .contributions
+            .iter()
+            .any(|existing| existing.party == contribution.party)
+        {
+            return Err(BoundaryError::DuplicateParty {
+                party: contribution.party,
+            });
+        }
+        self.contributions.push(contribution);
+        Ok(())
+    }
+
+    /// Homomorphically add the exact target and every public encrypted mask.
+    ///
+    /// This intentionally uses BFV's native modular add instead of the fold
+    /// wrap gate: modulo-t wrap is the one-time-pad construction here, not an
+    /// aggregate overflow. The resulting declaration is therefore `[0,t)`.
+    pub fn finish(self) -> BoundaryResult<ThresholdMaskedCiphertext> {
+        if self.contributions.len() < self.session.n_parties {
+            return Err(BoundaryError::QuorumTooSmall {
+                have: self.contributions.len(),
+                need: self.session.n_parties,
+            });
+        }
+        if self.contributions.len() > self.session.n_parties {
+            return Err(BoundaryError::ParamMismatch);
+        }
+        let mut aggregate =
+            Ciphertext::from_bytes(&self.session.target.to_fhe_bytes(), self.params.arc())
+                .map_err(|_| BoundaryError::MalformedWire)?;
+        for contribution in &self.contributions {
+            let encrypted_mask = Ciphertext::from_bytes(
+                &contribution.encrypted_mask.to_fhe_bytes(),
+                self.params.arc(),
+            )
+            .map_err(|_| BoundaryError::MalformedWire)?;
+            aggregate += &encrypted_mask;
+        }
+        let ciphertext = LeanCiphertext::from_fhe_bytes(
+            &aggregate.to_bytes(),
+            self.params.moduli(),
+            self.params.degree(),
+            self.params.plaintext_modulus() - 1,
+        )
+        .map_err(|_| BoundaryError::MalformedWire)?;
+        Ok(ThresholdMaskedCiphertext {
+            session: self.session,
+            ciphertext,
+        })
+    }
+}
+
+/// The coordinator's masked aggregate, ready for party-owned threshold shares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThresholdMaskedCiphertext {
+    session: MaskedDecryptSession,
+    ciphertext: LeanCiphertext,
+}
+
+impl ThresholdMaskedCiphertext {
+    pub fn ciphertext(&self) -> &LeanCiphertext {
+        &self.ciphertext
+    }
+
+    pub fn session(&self) -> &MaskedDecryptSession {
+        &self.session
+    }
+
+    /// Parse and combine only framed public decrypt-share messages. Full-quorum,
+    /// duplicate-party, smudging, and exact-ciphertext checks are delegated to
+    /// the threshold module's fail-closed combine gate.
+    pub fn open_framed(
+        &self,
+        framed_shares: &[Vec<u8>],
+        params: &BfvParams,
+    ) -> BoundaryResult<MaskedOpening> {
+        if framed_shares.len() < self.session.n_parties {
+            return Err(BoundaryError::QuorumTooSmall {
+                have: framed_shares.len(),
+                need: self.session.n_parties,
+            });
+        }
+        if framed_shares.len() > self.session.n_parties {
+            return Err(BoundaryError::ParamMismatch);
+        }
+        let shares = framed_shares
+            .iter()
+            .map(|wire| DecryptShare::from_wire_bytes(wire, params))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if shares
+            .iter()
+            .any(|share| share.ciphertext() != &self.ciphertext)
+        {
+            return Err(BoundaryError::SessionMismatch);
+        }
+        let y = threshold::combine(&shares, params)?;
+        Ok(MaskedOpening {
+            session: self.session.clone(),
+            y: y[..self.session.live_slots].to_vec(),
+            plaintext_modulus: params.plaintext_modulus(),
+        })
+    }
+}
+
+/// The only value opened by threshold decryption: `m + Σr_i (mod t)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaskedOpening {
+    session: MaskedDecryptSession,
+    y: Vec<u64>,
+    plaintext_modulus: u64,
+}
+
+impl MaskedOpening {
+    pub fn values(&self) -> &[u64] {
+        &self.y
+    }
+
+    pub fn session(&self) -> &MaskedDecryptSession {
+        &self.session
+    }
+}
+
+fn take_boundary_wire<const N: usize>(bytes: &[u8], i: &mut usize) -> BoundaryResult<[u8; N]> {
+    let end = i
+        .checked_add(N)
+        .filter(|&end| end <= bytes.len())
+        .ok_or(BoundaryError::MalformedWire)?;
+    let out = bytes[*i..end]
+        .try_into()
+        .map_err(|_| BoundaryError::MalformedWire)?;
+    *i = end;
+    Ok(out)
+}
+
+fn boundary_wire_usize(bytes: &[u8], i: &mut usize) -> BoundaryResult<usize> {
+    usize::try_from(u64::from_le_bytes(take_boundary_wire::<8>(bytes, i)?))
+        .map_err(|_| BoundaryError::MalformedWire)
+}
+
+fn take_boundary_slice<'a>(bytes: &'a [u8], i: &mut usize, len: usize) -> BoundaryResult<&'a [u8]> {
+    let end = i
+        .checked_add(len)
+        .filter(|&end| end <= bytes.len())
+        .ok_or(BoundaryError::MalformedWire)?;
+    let out = &bytes[*i..end];
+    *i = end;
+    Ok(out)
+}
 
 /// Sample the parties' masks: `masks[i][j]` = party `i`'s uniform `Z_t` mask for
 /// slot `j`. Each party samples its own row locally (the PoC uses one rng).
@@ -109,8 +556,8 @@ pub fn shares_from_masked_opening(y: &[u64], masks: &[Vec<u64>], t: u64) -> Vec<
         .collect()
 }
 
-/// The result of one masked decrypt-to-shares: the (safe-to-open) masked values
-/// and each slot's mod-t shares, plus phase timings.
+/// Legacy single-key benchmark result: the padded opening, reconstructed
+/// in-process mod-t shares, and phase timings.
 pub struct MaskedDecrypt {
     /// The opened masked plaintext `y[j] = (m[j] + Σ_i r_i[j]) mod t` for the K
     /// live slots — a one-time-padded value, safe to publish.
@@ -119,13 +566,16 @@ pub struct MaskedDecrypt {
     pub sigma: Vec<ModTShares>,
     /// Wall time for the parties to encrypt their masks + the homomorphic adds.
     pub mask: Duration,
-    /// Wall time to decrypt the masked ciphertext (production: the federation
-    /// threshold decrypt — its output is exactly this safe-to-open `y`).
+    /// Wall time for the legacy single-key decrypt. The production-shaped path
+    /// uses [`ThresholdMaskedCiphertext::open_framed`] instead.
     pub decrypt: Duration,
 }
 
-/// Steps 1–3: mask the folded curve ciphertext, decrypt ONLY the masked value,
-/// derive the local mod-t shares. No curve coefficient is ever opened.
+/// Legacy benchmark/oracle for steps 1–3 using one in-process secret key.
+///
+/// It opens only the padded value, but does not model threshold key custody.
+/// New protocol callers use [`MaskedBoundaryParty`] and
+/// [`MaskedDecryptCoordinator`].
 pub fn masked_decrypt_to_shares<R: Rng>(
     ct: &Ciphertext,
     k: usize,
@@ -218,8 +668,7 @@ pub fn triples_needed_boundary(k: usize, b: usize, t: u64, n: usize) -> usize {
     2 * k * per_slot + triples_needed(k, b) + w
 }
 
-/// One full masked-boundary clear, with per-phase timings: BFV fold → masked
-/// decrypt-to-shares → a2b_mod_t → the unchanged MPC crossing.
+/// One legacy in-process masked-boundary benchmark, with per-phase timings.
 pub struct BoundaryRun {
     pub cross: Crossing,
     pub transcript: Transcript,
@@ -233,9 +682,13 @@ pub struct BoundaryRun {
     pub a2b_and_gates: usize,
 }
 
-/// THE END-TO-END TIER-0 PIPELINE with no un-modelled value-channel step:
-/// carry-free BFV fold → homomorphic masking → decrypt only the padded value →
-/// local mod-t shares → a2b bridge → Beaver-triple crossing → reveal `(p*,V*)`.
+/// Legacy single-key end-to-end oracle: carry-free BFV fold → homomorphic
+/// masking → open the padded value → local mod-t shares → a2b bridge →
+/// Beaver-triple crossing → reveal `(p*,V*)`.
+///
+/// This remains useful for timing/algebra parity, but its `BfvFoldedBook` owns a
+/// joint secret key. The production-shaped custody path begins at
+/// [`MaskedDecryptSession`] and is exercised by the channel integration test.
 pub fn masked_boundary_clear<R: Rng>(
     orders: &[Order],
     k: usize,
@@ -414,7 +867,7 @@ mod tests {
             })
             .collect();
         let folded = bfv_fold_encrypted(&book, k, &params);
-        // direct decryption (the thing production never does in the clear):
+        // Direct decryption is the legacy test oracle, never the deployment path.
         let pt = folded.sk.try_decrypt(&folded.d_ct).expect("direct");
         let direct = Vec::<u64>::try_decode(&pt, Encoding::simd()).expect("decode");
         // the masked path:
@@ -456,7 +909,7 @@ mod tests {
                 run.cross.v_star as u32, reference.v_star,
                 "N={nn} K={k} n={n}"
             );
-            assert!(run.transcript.is_reveal_only(k));
+            assert!(run.transcript.is_reveal_only(k, 16));
         }
     }
 }

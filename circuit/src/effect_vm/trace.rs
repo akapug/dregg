@@ -767,12 +767,9 @@ pub fn generate_effect_vm_trace_ext(
                 proof_commitment,
             } => {
                 // Write VK hash into params[0..4]: the trace row carries the
-                // low 4 felts of the 8-felt VK hash for continuity. The full
-                // 8-felt vk_hash is bound through PI[CUSTOM_PROOFS_BASE..+8]
-                // (pi v2 widening, `pi::VK_PI_LAYOUT_VERSION == 2`). The
-                // executor's PI matching loop enforces equality between the
-                // full 32-byte registry key and the PI bytes — the trace's
-                // 4-felt slot is metadata only; binding is in PI.
+                // low 4 felts of the 8-felt VK hash. On the rotated custom
+                // member the high 4 ride exact member-local VK-teeth columns,
+                // and all eight are PI-pinned for the recursion fold.
                 for i in 0..4 {
                     row[PARAM_BASE + param::CUSTOM_VK_HASH_BASE + i] = program_vk_hash[i];
                 }
