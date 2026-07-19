@@ -1566,6 +1566,15 @@ fn main() {
     // Debug/dev builds keep the historical warn-and-degrade behavior unless `DREGG_REQUIRE_LEAN=1`.
     println!("cargo:rerun-if-env-changed=DREGG_REQUIRE_LEAN");
     println!("cargo:rerun-if-env-changed=PROFILE");
+    // The remaining knobs this script READS. Without these, setting one is INERT: cargo does not
+    // re-run build.rs, so the flag silently does nothing until an unrelated rebuild happens to
+    // fire. That is exactly how `DREGG_LEAN_FFI_NO_ARCHIVE_GC=1` — the escape hatch this file
+    // DOCUMENTS (see the ESCAPE HATCH note above the archive GC) for the dangling-init link
+    // failure — came to be undeclared and therefore unusable as written.
+    println!("cargo:rerun-if-env-changed=DREGG_LEAN_FFI_NO_ARCHIVE_GC");
+    println!("cargo:rerun-if-env-changed=DREGG_LEAN_SYSROOT");
+    println!("cargo:rerun-if-env-changed=DREGG_METATHEORY_DIR");
+    println!("cargo:rerun-if-env-changed=DREGG_LEANC_JOBS");
     let require_lean_env = std::env::var("DREGG_REQUIRE_LEAN").ok();
     let require_lean = matches!(
         require_lean_env.as_deref(),
