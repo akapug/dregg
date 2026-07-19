@@ -103,7 +103,9 @@ pub trait LinkStore {
                 .eq_ignore_ascii_case(custodial_pubkey_hex)
             {
                 match &latest {
-                    Some((t, _)) if *t >= r.verified_at => {}
+                    // strict `>`: on a same-second tie the LATER file-order record wins, so a
+                    // same-second rebind to a new K supersedes (the review's tie-break fix).
+                    Some((t, _)) if *t > r.verified_at => {}
                     _ => latest = Some((r.verified_at, r.root_pubkey_hex)),
                 }
             }
@@ -198,7 +200,11 @@ impl LinkStore for FileLinkStore {
             .create(true)
             .append(true)
             .open(&self.path)?;
-        writeln!(f, "{line}")
+        // ONE write_all of the whole record+newline: a single regular-file O_APPEND write is
+        // atomic, so concurrent appends (a /tg/link and /da/link racing, or the three processes)
+        // never interleave into a malformed line. (`writeln!` issued the line and the `\n` as two
+        // separate syscalls — the interleave the maturation review caught as silent record loss.)
+        f.write_all(format!("{line}\n").as_bytes())
     }
 
     fn all(&self) -> std::io::Result<Vec<LinkRecord>> {
