@@ -55,14 +55,21 @@ routes the subset through it via the `dregg_cell::program::ConstraintOracle` sea
 source; the differential gate (`exec-lean/tests/constraint_oracle_differential.rs`) pins Lean ==
 Rust across the subset.
 
-So the `admits` copy BELOW remains an honest LOCAL model at tug's SYMBOLIC (String-keyed counter)
-substrate — the substrate the game proofs are written over — NOT the deployed evaluator. Its
-agreement with the deployed `DeployedConstraint.admits` on the shared arms is what the differential
-gate checks; a full Lean refinement of this copy onto the deployed evaluator needs the
-String-counter ↔ 16-register allocation bridge (the second seam the audit named), and that remains
-NAMED, not claimed here.
+The `admits` copy BELOW is the honest LOCAL model at tug's SYMBOLIC (String-keyed counter)
+substrate — the substrate the game proofs are written over. ⚑ LARP-audit fix: the second seam
+the audit named — the String-counter ↔ 16-register allocation bridge — is now BUILT (`§4I`):
+`tugRegIdx`/`tugSlots` marshal the counter fragment into the deployed `[FieldElement;16]` + heap
+`DInput`, `heapAdmits_*_ok`/`sumEquals_conservation_deployed`/`sumGo_ok` prove the local verdict
+agrees with `DeployedConstraint.admits` on the tug pure subset, and
+`program_admits_legal_play_deployed` RE-STATES the forward refinement (`§4E`) against the deployed
+evaluator itself. So tug's action-teeth admission IS now proven-to-DeployedConstraint (FORWARD:
+legal ⇒ the deployed evaluator admits). What remains NAMED: the REVERSE (admitted ⇒ legal, =
+`airPlay`'s membership job, `§4H`) and the recursive `anyOf` win-teeth (NOT in the exported pure
+subset — the score-case win-gate reaches the referee at the SYMBOLIC layer via
+`winTooth_admits_iff_Won`, `§4F`).
 -/
 import Dregg2.Games.MultiwayTugAir
+import Dregg2.Exec.DeployedConstraint
 import Mathlib.Tactic.FinCases
 
 namespace Dregg2.Games.MultiwayTug.Prog
@@ -295,17 +302,27 @@ counter↔multiset substrate bridge — the NAMED next step, priced at months in
 theorem winGate_thresholds_match_Won :
     winCharmThreshold = 11 ∧ winGuildThreshold = 4 := ⟨rfl, rfl⟩
 
-/-- **`Won_iff_program_thresholds` (the deployed gate's numbers ARE the model win predicate).**
-The proven model win predicate `Won` (`MultiwayTug.lean`) holds IFF a score meets the deployed
-program's OWN threshold constants — the same `winCharmThreshold`/`winGuildThreshold` the emitted
-win-gate carries. This is the machine-checked tie to the PROVEN model (not a literal-vs-literal
-pin): edit `winCharmThreshold` here and this theorem REDS (the canary's Lean-side twin), because
-`Won` fixes 11/4. The remaining gap — that the deployed `SumEquals`/`FieldGte` COUNTERS equal
-`charmScore`/`geishaScore` over the `Multiset` model — is the counter↔multiset substrate bridge,
-the NAMED next step. -/
+/-- **`Won_iff_program_thresholds` (the emitted win-gate's LITERAL numbers ARE the model win
+predicate).** `Won` holds IFF a score meets the LITERAL `11`/`4` the emitted win-gate JSON carries
+(`winTooth_shape`: the gate is `AnyOf[¬(winner=who), FieldGte _ 11, FieldGte _ 4]`).
+
+⚑ LARP-audit fix: this is NO LONGER the old `Iff.rfl` self-identity (`Won ↔ Won-unfolded`, which
+survived any value edit because both sides read the same abbrev — the "reds on edit" claim was
+FALSE). The proof now ROUTES THROUGH the pin `winGate_thresholds_match_Won`
+(`winCharmThreshold = 11 ∧ winGuildThreshold = 4`); the RHS carries the FROZEN literals `11`/`4`
+(what the emit actually writes) while `Won` reads the model constants `charmWinThreshold`/
+`guildWinThreshold`. So the canary is now REAL: edit the model's `charmWinThreshold` (say to `12`)
+and `winGate_thresholds_match_Won` REDS (`winCharmThreshold = 11` becomes `12 = 11`), taking this
+theorem down with it — the emitted literal no longer certifiably matches the model threshold.
+
+The remaining gap — that the deployed `SumEquals`/`FieldGte` COUNTERS equal `charmScore`/
+`geishaScore` over the `Multiset` model — is the counter↔multiset substrate bridge, the NAMED
+next step (§5 of the boundary doc). -/
 theorem Won_iff_program_thresholds (s : GState) (p : Player) :
-    Won s p ↔
-      (winCharmThreshold ≤ charmScore s p ∨ winGuildThreshold ≤ geishaScore s p) := Iff.rfl
+    Won s p ↔ ((11 : ℕ) ≤ charmScore s p ∨ (4 : ℕ) ≤ geishaScore s p) := by
+  rw [show (11 : ℕ) = winCharmThreshold from winGate_thresholds_match_Won.1.symm,
+      show (4 : ℕ) = winGuildThreshold from winGate_thresholds_match_Won.2.symm]
+  exact Iff.rfl
 
 /-- The win-tooth for a player is exactly the `AnyOf[Not(winner=who), charm>=11, guilds>=4]`
 implication `state.rs::win_tooth` builds — pinned so the emit's win leaf is legible. -/
@@ -647,12 +664,15 @@ theorem commonAndAction_admits (o : GState) (p : Player) (a : Action)
       Bool.and_true, decide_eq_true_eq, usedCount_applyLegal o p a hleg]
     omega
 
-/-- **`program_admits_legal_play` (THE CLOSED FORWARD REFINEMENT).** The DEPLOYED `multiwayTugProgram`
-ADMITS the abstraction of every legal `applyAction` play: for a legal action `a` and a state whose
-card total is the deck's 21, the referee's accept predicate on `(α o, methodOf a, α (applyLegal o p a))`
-is `true`. The deployed counter-referee accepts exactly the legal game moves' counter effects —
-conservation, one-action-per-round, monotone scores, strict sequencing — each pinned to the PROVEN
-model invariant, not re-asserted. -/
+/-- **`program_admits_legal_play` (THE FORWARD REFINEMENT — legal ⇒ admitted).** The DEPLOYED
+`multiwayTugProgram` ADMITS the abstraction of every legal `applyAction` play: for a legal action
+`a` and a state whose card total is the deck's 21, the referee's accept predicate on
+`(α o, methodOf a, α (applyLegal o p a))` is `true`. Each admitted counter effect — conservation,
+one-action-per-round, monotone scores, strict sequencing — is pinned to the PROVEN model invariant,
+not re-asserted. ⚑ This is FORWARD ONLY (legal ⇒ admitted); it does NOT claim the converse
+(`admitted ⇒ legal`), which is impossible for the cardinality-blind counter program alone and is
+`airPlay`'s membership job (`§4H`, NAMED, gated on `MerkleSound`). `§4I` re-states this conclusion
+against the DEPLOYED evaluator (`program_admits_legal_play_deployed`). -/
 theorem program_admits_legal_play (o : GState) (p : Player) (a : Action)
     (hleg : legalB o p a = true) (hcons : (totalCards o).card = 21) :
     CellProgram.admitsMethod multiwayTugProgram (methodOf a) (abstract o)
@@ -745,6 +765,229 @@ theorem play_admitted_by_both (M : MultiwayTug.MerkleScheme) (hsound : MultiwayT
   rw [hlegal]
   exact program_admits_legal_play o p a hleg hcons
 
+/-! ## 4I. THE REFINEMENT ONTO THE DEPLOYED EVALUATOR (`Dregg2.Exec.DeployedConstraint`).
+
+The `Constraint.admits` copy above is the tug-SYMBOLIC (String-keyed counter) reading of the
+referee. This section closes the counter↔register seam the LARP-audit named: it MARSHALS a tug
+`Counters` fragment into the DEPLOYED substrate (`[FieldElement;16]` register list + one resolved
+heap value, UNSIGNED 256-bit `Nat`) and PROVES the local admission verdict agrees with
+`Dregg2.Exec.DeployedConstraint.admits` — the `@[export dregg_constraint_admits]` evaluator the
+deployed node routes through — on the tug action-teeth subset. The forward refinement
+`program_admits_legal_play` then lands ON the deployed evaluator as `program_admits_legal_play_deployed`.
+
+SCOPE (honest): the DEPLOYED PURE subset covers `sumEquals`/`writeOnce`/`strictMonotonic`/`fieldGte`
+/`heapField`-atoms — every action-case tooth. The score case's `anyOf` win-teeth are RECURSIVE and
+stay Rust-evaluated (NOT in the exported pure subset) — the named non-pure boundary; the win-gate's
+soundness reaches the referee via `winTooth_admits_iff_Won` at the SYMBOLIC layer (`§4F`). This is
+the FORWARD direction (legal ⇒ admitted); the reverse (admitted ⇒ legal) is `airPlay`'s membership
+job (NAMED, `§4H`), not claimed here. -/
+section DeployedRefinement
+open Dregg2.Exec.DeployedConstraint
+
+/-- Register allocation: tug's ≤14 register names → distinct deployed slot indices `0..13`
+(the two spare slots `14,15` are unused by tug's teeth). -/
+def tugRegIdx : String → Nat
+  | "deck" => 0 | "oop" => 1 | "a_hand" => 2 | "b_hand" => 3
+  | "a_secret" => 4 | "b_secret" => 5 | "a_board" => 6 | "b_board" => 7
+  | "round_actions" => 8 | "winner" => 9
+  | "a_charm" => 10 | "b_charm" => 11 | "a_guilds" => 12 | "b_guilds" => 13
+  | _ => 15
+
+/-- Marshal the tug counter fragment into the deployed 16-slot register list (`newRegs`/`oldRegs`),
+each slot at its `tugRegIdx`. -/
+def tugSlots (c : Counters) : List DField :=
+  [ c.reg "deck", c.reg "oop", c.reg "a_hand", c.reg "b_hand",
+    c.reg "a_secret", c.reg "b_secret", c.reg "a_board", c.reg "b_board",
+    c.reg "round_actions", c.reg "winner",
+    c.reg "a_charm", c.reg "b_charm", c.reg "a_guilds", c.reg "b_guilds", 0, 0 ]
+
+/-- Tug's heap-atom subset embeds into the deployed heap-atom vocabulary (`DHeapAtom`). -/
+def HeapAtom.toDHeap : HeapAtom → DHeapAtom
+  | .writeOnce => .writeOnce
+  | .monotonic => .monotonic
+  | .immutable => .immutable
+  | .equals v => .equals v
+  | .deltaEquals d => .deltaEquals d
+
+/-! ### Heap-atom agreement (verdict level, over arbitrary `Option` heap values — no marshalling).
+The local `HeapAtom.admits` (Bool `true`) implies the deployed `heapAdmits` verdict `.ok`. These
+hold UNCONDITIONALLY (the tug reconciliation of divergence (a) already matches the deployed
+`immutable` semantics; `writeOnce`/`monotonic`/`immutable` involve no field-lane arithmetic). -/
+
+theorem heapAdmits_writeOnce_ok {o n : Option Nat}
+    (h : HeapAtom.writeOnce.admits o n = true) :
+    heapAdmits DHeapAtom.writeOnce o n = DAdmit.ok := by
+  cases o with
+  | none => rfl
+  | some a =>
+    simp only [HeapAtom.admits, Bool.or_eq_true, decide_eq_true_eq] at h
+    simp only [heapAdmits]
+    rcases h with h0 | hn
+    · simp [h0]
+    · by_cases ha : a = 0
+      · simp [ha]
+      · simp [ha, hn]
+
+theorem heapAdmits_monotonic_ok {o n : Option Nat}
+    (h : HeapAtom.monotonic.admits o n = true) :
+    heapAdmits DHeapAtom.monotonic o n = DAdmit.ok := by
+  cases o with
+  | none => simp [HeapAtom.admits] at h
+  | some a =>
+    cases n with
+    | none => simp [HeapAtom.admits] at h
+    | some b =>
+      simp only [HeapAtom.admits, decide_eq_true_eq] at h
+      simp [heapAdmits, h]
+
+theorem heapAdmits_immutable_ok {o n : Option Nat}
+    (h : HeapAtom.immutable.admits o n = true) :
+    heapAdmits DHeapAtom.immutable o n = DAdmit.ok := by
+  cases o with
+  | none => rfl
+  | some a =>
+    simp only [HeapAtom.admits, decide_eq_true_eq] at h
+    simp [heapAdmits, h]
+
+/-! ### The deployed `sumEqualsAdmit` forward lemma (small nonneg terms, no u64-overflow ⇒ `.ok`). -/
+
+/-- The accumulator invariant for `sumEqualsAdmit.go`: if every index is in range and the running
+total (low-64 lanes) stays under `2^64` and lands on `low64 v`, the deployed sum-check admits. -/
+theorem sumGo_ok (v : DField) (regs : List DField) :
+    ∀ (l : List Nat) (acc : Nat),
+      (∀ i ∈ l, i < stateSlots) →
+      (acc + (l.map (fun i => low64 (regs.getD i 0))).sum < two64) →
+      (acc + (l.map (fun i => low64 (regs.getD i 0))).sum = low64 v) →
+      sumEqualsAdmit.go v regs l acc = DAdmit.ok := by
+  intro l
+  induction l with
+  | nil =>
+    intro acc _ _ hgoal
+    simp only [List.map_nil, List.sum_nil, add_zero] at hgoal
+    unfold sumEqualsAdmit.go
+    rw [if_pos hgoal]
+  | cons i rest ih =>
+    intro acc hidx hbound hgoal
+    have hi : i < stateSlots := hidx i (by simp)
+    simp only [List.map_cons, List.sum_cons] at hbound hgoal
+    unfold sumEqualsAdmit.go
+    rw [if_neg (by omega : ¬ i ≥ stateSlots)]
+    simp only
+    rw [if_neg (by omega : ¬ acc + low64 (regs.getD i 0) ≥ two64)]
+    apply ih (acc + low64 (regs.getD i 0))
+    · intro j hj; exact hidx j (by simp [hj])
+    · omega
+    · omega
+
+/-- The marshalled deployed input for one tug tooth on a `(old,new)` counter transition (registers
+via `tugSlots`, the resolved heap value for a `heapField` tooth's key; `oldPresent` — tug states
+are present). -/
+def mkDInput (old new : Counters) : Constraint → DInput
+  | .heapField k _ =>
+      { oldPresent := true, newNonce := 0, oldRegs := tugSlots old, newRegs := tugSlots new,
+        heapOld := old.heap k, heapNew := new.heap k }
+  | _ =>
+      { oldPresent := true, newNonce := 0, oldRegs := tugSlots old, newRegs := tugSlots new,
+        heapOld := none, heapNew := none }
+
+/-- The deployed constraint for one tug tooth (the PURE subset; `anyOf` — the named non-pure
+boundary — maps to an unused placeholder, never hit by the pure-subset teeth this section proves). -/
+def Constraint.toDC : Constraint → DConstraint
+  | .sumEquals regs v => .sumEquals (regs.map tugRegIdx) v
+  | .writeOnce r => .writeOnce (tugRegIdx r)
+  | .strictMonotonic r => .strictMonotonic (tugRegIdx r)
+  | .fieldGte r v => .fieldGte (tugRegIdx r) v
+  | .heapField _ atom => .heapField atom.toDHeap
+  | .anyOf _ => .fieldEquals 15 0
+
+/-- The conservation-tooth forward bridge: with the eight zones summing to 21, the deployed
+`SumEquals` evaluator admits (`.ok`). Per-term smallness follows from the sum (each zone ≤ 21 <
+`2^64`, so the low-64 lane is the identity and no `checked_add` overflow trips). -/
+theorem sumEquals_conservation_deployed (new : Counters)
+    (hsum : (conservationRegs.map new.reg).sum = 21) :
+    admits (.sumEquals (conservationRegs.map tugRegIdx) 21)
+        { oldPresent := true, newNonce := 0, oldRegs := tugSlots new, newRegs := tugSlots new,
+          heapOld := none, heapNew := none } = DAdmit.ok := by
+  have hidxs : conservationRegs.map tugRegIdx = [0,1,2,3,4,5,6,7] := by decide
+  simp only [conservationRegs, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil,
+    add_zero] at hsum
+  have h64 : (21 : Nat) < two64 := by decide
+  have small : ∀ x : Nat, x ≤ 21 → low64 x = x := fun x hx => Nat.mod_eq_of_lt (by omega)
+  have hmap : ([0,1,2,3,4,5,6,7].map (fun i => low64 ((tugSlots new).getD i 0))).sum = 21 := by
+    show low64 ((tugSlots new).getD 0 0) + (low64 ((tugSlots new).getD 1 0)
+      + (low64 ((tugSlots new).getD 2 0) + (low64 ((tugSlots new).getD 3 0)
+      + (low64 ((tugSlots new).getD 4 0) + (low64 ((tugSlots new).getD 5 0)
+      + (low64 ((tugSlots new).getD 6 0) + (low64 ((tugSlots new).getD 7 0) + 0))))))) = 21
+    show low64 (new.reg "deck") + (low64 (new.reg "oop") + (low64 (new.reg "a_hand")
+      + (low64 (new.reg "b_hand") + (low64 (new.reg "a_secret") + (low64 (new.reg "b_secret")
+      + (low64 (new.reg "a_board") + (low64 (new.reg "b_board") + 0))))))) = 21
+    rw [small _ (by omega), small _ (by omega), small _ (by omega), small _ (by omega),
+        small _ (by omega), small _ (by omega), small _ (by omega), small _ (by omega)]
+    omega
+  simp only [admits, hidxs, sumEqualsAdmit]
+  apply sumGo_ok
+  · decide
+  · rw [Nat.zero_add, hmap]; exact h64
+  · rw [Nat.zero_add, hmap, low64]; decide
+
+/-- **`program_admits_legal_play_deployed` — the FORWARD refinement lands on the DEPLOYED
+evaluator.** For a legal action play, EVERY tooth of the deployed action case evaluates to
+`Dregg2.Exec.DeployedConstraint.admits`'s `.ok` verdict on the marshalled register/heap input —
+i.e. the `@[export dregg_constraint_admits]` evaluator the deployed node routes through ADMITS
+each action-case constraint of the abstraction transition. This is `program_admits_legal_play`
+(`§4E`) with its conclusion RE-STATED against the deployed evaluator via the counter↔register
+marshalling. (`anyOf` win-teeth are the named non-pure boundary — recursive, Rust-evaluated — and
+appear only in the score case, not in the action case; FORWARD only, the reverse is `airPlay`.) -/
+theorem program_admits_legal_play_deployed (o : GState) (p : Player) (a : Action)
+    (hleg : legalB o p a = true) (hcons : (totalCards o).card = 21) :
+    ∀ c ∈ (commonTeeth ++ actionExtra),
+      admits (Constraint.toDC c)
+        (mkDInput (abstract o) (abstract (applyLegal o p a)) c) = DAdmit.ok := by
+  have hcard : (totalCards (applyLegal o p a)).card = 21 := by
+    have : totalCards (applyLegal o p a) = totalCards o := by
+      rw [← MultiwayTug.applyAction_of_legal o p a hleg]; exact MultiwayTug.conservation o p a
+    rw [this]; exact hcons
+  intro c hc
+  rw [commonTeeth, actionExtra] at hc
+  simp only [List.cons_append, List.mem_cons, List.mem_append,
+    List.not_mem_nil, or_false] at hc
+  rcases hc with rfl | (((hflag | hscore) | rfl) | rfl)
+  · -- conservation head
+    have hsum : (conservationRegs.map (abstract (applyLegal o p a)).reg).sum = 21 := by
+      rw [conservationSum_eq]; exact hcard
+    show admits (Constraint.toDC (Constraint.sumEquals conservationRegs conservationValue)) _ = _
+    rw [conservationValue_eq]
+    exact sumEquals_conservation_deployed _ hsum
+  · -- flag write-once teeth
+    rw [List.mem_map] at hflag
+    obtain ⟨nm, hnm, rfl⟩ := hflag
+    rw [flagNames, List.mem_flatMap] at hnm
+    obtain ⟨p', -, hnm⟩ := hnm
+    rw [List.mem_map] at hnm
+    obtain ⟨k', -, rfl⟩ := hnm
+    simp only [Constraint.toDC, HeapAtom.toDHeap, mkDInput, admits, absHeap_flag]
+    exact heapAdmits_writeOnce_ok (flag_writeOnce_admits o p a hleg p' k')
+  · -- score monotone teeth
+    rw [List.mem_map] at hscore
+    obtain ⟨nm, hnm, rfl⟩ := hscore
+    rw [scoreNames, List.mem_flatMap] at hnm
+    obtain ⟨g, -, hnm⟩ := hnm
+    rw [List.mem_map] at hnm
+    obtain ⟨p', -, rfl⟩ := hnm
+    simp only [Constraint.toDC, HeapAtom.toDHeap, mkDInput, admits, absHeap_score]
+    exact heapAdmits_monotonic_ok (score_monotonic_admits o p a hleg g p')
+  · -- sentinel frozen
+    simp [Constraint.toDC, HeapAtom.toDHeap, mkDInput, admits, absHeap_sentinel, heapAdmits]
+  · -- round_actions strict sequencing
+    have hlt : (abstract o).reg "round_actions"
+        < (abstract (applyLegal o p a)).reg "round_actions" := by
+      rw [absReg_round, absReg_round, usedCount_applyLegal o p a hleg]; omega
+    show (if (abstract o).reg "round_actions" < (abstract (applyLegal o p a)).reg "round_actions"
+      then DAdmit.ok else DAdmit.violated) = DAdmit.ok
+    rw [if_pos hlt]
+
+end DeployedRefinement
+
 /-! ## 5. `#guard` smoke — the emit runs and is well-formed. -/
 
 -- The program is the 6-case shape.
@@ -783,5 +1026,12 @@ theorem play_admitted_by_both (M : MultiwayTug.MerkleScheme) (hsound : MultiwayT
 #assert_axioms genesis_admits_first
 #assert_axioms genesis_restaple_refused
 #assert_axioms play_admitted_by_both
+-- §4I: the refinement onto the DEPLOYED evaluator (`Dregg2.Exec.DeployedConstraint`).
+#assert_axioms heapAdmits_writeOnce_ok
+#assert_axioms heapAdmits_monotonic_ok
+#assert_axioms heapAdmits_immutable_ok
+#assert_axioms sumGo_ok
+#assert_axioms sumEquals_conservation_deployed
+#assert_axioms program_admits_legal_play_deployed
 
 end Dregg2.Games.MultiwayTug.Prog

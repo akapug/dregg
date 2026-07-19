@@ -43,7 +43,9 @@ construction (edit a rule here, re-emit, and the deployed game changes: the cana
    model-legal run IS admitted — while eight named attacks (dupe, keyless way, staple,
    tomb move, dead light, fake flee, relic teleport, genesis replay) are REFUSED.
    Tug could not do this (its model lived on multisets, a different substrate); the
-   reimagined dungeon was AUTHORED so the refinement is direct.
+   reimagined dungeon was AUTHORED so the refinement is direct. ⚑ The way-flip inversion is
+   now proven for ALL THREE locked ways (`way_flip_exhibits_key` ⇒ `way2/3/4_flip_exhibits_key`),
+   closing the audit's "ways 3/4 are Rust-driven" gap.
 
 ## Honest scope
 
@@ -68,6 +70,45 @@ construction (edit a rule here, re-emit, and the deployed game changes: the cana
   (each loot flips EXACTLY the looted relic's code) is model-level (`Dungeon.lean`,
   where counters are *definitions* over custody) and engine-driven — the constraint
   vocabulary cannot count over heap keys. Named seam, inherited from the substrate.
+
+## ⚑ DeployedConstraint refinement — why tug lands and the descent is BOUNDED (LARP-audit fix #4/#5)
+
+The tug game's action teeth ALL live in `Dregg2.Exec.DeployedConstraint`'s exported PURE subset
+(`sumEquals`/`writeOnce`/`strictMonotonic`/`fieldGte`/`heapField`-atoms) over NONNEG counters, so
+tug's forward refinement was RE-STATED against the deployed evaluator itself
+(`MultiwayTugProgram §4I` `program_admits_legal_play_deployed`). The descent is TWO honest steps
+short of that, and this is a structural fact, not an omission:
+
+  1. **Vocabulary.** The descent's teeth use `affineLe` (capacity), `allowedTransitions`
+     (fate/way), `inRangeTwoSided` (zone ranges) and `fieldDelta` (posted prices) — NONE of which
+     are in `DeployedConstraint`'s exported pure subset (which is context-free/witness-free field &
+     heap atoms). Only `admitted_verb_conserves` (`sumEquals`) and `admitted_verb_pays`
+     (`strictMonotonic`+`fieldLte`) sit inside the pure subset; capacity/alive/way-flip do not.
+  2. **Signedness.** The inversions quantify over ARBITRARY `Exec.Value`s, where a scalar is a
+     SIGNED unbounded `Int`. `DeployedConstraint` is UNSIGNED 256-bit `Nat` — the EXACT divergence
+     the audit flagged. On a negative attacker scalar the two evaluators genuinely DISAGREE, so an
+     arbitrary-`Value` inversion CANNOT be faithfully re-stated over `DeployedConstraint`. The two
+     agree only on the NONNEG `encode` image — i.e. via the weld below, not the inversions.
+
+  So the honest descent scope is: the inversions are proven over the signed-`Int` `Exec` MODEL
+  (all three ways now included); a faithful `DeployedConstraint` refinement would hold only on the
+  nonneg `encode` image and only for the pure-subset teeth (conserves/pays), routed through the
+  ∀-weld. That is the NAMED remainder — it needs the ∀-weld (below) plus a nonneg `Int→Nat`
+  register marshalling, not a new substrate.
+
+## ⚑ The model↔program WELD — DRIVEN status, honestly (LARP-audit fix #5)
+
+The weld `model-legal step ⟹ program-admitted` (the FORWARD refinement direction) is DRIVEN, not
+yet a ∀-theorem: `programAdmitsRun crownedRun = true` checks it for ONE legal run (genesis + 17
+verbs), and nine attack `#guard`s check named forgeries are refused. The GENERAL ∀-weld
+(`∀ s m s', step s m = some s' → RecordProgram.admits dungeonExec (moveIdx m) (encode s)
+(encode s') = true`) is NAMED, not proven here: it is a per-move, tooth-by-tooth discharge of every
+matching verb case + `SlotChanged` rider over the SHARED `Exec` substrate (large — ~5 moves × the
+verb+rider teeth, with custody-`countP` conservation/ratchet lemmas — but tractable, and NOT a new
+substrate). Several of its consequences ARE already ∀-theorems in the REVERSE direction (the
+inversions `admitted_verb_*`, `banked_tomb_refuses`, `dead_light_refuses`, `way{2,3,4}_flip_*`),
+which is why the driven attacks each correspond to a proven inversion. What remains driven is the
+forward completeness (legal ⇒ admitted) beyond the single crowned run.
 -/
 import Dregg2.Games.Dungeon
 import Dregg2.Exec.Program
@@ -538,45 +579,48 @@ theorem dead_light_refuses {m : Nat}
     omega
 
 open Dregg2.Exec in
-/-- **Keys are exercised capabilities — deployed**: any admitted VERB turn that flips
-`way_2` carries the lawful `0→1` transition AND exhibits key-relic 1 CARRIED in the
-post-state. (The rider guard makes this METHOD-INDEPENDENT across the verb set: there
-is no verb from which a keyless way-flip is admissible.) -/
-theorem way2_flip_exhibits_key {m : Nat}
-    (hm : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5)
+/-- **Keys are exercised capabilities — deployed, ALL THREE WAYS.** Any admitted VERB turn that
+flips `way_w` (`w ∈ {2,3,4}`) carries the lawful `0→1` transition AND exhibits its carried key-relic
+`keyFor w = w−1` CARRIED in the post-state. The rider guard makes this METHOD-INDEPENDENT across the
+verb set — there is no verb from which a keyless way-flip is admissible. ⚑ This GENERALIZES the
+former way-2-only inversion: ways 3 and 4 (`way3_flip_exhibits_key`, `way4_flip_exhibits_key` below)
+are now proven, not Rust-driven — the audit's "ways 3/4 are Rust-driven" gap is closed. -/
+theorem way_flip_exhibits_key (w : Nat) (hw : w = 2 ∨ w = 3 ∨ w = 4)
+    {m : Nat} (hm : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5)
     {o n : Value} (h : RecordProgram.admits dungeonExec m o n = true)
-    (hflip : (o.scalar (wayName 2) == n.scalar (wayName 2)) = false) :
-    n.scalar (relicName 1) = some (CARRIED : Int)
-      ∧ o.scalar (wayName 2) = some 0 ∧ n.scalar (wayName 2) = some 1 := by
-  have hmatch : (wayRider 2).toExec.guard.matches m o n = true := by
+    (hflip : (o.scalar (wayName w) == n.scalar (wayName w)) = false) :
+    n.scalar (relicName (keyFor w)) = some (CARRIED : Int)
+      ∧ o.scalar (wayName w) = some 0 ∧ n.scalar (wayName w) = some 1 := by
+  have hmem : (wayRider w).toExec ∈ programCases.map Case.toExec := by
+    rcases hw with rfl | rfl | rfl <;> exact List.mem_map_of_mem (by simp [programCases])
+  have hmatch : (wayRider w).toExec.guard.matches m o n = true := by
     rcases hm with rfl | rfl | rfl | rfl | rfl <;>
       simp [wayRider, Case.toExec, Guard.toExec, verbs, methodIdx,
             TransitionGuard.matches, Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, hflip]
   have hall := admits_cases_mem (tcs := programCases.map Case.toExec) h
-    (tc := (wayRider 2).toExec)
-    (List.mem_map_of_mem (by simp [programCases])) hmatch
-  have hkey := hall ((Constraint.heapField (.named (relicName 1)) (.equals CARRIED)).toExec)
-    (List.mem_map_of_mem (by simp [wayRider, List.mem_append, keyFor]))
-  have htrans := hall ((Constraint.allowedTransitions (wayName 2) [(0, 1)]).toExec)
+    (tc := (wayRider w).toExec) hmem hmatch
+  have hkey := hall ((Constraint.heapField (.named (relicName (keyFor w))) (.equals CARRIED)).toExec)
     (List.mem_map_of_mem (by simp [wayRider, List.mem_append]))
-  have hkey' : evalSimple (.fieldEquals (relicName 1) (CARRIED : Int)) o n = true := hkey
+  have htrans := hall ((Constraint.allowedTransitions (wayName w) [(0, 1)]).toExec)
+    (List.mem_map_of_mem (by simp [wayRider, List.mem_append]))
+  have hkey' : evalSimple (.fieldEquals (relicName (keyFor w)) (CARRIED : Int)) o n = true := hkey
   refine ⟨?_, ?_, ?_⟩
   · have := hkey'
     simp only [evalSimple] at this
-    cases hk : n.scalar (relicName 1) with
+    cases hk : n.scalar (relicName (keyFor w)) with
     | none => rw [hk] at this; cases this
     | some k =>
       rw [hk] at this
       rw [show k = (CARRIED : Int) from by simpa using this]
   all_goals
     (have hT : evalConstraint
-        (.allowedTransitions (wayName 2) [((0 : Int), (1 : Int))]) o n = true := htrans
-     cases ha : o.scalar (wayName 2) with
+        (.allowedTransitions (wayName w) [((0 : Int), (1 : Int))]) o n = true := htrans
+     cases ha : o.scalar (wayName w) with
      | none =>
        simp only [evalConstraint, ha] at hT
        exact absurd hT (by decide)
      | some a =>
-       cases hb : n.scalar (wayName 2) with
+       cases hb : n.scalar (wayName w) with
        | none =>
          simp only [evalConstraint, ha, hb] at hT
          exact absurd hT (by decide)
@@ -587,6 +631,36 @@ theorem way2_flip_exhibits_key {m : Nat}
          first
            | rw [← h1]
            | rw [← h2])
+
+open Dregg2.Exec in
+/-- Way 2 (`keyFor 2 = 1`) — the original inversion, now a corollary of the general lemma. -/
+theorem way2_flip_exhibits_key {m : Nat}
+    (hm : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5)
+    {o n : Value} (h : RecordProgram.admits dungeonExec m o n = true)
+    (hflip : (o.scalar (wayName 2) == n.scalar (wayName 2)) = false) :
+    n.scalar (relicName 1) = some (CARRIED : Int)
+      ∧ o.scalar (wayName 2) = some 0 ∧ n.scalar (wayName 2) = some 1 :=
+  way_flip_exhibits_key 2 (Or.inl rfl) hm h hflip
+
+open Dregg2.Exec in
+/-- Way 3 (`keyFor 3 = 2`) — proven, not Rust-driven. -/
+theorem way3_flip_exhibits_key {m : Nat}
+    (hm : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5)
+    {o n : Value} (h : RecordProgram.admits dungeonExec m o n = true)
+    (hflip : (o.scalar (wayName 3) == n.scalar (wayName 3)) = false) :
+    n.scalar (relicName 2) = some (CARRIED : Int)
+      ∧ o.scalar (wayName 3) = some 0 ∧ n.scalar (wayName 3) = some 1 :=
+  way_flip_exhibits_key 3 (Or.inr (Or.inl rfl)) hm h hflip
+
+open Dregg2.Exec in
+/-- Way 4 (`keyFor 4 = 3`) — proven, not Rust-driven. -/
+theorem way4_flip_exhibits_key {m : Nat}
+    (hm : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5)
+    {o n : Value} (h : RecordProgram.admits dungeonExec m o n = true)
+    (hflip : (o.scalar (wayName 4) == n.scalar (wayName 4)) = false) :
+    n.scalar (relicName 3) = some (CARRIED : Int)
+      ∧ o.scalar (wayName 4) = some 0 ∧ n.scalar (wayName 4) = some 1 :=
+  way_flip_exhibits_key 4 (Or.inr (Or.inr rfl)) hm h hflip
 
 open Dregg2.Exec in
 /-- **Method-default-deny survives the riders**: a method outside the six verbs is
@@ -668,7 +742,9 @@ def setF (v : Value) (f : String) (x : Int) : Value :=
 
 /-! ### The weld, DRIVEN (`#guard` — kernel-evaluated, no axioms):
 the model-legal crowned run is admitted END TO END by the deployed program object,
-and eight named attacks are refused. -/
+and the named attacks are refused. ⚑ This is the FORWARD weld for ONE run; the general
+∀-weld (every legal step admitted) is the NAMED remainder — see the module header's WELD note.
+The reverse direction (admitted ⇒ the named laws) IS ∀-proven by the inversions in §4. -/
 
 -- ⚑ THE CROWNED RUN IS ADMITTED (genesis + all 17 verbs, each step model-legal AND
 -- program-admitted on the same encoded transition).
@@ -824,7 +900,10 @@ def emitJson (p : CellProgram) : String :=
 #assert_axioms admitted_verb_alive
 #assert_axioms banked_tomb_refuses
 #assert_axioms dead_light_refuses
+#assert_axioms way_flip_exhibits_key
 #assert_axioms way2_flip_exhibits_key
+#assert_axioms way3_flip_exhibits_key
+#assert_axioms way4_flip_exhibits_key
 #assert_axioms unknown_method_refused
 
 end Dregg2.Games.Dungeon.Prog
