@@ -2648,11 +2648,12 @@ fn cap_open_descriptor_json_by_key(key: &str) -> Result<&'static str, SdkError> 
         .ok_or_else(|| SdkError::InvalidWitness(format!("{key} not in staged rotated registry")))
 }
 
-/// The cap-open leg's `vk_hash` for a given registry key: the blake3 fingerprint of the committed
-/// cap-open descriptor JSON (the SAME fingerprint `verify_effect_vm_rotated_with_cutover` re-derives
-/// from the uniquely accepting cap-open cohort descriptor). Distinct per descriptor, so the attached
-/// vk_hash matches the actual cap-open descriptor (attenuate vs transfer base).
+/// The BARE (1-felt V3) cap-open leg's `vk_hash` for a given registry key: the blake3 fingerprint
+/// of the committed bare cap-open descriptor JSON. TEST-ONLY at HEAD — the chain routes via
+/// `cap_open_wide_vk_hash_by_key`, and the wide-only verifiers reject bare legs; the reject-tooth
+/// tests mint narrow foil legs with this pin to assert exactly that rejection.
 #[cfg(feature = "prover")]
+#[cfg_attr(not(test), allow(dead_code))]
 fn cap_open_vk_hash_by_key(key: &str) -> Result<[u8; 32], SdkError> {
     let json = cap_open_descriptor_json_by_key(key)?;
     Ok(*blake3::hash(json.as_bytes()).as_bytes())
@@ -2705,28 +2706,17 @@ fn wide_umem_weld_vk_hash_by_key(key: &str) -> Result<[u8; 32], SdkError> {
 
 /// THE WIDE CAP-OPEN FLAG-DAY: does this cap-open effective key have a PROVEN wide twin in
 /// `WIDE_REGISTRY_STAGED_TSV` (the Lean `v3RegistryCapOpenWide` authority crown + the §10
-/// `v3RegistryCapOpenWriteWide` WRITE tail)? True for the 8 AUTHORITY-CROWN members
-/// (`delegate/introduce/grantCap/revoke/refresh/revokeCapability CapOpen` + `transferCapOpenEff` +
-/// `attenuateCapOpenEff`) AND the 10 WRITE-bearing tail members (`…WriteCapOpenVmDescriptor2R24` +
-/// `spawnCapOpen` + `exerciseCapOpen`) — every cap-open host (819) is a gated host wide-wrapped by the
-/// SAME proven `wideAppend host bb (bb+51)`, geometry-identical to the crown (the cap-tree write is a
-/// `map_op`, not a column, so the host width is unchanged). FALSE only for the turn-bound
-/// (`transferCapOpenTB`) — its `effCapOpenV3TB` host carries TWO extra turn-identity columns at a
-/// DIFFERENT (821-col) width, so `append_wide_carriers_cap_open`'s `CAP_OPEN_WIDTH` lift does not accept
-/// it; it has no proven wide twin yet (the named TB residual) and stays on the 1-felt route. Membership
-/// is read STRAIGHT off the proven wide registry, so a key is wide iff its Lean wide twin exists.
-// Light-client VERIFY path: called unconditionally by `verify_effect_vm_rotated_inner`
-// (pure — reads only the always-available `dregg-circuit` `WIDE_REGISTRY_STAGED_TSV`),
-// so it must not be gated behind `prover` or the kernel-free client build (sdk-py light)
-// fails to compile the verifier.
+/// `v3RegistryCapOpenWriteWide` WRITE tail)? At HEAD this is TRUE for EVERY live cap-open key —
+/// the 8 AUTHORITY-CROWN members, the 10 WRITE-bearing tail members, AND the turn-bound
+/// `transferCapOpenTB` (its wide twin is the `wideAppend` at the transfer face emitted by
+/// `EmitWideRegistryProbe`; the TB branch of `build_effect_vm_cap_open_leg` lands the 8-felt
+/// carriers at the `CAP_OPEN_TB_WIDTH + avail_pad` host width). Membership is read STRAIGHT off
+/// the proven wide registry, so a key is wide iff its Lean wide twin exists — NO carve-outs
+/// (the historical `contains("TB") → false` exclusion kept the 1-felt bare-V3 verify fallback
+/// alive after the TB wide twin landed; it is retired).
+#[cfg_attr(not(test), allow(dead_code))] // the verify fallback it filtered is retired; tests pin it
 fn cap_open_key_has_wide_twin(key: &str) -> bool {
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
-    // The TB family has no proven wide twin (its host width differs); exclude it explicitly. Every
-    // OTHER cap-open key (crown AND the §10 WRITE tail) is wide iff it appears in the proven wide
-    // registry — read membership straight off the TSV (the Lean source of truth).
-    if key.contains("TB") {
-        return false;
-    }
     WIDE_REGISTRY_STAGED_TSV
         .lines()
         .any(|line| line.split('\t').next() == Some(key))
@@ -2760,18 +2750,19 @@ fn cap_open_wide_vk_hash_by_key(key: &str) -> Result<[u8; 32], SdkError> {
 
 /// The ATTENUATE cap-open leg's `vk_hash` (the blake3 fingerprint of its descriptor JSON).
 #[cfg(feature = "prover")]
-#[cfg_attr(not(test), allow(dead_code))] // test-only; the chain routes via `cap_open_vk_hash_by_key`
+#[cfg_attr(not(test), allow(dead_code))] // test-only; the chain routes via `cap_open_wide_vk_hash_by_key`
 fn rotated_cap_open_vk_hash() -> Result<[u8; 32], SdkError> {
     // The attenuate leg goes WIDE (production route), so its vk_hash is the wide descriptor fingerprint.
     cap_open_wide_vk_hash_by_key("attenuateCapOpenEffVmDescriptor2R24")
 }
 
-/// The TRANSFER cap-open leg's `vk_hash` (#225) — the blake3 fingerprint of the LIVE TURN-BOUND
-/// `transferCapOpenTBVmDescriptor2R24` JSON (the genuine-submask descriptor PLUS the turn-identity weld).
+/// The TRANSFER cap-open leg's `vk_hash` (#225) — the blake3 fingerprint of the WIDE TURN-BOUND
+/// `transferCapOpenTBVmDescriptor2R24` JSON (the genuine-submask descriptor PLUS the turn-identity
+/// weld, wide 8-felt carriers appended). Production always goes wide for TB; mirror it.
 #[cfg(feature = "prover")]
-#[cfg_attr(not(test), allow(dead_code))] // test-only; the chain routes via `cap_open_vk_hash_by_key`
+#[cfg_attr(not(test), allow(dead_code))] // test-only; the chain routes via `cap_open_wide_vk_hash_by_key`
 fn rotated_transfer_cap_open_vk_hash() -> Result<[u8; 32], SdkError> {
-    cap_open_vk_hash_by_key("transferCapOpenTBVmDescriptor2R24")
+    cap_open_wide_vk_hash_by_key("transferCapOpenTBVmDescriptor2R24")
 }
 
 /// **`prove_effect_vm_cap_open_transfer`** (residual (b) — the CROSS-VAT Transfer-via-granted-cap
@@ -2822,6 +2813,8 @@ fn prove_effect_vm_cap_open_transfer(
     };
     // The test helper publishes the OWNER arm (no explicit cross-vat identity); the verifier anchors
     // the three turn-identity PIs to the trusted turn in the deployment negative test.
+    // The TB key has a proven wide twin, so production always goes wide for it (the narrow 1-felt
+    // leg is rejected by the wide-dodge tooth). Mirror production: go WIDE.
     prove_effect_vm_cap_open(
         initial_state,
         effects,
@@ -2830,7 +2823,7 @@ fn prove_effect_vm_cap_open_transfer(
         cap,
         &route,
         None,
-        false,
+        true,
     )
 }
 
@@ -4026,6 +4019,17 @@ fn prove_cohort_run_chain(
             // cap path proves the TB Transfer route — see `node::turn_proving`'s wide commit anchors).
             let effective_key = cap_open_effective_key(&route, cap);
             let go_wide = cap_open_wide_descriptor_json_by_key(effective_key).is_ok();
+            // FAIL CLOSED: every deployed cap-open key has a proven wide twin; a key without one
+            // cannot mint a leg the wide-only verifiers (`verify_effect_vm_rotated_with_cutover`,
+            // the executor's `verify_one_cohort_run`) would accept, so refuse LOUDLY here rather
+            // than minting an unverifiable 1-felt leg.
+            if !go_wide {
+                return Err(SdkError::InvalidWitness(format!(
+                    "cap-open key {effective_key} has no wide twin in WIDE_REGISTRY_STAGED_TSV — \
+                     cap-open legs mint WIDE only (the 1-felt bare-V3 route is retired); emit the \
+                     wide member first"
+                )));
+            }
             // DOMAIN-2 UMEM WELD (the producer seam this closes). When the caller threaded the turn's
             // CAPS-domain universal-memory projection diff AND this cap-open key has a Lean-emitted
             // welded twin, prove the WIDE cap-open+umem WELDED descriptor (the membership crown + the
@@ -4071,14 +4075,11 @@ fn prove_cohort_run_chain(
                         "cap-open rotated proof serialize failed (run {k}): {e}"
                     ))
                 })?;
-                // The vk_hash MUST pin the EFFECTIVE descriptor that was PROVEN (wide when go_wide, else
-                // the 1-felt V3 cap-open) — the proof is descriptor-bound, and the wide-cutover verifier
-                // re-pins blake3(json) against it.
-                let vk_hash = if go_wide {
-                    cap_open_wide_vk_hash_by_key(effective_key)?
-                } else {
-                    cap_open_vk_hash_by_key(effective_key)?
-                };
+                // The vk_hash MUST pin the EFFECTIVE descriptor that was PROVEN — the proof is
+                // descriptor-bound, and the wide-cutover verifier re-pins blake3(json) against it.
+                // Every leg here is WIDE (`go_wide` was required above); the 1-felt V3 vk pin is
+                // retired with the verifier's bare fallback.
+                let vk_hash = cap_open_wide_vk_hash_by_key(effective_key)?;
                 (proof_bytes, dpis, vk_hash)
             }
         } else {
@@ -4415,24 +4416,22 @@ fn verify_effect_vm_rotated_inner(
     use dregg_circuit::descriptor_ir2::{
         DreggStarkConfig, Ir2BatchProof, parse_vm_descriptor2, verify_vm_descriptor2,
     };
-    // THE WIDE FLAG-DAY: the light-client verifier iterates the WIDE registry FIRST (the 8-felt
+    // THE WIDE FLAG-DAY: the light-client verifier iterates the WIDE registry (the 8-felt
     // ~124-bit commit descriptors, the verified Lean `v3RegistryCapOpenWide`). The producer
-    // (`prove_cohort_run_chain`) now emits wide legs for every NORMAL (owner-authorized) run, so the
+    // (`prove_cohort_run_chain`) emits wide legs for every NORMAL (owner-authorized) run, so the
     // uniquely-accepting descriptor is the wide member and the leg's 8-felt commit PIs (the LAST 16)
     // are what `verify_full_turn_bound` binds — the ~31-bit waist is GONE for the normal core.
     //
-    // THE NAMED RESIDUAL (cap-open tail): the AUTHORITY crown AND the §10 WRITE-bearing cap-open tail
-    // (`…WriteCapOpen…` + `spawnCapOpen` + `exerciseCapOpen`) now have PROVEN wide twins in
-    // `WIDE_REGISTRY_STAGED_TSV`, so an honest capability-gated WRITE turn verifies under its WIDE
-    // member (the full ~124-bit commit). To keep an HONEST leg with NO wide twin verifying (the
-    // turn-bound `transferCapOpenTB`, whose 821-col host has no wide twin yet), we FALL BACK to the
-    // 1-felt `V3_STAGED_REGISTRY_TSV` when no wide member accepts — but ONLY for cap-open keys that
-    // genuinely LACK a wide twin (the fallback filter below). A cap-open key that HAS a wide twin is
-    // filtered OUT of the V3 fallback, so a narrow 1-felt write-cap leg is REJECTED (the reject tooth).
-    // `verify_full_turn_bound` discriminates per-leg by the accepting registry. A forged plain-cap
-    // descriptor still hits the AUTHORITY FLOOR below.
+    // THE CAP-OPEN TAIL IS CLOSED: the AUTHORITY crown, the §10 WRITE-bearing cap-open tail
+    // (`…WriteCapOpen…` + `spawnCapOpen` + `exerciseCapOpen`), AND the turn-bound
+    // `transferCapOpenTB` all have PROVEN wide twins in `WIDE_REGISTRY_STAGED_TSV`, and the
+    // producer mints every cap-open leg WIDE (`build_effect_vm_cap_open_leg`'s `go_wide` is a
+    // straight wide-registry lookup). The historical 1-felt `V3_STAGED_REGISTRY_TSV` fallback
+    // (kept while TB lacked a wide twin) is RETIRED: a 1-felt leg — normal OR cap-open — verifies
+    // under NO accepted registry here and is REJECTED, matching the executor's wide-only
+    // `verify_one_cohort_run`. A forged plain-cap descriptor still hits the AUTHORITY FLOOR below.
     use dregg_circuit::effect_vm_descriptors::{
-        V3_STAGED_REGISTRY_TSV, WIDE_REGISTRY_STAGED_TSV, WIDE_UMEM_WELD_REGISTRY_TSV,
+        WIDE_REGISTRY_STAGED_TSV, WIDE_UMEM_WELD_REGISTRY_TSV,
     };
 
     let proof: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(proof_bytes)
@@ -4464,13 +4463,10 @@ fn verify_effect_vm_rotated_inner(
         bound
     };
 
-    // WIDE first (the normal core). If no wide member accepts, fall back to V3 — but ONLY accept a
-    // CAP-OPEN member there (the named residual tail). This is the load-bearing reject tooth: a
-    // malicious producer cannot present a 1-felt V3 leg for a NORMAL effect (e.g. a 1-felt transfer)
-    // to dodge the wide ~124-bit commitment — a plain V3 transfer/normal descriptor is NOT a cap-open
-    // member, so it is FILTERED OUT of the fallback and the proof verifies under NO accepted
-    // descriptor ⇒ REJECTED. Only genuine cap-open legs (the wide-twin-pending residual) survive the
-    // fallback, and they bind their 1-felt commit (the residual waist for cap-gated turns only).
+    // WIDE + WELDED are the ONLY accepted registries. This is the load-bearing reject tooth: a
+    // malicious producer cannot present a 1-felt V3 leg for ANY effect (normal or cap-open) to
+    // dodge the wide ~124-bit commitment — the proof verifies under NO accepted descriptor ⇒
+    // REJECTED, forcing every leg onto the 8-felt wide route.
     let mut bound = collect_bound(WIDE_REGISTRY_STAGED_TSV);
     // THE umem VK EPOCH (G4): the Lean-emitted WIDE+UMEM WELDED registry is the deployed DEFAULT
     // producer's accepted descriptor set. A welded proof (`prove_wide_umem_welded_staged`) binds the
@@ -4483,18 +4479,6 @@ fn verify_effect_vm_rotated_inner(
     // REQUIRES the welded twin for a single-cohort sovereign turn (`verify_one_cohort_run`'s
     // `require_welded`), so a committed turn carries the umem boundary on the wire.
     bound.extend(collect_bound(WIDE_UMEM_WELD_REGISTRY_TSV));
-    if bound.is_empty() {
-        bound = collect_bound(V3_STAGED_REGISTRY_TSV)
-            .into_iter()
-            // A V3 cap-open member survives the fallback ONLY if it has NO proven wide twin (the
-            // genuine residual — today the turn-bound `transferCapOpenTB`). A cap-open key that DOES
-            // have a wide twin (the §10 WRITE tail + the authority crown) is FILTERED OUT here: its
-            // honest leg verifies under the WIDE member above, so a 1-felt V3 leg for it is a
-            // wide-dodge and is REJECTED (the reject tooth — a narrow write-cap leg binds no accepted
-            // descriptor ⇒ rejected, forcing the producer onto the ~124-bit wide route).
-            .filter(|(name, _)| name.contains("CapOpen") && !cap_open_key_has_wide_twin(name))
-            .collect();
-    }
     match bound.as_slice() {
         [(name, json)] => {
             // AUTHORITY FLOOR (light-client unfoolability): a CAP effect MUST be proven under its
@@ -4893,6 +4877,25 @@ pub fn verify_full_turn(
     verify_full_turn_bound(proof, expected_old_commit, expected_new_commit, None, None)
 }
 
+/// Classify an effect-VM leg by its descriptor fingerprint: `true` iff `vk_hash` is the blake3 of a
+/// WIDE descriptor JSON in [`WIDE_REGISTRY_STAGED_TSV`](dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV)
+/// — so its 8-felt BEFORE/AFTER commits are the last 16 public inputs (the ~124-bit anchor). Otherwise
+/// the leg is a 1-felt V3 cap-open residual, bound at its single `pi::OLD_COMMIT`/`pi::NEW_COMMIT` felt.
+///
+/// UNCONDITIONAL across builds: the registry const is an ungated `include_str!` and `blake3` is a
+/// non-optional dep, so the trust-minimized (non-prover) light-client verifier classifies legs
+/// correctly. A prior `#[cfg(not(feature = "prover"))]` stub returned `false` here, silently reading a
+/// WIDE leg's ~124-bit anchor at its narrow slot-0 (~31-bit) position on exactly the wasm verify build.
+pub(crate) fn vk_hash_is_wide(vk_hash: &[u8; 32]) -> bool {
+    use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+    WIDE_REGISTRY_STAGED_TSV.lines().any(|line| {
+        line.splitn(3, '\t')
+            .nth(2)
+            .map(|json| blake3::hash(json.as_bytes()).as_bytes() == vk_hash)
+            .unwrap_or(false)
+    })
+}
+
 /// Verify a full turn proof, additionally binding the non-revocation sub-proof's
 /// accumulator root to a caller-supplied canonical root.
 ///
@@ -5147,19 +5150,12 @@ pub fn verify_full_turn_bound(
     // ⇒ bind the 8-felt tail; otherwise (the cap-open RESIDUAL tail — see the cutover comment) the leg
     // is a 1-felt V3 cap-open leg, bound at its single `pi::OLD_COMMIT`/`pi::NEW_COMMIT` felt
     // (broadcast into the 8-felt anchor's slot 0, the residual ~31-bit waist for cap-gated turns).
-    #[cfg(feature = "prover")]
+    // Classify each leg WIDE vs NARROW by its descriptor fingerprint via `vk_hash_is_wide` —
+    // UNCONDITIONAL across builds. A prior `#[cfg(not(feature = "prover"))]` stub forced `false` here,
+    // reading a WIDE leg's ~124-bit 8-felt anchor at its narrow slot-0 (~31-bit) position on exactly
+    // the light-client verify build; the classifier's inputs (registry const + blake3) need no prover.
     fn leg_is_wide(leg: &AttachedSubProof) -> bool {
-        use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
-        WIDE_REGISTRY_STAGED_TSV.lines().any(|line| {
-            line.splitn(3, '\t')
-                .nth(2)
-                .map(|json| blake3::hash(json.as_bytes()).as_bytes() == &leg.vk_hash)
-                .unwrap_or(false)
-        })
-    }
-    #[cfg(not(feature = "prover"))]
-    fn leg_is_wide(_leg: &AttachedSubProof) -> bool {
-        false
+        vk_hash_is_wide(&leg.vk_hash)
     }
 
     // Extract a leg's (before8, after8) commit anchors at the leg's true width. For a wide leg the
@@ -5333,22 +5329,23 @@ pub fn verify_full_turn_bound(
             // nullifier ⇒ ZERO sentinel ⇒ no binding.
             #[cfg(feature = "prover")]
             fn leg_is_note_spend(leg: &AttachedSubProof) -> bool {
-                use dregg_circuit::effect_vm_descriptors::{
-                    V3_STAGED_REGISTRY_TSV, WIDE_REGISTRY_STAGED_TSV,
-                };
-                let matches_ns = |registry: &str| {
-                    registry.lines().any(|line| {
-                        let mut it = line.splitn(3, '\t');
-                        let name = it.next();
-                        let _disp = it.next();
-                        let json = it.next();
-                        name == Some("noteSpendVmDescriptor2R24")
-                            && json
-                                .map(|j| blake3::hash(j.as_bytes()).as_bytes() == &leg.vk_hash)
-                                .unwrap_or(false)
-                    })
-                };
-                matches_ns(WIDE_REGISTRY_STAGED_TSV) || matches_ns(V3_STAGED_REGISTRY_TSV)
+                use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+                // WIDE-only: the live producer mints the note-spend leg from the wide registry,
+                // and the cutover verifier above rejects any 1-felt bare-V3 leg outright (so a
+                // bare fingerprint could never reach this read on an accepted turn). ⚠ KNOWN GAP
+                // (pre-existing, orthogonal): a WELDED note-spend leg (`WIDE_UMEM_WELD_REGISTRY_TSV`
+                // fingerprint) is NOT matched here, so its nullifier read is skipped — see
+                // HORIZONLOG 2026-07-18 (bare-V3 stratum) for the follow-up.
+                WIDE_REGISTRY_STAGED_TSV.lines().any(|line| {
+                    let mut it = line.splitn(3, '\t');
+                    let name = it.next();
+                    let _disp = it.next();
+                    let json = it.next();
+                    name == Some("noteSpendVmDescriptor2R24")
+                        && json
+                            .map(|j| blake3::hash(j.as_bytes()).as_bytes() == &leg.vk_hash)
+                            .unwrap_or(false)
+                })
             }
             #[cfg(not(feature = "prover"))]
             fn leg_is_note_spend(_leg: &AttachedSubProof) -> bool {
@@ -6174,6 +6171,31 @@ mod tests {
     use dregg_circuit::effect_vm::{CellState, Effect as VmEffect};
     use dregg_circuit::field::BabyBear;
 
+    /// REGRESSION (felt-width class): the wide/narrow leg classifier must work on the NON-PROVER
+    /// (light-client verify) build. A prior `#[cfg(not(feature = "prover"))]` stub returned `false`
+    /// unconditionally, so a WIDE leg's ~124-bit 8-felt anchor was silently read at its narrow slot-0
+    /// (~31-bit) position on exactly that build. This test carries NO `prover` gate, so it runs on the
+    /// trust-minimized verify configuration where the bug lived.
+    #[test]
+    fn wide_leg_classifier_works_without_prover() {
+        use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+        // A genuine WIDE descriptor fingerprint: blake3 of the first registry entry's JSON column.
+        let first_json = WIDE_REGISTRY_STAGED_TSV
+            .lines()
+            .next()
+            .and_then(|l| l.splitn(3, '\t').nth(2))
+            .expect("the wide registry has at least one entry with a JSON column");
+        let wide_vk: [u8; 32] = *blake3::hash(first_json.as_bytes()).as_bytes();
+        assert!(
+            vk_hash_is_wide(&wide_vk),
+            "a real WIDE descriptor fingerprint must classify as wide on the non-prover build"
+        );
+        assert!(
+            !vk_hash_is_wide(&[0xABu8; 32]),
+            "an unknown fingerprint classifies as the narrow cap-open residual"
+        );
+    }
+
     /// **THE AUTHORITY-FLOOR DENY-LIST IS COMPLETE OVER THE DEPLOYED REGISTRY** (the mechanical
     /// completeness leg — `RUST-ONLY-LOGIC-CENSUS` Tier-1 #1). The authority floor
     /// (`is_forbidden_plain_cap_descriptor`) is the ONLY barrier stopping a membership-free / write-free
@@ -6243,6 +6265,10 @@ mod tests {
     /// verb the registry did not declare before) is UNCLASSIFIED (`None`), so the enumeration test above
     /// would panic on it rather than silently admit it. (Mirrors the umem-flip risk: a welded authority
     /// twin landing in the registry without a deny-list entry.)
+    // Uses the `#[cfg(all(test, feature = "prover"))]` helper `descriptor_authority_class`; gate to
+    // match (its sibling deny-list test above is already gated). Without this the non-prover test build
+    // fails to compile — a pre-existing break unrelated to any single fix.
+    #[cfg(feature = "prover")]
     #[test]
     fn new_unlisted_authority_descriptor_is_unclassified_and_bites() {
         // A brand-new cap-open authority descriptor (the laundering shape) — not yet in any match arm.

@@ -244,17 +244,36 @@ const COL_EXIT: usize = 24;
 /// `command_id`, `output_digest`, or `exit_code`) does not verify against the
 /// public inputs this verdict reconstructs — the encoding IS the binding.
 ///
-/// It is INJECTIVE on the four bound fields: distinct fields map to distinct
-/// felt vectors (each 32-byte field via the fixed 8-limb little-endian
-/// projection, the exit code as its own felt).
-pub fn ci_verdict_public_inputs(verdict: &CiVerdict) -> Vec<BabyBear> {
+/// It is INJECTIVE on the four bound fields — PROVIDED the exit code is canonical
+/// ([`exit_code_is_canonical`]): distinct fields map to distinct felt vectors
+/// (each 32-byte field via the fixed 8-limb little-endian projection, the exit
+/// code as its own felt). A NON-canonical exit code is REFUSED (`None`), never
+/// silently reduced: `exit_code == BABYBEAR_P` — a genuine FAILURE — would
+/// otherwise reduce to felt `0` and satisfy the `COL_EXIT == 0` pass gate, and a
+/// negative code reinterprets its two's-complement bits under `as u32`. Refusing
+/// both here is what binds the pass gate's `felt == 0` to a TRUE `exit_code == 0`.
+pub fn ci_verdict_public_inputs(verdict: &CiVerdict) -> Option<Vec<BabyBear>> {
+    if !exit_code_is_canonical(verdict.exit_code) {
+        return None;
+    }
     let mut pis = Vec::with_capacity(CI_PI_COUNT);
     pis.extend_from_slice(&bytes32_to_8_limbs(&verdict.input_root));
     pis.extend_from_slice(&bytes32_to_8_limbs(&verdict.command_id));
     pis.extend_from_slice(&bytes32_to_8_limbs(&verdict.output_digest));
-    pis.push(BabyBear::new((verdict.exit_code as u32) % BABYBEAR_P));
+    // Canonical (`0 <= exit_code < p`) ⟹ this projection is injective and
+    // `felt == 0` ⟺ `exit_code == 0`; the guard above rules out the aliases.
+    pis.push(BabyBear::new(verdict.exit_code as u32));
     debug_assert_eq!(pis.len(), CI_PI_COUNT);
-    pis
+    Some(pis)
+}
+
+/// The exit-code domain on which the `i32 -> BabyBear` projection in
+/// [`ci_verdict_public_inputs`] is injective AND zero-preserving: non-negative
+/// and strictly below the field modulus. Outside `[0, BABYBEAR_P)` the reduction
+/// aliases — most dangerously `exit_code == BABYBEAR_P` (a FAILURE) → felt `0`,
+/// which satisfies the CI pass gate. Such a verdict is refused, not reduced.
+pub fn exit_code_is_canonical(exit_code: i32) -> bool {
+    exit_code >= 0 && (exit_code as u32) < BABYBEAR_P
 }
 
 /// **THE CI-ATTESTATION CIRCUIT** — the real dregg [`CellProgram`] the `Proven`
@@ -368,7 +387,13 @@ fn ci_attestation_descriptor2() -> EffectVmDescriptor2 {
 pub fn prove_ci_attestation(verdict: &CiVerdict) -> Result<CiExecutionProof, String> {
     let program = ci_attestation_program();
     let desc = ci_attestation_descriptor2();
-    let pis = ci_verdict_public_inputs(verdict);
+    let pis = ci_verdict_public_inputs(verdict).ok_or_else(|| {
+        format!(
+            "ci-attestation: non-canonical exit_code {} (must be in 0..{BABYBEAR_P}); \
+             refusing to reduce it into the pass-gate felt",
+            verdict.exit_code
+        )
+    })?;
     // A power-of-two trace (>= 2); the statement is single-row-meaningful (all
     // pi-bindings on row 0, the pass gate per-row), so a constant trace whose every
     // row IS the public-input vector works. The `pi_binding` constraints pin the
@@ -467,7 +492,12 @@ impl CiProofVerifier for StarkCiProofVerifier {
         // verified against this verdict's public inputs. A garbage / tampered wire
         // fails the decode or the verify (both fail closed).
         let desc = ci_attestation_descriptor2();
-        let pis = ci_verdict_public_inputs(verdict);
+        // A non-canonical exit_code (>= p, or negative) is REFUSED here: it would
+        // otherwise reduce to a pass-gate felt a real FAILURE could satisfy.
+        let pis = match ci_verdict_public_inputs(verdict) {
+            Some(pis) => pis,
+            None => return false,
+        };
         let batch: Ir2BatchProof<DreggStarkConfig> =
             match serde_json::from_slice(&proof.proof_bytes) {
                 Ok(b) => b,
@@ -1275,6 +1305,47 @@ mod tests {
             exit_code: 0,
             output_digest: output,
         }
+    }
+
+    /// CANARY (felt-width class): a FAILING exit code must never alias into the
+    /// pass gate. Before the fix, `exit_code = BABYBEAR_P` (a genuine failure)
+    /// reconstructed to felt `0` under `as u32 % p` and was `Proven` (a host could
+    /// report a failure and release a bond). Now every non-canonical code (`>= p`,
+    /// or negative) is REFUSED: the reconstruction is `None`, `prove` errs, and
+    /// only a TRUE `exit_code == 0` reaches the `COL_EXIT == 0` gate.
+    #[test]
+    fn failing_exit_code_cannot_alias_into_the_pass_gate() {
+        // The exact alias the modular reduction used to admit.
+        let p_as_code = BABYBEAR_P as i32;
+        assert_eq!(
+            (p_as_code as u32) % BABYBEAR_P,
+            0,
+            "BABYBEAR_P as an exit code reduces to felt 0 — the alias this guards"
+        );
+        assert!(!exit_code_is_canonical(p_as_code));
+        assert!(!exit_code_is_canonical(-1)); // negatives reinterpret under `as u32`
+
+        for bad in [p_as_code, -1, i32::MIN, i32::MAX] {
+            let mut v = verdict(OUTPUT);
+            v.exit_code = bad;
+            assert!(
+                ci_verdict_public_inputs(&v).is_none(),
+                "non-canonical exit_code {bad} must not reconstruct into public inputs"
+            );
+            assert!(
+                prove_ci_attestation(&v).is_err(),
+                "no proof may be minted for non-canonical exit_code {bad}"
+            );
+        }
+
+        // A genuine pass (exit_code == 0) still reconstructs, proves, and verifies.
+        let passing = verdict(OUTPUT);
+        assert!(ci_verdict_public_inputs(&passing).is_some());
+        let proof = prove_ci_attestation(&passing).expect("a genuine pass still proves");
+        assert!(
+            verify_ci_proof(&ci_attestation_vk(), &passing, &proof),
+            "a genuine pass (exit_code == 0) still verifies end to end"
+        );
     }
 
     /// A signed, committed CI-run `(receipt, verdict)` for `seed` over `output`.
