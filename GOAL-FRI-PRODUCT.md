@@ -270,6 +270,17 @@ BINDS but is PARTIALLY AIR-in-Lean; the DAG source = a named STARK-KILL residual
 now bind the real proof. NEXT = the DEEPEST phase: the transcript-replay challenger duplex (Fiat-Shamir; until
 built a prover supplies arbitrary challenges) — decision point, like FRI Stage 4.
 
+
+## ⚑ AIR-in-Lean CYCLE 5 — transcript challenger duplex BUILT + Lean-authored (f57cd8683), NOT yet wired (hole open)
+The hardest PIECE is done + genuinely AIR-in-Lean: ChallengerReplayEmit.lean emits the Fiat-Shamir squeeze
+as Lean R1CS from Poseidon2Fr.permuteW (challengerReplay_refines proven; NOT a Rust DAG like block 3). BUT
+the diff lane built only a STANDALONE test — emitted_verifier_full.go is UNTOUCHED, so the main circuit still
+feeds challenges FIXTURE-PINNED → the arbitrary-challenge soundness hole is STILL OPEN in the real verifier.
+⚠ standalone test = 0.4s = likely TOY-scale (not the full real transcript). Cycle 6 = the WIRING: integrate the
+Lean challenger into emitted_verifier_full.go, re-derive the REAL fixture challenges, ASSERT-equal (close the
+hole), differential-gate that a TAMPERED transcript REJECTS in the main circuit (the real soundness gain).
+Reality-gate discipline caught the standalone-vs-wired distinction (flagged + verified before believing).
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
