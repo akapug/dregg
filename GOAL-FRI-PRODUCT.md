@@ -405,6 +405,19 @@ the real folded==quotient(ζ)·Z_H(ζ) over recomposeQuotientNative, canary a WR
 assumption, NOT a wiring gap, NOT closed by wiring). "Basically done" is TRUE for the substrate axis; the FRI
 floor is the deepest remaining SOUNDNESS thing (a crypto reduction, its own campaign).
 
+
+## ✅ AIR-in-Lean CYCLE 14 — seam-#2 quotient placeholder CLOSED (verified load-bearing w/ ATTRIBUTION)
+bindBlockZeta tooth 3 (:1190): folded == quotient(ζ)·Z_H(ζ) over recomposeQuotientNative(opened chunks),
+placeholder fresh-out GONE. I RAN the canary (61.5s) — it ATTRIBUTES the reject: tooth3-ON/tooth2-OFF accepts
+honest; folded≠quotient·Z_H UNSAT w/ tooth3 sole constraint; tooth3-OFF same tamper ACCEPTS ⇒ reject IS the
+quotient identity, not leakage; even disqualifies chunk-tamper (rejects bind-OFF, transcript-observed) as not
+the identity proof. Best-constructed canary of the campaign.
+⚑ FINAL SUBSTRATE STATE: crypto-substrate DONE (all nonlinear crypto Lean-authored, glue ruled acceptable,
+quotient identity now real). The DEEP residual is ONE thing, on the SOUNDNESS axis not the substrate axis:
+FRI/PCS openings=evaluations (FriLowDegreeSound) — the opened chunks are transcript-bound but not proven to
+BE the committed polys' low-degree evals at ζ. A named crypto assumption / its own campaign. Plus permanent
+trust-refs (block-3 DAG, ceremony). NOT a wiring gap; NOT "basically done"-able by a cycle — honestly named.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
