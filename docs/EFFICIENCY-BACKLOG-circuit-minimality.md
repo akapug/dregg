@@ -8,6 +8,52 @@ registry-vestiges, other-AIRs, recursion-wrap, semantic-minimum) over HEAD, with
 shakiest claims independently re-derived by two adversarial verifier passes (verifier 2 pinned
 HEAD = `2e5fcd2b4`). One claim was refuted — see the graveyard; it is not silently dropped.
 
+## 2026-07-19 round — measured/landed, all byte-safe
+
+Three items advanced by a measurement/proof lane that touched no descriptor bytes; each was then
+independently re-derived by an adversarial verifier pass. Nothing was silently adopted.
+
+- **E7 — ADVANCED + verified CONFIRMED** (`9959af6cc`). Census reproduced by full per-column parse
+  (387 of 1,857 committed cols mechanically killable = 20.8%, byte-exact per-member table); the
+  narrowing-soundness bridge landed and CI-rooted (`ChipNarrowLookup.lean`, 6 keystones
+  `#assert_axioms`-clean, model-level — does NOT touch the FRI floor or the Rust LogUp impl).
+  Verifier nits (both immaterial, neither drives value): "126 lookup-only" is 131 on the natural
+  definition of a de-emphasized descriptive stat; the commit *message* says "7 zero-killable
+  members" where the doc table and the parse agree on 8. Regen now mechanical; staged below.
+- **E4 — ADVANCED + verified CONFIRMED** (`daa0a16`). Measurement harness + additive
+  `create_config_with_fri_full` landed byte-safe (shipped configs unchanged). Lean-ledger verdicts
+  at the member statement (no Rust soundness formula in the harness): deployed (6,19,16)
+  perFold/johnson/capacity/commit = 109/73/130/67; (8,15,16) = 105/76/136/60; (8,14,16) =
+  105/72/128/60 (capacity EXACTLY at the 128 drift margin, zero headroom). **ε_C finding the
+  ledger exists for:** lb 6→8 costs 7 commit-phase bits (67→60) — invisible to both closed-form
+  columns — and perFold falls BELOW the current 109 floor, so the cutover is a documented floor
+  re-pin + an (arity 8, lb 8) hΦ fiber-discharge instance, NOT knobs-only. **New free lever:**
+  `log_final_poly_len=4` alone is −5.9%/−6.9% bytes at zero ledger movement and zero prove-time.
+  Projections onto 151 KB: (8,15)→~134 KB, (8,14)→~127 KB, (8,15)+lfpl4→~125 KB. Prover cost
+  ~3.9–4.0× at lb 8. Shapes are mocked single-instance widths (measurement fixtures, ship
+  nowhere); the soundness numbers carry the tree's standing FRI caveats (johnson = idealisation,
+  capacity = refuted-conjecture canary).
+- **E2 — ADVANCED + verified CONFIRMED** (`1df4bc4cc`). Byte-safe probe minted the REAL rotated
+  `transferVmDescriptor2R24` leaf at full production `ir2_config` knobs and the unchanged leaf-wrap
+  absorbed it at fold arity 8: wrap green (root 229,594 B, verifies in-circuit), two arity-8 leaves
+  aggregate green. Non-vacuity teeth held: arity-2 = 402,539 B / 8 commit phases (all fold-by-2)
+  vs arity-8 = 373,951 B / 4 commit phases, schedule `[2,2,3,1]` (log_arity 3 present ⇒ the arity-8
+  reconstruct arm demonstrably ran) — commit phases halved at this fixture height, −7.1% leaf wire
+  free rider. The soundness half was already Lean-proven and CI-rooted at HEAD
+  (`FriLedgerSound.arity8_costs_seven_times_arity2_at_logBlowup6`: 112→109 per-fold, goodCount ×7,
+  `#assert_axioms`-clean; `FriArityFiberDischarge` discharges hΦ unconditionally at the deployed
+  arity-8 setup). Verdict: GO. The ~3.8× commit-phase claim is at the deployed 2^19 wrap height
+  (~18→~6 rounds); this fixture shows 8→4. Nothing deleted/re-pinned/regen'd — deploy staged below.
+
+**Refuted this round (NOT silently dropped — see E11 and the graveyard):** E11's "floor rises to
+the pow-16 set" premise is FALSE — `create_recursion_config` (lb 3/38q/pow 14) is production-live
+(`gpu_backend.rs:4459` + the inner-FRI prove/verify wrappers), and `recursive_witness_bundle` is
+referenced from `node/src/mcp/proof.rs`; it is not a zero-production-caller dead stratum, so the
+gate re-pin would launder a gap. E11 is downgraded to HELD-VERIFICATION pending a production-path
+read; it is NOT a clean deletion lane.
+
+**Lanes that died (contended, no landing):** E15 (CCC route-or-retire) and E17-docs.
+
 ## Vocabulary
 
 Evidence classes (arch-review vocabulary):
@@ -46,6 +92,121 @@ VK/FS epoch later:
 4. **E12 — pin children on the wide tree** before the staged wide-tree flip ships, or the seam
    ships with it.
 
+## BUNDLED-CUTOVER — the one ack-gated regen window
+
+Every item here is regen- or FS-epoch-class: each mints new VK / FRI-transcript / descriptor bytes,
+so **no two can run in parallel** — a second concurrent regen clobbers the first. They land together
+in ONE clean-window ack-gated regen (the Epoch-2 flag day). The measure/prove halves have already
+landed byte-safe and are verified (E7/E4/E2 above; E1 soundness-core proven); what remains is the
+single coordinated cutover below. `docs/VK-REGEN-LOG.md` records the flip; full per-step text lives
+in the HORIZONLOG entries dated 2026-07-18/19 under each key.
+
+**Landed already:** **S2** dead-stratum deletion (Epoch 1) — −32.6% proof bytes on the deployed
+member, verified, shipped. It is the pricing calibrant (188 B/col main; −960 cols → −181,757 B) and
+the method proof (`compactS2` + `compactOk` gate); it does not re-run.
+
+**Sequencing inside the window** (each step waits for the prior regen to settle):
+
+1. **Epoch-2 chip one-hot/tag retype** (the bundle proper — narrow-bus retirement, per-shape tuples,
+   TURN_HASH limb widening, bare-V3 stratum retirement). E7 and E9(b) sequence AFTER this.
+2. **§E2 fold-arity flip** (semantic-change, defines the FS epoch the rest ride).
+3. **§E4 FRI re-grid** (rides the E2 FS epoch — a lone flip would be a second flag day).
+4. **§E7 narrow-bus swap** (mechanical, but mints 24 new VKs — after the chip retype, not parallel).
+5. **§E1 + regen riders** (per-member compaction and everything gated only on VK re-pin).
+
+### §S2 — DONE (Epoch 1)
+
+Reference only. Uniform dead-stratum kill, landed and measured; the compactor method and 188 B/col
+pricing below inherit from it.
+
+### §E1 — per-member v1-face compaction (soundness-core proven, HELD-REGEN, contended files)
+
+`compactS2`-style value-preserving face compaction at the Lean emit, per-member kill-set (not the
+uniform S2 one): ~149 dead cols on transfer, 8,847 dead col-instances registry-wide. Recipe:
+(1) drive the per-member kill-set through `RotWideCompactS2.compactS2` + the `compactOk` gate;
+(2) delete columns, renumber densely; (3) producer fill + width pins follow; (4) regen descriptor
+emit + registry TSV + VK re-pin. Its two files (`circuit/descriptors/rotation-wide-registry-staged.tsv`,
+`metatheory/.../EffectVmEmitRotationV3.lean`) are DIRTY from a live lane — settle before flipping.
+Probe first: name the 34–39-col unidentified bands (RV-F8) before the compactor eats the evidence.
+
+### §E7 — by-name narrow-bus swap (census + bridge landed `9959af6cc`, mechanical regen)
+
+Sequence AFTER the Epoch-2 chip retype (E7 does not inherit it); cannot run parallel with other
+regens (mints new VK/bytes for 24 members). Recipe:
+1. In each by-name emit module (`NoteSpendingLeafEmit`, `BlindedMembershipEmit` +4ary,
+   `AttestedFactMembershipEmit`, `MerkleMembership{,4ary}Emit`,
+   `Predicates{Arithmetic,Gt,Le,Lt,Neq,InRange}Emit`, `NonRevocation{,Adjacency}Emit`,
+   `AdjacencyMembershipEmit`, `DfaRouting*`, `DyckParse*`, `BoundPresentationEmit`,
+   `EffectVmEmitTurnChainBinding`, derivation/cross-side/bundle-fold producers) swap
+   `.lookup {table := .poseidon2, tuple := chipLookupTuple ins digestCol laneCols}` →
+   `.lookup {table := poseidon2narrow, tuple := chipLookupTupleNarrow ins digestCol}`; delete lane
+   cols, renumber densely; drop note-spend-leaf's 8 unref cols {15, 55–61} + derivation's col 0.
+2. Re-point each Refine/Rung2 proof `chip_lookup_sound` →
+   `chip_lookup_narrow_sound_of_wide_table` / `narrow_lookup_holdsAt_sound` (identical conclusion).
+3. Regen GOLDEN strings via `emitVmJson2` + re-emit `by-name/` (drift gate recurses into by-name).
+4. Rust twins: layout consts + witness builders stop filling lanes
+   (`membership_descriptor_4ary.rs` `MEMBERSHIP_4ARY_WIDTH` 18→11, `LANE_BASE` deleted). Prover side
+   needs NOTHING — `TID_P2_NARROW` parse arm, `BUS_P2_1` AIR send, `narrow_hist` multiplicity
+   serving are already live in `descriptor_ir2.rs`.
+5. Canaries: honest prove+verify per member + each module's forge teeth re-run.
+6. Optional rider (semantic-change, same regen): the 1-felt `SenderAuthorized` waist fix
+   (`membership_verifier.rs:1076-1101` → 8-felt root + wide-tag chain).
+
+### §E4 — FRI re-grid flip (measurement landed `daa0a16`, rides the E2 FS epoch)
+
+A lone flip is a second FS flag-day — ride the epoch E2 already spends. Recipe:
+1. Flip `circuit/src/descriptor_ir2.rs::IR2_FRI_LOG_BLOWUP` 6→8 + `IR2_FRI_NUM_QUERIES` 19→15
+   (or 14 — capacity sits EXACTLY at the 128 drift margin), optionally
+   `IR2_FRI_LOG_FINAL_POLY_LEN` 0→4 (measured free bytes, same FS epoch).
+2. Re-derive `circuit-prove/tests/fri_params_soundness_budget.rs` floors via `dregg_fri_ledger` at
+   the lb-8 reading — perFold drops below the current 109 floor: a *documented re-pin*, not a
+   relax-in-place.
+3. Extend `metatheory/Dregg2/Circuit/FriArityFiberDischarge.lean` with the (arity 8, lb 8)
+   `friSetupK` instance (k=3, b=8; window dOut ≥ |L| − 2n) — lb 8 is not among the discharged
+   configs; without it the new perFold rides an undischarged hypothesis.
+4. Price ε_C at the new statement in the cutover commit (commit column 67→60) and NAME the chosen
+   posture (compensating levers: ext_deg at ~+31 bits/degree, or the still-unpriced commit-pow knob).
+5. Regen descriptor emit + registry TSVs + VK re-pin + apex re-verify inside the bundle; update
+   `docs/VK-REGEN-LOG.md`. `fri_regrid_post_s2_measure`'s always-on baseline pin then goes red until
+   the candidate table is re-grounded (deliberate tripwire).
+
+### §E2 — fold-arity 8 + double-prove retirement (probe GO `1df4bc4cc`, semantic-change)
+
+Proofs are NOT interchangeable across the flip — this defines the FS epoch. Recipe:
+1. Flip `INNER_FRI_MAX_LOG_ARITY` 1→3 at `plonky3_recursion_impl.rs:116` so `ir2_leaf_wrap_config()`
+   ≡ production `ir2_config` knobs; retire the `:401-411` PROBE comment.
+2. Delete the per-turn re-mint: `finalized_turn_from_full_turn` consumes the node's served
+   `Ir2BatchProof` directly — `turn/src/rotation_witness.rs:749-762` re-prove + `:685-687` mint
+   self-verify die; KEEP the fail-closed 8-felt wide-anchor tie.
+3. Collapse the `DreggStarkConfig`/`DreggRecursionConfig` split ("SIDESTEP option a" fossil,
+   `ivc_turn_chain.rs:927-935`, ~15 leaf adapters) so the production mint IS the fold input type.
+4. Re-pin posture: the rotated chain leaves `ir2LeafWrapRotatedConfig` (the ONE config the
+   ~112.6-bit per-fold posture describes) for the 109-bit arity-8 ledger row; move
+   `fri_params_soundness_budget.rs` expectations via the exported `dregg_fri_ledger`.
+5. gnark long pole: add an arity-8 `fold_row` beside `friFoldRowArity2`
+   (`chain/gnark/fri_verify_native.go:228`); bundle with apex lever B so the ETH wrap re-lands once.
+   `dregg_outer_config.rs:139-142` (ETH-wrap OUTER shrink, arity-2 lb-3) is a SEPARATE knob and may
+   stay.
+6. Gates after flip: `e2_fold_arity_recompose_probe` (becomes the standing regression gate),
+   `rotation_batchstark_leaf_smoke` (repoint its stale geometry pins — already red at HEAD on the
+   1702-wide/50-PI member vs its 1647/46 assertion), `ivc_turn_chain` chain tests,
+   `fri_params_soundness_budget`.
+
+### Regen riders (gated only on the VK re-pin — fold in, do not schedule separately)
+
+- **E5** map-ops instance split (op≤3 width 421 vs AAFI 897) — CONTENDED (IMT-migration cluster).
+- **E6** absent-op deletion — HELD-REGEN + Lean lemma; CONTENDED (same cluster).
+- **E13** legacy Memory table retirement + degree-8 kill — `setFieldDyn` in the dirty registry TSV.
+- **E14** umem cohort-boundary flip (`cohort := false`→`true` + TableDef swap + byte-parity pin).
+- **E8** bilateral-v2 expected-block delete (width 87→52) — semantic-change (strengthening).
+- **E16(b)** envelope binding-descriptor drop (envelope v5 FS re-pin; coordinate lightclient/wasm).
+- **E17 regen riders** — tables-decl sync, welded-placeholder filter, PI-layout normalization,
+  duplicate-gate / arity-3 drop, strata quarantine.
+
+**Not in this bundle:** **E11** (premise REFUTED — needs a production-path read, not a deletion) and
+**E15** (lane died this round). E9(a), E10-falsifier, E16(a)(c)(d) are byte-safe and run OUTSIDE the
+regen window.
+
 ## Ranked backlog — summary
 
 | # | Item | Verified cost today | Yield | Effort | Risk | vs Epoch-2 |
@@ -60,7 +221,7 @@ VK/FS epoch later:
 | 8 | E8 bilateral-v2 expected-block deletion | 35 duplicated cols+gates, live per multi-cell turn | width 87→52 + closes middle-row identity gap | 1 lane | semantic-change | independent |
 | 9 | E9 joint-turn binding leaf | free-witness digest + 1 uni-STARK + 1 wrap per joint turn | delete a layer or make it real | 0.5–1 lane | semantic-change | rides tag retype if (b) |
 | 10 | E10 frozen-authority falsifier + 83-col dedup | 83 duplicate cols ≈ 15.6 KB (16 members); 41 members unprobed | falsifier answer + 15.6 KB + 5.3K cells | hours + 1 lane | byte-safe then regen | dedup rides regen |
-| 11 | E11 Golden-v1 stratum deletion | ~900 dead lines; pow-14 config sets the gate's weakest column | ledger floor rises to the pow-16 set | 1 lane | byte-safe + gate re-pin | independent |
+| 11 | E11 Golden-v1 stratum deletion | ~900 lines; pow-14 config sets the gate's weakest column | REFUTED premise (pow-14 config is production-live) — HELD-VERIFICATION | production read first | unknown | independent |
 | 12 | E12 pinned children on wide/joint trees | 2 of 3 tree folds fold unpinned children | closes the foreign-child seam pre-flip | 0.5–1 lane | semantic-change | BEFORE wide flip |
 | 13 | E13 Memory-table retirement + degree-8 kill | 2 AIRs + 3 buses for one member's 2 ops; lone deg-8 gate | main degree uniformly ≤2; whole subsystem deleted | 1–2 lanes | regen | ride the regen |
 | 14 | E14 umem cohort boundary flip | 29 extra cols + byte sends × 57 welded proofs | ~2–3 KB × 57 | 0.5 lane | regen | independent |
@@ -100,6 +261,12 @@ VK/FS epoch later:
   nothing in the bundle deletes this band on its own).
 
 ### E2 — retire the per-turn double-prove; escalate fold arity (rank 2)
+
+**STATUS 2026-07-19: probe GO + verified CONFIRMED (`1df4bc4cc`). The `[U]` recompose-at-arity>1
+question is answered [M]: the unchanged leaf-wrap absorbs a full-`ir2_config` arity-8 leaf and two
+arity-8 leaves aggregate, both green in-circuit; commit phases halve at fixture height (8→4,
+schedule `[2,2,3,1]`), −7.1% leaf wire free rider. Soundness half already Lean-proven + CI-rooted.
+Bytes untouched; the semantic cutover is staged below (BUNDLED-CUTOVER §E2).**
 
 - **What/where:** Every IVC-bound turn is proven twice: the production artifact mints under
   `ir2_config` (lb 6, 19q, fold-by-8; `circuit/src/descriptor_ir2.rs:5452-5456`), then
@@ -147,6 +314,31 @@ VK/FS epoch later:
   Epoch-2 freeze; retrofit = another epoch.
 
 ### E4 — FRI re-grid at post-bundle scale (rank 4)
+
+**STATUS 2026-07-19: measurement landed byte-safe + verified CONFIRMED (`daa0a16`). The
+projection endpoints are now measured [M] on mocked-floor shapes and the ledger verdicts are read
+from the compiled `dregg_fri_ledger` [M-ledger]; shipped configs unchanged, no FS re-pin, no
+descriptor bytes. Harness `fri_regrid_post_s2_measure.rs` + additive `create_config_with_fri_full`
+(exposes the never-gridded `commit_proof_of_work_bits`). The cutover flip is staged below
+(BUNDLED-CUTOVER §E4).**
+
+- **Ledger verdicts [M-ledger]** (perFold / johnson / capacity / commit, member statement,
+  ext 4, arity 2^3, m=7): deployed (6,19,16) = 109/73/130/67; (8,15,16) = 105/76/136/60;
+  (8,14,16) = 105/72/128/60 (capacity EXACTLY 128, zero headroom). **The ε_C finding the ledger
+  exists for:** lb 6→8 costs 7 commit-phase bits (67→60), invisible to both closed-form columns,
+  and perFold (105) falls BELOW the current 109 floor — so the cutover is a *documented floor
+  re-pin* + the (arity 8, lb 8) hΦ fiber-discharge instance (lb 8 is not among the discharged
+  configs), NOT a knobs-only flip. lfpl-4 and commit-pow-8 twins read column-identical ledgers
+  (both knobs are ledger-invisible).
+- **Measured bytes [M]** (21 real proves, tamper-reject polarity per shape): post-S2 main proxy
+  (8,15,16) −11.3%, (8,14,16) −16.0%, (8,15)+lfpl4 −17.4% (floor proxy −10.6/−15.5/−17.8%). **New
+  free lever:** `log_final_poly_len=4` alone = −5.9%/−6.9% bytes at ZERO ledger movement and zero
+  prove-time (still FS-epoch class). Prover cost ~3.9–4.0× at lb 8 (re-proves every fold — budget
+  for the recursion wrap); verify time mildly drops. Projected onto 151 KB: (8,15)→~134 KB,
+  (8,14)→~127 KB, (8,15)+lfpl4→~125 KB — the 115–125 [A] optimistic end needs the lfpl stack or
+  (8,14)'s zero-headroom capacity, eyes-open. Scope: shapes are MOCKED single-instance widths
+  (fixtures, ship nowhere), so absolute bytes over/understate the member by construction; the
+  soundness numbers are the ledger's and carry its standing FRI posture caveats.
 
 - **What/where:** `ir2_config` = (lb 6, 19q, pow 16) was chosen from a grid measured when the
   member proof was 120.4 KiB (`.docs-history-noclaude/PROOF-ECONOMICS.md`) — **3.0× smaller than
@@ -207,10 +399,14 @@ VK/FS epoch later:
 
 ### E7 — by-name predicate/membership zoo re-emit (rank 7)
 
-**STATUS 2026-07-18: census CONFIRMED (full per-column parse of the deployed bytes at
+**STATUS 2026-07-19: census CONFIRMED (full per-column parse of the deployed bytes at
 `ea75575c0`) + the narrowing-soundness bridge LANDED
-(`metatheory/Dregg2/Circuit/ChipNarrowLookup.lean`, CI-rooted, #assert_axioms-clean). Bytes
-untouched; what remains is the single mechanical regen lane below.**
+(`metatheory/Dregg2/Circuit/ChipNarrowLookup.lean`, CI-rooted, #assert_axioms-clean), committed
+`9959af6cc` and independently re-derived by an adversarial verifier pass (byte-exact: 387/1,857 =
+20.8%, per-member table reproduced; two immaterial nits that do not drive value — see the
+2026-07-19 round note). The bridge is model-level (DescriptorIR2 denotation) — it does NOT touch
+the FRI floor or the Rust LogUp impl. Bytes untouched; what remains is the single mechanical regen
+lane below (BUNDLED-CUTOVER §E7).**
 
 - **What/where (CONFIRMED, was hunt-only):** the graduated-lane idiom (7 unused permutation
   lanes per single-output chip site) is endemic in the non-rotated Lean-emitted descriptors.
@@ -336,16 +532,29 @@ untouched; what remains is the single mechanical regen lane below.**
 
 ### E11 — delete the Golden-v1 shape stratum; re-pin the gate floor (rank 11)
 
+**STATUS 2026-07-19: HELD-VERIFICATION — the load-bearing premise is REFUTED by census.** The
+2026-07-18 claim "routed by zero production callers → floor rises to the pow-16 set" is FALSE:
+`create_recursion_config()` (lb 3/38q/pow 14) is production-live —
+`circuit-prove/src/gpu_backend.rs:4459` plus the inner-FRI prove/verify wrappers in
+`plonky3_recursion_impl.rs` — and `recursive_witness_bundle` is referenced from
+`node/src/mcp/proof.rs`. This is NOT a zero-production-caller dead stratum, so re-pinning the
+ledger gate over "the surviving configs" would launder a gap (the pow-14 config that pins the
+weakest column would still be live). E11 is NOT a clean deletion lane; it needs a careful
+production-path read before ANY deletion, not a swarm deletion lane. The width/line-count facts
+below are retained descriptively but the deletion + re-pin recipe is withdrawn.
+
 - **What/where:** `recursive_witness_bundle.rs` (590 lines) proves `EffectVmShapeAir`
-  (`effect_vm_p3_air.rs`, 296 lines), a self-described non-soundness-equivalent structural subset,
-  routed by zero production callers (the `recursive_compress: bool` surface; no caller passes
-  `true`). It is the main user of `create_recursion_config()` (lb 3/38q/**pow 14**) — the config
-  that pins the FRI ledger's weakest Johnson column at 71 and sits at exactly 128 capacity.
-- **Verified cost today:** ~900 lines + verifier plumbing of misleading surface; the soundness
-  gate's weakest-link floor is set by a config no production proof uses. [P], hunt-only.
-- **Fix sketch:** delete the stratum + `WitnessedReceipt` variant plumbing; re-pin the ledger gate
-  over the surviving configs (floor rises to the pow-16 set).
-- **Effort:** 1 lane. **Risk:** byte-safe deletion + gate re-pin. **Dependencies:** independent.
+  (`effect_vm_p3_air.rs`, 296 lines), a self-described non-soundness-equivalent structural subset.
+  It is a user of `create_recursion_config()` (lb 3/38q/**pow 14**) — the config that pins the FRI
+  ledger's weakest Johnson column at 71 and sits at exactly 128 capacity. ~~Routed by zero
+  production callers~~ REFUTED (see STATUS): production-live via `gpu_backend.rs` + `mcp/proof.rs`.
+- **Verified cost today:** unresolved — the "config no production proof uses" framing is refuted;
+  the real question is whether the pow-14 configuration is *necessary* on the live path or can be
+  retired there. [P] refuted, needs a production-path read.
+- **Fix sketch:** WITHDRAWN pending the production-path read. Do not delete the stratum or re-pin
+  the gate until the live callers are understood.
+- **Effort:** production-path read first (hours), then re-scope. **Risk:** unknown until the read.
+  **Dependencies:** independent.
 
 ### E12 — pin children on the wide and joint tree folds (rank 12)
 
@@ -482,6 +691,15 @@ untouched; what remains is the single mechanical regen lane below.**
   54); registry total 8,847 not 8,851; share 8.5% not ~9%. Where registry-vestiges F1 and
   semantic-minimum F1 conflicted, semantic-minimum is correct; E1 carries the corrected numbers.
   The aggregate thesis (the dead-band class and its ~28–29 KB/proof cost) survives.
+- **REFUTED — E11 deletion premise (2026-07-19 census).** Claimed: `recursive_witness_bundle` /
+  `create_recursion_config` (lb 3/38q/pow 14) is "routed by zero production callers," so deleting
+  the stratum lets the ledger floor "rise to the pow-16 set." Census: the pow-14 config is
+  production-live (`gpu_backend.rs:4459` + the inner-FRI prove/verify wrappers in
+  `plonky3_recursion_impl.rs`) and `recursive_witness_bundle` is referenced from
+  `node/src/mcp/proof.rs`. It is NOT a dead stratum; a gate re-pin over "surviving configs" would
+  launder a live weakest-column gap. E11 is downgraded to HELD-VERIFICATION (production-path read
+  first); the width/line-count facts survive descriptively, the deletion + re-pin recipe is
+  withdrawn. Unlike the F1 entry, no aggregate thesis survives here — the lever itself is suspended.
 
 Corrections absorbed into confirmed items (adjusted, not refuted):
 
