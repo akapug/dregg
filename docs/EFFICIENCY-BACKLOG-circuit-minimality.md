@@ -56,6 +56,57 @@ stale-comment. E11 re-scopes as an accept-surface retirement, not a dead-code de
 
 **Lanes that died (contended, no landing):** E15 (CCC route-or-retire) and E17-docs.
 
+## 2026-07-19 round (continued) — soundness-core proof + member-precise falsifier, byte-safe
+
+Two more items advanced by proof/falsifier lanes that touched no descriptor bytes, each
+independently re-derived by an adversarial verifier pass; E11's suspended premise was resolved by a
+production-path read. Nothing silently adopted.
+
+- **E8 — ADVANCED + verified CONFIRMED** (`b0c73d084`). Soundness core PROVEN byte-safe, no regen.
+  New `metatheory/Dregg2/Circuit/Emit/BilateralAggregationCompact.lean` (1,064 lines, 14
+  `#assert_axioms` clean — subset {propext, Classical.choice, Quot.sound}, no sorry): the compacted
+  `bilateralAggDescriptorV3` (width 87→52 — the 35-gate `sched==expected` block deleted, verified
+  tautological; middle-row identity gap closed by 13 identity-carry window gates; 48 constraints,
+  outer PI 23 unchanged; full v3 wire `#guard`-pinned before the descriptor file exists) is
+  machine-checked against the DEPLOYED `Satisfied2`: (A) `expand_satisfies` — every v3-accepted
+  trace expands to full `Satisfied2` of the byte-identical deployed v2 descriptor; (B)
+  `contract_preserves` — every identity-row-constant honest v2 witness contracts to v3; (C) STRICT:
+  `gapTrace_satisfies` EXHIBITS a v2-accepted 3-cell bundle forging middle-cell `turn_hash[0]=7`
+  (middle-row identity is in-AIR unconstrained in v2 — the per-row-CG-2 doc claim is falsified by
+  exhibit and corrected comment-only, v2 byte-pin rebuilt green), which v3 refuses
+  (`gap_no_v3_preimage`); Rung-1/Rung-2 crowns carried through the bridge. Verifier reproduced the
+  byte-safety (4 files: the new Lean, a 25-line doc-only correction to `EffectVmEmitBilateralAgg`,
+  one `Dregg2.lean` import, HORIZONLOG), a fresh Lean elaboration (all 14 `#assert_axioms` firing
+  live), and every width/constraint number (35 = COUNTS_LEN 7 + ROOTS_LEN 28; 70−35+13=48;
+  87−35=52). **Bundled CI defect the verifier caught (does NOT affect soundness or byte-safety):**
+  rooting the previously-orphaned `BilateralAggregationEmit/Refine/Rung2` into `Dregg2.lean` leaves
+  three now-stale `scripts/lean-orphans-allow.txt:32-34` entries that red `check-lean-orphans.sh` —
+  de-list them at cutover. Byte win STAGED (−40.2% main-trace committed columns, 70→48 constraints),
+  not measured; the proof-byte delta is a cutover-time measurement. Recipe: BUNDLED-CUTOVER §E8.
+- **E10 — ADVANCED + verified CONFIRMED** (`a8cd5e35f`). Member-precise falsifier landed byte-safe
+  (`circuit/tests/zzz_e10_freeze_owner_falsifier.rs`, single-file forge probe, no regen). Over the
+  LIVE `cellSealVmDescriptor2R24`, a self-consistent seal whose ONLY moved variable is the AFTER
+  owner octet (`B_PUBKEY_OCTET` 105–112) — lifecycle record-pin `PI[46]=Sealed` satisfied, economic
+  frame frozen, `wireCommitR` + NEW_COMMIT self-consistent — PROVES + VERIFIES through the deployed
+  per-descriptor `prove_vm_descriptor2`/`verify_vm_descriptor2`; the control lifecycle-freeze forgery
+  is REJECTED (a live discriminator, not accept-everything). Root (read, not asserted): `cellSeal =
+  graduateV1 (rotateV3WithLifecyclePayloadGate … cellSealVmDescriptor)` — NOT `v3OfFrozen`, so it
+  carries none of `frozenAuthorityColEqs`; the pubkey octet is in no freeze/weld set on either path,
+  and the verifier PI reconstruction does NOT compensate (`proof_verify.rs:552` binds NEW_COMMIT to
+  the prover's CLAIMED post, not an independent re-execute). So NOTHING at the AIR/verifier level
+  rejects a changed-owner seal — a witness-gen faithfulness hole faithful `apply_cell_seal` never
+  produces. The same free-AFTER-owner shape is shared by all 41 no-freeze members, so the no-freeze
+  class is PROVEN a real gap: the byte-safe E10 dedup on the 16 carriers is greenlit, and the real
+  close is a Lean-authored owner-freeze colEq (both ride the regen — recipe: BUNDLED-CUTOVER §E10).
+  Verifier reproduced the single-file byte-safety, the AIR root-cause read, and the live
+  accept/reject asymmetry.
+- **E11 — RESOLVED + verified CONFIRMED** (`bd247bbaf`, census-only docs lane; folded into §E11 and
+  the graveyard above). The suspended lever un-sticks: pow-14 `create_recursion_config` (lb 3/38q) is
+  NOT necessary on the live prove/verify path — re-scoped as an accept-surface retirement, not a
+  dead-code deletion. Verifier CONFIRMED: zero descriptor/VK/TSV/Lean bytes moved; every code-census
+  claim re-derived at HEAD (the three "production-live" edges are config-inert, producer-less, and a
+  stale comment); the honest ordering (surface removal + gate re-pin 71→73 in ONE cutover) preserved.
+
 ## Vocabulary
 
 Evidence classes (arch-review vocabulary):
@@ -99,9 +150,10 @@ VK/FS epoch later:
 Every item here is regen- or FS-epoch-class: each mints new VK / FRI-transcript / descriptor bytes,
 so **no two can run in parallel** — a second concurrent regen clobbers the first. They land together
 in ONE clean-window ack-gated regen (the Epoch-2 flag day). The measure/prove halves have already
-landed byte-safe and are verified (E7/E4/E2 above; E1 soundness-core proven); what remains is the
-single coordinated cutover below. `docs/VK-REGEN-LOG.md` records the flip; full per-step text lives
-in the HORIZONLOG entries dated 2026-07-18/19 under each key.
+landed byte-safe and are verified (E7/E4/E2 above; E1 soundness-core proven; E8 soundness-core proven
+`b0c73d084`; E10 falsifier landed `a8cd5e35f`); what remains is the single coordinated cutover below.
+`docs/VK-REGEN-LOG.md` records the flip; full per-step text lives in the HORIZONLOG entries dated
+2026-07-18/19 under each key.
 
 **Landed already:** **S2** dead-stratum deletion (Epoch 1) — −32.6% proof bytes on the deployed
 member, verified, shipped. It is the pricing calibrant (188 B/col main; −960 cols → −181,757 B) and
@@ -114,7 +166,8 @@ the method proof (`compactS2` + `compactOk` gate); it does not re-run.
 2. **§E2 fold-arity flip** (semantic-change, defines the FS epoch the rest ride).
 3. **§E4 FRI re-grid** (rides the E2 FS epoch — a lone flip would be a second flag day).
 4. **§E7 narrow-bus swap** (mechanical, but mints 24 new VKs — after the chip retype, not parallel).
-5. **§E1 + regen riders** (per-member compaction and everything gated only on VK re-pin).
+5. **§E1 + §E8 + §E10 + regen riders** (per-member compaction, the bilateral-v2 expected-block
+   deletion, the owner-freeze colEq + 83-col dedup, and everything else gated only on VK re-pin).
 
 ### §S2 — DONE (Epoch 1)
 
@@ -194,21 +247,80 @@ Proofs are NOT interchangeable across the flip — this defines the FS epoch. Re
    1702-wide/50-PI member vs its 1647/46 assertion), `ivc_turn_chain` chain tests,
    `fri_params_soundness_budget`.
 
+### §E8 — bilateral-v2 expected-block deletion (soundness-core proven `b0c73d084`, semantic-change)
+
+Soundness core proven byte-safe (`BilateralAggregationCompact.lean`, §2026-07-19 continued); this is
+the cutover half. Independent of the map/IMT/rotation cluster and of E9's `joint_turn_aggregation.rs`.
+Recipe:
+1. Emit `circuit/descriptors/dregg-bilateral-aggregation-v3.json := emitVmJson2 bilateralAggDescriptorV3`
+   (the bilateral leg of `scripts/emit_descriptors.py` or a one-line `lake env lean` driver); MUST
+   byte-equal the `#guard` pin already committed in `BilateralAggregationCompact.lean` §2.
+2. Rust twin in `circuit/src/bilateral_aggregation_air.rs`: `include_str!` the v3 file;
+   `BILATERAL_AGGREGATION_DESCRIPTOR_NAME` → `dregg-bilateral-aggregation-v3`; DELETE
+   `AggregationInnerRowV2.expected_counts/expected_roots`; `build_aggregation_trace_v2` width 87→52
+   (cum 49, consistent 50, n_cells 51); KEEP the padding-row identity mirror (load-bearing under v3 —
+   the carry gates fire on padding transitions); callers (`node/src/api.rs:3989-3997`, wasm, MCP
+   `dregg_bilateral_action`) drop the expected args.
+3. Re-pin `circuit-prove/tests/bilateral_aggregation_emit_gate.rs` `GOLDEN_JSON` to the v3 bytes;
+   hand-built twin shape width 52 / 48 constraints / 15 window gates; re-pin the descriptor SHA/VK
+   (`bilateral_aggregation_descriptor_matches_lean_pin`).
+4. Same-commit doc fixes in `bilateral_aggregation_air.rs`: (a) module header (~15-90) — per-row CG-2
+   + retired 112-wide layout → v3 (boundary bindings + identity carries, per-row and now true
+   in-circuit); (b) the CG-5 `edge_fp` "~124-bit" claim (~581) is wrong for a 1-felt fingerprint
+   (~31-bit image, birthday ~2^15.5) — state the off-AIR exact multiset re-derivation is the real
+   closure, or widen `edge_fp` to 4 felts in the SAME regen if an in-circuit collision claim is wanted.
+5. Same commit: de-list the three now-stale `scripts/lean-orphans-allow.txt:32-34` entries
+   (Emit/Refine/Rung2 are reachable since `b0c73d084` rooted them) so `check-lean-orphans.sh` greens.
+6. Canary + gate: Rust twin of `gapTrace` (middle-row forged turn-id) must flip ACCEPT(v2) →
+   REJECT(v3); honest multi-cell bundle proves+verifies; `cargo test -p dregg-circuit-prove bilateral`
+   + the `multi_cell_cross_fed_binding` gauntlet; MEASURE the proof-byte delta at cutover (width
+   −40.2% is the staged column count, not a measured byte number).
+
+### §E10 — frozen-authority owner-limb close + 83-col dedup (falsifier landed `a8cd5e35f`, semantic-change)
+
+The falsifier (byte-safe, landed) PROVED the AFTER owner limb is unforced on the no-freeze class; the
+regen half closes it and dedups the 16 carriers. Do NOT run parallel with another regen or a live
+descriptor-editing lane. The real close is a Lean-authored owner-freeze colEq (the AIR is
+Lean-authored — never hand-written in Rust). Recipe:
+1. Lean `EffectVmEmitRotationV3.lean`: add `pubkeyFreezeColEqs(w) := (List.range 8).map (fun i =>
+   colEq (w+B_PUBKEY_OCTET+i) (w+AFTER_BLOCK_OFF+B_PUBKEY_OCTET+i))`, appended as a single `++`
+   right-operand (v1 stays left) to every non-owner-moving member's rotate wrapper (both `v3Of` movers
+   like cellSeal and `v3OfFrozen` value members); the only exception is a future transferOwnership;
+   mirror `authorityHeadroomFreezes`. Prove `pubkeyFreeze_freezes` (AFTER octet == BEFORE on a
+   satisfying transition row); keep the graduable + refinement keystones verbatim (`.gate`/
+   `when_transition` past `rotateV3` — composition unchanged); `#assert_axioms` clean (subset of
+   propext/Classical.choice/Quot.sound), no sorry/admit.
+2. Emit: regenerate the staged registry TSVs (`rotation-wide-registry-staged.tsv` +
+   `rotation-wide-umem-welded-registry-staged.tsv`) and the by-name descriptor JSONs — MINTS new
+   per-member VK + proof bytes (the byte-safe half stops here).
+3. Rust: no hand-AIR edits; `descriptor_ir2`/`ir2_eval_accepts`/`prove_vm_descriptor2` pick up the new
+   colEqs from the parsed descriptor automatically.
+4. CANARY: `circuit/tests/zzz_e10_freeze_owner_falsifier.rs` must FLIP — the owner-forge prove/verify
+   verdict ACCEPTED → REJECTED (invert the final assert to assert rejection + control still-honest-
+   accepts); the honest seal still proves+verifies; the lifecycle/economic teeth in
+   `effect_vm_rotation_flip.rs` stay green.
+5. The byte-safe E10 emit-tuple dedup on the 16 carriers (~83 dup cols ≈ 15.6 KB + 5.3K cells/proof)
+   rides the SAME regen; MEASURE the proof-byte delta at cutover.
+
 ### Regen riders (gated only on the VK re-pin — fold in, do not schedule separately)
 
 - **E5** map-ops instance split (op≤3 width 421 vs AAFI 897) — CONTENDED (IMT-migration cluster).
 - **E6** absent-op deletion — HELD-REGEN + Lean lemma; CONTENDED (same cluster).
 - **E13** legacy Memory table retirement + degree-8 kill — `setFieldDyn` in the dirty registry TSV.
 - **E14** umem cohort-boundary flip (`cohort := false`→`true` + TableDef swap + byte-parity pin).
-- **E8** bilateral-v2 expected-block delete (width 87→52) — semantic-change (strengthening).
+- **E8** bilateral-v2 expected-block delete (width 87→52) — soundness core PROVEN byte-safe
+  (`b0c73d084`); promoted to its own **§E8** subsection above (full recipe).
+- **E10** owner-freeze colEq + 83-col dedup — falsifier landed byte-safe (`a8cd5e35f`); promoted to
+  its own **§E10** subsection above (full recipe).
 - **E16(b)** envelope binding-descriptor drop (envelope v5 FS re-pin; coordinate lightclient/wasm).
 - **E17 regen riders** — tables-decl sync, welded-placeholder filter, PI-layout normalization,
   duplicate-gate / arity-3 drop, strata quarantine.
 
 **Not in this bundle:** **E11** (production-path read DONE 07-19: retire-able — re-scoped as an
 accept-surface retirement cutover with its own bundled gate re-pin; see E11) and
-**E15** (lane died this round). E9(a), E10-falsifier, E16(a)(c)(d) are byte-safe and run OUTSIDE the
-regen window.
+**E15** (lane died this round). The **E10 falsifier** landed byte-safe this round (`a8cd5e35f`); its
+dedup + owner-freeze colEq close ride the regen (§E10). E9(a), E16(a)(c)(d) are byte-safe and run
+OUTSIDE the regen window.
 
 ## Ranked backlog — summary
 
@@ -221,9 +333,9 @@ regen window.
 | 5 | E5 map-ops instance split | 476 all-zero cols ≈ 36 KB on heapWrite/refusal | 36–68 KB on 10 map members | 1 lane | regen | independent |
 | 6 | E6 absent-op deletion | MapAbsent instance ≈ 18–27 KB + 1 witness chip path × 7 members | strongest single lever on the chip-64 cliff | 1–2 lanes | regen + Lean lemma | independent |
 | 7 | E7 by-name zoo re-emit | 387 of 1,857 committed cols mechanically dead (lanes-only + unref); note-spend-leaf −62% width | dominant share of every private-payment sub-proof | 1 lane (census + narrowing bridge LANDED; regen now mechanical) | regen | does NOT inherit Epoch-2 |
-| 8 | E8 bilateral-v2 expected-block deletion | 35 duplicated cols+gates, live per multi-cell turn | width 87→52 + closes middle-row identity gap | 1 lane | semantic-change | independent |
+| 8 | E8 bilateral-v2 expected-block deletion | 35 duplicated cols+gates, live per multi-cell turn | width 87→52 + closes middle-row identity gap | 1 lane (soundness core PROVEN `b0c73d084`; regen mechanical) | semantic-change | independent; ride the regen |
 | 9 | E9 joint-turn binding leaf | free-witness digest + 1 uni-STARK + 1 wrap per joint turn | delete a layer or make it real | 0.5–1 lane | semantic-change | rides tag retype if (b) |
-| 10 | E10 frozen-authority falsifier + 83-col dedup | 83 duplicate cols ≈ 15.6 KB (16 members); 41 members unprobed | falsifier answer + 15.6 KB + 5.3K cells | hours + 1 lane | byte-safe then regen | dedup rides regen |
+| 10 | E10 frozen-authority falsifier + 83-col dedup | 83 duplicate cols ≈ 15.6 KB (16 members); no-freeze class PROVEN a witness-gen gap | 15.6 KB + 5.3K cells + owner-freeze colEq close | 1 lane (falsifier LANDED `a8cd5e35f`; dedup + colEq ride regen) | byte-safe then regen | dedup + close ride regen |
 | 11 | E11 Golden-v1 accept-surface retirement | ~900 lines; pow-14 config sets the gate's weakest column | read DONE: pow-14 NOT live-necessary; gate floor un-pins 71→73 WITH surface removal | 1 lane + canary | accept-surface cutover (no regen) | independent; never split surface removal from re-pin |
 | 12 | E12 pinned children on wide/joint trees | 2 of 3 tree folds fold unpinned children | closes the foreign-child seam pre-flip | 0.5–1 lane | semantic-change | BEFORE wide flip |
 | 13 | E13 Memory-table retirement + degree-8 kill | 2 AIRs + 3 buses for one member's 2 ops; lone deg-8 gate | main degree uniformly ≤2; whole subsystem deleted | 1–2 lanes | regen | ride the regen |
@@ -472,6 +584,15 @@ lane below (BUNDLED-CUTOVER §E7).**
 
 ### E8 — bilateral aggregation v2: delete the self-checked expected block (rank 8)
 
+**STATUS 2026-07-19 (continued): soundness core PROVEN byte-safe + verified CONFIRMED
+(`b0c73d084`). `BilateralAggregationCompact.lean` (14 `#assert_axioms` clean) machine-checks the
+width-87→52 compaction against the deployed `Satisfied2` — v3 accept-set ⊆ v2 (injective expand,
+contract∘expand = id), STRICT via an exhibited middle-row `turn_hash[0]=7` forgery v2 accepts and v3
+refuses; the per-row-CG-2 doc overstatement is now falsified by exhibit and corrected comment-only.
+Bytes untouched; the cutover is staged (BUNDLED-CUTOVER §E8). Verifier caveat: rooting the
+now-un-orphaned Emit/Refine/Rung2 modules leaves 3 stale `scripts/lean-orphans-allow.txt` entries
+that red `check-lean-orphans.sh` — de-list at cutover (§E8 step 5).**
+
 - **What/where:** `dregg-bilateral-aggregation-v2.json` (width 87, 70 constraints): **35 of 38
   gates are exactly `sched[13+i] == expected[49+i]`, and both blocks are filled by the prover from
   the same `AggregationInnerRowV2`** (`circuit/src/bilateral_aggregation_air.rs:332-408`); no PI,
@@ -514,6 +635,16 @@ lane below (BUNDLED-CUTOVER §E7).**
   bundle otherwise (this AIR does not use the chip).
 
 ### E10 — frozen-authority: falsifier on the 41, dedup on the 16 (rank 10)
+
+**STATUS 2026-07-19 (continued): falsifier landed byte-safe + verified CONFIRMED (`a8cd5e35f`).
+`zzz_e10_freeze_owner_falsifier.rs` proves the deployed AIR/verifier ACCEPTS a self-consistent
+`cellSealVmDescriptor2R24` seal whose only moved variable is the AFTER owner octet
+(`B_PUBKEY_OCTET` 105–112), while the control lifecycle-freeze forgery is REJECTED — so the `[U]` on
+the no-freeze class is now `[M]`: a real witness-gen faithfulness hole `apply_cell_seal` never
+produces. Root read (not asserted): cellSeal is `graduateV1 (rotateV3WithLifecyclePayloadGate …)`,
+not `v3OfFrozen`, so the pubkey octet is unforced on either path, and `proof_verify.rs:552` binds
+NEW_COMMIT to the prover's CLAIMED post, not a re-execute. The 16-carrier dedup and the real close (a
+Lean-authored owner-freeze colEq) are staged (BUNDLED-CUTOVER §E10).**
 
 - **What/where:** Only 16/57 members carry the 83 freeze-shaped colEq gates (AFTER limb k =
   BEFORE limb k at delta 179); **41 members have zero freeze-shaped colEq at any delta** [P].
@@ -764,7 +895,8 @@ Corrections absorbed into confirmed items (adjusted, not refuted):
 
 - E1: identity of the 34–39-col dead bands on note/refusal/heap members (read the note-region
   emit before compaction).
-- E10: what rejects a forged owner-limb on the 41-member no-freeze class (the falsifier).
+- E10: RESOLVED (`a8cd5e35f`) — nothing at the AIR/verifier level rejects a forged owner-limb on
+  the no-freeze class; it is a proven witness-gen faithfulness gap (close = the §E10 owner-freeze colEq).
 - E13: setFieldDyn's `value == addr` mem-op oddity.
 - E16(c): member-mix invariance of the K-fold root VK.
 - Pre-freeze item 3: fold-side cost of the Epoch-2 floor-shape branches (absorb instance /
