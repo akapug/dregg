@@ -16,9 +16,11 @@
 use dreggnet_hermes::{Confinement, HermesOffering, TURN_PROMPT, ToolKind};
 use dreggnet_offerings::{Action, DreggIdentity, Offering, Outcome, RunCost, SessionConfig};
 
-/// A `prompt` affordance carrying the user's input text in the label.
+/// A `prompt` affordance carrying the user's input on the TEXT payload — the only place
+/// `advance` reads a prompt from. The label is the affordance verb, exactly as a frontend
+/// synthesizes it (`Action::new(turn.clone(), turn, arg, true)`).
 fn prompt(text: &str) -> Action {
-    Action::new(text, TURN_PROMPT, 0, true)
+    Action::new(TURN_PROMPT, TURN_PROMPT, 0, true).with_text(text)
 }
 
 fn user() -> DreggIdentity {
@@ -346,4 +348,102 @@ fn the_default_offering_wires_the_real_resident_brain_seam() {
         "scripted-mock",
         "the test constructor retains the deterministic mock brain"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE LABEL-IS-NOT-CONTENT TOOTH — the same class of hole that let dreggnet-names
+// register the literal string "register" as a name.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **A prompt press with NO typed text must REFUSE — it must never drive the brain on the verb.**
+///
+/// Every real frontend synthesizes a press as `Action::new(turn.clone(), turn, arg, true)`, so
+/// `label == turn == "prompt"`. `advance` used to fall back `input.text.unwrap_or(&input.label)`,
+/// so a bare press classified the literal string `"prompt"`, BURNED a metered turn against the
+/// confinement budget, and handed back a genuine receipt for a request the user never made. The
+/// prompt now rides `Action::text` and nothing else; a bare press meters NOTHING.
+#[test]
+fn a_press_with_no_typed_prompt_refuses_and_meters_nothing() {
+    let off = HermesOffering::scripted();
+    let mut s = off.open(SessionConfig::with_seed(777)).expect("open");
+
+    let before: Vec<_> = ToolKind::ALL
+        .iter()
+        .map(|&k| (k, s.rate_remaining(k), s.budget_remaining(k)))
+        .collect();
+
+    // EXACTLY the shape a frontend builds for a bare press: label == turn, text: None.
+    let pressed = Action::new(TURN_PROMPT, TURN_PROMPT, ToolKind::Execute.tool_id(), true);
+    assert!(pressed.text.is_none(), "the bare press carries no text");
+    let out = off.advance(&mut s, pressed, user());
+    let Outcome::Refused(why) = out else {
+        panic!("a prompt press with no typed text must REFUSE, got {out:?}");
+    };
+    assert!(
+        why.contains("no prompt supplied"),
+        "the refusal names the missing text legibly, got {why:?}"
+    );
+
+    // THE LOAD-BEARING ASSERTION — no meter moved, so no turn was committed on the verb.
+    for (kind, rate, budget) in before {
+        assert_eq!(
+            s.rate_remaining(kind),
+            rate,
+            "{kind:?} rate must be untouched by a refused press"
+        );
+        assert_eq!(
+            s.budget_remaining(kind),
+            budget,
+            "{kind:?} budget must be untouched by a refused press"
+        );
+    }
+}
+
+/// **Whitespace-only text is no prompt either** — the same hole through a different door.
+#[test]
+fn a_blank_prompt_payload_refuses_rather_than_metering_a_blank_turn() {
+    let off = HermesOffering::scripted();
+    let mut s = off.open(SessionConfig::with_seed(778)).expect("open");
+    let chat_before = s.rate_remaining(ToolKind::Chat);
+
+    for blank in ["", "   ", "\n\t "] {
+        let armed =
+            Action::new(TURN_PROMPT, TURN_PROMPT, ToolKind::Chat.tool_id(), true).with_text(blank);
+        let out = off.advance(&mut s, armed, user());
+        assert!(
+            matches!(out, Outcome::Refused(_)),
+            "blank prompt {blank:?} must REFUSE, got {out:?}"
+        );
+    }
+    assert_eq!(
+        s.rate_remaining(ToolKind::Chat),
+        chat_before,
+        "a blank prompt meters nothing"
+    );
+}
+
+/// **The positive half — real typed text drives the brain on that text VERBATIM.** The refusal
+/// above only means something if the armed path still commits the user's actual words.
+#[test]
+fn typed_text_drives_the_brain_verbatim_and_meters_its_class() {
+    let off = HermesOffering::scripted();
+    let mut s = off.open(SessionConfig::with_seed(779)).expect("open");
+
+    let armed = Action::new(TURN_PROMPT, TURN_PROMPT, ToolKind::Execute.tool_id(), true)
+        .with_text("run ls -la");
+    assert!(
+        off.advance(&mut s, armed, user()).landed(),
+        "the typed prompt lands one confined turn"
+    );
+    assert_eq!(
+        s.rate_remaining(ToolKind::Execute),
+        ToolKind::Execute.default_rate() - 1,
+        "the VERBATIM text 'run ls -la' classified as Execute and metered that class"
+    );
+    assert_eq!(
+        s.rate_remaining(ToolKind::Chat),
+        ToolKind::Chat.default_rate(),
+        "the label verb 'prompt' (which would classify as Chat) drove nothing"
+    );
+    assert!(off.verify(&s).verified, "the chain re-verifies");
 }

@@ -4,7 +4,7 @@
 //! passes; a transfer is admitted IFF the owner-authorization caveats bind `ctx.sender`
 //! to the current owner.
 
-use dreggnet_names::{NameOp, NamesOffering, TURN_REGISTER};
+use dreggnet_names::{NameOp, NamesOffering, TURN_REGISTER, TURN_RESOLVE, TURN_TRANSFER};
 use dreggnet_offerings::{Action, Offering, Outcome, SessionConfig};
 
 /// A free name commits a real `TurnReceipt` and resolves to the claimant; registering a
@@ -260,4 +260,143 @@ fn render_lists_registered_names() {
         other => panic!("expected a Section surface, got {other:?}"),
     }
     assert!(off.actions(&s).iter().any(|a| a.turn == "register"));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE LABEL-IS-NOT-CONTENT TOOTH — the regression fence for the worst failure mode
+// this offering can have: corrupt content carrying a VALID proof.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **A naming turn with NO typed name must REFUSE — it must never commit the button label.**
+///
+/// Every real frontend (web / telegram / discord) synthesizes an affordance press as
+/// `Action::new(turn.clone(), turn, arg, true)`, so `label == turn`. `advance` used to fall back
+/// `input.text.unwrap_or(&input.label)`, which meant a bare press on the register affordance
+/// permanently claimed the literal string `"register"` — and handed the player a genuine
+/// `TurnReceipt` for it. That is worse than a refusal: it is corrupt content with a valid proof.
+/// The name now rides `Action::text` and NOTHING else.
+#[test]
+fn a_press_with_no_typed_name_refuses_and_never_registers_the_verb() {
+    let off = NamesOffering::new();
+    let mut s = off
+        .open(SessionConfig::with_seed(4242))
+        .expect("registry opens");
+    let alice = s.enroll();
+    let bob = s.enroll();
+
+    // EXACTLY the shape every frontend builds for a bare press: label == turn, text: None.
+    for turn in [TURN_REGISTER, TURN_RESOLVE] {
+        let pressed = Action::new(turn, turn, -1, true);
+        assert!(pressed.text.is_none(), "the bare press carries no text");
+        let out = off.advance(&mut s, pressed, alice.clone());
+        let Outcome::Refused(why) = out else {
+            panic!("a `{turn}` press with no typed name must REFUSE, got {out:?}");
+        };
+        assert!(
+            why.contains("no name supplied"),
+            "the refusal names the missing text legibly, got {why:?}"
+        );
+    }
+    // A transfer press (arg names a real enrolled recipient, so it is ONLY the missing text
+    // that stops it) must refuse for the same reason.
+    let pressed = Action::new(TURN_TRANSFER, TURN_TRANSFER, 1, true);
+    let out = off.advance(&mut s, pressed, alice.clone());
+    let Outcome::Refused(why) = out else {
+        panic!("a `transfer` press with no typed name must REFUSE, got {out:?}");
+    };
+    assert!(why.contains("no name supplied"), "legible refusal: {why:?}");
+    let _ = bob;
+
+    // THE LOAD-BEARING ASSERTION — nothing was committed, so no verb is a registered name.
+    for verb in [TURN_REGISTER, TURN_TRANSFER, TURN_RESOLVE] {
+        assert!(
+            !s.is_registered(verb),
+            "the affordance verb {verb:?} must NEVER become a registered name"
+        );
+    }
+    assert!(
+        s.registered().is_empty(),
+        "a refused press commits nothing: {:?}",
+        s.registered()
+    );
+    assert_eq!(s.turn_count(), 0, "a refused press commits ZERO turns");
+    assert!(s.log().is_empty(), "a refused press writes no op-log entry");
+}
+
+/// **Whitespace-only text is no name either** — a frontend that routes an empty/blank message must
+/// not register a blank name (the same corrupt-commit hole through a different door).
+#[test]
+fn a_blank_text_payload_refuses_rather_than_registering_a_blank_name() {
+    let off = NamesOffering::new();
+    let mut s = off
+        .open(SessionConfig::with_seed(4243))
+        .expect("registry opens");
+    let alice = s.enroll();
+
+    for blank in ["", "   ", "\n\t "] {
+        let armed = Action::new(TURN_REGISTER, TURN_REGISTER, -1, true).with_text(blank);
+        let out = off.advance(&mut s, armed, alice.clone());
+        assert!(
+            matches!(out, Outcome::Refused(_)),
+            "blank text {blank:?} must REFUSE, got {out:?}"
+        );
+    }
+    assert!(s.registered().is_empty(), "no blank name was committed");
+    assert_eq!(s.turn_count(), 0, "nothing committed");
+}
+
+/// **The positive half — real typed text commits that name VERBATIM.** The refusal above is only
+/// meaningful if the armed path still works, and works on the user's exact string.
+#[test]
+fn typed_text_commits_the_name_verbatim_across_every_naming_turn() {
+    let off = NamesOffering::new();
+    let mut s = off
+        .open(SessionConfig::with_seed(4244))
+        .expect("registry opens");
+    let alice = s.enroll();
+    let bob = s.enroll();
+    let bob_slot = s
+        .actors()
+        .iter()
+        .position(|x| *x == bob)
+        .expect("bob is enrolled") as i64;
+
+    // REGISTER — the typed name, not the verb.
+    let armed = Action::new(TURN_REGISTER, TURN_REGISTER, -1, true).with_text("alice.dregg");
+    assert!(
+        off.advance(&mut s, armed, alice.clone()).landed(),
+        "a typed name registers"
+    );
+    assert_eq!(
+        s.resolve_owner("alice.dregg").as_ref(),
+        Some(&alice),
+        "the VERBATIM typed string is the registered name"
+    );
+    assert!(!s.is_registered("register"), "the verb is not a name");
+
+    // RESOLVE — reads the typed name.
+    let armed = Action::new(TURN_RESOLVE, TURN_RESOLVE, -1, true).with_text("alice.dregg");
+    assert!(
+        off.advance(&mut s, armed, alice.clone()).landed(),
+        "resolve reads the typed name"
+    );
+
+    // TRANSFER — the typed name + the recipient slot in `arg`.
+    let armed = Action::new(TURN_TRANSFER, TURN_TRANSFER, bob_slot, true).with_text("alice.dregg");
+    assert!(
+        off.advance(&mut s, armed, alice.clone()).landed(),
+        "the owner transfers the typed name"
+    );
+    assert_eq!(
+        s.resolve_owner("alice.dregg").as_ref(),
+        Some(&bob),
+        "the transfer re-owned the VERBATIM typed name"
+    );
+
+    // The whole committed chain still re-verifies against a fresh substrate.
+    assert!(
+        off.verify(&s).verified,
+        "the text-driven chain replays: {}",
+        off.verify(&s).detail
+    );
 }

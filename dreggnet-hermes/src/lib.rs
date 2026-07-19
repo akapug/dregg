@@ -803,8 +803,9 @@ impl Offering for HermesOffering {
             .collect()
     }
 
-    /// **Drive one metered, cap-bounded turn.** [`Action::label`] carries the user's
-    /// input; the [`Brain`] classifies it into a proposed tool-call; the executor
+    /// **Drive one metered, cap-bounded turn.** [`Action::text`] carries the user's
+    /// input (a prompt with no text is `Refused` and meters nothing — the label is a
+    /// display string, never the prompt); the [`Brain`] classifies it into a proposed tool-call; the executor
     /// referees it through the class's gateway. An in-mandate call lands a real
     /// [`TurnReceipt`](dregg_sdk::ToolReceipt) ([`Outcome::Landed`]); a rate-exhausted
     /// / over-budget / out-of-mandate call is a real refusal ([`Outcome::Refused`])
@@ -819,11 +820,22 @@ impl Offering for HermesOffering {
         if input.turn != TURN_PROMPT {
             return Outcome::Refused(format!("unknown affordance: {}", input.turn));
         }
-        // The prompt rides the first-class [`Action::text`] payload (what a chat frontend routes
-        // a typed reply into); a programmatic caller that carries the prompt on the label still
-        // works (the fallback). Either way the brain classifies the real user input, never the
-        // affordance's verb.
-        let prompt = input.text.as_deref().unwrap_or(&input.label);
+        // THE PROMPT-IS-TEXT TOOTH. The prompt rides the first-class [`Action::text`] payload
+        // and NOTHING ELSE. There is deliberately NO fallback to [`Action::label`]: every real
+        // frontend synthesizes the label from the affordance VERB
+        // (`Action::new(turn.clone(), turn, arg, true)`), so a fallback would silently drive the
+        // brain — and BURN a metered, committed turn — on the literal string "prompt" while the
+        // receipt claims a genuine user request. A press with no typed prompt REFUSES and meters
+        // nothing.
+        let prompt = match input.text.as_deref() {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => {
+                return Outcome::Refused(
+                    "no prompt supplied — type a message into the prompt affordance (the button label is not a prompt)"
+                        .into(),
+                );
+            }
+        };
         self.drive(session, prompt)
     }
 
@@ -1006,7 +1018,9 @@ mod tamper_tests {
         );
     }
 
+    /// A `prompt` affordance carrying the user's input on the TEXT payload (the only place
+    /// `advance` reads it from — the label is the affordance verb, as a frontend synthesizes it).
     fn prompt(text: &str) -> Action {
-        Action::new(text, TURN_PROMPT, 0, true)
+        Action::new(TURN_PROMPT, TURN_PROMPT, 0, true).with_text(text)
     }
 }

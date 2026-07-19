@@ -32,13 +32,14 @@
 //!
 //! - `open` — a fresh registry session (an empty shared ledger; enroll actors with
 //!   [`NamesSession::enroll`]).
-//! - `advance(action, actor)` —
-//!   - **register** (`turn = "register"`, name in `label`): claim a free name → a real
+//! - `advance(action, actor)` — **the name always rides [`Action::text`]**, never the
+//!   display `label`; a turn with no typed name is a real `Refused` that commits nothing.
+//!   - **register** (`turn = "register"`, name in `text`): claim a free name → a real
 //!     [`TurnReceipt`]; a TAKEN name is `Refused` by `WriteOnce(NAME_HASH)`.
-//!   - **transfer** (`turn = "transfer"`, name in `label`, recipient = enrolled index
+//!   - **transfer** (`turn = "transfer"`, name in `text`, recipient = enrolled index
 //!     in `arg`): the current owner re-owners the name (propose + accept, two real
 //!     turns) → `Landed`; a NON-owner is `Refused` by the owner-auth caveats.
-//!   - **resolve** (`turn = "resolve"`, name in `label`): a real turn that emits a
+//!   - **resolve** (`turn = "resolve"`, name in `text`): a real turn that emits a
 //!     `name-resolved` receipt anchored on the name cell, carrying the committed owner.
 //! - `verify` — re-drive the recorded op-log against a FRESH substrate ([`NamesSession::replay`]);
 //!   the names re-resolve to their owners and a forged claim (a duplicate register, a
@@ -588,9 +589,14 @@ impl NamesOffering {
         NamesOffering { initial_expiry }
     }
 
-    /// Convenience: REGISTER `name` as `by`, through [`Offering::advance`].
+    /// Convenience: REGISTER `name` as `by`, through [`Offering::advance`]. The name rides the
+    /// [`Action::text`] payload — the only place `advance` reads it from.
     pub fn register(&self, s: &mut NamesSession, name: &str, by: &DreggIdentity) -> Outcome {
-        self.advance(s, Action::new(name, TURN_REGISTER, -1, true), by.clone())
+        self.advance(
+            s,
+            Action::new(TURN_REGISTER, TURN_REGISTER, -1, true).with_text(name),
+            by.clone(),
+        )
     }
 
     /// Convenience: TRANSFER `name` from `by` (the current owner) to `to`, through
@@ -608,12 +614,20 @@ impl NamesOffering {
             .position(|x| x == to)
             .map(|i| i as i64)
             .unwrap_or(-1);
-        self.advance(s, Action::new(name, TURN_TRANSFER, arg, true), by.clone())
+        self.advance(
+            s,
+            Action::new(TURN_TRANSFER, TURN_TRANSFER, arg, true).with_text(name),
+            by.clone(),
+        )
     }
 
     /// Convenience: RESOLVE `name` as `by`, through [`Offering::advance`].
     pub fn resolve(&self, s: &mut NamesSession, name: &str, by: &DreggIdentity) -> Outcome {
-        self.advance(s, Action::new(name, TURN_RESOLVE, -1, true), by.clone())
+        self.advance(
+            s,
+            Action::new(TURN_RESOLVE, TURN_RESOLVE, -1, true).with_text(name),
+            by.clone(),
+        )
     }
 }
 
@@ -638,8 +652,8 @@ impl Offering for NamesOffering {
     fn actions(&self, session: &NamesSession) -> Vec<Action> {
         // Each naming affordance carries a NAME string, not an index — so it SOLICITS free text
         // (`taking_text`): a chat frontend routes the bare name the user types into the
-        // affordance's [`Action::text`] payload, and `advance` reads THAT (never the decorated
-        // button label, which would register the literal prompt string).
+        // affordance's [`Action::text`] payload, and `advance` reads THAT and ONLY that. A press
+        // with no typed name REFUSES; the decorated button label is never a name.
         let mut out =
             vec![Action::new("register a free name", TURN_REGISTER, -1, true).taking_text()];
         for (name, _owner) in session.registered() {
@@ -658,12 +672,29 @@ impl Offering for NamesOffering {
     }
 
     fn advance(&self, session: &mut NamesSession, input: Action, actor: DreggIdentity) -> Outcome {
-        // The name rides the first-class [`Action::text`] payload (what a chat frontend routes a
-        // typed name into); a programmatic caller that carries the bare name on the label still
-        // works (the fallback). The button's DECORATED label ("register a free name") is never
-        // the name.
-        let name = input.text.as_deref().unwrap_or(&input.label);
-        match input.turn.as_str() {
+        // THE NAME-IS-TEXT TOOTH. The name rides the first-class [`Action::text`] payload and
+        // NOTHING ELSE. There is deliberately NO fallback to [`Action::label`]: a label is a
+        // DISPLAY string, and every real frontend synthesizes it from the affordance VERB
+        // (`Action::new(turn.clone(), turn, arg, true)`), so a label fallback would let a bare
+        // press permanently register the literal string "register" as a name — corrupt content
+        // carrying a VALID receipt, the worst failure mode there is. A press with no typed name
+        // is a legible REFUSAL that commits nothing.
+        //
+        // The verb is dispatched FIRST so an unknown affordance still reports as unknown; every
+        // KNOWN naming verb then demands a real name off `text`.
+        let turn = input.turn.as_str();
+        if !matches!(turn, TURN_REGISTER | TURN_TRANSFER | TURN_RESOLVE) {
+            return Outcome::Refused(format!("unknown affordance: {turn}"));
+        }
+        let name = match input.text.as_deref() {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => {
+                return Outcome::Refused(format!(
+                    "no name supplied — the `{turn}` affordance needs a name typed into its text payload (the button label is not a name)"
+                ));
+            }
+        };
+        match turn {
             TURN_REGISTER => session.do_register(name, &actor, self.initial_expiry),
             TURN_TRANSFER => {
                 if input.arg < 0 {

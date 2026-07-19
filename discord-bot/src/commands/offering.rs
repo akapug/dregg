@@ -100,11 +100,12 @@ pub struct ValuePrompt {
     pub placeholder: &'static str,
 }
 
-/// A turn whose [`Action::label`] is a **free-text string the user supplies** (a Hermes prompt, a
+/// A turn whose [`Action::text`] is a **free-text string the user supplies** (a Hermes prompt, a
 /// document edit's text) rather than a numeric arg — rendered as a button that opens a Discord
 /// modal collecting text. Where a [`ValuePrompt`]'s modal value is parsed to `i64` and fired via
-/// [`drive_value`], a text prompt's raw string rides the [`Action::label`] and fires via
-/// [`drive_text`] (the affordance wire carries no string payload, so the label is where it goes).
+/// [`drive_value`], a text prompt's raw string rides the first-class [`Action::text`] payload and
+/// fires via [`drive_text`]. It never rides the label: a label is DISPLAY, and an offering that
+/// reads it as content commits the button's own caption as if it were the user's input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextPrompt {
     /// The modal title.
@@ -325,25 +326,28 @@ pub fn public_key_of(state: &BotState, discord_user_id: u64) -> [u8; 32] {
     .0
 }
 
-/// **Display-time cross-platform identity resolution.** Map a custodial pubkey hex to the ROOT key
-/// K it linked to (via `/link-prove`, recorded in the shared `$DREGG_LINK_DIR/links.tsv`), falling
-/// back to the custodial key ITSELF when it was never linked. So a Discord-you and a Telegram-you
-/// (different custodial keys) that both linked to the same K collapse to ONE human wherever a
-/// board / leaderboard groups or shows players.
+/// **Display-time cross-platform identity resolution.** Map a custodial pubkey hex to the stable
+/// ACCOUNT ID of the root key K it linked to (via `/link-prove`, recorded in the shared
+/// `$DREGG_LINK_DIR/links.tsv`), falling back to the custodial key ITSELF when it was never linked.
+/// So a Discord-you and a Telegram-you (different custodial keys) that both linked to the same K
+/// collapse to ONE human wherever a board / leaderboard groups or shows players.
+///
+/// The join key is the rotation-ready account id
+/// ([`webauth_core::link_registry::LinkStore::resolve_root_account`], via
+/// [`RootResolver`](webauth_core::identity_resolve::RootResolver)), NOT the raw root pubkey: it is
+/// byte-identical to the identity CELL's id, so the shallow TSV and the coming cell agree, and the
+/// resolution survives a future signing-key rotation.
 ///
 /// This is a DISPLAY / RANK concern only. Attribution is UNCHANGED: the turn (and its proof /
 /// receipt) is still signed by, and attributed to, the custodial key — only the label a board
-/// groups and shows under resolves to the root. Additive by construction: an unlinked key resolves
-/// to itself (`resolve_root` → `None`), so the common unlinked case is byte-identical to today.
+/// groups and shows under resolves to the account. Additive by construction: an unlinked key
+/// resolves to itself, so the common unlinked case is byte-identical to today.
+///
+/// **Per-call** — it re-reads the link store each time. A board render should build ONE
+/// [`RootResolver`](webauth_core::identity_resolve::RootResolver) snapshot and resolve every row
+/// against it (the boards here do); this stays for the one-off single-identity sites.
 pub fn resolve_display_root(custodial_pubkey_hex: &str) -> String {
-    use webauth_core::link_registry::LinkStore;
-    let store = webauth_core::link_registry::FileLinkStore::new(
-        webauth_core::link_registry::default_store_path(),
-    );
-    match store.resolve_root(custodial_pubkey_hex) {
-        Ok(Some(root)) => root,
-        _ => custodial_pubkey_hex.to_string(),
-    }
+    webauth_core::identity_resolve::RootResolver::load().resolve(custodial_pubkey_hex)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1012,8 +1016,8 @@ pub fn drive_value<O: DiscordOffering>(
 }
 
 /// **Drive a text-taking affordance** — the free-text modal-submit path. The typed string rides
-/// the [`Action::label`] (the affordance wire carries no string payload); ONE real offering turn,
-/// attributed to the presser's dregg identity. (A Hermes prompt, a document edit's text.)
+/// the first-class [`Action::text`] payload; ONE real offering turn, attributed to the presser's
+/// dregg identity. (A Hermes prompt, a document edit's text.)
 pub fn drive_text<O: DiscordOffering>(
     channel: u64,
     turn: &str,
@@ -1024,10 +1028,14 @@ pub fn drive_text<O: DiscordOffering>(
     let turn = turn.to_string();
     let text = text.to_string();
     let outcome = with_live::<O, _>(channel, move |live| {
-        // The typed text rides the first-class `Action::text` payload (and the label too, for
-        // label-reading offerings like Hermes); `arg` is the affordance's own (a doc insert's anchor),
-        // `enabled` is decoration — the substrate is the sole referee of what lands.
-        let action = Action::new(text.clone(), turn, arg, true).with_text(text);
+        // The typed text rides `Action::text` and ONLY that. The label is the affordance VERB —
+        // the same display-only string every other frontend path sends. We deliberately do NOT
+        // duplicate the user's text into the label: a label is decoration, and an offering that
+        // reads it as CONTENT is a bug (it let a bare press register the literal name "register").
+        // Keeping content out of the label means such a regression fails LOUDLY here instead of
+        // being silently propped up by this path. `arg` is the affordance's own (a doc insert's
+        // anchor); `enabled` is decoration — the substrate is the sole referee of what lands.
+        let action = Action::new(turn.clone(), turn, arg, true).with_text(text);
         live.offering.advance(&mut live.session, action, actor)
     });
     match outcome {
