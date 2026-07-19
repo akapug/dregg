@@ -1120,4 +1120,143 @@ theorem burn_canary_clause :
 
 end Burn
 
+/-! ## §H — pipelinedSend (freeze + nonce tick; canonical descriptor + the deployed range envelope).
+
+pipelinedSend's per-cell faithfulness runs UNDER the explicit `PipelinedSendRowCanon` range envelope (the
+deployed range-check invariant — every state-block cell of both windows is a canonical BabyBear
+representative, incl. the `state_commit` column). Since our carrier `hash` is ABSTRACT (an arbitrary
+`List ℤ → ℤ`, not the field-valued Poseidon2), the envelope on the commit column cannot be discharged for
+an abstract `hash`; it is threaded through `absorbsTo` as the honest, named precondition it is (the same
+one the deployed soundness carries). The `⟺` is real under it. -/
+
+section PipelinedSend
+
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gFieldPassAll gFieldPass)
+open Dregg2.Circuit.Emit.EffectVmEmitPipelinedSend
+  (SEL_PIPELINED_SEND pipelinedSendRowGates pipelinedSendVmDescriptor PipelinedSendRowIntent
+   PipelinedSendRowCanon pipelinedSendVm_faithful RowEncodesSend CellSendSpec IsPipelinedSendRow)
+open Dregg2.Circuit.Emit.EffectVmEmitPipelinedSendWide
+  (pipelinedSendVmDescriptorWide pipelinedSendWide_constraints_eq PipelinedSendFullClause
+   pipelinedSendRunnableSpec sendPre sendPost goodPreRoots pipelinedSend_clause_not_trivial)
+
+def pipelinedSendRow (hash : List ℤ → ℤ) (pre post : CellState) : VmRowEnv :=
+  mkRow SEL_PIPELINED_SEND hash pre post (fun _ => 0)
+
+theorem pipelinedSendRow_reads (hash : List ℤ → ℤ) (pre post : CellState) :
+    WReads (pipelinedSendRow hash pre post) SEL_PIPELINED_SEND hash pre post :=
+  mkRow_reads SEL_PIPELINED_SEND (by decide) (by decide) hash pre post _
+
+/-- The honest-witness precondition for pipelinedSend: the generic `cellAbsorbsTo` PLUS the deployed
+`PipelinedSendRowCanon` range envelope on the witness (the field-representative invariant its
+faithfulness runs under). -/
+def pipelinedSendAbsorbsTo (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState) (sr : SysRoots) : Prop :=
+  cellAbsorbsTo preRoots hash pre post sr ∧ PipelinedSendRowCanon (pipelinedSendRow hash pre post)
+
+theorem pipelinedSend_intent (hash : List ℤ → ℤ) (pre post : CellState) (hspec : CellSendSpec pre post) :
+    PipelinedSendRowIntent (pipelinedSendRow hash pre post) := by
+  have h := pipelinedSendRow_reads hash pre post
+  obtain ⟨hLo, hHi, hN, hFld, hCap, hRes⟩ := hspec
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [h.saLo, h.sbLo]; exact hLo
+  · rw [h.saHi, h.sbHi]; exact hHi
+  · rw [h.saN, h.sbN, h.noopCold, sub_zero]; exact hN
+  · rw [h.saCap, h.sbCap]; exact hCap
+  · rw [h.saRes, h.sbRes]; exact hRes
+  · intro i hi; rw [h.saF ⟨i, hi⟩, h.sbF ⟨i, hi⟩]; exact hFld ⟨i, hi⟩
+
+theorem pipelinedSend_gates (hash : List ℤ → ℤ) (pre post : CellState)
+    (hcanon : PipelinedSendRowCanon (pipelinedSendRow hash pre post)) (hspec : CellSendSpec pre post)
+    (b : Bool) (c : VmConstraint) (hc : c ∈ pipelinedSendRowGates) :
+    c.holdsVm (pipelinedSendRow hash pre post) b false := by
+  have hg := (pipelinedSendVm_faithful (pipelinedSendRow hash pre post) hcanon).mpr
+    (pipelinedSend_intent hash pre post hspec)
+  have hcc := hg c hc
+  simp only [pipelinedSendRowGates, gFieldPassAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using hcc
+
+theorem pipelinedSend_gates_vac (hash : List ℤ → ℤ) (pre post : CellState) (c : VmConstraint)
+    (hc : c ∈ pipelinedSendRowGates) : c.holdsVm (pipelinedSendRow hash pre post) true true := by
+  simp only [pipelinedSendRowGates, gFieldPassAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;> exact trivial
+
+def pipelinedSendRunnableCompleteSpec (preRoots : SysRoots) : RunnableFullStateCompleteSpec CellState where
+  toRunnableFullStateSpec := pipelinedSendRunnableSpec preRoots
+  buildRow := fun hash pre post _sr => pipelinedSendRow hash pre post
+  absorbsTo := pipelinedSendAbsorbsTo preRoots
+  build_isRow := fun hash pre post _sr =>
+    ⟨(pipelinedSendRow_reads hash pre post).selHot, (pipelinedSendRow_reads hash pre post).noopCold⟩
+  build_decode := by
+    intro hash pre post sr habsorb
+    have h := pipelinedSendRow_reads hash pre post
+    exact ⟨⟨h.sbLo, h.sbHi, h.sbN, h.sbF, h.sbCap, h.sbRes, h.sbC, h.saLo, h.saHi, h.saN, h.saF,
+            h.saCap, h.saRes, h.saC, h.pOld, h.pNew⟩, habsorb.2, habsorb.1.2.1⟩
+  build_carrier := by
+    intro hash pre post sr habsorb
+    exact wreads_carrier (pipelinedSendRow_reads hash pre post) habsorb.1.1
+  build_active := by
+    intro hash pre post sr hclause habsorb c hc
+    obtain ⟨hspec, _⟩ := hclause
+    have hc2 : c ∈ pipelinedSendRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates SEL_PIPELINED_SEND := hc
+    exact canonical_active (pipelinedSendRow_reads hash pre post) pipelinedSendRowGates
+      (pipelinedSend_gates hash pre post habsorb.2 hspec true) c hc2
+  build_last := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ pipelinedSendRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates SEL_PIPELINED_SEND := hc
+    exact canonical_last (pipelinedSendRow_reads hash pre post) pipelinedSendRowGates
+      (pipelinedSend_gates_vac hash pre post) c hc2
+  build_ranges := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ [(⟨saCol state.BALANCE_LO, 30⟩ : VmRange), ⟨saCol state.BALANCE_HI, 30⟩] := hc
+    exact wreads_ranges (pipelinedSendRow_reads hash pre post) habsorb.1.2.2.1 habsorb.1.2.2.2 c hc2
+  build_newcommit := by
+    intro hash pre post sr
+    exact wreads_newcommit (pipelinedSendRow_reads hash pre post)
+
+theorem pipelinedSend_commit_iff (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState) (sr : SysRoots)
+    (habsorb : pipelinedSendAbsorbsTo preRoots hash pre post sr) :
+    (satisfiedVm hash (pipelinedSendRunnableCompleteSpec preRoots).descriptor
+        ((pipelinedSendRunnableCompleteSpec preRoots).buildRow hash pre post sr) true false
+      ∧ satisfiedVm hash (pipelinedSendRunnableCompleteSpec preRoots).descriptor
+        ((pipelinedSendRunnableCompleteSpec preRoots).buildRow hash pre post sr) true true)
+    ↔ ((pipelinedSendRunnableCompleteSpec preRoots).fullClause pre post sr
+        ∧ ((pipelinedSendRunnableCompleteSpec preRoots).buildRow hash pre post sr).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash ((pipelinedSendRunnableCompleteSpec preRoots).buildRow hash pre post sr)) :=
+  runnable_full_commit_iff (pipelinedSendRunnableCompleteSpec preRoots) hash pre post sr habsorb
+
+def pipelinedSendDemoPost (hash : List ℤ → ℤ) : CellState :=
+  { sendPost with commit := cellWideCommit hash sendPost }
+
+/-- **`pipelinedSend_commit_iff_demo` — the both-windows `⟺`, concretely, UNDER the deployed range
+envelope.** The envelope on the abstract-`hash` commit column cannot be discharged for an arbitrary
+`hash`; it is the honest named hypothesis `hcanon` (true of the field-valued deployed Poseidon2 output). -/
+theorem pipelinedSend_commit_iff_demo (hash : List ℤ → ℤ)
+    (hcanon : PipelinedSendRowCanon (pipelinedSendRow hash sendPre (pipelinedSendDemoPost hash))) :
+    (satisfiedVm hash (pipelinedSendRunnableCompleteSpec goodPreRoots).descriptor
+        (pipelinedSendRow hash sendPre (pipelinedSendDemoPost hash)) true false
+      ∧ satisfiedVm hash (pipelinedSendRunnableCompleteSpec goodPreRoots).descriptor
+        (pipelinedSendRow hash sendPre (pipelinedSendDemoPost hash)) true true)
+    ↔ ((pipelinedSendRunnableCompleteSpec goodPreRoots).fullClause sendPre (pipelinedSendDemoPost hash) goodPreRoots
+        ∧ (pipelinedSendRow hash sendPre (pipelinedSendDemoPost hash)).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash (pipelinedSendRow hash sendPre (pipelinedSendDemoPost hash))) :=
+  pipelinedSend_commit_iff goodPreRoots hash sendPre (pipelinedSendDemoPost hash) goodPreRoots
+    ⟨⟨rfl, rfl, ⟨by norm_num [pipelinedSendDemoPost, sendPost], by norm_num [pipelinedSendDemoPost, sendPost]⟩,
+       ⟨by norm_num [pipelinedSendDemoPost, sendPost], by norm_num [pipelinedSendDemoPost, sendPost]⟩⟩, hcanon⟩
+
+theorem pipelinedSend_canary_clause :
+    ¬ (pipelinedSendRunnableCompleteSpec goodPreRoots).fullClause sendPre
+        { sendPost with nonce := 5 } goodPreRoots :=
+  pipelinedSend_clause_not_trivial
+
+#assert_axioms pipelinedSendRow_reads
+#assert_axioms pipelinedSend_commit_iff
+#assert_axioms pipelinedSend_commit_iff_demo
+#assert_axioms pipelinedSend_canary_clause
+
+end PipelinedSend
+
 end Dregg2.Circuit.Emit.EffectVmFullStateTagsB
