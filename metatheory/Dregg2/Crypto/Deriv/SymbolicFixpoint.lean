@@ -48,15 +48,16 @@ already-seen state closes in a few pops — where the bound-based search needed 
 1. **Reachable derivatives of a `RigidFull` root STAY `RigidFull`** (`rigidRE_der` /
    `rigidRE_derList`, proven below): `der` never invents a leaf — it propagates the existing ones
    and introduces only `bot = sym .ff`, which is rigid. So rigidity is checked ONCE, at the root.
-2. **A `SymbolicRE` root need NOT be `RigidFull`** — this is the honest fragment boundary, at the
-   ROOT not at the derivatives: `IsSymbolic` admits `symMemberOf` leaves, on which `predBEq`
-   fail-closes (`AciComplete`'s residual). The `not`/`and`/`or` compounds are NO LONGER outside:
-   `predBEq` descends them structurally (AciNormal, 07-19 widening), so e.g. `contradictionRE`'s
-   `¬braceP` leaf is now rigid and `contradictionRE` sits INSIDE the runnable fragment
-   (`#guard`ed below). The runnable fragment is therefore `IsSymbolic ∧ RigidFull` = leaves in
-   `tt/ff/symEq/digEq` closed under `not`/`and`/`or` — and it widens further exactly as `predBEq`
-   is extended over `symMemberOf` (mechanical; every theorem here transports unchanged, as
-   `AciComplete`'s residual already states for its own).
+2. **A `SymbolicRE` root is in fact always `RigidFull`** — the boundary this item once named is
+   CLOSED: the 07-19 `predBEq` widenings descend `not`/`and`/`or` structurally AND decide the
+   `symMemberOf`/`digFieldEq`/`allOf`/`anyOf` leaves (AciNormal), so every `IsSymbolic` leaf class
+   is `predBEq`-decidable — `rigidRE_of_isSymbolic` (SymbolicMintermsPlus) discharges the
+   `RigidFull` side condition for the WHOLE `IsSymbolic` fragment. `contradictionRE` and
+   enum-membership guards sit INSIDE the runnable fragment (`#guard`ed below); what remains
+   outside `rigidRE` are only the `fieldEqField`/reactive leaves, which are outside `IsSymbolic`
+   too. The instances below still take the (now always-dischargeable) `RigidFull` hypothesis
+   so this module is untouched by the widening — every theorem transports unchanged, as
+   `AciComplete`'s residual already states for its own.
 
 ## Termination, scoped honestly
 
@@ -464,10 +465,13 @@ def rolePlus : PredRE := .cat (.sym roleP) (.star (.sym roleP))
 -- ...and `contradictionRE` — whose `¬braceP` leaf USED to fail-close `rigidRE` — is now INSIDE
 -- the runnable fragment: `predBEq` descends `not`/`and`/`or` structurally (AciNormal, 07-19
 -- widening), exactly the "widens as `predBEq` is extended" promise of the module header. The
--- honest ROOT boundary is now exhibited by a `symMemberOf` leaf (`IsSymbolic` — pin-representable
--- — but `predBEq` does not descend it), at the root only (derivatives never escape: `rigidRE_der`).
+-- second 07-19 widening (`predBEq` over `symMemberOf`/`digFieldEq`/`allOf`/`anyOf`) then closed
+-- the `symMemberOf` boundary too — EVERY `IsSymbolic` root is now `RigidFull`
+-- (`rigidRE_of_isSymbolic`, SymbolicMintermsPlus). The honest ROOT boundary that remains is a
+-- `fieldEqField`/reactive leaf, which is outside `IsSymbolic` as well.
 #guard rigidRE contradictionRE = true
-#guard rigidRE (.sym (.symMemberOf "role" [3, 4])) = false
+#guard rigidRE (.sym (.symMemberOf "role" [3, 4])) = true
+#guard rigidRE (.sym (.fieldEqField "a" "b")) = false
 
 -- SATURATION at tiny fuel — the adaptive fixpoint CLOSES where the bound is `3^15+`:
 #guard (reachFix roleCands 32 rolePlus).isSome
