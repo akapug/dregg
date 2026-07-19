@@ -1,5 +1,79 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑⚑⚑ E1 — DEAD v1-FACE COLUMN COMPACTION (the allocator's SECOND flag-day): PROOF HALF LANDED (2026-07-18)
+`docs/EFFICIENCY-BACKLOG-circuit-minimality.md` item E1. On every wide registry member (already
+S2-compacted) a per-member band of v1-face columns is DEAD — referenced by ZERO surviving
+constraint/hash-site/range: the retired aux band cols 90..187 (incl the 60-col balance
+bit-decomposition superseded by the 15-bit-limb avail weld) + the gentian refuse tail. 103 cols on
+the deployed transfer row (1704→1601).
+
+LANDED + committed (58bbf7c09; rooting rode a192a270b via a concurrent `git add -A` sweep):
+- `Dregg2/Circuit/Emit/RotWideCompactE1.lean` — the general PER-MEMBER kill-set compaction reusing
+  the S2 generic transport engine. E1 kills PURE-DEAD columns, so `compactE1_expand` (a `Satisfied2`
+  witness of the COMPACT member re-derives FULL `Satisfied2` of the ORIGINAL) needs NO permutation
+  walk and NO chip-table extension (aux tables UNCHANGED; killed cols alias the compact row and
+  constrain nothing). `deadColsE1` = the DERIVED kill-set (filtered `List.range`, no hand-listing);
+  `compactE1Ok` = the value-preservation gate; `compactE1Ok_of_ceiling` = the GENERIC proof the
+  derived kill-set ALWAYS passes (killability IS unreferencedness by construction; only per-member
+  fact is `transitionCeilingOk`, a cheap transition-only scan). `#assert_axioms` clean, no sorry.
+- `Dregg2/Circuit/RotatedKernelRefinementAvailWideCompactE1.lean` — the CROWN COROLLARY stacked on
+  the S2 crown (transfer LANDED): the deployed E1-compact transfer row expands to the availability
+  keystone; `deployedE1_rejects_overdebit` closes the wrap-forgery class. `decide +kernel`, fast.
+- Validated: `deadColsE1` on the real deployed post-S2 transfer descriptor derives EXACTLY the
+  103-col census kill-set, `compactE1Ok = true`, 1704→1601.
+
+GROUND TRUTH (confirmed): the descriptor JSON constraint list IS the complete constraint set for the
+wide main table — a column referenced by zero JSON constraints is genuinely AIR-unconstrained (only
+`.transition {hi,lo}` does fixed-index face reads `STATE_BEFORE_BASE+hi`/`STATE_AFTER_BASE+lo`; fill
+functions write-not-constrain). floor 90 > every saCol (≤89) ⇒ `dropIdxG` identity on transitions.
+
+DEPLOYMENT HALF — STAGED (the exact recipe, from the Rust ground-truth lane):
+- ① Emit driver: `EmitWideRegistryProbe` + `EmitWideUMemWeldRegistryProbe` apply `compactE1` after
+  `compactForEmit` (S2), print an `e1compact\t{key}\t{intervals}` companion line (kill-set in
+  POST-S2 coords). Makes the crown byte-source claim true.
+- ② Rust producer: `circuit/src/effect_vm/e1_compact_generated.rs` (`E1_COMPACT_TABLE: &[(&str,
+  &[(usize,usize)])]`) + `trace_rotated::compact_e1_columns` (mirror `compact_s2_columns`
+  `:4079-4108` — `find` by key, `drain` intervals DESCENDING), sequenced AFTER `compact_s2_columns`
+  at every producer site: `generate_rotated_effect_vm_descriptor_and_trace_wide` (:5814),
+  `_heap_write_wide` (:4702), `_transfer_cap_open_tb_wide` (:4756), + SDK `full_turn_proof.rs`
+  1863/2022/3234/3469/3498. BOTH registries (umem-weld base = `wide_desc.trace_width` auto-shifts).
+- ③ `scripts/emit_descriptors.py::split_wide_registry` (:579-641) parses the `e1compact` lines into
+  `e1_compact_generated.rs`; `DREGG_VK_REGEN_ACK=$(git rev-parse HEAD:metatheory/Dregg2)` +
+  `DREGG_VK_REGEN_ALLOW_DIRTY=1`. Both FP pins (`WIDE_REGISTRY_STAGED_FP`,
+  `WIDE_UMEM_WELD_REGISTRY_FP`) change; ack-gated. `check-drift-taxonomy.sh` — E1 SHRINKS, verify it
+  is not mis-flagged as a widen (`DREGG_ALLOW_REGENESIS`).
+- ④ Tests: width gate `legacy_chain_drop_measurement.rs::s2_deletion_yield_measurement` (:179 assert
+  `BASELINE-960` → adjust for the extra E1 drop); ADD a value-level PI-equality differential (does
+  not yet exist); prove/verify `effect_vm_wide_roundtrip.rs` + `wide_new_members_cover.rs`
+  (`cargo test -p dregg-circuit --release`); executor `sdk/tests/executor_welded_commit.rs`
+  (`--features prover`); proof-size 375,053 B baseline in `docs/MEASURE-legacy-1felt-chain-drop.md`.
+- ⑤ The appendix [U] bands are now GROUNDED (stratum lane, cross-checked vs the emitted JSON) — ALL
+  CONFIRMED-DEAD-SAFE, and the pure-dead `deadColsE1` (no-drop, refs-complete) derivation captures
+  them with the CORRECT live boundaries automatically:
+  - note/refusal/heap `982..1015`/`968..1001` (34-col) = the cap-open READ-appendix cap-authority
+    tail `src`+`effBit`+32 `MASK_BITS` (`CapOpenEmit.lean:127-129`), inert on an IMT leaf (a heap/
+    fields/accumulator leaf carries no facet/mask authority) — never absorbed/gated/pinned.
+  - `690..693`/`676..679` (4-col) = READ-appendix `leaf 3..6` (unused `CapLeaf` mask/expiry/
+    breadstuff). `leaf 2` (689/675, the IMT `nextAddr`) is a LIVE arity-3 hash input — refcount ≥1
+    in the JSON, so the no-drop derivation KEEPS it (excludes it from the kill-set). The census's
+    old `689+5` was an artifact of a transitive-drop; the shipped derivation is `690+4`.
+  - refusal/heap `1019..1022`/`1005..1008` = AFTER-spine `leaf 3..6`, same unused cap-leaf fields.
+  - `585..588` = the 4-felt DFA/DSL route-commitment carrier `C_RC_OFF`
+    (`EffectVmEmitRotationV3.lean:216-223`): ZERO absent-sentinel + unconstrained on
+    heapWrite/cap-open family (dead), but LIVE PI-published on the `withDfaRcPins` members
+    (note/refusal/sovereign/custom). The PER-MEMBER `deadColsE1` handles this exactly (dead only
+    where truly unreferenced). Guardrail for the Rust producer: confirm `trace_rotated::C_DFA_RC_OFF`
+    zero-fills these on non-Dfa members (def-comment says it does).
+  - Full pure-dead yield: 12,136 col-instances (~2.28 MB) across both registries, mean 106.5/member.
+- ⑥ SEPARATE FOLLOW-UP (needs the S2-style WALK, not the pure-dead bridge): setField `589..616` (28
+  cols × 8 members) = the 4 arity-4 H4 `CellState`-commit chip sites' 7 spare lanes each (the
+  superseded S1 gadget; root `col 88`/PI 8 unbound on setField → transitively dead), plus heapWrite's
+  1 further dead arity-2 `node8` site. Dropping these chip LOOKUPS + reclaiming their outputs needs
+  the constraint-drop + chip-table extension (`RotWideCompactS2`'s `expandGo`/`ChipTableSoundN`
+  machinery, which is generic over the plan). The below-face selectors 14..53 + params 70..75 (~58
+  cols/transfer) are a THIRD, larger lever (a full face RE-LAY — deleting below-face shifts the fixed
+  `.transition`/producer/PI face bases), correctly out of E1 scope.
+
 ## ⚑⚑⚑ THE DESCENT REIMAGINED NATIVELY IN LEAN — deployed, driven, canary FIRED (2026-07-18)
 `Dregg2/Games/Dungeon.lean` (the reimagined game: custody-ratchet relics w/ provenance-to-mint, capacity
 attenuation `pack+depth ≤ CAP`, the light-as-clock permadeath theorem, keys-as-exercised-capabilities, terminal
@@ -9690,3 +9764,81 @@ witness-gen perimeter postures.
   anchors, then delete the bare chains + `rotV3SitesAt` from `rotateV3`.
 - FOLLOW-UP (small): PI slots 42/43 remain as producer-zeroed unbound slots in the wide PI vector
   (FS-absorbed, bind nothing); dropping them is a PI-map renumber across executor/SDK/fold.
+
+## 2026-07-18 — bare-V3 1-felt stratum: GROUNDED consumer map + partial repoint (retirement NOT forced)
+Exhaustive HEAD grounding of every `V3_STAGED_REGISTRY_TSV`/`_FP` consumer (5 read-only lanes +
+integrator re-reads of every load-bearing site). VERDICT: the bare registry still has live
+consumers, so it stays — but three of the four live reads were STALE-ROUTING debt, repointed now.
+
+**What was LIVE and got REPOINTED (this commit series):**
+- `circuit-prove/src/joint_turn_aggregation.rs:1294` `rotated_descriptor_selector` (node fold
+  admission via `verify_descriptor_participant`, reached from `node/src/mcp/handlers_verify.rs:159`)
+  read the BARE registry for its wire→DISPLAY name map while legs are MINTED WIDE
+  (`turn/src/rotation_witness.rs:577` dispatches the wide producer). It worked only because 52/57
+  display names are byte-identical across registries — the 5 heap-open/fields-open flip members
+  (`createCell`/`heapWrite`/`noteCreate`/`noteSpend`/`refusal`) have DIFFERENT wide display names, so
+  their wide legs were silently INADMISSIBLE. → now reads `WIDE_REGISTRY_STAGED_TSV`.
+- `sdk/src/full_turn_proof.rs` verifier fallback (was :4486-4497): the light-client cutover accepted
+  a 1-felt bare TB cap-open leg because `cap_open_key_has_wide_twin` HARD-CODED `"TB"→false` — stale
+  since the TB wide twin landed (`transferCapOpenTBVmDescriptor2R24` IS in both wide TSVs; the
+  producer's `go_wide` is a straight TSV lookup with NO carve-out, so honest producers never mint
+  bare TB). The executor (`verify_one_cohort_run`) was ALREADY wide-only — the fallback was a
+  light-client-only wide-dodge acceptance hole. → carve-out dropped (straight membership), fallback
+  DELETED, `matches_ns` bare arm dropped, chain fails CLOSED on a cap-open key with no wide twin,
+  TB test wrapper flipped to wide (mirroring the attenuate wrapper).
+- `dregg-epoch/src/lib.rs:138` `local_manifest().registry_fp` pinned `V3_STAGED_REGISTRY_FP` — but
+  the deployed proof path resolves from the WIDE registries, so an S2-class wide flag-day was
+  INVISIBLE to the epoch handshake (pre/post-S2 binaries agreed on registry_fp while mutually
+  unverifiable). Its own test pinned `bf263dd4…` vs actual `609bf269…` — red-at-HEAD, gate never
+  re-armed. → `registry_fp = <WIDE_FP>+<WELD_FP>`; tests fixed + re-pinned.
+
+**What STAYS on bare-V3 (the honest residue — the registry cannot retire yet):**
+1. `verifier/src/rotated_replay.rs` (:78/:183) — the `dregg-verifier rotated-replay-chain` CLI
+   demonstration floor (default feature, shipped; OFF the sovereign turn-verify wire). Its whole
+   adjacency logic rides the 1-felt PIs 42/43 (rotated OLD/NEW commit, `trace_rotated.rs:607-608`).
+   Migration = re-author around the wide 8-felt anchors (16 wide commit PIs); NOT quick.
+2. The 3 gentian Sat members (`settleEscrowSat`/`dischargeSat`/`vaultSat` VmDescriptor2R24) exist
+   ONLY in the bare TSV (wide has 57 of bare's 60 keys). Their consumers are tests
+   (`gentian_*`/`settle_escrow_*` — 5 files) but they are the deployed-capacity liveness surface;
+   retiring bare = first emitting their wide twins (a `SettleEscrowSatWideDescriptor.lean` exists;
+   discharge/vault wide twins do not).
+3. `V3_SETFIELD_VALUE8_STAGED_REGISTRY_TSV` — staged epoch, NO wide twin at all; test-only
+   (`setfield_value8_epoch_flip.rs`) but its epoch is un-taken, not dead.
+4. ~30 test files (classified): SUBJECTS of bare geometry (`effect_vm_rotation_flip`,
+   `producer_descriptor_coverage_gate`, `effect_enum_descriptor_residual_gate`) retire WITH the
+   registry; FOILS (bare-vs-wide in one file: `accumulator_completion_lane_forge`,
+   `cap_open_self_verify`, `heap_write_roundtrip`, wide-armed `vk_epoch_notes`/`refusal_lifecycle`)
+   keep their wide arms; FIXTURES pinned to bare geometry (6 `vk_epoch_*` LC-binding files at
+   PI 50/51/58 + `ROT_WIDTH`, `cap_open_avail_roundtrip` 49-PI, `cap_open_exercise_self_verify` 818,
+   `cap_open_turn_bound_verify` 409, `rotation_batchstark_leaf_smoke` 608) need geometry-aware
+   repoints; TRIVIAL repoints: `effect_vm_selector_gate_forgery`, `dsl_rc_emit`,
+   `avail_weld_live_roundtrip` (env-overridable), `heap_write_deployed_root_forced`,
+   `setfield_completion_lane_forge`, `verifier/tests/integration_rotated_replay_chain`.
+5. DEAD-not-deleted (named, no non-test caller): sdk narrow provers
+   `prove_effect_vm_rotated_ir2{,_with_caveat,_with_fee}`, `prove_rotated_umem_welded_staged`,
+   `rotated_descriptor_json_for_effects`, `verify_full_turn_bound_with_escrow_weld` (ZERO callers);
+   circuit-prove `mint_welded_from_block_witnesses` (bare read :703, test-only via
+   `turn/rotation_witness.rs:1004`); `rotated_prover_enabled()`/`DREGG_ROTATED_PROVER` gates nothing.
+6. LEAN CANNOT RETIRE regardless: the wide emission is DEFINED over the bare members
+   (`v3RegistryWide := v3Registry.zip(…).map wideAppend`, `rotateV3Wide := graduateV1 (rotateV3 d)`,
+   S2 compaction reads `rotV3SitesAt`) and the apex (`v3RegistryHeap`/`Rfix`,
+   `CircuitSoundnessAssembled.lean:141`) quantifies over `v3Registry`. Only the emission DRIVERS die
+   with the Rust registry: `EmitRotationV3.lean`, `EmitRotationV3SetFieldValue8.lean`,
+   `v3RegistrySetFieldValue8` (in `EffectVmEmitRotationV3Refused.lean`), their two
+   `scripts/emit_descriptors.py` entries + TSV goldens + PROVENANCE rows.
+
+**Retirement path (in order):** (1) wide twins for discharge/vault Sat (+ settle wide routing) OR
+retire the Sat stratum; (2) decide the setfield-value8 epoch (take it wide or delete it);
+(3) rotated_replay CLI → wide anchors; (4) test repoints per the classification above; (5) THEN
+delete the bare TSV + FP + `EmitRotationV3*.lean` drivers + emit entries (ACK-gated regen), and the
+1-felt chains + `rotV3SitesAt` fill from `rotateV3` — noting PI 42/43 renumber is a SEPARATE
+flag-day (wide vector carries them producer-zeroed; `RETIRED_COMMIT_PI_*`, trace_rotated.rs:4142).
+
+**⚠ DISCOVERED WOUND (pre-existing, NOT fixed here — soundness-adjacent, needs its own lane):**
+`verify_full_turn_bound`'s no-double-spend nullifier read gates on `leg_is_note_spend` matching the
+noteSpend fingerprint in the WIDE registry only — a WELDED noteSpend leg
+(`WIDE_UMEM_WELD_REGISTRY_TSV` fingerprint, mintable on the live chain path when a umem witness is
+threaded) is NOT matched, so its nullifier read is SKIPPED (zero sentinel ⇒ no cross-binding to the
+non-revocation leg). Adding the welded arm is acceptance-strengthening but touches the double-spend
+gate: verify blast radius (honest welded noteSpend turns must still carry the matching legs) before
+firing.
