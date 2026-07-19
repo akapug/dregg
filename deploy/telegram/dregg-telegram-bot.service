@@ -38,6 +38,12 @@ Environment=RUST_LOG=info
 # Durable game sessions: per-(offering,chat) move-logs, resumed by replay on every restart
 # (a tampered log refuses to reopen). The consumed-updates offset persists here too.
 Environment=TELEGRAM_SESSION_DIR=%h/.local/state/dregg-telegram/sessions
+# SHARED interaction-envelope audit dir (dreggnet-audit). The SAME dir as the
+# games-funnel web + discord units, so one `auditq correlate` joins a chain across
+# all three services (without it this bot writes to its own sibling of
+# TELEGRAM_SESSION_DIR and cross-service correlate is dead on arrival). Per-process
+# filenames keep the shared dir contention-free. =off disables.
+Environment=DREGG_AUDIT_DIR=%h/.local/state/dregg/audit
 WorkingDirectory=%h/dev/breadstuffs
 ExecStart=%h/dregg-telegram/dreggnet-telegram-bot
 Restart=always

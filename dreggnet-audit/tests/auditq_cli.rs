@@ -340,6 +340,96 @@ fn replay_emits_ordered_script_with_expectations_and_honest_scope() {
 }
 
 #[test]
+fn correlate_joins_across_per_process_files_in_one_dir() {
+    // The whole point of per-process filenames: two SERVICES share ONE
+    // correlate-able dir (distinct files, never contending on one) and auditq
+    // still joins a chain that spans them. Two `AuditLog`s opened for different
+    // platforms in the same dir land in DIFFERENT `audit-DATE.<platform>-<pid>.NN`
+    // files — this is the cross-process shape a real deploy produces.
+    let dir = std::env::temp_dir().join(format!(
+        "auditq-cli-xproc-{}-{}",
+        std::process::id(),
+        dreggnet_audit::correlation_id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let shared_sess = "shared-across-services";
+
+    // Service A (web): an earlier landed act on the shared session.
+    {
+        let web = AuditLog::open(&dir, "web");
+        let mut ev = AuditEvent::new(
+            "web",
+            Actor::asserted("anon"),
+            Surface::Http,
+            Input::new(
+                "POST /offerings/dungeon/session/x/act",
+                serde_json::json!({ "turn": "fire" }),
+            ),
+        )
+        .correlated("corr-web-A")
+        .in_session(Some("dungeon".into()), Some(shared_sess.into()))
+        .with_outcome(AuditOutcome::Landed {
+            turn_hash: TURN_HASH_A.into(),
+            ended: false,
+        });
+        ev.ts_ms = 1_784_380_000_000;
+        web.emit(&ev);
+        web.sync();
+    }
+
+    // Service B (telegram): a later act on the SAME session id, different process.
+    {
+        let tg = AuditLog::open(&dir, "telegram");
+        let mut ev = AuditEvent::new(
+            "telegram",
+            Actor::custodial("42", "f3".repeat(32)),
+            Surface::Callback,
+            Input::new("offering:fire", serde_json::json!({ "turn": "fire" })),
+        )
+        .correlated("corr-tg-B")
+        .in_session(Some("dungeon".into()), Some(shared_sess.into()));
+        ev.ts_ms = 1_784_380_002_000;
+        tg.emit(&ev);
+        tg.sync();
+    }
+
+    // The two services wrote SEPARATE segment files in the one shared dir.
+    let files = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("audit-") && n.ends_with(".jsonl"))
+        })
+        .count();
+    assert_eq!(
+        files, 2,
+        "web and telegram wrote SEPARATE per-process files in the shared dir"
+    );
+
+    // auditq correlate joins the chain ACROSS both files, ordered by time.
+    let out = stdout(&auditq(&dir, &["correlate", shared_sess]));
+    assert!(
+        out.contains("session_id = shared-across-services (2 event(s)"),
+        "the cross-service chain has both events: {out}"
+    );
+    let iw = out
+        .find("corr-web-A")
+        .expect("web event in the joined chain");
+    let it = out
+        .find("corr-tg-B")
+        .expect("telegram event in the joined chain");
+    assert!(
+        iw < it,
+        "the joined chain is ordered by time across the two service files"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn tool_output_carries_no_secret_shaped_values() {
     // The store schema is secret-free by design; the tool must not ADD any.
     // Denylist the env-shaped values a regressed build might leak.

@@ -13,11 +13,19 @@
 //! join to the receipt chain when a turn landed, and every refusal that
 //! committed nothing.
 //!
-//! Storage: append-only JSONL, one event per line, daily-rotated files
-//! `audit-YYYY-MM-DD.jsonl` in a per-deploy directory. Non-blocking: the hot
-//! path serializes once and `try_send`s to a writer thread; a full queue DROPS
-//! the line (counted, reported on the next successful write) — a turn never
-//! waits on the log.
+//! Storage: append-only JSONL, one event per line, in a per-deploy directory.
+//! Files are named PER PROCESS — `audit-YYYY-MM-DD.<platform>-<pid>.NN.jsonl` —
+//! so several services can share ONE correlate-able directory without ever
+//! contending on a single file (concurrent `O_APPEND` + a looping `write_all`
+//! can interleave partial lines — the same tear class as the link registry);
+//! the `.NN` suffix byte-rolls a burst so no single file grows unbounded. A
+//! shared dir + `auditq correlate` therefore joins a chain across services.
+//! Non-blocking: the hot path serializes once and `try_send`s to a writer
+//! thread; a full queue DROPS the line (counted, reported on the next
+//! successful write) — a turn never waits on the log. Durability is ON by
+//! default: the writer `fsync`s the tail periodically and on drain, OFF the
+//! per-line hot path (`DREGG_AUDIT_FSYNC=0` opts out); [`AuditLog::sync`] is the
+//! shutdown/test barrier that makes everything emitted-so-far durable.
 //!
 //! Secret hygiene is a HARD RULE: bot tokens, `BOT_SECRET`/master secrets,
 //! derived seeds, provider keys, and the raw Telegram initData string must
@@ -31,14 +39,23 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Current schema version stamped into every event.
 pub const SCHEMA_VERSION: u16 = 1;
 
 /// Bounded queue depth between emitters and the writer thread.
 const QUEUE_CAP: usize = 4096;
+
+/// Default byte size at which a segment file rolls to the next `.NN` — bounds a
+/// burst so no single file grows unbounded. Override with `DREGG_AUDIT_MAX_BYTES`.
+const DEFAULT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Default periodic-durability interval: the longest a written-but-unsynced tail
+/// may sit before the writer `fsync`s it, batched OFF the per-line hot path.
+/// Override with `DREGG_AUDIT_SYNC_MS`.
+const DEFAULT_SYNC_MS: u64 = 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Event shape (§3 of the design)
@@ -371,7 +388,14 @@ impl AuditLog {
     /// log that counts drops — mirroring the session stores'
     /// degrade-with-warning posture.
     pub fn open(dir: impl Into<PathBuf>, platform: &'static str) -> AuditLog {
-        let dir = dir.into();
+        Self::open_inner(dir.into(), platform, resolve_max_bytes())
+    }
+
+    /// The body behind [`AuditLog::open`], with an EXPLICIT per-segment byte cap
+    /// (so the rotation tests can force a roll without racing the global
+    /// `DREGG_AUDIT_MAX_BYTES` env against parallel tests). `fsync`, retention,
+    /// and the sync interval still come from env — defaults are durable.
+    fn open_inner(dir: PathBuf, platform: &'static str, max_bytes: u64) -> AuditLog {
         if let Err(e) = std::fs::create_dir_all(&dir) {
             eprintln!(
                 "[dreggnet-audit] WARNING: cannot open audit dir {} ({e}); \
@@ -380,7 +404,6 @@ impl AuditLog {
             );
             return Self::disabled_with(platform);
         }
-        let fsync = std::env::var("DREGG_AUDIT_FSYNC").is_ok_and(|v| v == "1");
         let retain_days = std::env::var("DREGG_AUDIT_RETAIN_DAYS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok());
@@ -388,11 +411,18 @@ impl AuditLog {
         let dropped = Arc::new(AtomicU64::new(0));
         let writer = Writer {
             dir,
-            fsync,
+            // Per-process tag: two services sharing one dir land in DISTINCT
+            // files, so neither `O_APPEND` nor byte-rolling ever contends.
+            proc_tag: format!("{platform}-{}", std::process::id()),
+            fsync: resolve_fsync(),
             retain_days,
+            max_bytes,
+            sync_interval: Duration::from_millis(resolve_sync_ms()),
             dropped: Arc::clone(&dropped),
             file: None,
             file_day: i64::MIN,
+            seq: 0,
+            bytes_written: 0,
             warned_io: AtomicBool::new(false),
         };
         std::thread::Builder::new()
@@ -541,93 +571,215 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Durability posture: fsync is ON by default (a crash keeps the recorded tail);
+/// `DREGG_AUDIT_FSYNC` in {`0`,`off`,`false`,`no`} opts OUT (still flushes, just
+/// does not force the disk sync). The sync itself is batched off the hot path.
+fn resolve_fsync() -> bool {
+    match std::env::var("DREGG_AUDIT_FSYNC") {
+        Ok(v) => !matches!(v.trim(), "0" | "off" | "false" | "no"),
+        Err(_) => true,
+    }
+}
+
+/// Per-segment byte cap from `DREGG_AUDIT_MAX_BYTES` (positive integer), else
+/// [`DEFAULT_MAX_BYTES`].
+fn resolve_max_bytes() -> u64 {
+    std::env::var("DREGG_AUDIT_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_BYTES)
+}
+
+/// Periodic-fsync interval (ms) from `DREGG_AUDIT_SYNC_MS`, else
+/// [`DEFAULT_SYNC_MS`]. Clamped to at least 1ms.
+fn resolve_sync_ms() -> u64 {
+    std::env::var("DREGG_AUDIT_SYNC_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|n| n.max(1))
+        .unwrap_or(DEFAULT_SYNC_MS)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Writer thread: one write(2) per line, daily rotation, retention prune
+// Writer thread: per-process segment files (day + byte rotation), batched fsync,
+// retention prune. One write(2) per line; durability off the hot path.
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct Writer {
     dir: PathBuf,
+    /// `<platform>-<pid>` — the per-process filename segment.
+    proc_tag: String,
     fsync: bool,
     retain_days: Option<u64>,
+    /// Roll to the next `.NN` segment once the current file crosses this size.
+    max_bytes: u64,
+    /// How long a written-but-unsynced tail may sit before a periodic fsync.
+    sync_interval: Duration,
     dropped: Arc<AtomicU64>,
     file: Option<File>,
     file_day: i64,
+    /// The current segment's `.NN` sequence within `(file_day, proc_tag)`.
+    seq: u32,
+    /// Bytes appended to the current segment (its on-open length + our writes),
+    /// so byte-rolling does not stat the file per line.
+    bytes_written: u64,
     warned_io: AtomicBool,
 }
 
 impl Writer {
     fn run(mut self, rx: Receiver<Msg>) {
-        while let Ok(msg) = rx.recv() {
-            match msg {
-                Msg::Line(line) => self.write_line(line),
-                Msg::Sync(ack) => {
-                    if let Some(f) = self.file.as_mut() {
-                        let _ = f.flush();
-                        if self.fsync {
-                            let _ = f.sync_all();
-                        }
+        let interval = self.sync_interval;
+        // `dirty` = there are written lines not yet fsynced. We fsync at natural
+        // idle points (queue drained) or after `interval`, NEVER per line.
+        let mut dirty = false;
+        let mut last_sync = Instant::now();
+        loop {
+            match rx.recv_timeout(interval) {
+                Ok(msg) => {
+                    self.handle(msg, &mut dirty, &mut last_sync);
+                    // Coalesce the rest of a burst without blocking, so the
+                    // fsync is amortized across the whole batch.
+                    while let Ok(msg) = rx.try_recv() {
+                        self.handle(msg, &mut dirty, &mut last_sync);
                     }
-                    let _ = ack.send(());
                 }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+            if dirty && last_sync.elapsed() >= interval {
+                self.fsync_now();
+                dirty = false;
+                last_sync = Instant::now();
             }
         }
-        // Channel disconnected: flush and exit.
+        // Channel disconnected: every queued line has been drained above; make
+        // the tail durable and exit.
+        self.fsync_now();
+    }
+
+    fn handle(&mut self, msg: Msg, dirty: &mut bool, last_sync: &mut Instant) {
+        match msg {
+            Msg::Line(line) => {
+                self.write_line(line);
+                *dirty = true;
+            }
+            Msg::Sync(ack) => {
+                // The barrier: everything emitted before this call is now on
+                // disk. FIFO delivery means all prior lines were already
+                // written; fsync makes them durable, then we ack.
+                self.fsync_now();
+                *dirty = false;
+                *last_sync = Instant::now();
+                let _ = ack.send(());
+            }
+        }
+    }
+
+    /// Flush + (unless opted out) fsync the current segment. Off the hot path:
+    /// called at idle/interval/shutdown/`sync()`, never per line.
+    fn fsync_now(&mut self) {
         if let Some(f) = self.file.as_mut() {
             let _ = f.flush();
+            if self.fsync {
+                let _ = f.sync_data();
+            }
         }
     }
 
     fn write_line(&mut self, mut line: String) {
         let today = (now_ms() / 86_400_000) as i64;
         if self.file.is_none() || self.file_day != today {
-            self.roll_to(today);
+            self.roll_new_day(today);
         }
-        let Some(f) = self.file.as_mut() else {
+        if self.file.is_none() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return;
-        };
-        // Report accumulated drops as their own meta line, first.
+        }
+
+        // Report accumulated drops as their own meta line, first (tiny; no roll).
         let pending_drops = self.dropped.swap(0, Ordering::Relaxed);
         if pending_drops > 0 {
             let meta = format!(
                 "{{\"v\":{SCHEMA_VERSION},\"ts_ms\":{},\"audit_meta\":{{\"dropped\":{pending_drops}}}}}\n",
                 now_ms()
             );
-            if f.write_all(meta.as_bytes()).is_err() {
+            if !self.append(meta.as_bytes()) {
                 // Fold the report back in; it will retry on the next write.
                 self.dropped.fetch_add(pending_drops, Ordering::Relaxed);
             }
         }
+
         line.push('\n');
-        match f.write_all(line.as_bytes()) {
+        // Byte-size rotation: roll to a fresh `.NN` before an append that would
+        // cross the cap — UNLESS the current segment is empty, so a single line
+        // larger than the cap still lands (in its own segment) not an infinite roll.
+        if self.bytes_written > 0
+            && self.bytes_written.saturating_add(line.len() as u64) > self.max_bytes
+        {
+            self.advance_segment();
+            if self.file.is_none() {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        if !self.append(line.as_bytes()) {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Append raw bytes to the current segment, updating the byte counter.
+    /// Returns false (and disarms the file for a reopen on the next line) on I/O
+    /// error, warning once.
+    fn append(&mut self, bytes: &[u8]) -> bool {
+        let Some(f) = self.file.as_mut() else {
+            return false;
+        };
+        match f.write_all(bytes) {
             Ok(()) => {
-                if self.fsync {
-                    let _ = f.sync_data();
-                }
+                self.bytes_written = self.bytes_written.saturating_add(bytes.len() as u64);
+                true
             }
             Err(e) => {
-                self.dropped.fetch_add(1, Ordering::Relaxed);
                 if !self.warned_io.swap(true, Ordering::Relaxed) {
                     eprintln!(
                         "[dreggnet-audit] WARNING: audit write failed ({e}); \
                          dropping lines (counted)"
                     );
                 }
-                // Force a reopen attempt on the next line.
                 self.file = None;
+                false
             }
         }
     }
 
-    fn roll_to(&mut self, day: i64) {
-        let path = self.dir.join(file_name_for_day(day));
+    /// Open the day's segment: continue the current tail (a restart APPENDS to
+    /// the live `.NN`, append-only) and keep byte-rolling from it. Prunes old
+    /// files once the day's file is open.
+    fn roll_new_day(&mut self, day: i64) {
+        let (seq, len) = latest_segment(&self.dir, day, &self.proc_tag);
+        self.file_day = day;
+        self.open_segment(day, seq, len);
+        if self.file.is_some()
+            && let Some(retain) = self.retain_days
+        {
+            prune_old(&self.dir, day, retain);
+        }
+    }
+
+    /// Roll to the next `.NN` on a byte-cap crossing.
+    fn advance_segment(&mut self) {
+        let next = self.seq.saturating_add(1);
+        self.open_segment(self.file_day, next, 0);
+    }
+
+    fn open_segment(&mut self, day: i64, seq: u32, initial_len: u64) {
+        let path = self.dir.join(audit_file_name(day, &self.proc_tag, seq));
         match OpenOptions::new().create(true).append(true).open(&path) {
             Ok(f) => {
                 self.file = Some(f);
-                self.file_day = day;
-                if let Some(retain) = self.retain_days {
-                    prune_old(&self.dir, day, retain);
-                }
+                self.seq = seq;
+                self.bytes_written = initial_len;
             }
             Err(e) => {
                 if !self.warned_io.swap(true, Ordering::Relaxed) {
@@ -643,22 +795,69 @@ impl Writer {
     }
 }
 
-/// `audit-YYYY-MM-DD.jsonl` (UTC) for a day count since the unix epoch.
-fn file_name_for_day(days_since_epoch: i64) -> String {
+/// The per-process, byte-sequenced segment file name (UTC):
+/// `audit-YYYY-MM-DD.<platform>-<pid>.NN.jsonl`.
+fn audit_file_name(days_since_epoch: i64, proc_tag: &str, seq: u32) -> String {
     let (y, m, d) = civil_from_days(days_since_epoch);
-    format!("audit-{y:04}-{m:02}-{d:02}.jsonl")
+    format!("audit-{y:04}-{m:02}-{d:02}.{proc_tag}.{seq:02}.jsonl")
 }
 
-/// Parse `audit-YYYY-MM-DD.jsonl` back to days-since-epoch.
+/// The `audit-YYYY-MM-DD` stem shared by every segment of a day.
+fn date_stem(days_since_epoch: i64) -> String {
+    let (y, m, d) = civil_from_days(days_since_epoch);
+    format!("audit-{y:04}-{m:02}-{d:02}")
+}
+
+/// Highest existing segment seq for `(day, proc_tag)` in `dir`, and that file's
+/// current byte length — so a restart APPENDS to the live tail (append-only) and
+/// keeps byte-rolling from it, rather than clobbering or losing the count. No
+/// existing segment → `(0, 0)`.
+fn latest_segment(dir: &Path, day: i64, proc_tag: &str) -> (u32, u64) {
+    let prefix = format!("{}.{proc_tag}.", date_stem(day));
+    let mut best: Option<(u32, u64)> = None;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(seq_str) = name
+                .strip_prefix(&prefix)
+                .and_then(|r| r.strip_suffix(".jsonl"))
+            else {
+                continue;
+            };
+            let Ok(seq) = seq_str.parse::<u32>() else {
+                continue;
+            };
+            let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+            match best {
+                Some((bs, _)) if seq <= bs => {}
+                _ => best = Some((seq, len)),
+            }
+        }
+    }
+    best.unwrap_or((0, 0))
+}
+
+/// Parse the day from an audit file name. Accepts BOTH the per-process form
+/// `audit-YYYY-MM-DD.<proc>.NN.jsonl` and the legacy `audit-YYYY-MM-DD.jsonl`
+/// (older stores stay readable). Returns days-since-epoch, or `None` for any
+/// name that is not an audit file.
 fn day_from_file_name(name: &str) -> Option<i64> {
     let rest = name.strip_prefix("audit-")?.strip_suffix(".jsonl")?;
-    let bytes = rest.as_bytes();
-    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+    // The date is the fixed first 10 chars. A per-process name then carries a
+    // `.` separator; the legacy name ends right there.
+    let date = rest.get(0..10)?;
+    let db = date.as_bytes();
+    if db[4] != b'-' || db[7] != b'-' {
         return None;
     }
-    let y: i64 = rest[0..4].parse().ok()?;
-    let m: u32 = rest[5..7].parse().ok()?;
-    let d: u32 = rest[8..10].parse().ok()?;
+    match rest.as_bytes().get(10) {
+        None | Some(b'.') => {}
+        Some(_) => return None,
+    }
+    let y: i64 = date.get(0..4)?.parse().ok()?;
+    let m: u32 = date.get(5..7)?.parse().ok()?;
+    let d: u32 = date.get(8..10)?.parse().ok()?;
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
     }
@@ -983,31 +1182,85 @@ mod tests {
     }
 
     #[test]
-    fn date_math_and_rotation_names() {
-        // Known anchors.
+    fn date_math_and_segment_names() {
+        // Known anchors — per-process, byte-sequenced names.
         assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(file_name_for_day(0), "audit-1970-01-01.jsonl");
+        assert_eq!(
+            audit_file_name(0, "web-1", 0),
+            "audit-1970-01-01.web-1.00.jsonl"
+        );
         let d = days_from_civil(2026, 7, 17);
         assert_eq!(civil_from_days(d), (2026, 7, 17));
-        assert_eq!(file_name_for_day(d), "audit-2026-07-17.jsonl");
+        assert_eq!(
+            audit_file_name(d, "telegram-42", 3),
+            "audit-2026-07-17.telegram-42.03.jsonl"
+        );
         // Leap day round-trip.
         let leap = days_from_civil(2024, 2, 29);
         assert_eq!(civil_from_days(leap), (2024, 2, 29));
-        // Parse is the inverse of format.
+        // The reader recovers the day from the per-process names (incl. a
+        // hyphen-bearing platform), the legacy name, and rejects non-audit files.
+        assert_eq!(
+            day_from_file_name("audit-2026-07-17.web-99.00.jsonl"),
+            Some(d)
+        );
+        assert_eq!(
+            day_from_file_name("audit-2026-07-17.tg-miniapp-7.12.jsonl"),
+            Some(d)
+        );
         assert_eq!(day_from_file_name("audit-2026-07-17.jsonl"), Some(d));
         assert_eq!(day_from_file_name("audit-index.sqlite"), None);
         assert_eq!(day_from_file_name("audit-2026-7-17.jsonl"), None);
+        assert_eq!(day_from_file_name("audit-2026-07-17-web.jsonl"), None);
         // Today's writer file really is named for today.
         let today = (now_ms() / 86_400_000) as i64;
-        assert_eq!(day_from_file_name(&file_name_for_day(today)), Some(today));
+        assert_eq!(
+            day_from_file_name(&audit_file_name(today, "web-1", 0)),
+            Some(today)
+        );
+    }
+
+    #[test]
+    fn byte_size_rotation_rolls_and_reads_back_across_segments() {
+        let dir = tmp_dir("byteroll");
+        // A tiny per-segment cap so each event (well over 200 bytes serialized)
+        // lands in its own `.NN`. Explicit cap avoids racing DREGG_AUDIT_MAX_BYTES.
+        let log = AuditLog::open_inner(dir.clone(), "web", 200);
+        for i in 0..4 {
+            log.emit(&sample_event("web", &format!("s{i}")));
+        }
+        log.sync();
+        drop(log);
+
+        let segments = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|n| day_from_file_name(n).is_some())
+            })
+            .count();
+        assert!(
+            segments >= 2,
+            "a burst past the byte cap rolled into multiple segments, got {segments}"
+        );
+        // Every event across the segments is read back, in order.
+        let (events, skipped) = read_events_dir(&dir).unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(events.len(), 4, "no event lost across a byte roll");
+        for (i, ev) in events.iter().enumerate() {
+            assert_eq!(ev.session_id.as_deref(), Some(format!("s{i}").as_str()));
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn retention_prunes_only_old_audit_files() {
         let dir = tmp_dir("prune");
         let today = (now_ms() / 86_400_000) as i64;
-        let old = file_name_for_day(today - 10);
-        let recent = file_name_for_day(today - 2);
+        let old = audit_file_name(today - 10, "web-1", 0);
+        let recent = audit_file_name(today - 2, "web-1", 0);
         let unrelated = "audit-index.sqlite";
         for name in [old.as_str(), recent.as_str(), unrelated] {
             std::fs::write(dir.join(name), b"x\n").unwrap();

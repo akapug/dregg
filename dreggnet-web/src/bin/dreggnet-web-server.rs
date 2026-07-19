@@ -62,6 +62,24 @@ async fn main() {
         )
         .init();
 
+    // ARM THE INTERACTION-ENVELOPE AUDIT LOG (dreggnet-audit) at boot — the
+    // discord/telegram bins already do this; without it the web service's audit
+    // dir diverged from theirs and `auditq correlate` could not join across
+    // services. Forcing resolution here (a) opens the writer thread now, before
+    // the first request, and (b) surfaces the resolved dir in the boot log.
+    // Resolution: DREGG_AUDIT_DIR (=off disables) > a sibling `audit/` of
+    // DREGGNET_WEB_SESSION_DIR > disabled. Point DREGG_AUDIT_DIR at the SAME dir
+    // as the other services to make the store cross-service correlate-able.
+    {
+        let audit = dreggnet_web::audit::log();
+        tracing::info!(
+            audit_dir = %resolve_audit_dir_for_log(),
+            enabled = audit.is_enabled(),
+            "interaction-envelope audit log armed (dreggnet-audit; \
+             DREGG_AUDIT_DIR overrides, =off disables)"
+        );
+    }
+
     let bind = resolve_bind();
     let addr: SocketAddr = match bind.parse() {
         Ok(a) => a,
@@ -152,9 +170,38 @@ async fn main() {
         .await
     {
         tracing::error!(error = %e, "server error");
+        // Flush the audit tail even on the error exit — durability over the
+        // 4096-line writer queue is best-effort, but a clean shutdown loses none.
+        dreggnet_web::audit::log().sync();
         std::process::exit(1);
     }
+    // Make the audit tail durable before exit (the writer also fsyncs
+    // periodically, but this drains everything emitted up to shutdown).
+    dreggnet_web::audit::log().sync();
     tracing::info!("server shut down gracefully");
+}
+
+/// Reproduce `dreggnet_web::audit`'s dir resolution for the boot log line (the
+/// module resolves this privately; the discord/telegram bins likewise compute
+/// their default in the bin). Purely for the operator-visible message — the log
+/// itself is armed by `audit::log()`.
+fn resolve_audit_dir_for_log() -> String {
+    match std::env::var("DREGG_AUDIT_DIR") {
+        Ok(v) if v == "off" => "disabled (DREGG_AUDIT_DIR=off)".to_string(),
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => match std::env::var("DREGGNET_WEB_SESSION_DIR") {
+            Ok(s) if !s.trim().is_empty() => {
+                let p = std::path::Path::new(&s);
+                match p.parent() {
+                    Some(par) if !par.as_os_str().is_empty() => {
+                        par.join("audit").display().to_string()
+                    }
+                    _ => "audit".to_string(),
+                }
+            }
+            _ => "disabled (no DREGG_AUDIT_DIR, no DREGGNET_WEB_SESSION_DIR)".to_string(),
+        },
+    }
 }
 
 /// Resolve the bind address: `--bind <addr>` flag > `DREGGNET_WEB_BIND` env > [`DEFAULT_BIND`].

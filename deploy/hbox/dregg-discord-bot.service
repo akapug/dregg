@@ -20,6 +20,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/dregg/discord-bot.env
+# SHARED interaction-envelope audit dir (dreggnet-audit) — the SAME dir as the
+# games-funnel web + telegram units, so one `auditq correlate` joins a chain
+# across all three services. Without it the bot writes to its own sibling of the
+# sqlite db and cross-service correlate is dead on arrival. Per-process filenames
+# (audit-DATE.discord-<pid>.NN.jsonl) keep the shared dir contention-free. The
+# discord bin reads this env directly (no source change); the env file may
+# override; =off disables.
+Environment=DREGG_AUDIT_DIR=%h/.local/state/dregg/audit
 WorkingDirectory=%h/dregg-bot
 ExecStart=%h/dregg-bot/dregg-discord-bot
 Restart=always
