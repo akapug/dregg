@@ -56,7 +56,7 @@ VK/FS epoch later:
 | 4 | E4 FRI re-grid (8,14–15,16) | (6,19) chosen at a 3.0×-smaller member | projected 151→115–125 KB [A] | 1 lane | regen | with/after bundle |
 | 5 | E5 map-ops instance split | 476 all-zero cols ≈ 36 KB on heapWrite/refusal | 36–68 KB on 10 map members | 1 lane | regen | independent |
 | 6 | E6 absent-op deletion | MapAbsent instance ≈ 18–27 KB + 1 witness chip path × 7 members | strongest single lever on the chip-64 cliff | 1–2 lanes | regen + Lean lemma | independent |
-| 7 | E7 by-name zoo re-emit | 39–88% of width per predicate/payment proof | dominant share of every private-payment sub-proof | ~2 lanes | regen | does NOT inherit Epoch-2 |
+| 7 | E7 by-name zoo re-emit | 387 of 1,857 committed cols mechanically dead (lanes-only + unref); note-spend-leaf −62% width | dominant share of every private-payment sub-proof | 1 lane (census + narrowing bridge LANDED; regen now mechanical) | regen | does NOT inherit Epoch-2 |
 | 8 | E8 bilateral-v2 expected-block deletion | 35 duplicated cols+gates, live per multi-cell turn | width 87→52 + closes middle-row identity gap | 1 lane | semantic-change | independent |
 | 9 | E9 joint-turn binding leaf | free-witness digest + 1 uni-STARK + 1 wrap per joint turn | delete a layer or make it real | 0.5–1 lane | semantic-change | rides tag retype if (b) |
 | 10 | E10 frozen-authority falsifier + 83-col dedup | 83 duplicate cols ≈ 15.6 KB (16 members); 41 members unprobed | falsifier answer + 15.6 KB + 5.3K cells | hours + 1 lane | byte-safe then regen | dedup rides regen |
@@ -207,25 +207,69 @@ VK/FS epoch later:
 
 ### E7 — by-name predicate/membership zoo re-emit (rank 7)
 
-- **What/where:** The graduated-lane idiom (7 unused permutation lanes per single-output chip
-  site) is endemic in the non-rotated Lean-emitted descriptors: `by-name/note-spend-leaf.json`
-  **125 of 149 cols are lookup-only + 8 fully unreferenced (89% plumbing/dead), per private
-  payment**; blinded-membership 29/33; attested-fact 29/34; merkle-membership-depth2 21/24;
-  predicate-arith 20 of 25–27 each; 4ary-general 7/18; non-revocation 15/27;
-  cross-side-existence-v2 17/24; bundle-tree-fold-v2 8/10. The 4-ary layout documents the lanes
-  explicitly (`circuit/src/membership_descriptor_4ary.rs:27,72`). [P] census, hunt-only.
-- **Verified cost today:** 39–88% of each proof's committed width, at per-predicate /
-  per-payment / per-bilateral-turn frequency. These descriptors are separate Lean emit modules —
-  **the Epoch-2 chip changes do not re-emit them**; without a pass of their own they keep the old
-  shape forever.
-- **Fix sketch:** one shared Lean combinator (`chipLookup` with per-shape tuple, out0-only) + a
-  re-emit sweep of `by-name/` through `scripts/emit-descriptors.sh` (the drift gate already
-  recurses into by-name); delete note-spend-leaf's 8 unreferenced cols in the same pass. Fold in
+**STATUS 2026-07-18: census CONFIRMED (full per-column parse of the deployed bytes at
+`ea75575c0`) + the narrowing-soundness bridge LANDED
+(`metatheory/Dregg2/Circuit/ChipNarrowLookup.lean`, CI-rooted, #assert_axioms-clean). Bytes
+untouched; what remains is the single mechanical regen lane below.**
+
+- **What/where (CONFIRMED, was hunt-only):** the graduated-lane idiom (7 unused permutation
+  lanes per single-output chip site) is endemic in the non-rotated Lean-emitted descriptors.
+  Hunt figures reproduced exactly on 8 of 9 members (note-spend-leaf measures **126** lookup-only
+  + 8 unreferenced = 134/149 (89%), hunt said 125; cross-side-existence-v2 measures **18**/24,
+  hunt said 17; every other figure exact: blinded 29/33, attested-fact 29/34, merkle-depth2
+  21/24, predicate-arith 20 of 25–27 each, 4ary-general 7/18, non-revocation 15/27,
+  bundle-tree-fold-v2 8/10).
+- **The census refinement the hunt missed — lookup-only ≠ killable.** A lookup tuple entry is an
+  expression over committed columns, so a free witness read only at tuple INPUT positions
+  (siblings, blinding factors — 34 cols on note-spend-leaf alone) must STAY committed. The
+  mechanically killable set is columns at output-LANE positions 18..24 only, plus fully
+  unreferenced cols: **387 of 1,857 committed columns (21%) across the 26 parsed members**, and
+  every digest (out0) column is read downstream (no dead lookups — the narrow swap covers every
+  site). Per-member kill (width → new width): note-spend-leaf 84 lanes (12 chip LUs) + 8 unref
+  {15, 55–61} = 149→57 (−62%); attested-fact 34→13; blinded-membership 33→12; blinded-4ary-d2/d8
+  27→13 each; merkle-depth2 24→10; 4ary-general 18→11; predicate-arith 25→11 ×4, neq 26→12,
+  inrange 27→13; non-revocation 27→13; non-rev-adjacency 37→23; adjacency-membership 32→18;
+  dfa-routing 22→8; dyck-parse 38→24; bound-presentation 29→22; turn-chain-binding 14→7;
+  poseidon2-hash-arity2 10→3; derivation 386→378 (7 lanes + unref col 0);
+  cross-side-existence-v2 24→10; bundle-tree-fold-v2 10→3. Zero killable on
+  automatafl-step/resolve, accumulator-nonrev, bridge-action, field-delta-result-range,
+  presentation-freshness, quantified-absence, temporal-predicate (all columns algebraically
+  read).
+- **Soundness core (LANDED, byte-safe):** the combinator already existed —
+  `NarrowChip.lean::chipLookupTupleNarrow`/`siteLookupNarrow` (18-wide `[arity, ins(16), out0]`
+  on `poseidon2narrow` = `.custom 3` = wire 8 = Rust `TID_P2_NARROW`, whose parse/AIR/multiplicity
+  plumbing is deployed with zero users). What was missing and is now proven
+  (`ChipNarrowLookup.lean`): `narrowTable_sound` — the 18-PREFIX of the deployed wide chip table
+  is `ChipTableSoundNarrow` (the model of Rust `narrow_hist`: ONE physical chip serves both
+  buses), so `chip_lookup_sound_narrow` fires with no assumed hypothesis;
+  `chip_lookup_narrow_sound_of_wide_table` (identical digest equation forced);
+  `narrow_served_by_same_rows` + holdsAt twins (completeness: no honest witness lost).
+- **Verified cost today:** 21% of zoo committed width (55–70% on the payment-path members), at
+  per-predicate / per-payment frequency. These descriptors are separate Lean emit modules —
+  **the Epoch-2 chip changes do not re-emit them**; without a pass of their own they keep the
+  old shape forever.
+- **Staged regen recipe (ONE mechanical lane, post-Epoch-2):** (1) in each by-name emit module
+  (`NoteSpendingLeafEmit`, `BlindedMembershipEmit` (+4ary), `AttestedFactMembershipEmit`,
+  `MerkleMembership{,4ary}Emit`, `Predicates{Arithmetic,Gt,Le,Lt,Neq,InRange}Emit`,
+  `NonRevocation{,Adjacency}Emit`, `AdjacencyMembershipEmit`, `DfaRouting*`, `DyckParse*`,
+  `BoundPresentationEmit`, `EffectVmEmitTurnChainBinding`, derivation/cross-side/bundle-fold
+  producers) swap `.lookup {table := .poseidon2, tuple := chipLookupTuple ins digestCol
+  laneCols}` → `.lookup {table := poseidon2narrow, tuple := chipLookupTupleNarrow ins
+  digestCol}`, delete the lane columns from the layout, renumber densely, drop note-spend-leaf's
+  8 unref cols + derivation's col 0; (2) swap `chip_lookup_sound` for
+  `chip_lookup_narrow_sound_of_wide_table` / `narrow_lookup_holdsAt_sound` in each Refine/Rung2
+  proof (identical conclusion — mechanical); (3) regenerate GOLDEN strings via `emitVmJson2` +
+  re-emit `by-name/` through the emit script (drift gate recurses into by-name); (4) Rust twins:
+  layout consts + witness builders stop filling lanes (e.g. `membership_descriptor_4ary.rs`
+  `MEMBERSHIP_4ARY_WIDTH` 18→11, `LANE_BASE` deleted); prover side needs NOTHING (narrow serving
+  is live); (5) canaries: honest prove+verify per member + each module's forge teeth re-run.
+  Mints new VK/bytes for all 24 touched members — cannot run parallel with other regens. Fold in
   the 1-felt waist fix (SenderAuthorized authorized-set root is a single ~31-bit felt,
   `turn/src/executor/membership_verifier.rs:1076-1101` → 8-felt root + wide-tag chain) — that
-  component is semantic-change.
-- **Effort:** ~2 lanes + regen. **Risk:** regen (waist fix: semantic-change). **Dependencies:**
-  sequence AFTER the Epoch-2 chip retype so the sweep happens once.
+  component is semantic-change and can ride the same regen.
+- **Effort:** 1 lane + regen (census + proofs done). **Risk:** regen (waist fix:
+  semantic-change). **Dependencies:** sequence AFTER the Epoch-2 chip retype so the sweep
+  happens once.
 
 ### E8 — bilateral aggregation v2: delete the self-checked expected block (rank 8)
 
