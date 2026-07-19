@@ -111,6 +111,17 @@ pub trait LinkStore {
         Ok(latest.map(|(_, root)| root))
     }
 
+    /// Resolve a custodial pubkey to the ROTATION-READY stable account id of its root
+    /// ([`account_id_of_root`]) — the deep-version join key, byte-identical to the identity cell's
+    /// id. Additive over [`resolve_root`](LinkStore::resolve_root): a frontend adopts this as the
+    /// unified-identity key when it wants the rotation story + forward-compatibility with the cell.
+    /// `None` if unlinked (its own identity) or the stored root hex is malformed.
+    fn resolve_root_account(&self, custodial_pubkey_hex: &str) -> std::io::Result<Option<String>> {
+        Ok(self
+            .resolve_root(custodial_pubkey_hex)?
+            .and_then(|root| account_id_of_root(&root)))
+    }
+
     /// Every platform link currently attributed to a root key (latest per (platform, uid)).
     fn platforms_for_root(&self, root_pubkey_hex: &str) -> std::io::Result<Vec<LinkRecord>> {
         let mut out: std::collections::HashMap<(String, String), LinkRecord> =
@@ -155,6 +166,21 @@ pub fn default_store_path() -> PathBuf {
             .unwrap_or_else(|_| ".".to_string())
     });
     PathBuf::from(dir).join("links.tsv")
+}
+
+/// The rotation-READY stable identity of a root pubkey: its inception-derived account id
+/// ([`crate::account_id::account_id_hex`]). `None` on malformed hex.
+///
+/// This is the FIRST BRICK of the deep version (`docs/IDENTITY-LINK-DEEP-VERSION-DESIGN.md`): the
+/// account id is byte-identical to the identity CELL's id (both are
+/// `CellId::derive_raw(inception_pubkey, "dregg:account-identity:v1")`), so once links move onto
+/// K's identity cell the resolution key needs no re-derivation — the raw pubkey the shallow TSV
+/// stores maps to the same stable id the cell keys on. It also gives the resolution a rotation
+/// story (the stable id survives a future signing-key rotation) instead of pinning a raw key.
+pub fn account_id_of_root(root_pubkey_hex: &str) -> Option<String> {
+    let bytes = hex::decode(root_pubkey_hex.trim()).ok()?;
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    Some(crate::account_id::account_id_hex(&arr))
 }
 
 impl LinkStore for FileLinkStore {
@@ -244,6 +270,29 @@ mod tests {
     fn an_unlinked_key_resolves_to_none() {
         let s = InMemoryLinkStore::default();
         assert_eq!(s.resolve_root("stranger").unwrap(), None);
+    }
+
+    /// The deep-version first brick: two platforms linked to one root resolve to the SAME stable
+    /// account id (not the raw pubkey), and it is byte-identical to `account_id_of_root(K)` — the
+    /// id the identity cell will key on.
+    #[test]
+    fn resolve_root_account_gives_one_stable_id_across_platforms() {
+        let root_hex = "aa".repeat(32); // a 64-hex root pubkey
+        let mut s = InMemoryLinkStore::default();
+        s.record(&rec(&root_hex, "discord", "111", "custD", 100))
+            .unwrap();
+        s.record(&rec(&root_hex, "telegram", "222", "custT", 101))
+            .unwrap();
+        let acct = account_id_of_root(&root_hex).expect("valid hex derives an account id");
+        assert_eq!(s.resolve_root_account("custD").unwrap(), Some(acct.clone()));
+        assert_eq!(s.resolve_root_account("custT").unwrap(), Some(acct));
+        // it is the DERIVED stable id, not the raw pubkey
+        assert_ne!(
+            s.resolve_root_account("custD").unwrap(),
+            s.resolve_root("custD").unwrap()
+        );
+        assert_eq!(s.resolve_root_account("stranger").unwrap(), None); // unlinked
+        assert_eq!(account_id_of_root("not-hex"), None); // malformed → None, no panic
     }
 
     /// A rebind supersedes: the LATEST link for a custodial key wins.
