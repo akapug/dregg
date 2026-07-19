@@ -260,6 +260,16 @@ in-circuit, all 4 rounds, Lean constraints) + rejects tampering. First divergenc
 batch-table). Progress: 2a commit-Merkle + 2b input-open both bind the real proof with Lean-authored AIR.
 Cycle 4 FIRING (block 3 batch-table; note whether its DAG is Lean-emitted or Rust — the stark-kill convergence).
 
+
+## ✅ AIR-in-Lean CYCLE 4 — block 3 batch-table BINDS the real proof (verified-by-me, go test Block3 PASS 15.5s)
+Block 3 checks the real quotient-identity + LogUp over 6 shrink instances vs the real opened-values-at-ζ
+(was inert). ⚑ SPLIT AIR-in-Lean status (honest): the CHECK/algebra is Lean-authored (BatchTableEmit.lean,
+byte-pinned, read-only) but the constraint DAG is RUST-EXTRACTED from the plonky3-recursion inner AIRs — NO
+machine-checked DAG↔inner-AIR refinement (empirical faithfulness via the real quotient identity). Block 3
+BINDS but is PARTIALLY AIR-in-Lean; the DAG source = a named STARK-KILL residual. Progress: blocks 2a/2b/3
+now bind the real proof. NEXT = the DEEPEST phase: the transcript-replay challenger duplex (Fiat-Shamir; until
+built a prover supplies arbitrary challenges) — decision point, like FRI Stage 4.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
