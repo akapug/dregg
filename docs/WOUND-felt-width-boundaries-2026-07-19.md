@@ -23,6 +23,39 @@ independently confirmed · **[?]** = severity needs one more trace before pricin
 
 ---
 
+## Probe findings — deeper seams surfaced by the Lean-port recon (2026-07-19)
+
+The four terrain probes turned up holes **bigger than felt-width**, and one correction to my own
+readiness claim. Captured here so they ride the same campaign.
+
+- **#15 Shielded `merkle_root` is wire-supplied, not pinned to the committed accumulator [A, HIGH].**
+  `apply_shielded_transfer` (`turn/src/executor/apply.rs:1315-1412`) reconstructs the tree
+  `from_serialized_parts(payload.merkle_root, …)` and verifies membership against **that** root — with
+  NO check it equals the live committed commitment-tree root. A prover supplies a root of their choosing
+  and proves membership in an attacker-built tree. Theft/inflation vector **larger than any birthday
+  collision**; widening the felt does not fix it.
+- **#16 Shielded value-link is honest-prover-trusted [A, HIGH].** `verify_value_link` (leaf-value ↔
+  Pedersen-leg-value equality) is called **only in a test** (`circuit-prove/tests/shielded_transfer_m2a.rs`),
+  never in `apply_shielded_transfer`. Conservation over `value_binding` is attested, not proved — the real
+  inflation exposure, independent of the 31-bit width.
+- **#17 Shielded PQ-commitment disagreement [A].** The Lean apex rests on Shor-broken Ristretto Pedersen
+  (`commit_hidden_asset`, DLog) while `spend_circuit.rs:42-48` declares a "PQ cutover (Option A)" making
+  the Poseidon2 `value_binding` authoritative — the two disagree on which commitment is load-bearing.
+- **Consequence for #10:** the shielded pool is **not** "widen 3 felts." It is "port the Rust-authored
+  `spend_circuit` AIR to Lean + pin `merkle_root` to the committed accumulator + fold the value-link
+  into the AIR + resolve the PQ-commitment story." Felt-width is the entry point, not the fix. Reachable
+  only in a `prover`-enabled executor (verify-only fails closed); not in the committed VK.
+- **Correction to #4/#10 (note/nullifier):** I over-claimed this as "finish an existing port." The
+  accumulator NODE digests are 8-felt + proven (`DeployedHeapTree`/`SortedTreeNonMembershipHeap8`), but
+  the note commitment/nullifier **value and the sorted key** are still 1-felt and UNSTARTED —
+  authoring a new Digest8-keyed scheme + new bracketing math over multi-felt keys (the `List ℤ` sorted-gap
+  lemmas do not transfer). Plus an **ember-gated, frozen** kernel flip (`NullifierAccumulator.lean:12-23`,
+  "do NOT fire piecemeal"). This is the HARDEST lane, not the exemplar.
+- **#12 interface_id has NO Lean model and NO wide twin** — left behind when cap_root grew its `_8`.
+  Reusable wide primitive exists (`Market/WideCommitBoundary.lean` `wireCommitR8`/`Poseidon2Width8`;
+  Rust `hash_many_8`/`digest8_to_bytes32`). Anti-laundering: the fold accumulator must be 8-felt
+  end-to-end, not just the final squeeze. Severity MODERATE (discovery/factory-identity, not funds).
+
 ## Update log — 2026-07-19 (post-pricing, verified reads)
 
 - **#6 CI exit_code — FIXED + VERIFIED GREEN.** `ci_verdict_public_inputs` now returns `Option`
