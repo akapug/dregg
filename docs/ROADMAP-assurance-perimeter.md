@@ -45,7 +45,11 @@ a trusted key. **Nothing trusted, nothing duplicated.**
   clean, both `⟺` bridges green standalone; the CI-wiring lands when the tree quiesces.
 - **Cycle 3 — IN FLIGHT, sequenced AROUND the co-tenant heap8/S2 churn.** KEY: the `→` soundness half is ALREADY
   generic (`runnable_full_sound` over `RunnableFullStateSpec` in `EffectVmFullStateRunnable.lean`, ~28 emits ride it);
-  only the `←` completeness is missing. **FIRE-NOW (independent):** author the ONE generic `runnable_full_complete` +
+  only the `←` completeness is missing. **FIRE-NOW ✅ DONE** — engine `92518d277` (`runnable_full_commit_iff`) +
+  fan A `1a53b1035` (8 kernel/lifecycle tags) + fan B `f4e7f871f` (9 kernel-emit tags incl. SetField) = **17 kernel-only
+  tags with `air_accepts ⟺ spec`**, reality-gated against the deployed `*Wide` descriptors, `#assert_axioms`-clean, per-tag
+  canaries; CI-wiring (`Dregg2.lean` imports) + full-tree confirm pending the co-tenant heap8/S2 landing (their WIP still
+  breaks `MapMerkleRoot`). The recipe was: the ONE generic `runnable_full_complete` +
   `runnable_full_commit_iff` (transfer template lifted) → the flagship becomes the ENGINE → ~15 KERNEL-ONLY tags become
   thin instantiations (IncrementNonce, SetVK, SetPermissions, MakeSovereign, CellSeal/Destroy/Unseal, CreateCell{,FromFactory},
   EmitEvent, Exercise, PipelinedSend, ReceiptArchive, Noop, Burn, BridgeMint; verify SetField). **DEFER (gated on heap8/S2
