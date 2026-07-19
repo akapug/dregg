@@ -31,8 +31,8 @@ const NON_GAME: &[(&str, &str)] = &[
     ("hermes", "DreggNet Hermes"),
 ];
 
-/// The demo host registers the whole portfolio: the games + the eight feature surfaces + the five
-/// non-game offerings. Assert the count and the non-game keys directly on the host.
+/// The demo host registers the whole portfolio: six games + eight feature surfaces + five
+/// non-game offerings. Assert the shared count and the non-game keys directly on the host.
 #[test]
 fn demo_host_mounts_the_whole_portfolio() {
     let host = demo_host();
@@ -44,12 +44,33 @@ fn demo_host_mounts_the_whole_portfolio() {
     for (key, _) in NON_GAME {
         assert!(keys.contains(&key.to_string()), "missing offering: {key}");
     }
-    // The five games + eight feature surfaces + five non-game = at least 18 offerings.
-    assert!(
-        host.list_offerings().len() >= 18,
-        "the catalog is the full portfolio, got {} offerings",
-        host.list_offerings().len()
+    assert_eq!(
+        host.list_offerings().len(),
+        dreggnet_catalog::CATALOG_KEYS.len(),
+        "the demo host must expose the shared catalog contract"
     );
+}
+
+/// The Dark Bazaar is a real web offering, and its rendered surface states the exact limits of
+/// this first CRAWL instead of implying stronger privacy or proof properties.
+#[tokio::test]
+async fn dark_bazaar_lists_opens_renders_and_discloses_its_crawl_grade() {
+    let app = make_app();
+
+    let (status, listing) = get(&app, "/offerings").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(listing.contains("The Dark Bazaar"));
+    assert!(listing.contains("/offerings/bazaar/session/bazaar-web"));
+
+    let (status, body) = get(&app, "/offerings/bazaar/session/bazaar-portfolio-test").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("No such session"));
+    assert!(!body.contains("No offering registered"));
+    assert!(body.contains("The Dark Bazaar — playable CRAWL"));
+    assert!(body.contains("operator-visible-at-settle / check-level"));
+    assert!(body.contains("NOT Tier0 house-blind"));
+    assert!(body.contains("NOT a STARK/ZK proof"));
+    assert!(body.contains("NOT source-bound"));
 }
 
 /// `GET /offerings` lists every non-game offering with its title.

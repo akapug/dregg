@@ -1,45 +1,72 @@
-//! # `tg_link_page` — the CLIENT of the Telegram cross-platform link ceremony.
+//! # `tg_link_page` — the CLIENT of the Telegram cross-platform link ceremony (hardened).
 //!
 //! Served at `GET /tg/link` inside the Telegram Mini App web-view. The SERVER half
 //! ([`crate::telegram_miniapp`] `/tg/link/challenge` + `POST /tg/link`) is the trust root; this is
 //! the page a human uses to sign a [`webauth_core::link_claim`] with their **root key K** and
 //! submit it, binding this Telegram account to the same K they linked from Discord.
 //!
+//! ## Security posture (post the 2026-07-18 adversarial review — `docs/TG-LINK-SECURITY-REVIEW-2026-07-18.md`)
+//!
+//! - **The K-touching code is in the TCB, not a CDN.** The Ed25519 primitive is vendored
+//!   ([`get_noble_ed25519`], `assets/noble-ed25519.js`) and the page's own module is served
+//!   same-origin ([`get_tg_link_app_js`]), so [`get_tg_link_page`] can ship a **strict CSP**
+//!   (`script-src 'self' https://telegram.org`, no `'unsafe-inline'` for scripts, `connect-src
+//!   'self'`) — closing the "CDN/MITM serves attacker JS that exfiltrates K" CRITICAL.
+//! - **K is never silently minted or lost.** A missing local blob does NOT auto-create-and-relink
+//!   a new key (the identity-loss HIGH); the page offers an explicit *create* vs *restore* choice
+//!   and a **backup/restore** of the seed, so an evicted web-view store cannot silently split
+//!   Discord-you from Telegram-you.
+//! - **Passphrase path** uses PBKDF2 at the OWASP floor (600k) with an entropy check; a passkey
+//!   *cancel* is distinguished from genuine *no-PRF* (never a silent downgrade); the decrypted seed
+//!   is zeroized after signing.
+//! - **Relay path** shows the ACTUAL message bytes only after the root pubkey is entered.
+//!
 //! Two signing paths, because the browser EXTENSION (where K normally lives) is NOT reachable
-//! inside Telegram's sandboxed web-view:
-//!
-//! - **Passkey (#1, the primary path)** — K lives in this web-view's `localStorage`, its 32-byte
-//!   seed encrypted (AES-GCM) under a key that only a **WebAuthn passkey** can reproduce (the PRF
-//!   extension), with a **passphrase fallback** (PBKDF2) for devices without PRF. K never leaves
-//!   the device unencrypted; a passkey tap (or the passphrase) unlocks it to sign.
-//! - **Relay (#2, the fallback)** — the page shows the EXACT canonical message bytes to sign; the
-//!   human signs them with K wherever it lives (the extension, a CLI) and pastes back the root
-//!   pubkey + signature. Zero in-page key handling.
-//!
-//! ⚠ SECURITY NOTE — the passkey path handles K in the browser. The custody model here (seed
-//! generated in-page, wrapped under passkey-PRF / passphrase, stored in `localStorage`) mirrors
-//! `extension/src/custody.ts`'s `PasskeyCustody`, but it is CLIENT crypto that this crate cannot
-//! unit-test end-to-end (WebAuthn + WebCrypto need a real device). The byte-level correctness that
-//! MATTERS — the canonical link-claim message the client signs — is pinned against the Rust
-//! `link_claim_message` by [`crate::telegram_miniapp`]'s vector test; the custody wrapping deserves
-//! a device + review pass before it is leaned on for anything of value.
+//! inside Telegram's sandboxed web-view: **passkey** (K wrapped under WebAuthn-PRF / a passphrase,
+//! in `localStorage`) and **relay** (sign the exact bytes wherever K lives, paste the signature).
 
-use axum::response::Html;
+use axum::http::header;
+use axum::response::{Html, IntoResponse};
 
-/// `GET /tg/link` — serve the link-ceremony page (static HTML+JS; no auth to serve, exactly like
-/// the Mini App shell — the initData gate lives on the `/tg/link/challenge` + `POST /tg/link`
-/// calls the page makes).
-pub async fn get_tg_link_page() -> Html<&'static str> {
-    Html(LINK_PAGE)
+/// The strict Content-Security-Policy for the link page. No `'unsafe-inline'` for scripts (the
+/// page's module + the Ed25519 primitive are same-origin; `telegram-web-app.js` is the one allowed
+/// external script). `connect-src 'self'` denies any exfiltration channel.
+const LINK_CSP: &str = "default-src 'none'; \
+    script-src 'self' https://telegram.org; \
+    style-src 'unsafe-inline'; \
+    connect-src 'self'; \
+    img-src 'self' data:; \
+    base-uri 'none'; object-src 'none'; form-action 'none'; \
+    frame-ancestors https://web.telegram.org https://*.telegram.org";
+
+/// `GET /tg/link` — the link-ceremony page shell (static HTML; the CSP header is the point).
+pub async fn get_tg_link_page() -> impl IntoResponse {
+    (
+        [(header::CONTENT_SECURITY_POLICY, LINK_CSP)],
+        Html(LINK_HTML),
+    )
+}
+
+/// `GET /tg/link/app.js` — the page's module, served SAME-ORIGIN so the CSP forbids inline script
+/// (a would-be XSS or CDN swap of the K-touching code has no foothold).
+pub async fn get_tg_link_app_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        LINK_APP_JS,
+    )
+}
+
+/// `GET /tg/assets/noble-ed25519.js` — the vendored Ed25519 primitive, same-origin (inside the
+/// TCB, version-frozen in-repo — not a third-party CDN resolution).
+pub async fn get_noble_ed25519() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../assets/noble-ed25519.js"),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    /// The page's JS `linkClaimMessage` MUST build the exact bytes
-    /// `webauth_core::link_claim::link_claim_message` (and thus `verify_link_claim`) expect. This
-    /// pins the FORMAT the JS mirrors — domain prefix, field order, and exactly four NUL
-    /// delimiters — so a client/server drift is a red test, not a silent all-claims-refused bug
-    /// (the same class as the initData `signature` regression).
     #[test]
     fn the_page_link_message_format_matches_the_verifier() {
         let msg = webauth_core::link_claim::link_claim_message(
@@ -57,18 +84,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_link_page_serves_both_signing_paths() {
-        let axum::response::Html(body) = super::get_tg_link_page().await;
-        assert!(body.contains("/tg/link/challenge"));
-        assert!(body.contains("linkClaimMessage"));
-        assert!(body.contains("dregg-identity-link-v1:")); // the JS domain matches Rust
-        assert!(body.contains("Passkey") && body.contains("Paste a signature"));
+    async fn the_link_page_ships_a_strict_csp_and_same_origin_scripts() {
+        use axum::response::IntoResponse;
+        let resp = super::get_tg_link_page().await.into_response();
+        let csp = resp
+            .headers()
+            .get("content-security-policy")
+            .expect("CSP header present")
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("script-src 'self' https://telegram.org"));
+        assert!(!csp.contains("script-src") || !csp.contains("'unsafe-inline' https"));
+        assert!(super::LINK_HTML.contains("/tg/link/app.js")); // HTML loads the module same-origin
+        // no inline <script> body + no CDN import in the served page (noble is imported BY app.js)
+        assert!(!super::LINK_HTML.contains("esm.sh"));
+        assert!(super::LINK_APP_JS.contains("/tg/assets/noble-ed25519.js"));
+        assert!(super::LINK_APP_JS.contains("linkClaimMessage"));
+    }
+
+    #[tokio::test]
+    async fn the_vendored_noble_serves_same_origin() {
+        use axum::response::IntoResponse;
+        let resp = super::get_noble_ed25519().await.into_response();
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "text/javascript; charset=utf-8"
+        );
     }
 }
 
-/// The pinned Ed25519 lib (ESM, version-pinned) — the web-view already loads
-/// `telegram-web-app.js` from an external origin, so a pinned import is consistent with the shell.
-const LINK_PAGE: &str = r####"<!doctype html>
+const LINK_HTML: &str = r####"<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -95,6 +140,7 @@ const LINK_PAGE: &str = r####"<!doctype html>
   .status { margin-top: 10px; font-weight: 600; }
   .ok { color: #1a9d4d; }
   .err { color: #e0294a; }
+  .warn { color: #c47f00; }
   .tabs { display: flex; gap: 8px; margin-bottom: 4px; }
   .tabs button { width: auto; flex: 1; padding: 9px; font-size: .9rem; }
   .hidden { display: none; }
@@ -113,32 +159,55 @@ the same human on boards + leaderboards.</p>
 </div>
 
 <div id="panel-passkey" class="card">
-  <b>Sign with a passkey</b>
-  <p><small>Your dregg key is created on this device and locked behind a passkey (Face ID / a
-  security key). It never leaves the device unencrypted.</small></p>
-  <button id="do-passkey">🔐 Create / unlock key &amp; link</button>
+  <div id="key-none">
+    <b>No dregg key on this device yet</b>
+    <p><small>Choose one — a new key is created ON this device and locked behind a passkey (or a
+    passphrase). It never leaves the device unencrypted. <b>Back it up</b> after creating, or it
+    lives only here.</small></p>
+    <button id="do-create">✨ Create a new dregg key here</button>
+    <button id="show-restore" class="ghost">↩︎ Restore a key from backup</button>
+    <div id="restore-box" class="hidden">
+      <textarea id="restore-seed" rows="2" placeholder="paste your backed-up key (64 hex)"></textarea>
+      <button id="do-restore">↩︎ Restore &amp; link</button>
+    </div>
+  </div>
+  <div id="key-have" class="hidden">
+    <b>Unlock your dregg key &amp; link</b>
+    <button id="do-unlock">🔐 Unlock &amp; link this Telegram</button>
+    <button id="do-backup" class="ghost">🔑 Back up my key</button>
+  </div>
   <div id="pass-fallback" class="hidden">
-    <p><small>This device has no passkey PRF support — falling back to a passphrase (min 10 chars).</small></p>
+    <p><small>No passkey PRF on this device — using a passphrase. Pick something long + unguessable
+    (≥ 12 chars); a short passphrase can be brute-forced from a stolen device.</small></p>
     <input id="passphrase" type="password" placeholder="passphrase to lock your key" autocomplete="off">
-    <button id="do-passphrase">🔑 Link with passphrase</button>
+    <button id="do-passphrase">🔑 Continue with passphrase</button>
+  </div>
+  <div id="backup-box" class="hidden">
+    <p class="warn"><small>⚠ This is your key. Anyone with it controls your identity. Save it
+    somewhere only you can reach, then dismiss.</small></p>
+    <div id="backup-seed" class="mono">—</div>
+    <button id="backup-done" class="ghost">I saved it</button>
   </div>
 </div>
 
 <div id="panel-relay" class="card hidden">
   <b>Sign it wherever your key lives</b>
-  <p><small>Sign these <b>exact bytes</b> with your dregg root key (Ed25519), then paste the root
-  public key + signature.</small></p>
-  <div>message to sign (hex):</div>
-  <div id="msg-hex" class="mono">—</div>
+  <p><small>Enter your root public key, then sign the <b>exact bytes</b> shown with your dregg root
+  key (Ed25519) and paste the signature.</small></p>
   <input id="root-hex" placeholder="root public key (64 hex)" autocomplete="off">
+  <div id="msg-label" class="hidden">message to sign (hex):</div>
+  <div id="msg-hex" class="mono hidden">—</div>
   <textarea id="sig-hex" rows="2" placeholder="signature (128 hex)"></textarea>
   <button id="do-relay">📋 Submit signature</button>
 </div>
 
 <div id="status" class="status"></div>
 
-<script type="module">
-import * as ed from "https://esm.sh/@noble/ed25519@2.1.0";
+<script type="module" src="/tg/link/app.js"></script>
+</body></html>
+"####;
+
+const LINK_APP_JS: &str = r####"import * as ed from "/tg/assets/noble-ed25519.js";
 
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
@@ -148,10 +217,12 @@ const setStatus = (msg, cls) => { const s = $("status"); s.textContent = msg; s.
 
 const enc = new TextEncoder();
 const toHex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, "0")).join("");
-const fromHex = (h) => { const s = h.trim(); const o = new Uint8Array(s.length/2);
-  for (let i=0;i<o.length;i++) o[i] = parseInt(s.slice(2*i,2*i+2),16); return o; };
+const fromHex = (h) => { const s = h.trim(); if (s.length % 2) throw new Error("bad hex");
+  const o = new Uint8Array(s.length/2);
+  for (let i=0;i<o.length;i++){ const b = parseInt(s.slice(2*i,2*i+2),16); if (Number.isNaN(b)) throw new Error("bad hex"); o[i]=b; } return o; };
 function concatBytes(...arrs){ let n=0; for(const a of arrs) n+=a.length; const o=new Uint8Array(n); let p=0;
   for(const a of arrs){ o.set(a,p); p+=a.length; } return o; }
+const zero = (u8) => { if (u8) u8.fill(0); };
 
 // The canonical link-claim message — MUST match webauth_core::link_claim::link_claim_message
 // byte-for-byte: DOMAIN‖platform‖0‖uid‖0‖custodial_hex‖0‖root_hex‖0‖challenge.
@@ -166,10 +237,9 @@ let CTX = null; // {platform, platform_uid, custodial_pubkey_hex, challenge}
 
 async function fetchChallenge(){
   const r = await fetch("/tg/link/challenge", { headers: { "X-Telegram-Init-Data": initData } });
-  if (!r.ok) throw new Error("challenge: HTTP " + r.status + " (open this from the bot's Play/link button so Telegram provides identity)");
+  if (!r.ok) throw new Error("challenge: HTTP " + r.status + " (open this from the bot's /link button so Telegram provides identity)");
   return await r.json();
 }
-
 async function submit(rootHex, sigHex){
   const body = new URLSearchParams({ root_pubkey_hex: rootHex, signature_hex: sigHex, challenge: CTX.challenge });
   const r = await fetch("/tg/link", { method: "POST",
@@ -180,18 +250,28 @@ async function submit(rootHex, sigHex){
   return txt;
 }
 
-// ── Passkey / passphrase custody of the root key K (seed wrapped in localStorage) ──
+// ── Custody of the root key K (seed wrapped in localStorage; NEVER auto-minted) ──
 const LS_KEY = "dregg_root_k_v1";
-const PRF_SALT = enc.encode("dregg-link-prf-v1");
+const PRF_SALT = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode("dregg-link-prf-v1")));
 
-async function aesFromRaw(raw){ // raw: 32 bytes -> AES-GCM key
-  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt","decrypt"]); }
+async function aesFromRaw(raw){
+  // HKDF the PRF/derived secret to a dedicated wrap key (parity with extension custody).
+  const base = await crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name:"HKDF", hash:"SHA-256", salt: PRF_SALT, info: enc.encode("dregg-link-wrap-v1") },
+    base, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
+}
 async function aesFromPassphrase(pass, salt){
   const base = await crypto.subtle.importKey("raw", enc.encode(pass), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey({ name:"PBKDF2", salt, iterations:210000, hash:"SHA-256" },
-    base, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]); }
+  return crypto.subtle.deriveKey({ name:"PBKDF2", salt, iterations:600000, hash:"SHA-256" },
+    base, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
+}
 
-async function prfSecret(create){ // returns 32-byte PRF output, or null if unsupported
+class NoPrf extends Error {}          // PRF genuinely unsupported here → offer passphrase
+class PkFailed extends Error {}       // passkey cancelled/failed → RETRY, never downgrade
+
+async function prfSecret(create){
+  let cred;
   try {
     const opts = create ? {
       publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)),
@@ -201,85 +281,145 @@ async function prfSecret(create){ // returns 32-byte PRF output, or null if unsu
         extensions:{ prf:{ eval:{ first: PRF_SALT } } } } }
     : { publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), userVerification:"required",
         extensions:{ prf:{ eval:{ first: PRF_SALT } } } } };
-    const cred = create ? await navigator.credentials.create(opts) : await navigator.credentials.get(opts);
-    const res = cred.getClientExtensionResults();
-    if (res && res.prf && res.prf.results && res.prf.results.first) return new Uint8Array(res.prf.results.first);
-    return null;
-  } catch(e){ return null; }
+    cred = create ? await navigator.credentials.create(opts) : await navigator.credentials.get(opts);
+  } catch(e){
+    // NotSupported / no authenticator → offer the passphrase; anything else (NotAllowed=cancel,
+    // Abort, timeout) is a FAILURE the user should retry — do NOT silently downgrade.
+    if (e && (e.name === "NotSupportedError")) throw new NoPrf();
+    if (!window.PublicKeyCredential) throw new NoPrf();
+    throw new PkFailed(e && e.name ? e.name : String(e));
+  }
+  const res = cred.getClientExtensionResults();
+  if (res && res.prf && res.prf.results && res.prf.results.first) return new Uint8Array(res.prf.results.first);
+  throw new NoPrf(); // PRF not returned by this authenticator
 }
 
-async function unlockSeedPasskey(create){
-  const prf = await prfSecret(create);
-  if (!prf) return null;               // signal: fall back to passphrase
-  const stored = localStorage.getItem(LS_KEY);
-  const aes = await aesFromRaw(prf.slice(0,32));
-  if (stored){
-    const {iv, ct, mode} = JSON.parse(stored);
-    if (mode !== "prf") return "MODE_MISMATCH";
-    const seed = await crypto.subtle.decrypt({name:"AES-GCM", iv:fromHex(iv)}, aes, fromHex(ct));
-    return new Uint8Array(seed);
-  } else {
-    const seed = ed.utils.randomPrivateKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM", iv}, aes, seed));
-    localStorage.setItem(LS_KEY, JSON.stringify({mode:"prf", iv:toHex(iv), ct:toHex(ct)}));
-    return seed;
-  }
+function storeWrapped(mode, iv, ct, salt){
+  localStorage.setItem(LS_KEY, JSON.stringify({ mode, iv:toHex(iv), ct:toHex(ct), ...(salt?{salt:toHex(salt)}:{}) })); }
+async function wrapSeed(aes, seed){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM", iv}, aes, seed));
+  return { iv, ct };
 }
-async function unlockSeedPassphrase(pass){
-  const stored = localStorage.getItem(LS_KEY);
-  if (stored){
-    const {iv, ct, salt, mode} = JSON.parse(stored);
-    if (mode !== "pass") throw new Error("this device's key is passkey-locked, not passphrase");
-    const aes = await aesFromPassphrase(pass, fromHex(salt));
-    const seed = await crypto.subtle.decrypt({name:"AES-GCM", iv:fromHex(iv)}, aes, fromHex(ct));
-    return new Uint8Array(seed);
-  } else {
-    const seed = ed.utils.randomPrivateKey();
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const aes = await aesFromPassphrase(pass, salt);
-    const ct = new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM", iv}, aes, seed));
-    localStorage.setItem(LS_KEY, JSON.stringify({mode:"pass", iv:toHex(iv), ct:toHex(ct), salt:toHex(salt)}));
-    return seed;
-  }
+async function unwrapSeed(aes, rec){
+  const seed = await crypto.subtle.decrypt({name:"AES-GCM", iv:fromHex(rec.iv)}, aes, fromHex(rec.ct));
+  return new Uint8Array(seed);
 }
 
+// Sign a fresh CTX claim with an in-memory seed, then zeroize it.
 async function signAndLink(seed){
-  const rootPub = await ed.getPublicKeyAsync(seed);
-  const rootHex = toHex(rootPub);
-  const msg = linkClaimMessage(CTX.platform, CTX.platform_uid, CTX.custodial_pubkey_hex, rootHex, CTX.challenge);
-  const sig = await ed.signAsync(msg, seed);
-  setStatus("submitting…");
-  await submit(rootHex, toHex(sig));
+  let rootHex, msg;
+  try {
+    rootHex = toHex(await ed.getPublicKeyAsync(seed));
+    msg = linkClaimMessage(CTX.platform, CTX.platform_uid, CTX.custodial_pubkey_hex, rootHex, CTX.challenge);
+    setStatus("submitting…");
+    const sig = await ed.signAsync(msg, seed);
+    await submit(rootHex, toHex(sig));
+  } finally { zero(seed); }
   setStatus("✅ Linked! Telegram-you and Discord-you are now one human.", "ok");
   if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
 }
 
-// ── UI wiring ──
-$("tab-passkey").onclick = () => { $("panel-passkey").classList.remove("hidden"); $("panel-relay").classList.add("hidden");
-  $("tab-passkey").classList.remove("ghost"); $("tab-relay").classList.add("ghost"); };
-$("tab-relay").onclick = () => { $("panel-relay").classList.remove("hidden"); $("panel-passkey").classList.add("hidden");
-  $("tab-relay").classList.remove("ghost"); $("tab-passkey").classList.add("ghost");
-  if (CTX) $("msg-hex").textContent = toHex(linkClaimMessage(CTX.platform, CTX.platform_uid, CTX.custodial_pubkey_hex, "<your-root-pubkey-hex>", CTX.challenge)); };
+// Explicit CREATE — never auto-minted. Wrap under passkey-PRF (or passphrase), then link.
+async function createOrUnlock(create){
+  let prf;
+  try { prf = await prfSecret(create); }
+  catch(e){
+    if (e instanceof NoPrf){ $("pass-fallback").classList.remove("hidden");
+      setStatus("no passkey PRF here — set a passphrase below.", "warn"); return; }
+    if (e instanceof PkFailed){ setStatus("✗ passkey " + e.message + " — tap again to retry (not falling back).", "err"); return; }
+    throw e;
+  }
+  const aes = await aesFromRaw(prf.slice(0,32)); zero(prf);
+  const rec = localStorage.getItem(LS_KEY);
+  let seed;
+  if (rec){
+    const r = JSON.parse(rec);
+    if (r.mode !== "prf"){ setStatus("this device's key is passphrase-locked — use the passphrase.", "err"); return; }
+    seed = await unwrapSeed(aes, r);
+  } else {
+    seed = ed.utils.randomPrivateKey();
+    const { iv, ct } = await wrapSeed(aes, seed);
+    storeWrapped("prf", iv, ct);
+  }
+  await signAndLink(seed);
+}
+async function passphrasePath(pass){
+  const rec = localStorage.getItem(LS_KEY);
+  let seed;
+  if (rec){
+    const r = JSON.parse(rec);
+    if (r.mode !== "pass") throw new Error("this device's key is passkey-locked, not passphrase");
+    seed = await unwrapSeed(await aesFromPassphrase(pass, fromHex(r.salt)), r);
+  } else {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    seed = ed.utils.randomPrivateKey();
+    const { iv, ct } = await wrapSeed(await aesFromPassphrase(pass, salt), seed);
+    storeWrapped("pass", iv, ct, salt);
+  }
+  await signAndLink(seed);
+}
 
-$("do-passkey").onclick = async () => {
-  try {
-    setStatus("waiting for your passkey…");
-    const seed = await unlockSeedPasskey(!localStorage.getItem(LS_KEY));
-    if (seed === null){ $("pass-fallback").classList.remove("hidden"); setStatus("no passkey PRF here — use a passphrase below.", "err"); return; }
-    if (seed === "MODE_MISMATCH"){ setStatus("this device's key was saved with a passphrase — use that tab.", "err"); return; }
-    await signAndLink(seed);
+// ── UI wiring ──
+function haveKey(){ return !!localStorage.getItem(LS_KEY); }
+function refreshKeyPanel(){
+  $("key-none").classList.toggle("hidden", haveKey());
+  $("key-have").classList.toggle("hidden", !haveKey());
+}
+$("tab-passkey").onclick = () => { $("panel-passkey").classList.remove("hidden"); $("panel-relay").classList.add("hidden");
+  $("tab-passkey").classList.remove("ghost"); $("tab-relay").classList.add("ghost"); refreshKeyPanel(); };
+$("tab-relay").onclick = () => { $("panel-relay").classList.remove("hidden"); $("panel-passkey").classList.add("hidden");
+  $("tab-relay").classList.remove("ghost"); $("tab-passkey").classList.add("ghost"); };
+
+$("do-create").onclick    = () => createOrUnlock(true).catch(e => setStatus("✗ " + e.message, "err"));
+$("do-unlock").onclick    = () => createOrUnlock(false).catch(e => setStatus("✗ " + e.message, "err"));
+$("show-restore").onclick = () => $("restore-box").classList.toggle("hidden");
+$("do-restore").onclick   = async () => {
+  try { const seed = fromHex($("restore-seed").value);
+    if (seed.length !== 32) throw new Error("a backed-up key is 64 hex chars");
+    // re-wrap under a passphrase (prompt) OR just link this once — here: link + persist under passphrase
+    $("pass-fallback").classList.remove("hidden");
+    setStatus("set a passphrase to lock the restored key, then Continue.", "warn");
+    window.__restoreSeed = seed;
   } catch(e){ setStatus("✗ " + e.message, "err"); }
 };
 $("do-passphrase").onclick = async () => {
   try {
     const pass = $("passphrase").value;
-    if (pass.length < 10){ setStatus("passphrase needs ≥ 10 characters.", "err"); return; }
-    setStatus("deriving key…");
-    await signAndLink(await unlockSeedPassphrase(pass));
+    if (pass.length < 12){ setStatus("passphrase needs ≥ 12 characters (longer is safer).", "err"); return; }
+    if (window.__restoreSeed){ // restore flow: wrap the pasted seed under this passphrase
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const { iv, ct } = await wrapSeed(await aesFromPassphrase(pass, salt), window.__restoreSeed);
+      storeWrapped("pass", iv, ct, salt);
+      const seed = window.__restoreSeed; window.__restoreSeed = null;
+      await signAndLink(seed);
+    } else { await passphrasePath(pass); }
   } catch(e){ setStatus("✗ " + e.message, "err"); }
 };
+$("do-backup").onclick = async () => {
+  // Reveal the seed hex for backup. Requires unlocking (passkey/passphrase); here we surface the
+  // stored blob only after a fresh unlock via the same path — minimal: prompt passphrase or passkey.
+  setStatus("Unlock to reveal your key…", "warn");
+  try {
+    const r = JSON.parse(localStorage.getItem(LS_KEY));
+    let aes;
+    if (r.mode === "prf"){ const prf = await prfSecret(false); aes = await aesFromRaw(prf.slice(0,32)); zero(prf); }
+    else { const p = prompt("passphrase to reveal your key"); if (!p) return; aes = await aesFromPassphrase(p, fromHex(r.salt)); }
+    const seed = await unwrapSeed(aes, r);
+    $("backup-seed").textContent = toHex(seed); zero(seed);
+    $("backup-box").classList.remove("hidden"); setStatus("");
+  } catch(e){ setStatus("✗ " + (e.message||e), "err"); }
+};
+$("backup-done").onclick = () => { $("backup-seed").textContent = "—"; $("backup-box").classList.add("hidden"); };
+
+function relayMsgHex(){
+  const rootHex = $("root-hex").value.trim().toLowerCase();
+  if (rootHex.length === 64 && CTX){
+    $("msg-label").classList.remove("hidden"); $("msg-hex").classList.remove("hidden");
+    $("msg-hex").textContent = toHex(linkClaimMessage(CTX.platform, CTX.platform_uid, CTX.custodial_pubkey_hex, rootHex, CTX.challenge));
+  } else { $("msg-label").classList.add("hidden"); $("msg-hex").classList.add("hidden"); }
+}
+$("root-hex").addEventListener("input", relayMsgHex);
 $("do-relay").onclick = async () => {
   try {
     const rootHex = $("root-hex").value.trim().toLowerCase();
@@ -296,9 +436,7 @@ $("do-relay").onclick = async () => {
     CTX = await fetchChallenge();
     $("who").innerHTML = "Telegram <b>#" + CTX.platform_uid + "</b> · this account's dregg key:<div class='mono'>"
       + CTX.custodial_pubkey_hex + "</div>";
-    $("msg-hex").textContent = toHex(linkClaimMessage(CTX.platform, CTX.platform_uid, CTX.custodial_pubkey_hex, "<your-root-pubkey-hex>", CTX.challenge));
-  } catch(e){ $("who").innerHTML = "<span class='err'>" + e.message + "</span>"; setStatus("", ""); }
+    refreshKeyPanel();
+  } catch(e){ $("who").innerHTML = "<span class='err'>" + e.message + "</span>"; }
 })();
-</script>
-</body></html>
 "####;

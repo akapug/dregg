@@ -460,6 +460,9 @@ pub struct TgMiniAppState {
     bot_secret: [u8; 32],
     /// The initData freshness window (seconds).
     max_age_secs: u64,
+    /// Single-use cache for spent link-ceremony challenge nonces — a `POST /tg/link` challenge is
+    /// consumed on success so a captured claim can't be replayed within its TTL (internally synced).
+    link_replay: webauth_core::replay::NonceCache,
 }
 
 impl TgMiniAppState {
@@ -476,6 +479,7 @@ impl TgMiniAppState {
             secret_key: webapp_secret_key(bot_token),
             bot_secret,
             max_age_secs,
+            link_replay: webauth_core::replay::NonceCache::new(true, 8192),
         }
     }
 
@@ -499,6 +503,14 @@ pub fn tg_miniapp_router(state: Arc<TgMiniAppState>) -> Router {
         .route(
             "/tg/link",
             get(crate::tg_link_page::get_tg_link_page).post(post_tg_link),
+        )
+        .route(
+            "/tg/link/app.js",
+            get(crate::tg_link_page::get_tg_link_app_js),
+        )
+        .route(
+            "/tg/assets/noble-ed25519.js",
+            get(crate::tg_link_page::get_noble_ed25519),
         )
         .with_state(state)
 }
@@ -1263,6 +1275,14 @@ async fn post_tg_link(
         now_unix_secs(),
     ) {
         Ok(()) => {
+            // Single-use: consume the challenge nonce so a captured claim can't be replayed within
+            // its TTL (the contract link_claim.rs names — "record the spent challenge via replay").
+            if let Some((nonce, exp)) = webauth_core::challenge::nonce_and_exp(&form.challenge) {
+                if !state.link_replay.consume(nonce, exp, now_unix_secs()) {
+                    audit::log().emit(ev("refused", "challenge_replayed"));
+                    return (StatusCode::FORBIDDEN, "link challenge already used").into_response();
+                }
+            }
             let root_hex = form.root_pubkey_hex.trim().to_lowercase();
             let recorded = webauth_core::link_registry::FileLinkStore::new(
                 webauth_core::link_registry::default_store_path(),

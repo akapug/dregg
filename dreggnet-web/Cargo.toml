@@ -117,6 +117,26 @@ sha2 = { workspace = true }
 subtle = { workspace = true }
 zeroize = { workspace = true }
 
+# THE DISCORD ACTIVITY surface (src/discord_activity.rs) — the /da scope validates a server-minted
+# activity ticket and derives the SAME custodial identity the in-chat Discord bot attributes:
+#  - dreggnet-discord-identity: the ONE uid→seed derivation (`seed_for`, formerly living in
+#    discord-bot/src/cipherclerk.rs) — CALLED, never mirrored, so the Activity player is
+#    byte-for-byte the in-chat player. `dreggnet-web` CANNOT dep `dregg-discord-bot` (an EXCLUDED
+#    workspace: sqlx → libsqlite3-sys `links = "sqlite3"` conflict), which is exactly why the
+#    derivation was extracted into this light crate (docs/DISCORD-ACTIVITIES-DESIGN.md §3);
+#  - base64: the ticket wire encoding (base64url, no padding — `URL_SAFE_NO_PAD`), the same engine
+#    webauth-core's challenge uses.
+# The ticket's HMAC chain reuses the hmac/sha2/subtle trio already pulled in for initData above.
+dreggnet-discord-identity = { path = "../dreggnet-discord-identity" }
+base64 = "0.22"
+# THE ONE OUTBOUND HTTP CALL-SITE — `POST /da/token`'s Discord OAuth `code`→`oauth2/token`→
+# `/users/@me` exchange (docs/DISCORD-ACTIVITIES-DESIGN.md §1). NOT a new heavy dep: `dregg-node-target`
+# with `features = ["http"]` (above) ALREADY compiles this exact `reqwest 0.12` (blocking + json +
+# rustls-tls); naming it directly here unifies onto that same build (zero extra compilation). Blocking,
+# driven off the async reactor via `tokio::task::spawn_blocking`, and structured behind the
+# `DiscordTokenExchange` trait so the module compiles + is testable with NO live Discord app/secret.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+
 # OBSERVABILITY — the SAME crate + versions node/Cargo.toml uses (workspace-consistent), so the
 # web surface's `GET /metrics` (src/metrics.rs) speaks the same Prometheus exposition the
 # deploy/observability stack already scrapes from the nodes. The `metrics` macros are no-ops
@@ -150,7 +170,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # THE SERVER BINARY (`src/bin/dreggnet-web-server.rs`) — the public-demo unblocker. The async
 # runtime for `axum::serve` (`net` = the TcpListener bind, `signal` = ctrl-c graceful shutdown).
 # The library stays runtime-agnostic; only the bin drives the runtime.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 # Structured startup / request logging for the server bin.
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -165,6 +185,23 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ugc-dregg = { path = "../ugc-dregg" }
 spween-dregg = { path = "../spween-dregg" }
 procgen-dregg = { path = "../procgen-dregg" }
+
+# THE CROWD-STREAM ENGINE (docs/CROWD-STREAM-ENGINE-DESIGN.md) — the overlay (`src/overlay.rs`) +
+# the round driver (`src/crowd_round.rs`):
+#  - dregg-stream-ingest: the dep-light platform-event → weighted-ballot mapping (serde-only,
+#    churn-independent — the YouTube liveChatMessages adapter + the vote-weight policy);
+#  - dungeon-on-dregg: the REAL quorum-certified vote engine reached via
+#    `collective::CollectiveRound` (cast signed ballots → resolve_into_world → ONE certified turn).
+#    Promoted from a dev-dependency (below) to a real dependency — the crowd round consumes it, it
+#    is CONSUMED never modified. `spween-dregg` (already a dep above) supplies the `WorldCell`/`Scene`
+#    the certified turn lands on.
+dregg-stream-ingest = { path = "../dregg-stream-ingest" }
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+# THE LIVE PUSH — the overlay's server→browser SSE fan-out. `tokio-stream`'s `sync` feature gives
+# `BroadcastStream` (a `tokio::sync::broadcast::Receiver` → an axum `Sse` stream); the matching
+# `sync` feature is enabled on `tokio` above for the broadcast channel itself. This is the FIRST SSE
+# in dreggnet-web (no prior server-push liveness existed).
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 [dev-dependencies]
 ed25519-dalek = { version = "2.1", features = ["std"] }

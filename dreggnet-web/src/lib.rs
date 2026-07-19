@@ -31,10 +31,10 @@
 //! - `POST /offerings/{key}/session/{id}/act`    — advance ONE real turn on that offering + re-render;
 //! - `GET  /offerings/{key}/session/{id}/verify` — re-verify that offering's committed chain.
 //!
-//! [`catalog_default_host`] registers three heterogeneous offerings — a dungeon (game), a council
-//! (governance), a market (commerce). Because some sessions are `!Send`, the host runs on ONE owning
-//! thread behind a `Send + Sync` [`HostThread`] handle (the discord-bot `Store` pattern generalised
-//! to a whole registry) — the SAME host a Telegram / WeChat frontend adopts unchanged.
+//! [`catalog_default_host`] delegates to the shared full DreggNet catalog. Because some sessions are
+//! `!Send`, the host runs on ONE owning thread behind a `Send + Sync` [`HostThread`] handle (the
+//! discord-bot `Store` pattern generalised to a whole registry) — the SAME host a Telegram / WeChat
+//! frontend adopts unchanged.
 //!
 //! ## Honest scope
 //! This renders the affordance [`Surface`] as HTML **directly** (server-rendered forms). The
@@ -53,20 +53,40 @@ pub mod act_signed;
 /// The audit emitter — the interaction envelope around every catalog/Mini-App decision
 /// (docs/BOT-AUDIT-LOGGING-DESIGN.md).
 pub mod audit;
+/// THE CROWD-STREAM ROUND DRIVER (docs/CROWD-STREAM-ENGINE-DESIGN.md): live-stream events →
+/// weighted ballots → the real quorum-certified `dungeon_on_dregg::collective::CollectiveRound` →
+/// ONE certified world turn per window. See [`crowd_round::CrowdRound`].
+pub mod crowd_round;
 /// THE SPECTATOR / PROVENANCE surface for *The Descent* (the flagship's growth artifact): a
 /// stranger opens a URL and INDEPENDENTLY re-verifies a run — a re-verified no-cheat leaderboard
 /// (`GET /descent/leaderboard`) + a run-card that re-executes the recorded run to PASS/FAIL
 /// (`GET /descent/run/{id}`). Additive; see [`descent::descent_router`].
 pub mod descent;
+/// THE PLAYABLE web front door for *The Descent* (backlog H1): `GET /descent/play` mounts the
+/// already-built `<dregg-descent>` thin-view over the wasm `DescentWorld` on a strict-CSP served
+/// page, so a stranger plays a real, private, replay-verifiable run in the tab — not the
+/// leaderboard. Additive + state-free; see [`descent_play::descent_play_router`].
+pub mod descent_play;
 /// The durable sqlite (rusqlite) backing for the Descent no-cheat leaderboard: persist a run's
 /// reproducible public input (the day seed + the move sequence), re-verified by REPLAY on boot so
 /// the board survives restart and a tampered row cannot resurrect a cheat. See [`descent_store`].
 pub mod descent_store;
+/// THE DISCORD ACTIVITY surface's trust root (`/da` scope): the server-minted **activity ticket**
+/// (`mint_ticket`) and its PURE, gate-ordered validator (`validate_ticket_at`) — the OAuth-verified
+/// analog of Telegram's initData envelope, over the SAME custodial identity the in-chat Discord bot
+/// derives (`dreggnet_discord_identity::seed_for`). The `/da/token` OAuth exchange, the routes and
+/// the Activity shell are the named follow-up (they need `DISCORD_CLIENT_SECRET`). See
+/// [`discord_activity`] and `docs/DISCORD-ACTIVITIES-DESIGN.md`.
+pub mod discord_activity;
 /// Prometheus metrics for the web surface (the `node/src/metrics.rs` pattern): the idempotent
 /// process-global recorder + the `GET /metrics` handler + the named emit helpers this surface's
 /// call sites bump (session opens/evictions, policy refusals, executor refusals, anchor + resume
 /// failures). See [`metrics`].
 pub mod metrics;
+/// THE CROWD-STREAM OVERLAY (docs/CROWD-STREAM-ENGINE-DESIGN.md): a transparent-background OBS vote
+/// surface + the FIRST server→browser SSE push in `dreggnet-web` — `GET /overlay`, `GET /overlay/sse`,
+/// `POST /overlay/ingest[/youtube]`, driven off a [`crowd_round::CrowdRound`]. See [`overlay`].
+pub mod overlay;
 /// The seat-claiming adapter that makes `dregg-multiway-tug` playable by real frontend users (a web
 /// identity is a derived key, never the game's canonical seat string). See [`seated::SeatedTug`].
 pub mod seated;
@@ -98,9 +118,6 @@ use axum::{
 use serde::Deserialize;
 
 use deos_view::{MenuItem, SessionFormBackend, SurfaceBackend, ViewNode};
-use dregg_automatafl::AutomataflOffering;
-use dreggnet_council::{CandidateProposal, CouncilOffering};
-use dreggnet_market::MarketOffering;
 use dreggnet_offerings::dungeon::{DungeonOffering, DungeonSession};
 use dreggnet_offerings::{
     Action, Attribution, DreggIdentity, FileResumeStore, Frontend, HostError, Offering,
@@ -1111,7 +1128,7 @@ fn turn_count(turns: usize) -> String {
 type HostJob = Box<dyn FnOnce(&mut OfferingHost) + Send + 'static>;
 
 /// **A thread-confined [`OfferingHost`] handle.** The host owns heterogeneous offering sessions,
-/// some of which are `!Send` (a [`CouncilOffering`] session holds `Rc`-backed ballot caps — the
+/// some of which are `!Send` (a [`dreggnet_council::CouncilOffering`] session holds `Rc`-backed ballot caps — the
 /// same reason the discord-bot's per-offering `Store` uses a dedicated thread). So the host cannot
 /// be a `Mutex<OfferingHost>` in an axum `State` (that needs `Send`). Instead the host lives on ONE
 /// owning thread and every access is a job shipped to it; only the job's plain-data result
@@ -1165,7 +1182,7 @@ pub struct CatalogState {
 }
 
 impl CatalogState {
-    /// A fresh catalog over the DEFAULT offerings (dungeon + council + market) — see
+    /// A fresh catalog over the full shared DreggNet portfolio — see
     /// [`catalog_default_host`].
     pub fn new() -> Self {
         CatalogState {
@@ -1231,9 +1248,20 @@ fn live_session_count(host: &OfferingHost) -> usize {
     host.list_offerings().iter().map(|o| o.open_sessions).sum()
 }
 
-/// **The default catalog host** — registers the three heterogeneous offerings the web catalog
-/// plays: the dungeon (a game), the council (governance), and the market (commerce). Built on the
-/// host's owning thread ([`HostThread::spawn`]), so each offering's `!Send` internals stay confined.
+/// The shared catalog configuration for the public web surface. The electorate preserves the
+/// existing browser identity contract: council member bytes are `blake3("alice"|"bob")`, exactly
+/// the bytes [`web_identity`] renders as those users' substrate identities.
+fn web_catalog_config() -> dreggnet_catalog::CatalogConfig {
+    let members = ["alice", "bob"]
+        .iter()
+        .map(|u| *blake3::hash(u.as_bytes()).as_bytes())
+        .collect();
+    dreggnet_catalog::CatalogConfig::with_council_members(members)
+}
+
+/// **The default catalog host** — registers the full shared DreggNet portfolio through
+/// [`dreggnet_catalog::full_catalog_host`]. Built on the host's owning thread
+/// ([`HostThread::spawn`]), so each offering's `!Send` internals stay confined.
 ///
 /// The council's electorate is derived from web usernames so a browser user can really vote: a web
 /// user's [`DreggIdentity`] is `blake3(user)` hex, and a council member's identity is the hex of its
@@ -1241,55 +1269,7 @@ fn live_session_count(host: &OfferingHost) -> usize {
 /// member (`alice` and `bob` here). Quorum is 2, so a proposal enacts only once BOTH approve — a
 /// real vote, drivable through the browser.
 pub fn catalog_default_host() -> OfferingHost {
-    let mut host = OfferingHost::new();
-    host.register(
-        "dungeon",
-        "The Warden's Keep — a verifiable dungeon (offering #0)",
-        DungeonOffering::new(),
-    );
-
-    // The council electorate: the web users who can vote (member pubkey = blake3(user) bytes).
-    let members: Vec<[u8; 32]> = ["alice", "bob"]
-        .iter()
-        .map(|u| *blake3::hash(u.as_bytes()).as_bytes())
-        .collect();
-    host.register(
-        "council",
-        "DreggNet Council — propose · vote · enact",
-        CouncilOffering::new(
-            members,
-            vec![
-                CandidateProposal::new("Fund the archive", 42),
-                CandidateProposal::new("Ratify the charter", 7),
-            ],
-            2, // quorum M = 2 (both members must approve)
-        ),
-    );
-
-    host.register(
-        "market",
-        "DreggNet Market — a sealed-bid auction (list · bid · settle)",
-        MarketOffering::new(),
-    );
-
-    // THE TWO PORTFOLIO GAMES — fully playable in the browser (and, through the SAME `Surface`,
-    // on Discord / Telegram / WeChat: the do-once path).
-    //
-    // `tug` is wrapped in the seat-claiming [`SeatedTug`] adapter because `TugOffering` names its
-    // seats by fixed canonical strings while a web user's identity is a derived key — the adapter
-    // claims a seat for the first two identities that act, changing nothing in the game crate.
-    // `automatafl` claims seats natively, so it is registered directly.
-    host.register(
-        "tug",
-        "Multiway-Tug — a hidden-hand tug of influence (seven guilds · eight actions)",
-        seated::SeatedTug::new(),
-    );
-    host.register(
-        "automatafl",
-        "Automatafl — the simultaneous-move board (seal a move · reveal · the automaton steps)",
-        AutomataflOffering,
-    );
-    host
+    dreggnet_catalog::full_catalog_host(&web_catalog_config())
 }
 
 /// **Register the five NON-GAME portfolio offerings** into a host — the full offering set beside the
@@ -1301,35 +1281,10 @@ pub fn catalog_default_host() -> OfferingHost {
 /// - `grain` — a metered / rate-limited work offering ([`dreggnet_grain::GrainOffering`], budget 1000);
 /// - `hermes` — the message relay ([`dreggnet_hermes::HermesOffering`]).
 ///
-/// This is what turns the catalog from a subset into the WHOLE portfolio (five games + eight
-/// feature surfaces + these five non-game offerings). Split from [`catalog_default_host`] so the
-/// committed single-offering + games tests keep their smaller host while the demo mounts everything.
+/// Compatibility wrapper retained for callers that extend a custom host. The default and demo hosts
+/// already receive these services through [`dreggnet_catalog::full_catalog_host`].
 pub fn register_non_game_offerings(host: &mut OfferingHost) {
-    host.register(
-        "doc",
-        "DreggNet Doc — a verifiable document store (author · amend · verify)",
-        dreggnet_doc::DocOffering::new(),
-    );
-    host.register(
-        "names",
-        "DreggNet Names — an identity / naming service (register · transfer · resolve)",
-        dreggnet_names::NamesOffering::new(),
-    );
-    host.register(
-        "compute",
-        "DreggNet Compute — a confined compute-job market (post · claim · settle)",
-        dreggnet_compute::ComputeOffering::new(),
-    );
-    host.register(
-        "grain",
-        "DreggNet Grain — metered work under a spend budget (request · grant)",
-        dreggnet_grain::GrainOffering::new(1000),
-    );
-    host.register(
-        "hermes",
-        "DreggNet Hermes — the message relay (send · deliver · ack)",
-        dreggnet_hermes::HermesOffering::new(),
-    );
+    dreggnet_catalog::register_services(host, &dreggnet_catalog::CatalogConfig::default());
 }
 
 /// **Build the multi-offering catalog router** over a shared [`CatalogState`]. Additive to
@@ -2032,15 +1987,37 @@ fn catalog_form(key: &str, id: &str, it: &MenuItem) -> String {
     )
 }
 
+/// The Descent's TRUE play path, when one is configured (H1): a Discord deep link — the game plays
+/// live in Discord. Rendered as an `<a class="{class}">` ONLY when `DESCENT_DISCORD_INVITE` is set,
+/// so a "Play" CTA never points nowhere; the served in-browser wasm play page is a separate lane.
+/// Empty string when no invite is configured (the caller then shows the board link alone).
+fn descent_play_cta(class: &str) -> String {
+    match std::env::var("DESCENT_DISCORD_INVITE") {
+        Ok(link) if !link.trim().is_empty() => format!(
+            "<a class=\"{class}\" href=\"{href}\">Play in Discord \
+             <span class=\"arr\" aria-hidden=\"true\">→</span></a>",
+            href = esc(link.trim()),
+        ),
+        _ => String::new(),
+    }
+}
+
 /// The `GET /offerings` catalog page — The Descent featured on top (the flagship pointer), then
 /// the Lab shelf: a card + "play" link per registered offering, framed by the shared
 /// `dreggnet_catalog::{flagship_pointer, lab_intro}` copy.
 fn catalog_page(offerings: &[OfferingInfo]) -> String {
-    // Group the catalog into coherent shelves so ~18 offerings read as three clear categories,
+    // Group the catalog into coherent shelves so ~19 offerings read as three clear categories,
     // not one flat wall of look-alike cards: the GAMES (play to win / verify), the RPG FEATURE
     // surfaces (the do-once render path), and the verifiable SERVICES. Any offering outside the
     // known sets falls into a catch-all "More" shelf (so a future registration still shows up).
-    const GAMES: &[&str] = &["dungeon", "council", "market", "tug", "automatafl"];
+    const GAMES: &[&str] = &[
+        "dungeon",
+        "council",
+        "market",
+        "bazaar",
+        "tug",
+        "automatafl",
+    ];
     // NOTE `cheevos`, not `cheevo`: `dreggnet_surfaces::register_surfaces` registers the
     // achievements surface under the PLURAL key. The singular never matched, so Achievements has
     // been silently falling through to the catch-all "More" shelf instead of sitting with the other
@@ -2131,14 +2108,17 @@ fn catalog_page(offerings: &[OfferingInfo]) -> String {
     };
 
     // THE LAB FRAMING (shared words: `dreggnet_catalog::{flagship_pointer, lab_intro}`) — the
-    // featured game leads, and the 18-offering shelf below is honestly the lab, not the product.
+    // featured game leads, and the 19-offering shelf below is honestly the lab, not the product.
+    // H1: the `/descent` link is the no-cheat BOARD (not play) — label it honestly; a true Play CTA
+    // (Discord) rides alongside when configured.
+    let descent_play = descent_play_cta("play");
     let body = format!(
         "<main class=\"catalog\"><div class=\"page-head\">\
          <p class=\"eyebrow\">DreggNet Cloud</p>\
          <h1>One game, and a lab full of parts.</h1>\
          <p class=\"deck\">{flagship}</p>\
-         <p class=\"prose\"><a class=\"play\" href=\"/descent\">Play today's descent \
-         <span class=\"arr\" aria-hidden=\"true\">→</span></a></p>\
+         <p class=\"prose\"><a class=\"play\" href=\"/descent\">See today's no-cheat board \
+         <span class=\"arr\" aria-hidden=\"true\">→</span></a>{descent_play}</p>\
          <p class=\"deck\">{lab} Every offering below is a confined, verifiable, per-session \
          thing on the real dregg substrate — no node, no testnet: verification is in-process \
          re-execution.</p></div>\
@@ -2263,16 +2243,12 @@ fn catalog_missing_offering(key: &str) -> String {
 //    a signed credential); a real deployment derives a per-user Ed25519 key as the bot does.
 // ═════════════════════════════════════════════════════════════════════════════════════════
 
-/// **The public-demo offering host** — the five games ([`catalog_default_host`]: dungeon, council,
-/// market, tug, automatafl) PLUS the eight do-once feature surfaces
-/// ([`dreggnet_surfaces::register_surfaces`]: trade, inventory, cheevos, guild, craft, companion,
-/// tavern, party). Built on the host's owning thread (so each offering's `!Send` internals stay
-/// confined), it is the registry the demo catalog browses + plays.
+/// **The public-demo offering host** — the full shared DreggNet portfolio, built through
+/// [`dreggnet_catalog::full_catalog_host`] with the web's `alice`/`bob` electorate. Built on the
+/// host's owning thread (so each offering's `!Send` internals stay confined), it is the registry
+/// the demo catalog browses + plays.
 pub fn demo_host() -> OfferingHost {
-    let mut host = catalog_default_host();
-    dreggnet_surfaces::register_surfaces(&mut host);
-    register_non_game_offerings(&mut host);
-    host
+    dreggnet_catalog::full_catalog_host(&web_catalog_config())
 }
 
 /// The session-lifecycle env knobs the web deployment reads (each unset/empty → `None`, i.e.
@@ -2528,7 +2504,7 @@ pub fn demo_win() -> (Vec<usize>, u64, u64) {
 /// - `GET /` — a landing page linking the surfaces;
 /// - `GET /health` — a liveness probe (200 `{"status":"ok"}`) for the fronting proxy / uptime check;
 /// - [`router`] — the single-offering session surface (`/session/{id}` …);
-/// - [`catalog_router`] over [`demo_host`] — the games + feature-surface catalog (`/offerings` …);
+/// - [`catalog_router`] over [`demo_host`] — the shared full portfolio (`/offerings` …);
 /// - [`descent_router`] over [`demo_descent_state`] — the seeded no-cheat Descent leaderboard
 ///   (`/descent/leaderboard`, `/descent/run/{id}`).
 ///
@@ -2585,12 +2561,30 @@ pub fn make_app_parts_with_descent(descent: Arc<DescentState>) -> (Router, Arc<C
         .merge(router(web))
         .merge(catalog_router(Arc::clone(&catalog)))
         .merge(descent_router(descent))
-        .merge(sprite::sprite_router());
+        // THE PLAYABLE web front door (backlog H1): `GET /descent/play` serves the in-tab
+        // `<dregg-descent>` client over the wasm `DescentWorld`. State-free + additive; no route
+        // overlap with `descent_router`'s board/run/submit surface.
+        .merge(descent_play::descent_play_router())
+        .merge(sprite::sprite_router())
+        // THE CROWD-STREAM OVERLAY (docs/CROWD-STREAM-ENGINE-DESIGN.md) — the transparent OBS vote
+        // overlay + its server→browser SSE tally push (`GET /overlay`, `GET /overlay/sse`,
+        // `POST /overlay/ingest[/youtube]`). The demo state is the keep round; a deployment builds
+        // its own `overlay::OverlayState` over the round for the game it is streaming and drives a
+        // close→resolve→advance timer via `OverlayState::close_tick`.
+        .merge(overlay::overlay_router(overlay::demo_state()));
     // THE TELEGRAM MINI APP surface — mounted iff `TELEGRAM_BOT_TOKEN` is set (the same ops gate
     // as the bot itself; `tg_miniapp_from_env` logs one line either way). It drives the SAME
     // catalog host, but through initData-verified identities landing Signed turns.
     let app = match telegram_miniapp::tg_miniapp_from_env(Arc::clone(&catalog)) {
         Some(tg) => app.merge(tg),
+        None => app,
+    };
+    // THE DISCORD ACTIVITY surface — mounted iff `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` /
+    // `BOT_SECRET` are all set (the same ops gate + identity secret as the in-chat bot;
+    // `discord_activity_from_env` logs one line either way). It drives the SAME catalog host, but
+    // through OAuth-ticket-verified identities landing Signed turns under the bot's custodial key.
+    let app = match discord_activity::discord_activity_from_env(Arc::clone(&catalog)) {
+        Some(da) => app.merge(da),
         None => app,
     };
     (app, catalog)
@@ -2703,6 +2697,15 @@ fn hero_board() -> String {
 /// receipt), **what it looks like** (a real board mid-turn, with its colour language labelled), and
 /// **why it is different** (play → commit → re-verify), then the three surfaces.
 async fn index() -> Html<String> {
+    // H1: the `/descent` links are the no-cheat BOARD, not a play surface — label them honestly. A
+    // true Play CTA (Discord) leads the hero when configured; the board is then the secondary action.
+    let hero_play = descent_play_cta("btn btn-primary");
+    let hero_board_class = if hero_play.is_empty() {
+        "btn btn-primary"
+    } else {
+        "btn btn-ghost"
+    };
+    let card_play = descent_play_cta("play");
     let body = format!(
         "<section class=\"hero\">\
          <div class=\"hero-copy\">\
@@ -2712,7 +2715,8 @@ async fn index() -> Html<String> {
          client JavaScript. Every move is a real executor turn, refereed on the substrate. Nothing \
          here is taken on trust: a run re-executes, or it fails.</p>\
          <div class=\"cta-row\">\
-         <a class=\"btn btn-primary\" href=\"/descent\">Play The Descent \
+         {hero_play}\
+         <a class=\"btn {hero_board_class}\" href=\"/descent\">See today's no-cheat board \
          <span class=\"arr\" aria-hidden=\"true\">→</span></a>\
          <a class=\"btn btn-ghost\" href=\"/offerings\">Browse the Lab</a>\
          </div></div>\
@@ -2742,10 +2746,10 @@ async fn index() -> Html<String> {
          <div class=\"offering-card shelf-games\"><h3>The Descent</h3>\
          <p class=\"tagline\">The featured game. One dungeon a day, seeded from a public beacon; \
          one life, no reruns; every finished climb is proved onto the no-cheat board.</p>\
-         <a class=\"play\" href=\"/descent\">Play today's descent \
-         <span class=\"arr\" aria-hidden=\"true\">→</span></a></div>\
+         <a class=\"play\" href=\"/descent\">See today's no-cheat board \
+         <span class=\"arr\" aria-hidden=\"true\">→</span></a>{card_play}</div>\
          <div class=\"offering-card shelf-services\"><h3>🧪 The Lab</h3>\
-         <p class=\"tagline\">Experimental engine surfaces — five games, eight feature surfaces, \
+         <p class=\"tagline\">Experimental engine surfaces — six games, eight feature surfaces, \
          five services. The parts the game is built from, on the shelf for the curious.</p>\
          <a class=\"play\" href=\"/offerings\">Browse the Lab \
          <span class=\"arr\" aria-hidden=\"true\">→</span></a></div>\
