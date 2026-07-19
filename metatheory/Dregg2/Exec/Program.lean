@@ -409,6 +409,17 @@ inductive StateConstraint where
   | anyOfBound (branches : List BoundBranch)
   deriving Repr
 
+/-! ## Decidable equality on the constraint catalog.
+
+All payloads are decidable: `FieldName = String`, `Int`, `Nat`, `Bool`, `List` of those, and the
+lattice carriers `Label`/`ClearanceGraph = Graph` (both `deriving DecidableEq` in
+`Authority/ClearanceGraph.lean`). So the whole catalog derives — ADDITIVE (a new instance cannot
+break any consumer). This TOTALIZES `predBEq`/`reEq` (`Crypto/Deriv/AciNormal.lean`): the `atom`
+leaf, previously fail-closed for lack of this instance, now decides. -/
+deriving instance DecidableEq for SimpleConstraint
+deriving instance DecidableEq for BoundBranch
+deriving instance DecidableEq for StateConstraint
+
 /-! ## Evaluation — the executable admissibility check. -/
 
 /-- A decidable `Int` comparison as a `Bool`. -/

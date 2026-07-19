@@ -37,19 +37,19 @@ Both points are findings of this slice, not assumptions carried into it.
 
 ## Equality: computable, CONSERVATIVE, and stated plainly
 
-`PredRE` has **no computable `DecidableEq`** — `Pred`'s `atom` carries a `StateConstraint`
-(`ClearanceGraph` / `Label` / `BoundBranch` payloads), and `deriving instance DecidableEq for Pred`
-FAILS (verified, not assumed). `Monotone.lean` supplies a `noncomputable`
-`Classical.typeDecidableEq PredRE`; using that here would make `normalize` noncomputable and the word
-"normalizer" a lie.
+This module carries its own **computable, one-sided** test `reEq : PredRE → PredRE → Bool` with
+`reEq_sound : reEq R S = true → R = S`, rather than the `noncomputable` `Classical.typeDecidableEq
+PredRE` from `Monotone.lean` (which would make `normalize` noncomputable and the word "normalizer" a
+lie). `reEq` lifts a leaf test `predBEq : Pred → Pred → Bool` over the regex structure.
 
-So this module carries its own **computable, one-sided** test `reEq : PredRE → PredRE → Bool` with
-`reEq_sound : reEq R S = true → R = S`. It is deliberately **FAIL-CLOSED**: on leaf `Pred`s outside
-the decidable fragment (`tt`, `ff`, `symEq`, `digEq`) it answers `false` rather than guessing. It may
-therefore MISS a duplicate (under-dedup, a completeness loss) but can never claim one that is not
-there (which would be an unsoundness — deleting a genuinely different disjunct). Soundness of
-`normalize` depends only on the `→` direction, so `normalize_sim` holds for ALL of `PredRE`; it is
-the dedup POWER that degrades outside the fragment. The fragment widens by extending `predBEq` alone.
+`predBEq` now **DECIDES the `atom` leaf**: `Exec.StateConstraint` carries a real `DecidableEq`
+(`Exec/Program.lean` — all payloads decidable, incl. the `Label`/`ClearanceGraph` lattice carriers),
+so `atom c`/`atom d` returns the true verdict instead of fail-closing. `predBEq` still answers `false`
+on the COMPOUND `Pred` constructors it does not descend (`and`/`or`/`not`/`allOf`/`anyOf`, and the
+typed `symMemberOf`/`digFieldEq`) — the remaining honest one-sided edge, which under-dedups but never
+misclaims. Soundness of `normalize` depends only on the `→` direction (`predBEq_sound`), so
+`normalize_sim` holds for ALL of `PredRE`; only the dedup POWER degrades on the still-uncovered
+constructors, and the fragment widens by extending `predBEq` alone.
 
 `sorry`-free; `#assert_all_clean` at the bottom.
 -/
@@ -68,8 +68,12 @@ namespace PredRE
 (any `Pred` outside the `tt`/`ff`/`symEq`/`digEq` fragment) — the honest cost of `Pred` having no
 derivable `DecidableEq`. -/
 
-/-- **`predBEq`** — computable equality on the decidable fragment of `Pred`; `false` elsewhere. -/
+/-- **`predBEq`** — computable equality on `Pred`. Now TOTAL on the `atom` leaf: `Exec.StateConstraint`
+carries a real `DecidableEq` (`Exec/Program.lean`, all payloads decidable incl. the `Label`/`ClearanceGraph`
+lattice carriers), so an `atom c` / `atom d` pair DECIDES rather than fail-closing. The remaining
+`false` arm covers only genuinely-distinct constructors. -/
 def predBEq : Pred → Pred → Bool
+  | .atom c,    .atom d    => decide (c = d)
   | .tt,        .tt        => true
   | .ff,        .ff        => true
   | .symEq f s, .symEq g t => f == g && s == t
@@ -81,6 +85,7 @@ theorem predBEq_sound : ∀ {p q : Pred}, predBEq p q = true → p = q := by
   intro p q h
   unfold predBEq at h
   split at h
+  · exact congrArg _ (of_decide_eq_true h)
   · rfl
   · rfl
   · simp only [Bool.and_eq_true, beq_iff_eq] at h
@@ -342,11 +347,14 @@ private def f5 : Value := .record [("k", .sym 5)]
 #guard derives [f5] (normalize (.alt (.alt r7 r9) r7)) = false
 #guard derives [f5] (.alt (.alt r7 r9) r7) = false
 
--- The FAIL-CLOSED edge, PINNED rather than hidden: an `atom` leaf is outside `predBEq`'s fragment,
--- so a duplicate of it is NOT detected. `normalize` stays SOUND; it just fails to dedup.
+-- The atom leaf is now INSIDE `predBEq`'s fragment (`Exec.StateConstraint` carries `DecidableEq`),
+-- so a duplicate of it IS detected and `normalize` dedups it — the fail-closed edge is CLOSED.
 private def atomLeaf : PredRE := .sym (.atom (.fieldLeField "a" "b"))
-#guard reEq atomLeaf atomLeaf = false
-#guard reEq (normalize (.alt atomLeaf atomLeaf)) (.alt atomLeaf atomLeaf) = false
+#guard reEq atomLeaf atomLeaf = true
+#guard reEq (normalize (.alt atomLeaf atomLeaf)) atomLeaf = true
+-- A DISTINCT atom is still (soundly) not merged.
+private def atomLeaf2 : PredRE := .sym (.atom (.fieldLeField "a" "c"))
+#guard reEq atomLeaf atomLeaf2 = false
 
 end Guards
 
@@ -389,10 +397,13 @@ is NOT proved here and nothing above approximates it. What it needs, exactly:
    which must keep its `#assert_not_depends_on` pins passing and must re-prove `sim_der`/`sim_sound`
    for the new constructors), or completeness is stated only for the pure-`alt` fragment.
 
-3. **A decidable leaf equality.** `predBEq` is fail-closed outside `tt`/`ff`/`symEq`/`digEq`, so even
-   on the pure-`alt` fragment completeness fails for `atom` leaves. Closing this needs a real
-   `DecidableEq StateConstraint` (currently NOT derivable — `ClearanceGraph`/`Label`/`BoundBranch`
-   carry no instance), which is mechanical but edits `Exec/Program.lean`.
+3. **A decidable leaf equality.** CLOSED. `predBEq` now decides `atom` leaves via the real
+   `DecidableEq StateConstraint` added in `Exec/Program.lean` (all payloads decidable, incl. the
+   `Label`/`ClearanceGraph` lattice carriers, which DO carry `DecidableEq`). `predBEq` is total on
+   `atom`; the remaining `false` arm covers only distinct constructors. So leaf equality no longer
+   blocks fragment completeness — item 1 (the pure-`alt` invariance argument) is now the sole
+   remaining obstacle for that fragment, and the full-`PredRE` case still needs item 2's `Sim`
+   congruence extension.
 
 **Is the chosen normal form reachable?** Yes — and that is the good news of this slice. Because the
 form is the ORDER-PRESERVING first-occurrence sequence (the free-left-regular-band canonical form),
