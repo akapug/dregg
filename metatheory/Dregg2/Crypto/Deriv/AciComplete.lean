@@ -340,6 +340,8 @@ theorem key_inter (R S : PredRE) : key (.inter R S) = none := by
   simp [key, altList, allRigid, rigidLeaf]
 theorem key_cat (R S : PredRE) : key (.cat R S) = none := by
   simp [key, altList, allRigid, rigidLeaf]
+theorem key_star (R : PredRE) : key (.star R) = none := by
+  simp [key, altList, allRigid, rigidLeaf]
 
 /-- **`sim_key`** — THE INVARIANCE THEOREM: the first-occurrence disjunct sequence is constant on
 `≅`-classes. Induction on the `Sim` derivation; every generator is discharged above. Holds for ALL
@@ -369,6 +371,8 @@ theorem sim_key {R S : PredRE} (h : Sim R S) : key R = key S := by
   | altCong _ _ ih₁ ih₂ => rw [key_alt, key_alt, ih₁, ih₂]
   | interCong _ _ _ _ => rw [key_inter, key_inter]
   | catCong _ _ => rw [key_cat, key_cat]
+  | catCongR _ _ => rw [key_cat, key_cat]
+  | starCong _ _ => rw [key_star, key_star]
 
 /-- The fragment is `Sim`-CLOSED: it is not an assumption on the right-hand side, it is a
 consequence. -/

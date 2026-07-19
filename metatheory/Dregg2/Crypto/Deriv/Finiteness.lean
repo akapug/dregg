@@ -94,6 +94,55 @@ theorem pieces_equiv' {f f' : PredRE} (eqv : Sim f f') :
         exact ⟨.cat i1 S, Sim.catCong i2,
           by simp only [pieces, mem_append, mem_map]; exact Or.inl ⟨i1, i3, rfl⟩⟩
       | Or.inr g => exact ⟨e, Sim.rfl, mem_append.mpr (Or.inr g)⟩
+  | @catCongR S₁ S₂ R hsim ih =>
+    -- `pieces (cat R Sᵢ) = map (·⬝Sᵢ) ⊕(pieces R) ++ pieces Sᵢ`. The `map` block: same `R`-piece,
+    -- right factor transported by `catCongR hsim`. The trailing `pieces Sᵢ` block: `ih` directly.
+    refine ⟨fun e h1 => ?_, fun e h1 => ?_⟩
+    · simp only [pieces, mem_append, mem_map] at h1
+      match h1 with
+      | Or.inl ⟨xs, g1, g2⟩ =>
+        subst g2
+        exact ⟨.cat xs S₂, Sim.catCongR hsim,
+          by simp only [pieces, mem_append, mem_map]; exact Or.inl ⟨xs, g1, rfl⟩⟩
+      | Or.inr g =>
+        have ⟨i1, i2, i3⟩ := ih.1 _ g
+        exact ⟨i1, i2, mem_append.mpr (Or.inr i3)⟩
+    · simp only [pieces, mem_append, mem_map] at h1
+      match h1 with
+      | Or.inl ⟨xs, g1, g2⟩ =>
+        subst g2
+        exact ⟨.cat xs S₁, Sim.catCongR (Sim.sym hsim),
+          by simp only [pieces, mem_append, mem_map]; exact Or.inl ⟨xs, g1, rfl⟩⟩
+      | Or.inr g =>
+        have ⟨i1, i2, i3⟩ := ih.2 _ g
+        exact ⟨i1, i2, mem_append.mpr (Or.inr i3)⟩
+  | @starCong R₁ R₂ hsim ih =>
+    -- `pieces (star R) = star R :: map (·⬝star R) ⊕(pieces R)`. Head → `starCong`. Map block →
+    -- transport the `R`-piece by `ih`, and the `star R` right factor by `catCongR ∘ starCong`.
+    refine ⟨fun e h1 => ?_, fun e h1 => ?_⟩
+    · simp only [pieces, mem_cons, mem_map] at h1
+      match h1 with
+      | Or.inl heq =>
+        subst heq
+        exact ⟨.star R₂, Sim.starCong hsim, by simp only [pieces]; exact mem_cons_self ..⟩
+      | Or.inr ⟨xs, g1, g2⟩ =>
+        subst g2
+        have ⟨i1, i2, i3⟩ := toSumSubsets_monotone ih.1 _ g1
+        exact ⟨.cat i1 (.star R₂),
+          Sim.trans (Sim.catCong i2) (Sim.catCongR (Sim.starCong hsim)),
+          by simp only [pieces, mem_cons, mem_map]; exact Or.inr ⟨i1, i3, rfl⟩⟩
+    · simp only [pieces, mem_cons, mem_map] at h1
+      match h1 with
+      | Or.inl heq =>
+        subst heq
+        exact ⟨.star R₁, Sim.starCong (Sim.sym hsim),
+          by simp only [pieces]; exact mem_cons_self ..⟩
+      | Or.inr ⟨xs, g1, g2⟩ =>
+        subst g2
+        have ⟨i1, i2, i3⟩ := toSumSubsets_monotone ih.2 _ g1
+        exact ⟨.cat i1 (.star R₁),
+          Sim.trans (Sim.catCong i2) (Sim.catCongR (Sim.starCong (Sim.sym hsim))),
+          by simp only [pieces, mem_cons, mem_map]; exact Or.inr ⟨i1, i3, rfl⟩⟩
   | interCong _ _ ih1 ih2 =>
     refine ⟨fun e h1 => ?_, fun e h1 => ?_⟩
     · simp only [pieces, List.productWith, mem_map, Prod.exists, List.pair_mem_product,

@@ -73,8 +73,12 @@ inductive Sim : PredRE → PredRE → Prop where
   | altCong   : Sim R₁ R₂ → Sim S₁ S₂ → Sim (.alt R₁ S₁) (.alt R₂ S₂)
   /-- Intersection congruence. -/
   | interCong : Sim R₁ R₂ → Sim S₁ S₂ → Sim (.inter R₁ S₁) (.inter R₂ S₂)
-  /-- Concatenation congruence (left only — the derivative only ever rewrites the left of a `cat`). -/
+  /-- Concatenation congruence (left). -/
   | catCong   : Sim R₁ R₂ → Sim (.cat R₁ S) (.cat R₂ S)
+  /-- Concatenation congruence (right) — makes `≅` a FULL congruence for `cat`. -/
+  | catCongR  : Sim S₁ S₂ → Sim (.cat R S₁) (.cat R S₂)
+  /-- Kleene-star congruence — makes `≅` a FULL congruence for `star`. -/
+  | starCong  : Sim R₁ R₂ → Sim (.star R₁) (.star R₂)
 
 @[inherit_doc] infix:37 " ≅ " => Sim
 
@@ -104,6 +108,8 @@ theorem sim_null {R S : PredRE} (h : R ≅ S) : null R = null S := by
   | altCong _ _ ihR ihS => simp only [null, ihR, ihS]
   | interCong _ _ ihR ihS => simp only [null, ihR, ihS]
   | @catCong R₁ R₂ S _ ih => simp only [null, ih]
+  | catCongR _ ih => simp only [null, ih]
+  | starCong _ _ => simp only [null]
 
 /-! ## Language-soundness of `≅` — the fact that licenses the quotient.
 
@@ -126,6 +132,9 @@ private theorem matches_neg (w : List Value) (r : PredRE) :
 
 private theorem matches_cat (w : List Value) (l r : PredRE) :
     Matches w (.cat l r) ↔ ∃ w₁ w₂, w₁ ++ w₂ = w ∧ Matches w₁ l ∧ Matches w₂ r := by rw [Matches]
+
+private theorem matches_star (w : List Value) (r : PredRE) :
+    Matches w (.star r) ↔ ∃ m, Matches w (repeatCat r m) := by rw [Matches]
 
 /-- **`sim_sound`** — similarity is LANGUAGE-SOUND: similar regexes match exactly the same words.
 THE theorem that makes "finite up to `≅`" a finiteness of recognized LANGUAGES, not just of syntax
@@ -155,6 +164,32 @@ theorem sim_sound {R S : PredRE} (h : R ≅ S) : ∀ w, Matches w R ↔ Matches 
     constructor
     · rintro ⟨w₁, w₂, hsplit, hl, hr⟩; exact ⟨w₁, w₂, hsplit, (ih w₁).mp hl, hr⟩
     · rintro ⟨w₁, w₂, hsplit, hl, hr⟩; exact ⟨w₁, w₂, hsplit, (ih w₁).mpr hl, hr⟩
+  | catCongR _ ih =>
+    -- Transport the IH on the RIGHT factor (the left factor `R` is shared).
+    intro w
+    rw [matches_cat, matches_cat]
+    constructor
+    · rintro ⟨w₁, w₂, hsplit, hl, hr⟩; exact ⟨w₁, w₂, hsplit, hl, (ih w₂).mp hr⟩
+    · rintro ⟨w₁, w₂, hsplit, hl, hr⟩; exact ⟨w₁, w₂, hsplit, hl, (ih w₂).mpr hr⟩
+  | @starCong R₁ R₂ _ ih =>
+    -- `star r`'s language is the finite-power union `∃ m, Matches w (repeatCat r m)`. Congruence of
+    -- each finite power (induction on `m`, transporting `ih` on every unfolded factor) then closes
+    -- under `exists_congr`.
+    have rep : ∀ (m : Nat) (w : List Value),
+        Matches w (repeatCat R₁ m) ↔ Matches w (repeatCat R₂ m) := by
+      intro m
+      induction m with
+      | zero => intro w; exact Iff.rfl
+      | succ n ihm =>
+        intro w
+        simp only [repeatCat]
+        rw [matches_cat, matches_cat]
+        constructor
+        · rintro ⟨w₁, w₂, hs, hl, hr⟩; exact ⟨w₁, w₂, hs, (ih w₁).mp hl, (ihm w₂).mp hr⟩
+        · rintro ⟨w₁, w₂, hs, hl, hr⟩; exact ⟨w₁, w₂, hs, (ih w₁).mpr hl, (ihm w₂).mpr hr⟩
+    intro w
+    rw [matches_star, matches_star]
+    exact exists_congr (fun m => rep m w)
 
 /-- **`sim_derives`** — the same soundness, transported to the EXECUTABLE matcher via Stage 1's
 `correctness`: similar regexes give the same `derives` verdict on every word. So normalizing a
@@ -197,6 +232,18 @@ theorem sim_der {R S : PredRE} (h : R ≅ S) (a : Value) : der a R ≅ der a S :
     cases hn : null R₂ with
     | false => simpa using Sim.catCong ih
     | true => simpa using Sim.altCong (Sim.catCong ih) Sim.rfl
+  | @catCongR S₁ S₂ R hsub ih =>
+    -- `der a (cat R Sᵢ)` shares the left factor `R` (hence `null R`); the two `Sᵢ` differ only in
+    -- the UNDERIVED right slot (both branches) and the derived `der a Sᵢ` (nullable branch).
+    simp only [der]
+    cases hn : null R with
+    | false => simpa using Sim.catCongR hsub
+    | true => simpa using Sim.altCong (Sim.catCongR hsub) ih
+  | @starCong R₁ R₂ hsub ih =>
+    -- `der a (star Rᵢ) = cat (der a Rᵢ) (star Rᵢ)`: derive the left via `ih`, then transport the
+    -- `star` on the right through `catCongR ∘ starCong`. Uses only `der`/`Sim` — semantics-free.
+    simp only [der]
+    exact Sim.trans (Sim.catCong ih) (Sim.catCongR (Sim.starCong hsub))
 
 /-! ## Iterating the der-congruence along a whole word. -/
 
