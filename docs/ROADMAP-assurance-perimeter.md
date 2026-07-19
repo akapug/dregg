@@ -29,7 +29,7 @@ a trusted key. **Nothing trusted, nothing duplicated.**
 | 8 | non-revocation | technique | ✅ (the template IS non-rev); residual: fold spine decode further |
 | 2 | state commitment (transfer) | technique | ✅ FLAGSHIP `c68c4f5a9` — `transferDescriptor_commit_iff`; CI-wired. TAIL: generalize to ALL effect tags; make `wire_commit` the chained commitment + delete BLAKE3 `ledger.root()` |
 | 5 | heap-root | ARCHITECTURE | ✅ `f7dd79db2` — genuine `Heap.set` forced, prepend-digest DELETED, MapOps carrier verified |
-| 3 | receipt `TurnExecuted` | trust→proof | 🔶 resolver `26d3b1615` + migration `b4ac7ef23` (all 4 features → `TurnProven`, proof threaded onto the receipt) committed; coherence build VERIFYING (a `service_promise` test-panic being resolved — lands when all 4 features genuinely resolve green). Blocked on its own test-fix, not churn. |
+| 3 | receipt `TurnExecuted` | trust→proof | ✅ **VERIFIED GREEN** — resolver `26d3b1615` + migration `b4ac7ef23` (all 4 features → `TurnProven`, proof threaded onto the receipt), on origin. Clean run: `service_promise` **7 passed / 0 failed**, incl. `committed_state_forbids_refund_after_release` + `committed_terminal_moves_the_cell_commitment` — the earlier "failures" WERE a stale-reverted-source artifact (the tree had been reset mid-session), exactly as the lane diagnosed. Trusted-key retired as the `TurnExecuted` trust root; a receipt now requires a VERIFIED EffectVM STARK bound to the turn. |
 | 4 | cap-root | ~~ARCHITECTURE~~ **ALREADY CLOSED** | ✅ the DEPLOYED `attenuateV3` already forces the faithful 8-felt sorted-tree write `writesTo8` (`CapOpenEmit.effCapOpenWriteV3_forces_write8`, §11 keystone, `#assert_axioms`-clean, apex-wired via `Rfix 12` / `ClosureFanoutGenuine` CLASS A) — **STRONGER than heap** (full ~124-bit vs heap's lane-0 scalar). The audit/crux "prepend / free CAP_DIGEST_NEW" read a SUPERSEDED study face, not the deployed descriptor. Doc corrected `c8f443e37`. The cap lane correctly REFUSED to build the requested scalar splice (would be a weaker re-authored mirror — reality-gate held). RESIDUALS (tracked, NOT soundness gaps): (a) delete the superseded prepend/free-digest code across ~15 cap-family modules (own multi-session cutover + adversarial audit); (b) a `Satisfied2`-only forged-root canary needs the sorted-tree functional property from the trace (discharge the `SpineCommits` decode) + closes the arity-7 leaf other-field encoding residual. |
 | 6 | note-spend | structural | ✅ `cb2567872` (on origin) — `noteSpendFresh_accepts_iff` (full `⟺`: `NoteFreshAccepts ↔ nf∉nulls`), `gapOpen_complete` forward gap-construction, canaried both directions, `#assert_axioms`-clean. `NullifierTreeEncodes` kept as the honest Rust-accumulator-boundary residual (named). |
 | — | garbled-eval | technique | ✅ `ba38e878b` (on origin) — `garbled_accepts_iff` (`AirAccepts ↔ CanonInstance`) + `garbled_bridge` (∀-soundness ∧ ∃-completeness); `honestG_satisfied2` generalizes the single witness parametrically; `GarbledCarriers` bundle (canon+hash), both canaries. Also CI-wired the previously `lake env`-only Rung-1/2 garbled chain. |
@@ -39,17 +39,18 @@ a trusted key. **Nothing trusted, nothing duplicated.**
 
 ## Cycles
 - **Cycle 1 — DONE.** template · heap hole · state-commit flagship · CI-wiring · receipt resolver (held).
-- **Cycle 2 — PROOFS DONE, integration finishing.** ✅ note-spend `cb2567872` · garbled `ba38e878b` · cap
-  found-already-closed `c8f443e37`. 🔶 #3 migration `b4ac7ef23` verifying its own service_promise test-fix.
-  ⚠ full-tree `Dregg2` CI-confirm blocked by co-tenant heap8 WIP (`MapMerkleRoot` deps mid-refactor) — origin is
-  clean, both `⟺` bridges green standalone; the CI-wiring lands when the tree quiesces.
+- **Cycle 2 — ✅ COMPLETE.** note-spend `cb2567872` · garbled `ba38e878b` · cap found-already-closed `c8f443e37` ·
+  #3 receipt migration `b4ac7ef23` **VERIFIED GREEN** (7/0 service_promise, the earlier reds were stale-reverted-source).
+  All exemplar modules CI-wired into the default `Dregg2` build and on origin.
 - **Cycle 3 — IN FLIGHT, sequenced AROUND the co-tenant heap8/S2 churn.** KEY: the `→` soundness half is ALREADY
   generic (`runnable_full_sound` over `RunnableFullStateSpec` in `EffectVmFullStateRunnable.lean`, ~28 emits ride it);
   only the `←` completeness is missing. **FIRE-NOW ✅ DONE** — engine `92518d277` (`runnable_full_commit_iff`) +
   fan A `1a53b1035` (8 kernel/lifecycle tags) + fan B `f4e7f871f` (9 kernel-emit tags incl. SetField) = **17 kernel-only
   tags with `air_accepts ⟺ spec`**, reality-gated against the deployed `*Wide` descriptors, `#assert_axioms`-clean, per-tag
-  canaries; CI-wiring (`Dregg2.lean` imports) + full-tree confirm pending the co-tenant heap8/S2 landing (their WIP still
-  breaks `MapMerkleRoot`). The recipe was: the ONE generic `runnable_full_complete` +
+  canaries; **CI-wiring ✅ DONE** — both tag modules wired into the default `Dregg2` build on origin (all 6 perimeter
+  exemplars now imported), and they build **green in-closure (3083 jobs)**. ⚠ The full `Dregg2` tree is currently red from
+  ANOTHER lane's `AutomataflResolveCapstone` `sorryAx` (committed, self-described "one hypothesis short") — NOT from the
+  perimeter work; the axiom gate is doing its job on their side. The recipe was: the ONE generic `runnable_full_complete` +
   `runnable_full_commit_iff` (transfer template lifted) → the flagship becomes the ENGINE → ~15 KERNEL-ONLY tags become
   thin instantiations (IncrementNonce, SetVK, SetPermissions, MakeSovereign, CellSeal/Destroy/Unseal, CreateCell{,FromFactory},
   EmitEvent, Exercise, PipelinedSend, ReceiptArchive, Noop, Burn, BridgeMint; verify SetField). **DEFER (gated on heap8/S2
