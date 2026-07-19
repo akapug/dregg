@@ -3022,20 +3022,32 @@ families are fixed-length lists whose positions do NOT move with `n`). `selectio
 `carryConstraints n` and `flowThroughConstraints n` are literally the same 6 / 4 / 14 gates as the
 frozen ones, so every polynomial-shape `rfl` and every `norm_num` closes unchanged.
 
-WHAT IS NOT HERE, AND WHY (the honest residual). The rest of the chain — auto pin, `validate_move`
-(`MoveValid`), the witnessed `is_vertical` + occlusion, `eq_coords`, the source read, `write_mid`,
-and hence `resolve_sat_imp_resolveMid` — needs one of two things this lane cannot supply:
-  • the `[0, n)` COORDINATE window (the frozen proofs pin coordinates to `{0,1}` via `coord01_of_sat`
-    / `interval_cases` / `sqdist_pure`; at `n > 2` the `decompose_coord_le` UPPER-edge bits and a
-    wider no-wrap window are required), and/or
+WHAT THE COORDINATE FAMILY NOW REACHES (§D.8, off the `AutomataflCoord` foundation). The
+COORDINATE-DEPENDENT extractions that needed the `[0, n)` window are now closed at ARBITRARY `n`:
+`sourceReadN_of_sat` (the witnessed source read, off `oneHotN_of_sat` + `dot_oneHot2`),
+`validMoveN_of_sat` (`validate_move` ⇒ the reference `MoveValid`, off `coordN_of_sat` +
+`autoPinN_of_sat` + `sqdistN_pure`), `ivN_of_sat` (the witnessed `is_vertical`), `eqCoordsN_of_sat`
+(the four pattern bits) and `srcNonVacN_of_sat` (the source-non-vacuum bit). The `{0,1}` reasoning
+(`coord01_of_sat` / `interval_cases` / `sqdist_pure` / the 4-cell split) is replaced by the
+foundation's `coordN_of_sat` UPPER-edge decode and the generalised `sqdistN_pure`/`sq1dN_pure` under
+EXPLICIT board-size windows (`2·(n−1)² < p`, `2^(rbits+1) ≤ p`, and for the 9-bit `is_vertical` /
+`eq_coords` distance sites the honest cap `dist ≤ 999` that the FIXED `RBITS = 9` decomposition
+imposes). All five are `#print axioms`-clean and non-vacuous at `n = 3`.
+
+WHAT IS STILL NOT HERE, AND WHY (the honest residual). The CAPSTONE `resolve_sat_imp_resolveMid` is
+NOT yet reached at `n > 2`; three ingredients remain at `NN = 2`:
   • a NON-VACUOUS OCCLUSION discharge. The generic occlusion MATH exists
-    (`AutomataflOcclusionGeneric.occ_eq_occluded_vert/horiz`), but the discharge of its hypotheses off
-    `Satisfied2` — `occ_iff_occluded_of_sat` — lives in `AutomataflOcclusionBridge` (a file this lane
-    may not touch) and is itself stated at `NN = 2` (built on `coord01_of_sat` + `NN = 2`). The
-    capstone's occlusion leg here runs through `occ_of_sat` / `occluded_false_n2` VACUITY, and the
-    caterpillar (`nextOf_pair` / `followChain_*` / `chainDest_*`) is stated with `.x < 2 ∧ .y < 2`.
+    (`AutomataflOcclusionGeneric.occ_eq_occluded_vert/horiz`), but its `Satisfied2` discharge
+    `occ_iff_occluded_of_sat` (in `AutomataflOcclusionBridge`) is still stated at `NN = 2` (built on
+    `coord01_of_sat` + `NN = 2`); the capstone's occlusion leg here still routes through `occ_of_sat`
+    / `occluded_false_n2` VACUITY;
+  • the per-cell `write_mid` assembly (`writeCell_of_sat` / `midCell_of_facts`), still enumerated over
+    the 4-cell `{0,1}²` board;
+  • the caterpillar coordinate bounds (`nextOf_pair` / `followChain_*` / `chainDest_*`), still stated
+    with `.x < 2 ∧ .y < 2`.
 So `resolve_sat_imp_resolveMid` remains at `NN = 2`; it is NOT restated at an `n` its proof cannot
-reach. -/
+reach. The `n`-generic coordinate extractions above are the assembled-capstone's inputs, landed but
+not yet composed. -/
 
 section AdjudicationCoreN
 variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
@@ -3360,6 +3372,676 @@ end AdjudicationCoreN
 #print axioms carryBN_of_sat
 #print axioms ftAN_of_sat
 #print axioms ftBN_of_sat
+
+/-! ## §D.8 — THE COORDINATE-DEPENDENT EXTRACTIONS, AT ARBITRARY BOARD SIZE `n`.
+
+This section closes the FIRST family of the honest residual §D.7 named: the extractions whose frozen
+proofs pinned coordinates to `{0,1}` (`coord01_of_sat` / `interval_cases` / `sqdist_pure` / the 4-cell
+board enumeration). Each is re-proved off `Satisfied2 (automataflResolveDescN n)` at ARBITRARY `n`,
+using the just-landed `AutomataflCoord` foundation (`coordN_of_sat`, `oneHotN_of_sat`, `dot_oneHot2`)
+in place of the `{0,1}` reasoning, and the already-`n`-generic `AutomataflResolveMembership` injectors.
+
+The window facts (`(n:ℤ) < p`, `2·(n−1)² < p`, `2^(rbits+1) ≤ p`) are EXPLICIT, discharged-at-call
+inequalities on the board size — trivially true at every realistic `n` and non-vacuous at `n = 3` —
+not assumed circuit facts. -/
+
+section CoordExtractN
+open Dregg2.Circuit.Emit.AutomataflCoord
+open Dregg2.Circuit.Emit.AutomataflOcclusionGeneric (OneHotAt)
+open Dregg2.Circuit.Emit.AutomataflResolveMembership
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
+  {t : VmTrace} {n : Nat}
+
+/-! ### §D.8.0 — Descriptor-generic reusable extractors (the `n`-generic twins of §0.2 / §3). -/
+
+/-- The `one` pin, n-generically (`one_of_sat`'s twin). -/
+theorem oneN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (envAt t i).loc (NGen.ONE n) = 1 := by
+  have hg := rgateHN hsat i hi (h := (Head.lin 1 (NGen.ONE n)).addConst (-1)) (mem_resolve_onePin n)
+  have hE : (headToExpr ((Head.lin 1 (NGen.ONE n)).addConst (-1))).eval (envAt t i).loc
+      = (envAt t i).loc (NGen.ONE n) + (-1) := rfl
+  rw [hE] at hg
+  exact eq_of_modEq_canon (canon_loc hc i _) canon_one ((gate_modEq_iff (by ring)).mp hg)
+
+/-- The `cond_nonzero` extractor, n-generically (`condNonzero_of_sat`'s twin). -/
+theorem condNonzeroN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (v inv : Nat)
+    (hg : cg (gCondNonzero (NGen.ONE n) v inv) ∈ (automataflResolveDescN n).constraints) :
+    ¬ ((envAt t i).loc v ≡ 0 [ZMOD 2013265921]) := by
+  set e := envAt t i with he
+  have hone := oneN_of_sat hsat hc i hi
+  rw [← he] at hone
+  have h := rgateN hsat i hi hg
+  simp only [gCondNonzero, EmittedExpr.eval] at h
+  rw [hone, one_mul] at h
+  intro hz
+  have : (e.loc v * e.loc inv + -1) ≡ (0 * e.loc inv + -1) [ZMOD 2013265921] :=
+    Int.ModEq.add (Int.ModEq.mul hz (Int.ModEq.refl _)) (Int.ModEq.refl _)
+  have h2 : (0 : ℤ) ≡ -1 [ZMOD 2013265921] := by
+    calc (0 : ℤ) ≡ e.loc v * e.loc inv + -1 [ZMOD 2013265921] := h.symm
+    _ ≡ 0 * e.loc inv + -1 [ZMOD 2013265921] := this
+    _ = -1 := by ring
+  exact absurd (eq_of_modEq_small (by norm_num) (by norm_num) h2) (by norm_num)
+
+/-- The `eq == 1 − neq` pin, n-generically (`eqPin_of_sat`'s twin). -/
+theorem eqPinN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (eqCol neqCol : Nat)
+    (gp : cgH (((Head.lin 1 eqCol).addLin 1 neqCol).addConst (-1))
+            ∈ (automataflResolveDescN n).constraints)
+    (hneq : (envAt t i).loc neqCol = 0 ∨ (envAt t i).loc neqCol = 1) :
+    (envAt t i).loc eqCol = 1 - (envAt t i).loc neqCol := by
+  set e := envAt t i with he
+  have hg := rgateHN hsat i hi gp
+  have hE : (headToExpr (((Head.lin 1 eqCol).addLin 1 neqCol).addConst (-1))).eval e.loc
+      = e.loc eqCol + e.loc neqCol + (-1) := rfl
+  rw [hE] at hg
+  have hmod := (gate_modEq_iff (x := e.loc eqCol + e.loc neqCol + -1)
+    (a := e.loc eqCol) (b := 1 - e.loc neqCol) (by ring)).mp hg
+  refine eq_of_modEq_canon (canon_loc hc i _) ?_ hmod
+  rcases hneq with h | h <;> rw [h] <;> exact ⟨by norm_num, by norm_num⟩
+
+/-- The 9-bit `forced_ge0` site extractor, n-generically (`ge0_9_of_sat`'s twin, membership args
+raw). The recomposition head is a FIXED structure (independent of `n`), so its `eval` is still `rfl`;
+`forcedGe0_wide` is pure; only the descriptor and the memberships are `n`-parametric. -/
+theorem ge0_9N_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (val ib bit0 : Nat)
+    (hib : cg (gBin ib) ∈ (automataflResolveDescN n).constraints)
+    (hbit : ∀ k, k < 9 → cg (gBin (bit0 + k)) ∈ (automataflResolveDescN n).constraints)
+    (hrec : cgH ((List.range 9).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k))
+                 (forcedGe0Term ((Head.lin 1 val).addConst (-1)) ib))
+             ∈ (automataflResolveDescN n).constraints)
+    (hlo : -999 ≤ (envAt t i).loc val) (hhi : (envAt t i).loc val ≤ 999) :
+    ((envAt t i).loc ib = 0 ∨ (envAt t i).loc ib = 1)
+      ∧ ((envAt t i).loc ib = 1 → 1 ≤ (envAt t i).loc val)
+      ∧ ((envAt t i).loc ib = 0 → (envAt t i).loc val ≤ 0) := by
+  set e := envAt t i with he
+  have hibv : e.loc ib = 0 ∨ e.loc ib = 1 :=
+    bin_of_gate (rgateN hsat i hi hib) (canon_loc hc i _)
+  have B : ∀ k : Nat, k < 9 → (0 ≤ e.loc (bit0 + k) ∧ e.loc (bit0 + k) ≤ 1) := by
+    intro k hk
+    have hb : e.loc (bit0 + k) = 0 ∨ e.loc (bit0 + k) = 1 :=
+      bin_of_gate (rgateN hsat i hi (hbit k hk)) (canon_loc hc i _)
+    rcases hb with h | h <;> omega
+  have h0 := B 0 (by norm_num); have h1 := B 1 (by norm_num); have h2 := B 2 (by norm_num)
+  have h3 := B 3 (by norm_num); have h4 := B 4 (by norm_num); have h5 := B 5 (by norm_num)
+  have h6 := B 6 (by norm_num); have h7 := B 7 (by norm_num); have h8 := B 8 (by norm_num)
+  set S : ℤ := e.loc (bit0 + 0) + 2 * e.loc (bit0 + 1) + 4 * e.loc (bit0 + 2)
+    + 8 * e.loc (bit0 + 3) + 16 * e.loc (bit0 + 4) + 32 * e.loc (bit0 + 5)
+    + 64 * e.loc (bit0 + 6) + 128 * e.loc (bit0 + 7) + 256 * e.loc (bit0 + 8) with hS
+  have hS0 : 0 ≤ S := by rw [hS]; omega
+  have hS1 : S ≤ 511 := by rw [hS]; omega
+  have hg := rgateHN hsat i hi hrec
+  have hE : (headToExpr ((List.range 9).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k))
+        (forcedGe0Term ((Head.lin 1 val).addConst (-1)) ib))).eval e.loc
+      = 2 * (e.loc ib * e.loc val) + (-2) * e.loc ib + e.loc ib + (-1) * e.loc val
+        + (-1) * e.loc (bit0 + 0) + (-2) * e.loc (bit0 + 1) + (-4) * e.loc (bit0 + 2)
+        + (-8) * e.loc (bit0 + 3) + (-16) * e.loc (bit0 + 4) + (-32) * e.loc (bit0 + 5)
+        + (-64) * e.loc (bit0 + 6) + (-128) * e.loc (bit0 + 7)
+        + (-256) * e.loc (bit0 + 8) := by rfl
+  rw [hE] at hg
+  have hmod : (2 * e.loc ib * (e.loc val - 1) + e.loc ib - (e.loc val - 1) - 1)
+      ≡ S [ZMOD 2013265921] := by
+    refine (gate_modEq_iff ?_).mp hg
+    rw [hS]; ring
+  obtain ⟨hp, hn⟩ := forcedGe0_wide hibv hS0 hS1 hmod (by omega) (by omega)
+  exact ⟨hibv, fun h => by have := hp h; omega, fun h => by have := hn h; omega⟩
+
+/-- The 5-bit `forced_ge0` site extractor, n-generically (`ge0_5_of_sat`'s twin). -/
+theorem ge0_5N_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (val ib bit0 : Nat)
+    (hib : cg (gBin ib) ∈ (automataflResolveDescN n).constraints)
+    (hbit : ∀ k, k < 5 → cg (gBin (bit0 + k)) ∈ (automataflResolveDescN n).constraints)
+    (hrec : cgH ((List.range 5).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k))
+                 (forcedGe0Term ((Head.lin 1 val).addConst (-1)) ib))
+             ∈ (automataflResolveDescN n).constraints)
+    (hlo : -99 ≤ (envAt t i).loc val) (hhi : (envAt t i).loc val ≤ 99) :
+    ((envAt t i).loc ib = 0 ∨ (envAt t i).loc ib = 1)
+      ∧ ((envAt t i).loc ib = 1 → 1 ≤ (envAt t i).loc val)
+      ∧ ((envAt t i).loc ib = 0 → (envAt t i).loc val ≤ 0) := by
+  set e := envAt t i with he
+  have hibv : e.loc ib = 0 ∨ e.loc ib = 1 :=
+    bin_of_gate (rgateN hsat i hi hib) (canon_loc hc i _)
+  have B : ∀ k : Nat, k < 5 → (0 ≤ e.loc (bit0 + k) ∧ e.loc (bit0 + k) ≤ 1) := by
+    intro k hk
+    have hb : e.loc (bit0 + k) = 0 ∨ e.loc (bit0 + k) = 1 :=
+      bin_of_gate (rgateN hsat i hi (hbit k hk)) (canon_loc hc i _)
+    rcases hb with h | h <;> omega
+  have h0 := B 0 (by norm_num); have h1 := B 1 (by norm_num); have h2 := B 2 (by norm_num)
+  have h3 := B 3 (by norm_num); have h4 := B 4 (by norm_num)
+  set S : ℤ := e.loc (bit0 + 0) + 2 * e.loc (bit0 + 1) + 4 * e.loc (bit0 + 2)
+    + 8 * e.loc (bit0 + 3) + 16 * e.loc (bit0 + 4) with hS
+  have hS0 : 0 ≤ S := by rw [hS]; omega
+  have hS1 : S ≤ 31 := by rw [hS]; omega
+  have hg := rgateHN hsat i hi hrec
+  have hE : (headToExpr ((List.range 5).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k))
+        (forcedGe0Term ((Head.lin 1 val).addConst (-1)) ib))).eval e.loc
+      = 2 * (e.loc ib * e.loc val) + (-2) * e.loc ib + e.loc ib + (-1) * e.loc val
+        + (-1) * e.loc (bit0 + 0) + (-2) * e.loc (bit0 + 1) + (-4) * e.loc (bit0 + 2)
+        + (-8) * e.loc (bit0 + 3) + (-16) * e.loc (bit0 + 4) := by rfl
+  rw [hE] at hg
+  have hmod : (2 * e.loc ib * (e.loc val - 1) + e.loc ib - (e.loc val - 1) - 1)
+      ≡ S [ZMOD 2013265921] := by
+    refine (gate_modEq_iff ?_).mp hg
+    rw [hS]; ring
+  obtain ⟨hp, hn⟩ := forcedGe0_core hibv hS0 hS1 hmod (by omega) (by omega)
+  exact ⟨hibv, fun h => by have := hp h; omega, fun h => by have := hn h; omega⟩
+
+/-! ### §D.8.1 — Generalised squared-distance purity: coordinates in `[0, n)`, no `{0,1}` split. -/
+
+/-- **`sqdistN_pure`** (`sqdist_pure`'s twin). A witnessed 2-D squared-distance column over four
+coordinates each in `[0, M]` is exactly the integer squared distance, provided the no-wrap window
+`2·M² < p` holds. `sqdist_pure` was this at `M = 1` with a `{0,1}⁴` enumeration; here the window is
+an explicit inequality on the board size. -/
+theorem sqdistN_pure {d x1 x2 y1 y2 M : ℤ} (hd : Canon d)
+    (bx1 : 0 ≤ x1 ∧ x1 ≤ M) (bx2 : 0 ≤ x2 ∧ x2 ≤ M)
+    (by1 : 0 ≤ y1 ∧ y1 ≤ M) (by2 : 0 ≤ y2 ∧ y2 ≤ M)
+    (hwin : 2 * M * M < 2013265921)
+    (h : d + (-1) * (x1 * x1) + 2 * (x1 * x2) + (-1) * (x2 * x2)
+          + (-1) * (y1 * y1) + 2 * (y1 * y2) + (-1) * (y2 * y2) ≡ 0 [ZMOD 2013265921]) :
+    d = (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) := by
+  have hdx : (x1 - x2) * (x1 - x2) ≤ M * M :=
+    by nlinarith [mul_nonneg (by linarith : (0:ℤ) ≤ M - (x1 - x2)) (by linarith : (0:ℤ) ≤ M + (x1 - x2))]
+  have hdy : (y1 - y2) * (y1 - y2) ≤ M * M :=
+    by nlinarith [mul_nonneg (by linarith : (0:ℤ) ≤ M - (y1 - y2)) (by linarith : (0:ℤ) ≤ M + (y1 - y2))]
+  have hval : Canon ((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2)) :=
+    ⟨by nlinarith [mul_self_nonneg (x1 - x2), mul_self_nonneg (y1 - y2)],
+     by nlinarith [hdx, hdy, hwin]⟩
+  exact eq_of_modEq_canon hd hval ((gate_modEq_iff (by ring)).mp h)
+
+/-- **`sq1dN_pure`** (`sq1d_pure`'s twin). The 1-D `eq_scalar` squared-distance over two coordinates
+in `[0, M]`, under `M² < p`. -/
+theorem sq1dN_pure {d a c M : ℤ} (hd : Canon d)
+    (ba : 0 ≤ a ∧ a ≤ M) (bc : 0 ≤ c ∧ c ≤ M) (hwin : M * M < 2013265921)
+    (h : d + (-1) * (a * a) + 2 * (a * c) + (-1) * (c * c) ≡ 0 [ZMOD 2013265921]) :
+    d = (a - c) * (a - c) := by
+  have hval : Canon ((a - c) * (a - c)) :=
+    ⟨mul_self_nonneg _,
+     by nlinarith [mul_nonneg (by linarith : (0:ℤ) ≤ M - (a - c)) (by linarith : (0:ℤ) ≤ M + (a - c)), hwin]⟩
+  exact eq_of_modEq_canon hd hval ((gate_modEq_iff (by ring)).mp h)
+
+/-! ### §D.8.2 — `sourceReadN_of_sat`: the witnessed source particle IS the OLD board cell.
+
+The `n`-generic twin of `sourceRead_of_sat` (§2), off `oneHotN_of_sat` (the two source one-hots) and
+`dot_oneHot2` (the row×column collapse), in place of the frozen 4-cell `rcases`. -/
+
+/-- The clean semantic value of `sourceReadHead`: `fp − Σ_y Σ_x selRow[y]·selCol[x]·old[y·n+x]`,
+written so the double sum is EXACTLY the shape `dot_oneHot2` collapses (the `−1` absorbed into the
+cell payload). The variable-length `foldl` does not `rfl`-reduce, so this is proved via the `evalH`
+combinators — the twin of the foundation's `evalH_autoPinHead`. -/
+theorem evalH_sourceReadHead (a : Nat → ℤ) (m b : Nat) :
+    evalH (NGen.sourceReadHead m b) a
+      = a (NGen.cFp m b)
+        + ((List.range m).map (fun y => ((List.range m).map (fun x =>
+            a (NGen.cSelRow m b y) * a (NGen.cSelCol m b x)
+              * (- a (NGen.old m (y * m + x))))).sum)).sum := by
+  have hinner : ∀ (h : Head) (y : Nat),
+      evalH ((List.range m).foldl (fun h2 x =>
+          h2.addProd (-1) [NGen.cSelRow m b y, NGen.cSelCol m b x, NGen.old m (y * m + x)]) h) a
+        = evalH h a
+          + ((List.range m).map (fun x =>
+              a (NGen.cSelRow m b y) * a (NGen.cSelCol m b x)
+                * (- a (NGen.old m (y * m + x))))).sum := by
+    intro h y
+    exact evalH_foldl_step a h (List.range m)
+      (fun h2 x => h2.addProd (-1) [NGen.cSelRow m b y, NGen.cSelCol m b x, NGen.old m (y * m + x)])
+      (fun x => a (NGen.cSelRow m b y) * a (NGen.cSelCol m b x) * (- a (NGen.old m (y * m + x))))
+      (by intro h2 x; rw [evalH_addProd]; simp only [varsVal, List.foldl_cons, List.foldl_nil]; ring)
+  rw [NGen.sourceReadHead,
+    evalH_foldl_step a (Head.lin 1 (NGen.cFp m b)) (List.range m)
+      (fun h y => (List.range m).foldl (fun h2 x =>
+          h2.addProd (-1) [NGen.cSelRow m b y, NGen.cSelCol m b x, NGen.old m (y * m + x)]) h)
+      (fun y => ((List.range m).map (fun x =>
+          a (NGen.cSelRow m b y) * a (NGen.cSelCol m b x) * (- a (NGen.old m (y * m + x))))).sum)
+      hinner,
+    evalH_lin]
+  ring
+
+/-- **`sourceReadN_of_sat`.** On a satisfying, canonical trace of `automataflResolveDescN n`, the
+witnessed source particle `fp` IS the OLD board cell `old[n·fy + fx]`: the source row/column one-hots
+collapse `Σ selRow·selCol·old` to the single cell at `(fx, fy)`, `n`-generically. The membership of
+the whole `validate_move` block is supplied by `hmv` (instantiated with
+`mem_resolve_of_mem_validateMove0/1` at the two move bases). -/
+theorem sourceReadN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (b : Nat)
+    (hn : (n : ℤ) < 2013265921)
+    (hmv : ∀ {g : VmConstraint2}, g ∈ NGen.validateMove n b
+            → g ∈ (automataflResolveDescN n).constraints) :
+    ∃ X Y : Nat, X < n ∧ Y < n
+      ∧ (envAt t i).loc (NGen.cFx n b) = (X : ℤ) ∧ (envAt t i).loc (NGen.cFy n b) = (Y : ℤ)
+      ∧ (envAt t i).loc (NGen.cFp n b) = (envAt t i).loc (NGen.old n (Y * n + X)) := by
+  set e := envAt t i with he
+  obtain ⟨ay, hayLt, hfyEq, hrow⟩ :=
+    oneHotN_of_sat hsat hc i hi n hn (NGen.cSelRow n b) (NGen.cFy n b)
+      (fun j hj => hmv (vm_selRow n b j hj)) (hmv (vm_srRs n b)) (hmv (vm_srRi n b))
+  obtain ⟨ax, haxLt, hfxEq, hcol⟩ :=
+    oneHotN_of_sat hsat hc i hi n hn (NGen.cSelCol n b) (NGen.cFx n b)
+      (fun j hj => hmv (vm_selCol n b j hj)) (hmv (vm_srCs n b)) (hmv (vm_srCi n b))
+  rw [← he] at hfyEq hfxEq
+  have hg := rgateHN hsat i hi (hmv (vm_srcRd n b))
+  rw [headToExpr_eval, evalH_sourceReadHead,
+    dot_oneHot2 hrow hcol (fun y x => - e.loc (NGen.old n (y * n + x)))] at hg
+  -- hg : e.loc (cFp n b) + (- e.loc (old n (ay*n+ax))) ≡ 0
+  have hmod : e.loc (NGen.cFp n b) ≡ e.loc (NGen.old n (ay * n + ax)) [ZMOD 2013265921] :=
+    (gate_modEq_iff (by ring)).mp hg
+  exact ⟨ax, ay, haxLt, hayLt, hfxEq, hfyEq,
+    eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) hmod⟩
+
+/-! ### §D.8.3 — `ivN_of_sat`: the witnessed direction bit IS the real geometry, at arbitrary `n`.
+
+The `n`-generic twin of `iv_of_sat` (§4). The squared-distance definition is a FIXED head (`rfl`
+eval); `sq1dN_pure` replaces the `{0,1}` `sq1d_pure`; the 9-bit `forced_ge0` decides the bit provided
+the (pinned) squared distance fits, which is the honest window `M² ≤ 999` on the board size
+(`M = n − 1`). NON-VACUOUS at `n = 3` (`M = 2`, `M² = 4 ≤ 999`). -/
+theorem ivN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (b o ob : Nat) (M : ℤ)
+    (hwin : M * M ≤ 999)
+    (hfx : 0 ≤ (envAt t i).loc (NGen.cFx n b) ∧ (envAt t i).loc (NGen.cFx n b) ≤ M)
+    (htx : 0 ≤ (envAt t i).loc (NGen.cTx n b) ∧ (envAt t i).loc (NGen.cTx n b) ≤ M)
+    (hvo : ∀ {g : VmConstraint2}, g ∈ NGen.validateOcclusion n b o ob
+            → g ∈ (automataflResolveDescN n).constraints) :
+    ((envAt t i).loc (NGen.cIv n o) = 0 ∨ (envAt t i).loc (NGen.cIv n o) = 1)
+      ∧ ((envAt t i).loc (NGen.cIv n o) = 1 ↔
+          (envAt t i).loc (NGen.cFx n b) = (envAt t i).loc (NGen.cTx n b)) := by
+  set e := envAt t i with he
+  have hdsq : e.loc (NGen.cIvDsq n o)
+      = (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)) * (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)) := by
+    have hg := rgateHN hsat i hi (hvo (vo_iv_dsq n b o ob))
+    have hE : (headToExpr ((((Head.lin 1 (NGen.cIvDsq n o)).addProd (-1) [NGen.cFx n b, NGen.cFx n b]).addProd 2
+          [NGen.cFx n b, NGen.cTx n b]).addProd (-1) [NGen.cTx n b, NGen.cTx n b])).eval e.loc
+        = e.loc (NGen.cIvDsq n o) + (-1) * (e.loc (NGen.cFx n b) * e.loc (NGen.cFx n b))
+          + 2 * (e.loc (NGen.cFx n b) * e.loc (NGen.cTx n b))
+          + (-1) * (e.loc (NGen.cTx n b) * e.loc (NGen.cTx n b)) := rfl
+    rw [hE] at hg
+    exact sq1dN_pure (canon_loc hc i _) hfx htx (by nlinarith [hwin]) hg
+  have hbnd : -999 ≤ e.loc (NGen.cIvDsq n o) ∧ e.loc (NGen.cIvDsq n o) ≤ 999 := by
+    rw [hdsq]
+    refine ⟨by nlinarith [mul_self_nonneg (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b))], ?_⟩
+    nlinarith [mul_nonneg (by linarith [hfx.1, hfx.2, htx.1, htx.2] :
+        (0:ℤ) ≤ M - (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)))
+      (by linarith [hfx.1, hfx.2, htx.1, htx.2] :
+        (0:ℤ) ≤ M + (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b))), hwin]
+  obtain ⟨hnb, hn1, hn0⟩ :=
+    ge0_9N_of_sat hsat hc i hi (NGen.cIvDsq n o) (NGen.cIvNeq n o) (NGen.ivNeqBit n o 0)
+      (hvo (vo_iv_neqIb n b o ob)) (fun k hk => hvo (vo_iv_neqBit n b o ob k hk))
+      (hvo (vo_iv_neqHead n b o ob)) hbnd.1 hbnd.2
+  rw [← he] at hnb hn1 hn0
+  have hiv : e.loc (NGen.cIv n o) = 1 - e.loc (NGen.cIvNeq n o) := by
+    have := eqPinN_of_sat hsat hc i hi (NGen.cIv n o) (NGen.cIvNeq n o) (hvo (vo_iv_eqPin n b o ob)) hnb
+    rwa [← he] at this
+  refine ⟨by rcases hnb with h | h <;> rw [hiv, h] <;> norm_num, ?_⟩
+  constructor
+  · intro h1
+    have hn : e.loc (NGen.cIvNeq n o) = 0 := by omega
+    have hle := hn0 hn
+    rw [hdsq] at hle
+    have hsq0 : (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b))
+        * (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)) = 0 :=
+      le_antisymm hle (mul_self_nonneg _)
+    have := mul_self_eq_zero.mp hsq0; linarith
+  · intro heq
+    have hz : e.loc (NGen.cIvDsq n o) = 0 := by rw [hdsq, heq]; ring
+    have : e.loc (NGen.cIvNeq n o) = 0 := by
+      rcases hnb with h | h
+      · exact h
+      · have := hn1 h; omega
+    omega
+
+/-! ### §D.8.4 — `eqCoordsN_of_sat`: an `eq_coords` pattern bit IS the coordinate-pair equality.
+
+The `n`-generic twin of `eqCoords_of_sat` (§5). `sqdistN_pure` replaces the `{0,1}⁴` `sqdist_pure`;
+the two sum-of-squares terms are split by non-negativity instead of enumeration. The 9-bit
+`forced_ge0` window is `2·M² ≤ 999` (the 2-D squared distance). NON-VACUOUS at `n = 3`. -/
+theorem eqCoordsN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (xa ya xb yb ec : Nat) (M : ℤ)
+    (hwin : 2 * M * M ≤ 999)
+    (bxa : 0 ≤ (envAt t i).loc xa ∧ (envAt t i).loc xa ≤ M)
+    (bya : 0 ≤ (envAt t i).loc ya ∧ (envAt t i).loc ya ≤ M)
+    (bxb : 0 ≤ (envAt t i).loc xb ∧ (envAt t i).loc xb ≤ M)
+    (byb : 0 ≤ (envAt t i).loc yb ∧ (envAt t i).loc yb ≤ M)
+    (hlift : ∀ {g : VmConstraint2}, g ∈ NGen.eqCoordsConstraints n xa ya xb yb ec
+            → g ∈ (automataflResolveDescN n).constraints) :
+    ((envAt t i).loc (NGen.cEqBit n ec) = 0 ∨ (envAt t i).loc (NGen.cEqBit n ec) = 1)
+      ∧ ((envAt t i).loc (NGen.cEqBit n ec) = 1 ↔
+          ((envAt t i).loc xa = (envAt t i).loc xb ∧ (envAt t i).loc ya = (envAt t i).loc yb)) := by
+  set e := envAt t i with he
+  have hdsq : e.loc (NGen.cEqDsq n ec)
+      = (e.loc xa - e.loc xb) * (e.loc xa - e.loc xb)
+        + (e.loc ya - e.loc yb) * (e.loc ya - e.loc yb) := by
+    have hgm : cgH ((((((Head.lin 1 (NGen.cEqDsq n ec)).addProd (-1) [xa, xa]).addProd 2 [xa, xb]).addProd (-1)
+          [xb, xb]).addProd (-1) [ya, ya]).addProd 2 [ya, yb] |>.addProd (-1) [yb, yb])
+          ∈ (automataflResolveDescN n).constraints := by
+      apply hlift; rw [NGen.eqCoordsConstraints]
+      exact List.mem_append_left _ (List.mem_append_left _ (List.mem_singleton.mpr rfl))
+    have hg := rgateHN hsat i hi hgm
+    have hE : (headToExpr ((((((Head.lin 1 (NGen.cEqDsq n ec)).addProd (-1) [xa, xa]).addProd 2
+          [xa, xb]).addProd (-1) [xb, xb]).addProd (-1) [ya, ya]).addProd 2 [ya, yb]
+          |>.addProd (-1) [yb, yb])).eval e.loc
+        = e.loc (NGen.cEqDsq n ec) + (-1) * (e.loc xa * e.loc xa) + 2 * (e.loc xa * e.loc xb)
+          + (-1) * (e.loc xb * e.loc xb) + (-1) * (e.loc ya * e.loc ya)
+          + 2 * (e.loc ya * e.loc yb) + (-1) * (e.loc yb * e.loc yb) := rfl
+    rw [hE] at hg
+    exact sqdistN_pure (canon_loc hc i _) bxa bxb bya byb (by nlinarith [hwin]) hg
+  have hbnd : -999 ≤ e.loc (NGen.cEqDsq n ec) ∧ e.loc (NGen.cEqDsq n ec) ≤ 999 := by
+    rw [hdsq]
+    refine ⟨by nlinarith [mul_self_nonneg (e.loc xa - e.loc xb),
+        mul_self_nonneg (e.loc ya - e.loc yb)], ?_⟩
+    nlinarith [mul_nonneg (by linarith [bxa.1, bxa.2, bxb.1, bxb.2] :
+        (0:ℤ) ≤ M - (e.loc xa - e.loc xb)) (by linarith [bxa.1, bxa.2, bxb.1, bxb.2] :
+        (0:ℤ) ≤ M + (e.loc xa - e.loc xb)),
+      mul_nonneg (by linarith [bya.1, bya.2, byb.1, byb.2] :
+        (0:ℤ) ≤ M - (e.loc ya - e.loc yb)) (by linarith [bya.1, bya.2, byb.1, byb.2] :
+        (0:ℤ) ≤ M + (e.loc ya - e.loc yb)), hwin]
+  have gib : cg (gBin (NGen.cEqNeq n ec)) ∈ (automataflResolveDescN n).constraints := by
+    apply hlift; rw [NGen.eqCoordsConstraints]
+    exact List.mem_append_left _ (List.mem_append_right _
+      (mem_forcedGe0N_ib ((Head.lin 1 (NGen.cEqDsq n ec)).addConst (-1)) (NGen.cEqNeq n ec)
+        (NGen.eqBitAt n ec 0) RBITS))
+  have gbit : ∀ k, k < 9 → cg (gBin (NGen.eqBitAt n ec 0 + k)) ∈ (automataflResolveDescN n).constraints := by
+    intro k hk
+    apply hlift; rw [NGen.eqCoordsConstraints]
+    exact List.mem_append_left _ (List.mem_append_right _
+      (mem_forcedGe0N_bit ((Head.lin 1 (NGen.cEqDsq n ec)).addConst (-1)) (NGen.cEqNeq n ec)
+        (NGen.eqBitAt n ec 0) RBITS k hk))
+  have ghead : cgH ((List.range 9).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (NGen.eqBitAt n ec 0 + k))
+      (forcedGe0Term ((Head.lin 1 (NGen.cEqDsq n ec)).addConst (-1)) (NGen.cEqNeq n ec)))
+      ∈ (automataflResolveDescN n).constraints := by
+    apply hlift; rw [NGen.eqCoordsConstraints]
+    exact List.mem_append_left _ (List.mem_append_right _
+      (mem_forcedGe0N_head ((Head.lin 1 (NGen.cEqDsq n ec)).addConst (-1)) (NGen.cEqNeq n ec)
+        (NGen.eqBitAt n ec 0) RBITS))
+  obtain ⟨hnb, hn1, hn0⟩ :=
+    ge0_9N_of_sat hsat hc i hi (NGen.cEqDsq n ec) (NGen.cEqNeq n ec) (NGen.eqBitAt n ec 0)
+      gib gbit ghead hbnd.1 hbnd.2
+  rw [← he] at hnb hn1 hn0
+  have hbit : e.loc (NGen.cEqBit n ec) = 1 - e.loc (NGen.cEqNeq n ec) := by
+    have hep : cgH (((Head.lin 1 (NGen.cEqBit n ec)).addLin 1 (NGen.cEqNeq n ec)).addConst (-1))
+        ∈ (automataflResolveDescN n).constraints := by
+      apply hlift; rw [NGen.eqCoordsConstraints]
+      exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
+    have := eqPinN_of_sat hsat hc i hi (NGen.cEqBit n ec) (NGen.cEqNeq n ec) hep hnb
+    rwa [← he] at this
+  refine ⟨by rcases hnb with h | h <;> rw [hbit, h] <;> norm_num, ?_⟩
+  constructor
+  · intro hone
+    have hn : e.loc (NGen.cEqNeq n ec) = 0 := by omega
+    have hle := hn0 hn
+    rw [hdsq] at hle
+    have hx0 : (e.loc xa - e.loc xb) * (e.loc xa - e.loc xb) = 0 :=
+      le_antisymm (by nlinarith [mul_self_nonneg (e.loc ya - e.loc yb)]) (mul_self_nonneg _)
+    have hy0 : (e.loc ya - e.loc yb) * (e.loc ya - e.loc yb) = 0 :=
+      le_antisymm (by nlinarith [mul_self_nonneg (e.loc xa - e.loc xb)]) (mul_self_nonneg _)
+    exact ⟨by have := mul_self_eq_zero.mp hx0; linarith,
+           by have := mul_self_eq_zero.mp hy0; linarith⟩
+  · rintro ⟨e1, e2⟩
+    have hz : e.loc (NGen.cEqDsq n ec) = 0 := by rw [hdsq, e1, e2]; ring
+    have : e.loc (NGen.cEqNeq n ec) = 0 := by
+      rcases hnb with h | h
+      · exact h
+      · have := hn1 h; omega
+    omega
+
+/-! ### §D.8.5 — `validMoveN_of_sat`: `validate_move` ⇒ the reference `MoveValid`, at arbitrary `n`.
+
+The flagship `n`-generic twin of `validMove_of_sat` (§2). `coordN_of_sat` pins the four move
+coordinates into `[0, n)` (replacing `coord01_of_sat` / `interval_cases`), `autoPinN_of_sat` pins the
+auto cell, `sqdistN_pure` replaces the `{0,1}⁴` `sqdist_pure`, and the rook-alignment product is
+resolved through `eq_of_modEq_win`. Windows: `M ≤ 1000` (via `M² ≤ 1000000`, for the rook product and
+the squared-distance no-wrap) and `2^(COORD_RBITS n + 1) ≤ p` (for the coordinate decode) — explicit
+board-size inequalities, non-vacuous at `n = 3` (`M = 2`). -/
+
+/-- The OLD board decoded at arbitrary size `n` (the `n`-generic `boardDecodeOld`). -/
+def boardDecodeOldN (n : Nat) (e : VmRowEnv) : Board where
+  size          := n
+  automaton     := ⟨(e.loc (NGen.AX_C n)).toNat, (e.loc (NGen.AY_C n)).toNat⟩
+  cells         := fun c => codeToParticle (e.loc (NGen.old n (c.y * n + c.x)))
+  useColumnRule := true
+
+/-- A move decoded at arbitrary size `n` (the `n`-generic `moveDecode`). -/
+def moveDecodeN (n : Nat) (e : VmRowEnv) (which : Nat) : Move :=
+  Move.mk 0
+    ⟨(e.loc (NGen.cFx n (NGen.mvBase n which))).toNat, (e.loc (NGen.cFy n (NGen.mvBase n which))).toNat⟩
+    ⟨(e.loc (NGen.cTx n (NGen.mvBase n which))).toNat, (e.loc (NGen.cTy n (NGen.mvBase n which))).toNat⟩
+
+theorem validMoveN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (which : Nat) (M : ℤ)
+    (hn1 : 1 ≤ n) (hnlt : (n : ℤ) < 2013265921) (hM : M = (n : ℤ) - 1) (hwin : M * M ≤ 1000000)
+    (hcw : (2 : ℤ) ^ (NGen.COORD_RBITS n + 1) ≤ 2013265921)
+    (hmv : ∀ {g : VmConstraint2}, g ∈ NGen.validateMove n (NGen.mvBase n which)
+            → g ∈ (automataflResolveDescN n).constraints) :
+    MoveValid (boardDecodeOldN n (envAt t i)) (moveDecodeN n (envAt t i) which) := by
+  set e := envAt t i with he
+  set b := NGen.mvBase n which with hbdef
+  -- block embeds of the four coordinate `decompose_coord_le` blocks into `validate_move`
+  have embFx : ∀ {g : VmConstraint2},
+      g ∈ NGen.decomposeConstraints n (NGen.cFx n b) (NGen.cFxLo n b) (NGen.cFxHi n b)
+        → g ∈ (automataflResolveDescN n).constraints := by
+    intro g hg; apply hmv; rw [NGen.validateMove]
+    exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (hg)))))))))))))
+  have embFy : ∀ {g : VmConstraint2},
+      g ∈ NGen.decomposeConstraints n (NGen.cFy n b) (NGen.cFyLo n b) (NGen.cFyHi n b)
+        → g ∈ (automataflResolveDescN n).constraints := by
+    intro g hg; apply hmv; rw [NGen.validateMove]
+    exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ (hg)))))))))))))
+  have embTx : ∀ {g : VmConstraint2},
+      g ∈ NGen.decomposeConstraints n (NGen.cTx n b) (NGen.cTxLo n b) (NGen.cTxHi n b)
+        → g ∈ (automataflResolveDescN n).constraints := by
+    intro g hg; apply hmv; rw [NGen.validateMove]
+    exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ (hg))))))))))))
+  have embTy : ∀ {g : VmConstraint2},
+      g ∈ NGen.decomposeConstraints n (NGen.cTy n b) (NGen.cTyLo n b) (NGen.cTyHi n b)
+        → g ∈ (automataflResolveDescN n).constraints := by
+    intro g hg; apply hmv; rw [NGen.validateMove]
+    exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ (hg)))))))))))
+  obtain ⟨X, hXlt, hfxE⟩ :=
+    coordN_of_sat hsat hc i hi n (NGen.COORD_RBITS n) (NGen.cFx n b) (NGen.cFxLo n b) (NGen.cFxHi n b)
+      hn1 hnlt hcw
+      (fun k hk => embFx (mem_decompose_loBit n (NGen.cFx n b) (NGen.cFxLo n b) (NGen.cFxHi n b) k hk))
+      (embFx (mem_decompose_loHead n (NGen.cFx n b) (NGen.cFxLo n b) (NGen.cFxHi n b)))
+      (fun k hk => embFx (mem_decompose_hiBit n (NGen.cFx n b) (NGen.cFxLo n b) (NGen.cFxHi n b) k hk))
+      (embFx (mem_decompose_hiHead n (NGen.cFx n b) (NGen.cFxLo n b) (NGen.cFxHi n b)))
+  obtain ⟨Y, hYlt, hfyE⟩ :=
+    coordN_of_sat hsat hc i hi n (NGen.COORD_RBITS n) (NGen.cFy n b) (NGen.cFyLo n b) (NGen.cFyHi n b)
+      hn1 hnlt hcw
+      (fun k hk => embFy (mem_decompose_loBit n (NGen.cFy n b) (NGen.cFyLo n b) (NGen.cFyHi n b) k hk))
+      (embFy (mem_decompose_loHead n (NGen.cFy n b) (NGen.cFyLo n b) (NGen.cFyHi n b)))
+      (fun k hk => embFy (mem_decompose_hiBit n (NGen.cFy n b) (NGen.cFyLo n b) (NGen.cFyHi n b) k hk))
+      (embFy (mem_decompose_hiHead n (NGen.cFy n b) (NGen.cFyLo n b) (NGen.cFyHi n b)))
+  obtain ⟨TX, hTXlt, htxE⟩ :=
+    coordN_of_sat hsat hc i hi n (NGen.COORD_RBITS n) (NGen.cTx n b) (NGen.cTxLo n b) (NGen.cTxHi n b)
+      hn1 hnlt hcw
+      (fun k hk => embTx (mem_decompose_loBit n (NGen.cTx n b) (NGen.cTxLo n b) (NGen.cTxHi n b) k hk))
+      (embTx (mem_decompose_loHead n (NGen.cTx n b) (NGen.cTxLo n b) (NGen.cTxHi n b)))
+      (fun k hk => embTx (mem_decompose_hiBit n (NGen.cTx n b) (NGen.cTxLo n b) (NGen.cTxHi n b) k hk))
+      (embTx (mem_decompose_hiHead n (NGen.cTx n b) (NGen.cTxLo n b) (NGen.cTxHi n b)))
+  obtain ⟨TY, hTYlt, htyE⟩ :=
+    coordN_of_sat hsat hc i hi n (NGen.COORD_RBITS n) (NGen.cTy n b) (NGen.cTyLo n b) (NGen.cTyHi n b)
+      hn1 hnlt hcw
+      (fun k hk => embTy (mem_decompose_loBit n (NGen.cTy n b) (NGen.cTyLo n b) (NGen.cTyHi n b) k hk))
+      (embTy (mem_decompose_loHead n (NGen.cTy n b) (NGen.cTyLo n b) (NGen.cTyHi n b)))
+      (fun k hk => embTy (mem_decompose_hiBit n (NGen.cTy n b) (NGen.cTyLo n b) (NGen.cTyHi n b) k hk))
+      (embTy (mem_decompose_hiHead n (NGen.cTy n b) (NGen.cTyLo n b) (NGen.cTyHi n b)))
+  obtain ⟨AX, AY, hAXlt, hAYlt, hAXe, hAYe, _⟩ := autoPinN_of_sat n hnlt hsat hc i hi
+  rw [← he] at hfxE hfyE htxE htyE hAXe hAYe
+  -- coordinate bounds in `[0, M]`
+  have bfx : 0 ≤ e.loc (NGen.cFx n b) ∧ e.loc (NGen.cFx n b) ≤ M := by rw [hfxE, hM]; omega
+  have bfy : 0 ≤ e.loc (NGen.cFy n b) ∧ e.loc (NGen.cFy n b) ≤ M := by rw [hfyE, hM]; omega
+  have btx : 0 ≤ e.loc (NGen.cTx n b) ∧ e.loc (NGen.cTx n b) ≤ M := by rw [htxE, hM]; omega
+  have bty : 0 ≤ e.loc (NGen.cTy n b) ∧ e.loc (NGen.cTy n b) ≤ M := by rw [htyE, hM]; omega
+  have bax : 0 ≤ e.loc (NGen.AX_C n) ∧ e.loc (NGen.AX_C n) ≤ M := by rw [hAXe, hM]; omega
+  have bay : 0 ≤ e.loc (NGen.AY_C n) ∧ e.loc (NGen.AY_C n) ≤ M := by rw [hAYe, hM]; omega
+  -- toNat facts
+  have hxn : (e.loc (NGen.cFx n b)).toNat = X := by rw [hfxE]; simp
+  have hyn : (e.loc (NGen.cFy n b)).toNat = Y := by rw [hfyE]; simp
+  have htxn : (e.loc (NGen.cTx n b)).toNat = TX := by rw [htxE]; simp
+  have htyn : (e.loc (NGen.cTy n b)).toNat = TY := by rw [htyE]; simp
+  -- rook alignment: (fx − tx)·(fy − ty) = 0
+  have hd1sq : (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)) * (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)) ≤ M * M :=
+    by nlinarith [mul_nonneg (by linarith [bfx.1, bfx.2, btx.1, btx.2] : (0:ℤ) ≤ M - (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b))) (by linarith [bfx.1, bfx.2, btx.1, btx.2] : (0:ℤ) ≤ M + (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)))]
+  have hd2sq : (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b)) * (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b)) ≤ M * M :=
+    by nlinarith [mul_nonneg (by linarith [bfy.1, bfy.2, bty.1, bty.2] : (0:ℤ) ≤ M - (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b))) (by linarith [bfy.1, bfy.2, bty.1, bty.2] : (0:ℤ) ≤ M + (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b)))]
+  have hrook : (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)) * (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b)) = 0 := by
+    have hg := rgateHN hsat i hi (hmv (vm_rook n b))
+    have hE : (headToExpr (NGen.rookAlignHead n b)).eval e.loc
+        = e.loc (NGen.cFx n b) * e.loc (NGen.cFy n b) + (-1) * (e.loc (NGen.cFx n b) * e.loc (NGen.cTy n b))
+          + (-1) * (e.loc (NGen.cTx n b) * e.loc (NGen.cFy n b)) + e.loc (NGen.cTx n b) * e.loc (NGen.cTy n b) := rfl
+    rw [hE] at hg
+    have hmod : (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)) * (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b))
+        ≡ 0 [ZMOD 2013265921] := (gate_modEq_iff (by ring)).mp hg
+    refine eq_of_modEq_win ⟨?_, ?_⟩ ⟨by norm_num, by norm_num⟩ hmod
+    · nlinarith [hd1sq, hd2sq, hwin, mul_self_nonneg (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b) + (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b)))]
+    · nlinarith [hd1sq, hd2sq, hwin, mul_self_nonneg (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b) - (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b)))]
+  -- distinctness: dsq ≠ 0 ⇒ ¬(frm = to)
+  have hdsqDef : e.loc (NGen.cDsq n b)
+      = (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b)) * (e.loc (NGen.cFx n b) - e.loc (NGen.cTx n b))
+        + (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b)) * (e.loc (NGen.cFy n b) - e.loc (NGen.cTy n b)) := by
+    have hg := rgateHN hsat i hi (hmv (vm_dsqDef n b))
+    have hE : (headToExpr (NGen.dsqHead n b)).eval e.loc
+        = e.loc (NGen.cDsq n b) + (-1) * (e.loc (NGen.cFx n b) * e.loc (NGen.cFx n b))
+          + 2 * (e.loc (NGen.cFx n b) * e.loc (NGen.cTx n b)) + (-1) * (e.loc (NGen.cTx n b) * e.loc (NGen.cTx n b))
+          + (-1) * (e.loc (NGen.cFy n b) * e.loc (NGen.cFy n b)) + 2 * (e.loc (NGen.cFy n b) * e.loc (NGen.cTy n b))
+          + (-1) * (e.loc (NGen.cTy n b) * e.loc (NGen.cTy n b)) := rfl
+    rw [hE] at hg
+    exact sqdistN_pure (canon_loc hc i _) bfx btx bfy bty (by nlinarith [hwin]) hg
+  have hdnz : ¬ ((e.loc (NGen.cDsq n b)) ≡ 0 [ZMOD 2013265921]) := by
+    have := condNonzeroN_of_sat hsat hc i hi (NGen.cDsq n b) (NGen.cDistinctInv n b) (hmv (vm_dsqNz n b))
+    rwa [← he] at this
+  have hdistinct : ¬ (e.loc (NGen.cFx n b) = e.loc (NGen.cTx n b) ∧ e.loc (NGen.cFy n b) = e.loc (NGen.cTy n b)) := by
+    rintro ⟨h1, h2⟩; exact hdnz (by rw [hdsqDef, h1, h2]; simp [Int.ModEq])
+  -- frm ≠ auto
+  have hfaDef : e.loc (NGen.cFa n b)
+      = (e.loc (NGen.cFx n b) - e.loc (NGen.AX_C n)) * (e.loc (NGen.cFx n b) - e.loc (NGen.AX_C n))
+        + (e.loc (NGen.cFy n b) - e.loc (NGen.AY_C n)) * (e.loc (NGen.cFy n b) - e.loc (NGen.AY_C n)) := by
+    have hg := rgateHN hsat i hi (hmv (vm_faDef n b))
+    have hE : (headToExpr (NGen.autoDistHead n (NGen.cFa n b) (NGen.cFx n b) (NGen.cFy n b))).eval e.loc
+        = e.loc (NGen.cFa n b) + (-1) * (e.loc (NGen.cFx n b) * e.loc (NGen.cFx n b))
+          + 2 * (e.loc (NGen.cFx n b) * e.loc (NGen.AX_C n)) + (-1) * (e.loc (NGen.AX_C n) * e.loc (NGen.AX_C n))
+          + (-1) * (e.loc (NGen.cFy n b) * e.loc (NGen.cFy n b)) + 2 * (e.loc (NGen.cFy n b) * e.loc (NGen.AY_C n))
+          + (-1) * (e.loc (NGen.AY_C n) * e.loc (NGen.AY_C n)) := rfl
+    rw [hE] at hg
+    exact sqdistN_pure (canon_loc hc i _) bfx bax bfy bay (by nlinarith [hwin]) hg
+  have hfanz : ¬ ((e.loc (NGen.cFa n b)) ≡ 0 [ZMOD 2013265921]) := by
+    have := condNonzeroN_of_sat hsat hc i hi (NGen.cFa n b) (NGen.cFnaInv n b) (hmv (vm_faNz n b))
+    rwa [← he] at this
+  have hfnotauto : ¬ (e.loc (NGen.cFx n b) = e.loc (NGen.AX_C n) ∧ e.loc (NGen.cFy n b) = e.loc (NGen.AY_C n)) := by
+    rintro ⟨h1, h2⟩; exact hfanz (by rw [hfaDef, h1, h2]; simp [Int.ModEq])
+  -- to ≠ auto
+  have htaDef : e.loc (NGen.cTa n b)
+      = (e.loc (NGen.cTx n b) - e.loc (NGen.AX_C n)) * (e.loc (NGen.cTx n b) - e.loc (NGen.AX_C n))
+        + (e.loc (NGen.cTy n b) - e.loc (NGen.AY_C n)) * (e.loc (NGen.cTy n b) - e.loc (NGen.AY_C n)) := by
+    have hg := rgateHN hsat i hi (hmv (vm_taDef n b))
+    have hE : (headToExpr (NGen.autoDistHead n (NGen.cTa n b) (NGen.cTx n b) (NGen.cTy n b))).eval e.loc
+        = e.loc (NGen.cTa n b) + (-1) * (e.loc (NGen.cTx n b) * e.loc (NGen.cTx n b))
+          + 2 * (e.loc (NGen.cTx n b) * e.loc (NGen.AX_C n)) + (-1) * (e.loc (NGen.AX_C n) * e.loc (NGen.AX_C n))
+          + (-1) * (e.loc (NGen.cTy n b) * e.loc (NGen.cTy n b)) + 2 * (e.loc (NGen.cTy n b) * e.loc (NGen.AY_C n))
+          + (-1) * (e.loc (NGen.AY_C n) * e.loc (NGen.AY_C n)) := rfl
+    rw [hE] at hg
+    exact sqdistN_pure (canon_loc hc i _) btx bax bty bay (by nlinarith [hwin]) hg
+  have htanz : ¬ ((e.loc (NGen.cTa n b)) ≡ 0 [ZMOD 2013265921]) := by
+    have := condNonzeroN_of_sat hsat hc i hi (NGen.cTa n b) (NGen.cTnaInv n b) (hmv (vm_taNz n b))
+    rwa [← he] at this
+  have htnotauto : ¬ (e.loc (NGen.cTx n b) = e.loc (NGen.AX_C n) ∧ e.loc (NGen.cTy n b) = e.loc (NGen.AY_C n)) := by
+    rintro ⟨h1, h2⟩; exact htanz (by rw [htaDef, h1, h2]; simp [Int.ModEq])
+  -- assemble `MoveValid`
+  refine ⟨?_, ?_, ⟨?_, ?_⟩, ⟨?_, ?_⟩, ?_, ?_, ?_, ?_⟩
+  · intro hEq
+    simp only [moveDecodeN, ← hbdef, Coord.mk.injEq] at hEq
+    obtain ⟨q1, q2⟩ := hEq
+    exact hdistinct ⟨by omega, by omega⟩
+  · rcases mul_eq_zero.mp hrook with h | h
+    · left; simp only [moveDecodeN, ← hbdef]; omega
+    · right; simp only [moveDecodeN, ← hbdef]; omega
+  · show (moveDecodeN n e which).frm.x < (boardDecodeOldN n e).size
+    simp only [moveDecodeN, ← hbdef, boardDecodeOldN]; rw [hxn]; exact hXlt
+  · show (moveDecodeN n e which).frm.y < (boardDecodeOldN n e).size
+    simp only [moveDecodeN, ← hbdef, boardDecodeOldN]; rw [hyn]; exact hYlt
+  · show (moveDecodeN n e which).to.x < (boardDecodeOldN n e).size
+    simp only [moveDecodeN, ← hbdef, boardDecodeOldN]; rw [htxn]; exact hTXlt
+  · show (moveDecodeN n e which).to.y < (boardDecodeOldN n e).size
+    simp only [moveDecodeN, ← hbdef, boardDecodeOldN]; rw [htyn]; exact hTYlt
+  · intro hEq
+    simp only [Board.isAutomaton, boardDecodeOldN, moveDecodeN, ← hbdef, Coord.mk.injEq] at hEq
+    obtain ⟨q1, q2⟩ := hEq
+    exact hfnotauto ⟨by omega, by omega⟩
+  · intro hEq
+    simp only [Board.isAutomaton, boardDecodeOldN, moveDecodeN, ← hbdef, Coord.mk.injEq] at hEq
+    obtain ⟨q1, q2⟩ := hEq
+    exact htnotauto ⟨by omega, by omega⟩
+  · simp [Board.isConflict, boardDecodeOldN]
+  · simp [Board.isConflict, boardDecodeOldN]
+
+/-! ### §D.8.6 — `srcNonVacN_of_sat`: the source-non-vacuum bit IS the reference predicate.
+
+The `n`-generic twin of `srcNonVac_of_sat` (§5), off `sourceReadN_of_sat` (the witnessed source read)
+and `ge0_5N_of_sat` (the 5-bit non-vacuum threshold), with the particle-alphabet envelope re-derived
+`n`-generically at the read cell from the emitted `assert_member` gate (DEFECT #4's fix, `n`-generic
+via `br_old`). The `anz` gate memberships are supplied raw (as in `ge0_5N`), anchored to
+`automataflResolveDescN n`. No board-size window needed — the source felt is alphabet-bounded. -/
+theorem srcNonVacN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (which ib bit0 : Nat)
+    (hnlt : (n : ℤ) < 2013265921)
+    (hmv : ∀ {g : VmConstraint2}, g ∈ NGen.validateMove n (NGen.mvBase n which)
+            → g ∈ (automataflResolveDescN n).constraints)
+    (hib : cg (gBin ib) ∈ (automataflResolveDescN n).constraints)
+    (hbit : ∀ k, k < 5 → cg (gBin (bit0 + k)) ∈ (automataflResolveDescN n).constraints)
+    (hrec : cgH ((List.range 5).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k))
+                 (forcedGe0Term ((Head.lin 1 (NGen.cFp n (NGen.mvBase n which))).addConst (-1)) ib))
+             ∈ (automataflResolveDescN n).constraints) :
+    ((envAt t i).loc ib = 0 ∨ (envAt t i).loc ib = 1)
+      ∧ ((envAt t i).loc ib = 1 ↔
+          ((boardDecodeOldN n (envAt t i)).cellAt (moveDecodeN n (envAt t i) which).frm).isVacuum
+            = false) := by
+  set e := envAt t i with he
+  set b := NGen.mvBase n which with hbdef
+  obtain ⟨X, Y, hX, hY, hfxE, hfyE, hfp⟩ := sourceReadN_of_sat hsat hc i hi b hnlt hmv
+  rw [← he] at hfxE hfyE hfp
+  have hXY : Y * n + X < NGen.KK n := by
+    simp only [NGen.KK]
+    have hle : (Y + 1) * n ≤ n * n := mul_le_mul_right' (by omega : Y + 1 ≤ n) n
+    have hexp : (Y + 1) * n = Y * n + n := by ring
+    omega
+  have hcellAlpha : e.loc (NGen.old n (Y * n + X)) = 0 ∨ e.loc (NGen.old n (Y * n + X)) = 1
+      ∨ e.loc (NGen.old n (Y * n + X)) = 2 ∨ e.loc (NGen.old n (Y * n + X)) = 3 :=
+    AutomataflStepRefine.mem4_of_gate
+      (rgateN hsat i hi (mem_resolve_of_mem_boardRange (br_old n (Y * n + X) hXY)))
+      (canon_loc hc i _)
+  have hfpv : e.loc (NGen.cFp n b) = 0 ∨ e.loc (NGen.cFp n b) = 1
+      ∨ e.loc (NGen.cFp n b) = 2 ∨ e.loc (NGen.cFp n b) = 3 := by rw [hfp]; exact hcellAlpha
+  have hbnd : -99 ≤ e.loc (NGen.cFp n b) ∧ e.loc (NGen.cFp n b) ≤ 99 := by
+    rcases hfpv with h | h | h | h <;> rw [h] <;> constructor <;> norm_num
+  obtain ⟨hb, h1, h0⟩ :=
+    ge0_5N_of_sat hsat hc i hi (NGen.cFp n b) ib bit0 hib hbit hrec hbnd.1 hbnd.2
+  rw [← he] at hb h1 h0
+  have hcell : (boardDecodeOldN n e).cellAt (moveDecodeN n e which).frm
+      = codeToParticle (e.loc (NGen.cFp n b)) := by
+    have hxn : (e.loc (NGen.cFx n b)).toNat = X := by rw [hfxE]; simp
+    have hyn : (e.loc (NGen.cFy n b)).toNat = Y := by rw [hfyE]; simp
+    simp only [Board.cellAt, boardDecodeOldN, moveDecodeN, ← hbdef]
+    rw [hxn, hyn, if_pos ⟨hX, hY⟩, hfp]
+  rw [hcell]
+  refine ⟨hb, ?_⟩
+  rcases hfpv with hv | hv | hv | hv <;> rw [hv] at h1 h0 ⊢ <;>
+    norm_num [codeToParticle, Particle.isVacuum] <;>
+    (first
+      | (intro hone; have := h1 hone; omega)
+      | (rcases hb with hz | ho
+         · exact absurd (h0 hz) (by norm_num)
+         · exact ho))
+
+#print axioms oneN_of_sat
+#print axioms condNonzeroN_of_sat
+#print axioms eqPinN_of_sat
+#print axioms ge0_9N_of_sat
+#print axioms ge0_5N_of_sat
+#print axioms sqdistN_pure
+#print axioms sq1dN_pure
+#print axioms sourceReadN_of_sat
+#print axioms ivN_of_sat
+#print axioms eqCoordsN_of_sat
+#print axioms validMoveN_of_sat
+#print axioms srcNonVacN_of_sat
+
+end CoordExtractN
 
 /-! ## §E — TWO-SIDED CANARIES for the assembly's reference side (`resolveMid` at `n = 2`).
 

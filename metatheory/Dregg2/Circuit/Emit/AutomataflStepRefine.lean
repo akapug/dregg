@@ -154,6 +154,22 @@ theorem astep_gate {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ �
     simpa using h
   simpa only [cg, VmConstraint2.holdsAt, VmConstraint.holdsVm, hlf] using hrc
 
+/-- **`astepN_gate` — the n-GENERIC single-row gate extraction** over `automataflStepDescN n` (the
+`astep_gate` twin, off the `n`-parametric descriptor). Every downstream `∀ n` refinement lemma reads
+its gates through THIS, so the denotation half is `n`-independent — only the MEMBERSHIP (`§2.5`) and
+the semantic collapse carry `n`. At `n = 2` `automataflStepDescN 2` is defeq to `automataflStepDesc`,
+so `astepN_gate` and `astep_gate` agree definitionally on the golden object. -/
+theorem astepN_gate {n : Nat} {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
+    {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (automataflStepDescN n) minit mfin maddrs t) (i : Nat)
+    (hi : i + 1 < t.rows.length) {g : EmittedExpr} (hg : cg g ∈ (automataflStepDescN n).constraints) :
+    g.eval (envAt t i).loc ≡ 0 [ZMOD 2013265921] := by
+  have hrc := hsat.rowConstraints i (by omega) _ hg
+  have hlf : (i + 1 == t.rows.length) = false := by
+    have h : i + 1 ≠ t.rows.length := by omega
+    simpa using h
+  simpa only [cg, VmConstraint2.holdsAt, VmConstraint.holdsVm, hlf] using hrc
+
 /-! ## §2.5 — n-GENERIC STRUCTURED gate membership (`automataflStepDescN n`).
 
 The front-end gate extractions below were discharged by `by decide` — a `decide` over the fully
@@ -5610,6 +5626,32 @@ theorem newvalid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin ma
   · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 3) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_new (by decide))))
       (canon_loc hc i _)
 
+/-- **`boardvalidN_of_sat` — the OLD board cells are valid particle felts, at ARBITRARY `n`.** The
+`n`-generic twin of `boardvalid_of_sat`: for EVERY cell `c < KK n = n²` the emitted
+`assert_member(old[c], {0,1,2,3})` gate (`boardRangeConstraints n`, emitted for all `n`) forces the
+cell into `{VAC,REP,ATT,AUTO}`. No `interval_cases` over a fixed board — the single `mem4_of_gate`
+runs at the symbolic `c`, off the `n`-parametric membership (`mem_fe_boardRange`/`boardRange_old`) and
+the `n`-generic gate extraction (`astepN_gate`). This family is emitted CORRECTLY at every `n` (unlike
+the coordinate `decomposeConstraints` — see §7 (ii)), so the lemma is genuinely `∀ n`. -/
+theorem boardvalidN_of_sat {n : Nat}
+    (hsat : Satisfied2 hash (automataflStepDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (c : Nat) (hcK : c < NGen.KK n) :
+    ((envAt t i).loc (NGen.old n c) = 0 ∨ (envAt t i).loc (NGen.old n c) = 1
+      ∨ (envAt t i).loc (NGen.old n c) = 2 ∨ (envAt t i).loc (NGen.old n c) = 3) :=
+  mem4_of_gate (astepN_gate hsat i hi (g := memberExpr (NGen.old n c) [0, 1, 2, 3])
+    (mem_fe_boardRange (boardRange_old hcK))) (canon_loc hc i _)
+
+/-- **`newvalidN_of_sat` — the NEW board cells are valid particle felts, at ARBITRARY `n`.** The
+`n`-generic twin of `newvalid_of_sat`, over the CLAIMED next board, so decoding the `new` columns is
+total-and-faithful at every `n`. -/
+theorem newvalidN_of_sat {n : Nat}
+    (hsat : Satisfied2 hash (automataflStepDescN n) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) (c : Nat) (hcK : c < NGen.KK n) :
+    ((envAt t i).loc (NGen.new n c) = 0 ∨ (envAt t i).loc (NGen.new n c) = 1
+      ∨ (envAt t i).loc (NGen.new n c) = 2 ∨ (envAt t i).loc (NGen.new n c) = 3) :=
+  mem4_of_gate (astepN_gate hsat i hi (g := memberExpr (NGen.new n c) [0, 1, 2, 3])
+    (mem_fe_boardRange (boardRange_new hcK))) (canon_loc hc i _)
+
 /-- The target cell is a valid particle felt (`{0,1,2,3}`): out of bounds the gated read is `0`; in
 bounds it is a valid OLD board cell (`boardvalid_of_sat`, off the descriptor). -/
 theorem tcell_valid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs t)
@@ -6063,6 +6105,10 @@ theorem boardDecode_cellAt (e : VmRowEnv) (x y : Nat) (hx : x < 2) (hy : y < 2) 
 #print axioms moved_parts_of_sat
 #print axioms boardvalid_of_sat
 #print axioms newvalid_of_sat
+-- n-GENERIC (∀ n over `automataflStepDescN n`): the gate extraction + board-cell validity families.
+#print axioms astepN_gate
+#print axioms boardvalidN_of_sat
+#print axioms newvalidN_of_sat
 #print axioms cell_update_pure
 #print axioms cell_of_data
 #print axioms moved_iff_guard_of_sat
@@ -6274,6 +6320,41 @@ REMAINING (NOT assumed, NOT stubbed — no `sorry`, no placeholder):
       decomposition (`decomposeConstraints` uses a single-bit range, not `COORD_RBITS n` bits, so at
       `n ≥ 3` a coordinate wider than 1 bit is unconstrained) and the fixed `SMALL_RBITS`/`SCORE_RBITS`
       range widths (sound at `n = 11`, but not derived from `n`).
-The Leg-A composition is now a proven theorem, and its LAYOUT is `n`-parametric. -/
+
+  FIRST `∀ n` REFINEMENT LEMMAS OVER `automataflStepDescN n` (landed here, foundation-free):
+    - `astepN_gate` — the `n`-generic single-row gate-DENOTATION extraction (the `astep_gate` twin over
+      the parametric descriptor). The denotation half is `n`-independent; only membership (§2.5) and the
+      semantic collapse carry `n`.
+    - `boardvalidN_of_sat` / `newvalidN_of_sat` — the OLD/NEW board-cell validity `∀ n`, `∀ c < n²`:
+      the `boardRangeConstraints n` family is emitted CORRECTLY at every `n`, so the `{0,1,2,3}` decode
+      is genuinely `∀ n` (no `interval_cases` — one symbolic `mem4_of_gate` off `mem_fe_boardRange`).
+
+  WHY (i)'s COORDINATE/AUTO-PIN legs and the CAPSTONE are NOT `∀ n` yet — two hard, precise blockers:
+    - IMPORT DAG. The `n`-generic coordinate/one-hot FOUNDATION (`AutomataflCoord`: `oneHotN_of_sat`,
+      `coordN_of_sat`, `dot_oneHot2`, `autoPinN_of_sat`) is DOWNSTREAM of THIS file — `AutomataflCoord`
+      *imports* `AutomataflStepRefine` (to reuse `Canon`/`StepCanon`/`bin_of_gate`/`canon_loc`). So those
+      lemmas CANNOT be used here (it would be an import cycle). The `∀ n` auto-pin / coordinate reads
+      and the `∀ n` capstone must therefore live in a file that imports `AutomataflCoord` (a new
+      downstream `StepRefineN`, or alongside `AutomataflResolveRefine`, which already imports both),
+      instantiating the generic-over-`d` `oneHotN_of_sat` / `dot_oneHot2` at `automataflStepDescN n`
+      plus this file's `n`-generic §2.5 step membership — NOT re-derived here.
+    - DESCRIPTOR GAP (blocks the capstone's DOMAIN, not just its proof). The step coordinate is
+      double-pinned: the auto one-hot pins it into `[0, n)` correctly, but the frozen 2-bit
+      `NGen.decomposeConstraints n` ALSO forces `col = loBit ∈ {0,1}` AND `(n−1) − col = hiBit ∈ {0,1}`,
+      i.e. `col ∈ {0,1} ∩ {n−2, n−1}`. At `n = 2` that is `[0,2)` (correct); at `n = 3` it is `{1}`
+      (ONLY a centre auto is accepted); at `n ≥ 4` it is `∅` (`automataflStepDescN n` is UNSATISFIABLE
+      for any board). So a capstone stated over `automataflStepDescN n` would be VACUOUS at `n ≥ 4` and
+      wrong-domain at `n = 3` — the coordinate decomposition must FIRST be re-emitted at `COORD_RBITS n`
+      bits (an `AutomataflStepEmit.NGen` change, the RESOLVE emitter's `rangeNonnegConstraints` pattern)
+      before any `∀ n` capstone is honest. `astep_sat_imp_automatonStep` is therefore NOT restated at
+      arbitrary `n`.
+    - RAY INDUCTION (legs 2–4). Even past the two above, the capstone rests on `automatonOffset_of_sat`,
+      whose four `raycast_*_of_sat` are `n = 2` finite two-step scans (explicit `rHit d 1`/`rHit d 2`;
+      `raycast_*_reduce` hardcode `size = 2`, `X,Y < 2`). Generalising needs a fuel/hit-index INDUCTION
+      over the ray (×4) plus `decideAxis`/`chooseOffset` restated over `automataflStepDescN n` — the
+      known-chunky residual, a multi-lemma effort.
+The Leg-A composition is a proven theorem at `n = 2`, its LAYOUT is `n`-parametric, and the gate /
+board-validity families are now `∀ n`; the coordinate/offset legs and capstone await the descriptor
+fix + the downstream foundation seat + the ray induction. -/
 
 end Dregg2.Circuit.Emit.AutomataflStepRefine
