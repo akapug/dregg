@@ -137,7 +137,7 @@ func (c *friVerifyNativeCircuit) Define(api frontend.API) error {
 	ch := NewMultiFieldChallenger(bb)
 	ch.ObserveBabyBearSlice(c.Prefix)
 	verifyFriNativeImpl(bb, c.cfg, c.r, c.CommitRoots, c.FinalPoly, c.PowWitness,
-		c.Queries, nil, ch, c.swap)
+		c.Queries, nil, ch, c.swap, nil)
 	return nil
 }
 

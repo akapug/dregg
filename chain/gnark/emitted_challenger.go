@@ -145,6 +145,14 @@ type shrinkTranscriptMeta struct {
 	// instance. Needed to bind each block-3 opened-value witness to its slot in
 	// the transcript-observed stream. nil = the openings bind is off.
 	shapes []StarkInstanceShape
+
+	// friStage is the FRI-stage emit-path template-replay context
+	// (emitted_fri_stage_replay.go): non-nil drives the per-round commit-phase
+	// leaf-hash / Merkle path / arity-2 fold through the committed Lean-emitted
+	// templates instead of the hand-Go friMerkleLeafHashNative /
+	// VerifyMerklePathBn254 / friFoldRowArity2. Attached by
+	// AllocVerifierFullCircuitWithTranscript; nil on the deployed lane.
+	friStage *friStageReplay
 }
 
 // rederive runs the emitted-permutation transcript re-derivation: it builds a
@@ -164,7 +172,7 @@ func (m *shrinkTranscriptMeta) rederive(bb *BBApi, in *shrinkTranscriptInputs) (
 	in.r = m.r
 	in.rollInAfterRound = m.rollInAfterRound
 	ch := NewMultiFieldChallengerWithPerm(bb, newEmittedPoseidon2Perm(m.tpl))
-	return rederiveShrinkChallenges(bb, ch, in)
+	return rederiveShrinkChallenges(bb, ch, in, m.friStage)
 }
 
 // rederiveShrinkChallenges replays the FULL real shrink transcript through the
@@ -176,17 +184,21 @@ func (m *shrinkTranscriptMeta) rederive(bb *BBApi, in *shrinkTranscriptInputs) (
 //     squeeze is asserted equal to its pinned value — this binds PermAlpha,
 //     PermBeta, the constraint-folding alpha, zeta, and the FRI batch alpha (the
 //     challenges block 3 / open_input consume);
-//   - FRI: VerifyFriNative draws each per-round beta and each per-query index
+//   - FRI: verifyFriNativeImpl draws each per-round beta and each per-query index
 //     LIVE from the same sponge and binds them by verifying the fold chain and
 //     Merkle openings against the committed roots/paths (a wrong beta or index
-//     fails the fold == finalEval / recomputed-root == root checks).
+//     fails the fold == finalEval / recomputed-root == root checks). With `replay`
+//     non-nil (the emit lane, attached by AllocVerifierFullCircuitWithTranscript)
+//     the per-round leaf-hash / Merkle path / arity-2 fold are the committed
+//     Lean-emitted templates (emitted_fri_stage_replay.go), not the hand-Go
+//     friMerkleLeafHashNative / VerifyMerklePathBn254 / friFoldRowArity2.
 //
 // A tampered commitment root, absorbed value, or pinned challenge moves the
 // squeeze and makes the constraint system UNSATISFIABLE: the challenges are bound
 // to the transcript, not supplied freely. This is the deployed transcript replay,
 // factored so the emit-driven verifier can run it through the Lean-emitted
 // permutation.
-func rederiveShrinkChallenges(bb *BBApi, ch *MultiFieldChallenger, in *shrinkTranscriptInputs) ([]BBExt, [][]frontend.Variable) {
+func rederiveShrinkChallenges(bb *BBApi, ch *MultiFieldChallenger, in *shrinkTranscriptInputs, replay *friStageReplay) ([]BBExt, [][]frontend.Variable) {
 	api := bb.API()
 	io, id, is := 0, 0, 0
 	for _, op := range in.script {
@@ -210,5 +222,5 @@ func rederiveShrinkChallenges(bb *BBApi, ch *MultiFieldChallenger, in *shrinkTra
 	// lets the caller (the descriptor's Define) link block 1's fold-beta operand and
 	// block 4's query-index witness to these exact transcript squeezes.
 	return verifyFriNativeImpl(bb, in.cfg, in.r, in.CommitRoots, in.FinalPoly, in.PowWitness,
-		in.Queries, in.rollInAfterRound, ch, false)
+		in.Queries, in.rollInAfterRound, ch, false, replay)
 }

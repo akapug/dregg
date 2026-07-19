@@ -1169,6 +1169,17 @@ func AllocVerifierFullCircuitWithTranscript(vf *VerifierFull, sym *SymbolicConst
 	}
 	c.selectorReplay = plan
 	c.SelectorWitness = make([]frontend.Variable, plan.total)
+	// Attach the FRI-stage template-replay context to the transcript meta: with the
+	// stage attached, the per-round commit-phase leaf-hash / Merkle path / arity-2
+	// fold run the committed Lean-emitted templates (emitted_fri_stage_replay.go), not
+	// the hand-Go friMerkleLeafHashNative / VerifyMerklePathBn254 / friFoldRowArity2.
+	if meta != nil {
+		fs, err := newFriStageReplay(c.merkleTpls, c.friFoldTpl)
+		if err != nil {
+			return nil, err
+		}
+		meta.friStage = fs
+	}
 	c.txMeta = meta
 	c.TxPrefixObs = make([]frontend.Variable, nPrefixObs)
 	c.TxPrefixDig = make([]frontend.Variable, nPrefixDig)

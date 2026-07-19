@@ -52,26 +52,26 @@
 // (apex_shrink_real_fixture_test.go over fixtures/apex_shrink_fri_real.json,
 // exported + self-checked by circuit-prove/src/apex_shrink_gnark_export.rs):
 //
-//   VERIFIED IN-CIRCUIT against real data: the full Fiat–Shamir transcript
-//   (the pre-FRI prefix replayed event-for-event with every sampled challenge
-//   pinned to the Rust value, then betas/PoW/query indices drawn live), the
-//   commit-phase native Merkle openings for every query and round, the fold
-//   arithmetic with multi-height ROLL-INS (verifier.rs:471-480: reduced
-//   openings entering as the fold passes each input height, scaled by
-//   beta^arity), the query grinding, and the final-polynomial check.
-//   Arity-2, LogFinalPolyLen = 0 (the DreggOuterConfig shape; blowup/query
-//   split as pinned by the fixture).
+//	VERIFIED IN-CIRCUIT against real data: the full Fiat–Shamir transcript
+//	(the pre-FRI prefix replayed event-for-event with every sampled challenge
+//	pinned to the Rust value, then betas/PoW/query indices drawn live), the
+//	commit-phase native Merkle openings for every query and round, the fold
+//	arithmetic with multi-height ROLL-INS (verifier.rs:471-480: reduced
+//	openings entering as the fold passes each input height, scaled by
+//	beta^arity), the query grinding, and the final-polynomial check.
+//	Arity-2, LogFinalPolyLen = 0 (the DreggOuterConfig shape; blowup/query
+//	split as pinned by the fixture).
 //
-//   SEAM CLOSED (stark_open_input.go): the per-query reduced openings
-//   (InitialEval + RollIns) still enter as witnesses for the fold chain, but
-//   the open_input layer now RE-DERIVES them in-circuit — the input-batch
-//   Merkle openings against the main/quotient/preprocessed/permutation
-//   commitments plus the alpha-combination Σ αᵏ(p(z)−p(x))/(z−x) — and
-//   asserts equality, so they are commitment-BOUND (the assembled circuit in
-//   stark_algebra_real_fixture_test.go wires this via the query bits this
-//   function returns). Constraint-eval-at-zeta + quotient recomposition:
-//   stark_verify_native.go. Remaining before the Groth16 wrap: bake the
-//   shape/DAG as VK constants and size the wrap.
+//	SEAM CLOSED (stark_open_input.go): the per-query reduced openings
+//	(InitialEval + RollIns) still enter as witnesses for the fold chain, but
+//	the open_input layer now RE-DERIVES them in-circuit — the input-batch
+//	Merkle openings against the main/quotient/preprocessed/permutation
+//	commitments plus the alpha-combination Σ αᵏ(p(z)−p(x))/(z−x) — and
+//	asserts equality, so they are commitment-BOUND (the assembled circuit in
+//	stark_algebra_real_fixture_test.go wires this via the query bits this
+//	function returns). Constraint-eval-at-zeta + quotient recomposition:
+//	stark_verify_native.go. Remaining before the Groth16 wrap: bake the
+//	shape/DAG as VK constants and size the wrap.
 package friverifier
 
 import (
@@ -167,6 +167,13 @@ func friMerkleLeafHashNative(api frontend.API, e0, e1 BBExt) frontend.Variable {
 // whose fold a reduced opening enters the chain (verifier.rs:471-480: an
 // input matrix lives at the just-reached height); `rollIns` carries the
 // corresponding values, scaled by beta^2 = beta^arity for independence.
+// `replay` is the FRI-STAGE emit-path split (emitted_fri_stage_replay.go): when
+// non-nil (the transcript-stage / emit lane), the per-round leaf-hash + Merkle path
+// and the arity-2 fold are driven by the committed Lean-emitted templates instead of
+// the hand-Go friMerkleLeafHashNative / VerifyMerklePathBn254 / friFoldRowArity2;
+// when nil (the deployed SettlementCircuit lane, via VerifyFriNative) the hand-Go
+// oracle path runs UNCHANGED. A replay error is a wiring/template bug and panics
+// (matching the fail-closed posture of the surrounding ingestion).
 func VerifyFriQueryNative(
 	bb *BBApi,
 	R int,
@@ -180,6 +187,7 @@ func VerifyFriQueryNative(
 	rollInAfterRound []int,
 	rollIns []BBExt,
 	finalEval BBExt,
+	replay *friStageReplay,
 ) {
 	api := bb.API()
 	if len(rollIns) != len(rollInAfterRound) {
@@ -217,15 +225,27 @@ func VerifyFriQueryNative(
 			e1[i] = api.Select(bR, folded[i], siblings[r][i])
 		}
 
-		// NATIVE Merkle opening against the round's committed root: one leaf
-		// permutation + lfh native compressions (the emulated path pays one
-		// ~16,837-R1CS emulated permutation per step; this pays ~243).
-		leaf := friMerkleLeafHashNative(api, e0, e1)
-		VerifyMerklePathBn254(api, leaf, merkleProofs[r], indexBits[r+1:r+1+lfh], commitRoots[r])
-
-		// Fold with beta — the shared emulated-BabyBear fold path (the
-		// arithmetic residual; the hash swap does not touch it).
-		folded = friFoldRowArity2(bb, e0, e1, betas[r], indexBits[r+1:r+1+lfh])
+		// NATIVE Merkle opening against the round's committed root, and the arity-2
+		// fold with beta. EMIT lane (replay != nil): the leaf-hash + path walk and the
+		// fold are the committed Lean-emitted templates (emitted_fri_stage_replay.go);
+		// DEPLOYED lane (replay == nil): the hand-Go oracle path — one leaf permutation
+		// + lfh native compressions (fri_verify_native.go / fri_query.go), retained as
+		// the differential oracle.
+		if replay != nil {
+			if err := replay.merkleOpen(api, e0, e1, merkleProofs[r],
+				indexBits[r+1:r+1+lfh], commitRoots[r]); err != nil {
+				panic(err.Error())
+			}
+			var err error
+			folded, err = replay.fold(bb, e0, e1, betas[r], indexBits[r+1:r+1+lfh])
+			if err != nil {
+				panic(err.Error())
+			}
+		} else {
+			leaf := friMerkleLeafHashNative(api, e0, e1)
+			VerifyMerklePathBn254(api, leaf, merkleProofs[r], indexBits[r+1:r+1+lfh], commitRoots[r])
+			folded = friFoldRowArity2(bb, e0, e1, betas[r], indexBits[r+1:r+1+lfh])
+		}
 
 		// Roll in the reduced opening for the just-reached height
 		// (verifier.rs:477-479): folded += beta^2 * ro.
@@ -283,7 +303,7 @@ func VerifyFriNative(
 	rollInAfterRound []int,
 	ch *MultiFieldChallenger,
 ) [][]frontend.Variable {
-	_, queryBits := verifyFriNativeImpl(bb, cfg, R, commitRoots, finalPoly, powWitness, queries, rollInAfterRound, ch, false)
+	_, queryBits := verifyFriNativeImpl(bb, cfg, R, commitRoots, finalPoly, powWitness, queries, rollInAfterRound, ch, false, nil)
 	return queryBits
 }
 
@@ -303,6 +323,7 @@ func verifyFriNativeImpl(
 	rollInAfterRound []int,
 	ch *MultiFieldChallenger,
 	swapOrder bool,
+	replay *friStageReplay,
 ) ([]BBExt, [][]frontend.Variable) {
 	if len(finalPoly) != (1 << cfg.LogFinalPolyLen) {
 		panic("VerifyFriNative: len(finalPoly) must equal 2^LogFinalPolyLen")
@@ -326,7 +347,7 @@ func verifyFriNativeImpl(
 			betas[r] = ch.SampleBabyBearExt()
 			ch.ObserveBn254Digest([]frontend.Variable{commitRoots[r]})
 		} else {
-			ch.ObserveBn254Digest([]frontend.Variable{commitRoots[r]})     // verifier.rs:221
+			ch.ObserveBn254Digest([]frontend.Variable{commitRoots[r]})      // verifier.rs:221
 			CheckWitnessNative(ch, cfg.CommitPowBits, frontend.Variable(0)) // :222 (0 bits: no-op)
 			betas[r] = ch.SampleBabyBearExt()                               // verifier.rs:225
 		}
@@ -357,7 +378,7 @@ func verifyFriNativeImpl(
 		domainBits := idxBits[cfg.ExtraQueryIndexBits:]
 		queryBits = append(queryBits, domainBits)
 		VerifyFriQueryNative(bb, R, logMaxHeight, commitRoots, betas, q.Siblings, q.MerkleProofs,
-			domainBits, q.InitialEval, rollInAfterRound, q.RollIns, finalEval) // verifier.rs:298 verify_query
+			domainBits, q.InitialEval, rollInAfterRound, q.RollIns, finalEval, replay) // verifier.rs:298 verify_query
 	}
 	// The per-round fold betas (live-sampled from `ch`) are returned alongside the
 	// query index bits so a caller re-deriving the transcript can BIND the

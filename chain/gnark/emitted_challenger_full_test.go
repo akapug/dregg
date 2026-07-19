@@ -63,7 +63,7 @@ func (c *emittedShrinkTranscriptCircuit) Define(api frontend.API) error {
 		script: c.script, cfg: c.cfg, r: c.r, rollInAfterRound: c.rollInAfterRound,
 		PrefixObs: c.PrefixObs, PrefixDigests: c.PrefixDigests, PrefixSamples: c.PrefixSamples,
 		CommitRoots: c.CommitRoots, FinalPoly: c.FinalPoly, PowWitness: c.PowWitness, Queries: c.Queries,
-	})
+	}, nil)
 	return nil
 }
 
