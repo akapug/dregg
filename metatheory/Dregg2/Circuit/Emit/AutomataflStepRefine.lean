@@ -279,26 +279,51 @@ theorem boardRange_new {n c} (hc : c < NGen.KK n) :
   unfold NGen.boardRangeConstraints
   exact List.mem_append_right _ (List.mem_map.mpr ⟨c, List.mem_range.mpr hc, rfl⟩)
 
-theorem decomp_loBin {n col loBit hiBit} :
-    cg (gBin loBit) ∈ NGen.decomposeConstraints n col loBit hiBit := by
-  unfold NGen.decomposeConstraints; exact List.mem_cons.mpr (Or.inl rfl)
+/- The coordinate decompose is now the `COORD_RBITS n`-bit `rangeNonnegConstraints` form (mirrors
+`AutomataflResolveEmit`; the old frozen 2-bit `decomp_loBin`/`decomp_loRecomp`/… located gates in a
+literal 4-element list, which pinned `col ∈ {0,1}∩{n−2,n−1} = ∅` at `n ≥ 4`). These lemmas locate a
+gate INSIDE the `range_nonneg` combinator, generically in `rbits = COORD_RBITS n` — the exact shape
+`AutomataflCoord.coordN_of_sat` consumes. Mirrors `AutomataflResolveMembership.mem_rangeNonneg_*` /
+`mem_decompose_*` over the STEP emitter's `NGen`. -/
 
-theorem decomp_loRecomp {n col loBit hiBit} :
-    cgH ((Head.lin 1 col).addLin (-1) loBit) ∈ NGen.decomposeConstraints n col loBit hiBit := by
-  unfold NGen.decomposeConstraints
-  exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
+/-- The k-th boolean bit of a `range_nonneg` block. -/
+theorem mem_rangeNonneg_bit (h : Head) (bit0 rbits k : Nat) (hk : k < rbits) :
+    cg (gBin (bit0 + k)) ∈ NGen.rangeNonnegConstraints h bit0 rbits :=
+  List.mem_append_left _ (List.mem_map.mpr ⟨k, List.mem_range.mpr hk, rfl⟩)
 
-theorem decomp_hiBin {n col loBit hiBit} :
-    cg (gBin hiBit) ∈ NGen.decomposeConstraints n col loBit hiBit := by
-  unfold NGen.decomposeConstraints
-  exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))))
+/-- The recomposition head of a `range_nonneg` block (its final gate). -/
+theorem mem_rangeNonneg_head (h : Head) (bit0 rbits : Nat) :
+    cgH ((List.range rbits).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k)) h)
+      ∈ NGen.rangeNonnegConstraints h bit0 rbits :=
+  List.mem_append_right _ (List.mem_singleton.mpr rfl)
 
-theorem decomp_hiRecomp {n col loBit hiBit} :
-    cgH (((Head.c ((n : ℤ) - 1)).addLin (-1) col).addLin (-1) hiBit)
-      ∈ NGen.decomposeConstraints n col loBit hiBit := by
-  unfold NGen.decomposeConstraints
-  exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inr (List.mem_cons.mpr
-    (Or.inr (List.mem_cons.mpr (Or.inl rfl)))))))
+/-- The k-th LOWER-edge bit of a `decompose_coord_le` block. -/
+theorem decomp_loBit {n col loBit0 hiBit0 k : Nat} (hk : k < NGen.COORD_RBITS n) :
+    cg (gBin (loBit0 + k)) ∈ NGen.decomposeConstraints n col loBit0 hiBit0 := by
+  rw [NGen.decomposeConstraints]
+  exact List.mem_append_left _ (mem_rangeNonneg_bit _ _ _ _ hk)
+
+/-- The LOWER-edge recomposition head of a `decompose_coord_le` block (`col = Σ 2^k b_k`). -/
+theorem decomp_loHead {n col loBit0 hiBit0 : Nat} :
+    cgH ((List.range (NGen.COORD_RBITS n)).foldl
+        (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (loBit0 + k)) (Head.lin 1 col))
+      ∈ NGen.decomposeConstraints n col loBit0 hiBit0 := by
+  rw [NGen.decomposeConstraints]
+  exact List.mem_append_left _ (mem_rangeNonneg_head _ _ _)
+
+/-- The k-th UPPER-edge bit of a `decompose_coord_le` block. -/
+theorem decomp_hiBit {n col loBit0 hiBit0 k : Nat} (hk : k < NGen.COORD_RBITS n) :
+    cg (gBin (hiBit0 + k)) ∈ NGen.decomposeConstraints n col loBit0 hiBit0 := by
+  rw [NGen.decomposeConstraints]
+  exact List.mem_append_right _ (mem_rangeNonneg_bit _ _ _ _ hk)
+
+/-- The UPPER-edge recomposition head of a `decompose_coord_le` block (`(n−1) − col = Σ 2^k b'_k`). -/
+theorem decomp_hiHead {n col loBit0 hiBit0 : Nat} :
+    cgH ((List.range (NGen.COORD_RBITS n)).foldl
+        (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (hiBit0 + k)) ((Head.c ((n : ℤ) - 1)).addLin (-1) col))
+      ∈ NGen.decomposeConstraints n col loBit0 hiBit0 := by
+  rw [NGen.decomposeConstraints]
+  exact List.mem_append_right _ (mem_rangeNonneg_head _ _ _)
 
 theorem oneHot_bool {sels : List Nat} {idxHead : Head} {c : Nat} (hc : c ∈ sels) :
     cg (gBin c) ∈ oneHotConstraints sels idxHead := by
@@ -485,20 +510,24 @@ theorem coord_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddr
       ∧ ((envAt t i).loc AY = 0 ∨ (envAt t i).loc AY = 1) := by
   set e := envAt t i with he
   -- AX = axLoBit, AY = ayLoBit (the recomposition gates), each boolean.
+  -- At n = 2, `COORD_RBITS 2 = 1`, so the `range_nonneg` lower edge is the single gate
+  -- `col − 2^0·b_lo == 0` (defeq to the old `col − b_lo`) and `b_lo` (= `loBit0 + 0`) is its one bit.
   have hxeq : e.loc AX = e.loc axLoBit := by
     have hg := astep_gate hsat i hi (g := .add (.var AX) (.mul (.const (-1)) (.var axLoBit)))
-      (mem_fe_decompAX decomp_loRecomp)
+      (mem_fe_decompAX decomp_loHead)
     simp only [EmittedExpr.eval] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
   have hyeq : e.loc AY = e.loc ayLoBit := by
     have hg := astep_gate hsat i hi (g := .add (.var AY) (.mul (.const (-1)) (.var ayLoBit)))
-      (mem_fe_decompAY decomp_loRecomp)
+      (mem_fe_decompAY decomp_loHead)
     simp only [EmittedExpr.eval] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
   have hxb : e.loc axLoBit = 0 ∨ e.loc axLoBit = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin axLoBit) (mem_fe_decompAX decomp_loBin)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin axLoBit)
+      (mem_fe_decompAX (decomp_loBit (k := 0) (by decide)))) (canon_loc hc i _)
   have hyb : e.loc ayLoBit = 0 ∨ e.loc ayLoBit = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin ayLoBit) (mem_fe_decompAY decomp_loBin)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin ayLoBit)
+      (mem_fe_decompAY (decomp_loBit (k := 0) (by decide)))) (canon_loc hc i _)
   exact ⟨hxeq ▸ hxb, hyeq ▸ hyb⟩
 
 /-- **`autoPin_of_sat` — SUB-LEMMA (1): the auto one-hot + dot-product pin the AUTO cell.** On a

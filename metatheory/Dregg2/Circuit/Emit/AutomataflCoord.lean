@@ -652,6 +652,67 @@ theorem autoPin_n3_rejects_wrong :
   rw [dot_oneHot2 oneHotAt3_1 oneHotAt3_2 (fun y x => if y = 0 ∧ x = 0 then AUTO_CODE else 0)]
   norm_num [AUTO_CODE]
 
+/-! ## §6.5 — `coordN_of_sat` APPLIES to the STEP descriptor: the auto coordinate decodes into
+`[0, n)` at `n = 3` and `n = 11` — the PAYOFF of the `AutomataflStepEmit.NGen` gadget migration.
+
+The step coordinate decompose is now the `COORD_RBITS n`-bit `rangeNonnegConstraints` form (mirroring
+the RESOLVE emitter), NOT the old frozen 2-bit-per-edge gadget. The old gadget pinned the auto
+coordinate to `col ∈ {0,1} ∩ {n−2, n−1}` — `[0,2)` at `n = 2` (correct), `{1}` at `n = 3` (only a
+centre auto), and `∅` at `n ≥ 4` (so `automataflStepDescN n` was UNSATISFIABLE for EVERY board). Here
+the SAME generic `coordN_of_sat` that serves the resolve descriptor applies VERBATIM to the STEP
+descriptor's `AX`/`AY` decompose families: the four `range_nonneg` gate hypotheses are discharged by
+the STEP §2.5 membership (`decomp_loBit`/`decomp_loHead`/`decomp_hiBit`/`decomp_hiHead`), and the
+coordinate is forced into the FULL `[0, n)`. The `cg`/`gBin` gate hypotheses match across the two
+emitters' vocabularies definitionally (they carry no `Head`), and the `cgH` recomposition heads match
+by concrete reduction at each fixed `n`. Concrete `n = 3` (auto ∈ {0,1,2}, not the old {1}) and the
+deployed `n = 11` (auto ∈ [0,11), not the old ∅) WITNESS that the `n ≥ 4` unsatisfiability is CLOSED. -/
+
+section StepCoordDecode
+variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+
+open Dregg2.Circuit.Emit.AutomataflStepEmit (automataflStepDescN)
+open Dregg2.Circuit.Emit.AutomataflStepEmit.NGen (AX AY axLoBit axHiBit ayLoBit ayHiBit)
+open Dregg2.Circuit.Emit.AutomataflStepRefine
+  (mem_fe_decompAX mem_fe_decompAY decomp_loBit decomp_loHead decomp_hiBit decomp_hiHead)
+
+/-- **`coordStep_n3_of_sat`.** On a satisfying, canonical `automataflStepDescN 3` trace the witnessed
+auto `AX`/`AY` are genuine 3×3-board indices in `[0, 3)`, via `coordN_of_sat` on the STEP descriptor's
+`COORD_RBITS 3 = 2`-bit decompose. NON-VACUOUS: the old 2-bit gadget forced `AX = 1` (centre only);
+this admits `AX ∈ {0,1,2}`. -/
+theorem coordStep_n3_of_sat
+    (hsat : Satisfied2 hash (automataflStepDescN 3) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (∃ vx : Nat, vx < 3 ∧ (envAt t i).loc (AX 3) = (vx : ℤ))
+      ∧ (∃ vy : Nat, vy < 3 ∧ (envAt t i).loc (AY 3) = (vy : ℤ)) :=
+  ⟨coordN_of_sat hsat hc i hi 3 (Dregg2.Circuit.Emit.AutomataflStepEmit.NGen.COORD_RBITS 3)
+      (AX 3) (axLoBit 3) (axHiBit 3) (by decide) (by decide) (by decide)
+      (fun _ hk => mem_fe_decompAX (decomp_loBit hk)) (mem_fe_decompAX decomp_loHead)
+      (fun _ hk => mem_fe_decompAX (decomp_hiBit hk)) (mem_fe_decompAX decomp_hiHead),
+   coordN_of_sat hsat hc i hi 3 (Dregg2.Circuit.Emit.AutomataflStepEmit.NGen.COORD_RBITS 3)
+      (AY 3) (ayLoBit 3) (ayHiBit 3) (by decide) (by decide) (by decide)
+      (fun _ hk => mem_fe_decompAY (decomp_loBit hk)) (mem_fe_decompAY decomp_loHead)
+      (fun _ hk => mem_fe_decompAY (decomp_hiBit hk)) (mem_fe_decompAY decomp_hiHead)⟩
+
+/-- **`coordStep_n11_of_sat`.** The same at the deployed `n = 11`: `AX`/`AY ∈ [0, 11)`, via the
+`COORD_RBITS 11 = 4`-bit decompose. At `n ≥ 4` the old 2-bit gadget was UNSATISFIABLE
+(`{0,1} ∩ {9,10} = ∅`); this shows the migrated descriptor admits a genuine full-range auto
+coordinate on the 11×11 board. -/
+theorem coordStep_n11_of_sat
+    (hsat : Satisfied2 hash (automataflStepDescN 11) minit mfin maddrs t)
+    (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
+    (∃ vx : Nat, vx < 11 ∧ (envAt t i).loc (AX 11) = (vx : ℤ))
+      ∧ (∃ vy : Nat, vy < 11 ∧ (envAt t i).loc (AY 11) = (vy : ℤ)) :=
+  ⟨coordN_of_sat hsat hc i hi 11 (Dregg2.Circuit.Emit.AutomataflStepEmit.NGen.COORD_RBITS 11)
+      (AX 11) (axLoBit 11) (axHiBit 11) (by decide) (by decide) (by decide)
+      (fun _ hk => mem_fe_decompAX (decomp_loBit hk)) (mem_fe_decompAX decomp_loHead)
+      (fun _ hk => mem_fe_decompAX (decomp_hiBit hk)) (mem_fe_decompAX decomp_hiHead),
+   coordN_of_sat hsat hc i hi 11 (Dregg2.Circuit.Emit.AutomataflStepEmit.NGen.COORD_RBITS 11)
+      (AY 11) (ayLoBit 11) (ayHiBit 11) (by decide) (by decide) (by decide)
+      (fun _ hk => mem_fe_decompAY (decomp_loBit hk)) (mem_fe_decompAY decomp_loHead)
+      (fun _ hk => mem_fe_decompAY (decomp_hiBit hk)) (mem_fe_decompAY decomp_hiHead)⟩
+
+end StepCoordDecode
+
 /-! ## §7 — Axiom pins. -/
 
 #assert_axioms headToExpr_eval
@@ -663,5 +724,7 @@ theorem autoPin_n3_rejects_wrong :
 #assert_axioms autoPinN_of_sat
 #assert_axioms autoPin_n3_accepts_correct
 #assert_axioms autoPin_n3_rejects_wrong
+#assert_axioms coordStep_n3_of_sat
+#assert_axioms coordStep_n11_of_sat
 
 end Dregg2.Circuit.Emit.AutomataflCoord

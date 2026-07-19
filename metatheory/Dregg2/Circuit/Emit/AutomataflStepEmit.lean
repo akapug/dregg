@@ -583,22 +583,30 @@ namespace NGen
 set_option linter.unusedVariables false
 
 def KK (n : Nat) : Nat := n * n
+/-- `decompose_coord_le`'s bit width — `ceil(log2 n)`, the number of bits needed to hold a coordinate
+in `[0, n)`. `1` at `n = 2`, `4` at `n = 11`. MIRRORS `AutomataflResolveEmit.NGen.COORD_RBITS`
+verbatim. This is what makes the auto-coordinate decode SATISFIABLE at `n ≥ 4`: the old frozen 2-bit
+gadget pinned `col ∈ {0,1} ∩ {n−2, n−1} = ∅`; the `COORD_RBITS n`-bit range decodes `col ∈ [0, n)`. -/
+def COORD_RBITS (n : Nat) : Nat := if n ≤ 1 then 1 else Nat.log2 (n - 1) + 1
 def old (n : Nat) (i : Nat) : Nat := i
 def new (n : Nat) (i : Nat) : Nat := (KK n) + i
 def AX (n : Nat) : Nat := 2 * (KK n)
 def AY (n : Nat) : Nat := 2 * (KK n) + 1
+/-- `decompose_coord_le` bit runs for `ax` / `ay`, each `COORD_RBITS n` wide, laid out
+`ax.lo ax.hi ay.lo ay.hi`. At `n = 2` (`COORD_RBITS 2 = 1`) these are the single columns
+`2k+2 … 2k+5` — byte-identical to the old frozen 2-bit layout; at `n ≥ 3` each edge widens. -/
 def axLoBit (n : Nat) : Nat := 2 * (KK n) + 2
-def axHiBit (n : Nat) : Nat := 2 * (KK n) + 3
-def ayLoBit (n : Nat) : Nat := 2 * (KK n) + 4
-def ayHiBit (n : Nat) : Nat := 2 * (KK n) + 5
-def selRow (n : Nat) (y : Nat) : Nat := 2 * (KK n) + 6 + y
-def selCol (n : Nat) (x : Nat) : Nat := 2 * (KK n) + 6 + n + x
+def axHiBit (n : Nat) : Nat := 2 * (KK n) + 2 + (COORD_RBITS n)
+def ayLoBit (n : Nat) : Nat := 2 * (KK n) + 2 + 2 * (COORD_RBITS n)
+def ayHiBit (n : Nat) : Nat := 2 * (KK n) + 2 + 3 * (COORD_RBITS n)
+def selRow (n : Nat) (y : Nat) : Nat := 2 * (KK n) + 2 + 4 * (COORD_RBITS n) + y
+def selCol (n : Nat) (x : Nat) : Nat := 2 * (KK n) + 2 + 4 * (COORD_RBITS n) + n + x
 /-- Per-ray column block width, `n`-parametric: `2n` interleaved `ib`/`rc` reads (steps `1..n`),
 `n` `hit` one-hot bits, then `dist`/`what`/`hib`/`inv` (4). At `n = 2` this is `10` — byte-identical
 to the old frozen 10-column-per-ray spacing; at `n ≥ 3` the `hit` block and the `dist`/`what` tail
 NO LONGER OVERLAP the widened `ib`/`rc` reads (the old `+4`/`+6`/… offsets were frozen at `n = 2`). -/
 def RAY_W (n : Nat) : Nat := 3 * n + 4
-def rayBase (n : Nat) (d : Nat) : Nat := 2 * (KK n) + 6 + 2 * n + (RAY_W n) * d
+def rayBase (n : Nat) (d : Nat) : Nat := 2 * (KK n) + 2 + 4 * (COORD_RBITS n) + 2 * n + (RAY_W n) * d
 def rIb (n : Nat) (d kk : Nat) : Nat := (rayBase n) d + 2 * (kk - 1)
 def rRc (n : Nat) (d kk : Nat) : Nat := (rayBase n) d + 2 * (kk - 1) + 1
 def rHit (n : Nat) (d kk : Nat) : Nat := (rayBase n) d + 2 * n + (kk - 1)
@@ -606,12 +614,22 @@ def rDist (n : Nat) (d : Nat) : Nat := (rayBase n) d + 3 * n
 def rWhat (n : Nat) (d : Nat) : Nat := (rayBase n) d + 3 * n + 1
 def rHib (n : Nat) (d : Nat) : Nat := (rayBase n) d + 3 * n + 2
 def rInv (n : Nat) (d : Nat) : Nat := (rayBase n) d + 3 * n + 3
-def A_FRONT_WIDTH (n : Nat) : Nat := 2 * (KK n) + 6 + 2 * n + (RAY_W n) * 4
-def decomposeConstraints (n : Nat) (col loBit hiBit : Nat) : List VmConstraint2 :=
-  [ cg (gBin loBit)
-  , cgH ((Head.lin 1 col).addLin (-1) loBit)                      -- col − b_lo == 0
-  , cg (gBin hiBit)
-  , cgH (((Head.c ((n : ℤ) - 1)).addLin (-1) col).addLin (-1) hiBit) ]  -- (n−1) − col − b_hi == 0
+def A_FRONT_WIDTH (n : Nat) : Nat := 2 * (KK n) + 2 + 4 * (COORD_RBITS n) + 2 * n + (RAY_W n) * 4
+/-- `Builder::range_nonneg(head, rbits)` with bits at `bit0 ..< bit0+rbits`: each bit boolean, then
+the recomposition `head − Σ 2^k·b_k == 0`. MIRRORS `AutomataflResolveEmit.rangeNonnegConstraints`
+verbatim (the RESOLVE emitter's `decompose_coord_le` combinator). -/
+def rangeNonnegConstraints (h : Head) (bit0 rbits : Nat) : List VmConstraint2 :=
+  (List.range rbits).map (fun k => cg (gBin (bit0 + k)))
+  ++ [ cgH ((List.range rbits).foldl (fun acc k => acc.addLin (-((2 : ℤ) ^ k)) (bit0 + k)) h) ]
+/-- `decompose_coord_le(col, n−1)` — the `COORD_RBITS n`-bit range decomposition of BOTH edges: the
+lower edge `col = Σ 2^k b_k` and the upper edge `(n−1) − col = Σ 2^k b'_k`. MIRRORS
+`AutomataflResolveEmit.NGen.decomposeConstraints` exactly — same combinator, same bit-width. At
+`n = 2` (`COORD_RBITS 2 = 1`) this reduces to the old frozen two-bit form; at `n ≥ 3` it decodes the
+coordinate into `[0, n)` with no wrap (`AutomataflCoord.coordN_of_sat`), fixing the `n ≥ 4`
+unsatisfiability of the old single-bit-per-edge gadget. -/
+def decomposeConstraints (n : Nat) (col loBit0 hiBit0 : Nat) : List VmConstraint2 :=
+  rangeNonnegConstraints (Head.lin 1 col) loBit0 (COORD_RBITS n)
+  ++ rangeNonnegConstraints ((Head.c ((n : ℤ) - 1)).addLin (-1) col) hiBit0 (COORD_RBITS n)
 def autoPinHead (n : Nat) : Head :=
   (List.range n).foldl (fun h (y : Nat) =>
     (List.range n).foldl (fun h2 (x : Nat) =>
@@ -981,15 +999,17 @@ example : EffectVmDescriptor2 := automataflStepDescN 11
 #guard NGen.rHit 11 0 11 + 1 == NGen.rDist 11 0
 #guard NGen.rInv 11 0 + 1 == NGen.rayBase 11 1
 #guard NGen.rInv 11 3 + 1 == NGen.A_FRONT_WIDTH 11
--- the back-end block bases at n = 11:
-#guard NGen.A_FRONT_WIDTH 11 == 418
-#guard NGen.A_DECIDE_X_BASE 11 == 418
-#guard NGen.A_DECIDE_Y_BASE 11 == 465
-#guard NGen.A_CHOOSE_BASE 11 == 512
-#guard NGen.A_STEP_BASE 11 == 569
-#guard NGen.A_BACK_TAIL 11 == 648
-#guard packFeltBase 11 == 648
-#guard (automataflStepDescN 11).traceWidth == 666
+-- the back-end block bases at n = 11 (re-pinned: the front-end widened by 12 = 4·(COORD_RBITS 11 − 1)
+-- = 4·3 columns, since each of the four coord edges is now 4 bits, not 1 — the auto-coordinate is
+-- genuinely decodable in [0,11) rather than pinned to the empty {0,1}∩{9,10}):
+#guard NGen.A_FRONT_WIDTH 11 == 430
+#guard NGen.A_DECIDE_X_BASE 11 == 430
+#guard NGen.A_DECIDE_Y_BASE 11 == 477
+#guard NGen.A_CHOOSE_BASE 11 == 524
+#guard NGen.A_STEP_BASE 11 == 581
+#guard NGen.A_BACK_TAIL 11 == 660
+#guard packFeltBase 11 == 660
+#guard (automataflStepDescN 11).traceWidth == 678
 -- each back-end block's TOP referenced column is exactly one below the next block's base (n = 11) —
 -- the back-end no longer overlaps the widened front-end OR the packed commitment:
 #guard maxColList (NGen.frontEndConstraints 11) + 1 == NGen.A_FRONT_WIDTH 11
@@ -1004,5 +1024,20 @@ example : EffectVmDescriptor2 := automataflStepDescN 11
 #guard NGen.KK 2 == KK
 #guard (NGen.boardRangeConstraints 2).length == boardRangeConstraints.length
 #guard (NGen.frontEndConstraints 2).length == frontEndConstraints.length
+
+-- THE COORDINATE-GADGET FIX: the auto-coordinate decompose is now `COORD_RBITS n`-bit per edge
+-- (`rangeNonnegConstraints`, mirroring `AutomataflResolveEmit`), NOT the old frozen 1-bit-per-edge
+-- gadget. At n = 2, `COORD_RBITS 2 = 1`, so it reduces to the old two-bit form (byte-golden held); at
+-- n ≥ 3 each edge widens, so the decoded coordinate ranges over the FULL [0,n) instead of the old
+-- `{0,1} ∩ {n−2, n−1}` (which was `{1}` at n = 3 and EMPTY — descriptor UNSATISFIABLE — at n ≥ 4).
+#guard NGen.COORD_RBITS 2 == 1
+#guard NGen.COORD_RBITS 3 == 2
+#guard NGen.COORD_RBITS 11 == 4
+-- each edge is one `range_nonneg` (`COORD_RBITS n` bits + 1 recomposition), two edges per coordinate:
+#guard (NGen.decomposeConstraints 2 (NGen.AX 2) (NGen.axLoBit 2) (NGen.axHiBit 2)).length == 4
+#guard (NGen.decomposeConstraints 3 (NGen.AX 3) (NGen.axLoBit 3) (NGen.axHiBit 3)).length == 6
+#guard (NGen.decomposeConstraints 11 (NGen.AX 11) (NGen.axLoBit 11) (NGen.axHiBit 11)).length == 10
+-- the auto-coord bit runs do not overlap the auto one-hot selectors at n = 11 (COORD_RBITS-spaced):
+#guard NGen.ayHiBit 11 + NGen.COORD_RBITS 11 == NGen.selRow 11 0
 
 end Dregg2.Circuit.Emit.AutomataflStepEmit
