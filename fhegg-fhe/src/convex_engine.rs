@@ -65,6 +65,15 @@
 //! is the emitted twin. `convex_solve` refuses `iterations > ceiling` BEFORE
 //! touching any ciphertext (`NoiseBudgetExceeded`, fail-closed).
 //!
+//! On the demo program the WINDOW ceiling (7) preempts the noise ceiling (12),
+//! so the noise guard there is arithmetic-only (the opus finding
+//! `ConvexNoiseGuardUntested`). The guard is CALIBRATED against real
+//! decryption in the noise-BINDING regime `noise_step()` (tests): a fused
+//! matrix whose value action is neutral on the input eigenspace (window never
+//! binds, intervals stay a point) while noise grows ×G=101 per iteration —
+//! decrypt is proven exact AT the ceiling and proven to physically break a
+//! measured 2 iterations past it (the bound's worst-case-vs-typical slack).
+//!
 //! ## NAMED residuals
 //! * ACTIVE prox under encryption (a binding clamp) — needs comparison machinery
 //!   (output-boundary MPC / threshold / PBS); refused, not approximated.
@@ -651,7 +660,7 @@ mod tests {
         let t = fx.t;
         let step = demo_step();
         let ceiling = max_iterations_for_params(&step, t);
-        assert_eq!(ceiling, 12, "G=45 on the deployed set: ceiling drifted");
+        assert_eq!(ceiling, 12, "G=39 on the deployed set: ceiling drifted");
 
         let state = vec![
             encrypt_signed(&mut fx, &[12], 0, 14),
@@ -713,6 +722,172 @@ mod tests {
         assert_ne!(
             unclamped, clamped,
             "the refused clamp would have been a no-op — toothless case"
+        );
+    }
+
+    /// THE NOISE-BINDING REGIME (closes the opus finding `ConvexNoiseGuardUntested`).
+    ///
+    /// On `demo_step()` the window ceiling (7) always preempts the noise
+    /// ceiling (12), so no decryptable regime ever exercised the noise bound.
+    /// This step is constructed so the WINDOW NEVER BINDS while the noise
+    /// physically explodes: the fused matrix is `C = 2I − A = [[51,−50],[−50,51]]`
+    /// (τ = 1/2), and the encrypted state rides C's eigenvalue-1 eigenspace
+    /// (x₁ = x₂ = 5 in EVERY slot, POINT intervals `[5,5]`), so both the true
+    /// values and the interval certificate stay exactly `[5,5]` at every depth —
+    /// the window and prox gates are provably inactive forever. The NOISE has
+    /// no such alignment: homomorphic ops map the error vector by the same C
+    /// (`e ← C·e` exactly — scalar mul scales phase error by c, adds sum it),
+    /// and C's antisymmetric eigenvalue is 101 = G, so the per-coefficient
+    /// noise grows ×101 per iteration toward the decrypt cliff at ~2^88.
+    /// The noise ceiling (10) is therefore the BINDING constraint — honestly,
+    /// not by weakening the window.
+    fn noise_step() -> PublicLinearStep {
+        PublicLinearStep {
+            a: vec![vec![-49, 50], vec![50, -49]],
+            tau_num: 1,
+            tau_den: 2,
+        }
+    }
+    const NOISE_REGIME_VAL: i64 = 5;
+    const NOISE_REGIME_BOX: (i64, i64) = (0, 14);
+
+    /// THE CALIBRATION TOOTH the opus finding demanded — a differential
+    /// decrypt AT the noise ceiling, in a regime where the noise gate is the
+    /// binding constraint:
+    ///
+    /// (a) the ceiling is noise-derived (first-principles G=101 boundary,
+    ///     both sides) and the WINDOW ADMITS depths past it (proven by
+    ///     executing the same fused step + prox certification past the
+    ///     ceiling with zero window/prox refusals);
+    /// (b) AT T = ceiling the full FHE solve decrypts EXACTLY to the
+    ///     plaintext PDHG on all 4096 slot-instances — the guard admits no
+    ///     depth whose decryption is corrupt (miscalibration in the unsafe
+    ///     direction now turns THIS assert red);
+    /// (c) at T = ceiling+1 the refusal is `NoiseBudgetExceeded` — the NOISE
+    ///     gate, not the window gate — fail-closed;
+    /// (d) the ceiling guards a REAL cliff: bypassing the gate (the raw
+    ///     fused step, exactly what convex_solve runs), decryption is
+    ///     MEASURED to go wrong at T = 12 = ceiling+2. The +2 gap is the
+    ///     bound's honest conservatism: B_fresh = 2^20 is a worst-case
+    ///     assumption and actual fresh pk noise is typically ~2^7 smaller;
+    ///     unsafe shifts inside that slack are physically invisible to any
+    ///     decrypt test and are guarded by the formula pins instead.
+    #[test]
+    fn noise_ceiling_is_binding_and_calibrated_at_the_decrypt_cliff() {
+        let mut fx = fixture(0xCE06);
+        let t = fx.t;
+        let step = noise_step();
+        let n = FOLD_DEGREE;
+        let (blo, bhi) = NOISE_REGIME_BOX;
+        let v = NOISE_REGIME_VAL;
+
+        // (a) the ceiling is exactly the G=101 SafeNoise boundary, both sides.
+        let ceiling = max_iterations_for_params(&step, t);
+        let g: u128 = 101; // row abs sums of C = [[51,−50],[−50,51]]
+        let safe = |b: u128| {
+            let r = Q4096 % u128::from(t);
+            2 * u128::from(t) * b + 2 * (u128::from(t) - 1) * r < Q4096
+        };
+        assert!(
+            safe(B_FRESH * g.pow(ceiling)),
+            "must be safe AT the ceiling"
+        );
+        assert!(
+            !safe(B_FRESH * g.pow(ceiling + 1)),
+            "must be unsafe ONE past the ceiling"
+        );
+        assert_eq!(ceiling, 10, "G=101 on the deployed set: ceiling drifted");
+
+        let vals = vec![v; n];
+        let state = vec![
+            encrypt_signed(&mut fx, &vals, v, v),
+            encrypt_signed(&mut fx, &vals, v, v),
+        ];
+
+        // (b) THE DIFFERENTIAL AT THE NOISE CEILING: exact decrypt, all 4096
+        // instances, vs the plaintext PDHG. This is the assert that goes RED
+        // if the guard is miscalibrated in the unsafe direction.
+        let out = convex_solve(&state, &step, blo, bhi, ceiling, t)
+            .expect("T = noise ceiling must pass BOTH gates in this regime");
+        let want = reference_solve_scaled(&[v, v], &step, blo, bhi, ceiling);
+        assert_eq!(
+            want,
+            vec![i128::from(v); 2],
+            "eigenspace bookkeeping drifted"
+        );
+        for (i, s) in out.iter().enumerate() {
+            let dec = decrypt_centered(&fx, s, n);
+            assert!(
+                dec.iter().all(|&d| i128::from(d) == want[i]),
+                "FHE decrypt AT the noise ceiling (T={ceiling}) is corrupt at coord {i}: \
+                 the noise guard admitted a depth past the physical cliff"
+            );
+        }
+
+        // (c) one past: the refusal is the NOISE gate, not the window gate.
+        match convex_solve(&state, &step, blo, bhi, ceiling + 1, t) {
+            Err(ConvexEngineError::NoiseBudgetExceeded {
+                requested,
+                ceiling: c,
+            }) => {
+                assert_eq!(requested, ceiling + 1);
+                assert_eq!(c, ceiling);
+            }
+            other => panic!("expected NoiseBudgetExceeded (the NOISE gate), got {other:?}"),
+        }
+
+        // (d) the window admits past-ceiling depths AND the cliff is REAL:
+        // run the exact per-iteration ops convex_solve runs (fused step +
+        // prox certification), past the gate, and find the depth where
+        // decryption physically breaks.
+        let mut x = state.clone();
+        let mut scale: i128 = 1;
+        let mut first_wrong: Option<u32> = None;
+        for k in 1..=ceiling + 4 {
+            let w = fused_linear_step(&x, &step, t).unwrap_or_else(|e| {
+                panic!(
+                    "window/step refused at T={k} — the window preempted the noise \
+                     gate after all, the regime is NOT noise-binding: {e}"
+                )
+            });
+            scale *= i128::from(step.tau_den);
+            for (i, wi) in w.iter().enumerate() {
+                let (lo, hi) = wi.interval();
+                assert!(
+                    i128::from(lo) >= i128::from(blo) * scale
+                        && i128::from(hi) <= i128::from(bhi) * scale,
+                    "prox certification failed at T={k}, coord {i}"
+                );
+                assert_eq!(
+                    (lo, hi),
+                    (v, v),
+                    "interval left the point at T={k} — the window would eventually \
+                     bind and the regime would stop being noise-binding"
+                );
+            }
+            x = w;
+            if k > ceiling && first_wrong.is_none() {
+                let wrong = x
+                    .iter()
+                    .any(|s| decrypt_centered(&fx, s, n).iter().any(|&d| d != v));
+                if wrong {
+                    first_wrong = Some(k);
+                }
+            }
+        }
+        let cliff = first_wrong.expect(
+            "no decrypt failure within ceiling+4 — the noise ceiling is pure slack \
+             in this regime and the guard still protects nothing real",
+        );
+        assert!(
+            cliff > ceiling,
+            "cliff at or below the ceiling: guard UNSAFE"
+        );
+        assert_eq!(
+            cliff,
+            ceiling + 2,
+            "the measured physical cliff moved (was ceiling+2 = 12; the gap is the \
+             B_fresh worst-case-vs-typical slack) — re-measure and re-pin"
         );
     }
 

@@ -1,8 +1,13 @@
-//! `fhIR` — the typed product/order DSL (the factory). FULLY DISJOINT from the crypto.
+//! `fhIR` — the typed product/order DSL (the factory). Disjoint from the ciphertext layer.
 //!
 //! Interface fixed in `docs/deos/FHEGG-PROTOTYPE-INTERFACES.md` §4, grammar from
 //! `docs/deos/FHEGG-PRODUCT-ORDER-FRONTIER.md`. OWNED by the `fhir` lane. Three type axes; the reject-list;
-//! `admissible`/`compile`. No crypto dependency — it emits a `ClearingSpec` the engine consumes.
+//! `admissible`/`compile`. No ciphertext/key dependency — it emits a `ClearingSpec` the engine
+//! consumes, and (post the `FhirCompileOverreach` fix) consults ONLY the engine's PUBLIC budget
+//! arithmetic (`convex_engine::max_iterations_for_params`, pure integers over the public step
+//! matrix) so that **admissible implies runnable**: `convex_engine::convex_solve` accepts every
+//! spec `compile` emits, for any initial state within the declared variable bounds, on an engine
+//! invoked with the certified `plaintext_modulus`.
 //!
 //! # The three type axes
 //!
@@ -38,8 +43,17 @@
 //!    within the public budget; certificate cost is `T`-independent by construction.
 //! 4. **conditional completeness** — every variable carries finite public bounds (the public
 //!    radius); `T ≥ 1`; the step size is well-defined.
-//! 5. **exact-arithmetic / no-wrap** — static interval analysis over the τ-scaled step
-//!    `w = τ_den·x − τ_num·A·x` proves every intermediate fits the centered plaintext window.
+//! 5. **exact-arithmetic / runnability** — the FULL T-step certificate, mirroring exactly what
+//!    `convex_engine::convex_solve` will do with the emitted spec: (a) `T` must not exceed the
+//!    engine's proven noise ceiling (`max_iterations_for_params` — the Bfv/Noise.lean-shaped
+//!    `G^T·B_fresh` bound); (b) exact interval arithmetic over ALL `T` fused iterations
+//!    `x ← (τ_den·I − τ_num·A)·x`, in the engine's own accumulation order, checks EVERY
+//!    intermediate (each scaled term, each partial sum) against the centered plaintext window;
+//!    (c) every iterate's interval must sit inside the `τ_den^k`-scaled prox box, or the engine
+//!    would refuse `ProxNotCertifiedIdentity` at run time — so compile refuses it now. This is
+//!    an honest RESTRICTION of the admissible set to what the engine can actually execute: a
+//!    program whose trajectory the interval certificate cannot clear is REJECTED (named), never
+//!    admitted-then-refused.
 //! 6. **leakage refinement** — the manifest lists ONLY dimensions, public topology (nnz), `T`,
 //!    precision, and deliberately-public facts; publishing a `Committed` variable, or an `Opened`
 //!    variable outside `Settle`, is a named rejection.
@@ -154,8 +168,17 @@ pub enum RejectKind {
     ResourceBudgetExceeded,
     /// Part 4: a variable without finite public bounds, or T = 0 (no public radius ⇒ no completeness).
     MissingPublicBounds,
-    /// Part 5: static interval analysis overflows the centered plaintext window (or i64 assembly).
+    /// Part 5b: static interval analysis overflows the centered plaintext window at SOME
+    /// intermediate of SOME iteration (or i64/i128 assembly, or the scaled domain leaves i128).
     WindowOverflow,
+    /// Part 5a: `T` exceeds the engine's PROVEN noise ceiling
+    /// (`convex_engine::max_iterations_for_params`) — the engine would refuse the spec
+    /// fail-closed before touching a ciphertext, so compile refuses the program now.
+    NoiseBudgetExceeded,
+    /// Part 5c: some iterate's propagated interval leaves the `τ_den^k`-scaled prox box — the
+    /// clamp might BIND, a binding clamp cannot be computed under additive encryption, and the
+    /// engine would refuse `ProxNotCertifiedIdentity` at run time.
+    ProxNotCertifiedIdentity,
     /// Part 6: publishing a Committed variable, or an Opened variable outside Settle.
     LeakageViolation,
     /// Structural: undeclared variable / trigger, empty program, inconsistent dimensions.
@@ -178,6 +201,8 @@ impl RejectKind {
             RejectKind::ResourceBudgetExceeded => "ResourceBudgetExceeded",
             RejectKind::MissingPublicBounds => "MissingPublicBounds",
             RejectKind::WindowOverflow => "WindowOverflow",
+            RejectKind::NoiseBudgetExceeded => "NoiseBudgetExceeded",
+            RejectKind::ProxNotCertifiedIdentity => "ProxNotCertifiedIdentity",
             RejectKind::LeakageViolation => "LeakageViolation",
             RejectKind::IllFormed => "IllFormed",
         }
@@ -217,6 +242,8 @@ impl Rejection {
             RejectKind::ResourceBudgetExceeded,
             RejectKind::MissingPublicBounds,
             RejectKind::WindowOverflow,
+            RejectKind::NoiseBudgetExceeded,
+            RejectKind::ProxNotCertifiedIdentity,
             RejectKind::LeakageViolation,
             RejectKind::IllFormed,
         ]
@@ -415,7 +442,11 @@ pub const MAX_ITERATIONS: u32 = 256;
 pub const MAX_TRIGGER_DEPTH: u32 = 8;
 /// Approved SOC blocks are SMALL (variance/vol epigraphs), per R2.3's cone library 𝔎₀.
 pub const MAX_SOC_BLOCK: usize = 16;
-/// Static-analysis default plaintext modulus (~2^20, matching the deployed BFV params).
+/// Static-analysis DEFAULT plaintext modulus (~2^20). HONESTY NOTE: the deployed fold params
+/// carry `t = 1_032_193` (fhe.rs `pick_params(20)`), which is SMALLER than `1 << 20` — the
+/// part-5 certificate is only as good as the modulus it is checked against, so a program bound
+/// for the deployed engine must set `with_plaintext_modulus(<the engine's actual t>)`; the
+/// runnability contract (admissible ⟹ the engine accepts) holds when the two agree.
 pub const DEFAULT_PLAINTEXT_MODULUS: u64 = 1 << 20;
 
 // ---------------------------------------------------------------------------
@@ -1202,6 +1233,186 @@ fn assemble_matrix(p: &Program) -> Result<Vec<Vec<i64>>, Rejection> {
     Ok(a)
 }
 
+/// Part 5 — the REAL T-step runnability certificate (the `FhirCompileOverreach` fix).
+///
+/// Mirrors, in exact integer interval arithmetic, precisely what
+/// `convex_engine::convex_solve(x0, PublicLinearStep{a, τ}, prox_lo, prox_hi, T, t)` will do
+/// with the emitted spec, gate for gate:
+///
+/// * **(a) the noise-budget gate** — `iterations ≤ convex_engine::max_iterations_for_params`
+///   (the proven `G^T·B_fresh` ceiling on the deployed modulus; the engine checks this FIRST,
+///   before any ciphertext work) → else [`RejectKind::NoiseBudgetExceeded`];
+/// * **(b) the window gates** — every iteration's fused row evaluation
+///   `w_i = Σ_j (τ_den·[i=j] − τ_num·A_ij)·x_j`, in the ENGINE'S OWN accumulation order
+///   (diagonal first, then ascending `j`, zero coefficients skipped), window-checking every
+///   scaled term and every partial sum against the centered window `±(t−1)/2` — exactly the
+///   checks `convex_step::{signed_scale, signed_add}` will make → else
+///   [`RejectKind::WindowOverflow`] (which also covers the engine's `ConstantOverflow` i64 gate
+///   on fused coefficients and its `ScaleOverflow` on `τ_den^k`);
+/// * **(c) the certified-identity prox** — every iterate's interval must sit inside the
+///   `τ_den^k`-scaled prox box or the engine refuses `ProxNotCertifiedIdentity` at run time →
+///   else [`RejectKind::ProxNotCertifiedIdentity`] now, at compile.
+///
+/// The certificate is against `p.plaintext_modulus` and the DECLARED variable bounds: the
+/// program is certified runnable on an engine invoked with that plaintext modulus, for any
+/// initial `SignedCt` state whose declared intervals lie within each variable's bounds.
+fn certify_runnable(
+    p: &Program,
+    a: &[Vec<i64>],
+    tau_num: u64,
+    tau_den: u64,
+    prox_lo: i64,
+    prox_hi: i64,
+) -> Result<(), Rejection> {
+    // (a) The engine's proven noise ceiling — the same function convex_solve gates on.
+    let step = crate::convex_step::PublicLinearStep {
+        a: a.to_vec(),
+        tau_num,
+        tau_den,
+    };
+    let ceiling = crate::convex_engine::max_iterations_for_params(&step, p.plaintext_modulus);
+    if p.iterations > ceiling {
+        return Err(Rejection::new(
+            RejectKind::NoiseBudgetExceeded,
+            format!(
+                "T = {} exceeds the proven-safe noise ceiling {ceiling} for these params \
+                 (convex_engine::max_iterations_for_params: G^T·B_fresh vs the SafeNoise \
+                 margin); the engine would refuse this spec fail-closed",
+                p.iterations
+            ),
+        ));
+    }
+
+    let d = p.vars.len();
+    let half = i128::from((p.plaintext_modulus.max(3) - 1) / 2);
+    let win = |lo: i128, hi: i128, at: &dyn fmt::Display| -> Result<(), Rejection> {
+        if lo < -half || hi > half {
+            return Err(Rejection::new(
+                RejectKind::WindowOverflow,
+                format!(
+                    "{at}: interval [{lo}, {hi}] leaves the centered window ±{half} \
+                     (t = {}); the engine would refuse WindowExceeded",
+                    p.plaintext_modulus
+                ),
+            ));
+        }
+        Ok(())
+    };
+    let scale_exhausted = || {
+        Rejection::new(
+            RejectKind::WindowOverflow,
+            "scaled domain exhausted: tau_den^k or the scaled prox box leaves i128 \
+             (the engine would refuse ScaleOverflow)",
+        )
+    };
+    // The fused coefficient C_ij = τ_den·[i=j] − τ_num·A_ij, with the ENGINE'S i64 gate.
+    let fused = |i: usize, j: usize| -> Result<i128, Rejection> {
+        let diag: i128 = if i == j { i128::from(tau_den) } else { 0 };
+        let c = i128::from(tau_num)
+            .checked_mul(i128::from(a[i][j]))
+            .and_then(|prod| diag.checked_sub(prod))
+            .ok_or_else(|| {
+                Rejection::new(
+                    RejectKind::WindowOverflow,
+                    "fused coefficient tau_num·A_ij overflows i128 \
+                     (the engine would refuse ConstantOverflow)",
+                )
+            })?;
+        if i64::try_from(c).is_err() {
+            return Err(Rejection::new(
+                RejectKind::WindowOverflow,
+                format!(
+                    "fused coefficient C[{i}][{j}] = {c} overflows i64 \
+                     (the engine would refuse ConstantOverflow)"
+                ),
+            ));
+        }
+        Ok(c)
+    };
+    // Interval of interval × public scalar — exactly signed_scale's bookkeeping.
+    let scaled = |(lo, hi): (i128, i128), c: i128| -> (i128, i128) {
+        let (p1, p2) = (lo * c, hi * c);
+        (p1.min(p2), p1.max(p2))
+    };
+
+    // Initial intervals: the declared variable bounds (SignedCt::new's window gate, statically).
+    let mut x: Vec<(i128, i128)> = p
+        .vars
+        .iter()
+        .map(|v| (i128::from(v.lo), i128::from(v.hi)))
+        .collect();
+    for (i, &(lo, hi)) in x.iter().enumerate() {
+        win(
+            lo,
+            hi,
+            &format_args!("variable '{}' declared bounds", p.vars[i].name),
+        )?;
+    }
+
+    let mut scale: i128 = 1; // τ_den^k after k iterations — the engine's own counter
+    for k in 1..=p.iterations {
+        let mut w: Vec<(i128, i128)> = Vec::with_capacity(d);
+        for i in 0..d {
+            // acc = C_ii·x_i first (the fused diagonal), then += C_ij·x_j ascending — the
+            // engine's accumulation order, so every partial sum checked here is one the
+            // engine will actually form.
+            let mut acc = scaled(x[i], fused(i, i)?);
+            win(
+                acc.0,
+                acc.1,
+                &format_args!("iteration {k}, coord {i}: diagonal term"),
+            )?;
+            for (j, &xj) in x.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                let c = fused(i, j)?;
+                if c == 0 {
+                    continue;
+                }
+                let term = scaled(xj, c);
+                win(
+                    term.0,
+                    term.1,
+                    &format_args!("iteration {k}, coord {i}: term j={j}"),
+                )?;
+                acc = (acc.0 + term.0, acc.1 + term.1);
+                win(
+                    acc.0,
+                    acc.1,
+                    &format_args!("iteration {k}, coord {i}: partial sum through j={j}"),
+                )?;
+            }
+            w.push(acc);
+        }
+        scale = scale
+            .checked_mul(i128::from(tau_den))
+            .ok_or_else(scale_exhausted)?;
+        let box_lo = i128::from(prox_lo)
+            .checked_mul(scale)
+            .ok_or_else(scale_exhausted)?;
+        let box_hi = i128::from(prox_hi)
+            .checked_mul(scale)
+            .ok_or_else(scale_exhausted)?;
+        for (i, &(lo, hi)) in w.iter().enumerate() {
+            if lo < box_lo || hi > box_hi {
+                return Err(Rejection::new(
+                    RejectKind::ProxNotCertifiedIdentity,
+                    format!(
+                        "iteration {k}, coord {i} ('{}'): propagated interval [{lo}, {hi}] is \
+                         not inside the scaled prox box [{box_lo}, {box_hi}]; the clamp might \
+                         BIND, a binding clamp cannot be computed under additive encryption, \
+                         and the engine would refuse this trajectory at run time",
+                        p.vars[i].name
+                    ),
+                ));
+            }
+        }
+        x = w;
+    }
+    Ok(())
+}
+
 /// The six-part admissibility judgement: admissible IFF it compiles + passes the resource
 /// manifest. Returns the tier the program is well-typed at (Tier0 iff FHE-tractable, ...), or a
 /// NAMED rejection (the reject-list).
@@ -1297,33 +1508,11 @@ pub fn compile(p: &Program) -> Result<ClearingSpec, Rejection> {
         )
     };
 
-    // Part 5 — static no-wrap: the engine computes w_i = τ_den·x_i − τ_num·Σ_j A_ij·x_j on the
-    // τ_den-scaled lattice. Worst case |w_i| ≤ τ_den·X + ‖A‖∞·X ≤ 2·τ_den·X where X is the
-    // largest bound magnitude. Certify it fits the centered window (t−1)/2.
-    let x_mag: u128 = p
-        .vars
-        .iter()
-        .map(|v| {
-            i128::from(v.lo)
-                .unsigned_abs()
-                .max(i128::from(v.hi).unsigned_abs())
-        })
-        .max()
-        .unwrap_or(0)
-        .max(i128::from(prox_lo).unsigned_abs())
-        .max(i128::from(prox_hi).unsigned_abs());
-    let worst = 2u128 * u128::from(tau_den) * x_mag;
-    let half_window = u128::from((p.plaintext_modulus.max(3) - 1) / 2);
-    if worst > half_window {
-        return Err(Rejection::new(
-            RejectKind::WindowOverflow,
-            format!(
-                "scaled step worst case {worst} exceeds the centered window {half_window} \
-                 (t = {}); shrink bounds or the operator",
-                p.plaintext_modulus
-            ),
-        ));
-    }
+    // Part 5 — runnability: the noise ceiling (5a), the FULL T-step interval analysis (5b),
+    // and the certified-identity prox (5c) — the engine's gates, run at compile time, so
+    // admissible ⟹ convex_solve accepts the emitted spec. (The old check here was SINGLE-STEP
+    // and let the engine refuse admitted programs — the FhirCompileOverreach finding.)
+    certify_runnable(p, &a, tau_num, tau_den, prox_lo, prox_hi)?;
 
     // Part 6 — the leakage manifest.
     let leakage_manifest = check_leakage(p, d, nnz)?;
@@ -1594,7 +1783,11 @@ mod tests {
     #[test]
     fn cyclic_trigger_chain_rejects_and_lagged_chain_admits() {
         let mut p = rebalance(Visibility::Committed);
-        let mark = p.var("mark", Visibility::Public, 0, 1000);
+        // Mark bounds inside the prox hull [-100, 100]: the mark rides the engine as a state
+        // coordinate (row 0 ⇒ it scales by τ_den^k), and part 5c honestly refuses a mark whose
+        // scaled trajectory leaves the scaled box — so keep this program runnable; the test's
+        // subject is the trigger-cycle check, not the prox certificate.
+        let mark = p.var("mark", Visibility::Public, 0, 100);
         let t0 = p.trigger(Trigger {
             guard: AffineExpr::var(mark),
             lag_epochs: 1,
@@ -1722,5 +1915,268 @@ mod tests {
         // Part-5 static certificate uses exactly the engine's window.
         let worst = 2u128 * u128::from(spec.tau_den) * 100;
         assert!(worst <= u128::from(centered_window(spec.plaintext_modulus)));
+    }
+
+    // -----------------------------------------------------------------------
+    // The FhirCompileOverreach teeth: admissible ⟹ runnable, proven BOTH ways
+    // (compile rejects exactly what the engine refuses; what compile admits,
+    // the engine executes end to end).
+    // -----------------------------------------------------------------------
+    mod runnability_teeth {
+        use super::*;
+        use crate::additive::pick_params;
+        use crate::bfv_lean::{LeanCiphertext, FOLD_DEGREE, FOLD_MODULI};
+        use crate::convex_engine::{
+            convex_solve, max_iterations_for_params, reference_solve_scaled, solve_scale,
+            ConvexEngineError,
+        };
+        use crate::convex_step::{
+            center, encode_signed, ConvexStepError, PublicLinearStep, SignedCt,
+        };
+        use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey, SecretKey};
+        use fhe_traits::{
+            DeserializeParametrized, FheDecoder, FheDecrypter, FheEncoder, FheEncrypter, Serialize,
+        };
+        use rand_09::rngs::StdRng;
+        use rand_09::{Rng, SeedableRng};
+        use std::sync::Arc;
+
+        struct Fixture {
+            params: Arc<BfvParameters>,
+            sk: SecretKey,
+            pk: PublicKey,
+            rng: StdRng,
+            t: u64,
+        }
+
+        fn fixture(seed: u64) -> Fixture {
+            let params = pick_params(20);
+            assert_eq!(params.degree(), FOLD_DEGREE, "degree drifted");
+            assert_eq!(params.moduli(), &FOLD_MODULI, "RNS moduli drifted");
+            let t = params.plaintext();
+            let mut rng = StdRng::seed_from_u64(seed);
+            let sk = SecretKey::random(&params, &mut rng);
+            let pk = PublicKey::new(&sk, &mut rng);
+            Fixture {
+                params,
+                sk,
+                pk,
+                rng,
+                t,
+            }
+        }
+
+        fn encrypt_signed(fx: &mut Fixture, vals: &[i64], lo: i64, hi: i64) -> SignedCt {
+            let t = fx.t;
+            let slots: Vec<u64> = vals.iter().map(|&v| encode_signed(v, t)).collect();
+            let pt =
+                Plaintext::try_encode(&slots, Encoding::simd(), &fx.params).expect("simd encode");
+            let ct = fx.pk.try_encrypt(&pt, &mut fx.rng).expect("pk encrypt");
+            let lean = LeanCiphertext::from_fhe_bytes(
+                &ct.to_bytes(),
+                fx.params.moduli(),
+                fx.params.degree(),
+                0,
+            )
+            .expect("parse fhe.rs ciphertext");
+            SignedCt::new(lean, lo, hi, t).expect("interval inside the window")
+        }
+
+        fn decrypt_centered(fx: &Fixture, s: &SignedCt, k: usize) -> Vec<i64> {
+            let ct = Ciphertext::from_bytes(&s.ciphertext().to_fhe_bytes(), &fx.params)
+                .expect("fhe.rs accepts our bytes");
+            let pt = fx.sk.try_decrypt(&ct).expect("fhe.rs decrypt");
+            let v = Vec::<u64>::try_decode(&pt, Encoding::simd()).expect("simd decode");
+            v[..k].iter().map(|&m| center(m, fx.t)).collect()
+        }
+
+        fn step_of(spec: &ClearingSpec) -> PublicLinearStep {
+            PublicLinearStep {
+                a: spec.a.clone(),
+                tau_num: spec.tau_num,
+                tau_den: spec.tau_den,
+            }
+        }
+
+        /// Encrypt one SignedCt per program variable, every slot a random value
+        /// inside that variable's declared bounds (the certificate's premise).
+        fn encrypt_state(
+            fx: &mut Fixture,
+            p: &Program,
+            seed: u64,
+        ) -> (Vec<Vec<i64>>, Vec<SignedCt>) {
+            let n = FOLD_DEGREE;
+            let mut gen = StdRng::seed_from_u64(seed);
+            let mut plain = Vec::new();
+            let mut state = Vec::new();
+            for d in p.vars.clone() {
+                let vals: Vec<i64> = (0..n).map(|_| gen.random_range(d.lo..=d.hi)).collect();
+                state.push(encrypt_signed(fx, &vals, d.lo, d.hi));
+                plain.push(vals);
+            }
+            (plain, state)
+        }
+
+        /// THE CANONICAL OVERREACH TOOTH: the rebalance at `iterations = 256` sits INSIDE the
+        /// resource budget (`MAX_ITERATIONS = 256`) and passed the OLD single-step no-wrap —
+        /// it was wrongly ADMITTED before this fix, while the engine's proven noise ceiling
+        /// for the very spec compile emits is far below 256. Now compile consults that ceiling
+        /// and rejects, NAMED as the noise budget specifically (not some other gate) — that is
+        /// what the ceiling-check mutation flips RED.
+        #[test]
+        fn rebalance_at_256_iterations_is_rejected_at_compile() {
+            let mut p = rebalance(Visibility::Committed);
+            p.with_iterations(256);
+            assert!(256 <= MAX_ITERATIONS, "premise: inside the resource budget");
+            // The old part-5 single-step bound would have passed too: 2·τ_den·X = 600 « (t−1)/2.
+            let r = admissible(&p);
+            assert_eq!(
+                kind(&r),
+                RejectKind::NoiseBudgetExceeded,
+                "T=256 must be refused by the NOISE ceiling gate specifically: {r:?}"
+            );
+            // Engine agreement: the ceiling convex_solve itself would gate on is < 256, so the
+            // old compile was emitting a spec the engine refuses — the exact overreach.
+            let step = PublicLinearStep {
+                a: vec![vec![2, 1], vec![1, 2]], // the rebalance spec's pinned operator
+                tau_num: 1,
+                tau_den: 3,
+            };
+            let ceiling = max_iterations_for_params(&step, DEFAULT_PLAINTEXT_MODULUS);
+            assert!(
+                (1..256).contains(&ceiling),
+                "premise drifted: ceiling {ceiling} must be a real bound below 256"
+            );
+            // And the rejection names the ceiling (actionable, not a bare no).
+            let msg = r.unwrap_err().0;
+            assert!(
+                msg.contains(&format!("ceiling {ceiling}")),
+                "rejection must name the proven ceiling: {msg}"
+            );
+        }
+
+        /// THE T-STEP WINDOW TOOTH, boundary-exact against the live engine: at the deployed
+        /// t = 1_032_193 the rebalance trajectory doubles per iteration (C = [[1,−1],[−1,1]]),
+        /// so T = 12 fits the centered window and T = 13 does not — while the OLD single-step
+        /// check (2·τ_den·X = 600 ≤ 516096) passed at ANY T. compile and convex_solve must
+        /// agree on BOTH sides of the boundary.
+        #[test]
+        fn t_step_window_certificate_matches_the_engine_on_both_sides() {
+            let mut fx = fixture(0xF1A0);
+            // T = 13: compile refuses (window), and the engine refuses the same trajectory.
+            let mut p13 = rebalance(Visibility::Committed);
+            p13.with_plaintext_modulus(fx.t).with_iterations(13);
+            assert_eq!(
+                kind(&admissible(&p13)),
+                RejectKind::WindowOverflow,
+                "T=13 must fail the T-step window analysis (the old single-step check passed it)"
+            );
+            // T = 12: compile certifies…
+            let mut p12 = rebalance(Visibility::Committed);
+            p12.with_plaintext_modulus(fx.t).with_iterations(12);
+            let spec = compile(&p12).expect("T=12 is certifiable");
+            // …and the engine ACCEPTS the emitted spec (admissible ⟹ runnable)…
+            let (_, state) = encrypt_state(&mut fx, &p12, 0xB0B0);
+            let step = step_of(&spec);
+            convex_solve(
+                &state,
+                &step,
+                spec.prox_lo,
+                spec.prox_hi,
+                spec.iterations,
+                fx.t,
+            )
+            .expect("the engine must accept what compile certified");
+            // …while ONE more iteration on the same spec is refused by the engine's own window
+            // gate — compile's boundary is the engine's boundary, not a coarser one.
+            match convex_solve(&state, &step, spec.prox_lo, spec.prox_hi, 13, fx.t) {
+                Err(ConvexEngineError::Step(ConvexStepError::WindowExceeded { .. })) => {}
+                other => panic!("engine must refuse T=13 with WindowExceeded, got {other:?}"),
+            }
+        }
+
+        /// THE PROX TOOTH: a box the trajectory's interval cannot be certified inside is
+        /// rejected AT COMPILE (named), and the engine confirms it would have refused the
+        /// same program at run time — the old compile admitted it and let the engine bounce it.
+        #[test]
+        fn prox_that_could_bind_is_rejected_at_compile_and_the_engine_agrees() {
+            let mut fx = fixture(0xF1A1);
+            // The rebalance with TIGHT boxes [0, 10]: after one step w = x − y ∈ [−200, 200]
+            // ⊄ 3·[0, 10] — the clamp might bind.
+            let mut p = Program::new(Phase::Clear);
+            let x = p.var("x", Visibility::Committed, -100, 100);
+            let y = p.var("y", Visibility::Committed, -100, 100);
+            p.minimize(Expr::Sum(vec![
+                Expr::Square(AffineExpr::var(x)),
+                Expr::Square(AffineExpr::var(y)),
+            ]));
+            p.subject_to(Constraint::EqZero(
+                AffineExpr::var(x).term(Coeff::Public(1), y),
+            ));
+            p.subject_to(Constraint::Box {
+                var: x,
+                lo: 0,
+                hi: 10,
+            });
+            p.subject_to(Constraint::Box {
+                var: y,
+                lo: 0,
+                hi: 10,
+            });
+            p.with_plaintext_modulus(fx.t).with_iterations(2);
+            assert_eq!(kind(&admissible(&p)), RejectKind::ProxNotCertifiedIdentity);
+
+            // Engine agreement: same operator, same tight box → ProxNotCertifiedIdentity at
+            // iteration 1, exactly what compile predicted.
+            let spec = compile(&rebalance(Visibility::Committed)).unwrap(); // the loose sibling
+            let (_, state) = encrypt_state(&mut fx, &p, 0xB0B1);
+            match convex_solve(&state, &step_of(&spec), 0, 10, 2, fx.t) {
+                Err(ConvexEngineError::ProxNotCertifiedIdentity { iteration: 1, .. }) => {}
+                other => panic!("engine must refuse the binding clamp, got {other:?}"),
+            }
+        }
+
+        /// THE POSITIVE HALF (the finding's other jaw): a modest-T program COMPILES and the
+        /// emitted spec runs END TO END through the real engine — encrypt within the declared
+        /// bounds, convex_solve accepts, and every one of the 4096 slot-instances decrypts
+        /// EXACTLY (BFV is exact, no tolerance) to the plaintext T-iteration reference.
+        #[test]
+        fn modest_t_spec_runs_end_to_end_and_matches_the_plaintext_reference() {
+            let mut fx = fixture(0xF1A2);
+            let mut p = rebalance(Visibility::Committed);
+            p.with_plaintext_modulus(fx.t).with_iterations(5);
+            let tier = admissible(&p).expect("modest-T rebalance is admissible");
+            assert_eq!(tier, Tier::Tier0Dark);
+            let spec = compile(&p).expect("admissible ⟹ compiles");
+
+            let (plain, state) = encrypt_state(&mut fx, &p, 0xB0B2);
+            let step = step_of(&spec);
+            let out = convex_solve(
+                &state,
+                &step,
+                spec.prox_lo,
+                spec.prox_hi,
+                spec.iterations,
+                fx.t,
+            )
+            .expect("admissible ⟹ the engine accepts the emitted spec");
+
+            let scale = solve_scale(&step, spec.iterations).expect("scale fits");
+            assert_eq!(scale, 243); // τ_den^T = 3^5
+            let n = FOLD_DEGREE;
+            let dec: Vec<Vec<i64>> = out.iter().map(|s| decrypt_centered(&fx, s, n)).collect();
+            for s in 0..n {
+                let x0 = [plain[0][s], plain[1][s]];
+                let want =
+                    reference_solve_scaled(&x0, &step, spec.prox_lo, spec.prox_hi, spec.iterations);
+                for i in 0..2 {
+                    assert_eq!(
+                        i128::from(dec[i][s]),
+                        want[i],
+                        "FHE x_T diverged from the plaintext reference at slot {s}, coord {i}"
+                    );
+                }
+            }
+        }
     }
 }
