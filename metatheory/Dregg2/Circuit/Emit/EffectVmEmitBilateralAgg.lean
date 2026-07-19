@@ -25,8 +25,11 @@ aggregation reads it without any v1 effect-vm dependency.
 
 ## The constraint families (mirrors the Rust AIR, now law-#1)
 
-* **CG-2** (turn-identity agreement): each row's `[turn_hash, effects_hash_global, actor_nonce,
-  prev_receipt]` equals the outer PI's. → per-row `gate` (col − pi) equalities.
+* **CG-2** (turn-identity agreement): the FIRST and LAST rows' `[turn_hash, effects_hash_global,
+  actor_nonce, prev_receipt]` equal the outer PI's — boundary `piBinding`s ONLY. Middle rows'
+  identity slots are in-AIR UNCONSTRAINED in this v2 form (`BilateralAggregationCompact.gapTrace`
+  exhibits a v2-accepted bundle whose middle cell carries a forged turn identity); the staged E8
+  v3 (`bilateralAggDescriptorV3`) closes the gap with per-row identity-carry `windowGate`s.
 * **CG-3** (schedule replay): each row's 7 counts + 7×4 roots equal the per-cell `expected_*`
   columns the prover populated from the schedule. → per-row `gate` (col − col) equalities.
 * **CG-4** (agent accounting): `is_agent ∈ {0,1}`, `consistent ∈ {0,1}`, padding rows
@@ -138,13 +141,17 @@ def colEqCol (a b : Nat) : VmConstraint2 :=
 /-- CG-3 row-local equality `local[a] == local[b]` (a `gate` `a - b = 0`). -/
 def cg3Eq (a b : Nat) : VmConstraint2 := colEqCol a b
 
-/-- CG-2 first/last PI binding `local[col] == pi[k]` on the boundary `row`. The Rust AIR binds
-CG-2 on EVERY row; here we pin the schedule's turn-identity fields to the outer PI on BOTH
-boundary rows (first AND last), which — combined with each row carrying the same value via the
-WR's standalone schedule block — gives the same agreement guarantee for the bundle the AIR's
-per-row equality does (the off-AIR verifier additionally re-derives the outer PI from the
-canonical Turn, `verify_aggregated_bundle` step 2). A per-row PI gate is the remaining grammar
-nicety (the base `piBinding` is boundary-only); tracked in the module header. -/
+/-- CG-2 first/last PI binding `local[col] == pi[k]` on the boundary `row`. The retired hand-AIR
+bound CG-2 on EVERY row; this emitted v2 pins the schedule's turn-identity fields to the outer PI
+on the TWO boundary rows only (the base `piBinding` grammar is boundary-only), which is STRICTLY
+WEAKER in-AIR: a middle row's identity slots are unconstrained, and
+`BilateralAggregationCompact.gapTrace_satisfies` EXHIBITS a `Satisfied2` bundle whose middle cell
+carries a forged turn identity. (The off-AIR verifier re-derives the outer PI from the canonical
+Turn — `verify_aggregated_bundle` step 2 — which is real but lives outside the proof.) The staged
+E8 compact v3 closes this in-circuit: 13 identity-carry `windowGate`s pin the slots row-constant,
+so first-row binding + carry forces EVERY row onto the published identity
+(`BilateralAggregationCompact.compact_identity_every_row`); the strengthening is machine-checked
+byte-safe (`expand_satisfies` / `contract_preserves`) ahead of the bundled regen cutover. -/
 def cg2PiBind (row : VmRow) (col k : Nat) : VmConstraint2 :=
   .base (.piBinding row col k)
 

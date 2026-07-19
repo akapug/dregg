@@ -9952,3 +9952,274 @@ red at HEAD — its fixture asserts `desc.trace_width == GRAD_ROT_WIDTH` (1647) 
 the committed bare-V3 transfer member (1702 wide, 50 PIs, avail+refuse-welded). Same class as the
 HORIZONLOG bare-V3 stratum entry's "FIXTURES pinned to bare geometry". The E2 probe already carries
 the geometry-neutral form (pad from `avail_pad_for_descriptor_name`, prover-side graduation).
+
+## 2026-07-19 — E4 MEASURED (byte-safe): the FRI re-grid at post-S2 / mocked-floor widths; the (lb,q) flip STAGED for the Epoch-2 FS epoch
+
+Backlog E4 (rank 4, the largest remaining wire lever), measurement half done with NO regen, NO FS
+re-pin, NO descriptor bytes. Harness: `circuit-prove/tests/fri_regrid_post_s2_measure.rs` (+
+additive `create_config_with_fri_full` in `circuit/src/plonky3_prover.rs` exposing plonky3's
+`commit_proof_of_work_bits`; `create_config_with_fri` delegates with 0 — no shipped config
+changes). Shapes are MOCKED synthetic-width fixtures (A post-S2 main proxy W=1704 h=2^6; B
+Epoch-2 floor cell-proxy W=1293; C post-S2 total-cell proxy W=6162), all-zero traces under
+always-satisfied degree-2 gates — measurement geometry, NOT authored AIR, ships nowhere.
+
+**LEAN-LEDGER VERDICTS** (compiled `dregg_fri_ledger` at the member statement, log_d0 = 8+lb,
+ext 4, arity 2^3, m=7 — not Rust arithmetic; the harness contains no soundness formula):
+deployed (6,19,16) perFold 109 / johnson 73 / capacity 130 / commit 67 · (8,15,16) 105/76/136/60
+· (8,14,16) 105/72/128/60 — capacity EXACTLY at the 128 drift margin, zero headroom. The lfpl-4
+and commit-pow-8 twins read column-identical ledgers (both knobs ledger-invisible: lfpl enters no
+column; commit-pow is the NAMED UNPRICED residual). **ε_C finding:** lb 6→8 costs the member
+statement 7 commit-phase bits (67→60) — the cost the Johnson/capacity closed forms cannot see;
+and perFold falls 109→105, BELOW the current 109 floor (|Good| grows with |κ|²).
+
+**MEASURED** (release, 21 proves, tamper-reject polarity per shape): shape A bytes
+(8,15,16) −11.3% · (8,14,16) −16.0% · (8,15)+lfpl4 −17.4%; B: −10.6/−15.5/−17.8%; C (prover
+cost): prove 602ms→2.4s ≈ **4.0× prover time at lb 8** (A brackets it at 3.9×); verify time
+mildly DROPS (fewer queries). **lfpl=4 alone is −5.9% (A) / −6.9% (B) bytes at zero ledger
+movement and zero prove-time cost** — the free-est lever found, but still FS-epoch class (proof
+shape changes). commit-pow 8 costs +8 bytes and up to ~2× prove; it buys unpriced ε_C grinding
+headroom only. Projected onto the backlog's 151 KB: (8,15) → ~134 KB; (8,14) → ~127 KB;
+(8,15)+lfpl4 → ~125 KB — the 115–125 optimistic end needs the lfpl stack or (8,14)'s
+zero-headroom capacity, chosen eyes-open.
+
+**STAGED RECIPE for the E4 cutover (regen-class, HELD — must ride the Epoch-2 FS epoch the
+bundle already spends; a lone flip is a second FS flag-day):**
+1. Flip `circuit/src/descriptor_ir2.rs::IR2_FRI_LOG_BLOWUP` 6→8 + `IR2_FRI_NUM_QUERIES` 19→15
+   (or 14: capacity sits at EXACTLY the 128 drift margin), optionally `IR2_FRI_LOG_FINAL_POLY_LEN`
+   0→4 (measured free bytes; same FS epoch).
+2. Re-derive the params-gate floors at the Lean lb-8 reading:
+   `circuit-prove/tests/fri_params_soundness_budget.rs` JOHNSON/PER_FOLD/CAPACITY pins move via
+   `dregg_fri_ledger`; perFold DROPS below the current 109 floor — a documented re-pin, not a
+   relax-in-place.
+3. Extend the hΦ fiber discharge with the (arity 8, lb 8) instance:
+   `metatheory/Dregg2/Circuit/FriArityFiberDischarge.lean` `friSetupK` k=3,b=8 (window
+   `dOut ≥ |L| − 2n`) — lb 8 is NOT among the configs discharged today; without it the new
+   perFold column rides an undischarged hypothesis.
+4. Price ε_C at the new statement in the cutover commit: commit column 67→60; compensating
+   levers are ext_deg (+~31 bits/degree) or the unpriced commit-pow knob — decide and NAME the
+   posture.
+5. Regen: descriptor emit + registry TSVs + VK re-pin + apex re-verify INSIDE the bundled
+   Epoch-2 cutover; update `docs/VK-REGEN-LOG.md`; `fri_regrid_post_s2_measure`'s always-on test
+   then goes red on its deployed-consts baseline pin until the candidate table is re-grounded
+   (deliberate tripwire). Budget the measured ~4× prover time before choosing lb 8 for the
+   recursion wrap path — it re-proves every fold.
+
+## 2026-07-19 — Dark Bazaar N4K4: private-order, wide-root hiding proof beachhead
+
+Landed the first fixed clearing family whose order side/limit/quantity are PRIVATE WITNESS rather
+than public Cert-F weights: `Market/DarkBazaarPrivateDescriptor.lean` + exact emitted
+`by-name/dark-bazaar-private-n4k4.json` + `circuit-prove::dark_bazaar_private`. Fixed product shape is
+`N<=4` (canonical zero padding), `K=4`, quantity `<16`; public statement is exactly 12 felts:
+`(session,rule,orderRoot[0..8),p*,V*)`. The source root is no scalar-felt toy: one
+domain-separated full-arity Poseidon2 permutation absorbs the injective 28-bit book pack plus EIGHT
+canonical blind felts and four explicit zero framing lanes, then exposes ALL eight output lanes
+(~248-bit digest/~124-bit collision work), with no narrow intermediate carrier. Arity 16 is
+load-bearing: it makes the deployed chip seed every input lane. Host `b>=p` and `session>=p` refuse
+before field reduction.
+
+Lean closes the executable semantic checker (`check_sound`: exact deterministic volume argmax,
+lowest-price strict-tie tooth, root/rule/output tamper guards), canonical blind semantics, and the
+honest collision boundary (`two_distinct_openings_yield_root_collision`, never false Poseidon
+injectivity). `darkBazaarPrivateN4K4_emitted_air_sound` is the real `Satisfied2` extraction rung: for
+ARBITRARY external PIs, canonical cells, and `ChipTableSoundN`, every emitted gate vanishes mod
+BabyBear, every PI pin binds the external vector, and the full root8 equals the genuine wide
+permutation output. All are `#assert_all_clean`-pinned.
+
+Privacy is a distinct API: `prove_zk`/`verify_zk` use OS-seeded `HidingFriPcs` (salted leaves,
+random trace rows/codewords); `prove_non_hiding` is explicitly named compatibility/debug only. Teeth
+pin random commitment + per-instance random openings, nondeterministic re-proofs, honest verification,
+private-order mutation binding, and forged root/p*/V* refusal. Audience is explicit: shielded from
+verifier/public, NOT from the plaintext trace-building prover; Tier-0 house blindness still needs the
+FHE/MPC producer/source-relation composition. `prove_orders_zk` also rejection-samples the eight
+canonical source-commitment blinds from OS entropy; a distributed producer may inject jointly sampled
+limbs via the explicit-with-blinding constructor.
+
+NARROW GATES: `lake env lean Market/DarkBazaarPrivateDescriptor.lean` GREEN (8 kernel-clean
+keystones); `lake build Market.DarkBazaarPrivateDescriptor` GREEN; fresh `EmitByName` payload byte-
+equal to the checked-in artifact; `check-no-degraded-felt.sh` GREEN; persvati
+`cargo nextest run -p dregg-circuit-prove --lib dark_bazaar_private` GREEN 3/3 (hiding/tamper test
+0.347 s after build). No default-workspace or heavy gauntlet was burned in the edit loop.
+
+**NAMED CENTRAL RESIDUAL — `DarkBazaarDescriptorToAccepts`:** finish the finite fixed-shape
+`Satisfied2 → Accepts` integer lift: binary/one-hot decode, modular-to-integer no-wrap for the bounded
+4/6-bit and aggregate columns, then identify descriptor `D/S/V/select` with `privateBook` and the Lean
+`crossing`. Runtime gates and real hiding proofs exist, but do not call the whole Lean functional chain
+closed until this theorem lands. After that: per-order allocation/settlement + ledger weld, authenticated
+source ingestion, and no-single-viewer FHE/MPC composition; then widen the product family. Authorized
+repo-wide provenance/VK regeneration remains an epoch/install act — this WIP lane does not silently
+perform it. Durable detail: `docs/deos/DARK-BAZAAR-PRIVATE-N4K4.md`.
+
+## 2026-07-19 — Private preference N4K4: reusable game/vote winner-only hiding receipt
+
+Landed `Dregg2/Games/PrivatePreferenceDescriptor.lean` + exact emitted
+`by-name/private-preference-n4k4.json` + `circuit-prove::private_preference`. The fixed family has
+four participants, four options, and a private two-bit score for every participant/option pair.
+Public output is exactly 11 felts: `(session,rule,ballotRoot[0..8),winner)`; aggregate totals and
+winning score stay private. The two faithful 16-bit score packs and all eight canonical blind felts
+enter one full-arity-16 Poseidon permutation, with all eight output lanes public. No narrow carrier.
+
+Lean proves injective ballot/two-pack encoding, maximum optimality, strict dominance over every
+lower option, uniqueness of the lowest-index maximizing winner, exact checker soundness, and the
+distinct-opening→wide-root-collision boundary. `privatePreferenceN4K4_emitted_air_sound` extracts
+every gate, arbitrary external PI binding, and genuine chip output from actual `Satisfied2`.
+`privatePreferenceN4K4_private_bits_decoded` further proves every private score/selector/difference/
+slack bit is honest integer `0/1` from canonical `Satisfied2`, using BabyBear primality; and
+`semantic_gate_exact` closes the generic complete-residual no-wrap→exact-integer rung;
+`score_recompose_exact`/`four_bit_recompose_exact` close every score/difference/slack recompose over
+the integers. Thirteen keystones are kernel-clean. The AIR recomputes all 16 score decompositions, totals, one-hot select,
+global max, and lowest-index slack. `HidingFriPcs` APIs rejection-sample the source blind, randomize
+every proof, verify winner-only statements, and refuse changed roots/winners. A changed private score
+that preserves the winner changes the root and cannot verify against the old statement.
+
+Integration is additive without a bad dependency inversion: `verify_decision_zk` returns a
+`VerifiedDecision` for direct mapping to `PartyFork.paths`, privacy-voting choice order,
+matchmaking candidates, or quest branches. `starbridge-privacy-voting` remains wasm-clean and
+`dreggnet-party` does not import the heavy prover. The host must weld receipt session/root to its
+poll/source before committing the existing application turn; eligibility, quorum, one-vote, and
+inclusion remain independent app/kernel teeth.
+
+NARROW GATES: module Lean check/build GREEN; fresh emitter SHA
+`e7e2c7dbf4d34b104f2478b4c745a399936b5b127afa4f8b793e9ef177cc902d` equals disk;
+faithful-commitment scan GREEN; persvati focused nextest GREEN 3/3 (225 skipped, hiding test 0.204s
+after build). No workspace/heavy gauntlet was run.
+
+**NAMED RESIDUAL — `PrivatePreferenceDescriptorToAccepts`:** bithood and all 2/4-bit recompositions
+are closed. Finish the bounded total/pack/select/max affine equalities, identify the four aggregate
+columns and unique selector/root with the semantic witness, then use the already-proved
+`winner_eq_of_optimal_and_lowest` endpoint. Afterward weld authenticated/censorship-resistant ballot
+ingestion to the committed root, add Tier-0 FHE/MPC production, and widen N/K/rule families. Current
+privacy is Tier 1: hidden from proof consumers, visible to the one trace-building process. Authorized
+provenance/VK installation remains a separate epoch act. Durable detail:
+`docs/deos/PRIVATE-PREFERENCE-N4K4.md`.
+
+## 2026-07-19 — E11-prodread RESOLVED (byte-safe census): pow-14 `create_recursion_config` is NOT live-necessary; E11 re-scopes as an ACCEPT-SURFACE RETIREMENT
+
+The suspended E11 lever (backlog rank 11, HELD-VERIFICATION since the 07-19 grep-census refutation)
+is un-stuck by a full-depth production-path read at HEAD `f4e7f871f`. Zero edits to code; zero
+descriptor/VK bytes; verdict + staged recipe only.
+
+**VERDICT: the pow-14 (lb 3 / 38q) engine is retire-able on the live path.** The live
+finalized-turn prove/verify path never touches it: node commit pipeline
+(`node/src/turn_proving.rs:1082`) proves ROTATED, and the rotated tree + joint aggregation run
+wall-to-wall at `ir2_leaf_wrap_config()` = (6, 19q, pow 16, arity 2)
+(`ivc_turn_chain.rs:941-957/2173/2602/2913`; `joint_turn_aggregation.rs` HEAD
+`:780/:908/:1047/:1154`; GPU dispatch `create_gpu_ir2_leaf_wrap_config()` at
+`gpu_backend.rs:4522/:4583`); the root verifies via
+`verify_recursive_batch_proof_with_config(root, &ir2_leaf_wrap_config())`
+(`ivc_turn_chain.rs:2661/:3898`).
+
+**The 07-19 refutation's three "production-live" edges dissolve under reading (grep-census cut the
+wrong way):** (1) `gpu_backend.rs:4459` feeds `create_recursion_config()` into a parameter named
+`_cpu_config` — IGNORED, the body is a pure postcard re-tag (`:4468-4484`), and the wrapper's only
+callers are `tests/gpu_recursion_fold_e2e.rs:159/:357`; (2) the pow-14-defaulted inner-FRI
+wrappers' sole non-test reachability is the Golden-v1 witness-bundle chain, whose PRODUCER is
+caller-less — `from_components_with_compression(.., true)` / `from_components_strict_recursive`
+have ZERO callers (the one caller passes `false`, `turn/src/witnessed_receipt.rs:403`), the demo
+fabricator `cmd_make_recursive_witness` is deleted, and the v1 standalone effect-vm material is
+hard-retired (`node/src/mcp/proof.rs:431-440` unconditionally errors); (3) the `mcp/proof.rs`
+"reference" to `recursive_witness_bundle` is one stale comment (`:426`) — zero code references at
+HEAD. Remaining pow-14 reality: verify-only ACCEPT surfaces for a producer-less artifact class
+(`dregg-verifier scope-recursive` → `replay_chain_recursive` → `verify_recursive_proof_variant` →
+`verify_recursive_batch_proof` default; exported-but-uncalled `verify_recursive_replay`, whose
+named producer type `RecursiveIvcStep` does not exist in the tree; the `cross_fed.rs:601-614`
+passthrough, always `None` in production), the config-inert gpu arg, and tests — where the pow-14
+config's live role is ADVERSARIAL fixture (the `ivc_turn_chain_rotated.rs:617-673` VK-pin tooth
+mints the FOREIGN proof production must REFUSE). Its inner AIR (`EffectVmShapeAir`) is
+self-described NON-soundness-equivalent (`recursive_witness_bundle.rs:51-58`), so retiring the
+acceptance is soundness-POSITIVE.
+
+**Why the HELD was half-right anyway:** until the accept surfaces are removed, a field verifier
+still ACCEPTS proofs at the 71-Johnson knobs — re-pinning the ledger gate over "surviving configs"
+BEFORE removing them would launder that gap. The honest resolution is the one the backlog now
+carries: surfaces and re-pin in ONE cutover, never split.
+
+**STAGED RECIPE for the E11 cutover (accept-surface retirement — NOT a regen; no descriptor,
+member-VK, or staged-TSV bytes move; `compute_recursive_vk_hash` is its own VK universe and dies
+with the stratum):**
+1. Delete `circuit-prove/src/recursive_witness_bundle.rs` (590) + `effect_vm_p3_air.rs` (296) and
+   their `lib.rs` mods; turn-side: `produce_recursive_variant`, both compression constructors
+   (collapse to `from_components`), `RecursiveProofVariant`; wire decision on
+   `WitnessBundle.recursive_proof`: keep-field-reject-`Some` (postcard/witness_hash-stable) vs
+   remove (shape change) — decide at cutover.
+2. Verifier-side: remove `scope-recursive` (main.rs:49/:369), `verify_recursive_replay`,
+   `verify_recursive_replay_from_bundle`, `replay_chain_recursive`, `RecursiveReplayVerdict`,
+   `ReplayRecursiveProofVariant`, the `cross_fed.rs` transcode arm; demo: drop scope-recursive
+   checks in `run.sh`/`charlie.py` + the retained dead DTO.
+3. `plonky3_recursion_impl.rs`: delete `create_recursion_config` + the RECURSION_FRI_* pow-14
+   knob consts + default-config wrappers (`prove_inner_for_air`, `verify_inner_for_air`,
+   `prove_recursive_layer_for_air`, `verify_recursive_batch_proof`, `verify_recursive_layer{,_bytes}`,
+   `prove_recursive_membership`), keeping the `_with_config` forms; `gpu_backend.rs`: delete
+   `create_gpu_recursion_config` (:3970-3986) + `gpu_recursion_proof_to_cpu` default wrapper +
+   the ignored-arg `_with_config` (fold callers onto `_with_lookups`). Retarget rejection-teeth
+   tests (VK-pin tooth, `descriptor_leaf_recursion`, smoke) onto a TEST-LOCAL
+   `create_recursion_config_with_fri(3,0,1,38,0,14)` — they need A foreign config, not THE
+   shipped one.
+4. Gate re-pin IN THE SAME COMMIT: `fri_params_soundness_budget.rs` `shipped()` 7→6;
+   `DEPLOYED_JOHNSON_FLOOR` 71→73 and capacity floor 128→130 READ FROM the Lean ledger
+   (`dregg_fri_ledger`), not asserted; commit-column weakest moves off `recursionConfig`. Lean:
+   move `FriLedgerSound.recursionConfig` theorems (`:385-389/:696/:714-716`) to a
+   retired/historical section (they stay `#assert_axioms`-clean; the config is no longer
+   "shipped"). Update `circuit/src/lib.rs` ledger commentary (`:65/:89/:106`).
+5. Canary: a stored Golden-v1 fixture chain (mint one pre-deletion) flips VERIFIED → REJECTED /
+   unknown-subcommand; whole-tree build + full `cargo test -p dregg-circuit-prove -p dregg-verifier
+   -p dregg-turn`; `cv`-audit that no new caller of the deleted names appeared between census and
+   cutover (the tree drifts hard).
+Payoff: gate weakest-column un-pin (Johnson 71→73, capacity zero-headroom-128→130, commit 61→next),
+~900-line TCB shrink, one fewer non-soundness-equivalent accept surface. 0 proof bytes (never a
+wire lever). Independent of the Epoch-2 regen bundle.
+
+## 2026-07-19 — E8 PROVEN (byte-safe): bilateral-agg expected-block delete, width 87→52 — the strengthening is machine-checked; cutover STAGED for the bundled regen window
+
+Backlog E8 (rank 8), soundness core done with NO regen, NO descriptor bytes, NO VK movement.
+`metatheory/Dregg2/Circuit/Emit/BilateralAggregationCompact.lean` (rooted in `Dregg2.lean`;
+rooting it also pulls the previously ORPHANED BilateralAggregationEmit/Refine/Rung2 — the v2 full
+byte-pin, the Rung-1 bridge, and the no-double-spend discharge — into the CI-built closure).
+
+**PROVEN, all `#assert_axioms`-clean** against the deployed acceptance predicate `Satisfied2`:
+`bilateralAggDescriptorV3` (width **52**, 48 constraints, outer PI 23 UNCHANGED; the 35
+prover-filled `sched[13+k]==expected[49+k]` self-check gates and their 35 dead columns DELETED;
+13 NEW identity-carry `windowGate`s pin the turn-identity slots row-constant) with:
+- `expand_satisfies` — the S2/E1-pattern compaction bridge: any v3-satisfying trace expands
+  (same outer PI; expected := schedule copy, the canonical witness of "nothing pins the expected
+  block") to FULL `Satisfied2` of the ORIGINAL v2 descriptor. v3 accepts a SUBSET of v2.
+- `contract_preserves` — every honest v2 witness (identity-row-constant, which
+  `build_aggregation_trace_v2` produces by construction incl. the padding-row identity mirror)
+  contracts to a v3 witness; `witV3` (the Rung-1 honest witness through the bridge) inhabits.
+- STRICT strengthening: `gapTrace_satisfies` — v2 ACCEPTS a 3-cell bundle whose MIDDLE cell
+  carries a forged `turn_hash[0]=7` (middle-row identity is in-AIR unconstrained in v2) —
+  `gapTrace_contract_not_v3` + `gap_no_v3_preimage` — v3 REFUSES it and nothing v3 accepts
+  expands to it (`contractT ∘ expandT = id`). Positive face `compact_identity_every_row`: under
+  v3 EVERY row's 13 identity slots equal the outer PI (exact over ℤ under the canonicality
+  envelope). Crowns carried through the bridge: `compact_refines` (BundleAggregated) and
+  `compact_unique_agent` (UniqueAgent — the cross-federation no-double-spend), `badTraceC` bites.
+- The FULL v3 wire string is `#guard`-pinned in the module BEFORE the file exists — flag day is
+  a mechanical re-emit against an already-pinned golden.
+Also landed byte-safe: `EffectVmEmitBilateralAgg.lean` header + `cg2PiBind` docstring no longer
+claim the boundary bindings give "the same agreement guarantee as per-row equality" (they do
+not; `gapTrace` is the exhibit) — v2's `#guard` byte-pin rebuilt green, bytes untouched.
+
+**STAGED RECIPE for the E8 cutover (regen-class, HELD — rides the bundled regen window with
+S2/E1; independent of the map/IMT/rotation cluster and of E9's joint_turn file):**
+1. Emit `circuit/descriptors/dregg-bilateral-aggregation-v3.json` := `emitVmJson2
+   bilateralAggDescriptorV3` (one-line driver or the `scripts/emit_descriptors.py` bilateral
+   leg); MUST byte-equal the `#guard` pin in `BilateralAggregationCompact.lean` §2.
+2. Rust twin (`circuit/src/bilateral_aggregation_air.rs`): `include_str!` the v3 file +
+   `BILATERAL_AGGREGATION_DESCRIPTOR_NAME` → v3; DELETE `AggregationInnerRowV2.expected_counts/
+   expected_roots`; `build_aggregation_trace_v2` width 87→52 (cum 49 · consistent 50 · n 51);
+   KEEP the padding-row identity mirror — under v3 it is load-bearing (the carry gates fire on
+   padding transitions). Callers (`node/src/api.rs:3989-3997`, wasm, MCP) drop the expected args.
+3. Re-pin the emit gate `circuit-prove/tests/bilateral_aggregation_emit_gate.rs::GOLDEN_JSON` to
+   the v3 bytes; hand-built-twin shape: width 52 / 48 constraints / 15 window gates. Re-pin the
+   descriptor SHA/VK (`bilateral_aggregation_descriptor_matches_lean_pin`).
+4. Doc-claim fixes IN THE SAME COMMIT (`bilateral_aggregation_air.rs`): (a) module header still
+   says CG-2 is "per-row PI slots equal the outer PI's" and describes the retired 112-wide
+   layout (lines ~15-90) — describe v3 (first-row bindings + identity carries = per-row, now
+   true IN-CIRCUIT); (b) the CG-5 comment "~124-bit hard" (line ~581) is wrong for the 1-FELT
+   `edge_fp` — a single-BabyBear-image fingerprint is ~31-bit (birthday ~2^15.5); the off-AIR
+   exact multiset re-derivation is the real closure — state it at that resolution (or widen
+   `edge_fp` to 4 felts in the same regen if an in-circuit collision claim is wanted).
+5. Canary: the Rust twin of `gapTrace` (middle-row forged turn-id) must flip ACCEPT(v2) →
+   REJECT(v3); honest multi-cell bundle proves+verifies; targeted `cargo test -p
+   dregg-circuit-prove bilateral` + the `multi_cell_cross_fed_binding` gauntlet; MEASURE the
+   proof-byte delta at cutover (main-trace committed columns −35/87 = −40.2%; opening felts per
+   FRI query scale with width — the byte number is a measurement, not a projection).
