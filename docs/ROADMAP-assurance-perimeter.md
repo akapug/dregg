@@ -29,18 +29,20 @@ a trusted key. **Nothing trusted, nothing duplicated.**
 | 8 | non-revocation | technique | ✅ (the template IS non-rev); residual: fold spine decode further |
 | 2 | state commitment (transfer) | technique | ✅ FLAGSHIP `c68c4f5a9` — `transferDescriptor_commit_iff`; CI-wired. TAIL: generalize to ALL effect tags; make `wire_commit` the chained commitment + delete BLAKE3 `ledger.root()` |
 | 5 | heap-root | ARCHITECTURE | ✅ `f7dd79db2` — genuine `Heap.set` forced, prepend-digest DELETED, MapOps carrier verified |
-| 3 | receipt `TurnExecuted` | trust→proof | 🔶 resolver DONE `26d3b1615` (HELD); COMPLETION = thread the produced finalized-turn STARK onto the receipt + migrate the 4 bare-receipt features (service_promise, shared_fork, cross-fed demo, full_pipeline) to `TurnProven`, then land coherent |
+| 3 | receipt `TurnExecuted` | trust→proof | 🔶 resolver `26d3b1615` + migration `b4ac7ef23` (all 4 features → `TurnProven`, proof threaded onto the receipt) committed; coherence build VERIFYING (a `service_promise` test-panic being resolved — lands when all 4 features genuinely resolve green). Blocked on its own test-fix, not churn. |
 | 4 | cap-root | ~~ARCHITECTURE~~ **ALREADY CLOSED** | ✅ the DEPLOYED `attenuateV3` already forces the faithful 8-felt sorted-tree write `writesTo8` (`CapOpenEmit.effCapOpenWriteV3_forces_write8`, §11 keystone, `#assert_axioms`-clean, apex-wired via `Rfix 12` / `ClosureFanoutGenuine` CLASS A) — **STRONGER than heap** (full ~124-bit vs heap's lane-0 scalar). The audit/crux "prepend / free CAP_DIGEST_NEW" read a SUPERSEDED study face, not the deployed descriptor. Doc corrected `c8f443e37`. The cap lane correctly REFUSED to build the requested scalar splice (would be a weaker re-authored mirror — reality-gate held). RESIDUALS (tracked, NOT soundness gaps): (a) delete the superseded prepend/free-digest code across ~15 cap-family modules (own multi-session cutover + adversarial audit); (b) a `Satisfied2`-only forged-root canary needs the sorted-tree functional property from the trace (discharge the `SpineCommits` decode) + closes the arity-7 leaf other-field encoding residual. |
-| 6 | note-spend | structural | ⏳ Cycle 2 — replicate the schema; decode rides the same spine-faithfulness lemma as non-rev |
-| — | garbled-eval | technique | ⏳ Cycle 2 — replicate; honest witness `garbled_honest_satisfied2` exists, only the parametric reverse missing |
+| 6 | note-spend | structural | ✅ `cb2567872` (on origin) — `noteSpendFresh_accepts_iff` (full `⟺`: `NoteFreshAccepts ↔ nf∉nulls`), `gapOpen_complete` forward gap-construction, canaried both directions, `#assert_axioms`-clean. `NullifierTreeEncodes` kept as the honest Rust-accumulator-boundary residual (named). |
+| — | garbled-eval | technique | ✅ `ba38e878b` (on origin) — `garbled_accepts_iff` (`AirAccepts ↔ CanonInstance`) + `garbled_bridge` (∀-soundness ∧ ∃-completeness); `honestG_satisfied2` generalizes the single witness parametrically; `GarbledCarriers` bundle (canon+hash), both canaries. Also CI-wired the previously `lake env`-only Rung-1/2 garbled chain. |
 | 1 | ledger root | trusted-Rust | ⏳ folds into #2 tail (`cells_root` = Lean-authored sorted-Poseidon2 fold, bound at the boundary) |
 | 9 | `system_roots_digest` | trusted-Rust | ⏳ later — small; make it an AIR-bound or Lean-authored value |
 | 10 | effect state-transition | Lean-authored | ✅ deployed `produce_via_lean` (covered set); residual: the root (#2) + wasm/unmapped fallback |
 
 ## Cycles
 - **Cycle 1 — DONE.** template · heap hole · state-commit flagship · CI-wiring · receipt resolver (held).
-- **Cycle 2 — IN FLIGHT.** (a) #3 completion (cross-crate receipt wiring + 4-feature migration → land `26d3b1615`);
-  (b) cap architecture hole (Phase-E splice, heap-pattern); (c) schema replication → garbled-eval; (d) → note-spend.
+- **Cycle 2 — PROOFS DONE, integration finishing.** ✅ note-spend `cb2567872` · garbled `ba38e878b` · cap
+  found-already-closed `c8f443e37`. 🔶 #3 migration `b4ac7ef23` verifying its own service_promise test-fix.
+  ⚠ full-tree `Dregg2` CI-confirm blocked by co-tenant heap8 WIP (`MapMerkleRoot` deps mid-refactor) — origin is
+  clean, both `⟺` bridges green standalone; the CI-wiring lands when the tree quiesces.
 - **Cycle 3.** generalize transfer `⟺` to all effect tags; `cells_root` Phase-E; make `wire_commit` the anchor +
   delete BLAKE3 root; discharge `hcanon` field-faithfulness; the ~31-bit 8-felt-lane thread (heap/nullifier).
 - **Apex (post-A).** recursive-proof-default (grow inner AIR to real `EffectVmAir`, force `NEW_COMMIT` in-circuit,
