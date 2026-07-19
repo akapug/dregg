@@ -1,8 +1,18 @@
 # Identity-Link DEEP Version — links as receipt-signed turns on K's identity cell (design, 2026-07-19)
 
-**Status:** design only (pure addition; no code — the shared tree is churn-blocked). Progresses
-the identity PILLAR from the shipped *shared-TSV registry* to *links are receipt-signed turns on
-the identity cell*.
+**Status:** partially SHIPPED. The **churn-independent core is built and unit-tested in
+`webauth-core`** — brick 1 `account_id_of_root` (the rotation-proof join key,
+`link_registry.rs`), brick 2 `link_kel` (the LINK/UNLINK memo convention + the pure
+`fold_link_events` / `resolve_root_from_events` resolver), and the `linked_platforms` credential
+schema type. The **node/cell-touching parts and the Lean AIR remain design** (§8/§9 below are the
+concrete build spec for when the `node` crate un-churns). Progresses the identity PILLAR from the
+shipped *shared-TSV registry* to *links are receipt-signed turns on the identity cell*.
+
+**What is verifiable NOW vs later:** the memo format, the signature/verb discipline, the fold, and
+the account-id cross-check with the TSV resolver are all provable in `webauth-core`'s own test
+suite (`cargo test -p webauth-core`, no node). The `verify_export` extension, the dual-write +
+reconcile, and the `FederationId ↔ account-id` adapter are **convergence-gated** (need the `node`
+crate). The **D2 enforced-links register is Lean-authored AIR** (§1.3) — the tripwire.
 
 **Substrate note (read first):** everything in stages D1/D2 that is **enforcement of a constraint**
 (who may append a link, append-only-ness, unlink-preserves-history as a *cell-program* rule) is
@@ -116,6 +126,26 @@ signature in the payload, not by the cell's constraint set) — that is **D2**.
   attestation is signed by a key **in the key set exhibited at that event** (see §4 — this ties
   links to rotation), (c) unlink folding;
 - a `resolve_root_from_kel(...)` that returns the same `custodial → account_id` map shape.
+
+**SHIPPED (churn-independent, `webauth-core`, unit-tested):** the memo convention + the pure fold
+are built as `webauth-core::link_kel`:
+
+- `LinkMemo` — the canonical on-turn bytes (`LINK_MEMO_DOMAIN ‖ verb ‖ platform ‖ 0 ‖ uid ‖ 0 ‖
+  custodial_hex ‖ 0 ‖ challenge ‖ 0 ‖ root_pubkey(32) ‖ signature(64)`), with `to_bytes` /
+  `from_bytes` round-trip. It **wraps the existing `link_claim` attestation verbatim** for LINK and
+  adds a byte-for-byte sibling `unlink_claim_message` under `dregg-identity-unlink-v1:` for UNLINK,
+  so a LINK signature can never be replayed as an UNLINK (distinct domain ⇒ distinct signed bytes).
+- `fold_link_events(&[LinkEvent]) -> Result<LinkResolution, LinkFoldError>` — verify each event's K
+  signature, enforce one-cell (one signing root) + strictly-increasing KEL order, fold LINK/UNLINK
+  latest-wins per custodial, expose the stable account id. `resolve_root_from_events(events,
+  custodial)` is the thin `custodial → account_id` seam — the **cell-reading analogue of
+  `link_registry::resolve_root_account`**, and a test pins that the two agree byte-for-byte on the
+  equivalent link set.
+
+This is exactly step 2–4 of the cell-reading resolver above, testable with **no live node**. What
+it deliberately does NOT do (deferred to §8): replay rotation (it pins one signing root), bind each
+link signature to the *exhibited key set*, check `cell == derive_raw(K_inception, ..)`, or run the
+chain/receipt/witness teeth — those need the KEL and live in `verify_export`.
 
 ### 1.3 D2 — an ENFORCED links register (LATER; AIR authored in LEAN)
 
@@ -357,3 +387,153 @@ consumer changes, because:
 
 The next step after that is P2 dual-write of `LINK` `ixn` turns behind a node-reachable check —
 still additive, still behind the unchanged `resolve_root` signature.
+
+---
+
+## 8. Node-side build spec (concrete; for when the `node` crate un-churns)
+
+Everything here touches `node/src/*` (co-tenant-churny) and so is **design, not yet code**. It is
+written as a precise build order so it can be executed against the real tree without re-deriving the
+seams. All of it is **Rust plumbing (serde / ed25519 / blake3)** except where §8.4 flags Lean.
+
+### 8.1 The `verify_export` extension (`node/src/identity_export.rs`)
+
+The shipped verifier signature is
+`verify_export(log: &IdentityEventLog, pinned_executor_key: Option<&[u8; 32]>) -> Result<VerifyReport, VerifyError>`.
+Add a link-aware pass **without changing** the existing chain/rotation/receipt teeth (they stay the
+authority for ordering + key history). Concretely:
+
+1. **Format bump `dregg-kel/2` (additive).** `KEL_FORMAT_VERSION` currently pins `"dregg-kel/1"`
+   and `verify_export` rejects any other `format`. Widen the accept set to `{dregg-kel/1,
+   dregg-kel/2}`; add to `IdentityEvent` an optional, `#[serde(default, skip_serializing_if …)]`
+   `link_attestation: Option<LinkAttestation>` where `LinkAttestation` is the decoded
+   `webauth_core::link_kel::LinkMemo` (verb + platform + uid + custodial_hex + root_pubkey +
+   challenge + signature). It must be **digested into `event_digest`** (extend `DigestSurface` with
+   a tag-prefixed `Option` branch, exactly like `prior`) so tampering breaks the chain — OR bound via
+   the already-digested `turn_hash` if the memo rides the turn action. Pick the digest-inclusion
+   route; it is self-contained (no dependence on how the turn serialized its action). v1 logs carry
+   no attestation and stay valid (reject-on-unknown only fires on an unknown *format*, not a missing
+   optional field).
+
+2. **`cell == derive_raw(K_inception, account_root_token())`.** The account binding. `verify_export`
+   already decodes `log.cell`. Add a parameter `pinned_inception_key: Option<&[u8; 32]>`; when
+   present, check `CellId::derive_raw(pinned_inception_key, &webauth_core::account_id::account_root_token()).0
+   == cell` and fail closed (`VerifyError::CellNotAccountId`) otherwise. This is the tooth that says
+   *this whole log is K's* — reusing `account_id` verbatim. (Without the pin, the verifier still
+   checks everything else; the binding is simply unproven, and the report says so.)
+
+3. **Link signature vs. the *exhibited key set* (rotation-aware).** For each event carrying a
+   `link_attestation`, rebuild the attestation message
+   (`link_kel::LinkMemo::signed_message()` — reuse verbatim) and `verify_strict` the signature.
+   The signing key must be a key **exhibited at or before this event**: the verifier already walks
+   `current_keys_commit` per event; require the attestation's `root_pubkey` hash to the key-set
+   commitment in force at this `seq` (i.e. `blake3(root_pubkey)`-membership against the installed
+   `current_keys_commit`, matching the gate's `HashKind::Blake3` shape). A stolen **old** key thus
+   cannot forge a **new** link (§4). New `VerifyError::LinkKeyNotExhibited { seq }`.
+
+4. **Unlink folding = the pure fold, wrapped.** After the per-event teeth pass, hand the ordered
+   `link_attestation`s (in `seq` order) to `webauth_core::link_kel::fold_link_events` and surface the
+   `LinkResolution` in `VerifyReport` (add `links_active: usize`, and a `resolve_root(custodial)`
+   helper on the report). **Do not re-implement the fold node-side** — the churn-independent core is
+   the single source of truth; `verify_export` only *feeds* it verified, ordered events. `resolve_root_from_kel(log, pinned_inception_key, custodial)` is then a one-liner:
+   `verify_export(..)?.resolve_root(custodial)`.
+
+Adversarial tests to ship with it (mirroring the existing `chain_tamper_refuses` style): a link
+attestation whose signature is by a non-exhibited key refuses; a tampered memo (digest mismatch)
+refuses; an UNLINK folds the custodial out; `cell != derive_raw(K_inception, ..)` refuses.
+
+### 8.2 Dual-write + reconcile (P2 → P3 of §5)
+
+- **Dual-write.** Where a frontend today calls `FileLinkStore::record` after `verify_link_claim`,
+  it *also* (behind a node-reachable check) submits a `LINK` `ixn` turn to K's identity cell whose
+  action carries `LinkMemo::to_bytes()`. The submission is a normal turn through the existing
+  SDK/exec path — the memo is opaque action bytes; **no new AIR** (the cell program does not yet
+  gate it — that is D2). On node-unreachable, queue with retry; the TSV write is the fast cache and
+  is never blocked on the node.
+- **`reconcile` job.** Periodically `GET /identity/export/{cell}` for each K, run
+  `verify_export(.., pinned_inception_key)`, fold, and **rebuild the TSV cache from the fold result**
+  so the cache is *provably derived from the authority* (the KEL), not an independent truth. The TSV
+  can be deleted and rebuilt at any time. This is the P3 "cache-source swap behind an unchanged
+  `resolve_root` signature": consumers keep calling `resolve_root(custodial) -> account_id`; only the
+  refresh source moves from "appended by frontends" to "folded from `verify_export`".
+- **Reconcile is the honesty gate.** Because the cache is rebuilt from `verify_export`, a divergence
+  between "what the TSV says" and "what the KEL proves" is a *detectable, fail-closed* condition (the
+  reconcile drops any TSV row the KEL does not carry), not a silent drift.
+
+### 8.3 The `FederationId ↔ account-id` adapter (for §2 delegation)
+
+`FederationId(pub [u8; 32])` (`types/src/lib.rs`). The HandoffCertificate names K as introducer by
+`FederationId`; to check "the introducer **is** the account", bind K's `FederationId` to K's
+inception pubkey. Build a tiny adapter (Rust, `node`-adjacent):
+
+- `fn account_federation_id(inception_pubkey: &[u8; 32]) -> FederationId` — the canonical map. The
+  clean choice is `FederationId(CellId::derive_raw(inception_pubkey, &account_root_token()).0)`, i.e.
+  **the FederationId IS the account id / cell id** (byte-identical), so "introducer == account" is a
+  literal `==` and no separate registry is needed.
+- `fn verify_introducer_is_account(cert_introducer: &FederationId, inception_pubkey: &[u8; 32]) -> bool`
+  — `*cert_introducer == account_federation_id(inception_pubkey)`. The cert's hybrid-PQ commitment
+  (`IntroducerIdentityCommitmentMismatch`, §2) already binds the `FederationId` to the ML-DSA key;
+  this adds the binding to the *account*, closing "K delegated" ⇒ "the account delegated".
+
+If the deployed `FederationId` derivation is *not* free to define this way (it is assigned by node
+provisioning), fall back to a one-row attestation cell mapping `FederationId → account_id` signed by
+K; but prefer the derivation identity — it needs no extra state.
+
+### 8.4 D2 — the ENFORCED links register  ⚠ **LEAN-AUTHORED AIR (THE TRIPWIRE)**
+
+> **STOP. This section is constraint/gadget work. It is authored in Lean, not Rust.** The moment the
+> *cell program itself* gates link appends — append-only; only a key exhibited against
+> `CURRENT_KEYS_COMMIT` may append; unlink cannot erase history; a `LINKS_COMMIT` register evolves by
+> a proven append/tombstone rule — that is a **`StateConstraint` / gadget with a refinement theorem
+> over the emitted object**, emitted from Lean, with Rust calling the artifact (exactly like
+> `KeyRotationGate`). Do **not** hand-write it as a Rust `StateConstraint`; extending a Rust AIR to
+> "just add the link-append case" IS the drift. Options A (slot-5 `LINKS_COMMIT`) and B (a separate
+> K-anchored link-ledger cell) are in §1.3; pick at D2 time **in Lean**. Until then, D1's ceiling —
+> K's signature authorizes; the KEL orders/witnesses/exports — is the honest posture, stated as such.
+
+---
+
+## 9. Linked-platforms credential — shipped schema + issuer adapter (design §3 made concrete)
+
+### 9.1 SHIPPED (churn-independent, `webauth-core::linked_platforms`)
+
+The **schema half is built and tested**, with **no dependency on the ZK stack** (`dregg-credentials`
+pulls in `dregg-bridge` + `dregg-circuit`, which are churny — so `webauth-core` does not depend on
+it):
+
+- `SCHEMA_NAME = "linked-platforms-v1"` and the **ordered** attribute names
+  (`schema_attributes()` — order is load-bearing for the credential fold-chain):
+  `platforms_count, has_discord, has_telegram, has_web, discord_uid_commit, telegram_uid_commit,
+  account_id`.
+- `LinkedPlatformsAttributes::from_resolution(&LinkResolution) -> Option<..>` — the **pure**
+  builder: it turns the folded cell links (§1.2, `link_kel`) into the attribute set — distinct
+  platform count, per-platform presence flags, `blake3(uid)` hiding commitments (never the uid), and
+  the 32-byte account id. `to_credential_pairs()` renders them as ordered `(name, LinkedAttrValue)`
+  pairs for the issuer.
+- `LinkedAttrValue { Int(u64), Bytes32([u8; 32]) }` — a local, churn-independent mirror of
+  `credentials::AttrValue` so the schema type need not link the ZK crate.
+
+### 9.2 The issuer-side flow (design; the thin adapter for when `credentials` is reachable)
+
+The issuer is a dregg node/federation that has **verified K's KEL before attesting**:
+
+1. `verify_export(log, pinned_inception_key)` (§8.1) → a `LinkResolution` (fold).
+2. `LinkedPlatformsAttributes::from_resolution(&resolution)` → the attribute set (shipped).
+3. Map `to_credential_pairs()` into `credentials::CredentialAttributes` and call
+   `credentials::issue(issuer, &schema, holder_id = blake3(K_pk), attributes, issued_at, not_after)`
+   (verbatim), with `schema = CredentialSchema::new(SCHEMA_NAME, schema_attributes())`.
+4. Presentation is `credentials::present` / `present_anonymous` + `PresentationOptions::disclose` +
+   `PredicateRequest::new("platforms_count", Predicate::Gte(2))` — all verbatim.
+
+**One concrete integration gap to resolve at build time (honest, named now):** `credentials::AttrValue`
+has variants `Integer / Text / Date / Bool` but **no `Bytes32`**. The 32-byte `account_id` /
+`*_uid_commit` attributes therefore ride either as (a) `AttrValue::Text(hex(commit))` — whose fact
+term is `blake3(hex(commit))`, an extra hash that issuer and verifier must both apply, still a valid
+hiding commitment — or (b) a new `AttrValue::Bytes32([u8;32])` variant added to `dregg-credentials`
+(preferred; it makes the disclosed bytes the commitment itself). The `Int` attributes
+(`platforms_count`, the `has_*` 0/1 flags) map to `AttrValue::Integer` directly and carry the
+predicate path (`platforms_count ≥ 2`).
+
+**Honest ceiling (design §6):** the credential is only as sound as (a) the issuer actually running
+`verify_export` + the fold before attesting (mitigated by making that step 1), and (b) the STARK
+floor `present` inherits (`project-fri-soundness-reality`). Both are named, not papered over.
