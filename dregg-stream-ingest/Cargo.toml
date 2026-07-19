@@ -1,0 +1,27 @@
+# `dregg-stream-ingest` — the dep-light INGESTION layer of the crowd-stream engine
+# (docs/CROWD-STREAM-ENGINE-DESIGN.md). A live-stream platform event (a YouTube Super
+# Chat / chat message, a Twitch cheer, a TikTok gift) is normalized into a `StreamEvent`
+# and mapped to a `WeightedBallot` — a viewer's paid-weighted vote for a poll option.
+#
+# CHURN-INDEPENDENT BY CONSTRUCTION: this crate depends on NOTHING but serde/serde_json.
+# It carries NO dep on the offering/circuit/collective tree, so it builds + tests in
+# isolation (`cargo test -p dregg-stream-ingest`) even while the rest of the workspace is
+# mid-refactor. The WIRING that feeds these ballots into the real quorum-certified
+# `CollectiveRound` lives in `dreggnet-web` (`crowd_round.rs`), where the offering-stack
+# deps are paid for.
+#
+# A breadstuffs workspace MEMBER; the root `[workspace]`/`[patch]` tables apply.
+[package]
+name = "dregg-stream-ingest"
+version = "0.1.0"
+edition = "2024"
+description = "Dep-light live-stream ingestion for the crowd-stream engine: a platform event (YouTube Super Chat / chat) normalized into a StreamEvent and mapped to a paid-weighted WeightedBallot. serde-only, churn-independent."
+
+[dependencies]
+# The ONLY deps — a normalized event is serializable (the wire shape the overlay/round
+# driver moves), and the YouTube adapter parses the liveChatMessages API JSON by value.
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
