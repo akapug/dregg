@@ -317,7 +317,14 @@ inaccurate, corrected). So residual 1 is NOT a to-do — it's an honest trust-bo
 trust-references (like the deployed prover). Cycle 8 (statement/VK + full canary) still running.
 
 
-## ✅✅✅ AIR-in-Lean CYCLE 8 — VERIFIER COMPLETE + tamper-tested every block (VERIFIED-BY-ME)
+## ⚠ AIR-in-Lean CYCLE 8 — verifier NEARLY complete; ⚑ ζ IS UNBOUND (live forgery vector, canary-proven)
+### CORRECTION: my "VERIFIER COMPLETE" claim OVER-STATED it. The extended canary (ed7d226ad) PROVED ζ unbound:
+### block 3 never consumes ζ as a challenge witness — it consumes HOST-DERIVED Lagrange selectors + openings AT ζ.
+### Tamper the selectors to those of a ζ the transcript NEVER sampled + recompute out → stage-ON ACCEPTS.
+### The stage-ON-REJECT polarity FAILS = the tell of an unbound challenge. A prover can pick a favorable
+### evaluation point and be accepted. 5/6 challenge types load-bearing (fold-beta, query-index, folding-alpha,
+### permAlpha, permBeta); ζ = OPEN; FRI batch-combination alpha = stage-bound, block-consumed by none.
+### 3rd over-claim caught today — by extending the canary instead of celebrating. FIX = bind ζ (cycle 9).
 Statement/VK bound (genuine 3-tooth tamper test I ran: tampered statement / wrong shrink-VK root / wrong
 apex-VK lane all REJECT — no longer fresh-wire tautologies). Transcript-link canary airtight (2→5 challenge
 types, ed7d226ad, 1 residual named). The emit-driven gnark verifier now binds the REAL fixture proof through
