@@ -266,21 +266,39 @@ func gadgetWitnessStartT(t *testing.T, vf *VerifierFull, sym *SymbolicConstraint
 // consume the transcript squeeze. The transcript-root tamper in the test above is
 // rejected by the STAGE ITSELF (the live-drawn betas move), so it does not isolate
 // the link. This test instead tampers a challenge the blocks consume as FREE
-// WITNESS, choosing two blocks whose own constraints DO NOT pin it:
+// WITNESS and shows the differential: with the link off the tamper is
+// otherwise-valid (the block alone accepts it), with the link on it is UNSAT.
 //
-//   - block 1 (FriFoldRowArity2) is an inert cost-model — the fold-beta operand `b`
-//     only feeds an ExtMul chain closed by ExtAssertIsEqual(x, x) (trivially true),
-//     so `b` is unconstrained by the block;
-//   - block 4 (SampleBitsDecomposed) is a bare 31-bit range check — any well-formed
-//     index passes.
+// COVERAGE — every challenge the descriptor blocks consume, one two-polarity
+// canary each:
 //
-// So a wrong-but-well-formed value for either is ACCEPTED with the stage OFF, and
-// the ONLY thing that can reject it with the stage ON is the transcript link. The
-// differential (stage-OFF ACCEPT, stage-ON REJECT on the SAME tamper) is the proof
-// the link binds each block challenge to the sponge squeeze. (Block 3's
-// alpha/permAlpha/permBeta are bound by the same mechanism but cannot be isolated
-// this cleanly — they also feed the DAG folded == out identity, which is exactly
-// the forgery the link prevents.)
+//   - block1-fold-beta (FRI round-0 fold beta): block 1 (FriFoldRowArity2) is an
+//     inert cost-model — the operand `b` only feeds an ExtMul chain closed by
+//     ExtAssertIsEqual(x, x), so a lone bumped felt is otherwise-valid as-is;
+//   - block4-query-index: block 4 (SampleBitsDecomposed) is a bare 31-bit range
+//     check — any well-formed index passes as-is;
+//   - block3-folding-alpha / block3-permAlpha / block3-permBeta: block 3 consumes
+//     these as witness but ALSO feeds them into its folded == out quotient identity,
+//     so a LONE bump is rejected by the block itself. Keeping the tamper
+//     otherwise-valid therefore requires recomputing `out` at the tampered challenge
+//     (instFolded, the host twin of the in-circuit fold) — which is EXACTLY the
+//     favorable-challenge forgery the link prevents: pick a challenge the transcript
+//     never sampled and supply the matching out. The block accepts that consistent
+//     pair (stage OFF); only the link rejects it (stage ON).
+//
+// FINDINGS (named, not skipped) — challenge types NOT closed by the block link:
+//
+//   - zeta: block 3 never consumes zeta as a challenge witness; it consumes
+//     host-derived Lagrange selectors + openings AT zeta (seam #2). Demonstrated
+//     below: a self-consistent wrong-zeta selector/out set is accepted with the
+//     stage ON too (the stage-ON-REJECT polarity FAILS — the tell of an unbound
+//     challenge). The zeta SAMPLE is squeeze-asserted by the stage, but block 3's
+//     zeta-derived inputs are not linked to it. The hole is partly open for zeta;
+//   - the FRI batch-combination alpha is a prefix sample bound by the stage
+//     squeeze-assert but consumed by no block — outside the block link;
+//   - only betas[0] and query-index[0] are block witnesses; the other 14 FRI betas
+//     and 37 query indices are drawn LIVE in the transcript stage and bound there by
+//     the fold-chain + Merkle-opening checks (the root-tamper test), not the block link.
 func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	fx := loadShrinkRealFixture(t)
 	ex := extractShrinkStark(t, fx)
@@ -294,37 +312,177 @@ func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
 	}
 	onAlloc := allocVerifierFullWithTranscript(t, fx, sym) // stage ON: the link is present
 
-	// betaStart: block 1's `b` operand follows its `x` operand (4 ext lanes).
+	// --- offsets into the flat witness bank W ---
+	// block 1's `b` operand follows its `x` operand (4 ext lanes); block 4's single
+	// query-index witness starts the SampleBitsDecomposed record.
 	betaStart := gadgetWitnessStartT(t, vf, sym, "FriFoldRowArity2") + 4
 	idxStart := gadgetWitnessStartT(t, vf, sym, "SampleBitsDecomposed")
 
-	for _, tc := range []struct {
+	// block 3 per-instance start offsets + the challenge / selector / out slots
+	// (the per-instance witness order VerifierFullCircuit.starkInstance consumes:
+	// Trace/Pre/Perm rows, the WitnessChecks Challenges bus, PermValues, selectors,
+	// PublicValues, alpha, out — symInstanceVars).
+	spans, _ := buildStarkOpenedSpans(ex.shapes)
+	block3Start := gadgetWitnessStartT(t, vf, sym, "BatchTableInstance")
+	instStart := make([]int, len(ex.shapes))
+	acc := block3Start
+	for i := range ex.shapes {
+		instStart[i] = acc
+		acc += symInstanceVars(&sym.Instances[i])
+	}
+	// Instance 0 (const): the smallest instance carrying the LogUp bus (NL=1, NPV=0).
+	const i0 = 0
+	sh0 := ex.shapes[i0]
+	chStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+2*sh0.NumLookups)   // permAlpha lane 0
+	selStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+5*sh0.NumLookups)  // isFirstRow lane 0
+	alphaStart0 := instStart[i0] + 4*(2*sh0.Width+2*sh0.PreWidth+5*sh0.NumLookups+3) + sh0.NumPublicValues
+	outStart0 := alphaStart0 + 4
+
+	// instFolded recomputes instance i0's alpha-folded constraint value under a
+	// mutated challenge / selector set — the host twin (evalSymbolicFoldedRef) of the
+	// block's in-circuit folded == out identity. Used to recompute `out` so a block-3
+	// challenge tamper stays OTHERWISE-VALID (the block alone still accepts it) and the
+	// differential isolates the transcript LINK, not the block's own quotient identity.
+	instFolded := func(chMut func(*shrinkStarkChallengesRef), selMut func(*starkSelectorsRef)) bbExtRef {
+		sp := spans[i0]
+		inst := &sym.Instances[i0]
+		slice := func(s efSpan) []bbExtRef { return ex.openedEF[s.off : s.off+s.len] }
+		chc := ex.ch
+		if chMut != nil {
+			chMut(&chc)
+		}
+		sel, serr := computeStarkSelectorsRef(chc.zeta, sh0.DegreeBits)
+		if serr != nil {
+			t.Fatalf("instance %d selectors: %v", i0, serr)
+		}
+		if selMut != nil {
+			selMut(&sel)
+		}
+		folded, ferr := evalSymbolicFoldedRef(inst,
+			shrinkSymInputsRef(sh0, sp, slice, ex.cumSums, ex.pubVals[i0], chc, sel), chc.alpha)
+		if ferr != nil {
+			t.Fatalf("instance %d host fold: %v", i0, ferr)
+		}
+		return folded
+	}
+	putExt := func(w []frontend.Variable, base int, e bbExtRef) {
+		for k := 0; k < 4; k++ {
+			w[base+k] = e[k]
+		}
+	}
+	bumpLane := func(w []frontend.Variable, off int) {
+		v, ok := w[off].(uint32)
+		if !ok {
+			t.Fatalf("witness slot %d is not a base-field felt (%T)", off, w[off])
+		}
+		w[off] = bbAddRef(v, 1)
+	}
+
+	// -----------------------------------------------------------------------
+	// LINKED challenges — one two-polarity canary each (stage-OFF ACCEPT of the
+	// otherwise-valid tamper, stage-ON REJECT of the SAME tamper).
+	// -----------------------------------------------------------------------
+	linked := []struct {
 		name   string
-		offset int
+		tamper func(w []frontend.Variable)
 	}{
-		{"block1-fold-beta", betaStart},
-		{"block4-query-index", idxStart},
-	} {
+		{"block1-fold-beta", func(w []frontend.Variable) { bumpLane(w, betaStart) }},
+		{"block4-query-index", func(w []frontend.Variable) { bumpLane(w, idxStart) }},
+		{"block3-folding-alpha", func(w []frontend.Variable) {
+			bumpLane(w, alphaStart0)
+			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.alpha[0] = bbAddRef(c.alpha[0], 1) }, nil))
+		}},
+		{"block3-permAlpha", func(w []frontend.Variable) {
+			for l := 0; l < sh0.NumLookups; l++ { // every lookup's permAlpha the link binds
+				bumpLane(w, chStart0+8*l)
+			}
+			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.permAlpha[0] = bbAddRef(c.permAlpha[0], 1) }, nil))
+		}},
+		{"block3-permBeta", func(w []frontend.Variable) {
+			for l := 0; l < sh0.NumLookups; l++ { // every lookup's permBeta the link binds
+				bumpLane(w, chStart0+8*l+4)
+			}
+			putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.permBeta[0] = bbAddRef(c.permBeta[0], 1) }, nil))
+		}},
+	}
+	for _, tc := range linked {
 		// (a) stage OFF — the tamper is otherwise valid: the block alone accepts it.
 		off := assignVerifierFull(t, fx, ex, sym)
-		orig, ok := off.W[tc.offset].(uint32)
-		if !ok {
-			t.Fatalf("%s: witness slot %d is not a base-field felt (%T)", tc.name, tc.offset, off.W[tc.offset])
-		}
-		off.W[tc.offset] = bbAddRef(orig, 1)
+		tc.tamper(off.W)
 		if err := test.IsSolved(offAlloc, off, field); err != nil {
-			t.Fatalf("%s: stage-OFF circuit REJECTED the wrong challenge — the tamper is not "+
-				"otherwise-valid, so the differential does not isolate the link: %v", tc.name, err)
+			t.Fatalf("%s: stage-OFF circuit REJECTED the tamper — it is not otherwise-valid, so the "+
+				"differential does not isolate the link: %v", tc.name, err)
 		}
-
 		// (b) stage ON — the SAME tamper: the link asserts the block challenge equals
 		// the transcript squeeze, so a different value is UNSAT.
 		on := assignVerifierFullWithTranscript(t, fx, ex, sym)
-		on.W[tc.offset] = bbAddRef(orig, 1)
+		tc.tamper(on.W)
 		if err := test.IsSolved(onAlloc, on, field); err == nil {
-			t.Fatalf("%s: stage-ON circuit ACCEPTED a block challenge that differs from the "+
-				"transcript squeeze — the LOAD-BEARING LINK is vacuous", tc.name)
+			t.Fatalf("%s: stage-ON circuit ACCEPTED a challenge that differs from the transcript "+
+				"squeeze — the LOAD-BEARING LINK is vacuous for this challenge", tc.name)
 		}
-		t.Logf("%s: stage-OFF ACCEPT, stage-ON REJECT on the same tamper — the transcript link is load-bearing", tc.name)
+		t.Logf("%s: stage-OFF ACCEPT, stage-ON REJECT on the same tamper — load-bearing", tc.name)
 	}
+
+	// -----------------------------------------------------------------------
+	// FINDINGS — challenge types the block-challenge link does NOT close.
+	// -----------------------------------------------------------------------
+
+	// (F1) zeta — RESIDUAL, the hole partly open. Tamper instance 0's Lagrange
+	// selectors to those of a zeta the transcript never sampled and recompute out:
+	// the block accepts (stage OFF), and — since no link binds the selectors — the
+	// stage-ON circuit accepts too. The stage-ON-REJECT polarity FAILS, the tell of
+	// an unbound challenge (seam #2: block 3's zeta-derived selectors/openings are
+	// not tied to the squeeze-asserted zeta sample).
+	zetaTamper := func(w []frontend.Variable) {
+		badZeta := bbExtRef{bbAddRef(ex.ch.zeta[0], 1), ex.ch.zeta[1], ex.ch.zeta[2], ex.ch.zeta[3]}
+		sel, serr := computeStarkSelectorsRef(badZeta, sh0.DegreeBits)
+		if serr != nil {
+			t.Fatalf("zeta finding: selectors: %v", serr)
+		}
+		putExt(w, selStart0, sel.isFirstRow)
+		putExt(w, selStart0+4, sel.isLastRow)
+		putExt(w, selStart0+8, sel.isTransition)
+		putExt(w, outStart0, instFolded(func(c *shrinkStarkChallengesRef) { c.zeta[0] = bbAddRef(c.zeta[0], 1) }, nil))
+	}
+	offZ := assignVerifierFull(t, fx, ex, sym)
+	zetaTamper(offZ.W)
+	if err := test.IsSolved(offAlloc, offZ, field); err != nil {
+		t.Fatalf("zeta finding: stage-OFF rejected a self-consistent wrong-zeta selector set "+
+			"(the demonstration is malformed, not a real result): %v", err)
+	}
+	onZ := assignVerifierFullWithTranscript(t, fx, ex, sym)
+	zetaTamper(onZ.W)
+	if err := test.IsSolved(onAlloc, onZ, field); err != nil {
+		t.Logf("zeta: stage-ON REJECTED the wrong-zeta selector set — zeta IS bound after all "+
+			"(seam #2 appears closed; update this finding): %v", err)
+	} else {
+		t.Logf("FINDING zeta (RESIDUAL, hole partly open): stage-ON ACCEPTS a self-consistent " +
+			"wrong-zeta selector/out set — block 3 consumes zeta only through host-derived selectors + " +
+			"openings-at-zeta (seam #2), which the block-challenge link does NOT bind. The zeta SAMPLE is " +
+			"squeeze-asserted by the stage, but block 3's zeta-derived inputs are not linked to it.")
+	}
+
+	// (F2) FRI betas / query indices: the descriptor consumes a SINGLE representative
+	// of each — one fold-beta operand and one query-index sample — so only betas[0]
+	// and query-index[0] are block witnesses (canaried load-bearing above). Pin the
+	// single-representative shape so a descriptor change that widens it is caught here.
+	if g, ok := vf.gadget("SampleBitsDecomposed"); !ok || g.Count != 1 {
+		t.Fatalf("FINDING (query indices): expected exactly ONE block-4 query-index witness "+
+			"(SampleBitsDecomposed count 1), got %+v — the single-representative finding is stale", g)
+	}
+	t.Logf("FINDING FRI betas / query indices: only betas[0] (block 1) and query-index[0] (block 4) are " +
+		"block witnesses (canaried above); the other 14 betas + 37 indices are drawn live in the transcript " +
+		"stage and bound there by the fold-chain + Merkle-opening checks (root-tamper test), not the block link.")
+
+	// (F3) the FRI batch-combination alpha is a prefix sample squeeze-asserted by the
+	// stage but consumed by no block — transcript-bound at the stage level, not by the
+	// block-challenge link.
+	t.Logf("FINDING FRI batch-alpha: prefix sample bound by the stage squeeze-assert; no descriptor " +
+		"block consumes it, so it is outside the block-challenge link (stage-bound, not block-linked).")
+
+	t.Logf("VERDICT: block-linked challenges proven load-bearing (stage-OFF ACCEPT / stage-ON REJECT): " +
+		"block1-fold-beta, block4-query-index, block3-folding-alpha, block3-permAlpha, block3-permBeta. " +
+		"Residual (not block-linked): zeta + FRI-batch-alpha (prefix samples, no block witness; zeta's " +
+		"selectors/openings are seam #2) and the non-representative FRI betas / query indices (stage-bound).")
 }
