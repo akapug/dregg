@@ -170,9 +170,15 @@ func TestEmittedChallengerFullTranscriptRederivesAndBinds(t *testing.T) {
 func allocVerifierFullWithTranscript(t *testing.T, fx *shrinkRealFixture, sym *SymbolicConstraints) *VerifierFullCircuit {
 	t.Helper()
 	a := allocApexShrinkRealCircuit(fx)
+	loc, err := locateShrinkStarkPrefix(fx)
+	if err != nil {
+		t.Fatalf("anchored prefix location (for the block-3 challenge link offsets): %v", err)
+	}
 	meta := &shrinkTranscriptMeta{
 		script: a.script, cfg: a.cfg, r: a.r, rollInAfterRound: a.rollInAfterRound,
-		tpl: loadPoseidon2TemplateT(t),
+		tpl:             loadPoseidon2TemplateT(t),
+		permChSampleOff: loc.permChSampleOff,
+		alphaSampleOff:  loc.alphaSampleOff,
 	}
 	c, err := AllocVerifierFullCircuitWithTranscript(loadVerifierFullT(t), sym, meta,
 		len(a.PrefixObs), len(a.PrefixDigests), len(a.PrefixSamples),
@@ -231,4 +237,94 @@ func TestEmittedVerifierFullTranscriptRederivesChallenges(t *testing.T) {
 			"the in-circuit challenge re-derivation does not bind")
 	}
 	t.Logf("REJECT: a tampered transcript commitment root is UNSAT — the challenges are bound to the roots")
+}
+
+// gadgetWitnessStartT returns the flat W offset at which `gadget`'s witness feed
+// begins — the WitnessLen of every gadget the interpreter consumes before it (the
+// same prefix-walk TestEmittedVerifierFullBlock3BindsRealProof uses to locate
+// block 3).
+func gadgetWitnessStartT(t *testing.T, vf *VerifierFull, sym *SymbolicConstraints, gadget string) int {
+	t.Helper()
+	prefix := &VerifierFull{Schema: vf.Schema, Shape: vf.Shape}
+	for _, g := range vf.Gadgets {
+		if g.Gadget == gadget {
+			n, err := prefix.WitnessLen(sym)
+			if err != nil {
+				t.Fatalf("witness offset for %s: %v", gadget, err)
+			}
+			return n
+		}
+		prefix.Gadgets = append(prefix.Gadgets, g)
+	}
+	t.Fatalf("gadget %s not in descriptor", gadget)
+	return 0
+}
+
+// TestEmittedVerifierFullTranscriptLinkIsLoadBearing is the mutation canary that
+// proves the LOAD-BEARING LINK (bindBlockChallengesToTranscript) is non-vacuous —
+// that it, and not some other constraint, is what forces the descriptor blocks to
+// consume the transcript squeeze. The transcript-root tamper in the test above is
+// rejected by the STAGE ITSELF (the live-drawn betas move), so it does not isolate
+// the link. This test instead tampers a challenge the blocks consume as FREE
+// WITNESS, choosing two blocks whose own constraints DO NOT pin it:
+//
+//   - block 1 (FriFoldRowArity2) is an inert cost-model — the fold-beta operand `b`
+//     only feeds an ExtMul chain closed by ExtAssertIsEqual(x, x) (trivially true),
+//     so `b` is unconstrained by the block;
+//   - block 4 (SampleBitsDecomposed) is a bare 31-bit range check — any well-formed
+//     index passes.
+//
+// So a wrong-but-well-formed value for either is ACCEPTED with the stage OFF, and
+// the ONLY thing that can reject it with the stage ON is the transcript link. The
+// differential (stage-OFF ACCEPT, stage-ON REJECT on the SAME tamper) is the proof
+// the link binds each block challenge to the sponge squeeze. (Block 3's
+// alpha/permAlpha/permBeta are bound by the same mechanism but cannot be isolated
+// this cleanly — they also feed the DAG folded == out identity, which is exactly
+// the forgery the link prevents.)
+func TestEmittedVerifierFullTranscriptLinkIsLoadBearing(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	ex := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
+	field := ecc.BN254.ScalarField()
+	vf := loadVerifierFullT(t)
+
+	offAlloc, err := AllocVerifierFullCircuit(vf, sym) // stage OFF: no transcript link
+	if err != nil {
+		t.Fatalf("alloc stage-off circuit: %v", err)
+	}
+	onAlloc := allocVerifierFullWithTranscript(t, fx, sym) // stage ON: the link is present
+
+	// betaStart: block 1's `b` operand follows its `x` operand (4 ext lanes).
+	betaStart := gadgetWitnessStartT(t, vf, sym, "FriFoldRowArity2") + 4
+	idxStart := gadgetWitnessStartT(t, vf, sym, "SampleBitsDecomposed")
+
+	for _, tc := range []struct {
+		name   string
+		offset int
+	}{
+		{"block1-fold-beta", betaStart},
+		{"block4-query-index", idxStart},
+	} {
+		// (a) stage OFF — the tamper is otherwise valid: the block alone accepts it.
+		off := assignVerifierFull(t, fx, ex, sym)
+		orig, ok := off.W[tc.offset].(uint32)
+		if !ok {
+			t.Fatalf("%s: witness slot %d is not a base-field felt (%T)", tc.name, tc.offset, off.W[tc.offset])
+		}
+		off.W[tc.offset] = bbAddRef(orig, 1)
+		if err := test.IsSolved(offAlloc, off, field); err != nil {
+			t.Fatalf("%s: stage-OFF circuit REJECTED the wrong challenge — the tamper is not "+
+				"otherwise-valid, so the differential does not isolate the link: %v", tc.name, err)
+		}
+
+		// (b) stage ON — the SAME tamper: the link asserts the block challenge equals
+		// the transcript squeeze, so a different value is UNSAT.
+		on := assignVerifierFullWithTranscript(t, fx, ex, sym)
+		on.W[tc.offset] = bbAddRef(orig, 1)
+		if err := test.IsSolved(onAlloc, on, field); err == nil {
+			t.Fatalf("%s: stage-ON circuit ACCEPTED a block challenge that differs from the "+
+				"transcript squeeze — the LOAD-BEARING LINK is vacuous", tc.name)
+		}
+		t.Logf("%s: stage-OFF ACCEPT, stage-ON REJECT on the same tamper — the transcript link is load-bearing", tc.name)
+	}
 }

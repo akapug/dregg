@@ -105,19 +105,34 @@ type shrinkTranscriptMeta struct {
 	r                int
 	rollInAfterRound []int
 	tpl              *Template
+
+	// Flat offsets into the prefix sample stream (== TxPrefixSamp indices) of the
+	// STARK-algebra challenges the descriptor's block 3 consumes, so the LOAD-BEARING
+	// LINK can bind each block-3 challenge witness to the transcript-bound squeeze
+	// at these offsets (shrinkStarkPrefixLoc: permChSampleOff is permAlpha[0..3]
+	// then permBeta[0..3]; alphaSampleOff is the constraint-folding alpha[0..3]).
+	permChSampleOff int
+	alphaSampleOff  int
 }
 
 // rederive runs the emitted-permutation transcript re-derivation: it builds a
 // MultiField challenger whose permutation is the Lean-emitted template and
 // replays the supplied witness streams (`in`, whose structural fields it fills
-// from the meta), binding every consumed challenge to the transcript.
-func (m *shrinkTranscriptMeta) rederive(bb *BBApi, in *shrinkTranscriptInputs) {
+// from the meta), binding every consumed challenge to the transcript. It RETURNS
+// the re-derived per-round FRI fold betas and per-query domain index bits (both
+// live-drawn from the sponge and bound by the fold/Merkle checks) so the caller
+// can link the descriptor blocks' challenge witnesses to them — closing the
+// arbitrary-challenge hole end-to-end (blocks bound to transcript, not just the
+// stage self-consistent). The prefix sample challenges (permAlpha/permBeta/alpha/
+// zeta/FRI-alpha) are already bound onto `in.PrefixSamples` (== c.TxPrefixSamp) in
+// rederiveShrinkChallenges, so the caller references those directly by offset.
+func (m *shrinkTranscriptMeta) rederive(bb *BBApi, in *shrinkTranscriptInputs) ([]BBExt, [][]frontend.Variable) {
 	in.script = m.script
 	in.cfg = m.cfg
 	in.r = m.r
 	in.rollInAfterRound = m.rollInAfterRound
 	ch := NewMultiFieldChallengerWithPerm(bb, newEmittedPoseidon2Perm(m.tpl))
-	rederiveShrinkChallenges(bb, ch, in)
+	return rederiveShrinkChallenges(bb, ch, in)
 }
 
 // rederiveShrinkChallenges replays the FULL real shrink transcript through the
@@ -139,7 +154,7 @@ func (m *shrinkTranscriptMeta) rederive(bb *BBApi, in *shrinkTranscriptInputs) {
 // to the transcript, not supplied freely. This is the deployed transcript replay,
 // factored so the emit-driven verifier can run it through the Lean-emitted
 // permutation.
-func rederiveShrinkChallenges(bb *BBApi, ch *MultiFieldChallenger, in *shrinkTranscriptInputs) {
+func rederiveShrinkChallenges(bb *BBApi, ch *MultiFieldChallenger, in *shrinkTranscriptInputs) ([]BBExt, [][]frontend.Variable) {
 	api := bb.API()
 	io, id, is := 0, 0, 0
 	for _, op := range in.script {
@@ -158,6 +173,10 @@ func rederiveShrinkChallenges(bb *BBApi, ch *MultiFieldChallenger, in *shrinkTra
 			}
 		}
 	}
-	VerifyFriNative(bb, in.cfg, in.r, in.CommitRoots, in.FinalPoly, in.PowWitness,
-		in.Queries, in.rollInAfterRound, ch)
+	// verifyFriNativeImpl draws the per-round betas and per-query index bits LIVE
+	// from the same sponge and binds them by the fold/Merkle checks; returning them
+	// lets the caller (the descriptor's Define) link block 1's fold-beta operand and
+	// block 4's query-index witness to these exact transcript squeezes.
+	return verifyFriNativeImpl(bb, in.cfg, in.r, in.CommitRoots, in.FinalPoly, in.PowWitness,
+		in.Queries, in.rollInAfterRound, ch, false)
 }

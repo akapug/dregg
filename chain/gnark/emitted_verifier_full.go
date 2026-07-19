@@ -508,6 +508,22 @@ type VerifierFullCircuit struct {
 	TxPow         []frontend.Variable // 0 or 1 element (the query-PoW witness)
 	TxFinalPoly   []BBExt
 	TxQueries     []FriNativeQueryOpening
+
+	// --- LOAD-BEARING LINK capture (the arbitrary-challenge hole closure). ---
+	//
+	// The descriptor blocks consume their challenges as FRESH witness off the flat
+	// bank W (assignVerifierFull feeds the real ones). With the transcript stage
+	// attached, expand() records the exact challenge witnesses each block consumed
+	// so Define can AssertIsEqual them against the transcript-re-derived challenge
+	// (bindBlockChallengesToTranscript). Without these links a prover could satisfy
+	// the transcript stage with the real challenges AND the blocks with favorable,
+	// unlinked ones; with them, no block can consume a challenge that is not the
+	// sponge squeeze of the real roots. Captured unconditionally (cheap); only USED
+	// when txMeta != nil, so the stage-off skeleton is unperturbed.
+	block1FoldBeta   *BBExt              // block 1 FriFoldRowArity2 fold-beta operand
+	block3Challenges [][]BBExt           // block 3 per-instance WitnessChecks bus (permAlpha,permBeta per lookup)
+	block3Alpha      []BBExt             // block 3 per-instance constraint-folding alpha
+	block4QueryIdx   []frontend.Variable // block 4 SampleBitsDecomposed query-index witness
 }
 
 // publicLane returns the i-th lane of the pinned 25-lane public statement in the
@@ -572,7 +588,7 @@ func (c *VerifierFullCircuit) Define(api frontend.API) error {
 		if len(c.TxPow) > 0 {
 			pow = c.TxPow[0]
 		}
-		c.txMeta.rederive(bb, &shrinkTranscriptInputs{
+		betas, queryIdxBits := c.txMeta.rederive(bb, &shrinkTranscriptInputs{
 			PrefixObs:     c.TxPrefixObs,
 			PrefixDigests: c.TxPrefixDig,
 			PrefixSamples: c.TxPrefixSamp,
@@ -581,8 +597,78 @@ func (c *VerifierFullCircuit) Define(api frontend.API) error {
 			PowWitness:    pow,
 			Queries:       c.TxQueries,
 		})
+		// THE LOAD-BEARING LINK: bind every challenge the descriptor blocks consumed
+		// (captured during expand) to the transcript-re-derived challenge. After this,
+		// no block can use a challenge that is not the sponge squeeze of the real roots.
+		c.bindBlockChallengesToTranscript(bb, betas, queryIdxBits)
 	}
 	return nil
+}
+
+// bindBlockChallengesToTranscript closes the arbitrary-challenge hole end-to-end:
+// it AssertIsEquals each challenge the descriptor blocks consumed as fresh witness
+// against the matching transcript-re-derived challenge. The prefix challenges
+// (permAlpha/permBeta/alpha) are already bound onto c.TxPrefixSamp by the stage
+// (rederiveShrinkChallenges squeeze-asserts), so binding a block witness to
+// c.TxPrefixSamp[off] transitively binds it to the squeeze; the FRI fold betas and
+// the query index are drawn live inside the stage and threaded out here.
+//
+//   - block 1 (fri_fold): the fold-beta operand == the transcript round-0 fold beta;
+//   - block 3 (batch_table): every instance's WitnessChecks bus (permAlpha, permBeta
+//     per lookup) == the transcript's, and its constraint-folding alpha == the
+//     transcript alpha — so the DAG folded == quotient·Z_H identity is evaluated at
+//     the transcript-sampled challenges, not favorable free ones;
+//   - block 4 (query_pow): the range-checked query index == the transcript's
+//     live-sampled query index.
+//
+// NAMED RESIDUAL (described at current resolution): block 3 does not consume zeta as
+// a challenge WITNESS — zeta enters only through the host-derived Lagrange selectors
+// and the openings-at-zeta, which the emit skeleton takes as inputs rather than
+// deriving in-circuit (the open_input structural abstraction, seam #2). So there is
+// no zeta slot to bind here; the zeta-boundness of the selectors/openings remains the
+// pre-existing seam-#2 residual, orthogonal to this challenge link. The scope is the
+// pinned fixture shape (extra_query_index_bits == 0, so the sampled domain index is
+// the full query index block 4 range-checks).
+func (c *VerifierFullCircuit) bindBlockChallengesToTranscript(bb *BBApi, betas []BBExt,
+	queryIdxBits [][]frontend.Variable) {
+	api := bb.API()
+	m := c.txMeta
+	txExt := func(off int) BBExt {
+		var e BBExt
+		for i := 0; i < 4; i++ {
+			e[i] = c.TxPrefixSamp[off+i]
+		}
+		return e
+	}
+
+	// block 1 — the FRI fold beta operand == the transcript round-0 fold beta.
+	if c.block1FoldBeta != nil && len(betas) > 0 {
+		bb.ExtAssertIsEqual(*c.block1FoldBeta, betas[0])
+	}
+
+	// block 3 — the WitnessChecks bus (permAlpha, permBeta) and the folding alpha.
+	permAlpha := txExt(m.permChSampleOff)
+	permBeta := txExt(m.permChSampleOff + 4)
+	alpha := txExt(m.alphaSampleOff)
+	for _, chs := range c.block3Challenges {
+		// chs is [permAlpha, permBeta, permAlpha, permBeta, ...] per lookup.
+		for l := 0; 2*l+1 < len(chs); l++ {
+			bb.ExtAssertIsEqual(chs[2*l], permAlpha)
+			bb.ExtAssertIsEqual(chs[2*l+1], permBeta)
+		}
+	}
+	for _, a := range c.block3Alpha {
+		bb.ExtAssertIsEqual(a, alpha)
+	}
+
+	// block 4 — the range-checked query index == the transcript's live-sampled
+	// query index (extra_query_index_bits == 0: the domain bits ARE the full index).
+	if len(c.block4QueryIdx) > 0 && len(queryIdxBits) > 0 {
+		idx := api.FromBinary(queryIdxBits[0]...)
+		for _, v := range c.block4QueryIdx {
+			api.AssertIsEqual(v, idx)
+		}
+	}
 }
 
 // AllocVerifierFullCircuitWithTranscript builds the emit-driven circuit WITH the
@@ -635,6 +721,11 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 	case "FriFoldRowArity2":
 		x := cur.nextExt()
 		b := cur.nextExt()
+		// LOAD-BEARING LINK: `b` is the block's fold-beta operand (assignment feeds
+		// ExpectedBetas[0]); record it so Define binds it to the transcript's
+		// round-0 fold beta (the sponge squeeze), not a free witness.
+		beta := b
+		c.block1FoldBeta = &beta
 		for i := 0; i < g.Count; i++ {
 			x = bb.ExtMul(x, b)
 		}
@@ -707,7 +798,12 @@ func (c *VerifierFullCircuit) expand(api frontend.API, bb *BBApi, rc frontend.Ra
 	case "SampleBitsDecomposed":
 		bits := firstParam(g, "bits")
 		for i := 0; i < g.Count; i++ {
-			rc.Check(cur.next(), bits)
+			idx := cur.next()
+			// LOAD-BEARING LINK: record the query-index witness so Define binds it to
+			// the transcript's live-sampled query index (the sponge squeeze), not a
+			// free witness.
+			c.block4QueryIdx = append(c.block4QueryIdx, idx)
+			rc.Check(idx, bits)
 		}
 
 	// block 4 — the PoW target: the low `pow_bits` bits of the sample are zero
@@ -828,6 +924,13 @@ func (c *VerifierFullCircuit) starkInstance(bb *BBApi, cur *varCursor, inst *Sym
 	}
 	alpha := cur.nextExt()
 	out := cur.nextExt()
+	// LOAD-BEARING LINK: record this instance's WitnessChecks bus (permAlpha/permBeta
+	// per lookup) and constraint-folding alpha so Define binds each to the
+	// transcript-re-derived challenge (TxPrefixSamp at permChSampleOff / alphaSampleOff).
+	// Without this, the DAG folded == out identity could be satisfied with a favorable
+	// alpha/permAlpha/permBeta the transcript never sampled.
+	c.block3Challenges = append(c.block3Challenges, in.Challenges)
+	c.block3Alpha = append(c.block3Alpha, alpha)
 	folded := evalSymbolicFoldedNative(bb, inst, in, alpha)
 	bb.ExtAssertIsEqual(folded, out)
 }
