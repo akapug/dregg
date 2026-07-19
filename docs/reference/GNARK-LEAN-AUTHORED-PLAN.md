@@ -227,10 +227,16 @@ as an expression DAG (`fixtures/shrink_symbolic_constraints.json`, Rust-emitted 
 constraint-evaluation mode — the hand-mode was removed as a vacuous-check trap). So the pattern "emit a
 constraint DAG from the verified side, interpret it generically in gnark" is **live in this exact
 circuit**. Two consequences: (a) the `batchTables` check's emit is largely *reuse* — keep the symbolic
-interpreter, and once STARK-KILL moves the inner AIRs to Lean (`EffectVmDescriptor2`), that DAG's source
-of truth becomes Lean too, converging with this plan; (b) this plan generalizes the same "emit +
-generic interpret" pattern from the algebra layer to the rest of the *outer* scaffolding (challenger +
-FRI + Merkle + field gadgets), which `verifyAlgo` — not the inner AIRs — specifies.
+interpreter; the CHECK over the DAG is Lean-authored (`BatchTableEmit.batchTable_refines`, ∀ every DAG),
+the DAG itself enters as input data. ⚠ CORRECTION (07-19 scout): the shrink DAG does NOT converge to
+Lean via STARK-KILL. It is the constraint system of plonky3-recursion's *in-circuit verifier* tables
+(`~/dev/plonky3-recursion`, a separate repo, field-generic — "table AIRs depend only on Val/Challenge"),
+NOT dregg's effect-vm application AIRs. STARK-KILL Lean-authors the latter; it never touches the former.
+So the DAG's *provenance* is a PERMANENT trusted-reference residual (a wrapped third-party recursion
+verifier, like the deployed p3 prover), faithfulness discharged empirically by the real-fixture quotient
+identity — NOT a gap STARK-KILL closes. (b) this plan generalizes the same "emit + generic interpret"
+pattern from the algebra layer to the rest of the *outer* scaffolding (challenger + FRI + Merkle + field
+gadgets), which `verifyAlgo` — not the inner AIRs — specifies.
 
 ---
 

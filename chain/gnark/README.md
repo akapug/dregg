@@ -47,8 +47,20 @@ calldata fixture for `chain/test/DreggSettlementRealProof.t.sol`, which
 settles a REAL proof against the REAL generated verifier (no mock on the
 accept path).
 
-NAMED RESIDUALS (honest scope): the Groth16 setup is a single-party DEV
-ceremony (a production VK needs an MPC).
+NAMED RESIDUALS (honest scope):
+- **Ceremony:** the Groth16 setup is a single-party DEV ceremony (a production VK
+  needs an MPC).
+- **The shrink constraint DAG:** a TRUSTED REFERENCE, not a dregg-authored AIR. The
+  batch-STARK CHECK over it is Lean-authored (`BatchTableEmit.batchTable_refines`, ∀
+  every DAG), but the DAG itself is the constraint system of plonky3-recursion's
+  in-circuit verifier tables (`~/dev/plonky3-recursion`, field-generic), extracted via
+  `get_symbolic_constraints`. Its faithfulness ("this DAG = the real inner-AIR
+  constraints") is discharged EMPIRICALLY by the real-fixture quotient identity — a
+  ~124-bit-per-instance equation a wrong tree/knob cannot pass — the like-for-like floor
+  for a wrapped third-party object (same class as the deployed p3 prover). NOT closeable
+  by STARK-KILL (which authors dregg's own effect-vm AIRs, not this verifier).
+- **The FRI floor:** `FriLowDegreeSound` — a low-degree-soundness crypto assumption
+  (a distinct question: crypto hardness, not provenance).
 
 ## Why native, not zkVM
 
