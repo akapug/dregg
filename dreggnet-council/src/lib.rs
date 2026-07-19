@@ -45,10 +45,41 @@
 //! executor-refereed, verifiable effect. A *fuller* governance offering would let a
 //! proposal carry a richer effect — a capability **grant** to a named cell, a fund
 //! **transfer**, a cross-cell program install, or a parameterized method call — and
-//! would add proposal lifecycle (amend / withdraw / expire), weighted / delegated
-//! ballots (the engine already supports non-amplifying delegation), and a
-//! constitutional amendment path. The abstraction is unchanged; only the enacted
-//! [`Effect`] set widens.
+//! would add proposal lifecycle (amend / withdraw / expire), delegated ballots (the
+//! engine already supports non-amplifying delegation), and a constitutional amendment
+//! path. The abstraction is unchanged; only the enacted [`Effect`] set widens.
+//!
+//! ## Weighted councils
+//!
+//! [`CouncilOffering::new_weighted`] opens the SAME three affordances over the
+//! engine's **weighted** primitives instead of the plain ones — nothing here
+//! hand-rolls a weight tally:
+//!
+//! - PROPOSE opens the poll with [`collective_choice::VoteEngine::open_poll_weighted_gated`],
+//!   so `quorum_m` becomes a **WEIGHT** threshold on APPROVE (`M·RESOLVED −
+//!   TALLY_approve ≤ 0` over weight-bumped tallies) and the `CountGe` floor drops to
+//!   one genuine distinct approver — a member whose grant alone clears `M` is a
+//!   legitimate quorum, while a forged tally jump with no real voter still cannot arm
+//!   `RESOLVED`.
+//! - VOTE casts with [`collective_choice::VoteEngine::cast_weighted`], so the member's
+//!   whole granted weight rides **ONE** nullifier (never `W` weight-1 ballots — that
+//!   is the amplification the delegation lattice forbids). A second cast at any weight
+//!   is the same [`VoteError::DoubleVote`] refusal as the classic council.
+//! - A **zero-weight** member is refused fail-closed by the engine's
+//!   [`VoteError::ZeroWeight`] floor *before* the ballot turn, so a worthless cast
+//!   never consumes their single-use ballot.
+//!
+//! The electorate of a weighted poll is dynamic at the ENGINE layer (eligibility is
+//! meant to be the caller's verified grant), so the council keeps its own membership
+//! gate: an actor outside [`CouncilSession::members`] is refused in
+//! [`advance`](Offering::advance) before any ballot is minted.
+//!
+//! The weight itself is **granted upstream** — this crate consumes it, it does not
+//! prove it. Where the number comes from (a proven on-chain holding, a bot-recorded
+//! standing, a charter) is the caller's claim to make honestly.
+//!
+//! An unweighted council is unchanged in every respect: it opens `open_poll_gated`,
+//! casts plain `cast`, and [`CouncilSession::member_weight`] reads a uniform `1`.
 
 #![forbid(unsafe_code)]
 
@@ -160,7 +191,12 @@ pub struct CouncilSession {
     /// an identity not derived from one of these is a non-member and is refused.
     members: Vec<[u8; 32]>,
     /// The quorum threshold `M` — APPROVE must reach this for a proposal to enact.
+    /// In a **weighted** session this is a WEIGHT threshold, not a headcount.
     quorum_m: u64,
+    /// The granted ballot weights, `Some` iff this council was opened weighted (see
+    /// [`CouncilOffering::new_weighted`]). `None` is the classic one-member-one-vote
+    /// council, whose every member weighs exactly `1`.
+    weights: Option<HashMap<[u8; 32], u64>>,
     /// The catalog of candidate proposals (the enactable effects).
     catalog: Vec<CandidateProposal>,
     /// `DreggIdentity` → member public key. Built from `members` at open; the reverse
@@ -177,6 +213,40 @@ impl CouncilSession {
     /// The number of proposals opened.
     pub fn proposal_count(&self) -> usize {
         self.proposals.len()
+    }
+
+    /// Whether this council was opened **weighted** ([`CouncilOffering::new_weighted`]):
+    /// every poll rides `open_poll_weighted_gated`, every vote rides `cast_weighted`,
+    /// and [`quorum`](Self::quorum) is a WEIGHT threshold rather than a headcount.
+    pub fn is_weighted(&self) -> bool {
+        self.weights.is_some()
+    }
+
+    /// The granted ballot weight one member's single vote is worth.
+    ///
+    /// In a **weighted** council this is the grant recorded at open — `0` for anyone
+    /// not granted (a stranger weighs nothing, and a granted `0` is a real zero-weight
+    /// member whose cast the engine refuses fail-closed). In the classic council every
+    /// member weighs exactly `1` — one member, one vote.
+    pub fn member_weight(&self, member: &[u8; 32]) -> u64 {
+        match &self.weights {
+            Some(w) => w.get(member).copied().unwrap_or(0),
+            None => 1,
+        }
+    }
+
+    /// The quorum threshold `M` — a WEIGHT threshold on APPROVE when
+    /// [`is_weighted`](Self::is_weighted), a distinct-member count otherwise.
+    pub fn quorum(&self) -> u64 {
+        self.quorum_m
+    }
+
+    /// The total granted weight of the electorate (the denominator a weight quorum is
+    /// read against). The member count for an unweighted council.
+    pub fn total_weight(&self) -> u64 {
+        self.members
+            .iter()
+            .fold(0u64, |a, pk| a.saturating_add(self.member_weight(pk)))
     }
 
     /// The live `(reject, approve)` tally for proposal `i` (a monotone board a light
@@ -224,6 +294,7 @@ impl CouncilSession {
 /// the confined thing.
 pub struct CouncilOffering {
     members: Vec<[u8; 32]>,
+    weights: Option<HashMap<[u8; 32], u64>>,
     catalog: Vec<CandidateProposal>,
     quorum_m: u64,
 }
@@ -237,6 +308,44 @@ impl CouncilOffering {
         catalog.truncate(MAX_CATALOG);
         CouncilOffering {
             members,
+            weights: None,
+            catalog,
+            quorum_m: quorum_m.max(1),
+        }
+    }
+
+    /// **A weighted council** — the same three affordances over the engine's weighted
+    /// primitives: each `(member, weight)` grant makes that member's single ballot
+    /// worth `weight` on `collective_choice::cast_weighted` (one nullifier carries the
+    /// whole grant), every PROPOSE opens its poll with `open_poll_weighted_gated`, and
+    /// `quorum_m` is a **WEIGHT** threshold on APPROVE — so a member whose grant alone
+    /// clears it is a legitimate quorum, and `M` weight-1 ballots are no longer the
+    /// only way there.
+    ///
+    /// The weights are **granted upstream and consumed here** (this crate proves no
+    /// standing); a member granted `0` is a real zero-weight voter whose cast the
+    /// engine refuses fail-closed without burning their ballot. A repeated member key
+    /// keeps its LAST grant, and the electorate is the grant order.
+    ///
+    /// `catalog` is truncated to [`MAX_CATALOG`] and `quorum_m` is clamped to at least
+    /// `1`, exactly as in [`new`](Self::new).
+    pub fn new_weighted(
+        grants: Vec<([u8; 32], u64)>,
+        catalog: Vec<CandidateProposal>,
+        quorum_m: u64,
+    ) -> Self {
+        let mut catalog = catalog;
+        catalog.truncate(MAX_CATALOG);
+        let mut members: Vec<[u8; 32]> = Vec::with_capacity(grants.len());
+        let mut weights: HashMap<[u8; 32], u64> = HashMap::with_capacity(grants.len());
+        for (pk, w) in grants {
+            if weights.insert(pk, w).is_none() {
+                members.push(pk);
+            }
+        }
+        CouncilOffering {
+            members,
+            weights: Some(weights),
             catalog,
             quorum_m: quorum_m.max(1),
         }
@@ -328,6 +437,7 @@ impl Offering for CouncilOffering {
             council_cell,
             members: self.members.clone(),
             quorum_m: self.quorum_m,
+            weights: self.weights.clone(),
             catalog: self.catalog.clone(),
             member_pk,
             proposals: Vec::new(),
@@ -471,9 +581,17 @@ impl Offering for CouncilOffering {
             title: "Council".to_string(),
             tag: "muted".to_string(),
             children: vec![ViewNode::Text(format!(
-                "{} members · quorum {} · {} verified turns",
+                "{} members · quorum {}{} · {} verified turns",
                 session.members.len(),
                 session.quorum_m,
+                if session.is_weighted() {
+                    format!(
+                        " by WEIGHT (of {} granted, on the verified cast_weighted path)",
+                        session.total_weight()
+                    )
+                } else {
+                    String::new()
+                },
                 session.committed_turns(),
             ))],
         }];
@@ -569,7 +687,17 @@ impl CouncilOffering {
             electorate: session.members.clone(),
             quorum_m: session.quorum_m,
         };
-        let poll = match session.engine.open_poll_gated(spec, APPROVE_OPTION) {
+        // A weighted council opens the WEIGHTED gated poll: `quorum_m` becomes a weight
+        // threshold on APPROVE and the tallies are the ones `cast_weighted` bumps by a
+        // member's whole grant. Unweighted opens exactly the poll it always did.
+        let opened = if session.is_weighted() {
+            session
+                .engine
+                .open_poll_weighted_gated(spec, APPROVE_OPTION)
+        } else {
+            session.engine.open_poll_gated(spec, APPROVE_OPTION)
+        };
+        let poll = match opened {
             Ok(p) => p,
             Err(e) => return Outcome::Refused(format!("poll open refused: {e}")),
         };
@@ -616,6 +744,8 @@ impl CouncilOffering {
     /// VOTE: cast a single-use ballot for `voter_pk` on proposal `arg`. The engine's
     /// `WriteOnce(VOTE)` + nullifier make a second vote a real [`Outcome::Refused`]; a
     /// non-electorate voter holds no cap (Ineligible → Refused). A cast lands a real receipt.
+    /// In a weighted council the cast rides `cast_weighted` at the member's granted
+    /// weight, and a zero-weight member is refused before the ballot is consumed.
     fn do_vote(
         &self,
         session: &mut CouncilSession,
@@ -632,6 +762,19 @@ impl CouncilOffering {
             return Outcome::Refused("that proposal is already enacted".to_string());
         }
         let poll = session.proposals[pi].poll;
+
+        // The weighted floor, checked BEFORE the ballot is minted or consumed: the
+        // engine refuses a zero-weight cast (`VoteError::ZeroWeight`) precisely so a
+        // worthless cast never burns the member's single ballot — refusing here keeps
+        // that promise one step earlier, with the same effect (nothing committed).
+        let weight = session.member_weight(&voter_pk);
+        if session.is_weighted() && weight == 0 {
+            return Outcome::Refused(
+                "that member's granted ballot weight is 0 — the cast is refused \
+                 fail-closed and their single-use ballot is NOT consumed"
+                    .to_string(),
+            );
+        }
 
         // Issue (idempotent) the voter's single-use ballot cap. Ineligible → non-member → refused.
         let existing = session.proposals[pi].ballots.get(&voter_pk).cloned();
@@ -653,7 +796,15 @@ impl CouncilOffering {
         };
 
         // Cast: the ballot turn is refereed by the executor (WriteOnce + monotone tally).
-        match session.engine.cast(poll, &cap, option) {
+        // A weighted council rides `cast_weighted`, so the member's WHOLE grant lands on
+        // ONE nullifier — never `weight` separate weight-1 ballots, which is exactly the
+        // amplification the delegation lattice forbids. Unweighted rides plain `cast`.
+        let cast = if session.is_weighted() {
+            session.engine.cast_weighted(poll, &cap, option, weight)
+        } else {
+            session.engine.cast(poll, &cap, option)
+        };
+        match cast {
             Ok(receipt) => {
                 session.proposals[pi].votes.push((actor, option));
                 session.receipts.push(receipt.clone());
@@ -665,6 +816,11 @@ impl CouncilOffering {
             Err(VoteError::DoubleVote) => {
                 Outcome::Refused("that member has already voted on this proposal".to_string())
             }
+            Err(VoteError::ZeroWeight) => Outcome::Refused(
+                "that member's granted ballot weight is 0 — the cast is refused \
+                 fail-closed and their single-use ballot is NOT consumed"
+                    .to_string(),
+            ),
             Err(e) => Outcome::Refused(format!("vote refused: {e}")),
         }
     }

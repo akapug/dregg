@@ -200,3 +200,52 @@ fn member_weight_reads_the_grant_and_the_unweighted_council_is_unchanged() {
     );
     let _ = (REJECT_OPTION, APPROVE_OPTION); // the option layout is part of the public contract
 }
+
+/// **The gate a weighted poll moves.** `open_poll_weighted_gated` makes the ENGINE's
+/// electorate DYNAMIC — `issue_ballot` mints to anyone, because for a holding-weight
+/// poll eligibility is meant to be the caller's verified grant. The council is that
+/// caller, so ITS membership check is the only thing standing between a stranger and a
+/// minted ballot. This test is the falsifier: a stranger must be refused with nothing
+/// committed, exactly as in the unweighted council.
+#[test]
+fn a_stranger_is_still_refused_though_the_weighted_poll_mints_dynamically() {
+    let (grants, ids) = weighted_electorate();
+    let offering = CouncilOffering::new_weighted(grants, catalog(), 5);
+    let mut session = offering
+        .open(SessionConfig::with_seed(70_007))
+        .expect("deploys");
+    press(&offering, &mut session, TURN_PROPOSE, 0, &ids[0]);
+    let before = session.committed_turns();
+
+    let stranger = CouncilOffering::member_identity(&[99u8; 32]);
+    match press(&offering, &mut session, TURN_APPROVE, 0, &stranger) {
+        Outcome::Refused(why) => assert!(why.contains("member"), "{why}"),
+        other => panic!("a stranger must be refused in a weighted council, got {other:?}"),
+    }
+    assert_eq!(session.committed_turns(), before);
+    assert_eq!(
+        session.tally_of(0),
+        Some((0, 0)),
+        "no stranger weight lands"
+    );
+}
+
+/// A repeated grant does NOT enroll a member twice (which would double their standing
+/// in the total) — the last grant wins on one electorate seat.
+#[test]
+fn a_repeated_grant_keeps_one_seat_at_its_last_weight() {
+    let offering = CouncilOffering::new_weighted(
+        vec![([11u8; 32], 3), ([22u8; 32], 2), ([11u8; 32], 9)],
+        catalog(),
+        4,
+    );
+    let session = offering
+        .open(SessionConfig::with_seed(70_008))
+        .expect("deploys");
+    assert_eq!(session.member_weight(&[11u8; 32]), 9, "the last grant wins");
+    assert_eq!(
+        session.total_weight(),
+        11,
+        "one seat per key: 9 + 2, not 3 + 2 + 9"
+    );
+}
