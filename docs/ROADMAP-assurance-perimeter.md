@@ -43,8 +43,16 @@ a trusted key. **Nothing trusted, nothing duplicated.**
   found-already-closed `c8f443e37`. 🔶 #3 migration `b4ac7ef23` verifying its own service_promise test-fix.
   ⚠ full-tree `Dregg2` CI-confirm blocked by co-tenant heap8 WIP (`MapMerkleRoot` deps mid-refactor) — origin is
   clean, both `⟺` bridges green standalone; the CI-wiring lands when the tree quiesces.
-- **Cycle 3.** generalize transfer `⟺` to all effect tags; `cells_root` Phase-E; make `wire_commit` the anchor +
-  delete BLAKE3 root; discharge `hcanon` field-faithfulness; the ~31-bit 8-felt-lane thread (heap/nullifier).
+- **Cycle 3 — IN FLIGHT, sequenced AROUND the co-tenant heap8/S2 churn.** KEY: the `→` soundness half is ALREADY
+  generic (`runnable_full_sound` over `RunnableFullStateSpec` in `EffectVmFullStateRunnable.lean`, ~28 emits ride it);
+  only the `←` completeness is missing. **FIRE-NOW (independent):** author the ONE generic `runnable_full_complete` +
+  `runnable_full_commit_iff` (transfer template lifted) → the flagship becomes the ENGINE → ~15 KERNEL-ONLY tags become
+  thin instantiations (IncrementNonce, SetVK, SetPermissions, MakeSovereign, CellSeal/Destroy/Unseal, CreateCell{,FromFactory},
+  EmitEvent, Exercise, PipelinedSend, ReceiptArchive, Noop, Burn, BridgeMint; verify SetField). **DEFER (gated on heap8/S2
+  landing, then near-instantiations of THEIR machinery):** sorted-tree tag completeness (cap/heap/note), `cells_root` Phase-E.
+  **DEFER + CORRECTED:** the state-commit anchor must target `wire_commit_8` (`Faithful8`), NOT the 1-felt `wire_commit`
+  (anchoring the 1-felt now RE-CEMENTS the ~31-bit waist the co-tenant is deleting — a regression); land after the 8-felt
+  STATE_COMMIT settles. **THEIRS:** the ~31-bit→8-felt node8 thread (co-tenant). `hcanon` field-faithfulness rides that.
 - **Apex (post-A).** recursive-proof-default (grow inner AIR to real `EffectVmAir`, force `NEW_COMMIT` in-circuit,
   then recurse). THEN the FRI floor campaign (`FriLdtExtractV3`, an adversary object) — separate.
 
