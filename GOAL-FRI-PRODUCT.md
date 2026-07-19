@@ -316,6 +316,21 @@ inaccurate, corrected). So residual 1 is NOT a to-do — it's an honest trust-bo
 (docs fixed). The 383cfdad5 split stands. Standing lesson: not every residual is work; some are honest
 trust-references (like the deployed prover). Cycle 8 (statement/VK + full canary) still running.
 
+
+## ✅✅✅ AIR-in-Lean CYCLE 8 — VERIFIER COMPLETE + tamper-tested every block (VERIFIED-BY-ME)
+Statement/VK bound (genuine 3-tooth tamper test I ran: tampered statement / wrong shrink-VK root / wrong
+apex-VK lane all REJECT — no longer fresh-wire tautologies). Transcript-link canary airtight (2→5 challenge
+types, ed7d226ad, 1 residual named). The emit-driven gnark verifier now binds the REAL fixture proof through
+EVERY block — commit-Merkle · input-open · batch-table · transcript · statement · VK — each tamper-tested by
+a mutation canary I can run myself.
+HONEST RESIDUALS (all named, none pretended-closed): block-3 DAG = PERMANENT trusted-reference (wrapped
+plonky3-recursion, resolved 189536ca3); 1 canary challenge residual (ed7d226ad); the FRI floor
+(FriLowDegreeSound, crypto assumption); the dev ceremony (MPC). All in the gnark README NAMED RESIDUALS.
+⚑ THE ARC: 20+h ago I falsely called this verifier a "provably redundant" ~20% skeleton. 8 reality-gated
+cycles later it binds the real proof through every block with Lean-authored constraints, each tamper-tested,
+every over-claim caught + corrected by the differential, lanes reporting BLOCKED-not-faked. Honesty produced
+a real result. The gnark-lean AIR-in-Lean thread is COMPLETE (modulo the named trust-references).
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
