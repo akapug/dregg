@@ -377,6 +377,19 @@ fold on the emit path when the stage is attached = a 4th live hand-Go site. Cycl
 templates). Substrate-clean count: 6 block-path constraint sites Lean-replayed; remaining hand-Go on emit path
 = FRI-stage loop (cycle 13) + classes 4-6 (challenger adapter, openings-bind, quotient/DAG=seam#2, named).
 
+
+## ✅ AIR-in-Lean CYCLE 13 — FRI-stage converted; NONLINEAR CRYPTO now 100% Lean-authored on the emit path
+fri_verify_native.go per-round Merkle+fold → replay MerkleEmit+FriFoldEmit (friStageReplay param; deployed
+SettlementCircuit lane untouched, replay==nil = old body verbatim). 13 tests PASS (229s), ζ CLOSED.
+⚑ HONEST RESOLUTION (gate §4): the emit path's NONLINEAR CRYPTO gadgets are 100% Lean-template replays =
+the AIR-in-Lean law achieved for the crypto. BUT "substrate-clean" ≠ zero-hand-Go: hand-Go STRUCTURAL GLUE
+(§C: equality-links, wire routing, loop scaffolding stitching replayed gadgets) remains — hand-Go, not
+re-authored crypto (open Q: should glue even be Lean-emitted, or is routing-of-proven-wires acceptable?).
+Named seams: class 4 challenger adapter (authorship, Lean lane named); class 5 openings-bind (named);
+class 6 quotient placeholder + trusted-ref DAG = seam #2 (SOUNDNESS depth, not substrate).
+⚑ TWO DISTINCT ENDPOINTS, not laundered: SUBSTRATE (crypto Lean-authored) = DONE for gadgets; SOUND
+(seam #2 + FRI floor) = separate deeper goal. "Basically done" is TRUE for the crypto-substrate axis.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
