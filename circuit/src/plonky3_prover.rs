@@ -160,6 +160,34 @@ pub fn create_config_with_fri(
     num_queries: usize,
     query_proof_of_work_bits: usize,
 ) -> DreggStarkConfig {
+    create_config_with_fri_full(
+        log_blowup,
+        log_final_poly_len,
+        max_log_arity,
+        num_queries,
+        0, // commit_proof_of_work_bits — every SHIPPED config sets it to 0
+        query_proof_of_work_bits,
+    )
+}
+
+/// [`create_config_with_fri`] with the SIXTH knob exposed: plonky3's
+/// `commit_proof_of_work_bits` (`fri/src/config.rs`) — grinding ground per fold
+/// round BEFORE the folding challenge `β` is drawn, i.e. against exactly the
+/// commit phase the BCIKS20 `ε_C` term bounds. Every shipped dregg config sets
+/// it to 0 and the Lean `dregg_fri_ledger` deliberately does NOT price it (a
+/// NAMED residual — see `FriLedger.lean`'s "unpriced" block), which is why it
+/// had never been in any measurement grid. This constructor exists so the E4
+/// FRI re-grid harness (`circuit-prove/tests/fri_regrid_post_s2_measure.rs`)
+/// can measure its byte/prover-time cost; like every non-default config it
+/// must never leak onto the wire.
+pub fn create_config_with_fri_full(
+    log_blowup: usize,
+    log_final_poly_len: usize,
+    max_log_arity: usize,
+    num_queries: usize,
+    commit_proof_of_work_bits: usize,
+    query_proof_of_work_bits: usize,
+) -> DreggStarkConfig {
     let perm16 = default_babybear_poseidon2_16();
 
     let hash = PaddingFreeSponge::new(perm16.clone());
@@ -173,7 +201,7 @@ pub fn create_config_with_fri(
         log_final_poly_len,
         max_log_arity,
         num_queries,
-        commit_proof_of_work_bits: 0,
+        commit_proof_of_work_bits,
         query_proof_of_work_bits,
         mmcs: challenge_mmcs,
     };
