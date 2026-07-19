@@ -282,17 +282,20 @@ pub async fn post_offering_act_signed(
         "counter": sa.counter,
     });
 
+    // The signer's derived identity — for an RPG key this selects the signer's OWN per-identity
+    // world (their isolated inventory); a shared table ignores it (one host for everyone).
+    let viewer = DreggIdentity(claimed.clone());
     // Ensure open first (lazily, lifecycle-aware) — mirroring the unsigned POST: a policy refusal
     // is an honest 4xx, an evicted persisted session resumes, an unknown offering is a 404.
     let opened = {
-        let key = key.clone();
+        let k = key.clone();
         let sid = sid.clone();
         let opener = Attribution::Asserted {
             label: claimed.clone(),
         };
-        state
-            .host
-            .run(move |h| h.ensure_open_as(&key, &sid, Some(&opener)))
+        state.run_offering(&key, &viewer, move |h| {
+            h.ensure_open_as(&k, &sid, Some(&opener))
+        })
     };
     match opened {
         Err(HostError::UnknownOffering(k)) => {
@@ -331,9 +334,9 @@ pub async fn post_offering_act_signed(
     // consume the counter → the executor referees the move → a landed turn records with
     // `Attribution::Signed` provenance.
     let outcome = {
-        let key = key.clone();
+        let k = key.clone();
         let sid = sid.clone();
-        state.host.run(move |h| h.advance_signed(&key, &sid, sa))
+        state.run_offering(&key, &viewer, move |h| h.advance_signed(&k, &sid, sa))
     };
 
     // AUDIT EMIT: the signature-verified advance — `Landed` carries the receipt-chain join;

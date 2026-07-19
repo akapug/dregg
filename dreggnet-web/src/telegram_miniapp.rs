@@ -83,7 +83,7 @@ use dreggnet_telegram::cipherclerk::{TelegramCipherclerk, seed_for};
 use webauth_core::link_registry::LinkStore;
 
 use crate::{
-    CatalogState, audit, live_session_count, metrics, open_audit_parts, refused_open_response,
+    CatalogState, audit, metrics, open_audit_parts, refused_open_response,
     render_offering_response, wants_fragment,
 };
 
@@ -748,18 +748,19 @@ async fn get_tg_session(
     let viewer = state.identity_for(user.user_id);
     let sid = SessionId::new(id);
 
-    let (opened, open_count) = {
-        let key = key.clone();
+    let opened = {
+        let k = key.clone();
         let sid = sid.clone();
         let opener = Attribution::Asserted {
             label: viewer.0.clone(),
         };
-        state.catalog.host.run(move |h| {
-            let r = h.ensure_open_as(&key, &sid, Some(&opener));
-            (r, live_session_count(h))
+        // RPG keys open in the VERIFIED viewer's own per-identity world (isolated inventory); the
+        // shared tables (games + services) open on the ONE catalog host.
+        state.catalog.run_offering(&key, &viewer, move |h| {
+            h.ensure_open_as(&k, &sid, Some(&opener))
         })
     };
-    metrics::set_sessions_open(open_count as f64);
+    metrics::set_sessions_open(state.catalog.shared_session_count() as f64);
     // AUDIT EMIT: the open decision for the verified viewer, joined to the initData accept
     // event by `corr`.
     {
@@ -867,17 +868,17 @@ async fn post_tg_act(
         .in_session(Some(key.clone()), Some(sid.0.clone()))
     };
 
-    // Ensure open first (lazily, lifecycle-aware) — mirroring the act-signed twin.
+    // Ensure open first (lazily, lifecycle-aware) — mirroring the act-signed twin. RPG keys open
+    // in the verified viewer's own per-identity world; the shared tables on the ONE catalog host.
     let opened = {
-        let key = key.clone();
+        let k = key.clone();
         let sid = sid.clone();
         let opener = Attribution::Asserted {
             label: viewer.0.clone(),
         };
-        state
-            .catalog
-            .host
-            .run(move |h| h.ensure_open_as(&key, &sid, Some(&opener)))
+        state.catalog.run_offering(&key, &viewer, move |h| {
+            h.ensure_open_as(&k, &sid, Some(&opener))
+        })
     };
     match opened {
         Err(HostError::UnknownOffering(k)) => {
@@ -905,11 +906,12 @@ async fn post_tg_act(
 
     // ONE atomic host-thread job: floor-read → sign at exactly the expected counter → verify →
     // consume → executor referees the move. No other job can interleave, so the custodial
-    // signer never races its own counter.
+    // signer never races its own counter. Routed to the viewer's own world for an RPG key.
     let outcome = {
-        let key = key.clone();
+        let k = key.clone();
         let sid = sid.clone();
-        state.catalog.host.run(move |h| {
+        state.catalog.run_offering(&key, &viewer, move |h| {
+            let key = k;
             let expected = match h.signed_counter(&key, &sid, signer.pubkey_hex()) {
                 None => 0,
                 Some(last) => match last.checked_add(1) {

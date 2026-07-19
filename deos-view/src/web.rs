@@ -536,6 +536,23 @@ fn session_form(sid: &str, turn: &str, arg: i64, label: &str, cls: &str, disable
     )
 }
 
+/// One affordance POST-form control with an EDITABLE `arg` — the [`ViewNode::Input`] draft (its
+/// committed value parses into `fire_turn`'s `arg`). Same `{turn, arg}` shape as [`session_form`],
+/// but `arg` rides as a `<input type=number>` seeded with `default_arg` so the user supplies the
+/// value on submit. The turn is REACHABLE (a real POST) even on the no-JS path.
+fn session_form_arg(sid: &str, turn: &str, default_arg: i64, label: &str) -> String {
+    format!(
+        "<form class=\"affordance input\" method=\"post\" action=\"/session/{sid}/act\">\
+<input type=\"hidden\" name=\"turn\" value=\"{turn}\">\
+<input class=\"arg\" type=\"number\" name=\"arg\" value=\"{arg}\" step=\"1\" inputmode=\"numeric\" aria-label=\"{turn} value\">\
+<button type=\"submit\">{label}</button></form>",
+        sid = esc_form(sid),
+        turn = esc_form(turn),
+        arg = default_arg,
+        label = esc_form(label),
+    )
+}
+
 /// **Render a [`ViewNode`] surface into a server-rendered HTML fragment** — the affordance surface
 /// as `<form>`/`<button>` POST controls (no client JS). `session_id` names the session each
 /// affordance POSTs its `{turn, arg}` to (`/session/{session_id}/act`). Prose → `<p class=prose>`,
@@ -603,38 +620,215 @@ fn session_node(node: &ViewNode, sid: &str, out: &mut String) {
                 session_node(c, sid, out);
             }
         }
-        ViewNode::Tabs { panels, .. } => {
+        // TABS (the affordance-loss cure): a tab click IS an actuation — `select_turn` with `arg =
+        // the tab index` — so each tab label becomes one POST form (the tab-switch is REACHABLE on
+        // the no-JS path, not silently dropped), THEN every panel is recursed (cursor-aligned with
+        // the other renderers). An empty `select_turn` (no bound selector) → labels only, no forms.
+        ViewNode::Tabs {
+            tabs,
+            select_turn,
+            panels,
+            ..
+        } => {
+            if !select_turn.is_empty() {
+                out.push_str("<div class=\"affordances tabs\">");
+                for (i, label) in tabs.iter().enumerate() {
+                    out.push_str(&session_form(
+                        sid,
+                        select_turn,
+                        i as i64,
+                        label,
+                        "affordance",
+                        "",
+                    ));
+                }
+                out.push_str("</div>");
+            }
             for p in panels {
                 session_node(p, sid, out);
             }
         }
         ViewNode::Host { view: Some(v), .. } => session_node(v, sid, out),
+        // An UNRESOLVED mount: an honest placeholder (the client-JS path re-reads the cell heap).
+        ViewNode::Host { view: None, cell } => {
+            out.push_str(&format!(
+                "<div class=\"deos-host-unresolved\">&lsaquo;mount cell {}: unresolved&rsaquo;</div>",
+                esc_form(cell)
+            ));
+        }
         ViewNode::Adept(inner) => session_node(inner, sid, out),
-        // A coordinate board: each clickable cell is one POST-form control (its glyph the label);
-        // inert cells carry no affordance and are skipped in the server-form path.
-        ViewNode::CoordGrid { cells, .. } => {
-            for cell in cells {
-                if !cell.turn.is_empty() {
-                    let cls = if cell.highlight {
-                        "affordance highlighted"
-                    } else {
-                        "affordance"
-                    };
+        // HALO (the affordance-loss cure): each handle in the direct-manipulation ring is an
+        // actuation, so each becomes one POST form (a `!enabled` handle rides dimmed + `disabled` —
+        // the cap tooth SHOWN, not hidden). A halo handle now FIRES on the web server-form path
+        // instead of silently doing nothing.
+        ViewNode::Halo { handles, .. } => {
+            out.push_str("<div class=\"affordances halo\">");
+            for h in handles {
+                let (disabled, cls) = if h.enabled {
+                    ("", "affordance")
+                } else {
+                    (" disabled", "affordance dimmed")
+                };
+                out.push_str(&session_form(sid, &h.turn, h.arg, &h.glyph, cls, disabled));
+            }
+            out.push_str("</div>");
+        }
+        // BREADCRUMB (the affordance-loss cure): the path is a nav line joined by `→`; a crumb
+        // carrying a non-empty `turn` is CLICKABLE — one POST form firing that turn — so a
+        // navigational actuation is reachable; an inert crumb is a plain label.
+        ViewNode::Breadcrumb { items } => {
+            out.push_str("<nav class=\"breadcrumb\">");
+            for (i, c) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str("<span class=\"crumb-sep\">&rarr;</span>");
+                }
+                if c.turn.is_empty() {
+                    out.push_str(&format!(
+                        "<span class=\"crumb\">{}</span>",
+                        esc_form(&c.label)
+                    ));
+                } else {
                     out.push_str(&session_form(
                         sid,
-                        &cell.turn,
-                        cell.arg,
-                        &cell.glyph,
-                        cls,
+                        &c.turn,
+                        c.arg,
+                        &c.label,
+                        "affordance crumb",
                         "",
                     ));
                 }
             }
+            out.push_str("</nav>");
+        }
+        // THE BOARD NODE (the fidelity cure — the server-form path was scattering clickable cells
+        // and LOSING the grid): render the FULL `cols`-wide coordinate board (matching the catalog
+        // web route), so both web routes agree. Every cell paints its glyph; a clickable cell
+        // (`turn` non-empty) is a real POST button; an inert cell is a plain span; a highlighted
+        // cell (legal-move / selected) gets the `highlighted` class.
+        ViewNode::CoordGrid { cols, cells } => {
+            let cols_n = (*cols).max(1);
+            out.push_str(&format!(
+                "<div class=\"coordgrid\" style=\"grid-template-columns:repeat({cols_n},1fr)\">"
+            ));
+            for cell in cells {
+                let hl = if cell.highlight { " highlighted" } else { "" };
+                if cell.turn.is_empty() {
+                    out.push_str(&format!(
+                        "<span class=\"cell{hl}\">{}</span>",
+                        esc_form(&cell.glyph)
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "<form class=\"cell{hl}\" method=\"post\" action=\"/session/{sid}/act\">\
+<input type=\"hidden\" name=\"turn\" value=\"{turn}\">\
+<input type=\"hidden\" name=\"arg\" value=\"{arg}\">\
+<button type=\"submit\">{glyph}</button></form>",
+                        sid = esc_form(sid),
+                        turn = esc_form(&cell.turn),
+                        arg = cell.arg,
+                        glyph = esc_form(&cell.glyph),
+                    ));
+                }
+            }
+            out.push_str("</div>");
         }
         ViewNode::Divider => out.push_str("<hr>"),
-        // The live/bound rich leaves (bind/gauge/pill/slider/…) have no server-form actuation — the
-        // deos-js + web-cells live path renders those. An unresolved host / bound leaf is skipped.
-        _ => {}
+        // ── STATIC-PROJECTION leaves. The no-JS server form has no live bind values (`binds` is
+        //    empty here), so these carry no live actuation — but they are DISPLAYED (a visible
+        //    projection, never a silent drop), matching the catalog web route so the two agree. ──
+        // A `pill`/`icon` is a status badge / glyph (its static text/tag half; the live case-mapped
+        // pill is a client-JS concern).
+        ViewNode::Pill { text, tag, .. } => {
+            out.push_str(&format!(
+                "<span class=\"pill tag-{}\">{}</span>",
+                esc_form(tag),
+                esc_form(text)
+            ));
+        }
+        ViewNode::Icon { glyph, tag } => {
+            out.push_str(&format!(
+                "<span class=\"icon tag-{}\">{}</span>",
+                esc_form(tag),
+                esc_form(glyph)
+            ));
+        }
+        // A `progress` bar is literal-valued → a static labelled bar. A `gauge` reads a live slot,
+        // which the no-JS path does not have (documented degradation): show its label + ceiling so
+        // it is visible rather than dropped, with no fabricated fill.
+        ViewNode::Progress { value, max, label } => {
+            out.push_str(&format!(
+                "<div class=\"progress\">{}{}/{}</div>",
+                esc_form(label),
+                value,
+                max
+            ));
+        }
+        ViewNode::Gauge { slot, max, label } => {
+            out.push_str(&format!(
+                "<div class=\"gauge\" data-slot=\"{slot}\">{}(/{max})</div>",
+                esc_form(label)
+            ));
+        }
+        // A `bind`'s LIVE value is not available on the bind-less server-form path (documented
+        // degradation — the client-JS `render_html` path paints the live re-read); its label is
+        // shown with a `data-slot` so a progressive-enhancement script could fill it.
+        ViewNode::Bind { slot, label, .. } => {
+            out.push_str(&format!(
+                "<span class=\"deos-bind\" data-slot=\"{slot}\">{}</span>",
+                esc_form(label)
+            ));
+        }
+        // An `input` whose committed draft parses into `fire_turn`'s `arg` (a value-taking turn) is
+        // a REAL editable-arg POST form — the turn is reachable on the no-JS path. A draft-only
+        // `input` (empty `fire_turn`) is an ephemeral field with no actuation → a plain display.
+        ViewNode::Input {
+            bind_view,
+            fire_turn,
+            submit_label,
+        } => {
+            if fire_turn.is_empty() {
+                out.push_str(&format!(
+                    "<span class=\"deos-input\">&lsaquo;{}&rsaquo;</span>",
+                    esc_form(bind_view)
+                ));
+            } else {
+                let label = if submit_label.is_empty() {
+                    "submit"
+                } else {
+                    submit_label.as_str()
+                };
+                out.push_str(&session_form_arg(sid, fire_turn, 0, label));
+            }
+        }
+        // A `tile` references a host-painted native region; the server-form path has no host
+        // resolver (the catalog web route does the sprite swap), so a labelled placeholder.
+        ViewNode::Tile { handle, .. } => {
+            out.push_str(&format!(
+                "<div class=\"tile placeholder\">&lsaquo;tile {}&rsaquo;</div>",
+                esc_form(handle)
+            ));
+        }
+        // VALUE-DEPENDENT controls: a `slider`'s fired `arg` is the DRAGGED value and a `toggle`'s
+        // fired turn depends on the LIVE slot — neither is a fixed `{turn, arg}` press a no-JS POST
+        // form can express (the same reason [`crate::backend::actuations`] excludes them). They are
+        // DISPLAYED (visible degradation) and driven live only on the client-JS `render_html` path.
+        ViewNode::Slider { slot, min, max, .. } => {
+            out.push_str(&format!(
+                "<div class=\"slider\" data-slot=\"{slot}\">&lsaquo;slider {min}&ndash;{max} (live surface)&rsaquo;</div>"
+            ));
+        }
+        ViewNode::Toggle {
+            slot,
+            glyph_off,
+            label,
+            ..
+        } => {
+            out.push_str(&format!(
+                "<div class=\"toggle\" data-slot=\"{slot}\">{} {} (live surface)</div>",
+                esc_form(glyph_off),
+                esc_form(label)
+            ));
+        }
     }
 }
 

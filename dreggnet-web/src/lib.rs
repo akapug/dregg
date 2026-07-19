@@ -125,6 +125,8 @@ use dreggnet_offerings::{
     Surface, SweepReport, SystemClock, VerifyReport,
 };
 
+use dreggnet_catalog::{PlayerWorlds, is_rpg_key};
+
 /// What the web frontend last presented for a session — the deos [`Surface`] and the cap-gated
 /// [`Action`]s beside it (what it paints as HTML forms). Mirrors `mock::Presented`.
 #[derive(Debug, Clone)]
@@ -1186,31 +1188,132 @@ impl HostThread {
     }
 }
 
+/// A unit of work run ON the per-identity RPG worlds' owning thread, against the live
+/// [`PlayerWorlds`] registry.
+type PlayerJob = Box<dyn FnOnce(&mut PlayerWorlds) + Send + 'static>;
+
+/// **A thread-confined [`PlayerWorlds`] handle** — the [`HostThread`] pattern for the per-identity
+/// RPG worlds. A [`PlayerWorlds`] owns one `!Send` [`OfferingHost`] per derived identity, so like
+/// the shared catalog host it lives on ONE owning thread and every access is a job shipped to it;
+/// only the (`Send`) result crosses back. The handle is a channel sender — `Send + Sync`, drops
+/// into an axum `State`.
+pub struct PlayerHostThread {
+    jobs: SyncSender<PlayerJob>,
+}
+
+impl PlayerHostThread {
+    /// Spawn the owning thread and BUILD the registry on it (`build` runs on the thread, so every
+    /// per-identity host — and its `!Send` sessions — is born there and never crosses a boundary).
+    pub fn spawn(build: impl FnOnce() -> PlayerWorlds + Send + 'static) -> PlayerHostThread {
+        let (jobs, rx) = sync_channel::<PlayerJob>(64);
+        std::thread::Builder::new()
+            .name("player-worlds".to_string())
+            .spawn(move || {
+                let mut worlds = build();
+                while let Ok(job) = rx.recv() {
+                    job(&mut worlds);
+                }
+            })
+            .expect("spawn the player-worlds thread");
+        PlayerHostThread { jobs }
+    }
+
+    /// Run `f` against the registry on the owning thread and hand back its (`Send`) result.
+    pub fn run<R: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut PlayerWorlds) -> R + Send + 'static,
+    ) -> R {
+        let (tx, rx) = sync_channel::<R>(1);
+        self.jobs
+            .send(Box::new(move |worlds| {
+                let _ = tx.send(f(worlds));
+            }))
+            .expect("the player-worlds thread is alive");
+        rx.recv().expect("the player-worlds thread answered")
+    }
+}
+
 /// **The axum state for the multi-offering catalog** — a thread-confined [`OfferingHost`] behind a
 /// `Send + Sync` handle. Shared behind an `Arc` as the handler `State`.
 pub struct CatalogState {
     /// The host handle (the registry of offerings + their live sessions, on its owning thread).
+    /// The SHARED tables — the games (dungeon/council/market/tug/…) and the service offerings —
+    /// live here: a council with one voter per host is not a council, so those are inherently
+    /// shared and stay on this ONE host across every viewer.
     host: HostThread,
+    /// The per-identity RPG worlds handle. The eight [`is_rpg_key`] surfaces (trade / inventory /
+    /// craft / …) are per-player by nature — an inventory is yours — so every RPG-key session
+    /// operation routes to the VIEWER's own [`OfferingHost`] here ([`run_offering`](Self::run_offering)),
+    /// keyed by their derived identity. Two viewers on the same web surface therefore have
+    /// ISOLATED inventories: player A forges an item and player B does not see it. This is the
+    /// shared-layer form of the split the Discord bot already runs.
+    players: PlayerHostThread,
 }
 
 impl CatalogState {
-    /// A fresh catalog over the full shared DreggNet portfolio — see
-    /// [`catalog_default_host`].
+    /// A fresh catalog over the full shared DreggNet portfolio (shared tables) plus an in-memory
+    /// per-identity RPG worlds registry — see [`catalog_default_host`] and [`PlayerWorlds`].
     pub fn new() -> Self {
         CatalogState {
             host: HostThread::spawn(catalog_default_host),
+            players: PlayerHostThread::spawn(PlayerWorlds::new),
         }
     }
 
-    /// A catalog over a caller-built host (the offerings are registered inside `build`, which runs
-    /// on the owning thread). Lets a deployment register its own offering set.
+    /// A catalog over a caller-built shared host (the offerings are registered inside `build`, which
+    /// runs on the owning thread), with an in-memory per-identity RPG worlds registry. Lets a
+    /// deployment register its own shared offering set; the RPG worlds stay in-memory (the tests'
+    /// path — see [`with_hosts`](Self::with_hosts) for the durable pair).
     pub fn with_host(build: impl FnOnce() -> OfferingHost + Send + 'static) -> Self {
         CatalogState {
             host: HostThread::spawn(build),
+            players: PlayerHostThread::spawn(PlayerWorlds::new),
         }
     }
 
-    /// The registered offerings (the catalog listing).
+    /// A catalog over a caller-built shared host AND a caller-built per-identity RPG worlds registry
+    /// — the full production seam ([`make_app_parts`] passes the env-resolved durable pair:
+    /// [`resolve_demo_host`] + [`resolve_player_worlds`], so both the shared game sessions and each
+    /// player's RPG world survive a restart by move-log replay).
+    pub fn with_hosts(
+        build_host: impl FnOnce() -> OfferingHost + Send + 'static,
+        build_players: impl FnOnce() -> PlayerWorlds + Send + 'static,
+    ) -> Self {
+        CatalogState {
+            host: HostThread::spawn(build_host),
+            players: PlayerHostThread::spawn(build_players),
+        }
+    }
+
+    /// **Route a `(key, session)`-scoped host job to the host that OWNS it for `viewer`.** An
+    /// [`is_rpg_key`] offering runs against the viewer's own per-identity RPG world (their isolated
+    /// inventory); everything else — the shared games + services — runs against the ONE catalog
+    /// host. This ONE routing decision is the whole fix: it is why two viewers never share an
+    /// inventory while a council / tug stays a single shared table.
+    pub(crate) fn run_offering<R: Send + 'static>(
+        &self,
+        key: &str,
+        viewer: &DreggIdentity,
+        f: impl FnOnce(&mut OfferingHost) -> R + Send + 'static,
+    ) -> R {
+        if is_rpg_key(key) {
+            let id = viewer.0.clone();
+            self.players.run(move |worlds| f(worlds.host_mut(&id)))
+        } else {
+            self.host.run(f)
+        }
+    }
+
+    /// The SHARED catalog host's total live-session count — the `dregg_web_sessions_open` gauge
+    /// source. The per-identity RPG worlds are counted separately (they are not the catalog host's
+    /// sessions), so the gauge keeps meaning "shared catalog sessions".
+    pub(crate) fn shared_session_count(&self) -> usize {
+        self.host.run(|h| live_session_count(h))
+    }
+
+    /// The registered offerings (the catalog listing). Served from the shared host, which still
+    /// registers the RPG keys for metadata/listing (their sessions route per-identity, but the
+    /// catalog page still lists all of them).
     pub fn list_offerings(&self) -> Vec<OfferingInfo> {
         self.host.run(|h| h.list_offerings())
     }
@@ -1341,18 +1444,19 @@ async fn get_offering_session(
     // viewer identity is the opener attribution (an ADVISORY `Asserted` quota lane — a forgeable
     // cookie; capacity + TTL are the real backstops), a policy refusal answers an honest 4xx
     // instead of minting, and an evicted persisted session transparently resumes.
-    let (opened, open_count) = {
-        let key = key.clone();
+    let opened = {
+        let k = key.clone();
         let sid = sid.clone();
         let opener = Attribution::Asserted {
             label: viewer.0.clone(),
         };
-        state.host.run(move |h| {
-            let r = h.ensure_open_as(&key, &sid, Some(&opener));
-            (r, live_session_count(h))
+        // RPG keys open in the VIEWER's own per-identity world (isolated inventory); the shared
+        // tables (games + services) open on the ONE catalog host.
+        state.run_offering(&key, &viewer, move |h| {
+            h.ensure_open_as(&k, &sid, Some(&opener))
         })
     };
-    metrics::set_sessions_open(open_count as f64);
+    metrics::set_sessions_open(state.shared_session_count() as f64);
     // AUDIT EMIT: the open decision (asserted-cookie attribution — the envelope names the
     // grade; a policy refusal is the gate WORKING and is recorded as `gated`).
     {
@@ -1431,18 +1535,18 @@ async fn post_offering_act(
     // Ensure open first (so a POST to a fresh session still resolves against a live offering) —
     // lifecycle-aware exactly as the GET: the actor is the opener attribution, a policy refusal
     // is an honest 4xx, an evicted persisted session resumes.
-    let (opened, open_count) = {
-        let key = key.clone();
+    let opened = {
+        let k = key.clone();
         let sid = sid.clone();
         let opener = Attribution::Asserted {
             label: actor.0.clone(),
         };
-        state.host.run(move |h| {
-            let r = h.ensure_open_as(&key, &sid, Some(&opener));
-            (r, live_session_count(h))
+        // RPG keys act in the ACTING user's own per-identity world; the shared tables on the ONE host.
+        state.run_offering(&key, &actor, move |h| {
+            h.ensure_open_as(&k, &sid, Some(&opener))
         })
     };
-    metrics::set_sessions_open(open_count as f64);
+    metrics::set_sessions_open(state.shared_session_count() as f64);
     match opened {
         Err(HostError::UnknownOffering(_)) => {
             audit::log().emit(
@@ -1464,15 +1568,16 @@ async fn post_offering_act(
     // host thread: the turn must be among the offering's current affordances (offered), then the
     // executor is the sole referee of the {turn, arg} on the substrate.
     let acted = {
-        let key = key.clone();
+        let k = key.clone();
         let sid = sid.clone();
         let turn = form.turn.clone();
         let arg = form.arg;
-        let actor = actor.clone();
-        state.host.run(move |h| {
+        let inner_actor = actor.clone();
+        // RPG keys resolve in the acting user's own world; the shared tables on the ONE host.
+        state.run_offering(&key, &actor, move |h| {
             // Validate against the affordances THIS actor sees (`actions_for`) — a viewer is offered
             // only what their caps allow; the executor remains the sole referee of the typed turn.
-            let Some(actions) = h.actions_for(&key, &sid, &actor) else {
+            let Some(actions) = h.actions_for(&k, &sid, &inner_actor) else {
                 return CatalogAct::Missing;
             };
             if !actions.iter().any(|a| a.turn == turn) {
@@ -1480,7 +1585,7 @@ async fn post_offering_act(
             }
             // The label + enabled are decoration; the executor resolves the TYPED (turn, arg).
             let action = Action::new(turn.clone(), turn, arg, true);
-            match h.advance(&key, &sid, action, actor) {
+            match h.advance(&k, &sid, action, inner_actor) {
                 Some(o) => CatalogAct::Advanced(o),
                 None => CatalogAct::Missing,
             }
@@ -1633,8 +1738,14 @@ pub(crate) fn open_audit_parts(e: &HostError) -> (&'static str, String) {
 async fn get_offering_verify(
     State(state): State<Arc<CatalogState>>,
     Path((key, id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(query): Query<WebQuery>,
 ) -> impl IntoResponse {
     let sid = SessionId::new(id);
+    // The viewer's derived identity — for an RPG key the chain being re-verified is THIS viewer's
+    // own world (a per-identity session), so verify must route to the same world its turns landed
+    // in. A shared table ignores the viewer (one chain for everyone).
+    let viewer = web_identity(&web_user(&headers, &query));
     let verify_event = || {
         audit::AuditEvent::new(
             "web",
@@ -1647,7 +1758,12 @@ async fn get_offering_verify(
         )
         .in_session(Some(key.clone()), Some(sid.0.clone()))
     };
-    match state.verify(&key, &sid) {
+    let report = {
+        let k = key.clone();
+        let sid = sid.clone();
+        state.run_offering(&key, &viewer, move |h| h.verify(&k, &sid))
+    };
+    match report {
         Some(report) => {
             // AUDIT EMIT: a re-verification ran — the report verdict is the outcome.
             audit::log().emit(verify_event().with_outcome(audit::AuditOutcome::Verified {
@@ -1685,14 +1801,16 @@ fn offering_surface_fragment(
     viewer: &DreggIdentity,
 ) -> Option<String> {
     let rendered = {
-        let key = key.to_string();
+        let k = key.to_string();
         let id = id.clone();
-        let viewer = viewer.clone();
+        let v = viewer.clone();
         // Render AS the viewer — the per-player projection (own hidden hand revealed, others fog),
-        // NOT the viewer-blind `render`. This is the host-boundary fix reaching the web surface.
-        state
-            .host
-            .run(move |h| h.render_for(&key, &id, &viewer).zip(h.verify(&key, &id)))
+        // NOT the viewer-blind `render`. For an RPG key this ALSO selects the viewer's own world
+        // (their inventory), so the render reads the ledger their turns landed in — the whole
+        // per-viewer isolation reaching the web surface.
+        state.run_offering(key, viewer, move |h| {
+            h.render_for(&k, &id, &v).zip(h.verify(&k, &id))
+        })
     };
     let (surface, verify) = rendered?;
     let forms = render_catalog_forms(surface.view(), key, &id.0);
@@ -1768,7 +1886,7 @@ fn wants_fragment(headers: &HeaderMap) -> bool {
 /// rendered `disabled` + dimmed (the cap tooth SHOWN, not hidden — a decoration; the executor still
 /// refuses a crafted POST of it). A value-taking turn's `arg` is an editable number input (so a
 /// market bid's value can be typed); a fixed-choice affordance defaults it to the presented arg.
-fn render_catalog_forms(node: &ViewNode, key: &str, id: &str) -> String {
+pub fn render_catalog_forms(node: &ViewNode, key: &str, id: &str) -> String {
     let mut out = String::new();
     catalog_node(node, key, id, &mut out);
     out
@@ -2342,6 +2460,44 @@ pub fn resolve_demo_host() -> OfferingHost {
     demo_host_over(dir, resolve_web_policy())
 }
 
+/// **Resolve the per-identity RPG worlds registry** from the environment — the per-player half of
+/// the catalog (the eight [`is_rpg_key`] surfaces). With `DREGGNET_WEB_SESSION_DIR` set, each
+/// identity's world attaches a durable [`FileResumeStore`] under a PER-IDENTITY subdirectory
+/// (`<dir>/players/<blake3(identity)>`), so a player's forge / inventory / trade survive a restart
+/// by move-log replay — the same durability the shared game sessions get, and the same per-player
+/// scoping Discord's `SqliteRpgResumeStore` gives (there by SQL row, here by directory). The
+/// subdirectory is the ONE thing the isolation guarantee rests on: no identity's host ever sees
+/// another's logs. Unset (or an unopenable dir) → that world stays in memory. Built on the
+/// player-worlds owning thread ([`PlayerHostThread::spawn`]).
+pub fn resolve_player_worlds() -> PlayerWorlds {
+    let root = std::env::var("DREGGNET_WEB_SESSION_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from);
+    let Some(root) = root else {
+        return PlayerWorlds::new();
+    };
+    let players_root = root.join("players");
+    PlayerWorlds::with_store(move |identity| {
+        // A per-identity subdirectory, named by a hash of the identity so any identity string maps
+        // to a safe, collision-resistant directory (identities are hex today, but this stays robust).
+        let sub = players_root.join(blake3::hash(identity.as_bytes()).to_hex().as_str());
+        match FileResumeStore::open(&sub) {
+            Ok(store) => {
+                Some(Box::new(store) as Box<dyn dreggnet_offerings::resume::SessionResumeStore>)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    dir = %sub.display(),
+                    error = %e,
+                    "could not open a per-identity RPG world store — that world stays in-memory"
+                );
+                None
+            }
+        }
+    })
+}
+
 /// **The demo host over a durable session store at `dir`** — the restart-survival weld, with no
 /// lifecycle policy armed (unbounded — the committed suites' path). See [`demo_host_over`].
 pub fn demo_host_resumed_from(dir: impl Into<std::path::PathBuf>) -> OfferingHost {
@@ -2593,7 +2749,14 @@ pub fn make_app_parts_with_descent(descent: Arc<DescentState>) -> (Router, Arc<C
     // `DREGGNET_WEB_MAX_SESSIONS` / `DREGGNET_WEB_SESSION_TTL_SECS` / `DREGGNET_WEB_OPENS_PER_USER`
     // / `DREGGNET_WEB_MIN_OPEN_INTERVAL_SECS` envs arm the session policy (all unset → unbounded,
     // byte-identical). See `resolve_demo_host`.
-    let catalog = Arc::new(CatalogState::with_host(resolve_demo_host));
+    // Both halves are env-resolved + durable: the shared host resumes its game/service sessions,
+    // and the per-identity RPG worlds each resume from their own per-player store (so an
+    // inventory/forge survives a restart exactly as Discord's per-player worlds do). See
+    // `resolve_demo_host` / `resolve_player_worlds`.
+    let catalog = Arc::new(CatalogState::with_hosts(
+        resolve_demo_host,
+        resolve_player_worlds,
+    ));
 
     let app = Router::new()
         .route("/", get(index))

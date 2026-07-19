@@ -67,6 +67,8 @@ fn walk(node: &ViewNode, depth: usize, out: &mut String) {
             }
         }
         ViewNode::Host { view: Some(v), .. } => walk(v, depth, out),
+        // An unresolved mount has no subtree to contribute prose from.
+        ViewNode::Host { view: None, .. } => {}
         ViewNode::Adept(inner) => walk(inner, depth, out),
         // A coordinate board contributes its text grid to the prose (a highlighted cell bracketed);
         // the clickable cells ride the channel's affordance carrier (keyboard / numbered block).
@@ -76,8 +78,26 @@ fn walk(node: &ViewNode, depth: usize, out: &mut String) {
                 push_line(out, line);
             }
         }
-        // The bound/indicator leaves have no plain-text projection here.
-        _ => {}
+        // ── The remaining leaves contribute NO chat prose (this match is EXHAUSTIVE on purpose:
+        //    a new `ViewNode` variant must fail to compile here until its prose projection is
+        //    DECIDED, never dropped by a silent `_ => {}`). None of these carries an affordance —
+        //    every affordance rides the channel's carrier (Telegram's inline keyboard / WeChat's
+        //    numbered reply list) via [`crate::backend::actuations`], NOT the prose — so a chat
+        //    surface legitimately omits their visual (a gauge/slider/pill/icon has no plain-text
+        //    form, and a `bind`/`gauge`'s live value is not available on this bind-less walk).
+        //    Their actuation reach is proven separately by the cross-surface differential test. ──
+        ViewNode::Bind { .. }
+        | ViewNode::Input { .. }
+        | ViewNode::Gauge { .. }
+        | ViewNode::Divider
+        | ViewNode::Breadcrumb { .. }
+        | ViewNode::Progress { .. }
+        | ViewNode::Pill { .. }
+        | ViewNode::Icon { .. }
+        | ViewNode::Halo { .. }
+        | ViewNode::Slider { .. }
+        | ViewNode::Toggle { .. }
+        | ViewNode::Tile { .. } => {}
     }
 }
 

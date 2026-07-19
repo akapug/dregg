@@ -152,6 +152,8 @@ fn walk(node: &ViewNode, enabled_for: &dyn Fn(&str) -> Option<bool>, out: &mut V
         | ViewNode::Section { children: cs, .. }
         | ViewNode::Grid { children: cs, .. } => kids(cs, out),
         ViewNode::Host { view: Some(v), .. } => walk(v, enabled_for, out),
+        // An UNRESOLVED mount carries no subtree yet, so no actuation reaches out of it.
+        ViewNode::Host { view: None, .. } => {}
         ViewNode::Adept(inner) => walk(inner, enabled_for, out),
         // A coordinate board: each CLICKABLE cell (non-empty `turn`) is one fixed `{turn, arg}`
         // press — the glyph is its label — so a board square reaches the numbered/keyboard carrier.
@@ -162,8 +164,32 @@ fn walk(node: &ViewNode, enabled_for: &dyn Fn(&str) -> Option<bool>, out: &mut V
                 }
             }
         }
-        // Leaves (and the value-dependent Slider/Toggle — see the doc above) carry no fixed press.
-        _ => {}
+        // ── EXPLICITLY-EXCLUDED nodes (this match is EXHAUSTIVE on purpose: a new `ViewNode`
+        //    variant must fail to compile here until its actuation reach is DECIDED, never
+        //    swept under a silent `_ => {}`). Two documented reasons a node contributes no
+        //    fixed `{turn, arg}` press to the numbered/keyboard carrier: ──
+        //
+        //  (1) VALUE-DEPENDENT actuation — the fired `{turn, arg}` is chosen by the LIVE slot,
+        //      not fixed by the node, so a numbered reply / keyboard button (which must name a
+        //      constant press) cannot express it; inventing an `arg` would be a lie. These stay
+        //      renderer-side (the DOM/native controls that read the live value).
+        ViewNode::Slider { .. } | ViewNode::Toggle { .. } => {}
+        //
+        //  (2) TEXT-SHAPED actuation — an `Input`'s `fire_turn` fires with the user's FREE TEXT,
+        //      not a constant index arg, so it is not a fixed press either. A chat surface
+        //      solicits that text via `Action::wants_text` (the next inbound message), not a
+        //      keyboard button; the DOM/server-form paths render it as a real `<input>`.
+        ViewNode::Input { .. } => {}
+        //
+        //  (3) PURE PRESENTATION leaves — content/indicators that carry no affordance at all.
+        ViewNode::Text(_)
+        | ViewNode::Bind { .. }
+        | ViewNode::Gauge { .. }
+        | ViewNode::Divider
+        | ViewNode::Progress { .. }
+        | ViewNode::Pill { .. }
+        | ViewNode::Icon { .. }
+        | ViewNode::Tile { .. } => {}
     }
 }
 

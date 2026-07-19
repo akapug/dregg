@@ -104,7 +104,10 @@ impl SurfaceBackend for DiscordBackend {
 struct Accum {
     description: String,
     fields: Vec<(String, String, bool)>,
-    buttons: Vec<(String, String)>,
+    /// `(label, custom_id, enabled)` — a `!enabled` affordance rides as a DISABLED button (the cap
+    /// tooth SHOWN, not hidden — the same posture the web dimmed form / WeChat locked-number take),
+    /// so a refused move is present-but-unfireable on Discord too, never silently dropped.
+    buttons: Vec<(String, String, bool)>,
 }
 
 /// Render a view-tree to a Discord [`DiscordCard`]. `title` heads the embed; `bind_values[n]`
@@ -159,7 +162,7 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
         }
         ViewNode::Button { label, turn, arg } => {
             acc.buttons
-                .push((label.clone(), affordance_custom_id(turn, *arg)));
+                .push((label.clone(), affordance_custom_id(turn, *arg), true));
         }
         ViewNode::Input {
             bind_view,
@@ -179,7 +182,7 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
                     submit_label.as_str()
                 };
                 acc.buttons
-                    .push((label.to_string(), affordance_custom_id(fire_turn, 0)));
+                    .push((label.to_string(), affordance_custom_id(fire_turn, 0), true));
             }
         }
         // The richness-expansion nodes flatten gracefully into the embed: a `section` is a
@@ -195,9 +198,25 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
                 block(c, binds, cursor, acc);
             }
         }
-        ViewNode::Tabs { tabs, panels, .. } => {
+        ViewNode::Tabs {
+            tabs,
+            select_turn,
+            panels,
+            ..
+        } => {
             if !tabs.is_empty() {
                 push_line(&mut acc.description, &format!("[{}]", tabs.join(" | ")));
+            }
+            // A tab click IS an actuation (`select_turn` with `arg = the tab index`), so each tab
+            // label becomes a button — the tab-switch is REACHABLE on Discord, not just described.
+            if !select_turn.is_empty() {
+                for (i, label) in tabs.iter().enumerate() {
+                    acc.buttons.push((
+                        label.clone(),
+                        affordance_custom_id(select_turn, i as i64),
+                        true,
+                    ));
+                }
             }
             for p in panels {
                 block(p, binds, cursor, acc);
@@ -227,6 +246,7 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
                     acc.buttons.push((
                         cell.glyph.clone(),
                         affordance_custom_id(&cell.turn, cell.arg),
+                        true,
                     ));
                 }
             }
@@ -241,7 +261,7 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
             for c in items {
                 if !c.turn.is_empty() {
                     acc.buttons
-                        .push((c.label.clone(), affordance_custom_id(&c.turn, c.arg)));
+                        .push((c.label.clone(), affordance_custom_id(&c.turn, c.arg), true));
                 }
             }
         }
@@ -266,23 +286,26 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
         }
         ViewNode::Icon { glyph, .. } => push_line(&mut acc.description, glyph),
         ViewNode::Menu { items } => {
+            // EVERY row becomes a button (a `!enabled` one DISABLED — the cap tooth SHOWN, not
+            // hidden): a refused move stays present-but-unfireable on Discord, matching the web
+            // dimmed form / WeChat locked-number, instead of vanishing from the affordance surface.
             for item in items {
-                if item.enabled {
-                    acc.buttons.push((
-                        item.label.clone(),
-                        affordance_custom_id(&item.turn, item.arg),
-                    ));
-                } else {
-                    push_line(&mut acc.description, &format!("~~{}~~", item.label));
-                }
+                acc.buttons.push((
+                    item.label.clone(),
+                    affordance_custom_id(&item.turn, item.arg),
+                    item.enabled,
+                ));
             }
         }
         ViewNode::Halo { handles, .. } => {
+            // Every handle in the ring becomes a button, a refused one DISABLED (shown, not
+            // silently dropped — the prior `if h.enabled` skip was a silent affordance loss).
             for h in handles {
-                if h.enabled {
-                    acc.buttons
-                        .push((h.glyph.clone(), affordance_custom_id(&h.turn, h.arg)));
-                }
+                acc.buttons.push((
+                    h.glyph.clone(),
+                    affordance_custom_id(&h.turn, h.arg),
+                    h.enabled,
+                ));
             }
         }
         ViewNode::Slider {
@@ -298,8 +321,11 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
             );
             // A discord slider exposes a single seek affordance (the bot supplies the target value).
             if !turn.is_empty() {
-                acc.buttons
-                    .push(("seek".to_string(), affordance_custom_id(turn, *min as i64)));
+                acc.buttons.push((
+                    "seek".to_string(),
+                    affordance_custom_id(turn, *min as i64),
+                    true,
+                ));
             }
         }
         ViewNode::Toggle {
@@ -314,10 +340,13 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
             // where the toggle drives whichever transition the current slot value selects).
             let name = if label.is_empty() { "toggle" } else { label };
             acc.buttons
-                .push((format!("{name} on"), affordance_custom_id(on_turn, 0)));
+                .push((format!("{name} on"), affordance_custom_id(on_turn, 0), true));
             if !off_turn.is_empty() {
-                acc.buttons
-                    .push((format!("{name} off"), affordance_custom_id(off_turn, 0)));
+                acc.buttons.push((
+                    format!("{name} off"),
+                    affordance_custom_id(off_turn, 0),
+                    true,
+                ));
             }
         }
         ViewNode::Tile { handle, w, h } => push_line(
@@ -365,7 +394,7 @@ fn inline(
     binds: &[u64],
     cursor: &mut usize,
     parts: &mut Vec<String>,
-    buttons: &mut Vec<(String, String)>,
+    buttons: &mut Vec<(String, String, bool)>,
 ) {
     match n {
         ViewNode::Row(children) | ViewNode::VStack(children) | ViewNode::List(children) => {
@@ -389,7 +418,7 @@ fn inline(
             parts.push(format!("{label}{}", crate::fmt::format_value(value, *fmt)));
         }
         ViewNode::Button { label, turn, arg } => {
-            buttons.push((label.clone(), affordance_custom_id(turn, *arg)));
+            buttons.push((label.clone(), affordance_custom_id(turn, *arg), true));
         }
         ViewNode::Input { bind_view, .. } => parts.push(format!("\u{2039}{bind_view}\u{203a}")),
         // The richness-expansion nodes inline into a row: a `section`/`tabs`/`grid` recurses; a
@@ -399,7 +428,21 @@ fn inline(
                 inline(c, binds, cursor, parts, buttons);
             }
         }
-        ViewNode::Tabs { panels, .. } => {
+        ViewNode::Tabs {
+            tabs,
+            select_turn,
+            panels,
+            ..
+        } => {
+            if !select_turn.is_empty() {
+                for (i, label) in tabs.iter().enumerate() {
+                    buttons.push((
+                        label.clone(),
+                        affordance_custom_id(select_turn, i as i64),
+                        true,
+                    ));
+                }
+            }
             for p in panels {
                 inline(p, binds, cursor, parts, buttons);
             }
@@ -416,6 +459,7 @@ fn inline(
                     buttons.push((
                         cell.glyph.clone(),
                         affordance_custom_id(&cell.turn, cell.arg),
+                        true,
                     ));
                 }
             }
@@ -434,7 +478,7 @@ fn inline(
             );
             for c in items {
                 if !c.turn.is_empty() {
-                    buttons.push((c.label.clone(), affordance_custom_id(&c.turn, c.arg)));
+                    buttons.push((c.label.clone(), affordance_custom_id(&c.turn, c.arg), true));
                 }
             }
         }
@@ -443,25 +487,26 @@ fn inline(
         ViewNode::Icon { glyph, .. } => parts.push(glyph.clone()),
         ViewNode::Menu { items } => {
             for item in items {
-                if item.enabled {
-                    buttons.push((
-                        item.label.clone(),
-                        affordance_custom_id(&item.turn, item.arg),
-                    ));
-                }
+                buttons.push((
+                    item.label.clone(),
+                    affordance_custom_id(&item.turn, item.arg),
+                    item.enabled,
+                ));
             }
         }
         ViewNode::Halo { handles, .. } => {
             for h in handles {
-                if h.enabled {
-                    buttons.push((h.glyph.clone(), affordance_custom_id(&h.turn, h.arg)));
-                }
+                buttons.push((
+                    h.glyph.clone(),
+                    affordance_custom_id(&h.turn, h.arg),
+                    h.enabled,
+                ));
             }
         }
         ViewNode::Slider { slot, .. } => parts.push(format!("\u{2039}slider {slot}\u{203a}")),
         ViewNode::Toggle { on_turn, label, .. } => {
             let name = if label.is_empty() { "toggle" } else { label };
-            buttons.push((name.to_string(), affordance_custom_id(on_turn, 0)));
+            buttons.push((name.to_string(), affordance_custom_id(on_turn, 0), true));
         }
         ViewNode::Tile { handle, .. } => parts.push(format!("\u{25A6}{handle}")),
         // A host inlined into a row: a `⌂ <cell>` marker + the hosted subtree's inline parts.
@@ -480,7 +525,7 @@ fn inline(
 /// Chunk the collected affordances into Discord button rows (≤5 buttons/row, ≤5 rows). Each
 /// button carries its affordance in the custom-id ([`affordance_custom_id`]) — the press
 /// payload a bot decodes with [`parse_affordance_id`].
-fn button_rows(buttons: Vec<(String, String)>) -> Vec<CreateActionRow> {
+fn button_rows(buttons: Vec<(String, String, bool)>) -> Vec<CreateActionRow> {
     buttons
         .chunks(5)
         .take(5)
@@ -488,7 +533,14 @@ fn button_rows(buttons: Vec<(String, String)>) -> Vec<CreateActionRow> {
             CreateActionRow::Buttons(
                 chunk
                     .iter()
-                    .map(|(label, id)| CreateButton::new(id).label(label).style(style_for(label)))
+                    .map(|(label, id, enabled)| {
+                        CreateButton::new(id)
+                            .label(label)
+                            .style(style_for(label))
+                            // A refused affordance is a DISABLED button (shown, not hidden) — it
+                            // keeps its `custom_id` so the surface is honest about the move existing.
+                            .disabled(!*enabled)
+                    })
                     .collect(),
             )
         })
