@@ -68,11 +68,13 @@ this file takes the widening:
 ## Scope, stated exactly (no laundering)
 
 This is still NOT full `PredRE` completeness. What remains is ONE axis, not two: leaves outside
-`predBEq`'s decidable fragment (`atom`, `symMemberOf`, `digFieldEq`, …), on which `rigidRE` is
-fail-closed by the same one-sided-`reEq` discipline as `AciNormal`. That boundary widens exactly as
-far as `predBEq` does, and every theorem below transports unchanged. The STRUCTURAL axis — the one
-`AciNormal`'s residual §2 named as blocked — is closed. The residual is restated precisely at the
-bottom of this file.
+`predBEq`'s decidable fragment — the `atom` leaf is now INSIDE it (`Exec.StateConstraint` carries
+`DecidableEq`, `Exec/Program.lean`), so the still-uncovered leaves are only `symMemberOf`,
+`digFieldEq`, and the compound `and`/`or`/`allOf`/`anyOf` — on which `rigidRE` is fail-closed by the
+same one-sided-`reEq` discipline as `AciNormal`. That boundary widens exactly as far as `predBEq`
+does, and every theorem below transports unchanged. The STRUCTURAL axis — the one `AciNormal`'s
+residual §2 named as blocked — is closed. The residual is restated precisely at the bottom of this
+file.
 
 `normalize` itself is UNCHANGED (other modules depend on its shape); `nrm` is a new function beside
 it, and the pure-`alt` results (1)–(3) stand on `normalize` exactly as before.
@@ -892,7 +894,11 @@ section Guards
 
 private def g7 : PredRE := .sym (.symEq "k" 7)
 private def g9 : PredRE := .sym (.symEq "k" 9)
+-- `gAtom` is now INSIDE `predBEq`'s fragment (`Exec.StateConstraint` carries `DecidableEq`).
 private def gAtom : PredRE := .sym (.atom (.fieldLeField "a" "b"))
+-- `gOut` — a leaf STILL outside the fragment: `predBEq` does not descend `symMemberOf`, so it
+-- fail-closes there exactly as it once did on `atom`. Keeps the OUT-of-fragment demonstrations live.
+private def gOut : PredRE := .sym (.symMemberOf "k" [1, 2])
 
 /-- `PredRE` has no `DecidableEq`, so the guards compare keys through the one-sided `reEq`
 (fail-closed: a `true` here is a real equality, by `reEq_sound`). -/
@@ -901,14 +907,16 @@ private def keyBEq : Option (List PredRE) → Option (List PredRE) → Bool
   | some l, some m => l.length == m.length && (l.zip m).all (fun p => reEq p.1 p.2)
   | _,      _      => false
 
--- IN the fragment: `alt` trees over `ε`/decidable `sym` leaves.
+-- IN the fragment: `alt` trees over `ε`/decidable `sym` leaves — now INCLUDING the `atom` leaf.
 #guard allRigid (altList (.alt (.alt g7 g9) g7)) = true
 #guard allRigid (altList (.alt g7 .ε)) = true
--- OUT of the fragment, fail-closed: a `star` leaf, and an `atom` leaf.
+#guard allRigid (altList (.alt gAtom g9)) = true
+#guard (key (.alt gAtom g9)).isNone = false
+-- OUT of the fragment, fail-closed: a `star` leaf, and a `symMemberOf` leaf.
 #guard allRigid (altList (.alt (.star g7) g9)) = false
-#guard allRigid (altList (.alt gAtom g9)) = false
+#guard allRigid (altList (.alt gOut g9)) = false
 #guard (key (.alt (.star g7) g9)).isNone = true
-#guard (key (.alt gAtom g9)).isNone = true
+#guard (key (.alt gOut g9)).isNone = true
 
 -- The key really is the ORDER-PRESERVING first-occurrence sequence, and it SEPARATES the two orders.
 #guard keyBEq (key (.alt (.alt g7 g9) g7)) (some [g7, g9]) = true
@@ -966,17 +974,20 @@ section WideGuards
 #guard simDecide (.star (.alt g7 g9)) (.star (.alt g9 g7)) = false
 #guard simDecide (.cat (.alt g7 g7) (.star g9)) (.cat g7 (.star g9)) = true
 
--- FAIL-CLOSED at the leaves, unchanged: an `atom` leaf is still outside `predBEq`'s fragment, so
--- `rigidRE` says `false` rather than guessing, and `nrm` under-dedups (sound, not complete).
-#guard rigidRE (.star (.alt gAtom gAtom)) = false
-#guard rigidRE (.alt gAtom gAtom) = false
--- The under-dedup, witnessed by a DECIDABLE invariant rather than by the one-sided `reEq` (a
--- `reEq _ _ = false` proves nothing — that is the fail-closed direction). Spine LENGTH after `ddf`:
--- the rigid pair collapses to 1, the `atom` pair does NOT (stays 2), so `nrm (a ⋓ a) ≠ a` for the
--- `atom` leaf — it is still a two-disjunct `alt`. THAT is the open residual, exhibited.
+-- The `atom` leaf is now IN the fragment: `rigidRE` accepts it and `nrm` DEDUPS it (the closure of
+-- the last leaf axis). The still-open residual is exhibited on `gOut` (`symMemberOf`), which
+-- `predBEq` still does not descend — `rigidRE` says `false` and `nrm` under-dedups (sound, not complete).
+#guard rigidRE (.star (.alt gAtom gAtom)) = true
+#guard rigidRE (.alt gAtom gAtom) = true
+#guard rigidRE (.star (.alt gOut gOut)) = false
+#guard rigidRE (.alt gOut gOut) = false
+-- Spine LENGTH after `ddf`, witnessed by a DECIDABLE invariant rather than the one-sided `reEq`:
+-- the rigid pair collapses to 1 (now including the `atom` pair — CLOSED), the `symMemberOf` pair does
+-- NOT (stays 2), so `nrm (a ⋓ a) ≠ a` for `gOut` — the open residual, exhibited on what remains.
 #guard (ddf (nlist (.alt g7 g7))).length = 1
-#guard (ddf (nlist (.alt gAtom gAtom))).length = 2
-#guard (ddf (nlist (.star (.alt gAtom gAtom)))).length = 1
+#guard (ddf (nlist (.alt gAtom gAtom))).length = 1
+#guard (ddf (nlist (.alt gOut gOut))).length = 2
+#guard (ddf (nlist (.star (.alt gOut gOut)))).length = 1
 
 /-! ### NON-VACUITY of the widening, as THEOREMS (not only as computed guards).
 
@@ -1051,7 +1062,9 @@ end PredRE
 ## THE RESIDUAL — what is still NOT proved, after the widening.
 
 `AciNormal`'s residual named TWO obstructions. **§2 (structural) is now CLOSED**; §3 (leaf equality)
-is not, and is the only one left.
+is now closed for the `atom` leaf (`DecidableEq StateConstraint`) AND for the compound
+`not`/`and`/`or` constructors (07-19: `predBEq` descends them structurally), and remains open ONLY
+for the `symMemberOf`/`digFieldEq`/`allOf`/`anyOf`/reactive leaves `predBEq` does not yet descend.
 
 **CLOSED — the structural axis.** `sim_nrm_eq : Sim R S → RigidFull R → nrm R = nrm S` is completeness
 on a fragment whose STRUCTURE IS ARBITRARY: `star`, `cat`, `inter` and `neg` nodes are inside it, at
@@ -1061,21 +1074,27 @@ disjuncts similar-but-unequal) is decided correctly — `#guard`ed. What paid fo
 with the recursion the key determines itself at every constructor (`nkey_star`/`nkey_cat`/…), so the
 four congruence cases of `sim_nkey` transport instead of collapsing to `none = none`.
 
-**OPEN — the leaf axis, and ONLY that.** `rigidRE` demands `predBEq p p = true` at every atomic leaf,
-so `atom`, `symMemberOf`, `digFieldEq`, … terms are outside `RigidFull` even though they are perfectly
-good leaves. Named precisely:
+**NARROWED — the leaf axis, now covering only the compound/typed leaves.** `rigidRE` demands
+`predBEq p p = true` at every atomic leaf. The **`atom` leaf is now DECIDED**: `Exec.StateConstraint`
+carries a real `DecidableEq` (added to `Exec/Program.lean` — all payloads decidable, incl. the
+`Label`/`ClearanceGraph` lattice carriers), so `predBEq` totalizes on `atom` and every `atom`-leaf
+term is now inside `RigidFull` (`#guard`ed: `rigidRE (.alt gAtom gAtom) = true`, `ddf` collapses the
+`atom` pair to length 1). The compound `not`/`and`/`or` constructors are now DESCENDED structurally
+(07-19 widening in `AciNormal`), so compound-over-decidable leaves are inside `RigidFull` too. What
+is STILL outside are the leaves `predBEq` does not descend — `symMemberOf`, `digFieldEq`, and the
+n-ary `allOf`/`anyOf` (plus the reactive/typed leaves) — exhibited on `gOut` (`symMemberOf`) at the
+end of the guard block. The FULL statement, no rigidity side condition:
 
     `∀ R S, Sim R S → nrm R = nrm S`   -- FULL `PredRE`, no rigidity side condition
 
-This is FALSE as stated for the CURRENT `predBEq`, not merely unproved: `predBEq` answers `false` on
-equal `atom` leaves, so `ddf` under-dedups and `nrm (alt a a) = alt a a ≠ a = nrm a` for `a` an `atom`
-leaf, while `Sim.idem : alt a a ≅ a` holds. The `#guard`s at the end of the guard block exhibit this
-with a DECIDABLE invariant — the post-`ddf` spine length is 1 for a rigid duplicate pair and 2 for the
-`atom` pair, so the normal form really is still a two-disjunct `alt`. It becomes provable — with
-every theorem in this file transporting UNCHANGED, since the invariance argument uses only
-`reEq_sound` plus reflexivity on the fragment — as soon as `predBEq` is total, which needs a real
-`DecidableEq StateConstraint` (`ClearanceGraph`/`Label`/`BoundBranch` carry no instance today; an edit
-to `Exec/Program.lean`, mechanical, NOT attempted here).
+is still FALSE as stated only because of THOSE remaining leaves: `predBEq` answers `false` on an equal
+`symMemberOf`/`digFieldEq` pair, so `ddf` under-dedups there (`#guard`: the `gOut` pair stays length 2)
+while `Sim.idem` holds. It becomes provable — with every theorem in this file transporting UNCHANGED,
+since the invariance argument uses only `reEq_sound` plus reflexivity on the fragment — as `predBEq` is
+extended to those constructors (each mechanical, the payloads are decidable; the `atom` closure here is
+the template). THE NOW-UNBLOCKED FOLLOW-UP: prove the full-`PredRE` statement above on the
+`atom`-inclusive fragment, and/or widen `predBEq` over `symMemberOf`/`digFieldEq`/`allOf`/`anyOf`
+to close the fragment entirely.
 
 **NOT a residual, but stated so it is not misread.** `≅` here is `Sim`, the ACI congruence on `alt`
 plus the structural congruences. It contains NO unit/annihilator/star laws — `cat ε R ≅ R`,

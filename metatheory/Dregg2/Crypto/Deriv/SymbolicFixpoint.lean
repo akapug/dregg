@@ -49,12 +49,14 @@ already-seen state closes in a few pops — where the bound-based search needed 
    `rigidRE_derList`, proven below): `der` never invents a leaf — it propagates the existing ones
    and introduces only `bot = sym .ff`, which is rigid. So rigidity is checked ONCE, at the root.
 2. **A `SymbolicRE` root need NOT be `RigidFull`** — this is the honest fragment boundary, at the
-   ROOT not at the derivatives: `IsSymbolic` admits `not`/`and`/`or`/`symMemberOf` leaves, on which
-   `predBEq` fail-closes (`AciComplete`'s residual). E.g. `contradictionRE`'s `¬braceP` leaf:
-   `IsSymbolic` but `rigidRE = false` (`#guard`ed below). The runnable fragment is therefore
-   `IsSymbolic ∧ RigidFull` = leaves in `tt/ff/symEq/digEq` — and it widens exactly as `predBEq`
-   is extended over `not`/`and`/`or`/`symMemberOf` (mechanical; every theorem here transports
-   unchanged, as `AciComplete`'s residual already states for its own).
+   ROOT not at the derivatives: `IsSymbolic` admits `symMemberOf` leaves, on which `predBEq`
+   fail-closes (`AciComplete`'s residual). The `not`/`and`/`or` compounds are NO LONGER outside:
+   `predBEq` descends them structurally (AciNormal, 07-19 widening), so e.g. `contradictionRE`'s
+   `¬braceP` leaf is now rigid and `contradictionRE` sits INSIDE the runnable fragment
+   (`#guard`ed below). The runnable fragment is therefore `IsSymbolic ∧ RigidFull` = leaves in
+   `tt/ff/symEq/digEq` closed under `not`/`and`/`or` — and it widens further exactly as `predBEq`
+   is extended over `symMemberOf` (mechanical; every theorem here transports unchanged, as
+   `AciComplete`'s residual already states for its own).
 
 ## Termination, scoped honestly
 
@@ -459,10 +461,13 @@ def rolePlus : PredRE := .cat (.sym roleP) (.star (.sym roleP))
 -- The runnable fragment membership, kernel-checked: both machines are RigidFull...
 #guard rigidRE rolePlus = true
 #guard rigidRE roleContra = true
--- ...while `contradictionRE` exhibits the ROOT boundary: `IsSymbolic` (its `¬braceP` leaf is
--- pin-representable) but NOT `RigidFull` (`predBEq` fail-closes on `not`) — the named fragment
--- edge, at the root only (derivatives never escape: `rigidRE_der`).
-#guard rigidRE contradictionRE = false
+-- ...and `contradictionRE` — whose `¬braceP` leaf USED to fail-close `rigidRE` — is now INSIDE
+-- the runnable fragment: `predBEq` descends `not`/`and`/`or` structurally (AciNormal, 07-19
+-- widening), exactly the "widens as `predBEq` is extended" promise of the module header. The
+-- honest ROOT boundary is now exhibited by a `symMemberOf` leaf (`IsSymbolic` — pin-representable
+-- — but `predBEq` does not descend it), at the root only (derivatives never escape: `rigidRE_der`).
+#guard rigidRE contradictionRE = true
+#guard rigidRE (.sym (.symMemberOf "role" [3, 4])) = false
 
 -- SATURATION at tiny fuel — the adaptive fixpoint CLOSES where the bound is `3^15+`:
 #guard (reachFix roleCands 32 rolePlus).isSome

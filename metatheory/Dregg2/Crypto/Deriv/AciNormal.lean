@@ -44,10 +44,12 @@ lie). `reEq` lifts a leaf test `predBEq : Pred → Pred → Bool` over the regex
 
 `predBEq` now **DECIDES the `atom` leaf**: `Exec.StateConstraint` carries a real `DecidableEq`
 (`Exec/Program.lean` — all payloads decidable, incl. the `Label`/`ClearanceGraph` lattice carriers),
-so `atom c`/`atom d` returns the true verdict instead of fail-closing. `predBEq` still answers `false`
-on the COMPOUND `Pred` constructors it does not descend (`and`/`or`/`not`/`allOf`/`anyOf`, and the
-typed `symMemberOf`/`digFieldEq`) — the remaining honest one-sided edge, which under-dedups but never
-misclaims. Soundness of `normalize` depends only on the `→` direction (`predBEq_sound`), so
+so `atom c`/`atom d` returns the true verdict instead of fail-closing. It also **DESCENDS the
+compound `not`/`and`/`or` constructors structurally** (the 07-19 widening — this is what puts
+`¬φ`-leaf guards, e.g. `symDiff`'s complements and `contradictionRE`'s `¬braceP`, inside the
+`rigidRE` runnable fragment). `predBEq` still answers `false` on `allOf`/`anyOf` and the typed
+`symMemberOf`/`digFieldEq`/reactive leaves — the remaining honest one-sided edge, which under-dedups
+but never misclaims. Soundness of `normalize` depends only on the `→` direction (`predBEq_sound`), so
 `normalize_sim` holds for ALL of `PredRE`; only the dedup POWER degrades on the still-uncovered
 constructors, and the fragment widens by extending `predBEq` alone.
 
@@ -68,31 +70,37 @@ namespace PredRE
 (any `Pred` outside the `tt`/`ff`/`symEq`/`digEq` fragment) — the honest cost of `Pred` having no
 derivable `DecidableEq`. -/
 
-/-- **`predBEq`** — computable equality on `Pred`. Now TOTAL on the `atom` leaf: `Exec.StateConstraint`
-carries a real `DecidableEq` (`Exec/Program.lean`, all payloads decidable incl. the `Label`/`ClearanceGraph`
-lattice carriers), so an `atom c` / `atom d` pair DECIDES rather than fail-closing. The remaining
-`false` arm covers only genuinely-distinct constructors. -/
+/-- **`predBEq`** — computable equality on `Pred`. TOTAL on the `atom` leaf (`Exec.StateConstraint`
+carries a real `DecidableEq`, `Exec/Program.lean`), and now STRUCTURAL on the compound
+`not`/`and`/`or` constructors: an equal pair of compounds over decidable leaves DECIDES rather than
+fail-closing (the widening that puts `¬φ`-leaf guards inside `rigidRE`'s runnable fragment). The
+remaining `false` arm covers genuinely-distinct constructors plus the still-undescended
+`allOf`/`anyOf`/`symMemberOf`/`digFieldEq`/`fieldEqField`/reactive leaves. -/
 def predBEq : Pred → Pred → Bool
   | .atom c,    .atom d    => decide (c = d)
   | .tt,        .tt        => true
   | .ff,        .ff        => true
   | .symEq f s, .symEq g t => f == g && s == t
   | .digEq f s, .digEq g t => f == g && s == t
+  | .not p,     .not q     => predBEq p q
+  | .and a b,   .and c d   => predBEq a c && predBEq b d
+  | .or a b,    .or c d    => predBEq a c && predBEq b d
   | _,          _          => false
 
-/-- **`predBEq_sound`** — the ONE direction that matters: a `true` answer is a real equality. -/
+/-- **`predBEq_sound`** — the ONE direction that matters: a `true` answer is a real equality.
+Extended over the structural `not`/`and`/`or` cases by transporting the IHs through `congrArg`. -/
 theorem predBEq_sound : ∀ {p q : Pred}, predBEq p q = true → p = q := by
-  intro p q h
-  unfold predBEq at h
-  split at h
-  · exact congrArg _ (of_decide_eq_true h)
-  · rfl
-  · rfl
-  · simp only [Bool.and_eq_true, beq_iff_eq] at h
-    rw [h.1, h.2]
-  · simp only [Bool.and_eq_true, beq_iff_eq] at h
-    rw [h.1, h.2]
-  · exact absurd h (by simp)
+  intro p q
+  fun_induction predBEq p q <;> intro h <;>
+    first
+      | exact congrArg _ (of_decide_eq_true h)
+      | rfl
+      | (simp only [Bool.and_eq_true, beq_iff_eq] at h; rw [h.1, h.2])
+      | exact Bool.noConfusion h
+      | (rename_i ih; exact congrArg _ (ih h))
+      | (rename_i ih1 ih2
+         simp only [Bool.and_eq_true] at h
+         rw [ih1 h.1, ih2 h.2])
 
 /-- **`reEq`** — the structural lift of `predBEq` to `PredRE`. Computable; one-sided. -/
 def reEq : PredRE → PredRE → Bool
@@ -355,6 +363,20 @@ private def atomLeaf : PredRE := .sym (.atom (.fieldLeField "a" "b"))
 -- A DISTINCT atom is still (soundly) not merged.
 private def atomLeaf2 : PredRE := .sym (.atom (.fieldLeField "a" "c"))
 #guard reEq atomLeaf atomLeaf2 = false
+
+-- The compound widening: `predBEq` descends `not`/`and`/`or` structurally — equal compounds DECIDE,
+-- distinct ones (at any depth) stay soundly `false`, and `normalize` now dedups a `¬φ` leaf.
+#guard predBEq (.not p7) (.not p7) = true
+#guard predBEq (.not p7) (.not p9) = false
+#guard predBEq (.and p7 p9) (.and p7 p9) = true
+#guard predBEq (.and p7 p9) (.and p9 p7) = false
+#guard predBEq (.or p7 (.not p9)) (.or p7 (.not p9)) = true
+#guard predBEq (.or p7 (.not p9)) (.or p7 (.not p7)) = false
+#guard predBEq (.not p7) (.and p7 p7) = false
+-- ...but the still-undescended constructors remain fail-closed (`symMemberOf` on itself).
+#guard predBEq (.symMemberOf "k" [1, 2]) (.symMemberOf "k" [1, 2]) = false
+private def notLeaf : PredRE := .sym (.not p7)
+#guard reEq (normalize (.alt notLeaf notLeaf)) notLeaf = true
 
 end Guards
 
