@@ -292,6 +292,18 @@ caught it: diff lane re-read the control flow + found disjoint witnesses; I conf
 binds Tx*, not cur/W). CYCLE 7 = the LINK (assert cur/W challenges == Tx* re-derived) + differential-gate a
 CROSS-STAGE mismatch REJECTS in the main circuit (the real end-to-end soundness closure).
 
+
+## ✅✅ AIR-in-Lean CYCLE 7 — arbitrary-challenge hole CLOSED end-to-end (VERIFIED-BY-ME)
+The load-bearing link landed: every verification-block challenge ExtAssertIsEqual'd to the transcript
+re-derivation (Lean Poseidon2 squeeze of the real roots). PROVEN LOAD-BEARING by a two-polarity mutation
+test I RAN (TranscriptLinkIsLoadBearing, 71.7s): stage-OFF ACCEPTS a tampered challenge, stage-ON REJECTS
+the SAME tamper (UNSAT) — block1-fold-beta + block4-query-index. THE DEEPEST PHASE (Fiat-Shamir soundness)
+is closed with Lean-authored constraints; a prover can no longer supply arbitrary challenges.
+Progress: blocks 2a/2b/3 bind + the transcript is now BOUND. Residuals (honest): block-3 DAG source (Rust,
+stark-kill), statement/VK-pins (the last blocks), full per-challenge link-coverage canary. The day started
+with me falsely calling the whole verifier redundant; it ends with the SOUNDNESS HEART closed + verified by
+my own hand-run of a mutation test. The reality-gate discipline held every cycle.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
