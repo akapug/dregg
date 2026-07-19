@@ -115,6 +115,7 @@ No `sorry`, no `native_decide`, no assumed arithmetization hypothesis.
 import Dregg2.Circuit.Emit.AutomataflResolveEmit
 import Dregg2.Circuit.Emit.AutomataflResolveMembership
 import Dregg2.Circuit.Emit.AutomataflStepRefine
+import Dregg2.Circuit.Emit.AutomataflCoord
 import Dregg2.Circuit.Emit.AutomataflCommitRefine
 import Dregg2.Circuit.DescriptorIR2
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
