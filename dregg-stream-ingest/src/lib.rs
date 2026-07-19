@@ -130,15 +130,65 @@ impl PlatformAdapter for YouTubeAdapter {
 /// (no author, unparseable) are skipped — the parse never fails on partial input, it returns
 /// what it could read.
 pub fn parse_youtube_livechat(json: &str) -> Vec<StreamEvent> {
+    parse_youtube_live_page(json).events
+}
+
+/// A parsed YouTube `liveChatMessages.list` **page** — the normalized events PLUS the
+/// poll-advance metadata a server-side poller needs to fetch the NEXT page:
+///
+/// * [`next_page_token`](Self::next_page_token) — the `nextPageToken` cursor to pass as
+///   `pageToken` on the following `liveChatMessages.list` call (absent / empty ⇒ `None`,
+///   meaning "start from the live tail again");
+/// * [`polling_interval_millis`](Self::polling_interval_millis) — the API's
+///   `pollingIntervalMillis`, how long YouTube asks the caller to wait before the next
+///   poll (a client that polls faster is throttled). `0` when the payload omitted it.
+///
+/// This is the shape a poller advances on. The PURE parse lives here (serde-only,
+/// testable with a canned body); the authenticated HTTP fetch loop lives in the
+/// offering-stack layer (`dreggnet-web::overlay::YouTubePoller`), so `amount_micros`
+/// comes from YouTube's own response — fetched with the operator's API key — not from a
+/// forgeable POST body.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct YouTubeLivePage {
+    /// The normalized vote-bearing events on this page (same mapping as
+    /// [`parse_youtube_livechat`]).
+    pub events: Vec<StreamEvent>,
+    /// The `nextPageToken` cursor for the following poll, or `None` if the page carried
+    /// none / an empty one.
+    pub next_page_token: Option<String>,
+    /// The API's requested `pollingIntervalMillis` (wait-before-next-poll); `0` if absent.
+    pub polling_interval_millis: u64,
+}
+
+/// **Parse a YouTube `liveChatMessages.list` response into a [`YouTubeLivePage`]** — the
+/// events (via [`parse_youtube_item`]) plus the `nextPageToken` + `pollingIntervalMillis`
+/// poll-advance cursors. Never fails: a malformed body yields an empty page (no events, no
+/// cursor, zero interval), so a poll loop degrades to "retry from the tail" rather than
+/// dying on one bad frame.
+pub fn parse_youtube_live_page(json: &str) -> YouTubeLivePage {
     let root: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
-        Err(_) => return Vec::new(),
+        Err(_) => return YouTubeLivePage::default(),
     };
-    let items = match root.get("items").and_then(|v| v.as_array()) {
-        Some(a) => a,
-        None => return Vec::new(),
-    };
-    items.iter().filter_map(parse_youtube_item).collect()
+    let events = root
+        .get("items")
+        .and_then(|v| v.as_array())
+        .map(|items| items.iter().filter_map(parse_youtube_item).collect())
+        .unwrap_or_default();
+    let next_page_token = root
+        .get("nextPageToken")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let polling_interval_millis = root
+        .get("pollingIntervalMillis")
+        .and_then(parse_u64_loose)
+        .unwrap_or(0);
+    YouTubeLivePage {
+        events,
+        next_page_token,
+        polling_interval_millis,
+    }
 }
 
 /// Parse one `items[]` entry; `None` if it is not a vote-bearing, author-attributed event.
@@ -193,7 +243,7 @@ fn parse_youtube_item(item: &serde_json::Value) -> Option<StreamEvent> {
             let details = snippet.get("superChatDetails");
             let amount = details
                 .and_then(|d| d.get("amountMicros"))
-                .and_then(parse_micros)
+                .and_then(parse_u64_loose)
                 .unwrap_or(0);
             let text = details
                 .and_then(|d| d.get("userComment"))
@@ -207,7 +257,7 @@ fn parse_youtube_item(item: &serde_json::Value) -> Option<StreamEvent> {
             let amount = snippet
                 .get("superStickerDetails")
                 .and_then(|d| d.get("amountMicros"))
-                .and_then(parse_micros)
+                .and_then(parse_u64_loose)
                 .unwrap_or(0);
             Some(mk(EventKind::Gift, amount, display.to_string()))
         }
@@ -216,8 +266,10 @@ fn parse_youtube_item(item: &serde_json::Value) -> Option<StreamEvent> {
     }
 }
 
-/// `amountMicros` is a JSON **string** in the API (`"5000000"`); accept a bare number too.
-fn parse_micros(v: &serde_json::Value) -> Option<u64> {
+/// Parse a `u64` from a JSON value that the API renders as **either** a string
+/// (`"5000000"`) or a bare number — the shape `amountMicros` and `pollingIntervalMillis`
+/// both arrive in (unsigned longs are JSON strings in the Google APIs).
+fn parse_u64_loose(v: &serde_json::Value) -> Option<u64> {
     if let Some(s) = v.as_str() {
         s.trim().parse::<u64>().ok()
     } else {
@@ -521,6 +573,57 @@ mod tests {
         let events = parse_youtube_livechat(mixed);
         assert_eq!(events.len(), 1, "only the author-attributed item survives");
         assert_eq!(events[0].author_id, "UC_ok");
+    }
+
+    #[test]
+    fn live_page_parses_events_and_poll_cursors() {
+        // A page carrying the poll-advance metadata a server-side poller rides: the
+        // `nextPageToken` cursor (as a string) and `pollingIntervalMillis` (unsigned long,
+        // rendered as a JSON string in the Google APIs).
+        let body = r#"{
+          "kind": "youtube#liveChatMessageListResponse",
+          "nextPageToken": "PAGE_2_CURSOR",
+          "pollingIntervalMillis": "4200",
+          "items": [
+            {
+              "snippet": {
+                "type": "superChatEvent",
+                "displayMessage": "$3 trade blows",
+                "superChatDetails": { "amountMicros": "3000000", "userComment": "trade blows" }
+              },
+              "authorDetails": { "channelId": "UC_whale" }
+            }
+          ]
+        }"#;
+        let page = parse_youtube_live_page(body);
+        assert_eq!(
+            page.events.len(),
+            1,
+            "the super chat normalizes to one event"
+        );
+        assert_eq!(page.events[0].amount_micros, 3_000_000);
+        assert_eq!(
+            page.next_page_token.as_deref(),
+            Some("PAGE_2_CURSOR"),
+            "the nextPageToken cursor is carried for the following poll"
+        );
+        assert_eq!(
+            page.polling_interval_millis, 4_200,
+            "pollingIntervalMillis parses from its string form"
+        );
+
+        // A numeric pollingIntervalMillis (some payloads) is accepted too, and a missing
+        // nextPageToken becomes None.
+        let numeric = r#"{"pollingIntervalMillis":1500,"items":[]}"#;
+        let page = parse_youtube_live_page(numeric);
+        assert_eq!(page.polling_interval_millis, 1_500);
+        assert_eq!(page.next_page_token, None, "no cursor ⇒ None");
+        assert!(page.events.is_empty());
+
+        // A malformed body degrades to an empty page (no cursor, zero interval) — a poller
+        // retries from the tail rather than dying.
+        let empty = parse_youtube_live_page("not json");
+        assert_eq!(empty, YouTubeLivePage::default());
     }
 
     #[test]

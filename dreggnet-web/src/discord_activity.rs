@@ -109,15 +109,42 @@ pub const ACTIVITY_TICKET_HEADER: &str = "x-dregg-activity-ticket";
 pub const ACTIVITY_TICKET_KEY_DOMAIN: &str = "dregg-discord-activity-ticket-v1";
 
 /// The env var tuning the ticket freshness window (seconds). Default
-/// [`DEFAULT_ACTIVITY_TICKET_MAX_AGE_SECS`] — an Activity keeps its launch-time ticket for a long
-/// play session; `authorize({prompt:'none'})` silently re-issues on expiry for a returning user.
+/// [`DEFAULT_ACTIVITY_TICKET_MAX_AGE_SECS`]. The ticket is a **bearer credential** (whoever holds
+/// it acts as the verified uid within the window), so the default is a DELIBERATE, bounded choice —
+/// long enough for a single play session, short enough that a captured ticket expires the same day.
+/// A kiosk / all-day-stream deployment raises it explicitly; `authorize({prompt:'none'})` silently
+/// re-issues on expiry for a returning user, so a tighter window is transparent to legitimate use.
 pub const DISCORD_ACTIVITY_TICKET_MAX_AGE_ENV: &str = "DISCORD_ACTIVITY_TICKET_MAX_AGE_SECS";
 
-/// The default ticket freshness window: 24 h (matching the Mini App's session-lifetime argument).
-pub const DEFAULT_ACTIVITY_TICKET_MAX_AGE_SECS: u64 = 86_400;
+/// The default ticket freshness window: **8 h** — a deliberate bearer-window choice (see
+/// [`DISCORD_ACTIVITY_TICKET_MAX_AGE_ENV`]). Deliberately tighter than a full day so a captured
+/// bearer is not valid for 24 h; covers any single session, and is env-overridable upward for
+/// long-running kiosk deployments.
+pub const DEFAULT_ACTIVITY_TICKET_MAX_AGE_SECS: u64 = 28_800;
 
 /// The clock-skew guard: a `minted_at` more than this many seconds in the FUTURE is refused.
 pub const FUTURE_SKEW_SECS: u64 = 300;
+
+/// The env var tuning the `/da/token` outbound-exchange concurrency cap (see
+/// [`DEFAULT_DA_TOKEN_CONCURRENCY`]).
+pub const DA_TOKEN_CONCURRENCY_ENV: &str = "DA_TOKEN_MAX_CONCURRENCY";
+
+/// The default cap on IN-FLIGHT `POST /da/token` OAuth exchanges. `/da/token` is the ONE
+/// unauthenticated endpoint that makes an outbound Discord call per request, so an unbounded flood
+/// amplifies into an outbound-request storm (and burns the OAuth rate budget). A small semaphore
+/// bounds the simultaneous outbound calls; a request that cannot immediately acquire a permit is
+/// refused a fast `429` instead of piling onto Discord.
+pub const DEFAULT_DA_TOKEN_CONCURRENCY: usize = 8;
+
+/// The `/da/token` concurrency cap from [`DA_TOKEN_CONCURRENCY_ENV`], else
+/// [`DEFAULT_DA_TOKEN_CONCURRENCY`].
+fn da_token_concurrency_from_env() -> usize {
+    std::env::var(DA_TOKEN_CONCURRENCY_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_DA_TOKEN_CONCURRENCY)
+}
 
 /// The minimum decoded ticket length: `uid(8) ‖ minted_at(8) ‖ HMAC(32)` — a nonce of length ≥ 0
 /// sits between `minted_at` and the HMAC. Anything shorter cannot carry the fixed fields.
@@ -633,6 +660,10 @@ pub struct DiscordActivityState {
     /// consumed on success so a captured claim can't be replayed within its TTL (the `/tg/link`
     /// posture; internally synced).
     link_replay: webauth_core::replay::NonceCache,
+    /// Bounds concurrent `POST /da/token` OAuth exchanges — the one unauthenticated endpoint that
+    /// makes an outbound Discord call per request. A request that cannot immediately acquire a
+    /// permit is refused `429` (see [`post_da_token`]).
+    token_gate: Arc<tokio::sync::Semaphore>,
 }
 
 impl DiscordActivityState {
@@ -673,6 +704,7 @@ impl DiscordActivityState {
             max_age_secs,
             oauth,
             link_replay: webauth_core::replay::NonceCache::new(true, 8192),
+            token_gate: Arc::new(tokio::sync::Semaphore::new(da_token_concurrency_from_env())),
         }
     }
 
@@ -900,6 +932,31 @@ async fn post_da_token(
     let corr = audit::correlation_id();
     let route = "POST /da/token";
 
+    // RATE LIMIT — this unauthenticated endpoint makes an outbound Discord call per request. Bound
+    // the concurrent exchanges: a request that cannot immediately acquire a permit is refused `429`
+    // rather than piling another outbound call onto Discord. The permit is held (via `_permit`)
+    // until this handler returns, i.e. across the whole exchange.
+    let _permit = match Arc::clone(&state.token_gate).try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            audit::log().emit(
+                audit::AuditEvent::new(
+                    "discord-activity",
+                    audit::Actor::unattributed(),
+                    audit::Surface::Http,
+                    audit::Input::new(route, serde_json::json!({ "status": 429 })),
+                )
+                .correlated(&corr)
+                .decided("gated", "rate_limited"),
+            );
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many concurrent token exchanges — retry shortly",
+            )
+                .into_response();
+        }
+    };
+
     // The exchange is blocking (reqwest::blocking) — drive it off the async reactor.
     let oauth = Arc::clone(&state.oauth);
     let client_id = state.client_id.clone();
@@ -999,12 +1056,22 @@ async fn get_da_offerings(
     }
     // THE LAB FRAMING (shared words: `dreggnet_catalog::{flagship_pointer, lab_intro}`) — the same
     // Descent-first shelf the `/tg` fragment paints, so the Activity is visually the SAME product.
+    //
+    // COHERENCE FIX (maturation cluster 5): the featured Descent used to carry a plain
+    // `<a href="/descent">` — an OUT-link to the COOKIE-identity surface — dropping a
+    // Discord-VERIFIED viewer onto a DIFFERENT, unverified identity right under the "Verified via
+    // Discord" banner. There is no ticket-gated Descent twin under `/da` yet, so we DROP the
+    // OUT-link from the verified shelf and NAME the identity boundary (pointing at the link
+    // ceremony that actually binds the two) instead of laundering it. The identity-coherent
+    // playables are the ticket-gated offering `cards` above.
     let featured = format!(
         "<div class=\"card\" style=\"margin:.6rem 0;padding:1rem;border:1px solid \
          var(--border);border-radius:var(--r-md);background:var(--panel)\">\
          <h3 style=\"margin:0 0 .35rem\">The Descent</h3>\
          <p class=\"prose\" style=\"margin:0 0 .5rem\">{flagship}</p>\
-         <a class=\"btn btn-primary\" href=\"/descent\">Play today's descent</a>\
+         <p class=\"prose\" style=\"margin:0;font-size:.85em;opacity:.75\">Played on the open \
+         leaderboard under a SEPARATE identity from your Discord-verified play here — \
+         <b>Link across platforms</b> below binds them into one.</p>\
          </div>\
          <p class=\"prose\" style=\"margin:.8rem 0 .4rem\">{lab}</p>",
         flagship = crate::esc(dreggnet_catalog::flagship_pointer()),

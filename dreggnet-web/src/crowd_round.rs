@@ -10,8 +10,10 @@
 //! ```text
 //! StreamEvent stream                (ingest here, over a round window)
 //!   → events_to_ballots / aggregate (one ballot per distinct voter, their strongest option)
-//!   → weight-replicated custody seats (a $5 Super Chat = 5 seats, capped)
+//!   → shaped, capped weight          (Linear or Concave/√ shaping; capped per voter)
+//!   → weight-replicated custody seats (a $5 Super Chat = 5 seats under Linear; 2 under √)
 //!   → CollectiveRound.cast × N       (each seat a REAL ed25519-signed ballot turn)
+//!   → distinct-voter floor + quorum  (K distinct humans AND Σ weight ≥ M)
 //!   → resolve_into_world             (the quorum gate → ONE certified TurnReceipt on the game)
 //! ```
 //!
@@ -28,6 +30,17 @@
 //!   real per-viewer custody (the viewer never signs on their own device). Real custody needs a
 //!   viewer-held key enrolled out-of-band; until then a Super Chat is authenticated as *coming
 //!   through YouTube*, not as *signed by that human*.
+//! * **Named residual — one weighted ballot (O(N) crypto).** To land a voter's weight `W`
+//!   we materialize `W` (capped, shaped) replicated seats and cast `W` real signed ballots,
+//!   so a window costs O(Σ shaped-weight) sign+verify operations under the overlay mutex. The
+//!   backing `collective_choice` engine ALREADY has the O(1)-per-voter primitive
+//!   (`cast_weighted` / `open_poll_weighted`, with a Lean mirror `castVoteW`: one signed
+//!   ballot worth `W`, tallied as `W`), but the `CollectiveRound` wrapper exposes only the
+//!   unweighted `cast` — wiring the weighted path through it is a `dungeon-on-dregg` change
+//!   outside this crate. Until then we bound the blow-up TWO ways: the per-voter weight is
+//!   **capped** (default [`DEFAULT_MAX_WEIGHT_PER_VOTER`], a small ceiling — a whale cannot
+//!   mint an unbounded electorate) and can be **√-shaped** ([`WeightShaping::Concave`], seats
+//!   ≤ ⌊√cap⌋), so the cost is O(N·√cap), not O(N·64).
 //! * **Named residual — dynamic electorate.** `CollectiveRound` fixes its roster at open
 //!   ("muster"). We honor that by materializing the electorate at **close** from exactly who voted
 //!   this window, opening a fresh round each window. Join/leave within a window is fine; a
@@ -69,13 +82,63 @@ pub struct CrowdRound {
     buffer: Vec<StreamEvent>,
     /// The certified turns this driver has landed, oldest first (an audit trail of the run).
     landed: Vec<CertifiedTurn>,
-    /// The cap on how many custody seats one voter's weight may materialize — the paid-influence
-    /// ceiling / DoS guard (a single whale cannot mint an unbounded electorate).
+    /// The cap on a voter's RAW weight before shaping — the paid-influence ceiling / DoS guard
+    /// (a single whale cannot mint an unbounded electorate; the shaped weight is what becomes
+    /// seats, so under [`WeightShaping::Concave`] the seat count is ≤ ⌊√cap⌋).
     max_weight_per_voter: u64,
+    /// How a voter's capped raw weight maps to influence (seats). See [`WeightShaping`].
+    shaping: WeightShaping,
+    /// The distinct-voter quorum floor `K`: a window certifies only when at least this many
+    /// DISTINCT voters (humans, not replicated seats) cast a ballot — so paid weight alone (one
+    /// Super Chat) can never carry a window. See [`CrowdRound::with_min_distinct_voters`].
+    min_distinct_voters: u64,
 }
 
-/// The default per-voter seat cap: a single voter tops out at 64 seats of influence in one window.
-pub const DEFAULT_MAX_WEIGHT_PER_VOTER: u64 = 64;
+/// The default per-voter RAW weight cap: a single voter's weight tops out here BEFORE shaping.
+/// Deliberately small (was 64) — the O(Σ weight) signed-ballot blow-up under the overlay mutex
+/// scales with this ceiling, so a small cap keeps a window cheap while [`WeightShaping::Concave`]
+/// shrinks the seat count further (≤ ⌊√8⌋ = 2). Raise it per deployment via
+/// [`CrowdRound::open_with`] when the electorate + hardware can pay for it.
+pub const DEFAULT_MAX_WEIGHT_PER_VOTER: u64 = 8;
+
+/// The default distinct-voter quorum floor: a window needs at least this many DISTINCT voters
+/// (alongside meeting the weight quorum) before it can certify. `2` blocks the degenerate
+/// single-Super-Chat-decides-the-world case out of the box; raise it per deployment.
+pub const DEFAULT_MIN_DISTINCT_VOTERS: u64 = 2;
+
+/// **How a voter's capped raw weight maps to influence (custody seats / tally weight).** A
+/// vote's raw weight is `dregg_stream_ingest::weight_for` (≈ whole dollars for a paid event);
+/// this shapes it AFTER the per-voter cap:
+///
+/// * [`Linear`](WeightShaping::Linear) — influence = the capped weight (a `$5` Super Chat = 5
+///   seats). Faithful to the amount, but paid influence grows linearly with spend.
+/// * [`Concave`](WeightShaping::Concave) — influence = `⌊√weight⌋` (min 1): a `$5` Super Chat =
+///   2, a `$100` (capped) = ⌊√cap⌋. Paid influence **saturates** — doubling the spend does not
+///   double the sway — which both damps whale dominance AND shrinks the replicated-seat count to
+///   ≤ ⌊√cap⌋, cutting the per-window crypto cost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeightShaping {
+    /// Influence = capped raw weight (proportional to spend).
+    Linear,
+    /// Influence = `⌊√(capped weight)⌋` (min 1) — concave, saturating paid influence.
+    Concave,
+}
+
+/// Floored integer square root (`⌊√n⌋`) — the [`WeightShaping::Concave`] kernel. Dependency-free
+/// (a bit-by-bit method) so the shaping is exact and portable across toolchains.
+fn isqrt_floor(n: u64) -> u64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
 
 /// One option's running weighted tally in a [`TallyPreview`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,18 +164,78 @@ pub struct TallyPreview {
     pub total: u64,
     /// Distinct voters this window.
     pub voters: u64,
-    /// The quorum threshold `M` (a seat/weight count; `total ≥ quorum` ⇒ the window can certify).
+    /// The quorum threshold `M` (a seat/weight count; `total ≥ quorum` is the WEIGHT half of the
+    /// certify gate).
     pub quorum: u64,
+    /// The distinct-voter quorum floor `K`: a window certifies only when `voters ≥ min_distinct_voters`
+    /// as well as `total ≥ quorum` — so paid weight alone cannot carry it.
+    pub min_distinct_voters: u64,
     /// The current leader's option index (max weight, `> 0`), or `None` if no votes yet.
     pub leader: Option<usize>,
 }
 
 impl TallyPreview {
-    /// Whether the running total has met quorum (a certify would resolve this window).
+    /// Whether the running window would certify: BOTH the weight quorum (`total ≥ quorum`) AND
+    /// the distinct-voter floor (`voters ≥ min_distinct_voters`) are met. A single big Super Chat
+    /// clears the weight half but not the distinct-voter half.
     pub fn quorum_met(&self) -> bool {
+        self.total >= self.quorum && self.voters >= self.min_distinct_voters
+    }
+
+    /// Whether the weight half of the gate is met (`total ≥ quorum`) — regardless of the
+    /// distinct-voter floor. Useful for an overlay that wants to show "weight met, waiting on
+    /// more distinct voters".
+    pub fn weight_quorum_met(&self) -> bool {
         self.total >= self.quorum
     }
+
+    /// Whether the distinct-voter floor is met (`voters ≥ min_distinct_voters`).
+    pub fn distinct_floor_met(&self) -> bool {
+        self.voters >= self.min_distinct_voters
+    }
 }
+
+/// Everything a [`CrowdRound::close_into_world`] can refuse — the crowd-stream layer's own
+/// distinct-voter floor, wrapping the backing [`CollectiveError`] (the weight quorum + the
+/// executor's teeth).
+#[derive(Debug)]
+pub enum CrowdCloseError {
+    /// Fewer distinct voters than [`CrowdRound::min_distinct_voters`] — the paid-influence
+    /// saturation gate: weight alone (a single Super Chat) cannot certify a window; at least
+    /// `required` distinct humans must have voted. Refused BEFORE the vote engine is touched (no
+    /// crypto spent); the window is left intact for retry.
+    DistinctFloor {
+        /// The distinct voters this window had.
+        voters: u64,
+        /// The configured floor `K` it fell short of.
+        required: u64,
+    },
+    /// The backing collective round refused — below the weight quorum
+    /// ([`CollectiveError::BelowQuorum`]), a bad signature, or a quorum-certified illegal command
+    /// the game executor rejected ([`CollectiveError::World`]).
+    Collective(CollectiveError),
+}
+
+impl From<CollectiveError> for CrowdCloseError {
+    fn from(e: CollectiveError) -> Self {
+        CrowdCloseError::Collective(e)
+    }
+}
+
+impl std::fmt::Display for CrowdCloseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CrowdCloseError::DistinctFloor { voters, required } => write!(
+                f,
+                "below the distinct-voter floor — {voters} distinct voter(s), need {required} \
+                 (paid weight alone cannot carry a window); the world does not move"
+            ),
+            CrowdCloseError::Collective(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for CrowdCloseError {}
 
 impl CrowdRound {
     /// Open a crowd-stream round. `proposals` and `options` are index-aligned (option `i`'s
@@ -160,6 +283,47 @@ impl CrowdRound {
             buffer: Vec::new(),
             landed: Vec::new(),
             max_weight_per_voter: max_weight_per_voter.max(1),
+            shaping: WeightShaping::Linear,
+            min_distinct_voters: DEFAULT_MIN_DISTINCT_VOTERS,
+        }
+    }
+
+    /// **Set the weight shaping** (default [`WeightShaping::Linear`]). Builder-style so a
+    /// deployment configures it inline: `CrowdRound::open(..).with_shaping(WeightShaping::Concave)`.
+    /// [`WeightShaping::Concave`] saturates paid influence and shrinks the replicated-seat count.
+    pub fn with_shaping(mut self, shaping: WeightShaping) -> CrowdRound {
+        self.shaping = shaping;
+        self
+    }
+
+    /// **Set the distinct-voter quorum floor `K`** (default [`DEFAULT_MIN_DISTINCT_VOTERS`]). A
+    /// window certifies only when at least `k` DISTINCT voters have cast a ballot, ALONGSIDE the
+    /// weight quorum — so a single Super Chat's weight can never carry a window. `0`/`1` disables
+    /// the floor (weight alone suffices). Builder-style.
+    pub fn with_min_distinct_voters(mut self, k: u64) -> CrowdRound {
+        self.min_distinct_voters = k;
+        self
+    }
+
+    /// The active weight shaping.
+    pub fn shaping(&self) -> WeightShaping {
+        self.shaping
+    }
+
+    /// The distinct-voter quorum floor `K`.
+    pub fn min_distinct_voters(&self) -> u64 {
+        self.min_distinct_voters
+    }
+
+    /// A voter's INFLUENCE from their raw aggregated weight: cap to `max_weight_per_voter`, then
+    /// apply the [`WeightShaping`]. This is the single place the cap + shaping live, so
+    /// [`preview`](Self::preview) and [`close_into_world`](Self::close_into_world) can never
+    /// diverge on how many seats a weight becomes.
+    fn shaped_weight(&self, raw_weight: u64) -> u64 {
+        let capped = raw_weight.clamp(1, self.max_weight_per_voter);
+        match self.shaping {
+            WeightShaping::Linear => capped,
+            WeightShaping::Concave => isqrt_floor(capped).max(1),
         }
     }
 
@@ -245,14 +409,14 @@ impl CrowdRound {
     }
 
     /// The running weighted tally over the open window (what the overlay pushes). Computed from the
-    /// SAME aggregation + cap [`close_into_world`](Self::close_into_world) uses, so preview and
-    /// resolve agree.
+    /// SAME aggregation + cap + shaping [`close_into_world`](Self::close_into_world) uses (via
+    /// [`shaped_weight`](Self::shaped_weight)), so preview and resolve agree on the seat count.
     pub fn preview(&self) -> TallyPreview {
         let ballots = self.aggregate();
         let mut votes = vec![0u64; self.options.len()];
         let mut total = 0u64;
         for b in &ballots {
-            let w = b.weight.clamp(1, self.max_weight_per_voter);
+            let w = self.shaped_weight(b.weight);
             if b.option_idx < votes.len() {
                 votes[b.option_idx] += w;
                 total += w;
@@ -278,40 +442,62 @@ impl CrowdRound {
             total,
             voters: ballots.len() as u64,
             quorum: self.quorum,
+            min_distinct_voters: self.min_distinct_voters,
             leader,
         }
     }
 
     /// **THE SEAM — close the window, resolve into the world.** Materializes the electorate from
-    /// who voted this window (each voter's weight expands to capped custody seats), opens a real
-    /// [`CollectiveRound`] over that electorate, casts every seat's `ed25519`-signed ballot, and
-    /// [`resolve_into_world`](CollectiveRound::resolve_into_world) → ONE certified [`CertifiedTurn`]
-    /// on the game executor.
+    /// who voted this window (each voter's SHAPED, capped weight expands to that many custody
+    /// seats), opens a real [`CollectiveRound`] over that electorate, casts every seat's
+    /// `ed25519`-signed ballot, and [`resolve_into_world`](CollectiveRound::resolve_into_world) →
+    /// ONE certified [`CertifiedTurn`] on the game executor.
+    ///
+    /// Two gates fire BEFORE the weight quorum:
+    /// * **distinct-voter floor** — fewer than [`min_distinct_voters`](Self::min_distinct_voters)
+    ///   distinct voters ⇒ [`CrowdCloseError::DistinctFloor`], refused before ANY crypto is spent
+    ///   (a single Super Chat's weight cannot carry the window);
+    /// * **empty window** — no option-naming votes ⇒
+    ///   [`CrowdCloseError::Collective`]`(`[`CollectiveError::BelowQuorum`]`)`.
     ///
     /// On success the certified turn is recorded and the window is reset (advanced). On refusal the
-    /// window is **left intact** so the caller can decide (retry after more votes, or drop):
-    /// * no votes / below quorum → [`CollectiveError::BelowQuorum`] (the world does not move);
-    /// * a quorum-certified but illegal command → [`CollectiveError::World`] (the executor's teeth).
+    /// window is **left intact** so the caller can decide (retry after more votes, or drop). The
+    /// downstream collective teeth still hold: below the weight quorum →
+    /// [`CollectiveError::BelowQuorum`]; a quorum-certified illegal command →
+    /// [`CollectiveError::World`] (the executor's teeth).
     pub fn close_into_world(
         &mut self,
         world: &WorldCell,
         scene: &Scene,
-    ) -> Result<CertifiedTurn, CollectiveError> {
+    ) -> Result<CertifiedTurn, CrowdCloseError> {
         let ballots = self.aggregate();
 
-        // Materialize the electorate: each voter's (capped) weight expands to that many custody
-        // seats, all voting the voter's aggregated option. Weight-as-replicated-seats is how a paid
-        // vote earns more influence on the one-ballot-per-seat engine (a $5 Super Chat = 5 seats).
+        // Gate 1 — the DISTINCT-VOTER FLOOR. `ballots` is one entry per distinct voter (humans,
+        // not replicated seats), so its length is the distinct-voter count. Enforced HERE, before
+        // any seat is minted or signed, so paid weight alone (one whale) never reaches the engine.
+        let distinct = ballots.len() as u64;
+        if distinct < self.min_distinct_voters {
+            return Err(CrowdCloseError::DistinctFloor {
+                voters: distinct,
+                required: self.min_distinct_voters,
+            });
+        }
+
+        // Materialize the electorate: each voter's SHAPED (capped, then Linear/Concave) weight
+        // expands to that many custody seats, all voting the voter's aggregated option.
+        // Weight-as-replicated-seats is how a paid vote earns more influence on the
+        // one-ballot-per-seat engine; the shaping bounds how many seats a whale can mint (≤ ⌊√cap⌋
+        // under Concave), keeping the per-window sign+verify cost small.
         let mut seated: Vec<(Custodian, usize)> = Vec::new();
         for b in &ballots {
-            let n = b.weight.clamp(1, self.max_weight_per_voter);
+            let n = self.shaped_weight(b.weight);
             for k in 0..n {
                 seated.push((seat_custodian(&b.voter, k), b.option_idx));
             }
         }
         // No votes ⇒ below quorum, without troubling the engine with an empty electorate.
         if seated.is_empty() {
-            return Err(CollectiveError::BelowQuorum);
+            return Err(CollectiveError::BelowQuorum.into());
         }
 
         let electorate: Vec<Seat> = seated.iter().map(|(c, _)| c.seat()).collect();
@@ -467,10 +653,10 @@ mod tests {
 
         let mut round = keep_round(5); // demand more weight than the crowd supplies.
         round.ingest(chat("A", "trade blows"));
-        round.ingest(chat("B", "trade blows")); // total weight 2 < quorum 5.
+        round.ingest(chat("B", "trade blows")); // two distinct voters (clears the floor); weight 2 < 5.
 
         match round.close_into_world(&world, &scene) {
-            Err(CollectiveError::BelowQuorum) => {}
+            Err(CrowdCloseError::Collective(CollectiveError::BelowQuorum)) => {}
             other => panic!("a sub-quorum window must not move the world, got {other:?}"),
         }
         assert_eq!(world.read_var("hp"), 50, "the world did not move");
@@ -482,14 +668,99 @@ mod tests {
     }
 
     #[test]
-    fn no_votes_is_below_quorum() {
+    fn no_votes_is_below_the_distinct_floor() {
         let scene = keep_scene();
         let world = deploy_keep(32);
         let mut round = keep_round(1);
-        round.ingest(chat("noise", "hello everyone")); // names no option.
+        round.ingest(chat("noise", "hello everyone")); // names no option ⇒ zero distinct voters.
         match round.close_into_world(&world, &scene) {
-            Err(CollectiveError::BelowQuorum) => {}
-            other => panic!("no option-naming votes ⇒ below quorum, got {other:?}"),
+            Err(CrowdCloseError::DistinctFloor {
+                voters: 0,
+                required: DEFAULT_MIN_DISTINCT_VOTERS,
+            }) => {}
+            other => panic!("no option-naming votes ⇒ below the distinct floor, got {other:?}"),
         }
+    }
+
+    /// **The distinct-voter floor blocks a single Super Chat from carrying the world.** One whale
+    /// pays enough weight to clear the quorum ALONE, but is the only distinct voter — the floor
+    /// (default 2) refuses the window before any crypto is spent, and the world does not move.
+    #[test]
+    fn single_super_chat_cannot_carry_a_window() {
+        let scene = keep_scene();
+        let mut world = deploy_keep(34);
+        world.seed_var("hp", Value::Int(50));
+        let mut round = keep_round(3); // weight quorum 3.
+        // A $9 Super Chat: raw weight 9, capped to 8 under Linear — clears the weight quorum alone.
+        round.ingest(super_chat("whale", "trade blows!!", 9_000_000));
+
+        let p = round.preview();
+        assert!(
+            p.weight_quorum_met(),
+            "the whale's weight alone clears the quorum"
+        );
+        assert!(!p.distinct_floor_met(), "but it is a single distinct voter");
+        assert!(!p.quorum_met(), "so the window would NOT certify");
+
+        match round.close_into_world(&world, &scene) {
+            Err(CrowdCloseError::DistinctFloor {
+                voters: 1,
+                required: 2,
+            }) => {}
+            other => panic!("one distinct voter must be refused by the floor, got {other:?}"),
+        }
+        assert_eq!(world.read_var("hp"), 50, "the world did not move");
+    }
+
+    /// **Concave (√) shaping saturates paid influence + shrinks the seat count.** A $5 Super Chat
+    /// weighs 5 raw; under `Concave` its influence is ⌊√5⌋ = 2, so a whale no longer buys linear
+    /// sway and the replicated-seat count (the per-window crypto cost) collapses.
+    #[test]
+    fn concave_shaping_saturates_paid_influence() {
+        let mut round = keep_round(2).with_shaping(WeightShaping::Concave);
+        round.ingest(super_chat("whale", "trade blows", 5_000_000)); // raw weight 5 → ⌊√5⌋ = 2.
+        round.ingest(chat("viewerA", "press on")); // weight 1 → ⌊√1⌋ = 1.
+
+        let p = round.preview();
+        assert_eq!(
+            p.options[0].votes, 2,
+            "$5 trade-blows saturates to ⌊√5⌋ = 2"
+        );
+        assert_eq!(p.options[1].votes, 1, "a plain chat is ⌊√1⌋ = 1");
+        assert_eq!(p.total, 3);
+        assert_eq!(p.voters, 2);
+        assert_eq!(round.shaping(), WeightShaping::Concave);
+    }
+
+    /// **The distinct-voter floor is configurable** — set it to 1 to let weight alone carry a
+    /// window (the legacy pure-weight behaviour), or higher to demand broader participation.
+    #[test]
+    fn distinct_floor_is_configurable() {
+        let scene = keep_scene();
+        let mut world = deploy_keep(35);
+        world.seed_var("hp", Value::Int(50));
+
+        // Floor lowered to 1: a single whale's weight now certifies.
+        let mut round = keep_round(3).with_min_distinct_voters(1);
+        assert_eq!(round.min_distinct_voters(), 1);
+        round.ingest(super_chat("whale", "trade blows!!", 4_000_000)); // weight 4 ≥ quorum 3.
+
+        let cert = round
+            .close_into_world(&world, &scene)
+            .expect("with the floor at 1, weight alone certifies");
+        assert_eq!(cert.command, Command::trade_blows());
+        assert_eq!(world.read_var("hp"), 30, "the world resolved trade-blows");
+    }
+
+    #[test]
+    fn isqrt_floor_is_exact() {
+        assert_eq!(isqrt_floor(0), 0);
+        assert_eq!(isqrt_floor(1), 1);
+        assert_eq!(isqrt_floor(3), 1);
+        assert_eq!(isqrt_floor(4), 2);
+        assert_eq!(isqrt_floor(8), 2);
+        assert_eq!(isqrt_floor(9), 3);
+        assert_eq!(isqrt_floor(63), 7);
+        assert_eq!(isqrt_floor(64), 8);
     }
 }

@@ -2568,10 +2568,13 @@ pub fn make_app_parts_with_descent(descent: Arc<DescentState>) -> (Router, Arc<C
         .merge(sprite::sprite_router())
         // THE CROWD-STREAM OVERLAY (docs/CROWD-STREAM-ENGINE-DESIGN.md) — the transparent OBS vote
         // overlay + its server→browser SSE tally push (`GET /overlay`, `GET /overlay/sse`,
-        // `POST /overlay/ingest[/youtube]`). The demo state is the keep round; a deployment builds
-        // its own `overlay::OverlayState` over the round for the game it is streaming and drives a
+        // `POST /overlay/ingest[/youtube]`). The demo state is the keep round, honestly labeled a
+        // tally board with no world resolve, and the ingest routes are gated behind the operator
+        // bearer `OVERLAY_INGEST_TOKEN` (unset ⇒ fail-closed). A deployment builds its own
+        // `overlay::OverlayState` over the game's live World cell, feeds it from the server-side
+        // `overlay::YouTubePoller` (authenticated) and/or the token-gated POST, and drives a
         // close→resolve→advance timer via `OverlayState::close_tick`.
-        .merge(overlay::overlay_router(overlay::demo_state()));
+        .merge(overlay::overlay_router(overlay::demo_state_from_env()));
     // THE TELEGRAM MINI APP surface — mounted iff `TELEGRAM_BOT_TOKEN` is set (the same ops gate
     // as the bot itself; `tg_miniapp_from_env` logs one line either way). It drives the SAME
     // catalog host, but through initData-verified identities landing Signed turns.
