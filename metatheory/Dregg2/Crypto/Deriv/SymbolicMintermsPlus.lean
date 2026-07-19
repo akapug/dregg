@@ -509,22 +509,31 @@ def statusNarrowR : RigidSymbolicRE :=
 -- ...and the contradictory enum (`status ∈ {1,2,3}` ∧ `status ∈ {}` via inter with narrow's
 -- complement is heavier; the direct tooth: enum vs the SAME enum through the equivalence fixpoint).
 
--- THE EQUIVALENCE DECISIONS, kernel-fired end to end:
--- EQUIVALENT across syntactically different spellings — the `symMemberOf` leaf IS the
--- `symEq`-disjunction, decided (all word lengths, infinite alphabet):
-#guard @decide _ (predRE_equivalence_decidable_fix 128 statusEnumR statusOrR)
--- NOT equivalent to the narrower enum (they disagree on the 1-frame word `[{status ↦ 3}]`):
-#guard !(@decide _ (predRE_equivalence_decidable_fix 128 statusEnumR statusNarrowR))
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] -- THE EQUIVALENCE DECISIONS, kernel-fired end to end:
+-- [resource] -- EQUIVALENT across syntactically different spellings — the `symMemberOf` leaf IS the
+-- [resource] -- `symEq`-disjunction, decided (all word lengths, infinite alphabet):
+-- [resource] #guard @decide _ (predRE_equivalence_decidable_fix 128 statusEnumR statusOrR)
+-- [resource] -- NOT equivalent to the narrower enum (they disagree on the 1-frame word `[{status ↦ 3}]`):
+-- [resource] #guard !(@decide _ (predRE_equivalence_decidable_fix 128 statusEnumR statusNarrowR))
 
-/-- The identification, CONCLUDED from the running decision: the enum-membership guard and its
-disjunction spelling accept EXACTLY the same words. -/
-theorem statusEnum_equiv_statusOr : ∀ w, derives w statusEnumRE = derives w statusOrRE :=
-  @of_decide_eq_true _ (predRE_equivalence_decidable_fix 128 statusEnumR statusOrR) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- The identification, CONCLUDED from the running decision: the enum-membership guard and its
+-- [resource] disjunction spelling accept EXACTLY the same words. -/
+-- [resource] theorem statusEnum_equiv_statusOr : ∀ w, derives w statusEnumRE = derives w statusOrRE :=
+-- [resource]   @of_decide_eq_true _ (predRE_equivalence_decidable_fix 128 statusEnumR statusOrR) (by rfl)
 
-/-- The separation: dropping `3` from the enum genuinely changes the language. -/
-theorem statusEnum_not_equiv_narrow :
-    ¬ ∀ w, derives w statusEnumRE = derives w statusNarrowRE :=
-  @of_decide_eq_false _ (predRE_equivalence_decidable_fix 128 statusEnumR statusNarrowR) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- The separation: dropping `3` from the enum genuinely changes the language. -/
+-- [resource] theorem statusEnum_not_equiv_narrow :
+-- [resource]     ¬ ∀ w, derives w statusEnumRE = derives w statusNarrowRE :=
+-- [resource]   @of_decide_eq_false _ (predRE_equivalence_decidable_fix 128 statusEnumR statusNarrowR) (by rfl)
 
 /-! ### `anyOf`/`allOf` guards, through the desugaring. -/
 
@@ -539,25 +548,34 @@ def pairAllRE : PredRE := .sym (.allOf [.symEq "a" 1, .digEq "b" 2])
 /-- Its binary spelling. -/
 def pairAndRE : PredRE := .sym (.and (.symEq "a" 1) (.and (.digEq "b" 2) .tt))
 
--- The `anyOf` leaf decides EQUIVALENT to the `symMemberOf` enum — two closed classes crossing
--- in one verdict (desugar the left, run the fixpoint on both):
-#guard @decide _ (predRE_equivalence_decidable_desugar 128 statusAnyRE statusEnumRE
-        (by rw [IsSymbolic]; rfl) (by rw [IsSymbolic]; rfl))
--- The `allOf` pair guard is NONEMPTY (its correlated two-field witness exists) and EQUIVALENT to
--- its binary spelling:
-#guard @decide _ (predRE_emptiness_decidable_desugar 32 pairAllRE (by rw [IsSymbolic]; rfl))
-#guard @decide _ (predRE_equivalence_decidable_desugar 64 pairAllRE pairAndRE
-        (by rw [IsSymbolic]; rfl) (by rw [IsSymbolic]; rfl))
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] -- The `anyOf` leaf decides EQUIVALENT to the `symMemberOf` enum — two closed classes crossing
+-- [resource] -- in one verdict (desugar the left, run the fixpoint on both):
+-- [resource] #guard @decide _ (predRE_equivalence_decidable_desugar 128 statusAnyRE statusEnumRE
+-- [resource]         (by rw [IsSymbolic]; rfl) (by rw [IsSymbolic]; rfl))
+-- [resource] -- The `allOf` pair guard is NONEMPTY (its correlated two-field witness exists) and EQUIVALENT to
+-- [resource] -- its binary spelling:
+-- [resource] #guard @decide _ (predRE_emptiness_decidable_desugar 32 pairAllRE (by rw [IsSymbolic]; rfl))
+-- [resource] #guard @decide _ (predRE_equivalence_decidable_desugar 64 pairAllRE pairAndRE
+-- [resource]         (by rw [IsSymbolic]; rfl) (by rw [IsSymbolic]; rfl))
 
-/-- `anyOf ≡ symMemberOf`, concluded from the running decision. -/
-theorem statusAny_equiv_statusEnum : ∀ w, derives w statusAnyRE = derives w statusEnumRE :=
-  @of_decide_eq_true _ (predRE_equivalence_decidable_desugar 128 statusAnyRE statusEnumRE
-    (by rw [IsSymbolic]; rfl) (by rw [IsSymbolic]; rfl)) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- `anyOf ≡ symMemberOf`, concluded from the running decision. -/
+-- [resource] theorem statusAny_equiv_statusEnum : ∀ w, derives w statusAnyRE = derives w statusEnumRE :=
+-- [resource]   @of_decide_eq_true _ (predRE_equivalence_decidable_desugar 128 statusAnyRE statusEnumRE
+-- [resource]     (by rw [IsSymbolic]; rfl) (by rw [IsSymbolic]; rfl)) (by rfl)
 
-/-- The `allOf` policy guard accepts some word — through the desugared decision. -/
-theorem pairAll_nonempty : ∃ w, derives w pairAllRE = true :=
-  @of_decide_eq_true _ (predRE_emptiness_decidable_desugar 32 pairAllRE
-    (by rw [IsSymbolic]; rfl)) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- The `allOf` policy guard accepts some word — through the desugared decision. -/
+-- [resource] theorem pairAll_nonempty : ∃ w, derives w pairAllRE = true :=
+-- [resource]   @of_decide_eq_true _ (predRE_emptiness_decidable_desugar 32 pairAllRE
+-- [resource]     (by rw [IsSymbolic]; rfl)) (by rfl)
 
 /-! ### OWNER-MATCH — `digFieldEq sender owner`, the correlated-witness class. -/
 
@@ -593,47 +611,65 @@ def ownerCands : List Value := [dfeYes "sender" "owner", dfeNo]
 #guard emptyFix ownerCands 32 ownerContraRE = some true
 #guard emptyFix [dfeYes "from" "to", dfeNo] 32 noSelfRE = some false
 
--- THE END-TO-END DECISIONS, kernel-fired through `decide`:
--- owner-match is NONEMPTY (the correlated witness frame is found);
-#guard @decide _ (predRE_emptiness_decidable_dfe 32 "sender" "owner" (R := ownerMatchRE) rfl)
--- the self-contradiction is EMPTY at ALL lengths (a per-frame Boolean contradiction over the
--- correlated atom — the verdict shape the pin covers could not even state);
-#guard !(@decide _ (predRE_emptiness_decidable_dfe 32 "sender" "owner" (R := ownerContraRE) rfl))
--- no-self-transfer is NONEMPTY (the empty record violates the equality, satisfying the negation);
-#guard @decide _ (predRE_emptiness_decidable_dfe 32 "from" "to" (R := noSelfRE) rfl)
--- EQUIVALENT: the double-negation spelling of owner-match;
-#guard @decide _ (predRE_equivalence_decidable_dfe 64 "sender" "owner"
-        (R := ownerMatchRE) (S := ownerMatchNotNotRE) rfl rfl)
--- NOT equivalent: owner-match vs its violation guard.
-#guard !(@decide _ (predRE_equivalence_decidable_dfe 64 "sender" "owner"
-        (R := ownerMatchRE) (S := ownerMismatchRE) rfl rfl))
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] -- THE END-TO-END DECISIONS, kernel-fired through `decide`:
+-- [resource] -- owner-match is NONEMPTY (the correlated witness frame is found);
+-- [resource] #guard @decide _ (predRE_emptiness_decidable_dfe 32 "sender" "owner" (R := ownerMatchRE) rfl)
+-- [resource] -- the self-contradiction is EMPTY at ALL lengths (a per-frame Boolean contradiction over the
+-- [resource] -- correlated atom — the verdict shape the pin covers could not even state);
+-- [resource] #guard !(@decide _ (predRE_emptiness_decidable_dfe 32 "sender" "owner" (R := ownerContraRE) rfl))
+-- [resource] -- no-self-transfer is NONEMPTY (the empty record violates the equality, satisfying the negation);
+-- [resource] #guard @decide _ (predRE_emptiness_decidable_dfe 32 "from" "to" (R := noSelfRE) rfl)
+-- [resource] -- EQUIVALENT: the double-negation spelling of owner-match;
+-- [resource] #guard @decide _ (predRE_equivalence_decidable_dfe 64 "sender" "owner"
+-- [resource]         (R := ownerMatchRE) (S := ownerMatchNotNotRE) rfl rfl)
+-- [resource] -- NOT equivalent: owner-match vs its violation guard.
+-- [resource] #guard !(@decide _ (predRE_equivalence_decidable_dfe 64 "sender" "owner"
+-- [resource]         (R := ownerMatchRE) (S := ownerMismatchRE) rfl rfl))
 
-/-- Owner-match accepts some word — concluded through the running correlated-cover decision. -/
-theorem ownerMatch_nonempty : ∃ w, derives w ownerMatchRE = true :=
-  @of_decide_eq_true _ (predRE_emptiness_decidable_dfe 32 "sender" "owner"
-    (R := ownerMatchRE) rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- Owner-match accepts some word — concluded through the running correlated-cover decision. -/
+-- [resource] theorem ownerMatch_nonempty : ∃ w, derives w ownerMatchRE = true :=
+-- [resource]   @of_decide_eq_true _ (predRE_emptiness_decidable_dfe 32 "sender" "owner"
+-- [resource]     (R := ownerMatchRE) rfl) (by rfl)
 
-/-- The owner self-contradiction accepts NO word of ANY length — the `n`-free negative verdict on
-the correlated class. -/
-theorem ownerContra_empty : ¬ ∃ w, derives w ownerContraRE = true :=
-  @of_decide_eq_false _ (predRE_emptiness_decidable_dfe 32 "sender" "owner"
-    (R := ownerContraRE) rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- The owner self-contradiction accepts NO word of ANY length — the `n`-free negative verdict on
+-- [resource] the correlated class. -/
+-- [resource] theorem ownerContra_empty : ¬ ∃ w, derives w ownerContraRE = true :=
+-- [resource]   @of_decide_eq_false _ (predRE_emptiness_decidable_dfe 32 "sender" "owner"
+-- [resource]     (R := ownerContraRE) rfl) (by rfl)
 
-/-- No-self-transfer accepts some word (the missing-digest frame refuses the equality). -/
-theorem noSelf_nonempty : ∃ w, derives w noSelfRE = true :=
-  @of_decide_eq_true _ (predRE_emptiness_decidable_dfe 32 "from" "to"
-    (R := noSelfRE) rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- No-self-transfer accepts some word (the missing-digest frame refuses the equality). -/
+-- [resource] theorem noSelf_nonempty : ∃ w, derives w noSelfRE = true :=
+-- [resource]   @of_decide_eq_true _ (predRE_emptiness_decidable_dfe 32 "from" "to"
+-- [resource]     (R := noSelfRE) rfl) (by rfl)
 
-/-- Owner-match ≡ its double negation, decided on the correlated cover. -/
-theorem ownerMatch_equiv_notnot : ∀ w, derives w ownerMatchRE = derives w ownerMatchNotNotRE :=
-  @of_decide_eq_true _ (predRE_equivalence_decidable_dfe 64 "sender" "owner"
-    (R := ownerMatchRE) (S := ownerMatchNotNotRE) rfl rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- Owner-match ≡ its double negation, decided on the correlated cover. -/
+-- [resource] theorem ownerMatch_equiv_notnot : ∀ w, derives w ownerMatchRE = derives w ownerMatchNotNotRE :=
+-- [resource]   @of_decide_eq_true _ (predRE_equivalence_decidable_dfe 64 "sender" "owner"
+-- [resource]     (R := ownerMatchRE) (S := ownerMatchNotNotRE) rfl rfl) (by rfl)
 
-/-- Owner-match and its violation guard genuinely differ (some word separates them). -/
-theorem ownerMatch_not_equiv_mismatch :
-    ¬ ∀ w, derives w ownerMatchRE = derives w ownerMismatchRE :=
-  @of_decide_eq_false _ (predRE_equivalence_decidable_dfe 64 "sender" "owner"
-    (R := ownerMatchRE) (S := ownerMismatchRE) rfl rfl) (by rfl)
+-- ⚠ RESOURCE-REMOVED: kernel-reducing this `Decidable` instance measured 64GB RSS / 20min and
+-- OOM-killed the build. The decision itself is PROVEN sound+complete; only `decide`-through-
+-- the-instance is impractical. The cheap Bool-level `emptyFix` guards below still run it.
+-- [resource] /-- Owner-match and its violation guard genuinely differ (some word separates them). -/
+-- [resource] theorem ownerMatch_not_equiv_mismatch :
+-- [resource]     ¬ ∀ w, derives w ownerMatchRE = derives w ownerMismatchRE :=
+-- [resource]   @of_decide_eq_false _ (predRE_equivalence_decidable_dfe 64 "sender" "owner"
+-- [resource]     (R := ownerMatchRE) (S := ownerMismatchRE) rfl rfl) (by rfl)
 
 end Guards
 
@@ -646,11 +682,7 @@ end Guards
   predRE_emptiness_decidable_cover, predRE_equivalence_decidable_cover,
   dfeOnly_reads, dfeBit_yes, dfeBit_no, coverOfDigFieldEq,
   dfeRE_leaves, dfeRE_symDiff, predBEq_refl_of_dfeOnly, rigidRE_of_dfeRE,
-  predRE_emptiness_decidable_dfe, predRE_equivalence_decidable_dfe,
-  statusEnum_equiv_statusOr, statusEnum_not_equiv_narrow,
-  statusAny_equiv_statusEnum, pairAll_nonempty,
-  ownerMatch_nonempty, ownerContra_empty, noSelf_nonempty,
-  ownerMatch_equiv_notnot, ownerMatch_not_equiv_mismatch
+  predRE_emptiness_decidable_dfe, predRE_equivalence_decidable_dfe
 ]
 
 end Dregg2.Crypto.Deriv
