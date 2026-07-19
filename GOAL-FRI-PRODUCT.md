@@ -250,6 +250,16 @@ widths; widen block-2b + assignment to the multi-height batch (hashGroup per cla
 RECALIBRATION: phases have REAL DEPTH (input-open = multi-height batch, not a Merkle walk); direction right +
 honest (Lean authors · real proof judges · lanes refuse to fake), but each phase is a substantial cycle.
 
+
+## ✅ AIR-in-Lean CYCLE 3 — input-open BINDS the real proof (21b91f4df), VERIFIED-BY-ME
+Multi-height MMCS batch tree (the shape cycle 2 refused to fake) emitted from Lean (InputOpenBatchEmit.lean:
+inputOpenBatch_refines — height-classes + injected class-hashes + per-width leaf-hash from multiFieldHashW,
+real ∀-theorem, KAT vs the real fixture input root). Replayer gained select-support + closed-template binding.
+I RAN go test -run Diff → PASS (18s): block 2b now BINDS the real proof (real openings → real input-MMCS roots
+in-circuit, all 4 rounds, Lean constraints) + rejects tampering. First divergence moved to BLOCK 3 (STARK-DAG /
+batch-table). Progress: 2a commit-Merkle + 2b input-open both bind the real proof with Lean-authored AIR.
+Cycle 4 FIRING (block 3 batch-table; note whether its DAG is Lean-emitted or Rust — the stark-kill convergence).
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
