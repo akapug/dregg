@@ -592,6 +592,33 @@ pub trait Offering {
         self.actions(session)
     }
 
+    /// **Does this offering's per-viewer projection reveal PRIVATE state?** — the declared
+    /// hidden-information signal a frontend needs BEFORE it decides where to paint a surface.
+    ///
+    /// [`render_for`](Offering::render_for) exists so a card hand / a sealed move / a fog-of-war
+    /// board can be shown to the player it belongs to. That projection is **safe only on a
+    /// single-reader surface**. A frontend whose surface is SHARED by many readers (a Telegram
+    /// group's one editable message, a Discord channel post, a projector) must therefore know
+    /// whether `render_for` carries secrets — and it cannot learn that by *comparing* renders: at
+    /// the moment a hidden-information session opens (before a seat is claimed, before a card is
+    /// dealt) the per-viewer projection is still identical to the public one, so a differential
+    /// says "safe" right up until it is not. The offering has to *declare* it.
+    ///
+    /// `true` means: `render_for(session, viewer)` may contain state that only `viewer` is
+    /// entitled to see, so a frontend must never paint it into a shared surface — it either
+    /// serves the viewer-blind [`render`](Offering::render) there, or declines to host the
+    /// offering on that surface and points the player at a private one.
+    ///
+    /// **Default (additive, non-breaking): `false`** — a full-information / public offering (the
+    /// dungeon, the market, a grain) has no secrets to leak and inherits it; an offering whose
+    /// `render_for` merely *dims cap-gated affordances* is also `false` (nothing hidden, only
+    /// decoration). Only an offering with genuinely per-player secrets overrides it. Note this is
+    /// a property of the OFFERING, not of one session: it is answered without a session, because a
+    /// frontend must decide before opening one.
+    fn hidden_information(&self) -> bool {
+        false
+    }
+
     /// What a paid action costs (run-credits). The free tier is [`RunCost::free`].
     fn price(&self, input: &Action) -> RunCost;
 }

@@ -15,10 +15,13 @@
 //! - a newly-registered game (**automatafl**) is REACHABLE and renders a NON-EMPTY surface (a
 //!   CoordGrid board degrades to a text grid on the text-only Telegram renderer — expected, not a
 //!   silent drop);
-//! - the **multiway-tug hidden hand** threads the viewer: a seated player, projected through the
-//!   frontend's own derived identity, sees THEIR OWN card ids while a different seat sees a DIFFERENT
-//!   hand — the per-viewer discrimination the `hidden_hand_web.rs` shape proves on the web, now on
-//!   the chat surface;
+//! - the **multiway-tug hidden hand** threads the viewer *to a DM*: a seated player, projected
+//!   through the frontend's own derived identity, sees THEIR OWN card ids while the opponent's hand
+//!   stays fog — the per-viewer projection the `hidden_hand_web.rs` shape proves on the web, on the
+//!   chat surface that may actually carry it. (This bullet used to claim the same for a GROUP, with
+//!   "a different seat sees a DIFFERENT hand" as the success condition. That was the leak, not the
+//!   feature — a group's session is ONE message everyone reads. See
+//!   `tests/hidden_information_never_shared.rs`.)
 //! - a real turn drives through a newly-registered game (tug's opening `comp` lands a receipt), and
 //!   the committed chain re-verifies.
 
@@ -141,18 +144,30 @@ fn automatafl_is_reachable_and_renders_a_non_empty_surface_on_telegram() {
     }
 }
 
-/// **The multiway-tug hidden hand threads the viewer through the Telegram surface.** Two Telegram
-/// users each claim a seat by playing; the frontend projects each re-render FOR the pressing user's
-/// derived identity (`render_for`), so each sees THEIR OWN card ids — and the two hands DIFFER. A
-/// seated player never sees the opponent's cards (fog). This is the `hidden_hand_web.rs` shape on
-/// the chat surface: per-viewer discrimination, driven end-to-end (not the viewer-blind projection).
+/// **The multiway-tug hidden hand threads the viewer through the Telegram surface — in a DM, the
+/// only surface that may carry it.**
+///
+/// ⚠ This test used to run in a GROUP (`chat = -700`) and assert, as its SUCCESS condition, that
+/// "a different seat sees a DIFFERENT hand" — read off `MockTransport::last()`. That assertion WAS
+/// the bug: a group chat's session is ONE message that every re-present EDITS in place, so the two
+/// different hands it celebrated were two different hands painted into the SAME message that the
+/// whole group reads. `last()` hid it by showing each render in isolation, as if each viewer had a
+/// private place to receive it. The leak is now closed structurally (a shared chat is served the
+/// viewer-blind projection, and a hidden-information offering is refused there outright), and
+/// `tests/hidden_information_never_shared.rs` is the referee — asserting over a chat's WHOLE
+/// transcript, not its latest frame.
+///
+/// What remains true, and is what this test keeps: in a DM — one reader — the frontend projects the
+/// re-render FOR the pressing user's derived identity (`render_for`), so the seated player sees
+/// THEIR OWN card ids while the opponent's hand stays fog. The per-viewer thread is intact; only
+/// its destination is now checked.
 #[test]
-fn the_tug_hidden_hand_threads_the_viewer_on_telegram() {
+fn the_tug_hidden_hand_threads_the_viewer_in_a_dm() {
     let mut h = host();
-    let chat: i64 = -700; // a group so both users share the round.
+    let chat: i64 = 700; // a POSITIVE chat id → a DM: one reader, the only surface a hand may reach.
     let sid = h
         .open("tug", chat, None, ALICE)
-        .expect("tug opens on Telegram");
+        .expect("tug opens in a DM on Telegram");
     assert_eq!(h.active_offering(&sid), Some("tug"));
 
     // ALICE plays the round's opening action (Competition) — claims seat A, lands a real receipt, and
@@ -184,25 +199,6 @@ fn the_tug_hidden_hand_threads_the_viewer_on_telegram() {
     assert!(
         alice_view.contains("Opponent (hidden hand)"),
         "the opponent's hand stays fog for the seated viewer: {alice_view}"
-    );
-
-    // BOB now presses — claims seat B (A is alice's). The re-render is projected FOR bob: his own,
-    // DIFFERENT hand. (The press may land or be a real turn-order refusal — either way the seat is
-    // claimed and the surface re-renders AS bob, which is the viewer-thread we assert.)
-    let _ = h.press(CallbackQuery::press(
-        chat,
-        BOB,
-        encode_callback("secret", 0),
-    ));
-    let bob_view = last_text(&h);
-    assert!(
-        bob_view.contains("Your hand") && bob_view.contains("card #"),
-        "seat B (bob) sees HIS OWN card ids through the frontend: {bob_view}"
-    );
-    assert_ne!(
-        alice_view, bob_view,
-        "the viewer threaded: alice's seat-A hand and bob's seat-B hand render DIFFERENTLY \
-         (per-viewer discrimination, not the viewer-blind fog everyone shared before)"
     );
 
     // The committed chain re-verifies by replay — a real driven turn through a newly-registered game.

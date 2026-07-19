@@ -24,14 +24,25 @@
 //!   the firing Telegram user's derived identity attributes the move.
 //!
 //! ## Session shape: a group chat = a collective, a DM = single-player
-//! A Telegram **chat** hosts one session (a [`SessionId`] over the chat id; a supergroup **forum
-//! topic** scopes a session under one topic thread). A DM (a positive chat id) is single-player; a
+//! A Telegram **chat** hosts a session per offering — the chat-scoped [`SessionId`] names it on the
+//! host ([`TelegramFrontend::session_id`]; a supergroup **forum topic** scopes it under one topic
+//! thread), while its Telegram-side SURFACE is one message per `(chat, offering)`
+//! ([`TelegramFrontend::surface_id`]), so several offerings coexist in a chat and a press routes by
+//! the message it was pressed on. A DM (a positive chat id) is single-player; a
 //! group/supergroup (a negative chat id) is a **collective** — many users press affordances on the
 //! ONE session, exactly the ballot shape the dungeon's collective-choice layer resolves (the core
 //! resolves the single typed [`Action`] a presser picked; the ballot/quorum lives one layer up in
 //! the orchestrator, unchanged from Discord). This crate classifies the chat ([`ChatKind`]) and
 //! attributes every press to its presser's derived identity; the collective tally is the
 //! orchestrator's job, identical across frontends.
+//!
+//! ## A shared surface never carries a private projection
+//! A group's surface is ONE message every member reads, and a re-present EDITS it in place — so
+//! the per-viewer projection ([`dreggnet_offerings::Offering::render_for`]: a card hand, a sealed
+//! move) is served only in a DM. A collective chat is always served the viewer-blind
+//! [`dreggnet_offerings::Offering::render`], and an offering that DECLARES hidden information
+//! ([`dreggnet_offerings::Offering::hidden_information`]) is not hosted in one at all — it is
+//! refused at open with a legible redirect (`host::OpenError::HiddenInSharedChat`).
 
 pub mod api;
 pub mod audit;
@@ -54,6 +65,12 @@ use crate::api::{
 };
 use crate::cipherclerk::TelegramCipherclerk;
 use crate::transport::{MessageId, Transport, TransportError};
+
+/// The separator between a chat-scoped session id and the OFFERING whose surface is meant — the
+/// `#tug` in `tg:-700#tug` (see [`TelegramFrontend::surface_id`]). Chosen because a chat id is
+/// `-?[0-9]+` and a topic is `[0-9]+`, so `#` can never appear in the chat part: parsing back is
+/// unambiguous ([`TelegramFrontend::chat_of`] / [`TelegramFrontend::offering_of`]).
+pub const SURFACE_SEP: char = '#';
 
 /// A Telegram user id (the Bot API `from.id`) — always positive, ≤ 52 bits.
 pub type TelegramUserId = u64;
@@ -104,6 +121,12 @@ pub struct CallbackQuery {
     pub chat_id: ChatId,
     /// The forum-topic thread, if the session is a topic-per-session.
     pub message_thread_id: Option<i64>,
+    /// **WHICH message the pressed button belongs to** (the Bot API `callback_query.message.
+    /// message_id`) — the field that says which of a chat's several live surfaces the press
+    /// addresses. With more than one offering open in a chat, each has its own message + its own
+    /// keyboard, and only this distinguishes them; `None` (a synthesized press — a `/act` command,
+    /// a Mini App round-trip, a test) falls back to the chat's most recent surface.
+    pub message_id: Option<i64>,
     /// The Telegram user who pressed the button (mapped to a [`DreggIdentity`] via the cclerk).
     pub from_user_id: TelegramUserId,
     /// The pressed button's `callback_data` — the [`api::encode_callback`]-encoded `{turn, arg}`.
@@ -111,11 +134,30 @@ pub struct CallbackQuery {
 }
 
 impl CallbackQuery {
-    /// A press of `data` in `chat_id` by `from_user_id` (no forum topic).
+    /// A press of `data` in `chat_id` by `from_user_id` (no forum topic, no message address — it
+    /// routes to the chat's most recent surface).
     pub fn press(chat_id: ChatId, from_user_id: TelegramUserId, data: impl Into<String>) -> Self {
         CallbackQuery {
             chat_id,
             message_thread_id: None,
+            message_id: None,
+            from_user_id,
+            data: data.into(),
+        }
+    }
+
+    /// A press of a button **on a specific message** — the live-bot shape, and the only way to
+    /// address one of several offerings open in the same chat.
+    pub fn press_on_message(
+        chat_id: ChatId,
+        message_id: MessageId,
+        from_user_id: TelegramUserId,
+        data: impl Into<String>,
+    ) -> Self {
+        CallbackQuery {
+            chat_id,
+            message_thread_id: None,
+            message_id: Some(message_id.0),
             from_user_id,
             data: data.into(),
         }
@@ -131,6 +173,7 @@ impl CallbackQuery {
         CallbackQuery {
             chat_id,
             message_thread_id: Some(message_thread_id),
+            message_id: None,
             from_user_id,
             data: data.into(),
         }
@@ -166,8 +209,18 @@ pub struct TelegramFrontend<T: Transport> {
     bot_secret: [u8; 32],
     /// The injected transport (mock in tests, `RawBotApi` in a deploy).
     transport: T,
-    /// The live session slots, keyed by the [`SessionId`] derived from the chat (+topic).
+    /// The live SURFACE slots — one per live message, keyed by the surface id
+    /// ([`TelegramFrontend::surface_id`]: the chat, plus the offering whose message it is). A chat
+    /// can hold several at once; a bare chat-scoped id ([`TelegramFrontend::session_id`]) is the
+    /// chat's own single surface, as a lone frontend (no host, one offering) uses it.
     sessions: HashMap<SessionId, TelegramSession>,
+    /// **message id → the surface it belongs to** — how a press on a specific message routes to
+    /// the right offering when several are open in one chat.
+    by_message: HashMap<i64, SessionId>,
+    /// **chat-scoped id → that chat's MOST RECENTLY presented surface.** The fallback for a press
+    /// that names no message (a `/act` command, a Mini App round-trip), and what keeps the
+    /// single-offering UX ("the chat's surface") meaningful now that a chat may host several.
+    latest: HashMap<SessionId, SessionId>,
     /// The last transport error a (infallible-signature) [`present`](Frontend::present) hit — so a
     /// caller using the trait method can still observe a send failure. Cleared on a successful send.
     last_send_error: Option<TransportError>,
@@ -180,6 +233,8 @@ impl<T: Transport> TelegramFrontend<T> {
             bot_secret,
             transport,
             sessions: HashMap::new(),
+            by_message: HashMap::new(),
+            latest: HashMap::new(),
             last_send_error: None,
         }
     }
@@ -194,10 +249,28 @@ impl<T: Transport> TelegramFrontend<T> {
         }
     }
 
-    /// Parse a [`SessionId`] minted by [`Self::session_id`] back into `(chat_id, topic)`. `None`
-    /// for a session id this frontend did not mint.
+    /// **The SURFACE id for `key`'s message in this chat** — the chat-scoped session id with the
+    /// offering appended (`tg:-700#tug`). One Telegram message per `(chat, offering)`, so opening
+    /// a second offering posts a SECOND live surface instead of stealing the first one's message.
+    ///
+    /// Distinct from [`session_id`](Self::session_id), which stays the chat-scoped *host* session
+    /// id: the [`dreggnet_offerings::OfferingHost`] already addresses a session by `(key, id)`, so
+    /// two offerings in one chat are already two separate host sessions. What used to collide was
+    /// the SURFACE — one message slot, one presented keyboard, one "active" offering per chat —
+    /// and that is what this id splits. Host-side session identity (its seed, its durable resume
+    /// log, its Mini App deep link) is untouched.
+    pub fn surface_id(chat_id: ChatId, message_thread_id: Option<i64>, key: &str) -> SessionId {
+        let chat = Self::session_id(chat_id, message_thread_id);
+        SessionId::new(format!("{}{SURFACE_SEP}{key}", chat.0))
+    }
+
+    /// Parse a [`SessionId`] minted by [`Self::session_id`] or [`Self::surface_id`] back into
+    /// `(chat_id, topic)` — the offering suffix, if any, is dropped. `None` for a session id this
+    /// frontend did not mint.
     pub fn chat_of(session: &SessionId) -> Option<(ChatId, Option<i64>)> {
         let rest = session.0.strip_prefix("tg:")?;
+        // Drop the `#offering` suffix: a surface id addresses the same chat as its session id.
+        let rest = rest.split(SURFACE_SEP).next()?;
         let mut parts = rest.split(':');
         let chat_id: ChatId = parts.next()?.parse().ok()?;
         let topic = match parts.next() {
@@ -207,9 +280,52 @@ impl<T: Transport> TelegramFrontend<T> {
         Some((chat_id, topic))
     }
 
-    /// The live session slot for `session`, if open.
+    /// The offering key a SURFACE id names (`tg:-700#tug` → `"tug"`), or `None` for a bare
+    /// chat-scoped session id (a chat-level surface: the offerings menu, or a lone frontend's one
+    /// offering).
+    pub fn offering_of(session: &SessionId) -> Option<&str> {
+        session.0.split_once(SURFACE_SEP).map(|(_, key)| key)
+    }
+
+    /// The chat-scoped session id `session` belongs to — itself, if it is already one.
+    pub fn chat_session_of(session: &SessionId) -> Option<SessionId> {
+        let (chat, topic) = Self::chat_of(session)?;
+        Some(Self::session_id(chat, topic))
+    }
+
+    /// The live surface slot for `session`. An exact surface id resolves exactly; a bare
+    /// chat-scoped id resolves to the chat's own surface if it has one, else to the chat's MOST
+    /// RECENTLY presented surface — so "the surface this chat is showing" keeps its meaning for a
+    /// caller that only knows the chat.
     pub fn session(&self, session: &SessionId) -> Option<&TelegramSession> {
-        self.sessions.get(session)
+        if let Some(slot) = self.sessions.get(session) {
+            return Some(slot);
+        }
+        let latest = self.latest.get(session)?;
+        self.sessions.get(latest)
+    }
+
+    /// The surface a live message belongs to — how a press on a specific message finds its
+    /// offering when a chat hosts several.
+    pub fn surface_of_message(&self, message_id: MessageId) -> Option<&SessionId> {
+        self.by_message.get(&message_id.0)
+    }
+
+    /// The chat's most recently presented surface id, if any.
+    pub fn latest_surface(&self, chat_session: &SessionId) -> Option<&SessionId> {
+        self.latest.get(chat_session)
+    }
+
+    /// Every live surface in a chat, in stable (surface-id) order — what "two offerings are both
+    /// live here" is read off.
+    pub fn surfaces_in_chat(&self, chat_session: &SessionId) -> Vec<&SessionId> {
+        let mut out: Vec<&SessionId> = self
+            .sessions
+            .keys()
+            .filter(|sid| Self::chat_session_of(sid).as_ref() == Some(chat_session))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// Borrow the injected transport (e.g. a test's [`transport::MockTransport`] to assert the sent
@@ -291,6 +407,11 @@ impl<T: Transport> TelegramFrontend<T> {
             });
         slot.message_id = Some(message_id);
         slot.presented = actions.to_vec();
+        // Index the live message → this surface (a press names its message), and record this as
+        // the chat's most recent surface (the fallback for a press that names none).
+        self.by_message.insert(message_id.0, session.clone());
+        self.latest
+            .insert(Self::session_id(chat_id, topic), session.clone());
         self.last_send_error = None;
         Ok(message_id)
     }
@@ -360,7 +481,21 @@ impl<T: Transport> Frontend for TelegramFrontend<T> {
     /// attribute it to the presser's derived identity. `None` if the session is unknown, the data
     /// is malformed, or the affordance was never presented (an event the frontend did not offer).
     fn collect(&self, ev: CallbackQuery) -> Option<(SessionId, Action, DreggIdentity)> {
-        let session = Self::session_id(ev.chat_id, ev.message_thread_id);
+        // The press's OWN message names its surface (the only way to tell apart several offerings
+        // live in one chat); a press that names no message falls back to the chat's surface.
+        let session = match ev
+            .message_id
+            .and_then(|m| self.surface_of_message(MessageId(m)))
+        {
+            Some(sid) => sid.clone(),
+            None => {
+                let chat = Self::session_id(ev.chat_id, ev.message_thread_id);
+                match self.latest.get(&chat) {
+                    Some(sid) => sid.clone(),
+                    None => chat,
+                }
+            }
+        };
         let slot = self.sessions.get(&session)?;
         let (turn, arg) = decode_callback(&ev.data)?;
         let action = slot
@@ -375,6 +510,16 @@ impl<T: Transport> Frontend for TelegramFrontend<T> {
     /// Tear a session's surface down (drop the slot). A live bot would additionally
     /// `editMessageReplyMarkup` to strip the keyboard from the archived message.
     fn teardown(&mut self, session: &SessionId) {
-        self.sessions.remove(session);
+        if let Some(slot) = self.sessions.remove(session) {
+            if let Some(mid) = slot.message_id {
+                self.by_message.remove(&mid.0);
+            }
+        }
+        // Drop the chat's "most recent surface" pointer if it pointed here.
+        if let Some(chat) = Self::chat_session_of(session) {
+            if self.latest.get(&chat) == Some(session) {
+                self.latest.remove(&chat);
+            }
+        }
     }
 }

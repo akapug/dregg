@@ -125,6 +125,12 @@ impl Offering for SeatedTug {
         }
     }
 
+    /// The seat adapter hides exactly what the wrapped game hides — the seat lookup only decides
+    /// WHOSE projection to serve, never whether one carries secrets.
+    fn hidden_information(&self) -> bool {
+        self.inner.hidden_information()
+    }
+
     fn price(&self, input: &Action) -> RunCost {
         self.inner.price(input)
     }

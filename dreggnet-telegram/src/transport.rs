@@ -58,10 +58,23 @@ pub trait Transport {
 /// chat id, text, the inline-keyboard payload) and hands back monotonically increasing synthetic
 /// message ids. NO token, NO HTTP — the same role [`dreggnet_offerings::mock::MockFrontend`] plays
 /// for the core, one layer down at the transport.
+/// ## It models the SHARED MESSAGE, deliberately
+/// The default [`Transport::edit_message`] falls back to *sending*, which made every re-present
+/// look like a fresh message here — and a test reading only [`MockTransport::last`] then sees each
+/// render in isolation, exactly as if each viewer had their own private message. That blind spot
+/// hid a real leak: a per-viewer surface EDITED into one group message is read by everyone in the
+/// chat. So this mock implements `edit_message` for real — the message id is stable, the edit
+/// lands on [`MockTransport::visible`], and every version stays in [`MockTransport::sent`],
+/// because a group member read each one as it was posted. Assert over a chat's whole transcript
+/// ([`MockTransport::sent_to`]), not over `last()`.
 #[derive(Debug, Default)]
 pub struct MockTransport {
-    /// Every request sent, in order (the wire bodies a live bot would POST).
+    /// Every request sent OR edited-in, in order — the full transcript of what the chat's readers
+    /// saw. A leak that was edited away a moment later is still a leak, and still here.
     pub sent: Vec<SendMessageRequest>,
+    /// What each live message CURRENTLY shows, by message id — the shared surface as it stands
+    /// now (an edit replaces; a send creates).
+    visible: std::collections::HashMap<i64, SendMessageRequest>,
     /// The next synthetic message id to hand out.
     next_id: i64,
     /// If set, the next `send_message` fails with this reason (to drive the error path).
@@ -73,14 +86,42 @@ impl MockTransport {
     pub fn new() -> Self {
         MockTransport {
             sent: Vec::new(),
+            visible: std::collections::HashMap::new(),
             next_id: 1,
             fail_next: None,
         }
     }
 
-    /// The last request sent, if any (the current surface a session shows).
+    /// The last request sent, if any (the surface most recently painted anywhere).
+    ///
+    /// **Careful:** this is the last thing painted in ANY chat, and — for a group — only the
+    /// LATEST version of a shared message. A privacy assertion belongs on
+    /// [`sent_to`](Self::sent_to) (everything that chat's readers ever saw), not here.
     pub fn last(&self) -> Option<&SendMessageRequest> {
         self.sent.last()
+    }
+
+    /// **Every request ever addressed to `chat_id`, in order** — the honest transcript of what
+    /// that chat's readers saw, including versions later edited away.
+    pub fn sent_to(&self, chat_id: i64) -> Vec<&SendMessageRequest> {
+        self.sent.iter().filter(|r| r.chat_id == chat_id).collect()
+    }
+
+    /// What the message `message_id` currently shows (the live shared surface).
+    pub fn visible(&self, message_id: MessageId) -> Option<&SendMessageRequest> {
+        self.visible.get(&message_id.0)
+    }
+
+    /// The live message ids in `chat_id`, ascending — how many distinct surfaces a chat holds.
+    pub fn messages_in(&self, chat_id: i64) -> Vec<MessageId> {
+        let mut ids: Vec<i64> = self
+            .visible
+            .iter()
+            .filter(|(_, r)| r.chat_id == chat_id)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids.into_iter().map(MessageId).collect()
     }
 
     /// Arm the next `send_message` to fail (drives the [`TransportError`] path in a test).
@@ -97,7 +138,23 @@ impl Transport for MockTransport {
         self.sent.push(req.clone());
         let id = self.next_id;
         self.next_id += 1;
+        self.visible.insert(id, req.clone());
         Ok(MessageId(id))
+    }
+
+    /// A REAL edit: the message keeps its id and its content is replaced — one message, many
+    /// versions, all of them read by everyone in the chat (so all of them stay in `sent`).
+    fn edit_message(
+        &mut self,
+        message_id: MessageId,
+        req: &SendMessageRequest,
+    ) -> Result<MessageId, TransportError> {
+        if let Some(why) = self.fail_next.take() {
+            return Err(TransportError(why));
+        }
+        self.sent.push(req.clone());
+        self.visible.insert(message_id.0, req.clone());
+        Ok(message_id)
     }
 }
 

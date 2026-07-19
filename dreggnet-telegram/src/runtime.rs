@@ -244,6 +244,9 @@ pub fn parse_updates(result: &Value) -> (Vec<BotEvent>, Option<i64>) {
                 query: CallbackQuery {
                     chat_id,
                     message_thread_id: msg.get("message_thread_id").and_then(Value::as_i64),
+                    // WHICH message the button lives on — with several offerings open in one
+                    // chat this is what says which one the press addresses.
+                    message_id: msg.get("message_id").and_then(Value::as_i64),
                     from_user_id: uid,
                     data: data.to_string(),
                 },
@@ -332,6 +335,12 @@ pub enum PressDecision {
         /// The offering key whose text slot was armed.
         key: String,
     },
+    /// A menu press asked for a HIDDEN-INFORMATION offering in a shared chat and this surface
+    /// refused to host it ([`HostPress::OpenRefused`]) — a privacy refusal BEFORE any render.
+    OpenRefused {
+        /// The offering that was not opened.
+        key: String,
+    },
     /// Frontend-level refusal BEFORE the substrate (stale keyboard / unknown affordance).
     NotOffered,
     /// Nothing open in the chat (post-resume-retry).
@@ -367,6 +376,7 @@ impl PressDecision {
                 turns: report.as_ref().map(|r| r.turns as u64).unwrap_or(0),
             },
             HostPress::TextArmed { key, .. } => PressDecision::TextArmed { key: key.clone() },
+            HostPress::OpenRefused { key, .. } => PressDecision::OpenRefused { key: key.clone() },
             HostPress::NotOffered => PressDecision::NotOffered,
             HostPress::NoSession => PressDecision::NoSession,
         }
@@ -416,6 +426,12 @@ impl PressDecision {
             PressDecision::TextArmed { key } => (
                 "routed",
                 "text_armed".to_string(),
+                AuditOutcome::None,
+                Some(key.clone()),
+            ),
+            PressDecision::OpenRefused { key } => (
+                "refused",
+                "hidden_information_in_shared_chat".to_string(),
                 AuditOutcome::None,
                 Some(key.clone()),
             ),
@@ -630,7 +646,9 @@ pub fn route_text_decided<T: Transport>(
                     },
                 ),
                 Err(e) => (
-                    Some(format!("Cannot open {rest}: {e}")),
+                    // A shared-chat privacy refusal replies with its own redirect; a host failure
+                    // keeps the "Cannot open <key>: …" shape.
+                    Some(e.human(rest)),
                     TextDecision::Open {
                         key: rest.to_string(),
                         err: Some(e.to_string()),
@@ -646,6 +664,9 @@ pub fn route_text_decided<T: Transport>(
                 CallbackQuery {
                     chat_id,
                     message_thread_id: topic,
+                    // A command-minted press names no message — it addresses the chat's most
+                    // recent surface, which is what "this chat's session" means to the typist.
+                    message_id: None,
                     from_user_id: uid,
                     data: encode_callback(TURN_VERIFY, 0),
                 },
@@ -681,6 +702,9 @@ pub fn route_text_decided<T: Transport>(
                 CallbackQuery {
                     chat_id,
                     message_thread_id: topic,
+                    // A command-minted press names no message — it addresses the chat's most
+                    // recent surface, which is what "this chat's session" means to the typist.
+                    message_id: None,
                     from_user_id: uid,
                     data: encode_callback(turn, arg),
                 },
@@ -850,6 +874,8 @@ pub fn route_web_app_data_decided<T: Transport>(
             CallbackQuery {
                 chat_id,
                 message_thread_id: topic,
+                // A Mini App round-trip names no message — the chat's most recent surface.
+                message_id: None,
                 from_user_id: uid,
                 data: data.to_string(),
             },
@@ -890,6 +916,8 @@ pub fn describe_press(press: HostPress) -> String {
             "Selected \"{}\" — now send your text and I will fill it in.",
             action.label
         ),
+        // The privacy redirect IS the ack (and, being long, the loop also lands it in the chat).
+        HostPress::OpenRefused { why, .. } => why,
         HostPress::NotOffered => {
             "That button is not on the current surface (a stale keyboard?).".to_string()
         }

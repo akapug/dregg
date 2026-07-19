@@ -10,7 +10,8 @@
 //!   `/offerings`-style control message whose inline keyboard is one button per registered
 //!   offering (a press opens that offering in the chat);
 //! - **open** — [`TelegramHost::open`]: open a session per `(offering, chat)` on the host and
-//!   present the offering's [`Surface`] as the Telegram inline keyboard + text;
+//!   present the offering's [`Surface`] on that offering's OWN message in the chat (several
+//!   offerings coexist per chat; a press routes by the message it was pressed on);
 //! - **advance** — [`TelegramHost::press`]: a button press → [`TelegramFrontend::collect`] the
 //!   typed [`Action`] → [`OfferingHost::advance`] ONE real turn on the substrate → re-present;
 //! - **verify** — [`TelegramHost::verify`]: re-verify an offering session's committed chain; ALSO
@@ -26,6 +27,16 @@
 //! [`TelegramFrontend`] itself (the affordance-renderer + the injected transport) stays on the
 //! calling thread; it never holds an offering session. This is exactly `dreggnet-web`'s
 //! [`HostThread`](dreggnet_web) pattern reused for Telegram.
+//!
+//! ## Who reads the surface decides which projection it carries
+//! A **DM** is read by one person; a **group / forum topic** is read by everyone in it, and its
+//! session is ONE message that every re-present EDITS in place. So a per-viewer projection
+//! ([`OfferingHost::render_for`] — a hidden hand, a sealed move) is served only in a DM; a shared
+//! chat always gets the viewer-blind [`OfferingHost::render`]. On top of that structural rule, an
+//! offering that DECLARES hidden information
+//! ([`dreggnet_offerings::Offering::hidden_information`] — tug, automatafl) is not hosted in a
+//! shared chat at all: it is refused at open ([`OpenError::HiddenInSharedChat`]) with a legible
+//! redirect to a DM / the Mini App, because a public-only projection is not a playable hand.
 //!
 //! ## Surface → keyboard mapping
 //! An offering's [`Surface`] is a deos view-tree; its cap-gated [`Action`]s are the moves. The
@@ -56,8 +67,8 @@ use dreggnet_offerings::{
 };
 
 use crate::cipherclerk::TelegramCipherclerk;
-use crate::transport::Transport;
-use crate::{ChatId, TelegramFrontend, TelegramUserId};
+use crate::transport::{MessageId, Transport};
+use crate::{ChatId, ChatKind, TelegramFrontend, TelegramUserId};
 
 /// The affordance verb the offerings-menu buttons carry — a host-level control (open the offering
 /// at `arg` in this chat), distinct from any offering's own turn verbs.
@@ -121,6 +132,54 @@ impl HostThread {
     }
 }
 
+/// **Why an open did not happen** — the host's refusal, or this SURFACE's own refusal to host the
+/// offering at all.
+#[derive(Debug)]
+pub enum OpenError {
+    /// The [`OfferingHost`] refused (unknown key, a policy gate, a failed deploy / resume).
+    Host(HostError),
+    /// **The chat is SHARED and the offering hides per-player state**
+    /// ([`dreggnet_offerings::Offering::hidden_information`]). A group / forum-topic session paints
+    /// ONE message that every member reads (a re-present EDITS it in place), so there is no way to
+    /// serve a per-viewer projection there without serving it to the whole room. Nothing was
+    /// opened; `why` is the legible redirect the player is shown.
+    HiddenInSharedChat {
+        /// The offering that will not be hosted here.
+        key: String,
+        /// The human redirect (DM / Mini App) — this is what the player reads.
+        why: String,
+    },
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::Host(e) => write!(f, "{e}"),
+            OpenError::HiddenInSharedChat { why, .. } => write!(f, "{why}"),
+        }
+    }
+}
+
+impl std::error::Error for OpenError {}
+
+impl From<HostError> for OpenError {
+    fn from(e: HostError) -> Self {
+        OpenError::Host(e)
+    }
+}
+
+impl OpenError {
+    /// The human reply for a `/open <key>` that did not open. A host failure keeps the familiar
+    /// "Cannot open <key>: …" shape; a shared-chat refusal IS its own message (it is a redirect,
+    /// not a malfunction, and prefixing it would bury the instruction).
+    pub fn human(&self, key: &str) -> String {
+        match self {
+            OpenError::Host(e) => format!("Cannot open {key}: {e}"),
+            OpenError::HiddenInSharedChat { why, .. } => why.clone(),
+        }
+    }
+}
+
 /// The outcome of a [`TelegramHost::press`] — a button press routed through the host.
 #[derive(Debug)]
 pub enum HostPress {
@@ -156,6 +215,15 @@ pub enum HostPress {
         /// The armed affordance (its `{turn, arg}` + human label — the text slot now selected).
         action: Action,
     },
+    /// A menu press asked for a HIDDEN-INFORMATION offering in a SHARED chat, and this surface
+    /// will not host one ([`OpenError::HiddenInSharedChat`]). Nothing opened, nothing rendered;
+    /// `why` is the legible redirect to a DM / the Mini App.
+    OpenRefused {
+        /// The offering that will not be hosted here.
+        key: String,
+        /// The human redirect the presser is shown.
+        why: String,
+    },
     /// The press did not match any affordance currently on the chat's surface — an honest
     /// frontend-level refusal, BEFORE the substrate (the executor is never reached).
     NotOffered,
@@ -177,15 +245,24 @@ pub struct TelegramHost<T: Transport> {
     host: HostThread,
     /// The Telegram affordance-renderer over the transport (records what each chat last presented).
     frontend: TelegramFrontend<T>,
-    /// Which offering each chat's session is currently playing (or [`MENU_KEY`] while browsing).
-    /// Keyed by the chat-scoped [`SessionId`]; a press routes to this offering.
+    /// **The chat's MOST RECENT surface's offering** (or [`MENU_KEY`] while browsing) — keyed by
+    /// the chat-scoped [`SessionId`].
+    ///
+    /// This is no longer "the one offering this chat may play": each offering now owns its OWN
+    /// message in the chat ([`TelegramFrontend::surface_id`]), so several coexist and a press
+    /// routes by the message it was pressed on. `active` is the fallback for a press that names no
+    /// message (a `/act` / `/verify` command, a Mini App round-trip) and the referent of "this
+    /// chat's session" for the single-offering UX — which is exactly what it always meant in a
+    /// chat with one offering open.
     active: HashMap<SessionId, String>,
     /// **The chat's ARMED free-text affordance, if one is selected.** A press on a
     /// [`Action::wants_text`] affordance records it here (see [`HostPress::TextArmed`]); the next
     /// plain-text message routes into it ([`Self::pending_text_action`] / [`Self::press_text`]).
     /// This is the gate that keeps free-text capture DELIBERATE — with nothing armed, a chat's
     /// plain messages are ordinary chatter (never swallowed into an offering). Cleared on any
-    /// advance / re-present (the surface moved on).
+    /// advance / re-present (the surface moved on). Keyed by SURFACE
+    /// ([`TelegramFrontend::surface_id`]), so arming a document's text slot does not disarm the
+    /// tug board open beside it in the same chat.
     armed: HashMap<SessionId, Action>,
     /// The Mini App base URL (the public funnel), when the deploy arms the `web_app` launch
     /// tier ([`Self::with_webapp_base`]). `None` = launch buttons off; the inline-button tier
@@ -323,8 +400,13 @@ impl<T: Transport> TelegramHost<T> {
                 ),
             ],
         });
-        self.frontend.spin_session(sid.clone());
-        self.frontend.present(&sid, &surface, &actions);
+        // The menu gets its OWN surface too ([`MENU_KEY`] is not a registered offering key, so it
+        // never collides). That keeps the menu message live and pressable AFTER an offering is
+        // opened beside it — pressing it again opens a SECOND offering, instead of the press being
+        // read as a stale move on whatever was opened last.
+        let menu_surface = TelegramFrontend::<T>::surface_id(chat_id, topic, MENU_KEY);
+        self.frontend.spin_session(menu_surface.clone());
+        self.frontend.present(&menu_surface, &surface, &actions);
         self.active.insert(sid.clone(), MENU_KEY.to_string());
         sid
     }
@@ -382,18 +464,76 @@ impl<T: Transport> TelegramHost<T> {
             .map_err(|e| format!("Could not send the link button: {e}"))
     }
 
+    /// **Would hosting `key` in this chat leak?** — the gate in front of every open.
+    ///
+    /// A DM is a single-reader surface: a per-viewer projection there reaches exactly the person
+    /// it is about. A group or forum topic is not — its session is ONE message that every member
+    /// reads, and a re-present EDITS that message in place, so whatever is painted into it is
+    /// painted for the whole room. An offering that DECLARES hidden information
+    /// ([`dreggnet_offerings::Offering::hidden_information`]) therefore cannot be hosted on a
+    /// shared surface at all, and this returns the legible redirect.
+    ///
+    /// The declared signal is what makes this decidable *before* opening: at that moment no seat
+    /// is claimed and no card is dealt, so the per-viewer projection is still byte-identical to
+    /// the public one — a render differential would answer "safe" and only start disagreeing after
+    /// the first hand is dealt, which is one turn too late. `None` = safe to host here.
+    fn hidden_in_shared_chat(
+        &self,
+        key: &str,
+        chat_id: ChatId,
+        topic: Option<i64>,
+    ) -> Option<String> {
+        if !ChatKind::classify(chat_id, topic).is_collective() {
+            return None;
+        }
+        let (hidden, title) = {
+            let k = key.to_string();
+            self.host.run(move |h| {
+                (
+                    h.hidden_information(&k).unwrap_or(false),
+                    h.list_offerings()
+                        .into_iter()
+                        .find(|o| o.key == k)
+                        .map(|o| o.title),
+                )
+            })
+        };
+        if !hidden {
+            return None;
+        }
+        let title = title.unwrap_or_else(|| key.to_string());
+        Some(format!(
+            "🔒 {title} hides per-player state — your hand is yours alone. This chat is a group, \
+             and a group's surface is ONE message every member reads (each move edits it in \
+             place), so painting your own cards there would deal them to the whole table. I will \
+             not do that. DM me and send `/open {key}` to play it privately — or `/play` for the \
+             Mini App (Telegram allows those in DMs only). Full-information offerings \
+             (`/offerings`) play here in the group as usual."
+        ))
+    }
+
     /// **Open an offering session for `(key, chat)`** — ensure a host session is live under the
     /// chat-scoped [`SessionId`] (seeded deterministically from it) and present the offering's
-    /// current [`Surface`] as the chat's inline keyboard, projected FOR the opening user `uid` (the
-    /// per-viewer surface — a hidden-hand / cap-dimmed offering paints the opener's own view, not the
-    /// viewer-blind one). Errors if `key` is unregistered. Returns the chat-scoped session id.
+    /// current [`Surface`] on its OWN message in the chat.
+    ///
+    /// In a DM the surface is projected FOR the opening user `uid` (the per-viewer view — a
+    /// hidden-hand / cap-dimmed offering paints the opener's own hand). In a group / forum topic
+    /// it is the viewer-blind projection, and a hidden-information offering is REFUSED outright
+    /// ([`OpenError::HiddenInSharedChat`]) rather than half-served — see
+    /// [`hidden_in_shared_chat`](Self::hidden_in_shared_chat). Returns the chat-scoped session id.
     pub fn open(
         &mut self,
         key: &str,
         chat_id: ChatId,
         topic: Option<i64>,
         uid: TelegramUserId,
-    ) -> Result<SessionId, HostError> {
+    ) -> Result<SessionId, OpenError> {
+        if let Some(why) = self.hidden_in_shared_chat(key, chat_id, topic) {
+            return Err(OpenError::HiddenInSharedChat {
+                key: key.to_string(),
+                why,
+            });
+        }
         let sid = TelegramFrontend::<T>::session_id(chat_id, topic);
         let viewer = self.frontend.identity(uid);
         self.open_into(key, &sid, &viewer)?;
@@ -401,8 +541,9 @@ impl<T: Transport> TelegramHost<T> {
     }
 
     /// Ensure a host session is live under `sid` (seeded from it) and present the offering's current
-    /// surface as the chat's keyboard, recording it active. The surface is projected FOR `viewer`
-    /// (the acting Telegram user). The shared opener behind [`open`](Self::open) and a menu-open press.
+    /// surface on its own message, recording it as the chat's most recent. The shared opener behind
+    /// [`open`](Self::open) and a menu-open press — BOTH of which check
+    /// [`hidden_in_shared_chat`](Self::hidden_in_shared_chat) first.
     fn open_into(
         &mut self,
         key: &str,
@@ -414,28 +555,57 @@ impl<T: Transport> TelegramHost<T> {
             let s = sid.clone();
             self.host.run(move |h| h.ensure_open(&k, &s))?;
         }
-        self.frontend.spin_session(sid.clone());
+        // Spin THIS offering's surface slot, not a bare chat-level one — a stray chat-keyed slot
+        // would shadow the offering's own surface for every caller that looks a chat up.
+        if let Some((chat_id, topic)) = TelegramFrontend::<T>::chat_of(sid) {
+            self.frontend
+                .spin_session(TelegramFrontend::<T>::surface_id(chat_id, topic, key));
+        }
         self.present_offering(key, sid, viewer);
         Ok(())
     }
 
-    /// Re-derive `(key, sid)`'s current surface + actions from the live host session **AS `viewer`
-    /// sees them** and present them (keeping the chat's affordance surface current for the next
-    /// press), recording the offering as active in the chat. Uses the viewer-aware
-    /// [`OfferingHost::render_for`] / [`OfferingHost::actions_for`] so a per-viewer offering (a
-    /// hidden-hand tug, a per-region document cap) paints the surface for the specific Telegram user
-    /// who is looking — not the viewer-blind projection everyone otherwise shared.
+    /// Re-derive `(key, sid)`'s current surface + actions from the live host session and present
+    /// them on THIS offering's own message in the chat, recording it as the chat's most recent.
+    ///
+    /// **Which projection depends on who can read the message, and that is the whole privacy
+    /// rule:**
+    /// - a **DM** is read by one person, so it gets the viewer-aware
+    ///   [`OfferingHost::render_for`] / [`OfferingHost::actions_for`] — a hidden-hand tug or a
+    ///   per-region document cap paints the surface for the specific Telegram user who is looking;
+    /// - a **group / forum topic** is read by everyone in it, and its session is ONE message that
+    ///   every re-present EDITS in place, so it gets the viewer-blind [`OfferingHost::render`] /
+    ///   [`OfferingHost::actions`] — the PUBLIC projection, the only thing a shared message can
+    ///   honestly carry.
+    ///
+    /// The rule is structural, not a heuristic: on a shared surface `render_for` is never called
+    /// at all, so no offering — declared hidden or not, today's or a future one — can have a
+    /// private projection edited into a message a group reads. (`hidden_information` offerings
+    /// additionally never reach here in a group: they are refused at open, because a public-only
+    /// projection is not a playable hand.) It also fixes an incoherence: a group keyboard used to
+    /// be whichever member pressed last: now the shared message shows one shared board with one
+    /// shared keyboard, and the executor stays the sole referee of what any presser may land.
     fn present_offering(&mut self, key: &str, sid: &SessionId, viewer: &DreggIdentity) {
+        let Some((chat_id, topic)) = TelegramFrontend::<T>::chat_of(sid) else {
+            return;
+        };
+        let shared = ChatKind::classify(chat_id, topic).is_collective();
+        let surface_sid = TelegramFrontend::<T>::surface_id(chat_id, topic, key);
         // The surface is (re)painted fresh — any previously-armed text slot is now stale
         // (the affordance moved on), so drop it. Arming a text slot ([`Self::press`]) returns
         // BEFORE this, so the arm survives until the next advance / open / re-present.
-        self.armed.remove(sid);
+        self.armed.remove(&surface_sid);
         let (surface, actions) = {
             let k = key.to_string();
             let s = sid.clone();
             let v = viewer.clone();
-            self.host
-                .run(move |h| (h.render_for(&k, &s, &v), h.actions_for(&k, &s, &v)))
+            self.host.run(move |h| {
+                if shared {
+                    (h.render(&k, &s), h.actions(&k, &s))
+                } else {
+                    (h.render_for(&k, &s, &v), h.actions_for(&k, &s, &v))
+                }
+            })
         };
         if let (Some(surface), Some(actions)) = (surface, actions) {
             // The Mini App launch tier: in a DM (the only place Telegram honors `web_app`
@@ -449,16 +619,27 @@ impl<T: Transport> TelegramHost<T> {
             });
             let extra: &[crate::api::InlineKeyboardButton] =
                 play.as_ref().map(std::slice::from_ref).unwrap_or(&[]);
-            self.frontend.present_with(sid, &surface, &actions, extra);
+            // Onto THIS offering's own message — a second offering opened in the chat gets its
+            // own, instead of stealing this one's.
+            self.frontend
+                .present_with(&surface_sid, &surface, &actions, extra);
             self.active.insert(sid.clone(), key.to_string());
         }
     }
 
-    /// **Route a button press.** Reconstruct the chat's session, decode the press's `callback_data`
-    /// into `{turn, arg}`, check the turn is among the affordances currently presented there
-    /// (offered), and:
-    /// - if the chat is browsing the menu, OPEN the offering the pressed button names;
-    /// - otherwise ADVANCE the active offering by ONE real turn on the substrate and re-present.
+    /// **Route a button press.** Resolve WHICH of the chat's live surfaces the press addresses,
+    /// decode its `callback_data` into `{turn, arg}`, check the turn is among the affordances that
+    /// surface presented (offered), and:
+    /// - if the addressed surface is the offerings menu, OPEN the offering the pressed button names;
+    /// - otherwise ADVANCE that surface's offering by ONE real turn on the substrate and re-present.
+    ///
+    /// **Surface resolution** — a chat may hold several live offerings at once, each on its own
+    /// message. A real press carries the message it was pressed on
+    /// ([`crate::CallbackQuery::message_id`]), which names its surface exactly; a synthesized press
+    /// that carries none (a `/act` or `/verify` command, a Mini App `sendData` round-trip) falls
+    /// back to the chat's most recently presented surface. So the offerings menu stays live and
+    /// usable to open a SECOND offering, and a press on the first offering's message still reaches
+    /// the first offering.
     ///
     /// The matching is TURN-offered (mirroring the web catalog's `post_offering_act`): an index move
     /// (a dungeon choice, a council proposal) carries its index in the button, while a value-taking
@@ -469,9 +650,29 @@ impl<T: Transport> TelegramHost<T> {
     /// is [`HostPress::NotOffered`] (refused BEFORE the substrate); a press in a chat with nothing
     /// open is [`HostPress::NoSession`].
     pub fn press(&mut self, ev: crate::CallbackQuery) -> HostPress {
+        // The HOST session id stays chat-scoped: `(key, sid)` already names a host session, so two
+        // offerings in one chat are already two sessions. Only the SURFACE needed splitting.
         let sid = TelegramFrontend::<T>::session_id(ev.chat_id, ev.message_thread_id);
-        let Some(active) = self.active.get(&sid).cloned() else {
-            return HostPress::NoSession;
+        // Which surface is being pressed: the press's own message names it; a press that names no
+        // message means the chat's most recent surface.
+        let surface_sid = match ev
+            .message_id
+            .and_then(|m| self.frontend.surface_of_message(MessageId(m)))
+        {
+            Some(s) => s.clone(),
+            None => match self.frontend.latest_surface(&sid) {
+                Some(s) => s.clone(),
+                None => sid.clone(),
+            },
+        };
+        // …and which offering that surface belongs to. A surface id carries its own offering; a
+        // bare chat-scoped surface is the chat-level one (the offerings menu).
+        let active = match TelegramFrontend::<T>::offering_of(&surface_sid) {
+            Some(k) => k.to_string(),
+            None => match self.active.get(&sid).cloned() {
+                Some(k) => k,
+                None => return HostPress::NoSession,
+            },
         };
         // The acting Telegram user's derived identity — the viewer every re-present is projected FOR
         // (the same identity the play turn is attributed to), so a per-viewer offering paints the
@@ -496,7 +697,7 @@ impl<T: Transport> TelegramHost<T> {
         }
         let offered = self
             .frontend
-            .session(&sid)
+            .session(&surface_sid)
             .map(|slot| slot.presented.iter().any(|a| a.turn == turn))
             .unwrap_or(false);
         if !offered {
@@ -513,8 +714,13 @@ impl<T: Transport> TelegramHost<T> {
                 return HostPress::NotOffered;
             };
             let key = info.key.clone();
-            // Open the offering's host session (seeded from the chat) + present its surface, projected
-            // for the pressing user.
+            // The SAME gate `/open` faces: a hidden-information offering is not hosted on a
+            // surface a whole group reads — refused here, before anything is rendered.
+            if let Some(why) = self.hidden_in_shared_chat(&key, ev.chat_id, ev.message_thread_id) {
+                return HostPress::OpenRefused { key, why };
+            }
+            // Open the offering's host session (seeded from the chat) + present its surface on its
+            // own message.
             if self.open_into(&key, &sid, &viewer).is_err() {
                 return HostPress::NotOffered;
             }
@@ -531,14 +737,15 @@ impl<T: Transport> TelegramHost<T> {
         // first (the old `find(wants_text)` made the doc silently append-only).
         // Bound to a `let` first so the immutable `self.frontend` borrow ends before the mutable
         // `self.armed` insert below.
-        let text_affordance = self.frontend.session(&sid).and_then(|slot| {
+        let text_affordance = self.frontend.session(&surface_sid).and_then(|slot| {
             slot.presented
                 .iter()
                 .find(|a| a.turn == turn && a.arg == arg && a.wants_text && a.text.is_none())
                 .cloned()
         });
         if let Some(text_affordance) = text_affordance {
-            self.armed.insert(sid.clone(), text_affordance.clone());
+            self.armed
+                .insert(surface_sid.clone(), text_affordance.clone());
             return HostPress::TextArmed {
                 key,
                 action: text_affordance,
@@ -580,13 +787,20 @@ impl<T: Transport> TelegramHost<T> {
     /// an offering input). A stale arm (the surface moved on, so the affordance is no longer
     /// presented) is dropped.
     pub fn pending_text_action(&self, sid: &SessionId) -> Option<Action> {
-        // Only a real offering (not the offerings menu) solicits text.
-        self.active_offering(sid)?;
-        // The chat must have ARMED a text affordance (a deliberate press).
-        let armed = self.armed.get(sid)?;
+        // Resolve the SURFACE: `sid` may already name one (`tg:-5#doc`), or be the chat-scoped id,
+        // in which case the chat's most recent offering owns the text slot. Only a real offering
+        // (not the offerings menu) solicits text.
+        let key = match TelegramFrontend::<T>::offering_of(sid) {
+            Some(k) => k.to_string(),
+            None => self.active_offering(sid)?.to_string(),
+        };
+        let (chat_id, topic) = TelegramFrontend::<T>::chat_of(sid)?;
+        let surface_sid = TelegramFrontend::<T>::surface_id(chat_id, topic, &key);
+        // The chat must have ARMED a text affordance on THAT surface (a deliberate press).
+        let armed = self.armed.get(&surface_sid)?;
         // Belt-and-suspenders: the armed affordance must still be the presented surface's own
         // (a stale arm — after a re-present that changed the affordances — is not honoured).
-        let slot = self.frontend.session(sid)?;
+        let slot = self.frontend.session(&surface_sid)?;
         slot.presented
             .iter()
             .any(|a| a.turn == armed.turn && a.arg == armed.arg && a.wants_text)
