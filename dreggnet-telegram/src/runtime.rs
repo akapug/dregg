@@ -530,6 +530,15 @@ pub enum TextDecision {
         /// The command word as typed.
         cmd: String,
     },
+    /// **Plain text routed as a pending text affordance's input** — the chat had an open
+    /// text-input offering (a document session soliciting an insert / title), so the message
+    /// became that affordance's [`Action::text`](dreggnet_offerings::Action::text) payload and
+    /// advanced one real turn. Carries the routed press's machine decision (the executor's
+    /// verdict — a landed edit or a real refusal).
+    TextInput {
+        /// The routed press's machine decision.
+        press: PressDecision,
+    },
     /// Ordinary chatter — no decision, no reply, no audit event.
     Ignored,
 }
@@ -677,7 +686,25 @@ pub fn route_text_decided<T: Transport>(
                 cmd: cmd.to_string(),
             },
         ),
-        _ => (None, TextDecision::Ignored),
+        // FREE TEXT (a non-command message). If — and ONLY if — the chat has an open offering
+        // whose surface is SOLICITING text (a document session presenting an insert / title
+        // template, [`TelegramHost::pending_text_action`]), route the whole message as that
+        // affordance's text input; the executor referees what lands. Otherwise it is ordinary
+        // chatter and stays `Ignored` (never swallow arbitrary group talk — text is only claimed
+        // when a text affordance is genuinely pending for this chat's session).
+        _ => {
+            let sid = TelegramFrontend::<T>::session_id(chat_id, topic);
+            if host.pending_text_action(&sid).is_some() {
+                let press = host.press_text(chat_id, topic, uid, text);
+                let decision = PressDecision::of(&press);
+                (
+                    Some(describe_press(press)),
+                    TextDecision::TextInput { press: decision },
+                )
+            } else {
+                (None, TextDecision::Ignored)
+            }
+        }
     }
 }
 
@@ -743,6 +770,12 @@ impl TextDecision {
                 None,
                 cmd.clone(),
             )),
+            // Free text routed into a pending text affordance — the press's own decision, under
+            // a `text` input kind (design §8: user free text IS the trail).
+            TextDecision::TextInput { press } => {
+                let (kind, reason, outcome, offering) = press.audit_parts();
+                Some((kind, reason, outcome, offering, "text".to_string()))
+            }
             TextDecision::Ignored => None,
         }
     }

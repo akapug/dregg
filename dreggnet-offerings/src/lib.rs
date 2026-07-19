@@ -163,6 +163,26 @@ pub struct Action {
     /// itself — a [`Frontend`] present/collect and the deos affordance codec round-trip it
     /// losslessly, no label-riding and no side channel.
     pub text: Option<String>,
+    /// **Whether this affordance SOLICITS free text** — the surface-level "this slot wants text"
+    /// signal, distinct from the [`text`](Action::text) PAYLOAD it eventually carries. A pure
+    /// index affordance (a scene choice, a cell to delete) leaves this `false`; a text-shaped
+    /// affordance (a document INSERT/set-title, a Hermes PROMPT) sets it `true` so a frontend
+    /// knows to solicit the string.
+    ///
+    /// This is the missing half the [`text`](Action::text) payload did not model: a text-taking
+    /// affordance is *presented* with `text: None` (a TEMPLATE — no content yet; the user
+    /// supplies the prose on actuation), which is byte-identical to a pure fixed-index button, so
+    /// the payload field alone cannot tell them apart. `wants_text` is that discriminator. It is
+    /// additive and defaults `false`, so every existing affordance is unchanged; a text-taking
+    /// affordance sets it with [`Action::taking_text`] (or gets it for free from
+    /// [`Action::with_text`], since carrying text IS being a text affordance).
+    ///
+    /// A frontend uses it to route a user's free text: e.g. a Telegram chat with an open
+    /// document session presents an insert affordance with `wants_text`, so the runtime routes
+    /// the next plain-text message as that affordance's [`text`](Action::text) input (the
+    /// executor stays the sole referee of what LANDS). It is a presentation hint, not carried on
+    /// the affordance codec wire — a press supplies its text, not this flag.
+    pub wants_text: bool,
 }
 
 impl Action {
@@ -176,13 +196,15 @@ impl Action {
             arg,
             enabled,
             text: None,
+            wants_text: false,
         }
     }
 
     /// **Attach a free-text payload** to this affordance (builder-style) — a document edit's
     /// prose, a Hermes prompt, a title's value. The `{label, turn, arg, enabled}` are unchanged;
     /// only [`Action::text`] is set, so the affordance now carries its string as a first-class
-    /// part of the actuation rather than on the label or a side channel.
+    /// part of the actuation rather than on the label or a side channel. Carrying text IS being a
+    /// text affordance, so this also sets [`Action::wants_text`].
     ///
     /// ```
     /// # use dreggnet_offerings::Action;
@@ -190,9 +212,29 @@ impl Action {
     ///     .with_text("the dragon's hoard glittered in the torchlight");
     /// assert_eq!(a.text.as_deref(), Some("the dragon's hoard glittered in the torchlight"));
     /// assert_eq!(a.arg, 3); // the {turn, arg} shape is untouched
+    /// assert!(a.wants_text); // a text-bearing affordance is a text affordance
     /// ```
     pub fn with_text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
+        self.wants_text = true;
+        self
+    }
+
+    /// **Mark this affordance as SOLICITING free text** (builder-style) without seeding a default
+    /// value — the text-TEMPLATE case: `text` stays `None` (no content yet) while
+    /// [`Action::wants_text`] becomes `true`, so a frontend knows the slot wants the user's prose.
+    /// This is what a document INSERT / set-title affordance is: presented as a template, its
+    /// string supplied on actuation. Use [`Action::with_text`] instead when seeding a default the
+    /// user may override.
+    ///
+    /// ```
+    /// # use dreggnet_offerings::Action;
+    /// let insert = Action::new("…continue the document", "insert", 3, true).taking_text();
+    /// assert!(insert.wants_text);
+    /// assert_eq!(insert.text, None); // a template — the user supplies the prose
+    /// ```
+    pub fn taking_text(mut self) -> Self {
+        self.wants_text = true;
         self
     }
 }

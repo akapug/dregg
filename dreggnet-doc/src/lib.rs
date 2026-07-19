@@ -594,20 +594,22 @@ impl DocOffering {
         let mut out = Vec::new();
         let cells = session.cells();
 
-        // Append at the tip — the always-clean insert position.
-        out.push(Action::new(
-            "…continue the document".to_string(),
-            TURN_INSERT,
-            cells.len() as i64,
-            may_edit,
-        ));
+        // Append at the tip — the always-clean insert position. A text-TEMPLATE: presented with
+        // no content (`text: None`), it SOLICITS the collaborator's prose (`taking_text`), so a
+        // frontend routes free text into it as the insert's `Action::text` payload.
+        out.push(
+            Action::new(
+                "…continue the document".to_string(),
+                TURN_INSERT,
+                cells.len() as i64,
+                may_edit,
+            )
+            .taking_text(),
+        );
         // Insert at the start.
-        out.push(Action::new(
-            "…open the document".to_string(),
-            TURN_INSERT,
-            0,
-            may_edit,
-        ));
+        out.push(
+            Action::new("…open the document".to_string(), TURN_INSERT, 0, may_edit).taking_text(),
+        );
         // Delete each live cell.
         for (i, (_, text)) in cells.iter().enumerate() {
             out.push(Action::new(
@@ -617,23 +619,23 @@ impl DocOffering {
                 may_edit,
             ));
         }
-        // The single-valued title (the non-monotone fragment).
-        out.push(Action::new(
-            "set the title".to_string(),
-            TURN_SET_TITLE,
-            0,
-            may_edit,
-        ));
+        // The single-valued title (the non-monotone fragment). Also a text template.
+        out.push(
+            Action::new("set the title".to_string(), TURN_SET_TITLE, 0, may_edit).taking_text(),
+        );
         // Resolution affordances — offered only where a conflict actually stands
         // (nothing is fabricated).
         for (i, region) in session.conflicts().iter().enumerate() {
             match region.regime {
-                Regime::Field => out.push(Action::new(
-                    "settle the title clash".to_string(),
-                    TURN_RESOLVE_TITLE,
-                    0,
-                    may_edit,
-                )),
+                Regime::Field => out.push(
+                    Action::new(
+                        "settle the title clash".to_string(),
+                        TURN_RESOLVE_TITLE,
+                        0,
+                        may_edit,
+                    )
+                    .taking_text(),
+                ),
                 Regime::Prose => out.push(Action::new(
                     "order the concurrent alternatives".to_string(),
                     TURN_ORDER_CONFLICT,

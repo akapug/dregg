@@ -278,13 +278,15 @@ impl<T: Transport> TelegramHost<T> {
         // THE LAB FRAMING (shared words: `dreggnet_catalog::{flagship_pointer, lab_intro}`) —
         // the flagship pointer leads (The Descent is NOT in this catalog; it lives on the web
         // surface), then the keyboard below is honestly labelled as the lab shelf.
+        // H1: `/descent` on the web is the no-cheat BOARD, not a play surface — label it honestly
+        // (the served in-browser play page is a separate lane; play today is live in Discord).
         let descent = match self.webapp_base.as_deref() {
             Some(base) => format!(
-                "{} Play it at {base}/descent.",
+                "{} See today's no-cheat board at {base}/descent.",
                 dreggnet_catalog::flagship_pointer()
             ),
             None => format!(
-                "{} It lives on the web surface, at /descent.",
+                "{} Its no-cheat board lives on the web surface, at /descent.",
                 dreggnet_catalog::flagship_pointer()
             ),
         };
@@ -512,6 +514,71 @@ impl<T: Transport> TelegramHost<T> {
                 HostPress::Advanced { key, outcome }
             }
             // The host had no such session (should not happen: `active` implies a live session).
+            None => HostPress::NoSession,
+        }
+    }
+
+    /// **The chat's PENDING text affordance, if one is on offer** — the "this slot wants text"
+    /// signal the free-text router keys on. Returns the presented affordance the chat's active
+    /// offering solicits free text for ([`Action::wants_text`]), or `None` when the chat has no
+    /// active offering (or is browsing the menu), or its surface offers no text-taking affordance.
+    ///
+    /// The detection is HONEST and offering-agnostic: it reads the [`Action::wants_text`]
+    /// discriminator off the affordances the offering actually presented (a document INSERT /
+    /// set-title marks it; a scene choice, a delete, a bid does not) — never a hard-coded verb
+    /// list in this surface layer. If several text affordances are on offer (a document offers
+    /// insert-at-tip, insert-at-start, set-title), the FIRST in the offering's own presented
+    /// order is chosen — for the document that is "…continue the document" (append at the tip,
+    /// the always-clean position), the intuitive home for a chat user's free prose.
+    pub fn pending_text_action(&self, sid: &SessionId) -> Option<Action> {
+        // Only a real offering (not the offerings menu) solicits text.
+        self.active_offering(sid)?;
+        let slot = self.frontend.session(sid)?;
+        slot.presented.iter().find(|a| a.wants_text).cloned()
+    }
+
+    /// **Route free text into the chat's pending text affordance** — the in-chat driver for a
+    /// text-input offering (a document EDIT's prose, a set-title's value). Finds the chat's
+    /// [`pending_text_action`](Self::pending_text_action), attaches `text` as its
+    /// [`Action::text`] payload, and ADVANCES it as one real turn on the substrate, attributed to
+    /// `uid`'s derived identity — exactly the path a button press takes ([`Self::press`]), only
+    /// the affordance's string is supplied by the message instead of a callback arg. The executor
+    /// stays the sole referee: an ill-formed / unauthorized / conflicting edit lands a real
+    /// [`Outcome::Refused`] (nothing committed), never a silent accept.
+    ///
+    /// [`HostPress::NoSession`] if nothing is open in the chat; [`HostPress::NotOffered`] if the
+    /// chat's surface has no text affordance pending (the caller should have checked
+    /// [`pending_text_action`](Self::pending_text_action) first, so this is a belt-and-suspenders
+    /// refusal, not a normal path). Re-presents the (possibly-advanced) surface on success.
+    pub fn press_text(
+        &mut self,
+        chat_id: ChatId,
+        topic: Option<i64>,
+        uid: TelegramUserId,
+        text: &str,
+    ) -> HostPress {
+        let sid = TelegramFrontend::<T>::session_id(chat_id, topic);
+        let Some(key) = self.active_offering(&sid).map(str::to_string) else {
+            return HostPress::NoSession;
+        };
+        let Some(pending) = self.pending_text_action(&sid) else {
+            return HostPress::NotOffered;
+        };
+        // The acting user's derived identity — the viewer every re-present is projected FOR and
+        // the actor the edit is attributed to (the same as a play press).
+        let viewer = self.frontend.identity(uid);
+        let action = pending.with_text(text.to_string());
+        let actor = viewer.clone();
+        let outcome = {
+            let k = key.clone();
+            let s = sid.clone();
+            self.host.run(move |h| h.advance(&k, &s, action, actor))
+        };
+        match outcome {
+            Some(outcome) => {
+                self.present_offering(&key, &sid, &viewer);
+                HostPress::Advanced { key, outcome }
+            }
             None => HostPress::NoSession,
         }
     }
