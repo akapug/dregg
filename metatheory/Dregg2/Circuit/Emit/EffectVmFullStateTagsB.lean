@@ -41,6 +41,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitExerciseWide
 import Dregg2.Circuit.Emit.EffectVmEmitPipelinedSendWide
 import Dregg2.Circuit.Emit.EffectVmEmitReceiptArchiveWide
 import Dregg2.Circuit.Emit.EffectVmEmitBurnRunnable
+import Dregg2.Circuit.Emit.EffectVmEmitSetFieldFullState
 
 namespace Dregg2.Circuit.Emit.EffectVmFullStateTagsB
 
@@ -1258,5 +1259,179 @@ theorem pipelinedSend_canary_clause :
 #assert_axioms pipelinedSend_canary_clause
 
 end PipelinedSend
+
+/-! ## §I — setField (write `fields[slot]` + nonce tick; row-gates-only descriptor + range envelope).
+
+CLASSIFICATION: setField is KERNEL-FIELD-ONLY (`gFieldWrite slot` writes `fields[slot]` = the runtime
+`param1` NEW_VALUE directly; the write is bound into `state_commit` by the same per-row GROUP-4 layout the
+other kernel tags use; there is NO heap / sorted-tree gate). So it is instantiated HERE.
+
+The deployed `EffectVmEmitSetFieldFullState.setFieldRunnableSpec` places the range envelope
+`SetFieldRowCanon` in its `isRow` field (`isRow := IsSetFieldRow ∧ SetFieldRowCanon`). The completeness
+engine's `build_isRow` is UNCONDITIONAL (`∀ hash pre post sr`), and the envelope's `state_commit` column
+(= the abstract `hash` output) is not field-bounded for an arbitrary `hash`, so that spec cannot be fed to
+the engine directly. We supply an EQUIVALENT soundness base (`setFieldRunnableSpecB`) — the SAME wide
+descriptor + SAME `fullClause`, with the envelope relocated from `isRow` to `decodeAfter` (where the
+completeness engine's `build_decode` provides it under the honest-witness `absorbsTo`). This is a faithful
+re-partition of the precondition, not a weakening: `decodeFull` still discharges via
+`setFieldGates_give_cellSpec` from BOTH `IsSetFieldRow` and `SetFieldRowCanon`. -/
+
+section SetField
+
+open Dregg2.Circuit.Emit.EffectVmEmitSetField
+  (SEL_SET_FIELD VALUE setFieldRowGates setFieldVmDescriptor gFieldWrite gOtherFieldsAll
+   SetFieldRowIntent SetFieldRowCanon setFieldVm_faithful RowEncodesSF CellSetFieldSpec IsSetFieldRow)
+open Dregg2.Circuit.Emit.EffectVmEmitSetFieldFullState
+  (setFieldVmDescriptorWide setFieldWide_constraints_eq SetFieldFullClause setFieldGates_give_cellSpec
+   setFieldPre setFieldPost setFieldPreRoots setField_clause_not_trivial)
+
+def setFieldRow (slot : Fin 8) (hash : List ℤ → ℤ) (pre post : CellState) : VmRowEnv :=
+  mkRow SEL_SET_FIELD hash pre post (fun i => if i = VALUE then post.fields slot else 0)
+
+theorem setFieldRow_reads (slot : Fin 8) (hash : List ℤ → ℤ) (pre post : CellState) :
+    WReads (setFieldRow slot hash pre post) SEL_SET_FIELD hash pre post :=
+  mkRow_reads SEL_SET_FIELD (by decide) (by decide) hash pre post _
+
+theorem setFieldRow_val (slot : Fin 8) (hash : List ℤ → ℤ) (pre post : CellState) :
+    (setFieldRow slot hash pre post).loc (prmCol VALUE) = post.fields slot := by
+  show (mkRow SEL_SET_FIELD hash pre post (fun i => if i = VALUE then post.fields slot else 0)).loc
+      (prmCol VALUE) = post.fields slot
+  rw [mkRow_locGe SEL_SET_FIELD hash pre post _ (prmCol VALUE) (by decide)]
+  rfl
+
+/-- The structured decode of the witness (`RowEncodesSF`, incl. the value-carrier `= post.fields slot`). -/
+theorem setFieldRow_encodes (slot : Fin 8) (hash : List ℤ → ℤ) (pre post : CellState) :
+    RowEncodesSF slot (setFieldRow slot hash pre post) pre post := by
+  have h := setFieldRow_reads slot hash pre post
+  exact ⟨h.sbLo, h.sbHi, h.sbN, h.sbF, h.sbCap, h.sbRes, h.sbC, h.saLo, h.saHi, h.saN, h.saF,
+         h.saCap, h.saRes, h.saC, setFieldRow_val slot hash pre post, h.pOld, h.pNew⟩
+
+theorem setField_intent (slot : Fin 8) (hash : List ℤ → ℤ) (pre post : CellState)
+    (hspec : CellSetFieldSpec slot pre (post.fields slot) post) :
+    SetFieldRowIntent slot (setFieldRow slot hash pre post) := by
+  have h := setFieldRow_reads slot hash pre post
+  have hval := setFieldRow_val slot hash pre post
+  obtain ⟨hwr, hlo, hhi, hnon, hcap, hres, hflds⟩ := hspec
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [h.saF slot, hval]
+  · rw [h.saLo, h.sbLo]; exact hlo
+  · rw [h.saHi, h.sbHi]; exact hhi
+  · rw [h.saN, h.sbN]; exact hnon
+  · rw [h.saCap, h.sbCap]; exact hcap
+  · rw [h.saRes, h.sbRes]; exact hres
+  · intro i hi8 hine
+    rw [h.saF ⟨i, hi8⟩, h.sbF ⟨i, hi8⟩]
+    exact hflds ⟨i, hi8⟩ (fun hc => hine (congrArg Fin.val hc))
+
+theorem setField_gates (slot : Fin 8) (hash : List ℤ → ℤ) (pre post : CellState)
+    (hcanon : SetFieldRowCanon (setFieldRow slot hash pre post))
+    (hspec : CellSetFieldSpec slot pre (post.fields slot) post)
+    (b : Bool) (c : VmConstraint) (hc : c ∈ setFieldRowGates slot) :
+    c.holdsVm (setFieldRow slot hash pre post) b false := by
+  have h := setFieldRow_reads slot hash pre post
+  have hg := (setFieldVm_faithful slot (setFieldRow slot hash pre post) ⟨h.selHot, h.noopCold⟩ hcanon).mpr
+    (setField_intent slot hash pre post hspec)
+  have hcc := hg c hc
+  simp only [setFieldRowGates, gOtherFieldsAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_filter] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using hcc
+
+theorem setField_gates_vac (slot : Fin 8) (hash : List ℤ → ℤ) (pre post : CellState) (c : VmConstraint)
+    (hc : c ∈ setFieldRowGates slot) : c.holdsVm (setFieldRow slot hash pre post) true true := by
+  simp only [setFieldRowGates, gOtherFieldsAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_filter] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;> exact trivial
+
+/-- The soundness base with the range envelope in `decodeAfter` (faithful re-partition; see the section
+header). Same wide descriptor + `fullClause` as the deployed `setFieldRunnableSpec`. -/
+def setFieldRunnableSpecB (slot : Fin 8) (preRoots : SysRoots) : RunnableFullStateSpec CellState where
+  descriptor := setFieldVmDescriptorWide slot
+  usesWideSites := rfl
+  isRow := IsSetFieldRow
+  decodeAfter := fun env pre post postRoots =>
+    RowEncodesSF slot env pre post ∧ SetFieldRowCanon env ∧ postRoots = preRoots
+  fullClause := SetFieldFullClause slot preRoots
+  decodeFull := by
+    intro env pre post postRoots hrow hdec hgates
+    obtain ⟨henc, hcanon, hroots⟩ := hdec
+    exact ⟨setFieldGates_give_cellSpec slot env pre post hrow hcanon henc
+            (setFieldWide_constraints_eq slot ▸ hgates), hroots⟩
+
+def setFieldAbsorbsTo (slot : Fin 8) (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState)
+    (sr : SysRoots) : Prop :=
+  cellAbsorbsTo preRoots hash pre post sr ∧ SetFieldRowCanon (setFieldRow slot hash pre post)
+
+def setFieldRunnableCompleteSpec (slot : Fin 8) (preRoots : SysRoots) :
+    RunnableFullStateCompleteSpec CellState where
+  toRunnableFullStateSpec := setFieldRunnableSpecB slot preRoots
+  buildRow := fun hash pre post _sr => setFieldRow slot hash pre post
+  absorbsTo := setFieldAbsorbsTo slot preRoots
+  build_isRow := fun hash pre post _sr =>
+    ⟨(setFieldRow_reads slot hash pre post).selHot, (setFieldRow_reads slot hash pre post).noopCold⟩
+  build_decode := by
+    intro hash pre post sr habsorb
+    exact ⟨setFieldRow_encodes slot hash pre post, habsorb.2, habsorb.1.2.1⟩
+  build_carrier := by
+    intro hash pre post sr habsorb
+    exact wreads_carrier (setFieldRow_reads slot hash pre post) habsorb.1.1
+  build_active := by
+    intro hash pre post sr hclause habsorb c hc
+    obtain ⟨hspec, _⟩ := hclause
+    have hc2 : c ∈ setFieldRowGates slot := hc
+    exact setField_gates slot hash pre post habsorb.2 hspec true c hc2
+  build_last := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ setFieldRowGates slot := hc
+    exact setField_gates_vac slot hash pre post c hc2
+  build_ranges := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ [(⟨saCol state.BALANCE_LO, 30⟩ : VmRange), ⟨saCol state.BALANCE_HI, 30⟩] := hc
+    exact wreads_ranges (setFieldRow_reads slot hash pre post) habsorb.1.2.2.1 habsorb.1.2.2.2 c hc2
+  build_newcommit := by
+    intro hash pre post sr
+    exact wreads_newcommit (setFieldRow_reads slot hash pre post)
+
+theorem setField_commit_iff (slot : Fin 8) (preRoots : SysRoots) (hash : List ℤ → ℤ)
+    (pre post : CellState) (sr : SysRoots) (habsorb : setFieldAbsorbsTo slot preRoots hash pre post sr) :
+    (satisfiedVm hash (setFieldRunnableCompleteSpec slot preRoots).descriptor
+        ((setFieldRunnableCompleteSpec slot preRoots).buildRow hash pre post sr) true false
+      ∧ satisfiedVm hash (setFieldRunnableCompleteSpec slot preRoots).descriptor
+        ((setFieldRunnableCompleteSpec slot preRoots).buildRow hash pre post sr) true true)
+    ↔ ((setFieldRunnableCompleteSpec slot preRoots).fullClause pre post sr
+        ∧ ((setFieldRunnableCompleteSpec slot preRoots).buildRow hash pre post sr).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash ((setFieldRunnableCompleteSpec slot preRoots).buildRow hash pre post sr)) :=
+  runnable_full_commit_iff (setFieldRunnableCompleteSpec slot preRoots) hash pre post sr habsorb
+
+def setFieldDemoPost (hash : List ℤ → ℤ) : CellState :=
+  { setFieldPost with commit := cellWideCommit hash setFieldPost }
+
+/-- **`setField_commit_iff_demo` — the both-windows `⟺`, concretely (slot 0), UNDER the deployed range
+envelope** (`SetFieldRowCanon`, an honest named hypothesis — the abstract-`hash` commit column is not
+field-bounded, exactly as for pipelinedSend). -/
+theorem setField_commit_iff_demo (hash : List ℤ → ℤ)
+    (hcanon : SetFieldRowCanon (setFieldRow 0 hash setFieldPre (setFieldDemoPost hash))) :
+    (satisfiedVm hash (setFieldRunnableCompleteSpec 0 setFieldPreRoots).descriptor
+        (setFieldRow 0 hash setFieldPre (setFieldDemoPost hash)) true false
+      ∧ satisfiedVm hash (setFieldRunnableCompleteSpec 0 setFieldPreRoots).descriptor
+        (setFieldRow 0 hash setFieldPre (setFieldDemoPost hash)) true true)
+    ↔ ((setFieldRunnableCompleteSpec 0 setFieldPreRoots).fullClause setFieldPre (setFieldDemoPost hash) setFieldPreRoots
+        ∧ (setFieldRow 0 hash setFieldPre (setFieldDemoPost hash)).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash (setFieldRow 0 hash setFieldPre (setFieldDemoPost hash))) :=
+  setField_commit_iff 0 setFieldPreRoots hash setFieldPre (setFieldDemoPost hash) setFieldPreRoots
+    ⟨⟨rfl, rfl, ⟨by norm_num [setFieldDemoPost, setFieldPost], by norm_num [setFieldDemoPost, setFieldPost]⟩,
+       ⟨by norm_num [setFieldDemoPost, setFieldPost], by norm_num [setFieldDemoPost, setFieldPost]⟩⟩, hcanon⟩
+
+theorem setField_canary_clause :
+    ¬ (setFieldRunnableCompleteSpec 0 setFieldPreRoots).fullClause setFieldPre
+        { setFieldPost with balLo := 999 } setFieldPreRoots :=
+  setField_clause_not_trivial
+
+#assert_axioms setFieldRow_reads
+#assert_axioms setField_commit_iff
+#assert_axioms setField_commit_iff_demo
+#assert_axioms setField_canary_clause
+
+end SetField
 
 end Dregg2.Circuit.Emit.EffectVmFullStateTagsB
