@@ -51,10 +51,14 @@ set_option maxRecDepth 16000
 (`sbCol`/`saCol` ≤ 89). -/
 def E1_FLOOR : Nat := 90
 
-/-- The DEPLOYED Epoch-1 E1-compact wide transfer row: the S2-compact crown member, additionally
-E1-compacted at its DERIVED kill-set (the dead v1-face bands at index `≥ 90`). BYTE SOURCE:
-`EmitWideRegistryProbe` emits `emitVmJson2` of exactly this value under the
-`transferVmDescriptor2R24` key. -/
+/-- The E1-compact wide transfer row: the S2-compact crown member, additionally E1-compacted at
+its DERIVED kill-set (the dead v1-face bands at index `≥ 90`). BYTE SOURCE (STAGED — the emit
+driver's E1 pass is the deployment cutover, not yet landed): once `EmitWideRegistryProbe` applies
+`compactE1` after `compactForEmit`, it emits `emitVmJson2` of exactly this value under the
+`transferVmDescriptor2R24` key. At current HEAD the deployed transfer row is the S2-only
+`transferWideDeployedC`; this theorem proves the availability keystone holds of the E1-compact row
+the cutover will mint (the bridge is unconditional; the byte-identity to the deployed artifact
+follows the emit cutover). -/
 def transferWideDeployedE1 : EffectVmDescriptor2 :=
   compactE1 transferWideDeployedC (deadColsE1 transferWideDeployedC E1_FLOOR)
 
