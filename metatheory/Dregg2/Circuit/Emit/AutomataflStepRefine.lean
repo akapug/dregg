@@ -154,6 +154,283 @@ theorem astep_gate {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ �
     simpa using h
   simpa only [cg, VmConstraint2.holdsAt, VmConstraint.holdsVm, hlf] using hrc
 
+/-! ## §2.5 — n-GENERIC STRUCTURED gate membership (`automataflStepDescN n`).
+
+The front-end gate extractions below were discharged by `by decide` — a `decide` over the fully
+reduced concrete `n = 2` 418-constraint list. That is `n = 2`-specific AND scales with the whole
+list. This section replaces it with STRUCTURED, `n`-INDEPENDENT membership derived from the
+fold's `List.range`/`List.append` shape (`AutomataflStepEmit.NGen.frontEndConstraints`): each
+non-commitment front-end family (board range · coordinate decompose · the two auto one-hots · the
+auto-pin · the four ray scans) gets a "this family element is in `(automataflStepDescN n).constraints`"
+lemma, proven once for ALL `n` via `List.mem_append`/`mem_map`/`mem_range`/`mem_range'`/`mem_flatMap`.
+Instantiated at `n = 2` these bridge (definitionally) to the exact call-site gate expressions, so
+`automataflStepDescN 2 = automataflStepDesc` stays byte-identical and every downstream proof is
+preserved. The Stage-1b BACK-END (`decide_axis`/`choose_offset`/step/board-update) and the COMMITMENT
+family (`bindBoardRootsConstraints`) are frozen at their absolute `n = 2` layout and keep `decide`. -/
+
+theorem constraintsN_eq (n : Nat) :
+    (automataflStepDescN n).constraints = NGen.frontEndConstraints n ++ backEndConstraints := rfl
+
+theorem mem_constraintsN_of_frontEnd {n : Nat} {x : VmConstraint2}
+    (h : x ∈ NGen.frontEndConstraints n) : x ∈ (automataflStepDescN n).constraints := by
+  rw [constraintsN_eq]; exact List.mem_append_left _ h
+
+/- Front-end segment injectors: `NGen.frontEndConstraints n = S0 ++ … ++ S9` (left-associated),
+climbed by explicit `List.mem_append_left`/`mem_append_right` (no `simp`/`tauto` — those `whnf` the
+symbolic folds and time out). -/
+
+theorem mem_fe_boardRange {n x} (h : x ∈ NGen.boardRangeConstraints n) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+    (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+      (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ h))))))))
+
+theorem mem_fe_decompAX {n x}
+    (h : x ∈ NGen.decomposeConstraints n (NGen.AX n) (NGen.axLoBit n) (NGen.axHiBit n)) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+    (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+      (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ h))))))))
+
+theorem mem_fe_decompAY {n x}
+    (h : x ∈ NGen.decomposeConstraints n (NGen.AY n) (NGen.ayLoBit n) (NGen.ayHiBit n)) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+    (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+      (List.mem_append_left _ (List.mem_append_right _ h)))))))
+
+theorem mem_fe_oneHotRow {n x}
+    (h : x ∈ oneHotConstraints ((List.range n).map (NGen.selRow n)) (Head.lin 1 (NGen.AY n))) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+    (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+      (List.mem_append_right _ h))))))
+
+theorem mem_fe_oneHotCol {n x}
+    (h : x ∈ oneHotConstraints ((List.range n).map (NGen.selCol n)) (Head.lin 1 (NGen.AX n))) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+    (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ h)))))
+
+theorem mem_fe_autoPin {n} :
+    cgH (NGen.autoPinHead n) ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+    (List.mem_append_left _ (List.mem_append_right _ (List.mem_singleton.mpr rfl)))))
+
+theorem mem_fe_ray0 {n x} (h : x ∈ NGen.rayConstraints n 0 1 0) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+    (List.mem_append_right _ h)))
+
+theorem mem_fe_ray1 {n x} (h : x ∈ NGen.rayConstraints n 1 (-1) 0) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ h))
+
+theorem mem_fe_ray2 {n x} (h : x ∈ NGen.rayConstraints n 2 0 1) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_left _ (List.mem_append_right _ h)
+
+theorem mem_fe_ray3 {n x} (h : x ∈ NGen.rayConstraints n 3 0 (-1)) :
+    x ∈ (automataflStepDescN n).constraints := by
+  apply mem_constraintsN_of_frontEnd; unfold NGen.frontEndConstraints
+  exact List.mem_append_right _ h
+
+/- Family-internal membership (a specific element → its family list), all n-generic. -/
+
+theorem boardRange_old {n c} (hc : c < NGen.KK n) :
+    cg (memberExpr (NGen.old n c) [0, 1, 2, 3]) ∈ NGen.boardRangeConstraints n := by
+  unfold NGen.boardRangeConstraints
+  exact List.mem_append_left _ (List.mem_map.mpr ⟨c, List.mem_range.mpr hc, rfl⟩)
+
+theorem boardRange_new {n c} (hc : c < NGen.KK n) :
+    cg (memberExpr (NGen.new n c) [0, 1, 2, 3]) ∈ NGen.boardRangeConstraints n := by
+  unfold NGen.boardRangeConstraints
+  exact List.mem_append_right _ (List.mem_map.mpr ⟨c, List.mem_range.mpr hc, rfl⟩)
+
+theorem decomp_loBin {n col loBit hiBit} :
+    cg (gBin loBit) ∈ NGen.decomposeConstraints n col loBit hiBit := by
+  unfold NGen.decomposeConstraints; exact List.mem_cons.mpr (Or.inl rfl)
+
+theorem decomp_loRecomp {n col loBit hiBit} :
+    cgH ((Head.lin 1 col).addLin (-1) loBit) ∈ NGen.decomposeConstraints n col loBit hiBit := by
+  unfold NGen.decomposeConstraints
+  exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
+
+theorem decomp_hiBin {n col loBit hiBit} :
+    cg (gBin hiBit) ∈ NGen.decomposeConstraints n col loBit hiBit := by
+  unfold NGen.decomposeConstraints
+  exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))))
+
+theorem decomp_hiRecomp {n col loBit hiBit} :
+    cgH (((Head.c ((n : ℤ) - 1)).addLin (-1) col).addLin (-1) hiBit)
+      ∈ NGen.decomposeConstraints n col loBit hiBit := by
+  unfold NGen.decomposeConstraints
+  exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inr (List.mem_cons.mpr
+    (Or.inr (List.mem_cons.mpr (Or.inl rfl)))))))
+
+theorem oneHot_bool {sels : List Nat} {idxHead : Head} {c : Nat} (hc : c ∈ sels) :
+    cg (gBin c) ∈ oneHotConstraints sels idxHead := by
+  unfold oneHotConstraints
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_map.mpr ⟨c, hc, rfl⟩))
+
+theorem oneHot_sigma {sels : List Nat} {idxHead : Head} :
+    cgH (sels.foldl (fun h co => h.addLin 1 co) (Head.c (-1))) ∈ oneHotConstraints sels idxHead := by
+  unfold oneHotConstraints
+  exact List.mem_append_left _ (List.mem_append_right _ (List.mem_singleton.mpr rfl))
+
+theorem oneHot_index {sels : List Nat} {idxHead : Head} :
+    cgH (((List.range sels.length).foldl (fun h (j : Nat) => h.addLin (j : ℤ) (sels[j]!)) Head.zero).append
+          (idxHead.scale (-1))) ∈ oneHotConstraints sels idxHead := by
+  unfold oneHotConstraints
+  exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
+
+/- Ray-family internal membership: the ray is `A ++ B ++ C ++ D ++ E ++ F ++ G ++ H ++ I`
+(left-associated) — A per-step {ib-bit, ibEq, rcRead} flatMap · B hit bits · C Σhit==1 · D dist ·
+E {what∈{0,1,2}, whatDot} · F occlusion (`beforeConstraints`) · G hib · H oob-hit · I cond-nonzero. -/
+
+theorem mem_rangeStep {n kk : Nat} (h1 : 1 ≤ kk) (h2 : kk ≤ n) : kk ∈ List.range' 1 n := by
+  rw [List.mem_range']; exact ⟨kk - 1, by omega, by omega⟩
+
+theorem ray_ibBit_mem {n d dx dy kk} (h1 : 1 ≤ kk) (h2 : kk ≤ n) :
+    cg (gBin (NGen.rIb n d kk)) ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left
+  rw [List.mem_flatMap]
+  exact ⟨kk, mem_rangeStep h1 h2, List.mem_cons.mpr (Or.inl rfl)⟩
+
+theorem ray_ibEq_mem {n d dx dy kk} (h1 : 1 ≤ kk) (h2 : kk ≤ n) :
+    cgH (NGen.ibEqHead n d dx dy kk) ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left
+  rw [List.mem_flatMap]
+  exact ⟨kk, mem_rangeStep h1 h2, List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))⟩
+
+theorem ray_rcRead_mem {n d dx dy kk} (h1 : 1 ≤ kk) (h2 : kk ≤ n) :
+    cgH (NGen.rcReadHead n d dx dy kk) ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left
+  rw [List.mem_flatMap]
+  exact ⟨kk, mem_rangeStep h1 h2,
+    List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))))⟩
+
+theorem ray_hitBit_mem {n d dx dy kk} (h1 : 1 ≤ kk) (h2 : kk ≤ n) :
+    cg (gBin (NGen.rHit n d kk)) ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left
+  apply List.mem_append_right
+  exact List.mem_map.mpr ⟨kk, mem_rangeStep h1 h2, rfl⟩
+
+theorem ray_sumHit_mem {n d dx dy} :
+    cgH ((List.range' 1 n).foldl (fun h (kk : Nat) => h.addLin 1 (NGen.rHit n d kk)) (Head.c (-1)))
+      ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_right
+  exact List.mem_singleton.mpr rfl
+
+theorem ray_dist_mem {n d dx dy} :
+    cgH ((List.range' 1 n).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (NGen.rHit n d kk))
+          (Head.lin (-1) (NGen.rDist n d))) ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_right
+  exact List.mem_singleton.mpr rfl
+
+theorem ray_whatMem_mem {n d dx dy} :
+    cg (memberExpr (NGen.rWhat n d) [0, 1, 2]) ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left
+  apply List.mem_append_right
+  exact List.mem_cons.mpr (Or.inl rfl)
+
+theorem ray_whatDot_mem {n d dx dy} :
+    cgH ((List.range' 1 n).foldl (fun h (kk : Nat) => h.addProd 1 [NGen.rHit n d kk, NGen.rRc n d kk])
+          (Head.lin (-1) (NGen.rWhat n d))) ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_left
+  apply List.mem_append_right
+  exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
+
+theorem ray_before_mem {n d dx dy x} (h : x ∈ NGen.beforeConstraints n d) :
+    x ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_right
+  exact h
+
+theorem before_vac_mem {n d i : Nat} (hi : i < n)
+    (hnz : headIsZero (((List.range n).filter (fun j => decide (j > i))).foldl
+             (fun h (j : Nat) => h.addProd 1 [NGen.rHit n d (j + 1), NGen.rRc n d (i + 1)]) Head.zero)
+           = false) :
+    cgH (((List.range n).filter (fun j => decide (j > i))).foldl
+          (fun h (j : Nat) => h.addProd 1 [NGen.rHit n d (j + 1), NGen.rRc n d (i + 1)]) Head.zero)
+      ∈ NGen.beforeConstraints n d := by
+  unfold NGen.beforeConstraints
+  rw [List.mem_flatMap]
+  refine ⟨i, List.mem_range.mpr hi, ?_⟩
+  apply List.mem_append_left
+  rw [hnz, cond_false]
+  exact List.mem_singleton.mpr rfl
+
+theorem before_inb_mem {n d i : Nat} (hi : i < n)
+    (hnzInb : headIsZero (((List.range n).filter (fun j => decide (j > i))).foldl
+                (fun h (j : Nat) => (h.addLin 1 (NGen.rHit n d (j + 1))).addProd (-1)
+                  [NGen.rHit n d (j + 1), NGen.rIb n d (i + 1)]) Head.zero) = false) :
+    cgH (((List.range n).filter (fun j => decide (j > i))).foldl
+          (fun h (j : Nat) => (h.addLin 1 (NGen.rHit n d (j + 1))).addProd (-1)
+            [NGen.rHit n d (j + 1), NGen.rIb n d (i + 1)]) Head.zero)
+      ∈ NGen.beforeConstraints n d := by
+  unfold NGen.beforeConstraints
+  rw [List.mem_flatMap]
+  refine ⟨i, List.mem_range.mpr hi, ?_⟩
+  apply List.mem_append_right
+  rw [hnzInb, cond_false]
+  exact List.mem_singleton.mpr rfl
+
+theorem ray_hib_mem {n d dx dy} :
+    cgH ((List.range' 1 n).foldl (fun h (kk : Nat) => h.addProd 1 [NGen.rHit n d kk, NGen.rIb n d kk])
+          (Head.lin (-1) (NGen.rHib n d))) ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left; apply List.mem_append_left
+  apply List.mem_append_right
+  exact List.mem_singleton.mpr rfl
+
+theorem ray_oobHit_mem {n d dx dy} :
+    cgH ((Head.lin 1 (NGen.rWhat n d)).addProd (-1) [NGen.rHib n d, NGen.rWhat n d])
+      ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_left
+  apply List.mem_append_right
+  exact List.mem_singleton.mpr rfl
+
+theorem ray_cond_mem {n d dx dy} :
+    cg (.mul (.var (NGen.rHib n d)) (.add (.mul (.var (NGen.rWhat n d)) (.var (NGen.rInv n d))) (.const (-1))))
+      ∈ NGen.rayConstraints n d dx dy := by
+  unfold NGen.rayConstraints
+  apply List.mem_append_right
+  exact List.mem_singleton.mpr rfl
+
 /-! ## §3 — The board decode + sub-lemma (1): the auto one-hot pins the AUTO cell.
 
 `codeToParticle`/`boardDecode` read a satisfying row back into the reference `Board`
@@ -187,18 +464,18 @@ theorem coord_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin maddr
   -- AX = axLoBit, AY = ayLoBit (the recomposition gates), each boolean.
   have hxeq : e.loc AX = e.loc axLoBit := by
     have hg := astep_gate hsat i hi (g := .add (.var AX) (.mul (.const (-1)) (.var axLoBit)))
-      (by decide)
+      (mem_fe_decompAX decomp_loRecomp)
     simp only [EmittedExpr.eval] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
   have hyeq : e.loc AY = e.loc ayLoBit := by
     have hg := astep_gate hsat i hi (g := .add (.var AY) (.mul (.const (-1)) (.var ayLoBit)))
-      (by decide)
+      (mem_fe_decompAY decomp_loRecomp)
     simp only [EmittedExpr.eval] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
   have hxb : e.loc axLoBit = 0 ∨ e.loc axLoBit = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin axLoBit) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin axLoBit) (mem_fe_decompAX decomp_loBin)) (canon_loc hc i _)
   have hyb : e.loc ayLoBit = 0 ∨ e.loc ayLoBit = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin ayLoBit) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin ayLoBit) (mem_fe_decompAY decomp_loBin)) (canon_loc hc i _)
   exact ⟨hxeq ▸ hxb, hyeq ▸ hyb⟩
 
 /-- **`autoPin_of_sat` — SUB-LEMMA (1): the auto one-hot + dot-product pin the AUTO cell.** On a
@@ -214,17 +491,17 @@ theorem autoPin_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin mad
   set e := envAt t i with he
   -- boolean one-hot selectors
   have bR0 : e.loc (selRow 0) = 0 ∨ e.loc (selRow 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bR1 : e.loc (selRow 1) = 0 ∨ e.loc (selRow 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bC0 : e.loc (selCol 0) = 0 ∨ e.loc (selCol 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bC1 : e.loc (selCol 1) = 0 ∨ e.loc (selCol 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   -- Σ sel = 1 (row + col). eval = (a+b) − 1 ≡ 0, both bool ⇒ a+b = 1.
   have sumR : e.loc (selRow 0) + e.loc (selRow 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (mem_fe_oneHotRow oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selRow 0) + e.loc (selRow 1) + -1)
       (a := e.loc (selRow 0) + e.loc (selRow 1)) (b := 1) (by ring)).mp hg
@@ -232,7 +509,7 @@ theorem autoPin_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin mad
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have sumC : e.loc (selCol 0) + e.loc (selCol 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (mem_fe_oneHotCol oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selCol 0) + e.loc (selCol 1) + -1)
       (a := e.loc (selCol 0) + e.loc (selCol 1)) (b := 1) (by ring)).mp hg
@@ -241,13 +518,13 @@ theorem autoPin_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin mad
   -- index pins: AY = selRow 1, AX = selCol 1 (the j=0 term drops at n=2).
   have idxR : e.loc AY = e.loc (selRow 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (by decide)
+      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (mem_fe_oneHotRow oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
   have idxC : e.loc AX = e.loc (selCol 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (by decide)
+      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (mem_fe_oneHotCol oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
@@ -265,7 +542,7 @@ theorem autoPin_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin mad
         + e.loc (selRow 0) * e.loc (selCol 1) * e.loc (old 1)
         + e.loc (selRow 1) * e.loc (selCol 0) * e.loc (old 2)
         + e.loc (selRow 1) * e.loc (selCol 1) * e.loc (old 3) + (-3) := rfl
-  have hAuto := astep_gate hsat i hi (g := headToExpr autoPinHead) (by decide)
+  have hAuto := astep_gate hsat i hi (g := headToExpr autoPinHead) mem_fe_autoPin
   rw [hEval, r0eq, r1eq, c0eq, c1eq] at hAuto
   -- 4 coordinate cases; the one-hot collapses the sum to the selected cell, pinned to AUTO = 3.
   rcases hay with ay | ay <;> rcases hax with ax | ax
@@ -406,12 +683,12 @@ theorem raycast_xp_of_sat
   set e := envAt t i with he
   -- ============ selector / coordinate facts ============
   have bC0 : e.loc (selCol 0) = 0 ∨ e.loc (selCol 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bC1 : e.loc (selCol 1) = 0 ∨ e.loc (selCol 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have sumC : e.loc (selCol 0) + e.loc (selCol 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (mem_fe_oneHotCol oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selCol 0) + e.loc (selCol 1) + -1)
       (a := e.loc (selCol 0) + e.loc (selCol 1)) (b := 1) (by ring)).mp hg
@@ -419,17 +696,17 @@ theorem raycast_xp_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have idxC : e.loc AX = e.loc (selCol 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (by decide)
+      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (mem_fe_oneHotCol oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
   have bR0 : e.loc (selRow 0) = 0 ∨ e.loc (selRow 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bR1 : e.loc (selRow 1) = 0 ∨ e.loc (selRow 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have sumR : e.loc (selRow 0) + e.loc (selRow 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (mem_fe_oneHotRow oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selRow 0) + e.loc (selRow 1) + -1)
       (a := e.loc (selRow 0) + e.loc (selRow 1)) (b := 1) (by ring)).mp hg
@@ -437,7 +714,7 @@ theorem raycast_xp_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have idxR : e.loc AY = e.loc (selRow 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (by decide)
+      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (mem_fe_oneHotRow oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
@@ -449,27 +726,27 @@ theorem raycast_xp_of_sat
   -- ============ ray-XP gate extractions (d = 0, steps kk ∈ {1,2}) ============
   -- ib pins: rIb1 = selCol0 (in-window prefix sum at kk=1), rIb2 = 0 (kk=2 out of window).
   have hib1 : e.loc (rIb 0 1) = e.loc (selCol 0) := by
-    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 0 1 0 1)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 0 1 0 1)) (mem_fe_ray0 (ray_ibEq_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (ibEqHead 0 1 0 1)).eval e.loc
         = e.loc (rIb 0 1) + (-1) * e.loc (selCol 0) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
   have hib2 : e.loc (rIb 0 2) = 0 := by
-    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 0 1 0 2)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 0 1 0 2)) (mem_fe_ray0 (ray_ibEq_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (ibEqHead 0 1 0 2)).eval e.loc = e.loc (rIb 0 2) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
   have hrc2 : e.loc (rRc 0 2) = 0 := by
-    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 0 1 0 2)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 0 1 0 2)) (mem_fe_ray0 (ray_rcRead_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (rcReadHead 0 1 0 2)).eval e.loc = e.loc (rRc 0 2) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
   -- the hit one-hot: booleans + Σ = 1.
   have hb1 : e.loc (rHit 0 1) = 0 ∨ e.loc (rHit 0 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 0 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 0 1)) (mem_fe_ray0 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hb2 : e.loc (rHit 0 2) = 0 ∨ e.loc (rHit 0 2) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 0 2)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 0 2)) (mem_fe_ray0 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hsum : e.loc (rHit 0 1) + e.loc (rHit 0 2) = 1 := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 0 kk))
-        (Head.c (-1)))) (by decide)
+        (Head.c (-1)))) (mem_fe_ray0 ray_sumHit_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 0 kk))
         (Head.c (-1)))).eval e.loc = e.loc (rHit 0 1) + e.loc (rHit 0 2) + (-1) from rfl] at hg
     have := (gate_modEq_iff (a := e.loc (rHit 0 1) + e.loc (rHit 0 2)) (b := 1) (by ring)).mp hg
@@ -478,43 +755,43 @@ theorem raycast_xp_of_sat
   -- the recomposition / occlusion / read gates as raw mod-`p` congruences (reduced per case).
   have hDist := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 0 kk))
-      (Head.lin (-1) (rDist 0)))) (by decide)
+      (Head.lin (-1) (rDist 0)))) (mem_fe_ray0 ray_dist_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 0 kk))
       (Head.lin (-1) (rDist 0)))).eval e.loc
       = (-1) * e.loc (rDist 0) + e.loc (rHit 0 1) + 2 * e.loc (rHit 0 2) from rfl] at hDist
   have hWhat := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 0 kk, rRc 0 kk])
-      (Head.lin (-1) (rWhat 0)))) (by decide)
+      (Head.lin (-1) (rWhat 0)))) (mem_fe_ray0 ray_whatDot_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 0 kk, rRc 0 kk])
       (Head.lin (-1) (rWhat 0)))).eval e.loc
       = (-1) * e.loc (rWhat 0) + e.loc (rHit 0 1) * e.loc (rRc 0 1)
         + e.loc (rHit 0 2) * e.loc (rRc 0 2) from rfl] at hWhat
   have hHib := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 0 kk, rIb 0 kk])
-      (Head.lin (-1) (rHib 0)))) (by decide)
+      (Head.lin (-1) (rHib 0)))) (mem_fe_ray0 ray_hib_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 0 kk, rIb 0 kk])
       (Head.lin (-1) (rHib 0)))).eval e.loc
       = (-1) * e.loc (rHib 0) + e.loc (rHit 0 1) * e.loc (rIb 0 1)
         + e.loc (rHit 0 2) * e.loc (rIb 0 2) from rfl] at hHib
-  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 0 1 0 1)) (by decide)
+  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 0 1 0 1)) (mem_fe_ray0 (ray_rcRead_mem (by norm_num) (by norm_num)))
   rw [show (headToExpr (rcReadHead 0 1 0 1)).eval e.loc
       = e.loc (rRc 0 1)
         + (-1) * (e.loc (rIb 0 1) * e.loc (selRow 0) * e.loc (selCol 0) * e.loc (old 1))
         + (-1) * (e.loc (rIb 0 1) * e.loc (selRow 1) * e.loc (selCol 0) * e.loc (old 3)) from rfl]
     at hRC1
-  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 0 2, rRc 0 1])) (by decide)
+  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 0 2, rRc 0 1])) (mem_fe_ray0 (ray_before_mem (before_vac_mem (n := 2) (d := 0) (i := 0) (by norm_num) (by decide))))
   rw [show (headToExpr (Head.zero.addProd 1 [rHit 0 2, rRc 0 1])).eval e.loc
       = e.loc (rHit 0 2) * e.loc (rRc 0 1) from rfl] at hVac
   have hInb := astep_gate hsat i hi
-    (g := headToExpr ((Head.zero.addLin 1 (rHit 0 2)).addProd (-1) [rHit 0 2, rIb 0 1])) (by decide)
+    (g := headToExpr ((Head.zero.addLin 1 (rHit 0 2)).addProd (-1) [rHit 0 2, rIb 0 1])) (mem_fe_ray0 (ray_before_mem (before_inb_mem (n := 2) (d := 0) (i := 0) (by norm_num) (by decide))))
   rw [show (headToExpr ((Head.zero.addLin 1 (rHit 0 2)).addProd (-1) [rHit 0 2, rIb 0 1])).eval e.loc
       = e.loc (rHit 0 2) + (-1) * (e.loc (rHit 0 2) * e.loc (rIb 0 1)) from rfl] at hInb
   have hCond := astep_gate hsat i hi
-    (g := .mul (.var (rHib 0)) (.add (.mul (.var (rWhat 0)) (.var (rInv 0))) (.const (-1)))) (by decide)
+    (g := .mul (.var (rHib 0)) (.add (.mul (.var (rWhat 0)) (.var (rInv 0))) (.const (-1)))) (mem_fe_ray0 ray_cond_mem)
   simp only [EmittedExpr.eval] at hCond
   -- the ray's `what` is a {VAC,REP,ATT} felt code (never AUTO).
   have hMem : e.loc (rWhat 0) = 0 ∨ e.loc (rWhat 0) = 1 ∨ e.loc (rWhat 0) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 0) [0, 1, 2]) (by decide))
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 0) [0, 1, 2]) (mem_fe_ray0 ray_whatMem_mem))
       (canon_loc hc i _)
   -- ============ reduce the reference raycast to the two-step n=2 scan ============
   have hXlt : (e.loc AX).toNat < 2 := by rcases hax with h | h <;> rw [h] <;> decide
@@ -688,12 +965,12 @@ theorem raycast_xn_of_sat
   set e := envAt t i with he
   -- ============ selector / coordinate facts (shared front-end auto one-hot) ============
   have bC0 : e.loc (selCol 0) = 0 ∨ e.loc (selCol 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bC1 : e.loc (selCol 1) = 0 ∨ e.loc (selCol 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have sumC : e.loc (selCol 0) + e.loc (selCol 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (mem_fe_oneHotCol oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selCol 0) + e.loc (selCol 1) + -1)
       (a := e.loc (selCol 0) + e.loc (selCol 1)) (b := 1) (by ring)).mp hg
@@ -701,17 +978,17 @@ theorem raycast_xn_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have idxC : e.loc AX = e.loc (selCol 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (by decide)
+      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (mem_fe_oneHotCol oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
   have bR0 : e.loc (selRow 0) = 0 ∨ e.loc (selRow 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bR1 : e.loc (selRow 1) = 0 ∨ e.loc (selRow 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have sumR : e.loc (selRow 0) + e.loc (selRow 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (mem_fe_oneHotRow oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selRow 0) + e.loc (selRow 1) + -1)
       (a := e.loc (selRow 0) + e.loc (selRow 1)) (b := 1) (by ring)).mp hg
@@ -719,7 +996,7 @@ theorem raycast_xn_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have idxR : e.loc AY = e.loc (selRow 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (by decide)
+      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (mem_fe_oneHotRow oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
@@ -731,26 +1008,26 @@ theorem raycast_xn_of_sat
   have hay : e.loc AY = 0 ∨ e.loc AY = 1 := idxR ▸ bR1
   -- ============ ray-XN gate extractions (d = 1, steps kk ∈ {1,2}) ============
   have hib1 : e.loc (rIb 1 1) = e.loc (selCol 1) := by
-    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 1 (-1) 0 1)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 1 (-1) 0 1)) (mem_fe_ray1 (ray_ibEq_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (ibEqHead 1 (-1) 0 1)).eval e.loc
         = e.loc (rIb 1 1) + (-1) * e.loc (selCol 1) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
   have hib2 : e.loc (rIb 1 2) = 0 := by
-    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 1 (-1) 0 2)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 1 (-1) 0 2)) (mem_fe_ray1 (ray_ibEq_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (ibEqHead 1 (-1) 0 2)).eval e.loc = e.loc (rIb 1 2) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
   have hrc2 : e.loc (rRc 1 2) = 0 := by
-    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 1 (-1) 0 2)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 1 (-1) 0 2)) (mem_fe_ray1 (ray_rcRead_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (rcReadHead 1 (-1) 0 2)).eval e.loc = e.loc (rRc 1 2) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
   have hb1 : e.loc (rHit 1 1) = 0 ∨ e.loc (rHit 1 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 1)) (mem_fe_ray1 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hb2 : e.loc (rHit 1 2) = 0 ∨ e.loc (rHit 1 2) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 2)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 2)) (mem_fe_ray1 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hsum : e.loc (rHit 1 1) + e.loc (rHit 1 2) = 1 := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 1 kk))
-        (Head.c (-1)))) (by decide)
+        (Head.c (-1)))) (mem_fe_ray1 ray_sumHit_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 1 kk))
         (Head.c (-1)))).eval e.loc = e.loc (rHit 1 1) + e.loc (rHit 1 2) + (-1) from rfl] at hg
     have := (gate_modEq_iff (a := e.loc (rHit 1 1) + e.loc (rHit 1 2)) (b := 1) (by ring)).mp hg
@@ -758,42 +1035,42 @@ theorem raycast_xn_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have hDist := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 1 kk))
-      (Head.lin (-1) (rDist 1)))) (by decide)
+      (Head.lin (-1) (rDist 1)))) (mem_fe_ray1 ray_dist_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 1 kk))
       (Head.lin (-1) (rDist 1)))).eval e.loc
       = (-1) * e.loc (rDist 1) + e.loc (rHit 1 1) + 2 * e.loc (rHit 1 2) from rfl] at hDist
   have hWhat := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 1 kk, rRc 1 kk])
-      (Head.lin (-1) (rWhat 1)))) (by decide)
+      (Head.lin (-1) (rWhat 1)))) (mem_fe_ray1 ray_whatDot_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 1 kk, rRc 1 kk])
       (Head.lin (-1) (rWhat 1)))).eval e.loc
       = (-1) * e.loc (rWhat 1) + e.loc (rHit 1 1) * e.loc (rRc 1 1)
         + e.loc (rHit 1 2) * e.loc (rRc 1 2) from rfl] at hWhat
   have hHib := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 1 kk, rIb 1 kk])
-      (Head.lin (-1) (rHib 1)))) (by decide)
+      (Head.lin (-1) (rHib 1)))) (mem_fe_ray1 ray_hib_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 1 kk, rIb 1 kk])
       (Head.lin (-1) (rHib 1)))).eval e.loc
       = (-1) * e.loc (rHib 1) + e.loc (rHit 1 1) * e.loc (rIb 1 1)
         + e.loc (rHit 1 2) * e.loc (rIb 1 2) from rfl] at hHib
-  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 1 (-1) 0 1)) (by decide)
+  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 1 (-1) 0 1)) (mem_fe_ray1 (ray_rcRead_mem (by norm_num) (by norm_num)))
   rw [show (headToExpr (rcReadHead 1 (-1) 0 1)).eval e.loc
       = e.loc (rRc 1 1)
         + (-1) * (e.loc (rIb 1 1) * e.loc (selRow 0) * e.loc (selCol 1) * e.loc (old 0))
         + (-1) * (e.loc (rIb 1 1) * e.loc (selRow 1) * e.loc (selCol 1) * e.loc (old 2)) from rfl]
     at hRC1
-  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 1 2, rRc 1 1])) (by decide)
+  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 1 2, rRc 1 1])) (mem_fe_ray1 (ray_before_mem (before_vac_mem (n := 2) (d := 1) (i := 0) (by norm_num) (by decide))))
   rw [show (headToExpr (Head.zero.addProd 1 [rHit 1 2, rRc 1 1])).eval e.loc
       = e.loc (rHit 1 2) * e.loc (rRc 1 1) from rfl] at hVac
   have hInb := astep_gate hsat i hi
-    (g := headToExpr ((Head.zero.addLin 1 (rHit 1 2)).addProd (-1) [rHit 1 2, rIb 1 1])) (by decide)
+    (g := headToExpr ((Head.zero.addLin 1 (rHit 1 2)).addProd (-1) [rHit 1 2, rIb 1 1])) (mem_fe_ray1 (ray_before_mem (before_inb_mem (n := 2) (d := 1) (i := 0) (by norm_num) (by decide))))
   rw [show (headToExpr ((Head.zero.addLin 1 (rHit 1 2)).addProd (-1) [rHit 1 2, rIb 1 1])).eval e.loc
       = e.loc (rHit 1 2) + (-1) * (e.loc (rHit 1 2) * e.loc (rIb 1 1)) from rfl] at hInb
   have hCond := astep_gate hsat i hi
-    (g := .mul (.var (rHib 1)) (.add (.mul (.var (rWhat 1)) (.var (rInv 1))) (.const (-1)))) (by decide)
+    (g := .mul (.var (rHib 1)) (.add (.mul (.var (rWhat 1)) (.var (rInv 1))) (.const (-1)))) (mem_fe_ray1 ray_cond_mem)
   simp only [EmittedExpr.eval] at hCond
   have hMem : e.loc (rWhat 1) = 0 ∨ e.loc (rWhat 1) = 1 ∨ e.loc (rWhat 1) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (by decide))
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (mem_fe_ray1 ray_whatMem_mem))
       (canon_loc hc i _)
   -- ============ reduce the reference raycast to the two-step n=2 scan ============
   have hXlt : (e.loc AX).toNat < 2 := by rcases hax with h | h <;> rw [h] <;> decide
@@ -965,12 +1242,12 @@ theorem raycast_yp_of_sat
   set e := envAt t i with he
   -- ============ selector / coordinate facts (shared front-end auto one-hot) ============
   have bC0 : e.loc (selCol 0) = 0 ∨ e.loc (selCol 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bC1 : e.loc (selCol 1) = 0 ∨ e.loc (selCol 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have sumC : e.loc (selCol 0) + e.loc (selCol 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (mem_fe_oneHotCol oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selCol 0) + e.loc (selCol 1) + -1)
       (a := e.loc (selCol 0) + e.loc (selCol 1)) (b := 1) (by ring)).mp hg
@@ -978,17 +1255,17 @@ theorem raycast_yp_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have idxC : e.loc AX = e.loc (selCol 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (by decide)
+      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (mem_fe_oneHotCol oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
   have bR0 : e.loc (selRow 0) = 0 ∨ e.loc (selRow 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bR1 : e.loc (selRow 1) = 0 ∨ e.loc (selRow 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have sumR : e.loc (selRow 0) + e.loc (selRow 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (mem_fe_oneHotRow oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selRow 0) + e.loc (selRow 1) + -1)
       (a := e.loc (selRow 0) + e.loc (selRow 1)) (b := 1) (by ring)).mp hg
@@ -996,7 +1273,7 @@ theorem raycast_yp_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have idxR : e.loc AY = e.loc (selRow 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (by decide)
+      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (mem_fe_oneHotRow oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
@@ -1008,26 +1285,26 @@ theorem raycast_yp_of_sat
   have hay : e.loc AY = 0 ∨ e.loc AY = 1 := idxR ▸ bR1
   -- ============ ray-YP gate extractions (d = 2, steps kk ∈ {1,2}) ============
   have hib1 : e.loc (rIb 2 1) = e.loc (selRow 0) := by
-    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 2 0 1 1)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 2 0 1 1)) (mem_fe_ray2 (ray_ibEq_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (ibEqHead 2 0 1 1)).eval e.loc
         = e.loc (rIb 2 1) + (-1) * e.loc (selRow 0) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
   have hib2 : e.loc (rIb 2 2) = 0 := by
-    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 2 0 1 2)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 2 0 1 2)) (mem_fe_ray2 (ray_ibEq_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (ibEqHead 2 0 1 2)).eval e.loc = e.loc (rIb 2 2) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
   have hrc2 : e.loc (rRc 2 2) = 0 := by
-    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 2 0 1 2)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 2 0 1 2)) (mem_fe_ray2 (ray_rcRead_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (rcReadHead 2 0 1 2)).eval e.loc = e.loc (rRc 2 2) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
   have hb1 : e.loc (rHit 2 1) = 0 ∨ e.loc (rHit 2 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 1)) (mem_fe_ray2 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hb2 : e.loc (rHit 2 2) = 0 ∨ e.loc (rHit 2 2) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 2)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 2)) (mem_fe_ray2 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hsum : e.loc (rHit 2 1) + e.loc (rHit 2 2) = 1 := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 2 kk))
-        (Head.c (-1)))) (by decide)
+        (Head.c (-1)))) (mem_fe_ray2 ray_sumHit_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 2 kk))
         (Head.c (-1)))).eval e.loc = e.loc (rHit 2 1) + e.loc (rHit 2 2) + (-1) from rfl] at hg
     have := (gate_modEq_iff (a := e.loc (rHit 2 1) + e.loc (rHit 2 2)) (b := 1) (by ring)).mp hg
@@ -1035,42 +1312,42 @@ theorem raycast_yp_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have hDist := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 2 kk))
-      (Head.lin (-1) (rDist 2)))) (by decide)
+      (Head.lin (-1) (rDist 2)))) (mem_fe_ray2 ray_dist_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 2 kk))
       (Head.lin (-1) (rDist 2)))).eval e.loc
       = (-1) * e.loc (rDist 2) + e.loc (rHit 2 1) + 2 * e.loc (rHit 2 2) from rfl] at hDist
   have hWhat := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 2 kk, rRc 2 kk])
-      (Head.lin (-1) (rWhat 2)))) (by decide)
+      (Head.lin (-1) (rWhat 2)))) (mem_fe_ray2 ray_whatDot_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 2 kk, rRc 2 kk])
       (Head.lin (-1) (rWhat 2)))).eval e.loc
       = (-1) * e.loc (rWhat 2) + e.loc (rHit 2 1) * e.loc (rRc 2 1)
         + e.loc (rHit 2 2) * e.loc (rRc 2 2) from rfl] at hWhat
   have hHib := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 2 kk, rIb 2 kk])
-      (Head.lin (-1) (rHib 2)))) (by decide)
+      (Head.lin (-1) (rHib 2)))) (mem_fe_ray2 ray_hib_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 2 kk, rIb 2 kk])
       (Head.lin (-1) (rHib 2)))).eval e.loc
       = (-1) * e.loc (rHib 2) + e.loc (rHit 2 1) * e.loc (rIb 2 1)
         + e.loc (rHit 2 2) * e.loc (rIb 2 2) from rfl] at hHib
-  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 2 0 1 1)) (by decide)
+  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 2 0 1 1)) (mem_fe_ray2 (ray_rcRead_mem (by norm_num) (by norm_num)))
   rw [show (headToExpr (rcReadHead 2 0 1 1)).eval e.loc
       = e.loc (rRc 2 1)
         + (-1) * (e.loc (rIb 2 1) * e.loc (selRow 0) * e.loc (selCol 0) * e.loc (old 2))
         + (-1) * (e.loc (rIb 2 1) * e.loc (selRow 0) * e.loc (selCol 1) * e.loc (old 3)) from rfl]
     at hRC1
-  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 2 2, rRc 2 1])) (by decide)
+  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 2 2, rRc 2 1])) (mem_fe_ray2 (ray_before_mem (before_vac_mem (n := 2) (d := 2) (i := 0) (by norm_num) (by decide))))
   rw [show (headToExpr (Head.zero.addProd 1 [rHit 2 2, rRc 2 1])).eval e.loc
       = e.loc (rHit 2 2) * e.loc (rRc 2 1) from rfl] at hVac
   have hInb := astep_gate hsat i hi
-    (g := headToExpr ((Head.zero.addLin 1 (rHit 2 2)).addProd (-1) [rHit 2 2, rIb 2 1])) (by decide)
+    (g := headToExpr ((Head.zero.addLin 1 (rHit 2 2)).addProd (-1) [rHit 2 2, rIb 2 1])) (mem_fe_ray2 (ray_before_mem (before_inb_mem (n := 2) (d := 2) (i := 0) (by norm_num) (by decide))))
   rw [show (headToExpr ((Head.zero.addLin 1 (rHit 2 2)).addProd (-1) [rHit 2 2, rIb 2 1])).eval e.loc
       = e.loc (rHit 2 2) + (-1) * (e.loc (rHit 2 2) * e.loc (rIb 2 1)) from rfl] at hInb
   have hCond := astep_gate hsat i hi
-    (g := .mul (.var (rHib 2)) (.add (.mul (.var (rWhat 2)) (.var (rInv 2))) (.const (-1)))) (by decide)
+    (g := .mul (.var (rHib 2)) (.add (.mul (.var (rWhat 2)) (.var (rInv 2))) (.const (-1)))) (mem_fe_ray2 ray_cond_mem)
   simp only [EmittedExpr.eval] at hCond
   have hMem : e.loc (rWhat 2) = 0 ∨ e.loc (rWhat 2) = 1 ∨ e.loc (rWhat 2) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (by decide))
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (mem_fe_ray2 ray_whatMem_mem))
       (canon_loc hc i _)
   -- ============ reduce the reference raycast to the two-step n=2 scan ============
   have hXlt : (e.loc AX).toNat < 2 := by rcases hax with h | h <;> rw [h] <;> decide
@@ -1242,12 +1519,12 @@ theorem raycast_yn_of_sat
   set e := envAt t i with he
   -- ============ selector / coordinate facts (shared front-end auto one-hot) ============
   have bC0 : e.loc (selCol 0) = 0 ∨ e.loc (selCol 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 0)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bC1 : e.loc (selCol 1) = 0 ∨ e.loc (selCol 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selCol 1)) (mem_fe_oneHotCol (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have sumC : e.loc (selCol 0) + e.loc (selCol 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selCol 0)) (.var (selCol 1))) (.const (-1))) (mem_fe_oneHotCol oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selCol 0) + e.loc (selCol 1) + -1)
       (a := e.loc (selCol 0) + e.loc (selCol 1)) (b := 1) (by ring)).mp hg
@@ -1255,17 +1532,17 @@ theorem raycast_yn_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have idxC : e.loc AX = e.loc (selCol 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (by decide)
+      (g := .add (.var (selCol 1)) (.mul (.const (-1)) (.var AX))) (mem_fe_oneHotCol oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
   have bR0 : e.loc (selRow 0) = 0 ∨ e.loc (selRow 0) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 0)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have bR1 : e.loc (selRow 1) = 0 ∨ e.loc (selRow 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (selRow 1)) (mem_fe_oneHotRow (oneHot_bool (List.mem_map.mpr ⟨1, List.mem_range.mpr (by decide), rfl⟩)))) (canon_loc hc i _)
   have sumR : e.loc (selRow 0) + e.loc (selRow 1) = 1 := by
     have hg := astep_gate hsat i hi
-      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (by decide)
+      (g := .add (.add (.var (selRow 0)) (.var (selRow 1))) (.const (-1))) (mem_fe_oneHotRow oneHot_sigma)
     simp only [EmittedExpr.eval] at hg
     have := (gate_modEq_iff (x := e.loc (selRow 0) + e.loc (selRow 1) + -1)
       (a := e.loc (selRow 0) + e.loc (selRow 1)) (b := 1) (by ring)).mp hg
@@ -1273,7 +1550,7 @@ theorem raycast_yn_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have idxR : e.loc AY = e.loc (selRow 1) := by
     have hg := astep_gate hsat i hi
-      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (by decide)
+      (g := .add (.var (selRow 1)) (.mul (.const (-1)) (.var AY))) (mem_fe_oneHotRow oneHot_index)
     simp only [EmittedExpr.eval] at hg
     exact (eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _)
       ((gate_modEq_iff (by ring)).mp hg)).symm
@@ -1285,26 +1562,26 @@ theorem raycast_yn_of_sat
   have hay : e.loc AY = 0 ∨ e.loc AY = 1 := idxR ▸ bR1
   -- ============ ray-YN gate extractions (d = 3, steps kk ∈ {1,2}) ============
   have hib1 : e.loc (rIb 3 1) = e.loc (selRow 1) := by
-    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 3 0 (-1) 1)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 3 0 (-1) 1)) (mem_fe_ray3 (ray_ibEq_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (ibEqHead 3 0 (-1) 1)).eval e.loc
         = e.loc (rIb 3 1) + (-1) * e.loc (selRow 1) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) (canon_loc hc i _) ((gate_modEq_iff (by ring)).mp hg)
   have hib2 : e.loc (rIb 3 2) = 0 := by
-    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 3 0 (-1) 2)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (ibEqHead 3 0 (-1) 2)) (mem_fe_ray3 (ray_ibEq_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (ibEqHead 3 0 (-1) 2)).eval e.loc = e.loc (rIb 3 2) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
   have hrc2 : e.loc (rRc 3 2) = 0 := by
-    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 3 0 (-1) 2)) (by decide)
+    have hg := astep_gate hsat i hi (g := headToExpr (rcReadHead 3 0 (-1) 2)) (mem_fe_ray3 (ray_rcRead_mem (by norm_num) (by norm_num)))
     rw [show (headToExpr (rcReadHead 3 0 (-1) 2)).eval e.loc = e.loc (rRc 3 2) from rfl] at hg
     exact eq_of_modEq_canon (canon_loc hc i _) canon_zero ((gate_modEq_iff (by ring)).mp hg)
   have hb1 : e.loc (rHit 3 1) = 0 ∨ e.loc (rHit 3 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 1)) (mem_fe_ray3 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hb2 : e.loc (rHit 3 2) = 0 ∨ e.loc (rHit 3 2) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 2)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 2)) (mem_fe_ray3 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hsum : e.loc (rHit 3 1) + e.loc (rHit 3 2) = 1 := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 3 kk))
-        (Head.c (-1)))) (by decide)
+        (Head.c (-1)))) (mem_fe_ray3 ray_sumHit_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 3 kk))
         (Head.c (-1)))).eval e.loc = e.loc (rHit 3 1) + e.loc (rHit 3 2) + (-1) from rfl] at hg
     have := (gate_modEq_iff (a := e.loc (rHit 3 1) + e.loc (rHit 3 2)) (b := 1) (by ring)).mp hg
@@ -1312,42 +1589,42 @@ theorem raycast_yn_of_sat
       exact eq_of_modEq_small (by rw [h0, h1]; norm_num) (by norm_num) this
   have hDist := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 3 kk))
-      (Head.lin (-1) (rDist 3)))) (by decide)
+      (Head.lin (-1) (rDist 3)))) (mem_fe_ray3 ray_dist_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 3 kk))
       (Head.lin (-1) (rDist 3)))).eval e.loc
       = (-1) * e.loc (rDist 3) + e.loc (rHit 3 1) + 2 * e.loc (rHit 3 2) from rfl] at hDist
   have hWhat := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 3 kk, rRc 3 kk])
-      (Head.lin (-1) (rWhat 3)))) (by decide)
+      (Head.lin (-1) (rWhat 3)))) (mem_fe_ray3 ray_whatDot_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 3 kk, rRc 3 kk])
       (Head.lin (-1) (rWhat 3)))).eval e.loc
       = (-1) * e.loc (rWhat 3) + e.loc (rHit 3 1) * e.loc (rRc 3 1)
         + e.loc (rHit 3 2) * e.loc (rRc 3 2) from rfl] at hWhat
   have hHib := astep_gate hsat i hi
     (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 3 kk, rIb 3 kk])
-      (Head.lin (-1) (rHib 3)))) (by decide)
+      (Head.lin (-1) (rHib 3)))) (mem_fe_ray3 ray_hib_mem)
   rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addProd 1 [rHit 3 kk, rIb 3 kk])
       (Head.lin (-1) (rHib 3)))).eval e.loc
       = (-1) * e.loc (rHib 3) + e.loc (rHit 3 1) * e.loc (rIb 3 1)
         + e.loc (rHit 3 2) * e.loc (rIb 3 2) from rfl] at hHib
-  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 3 0 (-1) 1)) (by decide)
+  have hRC1 := astep_gate hsat i hi (g := headToExpr (rcReadHead 3 0 (-1) 1)) (mem_fe_ray3 (ray_rcRead_mem (by norm_num) (by norm_num)))
   rw [show (headToExpr (rcReadHead 3 0 (-1) 1)).eval e.loc
       = e.loc (rRc 3 1)
         + (-1) * (e.loc (rIb 3 1) * e.loc (selRow 1) * e.loc (selCol 0) * e.loc (old 0))
         + (-1) * (e.loc (rIb 3 1) * e.loc (selRow 1) * e.loc (selCol 1) * e.loc (old 1)) from rfl]
     at hRC1
-  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 3 2, rRc 3 1])) (by decide)
+  have hVac := astep_gate hsat i hi (g := headToExpr (Head.zero.addProd 1 [rHit 3 2, rRc 3 1])) (mem_fe_ray3 (ray_before_mem (before_vac_mem (n := 2) (d := 3) (i := 0) (by norm_num) (by decide))))
   rw [show (headToExpr (Head.zero.addProd 1 [rHit 3 2, rRc 3 1])).eval e.loc
       = e.loc (rHit 3 2) * e.loc (rRc 3 1) from rfl] at hVac
   have hInb := astep_gate hsat i hi
-    (g := headToExpr ((Head.zero.addLin 1 (rHit 3 2)).addProd (-1) [rHit 3 2, rIb 3 1])) (by decide)
+    (g := headToExpr ((Head.zero.addLin 1 (rHit 3 2)).addProd (-1) [rHit 3 2, rIb 3 1])) (mem_fe_ray3 (ray_before_mem (before_inb_mem (n := 2) (d := 3) (i := 0) (by norm_num) (by decide))))
   rw [show (headToExpr ((Head.zero.addLin 1 (rHit 3 2)).addProd (-1) [rHit 3 2, rIb 3 1])).eval e.loc
       = e.loc (rHit 3 2) + (-1) * (e.loc (rHit 3 2) * e.loc (rIb 3 1)) from rfl] at hInb
   have hCond := astep_gate hsat i hi
-    (g := .mul (.var (rHib 3)) (.add (.mul (.var (rWhat 3)) (.var (rInv 3))) (.const (-1)))) (by decide)
+    (g := .mul (.var (rHib 3)) (.add (.mul (.var (rWhat 3)) (.var (rInv 3))) (.const (-1)))) (mem_fe_ray3 ray_cond_mem)
   simp only [EmittedExpr.eval] at hCond
   have hMem : e.loc (rWhat 3) = 0 ∨ e.loc (rWhat 3) = 1 ∨ e.loc (rWhat 3) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (by decide))
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (mem_fe_ray3 ray_whatMem_mem))
       (canon_loc hc i _)
   -- ============ reduce the reference raycast to the two-step n=2 scan ============
   have hXlt : (e.loc AX).toNat < 2 := by rcases hax with h | h <;> rw [h] <;> decide
@@ -1614,13 +1891,13 @@ theorem xdec_pd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs
     (envAt t i).loc (rDist 0) = 1 ∨ (envAt t i).loc (rDist 0) = 2 := by
   set e := envAt t i with he
   have b1 : e.loc (rHit 0 1) = 0 ∨ e.loc (rHit 0 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 0 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 0 1)) (mem_fe_ray0 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have b2 : e.loc (rHit 0 2) = 0 ∨ e.loc (rHit 0 2) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 0 2)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 0 2)) (mem_fe_ray0 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hsum : e.loc (rHit 0 1) + e.loc (rHit 0 2) = 1 := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 0 kk))
-        (Head.c (-1)))) (by decide)
+        (Head.c (-1)))) (mem_fe_ray0 ray_sumHit_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 0 kk))
         (Head.c (-1)))).eval e.loc = e.loc (rHit 0 1) + e.loc (rHit 0 2) + (-1) from rfl] at hg
     have := (gate_modEq_iff (a := e.loc (rHit 0 1) + e.loc (rHit 0 2)) (b := 1) (by ring)).mp hg
@@ -1629,7 +1906,7 @@ theorem xdec_pd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs
   have hval : e.loc (rDist 0) = e.loc (rHit 0 1) + 2 * e.loc (rHit 0 2) := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 0 kk))
-        (Head.lin (-1) (rDist 0)))) (by decide)
+        (Head.lin (-1) (rDist 0)))) (mem_fe_ray0 ray_dist_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 0 kk))
         (Head.lin (-1) (rDist 0)))).eval e.loc
         = (-1) * e.loc (rDist 0) + e.loc (rHit 0 1) + 2 * e.loc (rHit 0 2) from rfl] at hg
@@ -1646,13 +1923,13 @@ theorem xdec_nd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs
     (envAt t i).loc (rDist 1) = 1 ∨ (envAt t i).loc (rDist 1) = 2 := by
   set e := envAt t i with he
   have b1 : e.loc (rHit 1 1) = 0 ∨ e.loc (rHit 1 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 1)) (mem_fe_ray1 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have b2 : e.loc (rHit 1 2) = 0 ∨ e.loc (rHit 1 2) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 2)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 1 2)) (mem_fe_ray1 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hsum : e.loc (rHit 1 1) + e.loc (rHit 1 2) = 1 := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 1 kk))
-        (Head.c (-1)))) (by decide)
+        (Head.c (-1)))) (mem_fe_ray1 ray_sumHit_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 1 kk))
         (Head.c (-1)))).eval e.loc = e.loc (rHit 1 1) + e.loc (rHit 1 2) + (-1) from rfl] at hg
     have := (gate_modEq_iff (a := e.loc (rHit 1 1) + e.loc (rHit 1 2)) (b := 1) (by ring)).mp hg
@@ -1661,7 +1938,7 @@ theorem xdec_nd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs
   have hval : e.loc (rDist 1) = e.loc (rHit 1 1) + 2 * e.loc (rHit 1 2) := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 1 kk))
-        (Head.lin (-1) (rDist 1)))) (by decide)
+        (Head.lin (-1) (rDist 1)))) (mem_fe_ray1 ray_dist_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 1 kk))
         (Head.lin (-1) (rDist 1)))).eval e.loc
         = (-1) * e.loc (rDist 1) + e.loc (rHit 1 1) + 2 * e.loc (rHit 1 2) from rfl] at hg
@@ -2585,9 +2862,9 @@ theorem decideAxis_x_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin
       = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 0)), dist := ((envAt t i).loc (rDist 0)).toNat }
                      { what := codeToParticle ((envAt t i).loc (rWhat 1)), dist := ((envAt t i).loc (rDist 1)).toNat } := by
   have hpwm : (envAt t i).loc (rWhat 0) = 0 ∨ (envAt t i).loc (rWhat 0) = 1 ∨ (envAt t i).loc (rWhat 0) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 0) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 0) [0, 1, 2]) (mem_fe_ray0 ray_whatMem_mem)) (canon_loc hc i _)
   have hnwm : (envAt t i).loc (rWhat 1) = 0 ∨ (envAt t i).loc (rWhat 1) = 1 ∨ (envAt t i).loc (rWhat 1) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (mem_fe_ray1 ray_whatMem_mem)) (canon_loc hc i _)
   rcases hpwm with hp|hp|hp <;> rcases hnwm with hn|hn|hn
   · exact decideAxis_xdec_none hsat hc i hi hp hn
   · exact decideAxis_xdec_vacRep hsat hc i hi hp hn
@@ -2611,13 +2888,13 @@ theorem ydec_pd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs
     (envAt t i).loc (rDist 2) = 1 ∨ (envAt t i).loc (rDist 2) = 2 := by
   set e := envAt t i with he
   have b1 : e.loc (rHit 2 1) = 0 ∨ e.loc (rHit 2 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 1)) (mem_fe_ray2 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have b2 : e.loc (rHit 2 2) = 0 ∨ e.loc (rHit 2 2) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 2)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 2 2)) (mem_fe_ray2 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hsum : e.loc (rHit 2 1) + e.loc (rHit 2 2) = 1 := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 2 kk))
-        (Head.c (-1)))) (by decide)
+        (Head.c (-1)))) (mem_fe_ray2 ray_sumHit_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 2 kk))
         (Head.c (-1)))).eval e.loc = e.loc (rHit 2 1) + e.loc (rHit 2 2) + (-1) from rfl] at hg
     have := (gate_modEq_iff (a := e.loc (rHit 2 1) + e.loc (rHit 2 2)) (b := 1) (by ring)).mp hg
@@ -2626,7 +2903,7 @@ theorem ydec_pd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs
   have hval : e.loc (rDist 2) = e.loc (rHit 2 1) + 2 * e.loc (rHit 2 2) := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 2 kk))
-        (Head.lin (-1) (rDist 2)))) (by decide)
+        (Head.lin (-1) (rDist 2)))) (mem_fe_ray2 ray_dist_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 2 kk))
         (Head.lin (-1) (rDist 2)))).eval e.loc
         = (-1) * e.loc (rDist 2) + e.loc (rHit 2 1) + 2 * e.loc (rHit 2 2) from rfl] at hg
@@ -2643,13 +2920,13 @@ theorem ydec_nd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs
     (envAt t i).loc (rDist 3) = 1 ∨ (envAt t i).loc (rDist 3) = 2 := by
   set e := envAt t i with he
   have b1 : e.loc (rHit 3 1) = 0 ∨ e.loc (rHit 3 1) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 1)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 1)) (mem_fe_ray3 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have b2 : e.loc (rHit 3 2) = 0 ∨ e.loc (rHit 3 2) = 1 :=
-    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 2)) (by decide)) (canon_loc hc i _)
+    bin_of_gate (astep_gate hsat i hi (g := gBin (rHit 3 2)) (mem_fe_ray3 (ray_hitBit_mem (by norm_num) (by norm_num)))) (canon_loc hc i _)
   have hsum : e.loc (rHit 3 1) + e.loc (rHit 3 2) = 1 := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 3 kk))
-        (Head.c (-1)))) (by decide)
+        (Head.c (-1)))) (mem_fe_ray3 ray_sumHit_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin 1 (rHit 3 kk))
         (Head.c (-1)))).eval e.loc = e.loc (rHit 3 1) + e.loc (rHit 3 2) + (-1) from rfl] at hg
     have := (gate_modEq_iff (a := e.loc (rHit 3 1) + e.loc (rHit 3 2)) (b := 1) (by ring)).mp hg
@@ -2658,7 +2935,7 @@ theorem ydec_nd_mem (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs
   have hval : e.loc (rDist 3) = e.loc (rHit 3 1) + 2 * e.loc (rHit 3 2) := by
     have hg := astep_gate hsat i hi
       (g := headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 3 kk))
-        (Head.lin (-1) (rDist 3)))) (by decide)
+        (Head.lin (-1) (rDist 3)))) (mem_fe_ray3 ray_dist_mem)
     rw [show (headToExpr ((List.range' 1 NN).foldl (fun h (kk : Nat) => h.addLin (kk : ℤ) (rHit 3 kk))
         (Head.lin (-1) (rDist 3)))).eval e.loc
         = (-1) * e.loc (rDist 3) + e.loc (rHit 3 1) + 2 * e.loc (rHit 3 2) from rfl] at hg
@@ -3477,9 +3754,9 @@ theorem decideAxis_y_sound (hsat : Satisfied2 hash automataflStepDesc minit mfin
       = evaluateAxis { what := codeToParticle ((envAt t i).loc (rWhat 2)), dist := ((envAt t i).loc (rDist 2)).toNat }
                      { what := codeToParticle ((envAt t i).loc (rWhat 3)), dist := ((envAt t i).loc (rDist 3)).toNat } := by
   have hpwm : (envAt t i).loc (rWhat 2) = 0 ∨ (envAt t i).loc (rWhat 2) = 1 ∨ (envAt t i).loc (rWhat 2) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (mem_fe_ray2 ray_whatMem_mem)) (canon_loc hc i _)
   have hnwm : (envAt t i).loc (rWhat 3) = 0 ∨ (envAt t i).loc (rWhat 3) = 1 ∨ (envAt t i).loc (rWhat 3) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (mem_fe_ray3 ray_whatMem_mem)) (canon_loc hc i _)
   rcases hpwm with hp|hp|hp <;> rcases hnwm with hn|hn|hn
   · exact decideAxis_ydec_none hsat hc i hi hp hn
   · exact decideAxis_ydec_vacRep hsat hc i hi hp hn
@@ -4065,9 +4342,9 @@ theorem xScoreEval (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs 
   have ca61 : 0 ≤ e.loc 61 := (canon_loc hc i _).1
   -- the two ray what-codes drive the 9-case split.
   have hpwm : e.loc (rWhat 0) = 0 ∨ e.loc (rWhat 0) = 1 ∨ e.loc (rWhat 0) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 0) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 0) [0, 1, 2]) (mem_fe_ray0 ray_whatMem_mem)) (canon_loc hc i _)
   have hnwm : e.loc (rWhat 1) = 0 ∨ e.loc (rWhat 1) = 1 ∨ e.loc (rWhat 1) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 1) [0, 1, 2]) (mem_fe_ray1 ray_whatMem_mem)) (canon_loc hc i _)
   -- ipw/inw one-hots pick the active case's gate columns.
   obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := xdec_ipw_sel hsat hc i hi
   obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := xdec_inw_sel hsat hc i hi
@@ -4276,9 +4553,9 @@ theorem yScoreEval (hsat : Satisfied2 hash automataflStepDesc minit mfin maddrs 
   have ca61 : 0 ≤ e.loc 108 := (canon_loc hc i _).1
   -- the two ray what-codes drive the 9-case split.
   have hpwm : e.loc (rWhat 2) = 0 ∨ e.loc (rWhat 2) = 1 ∨ e.loc (rWhat 2) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 2) [0, 1, 2]) (mem_fe_ray2 ray_whatMem_mem)) (canon_loc hc i _)
   have hnwm : e.loc (rWhat 3) = 0 ∨ e.loc (rWhat 3) = 1 ∨ e.loc (rWhat 3) = 2 :=
-    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (by decide)) (canon_loc hc i _)
+    mem3_of_gate (astep_gate hsat i hi (g := memberExpr (rWhat 3) [0, 1, 2]) (mem_fe_ray3 ray_whatMem_mem)) (canon_loc hc i _)
   -- ipw/inw one-hots pick the active case's gate columns.
   obtain ⟨ib0, ib1, ib2, isum, iidx⟩ := ydec_ipw_sel hsat hc i hi
   obtain ⟨nb0, nb1, nb2, nsum, nidx⟩ := ydec_inw_sel hsat hc i hi
@@ -5299,13 +5576,13 @@ theorem boardvalid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin 
       ∨ (envAt t i).loc (old c) = 2 ∨ (envAt t i).loc (old c) = 3) := by
   have h4 : c < 4 := by simpa [KK, NN] using hcK
   interval_cases c
-  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 0) [0, 1, 2, 3]) (by decide))
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 0) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_old (by decide))))
       (canon_loc hc i _)
-  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 1) [0, 1, 2, 3]) (by decide))
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 1) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_old (by decide))))
       (canon_loc hc i _)
-  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 2) [0, 1, 2, 3]) (by decide))
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 2) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_old (by decide))))
       (canon_loc hc i _)
-  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 3) [0, 1, 2, 3]) (by decide))
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (old 3) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_old (by decide))))
       (canon_loc hc i _)
 
 /-- **The NEW board columns are valid particle felts** — the same `assert_member` family on the
@@ -5317,13 +5594,13 @@ theorem newvalid_of_sat (hsat : Satisfied2 hash automataflStepDesc minit mfin ma
       ∨ (envAt t i).loc (new c) = 2 ∨ (envAt t i).loc (new c) = 3) := by
   have h4 : c < 4 := by simpa [KK, NN] using hcK
   interval_cases c
-  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 0) [0, 1, 2, 3]) (by decide))
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 0) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_new (by decide))))
       (canon_loc hc i _)
-  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 1) [0, 1, 2, 3]) (by decide))
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 1) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_new (by decide))))
       (canon_loc hc i _)
-  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 2) [0, 1, 2, 3]) (by decide))
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 2) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_new (by decide))))
       (canon_loc hc i _)
-  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 3) [0, 1, 2, 3]) (by decide))
+  · exact mem4_of_gate (astep_gate hsat i hi (g := memberExpr (new 3) [0, 1, 2, 3]) (mem_fe_boardRange (boardRange_new (by decide))))
       (canon_loc hc i _)
 
 /-- The target cell is a valid particle felt (`{0,1,2,3}`): out of bounds the gated read is `0`; in

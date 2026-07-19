@@ -111,6 +111,7 @@ named seam, and no weakened or vacuous capstone standing in for either.
 No `sorry`, no `native_decide`, no assumed arithmetization hypothesis.
 -/
 import Dregg2.Circuit.Emit.AutomataflResolveEmit
+import Dregg2.Circuit.Emit.AutomataflResolveMembership
 import Dregg2.Circuit.Emit.AutomataflStepRefine
 import Dregg2.Circuit.DescriptorIR2
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
@@ -119,6 +120,7 @@ import Dregg2.Games.Automatafl
 namespace Dregg2.Circuit.Emit.AutomataflResolveRefine
 
 open Dregg2.Circuit.Emit.AutomataflResolveEmit
+open Dregg2.Circuit.Emit.AutomataflResolveMembership
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit (Assignment)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow VmRowEnv)
@@ -200,7 +202,7 @@ theorem oneHot_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin m
 theorem one_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
     (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length) :
     (envAt t i).loc ONE = 1 := by
-  have hg := rgateH hsat i hi (h := (Head.lin 1 ONE).addConst (-1)) (by decide)
+  have hg := rgateH hsat i hi (h := (Head.lin 1 ONE).addConst (-1)) (mem_resolve_onePin 2)
   have hE : (headToExpr ((Head.lin 1 ONE).addConst (-1))).eval (envAt t i).loc
       = (envAt t i).loc ONE + (-1) := rfl
   rw [hE] at hg
@@ -264,18 +266,24 @@ theorem autoPinR_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin
       ∧ (envAt t i).loc (old (Y * NN + X)) = AUTO_CODE := by
   set e := envAt t i with he
   obtain ⟨hay, hr1, hr0⟩ :=
-    oneHot_of_sat hsat hc i hi (selAutoRow 0) (selAutoRow 1) AY_C (by decide) (by decide)
-      (by decide) (by decide)
+    oneHot_of_sat hsat hc i hi (selAutoRow 0) (selAutoRow 1) AY_C
+      (mem_resolve_of_mem_autoRead (ar_selRowBit 2 0 (by decide)))
+      (mem_resolve_of_mem_autoRead (ar_selRowBit 2 1 (by decide)))
+      (mem_resolve_of_mem_autoRead (ar_selRowSum 2))
+      (mem_resolve_of_mem_autoRead (ar_selRowIdx 2))
   obtain ⟨hax, hc1, hc0⟩ :=
-    oneHot_of_sat hsat hc i hi (selAutoCol 0) (selAutoCol 1) AX_C (by decide) (by decide)
-      (by decide) (by decide)
+    oneHot_of_sat hsat hc i hi (selAutoCol 0) (selAutoCol 1) AX_C
+      (mem_resolve_of_mem_autoRead (ar_selColBit 2 0 (by decide)))
+      (mem_resolve_of_mem_autoRead (ar_selColBit 2 1 (by decide)))
+      (mem_resolve_of_mem_autoRead (ar_selColSum 2))
+      (mem_resolve_of_mem_autoRead (ar_selColIdx 2))
   rw [← he] at hay hr1 hr0 hax hc1 hc0
   have hEval : (headToExpr autoPinHead).eval e.loc
       = e.loc (selAutoRow 0) * e.loc (selAutoCol 0) * e.loc (old 0)
         + e.loc (selAutoRow 0) * e.loc (selAutoCol 1) * e.loc (old 1)
         + e.loc (selAutoRow 1) * e.loc (selAutoCol 0) * e.loc (old 2)
         + e.loc (selAutoRow 1) * e.loc (selAutoCol 1) * e.loc (old 3) + (-3) := rfl
-  have hAuto := rgateH hsat i hi (h := autoPinHead) (by decide)
+  have hAuto := rgateH hsat i hi (h := autoPinHead) (mem_resolve_of_mem_autoRead (ar_autoPin 2))
   rw [hEval, hr0, hr1, hc0, hc1] at hAuto
   rcases hay with ay | ay <;> rcases hax with ax | ax
   · refine ⟨0, 0, by norm_num [NN], by norm_num [NN], by exact_mod_cast ax, by exact_mod_cast ay, ?_⟩
@@ -351,8 +359,58 @@ structure MoveGates (b : Nat) : Prop where
   srCi   : cgH ((Head.lin 1 (cSelCol1 b)).addLin (-1) (cFx b)) ∈ automataflResolveDesc.constraints
   srcRd  : cgH (sourceReadHead b) ∈ automataflResolveDesc.constraints
 
-theorem moveGates_a : MoveGates (mvBase 0) := by constructor <;> decide
-theorem moveGates_b : MoveGates (mvBase 1) := by constructor <;> decide
+/-- STRUCTURED extraction (was `by constructor <;> decide` over the concrete 379-list): each field is
+`the-family-is-in-resolveConstraints ∘ the-gate-is-in-validate_move`, both n-generic. -/
+theorem moveGates_a : MoveGates (mvBase 0) :=
+  ⟨mem_resolve_of_mem_validateMove0 (vm_fxBin 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_fxHead 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_fyBin 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_fyHead 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_txBin 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_txHead 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_tyBin 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_tyHead 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_rook 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_dsqDef 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_dsqNz 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_faDef 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_faNz 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_taDef 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_taNz 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_selRow 2 (mvBase 0) 0 (by decide))
+  , mem_resolve_of_mem_validateMove0 (vm_selRow 2 (mvBase 0) 1 (by decide))
+  , mem_resolve_of_mem_validateMove0 (vm_srRs 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_srRi 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_selCol 2 (mvBase 0) 0 (by decide))
+  , mem_resolve_of_mem_validateMove0 (vm_selCol 2 (mvBase 0) 1 (by decide))
+  , mem_resolve_of_mem_validateMove0 (vm_srCs 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_srCi 2 (mvBase 0))
+  , mem_resolve_of_mem_validateMove0 (vm_srcRd 2 (mvBase 0))⟩
+theorem moveGates_b : MoveGates (mvBase 1) :=
+  ⟨mem_resolve_of_mem_validateMove1 (vm_fxBin 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_fxHead 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_fyBin 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_fyHead 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_txBin 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_txHead 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_tyBin 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_tyHead 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_rook 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_dsqDef 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_dsqNz 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_faDef 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_faNz 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_taDef 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_taNz 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_selRow 2 (mvBase 1) 0 (by decide))
+  , mem_resolve_of_mem_validateMove1 (vm_selRow 2 (mvBase 1) 1 (by decide))
+  , mem_resolve_of_mem_validateMove1 (vm_srRs 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_srRi 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_selCol 2 (mvBase 1) 0 (by decide))
+  , mem_resolve_of_mem_validateMove1 (vm_selCol 2 (mvBase 1) 1 (by decide))
+  , mem_resolve_of_mem_validateMove1 (vm_srCs 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_srCi 2 (mvBase 1))
+  , mem_resolve_of_mem_validateMove1 (vm_srcRd 2 (mvBase 1))⟩
 
 section ValidateMove
 variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
@@ -697,14 +755,64 @@ structure OccGates (o : Nat) : Prop where
   msum : cgH (msumHead o) ∈ automataflResolveDesc.constraints
   ge0  : Ge0Gates9 (cMsum o) (cOcc o) (occBit o 0)
 
-theorem ivGates_a : IvGates (mvBase 0) (occBase 0) := by
-  refine ⟨by decide, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ⟨by decide⟩⟩ <;> decide
-theorem ivGates_b : IvGates (mvBase 1) (occBase 1) := by
-  refine ⟨by decide, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ⟨by decide⟩⟩ <;> decide
-theorem occGates_a : OccGates (occBase 0) := by
-  refine ⟨by decide, by decide, by decide, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩⟩ <;> decide
-theorem occGates_b : OccGates (occBase 1) := by
-  refine ⟨by decide, by decide, by decide, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩⟩ <;> decide
+theorem ivGates_a : IvGates (mvBase 0) (occBase 0) :=
+  ⟨mem_resolve_of_mem_validateOcclusion0 (vo_iv_dsq 2 (mvBase 0) (occBase 0) (mvBase 1)),
+   ⟨mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqIb 2 (mvBase 0) (occBase 0) (mvBase 1)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 0 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 1 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 2 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 3 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 4 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 5 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 6 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 7 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqBit 2 (mvBase 0) (occBase 0) (mvBase 1) 8 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_iv_neqHead 2 (mvBase 0) (occBase 0) (mvBase 1))⟩,
+   ⟨mem_resolve_of_mem_validateOcclusion0 (vo_iv_eqPin 2 (mvBase 0) (occBase 0) (mvBase 1))⟩⟩
+theorem ivGates_b : IvGates (mvBase 1) (occBase 1) :=
+  ⟨mem_resolve_of_mem_validateOcclusion1 (vo_iv_dsq 2 (mvBase 1) (occBase 1) (mvBase 0)),
+   ⟨mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqIb 2 (mvBase 1) (occBase 1) (mvBase 0)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 0 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 1 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 2 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 3 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 4 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 5 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 6 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 7 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqBit 2 (mvBase 1) (occBase 1) (mvBase 0) 8 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_iv_neqHead 2 (mvBase 1) (occBase 1) (mvBase 0))⟩,
+   ⟨mem_resolve_of_mem_validateOcclusion1 (vo_iv_eqPin 2 (mvBase 1) (occBase 1) (mvBase 0))⟩⟩
+theorem occGates_a : OccGates (occBase 0) :=
+  ⟨mem_resolve_of_mem_validateOcclusion0 (vo_seg 2 (mvBase 0) (occBase 0) (mvBase 1) 0 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_seg 2 (mvBase 0) (occBase 0) (mvBase 1) 1 (by decide)),
+   mem_resolve_of_mem_validateOcclusion0 (vo_msum 2 (mvBase 0) (occBase 0) (mvBase 1)),
+   ⟨mem_resolve_of_mem_validateOcclusion0 (vo_occ_ib 2 (mvBase 0) (occBase 0) (mvBase 1)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 0 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 1 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 2 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 3 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 4 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 5 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 6 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 7 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_bit 2 (mvBase 0) (occBase 0) (mvBase 1) 8 (by decide)),
+    mem_resolve_of_mem_validateOcclusion0 (vo_occ_head 2 (mvBase 0) (occBase 0) (mvBase 1))⟩⟩
+theorem occGates_b : OccGates (occBase 1) :=
+  ⟨mem_resolve_of_mem_validateOcclusion1 (vo_seg 2 (mvBase 1) (occBase 1) (mvBase 0) 0 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_seg 2 (mvBase 1) (occBase 1) (mvBase 0) 1 (by decide)),
+   mem_resolve_of_mem_validateOcclusion1 (vo_msum 2 (mvBase 1) (occBase 1) (mvBase 0)),
+   ⟨mem_resolve_of_mem_validateOcclusion1 (vo_occ_ib 2 (mvBase 1) (occBase 1) (mvBase 0)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 0 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 1 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 2 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 3 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 4 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 5 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 6 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 7 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_bit 2 (mvBase 1) (occBase 1) (mvBase 0) 8 (by decide)),
+    mem_resolve_of_mem_validateOcclusion1 (vo_occ_head 2 (mvBase 1) (occBase 1) (mvBase 0))⟩⟩
 
 section Occlusion
 variable {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
@@ -866,10 +974,10 @@ theorem boardvalid_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mf
   have hK : c < 4 := by simpa [KK, NN] using hcK
   interval_cases c <;>
     exact ⟨AutomataflStepRefine.mem4_of_gate
-             (rgate hsat i hi (g := memberExpr (old _) [0, 1, 2, 3]) (by decide))
+             (rgate hsat i hi (g := memberExpr (old _) [0, 1, 2, 3]) (mem_resolve_of_mem_boardRange (br_old 2 _ (by decide))))
              (canon_loc hc i _),
            AutomataflStepRefine.mem4_of_gate
-             (rgate hsat i hi (g := memberExpr (mid _) [0, 1, 2, 3]) (by decide))
+             (rgate hsat i hi (g := memberExpr (mid _) [0, 1, 2, 3]) (mem_resolve_of_mem_boardRange (br_mid 2 _ (by decide))))
              (canon_loc hc i _)⟩
 
 /-- The 5-bit `forced_ge0` site extractor (the `anz`/`bnz` twin of `ge0_9_of_sat`). -/
@@ -988,7 +1096,7 @@ theorem selection_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
       = e.loc (cEqBit (eqBase 0)) - e.loc (cEqBit (eqBase 0)) * e.loc (cEqBit (eqBase 1)) := by
     have hg := rgateH hsat i hi
       (h := ((Head.lin 1 cFork).addLin (-1) (cEqBit (eqBase 0))).addProd 1
-              [cEqBit (eqBase 0), cEqBit (eqBase 1)]) (by decide)
+              [cEqBit (eqBase 0), cEqBit (eqBase 1)]) (mem_selection_idx 2 0 (by decide))
     have hE : (headToExpr (((Head.lin 1 cFork).addLin (-1) (cEqBit (eqBase 0))).addProd 1
           [cEqBit (eqBase 0), cEqBit (eqBase 1)])).eval e.loc
         = e.loc cFork + (-1) * e.loc (cEqBit (eqBase 0))
@@ -998,16 +1106,14 @@ theorem selection_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
     rcases hff with a | a <;> rcases htt with b | b <;> rw [a, b] <;>
       exact ⟨by norm_num, by norm_num⟩
   have hnff : e.loc cNeqFf = 1 - e.loc (cEqBit (eqBase 0)) := by
-    have hg := rgateH hsat i hi (h := ((Head.lin 1 cNeqFf).addLin 1 (cEqBit (eqBase 0))).addConst (-1))
-      (by decide)
+    have hg := rgateH hsat i hi (h := ((Head.lin 1 cNeqFf).addLin 1 (cEqBit (eqBase 0))).addConst (-1)) (mem_selection_idx 2 1 (by decide))
     have hE : (headToExpr (((Head.lin 1 cNeqFf).addLin 1 (cEqBit (eqBase 0))).addConst (-1))).eval
         e.loc = e.loc cNeqFf + e.loc (cEqBit (eqBase 0)) + (-1) := rfl
     rw [hE] at hg
     refine eq_of_modEq_canon (canon_loc hc i _) ?_ ((gate_modEq_iff (by ring)).mp hg)
     rcases hff with a | a <;> rw [a] <;> exact ⟨by norm_num, by norm_num⟩
   have hcol1 : e.loc cCol1 = e.loc (cEqBit (eqBase 1)) * e.loc cNeqFf := by
-    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCol1).addProd 1 [cEqBit (eqBase 1), cNeqFf])
-      (by decide)
+    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCol1).addProd 1 [cEqBit (eqBase 1), cNeqFf]) (mem_selection_idx 2 2 (by decide))
     have hE : (headToExpr ((Head.lin (-1) cCol1).addProd 1
         [cEqBit (eqBase 1), cNeqFf])).eval e.loc
         = (-1) * e.loc cCol1 + e.loc (cEqBit (eqBase 1)) * e.loc cNeqFf := rfl
@@ -1016,7 +1122,7 @@ theorem selection_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
     rcases hff with a | a <;> rcases htt with b | b <;> rw [hnff, a, b] <;>
       exact ⟨by norm_num, by norm_num⟩
   have hcol2 : e.loc cCol2 = e.loc cCol1 * e.loc cAnz := by
-    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCol2).addProd 1 [cCol1, cAnz]) (by decide)
+    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCol2).addProd 1 [cCol1, cAnz]) (mem_selection_idx 2 3 (by decide))
     have hE : (headToExpr ((Head.lin (-1) cCol2).addProd 1 [cCol1, cAnz])).eval e.loc
         = (-1) * e.loc cCol2 + e.loc cCol1 * e.loc cAnz := rfl
     rw [hE] at hg
@@ -1024,7 +1130,7 @@ theorem selection_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
     rcases hff with a | a <;> rcases htt with b | b <;> rcases hanz with c | c <;>
       rw [hcol1, hnff, a, b, c] <;> exact ⟨by norm_num, by norm_num⟩
   have hcollv : e.loc cCollide = e.loc cCol2 * e.loc cBnz := by
-    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCollide).addProd 1 [cCol2, cBnz]) (by decide)
+    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCollide).addProd 1 [cCol2, cBnz]) (mem_selection_idx 2 4 (by decide))
     have hE : (headToExpr ((Head.lin (-1) cCollide).addProd 1 [cCol2, cBnz])).eval e.loc
         = (-1) * e.loc cCollide + e.loc cCol2 * e.loc cBnz := rfl
     rw [hE] at hg
@@ -1036,7 +1142,7 @@ theorem selection_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
       = 1 - e.loc cFork - e.loc cCollide + e.loc cFork * e.loc cCollide := by
     have hg := rgateH hsat i hi
       (h := ((((Head.lin 1 cSurv).addConst (-1)).addLin 1 cFork).addLin 1 cCollide).addProd (-1)
-              [cFork, cCollide]) (by decide)
+              [cFork, cCollide]) (mem_selection_idx 2 5 (by decide))
     have hE : (headToExpr (((((Head.lin 1 cSurv).addConst (-1)).addLin 1 cFork).addLin 1
         cCollide).addProd (-1) [cFork, cCollide])).eval e.loc
         = e.loc cSurv + e.loc cFork + e.loc cCollide
@@ -1531,7 +1637,8 @@ theorem carryA_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin m
       ∧ ((envAt t i).loc cCarryA = 1 ↔
           ((envAt t i).loc cSurv = 1 ∧ (envAt t i).loc cAnz = 1
             ∧ (envAt t i).loc (cOcc (occBase 0)) = 0)) :=
-  carry_of_sat hsat hc i hi cSa1 cCarryA cSurv cAnz (cOcc (occBase 0)) (by decide) (by decide)
+  carry_of_sat hsat hc i hi cSa1 cCarryA cSurv cAnz (cOcc (occBase 0))
+    (mem_carry_idx 2 0 (by decide)) (mem_carry_idx 2 1 (by decide))
     hsurv hnz hocc
 
 theorem carryB_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
@@ -1543,7 +1650,8 @@ theorem carryB_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin m
       ∧ ((envAt t i).loc cCarryB = 1 ↔
           ((envAt t i).loc cSurv = 1 ∧ (envAt t i).loc cBnz = 1
             ∧ (envAt t i).loc (cOcc (occBase 1)) = 0)) :=
-  carry_of_sat hsat hc i hi cSb1 cCarryB cSurv cBnz (cOcc (occBase 1)) (by decide) (by decide)
+  carry_of_sat hsat hc i hi cSb1 cCarryB cSurv cBnz (cOcc (occBase 1))
+    (mem_carry_idx 2 2 (by decide)) (mem_carry_idx 2 3 (by decide))
     hsurv hnz hocc
 
 theorem ftA_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
@@ -1559,8 +1667,11 @@ theorem ftA_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin madd
             ∧ (envAt t i).loc cSurv = 1 ∧ (envAt t i).loc (cOcc (occBase 1)) = 0
             ∧ (envAt t i).loc (cEqBit (eqBase 3)) = 0)) :=
   ft_of_sat hsat hc i hi cNBnz cNOccb cNEqba cFa1 cFa2 cFa3 cFtA (cEqBit (eqBase 2)) cBnz
-    (cOcc (occBase 1)) (cEqBit (eqBase 3)) cSurv (by decide) (by decide) (by decide) (by decide)
-    (by decide) (by decide) (by decide) hab hbnz hocc hba hsurv
+    (cOcc (occBase 1)) (cEqBit (eqBase 3)) cSurv
+    (mem_flowThrough_idx 2 0 (by decide)) (mem_flowThrough_idx 2 1 (by decide))
+    (mem_flowThrough_idx 2 2 (by decide)) (mem_flowThrough_idx 2 3 (by decide))
+    (mem_flowThrough_idx 2 4 (by decide)) (mem_flowThrough_idx 2 5 (by decide))
+    (mem_flowThrough_idx 2 6 (by decide)) hab hbnz hocc hba hsurv
 
 theorem ftB_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
     (hc : StepCanon t) (i : Nat) (hi : i + 1 < t.rows.length)
@@ -1575,8 +1686,11 @@ theorem ftB_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfin madd
             ∧ (envAt t i).loc cSurv = 1 ∧ (envAt t i).loc (cOcc (occBase 0)) = 0
             ∧ (envAt t i).loc (cEqBit (eqBase 2)) = 0)) :=
   ft_of_sat hsat hc i hi cNAnz cNOcca cNEqab cFb1 cFb2 cFb3 cFtB (cEqBit (eqBase 3)) cAnz
-    (cOcc (occBase 0)) (cEqBit (eqBase 2)) cSurv (by decide) (by decide) (by decide) (by decide)
-    (by decide) (by decide) (by decide) hba hanz hocc hab hsurv
+    (cOcc (occBase 0)) (cEqBit (eqBase 2)) cSurv
+    (mem_flowThrough_idx 2 7 (by decide)) (mem_flowThrough_idx 2 8 (by decide))
+    (mem_flowThrough_idx 2 9 (by decide)) (mem_flowThrough_idx 2 10 (by decide))
+    (mem_flowThrough_idx 2 11 (by decide)) (mem_flowThrough_idx 2 12 (by decide))
+    (mem_flowThrough_idx 2 13 (by decide)) hba hanz hocc hab hsurv
 
 /-! ## §5.8 — (2) R6: the `write_mid_witnessed` endpoints and the per-cell rewrite gate.
 
@@ -1713,10 +1827,10 @@ theorem writeCell_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
 byte-pinned list and its polynomial SHAPE discharged by `rfl` on the emitted head. -/
 example (hsat : Satisfied2 hash automataflResolveDesc minit mfin maddrs t)
     (i : Nat) (hi : i + 1 < t.rows.length) : True := by
-  have _h0 := writeCell_of_sat hsat i hi 0 0 0 (by decide) rfl
-  have _h1 := writeCell_of_sat hsat i hi 1 0 1 (by decide) rfl
-  have _h2 := writeCell_of_sat hsat i hi 2 1 0 (by decide) rfl
-  have _h3 := writeCell_of_sat hsat i hi 3 1 1 (by decide) rfl
+  have _h0 := writeCell_of_sat hsat i hi 0 0 0 (mem_resolve_of_mem_writeMid (wm_writeCell 2 0 (by decide))) rfl
+  have _h1 := writeCell_of_sat hsat i hi 1 0 1 (mem_resolve_of_mem_writeMid (wm_writeCell 2 1 (by decide))) rfl
+  have _h2 := writeCell_of_sat hsat i hi 2 1 0 (mem_resolve_of_mem_writeMid (wm_writeCell 2 2 (by decide))) rfl
+  have _h3 := writeCell_of_sat hsat i hi 3 1 1 (mem_resolve_of_mem_writeMid (wm_writeCell 2 3 (by decide))) rfl
   trivial
 
 end Selection
@@ -1888,22 +2002,36 @@ end IndicatorGlue
 /-! ## §6 — The remaining gate bundles, discharged by `decide` against the byte-pinned list. -/
 
 theorem eqGates_ff : EqCoordsGates (cFx (mvBase 0)) (cFy (mvBase 0)) (cFx (mvBase 1))
-    (cFy (mvBase 1)) (eqBase 0) := by
-  refine ⟨by decide, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ⟨by decide⟩⟩ <;> decide
+    (cFy (mvBase 1)) (eqBase 0) :=
+  ⟨mem_patternBit_idx 2 0 (by decide),
+   ⟨mem_patternBit_idx 2 1 (by decide), mem_patternBit_idx 2 2 (by decide), mem_patternBit_idx 2 3 (by decide), mem_patternBit_idx 2 4 (by decide), mem_patternBit_idx 2 5 (by decide), mem_patternBit_idx 2 6 (by decide), mem_patternBit_idx 2 7 (by decide), mem_patternBit_idx 2 8 (by decide), mem_patternBit_idx 2 9 (by decide), mem_patternBit_idx 2 10 (by decide), mem_patternBit_idx 2 11 (by decide)⟩,
+   ⟨mem_patternBit_idx 2 12 (by decide)⟩⟩
 theorem eqGates_tt : EqCoordsGates (cTx (mvBase 0)) (cTy (mvBase 0)) (cTx (mvBase 1))
-    (cTy (mvBase 1)) (eqBase 1) := by
-  refine ⟨by decide, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ⟨by decide⟩⟩ <;> decide
+    (cTy (mvBase 1)) (eqBase 1) :=
+  ⟨mem_patternBit_idx 2 13 (by decide),
+   ⟨mem_patternBit_idx 2 14 (by decide), mem_patternBit_idx 2 15 (by decide), mem_patternBit_idx 2 16 (by decide), mem_patternBit_idx 2 17 (by decide), mem_patternBit_idx 2 18 (by decide), mem_patternBit_idx 2 19 (by decide), mem_patternBit_idx 2 20 (by decide), mem_patternBit_idx 2 21 (by decide), mem_patternBit_idx 2 22 (by decide), mem_patternBit_idx 2 23 (by decide), mem_patternBit_idx 2 24 (by decide)⟩,
+   ⟨mem_patternBit_idx 2 25 (by decide)⟩⟩
 theorem eqGates_ab : EqCoordsGates (cTx (mvBase 0)) (cTy (mvBase 0)) (cFx (mvBase 1))
-    (cFy (mvBase 1)) (eqBase 2) := by
-  refine ⟨by decide, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ⟨by decide⟩⟩ <;> decide
+    (cFy (mvBase 1)) (eqBase 2) :=
+  ⟨mem_patternBit_idx 2 26 (by decide),
+   ⟨mem_patternBit_idx 2 27 (by decide), mem_patternBit_idx 2 28 (by decide), mem_patternBit_idx 2 29 (by decide), mem_patternBit_idx 2 30 (by decide), mem_patternBit_idx 2 31 (by decide), mem_patternBit_idx 2 32 (by decide), mem_patternBit_idx 2 33 (by decide), mem_patternBit_idx 2 34 (by decide), mem_patternBit_idx 2 35 (by decide), mem_patternBit_idx 2 36 (by decide), mem_patternBit_idx 2 37 (by decide)⟩,
+   ⟨mem_patternBit_idx 2 38 (by decide)⟩⟩
 theorem eqGates_ba : EqCoordsGates (cTx (mvBase 1)) (cTy (mvBase 1)) (cFx (mvBase 0))
-    (cFy (mvBase 0)) (eqBase 3) := by
-  refine ⟨by decide, ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ⟨by decide⟩⟩ <;> decide
+    (cFy (mvBase 0)) (eqBase 3) :=
+  ⟨mem_patternBit_idx 2 39 (by decide),
+   ⟨mem_patternBit_idx 2 40 (by decide), mem_patternBit_idx 2 41 (by decide), mem_patternBit_idx 2 42 (by decide), mem_patternBit_idx 2 43 (by decide), mem_patternBit_idx 2 44 (by decide), mem_patternBit_idx 2 45 (by decide), mem_patternBit_idx 2 46 (by decide), mem_patternBit_idx 2 47 (by decide), mem_patternBit_idx 2 48 (by decide), mem_patternBit_idx 2 49 (by decide), mem_patternBit_idx 2 50 (by decide)⟩,
+   ⟨mem_patternBit_idx 2 51 (by decide)⟩⟩
 
-theorem anzGates : Ge0Gates5 (cFp (mvBase 0)) cAnz (anzBit 0) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
-theorem bnzGates : Ge0Gates5 (cFp (mvBase 1)) cBnz (bnzBit 0) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+theorem anzGates : Ge0Gates5 (cFp (mvBase 0)) cAnz (anzBit 0) :=
+  ⟨mem_srcNonVac_idx 2 0 (by decide), mem_srcNonVac_idx 2 1 (by decide),
+   mem_srcNonVac_idx 2 2 (by decide), mem_srcNonVac_idx 2 3 (by decide),
+   mem_srcNonVac_idx 2 4 (by decide), mem_srcNonVac_idx 2 5 (by decide),
+   mem_srcNonVac_idx 2 6 (by decide)⟩
+theorem bnzGates : Ge0Gates5 (cFp (mvBase 1)) cBnz (bnzBit 0) :=
+  ⟨mem_srcNonVac_idx 2 7 (by decide), mem_srcNonVac_idx 2 8 (by decide),
+   mem_srcNonVac_idx 2 9 (by decide), mem_srcNonVac_idx 2 10 (by decide),
+   mem_srcNonVac_idx 2 11 (by decide), mem_srcNonVac_idx 2 12 (by decide),
+   mem_srcNonVac_idx 2 13 (by decide)⟩
 
 /-! ## §6.5 — THE ASSEMBLY (residual (iii), CLOSED): Leg R's capstone and THE WHOLE TURN. -/
 
@@ -2014,7 +2142,7 @@ theorem forkCollide_bool_of_sat (hsat : Satisfied2 hash automataflResolveDesc mi
       = e.loc (cEqBit (eqBase 0)) - e.loc (cEqBit (eqBase 0)) * e.loc (cEqBit (eqBase 1)) := by
     have hg := rgateH hsat i hi
       (h := ((Head.lin 1 cFork).addLin (-1) (cEqBit (eqBase 0))).addProd 1
-              [cEqBit (eqBase 0), cEqBit (eqBase 1)]) (by decide)
+              [cEqBit (eqBase 0), cEqBit (eqBase 1)]) (mem_selection_idx 2 0 (by decide))
     have hE : (headToExpr (((Head.lin 1 cFork).addLin (-1) (cEqBit (eqBase 0))).addProd 1
           [cEqBit (eqBase 0), cEqBit (eqBase 1)])).eval e.loc
         = e.loc cFork + (-1) * e.loc (cEqBit (eqBase 0))
@@ -2025,15 +2153,14 @@ theorem forkCollide_bool_of_sat (hsat : Satisfied2 hash automataflResolveDesc mi
       exact ⟨by norm_num, by norm_num⟩
   have hnff : e.loc cNeqFf = 1 - e.loc (cEqBit (eqBase 0)) := by
     have hg := rgateH hsat i hi
-      (h := ((Head.lin 1 cNeqFf).addLin 1 (cEqBit (eqBase 0))).addConst (-1)) (by decide)
+      (h := ((Head.lin 1 cNeqFf).addLin 1 (cEqBit (eqBase 0))).addConst (-1)) (mem_selection_idx 2 1 (by decide))
     have hE : (headToExpr (((Head.lin 1 cNeqFf).addLin 1 (cEqBit (eqBase 0))).addConst (-1))).eval
         e.loc = e.loc cNeqFf + e.loc (cEqBit (eqBase 0)) + (-1) := rfl
     rw [hE] at hg
     refine eq_of_modEq_canon (canon_loc hc i _) ?_ ((gate_modEq_iff (by ring)).mp hg)
     rcases hff with a | a <;> rw [a] <;> exact ⟨by norm_num, by norm_num⟩
   have hcol1 : e.loc cCol1 = e.loc (cEqBit (eqBase 1)) * e.loc cNeqFf := by
-    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCol1).addProd 1 [cEqBit (eqBase 1), cNeqFf])
-      (by decide)
+    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCol1).addProd 1 [cEqBit (eqBase 1), cNeqFf]) (mem_selection_idx 2 2 (by decide))
     have hE : (headToExpr ((Head.lin (-1) cCol1).addProd 1
         [cEqBit (eqBase 1), cNeqFf])).eval e.loc
         = (-1) * e.loc cCol1 + e.loc (cEqBit (eqBase 1)) * e.loc cNeqFf := rfl
@@ -2042,7 +2169,7 @@ theorem forkCollide_bool_of_sat (hsat : Satisfied2 hash automataflResolveDesc mi
     rcases hff with a | a <;> rcases htt with b | b <;> rw [hnff, a, b] <;>
       exact ⟨by norm_num, by norm_num⟩
   have hcol2 : e.loc cCol2 = e.loc cCol1 * e.loc cAnz := by
-    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCol2).addProd 1 [cCol1, cAnz]) (by decide)
+    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCol2).addProd 1 [cCol1, cAnz]) (mem_selection_idx 2 3 (by decide))
     have hE : (headToExpr ((Head.lin (-1) cCol2).addProd 1 [cCol1, cAnz])).eval e.loc
         = (-1) * e.loc cCol2 + e.loc cCol1 * e.loc cAnz := rfl
     rw [hE] at hg
@@ -2050,7 +2177,7 @@ theorem forkCollide_bool_of_sat (hsat : Satisfied2 hash automataflResolveDesc mi
     rcases hff with a | a <;> rcases htt with b | b <;> rcases hanz with c | c <;>
       rw [hcol1, hnff, a, b, c] <;> exact ⟨by norm_num, by norm_num⟩
   have hcollv : e.loc cCollide = e.loc cCol2 * e.loc cBnz := by
-    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCollide).addProd 1 [cCol2, cBnz]) (by decide)
+    have hg := rgateH hsat i hi (h := (Head.lin (-1) cCollide).addProd 1 [cCol2, cBnz]) (mem_selection_idx 2 4 (by decide))
     have hE : (headToExpr ((Head.lin (-1) cCollide).addProd 1 [cCol2, cBnz])).eval e.loc
         = (-1) * e.loc cCollide + e.loc cCol2 * e.loc cBnz := rfl
     rw [hE] at hg
@@ -2235,17 +2362,39 @@ theorem resolveFacts_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit 
       · exact hz
       · exact absurd (habC.mp ho) h4
   · intro x y hx hy
-    have h := srcIndicator_of_sat hsat hc i hi 0 x y hx hy (by decide) (by decide) (by decide)
-      (by decide) (by decide) (by decide) (by decide) (by decide)
+    have h := srcIndicator_of_sat hsat hc i hi 0 x y hx hy
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcRow_sel 2 0 0 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcRow_sel 2 0 1 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcRow_sum 2 0 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcRow_idx 2 0 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcCol_sel 2 0 0 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcCol_sel 2 0 1 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcCol_sum 2 0 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcCol_idx 2 0 (by decide))))
     rw [h]; rfl
   · intro x y hx hy
-    have h := srcIndicator_of_sat hsat hc i hi 1 x y hx hy (by decide) (by decide) (by decide)
-      (by decide) (by decide) (by decide) (by decide) (by decide)
+    have h := srcIndicator_of_sat hsat hc i hi 1 x y hx hy
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcRow_sel 2 1 0 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcRow_sel 2 1 1 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcRow_sum 2 1 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcRow_idx 2 1 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcCol_sel 2 1 0 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcCol_sel 2 1 1 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcCol_sum 2 1 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_srcCol_idx 2 1 (by decide))))
     rw [h]; rfl
   · intro x y hx hy
     have h := dstIndicator_of_sat hsat hc i hi 0 x y hx hy (cTx (mvBase 0)) (cTx (mvBase 1))
-      (cTy (mvBase 0)) (cTy (mvBase 1)) cFtA (by decide) (by decide) (by decide) (by decide)
-      (by decide) (by decide) (by decide) (by decide) htxa htxb htya htyb hftaB
+      (cTy (mvBase 0)) (cTy (mvBase 1)) cFtA
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstRow_sel 2 0 0 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstRow_sel 2 0 1 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstRow_sum 2 0 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstRow_idx 2 0 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstCol_sel 2 0 0 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstCol_sel 2 0 1 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstCol_sum 2 0 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstCol_idx 2 0 (by decide))))
+      htxa htxb htya htyb hftaB
     have hdest : (⟨((envAt t i).loc (cTx (mvBase 0))
                      + (envAt t i).loc cFtA * ((envAt t i).loc (cTx (mvBase 1)) - (envAt t i).loc (cTx (mvBase 0)))).toNat,
                    ((envAt t i).loc (cTy (mvBase 0))
@@ -2260,8 +2409,16 @@ theorem resolveFacts_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit 
     rw [h, hdest]
   · intro x y hx hy
     have h := dstIndicator_of_sat hsat hc i hi 1 x y hx hy (cTx (mvBase 1)) (cTx (mvBase 0))
-      (cTy (mvBase 1)) (cTy (mvBase 0)) cFtB (by decide) (by decide) (by decide) (by decide)
-      (by decide) (by decide) (by decide) (by decide) htxb htxa htyb htya hftbB
+      (cTy (mvBase 1)) (cTy (mvBase 0)) cFtB
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstRow_sel 2 1 0 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstRow_sel 2 1 1 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstRow_sum 2 1 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstRow_idx 2 1 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstCol_sel 2 1 0 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstCol_sel 2 1 1 (by decide) (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstCol_sum 2 1 (by decide))))
+      (mem_resolve_of_mem_writeMid (mem_writeMid_of_writeEndpoint (we_dstCol_idx 2 1 (by decide))))
+      htxb htxa htyb htya hftbB
     have hdest : (⟨((envAt t i).loc (cTx (mvBase 1))
                      + (envAt t i).loc cFtB * ((envAt t i).loc (cTx (mvBase 0)) - (envAt t i).loc (cTx (mvBase 1)))).toNat,
                    ((envAt t i).loc (cTy (mvBase 1))
@@ -2580,13 +2737,13 @@ theorem resolve_sat_imp_resolveMid
   have hy2 : y < 2 := by simpa [NN] using hy
   interval_cases x <;> interval_cases y
   · exact midCell_of_facts F 0 0 0 (by norm_num) (by norm_num) rfl
-      (writeCell_of_sat hsat i hi 0 0 0 (by decide) rfl)
+      (writeCell_of_sat hsat i hi 0 0 0 (mem_resolve_of_mem_writeMid (wm_writeCell 2 0 (by decide))) rfl)
   · exact midCell_of_facts F 0 1 2 (by norm_num) (by norm_num) rfl
-      (writeCell_of_sat hsat i hi 2 1 0 (by decide) rfl)
+      (writeCell_of_sat hsat i hi 2 1 0 (mem_resolve_of_mem_writeMid (wm_writeCell 2 2 (by decide))) rfl)
   · exact midCell_of_facts F 1 0 1 (by norm_num) (by norm_num) rfl
-      (writeCell_of_sat hsat i hi 1 0 1 (by decide) rfl)
+      (writeCell_of_sat hsat i hi 1 0 1 (mem_resolve_of_mem_writeMid (wm_writeCell 2 1 (by decide))) rfl)
   · exact midCell_of_facts F 1 1 3 (by norm_num) (by norm_num) rfl
-      (writeCell_of_sat hsat i hi 3 1 1 (by decide) rfl)
+      (writeCell_of_sat hsat i hi 3 1 1 (mem_resolve_of_mem_writeMid (wm_writeCell 2 3 (by decide))) rfl)
 
 end Capstone
 
