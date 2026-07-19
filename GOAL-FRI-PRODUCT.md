@@ -281,6 +281,17 @@ Lean challenger into emitted_verifier_full.go, re-derive the REAL fixture challe
 hole), differential-gate that a TAMPERED transcript REJECTS in the main circuit (the real soundness gain).
 Reality-gate discipline caught the standalone-vs-wired distinction (flagged + verified before believing).
 
+
+## ⚑ AIR-in-Lean CYCLE 6 — transcript stage built, NOT linked (hole STILL OPEN)
+txMeta.rederive (emitted_challenger.go) re-derives every challenge from the roots via the LEAN Poseidon2 +
+asserts squeeze==Tx-sample (tamper-rejects the STAGE). Deployed challenger got a default-preserving swappable
+perm hook. ⚠ LOAD-BEARING RESIDUAL: blocks 0-5 use DISJOINT cur/W challenges, NO AssertIsEqual to the Tx*
+re-derived ones → the verification is NOT bound to the transcript → the arbitrary-challenge hole is NOT closed
+end-to-end. The diff lane's "hole-closed" was a round-up (it honestly NAMED the residual though). Reality-gate
+caught it: diff lane re-read the control flow + found disjoint witnesses; I confirmed in source (emitted_challenger:156
+binds Tx*, not cur/W). CYCLE 7 = the LINK (assert cur/W challenges == Tx* re-derived) + differential-gate a
+CROSS-STAGE mismatch REJECTS in the main circuit (the real end-to-end soundness closure).
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
