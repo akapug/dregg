@@ -367,6 +367,16 @@ fixed reusably, every step a BLOCKED-not-faked or a verified-by-me gate. Standin
 (stage-bound); ζ openings bound to transcript not proven =evals (PCS reduction, seam #2); block-3 DAG
 (trusted-ref); FRI floor; ceremony. All named.
 
+
+## AIR-in-Lean CYCLE 12 — 3 block-path drift classes Lean-replayed; FRI-STAGE loop still hand-Go (named)
+Block expand() path: Merkle/FRI-fold/PoW+canonicity all swapped to replay committed ∀-proven Lean templates
+(MerkleEmit/FriFoldEmit/QueryPowEmit) via the cycle-11 witness-aware replayer. Canaries green (ζ CLOSED),
+real proof verifies (162s). ⚑ HONEST QUALIFIER (gate lane named it, I confirmed): "3-of-3" is BLOCK-level
+only — fri_verify_native.go:223-224,228 (the transcript-stage native FRI loop) STILL hand-authors Merkle +
+fold on the emit path when the stage is attached = a 4th live hand-Go site. Cycle 13 = convert it (same
+templates). Substrate-clean count: 6 block-path constraint sites Lean-replayed; remaining hand-Go on emit path
+= FRI-stage loop (cycle 13) + classes 4-6 (challenger adapter, openings-bind, quotient/DAG=seam#2, named).
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
