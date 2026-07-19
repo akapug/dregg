@@ -43,7 +43,7 @@ Environment=TELEGRAM_SESSION_DIR=%h/.local/state/dregg-telegram/sessions
 # all three services (without it this bot writes to its own sibling of
 # TELEGRAM_SESSION_DIR and cross-service correlate is dead on arrival). Per-process
 # filenames keep the shared dir contention-free. =off disables.
-Environment=DREGG_AUDIT_DIR=%h/.local/state/dregg/audit
+Environment=DREGG_AUDIT_DIR=%h/dregg-shared/audit
 WorkingDirectory=%h/dev/breadstuffs
 ExecStart=%h/dregg-telegram/dreggnet-telegram-bot
 Restart=always

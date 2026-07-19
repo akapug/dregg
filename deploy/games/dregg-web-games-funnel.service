@@ -75,7 +75,7 @@ Environment=DREGGNET_WEB_SESSION_DIR=%h/dregg-games/sessions
 # its own sibling `audit/` and cross-service correlate is dead on arrival. Files
 # are per-process (audit-DATE.<platform>-<pid>.NN.jsonl), so the shared dir never
 # contends. The games-funnel.env file may override; =off disables.
-Environment=DREGG_AUDIT_DIR=%h/.local/state/dregg/audit
+Environment=DREGG_AUDIT_DIR=%h/dregg-shared/audit
 WorkingDirectory=%h/dev/breadstuffs
 ExecStart=%h/dev/breadstuffs/target/release/dreggnet-web-server
 Restart=always
