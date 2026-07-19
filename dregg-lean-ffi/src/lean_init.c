@@ -153,6 +153,20 @@ extern lean_object *initialize_Dregg2_Dregg2_Storage_Deployed(uint8_t builtin);
 extern lean_object *dregg_storage_content_root(lean_object *input);
 #endif
 
+/* The @[export]ed Lean `String -> String` DEPLOYED CONSTRAINT evaluator
+ * (`Dregg2.Exec.DeployedConstraint.admitsFFI`): decodes the pure-constraint admission wire
+ * (oldPresent, nonce, the one heap key's old/new option, 16+16 register hex, then the constraint),
+ * runs the PROVEN `admits` over the DEPLOYED substrate (unsigned-256 field compares + the low-64
+ * counter lane), and returns `"0"` (admit) / `"1"` (violated) / `"2 <idx>"` (needsOld) /
+ * `"3 <idx>"` (badIndex). This is the ONE source of the pure `StateConstraint`/`HeapAtom` teeth —
+ * the collapse of the game-proof LARP-audit's parallel-disconnected Lean copy of `eval.rs`. GATED on
+ * DREGG_CONSTRAINT_ADMITS (the module is OUTSIDE the FFI closure; build.rs probes + defines it, and
+ * dregg_ffi_init runs its initializer). */
+#ifdef DREGG_CONSTRAINT_ADMITS
+extern lean_object *initialize_Dregg2_Dregg2_Exec_DeployedConstraint(uint8_t builtin);
+extern lean_object *dregg_constraint_admits(lean_object *input);
+#endif
+
 /* The @[export]ed Lean `String -> String` VERIFIED ML-DSA VERIFY CORE
  * (`Dregg2.Crypto.Fips204Verify.verifyFFI`): decodes the wire `"thi μ c̃ z h"`, runs the extracted,
  * spec-agreeing `verifyCore` (= `Fips204Spec.MlDsaParams.verifyB` at the deployed ML-DSA-65 parameters —
@@ -441,6 +455,18 @@ int dregg_ffi_init(void) {
     }
     lean_dec_ref(sres);
 #endif
+#ifdef DREGG_CONSTRAINT_ADMITS
+    /* The deployed-constraint evaluator module is OUTSIDE the FFI closure; initialize it explicitly so
+     * `dregg_constraint_admits` is callable. It imports NOTHING beyond core Lean (no Mathlib), so its
+     * initializer is self-contained and re-entrant-safe under Lean's init guards. */
+    lean_object *cares = initialize_Dregg2_Dregg2_Exec_DeployedConstraint(1);
+    if (!lean_io_result_is_ok(cares)) {
+        lean_io_result_show_error(cares);
+        lean_dec_ref(cares);
+        return 1;
+    }
+    lean_dec_ref(cares);
+#endif
 #if defined(DREGG_FIPS204_VERIFY) || defined(DREGG_FIPS204_VERIFY_REAL)
     /* The verified ML-DSA verify-core module is OUTSIDE the FFI closure; initialize it explicitly so
      * `dregg_fips204_verify` AND the full-byte `dregg_fips204_verify_real` (BRICK 8, same module) are
@@ -594,6 +620,28 @@ size_t dregg_storage_content_root_str(const char *in_utf8, char *out, size_t out
     }
     lean_object *in_obj = lean_mk_string(in_utf8);
     lean_object *res = dregg_storage_content_root(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+#endif
+
+#ifdef DREGG_CONSTRAINT_ADMITS
+/* dregg_constraint_admits_str — the C string bridge over the VERIFIED Lean `String -> String`
+ * deployed-constraint evaluator export (`Dregg2.Exec.DeployedConstraint.admitsFFI`). Input: the
+ * pure-constraint admission wire; output: `"0"` admit / `"1"` violated / `"2 <idx>"` needsOld /
+ * `"3 <idx>"` badIndex. Runs the PROVEN `admits` over the deployed substrate — the ONE source the
+ * deployed node's ConstraintOracle routes through. Same return contract as the bridges above. */
+size_t dregg_constraint_admits_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_constraint_admits(in_obj);
     const char *cstr = lean_string_cstr(res);
     size_t full = strlen(cstr);
     size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);

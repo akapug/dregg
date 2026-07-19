@@ -37,6 +37,30 @@ the model win predicate `Won`'s thresholds (`winGate_thresholds_match_Won`), the
 tooth sums EXACTLY the 8 card zones the model conserves, and the program has exactly one case per
 game method. The full admission-relation refinement (`program admits ↔ airPlay`) is the NAMED
 next step — it needs the substrate bridge, not more of this file.
+
+## ⚑ The referee SEMANTICS — where the deployed evaluator now lives (LARP-audit collapse)
+
+`docs/audit/GAME-PROOF-LARP-AUDIT.md` correctly flagged that the `Constraint.admits` /
+`HeapAtom.admits` / `CellProgram.admitsMethod` below were a HAND-AUTHORED Lean copy of the
+constraint teeth in `cell/src/program/eval.rs` that Rust never called — a PARALLEL-DISCONNECTED
+model that had already DIVERGED from the deployed evaluator (the `immutable` atom above). That
+disconnect is now closed on the SEMANTICS axis: the pure (context-free, witness-free) constraint
+teeth are AUTHORED ONCE, over the DEPLOYED substrate (`[FieldElement;16]` + heap, UNSIGNED-256
+field compares), in `Dregg2.Exec.DeployedConstraint.admits`, which is `@[export
+dregg_constraint_admits]`-ed and CALLED by the deployed node (`eval.rs`'s `evaluate_constraint_full`
+routes the subset through it via the `dregg_cell::program::ConstraintOracle` seam installed by
+`dregg-exec-lean`). The reality-gate canary
+(`dregg-lean-ffi/tests/deployed_constraint_probe.rs`,
+`exec-lean/tests/constraint_oracle_reality_gate.rs`) proves the deployed decision IS the Lean
+source; the differential gate (`exec-lean/tests/constraint_oracle_differential.rs`) pins Lean ==
+Rust across the subset.
+
+So the `admits` copy BELOW remains an honest LOCAL model at tug's SYMBOLIC (String-keyed counter)
+substrate — the substrate the game proofs are written over — NOT the deployed evaluator. Its
+agreement with the deployed `DeployedConstraint.admits` on the shared arms is what the differential
+gate checks; a full Lean refinement of this copy onto the deployed evaluator needs the
+String-counter ↔ 16-register allocation bridge (the second seam the audit named), and that remains
+NAMED, not claimed here.
 -/
 import Dregg2.Games.MultiwayTugAir
 import Mathlib.Tactic.FinCases
@@ -356,7 +380,18 @@ def HeapAtom.admits : HeapAtom → Option Nat → Option Nat → Bool
       match old, new with
       | some o, some n => decide (o ≤ n)
       | _, _ => false
-  | .immutable, old, new => decide (new = old)
+  -- ⚑ RECONCILED (game-proof LARP-audit divergence a): the DEPLOYED sound semantics is
+  -- `none ⇒ admit` (the first write is free — heap keys start absent, so this is the write that
+  -- ESTABLISHES the sentinel) and `some a ⇒ new = some a` (frozen thereafter). This is
+  -- `Dregg2.Exec.DeployedConstraint.heapAdmits .immutable` — the ONE source `eval.rs` calls. (The
+  -- old `decide (new = old)` refused the establishing write; harmless here because tug only ever
+  -- hits `immutable` post-genesis with `old = some 1`, but it was the audited divergence, so it is
+  -- reconciled at the copy too. The differential gate `constraint_oracle_differential` checks this
+  -- agreement on the deployed evaluator.)
+  | .immutable, old, new =>
+      match old with
+      | none => true
+      | some a => decide (new = some a)
   | .equals v, _old, new => decide (new = some v)
   | .deltaEquals d, old, new =>
       match old, new with

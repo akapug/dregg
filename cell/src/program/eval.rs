@@ -269,6 +269,19 @@ fn evaluate_constraint_full(
     meta: &TransitionMeta,
     witnesses: &WitnessBundle<'_>,
 ) -> Result<(), ProgramError> {
+    // ── The deployed-node CONSTRAINT ORACLE (game-proof LARP-audit collapse) ──
+    // When a Lean-backed oracle is installed (`dregg-node` via `dregg-exec-lean`), the PURE
+    // (context-free, witness-free) `StateConstraint`/`HeapAtom` subset's admission is COMPUTED BY the
+    // verified Lean `dregg_constraint_admits` (`Dregg2.Exec.DeployedConstraint.admits`) — the ONE
+    // source. `admits` returns `Some(decision)` for that subset and `None` for the context/witness
+    // variants below (which stay Rust-evaluated). No oracle installed (cell's own tests, wasm, the
+    // SP1 zkVM guest — none can link the archive) ⇒ the Rust guest-path evaluator below runs.
+    // See `super::oracle` for why this is a runtime seam and not a direct FFI call.
+    if let Some(oracle) = super::oracle::installed_oracle() {
+        if let Some(decision) = oracle.admits(constraint, new_state, old_state) {
+            return decision;
+        }
+    }
     match constraint {
         StateConstraint::FieldEquals { index, value } => {
             let idx = check_index(*index)?;

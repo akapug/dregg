@@ -47,10 +47,22 @@ construction (edit a rule here, re-emit, and the deployed game changes: the cana
 
 ## Honest scope
 
-* The theorems hold of the Lean `Exec` evaluator — the LAW-#1 semantics the Rust
-  evaluator mirrors (`cell/src/program/types.rs` doc-pins). The Rust-side agreement is
-  driven by the descent crate's executor tests (illegal turns are REAL
-  `WorldError::Refused`), not re-proven here.
+* The theorems hold of the Lean `Exec.RecordProgram` evaluator — a name-keyed record MODEL
+  of the referee. ⚑ `docs/audit/GAME-PROOF-LARP-AUDIT.md` correctly flagged that this is NOT the
+  evaluator `eval.rs` calls, and that it had DIVERGED from the deployed one: `Exec`'s field
+  compares (`affineLe`/`fieldGe`) are signed unbounded `Int`, whereas the deployed field is
+  UNSIGNED 256-bit (`eval.rs:2842`). The SEMANTICS axis of that disconnect is now closed at its
+  source: the pure (context-free, witness-free) constraint teeth are AUTHORED ONCE over the
+  DEPLOYED substrate (`[FieldElement;16]` + heap, UNSIGNED-256) in
+  `Dregg2.Exec.DeployedConstraint.admits`, `@[export dregg_constraint_admits]`-ed and CALLED by the
+  deployed node (`eval.rs`'s `evaluate_constraint_full` routes the subset through it via the
+  `dregg_cell::program::ConstraintOracle` seam installed by `dregg-exec-lean`; the reality-gate
+  canary in `dregg-lean-ffi`/`exec-lean` tests proves the deployed decision IS the Lean source, and
+  the differential gate pins Lean == Rust across the subset). These dungeon inversions remain over
+  the signed-`Int` `Exec` MODEL — their honest scope — and reaching the deployed unsigned evaluator
+  is the register-substrate refinement the audit named (NOT re-claimed here). The Rust-side agreement
+  the descent crate's executor tests exercise (illegal turns are REAL `WorldError::Refused`) is now
+  ALSO backed by the differential gate, not prose alone.
 * The per-relic custody ratchet (`monotonic` + `memberOf {home, CARRIED, BANKED}`) and
   the zone-counter conservation are BOTH enforced; the exact custody↔counter bijection
   (each loot flips EXACTLY the looted relic's code) is model-level (`Dungeon.lean`,

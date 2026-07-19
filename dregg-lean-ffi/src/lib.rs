@@ -323,6 +323,32 @@ pub fn shadow_decide_refines(wire: &str) -> Result<String, String> {
     lean_decide_refines(wire)
 }
 
+/// Whether the linked archive exports the verified DEPLOYED-CONSTRAINT evaluator
+/// (`dregg_constraint_admits`, the C-ABI entry over the PROVEN
+/// `Dregg2.Exec.DeployedConstraint.admitsFFI`). When false, the `ConstraintOracle` install
+/// (`dregg-exec-lean`) is unavailable and the pure-constraint admission stays on the Rust guest-path
+/// evaluator. Distinct from [`lean_available`] (the executor exports): a stale archive can have the
+/// executor but lack this evaluator.
+pub fn constraint_admits_available() -> bool {
+    ffi::constraint_admits_present() && lean_init_once().is_ok()
+}
+
+/// Run the verified DEPLOYED-CONSTRAINT evaluator `@[export] dregg_constraint_admits` (the PROVEN
+/// `Dregg2.Exec.DeployedConstraint.admits`, over the deployed `[FieldElement;16]`+heap substrate with
+/// UNSIGNED-256 field compares) over a wire-encoded `(constraint, old, new)` slice.
+///
+/// The wire grammar the export reads (single line, space-separated):
+///   `oldPresent nonce heapOldPresent heapOldHex heapNewPresent heapNewHex R0..R15 N0..N15 <constraint>`
+///   * out: `"0"` admit · `"1"` violated · `"2 <idx>"` needsOld · `"3 <idx>"` badIndex.
+///
+/// The deployed node's `ConstraintOracle` (installed by `dregg-exec-lean`) routes each pure-subset
+/// admission through this entry, so `cell/src/program/eval.rs` runs the verified Lean decision rather
+/// than a hand-authored Rust mirror. Requires the archive to export the evaluator; `Err` otherwise.
+pub fn shadow_constraint_admits(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    ffi::lean_constraint_admits(wire)
+}
+
 /// Whether the linked archive exports the extracted, Lean-verified ML-DSA verify core
 /// (`dregg_fips204_verify`, the C-ABI entry over `Dregg2.Crypto.Fips204Verify.verifyFFI` =
 /// `Fips204Spec.verifyB` at the deployed ML-DSA-65 parameters). When false, a caller must fall back to
@@ -924,6 +950,12 @@ mod ffi {
             out: *mut c_char,
             out_cap: usize,
         ) -> usize;
+        #[cfg(dregg_constraint_admits_present)]
+        fn dregg_constraint_admits_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
         #[cfg(dregg_fips204_verify_present)]
         fn dregg_fips204_verify_str(
             in_utf8: *const c_char,
@@ -1126,6 +1158,32 @@ mod ffi {
     #[cfg(not(dregg_decide_refines_present))]
     pub fn lean_decide_refines(_wire: &str) -> Result<String, String> {
         Err("dregg_decide_refines not exported by the linked archive (rebuild to enable)".into())
+    }
+
+    #[cfg(dregg_constraint_admits_present)]
+    pub fn constraint_admits_present() -> bool {
+        true
+    }
+
+    #[cfg(not(dregg_constraint_admits_present))]
+    pub fn constraint_admits_present() -> bool {
+        false
+    }
+
+    /// DEPLOYED CONSTRAINT EVALUATOR — run the PROVEN Lean `admits` over the deployed substrate.
+    /// Input: the pure-constraint admission wire; output `"0"`/`"1"`/`"2 <idx>"`/`"3 <idx>"`.
+    #[cfg(dregg_constraint_admits_present)]
+    pub fn lean_constraint_admits(wire: &str) -> Result<String, String> {
+        lean_string_bridge(
+            wire,
+            dregg_constraint_admits_str,
+            "dregg_constraint_admits_str",
+        )
+    }
+
+    #[cfg(not(dregg_constraint_admits_present))]
+    pub fn lean_constraint_admits(_wire: &str) -> Result<String, String> {
+        Err("dregg_constraint_admits not exported by the linked archive (rebuild to enable)".into())
     }
 
     /// STORAGE-IN-LEAN EXTRACTION — run the VERIFIED Lean content-root over the deployed Poseidon2.
@@ -1743,6 +1801,14 @@ mod ffi {
     }
 
     pub fn lean_decide_refines(_wire: &str) -> Result<String, String> {
+        Err("Lean static lib not linked".into())
+    }
+
+    pub fn constraint_admits_present() -> bool {
+        false
+    }
+
+    pub fn lean_constraint_admits(_wire: &str) -> Result<String, String> {
         Err("Lean static lib not linked".into())
     }
 

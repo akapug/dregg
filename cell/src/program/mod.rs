@@ -69,6 +69,7 @@ pub(crate) use crate::state::{CellState, FIELD_ZERO, FieldElement, STATE_SLOTS};
 mod collection;
 mod error;
 mod eval;
+mod oracle;
 mod types;
 mod view;
 
@@ -78,5 +79,6 @@ mod tests;
 pub use collection::*;
 pub use error::*;
 pub use eval::*;
+pub use oracle::*;
 pub use types::*;
 pub use view::*;

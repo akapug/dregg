@@ -339,6 +339,15 @@ fn build_dregg2_archive(
         // `Nat` ops): the Mathlib-heavy proofs that JUSTIFY the numbers live in the un-spliced
         // `Dregg2.Circuit.FriLedgerSound`, which pins each thin op to its modeled counterpart.
         "Dregg2.Circuit.FriLedger",
+        // DEPLOYED CONSTRAINT evaluator extraction (the game-proof LARP-audit collapse): the ONE Lean
+        // source for the pure (context-free, witness-free) `StateConstraint`/`HeapAtom` admission teeth
+        // over the DEPLOYED substrate (`@[export] dregg_constraint_admits` over `admitsFFI`), OUTSIDE
+        // the FFI closure — build it so its `.c` IR is emitted and the splice picks up the export.
+        // The deployed node's `ConstraintOracle` (installed via `dregg-exec-lean`) routes the per-
+        // constraint admission decision through this instead of a hand-authored Rust mirror; the two
+        // divergences the audit found (unsigned-256 fieldGe, first-write-free heap immutable) are
+        // reconciled here. Import-thin (core Lean only), so its initializer stays Mathlib-free.
+        "Dregg2.Exec.DeployedConstraint",
     ];
     let lake_status = Command::new("lake")
         .arg("build")
@@ -445,9 +454,21 @@ fn build_dregg2_archive(
             "cargo:warning=dregg-lean-ffi: compiling {} changed Dregg2 C facet(s) via leanc …",
             jobs.len()
         );
-        let ncpu = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
+        // Leanc parallelism. DEFAULT = the CPU count (warm-box behavior, unchanged). But each leanc
+        // over a big Mathlib-closure `.c` facet is memory-heavy, and a FRESH object cache compiles the
+        // WHOLE closure (~1500 facets) at once — on a loaded/low-RAM box (or when co-tenant Lean builds
+        // are already running) that OOM-kills leanc mid-splice, and build.rs then keeps the previous
+        // archive (a NEW export never lands). `DREGG_LEANC_JOBS` caps the pool so the splice survives
+        // memory pressure (e.g. `DREGG_LEANC_JOBS=2` on a busy dev box). Opt-in: unset ⇒ CPU count.
+        let ncpu = std::env::var("DREGG_LEANC_JOBS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            })
             .max(1);
         let failed = std::sync::atomic::AtomicBool::new(false);
         let jobs_ref = &jobs;
@@ -1519,6 +1540,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_holding_grant_weight_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_interchain_reached_consensus_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fri_ledger_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_constraint_admits_present)");
 
     // ── FAIL-LOUD GATE (DREGG_REQUIRE_LEAN) — see docs/BUILD-LEAN-LINKED-NODE.md ─────────────
     // A distribution / CI / validator build REFUSES a silent degrade to the marshal-only shell
@@ -1851,6 +1873,25 @@ fn main() {
     // `initialize_Dregg2_Dregg2_Exec_FFIDirect` explicitly (gated on DREGG_DIRECT in the C shim).
     // We probe + gate the Rust `extern "C"` block AND the C shim define so a stale archive lacking the
     // export degrades to the JSON path rather than dangling at link time.
+    // DEPLOYED CONSTRAINT evaluator extraction (`dregg_constraint_admits`, module
+    // `Dregg2.Exec.DeployedConstraint`, OUTSIDE the FFI import closure). Same splice/probe discipline:
+    // once the module is `lake build`-t (it is in `lake_targets` above) its object is spliced in and the
+    // symbol appears; until then the `dregg_constraint_admits_str` bridge is compiled out and the
+    // deployed `ConstraintOracle` install (dregg-exec-lean) is unavailable, so the pure-subset admission
+    // stays on the Rust guest-path evaluator. Rebuild the archive to route the deployed decision through
+    // the PROVEN Lean `admits`.
+    let constraint_admits_present = archive_exports(&build_archive, "dregg_constraint_admits");
+    if constraint_admits_present {
+        println!("cargo:rustc-cfg=dregg_constraint_admits_present");
+    } else {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_constraint_admits` — \
+             the verified deployed-constraint evaluator bridge is compiled out (the ConstraintOracle \
+             install is unavailable; the pure-subset admission stays on the Rust guest-path evaluator). \
+             Rebuild the archive (it splices Dregg2.Exec.DeployedConstraint) to run the PROVEN admits."
+        );
+    }
+
     let direct_present = archive_exports(&build_archive, "dregg_exec_full_forest_auth_direct");
     if direct_present {
         println!("cargo:rustc-cfg=dregg_direct_present");
@@ -2112,6 +2153,11 @@ fn main() {
     }
     if direct_present {
         shim.define("DREGG_DIRECT", None);
+    }
+    // DEPLOYED CONSTRAINT evaluator (own module `Dregg2.Exec.DeployedConstraint`), so
+    // DREGG_CONSTRAINT_ADMITS gates BOTH the per-export extern+bridge AND the module initializer.
+    if constraint_admits_present {
+        shim.define("DREGG_CONSTRAINT_ADMITS", None);
     }
     // We drive the link with `rustc-link-lib` / `rustc-link-search` directives, NOT
     // `rustc-link-arg`. WHY: with the package's `links = "dregg_lean"` key, build-script

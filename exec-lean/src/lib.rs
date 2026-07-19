@@ -21,6 +21,7 @@
 //! does not depend on this crate and keeps the no-op default. That dependency choice — not a feature
 //! flag — is what selects the verified shadow/gate executor.
 
+pub mod constraint_oracle;
 pub mod distributed_gates;
 pub mod lean_apply;
 pub mod lean_shadow;
@@ -37,6 +38,7 @@ use dregg_turn::turn::{Turn, TurnResult};
 
 pub use nullifier::{NullifierDoubleSpend, ShadowNullifierAccumulator};
 
+pub use constraint_oracle::{LeanConstraintOracle, register_constraint_oracle};
 pub use distributed_gates::{LeanDistributedGate, register_distributed_gates};
 pub use lean_apply::{
     ProducerOutcome, execute_via_lean, produce_via_lean, prof_outer_dump, profile_lean_phases,

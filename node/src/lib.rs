@@ -593,6 +593,16 @@ pub async fn run(cli: Cli) {
     // differential siblings decide.
     dregg_exec_lean::register_distributed_gates();
 
+    // Arm the verified-Lean CONSTRAINT ORACLE (game-proof LARP-audit collapse): route the deployed
+    // executor's pure-subset `StateConstraint`/`HeapAtom` admission through the PROVEN Lean
+    // `dregg_constraint_admits` (`Dregg2.Exec.DeployedConstraint.admits`) instead of `eval.rs`'s
+    // hand-authored Rust `match`. `dregg-cell`/`dregg-turn` cannot link the archive (wasm32 + SP1 zkVM
+    // guest), so this installs the Lean backend from `dregg-exec-lean` at native startup. When the
+    // archive lacks the export (stale seed), this is a no-op and the Rust guest-path evaluator decides.
+    if dregg_exec_lean::register_constraint_oracle() {
+        tracing::debug!("constraint oracle: verified Lean deployed-constraint evaluator installed");
+    }
+
     // Initialize tracing. Write to stderr so the MCP stdio subcommand (which
     // serves JSON-RPC on stdout) doesn't get corrupted by log lines.
     tracing_subscriber::fmt()
