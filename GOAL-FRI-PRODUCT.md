@@ -354,6 +354,19 @@ constrain them, not boundary-solve them) — a REUSABLE unlock for every gadget 
 Then the selector swap (+ retro Poseidon2/Merkle if they hand-alloc). The 8055470a6 hand-Go ζ-binding stands
 until the replayer can consume the Lean template.
 
+
+## ✅ AIR-in-Lean CYCLE 11 — SUBSTRATE FIXED: ζ Lean-authored end-to-end (VERIFIED-BY-ME)
+Reusable unlock: ReplayTemplateWithWitness allocates a template's free internal vars as secret witnesses +
+applies asserts as CONSTRAINTS (not definitions) — handles any gadget with range-checks/hints, not just
+selectors. bindBlockZeta:917 → replaySelectorsWitness (replay of Lean SelectorEmit), emit path has ZERO live
+computeStarkSelectorsNative (survives only on the deployed hand-Go lane + as KAT oracle). I RAN the canary
+(80.4s): ζ CLOSED, favorable-ζ forgery UNSAT, rejection attributable to the Lean-emitted replay. ζ is now
+bound AND Lean-authored. The gate lane's "honesty nuance" was honest-and-fine (the rule honored, not a gap).
+Cycles 9-11 arc: ζ over-claimed complete → canary proved it a live forgery → bound (Go drift) → substrate
+fixed reusably, every step a BLOCKED-not-faked or a verified-by-me gate. Standing residuals: FRI-batch-alpha
+(stage-bound); ζ openings bound to transcript not proven =evals (PCS reduction, seam #2); block-3 DAG
+(trusted-ref); FRI floor; ceremony. All named.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
