@@ -42,6 +42,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitPipelinedSendWide
 import Dregg2.Circuit.Emit.EffectVmEmitReceiptArchiveWide
 import Dregg2.Circuit.Emit.EffectVmEmitBurnRunnable
 import Dregg2.Circuit.Emit.EffectVmEmitSetFieldFullState
+import Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
 
 namespace Dregg2.Circuit.Emit.EffectVmFullStateTagsB
 
@@ -1433,5 +1434,176 @@ theorem setField_canary_clause :
 #assert_axioms setField_canary_clause
 
 end SetField
+
+/-! ## §J — bridgeMint (balance credit by the value param + nonce tick; canonical descriptor + envelope).
+
+Like setField, the deployed `bridgeMintRunnableSpec` places `BridgeMintRowCanon` in `isRow` (the engine's
+`build_isRow` cannot discharge it for abstract `hash` — the commit column is an unbounded hash output) AND
+pins the side-table carrier `sysRootsDigestCol = systemRootsDigest hash postRoots` in `decodeAfter` (which
+`decodeFull` never reads — vestigial for the `⟺`). We supply an equivalent soundness base
+(`bridgeMintRunnableSpecB`) — SAME wide descriptor + SAME `fullClause` — with the envelope relocated to
+`decodeAfter` and the vestigial carrier pin dropped (the witness carries the frozen-empty carrier `0`, as
+every other tag here does). Faithful re-partition; `decodeFull` still discharges via
+`bridgeMintGates_give_cellSpec` from BOTH `IsBridgeMintRow` and `BridgeMintRowCanon`. -/
+
+section BridgeMint
+
+open Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
+  (bridgeMintRowGates bridgeMintVmDescriptorWide bridgeMintWide_constraints_eq BridgeMintRowIntent
+   BridgeMintRowCanon bridgeMintVm_faithful RowEncodes CellBridgeMintSpec IsBridgeMintRow
+   BridgeMintFullClause bridgeMintGates_give_cellSpec gFieldFixAll widePreCell widePostCell wideRefRoots
+   bridgeMint_wide_clause_refutable)
+
+def bridgeMintPA (value : ℤ) : Nat → ℤ :=
+  fun i => if i = Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.param.BRIDGE_MINT_VALUE_LO then value else 0
+
+def bridgeMintRow (value : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) : VmRowEnv :=
+  mkRow Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.selBM.BRIDGE_MINT hash pre post (bridgeMintPA value)
+
+theorem bridgeMintRow_reads (value : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) :
+    WReads (bridgeMintRow value hash pre post) Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.selBM.BRIDGE_MINT hash pre post :=
+  mkRow_reads Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.selBM.BRIDGE_MINT (by decide) (by decide) hash pre post _
+
+theorem bridgeMintRow_val (value : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) :
+    (bridgeMintRow value hash pre post).loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.param.BRIDGE_MINT_VALUE_LO) = value := by
+  show (mkRow Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.selBM.BRIDGE_MINT hash pre post (bridgeMintPA value)).loc
+      (prmCol Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.param.BRIDGE_MINT_VALUE_LO) = value
+  rw [mkRow_locGe Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.selBM.BRIDGE_MINT hash pre post (bridgeMintPA value) _ (by decide)]
+  rfl
+
+theorem bridgeMintRow_encodes (value : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) :
+    RowEncodes (bridgeMintRow value hash pre post) pre value post := by
+  have h := bridgeMintRow_reads value hash pre post
+  exact ⟨h.sbLo, h.sbHi, h.sbN, h.sbF, h.sbCap, h.sbRes, h.sbC, bridgeMintRow_val value hash pre post,
+         h.saLo, h.saHi, h.saN, h.saF, h.saCap, h.saRes, h.saC, h.pOld, h.pNew⟩
+
+theorem bridgeMint_intent (value : ℤ) (hash : List ℤ → ℤ) (pre post : CellState)
+    (hspec : CellBridgeMintSpec pre value post) :
+    BridgeMintRowIntent (bridgeMintRow value hash pre post) := by
+  have h := bridgeMintRow_reads value hash pre post
+  have hval := bridgeMintRow_val value hash pre post
+  obtain ⟨hLo, hHi, hN, hFld, hCap, hRes⟩ := hspec
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [h.saLo, h.sbLo, hval]; exact hLo
+  · rw [h.saHi, h.sbHi]; exact hHi
+  · rw [h.saN, h.sbN]; exact hN
+  · rw [h.saCap, h.sbCap]; exact hCap
+  · rw [h.saRes, h.sbRes]; exact hRes
+  · intro i hi; rw [h.saF ⟨i, hi⟩, h.sbF ⟨i, hi⟩]; exact hFld ⟨i, hi⟩
+
+theorem bridgeMint_gates (value : ℤ) (hash : List ℤ → ℤ) (pre post : CellState)
+    (hcanon : BridgeMintRowCanon (bridgeMintRow value hash pre post))
+    (hspec : CellBridgeMintSpec pre value post)
+    (b : Bool) (c : VmConstraint) (hc : c ∈ bridgeMintRowGates) :
+    c.holdsVm (bridgeMintRow value hash pre post) b false := by
+  have h := bridgeMintRow_reads value hash pre post
+  have hg := (bridgeMintVm_faithful (bridgeMintRow value hash pre post) ⟨h.selHot, h.noopCold⟩ hcanon).mpr
+    (bridgeMint_intent value hash pre post hspec)
+  have hcc := hg c hc
+  simp only [bridgeMintRowGates, gFieldFixAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using hcc
+
+theorem bridgeMint_gates_vac (value : ℤ) (hash : List ℤ → ℤ) (pre post : CellState) (c : VmConstraint)
+    (hc : c ∈ bridgeMintRowGates) : c.holdsVm (bridgeMintRow value hash pre post) true true := by
+  simp only [bridgeMintRowGates, gFieldFixAll, List.mem_append, List.mem_cons, List.not_mem_nil,
+    or_false, List.mem_map, List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;> exact trivial
+
+/-- The soundness base with the envelope in `decodeAfter` + the vestigial carrier pin dropped (faithful
+re-partition; see the section header). Same wide descriptor + `fullClause`. -/
+def bridgeMintRunnableSpecB (value : ℤ) (preRoots : SysRoots) : RunnableFullStateSpec CellState where
+  descriptor := bridgeMintVmDescriptorWide
+  usesWideSites := rfl
+  isRow := IsBridgeMintRow
+  decodeAfter := fun env pre post postRoots =>
+    RowEncodes env pre value post ∧ BridgeMintRowCanon env ∧ postRoots = preRoots
+  fullClause := BridgeMintFullClause value preRoots
+  decodeFull := by
+    intro env pre post postRoots hrow hdec hgates
+    obtain ⟨henc, hcanon, hroots⟩ := hdec
+    exact ⟨bridgeMintGates_give_cellSpec env pre post value hrow hcanon henc
+            (bridgeMintWide_constraints_eq ▸ hgates), hroots⟩
+
+def bridgeMintAbsorbsTo (value : ℤ) (preRoots : SysRoots) (hash : List ℤ → ℤ) (pre post : CellState)
+    (sr : SysRoots) : Prop :=
+  cellAbsorbsTo preRoots hash pre post sr ∧ BridgeMintRowCanon (bridgeMintRow value hash pre post)
+
+def bridgeMintRunnableCompleteSpec (value : ℤ) (preRoots : SysRoots) :
+    RunnableFullStateCompleteSpec CellState where
+  toRunnableFullStateSpec := bridgeMintRunnableSpecB value preRoots
+  buildRow := fun hash pre post _sr => bridgeMintRow value hash pre post
+  absorbsTo := bridgeMintAbsorbsTo value preRoots
+  build_isRow := fun hash pre post _sr =>
+    ⟨(bridgeMintRow_reads value hash pre post).selHot, (bridgeMintRow_reads value hash pre post).noopCold⟩
+  build_decode := by
+    intro hash pre post sr habsorb
+    exact ⟨bridgeMintRow_encodes value hash pre post, habsorb.2, habsorb.1.2.1⟩
+  build_carrier := by
+    intro hash pre post sr habsorb
+    exact wreads_carrier (bridgeMintRow_reads value hash pre post) habsorb.1.1
+  build_active := by
+    intro hash pre post sr hclause habsorb c hc
+    obtain ⟨hspec, _⟩ := hclause
+    have hc2 : c ∈ bridgeMintRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.selBM.BRIDGE_MINT := hc
+    exact canonical_active (bridgeMintRow_reads value hash pre post) bridgeMintRowGates
+      (bridgeMint_gates value hash pre post habsorb.2 hspec true) c hc2
+  build_last := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ bridgeMintRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                  ++ selectorGates Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.selBM.BRIDGE_MINT := hc
+    exact canonical_last (bridgeMintRow_reads value hash pre post) bridgeMintRowGates
+      (bridgeMint_gates_vac value hash pre post) c hc2
+  build_ranges := by
+    intro hash pre post sr hclause habsorb c hc
+    have hc2 : c ∈ [(⟨saCol state.BALANCE_LO, 30⟩ : VmRange), ⟨saCol state.BALANCE_HI, 30⟩] := hc
+    exact wreads_ranges (bridgeMintRow_reads value hash pre post) habsorb.1.2.2.1 habsorb.1.2.2.2 c hc2
+  build_newcommit := by
+    intro hash pre post sr
+    exact wreads_newcommit (bridgeMintRow_reads value hash pre post)
+
+theorem bridgeMint_commit_iff (value : ℤ) (preRoots : SysRoots) (hash : List ℤ → ℤ)
+    (pre post : CellState) (sr : SysRoots) (habsorb : bridgeMintAbsorbsTo value preRoots hash pre post sr) :
+    (satisfiedVm hash (bridgeMintRunnableCompleteSpec value preRoots).descriptor
+        ((bridgeMintRunnableCompleteSpec value preRoots).buildRow hash pre post sr) true false
+      ∧ satisfiedVm hash (bridgeMintRunnableCompleteSpec value preRoots).descriptor
+        ((bridgeMintRunnableCompleteSpec value preRoots).buildRow hash pre post sr) true true)
+    ↔ ((bridgeMintRunnableCompleteSpec value preRoots).fullClause pre post sr
+        ∧ ((bridgeMintRunnableCompleteSpec value preRoots).buildRow hash pre post sr).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash ((bridgeMintRunnableCompleteSpec value preRoots).buildRow hash pre post sr)) :=
+  runnable_full_commit_iff (bridgeMintRunnableCompleteSpec value preRoots) hash pre post sr habsorb
+
+def bridgeMintDemoPost (hash : List ℤ → ℤ) : CellState :=
+  { widePostCell with commit := cellWideCommit hash widePostCell }
+
+/-- **`bridgeMint_commit_iff_demo` — the both-windows `⟺`, concretely (credit 30), UNDER the deployed
+range envelope** (`BridgeMintRowCanon`, an honest named hypothesis — the abstract-`hash` commit column is
+not field-bounded, exactly as for pipelinedSend / setField). -/
+theorem bridgeMint_commit_iff_demo (hash : List ℤ → ℤ)
+    (hcanon : BridgeMintRowCanon (bridgeMintRow 30 hash widePreCell (bridgeMintDemoPost hash))) :
+    (satisfiedVm hash (bridgeMintRunnableCompleteSpec 30 wideRefRoots).descriptor
+        (bridgeMintRow 30 hash widePreCell (bridgeMintDemoPost hash)) true false
+      ∧ satisfiedVm hash (bridgeMintRunnableCompleteSpec 30 wideRefRoots).descriptor
+        (bridgeMintRow 30 hash widePreCell (bridgeMintDemoPost hash)) true true)
+    ↔ ((bridgeMintRunnableCompleteSpec 30 wideRefRoots).fullClause widePreCell (bridgeMintDemoPost hash) wideRefRoots
+        ∧ (bridgeMintRow 30 hash widePreCell (bridgeMintDemoPost hash)).pub pi.NEW_COMMIT
+            = wireCommitOfRow hash (bridgeMintRow 30 hash widePreCell (bridgeMintDemoPost hash))) :=
+  bridgeMint_commit_iff 30 wideRefRoots hash widePreCell (bridgeMintDemoPost hash) wideRefRoots
+    ⟨⟨rfl, rfl, ⟨by norm_num [bridgeMintDemoPost, widePostCell], by norm_num [bridgeMintDemoPost, widePostCell]⟩,
+       ⟨by norm_num [bridgeMintDemoPost, widePostCell], by norm_num [bridgeMintDemoPost, widePostCell]⟩⟩, hcanon⟩
+
+theorem bridgeMint_canary_clause :
+    ¬ (bridgeMintRunnableCompleteSpec 30 wideRefRoots).fullClause widePreCell
+        { widePostCell with balLo := 999 } wideRefRoots :=
+  bridgeMint_wide_clause_refutable
+
+#assert_axioms bridgeMintRow_reads
+#assert_axioms bridgeMint_commit_iff
+#assert_axioms bridgeMint_commit_iff_demo
+#assert_axioms bridgeMint_canary_clause
+
+end BridgeMint
 
 end Dregg2.Circuit.Emit.EffectVmFullStateTagsB
