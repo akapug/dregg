@@ -124,20 +124,12 @@ pub mod sealed_governance;
 // `WireCodec` over it lives in `dregg-sdk-net`.
 pub mod embed;
 // The ONE source of truth for the dregg production domains (api / devnet / auth
-// / gateway / hosting / portal). Defaults to the `dregg.net` product family;
-// overridable via the `DREGG_*_DOMAIN` env vars. See `endpoints.rs`.
+// / gateway / hosting / portal). Defaults to the current `*.fg-goose.online`
+// values; overridable via the `DREGG_*_DOMAIN` env vars. See `endpoints.rs`.
 pub mod endpoints;
 pub mod error;
 pub mod explain;
-// EXPERIMENTAL (feature `fhegg`, default-on): the fhEgg PLAINTEXT uniform-price
-// clearing demo surface — clear-a-book + verify-a-settlement over
-// `fhegg_solver::wire`. NO FHE, NO privacy, demo-scale; the solver is untrusted
-// and the settlement is self-checkable (`verify_settlement` re-derives it all).
-// The STARK-VERIFIED clearing path (Cert-F, ring-3/market4) lives in
-// circuit-prove, not here — see the module doc before claiming anything.
 pub mod factories;
-#[cfg(feature = "fhegg")]
-pub mod fhegg;
 pub mod flashwell;
 pub mod full_turn_proof;
 pub mod hatchery_mint;
@@ -214,6 +206,9 @@ pub use turns::{AuthorizedTurn, TurnBuilder};
 // The identity, its runtime, and the effect vocabulary the verbs speak.
 pub use cipherclerk::{AgentCipherclerk, SignedTurn};
 pub use dregg_cell::{CellId, Ledger};
+/// Outcome of the SIGN-side twin, `install_verified_mldsa_sign_core_real` — re-exported for the same
+/// reason: a host can match on it without taking a direct `dregg-pq` dependency.
+pub use dregg_pq::MlDsaSignCoreRealInstall;
 /// The verify-core install outcome (from `dregg-pq`), re-exported so SDK-hosted processes can match on
 /// [`install_verified_mldsa_verify_core`]'s result without a direct `dregg-pq` dependency.
 pub use dregg_pq::MlDsaVerifyCoreInstall;
@@ -221,7 +216,8 @@ pub use dregg_turn::Effect;
 pub use dregg_types::{PublicKey, Signature};
 pub use error::SdkError;
 pub use runtime::{
-    AgentRuntime, SubAgent, executor_pubkey_from_seed, install_verified_mldsa_verify_core,
+    AgentRuntime, SubAgent, executor_pubkey_from_seed, install_verified_mldsa_sign_core_real,
+    install_verified_mldsa_verify_core,
 };
 
 // ORGAN 4 — THE GATEWAY surface: the delegated tool-access seam for a live
@@ -279,7 +275,7 @@ pub use cipherclerk::{
     DisclosureSpec, FactDisclosure, FactIndex, HeldToken, LocalDelegation, OwnedStealthNote,
     VerificationMode,
 };
-pub use dregg_token::{Attenuation, AuthRequest, AuthToken, BudgetSpec};
+pub use dregg_token::{Attenuation, AuthRequest, AuthToken};
 
 // The factory/polis plan builders (authorized by construction: they emit
 // effect lists that ride `runtime.turn().effects(..)` / the execute paths).

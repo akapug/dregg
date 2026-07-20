@@ -1,47 +1,71 @@
-//! GUARD C — the anti-illusion test: SIGN and KEM are still CRATE-AUTHORITATIVE in every deployed process.
+//! GUARD C — the anti-illusion test: the TOY seams are not on any deployed path, and this is
+//! precisely which primitives remain CRATE-AUTHORITATIVE.
 //!
-//! `dregg-pq` exposes three Lean-verify SEAMS that mirror the verify-side one — `install_lean_sign_core`,
-//! `install_lean_encaps_core`, `install_lean_decaps_core`. Unlike the verify seam (which the node installs
-//! and which `ml_dsa_verify` genuinely routes through — see `tests/mldsa_lean_verify.rs`), these three are
-//! TOY-SCOPED: the installed objects are the SCALAR (n=1) `signCore` / bit-`m` `encapsCore`/`decapsCore`,
-//! and NOTHING deployed consults them. The deployed byte-level signer (`MlDsaKey::sign` /
-//! `ml_dsa_sign_from_seed`) uses the `fips204` crate directly; the deployed hybrid KEM
-//! (`hybrid_kem::initiate` / `HybridResponder::finish`) uses the `ml-kem` + `x25519-dalek` crates directly.
+//! # What changed (and why this file was rewritten)
 //!
-//! This test DOCUMENTS-IN-CODE that the deployed sign/KEM paths do NOT route through the toy seams — so no
-//! reader can be left with the false impression that they behave like the verify seam. If someone later
-//! wires the deployed signer/KEM through these seams, THIS test breaks, forcing the honest-scope comments in
-//! `dregg-pq/src/{mldsa,hybrid_kem}.rs` to be updated in the same breath.
+//! This test used to assert something broader and now FALSE: that "the deployed sign/KEM paths are
+//! crate-authoritative". That was true when the only Lean seams for sign/KEM were TOY-scoped. It is
+//! no longer true. `dregg-pq` now carries REAL, full-byte cores for three of the four operations,
+//! and every archive-linked host installs them at startup:
 //!
-//! The assertions are BEHAVIORAL (the strongest form the audit asked for): we install the toy seams with a
-//! POISON payload, then drive the real deployed fns and assert their output is a CRATE-VALID cryptographic
-//! object that the poison seam could never have produced. NOTE: ML-DSA signing is HEDGED (randomized via
-//! `OsRng` — see `fips204::traits::try_sign`), and the hybrid handshake draws fresh ephemeral keys per run,
-//! so byte-equality across calls is NOT the right invariant. The right invariant is that the deployed output
-//! stays a valid, full-size crate object (verifies / round-trips) with a poison seam installed — which it
-//! could not if the seam were on the deployed path. No leanc/FFI link is needed for the assertions
-//! themselves — the toy seams are pure Rust closures.
+//!   * ML-DSA-65 VERIFY  — `install_verified_mldsa_verify_core`   (node, SDK, starbridge-v2, drorb)
+//!   * ML-DSA-65 SIGN    — `install_verified_mldsa_sign_core_real` (node, SDK, starbridge-v2, drorb)
+//!   * ML-KEM-768 KEM    — `install_verified_mlkem_{encaps,decaps}_core` (node, drorb)
+//!
+//! On an installed host `MlDsaKey::try_sign` PRODUCES its bytes from the extracted Lean
+//! `MlDsaSignReal.signCore` and never calls `fips204` at all — observed under gdb in the drorb
+//! dataplane, where a breakpoint on `dregg_fips204_sign_real_str` fires on every sign while one on
+//! `fips204::ml_dsa::sign_internal::<false, 6, 5, 48, 3309, 4032, 768>` never fires.
+//!
+//! # What this test still proves, and it is worth proving
+//!
+//! The TOY seams (`install_lean_sign_core`, `install_lean_encaps_core`, `install_lean_decaps_core`)
+//! carry SCALAR (n=1) / bit-`m` reductions, and NOTHING deployed consults them. They are easy to
+//! mistake for the real ones — the names differ by a `_real` suffix. So the assertions below install
+//! the toy seams with a POISON payload and drive the real deployed fns: if any deployed path ever
+//! got wired to a toy seam, this test breaks loudly.
+//!
+//! # What remains CRATE-AUTHORITATIVE (the honest residual)
+//!
+//! 1. **KEYGEN, both algorithms.** `MlDsaKey::from_ed25519_seed` calls `fips204`'s
+//!    `ml_dsa_65::KG::keygen_from_seed`, and `ml_kem768_keygen` calls `ml-kem`'s
+//!    `MlKem768::generate`. There is no verified keygen core and — note this — NO audit-gate guard
+//!    on either, so keygen does not abort and does not announce itself. This is the largest
+//!    remaining unaudited surface in this crate.
+//! 2. **The classical halves.** Ed25519 (`ed25519-dalek`) and X25519 (`x25519-dalek`).
+//! 3. **The combiner.** The X-Wing concat-KDF is Rust `hkdf`/`sha2`, not a verified object.
+//! 4. **Any host that never installs.** A process that skips the installs still has `fips204` /
+//!    `ml-kem` behind sign/verify/KEM — but since the audit gate landed it ABORTS on first use
+//!    rather than substituting silently. That is the gate's whole job.
+//!
+//! ★ Anything asserted here is about THIS test binary, which by construction cannot link the 546 MB
+//! Lean archive and therefore always runs the crate fallback. That is a property of the test
+//! binary, NOT a description of a deployed process. The deployed routing is proven where the
+//! archive is actually linked: `drorb crates/dataplane/src/pq.rs`
+//! (`verified_sign_core_is_the_deployed_sign_authority`) and `node/tests/mldsa_live_sign.rs`.
 
 use dregg_pq::{
     MlDsaKey, install_lean_decaps_core, install_lean_encaps_core, install_lean_sign_core,
     lean_sign_core_installed, ml_dsa_sign_from_seed, ml_dsa_verify,
 };
 
-/// EXPLICIT OPT-IN to the unaudited fallback, and why it is correct here.
+/// EXPLICIT OPT-IN to the unaudited fallback, and why it is still correct in THIS file.
 ///
-/// `dregg-pq`'s refusal gate (`src/audit.rs`) aborts any process that answers a PQ operation
-/// with the unaudited `fips204` / `ml-kem` crates unless this is set. This test is the
-/// canonical legitimate exception: its ENTIRE PURPOSE is to demonstrate that the deployed
-/// sign and KEM paths ARE crate-authoritative (that the toy seams are not consulted). It
-/// cannot make that demonstration without running the crate path, so it opts in and says so.
+/// `dregg-pq`'s refusal gate (`src/audit.rs`) aborts any process that answers a PQ operation with
+/// the unaudited `fips204` / `ml-kem` crates unless this is set. This test binary is the canonical
+/// legitimate exception, but for a NARROWER reason than it used to claim:
 ///
-/// ★ Note what that means, plainly: the property this test exists to document IS the hole the
-/// refusal gate exists to make loud. Both are correct — this test records today's true state,
-/// and the gate ensures no PROCESS reaches that state without a deliberate opt-in. See §P.4
-/// of the drorb crypto-TCB ledger for the sign core's single caller.
+/// It is not that "the deployed paths are crate-authoritative" — they are not, for sign, verify and
+/// KEM. It is that a `dregg-pq` INTEGRATION TEST cannot link the Lean archive, so no verified core
+/// can exist in this process. To demonstrate that the toy seams are off the deployed path at all,
+/// the deployed fns must actually run, and here they can only run on the crate fallback.
 ///
-/// SAFETY: set before this process performs any PQ operation. Each integration-test file runs
-/// in its own process, and `opt_in()` is the first statement of every test in this file.
+/// ★ This opt-in is scoped to a test binary that makes no assurance claim. Setting it in a serving
+/// process — or to quiet the gate rather than install a core — is the exact failure the gate exists
+/// to prevent.
+///
+/// SAFETY: set before this process performs any PQ operation. Each integration-test file runs in
+/// its own process, and `opt_in()` is the first statement of every test in this file.
 fn opt_in() {
     unsafe { std::env::set_var("DREGG_ALLOW_UNAUDITED_PQ", "1") };
 }
@@ -141,5 +165,63 @@ fn installing_the_toy_kem_seams_does_not_change_the_deployed_hybrid_kem() {
     assert_ne!(
         key_before, key_after,
         "each deployed handshake uses fresh OS entropy (we exercised the real path twice)"
+    );
+}
+
+/// THE SCOPE PIN, machine-checked: installing a TOY seam must never look like installing the REAL
+/// core. The two live in SEPARATE `OnceLock`s (`LEAN_SIGN_CORE` vs `LEAN_SIGN_CORE_REAL`) and the
+/// deployed `try_sign` reads ONLY the latter. The names differ by a `_real` suffix, so a future
+/// edit that crossed them would be easy to miss in review and catastrophic in effect: a process
+/// could report an installed sign core, satisfy the audit gate, and still be signing with `fips204`.
+///
+/// This also states the scope of THIS binary precisely: no REAL core is installed here (an
+/// integration test cannot link the Lean archive), which is exactly why `opt_in()` is needed above,
+/// and exactly why nothing in this file may be read as a claim about a deployed process.
+#[test]
+fn a_toy_seam_install_never_reports_the_real_core_as_installed() {
+    opt_in();
+
+    // Install the TOY sign seam (poison payload; `let _` because install is once-per-process).
+    let _ = install_lean_sign_core(|_wire| Some(String::from_utf8_lossy(POISON_SIG).into_owned()));
+    assert!(
+        lean_sign_core_installed(),
+        "the TOY sign seam is installed in this process"
+    );
+
+    // ...and the REAL core is STILL not installed. Separate cell, separate question.
+    assert!(
+        !dregg_pq::lean_sign_core_real_installed(),
+        "installing the TOY sign seam must NOT make the REAL sign core report as installed — they \
+         are distinct OnceLocks and only the REAL one is read by the deployed MlDsaKey::try_sign"
+    );
+
+    // The same separation on the KEM side.
+    let _ = install_lean_encaps_core(|_wire| Some("POISONED-ENCAPS-u v K".to_string()));
+    let _ = install_lean_decaps_core(|_wire| Some("POISONED-DECAPS-K".to_string()));
+    assert!(
+        !dregg_pq::mlkem_encaps_real_core_installed(),
+        "installing the TOY encaps seam must NOT make the REAL encaps core report as installed"
+    );
+    assert!(
+        !dregg_pq::mlkem_decaps_real_core_installed(),
+        "installing the TOY decaps seam must NOT make the REAL decaps core report as installed"
+    );
+
+    // KEYGEN: the honest residual, stated in code. There is no verified keygen core to install and
+    // no audit-gate guard on the keygen path, so BOTH keygens are answered by the unaudited crates
+    // here and in every deployed process. If a verified keygen core is ever added, this assertion
+    // is where the scope statement must be updated in the same breath.
+    let key = MlDsaKey::from_ed25519_seed(&SEED);
+    assert_eq!(
+        key.public_bytes().len(),
+        dregg_pq::ML_DSA_PK_LEN,
+        "ML-DSA keygen is `fips204`'s KG::keygen_from_seed — CRATE-AUTHORITATIVE, ungated, and the \
+         largest unaudited surface left in this crate"
+    );
+    let (ek, dk) = dregg_pq::ml_kem768_keygen();
+    assert_eq!(
+        (ek.len(), dk.len()),
+        (1184, 2400),
+        "ML-KEM keygen is `ml-kem`'s MlKem768::generate — likewise CRATE-AUTHORITATIVE and ungated"
     );
 }

@@ -1,6 +1,6 @@
 //! Starbridge v2 — the native dregg master interface.
 //!
-//! TWO BUILDS, ONE CODEBASE (see Cargo.toml + .docs-history-noclaude/STARBRIDGE-V2.md):
+//! TWO BUILDS, ONE CODEBASE (see Cargo.toml + docs/STARBRIDGE-V2.md):
 //!
 //!   * `native-full` (DEFAULT) — EMBEDS THE REAL VERIFIED EXECUTOR and runs a
 //!     LIVE LOCAL dregg world natively (`crate::world::World` over
@@ -13,7 +13,7 @@
 //!
 //!   * `sel4-thin` (`--no-default-features --features sel4-thin`) — the Lean-
 //!     free thin HTTP client / verifier path for the eventual seL4 component
-//!     (.docs-history-noclaude/SEL4-EMBEDDING.md). No embedded executor, no gpui: it speaks the
+//!     (docs/SEL4-EMBEDDING.md). No embedded executor, no gpui: it speaks the
 //!     node's wire contract (`client`/`model`) against a remote node.
 //!
 //! The `NodeClient::{Mock,Http}` surface (`client`/`model`) is compiled in BOTH
@@ -93,6 +93,37 @@ fn main() {
                 "ML-DSA verify: the linked Lean archive does NOT export the real verify core — \
                  starbridge-v2's ML-DSA verify falls back to the `fips204` crate (a valid FIPS-204 \
                  verify, but NOT the Lean-verified authority). Rebuild against a HEAD-matching archive."
+            ),
+        }
+    }
+
+    // — ML-DSA SIGN: route this process's SIGNING through the Lean-verified core ———————————————
+    // The sign-side twin of the verify install above; it closes the other half of the same hole.
+    // starbridge-v2 does not call `MlDsaKey::sign` in its own src, but it signs TRANSITIVELY
+    // through the dregg libraries it embeds: captp handoff receipts, cell-crypto capability
+    // proofs, token revocations, turn. Every one of those was answered by the UNAUDITED `fips204`
+    // crate here. With dregg-pq's audit gate live that is no longer merely undisclosed — the first
+    // such sign ABORTS the process. Installing the verified core is the fix; setting
+    // DREGG_ALLOW_UNAUDITED_PQ would be the exact failure the gate exists to prevent.
+    //
+    // WARNING: on the installed path signing is DETERMINISTIC (`rnd = 0`, the FIPS 204
+    // deterministic variant — spec-valid); the crate fallback was hedged/randomized.
+    #[cfg(feature = "embedded-executor")]
+    {
+        use dregg_sdk::MlDsaSignCoreRealInstall as S;
+        match dregg_sdk::install_verified_mldsa_sign_core_real() {
+            S::Installed => eprintln!(
+                "ML-DSA sign: verified Lean REAL sign core installed — the extracted full-byte \
+                 `MlDsaSignReal.signCore` is now the PRODUCER behind `dregg_pq::MlDsaKey::sign` \
+                 (captp handoff, cell-crypto, token, turn) for this process; the `fips204` crate \
+                 is out of starbridge-v2's SIGN TCB. Signing is now DETERMINISTIC (rnd=0)."
+            ),
+            S::AlreadyInstalled => {}
+            S::ExportAbsent => eprintln!(
+                "ML-DSA sign: the linked Lean archive does NOT export the real sign core — NO \
+                 verified sign core is installed, so any ML-DSA sign this process reaches will be \
+                 REFUSED by dregg-pq's audit gate (process abort). Rebuild against a HEAD-matching \
+                 archive."
             ),
         }
     }

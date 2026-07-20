@@ -17,7 +17,6 @@ use dregg_turn::{
     Effect, TokenKeyRef, Turn, TurnExecutor, TurnReceipt, TurnResult, action::symbol,
 };
 use dregg_types::PublicKey;
-use zeroize::Zeroizing;
 
 use crate::cipherclerk::{AgentCipherclerk, HeldToken};
 use crate::error::SdkError;
@@ -74,6 +73,62 @@ pub fn install_verified_mldsa_verify_core() -> dregg_pq::MlDsaVerifyCoreInstall 
         dregg_lean_ffi::fips204_verify_real_core_available,
         |w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok(),
     )
+}
+
+/// Install the Lean-verified REAL, FULL-BYTE ML-DSA-65 SIGN core as the PRODUCER behind the deployed
+/// byte-level signer `dregg_pq::MlDsaKey::sign` / `ml_dsa_sign_from_seed` for THIS process — taking the
+/// `fips204` crate out of the SDK-hosted process's SIGN TCB.
+///
+/// The sign-side twin of [`install_verified_mldsa_verify_core`], and it closes the SAME hole on the other
+/// half: an SDK-hosted process does not sign in 'sdk/src` directly, but it signs TRANSITIVELY through the
+/// dregg libraries it hosts — `captp/src/handoff.rs` (handoff receipts), `cell-crypto/src/capability_proof.rs`,
+/// `token/src/revocation.rs`, and `turn/src/pq.rs` all reach `MlDsaKey`. Every one of those was crate-
+/// authoritative here. With `dregg-pq's audit gate live, they are worse than crate-authoritative: the first
+/// such sign ABORTS the process unless a verified core is installed.
+///
+/// Same shared install the node performs (`dregg_pq::install_verified_mldsa_sign_core_real`), injecting the
+/// two `dregg-lean-ffi` archive symbols; idempotent and once-per-process.
+///
+/// WARNING: on the installed path the signer is DETERMINISTIC (`rnd = 0`, the FIPS 204 deterministic
+/// variant — spec-valid), where the crate fallback is hedged/randomized.
+///
+/// Gated on `fips204_sign_real_core_available()`, and deliberately NOT fatal on `ExportAbsent` — unlike the
+/// `drorb` dataplane (which asserts, because it is a single serving binary that always links the archive),
+/// the SDK is also built for `no-lean-link` wasm/zkvm targets that have no archive to export from. Bricking
+/// those is not the tradeoff here; the audit gate still refuses to SIGN unaudited at the point of use.
+pub fn install_verified_mldsa_sign_core_real() -> dregg_pq::MlDsaSignCoreRealInstall {
+    dregg_pq::install_verified_mldsa_sign_core_real(
+        dregg_lean_ffi::fips204_sign_real_core_available,
+        |w| dregg_lean_ffi::shadow_fips204_sign_real(w).ok(),
+    )
+}
+
+/// Perform the once-per-process SIGN-core install at SDK agent-runtime startup, logging the outcome once.
+fn ensure_verified_mldsa_sign_core_installed() {
+    use dregg_pq::MlDsaSignCoreRealInstall as S;
+    use std::sync::Once;
+    static LOGGED: Once = Once::new();
+    let outcome = install_verified_mldsa_sign_core_real();
+    LOGGED.call_once(|| match outcome {
+        S::Installed => tracing::info!(
+            "ML-DSA sign: verified Lean REAL sign core installed at SDK agent-runtime startup — the \
+             extracted full-byte `MlDsaSignReal.signCore` is now the PRODUCER behind \
+             `dregg_pq::MlDsaKey::sign` for this process (captp handoff receipts, cell-crypto capability \
+             proofs, token revocations, turn); the `fips204` crate is out of the SDK-hosted SIGN TCB. \
+             Signing is now DETERMINISTIC (rnd=0, the FIPS 204 deterministic variant)."
+        ),
+        S::AlreadyInstalled => tracing::debug!(
+            "ML-DSA sign: a verified Lean REAL sign core was already installed this process (install is \
+             once-per-process) — the `fips204` crate remains out of the SDK-hosted SIGN TCB"
+        ),
+        S::ExportAbsent => tracing::warn!(
+            "ML-DSA sign: the linked Lean archive does NOT export the real sign core \
+             (`fips204_sign_real_core_available()` is false) — NO verified sign core is installed, so any \
+             ML-DSA sign this process reaches will be REFUSED by dregg-pq's audit gate (process abort) \
+             unless DREGG_ALLOW_UNAUDITED_PQ=1. Rebuild against a HEAD-matching archive to route sign \
+             through Lean."
+        ),
+    });
 }
 
 /// Perform the once-per-process verify-core install at SDK agent-runtime startup, logging the outcome once.
@@ -209,45 +264,7 @@ fn mint_subagent_cap_token(
     sub_cell: CellId,
     methods: &[&str],
 ) -> Result<(Vec<u8>, [u8; 32]), SdkError> {
-    mint_subagent_cap_token_with_keypair(sub_cell, methods, biscuit_auth::KeyPair::new())
-}
-
-/// DETERMINISTIC twin of [`mint_subagent_cap_token`]: mint the worker's
-/// capability biscuit under an issuer keypair rebuilt from `issuer_seed`
-/// instead of a fresh random one. Same credential shape, same executor trust
-/// anchor — the ONLY difference is that the same seed reproduces the same
-/// issuer across process restarts, so a credential minted in an earlier epoch
-/// still verifies against the recreated cell's `verification_key`.
-///
-/// # Security contract
-///
-/// `issuer_seed` IS the issuer's ed25519 private key. The caller must derive it
-/// from an already-custodied secret with strict domain separation (e.g.
-/// `blake3::derive_key("app.component.biscuit-issuer.vN", root_secret)`), must
-/// never reuse it for any other key role, and must never persist the derived
-/// seed or the issuer private key — only the custodied root secret.
-fn mint_subagent_cap_token_seeded(
-    sub_cell: CellId,
-    methods: &[&str],
-    issuer_seed: &[u8; 32],
-) -> Result<(Vec<u8>, [u8; 32]), SdkError> {
-    let private =
-        biscuit_auth::PrivateKey::from_bytes(issuer_seed, biscuit_auth::Algorithm::Ed25519)
-            .map_err(|e| {
-                SdkError::MissingKey(format!(
-                    "issuer seed is not a valid biscuit ed25519 private key: {e}"
-                ))
-            })?;
-    mint_subagent_cap_token_with_keypair(sub_cell, methods, biscuit_auth::KeyPair::from(&private))
-}
-
-/// Shared body for [`mint_subagent_cap_token`] / [`mint_subagent_cap_token_seeded`]:
-/// mint the worker's `service(sub_cell, method)` biscuit under `kp`.
-fn mint_subagent_cap_token_with_keypair(
-    sub_cell: CellId,
-    methods: &[&str],
-    kp: biscuit_auth::KeyPair,
-) -> Result<(Vec<u8>, [u8; 32]), SdkError> {
+    let kp = biscuit_auth::KeyPair::new();
     let issuer: [u8; 32] = kp
         .public()
         .to_bytes()
@@ -366,6 +383,7 @@ impl AgentRuntime {
         // Lean-verified core (idempotent, once-per-process) — see
         // [`ensure_verified_mldsa_verify_core_installed`].
         ensure_verified_mldsa_verify_core_installed();
+        ensure_verified_mldsa_sign_core_installed();
         let cell_id;
         let public_key;
         {
@@ -420,6 +438,7 @@ impl AgentRuntime {
     ) -> Self {
         // Same once-per-process verify-core install as `new` (this is an independent construction path).
         ensure_verified_mldsa_verify_core_installed();
+        ensure_verified_mldsa_sign_core_installed();
         let cell_id = cipherclerk
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -527,12 +546,6 @@ impl AgentRuntime {
     /// verification. Must match the federation id used to sign actions.
     pub fn set_local_federation_id(&mut self, id: [u8; 32]) {
         self.executor.set_local_federation_id(id);
-    }
-
-    /// The federation id the embedded executor verifies action signatures
-    /// against (see [`Self::set_local_federation_id`]).
-    pub fn local_federation_id(&self) -> [u8; 32] {
-        self.executor.local_federation_id
     }
 
     /// Set the block height the embedded executor evaluates time-gated
@@ -645,34 +658,24 @@ impl AgentRuntime {
     /// Sign `unsigned` with this runtime's cipherclerk key over the
     /// canonical federation-bound signing message. The authorization field
     /// of the input is ignored (zeroed for the message) and replaced with a
-    /// real `Authorization::HybridSignature` — this is the ONLY way an action
+    /// real `Authorization::Signature` — this is the ONLY way an action
     /// leaves the runtime.
-    ///
-    /// HYBRID (ed25519 + ML-DSA-65): the runtime signer routes through the
-    /// cipherclerk's [`AgentCipherclerk::sign_action_hybrid`] path — the SAME
-    /// seed-derived keys (the ML-DSA half from the ed25519 secret seed via
-    /// `MlDsaTurnKey::from_ed25519_seed`) and the SAME canonical signing
-    /// message (`TurnExecutor::compute_signing_message`, authorization zeroed
-    /// to `Unchecked`) the SDK cipherclerk uses. This makes every AgentRuntime
-    /// turn carry the post-quantum half, so the runtime path is `require_pq`-
-    /// acceptable rather than a live classical-only producer.
-    ///
-    /// `turn_nonce` must be the nonce the submitted turn will carry
-    /// (`dregg-action-sig-v3` binds it into the signing message): the
-    /// runtime's own counter for agent turns
-    /// ([`Self::next_agent_turn_nonce`]), or the CELL's on-ledger replay
-    /// counter for cell-agent turns (`execute_as`).
-    pub(crate) fn sign_action_for_runtime(&self, unsigned: Action, turn_nonce: u64) -> Action {
-        self.cipherclerk
+    pub(crate) fn sign_action_for_runtime(&self, unsigned: Action) -> Action {
+        let unsigned = Action {
+            authorization: Authorization::Unchecked,
+            ..unsigned
+        };
+        let message =
+            TurnExecutor::compute_signing_message(&unsigned, &self.executor.local_federation_id);
+        let sig = self
+            .cipherclerk
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .sign_action_hybrid(unsigned, &self.executor.local_federation_id, turn_nonce)
-    }
-
-    /// The nonce the next AGENT turn will be submitted under — the value
-    /// `submit_signed_action_as_agent` draws from the runtime counter.
-    pub(crate) fn next_agent_turn_nonce(&self) -> u64 {
-        *self.nonce.lock().unwrap()
+            .sign_bytes(&message);
+        Action {
+            authorization: Authorization::from_sig_bytes(sig.0),
+            ..unsigned
+        }
     }
 
     /// Submit a SIGNED root action as an ordinary agent turn: this agent
@@ -817,10 +820,11 @@ impl AgentRuntime {
     #[must_use = "dropping the TurnReceipt silently discards proof of execution"]
     pub fn execute(&self, effects: Vec<Effect>) -> Result<TurnReceipt, SdkError> {
         // Sign before acquiring the ledger lock since signing is pure.
-        let action = self.sign_action_for_runtime(
-            raw::unsigned_action_named(self.cell_id, "execute", effects),
-            self.next_agent_turn_nonce(),
-        );
+        let action = self.sign_action_for_runtime(raw::unsigned_action_named(
+            self.cell_id,
+            "execute",
+            effects,
+        ));
         self.submit_signed_action_as_agent(action, 10_000)
     }
 
@@ -849,23 +853,8 @@ impl AgentRuntime {
         effects: Vec<Effect>,
         fee: u64,
     ) -> Result<TurnReceipt, SdkError> {
-        // The signature binds the turn nonce (`dregg-action-sig-v3`), and a
-        // cell-agent turn rides the CELL's on-ledger replay counter — read it
-        // fresh, sign over it, then submit (which re-reads the same counter).
-        let turn_nonce = {
-            let ledger = self.ledger.lock().unwrap();
-            ledger
-                .get(&cell)
-                .ok_or(SdkError::Turn(dregg_turn::TurnError::CellNotFound {
-                    id: cell,
-                }))?
-                .state
-                .nonce()
-        };
-        let action = self.sign_action_for_runtime(
-            raw::unsigned_action_named(cell, "execute", effects),
-            turn_nonce,
-        );
+        let action =
+            self.sign_action_for_runtime(raw::unsigned_action_named(cell, "execute", effects));
         self.submit_signed_action_as_cell(cell, action, fee)
     }
 
@@ -886,10 +875,8 @@ impl AgentRuntime {
         target: CellId,
         effects: Vec<Effect>,
     ) -> Result<TurnReceipt, SdkError> {
-        let action = self.sign_action_for_runtime(
-            raw::unsigned_action_named(target, "execute", effects),
-            self.next_agent_turn_nonce(),
-        );
+        let action =
+            self.sign_action_for_runtime(raw::unsigned_action_named(target, "execute", effects));
         self.submit_signed_action_as_agent(action, 10_000)
     }
 
@@ -995,74 +982,8 @@ impl AgentRuntime {
         token: &HeldToken,
         allowed_methods: &[&str],
     ) -> Result<SubAgent, SdkError> {
-        // Fresh random identity + fresh random biscuit issuer (the pre-existing
-        // behavior, byte-for-byte).
-        self.spawn_sub_agent_scoped_with(
-            restrictions,
-            token,
-            allowed_methods,
-            AgentCipherclerk::new(),
-            None,
-        )
-    }
-
-    /// DETERMINISTIC twin of [`Self::spawn_sub_agent_scoped`]: rebuild the
-    /// worker's committed identity from seeds instead of fresh randomness.
-    ///
-    /// `worker_seed` is the worker cipherclerk's ed25519 signing key
-    /// ([`AgentCipherclerk::from_key_bytes`]) — it fixes the worker's public key
-    /// and therefore its [`CellId`] in this runtime's domain. `issuer_seed` is
-    /// the biscuit issuer's ed25519 private key — it fixes the issuer public key
-    /// recorded as the worker cell's `verification_key` (the executor's trust
-    /// anchor for the worker's capability credential). Calling this again with
-    /// the same seeds — even on a FRESH runtime and ledger after a process
-    /// restart — reproduces the same worker cell id and the same
-    /// `verification_key`, so a capability credential minted in an earlier
-    /// epoch still verifies against the recreated cell.
-    ///
-    /// # Security contract
-    ///
-    /// Both seeds are PRIVATE KEYS. The caller must derive them from an
-    /// already-custodied secret with strict domain separation (e.g.
-    /// `blake3::derive_key("app.component.worker-key.vN", root_secret)` /
-    /// `".biscuit-issuer.vN"`), must use distinct domains for the two seeds,
-    /// and must never persist the derived seeds or the issuer private key —
-    /// only the custodied root secret. The seeds are zeroized here after use.
-    ///
-    /// Pair the seeds one-to-one: the worker cell insert is idempotent, so
-    /// spawning the same `worker_seed` into the same ledger again keeps the
-    /// FIRST recorded `verification_key` — a second spawn under a different
-    /// `issuer_seed` would mint a credential the executor then refuses.
-    pub fn spawn_sub_agent_scoped_seeded(
-        &self,
-        restrictions: &Attenuation,
-        token: &HeldToken,
-        allowed_methods: &[&str],
-        worker_seed: [u8; 32],
-        issuer_seed: [u8; 32],
-    ) -> Result<SubAgent, SdkError> {
-        let sub_cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(worker_seed));
-        let issuer_seed = Zeroizing::new(issuer_seed);
-        self.spawn_sub_agent_scoped_with(
-            restrictions,
-            token,
-            allowed_methods,
-            sub_cclerk,
-            Some(&issuer_seed),
-        )
-    }
-
-    /// Shared spawn body: everything after worker-identity/issuer selection is
-    /// identical between the random ([`Self::spawn_sub_agent_scoped`]) and
-    /// seeded ([`Self::spawn_sub_agent_scoped_seeded`]) paths.
-    fn spawn_sub_agent_scoped_with(
-        &self,
-        restrictions: &Attenuation,
-        token: &HeldToken,
-        allowed_methods: &[&str],
-        mut sub_cclerk: AgentCipherclerk,
-        issuer_seed: Option<&[u8; 32]>,
-    ) -> Result<SubAgent, SdkError> {
+        // Create a new cipherclerk for the sub-agent.
+        let mut sub_cclerk = AgentCipherclerk::new();
         let sub_pk = sub_cclerk.public_key();
 
         // The delegated (narration) HeldToken must carry at least one caveat —
@@ -1152,10 +1073,7 @@ impl AgentRuntime {
         // `Authorization::Token`, so the EXECUTOR's `verify_token_authorization`
         // — not an out-of-band `cap.verify()` — is the real admission gate.
         let federation_id = self.executor.local_federation_id;
-        let (cap_token, cap_issuer) = match issuer_seed {
-            None => mint_subagent_cap_token(sub_cell_id, allowed_methods)?,
-            Some(seed) => mint_subagent_cap_token_seeded(sub_cell_id, allowed_methods, seed)?,
-        };
+        let (cap_token, cap_issuer) = mint_subagent_cap_token(sub_cell_id, allowed_methods)?;
         let cap_methods: Vec<String> = allowed_methods.iter().map(|m| m.to_string()).collect();
 
         // Create the sub-agent's cell in the ledger, recording the biscuit
@@ -1467,13 +1385,6 @@ impl SubAgent {
         &self.cap_token
     }
 
-    /// The biscuit issuer public key the worker's `cap_token` is signed under —
-    /// the same key recorded (blake3-hashed) as the worker cell's
-    /// `verification_key`, the executor's trust anchor for this credential.
-    pub fn cap_issuer(&self) -> [u8; 32] {
-        self.cap_issuer
-    }
-
     /// The method verbs the worker's capability credential grants (diagnostic;
     /// the authoritative scope is the biscuit's `service(...)` grants, enforced
     /// by the executor).
@@ -1645,100 +1556,5 @@ impl SubAgent {
     /// Get the sub-agent's current nonce.
     pub fn nonce(&self) -> u64 {
         *self.nonce.lock().unwrap()
-    }
-}
-
-#[cfg(test)]
-mod runtime_signer_hybrid_tests {
-    //! The runtime signer (`sign_action_for_runtime`) is the ONLY way an action
-    //! leaves an [`AgentRuntime`]. These tests pin that it now emits a HYBRID
-    //! authorization (ed25519 + ML-DSA-65) — the same seed-derived key and
-    //! canonical signing message the SDK cipherclerk uses — so an AgentRuntime
-    //! turn carries the post-quantum half and is `require_pq`-acceptable. This
-    //! closes the runtime's live CLASSICAL producer that blocked global
-    //! `require_pq`.
-    use super::*;
-    use crate::cipherclerk::AgentCipherclerk;
-    use dregg_turn::Effect;
-
-    fn runtime(domain: &str) -> AgentRuntime {
-        AgentRuntime::new_simple(AgentCipherclerk::new(), domain)
-    }
-
-    /// The runtime signer emits `Authorization::HybridSignature` with a NON-empty
-    /// ML-DSA half, over the SAME canonical `compute_signing_message` (both halves
-    /// verify), and the derived PQ pubkey is carried for a self-contained verifier.
-    #[test]
-    fn runtime_signer_emits_verifiable_hybrid_authorization() {
-        let rt = runtime("runtime-hybrid-emit");
-        let unsigned = raw::unsigned_action_named(
-            rt.cell_id(),
-            "execute",
-            vec![Effect::IncrementNonce { cell: rt.cell_id() }],
-        );
-        let turn_nonce = rt.next_agent_turn_nonce();
-        let signed = rt.sign_action_for_runtime(unsigned, turn_nonce);
-
-        let (ed25519, ml_dsa, ml_dsa_pk) = match &signed.authorization {
-            Authorization::HybridSignature {
-                ed25519,
-                ml_dsa,
-                ml_dsa_pk,
-            } => (*ed25519, ml_dsa.clone(), ml_dsa_pk.clone()),
-            other => panic!("runtime signer must emit HybridSignature, got {other:?}"),
-        };
-
-        // Both halves cover the SAME canonical message the runtime signs over.
-        let zeroed = Action {
-            authorization: Authorization::Unchecked,
-            ..signed.clone()
-        };
-        let msg = TurnExecutor::compute_signing_message(
-            &zeroed,
-            &rt.executor.local_federation_id,
-            turn_nonce,
-        );
-        let pk = rt
-            .cipherclerk
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .public_key();
-        assert!(
-            pk.verify(&msg, &crate::Signature(ed25519)),
-            "ed25519 half must verify against the runtime identity"
-        );
-        assert!(!ml_dsa.is_empty(), "the runtime always signs the PQ half");
-        assert_eq!(ml_dsa_pk.len(), dregg_turn::pq::ML_DSA_PK_LEN);
-        assert!(
-            dregg_turn::pq::ml_dsa_verify(&ml_dsa_pk, &msg, &ml_dsa),
-            "ML-DSA half must verify against the carried pubkey"
-        );
-    }
-
-    /// An AgentRuntime turn commits with `require_pq` OFF (the rollout default) —
-    /// the hybrid change preserves existing runtime semantics.
-    #[test]
-    fn runtime_turn_commits_with_require_pq_off() {
-        let rt = runtime("runtime-hybrid-off");
-        assert!(!rt.executor.require_pq());
-        let receipt = rt
-            .execute(vec![Effect::IncrementNonce { cell: rt.cell_id() }])
-            .expect("runtime turn must commit at require_pq=off");
-        assert_eq!(receipt.action_count, 1);
-    }
-
-    /// KEY require_pq gate: with `require_pq` FORCED ON on the runtime's executor,
-    /// an AgentRuntime turn is now ACCEPTED (it carries the ML-DSA half). Before
-    /// the hybrid flip the runtime emitted a classical-only `Signature`, which the
-    /// executor REJECTS under `require_pq=on` — so this is the blocker being lifted.
-    #[test]
-    fn runtime_turn_accepted_under_require_pq_on() {
-        let rt = runtime("runtime-hybrid-on");
-        rt.executor.set_require_pq(true);
-        assert!(rt.executor.require_pq());
-        let receipt = rt
-            .execute(vec![Effect::IncrementNonce { cell: rt.cell_id() }])
-            .expect("hybrid runtime turn MUST be accepted under require_pq=on");
-        assert_eq!(receipt.action_count, 1);
     }
 }
