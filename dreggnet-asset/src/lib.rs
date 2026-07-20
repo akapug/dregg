@@ -537,6 +537,87 @@ impl AssetWorld {
         }
     }
 
+    /// Build an executor-independent staging image of this asset world.
+    ///
+    /// The clone reproduces every note descriptor, live/spent bit, holder
+    /// identity, lineage, and revocation in fresh embedded executors. It is
+    /// intentionally a *state* clone rather than a receipt-history clone: prior
+    /// per-holder receipt chains are not copied, while every subsequently staged
+    /// transfer produces a new real executor receipt in the detached image.
+    /// This is the process-local transaction substrate used by composed market
+    /// settlement; dropping the image cannot mutate the source world.
+    pub fn detached_state_clone(&self) -> Self {
+        let mut staged = Self::new();
+        for label in self.holders.keys() {
+            staged.ensure_holder(label);
+        }
+        staged.revoked = self.revoked.clone();
+        for (asset, versions) in &self.lineages {
+            let mut staged_versions = Vec::with_capacity(versions.len());
+            for version in versions {
+                staged.ensure_holder(&version.holder);
+                let cell = staged.holders[&version.holder].install_note(
+                    &version.desc,
+                    &staged.slots,
+                    &staged.program,
+                );
+                debug_assert_eq!(cell, version.cell);
+                if self.holders[&version.holder].is_spent(version.cell, &self.slots) {
+                    staged.holders[&version.holder]
+                        .exec
+                        .with_ledger_mut(|ledger| {
+                            ledger
+                                .get_mut(&cell)
+                                .expect("the detached note was installed")
+                                .state
+                                .set_field(staged.slots.spent as usize, field_from_u64(1));
+                        });
+                }
+                staged_versions.push(version.clone());
+            }
+            staged.lineages.insert(*asset, staged_versions);
+        }
+        staged
+    }
+
+    /// Canonical process-local audit digest of every economically relevant
+    /// asset-world state item. HashMap iteration is sorted before hashing.
+    pub fn state_audit_digest(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("dreggnet-asset/state-audit/v1");
+        let mut holders = self.holders.keys().collect::<Vec<_>>();
+        holders.sort();
+        hasher.update(&(holders.len() as u64).to_be_bytes());
+        for label in holders {
+            hasher.update(&(label.len() as u64).to_be_bytes());
+            hasher.update(label.as_bytes());
+            hasher.update(&self.holders[label].pubkey());
+        }
+        let mut assets = self.lineages.iter().collect::<Vec<_>>();
+        assets.sort_by_key(|(asset, _)| **asset);
+        hasher.update(&(assets.len() as u64).to_be_bytes());
+        for (asset, versions) in assets {
+            hasher.update(asset);
+            hasher.update(&(versions.len() as u64).to_be_bytes());
+            for version in versions {
+                hasher.update(&(version.holder.len() as u64).to_be_bytes());
+                hasher.update(version.holder.as_bytes());
+                hasher.update(version.cell.as_bytes());
+                hasher.update(&version.desc.asset_id);
+                hasher.update(&version.desc.minter);
+                hasher.update(&version.desc.owner);
+                hasher.update(&version.desc.prev);
+                hasher.update(&version.desc.serial.to_be_bytes());
+                hasher.update(&version.desc.trait_root);
+                hasher.update(&[version.desc.soulbound]);
+                hasher.update(&[
+                    self.holders[&version.holder].is_spent(version.cell, &self.slots) as u8,
+                ]);
+            }
+            hasher.update(&[self.revoked.contains(asset) as u8]);
+        }
+        *hasher.finalize().as_bytes()
+    }
+
     fn ensure_holder(&mut self, label: &str) {
         self.holders
             .entry(label.to_string())

@@ -61,6 +61,9 @@ pub mod host;
 /// the unbounded pre-lifecycle behavior. See [`lifecycle`].
 pub mod lifecycle;
 pub mod mock;
+/// Transport-bearing deos affordances: one opaque binary operation descriptor
+/// and execution shape shared by every frontend adapter.
+pub mod operation;
 /// THE OVERWORLD OFFERING — a player traverses a REGION of universes, the map opening as they
 /// honestly clear each dungeon. Travel to a dungeon is a real region-cell turn REFUSED unless its
 /// prerequisite is verified-cleared; clearing a dungeon (a genuine, replay-verified WIN) unlocks the
@@ -93,10 +96,15 @@ pub mod session;
 /// consumer exists; rung 2 (browser/device-held keys) feeds this same verifier. See [`signed`].
 pub mod signed;
 
-pub use host::{HostError, OfferingHost, OfferingInfo, ResumeError};
+pub use host::{HostError, HostOperationError, OfferingHost, OfferingInfo, ResumeError};
 pub use lifecycle::{Clock, ManualClock, PolicyRefusal, SessionPolicy, SweepReport, SystemClock};
+pub use operation::{
+    BinaryOperationDescriptor, BinaryOperationError, BinaryOperationReceipt,
+    BinaryOperationReplayMaterial,
+};
 pub use resume::{
-    FileResumeStore, InMemoryResumeStore, LoggedMove, SessionMoveLog, SessionResumeStore,
+    FileResumeStore, InMemoryResumeStore, LoggedBinaryOperation, LoggedMove, SessionMoveLog,
+    SessionResumeStore,
 };
 pub use signed::{
     Attribution, SignedAction, SignedError, TurnSigner, signing_message, verify_signed,
@@ -590,6 +598,89 @@ pub trait Offering {
     /// surface, one for the buttons, both keyed to who is looking.
     fn actions_for(&self, session: &Self::Session, _viewer: &DreggIdentity) -> Vec<Action> {
         self.actions(session)
+    }
+
+    /// Discover transport-bearing operations on this live session.  These are
+    /// deos affordances like [`Action`], but their input is a canonical owning
+    /// byte object rather than a small `{turn, arg}` pair.
+    fn binary_operations(&self, _session: &Self::Session) -> Vec<BinaryOperationDescriptor> {
+        Vec::new()
+    }
+
+    /// Select a canonical, explicitly disclosed restart representation for an
+    /// opaque operation request. The host calls this before mutation. `None`
+    /// means the operation is intentionally ephemeral and is therefore refused
+    /// when a durable resume store is attached; a durable host never silently
+    /// loses an opaque state transition.
+    ///
+    /// The default declines persistence. An implementation must never return
+    /// raw request bytes merely because they are available: it owns the privacy
+    /// decision and should return only material known safe for durable storage.
+    fn binary_operation_replay_material(
+        &self,
+        _session: &Self::Session,
+        name: &str,
+        _payload: &[u8],
+    ) -> Result<Option<BinaryOperationReplayMaterial>, BinaryOperationError> {
+        if self
+            .binary_operations(_session)
+            .iter()
+            .any(|descriptor| descriptor.name == name)
+        {
+            Ok(None)
+        } else {
+            Err(BinaryOperationError::UnknownOperation(name.to_string()))
+        }
+    }
+
+    /// Revalidate a journaled safe representation and its disclosure before
+    /// restoration. The default is suitable for canonical-request material: it
+    /// asks the current offering policy to select the material again and
+    /// requires byte-for-byte equality. A typed snapshot overrides this with
+    /// its own decoder and state binding.
+    fn validate_binary_operation_replay_material(
+        &self,
+        session: &Self::Session,
+        name: &str,
+        material: &BinaryOperationReplayMaterial,
+    ) -> Result<(), BinaryOperationError> {
+        match self.binary_operation_replay_material(session, name, &material.bytes)? {
+            Some(expected) if expected == *material => Ok(()),
+            Some(_) => Err(BinaryOperationError::Refused(
+                "journaled replay material or disclosure differs from current offering policy"
+                    .to_string(),
+            )),
+            None => Err(BinaryOperationError::Refused(
+                "offering no longer authorizes durable replay for this operation".to_string(),
+            )),
+        }
+    }
+
+    /// Apply one transport-bearing operation to this live session.  Frontends
+    /// authenticate/attribute `actor` and enforce the descriptor's byte/media
+    /// limits; the concrete offering remains the sole decoder and state mutator.
+    fn invoke_binary_operation(
+        &self,
+        _session: &mut Self::Session,
+        name: &str,
+        _payload: &[u8],
+        _actor: DreggIdentity,
+    ) -> Result<BinaryOperationReceipt, BinaryOperationError> {
+        Err(BinaryOperationError::UnknownOperation(name.to_string()))
+    }
+
+    /// Restore one successfully journaled operation from its offering-selected
+    /// replay material. The default feeds those canonical bytes through the
+    /// same decoder/verifier/mutator as the live invocation; offerings with a
+    /// smaller typed snapshot may override this method.
+    fn restore_binary_operation(
+        &self,
+        session: &mut Self::Session,
+        name: &str,
+        replay_material: &[u8],
+        actor: DreggIdentity,
+    ) -> Result<BinaryOperationReceipt, BinaryOperationError> {
+        self.invoke_binary_operation(session, name, replay_material, actor)
     }
 
     /// **Does this offering's per-viewer projection reveal PRIVATE state?** — the declared

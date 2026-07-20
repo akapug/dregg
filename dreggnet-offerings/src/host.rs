@@ -36,11 +36,12 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::lifecycle::{Clock, PolicyRefusal, SessionPolicy, SweepReport, quota_key};
-use crate::resume::{SessionMoveLog, SessionResumeStore};
+use crate::resume::{LoggedBinaryOperation, SessionMoveLog, SessionResumeStore};
 use crate::signed::{Attribution, SignedAction, SignedError, verify_signed};
 use crate::{
-    Action, CollectiveDecision, DreggIdentity, Offering, OfferingError, Outcome, RunCost,
-    SessionConfig, SessionId, Surface, VerifyReport,
+    Action, BinaryOperationDescriptor, BinaryOperationError, BinaryOperationReceipt,
+    BinaryOperationReplayMaterial, CollectiveDecision, DreggIdentity, Offering, OfferingError,
+    Outcome, RunCost, SessionConfig, SessionId, Surface, VerifyReport,
 };
 
 /// A **catalog entry** — one registered offering's public identity + its live-session count, for a
@@ -96,6 +97,31 @@ pub enum HostError {
     },
 }
 
+/// A routing or concrete-offering refusal for a transport-bearing operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostOperationError {
+    /// No offering is registered under this key.
+    UnknownOffering(String),
+    /// No live session exists under the addressed offering/session pair.
+    UnknownSession { key: String, id: SessionId },
+    /// The concrete offering rejected the operation.
+    Operation(BinaryOperationError),
+}
+
+impl std::fmt::Display for HostOperationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownOffering(key) => write!(f, "no offering registered under key {key:?}"),
+            Self::UnknownSession { key, id } => {
+                write!(f, "no live session {:?} under offering {key:?}", id.0)
+            }
+            Self::Operation(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for HostOperationError {}
+
 impl std::fmt::Display for HostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -139,6 +165,14 @@ pub enum ResumeError {
         /// The executor's reason for refusing it.
         reason: String,
     },
+    /// A journaled opaque operation failed its integrity check, concrete
+    /// verification, deterministic restoration, or public-receipt comparison.
+    OperationRefused {
+        /// The 0-based index into [`SessionMoveLog::operations`].
+        index: usize,
+        /// Public refusal reason. Replay material itself is never formatted.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for ResumeError {
@@ -155,6 +189,11 @@ impl std::fmt::Display for ResumeError {
                 f,
                 "resume refused: logged move #{index} did not land on re-drive ({reason}) — \
                  the log is tampered"
+            ),
+            ResumeError::OperationRefused { index, reason } => write!(
+                f,
+                "resume refused: journaled operation #{index} did not restore ({reason}) — \
+                 the operation journal is tampered or its verifier policy changed"
             ),
         }
     }
@@ -208,6 +247,38 @@ trait OfferingSlot {
     fn verify(&self, id: &SessionId) -> Option<VerifyReport>;
     /// What `input` would cost in session `id` (`None` if absent).
     fn price(&self, id: &SessionId, input: &Action) -> Option<RunCost>;
+    /// Transport-bearing affordances published by this live session.
+    fn binary_operations(&self, id: &SessionId) -> Option<Vec<BinaryOperationDescriptor>>;
+    /// Ask the concrete offering for an explicitly safe restart representation.
+    fn binary_operation_replay_material(
+        &self,
+        id: &SessionId,
+        name: &str,
+        payload: &[u8],
+    ) -> Option<Result<Option<BinaryOperationReplayMaterial>, BinaryOperationError>>;
+    /// Revalidate retained replay bytes/disclosure against current policy.
+    fn validate_binary_operation_replay_material(
+        &self,
+        id: &SessionId,
+        name: &str,
+        material: &BinaryOperationReplayMaterial,
+    ) -> Option<Result<(), BinaryOperationError>>;
+    /// Apply one opaque operation to this live session.
+    fn invoke_binary_operation(
+        &mut self,
+        id: &SessionId,
+        name: &str,
+        payload: &[u8],
+        actor: DreggIdentity,
+    ) -> Option<Result<BinaryOperationReceipt, BinaryOperationError>>;
+    /// Restore a journaled operation from offering-selected safe material.
+    fn restore_binary_operation(
+        &mut self,
+        id: &SessionId,
+        name: &str,
+        replay_material: &[u8],
+        actor: DreggIdentity,
+    ) -> Option<Result<BinaryOperationReceipt, BinaryOperationError>>;
 }
 
 /// **The concrete slot** — an [`Offering`] `O` and its live `O::Session`s, keyed by [`SessionId`].
@@ -301,6 +372,65 @@ impl<O: Offering> OfferingSlot for Hosted<O> {
         }
         Some(self.offering.price(input))
     }
+
+    fn binary_operations(&self, id: &SessionId) -> Option<Vec<BinaryOperationDescriptor>> {
+        let session = self.sessions.get(id)?;
+        Some(self.offering.binary_operations(session))
+    }
+
+    fn binary_operation_replay_material(
+        &self,
+        id: &SessionId,
+        name: &str,
+        payload: &[u8],
+    ) -> Option<Result<Option<BinaryOperationReplayMaterial>, BinaryOperationError>> {
+        let session = self.sessions.get(id)?;
+        Some(
+            self.offering
+                .binary_operation_replay_material(session, name, payload),
+        )
+    }
+
+    fn validate_binary_operation_replay_material(
+        &self,
+        id: &SessionId,
+        name: &str,
+        material: &BinaryOperationReplayMaterial,
+    ) -> Option<Result<(), BinaryOperationError>> {
+        let session = self.sessions.get(id)?;
+        Some(
+            self.offering
+                .validate_binary_operation_replay_material(session, name, material),
+        )
+    }
+
+    fn invoke_binary_operation(
+        &mut self,
+        id: &SessionId,
+        name: &str,
+        payload: &[u8],
+        actor: DreggIdentity,
+    ) -> Option<Result<BinaryOperationReceipt, BinaryOperationError>> {
+        let session = self.sessions.get_mut(id)?;
+        Some(
+            self.offering
+                .invoke_binary_operation(session, name, payload, actor),
+        )
+    }
+
+    fn restore_binary_operation(
+        &mut self,
+        id: &SessionId,
+        name: &str,
+        replay_material: &[u8],
+        actor: DreggIdentity,
+    ) -> Option<Result<BinaryOperationReceipt, BinaryOperationError>> {
+        let session = self.sessions.get_mut(id)?;
+        Some(
+            self.offering
+                .restore_binary_operation(session, name, replay_material, actor),
+        )
+    }
 }
 
 /// **The frontend-agnostic multi-offering host.** Registers heterogeneous [`Offering`]s by key and
@@ -314,12 +444,10 @@ pub struct OfferingHost {
     slots: BTreeMap<String, Box<dyn OfferingSlot>>,
     /// A monotone counter minting fresh session ids for [`open`](OfferingHost::open).
     counter: u64,
-    /// **The per-session move-log** — the reproducible public input (seed + ordered landed advances)
-    /// of every live session, keyed by `(offering key, session id)`. Grown on
-    /// [`open`](OfferingHost::open_session) (the seed) and each landed [`advance`](OfferingHost::advance).
-    /// A session survives restart by REPLAYING its log ([`resume`](OfferingHost::resume)), not by a
-    /// trusted state blob. Held in memory here; mirrored to a durable [`SessionResumeStore`] when one
-    /// is attached.
+    /// **The per-session replay log** — seed plus the ordered timeline of landed advances and
+    /// offering-approved opaque operations. A session survives restart by REPLAYING this log
+    /// ([`resume`](OfferingHost::resume)), not by trusting a serialized session blob. Held in memory
+    /// here; mirrored to a durable [`SessionResumeStore`] when one is attached.
     logs: HashMap<(String, SessionId), SessionMoveLog>,
     /// An optional durable persistence seam for the move-logs. When attached
     /// ([`with_resume_store`](OfferingHost::with_resume_store)), the host writes each open + landed
@@ -363,9 +491,9 @@ impl OfferingHost {
     }
 
     /// **Attach a durable [`SessionResumeStore`]** — the session-resume persistence seam. With one
-    /// attached, the host writes each session OPEN (its seed) and each LANDED advance through to the
-    /// store, so the move-logs outlive the process; [`resume_all`](OfferingHost::resume_all) replays
-    /// every stored log on the next boot, reopening each session to its identical committed state. The
+    /// attached, the host writes each OPEN, LANDED advance, and safely replayable successful opaque
+    /// operation through to the store, so logs outlive the process; [`resume_all`](OfferingHost::resume_all)
+    /// replays every stored log on the next boot, reopening each session to its identical state. The
     /// reference impl is [`crate::resume::InMemoryResumeStore`]; the durable sqlite impl is the
     /// discord-bot's follow-up. Additive: a host with no store keeps its move-logs in memory only.
     pub fn with_resume_store(mut self, store: Box<dyn SessionResumeStore>) -> Self {
@@ -829,6 +957,114 @@ impl OfferingHost {
         self.slots.get(key)?.actions_for(id, viewer)
     }
 
+    /// Discover the transport-bearing deos affordances of live session
+    /// `(key, id)`.  The descriptor is frontend-neutral; adapters render the
+    /// same name, media type, byte cap, and disclosure.
+    pub fn binary_operations(
+        &self,
+        key: &str,
+        id: &SessionId,
+    ) -> Result<Vec<BinaryOperationDescriptor>, HostOperationError> {
+        let slot = self
+            .slots
+            .get(key)
+            .ok_or_else(|| HostOperationError::UnknownOffering(key.to_string()))?;
+        slot.binary_operations(id)
+            .ok_or_else(|| HostOperationError::UnknownSession {
+                key: key.to_string(),
+                id: id.clone(),
+            })
+    }
+
+    /// Apply one transport-bearing operation to exactly the addressed live
+    /// session.  Session lookup happens before the payload reaches the concrete
+    /// offering, and the offering remains the only decoder/mutator.
+    pub fn invoke_binary_operation(
+        &mut self,
+        key: &str,
+        id: &SessionId,
+        name: &str,
+        payload: &[u8],
+        actor: DreggIdentity,
+    ) -> Result<BinaryOperationReceipt, HostOperationError> {
+        // The concrete offering, not the host, decides whether any request
+        // representation is safe to retain. A durable host refuses an
+        // operation that has no such representation, before mutation, rather
+        // than acknowledging state that will vanish on restart.
+        let replay_material = {
+            let slot = self
+                .slots
+                .get(key)
+                .ok_or_else(|| HostOperationError::UnknownOffering(key.to_string()))?;
+            slot.binary_operation_replay_material(id, name, payload)
+                .ok_or_else(|| HostOperationError::UnknownSession {
+                    key: key.to_string(),
+                    id: id.clone(),
+                })?
+                .map_err(HostOperationError::Operation)?
+        };
+        if let Some(store) = &self.resume_store {
+            if replay_material.is_none() {
+                return Err(HostOperationError::Operation(
+                    BinaryOperationError::Refused(
+                        "durable host refuses an operation without offering-selected safe replay material"
+                            .to_string(),
+                    ),
+                ));
+            }
+            if !store.supports_binary_operations() {
+                return Err(HostOperationError::Operation(
+                    BinaryOperationError::Refused(
+                        "attached resume store does not support the binary-operation journal"
+                            .to_string(),
+                    ),
+                ));
+            }
+        }
+        let slot = self
+            .slots
+            .get_mut(key)
+            .ok_or_else(|| HostOperationError::UnknownOffering(key.to_string()))?;
+        let result = slot
+            .invoke_binary_operation(id, name, payload, actor.clone())
+            .ok_or_else(|| HostOperationError::UnknownSession {
+                key: key.to_string(),
+                id: id.clone(),
+            })?;
+        let receipt = result.map_err(HostOperationError::Operation)?;
+
+        if let Some(material) = replay_material {
+            let after_moves = self
+                .logs
+                .get(&(key.to_string(), id.clone()))
+                .map(|log| log.moves.len())
+                .unwrap_or(0);
+            let operation = LoggedBinaryOperation {
+                after_moves,
+                name: name.to_string(),
+                actor,
+                payload_digest: *blake3::hash(payload).as_bytes(),
+                replay_digest: *blake3::hash(&material.bytes).as_bytes(),
+                replay_material: material.bytes,
+                replay_disclosure: material.disclosure,
+                replay_is_canonical_request: material.is_canonical_request,
+                receipt: receipt.clone(),
+            };
+            if let Some(log) = self.logs.get_mut(&(key.to_string(), id.clone())) {
+                log.record_binary_operation(operation.clone());
+            }
+            if let Some(store) = &self.resume_store {
+                // Existing move persistence has the same synchronous
+                // write-through contract. The store's capability gate above
+                // prevents silent downgrade to an implementation that drops
+                // opaque operations.
+                let _ = store.record_binary_operation(key, id, &operation);
+            }
+        }
+        self.touch(key, id);
+        Ok(receipt)
+    }
+
     /// **Advance session `(key, id)` by one real turn** — resolve `input` on the substrate as ONE
     /// cap-bounded turn attributed to `actor` (a legal move lands a real [`Outcome::Landed`]; an
     /// illegal one is a real [`Outcome::Refused`] that commits nothing). `None` if the offering or
@@ -1117,9 +1353,117 @@ impl OfferingHost {
             slot.open(log.id.clone(), log.cfg.clone())
                 .map_err(ResumeError::Deploy)?;
         }
-        // Re-drive each logged advance through the REAL executor. A move that does not land is a
-        // tampered log — the executor refused it (the same anti-ghost gate a live move hits).
-        for (index, m) in log.moves.iter().enumerate() {
+        // Re-drive ordinary turns and opaque operations in their original
+        // relative order. `after_moves = n` means the operation landed after
+        // exactly `n` ordinary advances; multiple operations at the same cursor
+        // retain vector order.
+        let mut operation_index = 0usize;
+        for move_index in 0..=log.moves.len() {
+            while let Some(operation) = log.operations.get(operation_index) {
+                if operation.after_moves < move_index {
+                    if let Some(slot) = self.slots.get_mut(&log.key) {
+                        slot.close(&log.id);
+                    }
+                    return Err(ResumeError::OperationRefused {
+                        index: operation_index,
+                        reason: "operation timeline is not monotone".to_string(),
+                    });
+                }
+                if operation.after_moves > move_index {
+                    break;
+                }
+                if *blake3::hash(&operation.replay_material).as_bytes() != operation.replay_digest {
+                    if let Some(slot) = self.slots.get_mut(&log.key) {
+                        slot.close(&log.id);
+                    }
+                    return Err(ResumeError::OperationRefused {
+                        index: operation_index,
+                        reason: "safe replay material digest mismatch".to_string(),
+                    });
+                }
+                if operation.replay_is_canonical_request
+                    && operation.payload_digest != operation.replay_digest
+                {
+                    if let Some(slot) = self.slots.get_mut(&log.key) {
+                        slot.close(&log.id);
+                    }
+                    return Err(ResumeError::OperationRefused {
+                        index: operation_index,
+                        reason: "canonical request digest differs from replay material".to_string(),
+                    });
+                }
+                let retained = BinaryOperationReplayMaterial {
+                    bytes: operation.replay_material.clone(),
+                    disclosure: operation.replay_disclosure.clone(),
+                    is_canonical_request: operation.replay_is_canonical_request,
+                };
+                let validation = self
+                    .slots
+                    .get(&log.key)
+                    .expect("slot present (just opened)")
+                    .validate_binary_operation_replay_material(&log.id, &operation.name, &retained);
+                if !matches!(validation, Some(Ok(()))) {
+                    let reason = match validation {
+                        Some(Err(error)) => error.to_string(),
+                        _ => "the live session disappeared during replay-material validation"
+                            .to_string(),
+                    };
+                    if let Some(slot) = self.slots.get_mut(&log.key) {
+                        slot.close(&log.id);
+                    }
+                    return Err(ResumeError::OperationRefused {
+                        index: operation_index,
+                        reason,
+                    });
+                }
+                let restored = self
+                    .slots
+                    .get_mut(&log.key)
+                    .expect("slot present (just opened)")
+                    .restore_binary_operation(
+                        &log.id,
+                        &operation.name,
+                        &operation.replay_material,
+                        operation.actor.clone(),
+                    );
+                match restored {
+                    Some(Ok(receipt)) if receipt == operation.receipt => {}
+                    Some(Ok(_)) => {
+                        if let Some(slot) = self.slots.get_mut(&log.key) {
+                            slot.close(&log.id);
+                        }
+                        return Err(ResumeError::OperationRefused {
+                            index: operation_index,
+                            reason: "restored public receipt differs from the journal".to_string(),
+                        });
+                    }
+                    Some(Err(error)) => {
+                        if let Some(slot) = self.slots.get_mut(&log.key) {
+                            slot.close(&log.id);
+                        }
+                        return Err(ResumeError::OperationRefused {
+                            index: operation_index,
+                            reason: error.to_string(),
+                        });
+                    }
+                    None => {
+                        if let Some(slot) = self.slots.get_mut(&log.key) {
+                            slot.close(&log.id);
+                        }
+                        return Err(ResumeError::OperationRefused {
+                            index: operation_index,
+                            reason: "the live session disappeared during operation replay"
+                                .to_string(),
+                        });
+                    }
+                }
+                operation_index += 1;
+            }
+
+            if move_index == log.moves.len() {
+                break;
+            }
+            let m = &log.moves[move_index];
             let out = self
                 .slots
                 .get_mut(&log.key)
@@ -1135,8 +1479,20 @@ impl OfferingHost {
                     Some(Outcome::Refused(why)) => why,
                     _ => "the move is not on the current ballot".to_string(),
                 };
-                return Err(ResumeError::Refused { index, reason });
+                return Err(ResumeError::Refused {
+                    index: move_index,
+                    reason,
+                });
             }
+        }
+        if operation_index != log.operations.len() {
+            if let Some(slot) = self.slots.get_mut(&log.key) {
+                slot.close(&log.id);
+            }
+            return Err(ResumeError::OperationRefused {
+                index: operation_index,
+                reason: "operation timeline points past the landed move log".to_string(),
+            });
         }
         // The session reopened to its authentic state; adopt the log so further advances append to it.
         self.logs
@@ -1316,6 +1672,194 @@ mod tests {
         fn price(&self, _input: &Action) -> RunCost {
             RunCost::free()
         }
+    }
+
+    /// Tiny order-sensitive opaque operation fixture: ordinary moves add,
+    /// binary operations multiply. A replay that moved operations to the end
+    /// would therefore produce a different state.
+    struct JournalOffering;
+
+    impl Offering for JournalOffering {
+        type Session = u64;
+
+        fn open(&self, _cfg: SessionConfig) -> Result<Self::Session, OfferingError> {
+            Ok(0)
+        }
+
+        fn actions(&self, _session: &Self::Session) -> Vec<Action> {
+            vec![Action::new("add", "add", 1, true)]
+        }
+
+        fn advance(
+            &self,
+            session: &mut Self::Session,
+            input: Action,
+            _actor: DreggIdentity,
+        ) -> Outcome {
+            if input.turn != "add" || input.arg < 0 {
+                return Outcome::Refused("invalid add".to_string());
+            }
+            *session += input.arg as u64;
+            Outcome::Landed {
+                receipt: dregg_app_framework::TurnReceipt::default(),
+                ended: false,
+            }
+        }
+
+        fn verify(&self, session: &Self::Session) -> VerifyReport {
+            VerifyReport::ok(*session as usize)
+        }
+
+        fn render(&self, session: &Self::Session) -> Surface {
+            Surface(deos_view::ViewNode::Text(format!("journal = {session}")))
+        }
+
+        fn binary_operations(&self, _session: &Self::Session) -> Vec<BinaryOperationDescriptor> {
+            vec![BinaryOperationDescriptor {
+                name: "multiply.v1".to_string(),
+                title: "multiply".to_string(),
+                input_media_type: "application/x-u8".to_string(),
+                max_input_bytes: 1,
+                disclosure: "one public multiplier byte".to_string(),
+            }]
+        }
+
+        fn binary_operation_replay_material(
+            &self,
+            _session: &Self::Session,
+            name: &str,
+            payload: &[u8],
+        ) -> Result<Option<BinaryOperationReplayMaterial>, BinaryOperationError> {
+            if name != "multiply.v1" {
+                return Err(BinaryOperationError::UnknownOperation(name.to_string()));
+            }
+            if payload.len() != 1 {
+                return Err(BinaryOperationError::Malformed(
+                    "expected one multiplier byte".to_string(),
+                ));
+            }
+            Ok(Some(BinaryOperationReplayMaterial::new(
+                payload.to_vec(),
+                "one public multiplier byte",
+            )))
+        }
+
+        fn invoke_binary_operation(
+            &self,
+            session: &mut Self::Session,
+            name: &str,
+            payload: &[u8],
+            _actor: DreggIdentity,
+        ) -> Result<BinaryOperationReceipt, BinaryOperationError> {
+            if name != "multiply.v1" {
+                return Err(BinaryOperationError::UnknownOperation(name.to_string()));
+            }
+            let multiplier = *payload
+                .first()
+                .ok_or_else(|| BinaryOperationError::Malformed("missing multiplier".to_string()))?;
+            if payload.len() != 1 {
+                return Err(BinaryOperationError::Malformed(
+                    "expected one multiplier byte".to_string(),
+                ));
+            }
+            *session *= u64::from(multiplier);
+            let receipt_id = *blake3::hash(&session.to_le_bytes()).as_bytes();
+            Ok(BinaryOperationReceipt {
+                operation: name.to_string(),
+                receipt_id,
+                public_fields: vec![("value".to_string(), session.to_string())],
+            })
+        }
+
+        fn price(&self, _input: &Action) -> RunCost {
+            RunCost::free()
+        }
+    }
+
+    #[test]
+    fn binary_operation_journal_restores_in_timeline_order_and_refuses_tamper() {
+        let store = crate::resume::InMemoryResumeStore::new();
+        let id = SessionId::new("journaled");
+        let mut host = OfferingHost::new().with_resume_store(Box::new(store.clone()));
+        host.register("journal", "Journal", JournalOffering);
+        host.open_session("journal", id.clone(), SessionConfig::with_seed(17))
+            .unwrap();
+        let actor = DreggIdentity("signed-worker".to_string());
+        assert!(
+            host.advance(
+                "journal",
+                &id,
+                Action::new("add two", "add", 2, true),
+                actor.clone(),
+            )
+            .unwrap()
+            .landed()
+        );
+        host.invoke_binary_operation("journal", &id, "multiply.v1", &[3], actor.clone())
+            .expect("operation lands and journals");
+        assert!(
+            host.advance(
+                "journal",
+                &id,
+                Action::new("add one", "add", 1, true),
+                actor,
+            )
+            .unwrap()
+            .landed()
+        );
+        let authentic = store.load("journal", &id).expect("durable log");
+        assert_eq!(authentic.operations.len(), 1);
+        assert_eq!(authentic.operations[0].after_moves, 1);
+
+        drop(host); // simulated process death
+        let mut reopened = OfferingHost::new().with_resume_store(Box::new(store));
+        reopened.register("journal", "Journal", JournalOffering);
+        assert!(reopened.resume_all()[0].1.is_ok());
+        assert!(
+            format!("{:?}", reopened.render("journal", &id).unwrap().0).contains("journal = 7")
+        );
+
+        let mut tampered_material = authentic.clone();
+        tampered_material.operations[0].replay_material[0] ^= 1;
+        let mut rejecting = OfferingHost::new();
+        rejecting.register("journal", "Journal", JournalOffering);
+        assert!(matches!(
+            rejecting.resume(&tampered_material),
+            Err(ResumeError::OperationRefused { index: 0, .. })
+        ));
+        assert!(!rejecting.is_open("journal", &id));
+
+        let mut tampered_payload_digest = authentic.clone();
+        tampered_payload_digest.operations[0].payload_digest[0] ^= 1;
+        let mut rejecting = OfferingHost::new();
+        rejecting.register("journal", "Journal", JournalOffering);
+        assert!(matches!(
+            rejecting.resume(&tampered_payload_digest),
+            Err(ResumeError::OperationRefused { index: 0, .. })
+        ));
+        assert!(!rejecting.is_open("journal", &id));
+
+        let mut tampered_disclosure = authentic.clone();
+        tampered_disclosure.operations[0]
+            .replay_disclosure
+            .push_str(" (weakened)");
+        let mut rejecting = OfferingHost::new();
+        rejecting.register("journal", "Journal", JournalOffering);
+        assert!(matches!(
+            rejecting.resume(&tampered_disclosure),
+            Err(ResumeError::OperationRefused { index: 0, .. })
+        ));
+        assert!(!rejecting.is_open("journal", &id));
+
+        let mut tampered_receipt = authentic;
+        tampered_receipt.operations[0].receipt.public_fields[0].1 = "999".to_string();
+        let mut rejecting = OfferingHost::new();
+        rejecting.register("journal", "Journal", JournalOffering);
+        assert!(matches!(
+            rejecting.resume(&tampered_receipt),
+            Err(ResumeError::OperationRefused { index: 0, .. })
+        ));
+        assert!(!rejecting.is_open("journal", &id));
     }
 
     /// The host holds two HETEROGENEOUS offerings (a `DungeonSession` and a `u64` session) in ONE

@@ -107,6 +107,33 @@ pub mod dsl;
 /// capabilities, banking is terminal — each a theorem, each an executor tooth.
 pub mod descent;
 
+/// A feature-gated PRIVATE QUEST / RAID mechanic over the real Lean-authored
+/// bounded graph-rewrite prover and `dregg-turn`'s atomic proof history.  The
+/// hidden state is reduced twice while players/auditors see only chained roots
+/// and opaque HidingFri receipts.  Enable with `--features private-quest`.
+#[cfg(feature = "private-quest")]
+pub mod private_quest;
+
+/// Feature-gated private four-seat raid-role matching: scores and
+/// admissibility stay prover-private while the globally optimal,
+/// lexicographically deterministic role permutation is a transportable public
+/// receipt. Enable with `--features private-raid-assignment`.
+#[cfg(feature = "private-raid-assignment")]
+pub mod private_raid;
+
+/// Feature-gated private four-participant/four-option preference aggregation:
+/// ballots and totals stay prover-private while a real Lean-authored HidingFri
+/// receipt publishes only the deterministic aggregate winner.
+#[cfg(feature = "private-preference")]
+pub mod private_preference;
+
+/// Feature-gated, commit-before-reveal fair eight-seat deal over the real
+/// Lean-authored bias-free private-shuffle AIR. Rejected attempts are public
+/// history and accepted deals support one-card selective openings. Enable with
+/// `--features private-fair-shuffle`.
+#[cfg(feature = "private-fair-shuffle")]
+pub mod private_fair_shuffle;
+
 pub mod bloodgate;
 pub mod combat;
 /// LOOT-AS-ASSETS — a Descent reward is a real OWNED, TRANSFERABLE [`dreggnet_asset`] item,

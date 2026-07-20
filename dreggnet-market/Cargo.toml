@@ -10,11 +10,37 @@ default = []
 # batch-STARK prover.  Kept opt-in so ordinary market/game clients do not pull the
 # recursion/prover tower merely to list, bid, render, or settle.
 certified-clearing = ["dep:dregg-circuit-prove", "dep:fhegg-solver"]
+# Fixed N=4,K=4 private-book relation: a Plonky3 HidingFriPcs proof gates the
+# existing executor-backed SETTLE path.  Kept separate from `certified-clearing`
+# because it consumes neither the public Cert-F program nor fhegg-solver.
+private-clearing = ["dep:dregg-circuit-prove"]
 # Authenticated Dark Bazaar receipt: co-endorse the complete certified settlement
 # and ciphertext digests in fhegg-fhe's canonical claim, under a selected quorum.
 # The feature does not prove the ciphertexts open to the certified order book.
 # This remains opt-in so the ordinary market does not pull the FHE/runtime stack.
 authenticated-clearing = ["certified-clearing", "dep:fhegg-fhe"]
+# Direct authenticated fhEgg output gate for the real executor-backed Dark
+# Bazaar settlement. Unlike `authenticated-clearing`, this does not require the
+# public Cert-F book: it consumes the no-single-viewer pipeline's independently
+# reconstructed canonical context and fully verified quorum receipt.
+fhegg-settlement = ["dep:fhegg-fhe", "dep:ed25519-dalek"]
+# Executable game-facing encrypted-amount constant-product table. Kept
+# independent of `fhegg-settlement`: both use the generic hosted operation seam,
+# while this feature pays only for its own BFV producer/verifier boundary.
+dark-amm-game = [
+    "dep:dregg-circuit-prove",
+    "dep:fhegg-fhe",
+    "fhegg-fhe/amm-input-binding",
+    "dep:fhe",
+    "dep:fhe-traits",
+    "dep:rand_09",
+    "dep:ed25519-dalek",
+]
+
+[[bin]]
+name = "dark-amm-tool"
+path = "src/bin/dark-amm-tool.rs"
+required-features = ["dark-amm-game"]
 
 [dependencies]
 # THE OFFERING CORE — the frontend-agnostic `Offering` trait (open/actions/advance/
@@ -58,9 +84,12 @@ blake3 = "1"
 dregg-circuit-prove = { path = "../circuit-prove", optional = true }
 fhegg-solver = { path = "../fhegg-solver", optional = true }
 fhegg-fhe = { path = "../fhegg-fhe", optional = true }
+fhe = { version = "0.1.1", optional = true }
+fhe-traits = { version = "0.1.1", optional = true }
+rand_09 = { package = "rand", version = "0.9", optional = true }
+ed25519-dalek = { version = "2", features = ["std"], optional = true }
 
 [dev-dependencies]
-ed25519-dalek = { version = "2", features = ["std"] }
 rand = "0.8"
 dungeon-on-dregg = { path = "../dungeon-on-dregg" }
 procgen-dregg = { path = "../procgen-dregg" }

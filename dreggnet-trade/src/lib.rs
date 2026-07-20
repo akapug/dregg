@@ -253,6 +253,63 @@ pub struct TradeWorld {
     wallets: HashMap<String, Cell>,
 }
 
+/// A fully applied asset/value sale in a detached world image. Until
+/// [`PreparedAtomicSale::commit`] is called, the source [`TradeWorld`] is
+/// byte-for-byte untouched at its canonical audit boundary.
+pub struct PreparedAtomicSale {
+    staged: TradeWorld,
+    settlement: Settlement,
+    provenance: ProvenanceReport,
+    before_digest: [u8; 32],
+    after_digest: [u8; 32],
+}
+
+impl PreparedAtomicSale {
+    pub const fn before_digest(&self) -> [u8; 32] {
+        self.before_digest
+    }
+
+    pub const fn after_digest(&self) -> [u8; 32] {
+        self.after_digest
+    }
+
+    pub fn settlement(&self) -> &Settlement {
+        &self.settlement
+    }
+
+    pub fn provenance(&self) -> &ProvenanceReport {
+        &self.provenance
+    }
+
+    /// The staged image may commit only over the exact world it forked from.
+    pub fn is_fresh_for(&self, world: &TradeWorld) -> bool {
+        world.state_audit_digest() == self.before_digest
+    }
+
+    /// Infallibly replace `world` with the already-executed detached image.
+    /// Callers must check [`Self::is_fresh_for`] immediately before their own
+    /// atomic commit boundary while holding exclusive access to `world`.
+    pub fn commit(self, world: &mut TradeWorld) -> PreparedSaleReceipt {
+        *world = self.staged;
+        PreparedSaleReceipt {
+            settlement: self.settlement,
+            provenance: self.provenance,
+            before_digest: self.before_digest,
+            after_digest: self.after_digest,
+        }
+    }
+}
+
+/// Public evidence returned when a detached sale image replaces the live
+/// process-local world.
+#[derive(Clone, Debug)]
+pub struct PreparedSaleReceipt {
+    pub settlement: Settlement,
+    pub provenance: ProvenanceReport,
+    pub before_digest: [u8; 32],
+    pub after_digest: [u8; 32],
+}
+
 impl Default for TradeWorld {
     fn default() -> Self {
         Self::new()
@@ -266,6 +323,88 @@ impl TradeWorld {
             assets: AssetWorld::new(),
             wallets: HashMap::new(),
         }
+    }
+
+    /// Canonical audit digest of the asset world plus every `$DREGG` wallet.
+    /// This is the equality boundary used by process-local composed
+    /// transactions and adversarial rollback tests.
+    pub fn state_audit_digest(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("dreggnet-trade/state-audit/v1");
+        hasher.update(&self.assets.state_audit_digest());
+        let mut wallets = self.wallets.iter().collect::<Vec<_>>();
+        wallets.sort_by(|(a, _), (b, _)| a.cmp(b));
+        hasher.update(&(wallets.len() as u64).to_be_bytes());
+        for (label, wallet) in wallets {
+            hasher.update(&(label.len() as u64).to_be_bytes());
+            hasher.update(label.as_bytes());
+            hasher.update(&wallet.state_commitment());
+        }
+        *hasher.finalize().as_bytes()
+    }
+
+    /// Independent process-local state image. Prior per-holder receipt-chain
+    /// history is intentionally not copied; see
+    /// [`AssetWorld::detached_state_clone`].
+    pub fn detached_state_clone(&self) -> Self {
+        Self {
+            assets: self.assets.detached_state_clone(),
+            wallets: self.wallets.clone(),
+        }
+    }
+
+    /// Validate and execute an asset-for-`$DREGG` crossing against an isolated
+    /// state image. Every real asset executor/escrow transition runs in that
+    /// image; any refusal drops it and leaves `self` unchanged.
+    pub fn prepare_atomic_sale(
+        &self,
+        seller: &str,
+        buyer: &str,
+        asset: AssetId,
+        price: u64,
+    ) -> Result<PreparedAtomicSale, TradeError> {
+        match self.assets.current_holder_label(asset) {
+            None => return Err(TradeError::Asset(AssetError::UnknownAsset)),
+            Some(holder) if holder != seller => {
+                return Err(TradeError::Asset(AssetError::Refused(
+                    "the seller does not own the listed asset".to_string(),
+                )));
+            }
+            Some(_) => {}
+        }
+        if self.assets.is_soulbound(asset) {
+            return Err(TradeError::Asset(AssetError::Refused(
+                "the listed asset is soulbound".to_string(),
+            )));
+        }
+        let have = self
+            .wallets
+            .get(buyer)
+            .map(|wallet| wallet.state.balance())
+            .unwrap_or(0);
+        let need = i64::try_from(price).unwrap_or(i64::MAX);
+        if have < need {
+            return Err(TradeError::InsufficientDregg { have, need });
+        }
+
+        let before_digest = self.state_audit_digest();
+        let mut staged = self.detached_state_clone();
+        let mut listing = staged.list(seller, asset, price)?;
+        let settlement = staged.buy(&mut listing, buyer)?;
+        let provenance = staged.verify_provenance(asset);
+        if !provenance.verified {
+            return Err(TradeError::Asset(AssetError::Refused(format!(
+                "the staged asset provenance broke: {}",
+                provenance.reasons.join("; ")
+            ))));
+        }
+        let after_digest = staged.state_audit_digest();
+        Ok(PreparedAtomicSale {
+            staged,
+            settlement,
+            provenance,
+            before_digest,
+            after_digest,
+        })
     }
 
     /// **Adopt an EXISTING asset world** — the SHARED-world seam that makes a craft ->

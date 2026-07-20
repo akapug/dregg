@@ -28,6 +28,11 @@
 //!   processes resolve the secret through the ONE `master_secret_from_env`.
 //!   `TELEGRAM_INITDATA_MAX_AGE_SECS` tunes the initData freshness window (default 86400). Token
 //!   unset → the `/tg` routes are not mounted and the catalog serves exactly as before;
+//! - shielded operations (the `public-shielded-games` build): fhEgg settlement uses
+//!   `DREGG_FHEGG_QUORUM_PUBLIC_KEYS` + `DREGG_FHEGG_QUORUM_THRESHOLD`; proof-required Dark AMM
+//!   uses `DREGG_DARK_AMM_SECRET_KEY_FILE` + `DREGG_DARK_AMM_INITIAL_ROOT`. Each pair is optional,
+//!   but a half-pair, malformed roster/root, unsafe/corrupt key, or failed cryptographic registrar
+//!   refuses startup before the socket binds rather than leaving a healthy featureless service;
 //! - log level: the standard `RUST_LOG` env (`tracing_subscriber` env-filter), default `info`.
 //!
 //! ## Honest scope (the deploy scout's Phase-0)
@@ -88,6 +93,16 @@ async fn main() {
             std::process::exit(2);
         }
     };
+
+    // The production bundle is allowed to leave an operation deliberately
+    // unconfigured, but never to boot healthy after one half of a quorum/root
+    // pair or invalid protected key material was supplied. This validates the
+    // exact registrars before `make_app_parts` constructs the serving host.
+    #[cfg(feature = "public-shielded-games")]
+    if let Err(error) = dreggnet_web::validate_public_shielded_deployment() {
+        tracing::error!(%error, "public shielded deployment configuration refused");
+        std::process::exit(2);
+    }
 
     // The merged public-demo app: games + feature surfaces + the seeded no-cheat leaderboard —
     // plus the catalog handle, for the periodic session-lifecycle sweep below.

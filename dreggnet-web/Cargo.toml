@@ -22,6 +22,59 @@ version = "0.1.0"
 edition = "2024"
 description = "The web Frontend over dreggnet-offerings: a WebFrontend affordance-renderer (deos Surface -> HTML fragment) + an axum session surface (GET renders, POST advances one real turn), the third surface over the ONE offering core."
 
+[features]
+default = []
+# Shared authenticated binary-operation transport. Concrete operations add
+# their owning proof/verifier stacks below; adapters depend only on this seam.
+hosted-binary-operations = []
+# Owning authenticated fhEgg settlement uploads. Kept opt-in because fhegg-fhe
+# currently pulls the full TFHE stack; ordinary catalog/web tests should not pay
+# that compile cost. A host enabling this feature configures its verifier roster
+# with DREGG_FHEGG_QUORUM_PUBLIC_KEYS + DREGG_FHEGG_QUORUM_THRESHOLD.
+fhegg-settlement = [
+    "hosted-binary-operations",
+    "dreggnet-market/fhegg-settlement",
+    "dep:fhegg-fhe",
+]
+# Real HidingFri-backed dungeon raid assignment. This deliberately does not
+# enable fhEgg/TFHE: both use the same host/adapter transport but remain
+# independently priced deployment choices.
+private-raid-operation = [
+    "hosted-binary-operations",
+    "dreggnet-offerings/private-raid-operation",
+]
+private-preference-operation = [
+    "hosted-binary-operations",
+    "dreggnet-offerings/private-preference-operation",
+]
+private-fair-shuffle-operation = [
+    "hosted-binary-operations",
+    "dreggnet-offerings/private-fair-shuffle-operation",
+]
+private-quest-operation = [
+    "hosted-binary-operations",
+    "dreggnet-offerings/private-quest-operation",
+]
+# A standalone Dark Bazaar encrypted constant-product table. External clients
+# encrypt dx/dy; the shared web/Telegram/Discord operation adapter transports
+# the opaque canonical request without learning either amount.
+dark-amm-game = [
+    "hosted-binary-operations",
+    "dreggnet-market/dark-amm-game",
+    "dep:fhegg-fhe",
+]
+# The production games binary. Keep the default feature set cheap for ordinary
+# library consumers, but never let the public deploy silently omit a completed
+# shielded mechanic because its owning verifier stack is opt-in.
+public-shielded-games = [
+    "fhegg-settlement",
+    "private-raid-operation",
+    "private-preference-operation",
+    "private-fair-shuffle-operation",
+    "private-quest-operation",
+    "dark-amm-game",
+]
+
 # THE PUBLIC-DEMO SERVER — the ~15-line-core entrypoint that makes `dreggnet-web` a runnable
 # server (not just a library): it assembles the merged axum app (`make_app`) and serves it.
 # `cargo build -p dreggnet-web --bin dreggnet-web-server`.
@@ -50,6 +103,7 @@ dreggnet-audit = { path = "../dreggnet-audit" }
 # — the same offerings the Discord bot's generic adapter serves, now on the web surface.
 dreggnet-council = { path = "../dreggnet-council" }
 dreggnet-market = { path = "../dreggnet-market" }
+fhegg-fhe = { path = "../fhegg-fhe", optional = true }
 # THE TWO PORTFOLIO GAMES, registered in the web catalog (fully playable in the browser — and,
 # through the SAME deos `Surface`, on Discord / Telegram / WeChat via the do-once path):
 #  - dregg-multiway-tug: the hidden-hand tug of influence (`TugOffering`), reached through the
@@ -205,6 +259,9 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 
 [dev-dependencies]
 ed25519-dalek = { version = "2.1", features = ["std"] }
+rand = "0.8"
+rand_09 = { package = "rand", version = "0.9" }
+dregg-circuit-prove = { path = "../circuit-prove" }
 # Drive the axum handlers with no real network — `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
 # The async test runtime for the oneshot-driven handlers.

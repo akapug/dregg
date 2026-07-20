@@ -19,6 +19,22 @@ version = "0.1.0"
 edition = "2024"
 description = "The frontend-agnostic Offering/Session core of DreggNet Cloud: an Offering trait (open/actions/advance/verify/render/price) over the real dregg substrate, a DungeonOffering (offering #0) over spween-dregg's WorldCell, and a Frontend affordance-renderer abstraction (no Discord dep)."
 
+[features]
+default = []
+# Opt-in proof-bearing raid assignment operation.  Ordinary clients keep the
+# prover stack out of their build; hosts enabling this feature expose the same
+# canonical receipt through the frontend-neutral binary-operation seam.
+private-raid-operation = ["dungeon-on-dregg/private-raid-assignment"]
+# Hiding four-ballot/four-option party preference, exposed through the same
+# authenticated binary-operation seam as raids, shuffles, and private quests.
+private-preference-operation = ["dungeon-on-dregg/private-preference"]
+# Commit-before-reveal eight-seat fair deal with a real HidingFri proof and
+# selective card openings, transported through the same generic operation seam.
+private-fair-shuffle-operation = ["dungeon-on-dregg/private-fair-shuffle"]
+# Opaque two-step semantic-graph quest receipts. The host verifies the
+# Lean-authored Warden specialization and retains only roots + HidingFri proof.
+private-quest-operation = ["dungeon-on-dregg/private-quest"]
+
 [dependencies]
 # THE SUBSTRATE — the real verifiable world-cell binding: `WorldCell` (a move is ONE
 # cap-bounded turn the real `EmbeddedExecutor` admits IFF the installed gate passes),

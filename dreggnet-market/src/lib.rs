@@ -44,20 +44,68 @@
 #[cfg(feature = "certified-clearing")]
 pub mod certified_clearing;
 
+/// Hiding fixed-book proof gate for the real Dark Bazaar settlement. The proof
+/// is checked against caller-pinned public values before any executor turn is
+/// submitted; enable Cargo feature `private-clearing` to compile it.
+#[cfg(feature = "private-clearing")]
+pub mod private_clearing;
+
 /// Authenticated co-endorsement weld between the complete certified market
 /// receipt and fhegg-fhe's exact canonical MPC claim. This does not prove that
 /// the ciphertexts open to the certified book. It is an opt-in heavy surface.
 #[cfg(feature = "authenticated-clearing")]
 pub mod authenticated_receipt;
 
+/// Direct additive weld from fhEgg's authenticated encrypted-order clearing
+/// receipt into the real Dark Bazaar executor settlement. Enable Cargo feature
+/// `fhegg-settlement` to keep the FHE/MPC stack out of ordinary clients.
+#[cfg(feature = "fhegg-settlement")]
+pub mod fhegg_settlement;
+
+/// One-call process-local atomic composition of authenticated fhEgg clearing
+/// with the exact source-bound owned-asset/$DREGG crossing.
+#[cfg(feature = "fhegg-settlement")]
+pub mod fhegg_atomic_asset;
+
+/// Exact operator-visible BFV opening verification welded into source-bound
+/// WriteOnce auction seals. This is an authenticated source-verifier boundary,
+/// not a house-blind lattice ZK proof.
+#[cfg(feature = "fhegg-settlement")]
+pub mod fhegg_source_binding;
+
+/// Strict owning/wire boundary for accepting an authenticated fhEgg settlement
+/// from a remote worker without receiving trader plaintext. Shared by any web,
+/// Telegram, Discord, or native host that can transport opaque bytes.
+#[cfg(feature = "fhegg-settlement")]
+pub mod fhegg_transport;
+
 /// Owner-gated settlement of a real provenance-carrying asset (for example a
 /// Descent loot note) to the sealed auction's already-verified winner.
 pub mod asset_backed;
 
+/// Hosted encrypted-amount constant-product game table and its strict external
+/// producer wire. This heavy BFV surface is independently opt-in.
+#[cfg(feature = "dark-amm-game")]
+pub mod dark_amm_game;
+
+/// Public-only two-phase collective Dark AMM service: Tier-1 same-opening
+/// stages one encrypted candidate and an independent FHDAR decision advances
+/// it. This does not alter the single-host strict-v3 offering above.
+#[cfg(feature = "dark-amm-game")]
+pub mod dark_amm_collective;
+
 use dreggnet_offerings::{
-    Action, DreggIdentity, Offering, OfferingError, Outcome, RunCost, SessionConfig, Surface,
-    VerifyReport,
+    Action, BinaryOperationDescriptor, BinaryOperationError, BinaryOperationReceipt,
+    BinaryOperationReplayMaterial, DreggIdentity, Offering, OfferingError, Outcome, RunCost,
+    SessionConfig, Surface, VerifyReport,
 };
+
+#[cfg(feature = "fhegg-settlement")]
+use fhegg_fhe::attestation::{
+    AuthenticatedQuorumVerifier, InMemoryReplayGuard, QuorumVerifierError,
+};
+#[cfg(feature = "fhegg-settlement")]
+use std::cell::RefCell;
 
 use dregg_app_framework::{
     AgentCipherclerk, AppCipherclerk, AuthRequired, CellId, EmbeddedExecutor, field_from_u64,
@@ -68,10 +116,10 @@ use dregg_intent::verified_settle::VerifiedLedger;
 
 use starbridge_sealed_auction::CellId as AuctionCellId;
 use starbridge_sealed_auction::{
-    AUCTION_FACTORY_VK, AssetId, Auction, AuctionError, Bid, HIGH_BID_SLOT, PHASE_SLOT, Phase,
-    SELLER_SLOT, WINNER_SLOT, auction_child_program_vk, auction_factory_descriptor,
-    close_commit_effects, commit_bid_effects, commit_slot, fund_ledger, resolve_effects,
-    reveal_bid_effects,
+    AUCTION_FACTORY_VK, AssetId, Auction, AuctionError, Bid, COMMIT_BASE, HIGH_BID_SLOT,
+    PHASE_SLOT, Phase, SELLER_SLOT, Seal, WINNER_SLOT, auction_child_program_vk,
+    auction_factory_descriptor, close_commit_effects, commit_bid_effects, commit_slot, fund_ledger,
+    resolve_effects, reveal_bid_effects,
 };
 
 use deos_view::{MenuItem, ViewNode};
@@ -84,6 +132,20 @@ pub const TURN_LIST: &str = "list";
 /// VALUE (the price offered). The `(bidder, value, nonce)` secret is held in the session until
 /// SETTLE reveals it; only the [`Bid::seal`] digest is public during the commit phase.
 pub const TURN_BID: &str = "bid";
+
+/// Replayable source-bound bid carrying a canonical exact-opening verifier
+/// certificate in [`Action::text`]. Available only with `fhegg-settlement`.
+#[cfg(feature = "fhegg-settlement")]
+pub const TURN_BID_FHEGG: &str = "bid-fhegg-source";
+
+/// Seller-side exact encrypted-supply binding. Fired after ordinary LIST and
+/// before any source-bound bid, carrying a listing certificate in `Action::text`.
+#[cfg(feature = "fhegg-settlement")]
+pub const TURN_BIND_FHEGG_SUPPLY: &str = "bind-fhegg-supply";
+
+/// The first WriteOnce commit-board slot is reserved for the fhEgg listing
+/// source whenever one is installed. Source-bound bidder slots begin after it.
+pub const FHEGG_LISTING_SOURCE_SLOT: usize = COMMIT_BASE;
 
 /// The affordance verb the **auctioneer** fires to close the commit phase, reveal, and clear to the
 /// winning sealed bid (the value moves, conservation-checked). `arg` is unused.
@@ -128,6 +190,23 @@ const GOOD: AssetId = [0x60_u8; 32];
 /// A placed sealed bid, held in the session so SETTLE can reveal it. Carries the auction-ledger
 /// `handle`, the on-ledger commit `slot` the seal was frozen into (a re-bid to this slot is the
 /// `WriteOnce` executor refusal — the anti-double-bid tooth), and the [`Bid`] secret.
+#[derive(Clone, Copy, Debug)]
+struct FheggBidSourceBinding {
+    session_digest: [u8; 32],
+    binding_digest: [u8; 32],
+    message_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FheggListingSourceBinding {
+    asset: [u8; 32],
+    session_digest: [u8; 32],
+    binding_digest: [u8; 32],
+    message_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+}
+
 #[derive(Clone, Debug)]
 struct PlacedBid {
     /// The identity that placed it (a re-bid by the same identity targets its own `slot`).
@@ -138,6 +217,18 @@ struct PlacedBid {
     slot: usize,
     /// The sealed bid secret `(bidder, value, nonce)` — revealed at SETTLE.
     bid: Bid,
+    /// Exact public source digests included in a source-bound seal. `None` is
+    /// the legacy CRAWL bid and is never accepted by the fhEgg settlement gate.
+    fhegg_source: Option<FheggBidSourceBinding>,
+}
+
+impl PlacedBid {
+    fn seal(&self) -> Seal {
+        match self.fhegg_source {
+            Some(source) => self.bid.seal_with_source(&source.binding_digest),
+            None => self.bid.seal(),
+        }
+    }
 }
 
 /// The record of a cleared auction — the conserved post-ledger + the winning bid + the per-asset
@@ -191,6 +282,9 @@ pub struct MarketSession {
     seller: Option<DreggIdentity>,
     /// The placed sealed bids, in commit order (each frozen into its own `WriteOnce` slot).
     bids: Vec<PlacedBid>,
+    /// Exact seller ask + concrete asset frozen into the reserved listing
+    /// source slot. Required by fhEgg settlement; absent on the legacy crawl.
+    fhegg_listing_source: Option<FheggListingSourceBinding>,
     /// A monotone nonce counter — each sealed bid gets a fresh blinding nonce.
     next_nonce: u64,
     /// The committed receipt chain (birth + commits + close + reveals + resolve).
@@ -254,8 +348,36 @@ impl MarketSession {
                 return (pb.handle, pb.slot, true);
             }
         }
-        let idx = self.bids.len();
-        (BIDDER_BASE + idx as AuctionCellId, commit_slot(idx), false)
+        let bidder_idx = self.bids.len();
+        let slot_idx = bidder_idx + usize::from(self.fhegg_listing_source.is_some());
+        (
+            BIDDER_BASE + bidder_idx as AuctionCellId,
+            commit_slot(slot_idx),
+            false,
+        )
+    }
+
+    fn fhegg_listing_source_seal_for(&self, source: &FheggListingSourceBinding) -> Option<Seal> {
+        let seller = self.seller.as_ref()?;
+        let mut hasher =
+            blake3::Hasher::new_derive_key("dreggnet-market/fhegg/source-bound-listing/v1");
+        hasher.update(&self.seed.to_be_bytes());
+        hasher.update(&self.reserve.to_be_bytes());
+        hasher.update(&(seller.0.len() as u64).to_be_bytes());
+        hasher.update(seller.0.as_bytes());
+        hasher.update(&source.asset);
+        hasher.update(&1u16.to_be_bytes());
+        hasher.update(&source.session_digest);
+        hasher.update(&source.binding_digest);
+        hasher.update(&source.message_digest);
+        hasher.update(&source.ciphertext_digest);
+        Some(*hasher.finalize().as_bytes())
+    }
+
+    fn fhegg_listing_source_seal(&self) -> Option<Seal> {
+        self.fhegg_listing_source
+            .as_ref()
+            .and_then(|source| self.fhegg_listing_source_seal_for(source))
     }
 
     /// Build a freshly-funded settlement ledger from the recorded sealed bids: each bidder funded
@@ -372,6 +494,16 @@ impl MarketOffering {
     /// own committed slot → a REAL `WriteOnce` executor refusal (the anti-double-bid tooth); a bid
     /// after the commit phase closes is refused by the auction's own phase gate (anti-ghost).
     fn do_bid(&self, s: &mut MarketSession, input: &Action, actor: DreggIdentity) -> Outcome {
+        self.do_bid_with_source(s, input, actor, None)
+    }
+
+    fn do_bid_with_source(
+        &self,
+        s: &mut MarketSession,
+        input: &Action,
+        actor: DreggIdentity,
+        fhegg_source: Option<FheggBidSourceBinding>,
+    ) -> Outcome {
         let Some(cell) = s.auction_cell else {
             return Outcome::Refused("nothing is listed yet — LIST first".into());
         };
@@ -400,10 +532,14 @@ impl MarketOffering {
             // submit the overwrite turn to the bidder's frozen commit slot; the executor's
             // `WriteOnce(commit slot)` REFUSES it. Nothing commits (anti-ghost).
             let switched = Bid::new(handle, value, s.next_nonce);
+            let switched_seal = match fhegg_source {
+                Some(source) => switched.seal_with_source(&source.binding_digest),
+                None => switched.seal(),
+            };
             let action = s.cclerk.make_action(
                 cell,
                 "commit_bid",
-                commit_bid_effects(cell, slot, &switched.seal()),
+                commit_bid_effects(cell, slot, &switched_seal),
             );
             return match s.executor.submit_action(&s.cclerk, action) {
                 Ok(_) => Outcome::Refused(
@@ -417,7 +553,10 @@ impl MarketOffering {
         let nonce = s.next_nonce;
         s.next_nonce += 1;
         let bid = Bid::new(handle, value, nonce);
-        let seal = bid.seal();
+        let seal = match fhegg_source {
+            Some(source) => bid.seal_with_source(&source.binding_digest),
+            None => bid.seal(),
+        };
         let action =
             s.cclerk
                 .make_action(cell, "commit_bid", commit_bid_effects(cell, slot, &seal));
@@ -436,6 +575,7 @@ impl MarketOffering {
             handle,
             slot,
             bid,
+            fhegg_source,
         });
         s.receipts.push(receipt.clone());
         Outcome::Landed {
@@ -476,8 +616,9 @@ impl MarketOffering {
 
         // (2) Reveal every sealed bid — each a real verified turn; mirror into the in-process auction
         // (a reveal binds ONLY a committed seal — the substrate's uncommitted-cannot-open tooth).
-        let bids: Vec<Bid> = s.bids.iter().map(|b| b.bid).collect();
-        for b in &bids {
+        let bids = s.bids.clone();
+        for placed in &bids {
+            let b = placed.bid;
             let action = s.cclerk.make_action(
                 cell,
                 "reveal_bid",
@@ -488,7 +629,11 @@ impl MarketOffering {
                 Err(e) => return Outcome::Refused(format!("a reveal was refused: {e}")),
             }
             if let Some(a) = s.auction.as_mut() {
-                if let Err(e) = a.reveal(*b) {
+                let revealed = match placed.fhegg_source {
+                    Some(source) => a.reveal_source_bound(b, &source.binding_digest),
+                    None => a.reveal(b),
+                };
+                if let Err(e) = revealed {
                     return Outcome::Refused(format!(
                         "a reveal was refused by the auction protocol: {e}"
                     ));
@@ -591,6 +736,7 @@ impl Offering for MarketOffering {
             reserve: 0,
             seller: None,
             bids: Vec::new(),
+            fhegg_listing_source: None,
             next_nonce: 1,
             receipts: Vec::new(),
             clearing: None,
@@ -646,10 +792,18 @@ impl Offering for MarketOffering {
             return VerifyReport::broken(turns, "the listing cell is not in the ledger");
         };
         for pb in &session.bids {
-            if state.fields[pb.slot] != pb.bid.seal() {
+            if state.fields[pb.slot] != pb.seal() {
                 return VerifyReport::broken(
                     turns,
                     format!("commit slot {} does not hold the recorded seal", pb.slot),
+                );
+            }
+        }
+        if let Some(expected) = session.fhegg_listing_source_seal() {
+            if state.fields[FHEGG_LISTING_SOURCE_SLOT] != expected {
+                return VerifyReport::broken(
+                    turns,
+                    "the reserved listing-source slot does not hold the recorded seal",
                 );
             }
         }
@@ -662,13 +816,17 @@ impl Offering for MarketOffering {
         // (b) Re-derive the clear from scratch through the same verified settlement path.
         let mut replay = Auction::new(SELLER_HANDLE, SLOT_HANDLE, PAY, GOOD);
         for pb in &session.bids {
-            if replay.commit(pb.bid.seal()).is_err() {
+            if replay.commit(pb.seal()).is_err() {
                 return VerifyReport::broken(turns, "a recorded seal failed re-commit");
             }
         }
         replay.seal_commit_phase();
         for pb in &session.bids {
-            if replay.reveal(pb.bid).is_err() {
+            let revealed = match pb.fhegg_source {
+                Some(source) => replay.reveal_source_bound(pb.bid, &source.binding_digest),
+                None => replay.reveal(pb.bid),
+            };
+            if revealed.is_err() {
                 return VerifyReport::broken(
                     turns,
                     "a recorded bid failed re-reveal (not committed)",
@@ -819,6 +977,20 @@ impl Offering for MarketOffering {
 /// outside this default offering.
 pub struct DarkBazaarOffering {
     market: MarketOffering,
+    /// Exact-opening source verifier selected by the host. Its signatures make
+    /// the operator-visible reencryption check replayable; they are not ZK.
+    #[cfg(feature = "fhegg-settlement")]
+    fhegg_source_verifier: Option<[u8; 32]>,
+    /// Relying-party policy, selected by the host rather than the uploaded
+    /// receipt. `None` keeps the default crawl unable to accept fhEgg bundles.
+    #[cfg(feature = "fhegg-settlement")]
+    fhegg_verifier: Option<AuthenticatedQuorumVerifier>,
+    /// Live-process replay floor for the hosted operation. An OfferingHost with
+    /// a binary-operation-capable resume store reconstructs this floor on boot
+    /// by re-verifying/replaying its durable operation journal; callers that
+    /// bypass that host seam retain process-local semantics only.
+    #[cfg(feature = "fhegg-settlement")]
+    fhegg_replay: RefCell<InMemoryReplayGuard>,
 }
 
 impl DarkBazaarOffering {
@@ -829,6 +1001,12 @@ impl DarkBazaarOffering {
     pub fn new() -> Self {
         Self {
             market: MarketOffering::new(),
+            #[cfg(feature = "fhegg-settlement")]
+            fhegg_source_verifier: None,
+            #[cfg(feature = "fhegg-settlement")]
+            fhegg_verifier: None,
+            #[cfg(feature = "fhegg-settlement")]
+            fhegg_replay: RefCell::new(InMemoryReplayGuard::default()),
         }
     }
 
@@ -836,7 +1014,32 @@ impl DarkBazaarOffering {
     pub fn paid_bids(credits: u64) -> Self {
         Self {
             market: MarketOffering::paid_bids(credits),
+            #[cfg(feature = "fhegg-settlement")]
+            fhegg_source_verifier: None,
+            #[cfg(feature = "fhegg-settlement")]
+            fhegg_verifier: None,
+            #[cfg(feature = "fhegg-settlement")]
+            fhegg_replay: RefCell::new(InMemoryReplayGuard::default()),
         }
+    }
+
+    /// Build a Bazaar whose hosted fhEgg operation accepts only an exact,
+    /// deployment-selected Ed25519 quorum roster. Uploaded bytes never select
+    /// or weaken this policy.
+    #[cfg(feature = "fhegg-settlement")]
+    pub fn with_fhegg_quorum(
+        ordered_public_keys: Vec<[u8; 32]>,
+        threshold: usize,
+    ) -> Result<Self, QuorumVerifierError> {
+        Ok(Self {
+            market: MarketOffering::new(),
+            fhegg_source_verifier: None,
+            fhegg_verifier: Some(AuthenticatedQuorumVerifier::new(
+                ordered_public_keys,
+                threshold,
+            )?),
+            fhegg_replay: RefCell::new(InMemoryReplayGuard::default()),
+        })
     }
 
     /// The canonical key a heterogeneous [`dreggnet_offerings::OfferingHost`] can
@@ -931,38 +1134,153 @@ impl Offering for DarkBazaarOffering {
     }
 
     fn advance(&self, session: &mut Self::Session, input: Action, actor: DreggIdentity) -> Outcome {
+        #[cfg(feature = "fhegg-settlement")]
+        if input.turn == TURN_BID_FHEGG {
+            return self.advance_fhegg_source_bound_bid(session, &input, actor);
+        }
+        #[cfg(feature = "fhegg-settlement")]
+        if input.turn == TURN_BIND_FHEGG_SUPPLY {
+            return self.advance_fhegg_listing_source(session, &input, actor);
+        }
         self.market.advance(&mut session.market, input, actor)
     }
 
     fn verify(&self, session: &Self::Session) -> VerifyReport {
         let mut report = self.market.verify(&session.market);
-        report.detail = format!(
-            "Dark Bazaar CRAWL check-level replay (not Tier0/STARK/ZK/source-bound): {}",
-            report.detail
-        );
+        #[cfg(feature = "fhegg-settlement")]
+        let grade = if session.market.fhegg_listing_source.is_some()
+            && session
+                .market
+                .bids
+                .iter()
+                .all(|bid| bid.fhegg_source.is_some())
+        {
+            "operator-visible exact-source-bound board (not Tier0/house-blind lattice ZK)"
+        } else {
+            "CRAWL check-level replay (not Tier0/STARK/ZK/source-bound)"
+        };
+        #[cfg(not(feature = "fhegg-settlement"))]
+        let grade = "CRAWL check-level replay (not Tier0/STARK/ZK/source-bound)";
+        report.detail = format!("Dark Bazaar {grade}: {}", report.detail);
         report
     }
 
     fn render(&self, session: &Self::Session) -> Surface {
         let market_surface = self.market.render(&session.market).0;
+        let mut children = vec![
+            ViewNode::Section {
+                title: format!("Offering key: {}", Self::KEY),
+                tag: "muted".into(),
+                children: vec![
+                    ViewNode::Text(DARK_BAZAAR_CRAWL_DISCLOSURE.into()),
+                    ViewNode::Text(
+                        "Real now: sealed commit/reveal executor turns and conservation-checked value settlement.".into(),
+                    ),
+                    ViewNode::Text(DARK_BAZAAR_TIE_POLICY.into()),
+                ],
+            },
+        ];
+        #[cfg(feature = "fhegg-settlement")]
+        if self.fhegg_verifier.is_some() {
+            children.push(ViewNode::Section {
+                title: "Shielded settlement operation".into(),
+                tag: "accent".into(),
+                children: vec![
+                    ViewNode::Text(fhegg_transport::FHEGG_SETTLEMENT_OPERATION.to_string()),
+                    ViewNode::Text(fhegg_transport::FHEGG_SETTLEMENT_DISCLOSURE.to_string()),
+                ],
+            });
+        }
+        children.push(market_surface);
         Surface(ViewNode::Section {
             title: "The Dark Bazaar — playable CRAWL".into(),
             tag: "accent".into(),
-            children: vec![
-                ViewNode::Section {
-                    title: format!("Offering key: {}", Self::KEY),
-                    tag: "muted".into(),
-                    children: vec![
-                        ViewNode::Text(DARK_BAZAAR_CRAWL_DISCLOSURE.into()),
-                        ViewNode::Text(
-                            "Real now: sealed commit/reveal executor turns and conservation-checked value settlement.".into(),
-                        ),
-                        ViewNode::Text(DARK_BAZAAR_TIE_POLICY.into()),
-                    ],
-                },
-                market_surface,
-            ],
+            children,
         })
+    }
+
+    fn binary_operations(&self, _session: &Self::Session) -> Vec<BinaryOperationDescriptor> {
+        #[cfg(feature = "fhegg-settlement")]
+        if self.fhegg_verifier.is_some() {
+            return vec![fhegg_transport::FheggSettlementOperation::descriptor()];
+        }
+        Vec::new()
+    }
+
+    fn binary_operation_replay_material(
+        &self,
+        _session: &Self::Session,
+        name: &str,
+        payload: &[u8],
+    ) -> Result<Option<BinaryOperationReplayMaterial>, BinaryOperationError> {
+        #[cfg(feature = "fhegg-settlement")]
+        {
+            if name != fhegg_transport::FHEGG_SETTLEMENT_OPERATION {
+                return Err(BinaryOperationError::UnknownOperation(name.to_string()));
+            }
+            if self.fhegg_verifier.is_none() {
+                return Err(BinaryOperationError::Refused(
+                    "the host has no configured fhEgg computation-integrity policy".to_string(),
+                ));
+            }
+            let canonical = fhegg_transport::FheggSettlementBundle::from_wire_bytes(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?
+                .to_wire_bytes();
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "fhEgg settlement bundle is not canonically encoded".to_string(),
+                ));
+            }
+            return Ok(Some(BinaryOperationReplayMaterial::new(
+                canonical,
+                fhegg_transport::FHEGG_SETTLEMENT_DISCLOSURE,
+            )));
+        }
+        #[cfg(not(feature = "fhegg-settlement"))]
+        {
+            let _ = (_session, payload);
+            Err(BinaryOperationError::UnknownOperation(name.to_string()))
+        }
+    }
+
+    fn invoke_binary_operation(
+        &self,
+        session: &mut Self::Session,
+        name: &str,
+        payload: &[u8],
+        _actor: DreggIdentity,
+    ) -> Result<BinaryOperationReceipt, BinaryOperationError> {
+        #[cfg(feature = "fhegg-settlement")]
+        {
+            if name != fhegg_transport::FHEGG_SETTLEMENT_OPERATION {
+                return Err(BinaryOperationError::UnknownOperation(name.to_string()));
+            }
+            let verifier = self.fhegg_verifier.as_ref().ok_or_else(|| {
+                BinaryOperationError::Refused(
+                    "the host has no configured fhEgg computation-integrity policy".to_string(),
+                )
+            })?;
+            let operation = fhegg_transport::FheggSettlementOperation::from_wire_bytes(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let mut replay = self.fhegg_replay.borrow_mut();
+            let receipt = operation
+                .execute(self, session, verifier, &mut *replay)
+                .map_err(|error| BinaryOperationError::Refused(error.to_string()))?;
+            return Ok(BinaryOperationReceipt {
+                operation: name.to_string(),
+                receipt_id: receipt.claim_digest,
+                public_fields: vec![
+                    ("price".to_string(), receipt.price.to_string()),
+                    ("volume".to_string(), receipt.volume.to_string()),
+                    ("winner".to_string(), receipt.winner.0),
+                ],
+            });
+        }
+        #[cfg(not(feature = "fhegg-settlement"))]
+        {
+            let _ = (session, payload);
+            Err(BinaryOperationError::UnknownOperation(name.to_string()))
+        }
     }
 
     fn price(&self, input: &Action) -> RunCost {

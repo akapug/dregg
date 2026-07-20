@@ -494,7 +494,7 @@ impl TgMiniAppState {
 /// [`catalog_router`](crate::catalog_router); mounted by [`tg_miniapp_from_env`] when the token
 /// is present.
 pub fn tg_miniapp_router(state: Arc<TgMiniAppState>) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/tg", get(get_tg_shell))
         .route("/tg/offerings", get(get_tg_offerings))
         .route("/tg/offerings/{key}/session/{id}", get(get_tg_session))
@@ -511,8 +511,23 @@ pub fn tg_miniapp_router(state: Arc<TgMiniAppState>) -> Router {
         .route(
             "/tg/assets/noble-ed25519.js",
             get(crate::tg_link_page::get_noble_ed25519),
+        );
+    #[cfg(feature = "hosted-binary-operations")]
+    let router = router
+        .route(
+            "/tg/offerings/{key}/session/{id}/operations",
+            get(get_tg_operations),
         )
-        .with_state(state)
+        .route(
+            "/tg/offerings/{key}/session/{id}/operations/{name}",
+            post(post_tg_operation),
+        );
+    #[cfg(feature = "fhegg-settlement")]
+    let router = router.route(
+        "/tg/operations/{name}",
+        get(crate::fhegg_operation::get_descriptor),
+    );
+    router.with_state(state)
 }
 
 /// **Resolve the Mini App router from the environment** — `Some(router)` iff
@@ -803,6 +818,58 @@ async fn get_tg_session(
         wants_fragment(&headers),
     ))
     .into_response()
+}
+
+/// Authenticated discovery of transport-bearing affordances on one live
+/// session. The returned descriptor is the same value the web and Discord
+/// surfaces render; only this wrapper's initData gate differs.
+#[cfg(feature = "hosted-binary-operations")]
+async fn get_tg_operations(
+    State(state): State<Arc<TgMiniAppState>>,
+    Path((key, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let corr = audit::correlation_id();
+    if let Err(response) = verified_user(
+        &state,
+        &headers,
+        &corr,
+        "GET /tg/offerings/{key}/session/{id}/operations",
+    ) {
+        return response;
+    }
+    crate::fhegg_operation::session_operations(&state.catalog, key, id)
+}
+
+/// Telegram-authenticated wrapper around the one shared owning-bundle
+/// implementation. Authentication completes before the bounded request body is
+/// read; the raw initData and bundle bytes are never logged.
+#[cfg(feature = "hosted-binary-operations")]
+async fn post_tg_operation(
+    State(state): State<Arc<TgMiniAppState>>,
+    Path((key, id, name)): Path<(String, String, String)>,
+    request: axum::extract::Request,
+) -> Response {
+    let corr = audit::correlation_id();
+    let user = match verified_user(
+        &state,
+        request.headers(),
+        &corr,
+        "POST /tg/offerings/{key}/session/{id}/operations/{name}",
+    ) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let actor = state.identity_for(user.user_id);
+    crate::fhegg_operation::execute_upload(
+        Arc::clone(&state.catalog),
+        key,
+        id,
+        name,
+        actor,
+        request,
+    )
+    .await
 }
 
 /// The `{turn, arg, text}` POST body of `POST /tg/offerings/{key}/session/{id}/act` — the same

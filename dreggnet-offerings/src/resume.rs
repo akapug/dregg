@@ -4,15 +4,16 @@
 //! the type-erased `OfferingSlot` — some sessions are `!Send`, `Rc`-backed cells). That state is
 //! LOST on restart. This module closes that seam the way the rest of the platform's durable stores
 //! do (the discord-bot's `CharacterStore` / the `/gallery` registry): **store only the reproducible
-//! public input, and reopen by REPLAY — never a trusted serialized blob.**
+//! public input, and reopen by REPLAY — never a trusted serialized session blob.**
 //!
 //! ## What a session's reproducible public input is
 //!
-//! A session is deterministic from its [`SessionConfig`] seed + the ordered [`advance`]s that
-//! LANDED (the [`Offering`] contract: `open(cfg)` is a pure function of the seed, and
-//! `verify_by_replay` guarantees re-driving the ordered landed choices from a fresh identically
-//! seeded `open()` reproduces exactly the committed state chain). So a [`SessionMoveLog`] — the seed
-//! + that ordered `(action, actor)` list — is a **complete, un-forgeable** description of a session:
+//! A session is deterministic from its [`SessionConfig`] seed plus its ordered landed turns and
+//! successfully applied binary operations. Ordinary turns retain `(action, actor)` and re-drive
+//! through the executor. Each opaque operation retains its name/actor/request digest/public receipt
+//! plus only the concrete offering's explicitly approved replay representation; it is decoded,
+//! verified, reapplied, and receipt-compared on restart. A timeline cursor preserves interleaving.
+//! Thus a [`SessionMoveLog`] is a complete reproducible description without a trusted state blob:
 //!
 //! [`Offering`]: crate::Offering
 //! [`advance`]: crate::Offering::advance
@@ -22,12 +23,17 @@
 //!   re-derives the state. A forged / ineligible advance spliced into the log is **refused on
 //!   re-drive** (the same anti-ghost gate a live move hits), so a tampered log cannot reopen to a
 //!   forged state — it fails to reopen at all.
-//! - It is small and append-only (one row per landed turn), the natural durable shape.
+//! - It is append-only. Potentially large approved operation evidence lives in a content-addressed
+//!   sidecar rather than being expanded into the text log.
+//! - The host never assumes an upload is safe to retain. The concrete offering must disclose and
+//!   select replay material; a durable host refuses before mutation when it declines.
 //!
 //! ## The seam
 //!
 //! [`SessionResumeStore`] is the persistence trait — [`record_open`](SessionResumeStore::record_open)
 //! at open, [`record_landed`](SessionResumeStore::record_landed) after each landed advance,
+//! [`record_binary_operation`](SessionResumeStore::record_binary_operation) after each successful
+//! durable opaque operation,
 //! [`forget`](SessionResumeStore::forget) on close, [`load`](SessionResumeStore::load) /
 //! [`all`](SessionResumeStore::all) on boot. [`InMemoryResumeStore`] is the reference impl the tests
 //! drive; the durable **sqlite** impl is the discord-bot's follow-up (exactly as `SqliteGalleryStore`
@@ -44,7 +50,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::signed::Attribution;
-use crate::{Action, DreggIdentity, SessionConfig, SessionId};
+use crate::{Action, BinaryOperationReceipt, DreggIdentity, SessionConfig, SessionId};
 
 /// **One recorded LANDED advance** — the reproducible public input of a single committed turn: the
 /// typed [`Action`] that was resolved and the [`DreggIdentity`] it was attributed to (for a
@@ -90,12 +96,34 @@ impl LoggedMove {
     }
 }
 
-/// **A session's reproducible public input** — its [`SessionConfig`] seed plus the ordered
-/// [`LoggedMove`]s that landed. This is the ENTIRE durable footprint of a session: reopen it by
-/// re-driving these moves from a fresh [`open`](crate::Offering::open) under the same `cfg`
-/// ([`OfferingHost::resume`](crate::OfferingHost::resume)). It is not trusted — the executor
-/// re-checks every logged move on re-drive, so a tampered log is refused, never replayed to a forged
-/// state.
+/// One successfully applied transport-bearing operation in the session's
+/// durable replay timeline.
+///
+/// The host never journals an arbitrary upload body. `replay_material` is the
+/// concrete offering's explicit safe representation, accompanied by its exact
+/// disclosure. `payload_digest` still commits to the original request, while
+/// `replay_digest` detects corruption of the retained representation before it
+/// reaches an offering decoder. `after_moves` preserves ordering with ordinary
+/// landed turns without changing their legacy wire format.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoggedBinaryOperation {
+    pub after_moves: usize,
+    pub name: String,
+    pub actor: DreggIdentity,
+    pub payload_digest: [u8; 32],
+    pub replay_digest: [u8; 32],
+    pub replay_material: Vec<u8>,
+    pub replay_disclosure: String,
+    pub replay_is_canonical_request: bool,
+    pub receipt: BinaryOperationReceipt,
+}
+
+/// **A session's reproducible input** — its [`SessionConfig`] seed plus the landed
+/// [`LoggedMove`]s and [`LoggedBinaryOperation`]s in timeline order. Reopen it by re-driving both
+/// from a fresh [`open`](crate::Offering::open) under the same `cfg`
+/// ([`OfferingHost::resume`](crate::OfferingHost::resume)). It is not trusted: the executor checks
+/// each move, while each operation's safe representation is digest-checked, decoded, verified,
+/// reapplied, and compared with its journaled public receipt.
 #[derive(Clone, Debug)]
 pub struct SessionMoveLog {
     /// The offering the session belongs to (the host registry key).
@@ -107,6 +135,9 @@ pub struct SessionMoveLog {
     /// The ordered landed advances — replaying these from a fresh `open(cfg)` reproduces the exact
     /// committed state chain.
     pub moves: Vec<LoggedMove>,
+    /// Successful opaque operations, ordered relative to `moves` by each
+    /// entry's `after_moves` cursor. Legacy logs decode with an empty vector.
+    pub operations: Vec<LoggedBinaryOperation>,
 }
 
 impl SessionMoveLog {
@@ -117,6 +148,7 @@ impl SessionMoveLog {
             id,
             cfg,
             moves: Vec::new(),
+            operations: Vec::new(),
         }
     }
 
@@ -144,7 +176,14 @@ impl SessionMoveLog {
 
     /// Whether no advance has landed yet (a session at genesis).
     pub fn is_empty(&self) -> bool {
-        self.moves.is_empty()
+        self.moves.is_empty() && self.operations.is_empty()
+    }
+
+    /// Append one successfully applied opaque operation. The host constructs
+    /// the entry so the original request and safe replay representation remain
+    /// separately committed.
+    pub fn record_binary_operation(&mut self, operation: LoggedBinaryOperation) {
+        self.operations.push(operation);
     }
 }
 
@@ -208,6 +247,25 @@ pub trait SessionResumeStore {
     fn load_signed_counters(&self, key: &str, id: &SessionId) -> Vec<(String, u64)> {
         let _ = (key, id);
         Vec::new()
+    }
+
+    /// Whether this store can durably retain offering-selected binary-operation
+    /// replay material. The default is fail-closed so attaching an older store
+    /// cannot silently make a successful opaque mutation disappear on restart.
+    fn supports_binary_operations(&self) -> bool {
+        false
+    }
+
+    /// Append one successfully applied opaque operation. Returns `true` only
+    /// when both its public journal row and safe replay material were retained.
+    fn record_binary_operation(
+        &self,
+        key: &str,
+        id: &SessionId,
+        operation: &LoggedBinaryOperation,
+    ) -> bool {
+        let _ = (key, id, operation);
+        false
     }
 
     /// Drop `(key, id)`'s log (on session close) — it will not be resumed on the next boot.
@@ -305,6 +363,24 @@ impl SessionResumeStore for InMemoryResumeStore {
             .unwrap_or_default()
     }
 
+    fn supports_binary_operations(&self) -> bool {
+        true
+    }
+
+    fn record_binary_operation(
+        &self,
+        key: &str,
+        id: &SessionId,
+        operation: &LoggedBinaryOperation,
+    ) -> bool {
+        let mut map = self.inner.borrow_mut();
+        let entry = map
+            .entry(Self::map_key(key, id))
+            .or_insert_with(|| SessionMoveLog::new(key, id.clone(), SessionConfig::default()));
+        entry.record_binary_operation(operation.clone());
+        true
+    }
+
     fn forget(&self, key: &str, id: &SessionId) {
         self.inner.borrow_mut().remove(&Self::map_key(key, id));
         self.counters.borrow_mut().remove(&Self::map_key(key, id));
@@ -385,6 +461,17 @@ impl FileResumeStore {
             .join(format!("{}.counters", Self::name_for(key, id)))
     }
 
+    /// Content-addressed sidecar for one offering-selected replay object. Raw
+    /// bytes live here rather than being hex-expanded into the append-only text
+    /// log (an fhEgg evidence bundle may be large).
+    fn operation_path_for(&self, key: &str, id: &SessionId, replay_digest: &[u8; 32]) -> PathBuf {
+        self.root.join(format!(
+            "{}.op.{}",
+            Self::name_for(key, id),
+            hex32(replay_digest)
+        ))
+    }
+
     /// The collision-resistant file stem for `(key, id)`.
     fn name_for(key: &str, id: &SessionId) -> String {
         let mut h = blake3::Hasher::new();
@@ -421,6 +508,26 @@ impl FileResumeStore {
         {
             let _ = writeln!(f, "{}", encode_header(key, id, cfg));
         }
+    }
+
+    fn load_path(&self, path: &Path) -> Option<SessionMoveLog> {
+        let text = fs::read_to_string(path).ok()?;
+        let mut log = decode_log(&text)?;
+        // A renamed/spliced file must not claim a different `(key,id)` than its
+        // content-addressed filename.
+        if self.path_for(&log.key, &log.id) != path {
+            return None;
+        }
+        for operation in &mut log.operations {
+            // Preserve a missing/corrupt sidecar as a replayable *refusal*, not
+            // an absent session. OfferingHost checks `replay_digest` and reports
+            // `OperationRefused`, so lazy resume cannot mistake corruption for
+            // "no durable session" and fresh-mint over it.
+            operation.replay_material =
+                fs::read(self.operation_path_for(&log.key, &log.id, &operation.replay_digest))
+                    .unwrap_or_default();
+        }
+        Some(log)
     }
 }
 
@@ -482,20 +589,80 @@ impl SessionResumeStore for FileResumeStore {
             .collect()
     }
 
+    fn supports_binary_operations(&self) -> bool {
+        true
+    }
+
+    fn record_binary_operation(
+        &self,
+        key: &str,
+        id: &SessionId,
+        operation: &LoggedBinaryOperation,
+    ) -> bool {
+        if *blake3::hash(&operation.replay_material).as_bytes() != operation.replay_digest {
+            return false;
+        }
+        self.write_header_if_absent(key, id, &SessionConfig::default());
+
+        // Write the potentially large safe replay object first. An interrupted
+        // write cannot become a journaled operation; an orphan sidecar is inert.
+        let sidecar = self.operation_path_for(key, id, &operation.replay_digest);
+        if sidecar.exists() {
+            if fs::read(&sidecar).ok().as_deref() != Some(operation.replay_material.as_slice()) {
+                return false;
+            }
+        } else {
+            let Ok(mut file) = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&sidecar)
+            else {
+                return false;
+            };
+            if file.write_all(&operation.replay_material).is_err() || file.sync_data().is_err() {
+                return false;
+            }
+        }
+
+        let encoded = encode_operation(operation);
+        let log_path = self.path_for(key, id);
+        if fs::read_to_string(&log_path)
+            .ok()
+            .is_some_and(|text| text.lines().any(|line| line == encoded))
+        {
+            return true;
+        }
+        let Ok(mut file) = fs::OpenOptions::new().append(true).open(log_path) else {
+            return false;
+        };
+        writeln!(file, "{encoded}").is_ok() && file.sync_data().is_ok()
+    }
+
     fn forget(&self, key: &str, id: &SessionId) {
         let _ = fs::remove_file(self.path_for(key, id));
         let _ = fs::remove_file(self.counters_path_for(key, id));
+        let prefix = format!("{}.op.", Self::name_for(key, id));
+        if let Ok(entries) = fs::read_dir(&self.root) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(&prefix))
+                {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
     }
 
     fn load(&self, key: &str, id: &SessionId) -> Option<SessionMoveLog> {
-        let text = fs::read_to_string(self.path_for(key, id)).ok()?;
-        decode_log(&text)
+        self.load_path(&self.path_for(key, id))
     }
 
     fn all(&self) -> Vec<SessionMoveLog> {
         self.log_files()
             .iter()
-            .filter_map(|p| fs::read_to_string(p).ok().and_then(|t| decode_log(&t)))
+            .filter_map(|path| self.load_path(path))
             .collect()
     }
 }
@@ -574,6 +741,84 @@ fn encode_move(action: &Action, actor: &DreggIdentity, attribution: &Attribution
     )
 }
 
+/// One opaque operation metadata row. The safe replay bytes live in a
+/// content-addressed `.op.<digest>` sidecar; this line retains only commitments,
+/// attribution, the public receipt, and the exact persistence disclosure.
+fn encode_operation(operation: &LoggedBinaryOperation) -> String {
+    let mut fields = vec![
+        "@op".to_string(),
+        operation.after_moves.to_string(),
+        esc(&operation.name),
+        esc(&operation.actor.0),
+        hex32(&operation.payload_digest),
+        hex32(&operation.replay_digest),
+        esc(&operation.receipt.operation),
+        hex32(&operation.receipt.receipt_id),
+        esc(&operation.replay_disclosure),
+        (operation.replay_is_canonical_request as u8).to_string(),
+        operation.receipt.public_fields.len().to_string(),
+    ];
+    for (key, value) in &operation.receipt.public_fields {
+        fields.push(esc(key));
+        fields.push(esc(value));
+    }
+    fields.join("\t")
+}
+
+fn decode_operation(fields: &[&str]) -> Option<LoggedBinaryOperation> {
+    if fields.len() < 11 || fields[0] != "@op" {
+        return None;
+    }
+    let replay_is_canonical_request = match fields[9] {
+        "0" => false,
+        "1" => true,
+        _ => return None,
+    };
+    let count = fields[10].parse::<usize>().ok()?;
+    if fields.len() != 11 + count.checked_mul(2)? {
+        return None;
+    }
+    let mut public_fields = Vec::with_capacity(count);
+    for pair in fields[11..].chunks_exact(2) {
+        public_fields.push((unesc(pair[0]), unesc(pair[1])));
+    }
+    Some(LoggedBinaryOperation {
+        after_moves: fields[1].parse::<usize>().ok()?,
+        name: unesc(fields[2]),
+        actor: DreggIdentity(unesc(fields[3])),
+        payload_digest: decode_hex32(fields[4])?,
+        replay_digest: decode_hex32(fields[5])?,
+        replay_material: Vec::new(),
+        replay_disclosure: unesc(fields[8]),
+        replay_is_canonical_request,
+        receipt: BinaryOperationReceipt {
+            operation: unesc(fields[6]),
+            receipt_id: decode_hex32(fields[7])?,
+            public_fields,
+        },
+    })
+}
+
+fn hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+fn decode_hex32(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (index, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
 /// Parse a whole session file back into a [`SessionMoveLog`] — the header plus the ordered landed
 /// advances. Returns `None` on a structurally corrupt file (a missing / malformed header), so a
 /// damaged file is treated as absent rather than resumed to a wrong state.
@@ -598,6 +843,10 @@ fn decode_log(text: &str) -> Option<SessionMoveLog> {
             continue;
         }
         let f: Vec<&str> = line.split('\t').collect();
+        if f.first().copied() == Some("@op") {
+            log.record_binary_operation(decode_operation(&f)?);
+            continue;
+        }
         // 7 columns = the pre-attribution format (every such log was asserted-only);
         // 8 columns = the current format with the trailing trust column.
         if f.len() != 7 && f.len() != 8 {
@@ -689,6 +938,54 @@ mod file_store_tests {
         );
         assert!(!log.moves[1].action.enabled);
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Opaque-operation replay bytes live in a content-addressed sidecar, not
+    /// the text log, and corruption is refused before the offering sees them.
+    #[test]
+    fn binary_operation_journal_round_trips_and_refuses_sidecar_tamper() {
+        let dir = scratch_dir("binary-operation");
+        let store = FileResumeStore::open(&dir).expect("open store");
+        let key = "market";
+        let id = SessionId::new("shielded");
+        let cfg = SessionConfig::with_seed(41);
+        let replay_material = b"public proof material; no private witness".to_vec();
+        let replay_digest = *blake3::hash(&replay_material).as_bytes();
+        let operation = LoggedBinaryOperation {
+            after_moves: 3,
+            name: "settle.private.v1".to_string(),
+            actor: DreggIdentity("worker-key".to_string()),
+            payload_digest: replay_digest,
+            replay_digest,
+            replay_material: replay_material.clone(),
+            replay_disclosure: "public proof and result only".to_string(),
+            replay_is_canonical_request: true,
+            receipt: BinaryOperationReceipt {
+                operation: "settle.private.v1".to_string(),
+                receipt_id: [0xA5; 32],
+                public_fields: vec![("price".to_string(), "7".to_string())],
+            },
+        };
+
+        store.record_open(key, &id, &cfg);
+        assert!(store.record_binary_operation(key, &id, &operation));
+        let loaded = store.load(key, &id).expect("journal loads");
+        assert_eq!(loaded.operations, vec![operation.clone()]);
+
+        let sidecar = store.operation_path_for(key, &id, &replay_digest);
+        fs::write(&sidecar, b"tampered public proof").expect("tamper fixture");
+        let corrupt = store
+            .load(key, &id)
+            .expect("corrupt operation remains visible to fail-closed resume");
+        assert_ne!(
+            *blake3::hash(&corrupt.operations[0].replay_material).as_bytes(),
+            corrupt.operations[0].replay_digest,
+            "the host's replay gate will reject the corrupt sidecar"
+        );
+
+        store.forget(key, &id);
+        assert!(!sidecar.exists(), "forget removes operation sidecars");
         let _ = fs::remove_dir_all(&dir);
     }
 

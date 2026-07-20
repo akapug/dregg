@@ -17,7 +17,7 @@
 //!   turn hash is on the node's `GET /api/receipts` log.
 
 use dregg_node_target::NodeTarget;
-use dreggnet_web::demo_win;
+use dreggnet_web::demo_win_for_seed;
 use dreggnet_web::descent::DescentState;
 use procgen_dregg::daily_seed;
 
@@ -54,10 +54,11 @@ fn demo_seed() -> procgen_dregg::CommittedSeed {
 /// a turn on the node (the gated test below), while here it stays in-process (`Ok(None)`).
 #[test]
 fn local_mode_settle_is_an_in_process_noop() {
-    let (moves, level, class) = demo_win();
+    let seed = demo_seed();
+    let (moves, level, class) = demo_win_for_seed(seed);
     let state = DescentState::new(); // NodeTarget::Local by default
     assert!(!state.settles_to_a_node(), "Local is the default");
-    state.open_day("today", demo_seed());
+    state.open_day("today", seed);
     let run_id = "local-demo";
     let turns = state
         .submit_run("today", run_id, "ember", level, class, &moves)
@@ -93,10 +94,11 @@ fn federation_settle_lands_a_turn_on_a_running_node() {
     let target = NodeTarget::from_env().expect("DREGG_NODE_URL builds a Federation target");
     assert!(target.is_federation(), "DREGG_NODE_URL → Federation");
 
-    let (moves, level, class) = demo_win();
+    let seed = demo_seed();
+    let (moves, level, class) = demo_win_for_seed(seed);
     let state = DescentState::new().with_node_target(target);
     assert!(state.settles_to_a_node());
-    state.open_day("today", demo_seed());
+    state.open_day("today", seed);
 
     // Submit the demo WINNING run through the verify-gate (re-executed to the hoard + no-cheat-verified).
     let run_id = "devnet-demo-win";

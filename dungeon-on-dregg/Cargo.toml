@@ -93,6 +93,12 @@ procgen-dregg = { path = "../procgen-dregg" }
 # so the cross-cell driver reaches for it here. Same `dregg-turn` the framework and
 # executor are built on.
 dregg-turn = { path = "../turn" }
+# PRIVATE QUEST / RAID ZK (the `private_quest` module).  Optional because this is
+# the proof-PRODUCER path: it links the Lean-emitted bounded graph-rewrite AIR +
+# HidingFri prover.  The ordinary dungeon stays source/API-compatible without
+# enabling it; `private-quest` below also activates turn's real proof-history
+# module rather than copying its verifier into the game.
+dregg-circuit-prove = { path = "../circuit-prove", optional = true }
 # THE MULTI-PLAYER SHARED-WORLD substrate (the `mud` module). `starbridge_v2::world::World`
 # is the real MULTI-ACTOR ledger: each player is its OWN cell/identity, `World::turn(agent,
 # effects)` builds a turn attributed to that player, and `commit_turn` admits it IFF the
@@ -116,6 +122,7 @@ dregg-schema = { path = "../dregg-schema" }
 # allocator indices. Also used by the confined Bedrock brain on the live path.
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true }
+postcard = { version = "1", features = ["alloc"], optional = true }
 
 [features]
 # The REAL attested brain path (Phase E→B): links `dregg-zkoracle-prove`'s heavy MPC-TLS
@@ -125,6 +132,34 @@ serde_json = { workspace = true }
 # scripted-brain tests + the confined-channel parser stay green and light without it. The
 # live test (`tests/bedrock_brain_live.rs`) is `#[ignore]`d (real network + paid call).
 tlsn-live = ["dregg-zkoracle-prove/tlsn-live"]
+
+# A two-step hidden quest/raid state machine proved as the Lean-authored bounded
+# 4-host-slot / 2-pattern-slot match-driven replacement relation.  This is
+# deliberately not full DPO rewriting.  Heavy HidingFri proof production stays
+# opt-in; default dungeon builds do not compile this module.
+private-quest = ["dep:dregg-circuit-prove", "dregg-turn/prover"]
+
+# One-shot private 4-seat/4-role raid matching. The producer sees the private
+# score/admissibility matrix; proof consumers see only its root and the globally
+# optimal deterministic roles. This does not claim distributed input assembly
+# or an Effect::Custom cell binding.
+private-raid-assignment = ["dep:dregg-circuit-prove", "dep:postcard"]
+
+# One-shot private N=4/K=4 guild/party preference. The Lean-emitted HidingFri
+# relation reveals only the lowest-index aggregate winner and ballot root; the
+# Tier-1 producer still sees all four ballots.
+private-preference = ["dep:dregg-circuit-prove", "dep:postcard"]
+
+# Eight-participant commit-before-reveal fair deal. The static relation is the
+# Lean-emitted bias-free HidingFri AIR; the game layer records commitments and
+# rejected attempts and gates selective card openings. This is a standalone
+# receipt path, not an Effect::Custom cell binding or distributed MPC setup.
+private-fair-shuffle = ["dep:dregg-circuit-prove", "dep:postcard"]
+
+[[bin]]
+name = "dungeon-private-quest-producer"
+path = "src/bin/private-quest-producer.rs"
+required-features = ["private-quest"]
 
 # A workspace MEMBER of the breadstuffs root (registered in `members`). The root
 # `[workspace]` + `[patch]` tables apply; no standalone `[workspace]`/`[patch]`.

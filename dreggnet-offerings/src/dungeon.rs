@@ -23,11 +23,39 @@ use dregg_app_framework::TurnReceipt;
 use spween::{CompareOp, ConditionClause, ConditionExpr, PassageContent, Scene};
 use spween_dregg::{StepReceipt, WorldCell, WorldError, value_to_u64, verify, verify_by_replay};
 
+#[cfg(feature = "private-fair-shuffle-operation")]
+use dungeon_on_dregg::private_fair_shuffle::{
+    DIGEST_WIDTH as SHUFFLE_DIGEST_WIDTH, FairCardOpening, FairShuffleAttemptOutcome,
+    FairShuffleReceipt, FairShuffleTable, PARTICIPANTS as SHUFFLE_PARTICIPANTS,
+};
+#[cfg(feature = "private-preference-operation")]
+use dungeon_on_dregg::private_preference::{
+    PrivatePartyDecision, PrivatePreferenceReceipt, PrivatePreferenceSession,
+};
+#[cfg(feature = "private-quest-operation")]
+use dungeon_on_dregg::private_quest::{
+    PRIVATE_QUEST_DOMAIN, PRIVATE_QUEST_STEPS, PrivateQuestPublicHistory,
+    decode_private_quest_receipt, encode_private_quest_receipt,
+};
+#[cfg(feature = "private-raid-operation")]
+use dungeon_on_dregg::private_raid::{
+    RaidAssignmentReceipt, RaidAssignmentSession, RaidPartyAssignment,
+};
 use dungeon_on_dregg::{deploy_keep, keep_scene};
 
 use crate::{
     Action, CollectiveDecision, DreggIdentity, Offering, OfferingError, Outcome, RecordVerify,
     RunCost, SessionConfig, Surface, VerifyReport,
+};
+#[cfg(any(
+    feature = "private-raid-operation",
+    feature = "private-preference-operation",
+    feature = "private-fair-shuffle-operation",
+    feature = "private-quest-operation"
+))]
+use crate::{
+    BinaryOperationDescriptor, BinaryOperationError, BinaryOperationReceipt,
+    BinaryOperationReplayMaterial,
 };
 
 /// Re-export of the substrate **playthrough** — the public, transmissible session record the
@@ -45,6 +73,139 @@ pub const KEEP_NAME: &str = "The Warden's Keep";
 
 /// The Keep's objective, stated for the party.
 pub const KEEP_OBJECTIVE: &str = "trade past the gate-warden, claim the crown, descend the collapsing stair, and seize the hoard";
+
+#[cfg(feature = "private-raid-operation")]
+pub const PRIVATE_RAID_OPERATION: &str = "dungeon.private-raid-assignment.v1";
+#[cfg(feature = "private-raid-operation")]
+pub const PRIVATE_RAID_MEDIA_TYPE: &str =
+    "application/vnd.dregg.private-raid-assignment.v1+postcard";
+#[cfg(feature = "private-raid-operation")]
+pub const MAX_PRIVATE_RAID_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(feature = "private-raid-operation")]
+pub const PRIVATE_RAID_DISCLOSURE: &str = "HidingFri proves the published four-seat role permutation is admissible and globally optimal for one producer-private 4x4 score matrix. The producer sees every score and admissibility bit; this is not distributed private-input assembly or an Effect::Custom cell transition.";
+
+#[cfg(feature = "private-preference-operation")]
+pub const PRIVATE_PREFERENCE_OPERATION: &str = "dungeon.private-party-preference.v1";
+#[cfg(feature = "private-preference-operation")]
+pub const PRIVATE_PREFERENCE_MEDIA_TYPE: &str =
+    "application/vnd.dregg.private-party-preference.v1+postcard";
+#[cfg(feature = "private-preference-operation")]
+pub const MAX_PRIVATE_PREFERENCE_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(feature = "private-preference-operation")]
+pub const PRIVATE_PREFERENCE_DISCLOSURE: &str = "A Lean-authored HidingFri proof aggregates four producer-private, two-bit score ballots over four public party plans and reveals only the lowest-index winning plan plus a faithful ballot root. Ballots, option totals, and the winning total stay hidden; the current Tier-1 producer sees all ballots, while the separate custom-cell descriptor is not folded by this hosted receipt.";
+#[cfg(feature = "private-preference-operation")]
+pub const PRIVATE_PREFERENCE_OPTIONS: [&str; 4] = [
+    "assault the ash gate",
+    "descend the drowned stair",
+    "barter in the Dark Bazaar",
+    "muster for the moon raid",
+];
+
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub const PRIVATE_SHUFFLE_COMMIT_OPERATION: &str = "dungeon.private-fair-shuffle.commit.v1";
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub const PRIVATE_SHUFFLE_PROVE_OPERATION: &str = "dungeon.private-fair-shuffle.prove.v1";
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub const PRIVATE_SHUFFLE_REVEAL_OPERATION: &str = "dungeon.private-fair-shuffle.reveal.v1";
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub const PRIVATE_SHUFFLE_COMMIT_MEDIA_TYPE: &str =
+    "application/vnd.dregg.private-fair-shuffle-commit.v1";
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub const PRIVATE_SHUFFLE_PROOF_MEDIA_TYPE: &str =
+    "application/vnd.dregg.private-fair-shuffle-proof.v1+postcard";
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub const PRIVATE_SHUFFLE_REVEAL_MEDIA_TYPE: &str =
+    "application/vnd.dregg.private-fair-shuffle-opening.v1+postcard";
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub const PRIVATE_SHUFFLE_DISCLOSURE: &str = "Eight actor-bound commitments must land before a HidingFri proof can admit a bias-free deal; rejected ranks are recorded and retried, and each accepted seat may reveal only its own Merkle-opened card. The current producer sees all contributions and the host sees submitted openings; this is Tier-1, not distributed MPC input assembly or an Effect::Custom cell transition.";
+#[cfg(feature = "private-fair-shuffle-operation")]
+const MAX_PRIVATE_SHUFFLE_PROOF_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(feature = "private-fair-shuffle-operation")]
+const MAX_PRIVATE_SHUFFLE_OPENING_BYTES: usize = 64 * 1024;
+#[cfg(feature = "private-fair-shuffle-operation")]
+const PRIVATE_SHUFFLE_COMMIT_BYTES: usize = 1 + 4 * SHUFFLE_DIGEST_WIDTH;
+
+#[cfg(feature = "private-quest-operation")]
+pub const PRIVATE_QUEST_OPERATION: &str = "dungeon.private-quest-reduction.v1";
+#[cfg(feature = "private-quest-operation")]
+pub const PRIVATE_QUEST_MEDIA_TYPE: &str =
+    "application/vnd.dregg.private-quest-reduction.v1+postcard";
+#[cfg(feature = "private-quest-operation")]
+pub const MAX_PRIVATE_QUEST_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(feature = "private-quest-operation")]
+pub const PRIVATE_QUEST_DISCLOSURE: &str = "Each opaque HidingFri receipt proves one of two ordered, Lean-authored Warden graph reductions over a hidden four-edge quest state. The host retains only the fixed domain/session/index, blinded ruleset and state roots, and proof; graph edges, match, selected rule, and blindings stay with the producer. This standalone history is not yet the Effect::Custom cell carrier.";
+
+/// Stable public proof-session id derived from the hosted session seed.
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub fn private_fair_shuffle_session_for_seed(seed: u64) -> u32 {
+    const BABYBEAR_P: u64 = 2_013_265_921;
+    let mut hasher =
+        blake3::Hasher::new_derive_key("dregg-dungeon-private-fair-shuffle-session-v1");
+    hasher.update(&seed.to_le_bytes());
+    let mut low = [0u8; 8];
+    low.copy_from_slice(&hasher.finalize().as_bytes()[..8]);
+    (u64::from_le_bytes(low) % BABYBEAR_P) as u32
+}
+
+/// Stable canonical BabyBear session id for the private party preference.
+#[cfg(feature = "private-preference-operation")]
+pub fn private_preference_session_for_seed(seed: u64) -> u32 {
+    const BABYBEAR_P: u64 = 2_013_265_921;
+    let mut hasher =
+        blake3::Hasher::new_derive_key("dregg-dungeon-private-party-preference-session-v1");
+    hasher.update(&seed.to_le_bytes());
+    let mut low = [0u8; 8];
+    low.copy_from_slice(&hasher.finalize().as_bytes()[..8]);
+    (u64::from_le_bytes(low) % BABYBEAR_P) as u32
+}
+
+/// Stable canonical BabyBear session id for the private semantic quest.
+#[cfg(feature = "private-quest-operation")]
+pub fn private_quest_session_for_seed(seed: u64) -> u32 {
+    const BABYBEAR_P: u64 = 2_013_265_921;
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-dungeon-private-quest-session-v1");
+    hasher.update(&seed.to_le_bytes());
+    let mut low = [0u8; 8];
+    low.copy_from_slice(&hasher.finalize().as_bytes()[..8]);
+    (u64::from_le_bytes(low) % BABYBEAR_P) as u32
+}
+
+/// Exact fixed-width commitment submission used by every frontend adapter.
+#[cfg(feature = "private-fair-shuffle-operation")]
+pub fn encode_private_shuffle_commitment(
+    participant: u8,
+    commitment: [u32; SHUFFLE_DIGEST_WIDTH],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(PRIVATE_SHUFFLE_COMMIT_BYTES);
+    out.push(participant);
+    for lane in commitment {
+        out.extend_from_slice(&lane.to_be_bytes());
+    }
+    out
+}
+
+#[cfg(feature = "private-fair-shuffle-operation")]
+fn decode_private_shuffle_commitment(
+    payload: &[u8],
+) -> Result<(usize, [u32; SHUFFLE_DIGEST_WIDTH]), BinaryOperationError> {
+    if payload.len() != PRIVATE_SHUFFLE_COMMIT_BYTES {
+        return Err(BinaryOperationError::Malformed(format!(
+            "private shuffle commitment is {} bytes; canonical width is {PRIVATE_SHUFFLE_COMMIT_BYTES}",
+            payload.len()
+        )));
+    }
+    let participant = payload[0] as usize;
+    let mut commitment = [0u32; SHUFFLE_DIGEST_WIDTH];
+    for (lane, slot) in commitment.iter_mut().enumerate() {
+        let base = 1 + lane * 4;
+        *slot = u32::from_be_bytes(
+            payload[base..base + 4]
+                .try_into()
+                .expect("fixed payload width checked"),
+        );
+    }
+    Ok((participant, commitment))
+}
 
 /// **A dungeon play session over the REAL substrate** — the factored `fiction.rs` `RealSession`.
 /// Owns the live [`WorldCell`] (the committed dungeon-on-dregg Keep), the owned scene (the
@@ -73,6 +234,31 @@ pub struct DungeonSession {
     /// single-actor [`Offering::advance`], `Some` for an [`Offering::advance_collective`] crowd
     /// turn — the recorded electorate + carrier + tally, the crowd decision made first-class.
     collectives: Vec<Option<CollectiveDecision>>,
+    /// Opt-in proof-gated public role assignment. The HidingFri receipt is
+    /// accepted at most once for the session-derived field identifier.
+    #[cfg(feature = "private-raid-operation")]
+    private_raid: RaidAssignmentSession,
+    #[cfg(feature = "private-raid-operation")]
+    private_raid_actor: Option<DreggIdentity>,
+    /// One proof-gated aggregate party decision. The public session retains
+    /// only the ballot root, winner, and submitter.
+    #[cfg(feature = "private-preference-operation")]
+    private_preference: PrivatePreferenceSession,
+    #[cfg(feature = "private-preference-operation")]
+    private_preference_actor: Option<DreggIdentity>,
+    /// Public commit/proof/opening state for the opt-in private fair deal.
+    #[cfg(feature = "private-fair-shuffle-operation")]
+    private_shuffle: FairShuffleTable,
+    #[cfg(feature = "private-fair-shuffle-operation")]
+    private_shuffle_actors: [Option<DreggIdentity>; SHUFFLE_PARTICIPANTS],
+    /// Consumer-side root/proof history. The hidden graph is intentionally not
+    /// present in the host session; an external quest producer owns it.
+    #[cfg(feature = "private-quest-operation")]
+    private_quest: Option<PrivateQuestPublicHistory>,
+    #[cfg(feature = "private-quest-operation")]
+    private_quest_actors: Vec<DreggIdentity>,
+    #[cfg(feature = "private-quest-operation")]
+    private_quest_session: u32,
 }
 
 impl DungeonSession {
@@ -115,6 +301,61 @@ impl DungeonSession {
     /// Read a narrative var off the committed cell state.
     pub fn read_var(&self, name: &str) -> u64 {
         self.world.read_var(name)
+    }
+
+    #[cfg(feature = "private-raid-operation")]
+    pub const fn private_raid_session_id(&self) -> u32 {
+        self.private_raid.session()
+    }
+
+    #[cfg(feature = "private-raid-operation")]
+    pub fn private_raid_assignment(&self) -> Option<RaidPartyAssignment> {
+        self.private_raid.assignment().copied()
+    }
+
+    #[cfg(feature = "private-raid-operation")]
+    pub fn private_raid_actor(&self) -> Option<&DreggIdentity> {
+        self.private_raid_actor.as_ref()
+    }
+
+    #[cfg(feature = "private-preference-operation")]
+    pub const fn private_preference_session_id(&self) -> u32 {
+        self.private_preference.session()
+    }
+
+    #[cfg(feature = "private-preference-operation")]
+    pub fn private_preference_decision(&self) -> Option<PrivatePartyDecision> {
+        self.private_preference.decision().copied()
+    }
+
+    #[cfg(feature = "private-preference-operation")]
+    pub fn private_preference_actor(&self) -> Option<&DreggIdentity> {
+        self.private_preference_actor.as_ref()
+    }
+
+    #[cfg(feature = "private-fair-shuffle-operation")]
+    pub const fn private_fair_shuffle_session_id(&self) -> u32 {
+        self.private_shuffle.session()
+    }
+
+    #[cfg(feature = "private-fair-shuffle-operation")]
+    pub fn private_fair_shuffle_table(&self) -> &FairShuffleTable {
+        &self.private_shuffle
+    }
+
+    #[cfg(feature = "private-quest-operation")]
+    pub const fn private_quest_session_id(&self) -> u32 {
+        self.private_quest_session
+    }
+
+    #[cfg(feature = "private-quest-operation")]
+    pub fn private_quest_history(&self) -> Option<&PrivateQuestPublicHistory> {
+        self.private_quest.as_ref()
+    }
+
+    #[cfg(feature = "private-quest-operation")]
+    pub fn private_quest_actors(&self) -> &[DreggIdentity] {
+        &self.private_quest_actors
     }
 
     /// The recorded playthrough (genesis + committed steps) — the input to replay-verify.
@@ -237,6 +478,18 @@ impl Offering for DungeonOffering {
         // A deterministic deploy seed in 1..=251 (stable per session → replay-verifiable
         // identity), derived from the config seed (default 1).
         let seed = ((cfg.seed.unwrap_or(1) % 251) + 1) as u8;
+        #[cfg(feature = "private-raid-operation")]
+        let private_raid_session = {
+            let source = cfg.seed.unwrap_or(1);
+            // Canonical nonzero BabyBear value, stable for the hosted session.
+            ((source % 2_013_265_920) + 1) as u32
+        };
+        #[cfg(feature = "private-preference-operation")]
+        let private_preference_session = private_preference_session_for_seed(cfg.seed.unwrap_or(1));
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        let private_shuffle_session = private_fair_shuffle_session_for_seed(cfg.seed.unwrap_or(1));
+        #[cfg(feature = "private-quest-operation")]
+        let private_quest_session = private_quest_session_for_seed(cfg.seed.unwrap_or(1));
         let scene = keep_scene();
         let world = deploy_keep(seed);
         // Drive genesis with the stock runtime (intro entry effects: hp=50, mana_budget=50),
@@ -255,6 +508,27 @@ impl Offering for DungeonOffering {
             steps: Vec::new(),
             actors: Vec::new(),
             collectives: Vec::new(),
+            #[cfg(feature = "private-raid-operation")]
+            private_raid: RaidAssignmentSession::new(private_raid_session)
+                .map_err(|error| OfferingError::Deploy(error.to_string()))?,
+            #[cfg(feature = "private-raid-operation")]
+            private_raid_actor: None,
+            #[cfg(feature = "private-preference-operation")]
+            private_preference: PrivatePreferenceSession::new(private_preference_session)
+                .map_err(|error| OfferingError::Deploy(error.to_string()))?,
+            #[cfg(feature = "private-preference-operation")]
+            private_preference_actor: None,
+            #[cfg(feature = "private-fair-shuffle-operation")]
+            private_shuffle: FairShuffleTable::new(private_shuffle_session)
+                .map_err(|error| OfferingError::Deploy(error.to_string()))?,
+            #[cfg(feature = "private-fair-shuffle-operation")]
+            private_shuffle_actors: core::array::from_fn(|_| None),
+            #[cfg(feature = "private-quest-operation")]
+            private_quest: None,
+            #[cfg(feature = "private-quest-operation")]
+            private_quest_actors: Vec::new(),
+            #[cfg(feature = "private-quest-operation")]
+            private_quest_session,
         })
     }
 
@@ -386,6 +660,127 @@ impl Offering for DungeonOffering {
             },
         ];
 
+        #[cfg(feature = "private-raid-operation")]
+        {
+            let state = match session.private_raid_assignment() {
+                Some(assignment) => format!(
+                    "verified roles: {:?} · submitted by {}",
+                    assignment.roles(),
+                    session
+                        .private_raid_actor()
+                        .map(|actor| actor.0.as_str())
+                        .unwrap_or("unknown")
+                ),
+                None => format!(
+                    "awaiting {PRIVATE_RAID_OPERATION} receipt for proof session {}",
+                    session.private_raid_session_id()
+                ),
+            };
+            children.push(ViewNode::Section {
+                title: "Private raid muster".to_string(),
+                tag: "genuine".to_string(),
+                children: vec![
+                    ViewNode::Text(state),
+                    ViewNode::Text(PRIVATE_RAID_DISCLOSURE.to_string()),
+                ],
+            });
+        }
+
+        #[cfg(feature = "private-preference-operation")]
+        {
+            let state = match session.private_preference_decision() {
+                Some(decision) => format!(
+                    "the party privately chose #{}: {} · submitted by {}",
+                    decision.winner(),
+                    PRIVATE_PREFERENCE_OPTIONS[decision.winner()],
+                    session
+                        .private_preference_actor()
+                        .map(|actor| actor.0.as_str())
+                        .unwrap_or("unknown")
+                ),
+                None => format!(
+                    "awaiting {PRIVATE_PREFERENCE_OPERATION} receipt for proof session {} · plans: {}",
+                    session.private_preference_session_id(),
+                    PRIVATE_PREFERENCE_OPTIONS.join(" · ")
+                ),
+            };
+            children.push(ViewNode::Section {
+                title: "Shielded party counsel".to_string(),
+                tag: "genuine".to_string(),
+                children: vec![
+                    ViewNode::Text(state),
+                    ViewNode::Text(PRIVATE_PREFERENCE_DISCLOSURE.to_string()),
+                ],
+            });
+        }
+
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        {
+            let table = session.private_fair_shuffle_table();
+            let committed = table
+                .commitments()
+                .iter()
+                .filter(|entry| entry.is_some())
+                .count();
+            let state = if let Some(receipt) = table.accepted_receipt() {
+                format!(
+                    "accepted attempt {} · {} private card opening(s) landed",
+                    receipt.statement().attempt,
+                    table
+                        .revealed_cards()
+                        .iter()
+                        .filter(|card| card.is_some())
+                        .count()
+                )
+            } else {
+                format!(
+                    "attempt {} · {committed}/{SHUFFLE_PARTICIPANTS} actor-bound commitments",
+                    table.next_attempt().unwrap_or_default()
+                )
+            };
+            children.push(ViewNode::Section {
+                title: "Private fair deal".to_string(),
+                tag: "genuine".to_string(),
+                children: vec![
+                    ViewNode::Text(state),
+                    ViewNode::Text(format!(
+                        "proof session {} · {} rejected unbiased-retry receipt(s)",
+                        session.private_fair_shuffle_session_id(),
+                        table.rejected_receipts().len()
+                    )),
+                    ViewNode::Text(PRIVATE_SHUFFLE_DISCLOSURE.to_string()),
+                ],
+            });
+        }
+
+        #[cfg(feature = "private-quest-operation")]
+        {
+            let (steps, root) = session
+                .private_quest_history()
+                .map(|history| {
+                    (
+                        history.receipt_count(),
+                        format!("{:?}", history.head().current_root),
+                    )
+                })
+                .unwrap_or_else(|| (0, "not established".to_string()));
+            children.push(ViewNode::Section {
+                title: "Private semantic quest".to_string(),
+                tag: "genuine".to_string(),
+                children: vec![
+                    ViewNode::Text(format!(
+                        "{steps}/{PRIVATE_QUEST_STEPS} opaque reductions verified · current root {root}"
+                    )),
+                    ViewNode::Text(format!(
+                        "proof session {} · domain {PRIVATE_QUEST_DOMAIN} · {} authenticated submitter(s)",
+                        session.private_quest_session_id(),
+                        session.private_quest_actors().len()
+                    )),
+                    ViewNode::Text(PRIVATE_QUEST_DISCLOSURE.to_string()),
+                ],
+            });
+        }
+
         if session.is_ended() {
             children.push(ViewNode::Section {
                 title: "The Keep is cleared".to_string(),
@@ -416,6 +811,485 @@ impl Offering for DungeonOffering {
             tag: "accent".to_string(),
             children,
         })
+    }
+
+    #[cfg(any(
+        feature = "private-raid-operation",
+        feature = "private-preference-operation",
+        feature = "private-fair-shuffle-operation",
+        feature = "private-quest-operation"
+    ))]
+    fn binary_operations(&self, _session: &Self::Session) -> Vec<BinaryOperationDescriptor> {
+        let mut operations = Vec::new();
+        #[cfg(feature = "private-raid-operation")]
+        operations.push(BinaryOperationDescriptor {
+            name: PRIVATE_RAID_OPERATION.to_string(),
+            title: "Prove private raid-role assignment".to_string(),
+            input_media_type: PRIVATE_RAID_MEDIA_TYPE.to_string(),
+            max_input_bytes: MAX_PRIVATE_RAID_BYTES,
+            disclosure: PRIVATE_RAID_DISCLOSURE.to_string(),
+        });
+        #[cfg(feature = "private-preference-operation")]
+        operations.push(BinaryOperationDescriptor {
+            name: PRIVATE_PREFERENCE_OPERATION.to_string(),
+            title: "Prove a shielded party preference".to_string(),
+            input_media_type: PRIVATE_PREFERENCE_MEDIA_TYPE.to_string(),
+            max_input_bytes: MAX_PRIVATE_PREFERENCE_BYTES,
+            disclosure: PRIVATE_PREFERENCE_DISCLOSURE.to_string(),
+        });
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        operations.extend([
+            BinaryOperationDescriptor {
+                name: PRIVATE_SHUFFLE_COMMIT_OPERATION.to_string(),
+                title: "Commit one private fair-shuffle contribution".to_string(),
+                input_media_type: PRIVATE_SHUFFLE_COMMIT_MEDIA_TYPE.to_string(),
+                max_input_bytes: PRIVATE_SHUFFLE_COMMIT_BYTES,
+                disclosure: PRIVATE_SHUFFLE_DISCLOSURE.to_string(),
+            },
+            BinaryOperationDescriptor {
+                name: PRIVATE_SHUFFLE_PROVE_OPERATION.to_string(),
+                title: "Prove a bias-free private fair deal".to_string(),
+                input_media_type: PRIVATE_SHUFFLE_PROOF_MEDIA_TYPE.to_string(),
+                max_input_bytes: MAX_PRIVATE_SHUFFLE_PROOF_BYTES,
+                disclosure: PRIVATE_SHUFFLE_DISCLOSURE.to_string(),
+            },
+            BinaryOperationDescriptor {
+                name: PRIVATE_SHUFFLE_REVEAL_OPERATION.to_string(),
+                title: "Reveal one actor-owned card".to_string(),
+                input_media_type: PRIVATE_SHUFFLE_REVEAL_MEDIA_TYPE.to_string(),
+                max_input_bytes: MAX_PRIVATE_SHUFFLE_OPENING_BYTES,
+                disclosure: PRIVATE_SHUFFLE_DISCLOSURE.to_string(),
+            },
+        ]);
+        #[cfg(feature = "private-quest-operation")]
+        operations.push(BinaryOperationDescriptor {
+            name: PRIVATE_QUEST_OPERATION.to_string(),
+            title: "Prove one hidden semantic quest reduction".to_string(),
+            input_media_type: PRIVATE_QUEST_MEDIA_TYPE.to_string(),
+            max_input_bytes: MAX_PRIVATE_QUEST_BYTES,
+            disclosure: PRIVATE_QUEST_DISCLOSURE.to_string(),
+        });
+        operations
+    }
+
+    #[cfg(any(
+        feature = "private-raid-operation",
+        feature = "private-preference-operation",
+        feature = "private-fair-shuffle-operation",
+        feature = "private-quest-operation"
+    ))]
+    fn binary_operation_replay_material(
+        &self,
+        _session: &Self::Session,
+        name: &str,
+        payload: &[u8],
+    ) -> Result<Option<BinaryOperationReplayMaterial>, BinaryOperationError> {
+        #[cfg(feature = "private-raid-operation")]
+        if name == PRIVATE_RAID_OPERATION {
+            let receipt = RaidAssignmentReceipt::from_postcard(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = receipt
+                .to_postcard()
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "private raid receipt is not canonically encoded".to_string(),
+                ));
+            }
+            return Ok(Some(BinaryOperationReplayMaterial::new(
+                canonical,
+                "Retains the public raid statement, pinned verifier identity, and opaque hiding proof; no scores, admissibility matrix, or proof witness.",
+            )));
+        }
+
+        #[cfg(feature = "private-preference-operation")]
+        if name == PRIVATE_PREFERENCE_OPERATION {
+            let receipt = PrivatePreferenceReceipt::from_postcard(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = receipt
+                .to_postcard()
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "private preference receipt is not canonically encoded".to_string(),
+                ));
+            }
+            return Ok(Some(BinaryOperationReplayMaterial::new(
+                canonical,
+                "Retains the public preference session, faithful ballot root, winner, pinned verifier identity, and opaque HidingFri proof; no ballot, option total, winning total, or commitment blinding.",
+            )));
+        }
+
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        if name == PRIVATE_SHUFFLE_COMMIT_OPERATION {
+            let _ = decode_private_shuffle_commitment(payload)?;
+            return Ok(Some(BinaryOperationReplayMaterial::new(
+                payload.to_vec(),
+                "Retains one public participant commitment and participant index; no contribution or commitment blinding.",
+            )));
+        }
+
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        if name == PRIVATE_SHUFFLE_PROVE_OPERATION {
+            let receipt = FairShuffleReceipt::from_postcard(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = receipt
+                .to_postcard()
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "private fair-shuffle receipt is not canonically encoded".to_string(),
+                ));
+            }
+            return Ok(Some(BinaryOperationReplayMaterial::new(
+                canonical,
+                "Retains the public shuffle statement, pinned verifier identity, and opaque hiding proof; no participant contributions, cards, rank, or proof witness.",
+            )));
+        }
+
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        if name == PRIVATE_SHUFFLE_REVEAL_OPERATION {
+            let opening = FairCardOpening::from_postcard(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = opening
+                .to_postcard()
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "private fair-shuffle opening is not canonically encoded".to_string(),
+                ));
+            }
+            return Ok(Some(BinaryOperationReplayMaterial::new(
+                canonical,
+                "Retains exactly one intentionally revealed seat/card plus its commitment blinding and Merkle authentication path; no other card or contribution.",
+            )));
+        }
+
+        #[cfg(feature = "private-quest-operation")]
+        if name == PRIVATE_QUEST_OPERATION {
+            let receipt = decode_private_quest_receipt(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = encode_private_quest_receipt(&receipt)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            return Ok(Some(BinaryOperationReplayMaterial::new(
+                canonical,
+                "Retains the fixed quest domain/session/index, blinded old/new/ruleset roots, and opaque HidingFri proof; no graph edges, match, selected rule, or commitment blindings.",
+            )));
+        }
+
+        Err(BinaryOperationError::UnknownOperation(name.to_string()))
+    }
+
+    #[cfg(any(
+        feature = "private-raid-operation",
+        feature = "private-preference-operation",
+        feature = "private-fair-shuffle-operation",
+        feature = "private-quest-operation"
+    ))]
+    fn invoke_binary_operation(
+        &self,
+        session: &mut Self::Session,
+        name: &str,
+        payload: &[u8],
+        actor: DreggIdentity,
+    ) -> Result<BinaryOperationReceipt, BinaryOperationError> {
+        #[cfg(feature = "private-raid-operation")]
+        if name == PRIVATE_RAID_OPERATION {
+            if payload.len() > MAX_PRIVATE_RAID_BYTES {
+                return Err(BinaryOperationError::Malformed(format!(
+                    "private raid receipt is {} bytes; maximum is {MAX_PRIVATE_RAID_BYTES}",
+                    payload.len()
+                )));
+            }
+            let receipt = RaidAssignmentReceipt::from_postcard(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = receipt
+                .to_postcard()
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "private raid receipt is not canonically encoded".to_string(),
+                ));
+            }
+            let receipt_id = {
+                let mut hash = blake3::Hasher::new();
+                hash.update(b"dregg-dungeon-private-raid-operation-receipt-v1");
+                hash.update(&canonical);
+                *hash.finalize().as_bytes()
+            };
+            let assignment = session
+                .private_raid
+                .accept(&receipt)
+                .map_err(|error| BinaryOperationError::Refused(error.to_string()))?;
+            session.private_raid_actor = Some(actor);
+            return Ok(BinaryOperationReceipt {
+                operation: PRIVATE_RAID_OPERATION.to_string(),
+                receipt_id,
+                public_fields: vec![
+                    ("session".to_string(), assignment.session().to_string()),
+                    (
+                        "inputRoot".to_string(),
+                        format!("{:?}", assignment.input_root()),
+                    ),
+                    ("roles".to_string(), format!("{:?}", assignment.roles())),
+                ],
+            });
+        }
+
+        #[cfg(feature = "private-preference-operation")]
+        if name == PRIVATE_PREFERENCE_OPERATION {
+            if payload.len() > MAX_PRIVATE_PREFERENCE_BYTES {
+                return Err(BinaryOperationError::Malformed(format!(
+                    "private preference receipt is {} bytes; maximum is {MAX_PRIVATE_PREFERENCE_BYTES}",
+                    payload.len()
+                )));
+            }
+            let receipt = PrivatePreferenceReceipt::from_postcard(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = receipt
+                .to_postcard()
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "private preference receipt is not canonically encoded".to_string(),
+                ));
+            }
+            let receipt_id = {
+                let mut hash = blake3::Hasher::new();
+                hash.update(b"dregg-dungeon-private-preference-operation-receipt-v1");
+                hash.update(&canonical);
+                *hash.finalize().as_bytes()
+            };
+            let decision = session
+                .private_preference
+                .accept(&receipt)
+                .map_err(|error| BinaryOperationError::Refused(error.to_string()))?;
+            session.private_preference_actor = Some(actor);
+            return Ok(BinaryOperationReceipt {
+                operation: PRIVATE_PREFERENCE_OPERATION.to_string(),
+                receipt_id,
+                public_fields: vec![
+                    ("session".to_string(), decision.session().to_string()),
+                    (
+                        "ballotRoot".to_string(),
+                        format!("{:?}", decision.ballot_root()),
+                    ),
+                    ("winner".to_string(), decision.winner().to_string()),
+                    (
+                        "plan".to_string(),
+                        PRIVATE_PREFERENCE_OPTIONS[decision.winner()].to_string(),
+                    ),
+                ],
+            });
+        }
+
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        if name == PRIVATE_SHUFFLE_COMMIT_OPERATION {
+            let (participant, commitment) = decode_private_shuffle_commitment(payload)?;
+            if participant >= SHUFFLE_PARTICIPANTS {
+                return Err(BinaryOperationError::Refused(format!(
+                    "participant {participant} is outside fixed range 0..{}",
+                    SHUFFLE_PARTICIPANTS - 1
+                )));
+            }
+            if session
+                .private_shuffle_actors
+                .iter()
+                .enumerate()
+                .any(|(seat, bound)| seat != participant && bound.as_ref() == Some(&actor))
+            {
+                return Err(BinaryOperationError::Refused(
+                    "one authenticated actor cannot occupy two shuffle participants".to_string(),
+                ));
+            }
+            session
+                .private_shuffle
+                .commit(participant, commitment)
+                .map_err(|error| BinaryOperationError::Refused(error.to_string()))?;
+            session.private_shuffle_actors[participant] = Some(actor);
+            let receipt_id =
+                *blake3::Hasher::new_derive_key("dregg-dungeon-private-shuffle-commit-receipt-v1")
+                    .update(payload)
+                    .finalize()
+                    .as_bytes();
+            return Ok(BinaryOperationReceipt {
+                operation: name.to_string(),
+                receipt_id,
+                public_fields: vec![
+                    ("participant".to_string(), participant.to_string()),
+                    (
+                        "attempt".to_string(),
+                        session
+                            .private_shuffle
+                            .next_attempt()
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                ],
+            });
+        }
+
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        if name == PRIVATE_SHUFFLE_PROVE_OPERATION {
+            if payload.len() > MAX_PRIVATE_SHUFFLE_PROOF_BYTES {
+                return Err(BinaryOperationError::Malformed(format!(
+                    "private fair-shuffle receipt is {} bytes; maximum is {MAX_PRIVATE_SHUFFLE_PROOF_BYTES}",
+                    payload.len()
+                )));
+            }
+            let receipt = FairShuffleReceipt::from_postcard(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = receipt
+                .to_postcard()
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "private fair-shuffle receipt is not canonically encoded".to_string(),
+                ));
+            }
+            let outcome = session
+                .private_shuffle
+                .accept_attempt(&receipt)
+                .map_err(|error| BinaryOperationError::Refused(error.to_string()))?;
+            if outcome == FairShuffleAttemptOutcome::Rejected {
+                session.private_shuffle_actors = core::array::from_fn(|_| None);
+            }
+            let receipt_id =
+                *blake3::Hasher::new_derive_key("dregg-dungeon-private-shuffle-proof-receipt-v1")
+                    .update(&canonical)
+                    .finalize()
+                    .as_bytes();
+            return Ok(BinaryOperationReceipt {
+                operation: name.to_string(),
+                receipt_id,
+                public_fields: vec![
+                    (
+                        "session".to_string(),
+                        receipt.statement().session.to_string(),
+                    ),
+                    (
+                        "attempt".to_string(),
+                        receipt.statement().attempt.to_string(),
+                    ),
+                    (
+                        "outcome".to_string(),
+                        match outcome {
+                            FairShuffleAttemptOutcome::Accepted => "accepted",
+                            FairShuffleAttemptOutcome::Rejected => "rejected",
+                        }
+                        .to_string(),
+                    ),
+                    (
+                        "dealRoot".to_string(),
+                        format!("{:?}", receipt.statement().deal_root),
+                    ),
+                ],
+            });
+        }
+
+        #[cfg(feature = "private-fair-shuffle-operation")]
+        if name == PRIVATE_SHUFFLE_REVEAL_OPERATION {
+            if payload.len() > MAX_PRIVATE_SHUFFLE_OPENING_BYTES {
+                return Err(BinaryOperationError::Malformed(format!(
+                    "private fair-shuffle opening is {} bytes; maximum is {MAX_PRIVATE_SHUFFLE_OPENING_BYTES}",
+                    payload.len()
+                )));
+            }
+            let opening = FairCardOpening::from_postcard(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let canonical = opening
+                .to_postcard()
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if canonical != payload {
+                return Err(BinaryOperationError::Malformed(
+                    "private fair-shuffle opening is not canonically encoded".to_string(),
+                ));
+            }
+            let seat = opening.seat as usize;
+            if session
+                .private_shuffle_actors
+                .get(seat)
+                .and_then(Option::as_ref)
+                != Some(&actor)
+            {
+                return Err(BinaryOperationError::Refused(
+                    "only the actor bound to this shuffle seat may reveal its card".to_string(),
+                ));
+            }
+            let card = session
+                .private_shuffle
+                .reveal_card(opening)
+                .map_err(|error| BinaryOperationError::Refused(error.to_string()))?;
+            let receipt_id =
+                *blake3::Hasher::new_derive_key("dregg-dungeon-private-shuffle-opening-receipt-v1")
+                    .update(&canonical)
+                    .finalize()
+                    .as_bytes();
+            return Ok(BinaryOperationReceipt {
+                operation: name.to_string(),
+                receipt_id,
+                public_fields: vec![
+                    ("seat".to_string(), seat.to_string()),
+                    ("card".to_string(), card.to_string()),
+                ],
+            });
+        }
+
+        #[cfg(feature = "private-quest-operation")]
+        if name == PRIVATE_QUEST_OPERATION {
+            if payload.len() > MAX_PRIVATE_QUEST_BYTES {
+                return Err(BinaryOperationError::Malformed(format!(
+                    "private quest receipt is {} bytes; maximum is {MAX_PRIVATE_QUEST_BYTES}",
+                    payload.len()
+                )));
+            }
+            let receipt = decode_private_quest_receipt(payload)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            if receipt.statement.session != session.private_quest_session {
+                return Err(BinaryOperationError::Refused(format!(
+                    "private quest session mismatch: expected {}, claimed {}",
+                    session.private_quest_session, receipt.statement.session
+                )));
+            }
+            let canonical = encode_private_quest_receipt(&receipt)
+                .map_err(|error| BinaryOperationError::Malformed(error.to_string()))?;
+            let statement = receipt.statement;
+
+            if let Some(history) = session.private_quest.as_mut() {
+                history
+                    .append_verified(receipt)
+                    .map_err(|error| BinaryOperationError::Refused(error.to_string()))?;
+            } else {
+                session.private_quest = Some(
+                    PrivateQuestPublicHistory::begin_verified(receipt)
+                        .map_err(|error| BinaryOperationError::Refused(error.to_string()))?,
+                );
+            }
+            session.private_quest_actors.push(actor);
+
+            let receipt_id =
+                *blake3::Hasher::new_derive_key("dregg-dungeon-private-quest-operation-receipt-v1")
+                    .update(&canonical)
+                    .finalize()
+                    .as_bytes();
+            return Ok(BinaryOperationReceipt {
+                operation: name.to_string(),
+                receipt_id,
+                public_fields: vec![
+                    ("domain".to_string(), statement.domain.to_string()),
+                    ("session".to_string(), statement.session.to_string()),
+                    ("index".to_string(), statement.index.to_string()),
+                    ("oldRoot".to_string(), format!("{:?}", statement.old_root)),
+                    ("newRoot".to_string(), format!("{:?}", statement.new_root)),
+                    (
+                        "rulesetRoot".to_string(),
+                        format!("{:?}", statement.ruleset_root),
+                    ),
+                ],
+            });
+        }
+
+        Err(BinaryOperationError::UnknownOperation(name.to_string()))
     }
 
     /// The move's [`RunCost`] — the free tier by default; the paid tier prices the confined

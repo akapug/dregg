@@ -6,10 +6,13 @@
 //! engine seam needed by The Descent: a fair-drawn loot note can cross to the Bazaar
 //! winner without being re-minted into a synthetic market universe.
 //!
-//! Honest boundary: this is an additive post-clear weld. The current `Offering`
-//! crawl first commits its auction resolve turn and then a caller invokes
-//! [`MarketSession::settle_winning_asset`]. The asset/value cross itself is atomic,
-//! but auction resolution and the cross are not yet one indivisible multi-cell turn.
+//! [`MarketSession::settle_winning_asset`] remains the additive post-clear API for
+//! ordinary sealed auctions. Source-bound authenticated fhEgg callers should use
+//! [`crate::DarkBazaarOffering::settle_fhegg_asset_atomic`]: it stages the real
+//! trade and replay consumption, then commits the complete auction lifecycle in
+//! one executor turn before infallibly installing the staged process-local world.
+//! Its exact boundary and distributed-hyperedge residual are documented in
+//! [`crate::fhegg_atomic_asset`].
 
 use dreggnet_offerings::DreggIdentity;
 use dreggnet_trade::{AssetId, ProvenanceReport, Settlement, TradeError, TradeWorld};
@@ -36,6 +39,12 @@ pub struct AssetBackedClearing {
 /// Why a verified auction result could not be welded to an owned-asset cross.
 #[derive(Debug)]
 pub enum AssetBackedError {
+    /// A source-bound fhEgg listing may cross only the concrete asset signed by
+    /// its configured listing-source verifier and frozen on the auction board.
+    SourceAssetMismatch {
+        expected: AssetId,
+        provided: AssetId,
+    },
     /// The auction has not landed a verified clear yet.
     AuctionNotSettled,
     /// The recorded winner handle does not map back to a committed bidder actor.
@@ -53,6 +62,10 @@ pub enum AssetBackedError {
 impl std::fmt::Display for AssetBackedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SourceAssetMismatch { expected, provided } => write!(
+                f,
+                "source-bound listing names asset {expected:?}, not supplied asset {provided:?}"
+            ),
             Self::AuctionNotSettled => write!(f, "the sealed auction has not settled"),
             Self::WinnerActorMissing => {
                 write!(f, "the winning bidder handle has no recorded actor")
@@ -103,6 +116,14 @@ impl MarketSession {
         world: &mut TradeWorld,
         asset: AssetId,
     ) -> Result<AssetBackedClearing, AssetBackedError> {
+        if let Some(source) = self.fhegg_listing_source {
+            if source.asset != asset.0 {
+                return Err(AssetBackedError::SourceAssetMismatch {
+                    expected: AssetId(source.asset),
+                    provided: asset,
+                });
+            }
+        }
         let clearing = self
             .clearing
             .as_ref()

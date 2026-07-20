@@ -78,9 +78,10 @@ pub mod descent_store;
 /// the Activity shell are the named follow-up (they need `DISCORD_CLIENT_SECRET`). See
 /// [`discord_activity`] and `docs/DISCORD-ACTIVITIES-DESIGN.md`.
 pub mod discord_activity;
-/// One hosted fhEgg settlement operation shared by the web, Telegram Mini App,
-/// and Discord Activity authentication wrappers.
-#[cfg(feature = "fhegg-settlement")]
+/// One hosted binary-operation transport shared by the web, Telegram Mini App,
+/// and Discord Activity authentication wrappers. Concrete operations remain
+/// independently feature-gated.
+#[cfg(feature = "hosted-binary-operations")]
 pub mod fhegg_operation;
 /// Prometheus metrics for the web surface (the `node/src/metrics.rs` pattern): the idempotent
 /// process-global recorder + the `GET /metrics` handler + the named emit helpers this surface's
@@ -122,6 +123,8 @@ use axum::{
 use serde::Deserialize;
 
 use deos_view::{MenuItem, SessionFormBackend, SurfaceBackend, ViewNode};
+#[cfg(feature = "hosted-binary-operations")]
+use dreggnet_offerings::BinaryOperationDescriptor;
 use dreggnet_offerings::dungeon::{DungeonOffering, DungeonSession};
 use dreggnet_offerings::{
     Action, Attribution, DreggIdentity, FileResumeStore, Frontend, HostError, Offering,
@@ -763,6 +766,17 @@ strong{font-weight:700;color:var(--fg)}
 .affordance input.arg{flex:0 0 5.5rem;width:5.5rem;padding:.45rem .6rem;border-radius:10px;border:1px solid var(--line);background:var(--ink-950);color:var(--fg);font-family:var(--mono);font-size:var(--t-sm);text-align:center;transition:border-color .14s,box-shadow .18s}
 .affordance input.arg:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(92,201,255,.18)}
 .affordance input.arg:disabled{opacity:.45;cursor:not-allowed}
+.operation-uploader{margin:var(--s4) 0;padding:1rem 1.1rem;border:1px solid rgba(168,126,255,.26);border-radius:var(--r-lg);background:linear-gradient(180deg,rgba(37,27,61,.6),rgba(16,13,28,.58))}
+.operation-uploader>h2{margin:0 0 .35rem;color:#c9b5ff;font-size:var(--t-h3)}
+.operation-uploader>.prose{color:var(--fg-3)}
+.binary-operation{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.55rem;align-items:center;padding:.75rem 0;border-top:1px solid var(--line-soft)}
+.binary-operation:first-of-type{margin-top:.75rem}
+.binary-operation label{grid-column:1/-1;color:var(--head);font-weight:700}
+.binary-operation .operation-disclosure{grid-column:1/-1;margin:0;color:var(--fg-3);font-size:var(--t-xs);line-height:1.55}
+.binary-operation input[type=file]{min-width:0;padding:.5rem;border:1px solid var(--line);border-radius:10px;background:var(--ink-950);color:var(--fg-2);font:inherit;font-size:var(--t-xs)}
+.binary-operation button{padding:.58rem .8rem;border-radius:10px;border:1px solid rgba(168,126,255,.45);background:rgba(79,55,126,.55);color:#efe9ff;font:inherit;font-weight:700;cursor:pointer}
+.binary-operation [role=status]{grid-column:1/-1;min-height:1.2em;color:var(--fg-3);font-size:var(--t-xs);overflow-wrap:anywhere}
+.binary-operation.pending{opacity:.7;cursor:progress}
 /* ═══ NOTICE — what just happened ════════════════════════════════════════ */
 .notice{display:flex;align-items:flex-start;gap:.6rem;padding:.7rem .9rem;border-radius:var(--r-md);margin:0 0 var(--s4);font-size:var(--t-sm);font-weight:600;border:1px solid var(--line);animation:notice-in .26s var(--ease) both}
 .notice::before{flex:0 0 auto;width:1.15rem;height:1.15rem;border-radius:50%;display:grid;place-items:center;font-size:.7rem;font-weight:800;margin-top:.06rem}
@@ -909,6 +923,9 @@ hr{border:0;border-top:1px solid var(--line-soft);margin:var(--s4) 0}
 .affordance{flex-direction:column}
 .affordance input.arg{flex:1 1 auto;width:100%;text-align:left}
 .affordance button{min-height:2.85rem}
+.binary-operation{grid-template-columns:1fr}
+.binary-operation label,.binary-operation .operation-disclosure,.binary-operation [role=status]{grid-column:1}
+.binary-operation button{min-height:2.85rem}
 .kv{grid-template-columns:repeat(auto-fit,minmax(7rem,1fr))}
 }
 @media (max-width:26rem){.topnav a{padding:.35rem .45rem}}
@@ -1010,6 +1027,33 @@ const ENHANCE_SCRIPT: &str = r##"<script>
   document.addEventListener("submit",function(ev){
     var form=ev.target;
     if(!form||form.tagName!=="FORM")return;
+    if(form.classList.contains("binary-operation")){
+      ev.preventDefault();
+      if(form.classList.contains("in-flight"))return;
+      var input=form.querySelector("input[type=file]");
+      var status=form.querySelector("[role=status]");
+      if(!input||!input.files||!input.files[0]){
+        if(status)status.textContent="Choose the canonical proof or receipt first.";
+        return;
+      }
+      var btn=form.querySelector("button[type=submit]");
+      form.classList.add("in-flight","pending");
+      if(btn)btn.disabled=true;
+      if(status)status.textContent="Verifying opaque receipt…";
+      fetch(form.getAttribute("action"),{
+        method:"POST",
+        headers:{"Content-Type":form.getAttribute("data-media")||"application/octet-stream","Accept":"application/json"},
+        body:input.files[0],
+        credentials:"same-origin"
+      }).then(function(r){
+        return r.text().then(function(body){if(!r.ok)throw new Error(body||("HTTP "+r.status));return body;});
+      }).then(function(){window.location.reload();}).catch(function(err){
+        form.classList.remove("in-flight","pending");
+        if(btn)btn.disabled=false;
+        if(status)status.textContent="Refused: "+err.message;
+      });
+      return;
+    }
     if(!(form.classList.contains("affordance")||form.classList.contains("cell")))return;
     var action=form.getAttribute("action")||"";
     if(action.indexOf("/act")===-1)return;
@@ -1820,17 +1864,80 @@ fn offering_surface_fragment(
         // (their inventory), so the render reads the ledger their turns landed in — the whole
         // per-viewer isolation reaching the web surface.
         state.run_offering(key, viewer, move |h| {
-            h.render_for(&k, &id, &v).zip(h.verify(&k, &id))
+            let core = h.render_for(&k, &id, &v).zip(h.verify(&k, &id));
+            #[cfg(feature = "hosted-binary-operations")]
+            {
+                core.map(|(surface, verify)| {
+                    let operations = h.binary_operations(&k, &id).unwrap_or_default();
+                    (surface, verify, operations)
+                })
+            }
+            #[cfg(not(feature = "hosted-binary-operations"))]
+            {
+                core
+            }
         })
     };
+    #[cfg(feature = "hosted-binary-operations")]
+    let (surface, verify, operations) = rendered?;
+    #[cfg(not(feature = "hosted-binary-operations"))]
     let (surface, verify) = rendered?;
     let forms = render_catalog_forms(surface.view(), key, &id.0);
+    #[cfg(feature = "hosted-binary-operations")]
+    let operation_forms = render_operation_uploaders(&operations, key, &id.0);
+    #[cfg(not(feature = "hosted-binary-operations"))]
+    let operation_forms = String::new();
     Some(format!(
-        "{notice}{forms}{receipt}",
+        "{notice}{forms}{operation_forms}{receipt}",
         notice = notice_html(notice),
         forms = forms,
+        operation_forms = operation_forms,
         receipt = receipt_html(&verify, "chain re-verified by replay"),
     ))
+}
+
+/// Render discoverable opaque-proof operations as raw file upload controls on
+/// the normal playable page. The browser never decodes the file: it sends the
+/// exact bytes and advertised media type to the same generic route used by the
+/// Telegram Mini App and Discord Activity wrappers.
+#[cfg(feature = "hosted-binary-operations")]
+fn render_operation_uploaders(
+    operations: &[BinaryOperationDescriptor],
+    key: &str,
+    id: &str,
+) -> String {
+    if operations.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "<section class=\"operation-uploader\"><h2>Proof-bearing operations</h2>\
+         <p class=\"prose\">Submit a canonical receipt produced by your private client. \
+         Verification happens before the game state changes.</p>",
+    );
+    for (index, operation) in operations.iter().enumerate() {
+        let status_id = format!("operation-status-{index}");
+        out.push_str(&format!(
+            "<form class=\"binary-operation\" method=\"post\" \
+             action=\"/offerings/{key}/session/{id}/operations/{name}\" \
+             data-media=\"{media}\">\
+             <label for=\"operation-file-{index}\">{title}</label>\
+             <p class=\"operation-disclosure\">{disclosure} Maximum canonical input: {max} bytes.</p>\
+             <input id=\"operation-file-{index}\" type=\"file\" required \
+             accept=\"{media}\" aria-describedby=\"{status_id}\">\
+             <button type=\"submit\">Verify &amp; apply</button>\
+             <span id=\"{status_id}\" role=\"status\" aria-live=\"polite\"></span>\
+             </form>",
+            key = esc(key),
+            id = esc(id),
+            name = esc(&operation.name),
+            media = esc(&operation.input_media_type),
+            title = esc(&operation.title),
+            disclosure = esc(&operation.disclosure),
+            max = operation.max_input_bytes,
+        ));
+    }
+    out.push_str("</section>");
+    out
 }
 
 /// The offering title (registered `Name — tagline`), or the key if none is registered.
@@ -2561,6 +2668,176 @@ pub const WEB_OPENS_PER_USER_ENV: &str = "DREGGNET_WEB_OPENS_PER_USER";
 /// See [`WEB_MAX_SESSIONS_ENV`]. Minimum seconds between fresh mints per web identity.
 pub const WEB_MIN_OPEN_INTERVAL_ENV: &str = "DREGGNET_WEB_MIN_OPEN_INTERVAL_SECS";
 
+/// Protected deployment-key file for the opt-in encrypted-amount Dark Pool.
+///
+/// The file is created by `dark-amm-tool keygen`. On Unix it must be a regular,
+/// non-symlinked file with no group/other permission bits. Operators distribute
+/// only a session-specific public context:
+/// `dark-amm-tool public-id <key-file> <web-session-id> <new-public-file>`.
+/// The command deliberately uses the exact `blake3(id)` seed rule used by
+/// [`OfferingHost::ensure_open_as`], so a producer request is bound to that one
+/// live web/Telegram/Discord session and the host refuses a different id.
+/// Setting [`DARK_AMM_INITIAL_ROOT_ENV`] switches that deployment to the
+/// proof-required operation. Supplying the exact-opening authority policy as
+/// well selects strict v3; the production aggregate startup gate requires v3.
+#[cfg(feature = "dark-amm-game")]
+pub const DARK_AMM_SECRET_KEY_FILE_ENV: &str = "DREGG_DARK_AMM_SECRET_KEY_FILE";
+/// Optional comma-separated eight-lane BabyBear commitment. When configured,
+/// the host uses this value as the first root cursor. With an exact-opening
+/// authority it exposes only strict v3; without one the generic library
+/// registrar preserves the explicitly proof-only v2 research mode.
+#[cfg(feature = "dark-amm-game")]
+pub const DARK_AMM_INITIAL_ROOT_ENV: &str = "DREGG_DARK_AMM_INITIAL_ROOT";
+/// Ordered Ed25519 public keys for the Tier-1 exact-opening issuers required by
+/// the strict v3 Dark AMM operation. This roster is relying-party policy; an
+/// uploaded receipt cannot choose or weaken it.
+#[cfg(feature = "dark-amm-game")]
+pub const DARK_AMM_AUTHORITY_KEYS_ENV: &str = "DREGG_DARK_AMM_AUTHORITY_PUBLIC_KEYS";
+/// Required issuer signatures from [`DARK_AMM_AUTHORITY_KEYS_ENV`].
+#[cfg(feature = "dark-amm-game")]
+pub const DARK_AMM_AUTHORITY_THRESHOLD_ENV: &str = "DREGG_DARK_AMM_AUTHORITY_THRESHOLD";
+
+/// Parse the host-selected exact-opening issuer policy. Both values absent
+/// means the stricter operation is deliberately unconfigured; a partial or
+/// malformed policy is refused rather than weakened to a default quorum.
+#[cfg(feature = "dark-amm-game")]
+pub fn dark_amm_authority_from(
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<Option<(Vec<[u8; 32]>, usize)>, String> {
+    quorum_policy_from(
+        get,
+        DARK_AMM_AUTHORITY_KEYS_ENV,
+        DARK_AMM_AUTHORITY_THRESHOLD_ENV,
+    )
+}
+
+/// Read and validate the opt-in encrypted Dark Pool deployment key from an
+/// env-shaped getter. `Ok(None)` means the feature was deliberately left
+/// disabled; a configured but unsafe or invalid key is an error and never
+/// silently creates a fresh key (which would strand every persisted session).
+#[cfg(feature = "dark-amm-game")]
+pub fn dark_amm_key_from(
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<Option<dreggnet_market::dark_amm_game::DarkAmmHostKeyMaterial>, String> {
+    const MAX_KEY_BYTES: u64 = 128 * 1024 * 1024;
+
+    let Some(path) = get(DARK_AMM_SECRET_KEY_FILE_ENV).filter(|path| !path.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let path = std::path::Path::new(&path);
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "cannot inspect {DARK_AMM_SECRET_KEY_FILE_ENV} {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(format!(
+            "{DARK_AMM_SECRET_KEY_FILE_ENV} {} must be a regular, non-symlinked file",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_KEY_BYTES {
+        return Err(format!(
+            "{DARK_AMM_SECRET_KEY_FILE_ENV} {} is {} bytes; maximum is {MAX_KEY_BYTES}",
+            path.display(),
+            metadata.len()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let mode = metadata.mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "{DARK_AMM_SECRET_KEY_FILE_ENV} {} has mode {mode:03o}; remove all group/other permissions",
+                path.display()
+            ));
+        }
+    }
+
+    let mut bytes = std::fs::read(path).map_err(|error| {
+        format!(
+            "cannot read {DARK_AMM_SECRET_KEY_FILE_ENV} {}: {error}",
+            path.display()
+        )
+    })?;
+    let parsed =
+        dreggnet_market::dark_amm_game::DarkAmmHostKeyMaterial::from_secret_wire_bytes(&bytes)
+            .map_err(|error| format!("invalid encrypted Dark Pool deployment key: {error}"));
+    bytes.fill(0);
+    parsed.map(Some)
+}
+
+/// Register the encrypted-amount Dark Pool iff the deployment key env is set
+/// and valid. This is intentionally an additive, opt-in registrar: ordinary
+/// hosts do not pay for or claim the single-key demo boundary.
+#[cfg(feature = "dark-amm-game")]
+pub fn register_dark_amm_from(
+    host: &mut OfferingHost,
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<bool, String> {
+    let Some(key_material) = dark_amm_key_from(&get)? else {
+        return Ok(false);
+    };
+    let root = get(DARK_AMM_INITIAL_ROOT_ENV)
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| parse_dark_amm_root(&value))
+        .transpose()?;
+    let authority = dark_amm_authority_from(|name| get(name))?;
+    let offering = match (root, authority) {
+        (Some(root), Some((keys, threshold))) => {
+            dreggnet_market::dark_amm_game::DarkAmmGameOffering::demo_same_opening_required(
+                key_material,
+                root,
+                keys,
+                threshold,
+            )
+            .map_err(|error| format!("invalid strict-v3 Dark Pool policy: {error}"))?
+        }
+        (Some(root), None) => {
+            dreggnet_market::dark_amm_game::DarkAmmGameOffering::demo_proof_required(
+                key_material,
+                root,
+            )
+            .map_err(|error| format!("invalid proof-required Dark Pool root: {error}"))?
+        }
+        (None, Some(_)) => {
+            return Err(format!(
+                "{DARK_AMM_AUTHORITY_KEYS_ENV} requires {DARK_AMM_INITIAL_ROOT_ENV}"
+            ));
+        }
+        (None, None) => dreggnet_market::dark_amm_game::DarkAmmGameOffering::demo(key_material),
+    };
+    host.register(
+        dreggnet_market::dark_amm_game::DARK_AMM_OFFERING_KEY,
+        "The Dark Bazaar — encrypted constant-product table",
+        offering,
+    );
+    Ok(true)
+}
+
+#[cfg(feature = "dark-amm-game")]
+fn parse_dark_amm_root(value: &str) -> Result<[u32; 8], String> {
+    let lanes = value
+        .split(',')
+        .map(str::trim)
+        .map(|lane| {
+            lane.strip_prefix("0x")
+                .or_else(|| lane.strip_prefix("0X"))
+                .map_or_else(|| lane.parse::<u32>(), |hex| u32::from_str_radix(hex, 16))
+                .map_err(|_| format!("{DARK_AMM_INITIAL_ROOT_ENV} contains invalid u32 {lane:?}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    lanes.try_into().map_err(|lanes: Vec<u32>| {
+        format!(
+            "{DARK_AMM_INITIAL_ROOT_ENV} must contain exactly 8 comma-separated lanes, got {}",
+            lanes.len()
+        )
+    })
+}
+
 /// **Build the web [`SessionPolicy`] from an env-shaped getter** — the parse seam
 /// [`resolve_web_policy`] feeds real env vars through, and tests feed fixed pairs through
 /// (process env is global; tests must not mutate it). Unset/empty → `None` (unbounded);
@@ -2601,8 +2878,8 @@ pub const FHEGG_QUORUM_KEYS_ENV: &str = "DREGG_FHEGG_QUORUM_PUBLIC_KEYS";
 #[cfg(feature = "fhegg-settlement")]
 pub const FHEGG_QUORUM_THRESHOLD_ENV: &str = "DREGG_FHEGG_QUORUM_THRESHOLD";
 
-#[cfg(feature = "fhegg-settlement")]
-fn decode_fhegg_key(value: &str) -> Option<[u8; 32]> {
+#[cfg(any(feature = "fhegg-settlement", feature = "dark-amm-game"))]
+fn decode_quorum_key(value: &str) -> Option<[u8; 32]> {
     fn nibble(byte: u8) -> Option<u8> {
         match byte {
             b'0'..=b'9' => Some(byte - b'0'),
@@ -2622,6 +2899,41 @@ fn decode_fhegg_key(value: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
+#[cfg(any(feature = "fhegg-settlement", feature = "dark-amm-game"))]
+fn quorum_policy_from(
+    get: impl Fn(&str) -> Option<String>,
+    keys_env: &'static str,
+    threshold_env: &'static str,
+) -> Result<Option<(Vec<[u8; 32]>, usize)>, String> {
+    let keys = get(keys_env).filter(|value| !value.trim().is_empty());
+    let threshold = get(threshold_env).filter(|value| !value.trim().is_empty());
+    match (keys, threshold) {
+        (None, None) => Ok(None),
+        (None, Some(_)) | (Some(_), None) => Err(format!(
+            "{keys_env} and {threshold_env} must be set together"
+        )),
+        (Some(keys), Some(threshold)) => {
+            let keys = keys
+                .split(',')
+                .map(|key| {
+                    decode_quorum_key(key)
+                        .ok_or_else(|| format!("{keys_env} contains a non-32-byte hex key"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let threshold = threshold
+                .parse::<usize>()
+                .map_err(|_| format!("{threshold_env} is not a positive integer"))?;
+            if keys.is_empty() || threshold == 0 || threshold > keys.len() {
+                return Err(format!(
+                    "{threshold_env} must be in 1..={} for the configured roster",
+                    keys.len()
+                ));
+            }
+            Ok(Some((keys, threshold)))
+        }
+    }
+}
+
 /// Parse the host-selected fhEgg quorum from an injected env-shaped getter.
 /// Both values absent means disabled; a partial or malformed policy is refused
 /// as configuration rather than weakened to a smaller/default quorum.
@@ -2629,34 +2941,7 @@ fn decode_fhegg_key(value: &str) -> Option<[u8; 32]> {
 pub fn fhegg_quorum_from(
     get: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<(Vec<[u8; 32]>, usize)>, String> {
-    let keys = get(FHEGG_QUORUM_KEYS_ENV).filter(|value| !value.trim().is_empty());
-    let threshold = get(FHEGG_QUORUM_THRESHOLD_ENV).filter(|value| !value.trim().is_empty());
-    match (keys, threshold) {
-        (None, None) => Ok(None),
-        (None, Some(_)) | (Some(_), None) => Err(format!(
-            "{FHEGG_QUORUM_KEYS_ENV} and {FHEGG_QUORUM_THRESHOLD_ENV} must be set together"
-        )),
-        (Some(keys), Some(threshold)) => {
-            let keys = keys
-                .split(',')
-                .map(|key| {
-                    decode_fhegg_key(key).ok_or_else(|| {
-                        format!("{FHEGG_QUORUM_KEYS_ENV} contains a non-32-byte hex key")
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let threshold = threshold
-                .parse::<usize>()
-                .map_err(|_| format!("{FHEGG_QUORUM_THRESHOLD_ENV} is not a positive integer"))?;
-            if keys.is_empty() || threshold == 0 || threshold > keys.len() {
-                return Err(format!(
-                    "{FHEGG_QUORUM_THRESHOLD_ENV} must be in 1..={} for the configured roster",
-                    keys.len()
-                ));
-            }
-            Ok(Some((keys, threshold)))
-        }
-    }
+    quorum_policy_from(get, FHEGG_QUORUM_KEYS_ENV, FHEGG_QUORUM_THRESHOLD_ENV)
 }
 
 #[cfg(feature = "fhegg-settlement")]
@@ -2691,6 +2976,82 @@ fn demo_host_with_resolved_fhegg() -> OfferingHost {
     host
 }
 
+#[cfg(feature = "dark-amm-game")]
+fn demo_host_with_resolved_dark_amm(mut host: OfferingHost) -> OfferingHost {
+    match register_dark_amm_from(&mut host, |key| std::env::var(key).ok()) {
+        Ok(true) => tracing::info!(
+            "encrypted Dark Pool enabled — v3 iff root + exact-opening authority are set; SINGLE-HOST BFV custody remains"
+        ),
+        Ok(false) => {
+            tracing::info!("encrypted Dark Pool disabled — DREGG_DARK_AMM_SECRET_KEY_FILE is unset")
+        }
+        Err(error) => tracing::error!(
+            error = %error,
+            "encrypted Dark Pool key refused; offering remains unregistered (fail-closed)"
+        ),
+    }
+    host
+}
+
+/// Production-bundle startup gate. Ordinary opt-in library consumers retain
+/// the existing degrade-to-disabled registrar behavior, but the binary built
+/// with `public-shielded-games` must not report healthy after a configured
+/// verifier/key surface failed to instantiate.
+///
+/// Missing configuration still means deliberately disabled. Once either half
+/// of a protected operation is present, however, the complete pair and its
+/// cryptographic material must validate before the server binds a socket.
+#[cfg(feature = "public-shielded-games")]
+pub fn validate_public_shielded_deployment_from(
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    match fhegg_quorum_from(|name| get(name))? {
+        Some((keys, threshold)) => {
+            dreggnet_market::DarkBazaarOffering::with_fhegg_quorum(keys, threshold)
+                .map_err(|error| format!("fhEgg settlement quorum refused: {error}"))?;
+        }
+        None => {}
+    }
+
+    let dark_key = get(DARK_AMM_SECRET_KEY_FILE_ENV)
+        .filter(|value| !value.trim().is_empty())
+        .is_some();
+    let dark_root = get(DARK_AMM_INITIAL_ROOT_ENV)
+        .filter(|value| !value.trim().is_empty())
+        .is_some();
+    let dark_authority_keys = get(DARK_AMM_AUTHORITY_KEYS_ENV)
+        .filter(|value| !value.trim().is_empty())
+        .is_some();
+    let dark_authority_threshold = get(DARK_AMM_AUTHORITY_THRESHOLD_ENV)
+        .filter(|value| !value.trim().is_empty())
+        .is_some();
+    match (
+        dark_key,
+        dark_root,
+        dark_authority_keys,
+        dark_authority_threshold,
+    ) {
+        (false, false, false, false) => return Ok(()),
+        (true, true, true, true) => {}
+        _ => {
+            return Err(format!(
+                "{DARK_AMM_SECRET_KEY_FILE_ENV}, {DARK_AMM_INITIAL_ROOT_ENV}, {DARK_AMM_AUTHORITY_KEYS_ENV}, and {DARK_AMM_AUTHORITY_THRESHOLD_ENV} must be set together in the public shielded deployment (strict v3; refusing proof-only v2)"
+            ));
+        }
+    }
+    let mut host = OfferingHost::new();
+    if !register_dark_amm_from(&mut host, |name| get(name))? {
+        return Err("configured proof-required Dark AMM was not registered".to_string());
+    }
+    Ok(())
+}
+
+/// Environment-backed form used by the production server entrypoint.
+#[cfg(feature = "public-shielded-games")]
+pub fn validate_public_shielded_deployment() -> Result<(), String> {
+    validate_public_shielded_deployment_from(|name| std::env::var(name).ok())
+}
+
 /// **Resolve the demo host from the environment** — the session-durability switch, mirroring
 /// [`resolve_demo_descent`], PLUS the session-lifecycle policy ([`resolve_web_policy`]: capacity /
 /// TTL / per-user quota / open rate). With `DREGGNET_WEB_SESSION_DIR` set (non-empty), the host is
@@ -2707,6 +3068,8 @@ pub fn resolve_demo_host() -> OfferingHost {
     let base = demo_host_with_resolved_fhegg();
     #[cfg(not(feature = "fhegg-settlement"))]
     let base = demo_host();
+    #[cfg(feature = "dark-amm-game")]
+    let base = demo_host_with_resolved_dark_amm(base);
     assemble_demo_host(base, dir, resolve_web_policy())
 }
 
@@ -2860,7 +3223,7 @@ pub fn build_demo_descent(
     // never re-execute here, so `ranked` was always false and the share link never emitted. Both
     // processes now resolve their day from the SAME helper.
     let seed = crate::descent::todays_day().seed;
-    let (win_moves, win_level, win_class) = demo_win();
+    let (win_moves, win_level, win_class) = demo_win_for_seed(seed);
     let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
     let mut win = off
         .open_from_seed(DreggIdentity("ember".to_string()), seed)
@@ -2909,6 +3272,13 @@ pub fn build_demo_descent(
 /// warden HP / depth). Exposed so the demo state and the persistence/ingest tests share ONE source
 /// of the winning moves.
 pub fn demo_win() -> (Vec<usize>, u64, u64) {
+    demo_win_for_seed(crate::descent::todays_day().seed)
+}
+
+/// Derive the same world-adaptive winning line as [`demo_win`], but for an
+/// explicit committed seed. Tests and devnet tooling use this form so the move
+/// generator and the opened world cannot drift across a day boundary.
+pub fn demo_win_for_seed(seed: procgen_dregg::CommittedSeed) -> (Vec<usize>, u64, u64) {
     use dreggnet_offerings::DreggIdentity;
     use dreggnet_offerings::character::InMemoryCharacterStore;
     use dreggnet_offerings::daily_descent::{
@@ -2916,10 +3286,8 @@ pub fn demo_win() -> (Vec<usize>, u64, u64) {
         HOARD_SEIZE, KEY_TAKE,
     };
 
-    // The winning line is drawn on TODAY'S real world (the same day `build_demo_descent` opens),
-    // not a fixed fixture day. The line below is world-agnostic — it reads the live room + vitals at
-    // each step — so it reaches the hoard for any beacon-drawn warden HP / depth.
-    let seed = crate::descent::todays_day().seed;
+    // The line is world-agnostic: it reads the live room + vitals at each step,
+    // so it reaches the hoard for any committed-seed warden HP / depth.
     let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
     let mut run = off
         .open_from_seed(DreggIdentity("ember".to_string()), seed)
@@ -3036,7 +3404,7 @@ pub fn make_app_parts_with_descent(descent: Arc<DescentState>) -> (Router, Arc<C
         // `overlay::YouTubePoller` (authenticated) and/or the token-gated POST, and drives a
         // close→resolve→advance timer via `OverlayState::close_tick`.
         .merge(overlay::overlay_router(overlay::demo_state_from_env()));
-    #[cfg(feature = "fhegg-settlement")]
+    #[cfg(feature = "hosted-binary-operations")]
     let app = app.merge(fhegg_operation::router(Arc::clone(&catalog)));
     // THE TELEGRAM MINI APP surface — mounted iff `TELEGRAM_BOT_TOKEN` is set (the same ops gate
     // as the bot itself; `tg_miniapp_from_env` logs one line either way). It drives the SAME

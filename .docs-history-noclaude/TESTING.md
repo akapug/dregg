@@ -57,6 +57,7 @@ source. Durations are from a reference debug gauntlet:
 | `two_step_inductive_core_proves_and_verifies` | circuit (lib) | >60s | 2-step inductive fold |
 | `three_cell_joint_turn_recursive_proves_and_verifies` | circuit (lib) | >60s | 3-cell joint recursive turn |
 | `foreign_circuit_root_is_refused_by_vk_pin` | circuit (lib) | >60s | shares the fold setup |
+| `authenticated_encrypted_orders_gate_real_game_asset_settlement` | dreggnet-market | >1080s release | six degree-4096 exact share proofs + MPC/quorum + real game asset settlement |
 | `effect_vm_descriptor_cutover_harness` | circuit | ~43s (13 tests) | descriptor cutover differential |
 | `descriptor_leaf_recursion` | circuit | ~28s (1 test) | descriptor leaf prove + wrap |
 

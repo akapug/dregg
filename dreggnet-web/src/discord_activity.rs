@@ -719,7 +719,7 @@ impl DiscordActivityState {
 /// **Build the `/da` Activity router** over a shared [`DiscordActivityState`]. Additive beside the
 /// catalog + `/tg` routers; mounted by [`discord_activity_from_env`] when the creds are present.
 pub fn discord_activity_router(state: Arc<DiscordActivityState>) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/da", get(get_da_shell))
         .route("/da/token", post(post_da_token))
         .route("/da/static/discord-sdk.js", get(get_da_sdk_js))
@@ -733,8 +733,23 @@ pub fn discord_activity_router(state: Arc<DiscordActivityState>) -> Router {
         .route("/da/link/challenge", get(get_da_link_challenge))
         .route("/da/link", get(get_da_link_page).post(post_da_link))
         .route("/da/link/app.js", get(get_da_link_app_js))
-        .route("/da/static/noble-ed25519.js", get(get_da_noble_ed25519))
-        .with_state(state)
+        .route("/da/static/noble-ed25519.js", get(get_da_noble_ed25519));
+    #[cfg(feature = "hosted-binary-operations")]
+    let router = router
+        .route(
+            "/da/offerings/{key}/session/{id}/operations",
+            get(get_da_operations),
+        )
+        .route(
+            "/da/offerings/{key}/session/{id}/operations/{name}",
+            post(post_da_operation),
+        );
+    #[cfg(feature = "fhegg-settlement")]
+    let router = router.route(
+        "/da/operations/{name}",
+        get(crate::fhegg_operation::get_descriptor),
+    );
+    router.with_state(state)
 }
 
 /// **Resolve the Activity router from the environment** — `Some(router)` iff `DISCORD_CLIENT_ID`,
@@ -1163,6 +1178,57 @@ async fn get_da_session(
         wants_fragment(&headers),
     ))
     .into_response()
+}
+
+/// Ticket-authenticated discovery of transport-bearing affordances on one live
+/// session. The descriptor itself is shared byte-for-byte across surfaces.
+#[cfg(feature = "hosted-binary-operations")]
+async fn get_da_operations(
+    State(state): State<Arc<DiscordActivityState>>,
+    Path((key, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let corr = audit::correlation_id();
+    if let Err(response) = verified_user(
+        &state,
+        &headers,
+        &corr,
+        "GET /da/offerings/{key}/session/{id}/operations",
+    ) {
+        return response;
+    }
+    crate::fhegg_operation::session_operations(&state.catalog, key, id)
+}
+
+/// Discord-ticket wrapper around the one shared owning-bundle implementation.
+/// Ticket verification completes before bounded body collection; neither the
+/// bearer ticket nor uploaded bundle is logged.
+#[cfg(feature = "hosted-binary-operations")]
+async fn post_da_operation(
+    State(state): State<Arc<DiscordActivityState>>,
+    Path((key, id, name)): Path<(String, String, String)>,
+    request: axum::extract::Request,
+) -> Response {
+    let corr = audit::correlation_id();
+    let user = match verified_user(
+        &state,
+        request.headers(),
+        &corr,
+        "POST /da/offerings/{key}/session/{id}/operations/{name}",
+    ) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let actor = state.identity_for(user.user_id);
+    crate::fhegg_operation::execute_upload(
+        Arc::clone(&state.catalog),
+        key,
+        id,
+        name,
+        actor,
+        request,
+    )
+    .await
 }
 
 /// The `{turn, arg, text}` POST body of `POST /da/offerings/{key}/session/{id}/act` — the same form
