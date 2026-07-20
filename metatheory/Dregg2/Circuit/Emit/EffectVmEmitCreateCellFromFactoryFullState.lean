@@ -16,8 +16,9 @@ The factory writes only NON-`balance` record fields (no economic-column counterp
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
-`fullClause` NON-VACUOUS. Read-only imports; owns only itself.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The anti-ghost theorems carry NO
+collision-resistance hypothesis: they conclude a disjunction naming the sponge collision they would
+otherwise assume away. `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable
@@ -30,9 +31,8 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory
   (SEL_CREATECELLFROMFACTORY factoryRowGates factoryVmDescriptor BornEmptyRowIntent factoryVm_faithful)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
-   wideHashSites)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds_or_collides
+   wide_rejects_root_tamper_or_collides WideColl RootsColl wideHashSites)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -144,8 +144,16 @@ theorem createCellFromFactory_runnable_full_sound (hash : List ℤ → ℤ) (pre
 
 /-! ## §6 — THE ANTI-GHOST. -/
 
-theorem createCellFromFactory_runnable_full_commit_binds (hash : List ℤ → ℤ)
-    (hCR : Poseidon2SpongeCR hash) (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
+/-- **`createCellFromFactory_runnable_full_commit_binds_or_collides` — the factory anti-ghost.** Two
+wide factory rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) EITHER agree on
+all 12 absorbed state-block columns AND pointwise on the 8 side-table roots, OR exhibit a collision of
+the deployed sponge — at the wide absorb, or at the two root lists.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed sponge
+REFUTES; at deployed parameters it was vacuous. The disjunction is formally weaker and HOLDS of the
+deployed sponge. -/
+theorem createCellFromFactory_runnable_full_commit_binds_or_collides (hash : List ℤ → ℤ)
+    (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash factoryVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash factoryVmDescriptorWide e₂ true true)
     (hpin₁ : e₁.loc (saCol state.STATE_COMMIT) = e₁.pub pi.NEW_COMMIT)
@@ -153,11 +161,19 @@ theorem createCellFromFactory_runnable_full_commit_binds (hash : List ℤ → �
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (factoryRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (factoryRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-theorem createCellFromFactory_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`createCellFromFactory_rejects_root_tamper_or_collides` — side-table anti-ghost for the
+factory.** Two wide factory rows publishing the same `NEW_COMMIT` whose side-table sub-blocks DIFFER
+at some index `i` exhibit a collision of the deployed sponge: forging a side-table root under a fixed
+commitment costs a sponge collision.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed sponge REFUTES; at
+deployed parameters it was vacuous. This one names the collision instead of assuming it away. -/
+theorem createCellFromFactory_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash factoryVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash factoryVmDescriptorWide e₂ true true)
@@ -166,8 +182,9 @@ theorem createCellFromFactory_rejects_root_tamper (hash : List ℤ → ℤ) (hCR
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (factoryRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (factoryRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §7 — NON-VACUITY. -/
@@ -208,8 +225,8 @@ theorem factory_clause_rejects_root_drop :
 #assert_axioms intent_to_zeroSpec
 #assert_axioms factoryGates_give_zeroSpec
 #assert_axioms createCellFromFactory_runnable_full_sound
-#assert_axioms createCellFromFactory_runnable_full_commit_binds
-#assert_axioms createCellFromFactory_rejects_root_tamper
+#assert_axioms createCellFromFactory_runnable_full_commit_binds_or_collides
+#assert_axioms createCellFromFactory_rejects_root_tamper_or_collides
 #assert_axioms goodFactory_realizes
 #assert_axioms factory_clause_not_trivial
 #assert_axioms factory_clause_rejects_root_drop

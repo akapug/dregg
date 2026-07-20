@@ -30,12 +30,17 @@ freeze as raw column equalities. THIS module adds, on top of that intent:
       pre-`CellState` (balance moved by the signed amount, nonce+1, every frame field frozen), AND it
       satisfies the per-cell projection of universe-A's `BalanceMovementSpec`/`TransferSpec` shape
       (`CellTransferSpec`), so the runnable descriptor INHERITS A's guarantee;
-  (3) `transferDescriptor_commit_binds_state` — the KEYSTONE anti-ghost: under
-      `Poseidon2SpongeCR hash`, ANY after-state that satisfies the hash-sites and publishes
-      `state_commit = PI[NEW_COMMIT]` has its WHOLE absorbed state block uniquely determined by
-      `NEW_COMMIT` (because the H4-of-H4 commitment is injective in its 13 absorbed columns). Hence a
-      tampered post-balance / frozen-field that still claims the published commitment is UNSAT — the
-      commitment changes. Exhibited concretely on `goodRow` vs a forged after-state.
+  (3) `transferDescriptor_commit_binds_state_or_collides` — the KEYSTONE anti-ghost, UNCONDITIONAL:
+      ANY after-state that satisfies the hash-sites and publishes `state_commit = PI[NEW_COMMIT]`
+      EITHER has its WHOLE absorbed state block determined by `NEW_COMMIT`, OR exhibits a genuine
+      collision of the deployed sponge at a pair a TOTAL extractor returns. Hence a tampered
+      post-balance / frozen-field that still claims the published commitment costs a real collision.
+      Exhibited concretely on `goodRow` vs a forged after-state
+      (`tampered_rejected_or_collides`). ⚑ The old form of this keystone carried
+      `Poseidon2SpongeCR hash`, which `HashFloorHonesty.poseidon2SpongeCR_false_babyBear` REFUTES at
+      deployed parameters — it was vacuous exactly where it was meant to bind. DELETED, not kept
+      beside the new form; `absorbed_determined_by_commit_of_injective` recovers it as the injective
+      special case.
 
 This is what makes the SINGLE runnable description enforce the FULL cell state (not the projection a
 weaker conservation-only bridge would give): the commitment chain is what pins the 3rd, 4th, … cells
@@ -67,9 +72,11 @@ of the block, so the witness binds the whole post-state.
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY
-as the NAMED hypothesis `Poseidon2Binding.Poseidon2SpongeCR hash` (task #13's discharged carrier),
-never as a fresh axiom. Imports are read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR is no
+longer a hypothesis on any keystone here: the commitment core is unconditional and concludes a
+disjunction naming an extracted collision pair. `Poseidon2SpongeCR` survives only in the standalone
+`_of_injective` strength bridges and the refutability canary, which is the whole point of keeping it.
+Imports are read-only.
 -/
 -- Declared directly (2026-07-10): previously transitive via an upstream
 -- `Mathlib.Tactic` umbrella, since trimmed.
@@ -83,7 +90,8 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+open Dregg2.Circuit.Poseidon2Binding
+  (Poseidon2SpongeCR SpongeColl group4Find group4Find_spec spongeColl_refutable_of_injective)
 
 set_option linter.unusedVariables false
 
@@ -316,34 +324,91 @@ theorem commit_eq_commitOf (hash : List ℤ → ℤ) (env : VmRowEnv)
   have hb := transferHash_binds hash env h
   rw [hb]; rfl
 
-/-- **`absorbed_determined_by_commit` — the injective-commitment core.** Under
-`Poseidon2SpongeCR hash`, two after-states whose published `state_commit`s are EQUAL have identical
-absorbed-column lists. Proof: `commitOf` is `hash` of a 4-list of inner `hash`es; CR peels the outer
-`hash` (the 4-list agrees), then CR peels each inner `hash` (the field tuples agree). -/
-theorem absorbed_determined_by_commit (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-! ### The EXTRACTION-AS-DATA anti-ghost (the cured commitment core).
+
+⚑ **WHAT CHANGED AND WHY.** The core here used to be `absorbed_determined_by_commit`, carrying
+`Poseidon2SpongeCR hash`. That hypothesis is FALSE at deployed BabyBear parameters
+(`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`), so the theorem said NOTHING about the deployed
+system, and the concrete tamper-rejection tooth built on it said nothing either. Both are DELETED, not
+kept beside the new forms. The GROUP-4 peel is now the TOTAL `Poseidon2Binding.group4Find`, which
+either proves the absorbed columns equal or HANDS BACK the specific pair of lists at which the deployed
+sponge actually collides. -/
+
+/-- The transfer commitment's three inner GROUP-4 blocks, as the deployed absorption orders them. -/
+def transferBlockA (env : VmRowEnv) : List ℤ :=
+  [ env.loc (saCol state.BALANCE_LO), env.loc (saCol state.BALANCE_HI)
+  , env.loc (saCol state.NONCE), env.loc (saCol (state.FIELD_BASE + 0)) ]
+
+/-- The SECOND inner GROUP-4 block: `fields[1..4]`. -/
+def transferBlockB (env : VmRowEnv) : List ℤ :=
+  [ env.loc (saCol (state.FIELD_BASE + 1)), env.loc (saCol (state.FIELD_BASE + 2))
+  , env.loc (saCol (state.FIELD_BASE + 3)), env.loc (saCol (state.FIELD_BASE + 4)) ]
+
+/-- The THIRD inner GROUP-4 block: `fields[5..7], cap_root`. -/
+def transferBlockC (env : VmRowEnv) : List ℤ :=
+  [ env.loc (saCol (state.FIELD_BASE + 5)), env.loc (saCol (state.FIELD_BASE + 6))
+  , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT) ]
+
+/-- **`transferCollFind hash e₁ e₂`** — the pair the GROUP-4 extractor RETURNS on an equivocation
+between two transfer rows. Reuses the generic `Poseidon2Binding.group4Find`; no parallel copy. -/
+def transferCollFind (hash : List ℤ → ℤ) (e₁ e₂ : VmRowEnv) : List ℤ × List ℤ :=
+  group4Find hash (transferBlockA e₁) (transferBlockB e₁) (transferBlockC e₁)
+                  (e₁.loc (auxCol aux_off.STATE_RECORD_DIGEST))
+                  (transferBlockA e₂) (transferBlockB e₂) (transferBlockC e₂)
+                  (e₂.loc (auxCol aux_off.STATE_RECORD_DIGEST))
+
+/-- **`TransferColl hash e₁ e₂`** — the pair the extractor returned is a GENUINE collision of the
+deployed sponge. Deliberately NOT `∃ a collision`, which pigeonhole makes unconditionally true. -/
+def TransferColl (hash : List ℤ → ℤ) (e₁ e₂ : VmRowEnv) : Prop :=
+  SpongeColl hash (transferCollFind hash e₁ e₂)
+
+/-- **⚑ THE COMMITMENT CORE — UNCONDITIONAL** (the cured `absorbed_determined_by_commit`). Two
+after-states whose published `state_commit`s are EQUAL EITHER have identical absorbed-column lists, OR
+exhibit a genuine collision of the deployed sponge at the two lists `transferCollFind` returns.
+
+⚑ **STRENGTH, stated honestly.** The old form concluded a bare equality from `Poseidon2SpongeCR hash`,
+which the deployed sponge REFUTES; at deployed parameters it was vacuous. This one is a disjunction —
+formally weaker, but it HOLDS of the deployed sponge, which the old one did not. -/
+theorem absorbed_determined_by_commit_or_collides (hash : List ℤ → ℤ)
+    (e₁ e₂ : VmRowEnv)
+    (hs₁ : siteHoldsAll hash e₁ transferHashSites)
+    (hs₂ : siteHoldsAll hash e₂ transferHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    absorbedCols e₁ = absorbedCols e₂ ∨ TransferColl hash e₁ e₂ := by
+  rw [commit_eq_commitOf hash e₁ hs₁, commit_eq_commitOf hash e₂ hs₂] at hcommit
+  unfold commitOf at hcommit
+  rcases group4Find_spec hash (transferBlockA e₁) (transferBlockB e₁) (transferBlockC e₁)
+      (e₁.loc (auxCol aux_off.STATE_RECORD_DIGEST)) (transferBlockA e₂) (transferBlockB e₂)
+      (transferBlockC e₂) (e₂.loc (auxCol aux_off.STATE_RECORD_DIGEST)) hcommit with
+    ⟨hA, hB, hC, hrd⟩ | hcoll
+  · refine Or.inl ?_
+    have hA' := hA; have hB' := hB; have hC' := hC
+    unfold transferBlockA at hA'; unfold transferBlockB at hB'; unfold transferBlockC at hC'
+    rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at hA' hB' hC'
+    obtain ⟨e_bLo, e_bHi, e_n, e_f0, _⟩ := hA'
+    obtain ⟨e_f1, e_f2, e_f3, e_f4, _⟩ := hB'
+    obtain ⟨e_f5, e_f6, e_f7, e_cap, _⟩ := hC'
+    rw [absorbedCols_eq, absorbedCols_eq, e_bLo, e_bHi, e_n, e_f0, e_f1, e_f2, e_f3, e_f4,
+      e_f5, e_f6, e_f7, e_cap, hrd]
+  · exact Or.inr hcoll
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** The deleted `absorbed_determined_by_commit` is EXACTLY the
+injective special case. Standalone bridge, NOT a hypothesis on any deployed keystone. -/
+theorem absorbed_determined_by_commit_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv)
     (hs₁ : siteHoldsAll hash e₁ transferHashSites)
     (hs₂ : siteHoldsAll hash e₂ transferHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ := by
-  -- rewrite both published commits as commitOf of the absorbed columns
-  rw [commit_eq_commitOf hash e₁ hs₁, commit_eq_commitOf hash e₂ hs₂] at hcommit
-  unfold commitOf at hcommit
-  -- CR on the outer hash gives the 4-element list equal (last element is the record_digest).
-  have houter := hCR _ _ hcommit
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
-  obtain ⟨hA, hB, hC, e_rd, _⟩ := houter
-  -- CR on each inner hash gives the 4-element field tuples equal.
-  have hA' := hCR _ _ hA
-  have hB' := hCR _ _ hB
-  have hC' := hCR _ _ hC
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at hA' hB' hC'
-  obtain ⟨e_bLo, e_bHi, e_n, e_f0, _⟩ := hA'
-  obtain ⟨e_f1, e_f2, e_f3, e_f4, _⟩ := hB'
-  obtain ⟨e_f5, e_f6, e_f7, e_cap, _⟩ := hC'
-  -- reassemble the 13-element absorbed lists (the record_digest agrees via `e_rd`)
-  rw [absorbedCols_eq, absorbedCols_eq, e_bLo, e_bHi, e_n, e_f0, e_f1, e_f2, e_f3, e_f4,
-    e_f5, e_f6, e_f7, e_cap, e_rd]
+  rcases absorbed_determined_by_commit_or_collides hash e₁ e₂ hs₁ hs₂ hcommit with hEq | hcoll
+  · exact hEq
+  · exact absurd hcoll (spongeColl_refutable_of_injective hash hCR _)
+
+/-- **(CANARY — the collision disjunct is REFUTABLE.)** At an injective sponge the returned pair is not
+a collision, so the disjunction cannot discharge itself by taking the right branch. -/
+theorem transferColl_refutable_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv) : ¬ TransferColl hash e₁ e₂ :=
+  spongeColl_refutable_of_injective hash hCR _
 
 /-- **`transferDescriptor_commit_binds_state` — THE KEYSTONE anti-ghost tooth.** A row that satisfies
 the descriptor's hash-sites and publishes `state_commit = PI[NEW_COMMIT]` has EVERY absorbed
@@ -351,7 +416,7 @@ state-block column (balance limbs, nonce, all 8 fields, cap_root) uniquely deter
 — relative to any OTHER such row. Hence two satisfying rows that agree on the published `NEW_COMMIT`
 agree on their WHOLE absorbed after-state. So a prover CANNOT keep `NEW_COMMIT` while tampering any
 absorbed cell: the runnable descriptor binds the whole post-state, not a projection. -/
-theorem transferDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+theorem transferDescriptor_commit_binds_state_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv)
     (hsat₁ : satisfiedVm hash transferVmDescriptor e₁ true true)
     (hsat₂ : satisfiedVm hash transferVmDescriptor e₂ true true)
@@ -365,7 +430,7 @@ theorem transferDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : P
     (hcanon₂ : 0 ≤ e₂.loc (saCol state.STATE_COMMIT)
       ∧ e₂.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
-    absorbedCols e₁ = absorbedCols e₂ := by
+    absorbedCols e₁ = absorbedCols e₂ ∨ TransferColl hash e₁ e₂ := by
   have hs₁ := hsat₁.2.1
   have hs₂ := hsat₂.2.1
   -- each row's published state_commit is ≡ its NEW_COMMIT (pins_commit, mod p); the pubs are equal
@@ -382,7 +447,33 @@ theorem transferDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : P
     obtain ⟨l₁, u₁⟩ := hcanon₁
     obtain ⟨l₂, u₂⟩ := hcanon₂
     omega
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_or_collides hash e₁ e₂ hs₁ hs₂ hcommit
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH for the descriptor keystone.** The deleted
+`transferDescriptor_commit_binds_state` is EXACTLY the injective special case of the cured form.
+
+⚑ **THIS IS THE WIDER SWEEP'S HANDLE, AND IT IS STILL VACUOUS.** ~25 sibling emit modules
+(`EffectVmEmitSetVK`, `EffectVmEmitCellSeal`, `EffectVmEmitExercise`, … ) carry `Poseidon2SpongeCR` on
+their OWN per-tag `*_commit_binds_block` theorems and consume this keystone at that strength. Those
+theorems were vacuous before this repair and remain vacuous now — this repair did not reach them, and
+routing them through this bridge changes nothing about their content. It only makes the fact
+MACHINE-VISIBLE: a consumer of `_of_injective` is announcing that it still assumes a hypothesis the
+deployed sponge refutes. That is the honest boundary, not a fix. -/
+theorem transferDescriptor_commit_binds_state_of_injective (hash : List ℤ → ℤ)
+    (hCR : Poseidon2SpongeCR hash) (e₁ e₂ : VmRowEnv)
+    (hsat₁ : satisfiedVm hash transferVmDescriptor e₁ true true)
+    (hsat₂ : satisfiedVm hash transferVmDescriptor e₂ true true)
+    (hrow₁ : IsTransferRow e₁) (hrow₂ : IsTransferRow e₂)
+    (hcanon₁ : 0 ≤ e₁.loc (saCol state.STATE_COMMIT)
+      ∧ e₁.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hcanon₂ : 0 ≤ e₂.loc (saCol state.STATE_COMMIT)
+      ∧ e₂.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
+    absorbedCols e₁ = absorbedCols e₂ := by
+  rcases transferDescriptor_commit_binds_state_or_collides hash e₁ e₂ hsat₁ hsat₂ hrow₁ hrow₂
+    hcanon₁ hcanon₂ hpub with hEq | hcoll
+  · exact hEq
+  · exact absurd hcoll (spongeColl_refutable_of_injective hash hCR _)
 
 /-! ## §6 — CONCRETE anti-ghost: a tampered after-state CANNOT keep the published commitment.
 
@@ -431,11 +522,17 @@ theorem tampered_absorbed_differs : absorbedCols goodRow ≠ absorbedCols tamper
   rw [hg, ht] at h3
   norm_num at h3
 
-/-- **`tampered_rejected` — concrete keystone anti-ghost.** No CR sponge admits BOTH `goodRow` and
-`tamperedRow` as descriptor-satisfying transfer rows publishing the SAME `NEW_COMMIT`: the commitment
-binding would force their absorbed columns equal, contradicting `tampered_absorbed_differs`. The
-forged `field[0]` cannot ride the honest published commitment — the whole-state tooth bites. -/
-theorem tampered_rejected (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`tampered_rejected_or_collides` — the concrete keystone anti-ghost, UNCONDITIONAL.** If BOTH
+`goodRow` and `tamperedRow` are descriptor-satisfying transfer rows publishing the SAME `NEW_COMMIT`,
+then the deployed sponge GENUINELY COLLIDES at the pair `transferCollFind` returns: the commitment
+binding would otherwise force their absorbed columns equal, contradicting `tampered_absorbed_differs`.
+So the forged `field[0]` cannot ride the honest published commitment unless a real collision is
+exhibited — and the extracted pair is exactly the collision a forger would have to have found.
+
+⚑ **STRENGTH, stated honestly.** The old form concluded `False` from `Poseidon2SpongeCR hash`, which
+the deployed sponge REFUTES; at deployed parameters it ruled out nothing. This one names the price of
+the forgery instead of assuming it away, and it HOLDS of the deployed sponge. -/
+theorem tampered_rejected_or_collides (hash : List ℤ → ℤ)
     (hsatG : satisfiedVm hash transferVmDescriptor goodRow true true)
     (hsatT : satisfiedVm hash transferVmDescriptor tamperedRow true true)
     (hrowT : IsTransferRow tamperedRow)
@@ -445,10 +542,11 @@ theorem tampered_rejected (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR has
     (hcanonT : 0 ≤ tamperedRow.loc (saCol state.STATE_COMMIT)
       ∧ tamperedRow.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hpub : goodRow.pub pi.NEW_COMMIT = tamperedRow.pub pi.NEW_COMMIT) :
-    False :=
-  tampered_absorbed_differs
-    (transferDescriptor_commit_binds_state hash hCR goodRow tamperedRow hsatG hsatT
-      goodRow_isTransferRow hrowT hcanonG hcanonT hpub)
+    TransferColl hash goodRow tamperedRow := by
+  rcases transferDescriptor_commit_binds_state_or_collides hash goodRow tamperedRow hsatG hsatT
+    goodRow_isTransferRow hrowT hcanonG hcanonT hpub with hEq | hcoll
+  · exact absurd hEq tampered_absorbed_differs
+  · exact hcoll
 
 /-! ## §7 — THE HONEST FINDING: `state.RESERVED` is NOT bound by the commitment.
 
@@ -634,10 +732,12 @@ theorem transferVm_enforces_availability (hash : List ℤ → ℤ) (env : VmRowE
 #assert_axioms cellSpec_is_intentImage
 #assert_axioms transferDescriptor_full_sound
 #assert_axioms commit_eq_commitOf
-#assert_axioms absorbed_determined_by_commit
-#assert_axioms transferDescriptor_commit_binds_state
+#assert_axioms absorbed_determined_by_commit_or_collides
+#assert_axioms absorbed_determined_by_commit_of_injective
+#assert_axioms transferColl_refutable_of_injective
+#assert_axioms transferDescriptor_commit_binds_state_or_collides
 #assert_axioms tampered_absorbed_differs
-#assert_axioms tampered_rejected
+#assert_axioms tampered_rejected_or_collides
 #assert_axioms reserved_not_bound_by_commitment
 #assert_axioms goodSpec_holds
 #assert_axioms transferVm_enforces_availability

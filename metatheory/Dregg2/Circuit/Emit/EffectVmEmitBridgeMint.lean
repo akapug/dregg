@@ -331,7 +331,7 @@ theorem bridgeMintDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR :
     (hpubLo₂ : e₂.loc (saCol state.STATE_COMMIT) = e₂.pub pi.NEW_COMMIT)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  Dregg2.Circuit.Emit.EffectVmEmitTransferSound.absorbed_determined_by_commit
+  Dregg2.Circuit.Emit.EffectVmEmitTransferSound.absorbed_determined_by_commit_of_injective
     hash hCR e₁ e₂ hs₁ hs₂ (by rw [hpubLo₁, hpubLo₂, hpub])
 
 /-! ## §7 — THE CONNECTOR — `cellProjA` to the bridge-mint arm (`execFullA_bridgeMintA` = `recCMintAsset`). -/
@@ -568,7 +568,8 @@ post-state (the per-cell CREDIT block + a `system_roots`-blind commitment). This
 shared `EffectVmFullStateRunnable` recipe: the WIDE descriptor (`hashSites := wideHashSites`,
 `traceWidth := EFFECT_VM_WIDTH_SYSROOTS`) absorbs the dedicated `sysRootsDigestCol` carrier, so the
 descriptor the prover RUNS binds the per-cell CREDIT block AND all 8 side-table roots. Tamper ANY field or
-ANY side-table root ⇒ UNSAT (`wide_rejects_state_tamper` / `wide_rejects_root_tamper`).
+ANY side-table root ⇒ a produced hash collision (`wide_rejects_state_tamper_or_collides` /
+`wide_rejects_root_tamper_or_collides`).
 
 bridgeMint is the FROZEN-side-table case: it CREDITS the per-cell `balLo` (`CellBridgeMintSpec`) and
 prepends a DISCLOSING LOG receipt — touching NO `system_roots` side-table. So its sub-block is FROZEN
@@ -577,8 +578,8 @@ AND the (frozen) 8 roots into the running commitment. (The minted-supply total /
 proof are turn/portal-level, cited at §8½, not a `system_roots` field.) -/
 
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
-   wide_rejects_state_tamper wide_rejects_root_tamper wideHashSites hC)
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound WideColl RootsColl
+   wide_rejects_state_tamper_or_collides wide_rejects_root_tamper_or_collides wideHashSites hC)
 open Dregg2.Exec.SystemRoots
   (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
@@ -659,8 +660,15 @@ theorem bridgeMint_runnable_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv
   runnable_full_sound (bridgeMintRunnableSpec hash value preRoots) hash env pre post postRoots
     ⟨hrow, hcanon⟩ ⟨henc, hroots, hcar⟩ hsat
 
-/-- **`bridgeMint_wide_rejects_state_tamper` — per-cell-block anti-ghost on the RUNNABLE descriptor.** -/
-theorem bridgeMint_wide_rejects_state_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`bridgeMint_wide_rejects_state_tamper_or_collides` — per-cell-block anti-ghost on the RUNNABLE
+descriptor, as EXTRACTION.** Two wide bridge-mint rows publishing the same `NEW_COMMIT` whose absorbed
+state-block columns DIFFER exhibit a concrete collision of `hash`: a `WideColl` on the wide absorbed
+lists, or a `RootsColl` on the two root lists.
+
+The previous form concluded `False` from `Poseidon2SpongeCR hash`. The deployed BabyBear sponge REFUTES
+that hypothesis (`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`), so the previous form was vacuous at
+deployed parameters. This disjunction is formally weaker and holds of the deployed sponge. -/
+theorem bridgeMint_wide_rejects_state_tamper_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash bridgeMintVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash bridgeMintVmDescriptorWide e₂ true true)
@@ -669,15 +677,21 @@ theorem bridgeMint_wide_rejects_state_tamper (hash : List ℤ → ℤ) (hCR : Po
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
-  wide_rejects_state_tamper (bridgeMintRunnableSpec hash 0 sr₁) hash hCR e₁ e₂ sr₁ sr₂
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_state_tamper_or_collides (bridgeMintRunnableSpec hash 0 sr₁) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-/-- **`bridgeMint_wide_rejects_root_tamper` — side-table anti-ghost on the RUNNABLE descriptor.** Two wide
-rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) but whose side-table sub-blocks
-DIFFER at some index cannot both satisfy — every side-table root is now bound BY the running commitment, so
-a bridge-mint row that smuggled a side-table mutation (it must not touch any) is UNSAT. -/
-theorem bridgeMint_wide_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`bridgeMint_wide_rejects_root_tamper_or_collides` — side-table anti-ghost on the RUNNABLE
+descriptor, as EXTRACTION.** Two wide rows publishing the same `NEW_COMMIT` (with `systemRootsDigest`
+carriers) whose side-table sub-blocks DIFFER at some index exhibit a concrete collision of `hash` — a
+`WideColl` on the wide absorbed lists or a `RootsColl` on the two root lists. So every side-table root is
+bound BY the running commitment up to a produced collision: a bridge-mint row that smuggled a side-table
+mutation (it must touch none) IS one.
+
+The previous form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge
+refutes; it was therefore vacuous at deployed parameters. This form is weaker and holds of that sponge. -/
+theorem bridgeMint_wide_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash bridgeMintVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash bridgeMintVmDescriptorWide e₂ true true)
@@ -686,8 +700,9 @@ theorem bridgeMint_wide_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Pos
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (bridgeMintRunnableSpec hash 0 sr₁) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (bridgeMintRunnableSpec hash 0 sr₁) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ### Non-vacuity of the full-state instance: a real credited+frozen-roots post-state inhabits the clause. -/
@@ -743,8 +758,8 @@ theorem bridgeMint_wide_roots_clause_refutable :
 
 #assert_axioms bridgeMintGates_give_cellSpec
 #assert_axioms bridgeMint_runnable_full_sound
-#assert_axioms bridgeMint_wide_rejects_state_tamper
-#assert_axioms bridgeMint_wide_rejects_root_tamper
+#assert_axioms bridgeMint_wide_rejects_state_tamper_or_collides
+#assert_axioms bridgeMint_wide_rejects_root_tamper_or_collides
 #assert_axioms bridgeMint_wide_realizes
 #assert_axioms bridgeMint_wide_clause_refutable
 #assert_axioms bridgeMint_wide_roots_clause_refutable

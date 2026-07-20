@@ -30,7 +30,7 @@ by passthrough gates, and the 4 GROUP-4 hash-sites bind the whole post-state int
     publishes `post.commit = PI[NEW_COMMIT]`.
   * `burnDescriptor_commit_binds_state` — the KEYSTONE anti-ghost: two satisfying rows agreeing on the
     published `NEW_COMMIT` have IDENTICAL absorbed after-state columns (reusing the transfer keystone's
-    `transferDescriptor_commit_binds_state`, since the hash sites are the SAME GROUP-4 chain).
+    `transferDescriptor_commit_binds_state_of_injective`, since the hash sites are the SAME GROUP-4 chain).
   * `unify_burn` / `unify_burn_exec` — the CONNECTOR: a committed universe-A `BurnSpec` (= `recCBurnAsset`),
     projected per-`(cell, asset)` through `cellProjA`, satisfies `CellBurnSpec` EXACTLY (the conserved
     `bal cell a` drops by `amt`; the frame is `0 = 0`). So the runnable `bal_lo` column transition IS
@@ -69,7 +69,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer
    transferHashSites site0 site1 site2 site3 boundaryLast_pins
    gate_modEq_iff not_modEq_zero_of_canon pPrimeInt)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-  (CellState absorbedCols transferDescriptor_commit_binds_state)
+  (CellState absorbedCols transferDescriptor_commit_binds_state_of_injective)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Exec
@@ -368,7 +368,7 @@ theorem burnDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hr
 /-! ## §6 — THE ANTI-GHOST COMMITMENT TOOTH (reused from the transfer keystone).
 
 `burnVmDescriptor` carries the SAME GROUP-4 `transferHashSites`, so the transfer keystone's
-`transferDescriptor_commit_binds_state` applies verbatim once we reduce `satisfiedVm burnVmDescriptor`
+`transferDescriptor_commit_binds_state_of_injective` applies verbatim once we reduce `satisfiedVm burnVmDescriptor`
 to its hash-site component. Two satisfying burn rows that agree on the published `NEW_COMMIT` agree on
 their WHOLE absorbed after-state. -/
 
@@ -387,7 +387,7 @@ theorem burnDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Posei
     (hpubLo₂ : e₂.loc (saCol state.STATE_COMMIT) = e₂.pub pi.NEW_COMMIT)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  Dregg2.Circuit.Emit.EffectVmEmitTransferSound.absorbed_determined_by_commit
+  Dregg2.Circuit.Emit.EffectVmEmitTransferSound.absorbed_determined_by_commit_of_injective
     hash hCR e₁ e₂ hs₁ hs₂ (by rw [hpubLo₁, hpubLo₂, hpub])
 
 /-! ## §7 — THE CONNECTOR — `cellProjA` to universe-A's `BurnSpec` / `recCBurnAsset`.

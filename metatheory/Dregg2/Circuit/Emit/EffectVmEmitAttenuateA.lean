@@ -362,7 +362,7 @@ transfer keystone's, only the `cap_root` column now MOVES). -/
 
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (transferHashSites)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-  (absorbedCols commitOf commit_eq_commitOf absorbed_determined_by_commit)
+  (absorbedCols commitOf commit_eq_commitOf absorbed_determined_by_commit_of_injective)
 
 /-- `attenuateHashSites` is DEFINITIONALLY the transfer keystone's `transferHashSites` (same ordered
 4-site chain, same absorbed columns incl. the post `cap_root`). So all the keystone's commitment-binding
@@ -380,7 +380,7 @@ theorem attenuateDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : 
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ := by
   rw [attenuateHashSites_eq] at hs₁ hs₂
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §8 — THE CONNECTOR — `capRootProj` to universe-A's `attenuateA_full_sound`.
 
@@ -1021,8 +1021,9 @@ section CapGraphWide
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (transferHashSites)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
-   wide_rejects_state_tamper wide_rejects_root_tamper)
+  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound
+   runnable_full_commit_binds_or_collides wide_rejects_state_tamper_or_collides
+   wide_rejects_root_tamper_or_collides WideColl RootsColl)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 /-- **`attenuateVmDescriptorWide`** — the cap-graph row's descriptor WIDENED to bind the `system_roots`
@@ -1118,13 +1119,19 @@ theorem cap_runnable_full_sound (capDigestNew : ℤ) (preRoots : SysRoots)
   runnable_full_sound (capRunnableSpec capDigestNew preRoots) hash env pre post postRoots
     hrow ⟨henc, hroots⟩ hsat
 
-/-- **`cap_runnable_binds_full_state` — the whole-17-field anti-ghost over the WIDE commitment.** Two
-rows satisfying the cap-graph wide descriptor that publish the SAME `NEW_COMMIT`, whose carriers ARE the
-`systemRootsDigest` of their post sub-blocks, agree on EVERY absorbed state-block column (the moved
-`cap_root` included) AND every side-table root. So a prover CANNOT keep `NEW_COMMIT` while tampering ANY
-of the 17 fields' bound content — the runnable cap-graph descriptor binds the whole post-state. -/
-theorem cap_runnable_binds_full_state (capDigestNew : ℤ) (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`cap_runnable_binds_full_state_or_collides` — the whole-17-field anti-ghost over the WIDE
+commitment, UNCONDITIONALLY.** Two rows satisfying the cap-graph wide descriptor that publish the SAME
+`NEW_COMMIT`, whose carriers ARE the `systemRootsDigest` of their post sub-blocks, EITHER agree on EVERY
+absorbed state-block column (the moved `cap_root` included) AND every side-table root, OR exhibit a
+genuine collision of the deployed sponge — on the state block (`WideColl`) or on the ordered root list
+(`RootsColl`). So keeping `NEW_COMMIT` while tampering any of the 17 fields' bound content COSTS a named
+sponge collision.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed BabyBear
+sponge REFUTES, so at deployed parameters it was vacuous. This disjunction is formally weaker and holds
+of the deployed sponge. -/
+theorem cap_runnable_binds_full_state_or_collides (capDigestNew : ℤ) (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash attenuateVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash attenuateVmDescriptorWide e₂ true true)
@@ -1133,16 +1140,22 @@ theorem cap_runnable_binds_full_state (capDigestNew : ℤ) (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (capRunnableSpec capDigestNew preRoots) hash hCR
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (capRunnableSpec capDigestNew preRoots) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-/-- **`cap_runnable_rejects_cap_root_tamper` — the cap-graph headline tooth (state-block).** Two wide
-cap-graph rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose absorbed
-state-block columns DIFFER (a forged balance / tampered field / forged `cap_root`) cannot both satisfy —
-UNSAT. The moved `cap_root` (absorbed column 11) is bound by the wide commitment. -/
-theorem cap_runnable_rejects_cap_root_tamper (capDigestNew : ℤ) (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`cap_runnable_rejects_cap_root_tamper_or_collides` — the cap-graph headline tooth (state-block).**
+Two wide cap-graph rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose
+absorbed state-block columns DIFFER (a forged balance / tampered field / forged `cap_root`) exhibit a
+genuine collision of the deployed sponge: such a pair is UNSAT unless the prover holds a `WideColl` or a
+`RootsColl`. The moved `cap_root` (absorbed column 11) is bound by the wide commitment.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge REFUTES,
+so at deployed parameters it was vacuous. This form names what the tamper costs and holds of the deployed
+sponge. -/
+theorem cap_runnable_rejects_cap_root_tamper_or_collides (capDigestNew : ℤ) (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash attenuateVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash attenuateVmDescriptorWide e₂ true true)
@@ -1151,16 +1164,22 @@ theorem cap_runnable_rejects_cap_root_tamper (capDigestNew : ℤ) (preRoots : Sy
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
-  wide_rejects_state_tamper (capRunnableSpec capDigestNew preRoots) hash hCR
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_state_tamper_or_collides (capRunnableSpec capDigestNew preRoots) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-/-- **`cap_runnable_rejects_root_tamper` — the cap-graph headline tooth (side-table).** Two wide
-cap-graph rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table
+/-- **`cap_runnable_rejects_root_tamper_or_collides` — the cap-graph headline tooth (side-table).** Two
+wide cap-graph rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table
 sub-blocks DIFFER at some index (a dropped escrow, an omitted nullifier, a tampered DELEG/REFCOUNT root)
-cannot both satisfy — UNSAT. The 8 side-table roots are now bound BY the runnable cap-graph commitment. -/
-theorem cap_runnable_rejects_root_tamper (capDigestNew : ℤ) (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+exhibit a genuine collision of the deployed sponge: such a pair is UNSAT unless the prover holds a
+`WideColl` or a `RootsColl`. The 8 side-table roots are bound BY the runnable cap-graph commitment.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge REFUTES,
+so at deployed parameters it was vacuous. This form names what the tamper costs and holds of the deployed
+sponge. -/
+theorem cap_runnable_rejects_root_tamper_or_collides (capDigestNew : ℤ) (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash attenuateVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash attenuateVmDescriptorWide e₂ true true)
@@ -1169,8 +1188,9 @@ theorem cap_runnable_rejects_root_tamper (capDigestNew : ℤ) (preRoots : SysRoo
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (capRunnableSpec capDigestNew preRoots) hash hCR
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (capRunnableSpec capDigestNew preRoots) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ### §W.NV — NON-VACUITY of the shared cap-graph clause (a real cap-move inhabits it; a forged one
@@ -1226,9 +1246,9 @@ theorem capWide_roots_clause_not_trivial :
 #assert_axioms attenuateWide_constraints_eq
 #assert_axioms attenuateWide_hashSites_eq
 #assert_axioms cap_runnable_full_sound
-#assert_axioms cap_runnable_binds_full_state
-#assert_axioms cap_runnable_rejects_cap_root_tamper
-#assert_axioms cap_runnable_rejects_root_tamper
+#assert_axioms cap_runnable_binds_full_state_or_collides
+#assert_axioms cap_runnable_rejects_cap_root_tamper_or_collides
+#assert_axioms cap_runnable_rejects_root_tamper_or_collides
 #assert_axioms capWide_realizes
 #assert_axioms capWide_clause_not_trivial
 #assert_axioms capWide_roots_clause_not_trivial

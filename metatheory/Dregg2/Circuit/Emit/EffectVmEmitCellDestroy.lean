@@ -60,7 +60,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer
    transitionAll boundaryFirstPins boundaryLastPins
    transferHashSites boundaryLast_pins)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-  (CellState RowEncodes absorbedCols absorbed_determined_by_commit)
+  (CellState RowEncodes absorbedCols absorbed_determined_by_commit_of_injective)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec
@@ -231,7 +231,7 @@ theorem cellDestroyVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Poseid
     (hs₂ : siteHoldsAll hash e₂ cellDestroyHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §8 — the structured per-cell spec (REUSING `CellState`): passthrough + nonce tick. -/
 
@@ -362,7 +362,7 @@ theorem cellDestroyDescriptor_commit_binds_state (hash : List ℤ → ℤ)
   rw [hpub] at h₁
   have hdvd := Int.ModEq.dvd (h₁.trans h₂.symm)
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by omega
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §10 — CONNECTOR to universe-A `CellDestroySpec` via `cellProj`.
 

@@ -23,8 +23,8 @@ This module amplifies mint to full-state via the VALIDATED RECIPE
   * **`mint_runnable_full_sound`** — instantiating the GENERIC `runnable_full_sound`: a row satisfying
     `mintVmDescriptorWide` (the RUNNABLE wide descriptor), under the decode, pins the FULL 17-field post —
     the per-cell `CellMintSpec` AND the frozen 8 side-table roots. The crypto/anti-ghost on all 17 fields
-    falls out of the generic `wide_rejects_state_tamper`/`wide_rejects_root_tamper` (instantiated at
-    `mintRunnableSpec` in §4) — tamper ANY column or root ⇒ UNSAT.
+    falls out of the generic `wide_rejects_state_tamper_or_collides`/`wide_rejects_root_tamper_or_collides`
+    (instantiated at `mintRunnableSpec` in §4) — tamper ANY column or root ⇒ a produced hash collision.
 
 ## HONEST PRECONDITION-GAP NOTE (recorded for the audit wave, per the task brief)
 
@@ -37,10 +37,10 @@ the named, deferred systematic audit wave); it lifts the EXISTING gates to full-
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. The sole crypto carrier is the
-NAMED `Poseidon2SpongeCR` portal, entering ONLY through the generic `runnable_full_sound` / the §4 anti-ghost
-(reused, not re-assumed). Imports are read-only; this module
-owns only its own declarations.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. The §4 anti-ghost teeth carry
+NO crypto hypothesis: they conclude a DISJUNCTION handing back a specific `WideColl`/`RootsColl` collision
+in the tamper branch, so they hold of the deployed sponge rather than of an injective idealisation of it.
+Imports are read-only; this module owns only its own declarations.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitMint
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable
@@ -55,9 +55,8 @@ open Dregg2.Circuit.Emit.EffectVmEmitMint
    CellMintSpec RowEncodes MintRowIntent IsMintRow mintVmAirName
    goodMintRow goodMintRow_realizes_intent)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
-   wide_rejects_state_tamper wide_rejects_root_tamper)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound
+   WideColl RootsColl wide_rejects_state_tamper_or_collides wide_rejects_root_tamper_or_collides)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -155,14 +154,20 @@ theorem mint_runnable_full_sound (amt : ℤ) (preRoots : SysRoots) (hash : List 
 /-! ## §4 — ANTI-GHOST on all 17 fields (instantiating the generic teeth at `mintRunnableSpec`).
 
 The whole-state tooth: two rows satisfying `mintVmDescriptorWide` that publish the SAME `NEW_COMMIT` (with
-`systemRootsDigest` carriers) cannot DISAGREE on any absorbed state-block column (`mint_rejects_state_tamper`)
-NOR on any side-table root (`mint_rejects_root_tamper`) — UNSAT under CR. So the RUNNABLE mint commitment
-binds the per-cell block AND the side-table state — the magnesium breadth, not a projection. -/
+`systemRootsDigest` carriers) can DISAGREE on an absorbed state-block column
+(`mint_rejects_state_tamper_or_collides`) or on a side-table root (`mint_rejects_root_tamper_or_collides`)
+only by exhibiting a hash collision. So the RUNNABLE mint commitment binds the per-cell block AND the
+side-table state — the magnesium breadth, not a projection — up to a collision the theorem produces. -/
 
-/-- **`mint_rejects_state_tamper` — per-cell-block anti-ghost.** Two wide mint rows publishing the same
-`NEW_COMMIT` whose absorbed state-block columns DIFFER cannot both satisfy. -/
-theorem mint_rejects_state_tamper (amt : ℤ) (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`mint_rejects_state_tamper_or_collides` — per-cell-block anti-ghost, as EXTRACTION.** Two wide mint
+rows publishing the same `NEW_COMMIT` whose absorbed state-block columns DIFFER exhibit a concrete
+collision of `hash`: a `WideColl` on the wide absorbed lists, or a `RootsColl` on the two root lists.
+
+The previous form concluded `False` from `Poseidon2SpongeCR hash`. The deployed BabyBear sponge REFUTES
+that hypothesis (`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`), so the previous form was vacuous at
+deployed parameters. This disjunction is formally weaker and holds of the deployed sponge. -/
+theorem mint_rejects_state_tamper_or_collides (amt : ℤ) (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash mintVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash mintVmDescriptorWide e₂ true true)
@@ -171,16 +176,21 @@ theorem mint_rejects_state_tamper (amt : ℤ) (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
-  wide_rejects_state_tamper (mintRunnableSpec amt preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_state_tamper_or_collides (mintRunnableSpec amt preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-/-- **`mint_rejects_root_tamper` — side-table anti-ghost (the gap's headline tooth, now on mint).** Two
-wide mint rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table
-sub-blocks DIFFER at some index `i` cannot both satisfy. The side-table state is bound BY the runnable mint
-commitment — the Class-C disease cured for mint. -/
-theorem mint_rejects_root_tamper (amt : ℤ) (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`mint_rejects_root_tamper_or_collides` — side-table anti-ghost on mint, as EXTRACTION.** Two wide
+mint rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks
+DIFFER at some index `i` exhibit a concrete collision of `hash` — a `WideColl` on the wide absorbed lists
+or a `RootsColl` on the two root lists. The side-table state is bound BY the runnable mint commitment up
+to a produced collision.
+
+The previous form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge
+refutes; it was therefore vacuous at deployed parameters. This form is weaker and holds of that sponge. -/
+theorem mint_rejects_root_tamper_or_collides (amt : ℤ) (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash mintVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash mintVmDescriptorWide e₂ true true)
@@ -189,12 +199,13 @@ theorem mint_rejects_root_tamper (amt : ℤ) (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (mintRunnableSpec amt preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (mintRunnableSpec amt preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-#assert_axioms mint_rejects_state_tamper
-#assert_axioms mint_rejects_root_tamper
+#assert_axioms mint_rejects_state_tamper_or_collides
+#assert_axioms mint_rejects_root_tamper_or_collides
 
 /-! ## §5 — NON-VACUITY: the full clause is inhabited by a real mint, and refutable.
 

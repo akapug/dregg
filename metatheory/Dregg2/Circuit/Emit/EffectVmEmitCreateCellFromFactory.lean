@@ -158,7 +158,7 @@ theorem factoryVm_rejects_nonzero_balance (env : VmRowEnv)
 
 /-! ## §7 — the commitment binding (inherited from the keystone). -/
 
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols absorbed_determined_by_commit_of_injective)
 
 theorem factoryVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv)
@@ -166,7 +166,7 @@ theorem factoryVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Poseidon2S
     (hs₂ : siteHoldsAll hash e₂ factoryHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §8 — the minted cell's ECONOMIC balance is `0` (the overlap with the executor).
 

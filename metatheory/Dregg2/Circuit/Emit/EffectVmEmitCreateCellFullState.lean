@@ -18,7 +18,10 @@ obstruction is proven in `Argus/Effects/CreateCell`. The §RECIPE applied to cre
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. NO collision-resistance hypothesis enters:
+the anti-ghost theorems are the UNCONDITIONAL `_or_collides` forms, whose alternative branch hands back
+a specific colliding pair. The former `Poseidon2SpongeCR`-carrying forms were vacuous at deployed
+BabyBear parameters — the deployed compressing sponge REFUTES that hypothesis.
 `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCell
@@ -32,9 +35,9 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitCreateCell
   (SEL_CREATECELL createCellRowGates createCellVmDescriptor BornEmptyRowIntent createCellVm_faithful)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound WideColl RootsColl
+   runnable_full_commit_binds_or_collides wide_rejects_root_tamper_or_collides
    wideHashSites)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -145,7 +148,17 @@ theorem createCell_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : Sys
 
 /-! ## §6 — THE ANTI-GHOST. -/
 
-theorem createCell_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`createCell_runnable_full_commit_binds_or_collides` — whole-state binding over the WIDE
+commitment.** Two rows satisfying the wide createCell descriptor that publish the SAME `NEW_COMMIT`,
+with `systemRootsDigest` carriers, EITHER agree on EVERY absorbed state-block column AND every
+side-table root, OR exhibit a genuine collision of the deployed sponge (`WideColl` on the two wide
+preimages, or `RootsColl` on the two root lists).
+
+The former `createCell_runnable_full_commit_binds` concluded the bare conjunction from
+`Poseidon2SpongeCR hash`. The deployed sponge REFUTES that hypothesis, so at deployed parameters that
+theorem was vacuous. This disjunction is formally weaker, but it HOLDS of the deployed sponge, which the
+old one did not. -/
+theorem createCell_runnable_full_commit_binds_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash createCellVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash createCellVmDescriptorWide e₂ true true)
@@ -154,11 +167,20 @@ theorem createCell_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : P
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (createCellRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (createCellRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-theorem createCell_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`createCell_rejects_root_tamper_or_collides` — the side-table anti-ghost tooth.** Two wide
+createCell rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) but whose
+side-table sub-blocks DIFFER at some root index `i` cannot both satisfy WITHOUT exhibiting a collision
+of the deployed sponge.
+
+The former `createCell_rejects_root_tamper` concluded `False` from `Poseidon2SpongeCR hash`, which the
+deployed sponge REFUTES; at deployed parameters it was vacuous. This disjunction is formally weaker, but
+it HOLDS of the deployed sponge, which the old one did not. -/
+theorem createCell_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash createCellVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash createCellVmDescriptorWide e₂ true true)
@@ -167,8 +189,9 @@ theorem createCell_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (createCellRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (createCellRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §7 — NON-VACUITY. -/
@@ -210,8 +233,8 @@ theorem createCell_clause_rejects_root_drop :
 #assert_axioms intent_to_zeroSpec
 #assert_axioms createCellGates_give_zeroSpec
 #assert_axioms createCell_runnable_full_sound
-#assert_axioms createCell_runnable_full_commit_binds
-#assert_axioms createCell_rejects_root_tamper
+#assert_axioms createCell_runnable_full_commit_binds_or_collides
+#assert_axioms createCell_rejects_root_tamper_or_collides
 #assert_axioms goodCreateCell_realizes
 #assert_axioms createCell_clause_not_trivial
 #assert_axioms createCell_clause_rejects_root_drop

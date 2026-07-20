@@ -18,7 +18,9 @@ post.fields slot` ties the value carrier to it), so the clause is env-free + non
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The anti-ghost theorems carry NO
+collision-resistance hypothesis: they conclude a disjunction naming the sponge collision they
+would otherwise assume away.
 `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitSetField
@@ -33,9 +35,8 @@ open Dregg2.Circuit.Emit.EffectVmEmitSetField
   (SEL_SET_FIELD VALUE IsSetFieldRow SetFieldRowCanon setFieldRowGates setFieldVmDescriptor
    RowEncodesSF CellSetFieldSpec setFieldVm_faithful intent_to_cellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
-   wideHashSites)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds_or_collides
+   wide_rejects_root_tamper_or_collides WideColl RootsColl wideHashSites)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -135,8 +136,16 @@ theorem setField_runnable_full_sound (slot : Fin 8) (hash : List ℤ → ℤ) (p
 
 /-! ## §5 — THE ANTI-GHOST. -/
 
-theorem setField_runnable_full_commit_binds (slot : Fin 8) (hash : List ℤ → ℤ)
-    (hCR : Poseidon2SpongeCR hash) (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
+/-- **`setField_runnable_full_commit_binds_or_collides` — the setField anti-ghost.** Two wide
+slot-`slot` setField rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) EITHER
+agree on all 12 absorbed state-block columns AND pointwise on the 8 side-table roots, OR exhibit a
+collision of the deployed sponge — at the wide absorb, or at the two root lists.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed sponge
+REFUTES; at deployed parameters it was vacuous. The disjunction is formally weaker and HOLDS of the
+deployed sponge. -/
+theorem setField_runnable_full_commit_binds_or_collides (slot : Fin 8) (hash : List ℤ → ℤ)
+    (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash (setFieldVmDescriptorWide slot) e₁ true true)
     (hsat₂ : satisfiedVm hash (setFieldVmDescriptorWide slot) e₂ true true)
     (hpin₁ : e₁.loc (saCol state.STATE_COMMIT) = e₁.pub pi.NEW_COMMIT)
@@ -144,14 +153,19 @@ theorem setField_runnable_full_commit_binds (slot : Fin 8) (hash : List ℤ → 
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (setFieldRunnableSpec slot preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (setFieldRunnableSpec slot preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-/-- **`setField_rejects_root_tamper` — the side-table anti-ghost tooth.** Two wide slot-`slot` setField
-rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) but whose side-table sub-blocks
-DIFFER at some root index cannot both satisfy. -/
-theorem setField_rejects_root_tamper (slot : Fin 8) (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`setField_rejects_root_tamper_or_collides` — the side-table anti-ghost tooth.** Two wide
+slot-`slot` setField rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) but
+whose side-table sub-blocks DIFFER at some root index exhibit a collision of the deployed sponge:
+forging a side-table root under a fixed commitment costs a sponge collision.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed sponge REFUTES; at
+deployed parameters it was vacuous. This one names the collision instead of assuming it away. -/
+theorem setField_rejects_root_tamper_or_collides (slot : Fin 8) (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash (setFieldVmDescriptorWide slot) e₁ true true)
     (hsat₂ : satisfiedVm hash (setFieldVmDescriptorWide slot) e₂ true true)
@@ -160,8 +174,9 @@ theorem setField_rejects_root_tamper (slot : Fin 8) (hash : List ℤ → ℤ) (h
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (setFieldRunnableSpec slot preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (setFieldRunnableSpec slot preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §6 — NON-VACUITY (slot 0). -/
@@ -214,8 +229,8 @@ theorem setField_clause_rejects_root_drop :
 
 #assert_axioms setFieldGates_give_cellSpec
 #assert_axioms setField_runnable_full_sound
-#assert_axioms setField_runnable_full_commit_binds
-#assert_axioms setField_rejects_root_tamper
+#assert_axioms setField_runnable_full_commit_binds_or_collides
+#assert_axioms setField_rejects_root_tamper_or_collides
 #assert_axioms goodSetField_realizes
 #assert_axioms setField_clause_not_trivial
 #assert_axioms setField_clause_rejects_root_drop

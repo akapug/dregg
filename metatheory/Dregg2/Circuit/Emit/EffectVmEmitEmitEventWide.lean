@@ -32,8 +32,8 @@ ACTUALLY RUNS.
     := `CellFreezeSpec` (the whole block FROZEN) AND `postRoots = preRoots`; **`decodeFull`** := THIN,
     projecting the wide gates (= the narrow's) to the hash-site-free `emitEventGates_give_cellSpec`.
 
-The anti-ghost on ALL 17 fields falls out of the generic `runnable_full_commit_binds` /
-`wide_rejects_root_tamper` (§4).
+The anti-ghost on ALL 17 fields falls out of the generic `runnable_full_commit_binds_or_collides` /
+`wide_rejects_root_tamper_or_collides` (§4).
 
 ## SURFACE — the log-receipt divergence is UNCHANGED and named.
 
@@ -43,10 +43,12 @@ field and has NO EffectVM row column — is the SAME boundary the narrow header 
 `EmitEvent.lean` weld carry: the log receipt rides universe-A's `logHashInjective` portal, NOT this
 per-row state descriptor. This module closes ONLY the side-table-root binding gap on the kernel state.
 
-## The terminal (named, the ONLY acceptable irreducible)
+## The sponge terminal (named, and no longer assumed)
 
-`Poseidon2Binding.Poseidon2SpongeCR hash` — discharged ONCE in the generic crown; this module carries NO
-new portal. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem.
+The anti-ghost theorems carry NO collision-resistance hypothesis. Where the old forms assumed
+`Poseidon2Binding.Poseidon2SpongeCR hash` — which the deployed compressing sponge REFUTES — the §4
+theorems conclude a disjunction whose right side NAMES the colliding pair (`WideColl` / `RootsColl`).
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem.
 Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitEmitEvent
@@ -61,8 +63,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitEmitEvent
   (IsEmitRow SEL_EMIT_EVENT emitTickRowGates emitEventVmDescriptor EmitTickRowIntent emitTickVm_faithful
    emitTickRowGates_flag_indep RowEncodes EmitTickCellSpec intent_to_tickCellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound WideColl RootsColl)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -155,10 +156,16 @@ theorem emitEvent_runnable_full_sound (hash : List ℤ → ℤ)
 
 /-! ## §4 — ANTI-GHOST on ALL 17 fields (the generic teeth, instantiated). -/
 
-/-- **`emitEvent_wide_binds_full_state` — the whole-state anti-ghost.** Two rows satisfying the wide
-descriptor that publish the SAME `NEW_COMMIT`, whose carriers ARE the `systemRootsDigest` of their post
-sub-blocks, agree on EVERY absorbed state-block column AND every side-table root. -/
-theorem emitEvent_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`emitEvent_wide_binds_full_state_or_collides` — the whole-state anti-ghost.** Two rows
+satisfying the wide descriptor that publish the SAME `NEW_COMMIT`, whose carriers ARE the
+`systemRootsDigest` of their post sub-blocks, EITHER agree on EVERY absorbed state-block column AND
+every side-table root, OR exhibit a collision of the deployed sponge — at the wide absorb, or at the
+two root lists.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed sponge
+REFUTES; at deployed parameters it was vacuous. The disjunction is formally weaker and HOLDS of the
+deployed sponge. -/
+theorem emitEvent_wide_binds_full_state_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots) (preRoots : SysRoots)
     (hsat₁ : satisfiedVm hash emitEventVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash emitEventVmDescriptorWide e₂ true true)
@@ -167,13 +174,19 @@ theorem emitEvent_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Poseido
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  EffectVmFullStateRunnable.runnable_full_commit_binds (emitEventRunnableSpec preRoots)
-    hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  EffectVmFullStateRunnable.runnable_full_commit_binds_or_collides (emitEventRunnableSpec preRoots)
+    hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-/-- **`emitEvent_wide_rejects_root_tamper` — side-table anti-ghost.** Two wide rows publishing the same
-`NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks DIFFER cannot both satisfy. -/
-theorem emitEvent_wide_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`emitEvent_wide_rejects_root_tamper_or_collides` — side-table anti-ghost.** Two wide rows
+publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks DIFFER
+exhibit a collision of the deployed sponge: forging a side-table root under a fixed commitment costs a
+sponge collision.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed sponge REFUTES; at
+deployed parameters it was vacuous. This one names the collision instead of assuming it away. -/
+theorem emitEvent_wide_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots) (preRoots : SysRoots)
     (hsat₁ : satisfiedVm hash emitEventVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash emitEventVmDescriptorWide e₂ true true)
@@ -182,12 +195,13 @@ theorem emitEvent_wide_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Pose
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  EffectVmFullStateRunnable.wide_rejects_root_tamper (emitEventRunnableSpec preRoots)
-    hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  EffectVmFullStateRunnable.wide_rejects_root_tamper_or_collides (emitEventRunnableSpec preRoots)
+    hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-#assert_axioms emitEvent_wide_binds_full_state
-#assert_axioms emitEvent_wide_rejects_root_tamper
+#assert_axioms emitEvent_wide_binds_full_state_or_collides
+#assert_axioms emitEvent_wide_rejects_root_tamper_or_collides
 
 /-! ## §5 — NON-VACUITY: the full clause is INHABITED (TRUE) and REFUTABLE (FALSE), and the wide
 descriptor is the genuine 188-wide `system_roots`-absorbing circuit. -/

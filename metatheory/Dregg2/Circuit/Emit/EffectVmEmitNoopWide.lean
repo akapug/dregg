@@ -43,13 +43,16 @@ KERNEL shape (both freeze the whole block), differing only in their selector (`s
     **`fullClause`** := `CellFreezeSpec` (the whole block FROZEN) AND `postRoots = preRoots`;
     **`decodeFull`** := THIN, projecting the wide gates to the hash-site-free `noopGates_give_cellSpec`.
 
-The anti-ghost on ALL 17 fields falls out of the generic `runnable_full_commit_binds` /
-`wide_rejects_root_tamper` (§4).
+The anti-ghost on ALL 17 fields falls out of the generic `runnable_full_commit_binds_or_collides` /
+`wide_rejects_root_tamper_or_collides` (§4).
 
-## The terminal (named, the ONLY acceptable irreducible)
+## No terminal: the teeth are UNCONDITIONAL
 
-`Poseidon2Binding.Poseidon2SpongeCR hash` — discharged ONCE in the generic crown; this module carries NO
-new portal. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem.
+The §4 theorems take NO collision-resistance hypothesis. Their alternative branch hands back a specific
+colliding pair of the deployed sponge (`WideColl`/`RootsColl`). The former forms carried
+`Poseidon2Binding.Poseidon2SpongeCR hash`, which the deployed compressing sponge REFUTES — at deployed
+BabyBear parameters they were vacuous. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on
+every theorem.
 Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitEmitEvent
@@ -66,8 +69,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitEmitEvent
   (gFreeze emitRowGates EmitRowIntent emitEventVm_faithful emitRowGates_flag_indep
    RowEncodes CellFreezeSpec intent_to_cellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound WideColl RootsColl)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -167,11 +169,17 @@ theorem noop_runnable_full_sound (hash : List ℤ → ℤ)
 
 /-! ## §4 — ANTI-GHOST on ALL 17 fields (the generic teeth, instantiated). -/
 
-/-- **`noop_wide_binds_full_state` — the whole-state anti-ghost.** Two rows satisfying the wide no-op
-descriptor that publish the SAME `NEW_COMMIT`, whose carriers ARE the `systemRootsDigest` of their post
-sub-blocks, agree on EVERY absorbed state-block column AND every side-table root. So even the EMPTY-effect
-no-op binds the whole post-state (the contrast with `skipDescriptor`, which binds nothing). -/
-theorem noop_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`noop_wide_binds_full_state_or_collides` — the whole-state anti-ghost.** Two rows satisfying the
+wide no-op descriptor that publish the SAME `NEW_COMMIT`, whose carriers ARE the `systemRootsDigest` of
+their post sub-blocks, EITHER agree on EVERY absorbed state-block column AND every side-table root, OR
+exhibit a genuine collision of the deployed sponge (`WideColl` on the two wide preimages, or `RootsColl`
+on the two root lists). So even the EMPTY-effect no-op binds the whole post-state up to a collision (the
+contrast with `skipDescriptor`, which binds nothing).
+
+The former `noop_wide_binds_full_state` concluded the bare conjunction from `Poseidon2SpongeCR hash`.
+The deployed sponge REFUTES that hypothesis, so at deployed parameters that theorem was vacuous. This
+disjunction is formally weaker, but it HOLDS of the deployed sponge, which the old one did not. -/
+theorem noop_wide_binds_full_state_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots) (preRoots : SysRoots)
     (hsat₁ : satisfiedVm hash noopVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash noopVmDescriptorWide e₂ true true)
@@ -180,14 +188,20 @@ theorem noop_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Poseidon2Spo
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  EffectVmFullStateRunnable.runnable_full_commit_binds (noopRunnableSpec preRoots)
-    hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  EffectVmFullStateRunnable.runnable_full_commit_binds_or_collides (noopRunnableSpec preRoots)
+    hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-/-- **`noop_wide_rejects_root_tamper` — side-table anti-ghost.** Two wide no-op rows publishing the same
-`NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks DIFFER cannot both satisfy —
-the no-op's published commitment BINDS the side-table state (the empty AIR could not). -/
-theorem noop_wide_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`noop_wide_rejects_root_tamper_or_collides` — side-table anti-ghost.** Two wide no-op rows
+publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks DIFFER
+cannot both satisfy WITHOUT exhibiting a collision of the deployed sponge — the no-op's published
+commitment BINDS the side-table state up to that collision (the empty AIR could not).
+
+The former `noop_wide_rejects_root_tamper` concluded `False` from `Poseidon2SpongeCR hash`, which the
+deployed sponge REFUTES; at deployed parameters it was vacuous. This disjunction is formally weaker, but
+it HOLDS of the deployed sponge, which the old one did not. -/
+theorem noop_wide_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots) (preRoots : SysRoots)
     (hsat₁ : satisfiedVm hash noopVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash noopVmDescriptorWide e₂ true true)
@@ -196,12 +210,13 @@ theorem noop_wide_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  EffectVmFullStateRunnable.wide_rejects_root_tamper (noopRunnableSpec preRoots)
-    hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  EffectVmFullStateRunnable.wide_rejects_root_tamper_or_collides (noopRunnableSpec preRoots)
+    hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-#assert_axioms noop_wide_binds_full_state
-#assert_axioms noop_wide_rejects_root_tamper
+#assert_axioms noop_wide_binds_full_state_or_collides
+#assert_axioms noop_wide_rejects_root_tamper_or_collides
 
 /-! ## §5 — NON-VACUITY: the full clause is INHABITED (TRUE) and REFUTABLE (FALSE), the wide descriptor is
 the genuine 188-wide `system_roots`-absorbing circuit, and it is NON-EMPTY (unlike `skipDescriptor`). -/

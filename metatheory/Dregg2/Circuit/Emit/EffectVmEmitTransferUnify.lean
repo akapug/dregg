@@ -32,7 +32,7 @@ direction = 0). So the runnable descriptor provably inherits universe-A's existi
   * `commit`   — LEFT OUT of the projection's obligations: the EffectVM `state_commit` is the
                   Poseidon2 digest OUTPUT, NOT a `RecordKernelState` field. The projection sets it to
                   `0`; no unification clause constrains it (the commit binding is the keystone's
-                  separate anti-ghost tooth, `transferDescriptor_commit_binds_state`).
+                  separate anti-ghost tooth, `transferDescriptor_commit_binds_state_of_injective`).
 
 Against `CellTransferSpec pre p post`'s seven clauses, the executor's per-cell image satisfies:
 

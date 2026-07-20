@@ -29,7 +29,7 @@ the earlier descriptor read the value from `param0`, froze the nonce, and named 
 
   * BOUND + anti-ghosted (the 13 absorbed columns): `fields[slot]_after = VALUE` (the move) AND
     every other state-block column frozen. Tampering ANY of them moves `state_commit` ⇒ UNSAT
-    (`setFieldVm_commit_binds_block`, inherited from the keystone's `absorbed_determined_by_commit`).
+    (`setFieldVm_commit_binds_block`, inherited from the keystone's `absorbed_determined_by_commit_of_injective`).
   * UNIFIED to the executor: `unify_setField_exec` welds the descriptor's bound block to
     `execFullA`'s `SetFieldSpec` post-state (the conserved `balLo` frozen; the written slot's value
     is the executor's `fieldOf (slotName slot) (cell)`).
@@ -61,7 +61,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub ePrm eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass
    transferHashSites)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-  (CellState absorbedCols absorbed_determined_by_commit)
+  (CellState absorbedCols absorbed_determined_by_commit_of_injective)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Exec
@@ -316,7 +316,7 @@ theorem setFieldVm_commit_binds_block (slot : Fin 8) (hash : List ℤ → ℤ)
     (hs₂ : siteHoldsAll hash e₂ transferHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §7 — the structured per-cell spec + RowEncodes decoding. -/
 

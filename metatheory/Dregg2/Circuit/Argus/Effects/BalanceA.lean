@@ -323,8 +323,8 @@ limb. So balanceA's RUNNABLE EffectVM descriptor IS `transferVmDescriptorWide` (
 descriptor, `EffectVmFullStateRunnable.transferVmDescriptorWide`), instantiated per ledger entry.
 
 This section delivers balanceA's full-state-on-RUNNABLE THROUGH that wide descriptor, reusing the GENERIC
-`runnable_full_sound` (the crypto is discharged ONCE there, against the NAMED `Poseidon2SpongeCR` portal —
-nothing re-assumed here), and WELDS the descriptor-pinned per-entry post-state to `recKExecAsset`'s genuine
+`runnable_full_sound` (gate-only — it carries NO hash hypothesis; the anti-ghost teeth are discharged ONCE
+in `EffectVmFullStateRunnable`, nothing re-assumed here), and WELDS the descriptor-pinned per-entry post-state to `recKExecAsset`'s genuine
 per-asset ledger move (`recTransferBal_correct`). The honest CONTRAST with the per-cell `bal_lo` block: the
 EffectVM row carries ONE cell's balance limb, so balanceA's two-sided move (debit `(src,a)`, credit
 `(dst,a)`) is TWO wide rows — a debit leg (`direction = 1`) and a credit leg (`direction = 0`) — paired at
@@ -339,7 +339,6 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
   (CellState RowEncodes CellTransferSpec TransferParams signedMove)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (transferVmDescriptorWide transferRunnableSpec TransferFullClause runnable_full_sound)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots emptySystemRoots)
 open Dregg2.Circuit.Spec.BalanceMovement (recTransferBal_correct)
 
@@ -370,10 +369,12 @@ per-asset `bal_lo` move (`satisfiedVm`, first/last active) — under the structu
 either leg's params `p`), pins the FULL 17-field declarative post-state: the per-cell `CellTransferSpec`
 (this entry's balance moved by the signed amount, the whole frame frozen) AND the 8 side-table roots FROZEN
 (`postRoots = preRoots`). Routed THROUGH the generic `runnable_full_sound` at the validated
-`transferRunnableSpec` — the crypto/anti-ghost on all 17 fields is the generic
-`wide_rejects_state_tamper`/`wide_rejects_root_tamper`, the sole portal `Poseidon2SpongeCR`. Strictly
-stronger than a per-row-intent projection: the wide `state_commit` absorbs the `system_roots` digest, so a
-tamper of ANY of the 17 fields' content is UNSAT. -/
+`transferRunnableSpec` — the anti-ghost on all 17 fields is the generic
+`wide_rejects_state_tamper_or_collides`/`wide_rejects_root_tamper_or_collides`, which carry NO hash
+hypothesis: a tamper either moves the commitment or hands back a named collision of the deployed sponge
+(`WideColl`/`RootsColl`). Strictly stronger than a per-row-intent projection: the wide `state_commit`
+absorbs the `system_roots` digest, so a tamper of ANY of the 17 fields' content is UNSAT unless the prover
+holds such a collision. -/
 theorem balanceA_runnable_full_sound (p : TransferParams) (preRoots : SysRoots) (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsTransferRow env)

@@ -47,7 +47,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
    transitionAll boundaryFirstPins boundaryLastPins
    transferHashSites boundaryLast_pins not_modEq_zero_of_canon)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit_of_injective)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Circuit.StateCommit (logHashInjective compressNInjective cellLeafInjective RestHashIffFrame AccountsWF)
 open Dregg2.Circuit.EffectCommit (CommitSurface satisfiedE encodeE)
@@ -234,7 +234,7 @@ theorem pipelinedSendVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Pose
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ := by
   rw [pipelinedSendHashSites_eq] at hs₁ hs₂
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §7 — the structured per-cell spec (REUSING `CellState`): passthrough + nonce tick. -/
 
@@ -366,7 +366,7 @@ theorem pipelinedSendDescriptor_commit_binds_state (hash : List ℤ → ℤ)
   rw [hpub] at h₁
   have hdvd := Int.ModEq.dvd (h₁.trans h₂.symm)
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by omega
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §9 — THE CONNECTOR — to universe-A's `pipelinedSendA_full_sound` (whole-kernel freeze). -/
 

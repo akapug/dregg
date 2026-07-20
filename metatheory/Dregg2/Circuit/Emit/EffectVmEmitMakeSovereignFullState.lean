@@ -10,7 +10,8 @@ by amplifying the RUNNABLE descriptor to the WIDE (`system_roots`-absorbing) sha
 the generic `EffectVmFullStateRunnable.runnable_full_sound` crown: a satisfying WIDE-descriptor witness
 pins the FULL 17-field declarative post-state — the per-cell DROPPED block (`ZeroBlockSpec`: every
 economic column zero) AND every one of the 8 side-table roots FROZEN (makeSovereign touches no side-table
-in the RUNNABLE row). The anti-ghost tooth bites on all 17 (incl. any root).
+in the RUNNABLE row). The anti-ghost tooth bites on all 17 (incl. any root): a tamper either moves
+`state_commit` or exhibits a named collision of the deployed sponge (`WideColl`/`RootsColl`).
 
 The `cap_root` column is among the dropped (absorbed) columns, so a `cap_root` tamper is anti-ghosted;
 the cap-graph MEMBERSHIP stays the named opaque digest (a refinement, not a soundness gap). The §RECIPE
@@ -18,7 +19,8 @@ applied to makeSovereign.
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; NO hash hypothesis — the anti-ghost keystones
+are unconditional disjunctions naming the sponge collision they would need.
 `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitMakeSovereign
@@ -33,9 +35,8 @@ open Dregg2.Circuit.Emit.EffectVmEmitMakeSovereign
   (SEL_MAKESOVEREIGN makeSovereignRowGates makeSovereignVmDescriptor DroppedBlockIntent
    makeSovereignVm_faithful)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
-   wideHashSites)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds_or_collides
+   wide_rejects_root_tamper_or_collides WideColl RootsColl wideHashSites)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -150,7 +151,16 @@ theorem makeSovereign_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : 
 
 /-! ## §6 — THE ANTI-GHOST. -/
 
-theorem makeSovereign_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`makeSovereign_runnable_full_commit_binds_or_collides` — the anti-ghost, UNCONDITIONALLY.** Two
+satisfying WIDE makeSovereign rows publishing the SAME `NEW_COMMIT`, whose `sysRootsDigestCol` carriers
+ARE the `systemRootsDigest` of `sr₁`/`sr₂`, EITHER agree on all 12 absorbed state-block columns AND on
+every side-table root, OR exhibit a genuine collision of the deployed sponge — on the state block
+(`WideColl`) or on the ordered root list (`RootsColl`).
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed BabyBear
+sponge REFUTES, so at deployed parameters it was vacuous. This disjunction is formally weaker and holds
+of the deployed sponge. -/
+theorem makeSovereign_runnable_full_commit_binds_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash makeSovereignVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash makeSovereignVmDescriptorWide e₂ true true)
@@ -159,11 +169,19 @@ theorem makeSovereign_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR 
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (makeSovRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (makeSovRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-theorem makeSovereign_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`makeSovereign_rejects_root_tamper_or_collides`.** Two satisfying WIDE makeSovereign rows publishing
+the same `NEW_COMMIT` that DISAGREE on some side-table root exhibit a genuine collision of the deployed
+sponge — so a root tamper is UNSAT unless the prover holds a sponge collision.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge REFUTES,
+so at deployed parameters it was vacuous. This form names what the tamper costs and holds of the deployed
+sponge. -/
+theorem makeSovereign_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash makeSovereignVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash makeSovereignVmDescriptorWide e₂ true true)
@@ -172,8 +190,9 @@ theorem makeSovereign_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Posei
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (makeSovRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (makeSovRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §7 — NON-VACUITY. -/
@@ -218,8 +237,8 @@ theorem makeSov_clause_rejects_root_drop :
 #assert_axioms intent_to_zeroSpec
 #assert_axioms makeSovGates_give_zeroSpec
 #assert_axioms makeSovereign_runnable_full_sound
-#assert_axioms makeSovereign_runnable_full_commit_binds
-#assert_axioms makeSovereign_rejects_root_tamper
+#assert_axioms makeSovereign_runnable_full_commit_binds_or_collides
+#assert_axioms makeSovereign_rejects_root_tamper_or_collides
 #assert_axioms goodMakeSov_realizes
 #assert_axioms makeSov_clause_not_trivial
 #assert_axioms makeSov_clause_rejects_root_drop

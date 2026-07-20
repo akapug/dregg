@@ -15,7 +15,9 @@ refusal is evidence-of-absence (state passthrough + nonce-tick; the receipt + re
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The anti-ghost theorems carry NO
+collision-resistance hypothesis: they conclude a disjunction naming the sponge collision they
+would otherwise assume away.
 `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitRefusal
@@ -31,9 +33,8 @@ open Dregg2.Circuit.Emit.EffectVmEmitRefusal
   (SEL_REFUSAL refusalRowGates refusalVmDescriptor RowEncodesRefusal RefusalCellSpec
    refusalVm_faithful intent_to_cellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
-   wideHashSites)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds_or_collides
+   wide_rejects_root_tamper_or_collides WideColl RootsColl wideHashSites)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -108,7 +109,15 @@ theorem refusal_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : SysRoo
 
 /-! ## §5 — THE ANTI-GHOST. -/
 
-theorem refusal_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`refusal_runnable_full_commit_binds_or_collides` — the refusal anti-ghost.** Two wide refusal
+rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) EITHER agree on all 12
+absorbed state-block columns AND pointwise on the 8 side-table roots, OR exhibit a collision of the
+deployed sponge — at the wide absorb, or at the two root lists.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed sponge
+REFUTES; at deployed parameters it was vacuous. The disjunction is formally weaker and HOLDS of the
+deployed sponge. -/
+theorem refusal_runnable_full_commit_binds_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash refusalVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash refusalVmDescriptorWide e₂ true true)
@@ -117,11 +126,19 @@ theorem refusal_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : Pose
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (refusalRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (refusalRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-theorem refusal_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`refusal_rejects_root_tamper_or_collides` — side-table anti-ghost for refusal.** Two wide
+refusal rows publishing the same `NEW_COMMIT` whose side-table sub-blocks DIFFER at some index `i`
+exhibit a collision of the deployed sponge: forging a side-table root under a fixed commitment costs
+a sponge collision.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed sponge REFUTES; at
+deployed parameters it was vacuous. This one names the collision instead of assuming it away. -/
+theorem refusal_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash refusalVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash refusalVmDescriptorWide e₂ true true)
@@ -130,8 +147,9 @@ theorem refusal_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2Sp
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (refusalRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (refusalRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §6 — NON-VACUITY. -/
@@ -170,8 +188,8 @@ theorem refusal_clause_rejects_root_drop :
 
 #assert_axioms refusalGates_give_cellSpec
 #assert_axioms refusal_runnable_full_sound
-#assert_axioms refusal_runnable_full_commit_binds
-#assert_axioms refusal_rejects_root_tamper
+#assert_axioms refusal_runnable_full_commit_binds_or_collides
+#assert_axioms refusal_rejects_root_tamper_or_collides
 #assert_axioms goodRefusal_realizes
 #assert_axioms refusal_clause_not_trivial
 #assert_axioms refusal_clause_rejects_root_drop

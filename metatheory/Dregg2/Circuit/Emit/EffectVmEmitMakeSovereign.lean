@@ -164,7 +164,7 @@ theorem makeSovereignVm_rejects_surviving_balance (env : VmRowEnv)
 
 /-! ## §7 — the commitment binding (inherited from the keystone). -/
 
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols absorbed_determined_by_commit_of_injective)
 
 theorem makeSovereignVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv)
@@ -172,7 +172,7 @@ theorem makeSovereignVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Pose
     (hs₂ : siteHoldsAll hash e₂ makeSovereignHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §8 — the dropped record carries NO readable balance (the overlap with the executor).
 

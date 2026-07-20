@@ -16,7 +16,10 @@ The §RECIPE applied to cellDestroy.
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. NO collision-resistance hypothesis enters:
+the anti-ghost theorems are the UNCONDITIONAL `_or_collides` forms, whose alternative branch hands back
+a specific colliding pair. The former `Poseidon2SpongeCR`-carrying forms were vacuous at deployed
+BabyBear parameters — the deployed compressing sponge REFUTES that hypothesis.
 `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitCellDestroy
@@ -32,9 +35,9 @@ open Dregg2.Circuit.Emit.EffectVmEmitCellDestroy
   (SEL_CELLDESTROY cellDestroyRowGates cellDestroyVmDescriptor RowEncodesDestroy CellDestroyCellSpec
    CellDestroyRowCanon cellDestroyVm_faithful intent_to_cellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound WideColl RootsColl
+   runnable_full_commit_binds_or_collides wide_rejects_root_tamper_or_collides
    wideHashSites)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -110,7 +113,17 @@ theorem cellDestroy_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : Sy
 
 /-! ## §5 — THE ANTI-GHOST. -/
 
-theorem cellDestroy_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`cellDestroy_runnable_full_commit_binds_or_collides` — whole-state binding over the WIDE
+commitment.** Two rows satisfying the wide cellDestroy descriptor that publish the SAME `NEW_COMMIT`,
+with `systemRootsDigest` carriers, EITHER agree on EVERY absorbed state-block column AND every
+side-table root, OR exhibit a genuine collision of the deployed sponge (`WideColl` on the two wide
+preimages, or `RootsColl` on the two root lists).
+
+The former `cellDestroy_runnable_full_commit_binds` concluded the bare conjunction from
+`Poseidon2SpongeCR hash`. The deployed sponge REFUTES that hypothesis, so at deployed parameters that
+theorem was vacuous. This disjunction is formally weaker, but it HOLDS of the deployed sponge, which the
+old one did not. -/
+theorem cellDestroy_runnable_full_commit_binds_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash cellDestroyVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash cellDestroyVmDescriptorWide e₂ true true)
@@ -119,11 +132,20 @@ theorem cellDestroy_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : 
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (cellDestroyRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (cellDestroyRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-theorem cellDestroy_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`cellDestroy_rejects_root_tamper_or_collides` — the side-table anti-ghost tooth.** Two wide
+cellDestroy rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) but whose
+side-table sub-blocks DIFFER at some root index `i` cannot both satisfy WITHOUT exhibiting a collision
+of the deployed sponge.
+
+The former `cellDestroy_rejects_root_tamper` concluded `False` from `Poseidon2SpongeCR hash`, which the
+deployed sponge REFUTES; at deployed parameters it was vacuous. This disjunction is formally weaker, but
+it HOLDS of the deployed sponge, which the old one did not. -/
+theorem cellDestroy_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash cellDestroyVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash cellDestroyVmDescriptorWide e₂ true true)
@@ -132,8 +154,9 @@ theorem cellDestroy_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseido
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (cellDestroyRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (cellDestroyRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §6 — NON-VACUITY. -/
@@ -173,8 +196,8 @@ theorem cellDestroy_clause_rejects_root_drop :
 
 #assert_axioms cellDestroyGates_give_cellSpec
 #assert_axioms cellDestroy_runnable_full_sound
-#assert_axioms cellDestroy_runnable_full_commit_binds
-#assert_axioms cellDestroy_rejects_root_tamper
+#assert_axioms cellDestroy_runnable_full_commit_binds_or_collides
+#assert_axioms cellDestroy_rejects_root_tamper_or_collides
 #assert_axioms goodCellDestroy_realizes
 #assert_axioms cellDestroy_clause_not_trivial
 #assert_axioms cellDestroy_clause_rejects_root_drop

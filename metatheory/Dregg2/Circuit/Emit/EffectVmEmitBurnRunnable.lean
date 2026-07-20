@@ -42,8 +42,9 @@ exactly as `transferRunnableSpec` is the worked reference):
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. The sole crypto carrier is the
-NAMED `Poseidon2SpongeCR` portal, entering ONLY through the generic `runnable_full_sound` / the §4 anti-ghost.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. The §4 anti-ghost teeth carry
+NO crypto hypothesis: they conclude a DISJUNCTION that hands back a specific `WideColl`/`RootsColl` collision
+in the tamper branch, so they hold of the deployed sponge rather than of an injective idealisation of it.
 Imports are read-only; this module owns only its declarations.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitBurn
@@ -60,8 +61,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitBurn
    goodBurnRow goodBurnRow_isBurnRow goodBurnRow_realizes_intent)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound
-   wide_rejects_state_tamper wide_rejects_root_tamper)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+   WideColl RootsColl wide_rejects_state_tamper_or_collides wide_rejects_root_tamper_or_collides)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -158,10 +158,17 @@ theorem burn_runnable_full_sound (amt : ℤ) (preRoots : SysRoots) (hash : List 
 
 /-! ## §4 — ANTI-GHOST on all 17 fields (instantiating the generic teeth at `burnRunnableSpec`). -/
 
-/-- **`burn_rejects_state_tamper` — per-cell-block anti-ghost.** Two wide burn rows publishing the same
-`NEW_COMMIT` whose absorbed state-block columns DIFFER cannot both satisfy. -/
-theorem burn_rejects_state_tamper (amt : ℤ) (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`burn_rejects_state_tamper_or_collides` — per-cell-block anti-ghost, as EXTRACTION.** Two wide burn
+rows publishing the same `NEW_COMMIT` whose absorbed state-block columns DIFFER exhibit a concrete
+collision of `hash`: either a `WideColl` on the wide absorbed lists, or a `RootsColl` on the two
+side-table root lists.
+
+The previous form concluded `False` from `Poseidon2SpongeCR hash`. The deployed BabyBear sponge REFUTES
+that hypothesis (`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`), so the previous form was vacuous at
+deployed parameters. This disjunction is formally weaker and holds of the deployed sponge: a state tamper
+that keeps `NEW_COMMIT` is not impossible, it is a hash collision, and the theorem hands back which one. -/
+theorem burn_rejects_state_tamper_or_collides (amt : ℤ) (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash burnVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash burnVmDescriptorWide e₂ true true)
@@ -170,16 +177,21 @@ theorem burn_rejects_state_tamper (amt : ℤ) (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
-  wide_rejects_state_tamper (burnRunnableSpec amt preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_state_tamper_or_collides (burnRunnableSpec amt preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-/-- **`burn_rejects_root_tamper` — side-table anti-ghost (the gap's headline tooth, now on burn).** Two
-wide burn rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table
-sub-blocks DIFFER at some index `i` cannot both satisfy. The side-table state is bound BY the runnable burn
-commitment — the Class-C disease cured for burn. -/
-theorem burn_rejects_root_tamper (amt : ℤ) (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`burn_rejects_root_tamper_or_collides` — side-table anti-ghost on burn, as EXTRACTION.** Two wide
+burn rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks
+DIFFER at some index `i` exhibit a concrete collision of `hash` — a `WideColl` on the wide absorbed lists
+or a `RootsColl` on the two root lists. So the burn commitment binds the side-table state up to a produced
+collision: a dropped escrow or omitted nullifier that survives the published commitment IS one.
+
+The previous form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge
+refutes; it was therefore vacuous at deployed parameters. This form is weaker and holds of that sponge. -/
+theorem burn_rejects_root_tamper_or_collides (amt : ℤ) (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash burnVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash burnVmDescriptorWide e₂ true true)
@@ -188,12 +200,13 @@ theorem burn_rejects_root_tamper (amt : ℤ) (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (burnRunnableSpec amt preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (burnRunnableSpec amt preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-#assert_axioms burn_rejects_state_tamper
-#assert_axioms burn_rejects_root_tamper
+#assert_axioms burn_rejects_state_tamper_or_collides
+#assert_axioms burn_rejects_root_tamper_or_collides
 
 /-! ## §5 — NON-VACUITY: the full clause is inhabited by a real burn, and refutable.
 

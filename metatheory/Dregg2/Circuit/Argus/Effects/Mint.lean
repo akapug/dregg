@@ -6,7 +6,12 @@
 amplified the per-cell soundness to FULL-state on the RUNNABLE descriptor via the validated recipe
 (`mintVmDescriptorWide` + the generic `runnable_full_sound`): a satisfying wide mint row pins all 17
 RecordKernelState fields (the per-cell credit + frame freeze AND the 8 side-table roots frozen), with the
-anti-ghost on every column/root (`mint_rejects_state_tamper`/`mint_rejects_root_tamper`).
+anti-ghost on every column/root (`mint_rejects_state_tamper_or_collides` /
+`mint_rejects_root_tamper_or_collides`). ⚑ Read those teeth at their real strength: each concludes a
+DISJUNCTION — the tamper is excluded OR the deployed sponge genuinely collides at a pair a total
+extractor returns. Their earlier form assumed `Poseidon2SpongeCR`, which
+`HashFloorHonesty.poseidon2SpongeCR_false_babyBear` refutes at deployed BabyBear parameters, so it
+excluded nothing there. The disjunction is formally weaker and actually holds of the deployed sponge.
 
 This module welds that full-state-on-RUNNABLE result into the Argus library (so the coherence anchor
 `Dregg2.Circuit.Argus` carries it), re-exporting the deliverable under the Argus effect namespace. It owns

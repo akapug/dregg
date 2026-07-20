@@ -49,7 +49,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
    transitionAll boundaryFirstPins boundaryLastPins
    transferHashSites boundaryLast_pins gate_modEq_iff not_modEq_zero_of_canon eqToModEq)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit_of_injective)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Exec
@@ -212,7 +212,7 @@ theorem revokeVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Poseidon2Sp
     (hs₂ : siteHoldsAll hash e₂ revokeHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §7 — the structured per-cell spec (REUSING `CellState`): passthrough + nonce tick. -/
 
@@ -345,7 +345,7 @@ theorem revokeDescriptor_commit_binds_state (hash : List ℤ → ℤ)
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
     obtain ⟨k, hk⟩ := Int.modEq_iff_dvd.mp hmod
     omega
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §9 — THE CONNECTOR — the cap-table edge removal (OFF-ROW), via `revokeDelegationA_full_sound`.
 
@@ -600,7 +600,8 @@ that descriptor the `DELEG`/epoch sub-root is FROZEN. Routing the RUNNING Revoke
 is epoch-independent), a checked fact, not a buried assumption. -/
 
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound wide_rejects_root_tamper)
+  (wideHashSites RunnableFullStateSpec runnable_full_sound wide_rejects_root_tamper_or_collides
+   WideColl RootsColl)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest N_SYSTEM_ROOTS emptySystemRoots)
 
 /-- **`revokeDelegationVmDescriptorWide`** — the runnable `revokeDelegation` FULL-state circuit:
@@ -668,13 +669,19 @@ theorem revokeDelegation_runnable_full_sound (preRoots : SysRoots)
   runnable_full_sound (revokeRunnableSpec preRoots) hash env pre post postRoots
     hrow ⟨henc, hroots⟩ hsat
 
-/-- **`revokeDelegation_runnable_rejects_root_tamper` — the side-table anti-ghost for `revokeDelegation`.**
-Two wide revoke rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table
-sub-blocks DIFFER at some index cannot both satisfy — UNSAT. The 8 side-table roots (incl. `DELEG`) are
-bound by the runnable commitment (so a forged frozen-`DELEG` is rejected; an HONEST advance would require
-the kernel-widen wave to MOVE it, the reported residual). -/
-theorem revokeDelegation_runnable_rejects_root_tamper (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`revokeDelegation_runnable_rejects_root_tamper_or_collides` — the side-table anti-ghost for
+`revokeDelegation`.** Two wide revoke rows publishing the same `NEW_COMMIT` (with `systemRootsDigest`
+carriers) whose side-table sub-blocks DIFFER at some index exhibit a genuine collision of the deployed
+sponge — on the state block (`WideColl`) or on the ordered root list (`RootsColl`). So such a pair is UNSAT
+unless the prover holds a sponge collision: the 8 side-table roots (incl. `DELEG`) are bound by the
+runnable commitment (a forged frozen-`DELEG` is rejected; an HONEST advance would require the kernel-widen
+wave to MOVE it, the reported residual).
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge REFUTES,
+so at deployed parameters it was vacuous. This form names what the tamper costs and holds of the deployed
+sponge. -/
+theorem revokeDelegation_runnable_rejects_root_tamper_or_collides (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash revokeDelegationVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash revokeDelegationVmDescriptorWide e₂ true true)
@@ -683,8 +690,9 @@ theorem revokeDelegation_runnable_rejects_root_tamper (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (revokeRunnableSpec preRoots) hash hCR
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (revokeRunnableSpec preRoots) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-- **`revokeWide_realizes` — NON-VACUITY (witness TRUE).** A real passthrough+tick revoke cell transition
@@ -744,7 +752,7 @@ theorem revoke_DELEG_epoch_residual (D : Caps → ℤ)
 
 #assert_axioms revokeWide_constraints_eq
 #assert_axioms revokeDelegation_runnable_full_sound
-#assert_axioms revokeDelegation_runnable_rejects_root_tamper
+#assert_axioms revokeDelegation_runnable_rejects_root_tamper_or_collides
 #assert_axioms revokeWide_realizes
 #assert_axioms revokeWide_clause_not_trivial
 #assert_axioms revoke_DELEG_epoch_residual

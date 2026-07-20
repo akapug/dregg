@@ -15,10 +15,21 @@ GROUP-4 `wideCommitOf` absorption. This file supplies the per-tag `RunnableFullS
 
   IncrementNonce · SetVK · SetPermissions · MakeSovereign · CellSeal · CellUnseal · CellDestroy · Noop
 
-Each rides the SAME crypto carrier (`Poseidon2Binding.Poseidon2SpongeCR`, discharged ONCE in the
-engine); the genuine per-tag work is `build_active` — the effect's own per-row gates hold on the
-honest witness (the CONVERSE of `decodeFull`), plus the shared transition/boundary/selector structure
-proved once here over the constructed witness row `semKernelRow`.
+⚑ **NO CRYPTO CARRIER.** These `⟺` do NOT ride `Poseidon2Binding.Poseidon2SpongeCR` — an earlier
+version of this header said they did, and that was wrong. Read the statements: none carries a hash
+hypothesis. The `→` leg is `runnable_full_sound` (gates + decode, no hash floor) composed with
+`runnable_forces_genuine_commit` (the hash SITES *force* the published commit — an equation the
+constraint system pins, not an injectivity assumption); the `←` leg CONSTRUCTS the carrier columns.
+Injectivity was never needed, so these biconditionals are TRUE at deployed BabyBear parameters, where
+`HashFloorHonesty.poseidon2SpongeCR_false_babyBear` refutes the injective floor outright.
+
+What DID ride the false floor was the surrounding *evidence* — the whole-state anti-ghost and the
+mutation canaries, i.e. the machine-checked reasons to believe the commit conjunct says anything.
+Those have been cured to unconditional disjunctions naming an extracted collision pair.
+
+The genuine per-tag work is `build_active` — the effect's own per-row gates hold on the honest witness
+(the CONVERSE of `decodeFull`), plus the shared transition/boundary/selector structure proved once here
+over the constructed witness row `semKernelRow`.
 
 ## The witness row (`semKernelRow`)
 

@@ -53,8 +53,10 @@ no-double-spend (that lives at universe-A's nullifier-set guard and the turn-acc
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY as the named
-`Poseidon2SpongeCR` hypothesis. Imports are read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; where Poseidon2 CR enters at all it is ONLY as
+the named `Poseidon2SpongeCR` hypothesis. The §W full-state teeth do NOT take it: they conclude a
+DISJUNCTION handing back a specific `WideColl`/`RootsColl` collision, so they hold of the deployed sponge.
+Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
@@ -73,7 +75,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer
    transferHashSites transferHash_binds boundaryLast_pins
    eqToModEq gate_modEq_iff not_modEq_zero_of_canon)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-  (CellState absorbedCols commitOf commit_eq_commitOf absorbed_determined_by_commit)
+  (CellState absorbedCols commitOf commit_eq_commitOf absorbed_determined_by_commit_of_injective)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 
@@ -369,7 +371,7 @@ theorem noteSpendDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : 
     obtain ⟨l₁, u₁⟩ := hcanon₁
     obtain ⟨l₂, u₂⟩ := hcanon₂
     omega
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §9 — CONNECTOR to universe-A: `CellSpendSpec` IS `NoteSpendSpec`'s per-cell frame image.
 
@@ -861,14 +863,15 @@ theorem badNullRow_rejected : ¬ (VmConstraint.gate gNullifierRootUpdate).holdsV
 `EffectVmFullStateRunnable.runnable_full_sound` — the analog of `transferRunnableSpec` — over the
 DEDICATED, non-aliasing `sysRootsDigestCol = 186` carrier and the shared `wideHashSites` (so the crypto /
 anti-ghost is discharged ONCE in the generic theorem and the whole-17-field anti-ghost falls out of
-`wide_rejects_state_tamper`/`wide_rejects_root_tamper`). The per-effect content is THIN: the wide
+`wide_rejects_state_tamper_or_collides`/`wide_rejects_root_tamper_or_collides`). The per-effect content is THIN: the wide
 descriptor, the root-update gate over the dedicated carrier, the structured decode, and `decodeFull`
 (reusing §4's `noteSpendVm_faithful` + the root-gate faithfulness). NO new crypto portal.
 
 This binds the FULL post-state: the per-cell block (transparent CREDIT + nonce tick — the RUNTIME image,
 fields 1–3 of the §0 census) AND all 8 side-table roots (fields 4–12 — the `nullifiers` root ADVANCES by
 the accumulator step, every OTHER side-table root FROZEN). So a satisfying wide-descriptor witness pins
-the 17-field post-state the noteSpend RUNTIME executor produces, and tamper of ANY field/root is UNSAT.
+the 17-field post-state the noteSpend RUNTIME executor produces, and tamper of ANY field/root exhibits a
+concrete hash collision (the §W.4 teeth hand it back, rather than assuming it away).
 
 HONESTY (finding #2 + §10 still stand, UNAFFECTED): (a) binding the `nullifiers` DIGEST is NOT the
 no-double-spend FRESHNESS gate (`nf ∉ nullifiers` is a non-membership assertion the digest-advance gate
@@ -879,8 +882,8 @@ clause is the RUNTIME credit `CellSpendSpec`; the universe-A balance-NEUTRAL con
 actually enforces, the named divergence is orthogonal. -/
 
 open EffectVmFullStateRunnable
-  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
-   wide_rejects_state_tamper wide_rejects_root_tamper)
+  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound WideColl RootsColl
+   wide_rejects_state_tamper_or_collides wide_rejects_root_tamper_or_collides)
 open Dregg2.Circuit.Emit.EffectVmEmit (sysRootsDigestCol sysRootsDigestColBefore EFFECT_VM_WIDTH_SYSROOTS)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (RowEncodes CellState)
 
@@ -1035,13 +1038,18 @@ theorem noteSpend_runnable_full_sound (hash : List ℤ → ℤ)
   runnable_full_sound (noteSpendRunnableSpec hash value preRoots postRoots step) hash env pre post pr
     hrow hdec hgatesat
 
-/-- **`noteSpend_runnable_rejects_root_tamper` — the side-table anti-ghost (free from the generic crown).**
-Two wide rows publishing the SAME `NEW_COMMIT` (with `systemRootsDigest` carriers) but whose `system_roots`
+/-- **`noteSpend_runnable_rejects_root_tamper_or_collides` — the side-table anti-ghost, as EXTRACTION.**
+Two wide rows publishing the SAME `NEW_COMMIT` (with `systemRootsDigest` carriers) whose `system_roots`
 sub-blocks DIFFER at some index (a dropped/omitted `nullifiers` update — an attacker omitting `nf` to
-enable a later double-spend, OR any other side-table root tampered) cannot BOTH satisfy — UNSAT. The
-whole-17-field anti-ghost tooth, from `wide_rejects_root_tamper`. -/
-theorem noteSpend_runnable_rejects_root_tamper (hash : List ℤ → ℤ)
-    (hCR : Poseidon2SpongeCR hash)
+enable a later double-spend, OR any other side-table root tampered) exhibit a concrete collision of
+`hash`: a `WideColl` on the wide absorbed lists, or a `RootsColl` on the two root lists. The
+whole-17-field anti-ghost tooth, from `wide_rejects_root_tamper_or_collides`.
+
+The previous form concluded `False` from `Poseidon2SpongeCR hash`. The deployed BabyBear sponge REFUTES
+that hypothesis (`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`), so the previous form was vacuous at
+deployed parameters. This disjunction is formally weaker and holds of the deployed sponge: the omitted-`nf`
+attack is not impossible, it is a hash collision the theorem produces. -/
+theorem noteSpend_runnable_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (value : ℤ) (preRoots postRoots : SysRoots) (step : ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash noteSpendVmDescriptorWide e₁ true true)
@@ -1051,16 +1059,21 @@ theorem noteSpend_runnable_rejects_root_tamper (hash : List ℤ → ℤ)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (noteSpendRunnableSpec hash value preRoots postRoots step) hash hCR
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (noteSpendRunnableSpec hash value preRoots postRoots step) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-/-- **`noteSpend_runnable_rejects_state_tamper` — the per-cell-block anti-ghost (free).** Two wide rows
-publishing the same `NEW_COMMIT` but whose absorbed state-block columns (balance/nonce/fields/cap) DIFFER
-cannot both satisfy — a forged credit / tampered field / forged cap-root that still claims the published
-commitment is UNSAT. From `wide_rejects_state_tamper`. -/
-theorem noteSpend_runnable_rejects_state_tamper (hash : List ℤ → ℤ)
-    (hCR : Poseidon2SpongeCR hash)
+/-- **`noteSpend_runnable_rejects_state_tamper_or_collides` — the per-cell-block anti-ghost, as
+EXTRACTION.** Two wide rows publishing the same `NEW_COMMIT` whose absorbed state-block columns
+(balance/nonce/fields/cap) DIFFER exhibit a concrete collision of `hash` — a `WideColl` on the wide
+absorbed lists or a `RootsColl` on the two root lists. So a forged credit / tampered field / forged
+cap-root that still claims the published commitment IS a collision. From
+`wide_rejects_state_tamper_or_collides`.
+
+The previous form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge
+refutes; it was therefore vacuous at deployed parameters. This form is weaker and holds of that sponge. -/
+theorem noteSpend_runnable_rejects_state_tamper_or_collides (hash : List ℤ → ℤ)
     (value : ℤ) (preRoots postRoots : SysRoots) (step : ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash noteSpendVmDescriptorWide e₁ true true)
@@ -1070,8 +1083,9 @@ theorem noteSpend_runnable_rejects_state_tamper (hash : List ℤ → ℤ)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₂)
-    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
-  wide_rejects_state_tamper (noteSpendRunnableSpec hash value preRoots postRoots step) hash hCR
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_state_tamper_or_collides (noteSpendRunnableSpec hash value preRoots postRoots step) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ### §W.5 — NON-VACUITY of the wide instance: the full clause is INHABITED + REFUTABLE. -/
@@ -1142,8 +1156,8 @@ theorem noteSpend_fullClause_refutable (hash : List ℤ → ℤ) :
 #assert_axioms noteSpendWide_forces_credit
 #assert_axioms noteSpendWide_forces_root
 #assert_axioms noteSpend_runnable_full_sound
-#assert_axioms noteSpend_runnable_rejects_root_tamper
-#assert_axioms noteSpend_runnable_rejects_state_tamper
+#assert_axioms noteSpend_runnable_rejects_root_tamper_or_collides
+#assert_axioms noteSpend_runnable_rejects_state_tamper_or_collides
 #assert_axioms noteSpend_fullClause_inhabited
 #assert_axioms noteSpend_fullClause_refutable
 

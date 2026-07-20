@@ -15,8 +15,15 @@ welding the two directions into `runnable_full_commit_iff` over a `RunnableFullS
 This module supplies, PER TAG, that `RunnableFullStateCompleteSpec` — so each tag gets its literal
 `air_accepts ⟺ (fullClause ∧ NEW_COMMIT = wireCommitOfRow)` (`*_commit_iff`), plus a concrete demo and a
 per-tag canary. The genuine per-tag content is `build_active`/`build_last` (the effect's own per-row gates
-on the honest witness, the CONVERSE of `decodeFull`); the crypto is the engine's ONE named
-`Poseidon2SpongeCR` carrier, never a fresh `axiom`.
+on the honest witness, the CONVERSE of `decodeFull`).
+
+⚑ **NO CRYPTO CARRIER.** These `⟺` do NOT ride `Poseidon2SpongeCR` — an earlier version of this header
+said they did, and that was wrong. The `→` leg composes `runnable_full_sound` with
+`runnable_forces_genuine_commit`, which reads the commit off the hash SITES the constraint system pins;
+the `←` leg CONSTRUCTS those columns. No injectivity is invoked, so each `*_commit_iff` is TRUE at
+deployed BabyBear parameters — where `HashFloorHonesty.poseidon2SpongeCR_false_babyBear` refutes the
+injective floor. What did ride the false floor was the surrounding evidence (the whole-state anti-ghost
+and the mutation canaries), now cured to unconditional disjunctions.
 
 ## The shared witness engine (§A)
 
@@ -30,8 +37,8 @@ constraint list onto those shared facts + supplies its rowGates from the clause 
 `*_faithful.mpr`) — the ONLY genuine per-tag proof obligation.
 
 ## Axiom hygiene
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. NEW file; all imports
-read-only. The sole crypto carrier is the engine's `Poseidon2SpongeCR` portal.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. All imports read-only.
+There is no crypto carrier on any theorem in this file.
 -/
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnableComplete
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCellFullState

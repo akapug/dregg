@@ -66,7 +66,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer
    transferHashSites boundaryLast_pins
    gate_modEq_iff eqToModEq not_modEq_zero_of_canon)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-  (CellState absorbedCols absorbed_determined_by_commit)
+  (CellState absorbedCols absorbed_determined_by_commit_of_injective)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Exec
@@ -430,7 +430,7 @@ theorem emitEventDescriptor_commit_binds_state (hash : List ℤ → ℤ)
     obtain ⟨l₁, u₁⟩ := hcanon₁
     obtain ⟨l₂, u₂⟩ := hcanon₂
     omega
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §8 — THE CONNECTOR — `cellProjE` to universe-A's `EmitEventSpec` (the whole-kernel FREEZE).
 

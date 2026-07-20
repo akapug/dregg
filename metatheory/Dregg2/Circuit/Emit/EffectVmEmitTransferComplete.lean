@@ -41,17 +41,21 @@ whose hash sites hold — so `cellWireCommit` is literally the deployed `wire_co
     Poseidon2-CR carrier bundle only where the injectivity is used).
   * `sem_transfer_roundtrip` — BUILD a satisfying witness from any spec'd transfer, then FEED it back
     through the committed soundness bridge to recover `CellTransferSpec` + the genuine commit.
-  * `canary_tamper_moves_commit` — tamper ANY absorbed after-state field and the genuine wire commit
-    MOVES (under CR): the honest published `NEW_COMMIT` cannot ride a tampered after-state, so the
-    biconditional's commit conjunct BITES.
+  * `canary_tamper_moves_commit_or_collides` — tamper ANY absorbed after-state field and the genuine
+    wire commit MOVES, OR the deployed sponge genuinely collides at an extracted pair: the honest
+    published `NEW_COMMIT` cannot ride a tampered after-state without a real collision, so the
+    biconditional's commit conjunct BITES. ⚑ The old canary assumed `Poseidon2SpongeCR hash`, which the
+    deployed sponge REFUTES — so the evidence that the `⟺` is two-valued in its commit conjunct was
+    itself vacuous. `transferDescriptor_commit_iff` never carried the carrier and was always true at
+    deployed parameters; what was missing was honest evidence that it says something. This supplies it.
   * `canary_tamper_breaks_spec` — the same tamper ALSO fails `CellTransferSpec` (a frozen field
     moved), so the `↔`'s LHS is genuinely two-valued.
 
 ## Axiom hygiene
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR enters ONLY as the NAMED
-hypothesis `Poseidon2SpongeCR hash` (task #13's discharged carrier), never as a fresh axiom. NEW file;
-all imports read-only; `transferDescriptor_full_sound` / `commit_eq_commitOf` are UNCHANGED (used
-as-is for the `→` leg).
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR is no longer a hypothesis on
+the flagship or its canaries; it survives only in the standalone `_of_injective` bridge. All imports
+read-only; `transferDescriptor_full_sound` / `commit_eq_commitOf` are UNCHANGED (used as-is for the
+`→` leg).
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 
@@ -62,7 +66,8 @@ open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+open Dregg2.Circuit.Poseidon2Binding
+  (Poseidon2SpongeCR SpongeColl group4Find group4Find_spec spongeColl_refutable_of_injective)
 
 set_option linter.unusedVariables false
 
@@ -465,22 +470,52 @@ theorem sem_transfer_roundtrip_demo (hash : List ℤ → ℤ) :
 /-- A tampered after-state: `goodPost` with `field[0]` overwritten to `7` (an ABSORBED column). -/
 def tamperPost : CellState := { goodPost with fields := fun i => if i = 0 then 7 else 0 }
 
-/-- **`canary_tamper_moves_commit` — the whole-state commitment tooth BITES.** Under Poseidon2 CR,
-tampering the absorbed `field[0]` MOVES the genuine wire commit: the honest published `NEW_COMMIT`
-cannot ride a tampered after-state. Peel the outer `H4` (the inner-0 digest must match), then the
-inner `H4` (the fourth absorbed field must match) — but `0 ≠ 7`. -/
-theorem canary_tamper_moves_commit (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) :
+/-- **`canary_tamper_moves_commit_or_collides` — the whole-state commitment tooth BITES,
+UNCONDITIONALLY.** Tampering the absorbed `field[0]` EITHER moves the genuine wire commit, OR the
+deployed sponge genuinely collides at the pair `group4Find` returns. So the honest published
+`NEW_COMMIT` cannot ride a tampered after-state without exhibiting a real collision — which is exactly
+the price a forger pays, named rather than assumed away.
+
+⚑ **WHY THIS SHAPE.** The old canary concluded a bare `≠` from `Poseidon2SpongeCR hash`. That
+hypothesis is FALSE at deployed BabyBear parameters
+(`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`), so the canary certified NOTHING about the
+deployed system — and a canary is precisely the evidence that the `⟺`'s commit conjunct is two-valued.
+A vacuous canary is a vacuous non-vacuity argument. This one holds of the deployed sponge. -/
+theorem canary_tamper_moves_commit_or_collides (hash : List ℤ → ℤ) :
+    cellWireCommit hash goodPost 0 ≠ cellWireCommit hash tamperPost 0
+    ∨ SpongeColl hash (group4Find hash
+        [goodPost.balLo, goodPost.balHi, goodPost.nonce, goodPost.fields 0]
+        [goodPost.fields 1, goodPost.fields 2, goodPost.fields 3, goodPost.fields 4]
+        [goodPost.fields 5, goodPost.fields 6, goodPost.fields 7, goodPost.capRoot] 0
+        [tamperPost.balLo, tamperPost.balHi, tamperPost.nonce, tamperPost.fields 0]
+        [tamperPost.fields 1, tamperPost.fields 2, tamperPost.fields 3, tamperPost.fields 4]
+        [tamperPost.fields 5, tamperPost.fields 6, tamperPost.fields 7, tamperPost.capRoot] 0) := by
+  by_cases hne : cellWireCommit hash goodPost 0 = cellWireCommit hash tamperPost 0
+  · refine Or.inr ?_
+    unfold cellWireCommit commitOf at hne
+    rcases group4Find_spec hash
+        [goodPost.balLo, goodPost.balHi, goodPost.nonce, goodPost.fields 0]
+        [goodPost.fields 1, goodPost.fields 2, goodPost.fields 3, goodPost.fields 4]
+        [goodPost.fields 5, goodPost.fields 6, goodPost.fields 7, goodPost.capRoot] 0
+        [tamperPost.balLo, tamperPost.balHi, tamperPost.nonce, tamperPost.fields 0]
+        [tamperPost.fields 1, tamperPost.fields 2, tamperPost.fields 3, tamperPost.fields 4]
+        [tamperPost.fields 5, tamperPost.fields 6, tamperPost.fields 7, tamperPost.capRoot] 0
+        hne with ⟨hA, _, _, _⟩ | hcoll
+    · -- the blocks agreed, but `field[0]` moved `0 → 7`: impossible.
+      rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at hA
+      obtain ⟨_, _, _, hf0, _⟩ := hA
+      simp only [goodPost, tamperPost] at hf0
+      norm_num at hf0
+    · exact hcoll
+  · exact Or.inl hne
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** The deleted canary is EXACTLY the injective special case.
+Standalone bridge, NOT a hypothesis on the flagship. -/
+theorem canary_tamper_moves_commit_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) :
     cellWireCommit hash goodPost 0 ≠ cellWireCommit hash tamperPost 0 := by
-  intro heq
-  unfold cellWireCommit commitOf at heq
-  have houter := hCR _ _ heq
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
-  obtain ⟨hi0, _⟩ := houter
-  have hin := hCR _ _ hi0
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at hin
-  obtain ⟨_, _, _, hf0, _⟩ := hin
-  simp only [goodPost, tamperPost] at hf0
-  norm_num at hf0
+  rcases canary_tamper_moves_commit_or_collides hash with hne | hcoll
+  · exact hne
+  · exact absurd hcoll (spongeColl_refutable_of_injective hash hCR _)
 
 /-- **`canary_tamper_breaks_spec` — the `↔` is two-valued.** The same tamper ALSO fails
 `CellTransferSpec` (the frozen `field[0]` moved `0 → 7`, and `7 ≢ 0 [ZMOD p]` under canonicality), so
@@ -503,7 +538,8 @@ theorem canary_tamper_breaks_spec : ¬ CellTransferSpec goodPre goodParams tampe
 #assert_axioms sem_transfer_roundtrip
 #assert_axioms sem_transfer_satisfied_demo
 #assert_axioms sem_transfer_roundtrip_demo
-#assert_axioms canary_tamper_moves_commit
+#assert_axioms canary_tamper_moves_commit_or_collides
+#assert_axioms canary_tamper_moves_commit_of_injective
 #assert_axioms canary_tamper_breaks_spec
 
 end Dregg2.Circuit.Emit.EffectVmEmitTransferComplete

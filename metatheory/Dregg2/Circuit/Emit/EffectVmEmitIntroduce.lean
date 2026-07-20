@@ -50,7 +50,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer
    transitionAll boundaryFirstPins boundaryLastPins
    transferHashSites boundaryLast_pins
    gate_modEq_iff not_modEq_zero_of_canon eqToModEq)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit_of_injective)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Exec
@@ -208,7 +208,7 @@ theorem introduceVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Poseidon
     (hs₂ : siteHoldsAll hash e₂ introduceHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §7 — the structured per-cell spec (REUSING `CellState`): passthrough + nonce tick. -/
 
@@ -344,7 +344,7 @@ theorem introduceDescriptor_commit_binds_state (hash : List ℤ → ℤ)
     obtain ⟨l₁, u₁⟩ := hcanon₁
     obtain ⟨l₂, u₂⟩ := hcanon₂
     omega
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §9 — THE CONNECTOR — the cap-table grant (OFF-ROW), via `introduceA_full_sound`. -/
 
@@ -610,8 +610,8 @@ post-state (the per-cell block + the 8 frozen side-table roots, all bound). -/
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (boundaryLastPins boundaryLast_pins)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
-   wide_rejects_root_tamper)
+  (wideHashSites RunnableFullStateSpec runnable_full_sound
+   wide_rejects_root_tamper_or_collides WideColl RootsColl)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest N_SYSTEM_ROOTS)
 
 /-- **`introduceVmDescriptorWide`** — the runnable `introduce` FULL-state circuit: `introduceVmDescriptor`
@@ -682,12 +682,17 @@ theorem introduce_runnable_full_sound (preRoots : SysRoots)
   runnable_full_sound (introduceRunnableSpec preRoots) hash env pre post postRoots
     hrow ⟨henc, hroots⟩ hgatesat
 
-/-- **`introduce_runnable_rejects_root_tamper` — the side-table anti-ghost for `introduce`.** Two wide
-introduce rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table
-sub-blocks DIFFER at some index cannot both satisfy — UNSAT. The 8 side-table roots are bound by the
-runnable introduce commitment. -/
-theorem introduce_runnable_rejects_root_tamper (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`introduce_runnable_rejects_root_tamper_or_collides` — the side-table anti-ghost for `introduce`.**
+Two wide introduce rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose
+side-table sub-blocks DIFFER at some index exhibit a genuine collision of the deployed sponge — on the
+state block (`WideColl`) or on the ordered root list (`RootsColl`). So such a pair is UNSAT unless the
+prover holds a sponge collision: the 8 side-table roots are bound by the runnable introduce commitment.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge REFUTES,
+so at deployed parameters it was vacuous. This form names what the tamper costs and holds of the deployed
+sponge. -/
+theorem introduce_runnable_rejects_root_tamper_or_collides (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash introduceVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash introduceVmDescriptorWide e₂ true true)
@@ -696,8 +701,9 @@ theorem introduce_runnable_rejects_root_tamper (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (introduceRunnableSpec preRoots) hash hCR
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (introduceRunnableSpec preRoots) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-- **`introduceWide_realizes` — NON-VACUITY (witness TRUE).** `goodIntroduceRow` (the passthrough+tick
@@ -728,7 +734,7 @@ theorem introduceWide_clause_not_trivial :
 
 #assert_axioms introduceWide_constraints_eq
 #assert_axioms introduce_runnable_full_sound
-#assert_axioms introduce_runnable_rejects_root_tamper
+#assert_axioms introduce_runnable_rejects_root_tamper_or_collides
 #assert_axioms introduceWide_realizes
 #assert_axioms introduceWide_clause_not_trivial
 

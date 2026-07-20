@@ -293,7 +293,7 @@ theorem spawnDescriptor_full_sound (env : VmRowEnv) (post : CellState) (capDiges
 /-! ## §7 — THE ANTI-GHOST COMMITMENT TOOTH (whole child-state binding). -/
 
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-  (absorbedCols absorbed_determined_by_commit)
+  (absorbedCols absorbed_determined_by_commit_of_injective)
 
 /-- `spawnHashSites` is DEFINITIONALLY the transfer keystone's `transferHashSites`. -/
 theorem spawnHashSites_eq : spawnHashSites = transferHashSites := rfl
@@ -308,7 +308,7 @@ theorem spawnDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Pose
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ := by
   rw [spawnHashSites_eq] at hs₁ hs₂
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §8 — THE CONNECTOR — `capRootProj`/`balProj` to universe-A's `SpawnSpec`.
 

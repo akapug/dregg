@@ -191,7 +191,7 @@ lemmas apply verbatim: the published `state_commit` is the genuine H4-of-H4 dige
 injective in its 13 absorbed columns under Poseidon2 CR. So a prover cannot keep the published
 `NEW_COMMIT` while tampering ANY absorbed column of the born-empty block. -/
 
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols absorbed_determined_by_commit_of_injective)
 
 /-- The whole-block anti-ghost: two `createCell` rows publishing the SAME `state_commit` under CR have
 identical absorbed after-blocks. Inherited from the keystone (same hash sites). -/
@@ -201,7 +201,7 @@ theorem createCellVm_commit_binds_block (hash : List ℤ → ℤ) (hCR : Poseido
     (hs₂ : siteHoldsAll hash e₂ createCellHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §8 — CONNECTOR to universe-A `CreateCellSpec` via `cellProj`.
 

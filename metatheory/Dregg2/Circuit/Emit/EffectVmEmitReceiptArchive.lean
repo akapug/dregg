@@ -331,7 +331,7 @@ theorem archiveDescriptor_full_sound (env : VmRowEnv) (pre post : CellState)
 /-! ## §7 — THE ANTI-GHOST COMMITMENT TOOTH (whole-state binding, field[1] included). -/
 
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
-  (absorbedCols absorbed_determined_by_commit)
+  (absorbedCols absorbed_determined_by_commit_of_injective)
 
 /-- `archiveHashSites` is DEFINITIONALLY the transfer keystone's `transferHashSites`. -/
 theorem archiveHashSites_eq : archiveHashSites = transferHashSites := rfl
@@ -347,7 +347,7 @@ theorem archiveDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Po
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ := by
   rw [archiveHashSites_eq] at hs₁ hs₂
-  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §8 — THE CONNECTOR — `lifeProj` to universe-A's `ReceiptArchiveSpec`.
 

@@ -37,7 +37,7 @@ the transfer keystone proves.
 
 `recordSites_eq_transferSites_on_legacy`: when the carrier `fields_root = 0` (every legacy /
 non-map-write row), the record-GROUP-4 site set is DEFINITIONALLY the transfer site set, so the whole
-transfer keystone (`transferVm_faithful`, `transferDescriptor_commit_binds_state`, …) holds verbatim
+transfer keystone (`transferVm_faithful`, `transferDescriptor_commit_binds_state_of_injective`, …) holds verbatim
 for the record descriptor on legacy rows. STAGE 2 strictly EXTENDS the binding (adds `fields_root`)
 without weakening the transfer guarantee.
 

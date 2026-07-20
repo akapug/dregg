@@ -33,9 +33,10 @@ which `ReceiptArchiveSpec` freezes).
     hash-site-free `archiveGates_give_cellSpec` (a thin re-wrapping of the already-gate-only
     `archiveDescriptor_full_sound`).
 
-The anti-ghost on ALL 17 fields falls out of the generic `runnable_full_commit_binds` /
-`wide_rejects_root_tamper` (§4) — tamper the set `field[1]`, any absorbed cell, OR any side-table root ⇒
-the RUNNABLE descriptor is UNSAT.
+The anti-ghost on ALL 17 fields falls out of the generic `runnable_full_commit_binds_or_collides` /
+`wide_rejects_root_tamper_or_collides` (§4) — tamper the set `field[1]`, any absorbed cell, OR any
+side-table root ⇒ the RUNNABLE descriptor is UNSAT unless a collision of the deployed sponge is
+EXHIBITED.
 
 ## SURFACE — the log-receipt divergence is UNCHANGED and named.
 
@@ -48,10 +49,13 @@ the set `field[1]` is the cell-record slot; the kernel `lifecycle` side-table is
 fields (reached by universe-A's full-state spec; it has no EffectVM column on this effect). This module
 closes ONLY the side-table-root binding gap on the kernel state.
 
-## The terminal (named, the ONLY acceptable irreducible)
+## No terminal: the teeth are UNCONDITIONAL
 
-`Poseidon2Binding.Poseidon2SpongeCR hash` — discharged ONCE in the generic crown; this module carries NO
-new portal. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Imports are read-only; this file owns only itself.
+The §4 theorems take NO collision-resistance hypothesis. Their alternative branch hands back a specific
+colliding pair of the deployed sponge (`WideColl`/`RootsColl`). The former forms carried
+`Poseidon2Binding.Poseidon2SpongeCR hash`, which the deployed compressing sponge REFUTES — at deployed
+BabyBear parameters they were vacuous. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on
+every theorem. Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable
@@ -65,8 +69,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive
   (IsArchiveRow archiveRowGates receiptArchiveVmDescriptor ArchiveRowEncodes ArchiveCellSpec
    archiveDescriptor_full_sound LIFE_FIELD selRA.RECEIPT_ARCHIVE)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound WideColl RootsColl)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -163,11 +166,17 @@ theorem receiptArchive_runnable_full_sound (hash : List ℤ → ℤ)
 
 /-! ## §4 — ANTI-GHOST on ALL 17 fields (the generic teeth, instantiated). -/
 
-/-- **`receiptArchive_wide_binds_full_state` — the whole-state anti-ghost.** Two rows satisfying the wide
-descriptor that publish the SAME `NEW_COMMIT`, whose carriers ARE the `systemRootsDigest` of their post
-sub-blocks, agree on EVERY absorbed state-block column (the set `field[1]` included) AND every side-table
-root. -/
-theorem receiptArchive_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`receiptArchive_wide_binds_full_state_or_collides` — the whole-state anti-ghost.** Two rows
+satisfying the wide descriptor that publish the SAME `NEW_COMMIT`, whose carriers ARE the
+`systemRootsDigest` of their post sub-blocks, EITHER agree on EVERY absorbed state-block column (the set
+`field[1]` included) AND every side-table root, OR exhibit a genuine collision of the deployed sponge
+(`WideColl` on the two wide preimages, or `RootsColl` on the two root lists).
+
+The former `receiptArchive_wide_binds_full_state` concluded the bare conjunction from
+`Poseidon2SpongeCR hash`. The deployed sponge REFUTES that hypothesis, so at deployed parameters that
+theorem was vacuous. This disjunction is formally weaker, but it HOLDS of the deployed sponge, which the
+old one did not. -/
+theorem receiptArchive_wide_binds_full_state_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots) (preRoots : SysRoots)
     (hsat₁ : satisfiedVm hash archiveVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash archiveVmDescriptorWide e₂ true true)
@@ -176,14 +185,19 @@ theorem receiptArchive_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Po
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  EffectVmFullStateRunnable.runnable_full_commit_binds (archiveRunnableSpec preRoots)
-    hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  EffectVmFullStateRunnable.runnable_full_commit_binds_or_collides (archiveRunnableSpec preRoots)
+    hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-/-- **`receiptArchive_wide_rejects_root_tamper` — side-table anti-ghost.** Two wide rows publishing the
-same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks DIFFER cannot both
-satisfy. -/
-theorem receiptArchive_wide_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`receiptArchive_wide_rejects_root_tamper_or_collides` — side-table anti-ghost.** Two wide rows
+publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks DIFFER
+cannot both satisfy WITHOUT exhibiting a collision of the deployed sponge.
+
+The former `receiptArchive_wide_rejects_root_tamper` concluded `False` from `Poseidon2SpongeCR hash`,
+which the deployed sponge REFUTES; at deployed parameters it was vacuous. This disjunction is formally
+weaker, but it HOLDS of the deployed sponge, which the old one did not. -/
+theorem receiptArchive_wide_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots) (preRoots : SysRoots)
     (hsat₁ : satisfiedVm hash archiveVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash archiveVmDescriptorWide e₂ true true)
@@ -192,12 +206,13 @@ theorem receiptArchive_wide_rejects_root_tamper (hash : List ℤ → ℤ) (hCR :
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  EffectVmFullStateRunnable.wide_rejects_root_tamper (archiveRunnableSpec preRoots)
-    hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  EffectVmFullStateRunnable.wide_rejects_root_tamper_or_collides (archiveRunnableSpec preRoots)
+    hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-#assert_axioms receiptArchive_wide_binds_full_state
-#assert_axioms receiptArchive_wide_rejects_root_tamper
+#assert_axioms receiptArchive_wide_binds_full_state_or_collides
+#assert_axioms receiptArchive_wide_rejects_root_tamper_or_collides
 
 /-! ## §5 — NON-VACUITY: the full clause is INHABITED (TRUE) and REFUTABLE (FALSE), and the wide
 descriptor is the genuine 188-wide `system_roots`-absorbing circuit. -/

@@ -423,8 +423,117 @@ example : logHashInjective refLH := logHashInjective_of_realization refLogRealiz
 
 end Reference
 
+/-! ## §4½ — THE EXTRACTION-AS-DATA SPINE: the sound replacement for the `Poseidon2SpongeCR` floor.
+
+`Poseidon2SpongeCR` above is FALSE at deployed BabyBear parameters
+(`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`), so a keystone that CARRIES it as a hypothesis
+says nothing about the deployed system. This section supplies what such a keystone should conclude
+instead: a TOTAL extractor that, from an equivocation on a GROUP-4 sponge absorption, either proves
+the absorbed blocks equal or HANDS BACK the specific pair of lists at which the deployed sponge
+actually collides.
+
+Note what `SpongeColl` is NOT: it is not `∃ xs ys, sponge-collides xs ys`, which pigeonhole makes
+unconditionally TRUE at deployed parameters and which therefore binds nothing. It is a predicate about
+the SPECIFIC pair the extractor RETURNS, and it is REFUTABLE (`spongeColl_refutable_of_injective`).
+This is the `CapMerkleGeneric.NodeColl` / `EffectVmEmitRotationR.WireColl` shape at the sponge. -/
+
+/-- **`SpongeColl hash p`** — the SPECIFIC pair of lists `p` is a GENUINE collision of the sponge:
+DISTINCT inputs with the SAME digest. The named disjunct every cured keystone carries in place of the
+deleted injectivity floor. -/
+def SpongeColl (hash : List ℤ → ℤ) (p : List ℤ × List ℤ) : Prop :=
+  p.1 ≠ p.2 ∧ hash p.1 = hash p.2
+
+/-- "Is this pair a genuine collision?" is DECIDABLE, so the extractor may branch on it and remain a
+TOTAL function with no `Classical.choice` in the walk. -/
+instance decidableSpongeColl (hash : List ℤ → ℤ) (p : List ℤ × List ℤ) :
+    Decidable (SpongeColl hash p) := by
+  unfold SpongeColl
+  infer_instance
+
+/-- **⚑ THE GROUP-4 EXTRACTOR.** The deployed wide commitment is one `H4`-of-`H4`: three inner blocks
+`A/B/C` are sponged, and their digests plus a side-table carrier `d` form the outer 4-list. Given two
+such absorptions with EQUAL outer digests, locate where they break: if the two outer 4-lists differ
+they ARE the collision; otherwise the outer lists agree slot-for-slot, so each inner digest pair
+agrees and the FIRST inner block pair that differs is the collision. If nothing differs the spec
+delivers equality outright and the returned value is never read (a trivially non-colliding pair). -/
+def group4Find (hash : List ℤ → ℤ) (A₁ B₁ C₁ : List ℤ) (d₁ : ℤ)
+    (A₂ B₂ C₂ : List ℤ) (d₂ : ℤ) : List ℤ × List ℤ :=
+  if [hash A₁, hash B₁, hash C₁, d₁] ≠ [hash A₂, hash B₂, hash C₂, d₂] then
+    ([hash A₁, hash B₁, hash C₁, d₁], [hash A₂, hash B₂, hash C₂, d₂])
+  else if A₁ ≠ A₂ then (A₁, A₂)
+  else if B₁ ≠ B₂ then (B₁, B₂)
+  else if C₁ ≠ C₂ then (C₁, C₂)
+  else (A₁, A₁)
+
+/-- **⚑ THE EXTRACTOR IS CORRECT.** Two GROUP-4 absorptions with the SAME outer digest EITHER agree on
+all three inner blocks AND the carrier slot, OR the pair `group4Find` returns is a genuine collision of
+the deployed sponge. UNCONDITIONAL — no injectivity anywhere. -/
+theorem group4Find_spec (hash : List ℤ → ℤ) (A₁ B₁ C₁ : List ℤ) (d₁ : ℤ)
+    (A₂ B₂ C₂ : List ℤ) (d₂ : ℤ)
+    (h : hash [hash A₁, hash B₁, hash C₁, d₁] = hash [hash A₂, hash B₂, hash C₂, d₂]) :
+    (A₁ = A₂ ∧ B₁ = B₂ ∧ C₁ = C₂ ∧ d₁ = d₂)
+    ∨ SpongeColl hash (group4Find hash A₁ B₁ C₁ d₁ A₂ B₂ C₂ d₂) := by
+  unfold group4Find
+  by_cases houter : [hash A₁, hash B₁, hash C₁, d₁] ≠ [hash A₂, hash B₂, hash C₂, d₂]
+  · rw [if_pos houter]
+    exact Or.inr ⟨houter, h⟩
+  · rw [if_neg houter]
+    -- the outer lists agree slot-for-slot: each inner digest pair agrees, and so does the carrier.
+    push_neg at houter
+    rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
+    obtain ⟨hA, hB, hC, hd, _⟩ := houter
+    by_cases hA' : A₁ ≠ A₂
+    · rw [if_pos hA']; exact Or.inr ⟨hA', hA⟩
+    · rw [if_neg hA']
+      push_neg at hA'
+      by_cases hB' : B₁ ≠ B₂
+      · rw [if_pos hB']; exact Or.inr ⟨hB', hB⟩
+      · rw [if_neg hB']
+        push_neg at hB'
+        by_cases hC' : C₁ ≠ C₂
+        · rw [if_pos hC']; exact Or.inr ⟨hC', hC⟩
+        · rw [if_neg hC']
+          push_neg at hC'
+          exact Or.inl ⟨hA', hB', hC', hd⟩
+
+/-! ### Strength bridges — BOTH ways, standalone, deliberately NOT hypotheses on any keystone. -/
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** Under exactly the injectivity the deleted floor asserted, the
+collision disjunct is impossible and the plain equality falls straight out — so every theorem that used
+to carry `Poseidon2SpongeCR` is EXACTLY the injective special case of its cured form. Nothing that was
+genuinely proved has been given up; what was given up is the pretence that the deployed sponge
+satisfies the hypothesis. Stated standalone: a keystone carrying `Poseidon2SpongeCR` would be right
+back where this repair started. -/
+theorem group4_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (A₁ B₁ C₁ : List ℤ) (d₁ : ℤ) (A₂ B₂ C₂ : List ℤ) (d₂ : ℤ)
+    (h : hash [hash A₁, hash B₁, hash C₁, d₁] = hash [hash A₂, hash B₂, hash C₂, d₂]) :
+    A₁ = A₂ ∧ B₁ = B₂ ∧ C₁ = C₂ ∧ d₁ = d₂ := by
+  rcases group4Find_spec hash A₁ B₁ C₁ d₁ A₂ B₂ C₂ d₂ h with hEq | ⟨hne, himg⟩
+  · exact hEq
+  · exact absurd (hCR _ _ himg) hne
+
+/-- **(CANARY — the collision disjunct is REFUTABLE, so the disjunction is not a free pass.)** At an
+injective sponge no returned pair is a collision, so a cured keystone cannot discharge itself by taking
+the right branch: the binding half has to do the work. A disjunction whose right side were always
+available would carry no more content than `True` — which is precisely the free pass an
+`∃ collision` formulation would have handed over. -/
+theorem spongeColl_refutable_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (p : List ℤ × List ℤ) : ¬ SpongeColl hash p := by
+  rintro ⟨hne, himg⟩
+  exact hne (hCR _ _ himg)
+
+/-- **(CANARY — the collision branch is REACHABLE.)** A degenerate sponge genuinely collides at a pair,
+so `SpongeColl` is not accidentally empty either. Both branches of every cured disjunction are live
+across sponges — which is what makes the disjunction informative rather than a disguised equality. -/
+theorem badSponge_has_spongeColl :
+    SpongeColl (fun _ => 0) ([0], [1]) := ⟨by decide, rfl⟩
+
 /-! ## §5 — axiom-hygiene tripwires: each derivation pins exactly the whitelist. -/
 
+#assert_axioms group4Find_spec
+#assert_axioms group4_of_injective
+#assert_axioms spongeColl_refutable_of_injective
+#assert_axioms badSponge_has_spongeColl
 #assert_axioms compressNInjective_iff_poseidon2CR
 #assert_axioms compressNInjective_of_poseidon2CR
 #assert_axioms cellLeafInjective_of_realization

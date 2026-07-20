@@ -463,9 +463,14 @@ theorem attenuateVmDescriptorGenuine_nontrivial :
 The §-genuine descriptor binds the per-cell block. The shared cap-graph WIDE descriptor
 (`EffectVmEmitAttenuateA §W`, `attenuateVmDescriptorWide`) lifts the RUNNABLE binding to the FULL
 17-field post-state: the per-cell `cap_root` MOVE + frame freeze AND the 8 side-table roots (frozen — a
-caps-only effect). `cap_runnable_full_sound` is that crown; `cap_runnable_rejects_root_tamper` /
-`cap_runnable_rejects_cap_root_tamper` are the whole-state anti-ghost teeth. We re-export the crown for
-the attenuate weld so the magnesium full-state property is visible at this layer. -/
+caps-only effect). `cap_runnable_full_sound` is that crown; `cap_runnable_rejects_root_tamper_or_collides`
+/ `cap_runnable_rejects_cap_root_tamper_or_collides` are the whole-state anti-ghost teeth — each concludes
+that a tampering pair exhibits a genuine collision of the deployed sponge (`WideColl` on the state block or
+`RootsColl` on the ordered root list). Their old forms concluded `False` from `Poseidon2SpongeCR hash`,
+which the deployed BabyBear sponge REFUTES, so at deployed parameters they were vacuous; the disjunctive
+forms are formally weaker and hold of the deployed sponge. We re-export the crown for the attenuate weld so
+the magnesium full-state property is visible at this layer. The crown itself never carried the refuted
+floor, so it is unchanged. -/
 
 /-- **`attenuate_runnable_full_sound` — the attenuate MAGNESIUM crown (re-exported).** A row satisfying
 the wide runnable cap-graph descriptor pins the FULL 17-field post-state. The shared

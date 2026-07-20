@@ -432,7 +432,8 @@ here, beside the abstract crown, so the cross-surface weld reads in one place. -
 section RunnableWeld
 
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmFullStateRunnable (wideHashSites wide_binds_systemRoots)
+open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
+  (wideHashSites wide_binds_systemRoots_or_collides WideColl RootsColl)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest N_SYSTEM_ROOTS)
 
@@ -442,19 +443,19 @@ ARE the `systemRootsDigest` of their `system_roots` sub-blocks, agree on EVERY s
 is `cellCommitS_binds_roots_pointwise` (the record-layer binding) realized on the CIRCUIT THE PROVER
 RUNS: the runnable `state_commit` now binds the same 8 roots the abstract `cellCommitS` does — the
 abstract three-commitment crown and the runnable descriptor pin ONE side-table state object. -/
-theorem runnable_binds_same_system_roots
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+theorem runnable_binds_same_system_roots_or_collides
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hs₁ : siteHoldsAll hash e₁ wideHashSites)
     (hs₂ : siteHoldsAll hash e₂ wideHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT))
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
-    (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (i : Fin N_SYSTEM_ROOTS) :
-    sr₁ i = sr₂ i :=
-  wide_binds_systemRoots hash hCR e₁ e₂ sr₁ sr₂ hs₁ hs₂ hcommit hd₁ hd₂ i
+    (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
+    (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i)
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_binds_systemRoots_or_collides hash e₁ e₂ sr₁ sr₂ hs₁ hs₂ hcommit hd₁ hd₂
 
-#assert_axioms runnable_binds_same_system_roots
+#assert_axioms runnable_binds_same_system_roots_or_collides
 
 end RunnableWeld
 

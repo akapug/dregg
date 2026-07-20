@@ -284,10 +284,9 @@ the per-cell `CapCellSpec` (cap_root = `delegateCapDigestNew`) AND `postRoots = 
 
 open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
   (attenuateVmDescriptorWide CapFullClause capRunnableSpec cap_runnable_full_sound
-   cap_runnable_binds_full_state cap_runnable_rejects_cap_root_tamper cap_runnable_rejects_root_tamper
-   IsAttenRow CapRowEncodes)
-open Dregg2.Circuit.Emit.EffectVmFullStateRunnable (baseAbsorbedCols)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+   cap_runnable_binds_full_state_or_collides cap_runnable_rejects_cap_root_tamper_or_collides
+   cap_runnable_rejects_root_tamper_or_collides IsAttenRow CapRowEncodes)
+open Dregg2.Circuit.Emit.EffectVmFullStateRunnable (baseAbsorbedCols WideColl RootsColl)
 open Dregg2.Exec.SystemRoots (SysRoots)
 
 /-- **`delegateVmDescriptorWide`** — the runnable `delegate` FULL-state circuit: definitionally the shared
@@ -313,13 +312,19 @@ theorem delegate_runnable_full_sound (D : Caps → ℤ) (s : RecChainedState) (a
   cap_runnable_full_sound (delegateCapDigestNew D s args) preRoots hash env pre post postRoots
     hrow henc hroots hgatesat
 
-/-- **`delegate_runnable_binds_full_state` — the whole-17-field anti-ghost for `delegate`.** Two wide
-`delegate` rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) agree on EVERY
-absorbed state-block column (the moved `cap_root` included) AND every side-table root — so a prover cannot
-keep `NEW_COMMIT` while tampering ANY of the 17 fields. Inherited from the shared
-`cap_runnable_binds_full_state`. -/
-theorem delegate_runnable_binds_full_state (capDigestNew : ℤ) (preRoots : SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`delegate_runnable_binds_full_state_or_collides` — the whole-17-field anti-ghost for `delegate`,
+UNCONDITIONALLY.** Two wide `delegate` rows publishing the same `NEW_COMMIT` (with `systemRootsDigest`
+carriers) EITHER agree on EVERY absorbed state-block column (the moved `cap_root` included) AND every
+side-table root, OR exhibit a genuine collision of the deployed sponge — on the state block (`WideColl`)
+or on the ordered root list (`RootsColl`). So keeping `NEW_COMMIT` while tampering any of the 17 fields
+COSTS a named sponge collision. Inherited from the shared
+`cap_runnable_binds_full_state_or_collides`.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed BabyBear
+sponge REFUTES, so at deployed parameters it was vacuous. This disjunction is formally weaker and holds
+of the deployed sponge. -/
+theorem delegate_runnable_binds_full_state_or_collides (capDigestNew : ℤ) (preRoots : SysRoots)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash delegateVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash delegateVmDescriptorWide e₂ true true)
@@ -328,13 +333,14 @@ theorem delegate_runnable_binds_full_state (capDigestNew : ℤ) (preRoots : SysR
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂
-    ∧ (∀ i : Fin Dregg2.Exec.SystemRoots.N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  cap_runnable_binds_full_state capDigestNew preRoots hash hCR
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂
+      ∧ (∀ i : Fin Dregg2.Exec.SystemRoots.N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  cap_runnable_binds_full_state_or_collides capDigestNew preRoots hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
 #assert_axioms delegate_runnable_full_sound
-#assert_axioms delegate_runnable_binds_full_state
+#assert_axioms delegate_runnable_binds_full_state_or_collides
 
 /-! ## §5 — Axiom-hygiene tripwires (the honesty tripwire). -/
 

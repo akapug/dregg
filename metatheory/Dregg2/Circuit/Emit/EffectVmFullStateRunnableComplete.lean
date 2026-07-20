@@ -7,9 +7,9 @@ literal `⟺` for the WIDE full-state RUNNABLE descriptor, lifting the transfer 
 
 `EffectVmFullStateRunnable.runnable_full_sound` is the SOUNDNESS half (`SAT ⟹ SEM`) over the generic
 `RunnableFullStateSpec St`: a row satisfying the effect's WIDE runnable descriptor pins the FULL
-17-field declarative post-state (`fullClause`), and `runnable_full_commit_binds` is the whole-state
-anti-ghost. Both are generic — every kernel-only effect tag rides them as a THIN instance (only
-`decodeFull`).
+17-field declarative post-state (`fullClause`), and `runnable_full_commit_binds_or_collides` is the
+whole-state anti-ghost. Both are generic — every kernel-only effect tag rides them as a THIN instance
+(only `decodeFull`).
 
 This file supplies the COMPLEMENTARY half — COMPLETENESS (`SEM ⟹ SAT`) — at the SAME resolution: an
 engine that turns a genuine `fullClause` (plus the honest-witness precondition `absorbsTo`) into a row
@@ -36,9 +36,15 @@ The commit is GATE-forced (the GROUP-4 hash sites), so a per-row `↔` is genuin
 per-trace iff, and NOT lookup-enforced. The completeness witness is not vacuously satisfiable: the
 `fullClause` gates real per-cell content (the reference instance's clause is `CellTransferSpec ∧ frozen
 roots`, refutable — `canary_tamper_breaks_clause`) and the commit forces the genuine absorption
-(`canary_tamper_moves_commit`, `canary_bogus_commit_unsat`). The sole trust folds into the ONE named
-carrier `Poseidon2Binding.Poseidon2SpongeCR hash` (task #13's discharged Poseidon2 CR portal) — used
-only where injectivity is invoked, never a fresh `axiom`.
+(`canary_tamper_moves_commit_or_collides`, `canary_bogus_commit_unsat`).
+
+⚑ **WHERE THE VACUITY ACTUALLY WAS.** `runnable_full_commit_iff` itself never carried a hash floor —
+it is unconditional and TRUE at deployed BabyBear parameters, as are all 17 per-tag `*_commit_iff`.
+What WAS vacuous is the evidence around it: the mutation canary assumed `Poseidon2SpongeCR hash`
+(FALSE at deployed parameters — `HashFloorHonesty.poseidon2SpongeCR_false_babyBear`), and so did the
+whole-state anti-ghost `runnable_full_commit_binds` this file's docs cite as the meaning of the commit
+conjunct. A true `⟺` whose non-degeneracy certificate is empty is the sharper form of the disease.
+Both are now unconditional disjunctions naming an extracted collision pair.
 
 ## The reference instance + the demo
 
@@ -86,7 +92,8 @@ open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (RunnableFullStateSpec runnable_full_sound wideHashSites wideCommitOf wide_commit_eq
    transferVmDescriptorWide transferWide_constraints_eq TransferFullClause transferRunnableSpec
    goodPreRoots transferReference_clause_not_trivial)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+open Dregg2.Circuit.Poseidon2Binding
+  (Poseidon2SpongeCR SpongeColl group4Find group4Find_spec spongeColl_refutable_of_injective)
 open Dregg2.Exec.SystemRoots (SysRoots)
 
 set_option linter.unusedVariables false
@@ -348,24 +355,43 @@ end TransferReference
 
 Both directions of the two-valued `↔`, and the load-bearing of the completeness construction. -/
 
-/-- **`canary_tamper_moves_commit` — the commit conjunct BITES (tamper an after-state kernel field →
-the genuine wire commit MOVES).** Under Poseidon2 CR, an honest after-state (`field[0] = 0`) and a
-tampered one (`field[0] = 7`) — every other absorbed column equal — publish DIFFERENT `wideCommitOf`
-digests. So the honest published `NEW_COMMIT` cannot ride a tampered after-state: peel the outer `H4`
-(the inner-0 digest must match), then the inner `H4` (the fourth absorbed slot must match) — `0 ≠ 7`.
-This is the whole-state tooth on the WIDE (side-table-carrying) commitment. -/
-theorem canary_tamper_moves_commit (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) :
+/-- **`canary_tamper_moves_commit_or_collides` — the commit conjunct BITES, UNCONDITIONALLY.** An
+honest after-state (`field[0] = 0`) and a tampered one (`field[0] = 7`) — every other absorbed column
+equal — EITHER publish DIFFERENT `wideCommitOf` digests, OR the deployed sponge genuinely collides at
+the pair `group4Find` returns. So the honest published `NEW_COMMIT` cannot ride a tampered after-state
+without a real collision being exhibited. This is the whole-state tooth on the WIDE
+(side-table-carrying) commitment.
+
+⚑ **WHY THIS SHAPE.** The old canary concluded a bare `≠` from `Poseidon2SpongeCR hash`, which is FALSE
+at deployed BabyBear parameters (`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`). A canary IS the
+evidence that the `⟺`'s commit conjunct is two-valued; a vacuous canary certifies nothing. This one
+holds of the deployed sponge, so the `⟺`'s non-degeneracy is now witnessed at deployed parameters. -/
+theorem canary_tamper_moves_commit_or_collides (hash : List ℤ → ℤ) :
+    wideCommitOf hash 70 0 6 0 0 0 0 0 0 0 0 0 0
+      ≠ wideCommitOf hash 70 0 6 7 0 0 0 0 0 0 0 0 0
+    ∨ SpongeColl hash (group4Find hash [70, 0, 6, 0] [0, 0, 0, 0] [0, 0, 0, 0] 0
+                                       [70, 0, 6, 7] [0, 0, 0, 0] [0, 0, 0, 0] 0) := by
+  by_cases heq : wideCommitOf hash 70 0 6 0 0 0 0 0 0 0 0 0 0
+      = wideCommitOf hash 70 0 6 7 0 0 0 0 0 0 0 0 0
+  · refine Or.inr ?_
+    unfold wideCommitOf at heq
+    rcases group4Find_spec hash [70, 0, 6, 0] [0, 0, 0, 0] [0, 0, 0, 0] 0
+        [70, 0, 6, 7] [0, 0, 0, 0] [0, 0, 0, 0] 0 heq with ⟨hA, _, _, _⟩ | hcoll
+    · -- the first block agreed, but its fourth slot moved `0 → 7`: impossible.
+      rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at hA
+      obtain ⟨_, _, _, hf0, _⟩ := hA
+      norm_num at hf0
+    · exact hcoll
+  · exact Or.inl heq
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** The deleted canary is EXACTLY the injective special case.
+Standalone bridge, NOT a hypothesis on the engine's `⟺`. -/
+theorem canary_tamper_moves_commit_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) :
     wideCommitOf hash 70 0 6 0 0 0 0 0 0 0 0 0 0
     ≠ wideCommitOf hash 70 0 6 7 0 0 0 0 0 0 0 0 0 := by
-  intro heq
-  unfold wideCommitOf at heq
-  have houter := hCR _ _ heq
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
-  obtain ⟨hi0, _⟩ := houter
-  have hin := hCR _ _ hi0
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at hin
-  obtain ⟨_, _, _, hf0, _⟩ := hin
-  norm_num at hf0
+  rcases canary_tamper_moves_commit_or_collides hash with hne | hcoll
+  · exact hne
+  · exact absurd hcoll (spongeColl_refutable_of_injective hash hCR _)
 
 /-- **`canary_tamper_breaks_clause` — the clause conjunct is REFUTABLE (the `↔` LHS is genuinely
 two-valued).** A post-state whose `bal_lo` is NOT the signed move (`goodPre.balLo = 100`, demanding
@@ -395,7 +421,8 @@ theorem canary_bogus_commit_unsat (hash : List ℤ → ℤ) (env : VmRowEnv)
 #assert_axioms runnable_full_commit_iff
 #assert_axioms runnable_full_complete_demo
 #assert_axioms runnable_full_commit_iff_demo
-#assert_axioms canary_tamper_moves_commit
+#assert_axioms canary_tamper_moves_commit_or_collides
+#assert_axioms canary_tamper_moves_commit_of_injective
 #assert_axioms canary_tamper_breaks_clause
 #assert_axioms canary_bogus_commit_unsat
 

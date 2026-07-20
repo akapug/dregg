@@ -73,7 +73,7 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub eSelNoop gNonce gCapPass site0 site1 site2 site3 transitionAll boundaryFirstPins
    boundaryLastPins transferHashSites gate_modEq_iff not_modEq_zero_of_canon eqToModEq)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit_of_injective)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Exec
@@ -306,7 +306,7 @@ theorem refreshDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Po
     (hs₂ : siteHoldsAll hash e₂ transferHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
     absorbedCols e₁ = absorbedCols e₂ :=
-  absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  absorbed_determined_by_commit_of_injective hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §7 — THE DELEG SYSTEM-ROOT (STAGE 3): binding the touched `delegations` field.
 
@@ -690,8 +690,9 @@ record-layer connector + the reported pending runtime column).
 `refreshDelegation` is a PASSTHROUGH+nonce-TICK cap-graph row (cap_root FROZEN on-row). Its WIDE
 descriptor widens `refreshVmDescriptor` to `EFFECT_VM_WIDTH_SYSROOTS` with `wideHashSites`, so the
 published `state_commit` now ABSORBS the `system_roots` digest — i.e. the WHOLE side-table sub-block
-(`postRoots`) is bound by the runnable commitment (the anti-ghost `refresh_runnable_rejects_root_tamper`
-bites on every one of the 8 roots, the `DELEG` root included). The wide RUNNABLE crown pins the per-cell
+(`postRoots`) is bound by the runnable commitment (the anti-ghost
+`refresh_runnable_rejects_root_tamper_or_collides` bites on every one of the 8 roots, the `DELEG` root
+included). The wide RUNNABLE crown pins the per-cell
 freeze+tick (`RefreshCellSpec`) AND the `postRoots` the carrier digests.
 
 ⚑ THE TOUCHED ROOT (`DELEG`) — the split: refresh is the ONE cap-graph effect that MOVES a
@@ -704,8 +705,8 @@ boundary §7-9 already states, now on the RUNNABLE (`wideHashSites`) commitment 
 record-layer `cellCommitS`. -/
 
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound wide_rejects_root_tamper
-   wide_rejects_state_tamper)
+  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound
+   wide_rejects_root_tamper_or_collides wide_rejects_state_tamper_or_collides WideColl RootsColl)
 open Dregg2.Exec.SystemRoots (systemRootsDigest)
 
 /-- **`refreshVmDescriptorWide`** — the runnable `refreshDelegation` FULL-state circuit: `refreshVmDescriptor`
@@ -789,13 +790,19 @@ theorem refresh_runnable_full_sound
       simpa only [VmConstraint.holdsVm] using hh
   exact refreshDescriptor_full_sound env pre post hrow henc hgates'
 
-/-- **`refresh_runnable_rejects_root_tamper` — the side-table anti-ghost for `refreshDelegation` (the
-`DELEG`-root tooth on the RUNNABLE commitment).** Two wide refresh rows publishing the same `NEW_COMMIT`
-(with `systemRootsDigest` carriers) whose side-table sub-blocks DIFFER at some index (the `DELEG` root
-included) cannot both satisfy — UNSAT. So a prover cannot forge the `delegations` move while keeping the
-published commitment: the whole side-table sub-block is bound BY the runnable refresh commitment. -/
-theorem refresh_runnable_rejects_root_tamper
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`refresh_runnable_rejects_root_tamper_or_collides` — the side-table anti-ghost for
+`refreshDelegation` (the `DELEG`-root tooth on the RUNNABLE commitment).** Two wide refresh rows publishing
+the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table sub-blocks DIFFER at some index
+(the `DELEG` root included) exhibit a genuine collision of the deployed sponge — on the state block
+(`WideColl`) or on the ordered root list (`RootsColl`). So forging the `delegations` move while keeping the
+published commitment COSTS a named sponge collision: the whole side-table sub-block is bound BY the
+runnable refresh commitment.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge REFUTES,
+so at deployed parameters it was vacuous. This form names what the tamper costs and holds of the deployed
+sponge. -/
+theorem refresh_runnable_rejects_root_tamper_or_collides
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash refreshVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash refreshVmDescriptorWide e₂ true true)
@@ -804,16 +811,22 @@ theorem refresh_runnable_rejects_root_tamper
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (refreshRunnableSpec hash) hash hCR
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (refreshRunnableSpec hash) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
-/-- **`refresh_runnable_rejects_state_tamper` — the per-cell-block anti-ghost for `refreshDelegation`.**
-Two wide refresh rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose absorbed
-state-block columns DIFFER (a moved `cap_root`, a tampered field, a forged nonce) cannot both satisfy —
-UNSAT. -/
-theorem refresh_runnable_rejects_state_tamper
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`refresh_runnable_rejects_state_tamper_or_collides` — the per-cell-block anti-ghost for
+`refreshDelegation`.** Two wide refresh rows publishing the same `NEW_COMMIT` (with `systemRootsDigest`
+carriers) whose absorbed state-block columns DIFFER (a moved `cap_root`, a tampered field, a forged nonce)
+exhibit a genuine collision of the deployed sponge — on the state block (`WideColl`) or on the ordered root
+list (`RootsColl`). Such a pair is UNSAT unless the prover holds a sponge collision.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge REFUTES,
+so at deployed parameters it was vacuous. This form names what the tamper costs and holds of the deployed
+sponge. -/
+theorem refresh_runnable_rejects_state_tamper_or_collides
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash refreshVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash refreshVmDescriptorWide e₂ true true)
@@ -822,8 +835,9 @@ theorem refresh_runnable_rejects_state_tamper
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
-  wide_rejects_state_tamper (refreshRunnableSpec hash) hash hCR
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_state_tamper_or_collides (refreshRunnableSpec hash) hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-- **`refreshWide_realizes` — NON-VACUITY (witness TRUE).** A real passthrough+tick refresh cell
@@ -854,8 +868,8 @@ theorem refreshWide_clause_not_trivial :
 
 #assert_axioms refreshWide_constraints_eq
 #assert_axioms refresh_runnable_full_sound
-#assert_axioms refresh_runnable_rejects_root_tamper
-#assert_axioms refresh_runnable_rejects_state_tamper
+#assert_axioms refresh_runnable_rejects_root_tamper_or_collides
+#assert_axioms refresh_runnable_rejects_state_tamper_or_collides
 #assert_axioms refreshWide_realizes
 #assert_axioms refreshWide_clause_not_trivial
 

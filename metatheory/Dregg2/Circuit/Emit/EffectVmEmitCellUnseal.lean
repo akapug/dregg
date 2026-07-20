@@ -35,9 +35,9 @@ post-state — the per-cell block (`CellUnsealCellSpec`) AND every one of the 8 
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY through the named
-`Poseidon2SpongeCR` portal (in the generic theorems). `fullClause`
-NON-VACUOUS. Read-only imports; owns only its own declarations.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The anti-ghost theorems carry NO
+collision-resistance hypothesis: they conclude a disjunction naming the sponge collision they would
+otherwise assume away. `fullClause` NON-VACUOUS. Read-only imports; owns only its own declarations.
 
 ## The field-faithful denotation
 
@@ -57,12 +57,11 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
    transitionAll boundaryFirstPins boundaryLastPins transferHashSites boundaryLast_pins)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbed_determined_by_commit_of_injective)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
-   wide_rejects_root_tamper wideHashSites)
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds_or_collides
+   wide_rejects_root_tamper_or_collides WideColl RootsColl wideHashSites)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -391,7 +390,15 @@ theorem cellUnseal_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : Sys
 
 /-! ## §10 — THE ANTI-GHOST. -/
 
-theorem cellUnseal_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`cellUnseal_runnable_full_commit_binds_or_collides` — the cellUnseal anti-ghost.** Two wide
+cellUnseal rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) EITHER agree on
+all 12 absorbed state-block columns AND pointwise on the 8 side-table roots, OR exhibit a collision of
+the deployed sponge — at the wide absorb, or at the two root lists.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed sponge
+REFUTES; at deployed parameters it was vacuous. The disjunction is formally weaker and HOLDS of the
+deployed sponge. -/
+theorem cellUnseal_runnable_full_commit_binds_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash cellUnsealVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash cellUnsealVmDescriptorWide e₂ true true)
@@ -400,11 +407,19 @@ theorem cellUnseal_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : P
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (cellUnsealRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (cellUnsealRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-theorem cellUnseal_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`cellUnseal_rejects_root_tamper_or_collides` — side-table anti-ghost for cellUnseal.** Two wide
+cellUnseal rows publishing the same `NEW_COMMIT` whose side-table sub-blocks DIFFER at some index `i`
+exhibit a collision of the deployed sponge: forging a side-table root under a fixed commitment costs a
+sponge collision.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed sponge REFUTES; at
+deployed parameters it was vacuous. This one names the collision instead of assuming it away. -/
+theorem cellUnseal_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash cellUnsealVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash cellUnsealVmDescriptorWide e₂ true true)
@@ -413,8 +428,9 @@ theorem cellUnseal_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (cellUnsealRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (cellUnsealRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §11 — NON-VACUITY. -/
@@ -572,8 +588,8 @@ theorem staleNonceUnsealRow_rejected :
 #assert_axioms cellUnsealDescriptor_full_sound
 #assert_axioms cellUnsealGates_give_cellSpec
 #assert_axioms cellUnseal_runnable_full_sound
-#assert_axioms cellUnseal_runnable_full_commit_binds
-#assert_axioms cellUnseal_rejects_root_tamper
+#assert_axioms cellUnseal_runnable_full_commit_binds_or_collides
+#assert_axioms cellUnseal_rejects_root_tamper_or_collides
 #assert_axioms goodCellUnseal_realizes
 #assert_axioms cellUnseal_clause_not_trivial
 #assert_axioms cellUnseal_clause_rejects_root_drop

@@ -265,8 +265,8 @@ FROZEN, so the full clause is the per-cell `CapCellSpec` (cap_root = `delegateAt
 `postRoots = preRoots`. -/
 
 open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
-  (attenuateVmDescriptorWide CapFullClause cap_runnable_full_sound cap_runnable_binds_full_state
-   IsAttenRow CapRowEncodes)
+  (attenuateVmDescriptorWide CapFullClause cap_runnable_full_sound
+   cap_runnable_binds_full_state_or_collides IsAttenRow CapRowEncodes)
 
 /-- **`delegateAttenVmDescriptorWide`** — the runnable `delegateAtten` FULL-state circuit: definitionally
 the shared cap-graph WIDE descriptor (`attenuateVmDescriptorWide`), 188-wide with `wideHashSites`. The
@@ -291,12 +291,18 @@ theorem delegateAtten_runnable_full_sound (D : Caps → ℤ) (s : RecChainedStat
   cap_runnable_full_sound (delegateAttenCapDigestNew D s args) preRoots hash env pre post postRoots
     hrow henc hroots hgatesat
 
-/-- **`delegateAtten_runnable_binds_full_state` — the whole-17-field anti-ghost for `delegateAtten`.** Two
-wide `delegateAtten` rows publishing the same `NEW_COMMIT` agree on EVERY absorbed state-block column (the
-moved `cap_root` included) AND every side-table root. Inherited from `cap_runnable_binds_full_state`. -/
-theorem delegateAtten_runnable_binds_full_state (capDigestNew : ℤ)
+/-- **`delegateAtten_runnable_binds_full_state_or_collides` — the whole-17-field anti-ghost for
+`delegateAtten`, UNCONDITIONALLY.** Two wide `delegateAtten` rows publishing the same `NEW_COMMIT` EITHER
+agree on EVERY absorbed state-block column (the moved `cap_root` included) AND every side-table root, OR
+exhibit a genuine collision of the deployed sponge — on the state block (`WideColl`) or on the ordered
+root list (`RootsColl`). Inherited from `cap_runnable_binds_full_state_or_collides`.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed BabyBear
+sponge REFUTES, so at deployed parameters it was vacuous. This disjunction is formally weaker and holds
+of the deployed sponge. -/
+theorem delegateAtten_runnable_binds_full_state_or_collides (capDigestNew : ℤ)
     (preRoots : Dregg2.Exec.SystemRoots.SysRoots)
-    (hash : List ℤ → ℤ) (hCR : Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR hash)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : Dregg2.Exec.SystemRoots.SysRoots)
     (hsat₁ : satisfiedVm hash delegateAttenVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash delegateAttenVmDescriptorWide e₂ true true)
@@ -305,14 +311,16 @@ theorem delegateAtten_runnable_binds_full_state (capDigestNew : ℤ)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₂) :
-    Dregg2.Circuit.Emit.EffectVmFullStateRunnable.baseAbsorbedCols e₁
+    (Dregg2.Circuit.Emit.EffectVmFullStateRunnable.baseAbsorbedCols e₁
         = Dregg2.Circuit.Emit.EffectVmFullStateRunnable.baseAbsorbedCols e₂
-    ∧ (∀ i : Fin Dregg2.Exec.SystemRoots.N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  cap_runnable_binds_full_state capDigestNew preRoots hash hCR
+      ∧ (∀ i : Fin Dregg2.Exec.SystemRoots.N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ Dregg2.Circuit.Emit.EffectVmFullStateRunnable.WideColl hash e₁ e₂
+    ∨ Dregg2.Circuit.Emit.EffectVmFullStateRunnable.RootsColl hash sr₁ sr₂ :=
+  cap_runnable_binds_full_state_or_collides capDigestNew preRoots hash
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
 #assert_axioms delegateAtten_runnable_full_sound
-#assert_axioms delegateAtten_runnable_binds_full_state
+#assert_axioms delegateAtten_runnable_binds_full_state_or_collides
 
 /-! ## §5 — Axiom-hygiene tripwires. -/
 

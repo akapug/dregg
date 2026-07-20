@@ -35,13 +35,15 @@ fills them; §RECIPE + the §WORKLIST name which effects need one).
   * **§1 `wideHashSites` + `wideCommit_binds_everything`** — under `Poseidon2SpongeCR hash`, a row
     satisfying the wide hash-sites whose published `state_commit` is fixed has BOTH (a) its 13
     absorbed state-block columns AND (b) its `sysRootsDigestCol` carrier uniquely determined. This is
-    `EffectVmEmitTransferSound.absorbed_determined_by_commit` EXTENDED to the 4th absorbed slot (the
+    `EffectVmEmitTransferSound.absorbed_determined_by_commit_or_collides` EXTENDED to the 4th absorbed slot (the
     `system_roots` digest), proved by peeling the outer Poseidon CR one more position.
 
-  * **§2 `wideCommit_binds_systemRoots`** — chaining (b) with `Exec.SystemRoots.systemRootsDigest_binds_pointwise`:
-    two wide rows publishing the SAME `state_commit`, whose carriers ARE the `systemRootsDigest` of
-    their respective `SysRoots` sub-blocks, agree on EVERY side-table root (escrow / nullifier / …).
-    So the RUNNABLE commitment binds the whole `system_roots` state — the gap is closed.
+  * **§2 `wide_binds_systemRoots_or_collides`** — chaining (b) with the roots-digest peel: two wide
+    rows publishing the SAME `state_commit`, whose carriers ARE the `systemRootsDigest` of their
+    respective `SysRoots` sub-blocks, EITHER agree on EVERY side-table root (escrow / nullifier / …)
+    OR exhibit a genuine sponge collision at the two ordered root lists. So the RUNNABLE commitment
+    binds the whole `system_roots` state — the gap is closed, and without the false injective floor
+    the old version of this leg borrowed from `Exec.SystemRoots`.
 
   * **§3 `RunnableFullStateSpec` + `runnable_full_sound`** — the GENERIC crown jewel. A satisfying wide
     descriptor pins the FULL 17-field declarative post-state (`fullClause`): the per-cell state block
@@ -51,20 +53,40 @@ fills them; §RECIPE + the §WORKLIST name which effects need one).
     per-cell value's `restLimbs`, bound by `CommitmentCrossBind.LeafIsCellCommit`). The per-effect
     DECODE is the only thin obligation (`decodeFull`).
 
-  * **§4 anti-ghost** — tampering ANY absorbed state-block column (`wide_rejects_state_tamper`) OR any
-    `system_roots` root (`wide_rejects_root_tamper`) makes two same-`NEW_COMMIT` rows' bound data
-    DISAGREE — UNSAT. The whole-state tooth bites on all 17.
+  * **§4 anti-ghost** — tampering ANY absorbed state-block column
+    (`wide_rejects_state_tamper_or_collides`) OR any `system_roots` root
+    (`wide_rejects_root_tamper_or_collides`) forces two same-`NEW_COMMIT` rows to EXHIBIT a genuine
+    sponge collision at an extracted pair. The whole-state tooth bites on all 17 — and now names the
+    price a forger pays instead of assuming it away.
 
   * **§5 non-vacuity** — concrete wide rows: an honest one and a forged one (tampered side-table root)
     whose published commitments cannot coincide under CR; positive + negative `#guard`s, no
     `native_decide`.
 
-## The terminal (named, the ONLY acceptable irreducible)
+## The terminal (named — and the carrier is GONE from the keystones)
 
-The sole crypto carrier is `Poseidon2Binding.Poseidon2SpongeCR hash` — the NAMED Poseidon2 sponge
-collision-resistance portal (task #13's discharged carrier, the bridge to the real `babyBearD4W16`
-sponge), never a fresh `axiom`. `Exec.SystemRoots.systemRootsDigest_binds_pointwise` reuses the SAME
-carrier (`compressNInjective = Poseidon2SpongeCR`). Nothing else is assumed.
+⚑ **THE CARRIER WAS FALSE, AND IT HAS BEEN REMOVED.** This file used to fold its whole anti-ghost
+story into ONE named carrier, `Poseidon2Binding.Poseidon2SpongeCR hash` — injectivity of the sponge.
+That is FALSE at the deployed BabyBear parameters: `HashFloorHonesty.poseidon2SpongeCR_false_babyBear`
+proves it by pigeonhole (an infinite `List ℤ` domain into a bounded field). So `wide_binds_everything`,
+`wide_binds_systemRoots`, `runnable_full_commit_binds` and both `wide_rejects_*_tamper` teeth were
+VACUOUSLY TRUE exactly where they were supposed to bind the deployed system, and so were their ~17
+per-tag instantiations. They are DELETED — not kept beside the new forms, which would be the same sin
+in additive dress.
+
+The replacement assumes NOTHING. The GROUP-4 peel and the roots peel are TOTAL FUNCTIONS
+(`Poseidon2Binding.group4Find`, reused rather than re-authored) that either prove the binding or hand
+back the SPECIFIC pair of lists at which the deployed sponge collides. Every keystone below concludes
+`binding ∨ WideColl … ∨ RootsColl …`. As FORMULAS these are weaker; as CONTENT AT DEPLOYED PARAMETERS
+they are strictly stronger, because the deleted premise is unsatisfiable by the real sponge — the old
+theorems said nothing about the deployed system and these hold OF it. The `_of_injective` bridges
+recover each deleted statement as exactly its injective special case, so nothing genuinely proved was
+given up.
+
+NAMED RESIDUAL, untouched and still open: `Exec.SystemRoots.systemRootsDigest_binds_pointwise` carries
+the SAME defect (`compressNInjective = Poseidon2SpongeCR`) one level down, and has consumers across the
+note/delegation emit families. It is NOT in this repair, and this file no longer routes through it —
+the roots leg is discharged here via `systemRootsDigest_eq_hash_rootList` + the same extraction spine.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Imports are read-only.
 -/
@@ -79,10 +101,11 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (site0 site1 site2)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
   (CellState commitOf absorbedCols absorbedCols_eq)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+open Dregg2.Circuit.Poseidon2Binding
+  (Poseidon2SpongeCR SpongeColl group4Find group4Find_spec spongeColl_refutable_of_injective)
 open Dregg2.Exec.SystemRoots
-  (SysRoots systemRootsDigest systemRootsDigest_binds_pointwise emptySystemRoots
-   emptySystemRootsDigest N_SYSTEM_ROOTS)
+  (SysRoots systemRootsDigest emptySystemRoots
+   emptySystemRootsDigest N_SYSTEM_ROOTS rootList)
 
 set_option linter.unusedVariables false
 
@@ -172,65 +195,189 @@ theorem wide_commit_eq (hash : List ℤ → ℤ) (env : VmRowEnv)
   obtain ⟨_, _, _, h3, _⟩ := h
   rw [h3]; rfl
 
-/-- **`wide_binds_everything` — the FULL injective-commitment core (13 cols + the side-table digest).**
-Under `Poseidon2SpongeCR hash`, two wide rows whose published `state_commit`s are EQUAL agree on ALL
-13 absorbed state-block columns AND on the `sysRootsDigestCol` carrier. Proof: `wideCommitOf` is
-`hash` of a 4-list whose 4th element is the side-table digest; CR peels the outer `hash` (the 4-list
-agrees — INCLUDING the digest slot), then CR peels each inner `hash` (the field tuples agree). This is
-`absorbed_determined_by_commit` extended by ONE position. -/
-theorem wide_binds_everything (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-! ### §1½ — the absorbed block decomposition + the EXTRACTION-AS-DATA anti-ghost.
+
+⚑ **WHAT CHANGED AND WHY.** The keystone here used to be `wide_binds_everything`, carrying
+`Poseidon2SpongeCR hash`. That hypothesis is FALSE at the deployed BabyBear parameters
+(`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`: the sponge maps the infinite `List ℤ` into a
+bounded field, so it collides by pigeonhole), so the theorem — and with it every anti-ghost claim in
+this file and its ~17 per-tag instantiations — said NOTHING about the deployed system. It has been
+DELETED, not kept beside the new form.
+
+What replaces it assumes nothing. The GROUP-4 peel is written as a TOTAL FUNCTION
+(`Poseidon2Binding.group4Find`) that either proves the absorbed blocks equal or LANDS on the specific
+pair of lists at which the deployed sponge actually collides, and hands that pair back as DATA.
+Consumers carry `binding ∨ WideColl …` — a disjunction that is TRUE of the deployed sponge, where the
+injective form was empty. -/
+
+/-- The wide commitment's FIRST inner GROUP-4 block: `bal_lo, bal_hi, nonce, fields[0]`. -/
+def wideBlockA (env : VmRowEnv) : List ℤ :=
+  [ env.loc (saCol state.BALANCE_LO), env.loc (saCol state.BALANCE_HI)
+  , env.loc (saCol state.NONCE), env.loc (saCol (state.FIELD_BASE + 0)) ]
+
+/-- The SECOND inner GROUP-4 block: `fields[1..4]`. -/
+def wideBlockB (env : VmRowEnv) : List ℤ :=
+  [ env.loc (saCol (state.FIELD_BASE + 1)), env.loc (saCol (state.FIELD_BASE + 2))
+  , env.loc (saCol (state.FIELD_BASE + 3)), env.loc (saCol (state.FIELD_BASE + 4)) ]
+
+/-- The THIRD inner GROUP-4 block: `fields[5..7], cap_root`. -/
+def wideBlockC (env : VmRowEnv) : List ℤ :=
+  [ env.loc (saCol (state.FIELD_BASE + 5)), env.loc (saCol (state.FIELD_BASE + 6))
+  , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT) ]
+
+/-- The 12 absorbed columns ARE the three GROUP-4 blocks concatenated (definitional — the deployed
+absorption order, not a re-authored mirror). -/
+theorem baseAbsorbedCols_eq_blocks (env : VmRowEnv) :
+    baseAbsorbedCols env = wideBlockA env ++ wideBlockB env ++ wideBlockC env := rfl
+
+/-- **`wideCollFind hash e₁ e₂`** — the pair of lists the GROUP-4 extractor RETURNS on an equivocation
+between two wide rows. Reuses the generic `Poseidon2Binding.group4Find` spine; no parallel copy. -/
+def wideCollFind (hash : List ℤ → ℤ) (e₁ e₂ : VmRowEnv) : List ℤ × List ℤ :=
+  group4Find hash (wideBlockA e₁) (wideBlockB e₁) (wideBlockC e₁) (e₁.loc sysRootsDigestCol)
+                  (wideBlockA e₂) (wideBlockB e₂) (wideBlockC e₂) (e₂.loc sysRootsDigestCol)
+
+/-- **`WideColl hash e₁ e₂`** — the pair the extractor returned is a GENUINE collision of the deployed
+sponge. The named disjunct every cured keystone below carries in place of the deleted floor.
+Deliberately NOT `∃ a collision`, which pigeonhole makes unconditionally true and which would bind
+nothing. -/
+def WideColl (hash : List ℤ → ℤ) (e₁ e₂ : VmRowEnv) : Prop :=
+  SpongeColl hash (wideCollFind hash e₁ e₂)
+
+/-- **⚑ THE FULL COMMITMENT-BINDING CORE — UNCONDITIONAL** (the cured `wide_binds_everything`). Two
+wide rows whose published `state_commit`s are EQUAL EITHER agree on ALL 12 absorbed state-block columns
+AND on the `sysRootsDigestCol` carrier, OR exhibit a genuine collision of the deployed sponge at the
+two lists `wideCollFind` returns.
+
+⚑ **STRENGTH, stated honestly.** The old form concluded a bare conjunction from `Poseidon2SpongeCR
+hash`, which the deployed sponge REFUTES; at deployed parameters it was vacuous. This one is a
+disjunction — formally weaker, but it HOLDS of the deployed sponge, which the old one did not. Nothing
+that was genuinely proved has been given up (`wide_binds_everything_of_injective` recovers the old
+statement as exactly the injective special case). -/
+theorem wide_binds_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv)
     (hs₁ : siteHoldsAll hash e₁ wideHashSites)
     (hs₂ : siteHoldsAll hash e₂ wideHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ e₁.loc sysRootsDigestCol = e₂.loc sysRootsDigestCol := by
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂
+      ∧ e₁.loc sysRootsDigestCol = e₂.loc sysRootsDigestCol)
+    ∨ WideColl hash e₁ e₂ := by
   rw [wide_commit_eq hash e₁ hs₁, wide_commit_eq hash e₂ hs₂] at hcommit
   unfold wideCommitOf at hcommit
-  -- CR on the outer hash: the 4-element list agrees (4th element = the side-table digest).
-  have houter := hCR _ _ hcommit
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
-  obtain ⟨hA, hB, hC, hDig, _⟩ := houter
-  -- CR on each inner hash: the field tuples agree.
-  have hA' := hCR _ _ hA
-  have hB' := hCR _ _ hB
-  have hC' := hCR _ _ hC
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at hA' hB' hC'
-  obtain ⟨e_bLo, e_bHi, e_n, e_f0, _⟩ := hA'
-  obtain ⟨e_f1, e_f2, e_f3, e_f4, _⟩ := hB'
-  obtain ⟨e_f5, e_f6, e_f7, e_cap, _⟩ := hC'
-  refine ⟨?_, hDig⟩
-  unfold baseAbsorbedCols
-  rw [e_bLo, e_bHi, e_n, e_f0, e_f1, e_f2, e_f3, e_f4, e_f5, e_f6, e_f7, e_cap]
+  rcases group4Find_spec hash (wideBlockA e₁) (wideBlockB e₁) (wideBlockC e₁)
+      (e₁.loc sysRootsDigestCol) (wideBlockA e₂) (wideBlockB e₂) (wideBlockC e₂)
+      (e₂.loc sysRootsDigestCol) hcommit with ⟨hA, hB, hC, hd⟩ | hcoll
+  · refine Or.inl ⟨?_, hd⟩
+    rw [baseAbsorbedCols_eq_blocks, baseAbsorbedCols_eq_blocks, hA, hB, hC]
+  · exact Or.inr hcoll
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** The deleted `wide_binds_everything` is EXACTLY the injective
+special case: assume the injectivity the old carrier asserted and the collision disjunct is impossible,
+so the conjunction falls straight out. Stated as a standalone bridge, deliberately NOT as a hypothesis
+on any deployed keystone — `Poseidon2SpongeCR` is FALSE at deployed BabyBear parameters, so a keystone
+carrying it would be right back where this repair started. -/
+theorem wide_binds_everything_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv)
+    (hs₁ : siteHoldsAll hash e₁ wideHashSites)
+    (hs₂ : siteHoldsAll hash e₂ wideHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂
+      ∧ e₁.loc sysRootsDigestCol = e₂.loc sysRootsDigestCol := by
+  rcases wide_binds_or_collides hash e₁ e₂ hs₁ hs₂ hcommit with hEq | hcoll
+  · exact hEq
+  · exact absurd hcoll (spongeColl_refutable_of_injective hash hCR _)
+
+/-- **(CANARY — the collision disjunct is REFUTABLE.)** At an injective sponge the extractor's returned
+pair is NOT a collision, so `wide_binds_or_collides` cannot discharge itself by taking the right
+branch: the binding has to do the work. -/
+theorem wideColl_refutable_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv) : ¬ WideColl hash e₁ e₂ :=
+  spongeColl_refutable_of_injective hash hCR _
+
+/-- **⚑ THE COLLISION BRANCH IS UNREACHABLE ON A REFLEXIVE INSTANCE — AT ANY SPONGE.** A collision
+needs DISTINCT inputs, and the extractor fed a row against ITSELF returns a pair of identical lists.
+So `wide_binds_or_collides` applied at `e₁ = e₂` MUST land in the binding branch, with NO injectivity
+hypothesis anywhere.
+
+This is what lets a non-vacuity witness for the cured keystones be discharged HONESTLY. The previous
+audit witness (`Verify.KeystoneAuditSystemRoots`) had to satisfy `Poseidon2SpongeCR` and did so with
+the toy `encodeSponge` — precisely the "FALSE COMFORT" `HashFloorHonesty`'s header calls out, since
+that sponge injects into ALL of `ℤ` while the real compressing Poseidon2 refutes the floor. No toy
+sponge is needed now. -/
+theorem wideColl_irrefl (hash : List ℤ → ℤ) (e : VmRowEnv) : ¬ WideColl hash e e := by
+  rintro ⟨hne, _⟩
+  exact hne (by simp [wideCollFind, group4Find])
 
 /-! ## §2 — the `system_roots` sub-block bound BY the RUNNABLE commitment.
 
-Chaining §1's carrier-binding with `Exec.SystemRoots.systemRootsDigest_binds_pointwise` (the SAME
-Poseidon CR carrier): when each wide row's `sysRootsDigestCol` IS the `systemRootsDigest` of a
+Chaining §1's carrier-binding with the roots-digest peel (`systemRootsDigest_eq_hash_rootList` + the
+SAME extraction spine — deliberately NOT `Exec.SystemRoots.systemRootsDigest_binds_pointwise`, which
+still carries the refuted `compressNInjective` floor and is out of this repair's scope): when each wide row's `sysRootsDigestCol` IS the `systemRootsDigest` of a
 `SysRoots` sub-block, two rows publishing the same `state_commit` agree on every side-table root. So
 the RUNNABLE descriptor — the circuit the prover runs — binds the whole side-table state, not a
 record-layer commitment off to the side. -/
 
-/-- **`wide_binds_systemRoots` (the gap closed).** Two wide rows publishing the SAME
+/-- The `system_roots` digest is ONE sponge application over the ordered root list (`listDigest` under
+the identity leaf encoder). Definitional — the deployed absorption, unfolded so the same extraction
+spine applies to the roots leg. -/
+theorem systemRootsDigest_eq_hash_rootList (hash : List ℤ → ℤ) (sr : SysRoots) :
+    systemRootsDigest hash sr = hash (rootList sr) := by
+  simp [systemRootsDigest, Dregg2.Circuit.ListCommit.listDigest]
+
+/-- **`RootsColl hash sr₁ sr₂`** — the two ordered root lists are a GENUINE collision of the deployed
+sponge. The roots leg's named disjunct: the `system_roots` digest is a compressing sponge exactly like
+the state block, so it earns the same honest treatment rather than riding an injectivity floor. -/
+def RootsColl (hash : List ℤ → ℤ) (sr₁ sr₂ : SysRoots) : Prop :=
+  SpongeColl hash (rootList sr₁, rootList sr₂)
+
+/-- **⚑ The same for the roots leg**: the roots extractor fed a sub-block against itself cannot have
+returned a genuine collision. Sponge-agnostic. -/
+theorem rootsColl_irrefl (hash : List ℤ → ℤ) (sr : SysRoots) : ¬ RootsColl hash sr sr := by
+  rintro ⟨hne, _⟩
+  exact hne rfl
+
+/-- **`wide_binds_systemRoots_or_collides` (the gap closed, UNCONDITIONALLY).** Two wide rows publishing the SAME
 `state_commit`, whose `sysRootsDigestCol` carriers ARE the `systemRootsDigest` of their respective
 `SysRoots` sub-blocks `sr₁`/`sr₂`, agree on EVERY side-table root (pointwise on the 8-index
 sub-block). The chain: equal commitment ⇒ equal carrier (`wide_binds_everything`) ⇒ equal digest ⇒
-equal roots pointwise (`systemRootsDigest_binds_pointwise`). Tampering ONLY a side-table root (a
+equal roots pointwise, or a named collision. Tampering ONLY a side-table root (a
 dropped escrow, an omitted nullifier) provably MOVES `state_commit` ⇒ UNSAT against the published
 `NEW_COMMIT`. -/
-theorem wide_binds_systemRoots (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+theorem wide_binds_systemRoots_or_collides (hash : List ℤ → ℤ)
+    (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
+    (hs₁ : siteHoldsAll hash e₁ wideHashSites)
+    (hs₂ : siteHoldsAll hash e₂ wideHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT))
+    (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
+    (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
+    (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i)
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ := by
+  rcases wide_binds_or_collides hash e₁ e₂ hs₁ hs₂ hcommit with ⟨_, hcarrier⟩ | hcoll
+  · have hdig : hash (rootList sr₁) = hash (rootList sr₂) := by
+      rw [← systemRootsDigest_eq_hash_rootList hash sr₁,
+        ← systemRootsDigest_eq_hash_rootList hash sr₂, ← hd₁, ← hd₂]
+      exact hcarrier
+    by_cases hne : rootList sr₁ = rootList sr₂
+    · refine Or.inl (fun i => ?_)
+      have hfn : sr₁ = sr₂ := List.ofFn_inj.mp hne
+      rw [hfn]
+    · exact Or.inr (Or.inr ⟨hne, hdig⟩)
+  · exact Or.inr (Or.inl hcoll)
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH for the roots leg.** The deleted `wide_binds_systemRoots` is exactly
+the injective special case. -/
+theorem wide_binds_systemRoots_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hs₁ : siteHoldsAll hash e₁ wideHashSites)
     (hs₂ : siteHoldsAll hash e₂ wideHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT))
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (i : Fin N_SYSTEM_ROOTS) :
-    sr₁ i = sr₂ i := by
-  have hcarrier : e₁.loc sysRootsDigestCol = e₂.loc sysRootsDigestCol :=
-    (wide_binds_everything hash hCR e₁ e₂ hs₁ hs₂ hcommit).2
-  have hdig : systemRootsDigest hash sr₁ = systemRootsDigest hash sr₂ := by
-    rw [← hd₁, ← hd₂]; exact hcarrier
-  exact systemRootsDigest_binds_pointwise hash hCR sr₁ sr₂ hdig i
+    (i : Fin N_SYSTEM_ROOTS) : sr₁ i = sr₂ i := by
+  rcases wide_binds_systemRoots_or_collides hash e₁ e₂ sr₁ sr₂ hs₁ hs₂ hcommit hd₁ hd₂ with
+    hEq | hcoll | hrcoll
+  · exact hEq i
+  · exact absurd hcoll (wideColl_refutable_of_injective hash hCR e₁ e₂)
+  · exact absurd hrcoll (spongeColl_refutable_of_injective hash hCR _)
 
 /-! ## §3 — the GENERIC FULL-STATE-ON-RUNNABLE crown jewel.
 
@@ -300,7 +447,34 @@ satisfying the effect's wide descriptor that publish the SAME `NEW_COMMIT`, and 
 side-table root. So a prover CANNOT keep `NEW_COMMIT` while tampering ANY of the 17 fields' bound
 content — the runnable descriptor binds the whole post-state, not a projection. (Requires the decode's
 `NEW_COMMIT = after-state_commit` link, supplied as `hpin₁`/`hpin₂`.) -/
-theorem runnable_full_commit_binds {St : Type} (E : RunnableFullStateSpec St)
+theorem runnable_full_commit_binds_or_collides {St : Type} (E : RunnableFullStateSpec St)
+    (hash : List ℤ → ℤ)
+    (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
+    (hsat₁ : satisfiedVm hash E.descriptor e₁ true true)
+    (hsat₂ : satisfiedVm hash E.descriptor e₂ true true)
+    (hpin₁ : e₁.loc (saCol state.STATE_COMMIT) = e₁.pub pi.NEW_COMMIT)
+    (hpin₂ : e₂.loc (saCol state.STATE_COMMIT) = e₂.pub pi.NEW_COMMIT)
+    (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
+    (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
+    (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ := by
+  have hs₁ : siteHoldsAll hash e₁ wideHashSites := E.usesWideSites ▸ hsat₁.2.1
+  have hs₂ : siteHoldsAll hash e₂ wideHashSites := E.usesWideSites ▸ hsat₂.2.1
+  have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
+    rw [hpin₁, hpin₂, hpub]
+  rcases wide_binds_or_collides hash e₁ e₂ hs₁ hs₂ hcommit with ⟨hcols, _⟩ | hcoll
+  · rcases wide_binds_systemRoots_or_collides hash e₁ e₂ sr₁ sr₂ hs₁ hs₂ hcommit hd₁ hd₂ with
+      hroots | hc | hrc
+    · exact Or.inl ⟨hcols, hroots⟩
+    · exact Or.inr (Or.inl hc)
+    · exact Or.inr (Or.inr hrc)
+  · exact Or.inr (Or.inl hcoll)
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH for the generic anti-ghost.** The deleted `runnable_full_commit_binds`
+is EXACTLY the injective special case of the cured keystone. Standalone bridge, NOT a hypothesis on any
+deployed instantiation. -/
+theorem runnable_full_commit_binds_of_injective {St : Type} (E : RunnableFullStateSpec St)
     (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash E.descriptor e₁ true true)
@@ -311,12 +485,11 @@ theorem runnable_full_commit_binds {St : Type} (E : RunnableFullStateSpec St)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
     baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) := by
-  have hs₁ : siteHoldsAll hash e₁ wideHashSites := E.usesWideSites ▸ hsat₁.2.1
-  have hs₂ : siteHoldsAll hash e₂ wideHashSites := E.usesWideSites ▸ hsat₂.2.1
-  have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
-    rw [hpin₁, hpin₂, hpub]
-  refine ⟨(wide_binds_everything hash hCR e₁ e₂ hs₁ hs₂ hcommit).1, fun i => ?_⟩
-  exact wide_binds_systemRoots hash hCR e₁ e₂ sr₁ sr₂ hs₁ hs₂ hcommit hd₁ hd₂ i
+  rcases runnable_full_commit_binds_or_collides E hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub
+    hd₁ hd₂ with hEq | hcoll | hrcoll
+  · exact hEq
+  · exact absurd hcoll (wideColl_refutable_of_injective hash hCR e₁ e₂)
+  · exact absurd hrcoll (spongeColl_refutable_of_injective hash hCR _)
 
 /-! ## §3½ — THE VALIDATED REFERENCE INSTANCE (transfer): `decodeFull` is REAL, `fullClause` non-vacuous.
 
@@ -450,8 +623,8 @@ AND the side-table roots (escrow/nullifier/… tamper). -/
 `NEW_COMMIT` but whose absorbed state-block columns DIFFER cannot both satisfy (the commitment would
 force them equal). A forged balance / tampered field / forged cap-root that still claims the published
 commitment is UNSAT. -/
-theorem wide_rejects_state_tamper {St : Type} (E : RunnableFullStateSpec St)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+theorem wide_rejects_state_tamper_or_collides {St : Type} (E : RunnableFullStateSpec St)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash E.descriptor e₁ true true)
     (hsat₂ : satisfiedVm hash E.descriptor e₂ true true)
@@ -460,15 +633,20 @@ theorem wide_rejects_state_tamper {St : Type} (E : RunnableFullStateSpec St)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
-  htamper (runnable_full_commit_binds E hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂).1
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ := by
+  rcases runnable_full_commit_binds_or_collides E hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub
+    hd₁ hd₂ with ⟨hcols, _⟩ | hcoll | hrcoll
+  · exact absurd hcols htamper
+  · exact Or.inl hcoll
+  · exact Or.inr hrcoll
 
 /-- **`wide_rejects_root_tamper` — side-table anti-ghost (the gap's headline tooth).** Two wide rows
 that publish the same `NEW_COMMIT` (with `systemRootsDigest` carriers) but whose side-table sub-blocks
 DIFFER at some index `i` (a dropped escrow, an omitted nullifier, a reordered queue) cannot both
 satisfy. The side-table state is now bound BY the runnable commitment — the Class-C disease cured. -/
-theorem wide_rejects_root_tamper {St : Type} (E : RunnableFullStateSpec St)
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+theorem wide_rejects_root_tamper_or_collides {St : Type} (E : RunnableFullStateSpec St)
+    (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash E.descriptor e₁ true true)
     (hsat₂ : satisfiedVm hash E.descriptor e₂ true true)
@@ -477,8 +655,13 @@ theorem wide_rejects_root_tamper {St : Type} (E : RunnableFullStateSpec St)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  htamper ((runnable_full_commit_binds E hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂).2 i)
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ := by
+  rcases runnable_full_commit_binds_or_collides E hash e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub
+    hd₁ hd₂ with ⟨_, hroots⟩ | hcoll | hrcoll
+  · exact absurd (hroots i) htamper
+  · exact Or.inl hcoll
+  · exact Or.inr hrcoll
 
 /-! ## §5 — NON-VACUITY: a concrete wide row + a side-table-root forgery the commitment forbids.
 
@@ -586,12 +769,20 @@ through this generic `RunnableFullStateSpec`).
 ## §8 — axiom-hygiene tripwires (⊆ {propext, Classical.choice, Quot.sound}). -/
 
 #assert_axioms wide_commit_eq
-#assert_axioms wide_binds_everything
-#assert_axioms wide_binds_systemRoots
+#assert_axioms baseAbsorbedCols_eq_blocks
+#assert_axioms wide_binds_or_collides
+#assert_axioms wide_binds_everything_of_injective
+#assert_axioms wideColl_refutable_of_injective
+#assert_axioms wideColl_irrefl
+#assert_axioms rootsColl_irrefl
+#assert_axioms systemRootsDigest_eq_hash_rootList
+#assert_axioms wide_binds_systemRoots_or_collides
+#assert_axioms wide_binds_systemRoots_of_injective
 #assert_axioms runnable_full_sound
-#assert_axioms runnable_full_commit_binds
-#assert_axioms wide_rejects_state_tamper
-#assert_axioms wide_rejects_root_tamper
+#assert_axioms runnable_full_commit_binds_or_collides
+#assert_axioms runnable_full_commit_binds_of_injective
+#assert_axioms wide_rejects_state_tamper_or_collides
+#assert_axioms wide_rejects_root_tamper_or_collides
 #assert_axioms transferGates_give_cellSpec
 #assert_axioms goodTransfer_realizes
 #assert_axioms transferReference_clause_not_trivial

@@ -17,7 +17,9 @@ block), so a `cap_root` tamper is anti-ghosted too; the cap-graph MEMBERSHIP sta
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The anti-ghost theorems carry NO
+collision-resistance hypothesis: they conclude a disjunction naming the sponge collision they
+would otherwise assume away.
 `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitSetPermissions
@@ -33,9 +35,8 @@ open Dregg2.Circuit.Emit.EffectVmEmitSetPermissions
   (SEL_SET_PERMS IsSetPermsRow SetPermsRowCanon setPermsRowGates setPermsVmDescriptor
    RowEncodesPerms PermCellSpec setPermsVm_faithful intent_to_permCellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
-   wideHashSites)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds_or_collides
+   wide_rejects_root_tamper_or_collides WideColl RootsColl wideHashSites)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -112,7 +113,15 @@ theorem setPermissions_runnable_full_sound (hash : List ℤ → ℤ) (preRoots :
 
 /-! ## §5 — THE ANTI-GHOST. -/
 
-theorem setPermissions_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`setPermissions_runnable_full_commit_binds_or_collides` — the setPermissions anti-ghost.** Two
+wide setPermissions rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) EITHER
+agree on all 12 absorbed state-block columns AND pointwise on the 8 side-table roots, OR exhibit a
+collision of the deployed sponge — at the wide absorb, or at the two root lists.
+
+The old form concluded the bare conjunction from `Poseidon2SpongeCR hash`, which the deployed sponge
+REFUTES; at deployed parameters it was vacuous. The disjunction is formally weaker and HOLDS of the
+deployed sponge. -/
+theorem setPermissions_runnable_full_commit_binds_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash setPermsVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash setPermsVmDescriptorWide e₂ true true)
@@ -121,11 +130,19 @@ theorem setPermissions_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (setPermsRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (setPermsRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-theorem setPermissions_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`setPermissions_rejects_root_tamper_or_collides` — side-table anti-ghost for setPermissions.**
+Two wide setPermissions rows publishing the same `NEW_COMMIT` whose side-table sub-blocks DIFFER at
+some index `i` exhibit a collision of the deployed sponge: forging a side-table root under a fixed
+commitment costs a sponge collision.
+
+The old form concluded `False` from `Poseidon2SpongeCR hash`, which the deployed sponge REFUTES; at
+deployed parameters it was vacuous. This one names the collision instead of assuming it away. -/
+theorem setPermissions_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash setPermsVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash setPermsVmDescriptorWide e₂ true true)
@@ -134,8 +151,9 @@ theorem setPermissions_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Pose
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (setPermsRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (setPermsRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §6 — NON-VACUITY. -/
@@ -174,8 +192,8 @@ theorem setPerms_clause_rejects_root_drop :
 
 #assert_axioms setPermsGates_give_cellSpec
 #assert_axioms setPermissions_runnable_full_sound
-#assert_axioms setPermissions_runnable_full_commit_binds
-#assert_axioms setPermissions_rejects_root_tamper
+#assert_axioms setPermissions_runnable_full_commit_binds_or_collides
+#assert_axioms setPermissions_rejects_root_tamper_or_collides
 #assert_axioms goodSetPerms_realizes
 #assert_axioms setPerms_clause_not_trivial
 #assert_axioms setPerms_clause_rejects_root_drop

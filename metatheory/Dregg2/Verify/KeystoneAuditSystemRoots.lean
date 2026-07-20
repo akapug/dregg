@@ -5,16 +5,26 @@
 The keystone `Dregg2.Circuit.CommitmentCrossBind.runnable_binds_same_system_roots` says: two rows of
 the WIDE runnable EffectVm descriptor that publish the SAME `state_commit`, whose `sysRootsDigestCol`
 carriers ARE the `systemRootsDigest` of their `system_roots` sub-blocks, agree on EVERY side-table
-root. It carries the named crypto floor `Poseidon2Binding.Poseidon2SpongeCR hash` and the wide
-hash-site hypothesis `siteHoldsAll hash e wideHashSites`.
+root — OR exhibits a genuine sponge collision at a pair a total extractor returns. It carries the wide
+hash-site hypothesis `siteHoldsAll hash e wideHashSites` and, since the vacuity repair, NO crypto floor
+at all.
 
-The non-vacuity question this module answers is the SHARP one: is `siteHoldsAll hash e wideHashSites`
-JOINTLY satisfiable on a CONCRETE row (together with the carrier/commit hypotheses), under a CONCRETE
-collision-resistant `hash`? It is. We supply:
+⚑ **WHAT THIS AUDIT USED TO CERTIFY, AND WHY THAT WAS HOLLOW.** The keystone previously carried
+`Poseidon2Binding.Poseidon2SpongeCR hash`, and this module discharged it with
+`FloorsNonVacuous.encodeSponge_cr` — a TOY sponge that injects into ALL of `ℤ` via `Encodable.encode`.
+`HashFloorHonesty`'s own header names exactly that witness as **FALSE COMFORT**: the floor is
+satisfiable by the toy and REFUTED by the real compressing Poseidon2
+(`poseidon2SpongeCR_false_babyBear`). So the CI gate was certifying "non-vacuous" using the one
+instance that cannot arise in deployment — an audit that passes precisely because it does not look at
+the deployed sponge.
 
-  * `hash := FloorsNonVacuous.encodeSponge` (the proven-CR injective `Encodable.encode`-cast sponge,
-    `encodeSponge_cr : Poseidon2SpongeCR encodeSponge`), so the named crypto floor is REALIZED — this
-    keystone is WELDABLE, not terminal; and
+That is fixed at the root: the keystone no longer has a floor to realize, so this audit no longer
+needs a sponge that satisfies one. The non-vacuity question reduces to the SHARP one it should always
+have been: is `siteHoldsAll hash e wideHashSites` JOINTLY satisfiable on a CONCRETE row (with the
+carrier/commit hypotheses)? It is. We supply:
+
+  * `hash := FloorsNonVacuous.encodeSponge` — kept ONLY as a concrete computable sponge to build a row
+    against, NOT to discharge any collision-resistance claim. Nothing below uses `encodeSponge_cr`; and
   * a CONCRETE WIDE row `witnessRow sr` whose four GROUP-4 digest output columns (`STATE_INTER1/2/3` and
     `saCol STATE_COMMIT`) carry, BY CONSTRUCTION, the genuine `encodeSponge` of their resolved inputs,
     and whose `sysRootsDigestCol` carrier IS `systemRootsDigest encodeSponge sr`. So
@@ -23,7 +33,11 @@ collision-resistant `hash`? It is. We supply:
 
   [1] NON-VACUITY (`*_satisfiable`): take `e₁ = e₂ = witnessRow sr₀`, `sr₁ = sr₂ = sr₀`. The wide-site,
       carrier, and equal-commit hypotheses are DISCHARGED on the concrete row (not assumed), so the
-      keystone FIRES its conclusion `sr₀ i = sr₀ i` on a genuinely satisfying instance — non-vacuous.
+      keystone FIRES on a genuinely satisfying instance — non-vacuous. And it fires into the BINDING
+      branch, not out through the collision escape: `wideColl_irrefl` / `rootsColl_irrefl` show a
+      reflexive instance can never have yielded a genuine collision (a collision needs DISTINCT
+      inputs), AT ANY SPONGE and with no injectivity hypothesis. So the disjunction is not discharging
+      itself for free here.
   [2] TEETH (`*_teeth`): a hostile `SysRoots` pair differing at index 0 (`0 ≠ 1`) REFUTES the
       conclusion `sr₁ 0 = sr₂ 0` by `decide` — the keystone's conclusion is two-valued, not `:= True`.
 
@@ -39,8 +53,9 @@ open Dregg2.Verify.KeystoneLint
 namespace Dregg2.Verify.KeystoneAuditSystemRoots
 
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmFullStateRunnable (wideHashSites)
-open Dregg2.Circuit.FloorsNonVacuous (encodeSponge encodeSponge_cr)
+open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
+  (wideHashSites WideColl RootsColl wideColl_irrefl rootsColl_irrefl)
+open Dregg2.Circuit.FloorsNonVacuous (encodeSponge)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -103,42 +118,51 @@ theorem witnessRow_holds_wideSites (sr : SysRoots) :
 /-- The non-vacuity reference sub-block (any concrete `SysRoots` works; the empty one is canonical). -/
 def sr₀ : SysRoots := emptySystemRoots
 
-/-- **`runnable_binds_same_system_roots_satisfiable`.** The keystone's hypotheses are JOINTLY satisfied
-on a CONCRETE instance: `hash := encodeSponge` (CR via `encodeSponge_cr`), `e₁ = e₂ = witnessRow sr₀`
-(wide sites discharged via `witnessRow_holds_wideSites`, equal-commit by `rfl`, carriers via
-`witnessRow_carrier`), `sr₁ = sr₂ = sr₀`. So the keystone FIRES its conclusion `sr₀ i = sr₀ i` on a
-genuinely satisfying instance — the carried `siteHoldsAll`/`Poseidon2SpongeCR`/carrier hypotheses are
-not secretly unsatisfiable. The statement reproduces the keystone's conclusion at the witness. -/
-theorem runnable_binds_same_system_roots_satisfiable (i : Fin N_SYSTEM_ROOTS) :
-    sr₀ i = sr₀ i :=
-  Dregg2.Circuit.CommitmentCrossBind.runnable_binds_same_system_roots
-    encodeSponge encodeSponge_cr (witnessRow sr₀) (witnessRow sr₀) sr₀ sr₀
-    (witnessRow_holds_wideSites sr₀) (witnessRow_holds_wideSites sr₀)
-    rfl (witnessRow_carrier sr₀) (witnessRow_carrier sr₀) i
+/-- **`runnable_binds_same_system_roots_or_collides_satisfiable`.** The keystone's hypotheses are
+JOINTLY satisfied on a CONCRETE instance: `hash := encodeSponge`, `e₁ = e₂ = witnessRow sr₀` (wide
+sites discharged via `witnessRow_holds_wideSites`, equal-commit by `rfl`, carriers via
+`witnessRow_carrier`), `sr₁ = sr₂ = sr₀`. So the keystone FIRES its conclusion on a genuinely
+satisfying instance — the carried `siteHoldsAll`/carrier hypotheses are not secretly unsatisfiable.
+
+⚑ **AND IT FIRES INTO THE BINDING BRANCH.** The conclusion is now a disjunction, so "it fired" would be
+worth nothing if the collision escape were available: the statement below would hold for free. It is
+not available. `wideColl_irrefl`/`rootsColl_irrefl` refute BOTH collision disjuncts at this reflexive
+instance, unconditionally and at any sponge — so the `∀ i, sr₀ i = sr₀ i` we extract is genuinely the
+binding half of the keystone doing the work. Note what is NOT used anywhere here: `encodeSponge_cr`.
+The audit no longer leans on a toy injective sponge to certify anything. -/
+theorem runnable_binds_same_system_roots_or_collides_satisfiable (i : Fin N_SYSTEM_ROOTS) :
+    sr₀ i = sr₀ i := by
+  rcases Dregg2.Circuit.CommitmentCrossBind.runnable_binds_same_system_roots_or_collides
+      encodeSponge (witnessRow sr₀) (witnessRow sr₀) sr₀ sr₀
+      (witnessRow_holds_wideSites sr₀) (witnessRow_holds_wideSites sr₀)
+      rfl (witnessRow_carrier sr₀) (witnessRow_carrier sr₀) with hbind | hw | hr
+  · exact hbind i
+  · exact absurd hw (wideColl_irrefl encodeSponge (witnessRow sr₀))
+  · exact absurd hr (rootsColl_irrefl encodeSponge sr₀)
 
 /-! ## §3 — TEETH: the conclusion DISCRIMINATES (a hostile `SysRoots` pair refutes it). -/
 
 /-- A hostile pair: `srHi` differs from `srLo := sr₀` (all `0`) at index `0` (value `1`). -/
 def srHi : SysRoots := fun j => if j = (⟨0, by decide⟩ : Fin N_SYSTEM_ROOTS) then 1 else 0
 
-/-- **`runnable_binds_same_system_roots_teeth`.** On the hostile `SysRoots` pair `(sr₀, srHi)` that
+/-- **`runnable_binds_same_system_roots_or_collides_teeth`.** On the hostile `SysRoots` pair `(sr₀, srHi)` that
 differs at index `0` (`0 ≠ 1`), the keystone's conclusion `sr₀ 0 = srHi 0` is FALSE. So the conclusion
 `sr₁ i = sr₂ i` is two-valued — proving the keystone CONSTRAINS the side-table roots, it is not
 `:= True`. (The teeth need not satisfy the keystone's hypotheses; it refutes the conclusion on a
 hostile instance, the discrimination half of the audit.) -/
-theorem runnable_binds_same_system_roots_teeth :
+theorem runnable_binds_same_system_roots_or_collides_teeth :
     ¬ (sr₀ (⟨0, by decide⟩ : Fin N_SYSTEM_ROOTS) = srHi (⟨0, by decide⟩ : Fin N_SYSTEM_ROOTS)) := by
   decide
 
 /-! ## §4 — TAG the keystone with its companions + RUN the audit (the CI gate). -/
 
 @[load_bearing_keystone
-    satisfiable := Dregg2.Verify.KeystoneAuditSystemRoots.runnable_binds_same_system_roots_satisfiable
-    teeth := Dregg2.Verify.KeystoneAuditSystemRoots.runnable_binds_same_system_roots_teeth]
-def runnable_binds_same_system_roots_KS :=
-  @Dregg2.Circuit.CommitmentCrossBind.runnable_binds_same_system_roots
+    satisfiable := Dregg2.Verify.KeystoneAuditSystemRoots.runnable_binds_same_system_roots_or_collides_satisfiable
+    teeth := Dregg2.Verify.KeystoneAuditSystemRoots.runnable_binds_same_system_roots_or_collides_teeth]
+def runnable_binds_same_system_roots_or_collides_KS :=
+  @Dregg2.Circuit.CommitmentCrossBind.runnable_binds_same_system_roots_or_collides
 
-#keystone_audit Dregg2.Verify.KeystoneAuditSystemRoots.runnable_binds_same_system_roots_KS
+#keystone_audit Dregg2.Verify.KeystoneAuditSystemRoots.runnable_binds_same_system_roots_or_collides_KS
 
 #keystone_audit_tagged
 
@@ -146,8 +170,8 @@ def runnable_binds_same_system_roots_KS :=
 
 #assert_axioms witnessRow_carrier
 #assert_axioms witnessRow_holds_wideSites
-#assert_axioms runnable_binds_same_system_roots_satisfiable
-#assert_axioms runnable_binds_same_system_roots_teeth
-#assert_axioms runnable_binds_same_system_roots_KS
+#assert_axioms runnable_binds_same_system_roots_or_collides_satisfiable
+#assert_axioms runnable_binds_same_system_roots_or_collides_teeth
+#assert_axioms runnable_binds_same_system_roots_or_collides_KS
 
 end Dregg2.Verify.KeystoneAuditSystemRoots

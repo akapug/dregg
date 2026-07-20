@@ -517,7 +517,7 @@ theorem integrity_guarantee_whole_turn_covered
 #assert_axioms Dregg2.Circuit.Argus.Receipt.argus_circuit_executor_receipts_agree
 #assert_axioms Dregg2.Circuit.Argus.Receipt.transfer_commits_to_one_receipt
 #assert_axioms Dregg2.Circuit.Argus.Receipt.writeCell0_receipt_binds_tail
-#assert_axioms Dregg2.Circuit.CommitmentCrossBind.runnable_binds_same_system_roots
+#assert_axioms Dregg2.Circuit.CommitmentCrossBind.runnable_binds_same_system_roots_or_collides
 #assert_axioms Dregg2.Circuit.CommitmentCrossBind.stateCommit_binds_cells_and_rest
 #assert_axioms Dregg2.Circuit.CommitmentCrossBind.setFieldCommit_binds_cellCommit
 #assert_axioms Dregg2.Circuit.CommitmentCrossBind.chC_bad_not_bridge

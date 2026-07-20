@@ -12,7 +12,8 @@ FULL 17-field declarative post-state — the per-cell block (`CellIncNonceSpec`)
 side-table roots FROZEN (`postRoots = preRoots`). incrementNonce touches NO side-table, so its
 `system_roots` sub-block is frozen; the magnesium win is that the WIDE commitment now BINDS all 8 roots,
 so a prover CANNOT tamper any side-table root (a dropped escrow, an omitted nullifier, …) while keeping
-the published `NEW_COMMIT` — the anti-ghost tooth (`runnable_full_commit_binds`) bites on all 17.
+the published `NEW_COMMIT` without EXHIBITING a collision of the deployed sponge — the anti-ghost tooth
+(`runnable_full_commit_binds_or_collides`) bites on all 17.
 
 This is the §RECIPE of `EffectVmFullStateRunnable` applied to incrementNonce: (1) the wide descriptor
 (`traceWidth := EFFECT_VM_WIDTH_SYSROOTS`, `hashSites := wideHashSites`, constraint list UNCHANGED so
@@ -24,9 +25,11 @@ theorem; per-effect is just the decode.
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem; Poseidon2 CR enters ONLY
-through the generic `runnable_full_sound`/`runnable_full_commit_binds` (the named `Poseidon2SpongeCR`
-portal). `fullClause` is NON-VACUOUS (the genuine per-cell
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. NO collision-resistance
+hypothesis enters anywhere: the anti-ghost theorems are the UNCONDITIONAL `_or_collides` forms, whose
+alternative branch hands back a specific colliding pair (`WideColl`/`RootsColl`). The former
+`Poseidon2SpongeCR`-carrying forms were vacuous at deployed BabyBear parameters — the deployed
+compressing sponge REFUTES that hypothesis. `fullClause` is NON-VACUOUS (the genuine per-cell
 nonce-tick + the frozen 8-root sub-block, refutable on a forged post). Imports are read-only; this file
 owns only its own declarations.
 -/
@@ -44,9 +47,9 @@ open Dregg2.Circuit.Emit.EffectVmEmitIncrementNonce
    incNonceHashSites RowEncodesIncNonce CellIncNonceSpec incNonceVm_faithful intent_to_cellSpec
    goodIncNonceRow goodIncNonceRow_noop goodIncNonceRow_realizes_intent)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound WideColl RootsColl
+   runnable_full_commit_binds_or_collides wide_rejects_root_tamper_or_collides
    wideHashSites)
-open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
 set_option linter.unusedVariables false
@@ -151,11 +154,18 @@ theorem incrementNonce_runnable_full_sound (hash : List ℤ → ℤ) (preRoots :
 
 /-! ## §5 — THE ANTI-GHOST: tamper ANY of the 17 fields ⇒ UNSAT (incl. any side-table root). -/
 
-/-- **`incrementNonce_runnable_full_commit_binds` — whole-state binding over the WIDE commitment.** Two
-rows satisfying the wide incrementNonce descriptor that publish the SAME `NEW_COMMIT`, with
-`systemRootsDigest` carriers, agree on EVERY absorbed state-block column AND every side-table root. So a
-prover cannot keep `NEW_COMMIT` while tampering ANY of the 17 fields. -/
-theorem incrementNonce_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`incrementNonce_runnable_full_commit_binds_or_collides` — whole-state binding over the WIDE
+commitment.** Two rows satisfying the wide incrementNonce descriptor that publish the SAME `NEW_COMMIT`,
+with `systemRootsDigest` carriers, EITHER agree on EVERY absorbed state-block column AND every side-table
+root, OR exhibit a genuine collision of the deployed sponge (`WideColl` on the two wide preimages, or
+`RootsColl` on the two root lists). So a prover cannot keep `NEW_COMMIT` while tampering ANY of the 17
+fields without producing a collision.
+
+The former `incrementNonce_runnable_full_commit_binds` concluded the bare conjunction from
+`Poseidon2SpongeCR hash`. The deployed sponge REFUTES that hypothesis, so at deployed parameters that
+theorem was vacuous. This disjunction is formally weaker, but it HOLDS of the deployed sponge, which the
+old one did not. -/
+theorem incrementNonce_runnable_full_commit_binds_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash incrementNonceVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash incrementNonceVmDescriptorWide e₂ true true)
@@ -164,16 +174,22 @@ theorem incrementNonce_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
-  runnable_full_commit_binds (incNonceRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    (baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i))
+    ∨ WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  runnable_full_commit_binds_or_collides (incNonceRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
-/-- **`incrementNonce_rejects_root_tamper` — the side-table anti-ghost tooth (the gap's headline).** Two
-wide incrementNonce rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) but whose
-side-table sub-blocks DIFFER at some root index `i` (a dropped escrow, an omitted nullifier) cannot both
-satisfy. The 8 side-table roots are now bound BY the runnable commitment — the Class-C gap cured for
-incrementNonce. -/
-theorem incrementNonce_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`incrementNonce_rejects_root_tamper_or_collides` — the side-table anti-ghost tooth (the gap's
+headline).** Two wide incrementNonce rows publishing the same `NEW_COMMIT` (with `systemRootsDigest`
+carriers) but whose side-table sub-blocks DIFFER at some root index `i` (a dropped escrow, an omitted
+nullifier) cannot both satisfy WITHOUT exhibiting a collision of the deployed sponge. The 8 side-table
+roots are bound BY the runnable commitment up to that collision — the Class-C gap cured for
+incrementNonce.
+
+The former `incrementNonce_rejects_root_tamper` concluded `False` from `Poseidon2SpongeCR hash`, which
+the deployed sponge REFUTES; at deployed parameters it was vacuous. This disjunction is formally weaker,
+but it HOLDS of the deployed sponge, which the old one did not. -/
+theorem incrementNonce_rejects_root_tamper_or_collides (hash : List ℤ → ℤ)
     (preRoots : SysRoots) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hsat₁ : satisfiedVm hash incrementNonceVmDescriptorWide e₁ true true)
     (hsat₂ : satisfiedVm hash incrementNonceVmDescriptorWide e₂ true true)
@@ -182,8 +198,9 @@ theorem incrementNonce_rejects_root_tamper (hash : List ℤ → ℤ) (hCR : Pose
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) : False :=
-  wide_rejects_root_tamper (incNonceRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
+    {i : Fin N_SYSTEM_ROOTS} (htamper : sr₁ i ≠ sr₂ i) :
+    WideColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ :=
+  wide_rejects_root_tamper_or_collides (incNonceRunnableSpec preRoots) hash e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
 /-! ## §6 — NON-VACUITY: a real incrementNonce inhabits the full clause; a forged post is refuted. -/
@@ -238,8 +255,8 @@ theorem incNonce_clause_rejects_root_drop :
 
 #assert_axioms incNonceGates_give_cellSpec
 #assert_axioms incrementNonce_runnable_full_sound
-#assert_axioms incrementNonce_runnable_full_commit_binds
-#assert_axioms incrementNonce_rejects_root_tamper
+#assert_axioms incrementNonce_runnable_full_commit_binds_or_collides
+#assert_axioms incrementNonce_rejects_root_tamper_or_collides
 #assert_axioms goodIncNonce_realizes
 #assert_axioms incNonce_clause_not_trivial
 #assert_axioms incNonce_clause_rejects_root_drop
