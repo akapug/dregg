@@ -43,6 +43,10 @@ use tfhe::{ClientKey, FheUint32};
 /// The CARRY-FREE ADDITIVE fold (BFV / fhe.rs) — codex Round-3 Q1's Tier-0 speed
 /// lever, measured head-to-head against the exact-integer TFHE fold above.
 pub mod additive;
+/// Tier-1 exact BFV↔HidingFri opening authority for the private Dark AMM.
+/// Feature-gated so the proof-production tower remains opt-in.
+#[cfg(feature = "amm-input-binding")]
+pub mod amm_same_opening;
 /// Canonical, fail-closed binding of a public clearing result to the BFV/MPC
 /// session that produced it. Computation-integrity evidence remains explicit:
 /// transcript/output self-assertion alone is never a full attestation.
@@ -62,6 +66,13 @@ pub mod convex_engine;
 /// oracle-anchored in `tests/convex_step_oracle.rs`.
 pub mod convex_step;
 pub mod dark_amm;
+/// Cross-process, quorum-attested commit of an already-encrypted Dark AMM
+/// candidate by a host that possesses no BFV secret key.
+pub mod dark_amm_attested;
+/// Durable quorum-signed companion to the in-process one-bit private decision
+/// capability. The receipt binds the exact candidate/session and reveal-only
+/// transcript while keeping malicious BFV-share validity an explicit residual.
+pub mod decision_attestation;
 pub mod fhir;
 pub mod gpu_arena;
 pub mod threshold;
@@ -74,6 +85,9 @@ pub mod mpc;
 /// Party threads retain input/triple shares; the coordinator routes only masked
 /// Beaver openings and reconstructs the public `(p*, V*)` result.
 pub mod mpc_party;
+/// Trader-local encryption plus authenticated, replay-resistant ciphertext
+/// ingress for the no-viewer clearing pipeline.
+pub mod order_ingress;
 
 pub type Qty = u16;
 

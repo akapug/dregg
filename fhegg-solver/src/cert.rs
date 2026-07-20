@@ -19,8 +19,11 @@
 //!
 //! `to_json()` emits a self-describing object: the public program (`edges` of
 //! the incidence, `w`, `c`), the witness (`f`, `pi`, `s`), the tolerance
-//! `epsilon`, and the derived gap/residual. Integer-free, dense vectors — the
-//! shape the Lean Cert-F ingestor and the in-STARK checker both consume.
+//! `epsilon`, and diagnostic derived gap/residual fields. [`CertF::check`] never
+//! trusts those stored diagnostics: it validates the carrier shape and
+//! recomputes both objectives, the gap, and the conservation residual from the
+//! public program plus `(f, pi, s)`. Integer-free, dense vectors — the shape the
+//! Lean Cert-F ingestor and the in-STARK checker both consume.
 
 use crate::pdhg::FlowLp;
 use serde::Serialize;
@@ -59,6 +62,11 @@ pub struct CertF {
 /// The result of running the Cert-F checks (mirrors the Lean checker).
 #[derive(Clone, Debug, Serialize)]
 pub struct CertReport {
+    /// All program/witness vectors have their declared lengths, every edge
+    /// endpoint is in range, capacities/tolerances are nonnegative, and all
+    /// checked arithmetic is finite. A malformed carrier fails closed before
+    /// any indexed linear algebra is evaluated.
+    pub well_formed: bool,
     /// `A f = 0` within `feas_tol`.
     pub conserves: bool,
     /// `0 ≤ f ≤ c` (exact — the box prox guarantees it).
@@ -109,7 +117,41 @@ impl CertF {
     /// equality `Af=0` and the inequality `Aᵀπ+s≥w` (a first-order solver reaches
     /// a small residual, not exact zero — the honest Stage-1 statement; a strict
     /// checker demands a rounding/projection step, a NAMED residual).
+    ///
+    /// Stored `primal_obj`, `dual_obj`, `duality_gap`, and `feas_residual`
+    /// fields are diagnostics only. Acceptance recomputes `wᵀf`, `cᵀs`, their
+    /// difference, and `Af`; changing a stored report cannot change the verdict.
     pub fn check_with(&self, feas_tol: f64) -> CertReport {
+        let vector_shape_ok = self.edges.len() == self.m_edges
+            && self.w.len() == self.m_edges
+            && self.c.len() == self.m_edges
+            && self.f.len() == self.m_edges
+            && self.s.len() == self.m_edges
+            && self.pi.len() == self.n_nodes;
+        let endpoints_ok = self
+            .edges
+            .iter()
+            .all(|&(tail, head)| (tail as usize) < self.n_nodes && (head as usize) < self.n_nodes);
+        let inputs_finite = self
+            .w
+            .iter()
+            .chain(&self.c)
+            .chain(&self.f)
+            .chain(&self.pi)
+            .chain(&self.s)
+            .all(|value| value.is_finite());
+        let carrier_well_formed = vector_shape_ok
+            && endpoints_ok
+            && inputs_finite
+            && self.c.iter().all(|capacity| *capacity >= 0.0)
+            && self.epsilon.is_finite()
+            && self.epsilon >= 0.0
+            && feas_tol.is_finite()
+            && feas_tol >= 0.0;
+        if !carrier_well_formed {
+            return invalid_report(feas_tol);
+        }
+
         // Reconstruct A from edges for the checks (public).
         let lp = FlowLp {
             n_nodes: self.n_nodes,
@@ -119,6 +161,33 @@ impl CertF {
         };
         let af = lp.a_times(&self.f);
         let feas_residual = af.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let aty = lp.at_times(&self.pi);
+        let primal_obj: f64 = self
+            .w
+            .iter()
+            .zip(&self.f)
+            .map(|(weight, flow)| weight * flow)
+            .sum();
+        let dual_obj: f64 = self
+            .c
+            .iter()
+            .zip(&self.s)
+            .map(|(capacity, slack)| capacity * slack)
+            .sum();
+        let gap = dual_obj - primal_obj;
+        let bounded_expressions_finite = (0..self.m_edges).all(|edge| {
+            (self.c[edge] + feas_tol).is_finite()
+                && (self.w[edge] - feas_tol).is_finite()
+                && (aty[edge] + self.s[edge]).is_finite()
+        });
+        let arithmetic_finite = af.iter().chain(&aty).all(|value| value.is_finite())
+            && primal_obj.is_finite()
+            && dual_obj.is_finite()
+            && gap.is_finite()
+            && bounded_expressions_finite;
+        if !arithmetic_finite {
+            return invalid_report(feas_tol);
+        }
         let conserves = feas_residual <= feas_tol;
 
         let primal_boxed = self
@@ -129,14 +198,13 @@ impl CertF {
 
         let s_nonneg = self.s.iter().all(|s| *s >= -feas_tol);
 
-        let aty = lp.at_times(&self.pi);
         let dual_feasible = (0..self.m_edges).all(|e| aty[e] + self.s[e] >= self.w[e] - feas_tol);
 
-        let gap = self.dual_obj - self.primal_obj;
         let gap_ok = gap <= self.epsilon;
 
         let valid = conserves && primal_boxed && s_nonneg && dual_feasible && gap_ok;
         CertReport {
+            well_formed: true,
             conserves,
             primal_boxed,
             s_nonneg,
@@ -170,6 +238,21 @@ impl CertF {
     }
 }
 
+fn invalid_report(feas_tol: f64) -> CertReport {
+    CertReport {
+        well_formed: false,
+        conserves: false,
+        primal_boxed: false,
+        s_nonneg: false,
+        dual_feasible: false,
+        gap_ok: false,
+        gap: f64::INFINITY,
+        feas_residual: f64::INFINITY,
+        feas_tol,
+        valid: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +280,52 @@ mod tests {
         let rep = cert.check();
         assert!(!rep.conserves, "tampered f breaks A f = 0");
         assert!(!rep.valid, "tampered certificate must be rejected");
+    }
+
+    #[test]
+    fn stored_objective_forgery_cannot_hide_a_real_gap() {
+        // The zero circulation is feasible but three units below the optimum.
+        // With pi=0, the honest dual slack is s=w and the real gap is 3. The
+        // diagnostic fields are public/mutable wire data; forging them to zero
+        // must not turn this into an epsilon=0 certificate.
+        let lp = cycle_lp(3, &[1.0; 3], &[1.0; 3]);
+        let mut cert = CertF::from_solution(&lp, &[0.0; 3], &[0.0; 3], 0.0);
+        assert_eq!(cert.duality_gap, 3.0);
+        cert.primal_obj = 0.0;
+        cert.dual_obj = 0.0;
+        cert.duality_gap = 0.0;
+        cert.feas_residual = 0.0;
+
+        let report = cert.check();
+        assert!(report.well_formed);
+        assert_eq!(report.gap, 3.0, "gap must be recomputed from w,f,c,s");
+        assert!(!report.gap_ok);
+        assert!(
+            !report.valid,
+            "forged diagnostics must never decide acceptance"
+        );
+    }
+
+    #[test]
+    fn malformed_and_nonfinite_carriers_fail_closed_without_indexing() {
+        let lp = cycle_lp(3, &[1.0; 3], &[1.0; 3]);
+        let res = solve_cpu(&lp, 2000);
+        let baseline = CertF::from_solution(&lp, &res.f, &res.y, 0.1);
+
+        let mut short_flow = baseline.clone();
+        short_flow.f.clear();
+        let report = short_flow.check();
+        assert!(!report.well_formed && !report.valid);
+
+        let mut bad_endpoint = baseline.clone();
+        bad_endpoint.edges[0].0 = bad_endpoint.n_nodes as u32;
+        let report = bad_endpoint.check();
+        assert!(!report.well_formed && !report.valid);
+
+        let mut nonfinite = baseline;
+        nonfinite.s[0] = f64::NAN;
+        let report = nonfinite.check();
+        assert!(!report.well_formed && !report.valid);
     }
 
     #[test]

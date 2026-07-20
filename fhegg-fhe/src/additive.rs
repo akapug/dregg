@@ -425,6 +425,83 @@ pub fn encrypt_collective_order_rows(
     Ok((rows, timing))
 }
 
+/// Encrypt one trader-owned order under the collective public key.
+///
+/// This is the deployment-shaped sibling of [`encrypt_collective_order_rows`]:
+/// it can be called inside the trader's process so an order aggregator receives
+/// only a [`CollectiveOrderRow`], never the plaintext [`Order`].  The returned
+/// timing covers exactly one row.  As with every BFV ingress in this crate, the
+/// ciphertext does not itself prove that its hidden slots are the unary encoding
+/// of the declared bound; malicious-input validity still requires a range/
+/// well-formedness proof or an authenticated honest-client policy.
+pub fn encrypt_collective_order(
+    order: &Order,
+    k: usize,
+    params: &BfvParams,
+    public_key: &CollectivePublicKey,
+) -> CollectiveFoldResult<(CollectiveOrderRow, CollectiveIngressTiming)> {
+    if k == 0 || k > params.degree() {
+        return Err(CollectiveFoldError::InvalidBucketCount {
+            k,
+            degree: params.degree(),
+        });
+    }
+    let slots = order_increment(order, k)
+        .into_iter()
+        .map(u64::from)
+        .collect::<Vec<_>>();
+    let mut timing = CollectiveIngressTiming::default();
+    let mut rng = rand_09::rng();
+    let row = encrypt_collective_row(
+        order.side,
+        &slots,
+        u64::from(order.qty),
+        params,
+        public_key,
+        &mut rng,
+        &mut timing,
+    )?;
+    timing.rows = 1;
+    Ok((row, timing))
+}
+
+/// Deterministic sibling used only by the authenticated-ingress opening
+/// verifier.  The seed is an encryption-randomness opening: disclosing it
+/// together with a guessed plaintext lets a verifier reproduce the exact BFV
+/// ciphertext, so callers must treat it as secret until they intentionally use
+/// the operator-visible verification tier.
+pub(crate) fn encrypt_collective_order_with_seed(
+    order: &Order,
+    k: usize,
+    params: &BfvParams,
+    public_key: &CollectivePublicKey,
+    seed: [u8; 32],
+) -> CollectiveFoldResult<(CollectiveOrderRow, CollectiveIngressTiming)> {
+    if k == 0 || k > params.degree() {
+        return Err(CollectiveFoldError::InvalidBucketCount {
+            k,
+            degree: params.degree(),
+        });
+    }
+    let slots = order_increment(order, k)
+        .into_iter()
+        .map(u64::from)
+        .collect::<Vec<_>>();
+    let mut timing = CollectiveIngressTiming::default();
+    let mut rng = StdRng09::from_seed(seed);
+    let row = encrypt_collective_row(
+        order.side,
+        &slots,
+        u64::from(order.qty),
+        params,
+        public_key,
+        &mut rng,
+        &mut timing,
+    )?;
+    timing.rows = 1;
+    Ok((row, timing))
+}
+
 fn encrypt_collective_row(
     side: Side,
     live_slots: &[u64],

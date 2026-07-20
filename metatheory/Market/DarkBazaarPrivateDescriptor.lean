@@ -21,6 +21,7 @@ the emitted descriptor.
 -/
 import Market.FhEggClearing
 import Dregg2.Circuit.DescriptorIR2
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Tactics
 
 namespace Market.DarkBazaarPrivateDescriptor
@@ -451,15 +452,11 @@ def darkBazaarPrivateN4K4Descriptor : EffectVmDescriptor2 :=
 
 /-! ## 3. Honest emitted-AIR extraction boundary.
 
-This section connects `Satisfied2` to the descriptor bytes: every semantic gate
-vanishes modulo BabyBear, every public pin is enforced, and the wide lookup binds
-all eight root columns to the genuine full-arity permutation output under
-`ChipTableSoundN`.  It is deliberately NOT mislabeled as the final
-`Satisfied2 → Accepts` theorem.  The named residual
-`DarkBazaarDescriptorToAccepts` is the remaining fixed-size decode/no-wrap lift:
-extract the unique kind one-hot and 4-bit quantities, turn all modular equations
-into integer equalities using the explicit bounds, then identify the four volume
-columns and lowest argmax with `privateBook`. -/
+This section begins the `Satisfied2` bridge: every semantic gate vanishes modulo
+BabyBear, every public pin is enforced, and the wide lookup binds all eight root
+columns to the genuine full-arity permutation output under `ChipTableSoundN`.
+Sections 4–6 perform the bounded integer decode and close the final
+`darkBazaarPrivateN4K4_descriptor_to_accepts` theorem. -/
 
 def dbM0 : Int → Int := fun _ => 0
 def dbF0 : Int → Int × Nat := fun _ => (0, 0)
@@ -542,11 +539,10 @@ structure EmittedAirFacts (permOut : List Int → List Int)
     VmConstraint2.base (.piBinding .first col pi) ∈ publicPins →
     a col ≡ pis pi [ZMOD BABYBEAR_MODULUS]
 
-/-- **The strongest closed emitted-AIR bridge in this module today.**  This is
-load-bearing (not a guard): it starts from the actual `Satisfied2` denotation and
-extracts every gate, every PI, and the full wide commitment lookup.  The exact
-integer decode/argmax lift is named above and remains visibly outside this
-theorem rather than being assumed. -/
+/-- Load-bearing first rung of the emitted-AIR bridge: it starts from the actual
+`Satisfied2` denotation and extracts every gate, every PI, and the full wide
+commitment lookup.  The closing theorem below consumes these facts through the
+complete integer decode and market identification. -/
 theorem darkBazaarPrivateN4K4_emitted_air_sound
     {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
     (permOut : List Int → List Int)
@@ -566,6 +562,1362 @@ theorem binaryBody_zero_iff (a : Assignment) (col : Nat) :
   simp [binaryBody, sub, neg, mul, add, v, c, EmittedExpr.eval]
   omega
 
+/-! ## 4. Exact integer decoding of the emitted private witness. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (pPrimeInt)
+
+/-- BabyBear primality and canonical representatives turn a modular boolean
+gate into honest integer bithood. -/
+theorem binary_of_modular_gate {a : Assignment} {col : Nat}
+    (hcanon : CanonicalAssignment a)
+    (hmod : (binaryBody col).eval a ≡ 0 [ZMOD BABYBEAR_MODULUS]) :
+    a col = 0 ∨ a col = 1 := by
+  have hev : (binaryBody col).eval a = a col * (a col - 1) := by
+    simp only [binaryBody, sub, neg, mul, add, v, c, EmittedExpr.eval]
+    ring
+  rw [hev] at hmod
+  have hd : (2013265921 : Int) ∣ a col * (a col - 1) := by
+    simpa [BABYBEAR_MODULUS] using Int.modEq_zero_iff_dvd.mp hmod
+  rcases pPrimeInt.dvd_mul.mp hd with hx | hx
+  · obtain ⟨k, hk⟩ := hx
+    have hc := hcanon col
+    simp only [BABYBEAR_MODULUS] at hc
+    left
+    omega
+  · obtain ⟨k, hk⟩ := hx
+    have hc := hcanon col
+    simp only [BABYBEAR_MODULUS] at hc
+    right
+    omega
+
+/-- Two canonical representatives of one BabyBear residue are the same integer. -/
+theorem eq_of_modEq_of_canonical {x y : Int}
+    (hmod : x ≡ y [ZMOD BABYBEAR_MODULUS])
+    (hx : 0 ≤ x ∧ x < BABYBEAR_MODULUS)
+    (hy : 0 ≤ y ∧ y < BABYBEAR_MODULUS) : x = y := by
+  obtain ⟨k, hk⟩ := Int.modEq_iff_dvd.mp hmod
+  simp only [BABYBEAR_MODULUS] at hk hx hy
+  omega
+
+theorem kind_bit_body_mem (order : Fin 4) (kind : Fin 8) :
+    binaryBody (KIND order.val kind.val) ∈ semanticBodies := by
+  fin_cases order <;> fin_cases kind <;> decide
+
+theorem qty_bit_body_mem (order : Fin 4) (bit : Fin 4) :
+    binaryBody (QTY_BIT order.val bit.val) ∈ semanticBodies := by
+  fin_cases order <;> fin_cases bit <;> decide
+
+theorem min_choose_body_mem (price : Fin 4) :
+    binaryBody (MIN_CHOOSE price.val) ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+theorem min_diff_bit_body_mem (price : Fin 4) (bit : Fin 6) :
+    binaryBody (MIN_DIFF_BIT price.val bit.val) ∈ semanticBodies := by
+  fin_cases price <;> fin_cases bit <;> decide
+
+theorem select_body_mem (price : Fin 4) :
+    binaryBody (SELECT price.val) ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+theorem max_diff_bit_body_mem (price : Fin 4) (bit : Fin 6) :
+    binaryBody (MAX_DIFF_BIT price.val bit.val) ∈ semanticBodies := by
+  fin_cases price <;> fin_cases bit <;> decide
+
+theorem low_slack_bit_body_mem (price : Fin 4) (bit : Fin 6) :
+    binaryBody (LOW_SLACK_BIT price.val bit.val) ∈ semanticBodies := by
+  fin_cases price <;> fin_cases bit <;> decide
+
+structure DecodedPrivateBits (a : Assignment) : Prop where
+  kind : ∀ order : Fin 4, ∀ kind : Fin 8,
+    a (KIND order.val kind.val) = 0 ∨ a (KIND order.val kind.val) = 1
+  qty : ∀ order bit : Fin 4,
+    a (QTY_BIT order.val bit.val) = 0 ∨ a (QTY_BIT order.val bit.val) = 1
+  minChoose : ∀ price : Fin 4,
+    a (MIN_CHOOSE price.val) = 0 ∨ a (MIN_CHOOSE price.val) = 1
+  minDiff : ∀ price : Fin 4, ∀ bit : Fin 6,
+    a (MIN_DIFF_BIT price.val bit.val) = 0 ∨ a (MIN_DIFF_BIT price.val bit.val) = 1
+  select : ∀ price : Fin 4,
+    a (SELECT price.val) = 0 ∨ a (SELECT price.val) = 1
+  maxDiff : ∀ price : Fin 4, ∀ bit : Fin 6,
+    a (MAX_DIFF_BIT price.val bit.val) = 0 ∨ a (MAX_DIFF_BIT price.val bit.val) = 1
+  lowSlack : ∀ price : Fin 4, ∀ bit : Fin 6,
+    a (LOW_SLACK_BIT price.val bit.val) = 0 ∨ a (LOW_SLACK_BIT price.val bit.val) = 1
+
+/-- Every private selector and range-decomposition limb is an actual bit in any
+canonical satisfying trace. -/
+theorem darkBazaarPrivateN4K4_private_bits_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    DecodedPrivateBits a := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro order kind
+    exact binary_of_modular_gate hcanon
+      (semantic_gate_vanishes hsat (kind_bit_body_mem order kind))
+  · intro order bit
+    exact binary_of_modular_gate hcanon
+      (semantic_gate_vanishes hsat (qty_bit_body_mem order bit))
+  · intro price
+    exact binary_of_modular_gate hcanon
+      (semantic_gate_vanishes hsat (min_choose_body_mem price))
+  · intro price bit
+    exact binary_of_modular_gate hcanon
+      (semantic_gate_vanishes hsat (min_diff_bit_body_mem price bit))
+  · intro price
+    exact binary_of_modular_gate hcanon
+      (semantic_gate_vanishes hsat (select_body_mem price))
+  · intro price bit
+    exact binary_of_modular_gate hcanon
+      (semantic_gate_vanishes hsat (max_diff_bit_body_mem price bit))
+  · intro price bit
+    exact binary_of_modular_gate hcanon
+      (semantic_gate_vanishes hsat (low_slack_bit_body_mem price bit))
+
+theorem qty_recompose_body_mem (order : Fin 4) :
+    recompose (QTY order.val) (QTY_BIT order.val) QTY_BITS ∈ semanticBodies := by
+  fin_cases order <;> decide
+
+theorem min_diff_recompose_body_mem (price : Fin 4) :
+    recompose (MIN_DIFF price.val) (MIN_DIFF_BIT price.val) DIFF_BITS ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+theorem max_diff_recompose_body_mem (price : Fin 4) :
+    recompose (MAX_DIFF price.val) (MAX_DIFF_BIT price.val) DIFF_BITS ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+theorem low_slack_recompose_body_mem (price : Fin 4) :
+    recompose (LOW_SLACK price.val) (LOW_SLACK_BIT price.val) DIFF_BITS ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+/-- Exact four-bit recomposition for private quantities. -/
+theorem qty_recompose_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf))
+    (order : Fin 4) :
+    a (QTY order.val) =
+      a (QTY_BIT order.val 0) + 2 * a (QTY_BIT order.val 1) +
+      4 * a (QTY_BIT order.val 2) + 8 * a (QTY_BIT order.val 3) := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb0 := hbits.qty order 0; have hb1 := hbits.qty order 1
+  have hb2 := hbits.qty order 2; have hb3 := hbits.qty order 3
+  have hgate := semantic_gate_vanishes hsat (qty_recompose_body_mem order)
+  have hres :
+      (a (QTY_BIT order.val 0) + 2 * a (QTY_BIT order.val 1) +
+        4 * a (QTY_BIT order.val 2) + 8 * a (QTY_BIT order.val 3)) -
+        a (QTY order.val) ≡ 0 [ZMOD BABYBEAR_MODULUS] := by
+    norm_num [recompose, sumE, weighted, sub, neg, mul, add, v, c, QTY_BITS,
+      EmittedExpr.eval, List.range_succ, Function.comp_apply] at hgate
+    simpa [sub_eq_add_neg, add_assoc] using hgate
+  have hcong :
+      a (QTY_BIT order.val 0) + 2 * a (QTY_BIT order.val 1) +
+        4 * a (QTY_BIT order.val 2) + 8 * a (QTY_BIT order.val 3) ≡
+      a (QTY order.val) [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right (a (QTY order.val))
+  have hsmall :
+      0 ≤ a (QTY_BIT order.val 0) + 2 * a (QTY_BIT order.val 1) +
+        4 * a (QTY_BIT order.val 2) + 8 * a (QTY_BIT order.val 3) ∧
+      a (QTY_BIT order.val 0) + 2 * a (QTY_BIT order.val 1) +
+        4 * a (QTY_BIT order.val 2) + 8 * a (QTY_BIT order.val 3) < BABYBEAR_MODULUS := by
+    rcases hb0 with hb0 | hb0 <;> rcases hb1 with hb1 | hb1 <;>
+      rcases hb2 with hb2 | hb2 <;> rcases hb3 with hb3 | hb3 <;>
+      simp_all [BABYBEAR_MODULUS]
+  exact (eq_of_modEq_of_canonical hcong hsmall (hcanon (QTY order.val))).symm
+
+theorem qty_column_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf))
+    (order : Fin 4) :
+    0 ≤ a (QTY order.val) ∧ a (QTY order.val) < 16 := by
+  rw [qty_recompose_exact hcanon hsat order]
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb0 := hbits.qty order 0; have hb1 := hbits.qty order 1
+  have hb2 := hbits.qty order 2; have hb3 := hbits.qty order 3
+  rcases hb0 with hb0 | hb0 <;> rcases hb1 with hb1 | hb1 <;>
+    rcases hb2 with hb2 | hb2 <;> rcases hb3 with hb3 | hb3 <;> simp_all
+
+theorem bit_bounds {x : Int} (h : x = 0 ∨ x = 1) : 0 ≤ x ∧ x ≤ 1 := by
+  rcases h with rfl | rfl <;> omega
+
+/-- Generic exact six-bit decomposition for market difference and tie-slack columns. -/
+theorem six_bit_recompose_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf))
+    (col : Nat) (bit : Nat → Nat)
+    (hbody : recompose col bit DIFF_BITS ∈ semanticBodies)
+    (hbits : ∀ b : Fin 6, a (bit b.val) = 0 ∨ a (bit b.val) = 1) :
+    a col = a (bit 0) + 2 * a (bit 1) + 4 * a (bit 2) + 8 * a (bit 3) +
+      16 * a (bit 4) + 32 * a (bit 5) := by
+  have hb0 : 0 ≤ a (bit 0) ∧ a (bit 0) ≤ 1 := by simpa using bit_bounds (hbits 0)
+  have hb1 : 0 ≤ a (bit 1) ∧ a (bit 1) ≤ 1 := by simpa using bit_bounds (hbits 1)
+  have hb2 : 0 ≤ a (bit 2) ∧ a (bit 2) ≤ 1 := by simpa using bit_bounds (hbits 2)
+  have hb3 : 0 ≤ a (bit 3) ∧ a (bit 3) ≤ 1 := by simpa using bit_bounds (hbits 3)
+  have hb4 : 0 ≤ a (bit 4) ∧ a (bit 4) ≤ 1 := by simpa using bit_bounds (hbits 4)
+  have hb5 : 0 ≤ a (bit 5) ∧ a (bit 5) ≤ 1 := by simpa using bit_bounds (hbits 5)
+  have hgate := semantic_gate_vanishes hsat hbody
+  have hres :
+      (a (bit 0) + 2 * a (bit 1) + 4 * a (bit 2) + 8 * a (bit 3) +
+        16 * a (bit 4) + 32 * a (bit 5)) - a col ≡
+        0 [ZMOD BABYBEAR_MODULUS] := by
+    norm_num [recompose, sumE, weighted, sub, neg, mul, add, v, c, DIFF_BITS,
+      EmittedExpr.eval, List.range_succ, Function.comp_apply] at hgate
+    simpa [sub_eq_add_neg, add_assoc] using hgate
+  have hcong :
+      a (bit 0) + 2 * a (bit 1) + 4 * a (bit 2) + 8 * a (bit 3) +
+        16 * a (bit 4) + 32 * a (bit 5) ≡ a col [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right (a col)
+  have hsmall :
+      0 ≤ a (bit 0) + 2 * a (bit 1) + 4 * a (bit 2) + 8 * a (bit 3) +
+        16 * a (bit 4) + 32 * a (bit 5) ∧
+      a (bit 0) + 2 * a (bit 1) + 4 * a (bit 2) + 8 * a (bit 3) +
+        16 * a (bit 4) + 32 * a (bit 5) < BABYBEAR_MODULUS := by
+    simp only [BABYBEAR_MODULUS]
+    omega
+  exact (eq_of_modEq_of_canonical hcong hsmall (hcanon col)).symm
+
+theorem min_diff_recompose_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (MIN_DIFF price.val) =
+      a (MIN_DIFF_BIT price.val 0) + 2 * a (MIN_DIFF_BIT price.val 1) +
+      4 * a (MIN_DIFF_BIT price.val 2) + 8 * a (MIN_DIFF_BIT price.val 3) +
+      16 * a (MIN_DIFF_BIT price.val 4) + 32 * a (MIN_DIFF_BIT price.val 5) := by
+  apply six_bit_recompose_exact hcanon hsat _ _ (min_diff_recompose_body_mem price)
+  exact (darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).minDiff price
+
+theorem max_diff_recompose_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (MAX_DIFF price.val) =
+      a (MAX_DIFF_BIT price.val 0) + 2 * a (MAX_DIFF_BIT price.val 1) +
+      4 * a (MAX_DIFF_BIT price.val 2) + 8 * a (MAX_DIFF_BIT price.val 3) +
+      16 * a (MAX_DIFF_BIT price.val 4) + 32 * a (MAX_DIFF_BIT price.val 5) := by
+  apply six_bit_recompose_exact hcanon hsat _ _ (max_diff_recompose_body_mem price)
+  exact (darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).maxDiff price
+
+theorem low_slack_recompose_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (LOW_SLACK price.val) =
+      a (LOW_SLACK_BIT price.val 0) + 2 * a (LOW_SLACK_BIT price.val 1) +
+      4 * a (LOW_SLACK_BIT price.val 2) + 8 * a (LOW_SLACK_BIT price.val 3) +
+      16 * a (LOW_SLACK_BIT price.val 4) + 32 * a (LOW_SLACK_BIT price.val 5) := by
+  apply six_bit_recompose_exact hcanon hsat _ _ (low_slack_recompose_body_mem price)
+  exact (darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).lowSlack price
+
+theorem six_bit_column_bounds
+    {a : Assignment} {col : Nat} {bit : Nat → Nat}
+    (hrec : a col = a (bit 0) + 2 * a (bit 1) + 4 * a (bit 2) + 8 * a (bit 3) +
+      16 * a (bit 4) + 32 * a (bit 5))
+    (hbits : ∀ b : Fin 6, a (bit b.val) = 0 ∨ a (bit b.val) = 1) :
+    0 ≤ a col ∧ a col ≤ 63 := by
+  rw [hrec]
+  have hb0 : 0 ≤ a (bit 0) ∧ a (bit 0) ≤ 1 := by simpa using bit_bounds (hbits 0)
+  have hb1 : 0 ≤ a (bit 1) ∧ a (bit 1) ≤ 1 := by simpa using bit_bounds (hbits 1)
+  have hb2 : 0 ≤ a (bit 2) ∧ a (bit 2) ≤ 1 := by simpa using bit_bounds (hbits 2)
+  have hb3 : 0 ≤ a (bit 3) ∧ a (bit 3) ≤ 1 := by simpa using bit_bounds (hbits 3)
+  have hb4 : 0 ≤ a (bit 4) ∧ a (bit 4) ≤ 1 := by simpa using bit_bounds (hbits 4)
+  have hb5 : 0 ≤ a (bit 5) ∧ a (bit 5) ≤ 1 := by simpa using bit_bounds (hbits 5)
+  omega
+
+theorem min_diff_column_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    0 ≤ a (MIN_DIFF price.val) ∧ a (MIN_DIFF price.val) ≤ 63 :=
+  six_bit_column_bounds (min_diff_recompose_exact hcanon hsat price)
+    ((darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).minDiff price)
+
+theorem max_diff_column_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    0 ≤ a (MAX_DIFF price.val) ∧ a (MAX_DIFF price.val) ≤ 63 :=
+  six_bit_column_bounds (max_diff_recompose_exact hcanon hsat price)
+    ((darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).maxDiff price)
+
+theorem low_slack_column_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    0 ≤ a (LOW_SLACK price.val) ∧ a (LOW_SLACK price.val) ≤ 63 :=
+  six_bit_column_bounds (low_slack_recompose_exact hcanon hsat price)
+    ((darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).lowSlack price)
+
+theorem kind_sum_body_mem (order : Fin 4) :
+    sub (sumE ((List.range 8).map (fun t => v (KIND order.val t)))) (c 1) ∈
+      semanticBodies := by
+  fin_cases order <;> decide
+
+theorem kind_sum_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    a (KIND order.val 0) + a (KIND order.val 1) + a (KIND order.val 2) +
+      a (KIND order.val 3) + a (KIND order.val 4) + a (KIND order.val 5) +
+      a (KIND order.val 6) + a (KIND order.val 7) = 1 := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb0 : 0 ≤ a (KIND order.val 0) ∧ a (KIND order.val 0) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 0)
+  have hb1 : 0 ≤ a (KIND order.val 1) ∧ a (KIND order.val 1) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 1)
+  have hb2 : 0 ≤ a (KIND order.val 2) ∧ a (KIND order.val 2) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 2)
+  have hb3 : 0 ≤ a (KIND order.val 3) ∧ a (KIND order.val 3) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 3)
+  have hb4 : 0 ≤ a (KIND order.val 4) ∧ a (KIND order.val 4) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 4)
+  have hb5 : 0 ≤ a (KIND order.val 5) ∧ a (KIND order.val 5) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 5)
+  have hb6 : 0 ≤ a (KIND order.val 6) ∧ a (KIND order.val 6) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 6)
+  have hb7 : 0 ≤ a (KIND order.val 7) ∧ a (KIND order.val 7) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 7)
+  have hgate := semantic_gate_vanishes hsat (kind_sum_body_mem order)
+  have hres :
+      (a (KIND order.val 0) + a (KIND order.val 1) + a (KIND order.val 2) +
+        a (KIND order.val 3) + a (KIND order.val 4) + a (KIND order.val 5) +
+        a (KIND order.val 6) + a (KIND order.val 7)) - 1 ≡
+        0 [ZMOD BABYBEAR_MODULUS] := by
+    norm_num [sumE, sub, neg, mul, add, v, c, EmittedExpr.eval,
+      List.range_succ, Function.comp_apply] at hgate
+    simpa [sub_eq_add_neg, add_assoc] using hgate
+  have hcong :
+      a (KIND order.val 0) + a (KIND order.val 1) + a (KIND order.val 2) +
+        a (KIND order.val 3) + a (KIND order.val 4) + a (KIND order.val 5) +
+        a (KIND order.val 6) + a (KIND order.val 7) ≡ 1 [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right 1
+  apply eq_of_modEq_of_canonical hcong
+  · simp only [BABYBEAR_MODULUS]
+    omega
+  · norm_num [BABYBEAR_MODULUS]
+
+def kindColumnValue (a : Assignment) (order : Fin 4) : Int :=
+  a (KIND order.val 1) + 2 * a (KIND order.val 2) + 3 * a (KIND order.val 3) +
+    4 * a (KIND order.val 4) + 5 * a (KIND order.val 5) +
+    6 * a (KIND order.val 6) + 7 * a (KIND order.val 7)
+
+theorem kindColumnValue_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    0 ≤ kindColumnValue a order ∧ kindColumnValue a order < 8 := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb0 : 0 ≤ a (KIND order.val 0) ∧ a (KIND order.val 0) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 0)
+  have hb1 : 0 ≤ a (KIND order.val 1) ∧ a (KIND order.val 1) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 1)
+  have hb2 : 0 ≤ a (KIND order.val 2) ∧ a (KIND order.val 2) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 2)
+  have hb3 : 0 ≤ a (KIND order.val 3) ∧ a (KIND order.val 3) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 3)
+  have hb4 : 0 ≤ a (KIND order.val 4) ∧ a (KIND order.val 4) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 4)
+  have hb5 : 0 ≤ a (KIND order.val 5) ∧ a (KIND order.val 5) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 5)
+  have hb6 : 0 ≤ a (KIND order.val 6) ∧ a (KIND order.val 6) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 6)
+  have hb7 : 0 ≤ a (KIND order.val 7) ∧ a (KIND order.val 7) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order 7)
+  have hsum := kind_sum_exact hcanon hsat order
+  simp only [kindColumnValue]
+  omega
+
+def decodedKind (a : Assignment) (order : Fin 4) : Fin 8 :=
+  ⟨(kindColumnValue a order).toNat % 8, Nat.mod_lt _ (by decide)⟩
+
+def decodedQty (a : Assignment) (order : Fin 4) : Fin 16 :=
+  ⟨(a (QTY order.val)).toNat % 16, Nat.mod_lt _ (by decide)⟩
+
+def decodedWitness (a : Assignment) : PrivateWitness where
+  orders := fun order => ⟨decodedKind a order, decodedQty a order⟩
+  blinding := fun lane => a (BLINDING lane.val)
+
+def columnPublic (a : Assignment) : PublicStatement where
+  session := a SESSION
+  rule := a RULE
+  orderRoot := fun lane => a (ROOT lane.val)
+  pStar := (a PSTAR).toNat
+  vStar := a VSTAR
+
+def piPublic (pis : Assignment) : PublicStatement where
+  session := pis 0
+  rule := pis 1
+  orderRoot := fun lane => pis (2 + lane.val)
+  pStar := (pis 10).toNat
+  vStar := pis 11
+
+def permHash8 (permOut : List Int → List Int) (xs : List Int) (lane : Fin 8) : Int :=
+  (permOut xs).getD lane.val 0
+
+theorem decoded_kind_value
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    ((decodedWitness a).orders order).kind.val = (kindColumnValue a order).toNat := by
+  simp only [decodedWitness, decodedKind]
+  exact Nat.mod_eq_of_lt ((Int.toNat_lt (kindColumnValue_bounds hcanon hsat order).1).2
+    (kindColumnValue_bounds hcanon hsat order).2)
+
+theorem decoded_kind_coe
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    (((decodedWitness a).orders order).kind.val : Int) = kindColumnValue a order := by
+  rw [decoded_kind_value hcanon hsat]
+  exact Int.toNat_of_nonneg (kindColumnValue_bounds hcanon hsat order).1
+
+theorem decoded_qty_value
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    ((decodedWitness a).orders order).qty.val = (a (QTY order.val)).toNat := by
+  simp only [decodedWitness, decodedQty]
+  exact Nat.mod_eq_of_lt ((Int.toNat_lt (qty_column_bounds hcanon hsat order).1).2
+    (qty_column_bounds hcanon hsat order).2)
+
+theorem decoded_qty_coe
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    (((decodedWitness a).orders order).qty.val : Int) = a (QTY order.val) := by
+  rw [decoded_qty_value hcanon hsat]
+  exact Int.toNat_of_nonneg (qty_column_bounds hcanon hsat order).1
+
+theorem decoded_blinding_canonical (a : Assignment) (hcanon : CanonicalAssignment a) :
+    CanonicalBlinding (decodedWitness a) := by
+  intro lane
+  simpa [decodedWitness, BLINDING, BABYBEAR_MODULUS] using hcanon (BLINDING lane.val)
+
+theorem kindValue_eval (a : Assignment) (order : Nat) :
+    (kindValue order).eval a =
+      a (KIND order 1) + 2 * a (KIND order 2) + 3 * a (KIND order 3) +
+      4 * a (KIND order 4) + 5 * a (KIND order 5) +
+      6 * a (KIND order 6) + 7 * a (KIND order 7) := by
+  norm_num [kindValue, sumE, weighted, add, mul, v, c, EmittedExpr.eval,
+    List.range_succ, Function.comp_apply, add_assoc]
+
+theorem rule_body_mem : sub (v RULE) (c RULE_ID) ∈ semanticBodies := by decide
+
+theorem rule_column_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    a RULE = RULE_ID := by
+  have hgate := semantic_gate_vanishes hsat rule_body_mem
+  have hres : a RULE - RULE_ID ≡ 0 [ZMOD BABYBEAR_MODULUS] := by
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval] using hgate
+  have hcong : a RULE ≡ RULE_ID [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right RULE_ID
+  exact eq_of_modEq_of_canonical hcong (hcanon RULE) (by
+    norm_num [RULE_ID, BABYBEAR_MODULUS])
+
+theorem order_pack_body_mem (order : Fin 4) :
+    sub (v (ORDER_PACK order.val))
+      (add (kindValue order.val) (weighted 8 (v (QTY order.val)))) ∈ semanticBodies := by
+  fin_cases order <;> decide
+
+theorem order_pack_column_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    a (ORDER_PACK order.val) = kindColumnValue a order + 8 * a (QTY order.val) := by
+  have hk := kindColumnValue_bounds hcanon hsat order
+  have hq := qty_column_bounds hcanon hsat order
+  have hgate := semantic_gate_vanishes hsat (order_pack_body_mem order)
+  have hkv := kindValue_eval a order.val
+  have hres :
+      a (ORDER_PACK order.val) - (kindColumnValue a order + 8 * a (QTY order.val)) ≡
+        0 [ZMOD BABYBEAR_MODULUS] := by
+    simp only [sub, neg, weighted, mul, add, v, c, EmittedExpr.eval] at hgate
+    rw [hkv] at hgate
+    simpa [kindColumnValue,
+      sub_eq_add_neg, add_assoc] using hgate
+  have hcong : a (ORDER_PACK order.val) ≡
+      kindColumnValue a order + 8 * a (QTY order.val) [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right (kindColumnValue a order + 8 * a (QTY order.val))
+  apply eq_of_modEq_of_canonical hcong (hcanon (ORDER_PACK order.val))
+  simp only [BABYBEAR_MODULUS]
+  omega
+
+theorem order_pack_column_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    0 ≤ a (ORDER_PACK order.val) ∧ a (ORDER_PACK order.val) < 128 := by
+  rw [order_pack_column_exact hcanon hsat order]
+  have hk := kindColumnValue_bounds hcanon hsat order
+  have hq := qty_column_bounds hcanon hsat order
+  omega
+
+theorem order_pack_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    a (ORDER_PACK order.val) = orderCode ((decodedWitness a).orders order) := by
+  rw [order_pack_column_exact hcanon hsat order]
+  simp only [orderCode]
+  rw [decoded_kind_coe hcanon hsat order, decoded_qty_coe hcanon hsat order]
+
+theorem packed_book_body_mem :
+    sub (v PACKED_BOOK)
+      (sumE ((List.range 4).map
+        (fun i => weighted ((128 : Int) ^ i) (v (ORDER_PACK i))))) ∈ semanticBodies := by
+  decide
+
+theorem packed_book_column_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    a PACKED_BOOK = a (ORDER_PACK 0) + 128 * a (ORDER_PACK 1) +
+      16384 * a (ORDER_PACK 2) + 2097152 * a (ORDER_PACK 3) := by
+  have h0 : 0 ≤ a (ORDER_PACK 0) ∧ a (ORDER_PACK 0) < 128 := by
+    simpa using order_pack_column_bounds hcanon hsat (0 : Fin 4)
+  have h1 : 0 ≤ a (ORDER_PACK 1) ∧ a (ORDER_PACK 1) < 128 := by
+    simpa using order_pack_column_bounds hcanon hsat (1 : Fin 4)
+  have h2 : 0 ≤ a (ORDER_PACK 2) ∧ a (ORDER_PACK 2) < 128 := by
+    simpa using order_pack_column_bounds hcanon hsat (2 : Fin 4)
+  have h3 : 0 ≤ a (ORDER_PACK 3) ∧ a (ORDER_PACK 3) < 128 := by
+    simpa using order_pack_column_bounds hcanon hsat (3 : Fin 4)
+  have hgate := semantic_gate_vanishes hsat packed_book_body_mem
+  have hres :
+      a PACKED_BOOK - (a (ORDER_PACK 0) + 128 * a (ORDER_PACK 1) +
+        16384 * a (ORDER_PACK 2) + 2097152 * a (ORDER_PACK 3)) ≡
+        0 [ZMOD BABYBEAR_MODULUS] := by
+    norm_num [sumE, weighted, sub, neg, mul, add, v, c, EmittedExpr.eval,
+      List.range_succ, Function.comp_apply, add_assoc] at hgate
+    simpa [sub_eq_add_neg, add_assoc] using hgate
+  have hcong : a PACKED_BOOK ≡
+      a (ORDER_PACK 0) + 128 * a (ORDER_PACK 1) +
+        16384 * a (ORDER_PACK 2) + 2097152 * a (ORDER_PACK 3)
+      [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right
+      (a (ORDER_PACK 0) + 128 * a (ORDER_PACK 1) +
+        16384 * a (ORDER_PACK 2) + 2097152 * a (ORDER_PACK 3))
+  apply eq_of_modEq_of_canonical hcong (hcanon PACKED_BOOK)
+  simp only [BABYBEAR_MODULUS]
+  omega
+
+theorem packed_book_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    a PACKED_BOOK = packedBook (decodedWitness a) := by
+  rw [packed_book_column_exact hcanon hsat]
+  have h0 := order_pack_decoded hcanon hsat (0 : Fin 4)
+  have h1 := order_pack_decoded hcanon hsat (1 : Fin 4)
+  have h2 := order_pack_decoded hcanon hsat (2 : Fin 4)
+  have h3 := order_pack_decoded hcanon hsat (3 : Fin 4)
+  have h0' : a (ORDER_PACK 0) = orderCode ((decodedWitness a).orders 0) := by simpa using h0
+  have h1' : a (ORDER_PACK 1) = orderCode ((decodedWitness a).orders 1) := by simpa using h1
+  have h2' : a (ORDER_PACK 2) = orderCode ((decodedWitness a).orders 2) := by simpa using h2
+  have h3' : a (ORDER_PACK 3) = orderCode ((decodedWitness a).orders 3) := by simpa using h3
+  rw [h0', h1', h2', h3']
+  simp [packedBook, List.ofFn_succ, add_assoc]
+
+/-! ## 5. Commitment and public-input identification. -/
+
+theorem root_input_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    rootInputExprs.map (·.eval a) =
+      rootPreimage (columnPublic a).session (decodedWitness a) := by
+  have hp := packed_book_decoded hcanon hsat
+  have hr := rule_column_exact hcanon hsat
+  simp only [rootInputExprs, rootPreimage, columnPublic, decodedWitness, BLINDING,
+    ROOT_DOMAIN_TAG, List.ofFn_succ, v, c, DIGEST_WIDTH, BLINDING_BASE]
+  norm_num [List.range_succ, Function.comp_apply, EmittedExpr.eval]
+  exact ⟨hr, by simpa [decodedWitness, BLINDING, BLINDING_BASE] using hp⟩
+
+theorem column_root_semantic
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (permOut : List Int → List Int)
+    (hcanon : CanonicalAssignment a)
+    (hChip : ChipTableSoundN permOut (tf TableId.poseidon2))
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    (columnPublic a).orderRoot =
+      orderRoot (permHash8 permOut) (columnPublic a).session (decodedWitness a) := by
+  have hwide := wide_root_lookup_sound permOut hChip hsat
+  rw [root_input_decoded hcanon hsat] at hwide
+  funext lane
+  have h := congrArg (fun xs : List Int => xs.getD lane.val 0) hwide
+  fin_cases lane <;>
+    simpa [columnPublic, orderRoot, permHash8, rootDigestCols,
+      DIGEST_WIDTH, ROOT, List.range_succ] using h
+
+theorem pi_public_eq_column
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hcanonPis : CanonicalAssignment pis)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    piPublic pis = columnPublic a := by
+  have hs : pis 0 = a SESSION :=
+    (eq_of_modEq_of_canonical (public_pin_sound hsat (by
+      simp [publicPins, DIGEST_WIDTH, ROOT, List.range_succ]))
+      (hcanon SESSION) (hcanonPis 0)).symm
+  have hr : pis 1 = a RULE :=
+    (eq_of_modEq_of_canonical (public_pin_sound hsat (by
+      simp [publicPins, DIGEST_WIDTH, ROOT, List.range_succ]))
+      (hcanon RULE) (hcanonPis 1)).symm
+  have hroot : (fun lane : Fin 8 => pis (2 + lane.val)) =
+      fun lane => a (ROOT lane.val) := by
+    funext lane
+    exact (eq_of_modEq_of_canonical (public_pin_sound hsat (by
+      fin_cases lane <;> simp [publicPins, DIGEST_WIDTH, ROOT, List.range_succ]))
+      (hcanon (ROOT lane.val)) (hcanonPis (2 + lane.val))).symm
+  have hp : pis 10 = a PSTAR :=
+    (eq_of_modEq_of_canonical (public_pin_sound hsat (by
+      simp [publicPins, DIGEST_WIDTH, ROOT, List.range_succ]))
+      (hcanon PSTAR) (hcanonPis 10)).symm
+  have hv : pis 11 = a VSTAR :=
+    (eq_of_modEq_of_canonical (public_pin_sound hsat (by
+      simp [publicPins, DIGEST_WIDTH, ROOT, List.range_succ]))
+      (hcanon VSTAR) (hcanonPis 11)).symm
+  simp only [piPublic, columnPublic]
+  rw [hs, hr, hroot, hp, hv]
+
+/-! ## 6. Exact market-column identification. -/
+
+theorem kind_one_selected
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) :
+    a (KIND order.val 0) = 1 ∨ a (KIND order.val 1) = 1 ∨
+    a (KIND order.val 2) = 1 ∨ a (KIND order.val 3) = 1 ∨
+    a (KIND order.val 4) = 1 ∨ a (KIND order.val 5) = 1 ∨
+    a (KIND order.val 6) = 1 ∨ a (KIND order.val 7) = 1 := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hsum := kind_sum_exact hcanon hsat order
+  have h0 : a (KIND order.val 0) = 0 ∨ a (KIND order.val 0) = 1 := by
+    simpa using hbits.kind order (0 : Fin 8)
+  have h1 : a (KIND order.val 1) = 0 ∨ a (KIND order.val 1) = 1 := by
+    simpa using hbits.kind order (1 : Fin 8)
+  have h2 : a (KIND order.val 2) = 0 ∨ a (KIND order.val 2) = 1 := by
+    simpa using hbits.kind order (2 : Fin 8)
+  have h3 : a (KIND order.val 3) = 0 ∨ a (KIND order.val 3) = 1 := by
+    simpa using hbits.kind order (3 : Fin 8)
+  have h4 : a (KIND order.val 4) = 0 ∨ a (KIND order.val 4) = 1 := by
+    simpa using hbits.kind order (4 : Fin 8)
+  have h5 : a (KIND order.val 5) = 0 ∨ a (KIND order.val 5) = 1 := by
+    simpa using hbits.kind order (5 : Fin 8)
+  have h6 : a (KIND order.val 6) = 0 ∨ a (KIND order.val 6) = 1 := by
+    simpa using hbits.kind order (6 : Fin 8)
+  have h7 : a (KIND order.val 7) = 0 ∨ a (KIND order.val 7) = 1 := by
+    simpa using hbits.kind order (7 : Fin 8)
+  rcases h0 with h0 | h0
+  · rcases h1 with h1 | h1
+    · rcases h2 with h2 | h2
+      · rcases h3 with h3 | h3
+        · rcases h4 with h4 | h4
+          · rcases h5 with h5 | h5
+            · rcases h6 with h6 | h6
+              · rcases h7 with h7 | h7
+                · omega
+                · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr h7))))))
+              · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h6))))))
+            · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h5)))))
+          · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h4))))
+        · exact Or.inr (Or.inr (Or.inr (Or.inl h3)))
+      · exact Or.inr (Or.inr (Or.inl h2))
+    · exact Or.inr (Or.inl h1)
+  · exact Or.inl h0
+
+/-- Every kind column is the exact selector for the unique decoded integer kind. -/
+theorem kind_selector_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order : Fin 4) (kind : Fin 8) :
+    a (KIND order.val kind.val) =
+      if kindColumnValue a order = (kind.val : Int) then 1 else 0 := by
+  have hsum := kind_sum_exact hcanon hsat order
+  have hsel := kind_one_selected hcanon hsat order
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb0 : 0 ≤ a (KIND order.val 0) ∧ a (KIND order.val 0) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order (0 : Fin 8))
+  have hb1 : 0 ≤ a (KIND order.val 1) ∧ a (KIND order.val 1) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order (1 : Fin 8))
+  have hb2 : 0 ≤ a (KIND order.val 2) ∧ a (KIND order.val 2) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order (2 : Fin 8))
+  have hb3 : 0 ≤ a (KIND order.val 3) ∧ a (KIND order.val 3) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order (3 : Fin 8))
+  have hb4 : 0 ≤ a (KIND order.val 4) ∧ a (KIND order.val 4) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order (4 : Fin 8))
+  have hb5 : 0 ≤ a (KIND order.val 5) ∧ a (KIND order.val 5) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order (5 : Fin 8))
+  have hb6 : 0 ≤ a (KIND order.val 6) ∧ a (KIND order.val 6) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order (6 : Fin 8))
+  have hb7 : 0 ≤ a (KIND order.val 7) ∧ a (KIND order.val 7) ≤ 1 := by
+    simpa using bit_bounds (hbits.kind order (7 : Fin 8))
+  rcases hsel with hsel | hsel | hsel | hsel | hsel | hsel | hsel | hsel <;>
+    fin_cases kind <;>
+    simp only [kindColumnValue] <;> split <;> omega
+
+theorem fin8_cases (x : Fin 8) :
+    x = 0 ∨ x = 1 ∨ x = 2 ∨ x = 3 ∨ x = 4 ∨ x = 5 ∨ x = 6 ∨ x = 7 := by
+  fin_cases x <;> simp
+
+set_option maxRecDepth 4000 in
+theorem bidActive_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order price : Fin 4) :
+    (bidActive order.val price.val).eval a =
+      if (((decodedWitness a).orders order).toLimitOrder.side = Side.bid ∧
+          price.val ≤ ((decodedWitness a).orders order).toLimitOrder.limit)
+      then 1 else 0 := by
+  have hk := decoded_kind_coe hcanon hsat order
+  have s0 := kind_selector_decoded hcanon hsat order (0 : Fin 8)
+  have s1 := kind_selector_decoded hcanon hsat order (1 : Fin 8)
+  have s2 := kind_selector_decoded hcanon hsat order (2 : Fin 8)
+  have s3 := kind_selector_decoded hcanon hsat order (3 : Fin 8)
+  have s4 := kind_selector_decoded hcanon hsat order (4 : Fin 8)
+  have s5 := kind_selector_decoded hcanon hsat order (5 : Fin 8)
+  have s6 := kind_selector_decoded hcanon hsat order (6 : Fin 8)
+  have s7 := kind_selector_decoded hcanon hsat order (7 : Fin 8)
+  have hcases := fin8_cases ((decodedWitness a).orders order).kind
+  rcases hcases with hkind | hkind | hkind | hkind | hkind | hkind | hkind | hkind
+  all_goals
+    rw [hkind] at hk
+    norm_num at hk
+    rw [← hk] at s0 s1 s2 s3 s4 s5 s6 s7
+    norm_num at s0 s1 s2 s3 s4 s5 s6 s7
+    fin_cases price <;>
+      norm_num [bidActive, sumE, add, v, c, EmittedExpr.eval,
+        List.range_succ, Function.comp_apply, PrivateOrder.toLimitOrder,
+        hkind, s0, s1, s2, s3, s4, s5, s6, s7]
+  all_goals decide
+
+set_option maxRecDepth 4000 in
+theorem askActive_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (order price : Fin 4) :
+    (askActive order.val price.val).eval a =
+      if (((decodedWitness a).orders order).toLimitOrder.side = Side.ask ∧
+          ((decodedWitness a).orders order).toLimitOrder.limit ≤ price.val)
+      then 1 else 0 := by
+  have hk := decoded_kind_coe hcanon hsat order
+  have s0 := kind_selector_decoded hcanon hsat order (0 : Fin 8)
+  have s1 := kind_selector_decoded hcanon hsat order (1 : Fin 8)
+  have s2 := kind_selector_decoded hcanon hsat order (2 : Fin 8)
+  have s3 := kind_selector_decoded hcanon hsat order (3 : Fin 8)
+  have s4 := kind_selector_decoded hcanon hsat order (4 : Fin 8)
+  have s5 := kind_selector_decoded hcanon hsat order (5 : Fin 8)
+  have s6 := kind_selector_decoded hcanon hsat order (6 : Fin 8)
+  have s7 := kind_selector_decoded hcanon hsat order (7 : Fin 8)
+  have hcases := fin8_cases ((decodedWitness a).orders order).kind
+  rcases hcases with hkind | hkind | hkind | hkind | hkind | hkind | hkind | hkind
+  all_goals
+    rw [hkind] at hk
+    norm_num at hk
+    rw [← hk] at s0 s1 s2 s3 s4 s5 s6 s7
+    norm_num at s0 s1 s2 s3 s4 s5 s6 s7
+    fin_cases price <;>
+      norm_num [askActive, sumE, add, v, c, EmittedExpr.eval,
+        List.range_succ, Function.comp_apply, PrivateOrder.toLimitOrder,
+        hkind, s0, s1, s2, s3, s4, s5, s6, s7]
+  all_goals decide
+
+theorem demand_body_mem (price : Fin 4) :
+    sub (v (DEMAND price.val)) (demandExpr price.val) ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+theorem supply_body_mem (price : Fin 4) :
+    sub (v (SUPPLY price.val)) (supplyExpr price.val) ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+theorem demandExpr_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    (demandExpr price.val).eval a = demand (privateBook (decodedWitness a)) price.val := by
+  have h0 := bidActive_decoded hcanon hsat (0 : Fin 4) price
+  have h1 := bidActive_decoded hcanon hsat (1 : Fin 4) price
+  have h2 := bidActive_decoded hcanon hsat (2 : Fin 4) price
+  have h3 := bidActive_decoded hcanon hsat (3 : Fin 4) price
+  have q0 := decoded_qty_coe hcanon hsat (0 : Fin 4)
+  have q1 := decoded_qty_coe hcanon hsat (1 : Fin 4)
+  have q2 := decoded_qty_coe hcanon hsat (2 : Fin 4)
+  have q3 := decoded_qty_coe hcanon hsat (3 : Fin 4)
+  norm_num [demandExpr, sumE, mul, add, v, c, EmittedExpr.eval,
+    List.range_succ, Function.comp_apply]
+  norm_num at h0 h1 h2 h3 q0 q1 q2 q3
+  rw [h0, h1, h2, h3]
+  rw [← q0, ← q1, ← q2, ← q3]
+  simp [privateBook, demand, demandIncr, PrivateOrder.toLimitOrder, List.ofFn_succ]
+
+theorem supplyExpr_decoded
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    (supplyExpr price.val).eval a = supply (privateBook (decodedWitness a)) price.val := by
+  have h0 := askActive_decoded hcanon hsat (0 : Fin 4) price
+  have h1 := askActive_decoded hcanon hsat (1 : Fin 4) price
+  have h2 := askActive_decoded hcanon hsat (2 : Fin 4) price
+  have h3 := askActive_decoded hcanon hsat (3 : Fin 4) price
+  have q0 := decoded_qty_coe hcanon hsat (0 : Fin 4)
+  have q1 := decoded_qty_coe hcanon hsat (1 : Fin 4)
+  have q2 := decoded_qty_coe hcanon hsat (2 : Fin 4)
+  have q3 := decoded_qty_coe hcanon hsat (3 : Fin 4)
+  norm_num [supplyExpr, sumE, mul, add, v, c, EmittedExpr.eval,
+    List.range_succ, Function.comp_apply]
+  norm_num at h0 h1 h2 h3 q0 q1 q2 q3
+  rw [h0, h1, h2, h3]
+  rw [← q0, ← q1, ← q2, ← q3]
+  simp [privateBook, supply, supplyIncr, PrivateOrder.toLimitOrder, List.ofFn_succ]
+
+theorem demand_decoded_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    0 ≤ demand (privateBook (decodedWitness a)) price.val ∧
+      demand (privateBook (decodedWitness a)) price.val ≤ 60 := by
+  have q0 := qty_column_bounds hcanon hsat (0 : Fin 4)
+  have q1 := qty_column_bounds hcanon hsat (1 : Fin 4)
+  have q2 := qty_column_bounds hcanon hsat (2 : Fin 4)
+  have q3 := qty_column_bounds hcanon hsat (3 : Fin 4)
+  have h0 := bidActive_decoded hcanon hsat (0 : Fin 4) price
+  have h1 := bidActive_decoded hcanon hsat (1 : Fin 4) price
+  have h2 := bidActive_decoded hcanon hsat (2 : Fin 4) price
+  have h3 := bidActive_decoded hcanon hsat (3 : Fin 4) price
+  norm_num at h0 h1 h2 h3 q0 q1 q2 q3
+  have b0 : (bidActive 0 price.val).eval a = 0 ∨ (bidActive 0 price.val).eval a = 1 := by
+    rw [h0]; split <;> simp
+  have b1 : (bidActive 1 price.val).eval a = 0 ∨ (bidActive 1 price.val).eval a = 1 := by
+    rw [h1]; split <;> simp
+  have b2 : (bidActive 2 price.val).eval a = 0 ∨ (bidActive 2 price.val).eval a = 1 := by
+    rw [h2]; split <;> simp
+  have b3 : (bidActive 3 price.val).eval a = 0 ∨ (bidActive 3 price.val).eval a = 1 := by
+    rw [h3]; split <;> simp
+  rw [← demandExpr_decoded hcanon hsat price]
+  norm_num [demandExpr, sumE, mul, add, v, c, EmittedExpr.eval,
+    List.range_succ, Function.comp_apply]
+  rcases b0 with b0 | b0 <;> rcases b1 with b1 | b1 <;>
+    rcases b2 with b2 | b2 <;> rcases b3 with b3 | b3 <;> simp_all <;> omega
+
+theorem supply_decoded_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    0 ≤ supply (privateBook (decodedWitness a)) price.val ∧
+      supply (privateBook (decodedWitness a)) price.val ≤ 60 := by
+  have q0 := qty_column_bounds hcanon hsat (0 : Fin 4)
+  have q1 := qty_column_bounds hcanon hsat (1 : Fin 4)
+  have q2 := qty_column_bounds hcanon hsat (2 : Fin 4)
+  have q3 := qty_column_bounds hcanon hsat (3 : Fin 4)
+  have h0 := askActive_decoded hcanon hsat (0 : Fin 4) price
+  have h1 := askActive_decoded hcanon hsat (1 : Fin 4) price
+  have h2 := askActive_decoded hcanon hsat (2 : Fin 4) price
+  have h3 := askActive_decoded hcanon hsat (3 : Fin 4) price
+  norm_num at h0 h1 h2 h3 q0 q1 q2 q3
+  have b0 : (askActive 0 price.val).eval a = 0 ∨ (askActive 0 price.val).eval a = 1 := by
+    rw [h0]; split <;> simp
+  have b1 : (askActive 1 price.val).eval a = 0 ∨ (askActive 1 price.val).eval a = 1 := by
+    rw [h1]; split <;> simp
+  have b2 : (askActive 2 price.val).eval a = 0 ∨ (askActive 2 price.val).eval a = 1 := by
+    rw [h2]; split <;> simp
+  have b3 : (askActive 3 price.val).eval a = 0 ∨ (askActive 3 price.val).eval a = 1 := by
+    rw [h3]; split <;> simp
+  rw [← supplyExpr_decoded hcanon hsat price]
+  norm_num [supplyExpr, sumE, mul, add, v, c, EmittedExpr.eval,
+    List.range_succ, Function.comp_apply]
+  rcases b0 with b0 | b0 <;> rcases b1 with b1 | b1 <;>
+    rcases b2 with b2 | b2 <;> rcases b3 with b3 | b3 <;> simp_all <;> omega
+
+theorem demand_column_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (DEMAND price.val) = demand (privateBook (decodedWitness a)) price.val := by
+  have hgate := semantic_gate_vanishes hsat (demand_body_mem price)
+  simp only [sub, neg, mul, add, v, c, EmittedExpr.eval] at hgate
+  rw [demandExpr_decoded hcanon hsat price] at hgate
+  have hcong : a (DEMAND price.val) ≡ demand (privateBook (decodedWitness a)) price.val
+      [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hgate.add_right (demand (privateBook (decodedWitness a)) price.val)
+  exact eq_of_modEq_of_canonical hcong (hcanon (DEMAND price.val)) (by
+    have h := demand_decoded_bounds hcanon hsat price
+    simp only [BABYBEAR_MODULUS]
+    omega)
+
+theorem supply_column_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (SUPPLY price.val) = supply (privateBook (decodedWitness a)) price.val := by
+  have hgate := semantic_gate_vanishes hsat (supply_body_mem price)
+  simp only [sub, neg, mul, add, v, c, EmittedExpr.eval] at hgate
+  rw [supplyExpr_decoded hcanon hsat price] at hgate
+  have hcong : a (SUPPLY price.val) ≡ supply (privateBook (decodedWitness a)) price.val
+      [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hgate.add_right (supply (privateBook (decodedWitness a)) price.val)
+  exact eq_of_modEq_of_canonical hcong (hcanon (SUPPLY price.val)) (by
+    have h := supply_decoded_bounds hcanon hsat price
+    simp only [BABYBEAR_MODULUS]
+    omega)
+
+def InZeroResidueWindow (x : Int) : Prop :=
+  -BABYBEAR_MODULUS < x ∧ x < BABYBEAR_MODULUS
+
+theorem eq_zero_of_modEq_zero_of_window {x : Int}
+    (hmod : x ≡ 0 [ZMOD BABYBEAR_MODULUS])
+    (hwindow : InZeroResidueWindow x) : x = 0 := by
+  obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp hmod
+  rcases hwindow with ⟨hlo, hhi⟩
+  simp only [BABYBEAR_MODULUS] at hk hlo hhi
+  omega
+
+theorem volume_body_mem (price : Fin 4) :
+    sub (v (VOLUME price.val))
+      (add (mul (v (MIN_CHOOSE price.val)) (v (DEMAND price.val)))
+        (mul (sub (c 1) (v (MIN_CHOOSE price.val))) (v (SUPPLY price.val)))) ∈
+      semanticBodies := by
+  fin_cases price <;> decide
+
+theorem min_diff_relation_body_mem (price : Fin 4) :
+    sub (v (MIN_DIFF price.val))
+      (add (mul (v (MIN_CHOOSE price.val))
+          (sub (v (SUPPLY price.val)) (v (DEMAND price.val))))
+        (mul (sub (c 1) (v (MIN_CHOOSE price.val)))
+          (sub (v (DEMAND price.val)) (v (SUPPLY price.val))))) ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+theorem volume_column_selected_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (VOLUME price.val) =
+      a (MIN_CHOOSE price.val) * a (DEMAND price.val) +
+        (1 - a (MIN_CHOOSE price.val)) * a (SUPPLY price.val) := by
+  have hc := (darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).minChoose price
+  have hd := demand_decoded_bounds hcanon hsat price
+  have hs := supply_decoded_bounds hcanon hsat price
+  have hde := demand_column_exact hcanon hsat price
+  have hse := supply_column_exact hcanon hsat price
+  have hgate := semantic_gate_vanishes hsat (volume_body_mem price)
+  have hres : a (VOLUME price.val) -
+      (a (MIN_CHOOSE price.val) * a (DEMAND price.val) +
+        (1 - a (MIN_CHOOSE price.val)) * a (SUPPLY price.val)) ≡
+        0 [ZMOD BABYBEAR_MODULUS] := by
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval, sub_eq_add_neg] using hgate
+  have hcong : a (VOLUME price.val) ≡
+      a (MIN_CHOOSE price.val) * a (DEMAND price.val) +
+        (1 - a (MIN_CHOOSE price.val)) * a (SUPPLY price.val)
+      [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right
+      (a (MIN_CHOOSE price.val) * a (DEMAND price.val) +
+        (1 - a (MIN_CHOOSE price.val)) * a (SUPPLY price.val))
+  apply eq_of_modEq_of_canonical hcong (hcanon (VOLUME price.val))
+  rw [hde, hse]
+  rcases hc with hc | hc <;> simp [hc, BABYBEAR_MODULUS] <;> omega
+
+theorem min_diff_relation_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (MIN_DIFF price.val) =
+      a (MIN_CHOOSE price.val) * (a (SUPPLY price.val) - a (DEMAND price.val)) +
+        (1 - a (MIN_CHOOSE price.val)) *
+          (a (DEMAND price.val) - a (SUPPLY price.val)) := by
+  have hc := (darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).minChoose price
+  have hd := demand_decoded_bounds hcanon hsat price
+  have hs := supply_decoded_bounds hcanon hsat price
+  have hde := demand_column_exact hcanon hsat price
+  have hse := supply_column_exact hcanon hsat price
+  have hm := min_diff_column_bounds hcanon hsat price
+  have hgate := semantic_gate_vanishes hsat (min_diff_relation_body_mem price)
+  have hres : a (MIN_DIFF price.val) -
+      (a (MIN_CHOOSE price.val) * (a (SUPPLY price.val) - a (DEMAND price.val)) +
+        (1 - a (MIN_CHOOSE price.val)) *
+          (a (DEMAND price.val) - a (SUPPLY price.val))) ≡
+        0 [ZMOD BABYBEAR_MODULUS] := by
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval, sub_eq_add_neg] using hgate
+  apply sub_eq_zero.mp
+  apply eq_zero_of_modEq_zero_of_window hres
+  simp only [InZeroResidueWindow, BABYBEAR_MODULUS]
+  rw [hde, hse]
+  rcases hc with hc | hc <;> simp [hc] <;> omega
+
+theorem volume_column_semantic
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (VOLUME price.val) = execVol (privateBook (decodedWitness a)) price.val := by
+  have hc := (darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat).minChoose price
+  have hv := volume_column_selected_exact hcanon hsat price
+  have hm := min_diff_relation_exact hcanon hsat price
+  have hmb := min_diff_column_bounds hcanon hsat price
+  have hd := demand_column_exact hcanon hsat price
+  have hs := supply_column_exact hcanon hsat price
+  rcases hc with hc | hc
+  · have hle : a (SUPPLY price.val) ≤ a (DEMAND price.val) := by
+      simp [hc] at hm
+      omega
+    simp [hc] at hv
+    unfold execVol
+    rw [← hd, ← hs, min_eq_right hle]
+    exact hv
+  · have hle : a (DEMAND price.val) ≤ a (SUPPLY price.val) := by
+      simp [hc] at hm
+      omega
+    simp [hc] at hv
+    unfold execVol
+    rw [← hd, ← hs, min_eq_left hle]
+    exact hv
+
+theorem volume_column_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    0 ≤ a (VOLUME price.val) ∧ a (VOLUME price.val) ≤ 60 := by
+  rw [volume_column_semantic hcanon hsat price]
+  simp only [execVol]
+  have hd := demand_decoded_bounds hcanon hsat price
+  have hs := supply_decoded_bounds hcanon hsat price
+  omega
+
+theorem select_sum_body_mem :
+    sub (sumE ((List.range 4).map (fun price => v (SELECT price)))) (c 1) ∈
+      semanticBodies := by decide
+
+theorem pstar_body_mem :
+    sub (v PSTAR)
+      (sumE ((List.range 4).map
+        (fun (price : Nat) => weighted (price : Int) (v (SELECT price))))) ∈
+      semanticBodies := by decide
+
+theorem vstar_body_mem :
+    sub (v VSTAR)
+      (sumE ((List.range 4).map
+        (fun price => mul (v (SELECT price)) (v (VOLUME price))))) ∈ semanticBodies := by decide
+
+theorem max_diff_relation_body_mem (price : Fin 4) :
+    sub (v (MAX_DIFF price.val)) (sub (v VSTAR) (v (VOLUME price.val))) ∈
+      semanticBodies := by
+  fin_cases price <;> decide
+
+theorem low_slack_relation_body_mem (price : Fin 4) :
+    sub (v (LOW_SLACK price.val))
+      (sub (v (MAX_DIFF price.val)) (laterSelected price.val)) ∈ semanticBodies := by
+  fin_cases price <;> decide
+
+theorem select_sum_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    a (SELECT 0) + a (SELECT 1) + a (SELECT 2) + a (SELECT 3) = 1 := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb0 := hbits.select 0; have hb1 := hbits.select 1
+  have hb2 := hbits.select 2; have hb3 := hbits.select 3
+  have hgate := semantic_gate_vanishes hsat select_sum_body_mem
+  have hres :
+      (a (SELECT 0) + a (SELECT 1) + a (SELECT 2) + a (SELECT 3)) - 1 ≡
+        0 [ZMOD BABYBEAR_MODULUS] := by
+    norm_num [sumE, sub, neg, mul, add, v, c, EmittedExpr.eval,
+      List.range_succ, Function.comp_apply, add_assoc] at hgate
+    simpa [sub_eq_add_neg, add_assoc] using hgate
+  have hcong : a (SELECT 0) + a (SELECT 1) + a (SELECT 2) + a (SELECT 3) ≡
+      1 [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right 1
+  apply eq_of_modEq_of_canonical hcong
+  · rcases hb0 with hb0 | hb0 <;> rcases hb1 with hb1 | hb1 <;>
+      rcases hb2 with hb2 | hb2 <;> rcases hb3 with hb3 | hb3 <;>
+      simp_all [BABYBEAR_MODULUS]
+  · norm_num [BABYBEAR_MODULUS]
+
+theorem pstar_column_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    a PSTAR = a (SELECT 1) + 2 * a (SELECT 2) + 3 * a (SELECT 3) := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb1 := hbits.select 1; have hb2 := hbits.select 2; have hb3 := hbits.select 3
+  have hgate := semantic_gate_vanishes hsat pstar_body_mem
+  have hres : a PSTAR - (a (SELECT 1) + 2 * a (SELECT 2) + 3 * a (SELECT 3)) ≡
+      0 [ZMOD BABYBEAR_MODULUS] := by
+    norm_num [sumE, weighted, sub, neg, mul, add, v, c, EmittedExpr.eval,
+      List.range_succ, Function.comp_apply, add_assoc] at hgate
+    simpa [sub_eq_add_neg, add_assoc] using hgate
+  have hcong : a PSTAR ≡ a (SELECT 1) + 2 * a (SELECT 2) + 3 * a (SELECT 3)
+      [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right (a (SELECT 1) + 2 * a (SELECT 2) + 3 * a (SELECT 3))
+  apply eq_of_modEq_of_canonical hcong (hcanon PSTAR)
+  rcases hb1 with hb1 | hb1 <;> rcases hb2 with hb2 | hb2 <;>
+    rcases hb3 with hb3 | hb3 <;> simp_all [BABYBEAR_MODULUS]
+
+theorem vstar_column_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    a VSTAR =
+      a (SELECT 0) * a (VOLUME 0) + a (SELECT 1) * a (VOLUME 1) +
+        a (SELECT 2) * a (VOLUME 2) + a (SELECT 3) * a (VOLUME 3) := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hs0 := hbits.select 0; have hs1 := hbits.select 1
+  have hs2 := hbits.select 2; have hs3 := hbits.select 3
+  have hv0 := volume_column_bounds hcanon hsat (0 : Fin 4)
+  have hv1 := volume_column_bounds hcanon hsat (1 : Fin 4)
+  have hv2 := volume_column_bounds hcanon hsat (2 : Fin 4)
+  have hv3 := volume_column_bounds hcanon hsat (3 : Fin 4)
+  have hgate := semantic_gate_vanishes hsat vstar_body_mem
+  have hres : a VSTAR -
+      (a (SELECT 0) * a (VOLUME 0) + a (SELECT 1) * a (VOLUME 1) +
+        a (SELECT 2) * a (VOLUME 2) + a (SELECT 3) * a (VOLUME 3)) ≡
+        0 [ZMOD BABYBEAR_MODULUS] := by
+    norm_num [sumE, sub, neg, mul, add, v, c, EmittedExpr.eval,
+      List.range_succ, Function.comp_apply, add_assoc] at hgate
+    simpa [sub_eq_add_neg, add_assoc] using hgate
+  have hcong : a VSTAR ≡
+      a (SELECT 0) * a (VOLUME 0) + a (SELECT 1) * a (VOLUME 1) +
+        a (SELECT 2) * a (VOLUME 2) + a (SELECT 3) * a (VOLUME 3)
+      [ZMOD BABYBEAR_MODULUS] := by
+    simpa using hres.add_right
+      (a (SELECT 0) * a (VOLUME 0) + a (SELECT 1) * a (VOLUME 1) +
+        a (SELECT 2) * a (VOLUME 2) + a (SELECT 3) * a (VOLUME 3))
+  apply eq_of_modEq_of_canonical hcong (hcanon VSTAR)
+  rcases hs0 with hs0 | hs0 <;> rcases hs1 with hs1 | hs1 <;>
+    rcases hs2 with hs2 | hs2 <;> rcases hs3 with hs3 | hs3 <;>
+    simp_all [BABYBEAR_MODULUS] <;> omega
+
+theorem vstar_column_bounds
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    0 ≤ a VSTAR ∧ a VSTAR ≤ 60 := by
+  rw [vstar_column_exact hcanon hsat]
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hs0 := hbits.select 0; have hs1 := hbits.select 1
+  have hs2 := hbits.select 2; have hs3 := hbits.select 3
+  have hsum := select_sum_exact hcanon hsat
+  have hv0 := volume_column_bounds hcanon hsat (0 : Fin 4)
+  have hv1 := volume_column_bounds hcanon hsat (1 : Fin 4)
+  have hv2 := volume_column_bounds hcanon hsat (2 : Fin 4)
+  have hv3 := volume_column_bounds hcanon hsat (3 : Fin 4)
+  rcases hs0 with hs0 | hs0 <;> rcases hs1 with hs1 | hs1 <;>
+    rcases hs2 with hs2 | hs2 <;> rcases hs3 with hs3 | hs3 <;> simp_all
+
+theorem max_diff_relation_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (MAX_DIFF price.val) = a VSTAR - a (VOLUME price.val) := by
+  have hm := max_diff_column_bounds hcanon hsat price
+  have hv := volume_column_bounds hcanon hsat price
+  have hs := vstar_column_bounds hcanon hsat
+  have hgate := semantic_gate_vanishes hsat (max_diff_relation_body_mem price)
+  have hres : a (MAX_DIFF price.val) - (a VSTAR - a (VOLUME price.val)) ≡
+      0 [ZMOD BABYBEAR_MODULUS] := by
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval, sub_eq_add_neg] using hgate
+  apply sub_eq_zero.mp
+  exact eq_zero_of_modEq_zero_of_window hres (by
+    simp only [InZeroResidueWindow, BABYBEAR_MODULUS]
+    omega)
+
+theorem low_slack_relation_exact
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) (price : Fin 4) :
+    a (LOW_SLACK price.val) =
+      a (MAX_DIFF price.val) - (laterSelected price.val).eval a := by
+  have hl := low_slack_column_bounds hcanon hsat price
+  have hm := max_diff_column_bounds hcanon hsat price
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hs0 := hbits.select 0; have hs1 := hbits.select 1
+  have hs2 := hbits.select 2; have hs3 := hbits.select 3
+  have hlater : 0 ≤ (laterSelected price.val).eval a ∧
+      (laterSelected price.val).eval a ≤ 3 := by
+    fin_cases price <;>
+      norm_num [laterSelected, sumE, add, v, c, EmittedExpr.eval,
+        List.range_succ, Function.comp_apply, add_assoc] <;>
+      rcases hs0 with hs0 | hs0 <;> rcases hs1 with hs1 | hs1 <;>
+      rcases hs2 with hs2 | hs2 <;> rcases hs3 with hs3 | hs3 <;> simp_all
+  have hgate := semantic_gate_vanishes hsat (low_slack_relation_body_mem price)
+  have hres : a (LOW_SLACK price.val) -
+      (a (MAX_DIFF price.val) - (laterSelected price.val).eval a) ≡
+      0 [ZMOD BABYBEAR_MODULUS] := by
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval, sub_eq_add_neg] using hgate
+  apply sub_eq_zero.mp
+  exact eq_zero_of_modEq_zero_of_window hres (by
+    simp only [InZeroResidueWindow, BABYBEAR_MODULUS]
+    omega)
+
+/-- Optimality plus strict dominance over all lower indices uniquely identifies
+the fixed lowest-price clearing bucket. -/
+theorem crossing_eq_of_optimal_and_lowest (bk : OrderBook) {chosen : Nat}
+    (hchosen : chosen < PRICE_COUNT)
+    (hmax : ∀ q < PRICE_COUNT, execVol bk q ≤ execVol bk chosen)
+    (hlow : ∀ q < chosen, execVol bk q < execVol bk chosen) :
+    crossing bk PRICE_COUNT = chosen := by
+  have hwlt := crossing_lt bk (by decide : 0 < PRICE_COUNT)
+  have hcw := hmax (crossing bk PRICE_COUNT) hwlt
+  have hwc : execVol bk chosen ≤ execVol bk (crossing bk PRICE_COUNT) := by
+    simpa only [execVol, clearedVolume] using clearedVolume_optimal bk PRICE_COUNT hchosen
+  by_contra hne
+  have hcases : crossing bk PRICE_COUNT < chosen ∨
+      chosen < crossing bk PRICE_COUNT := by omega
+  cases hcases with
+  | inl h =>
+      have := hlow (crossing bk PRICE_COUNT) h
+      omega
+  | inr h =>
+      have hstrict : execVol bk chosen < execVol bk (crossing bk PRICE_COUNT) := by
+        simpa only [clearedVolume] using crossing_strict_before bk h
+      omega
+
+theorem column_pstar_semantic
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    (columnPublic a).pStar = crossing (privateBook (decodedWitness a)) PRICE_COUNT := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb0 := hbits.select (0 : Fin 4); have hb1 := hbits.select (1 : Fin 4)
+  have hb2 := hbits.select (2 : Fin 4); have hb3 := hbits.select (3 : Fin 4)
+  have hsum := select_sum_exact hcanon hsat
+  have hp := pstar_column_exact hcanon hsat
+  have hv := vstar_column_exact hcanon hsat
+  have hd0 := max_diff_relation_exact hcanon hsat (0 : Fin 4)
+  have hd1 := max_diff_relation_exact hcanon hsat (1 : Fin 4)
+  have hd2 := max_diff_relation_exact hcanon hsat (2 : Fin 4)
+  have hd3 := max_diff_relation_exact hcanon hsat (3 : Fin 4)
+  have hdb0 := max_diff_column_bounds hcanon hsat (0 : Fin 4)
+  have hdb1 := max_diff_column_bounds hcanon hsat (1 : Fin 4)
+  have hdb2 := max_diff_column_bounds hcanon hsat (2 : Fin 4)
+  have hdb3 := max_diff_column_bounds hcanon hsat (3 : Fin 4)
+  have hl0 := low_slack_relation_exact hcanon hsat (0 : Fin 4)
+  have hl1 := low_slack_relation_exact hcanon hsat (1 : Fin 4)
+  have hl2 := low_slack_relation_exact hcanon hsat (2 : Fin 4)
+  have hl3 := low_slack_relation_exact hcanon hsat (3 : Fin 4)
+  have hlb0 := low_slack_column_bounds hcanon hsat (0 : Fin 4)
+  have hlb1 := low_slack_column_bounds hcanon hsat (1 : Fin 4)
+  have hlb2 := low_slack_column_bounds hcanon hsat (2 : Fin 4)
+  have hlb3 := low_slack_column_bounds hcanon hsat (3 : Fin 4)
+  have he0 := volume_column_semantic hcanon hsat (0 : Fin 4)
+  have he1 := volume_column_semantic hcanon hsat (1 : Fin 4)
+  have he2 := volume_column_semantic hcanon hsat (2 : Fin 4)
+  have he3 := volume_column_semantic hcanon hsat (3 : Fin 4)
+  norm_num [laterSelected, sumE, add, v, c, EmittedExpr.eval,
+    List.range_succ, Function.comp_apply, add_assoc] at hl0 hl1 hl2 hl3
+  rcases hb0 with hb0 | hb0 <;> rcases hb1 with hb1 | hb1 <;>
+    rcases hb2 with hb2 | hb2 <;> rcases hb3 with hb3 | hb3 <;> simp_all
+  all_goals
+    symm
+    apply crossing_eq_of_optimal_and_lowest
+    · simp [columnPublic, hp, PRICE_COUNT]
+    · intro q hq
+      simp only [PRICE_COUNT] at hq
+      have hcases : q = 0 ∨ q = 1 ∨ q = 2 ∨ q = 3 := by omega
+      rcases hcases with rfl | rfl | rfl | rfl <;> simp_all [columnPublic]
+    · intro q hq
+      have hcases : q = 0 ∨ q = 1 ∨ q = 2 := by
+        change q < (a PSTAR).toNat at hq
+        rw [hp] at hq
+        omega
+      rcases hcases with rfl | rfl | rfl <;> simp_all [columnPublic] <;> omega
+
+theorem column_vstar_semantic
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (hcanon : CanonicalAssignment a)
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    (columnPublic a).vStar = clearedVolume (privateBook (decodedWitness a)) PRICE_COUNT := by
+  have hbits := darkBazaarPrivateN4K4_private_bits_decoded hcanon hsat
+  have hb0 := hbits.select (0 : Fin 4); have hb1 := hbits.select (1 : Fin 4)
+  have hb2 := hbits.select (2 : Fin 4); have hb3 := hbits.select (3 : Fin 4)
+  have hsum := select_sum_exact hcanon hsat
+  have hp := pstar_column_exact hcanon hsat
+  have hv := vstar_column_exact hcanon hsat
+  have he0 := volume_column_semantic hcanon hsat (0 : Fin 4)
+  have he1 := volume_column_semantic hcanon hsat (1 : Fin 4)
+  have he2 := volume_column_semantic hcanon hsat (2 : Fin 4)
+  have he3 := volume_column_semantic hcanon hsat (3 : Fin 4)
+  have hcross := column_pstar_semantic hcanon hsat
+  simp only [columnPublic] at hcross ⊢
+  rw [clearedVolume, ← hcross]
+  rcases hb0 with hb0 | hb0 <;> rcases hb1 with hb1 | hb1 <;>
+    rcases hb2 with hb2 | hb2 <;> rcases hb3 with hb3 | hb3 <;>
+    simp_all [execVol]
+
+theorem darkBazaarPrivateN4K4_column_accepts
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (permOut : List Int → List Int)
+    (hcanon : CanonicalAssignment a)
+    (hChip : ChipTableSoundN permOut (tf TableId.poseidon2))
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    Accepts (permHash8 permOut) (columnPublic a) (decodedWitness a) := by
+  refine ⟨decoded_blinding_canonical a hcanon, ?_, ?_, ?_, ?_⟩
+  · simpa [columnPublic] using rule_column_exact hcanon hsat
+  · exact column_root_semantic permOut hcanon hChip hsat
+  · exact column_pstar_semantic hcanon hsat
+  · exact column_vstar_semantic hcanon hsat
+
+/-- **`DarkBazaarDescriptorToAccepts` is closed.** Satisfaction of the emitted
+AIR, canonical trace and PI representatives, and the sound wide-Poseidon table
+imply the exact private-book commitment and lowest-price volume-argmax semantics. -/
+theorem darkBazaarPrivateN4K4_descriptor_to_accepts
+    {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
+    (permOut : List Int → List Int)
+    (hcanon : CanonicalAssignment a)
+    (hcanonPis : CanonicalAssignment pis)
+    (hChip : ChipTableSoundN permOut (tf TableId.poseidon2))
+    (hsat : Satisfied2 hash darkBazaarPrivateN4K4Descriptor dbM0 dbF0 []
+      (constTrace a pis tf)) :
+    Accepts (permHash8 permOut) (piPublic pis) (decodedWitness a) := by
+  rw [pi_public_eq_column hcanon hcanonPis hsat]
+  exact darkBazaarPrivateN4K4_column_accepts permOut hcanon hChip hsat
+
 #assert_all_clean [
   Market.DarkBazaarPrivateDescriptor.orderCode_injective,
   Market.DarkBazaarPrivateDescriptor.packedBook_injective_on_orders,
@@ -574,6 +1926,16 @@ theorem binaryBody_zero_iff (a : Assignment) (col : Nat) :
   Market.DarkBazaarPrivateDescriptor.check_sound,
   Market.DarkBazaarPrivateDescriptor.two_distinct_openings_yield_root_collision,
   Market.DarkBazaarPrivateDescriptor.darkBazaarPrivateN4K4_emitted_air_sound,
-  Market.DarkBazaarPrivateDescriptor.binaryBody_zero_iff]
+  Market.DarkBazaarPrivateDescriptor.binaryBody_zero_iff,
+  Market.DarkBazaarPrivateDescriptor.darkBazaarPrivateN4K4_private_bits_decoded,
+  Market.DarkBazaarPrivateDescriptor.packed_book_decoded,
+  Market.DarkBazaarPrivateDescriptor.column_root_semantic,
+  Market.DarkBazaarPrivateDescriptor.demand_column_exact,
+  Market.DarkBazaarPrivateDescriptor.supply_column_exact,
+  Market.DarkBazaarPrivateDescriptor.volume_column_semantic,
+  Market.DarkBazaarPrivateDescriptor.column_pstar_semantic,
+  Market.DarkBazaarPrivateDescriptor.column_vstar_semantic,
+  Market.DarkBazaarPrivateDescriptor.pi_public_eq_column,
+  Market.DarkBazaarPrivateDescriptor.darkBazaarPrivateN4K4_descriptor_to_accepts]
 
 end Market.DarkBazaarPrivateDescriptor

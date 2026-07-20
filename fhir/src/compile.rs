@@ -34,6 +34,7 @@ use fhegg_solver::package::{PackageAuction, PackageBid};
 use fhegg_solver::pdhg::FlowLp;
 use fhegg_solver::pricecert::{american_put_binomial, Market, SnellTree};
 use fhegg_solver::qp::{markowitz, QpProblem};
+use sha2::{Digest, Sha256};
 
 /// The back-end IR a product compiles to — holding the REAL `fhegg-solver`
 /// engine types, so a compiled program RUNS through the engine unchanged
@@ -76,6 +77,10 @@ pub enum ConvexProgram {
 pub struct Compiled {
     pub name: String,
     pub program: ConvexProgram,
+    /// Durable exact SDD/PSD admission evidence. Compiler-produced values are
+    /// `Some` exactly for [`ConvexProgram::Qp`]; the runner re-verifies this
+    /// certificate against the backend `QpProblem::p` before solving.
+    pub exact_sdd_psd_certificate: Option<ExactSddPsdCertificate>,
     /// The MOST-PRIVATE tier the math honestly delivers.
     pub tier: Tier,
     pub cert: CertKind,
@@ -86,6 +91,7 @@ pub struct Compiled {
 struct Lowered {
     shape: ProgramType,
     program: ConvexProgram,
+    exact_sdd_psd_certificate: Option<ExactSddPsdCertificate>,
 }
 
 /// Infer the most-private admissible tier: the minimum tier (in the privacy
@@ -101,7 +107,11 @@ pub fn most_private_admissible(shape: &ProgramType) -> Tier {
 /// Compile a product: lower it, infer the most-private honest tier, and reject
 /// an over-claim with the precise reason.
 pub fn compile(p: &Product) -> Result<Compiled, TypeError> {
-    let Lowered { shape, program } = lower(p)?;
+    let Lowered {
+        shape,
+        program,
+        exact_sdd_psd_certificate,
+    } = lower(p)?;
     let honest = most_private_admissible(&shape);
 
     if let Some(claimed) = p.claim {
@@ -124,6 +134,7 @@ pub fn compile(p: &Product) -> Result<Compiled, TypeError> {
         name: p.name.clone(),
         cert: shape.cert,
         program,
+        exact_sdd_psd_certificate,
         tier: honest,
         shape,
     })
@@ -142,6 +153,402 @@ pub const QP_CERT_EXACT_SCALE: u32 = 9;
 /// envelope enforced by `fhegg_solver::qp_exact::lift_cert`.
 const F64_EXACT_INTEGER_BOUND: f64 = 9_007_199_254_740_992.0;
 
+const EXACT_SDD_PSD_CERTIFICATE_VERSION: u8 = 1;
+const EXACT_SDD_PSD_CERTIFICATE_MAGIC: &[u8; 8] = b"FHSDD001";
+const EXACT_SDD_PSD_CHECKSUM_DOMAIN: &[u8] = b"fhir/exact-sdd-psd-certificate/v1";
+const EXACT_SDD_PSD_WIRE_HEADER_LEN: usize = 8 + 1 + 4 + 8 + 8 + 8;
+const EXACT_SDD_PSD_WIRE_CHECKSUM_LEN: usize = 32;
+pub const MAX_EXACT_SDD_DIMENSION: usize = 2048;
+pub const MAX_EXACT_SDD_CERTIFICATE_WIRE_BYTES: usize = EXACT_SDD_PSD_WIRE_HEADER_LEN
+    + 16 * (MAX_EXACT_SDD_DIMENSION * MAX_EXACT_SDD_DIMENSION + MAX_EXACT_SDD_DIMENSION)
+    + EXACT_SDD_PSD_WIRE_CHECKSUM_LEN;
+
+/// Re-verifiable witness that the exact rounded QP objective matrix belongs to
+/// fhIR's conservative symmetric diagonally-dominant PSD family.
+///
+/// The exact entries are the canonical symmetric backend matrix multiplied by
+/// `10^scale`; `row_radii[row]` is the checked sum of absolute off-diagonal
+/// entries in that row. Fields are private so only the compiler's checked lift
+/// can mint a certificate, while [`verify_against`](Self::verify_against)
+/// independently replays every structural and backend-binding check.
+///
+/// The Lean theorem proves that this integer SDD premise implies PSD. The Rust
+/// path from source `f64` through tolerance acceptance, symmetric averaging,
+/// scaling, and rounding remains a structurally pinned/KAT boundary; this type
+/// does not by itself prove a full real-to-floating refinement theorem.
+/// The wire checksum below detects accidental corruption only. It is public,
+/// unkeyed SHA-256 domain separation—not authenticity, issuer identity, or a
+/// substitute for a signed transport envelope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExactSddPsdCertificate {
+    version: u8,
+    scale: u32,
+    dimension: usize,
+    exact_entries: Vec<i128>,
+    row_radii: Vec<i128>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExactSddPsdCertificateError {
+    MissingForQp,
+    UnexpectedForNonQp,
+    UnsupportedVersion { found: u8 },
+    UnsupportedScale { found: u32 },
+    EmptyDimension,
+    DimensionOverflow,
+    DimensionTooLarge { found: usize, maximum: usize },
+    ExactEntryCount { actual: usize, expected: usize },
+    RowRadiusCount { actual: usize, expected: usize },
+    BackendDimension { actual: usize, expected: usize },
+    BackendEntryCount { actual: usize, expected: usize },
+    BackendNonFinite { index: usize },
+    ExactEntryOutOfRange { index: usize },
+    BackendBindingMismatch { index: usize },
+    Asymmetric { row: usize, col: usize },
+    NegativeDiagonal { row: usize },
+    RowAbsoluteSumOverflow { row: usize },
+    RowRadiusMismatch { row: usize },
+    NotDiagonallyDominant { row: usize },
+    MalformedWire,
+    WireTooLarge { actual: usize, maximum: usize },
+    ChecksumMismatch,
+}
+
+impl std::fmt::Display for ExactSddPsdCertificateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for ExactSddPsdCertificateError {}
+
+impl ExactSddPsdCertificate {
+    fn from_checked_lift(dimension: usize, exact_entries: Vec<i128>, row_radii: Vec<i128>) -> Self {
+        Self {
+            version: EXACT_SDD_PSD_CERTIFICATE_VERSION,
+            scale: QP_CERT_EXACT_SCALE,
+            dimension,
+            exact_entries,
+            row_radii,
+        }
+    }
+
+    pub fn version(&self) -> u8 {
+        self.version
+    }
+
+    pub fn scale(&self) -> u32 {
+        self.scale
+    }
+
+    pub fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    pub fn exact_entries(&self) -> &[i128] {
+        &self.exact_entries
+    }
+
+    pub fn row_radii(&self) -> &[i128] {
+        &self.row_radii
+    }
+
+    /// Strict canonical cross-process artifact. Signed integers are two's-
+    /// complement i128 in network byte order; no serde format is involved.
+    pub fn to_wire_bytes(&self) -> Result<Vec<u8>, ExactSddPsdCertificateError> {
+        self.verify_structure()?;
+        let wire_len = exact_sdd_psd_wire_len(self.dimension)?;
+        let mut out = Vec::with_capacity(wire_len);
+        out.extend_from_slice(EXACT_SDD_PSD_CERTIFICATE_MAGIC);
+        out.push(self.version);
+        out.extend_from_slice(&self.scale.to_be_bytes());
+        out.extend_from_slice(&(self.dimension as u64).to_be_bytes());
+        out.extend_from_slice(&(self.exact_entries.len() as u64).to_be_bytes());
+        out.extend_from_slice(&(self.row_radii.len() as u64).to_be_bytes());
+        for entry in &self.exact_entries {
+            out.extend_from_slice(&entry.to_be_bytes());
+        }
+        for radius in &self.row_radii {
+            out.extend_from_slice(&radius.to_be_bytes());
+        }
+        let checksum = exact_sdd_psd_checksum(&out);
+        out.extend_from_slice(&checksum);
+        debug_assert_eq!(out.len(), wire_len);
+        Ok(out)
+    }
+
+    /// Decode a bounded, exact-EOF artifact, validate its corruption checksum,
+    /// replay every SDD structural check, and require canonical re-encoding.
+    pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self, ExactSddPsdCertificateError> {
+        if bytes.len() > MAX_EXACT_SDD_CERTIFICATE_WIRE_BYTES {
+            return Err(ExactSddPsdCertificateError::WireTooLarge {
+                actual: bytes.len(),
+                maximum: MAX_EXACT_SDD_CERTIFICATE_WIRE_BYTES,
+            });
+        }
+        if bytes.len() < EXACT_SDD_PSD_WIRE_HEADER_LEN + EXACT_SDD_PSD_WIRE_CHECKSUM_LEN {
+            return Err(ExactSddPsdCertificateError::MalformedWire);
+        }
+        let mut cursor = ExactSddPsdWireCursor::new(bytes);
+        if cursor.take::<8>()? != *EXACT_SDD_PSD_CERTIFICATE_MAGIC {
+            return Err(ExactSddPsdCertificateError::MalformedWire);
+        }
+        let version = cursor.take::<1>()?[0];
+        if version != EXACT_SDD_PSD_CERTIFICATE_VERSION {
+            return Err(ExactSddPsdCertificateError::UnsupportedVersion { found: version });
+        }
+        let scale = u32::from_be_bytes(cursor.take::<4>()?);
+        if scale != QP_CERT_EXACT_SCALE {
+            return Err(ExactSddPsdCertificateError::UnsupportedScale { found: scale });
+        }
+        let dimension_u64 = u64::from_be_bytes(cursor.take::<8>()?);
+        let dimension = usize::try_from(dimension_u64)
+            .map_err(|_| ExactSddPsdCertificateError::DimensionOverflow)?;
+        if dimension == 0 {
+            return Err(ExactSddPsdCertificateError::EmptyDimension);
+        }
+        if dimension > MAX_EXACT_SDD_DIMENSION {
+            return Err(ExactSddPsdCertificateError::DimensionTooLarge {
+                found: dimension,
+                maximum: MAX_EXACT_SDD_DIMENSION,
+            });
+        }
+        let expected_entries = dimension
+            .checked_mul(dimension)
+            .ok_or(ExactSddPsdCertificateError::DimensionOverflow)?;
+        let entry_count = usize::try_from(u64::from_be_bytes(cursor.take::<8>()?))
+            .map_err(|_| ExactSddPsdCertificateError::DimensionOverflow)?;
+        let radius_count = usize::try_from(u64::from_be_bytes(cursor.take::<8>()?))
+            .map_err(|_| ExactSddPsdCertificateError::DimensionOverflow)?;
+        if entry_count != expected_entries {
+            return Err(ExactSddPsdCertificateError::ExactEntryCount {
+                actual: entry_count,
+                expected: expected_entries,
+            });
+        }
+        if radius_count != dimension {
+            return Err(ExactSddPsdCertificateError::RowRadiusCount {
+                actual: radius_count,
+                expected: dimension,
+            });
+        }
+        let expected_wire_len = exact_sdd_psd_wire_len(dimension)?;
+        if bytes.len() != expected_wire_len {
+            return Err(ExactSddPsdCertificateError::MalformedWire);
+        }
+        let payload_len = expected_wire_len - EXACT_SDD_PSD_WIRE_CHECKSUM_LEN;
+        let expected_checksum = exact_sdd_psd_checksum(&bytes[..payload_len]);
+        if bytes[payload_len..] != expected_checksum {
+            return Err(ExactSddPsdCertificateError::ChecksumMismatch);
+        }
+
+        let mut exact_entries = Vec::with_capacity(entry_count);
+        for _ in 0..entry_count {
+            exact_entries.push(i128::from_be_bytes(cursor.take::<16>()?));
+        }
+        let mut row_radii = Vec::with_capacity(radius_count);
+        for _ in 0..radius_count {
+            row_radii.push(i128::from_be_bytes(cursor.take::<16>()?));
+        }
+        let checksum = cursor.take::<EXACT_SDD_PSD_WIRE_CHECKSUM_LEN>()?;
+        if checksum != expected_checksum || !cursor.is_finished() {
+            return Err(ExactSddPsdCertificateError::MalformedWire);
+        }
+        let certificate = Self {
+            version,
+            scale,
+            dimension,
+            exact_entries,
+            row_radii,
+        };
+        certificate.verify_structure()?;
+        if certificate.to_wire_bytes()?.as_slice() != bytes {
+            return Err(ExactSddPsdCertificateError::MalformedWire);
+        }
+        Ok(certificate)
+    }
+
+    fn verify_structure(&self) -> Result<usize, ExactSddPsdCertificateError> {
+        if self.version != EXACT_SDD_PSD_CERTIFICATE_VERSION {
+            return Err(ExactSddPsdCertificateError::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        if self.scale != QP_CERT_EXACT_SCALE {
+            return Err(ExactSddPsdCertificateError::UnsupportedScale { found: self.scale });
+        }
+        if self.dimension == 0 {
+            return Err(ExactSddPsdCertificateError::EmptyDimension);
+        }
+        if self.dimension > MAX_EXACT_SDD_DIMENSION {
+            return Err(ExactSddPsdCertificateError::DimensionTooLarge {
+                found: self.dimension,
+                maximum: MAX_EXACT_SDD_DIMENSION,
+            });
+        }
+        let expected_len = self
+            .dimension
+            .checked_mul(self.dimension)
+            .ok_or(ExactSddPsdCertificateError::DimensionOverflow)?;
+        if self.exact_entries.len() != expected_len {
+            return Err(ExactSddPsdCertificateError::ExactEntryCount {
+                actual: self.exact_entries.len(),
+                expected: expected_len,
+            });
+        }
+        if self.row_radii.len() != self.dimension {
+            return Err(ExactSddPsdCertificateError::RowRadiusCount {
+                actual: self.row_radii.len(),
+                expected: self.dimension,
+            });
+        }
+        let exact_bound = F64_EXACT_INTEGER_BOUND as i128;
+        for (index, entry) in self.exact_entries.iter().copied().enumerate() {
+            let magnitude = entry
+                .checked_abs()
+                .ok_or(ExactSddPsdCertificateError::ExactEntryOutOfRange { index })?;
+            if magnitude > exact_bound {
+                return Err(ExactSddPsdCertificateError::ExactEntryOutOfRange { index });
+            }
+        }
+        for row in 0..self.dimension {
+            for col in 0..row {
+                if self.exact_entries[row * self.dimension + col]
+                    != self.exact_entries[col * self.dimension + row]
+                {
+                    return Err(ExactSddPsdCertificateError::Asymmetric { row, col });
+                }
+            }
+            let diagonal = self.exact_entries[row * self.dimension + row];
+            if diagonal < 0 {
+                return Err(ExactSddPsdCertificateError::NegativeDiagonal { row });
+            }
+            let mut radius = 0_i128;
+            for col in 0..self.dimension {
+                if col == row {
+                    continue;
+                }
+                let magnitude = self.exact_entries[row * self.dimension + col]
+                    .checked_abs()
+                    .ok_or(ExactSddPsdCertificateError::RowAbsoluteSumOverflow { row })?;
+                radius = radius
+                    .checked_add(magnitude)
+                    .ok_or(ExactSddPsdCertificateError::RowAbsoluteSumOverflow { row })?;
+            }
+            if self.row_radii[row] != radius {
+                return Err(ExactSddPsdCertificateError::RowRadiusMismatch { row });
+            }
+            if diagonal < radius {
+                return Err(ExactSddPsdCertificateError::NotDiagonallyDominant { row });
+            }
+        }
+        Ok(expected_len)
+    }
+
+    /// Recheck the certificate and bind it bit-exactly to the actual backend
+    /// matrix. The only accepted `f64` for an exact entry `z` is the canonical
+    /// Rust value `z as f64 / 10^scale` produced by the checked compiler lift.
+    pub fn verify_against(&self, problem: &QpProblem) -> Result<(), ExactSddPsdCertificateError> {
+        let expected_len = self.verify_structure()?;
+        if problem.n != self.dimension {
+            return Err(ExactSddPsdCertificateError::BackendDimension {
+                actual: problem.n,
+                expected: self.dimension,
+            });
+        }
+        if problem.p.len() != expected_len {
+            return Err(ExactSddPsdCertificateError::BackendEntryCount {
+                actual: problem.p.len(),
+                expected: expected_len,
+            });
+        }
+        let factor = 10_i128.pow(self.scale) as f64;
+        for (index, (&actual, &exact)) in problem.p.iter().zip(&self.exact_entries).enumerate() {
+            if !actual.is_finite() {
+                return Err(ExactSddPsdCertificateError::BackendNonFinite { index });
+            }
+            let canonical = exact as f64 / factor;
+            if actual.to_bits() != canonical.to_bits() {
+                return Err(ExactSddPsdCertificateError::BackendBindingMismatch { index });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn exact_sdd_psd_wire_len(dimension: usize) -> Result<usize, ExactSddPsdCertificateError> {
+    if dimension == 0 {
+        return Err(ExactSddPsdCertificateError::EmptyDimension);
+    }
+    if dimension > MAX_EXACT_SDD_DIMENSION {
+        return Err(ExactSddPsdCertificateError::DimensionTooLarge {
+            found: dimension,
+            maximum: MAX_EXACT_SDD_DIMENSION,
+        });
+    }
+    let entries = dimension
+        .checked_mul(dimension)
+        .ok_or(ExactSddPsdCertificateError::DimensionOverflow)?;
+    entries
+        .checked_add(dimension)
+        .and_then(|count| count.checked_mul(16))
+        .and_then(|body| body.checked_add(EXACT_SDD_PSD_WIRE_HEADER_LEN))
+        .and_then(|body| body.checked_add(EXACT_SDD_PSD_WIRE_CHECKSUM_LEN))
+        .filter(|wire_len| *wire_len <= MAX_EXACT_SDD_CERTIFICATE_WIRE_BYTES)
+        .ok_or(ExactSddPsdCertificateError::DimensionOverflow)
+}
+
+fn exact_sdd_psd_checksum(payload: &[u8]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update((EXACT_SDD_PSD_CHECKSUM_DOMAIN.len() as u64).to_be_bytes());
+    hash.update(EXACT_SDD_PSD_CHECKSUM_DOMAIN);
+    hash.update((payload.len() as u64).to_be_bytes());
+    hash.update(payload);
+    hash.finalize().into()
+}
+
+struct ExactSddPsdWireCursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> ExactSddPsdWireCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take<const N: usize>(&mut self) -> Result<[u8; N], ExactSddPsdCertificateError> {
+        let end = self
+            .offset
+            .checked_add(N)
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or(ExactSddPsdCertificateError::MalformedWire)?;
+        let value = self.bytes[self.offset..end]
+            .try_into()
+            .map_err(|_| ExactSddPsdCertificateError::MalformedWire)?;
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}
+
+impl Compiled {
+    /// Validate the QP admission certificate carrier and its exact binding to
+    /// the backend matrix. This is also called by the solver bridge before any
+    /// QP iteration is executed.
+    pub fn verify_exact_sdd_psd_certificate(&self) -> Result<(), ExactSddPsdCertificateError> {
+        match (&self.program, &self.exact_sdd_psd_certificate) {
+            (ConvexProgram::Qp(problem), Some(certificate)) => certificate.verify_against(problem),
+            (ConvexProgram::Qp(_), None) => Err(ExactSddPsdCertificateError::MissingForQp),
+            (_, Some(_)) => Err(ExactSddPsdCertificateError::UnexpectedForNonQp),
+            (_, None) => Ok(()),
+        }
+    }
+}
+
 fn invalid_portfolio(violation: PortfolioQpViolation) -> TypeError {
     TypeError::InvalidPortfolioQp { violation }
 }
@@ -157,10 +564,13 @@ fn validate_portfolio_qp(
     mu: &[f64],
     lambda: f64,
     w_max: f64,
-) -> Result<Vec<f64>, TypeError> {
+) -> Result<(Vec<f64>, ExactSddPsdCertificate), TypeError> {
     let n = mu.len();
     if n == 0 {
         return Err(invalid_portfolio(PortfolioQpViolation::Empty));
+    }
+    if n > MAX_EXACT_SDD_DIMENSION {
+        return Err(invalid_portfolio(PortfolioQpViolation::DimensionOverflow));
     }
     let expected_len = n
         .checked_mul(n)
@@ -252,6 +662,7 @@ fn validate_portfolio_qp(
             exact[col * n + row] = lifted;
         }
     }
+    let mut row_radii = Vec::with_capacity(n);
     for row in 0..n {
         let diagonal = exact[row * n + row];
         let mut off_diagonal_sum = 0_i128;
@@ -275,14 +686,19 @@ fn validate_portfolio_qp(
                 },
             ));
         }
+        row_radii.push(off_diagonal_sum);
     }
+
+    let certificate = ExactSddPsdCertificate::from_checked_lift(n, exact, row_radii);
+    debug_assert!(certificate.verify_structure().is_ok());
 
     // The backend receives this exact rounded problem (converted back to f64),
     // not the tolerance-accepted source matrix. That keeps compiler admission,
     // optimization, and exact certificate checking on one public P.
-    let canonical_cov: Vec<f64> = exact
-        .into_iter()
-        .map(|entry| entry as f64 / exact_factor_f64)
+    let canonical_cov: Vec<f64> = certificate
+        .exact_entries
+        .iter()
+        .map(|entry| *entry as f64 / exact_factor_f64)
         .collect();
 
     // Additional diagnostic/conservative tooth on the actual backend f64 data.
@@ -290,7 +706,7 @@ fn validate_portfolio_qp(
     // factorization pathologies and fails closed on any non-finite intermediate.
     validate_portfolio_ldlt(&canonical_cov, n)?;
 
-    Ok(canonical_cov)
+    Ok((canonical_cov, certificate))
 }
 
 fn validate_portfolio_ldlt(cov: &[f64], n: usize) -> Result<(), TypeError> {
@@ -454,6 +870,7 @@ fn lower_uniform_price(orders: &[OrderSpec], k: usize) -> Lowered {
             orders: engine_orders,
             k,
         },
+        exact_sdd_psd_certificate: None,
     }
 }
 
@@ -484,6 +901,7 @@ fn lower_flow(nodes: usize, edges: &[EdgeSpec]) -> Lowered {
     Lowered {
         shape,
         program: ConvexProgram::FlowLp(lp),
+        exact_sdd_psd_certificate: None,
     }
 }
 
@@ -495,7 +913,7 @@ fn lower_portfolio(
 ) -> Result<Lowered, TypeError> {
     // Validate and canonicalize before the backend constructor can assert/panic
     // and before fhIR attaches the semantic `Convex` label.
-    let symmetric_cov = validate_portfolio_qp(cov, mu, lambda, w_max)?;
+    let (symmetric_cov, exact_sdd_psd_certificate) = validate_portfolio_qp(cov, mu, lambda, w_max)?;
     let prob: QpProblem = markowitz(&symmetric_cov, mu, lambda, w_max);
     let shape = ProgramType {
         kind: ProgramKind::Qp,
@@ -521,6 +939,7 @@ fn lower_portfolio(
     Ok(Lowered {
         shape,
         program: ConvexProgram::Qp(prob),
+        exact_sdd_psd_certificate: Some(exact_sdd_psd_certificate),
     })
 }
 
@@ -551,6 +970,7 @@ fn lower_derivative(instruments: &MatrixData, marks: &[f64], payoff: &[f64]) -> 
     Lowered {
         shape,
         program: ConvexProgram::StatePriceLp(market),
+        exact_sdd_psd_certificate: None,
     }
 }
 
@@ -580,6 +1000,7 @@ fn lower_american(spec: &BinomialSpec) -> Lowered {
     Lowered {
         shape,
         program: ConvexProgram::SnellLp(tree),
+        exact_sdd_psd_certificate: None,
     }
 }
 
@@ -626,6 +1047,7 @@ fn lower_discriminatory(orders: &[OrderSpec], k: usize) -> Lowered {
             orders: engine_orders,
             prices,
         },
+        exact_sdd_psd_certificate: None,
     }
 }
 
@@ -662,6 +1084,7 @@ fn lower_welfare_max(
     Lowered {
         shape,
         program: ConvexProgram::WelfareMax(market),
+        exact_sdd_psd_certificate: None,
     }
 }
 
@@ -695,6 +1118,7 @@ fn lower_cfmm(pools: &[PoolSpec], budget: f64) -> Lowered {
             pools: engine_pools,
             budget,
         }),
+        exact_sdd_psd_certificate: None,
     }
 }
 
@@ -731,6 +1155,7 @@ fn lower_package(n_items: usize, supply: &[f64], bids: &[PackageBidSpec]) -> Low
     Lowered {
         shape,
         program: ConvexProgram::PackageClearing(auction),
+        exact_sdd_psd_certificate: None,
     }
 }
 
@@ -738,6 +1163,7 @@ fn lower_package(n_items: usize, supply: &[f64], bids: &[PackageBidSpec]) -> Low
 mod tests {
     use super::*;
     use crate::products;
+    use crate::solver_bridge::{run, RunOutcome};
 
     fn portfolio_with_cov(cov: MatrixData, mu: Vec<f64>) -> Product {
         Product::infer(
@@ -757,6 +1183,7 @@ mod tests {
         assert_eq!(c.tier, Tier::Dark);
         assert_eq!(c.cert, CertKind::Aggregation);
         assert!(matches!(c.program, ConvexProgram::Aggregation { .. }));
+        assert!(c.exact_sdd_psd_certificate.is_none());
     }
 
     #[test]
@@ -919,10 +1346,252 @@ mod tests {
             vec![0.1, 0.2],
         );
         let compiled = compile(&p).unwrap();
-        let ConvexProgram::Qp(prob) = compiled.program else {
+        let certificate = compiled
+            .exact_sdd_psd_certificate
+            .as_ref()
+            .expect("QP carries exact SDD certificate");
+        let ConvexProgram::Qp(prob) = &compiled.program else {
             panic!("portfolio must lower to QP")
         };
         assert_eq!(prob.p[1], prob.p[2]);
+        assert_eq!(certificate.version(), 1);
+        assert_eq!(certificate.scale(), QP_CERT_EXACT_SCALE);
+        assert_eq!(certificate.dimension(), 2);
+        assert_eq!(certificate.exact_entries()[1], 250_000_000);
+        assert_eq!(certificate.exact_entries()[2], 250_000_000);
+        assert_eq!(certificate.row_radii(), &[250_000_000, 250_000_000]);
+        certificate.verify_against(prob).unwrap();
+    }
+
+    #[test]
+    fn exact_sdd_certificate_wire_is_strict_bounded_and_backend_reverifiable() {
+        fn refresh_checksum(wire: &mut [u8]) {
+            let payload_len = wire.len() - EXACT_SDD_PSD_WIRE_CHECKSUM_LEN;
+            let checksum = exact_sdd_psd_checksum(&wire[..payload_len]);
+            wire[payload_len..].copy_from_slice(&checksum);
+        }
+
+        let compiled = compile(&products::portfolio_qp_public()).unwrap();
+        let certificate = compiled.exact_sdd_psd_certificate.as_ref().unwrap();
+        let ConvexProgram::Qp(problem) = &compiled.program else {
+            unreachable!()
+        };
+        let wire = certificate.to_wire_bytes().unwrap();
+        let decoded = ExactSddPsdCertificate::from_wire_bytes(&wire).unwrap();
+        assert_eq!(decoded, *certificate);
+        assert_eq!(decoded.to_wire_bytes().unwrap(), wire);
+        decoded.verify_against(problem).unwrap();
+
+        for end in 0..wire.len() {
+            assert!(
+                ExactSddPsdCertificate::from_wire_bytes(&wire[..end]).is_err(),
+                "truncated certificate length {end}"
+            );
+        }
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&trailing),
+            Err(ExactSddPsdCertificateError::MalformedWire)
+        );
+        let mut wrong_magic = wire.clone();
+        wrong_magic[..8].copy_from_slice(b"FHSDD999");
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&wrong_magic),
+            Err(ExactSddPsdCertificateError::MalformedWire)
+        );
+        let mut old_magic = wire.clone();
+        old_magic[..8].copy_from_slice(b"FHSDD000");
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&old_magic),
+            Err(ExactSddPsdCertificateError::MalformedWire)
+        );
+        let mut wrong_version = wire.clone();
+        wrong_version[8] = 2;
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&wrong_version),
+            Err(ExactSddPsdCertificateError::UnsupportedVersion { found: 2 })
+        );
+
+        let mut oversized_dimension = wire.clone();
+        oversized_dimension[13..21]
+            .copy_from_slice(&((MAX_EXACT_SDD_DIMENSION + 1) as u64).to_be_bytes());
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&oversized_dimension),
+            Err(ExactSddPsdCertificateError::DimensionTooLarge {
+                found: MAX_EXACT_SDD_DIMENSION + 1,
+                maximum: MAX_EXACT_SDD_DIMENSION,
+            })
+        );
+        let mut oversized_count = wire.clone();
+        oversized_count[21..29].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert!(matches!(
+            ExactSddPsdCertificate::from_wire_bytes(&oversized_count),
+            Err(ExactSddPsdCertificateError::ExactEntryCount { .. })
+                | Err(ExactSddPsdCertificateError::DimensionOverflow)
+        ));
+
+        let mut bad_checksum = wire.clone();
+        *bad_checksum.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&bad_checksum),
+            Err(ExactSddPsdCertificateError::ChecksumMismatch)
+        );
+        let mut payload_tamper = wire.clone();
+        payload_tamper[EXACT_SDD_PSD_WIRE_HEADER_LEN + 15] ^= 1;
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&payload_tamper),
+            Err(ExactSddPsdCertificateError::ChecksumMismatch)
+        );
+
+        let mut negative_diagonal = wire.clone();
+        negative_diagonal[EXACT_SDD_PSD_WIRE_HEADER_LEN..EXACT_SDD_PSD_WIRE_HEADER_LEN + 16]
+            .copy_from_slice(&(-1_i128).to_be_bytes());
+        refresh_checksum(&mut negative_diagonal);
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&negative_diagonal),
+            Err(ExactSddPsdCertificateError::NegativeDiagonal { row: 0 })
+        );
+
+        let mut non_dominant = wire.clone();
+        non_dominant[EXACT_SDD_PSD_WIRE_HEADER_LEN..EXACT_SDD_PSD_WIRE_HEADER_LEN + 16]
+            .copy_from_slice(&0_i128.to_be_bytes());
+        refresh_checksum(&mut non_dominant);
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&non_dominant),
+            Err(ExactSddPsdCertificateError::NotDiagonallyDominant { row: 0 })
+        );
+
+        let mut wrong_radius = wire.clone();
+        let radius_offset =
+            EXACT_SDD_PSD_WIRE_HEADER_LEN + 16 * certificate.dimension() * certificate.dimension();
+        let radius = i128::from_be_bytes(
+            wrong_radius[radius_offset..radius_offset + 16]
+                .try_into()
+                .unwrap(),
+        );
+        wrong_radius[radius_offset..radius_offset + 16]
+            .copy_from_slice(&(radius + 1).to_be_bytes());
+        refresh_checksum(&mut wrong_radius);
+        assert_eq!(
+            ExactSddPsdCertificate::from_wire_bytes(&wrong_radius),
+            Err(ExactSddPsdCertificateError::RowRadiusMismatch { row: 0 })
+        );
+    }
+
+    #[test]
+    fn exact_sdd_certificate_and_backend_tamper_fail_before_solving() {
+        let mut certificate_tamper = compile(&products::portfolio_qp_public()).unwrap();
+        certificate_tamper
+            .exact_sdd_psd_certificate
+            .as_mut()
+            .unwrap()
+            .row_radii[0] += 1;
+        assert!(matches!(
+            certificate_tamper.verify_exact_sdd_psd_certificate(),
+            Err(ExactSddPsdCertificateError::RowRadiusMismatch { row: 0 })
+        ));
+        assert!(matches!(
+            run(&certificate_tamper),
+            RunOutcome::InvalidCompiled {
+                reason: ExactSddPsdCertificateError::RowRadiusMismatch { row: 0 }
+            }
+        ));
+
+        let mut backend_tamper = compile(&products::portfolio_qp_public()).unwrap();
+        let ConvexProgram::Qp(problem) = &mut backend_tamper.program else {
+            unreachable!()
+        };
+        problem.p[0] += 1.0e-9;
+        assert!(matches!(
+            run(&backend_tamper),
+            RunOutcome::InvalidCompiled {
+                reason: ExactSddPsdCertificateError::BackendBindingMismatch { index: 0 }
+            }
+        ));
+
+        let mut missing = compile(&products::portfolio_qp_public()).unwrap();
+        missing.exact_sdd_psd_certificate = None;
+        assert!(matches!(
+            run(&missing),
+            RunOutcome::InvalidCompiled {
+                reason: ExactSddPsdCertificateError::MissingForQp
+            }
+        ));
+
+        let mut unexpected = compile(&products::uniform_price_clearing()).unwrap();
+        unexpected.exact_sdd_psd_certificate = compile(&products::portfolio_qp_public())
+            .unwrap()
+            .exact_sdd_psd_certificate;
+        assert!(matches!(
+            run(&unexpected),
+            RunOutcome::InvalidCompiled {
+                reason: ExactSddPsdCertificateError::UnexpectedForNonQp
+            }
+        ));
+    }
+
+    #[test]
+    fn exact_sdd_certificate_fails_closed_on_internal_shape_and_arithmetic_tamper() {
+        let mut asymmetric = compile(&products::portfolio_qp_public()).unwrap();
+        let certificate = asymmetric.exact_sdd_psd_certificate.as_mut().unwrap();
+        certificate.exact_entries[1] += 1;
+        certificate.row_radii[0] += 1;
+        let ConvexProgram::Qp(problem) = &mut asymmetric.program else {
+            unreachable!()
+        };
+        problem.p[1] = certificate.exact_entries[1] as f64 / 1.0e9;
+        assert!(matches!(
+            certificate.verify_against(problem),
+            Err(ExactSddPsdCertificateError::Asymmetric { row: 1, col: 0 })
+        ));
+
+        let mut out_of_range = compile(&products::portfolio_qp_public()).unwrap();
+        out_of_range
+            .exact_sdd_psd_certificate
+            .as_mut()
+            .unwrap()
+            .exact_entries[0] = i128::MIN;
+        assert!(matches!(
+            out_of_range.verify_exact_sdd_psd_certificate(),
+            Err(ExactSddPsdCertificateError::ExactEntryOutOfRange { index: 0 })
+        ));
+
+        let mut oversized_dimension = compile(&products::portfolio_qp_public()).unwrap();
+        oversized_dimension
+            .exact_sdd_psd_certificate
+            .as_mut()
+            .unwrap()
+            .dimension = usize::MAX;
+        assert_eq!(
+            oversized_dimension.verify_exact_sdd_psd_certificate(),
+            Err(ExactSddPsdCertificateError::DimensionTooLarge {
+                found: usize::MAX,
+                maximum: MAX_EXACT_SDD_DIMENSION,
+            })
+        );
+    }
+
+    #[test]
+    fn exact_rounding_underflow_is_canonical_and_negative_beyond_half_unit_refuses() {
+        let underflow = portfolio_with_cov(MatrixData::public(1, 1, vec![-0.4e-9]), vec![0.1]);
+        let compiled = compile(&underflow).expect("rounds exactly to the zero PSD matrix");
+        let certificate = compiled.exact_sdd_psd_certificate.as_ref().unwrap();
+        assert_eq!(certificate.exact_entries(), &[0]);
+        assert_eq!(certificate.row_radii(), &[0]);
+        let ConvexProgram::Qp(problem) = &compiled.program else {
+            unreachable!()
+        };
+        assert_eq!(problem.p[0].to_bits(), 0.0_f64.to_bits());
+        certificate.verify_against(problem).unwrap();
+
+        let below_zero = portfolio_with_cov(MatrixData::public(1, 1, vec![-0.6e-9]), vec![0.1]);
+        assert!(matches!(
+            compile(&below_zero),
+            Err(TypeError::InvalidPortfolioQp {
+                violation: PortfolioQpViolation::ExactPsdNotDiagonallyDominant { row: 0, .. }
+            })
+        ));
     }
 
     #[test]

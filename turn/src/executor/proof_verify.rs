@@ -278,6 +278,11 @@ impl TurnExecutor {
             )
         })?;
 
+        // The app-write face is structural and cheap. Refuse malformed
+        // Custom→SetField compositions before parsing or verifying any custom
+        // STARK, preserving the same exhaustion posture as the proof-count cap.
+        Self::enforce_custom_app_write_bindings(turn, cell_id, registry)?;
+
         for (i, proof) in proofs.iter().enumerate() {
             // Registry dispatch: VkHashNotRegistered (fail-closed), ProofMissing
             // (empty bytes), or the verifier's own Rejected verdict all surface
@@ -293,6 +298,177 @@ impl TurnExecutor {
                         "custom-effect proof #{i} rejected: {e}"
                     ))
                 })?;
+        }
+        Ok(())
+    }
+
+    /// Enforce verifier-declared bounded app writes as a composition of the
+    /// existing proof-binding `Custom` carrier with ordinary `SetField` verbs.
+    ///
+    /// This deliberately does not invent state-transition semantics for the
+    /// Custom row. Instead, for an opt-in verifier it requires the paired Custom
+    /// effect to be immediately followed (inside the same action) by a contiguous
+    /// run of canonical scalar field writes equal to the proof's published app
+    /// PIs. The outer EffectVM proof attests those SetFields and the final root;
+    /// the existing custom-proof weld attests the proof/VK/PI commitment. Their
+    /// checked equality is the atomic app-write face.
+    fn enforce_custom_app_write_bindings(
+        turn: &Turn,
+        cell_id: &CellId,
+        registry: &dregg_cell::CustomEffectRegistry,
+    ) -> Result<(), TurnError> {
+        use dregg_circuit::effect_vm::layout_generated::CUSTOM_APP_FIELD_OCTET_LEN;
+        use dregg_circuit::field::BABYBEAR_P;
+
+        let proofs = match &turn.custom_program_proofs {
+            Some(p) if !p.is_empty() => p,
+            _ => return Ok(()),
+        };
+
+        // Pair proofs with Custom rows in the exact pre-order DFS / within-action
+        // order used by convert_turn_effects_to_vm. Keep the tail slice so the
+        // face can require adjacency without flattening across an action boundary.
+        fn collect_customs<'a>(
+            tree: &'a crate::forest::CallTree,
+            cell_id: &CellId,
+            out: &mut Vec<(&'a Effect, &'a [Effect])>,
+        ) {
+            for (position, effect) in tree.action.effects.iter().enumerate() {
+                if matches!(effect, Effect::Custom { cell, .. } if cell == cell_id) {
+                    out.push((effect, &tree.action.effects[position + 1..]));
+                }
+            }
+            for child in &tree.children {
+                collect_customs(child, cell_id, out);
+            }
+        }
+
+        let mut customs = Vec::new();
+        for root in &turn.call_forest.roots {
+            collect_customs(root, cell_id, &mut customs);
+        }
+
+        let mismatch = |index, reason| TurnError::CustomAppWriteBindingMismatch { index, reason };
+
+        for (i, proof) in proofs.iter().enumerate() {
+            let Some(verifier) = registry.get(&proof.vk_hash) else {
+                // Registry dispatch below owns the typed unregistered-VK refusal.
+                continue;
+            };
+            let Some(binding) = verifier.app_write_binding() else {
+                continue;
+            };
+
+            if !binding.is_well_formed() {
+                return Err(mismatch(i, format!("ill-formed binding {binding:?}")));
+            }
+            let Some(pi_end) = binding.app_root_pi_offset.checked_add(binding.app_root_len) else {
+                return Err(mismatch(i, "app PI range overflows usize".to_string()));
+            };
+            let Some(field_end) = binding.field_key.checked_add(binding.app_root_len) else {
+                return Err(mismatch(i, "field range overflows usize".to_string()));
+            };
+            if field_end > CUSTOM_APP_FIELD_OCTET_LEN {
+                return Err(mismatch(
+                    i,
+                    format!(
+                        "field range [{}..{}) exceeds the exposed fields[0..{}) octet",
+                        binding.field_key, field_end, CUSTOM_APP_FIELD_OCTET_LEN
+                    ),
+                ));
+            }
+            if pi_end > proof.public_inputs.len() {
+                return Err(mismatch(
+                    i,
+                    format!(
+                        "public inputs are too short for app range [{}..{}): got {} felts",
+                        binding.app_root_pi_offset,
+                        pi_end,
+                        proof.public_inputs.len()
+                    ),
+                ));
+            }
+
+            let Some((custom, following)) = customs.get(i) else {
+                return Err(mismatch(
+                    i,
+                    "no paired Custom effect for this proof in canonical DFS order".to_string(),
+                ));
+            };
+            let (custom_cell, committed_vk) = match custom {
+                Effect::Custom {
+                    cell,
+                    program_vk_hash,
+                    ..
+                } => (cell, program_vk_hash),
+                _ => unreachable!("collector stores only Custom effects"),
+            };
+            if custom_cell != cell_id {
+                return Err(mismatch(
+                    i,
+                    format!("paired Custom targets {custom_cell}, expected {cell_id}"),
+                ));
+            }
+            if committed_vk != &proof.vk_hash {
+                return Err(mismatch(
+                    i,
+                    "paired Custom program_vk_hash differs from the dispatched proof vk_hash"
+                        .to_string(),
+                ));
+            }
+
+            for j in 0..binding.app_root_len {
+                let raw_pi = proof.public_inputs[binding.app_root_pi_offset + j];
+                if raw_pi >= BABYBEAR_P {
+                    return Err(mismatch(
+                        i,
+                        format!(
+                            "app PI lane {j} is non-canonical BabyBear value {raw_pi} (p={BABYBEAR_P})"
+                        ),
+                    ));
+                }
+
+                let expected_index = binding.field_key + j;
+                let Some(effect) = following.get(j) else {
+                    return Err(mismatch(
+                        i,
+                        format!(
+                            "Custom is not followed by all {} declared SetField effects",
+                            binding.app_root_len
+                        ),
+                    ));
+                };
+                let Effect::SetField { cell, index, value } = effect else {
+                    return Err(mismatch(
+                        i,
+                        format!("effect {} after Custom is not SetField", j + 1),
+                    ));
+                };
+                if cell != cell_id {
+                    return Err(mismatch(
+                        i,
+                        format!("SetField lane {j} targets {cell}, expected Custom cell {cell_id}"),
+                    ));
+                }
+                if *index != expected_index {
+                    return Err(mismatch(
+                        i,
+                        format!(
+                            "SetField lane {j} writes field {index}, expected {expected_index}"
+                        ),
+                    ));
+                }
+                let mut expected_value = [0u8; 32];
+                expected_value[..4].copy_from_slice(&raw_pi.to_le_bytes());
+                if value != &expected_value {
+                    return Err(mismatch(
+                        i,
+                        format!(
+                            "SetField lane {j} value is not the canonical 32-byte encoding of app PI {raw_pi}"
+                        ),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -3249,13 +3425,14 @@ impl TurnExecutor {
 mod custom_effect_dispatch_tests {
     use super::*;
     use crate::ComputronCosts;
-    use crate::action::{Action, Authorization, DelegationMode};
+    use crate::action::{Action, Authorization, DelegationMode, Effect};
     use crate::forest::{CallForest, CallTree};
     use crate::turn::{CustomProgramProof, Turn};
     use dregg_cell::{
         CustomEffectError, CustomEffectRegistry, CustomEffectVerifier, ProvingSystemId,
         StubCustomEffectVerifier, VerifierFingerprint, VkComponents, canonical_vk_v2,
     };
+    use dregg_circuit::effect_vm::custom_state_binding::AppRootBinding;
     use std::sync::Arc;
 
     fn cell_id(seed: u8) -> CellId {
@@ -3341,6 +3518,232 @@ mod custom_effect_dispatch_tests {
         let mut ex = TurnExecutor::new(ComputronCosts::zero());
         ex.set_custom_effect_registry(reg);
         ex
+    }
+
+    struct AppWriteVerifier {
+        vk: [u8; 32],
+        binding: AppRootBinding,
+    }
+
+    impl CustomEffectVerifier for AppWriteVerifier {
+        fn name(&self) -> &'static str {
+            "bounded-app-write"
+        }
+
+        fn vk_hash(&self) -> [u8; 32] {
+            self.vk
+        }
+
+        fn verify(&self, _pi: &[u8], _proof: &[u8]) -> Result<(), CustomEffectError> {
+            Ok(())
+        }
+
+        fn app_write_binding(&self) -> Option<AppRootBinding> {
+            Some(self.binding)
+        }
+    }
+
+    fn registry_with_app_write(
+        canonical: &[u8],
+        binding: AppRootBinding,
+    ) -> (CustomEffectRegistry, [u8; 32]) {
+        let vk = canonical_vk_v2(&VkComponents {
+            program_bytes: canonical,
+            air_fingerprint: air_fp(),
+            verifier_fingerprint: verifier_fp(),
+            proving_system_id: proving_system(),
+        });
+        let mut registry = CustomEffectRegistry::empty();
+        registry
+            .register(
+                canonical.to_vec(),
+                air_fp(),
+                verifier_fp(),
+                proving_system(),
+                Arc::new(AppWriteVerifier { vk, binding }),
+            )
+            .expect("register bounded app-write verifier");
+        (registry, vk)
+    }
+
+    fn scalar_field(value: u32) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[..4].copy_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn app_write_turn(cell: CellId, vk: [u8; 32]) -> Turn {
+        let mut turn = empty_turn(cell);
+        let mut public_inputs = vec![0; 16];
+        public_inputs.extend_from_slice(&[7, 9]);
+        turn.custom_program_proofs = Some(vec![CustomProgramProof {
+            vk_hash: vk,
+            proof_bytes: b"valid-app-proof".to_vec(),
+            public_inputs,
+        }]);
+        turn.call_forest.roots[0].action.effects = vec![
+            Effect::Custom {
+                cell,
+                program_vk_hash: vk,
+                proof_commitment: [0xCC; 32],
+            },
+            Effect::SetField {
+                cell,
+                index: 2,
+                value: scalar_field(7),
+            },
+            Effect::SetField {
+                cell,
+                index: 3,
+                value: scalar_field(9),
+            },
+        ];
+        turn
+    }
+
+    fn app_binding() -> AppRootBinding {
+        AppRootBinding {
+            app_root_pi_offset: 16,
+            app_root_len: 2,
+            field_key: 2,
+        }
+    }
+
+    fn assert_app_write_refusal(err: TurnError) {
+        assert!(
+            matches!(
+                err,
+                TurnError::CustomAppWriteBindingMismatch { index: 0, .. }
+            ),
+            "expected typed bounded app-write refusal, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn custom_app_write_accepts_exact_atomic_composition() {
+        let cell = cell_id(0xA0);
+        let (registry, vk) = registry_with_app_write(b"bounded-app-write", app_binding());
+        let executor = executor_with(registry);
+        let turn = app_write_turn(cell, vk);
+
+        executor
+            .enforce_custom_effect_proofs(&turn, &cell, &Ledger::new())
+            .expect("Custom followed by its exact PI-equal SetField run must pass");
+    }
+
+    #[test]
+    fn custom_app_write_refuses_tampered_field_value() {
+        let cell = cell_id(0xA1);
+        let (registry, vk) = registry_with_app_write(b"bounded-app-write-value", app_binding());
+        let executor = executor_with(registry);
+        let mut turn = app_write_turn(cell, vk);
+        let Effect::SetField { value, .. } = &mut turn.call_forest.roots[0].action.effects[1]
+        else {
+            unreachable!()
+        };
+        *value = scalar_field(8);
+
+        assert_app_write_refusal(
+            executor
+                .enforce_custom_effect_proofs(&turn, &cell, &Ledger::new())
+                .expect_err("a field value different from the published PI must be refused"),
+        );
+
+        // Even when lane 0 decodes to the published scalar, non-zero completion
+        // bytes are a different faithful 32-byte field and must not pass.
+        let mut noncanonical_field = app_write_turn(cell, vk);
+        let Effect::SetField { value, .. } =
+            &mut noncanonical_field.call_forest.roots[0].action.effects[1]
+        else {
+            unreachable!()
+        };
+        value[4] = 1;
+        assert_app_write_refusal(
+            executor
+                .enforce_custom_effect_proofs(&noncanonical_field, &cell, &Ledger::new())
+                .expect_err("non-zero field completion bytes must be refused"),
+        );
+    }
+
+    #[test]
+    fn custom_app_write_refuses_missing_or_misordered_write() {
+        let cell = cell_id(0xA2);
+        let (registry, vk) = registry_with_app_write(b"bounded-app-write-order", app_binding());
+        let executor = executor_with(registry);
+        let mut turn = app_write_turn(cell, vk);
+        turn.call_forest.roots[0].action.effects.remove(1);
+
+        assert_app_write_refusal(
+            executor
+                .enforce_custom_effect_proofs(&turn, &cell, &Ledger::new())
+                .expect_err("the declared SetField run must immediately follow Custom"),
+        );
+    }
+
+    #[test]
+    fn custom_app_write_refuses_wrong_field_or_program() {
+        let cell = cell_id(0xA3);
+        let (registry, vk) = registry_with_app_write(b"bounded-app-write-identity", app_binding());
+        let executor = executor_with(registry);
+
+        let mut wrong_field = app_write_turn(cell, vk);
+        let Effect::SetField { index, .. } =
+            &mut wrong_field.call_forest.roots[0].action.effects[2]
+        else {
+            unreachable!()
+        };
+        *index = 4;
+        assert_app_write_refusal(
+            executor
+                .enforce_custom_effect_proofs(&wrong_field, &cell, &Ledger::new())
+                .expect_err("a non-contiguous target field must be refused"),
+        );
+
+        let mut wrong_program = app_write_turn(cell, vk);
+        let Effect::Custom {
+            program_vk_hash, ..
+        } = &mut wrong_program.call_forest.roots[0].action.effects[0]
+        else {
+            unreachable!()
+        };
+        *program_vk_hash = [0xEE; 32];
+        assert_app_write_refusal(
+            executor
+                .enforce_custom_effect_proofs(&wrong_program, &cell, &Ledger::new())
+                .expect_err("the Custom carrier and dispatched proof must name one verifier"),
+        );
+    }
+
+    #[test]
+    fn custom_app_write_refuses_noncanonical_pi_or_unexposed_field() {
+        let cell = cell_id(0xA4);
+        let (registry, vk) =
+            registry_with_app_write(b"bounded-app-write-noncanonical", app_binding());
+        let executor = executor_with(registry);
+        let mut noncanonical = app_write_turn(cell, vk);
+        noncanonical.custom_program_proofs.as_mut().unwrap()[0].public_inputs[16] =
+            dregg_circuit::field::BABYBEAR_P;
+        assert_app_write_refusal(
+            executor
+                .enforce_custom_effect_proofs(&noncanonical, &cell, &Ledger::new())
+                .expect_err("non-canonical raw BabyBear PIs must not reduce into a field value"),
+        );
+
+        let (registry, wide_vk) = registry_with_app_write(
+            b"bounded-app-write-out-of-range",
+            AppRootBinding {
+                app_root_pi_offset: 16,
+                app_root_len: 2,
+                field_key: 7,
+            },
+        );
+        let executor = executor_with(registry);
+        let out_of_range = app_write_turn(cell, wide_vk);
+        assert_app_write_refusal(
+            executor
+                .enforce_custom_effect_proofs(&out_of_range, &cell, &Ledger::new())
+                .expect_err("the face cannot claim fields outside the exposed octet"),
+        );
     }
 
     /// A turn with NO custom proofs always passes (the common case).

@@ -10,10 +10,19 @@
 //! quorum and broadcasts the opened, one-time-padded `(d,e)`. Only the final
 //! index and volume shares are reconstructed.
 //!
-//! The circuit is the same lowest-index-stable balanced volume-argmax as
+//! The crossing circuit is the same lowest-index-stable balanced volume-argmax as
 //! [`crate::mpc::mpc_crossing`]: compute every `min(D[p], S[p])` under sharing,
 //! then reduce adjacent candidates in a balanced tournament, keeping the left
 //! candidate on equality. Odd candidates are carried without a secret branch.
+//! [`PartyMpcSession::equality`] selects a second, scalar circuit over the same
+//! ingress and Beaver engine: reduce two mod-`t` shared operands, compare every
+//! shared bit, and reconstruct only the final equality bit. This is intended for
+//! invariant and certificate decisions whose refusal path must not reveal the
+//! rejected residue.
+//! [`PartyMpcSession::less_than`] selects the corresponding strict-comparison
+//! circuit and reconstructs only `left < right`. This is the reusable private
+//! ordering organ for allocation, preference, matchmaking, and range windows;
+//! neither operand nor their difference appears in its public transcript.
 //!
 //! # Security and deployment scope
 //!
@@ -52,6 +61,14 @@ pub struct PartyMpcSession {
     value_bits: usize,
     plaintext_modulus: u64,
     quorum_timeout: Duration,
+    circuit: CircuitKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CircuitKind {
+    Crossing,
+    Equality,
+    LessThan,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +78,7 @@ struct SessionBinding {
     buckets: usize,
     value_bits: usize,
     plaintext_modulus: u64,
+    circuit: CircuitKind,
 }
 
 impl PartyMpcSession {
@@ -71,6 +89,69 @@ impl PartyMpcSession {
         value_bits: usize,
         plaintext_modulus: u64,
         quorum_timeout: Duration,
+    ) -> Result<Self> {
+        Self::new_for(
+            nonce,
+            n_parties,
+            buckets,
+            value_bits,
+            plaintext_modulus,
+            quorum_timeout,
+            CircuitKind::Crossing,
+        )
+    }
+
+    /// A scalar decision session. Each party supplies one mod-`t` additive
+    /// share of a left and right operand; the circuit reconstructs neither and
+    /// reveals only whether the two residues are equal.
+    pub fn equality(
+        nonce: [u8; 32],
+        n_parties: usize,
+        value_bits: usize,
+        plaintext_modulus: u64,
+        quorum_timeout: Duration,
+    ) -> Result<Self> {
+        Self::new_for(
+            nonce,
+            n_parties,
+            1,
+            value_bits,
+            plaintext_modulus,
+            quorum_timeout,
+            CircuitKind::Equality,
+        )
+    }
+
+    /// A scalar strict-comparison session. Each party supplies one mod-`t`
+    /// additive share of the left and right operand; the circuit reveals only
+    /// whether `left < right` over their declared canonical bit width.
+    pub fn less_than(
+        nonce: [u8; 32],
+        n_parties: usize,
+        value_bits: usize,
+        plaintext_modulus: u64,
+        quorum_timeout: Duration,
+    ) -> Result<Self> {
+        Self::new_for(
+            nonce,
+            n_parties,
+            1,
+            value_bits,
+            plaintext_modulus,
+            quorum_timeout,
+            CircuitKind::LessThan,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_for(
+        nonce: [u8; 32],
+        n_parties: usize,
+        buckets: usize,
+        value_bits: usize,
+        plaintext_modulus: u64,
+        quorum_timeout: Duration,
+        circuit: CircuitKind,
     ) -> Result<Self> {
         if n_parties < 2 {
             return Err(PartyMpcError::InvalidParameters(
@@ -110,6 +191,7 @@ impl PartyMpcSession {
             value_bits,
             plaintext_modulus,
             quorum_timeout,
+            circuit,
         };
         exact_and_gates(&session)?;
         Ok(session)
@@ -152,6 +234,7 @@ impl PartyMpcSession {
             buckets: self.buckets,
             value_bits: self.value_bits,
             plaintext_modulus: self.plaintext_modulus,
+            circuit: self.circuit,
         }
     }
 }
@@ -232,6 +315,15 @@ pub struct PartyArithmeticInput {
     supply_by_recipient: Vec<Vec<Vec<u8>>>,
 }
 
+/// Opaque scalar-equality ingress. Each party owns only its two local mod-`t`
+/// additive shares; the wrapper prevents accidentally running those operands
+/// through the crossing circuit (which reveals a volume).
+pub struct PartyEqualityInput(PartyArithmeticInput);
+
+/// Opaque scalar-comparison ingress. As with equality, each party owns only
+/// its two local mod-`t` shares and exposes no operand accessor.
+pub struct PartyComparisonInput(PartyArithmeticInput);
+
 /// Opaque party-owned Beaver preprocessing. The trusted dealer that constructs
 /// it receives only [`PartyMpcSession`], never an input row or aggregate curve.
 pub struct TripleMaterial {
@@ -270,6 +362,9 @@ pub struct DistributedTranscript {
 impl DistributedTranscript {
     /// Strict reveal/schema tooth for the exact session shape.
     pub fn is_reveal_only(&self, session: &PartyMpcSession) -> bool {
+        if session.circuit != CircuitKind::Crossing {
+            return false;
+        }
         let gates = session.exact_and_gates();
         let canonical = |bits: &[u8]| bits.iter().all(|&bit| bit <= 1);
         self.masked.len() == gates
@@ -292,11 +387,122 @@ impl DistributedTranscript {
     }
 }
 
+/// Public transcript for a scalar equality decision. The two operands and
+/// their residues never appear; only Beaver-masked gate openings and one final
+/// bit do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecisionTranscript {
+    pub masked: Vec<MaskedOpening>,
+    pub revealed_equal: u8,
+    pub and_gates: usize,
+    pub scalar_opening_rounds: usize,
+    pub modeled_batched_rounds: usize,
+    pub gate_share_messages: usize,
+    pub output_share_messages: usize,
+}
+
+impl DecisionTranscript {
+    pub fn is_reveal_only(&self, session: &PartyMpcSession) -> bool {
+        if session.circuit != CircuitKind::Equality {
+            return false;
+        }
+        let gates = session.exact_and_gates();
+        self.masked.len() == gates
+            && self
+                .masked
+                .iter()
+                .enumerate()
+                .all(|(gate, opening)| opening.gate == gate && opening.d <= 1 && opening.e <= 1)
+            && self.revealed_equal <= 1
+            && self.and_gates == gates
+            && self.scalar_opening_rounds == gates
+            && self.modeled_batched_rounds == modeled_batched_rounds(session)
+            && gates
+                .checked_mul(session.n_parties)
+                .is_some_and(|count| self.gate_share_messages == count)
+            && self.output_share_messages == session.n_parties
+    }
+}
+
+/// Public transcript for a scalar strict comparison. Only Beaver-masked gate
+/// openings and the final `left < right` bit are retained.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComparisonTranscript {
+    pub masked: Vec<MaskedOpening>,
+    pub revealed_less_than: u8,
+    pub and_gates: usize,
+    pub scalar_opening_rounds: usize,
+    pub modeled_batched_rounds: usize,
+    pub gate_share_messages: usize,
+    pub output_share_messages: usize,
+}
+
+impl ComparisonTranscript {
+    pub fn is_reveal_only(&self, session: &PartyMpcSession) -> bool {
+        if session.circuit != CircuitKind::LessThan {
+            return false;
+        }
+        let gates = session.exact_and_gates();
+        self.masked.len() == gates
+            && self
+                .masked
+                .iter()
+                .enumerate()
+                .all(|(gate, opening)| opening.gate == gate && opening.d <= 1 && opening.e <= 1)
+            && self.revealed_less_than <= 1
+            && self.and_gates == gates
+            && self.scalar_opening_rounds == gates
+            && self.modeled_batched_rounds == modeled_batched_rounds(session)
+            && gates
+                .checked_mul(session.n_parties)
+                .is_some_and(|count| self.gate_share_messages == count)
+            && self.output_share_messages == session.n_parties
+    }
+}
+
 /// Coordinator result. No curve coefficient or Beaver mask is present.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DistributedRun {
     pub crossing: Crossing,
     pub transcript: DistributedTranscript,
+}
+
+/// Coordinator result for the scalar decision circuit. No operand, residue,
+/// or bit decomposition is retained.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DistributedDecisionRun {
+    equal: bool,
+    session_nonce: [u8; 32],
+    pub transcript: DecisionTranscript,
+}
+
+impl DistributedDecisionRun {
+    pub fn is_equal(&self) -> bool {
+        self.equal
+    }
+
+    pub fn session_nonce(&self) -> [u8; 32] {
+        self.session_nonce
+    }
+}
+
+/// Coordinator result for strict comparison. No operand, residue, bit
+/// decomposition, or difference is retained.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DistributedComparisonRun {
+    less_than: bool,
+    session_nonce: [u8; 32],
+    pub transcript: ComparisonTranscript,
+}
+
+impl DistributedComparisonRun {
+    pub fn is_less_than(&self) -> bool {
+        self.less_than
+    }
+
+    pub fn session_nonce(&self) -> [u8; 32] {
+        self.session_nonce
+    }
 }
 
 /// Party completion report. A party never reconstructs the public result; it
@@ -337,6 +543,16 @@ enum PartyMessage {
         party: usize,
         pstar: Vec<u8>,
         vstar: Vec<u8>,
+    },
+    DecisionShare {
+        session: SessionBinding,
+        party: usize,
+        equal: u8,
+    },
+    ComparisonShare {
+        session: SessionBinding,
+        party: usize,
+        less_than: u8,
     },
 }
 
@@ -407,6 +623,19 @@ impl PartyArithmeticInput {
         supply_mod_t: &[u64],
         rng: &mut R,
     ) -> Result<Self> {
+        if session.circuit != CircuitKind::Crossing {
+            return Err(PartyMpcError::SessionMismatch);
+        }
+        Self::prepare(session, party, demand_mod_t, supply_mod_t, rng)
+    }
+
+    fn prepare<R: Rng>(
+        session: &PartyMpcSession,
+        party: usize,
+        demand_mod_t: &[u64],
+        supply_mod_t: &[u64],
+        rng: &mut R,
+    ) -> Result<Self> {
         if party >= session.n_parties {
             return Err(PartyMpcError::InvalidParty {
                 party,
@@ -440,6 +669,55 @@ impl PartyArithmeticInput {
             demand_by_recipient,
             supply_by_recipient,
         })
+    }
+}
+
+impl PartyEqualityInput {
+    /// Prepare direct-peer boolean ingress from this party's local shares of
+    /// two scalar operands. The public target `k` is represented canonically
+    /// by giving party zero share `k` and every other party share zero.
+    pub fn new<R: Rng>(
+        session: &PartyMpcSession,
+        party: usize,
+        left_mod_t_share: u64,
+        right_mod_t_share: u64,
+        rng: &mut R,
+    ) -> Result<Self> {
+        if session.circuit != CircuitKind::Equality {
+            return Err(PartyMpcError::SessionMismatch);
+        }
+        PartyArithmeticInput::prepare(
+            session,
+            party,
+            &[left_mod_t_share],
+            &[right_mod_t_share],
+            rng,
+        )
+        .map(Self)
+    }
+}
+
+impl PartyComparisonInput {
+    /// Prepare direct-peer boolean ingress for a strict comparison of two
+    /// secret-shared canonical integers.
+    pub fn new<R: Rng>(
+        session: &PartyMpcSession,
+        party: usize,
+        left_mod_t_share: u64,
+        right_mod_t_share: u64,
+        rng: &mut R,
+    ) -> Result<Self> {
+        if session.circuit != CircuitKind::LessThan {
+            return Err(PartyMpcError::SessionMismatch);
+        }
+        PartyArithmeticInput::prepare(
+            session,
+            party,
+            &[left_mod_t_share],
+            &[right_mod_t_share],
+            rng,
+        )
+        .map(Self)
     }
 }
 
@@ -485,6 +763,9 @@ pub fn run_party(
     preprocessing: TripleMaterial,
     channels: PartyChannels,
 ) -> Result<PartyReport> {
+    if input.session.circuit != CircuitKind::Crossing {
+        return Err(PartyMpcError::SessionMismatch);
+    }
     if input.session != preprocessing.session {
         return Err(PartyMpcError::SessionMismatch);
     }
@@ -574,9 +855,168 @@ pub fn run_party(
     })
 }
 
+/// Execute one party's scalar equality circuit. The party sends exactly one
+/// final XOR share; only the coordinator can reconstruct the decision after a
+/// full quorum, and no operand is opened.
+pub fn run_party_equality(
+    input: PartyEqualityInput,
+    preprocessing: TripleMaterial,
+    channels: PartyChannels,
+) -> Result<PartyReport> {
+    let PartyEqualityInput(input) = input;
+    if input.session.circuit != CircuitKind::Equality {
+        return Err(PartyMpcError::SessionMismatch);
+    }
+    if input.session != preprocessing.session {
+        return Err(PartyMpcError::SessionMismatch);
+    }
+    if input.party != preprocessing.party {
+        return Err(PartyMpcError::PartyMismatch {
+            material: input.party,
+            channel: preprocessing.party,
+        });
+    }
+    if input.party != channels.party {
+        return Err(PartyMpcError::PartyMismatch {
+            material: input.party,
+            channel: channels.party,
+        });
+    }
+    let PartyArithmeticInput {
+        session,
+        party,
+        demand_by_recipient: left_by_recipient,
+        supply_by_recipient: right_by_recipient,
+    } = input;
+    let TripleMaterial { triples, .. } = preprocessing;
+    let (left_sources, right_sources, peer_messages) = exchange_arithmetic_ingress(
+        &session,
+        party,
+        left_by_recipient,
+        right_by_recipient,
+        &channels,
+    )?;
+    if left_sources.len() != 1 || right_sources.len() != 1 {
+        return Err(PartyMpcError::ShapeMismatch);
+    }
+    let mut engine = LocalEngine {
+        session: &session,
+        party,
+        channels,
+        triples,
+        next_gate: 0,
+    };
+    let left = reduce_mod_t_local(&left_sources[0], &mut engine)?;
+    let right = reduce_mod_t_local(&right_sources[0], &mut engine)?;
+    let equal = equal_local(&left, &right, &mut engine)?;
+    if engine.next_gate != session.exact_and_gates() {
+        return Err(PartyMpcError::UnexpectedMessage {
+            expected: ProtocolPhase::OutputReveal,
+        });
+    }
+    engine
+        .channels
+        .to_coordinator
+        .send(PartyMessage::DecisionShare {
+            session: session.binding(),
+            party,
+            equal,
+        })
+        .map_err(|_| PartyMpcError::ChannelClosed {
+            phase: ProtocolPhase::OutputReveal,
+        })?;
+    Ok(PartyReport {
+        party,
+        and_gates: engine.next_gate,
+        peer_input_messages_sent: peer_messages,
+        peer_input_messages_received: peer_messages,
+    })
+}
+
+/// Execute one party's strict-comparison circuit. The only reconstructed value
+/// is the final `left < right` bit after a full quorum.
+pub fn run_party_comparison(
+    input: PartyComparisonInput,
+    preprocessing: TripleMaterial,
+    channels: PartyChannels,
+) -> Result<PartyReport> {
+    let PartyComparisonInput(input) = input;
+    if input.session.circuit != CircuitKind::LessThan {
+        return Err(PartyMpcError::SessionMismatch);
+    }
+    if input.session != preprocessing.session {
+        return Err(PartyMpcError::SessionMismatch);
+    }
+    if input.party != preprocessing.party {
+        return Err(PartyMpcError::PartyMismatch {
+            material: input.party,
+            channel: preprocessing.party,
+        });
+    }
+    if input.party != channels.party {
+        return Err(PartyMpcError::PartyMismatch {
+            material: input.party,
+            channel: channels.party,
+        });
+    }
+    let PartyArithmeticInput {
+        session,
+        party,
+        demand_by_recipient: left_by_recipient,
+        supply_by_recipient: right_by_recipient,
+    } = input;
+    let TripleMaterial { triples, .. } = preprocessing;
+    let (left_sources, right_sources, peer_messages) = exchange_arithmetic_ingress(
+        &session,
+        party,
+        left_by_recipient,
+        right_by_recipient,
+        &channels,
+    )?;
+    if left_sources.len() != 1 || right_sources.len() != 1 {
+        return Err(PartyMpcError::ShapeMismatch);
+    }
+    let mut engine = LocalEngine {
+        session: &session,
+        party,
+        channels,
+        triples,
+        next_gate: 0,
+    };
+    let left = reduce_mod_t_local(&left_sources[0], &mut engine)?;
+    let right = reduce_mod_t_local(&right_sources[0], &mut engine)?;
+    let greater_or_equal = geq_local(&left, &right, &mut engine)?;
+    let less_than = greater_or_equal ^ local_const(1, party);
+    if engine.next_gate != session.exact_and_gates() {
+        return Err(PartyMpcError::UnexpectedMessage {
+            expected: ProtocolPhase::OutputReveal,
+        });
+    }
+    engine
+        .channels
+        .to_coordinator
+        .send(PartyMessage::ComparisonShare {
+            session: session.binding(),
+            party,
+            less_than,
+        })
+        .map_err(|_| PartyMpcError::ChannelClosed {
+            phase: ProtocolPhase::OutputReveal,
+        })?;
+    Ok(PartyReport {
+        party,
+        and_gates: engine.next_gate,
+        peer_input_messages_sent: peer_messages,
+        peer_input_messages_received: peer_messages,
+    })
+}
+
 impl CoordinatorChannels {
     /// Route a complete full-quorum run and reconstruct only `(p*, V*)`.
     pub fn coordinate(self, session: &PartyMpcSession) -> Result<DistributedRun> {
+        if session.circuit != CircuitKind::Crossing {
+            return Err(PartyMpcError::SessionMismatch);
+        }
         if self.to_parties.len() != session.n_parties {
             return Err(PartyMpcError::ShapeMismatch);
         }
@@ -700,6 +1140,229 @@ impl CoordinatorChannels {
             transcript,
         })
     }
+
+    /// Route a complete scalar-decision run and reconstruct one equality bit.
+    /// The coordinator has no endpoint for either party-owned operand share.
+    pub fn coordinate_equality(self, session: &PartyMpcSession) -> Result<DistributedDecisionRun> {
+        if session.circuit != CircuitKind::Equality {
+            return Err(PartyMpcError::SessionMismatch);
+        }
+        if self.to_parties.len() != session.n_parties {
+            return Err(PartyMpcError::ShapeMismatch);
+        }
+        let gates = session.exact_and_gates();
+        let mut masked = Vec::with_capacity(gates);
+        for gate in 0..gates {
+            let phase = ProtocolPhase::BeaverGate(gate);
+            let deadline = Instant::now()
+                .checked_add(session.quorum_timeout)
+                .ok_or(PartyMpcError::ArithmeticOverflow)?;
+            let mut seen = vec![false; session.n_parties];
+            let mut d = 0u8;
+            let mut e = 0u8;
+            let mut have = 0usize;
+            while have < session.n_parties {
+                let message =
+                    recv_before(&self.from_parties, deadline, phase, have, session.n_parties)?;
+                let PartyMessage::GateShare {
+                    session: message_session,
+                    party,
+                    gate: message_gate,
+                    d: d_share,
+                    e: e_share,
+                } = message
+                else {
+                    return Err(PartyMpcError::UnexpectedMessage { expected: phase });
+                };
+                validate_message_header(session, message_session, party)?;
+                if message_gate != gate {
+                    return Err(PartyMpcError::UnexpectedMessage { expected: phase });
+                }
+                if d_share > 1 || e_share > 1 {
+                    return Err(PartyMpcError::NonCanonicalBit);
+                }
+                if std::mem::replace(&mut seen[party], true) {
+                    return Err(PartyMpcError::DuplicateParty { party, phase });
+                }
+                d ^= d_share;
+                e ^= e_share;
+                have += 1;
+            }
+            masked.push(MaskedOpening { gate, d, e });
+            for sender in &self.to_parties {
+                sender
+                    .send(CoordinatorMessage::GateOpened {
+                        session: session.binding(),
+                        gate,
+                        d,
+                        e,
+                    })
+                    .map_err(|_| PartyMpcError::ChannelClosed { phase })?;
+            }
+        }
+
+        let phase = ProtocolPhase::OutputReveal;
+        let deadline = Instant::now()
+            .checked_add(session.quorum_timeout)
+            .ok_or(PartyMpcError::ArithmeticOverflow)?;
+        let mut equal = 0u8;
+        let mut seen = vec![false; session.n_parties];
+        let mut have = 0usize;
+        while have < session.n_parties {
+            let message =
+                recv_before(&self.from_parties, deadline, phase, have, session.n_parties)?;
+            let PartyMessage::DecisionShare {
+                session: message_session,
+                party,
+                equal: share,
+            } = message
+            else {
+                return Err(PartyMpcError::UnexpectedMessage { expected: phase });
+            };
+            validate_message_header(session, message_session, party)?;
+            if std::mem::replace(&mut seen[party], true) {
+                return Err(PartyMpcError::DuplicateParty { party, phase });
+            }
+            if share > 1 {
+                return Err(PartyMpcError::InvalidOutput);
+            }
+            equal ^= share;
+            have += 1;
+        }
+
+        let transcript = DecisionTranscript {
+            masked,
+            revealed_equal: equal,
+            and_gates: gates,
+            scalar_opening_rounds: gates,
+            modeled_batched_rounds: modeled_batched_rounds(session),
+            gate_share_messages: gates
+                .checked_mul(session.n_parties)
+                .ok_or(PartyMpcError::ArithmeticOverflow)?,
+            output_share_messages: session.n_parties,
+        };
+        if !transcript.is_reveal_only(session) {
+            return Err(PartyMpcError::InvalidOutput);
+        }
+        Ok(DistributedDecisionRun {
+            equal: equal == 1,
+            session_nonce: session.nonce,
+            transcript,
+        })
+    }
+
+    /// Route a complete strict-comparison run and reconstruct only the
+    /// `left < right` bit. The coordinator has no operand-share endpoint.
+    pub fn coordinate_comparison(
+        self,
+        session: &PartyMpcSession,
+    ) -> Result<DistributedComparisonRun> {
+        if session.circuit != CircuitKind::LessThan {
+            return Err(PartyMpcError::SessionMismatch);
+        }
+        if self.to_parties.len() != session.n_parties {
+            return Err(PartyMpcError::ShapeMismatch);
+        }
+        let gates = session.exact_and_gates();
+        let mut masked = Vec::with_capacity(gates);
+        for gate in 0..gates {
+            let phase = ProtocolPhase::BeaverGate(gate);
+            let deadline = Instant::now()
+                .checked_add(session.quorum_timeout)
+                .ok_or(PartyMpcError::ArithmeticOverflow)?;
+            let mut seen = vec![false; session.n_parties];
+            let mut d = 0u8;
+            let mut e = 0u8;
+            let mut have = 0usize;
+            while have < session.n_parties {
+                let message =
+                    recv_before(&self.from_parties, deadline, phase, have, session.n_parties)?;
+                let PartyMessage::GateShare {
+                    session: message_session,
+                    party,
+                    gate: message_gate,
+                    d: d_share,
+                    e: e_share,
+                } = message
+                else {
+                    return Err(PartyMpcError::UnexpectedMessage { expected: phase });
+                };
+                validate_message_header(session, message_session, party)?;
+                if message_gate != gate {
+                    return Err(PartyMpcError::UnexpectedMessage { expected: phase });
+                }
+                if d_share > 1 || e_share > 1 {
+                    return Err(PartyMpcError::NonCanonicalBit);
+                }
+                if std::mem::replace(&mut seen[party], true) {
+                    return Err(PartyMpcError::DuplicateParty { party, phase });
+                }
+                d ^= d_share;
+                e ^= e_share;
+                have += 1;
+            }
+            masked.push(MaskedOpening { gate, d, e });
+            for sender in &self.to_parties {
+                sender
+                    .send(CoordinatorMessage::GateOpened {
+                        session: session.binding(),
+                        gate,
+                        d,
+                        e,
+                    })
+                    .map_err(|_| PartyMpcError::ChannelClosed { phase })?;
+            }
+        }
+
+        let phase = ProtocolPhase::OutputReveal;
+        let deadline = Instant::now()
+            .checked_add(session.quorum_timeout)
+            .ok_or(PartyMpcError::ArithmeticOverflow)?;
+        let mut less_than = 0u8;
+        let mut seen = vec![false; session.n_parties];
+        let mut have = 0usize;
+        while have < session.n_parties {
+            let message =
+                recv_before(&self.from_parties, deadline, phase, have, session.n_parties)?;
+            let PartyMessage::ComparisonShare {
+                session: message_session,
+                party,
+                less_than: share,
+            } = message
+            else {
+                return Err(PartyMpcError::UnexpectedMessage { expected: phase });
+            };
+            validate_message_header(session, message_session, party)?;
+            if std::mem::replace(&mut seen[party], true) {
+                return Err(PartyMpcError::DuplicateParty { party, phase });
+            }
+            if share > 1 {
+                return Err(PartyMpcError::InvalidOutput);
+            }
+            less_than ^= share;
+            have += 1;
+        }
+
+        let transcript = ComparisonTranscript {
+            masked,
+            revealed_less_than: less_than,
+            and_gates: gates,
+            scalar_opening_rounds: gates,
+            modeled_batched_rounds: modeled_batched_rounds(session),
+            gate_share_messages: gates
+                .checked_mul(session.n_parties)
+                .ok_or(PartyMpcError::ArithmeticOverflow)?,
+            output_share_messages: session.n_parties,
+        };
+        if !transcript.is_reveal_only(session) {
+            return Err(PartyMpcError::InvalidOutput);
+        }
+        Ok(DistributedComparisonRun {
+            less_than: less_than == 1,
+            session_nonce: session.nonce,
+            transcript,
+        })
+    }
 }
 
 /// Simulate the public broadcast transcript from only the intended output and
@@ -710,6 +1373,9 @@ pub fn simulate_public_transcript<R: Rng>(
     session: &PartyMpcSession,
     rng: &mut R,
 ) -> Result<DistributedTranscript> {
+    if session.circuit != CircuitKind::Crossing {
+        return Err(PartyMpcError::SessionMismatch);
+    }
     let gates = session.exact_and_gates();
     let masked = (0..gates)
         .map(|gate| MaskedOpening {
@@ -737,6 +1403,76 @@ pub fn simulate_public_transcript<R: Rng>(
             .ok_or(PartyMpcError::ArithmeticOverflow)?,
         output_share_messages: session.n_parties,
     };
+    Ok(transcript)
+}
+
+/// Simulate the public scalar-decision transcript from only the intended bit
+/// and public circuit shape. This is the same semi-honest simulation claim as
+/// [`simulate_public_transcript`].
+pub fn simulate_decision_transcript<R: Rng>(
+    equal: bool,
+    session: &PartyMpcSession,
+    rng: &mut R,
+) -> Result<DecisionTranscript> {
+    if session.circuit != CircuitKind::Equality {
+        return Err(PartyMpcError::SessionMismatch);
+    }
+    let gates = session.exact_and_gates();
+    let transcript = DecisionTranscript {
+        masked: (0..gates)
+            .map(|gate| MaskedOpening {
+                gate,
+                d: rng.gen_range(0..=1),
+                e: rng.gen_range(0..=1),
+            })
+            .collect(),
+        revealed_equal: u8::from(equal),
+        and_gates: gates,
+        scalar_opening_rounds: gates,
+        modeled_batched_rounds: modeled_batched_rounds(session),
+        gate_share_messages: gates
+            .checked_mul(session.n_parties)
+            .ok_or(PartyMpcError::ArithmeticOverflow)?,
+        output_share_messages: session.n_parties,
+    };
+    if !transcript.is_reveal_only(session) {
+        return Err(PartyMpcError::InvalidOutput);
+    }
+    Ok(transcript)
+}
+
+/// Simulate the public comparison transcript from only the intended bit and
+/// public circuit shape, under the same semi-honest claim as the equality
+/// simulator.
+pub fn simulate_comparison_transcript<R: Rng>(
+    less_than: bool,
+    session: &PartyMpcSession,
+    rng: &mut R,
+) -> Result<ComparisonTranscript> {
+    if session.circuit != CircuitKind::LessThan {
+        return Err(PartyMpcError::SessionMismatch);
+    }
+    let gates = session.exact_and_gates();
+    let transcript = ComparisonTranscript {
+        masked: (0..gates)
+            .map(|gate| MaskedOpening {
+                gate,
+                d: rng.gen_range(0..=1),
+                e: rng.gen_range(0..=1),
+            })
+            .collect(),
+        revealed_less_than: u8::from(less_than),
+        and_gates: gates,
+        scalar_opening_rounds: gates,
+        modeled_batched_rounds: modeled_batched_rounds(session),
+        gate_share_messages: gates
+            .checked_mul(session.n_parties)
+            .ok_or(PartyMpcError::ArithmeticOverflow)?,
+        output_share_messages: session.n_parties,
+    };
+    if !transcript.is_reveal_only(session) {
+        return Err(PartyMpcError::InvalidOutput);
+    }
     Ok(transcript)
 }
 
@@ -1014,6 +1750,21 @@ fn geq_local(a: &[u8], b: &[u8], engine: &mut LocalEngine<'_>) -> Result<u8> {
     Ok(gt ^ eq)
 }
 
+/// Equality of two secret-shared integers. The running prefix remains shared;
+/// the only reconstruction happens after the full circuit returns its final
+/// share to the coordinator.
+fn equal_local(a: &[u8], b: &[u8], engine: &mut LocalEngine<'_>) -> Result<u8> {
+    if a.len() != b.len() || a.is_empty() {
+        return Err(PartyMpcError::ShapeMismatch);
+    }
+    let mut equal = local_const(1, engine.party);
+    for (&a_bit, &b_bit) in a.iter().zip(b) {
+        let same = a_bit ^ b_bit ^ local_const(1, engine.party);
+        equal = engine.and(equal, same)?;
+    }
+    Ok(equal)
+}
+
 fn secure_min_local(a: &[u8], b: &[u8], engine: &mut LocalEngine<'_>) -> Result<Vec<u8>> {
     let ge = geq_local(a, b, engine)?;
     let lt = ge ^ local_const(1, engine.party);
@@ -1131,8 +1882,15 @@ fn exact_and_gates(session: &PartyMpcSession) -> Result<usize> {
         .checked_mul(session.buckets)
         .and_then(|count| count.checked_mul(per_coefficient))
         .ok_or(PartyMpcError::ArithmeticOverflow)?;
+    let decision = match session.circuit {
+        CircuitKind::Crossing => crossing_and_gates(session.buckets, session.value_bits)?,
+        CircuitKind::Equality => session.value_bits,
+        CircuitKind::LessThan => 3usize
+            .checked_mul(session.value_bits)
+            .ok_or(PartyMpcError::ArithmeticOverflow)?,
+    };
     ingress
-        .checked_add(crossing_and_gates(session.buckets, session.value_bits)?)
+        .checked_add(decision)
         .ok_or(PartyMpcError::ArithmeticOverflow)
 }
 
@@ -1140,7 +1898,12 @@ fn modeled_batched_rounds(session: &PartyMpcSession) -> usize {
     let w = session.ingress_bits();
     let sum_depth = ceil_log2_public(session.n_parties) * (w - 1);
     let reduction_depth = (session.n_parties - 1) * (w + 1);
-    sum_depth + reduction_depth + crossing_rounds(session.buckets, session.value_bits)
+    let decision_depth = match session.circuit {
+        CircuitKind::Crossing => crossing_rounds(session.buckets, session.value_bits),
+        CircuitKind::Equality => session.value_bits,
+        CircuitKind::LessThan => session.value_bits,
+    };
+    sum_depth + reduction_depth + decision_depth
 }
 
 fn sum_width(n: usize, modulus: u64) -> Result<usize> {

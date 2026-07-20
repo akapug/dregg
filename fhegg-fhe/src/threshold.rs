@@ -59,6 +59,14 @@ use rand_09::{Rng, RngCore, SeedableRng};
 use crate::additive::pick_params;
 use crate::bfv_lean::{LeanCiphertext, RnsPoly};
 
+/// Crash-tolerant `t < n` Shamir custody and opening.  The original API in
+/// this module remains the smaller, independently tested n-of-n construction.
+pub mod quorum;
+/// Honest n-of-n multiparty BFV relinearization-key generation.  Each party
+/// retains the same secret share used by collective key generation; only the
+/// two public fhe.rs protocol-round shares reach the coordinator.
+pub mod relin;
+
 pub type Result<T> = std::result::Result<T, ThresholdError>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -403,6 +411,10 @@ fn take_wire<const N: usize>(bytes: &[u8], i: &mut usize) -> Result<[u8; N]> {
 /// Construct this inside the party process and keep it there.
 pub struct ThresholdParty {
     key_share: KeyShare,
+    /// Retained public identity of the key-generation ceremony that created
+    /// `key_share`.  Descendant protocol modules use it to prevent a share
+    /// from being replayed into a different collective-key session.
+    keygen_session: KeygenSession,
 }
 
 impl ThresholdParty {
@@ -440,7 +452,13 @@ impl ThresholdParty {
             party,
             public_key_bytes: singleton_pk.to_bytes(),
         };
-        Ok((Self { key_share }, contribution))
+        Ok((
+            Self {
+                key_share,
+                keygen_session: session.clone(),
+            },
+            contribution,
+        ))
     }
 
     pub fn party(&self) -> usize {

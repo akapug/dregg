@@ -24,7 +24,10 @@ use dregg_circuit::descriptor_ir2::{
     parse_vm_descriptor2, prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
 };
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::stark_zk::{DreggZkStarkConfig, create_zk_config};
+use dregg_circuit::stark_zk::{
+    DreggZkStarkConfig, ZK_EXT_DEGREE, ZK_FRI_LOG_BLOWUP, ZK_FRI_LOG_FINAL_POLY_LEN,
+    ZK_FRI_MAX_LOG_ARITY, ZK_FRI_NUM_QUERIES, ZK_FRI_QUERY_POW_BITS, create_zk_config,
+};
 
 pub const PRIVATE_SHUFFLE_FAIR_DESCRIPTOR_JSON: &str =
     include_str!("../../circuit/descriptors/by-name/private-shuffle-fair-n8.json");
@@ -33,12 +36,16 @@ pub const PARTICIPANT_COUNT: usize = 8;
 pub const SEAT_COUNT: usize = 8;
 pub const CARD_COUNT: usize = 8;
 pub const DIGEST_WIDTH: usize = 8;
+pub const PUBLIC_INPUT_COUNT: usize = 20;
 pub const ENTROPY_SPACE: u32 = 65_536;
 pub const PERMUTATION_COUNT: u32 = 40_320;
 pub const RULE_ID: u32 = 1_246_122_552;
 pub const COMMIT_DOMAIN_TAG: u32 = 1_246_051_896;
 pub const SHUFFLE_RULE_ID: u32 = 1_346_720_312;
 pub const SHUFFLE_LEAF_DOMAIN_TAG: u32 = 1_397_245_496;
+pub const PLONKY3_REV: &str = "82cfad73cd734d37a0d51953094f970c531817ec";
+pub const HIDING_VERIFIER_MANIFEST: &str =
+    "private-shuffle-fair-n8-v1|BabyBear|Poseidon2-W16|HidingFriPcs|salt=4|random-codewords=4";
 
 const TRACE_WIDTH: usize = 823;
 const SESSION: usize = 0;
@@ -265,6 +272,15 @@ pub struct PublicStatement {
 }
 
 impl PublicStatement {
+    pub fn as_u32_vec(self) -> Vec<u32> {
+        let mut public = Vec::with_capacity(PUBLIC_INPUT_COUNT);
+        public.extend([self.session, self.rule, self.attempt]);
+        public.extend(self.commitment_root);
+        public.push(u32::from(self.accepted));
+        public.extend(self.deal_root);
+        public
+    }
+
     fn as_felts(self) -> [BabyBear; 20] {
         let mut public = [BabyBear::ZERO; 20];
         public[SESSION] = BabyBear::new(self.session);
@@ -280,7 +296,7 @@ impl PublicStatement {
         public
     }
 
-    fn validate_shape(self) -> Result<(), String> {
+    pub fn validate(self) -> Result<(), String> {
         if self.session >= BABYBEAR_P || self.attempt >= BABYBEAR_P {
             return Err("session/attempt is noncanonical for BabyBear".to_string());
         }
@@ -307,10 +323,57 @@ impl PublicStatement {
         }
         Ok(())
     }
+
+    /// Decode the exact 20-word public ABI. Boolean and field values must use
+    /// canonical representatives; the decoder never silently reduces them.
+    pub fn try_from_u32s(values: &[u32]) -> Result<Self, String> {
+        if values.len() != PUBLIC_INPUT_COUNT {
+            return Err(format!(
+                "private fair shuffle expects {PUBLIC_INPUT_COUNT} public inputs, got {}",
+                values.len()
+            ));
+        }
+        let accepted = match values[ACCEPTED] {
+            0 => false,
+            1 => true,
+            value => {
+                return Err(format!(
+                    "accepted flag has non-boolean representative {value}"
+                ));
+            }
+        };
+        let public = Self {
+            session: values[SESSION],
+            rule: values[RULE],
+            attempt: values[ATTEMPT],
+            commitment_root: values[COMMIT_ROOT_BASE..COMMIT_ROOT_BASE + DIGEST_WIDTH]
+                .try_into()
+                .expect("length checked"),
+            accepted,
+            deal_root: values[DEAL_ROOT_PUBLIC_BASE..DEAL_ROOT_PUBLIC_BASE + DIGEST_WIDTH]
+                .try_into()
+                .expect("length checked"),
+        };
+        public.validate()?;
+        Ok(public)
+    }
 }
 
 pub struct FairShuffleZkProof {
     proof: Ir2BatchProof<DreggZkStarkConfig>,
+}
+
+impl FairShuffleZkProof {
+    pub fn to_postcard(&self) -> Result<Vec<u8>, String> {
+        postcard::to_allocvec(&self.proof)
+            .map_err(|error| format!("private fair-shuffle proof encode failed: {error}"))
+    }
+
+    pub fn from_postcard(bytes: &[u8]) -> Result<Self, String> {
+        let proof = postcard::from_bytes(bytes)
+            .map_err(|error| format!("private fair-shuffle proof decode failed: {error}"))?;
+        Ok(Self { proof })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,6 +391,60 @@ pub fn descriptor() -> Result<EffectVmDescriptor2, String> {
         return Err("private fair shuffle emitted descriptor shape drifted".to_string());
     }
     Ok(desc)
+}
+
+/// Fingerprint of the exact Lean-emitted AIR artifact.
+pub fn air_fingerprint() -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-private-shuffle-fair-air-v1");
+    hasher.update(PRIVATE_SHUFFLE_FAIR_DESCRIPTOR_JSON.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+/// Stable identity of the privacy-facing HidingFri verifier/config family.
+pub fn hiding_verifier_config_fingerprint() -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-private-shuffle-fair-hiding-config-v1");
+    hasher.update(HIDING_VERIFIER_MANIFEST.as_bytes());
+    hasher.update(PLONKY3_REV.as_bytes());
+    for knob in [
+        ZK_FRI_LOG_BLOWUP,
+        ZK_FRI_LOG_FINAL_POLY_LEN,
+        ZK_FRI_MAX_LOG_ARITY,
+        ZK_FRI_NUM_QUERIES,
+        ZK_FRI_QUERY_POW_BITS,
+        ZK_EXT_DEGREE,
+    ] {
+        hasher.update(&(knob as u64).to_le_bytes());
+    }
+    hasher.update(&air_fingerprint());
+    *hasher.finalize().as_bytes()
+}
+
+pub fn proving_system_canonical_bytes() -> Vec<u8> {
+    let mut out = vec![0];
+    out.extend_from_slice(&(PLONKY3_REV.len() as u64).to_le_bytes());
+    out.extend_from_slice(PLONKY3_REV.as_bytes());
+    out
+}
+
+/// Canonical identity of this standalone verifier. This does not claim an
+/// `Effect::Custom` binding to a cell transition.
+pub fn canonical_vk_hash() -> [u8; 32] {
+    let verifier_source = hiding_verifier_config_fingerprint();
+    let mut verifier = blake3::Hasher::new_derive_key("dregg-verifier-fingerprint-v1");
+    verifier.update(&[0]);
+    verifier.update(&verifier_source);
+    let verifier_canonical = *verifier.finalize().as_bytes();
+    let proving_system = proving_system_canonical_bytes();
+    let program = PRIVATE_SHUFFLE_FAIR_DESCRIPTOR_JSON.as_bytes();
+
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-vk-v2");
+    hasher.update(&(program.len() as u64).to_le_bytes());
+    hasher.update(program);
+    hasher.update(&air_fingerprint());
+    hasher.update(&verifier_canonical);
+    hasher.update(&(proving_system.len() as u64).to_le_bytes());
+    hasher.update(&proving_system);
+    *hasher.finalize().as_bytes()
 }
 
 /// The exact recursive decoder used by Lean's `Perm.decomposeFin` equivalence.
@@ -397,6 +514,57 @@ fn commitment_leaf_digest(
     preimage.extend(blind.map(BabyBear::new));
     preimage.extend([BabyBear::ZERO; 2]);
     chip_absorb_all_lanes(preimage.len(), &preimage)
+}
+
+/// Public commitment emitted before a participant reveals its seed to the
+/// local proof producer. It binds session, attempt, participant index, seed,
+/// and all eight blinding lanes.
+pub fn participant_commitment(
+    session: u32,
+    attempt: u32,
+    participant: usize,
+    seed: u16,
+    blind: [u32; DIGEST_WIDTH],
+) -> Result<[u32; DIGEST_WIDTH], String> {
+    if session >= BABYBEAR_P || attempt >= BABYBEAR_P {
+        return Err("session/attempt is noncanonical for BabyBear".to_string());
+    }
+    if participant >= PARTICIPANT_COUNT {
+        return Err(format!(
+            "participant {participant} is outside fixed range 0..{}",
+            PARTICIPANT_COUNT - 1
+        ));
+    }
+    for (lane, value) in blind.into_iter().enumerate() {
+        if value >= BABYBEAR_P {
+            return Err(format!(
+                "commitment blind lane {lane}={value} is noncanonical for BabyBear"
+            ));
+        }
+    }
+    Ok(commitment_leaf_digest(session, attempt, participant, seed, blind).map(BabyBear::as_u32))
+}
+
+/// Reconstruct the AIR's fixed depth-three participant commitment tree from
+/// the eight public leaf commitments recorded during commit-before-reveal.
+pub fn commitment_root_from_leaves(
+    leaves: [[u32; DIGEST_WIDTH]; PARTICIPANT_COUNT],
+) -> Result<[u32; DIGEST_WIDTH], String> {
+    for (participant, digest) in leaves.iter().enumerate() {
+        for (lane, &value) in digest.iter().enumerate() {
+            if value >= BABYBEAR_P {
+                return Err(format!(
+                    "participant commitment {participant}:{lane}={value} is noncanonical for BabyBear"
+                ));
+            }
+        }
+    }
+    let leaves = leaves.map(|digest| digest.map(BabyBear::new));
+    let level1: [Digest; 4] =
+        core::array::from_fn(|pair| node8(leaves[2 * pair], leaves[2 * pair + 1]));
+    let level2: [Digest; 2] =
+        core::array::from_fn(|pair| node8(level1[2 * pair], level1[2 * pair + 1]));
+    Ok(node8(level2[0], level2[1]).map(BabyBear::as_u32))
 }
 
 fn deal_leaf_digest(session: u32, seat: usize, card: u8, blind: [u32; DIGEST_WIDTH]) -> Digest {
@@ -641,7 +809,7 @@ pub fn verify_zk(
     proof: &FairShuffleZkProof,
     public: PublicStatement,
 ) -> Result<VerifiedAttempt, String> {
-    public.validate_shape()?;
+    public.validate()?;
     let config = create_zk_config();
     verify_vm_descriptor2_with_config(&descriptor()?, &proof.proof, &public.as_felts(), &config)?;
     Ok(if public.accepted {
@@ -649,6 +817,56 @@ pub fn verify_zk(
     } else {
         VerifiedAttempt::Rejected(public)
     })
+}
+
+/// Verify the stable transport form without exposing the concrete proof type.
+pub fn verify_postcard(
+    proof_bytes: &[u8],
+    public_values: &[u32],
+) -> Result<VerifiedAttempt, String> {
+    let proof = FairShuffleZkProof::from_postcard(proof_bytes)?;
+    verify_zk(&proof, PublicStatement::try_from_u32s(public_values)?)
+}
+
+/// Open one card from an accepted fair-shuffle witness using the existing
+/// `SHF8` Merkle-opening format. Rejected attempts have no public deal root and
+/// therefore cannot issue card openings.
+pub fn deal_opening(
+    session: u32,
+    witness: &FairShuffleWitness,
+    seat: usize,
+) -> Result<crate::private_shuffle::CardOpening, String> {
+    witness.validate()?;
+    if !witness.is_accepted() {
+        return Err("rejected fair-shuffle attempt has no openable deal".to_string());
+    }
+    let shuffle_witness =
+        crate::private_shuffle::PrivateShuffleWitness::try_from_assignment_with_blinding(
+            &witness.cards(),
+            witness.deal_blinding,
+        )?;
+    crate::private_shuffle::opening(session, &shuffle_witness, seat)
+}
+
+/// Verify one selective opening against the accepted deal root. The fair
+/// proof must be verified separately first; game consumers do that before
+/// admitting this opening into state.
+pub fn verify_deal_opening(
+    public: PublicStatement,
+    opening: &crate::private_shuffle::CardOpening,
+) -> Result<(), String> {
+    public.validate()?;
+    if !public.accepted {
+        return Err("rejected fair-shuffle attempt has no openable deal".to_string());
+    }
+    crate::private_shuffle::verify_opening(
+        crate::private_shuffle::PublicStatement {
+            session: public.session,
+            rule: SHUFFLE_RULE_ID,
+            deal_root: public.deal_root,
+        },
+        opening,
+    )
 }
 
 #[cfg(test)]
@@ -743,6 +961,39 @@ mod tests {
         ));
         assert!(proof.proof.commitments.random.is_some());
 
+        let proof_bytes = proof.to_postcard().expect("proof transport");
+        let public_values = public.as_u32_vec();
+        assert_eq!(public_values.len(), PUBLIC_INPUT_COUNT);
+        assert_eq!(
+            PublicStatement::try_from_u32s(&public_values).unwrap(),
+            public
+        );
+        assert_eq!(
+            verify_postcard(&proof_bytes, &public_values).unwrap(),
+            VerifiedAttempt::Accepted(public)
+        );
+
+        let leaves = core::array::from_fn(|participant| {
+            participant_commitment(
+                77,
+                3,
+                participant,
+                witness.seeds[participant],
+                witness.commitment_blinding[participant],
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            commitment_root_from_leaves(leaves).unwrap(),
+            public.commitment_root
+        );
+
+        let opening = deal_opening(77, &witness, 5).expect("selective deal opening");
+        verify_deal_opening(public, &opening).expect("opening binds accepted deal root");
+        let mut wrong_opening = opening;
+        wrong_opening.card = (wrong_opening.card + 1) % CARD_COUNT as u8;
+        assert!(verify_deal_opening(public, &wrong_opening).is_err());
+
         let mut attempt_tamper = public;
         attempt_tamper.attempt += 1;
         assert!(verify_zk(&proof, attempt_tamper).is_err());
@@ -759,6 +1010,9 @@ mod tests {
         let mut root_tamper = public;
         root_tamper.deal_root[7] = (root_tamper.deal_root[7] + 1) % BABYBEAR_P;
         assert!(verify_zk(&proof, root_tamper).is_err());
+
+        assert_ne!(air_fingerprint(), hiding_verifier_config_fingerprint());
+        assert_ne!(canonical_vk_hash(), [0; 32]);
 
         let rejected_witness = fixture_with_seed0(40_320);
         let (rejected_proof, rejected_public) =

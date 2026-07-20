@@ -530,6 +530,16 @@ pub enum TurnError {
     /// keystone `admissionReason_eq_admitted_iff` proves the reason is faithful: it is never
     /// `Admitted` on a refused turn.
     AdmissionRefused { reason: crate::AdmissionReason },
+
+    /// A verifier opted into the bounded custom app-write face, but the turn
+    /// did not carry the exact `Custom; SetField*` composition its policy
+    /// declares. This is checked before the outer sovereign proof can commit:
+    /// on refusal no state or sovereign commitment has changed.
+    ///
+    /// `index` is the custom sub-proof's canonical DFS position; `reason`
+    /// identifies the malformed declaration, missing/misordered write, wrong
+    /// target/index/value, or non-canonical public input.
+    CustomAppWriteBindingMismatch { index: usize, reason: String },
 }
 
 /// Operational classification of a refusal, for the security observability
@@ -1102,6 +1112,13 @@ impl core::fmt::Display for TurnError {
             TurnError::AdmissionRefused { reason } => {
                 // The reason renders its own stranger-facing "refused: …" explanation.
                 write!(f, "{reason}")
+            }
+            TurnError::CustomAppWriteBindingMismatch { index, reason } => {
+                write!(
+                    f,
+                    "custom-effect sub-proof #{index} violates its bounded app-write binding: \
+                     {reason}; rejected before the sovereign commitment advances"
+                )
             }
         }
     }

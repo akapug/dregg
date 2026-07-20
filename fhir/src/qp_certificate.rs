@@ -1,0 +1,467 @@
+//! A self-contained, strict exact certificate for one fhIR quadratic program.
+//!
+//! A KKT residual certificate has its intended convex-optimization meaning
+//! only when its quadratic matrix is positive semidefinite.  fhIR previously carried the
+//! exact SDD=>PSD admission certificate on [`Compiled`](crate::Compiled) and
+//! the exact KKT certificate on [`RunOutcome`](crate::RunOutcome), but a caller
+//! exporting the latter could accidentally drop the former.  This module
+//! makes that unsafe split unrepresentable at the transport boundary.
+//!
+//! `FHQPB001` contains both exact integer objects and verifies, from the bytes
+//! alone, that:
+//!
+//! * the SDD admission witness is structurally valid;
+//! * the KKT certificate passes its exact, overflow-checked checker; and
+//! * both objects name the identical fixed-point `P` matrix and scale.
+//!
+//! The checksum detects corruption.  It is deliberately not authentication;
+//! callers that need issuer identity must sign the canonical artifact.
+
+use crate::compile::{
+    Compiled, ConvexProgram, ExactSddPsdCertificate, ExactSddPsdCertificateError,
+    QP_CERT_EXACT_SCALE,
+};
+use crate::solver_bridge::{run, ExactCertQpVerdict, RunOutcome};
+use fhegg_solver::qp_exact::CertQpExact;
+use sha2::{Digest, Sha256};
+
+const MAGIC: &[u8; 8] = b"FHQPB001";
+const VERSION: u8 = 1;
+const CHECKSUM_DOMAIN: &[u8] = b"fhir/exact-qp-certificate-bundle/v1";
+const HEADER_LEN: usize = 8 + 1 + 4 + 4 + 4 + 4;
+const CHECKSUM_LEN: usize = 32;
+
+/// Deliberately below the independent SDD carrier's limit: the KKT artifact
+/// also contains an `m*n` constraint matrix and must remain cheaply bounded
+/// before allocation.
+pub const MAX_QP_BUNDLE_DIMENSION: usize = 1024;
+pub const MAX_QP_BUNDLE_WIRE_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExactQpCertificateBundle {
+    admission: ExactSddPsdCertificate,
+    kkt: CertQpExact,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExactQpCertificateBundleError {
+    NotQp,
+    MissingAdmission,
+    Admission(ExactSddPsdCertificateError),
+    KktInvalid,
+    ScaleMismatch,
+    DimensionMismatch,
+    MatrixMismatch { index: usize },
+    DimensionTooLarge { n: usize, mc: usize },
+    ArithmeticOverflow,
+    WireTooLarge { actual: usize, maximum: usize },
+    MalformedWire,
+    UnsupportedVersion { found: u8 },
+    ChecksumMismatch,
+}
+
+impl std::fmt::Display for ExactQpCertificateBundleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for ExactQpCertificateBundleError {}
+
+impl From<ExactSddPsdCertificateError> for ExactQpCertificateBundleError {
+    fn from(value: ExactSddPsdCertificateError) -> Self {
+        Self::Admission(value)
+    }
+}
+
+impl ExactQpCertificateBundle {
+    /// Join two independently executable exact certificates.  Construction
+    /// rechecks both; no cached report bit becomes authority.
+    pub fn new(
+        admission: ExactSddPsdCertificate,
+        kkt: CertQpExact,
+    ) -> Result<Self, ExactQpCertificateBundleError> {
+        let bundle = Self { admission, kkt };
+        bundle.verify()?;
+        Ok(bundle)
+    }
+
+    pub fn admission(&self) -> &ExactSddPsdCertificate {
+        &self.admission
+    }
+
+    pub fn kkt(&self) -> &CertQpExact {
+        &self.kkt
+    }
+
+    /// Verify the complete standalone claim.  Re-encoding the SDD carrier is
+    /// also its public structural verifier; the exact KKT checker recomputes
+    /// all residuals with checked i128 arithmetic.
+    pub fn verify(&self) -> Result<(), ExactQpCertificateBundleError> {
+        self.admission.to_wire_bytes()?;
+        if self.kkt.n == 0
+            || self.kkt.n > MAX_QP_BUNDLE_DIMENSION
+            || self.kkt.mc > MAX_QP_BUNDLE_DIMENSION
+        {
+            return Err(ExactQpCertificateBundleError::DimensionTooLarge {
+                n: self.kkt.n,
+                mc: self.kkt.mc,
+            });
+        }
+        if self.admission.scale() != QP_CERT_EXACT_SCALE || self.kkt.scale != QP_CERT_EXACT_SCALE {
+            return Err(ExactQpCertificateBundleError::ScaleMismatch);
+        }
+        if self.admission.dimension() != self.kkt.n
+            || self.admission.exact_entries().len() != self.kkt.p.len()
+        {
+            return Err(ExactQpCertificateBundleError::DimensionMismatch);
+        }
+        for (index, (admitted, used)) in self
+            .admission
+            .exact_entries()
+            .iter()
+            .zip(&self.kkt.p)
+            .enumerate()
+        {
+            if admitted != used {
+                return Err(ExactQpCertificateBundleError::MatrixMismatch { index });
+            }
+        }
+        if !self.kkt.check().valid {
+            return Err(ExactQpCertificateBundleError::KktInvalid);
+        }
+        exact_wire_len(&self.kkt, self.admission.to_wire_bytes()?.len())?;
+        Ok(())
+    }
+
+    /// Canonical, bounded, exact-EOF transport.  Every i128 uses network-order
+    /// two's complement; all vector lengths are implied by `(n, mc)`.
+    pub fn to_wire_bytes(&self) -> Result<Vec<u8>, ExactQpCertificateBundleError> {
+        self.verify()?;
+        let admission = self.admission.to_wire_bytes()?;
+        let wire_len = exact_wire_len(&self.kkt, admission.len())?;
+        let mut out = Vec::with_capacity(wire_len);
+        out.extend_from_slice(MAGIC);
+        out.push(VERSION);
+        out.extend_from_slice(&(admission.len() as u32).to_be_bytes());
+        out.extend_from_slice(&(self.kkt.n as u32).to_be_bytes());
+        out.extend_from_slice(&(self.kkt.mc as u32).to_be_bytes());
+        out.extend_from_slice(&self.kkt.scale.to_be_bytes());
+        out.extend_from_slice(&admission);
+        push_i128s(&mut out, &self.kkt.p);
+        push_i128s(&mut out, &self.kkt.q);
+        push_i128s(&mut out, &self.kkt.a);
+        push_i128s(&mut out, &self.kkt.l);
+        push_i128s(&mut out, &self.kkt.u);
+        push_i128s(&mut out, &self.kkt.x);
+        push_i128s(&mut out, &self.kkt.y);
+        out.extend_from_slice(&self.kkt.epsilon.to_be_bytes());
+        let checksum = checksum(&out);
+        out.extend_from_slice(&checksum);
+        debug_assert_eq!(out.len(), wire_len);
+        Ok(out)
+    }
+
+    pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self, ExactQpCertificateBundleError> {
+        if bytes.len() > MAX_QP_BUNDLE_WIRE_BYTES {
+            return Err(ExactQpCertificateBundleError::WireTooLarge {
+                actual: bytes.len(),
+                maximum: MAX_QP_BUNDLE_WIRE_BYTES,
+            });
+        }
+        if bytes.len() < HEADER_LEN + CHECKSUM_LEN {
+            return Err(ExactQpCertificateBundleError::MalformedWire);
+        }
+        let payload_len = bytes.len() - CHECKSUM_LEN;
+        if bytes[payload_len..] != checksum(&bytes[..payload_len]) {
+            return Err(ExactQpCertificateBundleError::ChecksumMismatch);
+        }
+        let mut cursor = Cursor::new(&bytes[..payload_len]);
+        if cursor.take::<8>()? != *MAGIC {
+            return Err(ExactQpCertificateBundleError::MalformedWire);
+        }
+        let version = cursor.take::<1>()?[0];
+        if version != VERSION {
+            return Err(ExactQpCertificateBundleError::UnsupportedVersion { found: version });
+        }
+        let admission_len = u32::from_be_bytes(cursor.take::<4>()?) as usize;
+        let n = u32::from_be_bytes(cursor.take::<4>()?) as usize;
+        let mc = u32::from_be_bytes(cursor.take::<4>()?) as usize;
+        let scale = u32::from_be_bytes(cursor.take::<4>()?);
+        if n == 0 || n > MAX_QP_BUNDLE_DIMENSION || mc > MAX_QP_BUNDLE_DIMENSION {
+            return Err(ExactQpCertificateBundleError::DimensionTooLarge { n, mc });
+        }
+        let expected = exact_wire_len_for_dimensions(n, mc, admission_len)?;
+        if expected != bytes.len() {
+            return Err(ExactQpCertificateBundleError::MalformedWire);
+        }
+        let admission = ExactSddPsdCertificate::from_wire_bytes(cursor.take_slice(admission_len)?)?;
+        let nn = n
+            .checked_mul(n)
+            .ok_or(ExactQpCertificateBundleError::ArithmeticOverflow)?;
+        let mn = mc
+            .checked_mul(n)
+            .ok_or(ExactQpCertificateBundleError::ArithmeticOverflow)?;
+        let kkt = CertQpExact {
+            n,
+            mc,
+            scale,
+            p: cursor.take_i128s(nn)?,
+            q: cursor.take_i128s(n)?,
+            a: cursor.take_i128s(mn)?,
+            l: cursor.take_i128s(mc)?,
+            u: cursor.take_i128s(mc)?,
+            x: cursor.take_i128s(n)?,
+            y: cursor.take_i128s(mc)?,
+            epsilon: i128::from_be_bytes(cursor.take::<16>()?),
+        };
+        if !cursor.is_finished() {
+            return Err(ExactQpCertificateBundleError::MalformedWire);
+        }
+        let bundle = Self::new(admission, kkt)?;
+        if bundle.to_wire_bytes()?.as_slice() != bytes {
+            return Err(ExactQpCertificateBundleError::MalformedWire);
+        }
+        Ok(bundle)
+    }
+}
+
+/// Compile-time PSD admission and run-time fixed-point KKT residual acceptance
+/// packaged into one exportable exact-arithmetic artifact.  The solver remains
+/// untrusted: this function only returns after independently re-running both
+/// checkers. A positive tolerance is still a residual bound, not exact-zero
+/// KKT/global optimality; `Market.QpCertificateBundle` proves the latter only
+/// once an exact-KKT refinement has been supplied.
+pub fn run_certified_qp(
+    compiled: &Compiled,
+) -> Result<ExactQpCertificateBundle, ExactQpCertificateBundleError> {
+    if !matches!(compiled.program, ConvexProgram::Qp(_)) {
+        return Err(ExactQpCertificateBundleError::NotQp);
+    }
+    compiled.verify_exact_sdd_psd_certificate()?;
+    let admission = compiled
+        .exact_sdd_psd_certificate
+        .clone()
+        .ok_or(ExactQpCertificateBundleError::MissingAdmission)?;
+    match run(compiled) {
+        RunOutcome::CertQp {
+            exact: ExactCertQpVerdict::Checked { cert, .. },
+            ..
+        } => ExactQpCertificateBundle::new(admission, cert),
+        RunOutcome::InvalidCompiled { reason } => Err(reason.into()),
+        RunOutcome::CertQp { .. } => Err(ExactQpCertificateBundleError::KktInvalid),
+        _ => Err(ExactQpCertificateBundleError::NotQp),
+    }
+}
+
+fn push_i128s(out: &mut Vec<u8>, values: &[i128]) {
+    for value in values {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+}
+
+fn exact_value_count(n: usize, mc: usize) -> Result<usize, ExactQpCertificateBundleError> {
+    let nn = n
+        .checked_mul(n)
+        .ok_or(ExactQpCertificateBundleError::ArithmeticOverflow)?;
+    let mn = mc
+        .checked_mul(n)
+        .ok_or(ExactQpCertificateBundleError::ArithmeticOverflow)?;
+    // p + q + a + l + u + x + y + epsilon
+    nn.checked_add(n)
+        .and_then(|v| v.checked_add(mn))
+        .and_then(|v| v.checked_add(mc.checked_mul(2)?))
+        .and_then(|v| v.checked_add(n))
+        .and_then(|v| v.checked_add(mc))
+        .and_then(|v| v.checked_add(1))
+        .ok_or(ExactQpCertificateBundleError::ArithmeticOverflow)
+}
+
+fn exact_wire_len(
+    kkt: &CertQpExact,
+    admission_len: usize,
+) -> Result<usize, ExactQpCertificateBundleError> {
+    exact_wire_len_for_dimensions(kkt.n, kkt.mc, admission_len)
+}
+
+fn exact_wire_len_for_dimensions(
+    n: usize,
+    mc: usize,
+    admission_len: usize,
+) -> Result<usize, ExactQpCertificateBundleError> {
+    if n == 0 || n > MAX_QP_BUNDLE_DIMENSION || mc > MAX_QP_BUNDLE_DIMENSION {
+        return Err(ExactQpCertificateBundleError::DimensionTooLarge { n, mc });
+    }
+    let values = exact_value_count(n, mc)?;
+    HEADER_LEN
+        .checked_add(admission_len)
+        .and_then(|v| v.checked_add(values.checked_mul(16)?))
+        .and_then(|v| v.checked_add(CHECKSUM_LEN))
+        .filter(|len| *len <= MAX_QP_BUNDLE_WIRE_BYTES)
+        .ok_or(ExactQpCertificateBundleError::WireTooLarge {
+            actual: usize::MAX,
+            maximum: MAX_QP_BUNDLE_WIRE_BYTES,
+        })
+}
+
+fn checksum(payload: &[u8]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update((CHECKSUM_DOMAIN.len() as u64).to_be_bytes());
+    hash.update(CHECKSUM_DOMAIN);
+    hash.update((payload.len() as u64).to_be_bytes());
+    hash.update(payload);
+    hash.finalize().into()
+}
+
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take<const N: usize>(&mut self) -> Result<[u8; N], ExactQpCertificateBundleError> {
+        self.take_slice(N)?
+            .try_into()
+            .map_err(|_| ExactQpCertificateBundleError::MalformedWire)
+    }
+
+    fn take_slice(&mut self, len: usize) -> Result<&'a [u8], ExactQpCertificateBundleError> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or(ExactQpCertificateBundleError::MalformedWire)?;
+        let value = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn take_i128s(&mut self, len: usize) -> Result<Vec<i128>, ExactQpCertificateBundleError> {
+        let mut values = Vec::with_capacity(len);
+        for _ in 0..len {
+            values.push(i128::from_be_bytes(self.take::<16>()?));
+        }
+        Ok(values)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{compile, products};
+
+    fn bundle() -> ExactQpCertificateBundle {
+        let compiled = compile(&products::portfolio_qp_public()).expect("compile public QP");
+        run_certified_qp(&compiled).expect("exact PSD+KKT bundle")
+    }
+
+    fn repair_checksum(wire: &mut [u8]) {
+        let payload_len = wire.len() - CHECKSUM_LEN;
+        let repaired = checksum(&wire[..payload_len]);
+        wire[payload_len..].copy_from_slice(&repaired);
+    }
+
+    #[test]
+    fn exact_qp_bundle_roundtrips_and_rechecks_both_proofs() {
+        let bundle = bundle();
+        bundle.verify().unwrap();
+        let wire = bundle.to_wire_bytes().unwrap();
+        let decoded = ExactQpCertificateBundle::from_wire_bytes(&wire).unwrap();
+        assert_eq!(decoded, bundle);
+        decoded.verify().unwrap();
+
+        for end in 0..wire.len() {
+            assert!(ExactQpCertificateBundle::from_wire_bytes(&wire[..end]).is_err());
+        }
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        assert!(ExactQpCertificateBundle::from_wire_bytes(&trailing).is_err());
+        let mut corrupted = wire;
+        corrupted[HEADER_LEN + 1] ^= 1;
+        assert_eq!(
+            ExactQpCertificateBundle::from_wire_bytes(&corrupted),
+            Err(ExactQpCertificateBundleError::ChecksumMismatch)
+        );
+    }
+
+    #[test]
+    fn exact_qp_bundle_valid_checksum_cannot_bypass_version_or_dimensions() {
+        let wire = bundle().to_wire_bytes().unwrap();
+
+        let mut retired = wire.clone();
+        retired[..8].copy_from_slice(b"FHQPB000");
+        repair_checksum(&mut retired);
+        assert_eq!(
+            ExactQpCertificateBundle::from_wire_bytes(&retired),
+            Err(ExactQpCertificateBundleError::MalformedWire)
+        );
+
+        let mut future = wire.clone();
+        future[8] = 2;
+        repair_checksum(&mut future);
+        assert_eq!(
+            ExactQpCertificateBundle::from_wire_bytes(&future),
+            Err(ExactQpCertificateBundleError::UnsupportedVersion { found: 2 })
+        );
+
+        let mc = u32::from_be_bytes(wire[17..21].try_into().unwrap()) as usize;
+        let mut oversized = wire;
+        oversized[13..17].copy_from_slice(&((MAX_QP_BUNDLE_DIMENSION + 1) as u32).to_be_bytes());
+        repair_checksum(&mut oversized);
+        assert_eq!(
+            ExactQpCertificateBundle::from_wire_bytes(&oversized),
+            Err(ExactQpCertificateBundleError::DimensionTooLarge {
+                n: MAX_QP_BUNDLE_DIMENSION + 1,
+                mc,
+            })
+        );
+    }
+
+    #[test]
+    fn exact_qp_bundle_valid_checksum_cannot_substitute_the_kkt_matrix() {
+        let mut wire = bundle().to_wire_bytes().unwrap();
+        let admission_len = u32::from_be_bytes(wire[9..13].try_into().unwrap()) as usize;
+        let first_kkt_p_low_byte = HEADER_LEN + admission_len + 15;
+        wire[first_kkt_p_low_byte] ^= 1;
+        repair_checksum(&mut wire);
+        assert_eq!(
+            ExactQpCertificateBundle::from_wire_bytes(&wire),
+            Err(ExactQpCertificateBundleError::MatrixMismatch { index: 0 })
+        );
+    }
+
+    #[test]
+    fn exact_qp_bundle_refuses_matrix_and_kkt_forgery() {
+        let bundle = bundle();
+        let mut wrong_matrix = bundle.clone();
+        wrong_matrix.kkt.p[0] += 1;
+        assert_eq!(
+            wrong_matrix.verify(),
+            Err(ExactQpCertificateBundleError::MatrixMismatch { index: 0 })
+        );
+
+        let mut wrong_witness = bundle;
+        wrong_witness.kkt.x[0] += 10_i128.pow(QP_CERT_EXACT_SCALE);
+        assert_eq!(
+            wrong_witness.verify(),
+            Err(ExactQpCertificateBundleError::KktInvalid)
+        );
+    }
+
+    #[test]
+    fn certified_qp_runner_refuses_non_qp() {
+        let compiled = compile(&products::small_flow_clearing()).expect("compile LP");
+        assert_eq!(
+            run_certified_qp(&compiled),
+            Err(ExactQpCertificateBundleError::NotQp)
+        );
+    }
+}

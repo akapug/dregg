@@ -164,4 +164,3 @@ Dregg2.Exec.FFIDirect  # GREEN, #guard-only (no axiom self-check) — FFI-direct
 
 # --- the Claims axiom-net — KNOWN 'ran nowhere' (see MEMORY: CI-meaningfulness audit); being wired on its own track ---
 Dregg2.Claims  # GREEN self-checked (#assert clean), REGISTERABLE — Claims axiom-net
-Dregg2.Crypto.Deriv.SymbolicIntervals  # ⚠ INCOMPLETE WIP — the LIA/interval frontier (scalar bounds: amount<=limit, ranges). Design is verify-SOUND (threshold-cell cover; m±1 provably rides the open cell between far thresholds), but the PROOFS ARE UNFINISHED: 8 unsolved goals / failed rewrites. Swept into HEAD by b48169dde, deliberately NOT registered so it stays out of the build closure. Do not treat as landed.

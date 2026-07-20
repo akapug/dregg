@@ -18,7 +18,7 @@
 //!
 //! [`DistributedTranscript::is_reveal_only`]: crate::mpc_party::DistributedTranscript::is_reveal_only
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 use crate::bfv_lean::LeanCiphertext;
 use crate::mpc::Crossing;
 use crate::mpc_party::{DistributedTranscript, PartyMpcSession};
+use crate::threshold::quorum::QuorumKeygenSession;
 use crate::threshold::{BfvParams, CollectivePublicKey, KeygenSession};
 
 /// Stable protocol discriminator. It is part of every claim and replay key.
@@ -43,6 +44,7 @@ const PARTY_ID_DOMAIN: &[u8] = b"fhegg/attestation/party-id/v1";
 const CIPHERTEXT_DOMAIN: &[u8] = b"fhegg/attestation/input-ciphertext/v1";
 const MODULI_DOMAIN: &[u8] = b"fhegg/attestation/bfv-moduli/v1";
 const PUBLIC_KEY_DOMAIN: &[u8] = b"fhegg/attestation/bfv-collective-pk/v1";
+const ENCRYPTION_DOMAIN: &[u8] = b"fhegg/attestation/bfv-encryption-domain/v1";
 const TRANSCRIPT_DOMAIN: &[u8] = b"fhegg/attestation/distributed-transcript/v1";
 const CLAIM_DOMAIN: &[u8] = b"fhegg/attestation/clearing-claim/v1";
 const ENVELOPE_DOMAIN: &[u8] = b"fhegg/attestation/envelope/v1";
@@ -51,6 +53,9 @@ const QUORUM_ROSTER_DOMAIN: &[u8] = b"fhegg/attestation/quorum-roster/v1";
 const QUORUM_VERIFIER_DOMAIN: &[u8] = b"fhegg/attestation/quorum-verifier/v1";
 const QUORUM_SIGNATURE_DOMAIN: &[u8] = b"fhegg/attestation/quorum-signature/v1";
 const QUORUM_EVIDENCE_VERSION: u8 = 1;
+const REPLAY_SNAPSHOT_MAGIC: &[u8; 8] = b"FHRSv001";
+const REPLAY_SNAPSHOT_DOMAIN: &[u8] = b"fhegg/replay-snapshot/v1";
+const MAX_REPLAY_SNAPSHOT_ENTRIES: usize = 1_000_000;
 
 fn domain_digest(domain: &[u8], bytes: &[u8]) -> Digest32 {
     let mut hasher = Sha256::new();
@@ -59,6 +64,33 @@ fn domain_digest(domain: &[u8], bytes: &[u8]) -> Digest32 {
     hasher.update((bytes.len() as u64).to_be_bytes());
     hasher.update(bytes);
     hasher.finalize().into()
+}
+
+fn bfv_moduli_digest(params: &BfvParams) -> Digest32 {
+    let mut moduli = CanonicalBytes::default();
+    moduli.u64(params.moduli().len() as u64);
+    for &modulus in params.moduli() {
+        moduli.u64(modulus);
+    }
+    domain_digest(MODULI_DOMAIN, &moduli.finish())
+}
+
+fn bfv_public_key_digest(collective_public_key: &CollectivePublicKey) -> Digest32 {
+    domain_digest(PUBLIC_KEY_DOMAIN, &collective_public_key.pk.to_bytes())
+}
+
+fn bfv_encryption_domain_digest(
+    degree: u64,
+    moduli_digest: &Digest32,
+    plaintext_modulus: u64,
+    collective_public_key_digest: &Digest32,
+) -> Digest32 {
+    let mut domain = CanonicalBytes::default();
+    domain.u64(degree);
+    domain.digest(moduli_digest);
+    domain.u64(plaintext_modulus);
+    domain.digest(collective_public_key_digest);
+    domain_digest(ENCRYPTION_DOMAIN, &domain.finish())
 }
 
 #[derive(Default)]
@@ -155,7 +187,12 @@ impl InputDigest {
 /// parameters and public hashes only, never a secret key or decryption share.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BfvPublicIdentity {
+    /// Total key-custody roster size fixed by distributed key generation.
     pub n_parties: u64,
+    /// Number of live custody parties required for one opening.  This equals
+    /// `n_parties` for the legacy n-of-n key and is strictly smaller for the
+    /// crash-tolerant Shamir path.
+    pub opening_threshold: u64,
     pub degree: u64,
     pub moduli_digest: Digest32,
     pub plaintext_modulus: u64,
@@ -169,26 +206,61 @@ impl BfvPublicIdentity {
         keygen: &KeygenSession,
         collective_public_key: &CollectivePublicKey,
     ) -> Self {
-        let mut moduli = CanonicalBytes::default();
-        moduli.u64(params.moduli().len() as u64);
-        for &modulus in params.moduli() {
-            moduli.u64(modulus);
-        }
+        let moduli_digest = bfv_moduli_digest(params);
+        let collective_public_key_digest = bfv_public_key_digest(collective_public_key);
         Self {
             n_parties: keygen.n_parties() as u64,
+            opening_threshold: keygen.n_parties() as u64,
             degree: params.degree() as u64,
-            moduli_digest: domain_digest(MODULI_DOMAIN, &moduli.finish()),
+            moduli_digest,
             plaintext_modulus: params.plaintext_modulus(),
             crp_seed: keygen.crp_seed(),
-            collective_public_key_digest: domain_digest(
-                PUBLIC_KEY_DOMAIN,
-                &collective_public_key.pk.to_bytes(),
-            ),
+            collective_public_key_digest,
         }
+    }
+
+    /// Canonical identity of exactly the BFV parameters and collective public
+    /// key that determine encryption. Custody roster, threshold, and CRP remain
+    /// separately bound by the full attestation identity.
+    pub fn encryption_domain_digest(&self) -> Digest32 {
+        bfv_encryption_domain_digest(
+            self.degree,
+            &self.moduli_digest,
+            self.plaintext_modulus,
+            &self.collective_public_key_digest,
+        )
+    }
+
+    /// Construct the same encryption-domain identity directly from live BFV
+    /// objects at encrypted-order ingress, before a complete custody identity
+    /// is necessarily available.
+    pub fn encryption_domain_digest_from_public(
+        params: &BfvParams,
+        collective_public_key: &CollectivePublicKey,
+    ) -> Digest32 {
+        bfv_encryption_domain_digest(
+            params.degree() as u64,
+            &bfv_moduli_digest(params),
+            params.plaintext_modulus(),
+            &bfv_public_key_digest(collective_public_key),
+        )
+    }
+
+    /// Public identity for a crash-tolerant Shamir custody domain.
+    pub fn from_quorum_public(
+        params: &BfvParams,
+        keygen: &QuorumKeygenSession,
+        collective_public_key: &CollectivePublicKey,
+    ) -> Self {
+        let mut identity =
+            Self::from_public(params, keygen.public_key_session(), collective_public_key);
+        identity.opening_threshold = keygen.threshold() as u64;
+        identity
     }
 
     fn encode(&self, out: &mut CanonicalBytes) {
         out.u64(self.n_parties);
+        out.u64(self.opening_threshold);
         out.u64(self.degree);
         out.digest(&self.moduli_digest);
         out.u64(self.plaintext_modulus);
@@ -676,7 +748,7 @@ pub trait ReplayGuard {
     fn check_and_record(&mut self, replay_id: Digest32) -> bool;
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct InMemoryReplayGuard {
     seen: HashSet<Digest32>,
 }
@@ -684,6 +756,154 @@ pub struct InMemoryReplayGuard {
 impl ReplayGuard for InMemoryReplayGuard {
     fn check_and_record(&mut self, replay_id: Digest32) -> bool {
         self.seen.insert(replay_id)
+    }
+}
+
+/// Strict restart snapshot for a replay guard.
+///
+/// The caller chooses a public `context` (for example a game/session or
+/// verifier-configuration digest), persists [`to_wire_bytes`](Self::to_wire_bytes)
+/// in the same transaction as the authorized mutation, and restores it with
+/// [`from_wire_bytes`](Self::from_wire_bytes). The canonical checksum detects
+/// corruption and context confusion; it is not a MAC and cannot prevent a
+/// storage operator from rolling back to an older valid snapshot. Production
+/// rollback resistance still requires monotonic or consensus-backed storage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotReplayGuard {
+    context: Digest32,
+    revision: u64,
+    seen: BTreeSet<Digest32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReplaySnapshotError {
+    MalformedWire,
+    ContextMismatch,
+    TooManyEntries,
+    NonCanonicalOrder,
+    ChecksumMismatch,
+}
+
+impl fmt::Display for ReplaySnapshotError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "replay snapshot error: {self:?}")
+    }
+}
+
+impl std::error::Error for ReplaySnapshotError {}
+
+impl SnapshotReplayGuard {
+    pub fn new(context: Digest32) -> Self {
+        Self {
+            context,
+            revision: 0,
+            seen: BTreeSet::new(),
+        }
+    }
+
+    pub fn context(&self) -> Digest32 {
+        self.context
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn len(&self) -> usize {
+        self.seen.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.seen.is_empty()
+    }
+
+    pub fn to_wire_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(8 + 32 + 8 + 8 + self.seen.len() * 32 + 32);
+        out.extend_from_slice(REPLAY_SNAPSHOT_MAGIC);
+        out.extend_from_slice(&self.context);
+        out.extend_from_slice(&self.revision.to_be_bytes());
+        out.extend_from_slice(&(self.seen.len() as u64).to_be_bytes());
+        for replay_id in &self.seen {
+            out.extend_from_slice(replay_id);
+        }
+        let checksum = domain_digest(REPLAY_SNAPSHOT_DOMAIN, &out);
+        out.extend_from_slice(&checksum);
+        out
+    }
+
+    pub fn from_wire_bytes(
+        expected_context: Digest32,
+        bytes: &[u8],
+    ) -> std::result::Result<Self, ReplaySnapshotError> {
+        const HEADER: usize = 8 + 32 + 8 + 8;
+        const CHECKSUM: usize = 32;
+        if bytes.len() < HEADER + CHECKSUM || bytes[..8] != *REPLAY_SNAPSHOT_MAGIC {
+            return Err(ReplaySnapshotError::MalformedWire);
+        }
+        let context: Digest32 = bytes[8..40]
+            .try_into()
+            .map_err(|_| ReplaySnapshotError::MalformedWire)?;
+        if context != expected_context {
+            return Err(ReplaySnapshotError::ContextMismatch);
+        }
+        let revision = u64::from_be_bytes(
+            bytes[40..48]
+                .try_into()
+                .map_err(|_| ReplaySnapshotError::MalformedWire)?,
+        );
+        let count_u64 = u64::from_be_bytes(
+            bytes[48..56]
+                .try_into()
+                .map_err(|_| ReplaySnapshotError::MalformedWire)?,
+        );
+        let count = usize::try_from(count_u64).map_err(|_| ReplaySnapshotError::TooManyEntries)?;
+        if count > MAX_REPLAY_SNAPSHOT_ENTRIES {
+            return Err(ReplaySnapshotError::TooManyEntries);
+        }
+        let expected_len = count
+            .checked_mul(32)
+            .and_then(|entries| HEADER.checked_add(entries))
+            .and_then(|body| body.checked_add(CHECKSUM))
+            .ok_or(ReplaySnapshotError::TooManyEntries)?;
+        if bytes.len() != expected_len || revision != count_u64 {
+            return Err(ReplaySnapshotError::MalformedWire);
+        }
+        let body_end = expected_len - CHECKSUM;
+        let expected_checksum = domain_digest(REPLAY_SNAPSHOT_DOMAIN, &bytes[..body_end]);
+        if bytes[body_end..] != expected_checksum {
+            return Err(ReplaySnapshotError::ChecksumMismatch);
+        }
+        let mut seen = BTreeSet::new();
+        let mut previous: Option<Digest32> = None;
+        for chunk in bytes[HEADER..body_end].chunks_exact(32) {
+            let replay_id: Digest32 = chunk
+                .try_into()
+                .map_err(|_| ReplaySnapshotError::MalformedWire)?;
+            if previous.is_some_and(|prior| prior >= replay_id) || !seen.insert(replay_id) {
+                return Err(ReplaySnapshotError::NonCanonicalOrder);
+            }
+            previous = Some(replay_id);
+        }
+        Ok(Self {
+            context,
+            revision,
+            seen,
+        })
+    }
+
+    pub fn snapshot_digest(&self) -> Digest32 {
+        domain_digest(REPLAY_SNAPSHOT_DOMAIN, &self.to_wire_bytes())
+    }
+}
+
+impl ReplayGuard for SnapshotReplayGuard {
+    fn check_and_record(&mut self, replay_id: Digest32) -> bool {
+        if self.seen.contains(&replay_id) || self.revision == u64::MAX {
+            return false;
+        }
+        self.seen.insert(replay_id);
+        self.revision += 1;
+        true
     }
 }
 
@@ -802,7 +1022,9 @@ fn validate_context(context: &ExpectedClearingContext<'_>) -> Result<()> {
     if context.ordered_inputs.is_empty() {
         return Err(AttestationError::EmptyInputBinding);
     }
-    if context.bfv.n_parties != context.session.n_parties() as u64
+    if context.bfv.opening_threshold != context.session.n_parties() as u64
+        || context.bfv.opening_threshold == 0
+        || context.bfv.opening_threshold > context.bfv.n_parties
         || context.bfv.plaintext_modulus != context.session.plaintext_modulus()
     {
         return Err(AttestationError::BfvSessionMismatch);

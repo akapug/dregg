@@ -5,6 +5,13 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "fhEgg Stage-2 NO-VIEWER FHE clearing PoC: uniform-price batch auction cleared entirely on TFHE ciphertexts (nobody decrypts the orders), plus one PDHG flow-LP iteration under FHE. Real tfhe-rs, measured envelope."
 
+[features]
+default = []
+# Tier-1/operator-visible BFV↔HidingFri same-opening authority for the private
+# Dark AMM.  Keep the proof-production tower out of fhegg-fhe's default fast
+# surface; hosts opt into this producer/reference-verifier seam explicitly.
+amm-input-binding = ["dep:dregg-circuit-prove"]
+
 # The NO-VIEWER stage: orders are submitted as TFHE ciphertexts (unary
 # price-bucket increments, Cryptobazaar-style) and the clearing is computed
 # HOMOMORPHICALLY. Nobody — not this binary, not any committee — ever holds a
@@ -33,6 +40,7 @@ rand = "0.8"
 # specified for the auction fold. `rand_09` is BFV's rng (fhe.rs is on rand 0.9;
 # the existing tfhe bins stay on rand 0.8, so it is a renamed second dep).
 fhe = "0.1.1"
+fhe-math = "0.1.1"
 fhe-traits = "0.1.1"
 rand_09 = { package = "rand", version = "0.9" }
 # GPU BFV fold (bfv_gpu.rs): portable wgpu compute — the aggregation hot path at scale is bandwidth-bound.
@@ -45,6 +53,15 @@ serde_json = { workspace = true }
 # Authenticated computation-integrity quorum: strict Ed25519 signatures from the
 # declared ordered party roster over the exact canonical clearing-claim digest.
 ed25519-dalek = { version = "2", features = ["std"] }
+dregg-circuit-prove = { path = "../circuit-prove", optional = true }
+# The malicious-share threshold lane uses Pedersen commitments plus aggregated
+# Bulletproof range proofs.  The VSS transcript commits every party's exact BFV
+# share, and the opening proof links that commitment to h=c1*s+smudge while
+# proving the (81-bit, signed) smudge bound without revealing the smudge.
+bulletproofs = "5"
+curve25519-dalek = { version = "4", features = ["alloc", "rand_core"] }
+merlin = "3"
+ethnum = "1.5"
 
 [[bin]]
 name = "smoke"

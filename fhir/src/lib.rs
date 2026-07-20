@@ -45,16 +45,30 @@
 //! the typing judgment with precise structural rejections, the example products
 //! compiling to their `(program, tier, cert)`, the over-claim rejections, and a
 //! real end-to-end compile → run → certificate through `fhegg-solver`.
+//!
+//! For a QP, [`qp_certificate::run_certified_qp`] exports the exact SDD→PSD
+//! admission witness and the exact KKT witness together as one strict bounded
+//! `FHQPB001` artifact. Its standalone verifier re-runs both checkers and
+//! requires their fixed-point `P` matrices to agree entry-for-entry, preventing
+//! transport code from accidentally retaining optimality evidence while
+//! dropping the PSD premise.
 
 pub mod ast;
 pub mod compile;
 pub mod products;
+pub mod qp_certificate;
 pub mod solver_bridge;
 pub mod tier;
 pub mod types;
 
-pub use compile::{compile, most_private_admissible, Compiled, ConvexProgram};
-pub use solver_bridge::{run, RunOutcome};
+pub use compile::{
+    compile, most_private_admissible, Compiled, ConvexProgram, ExactSddPsdCertificate,
+    ExactSddPsdCertificateError,
+};
+pub use qp_certificate::{
+    run_certified_qp, ExactQpCertificateBundle, ExactQpCertificateBundleError,
+};
+pub use solver_bridge::{run, AggregationSourceBinding, RunOutcome};
 pub use tier::Tier;
 pub use types::{CertKind, TypeError};
 

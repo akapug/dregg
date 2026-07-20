@@ -170,6 +170,38 @@ pub trait CustomEffectVerifier: Send + Sync {
     /// Returns `Ok(())` on accept; `CustomEffectError::Rejected` on
     /// algebraic reject.
     fn verify(&self, public_inputs: &[u8], proof_bytes: &[u8]) -> Result<(), CustomEffectError>;
+
+    /// Opt into the **bounded custom app-write face** for this verifier.
+    ///
+    /// Raw [`Effect::Custom`](dregg_circuit::effect_vm::Effect::Custom) is a
+    /// proof-binding carrier, not an app-state mutation verb. A verifier that
+    /// returns `Some(binding)` declares that every proof under its `vk_hash`
+    /// must be composed, in one action, with a contiguous run of ordinary
+    /// `SetField` effects. The executor requires:
+    ///
+    /// - the custom proof publishes `binding.app_root_len` canonical BabyBear
+    ///   scalars beginning at `binding.app_root_pi_offset`;
+    /// - its paired `Effect::Custom` is immediately followed by those
+    ///   `SetField`s, targeting the same cell and fields
+    ///   `binding.field_key .. binding.field_key + binding.app_root_len`;
+    /// - every field is the canonical 32-byte encoding of the corresponding
+    ///   scalar (`u32::to_le_bytes`, then 28 zero bytes); and
+    /// - the whole range lies in the wide leg's exposed `fields[0..8]` octet.
+    ///
+    /// The outer EffectVM proof already attests that exact effect sequence and
+    /// the resulting post-state commitment, so this equality closes the
+    /// executor/re-execution side of an atomic custom-proof → app-field write.
+    /// Supplying the same declaration to the chain prover's
+    /// `CustomWitnessBundle` closes the pure-light-client side with the existing
+    /// app-root fold. The verifier fingerprint used by v2 registration MUST
+    /// commit to this policy; changing it is a verifier/VK epoch.
+    ///
+    /// The default retains the existing carrier-only Custom semantics.
+    fn app_write_binding(
+        &self,
+    ) -> Option<dregg_circuit::effect_vm::custom_state_binding::AppRootBinding> {
+        None
+    }
 }
 
 /// The registry resolving `Effect::Custom` vk_hashes to their

@@ -12,7 +12,8 @@
 //! TFHE and we do NOT scheme-switch BFV→TFHE. Instead, at the OUTPUT BOUNDARY the
 //! `n` parties collectively decrypt only a masked aggregate and locally derive
 //! additive plaintext shares (the mask/decrypt/re-share construction lives in
-//! `crate::boundary`; real n-of-n BFV custody lives in `crate::threshold`) and run
+//! `crate::boundary`; real BFV custody lives in `crate::threshold`, including the
+//! strict Shamir `t < n` path in `crate::threshold::quorum`) and run
 //! the crossing `p* = argmax_j min(D[j],S[j])` in a **secret-shared MPC**,
 //! revealing ONLY `p*` and the cleared volume `V*`. This module is that MPC.
 //!
@@ -24,8 +25,12 @@
 //! algebraic privacy argument. The implementation here, however, simulates every
 //! party in one process, generates triples through a simulated dealer, and records
 //! only the public transcript. It is not an authenticated distributed runtime or
-//! a malicious-security theorem. The current BFV custody path is n-of-n and its
-//! party key shares are reusable.
+//! a malicious-security theorem. The quorum BFV path tolerates `n-t` custodians
+//! being absent after all-dealer DKG. The verified setup path now has committed
+//! bivariate-row VSS with pairwise algebraic consistency checks; public
+//! `-a*s+e` coefficient images also force its hidden constants to the real RLWE
+//! public-key share. It still lacks hidden ternary/CBD range proofs and a public
+//! decrypt-share correctness/range proof. Its party shares are reusable.
 //!
 //! ## What "reveal only (p*, V*)" means (the leakage argument)
 //!
@@ -57,9 +62,9 @@
 //!   online phase that carries the reveal-only-`p*` property.
 //! - **ABSTRACTED (labelled):** this module's convenience path models the boundary
 //!   by sharing clear committed coefficients (`share_int`). `boundary.rs` pins the
-//!   mask/decrypt/re-share identity; `threshold.rs` independently pins n-of-n BFV
-//!   keygen and smudged decrypt shares. Their distributed composition is not in
-//!   this module.
+//!   mask/decrypt/re-share identity; `threshold.rs` pins legacy n-of-n BFV, while
+//!   `threshold::quorum` pins Shamir `t < n` key custody and smudged decrypt
+//!   shares. Their distributed composition is not in this module.
 
 use std::time::{Duration, Instant};
 

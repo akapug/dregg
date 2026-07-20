@@ -23,7 +23,10 @@ use dregg_circuit::descriptor_ir2::{
     parse_vm_descriptor2, prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
 };
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::stark_zk::{DreggZkStarkConfig, create_zk_config};
+use dregg_circuit::stark_zk::{
+    DreggZkStarkConfig, ZK_EXT_DEGREE, ZK_FRI_LOG_BLOWUP, ZK_FRI_LOG_FINAL_POLY_LEN,
+    ZK_FRI_MAX_LOG_ARITY, ZK_FRI_NUM_QUERIES, ZK_FRI_QUERY_POW_BITS, create_zk_config,
+};
 
 /// Exact artifact emitted by the Lean author.
 pub const PRIVATE_RAID_ASSIGNMENT_DESCRIPTOR_JSON: &str =
@@ -33,8 +36,12 @@ pub const SEAT_COUNT: usize = 4;
 pub const ROLE_COUNT: usize = 4;
 pub const DIGEST_WIDTH: usize = 8;
 pub const CANDIDATE_COUNT: usize = 24;
+pub const PUBLIC_INPUT_COUNT: usize = 14;
 pub const RULE_ID: u32 = 1_380_007_220;
 pub const ROOT_DOMAIN_TAG: u32 = 1_380_006_196;
+pub const PLONKY3_REV: &str = "82cfad73cd734d37a0d51953094f970c531817ec";
+pub const HIDING_VERIFIER_MANIFEST: &str =
+    "private-raid-assignment-n4-v1|BabyBear|Poseidon2-W16|HidingFriPcs|salt=4|random-codewords=4";
 
 const TRACE_WIDTH: usize = 299;
 const SESSION: usize = 0;
@@ -198,6 +205,14 @@ pub struct PublicStatement {
 }
 
 impl PublicStatement {
+    pub fn as_u32_vec(self) -> Vec<u32> {
+        let mut public = Vec::with_capacity(PUBLIC_INPUT_COUNT);
+        public.extend([self.session, self.rule]);
+        public.extend(self.input_root);
+        public.extend(self.roles.map(u32::from));
+        public
+    }
+
     fn as_felts(self) -> [BabyBear; 14] {
         let mut public = [BabyBear::ZERO; 14];
         public[0] = BabyBear::new(self.session);
@@ -211,7 +226,7 @@ impl PublicStatement {
         public
     }
 
-    fn validate_shape(self) -> Result<(), String> {
+    pub fn validate(self) -> Result<(), String> {
         if self.session >= BABYBEAR_P {
             return Err(format!(
                 "session {} is noncanonical for BabyBear modulus {BABYBEAR_P}",
@@ -233,11 +248,49 @@ impl PublicStatement {
         }
         validate_role_permutation(&self.roles)
     }
+
+    /// Decode the descriptor's exact public ABI and reject noncanonical field
+    /// or role representatives before any proof work.
+    pub fn try_from_u32s(values: &[u32]) -> Result<Self, String> {
+        if values.len() != PUBLIC_INPUT_COUNT {
+            return Err(format!(
+                "private raid assignment expects {PUBLIC_INPUT_COUNT} public inputs, got {}",
+                values.len()
+            ));
+        }
+        let mut roles = [0u8; SEAT_COUNT];
+        for (seat, &role) in values[10..14].iter().enumerate() {
+            roles[seat] = u8::try_from(role).map_err(|_| {
+                format!("seat {seat} carries noncanonical u8 role representative {role}")
+            })?;
+        }
+        let public = Self {
+            session: values[0],
+            rule: values[1],
+            input_root: values[2..10].try_into().expect("length checked"),
+            roles,
+        };
+        public.validate()?;
+        Ok(public)
+    }
 }
 
 /// Hiding proof of the fixed-four globally-optimal assignment relation.
 pub struct PrivateRaidZkProof {
     proof: Ir2BatchProof<DreggZkStarkConfig>,
+}
+
+impl PrivateRaidZkProof {
+    pub fn to_postcard(&self) -> Result<Vec<u8>, String> {
+        postcard::to_allocvec(&self.proof)
+            .map_err(|error| format!("private raid assignment proof encode failed: {error}"))
+    }
+
+    pub fn from_postcard(bytes: &[u8]) -> Result<Self, String> {
+        let proof = postcard::from_bytes(bytes)
+            .map_err(|error| format!("private raid assignment proof decode failed: {error}"))?;
+        Ok(Self { proof })
+    }
 }
 
 /// Compact application seam obtainable only from successful verification.
@@ -278,6 +331,62 @@ pub fn descriptor() -> Result<EffectVmDescriptor2, String> {
         return Err("private raid assignment emitted descriptor shape drifted".to_string());
     }
     Ok(desc)
+}
+
+/// Fingerprint of the exact Lean-emitted AIR artifact.
+pub fn air_fingerprint() -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-private-raid-assignment-air-v1");
+    hasher.update(PRIVATE_RAID_ASSIGNMENT_DESCRIPTOR_JSON.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+/// Stable identity of the privacy-facing verifier/config family.
+pub fn hiding_verifier_config_fingerprint() -> [u8; 32] {
+    let mut hasher =
+        blake3::Hasher::new_derive_key("dregg-private-raid-assignment-hiding-config-v1");
+    hasher.update(HIDING_VERIFIER_MANIFEST.as_bytes());
+    hasher.update(PLONKY3_REV.as_bytes());
+    for knob in [
+        ZK_FRI_LOG_BLOWUP,
+        ZK_FRI_LOG_FINAL_POLY_LEN,
+        ZK_FRI_MAX_LOG_ARITY,
+        ZK_FRI_NUM_QUERIES,
+        ZK_FRI_QUERY_POW_BITS,
+        ZK_EXT_DEGREE,
+    ] {
+        hasher.update(&(knob as u64).to_le_bytes());
+    }
+    hasher.update(&air_fingerprint());
+    *hasher.finalize().as_bytes()
+}
+
+pub fn proving_system_canonical_bytes() -> Vec<u8> {
+    let mut out = vec![0];
+    out.extend_from_slice(&(PLONKY3_REV.len() as u64).to_le_bytes());
+    out.extend_from_slice(PLONKY3_REV.as_bytes());
+    out
+}
+
+/// Canonical verifier identity over descriptor bytes, AIR fingerprint, hiding
+/// config, and pinned proving system. This identifies the standalone receipt
+/// verifier; it is not an `Effect::Custom` state-binding claim.
+pub fn canonical_vk_hash() -> [u8; 32] {
+    let verifier_source = hiding_verifier_config_fingerprint();
+    let mut verifier = blake3::Hasher::new_derive_key("dregg-verifier-fingerprint-v1");
+    verifier.update(&[0]);
+    verifier.update(&verifier_source);
+    let verifier_canonical = *verifier.finalize().as_bytes();
+    let proving_system = proving_system_canonical_bytes();
+    let program = PRIVATE_RAID_ASSIGNMENT_DESCRIPTOR_JSON.as_bytes();
+
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-vk-v2");
+    hasher.update(&(program.len() as u64).to_le_bytes());
+    hasher.update(program);
+    hasher.update(&air_fingerprint());
+    hasher.update(&verifier_canonical);
+    hasher.update(&(proving_system.len() as u64).to_le_bytes());
+    hasher.update(&proving_system);
+    *hasher.finalize().as_bytes()
 }
 
 fn validate_role_permutation(roles: &[u8; SEAT_COUNT]) -> Result<(), String> {
@@ -466,10 +575,19 @@ pub fn verify_zk(
     proof: &PrivateRaidZkProof,
     public: PublicStatement,
 ) -> Result<VerifiedAssignment, String> {
-    public.validate_shape()?;
+    public.validate()?;
     let config = create_zk_config();
     verify_vm_descriptor2_with_config(&descriptor()?, &proof.proof, &public.as_felts(), &config)?;
     Ok(VerifiedAssignment { public })
+}
+
+/// Verify the stable transport form without exposing the concrete proof layout.
+pub fn verify_postcard(
+    proof_bytes: &[u8],
+    public_values: &[u32],
+) -> Result<VerifiedAssignment, String> {
+    let proof = PrivateRaidZkProof::from_postcard(proof_bytes)?;
+    verify_zk(&proof, PublicStatement::try_from_u32s(public_values)?)
 }
 
 #[cfg(test)]
@@ -641,5 +759,38 @@ mod tests {
         let mut rule_tamper = public;
         rule_tamper.rule ^= 1;
         assert!(verify_zk(&proof, rule_tamper).is_err());
+
+        let proof_bytes = proof.to_postcard().expect("proof transport");
+        let public_values = public.as_u32_vec();
+        assert_eq!(
+            PublicStatement::try_from_u32s(&public_values).unwrap(),
+            public
+        );
+        assert_eq!(
+            verify_postcard(&proof_bytes, &public_values)
+                .expect("transport proof verifies")
+                .roles(),
+            public.roles
+        );
+
+        let mut corrupt_proof = proof_bytes;
+        let at = corrupt_proof.len() / 2;
+        corrupt_proof[at] ^= 1;
+        assert!(verify_postcard(&corrupt_proof, &public_values).is_err());
+    }
+
+    #[test]
+    fn public_abi_and_canonical_hiding_verifier_identity_are_stable() {
+        let public = statement(77, &optimizer_fixture()).unwrap();
+        assert_eq!(public.as_u32_vec().len(), PUBLIC_INPUT_COUNT);
+        assert!(PublicStatement::try_from_u32s(&public.as_u32_vec()[..13]).is_err());
+
+        let mut noncanonical_role = public.as_u32_vec();
+        noncanonical_role[10] = u8::MAX as u32 + 1;
+        assert!(PublicStatement::try_from_u32s(&noncanonical_role).is_err());
+
+        assert_ne!(air_fingerprint(), hiding_verifier_config_fingerprint());
+        assert_ne!(canonical_vk_hash(), [0u8; 32]);
+        assert_eq!(canonical_vk_hash(), canonical_vk_hash());
     }
 }

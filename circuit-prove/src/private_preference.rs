@@ -21,7 +21,10 @@ use dregg_circuit::descriptor_ir2::{
     verify_vm_descriptor2, verify_vm_descriptor2_with_config,
 };
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::stark_zk::{DreggZkStarkConfig, create_zk_config};
+use dregg_circuit::stark_zk::{
+    DreggZkStarkConfig, ZK_EXT_DEGREE, ZK_FRI_LOG_BLOWUP, ZK_FRI_LOG_FINAL_POLY_LEN,
+    ZK_FRI_MAX_LOG_ARITY, ZK_FRI_NUM_QUERIES, ZK_FRI_QUERY_POW_BITS, create_zk_config,
+};
 
 /// Exact Lean-emitted descriptor artifact.
 pub const PRIVATE_PREFERENCE_DESCRIPTOR_JSON: &str =
@@ -33,6 +36,10 @@ pub const MAX_SCORE: u8 = 3;
 pub const RULE_ID: u32 = 1_347_571_252;
 pub const ROOT_DOMAIN_TAG: u32 = 1_347_569_204;
 pub const DIGEST_WIDTH: usize = 8;
+pub const PUBLIC_INPUT_COUNT: usize = 11;
+pub const PLONKY3_REV: &str = "82cfad73cd734d37a0d51953094f970c531817ec";
+pub const HIDING_VERIFIER_MANIFEST: &str =
+    "private-preference-n4k4-v1|BabyBear|Poseidon2-W16|HidingFriPcs|salt=4|random-codewords=4";
 
 const TRACE_WIDTH: usize = 118;
 const SESSION: usize = 0;
@@ -205,8 +212,8 @@ pub struct VerifiedDecision {
 }
 
 impl PublicStatement {
-    pub(crate) fn as_felts(self) -> [BabyBear; 11] {
-        let mut public = [BabyBear::ZERO; 11];
+    pub fn as_felts(self) -> [BabyBear; PUBLIC_INPUT_COUNT] {
+        let mut public = [BabyBear::ZERO; PUBLIC_INPUT_COUNT];
         public[0] = BabyBear::new(self.session);
         public[1] = BabyBear::new(self.rule);
         for (lane, root) in self.ballot_root.into_iter().enumerate() {
@@ -216,7 +223,28 @@ impl PublicStatement {
         public
     }
 
-    pub(crate) fn validate_shape(self) -> Result<(), String> {
+    pub fn as_u32_vec(self) -> Vec<u32> {
+        self.as_felts().map(BabyBear::as_u32).to_vec()
+    }
+
+    pub fn try_from_u32s(values: &[u32]) -> Result<Self, String> {
+        if values.len() != PUBLIC_INPUT_COUNT {
+            return Err(format!(
+                "private preference expects {PUBLIC_INPUT_COUNT} public inputs, got {}",
+                values.len()
+            ));
+        }
+        let statement = Self {
+            session: values[0],
+            rule: values[1],
+            ballot_root: values[2..10].try_into().expect("length checked"),
+            winner: values[10],
+        };
+        statement.validate_shape()?;
+        Ok(statement)
+    }
+
+    pub fn validate_shape(self) -> Result<(), String> {
         if self.session >= BABYBEAR_P {
             return Err(format!(
                 "session {} is noncanonical for BabyBear modulus {BABYBEAR_P}",
@@ -256,6 +284,19 @@ pub struct PrivatePreferenceZkProof {
     proof: Ir2BatchProof<DreggZkStarkConfig>,
 }
 
+impl PrivatePreferenceZkProof {
+    pub fn to_postcard(&self) -> Result<Vec<u8>, String> {
+        postcard::to_allocvec(&self.proof)
+            .map_err(|error| format!("private preference proof encode failed: {error}"))
+    }
+
+    pub fn from_postcard(bytes: &[u8]) -> Result<Self, String> {
+        let proof = postcard::from_bytes(bytes)
+            .map_err(|error| format!("private preference proof decode failed: {error}"))?;
+        Ok(Self { proof })
+    }
+}
+
 pub fn descriptor() -> Result<EffectVmDescriptor2, String> {
     let desc = parse_vm_descriptor2(PRIVATE_PREFERENCE_DESCRIPTOR_JSON)?;
     if desc.name != "private-preference-n4k4::score2-wide-poseidon2-v1"
@@ -265,6 +306,60 @@ pub fn descriptor() -> Result<EffectVmDescriptor2, String> {
         return Err("private preference emitted descriptor shape drifted".to_string());
     }
     Ok(desc)
+}
+
+/// Fingerprint of the exact Lean-emitted AIR bytes.
+pub fn air_fingerprint() -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-private-preference-air-v1");
+    hasher.update(PRIVATE_PREFERENCE_DESCRIPTOR_JSON.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+/// Stable identity of the privacy-facing HidingFri verifier/config family.
+pub fn hiding_verifier_config_fingerprint() -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-private-preference-hiding-config-v1");
+    hasher.update(HIDING_VERIFIER_MANIFEST.as_bytes());
+    hasher.update(PLONKY3_REV.as_bytes());
+    for knob in [
+        ZK_FRI_LOG_BLOWUP,
+        ZK_FRI_LOG_FINAL_POLY_LEN,
+        ZK_FRI_MAX_LOG_ARITY,
+        ZK_FRI_NUM_QUERIES,
+        ZK_FRI_QUERY_POW_BITS,
+        ZK_EXT_DEGREE,
+    ] {
+        hasher.update(&(knob as u64).to_le_bytes());
+    }
+    hasher.update(&air_fingerprint());
+    *hasher.finalize().as_bytes()
+}
+
+pub fn proving_system_canonical_bytes() -> Vec<u8> {
+    let mut out = vec![0];
+    out.extend_from_slice(&(PLONKY3_REV.len() as u64).to_le_bytes());
+    out.extend_from_slice(PLONKY3_REV.as_bytes());
+    out
+}
+
+/// Canonical standalone verifier identity. The custom-cell variant has its own
+/// descriptor and therefore a deliberately different VK identity.
+pub fn canonical_vk_hash() -> [u8; 32] {
+    let verifier_source = hiding_verifier_config_fingerprint();
+    let mut verifier = blake3::Hasher::new_derive_key("dregg-verifier-fingerprint-v1");
+    verifier.update(&[0]);
+    verifier.update(&verifier_source);
+    let verifier_canonical = *verifier.finalize().as_bytes();
+    let proving_system = proving_system_canonical_bytes();
+    let program = PRIVATE_PREFERENCE_DESCRIPTOR_JSON.as_bytes();
+
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-vk-v2");
+    hasher.update(&(program.len() as u64).to_le_bytes());
+    hasher.update(program);
+    hasher.update(&air_fingerprint());
+    hasher.update(&verifier_canonical);
+    hasher.update(&(proving_system.len() as u64).to_le_bytes());
+    hasher.update(&proving_system);
+    *hasher.finalize().as_bytes()
 }
 
 #[inline]

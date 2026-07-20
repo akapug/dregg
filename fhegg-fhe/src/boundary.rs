@@ -17,9 +17,12 @@
 //!      and homomorphically adds `Enc(r_i)` to the folded curve ciphertext:
 //!      `ct' = ct ⊞ Enc(r_0) ⊞ … ⊞ Enc(r_{n-1})` — n more carry-free adds on a
 //!      noise budget sized for millions.
-//!   2. Every [`ThresholdParty`](crate::threshold::ThresholdParty) emits a
-//!      smudged n-of-n decrypt share over `ct'`; the coordinator combines the
-//!      framed public shares. What opens is
+//!   2. The selected BFV custodians emit smudged decrypt shares over `ct'`. The
+//!      legacy [`ThresholdParty`](crate::threshold::ThresholdParty) path is
+//!      n-of-n; [`crate::threshold::quorum::QuorumParty`] provides strict `t < n`
+//!      Shamir opening, and its authenticated combiner binds each share to a
+//!      configured Ed25519 custody identity. The coordinator combines only the
+//!      expected framed roster. What opens is
 //!      `y = (m + Σ r_i) mod t` — **a one-time-padded value**,
 //!      uniform on `Z_t` and EXACTLY independent of the curve `m` for any view
 //!      missing at least one honest party's mask (proven by enumeration in
@@ -53,11 +56,22 @@
 //!   is KAT-checked against direct decryption and the plaintext reference.
 //! - **Process-shaped, not a network protocol:** the integration tooth uses
 //!   channels and party threads, but this module does not authenticate session
-//!   nonces, public-key contributions, mask contributions, or decrypt shares.
-//!   It also does not prove malicious shares well formed or provide replay,
-//!   crash-recovery, or persistent secret-storage policy. The threshold module's
-//!   Lean-pinned smudging floor closes the named decryption-noise channel for the
-//!   honest-party model; malicious robustness remains open.
+//!   nonces, public-key contributions, or mask contributions. The legacy
+//!   opening methods also leave decrypt shares unauthenticated;
+//!   [`ThresholdMaskedCiphertext::open_authenticated_quorum_framed`] verifies
+//!   the quorum module's DKG/session/ciphertext/roster-bound Ed25519 envelopes.
+//!   The verified setup path now binds salted bivariate-row commitments and
+//!   genuine pairwise row-consistency checks into those envelopes. Public
+//!   `-a*s+e` coefficient images also force the hidden VSS constants to the
+//!   actual fhe.rs public-key share. It still does not prove their hidden
+//!   ternary/CBD ranges, or that a malicious party formed its public BFV
+//!   decrypt share with in-range smudge. This layer also lacks full crash recovery or persistent
+//!   secret-storage/replay policy. The Shamir path tolerates `n-t` absent
+//!   custodians after all-dealer DKG, with in-memory exact-session and
+//!   exact-target replay teeth. The threshold module's Lean-pinned smudging
+//!   floor closes the named decryption-noise channel for the honest-party model;
+//!   the remaining malicious-robustness seam is the lattice shortness/range and
+//!   decrypt-share proof, not row consistency or the BFV public-key equation.
 //! - **Still separate:** locally derived mod-t shares must enter an authenticated
 //!   distributed MPC transport. [`a2b_mod_t`] and [`mpc_crossing`] implement the
 //!   algebra in one process; they do not supply that transport.
@@ -79,6 +93,10 @@ use crate::bfv_lean::LeanCiphertext;
 use crate::mpc::{
     const_int, geq, mpc_crossing, secure_add, select_int, share_int, triples_needed, Crossing,
     SharedInt, Transcript, TriplePool,
+};
+use crate::threshold::quorum::{
+    self, AuthenticatedOpeningAudit, AuthenticatedQuorumCombiner, QuorumDecryptShare, QuorumError,
+    QuorumOpeningSession,
 };
 use crate::threshold::{self, BfvParams, CollectivePublicKey, DecryptShare, ThresholdError};
 use crate::Order;
@@ -104,11 +122,18 @@ pub enum BoundaryError {
     MalformedWire,
     Crypto,
     Threshold(ThresholdError),
+    Quorum(QuorumError),
 }
 
 impl From<ThresholdError> for BoundaryError {
     fn from(value: ThresholdError) -> Self {
         Self::Threshold(value)
+    }
+}
+
+impl From<QuorumError> for BoundaryError {
+    fn from(value: QuorumError) -> Self {
+        Self::Quorum(value)
     }
 }
 
@@ -480,6 +505,98 @@ impl ThresholdMaskedCiphertext {
             y: y[..self.session.live_slots].to_vec(),
             plaintext_modulus: params.plaintext_modulus(),
         })
+    }
+
+    /// Open the same one-time-padded value through a crash-tolerant `t < n`
+    /// custody roster.
+    ///
+    /// The quorum nonce must be the masked-decrypt nonce, and every framed
+    /// share must target this exact masked ciphertext.  The caller supplies the
+    /// expected roster rather than trusting metadata chosen by the first share.
+    /// Construction/combination refusals occur before a [`MaskedOpening`] exists.
+    pub fn open_quorum_framed(
+        &self,
+        expected: &QuorumOpeningSession,
+        framed_shares: &[Vec<u8>],
+        params: &BfvParams,
+    ) -> BoundaryResult<MaskedOpening> {
+        if expected.nonce() != self.session.nonce {
+            return Err(BoundaryError::SessionMismatch);
+        }
+        if framed_shares.len() < expected.parties().len() {
+            return Err(BoundaryError::QuorumTooSmall {
+                have: framed_shares.len(),
+                need: expected.parties().len(),
+            });
+        }
+        if framed_shares.len() > expected.parties().len() {
+            return Err(BoundaryError::ParamMismatch);
+        }
+        let shares = framed_shares
+            .iter()
+            .map(|wire| QuorumDecryptShare::from_wire_bytes(wire, params))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if shares
+            .iter()
+            .any(|share| share.ciphertext() != &self.ciphertext)
+        {
+            return Err(BoundaryError::SessionMismatch);
+        }
+        let y = quorum::combine_quorum(&shares, expected, params)?;
+        Ok(MaskedOpening {
+            session: self.session.clone(),
+            y: y[..self.session.live_slots].to_vec(),
+            plaintext_modulus: params.plaintext_modulus(),
+        })
+    }
+
+    /// Open through canonical DKG/session/ciphertext/roster-bound signed
+    /// decryption-share envelopes.
+    ///
+    /// This authenticates each configured custodian, binds the accepted
+    /// bivariate-VSS setup transcript when the verified constructor was used,
+    /// and refuses coordinator replay in memory.  The VSS transcript proves
+    /// setup-row consistency and the exact BFV `p0 = -a*s+e` equation. It does
+    /// not yet prove the hidden ternary/CBD ranges or that an authenticated
+    /// custodian formed `h = c1*s_i +` in-range smudge. Those require the
+    /// remaining lattice short-witness/range proofs.
+    pub fn open_authenticated_quorum_framed(
+        &self,
+        combiner: &mut AuthenticatedQuorumCombiner,
+        expected: &QuorumOpeningSession,
+        framed_shares: &[Vec<u8>],
+        params: &BfvParams,
+    ) -> BoundaryResult<MaskedOpening> {
+        self.open_authenticated_quorum_framed_with_audit(combiner, expected, framed_shares, params)
+            .map(|(opening, _audit)| opening)
+    }
+
+    /// Authenticated opening plus a digest-only custody transcript commitment
+    /// suitable for binding into an outer receipt without disclosing shares.
+    pub fn open_authenticated_quorum_framed_with_audit(
+        &self,
+        combiner: &mut AuthenticatedQuorumCombiner,
+        expected: &QuorumOpeningSession,
+        framed_shares: &[Vec<u8>],
+        params: &BfvParams,
+    ) -> BoundaryResult<(MaskedOpening, AuthenticatedOpeningAudit)> {
+        if expected.nonce() != self.session.nonce {
+            return Err(BoundaryError::SessionMismatch);
+        }
+        let (y, audit) = combiner.combine_framed_with_audit(
+            expected,
+            &self.ciphertext,
+            framed_shares,
+            params,
+        )?;
+        Ok((
+            MaskedOpening {
+                session: self.session.clone(),
+                y: y[..self.session.live_slots].to_vec(),
+                plaintext_modulus: params.plaintext_modulus(),
+            },
+            audit,
+        ))
     }
 }
 

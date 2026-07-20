@@ -46,6 +46,7 @@ fn roster() -> Vec<PartyIdentity> {
 fn bfv() -> BfvPublicIdentity {
     BfvPublicIdentity {
         n_parties: 3,
+        opening_threshold: 3,
         degree: 4096,
         moduli_digest: [0x31; 32],
         plaintext_modulus: 257,

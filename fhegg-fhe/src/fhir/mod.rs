@@ -76,6 +76,9 @@
 use std::fmt;
 
 pub mod clearing_plan;
+/// Executable active box projection over party-owned additive shares.
+/// This is the first fhIR prox product whose clamp may actually bind.
+pub mod private_box;
 pub use clearing_plan::{
     decode_canonical_clearing_plan, lean_rebalance_plan_v1, ClearingPlan, ClearingPlanError,
     NoWrapCertificate, ResourceCertificate, LEAN_REBALANCE_V1_JSON,

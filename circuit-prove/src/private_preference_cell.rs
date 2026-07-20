@@ -308,8 +308,21 @@ pub fn decode_public_input_bytes(bytes: &[u8]) -> Result<Vec<u32>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::custom_leaf_adapter::prove_direct_ir2_leaf_with_app_root_commitment;
+    use crate::custom_proof_bind::custom_proof_pi_commitment;
+    use crate::ivc_turn_chain::{
+        CUSTOM_PROGRAM_VK_PI_LO, DEPLOYED_CUSTOM_PROGRAM_VK_PI_LEN, SEG_ANCHOR_WIDTH,
+        ir2_leaf_wrap_config, prove_descriptor_leaf_expose_segment_and_claims,
+    };
+    use crate::joint_turn_recursive::{
+        CUSTOM_COMMIT_LEN, CUSTOM_COMMIT_PI_LO, prove_direct_ir2_binding_node_app_root_segmented,
+    };
+    use crate::plonky3_recursion_impl::recursive::DreggRecursionConfig;
     use crate::private_preference::PrivateBallot;
     use crate::private_preference::{OPTION_COUNT, RULE_ID};
+    use dregg_circuit::descriptor_ir2::{VmConstraint2, prove_vm_descriptor2_for_config};
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+    use dregg_circuit::refusal::must_refuse;
 
     fn witness() -> PrivatePreferenceWitness {
         let ballots = [
@@ -345,6 +358,207 @@ mod tests {
         wrong.name.push_str("-substituted");
         let err = vk_recipe().require_exact_descriptor(&wrong).unwrap_err();
         assert!(err.contains("differs from canonical-v2 program bytes"));
+
+        let mut wrong_program = PRIVATE_PREFERENCE_CELL_DESCRIPTOR_JSON.as_bytes().to_vec();
+        wrong_program.extend_from_slice(b" ");
+        let wrong_recipe = CustomIr2VkRecipe::source_hash(
+            wrong_program,
+            air_fingerprint(),
+            hiding_verifier_config_fingerprint(),
+            proving_system_canonical_bytes(),
+        );
+        // Even JSON-whitespace changes are a different canonical-v2 program identity;
+        // semantic parsing alone is not allowed to erase the registry byte identity.
+        assert_ne!(wrong_recipe.canonical_vk_hash(), canonical_vk_hash());
+    }
+
+    const DIRECT_LEG_PI_COUNT: usize = 90;
+    const DIRECT_FIELD_PI: usize = 66;
+
+    /// Faithful custom-wide ABI stand-in used only to isolate the direct binding node:
+    /// commitment8@46, VK8@54, committed field[0]@66, wide anchors at the final 16 PIs.
+    fn direct_leg_leaf(
+        claim: [BabyBear; 8],
+        field0: BabyBear,
+        vk8: [BabyBear; 8],
+        old8: [BabyBear; 8],
+        new8: [BabyBear; 8],
+        config: &DreggRecursionConfig,
+    ) -> p3_recursion::RecursionOutput<DreggRecursionConfig> {
+        let old_lo = DIRECT_LEG_PI_COUNT - 2 * SEG_ANCHOR_WIDTH;
+        let new_lo = DIRECT_LEG_PI_COUNT - SEG_ANCHOR_WIDTH;
+        let trace_width = 8 + 1 + 8 + 8 + 8;
+        let pin = |col, pi_index| {
+            VmConstraint2::Base(VmConstraint::PiBinding {
+                row: VmRow::First,
+                col,
+                pi_index,
+            })
+        };
+        let mut constraints = Vec::new();
+        for k in 0..8 {
+            constraints.push(pin(k, CUSTOM_COMMIT_PI_LO + k));
+            constraints.push(pin(9 + k, CUSTOM_PROGRAM_VK_PI_LO + k));
+            constraints.push(pin(17 + k, old_lo + k));
+            constraints.push(pin(25 + k, new_lo + k));
+        }
+        constraints.push(pin(8, DIRECT_FIELD_PI));
+        let desc = EffectVmDescriptor2 {
+            name: "custom-direct-ir2-vk8-leg-standin".to_string(),
+            trace_width,
+            public_input_count: DIRECT_LEG_PI_COUNT,
+            tables: vec![],
+            constraints,
+            hash_sites: vec![],
+            ranges: vec![],
+        };
+        let mut row = Vec::with_capacity(trace_width);
+        row.extend_from_slice(&claim);
+        row.push(field0);
+        row.extend_from_slice(&vk8);
+        row.extend_from_slice(&old8);
+        row.extend_from_slice(&new8);
+        let trace = (0..4).map(|_| row.clone()).collect::<Vec<_>>();
+        let mut pis = vec![BabyBear::ZERO; DIRECT_LEG_PI_COUNT];
+        pis[CUSTOM_COMMIT_PI_LO..CUSTOM_COMMIT_PI_LO + 8].copy_from_slice(&claim);
+        pis[CUSTOM_PROGRAM_VK_PI_LO..CUSTOM_PROGRAM_VK_PI_LO + 8].copy_from_slice(&vk8);
+        pis[DIRECT_FIELD_PI] = field0;
+        pis[old_lo..old_lo + 8].copy_from_slice(&old8);
+        pis[new_lo..new_lo + 8].copy_from_slice(&new8);
+        let proof = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+            &desc,
+            &trace,
+            &pis,
+            &MemBoundaryWitness::default(),
+            &[],
+            &UMemBoundaryWitness::default(),
+            config,
+        )
+        .expect("faithful direct leg stand-in proves");
+        prove_descriptor_leaf_expose_segment_and_claims(
+            &desc,
+            &proof,
+            &pis,
+            config,
+            &[
+                (CUSTOM_COMMIT_PI_LO, CUSTOM_COMMIT_LEN),
+                (DIRECT_FIELD_PI, 1),
+                (CUSTOM_PROGRAM_VK_PI_LO, DEPLOYED_CUSTOM_PROGRAM_VK_PI_LEN),
+            ],
+        )
+        .expect("direct leg exposes segment, commitment8, field, and VK8")
+    }
+
+    fn direct_fixture() -> (
+        CustomIr2WitnessBundle,
+        [BabyBear; 8],
+        [BabyBear; 8],
+        BabyBear,
+        [BabyBear; 8],
+        [BabyBear; 8],
+    ) {
+        let old_u32 = core::array::from_fn(|i| 100 + i as u32);
+        let new_u32 = core::array::from_fn(|i| 200 + i as u32);
+        let (desc, trace, public, pis) =
+            trace_and_statement(77, &witness(), old_u32, new_u32).unwrap();
+        let recipe = vk_recipe();
+        let vk8 = recipe.canonical_vk_felts();
+        let claim = custom_proof_pi_commitment(&pis);
+        let old8 = old_u32.map(BabyBear::new);
+        let new8 = new_u32.map(BabyBear::new);
+        let winner = BabyBear::new(public.preference.winner);
+        let bundle = CustomIr2WitnessBundle {
+            descriptor: desc,
+            base_trace: trace,
+            public_inputs: pis,
+            vk_recipe: recipe,
+            app_root_binding: AppRootBinding {
+                app_root_pi_offset: WINNER_PI,
+                app_root_len: 1,
+                field_key: 0,
+            },
+        };
+        (bundle, claim, vk8, winner, old8, new8)
+    }
+
+    #[test]
+    #[ignore = "heavy: exact private-preference IR2 leaf + direct VK8 recursion fold"]
+    fn honest_private_preference_direct_ir2_fold_binds() {
+        let config = ir2_leaf_wrap_config();
+        let (bundle, claim, vk8, winner, old8, new8) = direct_fixture();
+        let direct = prove_direct_ir2_leaf_with_app_root_commitment(
+            &bundle.descriptor,
+            &bundle.base_trace,
+            &bundle.public_inputs,
+            &bundle.vk_recipe,
+            &bundle.app_root_binding,
+            &config,
+        )
+        .expect("exact private-preference direct leaf proves");
+        let leg = direct_leg_leaf(claim, winner, vk8, old8, new8, &config);
+        prove_direct_ir2_binding_node_app_root_segmented(&leg, &direct, &config, 1)
+            .expect("honest private-preference direct fold binds all four surfaces");
+    }
+
+    #[test]
+    #[ignore = "heavy: four direct-IR2 recursion refusal poles"]
+    fn private_preference_direct_fold_refuses_wrong_vk_old_new_and_app_root() {
+        let config = ir2_leaf_wrap_config();
+        let (bundle, claim, vk8, winner, old8, new8) = direct_fixture();
+        let direct = prove_direct_ir2_leaf_with_app_root_commitment(
+            &bundle.descriptor,
+            &bundle.base_trace,
+            &bundle.public_inputs,
+            &bundle.vk_recipe,
+            &bundle.app_root_binding,
+            &config,
+        )
+        .expect("exact private-preference direct leaf proves");
+        let cases = [
+            (
+                "wrong VK8",
+                claim,
+                winner,
+                {
+                    let mut x = vk8;
+                    x[7] += BabyBear::ONE;
+                    x
+                },
+                old8,
+                new8,
+            ),
+            (
+                "wrong old8",
+                claim,
+                winner,
+                vk8,
+                {
+                    let mut x = old8;
+                    x[3] += BabyBear::ONE;
+                    x
+                },
+                new8,
+            ),
+            ("wrong new8", claim, winner, vk8, old8, {
+                let mut x = new8;
+                x[5] += BabyBear::ONE;
+                x
+            }),
+            (
+                "wrong app root",
+                claim,
+                winner + BabyBear::ONE,
+                vk8,
+                old8,
+                new8,
+            ),
+        ];
+        for (name, c, field, vk, old, new) in cases {
+            let leg = direct_leg_leaf(c, field, vk, old, new, &config);
+            must_refuse(name, || {
+                prove_direct_ir2_binding_node_app_root_segmented(&leg, &direct, &config, 1)
+            });
+        }
     }
 
     #[test]

@@ -58,10 +58,16 @@ import Dregg2.Circuit.Emit.PredicatesNeqEmit
 import Dregg2.Circuit.Emit.PresentationEmit
 import Dregg2.Circuit.Emit.QuantifiedAbsenceEmit
 import Dregg2.Circuit.Emit.TemporalPredicateEmit
+import Dregg2.Crypto.PrivateGraphRewriteDescriptor
+import Dregg2.Games.PrivateQuestGraphDescriptor
+import Dregg2.Crypto.PrivateGraphRewriteCellDescriptor
 import Dregg2.Games.PrivatePreferenceDescriptor
 import Dregg2.Games.PrivatePreferenceCellDescriptor
+import Dregg2.Games.PrivateRaidAssignmentDescriptor
 import Dregg2.Games.PrivateShuffleDescriptor
+import Dregg2.Games.PrivateShuffleFairDescriptor
 import Market.DarkBazaarPrivateDescriptor
+import Market.DarkAmmPrivateDescriptor
 
 open Dregg2.Circuit.DescriptorIR2 (EffectVmDescriptor2 emitVmJson2)
 
@@ -149,19 +155,31 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
       Dregg2.Circuit.Emit.EffectVmEmitTurnChainBinding.turnChainBindingDescriptor)
   , ("dark-bazaar-private-n4k4.json",
       Market.DarkBazaarPrivateDescriptor.darkBazaarPrivateN4K4Descriptor)
+  , ("dark-amm-private-v1.json",
+      Market.DarkAmmPrivateDescriptor.darkAmmPrivateDescriptor)
   , ("private-preference-n4k4.json",
       Dregg2.Games.PrivatePreferenceDescriptor.privatePreferenceN4K4Descriptor)
   , ("private-preference-cell-n4k4.json",
       Dregg2.Games.PrivatePreferenceCellDescriptor.privatePreferenceCellN4K4Descriptor)
   , ("private-shuffle-n8.json",
       Dregg2.Games.PrivateShuffleDescriptor.privateShuffleN8Descriptor)
+  , ("private-shuffle-fair-n8.json",
+      Dregg2.Games.PrivateShuffleFairDescriptor.privateShuffleFairN8Descriptor)
+  , ("private-raid-assignment-n4.json",
+      Dregg2.Games.PrivateRaidAssignmentDescriptor.privateRaidAssignmentN4Descriptor)
+  , ("private-graph-rewrite-4x2.json",
+      Dregg2.Crypto.PrivateGraphRewriteDescriptor.privateGraphRewriteDescriptor)
+  , ("private-graph-rewrite-cell-4x2.json",
+      Dregg2.Crypto.PrivateGraphRewriteCellDescriptor.privateGraphRewriteCellDescriptor)
+  , ("private-quest-graph-4x2.json",
+      Dregg2.Games.PrivateQuestGraphDescriptor.privateQuestGraphDescriptor)
   ]
 
-/- The routing table covers the checked-in directory exactly (34 artifacts). A bare count is a
+/- The routing table covers the checked-in directory exactly (38 artifacts). A bare count is a
 weak guard, but it is the one this file can state without IO: the STRONG guard is
 `emit_descriptors.py`'s recursive coverage check, which fails on any by-name file this table does
 not reproduce. -/
-#guard byNameDescriptors.length == 34
+#guard byNameDescriptors.length == 40
 
 def main : IO Unit := do
   for (file, d) in byNameDescriptors do

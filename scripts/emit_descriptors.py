@@ -126,7 +126,12 @@ BY_NAME_NEWLINE_TERMINATED = frozenset({
     "poseidon2-hash-arity2.json",
     "private-preference-n4k4.json",
     "private-preference-cell-n4k4.json",
+    "private-graph-rewrite-4x2.json",
+    "private-graph-rewrite-cell-4x2.json",
+    "private-quest-graph-4x2.json",
+    "private-raid-assignment-n4.json",
     "private-shuffle-n8.json",
+    "private-shuffle-fair-n8.json",
     "turn-chain-binding.json",
 })
 
