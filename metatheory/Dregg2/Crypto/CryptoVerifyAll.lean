@@ -52,3 +52,4 @@ import Dregg2.Crypto.MlDsaSigVerAcvp
 import Dregg2.Crypto.MlKemEncapsAcvp
 import Dregg2.Crypto.MlDsaSigGenAcvp
 import Dregg2.Crypto.CrateGeneratedKats
+import Dregg2.Crypto.KeccakCavp

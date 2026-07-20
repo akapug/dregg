@@ -434,6 +434,12 @@ impl MlDsaKey {
         }
 
         // FALLBACK (no verified core installed): the hedged `fips204` crate primitive.
+        // Refuses (aborts) unless DREGG_ALLOW_UNAUDITED_PQ=1 — see `crate::audit`.
+        crate::audit::guard_unaudited_fallback(
+            "ML-DSA-65 sign",
+            "fips204 0.4",
+            "install_verified_mldsa_sign_core_real",
+        );
         self.secret.try_sign(message, ctx).ok().map(|s| s.to_vec())
     }
 }
@@ -487,6 +493,12 @@ pub fn ml_dsa_verify(public_bytes: &[u8], ctx: &[u8], message: &[u8], sig_bytes:
     }
 
     // FALLBACK (no verified core installed): the `fips204` crate primitive.
+    // Refuses (aborts) unless DREGG_ALLOW_UNAUDITED_PQ=1 — see `crate::audit`.
+    crate::audit::guard_unaudited_fallback(
+        "ML-DSA-65 verify",
+        "fips204 0.4",
+        "install_verified_mldsa_verify_core",
+    );
     let Ok(pk_arr) = <[u8; ml_dsa_65::PK_LEN]>::try_from(public_bytes) else {
         return false;
     };

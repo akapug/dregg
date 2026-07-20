@@ -25,6 +25,29 @@ const CTX: &[u8] = b"dregg-pq-brick8-gate-ctx-v1";
 
 /// Install the leanc-native REAL verify core (idempotent: the install is once-per-process).
 fn install_core() {
+    // ── EXPLICIT OPT-IN to the unaudited fallback, and WHY it is correct here ──────────
+    // `dregg-pq`'s refusal gate (`src/audit.rs`) aborts any process that answers a PQ
+    // operation with the unaudited `fips204` / `ml-kem` crates. This test is one of the
+    // few legitimate exceptions, and it must SAY SO rather than be silently exempted.
+    //
+    // The authority UNDER TEST here is the Lean-verified REAL verify core: it is installed
+    // below, its availability is ASSERTED (not assumed), and every accept/reject verdict
+    // this test checks comes from it. What the `fips204` crate is used for is producing the
+    // GENUINE keypair + signature that the Lean core is then asked to judge, and serving as
+    // the differential oracle its verdict is compared against. That is the whole point of
+    // the test — a Lean verify that only ever saw Lean-produced signatures would prove
+    // nothing about real-world ones — so the crate is the SUBJECT here, never the authority.
+    //
+    // The SIGN path is what trips the gate (`MlDsaKey::sign` below), and it is deliberately
+    // left on the crate. Note this is not merely a test artifact: `install_verified_mldsa_
+    // sign_core_real` has exactly ONE caller in either tree (`node/src/lib.rs`), so most
+    // processes still sign with the unaudited crate. See §P.4 of the drorb crypto-TCB ledger.
+    //
+    // SAFETY: set before this process performs any PQ operation. Test binaries run each
+    // integration-test file in its own process, and `install_core()` is the first statement
+    // of every test in this file, so no other thread can be mid-operation.
+    unsafe { std::env::set_var("DREGG_ALLOW_UNAUDITED_PQ", "1") };
+
     let _ = install_lean_verify_core_real(|w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok());
 }
 

@@ -31,8 +31,11 @@
 //! `ml_kem::kem` module, so this crate depends only on `ml-kem` and never pins
 //! the pre-release `kem` crate in its manifest.
 
+mod audit;
 pub mod hybrid_kem;
 mod mldsa;
+
+pub use audit::ALLOW_UNAUDITED_PQ_ENV;
 
 pub use hybrid_kem::{
     MlKemDecapsCoreInstall, MlKemEncapsCoreInstall, install_lean_decaps_core,

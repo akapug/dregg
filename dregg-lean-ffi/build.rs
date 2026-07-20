@@ -4,13 +4,12 @@
 //   * libdregg_lean.a — a single static archive of the native objects emitted by the
 //     Lean compiler for `Dregg2.Exec.FFI` and its ENTIRE transitive dependency
 //     closure (Dregg2 modules + mathlib + batteries + aesop + Qq + … — ~8200 .o).
-//     The read-only SEED archive lives next to this build.rs. It is NOT committed
-//     (gitignored by `dregg-lean-ffi/.gitignore` `*.a`); it is produced out-of-band by
+//     The git-tracked SEED archive lives next to this build.rs; it was produced by
 //     compiling each module's `.c` (lake's `:c` facet) with `leanc -c` and archiving
 //     with `llvm-ar` (see `scripts/seed-dregg2-closure.sh`).
 //
 // ── SWARM-SAFE ARCHIVE (the per-OUT_DIR working copy) ──
-// The `libdregg_lean.a` is treated as a READ-ONLY SEED. A `cargo build`
+// The git-tracked `libdregg_lean.a` is treated as a READ-ONLY SEED. A `cargo build`
 // NEVER mutates it. Instead, each build copies the seed into a per-`OUT_DIR` working
 // archive (`$OUT_DIR/libdregg_lean.a`) and does its splice → closure-completion →
 // reachability-GC against THAT copy, then links against it. Because `OUT_DIR` is
@@ -153,7 +152,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Seed the per-OUT_DIR WORKING archive (`build`) from the SEED (`seed`), so the
+/// Seed the per-OUT_DIR WORKING archive (`build`) from the git-tracked SEED (`seed`), so the
 /// splice/closure/GC steps below mutate the working copy and NEVER the shared seed (the swarm-safe
 /// split — see the top-of-file note). The seed is treated as read-only input.
 ///
@@ -164,27 +163,17 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
 /// renamed into place so a working archive is never observed half-written. If the seed is absent we
 /// do nothing: a prior working copy (if any) is reused; otherwise the `!build_archive.exists()`
 /// guard in `main` degrades to marshal-only.
-///
-/// **Returns `true` iff a fresh copy was installed.** That fact is load-bearing, not cosmetic: the
-/// seed is a dependency BASE, NOT a self-linking archive. It carries the Dregg2 slice + the
-/// dependency closure it was SEEDED with, but the `initialize_*` objects that closure-completion
-/// (step 4 of `build_dregg2_archive`) compiles land ONLY in the working copy — the seed never gets
-/// them. So a re-seed REVERTS the working archive to a closure-INCOMPLETE state, and the caller
-/// MUST re-run splice + closure-completion + GC over it, even when nothing else changed. (This is
-/// exactly the CI seed lane: `rebuild-dregg2-closure.sh` re-splices the seed's Dregg2 slice at HEAD
-/// out-of-band, so the next `cargo` re-seeds from an archive whose fresh Dregg2 objects import
-/// mathlib modules the OLD closure lacks → dangling `initialize_mathlib_*` at the final link.)
-fn seed_build_archive(seed: &Path, build: &Path) -> bool {
+fn seed_build_archive(seed: &Path, build: &Path) {
     if !seed.exists() {
-        return false;
+        return;
     }
     // Decide whether to (re)seed. Copy iff the working archive is missing or strictly older than
     // the seed (mtime). `newer_than(seed, build)` ⇒ seed is newer (or build absent) ⇒ copy.
     if build.exists() && !newer_than(seed, build) {
-        return false;
+        return;
     }
     let Some(parent) = build.parent() else {
-        return false;
+        return;
     };
     // Stage to a unique-ish temp in the SAME dir (so the final rename is same-filesystem & atomic),
     // keyed on the build OUT_DIR's own path hash via the process id — one build script runs per
@@ -199,7 +188,7 @@ fn seed_build_archive(seed: &Path, build: &Path) -> bool {
                  the build will use the existing working archive if present."
             );
             let _ = std::fs::remove_file(&tmp);
-            return false;
+            return;
         }
     }
     if let Err(e) = std::fs::rename(&tmp, build) {
@@ -209,38 +198,23 @@ fn seed_build_archive(seed: &Path, build: &Path) -> bool {
                 "cargo:warning=dregg-lean-ffi: could not install the working archive in OUT_DIR \
                  ({e}) — using the existing working archive if present."
             );
-            let _ = std::fs::remove_file(&tmp);
-            return false;
         }
         let _ = std::fs::remove_file(&tmp);
     }
-    true
 }
 
 /// Produce / refresh `libdregg_lean.a` IN OUT_DIR by (1) `lake build`-ing the FFI module's
 /// `:c` facet, (2) `leanc -c`-compiling each freshly-emitted `Dregg2/**/*.c` whose `.c` is newer
 /// than its cached `.o`, and (3) splicing ONLY those `Dregg2_*.o` back into the (seeded) working
 /// archive — preserving the ~5600 expensive mathlib/batteries/aesop dependency objects untouched.
-/// `archive` here is the PER-OUT_DIR working copy, never the seed.
+/// `archive` here is the PER-OUT_DIR working copy, never the git-tracked seed.
 ///
 /// Incremental + cached: `lake` is itself incremental, the `leanc` step is guarded on
 /// `.c`-newer-than-`.o`, and the (relatively expensive) `ar` extract/repack only runs when at least
 /// one Dregg2 object actually changed or the archive lacks Dregg2 members. `rerun-if-changed` is
 /// emitted by the caller for the source tree + toolchain marker, so a genuine no-op cargo build does
 /// not even re-enter this function.
-///
-/// `reseeded` says the working archive was JUST re-copied from the seed by `seed_build_archive`.
-/// Because the seed is closure-INCOMPLETE by construction (see that function), a re-seed invalidates
-/// the incremental "nothing changed ⇒ nothing to do" reasoning and forces the splice + closure +
-/// GC path regardless of the `.o` cache's warmth.
-fn build_dregg2_archive(
-    meta: &Path,
-    sysroot: &Path,
-    archive: &Path,
-    out_dir: &Path,
-    seed: &Path,
-    reseeded: bool,
-) {
+fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &Path, seed: &Path) {
     // (1) Refresh the Lean `:c` facets. `lake build` is incremental; building the FFI module pulls
     // in (and emits `:c` for) its whole Dregg2 transitive closure.
     let inc = sysroot.join("include");
@@ -329,25 +303,6 @@ fn build_dregg2_archive(
         // It lives under `Dregg2/` so its IR emits under `.lake/build/ir/Dregg2/` and the
         // `build_dregg2_archive` splice (which walks `Dregg2/**/*.c`) picks up the export.
         "Dregg2.Bridge.InterchainAdapterDecision",
-        // FRI SOUNDNESS LEDGER extraction: the COMPUTABLE per-config FRI soundness ledger
-        // (`@[export] dregg_fri_ledger` over `friLedger` — the arity / folded-domain / good-challenge
-        // count / per-fold-bits / Johnson / capacity columns of ONE shipped knob set), OUTSIDE the FFI
-        // closure — build it so its `.c` IR is emitted and the splice picks up the export. This is the
-        // object `circuit-prove/tests/fri_params_soundness_budget.rs` routes every deployed config
-        // through, so the gate REPORTS Lean's numbers instead of re-deriving the soundness arithmetic in
-        // a hand-written Rust twin. Deliberately import-thin (`Dregg2.Circuit.FriVerifier` only, core
-        // `Nat` ops): the Mathlib-heavy proofs that JUSTIFY the numbers live in the un-spliced
-        // `Dregg2.Circuit.FriLedgerSound`, which pins each thin op to its modeled counterpart.
-        "Dregg2.Circuit.FriLedger",
-        // DEPLOYED CONSTRAINT evaluator extraction (the game-proof LARP-audit collapse): the ONE Lean
-        // source for the pure (context-free, witness-free) `StateConstraint`/`HeapAtom` admission teeth
-        // over the DEPLOYED substrate (`@[export] dregg_constraint_admits` over `admitsFFI`), OUTSIDE
-        // the FFI closure — build it so its `.c` IR is emitted and the splice picks up the export.
-        // The deployed node's `ConstraintOracle` (installed via `dregg-exec-lean`) routes the per-
-        // constraint admission decision through this instead of a hand-authored Rust mirror; the two
-        // divergences the audit found (unsigned-256 fieldGe, first-write-free heap immutable) are
-        // reconciled here. Import-thin (core Lean only), so its initializer stays Mathlib-free.
-        "Dregg2.Exec.DeployedConstraint",
     ];
     let lake_status = Command::new("lake")
         .arg("build")
@@ -365,7 +320,7 @@ fn build_dregg2_archive(
             // SPECIALIZATIONS don't resolve: a freshly-recompiled `Dregg2_Exec_Handler.o` references
             // `_lp_…_TurnExecutorFull_*` specialized symbols that the un-rebuilt `TurnExecutorFull.o`
             // never emitted → `Undefined symbols` at the final link of every downstream binary
-            // (dregg-node included). The SEED archive is, by construction, a coherent
+            // (dregg-node included). The git-tracked SEED archive is, by construction, a coherent
             // linkable set. So on a `lake build` failure we DISCARD any prior (possibly incoherent)
             // working archive and restore the consistent seed, then skip the recompile/splice
             // entirely. The node links the known-good verified kernel; an in-progress metatheory
@@ -373,17 +328,13 @@ fn build_dregg2_archive(
             println!(
                 "cargo:warning=dregg-lean-ffi: `lake build` of the FFI + gate modules exited {s} — \
                  the metatheory IR tree may be incoherent (a module failed to elaborate). Restoring \
-                 the consistent seed archive and NOT splicing a partial fresh set (a torn \
+                 the git-tracked consistent seed archive and NOT splicing a partial fresh set (a torn \
                  splice would fail to link). To pick up fresh Lean changes, make `lake build \
                  Dregg2.Exec.FFI` green in metatheory/ and rebuild."
             );
             // Force the working archive back to the seed (overwrite any prior incoherent splice).
-            // The restored seed is closure-incomplete, but we deliberately do NOT complete it here:
-            // the IR tree is incoherent, so there is nothing trustworthy to complete it FROM. The
-            // link may fail; that is strictly better than splicing a torn set. Making `lake build`
-            // green is the fix, and the warning above says so.
             let _ = std::fs::remove_file(archive);
-            let _ = seed_build_archive(seed, archive);
+            seed_build_archive(seed, archive);
             return;
         }
         Err(e) => {
@@ -454,21 +405,9 @@ fn build_dregg2_archive(
             "cargo:warning=dregg-lean-ffi: compiling {} changed Dregg2 C facet(s) via leanc …",
             jobs.len()
         );
-        // Leanc parallelism. DEFAULT = the CPU count (warm-box behavior, unchanged). But each leanc
-        // over a big Mathlib-closure `.c` facet is memory-heavy, and a FRESH object cache compiles the
-        // WHOLE closure (~1500 facets) at once — on a loaded/low-RAM box (or when co-tenant Lean builds
-        // are already running) that OOM-kills leanc mid-splice, and build.rs then keeps the previous
-        // archive (a NEW export never lands). `DREGG_LEANC_JOBS` caps the pool so the splice survives
-        // memory pressure (e.g. `DREGG_LEANC_JOBS=2` on a busy dev box). Opt-in: unset ⇒ CPU count.
-        let ncpu = std::env::var("DREGG_LEANC_JOBS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(4)
-            })
+        let ncpu = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
             .max(1);
         let failed = std::sync::atomic::AtomicBool::new(false);
         let jobs_ref = &jobs;
@@ -517,22 +456,9 @@ fn build_dregg2_archive(
         }
     }
 
-    // (3) Splice. Only pay the extract/repack cost when something actually changed, when the
-    // working archive was just RE-SEEDED, or when the archive is missing Dregg2 members entirely
-    // (e.g. a freshly-seeded dependency-only base).
-    //
-    // `reseeded` is NOT redundant with the other two disjuncts, and omitting it was a real link
-    // break (the CI seed lane's `initialize_mathlib_*` undefined symbols). A re-seed can leave BOTH
-    // other guards false while the working archive still needs closure-completion:
-    //   * `recompiled` is false — the OUT_DIR `.o` cache is warm and no `Dregg2/**/*.c` changed, so
-    //     there is nothing to RE-compile;
-    //   * `archive_has_dregg2(archive)` is true — the out-of-band re-seed
-    //     (`rebuild-dregg2-closure.sh`) put a FRESH Dregg2 slice into the seed, so Dregg2 members
-    //     are present;
-    // …yet the archive we just copied in carries the seed's OLD dependency closure, which lacks the
-    // `initialize_*` objects that fresh slice imports. Returning here would skip steps (4) and (5)
-    // and hand the linker a dangling archive. So: any re-seed re-runs the closure.
-    let needs_splice = recompiled || reseeded || !archive_has_dregg2(archive);
+    // (3) Splice. Only pay the extract/repack cost when something actually changed, or when the
+    // archive is missing Dregg2 members entirely (e.g. a freshly-seeded dependency-only base).
+    let needs_splice = recompiled || !archive_has_dregg2(archive);
     if !needs_splice {
         return;
     }
@@ -758,7 +684,7 @@ fn complete_initializer_closure(meta: &Path, sysroot: &Path, archive: &Path, out
     let roots = discover_ir_roots(meta);
     let index = build_cfile_index(&roots);
 
-    for pass in 0..64 {
+    for pass in 0..16 {
         let undefined = undefined_initializers(archive);
         if undefined.is_empty() {
             return;
@@ -821,7 +747,7 @@ fn complete_initializer_closure(meta: &Path, sysroot: &Path, archive: &Path, out
         );
     }
     println!(
-        "cargo:warning=dregg-lean-ffi: closure completion hit the 64-pass bound — archive may \
+        "cargo:warning=dregg-lean-ffi: closure completion hit the 16-pass bound — archive may \
          still have undefined initializers. Consider re-seeding the closure."
     );
 }
@@ -842,38 +768,6 @@ fn complete_initializer_closure(meta: &Path, sysroot: &Path, archive: &Path, out
 /// member, so members that ONLY serve them drop out. If `nm` is unavailable or the computed reachable
 /// set looks implausibly small (a parse failure), we SKIP the GC and keep the (correct, larger) archive
 /// — never risk a broken link to save bytes.
-/// Split one `nm -A` line into `(member, rest)`. THE ONE parser — `gc_unreachable_members` and
-/// `runtime_dead_init_trim` both used to carry their own copy of this, and both copies had the same
-/// bug, which is exactly what duplication buys you.
-///
-/// `nm -A` prefixes every line with the archive path, then names the member PLATFORM-SPECIFICALLY:
-///   BSD / llvm-nm (macOS): `<archive>[<member>.o]: <addr> <ty> <sym>`
-///   GNU binutils (Linux):  `<archive>:<member>.o:<addr> <ty> <sym>`   ← NO space after the colon
-///
-/// The old `split_once(": ")` matched only the BSD form — plus, by accident, the GNU form's
-/// UNDEFINED lines (nm space-pads the empty address there). So on LINUX every DEFINED line was
-/// dropped, `roots` came out empty, and BOTH the GC and the runtime trim bailed to the untouched
-/// archive. Silently. That is why the archive shipped unpruned on every Linux/CI build while the
-/// (Darwin-only) measurements said it had been pruned. The old doc-comment even had the two
-/// platforms swapped, which is likely how it survived review: the parse *looked* cross-platform.
-///
-/// Anchor on the archive path, accept both spellings, and return None only for lines that are
-/// genuinely not archive members.
-fn nm_split_member<'a>(archive: &str, line: &'a str) -> Option<(&'a str, &'a str)> {
-    let after = line.strip_prefix(archive)?;
-    let (member, rest) = if let Some(a) = after.strip_prefix('[') {
-        a.split_once("]: ")?
-    } else if let Some(a) = after.strip_prefix(':') {
-        a.split_once(':')?
-    } else {
-        return None;
-    };
-    if !member.ends_with(".o") {
-        return None;
-    }
-    Some((member, rest))
-}
-
 fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     let Ok(out) = Command::new(nm_tool()).arg("-A").arg(archive).output() else {
         return;
@@ -885,11 +779,18 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     let mut sym_def_in: HashMap<String, HashSet<String>> = HashMap::new();
     let mut members: HashSet<String> = HashSet::new();
     let mut roots: HashSet<String> = HashSet::new();
-    let arch = archive.to_string_lossy().to_string();
     for line in text.lines() {
-        let Some((member, rest)) = nm_split_member(&arch, line) else {
+        // `nm -A` location-prefixed forms (see `members_defining_project_initializers`):
+        //   macOS/llvm: `<archive>:<member.o>: <addr> T _sym`  /  `<archive>:<member.o>:    U _sym`
+        //   GNU:        `<archive>[<member.o>]: <addr> T _sym`
+        let Some((prefix, rest)) = line.split_once(": ") else {
             continue;
         };
+        let prefix = prefix.trim_end_matches(']');
+        let member = prefix.rsplit(['/', ':', '[']).next().unwrap_or(prefix);
+        if !member.ends_with(".o") {
+            continue;
+        }
         let toks: Vec<&str> = rest.split_whitespace().collect();
         let (ty, sym) = match toks.as_slice() {
             [ty, sym] if ty.len() == 1 => (*ty, *sym),
@@ -914,18 +815,7 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
         }
     }
     if members.is_empty() || roots.is_empty() {
-        // Parse failure or no exports found — do not risk a destructive GC. But SAY SO. A silent
-        // bail is precisely how this GC spent its whole life no-opping on Linux while every caller
-        // (and every measurement) assumed the archive had been pruned. A mechanism that cannot tell
-        // you it did nothing is a mechanism you cannot trust when it says nothing.
-        println!(
-            "cargo:warning=dregg-lean-ffi: archive GC parsed {} members / {} `dregg_*` roots from \
-             `{} -A` — REFUSING to GC, so the archive ships UNPRUNED. If that is unexpected, this \
-             nm's line format is neither of the two `nm_split_member` accepts.",
-            members.len(),
-            roots.len(),
-            nm_tool()
-        );
+        // Parse failure or no exports found — do not risk a destructive GC.
         return;
     }
     // BFS: keep a member, then chase each of its undefined symbols to the member(s) defining them.
@@ -1015,7 +905,7 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     );
 }
 
-/// **The PRINCIPLED elaborator / proof-time TRIM (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §4.2).**
+/// **The PRINCIPLED elaborator / proof-time TRIM (docs/EMBEDDABLE-LEAN-RUNTIME.md §4.2).**
 ///
 /// `gc_unreachable_members` keeps every member reachable by ANY undefined-symbol edge — and the
 /// per-module `initialize_*` chain is such an edge. So the executor's import closure drags in the
@@ -1065,15 +955,15 @@ fn runtime_dead_init_trim(
     let mut sym_def_in: HashMap<String, HashSet<String>> = HashMap::new();
     let mut members: HashSet<String> = HashSet::new();
     let mut roots: HashSet<String> = HashSet::new();
-    // The three module-initializer symbol prefixes Lean v4.30's module system emits (see the
-    // is_init note below). Mutually exclusive as prefixes. Used both to classify an edge as an
-    // init boundary and to recognize a sysroot toolchain init.
-    const INIT_PREFIXES: [&str; 3] = ["initialize_", "runtime_initialize_", "meta_initialize_"];
-    let arch = full_archive.to_string_lossy().to_string();
     for line in text.lines() {
-        let Some((member, rest)) = nm_split_member(&arch, line) else {
+        let Some((prefix, rest)) = line.split_once(": ") else {
             continue;
         };
+        let prefix = prefix.trim_end_matches(']');
+        let member = prefix.rsplit(['/', ':', '[']).next().unwrap_or(prefix);
+        if !member.ends_with(".o") {
+            continue;
+        }
         let toks: Vec<&str> = rest.split_whitespace().collect();
         let (ty, sym) = match toks.as_slice() {
             [ty, sym] if ty.len() == 1 => (*ty, *sym),
@@ -1082,16 +972,7 @@ fn runtime_dead_init_trim(
         };
         members.insert(member.to_string());
         let bare = sym.trim_start_matches('_');
-        // Lean v4.30's MODULE system emits THREE initializers per module, not one:
-        //   `initialize_M`, `runtime_initialize_M`, `meta_initialize_M`
-        // — each an `lean_object* (uint8_t)` that chains its imports' same-variant initializers.
-        // The old `starts_with("initialize_")` caught only the FIRST, so `runtime_initialize_aesop_*`
-        // (and the meta variant) read as a real CALL edge, and the reachability BFS below dragged the
-        // ENTIRE proof-time cluster (Aesop + Mathlib.Tactic + Qq + Plausible + ProofWidgets) in as
-        // "runtime-live". Measured: that miss inflated the trim ~6× — 783 members / 104 MB (81.5% of
-        // the trim) reachable ONLY through these init edges, 0 real-call edges among them. Catch all
-        // three so an init chain of any variant is a boundary, not a call.
-        let is_init = INIT_PREFIXES.iter().any(|p| bare.starts_with(p));
+        let is_init = bare.starts_with("initialize_");
         if ty == "U" || ty == "u" {
             if is_init {
                 undef_init
@@ -1115,18 +996,6 @@ fn runtime_dead_init_trim(
         }
     }
     if members.is_empty() || roots.is_empty() {
-        // Same law as the GC above: never bail in silence. This `return None` is what made
-        // `DREGG_LEAN_FFI_RUNTIME_TRIM=1` build green in 36s on Linux while quietly linking the
-        // FULL archive — the caller takes `None` as "no trim today" and says nothing, so the flag
-        // appeared to work and measured nothing.
-        println!(
-            "cargo:warning=dregg-lean-ffi: RUNTIME TRIM requested but parsed {} members / {} \
-             `dregg_*` roots from `{} -A` — NOT trimming; the FULL archive will be linked. This is \
-             a parse failure, not an empty archive.",
-            members.len(),
-            roots.len(),
-            nm_tool()
-        );
         return None;
     }
 
@@ -1150,27 +1019,9 @@ fn runtime_dead_init_trim(
             }
         }
     }
-    // Nothing dead → the trim is a genuine no-op; quiet fallback to the full archive is correct.
-    if live.len() >= members.len() {
-        return None;
-    }
-    // Plausibility floor: a misfired parse/BFS must not silently produce a tiny broken archive.
-    // ⚠ This floor was 200 — calibrated for the OLD 1-of-3 init classification, where the miss
-    // dragged ~936 members in as "runtime-live". With all three init variants now correctly cut,
-    // the TRUE runtime closure is ~153 members (measured: links + round-trips a real turn), which
-    // sits BELOW 200 — so the old floor SILENTLY discarded the correct 153-member trim and shipped
-    // the full archive believing it had trimmed. The floor is now 50 (the real closure clears it
-    // with wide margin; a genuine misfire collapses toward 0, and `roots.is_empty()` above already
-    // catches the zero case) — and it WARNS instead of bailing in silence, the same law as the
-    // parse-failure bail above.
-    if live.len() < 50 {
-        println!(
-            "cargo:warning=dregg-lean-ffi: RUNTIME TRIM found only {} runtime-live of {} members — \
-             below the sanity floor (50). Refusing to ship a suspiciously tiny archive (likely a \
-             BFS/parse misfire); linking the FULL archive instead.",
-            live.len(),
-            members.len()
-        );
+    // Plausibility floor (mirrors gc_unreachable_members): a misfired parse must not silently
+    // produce a tiny broken archive. And if nothing is dead the trim is a no-op — fall back.
+    if live.len() < 200 || live.len() >= members.len() {
         return None;
     }
 
@@ -1180,10 +1031,7 @@ fn runtime_dead_init_trim(
     // so never no-op those — if a live member genuinely references `initialize_Lean`, let the real
     // (sysroot) init run rather than silently skip it.
     let is_toolchain = |bare: &str| -> bool {
-        // Strip whichever of the three init-variant prefixes matches (they are mutually exclusive),
-        // then check the module against the sysroot-provided libraries.
-        let rest = INIT_PREFIXES.iter().find_map(|p| bare.strip_prefix(p));
-        match rest {
+        match bare.strip_prefix("initialize_") {
             Some(rest) => ["Init", "Std", "Lean", "Lake"]
                 .iter()
                 .any(|lib| rest == *lib || rest.starts_with(&format!("{lib}_"))),
@@ -1337,33 +1185,36 @@ fn archive_has_dregg2(archive: &Path) -> bool {
 
 /// The set of archive MEMBER names (e.g. `Await.o`, `Dregg2_Spec_Await.o`) that define a project
 /// module initializer (`_initialize_Dregg2_*` / `_initialize_Metatheory_*`). Computed with `nm -A`,
-/// which prefixes each symbol line with the member location. The prefix format differs by platform
-/// (see `nm_split_member`, THE ONE parser this now routes through):
-///   * BSD / llvm-nm (macOS): `<archive>[<member>.o]: <addr> <ty> <sym>`   (bracket form)
-///   * GNU binutils (Linux):  `<archive>:<member>.o:<addr> <ty> <sym>`     (colon form, NO space)
+/// which prefixes each symbol line with the member location. The prefix format differs by platform:
+///   * macOS/llvm-nm: `<archive>:<member.o>: <addr> T <sym>`
+///   * GNU/binutils:  `<archive>[<member.o>]: <addr> T <sym>`
 ///
-/// This USED to extract the member with an ad-hoc `line.split(": ")`, the exact BSD-only pattern
-/// that `nm_split_member` was created to replace: on Linux the GNU form has no `": "`, so every
-/// member came out unrecognized and the purge set was empty — the splice silently kept stale
-/// project objects on every Linux/CI build (the same disease the GC/trim twins already had fixed).
+/// We extract the member by taking the basename of the path segment ending in `.o`, so the splice can
+/// purge stale project objects regardless of how they were named when the base archive was seeded.
 fn members_defining_project_initializers(archive: &Path) -> std::collections::HashSet<String> {
     let mut members = std::collections::HashSet::new();
     let Ok(out) = Command::new(nm_tool()).arg("-A").arg(archive).output() else {
         return members;
     };
     let text = String::from_utf8_lossy(&out.stdout);
-    let arch = archive.to_string_lossy().to_string();
     for line in text.lines() {
-        let Some((member, rest)) = nm_split_member(&arch, line) else {
-            continue;
-        };
         // Only DEFINING (`T`) lines for a project initializer; skip undefined (`U`) references.
         // The C symbol carries a leading `_` on Mach-O (macOS) but NOT on ELF/COFF (Linux,
         // Windows-MinGW), so accept both `T _initialize_*` and `T initialize_*`.
         let is_project_init = |stem: &str| {
-            rest.contains(&format!("T _{stem}")) || rest.contains(&format!("T {stem}"))
+            line.contains(&format!("T _{stem}")) || line.contains(&format!("T {stem}"))
         };
-        if is_project_init("initialize_Dregg2_") || is_project_init("initialize_Metatheory_") {
+        if !(is_project_init("initialize_Dregg2_") || is_project_init("initialize_Metatheory_")) {
+            continue;
+        }
+        // The location prefix is everything up to the first `: ` (space-separated from the address).
+        let Some(prefix) = line.split(": ").next() else {
+            continue;
+        };
+        // Strip a trailing `]` (GNU bracket form), then take the basename and keep it iff it's a `.o`.
+        let prefix = prefix.trim_end_matches(']');
+        let member = prefix.rsplit(['/', ':', '[']).next().unwrap_or(prefix);
+        if member.ends_with(".o") {
             members.insert(member.to_string());
         }
     }
@@ -1539,8 +1390,6 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_grain_r3_verify_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_holding_grant_weight_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_interchain_reached_consensus_present)");
-    println!("cargo::rustc-check-cfg=cfg(dregg_fri_ledger_present)");
-    println!("cargo::rustc-check-cfg=cfg(dregg_constraint_admits_present)");
 
     // ── FAIL-LOUD GATE (DREGG_REQUIRE_LEAN) — see docs/BUILD-LEAN-LINKED-NODE.md ─────────────
     // A distribution / CI / validator build REFUSES a silent degrade to the marshal-only shell
@@ -1566,15 +1415,6 @@ fn main() {
     // Debug/dev builds keep the historical warn-and-degrade behavior unless `DREGG_REQUIRE_LEAN=1`.
     println!("cargo:rerun-if-env-changed=DREGG_REQUIRE_LEAN");
     println!("cargo:rerun-if-env-changed=PROFILE");
-    // The remaining knobs this script READS. Without these, setting one is INERT: cargo does not
-    // re-run build.rs, so the flag silently does nothing until an unrelated rebuild happens to
-    // fire. That is exactly how `DREGG_LEAN_FFI_NO_ARCHIVE_GC=1` — the escape hatch this file
-    // DOCUMENTS (see the ESCAPE HATCH note above the archive GC) for the dangling-init link
-    // failure — came to be undeclared and therefore unusable as written.
-    println!("cargo:rerun-if-env-changed=DREGG_LEAN_FFI_NO_ARCHIVE_GC");
-    println!("cargo:rerun-if-env-changed=DREGG_LEAN_SYSROOT");
-    println!("cargo:rerun-if-env-changed=DREGG_METATHEORY_DIR");
-    println!("cargo:rerun-if-env-changed=DREGG_LEANC_JOBS");
     let require_lean_env = std::env::var("DREGG_REQUIRE_LEAN").ok();
     let require_lean = matches!(
         require_lean_env.as_deref(),
@@ -1604,7 +1444,7 @@ fn main() {
         }
     };
 
-    // ── PLATFORM GATE (polarity inversion, .docs-history-noclaude/FEATURE-HYGIENE.md §Lean): the link is
+    // ── PLATFORM GATE (polarity inversion, docs/FEATURE-HYGIENE.md §Lean): the link is
     // UNCONDITIONAL on native; the ONE opt-out is the `no-lean-link` platform feature, set
     // only by builds whose target cannot link libdregg_lean.a (wasm32, the SP1 zkvm guest,
     // and Windows-MSVC). We also hard-skip on those targets regardless of the feature — a
@@ -1631,7 +1471,7 @@ fn main() {
     //     embedded `lean_initialize_runtime_module()` under Windows-on-ARM x64 emulation.
     //
     // wasm32 and the SP1 zkvm guest always skip (no native archive at all). The `no-lean-link`
-    // platform feature is the explicit opt-out. See .docs-history-noclaude/FEATURE-HYGIENE.md §Lean.
+    // platform feature is the explicit opt-out. See docs/FEATURE-HYGIENE.md §Lean.
     let no_lean_link = std::env::var_os("CARGO_FEATURE_NO_LEAN_LINK").is_some();
     let gate_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let gate_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -1653,7 +1493,7 @@ fn main() {
 
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
-    // The SEED archive (read-only input; a `cargo build` never writes it).
+    // The git-tracked SEED archive (read-only input; a `cargo build` never writes it).
     let seed_archive = crate_dir.join("libdregg_lean.a");
     // The per-OUT_DIR WORKING archive: where splice / closure-completion / GC happen and
     // what we link against. Per-(crate,feature-set,profile) ⇒ concurrent multi-feature
@@ -1678,16 +1518,14 @@ fn main() {
     let sysroot_opt = lean_sysroot();
     let meta_opt = metatheory_dir();
 
-    // ── SEED the per-OUT_DIR working archive from the seed (read-only input). This
+    // ── SEED the per-OUT_DIR working archive from the git-tracked seed (read-only input). This
     // copies the seed into `$OUT_DIR/libdregg_lean.a` once (and re-copies whenever the seed is
     // newer than the working copy, e.g. after an out-of-band re-seed). All splice / closure /
     // GC mutation below targets `build_archive`, never the seed — so concurrent multi-feature
     // lanes never tear the shared file. `cargo:rerun-if-changed` on the seed re-runs build.rs
     // when the seed is re-produced out-of-band, picking up the fresh base.
-    // A re-seed reverts the working copy to a closure-INCOMPLETE base, so `reseeded` forces
-    // `build_dregg2_archive` to re-run splice + closure-completion + GC over it (see below).
     println!("cargo:rerun-if-changed={}", seed_archive.display());
-    let reseeded = seed_build_archive(&seed_archive, &build_archive);
+    seed_build_archive(&seed_archive, &build_archive);
 
     // ── PRODUCE / REFRESH the archive from the Lean source (the linchpin). We watch the whole
     // `metatheory/Dregg2` source tree + the toolchain marker; when any of those change, build.rs
@@ -1708,14 +1546,9 @@ fn main() {
         );
 
         match &sysroot_opt {
-            Some(sysroot) => build_dregg2_archive(
-                meta,
-                sysroot,
-                &build_archive,
-                &out_dir,
-                &seed_archive,
-                reseeded,
-            ),
+            Some(sysroot) => {
+                build_dregg2_archive(meta, sysroot, &build_archive, &out_dir, &seed_archive)
+            }
             None => println!(
                 "cargo:warning=dregg-lean-ffi: cannot resolve the Lean sysroot (no \
                  DREGG_LEAN_SYSROOT and `lake env` failed in metatheory/) — skipping the archive \
@@ -1734,7 +1567,7 @@ fn main() {
 
     if !build_archive.exists() {
         println!(
-            "cargo:warning=dregg-lean-ffi: libdregg_lean.a absent (no seed AND no \
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a absent (no git-tracked seed AND no \
              prior per-OUT_DIR working archive) — building MARSHAL-ONLY: lean_available() will be \
              false and the node falls back to the UNVERIFIED Rust executor. To link the verified \
              Lean kernel, run `./scripts/bootstrap.sh` from the repo root (one command: it checks \
@@ -1775,7 +1608,7 @@ fn main() {
 
     println!("cargo:rustc-cfg=lean_lib_present");
 
-    // ── THE PRINCIPLED ELABORATOR / PROOF-TIME TRIM (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md §4.2) ──
+    // ── THE PRINCIPLED ELABORATOR / PROOF-TIME TRIM (docs/EMBEDDABLE-LEAN-RUNTIME.md §4.2) ──
     // OPT-IN (`DREGG_LEAN_FFI_RUNTIME_TRIM=1`): derive a SEPARATE trimmed archive holding only the
     // executor's runtime-FUNCTION closure (the elaborator + proof-time mathlib/aesop, reachable only
     // via the per-module init-chain, are dropped), plus a boundary no-op stub for the dead inits the
@@ -1787,21 +1620,19 @@ fn main() {
         None
     };
 
-    // `dregg_exec_handler_turn` is a DELIBERATELY-ABSENT secondary export, NOT a "predates it / older
-    // archive" version-skew: the handler-cutover path executes over an `eraseAuth`'d forest (it DROPS
-    // the authorization — see `eraseAuth` in metatheory/Dregg2/Exec/FFI.lean), so it is intentionally
-    // not `@[export]`ed into the deployed archive. Its absence is the correct, permanent posture. We
-    // set `dregg_handler_present` (and wire the string bridge) ONLY if the symbol is present, so the
-    // shim carries no dangling ref under -dead_strip; `dregg-lean-ffi/src/lib.rs` has the
-    // `#[cfg(not(dregg_handler_present))]` fallback for the normal (absent) case. The load-bearing
-    // forest-auth gate is a separate, always-present path.
-    //
-    // Absence is EXPECTED, so we DO NOT warn (#42): the old "Rebuild the archive to enable
-    // shadow_exec_handler_turn" advice was impossible — a rebuild cannot restore an un-`@[export]`ed,
-    // deliberately-fenced symbol — and it fired on every clean verified build forever.
+    // The handler-cutover export is a SECONDARY path; older archives predate it. Only wire its
+    // string bridge when the archive actually exports it (otherwise the dangling ref breaks the
+    // whole shim under -dead_strip). The forest-auth gate is the load-bearing path and is always
+    // present.
     let handler_present = archive_exports(&build_archive, "dregg_exec_handler_turn");
     if handler_present {
         println!("cargo:rustc-cfg=dregg_handler_present");
+    } else {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_exec_handler_turn` — \
+             the handler-cutover bridge is compiled out (forest-auth gate unaffected). \
+             Rebuild the archive to enable shadow_exec_handler_turn."
+        );
     }
 
     // The verified FINALITY GATE export (`dregg_blocklace_finalize`) lives in
@@ -1882,25 +1713,6 @@ fn main() {
     // `initialize_Dregg2_Dregg2_Exec_FFIDirect` explicitly (gated on DREGG_DIRECT in the C shim).
     // We probe + gate the Rust `extern "C"` block AND the C shim define so a stale archive lacking the
     // export degrades to the JSON path rather than dangling at link time.
-    // DEPLOYED CONSTRAINT evaluator extraction (`dregg_constraint_admits`, module
-    // `Dregg2.Exec.DeployedConstraint`, OUTSIDE the FFI import closure). Same splice/probe discipline:
-    // once the module is `lake build`-t (it is in `lake_targets` above) its object is spliced in and the
-    // symbol appears; until then the `dregg_constraint_admits_str` bridge is compiled out and the
-    // deployed `ConstraintOracle` install (dregg-exec-lean) is unavailable, so the pure-subset admission
-    // stays on the Rust guest-path evaluator. Rebuild the archive to route the deployed decision through
-    // the PROVEN Lean `admits`.
-    let constraint_admits_present = archive_exports(&build_archive, "dregg_constraint_admits");
-    if constraint_admits_present {
-        println!("cargo:rustc-cfg=dregg_constraint_admits_present");
-    } else {
-        println!(
-            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_constraint_admits` — \
-             the verified deployed-constraint evaluator bridge is compiled out (the ConstraintOracle \
-             install is unavailable; the pure-subset admission stays on the Rust guest-path evaluator). \
-             Rebuild the archive (it splices Dregg2.Exec.DeployedConstraint) to run the PROVEN admits."
-        );
-    }
-
     let direct_present = archive_exports(&build_archive, "dregg_exec_full_forest_auth_direct");
     if direct_present {
         println!("cargo:rustc-cfg=dregg_direct_present");
@@ -2008,6 +1820,105 @@ fn main() {
         println!("cargo:rustc-cfg=dregg_mlkem_encaps_real_present");
     }
 
+    // ── PQ-CORE EXPORT GATE (DREGG_REQUIRE_PQ_CORES) ────────────────────────────────────────
+    // The DREGG_REQUIRE_LEAN gate above asks only "is a Lean archive linked at all"
+    // (`lean_available()`). That question passes for an archive that links perfectly and
+    // exports ZERO verified PQ cores — which is EXACTLY the state of the git-tracked
+    // `dregg-lean-ffi/libdregg_lean.a` seed (`nm -g --defined-only` finds 0 of the 3). The
+    // existing gate therefore does not see the failure that actually matters here.
+    //
+    // In such a build every `*_real_core_available()` probe returns false, each
+    // `dregg_pq::install_verified_*` returns `ExportAbsent`, and `dregg-pq` answers
+    // security-critical operations with the UNAUDITED `fips204` 0.4 / `ml-kem` 0.2.3 crates.
+    // Nothing errors. The build is green. The deployed binary runs crypto nobody audited.
+    //
+    // Worse, EVERY degrade path in `build_dregg2_archive` above (a `lake build` failure, a
+    // `leanc` failure, an archive-splice failure, an absent base archive) reports itself with
+    // `cargo:warning=` and then `return`s to the seed — and cargo HIDES build-script warnings
+    // for dependency crates unless you pass `-vv`. The degrade is invisible in a normal log.
+    //
+    // This gate checks the ARTIFACT rather than the control flow: it re-probes the archive we
+    // are actually about to link for the three cores `dregg-pq` routes through. That catches
+    // every degrade path at once, including ones added later, and cannot be bypassed by a new
+    // early `return` upstream.
+    //
+    // Tier policy is deliberately the SAME as DREGG_REQUIRE_LEAN (`require_lean_native`): ON
+    // for a native `--release`/distribution build or an explicit `DREGG_REQUIRE_LEAN=1`, so a
+    // release binary can never silently ship without the verified cores. The opt-out for a
+    // deliberately core-less build is `DREGG_REQUIRE_PQ_CORES=0`.
+    println!("cargo:rerun-if-env-changed=DREGG_REQUIRE_PQ_CORES");
+    let require_pq_env = std::env::var("DREGG_REQUIRE_PQ_CORES").ok();
+    let require_pq_off = matches!(
+        require_pq_env.as_deref(),
+        Some("0") | Some("false") | Some("FALSE") | Some("off") | Some("OFF")
+    );
+    let require_pq_on = matches!(
+        require_pq_env.as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("on") | Some("ON")
+    );
+    let require_pq_cores = require_pq_on || (require_lean_native && !require_pq_off);
+    if require_pq_cores {
+        // (export symbol, present?, what dregg-pq silently falls back to without it)
+        let required: [(&str, bool, &str); 3] = [
+            (
+                "dregg_fips204_verify_real",
+                fips204_verify_real_present,
+                "ML-DSA-65 verify would be answered by the UNAUDITED `fips204` 0.4 crate",
+            ),
+            (
+                "dregg_mlkem_encaps_real",
+                mlkem_encaps_real_present,
+                "ML-KEM-768 encaps would be answered by the UNAUDITED `ml-kem` 0.2.3 crate",
+            ),
+            (
+                "dregg_mlkem_decaps_real",
+                mlkem_decaps_real_present,
+                "ML-KEM-768 decaps would be answered by the UNAUDITED `ml-kem` 0.2.3 crate",
+            ),
+        ];
+        let missing: Vec<&(&str, bool, &str)> =
+            required.iter().filter(|(_, present, _)| !present).collect();
+        if !missing.is_empty() {
+            let detail = missing
+                .iter()
+                .map(|(sym, _, consequence)| format!("  * {sym} — ABSENT: {consequence}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let archive_path = build_archive.display();
+            let n_missing = missing.len();
+            panic!(
+                "\n\
+                 ================================================================================\n\
+                 dregg-lean-ffi: REFUSING to link an archive without the verified PQ cores.\n\
+                 ================================================================================\n\
+                 The PQ-core export gate is ACTIVE (DREGG_REQUIRE_PQ_CORES=1, or a --release /\n\
+                 distribution build on a native archive-linkable target), but the archive this\n\
+                 build would link:\n\
+                 \n    {archive_path}\n\n\
+                 does NOT export {n_missing} of the 3 Lean-verified post-quantum cores:\n\
+                 {detail}\n\
+                 \n\
+                 A binary linked against this archive would look identical, build green, and\n\
+                 answer every post-quantum operation with UNAUDITED crate primitives — the exact\n\
+                 silent substitution this gate exists to prevent.\n\
+                 \n\
+                 CAUSE: the git-tracked seed archive exports NONE of these; they are produced by\n\
+                 THIS build script splicing freshly-compiled Dregg2 objects in. If they are\n\
+                 missing, a degrade path above fired and reported itself only as a\n\
+                 `cargo:warning=` (which cargo HIDES for dependency crates). Re-run with\n\
+                 `cargo build -vv` and read the `dregg-lean-ffi:` warnings — the usual causes are\n\
+                 a `lake build` failure in metatheory/ (a module failed to elaborate), a `leanc`\n\
+                 failure, or an archive-splice failure.\n\
+                 \n\
+                 VERIFY BY HAND:\n\
+                 \n    nm -g --defined-only {archive_path} | grep dregg_fips204_verify_real\n\n\
+                 To allow a deliberately core-less build (dev, benches, a non-PQ crate) set\n\
+                 DREGG_REQUIRE_PQ_CORES=0 — such a build MUST NOT ship as verified.\n\
+                 ================================================================================\n"
+            );
+        }
+    }
+
     // GRAIN R3 whole-history verify extraction: probe the spliced archive for the
     // `@[export] dregg_grain_r3_verify` symbol (the extracted, Lean-verified R3-accept decision over
     // the whole-chain STARK verified-status + the R1 head binding). Present ⇒ gate the Rust
@@ -2051,22 +1962,9 @@ fn main() {
         println!("cargo:rustc-cfg=dregg_interchain_reached_consensus_present");
     }
 
-    // FRI SOUNDNESS LEDGER (`Dregg2.Circuit.FriLedger.friLedgerFFI`): the computable per-config FRI
-    // soundness ledger. Same shape as the decisions above — probe the spliced archive, gate the extern +
-    // the C shim string bridge, and (self-contained core — like R3/holding/interchain) NO module
-    // initializer. `circuit-prove/tests/fri_params_soundness_budget.rs` marshals each DEPLOYED knob set
-    // through this so the gate reports the numbers `Dregg2.Circuit.FriLedgerSound` proves, rather than
-    // re-deriving the capacity/Johnson/per-fold arithmetic in hand-written Rust (the twin that gate used
-    // to be). `friLedgerFFI` lives under `Dregg2/`, so its IR emits under `.lake/build/ir/Dregg2/` and
-    // the `build_dregg2_archive` splice picks up the symbol like every other export.
-    let fri_ledger_present = archive_exports(&build_archive, "dregg_fri_ledger");
-    if fri_ledger_present {
-        println!("cargo:rustc-cfg=dregg_fri_ledger_present");
-    }
-
     let mut shim = cc::Build::new();
     shim.file("src/lean_init.c").include(&lean_include);
-    // The SINGLE-THREADED / libuv-thread-free init (.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md).
+    // The SINGLE-THREADED / libuv-thread-free init (docs/EMBEDDABLE-LEAN-RUNTIME.md).
     // A C++ TU (it calls the namespaced `lean::initialize_*` runtime initializers
     // directly, skipping `initialize_libuv` so the libuv event-loop thread is never
     // spawned — the pg-Tier-D-embeddable path). Compiled into the SAME shim archive so
@@ -2089,7 +1987,7 @@ fn main() {
     // makes `lean_init_st.cpp` call `lean_initialize_runtime_module` (one runtime
     // copy). NOTE: that exported init pulls libuv, so the shared-mode `dregg_ffi_init_st`
     // is NOT libuv-thread-free — the libuv-free property holds only on the STATIC link
-    // (the host probe + the standalone node). See `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` §5.
+    // (the host probe + the standalone node). See `docs/EMBEDDABLE-LEAN-RUNTIME.md` §5.
     let shared = shared_link_mode();
     if shared {
         shim.define("DREGG_LEAN_SHARED", None);
@@ -2157,16 +2055,8 @@ fn main() {
     if interchain_reached_consensus_present {
         shim.define("DREGG_INTERCHAIN_REACHED_CONSENSUS", None);
     }
-    if fri_ledger_present {
-        shim.define("DREGG_FRI_LEDGER", None);
-    }
     if direct_present {
         shim.define("DREGG_DIRECT", None);
-    }
-    // DEPLOYED CONSTRAINT evaluator (own module `Dregg2.Exec.DeployedConstraint`), so
-    // DREGG_CONSTRAINT_ADMITS gates BOTH the per-export extern+bridge AND the module initializer.
-    if constraint_admits_present {
-        shim.define("DREGG_CONSTRAINT_ADMITS", None);
     }
     // We drive the link with `rustc-link-lib` / `rustc-link-search` directives, NOT
     // `rustc-link-arg`. WHY: with the package's `links = "dregg_lean"` key, build-script
@@ -2197,9 +2087,9 @@ fn main() {
     // `-Wl,-dead_strip` regardless of archive-member ordering (the empirical link-failure fix).
     let _ = shim_archive;
     // BOTH the shim AND the spliced Lean archive resolve from `OUT_DIR` (the per-build working
-    // copy of `libdregg_lean.a`, seeded from the seed and then spliced/GC'd HERE).
+    // copy of `libdregg_lean.a`, seeded from the git-tracked seed and then spliced/GC'd HERE).
     // We deliberately do NOT add `crate_dir` to the search path: pointing the linker at the
-    // seed would (a) reintroduce the wrong-feature-set race this split closes and
+    // git-tracked seed would (a) reintroduce the wrong-feature-set race this split closes and
     // (b) link a non-GC'd (full-closure) archive. One search root for our static libs: OUT_DIR.
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static:+whole-archive=dregg_ffi_shim");

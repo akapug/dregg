@@ -27,6 +27,25 @@ use dregg_pq::{
     lean_sign_core_installed, ml_dsa_sign_from_seed, ml_dsa_verify,
 };
 
+/// EXPLICIT OPT-IN to the unaudited fallback, and why it is correct here.
+///
+/// `dregg-pq`'s refusal gate (`src/audit.rs`) aborts any process that answers a PQ operation
+/// with the unaudited `fips204` / `ml-kem` crates unless this is set. This test is the
+/// canonical legitimate exception: its ENTIRE PURPOSE is to demonstrate that the deployed
+/// sign and KEM paths ARE crate-authoritative (that the toy seams are not consulted). It
+/// cannot make that demonstration without running the crate path, so it opts in and says so.
+///
+/// ★ Note what that means, plainly: the property this test exists to document IS the hole the
+/// refusal gate exists to make loud. Both are correct — this test records today's true state,
+/// and the gate ensures no PROCESS reaches that state without a deliberate opt-in. See §P.4
+/// of the drorb crypto-TCB ledger for the sign core's single caller.
+///
+/// SAFETY: set before this process performs any PQ operation. Each integration-test file runs
+/// in its own process, and `opt_in()` is the first statement of every test in this file.
+fn opt_in() {
+    unsafe { std::env::set_var("DREGG_ALLOW_UNAUDITED_PQ", "1") };
+}
+
 const CTX: &[u8] = b"dregg-pq-guard-c-seam-scope-honesty-v1";
 const SEED: [u8; 32] = [0x5au8; 32];
 
@@ -37,6 +56,7 @@ const POISON_SIG: &[u8] =
 
 #[test]
 fn the_deployed_signer_ignores_an_installed_poison_sign_seam() {
+    opt_in();
     let key = MlDsaKey::from_ed25519_seed(&SEED);
     let pk = key.public_bytes();
     let msg = b"guard C: the deployed signer is crate-authoritative, not seam-routed";
@@ -81,6 +101,7 @@ fn the_deployed_signer_ignores_an_installed_poison_sign_seam() {
 
 #[test]
 fn installing_the_toy_kem_seams_does_not_change_the_deployed_hybrid_kem() {
+    opt_in();
     use dregg_pq::hybrid_kem::{initiate, responder_offer};
 
     // A full hybrid handshake BEFORE any KEM seam is installed (the `ml-kem` + `x25519-dalek` crate path).

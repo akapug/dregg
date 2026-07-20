@@ -567,6 +567,12 @@ pub fn initiate(offer: &HybridOffer) -> Result<(HybridInitiatorMessage, [u8; 32]
         decode_ct_ss_hex(&reply).ok_or(HybridError::Encapsulation)?
     } else {
         // FALLBACK (no verified core installed): the `ml-kem` crate primitive.
+        // Refuses (aborts) unless DREGG_ALLOW_UNAUDITED_PQ=1 — see `crate::audit`.
+        crate::audit::guard_unaudited_fallback(
+            "ML-KEM-768 encaps (hybrid session KEM)",
+            "ml-kem 0.2.3",
+            "install_verified_mlkem_encaps_core",
+        );
         let ek = Ek::from_bytes(&ek_encoded);
         let (ct, ss_mlkem) = ek
             .encapsulate(&mut rng)
@@ -628,6 +634,12 @@ impl HybridResponder {
             decode_ss_hex(&reply).ok_or(HybridError::BadCiphertext)?
         } else {
             // FALLBACK (no verified core installed): the `ml-kem` crate primitive.
+            // Refuses (aborts) unless DREGG_ALLOW_UNAUDITED_PQ=1 — see `crate::audit`.
+            crate::audit::guard_unaudited_fallback(
+                "ML-KEM-768 decaps (hybrid session KEM)",
+                "ml-kem 0.2.3",
+                "install_verified_mlkem_decaps_core",
+            );
             shared_to_array(
                 self.mlkem_dk
                     .decapsulate(&ct)
@@ -684,6 +696,12 @@ pub fn ml_kem768_encaps(ek: &[u8]) -> Option<(Vec<u8>, [u8; 32])> {
         return core(&wire).and_then(|reply| decode_ct_ss_hex(&reply));
     }
     // FALLBACK (no verified core installed): the `ml-kem` crate primitive.
+    // Refuses (aborts) unless DREGG_ALLOW_UNAUDITED_PQ=1 — see `crate::audit`.
+    crate::audit::guard_unaudited_fallback(
+        "ML-KEM-768 encaps (bare)",
+        "ml-kem 0.2.3",
+        "install_verified_mlkem_encaps_core",
+    );
     let ek = Ek::from_bytes(&ek_encoded);
     let (ct, ss) = ek.encapsulate(&mut rng).ok()?;
     Some((ct.as_slice().to_vec(), shared_to_array(ss)))
@@ -712,6 +730,12 @@ pub fn ml_kem768_decaps(dk: &[u8], ct: &[u8]) -> Option<[u8; 32]> {
         return core(&wire).and_then(|reply| decode_ss_hex(&reply));
     }
     // FALLBACK (no verified core installed): the `ml-kem` crate primitive.
+    // Refuses (aborts) unless DREGG_ALLOW_UNAUDITED_PQ=1 — see `crate::audit`.
+    crate::audit::guard_unaudited_fallback(
+        "ML-KEM-768 decaps (bare)",
+        "ml-kem 0.2.3",
+        "install_verified_mlkem_decaps_core",
+    );
     let dk = Dk::from_bytes(&dk_encoded);
     Some(shared_to_array(dk.decapsulate(&ct_parsed).ok()?))
 }
