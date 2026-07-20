@@ -418,6 +418,50 @@ FRI/PCS openings=evaluations (FriLowDegreeSound) — the opened chunks are trans
 BE the committed polys' low-degree evals at ζ. A named crypto assumption / its own campaign. Plus permanent
 trust-refs (block-3 DAG, ceremony). NOT a wiring gap; NOT "basically done"-able by a cycle — honestly named.
 
+
+## ⚠⚠⚠ FRI-CAMPAIGN GROUNDING (07-20) — THE FLOOR IS EMPTY IN FOUR PLACES (counterproofs of OUR OWN claims)
+⚑ CORRECTION TO CYCLE 4: `FriLowDegreeSound` (FriVerifier.lean:995) is VACUOUS — provably ≡ True.
+GenuineWitness has ONE unconstrained Prop field (⟨True⟩ discharges it); its only other conjunct
+(proof.exposedSegment = pub.segment) IS ALREADY a conjunct of verifyAlgo (segmentTooth is definitionally
+that). Antecedent syntactically implies consequent. ZERO instances in-tree; wrap_sound has NO #assert_axioms.
+⇒ emitVerifier_wrap_sound ("the keystone FIRES", cycle 4, e11e99a6f) CONCLUDES NOTHING. I celebrated it as
+"structural soundness conditional on a named carrier" — the honest-sounding hedge hid an EMPTY carrier.
+4th over-claim of the session, and the worst.
+⚑ THREE CARRIERS REFUTABLE AT REAL PARAMS (false, not undischarged): FriLdtExtractV3/DeployedTraceExtract;
+DeployedFriEmbedding.accept_folds (accept ⟹ folds ∈ C' EXACTLY = strictly stronger than real FRI);
+ColumnDecodeBridge.accept_chains. All assert "every accepting proof yields a codeword" — FALSE BY COUNTING
+(δ-far passes k spot-checks w.p. (1−δ)^k > 0; verifyAlgo is a Bool on a SUPPLIED proof, FS derandomized, so
+the accepting set CONTAINS far-word proofs). The tree says so itself (FriColumnDecode.lean:52-56).
+⚑ εQuery DISCHARGED BY DETERMINISTIC COLLAPSE: FriFarnessReconcile — both far events EMPTY on accepting runs
+⇒ Pr=0, (1−δ)^k NEVER PAID. FriPositiveRadiusPayment proves it is unfixable at the deployed instance
+(premises UNINHABITED; friSetupK8 = 16-point domain folding to size 2 vs production 2^24). The payment
+lemmas are correct and THERE IS NO INSTANCE AT WHICH THEY FIRE.
+⚑ DeployedFriEmbedding has NO field tying `oracle` to the proof's committed column ⇒ oracle:=fun _ _ => 0
+trivializes accept_folds ⇒ collapses to DeployedTraceExtract verbatim (they are EQUIVALENT). The later
+ColumnDecodeBridge (pins decodeColumn) is the non-trivializable route — build on THAT.
+⚑ "~112.6 bits" STALE + WRONG (arity-2 figure; prover folds arity-8 ⇒ 109.84; arity8_error_not_lt_2e112
+PROVES 112.6 fails at arity 8). ~35 docs still quote it; fri_params_soundness_budget.rs asserts 61 vs
+PROVEN-120-CONFIG's 57.
+✅ GENUINELY PROVEN (efficient-adversary test PASSED): hit_cond (the keystone — REPLACED a refuted carrier;
+Stages 2-3's fsPt∉queriedFinset premise is FALSE for every self-transcript-computing adversary);
+epsFri_closed_legs (εFS+εGrind+εMerkle over ONE shared oracle); the union bound; the whole-TREE fold
+(nodes_union_bound, apex_probabilistic_nodeCarrier — tree side DONE, gap entirely per-node); the re-basing
+faithfulness; codex's FriQuerySamplingBias (all 15 decls clean, real non-vacuity witness).
+⚠ epsilon_query_layer/deployed are quantified over WORDS not ADVERSARIES (a fraction of the uniform product
+space, f/f' universally quantified, verifier's own honest sampling with the far word FIXED IN ADVANCE) —
+the project-fri-soundness-reality finding UNCHANGED by five stages.
+⇒ BOTTOM LINE: the FRI content is NOT purchased at deployed params. 3 non-FRI legs proven vs Q-query
+adversaries; the FRI leg discharged only by deterministic collapse at a TOY 16-point domain under refutable
+carriers, and the wrap's carrier is vacuous.
+⚑ FIRST MOVE (bounded, NON-research, unblocks everything downstream): build a FriSetup/FriSetupK instance at
+REALISTIC domain AND deployed rate so the proven-but-unfireable positive-radius payment lemmas can FIRE.
+Then: (ii) query-log extractor (commitment→total column, BCS16 straight-line), (iii) εQuery attached to the
+ADVERSARY's run + codex's epsQueryBias composed (epsQueryBias currently has ZERO consumers), (iv) arity-8
+rewind, (v) RETIRE/DELETE FriLowDegreeSound (as written it launders).
+NOTE: ArkLib/VCVio NOT vendored (mathlib only); ArkLib FRI soundness is `sorry` end-to-end (117) — nothing
+to import. The tree is honest to an unusual degree (Stage 5 states its own NEGATIVE verdict in Lean;
+FriPositiveRadiusPayment proves its own vacuity) — the campaign inherits good faith, not good bits.
+
 ## Standing
 - ArkLib **PR #655 LIVE + green** (import-check fixed, 78306878). Maintainers' call now.
 - Discipline: sufficient-test every floor · additive soundness gets THOUGHT · never `-A` ·
