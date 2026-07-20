@@ -10034,20 +10034,23 @@ FHE/MPC producer/source-relation composition. `prove_orders_zk` also rejection-s
 canonical source-commitment blinds from OS entropy; a distributed producer may inject jointly sampled
 limbs via the explicit-with-blinding constructor.
 
-NARROW GATES: `lake env lean Market/DarkBazaarPrivateDescriptor.lean` GREEN (8 kernel-clean
+NARROW GATES: `lake env lean Market/DarkBazaarPrivateDescriptor.lean` GREEN (18 kernel-clean
 keystones); `lake build Market.DarkBazaarPrivateDescriptor` GREEN; fresh `EmitByName` payload byte-
 equal to the checked-in artifact; `check-no-degraded-felt.sh` GREEN; persvati
 `cargo nextest run -p dregg-circuit-prove --lib dark_bazaar_private` GREEN 3/3 (hiding/tamper test
 0.347 s after build). No default-workspace or heavy gauntlet was burned in the edit loop.
 
-**NAMED CENTRAL RESIDUAL — `DarkBazaarDescriptorToAccepts`:** finish the finite fixed-shape
-`Satisfied2 → Accepts` integer lift: binary/one-hot decode, modular-to-integer no-wrap for the bounded
-4/6-bit and aggregate columns, then identify descriptor `D/S/V/select` with `privateBook` and the Lean
-`crossing`. Runtime gates and real hiding proofs exist, but do not call the whole Lean functional chain
-closed until this theorem lands. After that: per-order allocation/settlement + ledger weld, authenticated
-source ingestion, and no-single-viewer FHE/MPC composition; then widen the product family. Authorized
-repo-wide provenance/VK regeneration remains an epoch/install act — this WIP lane does not silently
-perform it. Durable detail: `docs/deos/DARK-BAZAAR-PRIVATE-N4K4.md`.
+**CLOSED — `DarkBazaarDescriptorToAccepts`:** the finite fixed-shape `Satisfied2 → Accepts` integer
+lift has landed as `darkBazaarPrivateN4K4_descriptor_to_accepts`. Canonical private-bit/one-hot
+decoding, bounded modular-to-integer exactness, packed-book and wide-root semantics, exact descriptor
+`D/S/V/select`, lowest-index `crossing`, and arbitrary external PI binding now compose in one
+kernel-clean theorem. **NEXT RESIDUALS:** per-order allocation/settlement + proof-authoritative ledger
+weld, no-single-viewer FHE/MPC witness production, and a cryptographic same-opening relation between
+the ciphertext ingress and committed order root; then widen the product family. The current exact
+re-encryption source certificate is verifier-visible and must not be mistaken for that lattice-ZK
+same-opening proof. Authorized repo-wide provenance/VK regeneration remains an epoch/install act —
+this WIP lane does not silently perform it. Durable detail:
+`docs/deos/DARK-BAZAAR-PRIVATE-N4K4.md`.
 
 ## 2026-07-19 — Private preference N4K4: reusable game/vote winner-only hiding receipt
 
@@ -10294,3 +10297,156 @@ parallel with another regen or a live descriptor-editing lane):
 5. E10 DEDUP (the byte-safe emit-tuple sharing on the 16 carriers, ~83 dup cols ≈ 15.6KB + 5.3K
    cells/proof) rides the SAME regen — greenlit now that the no-freeze class is proven a real gap.
    MEASURE proof-byte delta at cutover.
+
+## 2026-07-19 — fhEgg/Dark Bazaar privacy composition: exact source, hiding AMM, no-scalar decision, threshold certificates
+
+HEAD is materially past the earlier “local collective BFV shape” checkpoint. The exact fixed N4K4
+`Satisfied2 -> Accepts` bridge is closed (18 clean keystones). The new private AMM family is also closed
+end-to-end at the proof-carrier layer: `Market.DarkAmmPrivateReceipt` (9 clean) ->
+`Market.DarkAmmPrivateDescriptor` (104 columns, 19 PI, complete `Satisfied2 -> Accepts`, 19 clean) ->
+Lean-emitted 36,280-byte JSON -> hiding-only Rust HidingFri prover (2/2 release). Both old and new state
+commitments now use one root domain, so a proved successor is the next receipt's valid predecessor rather
+than a domain-mismatched dead end. Functional correctness of the fixed relation and the proof carrier are
+closed; distributed/no-single-viewer witness production remains open.
+
+The immediate BFV/proof composition seam is closed at an explicitly Tier-1 grade. The offline producer keeps
+root-continuous owner state, proves and deterministically encrypts the same amounts, and emits an owner-only
+authority bundle containing the witness and independent BFV seeds. A configured issuer quorum re-encrypts
+both exact ciphertexts, reconstructs the Lean-authored statement, verifies the HidingFri proof, and signs one
+canonical `FHASR003` claim. Strict hosted operation
+`dark-bazaar.private-amm-swap.proved.same-opening.v3` reconstructs every object, requires that receipt, and
+atomically advances encrypted state/root/sequence/replay; neither v1 nor v2 can enter it. Its release gate
+passes with real HidingFri + BFV + 2-of-3 evidence and journal restart. The public web registrar, Telegram
+Mini App, Discord Activity adapter, aggregate feature, startup policy, and hbox deploy contract expose v3 and
+refuse a public proof-only downgrade. Current host BFV custody remains visibly n=1, and every Tier-1 issuer
+sees the witness/seeds; this is authenticated exact-opening, not lattice ZK or no-viewer custody.
+
+The frontend-neutral claim is now exercised through successful authenticated player paths, not only route
+discovery. One release scenario lands independent v3 requests through browser identity, a real
+HMAC-validated Telegram initData envelope, and Discord's production `/da/token` ticket mint/verify handlers
+(with only the documented external OAuth exchange injected). Each session pins its exact new root, commits
+one turn, refuses duplicate upload with 409, and re-verifies from the shared journal; Telegram credentials
+cannot authenticate Discord and Discord tickets cannot authenticate Telegram. The combined target is 2/2
+green in 19.480s after the full-parameter protocol bump.
+
+The final complete `dreggnet-web --features public-shielded-games` release sweep found and repaired two
+cross-surface fixture drifts rather than hiding behind the narrow green. Generic fhEgg settlement now drives
+the mandatory source-certified encrypted seller ask/asset and both source-bound encrypted bids, with the
+exact derived BFV identity, through its shared web/Telegram/Discord operation test; the old unbound fixture
+correctly failed `UnboundListingSource`. Descent now exposes `demo_win_for_seed`, so devnet and demo fixtures
+derive the winning line from the exact world they open rather than mixing today's seed with a fixed seed.
+The complete web package passes 143/143 release. Persvati used the explicit test-only
+`DREGG_REQUIRE_LEAN=0` override because its Lean archive is unseeded; no marshal-only shipping claim follows.
+
+The authority wire is now `FHASO/FHASE/FHASR003`: both public `dx_bound`/`dy_bound` values used by the BFV
+wrap guard and a digest of fhe.rs's complete canonical parameters (including error variance) are inside the
+signed claim. Bounds parse only in `0 < bound < t`, and the reference issuer refuses a
+bound below the exact opening. This closes the underdeclared-cap attack without weakening the honest grade:
+bound soundness has the same issuer-visible Tier-1 trust as exact opening. `Market.DarkAmmBoundReceipt`
+models both caps and proves `accepted_bounds_are_sound` (8 clean keystones). The owner/issuer boundary is
+also executable without caller-authored Rust: separate `same-opening-endorse` invocations consume protected
+authority/key files and emit strict public `FHASE003` artifacts; an owner-side assembler verifies distinct
+quorum evidence and emits `DBAMv003`. Core 2/2, CLI lifecycle 1/1, and hosted restart/bound-tamper 1/1 release
+gates pass. Old 001/002 artifacts, variance substitution, and request-cap substitutions fail closed.
+
+The honest n-of-n custody path no longer assembles a secret to make the BFV relin key:
+`threshold/relin.rs` runs the real fhe.rs R1/R2 multiparty ceremony over party-owned shares and is used by
+a no-scalar-opening Dark AMM test. That chain keeps reserves and dx/dy encrypted, threshold-opens only a
+one-time-padded invariant, lets mask owners derive their local mod-t shares, releases one party-MPC
+equality bit, verifies a 2-of-3 `FHDAR001` receipt with replay refusal, and atomically commits. It imports
+no `SecretKey`, `threshold::combine`, or decrypt API. Relin+decision gates pass 4/4 release. Honest
+boundary: n-of-n, semi-honest/in-memory MPC, trusted triples, authenticated bit agreement rather than
+malicious input binding. Relin now also has signed session/PK/roster/phase manifests and a strict restartable
+public coordinator transcript. The upstream typed algebraic shares still have no canonical codec, so the
+manifest cannot bind their bytes; party restart, malicious-share proofs, and dropout/`t<n` relin remain.
+
+The collective path is now restartable on the evaluator side without weakening back to one key.
+`FHDAP002` canonically carries the exact public BFV identity, collective PK, public relin key, `k`, caps, and
+reserve ciphertexts; a restored `DarkPool` accepts no `SecretKey` and can build the next encrypted candidate.
+The v2 parameter digest hashes fhe.rs's complete canonical parameter encoding (including error variance),
+and a variance-only substitution plus checksum-valid retired `FHDAP001` now fail closed.
+That candidate binds the exact encrypted pre-state, so an old authorized transition cannot roll an advanced
+pool backward. `dark_amm_attested` reconstructs the equality session from independent relying-party policy,
+verifies a reveal-only `FHDAR001` quorum receipt, consumes durable replay last, and then infallibly installs
+the ciphertext state without `DistributedDecisionRun`. The focused gate is 6/6 and the complete default
+`fhegg-fhe` release gate is 170/170 (one named heavy test skipped). Initial carrier correctness/key-domain
+binding, malicious share/MPC validity, and atomic rollback-resistant carrier+replay storage remain open.
+A standalone `dreggnet-market::dark_amm_collective` service now performs the two-phase hosted operation under
+the real collective public identity: stage verifies but preserves both replay images; commit re-verifies and
+atomically installs public ciphertext material/root/sequence plus same-opening and FHDAR replay; pending state
+survives a strict checkpoint and abandon/restart/restage remains live. The focused release gate is 1/1 with
+real 3-party DKG/relin, HidingFri, 2-of-3 same-opening, FHDAR, refusal atomicity, and both-side restart. Its
+decision-worker transcript is simulated; the upstream 6/6 no-secret gate is the real masked computation. The
+existing shared web/Telegram/Discord v3 offering remains n=1 until it is replaced by this service.
+`Market.DarkAmmCollectiveTwoAuthority` is the semantic crown for the repaired replay order: ten clean laws
+prove stage consumes neither authority, abandon-after-stage is exact identity, and commit consumes both exact
+fresh ids only with candidate install/sequence advance/pending clear; either replay or binding failure holds
+the full state.
+
+The state law for that substrate is now Lean-authored rather than inferred from Rust tests alone.
+`Market.DarkAmmPublicHost` has ten clean keystones for exact encrypted pre-state binding, stale-candidate
+nonacceptance, decision-nonce pinning, exact after-state plus fresh replay installation, false/refused full
+state hold, no partial outcome, restart preservation under an explicit codec roundtrip premise, and distinct
+state-staleness/receipt-replay sequential barriers. `Market.DarkAmmPublicHostLifecycle` adds fourteen clean
+keystones for exact staging, false/wrong/stale/replayed commit refusal, exact atomic commit, abandonment, and
+full committed-plus-pending restart. Two
+dependency pins keep structural binding/restore independent of receipt semantics. Focused Lean, aggregate
+Market, and orphan gates pass; fhe.rs/key-domain/initial-k, nonce-hash, signature, MPC, and rollback security
+remain external premises rather than axioms.
+
+The authenticated `t<n` path is stronger than the old status text: each opening share now carries a
+VSS-anchored `FHQPv001` ZK proof of the exact negacyclic/RNS relation, both quotient families, and the
+inclusive `[-2^80,2^80]` smudge range. The real 3-of-4 Descent settlement passed, but six degree-4096
+proofs took 1086.009s release. This is correctness-grade, interactive-performance red. A canonical
+parallel custodian scheduler is green (1/1), but the heavy path has not been re-measured and individual
+proof compression/batching remains central. DKG ternary/CBD shortness and a distributed persistent
+commitment ceremony remain separate open floors.
+
+Source authority is exact at the current explicitly operator-visible tier. Bid order/ciphertext pairs
+and the seller's exact encrypted ask + concrete asset are independently re-encryption-checked, signed by
+the configured source verifier, committed into authoritative WriteOnce slots, transported/replayed across
+restart, and required exactly once by settlement under one BFV identity. Legacy/unbound source and
+order/ciphertext/actor/asset/session/key/seal substitutions fail closed; fast market suite 15/15. This is
+not lattice ZK: the verifier sees plaintext and encryption randomness. Clearing and the exact Descent
+asset/$DREGG cross now share a one-host atomic apex with a strict four-phase file journal, replay reservation,
+OS lock, fsync + atomic rename, and idempotent recovery across prepare/market/world/replay/commit crash points;
+the focused gate is 6/6. Host image restoration, rollback-resistant anchoring, and a transaction across
+independently committed federation/asset ledgers remain open, so this is not yet a distributed hyperedge.
+
+The optimizer/certificate surface is green across 159 release tests: fhIR admission, exact fixed-point QP,
+Cert-F, CFMM route, Fisher equilibrium, derivative price/Snell, package approximation, aggregation source
+re-execution, and GPU parity. `Market.SddPsd` now gives the conservative covariance gate an executable exact
+Lean checker and proves, in arbitrary finite dimension, that symmetric row diagonal dominance plus a
+nonnegative diagonal implies a nonnegative rational quadratic form (13 clean keystones). It also proves a
+rank-one PSD matrix that the SDD checker refuses, keeping incompleteness visible. The Rust f64
+tolerance/averaging/1e9 rounding/2^53/i128 parsing path is not yet proved a faithful refinement of that exact
+checker.
+
+The QP PSD premise is no longer only a checked compiler branch: `Compiled` carries an
+`ExactSddPsdCertificate` v1 containing the exact scale-9 rounded symmetric matrix and row radii, and
+`solver_bridge::run` independently rechecks version, dimensions, 2^53 lift envelope, symmetry, nonnegative
+diagonal, overflow-safe radii, dominance, and bit-exact binding to the actual backend `QpProblem.p` before
+ADMM. Strict non-serde `FHSDD001` now transports the signed-i128 matrix/radii with pre-allocation dimension
+and size ceilings, exact EOF/canonical replay, and a public corruption checksum. Missing/misplaced/tampered/
+backend-substituted evidence yields `InvalidCompiled`. `FHQPB001` now joins that PSD witness to the exact
+KKT certificate as one bounded, canonical standalone artifact and refuses a scale or fixed-point `P`
+disagreement after re-running both checkers; valid-checksum version/dimension/matrix substitutions are teeth.
+`Market.QpCertificateBundle` supplies the semantic join: same-matrix SDD plus exact-zero KKT implies global
+optimality (two clean keystones and two independence pins). It explicitly does not promote the deployed
+positive-tolerance residual check into that exact-zero premise.
+The expanded fhir release gate is 58/58 (combined fhir + solver 164/164). This exposes
+the exact Lean premise at runtime, while the source-f64
+tolerance/averaging/rounding refinement remains structural/KAT rather than a floating-point theorem.
+
+Two reusable one-bit organs are now explicit. `Market.DarkAmmDecisionReceipt` proves candidate binding,
+fresh replay consumption, false-bit state hold, and true-bit refinement (7 clean). Party MPC adds strict
+secret-shared `<` with a reveal-only transcript plus a session-separated 2-of-3 `FHCAR001` receipt and
+replay refusal (3/3 release); `Market.PrivateComparison` fixes strict
+comparison, range-window, floor-invariant-window, stable-preference, and receipt/replay semantics
+(10 clean). Malicious
+range/input binding is still the carrier obligation—named, not claimed.
+
+Replay persistence now has a shared strict carrier: `SnapshotReplayGuard` context-binds a canonical sorted
+id set, revision, exact EOF and corruption checksum; restart/corruption/context/noncanonical-order teeth
+pass 2/2. It must still be persisted atomically with the mutation and anchored against rollback; the public
+checksum alone is not rollback resistance.

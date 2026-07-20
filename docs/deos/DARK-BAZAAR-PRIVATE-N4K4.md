@@ -62,7 +62,7 @@ shielding from proof consumers, not Tier-0 house blindness. The future no-viewer
 
 Neither composition is implied by `HidingFriPcs`.
 
-## Formal boundary and named residual
+## Formal boundary — descriptor-to-market chain closed
 
 `darkBazaarPrivateN4K4_emitted_air_sound` starts from the actual `Satisfied2` denotation, an arbitrary
 external public-input assignment, canonical field cells, and `ChipTableSoundN`. It extracts:
@@ -71,12 +71,20 @@ external public-input assignment, canonical field cells, and `ChipTableSoundN`. 
 - every PI binding against the external verifier-supplied vector; and
 - all eight public root lanes equal to the genuine wide Poseidon permutation output.
 
-The remaining theorem is named `DarkBazaarDescriptorToAccepts`: lift the fixed modular gate bundle
-to integer equalities using the 4/6-bit bounds, decode the unique order one-hots, identify the four
-computed volume buckets with `privateBook`, and conclude the semantic `Accepts` relation. This is a
-formalization residual, not an absent runtime gate: the Rust producer proves the emitted AIR and its
-positive/tamper tests exercise the actual verifier, but the final Lean descriptor-to-market theorem
-must close before calling the entire functional-correctness chain proved.
+That remaining lift is now closed. `darkBazaarPrivateN4K4_descriptor_to_accepts` composes the actual
+`Satisfied2` denotation with canonical trace and PI representatives plus the wide-Poseidon chip
+soundness hypothesis, then concludes the exact semantic `Accepts` relation. Its supporting theorems:
+
+- decode every boolean/one-hot private order column and the injective packed book;
+- lift bounded modular gates to exact integer demand, supply, minimum, and volume equations;
+- prove the selected `pStar` is the lowest maximizing bucket and `vStar` is its exact volume;
+- identify all eight root columns with the full-arity permutation output; and
+- identify the verifier-supplied public vector with those semantic columns.
+
+All of those keystones, including the final composition theorem, are in the file's
+`#assert_all_clean` gate. The remaining privacy/product residuals are outside functional correctness
+of this fixed relation: proof-system assumptions, no-viewer witness production, source same-opening,
+and ledger/allocation composition.
 
 ## Assumptions and non-claims
 
@@ -105,6 +113,6 @@ scripts/pbuild srot cargo nextest run -p dregg-circuit-prove dark_bazaar_private
 
 The default/heavy workspace gauntlets are intentionally not part of this edit loop.
 
-Current narrow results: Lean file + module build green with 8 kernel-clean keystones; emitted bytes
+Current narrow results: Lean file + module build green with 18 kernel-clean keystones; emitted bytes
 compare exactly against a fresh `EmitByName` line; the faithful-commitment AST gate passes; focused
 `nextest --lib` is 3/3 green, with the two-proof hiding/tamper test taking 0.347 s after build.

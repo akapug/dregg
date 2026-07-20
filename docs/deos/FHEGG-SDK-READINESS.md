@@ -28,11 +28,40 @@ features include it. Python/TypeScript bindings and the private FHE/MPC service 
   market4), not arbitrary live books. A fixed `N<=4,K=4` Dark Bazaar family now moves order
   side/limit/quantity out of public coefficients and into a `HidingFriPcs` witness, commits them with
   a faithful 8-felt root, and publishes only `(session,rule,root8,p*,V*)`; see
-  `DARK-BAZAAR-PRIVATE-N4K4.md`. It is operator/prover-visible, not yet no-single-viewer, and its final
-  Lean `Satisfied2 → Accepts` integer-decode lift is a named residual.
+  `DARK-BAZAAR-PRIVATE-N4K4.md`. It is operator/prover-visible, not yet no-single-viewer. Its Lean
+  `Satisfied2 → Accepts` chain is now closed: canonical private-bit decoding, packed-book/root semantics,
+  exact demand/supply/volume columns, lowest-price selection, and external PI binding compose in the
+  kernel-clean `darkBazaarPrivateN4K4_descriptor_to_accepts` theorem.
 - The canonical FHE/MPC claim now has a strict Ed25519 threshold-roster verifier and an opt-in market
-  co-endorsement weld. It authenticates an exact combined ciphertext/output/settlement claim; it does not
-  prove that the ciphertexts open to that settlement's orders or upgrade the local MPC to malicious security.
+  co-endorsement weld. A separate ingress certificate now binds each signed bid message to the exact BFV
+  ciphertext by deterministic re-encryption and is carried into the sealed-auction write-once seal. This is
+  an **operator-visible source-verifier boundary**, not a lattice zero-knowledge same-opening proof, and it
+  does not upgrade the local MPC to malicious security.
+- Under the opt-in `amm-input-binding` feature, the private Dark AMM now has the corresponding exact
+  BFV↔HidingFri authority: each issuer deterministically re-encrypts both amount openings, reconstructs the
+  Lean-authored statement from the same witness, verifies the hiding proof, and only then contributes to a
+  threshold-signed, restart-replay-protected receipt. This is real Tier-1 same-opening, but every issuer sees
+  `x/y/dx/dy`, commitment blinds, and encryption seeds; it is not lattice ZK or no-viewer production. The
+  hosted market now has a strict v3-only policy that requires this receipt, reconstructs every exact public
+  object, and commits receipt replay with the encrypted/root transition. Its current deployment key is
+  explicitly represented as `n=1/opening_threshold=1`, not threshold custody. The authority wire is v2:
+  it additionally binds both public BFV wrap-safety caps and refuses a cap below the hidden amount. This
+  closes an underdeclared-bound attack at the same explicit issuer-trust tier.
+- Independently of that still-`n=1` hosted offering, the collective Dark AMM substrate now has a strict
+  `FHDAP002` public-host carrier: exact canonical BFV parameter identity (including error variance), collective public key, public
+  relinearization key, `k`, caps, and both reserve ciphertexts survive canonical bounded restart. A restored
+  process holds no secret key, can evaluate the next encrypted candidate, and can install it from an
+  independently transported `FHDAR001` quorum receipt plus reveal-only transcript. Candidate nonces now
+  bind the exact encrypted pre-state as well as the result, closing stale-candidate rollback in memory.
+  This is substrate for replacing the hosted `n=1` key, not evidence that dreggnet has made that cutover.
+- The exact source-bound clear can now settle the certified Descent asset and `$DREGG` countervalue through
+  one four-phase durable transaction. The file journal reserves replay, fsyncs and atomically renames each
+  phase image, and recovers idempotently across injected crash boundaries. This is a real one-host atomic
+  apex, not a distributed transaction across independently committed federation/asset ledgers.
+- The authenticated `t<n` opening now also carries a zero-knowledge certificate for the exact
+  ciphertext/share relation, RNS quotients, and the Lean-pinned smudge range. The complete six-share
+  degree-4096 settlement passed, but took 1086.009 seconds in release; this is correctness-grade and a
+  severe interactive-performance blocker, not an SDK-ready opening service.
 - fhIR now has one concrete Lean-authoritative family: a proved two-coordinate rebalance plan emits canonical
   bytes that Rust strictly validates and dispatches to the real exact-integer engine. Other fhIR product
   families remain under the broader legacy Rust compiler and are not covered by that cutover.
@@ -50,15 +79,16 @@ attestation close.
 |---|---|---|---|
 | `reference_clear` (plaintext uniform-price) | WORKING (rule) | PROTOTYPE | ~~no per-order allocation/fill; no serde/IDs/versioning; price is an abstract bucket index, no tick map~~ ALL THREE CLOSED 2026-07-17 on the SOLVER side: `fhegg-solver::clearing::{allocate,ration}` (verified, Lean-bound) + `fhegg-solver::wire` (versioned/ID-bearing serde types, tick↔bucket map, `Settlement::verify`). `fhegg-fhe`'s own types stay serde-less BY DESIGN (§4.4: don't surface the FHE path) |
 | `fhe_clear` (TFHE homomorphic) | RESEARCH (honest) | NOT READY | minutes-slow; single-key (caller decrypts all); no keygen/serialization API; no-viewer decrypt ABSENT |
-| collective BFV carry-free fold | RESEARCH pipeline | NOT READY | party-owned n-of-n key custody + retained GPU fold + masked boundary are composed; fhe.rs remains a research dependency and the path is not an authenticated service |
-| `mpc_party` output-boundary crossing | RESEARCH PoC | NOT READY | party-thread direct-peer arithmetic ingress and exact A2B/crossing are built; trusted-dealer triples, unauthenticated in-memory channels, n-of-n liveness, semi-honest only |
+| collective BFV carry-free fold | RESEARCH pipeline | NOT READY | retained GPU fold + masked boundary are composed with both the legacy n-of-n custody and an authenticated crash-tolerant `t<n` VSS/opening path linked to the actual BFV public-key contribution; the latter proves the exact decrypt-share relation and smudge range, but six degree-4096 proofs take 1086.009s in release; fhe.rs remains a research dependency and the path is not an isolated service |
+| `mpc_party` output-boundary crossing | RESEARCH PoC | NOT READY | party-thread direct-peer arithmetic ingress and exact A2B/crossing are built, plus a candidate-bound equality mode that opens only one decision bit; trusted-dealer triples, unauthenticated in-memory channels, semi-honest arithmetic inputs |
 | solver (PDHG on the circulation LP) | WORKING | usable (plaintext) | CPU path is real; GPU PDHG has measured large-shape wins, but whole private-solver residency and at-scale product throughput are not established |
 | Cert-F certificate (emit + native check) | WORKING | usable (plaintext) | prescriptive ε bridge is built; exact integer admission/range bounds remain program-specific |
 | Cert-F **verified** (Lean-pinned STARK) | RESEARCH | NOT READY (closer) | full generic emit-soundness + integer admissions for ring3/market4 + real hiding proof path; residual: registration is per-program-constants, so live arbitrary private books need a fixed-shape committed-input relation, not public per-book weights |
-| Dark Bazaar private N4K4 | RESEARCH (real hiding proof) | NOT READY (beachhead) | fixed `N<=4,K=4,qty<16`; 8-felt committed private orders + exact output AIR + hiding prover are built; final Lean descriptor→`Accepts` decode/no-wrap theorem, no-viewer producer, ingestion and ledger/allocation weld remain |
-| canonical clearing attestation | RESEARCH | NOT READY | strict Ed25519 threshold roster + full claim/settlement co-endorsement and replay teeth are built; ciphertext-opening/source relation, honest-verifier enforcement, and durable replay are not |
+| Dark Bazaar private N4K4 | RESEARCH (real hiding proof, proved relation) | NOT READY (beachhead) | fixed `N<=4,K=4,qty<16`; 8-felt committed private orders + exact output AIR + hiding prover + kernel-clean descriptor→`Accepts` theorem are built; no-viewer producer and proof-authoritative ingestion/ledger/allocation weld remain |
+| canonical clearing attestation | RESEARCH | NOT READY | strict Ed25519 threshold roster + full claim/settlement co-endorsement, durable public replay, and exact verifier-certified bid plus seller/listing/asset ciphertext source binding through actual WriteOnce seals/restart/transport are built. A one-host four-phase journal atomically composes that clear with the exact Descent asset and `$DREGG` leg and recovers across crash boundaries. The source verifier sees plaintext+randomness; lattice-ZK same-opening, malicious-MPC input binding, rollback-resistant anchoring, and a transaction across independently committed federation/asset ledgers remain. |
+| encrypted-amount Dark AMM | RESEARCH (executable) | NOT READY | reserves and `dx`/`dy` remain BFV ciphertexts through the exact constant-product check; the collective-key path generates relin without an assembled secret and composes masked threshold opening into party equality, a one-bit quorum receipt, and atomic commit without scalar-opening the invariant. `FHDAP002` now restarts the exact public evaluation state (collective PK, relin key, `k`, caps, ciphertexts) into a host with no secret key; it hashes fhe.rs's complete canonical parameter encoding, refuses variance-only substitution, and rejects retired v1. Independently configured `FHDAR001` verification can commit a reveal-only equal bit without the in-process decision capability, and every private candidate is pinned to its encrypted pre-state. The 104-column Lean descriptor, full `Satisfied2->Accepts`, hiding prover, and strict hosted v3 proof+same-opening mutation weld are built. v3 binds exact deterministic BFV openings to the same witness/statement/proof under threshold Ed25519 evidence, rejects every v2 bypass, and rebuilds replay from the durable journal. Authority wire v3 signs the complete canonical BFV parameter digest (including error variance) plus the exact public wrap-safety caps and refuses a cap below the proved hidden value; Lean's host law now pins and proves sound both accepted bounds. A standalone two-phase dreggnet collective service stages the exact collective request without consuming replay, can abandon/restart/restage, and atomically consumes same-opening plus FHDAR evidence only with the public ciphertext/root/sequence commit. The new public carrier cannot prove initial-state correctness or that PK/relin/ciphertexts share one secret-key domain, quorum evidence does not prove malicious share validity, and replay/carrier persistence remains rollback-sensitive. Its issuers see the witness+randomness; the collective service test simulates the decision-worker transcript, and the existing player-facing game still uses a visible `n=1/opening_threshold=1` BFV key. Lattice-ZK/no-viewer same-opening, distributed witness production, shared-interface collective deployment, malicious MPC, and dropout-tolerant relin remain. |
 | Lean-authored fhIR ClearingPlan | WORKING for one family | PROTOTYPE | exact rebalance-v1 plan/no-wrap/noise proof + canonical artifact + strict Rust interpreter are built; general product compiler/refinement is not |
-| sibling certs (CertQp/Eq/Route/Package/Grad) | MIXED | NOT READY | CertQp now has an exact fixed-point KKT checker and fhIR product acceptance uses it (the rounded problem, PSD pinned separately); Eq/Route/Package/Grad remain f64-native, and none yet has Cert-F's general descriptor/STARK chain |
+| sibling certs (CertQp/Eq/Route/Package/Grad) | MIXED | NOT READY | CertQp has an exact-arithmetic fixed-point KKT residual checker and fhIR product acceptance uses it. The PSD premise is now a first-class `ExactSddPsdCertificate`: the compiler records the exact rounded matrix/radii and the runner rechecks its SDD structure plus bit-exact binding to the actual backend `P` before ADMM. Strict bounded `FHSDD001` carries that artifact across processes. `FHQPB001` makes the PSD and KKT witnesses one self-contained canonical certificate: its verifier independently rechecks both and requires identical scale-9 `P` entries, with allocation ceilings and exact EOF. Their public checksums detect corruption, not forgery. Lean proves same-matrix SDD admission plus exact-zero KKT implies global optimality; the deployed positive-tolerance check remains a residual certificate and the source-f64 averaging/rounding refinement remains KAT/structural. Eq/Route/Package/Grad remain f64-native, and none yet has Cert-F's general descriptor/STARK chain. |
 | `fhegg-rtl` | RESEARCH scaffolding | N/A | FPGA netlist-DSL→Verilog spine + a proven full-adder; gates nothing in the software path — ignore for SDK |
 
 ---
@@ -127,15 +157,32 @@ complete batch-STARK transcript remains a separate floor. Also, `(A,w,c,ε)` is 
 algebra: if bid values live in `w`, this hides the certificate witness, not those bids.
 
 **No-viewer FHE clearing** — a process-shaped composition now exists:
-party-owned n-of-n collective BFV keygen → retained carry-free GPU fold → encrypted party masks →
+party-owned collective BFV keygen (legacy n-of-n, plus a newer authenticated crash-tolerant `t<n`
+VSS/opening path) → retained carry-free GPU fold → encrypted party masks →
 smudged threshold opening of only `y = m + Σr_i mod t` → each party's private mod-t row → direct-peer
 boolean sharing and exact A2B/mod-t reduction → balanced volume-argmax MPC → only `(p*,V*)`.
 `threshold_masked_boundary_channels` drives the real masked-boundary rows through `mpc_party.rs`; the
 coordinator has no peer-input endpoint and the triple dealer receives public shape only. This closes the
 old cleartext decrypt-and-reshare seam and removes any BFV→TFHE scheme switch from the selected architecture.
 It is still a **local semi-honest PoC**, not the product property: channels are unauthenticated/in-memory,
-triples come from a trusted dealer, all `n` parties must be live, the current BFV custody is n-of-n, and no
-malicious-input/share proof or isolated-process deployment exists.
+triples come from a trusted dealer, the party arithmetic inputs are not maliciously bound to the masked BFV
+opening, and no isolated-process deployment exists. The newer quorum path removes the old all-`n` liveness
+requirement; it does not by itself make the MPC malicious-secure.
+
+**Private AMM decision** — a second, deliberately small composition now exists. Encrypted reserves and
+encrypted `dx`/`dy` produce an encrypted candidate state and encrypted invariant. The preferred acceptance
+path binds a party-MPC equality session to those exact ciphertext bytes and reveals one bit; a false bit holds
+the state and does not return the rejected product. `FHDAP002` serializes the exact public evaluation state
+with strict size/canonical-encoding/parameter/cap checks, so a process holding no BFV secret key can restore
+the ciphertext reserves and produce another candidate. The candidate nonce binds both encrypted pre-state and
+post-state. The in-process decision value remains one commit capability, while `dark_amm_attested.rs` supplies
+the durable alternative: reconstruct the equality session from host-owned roster/value-width/modulus policy,
+verify the independently supplied reveal-only transcript and strict `FHDAR001` receipt, consume replay last,
+then install the candidate through an infallible final mutation. Configured threshold signatures authenticate
+roster agreement, not malicious correctness of the masked BFV shares. The public checksum is not source
+authentication or rollback protection, and public decoding cannot prove that the public key, relin key, and
+ciphertexts share one secret domain or that the initial openings multiply to `k`. The legacy scalar-opening
+commit remains only as a differential oracle.
 
 ---
 
@@ -203,11 +250,16 @@ Prioritized. The nearest real target is the plaintext verify-not-find engine, NO
    so it is plausibly 2–3× slower than documented. Re-run the current circuit end-to-end before any perf claim.
 4. **Harden the selected BFV → output-boundary-MPC trust story (bigger).** The architecture decision and
    process-shaped composition now exist: injected party-owned collective keys, strict ciphertext/share
-   framing, masked threshold opening, direct-peer arithmetic ingress, exact A2B/mod-t reduction, and the
-   party-thread balanced crossing. Remaining product work is authenticated isolated-process transport,
-   roster/replay binding, malicious-share/input validity, dealer-free or auditable triple preprocessing,
-   crash/recovery behavior, and a real `t<n` threshold construction. A BFV→TFHE scheme switch is not part
-   of this selected path.
+   framing, masked threshold opening, direct-peer arithmetic ingress, exact A2B/mod-t reduction, the
+   party-thread balanced crossing, and an authenticated `t<n` custody/opening layer linked to the actual BFV
+   public-key contribution. The opening now proves its exact ciphertext/share relation, quotient arithmetic,
+   and smudge range; it is not merely a signature around an unproved share. Remaining product work is to cut
+   its measured six-share release cost from 1086.009s to an interactive envelope (the library can now
+   schedule independent custodians concurrently, but the heavy path has not yet been re-measured), prove setup ternary/CBD
+   shortness, distribute/persist the commitment ceremony, wire the new strict replay snapshot into
+   rollback-resistant transactional storage, authenticate isolated-process
+   transport, bind malicious MPC inputs, and replace trusted triples with dealer-free or auditable
+   preprocessing. A BFV→TFHE scheme switch is not part of this selected path.
 
 **Do NOT** surface `fhe_clear`/the collective-BFV path/`mpc_party` as a production-private SDK until the
 remaining items in (4) close. The first is still minutes-slow and single-key; the second is a fast,
@@ -258,23 +310,34 @@ stalled at 0.1.1 and never reached 1.0. Research-grade. (Our mirror lags — tre
 tfhe-rs does not do BFV; swapping would vaporize the fold. **That gap is exactly WHY the BFV→TFHE
 scheme-switch is a named residual** — it is not incidental, it is the architecture.
 
-**THE REAL PROBLEM (why ember's suspicion lands):** the threshold primitive the entire no-viewer story would
-rest on — `mbfv` collective keygen/decryption (Mouchet et al. ePrint 2020/304) — lives INSIDE fhe.rs, and its
+**THE ORIGINAL DEPENDENCY PROBLEM (why ember's suspicion landed):** the legacy threshold primitive the
+first no-viewer prototype rested on — `mbfv` collective keygen/decryption (Mouchet et al. ePrint 2020/304) —
+lives INSIDE fhe.rs, and its
 **smudging noise is a literal upstream `TODO`** (`mbfv/secret_key_switch.rs:76`: *"TODO this should be
 exponential in ciphertext noise!"*). Smudging is what stops decryption shares from leaking the secret key.
-Also n-of-n only (no t-of-n). **So shipping production no-viewer on fhe.rs today = inheriting a
-known-incomplete SECURITY parameter from an unmaintained 0.1.1 crate.** That is building on sand — the class
-this repo deletes. `FheggBfvDependencyResidual`.
+It is also n-of-n only (no t-of-n). The repo no longer treats that upstream path as the whole custody story:
+`threshold/quorum.rs` implements its own authenticated `t<n` bivariate-VSS key/opening layer, links the
+shares algebraically to the real BFV public-key contribution, and chooses smudging bounds locally. That is a
+material closure of the old architectural blocker. It is not permission to ship yet: the current quorum
+proof/ceremony and surrounding MPC still need their stated cryptographic hardening and deployment work.
+`FheggBfvDependencyResidual` now names the remaining reliance on fhe.rs arithmetic/serialization plus those
+   proof and parameter-audit obligations—not a claim that the only available custody is upstream n-of-n.
+   In particular, the repo-owned opening now has a VSS-anchored `FHQPv001` zero-knowledge certificate for
+   the exact BFV decryption-share equation, RNS quotients, and bounded smudge. The still-open range proof is
+   setup-key ternary/CBD shortness, not the opening relation. At 1086.009s for six degree-4096 shares, proof
+   compression/batching is itself part of the dependency-hardening work.
 
 **The option set, honestly:**
 | option | verdict |
 |---|---|
-| stay on `fhe.rs` | research-grade, stalled at 0.1.1; threshold path has an upstream security TODO |
+| stay on `fhe.rs` | research-grade, stalled at 0.1.1; do not use its upstream mbfv smudging as the security boundary. The repo's own `t<n` layer is the selected research path, but still needs audit/hardening |
 | OpenFHE/SEAL via FFI | mature — but **unverified C++ in the TCB**, against the whole ethos (cf. the EverCrypt lesson: never let a "use a real lib" default put unverified C in a verified TCB) |
 | `lattigo` (Go) | non-starter for this stack |
 | **Lean-first BFV (ours)** | ethos-coherent (we already EMIT circuits from Lean; the repo is a Lean-verified-kernel-first stack) — but NTT/RNS/noise-analysis/param-selection is a BIG build, and **wrong FHE params fail SILENTLY** (no test goes red — the worst failure shape for this repo's discipline) |
 
-**The honest framing:** fhegg's no-viewer path is **gated on a dependency decision nobody has made**, not on
-the scheme-switch code. Do NOT ship a privacy claim on fhe.rs's mbfv while its smudging TODO stands. Lean-first
-BFV is the coherent END STATE; the open question is whether that is a funded build or a named residual we
-simply refuse to ship on top of. **Named, not claimed.**
+**The honest framing now:** fhEgg has made a local architectural decision for its research path: keep fhe.rs
+as the BFV arithmetic substrate while refusing to inherit upstream mbfv as the security statement, and build
+the custody/opening protocol around repo-owned `t<n` VSS, authenticated transcripts, explicit smudging, and
+eventually verified parameter bounds. Do NOT ship a production privacy claim merely because this process
+shape exists. Lean-first BFV remains the coherent end state; until then the exact dependency, proof-system,
+MPC, and deployment assumptions stay named at every public boundary. **Named, not claimed.**
