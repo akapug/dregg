@@ -62,7 +62,12 @@ Fold the critical resolver invariants **in-circuit** via dregg's `circuit`/`circ
 so a *succinct* proof attests rule-correctness without full replay. Smallest first invariant:
 **inventory conservation** (no item created/destroyed except by an authorized transfer). This is the
 zk frontier — designed (`docs/DESIGN-verifiable-game.md`), not yet implemented. **Honest caveat:**
-the deployed prover's per-fold FRI soundness is a *discharged proof* at ~112.6 bits — the BCIKS20
+the deployed prover's per-fold FRI column reads 112 bits at the arity-2
+`ir2_leaf_wrap_config()` and **109** at the arity-8 `ir2_config` leaf mint, where ~112.6
+**provably fails** (`FriArityTransfer.arity8_error_not_lt_2e112`); the deployed **commit
+column binds below both, at 51** (`FriDeployedHeightPairing.deployed_wrap_commitBits`).
+⚑ None of these is a *discharged proof* of soundness — they are readings of a knob ledger
+transcribed from BCIKS20; `FriLdtExtractV3` is assumed. The chain is the BCIKS20
 correlated-agreement chain over the deployed rate-1/64 BabyBear code
 (`metatheory/Dregg2/Circuit/BabyBearFriDeployedInstance.lean`,
 `FriCorrelatedAgreementSharp.lean`) — resting on named hypotheses (Poseidon2

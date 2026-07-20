@@ -704,7 +704,16 @@ theorem ledger_commitBits_at_measured_heights :
   · refine commitBits_eq_of_bracket _ _ _ 61 ?_ ?_ <;>
       norm_num [friCommitLedger, ceilDiv, ledgerP, recursionConfig]
 
-/-- **⚑ THE DEPLOYED WORST CASE IS THE RECURSION WRAP, AND IT IS THE WEAKEST ON BOTH COLUMNS.**
+/-- ⚠ **CORRECTED 2026-07-20 — THE RECURSION WRAP IS NOT THE DEPLOYED PAIR.** See
+`Dregg2.Circuit.FriDeployedHeightPairing`. `Accumulator::accumulate` binds `ir2_leaf_wrap_config()`
+(`logBlowup = 6`) and `wrap_params()`'s `2^16` floor in ONE prove call, so the deployed domain is
+`2^22` at the arity-2 `logBlowup = 6` knob set — `create_recursion_config` (`lb = 3`) is not on that
+path. The statement below is TRUE (`recursionConfig` at `2^19` really does read `61`); what is wrong
+is calling that pair "the deployed worst case". The deployed reading is **51**
+(`FriDeployedHeightPairing.deployed_wrap_commitBits`), and `61` is refuted as the deployed number by
+`FriDeployedHeightPairing.deployed_wrap_is_not_61`.
+
+**⚑ THE RECURSION WRAP IS THE WEAKEST SHIPPED CONFIG ON BOTH COLUMNS AT ITS OWN HEIGHT.**
 `recursionConfig` is already the tree's named weakest link on the query ledger (`johnsonBits = 71`
 at `pow = 14`); at its MEASURED `|D⁽⁰⁾| = 2^19` it is also the weakest on the commit column (`61`).
 ⚑ And the two weakest-link facts are independent: on the FIXTURE height the commit column's weakest

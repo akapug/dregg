@@ -130,6 +130,17 @@ const LEAF_ENVELOPE_LOG_D0: usize = 14;
 ///
 /// `WRAP_LOG_CEIL` (2^16 rows, FORCED on every running fold) + `RECURSION_FRI_LOG_BLOWUP` (3).
 /// This is the number the proven posture is set by — not the leaf's, and not the fixture's.
+/// ⚠ **CORRECTED 2026-07-20 — THIS CONSTANT IS MIS-DERIVED, AND IT IS NOT A MEASUREMENT.**
+/// It is a sum of two compile-time constants (nothing here reads a proof), and the two constants
+/// come from DIFFERENT paths: `WRAP_LOG_CEIL` is the `min_trace_height` floor
+/// `Accumulator::accumulate` applies via `wrap_params()`, but that same call binds
+/// `config = ir2_leaf_wrap_config()`, whose blowup is `IR2_INNER_LOG_BLOWUP = 6` — not
+/// `RECURSION_FRI_LOG_BLOWUP = 3`. `create_recursion_config` is not constructed on the wrap path at
+/// all. The deployed domain is therefore `2^(16 + 6) = 2^22`, and the commit column there reads
+/// **51**, not the `61` this `19` produces
+/// (`Dregg2.Circuit.FriDeployedHeightPairing.deployed_wrap_commitBits`, `deployed_wrap_is_not_61`).
+/// Left in place because the assertions below pin it by name and moving it is a posture change to
+/// be argued, not a constant to edit quietly — but it must not be quoted as the deployed height.
 const DEPLOYED_WORST_LOG_D0: usize = WRAP_LOG_CEIL + RECURSION_FRI_LOG_BLOWUP;
 
 /// One measured workload: what ran, and the heights the proof it produced actually carries.

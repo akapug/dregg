@@ -451,7 +451,10 @@ Stated in advance so failure is cheap and early ([[feedback-prove-the-floor-fals
   to the adversary's acceptance event — e.g., if the qidx binding is too weak to force the
   adversary's opened positions to be the transcript's. (ii) If anyone attempts to read the
   ~112.6-bit number out of this pipeline at deployed configs, the pipeline is being misused; the
-  design mandates the proven-radius instantiation.
+  design mandates the proven-radius instantiation. ⚑ And ~112.6 is not a deployed number at all:
+  it is the arity-2 `ir2_leaf_wrap_config()` reading, refuted at the arity-8 `ir2_config` mint by
+  `FriArityTransfer.arity8_error_not_lt_2e112` (which reads 109). The binding deployed column is
+  the commit column at **51** (`FriDeployedHeightPairing.deployed_wrap_commitBits`).
 - **Stage 5:** the union bound requires per-node εs over a SHARED oracle; if node events are not
   monotone in the query log (they are — acceptance and extraction-failure are both events over
   the adversary's single run), independence-shaped errors would appear. Falsifier: a two-node

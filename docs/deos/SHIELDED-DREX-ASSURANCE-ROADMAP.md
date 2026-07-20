@@ -16,7 +16,10 @@ Grading legend:
 
 The whole tree's soundness floor is `HashCR` (Poseidon2 sponge collision-resistance) +
 `Poseidon2ChipArithSound`, with the BCIKS20 list-decoding core proved for the deployed code and the
-deployed FRI provably ~112.6-bit (memory `project-linking-tower-forgery-closure`). Everything below
+deployed FRI knob-ledger columns reading 112 (arity-2 wrap) / 109 (arity-8 leaf mint,
+where ~112.6 provably fails — `FriArityTransfer.arity8_error_not_lt_2e112`) / **51 at the
+deployed commit column** (`FriDeployedHeightPairing.deployed_wrap_commitBits`) — ⚑ ledger
+readings, NOT proven soundness against an adversary; `FriLdtExtractV3` is assumed. Everything below
 inherits that floor for its STARK soundness; component 6 states where the shielded objects sit on it.
 
 > **⚑ PQ posture correction (2026-07-14).** The shielded pool's value-commitment is today a Pedersen
@@ -277,8 +280,10 @@ meaningful) and 4 (allocations land as note-creates against the accumulator).
 ## 6. Composition + deployed-assurance
 
 **PROVEN.** The AIRs are STARK-sound on the real floors (`HashCR` + `Poseidon2ChipArithSound`,
-BCIKS20 proved for deployed code, FRI provably ~112.6-bit — memory
-`project-linking-tower-forgery-closure`). The fusion is spec-proven end-to-end
+BCIKS20 transcribed for deployed code; the FRI ledger's weakest deployed column is **51**
+(`FriDeployedHeightPairing.deployed_wrap_commitBits`) — ⚑ a ledger reading, not a proven
+bound against an adversary, and ~112.6 provably fails at the arity-8 mint
+(`FriArityTransfer.arity8_error_not_lt_2e112`)). The fusion is spec-proven end-to-end
 (`shielded_ring_fused_clears`), and the in-AIR conservation refines the Lean group-Pedersen
 conservation (`inAir_conservation_refines_pedersen`) — the deployed field gate forces what the Lean
 proves for the value-mint hazard (no toy stand-in: the `refVC` additive toy and `refTreeRoot` linear

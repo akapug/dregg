@@ -46,8 +46,13 @@ computed by an exact transcription of `metatheory/Dregg2/Circuit/FriLedger.lean`
    `2^16 · 2^6 = 2^22`. `create_recursion_config` (lb = 3) **is not called on that path at all**.
    ⚠ **So `FriLedgerSound.ledger_commitBits_at_measured_heights` row 4 is wrong**: it pairs
    `recursionConfig` (lb = 3) with a height sourced from a floor applied only to the lb = 6 path —
-   **precisely the error its own docstring says a parametric ledger exists to prevent.** **The deployed
-   posture is 57, not the 61 the tree currently believes.**
+   **precisely the error its own docstring says a parametric ledger exists to prevent.** ⚠ **AND THIS SECTION'S OWN REPLACEMENT FIGURE IS HALF-APPLIED (corrected 2026-07-20).** It derives
+   `2^22` in the sentence above and then reports **57**, which is the `lb = 6` engine's reading at
+   `2^19` — the very height it just refuted. At the `2^22` it derived, that engine reads **51**.
+   Mechanized: `Dregg2.Circuit.FriDeployedHeightPairing.the_proven120_correction_is_half_applied`
+   exhibits BOTH readings of the SAME config (so only `logD0` moves), and
+   `deployed_wrap_is_not_the_proven120_number` refutes the `57`.
+   **The deployed posture is 51 — not the 61 the tree believed, and not the 57 written here.**
 
 4. **⚑ ember's ceiling equation is CONFIRMED in shape and is 0.6–1.5 bits OPTIMISTIC.**
    `CEILING = 30.907·d − 12.65 − 2·log₂(T) − 3.5·lb` reproduces the mechanized ledger's every entry to

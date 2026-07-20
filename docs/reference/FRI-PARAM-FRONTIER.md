@@ -93,6 +93,39 @@ Reading the table honestly, three ways:
   The gate's Johnson floor is now `71`, pinned to that config by name
   (`recursion_config_is_the_weakest_link`), so it cannot be quietly lowered without naming who forced it.
 
+⚑ **CORRECTED (2026-07-20) — THE COMMIT COLUMN'S "DEPLOYED" PAIRING WAS THE WRONG CONFIG AT THE
+WRONG HEIGHT, AND THE TWO ERRORS AGREED.** The tree read the commit column at
+`(recursionConfig, |D⁽⁰⁾| = 2^19)` and called it the deployed worst case (`61`). Neither half is the
+deployed path. `Accumulator::accumulate` binds `config = ir2_leaf_wrap_config()` — whose
+`IR2_INNER_LOG_BLOWUP = 6` reaches `MyPcs::new`, the PCS that **mints** the proof — together with
+`wrap_params()`'s `min_trace_height = 2^WRAP_LOG_CEIL = 2^16`, in **one** prove call. So the deployed
+domain is `2^16 · 2^6 = 2^22` at the arity-2 `logBlowup = 6` knob set, and `create_recursion_config`
+(`lb = 3`) is never constructed there. `fri_trace_height_measure.rs`'s
+`DEPLOYED_WORST_LOG_D0 = WRAP_LOG_CEIL + RECURSION_FRI_LOG_BLOWUP = 19` adds one path's trace floor
+to the other path's blowup — and is a sum of two compile-time constants, not the measurement its
+prose calls it. Mechanized in `metatheory/Dregg2/Circuit/FriDeployedHeightPairing.lean` (Lake-green,
+`sorry`-free, mutation-canaried):
+
+| pairing | reading | status |
+|---|---|---|
+| `(recursionConfig, 2^19)` | `61` | TRUE of that config; **not deployed** (`deployed_wrap_is_not_61`) |
+| `(ir2LeafWrapRotatedConfig, 2^19)` | `57` | `PROVEN-120-CONFIG.md` §3's figure; right config, **wrong height** (`the_proven120_correction_is_half_applied`) |
+| `(ir2LeafWrapRotatedConfig, 2^22)` | **`51`** | **the deployed pairing** (`deployed_wrap_commitBits`) |
+
+`PROVEN-120-CONFIG.md` §3 derives `2^16 · 2^6 = 2^22` in its own sentence and then reports the `2^19`
+number; its correction is **half-applied**. The fixture's `71` therefore flatters by **20** bits, not
+the ~10 the gate's docstring claims (`the_fixture_gap_is_twenty_bits`). ⚑ The pending E2 arity flip
+(`INNER_FRI_MAX_LOG_ARITY` 1→3) does **not** move this column — arity enters `ε_C` only through
+`Σᵢ l⁽ⁱ⁾` in the dominated second term (`arity_flip_does_not_move_the_commit_column`) — while it
+moves `perFoldBits` `112 → 109`. Two columns, two dependencies, again.
+
+⚑ **AND NONE OF THESE NUMBERS IS ADVERSARY-QUANTIFIED.** `51`, `61`, `71`, `109`, `112.6`, `118`,
+`130` are all readings of a calculator. There is no prover-strategy type, no interaction, and no
+random-oracle query bound anywhere in the ledger; `verifyAlgo` is a `Bool` on a **supplied** proof,
+and `FriLdtExtractV3` — the extraction guarantee the apex actually consumes — is carried as an
+undischarged hypothesis. Quote these as knob-ledger readings at named parameters, never as "the
+system has N bits of soundness".
+
 ⚑ **The `M = 1` fiber bound is DISCHARGED at every shipped config** (2026-07-15,
 `Dregg2/Circuit/FriArityFiberDischarge.lean`). Every per-fold number rests on it, carried as the
 per-config hypothesis `hΦ` by the arity-generic count (correctly — that count mentions no setup).

@@ -275,8 +275,24 @@ const COMMIT_FLOOR_BITS: usize = 71;
 /// ```text
 ///   log_d0 = 12  (this fixture, a 1-effect turn) ... 71 bits  ← what COMMIT_FLOOR_BITS gates
 ///   log_d0 = 14  (MEASURED 64-effect leaf) ......... 67 bits
-///   log_d0 = 19  (MEASURED deployed WORST) ......... 61 bits  ← the real deployed posture
+///   log_d0 = 19  (recursionConfig's pairing) ....... 61 bits  ← ⚠ NOT the deployed pairing
+///   log_d0 = 22  (ir2_leaf_wrap_config @ 2^16·2^6) .. 51 bits  ← the real deployed posture
 /// ```
+///
+/// ⚠ **CORRECTED 2026-07-20 — `61` PAIRS THE WRONG CONFIG WITH THE WRONG HEIGHT, CONSISTENTLY.**
+/// `Accumulator::accumulate` binds `config = ir2_leaf_wrap_config()` (`log_blowup = 6`, via
+/// `IR2_INNER_LOG_BLOWUP`, and that blowup reaches `MyPcs::new` — the PCS that MINTS the proof) and
+/// `fold_params = wrap_params()` (`min_trace_height = 1 << WRAP_LOG_CEIL`) in the SAME prove call.
+/// So the deployed domain is `2^16 · 2^6 = 2^22`, and `create_recursion_config` (`lb = 3`) is never
+/// constructed on that path. `DEPLOYED_WORST_LOG_D0 = WRAP_LOG_CEIL + RECURSION_FRI_LOG_BLOWUP`
+/// adds one path's trace floor to the OTHER path's blowup. Lean:
+/// `FriDeployedHeightPairing.deployed_wrap_commitBits` = **51**;
+/// `deployed_wrap_is_not_61` refutes this line's old claim;
+/// `the_61_is_the_recursion_config_reading` shows `61` is a TRUE reading of `recursionConfig` at
+/// `2^19` — a mis-pairing, not bad arithmetic. `docs/reference/PROVEN-120-CONFIG.md` §3's
+/// replacement figure `57` is ALSO not the deployed reading: it corrects the config but keeps the
+/// `2^19` height it had just derived away from
+/// (`the_proven120_correction_is_half_applied`).
 ///
 /// This const is kept at `12` because it is the height the repo's cost grid actually measured and the
 /// height the `71` floor is honest about — **not** because `12` describes production. It does not.

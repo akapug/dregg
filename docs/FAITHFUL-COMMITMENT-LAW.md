@@ -9,9 +9,17 @@ never a lossy 1-felt projection.**
 The deployed state commitment once carried components folded **32 bytes → ONE
 BabyBear** (`fold_bytes32_to_bb`, a Horner fold). A single BabyBear is ~31 bits,
 so two distinct 32-byte values collide with probability ~`1/p ≈ 2^-31`. That is
-**far below** the system's own **~112.6-bit proven** FRI/STARK soundness floor
-(`wrap_perFold_soundness_capacity`, `FriCorrelatedAgreementSharp.lean` §8; the FRI
-capacity conjecture that once quoted ~130 is refuted — see `FRI-PARAM-FRONTIER.md`):
+**far below** every column of the FRI knob ledger (`FriLedger.friLedger` /
+`friCommitLedger`), whose weakest deployed reading is the **51-bit** commit column
+(`FriDeployedHeightPairing.deployed_wrap_commitBits`, at `ir2_leaf_wrap_config()` /
+`|D⁽⁰⁾| = 2^22`). ⚑ Those are LEDGER READINGS, not a proven soundness floor: there is no
+adversary object in the tree, and `FriLdtExtractV3` — the extraction guarantee the apex
+actually consumes — is assumed. The former **~112.6-bit proven floor** claim here was
+wrong twice: it quoted the arity-2 per-fold column
+(`wrap_perFold_soundness_capacity`, `FriCorrelatedAgreementSharp.lean` §8) as if it were
+the system's number, and the arity-8 leaf mint refutes it outright
+(`FriArityTransfer.arity8_error_not_lt_2e112`). The FRI capacity conjecture that once
+quoted ~130 is refuted — see `FRI-PARAM-FRONTIER.md`:
 an adversary who can grind a 31-bit collision can show a light client a forged
 committed state that the proof still accepts.
 

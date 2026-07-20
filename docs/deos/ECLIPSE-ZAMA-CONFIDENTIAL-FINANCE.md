@@ -163,8 +163,10 @@ lattice-based PQ ZK [litepaper]. So Zama's end-to-end PQ is aspirational.
 are audited, not just `#assert_axioms`-clean: `CertF.weak_duality` /
 `certifies_epsilon_optimal`, `FhEggClearing.clearedBatch_conserves` /
 `clearedBatch_optimal`, `RevealNothing.reveal_nothing`, all `#assert_all_clean`. The STARK
-soundness floor itself is proven (BCIKS20 list-decoding, deployed FRI ~112.6-bit; memory
-`project-linking-tower-forgery-closure`). (ii) **PQ by construction on the privacy + proof +
+soundness floor is a TRANSCRIBED ledger, not a proven adversary bound (BCIKS20 list-decoding;
+the deployed FRI columns read 112 arity-2 / 109 arity-8 — ~112.6 provably fails at the latter,
+`FriArityTransfer.arity8_error_not_lt_2e112` — and **51** at the binding commit column,
+`FriDeployedHeightPairing.deployed_wrap_commitBits`; `FriLdtExtractV3` is assumed). (ii) **PQ by construction on the privacy + proof +
 value-binding surface** — Poseidon2/FRI hashing, statistical-ZK PCS, Poseidon2
 hash-commitment value-binding, lattice FHE at Tier 0 — the things regulated institutions
 with a decade horizon should actually demand.
