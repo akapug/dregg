@@ -82,7 +82,7 @@ def accumInserts8 (S8 : Heap8Scheme) (beforeRoot : Digest8) (key value : ℤ) (a
 
 /-- **`accumInserts8_setGrows` — the faithful set-grow consequence.** The AFTER committed key set is
 EXACTLY the BEFORE set plus the fresh `key` (`update_sound8`): the insert adds precisely `key`, nothing
-else. The insert twin of `heapWritesTo8_forces_postleaf` at the set level. -/
+else. The insert twin of `heapWritesTo8_forces_postleaf_or_collides` at the set level. -/
 theorem accumInserts8_setGrows (S8 : Heap8Scheme) (beforeRoot : Digest8) (key value : ℤ)
     (afterRoot : Digest8) (h : accumInserts8 S8 beforeRoot key value afterRoot) :
     ∀ y, y ∈ keysOf8 S8 afterRoot ↔ (y = key ∨ y ∈ keysOf8 S8 beforeRoot) := by

@@ -643,9 +643,10 @@ witness satisfiable, real compressing Poseidon2 false.**
      genuinely proved was given up by the deletion; and
   2. the refutability canaries (`coll8_refutable_of_injective`), which show the collision disjunct is
      not a free pass.
-It is ALSO still a field of the sibling `DeployedHeapTree.Heap8Scheme` / `DeployedFieldsTree.Fields8Scheme`
-(co-tenant modules, out of scope for this repair) — those two structures carry the SAME defect and are
-the named remaining edge.
+⚑ **AND THE CLASS IS NOW CLOSED (2026-07-20).** The sibling `DeployedHeapTree.Heap8Scheme` and
+`DeployedFieldsTree.Fields8Scheme` carried the IDENTICAL field; both are deleted, both structures have
+constructed deployed inhabitants (`deployedHeap8Scheme` / `deployedFields8Scheme`), and
+`VacuitySweepTeeth` §1‴-HF fires the refutation tooth at each. `Compress8CR` is a field of NOTHING.
 
 **RE-GROUNDED (probabilistic residual):** `Circuit.InjectiveFloorRegrounded` §1 — `Chip8Keyed` is the
 deployed chip carrying no CR field, and `node8_injective_advantage_bound` /

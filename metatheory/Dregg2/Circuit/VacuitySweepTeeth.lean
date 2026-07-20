@@ -75,6 +75,8 @@ verdict PROVED.
 -/
 import Dregg2.Circuit.HashFloorHonesty
 import Dregg2.Circuit.DeployedCapTree
+import Dregg2.Circuit.DeployedHeapTree
+import Dregg2.Circuit.DeployedFieldsTree
 import Dregg2.Circuit.Emit.EffectVmEmitRotationR
 import Dregg2.Tactics
 
@@ -154,10 +156,14 @@ The tooth below is UNCHANGED and still fires. What changed is what it is now a t
 deleted, `Cap8Scheme` carries only the chip, and `DeployedCapTree.deployedCap8Scheme` is a REAL
 INHABITANT whose own chip this tooth refutes (`deployedCap8Scheme_chip_not_Compress8CR` below). The
 cap-tree binding it used to assume is now EXTRACTED AS DATA
-(`DeployedCapTree.Cap8Scheme.capOpen8_binds_leaf_or_collides` and friends). `Compress8CR` survives only
-as the injective special case in the strength-relation bridges, and as a field of the sibling
-`Heap8Scheme` / `Fields8Scheme` structures — which carry the IDENTICAL defect and are the named
-remaining edge. -/
+(`DeployedCapTree.Cap8Scheme.capOpen8_binds_leaf_or_collides` and friends).
+
+⚑ **AND AS OF 2026-07-20 THE CLASS IS CLOSED.** `Compress8CR` was ALSO a field of the sibling
+`DeployedHeapTree.Heap8Scheme` and `DeployedFieldsTree.Fields8Scheme` — the identical defect, and the
+one this file's previous revision named as "the remaining edge". Both fields are now deleted, both
+structures have constructed deployed inhabitants, and §1‴-HF below fires TOOTH 1″ at each of them.
+`Compress8CR` is now a field of NOTHING: it survives only as the injective special case in the three
+trees' strength-relation bridges, and as the refutability canaries' hypothesis. -/
 
 /-- The set of 8-felt digests with all lanes in `Set.Ico 0 q` is FINITE (a box in `Fin 8 → ℤ`). -/
 theorem finite_digest8_bounded (q : ℤ) :
@@ -229,6 +235,59 @@ theorem membersAt8_not_vacuous_deployed (root : Digest8) (leaf : CapLeaf)
   rintro ⟨path, hpath⟩
   exact hno path hpath
 
+/-! ### ⚑ §1‴-HF — THE SAME TOOTH AT THE LAST TWO STRUCTURE-FIELD SITES (heap + fields).
+
+`Heap8Scheme` and `Fields8Scheme` carried the IDENTICAL `chip8CR : Compress8CR chipAbsorb8` FIELD, and
+therefore the identical vacuity: no deployed value could be constructed, so every
+`∀ S8 : Heap8Scheme, …` / `∀ S8 : Fields8Scheme, …` theorem — including the sorted-tree heap forcing the
+perimeter leans on and the fields-map write gate — was vacuously true. Both fields are DELETED
+(2026-07-20) and both structures now have constructed inhabitants.
+
+The pair below is the same sharp statement made for cap: each inhabitant EXISTS, and each inhabitant's
+OWN chip is refuted by TOOTH 1″. The structures became inhabitable by dropping a claim the deployment
+never satisfied — NOT by weakening to something the deployment misses. All three ride the SAME
+`deployedShapedChip8`, which is the faithful modelling of the deployment's ONE arity-16 `node8` chip. -/
+
+/-- ⚑ **THE HEAP INHABITANT'S OWN CHIP REFUTES THE DELETED FIELD.** `deployedHeap8Scheme` is a real
+`Heap8Scheme` value, and TOOTH 1″ applies to its chip: had `chip8CR : Compress8CR chipAbsorb8` still
+been a field, THIS value would have been unconstructible. -/
+theorem deployedHeap8Scheme_chip_not_Compress8CR :
+    ¬ Compress8CR DeployedHeapTree.deployedHeap8Scheme.chipAbsorb8 :=
+  compress8CR_false_babyBear _ (fun xs i => deployedShapedChip8_babyBear_bounded xs i)
+
+/-- ⚑ **THE FIELDS INHABITANT'S OWN CHIP REFUTES THE DELETED FIELD.** The third and last site of this
+defect class. -/
+theorem deployedFields8Scheme_chip_not_Compress8CR :
+    ¬ Compress8CR DeployedFieldsTree.deployedFields8Scheme.chipAbsorb8 :=
+  compress8CR_false_babyBear _ (fun xs i => deployedShapedChip8_babyBear_bounded xs i)
+
+/-- **AND THE HEAP GENTIAN TOOTH FIRES AT IT.** The heap-open anti-ghost, instantiated at the real
+value — the application the `∀ S8 : Heap8Scheme` form could never actually be performed for. -/
+theorem deployed_heapOpen_tooth_fires
+    (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8)) {e₁ e₂ : ℤ × ℤ × ℤ}
+    (h : DeployedHeapTree.Heap8Scheme.recomposeUp8 DeployedHeapTree.deployedHeap8Scheme
+           (DeployedHeapTree.Heap8Scheme.heapLeafDigest8
+             DeployedHeapTree.deployedHeap8Scheme e₁) path
+       = DeployedHeapTree.Heap8Scheme.recomposeUp8 DeployedHeapTree.deployedHeap8Scheme
+           (DeployedHeapTree.Heap8Scheme.heapLeafDigest8
+             DeployedHeapTree.deployedHeap8Scheme e₂) path) :
+    e₁ = e₂ ∨ DeployedHeapTree.Heap8Scheme.HeapOpenColl
+                DeployedHeapTree.deployedHeap8Scheme e₁ e₂ path :=
+  DeployedHeapTree.deployed_heapOpen8_binds_leaf_or_collides path h
+
+/-- **AND THE FIELDS GENTIAN TOOTH FIRES AT IT.** -/
+theorem deployed_fieldsOpen_tooth_fires
+    (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8)) {e₁ e₂ : ℤ × ℤ × ℤ}
+    (h : DeployedFieldsTree.Fields8Scheme.recomposeUp8 DeployedFieldsTree.deployedFields8Scheme
+           (DeployedFieldsTree.Fields8Scheme.fieldsLeafDigest8
+             DeployedFieldsTree.deployedFields8Scheme e₁) path
+       = DeployedFieldsTree.Fields8Scheme.recomposeUp8 DeployedFieldsTree.deployedFields8Scheme
+           (DeployedFieldsTree.Fields8Scheme.fieldsLeafDigest8
+             DeployedFieldsTree.deployedFields8Scheme e₂) path) :
+    e₁ = e₂ ∨ DeployedFieldsTree.Fields8Scheme.FieldsOpenColl
+                DeployedFieldsTree.deployedFields8Scheme e₁ e₂ path :=
+  DeployedFieldsTree.deployed_fieldsOpen8_binds_leaf_or_collides path h
+
 /-! ## §2 — `MembersAt8`: the depth-16 claim is not carried; a depth-0 opening is a "membership". -/
 
 /-- **TOOTH 2 — a DEPTH-0 opening satisfies `MembersAt8`.** The empty path recomposes to the held
@@ -273,6 +332,10 @@ theorem membersAt8_not_vacuous_general (S8 : Cap8Scheme) (root : Digest8) (leaf 
 #assert_axioms deployedShapedChip8_babyBear_bounded
 #assert_axioms deployedCap8Scheme_chip_not_Compress8CR
 #assert_axioms deployed_capOpen_tooth_fires
+#assert_axioms deployedHeap8Scheme_chip_not_Compress8CR
+#assert_axioms deployedFields8Scheme_chip_not_Compress8CR
+#assert_axioms deployed_heapOpen_tooth_fires
+#assert_axioms deployed_fieldsOpen_tooth_fires
 #assert_axioms membersAt8_not_vacuous_deployed
 #assert_axioms membersAt8_at_own_digest
 #assert_axioms membersAt_at_own_digest

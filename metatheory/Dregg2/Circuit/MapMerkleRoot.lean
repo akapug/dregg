@@ -244,13 +244,25 @@ theorem writesToMerkle_functional (hash : List ℤ → ℤ) (hCR : Poseidon2Spon
 `node8` (`Digest8`), the exact twin of §2–§5 but at the deployed ~124-bit width. The historical §2–§5
 folded a SINGLE felt per node (`mapNode hash : ℤ → ℤ → ℤ`, ~2^31, below the FRI/STARK ~124-bit floor); the
 GENTIAN tooth exhibits a colliding-lane-0 heap pair. This section commits the FULL 8-felt root: nodes ride
-`Heap8Scheme.heapNodeOf8` (arity-16 `node8` chip), leaves `heapLeafDigest8`, and the anti-ghost re-proves
-against `heapNodeOf8_injective` / `heapLeafDigest8_injective` (`DeployedHeapTree`), NOT the 1-felt sponge.
-`MapOp.holdsAt`'s deployed denotation moves onto `opensToMerkle8` / `writesToMerkle8`. -/
+`Heap8Scheme.heapNodeOf8` (arity-16 `node8` chip) and leaves `heapLeafDigest8` (`DeployedHeapTree`), NOT
+the 1-felt sponge. `MapOp.holdsAt`'s deployed denotation moves onto `opensToMerkle8` / `writesToMerkle8`.
+
+⚑ **BINDING IS EXTRACTED AS DATA, NOT ASSUMED (2026-07-20).** This cascade used to be discharged from
+`heapNodeOf8_injective` / `heapLeafDigest8_injective`, which rode the `Heap8Scheme.chip8CR` FIELD —
+`Compress8CR chipAbsorb8`, which the deployed chip REFUTES (`VacuitySweepTeeth.compress8CR_false_babyBear`)
+and which therefore made `Heap8Scheme` uninhabitable and this whole section VACUOUS. The field is deleted;
+every equality below is now a DISJUNCTION `binding ∨ Coll8 chipAbsorb8 (the pair a TOTAL extractor
+returned)`. The extractors mirror the proofs exactly: `foldLevel8Find` scans one Merkle level pairwise,
+`perfectRoot8Find` descends the levels, `mapLeaf8Find` scans the leaf vector, and `mapRoot8Find` resolves
+the two possible collision sites (node vs leaf) into ONE named pair. §5b.S recovers every deleted
+statement as the injective special case, so no strength was lost. -/
 
 section Faithful8
-open Dregg2.Circuit.DeployedHeapTree.Heap8Scheme (heapLeafDigest8 heapNodeOf8 heapLeafDigest8_injective
-  heapNodeOf8_injective)
+open Dregg2.Circuit.DeployedHeapTree.Heap8Scheme (heapLeafDigest8 heapNodeOf8
+  heapLeafColl8Find heapNodeColl8Find
+  heapLeafDigest8_binds_or_collides heapNodeOf8_binds_or_collides)
+open Dregg2.Circuit.DeployedCapTree (Coll8 Compress8CR)
+open Dregg2.Circuit.DeployedCapTree.Cap8Scheme (coll8_refutable_of_injective)
 
 variable (S8 : Heap8Scheme)
 
@@ -288,37 +300,75 @@ theorem foldLevel8_length_half :
       have hrest : rest.length = 2 * m := by omega
       simp only [foldLevel8, List.length_cons, ih rest hrest]
 
-/-- `foldLevel8` is injective on lists of equal length `2*n` under the `node8` injectivity (the `node8`
-twin of `foldLevel_injective`; peels each pair by `heapNodeOf8_injective`). -/
-theorem foldLevel8_injective :
+/-- **The one-level EXTRACTOR** — scan two Merkle levels pairwise and return the first pair of arity-16
+`node8` input blocks that is a GENUINE chip collision; if the scan runs out, return the trivially
+non-colliding `([], [])` (the spec's terminal cases deliver equality outright and never read it). A
+TOTAL function — no `Classical.choice` in the walk. -/
+def foldLevel8Find : List Digest8 → List Digest8 → List ℤ × List ℤ
+  | l :: r :: rest, l' :: r' :: rest' =>
+      if Coll8 S8.chipAbsorb8 (heapNodeColl8Find l r l' r')
+      then heapNodeColl8Find l r l' r'
+      else foldLevel8Find rest rest'
+  | _, _ => ([], [])
+
+/-- **One 8-felt fold level BINDS its input, UNCONDITIONAL** (replaces `foldLevel8_injective`). Equal
+folds of equal-length levels EITHER force the levels equal, OR the scan lands on a pair of arity-16
+`node8` blocks that genuinely collide, handed back by name. Peels each pair by
+`heapNodeOf8_binds_or_collides` — the same peel as before, with the failure branch producing a WITNESS
+instead of consuming an injectivity hypothesis the deployed chip refutes. -/
+theorem foldLevel8_binds_or_collides :
     ∀ (n : Nat) {xs ys : List Digest8}, xs.length = 2 * n → ys.length = 2 * n →
-      foldLevel8 S8 xs = foldLevel8 S8 ys → xs = ys := by
+      foldLevel8 S8 xs = foldLevel8 S8 ys →
+      xs = ys ∨ Coll8 S8.chipAbsorb8 (foldLevel8Find S8 xs ys) := by
   intro n
   induction n with
   | zero =>
     intro xs ys hx hy _
     have hxe : xs = [] := List.length_eq_zero_iff.mp (by omega)
     have hye : ys = [] := List.length_eq_zero_iff.mp (by omega)
-    rw [hxe, hye]
+    exact Or.inl (by rw [hxe, hye])
   | succ m ih =>
     intro xs ys hx hy hfold
     match xs, hx, ys, hy with
     | l :: r :: rest, hx, l' :: r' :: rest', hy =>
       simp only [foldLevel8, List.cons.injEq] at hfold
       obtain ⟨hnode, hrest⟩ := hfold
-      obtain ⟨hl, hr⟩ := heapNodeOf8_injective S8 hnode
-      simp only [List.length_cons] at hx hy
-      have hxlen : rest.length = 2 * m := by omega
-      have hylen : rest'.length = 2 * m := by omega
-      have := ih hxlen hylen hrest
-      rw [hl, hr, this]
+      by_cases hif : Coll8 S8.chipAbsorb8 (heapNodeColl8Find l r l' r')
+      · refine Or.inr ?_
+        show Coll8 S8.chipAbsorb8 (foldLevel8Find S8 (l :: r :: rest) (l' :: r' :: rest'))
+        rw [foldLevel8Find, if_pos hif]
+        exact hif
+      · rcases heapNodeOf8_binds_or_collides S8 hnode with ⟨hl, hr⟩ | hc
+        · simp only [List.length_cons] at hx hy
+          have hxlen : rest.length = 2 * m := by omega
+          have hylen : rest'.length = 2 * m := by omega
+          rcases ih hxlen hylen hrest with htail | hct
+          · exact Or.inl (by rw [hl, hr, htail])
+          · refine Or.inr ?_
+            show Coll8 S8.chipAbsorb8 (foldLevel8Find S8 (l :: r :: rest) (l' :: r' :: rest'))
+            rw [foldLevel8Find, if_neg hif]
+            exact hct
+        · exact absurd hc hif
 
-/-- **`perfectRoot8_injective` — the 8-felt binary-Merkle root BINDS the whole leaf-digest vector.**
-Two length-`2^d` `Digest8` lists with EQUAL `node8` roots are EQUAL, under `heapNodeOf8_injective` — the
-`node8` twin of `perfectRoot_injective`, at ~124-bit width. -/
-theorem perfectRoot8_injective :
+/-- **The perfect-tree EXTRACTOR** — descend the `d` fold levels; if the deeper walk found a genuine
+collision that is the answer, otherwise the deeper levels have already been forced equal and the
+collision (if any) is at THIS level, so hand back what the one-level scan returns. TOTAL. -/
+def perfectRoot8Find : Nat → List Digest8 → List Digest8 → List ℤ × List ℤ
+  | 0,     _,  _  => ([], [])
+  | d + 1, xs, ys =>
+      if Coll8 S8.chipAbsorb8 (perfectRoot8Find d (foldLevel8 S8 xs) (foldLevel8 S8 ys))
+      then perfectRoot8Find d (foldLevel8 S8 xs) (foldLevel8 S8 ys)
+      else foldLevel8Find S8 xs ys
+
+/-- **The 8-felt binary-Merkle root BINDS the whole leaf-digest vector, UNCONDITIONAL** (replaces
+`perfectRoot8_injective`). Two length-`2^d` `Digest8` lists with EQUAL `node8` roots are EITHER EQUAL,
+OR the descent lands on a level whose two arity-16 `node8` blocks genuinely collide. The ~124-bit
+statement: a prover cannot republish the same 8-felt root over a different leaf vector without
+exhibiting a real collision at the NAMED pair this extractor returns. -/
+theorem perfectRoot8_binds_or_collides :
     ∀ (d : Nat) {xs ys : List Digest8}, xs.length = 2 ^ d → ys.length = 2 ^ d →
-      perfectRoot8 S8 d xs = perfectRoot8 S8 d ys → xs = ys := by
+      perfectRoot8 S8 d xs = perfectRoot8 S8 d ys →
+      xs = ys ∨ Coll8 S8.chipAbsorb8 (perfectRoot8Find S8 d xs ys) := by
   intro d
   induction d with
   | zero =>
@@ -327,25 +377,49 @@ theorem perfectRoot8_injective :
     match xs, ys, hx, hy with
     | [x], [y], _, _ =>
       simp only [perfectRoot8, List.headD_cons] at hroot
-      rw [hroot]
+      exact Or.inl (by rw [hroot])
   | succ d ih =>
     intro xs ys hx hy hroot
     simp only [perfectRoot8] at hroot
     have hfl_x : (foldLevel8 S8 xs).length = 2 ^ d := foldLevel8_length_half S8 (2 ^ d) xs (by omega)
     have hfl_y : (foldLevel8 S8 ys).length = 2 ^ d := foldLevel8_length_half S8 (2 ^ d) ys (by omega)
-    have hfold := ih hfl_x hfl_y hroot
-    exact foldLevel8_injective S8 (2 ^ d) (by omega) (by omega) hfold
+    by_cases hif : Coll8 S8.chipAbsorb8
+        (perfectRoot8Find S8 d (foldLevel8 S8 xs) (foldLevel8 S8 ys))
+    · refine Or.inr ?_
+      show Coll8 S8.chipAbsorb8 (perfectRoot8Find S8 (d + 1) xs ys)
+      rw [perfectRoot8Find, if_pos hif]
+      exact hif
+    · rcases ih hfl_x hfl_y hroot with hfold | hc
+      · rcases foldLevel8_binds_or_collides S8 (2 ^ d) (by omega) (by omega) hfold with hxy | hcl
+        · exact Or.inl hxy
+        · refine Or.inr ?_
+          show Coll8 S8.chipAbsorb8 (perfectRoot8Find S8 (d + 1) xs ys)
+          rw [perfectRoot8Find, if_neg hif]
+          exact hcl
+      · exact absurd hc hif
 
-/-- The `heapLeafDigest8` map is INJECTIVE on LINKED leaf lists (the `node8` twin of
-`Heap.map_leaf_injective`): distinct linked entry lists yield distinct 8-felt leaf-digest lists, by
-`heapLeafDigest8_injective` (the arity-3 IMT digest binds addr, value, AND pointer). -/
-theorem map_leaf8_injective :
+/-- **The leaf-vector EXTRACTOR** — scan two LINKED leaf lists in step and return the first pair of
+arity-3 IMT blocks that is a GENUINE chip collision; `([], [])` (never a collision) if the scan runs
+out. TOTAL. -/
+def mapLeaf8Find : List (ℤ × ℤ × ℤ) → List (ℤ × ℤ × ℤ) → List ℤ × List ℤ
+  | e₁ :: t₁, e₂ :: t₂ =>
+      if Coll8 S8.chipAbsorb8 (heapLeafColl8Find e₁ e₂)
+      then heapLeafColl8Find e₁ e₂
+      else mapLeaf8Find t₁ t₂
+  | _, _ => ([], [])
+
+/-- **The `heapLeafDigest8` map BINDS the LINKED leaf list, UNCONDITIONAL** (replaces
+`map_leaf8_injective`). Equal 8-felt leaf-digest lists EITHER force the linked entry lists equal — addr,
+value, AND the sorted-chain pointer, so the chain cannot be relinked under a fixed digest vector — OR
+the scan returns a genuinely colliding pair of arity-3 IMT blocks. -/
+theorem map_leaf8_binds_or_collides :
     ∀ (l₁ l₂ : List (ℤ × ℤ × ℤ)),
-      l₁.map (heapLeafDigest8 S8) = l₂.map (heapLeafDigest8 S8) → l₁ = l₂ := by
+      l₁.map (heapLeafDigest8 S8) = l₂.map (heapLeafDigest8 S8) →
+      l₁ = l₂ ∨ Coll8 S8.chipAbsorb8 (mapLeaf8Find S8 l₁ l₂) := by
   intro l₁
   induction l₁ with
   | nil => intro l₂ h; cases l₂ with
-    | nil => rfl
+    | nil => exact Or.inl rfl
     | cons hd t => simp at h
   | cons hd₁ t₁ ih =>
     intro l₂ h
@@ -354,7 +428,19 @@ theorem map_leaf8_injective :
     | cons hd₂ t₂ =>
       simp only [List.map_cons, List.cons.injEq] at h
       obtain ⟨hleaf, htail⟩ := h
-      rw [heapLeafDigest8_injective S8 hleaf, ih t₂ htail]
+      by_cases hif : Coll8 S8.chipAbsorb8 (heapLeafColl8Find hd₁ hd₂)
+      · refine Or.inr ?_
+        show Coll8 S8.chipAbsorb8 (mapLeaf8Find S8 (hd₁ :: t₁) (hd₂ :: t₂))
+        rw [mapLeaf8Find, if_pos hif]
+        exact hif
+      · rcases heapLeafDigest8_binds_or_collides S8 hleaf with hhd | hc
+        · rcases ih t₂ htail with htl | hct
+          · exact Or.inl (by rw [hhd, htl])
+          · refine Or.inr ?_
+            show Coll8 S8.chipAbsorb8 (mapLeaf8Find S8 (hd₁ :: t₁) (hd₂ :: t₂))
+            rw [mapLeaf8Find, if_neg hif]
+            exact hct
+        · exact absurd hc hif
 
 /-- The deployed TERMINAL pointer (`circuit/src/dsl/revocation.rs::SENTINEL_MAX = p − 1 =
 2013265920`): the largest linked leaf points at it (the sorted chain's end). -/
@@ -398,16 +484,57 @@ pointers (`linkHeap` — `relink_next_addrs`), digest each linked leaf (arity-3 
 def mapRoot8 (d : Nat) (h : Heap.FeltHeap) : Digest8 :=
   perfectRoot8 S8 d ((linkHeap h).map (heapLeafDigest8 S8))
 
-/-- **`mapRoot8_injective` — the 8-felt root BINDS the whole heap.** Two depth-`d` `2^d`-leaf heaps
-publishing the same 8-felt root are EQUAL, re-proved against `perfectRoot8_injective` / `heapNodeOf8`,
-NOT the 1-felt sponge. -/
-theorem mapRoot8_injective (d : Nat) {h₁ h₂ : Heap.FeltHeap}
+/-- **THE HEAP-ROOT EXTRACTOR** — the SINGLE named pair the whole 8-felt heap-root peel hands back. Run
+the perfect-tree descent over the two leaf-digest vectors; if it found a genuine collision that is the
+answer, otherwise the descent has already forced the two DIGEST VECTORS equal, so the collision (if any)
+is at the leaf absorb and the leaf-vector scan supplies the pair. -/
+def mapRoot8Find (d : Nat) (h₁ h₂ : Heap.FeltHeap) : List ℤ × List ℤ :=
+  if Coll8 S8.chipAbsorb8
+      (perfectRoot8Find S8 d ((linkHeap h₁).map (heapLeafDigest8 S8))
+                             ((linkHeap h₂).map (heapLeafDigest8 S8)))
+  then perfectRoot8Find S8 d ((linkHeap h₁).map (heapLeafDigest8 S8))
+                             ((linkHeap h₂).map (heapLeafDigest8 S8))
+  else mapLeaf8Find S8 (linkHeap h₁) (linkHeap h₂)
+
+/-- **`MapRootColl S8 d h₁ h₂`** — the pair `mapRoot8Find` RETURNS on this heap equivocation is a genuine
+collision of the deployed arity-16 chip. The ONE named disjunct every 8-felt heap-root consumer carries
+in place of the deleted `chip8CR` floor.
+
+Deliberately NOT `∃ a b, chip collides`: at deployed BabyBear parameters that existence claim is
+UNCONDITIONALLY TRUE by pigeonhole (`VacuitySweepTeeth.compress8CR_false_babyBear` proves precisely it),
+so a disjunct of that shape would carry no more content than `True`. This one is about the SPECIFIC pair
+a total extractor hands back, and it is REFUTABLE (`mapRootColl_refutable_of_injective`). -/
+def MapRootColl (d : Nat) (h₁ h₂ : Heap.FeltHeap) : Prop :=
+  Coll8 S8.chipAbsorb8 (mapRoot8Find S8 d h₁ h₂)
+
+/-- **⚑ THE 8-FELT ROOT BINDS THE WHOLE HEAP, UNCONDITIONAL** (replaces `mapRoot8_injective`). Two
+depth-`d` `2^d`-leaf heaps publishing the SAME 8-felt root are EITHER the same heap, OR the deployed chip
+genuinely collides at the two blocks `mapRoot8Find` hands back.
+
+This is what the 8-felt migration actually buys, stated honestly: the colliding-lane-0 heap pair the
+GENTIAN tooth exhibits (`circuit/tests/heap_root_gentian_weld.rs`) is excluded UNLESS the adversary
+produces a full ~124-bit collision at a NAMED pair of chip input blocks. The old form asserted the
+exclusion outright while resting on a premise the deployed chip refutes. -/
+theorem mapRoot8_binds_or_collides (d : Nat) {h₁ h₂ : Heap.FeltHeap}
     (hlen₁ : h₁.length = 2 ^ d) (hlen₂ : h₂.length = 2 ^ d)
-    (h : mapRoot8 S8 d h₁ = mapRoot8 S8 d h₂) : h₁ = h₂ := by
-  have hmap : ((linkHeap h₁).map (heapLeafDigest8 S8)) = ((linkHeap h₂).map (heapLeafDigest8 S8)) :=
-    perfectRoot8_injective S8 d (by rw [List.length_map, linkHeap_length, hlen₁])
-      (by rw [List.length_map, linkHeap_length, hlen₂]) h
-  exact linkHeap_injective (map_leaf8_injective S8 _ _ hmap)
+    (h : mapRoot8 S8 d h₁ = mapRoot8 S8 d h₂) : h₁ = h₂ ∨ MapRootColl S8 d h₁ h₂ := by
+  by_cases hif : Coll8 S8.chipAbsorb8
+      (perfectRoot8Find S8 d ((linkHeap h₁).map (heapLeafDigest8 S8))
+                             ((linkHeap h₂).map (heapLeafDigest8 S8)))
+  · refine Or.inr ?_
+    show Coll8 S8.chipAbsorb8 (mapRoot8Find S8 d h₁ h₂)
+    rw [mapRoot8Find, if_pos hif]
+    exact hif
+  · rcases perfectRoot8_binds_or_collides S8 d
+        (by rw [List.length_map, linkHeap_length, hlen₁])
+        (by rw [List.length_map, linkHeap_length, hlen₂]) h with hmap | hc
+    · rcases map_leaf8_binds_or_collides S8 _ _ hmap with hlink | hcl
+      · exact Or.inl (linkHeap_injective hlink)
+      · refine Or.inr ?_
+        show Coll8 S8.chipAbsorb8 (mapRoot8Find S8 d h₁ h₂)
+        rw [mapRoot8Find, if_neg hif]
+        exact hcl
+    · exact absurd hc hif
 
 /-- **`opensToMerkle8 S8 d r k o`** — some depth-`d` `2^d`-leaf sorted heap behind the 8-felt binary root
 `r` reads `o` at `k`. The faithful `node8` replacement of `opensToMerkle`. -/
@@ -421,30 +548,105 @@ def writesToMerkle8 (d : Nat) (r : Digest8) (k v : ℤ) (r' : Digest8) : Prop :=
     ∧ (Heap.set h k v).length = 2 ^ d
     ∧ mapRoot8 S8 d h = r ∧ r' = mapRoot8 S8 d (Heap.set h k v)
 
-/-- **8-felt openings are FUNCTIONAL (the anti-ghost over the `node8` tree).** Under the arity-16 chip
-CR, the 8-felt root + key determine the read. Re-proved against `mapRoot8_injective`. -/
-theorem opensToMerkle8_functional (d : Nat) {r : Digest8} {k : ℤ} {o₁ o₂ : Option ℤ}
+/-! ### §5b.E — the OPENING-LEVEL consumers, over EXPLICIT witness heaps.
+
+`opensToMerkle8` / `writesToMerkle8` hide their heap behind an existential, so the pair a collision
+extractor returns is a function of the WITNESSES, not of the statement's visible parameters. Restating
+the conclusion as `… ∨ ∃ collision` would be exactly the free pass this repair exists to avoid
+(pigeonhole makes it unconditionally true). So the honest form takes the two witness heaps EXPLICITLY
+and names `MapRootColl S8 d m₁ m₂` — the specific pair, extracted from the specific witnesses. The
+existential-level statements survive as the injective special cases in §5b.S. -/
+
+/-- **8-felt openings are FUNCTIONAL, UNCONDITIONAL** (replaces `opensToMerkle8_functional`; the
+anti-ghost over the `node8` tree). Two witness heaps behind the SAME 8-felt root read the SAME value at
+a key — OR the deployed chip genuinely collides at the named pair. -/
+theorem opensToMerkle8_functional_or_collides (d : Nat) {r : Digest8} {k : ℤ} {o₁ o₂ : Option ℤ}
+    {m₁ m₂ : Heap.FeltHeap}
+    (hl₁ : m₁.length = 2 ^ d) (hr₁ : mapRoot8 S8 d m₁ = r) (hg₁ : Heap.get m₁ k = o₁)
+    (hl₂ : m₂.length = 2 ^ d) (hr₂ : mapRoot8 S8 d m₂ = r) (hg₂ : Heap.get m₂ k = o₂) :
+    o₁ = o₂ ∨ MapRootColl S8 d m₁ m₂ := by
+  rcases mapRoot8_binds_or_collides S8 d hl₁ hl₂ (hr₁.trans hr₂.symm) with hm | hc
+  · exact Or.inl (by rw [← hg₁, ← hg₂, hm])
+  · exact Or.inr hc
+
+/-- **Membership and non-membership at the same 8-felt root/key EXCLUDE each other, UNCONDITIONAL** (the
+`node8` nullifier / non-membership tooth; replaces `opensToMerkle8_some_excludes_none`). A prover
+showing both must exhibit the named chip collision. -/
+theorem opensToMerkle8_some_excludes_none_or_collides (d : Nat) {r : Digest8} {k v : ℤ}
+    {m₁ m₂ : Heap.FeltHeap}
+    (hl₁ : m₁.length = 2 ^ d) (hr₁ : mapRoot8 S8 d m₁ = r) (hg₁ : Heap.get m₁ k = some v)
+    (hl₂ : m₂.length = 2 ^ d) (hr₂ : mapRoot8 S8 d m₂ = r) (hg₂ : Heap.get m₂ k = none) :
+    MapRootColl S8 d m₁ m₂ := by
+  rcases opensToMerkle8_functional_or_collides S8 d hl₁ hr₁ hg₁ hl₂ hr₂ hg₂ with heq | hc
+  · simp at heq
+  · exact hc
+
+/-- **8-felt writes are FUNCTIONAL, UNCONDITIONAL** (replaces `writesToMerkle8_functional`). The 8-felt
+root + key + value determine the new root — the map-op row's `new_root` GROUP cannot be forged — unless
+the deployed chip genuinely collides at the named pair. -/
+theorem writesToMerkle8_functional_or_collides (d : Nat) {r : Digest8} {k v : ℤ} {r₁ r₂ : Digest8}
+    {m₁ m₂ : Heap.FeltHeap}
+    (hl₁ : m₁.length = 2 ^ d) (hr₁ : mapRoot8 S8 d m₁ = r) (he₁ : r₁ = mapRoot8 S8 d (Heap.set m₁ k v))
+    (hl₂ : m₂.length = 2 ^ d) (hr₂ : mapRoot8 S8 d m₂ = r) (he₂ : r₂ = mapRoot8 S8 d (Heap.set m₂ k v)) :
+    r₁ = r₂ ∨ MapRootColl S8 d m₁ m₂ := by
+  rcases mapRoot8_binds_or_collides S8 d hl₁ hl₂ (hr₁.trans hr₂.symm) with hm | hc
+  · exact Or.inl (by rw [he₁, he₂, hm])
+  · exact Or.inr hc
+
+/-! ### §5b.S — THE STRENGTH RELATION, both directions (no strength lost; no free pass gained).
+
+The `…_of_injective` bridges assume exactly the injectivity the deleted `Heap8Scheme.chip8CR` field
+asserted, and EVERY deleted statement — including the existential-level `opensToMerkle8_functional`,
+`opensToMerkle8_some_excludes_none` and `writesToMerkle8_functional` — falls straight out. They are
+precisely the injective special case of the new disjunctions. And `mapRootColl_refutable_of_injective`
+shows the collision disjunct is REFUTABLE, so it is not a free pass: at an injective chip the binding
+half has to do the work.
+
+These are STANDALONE bridges, deliberately NOT hypotheses on any deployed keystone: `Compress8CR` is
+FALSE at deployed BabyBear parameters, so a keystone carrying it would be right back where this repair
+started. -/
+
+/-- **(CANARY — the collision disjunct is REFUTABLE.)** At an injective chip `MapRootColl` is empty. -/
+theorem mapRootColl_refutable_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    (d : Nat) (h₁ h₂ : Heap.FeltHeap) : ¬ MapRootColl S8 d h₁ h₂ :=
+  coll8_refutable_of_injective hCR _
+
+/-- **NO STRENGTH LOST — the deleted `mapRoot8_injective` is the injective special case.** -/
+theorem mapRoot8_injective_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    (d : Nat) {h₁ h₂ : Heap.FeltHeap}
+    (hlen₁ : h₁.length = 2 ^ d) (hlen₂ : h₂.length = 2 ^ d)
+    (h : mapRoot8 S8 d h₁ = mapRoot8 S8 d h₂) : h₁ = h₂ := by
+  rcases mapRoot8_binds_or_collides S8 d hlen₁ hlen₂ h with hm | hc
+  · exact hm
+  · exact absurd hc (mapRootColl_refutable_of_injective S8 hCR _ _ _)
+
+/-- **NO STRENGTH LOST — the deleted existential-level `opensToMerkle8_functional`, recovered verbatim
+at an injective chip.** -/
+theorem opensToMerkle8_functional_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    (d : Nat) {r : Digest8} {k : ℤ} {o₁ o₂ : Option ℤ}
     (h₁ : opensToMerkle8 S8 d r k o₁) (h₂ : opensToMerkle8 S8 d r k o₂) : o₁ = o₂ := by
   obtain ⟨m₁, _, hl₁, hr₁, hg₁⟩ := h₁
   obtain ⟨m₂, _, hl₂, hr₂, hg₂⟩ := h₂
-  have hm : m₁ = m₂ := mapRoot8_injective S8 d hl₁ hl₂ (hr₁.trans hr₂.symm)
-  rw [← hg₁, ← hg₂, hm]
+  rcases opensToMerkle8_functional_or_collides S8 d hl₁ hr₁ hg₁ hl₂ hr₂ hg₂ with ho | hc
+  · exact ho
+  · exact absurd hc (mapRootColl_refutable_of_injective S8 hCR _ _ _)
 
-/-- Membership and non-membership at the same 8-felt root/key EXCLUDE each other (the `node8` nullifier /
-non-membership tooth). -/
-theorem opensToMerkle8_some_excludes_none (d : Nat) {r : Digest8} {k v : ℤ}
+/-- **NO STRENGTH LOST — the deleted `opensToMerkle8_some_excludes_none`.** -/
+theorem opensToMerkle8_some_excludes_none_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    (d : Nat) {r : Digest8} {k v : ℤ}
     (h₁ : opensToMerkle8 S8 d r k (some v)) (h₂ : opensToMerkle8 S8 d r k none) : False := by
-  have := opensToMerkle8_functional S8 d h₁ h₂
+  have := opensToMerkle8_functional_of_injective S8 hCR d h₁ h₂
   simp at this
 
-/-- **8-felt writes are FUNCTIONAL.** Under the arity-16 chip CR, 8-felt root + key + value determine the
-new root: the map-op row's `new_root` GROUP cannot be forged. Re-proved against `mapRoot8_injective`. -/
-theorem writesToMerkle8_functional (d : Nat) {r : Digest8} {k v : ℤ} {r₁ r₂ : Digest8}
+/-- **NO STRENGTH LOST — the deleted `writesToMerkle8_functional`.** -/
+theorem writesToMerkle8_functional_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    (d : Nat) {r : Digest8} {k v : ℤ} {r₁ r₂ : Digest8}
     (h₁ : writesToMerkle8 S8 d r k v r₁) (h₂ : writesToMerkle8 S8 d r k v r₂) : r₁ = r₂ := by
   obtain ⟨m₁, _, hl₁, _, hr₁, he₁⟩ := h₁
   obtain ⟨m₂, _, hl₂, _, hr₂, he₂⟩ := h₂
-  have hm : m₁ = m₂ := mapRoot8_injective S8 d hl₁ hl₂ (hr₁.trans hr₂.symm)
-  rw [he₁, he₂, hm]
+  rcases writesToMerkle8_functional_or_collides S8 d hl₁ hr₁ he₁ hl₂ hr₂ he₂ with hr | hc
+  · exact hr
+  · exact absurd hc (mapRootColl_refutable_of_injective S8 hCR _ _ _)
 
 end Faithful8
 
@@ -458,13 +660,22 @@ end Faithful8
 #assert_axioms opensToMerkle_functional
 #assert_axioms opensToMerkle_some_excludes_none
 #assert_axioms writesToMerkle_functional
--- §5b — the faithful 8-felt (`node8`) denotation, axiom-clean (crypto enters only as the named
--- `Heap8Scheme.chip8CR` arity-16 chip CR, via `DeployedHeapTree`).
-#assert_axioms foldLevel8_injective
-#assert_axioms perfectRoot8_injective
-#assert_axioms mapRoot8_injective
-#assert_axioms opensToMerkle8_functional
-#assert_axioms opensToMerkle8_some_excludes_none
-#assert_axioms writesToMerkle8_functional
+-- §5b — the faithful 8-felt (`node8`) denotation, axiom-clean. Crypto no longer enters as an ASSUMED
+-- carrier at all: the `Heap8Scheme.chip8CR` field is deleted (it is false at deployed BabyBear
+-- parameters), and every statement below carries its collision site as EXTRACTED DATA instead.
+#assert_axioms foldLevel8_binds_or_collides
+#assert_axioms perfectRoot8_binds_or_collides
+#assert_axioms map_leaf8_binds_or_collides
+#assert_axioms mapRoot8_binds_or_collides
+#assert_axioms opensToMerkle8_functional_or_collides
+#assert_axioms opensToMerkle8_some_excludes_none_or_collides
+#assert_axioms writesToMerkle8_functional_or_collides
+-- §5b.S — the strength relation: every deleted statement recovered as the injective special case, plus
+-- the refutability canary that keeps the collision disjunct from being a free pass.
+#assert_axioms mapRootColl_refutable_of_injective
+#assert_axioms mapRoot8_injective_of_injective
+#assert_axioms opensToMerkle8_functional_of_injective
+#assert_axioms opensToMerkle8_some_excludes_none_of_injective
+#assert_axioms writesToMerkle8_functional_of_injective
 
 end Dregg2.Circuit.MapMerkleRoot

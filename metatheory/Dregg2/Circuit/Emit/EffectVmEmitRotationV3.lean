@@ -1622,12 +1622,20 @@ def heapWritesTo8 (S8 : Heap8Scheme) (oldRoot : Digest8) (k v : ℤ) (newRoot : 
     Heap8Scheme.recomposeUp8 S8 (Heap8Scheme.heapLeafDigest8 S8 (k, oldVal, next)) path = oldRoot ∧
     Heap8Scheme.recomposeUp8 S8 (Heap8Scheme.heapLeafDigest8 S8 (k, v, next)) path = newRoot
 
-/-- **The 8-felt heap anti-forge tooth.** Along a FIXED sibling path the post-root pins the post-leaf digest
-(`Heap8Scheme.recomposeUp8` injective at the full ~124-bit width). A forged `newRoot` cannot be reached with
-the genuine post-leaf along the genuine path — the heap GENTIAN close at full width, NOT lane-0. -/
-theorem heapWritesTo8_forces_postleaf (S8 : Heap8Scheme) (path : List (StepG Digest8))
-    {a b : Digest8} (h : Heap8Scheme.recomposeUp8 S8 a path = Heap8Scheme.recomposeUp8 S8 b path) : a = b :=
-  Heap8Scheme.recomposeUp8_inj_of_path S8 path h
+/-- **The 8-felt heap anti-forge tooth, UNCONDITIONAL.** Along a FIXED sibling path the post-root EITHER
+pins the post-leaf digest at full ~124-bit width, OR the deployed arity-16 chip genuinely collides at the
+two `node8` blocks the walk hands back. A forged `newRoot` cannot be reached with a DIFFERENT post-leaf
+along the genuine path unless that named collision is real — the heap GENTIAN close at full width, NOT
+lane-0.
+
+⚑ This replaces the former `heapWritesTo8_forces_postleaf`, which rode
+`Heap8Scheme.recomposeUp8_inj_of_path` and hence the deleted `chip8CR : Compress8CR` FIELD — a field the
+deployed chip refutes, which made `Heap8Scheme` uninhabitable and every theorem over it (this one
+included) VACUOUS. Exactly the cap-side repair above, at the second faithful root. -/
+theorem heapWritesTo8_forces_postleaf_or_collides (S8 : Heap8Scheme) (path : List (StepG Digest8))
+    {a b : Digest8} (h : Heap8Scheme.recomposeUp8 S8 a path = Heap8Scheme.recomposeUp8 S8 b path) :
+    a = b ∨ Coll8 S8.chipAbsorb8 (Heap8Scheme.recomposeUp8Find S8 a b path) :=
+  Heap8Scheme.recomposeUp8_binds_or_collides S8 path h
 
 /-! ### v10 — the FAITHFUL 8-felt FIELDS-root column GROUP + the native-`node8` fields-write relation
 `fieldsWritesTo8` (the THIRD and LAST faithful root, the exact twin of the cap/heap-root groups above).
@@ -1774,14 +1782,19 @@ def fieldsWritesTo8 (S8 : Fields8Scheme) (oldRoot : Digest8) (k v : ℤ) (newRoo
     Fields8Scheme.recomposeUp8 S8 (Fields8Scheme.fieldsLeafDigest8 S8 (k, oldVal, next)) path = oldRoot ∧
     Fields8Scheme.recomposeUp8 S8 (Fields8Scheme.fieldsLeafDigest8 S8 (k, v, next)) path = newRoot
 
-/-- **The 8-felt fields anti-forge tooth.** Along a FIXED sibling path the post-root pins the post-leaf
-digest (`Fields8Scheme.recomposeUp8` injective at the full ~124-bit width). A forged `newRoot` cannot be
-reached with the genuine post-leaf along the genuine path — the fields GENTIAN close at full width, NOT
-lane-0. -/
-theorem fieldsWritesTo8_forces_postleaf (S8 : Fields8Scheme) (path : List (StepG Digest8))
+/-- **The 8-felt fields anti-forge tooth, UNCONDITIONAL.** Along a FIXED sibling path the post-root EITHER
+pins the post-leaf digest at full ~124-bit width, OR the deployed arity-16 chip genuinely collides at the
+two `node8` blocks the walk hands back. The fields GENTIAN close at full width, NOT lane-0.
+
+⚑ This replaces the former `fieldsWritesTo8_forces_postleaf`, which rode
+`Fields8Scheme.recomposeUp8_inj_of_path` and hence the deleted `chip8CR : Compress8CR` FIELD — a field the
+deployed chip refutes, which made `Fields8Scheme` uninhabitable and every theorem over it (this one
+included) VACUOUS. The third and last site of that defect class. -/
+theorem fieldsWritesTo8_forces_postleaf_or_collides (S8 : Fields8Scheme) (path : List (StepG Digest8))
     {a b : Digest8}
-    (h : Fields8Scheme.recomposeUp8 S8 a path = Fields8Scheme.recomposeUp8 S8 b path) : a = b :=
-  Fields8Scheme.recomposeUp8_inj_of_path S8 path h
+    (h : Fields8Scheme.recomposeUp8 S8 a path = Fields8Scheme.recomposeUp8 S8 b path) :
+    a = b ∨ Coll8 S8.chipAbsorb8 (Fields8Scheme.recomposeUp8Find S8 a b path) :=
+  Fields8Scheme.recomposeUp8_binds_or_collides S8 path h
 
 /-- The held-capability MEMBERSHIP read on the ROTATED before-block cap-root limb (limb 25). The before
 `cap_root` (rotated limb) opens at `param[CAP_KEY]` to `param[HELD_MASK]` (root unchanged — a read). The

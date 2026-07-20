@@ -1602,18 +1602,24 @@ theorem heapWrite_forces_write8_sat (S8 : Heap8Scheme)
   Dregg2.Circuit.Emit.HeapOpenEmit.effHeapWriteV3_forces_write8
     S8 base name hash mi mf ma tr hChip hsat i hi hnotlast hcells
 
-/-- **CLASS-A HEAP TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0).** Along the
-FIXED sibling path the forced `heapWritesTo8` fixes, the after heap-root determines the after leaf digest
-(`Heap8Scheme.recomposeUp8` injective at full ~124-bit width): a forged after heap-root reached by a
-DIFFERENT post-leaf along the genuine path is impossible. The deployed twin of the Rust GENTIAN weld
-(`heap_root_gentian_weld.rs`). -/
-theorem heapWrite_forces_postleaf (S8 : Heap8Scheme) (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8))
-    {a b : Digest8}
-    (h : Heap8Scheme.recomposeUp8 S8 a path = Heap8Scheme.recomposeUp8 S8 b path) : a = b :=
-  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.heapWritesTo8_forces_postleaf S8 path h
+/-- **CLASS-A HEAP TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0),
+UNCONDITIONAL.** Along the FIXED sibling path the forced `heapWritesTo8` fixes, the after heap-root
+EITHER determines the after leaf digest at full ~124-bit width, OR the deployed arity-16 chip genuinely
+collides at the NAMED pair of `node8` blocks the walk returns. A forged after heap-root reached by a
+DIFFERENT post-leaf along the genuine path requires that real collision. The deployed twin of the Rust
+GENTIAN weld (`heap_root_gentian_weld.rs`).
+
+⚑ Was `heapWrite_forces_postleaf`, concluding a bare `a = b` from the deleted `Heap8Scheme.chip8CR`
+FIELD — false at deployed BabyBear parameters, hence VACUOUS. -/
+theorem heapWrite_forces_postleaf_or_collides (S8 : Heap8Scheme)
+    (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8)) {a b : Digest8}
+    (h : Heap8Scheme.recomposeUp8 S8 a path = Heap8Scheme.recomposeUp8 S8 b path) :
+    a = b ∨ Dregg2.Circuit.DeployedCapTree.Coll8 S8.chipAbsorb8
+              (Heap8Scheme.recomposeUp8Find S8 a b path) :=
+  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.heapWritesTo8_forces_postleaf_or_collides S8 path h
 
 #assert_axioms heapWrite_forces_write8_sat
-#assert_axioms heapWrite_forces_postleaf
+#assert_axioms heapWrite_forces_postleaf_or_collides
 
 /-! ## §I — refusal fields-write (the THIRD and LAST faithful 8-felt root): the DEPLOYED after-spine
 `effFieldsWriteV3` FORCES `fieldsWritesTo8` over the committed BEFORE/AFTER fields-root blocks. The fields
@@ -1650,18 +1656,23 @@ theorem refusalWrite_forces_write8_sat (S8 : Fields8Scheme)
   Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3_forces_write8
     S8 base name hash mi mf ma tr hChip hsat i hi hnotlast hcells
 
-/-- **CLASS-A FIELDS TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0).** Along the
-FIXED sibling path the forced `fieldsWritesTo8` fixes, the after fields-root determines the after leaf digest
-(`Fields8Scheme.recomposeUp8` injective at full ~124-bit width): a forged after fields-root reached by a
-DIFFERENT post-leaf along the genuine path is impossible. The deployed twin of the Rust GENTIAN weld
-(`fields_root_gentian_weld.rs`). -/
-theorem refusalWrite_forces_postleaf (S8 : Fields8Scheme) (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8))
-    {a b : Digest8}
-    (h : Fields8Scheme.recomposeUp8 S8 a path = Fields8Scheme.recomposeUp8 S8 b path) : a = b :=
-  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.fieldsWritesTo8_forces_postleaf S8 path h
+/-- **CLASS-A FIELDS TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0),
+UNCONDITIONAL.** Along the FIXED sibling path the forced `fieldsWritesTo8` fixes, the after fields-root
+EITHER determines the after leaf digest at full ~124-bit width, OR the deployed arity-16 chip genuinely
+collides at the NAMED pair of `node8` blocks the walk returns. The deployed twin of the Rust GENTIAN weld
+(`fields_root_gentian_weld.rs`).
+
+⚑ Was `refusalWrite_forces_postleaf`, concluding a bare `a = b` from the deleted `Fields8Scheme.chip8CR`
+FIELD — false at deployed BabyBear parameters, hence VACUOUS. -/
+theorem refusalWrite_forces_postleaf_or_collides (S8 : Fields8Scheme)
+    (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8)) {a b : Digest8}
+    (h : Fields8Scheme.recomposeUp8 S8 a path = Fields8Scheme.recomposeUp8 S8 b path) :
+    a = b ∨ Dregg2.Circuit.DeployedCapTree.Coll8 S8.chipAbsorb8
+              (Fields8Scheme.recomposeUp8Find S8 a b path) :=
+  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.fieldsWritesTo8_forces_postleaf_or_collides S8 path h
 
 #assert_axioms refusalWrite_forces_write8_sat
-#assert_axioms refusalWrite_forces_postleaf
+#assert_axioms refusalWrite_forces_postleaf_or_collides
 
 /-! ## §J — the THREE DEDICATED ACCUMULATOR roots (the 4th/5th/6th faithful 8-felt roots): the after-spine
 `effAccumWriteV3` FORCES `heapWritesTo8` over the committed BEFORE/AFTER accumulator-root groups
@@ -1879,20 +1890,25 @@ theorem cellsInsert_forces_write8_sat (S8 : Heap8Scheme)
     (fun s hs => by simp at hs)
     spine hbefore g hcov hafter
 
-/-- **CLASS-A ACCUMULATOR TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0).** Shared
-across all three accumulator families (SAME `Heap8Scheme`): along the FIXED sibling path the forced
-`heapWritesTo8` fixes, the after accumulator-root determines the after leaf digest (`recomposeUp8` injective
-at full ~124-bit width) — a forged after-root reached by a DIFFERENT post-leaf along the genuine path is
-impossible. -/
-theorem accumWrite_forces_postleaf (S8 : Heap8Scheme)
+/-- **CLASS-A ACCUMULATOR TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0),
+UNCONDITIONAL.** Shared across all three accumulator families (SAME `Heap8Scheme`): along the FIXED
+sibling path the forced `heapWritesTo8` fixes, the after accumulator-root EITHER determines the after leaf
+digest at full ~124-bit width, OR the deployed arity-16 chip genuinely collides at the NAMED pair of
+`node8` blocks the walk returns.
+
+⚑ Was `accumWrite_forces_postleaf`, concluding a bare `a = b` from the deleted `Heap8Scheme.chip8CR`
+FIELD — false at deployed BabyBear parameters, hence VACUOUS. -/
+theorem accumWrite_forces_postleaf_or_collides (S8 : Heap8Scheme)
     (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8)) {a b : Digest8}
-    (h : Heap8Scheme.recomposeUp8 S8 a path = Heap8Scheme.recomposeUp8 S8 b path) : a = b :=
-  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.heapWritesTo8_forces_postleaf S8 path h
+    (h : Heap8Scheme.recomposeUp8 S8 a path = Heap8Scheme.recomposeUp8 S8 b path) :
+    a = b ∨ Dregg2.Circuit.DeployedCapTree.Coll8 S8.chipAbsorb8
+              (Heap8Scheme.recomposeUp8Find S8 a b path) :=
+  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.heapWritesTo8_forces_postleaf_or_collides S8 path h
 
 #assert_axioms nullifierWrite_forces_write8_sat
 #assert_axioms commitmentsWrite_forces_write8_sat
 #assert_axioms cellsWrite_forces_write8_sat
-#assert_axioms accumWrite_forces_postleaf
+#assert_axioms accumWrite_forces_postleaf_or_collides
 #assert_axioms nullifierInsert_forces_write8_sat
 #assert_axioms commitmentsInsert_forces_write8_sat
 #assert_axioms cellsInsert_forces_write8_sat
