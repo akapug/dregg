@@ -151,9 +151,9 @@ private theorem contains_congr {x y : Int} : ∀ {l : List Int},
 threshold probe get the same verdict (old state is irrelevant — the class is stateless). -/
 theorem intervalAtoms?_reads : ∀ {c : SimpleConstraint} {A : List (FieldName × Int)},
     intervalAtoms? c = some A →
-    ∀ {o a b : Value}, (∀ p ∈ A, scalarProbe a p.1 p.2 = scalarProbe b p.1 p.2) →
-      evalSimple c o a = evalSimple c o b
-  | .fieldEquals f v, A, h, o, a, b, hab => by
+    ∀ {o₁ o₂ a b : Value}, (∀ p ∈ A, scalarProbe a p.1 p.2 = scalarProbe b p.1 p.2) →
+      evalSimple c o₁ a = evalSimple c o₂ b
+  | .fieldEquals f v, A, h, o₁, o₂, a, b, hab => by
       simp only [intervalAtoms?, Option.some.injEq] at h
       subst h
       rcases probe_agree (hab (f, v) (by simp)) with ⟨ha, hb⟩ | ⟨x, y, ha, hb, h1, h2⟩
@@ -162,7 +162,7 @@ theorem intervalAtoms?_reads : ∀ {c : SimpleConstraint} {A : List (FieldName �
         apply bool_eq_of_iff
         simp only [beq_iff_eq, Option.some.injEq]
         omega
-  | .fieldGe f v, A, h, o, a, b, hab => by
+  | .fieldGe f v, A, h, o₁, o₂, a, b, hab => by
       simp only [intervalAtoms?, Option.some.injEq] at h
       subst h
       rcases probe_agree (hab (f, v) (by simp)) with ⟨ha, hb⟩ | ⟨x, y, ha, hb, h1, h2⟩
@@ -172,7 +172,7 @@ theorem intervalAtoms?_reads : ∀ {c : SimpleConstraint} {A : List (FieldName �
         show decide (v ≤ x) = true ↔ decide (v ≤ y) = true
         simp only [decide_eq_true_eq]
         omega
-  | .fieldLe f v, A, h, o, a, b, hab => by
+  | .fieldLe f v, A, h, o₁, o₂, a, b, hab => by
       simp only [intervalAtoms?, Option.some.injEq] at h
       subst h
       rcases probe_agree (hab (f, v) (by simp)) with ⟨ha, hb⟩ | ⟨x, y, ha, hb, h1, h2⟩
@@ -182,7 +182,7 @@ theorem intervalAtoms?_reads : ∀ {c : SimpleConstraint} {A : List (FieldName �
         show decide (x ≤ v) = true ↔ decide (y ≤ v) = true
         simp only [decide_eq_true_eq]
         omega
-  | .inRangeTwoSided f lo hi, A, h, o, a, b, hab => by
+  | .inRangeTwoSided f lo hi, A, h, o₁, o₂, a, b, hab => by
       simp only [intervalAtoms?, Option.some.injEq] at h
       subst h
       rcases probe_agree (hab (f, lo) (by simp)) with ⟨ha, hb⟩ | ⟨x, y, ha, hb, hl1, hl2⟩
@@ -199,7 +199,7 @@ theorem intervalAtoms?_reads : ∀ {c : SimpleConstraint} {A : List (FieldName �
                (decide (lo ≤ y) && decide (y ≤ hi)) = true
           simp only [Bool.and_eq_true, decide_eq_true_eq]
           omega
-  | .memberOf f set, A, h, o, a, b, hab => by
+  | .memberOf f set, A, h, o₁, o₂, a, b, hab => by
       simp only [intervalAtoms?, Option.some.injEq] at h
       subst h
       cases set with
@@ -223,16 +223,16 @@ theorem intervalAtoms?_reads : ∀ {c : SimpleConstraint} {A : List (FieldName �
               apply bool_eq_of_iff
               simp only [beq_iff_eq]
               omega
-  | .not c, A, h, o, a, b, hab => by
+  | .not c, A, h, o₁, o₂, a, b, hab => by
       simp only [intervalAtoms?] at h
       rw [evalSimple_not, evalSimple_not, intervalAtoms?_reads h hab]
 
 /-- Lift to `StateConstraint` (only the `simple` arm is inhabited). -/
 theorem constraintIntervalAtoms?_reads : ∀ {c : StateConstraint} {A : List (FieldName × Int)},
     constraintIntervalAtoms? c = some A →
-    ∀ {o a b : Value}, (∀ p ∈ A, scalarProbe a p.1 p.2 = scalarProbe b p.1 p.2) →
-      evalConstraint c o a = evalConstraint c o b
-  | .simple sc, A, h, o, a, b, hab => by
+    ∀ {o₁ o₂ a b : Value}, (∀ p ∈ A, scalarProbe a p.1 p.2 = scalarProbe b p.1 p.2) →
+      evalConstraint c o₁ a = evalConstraint c o₂ b
+  | .simple sc, A, h, o₁, o₂, a, b, hab => by
       simp only [constraintIntervalAtoms?] at h
       simp only [evalConstraint]
       exact intervalAtoms?_reads h hab
@@ -248,7 +248,8 @@ theorem predIntervalAtoms?_reads : ∀ (φ : Pred) {A : List (FieldName × Int)}
   | .ff, _, _, _, _, _ => rfl
   | .atom c, A, h, a, b, hab => by
       simp only [predIntervalAtoms?] at h
-      show Pred.eval (.atom c) (.record []) a = Pred.eval (.atom c) (.record []) b
+      show Pred.eval (.atom c) (PredRE.symbolOld a) a =
+        Pred.eval (.atom c) (PredRE.symbolOld b) b
       simp only [Pred.eval]
       exact constraintIntervalAtoms?_reads h hab
   | .and l r, A, h, a, b, hab => by

@@ -13,10 +13,12 @@ height-bounded subtype and no `existsMatch` mutual recursion, and the terminatio
 from a 4-tuple to nothing more than structural list recursion (for `derives`) / `star_metric` (for
 `Matches`).
 
-The alphabet is `σ := Value` (a single frame; the safe, primary carrier of the design §1.1): a
-`sym φ` leaf reads ONE `Value` per step, decided by `Pred.eval φ (.record []) a` (old = the empty
-record — every stateless atom ignores `old`). The stateful `(old,new)` carrier (design §5) is NOT
-built here.
+The alphabet remains `σ := Value`, so the derivative/finiteness tower does not fork, but it now
+has TWO conservative symbol forms.  An ordinary record is still a single NEW frame and is evaluated
+exactly as before with `old = ∅`.  `transitionSymbol old new` is a reserved record envelope for one
+real transition; a `sym φ` leaf decodes it and evaluates `Pred.eval φ old new`.  Thus stateless
+users retain their old language definitionally, while reactive leaves can use the same derivative
+and finite-cover machinery over genuine `(old,new)` points.
 
 `#guard`s pin non-vacuity in BOTH polarities (`der`/`derives`/`Matches` admit AND reject real words),
 the dregg discipline mirroring `PredAlgebra.lean:489-508`.
@@ -61,16 +63,60 @@ abbrev bot : PredRE := .sym .ff
 /-- The "any single frame" regex: `sym .tt`. -/
 abbrev any : PredRE := .sym .tt
 
-/-! ## The leaf decision — dregg's `Pred.eval` over a single frame.
+/-! ## The leaf decision — ordinary frames plus a reserved transition envelope. -/
 
-The ONLY semantic swap from ERE≤'s `denote φ a`: a `Pred` denotes over a `(old, new)` transition,
-so to read one frame `a` statelessly we feed `old := .record []` (the empty record). Every stateless
-atom (`symEq`/`digEq`/`symMemberOf`/`memberOf`/the range & affine atoms) ignores `old`; the reactive
-atoms (`symUnchanged`/…) see an absent old field and so are first-write-permissive — exactly the
-single-frame reading. -/
+/-- Reserved first field of a transition symbol.  It is deliberately not an authoring field: the
+outer record is an alphabet envelope, while its tail is the actual NEW record. -/
+def transitionTagField : FieldName := "\u0000dregg.transition"
 
-/-- **`leaf φ a`** — does frame `a` satisfy the leaf predicate `φ`? `Pred.eval φ ∅ a`, old = empty. -/
-@[simp] def leaf (φ : Pred) (a : Value) : Bool := φ.eval (.record []) a
+/-- Reserved second field carrying the OLD record of a transition symbol. -/
+def transitionOldField : FieldName := "\u0000dregg.old"
+
+/-- **`transitionSymbol old new`** — encode a real record transition in the existing `Value`
+alphabet.  For the record substrate (the supported policy carrier), the NEW record's fields remain
+at the outer level after a two-field reserved prefix; this keeps the representation a point whose
+coordinates are `(field × frame-slot)` without changing `PredRE`, `der`, or any fixpoint type.
+Non-record NEW values have no policy-visible fields and are therefore represented by an empty NEW
+record, consistently with every record predicate failing closed on them. -/
+def transitionSymbol (old : Value) : Value → Value
+  | .record fs => .record ((transitionTagField, .sym 0) :: (transitionOldField, old) :: fs)
+  | _          => .record [(transitionTagField, .sym 0), (transitionOldField, old)]
+
+/-- Decode the OLD frame.  Ordinary symbols take the legacy empty-old path; only the exact reserved
+two-field prefix is recognized as a transition. -/
+def symbolOld : Value → Value
+  | .record ((tag, .sym 0) :: (oldKey, old) :: _fs) =>
+      if tag == transitionTagField && oldKey == transitionOldField
+      then old
+      else .record []
+  | _ => .record []
+
+/-- Decode an alphabet symbol to the `(old,new)` pair seen by `Pred.eval`.  The NEW component is
+definitionally the symbol itself; the reserved prefix is merely extra record data and therefore
+invisible to every ordinary authored field.  This also keeps all established stateless covers
+definitionally unchanged. -/
+def symbolFrames (a : Value) : Value × Value := (symbolOld a, a)
+
+@[simp] theorem symbolFrames_transitionSymbol (old : Value) (fs : List (FieldName × Value)) :
+    symbolFrames (transitionSymbol old (.record fs)) =
+      (old, transitionSymbol old (.record fs)) := by
+  simp [transitionSymbol, symbolFrames, symbolOld, transitionTagField, transitionOldField]
+
+@[simp] theorem symbolFrames_record_nil :
+    symbolFrames (.record []) = (.record [], .record []) := rfl
+
+@[simp] theorem symbolFrames_record_single (p : FieldName × Value) :
+    symbolFrames (.record [p]) = (.record [], .record [p]) := by
+  rcases p with ⟨k, v⟩
+  cases v with
+  | int i => rfl
+  | dig d => rfl
+  | sym s => cases s <;> rfl
+  | record fs => rfl
+
+/-- **`leaf φ a`** — evaluate an ordinary NEW frame or a decoded transition symbol. -/
+@[simp] def leaf (φ : Pred) (a : Value) : Bool :=
+  φ.eval (symbolOld a) a
 
 /-! ## Nullability — does the regex match the empty word `[]`?
 
@@ -310,6 +356,7 @@ end PredRE
 /-! ## Axiom hygiene — the Stage 0 metric lemmas are kernel-clean. -/
 
 #assert_all_clean [
+  PredRE.symbolFrames_transitionSymbol,
   PredRE.starMetric_alt_l, PredRE.starMetric_alt_r,
   PredRE.starMetric_inter_l, PredRE.starMetric_inter_r,
   PredRE.starMetric_cat_l, PredRE.starMetric_cat_r,

@@ -44,9 +44,11 @@ takes that plug-in point, three times, WITHOUT touching the tower:
   (EUF-style). `dfeOnly` scopes this module's cover to guards over ONE `digFieldEq` atom; mixing
   is the next constructor, not a hidden failure mode (mixed guards simply do not satisfy `dfeOnly`,
   fail closed).
-* **`fieldEqField` / reactive leaves** — outside `predBEq` (so outside `rigidRE`) and outside every
-  cover here; unchanged from `SymbolicMinterms`' boundary.
-* **`atom` scalar leaves** — still the LIA-witness frontier (`SatOracle.lean`).
+* **`fieldEqField` / reactive leaves** — outside every cover in this file. The downstream
+  `SymbolicDifference` constructor closes full-value `fieldEqField` plus numeric difference atoms;
+  typed reactive identity leaves still need different witness machinery.
+* **General affine `atom` leaves** remain the LIA frontier. Axis and `x-y≤c` atoms are closed by
+  `SymbolicIntervals` / `SymbolicDifference`; arbitrary linear combinations are not.
 
 `#assert_all_clean` at the bottom; `sorry`-free.
 -/

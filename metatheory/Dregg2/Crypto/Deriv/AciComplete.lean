@@ -71,7 +71,7 @@ This is still NOT full `PredRE` completeness. What remains is ONE axis, not two:
 `predBEq`'s decidable fragment — the `atom` leaf is INSIDE it (`Exec.StateConstraint` carries
 `DecidableEq`, `Exec/Program.lean`), and the 07-19 widenings put the compound `not`/`and`/`or`,
 the n-ary `allOf`/`anyOf`, and the typed `symMemberOf`/`digFieldEq` leaves inside it too, so the
-still-uncovered leaves are only `fieldEqField` and the reactive constructors — on which `rigidRE`
+still-uncovered leaves are only the typed reactive constructors — on which `rigidRE`
 is fail-closed by the same one-sided-`reEq` discipline as `AciNormal`. That boundary widens exactly
 as far as `predBEq` does, and every theorem below transports unchanged. The STRUCTURAL axis — the one `AciNormal`'s
 residual §2 named as blocked — is closed. The residual is restated precisely at the bottom of this
@@ -897,9 +897,7 @@ private def g7 : PredRE := .sym (.symEq "k" 7)
 private def g9 : PredRE := .sym (.symEq "k" 9)
 -- `gAtom` is now INSIDE `predBEq`'s fragment (`Exec.StateConstraint` carries `DecidableEq`).
 private def gAtom : PredRE := .sym (.atom (.fieldLeField "a" "b"))
--- `gOut` — a leaf STILL outside the fragment: `predBEq` does not descend `fieldEqField`, so it
--- fail-closes there exactly as it once did on `atom` (and, before the 07-19 widening, on
--- `symMemberOf`). Keeps the OUT-of-fragment demonstrations live.
+-- `gOut` is inside the rigid fragment too: field-name equality is decidable.
 private def gOut : PredRE := .sym (.fieldEqField "a" "b")
 
 /-- `PredRE` has no `DecidableEq`, so the guards compare keys through the one-sided `reEq`
@@ -914,11 +912,11 @@ private def keyBEq : Option (List PredRE) → Option (List PredRE) → Bool
 #guard allRigid (altList (.alt g7 .ε)) = true
 #guard allRigid (altList (.alt gAtom g9)) = true
 #guard (key (.alt gAtom g9)).isNone = false
--- OUT of the fragment, fail-closed: a `star` leaf, and a `symMemberOf` leaf.
+-- A whole `star` term is not a top-level rigid `alt` leaf for the narrow `key` operation.
 #guard allRigid (altList (.alt (.star g7) g9)) = false
-#guard allRigid (altList (.alt gOut g9)) = false
+#guard allRigid (altList (.alt gOut g9)) = true
 #guard (key (.alt (.star g7) g9)).isNone = true
-#guard (key (.alt gOut g9)).isNone = true
+#guard (key (.alt gOut g9)).isNone = false
 
 -- The key really is the ORDER-PRESERVING first-occurrence sequence, and it SEPARATES the two orders.
 #guard keyBEq (key (.alt (.alt g7 g9) g7)) (some [g7, g9]) = true
@@ -976,19 +974,17 @@ section WideGuards
 #guard simDecide (.star (.alt g7 g9)) (.star (.alt g9 g7)) = false
 #guard simDecide (.cat (.alt g7 g7) (.star g9)) (.cat g7 (.star g9)) = true
 
--- The `atom` leaf is now IN the fragment: `rigidRE` accepts it and `nrm` DEDUPS it (the closure of
--- the last leaf axis). The still-open residual is exhibited on `gOut` (`fieldEqField`), which
--- `predBEq` still does not descend — `rigidRE` says `false` and `nrm` under-dedups (sound, not complete).
+-- Both `atom` and `fieldEqField` leaves are in the fragment: `rigidRE` accepts them and `nrm`
+-- deduplicates them.
 #guard rigidRE (.star (.alt gAtom gAtom)) = true
 #guard rigidRE (.alt gAtom gAtom) = true
-#guard rigidRE (.star (.alt gOut gOut)) = false
-#guard rigidRE (.alt gOut gOut) = false
+#guard rigidRE (.star (.alt gOut gOut)) = true
+#guard rigidRE (.alt gOut gOut) = true
 -- Spine LENGTH after `ddf`, witnessed by a DECIDABLE invariant rather than the one-sided `reEq`:
--- the rigid pair collapses to 1 (now including the `atom` pair — CLOSED), the `fieldEqField` pair
--- does NOT (stays 2), so `nrm (a ⋓ a) ≠ a` for `gOut` — the open residual, exhibited on what remains.
+-- every rigid equal pair collapses to one first occurrence.
 #guard (ddf (nlist (.alt g7 g7))).length = 1
 #guard (ddf (nlist (.alt gAtom gAtom))).length = 1
-#guard (ddf (nlist (.alt gOut gOut))).length = 2
+#guard (ddf (nlist (.alt gOut gOut))).length = 1
 #guard (ddf (nlist (.star (.alt gOut gOut)))).length = 1
 
 /-! ### NON-VACUITY of the widening, as THEOREMS (not only as computed guards).
@@ -1064,10 +1060,10 @@ end PredRE
 ## THE RESIDUAL — what is still NOT proved, after the widening.
 
 `AciNormal`'s residual named TWO obstructions. **§2 (structural) is now CLOSED**; §3 (leaf equality)
-is now closed for the `atom` leaf (`DecidableEq StateConstraint`), for the compound
+is now closed for the `atom` leaf (`DecidableEq StateConstraint`), `fieldEqField`, the compound
 `not`/`and`/`or` constructors, AND (second 07-19 widening) for the n-ary `allOf`/`anyOf` and the
-typed `symMemberOf`/`digFieldEq` leaves, and remains open ONLY for the `fieldEqField`/reactive
-leaves `predBEq` does not yet descend.
+typed `symMemberOf`/`digFieldEq` leaves. It remains open only for the typed reactive constructors
+that `predBEq` does not yet descend.
 
 **CLOSED — the structural axis.** `sim_nrm_eq : Sim R S → RigidFull R → nrm R = nrm S` is completeness
 on a fragment whose STRUCTURE IS ARBITRARY: `star`, `cat`, `inter` and `neg` nodes are inside it, at
@@ -1085,19 +1081,17 @@ term is now inside `RigidFull` (`#guard`ed: `rigidRE (.alt gAtom gAtom) = true`,
 `atom` pair to length 1). The compound `not`/`and`/`or` constructors are DESCENDED structurally,
 and the second 07-19 widening added the n-ary `allOf`/`anyOf` (elementwise, `predBEqList`) and the
 typed `symMemberOf`/`digFieldEq` leaves — enum-membership and owner-match guards are inside
-`RigidFull` now. What is STILL outside are the leaves `predBEq` does not descend — `fieldEqField`
-and the reactive constructors — exhibited on `gOut` (`fieldEqField`) at the end of the guard block.
+`RigidFull` now. `fieldEqField` is decided directly from its two field-name payloads. What is still
+outside are the typed reactive constructors that `predBEq` does not yet descend.
 The FULL statement, no rigidity side condition:
 
     `∀ R S, Sim R S → nrm R = nrm S`   -- FULL `PredRE`, no rigidity side condition
 
-is still FALSE as stated only because of THOSE remaining leaves: `predBEq` answers `false` on an equal
-`fieldEqField` pair, so `ddf` under-dedups there (`#guard`: the `gOut` pair stays length 2)
-while `Sim.idem` holds. It becomes provable — with every theorem in this file transporting UNCHANGED,
+is still FALSE as stated only because of those remaining typed reactive leaves. It becomes provable
+— with every theorem in this file transporting UNCHANGED,
 since the invariance argument uses only `reEq_sound` plus reflexivity on the fragment — as `predBEq` is
-extended to those constructors (each mechanical, the payloads are decidable; the `atom` closure here is
-the template). THE NOW-UNBLOCKED FOLLOW-UP: widen `predBEq` over `fieldEqField` and the reactive
-leaves to close the fragment entirely, and prove the then-unconditional full-`PredRE` statement.
+extended to those constructors. The difference-cover work is independent: the reactive simple atoms
+are already carried by `Pred.atom` and therefore already rigid.
 
 **NOT a residual, but stated so it is not misread.** `≅` here is `Sim`, the ACI congruence on `alt`
 plus the structural congruences. It contains NO unit/annihilator/star laws — `cat ε R ≅ R`,

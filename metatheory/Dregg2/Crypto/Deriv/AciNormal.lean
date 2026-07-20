@@ -49,9 +49,10 @@ compound `not`/`and`/`or` constructors structurally** (the first 07-19 widening 
 `¬φ`-leaf guards, e.g. `symDiff`'s complements and `contradictionRE`'s `¬braceP`, inside the
 `rigidRE` runnable fragment), and — the second 07-19 widening — **DECIDES the typed
 `symMemberOf`/`digFieldEq` leaves and the n-ary `allOf`/`anyOf`** (elementwise via a mutual
-`predBEqList` arm), the enum-membership and owner-match classes. `predBEq` still answers `false` on
-the `fieldEqField`/reactive leaves — the remaining honest one-sided edge, which under-dedups but
-never misclaims. Soundness of `normalize` depends only on the `→` direction (`predBEq_sound`), so
+`predBEqList` arm), the enum-membership and owner-match classes. It also decides `fieldEqField`
+from its two field-name payloads. `predBEq` still answers `false` on the typed reactive leaves —
+the remaining honest one-sided edge, which under-dedups but never misclaims. Soundness of
+`normalize` depends only on the `→` direction (`predBEq_sound`), so
 `normalize_sim` holds for ALL of `PredRE`; only the dedup POWER degrades on the still-uncovered
 constructors, and the fragment widens by extending `predBEq` alone.
 
@@ -69,7 +70,7 @@ namespace PredRE
 /-! ## A computable, one-sided equality test.
 
 `predBEq`/`reEq` never return `true` on distinct terms. They DO return `false` on some equal terms
-(a `Pred` whose leaves reach the still-undescended `fieldEqField`/reactive constructors) — the
+(a `Pred` whose leaves reach the still-undescended typed reactive constructors) — the
 honest cost of `Pred` having no derivable `DecidableEq`. -/
 
 mutual
@@ -79,7 +80,7 @@ constructors (the first 07-19 widening — `¬φ`-leaf guards inside `rigidRE`'s
 and now ALSO on the typed `symMemberOf`/`digFieldEq` leaves and the n-ary `allOf`/`anyOf`
 (elementwise through the mutual `predBEqList` — the second 07-19 widening, which puts
 enum-membership and owner-match guards inside the runnable fragment). The remaining `false` arm
-covers genuinely-distinct constructors plus the still-undescended `fieldEqField`/reactive leaves. -/
+covers genuinely-distinct constructors plus the still-undescended typed reactive leaves. -/
 def predBEq : Pred → Pred → Bool
   | .atom c,    .atom d    => decide (c = d)
   | .tt,        .tt        => true
@@ -88,6 +89,7 @@ def predBEq : Pred → Pred → Bool
   | .digEq f s, .digEq g t => f == g && s == t
   | .symMemberOf f s, .symMemberOf g t => f == g && s == t
   | .digFieldEq f g,  .digFieldEq f' g' => f == f' && g == g'
+  | .fieldEqField f g, .fieldEqField f' g' => f == f' && g == g'
   | .not p,     .not q     => predBEq p q
   | .and a b,   .and c d   => predBEq a c && predBEq b d
   | .or a b,    .or c d    => predBEq a c && predBEq b d
@@ -117,6 +119,8 @@ theorem predBEq_sound : ∀ {p q : Pred}, predBEq p q = true → p = q
   | .symMemberOf _ _, .symMemberOf _ _, h => by
       simp only [predBEq, Bool.and_eq_true, beq_iff_eq] at h; rw [h.1, h.2]
   | .digFieldEq _ _, .digFieldEq _ _, h => by
+      simp only [predBEq, Bool.and_eq_true, beq_iff_eq] at h; rw [h.1, h.2]
+  | .fieldEqField _ _, .fieldEqField _ _, h => by
       simp only [predBEq, Bool.and_eq_true, beq_iff_eq] at h; rw [h.1, h.2]
   | .not _, .not _, h => congrArg _ (predBEq_sound h)
   | .and _ _, .and _ _, h => by
@@ -424,8 +428,8 @@ private def memberLeaf : PredRE := .sym (.symMemberOf "status" [1, 2, 3])
 #guard reEq (normalize (.alt memberLeaf memberLeaf)) memberLeaf = true
 private def ownerLeaf : PredRE := .sym (.digFieldEq "sender" "owner")
 #guard reEq (normalize (.alt ownerLeaf ownerLeaf)) ownerLeaf = true
--- ...while the still-undescended constructors remain fail-closed (`fieldEqField` on itself).
-#guard predBEq (.fieldEqField "a" "b") (.fieldEqField "a" "b") = false
+-- Cross-field equality is now a rigid leaf too (the DBM/difference cover consumes it).
+#guard predBEq (.fieldEqField "a" "b") (.fieldEqField "a" "b") = true
 private def notLeaf : PredRE := .sym (.not p7)
 #guard reEq (normalize (.alt notLeaf notLeaf)) notLeaf = true
 

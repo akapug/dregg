@@ -54,7 +54,7 @@ already-seen state closes in a few pops — where the bound-based search needed 
    is `predBEq`-decidable — `rigidRE_of_isSymbolic` (SymbolicMintermsPlus) discharges the
    `RigidFull` side condition for the WHOLE `IsSymbolic` fragment. `contradictionRE` and
    enum-membership guards sit INSIDE the runnable fragment (`#guard`ed below); what remains
-   outside `rigidRE` are only the `fieldEqField`/reactive leaves, which are outside `IsSymbolic`
+   outside `rigidRE` are only the typed reactive leaves, which are outside `IsSymbolic`
    too. The instances below still take the (now always-dischargeable) `RigidFull` hypothesis
    so this module is untouched by the widening — every theorem transports unchanged, as
    `AciComplete`'s residual already states for its own.
@@ -468,10 +468,11 @@ def rolePlus : PredRE := .cat (.sym roleP) (.star (.sym roleP))
 -- second 07-19 widening (`predBEq` over `symMemberOf`/`digFieldEq`/`allOf`/`anyOf`) then closed
 -- the `symMemberOf` boundary too — EVERY `IsSymbolic` root is now `RigidFull`
 -- (`rigidRE_of_isSymbolic`, SymbolicMintermsPlus). The honest ROOT boundary that remains is a
--- `fieldEqField`/reactive leaf, which is outside `IsSymbolic` as well.
+-- `fieldEqField` is rigid (its field-name payloads have decidable equality); typed reactive
+-- leaves remain outside this older cover.
 #guard rigidRE contradictionRE = true
 #guard rigidRE (.sym (.symMemberOf "role" [3, 4])) = true
-#guard rigidRE (.sym (.fieldEqField "a" "b")) = false
+#guard rigidRE (.sym (.fieldEqField "a" "b")) = true
 
 -- SATURATION at tiny fuel — the adaptive fixpoint CLOSES where the bound is `3^15+`:
 #guard (reachFix roleCands 32 rolePlus).isSome
