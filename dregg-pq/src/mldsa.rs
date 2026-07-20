@@ -12,7 +12,17 @@ use std::sync::OnceLock;
 /// The extracted core lives in `metatheory/Dregg2/Crypto/Fips204Verify.lean`
 /// (`verifyCore` = the `Fips204Spec.MlDsaParams.verifyB` predicate at the deployed ML-DSA-65
 /// parameters), `@[export]`ed as `dregg_fips204_verify` and compiled to leanc-native code. It is
-/// PROVED to agree with the spec (`verifyCore_unfolds_to_def`) and to discharge
+/// ★ SCOPE — READ THE LEAN STATEMENTS, NOT THIS PROSE. This core is the SCALAR MODEL, not
+/// ML-DSA-65. `Fips204Verify.realParams` is an `n = 1` instance over `ℤ` with `A := LinearMap.id`,
+/// `challenge _ := 1` (constant), and `hash μ hb := μ + 8380417 * hb` (linear) — real only in its
+/// rounding constants. It is NOT the same object as `MlDsaVerifyReal.verifyCore`, which is the
+/// full-dimension byte-level verifier over real 1952-byte keys / 3309-byte signatures.
+/// ★ `verifyCore_unfolds_to_def` IS NOT A SPEC-AGREEMENT WARRANT: it is `:= rfl` on `verifyCore`'s
+/// own definiens (`verifyCore` is DEFINED as `realParams.verifyB`), i.e. `P = P`. Its own Lean
+/// docstring states verbatim: "IT IS NOT EVIDENCE OF SPEC AGREEMENT ... it would hold verbatim for
+/// any `realParams` whatsoever, including a broken one." Do not cite it as a proof that the
+/// deployed verify is correct. What it records is only that the `@[export]`ed object is a plain
+/// alias — nothing was re-implemented between the `def` and the FFI. It discharges
 /// `DreggPqRefinement.Fips204Correct` for the verify direction (`extractedApi_fips204`) — no `fips204`
 /// crate is trusted for the round-trip. `dregg-lean-ffi::shadow_fips204_verify` runs it natively.
 ///
@@ -155,7 +165,12 @@ fn real_verify_wire(pk: &[u8], msg: &[u8], ctx: &[u8], sig: &[u8]) -> String {
 /// The extracted core is `Dregg2.Crypto.Fips204Verify.signCore` — the DETERMINISTIC
 /// Fiat–Shamir-with-aborts signer (`sk → μ → randomness → Option Sig`) at the deployed ML-DSA-65
 /// parameters, `@[export]`ed as `dregg_fips204_sign` and compiled to leanc-native code. It is PROVED to
-/// agree with the spec (`signCore_eq_spec`) and, TOGETHER with the extracted `verifyCore`, to discharge
+/// ★ SCOPE: like the verify core above, this is the SCALAR `realParams` model (`s1 s2 t0 μ y : ℤ`,
+/// `A = id`, constant challenge), NOT full-dimension ML-DSA-65 — for that see
+/// `MlDsaSignReal.signCore` over real 4032-byte `sk` / 3309-byte signatures. `signCore_eq_spec` is
+/// a DEFINITIONAL unfolding (`simp only [signCore, h, if_true]`): on an accepted iteration the
+/// `if`'s true branch IS `realParams.sign`. That is an alias record, not evidence the scalar model
+/// is ML-DSA. Together with the extracted `verifyCore` it discharges
 /// `DreggPqRefinement.Fips204Correct` FULLY (`signExtractedApi_fips204`) — no `fips204` crate is trusted
 /// for the sign→verify round-trip. `dregg-lean-ffi::shadow_fips204_sign` runs it natively.
 ///
@@ -210,11 +225,17 @@ pub fn ml_dsa_sign_core(wire: &str) -> Option<Option<String>> {
 ///
 /// The extracted core is `Dregg2.Crypto.MlDsaSignReal.signRealFFI` over `signCore` (the `n=256` negacyclic
 /// ring / NTT / SampleInBall / ExpandA / MakeHint / rejection loop / real 4032/3309-byte codec), `@[export]`ed
-/// as `dregg_fips204_sign_real` and compiled to leanc-native code. It is PROVED (`native_decide`) to
-/// reproduce a genuine `fips204` v0.4.6 crate DETERMINISTIC signature byte-for-byte
-/// (`sign_matches_acvp_deterministic` / `signRealFFI_matches_acvp_deterministic` -- NIST ACVP-anchored
-/// single-vector KATs, not a forall), and its output is
-/// ACCEPTED by the verified `MlDsaVerifyReal.verifyCore` (`sign_produces_valid_sig`).
+/// as `dregg_fips204_sign_real` and compiled to leanc-native code. It is PROVED (`native_decide`)
+/// to reproduce NIST's OWN published expected signature byte-for-byte on the COMPLETE NIST ACVP
+/// `ML-DSA-sigGen-FIPS204` group for this parameter set — `MlDsaSigGenAcvp.sign_matches_acvp_group`,
+/// all 15 cases of `tgId = 3` (ML-DSA-65, deterministic, external, pure), `tcId` 31-45, messages
+/// 1-8192 B and contexts 0-255 B. The anchor is NIST, NOT the `fips204` crate. Its output is also
+/// accepted by `MlDsaVerifyReal.verifyCore` across the whole group
+/// (`MlDsaSigGenAcvp.sign_verify_agree_acvp_group`).
+/// ★ THESE ARE KATs, NOT REFINEMENT THEOREMS: 15 concrete inputs, NO `forall`. The for-all-inputs
+/// obligation is `SignCoreSpec` and it is OPEN. Widening from the previous single vector
+/// (`sign_matches_acvp_deterministic`, `tcId = 36`, which is the group's SHORTEST message at 1 byte)
+/// removes the cherry-picked-vector objection; it does not convert a KAT into a proof.
 /// `dregg-lean-ffi::shadow_fips204_sign_real` runs it natively.
 ///
 /// dregg-pq stays a LIGHT leaf (it never depends on the 195 MB Lean archive): it takes a function pointer.
@@ -563,7 +584,9 @@ mod tests {
 
     /// The routing seam sends the security-critical verify through the extracted, Lean-verified core.
     /// Here the installed core stands in for `dregg-lean-ffi::shadow_fips204_verify` (which drives the
-    /// leanc-native `verifyCore` = `Fips204Spec.verifyB`; its round-trip is green in dregg-lean-ffi's
+    /// leanc-native SCALAR `Fips204Verify.verifyCore` — `realParams.verifyB` at `n = 1` over `ℤ`,
+    /// NOT the full-byte `MlDsaVerifyReal.verifyCore`, as the `(thi=3, μ=7, ...)` data below shows;
+    /// its round-trip is green in dregg-lean-ffi's
     /// `verified_ml_dsa_verify_runs_in_lean`). It carries the SAME contract the Lean `verifyFFI` proves:
     /// the honest deployed-parameter statement `(thi=3, μ=7, c̃=7, z=45, h=0)` ACCEPTS; a tampered `c̃`
     /// or out-of-range `z` REJECTS. This test exercises that the seam routes `ml_dsa_verify_core`

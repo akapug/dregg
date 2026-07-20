@@ -49,4 +49,6 @@ import Dregg2.Crypto.UcSignatureQuant
 import Dregg2.Crypto.HybridThresholdQuant
 import Dregg2.Crypto.ProtocolSoundnessQuant
 import Dregg2.Crypto.MlDsaSigVerAcvp
+import Dregg2.Crypto.MlKemEncapsAcvp
+import Dregg2.Crypto.MlDsaSigGenAcvp
 import Dregg2.Crypto.CrateGeneratedKats

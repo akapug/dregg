@@ -71,7 +71,13 @@ use zeroize::Zeroize;
 /// The extracted cores live in `metatheory/Dregg2/Crypto/Fips203Kem.lean` (`encapsCore` = `foEncaps` and
 /// `decapsCore` = `foDecaps` at the deployed Kyber parameters — the re-encryption check + implicit
 /// reject), `@[export]`ed as `dregg_fips203_encaps` / `dregg_fips203_decaps` and compiled to leanc-native
-/// code. They are PROVED to agree with the `MlKemIndCca` spec (`encapsCore_eq_spec` / `decapsCore_eq_spec`)
+/// code.
+/// ★ SCOPE — READ THE LEAN STATEMENTS: these are the SCALAR model (`encapsCore (A t m : ℤ)`), NOT
+/// full-dimension ML-KEM-768; for that see `MlKemEncaps.mlkemEncaps` over real 1184/1088-byte
+/// objects. `encapsCore_eq_spec` and `decapsCore_eq_spec` are BOTH `:= rfl` — the extracted `def`
+/// unfolded to its own definiens (`foEncaps` / `foDecaps`). They record that the `@[export]`ed
+/// object is a plain alias and NOT that the scalar instance models ML-KEM. They do not warrant
+/// "agrees with the spec" in any stronger sense. The cores discharge
 /// and to discharge `DreggKemRefinement.Fips203Correct` — the encaps→decaps round-trip — with NO `ml-kem`
 /// crate hypothesis (`extractedKemApi_fips203`). `dregg-lean-ffi::shadow_fips203_{encaps,decaps}` run them.
 ///
@@ -176,9 +182,14 @@ pub enum MlKemDecapsCoreInstall {
 /// The extracted core is `Dregg2.Crypto.MlKemEncaps.mlkemEncapsRealFFI` over `mlkemEncaps` (the FIPS 203 Alg 16
 /// FO encaps: `H(ek)` SHA3-256, `G(m ‖ H(ek))` SHA3-512 split, K-PKE.Encrypt over the real n=256 negacyclic
 /// ring / NTT / real 1184/1088-byte codec), `@[export]`ed as `dregg_mlkem_encaps_real` and compiled to
-/// leanc-native code. It is PROVED (`native_decide`) BYTE-EXACT vs the `ml-kem` v0.2.3 crate's
-/// NIST's ACVP FIPS 203 expected values (`encaps_matches_acvp`) and to round-trip through the K4 decaps
-/// (`encaps_decaps_roundtrip`). `dregg-lean-ffi::shadow_mlkem_encaps_real` runs it natively.
+/// leanc-native code. It is PROVED (`native_decide`) BYTE-EXACT vs NIST's OWN published expected
+/// ciphertext AND shared secret on the COMPLETE NIST ACVP `ML-KEM-encapDecap-FIPS203` group for this
+/// parameter set — `MlKemEncapsAcvp.encaps_matches_acvp_group`, all 25 cases of `tgId = 2`
+/// (ML-KEM-768, encapsulation, AFT), `tcId` 26-50 — and to round-trip through the K4 decaps across
+/// the same 25 (`MlKemEncapsAcvp.encaps_decaps_roundtrip_acvp_group`). The anchor is NIST, NOT the
+/// `ml-kem` crate. `dregg-lean-ffi::shadow_mlkem_encaps_real` runs it natively.
+/// ★ THESE ARE KATs, NOT REFINEMENT THEOREMS: 25 concrete inputs, NO `forall`. The for-all-inputs
+/// obligation is `EncapsCoreSpec` and it is OPEN.
 ///
 /// dregg-pq stays a LIGHT leaf (it never depends on the ~195 MB Lean archive): it takes a function pointer.
 /// An integration layer that CAN link the archive installs the native core via

@@ -62,7 +62,7 @@ signature. No `sorry`, no user `axiom`, no toy substitute.
 ## RESIDUAL
 
 `verify_accepts_real`, the one remaining `native_decide` theorem here (kept because
-`verifyCore_eq_spec_witness` in `VerifyCoreEqSpec` consumes it as a proof term), has trusted base the
+`verifyCore_eq_challengeMatches_and_norm_witness` in `VerifyCoreEqSpec` consumes it as a proof term), has trusted base the
 per-declaration `native_decide` compiler-trust axiom `verify_accepts_real._native.native_decide.ax`
 (the v4.30 realization of `Lean.ofReduceBool` / `Lean.trustCompiler`, i.e. compiled evaluation) — the
 SAME residual `Keccak`, `MlDsaRing`, and `MlDsaCodec` already name. The `#guard` reject/length vectors are commands with no
@@ -211,7 +211,7 @@ def genMsg : List UInt8 := [100, 114, 101, 103, 103, 32, 114, 101, 97, 108, 32, 
 
 Over the genuine crate bytes: `verify_accepts_real` is a `native_decide` theorem (the whole brick — if the
 μ framing, centered `Decompose`, `w1Encode` width, or `2^d` NTT scaling were wrong it would NOT close on the
-real signature; downstream `verifyCore_eq_spec_witness` consumes it as a proof term, so it stays a theorem
+real signature; downstream `verifyCore_eq_challengeMatches_and_norm_witness` consumes it as a proof term, so it stays a theorem
 and keeps its `native_decide` compiler-trust axiom `..._native.native_decide.ax` — the v4.30
 realization of `Lean.ofReduceBool`/`Lean.trustCompiler`). The reject/length vectors are `#guard` checks — compiler-
 evaluated commands with no proof term, hence no `ofReduceBool` axiom. -/
