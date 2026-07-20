@@ -12,8 +12,8 @@
 //!
 //! [`WitnessMode::Symbolic`] exploits that split. A symbolic turn applies the
 //! full state transition (the abstract progress) but DEFERS witness
-//! materialization: it does not call `Ledger::root()` (the truly-lazy Merkle
-//! materialization point, `cell/src/ledger.rs`), so its receipt carries a
+//! materialization: it does not compute the state anchor
+//! (`crate::state_commit`, the AIR-bound chip 8-felt commitment), so its receipt carries a
 //! DEFERRED sentinel post/pre state hash ([`DEFERRED_STATE_HASH`], all-zeros,
 //! which the conditional/atomic paths already tolerate). The witnesses are
 //! recovered ON DEMAND by [`collapse`], which re-runs the recorded symbolic
@@ -98,15 +98,14 @@ pub fn is_deferred(receipt: &TurnReceipt) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WitnessMode {
     /// THE CORRECT DEFAULT. Every committed turn materializes its
-    /// `pre_state_hash` / `post_state_hash` Merkle commitments (calls
-    /// `Ledger::root()`), so the receipt is immediately publishable to a light
-    /// client. Byte-identical to the executor's behavior before symbolic mode
-    /// existed.
+    /// `pre_state_hash` / `post_state_hash` state anchors (the AIR-bound chip
+    /// 8-felt commitment, `crate::state_commit`), so the receipt is immediately
+    /// publishable to a light client.
     #[default]
     Full,
     /// THE LOCAL FAST PATH. The state transition fully applies (balances /
     /// caps / nonces — the abstract progress), but witness materialization is
-    /// DEFERRED: the executor does not call `Ledger::root()`, and the receipt
+    /// DEFERRED: the executor does not compute the state anchor, and the receipt
     /// carries [`DEFERRED_STATE_HASH`] in its state-hash fields. A symbolic
     /// receipt is local/unpublishable until [`collapse`] re-derives its real
     /// witnesses. Admission gates are NOT deferred — only the witness is.
@@ -230,7 +229,16 @@ pub fn collapse_with(
         }
     }
 
-    let final_root = ledger.root();
+    // The collapse's materialized head is the LAST re-derived receipt's AIR-bound
+    // post-state anchor — the same object the receipts chain on. (It was
+    // `ledger.root()`, the trusted-Rust BLAKE3 tree; that value is not comparable
+    // to what the receipts now carry, so taking it from the chain head is both
+    // correct and the only self-consistent choice.) An empty collapse materialized
+    // no transition, so its head is the deferred sentinel.
+    let final_root = receipts
+        .last()
+        .map(|r| r.post_state_hash)
+        .unwrap_or(DEFERRED_STATE_HASH);
     Ok(CollapseResult {
         receipts,
         final_root,

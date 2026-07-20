@@ -11,12 +11,17 @@
 //!
 //! Phases (one accumulator each), in execution order for the classical forest path:
 //!   * `validate`   — Phase 0: empty/expiry/agent/nonce/fee/frozen/receipt-chain/budget gate.
-//!   * `pre_root`   — `ledger.root()` for the pre-state hash.
+//!   * `pre_root`   — the AIR-bound state ANCHOR for the pre-state hash
+//!     (`crate::state_commit::consensus_state_commitment`). This phase got
+//!     MEASURABLY more expensive when the anchor replaced BLAKE3 `ledger.root()`:
+//!     `root()` was an incremental O(log n) leaf patch, the anchor is O(n_cells)
+//!     Poseidon2 (`cells_root`) plus a `CanonicalHeapTree8` rebuild per
+//!     accumulator. Deliberate — see `state_commit`'s module docs, residual (4).
 //!   * `phase1`     — fee debit + nonce increment.
 //!   * `forest`     — `execute_tree` over every root (the auth+effect-apply walk).
 //!   * `post`       — conservation/excess checks, sovereign post-exec, committed-height
 //!     advance, fee distribution, rate-limit counters.
-//!   * `post_root`  — `ledger.root()` for the post-state hash.
+//!   * `post_root`  — the same anchor computation for the post-state hash.
 //!   * `receipt`    — effects/turn/forest hashes, delta build, receipt build, sign, record head.
 //!
 //! Within `forest`, a second tier attributes the per-action sub-phases:

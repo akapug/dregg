@@ -1474,8 +1474,12 @@ fn test_receipt_state_hashes() {
     let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 0);
     let executor = zero_cost_executor();
 
-    // Compute expected pre-state hash directly from the ledger root.
-    let expected_pre_state_hash = ledger.root();
+    // Compute the expected pre-state ANCHOR — the AIR-bound chip 8-felt state
+    // commitment (`crate::state_commit`), which REPLACED the trusted-Rust BLAKE3
+    // `ledger.root()` this test used to compare against. Same width, different
+    // object: the test still pins the receipt to an independently recomputed
+    // value, it just pins it to the value a circuit can actually recompute.
+    let expected_pre_state_hash = executor.consensus_state_commitment(&ledger, &agent_id);
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
@@ -1489,17 +1493,23 @@ fn test_receipt_state_hashes() {
     let result = executor.execute(&turn, &mut ledger);
     let (_, receipt, _) = result.unwrap_committed();
 
-    // Compute expected post-state hash after execution.
-    let expected_post_state_hash = ledger.root();
+    // Compute the expected post-state anchor after execution.
+    let expected_post_state_hash = executor.consensus_state_commitment(&ledger, &agent_id);
 
-    // Receipt must contain the exact hashes of the ledger at execution boundaries.
+    // Receipt must carry the exact anchors at the execution boundaries.
     assert_eq!(
         receipt.pre_state_hash, expected_pre_state_hash,
-        "pre_state_hash must match ledger root before execution"
+        "pre_state_hash must be the AIR-bound state anchor before execution"
     );
     assert_eq!(
         receipt.post_state_hash, expected_post_state_hash,
-        "post_state_hash must match ledger root after execution"
+        "post_state_hash must be the AIR-bound state anchor after execution"
+    );
+    // ...and must NOT be the retired trusted-Rust BLAKE3 ledger root.
+    assert_ne!(
+        receipt.post_state_hash,
+        ledger.root(),
+        "post_state_hash must no longer be the BLAKE3 ledger root"
     );
     // State changed (fee deducted, nonce incremented, field set), so hashes differ.
     assert_ne!(receipt.pre_state_hash, receipt.post_state_hash);
@@ -6611,7 +6621,8 @@ fn test_fee_distribution() {
         }
 
         // Added coverage for fee share consistency (post-fix for proof path timing too):
-        // shares visible in post_state_hash (== ledger.root() after dist), deltas (for ARs/cross-fed),
+        // shares visible in post_state_hash (== the AIR-bound state anchor after dist,
+        // `crate::state_commit` — formerly `ledger.root()`), deltas (for ARs/cross-fed),
         // and TurnReceipt. (FederationReceiptBody exercised in teasting vision tests.)
         // This covers the gap: fee + set_proposer/treasury + post_hash/AR/receipt/delta asserts.
         if case.expect_committed {
@@ -6621,10 +6632,10 @@ fn test_fee_distribution() {
                 ..
             } = &result
             {
-                let post_root = ledger.root();
+                let post_root = executor.consensus_state_commitment(&ledger, &agent_id);
                 assert_eq!(
                     receipt.post_state_hash, post_root,
-                    "case {}: receipt.post_state_hash must match ledger.root() after proposer/treasury fee shares",
+                    "case {}: receipt.post_state_hash must be the AIR-bound state anchor after proposer/treasury fee shares",
                     case.name
                 );
                 // Delta must reflect Phase-1 payer debit + Phase-3 share credits (matches compute_delta_from_journal_with_fee + proof-arm logic).

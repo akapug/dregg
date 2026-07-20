@@ -21,7 +21,7 @@
 //! * **`history_root`** (slot [`HISTORY_ROOT_SLOT`], = 3) — the per-grain
 //!   CommitBindsMMR rung: the [`Blake3Mmr`](dregg_query::Blake3Mmr) root over this
 //!   grain's receipt chain STRICTLY BEFORE this turn (leaf `i` = the canonical
-//!   `dregg-receipt-v3` `TurnReceipt::receipt_hash` of the grain's turn `i`),
+//!   `dregg-receipt-v4` `TurnReceipt::receipt_hash` of the grain's turn `i`),
 //!   witnessed on the same metered turn — so the committed post-state PINS the
 //!   grain's whole prior history. See [`verify_grain_history`].
 //! * **`calls_made`** (slot [`CALLS_MADE_SLOT`](dregg_sdk::CALLS_MADE_SLOT), = 4) — the metered turn counter the
@@ -108,7 +108,7 @@ pub const CONSUMED_SLOT: usize = 5;
 /// On every minted turn `N` (0-based) the minter writes
 /// [`grain_history_root`]`(receipt_hashes[0..N])` here: the
 /// [`Blake3Mmr`](dregg_query::Blake3Mmr) root whose leaf `i` is the canonical
-/// `dregg-receipt-v3` digest (`TurnReceipt::receipt_hash`) of this grain's
+/// `dregg-receipt-v4` digest (`TurnReceipt::receipt_hash`) of this grain's
 /// committed turn `i` — the grain's receipt chain **strictly before** this turn.
 /// The prefix (not the log including this turn) is what breaks the circularity:
 /// turn `N`'s own receipt absorbs the post-state hash, and the post-state now
@@ -139,7 +139,7 @@ pub const HISTORY_ROOT_SLOT: usize = 3;
 
 /// **The per-grain receipt-history MMR root** — the value bound at
 /// [`HISTORY_ROOT_SLOT`]. Leaf `i` is `receipt_hashes[i]`, the canonical
-/// `dregg-receipt-v3` digest of the grain's committed turn `i`; the structure and
+/// `dregg-receipt-v4` digest of the grain's committed turn `i`; the structure and
 /// root are the [`Blake3Mmr`](dregg_query::Blake3Mmr) forest (peaks bagged
 /// youngest-outward — Lean `mroot`, whose `mroot_injective` makes tamper /
 /// truncate / extend / reorder each move the root). The empty log yields the
@@ -334,7 +334,7 @@ pub struct ToolGatewayMinter {
     /// committed turn — the input `finalize_session` folds into `FinalizedTurn`s.
     records: Vec<GrainTurnRecord>,
     /// The grain's receipt-hash log, in commit order — leaf `i` is the canonical
-    /// `dregg-receipt-v3` digest (`TurnReceipt::receipt_hash`) of committed turn
+    /// `dregg-receipt-v4` digest (`TurnReceipt::receipt_hash`) of committed turn
     /// `i`. The MMR values whose root ([`grain_history_root`]) the next turn
     /// binds at [`HISTORY_ROOT_SLOT`] (the per-grain CommitBindsMMR weld).
     receipt_log: Vec<[u8; 32]>,
@@ -464,7 +464,7 @@ impl ToolGatewayMinter {
     }
 
     /// The grain's receipt-hash log, in commit order — one canonical
-    /// `dregg-receipt-v3` digest (`TurnReceipt::receipt_hash`) per committed
+    /// `dregg-receipt-v4` digest (`TurnReceipt::receipt_hash`) per committed
     /// turn. The MMR leaves behind the [`HISTORY_ROOT_SLOT`] binding; hand this
     /// (from a source you trust — this accessor is the HOST's copy) to
     /// [`verify_grain_history`] against an independently obtained committed cell.

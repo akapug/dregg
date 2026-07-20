@@ -666,6 +666,19 @@ pub struct ReversibleHistory {
     steps: Vec<Arc<ReversibleStep>>,
     /// `roots[i]` = canonical [`Ledger::root`] after applying steps `0..i`;
     /// `roots[0]` is the empty-ledger root, `roots[len()]` the head.
+    ///
+    /// ⚑ **These teeth are BLAKE3 `Ledger::root()` ON PURPOSE, and that is a
+    /// genuine fast path — not the consensus anchor.** They are in-process
+    /// scrubber bookkeeping: nothing here is signed, gossiped, persisted as a
+    /// quorum anchor, or shown to a light client. Their only job is "did the
+    /// backward walk land on exactly the state the forward walk left?", for
+    /// which a fast whole-image byte digest is the right tool — precisely the
+    /// non-ZK role the dual-hash ADR (`dregg_commit::hash`) reserves for BLAKE3.
+    /// The value a receipt CHAINS and an executor SIGNS is a different object
+    /// entirely: `crate::state_commit`'s AIR-bound chip 8-felt commitment. Do
+    /// not "unify" these two — a scrubber tooth that became a per-cell
+    /// commitment would stop detecting divergence in cells the turn did not
+    /// name, which is the whole point of a whole-image tooth.
     roots: Vec<[u8; 32]>,
     timestamp: i64,
     costs: ComputronCosts,

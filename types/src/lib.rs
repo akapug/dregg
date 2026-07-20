@@ -436,7 +436,20 @@ pub fn merkle_root_of_receipt_hashes(receipts: &[[u8; 32]]) -> [u8; 32] {
 /// vote signs the finalized state root it attests, so a quorum of these votes
 /// IS the restart anchor's quorum. The bump fences the format against a v1 vote
 /// (which signed `block_id || level` only) being replayed as a v2 root vote.
-pub const FINALIZATION_VOTE_DOMAIN_V2: &[u8] = b"dregg-finalization-vote-v2";
+///
+/// **v2 -> v3 (state anchor).** `merkle_root` here is
+/// `dregg_persist::canonical_ledger_root` — a BLAKE3 whole-image digest — and it
+/// DELIBERATELY stays that. It is the **restart anchor**: a node re-reads its
+/// store, reconstructs the ledger, and checks the reconstruction against this
+/// quorum-signed value. No per-cell algebraic commitment fills that role, and
+/// the whole-ledger 8-felt that would (`cells_root` Phase-E) is deferred. What
+/// DID change is everything downstream: the receipts this vote's block carries
+/// now anchor on the AIR-bound chip 8-felt commitment
+/// (`dregg_turn::state_commit`) rather than a trusted-Rust `Ledger::root()`, and
+/// the `AttestedRoot` this quorum re-anchors binds those receipts through
+/// `receipt_stream_root`. The bump fences a v2 signature — made when the receipt
+/// stream meant a BLAKE3 ledger root — from counting toward a v3 quorum.
+pub const FINALIZATION_VOTE_DOMAIN_V3: &[u8] = b"dregg-finalization-vote-v3";
 
 /// The canonical bytes a committee member signs when it votes that it has
 /// finalized `block_id` over committed state root `merkle_root`.
@@ -454,8 +467,8 @@ pub const FINALIZATION_VOTE_DOMAIN_V2: &[u8] = b"dregg-finalization-vote-v2";
 /// so every honest committee member computes the identical preimage regardless
 /// of local wall clock or per-node DAG bookkeeping.
 pub fn finalization_vote_signing_message(block_id: &[u8; 32], merkle_root: &[u8; 32]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(FINALIZATION_VOTE_DOMAIN_V2.len() + 32 + 32);
-    buf.extend_from_slice(FINALIZATION_VOTE_DOMAIN_V2);
+    let mut buf = Vec::with_capacity(FINALIZATION_VOTE_DOMAIN_V3.len() + 32 + 32);
+    buf.extend_from_slice(FINALIZATION_VOTE_DOMAIN_V3);
     buf.extend_from_slice(block_id);
     buf.extend_from_slice(merkle_root);
     buf
@@ -661,6 +674,17 @@ impl AttestedRoot {
     /// produces a different message than `note_tree_root = None, nullifier_set_root = Some(X)`.
     pub fn signing_message(&self) -> Vec<u8> {
         let mut msg = Vec::new();
+        // v6 (state anchor): `merkle_root` REMAINS `canonical_ledger_root` (a
+        // BLAKE3 whole-image digest) because it is the RESTART ANCHOR — a node
+        // reconstructs its ledger from the store and checks it against this
+        // quorum-signed value, a role no per-cell algebraic commitment fills
+        // (the whole-ledger 8-felt is the deferred `cells_root` Phase-E). What
+        // moved is what `receipt_stream_root` now covers: the receipts it roots
+        // carry the AIR-bound chip 8-felt state commitment
+        // (`dregg_turn::state_commit`), not a trusted-Rust `Ledger::root()`. So
+        // this quorum signature DOES certify the AIR-bound anchor — transitively,
+        // through the receipt stream. The domain bump fences a v5 signature from
+        // being read as a v6 claim.
         // v4 (issue #80) binds the receipt_stream_root so two federations
         // with identical ledger state but different receipt streams produce
         // different attestations.
@@ -680,7 +704,7 @@ impl AttestedRoot {
         // longer consensus-bound. The domain bump v4->v5 fences the format: a v4
         // verifier reconstructing a v5 preimage fails the signature check, so all
         // committee members must upgrade together (a genesis/epoch boundary).
-        msg.extend_from_slice(b"dregg-attested-root-v5");
+        msg.extend_from_slice(b"dregg-attested-root-v6");
         msg.extend_from_slice(&self.federation_id.0);
         msg.extend_from_slice(&self.merkle_root);
         match self.note_tree_root {
@@ -1286,12 +1310,12 @@ mod tests {
     #[test]
     fn v5_signing_message_distinct_from_legacy_preimage() {
         // Bumping the domain tag to v5 means a v5 root's signing message starts
-        // with "dregg-attested-root-v5" — a v4 verifier reconstructing the
+        // with "dregg-attested-root-v6" — a v5 verifier reconstructing the
         // preimage with the v4 tag (and mixing the now-dropped timestamp) would
         // fail the signature check, so legacy verifiers MUST be upgraded.
         let v5_root = root_with_receipts([0xCC; 32], &[[0x99; 32]]);
         let msg = v5_root.signing_message();
-        assert!(msg.starts_with(b"dregg-attested-root-v5"));
+        assert!(msg.starts_with(b"dregg-attested-root-v6"));
         // The receipt_stream_root tag (0x01) precedes the 32-byte hash
         // at the end of the preimage.
         assert_eq!(msg[msg.len() - 33], 0x01u8);
@@ -1318,7 +1342,7 @@ mod tests {
         // The shared finalization-vote preimage binds both the block id and the
         // finalized merkle_root: flipping either yields a different message.
         let base = finalization_vote_signing_message(&[0x11; 32], &[0x22; 32]);
-        assert!(base.starts_with(FINALIZATION_VOTE_DOMAIN_V2));
+        assert!(base.starts_with(FINALIZATION_VOTE_DOMAIN_V3));
         assert_ne!(
             base,
             finalization_vote_signing_message(&[0x11; 32], &[0x23; 32]),

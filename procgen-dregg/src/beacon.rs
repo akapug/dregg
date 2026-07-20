@@ -819,7 +819,7 @@ mod fetch_tests {
 // federation's finalized ledger root is the other half: it is authenticated by the
 // node's HYBRID finalization quorum (`node/src/finalization_votes.rs` —
 // `FinalizationVote` carries BOTH an ed25519 AND an ML-DSA-65 (FIPS 204) signature
-// over `dregg-finalization-vote-v2 ‖ block_id ‖ merkle_root`, and a vote counts only
+// over `dregg-finalization-vote-v3 ‖ block_id ‖ merkle_root`, and a vote counts only
 // when BOTH verify), so the root is POST-QUANTUM unforgeable — but a within-threshold
 // proposer can grind block content to steer `H(root)`, so it is not on its own
 // bias-resistant.
@@ -1015,7 +1015,7 @@ impl std::error::Error for RootError {}
 /// (`node/src/finalization_votes.rs::VoteCollector::assembled_quorum`) and the persistence
 /// layer stores as an attested root's `finalization_quorum`: per distinct signer, the
 /// ed25519 signature AND the ML-DSA-65 signature over the ONE canonical preimage
-/// `dregg-finalization-vote-v2 ‖ block_id ‖ merkle_root`. Nothing is re-signed here — the
+/// `dregg-finalization-vote-v3 ‖ block_id ‖ merkle_root`. Nothing is re-signed here — the
 /// day seed folds the federation's own finality evidence.
 ///
 /// `fixed_at_unix` is WHEN the root was fixed (the finalized block's time, as observed /

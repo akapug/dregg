@@ -27,13 +27,13 @@ a trusted key. **Nothing trusted, nothing duplicated.**
 |---|---|---|---|
 | — | `⟺` TEMPLATE (non-rev) | technique | ✅ `209d543e5` — the reusable schema + honest-shape finding; CI-wired |
 | 8 | non-revocation | technique | ✅ (the template IS non-rev); residual: fold spine decode further |
-| 2 | state commitment (transfer) | technique | ✅ FLAGSHIP `c68c4f5a9` — `transferDescriptor_commit_iff`; CI-wired. TAIL: generalize to ALL effect tags; make `wire_commit` the chained commitment + delete BLAKE3 `ledger.root()` |
+| 2 | state commitment (transfer) | technique | ✅ FLAGSHIP `c68c4f5a9` — `transferDescriptor_commit_iff`; CI-wired. **ANCHOR CUTOVER LANDED** (this cycle): `dregg_turn::state_commit` is now THE consensus anchor — `TurnReceipt::{pre,post}_state_hash`, the executor signature, the federation receipt QC body, and (transitively via `receipt_stream_root`) the `AttestedRoot` quorum all carry the CHIP 8-felt `wire_commit_8_chip`, not BLAKE3 `Ledger::root()`. ⚑ NOT `⟺`-CLOSED: the flagship theorems certify the **1-felt** `wireCommitR`; the 8-felt anchor is chip-bound + soundness-ADDITIVE, and `air_accepts ⟺ spec` at 8 felts awaits the S2 flag-day + an 8-felt re-derivation (gated on the vacuous-at-params `Poseidon2WideCR`/`InjectiveFloorRegrounded`). TAIL: generalize to ALL effect tags; the 8-felt re-derivation. |
 | 5 | heap-root | ARCHITECTURE | ✅ `f7dd79db2` — genuine `Heap.set` forced, prepend-digest DELETED, MapOps carrier verified |
 | 3 | receipt `TurnExecuted` | trust→proof | ✅ **VERIFIED GREEN** — resolver `26d3b1615` + migration `b4ac7ef23` (all 4 features → `TurnProven`, proof threaded onto the receipt), on origin. Clean run: `service_promise` **7 passed / 0 failed**, incl. `committed_state_forbids_refund_after_release` + `committed_terminal_moves_the_cell_commitment` — the earlier "failures" WERE a stale-reverted-source artifact (the tree had been reset mid-session), exactly as the lane diagnosed. Trusted-key retired as the `TurnExecuted` trust root; a receipt now requires a VERIFIED EffectVM STARK bound to the turn. |
 | 4 | cap-root | ~~ARCHITECTURE~~ **ALREADY CLOSED** | ✅ the DEPLOYED `attenuateV3` already forces the faithful 8-felt sorted-tree write `writesTo8` (`CapOpenEmit.effCapOpenWriteV3_forces_write8`, §11 keystone, `#assert_axioms`-clean, apex-wired via `Rfix 12` / `ClosureFanoutGenuine` CLASS A) — **STRONGER than heap** (full ~124-bit vs heap's lane-0 scalar). The audit/crux "prepend / free CAP_DIGEST_NEW" read a SUPERSEDED study face, not the deployed descriptor. Doc corrected `c8f443e37`. The cap lane correctly REFUSED to build the requested scalar splice (would be a weaker re-authored mirror — reality-gate held). RESIDUALS (tracked, NOT soundness gaps): (a) delete the superseded prepend/free-digest code across ~15 cap-family modules (own multi-session cutover + adversarial audit); (b) a `Satisfied2`-only forged-root canary needs the sorted-tree functional property from the trace (discharge the `SpineCommits` decode) + closes the arity-7 leaf other-field encoding residual. |
 | 6 | note-spend | structural | ✅ `cb2567872` (on origin) — `noteSpendFresh_accepts_iff` (full `⟺`: `NoteFreshAccepts ↔ nf∉nulls`), `gapOpen_complete` forward gap-construction, canaried both directions, `#assert_axioms`-clean. `NullifierTreeEncodes` kept as the honest Rust-accumulator-boundary residual (named). |
 | — | garbled-eval | technique | ✅ `ba38e878b` (on origin) — `garbled_accepts_iff` (`AirAccepts ↔ CanonInstance`) + `garbled_bridge` (∀-soundness ∧ ∃-completeness); `honestG_satisfied2` generalizes the single witness parametrically; `GarbledCarriers` bundle (canon+hash), both canaries. Also CI-wired the previously `lake env`-only Rung-1/2 garbled chain. |
-| 1 | ledger root | trusted-Rust | ⏳ folds into #2 tail (`cells_root` = Lean-authored sorted-Poseidon2 fold, bound at the boundary) |
+| 1 | ledger root | trusted-Rust | 🟡 **OFF THE RECEIPT/SIGNING PATH** — `Ledger::root()` no longer reaches any receipt, executor signature, or federation receipt QC. It survives ONLY where a genuine non-consensus rationale holds (the `reversible.rs` in-process scrubber teeth, snapshot/image whole-image bootstrap, wasm host export) — the roles the dual-hash ADR (`dregg_commit::hash`) actually reserves for BLAKE3. `canonical_ledger_root` REMAINS in `AttestedRoot`/`FinalizationVote` as the **restart anchor** (a node reconstructs its ledger from the store and checks it against the quorum-signed digest — no per-cell algebraic commitment fills that role). RESIDUAL: this anchors a **per-cell/per-transition** commit, so the whole-ledger 8-felt state root is still the deferred `cells_root` Phase-E. |
 | 9 | `system_roots_digest` | trusted-Rust | ⏳ later — small; make it an AIR-bound or Lean-authored value |
 | 10 | effect state-transition | Lean-authored | ✅ deployed `produce_via_lean` (covered set); residual: the root (#2) + wasm/unmapped fallback |
 
@@ -65,9 +65,14 @@ a trusted key. **Nothing trusted, nothing duplicated.**
 1. **Receipt proof-threading (#3):** commit pipeline PRODUCES the rotated STARK → ATTACH to `TurnReceipt`/
    `ConditionProof` at construction → 4 features migrate to `TurnProven`+`EffectVmProof` → land `26d3b1615`.
    Touches: node commit pipeline, sdk receipt type, turn/conditional, the 4 feature crates + tests.
-2. **State-commit anchor cutover (#2 tail):** `wire_commit` becomes the chained commitment in `execute.rs`;
-   delete BLAKE3 `ledger.root()`. Greenfield = a code change, NOT a migration. Touches: cell/ledger, turn/executor,
-   node, light-client read paths.
+2. **State-commit anchor cutover (#2 tail): ✅ LANDED.** `turn/src/state_commit.rs` is THE anchor
+   (`wire_commit_8_chip`, NOT the plain `wire_commit_8` — the plain chain diverges from the deployed chip
+   chain and a canary test pins that). Converted: `execute.rs` pre/post, `collapse.rs` head,
+   `exec-lean/lean_apply.rs` (Lean/Rust differential now over the anchor), `finalize.rs` contracts.
+   Domain-bumped: `dregg-receipt-v4`, `executor-receipt-sig-v4`, `dregg-fed-receipt-body-v2`,
+   `dregg-attested-root-v6`, `dregg-finalization-vote-v3`. RESIDUAL (do not overclaim): 8-felt `⟺` is not
+   derived; the anchor is per-cell not whole-ledger; the lane-0 waist persists at narrow-leg broadcast
+   sites; the executor's root phase regressed from incremental O(log n) to O(n_cells) Poseidon2.
 3. **All-effect-tag `⟺`:** generalize `transferDescriptor_commit_iff` from transfer to every effect (the rotated
    descriptor covers them; the per-family completeness proofs do not exist). Pure Lean, but broad.
 

@@ -1073,13 +1073,16 @@ impl TurnExecutor {
     ///
     /// The receipt is built the same self-contained way as the proof-carrying early-commit path
     /// (`execute.rs`): `effects_hash`/`action_count` from the turn's call forest, a metering-proxy
-    /// `computrons_used`, `pre_state_hash`/`post_state_hash` pinned to the pre/authoritative roots,
+    /// `computrons_used`, `pre_state_hash`/`post_state_hash` pinned to the pre/authoritative ANCHORS (the
+    /// AIR-bound chip 8-felt commitment — the caller MUST source both from
+    /// `TurnExecutor::consensus_state_commitment` so the chain's continuity check compares
+    /// like with like),
     /// signed if a key is configured, and a fee-aware (conservation-closed) ledger delta. It does NOT
     /// re-run the effect loop — the verified executor already adjudicated the transition; this is the
     /// honest attestation of its authoritative verdict.
     ///
-    /// `pre_root` is the pre-state root (for `pre_state_hash`); `post_root` is the installed Lean
-    /// post-state root.
+    /// `pre_root` is the pre-state anchor (for `pre_state_hash`); `post_root` is the installed Lean
+    /// post-state anchor. Both MUST come from `TurnExecutor::consensus_state_commitment`.
     pub fn build_producer_committed_result(
         &self,
         turn: &Turn,

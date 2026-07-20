@@ -51,9 +51,18 @@ pub struct FederationReceiptBody {
     pub agent: CellId,
     /// Per-agent nonce.
     pub nonce: u64,
-    /// Pre-state hash (BLAKE3 of canonical pre-state).
+    /// Pre-state ANCHOR: the AIR-bound chip 8-felt state commitment
+    /// (`dregg_turn::state_commit`), packed 8 × 4 LE = 32 bytes. This was a
+    /// BLAKE3 `Ledger::root()`; it is now the same Poseidon2 carrier the
+    /// deployed rotated EffectVM trace publishes as `STATE_COMMIT`. The BLS
+    /// threshold QC over `body_hash` therefore makes a genuine **quorum
+    /// certificate over the AIR-bound commitment** rather than over a
+    /// trusted-Rust Merkle root. See `dregg_turn::state_commit` for the labeled
+    /// residual (the `⟺` refinement certifies the 1-felt chain, not this one;
+    /// and this is a per-cell, not whole-ledger, commitment).
     pub pre_state_hash: [u8; 32],
-    /// Post-state hash (BLAKE3 of canonical post-state).
+    /// Post-state ANCHOR — the same object as [`Self::pre_state_hash`], one
+    /// transition later.
     pub post_state_hash: [u8; 32],
     /// Effects-hash (BLAKE3 of the runtime effect sequence).
     pub effects_hash: [u8; 32],
@@ -66,8 +75,13 @@ impl FederationReceiptBody {
     ///
     /// Domain-separated via BLAKE3 derive_key, so it cannot collide with any
     /// other dregg signing message (vote, attested root, bridge phase).
+    ///
+    /// **v2:** bumped when `pre_state_hash` / `post_state_hash` became the
+    /// AIR-bound chip 8-felt anchor instead of the trusted-Rust BLAKE3 ledger
+    /// root. Same widths, different value and meaning — the bump keeps a v1
+    /// threshold signature from ever verifying against a v2 body.
     pub fn body_hash(&self) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-fed-receipt-body-v1");
+        let mut hasher = blake3::Hasher::new_derive_key("dregg-fed-receipt-body-v2");
         hasher.update(&self.turn_hash);
         hasher.update(&self.block_height.to_le_bytes());
         hasher.update(&self.block_hash);

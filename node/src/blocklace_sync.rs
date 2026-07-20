@@ -5384,11 +5384,30 @@ async fn execute_finalized_turn(
                 build_federation_receipt(&s, &signed_turn.turn, &receipt, new_height, block_id);
 
             // ── Write a fresh AttestedRoot anchored to (block_id, round)
-            // (audit F3 / gap D). The merkle_root is the BLAKE3 of the
-            // ledger's canonical bytes. When full-turn proving is enabled
-            // (devnet) the committed turn ALSO carries a real, re-verified
-            // full-turn STARK proof (see `full_turn_proof_attached` above);
-            // the note-tree Poseidon2 root binding remains threaded separately.
+            // (audit F3 / gap D).
+            //
+            // `merkle_root` is the BLAKE3 whole-image `canonical_ledger_root`,
+            // and it STAYS that ON PURPOSE: it is the RESTART ANCHOR — on boot a
+            // node reconstructs its ledger from the store and checks the
+            // reconstruction against this quorum-signed value (`state.rs`'s
+            // `recovered_root`). No per-cell algebraic commitment fills that
+            // role, and the whole-ledger 8-felt that would (`cells_root`
+            // Phase-E) is deferred.
+            //
+            // The AIR-bound binding arrives through `receipt_stream_root` below:
+            // it roots `receipt.receipt_hash()`, and a receipt's
+            // `pre`/`post_state_hash` are now the chip 8-felt state commitment
+            // (`dregg_turn::state_commit`), NOT the trusted-Rust
+            // `Ledger::root()`. So this attestation's quorum signature DOES
+            // certify the AIR-bound anchor — transitively, via the receipt
+            // stream — while the BLAKE3 digest keeps doing the whole-image
+            // recovery job the dual-hash ADR (`dregg_commit::hash`) reserves for
+            // non-circuit paths.
+            //
+            // When full-turn proving is enabled (devnet) the committed turn ALSO
+            // carries a real, re-verified full-turn STARK proof (see
+            // `full_turn_proof_attached` above); the note-tree Poseidon2 root
+            // binding remains threaded separately.
             let merkle_root = canonical_ledger_root(&s.ledger);
             let note_tree_root: Option<[u8; 32]> = None;
             let timestamp_for_root = now;
@@ -5443,7 +5462,7 @@ async fn execute_finalized_turn(
             // node after >=1 finalized height.
             //
             // Fix B (landed): `FinalizationVote` v2 binds the finalized
-            // merkle_root (`dregg-finalization-vote-v2 || block_id ||
+            // merkle_root (`dregg-finalization-vote-v3 || block_id ||
             // merkle_root`), the `VoteCollector` RETAINS the signature bytes
             // (`assembled_quorum`), and the >=threshold committee quorum is
             // persisted into the root's `finalization_quorum` — captured below

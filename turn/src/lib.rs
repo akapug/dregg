@@ -109,6 +109,10 @@ pub mod pending;
 pub mod pq;
 pub mod presence_discharge;
 #[cfg(feature = "prover")]
+pub mod private_graph_rewrite_custom;
+#[cfg(feature = "prover")]
+pub mod private_graph_rewrite_history;
+#[cfg(feature = "prover")]
 pub mod private_preference_custom;
 pub mod reactive;
 pub mod reversible;
@@ -116,6 +120,7 @@ pub mod rotation_witness;
 pub mod routing;
 pub mod script;
 pub mod shadow;
+pub mod state_commit;
 pub mod turn;
 pub mod umem;
 pub mod verify;

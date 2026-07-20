@@ -345,8 +345,13 @@ impl StoredAttestedRoot {
         let mut msg = Vec::new();
         // v5 (N3 committee-restart fix): the wall-clock `timestamp` is DROPPED
         // from the signed preimage so the root's preimage is deterministic
-        // across the committee. Mirrors `dregg_types::AttestedRoot::signing_message`.
-        msg.extend_from_slice(b"dregg-attested-root-v5");
+        // across the committee. v6 (state anchor): `merkle_root` STAYS the BLAKE3
+        // whole-image `canonical_ledger_root` — it is the restart anchor this very
+        // function re-verifies — while the receipts under `receipt_stream_root` moved
+        // to the AIR-bound chip 8-felt commitment (`dregg_turn::state_commit`).
+        // Mirrors `dregg_types::AttestedRoot::signing_message` and MUST stay
+        // byte-identical to it.
+        msg.extend_from_slice(b"dregg-attested-root-v6");
         msg.extend_from_slice(&self.federation_id.0);
         msg.extend_from_slice(&self.merkle_root);
         match self.note_tree_root {

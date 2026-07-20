@@ -933,8 +933,21 @@ impl TurnReceipt {
     pub fn receipt_hash(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         // Version-bumped to v2 when federation_id binding was added; to v3
-        // when consumed_capabilities binding was added (cap Phase C).
-        hasher.update(b"dregg-receipt-v3");
+        // when consumed_capabilities binding was added (cap Phase C); to v4
+        // when `pre_state_hash` / `post_state_hash` STOPPED being the
+        // trusted-Rust BLAKE3 `Ledger::root()` and BECAME the AIR-bound chip
+        // 8-felt state commitment (`crate::state_commit`). The fields are the
+        // same width — `Faithful8::to_bytes32` packs 8 × 4 LE = exactly 32
+        // bytes — so only the VALUE and its MEANING changed. The domain bump
+        // fences that: a v3 verifier reconstructing a v4 preimage fails the
+        // signature check rather than silently comparing a Poseidon2 anchor
+        // against a BLAKE3 root.
+        //
+        // NB the receipt hash itself stays BLAKE3. That is the dual-hash ADR
+        // working as written (`dregg_commit::hash`): this is a non-ZK
+        // general-purpose commitment over an already-algebraic anchor, not a
+        // value any circuit recomputes.
+        hasher.update(b"dregg-receipt-v4");
         hasher.update(&self.turn_hash);
         hasher.update(&self.forest_hash);
         hasher.update(&self.pre_state_hash);
@@ -1057,9 +1070,15 @@ impl TurnReceipt {
     /// signature attest to *every* field bound into `receipt_hash`. The
     /// v2 narrow message is preserved (see
     /// [`canonical_executor_signed_message_v2`]) so existing fixtures and
-    /// test vectors can still round-trip; new signers should use v3.
+    /// test vectors can still round-trip; new signers should use v4.
+    ///
+    /// **v4 (state anchor):** the state fields the message transitively covers
+    /// are no longer the trusted-Rust BLAKE3 `Ledger::root()` — they are the
+    /// AIR-bound chip 8-felt commitment (`crate::state_commit`). The domain
+    /// bumps in lockstep with `dregg-receipt-v4` so an executor signature can
+    /// never be replayed across the meaning change.
     pub fn canonical_executor_signed_message(&self) -> Vec<u8> {
-        const DOMAIN: &[u8] = b"executor-receipt-sig-v3:";
+        const DOMAIN: &[u8] = b"executor-receipt-sig-v4:";
         let receipt_hash = self.receipt_hash();
         let mut msg = Vec::with_capacity(DOMAIN.len() + 32);
         msg.extend_from_slice(DOMAIN);

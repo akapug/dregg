@@ -262,7 +262,14 @@ fn collapse_reproduces_full_run() {
     for t in &turns {
         full_receipts.push(drive(&full_exec, &mut full_ledger, t.clone()));
     }
-    let full_final_root = full_ledger.root();
+    // The Full run's HEAD is its last receipt's AIR-bound post-state anchor
+    // (`dregg_turn::state_commit`) — the object `CollapseResult::final_root` now
+    // carries, replacing the trusted-Rust BLAKE3 `ledger.root()`. Same
+    // assertion strength: collapse must land on exactly the Full run's head.
+    let full_final_root = full_receipts
+        .last()
+        .expect("the Full run committed at least one turn")
+        .post_state_hash;
 
     // COLLAPSE the recorded symbolic run: re-run through Full from the same
     // pre-state base. (collapse pins its own Full executor to the timestamp.)

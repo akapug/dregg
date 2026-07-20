@@ -1625,6 +1625,32 @@ impl TurnExecutor {
         }
     }
 
+    /// **THE consensus state anchor for this executor** — the AIR-bound chip
+    /// 8-felt commitment of `agent`'s cell (see [`crate::state_commit`]).
+    ///
+    /// This REPLACED `Ledger::root()` (a trusted-Rust BLAKE3 Merkle tree the
+    /// circuit never recomputes) as the value stamped into
+    /// `TurnReceipt::{pre,post}_state_hash` — and therefore as the value the
+    /// executor signature, the federation receipt QC, and the attestation quorum
+    /// all certify. Read `crate::state_commit`'s module docs for the LABELED
+    /// residual: this is the right object, chip-bound and soundness-additive,
+    /// but `air_accepts ⟺ spec` **at 8 felts** is not yet proven, and this is a
+    /// per-cell commit, not the whole-ledger snapshot the BLAKE3 root was.
+    ///
+    /// The three accumulator roots are the executor's LIVE state, so the anchor
+    /// tracks the same carrier the deployed rotated trace publishes. Both the
+    /// pre- and post-state calls go through here, so
+    /// `verify::verify_receipt_chain`'s continuity check compares like with like.
+    pub fn consensus_state_commitment(&self, ledger: &Ledger, agent: &CellId) -> [u8; 32] {
+        let ctx = crate::state_commit::consensus_ctx(
+            ledger,
+            self.note_nullifiers.lock().unwrap().root8(),
+            self.note_commitments.lock().unwrap().root8(),
+            self.note_revoked.lock().unwrap().root8(),
+        );
+        crate::state_commit::consensus_state_commitment(ledger, agent, &ctx)
+    }
+
     /// Sign `receipt.receipt_hash()` with the executor's signing key if one
     /// is configured, returning the 64-byte signature bytes for embedding in
     /// `receipt.executor_signature`. Returns `None` when no key is set —
@@ -1632,7 +1658,7 @@ impl TurnExecutor {
     fn maybe_sign_receipt(&self, receipt: &TurnReceipt) -> Option<Vec<u8>> {
         let seed = self.executor_signing_key.as_ref()?;
         let sk = ed25519_dalek::SigningKey::from_bytes(seed);
-        // Sign the v3 canonical message: `executor-receipt-sig-v3:` || receipt_hash() —
+        // Sign the v4 canonical message: `executor-receipt-sig-v4:` || receipt_hash() —
         // the FULL receipt hash, so the signature attests to every field bound into it
         // (effects_hash, computrons_used, derivation_records, routing directives, emitted
         // events, finality, was_encrypted, was_burn, the chain link). The narrow v2 prefix

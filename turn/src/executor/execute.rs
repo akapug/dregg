@@ -526,13 +526,16 @@ impl TurnExecutor {
             None
         };
 
-        // Compute pre-state hash before any mutations.
+        // Compute the pre-state ANCHOR before any mutations — the AIR-bound chip
+        // 8-felt commitment of the agent's cell (`crate::state_commit`), NOT the
+        // trusted-Rust BLAKE3 `Ledger::root()` this used to stamp. See
+        // `state_commit`'s module docs for the labeled residual.
         //
         // SYMBOLIC EXECUTION (`crate::collapse`): in WitnessMode::Symbolic the
-        // per-turn Merkle witness is DEFERRED — we skip `Ledger::root()` (the
-        // truly-lazy materialization point) and stamp the deferred sentinel
-        // instead. The state transition below still applies in full; only the
-        // witness is deferred (recovered on demand by `collapse`). EXCEPTION:
+        // per-turn witness is DEFERRED — we skip the anchor computation and
+        // stamp the deferred sentinel instead. The state transition below still
+        // applies in full; only the witness is deferred (recovered on demand by
+        // `collapse`). EXCEPTION:
         // the proof-carrying sovereign path (`turn.execution_proof.is_some()`)
         // is itself an ADMISSION/witness gate — its STARK binds the committed
         // state commitment — so it always materializes the real root (a witness
@@ -545,7 +548,7 @@ impl TurnExecutor {
         let pre_state_hash = if symbolic_defer {
             crate::collapse::DEFERRED_STATE_HASH
         } else {
-            ledger.root()
+            self.consensus_state_commitment(ledger, &turn.agent)
         };
         if prof {
             super::turn_profile::accum(super::turn_profile::Phase::pre_root, _pt_root);
@@ -637,7 +640,10 @@ impl TurnExecutor {
                         turn.fee,
                     );
 
-                    let post_state_hash = ledger.root();
+                    // The AIR-bound post-state anchor (same function as the
+                    // pre-state above, so `verify_receipt_chain`'s continuity
+                    // check compares like with like).
+                    let post_state_hash = self.consensus_state_commitment(ledger, &turn.agent);
                     // Compute the forest hash once; reuse for turn_hash + receipt field.
                     let forest_hash = turn.call_forest.compute_hash();
                     let turn_hash = turn.hash_with_forest(&forest_hash);
@@ -1343,12 +1349,12 @@ impl TurnExecutor {
         // Phase 4: Compute receipt.
         //
         // SYMBOLIC EXECUTION: in WitnessMode::Symbolic this classical forest
-        // path DEFERS the post-state Merkle witness — skip `Ledger::root()` and
-        // stamp the deferred sentinel. The state transition above already
-        // applied; `collapse` re-runs this turn under Full to materialize the
-        // real `post_state_hash`. (`symbolic_defer` was computed at the
-        // pre-state above; the forest path is never proof-carrying, so it is
-        // simply `self.is_symbolic()` here.)
+        // path DEFERS the post-state witness — skip the anchor and stamp the
+        // deferred sentinel. The state transition above already applied;
+        // `collapse` re-runs this turn under Full to materialize the real
+        // `post_state_hash`. (`symbolic_defer` was computed at the pre-state
+        // above; the forest path is never proof-carrying, so it is simply
+        // `self.is_symbolic()` here.)
         if prof {
             super::turn_profile::accum(super::turn_profile::Phase::post, _pt_post);
         }
@@ -1356,7 +1362,7 @@ impl TurnExecutor {
         let post_state_hash = if symbolic_defer {
             crate::collapse::DEFERRED_STATE_HASH
         } else {
-            ledger.root()
+            self.consensus_state_commitment(ledger, &turn.agent)
         };
         if prof {
             super::turn_profile::accum(super::turn_profile::Phase::post_root, _pt_postroot);

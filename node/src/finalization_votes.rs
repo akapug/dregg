@@ -34,7 +34,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 ///
 /// The signature is over
 /// [`dregg_types::finalization_vote_signing_message`] =
-/// `dregg-finalization-vote-v2 || block_id || merkle_root`, so it binds the
+/// `dregg-finalization-vote-v3 || block_id || merkle_root`, so it binds the
 /// voter to *this* block at *this* finalized state root. That `merkle_root`
 /// binding (N3 committee-restart fix, `VOTE_DOMAIN` v1→v2) is what turns a
 /// quorum of these votes INTO the restart anchor: the same signatures a full

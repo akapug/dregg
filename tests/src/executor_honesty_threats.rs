@@ -693,7 +693,7 @@ fn cross_cutting_canonical_signing_message_fields() {
 
     let message = base.canonical_executor_signed_message();
     assert!(
-        message.starts_with(b"executor-receipt-sig-v3:"),
+        message.starts_with(b"executor-receipt-sig-v4:"),
         "executor receipt signatures must use the v3 domain separator"
     );
 

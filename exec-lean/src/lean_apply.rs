@@ -1758,8 +1758,11 @@ pub fn produce_via_lean(
             return (result, ProducerOutcome::Fallback { reason: e });
         }
     };
-    let (mut lean_ledger, lean_committed) = lean;
-    let lean_root = lean_ledger.root();
+    let (lean_ledger, lean_committed) = lean;
+    // The AIR-bound state anchor (`dregg_turn::state_commit`), NOT the trusted-Rust
+    // BLAKE3 `Ledger::root()` this used to compare. The Rust↔Lean differential is
+    // now over the value the deployed rotated trace actually publishes.
+    let lean_root = executor.consensus_state_commitment(&lean_ledger, &turn.agent);
 
     // PRE-STATE SNAPSHOT: capture the pre-state (and its root) BEFORE the Rust reference mutates
     // `ledger`. The verdict is already known (`lean_committed`), so we only pay the clone when the
@@ -1767,7 +1770,7 @@ pub fn produce_via_lean(
     // rejection mandates (a verified reject = no state edit). `pre_root` (cheap) is always taken for
     // the synthesized-receipt `pre_state_hash`. Mirrors the strict-veto snapshot in
     // `executor::execute_with_shadow`, but lazily — the agreeing commit path pays no clone.
-    let pre_root = ledger.root();
+    let pre_root = executor.consensus_state_commitment(ledger, &turn.agent);
     let pre_snapshot = if lean_committed {
         None
     } else {
@@ -1779,7 +1782,7 @@ pub fn produce_via_lean(
     // DEMOTED cross-check, not the authority.
     let rust_result = executor.execute(turn, ledger);
     let rust_committed = matches!(rust_result, TurnResult::Committed { .. });
-    let rust_root = ledger.root();
+    let rust_root = executor.consensus_state_commitment(ledger, &turn.agent);
     let rust_agreed = lean_committed == rust_committed && lean_root == rust_root;
 
     let outcome = ProducerOutcome::LeanAuthoritative {
