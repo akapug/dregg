@@ -36,7 +36,7 @@ the verify matmul; they are stated in the `(ntt ·)(ntt ·)` / normal-domain-mat
 ## 2. `sign_produces_spec_valid` — sign→verify correctness routed through the proven verify=spec
 
 The security-meaningful direction. `MlDsaSignReal.sign_produces_valid_sig` establishes
-`verifyCore signPk signMsg [] (signCore signSk signMsg []) = true` on the honest keypair. Feeding that through
+`verifyCore acvpPk acvpMsg acvpCtx (signCore acvpSk acvpMsg acvpCtx) = true` on the NIST ACVP keypair. Feeding that through
 the PROVEN `verifyCore_eq_spec`, the signature `signCore` produces satisfies the FIPS 204 Algorithm 8 verify
 PREDICATE: the SHAKE challenge fixed-point (`VerifyCoreSpec.challengeMatches`) AND the response norm bound
 `‖z‖∞ < γ₁−β`. This is honest sign→verify correctness, and it is NON-VACUOUS — a concrete genuine ML-DSA-65
@@ -45,7 +45,7 @@ PREDICATE: the SHAKE challenge fixed-point (`VerifyCoreSpec.challengeMatches`) A
 ## HONEST RESIDUALS (named, not laundered)
 
 * **The full `signCore = Sign_internal` byte identity** (with the rejection loop) is NOT reproved here
-  symbolically; `MlDsaSignReal.sign_matches_crate_deterministic` pins it byte-for-byte on the concrete vector
+  symbolically; `MlDsaSignReal.sign_matches_acvp_deterministic` pins it byte-for-byte on the NIST ACVP vector
   (`native_decide`). The loop is a `partial def`; the ring-faithful lemmas above are its per-iteration ring
   content, and `sign_produces_spec_valid` certifies the accepted iteration against the FIPS verify predicate.
 * **`ExpandMask` = spec** and **the rejection-loop termination/bounds** (`‖z‖∞ < γ₁−β`, `‖r0‖∞ < γ₂−β`,
@@ -55,8 +55,8 @@ PREDICATE: the SHAKE challenge fixed-point (`VerifyCoreSpec.challengeMatches`) A
   `VerifyCoreEqSpec` (at the γ₁ = 2¹⁹ width, `cbits = 20`), left unwired here.
 * **`Â_il = ntt(A_il)`** (NTT-domain matrix ↔ normal-domain matrix). `signRing_w_row` is stated in the
   normal-domain `(ntt t.1)(ntt t.2)` shape; identifying it with signCore's already-NTT-domain `expandA`
-  matrix `Â` needs `ntt ∘ intt = id` for-all (CLOSED: `MlDsaRing.nttRightInverse_proven` in
-  `Dregg2.Crypto.NttFaithful`, axiom-clean, no `native_decide`). This is the IDENTICAL residual on the verify side (`toRq_intt_matmul_row` has the same shape) — a
+  matrix `Â` needs `ntt ∘ intt = id` for-all (today only `MlDsaRing.ntt_intt_id`, one `native_decide`
+  sample). This is the IDENTICAL residual on the verify side (`toRq_intt_matmul_row` has the same shape) — a
   faithful-NTT fact, not a hardness carrier.
 * **The abstract `MlDsaParams.sign` instance over `R_q^k`** (constructing `A : R_q^l →ₗ R_q^k` as a
   `LinearMap`) is not built — as on the verify side, we stop at the per-row/per-coefficient `toRq` identities
@@ -70,7 +70,7 @@ namespace Dregg2.Crypto.SignCoreSpec
 open Dregg2.Crypto.MlDsaRing (Poly q zeroPoly ntt intt pointwiseMul addPoly subPoly
   pointwiseMul_size pointwiseMul_lt zeroPoly_lt intt_lt)
 open Dregg2.Crypto.VerifyCoreEqSpec (toRq toRq_add toRq_sub toRq_nttMul toRq_intt_addFold toRq_intt_zero)
-open Dregg2.Crypto.MlDsaSignReal (signCore signSk signPk signMsg makeHintPoly)
+open Dregg2.Crypto.MlDsaSignReal (signCore acvpSk acvpPk acvpMsg acvpCtx makeHintPoly)
 open Dregg2.Crypto.MlDsaVerifyReal (verifyCore infNormZ zBound)
 open Dregg2.Crypto.MlDsaCodec (sigDecode paramK)
 
@@ -140,18 +140,21 @@ NOT inside any ∀-theorem; the equivalence it rides (`verifyCore_eq_spec`) is `
 /-- The honest sign-produced signature's hint decodes to `k = 6` polynomials, so `verifyCore_eq_spec`'s
 hypothesis is inhabited on the sign output. -/
 theorem sign_hint_size :
-    (sigDecode (signCore signSk.toList signMsg [])).2.2.size = paramK := by native_decide
+    (sigDecode (signCore acvpSk.toList acvpMsg.toList acvpCtx.toList)).2.2.size = paramK := by
+  native_decide
 
 /-- **`sign_produces_spec_valid` — SIGN→VERIFY correctness via the proven verify=spec.** The signature
 `signCore` produces on the honest keypair satisfies BOTH FIPS 204 Algorithm 8 acceptance conditions: the
 SHAKE challenge fixed-point (`VerifyCoreSpec.challengeMatches`) AND the response norm bound `‖z‖∞ < γ₁−β`.
 Derived by feeding `MlDsaSignReal.sign_produces_valid_sig` through the ∀-proven `verifyCore_eq_spec` — the
 security-meaningful direction, routed through the flagship verify=spec result. NON-VACUOUS: a concrete
-genuine ML-DSA-65 `(sk, pk, msg)`, and both conjuncts genuinely hold. -/
+genuine NIST ACVP ML-DSA-65 `(sk, pk, msg, ctx)`, and both conjuncts genuinely hold. -/
 theorem sign_produces_spec_valid :
-    VerifyCoreSpec.challengeMatches signPk.toList signMsg [] (signCore signSk.toList signMsg []) = true
-      ∧ infNormZ (sigDecode (signCore signSk.toList signMsg [])).2.1 < zBound :=
-  (VerifyCoreEqSpec.verifyCore_eq_spec signPk.toList signMsg [] (signCore signSk.toList signMsg [])
+    VerifyCoreSpec.challengeMatches acvpPk.toList acvpMsg.toList acvpCtx.toList
+        (signCore acvpSk.toList acvpMsg.toList acvpCtx.toList) = true
+      ∧ infNormZ (sigDecode (signCore acvpSk.toList acvpMsg.toList acvpCtx.toList)).2.1 < zBound :=
+  (VerifyCoreEqSpec.verifyCore_eq_spec acvpPk.toList acvpMsg.toList acvpCtx.toList
+      (signCore acvpSk.toList acvpMsg.toList acvpCtx.toList)
       sign_hint_size).mp MlDsaSignReal.sign_produces_valid_sig
 
 end Dregg2.Crypto.SignCoreSpec

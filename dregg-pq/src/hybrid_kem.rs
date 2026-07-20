@@ -177,7 +177,7 @@ pub enum MlKemDecapsCoreInstall {
 /// FO encaps: `H(ek)` SHA3-256, `G(m ‖ H(ek))` SHA3-512 split, K-PKE.Encrypt over the real n=256 negacyclic
 /// ring / NTT / real 1184/1088-byte codec), `@[export]`ed as `dregg_mlkem_encaps_real` and compiled to
 /// leanc-native code. It is PROVED (`native_decide`) BYTE-EXACT vs the `ml-kem` v0.2.3 crate's
-/// `EncapsulateDeterministic` (`encaps_matches_crate`) and to round-trip through the verified K4 decaps
+/// NIST's ACVP FIPS 203 expected values (`encaps_matches_acvp`) and to round-trip through the K4 decaps
 /// (`encaps_decaps_roundtrip`). `dregg-lean-ffi::shadow_mlkem_encaps_real` runs it natively.
 ///
 /// dregg-pq stays a LIGHT leaf (it never depends on the ~195 MB Lean archive): it takes a function pointer.

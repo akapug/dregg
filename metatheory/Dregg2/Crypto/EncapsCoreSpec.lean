@@ -30,8 +30,9 @@ BOTH executable expressions map under `toRqKem` to those spec ring expressions, 
   `tᵀ·y` the FIPS 203 K-PKE.Encrypt quantifies, for all inputs — riding the proven incomplete-NTT correctness.
 * **`encaps_produces_spec_valid`** — the security-meaningful direction (KEM analog of
   `SignCoreSpec.sign_produces_spec_valid`): `encapsCore`'s output `(ct, K)` decapsulates back to `K`. Routed
-  through `MlKemEncaps.encaps_decaps_roundtrip` (`mlkemDecaps realDk (mlkemEncaps …).1 = realKEnc`, byte-exact)
-  composed with `MlKemEncaps.encaps_matches_crate` (`mlkemEncaps realEk mFixed = (realCtEnc, realKEnc)`).
+  through `MlKemEncaps.encaps_decaps_roundtrip_acvp` (`mlkemDecaps acvpDk (mlkemEncaps …).1 = acvpK`,
+  byte-exact) composed with `MlKemEncaps.encaps_matches_acvp`
+  (`mlkemEncaps acvpEk acvpM = (acvpCt, acvpK)`) — the NIST ACVP FIPS 203 vector.
 
 ## HONEST RESIDUAL (named, not laundered)
 
@@ -403,8 +404,8 @@ def witEk : List UInt8 :=
   byteEncode dCoeff (ntt sampleA) ++ byteEncode dCoeff (ntt sampleA)
     ++ byteEncode dCoeff (ntt sampleA) ++ List.replicate 32 (0 : UInt8)
 
-/-- A fixed concrete `r`/`m` witness (the pinned `mFixed`), so the sampled `y`/`e2`/`μ` are computable. -/
-def witR : List UInt8 := MlKemEncaps.mFixed.toList
+/-- A fixed concrete `r`/`m` witness (the NIST ACVP `m`), so the sampled `y`/`e2`/`μ` are computable. -/
+def witR : List UInt8 := MlKemEncaps.acvpM.toList
 
 /-- **Non-vacuity**: the witness honest `ek` genuinely satisfies `t̂[i] = ekDecode(witEk).1[i] = NTT(sampleA)`
 for every `i < paramK` — the codec round-trips `ByteEncode₁₂/ByteDecode₁₂` on the real NTT-domain value. -/
@@ -427,7 +428,7 @@ theorem encryptV_eq_spec_witness :
     toRqKem (encV witEk witR witR)
       = ((List.range' 0 paramK 1).map (fun i => toRqKem sampleA * toRqKem (encY witR)[i]!)).sum
         + toRqKem (encE2 witR) + toRqKem (encMu witR) :=
-  encryptV_eq_spec witEk witR witR (fun _ => sampleA) witEk_hT (fun _ _ => DecapsCoreSpec.sampleA_size) encY_witR_size
+  encryptV_eq_spec witEk witR witR (fun _ => sampleA) witEk_hT (fun _ _ => sampleA_size) encY_witR_size
 
 /-! ## `encaps_produces_spec_valid` — the security-meaningful direction (KEM analog of `sign_produces_spec_valid`).
 
@@ -436,17 +437,18 @@ the K4 decaps) round-trip end-to-end. The `encrypt_ring_faithful` identities abo
 core of the encaps; the FO wrapper (`G`-KDF, `Compress`) is the named generic-instantiation residual. The
 end-to-end byte round-trip on the REAL `ml-kem` v0.2.3 crate encapsulation is the concrete non-vacuous witness. -/
 
-/-- **`encaps_produces_spec_valid`** — the KEM analog of `SignCoreSpec.sign_produces_spec_valid`: on the honest
-REAL key, the ciphertext `mlkemEncaps` produces decapsulates (through the verified K4 `mlkemDecaps`) back to the
-SAME shared secret `mlkemEncaps` emitted. Composed from `MlKemEncaps.encaps_decaps_roundtrip`
-(`mlkemDecaps realDk (mlkemEncaps …).1 = realKEnc`) with `MlKemEncaps.encaps_matches_crate`
-(`mlkemEncaps realEk mFixed = (realCtEnc, realKEnc)`, so the emitted `K = (…).2 = realKEnc`). -/
+/-- **`encaps_produces_spec_valid`** — the KEM analog of `SignCoreSpec.sign_produces_spec_valid`: on the NIST ACVP
+key, the ciphertext `mlkemEncaps` produces decapsulates (through the verified K4 `mlkemDecaps`) back to the
+SAME shared secret `mlkemEncaps` emitted. Composed from `MlKemEncaps.encaps_decaps_roundtrip_acvp`
+(`mlkemDecaps acvpDk (mlkemEncaps …).1 = acvpK`) with `MlKemEncaps.encaps_matches_acvp`
+(`mlkemEncaps acvpEk acvpM = (acvpCt, acvpK)`, so the emitted `K = (…).2 = acvpK`). The key pair is NIST's
+own ACVP `(ek, dk)`, not a crate-generated one. -/
 theorem encaps_produces_spec_valid :
-    MlKemDecaps.mlkemDecaps (Dregg2.Crypto.MlKemCodec.realDk).toList
-        (MlKemEncaps.mlkemEncaps (Dregg2.Crypto.MlKemCodec.realEk).toList MlKemEncaps.mFixed.toList).1
-      = (MlKemEncaps.mlkemEncaps (Dregg2.Crypto.MlKemCodec.realEk).toList MlKemEncaps.mFixed.toList).2 := by
-  have h := MlKemEncaps.encaps_decaps_roundtrip
-  rw [MlKemEncaps.encaps_matches_crate] at h ⊢
+    MlKemDecaps.mlkemDecaps MlKemEncaps.acvpDk.toList
+        (MlKemEncaps.mlkemEncaps MlKemEncaps.acvpEk.toList MlKemEncaps.acvpM.toList).1
+      = (MlKemEncaps.mlkemEncaps MlKemEncaps.acvpEk.toList MlKemEncaps.acvpM.toList).2 := by
+  have h := MlKemEncaps.encaps_decaps_roundtrip_acvp
+  rw [MlKemEncaps.encaps_matches_acvp] at h ⊢
   exact h
 
 end Dregg2.Crypto.EncapsCoreSpec

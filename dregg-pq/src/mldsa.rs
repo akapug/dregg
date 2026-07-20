@@ -212,7 +212,8 @@ pub fn ml_dsa_sign_core(wire: &str) -> Option<Option<String>> {
 /// ring / NTT / SampleInBall / ExpandA / MakeHint / rejection loop / real 4032/3309-byte codec), `@[export]`ed
 /// as `dregg_fips204_sign_real` and compiled to leanc-native code. It is PROVED (`native_decide`) to
 /// reproduce a genuine `fips204` v0.4.6 crate DETERMINISTIC signature byte-for-byte
-/// (`sign_matches_crate_deterministic` / `signRealFFI_matches_crate_deterministic`), and its output is
+/// (`sign_matches_acvp_deterministic` / `signRealFFI_matches_acvp_deterministic` -- NIST ACVP-anchored
+/// single-vector KATs, not a forall), and its output is
 /// ACCEPTED by the verified `MlDsaVerifyReal.verifyCore` (`sign_produces_valid_sig`).
 /// `dregg-lean-ffi::shadow_fips204_sign_real` runs it natively.
 ///
@@ -382,52 +383,9 @@ impl MlDsaKey {
             .expect("ml-dsa sign failed (internal RNG)")
     }
 
-    /// Sign `message` under the caller-supplied FIPS 204 `ctx` (HEDGED from OS
-    /// entropy on the crate-fallback path). `None` only on the vanishingly rare
-    /// internal RNG failure, which then fails CLOSED at verification (a
-    /// present-but-absent PQ half rejects the hybrid).
-    ///
-    /// The signature is produced by the Lean-verified real sign core when
-    /// installed (see [`Self::sign_impl`]); otherwise by the `fips204` crate.
-    /// Where the signature is bound into a consensus commitment (the hybrid TURN
-    /// perimeter), use [`Self::try_sign_deterministic`] so the commitment is
-    /// stable across signings.
-    pub fn try_sign(&self, ctx: &[u8], message: &[u8]) -> Option<Vec<u8>> {
-        self.sign_impl(ctx, message, /*deterministic=*/ false)
-    }
-
-    /// Sign `message` under `ctx` with the DETERMINISTIC FIPS 204 signing variant
-    /// (`rnd = {0}^32`): the same key + ctx + message signs to IDENTICAL bytes on
-    /// every call. `None` only on the vanishingly rare internal failure, which
-    /// then fails CLOSED at verification (a present-but-absent PQ half rejects).
-    ///
-    /// # Why a deterministic variant exists
-    ///
-    /// Where a signature is BOUND INTO A CONSENSUS COMMITMENT — the hybrid *turn*
-    /// perimeter binds the ML-DSA half into [`crate`]'s `Action::hash`, which flows
-    /// into `Turn::hash` — a hedged (randomized) signature makes the SAME logical
-    /// turn hash DIFFERENTLY on each signing, breaking turn identity (receipt
-    /// matching, dedup, exactly-once). The deterministic variant makes the turn
-    /// hash stable while the sig stays bound (anti-strip intact).
-    ///
-    /// This is spec-valid: FIPS 204 §Algorithm 2 defines the deterministic variant
-    /// as substituting `rnd ← {0}^32`. It matches the ALREADY-deterministic
-    /// Lean-verified real sign core (`rnd = 0`), so the archive-linked and
-    /// light-leaf fallback paths agree — the turn hash no longer depends on which
-    /// signing backend is installed.
-    ///
-    /// Tradeoff: a deterministic signature forgoes the fault-attack hedging the
-    /// randomized variant supplies. In dregg's threat model that hedging guards a
-    /// signer against a *local* fault-injection adversary with physical access; a
-    /// remote turn-forging adversary gains nothing from it, and turn-identity
-    /// determinism IS load-bearing for consensus. The deployed verified core is
-    /// already deterministic, so this is the project-correct signing mode here.
-    pub fn try_sign_deterministic(&self, ctx: &[u8], message: &[u8]) -> Option<Vec<u8>> {
-        self.sign_impl(ctx, message, /*deterministic=*/ true)
-    }
-
-    /// Shared signing core for [`Self::try_sign`] (hedged) and
-    /// [`Self::try_sign_deterministic`] (`rnd = {0}^32`).
+    /// Sign `message` under the caller-supplied FIPS 204 `ctx`. `None` only on
+    /// the vanishingly rare internal RNG failure, which then fails CLOSED at
+    /// verification (a present-but-absent PQ half rejects the hybrid).
     ///
     /// # The signature bytes come from the Lean-verified core, not the crate
     ///
@@ -436,17 +394,15 @@ impl MlDsaKey {
     /// full-dimension `MlDsaSignReal.signCore` (the brick-8 SIGN analog) over the actual `sk ‖ msg ‖ ctx`
     /// bytes — running as leanc-native code, PROVED to reproduce a genuine crate DETERMINISTIC signature
     /// byte-for-byte. On that path the `fips204` crate is NO LONGER trusted to sign: it is not consulted at
-    /// all. That core is ALREADY the deterministic (`rnd = 0`) FIPS 204 variant, so `deterministic` only
-    /// selects the FALLBACK behavior.
+    /// all. The signer becomes DETERMINISTIC (`rnd = 0`, the FIPS 204 deterministic variant — spec-valid).
     ///
     /// When NO verified core is installed (a caller that has not wired the Lean archive), this falls back to
-    /// the `fips204` crate primitive: hedged (`OsRng` `rnd`) when `deterministic` is `false`, or the
-    /// deterministic (`rnd = {0}^32`, via a zero seed) variant when `true`. `dregg-pq` is a light leaf that
-    /// cannot itself link the 195 MB Lean archive, so the routing is an install-time seam; a deployed,
-    /// verified node installs the real core at startup and thereby leaves the crate out of the sign TCB.
-    fn sign_impl(&self, ctx: &[u8], message: &[u8], deterministic: bool) -> Option<Vec<u8>> {
+    /// the hedged `fips204` crate primitive. `dregg-pq` is a light leaf that cannot itself link the 195 MB
+    /// Lean archive, so the routing is an install-time seam; a deployed, verified node installs the real core
+    /// at startup and thereby leaves the crate out of the sign TCB.
+    pub fn try_sign(&self, ctx: &[u8], message: &[u8]) -> Option<Vec<u8>> {
         // AUTHORITY: the Lean-verified real sign core over the real bytes, when installed. The `fips204`
-        // crate is not consulted on this path — it has left the sign TCB. It is already deterministic.
+        // crate is not consulted on this path — it has left the sign TCB.
         if let Some(core) = LEAN_SIGN_CORE_REAL.get() {
             let sk_bytes = self.secret.clone().into_bytes();
             let wire = real_sign_wire(&sk_bytes, message, ctx);
@@ -456,19 +412,8 @@ impl MlDsaKey {
             return (sig.len() == ml_dsa_65::SIG_LEN).then_some(sig);
         }
 
-        // FALLBACK (no verified core installed): the `fips204` crate primitive.
-        if deterministic {
-            // DETERMINISTIC FIPS 204 variant: a zero seed drives the crate's
-            // `DummyRng`, which substitutes `rnd = {0}^32`. Same key+ctx+message
-            // ⇒ identical signature bytes.
-            self.secret
-                .try_sign_with_seed(&[0u8; 32], message, ctx)
-                .ok()
-                .map(|s| s.to_vec())
-        } else {
-            // Hedged: fresh `OsRng` `rnd` per call.
-            self.secret.try_sign(message, ctx).ok().map(|s| s.to_vec())
-        }
+        // FALLBACK (no verified core installed): the hedged `fips204` crate primitive.
+        self.secret.try_sign(message, ctx).ok().map(|s| s.to_vec())
     }
 }
 
@@ -562,32 +507,6 @@ mod tests {
         // The from-seed sign helper produces an equally valid signature.
         let sig2 = ml_dsa_sign_from_seed(&[3u8; 32], CTX, msg).expect("sign");
         assert!(ml_dsa_verify(&key.public_bytes(), CTX, msg, &sig2));
-    }
-
-    #[test]
-    fn deterministic_sign_is_stable_and_verifies() {
-        // The DETERMINISTIC variant signs the SAME key+ctx+message to IDENTICAL
-        // bytes on every call (the FIPS 204 `rnd = {0}^32` variant) — the property
-        // consensus commitments that bind the signature depend on. The hedged
-        // `try_sign` does NOT have this property (it is randomized).
-        let key = MlDsaKey::from_ed25519_seed(&[42u8; 32]);
-        let msg = b"the same logical turn's canonical signing message";
-        let a = key.try_sign_deterministic(CTX, msg).expect("det sign a");
-        let b = key.try_sign_deterministic(CTX, msg).expect("det sign b");
-        assert_eq!(a, b, "deterministic sign must be byte-for-byte stable");
-        // It is a valid FIPS 204 signature.
-        assert!(ml_dsa_verify(&key.public_bytes(), CTX, msg, &a));
-        // A different message deterministically yields a different signature.
-        let c = key
-            .try_sign_deterministic(CTX, b"a different message")
-            .expect("det sign c");
-        assert_ne!(a, c, "different message ⇒ different deterministic sig");
-        assert!(ml_dsa_verify(
-            &key.public_bytes(),
-            CTX,
-            b"a different message",
-            &c
-        ));
     }
 
     #[test]
