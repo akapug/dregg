@@ -567,7 +567,7 @@ Record-layer STAGE 3 (`Exec.SystemRoots`, `6aa29e996`) homed each side-table roo
 descriptor to FULL: a per-row root-UPDATE gate binds the `nullifiers`-accumulator step into the row, the
 after-`SYSTEM_ROOTS_DIGEST` carrier is absorbed into `state_commit` by the GROUP-4 extension, and the
 anti-ghost tooth is re-proved over the now-bound root, CONNECTED to
-`Exec.SystemRoots.cellCommitS_binds_systemRoots`. The whole-cell FREEZE + universe-A connectors of
+`Exec.SystemRoots.cellCommitS_binds_systemRoots_or_collides`. The whole-cell FREEZE + universe-A connectors of
 §4–§11 are UNCHANGED (strictly additive).
 
 HONESTY (finding #2 still stands): binding the nullifier-set DIGEST closes finding #1 (the insert is
@@ -577,7 +577,11 @@ root bound, a sorted-set / Merkle non-membership gate-kind is still required (th
 `noteSpend_no_double_spend_is_turn_property` and state the precise boundary in §D. -/
 
 open Dregg2.Exec.SystemRoots
-  (SysRoots systemRootsDigest systemRootsDigest_binds_pointwise N_SYSTEM_ROOTS rootList)
+  (SysRoots systemRootsDigest systemRootsDigest_binds_pointwise_or_collides
+   rootsCollFind RootsColl rootsColl_refutable_of_injective N_SYSTEM_ROOTS rootList)
+open Dregg2.Circuit.Poseidon2Binding
+  (SpongeColl group4Find group4Find_spec spongeColl_refutable_of_injective)
+open Dregg2.Circuit.Emit.EffectVmFullStateRunnable (wideBlockA wideBlockB wideBlockC)
 
 /-- The committed `system_roots` digest carrier of the AFTER state (the kernel side-table digest the
 GROUP-4 extension absorbs into `state_commit`). This is the IR's `aux_off_sys.SYSTEM_ROOTS_DIGEST`. -/
@@ -710,28 +714,111 @@ theorem noteSpendFull_forces_root (env : VmRowEnv) (b1 : Bool)
   have := hgates _ hmem
   simpa only [VmConstraint.holdsVm] using this
 
-/-- **`noteSpendFull_commit_binds_sysdigest` — the digest is now bound into `state_commit`.** Two rows
-satisfying the amplified hash-sites that publish the SAME `state_commit` have the SAME absorbed
-`system_roots` digest. So a prover CANNOT keep `state_commit` while tampering the side-table digest —
-finding #1 (the nullifier insert out-of-IR) is CLOSED. -/
-theorem noteSpendFull_commit_binds_sysdigest (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-! ### The digest is bound into `state_commit` — EXTRACTION AS DATA, not an injectivity floor.
+
+Finding #1 (the nullifier insert out-of-IR) is CLOSED by the amplified sites: two rows publishing the
+SAME `state_commit` have the SAME absorbed `system_roots` digest. What has changed (07-20) is the PRICE
+of saying so. The old `noteSpendFull_commit_binds_sysdigest` derived that equality from
+`Poseidon2SpongeCR hash`, which `HashFloorHonesty.poseidon2SpongeCR_false_babyBear` REFUTES at deployed
+parameters — so it bound nothing about the deployed circuit. The GROUP-4 peel below is a TOTAL FUNCTION
+that either proves the equality or hands back the SPECIFIC pair of lists at which the deployed sponge
+collides. The spine is `Poseidon2Binding.group4Find` and the wide runnable's own `wideBlockA/B/C` —
+REUSED, never re-authored, since `noteSpendRootHashSites` absorbs exactly those three inner blocks. -/
+
+/-- **`noteSpendCollFind hash e₁ e₂`** — the pair the GROUP-4 extractor RETURNS on an equivocation
+between two amplified noteSpend rows (carrier slot = `SYS_DIG_AFTER`). -/
+def noteSpendCollFind (hash : List ℤ → ℤ) (e₁ e₂ : VmRowEnv) : List ℤ × List ℤ :=
+  group4Find hash
+    (wideBlockA e₁) (wideBlockB e₁) (wideBlockC e₁) (e₁.loc SYS_DIG_AFTER)
+    (wideBlockA e₂) (wideBlockB e₂) (wideBlockC e₂) (e₂.loc SYS_DIG_AFTER)
+
+/-- **`NoteSpendColl hash e₁ e₂`** — the pair `noteSpendCollFind` RETURNS is a GENUINE collision of the
+deployed sponge. Deliberately NOT `∃ a collision`, which pigeonhole makes unconditionally true at
+deployed parameters and which would bind nothing. -/
+def NoteSpendColl (hash : List ℤ → ℤ) (e₁ e₂ : VmRowEnv) : Prop :=
+  SpongeColl hash (noteSpendCollFind hash e₁ e₂)
+
+/-- **⚑ A REFLEXIVE INSTANCE CANNOT HAVE COLLIDED — AT ANY SPONGE.** The extractor fed a row against
+itself returns a pair of identical lists, so a consumer applied at `e₁ = e₂` MUST land in the binding
+branch with no injectivity hypothesis. -/
+theorem noteSpendColl_irrefl (hash : List ℤ → ℤ) (e : VmRowEnv) : ¬ NoteSpendColl hash e e := by
+  rintro ⟨hne, _⟩
+  exact hne (by simp [noteSpendCollFind, group4Find])
+
+/-- **(CANARY — the collision disjunct is REFUTABLE.)** At an injective sponge the returned pair is not
+a collision, so the cured statements below cannot discharge themselves through the escape. -/
+theorem noteSpendColl_refutable_of_injective (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv) : ¬ NoteSpendColl hash e₁ e₂ :=
+  spongeColl_refutable_of_injective hash hCR _
+
+/-- **`noteSpendFull_commit_binds_sysdigest_or_collides` (UNCONDITIONAL).** Two rows satisfying the
+amplified hash-sites that publish the SAME `state_commit` EITHER have the SAME absorbed `system_roots`
+digest, OR exhibit a genuine collision of the deployed sponge at the pair `noteSpendCollFind` returns.
+The old form derived the equality from `Poseidon2SpongeCR hash`, which the deployed BabyBear sponge
+REFUTES; the GROUP-4 peel is now a TOTAL FUNCTION (`Poseidon2Binding.group4Find`, reused not
+re-authored) over the SAME three inner blocks the wide runnable descriptor absorbs. -/
+theorem noteSpendFull_commit_binds_sysdigest_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv)
     (hs₁ : siteHoldsAll hash e₁ noteSpendRootHashSites)
     (hs₂ : siteHoldsAll hash e₂ noteSpendRootHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
-    e₁.loc SYS_DIG_AFTER = e₂.loc SYS_DIG_AFTER := by
+    e₁.loc SYS_DIG_AFTER = e₂.loc SYS_DIG_AFTER ∨ NoteSpendColl hash e₁ e₂ := by
   rw [noteSpendRootHash_binds hash e₁ hs₁, noteSpendRootHash_binds hash e₂ hs₂] at hcommit
-  have houter := hCR _ _ hcommit
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
-  exact houter.2.2.2.1
+  rcases group4Find_spec hash
+      (wideBlockA e₁) (wideBlockB e₁) (wideBlockC e₁) (e₁.loc SYS_DIG_AFTER)
+      (wideBlockA e₂) (wideBlockB e₂) (wideBlockC e₂) (e₂.loc SYS_DIG_AFTER)
+      hcommit with ⟨_, _, _, hd⟩ | hcoll
+  · exact Or.inl hd
+  · exact Or.inr hcoll
 
-/-- **`noteSpendFull_binds_nullifiers_root` — CONNECTED to `Exec.SystemRoots`.** Two amplified rows
-that publish the same `state_commit` AND whose after-digest carrier IS the `systemRootsDigest` of their
-respective `system_roots` sub-blocks have the SAME `nullifiers` side-table root (and every other). The
-chain: equal commitment ⇒ equal digest carrier ⇒ equal side-table roots pointwise. Tampering ONLY the
-`nullifiers` root (omitting `nf`) provably MOVES `state_commit` ⇒ UNSAT. -/
-theorem noteSpendFull_binds_nullifiers_root (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+/-- **`noteSpendFull_binds_nullifiers_root_or_collides` — CONNECTED to `Exec.SystemRoots`,
+UNCONDITIONAL.** Two amplified rows that publish the same `state_commit` AND whose after-digest carrier
+IS the `systemRootsDigest` of their respective `system_roots` sub-blocks EITHER have the SAME
+`nullifiers` side-table root (and every other), OR name a collision of the deployed sponge — at the
+GROUP-4 absorption (`NoteSpendColl`) or at the ordered root list (`RootsColl`). The chain: equal
+commitment ⇒ equal digest carrier ⇒ equal side-table roots pointwise. Tampering ONLY the `nullifiers`
+root (omitting `nf`) provably MOVES `state_commit` ⇒ UNSAT unless the prover holds that collision.
+
+⚑ Both legs used to ride refuted floors: `Poseidon2SpongeCR` at the outer absorption and
+`Exec.SystemRoots.systemRootsDigest_binds_pointwise`'s `compressNInjective` at the roots digest. Neither
+is satisfiable by the deployed compressing sponge, so the old theorem was vacuous exactly where it was
+meant to bind the deployed nullifier set. -/
+theorem noteSpendFull_binds_nullifiers_root_or_collides (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
+    (hs₁ : siteHoldsAll hash e₁ noteSpendRootHashSites)
+    (hs₂ : siteHoldsAll hash e₂ noteSpendRootHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT))
+    (hd₁ : e₁.loc SYS_DIG_AFTER = systemRootsDigest hash sr₁)
+    (hd₂ : e₂.loc SYS_DIG_AFTER = systemRootsDigest hash sr₂) :
+    (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i)
+    ∨ NoteSpendColl hash e₁ e₂ ∨ RootsColl hash sr₁ sr₂ := by
+  rcases noteSpendFull_commit_binds_sysdigest_or_collides hash e₁ e₂ hs₁ hs₂ hcommit with
+    hcar | hcoll
+  · have hdig : systemRootsDigest hash sr₁ = systemRootsDigest hash sr₂ := by
+      rw [← hd₁, ← hd₂]; exact hcar
+    rcases systemRootsDigest_binds_pointwise_or_collides hash sr₁ sr₂ hdig with hpt | hrcoll
+    · exact Or.inl hpt
+    · exact Or.inr (Or.inr hrcoll)
+  · exact Or.inr (Or.inl hcoll)
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** The deleted `noteSpendFull_commit_binds_sysdigest` is EXACTLY the
+injective special case. -/
+theorem noteSpendFull_commit_binds_sysdigest_of_injective (hash : List ℤ → ℤ)
+    (hCR : Poseidon2SpongeCR hash) (e₁ e₂ : VmRowEnv)
+    (hs₁ : siteHoldsAll hash e₁ noteSpendRootHashSites)
+    (hs₂ : siteHoldsAll hash e₂ noteSpendRootHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    e₁.loc SYS_DIG_AFTER = e₂.loc SYS_DIG_AFTER := by
+  rcases noteSpendFull_commit_binds_sysdigest_or_collides hash e₁ e₂ hs₁ hs₂ hcommit with
+    hd | hcoll
+  · exact hd
+  · exact absurd hcoll (noteSpendColl_refutable_of_injective hash hCR e₁ e₂)
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH (roots).** The deleted `noteSpendFull_binds_nullifiers_root`,
+recovered verbatim as the injective special case. Standalone bridge, never a hypothesis on a deployed
+statement. -/
+theorem noteSpendFull_binds_nullifiers_root_of_injective (hash : List ℤ → ℤ)
+    (hCR : Poseidon2SpongeCR hash) (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
     (hs₁ : siteHoldsAll hash e₁ noteSpendRootHashSites)
     (hs₂ : siteHoldsAll hash e₂ noteSpendRootHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT))
@@ -739,10 +826,11 @@ theorem noteSpendFull_binds_nullifiers_root (hash : List ℤ → ℤ) (hCR : Pos
     (hd₂ : e₂.loc SYS_DIG_AFTER = systemRootsDigest hash sr₂)
     (i : Fin N_SYSTEM_ROOTS) :
     sr₁ i = sr₂ i := by
-  have hdig : systemRootsDigest hash sr₁ = systemRootsDigest hash sr₂ := by
-    rw [← hd₁, ← hd₂]
-    exact noteSpendFull_commit_binds_sysdigest hash hCR e₁ e₂ hs₁ hs₂ hcommit
-  exact systemRootsDigest_binds_pointwise hash hCR sr₁ sr₂ hdig i
+  rcases noteSpendFull_binds_nullifiers_root_or_collides hash e₁ e₂ sr₁ sr₂ hs₁ hs₂ hcommit hd₁ hd₂
+    with hpt | hcoll | hrcoll
+  · exact hpt i
+  · exact absurd hcoll (noteSpendColl_refutable_of_injective hash hCR e₁ e₂)
+  · exact absurd hrcoll (rootsColl_refutable_of_injective hash hCR sr₁ sr₂)
 
 /-! ## §E — CONNECTOR to universe-A `noteSpendDescriptor_full_sound` over the root-bound descriptor. -/
 
@@ -1188,8 +1276,12 @@ theorem noteSpend_fullClause_refutable (hash : List ℤ → ℤ) :
 #assert_axioms noteSpendRoot_rejects_wrong_root
 #assert_axioms noteSpendFull_forces_freeze
 #assert_axioms noteSpendFull_forces_root
-#assert_axioms noteSpendFull_commit_binds_sysdigest
-#assert_axioms noteSpendFull_binds_nullifiers_root
+#assert_axioms noteSpendColl_irrefl
+#assert_axioms noteSpendColl_refutable_of_injective
+#assert_axioms noteSpendFull_commit_binds_sysdigest_or_collides
+#assert_axioms noteSpendFull_binds_nullifiers_root_or_collides
+#assert_axioms noteSpendFull_commit_binds_sysdigest_of_injective
+#assert_axioms noteSpendFull_binds_nullifiers_root_of_injective
 #assert_axioms noteSpendFull_sound
 #assert_axioms noteSpend_freshness_still_needs_nonmembership
 #assert_axioms goodNullRow_realizes

@@ -83,10 +83,13 @@ theorems said nothing about the deployed system and these hold OF it. The `_of_i
 recover each deleted statement as exactly its injective special case, so nothing genuinely proved was
 given up.
 
-NAMED RESIDUAL, untouched and still open: `Exec.SystemRoots.systemRootsDigest_binds_pointwise` carries
-the SAME defect (`compressNInjective = Poseidon2SpongeCR`) one level down, and has consumers across the
-note/delegation emit families. It is NOT in this repair, and this file no longer routes through it —
-the roots leg is discharged here via `systemRootsDigest_eq_hash_rootList` + the same extraction spine.
+⚑ **THAT NAMED RESIDUAL IS NOW CLOSED (07-20).** `Exec.SystemRoots.systemRootsDigest_binds_pointwise`
+carried the SAME defect (`compressNInjective` = `Poseidon2SpongeCR`) one level down, with consumers
+across the note/delegation emit families. A follow-on lane deleted it and its `_binds`/`_binds_fn`
+siblings and the `cellCommitS_binds_*` commitment teeth, rewiring all four consumers onto extraction-
+as-data. The roots-leg spine (`systemRootsDigest_eq_hash_rootList`, `rootsCollFind`, `RootsColl`,
+`rootsColl_irrefl`) MOVED to `Exec.SystemRoots` — its natural home beside `rootList` — and is `export`ed
+below, so this file and its downstream tags read the one canonical definition instead of a parallel copy.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Imports are read-only.
 -/
@@ -310,30 +313,19 @@ theorem wideColl_irrefl (hash : List ℤ → ℤ) (e : VmRowEnv) : ¬ WideColl h
 /-! ## §2 — the `system_roots` sub-block bound BY the RUNNABLE commitment.
 
 Chaining §1's carrier-binding with the roots-digest peel (`systemRootsDigest_eq_hash_rootList` + the
-SAME extraction spine — deliberately NOT `Exec.SystemRoots.systemRootsDigest_binds_pointwise`, which
-still carries the refuted `compressNInjective` floor and is out of this repair's scope): when each wide row's `sysRootsDigestCol` IS the `systemRootsDigest` of a
+SAME extraction spine, now shared with the cured
+`Exec.SystemRoots.systemRootsDigest_binds_pointwise_or_collides`): when each wide row's `sysRootsDigestCol` IS the `systemRootsDigest` of a
 `SysRoots` sub-block, two rows publishing the same `state_commit` agree on every side-table root. So
 the RUNNABLE descriptor — the circuit the prover runs — binds the whole side-table state, not a
 record-layer commitment off to the side. -/
 
-/-- The `system_roots` digest is ONE sponge application over the ordered root list (`listDigest` under
-the identity leaf encoder). Definitional — the deployed absorption, unfolded so the same extraction
-spine applies to the roots leg. -/
-theorem systemRootsDigest_eq_hash_rootList (hash : List ℤ → ℤ) (sr : SysRoots) :
-    systemRootsDigest hash sr = hash (rootList sr) := by
-  simp [systemRootsDigest, Dregg2.Circuit.ListCommit.listDigest]
-
-/-- **`RootsColl hash sr₁ sr₂`** — the two ordered root lists are a GENUINE collision of the deployed
-sponge. The roots leg's named disjunct: the `system_roots` digest is a compressing sponge exactly like
-the state block, so it earns the same honest treatment rather than riding an injectivity floor. -/
-def RootsColl (hash : List ℤ → ℤ) (sr₁ sr₂ : SysRoots) : Prop :=
-  SpongeColl hash (rootList sr₁, rootList sr₂)
-
-/-- **⚑ The same for the roots leg**: the roots extractor fed a sub-block against itself cannot have
-returned a genuine collision. Sponge-agnostic. -/
-theorem rootsColl_irrefl (hash : List ℤ → ℤ) (sr : SysRoots) : ¬ RootsColl hash sr sr := by
-  rintro ⟨hne, _⟩
-  exact hne rfl
+/-! The roots leg's spine now lives at its natural home, `Exec.SystemRoots` — beside `rootList` and the
+digest it peels, where the SAME repair cured `systemRootsDigest_binds_*` (07-20). `export`ed here rather
+than re-declared so there is exactly ONE `RootsColl` in the tree and the ~40 per-tag wide keystones that
+`open …EffectVmFullStateRunnable (RootsColl)` keep resolving to it. -/
+export Dregg2.Exec.SystemRoots
+  (systemRootsDigest_eq_hash_rootList rootsCollFind RootsColl rootsColl_irrefl
+   rootsColl_refutable_of_injective)
 
 /-- **`wide_binds_systemRoots_or_collides` (the gap closed, UNCONDITIONALLY).** Two wide rows publishing the SAME
 `state_commit`, whose `sysRootsDigestCol` carriers ARE the `systemRootsDigest` of their respective

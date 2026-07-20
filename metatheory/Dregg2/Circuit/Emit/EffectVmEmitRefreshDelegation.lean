@@ -11,7 +11,7 @@ Before STAGE 3 this module flagged a LOUD IR GAP: `refreshDelegationA`'s genuine
 `refreshDelegationA_full_sound`. STAGE 3 (`Exec.SystemRoots`, `_RECORD-LAYER-UPGRADE.md` §C) gives the 8
 kernel side-tables their OWN namespace: `delegations` is `systemRoot.DELEG` (index 4), digested by
 `Exec.SystemRoots.systemRootsDigest`, carried in the `SYSTEM_ROOTS_DIGEST` column, and ABSORBED into the
-canonical cell commitment by `cellCommitS` — with the anti-ghost tooth `cellCommitS_binds_systemRoots`
+canonical cell commitment by `cellCommitS` — with the anti-ghost tooth `cellCommitS_binds_systemRoots_or_collides`
 (equal commitment ⇒ equal digest ⇒ equal `DELEG` root pointwise) PROVED. So the `delegations` move is now
 BINDABLE: this module BINDS universe-A's injective `delegations` digest `D` onto the `DELEG` system-root,
 re-proves the faithfulness + anti-ghost over the now-bound root, and connects it to
@@ -32,7 +32,7 @@ re-proves the faithfulness + anti-ghost over the now-bound root, and connects it
   * **RECORD COMMITMENT layer (the deleg move, now bound).** The genuine `delegations := refreshDelegationsMap`
     move is bound at the canonical-commitment layer through STAGE 3's `DELEG` system-root: the row's
     `deleg_root` (= `D k.delegations`) MOVES from `D k.delegations` to `D (refreshDelegationsMap k child)`,
-    every OTHER system-root FREEZES, and `cellCommitS_binds_systemRoots` makes tampering the `DELEG` root
+    every OTHER system-root FREEZES, and `cellCommitS_binds_systemRoots_or_collides` makes tampering the `DELEG` root
     flip the published commitment (UNSAT). This is the anti-ghost tooth the coverage memos demand, now over
     the touched field. Connected to `refreshDelegationA_full_sound` (`unify_refresh_delegMove_via_full_sound`).
 
@@ -56,9 +56,17 @@ re-proves the faithfulness + anti-ghost over the now-bound root, and connects it
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR ONLY as `Poseidon2SpongeCR`;
-the side-table digest CR ONLY as `Exec.SystemRoots`'s `compressNInjective` carrier (the realizable
-`ListCommit` portal) + universe-A's `Function.Injective D`. Imports read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Universe-A's `Function.Injective D` is
+carried; Imports read-only.
+
+⚑ **THE SIDE-TABLE DIGEST NO LONGER CARRIES A CR FLOOR (07-20).** `delegRoot_binds_under_commit` used
+to take `Exec.SystemRoots`'s `compressNInjective` carrier, which `HashFloorHonesty` REFUTES at the
+deployed BabyBear parameters — so the `DELEG`-root anti-ghost tooth said nothing about the deployed
+system. It is DELETED and replaced by `delegRoot_binds_under_commit_or_collides`, whose alternative
+branches NAME the colliding pair a total extractor returns (`CellCommitSColl` at the commitment
+absorption, `RootsColl` at the ordered root list). `delegRoot_binds_under_commit_of_injective` recovers
+the old statement as exactly the injective special case. The remaining `Poseidon2SpongeCR` uses in this
+file are on the STATE-BLOCK teeth (`refreshDescriptor_commit_binds_state`), a separate leg.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Poseidon2Binding
@@ -84,8 +92,10 @@ open Dregg2.Circuit.StateCommit (logHashInjective compressNInjective)
 open Dregg2.Circuit.Inst.RefreshDelegationA (RefreshDelegationArgs refreshDelegationE refreshDelegationA_full_sound)
 open Dregg2.Circuit.Spec.RefreshDelegation (RefreshDelegationSpec RefreshDelegationFullSpec refreshDelegationsMap)
 open Dregg2.Exec.SystemRoots
-  (SysRoots systemRootsDigest cellCommitS cellCommitS_binds_systemRoots
-   systemRootsDigest_binds_pointwise N_SYSTEM_ROOTS)
+  (SysRoots systemRootsDigest cellCommitS cellCommitS_binds_systemRoots_or_collides
+   cellCommitSCollFind CellCommitSColl cellCommitSColl_refutable_of_injective
+   systemRootsDigest_binds_pointwise_or_collides
+   rootsCollFind RootsColl rootsColl_refutable_of_injective N_SYSTEM_ROOTS)
 
 /-- The `delegations` side-table root index in the STAGE-3 `system_roots` sub-block
 (`Exec.SystemRoots.systemRoot.DELEG = 4`), as a bounded `Fin`. Local abbreviation to avoid the
@@ -336,25 +346,52 @@ theorem delegRoot_moves_under_spec (D : (CellId → List Cap) → ℤ)
   show D s'.kernel.delegations = D (refreshDelegationsMap s.kernel child)
   rw [hdeleg]
 
-/-- **`delegRoot_binds_under_commit`** (the STAGE-3 anti-ghost tooth, lifted to the `DELEG` root).
-Two cells whose canonical `cellCommitS` commitments AGREE (over the same `rest` and the same frozen
-sibling roots `others`) have the SAME `DELEG` root: the commitment binds the digest
-(`cellCommitS_binds_systemRoots`), which binds every system-root pointwise
-(`systemRootsDigest_binds_pointwise`) — in particular `DELEG`. So a prover cannot tamper the
-`delegations` root (a forged refresh snapshot) while keeping the published commitment: UNSAT. -/
-theorem delegRoot_binds_under_commit
+/-- **`delegRoot_binds_under_commit_or_collides`** (the STAGE-3 anti-ghost tooth, lifted to the `DELEG`
+root — UNCONDITIONAL). Two cells whose canonical `cellCommitS` commitments AGREE (over the same `rest`
+and the same frozen sibling roots `others`) EITHER have the SAME `DELEG` root, OR the prover holds a
+NAMED collision of the deployed sponge: at the commitment absorption (`CellCommitSColl`, the pair
+`cellCommitSCollFind` returns) or at the ordered root list (`RootsColl`). The chain: the commitment
+binds the digest (`cellCommitS_binds_systemRoots_or_collides`), which binds every system-root pointwise
+(`systemRootsDigest_binds_pointwise_or_collides`) — in particular `DELEG`. So a prover cannot tamper the
+`delegations` root (a forged refresh snapshot) while keeping the published commitment: UNSAT unless a
+collision is exhibited.
+
+⚑ **WHY THIS SHAPE.** The old form carried `StateCommit.compressNInjective compressN`, which
+`HashFloorHonesty` REFUTES at the deployed BabyBear parameters — so it said nothing about the deployed
+`delegations` binding. This one assumes nothing about the sponge and holds OF it;
+`delegRoot_binds_under_commit_of_injective` recovers the old statement as exactly the injective special
+case, so no strength was lost. -/
+theorem delegRoot_binds_under_commit_or_collides
+    (compressN : List ℤ → ℤ)
+    (D : (CellId → List Cap) → ℤ) (others : SysRoots) (rest : List ℤ)
+    (k₁ k₂ : RecordKernelState)
+    (hcommit : cellCommitS compressN rest (withDelegRoot D others k₁)
+             = cellCommitS compressN rest (withDelegRoot D others k₂)) :
+    delegRootProj D k₁ = delegRootProj D k₂
+    ∨ CellCommitSColl compressN rest (withDelegRoot D others k₁) (withDelegRoot D others k₂)
+    ∨ RootsColl compressN (withDelegRoot D others k₁) (withDelegRoot D others k₂) := by
+  rcases cellCommitS_binds_systemRoots_or_collides compressN rest _ _ hcommit with hdig | hcoll
+  · rcases systemRootsDigest_binds_pointwise_or_collides compressN _ _ hdig with hpt | hrcoll
+    · exact Or.inl (by simpa only [withDelegRoot, if_pos rfl] using hpt delegIdx)
+    · exact Or.inr (Or.inr hrcoll)
+  · exact Or.inr (Or.inl hcoll)
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** The deleted `delegRoot_binds_under_commit` is EXACTLY the
+injective special case of its cured form. Standalone bridge, deliberately NOT a hypothesis on any
+deployed statement — a theorem carrying `compressNInjective` would be right back where this repair
+started. -/
+theorem delegRoot_binds_under_commit_of_injective
     (compressN : List ℤ → ℤ) (hN : compressNInjective compressN)
     (D : (CellId → List Cap) → ℤ) (others : SysRoots) (rest : List ℤ)
     (k₁ k₂ : RecordKernelState)
     (hcommit : cellCommitS compressN rest (withDelegRoot D others k₁)
              = cellCommitS compressN rest (withDelegRoot D others k₂)) :
     delegRootProj D k₁ = delegRootProj D k₂ := by
-  have hdig : systemRootsDigest compressN (withDelegRoot D others k₁)
-            = systemRootsDigest compressN (withDelegRoot D others k₂) :=
-    cellCommitS_binds_systemRoots compressN hN rest _ _ hcommit
-  have hpt := systemRootsDigest_binds_pointwise compressN hN _ _ hdig
-    delegIdx
-  simpa only [withDelegRoot, if_pos rfl] using hpt
+  rcases delegRoot_binds_under_commit_or_collides compressN D others rest k₁ k₂ hcommit with
+    hEq | hcoll | hrcoll
+  · exact hEq
+  · exact absurd hcoll (cellCommitSColl_refutable_of_injective compressN hN rest _ _)
+  · exact absurd hrcoll (rootsColl_refutable_of_injective compressN hN _ _)
 
 /-! ## §8 — THE CONNECTORS — to `refreshDelegationA_full_sound` (cap-freeze AND deleg-move). -/
 
@@ -673,7 +710,8 @@ theorem refreshNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.Vm
 #assert_axioms refreshDescriptor_full_sound
 #assert_axioms refreshDescriptor_commit_binds_state
 #assert_axioms delegRoot_moves_under_spec
-#assert_axioms delegRoot_binds_under_commit
+#assert_axioms delegRoot_binds_under_commit_or_collides
+#assert_axioms delegRoot_binds_under_commit_of_injective
 #assert_axioms unify_refresh_capFreeze
 #assert_axioms unify_refresh_via_full_sound
 #assert_axioms delegRoot_runtime_column_pending

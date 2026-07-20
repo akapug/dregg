@@ -96,7 +96,7 @@ gate: each writes `saCol (systemRoot.X)`, NEVER a user `fields[j]`. The reconcil
 (`_RECORD-LAYER-UPGRADE.md:246-250`) re-targets each emit file's root from `FIELD_BASE+i` onto
 `systemRoot.X` — these are those targets. The 8 roots are committed by `Exec.SystemRoots.systemRootsDigest`
 (one carrier column `SYSTEM_ROOTS_DIGEST`), absorbed into `state_commit` by the same GROUP-4 hash-site
-mechanism `FIELDS_ROOT` uses (anti-ghost tooth: `Exec.SystemRoots.cellCommitS_binds_systemRoots`). -/
+mechanism `FIELDS_ROOT` uses (anti-ghost tooth: `Exec.SystemRoots.cellCommitS_binds_systemRoots_or_collides`). -/
 namespace systemRoot
 /-- `escrows` list digest (createEscrow / refund / release / bridge-park). -/
 def ESCROW       : Nat := 0

@@ -43,7 +43,7 @@ This module makes "the running per-cell commitment IS the proven shape" a CHECKE
     so tampering the authority residue — a permission flip, a VK swap, a dropped side-table root —
     provably MOVES the commitment UNLESS the deployed `hash_4_to_1` collides at two EXPLICITLY NAMED
     quads, which the theorem hands back. This is the deployed twin of
-    `SystemRoots.cellCommitS_binds_systemRoots`; a `record_digest := 0` stub for a residue-bearing cell
+    `SystemRoots.cellCommitS_binds_systemRoots_or_collides`; a `record_digest := 0` stub for a residue-bearing cell
     would collapse it (the audit P0-2 hole). The old `compress4Injective`-conditioned forms were
     DELETED (VACUITY-SWEEP FINDING 2): injectivity of a compressing `ℤ⁴ → ℤ` map is FALSE at deployed
     BabyBear parameters, so those theorems were vacuous exactly where it mattered. The probabilistic

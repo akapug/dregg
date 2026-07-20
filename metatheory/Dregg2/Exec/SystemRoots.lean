@@ -31,11 +31,12 @@ namespace). It supplies, in ONE place:
   * **`cellCommitS`** — the canonical cell commitment EXTENDED to absorb `systemRootsDigest` as ONE
     more limb (mirroring how STAGE 1's `RecordCommit.cellCommit` absorbs `fieldsRoot`). The anti-ghost
     tooth + legacy no-op are PROVED over it:
-      - `cellCommitS_binds_systemRoots` — equal commitments ⇒ equal `systemRootsDigest` ⇒
-        (off the digest injectivity) the SAME 8 side-table roots. Tampering ANY side-table root
-        (escrow drop, nullifier omission, …) FLIPS its root ⇒ flips the digest ⇒ flips the commitment
-        ⇒ UNSAT against the pinned `state_commit`. This is the per-effect anti-ghost tooth the coverage
-        memos demand, lifted to ALL 8 side-tables at once.
+      - `cellCommitS_binds_systemRoots_or_collides` — equal commitments ⇒ equal `systemRootsDigest` ⇒
+        the SAME 8 side-table roots, OR a NAMED collision of the deployed sponge at a pair a total
+        extractor returns. Tampering ANY side-table root (escrow drop, nullifier omission, …) FLIPS its
+        root ⇒ flips the digest ⇒ flips the commitment ⇒ UNSAT against the pinned `state_commit`, unless
+        the prover holds that collision. This is the per-effect anti-ghost tooth the coverage memos
+        demand, lifted to ALL 8 side-tables at once.
       - `legacy_commitS_absorbs_empty_roots` — a LEGACY cell (all-sentinel `system_roots`)
         commits BYTE-IDENTICALLY to the empty-roots reference: the absorbed digest is the fixed
         `emptySystemRootsDigest` constant, cell-INDEPENDENT, so folding it in is a uniform no-op.
@@ -46,16 +47,29 @@ namespace). It supplies, in ONE place:
     root MOVES it (anti-ghost), and two cells with the SAME roots commit IDENTICALLY (completeness).
     A `systemRootsDigest := 0` stub would collapse the positive guard — forbidden.
 
-Pure, computable, `#guard`-able (no `native_decide`). Reuses `Circuit.ListCommit.listDigest` /
-`compressNInjective` (the already-built injective accumulator portal) — never a new axiom.
+Pure, computable, `#guard`-able (no `native_decide`). Reuses `Circuit.ListCommit.listDigest` and the
+`Circuit.Poseidon2Binding.SpongeColl` extraction spine — never a new axiom.
 `#assert_axioms` whitelists `{propext, Classical.choice, Quot.sound}`.
+
+⚑ **THE INJECTIVITY FLOOR IS GONE FROM EVERY BINDING STATEMENT HERE (07-20).** `systemRootsDigest_binds`,
+`_binds_fn`, `_binds_pointwise`, `cellCommitS_binds_systemRoots` and `cellCommitS_binds_roots_pointwise`
+each carried `StateCommit.compressNInjective` — the same proposition as `Poseidon2SpongeCR`, which
+`HashFloorHonesty` REFUTES at the deployed BabyBear parameters. At the deployed sponge they were
+vacuously true and bound nothing. They are DELETED and replaced by extraction-as-data forms
+(`…_or_collides`) that assume nothing about the sponge and name the colliding pair a total extractor
+returns (`rootsCollFind`/`RootsColl`, `cellCommitSCollFind`/`CellCommitSColl`). §3′ proves the strength
+relation BOTH ways as standalone bridges — every deleted theorem is recovered as exactly its injective
+special case (`…_of_injective`), and the collision disjunct is refutable there (`…_refutable_of_injective`)
+while being genuinely inhabited at a degenerate sponge (`badRootsSponge_has_rootsColl`).
 -/
 import Dregg2.Circuit.ListCommit
+import Dregg2.Circuit.Poseidon2Binding
 
 namespace Dregg2.Exec.SystemRoots
 
 open Dregg2.Circuit.StateCommit (compressNInjective)
 open Dregg2.Circuit.ListCommit
+open Dregg2.Circuit.Poseidon2Binding (SpongeColl)
 
 /-! ## §1 — the kernel-owned root INDICES (the dedicated home).
 
@@ -128,37 +142,162 @@ uniform no-op (the STAGE 3 backward-compat keystone, next section). -/
 def emptySystemRootsDigest (compressN : List FieldElem → FieldElem) : FieldElem :=
   systemRootsDigest compressN emptySystemRoots
 
-/-! ## §3 — injectivity: `systemRootsDigest` binds the WHOLE sub-block (anti-ghost foundation). -/
+/-! ## §3 — the digest BINDS the WHOLE sub-block — or hands back the colliding pair.
 
-/-- **`systemRootsDigest_binds`.** Equal digests force the SAME ordered root list. Off the
-single realizable `compressN`-injectivity carrier (`ListCommit.ListDigestBindsList` with the identity
-leaf, which is trivially injective). So tampering ANY side-table root — a dropped escrow, an omitted
-nullifier, a reordered queue — produces a DIFFERENT `systemRootsDigest`: the anti-ghost foundation. -/
-theorem systemRootsDigest_binds (compressN : List FieldElem → FieldElem)
+⚑ **WHAT THIS SECTION USED TO ASSUME, AND WHY IT SAID NOTHING.** `systemRootsDigest_binds`,
+`_binds_fn` and `_binds_pointwise` each carried `StateCommit.compressNInjective compressN`. That
+predicate is literally `∀ xs ys, compressN xs = compressN ys → xs = ys` — the same proposition as
+`Poseidon2Binding.Poseidon2SpongeCR`, and FALSE at the deployed BabyBear parameters:
+`HashFloorHonesty.compressNInjective_false_of_finite_range` / `poseidon2SpongeCR_false_babyBear`
+refute it by pigeonhole (the infinite `List ℤ` domain compressed into a bounded field). So the three
+theorems, and every consumer that instantiated them at the deployed sponge, were VACUOUSLY TRUE
+exactly where they were supposed to bind the deployed side-table state. They are DELETED — not kept
+beside the new forms, which would be the same sin in additive dress.
+
+The replacement assumes NOTHING. The roots peel is a TOTAL FUNCTION (`rootsCollFind`) that either
+proves the ordered root lists equal or hands back the SPECIFIC pair of lists at which the deployed
+sponge actually collides. `RootsColl` is a predicate about THAT pair — deliberately NOT
+`∃ xs ys, collision`, which pigeonhole makes unconditionally true at deployed parameters and which
+would therefore bind nothing at all. The `_of_injective` bridges below recover each deleted statement
+as EXACTLY its injective special case, so nothing genuinely proved was given up; what was given up is
+the pretence that the deployed sponge satisfies the hypothesis. -/
+
+/-- **`systemRootsDigest_eq_hash_rootList`** — the digest is ONE sponge application over the ordered
+root list (`listDigest` under the identity leaf encoder). Definitional: the deployed absorption,
+unfolded so the extraction spine applies directly to the roots leg. -/
+theorem systemRootsDigest_eq_hash_rootList (compressN : List FieldElem → FieldElem) (sr : SysRoots) :
+    systemRootsDigest compressN sr = compressN (rootList sr) := by
+  simp [systemRootsDigest, listDigest]
+
+/-- **`rootsCollFind sr sr'`** — the TOTAL extractor for the roots leg: the SPECIFIC pair of lists at
+which two `system_roots` sub-blocks sharing a digest must have collided. The sponge absorbs the ordered
+root list directly (one application, no inner group), so the peel is the pair of root lists itself —
+still a total function of the inputs, still a pair the caller can name and inspect. -/
+def rootsCollFind (sr sr' : SysRoots) : List FieldElem × List FieldElem :=
+  (rootList sr, rootList sr')
+
+/-- **`RootsColl compressN sr sr'`** — the pair `rootsCollFind` RETURNS is a GENUINE collision of the
+deployed sponge: DISTINCT ordered root lists with the SAME digest. The named disjunct every cured
+statement below carries in place of the refuted injectivity floor.
+
+This is the ONE definition of the roots-leg collision in the tree: `Circuit.Emit.EffectVmFullStateRunnable`
+(and through it the ~40 per-tag wide keystones) `export`s this name rather than carrying a parallel copy. -/
+def RootsColl (compressN : List FieldElem → FieldElem) (sr sr' : SysRoots) : Prop :=
+  SpongeColl compressN (rootsCollFind sr sr')
+
+/-- **⚑ A REFLEXIVE INSTANCE CANNOT HAVE COLLIDED — AT ANY SPONGE.** A collision needs DISTINCT
+inputs, and the extractor fed a sub-block against itself returns a pair of identical lists. So a
+consumer applied at `sr = sr'` MUST land in the binding branch, with NO injectivity hypothesis
+anywhere. This is what lets a non-vacuity witness be discharged HONESTLY: the keystone audit shows the
+keystone fires INTO the binding branch rather than escaping through the disjunct, and it needs no toy
+sponge to do so. -/
+theorem rootsColl_irrefl (compressN : List FieldElem → FieldElem) (sr : SysRoots) :
+    ¬ RootsColl compressN sr sr := by
+  rintro ⟨hne, _⟩
+  exact hne rfl
+
+/-- **`systemRootsDigest_binds_or_collides` (the cured `systemRootsDigest_binds`, UNCONDITIONAL).**
+Equal digests EITHER force the SAME ordered root list, OR the pair `rootsCollFind` returns is a genuine
+collision of the deployed sponge. So tampering ANY side-table root — a dropped escrow, an omitted
+nullifier, a reordered queue — either moves the digest or COSTS the prover a named sponge collision.
+
+⚑ **STRENGTH, stated honestly.** As a FORMULA this is weaker than the deleted equality. As CONTENT AT
+DEPLOYED PARAMETERS it is strictly stronger, because the deleted premise is unsatisfiable by the real
+compressing sponge: the old theorem said nothing about the deployed system and this one holds OF it. -/
+theorem systemRootsDigest_binds_or_collides (compressN : List FieldElem → FieldElem)
+    (sr sr' : SysRoots)
+    (h : systemRootsDigest compressN sr = systemRootsDigest compressN sr') :
+    rootList sr = rootList sr' ∨ RootsColl compressN sr sr' := by
+  by_cases hne : rootList sr = rootList sr'
+  · exact Or.inl hne
+  · refine Or.inr ⟨hne, ?_⟩
+    show compressN (rootList sr) = compressN (rootList sr')
+    rw [← systemRootsDigest_eq_hash_rootList compressN sr,
+      ← systemRootsDigest_eq_hash_rootList compressN sr']
+    exact h
+
+/-- **`systemRootsDigest_binds_fn_or_collides` (the cured `systemRootsDigest_binds_fn`).** Equal
+digests force the WHOLE sub-block FUNCTION equal, or hand back the collision. `rootList = List.ofFn`,
+and `List.ofFn_inj` says `ofFn sr = ofFn sr' → sr = sr'`. -/
+theorem systemRootsDigest_binds_fn_or_collides (compressN : List FieldElem → FieldElem)
+    (sr sr' : SysRoots)
+    (h : systemRootsDigest compressN sr = systemRootsDigest compressN sr') :
+    sr = sr' ∨ RootsColl compressN sr sr' := by
+  rcases systemRootsDigest_binds_or_collides compressN sr sr' h with hlist | hcoll
+  · exact Or.inl (List.ofFn_inj.mp hlist)
+  · exact Or.inr hcoll
+
+/-- **`systemRootsDigest_binds_pointwise_or_collides` (the cured `systemRootsDigest_binds_pointwise`).**
+Equal digests force EVERY side-table root equal (pointwise at each kernel index), or hand back the
+collision. The per-index anti-ghost statement, now TRUE of the deployed sponge: if the committed digest
+is fixed, NO side-table root can be tampered without a named sponge collision. Combined with the
+commitment absorption (§4), this is the 3-corner anti-ghost tooth for all 8 side-tables. -/
+theorem systemRootsDigest_binds_pointwise_or_collides (compressN : List FieldElem → FieldElem)
+    (sr sr' : SysRoots)
+    (h : systemRootsDigest compressN sr = systemRootsDigest compressN sr') :
+    (∀ i : Fin N_SYSTEM_ROOTS, sr i = sr' i) ∨ RootsColl compressN sr sr' := by
+  rcases systemRootsDigest_binds_fn_or_collides compressN sr sr' h with hfn | hcoll
+  · exact Or.inl (fun i => congrFun hfn i)
+  · exact Or.inr hcoll
+
+/-! ### §3′ — the STRENGTH RELATION, proved BOTH ways as STANDALONE bridges.
+
+Deliberately NOT hypotheses on any deployed statement: a theorem carrying `compressNInjective` would be
+right back where this repair started. They exist so the claim "nothing genuinely proved was given up"
+is itself machine-checked, and so the disjunction is visibly not a free pass. -/
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH (`_binds`).** The deleted `systemRootsDigest_binds` is EXACTLY the
+injective special case of its cured form — same statement, same hypotheses, derived rather than
+assumed. -/
+theorem systemRootsDigest_binds_of_injective (compressN : List FieldElem → FieldElem)
     (hN : compressNInjective compressN) (sr sr' : SysRoots)
     (h : systemRootsDigest compressN sr = systemRootsDigest compressN sr') :
-    rootList sr = rootList sr' :=
-  ListDigestBindsList id compressN hN (fun _ _ h => h) _ _ h
+    rootList sr = rootList sr' := by
+  rcases systemRootsDigest_binds_or_collides compressN sr sr' h with hlist | ⟨hne, himg⟩
+  · exact hlist
+  · exact absurd (hN _ _ himg) hne
 
-/-- **`systemRootsDigest_binds_fn`.** Equal digests force the WHOLE sub-block FUNCTION equal.
-`rootList = List.ofFn`, and `List.ofFn_inj` says `ofFn sr = ofFn sr' → sr = sr'`. So if the committed
-digest is fixed, the entire `system_roots` sub-block is pinned. -/
-theorem systemRootsDigest_binds_fn (compressN : List FieldElem → FieldElem)
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH (`_binds_fn`).** The deleted `systemRootsDigest_binds_fn`, recovered. -/
+theorem systemRootsDigest_binds_fn_of_injective (compressN : List FieldElem → FieldElem)
     (hN : compressNInjective compressN) (sr sr' : SysRoots)
     (h : systemRootsDigest compressN sr = systemRootsDigest compressN sr') :
-    sr = sr' := by
-  have hlist : rootList sr = rootList sr' := systemRootsDigest_binds compressN hN sr sr' h
-  exact List.ofFn_inj.mp hlist
+    sr = sr' :=
+  List.ofFn_inj.mp (systemRootsDigest_binds_of_injective compressN hN sr sr' h)
 
-/-- **`systemRootsDigest_binds_pointwise`.** Equal digests force EVERY side-table root equal
-(pointwise at each kernel index `i`). The per-index anti-ghost statement: if the committed digest is
-fixed, NO side-table root can be tampered. Combined with the commitment absorption (§4), this is the
-3-corner anti-ghost tooth for all 8 side-tables. -/
-theorem systemRootsDigest_binds_pointwise (compressN : List FieldElem → FieldElem)
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH (`_binds_pointwise`).** The deleted
+`systemRootsDigest_binds_pointwise` — the one with consumers across the note/delegation emit families —
+recovered verbatim as the injective special case. -/
+theorem systemRootsDigest_binds_pointwise_of_injective (compressN : List FieldElem → FieldElem)
     (hN : compressNInjective compressN) (sr sr' : SysRoots)
     (h : systemRootsDigest compressN sr = systemRootsDigest compressN sr') (i : Fin N_SYSTEM_ROOTS) :
     sr i = sr' i :=
-  congrFun (systemRootsDigest_binds_fn compressN hN sr sr' h) i
+  congrFun (systemRootsDigest_binds_fn_of_injective compressN hN sr sr' h) i
+
+/-- **(CANARY — the collision disjunct is REFUTABLE, so the disjunction is not a free pass.)** At an
+injective sponge the extracted pair is NOT a collision, so a cured statement cannot discharge itself by
+taking the right branch: the binding half has to do the work. A disjunction whose right side were always
+available would carry no more content than `True` — precisely the free pass an `∃ collision`
+formulation would have handed over. -/
+theorem rootsColl_refutable_of_injective (compressN : List FieldElem → FieldElem)
+    (hN : compressNInjective compressN) (sr sr' : SysRoots) :
+    ¬ RootsColl compressN sr sr' := by
+  rintro ⟨hne, himg⟩
+  exact hne (hN _ _ himg)
+
+/-- **(CANARY — the collision branch is REACHABLE.)** A degenerate sponge genuinely collides on two
+DISTINCT sub-blocks, so `RootsColl` is not accidentally empty either. Both branches of the cured
+disjunction are live across sponges — which is what makes it informative rather than a disguised
+equality with extra syntax. -/
+def onesSystemRoots : SysRoots := fun _ => 1
+
+theorem badRootsSponge_has_rootsColl :
+    RootsColl (fun _ => 0) emptySystemRoots onesSystemRoots := by
+  refine ⟨?_, rfl⟩
+  show rootList emptySystemRoots ≠ rootList onesSystemRoots
+  intro h
+  have hfn : emptySystemRoots = onesSystemRoots := List.ofFn_inj.mp h
+  have h0 := congrFun hfn (⟨0, by decide⟩ : Fin N_SYSTEM_ROOTS)
+  simp [emptySystemRoots, onesSystemRoots] at h0
 
 /-! ## §4 — the canonical cell commitment EXTENDED to absorb `systemRootsDigest`.
 
@@ -182,33 +321,91 @@ cell-INDEPENDENT constant in the system-roots slot — the no-op fold (the Rust
 def legacyReferenceCommitS (rest : List FieldElem) : FieldElem :=
   compressN (rest ++ [emptySystemRootsDigest compressN])
 
-/-- **`cellCommitS_binds_systemRoots` (the anti-ghost tooth).** Equal canonical commitments
-(over the SAME `rest`) force the SAME `systemRootsDigest`. Off the `compressN`-injectivity carrier:
-the sponge binds its input list, the shared `rest` cancels, the singleton digest limbs are equal.
-Combined with `systemRootsDigest_binds_pointwise`, this is the per-side-table anti-ghost tooth:
-two cells with the SAME commitment have the SAME 8 side-table roots, so tampering ANY of them
-provably MOVES the commitment. A `systemRootsDigest := 0` stub would make this vacuous — forbidden. -/
-theorem cellCommitS_binds_systemRoots
+/-- **`cellCommitSCollFind compressN rest sr sr'`** — the TOTAL extractor for the COMMITMENT leg: the
+specific pair of absorbed lists at which two cells sharing a `cellCommitS` must have collided. A total
+function of the inputs, exactly like `rootsCollFind` one level down. -/
+def cellCommitSCollFind (rest : List FieldElem) (sr sr' : SysRoots) :
+    List FieldElem × List FieldElem :=
+  (rest ++ [systemRootsDigest compressN sr], rest ++ [systemRootsDigest compressN sr'])
+
+/-- **`CellCommitSColl compressN rest sr sr'`** — the pair `cellCommitSCollFind` RETURNS is a GENUINE
+collision of the deployed commitment sponge. The named disjunct replacing the deleted
+`compressNInjective` carrier at the commitment layer. -/
+def CellCommitSColl (rest : List FieldElem) (sr sr' : SysRoots) : Prop :=
+  SpongeColl compressN (cellCommitSCollFind compressN rest sr sr')
+
+/-- **⚑ A REFLEXIVE INSTANCE CANNOT HAVE COLLIDED at the commitment layer either** — sponge-agnostic,
+no injectivity hypothesis. The commitment-leg twin of `rootsColl_irrefl`. -/
+theorem cellCommitSColl_irrefl (rest : List FieldElem) (sr : SysRoots) :
+    ¬ CellCommitSColl compressN rest sr sr := by
+  rintro ⟨hne, _⟩
+  exact hne rfl
+
+/-- **`cellCommitS_binds_systemRoots_or_collides` (the cured anti-ghost tooth, UNCONDITIONAL).** Equal
+canonical commitments (over the SAME `rest`) EITHER force the SAME `systemRootsDigest`, OR hand back the
+specific pair of absorbed lists at which the deployed sponge collides. The shared `rest` cancels and the
+singleton digest limbs are compared; nothing is assumed about the sponge.
+
+The old form carried `compressNInjective compressN`, which the deployed BabyBear sponge REFUTES — so it
+said nothing about the deployed commitment. A `systemRootsDigest := 0` stub would still make the binding
+branch vacuous, and the §5 guards forbid it. -/
+theorem cellCommitS_binds_systemRoots_or_collides
+    (rest : List FieldElem) (sr sr' : SysRoots)
+    (h : cellCommitS compressN rest sr = cellCommitS compressN rest sr') :
+    systemRootsDigest compressN sr = systemRootsDigest compressN sr'
+    ∨ CellCommitSColl compressN rest sr sr' := by
+  unfold cellCommitS at h
+  by_cases hne : rest ++ [systemRootsDigest compressN sr]
+      = rest ++ [systemRootsDigest compressN sr']
+  · refine Or.inl ?_
+    have := List.append_cancel_left hne
+    simpa using this
+  · exact Or.inr ⟨hne, h⟩
+
+/-- **`cellCommitS_binds_roots_pointwise_or_collides` (the cured corollary).** Equal commitments force
+EVERY side-table root equal, or name a collision of the deployed sponge — at the commitment layer
+(`CellCommitSColl`) or at the roots digest (`RootsColl`). The full chain, now TRUE of the deployed
+sponge: equal commitment ⇒ equal digest ⇒ equal roots pointwise. This is "the canonical commitment binds
+the whole side-table state" — the soundness statement STAGE 3 buys for ALL 8 side-tables, at deployed
+parameters instead of under a refuted hypothesis. -/
+theorem cellCommitS_binds_roots_pointwise_or_collides
+    (rest : List FieldElem) (sr sr' : SysRoots)
+    (h : cellCommitS compressN rest sr = cellCommitS compressN rest sr') :
+    (∀ i : Fin N_SYSTEM_ROOTS, sr i = sr' i)
+    ∨ CellCommitSColl compressN rest sr sr' ∨ RootsColl compressN sr sr' := by
+  rcases cellCommitS_binds_systemRoots_or_collides compressN rest sr sr' h with hdig | hcoll
+  · rcases systemRootsDigest_binds_pointwise_or_collides compressN sr sr' hdig with hpt | hrcoll
+    · exact Or.inl hpt
+    · exact Or.inr (Or.inr hrcoll)
+  · exact Or.inr (Or.inl hcoll)
+
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH (commitment layer).** The deleted `cellCommitS_binds_systemRoots` is
+EXACTLY the injective special case. Standalone bridge, never a hypothesis on a deployed statement. -/
+theorem cellCommitS_binds_systemRoots_of_injective
     (hN : compressNInjective compressN) (rest : List FieldElem) (sr sr' : SysRoots)
     (h : cellCommitS compressN rest sr = cellCommitS compressN rest sr') :
     systemRootsDigest compressN sr = systemRootsDigest compressN sr' := by
-  unfold cellCommitS at h
-  have hlist : rest ++ [systemRootsDigest compressN sr]
-      = rest ++ [systemRootsDigest compressN sr'] := hN _ _ h
-  have := List.append_cancel_left hlist
-  simpa using this
+  rcases cellCommitS_binds_systemRoots_or_collides compressN rest sr sr' h with hdig | ⟨hne, himg⟩
+  · exact hdig
+  · exact absurd (hN _ _ himg) hne
 
-/-- **`cellCommitS_binds_roots_pointwise` (corollary).** Equal commitments force EVERY
-side-table root equal. The full chain: equal commitment ⇒ equal digest
-(`cellCommitS_binds_systemRoots`) ⇒ equal roots pointwise (`systemRootsDigest_binds_pointwise`). This
-is "the canonical commitment binds the whole side-table state" — the soundness statement STAGE 3
-buys for ALL 8 side-tables. -/
-theorem cellCommitS_binds_roots_pointwise
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH (commitment corollary).** The deleted
+`cellCommitS_binds_roots_pointwise`, recovered verbatim. -/
+theorem cellCommitS_binds_roots_pointwise_of_injective
     (hN : compressNInjective compressN) (rest : List FieldElem) (sr sr' : SysRoots)
     (h : cellCommitS compressN rest sr = cellCommitS compressN rest sr') (i : Fin N_SYSTEM_ROOTS) :
     sr i = sr' i :=
-  systemRootsDigest_binds_pointwise compressN hN sr sr'
-    (cellCommitS_binds_systemRoots compressN hN rest sr sr' h) i
+  systemRootsDigest_binds_pointwise_of_injective compressN hN sr sr'
+    (cellCommitS_binds_systemRoots_of_injective compressN hN rest sr sr' h) i
+
+/-- **(CANARY — the commitment-layer collision disjunct is REFUTABLE.)** At an injective sponge the
+extracted pair is not a collision, so `cellCommitS_binds_*_or_collides` cannot discharge itself through
+the escape. -/
+theorem cellCommitSColl_refutable_of_injective
+    (hN : compressNInjective compressN) (rest : List FieldElem) (sr sr' : SysRoots) :
+    ¬ CellCommitSColl compressN rest sr sr' := by
+  rintro ⟨hne, himg⟩
+  exact hne (hN _ _ himg)
 
 /-- **`legacy_commitS_absorbs_empty_roots` (the backward-compat keystone).** A LEGACY cell
 (all-sentinel `system_roots`, i.e. every side-table empty) has a canonical commitment BYTE-IDENTICAL
@@ -284,11 +481,26 @@ private def tamperedRoots : SysRoots := fun i =>
         systemRoot.DELEG, systemRoot.NULLIFIER, systemRoot.COMMIT, systemRoot.SEALED_BOXES].all
         (· < N_SYSTEM_ROOTS)
 
-#assert_axioms systemRootsDigest_binds
-#assert_axioms systemRootsDigest_binds_fn
-#assert_axioms systemRootsDigest_binds_pointwise
-#assert_axioms cellCommitS_binds_systemRoots
-#assert_axioms cellCommitS_binds_roots_pointwise
+-- The roots-leg collision branch is REACHABLE (a degenerate sponge inhabits it) and IRREFLEXIVE
+-- (`rootsColl_irrefl`), so the cured disjunction is two-valued rather than a free pass:
+#guard decide (rootList emptySystemRoots = rootList onesSystemRoots) == false
+
+#assert_axioms systemRootsDigest_eq_hash_rootList
+#assert_axioms rootsColl_irrefl
+#assert_axioms systemRootsDigest_binds_or_collides
+#assert_axioms systemRootsDigest_binds_fn_or_collides
+#assert_axioms systemRootsDigest_binds_pointwise_or_collides
+#assert_axioms systemRootsDigest_binds_of_injective
+#assert_axioms systemRootsDigest_binds_fn_of_injective
+#assert_axioms systemRootsDigest_binds_pointwise_of_injective
+#assert_axioms rootsColl_refutable_of_injective
+#assert_axioms badRootsSponge_has_rootsColl
+#assert_axioms cellCommitSColl_irrefl
+#assert_axioms cellCommitS_binds_systemRoots_or_collides
+#assert_axioms cellCommitS_binds_roots_pointwise_or_collides
+#assert_axioms cellCommitS_binds_systemRoots_of_injective
+#assert_axioms cellCommitS_binds_roots_pointwise_of_injective
+#assert_axioms cellCommitSColl_refutable_of_injective
 #assert_axioms legacy_commitS_absorbs_empty_roots
 #assert_axioms legacy_commitsS_agree
 

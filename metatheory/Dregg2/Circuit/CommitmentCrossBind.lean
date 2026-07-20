@@ -440,7 +440,7 @@ open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest N_SYSTEM_ROOTS)
 /-- **`runnable_binds_same_system_roots` (R1 closed for the side-table state).** Two rows of
 the WIDE runnable descriptor that publish the SAME `state_commit`, whose `sysRootsDigestCol` carriers
 ARE the `systemRootsDigest` of their `system_roots` sub-blocks, agree on EVERY side-table root. This
-is `cellCommitS_binds_roots_pointwise` (the record-layer binding) realized on the CIRCUIT THE PROVER
+is `cellCommitS_binds_roots_pointwise_or_collides` (the record-layer binding) realized on the CIRCUIT THE PROVER
 RUNS: the runnable `state_commit` now binds the same 8 roots the abstract `cellCommitS` does — the
 abstract three-commitment crown and the runnable descriptor pin ONE side-table state object. -/
 theorem runnable_binds_same_system_roots_or_collides

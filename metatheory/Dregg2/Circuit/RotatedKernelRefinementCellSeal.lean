@@ -23,7 +23,7 @@ committed lifecycle-root column — and discharges the VALUE rung against it.
 ## The binding mechanism (chosen: a dedicated `lifecycle` system-root limb)
 
 `Exec.SystemRoots` already gives the kernel side-tables their OWN committed home: `systemRootsDigest`
-is absorbed into the cell commitment by `cellCommitS`, and `cellCommitS_binds_systemRoots` proves a
+is absorbed into the cell commitment by `cellCommitS`, and `cellCommitS_binds_systemRoots_or_collides` proves a
 fixed commitment pins every side-table root (`SystemRoots.lean:191`). `lifecycle` is exactly such a
 kernel-owned side-table. We model its committed root — `lifecycleRoot` — the SAME way the side-table
 roots are modelled (a `ListCommit.listDigest` over the entry, binding via the realizable
@@ -122,7 +122,7 @@ def lifecycleRoot (compressN : List FieldElem → FieldElem) (k : RecordKernelSt
 
 /-- **`lifecycleRoot_binds`** — equal lifecycle roots (over the SAME `cell`) force the SAME entry
 value. Off the realizable `compressN`-injectivity carrier + the injective leaf: the digest binds the
-one-element entry list, so the entry value is pinned. This is the `systemRootsDigest_binds` shape for
+one-element entry list, so the entry value is pinned. This is the `systemRootsDigest_binds_or_collides` shape for
 the lifecycle side-table — the anti-ghost foundation a forged un-sealed post must clear. -/
 theorem lifecycleRoot_binds (compressN : List FieldElem → FieldElem)
     (hN : compressNInjective compressN) (k k' : RecordKernelState) (cell : CellId)
