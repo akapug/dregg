@@ -454,9 +454,38 @@ theorem wireCommitR8_binds_or_collides (permW : List ℤ → List ℤ)
   · exact Or.inl hne
   · exact Or.inr (wireCommit8Find_spec permW hW hlen hne h)
 
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** The deleted `wireCommitR8_binds` is EXACTLY the injective special
+case of the unconditional keystone: assume the injectivity the old carrier asserted and the collision
+disjunct is impossible, so the equality falls out. Nothing that was genuinely proved was given up by
+the deletion — what was given up is the pretence that the deployed permutation satisfies the
+hypothesis. Stated as a standalone bridge, deliberately NOT as a hypothesis on any deployed keystone:
+`Function.Injective permW` is FALSE at deployed BabyBear parameters
+(`VacuitySweepTeeth.widePerm_not_injective_babyBear`), so a keystone carrying it would be right back
+where this sweep started. -/
+theorem wireCommitR8_binds_of_injective (permW : List ℤ → List ℤ)
+    (hW : Poseidon2Width8 permW) (hinj : Function.Injective permW)
+    {l l' : List ℤ} {ir ir' : ℤ} (hlen : l.length = l'.length)
+    (h : wireCommitR8 permW l ir = wireCommitR8 permW l' ir') : l = l' ∧ ir = ir' := by
+  rcases wireCommitR8_binds_or_collides permW hW hlen h with hEq | ⟨hne, himg⟩
+  · exact hEq
+  · exact absurd (hinj himg) hne
+
+/-- **(CANARY — the collision disjunct is REFUTABLE, so the disjunction is not a free pass.)** At an
+injective width-8 permutation the extractor's returned pair is NOT a collision, so
+`wireCommitR8_binds_or_collides` cannot discharge itself by taking the right branch: the binding has to
+do the work. A disjunction whose right side were always available would carry no more content than
+`True`. -/
+theorem wireColl_refutable_of_injective (permW : List ℤ → List ℤ)
+    (hinj : Function.Injective permW) (l : List ℤ) (ir : ℤ) (l' : List ℤ) (ir' : ℤ) :
+    ¬ WireColl permW l ir l' ir' := by
+  rintro ⟨hne, himg⟩
+  exact hne (hinj himg)
+
 #assert_axioms chainCollFind_spec
 #assert_axioms wireCommit8Find_spec
 #assert_axioms wireCommitR8_binds_or_collides
+#assert_axioms wireCommitR8_binds_of_injective
+#assert_axioms wireColl_refutable_of_injective
 
 -- NON-VACUITY at the measured widths, both polarities (Horner toy sponge): a low register,
 -- a high register, the committed height, and the iroot each move the commit; the honest

@@ -213,6 +213,31 @@ theorem effectVmCommit_binds_cap_root_or_collides
     refine Or.inr (Or.inr ⟨fun hq => hi3 ?_, h⟩)
     exact congrArg (fun q : ℤ × ℤ × ℤ × ℤ => q.2.2.1) hq
 
+/-- **⚑ THE NO-STRENGTH-LOST TOOTH.** The deleted `effectVmCommit_binds_record_digest` is EXACTLY the
+injective special case of the unconditional tooth: assume the injectivity the old carrier asserted and
+the collision disjunct is impossible, so the equality falls out. Nothing genuinely proved was given up
+by the deletion — only the pretence that the deployed `hash_4_to_1` satisfies the hypothesis. Stated as
+a standalone bridge, deliberately NOT as a hypothesis on any consumer:
+`Function.Injective (h4q h4)` is FALSE at deployed BabyBear parameters
+(`InjectiveFloorRegrounded.compress4_not_injective_babyBear`). -/
+theorem effectVmCommit_binds_record_digest_of_injective (hinj : Function.Injective (h4q h4))
+    (balLo balHi nonce : ℤ) (fields : Fin 8 → ℤ) (capRoot recordDigest recordDigest' : ℤ)
+    (h : effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest
+       = effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest') :
+    recordDigest = recordDigest' := by
+  rcases effectVmCommit_binds_record_digest_or_collides h4 balLo balHi nonce fields capRoot
+    recordDigest recordDigest' h with hEq | ⟨hne, himg⟩
+  · exact hEq
+  · exact absurd (hinj himg) hne
+
+/-- **(CANARY — the collision disjunct is REFUTABLE, so the disjunction is not a free pass.)** At an
+injective compress the named quads are not a collision, so the `_or_collides` teeth cannot discharge
+themselves by taking the right branch: the binding has to do the work. -/
+theorem coll4_refutable_of_injective (hinj : Function.Injective (h4q h4))
+    (p q : ℤ × ℤ × ℤ × ℤ) : ¬ Coll4 h4 p q := by
+  rintro ⟨hne, himg⟩
+  exact hne (hinj himg)
+
 /-! ## §4 — THE NO-OP CUTOVER (residue-free cell = legacy ZERO form).
 
 A residue-free cell carries `record_digest = 0` (Rust `empty_record_digest()`). The deployed
@@ -273,6 +298,8 @@ private def realDigestC : ℤ := 42  -- a residue-bearing cell (real authority d
 #assert_axioms record_digest_at_index_12
 #assert_axioms effectVmCommit_binds_record_digest_or_collides
 #assert_axioms effectVmCommit_binds_cap_root_or_collides
+#assert_axioms effectVmCommit_binds_record_digest_of_injective
+#assert_axioms coll4_refutable_of_injective
 #assert_axioms h4q_rootQuad
 #assert_axioms effectVmCommit_residueFree_noop
 
