@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 /// The extracted core lives in `metatheory/Dregg2/Crypto/Fips204Verify.lean`
 /// (`verifyCore` = the `Fips204Spec.MlDsaParams.verifyB` predicate at the deployed ML-DSA-65
 /// parameters), `@[export]`ed as `dregg_fips204_verify` and compiled to leanc-native code. It is
-/// PROVED to agree with the spec (`verifyCore_is_spec`) and to discharge
+/// PROVED to agree with the spec (`verifyCore_unfolds_to_def`) and to discharge
 /// `DreggPqRefinement.Fips204Correct` for the verify direction (`extractedApi_fips204`) — no `fips204`
 /// crate is trusted for the round-trip. `dregg-lean-ffi::shadow_fips204_verify` runs it natively.
 ///

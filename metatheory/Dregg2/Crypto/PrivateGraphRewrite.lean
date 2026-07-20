@@ -18,7 +18,11 @@ padding before interpreting the witness as the existing generic
 `GraphRewrite.RewriteStep`.  The bounded relation strengthens that generic
 relation with an injective substitution and a nonempty LHS; the current generic
 `RewriteStep` itself only carries a homomorphism despite older "embedding"
-prose.
+prose.  Precisely, this first primitive is **injective match-driven bounded
+hyperedge replacement**.  It is not yet categorical DPO: RHS-only variables are
+not forced fresh and LHS-only variables do not yet carry a dangling-condition
+check against the preserved context.  Those are explicit next-layer teeth, not
+claims silently attributed to this relation.
 -/
 import Dregg2.Crypto.GraphRewrite
 import Mathlib.Data.List.FinRange
@@ -39,8 +43,7 @@ def CONTEXT_SLOTS : Nat := 2
 def DIGEST_WIDTH : Nat := 8
 def PROTOCOL_VERSION : Int := 1
 def SHAPE_ID : Int := 4216242
-def OLD_SIDE_TAG : Int := 7301
-def NEW_SIDE_TAG : Int := 7302
+def GRAPH_STATE_TAG : Int := 7301
 
 structure HostEdgeSlot where
   active : Bool
@@ -105,11 +108,12 @@ def BoundedContext.edges (ctx : BoundedContext) : List (Hyperedge Label Node) :=
 def instantiate (sigma : Var → Node) (p : BoundedPattern) : List (Hyperedge Label Node) :=
   instEdges sigma p.toHypergraph.edges
 
-/-- A genuine bounded one-step rewrite: selected rule membership, injective
+/-- An injective match-driven bounded hyperedge replacement step: selected rule membership, injective
 match, nonempty deletion pattern, exact old decomposition up to permutation,
 and a canonically ordered new context-plus-glue result.  Canonicalizing the new
 endpoint is load-bearing: the committed public `newRoot` names the exact generic
-`RewriteStep` target used by history linkage. -/
+`RewriteStep` target used by history linkage.  This relation deliberately does
+not claim DPO freshness or the dangling condition. -/
 def BoundedOneStep (rules : List BoundedRule)
     (oldGraph newGraph : BoundedGraph) (rule : BoundedRule)
     (sigma : Var → Node) (context : BoundedContext) : Prop :=
@@ -119,8 +123,8 @@ def BoundedOneStep (rules : List BoundedRule)
   newGraph.toHypergraph.edges = context.edges ++ instantiate sigma rule.rhs
 
 /-- The bounded semantics really is an existing generic match-driven graph
-rewrite step; only the harmless ordering of the new graph is normalized by
-choosing the permuted edge list as the generic step's target. -/
+rewrite step.  Its exact canonical committed `newGraph` is the generic step's
+target; there is no order-changing endpoint substitution. -/
 theorem boundedOneStep_to_rewriteStep
     {rules : List BoundedRule} {oldGraph newGraph : BoundedGraph}
     {rule : BoundedRule} {sigma : Var → Node} {context : BoundedContext}
@@ -177,15 +181,15 @@ def ruleLeafInputs (core : Digest8) (blind : Blind4)
     (domain version shape slot : Int) : List Int :=
   List.ofFn core ++ List.ofFn blind ++ [domain, version, shape, slot]
 
-def rulesetNodeInputs (slot : Bool) (leaf sibling : Digest8) : List Int :=
-  if slot then List.ofFn sibling ++ List.ofFn leaf
-  else List.ofFn leaf ++ List.ofFn sibling
+def rulesetNodeInputs (leaf0 leaf1 : Digest8) : List Int :=
+  List.ofFn leaf0 ++ List.ofFn leaf1
 
 structure PublicStatement where
   domain : Int
   session : Int
   version : Int
   shape : Int
+  index : Int
   rulesetRoot : Digest8
   oldRoot : Digest8
   newRoot : Digest8
@@ -193,14 +197,21 @@ structure PublicStatement where
 structure PrivateWitness where
   oldGraph : BoundedGraph
   newGraph : BoundedGraph
-  rule : BoundedRule
+  rules : Fin 2 → BoundedRule
   sigma : Var → Node
   context : BoundedContext
   oldBlind : Blind4
   newBlind : Blind4
-  ruleBlind : Blind4
+  ruleBlinds : Fin 2 → Blind4
   ruleSlot : Bool
-  rulesetSibling : Digest8
+
+def PrivateWitness.selectedRule (w : PrivateWitness) : BoundedRule :=
+  if w.ruleSlot then w.rules 1 else w.rules 0
+
+def ruleLeafDigest (H : List Int → List Int) (pub : PublicStatement)
+    (w : PrivateWitness) (slot : Fin 2) : Digest8 :=
+  digest8 H (ruleLeafInputs (digest8 H (ruleCoreInputs (w.rules slot)))
+    (w.ruleBlinds slot) pub.domain pub.version pub.shape slot.val)
 
 def CanonicalBlind (b : Blind4) : Prop :=
   ∀ i, 0 ≤ b i ∧ b i < 2013265921
@@ -214,34 +225,86 @@ structure Accepts (H : List Int → List Int)
   shape : pub.shape = SHAPE_ID
   oldBlindCanonical : CanonicalBlind w.oldBlind
   newBlindCanonical : CanonicalBlind w.newBlind
-  ruleBlindCanonical : CanonicalBlind w.ruleBlind
-  step : BoundedOneStep [w.rule] w.oldGraph w.newGraph w.rule w.sigma w.context
+  ruleBlindsCanonical : ∀ slot, CanonicalBlind (w.ruleBlinds slot)
+  step : BoundedOneStep (List.ofFn w.rules) w.oldGraph w.newGraph
+    w.selectedRule w.sigma w.context
   oldRoot :
     pub.oldRoot = digest8 H (graphRootInputs (digest8 H (graphCoreInputs w.oldGraph))
-      w.oldBlind pub.domain pub.session pub.version OLD_SIDE_TAG)
+      w.oldBlind pub.domain pub.session pub.version GRAPH_STATE_TAG)
   newRoot :
     pub.newRoot = digest8 H (graphRootInputs (digest8 H (graphCoreInputs w.newGraph))
-      w.newBlind pub.domain pub.session pub.version NEW_SIDE_TAG)
+      w.newBlind pub.domain pub.session pub.version GRAPH_STATE_TAG)
   rulesetRoot :
-    pub.rulesetRoot = digest8 H (rulesetNodeInputs w.ruleSlot
-      (digest8 H (ruleLeafInputs (digest8 H (ruleCoreInputs w.rule)) w.ruleBlind
-        pub.domain pub.version pub.shape (boolInt w.ruleSlot)))
-      w.rulesetSibling)
+    pub.rulesetRoot = digest8 H
+      (rulesetNodeInputs (ruleLeafDigest H pub w 0) (ruleLeafDigest H pub w 1))
+
+/-- The actual old-graph root preimage, parameterized by the core hash.  Keeping
+this constructor explicit makes the collision boundary honest: a finite sponge
+is never assumed mathematically injective. -/
+def oldGraphRootPreimage (H : List Int → List Int)
+    (pub : PublicStatement) (w : PrivateWitness) : List Int :=
+  graphRootInputs (digest8 H (graphCoreInputs w.oldGraph))
+    w.oldBlind pub.domain pub.session pub.version GRAPH_STATE_TAG
+
+def newGraphRootPreimage (H : List Int → List Int)
+    (pub : PublicStatement) (w : PrivateWitness) : List Int :=
+  graphRootInputs (digest8 H (graphCoreInputs w.newGraph))
+    w.newBlind pub.domain pub.session pub.version GRAPH_STATE_TAG
+
+def rulesetRootPreimage (H : List Int → List Int)
+    (pub : PublicStatement) (w : PrivateWitness) : List Int :=
+  rulesetNodeInputs (ruleLeafDigest H pub w 0) (ruleLeafDigest H pub w 1)
+
+def DigestCollision (H : List Int → List Int) : Prop :=
+  ∃ left right, left ≠ right ∧ digest8 H left = digest8 H right
+
+/-- Two distinct accepted old-graph root openings for one public statement are
+an explicit full-eight-lane digest collision. -/
+theorem two_accepting_old_openings_yield_collision
+    {H : List Int → List Int} {pub : PublicStatement} {left right : PrivateWitness}
+    (hl : Accepts H pub left) (hr : Accepts H pub right)
+    (hdiff : oldGraphRootPreimage H pub left ≠ oldGraphRootPreimage H pub right) :
+    DigestCollision H := by
+  refine ⟨oldGraphRootPreimage H pub left, oldGraphRootPreimage H pub right, hdiff, ?_⟩
+  exact hl.oldRoot.symm.trans hr.oldRoot
+
+/-- The same binding reduction for the exact committed new endpoint. -/
+theorem two_accepting_new_openings_yield_collision
+    {H : List Int → List Int} {pub : PublicStatement} {left right : PrivateWitness}
+    (hl : Accepts H pub left) (hr : Accepts H pub right)
+    (hdiff : newGraphRootPreimage H pub left ≠ newGraphRootPreimage H pub right) :
+    DigestCollision H := by
+  refine ⟨newGraphRootPreimage H pub left, newGraphRootPreimage H pub right, hdiff, ?_⟩
+  exact hl.newRoot.symm.trans hr.newRoot
+
+/-- Opening the complete two-rule private ruleset in two distinct ways under
+one accepted public root likewise produces a concrete digest collision. -/
+theorem two_accepting_ruleset_openings_yield_collision
+    {H : List Int → List Int} {pub : PublicStatement} {left right : PrivateWitness}
+    (hl : Accepts H pub left) (hr : Accepts H pub right)
+    (hdiff : rulesetRootPreimage H pub left ≠ rulesetRootPreimage H pub right) :
+    DigestCollision H := by
+  refine ⟨rulesetRootPreimage H pub left, rulesetRootPreimage H pub right, hdiff, ?_⟩
+  exact hl.rulesetRoot.symm.trans hr.rulesetRoot
 
 theorem accepts_rewriteStep {H : List Int → List Int}
     {pub : PublicStatement} {w : PrivateWitness} (h : Accepts H pub w) :
-    RewriteStep [w.rule.toRule] w.oldGraph.toHypergraph w.newGraph.toHypergraph := by
+    RewriteStep ((List.ofFn w.rules).map BoundedRule.toRule)
+      w.oldGraph.toHypergraph w.newGraph.toHypergraph := by
   simpa using boundedOneStep_to_rewriteStep h.step
 
 theorem accepts_embeds {H : List Int → List Int}
     {pub : PublicStatement} {w : PrivateWitness} (h : Accepts H pub w) :
-    Embeds w.rule.lhs.toHypergraph w.oldGraph.toHypergraph := by
+    Embeds w.selectedRule.lhs.toHypergraph w.oldGraph.toHypergraph := by
   simpa using boundedOneStep_embeds h.step
 
 #assert_all_clean [
   Dregg2.Crypto.PrivateGraphRewrite.boundedOneStep_to_rewriteStep,
   Dregg2.Crypto.PrivateGraphRewrite.boundedOneStep_embeds,
   Dregg2.Crypto.PrivateGraphRewrite.accepts_rewriteStep,
-  Dregg2.Crypto.PrivateGraphRewrite.accepts_embeds]
+  Dregg2.Crypto.PrivateGraphRewrite.accepts_embeds,
+  Dregg2.Crypto.PrivateGraphRewrite.two_accepting_old_openings_yield_collision,
+  Dregg2.Crypto.PrivateGraphRewrite.two_accepting_new_openings_yield_collision,
+  Dregg2.Crypto.PrivateGraphRewrite.two_accepting_ruleset_openings_yield_collision]
 
 end Dregg2.Crypto.PrivateGraphRewrite

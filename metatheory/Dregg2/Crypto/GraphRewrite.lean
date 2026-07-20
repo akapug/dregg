@@ -1,13 +1,13 @@
 /-
-# Dregg2.Crypto.GraphRewrite — full graph rewriting: matchings + rewrite relations over arbitrary bytes.
+# Dregg2.Crypto.GraphRewrite — match-driven contextual hyperedge replacement.
 
 `Crypto/Hypergraph` reduces hypergraphs by POSITIONAL edge splicing (`⟨pre ++ e :: post⟩ ↝ ⟨pre ++ rhs ++
-post⟩`). That is enough to bridge to the generic reduction certificate, but it is not *full* graph
-rewriting: there is no genuine **match** (an occurrence of a pattern anywhere in a host graph, up to node
-identification), and the pattern is a single edge in a fixed position.
+post⟩`). That is enough to bridge to the generic reduction certificate, but it has no genuine **match**
+(an occurrence of a pattern anywhere in a host graph, up to node identification), and the pattern is a
+single edge in a fixed position.
 
-This module adds the missing pieces, all over ARBITRARY node/label carriers `V`/`L` (instantiate at a byte
-type — `UInt8` below — for "arbitrary relations about arbitrary bytes"):
+This module adds match-driven contextual replacement over arbitrary node/label carriers `V`/`L
+(`UInt8` is the concrete example below):
 
   * **matching** — `IsHom f pat host` (a node map sending every pattern edge to a host edge) and the
     relations `Matches`/`Embeds` (a homomorphism / an injective homomorphism = subgraph embedding). This
@@ -15,14 +15,13 @@ type — `UInt8` below — for "arbitrary relations about arbitrary bytes"):
   * **rewrite rules** — `Rule Var L` = a pair of pattern graphs `lhs`/`rhs` over pattern variables `Var`;
   * **rewrite steps** — `RewriteStep rules G H`: there is a rule, a MATCH `σ : Var → V` (embedding the
     pattern `lhs` into `G`), and a preserved CONTEXT, such that `H` replaces the matched `lhs` by the
-    instantiated `rhs`. This is DPO-style rewriting: match, delete the matched pattern, glue in the
-    replacement, keep the context (`G.edges ~ ctx ++ σ·lhs`, `H.edges = ctx ++ σ·rhs`).
+    instantiated `rhs`: match, delete the matched pattern, glue in the replacement, and keep the
+    context (`G.edges ~ ctx ++ σ·lhs`, `H.edges = ctx ++ σ·rhs`).
 
-Feeding `RewriteStep rules` to the generic `Hypergraph.bridge` yields ZK-checkable certificates for
-ARBITRARY graph-rewriting derivations (`graphRewrite_bridge`), and `step_matches` shows every rewrite
-step is witnessed by a genuine graph matching. Because a rewrite rule can encode any local graph
-transformation and `bridge` closes it reflexive-transitively, this expresses arbitrary relations on
-arbitrary byte-labeled graphs.
+Feeding `RewriteStep rules` to the generic `Hypergraph.bridge` yields checkable certificates for finite
+derivations (`graphRewrite_bridge`), and `step_matches` shows every rewrite step is witnessed by a
+genuine graph matching. This is the reusable relation-level substrate beneath a bounded circuit
+instance; it does not by itself impose DPO freshness/dangling conditions or prove a circuit encoding.
 -/
 import Dregg2.Crypto.Hypergraph
 import Dregg2.Tactics
@@ -57,11 +56,11 @@ theorem embeds_matches {Vp Vh L : Type} {pat : Hypergraph L Vp} {host : Hypergra
     (h : Embeds pat host) : Matches pat host :=
   ⟨h.choose, h.choose_spec.1⟩
 
-/-! ## Rewrite rules + match-driven rewrite steps (DPO-style). -/
+/-! ## Rewrite rules + match-driven contextual replacement. -/
 
-/-- A rewrite rule: a left pattern and a right pattern over pattern variables `Var`. Shared variables are
-the interface (preserved/glued); variables only in `rhs` are freshly introduced nodes (the match `σ`
-assigns them their host identities). -/
+/-- A rewrite rule: a left pattern and a right pattern over pattern variables `Var`. Shared variables
+can serve as a preserved interface. This relation does not require RHS-only variables to be fresh;
+that is a stronger, explicitly named follow-on condition for a DPO-capable instance. -/
 structure Rule (Var L : Type) where
   /-- The pattern to match and delete. -/
   lhs : Hypergraph L Var
@@ -72,11 +71,12 @@ structure Rule (Var L : Type) where
 def instEdges {Var V L : Type} (σ : Var → V) (es : List (Hyperedge L Var)) : List (Hyperedge L V) :=
   es.map (mapEdge σ)
 
-/-- **`RewriteStep rules G H`** — one full graph-rewrite step. There is a rule `r ∈ rules`, a MATCH
-`σ : Var → V` embedding `r.lhs` into `G`, and a CONTEXT `ctx` of untouched edges, such that `G` is the
+/-- **`RewriteStep rules G H`** — one contextual graph-rewrite step. There is a rule `r ∈ rules`, a
+MATCH `σ : Var → V` mapping `r.lhs` into `G`, and a CONTEXT `ctx` of untouched edges, such that `G` is the
 context together with the matched pattern (`G.edges ~ ctx ++ σ·lhs`, up to reordering — the pattern may
 occur anywhere), and `H` replaces the matched pattern by the instantiated replacement while keeping the
-context (`H.edges = ctx ++ σ·rhs`). This is the double-pushout rewrite: match, delete, glue. -/
+context (`H.edges = ctx ++ σ·rhs`). Injectivity, RHS freshness, and the dangling condition are not
+premises of this general relation. -/
 inductive RewriteStep {Var V L : Type} (rules : List (Rule Var L)) :
     Hypergraph L V → Hypergraph L V → Prop where
   /-- Rewrite via rule `r`, match `σ`, preserved context `ctx`. -/
@@ -86,10 +86,10 @@ inductive RewriteStep {Var V L : Type} (rules : List (Rule Var L)) :
       (hH : H.edges = ctx ++ instEdges σ r.rhs.edges) :
       RewriteStep rules G H
 
-/-- **`graphRewrite_bridge`** — the generic reduction bridge INSTANTIATED at full graph rewriting: a
-ZK-checkable certificate (a chain of graphs, each obtained from the previous by ONE match-driven rewrite
+/-- **`graphRewrite_bridge`** — the generic reduction bridge instantiated at contextual graph rewriting:
+a checkable certificate (a chain of graphs, each obtained from the previous by ONE match-driven rewrite
 step) from `G` to `G'` exists IFF `G` rewrites to `G'` in the reflexive-transitive rewrite relation.
-Arbitrary graph-rewriting derivations, certified — the same machinery `Crypto/Cfg` uses for parses. -/
+Finite match-driven derivations, certified — the same machinery `Crypto/Cfg` uses for parses. -/
 theorem graphRewrite_bridge {Var V L : Type} (rules : List (Rule Var L)) (G G' : Hypergraph L V) :
     (∃ c, Cert (RewriteStep rules) G G' c) ↔ Relation.ReflTransGen (RewriteStep rules) G G' :=
   bridge (RewriteStep rules) G G'
@@ -159,7 +159,7 @@ theorem g0_rewrites_g1 : RewriteStep [splitRule] g0 g1 := by
     rfl
 
 /-- **`g0_reduces_g1`** — via the bridge, the one-step certificate proves the reflexive-transitive
-graph-rewrite reduction `g0 ↝* g1`. A concrete arbitrary-graph-rewriting proof from a checkable chain. -/
+graph-rewrite reduction `g0 ↝* g1`. A concrete contextual-rewrite proof from a checkable chain. -/
 theorem g0_reduces_g1 : Relation.ReflTransGen (RewriteStep [splitRule]) g0 g1 :=
   (graphRewrite_bridge [splitRule] g0 g1).mp
     ⟨[g0, g1], rfl, rfl, g0_rewrites_g1, trivial⟩

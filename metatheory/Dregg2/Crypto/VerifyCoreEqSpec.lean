@@ -3,7 +3,7 @@
 
 `VerifyCoreSpec.verifyCore_split` reduced the executable ML-DSA-65 `verifyCore` to the two FIPS 204 Algorithm
 8 acceptance conditions, leaving three NAMED `∀`-bridges (`VerifyCoreSpec.{RingRepFaithful, DecodeSemantics,
-ChallengeMatchesSpec}`). `NttFaithful.ringRepFaithful_proven` closed the hard one (the fast NTT multiply
+ChallengeMatchesSpec_TRIVIAL_OPEN}`). `NttFaithful.ringRepFaithful_proven` closed the hard one (the fast NTT multiply
 computes the negacyclic ring product, for all size-256 reduced polys). THIS file builds the remaining
 algebraic bridge that turns that coefficient-array fact into a statement over the REAL ring
 `R_q = ℤ_q[X]/(X²⁵⁶+1)` (`Fips204CorrectReal.Rq`):
@@ -586,50 +586,69 @@ theorem decode_z_leg (fields : Poly) (hsz : fields.size = 256)
 #assert_axioms decode_t1_leg
 #assert_axioms decode_z_leg
 
-/-! ## `verifyCore_eq_spec` — verifyCore IS the FIPS 204 Algorithm 8 acceptance predicate, for-all.
+/-! ## `verifyCore_eq_challengeMatches_and_norm` — the Prop-level form of the bisection.
 
-Composing `VerifyCoreSpec.verifyCore_split` (verifyCore's `Bool` = the two Alg-8 acceptance conditions) with
-the now-closed algebra legs (`toRq_intt_matmul_row`: the per-row NTT matmul IS the `R_q` matrix–vector
-argument `A·z − c·t1·2^d`) and the codec recovery (`unpackBits_packBits` / `decode_{t1,z}_leg`: the decoded
-`t1`/`z` ARE the structured `ℤ_q` values), `verifyCore` accepts EXACTLY when the FIPS 204 Algorithm 8 verify
-predicate holds. The predicate is written in `verifyB` shape — `zBoundB z ∧ [[hash μ w1' = c̃]]`: the
-challenge conjunct is `VerifyCoreSpec.challengeMatches` (the SHAKE fixed-point of `w1Encode(w1)`, whose inner
-`w1` rides the closed matmul bridge) and the norm conjunct is `infNormZ z < γ₁−β` (`= zBound`). -/
+This is `VerifyCoreSpec.verifyCore_split` restated as an `↔` between `verifyCore … = true` and the
+conjunction of its two Boolean conjuncts. It is TRUE and it is `#assert_axioms`-clean, but read its content
+carefully: the right-hand side's first conjunct is `VerifyCoreSpec.challengeMatches`, which is `verifyCore`'s
+own body with the norm conjunct deleted. So the biconditional relates `verifyCore` to a BISECTION OF ITSELF.
 
-/-- **`verifyCore_eq_spec` — THE CULMINATION.** For every input whose hint decodes, `verifyCore` accepts iff
-the FIPS 204 Algorithm 8 acceptance predicate holds on the decoded `(ρ, t1, c̃, z, h)`: the SHAKE challenge
-fixed-point (`challengeMatches`, the `verifyB` hash conjunct, its `w1` argument the `R_q` matvec of
-`toRq_intt_matmul_row`) AND the response norm bound `‖z‖∞ < γ₁−β`. The deployed executable verify IS the
-spec's acceptance predicate, for ALL inputs — the VERIFY direction of Seam 1. -/
-theorem verifyCore_eq_spec (pk M ctx sig : List UInt8)
+IT DOES NOT COMPOSE THE ALGEBRA LEGS PROVED ABOVE. Its proof is a single `rw` off `verifyCore_split`;
+`toRq_intt_matmul_row`, `unpackBits_packBits`, `decode_t1_leg` and `decode_z_leg` do NOT appear in it, and
+nothing downstream currently attaches them to it. Those legs are real, separately-proved algebra
+(`toRq (intt (…matmul…)) = the R_q matvec`, `unpackBits ∘ packBits = id`); the wiring that would turn them
+into a genuine `verifyCore = verifyB` statement is the OPEN obligation recorded in
+`VerifyCoreSpec` (see the `★ OPEN OBLIGATION` block there) and restated in the closing section below. -/
+
+/-- **`verifyCore` accepts iff [its own body minus the norm conjunct] and [the norm conjunct].** For every
+input whose hint decodes, `verifyCore pk M ctx sig = true ↔ (challengeMatches pk M ctx sig = true ∧
+infNormZ z < zBound)`.
+
+PROOF CONTENT: one `rw` chain off `VerifyCoreSpec.verifyCore_split` plus `Bool.and_eq_true` /
+`decide_eq_true_eq`. Since `challengeMatches` is a verbatim copy of `verifyCore`'s body minus the trailing
+`&& (infNormZ z < zBound)`, this is a Prop-level restatement of that syntactic bisection — a for-all fact
+about the implementation's shape, not an identification with `Fips204Spec.MlDsaParams.verifyB`.
+
+NOT PROVED HERE: that `challengeMatches` equals the spec's `decide (hash μ (UseHint h (A·z − c·t1·2^d)) =
+c̃)`. The algebra legs of this file (`toRq_intt_matmul_row`) and of `VerifyCoreEqSpecW` (`wOne_recovers`) and
+the codec legs (`unpackBits_packBits`, `decode_t1_leg`, `decode_z_leg`) are ingredients for that bridge, but
+this theorem uses NONE of them. See the HONEST FRONTIER section below. -/
+theorem verifyCore_eq_challengeMatches_and_norm (pk M ctx sig : List UInt8)
     (hh : (sigDecode sig).2.2.size = paramK) :
     verifyCore pk M ctx sig = true
       ↔ (VerifyCoreSpec.challengeMatches pk M ctx sig = true
           ∧ infNormZ (sigDecode sig).2.1 < zBound) := by
   rw [VerifyCoreSpec.verifyCore_split pk M ctx sig hh, Bool.and_eq_true, decide_eq_true_eq]
 
-/-- **Non-vacuity.** On the genuine `fips204` v0.4.6 crate signature, BOTH FIPS 204 Algorithm 8 acceptance
-conditions genuinely hold — `verifyCore_eq_spec`'s equivalence fires on real data, not `_ ↔ (true ∧ ·)`
-trivia. The forward direction of the ↔ applied to `verify_accepts_real`. -/
-theorem verifyCore_eq_spec_witness :
+/-- **Non-vacuity.** On the genuine `fips204` v0.4.6 crate signature, BOTH of `verifyCore`'s conjuncts are
+genuinely `true` — the equivalence fires on real data, not `_ ↔ (true ∧ ·)` trivia. (This is non-vacuity of
+the BISECTION, not evidence about the spec bridge.) The forward direction of the ↔ applied to
+`verify_accepts_real`, which is itself a `native_decide` KAT pin. -/
+theorem verifyCore_eq_challengeMatches_and_norm_witness :
     VerifyCoreSpec.challengeMatches genPk.toList genMsg [] genSig.toList = true
       ∧ infNormZ (sigDecode genSig.toList).2.1 < zBound :=
-  (verifyCore_eq_spec genPk.toList genMsg [] genSig.toList VerifyCoreSpec.gen_hint_size).mp
+  (verifyCore_eq_challengeMatches_and_norm genPk.toList genMsg [] genSig.toList
+      VerifyCoreSpec.gen_hint_size).mp
     verify_accepts_real
 
-#assert_axioms verifyCore_eq_spec
+#assert_axioms verifyCore_eq_challengeMatches_and_norm
 
 /-! ## HONEST FRONTIER — the one remaining wiring (NAMED, not laundered).
 
-`verifyCore_eq_spec` reduces the "IS the spec" seam to the identification of `challengeMatches`'s hashed
-argument with the abstract `verifyB.hash μ (UseHint h (A·z − c·t1·2^d))`. Two of its three ingredients are
-CLOSED here: the `A·z − c·t1·2^d` argument IS the `R_q` matvec (`toRq_intt_matmul_row`), and the decoded
-`(t1, z)` ARE the structured `ℤ_q` values (`decode_t1_leg`/`decode_z_leg` + `zCoeff_zField`). What remains is
-the per-coefficient `UseHint`/`w1Encode` wrapping — that verifyCore's coefficientwise `useHint(h_i, w_i)`
-followed by `w1Encode`, hashed under the SHAKE framing, equals the abstract `hash μ (round.useHint h ·)` at
-the concrete instantiation. This is a legitimate INTERPRETATION of `verifyB`'s generic `hash`/`round` fields
-(the CR/rejection specs live on the `HashSig`/`FoQrom` floor, a separate axis), riding the now-closed matmul
-bridge — NOT a hardness carrier and NOT a soundness gap.
+THE SEAM IS OPEN. No theorem in this tree relates `challengeMatches` to `verifyB`. What exists is: (i) the
+syntactic bisection (`verifyCore_eq_challengeMatches_and_norm`), and (ii) INGREDIENTS proved in isolation —
+`toRq_intt_matmul_row` (the per-row NTT matmul IS the `R_q` matvec `A·z − c·t1·2^d`),
+`decode_t1_leg`/`decode_z_leg` + `zCoeff_zField` (the codec bit-packing round-trips at the poly layer), and
+`VerifyCoreEqSpecW.wOne_recovers` (the `toRq` coordinate inverse). These ingredients are REAL ∀-theorems and
+they are `#assert_axioms`-clean. They are ALSO not composed with each other or with (i) anywhere — there is
+no proof term joining them, and the statement they would jointly imply is not written down.
+
+The unwritten step is the per-coefficient `UseHint`/`w1Encode`/SHAKE wrapping: that verifyCore's
+coefficientwise `useHint(h_i, w_i)` followed by `w1Encode`, hashed under the SHAKE framing, equals the
+abstract `hash μ (round.useHint h ·)` at the concrete instantiation. Choosing `hash`/`round` concretely is a
+legitimate INSTANTIATION of `verifyB`'s generic fields (their CR/rejection specs live on the
+`HashSig`/`FoQrom` floor, a separate axis) — but performing that instantiation and discharging the equality
+is work that has NOT been done. Do not describe the verify direction as closed.
 
 The full byte-level `pkDecode∘pkEncode = id` / `sigDecode∘sigEncode = id` (the literal
 `VerifyCoreSpec.DecodeSemantics`) additionally needs the mechanical `Array.extract`/`++`/offset-slicing

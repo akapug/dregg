@@ -143,7 +143,7 @@ accept/reject verdict is computed by the extracted, Lean-verified
 ML-DSA-65 verify over the real 1952/3309-byte pk/sig), PROVED by dregg to accept a
 genuine signature (`MlDsaVerifyReal.verify_accepts_real`) and reject a one-byte
 tamper / wrong message (`verify_rejects_tampered`, `verify_rejects_wrong_msg`), and
-to agree with the FIPS 204 spec (`Fips204Verify.verifyCore_is_spec`,
+to agree with the FIPS 204 spec (`Fips204Verify.verifyCore_unfolds_to_def`,
 `extractedApi_fips204`). `ctx` is the FIPS 204 domain-separation string. The
 soundness of THIS primitive is dregg's proof, not re-derived here — see
 `Assumptions.mlDsaVerify_authentic`. -/
@@ -346,7 +346,7 @@ signatures `mlDsaVerify` accepts are genuine ones by the matching seed. This is
 NOT re-derived here: it is the shadow of `Dregg2.Crypto.MlDsaVerifyReal.verifyCore`'s
 proven accept-genuine / reject-tamper gate (`verify_accepts_real`,
 `verify_rejects_tampered`, `verify_rejects_wrong_msg`) and its proven agreement
-with the FIPS 204 spec (`Fips204Verify.verifyCore_is_spec`, `extractedApi_fips204`).
+with the FIPS 204 spec (`Fips204Verify.verifyCore_unfolds_to_def`, `extractedApi_fips204`).
 The residual trust is dregg's F*/leanc toolchain and the `drorb_ml_dsa_verify`
 marshalling — exactly parallel to the HACL* axioms above (the shape mirrors
 `chacha_open_authentic`: acceptance implies genuine sender output). -/

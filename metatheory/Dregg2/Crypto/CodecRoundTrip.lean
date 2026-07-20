@@ -9,7 +9,7 @@ structured-value recovery `pkDecode ∘ pkEncode = id` and the `c̃`/`z` legs of
 for ALL well-formed structured values (not just the pinned KAT bytes `MlDsaCodec.{pk,sig}_roundtrip` reach by
 `native_decide`). This is the ML-DSA analog of `MlKemCodecSpec.byteDecodeAt_byteEncode` (the ML-KEM codec
 round-trip), and the byte-level completion of the VERIFY direction of Seam 1 (the ring-level `=spec` is
-`VerifyCoreEqSpec.verifyCore_eq_spec`).
+`VerifyCoreEqSpec.verifyCore_eq_challengeMatches_and_norm`).
 
 ## What CLOSES here (real ∀-proofs, `#assert_axioms`-clean)
 

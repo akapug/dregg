@@ -4,20 +4,26 @@
 `MlDsaVerifyReal.verifyCore (pk M ctx sig : List UInt8) : Bool` is the byte-exact ML-DSA-65 verify. It is
 proven byte-identical to the `fips204` crate on the pinned KAT vectors (`verify_accepts_real`,
 `verify_rejects_tampered`, …) by `native_decide` — i.e. on a FEW inputs. `Fips204Spec.MlDsaParams.verifyB`
-is the ALGEBRAIC verify predicate: `zBoundB z ∧ hash(μ, UseHint(h, A·z − c·t1·2^d)) = c̃`. This file LINKS
-them: it exhibits `verifyCore`'s verdict AS the FIPS 204 Algorithm 8 acceptance conjunction, over ALL
-inputs, and it names — precisely, without `sorry`/`native_decide` in any ∀-theorem — the exact residual
-bridges that remain to complete the identification with the abstract module-algebra predicate.
+is the ALGEBRAIC verify predicate: `zBoundB z ∧ hash(μ, UseHint(h, A·z − c·t1·2^d)) = c̃`.
+
+READ THIS FIRST — WHAT THIS FILE DOES AND DOES NOT DO. This file BISECTS `verifyCore` into its two
+Boolean conjuncts and NAMES the residual bridges to `verifyB`. The bisection is SYNTACTIC: `challengeMatches`
+below is `verifyCore`'s body copied verbatim with the final line's second conjunct (`&& (infNormZ z <
+zBound)`) dropped. So `verifyCore_split` relates `verifyCore` to a BISECTION OF ITSELF; it carries no
+FIPS-204 content on its own, and it is NOT an identification with `Fips204Spec.MlDsaParams.verifyB`. What it
+DOES buy is a stable handle on each conjunct separately — which is what lets `verify_accept_imp_normBound`
+(a genuine ∀-fact about the norm gate) be proved, and what the algebra legs in `VerifyCoreEqSpec` /
+`VerifyCoreEqSpecW` attach to. The identification with `verifyB` itself is OPEN; see PART 3.
 
 ## What CLOSES here (real ∀-proofs, `#assert_axioms`-clean)
 
-* **`verifyCore_split`** — the STRUCTURAL keystone. For every `(pk, M, ctx, sig)` whose hint decodes
-  (`h.size = k`), `verifyCore pk M ctx sig = challengeMatches pk M ctx sig && decide (‖z‖∞ < γ₁−β)`. This
-  exhibits `verifyCore`'s Bool as EXACTLY the two acceptance conditions of FIPS 204 Algorithm 8:
-  `[[c̃′ = c̃]]` (the SHAKE challenge fixed-point, `challengeMatches`) AND `[[‖z‖∞ < γ₁−β]]` (the response
-  norm gate). Same Boolean SHAPE as `MlDsaParams.verifyB` (`zBoundB z && decide (hash μ w1' = c̃)`). A real
-  for-all theorem — the `Id.run do` verify (early hint-reject guard + the k×l NTT matmul loop + the per-coeff
-  `UseHint` loop) is reduced to this conjunction by `simp`, not `native_decide`.
+* **`verifyCore_split`** — the SYNTACTIC BISECTION. For every `(pk, M, ctx, sig)` whose hint decodes
+  (`h.size = k`), `verifyCore pk M ctx sig = challengeMatches pk M ctx sig && decide (‖z‖∞ < γ₁−β)`. It is a
+  real ∀-theorem and it is `#assert_axioms`-clean, but be precise about its CONTENT: `challengeMatches` is
+  `verifyCore`'s own body minus the norm conjunct, so this says `verifyCore = [verifyCore-minus-a-conjunct]
+  && [that conjunct]`. It does NOT relate `verifyCore` to any independently-written FIPS 204 predicate, and
+  nothing here proves that `challengeMatches` computes `hash μ (UseHint h (A·z − c·t1·2^d))`. Proved by
+  `unfold` + one `simp only` — no `native_decide`.
 * **`verify_accept_imp_normBound`** — acceptance IMPLIES the FIPS norm bound: `verifyCore … = true →
   ‖z‖∞ < γ₁−β`. This is the `zBoundB` LEG of the predicate, discharged for ALL inputs (not a KAT). The norm
   gate `infNormZ z < zBound` IS the spec's `zBoundB z` at the deployed `γ₁−β = 524092`.
@@ -35,9 +41,9 @@ INSTANTIATION (`hash := SHAKE256-framing`, `challenge := sampleInBall`, `round :
 NOT a gap. The genuine remaining MATHEMATICAL bridges are named as `Prop`s below:
 
 * **`RingRepFaithful`** — the concrete fast NTT path computes the negacyclic ring product for ALL polys:
-  `intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b`. CLOSED for-all in `Dregg2.Crypto.NttFaithful`
-  (`ringRepFaithful_proven`, carried under the gate name `ntt_computes_negacyclic_mul` there) — a real
-  NTT-correctness proof, axiom-clean, no `native_decide`, NOT a hardness carrier. IT makes verifyCore's per-row
+  `intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b`. Today only `MlDsaRing.ntt_computes_negacyclic_mul`
+  (ONE sample pair, `native_decide`) is proven. This is the ∀-lift — a real NTT-correctness proof, LIFTABLE
+  from Mathlib's roots-of-unity/DFT machinery, NOT a hardness carrier. IT is what makes verifyCore's per-row
   `intt(Σ Â⊙ntt(z) − ĉ⊙ntt(2^d·t1))` equal the spec's `A·z − c·t1·2^d`.
 * **`WOneRecoversSpec`** — the concrete per-coefficient `w1` array equals the abstract recovery
   `UseHint(h, A·z − c·t1·2^d)`; combines `RingRepFaithful`, `ExpandA`-as-matrix, and the rounding leg. This
@@ -129,12 +135,18 @@ def challengeMatches (pk M ctx sig : List UInt8) : Bool := Id.run do
   let cTildePrime := shake256 (mu ++ w1Encode w1) 48
   return (cTildePrime == ctilde)
 
-/-- **`verifyCore_split` — THE STRUCTURAL LINK.** For every input whose hint decodes (`h.size = k`),
-`verifyCore` is EXACTLY the conjunction of the two FIPS 204 Algorithm 8 acceptance conditions: the SHAKE
-challenge fixed-point (`challengeMatches`) and the response norm gate (`‖z‖∞ < γ₁−β`). This is the Boolean
-SHAPE of `Fips204Spec.MlDsaParams.verifyB` (`zBoundB z && decide (hash μ w1' = c̃)`), with the concrete
-executable operations in place of the abstract fields. Proved by reducing the `Id.run do` verify — hint-
-reject guard, k×l NTT matmul loop, per-coefficient `UseHint` loop — with `simp`; NO `native_decide`. -/
+/-- **`verifyCore_split` — the SYNTACTIC BISECTION of `verifyCore` into its two conjuncts.** For every input
+whose hint decodes (`h.size = k`), `verifyCore = challengeMatches && decide (‖z‖∞ < γ₁−β)`.
+
+WHAT THIS PROVES: `challengeMatches` is `verifyCore`'s body copied verbatim with the trailing `&& (infNormZ z
+< zBound)` removed (compare `MlDsaVerifyReal.verifyCore` line-for-line). So the statement is
+`verifyCore = [verifyCore minus one conjunct] && [that conjunct]` — a for-all theorem about the
+implementation's own shape, discharged by `unfold` + one `simp only`. NO `native_decide`.
+
+WHAT THIS DOES NOT PROVE: it is NOT an identification with `Fips204Spec.MlDsaParams.verifyB`. Nothing here
+shows `challengeMatches` computes the spec's `hash μ (UseHint h (A·z − c·t1·2^d))`; that is the OPEN bridge
+named in PART 3. The value of this lemma is that it isolates each conjunct so downstream facts can be stated
+against one of them (see `verify_accept_imp_normBound`, which IS genuine spec content). -/
 theorem verifyCore_split (pk M ctx sig : List UInt8)
     (hh : (sigDecode sig).2.2.size = paramK) :
     verifyCore pk M ctx sig
@@ -161,9 +173,9 @@ theorem verify_accept_imp_normBound (pk M ctx sig : List UInt8)
 / `expandA`-matmul / `decompose`-rounding is a legitimate INSTANTIATION, not a gap. The genuine remaining
 MATHEMATICAL bridges — each a real ∀-statement, none a hardness carrier — are named here as `Prop`s. -/
 
-/-- **RESIDUAL (ring representation) — CLOSED.** The concrete fast NTT path computes the negacyclic ring
-product for ALL poly pairs. Proven for-all in `Dregg2.Crypto.NttFaithful` (`ringRepFaithful_proven`, gate
-name `ntt_computes_negacyclic_mul` there), axiom-clean, no `native_decide` — Mathlib roots-of-unity. It is
+/-- **RESIDUAL (ring representation).** The concrete fast NTT path computes the negacyclic ring product for
+ALL poly pairs. Today only `MlDsaRing.ntt_computes_negacyclic_mul` (one `native_decide` sample) is proven;
+this is the ∀-lift, a real NTT-correctness proof liftable from Mathlib's DFT/roots-of-unity machinery. It is
 exactly what turns verifyCore's `intt(Σ Â⊙ntt(z) − ĉ⊙ntt(2^d·t1))` into the spec's `A·z − c·t1·2^d`. -/
 def RingRepFaithful : Prop :=
   ∀ a b : Poly, a.size = 256 → b.size = 256 →
@@ -181,15 +193,33 @@ def DecodeSemantics : Prop :=
       p.2.1.size = paramL → p.2.2.size = paramK →
       sigDecode (Dregg2.Crypto.MlDsaCodec.sigEncode p) = p)
 
-/-- **The remaining identification, stated conditionally.** GIVEN the ring-representation and decode-semantics
-bridges (`RingRepFaithful`, `DecodeSemantics`), `challengeMatches` coincides with the spec's hash fixed-point
-conjunct — i.e. `verifyCore`'s challenge check IS `decide (hash μ (UseHint h (A·z − c·t1·2^d)) = c̃)` at the
-concrete instantiation. This is the ONE bridge that `verifyCore_split` reduces the whole "IS the spec" seam
-to; it is NAMED, not proved (its proof needs `R_q` as a `CommRing` + the two ∀-bridges above). -/
-def ChallengeMatchesSpec : Prop :=
+/-! ### ★ OPEN OBLIGATION — `challengeMatches` = the spec's hash fixed-point conjunct.
+
+THE OBLIGATION, in words: for every `(pk, M, ctx, sig)`,
+
+    challengeMatches pk M ctx sig = decide (verifyB.hash μ (round.useHint h (A·z − c·t1·2^d)) = c̃)
+
+at the concrete instantiation (`hash :=` the SHAKE-256 framing, `round :=` `decompose`/`useHint`, `A :=`
+`expandA ρ` read as an `R_q` matrix). This is the ONE thing standing between `verifyCore_split` and an
+actual "verifyCore IS `Fips204Spec.MlDsaParams.verifyB`" statement.
+
+IT IS NOT PROVED, AND IT IS NOT STATED AS A `Prop` IN THIS FILE. It cannot be: writing it down needs
+`R_q = ℤ_q[X]/(X²⁵⁶+1)` as a `CommRing`, which is built in `VerifyCoreEqSpec` — a module that IMPORTS this
+one. Partial progress on its ingredients lives there and in `VerifyCoreEqSpecW`
+(`toRq_intt_matmul_row`, `wOne_recovers`, `unpackBits_packBits`); the `UseHint`/`w1Encode`/SHAKE wrapping
+that would compose them into the display above is NOT done anywhere in the tree.
+
+The `Prop` below is the historical placeholder and is RETAINED, renamed, so that the gap stays visible in
+the symbol table rather than disappearing. Its conclusion is literally `True`, so it is discharged by
+`fun _ _ => trivial` and establishes NOTHING. Do not read it as an obligation; read the paragraphs above. -/
+
+/-- **★ NOT AN OBLIGATION — a placeholder whose conclusion is `True`.** `RingRepFaithful → DecodeSemantics →
+True`. Both hypotheses are UNUSED and the conclusion is trivially inhabited (`fun _ _ => trivial`), so
+proving this establishes nothing whatsoever. It is kept only as a visible marker for the OPEN obligation
+described immediately above — the real statement is not expressible here (it needs `R_q`, built downstream
+in `VerifyCoreEqSpec`). Nothing in the tree depends on this definition. -/
+def ChallengeMatchesSpec_TRIVIAL_OPEN : Prop :=
   RingRepFaithful → DecodeSemantics →
-    -- The abstract identification target lives over `R_q`; naming it here keeps the seam explicit without
-    -- committing the (heavy) `CommRing R_q` construction. The frontier is this implication's conclusion.
     True
 
 /-! ## PART 4 — NON-VACUITY: the split fires on a REAL crate signature.

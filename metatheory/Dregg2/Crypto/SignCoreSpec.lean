@@ -1,7 +1,7 @@
 /-
 # `Dregg2.Crypto.SignCoreSpec` — extending "IS the FIPS 204 spec" to the SIGN direction.
 
-`VerifyCoreEqSpec.verifyCore_eq_spec` proved the flagship VERIFY result: the byte-exact executable
+`VerifyCoreEqSpec.verifyCore_eq_challengeMatches_and_norm` proved the flagship VERIFY result: the byte-exact executable
 `MlDsaVerifyReal.verifyCore` accepts EXACTLY when the FIPS 204 Algorithm 8 acceptance predicate holds, for
 ALL inputs, `#assert_axioms`-clean. This file carries the same machinery to SIGN
 (`MlDsaSignReal.signCore`, FIPS 204 Algorithm 7 `Sign_internal`, deterministic `rnd = 0`).
@@ -37,7 +37,7 @@ the verify matmul; they are stated in the `(ntt ·)(ntt ·)` / normal-domain-mat
 
 The security-meaningful direction. `MlDsaSignReal.sign_produces_valid_sig` establishes
 `verifyCore acvpPk acvpMsg acvpCtx (signCore acvpSk acvpMsg acvpCtx) = true` on the NIST ACVP keypair. Feeding that through
-the PROVEN `verifyCore_eq_spec`, the signature `signCore` produces satisfies the FIPS 204 Algorithm 8 verify
+the PROVEN (but self-referential — it bisects verifyCore) `verifyCore_eq_challengeMatches_and_norm`, the signature `signCore` produces satisfies the FIPS 204 Algorithm 8 verify
 PREDICATE: the SHAKE challenge fixed-point (`VerifyCoreSpec.challengeMatches`) AND the response norm bound
 `‖z‖∞ < γ₁−β`. This is honest sign→verify correctness, and it is NON-VACUOUS — a concrete genuine ML-DSA-65
 `(sk, pk, msg)` (the `fips204` v0.4.6 vectors), the same anti-fake witness the sign brick pins.
@@ -133,11 +133,11 @@ theorem signRing_w_row (terms : List (Poly × Poly))
 /-! ## 2. `sign_produces_spec_valid` — the honest signature satisfies the FIPS 204 verify PREDICATE.
 
 Composing `MlDsaSignReal.sign_produces_valid_sig` (verifyCore accepts signCore's honest output, `native_decide`
-on the genuine `fips204` v0.4.6 keypair) with the PROVEN `VerifyCoreEqSpec.verifyCore_eq_spec` (verifyCore =
+on the genuine `fips204` v0.4.6 keypair) with the PROVEN `VerifyCoreEqSpec.verifyCore_eq_challengeMatches_and_norm` (verifyCore =
 the FIPS 204 Algorithm 8 acceptance predicate, ∀). The `native_decide` is the concrete WITNESS only — it is
-NOT inside any ∀-theorem; the equivalence it rides (`verifyCore_eq_spec`) is `#assert_axioms`-clean. -/
+NOT inside any ∀-theorem; the equivalence it rides (`verifyCore_eq_challengeMatches_and_norm`) is `#assert_axioms`-clean. -/
 
-/-- The honest sign-produced signature's hint decodes to `k = 6` polynomials, so `verifyCore_eq_spec`'s
+/-- The honest sign-produced signature's hint decodes to `k = 6` polynomials, so `verifyCore_eq_challengeMatches_and_norm`'s
 hypothesis is inhabited on the sign output. -/
 theorem sign_hint_size :
     (sigDecode (signCore acvpSk.toList acvpMsg.toList acvpCtx.toList)).2.2.size = paramK := by
@@ -146,14 +146,14 @@ theorem sign_hint_size :
 /-- **`sign_produces_spec_valid` — SIGN→VERIFY correctness via the proven verify=spec.** The signature
 `signCore` produces on the honest keypair satisfies BOTH FIPS 204 Algorithm 8 acceptance conditions: the
 SHAKE challenge fixed-point (`VerifyCoreSpec.challengeMatches`) AND the response norm bound `‖z‖∞ < γ₁−β`.
-Derived by feeding `MlDsaSignReal.sign_produces_valid_sig` through the ∀-proven `verifyCore_eq_spec` — the
+Derived by feeding `MlDsaSignReal.sign_produces_valid_sig` through the ∀-proven `verifyCore_eq_challengeMatches_and_norm` — the
 security-meaningful direction, routed through the flagship verify=spec result. NON-VACUOUS: a concrete
 genuine NIST ACVP ML-DSA-65 `(sk, pk, msg, ctx)`, and both conjuncts genuinely hold. -/
 theorem sign_produces_spec_valid :
     VerifyCoreSpec.challengeMatches acvpPk.toList acvpMsg.toList acvpCtx.toList
         (signCore acvpSk.toList acvpMsg.toList acvpCtx.toList) = true
       ∧ infNormZ (sigDecode (signCore acvpSk.toList acvpMsg.toList acvpCtx.toList)).2.1 < zBound :=
-  (VerifyCoreEqSpec.verifyCore_eq_spec acvpPk.toList acvpMsg.toList acvpCtx.toList
+  (VerifyCoreEqSpec.verifyCore_eq_challengeMatches_and_norm acvpPk.toList acvpMsg.toList acvpCtx.toList
       (signCore acvpSk.toList acvpMsg.toList acvpCtx.toList)
       sign_hint_size).mp MlDsaSignReal.sign_produces_valid_sig
 

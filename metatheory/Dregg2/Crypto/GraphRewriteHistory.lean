@@ -42,23 +42,25 @@ structure Statement (Session RulesRoot GraphRoot : Type) where
 
 /-- A public rewrite statement together with the hidden semantic openings and the proof meaning of
 one accepted private leaf.  The graph values are witness-side data; only `stmt` is the receipt ABI. -/
-structure CertifiedStep (Session RulesRoot : Type) {Var V L GraphRoot : Type}
-    (rules : List (Rule Var L)) (commit : Hypergraph L V → GraphRoot) where
+structure CertifiedStep (Session RulesRoot : Type) {V L GraphRoot : Type}
+    (Step : Hypergraph L V → Hypergraph L V → Prop)
+    (commit : Hypergraph L V → GraphRoot) where
   stmt : Statement Session RulesRoot GraphRoot
   oldGraph : Hypergraph L V
   newGraph : Hypergraph L V
   oldRoot_binds : stmt.oldRoot = commit oldGraph
   newRoot_binds : stmt.newRoot = commit newGraph
-  sound : RewriteStep rules oldGraph newGraph
+  sound : Step oldGraph newGraph
 
 namespace CertifiedStep
 
-variable {Var V L Session RulesRoot GraphRoot : Type}
-variable {rules : List (Rule Var L)} {commit : Hypergraph L V → GraphRoot}
+variable {V L Session RulesRoot GraphRoot : Type}
+variable {Step : Hypergraph L V → Hypergraph L V → Prop}
+variable {commit : Hypergraph L V → GraphRoot}
 
 /-- The public view of a certified step; witness graphs and the semantic proof do not cross the
 receipt boundary. -/
-def publicStatement (s : CertifiedStep Session RulesRoot rules commit) :
+def publicStatement (s : CertifiedStep Session RulesRoot Step commit) :
     Statement Session RulesRoot GraphRoot :=
   s.stmt
 
@@ -66,9 +68,10 @@ end CertifiedStep
 
 /-- Two consecutive receipts form one protocol link exactly when they stay in one session and one
 ruleset, advance by one index, and identify the preceding output root with the next input root. -/
-structure Link {Var V L Session RulesRoot GraphRoot : Type}
-    {rules : List (Rule Var L)} {commit : Hypergraph L V → GraphRoot}
-    (a b : CertifiedStep Session RulesRoot rules commit) : Prop where
+structure Link {V L Session RulesRoot GraphRoot : Type}
+    {Step : Hypergraph L V → Hypergraph L V → Prop}
+    {commit : Hypergraph L V → GraphRoot}
+    (a b : CertifiedStep Session RulesRoot Step commit) : Prop where
   sameSession : b.stmt.session = a.stmt.session
   sameRules : b.stmt.rulesRoot = a.stmt.rulesRoot
   nextIndex : b.stmt.index = a.stmt.index + 1
@@ -76,27 +79,36 @@ structure Link {Var V L Session RulesRoot GraphRoot : Type}
 
 /-- Consecutive-link validity for a receipt list.  This intentionally mirrors
 `Hypergraph.chain`; the latter is recovered semantically by `linked_has_cert`. -/
-def Linked {Var V L Session RulesRoot GraphRoot : Type}
-    {rules : List (Rule Var L)} {commit : Hypergraph L V → GraphRoot} :
-    List (CertifiedStep Session RulesRoot rules commit) → Prop
+def Linked {V L Session RulesRoot GraphRoot : Type}
+    {Step : Hypergraph L V → Hypergraph L V → Prop}
+    {commit : Hypergraph L V → GraphRoot} :
+    List (CertifiedStep Session RulesRoot Step commit) → Prop
   | [] => True
   | [_] => True
   | a :: b :: rest => Link a b ∧ Linked (b :: rest)
 
 /-- The semantic end graph of a nonempty history represented as its first step and remaining
 steps. -/
-def endGraph {Var V L Session RulesRoot GraphRoot : Type}
-    {rules : List (Rule Var L)} {commit : Hypergraph L V → GraphRoot}
-    (head : CertifiedStep Session RulesRoot rules commit) :
-    List (CertifiedStep Session RulesRoot rules commit) → Hypergraph L V
+def endGraph {V L Session RulesRoot GraphRoot : Type}
+    {Step : Hypergraph L V → Hypergraph L V → Prop}
+    {commit : Hypergraph L V → GraphRoot}
+    (head : CertifiedStep Session RulesRoot Step commit) :
+    List (CertifiedStep Session RulesRoot Step commit) → Hypergraph L V
   | [] => head.newGraph
   | next :: rest => endGraph next rest
 
+/-- A concrete binding failure for a graph commitment: two different semantic graphs have the same
+public root.  This is the computationally meaningful alternative to treating a finite hash as a
+mathematically injective function. -/
+def CommitCollision {V L GraphRoot : Type} (commit : Hypergraph L V → GraphRoot) : Prop :=
+  ∃ g h, g ≠ h ∧ commit g = commit h
+
 section Refusals
 
-variable {Var V L Session RulesRoot GraphRoot : Type}
-variable {rules : List (Rule Var L)} {commit : Hypergraph L V → GraphRoot}
-variable {a b : CertifiedStep Session RulesRoot rules commit}
+variable {V L Session RulesRoot GraphRoot : Type}
+variable {Step : Hypergraph L V → Hypergraph L V → Prop}
+variable {commit : Hypergraph L V → GraphRoot}
+variable {a b : CertifiedStep Session RulesRoot Step commit}
 
 /-- A ruleset substitution cannot be a valid link. -/
 theorem wrong_rules_refused (h : b.stmt.rulesRoot ≠ a.stmt.rulesRoot) : ¬ Link a b :=
@@ -140,17 +152,47 @@ end Refusals
 
 section HistorySoundness
 
-variable {Var V L Session RulesRoot GraphRoot : Type}
-variable {rules : List (Rule Var L)} {commit : Hypergraph L V → GraphRoot}
+variable {V L Session RulesRoot GraphRoot : Type}
+variable {Step : Hypergraph L V → Hypergraph L V → Prop}
+variable {commit : Hypergraph L V → GraphRoot}
+
+/-- **Unconditional history soundness as a reduction.**  A linked history either denotes a genuine
+semantic rewrite reduction or exhibits a concrete commitment collision.  This is the deployed
+cryptographic theorem shape: collision resistance makes the second branch negligible; no global
+injectivity of a finite root is asserted. -/
+theorem linked_reduces_or_collision :
+    ∀ (head : CertifiedStep Session RulesRoot Step commit)
+      (rest : List (CertifiedStep Session RulesRoot Step commit)),
+      Linked (head :: rest) →
+      Relation.ReflTransGen Step head.oldGraph (endGraph head rest) ∨
+        CommitCollision commit := by
+  intro head rest
+  induction rest generalizing head with
+  | nil =>
+      intro _
+      exact Or.inl (Relation.ReflTransGen.head head.sound Relation.ReflTransGen.refl)
+  | cons next rest ih =>
+      intro hlinked
+      have hpair : Link head next := hlinked.1
+      have htail : Linked (next :: rest) := hlinked.2
+      classical
+      by_cases hEq : head.newGraph = next.oldGraph
+      · rcases ih next htail with hreduces | hcollision
+        · have hsound := head.sound
+          rw [hEq] at hsound
+          exact Or.inl (Relation.ReflTransGen.head hsound hreduces)
+        · exact Or.inr hcollision
+      · exact Or.inr ⟨head.newGraph, next.oldGraph, hEq,
+          (hidden_splice_extracts_collision hpair hEq).2⟩
 
 /-- **A root-linked certified history is a genuine semantic graph-rewrite reduction**, under the
 explicit commitment-binding carrier.  Each receipt contributes one real `RewriteStep`; root
 binding identifies adjacent hidden endpoint graphs; `ReflTransGen.head` composes the steps. -/
 theorem linked_reduces (hcommit : Function.Injective commit) :
-    ∀ (head : CertifiedStep Session RulesRoot rules commit)
-      (rest : List (CertifiedStep Session RulesRoot rules commit)),
+    ∀ (head : CertifiedStep Session RulesRoot Step commit)
+      (rest : List (CertifiedStep Session RulesRoot Step commit)),
       Linked (head :: rest) →
-      Relation.ReflTransGen (RewriteStep rules) head.oldGraph (endGraph head rest) := by
+      Relation.ReflTransGen Step head.oldGraph (endGraph head rest) := by
   intro head rest
   induction rest generalizing head with
   | nil =>
@@ -169,12 +211,24 @@ theorem linked_reduces (hcommit : Function.Injective commit) :
 /-- The same result in the repository's common certificate form: every valid root-linked receipt
 history has a locally checkable `Hypergraph.Cert` chain for the semantic rewrite relation. -/
 theorem linked_has_cert (hcommit : Function.Injective commit)
-    (head : CertifiedStep Session RulesRoot rules commit)
-    (rest : List (CertifiedStep Session RulesRoot rules commit))
+    (head : CertifiedStep Session RulesRoot Step commit)
+    (rest : List (CertifiedStep Session RulesRoot Step commit))
     (hlinked : Linked (head :: rest)) :
-    ∃ c, Cert (RewriteStep rules) head.oldGraph (endGraph head rest) c :=
-  (bridge (RewriteStep rules) head.oldGraph (endGraph head rest)).mpr
+    ∃ c, Cert Step head.oldGraph (endGraph head rest) c :=
+  (bridge Step head.oldGraph (endGraph head rest)).mpr
     (linked_reduces hcommit head rest hlinked)
+
+/-- Certificate-form unconditional reduction: either the common `Cert R` witness exists or the
+root-linking commitment collided. -/
+theorem linked_has_cert_or_collision
+    (head : CertifiedStep Session RulesRoot Step commit)
+    (rest : List (CertifiedStep Session RulesRoot Step commit))
+    (hlinked : Linked (head :: rest)) :
+    (∃ c, Cert Step head.oldGraph (endGraph head rest) c) ∨
+      CommitCollision commit := by
+  rcases linked_reduces_or_collision head rest hlinked with hreduces | hcollision
+  · exact Or.inl ((bridge Step head.oldGraph (endGraph head rest)).mpr hreduces)
+  · exact Or.inr hcollision
 
 end HistorySoundness
 
@@ -206,7 +260,7 @@ def refStmt : Statement Unit Nat (List (Hyperedge UInt8 UInt8)) where
   oldRoot := edgeCommit g0
   newRoot := edgeCommit g1
 
-def refStep : CertifiedStep Unit Nat [splitRule] edgeCommit where
+def refStep : CertifiedStep Unit Nat (RewriteStep [splitRule]) edgeCommit where
   stmt := refStmt
   oldGraph := g0
   newGraph := g1
@@ -233,8 +287,10 @@ end Reference
   wrong_root_refused,
   hidden_splice_extracts_collision,
   linked_graph_eq,
+  linked_reduces_or_collision,
   linked_reduces,
   linked_has_cert,
+  linked_has_cert_or_collision,
   Reference.edgeCommit_injective,
   Reference.reference_history_reduces,
   Reference.reference_history_has_cert

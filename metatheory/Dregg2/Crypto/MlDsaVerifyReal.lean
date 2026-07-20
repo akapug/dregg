@@ -29,6 +29,19 @@ the low part `r0 = r mod± α ∈ (−γ₂, γ₂]` and returns `(r1, r0)` with
 (sign by `r0`), else `r1`. `w1Encode` is `SimpleBitPack` of the 6 `w1'` polys at `bitlen(15) = 4` bits/coeff
 (reusing the codec's `packBits`), hence `μ ‖ 768 bytes`.
 
+## PROVENANCE OF THE VECTORS IN *THIS* FILE: CRATE-GENERATED, NOT NIST
+
+`genPk` / `genSig` / `genSigTampered` below are `fips204` v0.4.6 CRATE output. On them the CRATE, not
+FIPS 204, is the specification anchor. That is a real limit and it is why `verify_accepts_real` is named
+for the crate signature it accepts and not for a standard.
+
+The NIST-published anchor for this same `verifyCore` lives in `Dregg2.Crypto.MlDsaSigVerAcvp`:
+`verifyCore_matches_acvp_sigVer` runs `verifyCore` over the COMPLETE NIST ACVP `ML-DSA-sigVer-FIPS204`
+ML-DSA-65 external/pure group (`tgId = 3`, `tcId` 31–45 — 3 expected-accept, 12 expected-reject) and
+proves it reproduces NIST's own `testPassed` verdict on every case. That module cites the exact
+ACVP-Server file, group, test-case ids and downloaded-file digests. Read the two together: the gate below
+is crate agreement, `MlDsaSigVerAcvp` is the NIST anchor. Neither is a `forall` — that is `VerifyCoreEqSpec`.
+
 ## THE ANTI-FAKE GATE — accept a REAL crate signature, reject tampers
 
 `genPk`/`genSig`/`genSigTampered` are a genuine ML-DSA-65 keypair+signature from the real `fips204` v0.4.6

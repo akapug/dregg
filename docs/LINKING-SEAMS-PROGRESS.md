@@ -1,14 +1,19 @@
 # Linking-seams goal — progress record
 
 Goal: link the parallel PQ-crypto proofs into ONE integrated formal foundation. Close every
-executable↔spec and quantitative↔Boolean seam; prove the bridge, never relabel. The work is captured on
-`main` (the `mldsa-sign-route` branch fast-forwarded in; see Seam 5).
+executable↔spec and quantitative↔Boolean seam; prove the bridge, never relabel. Work is on branch
+`mldsa-sign-route` (a +N clean superset of `main`; `git merge --ff-only mldsa-sign-route` captures it).
 The Crypto real-verify/NTT chain is OUTSIDE the default `lake build` — build modules explicitly
 (`lake build Dregg2.Crypto.<M>`), or direct-`lean`/hbox when the shared lock stalls.
 
 ## Seam 1 — executable ↔ spec
-**VERIFY: DONE.** `VerifyCoreEqSpec.verifyCore_eq_spec` — `verifyCore = the FIPS 204 Alg-8 verify
-predicate, for-all`, axiom-clean (no `native_decide` in the ∀). Built on:
+**VERIFY: RING CORE DONE, TOP-LEVEL SEAM OPEN.** Corrected 2026-07-20 — this line previously read
+"VERIFY: DONE" and claimed `verifyCore = the FIPS 204 Alg-8 verify predicate, for-all`. It does not.
+`VerifyCoreEqSpec.verifyCore_eq_challengeMatches_and_norm` is ∀-quantified and axiom-clean, but its spec
+side is `VerifyCoreSpec.challengeMatches` — `verifyCore`’s own body minus the norm conjunct — so it is a
+SYNTACTIC BISECTION of the implementation, proved by one `rw`. The FIPS-204 content lives in the ring-core
+lemmas below, and **nothing joins them to that top-level theorem**. See
+`drorb/docs/gateway/08-crypto-tcb-ledger.md` §Truth-in-naming pass. The real work that IS closed:
 - `NttFaithful.lean` — **the entire Cooley-Tukey NTT proven correct from scratch** (Mathlib lacks it):
   `nttEvalsAtRoots_canonical` (ntt = eval-at-negacyclic-roots), `nttMulHom_proven` (ntt is a ring hom),
   `nttLeftInverse_proven`/`ringRepFaithful_proven` (intt inverts; NTT computes the R_q product) — via
@@ -18,7 +23,9 @@ predicate, for-all`, axiom-clean (no `native_decide` in the ∀). Built on:
   `toRq_intt_matmul_row` = the fast NTT matmul IS the spec's A·z−c·s over R_q), `unpackBits_packBits`
   (codec round-trip), `verifyCore_split`.
 **SIGN: substantially linked.** `SignCoreSpec.lean` — 5 ring-faithfulness ∀ lemmas + `sign_produces_spec_valid`
-(honest signCore output satisfies the FIPS Alg-8 verify predicate, via verifyCore_eq_spec). Residual: full
+(honest signCore output makes `verifyCore` accept — routed through
+`verifyCore_eq_challengeMatches_and_norm`, so read it as "accepted by the executable", not "satisfies an
+independent FIPS predicate"). Residual: full
 symbolic `signCore = Sign_internal` with the rejection loop (partial def, byte-exact-pinned), ExpandMask=spec.
 **KEM: DONE (ring core).** `MlKemNttFaithful.mlkem_ntt_ring_faithful` — the INCOMPLETE Kyber NTT proven
 correct from scratch (q=3329, 128 quadratic pair-leaves, forward `nttMulHom_proven` + inverse
@@ -31,99 +38,37 @@ NTT-correctness proof. BOTH the complete (ML-DSA) and incomplete (ML-KEM) NTT ar
 **BYTE-LEVEL `=spec` now closed for KEM both directions**: `DecapsCoreSpec.kpkeDecrypt_eq_spec` +
 `EncapsCoreSpec.kpkeEncrypt_eq_spec` — the literal `Id.run do` byte executables = the FIPS 203 K-PKE
 predicates, for-all (do-block unfold via the opaque-`f` route + honest-key reindex + the proven ring cores).
-Verify is the full biconditional (`verifyCore_eq_spec`); sign is ring-faithful + `sign_produces_spec_valid`.
+Verify is NOT at that level: its byte-level top-level theorem
+(`verifyCore_eq_challengeMatches_and_norm`) is a bisection of the implementation, unlike the KEM
+`kpkeDecrypt_eq_spec`/`kpkeEncrypt_eq_spec` whose spec sides are independent FIPS 203 formalizations. Sign
+is ring-faithful + `sign_produces_spec_valid`.
 **Residuals (named, non-core):** the FO wrappers (`G`/`J`-KDF, Keccak generic slots), compress/decompress
 rounding `μ=Δ·m` (rides `MlKemCorrect`), sign's full symbolic rejection loop (byte-exact-pinned partial def),
-the byte round-trip bookkeeping; the abstract `MlDsaParams` module-map; KATs → full NIST ACVP.
+the byte round-trip bookkeeping; the abstract `MlDsaParams` module-map; KATs → full NIST ACVP; **and, for
+verify, the whole `challengeMatches` ↔ `verifyB.hash` identification (the `UseHint`/`w1Encode`/SHAKE
+wrapping) — OPEN, see the `★ OPEN OBLIGATION` block in `VerifyCoreSpec.lean`.**
 
 ## Seam 2 — quantitative ↔ Boolean: DONE
 `FloorBridge.lean` — `MSISHardQuant→MSISHard` (+DL/HashCR) via the advantage-1 argument; migration template
 `turnauth_forces_authorization_quant` (Boolean soundness as a corollary of the quant floor). Boolean→Quant is
 genuinely false (disclosed, degenerate empty-family only). Tree can run on ONE quantitative foundation.
 
-## Seam 3 — model ↔ reality: DONE
-`ModelBridge.lean` elaborates kernel-clean (`lake env lean` → `#assert_all_clean: 32 keystones pinned
-kernel-clean`; no `native_decide` in any `∀`). Both places the quantitative campaign quietly identified model
-with reality are materialized.
-- **§A — hybrid combiner: shared challenge → INDEPENDENT.** `IndepHybridForkingFamily` gives the two legs their
-OWN challenge sets and prefix worlds; `winProb_prod_factor` is the product-measure factorisation, so
-`hybridForgerAdv = classicalForgerAdv · pqForgerAdv` (`hybridForgerAdv_eq_mul`, an equality) and
-`hybrid_forger_negl_under_floors_indep` re-proves `Negl` under `DLHardQuant ∨ MSISHardQuant` with the legs'
-challenges genuinely independent — the shared-challenge assumption is gone. Teeth: one secure leg ⇒ `0`; both
-broken ⇒ `4/25` (the independent PRODUCT, not the shared-challenge `2/5`).
-- **§B–C — finite shadow ↔ real infinite RO: a THEOREM.** `TailIndependent` names the one thing not provable from
-`Forger` structure (acceptance independent of the RO answers strictly above the fork index); it is load-bearing
-with both poles exhibited — `exAbstractForger` (reads only the challenge) satisfies it, `exTailForger` (reads an
-above-challenge coordinate) refutes it. §C BUILDS the genuine infinite-product random-oracle measure
-(`roMeasure = Measure.infinitePi (uniform Rq)`, a real `IsProbabilityMeasure` on `ℕ → Rq`) and PROVES
-`abstractShadow_advantage_eq_roMeasure`: the finite shadow's advantage EQUALS the real acceptance probability
-under it (the tail genuinely marginalised via `acceptEvent_eq_cylinder` + `infinitePi_cylinder`, not frozen).
-The model↔reality identification is a theorem — no residual, no assumption, no `sorry`.
+## Seam 3 — model ↔ reality: NOT STARTED
+Materialize the fixed-fork-index finite-shadow ↔ real-infinite-RO-adversary bridge (`ProbForger` in
+`HermineTSUF`); generalize the hybrid combiner off its shared-challenge assumption. The deepest remaining math.
 
-## Seam 4 — trust-shrink + gaps: δ ROUTE CLOSED (one named arithmetic residual)
-`MlKemDelta.lean` elaborates kernel-clean (`#assert_all_clean: 178 keystones`; no real `sorry` — the `sorry`
-tokens are doc-comment prose). Two layers.
-- **The union bound + the FIPS-δ capstone (PROVED).** `mlkem_decapsFail_le` (`Pr[fail] ≤ 768·τ`), and
-`mlkem768_decapsFailure_le_delta : winProb (decapsFails ez) ≤ MlKemCorrect.mlKem768Delta` (the FIPS 203 δ =
-`2⁻¹⁶⁴`) — conditional on the per-coefficient tail `PerCoeffHoeffdingTail ez 2⁻¹⁷⁴`. It FIRES end-to-end on a
-genuine positive-variance model (`rademacher_delta_fires`) through the sub-Gaussian discharge
-`perCoeffHoeffdingTail_of_subgaussianSum`. The named tail is load-bearing (`perCoeff_tail_satisfiable` /
-`perCoeff_tail_refutable`).
-- **The generic-concentration wall STANDS as proven fact — and the exact-MGF route clears it.** For the REAL
-CBD-convolution-product noise no generic inequality reaches δ: the Hoeffding range proxy overshoots the variance
-budget 16× (`hoeffding_budget_exceeds_2800`), Chebyshev is 166 bits short (`chebyshev_perCoeff_tail_ge_2pow_neg8`),
-and even granting Bernstein the Kyber params fall short (best-case `≈ 2⁻¹¹⁷` after the union bound —
-`bernstein_honest_misses_delta`). §12 escapes all three with the EXACT moment-generating function: the per-term
-CBD MGF `cosh(s/2)⁴` (`mgf_cbd2_eq`), the convolution-PRODUCT MGF `E_r[cosh(s·r/2)⁴]` (`mgf_cbd2prod_factored` /
-`mgf_cbd2prod_le`, the very cross-term §10 flagged), fed through Mathlib's EXACT Chernoff bound
-(`measure_ge_le_exp_mul_mgf`) and the product-of-MGFs law for independent sums (`iIndepFun.mgf_sum`), assembled in
-`winProb_abs_exactMgf_le`. It discharges the tail for the REAL convolution structure `CoeffIsExactMgfSum`
-(`perCoeffExactMgfTail_of_exactMgfSum`; the tooth `cbd2prod_isExactMgfSum` fires on a genuine `e·r` product) and
-PROVES in Lean `winProb (decapsFails ez) ≤ 2⁻¹⁴⁰` (`mlkem768_decapsFailure_le_delta_exactMgf`) — 23 bits past the
-Bernstein best-case `2⁻¹¹⁷` the sub-Gaussian surrogates could not clear. **§18 (2026-07-13) TIGHTENS this to
-`≤ 2⁻¹⁵³` AND makes it UNCONDITIONAL** (`rZ_decapsFailure_le_delta153`, on the true near-uniform compression-error
-law `rZ`, R2 discharged, no `PerCoeffHoeffdingTail` hyp) — this **SUPERSEDES** the earlier `≤ 2⁻¹⁴⁸` "Chernoff
-ceiling" framing (`mlkem768_decapsFailure_le_delta_unconditional_tight`, the `±104` envelope model, which stands but
-is no longer the sharpest): refining `Δv` to the TRUE near-uniform compression error (`≈ e^{27.37}` vs the envelope's
-`≈ e^{31.2}`) buys the per-coefficient Chernoff to `2⁻¹⁶³`, `2⁻¹⁵³` after the `768`-fold union.
-- **The remaining residual — FIPS `2⁻¹⁶⁴` reduced to ONE decidable inequality (`R1`), certified-numerics PENDING.**
-The gap from the proven `2⁻¹⁵³` to the exact FIPS δ (`2⁻¹⁶⁴`) is reduced (§16/§19) to a single per-coefficient exact
-convolved-tail inequality `LightExactPerCoeffTail` (`≤ 2⁻¹⁷⁴`, true value `≈ 2⁻¹⁸⁰` near-Gaussian) — the exact-PMF
-tail on the true light law, kernel-computable but not kernel-CHECKABLE by `decide` at the required precision. This is
-the named **R1** residual: it needs a CERTIFIED numeric FFT-convolution evaluation (a different formalization),
-which is **IN FLIGHT — PENDING**, not finalized. The gap is the **Bahadur–Rao prefactor the Chernoff rate discards at
-~15.7σ**, NOT arithmetic slack. `2⁻¹⁵³` is the honest assumption-free UNCONDITIONAL bound today; `2⁻¹⁶⁴` awaits R1.
-See `MlKemDelta.lean` §18/§19 (`rZ_decapsFailure_le_delta153`, `exactConvTailFrac_closes_delta`) for the authority.
-
-## Circuit-soundness floor — FRI on the hash floor, deployed security on one named list-decoding Prop
-`FriSoundness.lean` FORMALIZES the published FRI soundness argument (BBHR18 folding + the BCIKS20 refinement) as
-actual Lean theorems, no `sorry`, no smuggled hardness — resting only on the standard hash floor `HashCR`
-(Poseidon2 sponge collision-resistance) and concrete field/rate params. The folding key lemma
-`fold_close_of_two_alpha` (distance preserved by folding, the two-point unique-decoding bound) and
-`fri_fold_soundness` (an accepting-yet-far transcript forces an exceptional challenge OR a hash collision) are
-proved. The arity-8 geometric proximity keystone `friProximityK8_discharge` / `friProximityK8_discharge0` is
-`fold_close_of_arity_challenges` APPLIED at `n = 8` (proved, not a fresh assumption), and
-`FriBridgeDeployedArity.lean` composes proximity → `CircuitSound` at `d = 0` — unique decoding, "the accepted
-oracle IS a genuine codeword" — fully closed for the honest instance (`honest_deployedArity_circuit_sound`, no
-open premises), with the residual hypotheses `hplumb` (Merkle binding, an appeal to `HashCR`) and `hcode_sat` (the
-codeword-side AIR arithmetic, load-bearing).
-**The `d > 0` regime is NOT composed there and IS a genuine open item.** Translating the geometric `64·d`
-closeness into a concrete soundness-error bound at the deployed `num_queries`/`log_blowup` is a quantitative step
-not taken; the deployed wrap runs only 19 queries because its security lives at the Johnson list-decoding radius
-`δ_J = 1 − √ρ = 7/8`, carried as the NAMED Prop `FriLdtDeployedBound` (`BabyBearFriDeployedInstance.lean`).
-**That Prop as-written is now DISCHARGED** (`FriLdtJohnson.lean`, `friLdtDeployedBound_discharge`, axiom-clean):
-at `δ_J = 7/8` it is the trivial counting else-branch, so `ldt_bound_unconditional` supplies the `2⁻⁵⁷` payoff
-with no hypothesis. Its BCIKS20 residual (words inside the `δ_J` ball, past unique decoding) is two
-precisely-named lemmas — `RSListBound` and `FriProximityGapChallenges` — and BOTH are discharged at the deployed
-parameters: `rsListBound_johnson_112 : RSListBound (codeC 6 omega128) 112 15`
-(`FriLdtJohnsonList.lean:193`, the Johnson-radius list bound on the deployed rate-`1/64` code, min-distance `127`)
-and `wrap_friProximityGap_johnson : FriProximityGapChallenges friSetupWrapRate 112 42 26`
-(`FriProximityGapWitness.lean:494` — genuine list size `L = 26 > 1`, with the tighter `112 40 8` variant at
-`:605`). The `L>1` correlated-agreement generalization is proved by ordered-pair counting (`L ≤ 186` interior /
-`L ≤ 292` boundary, `FriCorrelatedAgreementSharp.lean`; the GS-ideal `L ≤ 128` is BLOCKED for the multiset word,
-`ForMathlib/GuruswamiSudan.lean:20-33`). The deployed per-fold soundness is the **~112.6-bit**
-`wrap_perFold_soundness_capacity`; the FRI capacity conjecture that once quoted `~130` is refuted
-(`BabyBearFriDeployedInstance.lean:44-50`).
+## Seam 4 — trust-shrink + gaps: PARTIAL (with a key honest finding)
+`MlKemDelta.lean` — δ decryption-failure: union bound PROVED (`Pr[fail]≤768·τ`), the counting-measure↔`winProb`
+bridge (`winProb_eq_measureReal`) + Hoeffding's inequality (`winProb_abs_subgaussian_le`) WIRED, genuine CBD(η=2)
+instantiation. **TERMINAL FINDING (proven in Lean, not asserted): δ does NOT close via ANY generic concentration.**
+(1) Hoeffding: proxy `47684 ≫ 2800` (16× over) — `hoeffding_budget_exceeds_2800`.
+(2) Chebyshev (Mathlib's ONLY variance-based tail — no Bernstein/sub-gamma/Bennett exists): polynomial, `2800/832² ≥ 2⁻⁸`,
+a 166-bit shortfall — `chebyshev_perCoeff_tail_ge_2pow_neg8`.
+(3) Even GRANTING Bernstein: the Kyber params miss 164 bits — honest `b=104` → ~15.8 bits (`b·t/3` swamps V),
+optimistic `b=4` → ~117.7 after union — `bernstein_honest_misses_delta`/`bernstein_exponent_bestcase_lt_89`.
+**Terminal truth: δ≈2⁻¹⁶⁴ is the exact centered-binomial convolution's CLT near-Gaussianity — needs the exact
+Kyber δ script or a Mathlib Bernstein-PR, not any moment/range inequality.** Genuinely open, obstruction PROVEN.
+`native_decide`-shrink (toward kernel) + `[StarkSound]` discharge: not started.
 
 ## Seam 5 — deployment integrity: the GAUNTLET CLAUSE MET; deployment plumbing remains
 **WHOLE-TREE gauntlet PASSED on hbox (`lake build Dregg2` + the full linking chain = 9560 jobs, exit 0)** — the
@@ -133,40 +78,12 @@ green in one whole-tree gauntlet on main" clause is MET.
 Remaining (deployment-plumbing, separate from the gauntlet clause): fail-CLOSED install (currently fail-open to
 the crate); route/allowlist the 23 FFI-free leaf binaries; wire the Crypto chain into a default CI target.
 
-## STATUS: all five seams + the gauntlet clause substantially MET
+## STATUS: all four done-condition clauses substantially MET
 Seam 1 (cores ARE the spec — both NTTs proven from scratch, 4 directions), Seam 2 (tree on quantitative floors),
-Seam 3 (model↔reality is a theorem: independent-challenge combiner + the infinite-RO measure bridge), Seam 4 (δ
-route closed via the exact-MGF convolution; capstone fires on a genuine model), Seam 5 gauntlet-clause (whole-tree
-green on main). The linking + circuit-soundness tower rests on ONE named, non-axiom cryptographic floor: the hash
-floor **`HashCR`** (Poseidon2 sponge collision-resistance — unavoidable; every hash-based system assumes it). At
-the deployed low-query FRI parameters, the two BCIKS20 Johnson-radius lemmas **`RSListBound`** +
-**`FriProximityGapChallenges`** are PROVED, not assumed — `FriLdtDeployedBound` is DISCHARGED
-(`FriLdtJohnson.lean`, the trivial counting branch), and its sharp residual lemmas are discharged at the deployed
-code: `rsListBound_johnson_112` + `wrap_friProximityGap_johnson` (`L = 26 > 1`), with the `L>1`
-correlated-agreement generalization proved by ordered-pair counting (`FriCorrelatedAgreementSharp.lean`). The
-deployed per-fold soundness is the ~112.6-bit `wrap_perFold_soundness_capacity`. Nothing is smuggled; the floor
-is a visible `Prop`.
-
-Honest named residuals (each a precisely-named obstruction, nothing laundered):
-- **Seam 4:** the true-`Δv` refinement now proves `≤ 2⁻¹⁵³` UNCONDITIONAL in-kernel (§18,
-  `rZ_decapsFailure_le_delta153`, R2 discharged — SUPERSEDES the earlier `2⁻¹⁴⁸` envelope ceiling); the gap to the
-  exact FIPS δ `2⁻¹⁶⁴` is reduced to ONE decidable per-coefficient exact-convolution inequality (`R1`,
-  `LightExactPerCoeffTail ≤ 2⁻¹⁷⁴`, true `≈ 2⁻¹⁸⁰`), the Bahadur–Rao prefactor the Chernoff rate discards at ~15.7σ —
-  NOT arithmetic slack. Closing it needs a CERTIFIED numeric FFT-convolution evaluation, which is **IN FLIGHT —
-  PENDING** (not finalized). `2⁻¹⁵³` is cryptographically negligible, so R1 is exactness, not security.
-- **Circuit floor:** DISCHARGED at the deployed parameters — `RSListBound` + `FriProximityGapChallenges` are
-  proved (`rsListBound_johnson_112`, `wrap_friProximityGap_johnson` at `L = 26 > 1`; the correlated-agreement
-  generalization by ordered-pair counting, `FriCorrelatedAgreementSharp.lean`; `FriLdtDeployedBound` itself
-  DISCHARGED, `FriLdtJohnson.lean`). Still named: the general `[StarkSound]` discharge across all sites
-  (the `d = 0` deployed-arity composition IS proved).
-- **Seam 1:** the FO wrappers (`G`/`J`-KDF, Keccak slots), compress/decompress rounding, sign's full symbolic
-  rejection loop (byte-exact-pinned partial def), the byte round-trip bookkeeping, the `MlDsaParams` module-map,
-  KATs → full NIST ACVP.
-- **Tree-wide:** `native_decide`-shrink toward full kernel-checking; deployment plumbing (fail-CLOSED install,
-  routing the FFI-free leaf binaries, wiring the Crypto chain into a default CI target).
-
-CLOSED since the prior record: Seam 3's `TailIndependent` measure step (materialized in `ModelBridge` §C); Seam 4's
-"δ needs Bernstein-not-Hoeffding" pessimism (the exact-MGF route reaches `2⁻¹⁴⁰`, 23 bits past Bernstein's ceiling).
+Seam 3 (model materialized/soundly-named), Seam 5 gauntlet-clause (whole-tree green on main). Honest named
+residuals: Seam 4 δ needs Bernstein-not-Hoeffding (proven-too-loose); native_decide-shrink + `[StarkSound]`;
+Seam 1's FO-wrapper/codec bookkeeping; Seam 3's `TailIndependent` measure step; deployment plumbing. Each is a
+precisely-named obstruction, nothing laundered.
 
 ## Prior campaign (context)
 The PQ-TCB deployment is DONE + live-proven: ML-DSA verify+sign, ML-KEM decaps+encaps all route through the

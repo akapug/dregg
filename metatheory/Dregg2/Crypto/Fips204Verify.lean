@@ -23,27 +23,17 @@ native via `leanc` and called from Rust through the `@[export]`ed `verifyFFI`. T
      computable `Bool` verifier: recover `c = SampleInBall(c̃)`, recompute `w₁' = UseHint(h, A·z − c·t₁·2^d)`,
      accept iff the challenge is a fixed point AND `‖z‖` passes. `verifyFFI : String → String` `@[export]`s
      it (`dregg_fips204_verify`); `leanc` compiles it native and `dregg-pq` calls it (the same Lean-is-the-
-     runtime shape as `dregg_storage_content_root`). `verifyCore_is_spec` proves the exported core IS the
-     spec verify (executable = spec, definitional).
+     runtime shape as `dregg_storage_content_root`). NOTE `verifyCore` is `realParams.verifyB` BY
+     DEFINITION, so `verifyCore_unfolds_to_def` (below) is `rfl` on that unfolding — a `P = P` restatement,
+     NOT independent evidence that the core agrees with anything. And `realParams` is a SCALAR instance
+     (`R = M = N = ℤ`, `A := LinearMap.id`, `challenge _ := 1`): the ROUNDING constants are the deployed
+     ML-DSA-65 ones, the module structure is not. The byte-exact ML-DSA-65 verify is a DIFFERENT object,
+     `MlDsaVerifyReal.verifyCore`; do not cite results about this one as results about that one.
 
   3. **`Fips204Correct` DISCHARGED (verify) — no crate hypothesis.** `extractedApi` is a `DreggPqApi` whose
      `verify` is `verifyCore`; `extractedApi_fips204 : Fips204Correct extractedApi` is PROVED from the spec's
      `fips204_correct` — NOT taken as a hypothesis, NOT a `def …Hard`. The trusted sentence "the verify
      round-trips" is now a THEOREM about the extracted Lean object.
-
-## ⚑ THE FULL-DIMENSION FLOOR LIVES ELSEWHERE — read this before citing `extractedApi_fips204`
-
-`realParams` (PART 1) carries the DEPLOYED LITERALS (`q`, `γ₂`, `α`, `β`, `γ₁−β`) but at `n = 1`,
-`A = LinearMap.id`, constant challenge `c = 1`, and a single FIXED secret `(s₁,s₂,t₀) = (5,1,3)` with the
-fixed mask `y = 40` — a SCALAR CARICATURE of the ML-DSA-65 module. So `extractedApi_fips204` /
-`signExtractedApi_fips204` discharge `Fips204Correct` for the extracted EXECUTABLE cores (which is what
-they are for — the `@[export]`ed verify/sign equations, with `#guard` teeth), but they must NOT be read as
-"the deployed `dregg_pq_correct` has a full-dimension correctness floor".
-
-That floor is `Dregg2.Crypto.Fips204FullDim`: `fullDimApi_fips204 : Fips204Correct (fullDimApi A hash chal)`
-over the REAL `R_q = ℤ_q[X]/(X²⁵⁶+1)`, `M = R_q^5`, `N = R_q^6`, for an ARBITRARY linear `A`, an ARBITRARY
-Fiat–Shamir hash, an ARBITRARY `SampleInBall` sampler and an ARBITRARY secret — kernel-clean, no
-`native_decide`. `Fips204FullDim.fullDimApi_correct` is what feeds `dregg_pq_correct` at full dimension.
 
 ## HONEST RESIDUAL (named, not laundered)
 
@@ -111,16 +101,23 @@ def realParams : MlDsaParams ℤ ℤ ℤ ℤ ℤ ℤ ℤ where
 
 /-! ## PART 2 — the EXECUTABLE verify core, and its agreement with the spec. -/
 
-/-- **The EXECUTABLE ML-DSA verify core** — `realParams.verifyB` as a plain `def … : Bool`, the object the
+/-- **The EXECUTABLE verify core at `realParams`** — `realParams.verifyB` as a plain `def … : Bool`, the object the
 `@[export]` compiles to native and `dregg-pq` calls. Recovers `c = SampleInBall(c̃)`, recomputes
 `w₁' = UseHint(h, A·z − c·t₁·2^d)`, accepts iff `H(μ, w₁') = c̃` (the challenge is a fixed point) and `‖z‖`
 passes. Fail-closed: any mismatch is `false`. -/
 def verifyCore (thi μ : ℤ) (σ : ℤ × ℤ × ℤ) : Bool := realParams.verifyB thi μ σ
 
-/-- **EXECUTABLE = SPEC.** The exported core IS the `Fips204Spec.MlDsaParams.verifyB` verify predicate at the
-real parameters — definitionally. So routing `dregg-pq` through `verifyCore` routes it through the object
-`fips204_correct` reasons about, not a re-implementation. -/
-theorem verifyCore_is_spec (thi μ : ℤ) (σ : ℤ × ℤ × ℤ) :
+/-- **`rfl` on the definitional unfolding of `verifyCore`.** `verifyCore` is DEFINED as `realParams.verifyB`
+(see the `def` directly above), so this equation is `P = P` and its proof is `rfl`. It records that the
+`@[export]`ed object is a plain alias — nothing was re-implemented between the `def` and the FFI — and that
+is ALL it records.
+
+IT IS NOT EVIDENCE OF SPEC AGREEMENT. It compares `verifyCore` to its own definiens, so it would hold
+verbatim for any `realParams` whatsoever, including a broken one. The content of "the deployed verify is
+correct" lives entirely in (a) whether `realParams` is the right instance — it is a SCALAR one, `A :=
+LinearMap.id` over `ℤ` with `challenge _ := 1`, real only in its rounding constants — and (b)
+`extractedApi_fips204` / `fips204_correct`, which are separate theorems. -/
+theorem verifyCore_unfolds_to_def (thi μ : ℤ) (σ : ℤ × ℤ × ℤ) :
     verifyCore thi μ σ = realParams.verifyB thi μ σ := rfl
 
 /-! ## PART 3 — `Fips204Correct` DISCHARGED for VERIFY, with a Lean-verified object.
@@ -199,7 +196,7 @@ must REJECT. These `#guard`s are the load-bearing check that `verifyCore` is a r
 #guard verifyFFI "garbage" = "0"
 
 #assert_axioms realRounding
-#assert_axioms verifyCore_is_spec
+#assert_axioms verifyCore_unfolds_to_def
 #assert_axioms realParams_honest
 #assert_axioms extractedApi_fips204
 #assert_axioms extractedApi_correct
