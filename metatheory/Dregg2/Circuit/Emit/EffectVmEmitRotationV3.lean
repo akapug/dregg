@@ -127,8 +127,9 @@ open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Crypto
 open Dregg2.Substrate.Heap (refSponge)
 -- v10 faithful-8-felt cap-root: the native `node8` tree carrier + recompose spine.
-open Dregg2.Circuit.DeployedCapTree (Digest8 Cap8Scheme CapLeaf)
-open Dregg2.Circuit.DeployedCapTree.Cap8Scheme (recomposeUp8 capLeafDigest8 recomposeUp8_inj_of_path)
+open Dregg2.Circuit.DeployedCapTree (Digest8 Cap8Scheme CapLeaf Coll8)
+open Dregg2.Circuit.DeployedCapTree.Cap8Scheme
+  (recomposeUp8 capLeafDigest8 recomposeUp8Find recomposeUp8_binds_or_collides)
 open Dregg2.Circuit.CapMerkleGeneric (StepG)
 -- v10 faithful-8-felt HEAP-root: the native `node8` heap-tree carrier + recompose spine.
 open Dregg2.Circuit.DeployedHeapTree (Heap8Scheme)
@@ -1482,7 +1483,8 @@ the ~31-bit lane-0 PROJECTION of the deployed 8-felt cap root. v10 commits the F
 commit. The GROUP readers below pin those eight columns to a `Digest8`; `writesTo8` is the native
 arity-16 `node8` UPDATE-AT-KEY over the FULL 8-felt root (`recomposeUp8`, ~124-bit), NEVER a lane-0
 squeeze (the soundness downgrade the GENTIAN tooth closes). The anti-forge tooth is the recompose
-injectivity (`recomposeUp8_inj_of_path`): a forged high-felt post-root forces a different post-leaf. -/
+binding (`recomposeUp8_binds_or_collides`): a forged high-felt post-root forces a different post-leaf,
+unless the deployed chip collides at the two `node8` blocks the walk hands back. -/
 
 /-- The cap-root 8-felt column at lane `i` in the block based at `blockBase` (limb `B_CAP_ROOT` = 25 for
 lane 0; the seven completion limbs 52..58 for lanes 1..7). `blockBase = w` (BEFORE) / `w + 239` (AFTER). -/
@@ -1519,12 +1521,19 @@ def writesTo8 (S8 : Cap8Scheme) (oldRoot : Digest8) (k v : ℤ) (newRoot : Diges
     recomposeUp8 S8 (capLeafDigest8 S8 oldLeaf) path = oldRoot ∧
     recomposeUp8 S8 (capLeafDigest8 S8 newLeaf) path = newRoot
 
-/-- **The 8-felt anti-forge tooth.** Along a FIXED sibling path the post-root pins the post-leaf digest
-(`recomposeUp8` injective at the full ~124-bit width). A forged `newRoot` cannot be reached with the
-genuine post-leaf along the genuine path — the GENTIAN close at full width, NOT lane-0. -/
-theorem writesTo8_forces_postleaf (S8 : Cap8Scheme) (path : List (StepG Digest8))
-    {a b : Digest8} (h : recomposeUp8 S8 a path = recomposeUp8 S8 b path) : a = b :=
-  recomposeUp8_inj_of_path S8 path h
+/-- **The 8-felt anti-forge tooth, UNCONDITIONAL.** Along a FIXED sibling path the post-root pins the
+post-leaf digest at the full ~124-bit width — UNLESS the deployed arity-16 chip genuinely collides at
+the two `node8` input blocks the walk hands back. A forged `newRoot` cannot be reached with the genuine
+post-leaf along the genuine path except at that named collision — the GENTIAN close at full width, NOT
+lane-0.
+
+⚑ This replaces the former `writesTo8_forces_postleaf`, which rode `Cap8Scheme.recomposeUp8_inj_of_path`
+and hence the deleted `chip8CR : Compress8CR` FIELD — a field the deployed chip refutes, which made
+`Cap8Scheme` uninhabitable and every theorem over it (this one included) VACUOUS. -/
+theorem writesTo8_forces_postleaf_or_collides (S8 : Cap8Scheme) (path : List (StepG Digest8))
+    {a b : Digest8} (h : recomposeUp8 S8 a path = recomposeUp8 S8 b path) :
+    a = b ∨ Coll8 S8.chipAbsorb8 (recomposeUp8Find S8 a b path) :=
+  recomposeUp8_binds_or_collides S8 path h
 
 /-! ### v10 — the FAITHFUL 8-felt HEAP-root column GROUP + the native-`node8` heap-write relation
 `heapWritesTo8` (the SECOND faithful root, the exact twin of the cap-root group above).
@@ -2120,8 +2129,8 @@ def customPiExposure : List VmConstraint2 :=
 /-- The rotated CUSTOM (sel 8) WITH the recursive-proof-binding leg: the runtime passthrough face
 lifted through `rotateV3`, carrying the `proofBind` op (`customProofBind`) that ties the row's
 `custom_proof_commitment` to a verifying external sub-proof — the accumulator constraint the
-per-row IR gained — PLUS (the VK epoch + the proof-bind flag day) the FOUR COMMIT-TEETH columns
-(the 8-felt commitment's second squeeze block, appended at the end of the host) and the twelve
+per-row IR gained — PLUS (the VK epoch + the proof-bind flag day) the FOUR COMMIT-TEETH and FOUR
+VK-TEETH columns (the 8-felt commitment and VK second squeeze blocks, appended at the end of the host) and the sixteen
 `customPiExposure` PI bindings that publish the bound `(commit, vk)` so the per-turn FOLD can
 connect the custom sub-proof leaf. The `proofBind` row gate stays `True`; the binding is
 enforced at the fold (see `customPiExposure`).
@@ -6083,7 +6092,7 @@ theorem proofBindsOf_customV3 : proofBindsOf customV3 = [customProofBind] := by
   have hbase : proofBindsOf (v3Of customV1Face) = [] := proofBindsOf_graduateV1 (rotateV3 customV1Face)
   unfold proofBindsOf at hbase ⊢
   -- `customV3.constraints = ((v3Of …).constraints ++ [proofBind customProofBind]) ++ customPiExposure`;
-  -- the eight `customPiExposure` pins are all `.base (.piBinding …)`, contributing no proof-binds.
+  -- the sixteen `customPiExposure` pins are all `.base (.piBinding …)`, contributing no proof-binds.
   show (((v3Of customV1Face).constraints ++ [VmConstraint2.proofBind customProofBind])
       ++ customPiExposure).filterMap _ = _
   rw [List.filterMap_append, List.filterMap_append, hbase]

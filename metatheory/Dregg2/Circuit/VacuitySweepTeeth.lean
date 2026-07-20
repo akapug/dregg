@@ -141,14 +141,23 @@ theorem widePerm_not_injective_babyBear (permW : List ℤ → List ℤ)
   rintro _ ⟨xs, rfl⟩
   exact ⟨hw xs, fun x hx => ⟨(hb xs x hx).1, (hb xs x hx).2⟩⟩
 
-/-! ### The same tooth on `Compress8CR` — the floor the WHOLE native-8-felt cap tree rides.
+/-! ### The same tooth on `Compress8CR` — ⚑ **THE CARRIER IT REFUTED HAS BEEN DELETED (2026-07-20).**
 
-`Compress8CR f := ∀ a b : List ℤ, f a = f b → a = b` (`DeployedCapTree.lean:630`) is the crypto
-carrier inside the `Cap8Scheme` structure itself (`chip8CR`), so EVERY 8-felt cap-tree theorem
-carries it. Its docstring argues non-triviality by exhibiting an injective `Reference8` and a
-colliding `badChip8` — which is precisely the FALSE COMFORT `HashFloorHonesty`'s header already
-named: "they satisfy the floor with a toy injective sponge, while the REAL compressing Poseidon2
-refutes it." Toy witness satisfiable; real instantiation false. -/
+`Compress8CR f := ∀ a b : List ℤ, f a = f b → a = b` USED TO BE the crypto carrier inside the
+`Cap8Scheme` structure itself (the `chip8CR` FIELD), so EVERY 8-felt cap-tree theorem carried it — and,
+because a field cannot be assumed away at a use site, no deployed `Cap8Scheme` VALUE could exist and
+every theorem of the form `∀ S8 : Cap8Scheme, …` was VACUOUS. Its old docstring argued non-triviality
+by exhibiting an injective `Reference8` and a colliding `badChip8`, which was precisely the FALSE
+COMFORT `HashFloorHonesty`'s header named: toy witness satisfiable; real instantiation false.
+
+The tooth below is UNCHANGED and still fires. What changed is what it is now a tooth ON: the field is
+deleted, `Cap8Scheme` carries only the chip, and `DeployedCapTree.deployedCap8Scheme` is a REAL
+INHABITANT whose own chip this tooth refutes (`deployedCap8Scheme_chip_not_Compress8CR` below). The
+cap-tree binding it used to assume is now EXTRACTED AS DATA
+(`DeployedCapTree.Cap8Scheme.capOpen8_binds_leaf_or_collides` and friends). `Compress8CR` survives only
+as the injective special case in the strength-relation bridges, and as a field of the sibling
+`Heap8Scheme` / `Fields8Scheme` structures — which carry the IDENTICAL defect and are the named
+remaining edge. -/
 
 /-- The set of 8-felt digests with all lanes in `Set.Ico 0 q` is FINITE (a box in `Fin 8 → ℤ`). -/
 theorem finite_digest8_bounded (q : ℤ) :
@@ -160,9 +169,9 @@ theorem finite_digest8_bounded (q : ℤ) :
   exact Set.Finite.pi (fun _ => Set.finite_Ico (0 : ℤ) q)
 
 /-- **TOOTH 1″ — `Compress8CR` is FALSE at the REAL BabyBear parameters.** The arity-16 chip absorb
-compresses the infinite `List ℤ` into 8 bounded lanes, so it is not injective. Since `chip8CR` is a
-FIELD of `Cap8Scheme`, a real deployed `Cap8Scheme` value cannot exist — every 8-felt cap-tree
-theorem is conditioned on a structure the deployed Poseidon2 refutes. -/
+compresses the infinite `List ℤ` into 8 bounded lanes, so it is not injective. When `chip8CR` was a
+FIELD of `Cap8Scheme` this meant a real deployed `Cap8Scheme` value could not exist and every 8-felt
+cap-tree theorem was conditioned on a structure the deployed Poseidon2 refutes. -/
 theorem compress8CR_false_babyBear (f : List ℤ → Digest8)
     (hb : ∀ xs i, 0 ≤ f xs i ∧ f xs i < babyBearP) :
     ¬ Compress8CR f := by
@@ -170,6 +179,55 @@ theorem compress8CR_false_babyBear (f : List ℤ → Digest8)
   refine Set.Finite.subset (finite_digest8_bounded babyBearP) ?_
   rintro _ ⟨xs, rfl⟩
   exact fun i => ⟨(hb xs i).1, (hb xs i).2⟩
+
+/-! ### ⚑ TOOTH 1‴ — THE VACUITY IS GONE, and the two facts that show it are BOTH machine-checked.
+
+This is the sharpest available statement of the repair, and it is deliberately a PAIR:
+
+  * `deployedCap8Scheme` is a `Cap8Scheme` VALUE — the type is inhabited, so `∀ S8 : Cap8Scheme, …`
+    theorems now have an instance to be applied at (they had none before);
+  * that value's OWN chip is refuted by TOOTH 1″ — so it is EXACTLY the kind of function the deleted
+    field excluded. The deployed-shaped chip could not have been a `Cap8Scheme` before; it is one now.
+
+Together: the structure did not become inhabitable by being weakened to something the deployment
+misses, it became inhabitable by dropping a claim the deployment never satisfied. -/
+
+/-- Every lane of the deployed-shaped chip is BabyBear-bounded (restated at this module's
+`babyBearP` — the same literal as `DeployedCapTree.BABYBEAR_P`). -/
+theorem deployedShapedChip8_babyBear_bounded (xs : List ℤ) (i : Fin 8) :
+    0 ≤ DeployedCapTree.deployedShapedChip8 xs i
+      ∧ DeployedCapTree.deployedShapedChip8 xs i < babyBearP :=
+  DeployedCapTree.deployedShapedChip8_bounded xs i
+
+/-- **⚑ THE CONSTRUCTED INHABITANT'S OWN CHIP REFUTES THE DELETED FIELD.** `deployedCap8Scheme` is a
+real `Cap8Scheme` value, and TOOTH 1″ applies to its chip: had `chip8CR : Compress8CR chipAbsorb8`
+still been a field, THIS value would have been unconstructible — which is exactly why every theorem
+over the old structure was vacuous, and exactly what the deletion fixed. -/
+theorem deployedCap8Scheme_chip_not_Compress8CR :
+    ¬ Compress8CR DeployedCapTree.deployedCap8Scheme.chipAbsorb8 :=
+  compress8CR_false_babyBear _ (fun xs i => deployedShapedChip8_babyBear_bounded xs i)
+
+/-- **AND THE CAP-OPEN TOOTH FIRES AT IT.** The anti-ghost binding, instantiated at the real value —
+the application the `∀ S8 : Cap8Scheme` form could never actually be performed for. -/
+theorem deployed_capOpen_tooth_fires
+    (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8)) {nl₁ nl₂ : CapLeaf}
+    (h : Cap8Scheme.recomposeUp8 DeployedCapTree.deployedCap8Scheme
+           (Cap8Scheme.capLeafDigest8 DeployedCapTree.deployedCap8Scheme nl₁) path
+       = Cap8Scheme.recomposeUp8 DeployedCapTree.deployedCap8Scheme
+           (Cap8Scheme.capLeafDigest8 DeployedCapTree.deployedCap8Scheme nl₂) path) :
+    nl₁ = nl₂ ∨ Cap8Scheme.CapOpenColl DeployedCapTree.deployedCap8Scheme nl₁ nl₂ path :=
+  DeployedCapTree.deployed_capOpen8_binds_leaf_or_collides path h
+
+/-- **AND `MembersAt8` IS NOW NON-VACUOUSLY REFUTABLE AT A REAL SCHEME.** TOOTH 2″ below is stated
+`∀ S8 : Cap8Scheme`; before the repair that quantifier ranged over an EMPTY type, so the counter-tooth
+that kept §2's finding honest was itself vacuous. Instantiated at the inhabitant, it has content. -/
+theorem membersAt8_not_vacuous_deployed (root : Digest8) (leaf : CapLeaf)
+    (hno : ∀ path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8),
+        Cap8Scheme.recomposeUp8 DeployedCapTree.deployedCap8Scheme
+          (Cap8Scheme.capLeafDigest8 DeployedCapTree.deployedCap8Scheme leaf) path ≠ root) :
+    ¬ Cap8Scheme.MembersAt8 DeployedCapTree.deployedCap8Scheme root leaf := by
+  rintro ⟨path, hpath⟩
+  exact hno path hpath
 
 /-! ## §2 — `MembersAt8`: the depth-16 claim is not carried; a depth-0 opening is a "membership". -/
 
@@ -212,6 +270,10 @@ theorem membersAt8_not_vacuous_general (S8 : Cap8Scheme) (root : Digest8) (leaf 
 #assert_axioms widePerm_not_injective_babyBear
 #assert_axioms finite_digest8_bounded
 #assert_axioms compress8CR_false_babyBear
+#assert_axioms deployedShapedChip8_babyBear_bounded
+#assert_axioms deployedCap8Scheme_chip_not_Compress8CR
+#assert_axioms deployed_capOpen_tooth_fires
+#assert_axioms membersAt8_not_vacuous_deployed
 #assert_axioms membersAt8_at_own_digest
 #assert_axioms membersAt_at_own_digest
 #assert_axioms membersAt8_not_vacuous_general

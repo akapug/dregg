@@ -1042,7 +1042,9 @@ theorem revokeDelegation_sat_forces_postroot (S8 : Cap8Scheme)
 /-- **FORGE-DETECTOR (revoke, tag 2) — a fabricated post-cap-root is UNSAT.** The genuine REMOVE
 FORCES `capRemoves8 … henc.newRoot` (`revokeDelegation_sat_forces_postroot`); the committed remove is
 FUNCTIONAL under CR (the after-root is the unique root committing the removed spine — the named
-`hRemoves8Func` carrier, derivable from `S8.chip8CR`). So ANY forged `forgedRoot` claiming to be the
+`hRemoves8Func` carrier — formerly "derivable from `S8.chip8CR`", which is now known to be DERIVABLE
+FROM NOTHING: that field was false at deployed parameters and is DELETED; the honest derivation is
+`DeployedCapTree.Cap8Scheme.recomposeUp8_binds_or_collides`, i.e. functionality-or-a-named-collision). So ANY forged `forgedRoot` claiming to be the
 same remove but differing from the genuine `henc.newRoot` is excluded — the forged-root branch is
 `False`. NON-vacuous: the forced `capRemoves8` is the live witness (drop the BEFORE welds and the
 hypothesis it consumes vanishes), and `forgedRoot ≠ henc.newRoot` is satisfiable, so the elimination
@@ -1057,7 +1059,9 @@ theorem revoke_sat_rejects_forged_postroot (S8 : Cap8Scheme)
     (henc : RevokeCapsTreeEncodes S8 pre post holder t)
     (anc : RevokeDelegationWriteAnchor S8 pre post holder t hash mi mf ma tr henc)
     -- NAMED CRYPTO CARRIER: the deployed cap-tree's 8-felt remove-functionality (membership-path
-    -- uniqueness at full ~124-bit width, derivable from `S8.chip8CR` — the internalization TODO
+    -- uniqueness at full ~124-bit width; the honest derivation is now
+    -- `recomposeUp8_binds_or_collides` (functionality OR a named chip collision), NOT the deleted
+    -- `S8.chip8CR` field — the internalization TODO
     -- mirroring the scalar `MapMerkleRoot.writesToMerkle_functional` the old `hCR` tooth consumed).
     (hRemoves8Func : ∀ {r₁ r₂ : Digest8},
       capRemoves8 S8 henc.oldRoot

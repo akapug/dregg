@@ -621,37 +621,72 @@ discharged from the named `Compress8CR` floor exactly as `nodeOf_injective` ride
 length-8 felt vector (`[BabyBear; 8]`), modeled as `Fin 8 → ℤ`. -/
 abbrev Digest8 := Fin 8 → ℤ
 
-/-- ⚠ **BROKEN AS A FLOOR — FALSE AT DEPLOYED PARAMETERS, and it is a STRUCTURE FIELD. See the teeth.**
+/-- ⚠ **NOT A FLOOR — FALSE AT DEPLOYED PARAMETERS. It is no longer a field of anything in this file.**
 
-The 8-output chip absorb `f : List ℤ → Digest8` (`descriptor_ir2::chip_absorb_all_lanes`, all 8 squeezed
-lanes) is collision-resistant: equal 8-felt output vectors force equal input lists. This is stated as
-INJECTIVITY, which `VacuitySweepTeeth.compress8CR_false_babyBear` proves FALSE for the deployed chip: it
-compresses the infinite `List ℤ` into 8 BOUNDED BabyBear lanes, so collisions EXIST by pigeonhole.
+`Compress8CR f` says the 8-output chip absorb `f : List ℤ → Digest8`
+(`descriptor_ir2::chip_absorb_all_lanes`, all 8 squeezed lanes) is INJECTIVE: equal 8-felt output
+vectors force equal input lists. `VacuitySweepTeeth.compress8CR_false_babyBear` proves this FALSE for
+the deployed chip — it compresses the infinite `List ℤ` into 8 BOUNDED BabyBear lanes, so collisions
+EXIST by pigeonhole.
 
-⚑ Because `Cap8Scheme.chip8CR` carries this as a FIELD, a real deployed `Cap8Scheme` **VALUE CANNOT
-EXIST** — this is not merely a hypothesis on a theorem, it is a non-inhabitable field, and EVERY 8-felt
-cap/heap/fields-tree theorem carries it. The non-vacuity argument below (`Reference8` exhibits an
-injective chip; `badChip8_not_CR` falsifies a colliding one, so it is not `True`) is exactly the FALSE
-COMFORT `HashFloorHonesty`'s header already named: **toy witness satisfiable, real compressing Poseidon2
-false.**
+⚑ **IT USED TO BE THE `Cap8Scheme.chip8CR` FIELD, and that made `Cap8Scheme` UNINHABITABLE**: not
+merely a hypothesis on a theorem but a non-constructible field, so EVERY theorem of the form
+`∀ S8 : Cap8Scheme, …` — the whole cap-family surface — was VACUOUS. The field is DELETED (§5b below);
+`Cap8Scheme` now carries the chip and nothing false about it, and §5b.D exhibits a real deployed
+inhabitant. The old "non-vacuity" argument (`Reference8` exhibits an injective chip, `badChip8_not_CR`
+falsifies a colliding one) was exactly the FALSE COMFORT `HashFloorHonesty`'s header named: **toy
+witness satisfiable, real compressing Poseidon2 false.**
 
-**RE-GROUNDED:** `Circuit.InjectiveFloorRegrounded` §1 — `Chip8Keyed` is the deployed chip WITHOUT this
-field (so it is INHABITED by the real chip), and `node8_injective_advantage_bound` /
-`leaf8_injective_advantage_bound` derive `nodeOf8_injective` / `capLeafDigest8_injective` from a REAL
-collision game on it (`FloorGames.HashCRHardQuant (chip8Family D) Eff`), with the `Eff` obligation in the
-open. KEPT here, untouched, as the historical algebraic form. -/
+**WHAT IT IS RETAINED FOR — two honest jobs, neither of them a deployed keystone:**
+  1. the INJECTIVE SPECIAL CASE in the strength-relation bridges (`…_of_injective` in §5b), which show
+     the deleted theorems fall straight out of the new disjunctions once you assume it — so nothing
+     genuinely proved was given up by the deletion; and
+  2. the refutability canaries (`coll8_refutable_of_injective`), which show the collision disjunct is
+     not a free pass.
+It is ALSO still a field of the sibling `DeployedHeapTree.Heap8Scheme` / `DeployedFieldsTree.Fields8Scheme`
+(co-tenant modules, out of scope for this repair) — those two structures carry the SAME defect and are
+the named remaining edge.
+
+**RE-GROUNDED (probabilistic residual):** `Circuit.InjectiveFloorRegrounded` §1 — `Chip8Keyed` is the
+deployed chip carrying no CR field, and `node8_injective_advantage_bound` /
+`leaf8_injective_advantage_bound` bound the probability that an adversary in a named class `Eff`
+produces the collision disjunct, with the `Eff` obligation in the open. -/
 def Compress8CR (f : List ℤ → Digest8) : Prop :=
   ∀ a b : List ℤ, f a = f b → a = b
+
+/-- **`Coll8 f p`** — the pair of input lists `p` is a GENUINE collision of the 8-output chip absorb:
+two DISTINCT lists with the SAME 8-felt image.
+
+Note what this is NOT: it is not `∃ a b, f a = f b ∧ a ≠ b`. At deployed parameters that existence
+claim is UNCONDITIONALLY TRUE by pigeonhole (`compress8CR_false_babyBear` proves precisely it), so a
+disjunct of that shape would be a free pass carrying no more content than `True`. `Coll8` is a
+predicate about the SPECIFIC pair an extractor RETURNS, so a theorem concluding it EXHIBITS the
+collision rather than asserting one exists — and it is REFUTABLE (`coll8_refutable_of_injective`). -/
+def Coll8 (f : List ℤ → Digest8) (p : List ℤ × List ℤ) : Prop :=
+  p.1 ≠ p.2 ∧ f p.1 = f p.2
+
+/-- "Is this pair a genuine chip collision?" is DECIDABLE (`List ℤ` and `Digest8` both have decidable
+equality) — so the extractors may branch on it and stay TOTAL functions, no `Classical.choice` in the
+reduction. -/
+instance decidableColl8 (f : List ℤ → Digest8) (p : List ℤ × List ℤ) : Decidable (Coll8 f p) := by
+  unfold Coll8
+  infer_instance
 
 /-- **`Cap8Scheme`** — the native-8-felt cap-tree's SINGLE Poseidon2 carrier: the 8-output chip absorb
 `chipAbsorb8 : List ℤ → Digest8`. BOTH the leaf (`capLeafDigest8`, arity 7) and the node
 (`nodeOf8`, arity 16) ride it; the input lists are length-disjoint (7 vs 16), so the chip's per-row
-`(arity, padded inputs)` seeding separates the two domains for free. -/
+`(arity, padded inputs)` seeding separates the two domains for free.
+
+⚑ **ONE FIELD, AND IT IS INHABITED.** The `chip8CR : Compress8CR chipAbsorb8` field is GONE. It
+asserted injectivity of a map that squeezes an infinite domain into 8 bounded BabyBear lanes, which the
+deployed chip refutes — so no deployed `Cap8Scheme` value could be constructed and every theorem
+quantifying over this type was vacuous. §5b.D constructs `deployedCap8Scheme`, a real value whose chip
+is deployed-shaped (BabyBear-bounded lanes) and whose own chip therefore REFUTES the deleted field
+(`VacuitySweepTeeth.deployedCap8Scheme_chip_not_Compress8CR`). The collision resistance the tree used
+to assume is now EXTRACTED AS DATA instead: see `Coll8` and the `…_binds_or_collides` family. -/
 structure Cap8Scheme where
   /-- The single 8-output chip-absorb compression (`cap_root.rs::cap_node8`/`CapLeaf::digest`). -/
   chipAbsorb8 : List ℤ → Digest8
-  /-- CRYPTO CARRIER: the arity-16 chip's per-row collision-resistance (primitive #4 at 8-felt width). -/
-  chip8CR : Compress8CR chipAbsorb8
 
 namespace Cap8Scheme
 
@@ -679,34 +714,180 @@ def capLeafDigest8 (l : CapLeaf) : Digest8 := S8.chipAbsorb8 (leafFields l)
 the leaf — one cap hash everywhere. -/
 def nodeOf8 (l r : Digest8) : Digest8 := S8.chipAbsorb8 (pack8 l r)
 
-/-- **Leaf injectivity at 8-felt width** — distinct 7-tuples yield distinct 8-felt digests, by the
-8-output chip CR composed with `leafFields` injectivity. (`capLeafDigest8_injective`.) -/
-theorem capLeafDigest8_injective {l₁ l₂ : CapLeaf}
-    (h : capLeafDigest8 S8 l₁ = capLeafDigest8 S8 l₂) : l₁ = l₂ :=
-  leafFields_inj (S8.chip8CR _ _ h)
+/-! ### §5b.X — BINDING, EXTRACTED AS DATA (the sound replacement for the deleted injectivity family).
 
-/-- **THE ONE NEW OBLIGATION — node injectivity at 8-felt width.** Equal `node8` images ⇒ equal 8-felt
-children. PROVED by the arity-16 chip's collision-resistance (`Compress8CR`) composed with `pack8`
-injectivity — the per-level peel the native-8-felt membership recompose's anti-ghost needs. This is the
-SOLE width-specific lemma the `node8` migration adds; the recompose spine is reused, not re-proved. -/
-theorem nodeOf8_injective {l₁ r₁ l₂ r₂ : Digest8}
-    (h : nodeOf8 S8 l₁ r₁ = nodeOf8 S8 l₂ r₂) : l₁ = l₂ ∧ r₁ = r₂ := by
-  unfold nodeOf8 at h
-  exact pack8_inj (S8.chip8CR _ _ h)
+The three theorems this section replaces — `capLeafDigest8_injective`, `nodeOf8_injective`,
+`recomposeUp8_inj_of_path` — were all discharged from the `chip8CR` FIELD, i.e. from
+`Compress8CR chipAbsorb8`, which the deployed chip refutes. They are DELETED, not kept beside the new
+forms: keeping them is what made the earlier regrounding additive and therefore inert.
+
+Each is replaced by a TOTAL EXTRACTOR plus a theorem that what it returns is a genuine collision. The
+conclusions are disjunctions `binding ∨ Coll8 chipAbsorb8 (the pair the extractor returned)`. As
+FORMULAS they are weaker than the equalities they replace; as CONTENT AT DEPLOYED PARAMETERS they are
+strictly stronger, because the deleted premise is unsatisfiable by the real chip — the old theorems
+said nothing about the deployed system, and these hold OF it. §5b.S proves that relation in both
+directions. -/
+
+/-- The leaf extractor: the two 7-field blocks the arity-7 chip absorbed. -/
+def leafColl8Find (l₁ l₂ : CapLeaf) : List ℤ × List ℤ := (leafFields l₁, leafFields l₂)
+
+/-- **Leaf binding at 8-felt width, UNCONDITIONAL** (replaces `capLeafDigest8_injective`). Equal 8-felt
+leaf digests EITHER force the whole 7-field `CapLeaf` equal, OR the two `leafFields` blocks ARE a
+genuine collision of the deployed chip — handed back by name. -/
+theorem capLeafDigest8_binds_or_collides {l₁ l₂ : CapLeaf}
+    (h : capLeafDigest8 S8 l₁ = capLeafDigest8 S8 l₂) :
+    l₁ = l₂ ∨ Coll8 S8.chipAbsorb8 (leafColl8Find l₁ l₂) := by
+  by_cases hl : l₁ = l₂
+  · exact Or.inl hl
+  · exact Or.inr ⟨fun hf => hl (leafFields_inj hf), h⟩
+
+/-- The node extractor: the two arity-16 `L8 ‖ R8` input blocks. -/
+def nodeColl8Find (l₁ r₁ l₂ r₂ : Digest8) : List ℤ × List ℤ := (pack8 l₁ r₁, pack8 l₂ r₂)
+
+/-- **Node binding at 8-felt width, UNCONDITIONAL** (replaces `nodeOf8_injective`, the "SOLE
+width-specific obligation" the whole native-8-felt tree used to ride). Equal `node8` images EITHER force
+equal 8-felt children, OR the two packed arity-16 blocks ARE a genuine chip collision. -/
+theorem nodeOf8_binds_or_collides {l₁ r₁ l₂ r₂ : Digest8}
+    (h : nodeOf8 S8 l₁ r₁ = nodeOf8 S8 l₂ r₂) :
+    (l₁ = l₂ ∧ r₁ = r₂) ∨ Coll8 S8.chipAbsorb8 (nodeColl8Find l₁ r₁ l₂ r₂) := by
+  by_cases hn : l₁ = l₂ ∧ r₁ = r₂
+  · exact Or.inl hn
+  · exact Or.inr ⟨fun hp => hn (pack8_inj hp), h⟩
 
 /-- **`recomposeUp8 S8 cur path`** — the native-8-felt membership recompose, DEFINED as the generic
 `CapMerkleGeneric.recomposeG` at `D := Digest8`, `node := nodeOf8 S8`. No bespoke recursion. -/
 def recomposeUp8 (cur : Digest8) (path : List (CapMerkleGeneric.StepG Digest8)) : Digest8 :=
   CapMerkleGeneric.recomposeG (nodeOf8 S8) cur path
 
-/-- **The native-8-felt anti-ghost spine — a PURE RE-INSTANTIATION.** `recomposeUp8` is injective in
-its starting digest along a fixed path, by `CapMerkleGeneric.recomposeG_inj_of_path` fed the ONE new
-obligation `nodeOf8_injective`. NO spine re-proof: the SAME generic theorem the 1-felt tree delegates
-to. This is the payoff of Option A — the ~3,300-line migration collapses to `nodeOf8_injective` + this. -/
-theorem recomposeUp8_inj_of_path (path : List (CapMerkleGeneric.StepG Digest8)) :
-    ∀ {a b : Digest8}, recomposeUp8 S8 a path = recomposeUp8 S8 b path → a = b :=
-  CapMerkleGeneric.recomposeG_inj_of_path (nodeOf8 S8)
-    (fun hh => nodeOf8_injective S8 hh) path
+/-- **The native-8-felt spine EXTRACTOR** — the generic path walk
+(`CapMerkleGeneric.recomposeGFind`) at `node := nodeOf8 S8`, with the colliding child-pairs it lands on
+mapped through `pack8` into the two arity-16 chip input blocks. A TOTAL function of the two starting
+digests and the path. -/
+def recomposeUp8Find (a b : Digest8) (path : List (CapMerkleGeneric.StepG Digest8)) :
+    List ℤ × List ℤ :=
+  (pack8 (CapMerkleGeneric.recomposeGFind (nodeOf8 S8) a b path).1.1
+         (CapMerkleGeneric.recomposeGFind (nodeOf8 S8) a b path).1.2,
+   pack8 (CapMerkleGeneric.recomposeGFind (nodeOf8 S8) a b path).2.1
+         (CapMerkleGeneric.recomposeGFind (nodeOf8 S8) a b path).2.2)
+
+/-- **The native-8-felt anti-ghost spine, UNCONDITIONAL** (replaces `recomposeUp8_inj_of_path`). Equal
+recomposed roots along a FIXED path EITHER force equal starting 8-felt digests, OR the walk LANDS on a
+level whose two arity-16 `node8` blocks are a genuine chip collision, returned by name. A prover cannot
+keep the published root while swapping the opened leaf UNLESS the deployed chip actually collides at
+the two blocks this extractor hands back.
+
+Still a PURE RE-INSTANTIATION — `CapMerkleGeneric.recomposeGFind_spec` is proved once, generically. -/
+theorem recomposeUp8_binds_or_collides (path : List (CapMerkleGeneric.StepG Digest8))
+    {a b : Digest8} (h : recomposeUp8 S8 a path = recomposeUp8 S8 b path) :
+    a = b ∨ Coll8 S8.chipAbsorb8 (recomposeUp8Find S8 a b path) := by
+  rcases CapMerkleGeneric.recomposeGFind_spec (nodeOf8 S8) path h with heq | ⟨hne, himg⟩
+  · exact Or.inl heq
+  · refine Or.inr ⟨fun hp => hne ?_, himg⟩
+    exact Prod.ext (pack8_inj hp).1 (pack8_inj hp).2
+
+/-- **THE CAP-OPEN EXTRACTOR** — the SINGLE named pair the whole cap-open peel hands back. Run the
+spine walk over the two leaf digests; if it found a genuine collision that is the answer, otherwise the
+walk has already forced the two leaf DIGESTS equal, so the collision (if any) is at the leaf absorb and
+the two `leafFields` blocks are the pair. -/
+def capOpen8Find (nl₁ nl₂ : CapLeaf) (path : List (CapMerkleGeneric.StepG Digest8)) :
+    List ℤ × List ℤ :=
+  if Coll8 S8.chipAbsorb8
+      (recomposeUp8Find S8 (capLeafDigest8 S8 nl₁) (capLeafDigest8 S8 nl₂) path)
+  then recomposeUp8Find S8 (capLeafDigest8 S8 nl₁) (capLeafDigest8 S8 nl₂) path
+  else leafColl8Find nl₁ nl₂
+
+/-- **`CapOpenColl S8 nl₁ nl₂ path`** — the pair `capOpen8Find` RETURNS on this equivocation is a
+genuine collision of the deployed arity-16 chip. The ONE named disjunct every cap-open consumer carries
+in place of the deleted `chip8CR` floor. -/
+def CapOpenColl (nl₁ nl₂ : CapLeaf) (path : List (CapMerkleGeneric.StepG Digest8)) : Prop :=
+  Coll8 S8.chipAbsorb8 (capOpen8Find S8 nl₁ nl₂ path)
+
+/-- **⚑ THE CAP-OPEN ANTI-GHOST TOOTH, UNCONDITIONAL.** Two leaves opening to the SAME 8-felt root
+along the SAME committed path are EITHER the same leaf, OR the deployed chip genuinely collides at the
+two blocks `capOpen8Find` hands back. This is the composition
+`recomposeUp8_binds_or_collides ∘ capLeafDigest8_binds_or_collides` the whole cap family rides, with the
+two possible collision sites resolved into one named pair. -/
+theorem capOpen8_binds_leaf_or_collides (path : List (CapMerkleGeneric.StepG Digest8))
+    {nl₁ nl₂ : CapLeaf}
+    (h : recomposeUp8 S8 (capLeafDigest8 S8 nl₁) path
+       = recomposeUp8 S8 (capLeafDigest8 S8 nl₂) path) :
+    nl₁ = nl₂ ∨ CapOpenColl S8 nl₁ nl₂ path := by
+  by_cases hif : Coll8 S8.chipAbsorb8
+      (recomposeUp8Find S8 (capLeafDigest8 S8 nl₁) (capLeafDigest8 S8 nl₂) path)
+  · refine Or.inr ?_
+    show Coll8 S8.chipAbsorb8 (capOpen8Find S8 nl₁ nl₂ path)
+    rw [capOpen8Find, if_pos hif]
+    exact hif
+  · rcases recomposeUp8_binds_or_collides S8 path h with hdig | hc
+    · rcases capLeafDigest8_binds_or_collides S8 hdig with hl | hlc
+      · exact Or.inl hl
+      · refine Or.inr ?_
+        show Coll8 S8.chipAbsorb8 (capOpen8Find S8 nl₁ nl₂ path)
+        rw [capOpen8Find, if_neg hif]
+        exact hlc
+    · exact absurd hc hif
+
+/-! ### §5b.S — THE STRENGTH RELATION, both directions (no strength was lost; no free pass was gained).
+
+Deleting a carrier and restating its consumers as disjunctions invites two fair objections. Both are
+answered here in Lean rather than in prose.
+
+1. *"You weakened the theorems to make the deletion easy."* — the `…_of_injective` bridges assume
+   exactly the injectivity the deleted field asserted, and the deleted theorems fall straight out. They
+   are precisely the injective special case of the new ones.
+2. *"The right disjunct is a free pass, so the disjunction says nothing."* — `coll8_refutable_of_injective`
+   shows the collision disjunct is REFUTABLE: at an injective chip the extracted pair is NOT a
+   collision, so the binding half has to do the work.
+
+These are STANDALONE bridges, deliberately NOT hypotheses on any deployed keystone: `Compress8CR` is
+FALSE at deployed BabyBear parameters, so a keystone carrying it would be right back where this repair
+started. -/
+
+/-- **(CANARY — the collision disjunct is REFUTABLE.)** At an injective chip NO pair is a collision, so
+none of the `…_or_collides` theorems can discharge itself by taking the right branch. -/
+theorem coll8_refutable_of_injective {f : List ℤ → Digest8} (hCR : Compress8CR f)
+    (p : List ℤ × List ℤ) : ¬ Coll8 f p := by
+  rintro ⟨hne, himg⟩
+  exact hne (hCR _ _ himg)
+
+/-- **(CANARY at the cap-open composite.)** `CapOpenColl` is refutable at an injective chip. -/
+theorem capOpenColl_refutable_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    (nl₁ nl₂ : CapLeaf) (path : List (CapMerkleGeneric.StepG Digest8)) :
+    ¬ CapOpenColl S8 nl₁ nl₂ path :=
+  coll8_refutable_of_injective hCR _
+
+/-- **NO STRENGTH LOST — the deleted `capLeafDigest8_injective` is the injective special case.** -/
+theorem capLeafDigest8_injective_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    {l₁ l₂ : CapLeaf} (h : capLeafDigest8 S8 l₁ = capLeafDigest8 S8 l₂) : l₁ = l₂ := by
+  rcases capLeafDigest8_binds_or_collides S8 h with hl | hc
+  · exact hl
+  · exact absurd hc (coll8_refutable_of_injective hCR _)
+
+/-- **NO STRENGTH LOST — the deleted `nodeOf8_injective` is the injective special case.** -/
+theorem nodeOf8_injective_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    {l₁ r₁ l₂ r₂ : Digest8} (h : nodeOf8 S8 l₁ r₁ = nodeOf8 S8 l₂ r₂) : l₁ = l₂ ∧ r₁ = r₂ := by
+  rcases nodeOf8_binds_or_collides S8 h with hn | hc
+  · exact hn
+  · exact absurd hc (coll8_refutable_of_injective hCR _)
+
+/-- **NO STRENGTH LOST — the deleted `recomposeUp8_inj_of_path` is the injective special case.** -/
+theorem recomposeUp8_inj_of_path_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    (path : List (CapMerkleGeneric.StepG Digest8)) {a b : Digest8}
+    (h : recomposeUp8 S8 a path = recomposeUp8 S8 b path) : a = b := by
+  rcases recomposeUp8_binds_or_collides S8 path h with heq | hc
+  · exact heq
+  · exact absurd hc (coll8_refutable_of_injective hCR _)
+
+/-- **NO STRENGTH LOST at the composite** — the cap-open peel the cap family used to perform
+(`capLeafDigest8_injective ∘ recomposeUp8_inj_of_path`) is the injective special case of
+`capOpen8_binds_leaf_or_collides`. -/
+theorem capOpen8_binds_leaf_of_injective (hCR : Compress8CR S8.chipAbsorb8)
+    (path : List (CapMerkleGeneric.StepG Digest8)) {nl₁ nl₂ : CapLeaf}
+    (h : recomposeUp8 S8 (capLeafDigest8 S8 nl₁) path
+       = recomposeUp8 S8 (capLeafDigest8 S8 nl₂) path) : nl₁ = nl₂ := by
+  rcases capOpen8_binds_leaf_or_collides S8 path h with hl | hc
+  · exact hl
+  · exact absurd hc (capOpenColl_refutable_of_injective S8 hCR _ _ _)
 
 /-! ### §5b.M — the NATIVE 8-FELT membership predicate + the effect-general authority bridge.
 
@@ -835,12 +1016,105 @@ theorem deployedFaithfulEff_canonical8
 
 end Cap8Scheme
 
-/-! ### §5b non-vacuity: the `Compress8CR` floor is REAL (a CR witness fires; a colliding one fails). -/
+/-! ### §5b.D — ⚑ THE ACCEPTANCE TEST: a REAL DEPLOYED `Cap8Scheme` VALUE.
+
+The whole point of deleting the `chip8CR` field is measured HERE, not by a green build. With the field
+present, `Cap8Scheme` had no deployed inhabitant (`VacuitySweepTeeth.compress8CR_false_babyBear` refutes
+the field for any function that lands in bounded BabyBear lanes, which the deployed chip does), so every
+`∀ S8 : Cap8Scheme, …` theorem — the entire cap-family surface — was vacuously true.
+
+`deployedCap8Scheme` below is a VALUE. Its chip is DEPLOYED-SHAPED in the only respect this argument
+ever turned on: it squeezes an arbitrary-length `List ℤ` into eight lanes each reduced into `[0, p)` for
+the deployed BabyBear prime, exactly like `descriptor_ir2::chip_absorb_all_lanes`. Nothing about a real
+Poseidon2 round schedule is relevant to inhabitation — and, decisively, its own chip REFUTES the deleted
+field (`VacuitySweepTeeth.deployedCap8Scheme_chip_not_Compress8CR`, which is where `compress8CR_false_babyBear`
+is available). That is the tightest possible statement of what changed: **the very function the teeth
+refute now INHABITS the structure.**
+
+⚑ Honest scope: this is not a KAT-faithful Poseidon2 model (none exists in Lean here), so it is not a
+byte-differential against the Rust chip. It is a deployed-SHAPED inhabitant, and shape is precisely what
+the vacuity argument was about. -/
+
+/-- The deployed BabyBear prime `p = 2^31 - 2^27 + 1` — the modulus every lane of
+`descriptor_ir2::chip_absorb_all_lanes` reduces into. (`VacuitySweepTeeth.babyBearP` is the same
+literal; it is restated here because that module imports THIS one.) -/
+def BABYBEAR_P : ℤ := 2013265921
+
+/-- **A DEPLOYED-SHAPED 8-output chip absorb.** An arbitrary-length input list, eight output lanes,
+every lane reduced into `[0, p)`. This is the shape of `chip_absorb_all_lanes`, and it is the shape
+`compress8CR_false_babyBear` refutes injectivity for. -/
+def deployedShapedChip8 (xs : List ℤ) : Digest8 :=
+  fun i => (xs.foldl (fun acc x => (acc * 31 + x) % BABYBEAR_P) ((i : ℤ) + 1)) % BABYBEAR_P
+
+/-- Every lane of the deployed-shaped chip lands in `[0, p)` — the hypothesis
+`VacuitySweepTeeth.compress8CR_false_babyBear` consumes. -/
+theorem deployedShapedChip8_bounded (xs : List ℤ) (i : Fin 8) :
+    0 ≤ deployedShapedChip8 xs i ∧ deployedShapedChip8 xs i < BABYBEAR_P :=
+  ⟨Int.emod_nonneg _ (by decide), Int.emod_lt_of_pos _ (by decide)⟩
+
+/-- ⚑ **THE CONSTRUCTED INHABITANT — a real deployed `Cap8Scheme` VALUE.** This term is what the old
+structure could not have. Every theorem in §5b now has an instance to be applied at. -/
+def deployedCap8Scheme : Cap8Scheme := ⟨deployedShapedChip8⟩
+
+/-- The inhabitant's chip IS the deployed-shaped chip (definitional — the projection fires). -/
+theorem deployedCap8Scheme_chip : deployedCap8Scheme.chipAbsorb8 = deployedShapedChip8 := rfl
+
+/-- ⚑ **THE TOOTH FIRES AT THE INHABITANT.** The cap-open anti-ghost, INSTANTIATED at a real value —
+the operation the `∀ S8 : Cap8Scheme` form could never actually be performed for. -/
+theorem deployed_capOpen8_binds_leaf_or_collides
+    (path : List (CapMerkleGeneric.StepG Digest8)) {nl₁ nl₂ : CapLeaf}
+    (h : Cap8Scheme.recomposeUp8 deployedCap8Scheme
+           (Cap8Scheme.capLeafDigest8 deployedCap8Scheme nl₁) path
+       = Cap8Scheme.recomposeUp8 deployedCap8Scheme
+           (Cap8Scheme.capLeafDigest8 deployedCap8Scheme nl₂) path) :
+    nl₁ = nl₂ ∨ Cap8Scheme.CapOpenColl deployedCap8Scheme nl₁ nl₂ path :=
+  Cap8Scheme.capOpen8_binds_leaf_or_collides deployedCap8Scheme path h
+
+/-! #### §5b.D-guards — the inhabitant RUNS (computable witnesses, no `native_decide`). -/
+
+/-- A concrete 7-field cap leaf. -/
+def demoLeaf8A : CapLeaf :=
+  { slot_hash := 11, target := 22, auth_tag := 1, mask_lo := 3, mask_hi := 0,
+    expiry := 0, breadstuff := 0 }
+
+/-- The SAME leaf with a different rights felt (`mask_lo`) — the authority-residue mutation. -/
+def demoLeaf8B : CapLeaf := { demoLeaf8A with mask_lo := 7 }
+
+/-- A concrete two-level sibling/direction path. -/
+def demoPath8 : List (CapMerkleGeneric.StepG Digest8) :=
+  [⟨fun _ => 101, false⟩, ⟨fun _ => 202, true⟩]
+
+-- The deployed inhabitant's leaf digest is a genuine 8-lane vector.
+#guard (List.ofFn (Cap8Scheme.capLeafDigest8 deployedCap8Scheme demoLeaf8A)).length == 8
+
+-- Every lane lands inside the BabyBear range.
+#guard (List.ofFn (Cap8Scheme.capLeafDigest8 deployedCap8Scheme demoLeaf8A)).all
+    (fun x => 0 ≤ x && x < BABYBEAR_P)
+
+-- NON-VACUITY, at the inhabitant: flipping the rights felt MOVES the 8-felt leaf digest.
+#guard (List.ofFn (Cap8Scheme.capLeafDigest8 deployedCap8Scheme demoLeaf8A))
+    != (List.ofFn (Cap8Scheme.capLeafDigest8 deployedCap8Scheme demoLeaf8B))
+
+-- ... and MOVES the recomposed 8-felt cap ROOT along a real path: the whole `node8` membership
+-- machinery COMPUTES on the constructed value.
+#guard (List.ofFn (Cap8Scheme.recomposeUp8 deployedCap8Scheme
+        (Cap8Scheme.capLeafDigest8 deployedCap8Scheme demoLeaf8A) demoPath8))
+    != (List.ofFn (Cap8Scheme.recomposeUp8 deployedCap8Scheme
+        (Cap8Scheme.capLeafDigest8 deployedCap8Scheme demoLeaf8B) demoPath8))
+
+/-! ### §5b.R — the REFUTABILITY reference chip (what `Reference8` is now FOR).
+
+`Reference8` used to be offered as the "non-vacuity" argument for the `chip8CR` field — an injective toy
+chip satisfying it. That was the FALSE COMFORT: a toy witness satisfies the field, the real compressing
+Poseidon2 refutes it, and the structure had no deployed value. `Compress8CR` is no longer a field, so
+`refChip8CR`'s job now is to make the §5b.S refutability canaries CONCRETE: at this chip the collision
+disjunct really is unavailable. -/
 
 namespace Reference8
 
 /-- A toy CR 8-output absorb: every lane carries the injective `Encodable` encoding of the input list.
-Injective because `f a = f b` evaluated at lane `0` gives `encode a = encode b`. -/
+Injective because `f a = f b` evaluated at lane `0` gives `encode a = encode b`. NOT deployed-shaped —
+its lanes are unbounded, which is exactly why it can be injective and the real chip cannot. -/
 def refChipAbsorb8 (xs : List ℤ) : Digest8 := fun _ => (Encodable.encode xs : ℕ)
 
 theorem refChip8CR : Compress8CR refChipAbsorb8 := by
@@ -849,10 +1123,26 @@ theorem refChip8CR : Compress8CR refChipAbsorb8 := by
   unfold refChipAbsorb8 at h0
   exact Encodable.encode_injective (by exact_mod_cast h0)
 
-/-- The reference 8-felt scheme — `nodeOf8`/`recomposeUp8_inj_of_path` FIRE on it. -/
-def refScheme8 : Cap8Scheme := ⟨refChipAbsorb8, refChip8CR⟩
+/-- The reference 8-felt scheme (no CR field to supply any more). -/
+def refScheme8 : Cap8Scheme := ⟨refChipAbsorb8⟩
 
-/-- A COLLIDING 8-output absorb (constant zero vector) FALSIFIES `Compress8CR` — the carrier is not
+/-- **THE CANARY, CONCRETE: at this chip NO extracted pair is a collision.** So
+`capOpen8_binds_leaf_or_collides` cannot discharge itself on the right — the binding half does the work,
+and the disjunction carries strictly more than `True`. -/
+theorem refScheme8_capOpenColl_refutable (nl₁ nl₂ : CapLeaf)
+    (path : List (CapMerkleGeneric.StepG Digest8)) :
+    ¬ Cap8Scheme.CapOpenColl refScheme8 nl₁ nl₂ path :=
+  Cap8Scheme.capOpenColl_refutable_of_injective refScheme8 refChip8CR nl₁ nl₂ path
+
+/-- **AND THE OLD CONCLUSION IS RECOVERED THERE.** At the injective reference chip the deleted
+`capLeafDigest8_injective ∘ recomposeUp8_inj_of_path` peel falls straight out of the new disjunction. -/
+theorem refScheme8_capOpen_binds (path : List (CapMerkleGeneric.StepG Digest8)) {nl₁ nl₂ : CapLeaf}
+    (h : Cap8Scheme.recomposeUp8 refScheme8 (Cap8Scheme.capLeafDigest8 refScheme8 nl₁) path
+       = Cap8Scheme.recomposeUp8 refScheme8 (Cap8Scheme.capLeafDigest8 refScheme8 nl₂) path) :
+    nl₁ = nl₂ :=
+  Cap8Scheme.capOpen8_binds_leaf_of_injective refScheme8 refChip8CR path h
+
+/-- A COLLIDING 8-output absorb (constant zero vector) FALSIFIES `Compress8CR` — the predicate is not
 `True`: a real collision (`[0] ≠ [1]`, same image) is exhibited. -/
 def badChipAbsorb8 (_ : List ℤ) : Digest8 := fun _ => 0
 
@@ -860,6 +1150,13 @@ theorem badChip8_not_CR : ¬ Compress8CR badChipAbsorb8 := by
   intro hCR
   have : ([0] : List ℤ) = [1] := hCR [0] [1] rfl
   simp at this
+
+/-- The colliding chip is a `Cap8Scheme` too — and at it the `Coll8` disjunct is genuinely INHABITED,
+so the two branches of every `…_or_collides` theorem are both reachable across schemes. -/
+def badScheme8 : Cap8Scheme := ⟨badChipAbsorb8⟩
+
+theorem badScheme8_has_coll8 : Coll8 badScheme8.chipAbsorb8 ([0], [1]) :=
+  ⟨by simp, rfl⟩
 
 end Reference8
 
@@ -943,9 +1240,22 @@ theorem empty_caps_unauthorized :
 #assert_axioms CapHashScheme.recomposeUp_inj_of_path
 -- Native-8-felt (Phase H-CAP-8): the node8 obligation + the re-instantiated recompose spine.
 #assert_axioms Cap8Scheme.pack8_inj
-#assert_axioms Cap8Scheme.capLeafDigest8_injective
-#assert_axioms Cap8Scheme.nodeOf8_injective
-#assert_axioms Cap8Scheme.recomposeUp8_inj_of_path
+#assert_axioms Cap8Scheme.capLeafDigest8_binds_or_collides
+#assert_axioms Cap8Scheme.nodeOf8_binds_or_collides
+#assert_axioms Cap8Scheme.recomposeUp8_binds_or_collides
+#assert_axioms Cap8Scheme.capOpen8_binds_leaf_or_collides
+#assert_axioms Cap8Scheme.coll8_refutable_of_injective
+#assert_axioms Cap8Scheme.capOpenColl_refutable_of_injective
+#assert_axioms Cap8Scheme.capLeafDigest8_injective_of_injective
+#assert_axioms Cap8Scheme.nodeOf8_injective_of_injective
+#assert_axioms Cap8Scheme.recomposeUp8_inj_of_path_of_injective
+#assert_axioms Cap8Scheme.capOpen8_binds_leaf_of_injective
+#assert_axioms deployedShapedChip8_bounded
+#assert_axioms deployedCap8Scheme_chip
+#assert_axioms deployed_capOpen8_binds_leaf_or_collides
+#assert_axioms Reference8.refScheme8_capOpenColl_refutable
+#assert_axioms Reference8.refScheme8_capOpen_binds
+#assert_axioms Reference8.badScheme8_has_coll8
 #assert_axioms Cap8Scheme.deployedCapOpen8_implies_authorizedB
 #assert_axioms Cap8Scheme.deployedCapOpen8_implies_authorizedEffB
 #assert_axioms Cap8Scheme.deployedFaithfulEff_canonical8
