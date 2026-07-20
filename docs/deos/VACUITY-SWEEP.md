@@ -287,6 +287,41 @@ Nothing that was genuinely proved was given up. The teeth were RETAINED and rest
 `Function.Injective` directly (`compress4_not_injective_babyBear`, `widePerm_not_injective_babyBear`) — the
 record must outlive the carrier it refuted.
 
+**⚑ THERE IS NO FREE DELETION LEFT.** A census of the remaining 15 censused carriers (`Compress1CR`,
+`RootCR`, `LeafCR`, `PairCR`, `LenBindCR`, `KeySetCR`, `RosterCR`, `CommitTreeInjective`,
+`CompressInjective`, `FloorDigestBinds`, `Blake3NoCollision`, `BindingHashCR`, `HonestSlotCR`,
+`CompressionCR`, `HashInjective`) found **every one USED**, 4–13 live sites each — none is an orphan that
+can simply be dropped. Thirteen already have a paired `*Regrounded` / `*FloorReduce` module, and those
+modules' own refutation teeth (`¬ KeySetCR hash`, …) *consume the carrier in order to refute it*, so a
+naive deletion would delete the evidence that the carrier is false. That objection is answered by the
+method used above and is not a blocker: restate the tooth about `Function.Injective h` directly, and the
+refutation outlives the carrier. But it means each remaining carrier costs a full delete-teeth-consumers
+pass, not a line removal.
+
+**⚑ PRIORITY ORDER FOR THE REMAINDER: the non-inhabitable STRUCTURE FIELDS first.** A carrier that is a
+`Prop` hypothesis makes the theorems above it vacuous; a carrier that is a *structure field* makes the
+structure itself uninhabitable at deployed parameters, so every theorem quantifying over a value of that
+type is vacuous — a strictly larger blast radius, and invisible at each individual use site. The known
+members of that class:
+
+| structure | field | file |
+|---|---|---|
+| `Cap8Scheme` | `chip8CR : Compress8CR` | `Circuit/DeployedCapTree.lean` |
+| `CapHashScheme` | `chipCR : Compress1CR` | `Circuit/DeployedCapTree.lean` |
+| `Compress2` | `compress1CR : Compress1CR` | `Crypto/CommitmentBinding.lean` |
+| `LeafRealization` / `LogRealization` | carry `Poseidon2SpongeCR` | `Circuit/Poseidon2Binding.lean` |
+| `Heap8Scheme` / `Fields8Scheme` | own `chip8CR` twins | `DeployedHeapTree` / `DeployedFieldsTree` |
+
+`FactoryBindingFloorRegrounded` already proves `Compress2` uninhabitable at deployed parameters, and
+`StateCommitFloorRegrounded` proves the same of `LeafRealization`/`LogRealization`. The proofs exist; the
+deletions do not.
+
+**⚑ ONE CATEGORY CAVEAT — do not sweep `BindingHashCR` in with the rest.** It is `Tag → Bytes` with BOTH
+sides potentially finite, so pigeonhole does NOT apply; `FactoryBindingFloorRegrounded` records this as a
+deliberate non-verdict and its teeth are explicitly conditional (`card Bytes < card Tag`, or
+`Infinite Tag`). Treating it as pigeonhole-false would be a category error — the kind this document
+exists to catch.
+
 **REMAINDER (named, not applied).** `Compress8CR` is the priority and is NOT yet deleted: it sits inside the
 `Cap8Scheme` structure as `chip8CR`, so it is not merely a hypothesis but a **non-inhabitable field** — a
 real deployed `Cap8Scheme` VALUE cannot exist, which makes *every* theorem quantifying over `S8 : Cap8Scheme`
