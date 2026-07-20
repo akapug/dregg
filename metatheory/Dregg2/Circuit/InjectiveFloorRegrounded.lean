@@ -46,7 +46,7 @@ which this tree cannot give content to (`FloorGames` §8: no cost model). So thi
     the open at every use site — the honest name for "the reduction is efficient";
   * BOTH poles are proved for each floor: `Eff := ⊤` is FALSE at deployed BabyBear parameters (routed
     through the sweep's OWN teeth — `VacuitySweepTeeth.poseidon2WideCR_false_babyBear`,
-    `compress8CR_false_babyBear`, and §4's new `compress4Injective_false_babyBear`), `Eff := ⊥` is
+    `compress8CR_false_babyBear`, and §2.1's `compress4_not_injective_babyBear`), `Eff := ⊥` is
     vacuous (`hard_bot_vacuous`). A reader can price any instantiation exactly.
 
 ## What is re-grounded, per carrier
@@ -55,10 +55,14 @@ which this tree cannot give content to (`FloorGames` §8: no cost model). So thi
     obligations the whole native-8-felt cap/heap/fields tree rides). Break game: two DISTINCT 8-felt
     child pairs with an equal `node8` image. Extractor `node8BreakToFinder`: hand back
     `(pack8 l₁ r₁, pack8 l₂ r₂)` — a genuine chip collision by `pack8_inj`'s contrapositive.
-  * **§3 `compress4Injective`** — `effectVmCommit_binds_all` / `_binds_record_digest` / `_binds_cap_root`
-    (the audit-P0-2 anti-ghost teeth). Break game: two DISTINCT 13-limb claims with an equal deployed
-    commitment. Extractor `commit4Find`: the TREE TRACE — root quad, else head quad, else the two body
-    quads — the `effectVmCommit_collision_of_ne` case analysis written as a FUNCTION.
+  * **§2 `compress4Injective` (the carrier is now DELETED)** — it used to condition
+    `effectVmCommit_binds_all` / `_binds_record_digest` / `_binds_cap_root` (the audit-P0-2 anti-ghost
+    teeth). Break game: two DISTINCT 13-limb claims with an equal deployed commitment. Extractor
+    `commit4Find`: the TREE TRACE — root quad, else head quad, else the two body quads — the
+    `effectVmCommit_collision_of_ne` case analysis written as a FUNCTION. The algebraic consumers were
+    REPLACED in place by the unconditional
+    `CommitDifferential.effectVmCommit_binds_record_digest_or_collides` / `_binds_cap_root_or_collides`
+    (bind, or EXHIBIT the collision — no floor at all); this section prices the residual.
   * **§5 `Poseidon2WideCR`** — `chainFrom8_inj` / `wireCommitR8_binds` (the faithful ~124-bit
     commitment the light client trusts). Break game: two DISTINCT `(limbs, iroot)` claims of equal limb
     length with an equal `wireCommitR8`. Extractor `wireCommit8Find`: the CHAIN WALK
@@ -98,7 +102,7 @@ open Dregg2.Crypto.FloorGames
    collisionResistant_iff_hashCRHardQuant_top collisionResistant_false_of_compressing)
 open Dregg2.Circuit.DeployedCapTree (Digest8 Compress8CR CapLeaf leafFields leafFields_inj)
 open Dregg2.Circuit.DeployedCapTree.Cap8Scheme (pack8 pack8_inj)
-open Dregg2.Circuit.CommitDifferential (compress4Injective effectVmCommit)
+open Dregg2.Circuit.CommitDifferential (effectVmCommit h4q)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationR
   (Poseidon2WideCR Poseidon2Width8 chainFrom8 chainFrom8_len chainFrom8_snoc wireCommitR8 chunk31
    chunk31_length chunk31_flatten)
@@ -368,21 +372,25 @@ theorem chip8_floor_bot_vacuous (D : Chip8Keyed) :
     HashCRHardQuant (chip8Family D) (fun _ => False) :=
   hashCRHardQuant_bot_vacuous _
 
-/-! ## §2 — carrier 3 (`compress4Injective`): the deployed `hash_4_to_1` cell-commitment tree.
+/-! ## §2 — carrier 3 (`compress4Injective`, DELETED): the deployed `hash_4_to_1` commitment tree.
 
-`compress4Injective h4 := ∀ a b c d a' b' c' d', h4 a b c d = h4 a' b' c' d' → a = a' ∧ …`
-(`CommitDifferential:82`) is injectivity of the 4-to-1 compress on the INFINITE `ℤ⁴`. Its docstring
-calls it "REALIZABLE — the `hash_4_to_1` the circuit verifies". §2.1 proves it FALSE at the deployed
-BabyBear parameters, by the same counting core that killed the flagged four. -/
+The carrier was `compress4Injective h4 := ∀ a b c d a' b' c' d', h4 a b c d = h4 a' b' c' d' → a = a' ∧ …`
+— injectivity of the 4-to-1 compress on the INFINITE `ℤ⁴`, doc-marked "REALIZABLE — the `hash_4_to_1`
+the circuit verifies". §2.1 proves that FALSE at the deployed BabyBear parameters, by the same counting
+core that killed the flagged four, so the carrier has been REMOVED from `CommitDifferential` and its
+consumers restated unconditionally. This section supplies the probabilistic residual. -/
 
-/-- The uncurried 4-to-1 compress — the shape the collision game's input domain needs. -/
-def h4q (h4 : ℤ → ℤ → ℤ → ℤ → ℤ) (q : ℤ × ℤ × ℤ × ℤ) : ℤ := h4 q.1 q.2.1 q.2.2.1 q.2.2.2
-
-/-! ### §2.1 — the FALSIFIABILITY TOOTH: `compress4Injective` is FALSE at deployed params.
+/-! ### §2.1 — the FALSIFIABILITY TOOTH: 4-to-1 injectivity is FALSE at deployed params.
 
 `VacuitySweepTeeth` proved the two representatives (`Poseidon2WideCR`, `Compress8CR`) false and left
-the rest of the class "known by class argument, only two proved here". This is the third, and it is
-mechanical exactly as the sweep predicted: the counting core plus this carrier's own bounded range. -/
+the rest of the class "known by class argument, only two proved here". This was the third, and it is
+mechanical exactly as the sweep predicted: the counting core plus the carrier's own bounded range.
+
+⚑ The named carrier `CommitDifferential.compress4Injective` these teeth used to refute has since been
+DELETED (its consumers now carry no floor — `effectVmCommit_binds_record_digest_or_collides` and
+`_binds_cap_root_or_collides` are unconditional and EXHIBIT the collision). The teeth are RETAINED,
+restated about the underlying map `h4q h4` itself, because they are the reason the deletion was
+correct: the record must outlive the carrier. -/
 
 /-- `ℤ × ℤ × ℤ × ℤ` is infinite (the first coordinate already is) — the counting core's domain premise.
 `local`, deliberately: this file is imported by the `Dregg2` root, and a GLOBAL `Infinite` instance
@@ -390,28 +398,26 @@ would perturb instance resolution tree-wide for a fact needed only in §2.1. -/
 local instance : Infinite (ℤ × ℤ × ℤ × ℤ) :=
   Infinite.of_injective (fun n : ℤ => (n, 0, 0, 0)) (fun a b h => by simpa using h)
 
-/-- **TOOTH — `compress4Injective` is FALSE for a range-bounded 4-to-1 compress.** Literally
-`not_injective_of_finite_range` on the uncurried map: the floor IS injectivity on the infinite `ℤ⁴`.
-The exact shape of `HashFloorHonesty.compressInjective_false_of_finite_range`, one arity up. -/
-theorem compress4Injective_false_of_finite_range (h4 : ℤ → ℤ → ℤ → ℤ → ℤ)
-    (hfin : (Set.range (h4q h4)).Finite) : ¬ compress4Injective h4 := by
-  intro hci
-  refine not_injective_of_finite_range (h4q h4) hfin ?_
-  rintro ⟨a, b, c, d⟩ ⟨a', b', c', d'⟩ heq
-  obtain ⟨h1, h2, h3, h4'⟩ := hci a b c d a' b' c' d' heq
-  simp [h1, h2, h3, h4']
+/-- **TOOTH — 4-to-1 injectivity is FALSE for a range-bounded compress.** Literally
+`not_injective_of_finite_range` on the uncurried map: the deleted floor WAS injectivity on the
+infinite `ℤ⁴`. The exact shape of `HashFloorHonesty.compressInjective_false_of_finite_range`, one
+arity up. -/
+theorem compress4_not_injective_of_finite_range (h4 : ℤ → ℤ → ℤ → ℤ → ℤ)
+    (hfin : (Set.range (h4q h4)).Finite) : ¬ Function.Injective (h4q h4) :=
+  not_injective_of_finite_range (h4q h4) hfin
 
-/-- **⚑ TOOTH (deployed form) — `compress4Injective` is FALSE at the REAL BabyBear parameters.** A
+/-- **⚑ TOOTH (deployed form) — 4-to-1 injectivity is FALSE at the REAL BabyBear parameters.** A
 `hash_4_to_1` whose output is a genuine BabyBear field element (`0 ≤ · < p`, `p = 2³¹ − 2²⁷ + 1`) — i.e.
-the deployed Poseidon2 `hash_4_to_1`, KAT-locked to Plonky3 — REFUTES the floor its own docstring calls
-"REALIZABLE". Four field elements do not fit in one without collision.
+the deployed Poseidon2 `hash_4_to_1`, KAT-locked to Plonky3 — REFUTES the floor whose docstring once
+called it "REALIZABLE". Four field elements do not fit in one without collision.
 
-So `CommitDifferential.effectVmCommit_binds_all` / `_binds_record_digest` / `_binds_cap_root` — the
-audit-P0-2 anti-ghost teeth — are VACUOUSLY TRUE at deployed parameters. §2.2–§2.5 re-ground them. -/
-theorem compress4Injective_false_babyBear (h4 : ℤ → ℤ → ℤ → ℤ → ℤ)
+This is why `CommitDifferential.compress4Injective` was DELETED rather than kept "for the record":
+every theorem that carried it — the audit-P0-2 anti-ghost teeth — was VACUOUSLY TRUE at deployed
+parameters. Their unconditional replacements carry no floor; §2.2–§2.5 price the residual. -/
+theorem compress4_not_injective_babyBear (h4 : ℤ → ℤ → ℤ → ℤ → ℤ)
     (hb : ∀ a b c d, 0 ≤ h4 a b c d ∧ h4 a b c d < babyBearP) :
-    ¬ compress4Injective h4 := by
-  refine compress4Injective_false_of_finite_range h4 ?_
+    ¬ Function.Injective (h4q h4) := by
+  refine compress4_not_injective_of_finite_range h4 ?_
   refine (Set.finite_Ico (0 : ℤ) babyBearP).subset ?_
   rintro _ ⟨⟨a, b, c, d⟩, rfl⟩
   exact ⟨(hb a b c d).1, (hb a b c d).2⟩
@@ -613,7 +619,7 @@ theorem effectVmCommit_binds_all_advantage_bound (D : H4Keyed)
 /-- **(CANARY — the keystone does NOT follow from the floor applied at ANOTHER finder.)** The `h4`
 collision floor at some OTHER finder `B` cannot close the equivocator's negligibility: only
 `commit4_adv_le` connects the EXTRACTED finder to the break game. Unwritable under the old free
-`compress4Injective` hypothesis. -/
+`compress4Injective` hypothesis (now deleted). -/
 example (D : H4Keyed) (Eff : Adversary (hashGame (h4Family D)) → Prop)
     (A : Adversary (commit4BreakGame D))
     (B : Adversary (hashGame (h4Family D))) (hB : Eff B)
@@ -640,12 +646,8 @@ theorem h4_floor_top_false_babyBear (D : H4Keyed)
     ¬ HashCRHardQuant (h4Family D) (fun _ => True) := by
   refine hashCRHardQuant_top_false_of_compressing _ ⟨((0 : ℤ), (0 : ℤ), (0 : ℤ), (0 : ℤ))⟩
     (fun l t => ?_)
-  have hni := compress4Injective_false_babyBear (D.h4At t) (hb t)
-  refine exists_collision_of_not_injective (h := h4q (D.h4At t)) (fun hinj => hni ?_)
-  intro a b c d a' b' c' d' hh
-  have := hinj (a, b, c, d) (a', b', c', d') hh
-  simp only [Prod.mk.injEq] at this
-  exact ⟨this.1, this.2.1, this.2.2.1, this.2.2.2⟩
+  exact exists_collision_of_not_injective (h := h4q (D.h4At t))
+    (compress4_not_injective_babyBear (D.h4At t) (hb t))
 
 /-- **THE ⊥ POLE — vacuous.** -/
 theorem h4_floor_bot_vacuous (D : H4Keyed) :
@@ -963,8 +965,8 @@ theorem wide_floor_bot_vacuous (D : WideKeyed) :
   the_repaired_node8_bound_fires,
   chip8_floor_top_false_babyBear,
   chip8_floor_bot_vacuous,
-  compress4Injective_false_of_finite_range,
-  compress4Injective_false_babyBear,
+  compress4_not_injective_of_finite_range,
+  compress4_not_injective_babyBear,
   deployedH4_is_family_instance,
   Claim13.ext',
   commit4BreakGame_wins_iff,

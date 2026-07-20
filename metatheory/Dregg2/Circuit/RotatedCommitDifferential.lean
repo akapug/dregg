@@ -273,7 +273,6 @@ checked fact. -/
 theorem rotated_and_perCell_both_bind_authority_residue
     -- per-cell side
     (h4 : ℤ → ℤ → ℤ → ℤ → ℤ)
-    (hCR4 : Dregg2.Circuit.CommitDifferential.compress4Injective h4)
     (balLo balHi nonce : ℤ) (pcFields : Fin 8 → ℤ) (pcCapRoot : ℤ)
     -- rotated side
     (hash : List ℤ → ℤ) (hCRN : Poseidon2SpongeCR hash)
@@ -282,9 +281,12 @@ theorem rotated_and_perCell_both_bind_authority_residue
     (capRoot nullifierRoot commitmentsRoot heapRoot lifecycle epoch committedHeight lifecycleDisc permsDigest vkDigest mode fieldsRoot iroot : ℤ)
     -- the SHARED authority residue felt and a tampered one
     (d d' : ℤ) (hd : d ≠ d') :
-    -- per-cell commitment moves
-    Dregg2.Circuit.CommitDifferential.effectVmCommit h4 balLo balHi nonce pcFields pcCapRoot d
-      ≠ Dregg2.Circuit.CommitDifferential.effectVmCommit h4 balLo balHi nonce pcFields pcCapRoot d'
+    -- per-cell commitment moves — or the deployed `hash_4_to_1` collides at two NAMED quads
+    (Dregg2.Circuit.CommitDifferential.effectVmCommit h4 balLo balHi nonce pcFields pcCapRoot d
+       ≠ Dregg2.Circuit.CommitDifferential.effectVmCommit h4 balLo balHi nonce pcFields pcCapRoot d'
+     ∨ Dregg2.Circuit.CommitDifferential.Coll4 h4
+         (Dregg2.Circuit.CommitDifferential.rootQuad h4 balLo balHi nonce pcFields pcCapRoot d)
+         (Dregg2.Circuit.CommitDifferential.rootQuad h4 balLo balHi nonce pcFields pcCapRoot d'))
     -- AND the published rotated commitment moves
     ∧ rotatedCommit hash
         (rotatedLimbs cellsRoot r0 r1 r2 rFields r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22
@@ -292,9 +294,17 @@ theorem rotated_and_perCell_both_bind_authority_residue
       ≠ rotatedCommit hash
         (rotatedLimbs cellsRoot r0 r1 r2 rFields r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22
           d' capRoot nullifierRoot commitmentsRoot heapRoot lifecycle epoch committedHeight lifecycleDisc permsDigest vkDigest mode fieldsRoot) iroot := by
-  refine ⟨fun hpc => hd ?_, fun hrot => hd ?_⟩
-  · exact Dregg2.Circuit.CommitDifferential.effectVmCommit_binds_record_digest h4 hCR4
-      balLo balHi nonce pcFields pcCapRoot d d' hpc
+  refine ⟨?_, fun hrot => hd ?_⟩
+  · -- either the per-cell commitment already moved, or the unconditional tooth hands back the
+    -- collision the deployed `hash_4_to_1` would have to have.
+    by_cases hpc : Dregg2.Circuit.CommitDifferential.effectVmCommit h4 balLo balHi nonce pcFields
+        pcCapRoot d
+      = Dregg2.Circuit.CommitDifferential.effectVmCommit h4 balLo balHi nonce pcFields pcCapRoot d'
+    · rcases Dregg2.Circuit.CommitDifferential.effectVmCommit_binds_record_digest_or_collides
+        h4 balLo balHi nonce pcFields pcCapRoot d d' hpc with hdd | hcoll
+      · exact absurd hdd hd
+      · exact Or.inr hcoll
+    · exact Or.inl hpc
   · exact rotatedCommit_binds_authority_digest hash hCRN cellsRoot r0 r1 r2 rFields
       r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 d d' capRoot nullifierRoot commitmentsRoot
       heapRoot lifecycle epoch committedHeight lifecycleDisc permsDigest vkDigest mode fieldsRoot iroot hrot

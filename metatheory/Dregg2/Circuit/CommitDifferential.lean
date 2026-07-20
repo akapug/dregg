@@ -38,13 +38,16 @@ This module makes "the running per-cell commitment IS the proven shape" a CHECKE
     commitments agree iff the SAME limb list was absorbed (the shape MATCHES — no reorder, no dropped
     limb, no extra limb).
 
-  * `effectVmCommit_binds_record_digest` (+ the per-limb binding family) — the HISTORICAL injective
-    formulation. `compress4Injective` cannot hold for a bounded hash; the live theorem is
-    `CommitFaithfulRegrounded.effectVmCommit_collision_of_ne`, which returns an `h4` collision. The
-    deployed commitment binds the `record_digest` limb (and every other limb), so tampering the
-    authority residue — a permission flip, a VK swap, a dropped side-table root — provably MOVES the
-    commitment. This is the deployed twin of `SystemRoots.cellCommitS_binds_systemRoots`. A
-    `record_digest := 0` stub for a residue-bearing cell would collapse it (the audit P0-2 hole).
+  * `effectVmCommit_binds_record_digest_or_collides` / `_binds_cap_root_or_collides` — the
+    UNCONDITIONAL binding. The deployed commitment binds the `record_digest` limb (and the cap root),
+    so tampering the authority residue — a permission flip, a VK swap, a dropped side-table root —
+    provably MOVES the commitment UNLESS the deployed `hash_4_to_1` collides at two EXPLICITLY NAMED
+    quads, which the theorem hands back. This is the deployed twin of
+    `SystemRoots.cellCommitS_binds_systemRoots`; a `record_digest := 0` stub for a residue-bearing cell
+    would collapse it (the audit P0-2 hole). The old `compress4Injective`-conditioned forms were
+    DELETED (VACUITY-SWEEP FINDING 2): injectivity of a compressing `ℤ⁴ → ℤ` map is FALSE at deployed
+    BabyBear parameters, so those theorems were vacuous exactly where it mattered. The probabilistic
+    residual lives in `InjectiveFloorRegrounded` §2.
 
   * `effectVmCommit_residueFree_noop` — the NO-OP cutover: a residue-free cell (`record_digest = 0`,
     Rust `empty_record_digest()`) commits exactly as the legacy `record_digest`-at-ZERO form — the
@@ -53,8 +56,8 @@ This module makes "the running per-cell commitment IS the proven shape" a CHECKE
   * the VACUITY GUARD: concrete computable `#guard`s over an injective toy `h4` — the residue limb
     is load-bearing (a residue-bearing cell DIFFERS from its residue-free twin) AND the no-op holds.
 
-Pure, computable, `#guard`-able (no `native_decide`). `compress4Injective` below is retained only as
-the algebraic historical form; it is not a realizable Poseidon floor. The Rust-side empirical twin is
+Pure, computable, `#guard`-able (no `native_decide`). No injectivity floor is carried anywhere in this
+file — `Coll4` names collisions at SPECIFIC quads, never `∃`. The Rust-side empirical twin is
 `circuit/tests/effect_vm_commit_lean_differential.rs` (same limb order, same record_digest position,
 same no-op).
 -/
@@ -75,31 +78,16 @@ section Surface
 -- `h4 a b c d` — the abstract Poseidon 4-to-1 compress (Rust `poseidon2::hash_4_to_1`).
 variable (h4 : ℤ → ℤ → ℤ → ℤ → ℤ)
 
-/-- ⚠ **BROKEN AS A FLOOR — NOT "REALIZABLE": FALSE AT DEPLOYED PARAMETERS. See the teeth.**
+/-- **`h4q h4 q`** — the 4-to-1 compress, UNCURRIED onto a quad. The shape a collision game (and the
+counting core) needs: one function, one infinite domain (`ℤ⁴`), one bounded codomain. -/
+def h4q (q : ℤ × ℤ × ℤ × ℤ) : ℤ := h4 q.1 q.2.1 q.2.2.1 q.2.2.2
 
-`compress4Injective h4` — the 4-to-1 hash `h4` is injective:
-`h4 a b c d = h4 a' b' c' d' ⇒ (a,b,c,d) = (a',b',c',d')`. Same shape as `StateCommit.compressInjective`,
-one arity up — and it inherits that sibling's fate.
-`InjectiveFloorRegrounded.compress4Injective_false_babyBear` proves it FALSE for the DEPLOYED
-`hash_4_to_1` (KAT-locked to Plonky3's BabyBear Poseidon2): four field elements do not fit in one
-without collision, so the map from the infinite `ℤ⁴` into a bounded field has collisions by pigeonhole.
-This carrier's docstring formerly claimed "REALIZABLE — the `hash_4_to_1` the circuit verifies"; the
-circuit's `hash_4_to_1` is precisely what refutes it.
-
-So `effectVmCommit_binds_all` / `_binds_record_digest` / `_binds_cap_root` — the audit-P0-2 anti-ghost
-teeth below — are **VACUOUSLY TRUE at real parameters**; §3's header already says the premise "is false
-for any bounded real hash", and these are the teeth that prove it.
-
-**RE-GROUNDED:** `Circuit.InjectiveFloorRegrounded` §2 —
-`effectVmCommit_binds_all_advantage_bound` derives the same full-limb binding from a REAL collision game
-on the deployed compress (`FloorGames.HashCRHardQuant (h4Family D) Eff`) via the tree-trace extractor
-`commit4Find`, with the `Eff` obligation in the open. (Contrast
-`CommitFaithfulRegrounded.effectVmCommit_collision_of_ne`, which lands in `Compress4Collision h4 := ∃ …`
-— an EXISTENCE prop, unconditionally TRUE at deployed params, so it is not an object a floor can bind.)
-KEPT here, untouched, as the historical algebraic form. -/
-def compress4Injective : Prop :=
-  ∀ a b c d a' b' c' d' : ℤ,
-    h4 a b c d = h4 a' b' c' d' → a = a' ∧ b = b' ∧ c = c' ∧ d = d'
+/-- **`Coll4 h4 p q`** — the pair `(p, q)` is a GENUINE collision of the deployed 4-to-1 compress:
+two DISTINCT quads with the SAME image. Note what this is NOT: it is not `∃ p q, …` (an existence prop
+that pigeonhole makes unconditionally TRUE at deployed parameters, hence content-free — see
+`InjectiveFloorRegrounded` §0). It is a predicate about the SPECIFIC quads an extractor RETURNS, so a
+theorem concluding it EXHIBITS the collision rather than asserting one exists. -/
+def Coll4 (p q : ℤ × ℤ × ℤ × ℤ) : Prop := p ≠ q ∧ h4q h4 p = h4q h4 q
 
 /-- **`effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest`** — the FAITHFUL Lean model
 of the deployed `CellState::compute_commitment`: the SAME `hash_4_to_1` tree over the SAME ordered
@@ -153,57 +141,77 @@ theorem effectVmCommit_absorbs_limbs (balLo balHi nonce : ℤ) (fields : Fin 8 �
     effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest
       = effectVmFoldLimbs h4 (effectVmLimbs balLo balHi nonce fields capRoot recordDigest) := rfl
 
-/-! ## §3 — HISTORICAL injective form (retained; not the deployed crypto floor).
+/-! ## §3 — the UNCONDITIONAL binding: bind, or EXHIBIT the collision.
 
-This implication is algebraically valid, but its `compress4Injective h4` premise is false for any
-bounded real hash. Consumers must use `CommitFaithfulRegrounded`'s bind-or-collision reduction. -/
+⚑ These replace the deleted `compress4Injective`-conditioned forms (the VACUITY-SWEEP FINDING-2
+carrier: injectivity of a compressing `ℤ⁴ → ℤ` map, FALSE at deployed BabyBear parameters by
+pigeonhole, so every theorem above it was VACUOUSLY TRUE at real parameters).
 
-/-- **`effectVmCommit_binds_all` — full-limb binding.** Equal deployed commitments force EVERY limb
-equal: the three intermediates + `record_digest` (root injectivity), then each intermediate's four
-inputs (the three sub-`h4`s). Off `compress4Injective` alone. -/
-theorem effectVmCommit_binds_all (hCR : compress4Injective h4)
-    (balLo balHi nonce : ℤ) (fields : Fin 8 → ℤ) (capRoot recordDigest : ℤ)
-    (balLo' balHi' nonce' : ℤ) (fields' : Fin 8 → ℤ) (capRoot' recordDigest' : ℤ)
-    (h : effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest
-       = effectVmCommit h4 balLo' balHi' nonce' fields' capRoot' recordDigest') :
-    balLo = balLo' ∧ balHi = balHi' ∧ nonce = nonce'
-      ∧ fields 0 = fields' 0 ∧ fields 1 = fields' 1 ∧ fields 2 = fields' 2 ∧ fields 3 = fields' 3
-      ∧ fields 4 = fields' 4 ∧ fields 5 = fields' 5 ∧ fields 6 = fields' 6 ∧ fields 7 = fields' 7
-      ∧ capRoot = capRoot' ∧ recordDigest = recordDigest' := by
-  unfold effectVmCommit at h
-  -- root: the three intermediates + record_digest.
-  obtain ⟨hi1, hi2, hi3, hrd⟩ := hCR _ _ _ _ _ _ _ _ h
-  -- inter1: balLo balHi nonce fields[0].
-  obtain ⟨hbl, hbh, hn, hf0⟩ := hCR _ _ _ _ _ _ _ _ hi1
-  -- inter2: fields[1..5].
-  obtain ⟨hf1, hf2, hf3, hf4⟩ := hCR _ _ _ _ _ _ _ _ hi2
-  -- inter3: fields[5..8] + capRoot.
-  obtain ⟨hf5, hf6, hf7, hcr⟩ := hCR _ _ _ _ _ _ _ _ hi3
-  exact ⟨hbl, hbh, hn, hf0, hf1, hf2, hf3, hf4, hf5, hf6, hf7, hcr, hrd⟩
+The honest form assumes NOTHING. Equal commitments EITHER force the limbs equal OR hand back the two
+DISTINCT quads at which the deployed `hash_4_to_1` actually collides — named explicitly, computed from
+the inputs. That is a TRUE theorem at deployed parameters, where the old one was empty.
 
-/-- **`effectVmCommit_binds_record_digest` — THE audit-P0-2 anti-ghost tooth.** Equal deployed
-commitments (same carried limbs) force EQUAL `record_digest`: the authority residue is bound. So two
-cells differing ONLY in their authority residue value (permissions / VK / delegate / …, which live in
-`record_digest`) commit DIFFERENTLY — the exact gap the old `…, ZERO` fourth input left open. The
-deployed twin of `SystemRoots.cellCommitS_binds_systemRoots` / `RecordCommit.cellCommit_binds_fieldsRoot`. -/
-theorem effectVmCommit_binds_record_digest (hCR : compress4Injective h4)
+⚑ **STRENGTH, stated honestly.** The old conclusion was a bare equality; this one is a disjunction, so
+as a *formula* it is weaker. As *content at deployed parameters* it is strictly stronger: the old
+premise is unsatisfiable by the real `hash_4_to_1`, so the old theorem said nothing about the deployed
+system, while this one holds OF the deployed system. The residual crypto is priced where it belongs —
+`InjectiveFloorRegrounded` §2 bounds the probability that an adversary in a named class `Eff` produces
+the collision disjunct (`effectVmCommit_binds_all_advantage_bound`, via the tree-trace extractor
+`commit4Find`), with the `Eff` obligation in the open. -/
+
+/-- The root quad of the deployed commitment tree: the three intermediates and the authority residue.
+`h4q h4 (rootQuad …) = effectVmCommit …` by `rfl` — this IS the outermost `hash_4_to_1` call. -/
+def rootQuad (balLo balHi nonce : ℤ) (fields : Fin 8 → ℤ) (capRoot recordDigest : ℤ) :
+    ℤ × ℤ × ℤ × ℤ :=
+  (h4 balLo balHi nonce (fields 0), h4 (fields 1) (fields 2) (fields 3) (fields 4),
+   h4 (fields 5) (fields 6) (fields 7) capRoot, recordDigest)
+
+/-- The root quad IS the commitment's outermost absorption (definitional). -/
+theorem h4q_rootQuad (balLo balHi nonce : ℤ) (fields : Fin 8 → ℤ) (capRoot recordDigest : ℤ) :
+    h4q h4 (rootQuad h4 balLo balHi nonce fields capRoot recordDigest)
+      = effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest := rfl
+
+/-- **`effectVmCommit_binds_record_digest_or_collides` — THE audit-P0-2 anti-ghost tooth, UNCONDITIONAL.**
+Equal deployed commitments over otherwise-identical limbs EITHER force an equal `record_digest`, OR the
+two root quads (which differ in exactly that one coordinate) ARE a genuine `hash_4_to_1` collision. So
+two cells differing ONLY in their authority residue (permissions / VK / delegate / …) commit
+differently UNLESS the deployed hash collides at these two named quads — the exact gap the old
+`…, ZERO` fourth input left open, now stated without a false premise. -/
+theorem effectVmCommit_binds_record_digest_or_collides
     (balLo balHi nonce : ℤ) (fields : Fin 8 → ℤ) (capRoot recordDigest recordDigest' : ℤ)
     (h : effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest
        = effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest') :
-    recordDigest = recordDigest' := by
-  unfold effectVmCommit at h
-  exact (hCR _ _ _ _ _ _ _ _ h).2.2.2
+    recordDigest = recordDigest'
+      ∨ Coll4 h4 (rootQuad h4 balLo balHi nonce fields capRoot recordDigest)
+          (rootQuad h4 balLo balHi nonce fields capRoot recordDigest') := by
+  by_cases hrd : recordDigest = recordDigest'
+  · exact Or.inl hrd
+  · refine Or.inr ⟨fun hq => hrd ?_, h⟩
+    exact congrArg (fun q : ℤ × ℤ × ℤ × ℤ => q.2.2.2) hq
 
-/-- **`effectVmCommit_binds_cap_root` (corollary).** Equal commitments force equal `cap_root` — the
-deployed twin of cap-Phase-A's "the openable c-list root is bound" (`cap_root_cell_circuit_differential`). -/
-theorem effectVmCommit_binds_cap_root (hCR : compress4Injective h4)
+/-- **`effectVmCommit_binds_cap_root_or_collides` (corollary), UNCONDITIONAL.** Equal commitments over
+otherwise-identical limbs EITHER force an equal `cap_root`, OR exhibit a genuine `hash_4_to_1`
+collision — at the third intermediate if that absorption already collided, otherwise at the root. The
+deployed twin of cap-Phase-A's "the openable c-list root is bound". -/
+theorem effectVmCommit_binds_cap_root_or_collides
     (balLo balHi nonce : ℤ) (fields : Fin 8 → ℤ) (capRoot capRoot' recordDigest : ℤ)
     (h : effectVmCommit h4 balLo balHi nonce fields capRoot recordDigest
        = effectVmCommit h4 balLo balHi nonce fields capRoot' recordDigest) :
-    capRoot = capRoot' := by
-  have := effectVmCommit_binds_all h4 hCR balLo balHi nonce fields capRoot recordDigest
-    balLo balHi nonce fields capRoot' recordDigest h
-  exact this.2.2.2.2.2.2.2.2.2.2.2.1
+    capRoot = capRoot'
+      ∨ Coll4 h4 ((fields 5), (fields 6), (fields 7), capRoot)
+          ((fields 5), (fields 6), (fields 7), capRoot')
+      ∨ Coll4 h4 (rootQuad h4 balLo balHi nonce fields capRoot recordDigest)
+          (rootQuad h4 balLo balHi nonce fields capRoot' recordDigest) := by
+  by_cases hcr : capRoot = capRoot'
+  · exact Or.inl hcr
+  by_cases hi3 : h4 (fields 5) (fields 6) (fields 7) capRoot
+      = h4 (fields 5) (fields 6) (fields 7) capRoot'
+  · -- the third intermediate already collided: THAT is the collision.
+    refine Or.inr (Or.inl ⟨fun hq => hcr ?_, hi3⟩)
+    exact congrArg (fun q : ℤ × ℤ × ℤ × ℤ => q.2.2.2) hq
+  · -- the intermediates differ, so the two root quads differ while their images agree.
+    refine Or.inr (Or.inr ⟨fun hq => hi3 ?_, h⟩)
+    exact congrArg (fun q : ℤ × ℤ × ℤ × ℤ => q.2.2.1) hq
 
 /-! ## §4 — THE NO-OP CUTOVER (residue-free cell = legacy ZERO form).
 
@@ -263,9 +271,9 @@ private def realDigestC : ℤ := 42  -- a residue-bearing cell (real authority d
 
 #assert_axioms effectVmCommit_absorbs_limbs
 #assert_axioms record_digest_at_index_12
-#assert_axioms effectVmCommit_binds_all
-#assert_axioms effectVmCommit_binds_record_digest
-#assert_axioms effectVmCommit_binds_cap_root
+#assert_axioms effectVmCommit_binds_record_digest_or_collides
+#assert_axioms effectVmCommit_binds_cap_root_or_collides
+#assert_axioms h4q_rootQuad
 #assert_axioms effectVmCommit_residueFree_noop
 
 end Dregg2.Circuit.CommitDifferential
