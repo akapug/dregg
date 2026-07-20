@@ -255,9 +255,50 @@ honesty/re-grounding file — **none re-grounded**:
 vacuously true at real parameters and `#assert_axioms` is blind to it (axiom-clean ≠ hypothesis-free). The
 honest replacement already exists (`HashFloorHonesty.CollisionResistant`) and is unused by any of them.
 
-**REPAIR (named, not applied):** extend the `FloorRegroundedConsumers` / `Poseidon2KeyedBridge` treatment to
-the ~20 unflagged carriers. `Compress8CR` is the priority — it sits inside a structure, so it is not merely a
-hypothesis on a theorem but a **non-inhabitable field**.
+**REPAIR — APPLIED IN TWO STAGES, and the second stage is the one that mattered.**
+
+*Stage 1 (2026-07-17, `InjectiveFloorRegrounded`).* The three highest-value carriers — `Poseidon2WideCR`,
+`Compress8CR`, `compress4Injective` — were re-grounded onto real collision GAMES with an explicit `Eff`.
+But the file states plainly: *"The OLD injective-floor consumers are KEPT UNTOUCHED — this file only ADDS
+siblings."* So the regrounding was **additive**, and every consumer still rode the false hypothesis. A
+regrounding that leaves the vacuous form in place has not removed the vacuity; it has only put a sound
+theorem next to it. That is the failure mode this whole document is about, one level up again.
+
+*Stage 2 (2026-07-20) — the carriers are DELETED, not re-grounded-beside.* Two of the three are gone:
+
+| carrier | what replaced it | scope |
+|---|---|---|
+| `compress4Injective` | `CommitDifferential.effectVmCommit_binds_record_digest_or_collides` / `_binds_cap_root_or_collides` + `Coll4` — UNCONDITIONAL: bind, or EXHIBIT the collision at two NAMED quads | 3 files |
+| `Poseidon2WideCR` | `EffectVmEmitRotationR.wireCommitR8_binds_or_collides` + `WireColl`, riding the extractors (`chainCollFind`, `wireCommit8Find`) MOVED DOWN from the regrounding file; 9 downstream keystones rewired | 5 files, 11 binder sites |
+
+Also deleted as regrounded-and-unused: `effectVmCommit_binds_all`, `chainFrom8_inj`, `wireCommitR8_binds`.
+
+**The shape of the honest replacement.** Not the game (a game bounds a probability; it cannot substitute for
+an equality inside a `⟺` proof) and not `∃ collision` (unconditionally true at deployed parameters by
+pigeonhole — §"the extractors are constructive functions"). It is **extraction as data**: a total function
+that, from the equivocation, RETURNS the specific pair at which the deployed hash collides, plus a theorem
+that the returned pair is a genuine collision. `root_distinct_extracts_collision` and `findCollisionZ` were
+already the tree's own best practice; this generalises them to the two deleted carriers.
+
+**Strength, stated honestly.** Every rewired conclusion became a disjunction, so as a *formula* it is weaker.
+As *content at deployed parameters* it is strictly stronger: the deleted premises are unsatisfiable by the
+real Poseidon2, so the old theorems said nothing about the deployed system, while the new ones hold OF it.
+Nothing that was genuinely proved was given up. The teeth were RETAINED and restated about
+`Function.Injective` directly (`compress4_not_injective_babyBear`, `widePerm_not_injective_babyBear`) — the
+record must outlive the carrier it refuted.
+
+**REMAINDER (named, not applied).** `Compress8CR` is the priority and is NOT yet deleted: it sits inside the
+`Cap8Scheme` structure as `chip8CR`, so it is not merely a hypothesis but a **non-inhabitable field** — a
+real deployed `Cap8Scheme` VALUE cannot exist, which makes *every* theorem quantifying over `S8 : Cap8Scheme`
+vacuous at deployed parameters. That is the largest single vacuity left. Deleting the field is a 3-file
+change (`DeployedCapTree`, `EffectVmCapFamilyComplete`, `EffectVmEmitRotationV3`) because
+`recomposeUp8_inj_of_path` must become an extraction; deleting the predicate is a 7-file change that also
+reaches `DeployedHeapTree` / `DeployedFieldsTree`, whose `Heap8Scheme` / `Fields8Scheme` carry their own
+identically-shaped `chip8CR` field. Deferred here only because `EffectVmEmitRotationV3` was co-tenant
+work-in-progress. Beyond it: `Poseidon2SpongeCR` (~237 files), `logHashInjective` (~335 binder uses),
+`cellLeafInjective` (~160), `compressInjective` (~55) — the same defect at a scale that needs its own
+campaign, and `Poseidon2Binding.LeafRealization` / `LogRealization` carry `Poseidon2SpongeCR` as a FIELD,
+so they are non-inhabitable in exactly the `Compress8CR` way.
 
 ---
 
