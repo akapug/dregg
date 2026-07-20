@@ -442,6 +442,34 @@ impl MlDsaKey {
         );
         self.secret.try_sign(message, ctx).ok().map(|s| s.to_vec())
     }
+
+    /// Sign with the FIPS 204 deterministic variant (`rnd = {0}^32`). This is
+    /// required when the signature bytes are themselves part of a stable object
+    /// identity (for example a turn hash), rather than merely an authorization
+    /// checked alongside that object.
+    ///
+    /// The installed Lean real-sign core is already deterministic and remains
+    /// authoritative when present. The unaudited fallback is guarded by the
+    /// same deployment policy as [`Self::try_sign`], but calls fips204's explicit
+    /// deterministic primitive instead of its OS-random hedged signer.
+    pub fn try_sign_deterministic(&self, ctx: &[u8], message: &[u8]) -> Option<Vec<u8>> {
+        if let Some(core) = LEAN_SIGN_CORE_REAL.get() {
+            let sk_bytes = self.secret.clone().into_bytes();
+            let wire = real_sign_wire(&sk_bytes, message, ctx);
+            let sig = decode_hex(core(&wire).as_deref()?)?;
+            return (sig.len() == ml_dsa_65::SIG_LEN).then_some(sig);
+        }
+
+        crate::audit::guard_unaudited_fallback(
+            "ML-DSA-65 deterministic sign",
+            "fips204 0.4",
+            "install_verified_mldsa_sign_core_real",
+        );
+        self.secret
+            .try_sign_with_seed(&[0u8; 32], message, ctx)
+            .ok()
+            .map(|signature| signature.to_vec())
+    }
 }
 
 /// The ML-DSA-65 public key of the signer holding `seed`, derived
