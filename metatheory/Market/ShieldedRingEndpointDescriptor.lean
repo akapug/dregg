@@ -23,7 +23,7 @@ open Dregg2.Circuit.DescriptorIR2
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitRotationWide
 open Dregg2.Circuit.Emit.EffectVmEmitRotationR
-  (Poseidon2WideCR Poseidon2Width8 wireCommitR8 wireCommitR8_binds)
+  (Poseidon2Width8 wireCommitR8 wireCommitR8_binds_or_collides WireColl)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 
 set_option autoImplicit false
@@ -209,17 +209,26 @@ structure RingEndpointDecode (permW : List ℤ → List ℤ)
     f.amount0 f.amount1
   receiptTransition : post.log = endpointPostLog f pre.log
 
+/-- The endpoint's 8-felt commitment binds its pre-kernel — OR exhibits a genuine collision of the
+deployed wide permutation.
+
+⚑ **NO CR FLOOR IS CARRIED.** The old form took `hCR : Poseidon2WideCR permW` — DELETED, false at
+deployed parameters, so the theorem was vacuous there. -/
 theorem ringCommit8_pre_binds_kernel (permW : List ℤ → List ℤ)
-    (hCR : Poseidon2WideCR permW) (hW : Poseidon2Width8 permW)
+    (hW : Poseidon2Width8 permW)
     (f g : RingEndpointFields) (rf rg : ℤ)
     (h : ringCommit8 permW hW f false rf = ringCommit8 permW hW g false rg) :
     ringKernelPre f.creator0 f.creator1 f.asset0 f.asset1 f.amount0 f.amount1 =
-      ringKernelPre g.creator0 g.creator1 g.asset0 g.asset1 g.amount0 g.amount1 := by
+      ringKernelPre g.creator0 g.creator1 g.asset0 g.asset1 g.amount0 g.amount1
+    ∨ WireColl permW (ringKernelPayload f false) rf (ringKernelPayload g false) rg := by
   have hw : wireCommitR8 permW (ringKernelPayload f false) rf =
       wireCommitR8 permW (ringKernelPayload g false) rg := by
     simpa [ringCommit8] using congrArg Market.WideCommitBoundary.Felt8.vals h
-  obtain ⟨hp, _⟩ := wireCommitR8_binds permW hCR hW
-    (by rw [ringKernelPayload_length, ringKernelPayload_length]) hw
+  rcases wireCommitR8_binds_or_collides permW hW
+    (by rw [ringKernelPayload_length, ringKernelPayload_length]) hw with ⟨hp, _⟩ | hcoll
+  swap
+  · exact Or.inr hcoll
+  refine Or.inl ?_
   have h0 := congrArg (fun xs : List ℤ => xs.getD 0 0) hp
   have h1 := congrArg (fun xs : List ℤ => xs.getD 1 0) hp
   have h2 := congrArg (fun xs : List ℤ => xs.getD 2 0) hp
@@ -232,17 +241,26 @@ theorem ringCommit8_pre_binds_kernel (permW : List ℤ → List ℤ)
     at h0 h1 h2 h3 h4 h6
   simp_all
 
+/-- The endpoint's 8-felt commitment binds its post-kernel — OR exhibits a genuine collision of the
+deployed wide permutation.
+
+⚑ **NO CR FLOOR IS CARRIED.** The old form took `hCR : Poseidon2WideCR permW` — DELETED, false at
+deployed parameters, so the theorem was vacuous there. -/
 theorem ringCommit8_post_binds_kernel (permW : List ℤ → List ℤ)
-    (hCR : Poseidon2WideCR permW) (hW : Poseidon2Width8 permW)
+    (hW : Poseidon2Width8 permW)
     (f g : RingEndpointFields) (rf rg : ℤ)
     (h : ringCommit8 permW hW f true rf = ringCommit8 permW hW g true rg) :
     ringKernelPost f.creator0 f.creator1 f.asset0 f.asset1 f.amount0 f.amount1 =
-      ringKernelPost g.creator0 g.creator1 g.asset0 g.asset1 g.amount0 g.amount1 := by
+      ringKernelPost g.creator0 g.creator1 g.asset0 g.asset1 g.amount0 g.amount1
+    ∨ WireColl permW (ringKernelPayload f true) rf (ringKernelPayload g true) rg := by
   have hw : wireCommitR8 permW (ringKernelPayload f true) rf =
       wireCommitR8 permW (ringKernelPayload g true) rg := by
     simpa [ringCommit8] using congrArg Market.WideCommitBoundary.Felt8.vals h
-  obtain ⟨hp, _⟩ := wireCommitR8_binds permW hCR hW
-    (by rw [ringKernelPayload_length, ringKernelPayload_length]) hw
+  rcases wireCommitR8_binds_or_collides permW hW
+    (by rw [ringKernelPayload_length, ringKernelPayload_length]) hw with ⟨hp, _⟩ | hcoll
+  swap
+  · exact Or.inr hcoll
+  refine Or.inl ?_
   have h0 := congrArg (fun xs : List ℤ => xs.getD 0 0) hp
   have h1 := congrArg (fun xs : List ℤ => xs.getD 1 0) hp
   have h2 := congrArg (fun xs : List ℤ => xs.getD 2 0) hp

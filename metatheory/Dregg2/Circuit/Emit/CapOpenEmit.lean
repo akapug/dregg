@@ -1840,17 +1840,19 @@ theorem v3RegistryCapOpenWide_sound (hash : List ℤ → ℤ)
   exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_satisfied2_host hash h bb (bb + 239)
     minit mfin maddrs t hsat
 
-open Dregg2.Circuit.Emit.EffectVmEmitRotationR (Poseidon2WideCR Poseidon2Width8 wireCommitR8)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationR (Poseidon2Width8 wireCommitR8 WireColl)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationWide (preLimbsWide)
 open Dregg2.Circuit.DescriptorIR2 (ChipTableSoundN VmTrace envAt)
 
 /-- **`v3RegistryCapOpenWide_binds` — THE 8-FELT BINDING FOLD over all 45.** Every wide entry's published
 8-felt BEFORE/AFTER commits BIND: two `Satisfied2` witnesses of the SAME wide entry publishing the same 8-felt
 BEFORE commit and the same 8-felt AFTER commit agree on the WHOLE before-block 37-limb list + iroot AND the
-whole after-block 37-limb list + iroot — the genuine ~124-bit binding via the faithful `wireCommitR8_binds`,
+whole after-block 37-limb list + iroot — the genuine ~124-bit binding via the faithful
+`wireCommitR8_binds_or_collides` — OR EXHIBIT a genuine wide-permutation collision, per leg —
+(⚑ NO CR FLOOR IS CARRIED: the deleted `Poseidon2WideCR` was false at deployed parameters),
 member-by-member over the full 45-member emit-source registry (cohort AND cap-open). -/
 theorem v3RegistryCapOpenWide_binds (hash : List ℤ → ℤ) (permW : List ℤ → List ℤ)
-    (hCR : Poseidon2WideCR permW) (hW : Poseidon2Width8 permW)
+    (hW : Poseidon2Width8 permW)
     (i : Nat) (hi : i < v3RegistryCapOpenWide.length)
     (h : EffectVmDescriptor2) (bb : Nat)
     (heq : v3RegistryCapOpenWide[i].2
@@ -1891,13 +1893,18 @@ theorem v3RegistryCapOpenWide_binds (hash : List ℤ → ℤ) (permW : List ℤ 
             (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAfterCBase h.traceWidth) 59).getD m 0)
         ∧ (envAt t' l).loc ((Dregg2.Circuit.Emit.EffectVmEmitRotationWide.carrierCols
             (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAfterCBase h.traceWidth) 59).getD m 0) < 2013265921) :
-    (preLimbsWide bb (envAt t a).loc = preLimbsWide bb (envAt t' b).loc
-      ∧ (envAt t a).loc (bb + 178) = (envAt t' b).loc (bb + 178))
-    ∧ (preLimbsWide (bb + 239) (envAt t k).loc = preLimbsWide (bb + 239) (envAt t' l).loc
-      ∧ (envAt t k).loc (bb + 239 + 178) = (envAt t' l).loc (bb + 239 + 178)) := by
+    ((preLimbsWide bb (envAt t a).loc = preLimbsWide bb (envAt t' b).loc
+        ∧ (envAt t a).loc (bb + 178) = (envAt t' b).loc (bb + 178))
+      ∨ WireColl permW (preLimbsWide bb (envAt t a).loc) ((envAt t a).loc (bb + 178))
+          (preLimbsWide bb (envAt t' b).loc) ((envAt t' b).loc (bb + 178)))
+    ∧ ((preLimbsWide (bb + 239) (envAt t k).loc = preLimbsWide (bb + 239) (envAt t' l).loc
+        ∧ (envAt t k).loc (bb + 239 + 178) = (envAt t' l).loc (bb + 239 + 178))
+      ∨ WireColl permW (preLimbsWide (bb + 239) (envAt t k).loc)
+          ((envAt t k).loc (bb + 239 + 178)) (preLimbsWide (bb + 239) (envAt t' l).loc)
+          ((envAt t' l).loc (bb + 239 + 178))) := by
   rw [heq] at hsat hsat'
   exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_binds_published
-    hash permW hCR hW h bb (bb + 239)
+    hash permW hW h bb (bb + 239)
     minit mfin maddrs t minit' mfin' maddrs' t' hchipN hchipN' hsat hsat'
     a b ha hb hfirst hfirst' k l hk hl hlast hlast' hpubBefore hpubAfter
     hcCanonB hcCanonB' hcCanonA hcCanonA'
@@ -2041,7 +2048,7 @@ entry publishing the same 8-felt BEFORE/AFTER commits agree on the WHOLE before/
 iroot — the genuine ~124-bit binding via `wireCommitR8_binds`, member-by-member over the WRITE-cap tail.
 So a capability-gated WRITE turn binds the FULL ~124-bit commit, NOT the ~31-bit 1-felt waist. -/
 theorem v3RegistryCapOpenWriteWide_binds (hash : List ℤ → ℤ) (permW : List ℤ → List ℤ)
-    (hCR : Poseidon2WideCR permW) (hW : Poseidon2Width8 permW)
+    (hW : Poseidon2Width8 permW)
     (i : Nat) (hi : i < v3RegistryCapOpenWriteWide.length)
     (h : EffectVmDescriptor2) (bb : Nat)
     (heq : v3RegistryCapOpenWriteWide[i].2
@@ -2082,13 +2089,18 @@ theorem v3RegistryCapOpenWriteWide_binds (hash : List ℤ → ℤ) (permW : List
             (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAfterCBase h.traceWidth) 59).getD m 0)
         ∧ (envAt t' l).loc ((Dregg2.Circuit.Emit.EffectVmEmitRotationWide.carrierCols
             (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAfterCBase h.traceWidth) 59).getD m 0) < 2013265921) :
-    (preLimbsWide bb (envAt t a).loc = preLimbsWide bb (envAt t' b).loc
-      ∧ (envAt t a).loc (bb + 178) = (envAt t' b).loc (bb + 178))
-    ∧ (preLimbsWide (bb + 239) (envAt t k).loc = preLimbsWide (bb + 239) (envAt t' l).loc
-      ∧ (envAt t k).loc (bb + 239 + 178) = (envAt t' l).loc (bb + 239 + 178)) := by
+    ((preLimbsWide bb (envAt t a).loc = preLimbsWide bb (envAt t' b).loc
+        ∧ (envAt t a).loc (bb + 178) = (envAt t' b).loc (bb + 178))
+      ∨ WireColl permW (preLimbsWide bb (envAt t a).loc) ((envAt t a).loc (bb + 178))
+          (preLimbsWide bb (envAt t' b).loc) ((envAt t' b).loc (bb + 178)))
+    ∧ ((preLimbsWide (bb + 239) (envAt t k).loc = preLimbsWide (bb + 239) (envAt t' l).loc
+        ∧ (envAt t k).loc (bb + 239 + 178) = (envAt t' l).loc (bb + 239 + 178))
+      ∨ WireColl permW (preLimbsWide (bb + 239) (envAt t k).loc)
+          ((envAt t k).loc (bb + 239 + 178)) (preLimbsWide (bb + 239) (envAt t' l).loc)
+          ((envAt t' l).loc (bb + 239 + 178))) := by
   rw [heq] at hsat hsat'
   exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_binds_published
-    hash permW hCR hW h bb (bb + 239)
+    hash permW hW h bb (bb + 239)
     minit mfin maddrs t minit' mfin' maddrs' t' hchipN hchipN' hsat hsat'
     a b ha hb hfirst hfirst' k l hk hl hlast hlast' hpubBefore hpubAfter
     hcCanonB hcCanonB' hcCanonA hcCanonA'

@@ -82,25 +82,32 @@ namespace Dregg2.Circuit.VacuitySweepTeeth
 
 open Dregg2.Circuit.HashFloorHonesty (not_injective_of_finite_range)
 open Dregg2.Circuit.DeployedCapTree
-open Dregg2.Circuit.Emit.EffectVmEmitRotationR (Poseidon2WideCR Poseidon2Width8)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationR (Poseidon2Width8)
 
 set_option autoImplicit false
 
 /-- The BabyBear prime `p = 2³¹ − 2²⁷ + 1` — the deployed field the lanes live in. -/
 def babyBearP : ℤ := 2013265921
 
-/-! ## §1 — `Poseidon2WideCR` is FALSE for a range-bounded wide permutation.
+/-! ## §1 — wide-permutation injectivity is FALSE for a range-bounded wide permutation.
 
-`Poseidon2WideCR permW := ∀ xs ys, permW xs = permW ys → xs = ys` is `Function.Injective permW` on
-the INFINITE `List ℤ`. The deployed `permW` (Rust `poseidon2::single_perm_compress`) squeezes exactly
-8 BabyBear lanes (`Poseidon2Width8`), so its range is FINITE — and the counting core fires. -/
+The carrier this refuted was `Poseidon2WideCR permW := ∀ xs ys, permW xs = permW ys → xs = ys` —
+`Function.Injective permW` on the INFINITE `List ℤ`. The deployed `permW` (Rust
+`poseidon2::single_perm_compress`) squeezes exactly 8 BabyBear lanes (`Poseidon2Width8`), so its range
+is FINITE, and the counting core fires.
 
-/-- **TOOTH 1 — `Poseidon2WideCR` is FALSE for any range-bounded wide permutation.** Literally
-`not_injective_of_finite_range`: the floor IS injectivity on `List ℤ`, which is infinite. Stated in
-the same shape as the flagged siblings' teeth (`poseidon2SpongeCR_false_of_finite_range`). -/
-theorem poseidon2WideCR_false_of_finite_range
+⚑ The carrier itself has since been **DELETED** from `Emit/EffectVmEmitRotationR` — its consumers are
+now unconditional (`wireCommitR8_binds_or_collides`: bind, or EXHIBIT the collision). These teeth are
+RETAINED, restated about `Function.Injective permW` directly, because they are the REASON the deletion
+was correct; the record must outlive the carrier. -/
+
+/-- **TOOTH 1 — wide-permutation injectivity is FALSE for any range-bounded wide permutation.**
+Literally `not_injective_of_finite_range`: the deleted floor WAS injectivity on `List ℤ`, which is
+infinite. Stated in the same shape as the flagged siblings' teeth
+(`poseidon2SpongeCR_false_of_finite_range`). -/
+theorem widePerm_not_injective_of_finite_range
     (permW : List ℤ → List ℤ) (hfin : (Set.range permW).Finite) :
-    ¬ Poseidon2WideCR permW :=
+    ¬ Function.Injective permW :=
   not_injective_of_finite_range permW hfin
 
 /-- The set of length-`8` lists whose entries all lie in `Set.Ico 0 q` is FINITE — it is the image of
@@ -119,17 +126,17 @@ theorem finite_width8_bounded (q : ℤ) :
       interval_cases n <;> simp
   exact Set.Finite.subset (Set.Finite.image _ (Set.Finite.pi (fun _ => Set.finite_Ico (0 : ℤ) q))) hsub
 
-/-- **TOOTH 1′ (deployed form) — `Poseidon2WideCR` is FALSE at the REAL BabyBear parameters.** A wide
-permutation that squeezes exactly 8 lanes, each a genuine BabyBear field element (`0 ≤ · < p`) — i.e.
-the deployed `single_perm_compress` — REFUTES the floor its own docstring calls "the EXACT analogue of
-`Poseidon2SpongeCR`". The analogue is exact: that one is false too
-(`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`). Every consumer of `Poseidon2WideCR` is
-conditioned on a hypothesis the deployed hash refutes. -/
-theorem poseidon2WideCR_false_babyBear (permW : List ℤ → List ℤ)
+/-- **TOOTH 1′ (deployed form) — wide-permutation injectivity is FALSE at the REAL BabyBear
+parameters.** A wide permutation that squeezes exactly 8 lanes, each a genuine BabyBear field element
+(`0 ≤ · < p`) — i.e. the deployed `single_perm_compress` — REFUTED the floor whose docstring called it
+"the EXACT analogue of `Poseidon2SpongeCR`". The analogue was exact: that one is false too
+(`HashFloorHonesty.poseidon2SpongeCR_false_babyBear`). Every consumer of the deleted carrier was
+conditioned on a hypothesis the deployed hash refutes — which is why they now carry none. -/
+theorem widePerm_not_injective_babyBear (permW : List ℤ → List ℤ)
     (hw : Poseidon2Width8 permW)
     (hb : ∀ xs, ∀ x ∈ permW xs, 0 ≤ x ∧ x < babyBearP) :
-    ¬ Poseidon2WideCR permW := by
-  refine poseidon2WideCR_false_of_finite_range permW ?_
+    ¬ Function.Injective permW := by
+  refine widePerm_not_injective_of_finite_range permW ?_
   refine Set.Finite.subset (finite_width8_bounded babyBearP) ?_
   rintro _ ⟨xs, rfl⟩
   exact ⟨hw xs, fun x hx => ⟨(hb xs x hx).1, (hb xs x hx).2⟩⟩
@@ -200,9 +207,9 @@ theorem membersAt8_not_vacuous_general (S8 : Cap8Scheme) (root : Digest8) (leaf 
 
 /-! ## §3 — axiom-hygiene tripwires. -/
 
-#assert_axioms poseidon2WideCR_false_of_finite_range
+#assert_axioms widePerm_not_injective_of_finite_range
 #assert_axioms finite_width8_bounded
-#assert_axioms poseidon2WideCR_false_babyBear
+#assert_axioms widePerm_not_injective_babyBear
 #assert_axioms finite_digest8_bounded
 #assert_axioms compress8CR_false_babyBear
 #assert_axioms membersAt8_at_own_digest

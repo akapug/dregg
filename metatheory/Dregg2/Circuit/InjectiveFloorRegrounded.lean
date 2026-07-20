@@ -104,9 +104,10 @@ open Dregg2.Circuit.DeployedCapTree (Digest8 Compress8CR CapLeaf leafFields leaf
 open Dregg2.Circuit.DeployedCapTree.Cap8Scheme (pack8 pack8_inj)
 open Dregg2.Circuit.CommitDifferential (effectVmCommit h4q)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationR
-  (Poseidon2WideCR Poseidon2Width8 chainFrom8 chainFrom8_len chainFrom8_snoc wireCommitR8 chunk31
-   chunk31_length chunk31_flatten)
-open Dregg2.Circuit.VacuitySweepTeeth (babyBearP poseidon2WideCR_false_babyBear compress8CR_false_babyBear)
+  (Poseidon2Width8 chainFrom8 chainFrom8_len chainFrom8_snoc wireCommitR8 chunk31
+   chunk31_length chunk31_flatten IsCollW chainCollFind chainCollFind_spec wireCommit8Find
+   wireCommit8Find_spec WireColl)
+open Dregg2.Circuit.VacuitySweepTeeth (babyBearP widePerm_not_injective_babyBear compress8CR_false_babyBear)
 
 set_option autoImplicit false
 
@@ -663,135 +664,16 @@ THE most load-bearing unflagged carrier (7 hypothesis uses, across
 had ALREADY proved FALSE. The analogy was exact; the conclusion did not travel.
 `VacuitySweepTeeth.poseidon2WideCR_false_babyBear` refutes it at the deployed width-8 BabyBear squeeze.
 
-The consumers `chainFrom8_inj` / `wireCommitR8_binds` peel the chain from the OUTSIDE in, applying
+The consumers `chainFrom8_inj` / `wireCommitR8_binds` peeled the chain from the OUTSIDE in, applying
 `hCR` at each step. The honest re-grounding must therefore WALK the chain and LOCATE the colliding
-step — §3.1's `chainCollFind` is that walk, as a function. -/
+step — `chainCollFind` is that walk, as a function.
 
-/-- `IsCollW permW p` — the pair `p` is a genuine collision of the wide permutation. -/
-def IsCollW (permW : List ℤ → List ℤ) (p : List ℤ × List ℤ) : Prop :=
-  p.1 ≠ p.2 ∧ permW p.1 = permW p.2
-
-/-- "Is this pair a genuine collision?" is DECIDABLE (equality of `List ℤ` is) — so the extractor may
-branch on it and remain a total function, no `Classical.choice` in the reduction. -/
-instance decidableIsCollW (permW : List ℤ → List ℤ) (p : List ℤ × List ℤ) :
-    Decidable (IsCollW permW p) := by
-  unfold IsCollW
-  infer_instance
-
-/-! ### §3.1 — THE CHAIN WALK: locate the colliding `permW` step. -/
-
-/-- **⚑ THE CHAIN WALK.** Step the two 8-felt chains together. At each step the two `permW` arguments
-are `acc ++ c` and `acc' ++ c'`; if they COLLIDE (equal images, distinct arguments) return them, else
-carry on with the two new carriers. If the walk runs out of chunks, return the two seeds — the caller
-(`wireCommit8Find`) resolves that case at the head.
-
-Note the third possibility the `else` silently absorbs and `chainCollFind_spec` handles: the two
-arguments may have DIFFERENT `permW` images at this step and the chains still re-converge later. That
-is why the walk continues rather than concluding, and it is exactly the case a "peel from the outside"
-proof gets for free but a FUNCTION must be written to survive. -/
-def chainCollFind (permW : List ℤ → List ℤ) :
-    List ℤ → List (List ℤ) → List ℤ → List (List ℤ) → List ℤ × List ℤ
-  | acc, c :: ds, acc', c' :: ds' =>
-      if permW (acc ++ c) = permW (acc' ++ c') ∧ (acc ++ c) ≠ (acc' ++ c') then
-        (acc ++ c, acc' ++ c')
-      else
-        chainCollFind permW (permW (acc ++ c)) ds (permW (acc' ++ c')) ds'
-  | acc, _, acc', _ => (acc, acc')
-
-/-- **⚑ THE WALK IS CORRECT.** For two chains of EQUAL chunk count over width-8 carriers with EQUAL
-final digests: EITHER the seeds and the chunk lists agree outright, OR the walk lands on a genuine
-`permW` collision. This is `chainFrom8_inj`'s peel, restated so that the failure branch produces a
-WITNESS instead of consuming an injectivity hypothesis. -/
-theorem chainCollFind_spec (permW : List ℤ → List ℤ) (hW : Poseidon2Width8 permW) :
-    ∀ {cs cs' : List (List ℤ)} {acc acc' : List ℤ}, cs.length = cs'.length →
-      acc.length = 8 → acc'.length = 8 →
-      chainFrom8 permW acc cs = chainFrom8 permW acc' cs' →
-      (acc = acc' ∧ cs = cs') ∨ IsCollW permW (chainCollFind permW acc cs acc' cs') := by
-  intro cs
-  induction cs with
-  | nil =>
-    intro cs' acc acc' hlen _ _ h
-    have hnil : cs' = [] := List.length_eq_zero_iff.mp hlen.symm
-    subst hnil
-    exact Or.inl ⟨h, rfl⟩
-  | cons c ds ih =>
-    intro cs' acc acc' hlen hacc hacc' h
-    cases cs' with
-    | nil => simp at hlen
-    | cons c' ds' =>
-      simp only [chainFrom8] at h
-      have hlen' : ds.length = ds'.length := by simpa using hlen
-      by_cases hif : permW (acc ++ c) = permW (acc' ++ c') ∧ (acc ++ c) ≠ (acc' ++ c')
-      · refine Or.inr ?_
-        show IsCollW permW (chainCollFind permW acc (c :: ds) acc' (c' :: ds'))
-        rw [chainCollFind, if_pos hif]
-        exact ⟨hif.2, hif.1⟩
-      · rcases ih hlen' (hW (acc ++ c)) (hW (acc' ++ c')) h with ⟨himg, hds⟩ | hcoll
-        · -- the recursive carriers agree; with the failed test that forces the ARGUMENTS to agree.
-          refine Or.inl ⟨?_, ?_⟩
-          · have hargs : acc ++ c = acc' ++ c' := by
-              by_contra hne
-              exact hif ⟨himg, hne⟩
-            exact (List.append_inj hargs (by rw [hacc, hacc'])).1
-          · have hargs : acc ++ c = acc' ++ c' := by
-              by_contra hne
-              exact hif ⟨himg, hne⟩
-            rw [(List.append_inj hargs (by rw [hacc, hacc'])).2, hds]
-        · refine Or.inr ?_
-          show IsCollW permW (chainCollFind permW acc (c :: ds) acc' (c' :: ds'))
-          rw [chainCollFind, if_neg hif]
-          exact hcoll
-
-/-! ### §3.2 — the `wireCommitR8` break extractor: the walk, plus the head. -/
-
-/-- **⚑ THE `wireCommitR8` EXTRACTOR.** Run the chain walk over the deployed commitment's chunk
-decomposition (`head = permW (l.take 4)`, body `= chunk31 (l.drop 4)`, then the iroot site `[ir,0,0]`
-LAST). If the walk found a genuine collision, that is the answer; otherwise the walk proved the seeds
-and chunks agree, which — given the claims DIFFER — forces the collision to be at the HEAD, so return
-the two 4-wide head blocks. -/
-def wireCommit8Find (permW : List ℤ → List ℤ) (l : List ℤ) (ir : ℤ) (l' : List ℤ) (ir' : ℤ) :
-    List ℤ × List ℤ :=
-  let r := chainCollFind permW (permW (l.take 4)) (chunk31 (l.drop 4) ++ [[ir, 0, 0]])
-    (permW (l'.take 4)) (chunk31 (l'.drop 4) ++ [[ir', 0, 0]])
-  if IsCollW permW r then r else (l.take 4, l'.take 4)
-
-/-- **⚑ THE EXTRACTOR IS CORRECT — a `wireCommitR8` equivocation always yields a REAL `permW`
-collision.** Two DISTINCT `(limbs, iroot)` claims of EQUAL limb length with the SAME 8-felt chained
-commitment produce two DISTINCT lists with the SAME `permW` image.
-
-This is `wireCommitR8_binds` turned inside out: that theorem CONSUMES `Poseidon2WideCR` (false at
-deployed params) to conclude equality; this one PRODUCES the collision the deployed `permW` genuinely
-has, which is the object a real floor can bind. -/
-theorem wireCommit8Find_spec (permW : List ℤ → List ℤ) (hW : Poseidon2Width8 permW)
-    {l l' : List ℤ} {ir ir' : ℤ} (hlen : l.length = l'.length)
-    (hne : ¬ (l = l' ∧ ir = ir'))
-    (h : wireCommitR8 permW l ir = wireCommitR8 permW l' ir') :
-    IsCollW permW (wireCommit8Find permW l ir l' ir') := by
-  unfold wireCommitR8 at h
-  by_cases hif : IsCollW permW (chainCollFind permW (permW (l.take 4))
-      (chunk31 (l.drop 4) ++ [[ir, 0, 0]]) (permW (l'.take 4)) (chunk31 (l'.drop 4) ++ [[ir', 0, 0]]))
-  · show IsCollW permW (wireCommit8Find permW l ir l' ir')
-    rw [wireCommit8Find, if_pos hif]
-    exact hif
-  · show IsCollW permW (wireCommit8Find permW l ir l' ir')
-    rw [wireCommit8Find, if_neg hif]
-    have hclen : (chunk31 (l.drop 4) ++ [[ir, 0, 0]]).length
-        = (chunk31 (l'.drop 4) ++ [[ir', 0, 0]]).length := by
-      rw [List.length_append, List.length_append, chunk31_length, chunk31_length,
-        List.length_drop, List.length_drop, hlen]
-      simp
-    rcases chainCollFind_spec permW hW hclen (hW (l.take 4)) (hW (l'.take 4)) h with
-      ⟨hseed, hcs⟩ | hcoll
-    · -- the walk found nothing: seeds AND chunk lists agree, so the break is at the HEAD.
-      obtain ⟨hbody, hir⟩ := List.append_inj' hcs rfl
-      have hir' : ir = ir' := by simpa using hir
-      have hdrop : l.drop 4 = l'.drop 4 := by
-        have := congrArg List.flatten hbody
-        rwa [chunk31_flatten, chunk31_flatten] at this
-      refine ⟨fun htake => hne ⟨?_, hir'⟩, hseed⟩
-      replace htake : List.take 4 l = List.take 4 l' := htake
-      rw [← List.take_append_drop 4 l, ← List.take_append_drop 4 l', htake, hdrop]
-    · exact absurd hcoll hif
+⚑ **§3.1/§3.2 MOVED.** `IsCollW`, `chainCollFind`(`_spec`), `wireCommit8Find`(`_spec`) now live in
+`Emit/EffectVmEmitRotationR`, beside the commitment they are about. They had to move when the false
+`Poseidon2WideCR` carrier was DELETED: the deployed keystone there is now
+`wireCommitR8_binds_or_collides`, stated UNCONDITIONALLY in terms of the extractor, so the extractor
+cannot live in a file that imports it. They are re-opened below. §3.3 onward is unchanged — it prices
+the residual probabilistically, which is the part a game, not an extractor, has to do. -/
 
 /-! ### §3.3 — the deployed wide permutation, as a KEYED family. -/
 
@@ -941,7 +823,7 @@ theorem wide_floor_top_false_babyBear (D : WideKeyed)
     ¬ HashCRHardQuant (wideFamily D) (fun _ => True) := by
   refine hashCRHardQuant_top_false_of_compressing _ ⟨([] : List ℤ)⟩ (fun l t => ?_)
   exact exists_collision_of_not_injective
-    (poseidon2WideCR_false_babyBear (D.permWAt t) (D.width8At t) (hb t))
+    (widePerm_not_injective_babyBear (D.permWAt t) (D.width8At t) (hb t))
 
 /-- **THE ⊥ POLE — vacuous.** -/
 theorem wide_floor_bot_vacuous (D : WideKeyed) :

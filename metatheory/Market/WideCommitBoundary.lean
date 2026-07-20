@@ -20,8 +20,8 @@ namespace Market.WideCommitBoundary
 open Dregg2.Exec
 open Dregg2.Circuit.CircuitSoundness
 open Dregg2.Circuit.Emit.EffectVmEmitRotationR
-  (Poseidon2WideCR Poseidon2Width8 chainFrom8_len chainFrom8_snoc wireCommitR8
-   wireCommitR8_binds)
+  (Poseidon2Width8 chainFrom8_len chainFrom8_snoc wireCommitR8 WireColl
+   wireCommitR8_binds_or_collides)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 
 set_option autoImplicit false
@@ -140,21 +140,34 @@ structure StateDecode8 (permW : List ℤ → List ℤ) (hW : Poseidon2Width8 per
   preWF : Dregg2.Circuit.StateCommit.AccountsWF pre.kernel
   postWF : Dregg2.Circuit.StateCommit.AccountsWF post.kernel
 
-/-- Equal faithful pre endpoints determine the entire chained pre-state. -/
+/-- Equal faithful pre endpoints determine the entire chained pre-state — OR exhibit a genuine
+collision of the deployed wide permutation.
+
+⚑ **NO WIDE CR FLOOR IS CARRIED.** The old form took `hWideCR : Poseidon2WideCR permW` — DELETED,
+because the deployed `single_perm_compress` REFUTES it, so the theorem was VACUOUSLY TRUE at deployed
+parameters. (`hReceiptCR : Poseidon2SpongeCR hash` is the SAME defect on the 1-felt receipt-root
+sponge and is a NAMED, still-open residual — that carrier has ~237 files of consumers and is not part
+of this sweep.) -/
 theorem stateDecode8_pre_faithful (permW : List ℤ → List ℤ)
-    (hWideCR : Poseidon2WideCR permW) (hW : Poseidon2Width8 permW)
+    (hW : Poseidon2Width8 permW)
     (hash : List ℤ → ℤ) (hReceiptCR : Poseidon2SpongeCR hash)
     (S : CommitSurface) (pc : PublishedCommit8)
     {pre post pre' post' : RecChainedState}
     (h : StateDecode8 permW hW hash S pc pre post)
-    (h' : StateDecode8 permW hW hash S pc pre' post') : pre = pre' := by
+    (h' : StateDecode8 permW hW hash S pc pre' post') :
+    pre = pre' ∨ WireColl permW (kernelPayload S pre.kernel pc.turn)
+      (receiptRoot hash pre.log) (kernelPayload S pre'.kernel pc.turn)
+      (receiptRoot hash pre'.log) := by
   have hwide :
       wireCommitR8 permW (kernelPayload S pre.kernel pc.turn) (receiptRoot hash pre.log) =
         wireCommitR8 permW (kernelPayload S pre'.kernel pc.turn) (receiptRoot hash pre'.log) := by
     have := congrArg Felt8.vals (h.preBinds.symm.trans h'.preBinds)
     simpa [commit8] using this
-  obtain ⟨hpayload, hroot⟩ := wireCommitR8_binds permW hWideCR hW
-    (by rw [kernelPayload_length, kernelPayload_length]) hwide
+  rcases wireCommitR8_binds_or_collides permW hW
+    (by rw [kernelPayload_length, kernelPayload_length]) hwide with ⟨hpayload, hroot⟩ | hcoll
+  swap
+  · exact Or.inr hcoll
+  refine Or.inl ?_
   have hkcommit : S.commit pre.kernel pc.turn = S.commit pre'.kernel pc.turn := by
     simpa [kernelPayload] using congrArg List.head? hpayload
   have hk : pre.kernel = pre'.kernel :=
@@ -164,21 +177,34 @@ theorem stateDecode8_pre_faithful (permW : List ℤ → List ℤ)
   cases pre'
   simp_all
 
-/-- Equal faithful post endpoints determine the entire chained post-state. -/
+/-- Equal faithful post endpoints determine the entire chained post-state — OR exhibit a genuine
+collision of the deployed wide permutation.
+
+⚑ **NO WIDE CR FLOOR IS CARRIED.** The old form took `hWideCR : Poseidon2WideCR permW` — DELETED,
+because the deployed `single_perm_compress` REFUTES it, so the theorem was VACUOUSLY TRUE at deployed
+parameters. (`hReceiptCR : Poseidon2SpongeCR hash` is the SAME defect on the 1-felt receipt-root
+sponge and is a NAMED, still-open residual — that carrier has ~237 files of consumers and is not part
+of this sweep.) -/
 theorem stateDecode8_post_faithful (permW : List ℤ → List ℤ)
-    (hWideCR : Poseidon2WideCR permW) (hW : Poseidon2Width8 permW)
+    (hW : Poseidon2Width8 permW)
     (hash : List ℤ → ℤ) (hReceiptCR : Poseidon2SpongeCR hash)
     (S : CommitSurface) (pc : PublishedCommit8)
     {pre post pre' post' : RecChainedState}
     (h : StateDecode8 permW hW hash S pc pre post)
-    (h' : StateDecode8 permW hW hash S pc pre' post') : post = post' := by
+    (h' : StateDecode8 permW hW hash S pc pre' post') :
+    post = post' ∨ WireColl permW (kernelPayload S post.kernel pc.turn)
+      (receiptRoot hash post.log) (kernelPayload S post'.kernel pc.turn)
+      (receiptRoot hash post'.log) := by
   have hwide :
       wireCommitR8 permW (kernelPayload S post.kernel pc.turn) (receiptRoot hash post.log) =
         wireCommitR8 permW (kernelPayload S post'.kernel pc.turn) (receiptRoot hash post'.log) := by
     have := congrArg Felt8.vals (h.postBinds.symm.trans h'.postBinds)
     simpa [commit8] using this
-  obtain ⟨hpayload, hroot⟩ := wireCommitR8_binds permW hWideCR hW
-    (by rw [kernelPayload_length, kernelPayload_length]) hwide
+  rcases wireCommitR8_binds_or_collides permW hW
+    (by rw [kernelPayload_length, kernelPayload_length]) hwide with ⟨hpayload, hroot⟩ | hcoll
+  swap
+  · exact Or.inr hcoll
+  refine Or.inl ?_
   have hkcommit : S.commit post.kernel pc.turn = S.commit post'.kernel pc.turn := by
     simpa [kernelPayload] using congrArg List.head? hpayload
   have hk : post.kernel = post'.kernel :=
