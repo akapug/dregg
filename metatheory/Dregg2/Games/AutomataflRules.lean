@@ -1,0 +1,1445 @@
+import Dregg2.Games.Automatafl
+import Dregg2.Tactics
+import Mathlib.Data.List.Dedup
+
+/-!
+# AutomataflRules — the automatafl spec REWRITTEN AGAINST THE RULESET
+
+⚑ SUBSTRATE. This is a **Lean-authored game spec**. Nothing here is a Rust AIR, and the
+AIR/gadget layer over it stays Lean-authored (`Dregg2.Circuit.Emit.Automatafl*`). The
+existing hand-written Rust in `dregg-automatafl/` is DEBT and is not extended by this file.
+
+## Why this file exists
+
+`Dregg2.Games.Automatafl` was written by mirroring `logic/src/game.rs::apply_moves` and was
+guarded by a differential test pointed at a second copy of the same code. The audit
+(`docs/reference/AUTOMATAFL-RULES-CONFORMANCE-AUDIT.md`) read it against the Creator-Approved
+ruleset and found nine divergences — six outcome-changing, three that DESTROY PIECES, the
+smallest firing with one move on a 3x3 board. This file is the rules-faithful replacement.
+
+**Ground truth**, in precedence order:
+
+1. `~/dev/automatafl/logic/README.md` §"Game Rules" — the Creator-Approved ruleset.
+2. `~/dev/automatafl/old_python_prototype/model.py` — the ACTUAL GAME per the author
+   (`Game.ev_Move` / `Resolve` / `CompleteMoves` / `ClearState`, `Board.CanMove` / `Move` /
+   `AgentStep`).
+3. `logic/MOVE_EXPLAIN.md`, `logic/PHILOSOPHY.md` for intent.
+4. `logic/src/*.rs` as corroboration only.
+
+## The author's four rulings, implemented here
+
+* **(A) Conflict re-entry is modelled in full.** `Board → List Move → Board` is the WRONG
+  TYPE for a turn. A turn is N ROUNDS (§7): submit → detect → on conflict the involved
+  players' moves are dropped and THEY re-enter, every non-conflicted player is LOCKED, the
+  conflicted COORDINATE is MARKED and becomes illegal as source AND destination FOR ALL, and
+  the round recurses. Only a clean round resolves; then the automaton steps; then the win is
+  checked. Markers, locks and pending moves die at turn end (`model.py::ClearState`).
+* **(B) The column rule is SELECTABLE** (`GameConfig.tieBreak`, §5): `Column` (default,
+  = `automaton.rs`, prefers the Y axis) | `Row` (= `model.py::AgentStep`, prefers X) |
+  `Freeze` (no move on an equal-priority tie). See §5 for why the two implementations'
+  disagreement is only apparent.
+* **(C) 2-cycles STAY PUT** (§4), the README's empty-square-back-to-a-source case stays put,
+  and empty cycles cannot capture a piece.
+* **(D) The automaton square is banned as a move SOURCE ONLY** (§2). Naming it as a
+  DESTINATION is legal to propose and simply FAILS to execute — the square is occupied, so
+  the inclusive path check (§4) blocks the move and the piece is replaced at its origin.
+
+## What else changed vs. `Automatafl.lean`
+
+* **3.2, the worst one.** The path check is INCLUSIVE OF THE DESTINATION
+  (`model.py::CanMove` scans `range(min, max+1)` on both coordinates, exempting sources via
+  `PC_F_PASSABLE`). A non-moving piece standing on the destination BLOCKS, and the mover is
+  replaced at its origin. The old `interior`-only check let the mover overwrite it.
+* **3.7, determinism.** `journeys.find?` awarded a shared landing square by MOVE-LIST ORDER
+  and deleted the loser. Here a contested landing is a **CONFLICT** (§3, `unresolved`) —
+  the `DetectAndConflict` reading of "the conflict rules are the weakest precondition that
+  structurally ensures that following move resolution has a deterministic result". Resolution
+  only runs on a round whose landings are uniquely claimed, so `resolve_perm` is a THEOREM.
+* **Setup and win** (§6) existed only in hand-written Rust. Two-player = two corners in the
+  same row each; four-player = one corner each; and the win fires on the automaton **moving
+  into** a corner, not sitting on one.
+
+## What was KEPT because it conforms
+
+The identical-move exception, the caterpillar erratum (a piece landing on another move's
+source participates in that move too; cycles permissible), >2-cycle rotation, and THE ENTIRE
+AUTOMATON — all four priorities, both equidistant-removals, all empty-space guards. §5 reuses
+`evaluateAxis` / `decisionCmp` / `Decision.delta` / `stepTo` from `Automatafl.lean`
+UNCHANGED; only the equal-priority tie-break is rewired to `GameConfig`.
+
+## The two keystones
+
+* `resolve_conserves` (§8) — **UNCONDITIONAL** piece conservation: a bijection between the
+  occupied squares before and after resolution. The old `applyMoves_conserves_pieces` had to
+  assume `hlandA`/`hlandB` ("neither target square holds a piece that is not one of the two
+  movers") — that assumption WAS rules clause 3.2, and implementing 3.2 discharges it.
+* `resolve_perm` (§9) — **PROVEN** permutation-invariance. The old `FairnessObligation` was
+  not merely unproven, it was FALSE (audit D5); this is the theorem it should have been.
+-/
+
+namespace Dregg2.Games.AutomataflRules
+
+open Dregg2.Games.Automatafl
+
+/-! ## §1  Game configuration -/
+
+/-- The equal-priority tie-break, README: *"some people have suggested having the Automaton
+'freeze' for that step altogether, and thus this is a selectable preference in every game"*.
+`column` prefers the Y axis (`automaton.rs`, the deployed default); `row` prefers the X axis
+(`model.py::AgentStep`, which ties to `colpri` — that file calls the X axis "columns" because
+`self.columns` is indexed by x). -/
+inductive TieBreak
+  | column | row | freeze
+deriving DecidableEq, Repr
+
+/-- Per-game selectable preferences. -/
+structure GameConfig where
+  tieBreak : TieBreak := .column
+deriving DecidableEq, Repr
+
+/-! ## §2  Move legality
+
+README, Move Entry Phase: a move is two coordinates, source ≠ destination, sharing an axis
+(a rook move on an empty board), both in bounds. Plus:
+
+* **(D)** `model.py::ev_Move` rejects `POS_CANT_MOVE_THAT` when the SOURCE is the agent, and
+  says nothing about the destination. A move TARGETING the automaton is proposable and simply
+  fails at resolution (`CanMove` finds a non-empty, non-passable square). `game.rs` bans both
+  endpoints; the prototype and the README are the authority, so only the source is banned.
+* The conflicted-coordinate clause is LIVE here: `marks` comes from the enclosing
+  `RoundState` (§7), so it is genuinely set during a turn. (In `Automatafl.lean` the twin
+  clause read `Board.conflictAt`, which was never set true anywhere in the tree.) -/
+
+/-- Move legality against a board and the round's conflict markers. -/
+def MoveLegal (b : Board) (marks : List Coord) (m : Move) : Prop :=
+  m.frm ≠ m.to
+  ∧ (m.frm.x = m.to.x ∨ m.frm.y = m.to.y)
+  ∧ b.inBounds m.frm ∧ b.inBounds m.to
+  ∧ ¬ b.isAutomaton m.frm
+  ∧ m.frm ∉ marks ∧ m.to ∉ marks
+
+instance moveLegal_decidable (b : Board) (marks : List Coord) (m : Move) :
+    Decidable (MoveLegal b marks m) := by
+  unfold MoveLegal; exact inferInstance
+
+/-- The Bool twin. -/
+def moveLegalB (b : Board) (marks : List Coord) (m : Move) : Bool :=
+  decide (MoveLegal b marks m)
+
+theorem moveLegalB_iff (b : Board) (marks : List Coord) (m : Move) :
+    moveLegalB b marks m = true ↔ MoveLegal b marks m := by
+  unfold moveLegalB; exact decide_eq_true_iff
+
+/-! ## §3  Conflicts
+
+README: *"a conflict occurs if multiple players specify the same source; or multiple players
+specify the same destination with a non-vacuum source. Except two players specifying an
+identical (same sources, same targets) move is not a conflict."*
+
+Both detectors compare a PAIR of moves and require the pair to differ in the field that is
+not shared — so an identical `(src,dst)` submitted twice can never fire either one. That is
+the exception, by construction (and it is `model.py`'s `if pending_move in seen_moves:
+continue`, expressed without an order-dependent `seen` set).
+
+The third clause, `unresolved` (§4), is the merge/confluence conflict. -/
+
+/-- Fork: ≥2 moves out of `s` to different destinations. -/
+def forkAt (ms : List Move) (s : Coord) : Bool :=
+  ms.any (fun m₁ => ms.any (fun m₂ => m₁.frm == s && m₂.frm == s && m₁.to != m₂.to))
+
+/-- Collision: ≥2 moves into `d` from different NON-VACUUM sources. -/
+def collideAt (b : Board) (ms : List Move) (d : Coord) : Bool :=
+  ms.any (fun m₁ => ms.any (fun m₂ =>
+    m₁.to == d && m₂.to == d && m₁.frm != m₂.frm
+      && !(b.cellAt m₁.frm).isVacuum && !(b.cellAt m₂.frm).isVacuum))
+
+/-- Every coordinate any move names — the only places a fork/collide can live. -/
+def candidates (ms : List Move) : List Coord := (ms.map (·.frm)) ++ (ms.map (·.to))
+
+/-- The fork/collide conflicted coordinates. -/
+def clashCoords (b : Board) (ms : List Move) : List Coord :=
+  ((candidates ms).filter (fun c => forkAt ms c || collideAt b ms c)).dedup
+
+/-! ## §4  Resolution
+
+Rules step 3, and `model.py::CompleteMoves` — which fires a move exactly when its source is
+occupied, its destination is empty, and `CanMove` finds the INCLUSIVE rectangle clear of
+non-passable pieces (all sources are `PC_F_PASSABLE`). That loop is order-dependent; the
+conflict clauses exist precisely to make the order not matter, and §9 proves it here.
+
+The order-free rendering: the non-blocked moves form a graph with out-degree ≤ 1 on sources
+(a fork is a conflict), so each piece has a forward orbit. A piece advances along its orbit
+to the first square strictly ahead that either carries a piece at turn start (the caterpillar
+— that piece consumed the edge out of its own square, so we stop there) or dead-ends. It
+advances only if that square actually empties. -/
+
+/-- The straight-line path INCLUSIVE OF THE DESTINATION (`model.py::CanMove` scans
+`range(min, max+1)` on both coordinates). This is the fix for audit divergence 3.2. -/
+def pathCells (frm dst : Coord) : List Coord := interior frm dst ++ [dst]
+
+/-- A move is blocked iff some cell on its path — DESTINATION INCLUDED — holds a piece that
+is not itself a moving source. Sources are passable "in the process of being moved"
+(`mark_passable`, `PC_F_PASSABLE`) whether or not their own move ends up executing.
+
+A blocked move contributes NO EDGE, so its piece is replaced at its origin: the author's
+*"designating a move to an occupied square is fine, it just fails to execute, it doesn't
+generate a conflict and shouldn't."* -/
+def blockedB (b : Board) (ms : List Move) (m : Move) : Bool :=
+  (pathCells m.frm m.to).any
+    (fun c => !(b.cellAt c).isVacuum && !(ms.any (fun m' => m'.frm == c)))
+
+/-- "All these are the same coordinate" — `none` on an empty list AND on a fork. Written so
+it depends on the list only through its MEMBERS (`allEqOpt_spec`), which is what makes the
+whole resolution permutation-invariant (§9). -/
+def allEqOpt (l : List Coord) : Option Coord :=
+  match l.head? with
+  | none   => none
+  | some d => if l.all (fun e => e == d) then some d else none
+
+/-- The move graph: the unique unblocked destination out of `c`, if there is one. -/
+def edgeOf (b : Board) (ms : List Move) (c : Coord) : Option Coord :=
+  allEqOpt ((ms.filter (fun m => m.frm == c && !blockedB b ms m)).map (·.to))
+
+/-- Does `c` carry a piece at turn start? (The automaton counts — it occludes, it is never a
+source, and no move may land on it.) -/
+def carAt (b : Board) (c : Coord) : Bool := !(b.cellAt c).isVacuum
+
+/-- `c`'s move goes to a square whose move comes straight back — a 2-cycle.
+PHILOSOPHY.md: *"2-cycles (A→B, B→A): **Always** stay in place — unambiguous composition"*;
+MERGE_RESOLUTION_DESIGN "Fixed behavior (not configurable)"; `game.rs` `is_two_cycle ⇒
+dest_coord = start_coord`. `Automatafl.lean` SWAPPED them, which is audit divergence 3.5a,
+and it also covers the README's own named case — *"a move from an empty square directly back
+to some source square — the piece simply doesn't move"* (3.5b): there the far square is
+vacuum, and the pair is still a 2-cycle. -/
+def twoCyc (E : Coord → Option Coord) (c : Coord) : Bool :=
+  match E c with
+  | none   => false
+  | some d => (E d == some c) && (d != c)
+
+/-- Walk forward from `c`: the square a piece leaving `c` would come to rest on — the first
+square STRICTLY AHEAD that carries a piece at turn start, or the first dead end.
+`none` = the walk never terminates, i.e. it entered a cycle of squares that were ALL empty at
+turn start; MOVE_EXPLAIN §4 *"An empty cycle cannot 'pull' a new piece into it. The move is
+nullified"* (audit divergence 3.5c). -/
+def stopWalk (E : Coord → Option Coord) (car : Coord → Bool) : Nat → Coord → Option Coord
+  | 0,     _ => none
+  | f + 1, c =>
+    match E c with
+    | none   => some c
+    | some d => if car d then some d else stopWalk E car f d
+
+/-- Does the piece standing on `c` leave its square? It does not if `c` is in a 2-cycle, if
+its walk enters an empty cycle, if its walk returns to `c` itself, or if the square it would
+come to rest on is held by a piece that does not itself leave (recursively — that is the
+author's "fails to execute", propagated back down the chain).
+
+Running out of `vf` means the chain of "waiting on the piece ahead" is longer than the number
+of moves, i.e. it is a rotation cycle, and on a cycle every edge fires. -/
+def leaves (E : Coord → Option Coord) (car : Coord → Bool) (sf : Nat) :
+    Nat → Coord → Bool
+  | 0,     _ => true
+  | v + 1, c =>
+    if twoCyc E c then false
+    else
+      match stopWalk E car sf c with
+      | none   => false
+      | some d => if d == c then false else if car d then leaves E car sf v d else true
+
+/-- Where the piece on `c` ends the resolution. -/
+def landOf (E : Coord → Option Coord) (car : Coord → Bool) (sf vf : Nat) (c : Coord) : Coord :=
+  if leaves E car sf vf c then (stopWalk E car sf c).getD c else c
+
+/-- The move graph of a round. -/
+def edgeMap (b : Board) (ms : List Move) : Coord → Option Coord := edgeOf b ms
+
+/-- The landing map of a round. Fuel `ms.length + 1` for both walks: a walk longer than the
+number of moves has repeated an edge. -/
+def landMap (b : Board) (ms : List Move) : Coord → Coord :=
+  landOf (edgeMap b ms) (carAt b) (ms.length + 1) (ms.length + 1)
+
+/-- The squares whose piece actually moves. `dedup` renders the identical-move exception at
+the resolution layer: two players naming the same `(src,dst)` contribute ONE mover. -/
+def moverList (b : Board) (ms : List Move) (L : Coord → Coord) : List Coord :=
+  ((ms.map (·.frm)).dedup).filter (fun c => carAt b c && L c != c)
+
+/-- The movers of a round. -/
+def movers (b : Board) (ms : List Move) : List Coord := moverList b ms (landMap b ms)
+
+/-- The single element of a list, or `none`. Depends on the list only up to permutation
+(`uniqueOf_spec`). -/
+def uniqueOf : List Coord → Option Coord
+  | [c] => some c
+  | _   => none
+
+/-- Who arrives on `q`, if exactly one mover does. -/
+def arrivalAt (M : List Coord) (L : Coord → Coord) (q : Coord) : Option Coord :=
+  uniqueOf (M.filter (fun c => L c == q))
+
+/-- Bool membership written through `any`, so permutation-invariance is one lemma. -/
+def memB (M : List Coord) (q : Coord) : Bool := M.any (fun x => x == q)
+
+theorem memB_iff (M : List Coord) (q : Coord) : memB M q = true ↔ q ∈ M := by
+  unfold memB
+  simp [List.any_eq_true]
+
+/-- A mover whose landing is not cleanly its own. Three ways, all decidable:
+
+1. **the merge/confluence clause** — another mover claims the same landing square. This is
+   audit divergence 3.7. `Automatafl.lean` resolved it by `journeys.find?`, i.e. by MOVE-LIST
+   ORDER, and DELETED the loser. Here it is a conflict.
+2. the landing square holds a piece that does not itself leave. `leaves` is written to
+   prevent this; the check is kept so that resolution can never be reached in a state where a
+   piece would be overwritten. It is a CHECKED side condition, not a proven property of
+   `leaves` — a labelled residual, and its failure mode is a conflict, never a lost piece.
+3. the landing is off the board. Unreachable through `roundStep` (which filters for
+   legality); kept for the same reason. -/
+def landBad (b : Board) (ms : List Move) (c : Coord) : Bool :=
+  !(((movers b ms).filter (fun c' => landMap b ms c' == landMap b ms c)).length == 1)
+    || (carAt b (landMap b ms c) && (landMap b ms (landMap b ms c) == landMap b ms c))
+    || !(decide (b.inBounds (landMap b ms c)))
+
+/-- The contested coordinates: the landing squares that are not cleanly claimed. Empty ⟺ the
+round's landings are a partial injection onto empty-or-emptying squares. -/
+def unresolved (b : Board) (ms : List Move) : List Coord :=
+  (((movers b ms).filter (landBad b ms)).map (landMap b ms)).dedup
+
+/-- Is this round's resolution well-defined? -/
+def resolvableB (b : Board) (ms : List Move) : Bool := (unresolved b ms).isEmpty
+
+/-- Write the landings onto the board. Every occupied square is either a mover's origin
+(vacated unless something arrives) or untouched. -/
+def writeBoard (b : Board) (M : List Coord) (L : Coord → Coord) : Board :=
+  { b with
+    cells := fun q =>
+      match arrivalAt M L q with
+      | some c => b.cellAt c
+      | none   => if memB M q then .vacuum else b.cellAt q }
+
+/-- **Resolution.** Rules step 3, in full. Guarded by `resolvableB`, which `roundStep` also
+uses to decide whether the round resolves at all — so the guard is not a fiction, it is the
+same predicate that turns an ambiguous round into a conflict. -/
+def resolveMoves (b : Board) (ms : List Move) : Board :=
+  if resolvableB b ms then writeBoard b (movers b ms) (landMap b ms) else b
+
+/-! ## §5  The automaton step — UNCHANGED, with the tie-break wired to `GameConfig`
+
+`evaluateAxis`'s nine-case table, its four empty-space guards, its two equidistant-removals
+and its distance tie-break order were checked clause-by-clause against README Priorities 1–4
+and conform on every one. They are reused here verbatim from `Dregg2.Games.Automatafl`; the
+ONLY change is the equal-priority branch.
+
+Note the `(repulsor, repulsor)` arm's empty-space guard is IMPLIED, not missing: distances are
+≥ 1, so `pos.dist ≠ neg.dist` forces `max ≥ 2` and the flight direction has room. Do not
+"fix" it into a bug.
+
+**On the two implementations disagreeing about which axis is "the column".** `automaton.rs`
+breaks equal-priority ties along Y; `model.py::AgentStep` breaks them along X. They are the
+same game: `model.py`'s `DEFAULT_SETUP` is indexed `[x][y]` and `board.rs`'s `arr2` is indexed
+`[y][x]` (`Coord::ix` = `(y, x)`), so the two stock boards are TRANSPOSES of each other, and
+transposing swaps the axes. The author has ruled the preference selectable with `Column`
+(= Y, `automaton.rs`) as the default, and §6's `stockTwoPlayer` uses the `board.rs`
+orientation to match. -/
+
+/-- The equal-priority branch, per `GameConfig`. Everything else is `Automatafl.chooseOffset`. -/
+def chooseOffsetCfg (xDec yDec : Decision) (tb : TieBreak) : Int × Int :=
+  match decisionCmp xDec yDec, tb with
+  | .gt, _       => xDec.delta (1, 0)
+  | .lt, _       => yDec.delta (0, 1)
+  | .eq, .column => yDec.delta (0, 1)
+  | .eq, .row    => xDec.delta (1, 0)
+  | .eq, .freeze => (0, 0)
+
+/-- The automaton's offset. -/
+def automatonOffsetCfg (b : Board) (tb : TieBreak) : Int × Int :=
+  chooseOffsetCfg
+    (evaluateAxis (b.raycast b.automaton .xp) (b.raycast b.automaton .xn))
+    (evaluateAxis (b.raycast b.automaton .yp) (b.raycast b.automaton .yn))
+    tb
+
+/-- The offset is one of the five cardinal offsets (including zero). -/
+theorem chooseOffsetCfg_mem (x y : Decision) (tb : TieBreak) :
+    chooseOffsetCfg x y tb = (1, 0) ∨ chooseOffsetCfg x y tb = (-1, 0)
+      ∨ chooseOffsetCfg x y tb = (0, 1) ∨ chooseOffsetCfg x y tb = (0, -1)
+      ∨ chooseOffsetCfg x y tb = (0, 0) := by
+  unfold chooseOffsetCfg
+  split <;>
+    first
+      | exact Decision.delta_mem _ _ (Or.inl rfl)
+      | exact Decision.delta_mem _ _ (Or.inr rfl)
+      | exact Or.inr (Or.inr (Or.inr (Or.inr rfl)))
+
+/-- **The automaton moves AT MOST one step in a cardinal direction**, for every tie-break. -/
+theorem automatonOffsetCfg_bounded (b : Board) (tb : TieBreak) :
+    (automatonOffsetCfg b tb).1.natAbs + (automatonOffsetCfg b tb).2.natAbs ≤ 1 := by
+  rcases chooseOffsetCfg_mem
+      (evaluateAxis (b.raycast b.automaton .xp) (b.raycast b.automaton .xn))
+      (evaluateAxis (b.raycast b.automaton .yp) (b.raycast b.automaton .yn)) tb with
+    h | h | h | h | h <;> (unfold automatonOffsetCfg; rw [h]) <;> decide
+
+/-- The automaton step: move onto the one-step target iff it is in bounds, a genuine move,
+and vacuum ("the Automaton can never move into an occupied square"). -/
+def automatonStepCfg (cfg : GameConfig) (b : Board) : Board :=
+  let off := automatonOffsetCfg b cfg.tieBreak
+  if 0 ≤ (b.automaton.x : Int) + off.1 ∧ (b.automaton.x : Int) + off.1 < b.size
+      ∧ 0 ≤ (b.automaton.y : Int) + off.2 ∧ (b.automaton.y : Int) + off.2 < b.size
+      ∧ (off.1 ≠ 0 ∨ off.2 ≠ 0)
+      ∧ b.cellAt ⟨((b.automaton.x : Int) + off.1).toNat,
+                  ((b.automaton.y : Int) + off.2).toNat⟩ = .vacuum then
+    stepTo b ⟨((b.automaton.x : Int) + off.1).toNat, ((b.automaton.y : Int) + off.2).toNat⟩
+  else b
+
+/-! ### The Leg-A migration bridge
+
+At the DEFAULT tie-break the new automaton is the OLD automaton, arm for arm. So the ~13.8k
+lines of Leg A (`AutomataflStepRefine`, `StepBackend`, `StepCapstone`, `StepChoose`,
+`StepEmit`, `StepCoord`) re-point by rewriting with these three lemmas — nothing in the
+nine-case `evaluateAxis` table, the raycast congruences or the arithmetization moves. A game
+that ships `.row` or `.freeze` needs a regenerated `automatafl-step.json`; `.column` does not. -/
+
+theorem chooseOffsetCfg_column (x y : Decision) :
+    chooseOffsetCfg x y .column = chooseOffset x y true := by
+  unfold chooseOffsetCfg chooseOffset
+  cases decisionCmp x y <;> rfl
+
+theorem automatonOffsetCfg_column (b : Board) (hb : b.useColumnRule = true) :
+    automatonOffsetCfg b .column = automatonOffset b := by
+  unfold automatonOffsetCfg automatonOffset
+  rw [hb, chooseOffsetCfg_column]
+
+theorem automatonStepCfg_size (cfg : GameConfig) (b : Board) :
+    (automatonStepCfg cfg b).size = b.size := by
+  simp only [automatonStepCfg]; split <;> rfl
+
+/-- The automaton stays in bounds across its step. -/
+theorem automatonStepCfg_preserves_inBounds (cfg : GameConfig) (b : Board)
+    (hb : b.inBounds b.automaton) :
+    (automatonStepCfg cfg b).inBounds (automatonStepCfg cfg b).automaton := by
+  unfold Board.inBounds
+  rw [automatonStepCfg_size]
+  simp only [automatonStepCfg]
+  split
+  · rename_i h
+    obtain ⟨_, _, _, _, _, _⟩ := h
+    exact ⟨by simp only [stepTo]; omega, by simp only [stepTo]; omega⟩
+  · exact hb
+
+/-! ## §6  Setup and the win condition
+
+README, Initial Setup: *"In a two-player game, each player picks two corners that are in the
+same row. In a four-player game, each player picks exactly one corner."*
+Win: *"When the Automaton **moves into** a corner, the game is won by whomever owns the
+corner."*
+
+`Automatafl.lean` had none of this — no layout, no corners, no goal well-formedness — and its
+`winner` tested SITS ON, so its own witness reported a win on a board where the automaton had
+never moved. -/
+
+/-- The four corners of an `n × n` board. -/
+def cornersOf (size : Nat) : List Coord :=
+  [⟨0, 0⟩, ⟨size - 1, 0⟩, ⟨0, size - 1⟩, ⟨size - 1, size - 1⟩]
+
+/-- A goal assignment: which seat owns which corner. -/
+structure GoalAssignment where
+  entries : List (Coord × Pid)
+deriving DecidableEq, Repr
+
+/-- Every goal is a corner. -/
+def GoalAssignment.onCorners (g : GoalAssignment) (size : Nat) : Bool :=
+  g.entries.all (fun e => (cornersOf size).contains e.1)
+
+/-- Every corner is assigned. -/
+def GoalAssignment.coversCorners (g : GoalAssignment) (size : Nat) : Bool :=
+  (cornersOf size).all (fun c => g.entries.any (fun e => e.1 == c))
+
+/-- No square is assigned twice. -/
+def GoalAssignment.squaresDistinct (g : GoalAssignment) : Bool :=
+  (g.entries.map (·.1)).Nodup
+
+/-- The seats holding at least one corner. -/
+def GoalAssignment.seats (g : GoalAssignment) : List Pid := (g.entries.map (·.2)).dedup
+
+/-- Each seat's corners share a row (equal `y`). -/
+def GoalAssignment.seatsShareRow (g : GoalAssignment) : Bool :=
+  g.entries.all (fun e₁ => g.entries.all (fun e₂ => e₁.2 != e₂.2 || e₁.1.y == e₂.1.y))
+
+/-- Each seat holds exactly `k` corners. -/
+def GoalAssignment.eachSeatHolds (g : GoalAssignment) (k : Nat) : Bool :=
+  g.seats.all (fun p => (g.entries.filter (fun e => e.2 == p)).length == k)
+
+/-- **Two-player setup**: exactly two seats, two corners each, each pair sharing a row. -/
+def GoalAssignment.WellFormed2 (g : GoalAssignment) (size : Nat) : Bool :=
+  g.onCorners size && g.coversCorners size && g.squaresDistinct
+    && g.seats.length == 2 && g.eachSeatHolds 2 && g.seatsShareRow
+
+/-- **Four-player setup**: exactly four seats, one corner each. -/
+def GoalAssignment.WellFormed4 (g : GoalAssignment) (size : Nat) : Bool :=
+  g.onCorners size && g.coversCorners size && g.squaresDistinct
+    && g.seats.length == 4 && g.eachSeatHolds 1
+
+/-- The stock two-player assignment: seat 0 takes the `y = 0` row, seat 1 the `y = size-1`
+row. (`reference.rs::GOAL_CORNERS_2P` agrees. `model.py::DEFAULT_GOALS[2]` does NOT — it reads
+`[[(0,0),(10,0)], [(10,0),(10,10)]]`, repeating `(10,0)` and giving seat 1 a COLUMN. That is
+a prototype bug; the README is the authority.) -/
+def stockGoals2 (size : Nat) : GoalAssignment :=
+  ⟨[(⟨0, 0⟩, 0), (⟨size - 1, 0⟩, 0), (⟨0, size - 1⟩, 1), (⟨size - 1, size - 1⟩, 1)]⟩
+
+/-- The stock four-player assignment: one corner each, counter-clockwise. -/
+def stockGoals4 (size : Nat) : GoalAssignment :=
+  ⟨[(⟨0, 0⟩, 0), (⟨size - 1, 0⟩, 1), (⟨size - 1, size - 1⟩, 2), (⟨0, size - 1⟩, 3)]⟩
+
+/-- The win check: the automaton **moved**, and its new square is a declared goal. -/
+def winOnEntry (before after : Board) (g : GoalAssignment) : Option Pid :=
+  if after.automaton = before.automaton then none
+  else winnerAux after.automaton g.entries
+
+/-- **Win soundness.** A win means the automaton genuinely MOVED and genuinely landed on a
+declared goal of the winner. -/
+theorem winOnEntry_sound (before after : Board) (g : GoalAssignment) (p : Pid)
+    (h : winOnEntry before after g = some p) :
+    after.automaton ≠ before.automaton ∧ (after.automaton, p) ∈ g.entries := by
+  unfold winOnEntry at h
+  by_cases hm : after.automaton = before.automaton
+  · rw [if_pos hm] at h; exact absurd h (by simp)
+  · rw [if_neg hm] at h
+    refine ⟨hm, ?_⟩
+    have : ∀ (l : List (Coord × Pid)), winnerAux after.automaton l = some p →
+        (after.automaton, p) ∈ l := by
+      intro l
+      induction l with
+      | nil => intro hn; simp [winnerAux] at hn
+      | cons e es ih =>
+        obtain ⟨c, q⟩ := e
+        simp only [winnerAux]
+        by_cases hc : c = after.automaton
+        · rw [if_pos hc]; intro hq; injection hq with hq; subst hq; subst hc
+          exact List.mem_cons_self
+        · rw [if_neg hc]; intro hq; exact List.mem_cons_of_mem _ (ih hq)
+    exact this _ h
+
+/-- **A win is a CORNER**, once the assignment is on corners. This is the statement
+`Automatafl.lean`'s `winner_sound` could not make, because cornerhood was not in the model. -/
+theorem winOnEntry_corner (before after : Board) (g : GoalAssignment) (size : Nat) (p : Pid)
+    (hg : g.onCorners size = true) (h : winOnEntry before after g = some p) :
+    after.automaton ∈ cornersOf size := by
+  obtain ⟨_, hmem⟩ := winOnEntry_sound before after g p h
+  unfold GoalAssignment.onCorners at hg
+  have := List.all_eq_true.mp hg _ hmem
+  simpa using this
+
+/-! ### The stock 11×11 opening
+
+Transcribed from `board.rs::stock_two_player` (identical to `model.py::DEFAULT_SETUP` up to
+the transpose discussed in §5; the `board.rs` orientation is used, so the default `Column`
+tie-break is the prototype's play). Corners hold repulsors: the automaton can never move into
+an occupied square, so a corner must be cleared before it can be won. -/
+
+private def rowR (y : Nat) (xs : List Nat) : List (Coord × Particle) :=
+  xs.map (fun x => (⟨x, y⟩, Particle.repulsor))
+
+private def rowA (y : Nat) (xs : List Nat) : List (Coord × Particle) :=
+  xs.map (fun x => (⟨x, y⟩, Particle.attractor))
+
+/-- The stock two-player 11×11 board, automaton centred at (5,5). -/
+def stockTwoPlayer : Board :=
+  mkBoard 11
+    (rowR 0 [0, 1, 4, 5, 6, 9, 10] ++
+     rowA 1 [3, 7] ++ rowR 1 [4, 5, 6] ++
+     rowA 4 [0, 1, 9, 10] ++
+     rowR 5 [0, 1, 9, 10] ++
+     rowA 6 [0, 1, 9, 10] ++
+     rowA 9 [3, 7] ++ rowR 9 [4, 5, 6] ++
+     rowR 10 [0, 1, 4, 5, 6, 9, 10])
+    ⟨5, 5⟩
+
+/-! ## §7  THE ROUND — the honest type of a turn
+
+`applyTurn : Board → List Move → Board` cannot express the rules. Per (A):
+
+> In the event of a conflict, all players involved in the conflict must invalidate their
+> previous move and prepare another move. It is illegal to specify as a source or destination
+> the *exact* coordinate which was conflicted upon … this is often indicated with a temporary
+> marker … After all involved players have prepared their respective moves, they are revealed
+> simultaneously, and, if needed, the conflict resolution will recurse.
+
+So a turn is a sequence of ROUNDS over a `RoundState`: the board (frozen for the whole turn —
+nothing resolves until a clean round), the accumulated markers, the LOCKED moves that stand,
+and the seats that must re-enter. `roundStep` is one round; `runTurn` folds a trace of
+submissions. `ClearState` is structural: a fresh `RoundState` per turn carries no markers, no
+locks and no pending moves. -/
+
+/-- The mid-turn state. `board` is the TURN-START board; rounds never mutate it. -/
+structure RoundState where
+  board   : Board
+  marks   : List Coord
+  locked  : List Move
+  waiting : List Pid
+
+/-- The turn's opening round state. -/
+def openRound (b : Board) (seats : List Pid) : RoundState :=
+  { board := b, marks := [], locked := [], waiting := seats }
+
+/-- A round either demands re-entry, or resolves the turn. -/
+inductive RoundOutcome
+  | again (rs : RoundState)
+  | resolved (b : Board) (win : Option Pid)
+
+/-- **ONE ROUND.**
+
+1. Take the submissions from the seats that owe a move, keeping only the legal ones (a
+   marked coordinate is illegal as source AND destination, for everyone — §2).
+2. Add the locked moves. Detect fork/collide conflicts; if none, detect merge conflicts (§4).
+3. Any conflicted coordinate is MARKED, every move naming it at EITHER endpoint is dropped
+   and its seat re-enters, and every other move is LOCKED. The round recurses.
+   (`Automatafl.lean`'s `conflictResolve` dropped a move only if *its own* source was
+   fork-conflicted or *its own* destination collide-conflicted — a move merely MENTIONING a
+   conflicted coordinate at the other endpoint survived and executed. Audit divergences
+   2.4c / D4a / D4b.)
+4. A clean round RESOLVES: markers are cleared (they live in `RoundState`, so this is
+   structural), moves resolve, the automaton steps, the win is checked on ENTRY.
+
+One deviation from `model.py`, in the README's favour: a previously-locked seat whose move is
+newly conflicted re-enters. `model.py` deletes its pending move but never removes it from
+`self.locked`, so it can no longer submit — a deadlock the README's "all players involved …
+must prepare another move" does not permit. -/
+def roundStep (cfg : GameConfig) (g : GoalAssignment) (rs : RoundState) (subs : List Move) :
+    RoundOutcome :=
+  let fresh := subs.filter (fun m => rs.waiting.contains m.who && moveLegalB rs.board rs.marks m)
+  let all := rs.locked ++ fresh
+  let clash := clashCoords rs.board all
+  let cs := if clash.isEmpty then unresolved rs.board all else clash
+  if cs.isEmpty then
+    let mid := resolveMoves rs.board all
+    let after := automatonStepCfg cfg mid
+    .resolved after (winOnEntry mid after g)
+  else
+    .again
+      { board := rs.board
+        marks := (rs.marks ++ cs).dedup
+        locked := all.filter (fun m => !(cs.contains m.frm || cs.contains m.to))
+        waiting := ((all.filter (fun m => cs.contains m.frm || cs.contains m.to)).map (·.who)).dedup }
+
+/-- A whole turn: fold a trace of per-round submissions. `none` = the trace ran out before a
+clean round (the turn is still awaiting re-entry). -/
+def runTurn (cfg : GameConfig) (g : GoalAssignment) (rs : RoundState) :
+    List (List Move) → Option (Board × Option Pid)
+  | []           => none
+  | subs :: rest =>
+    match roundStep cfg g rs subs with
+    | .resolved b w => some (b, w)
+    | .again rs'    => runTurn cfg g rs' rest
+
+/-- Read-only projections, so `#guard` can inspect an outcome without needing `DecidableEq`
+on `Board` (which carries function fields). -/
+def RoundOutcome.isAgain : RoundOutcome → Bool
+  | .again _ => true | .resolved _ _ => false
+
+def RoundOutcome.marks : RoundOutcome → List Coord
+  | .again rs => rs.marks | .resolved _ _ => []
+
+def RoundOutcome.waiting : RoundOutcome → List Pid
+  | .again rs => rs.waiting | .resolved _ _ => []
+
+def RoundOutcome.locked : RoundOutcome → List Move
+  | .again rs => rs.locked | .resolved _ _ => []
+
+def RoundOutcome.cellAt : RoundOutcome → Coord → Option Particle
+  | .again _ => fun _ => none | .resolved b _ => fun c => some (b.cellAt c)
+
+def RoundOutcome.win : RoundOutcome → Option Pid
+  | .again _ => none | .resolved _ w => w
+
+/-! ## §8  ⚑ PIECE CONSERVATION — UNCONDITIONAL
+
+Every piece on the board at turn start is on the board after resolution, exactly once, and
+nothing appears from nowhere: `φ` is a bijection between the occupied squares.
+
+No hypotheses. `Automatafl.lean`'s `applyMoves_conserves_pieces` carried `hlandA`/`hlandB`
+("neither target square holds a piece that is not one of the two movers") and was stated only
+at arity 2. Those hypotheses WERE rules clause 3.2; `blockedB`'s inclusive path check
+discharges them, and the guard `resolvableB` — which is `roundStep`'s own conflict test —
+supplies uniqueness of arrivals. -/
+
+/-- A piece-preserving relabelling of the occupied squares. -/
+structure Conserves (b b' : Board) (φ : Coord → Coord) : Prop where
+  /-- every piece survives, at `φ` of where it was -/
+  carried : ∀ c, (b.cellAt c).isVacuum = false → b'.cellAt (φ c) = b.cellAt c
+  /-- no two pieces end up on the same square -/
+  injOn : ∀ c₁ c₂, (b.cellAt c₁).isVacuum = false → (b.cellAt c₂).isVacuum = false →
+            φ c₁ = φ c₂ → c₁ = c₂
+  /-- nothing appears from nowhere -/
+  onto : ∀ q, (b'.cellAt q).isVacuum = false → ∃ c, (b.cellAt c).isVacuum = false ∧ φ c = q
+
+/-- The relabelling resolution induces. -/
+def conservePhi (b : Board) (ms : List Move) : Coord → Coord :=
+  if resolvableB b ms = true then landMap b ms else id
+
+theorem cellAt_in (b : Board) (q : Coord) (h : b.inBounds q) : b.cellAt q = b.cells q := by
+  unfold Board.cellAt; exact if_pos h
+
+theorem inBounds_of_carrying (b : Board) (c : Coord) (h : (b.cellAt c).isVacuum = false) :
+    b.inBounds c := by
+  unfold Board.cellAt at h
+  by_cases hb : c.x < b.size ∧ c.y < b.size
+  · exact hb
+  · rw [if_neg hb] at h; simp [Particle.isVacuum] at h
+
+/-- `writeBoard` reads through at any in-bounds square. -/
+theorem writeBoard_cellAt (b : Board) (M : List Coord) (L : Coord → Coord) (q : Coord)
+    (hq : b.inBounds q) :
+    (writeBoard b M L).cellAt q =
+      (match arrivalAt M L q with
+       | some c => b.cellAt c
+       | none   => if memB M q then Particle.vacuum else b.cellAt q) := by
+  rw [cellAt_in (writeBoard b M L) q hq]
+  rfl
+
+/-- A square nothing moves out of is a square whose landing is itself. -/
+theorem landMap_of_not_src (b : Board) (ms : List Move) (c : Coord)
+    (h : (ms.any (fun m => m.frm == c)) = false) : landMap b ms c = c := by
+  have hE : edgeMap b ms c = none := by
+    unfold edgeMap edgeOf
+    have : (ms.filter (fun m => m.frm == c && !blockedB b ms m)) = [] := by
+      rw [List.filter_eq_nil_iff]
+      intro m hm
+      have := (List.any_eq_false.mp h) m hm
+      simp only [Bool.not_eq_true] at this ⊢
+      simp [this]
+    rw [this]; rfl
+  unfold landMap landOf
+  have hs : stopWalk (edgeMap b ms) (carAt b) (ms.length + 1) c = some c := by
+    rw [stopWalk, hE]
+  have hl : leaves (edgeMap b ms) (carAt b) (ms.length + 1) (ms.length + 1) c = false := by
+    rw [leaves]
+    have h2 : twoCyc (edgeMap b ms) c = false := by unfold twoCyc; rw [hE]
+    rw [if_neg (by simp [h2]), hs]
+    simp
+  rw [if_neg (by simp [hl])]
+
+/-- A carrying square that is not a mover keeps its landing. -/
+theorem landMap_of_not_mover (b : Board) (ms : List Move) (c : Coord)
+    (hcar : carAt b c = true) (hM : c ∉ movers b ms) : landMap b ms c = c := by
+  by_cases hsrc : (ms.any (fun m => m.frm == c)) = true
+  · by_contra hne
+    apply hM
+    unfold movers moverList
+    rw [List.mem_filter]
+    refine ⟨?_, by simp [hcar, hne]⟩
+    rw [List.mem_dedup, List.mem_map]
+    obtain ⟨m, hm, hmc⟩ := List.any_eq_true.mp hsrc
+    exact ⟨m, hm, by simpa using hmc⟩
+  · exact landMap_of_not_src b ms c (by simpa using hsrc)
+
+/-- Every mover carries a piece. -/
+theorem carAt_of_mover (b : Board) (ms : List Move) (c : Coord) (h : c ∈ movers b ms) :
+    carAt b c = true := by
+  unfold movers moverList at h
+  rw [List.mem_filter] at h
+  have h2 := h.2
+  simp only [Bool.and_eq_true] at h2
+  exact h2.1
+
+section Guarded
+
+variable (b : Board) (ms : List Move)
+
+/-- Unpack `resolvableB`. -/
+theorem landBad_false_of_resolvable (h : resolvableB b ms = true) (c : Coord)
+    (hc : c ∈ movers b ms) : landBad b ms c = false := by
+  unfold resolvableB unresolved at h
+  rw [List.isEmpty_iff] at h
+  have h1 : ((movers b ms).filter (landBad b ms)).map (landMap b ms) = [] := by
+    simpa using h
+  have h2 : (movers b ms).filter (landBad b ms) = [] := by simpa using h1
+  rw [List.filter_eq_nil_iff] at h2
+  simpa using h2 c hc
+
+/-- The three clauses of a clean landing, unpacked. -/
+theorem clean_land (h : resolvableB b ms = true) (c : Coord) (hc : c ∈ movers b ms) :
+    ((movers b ms).filter (fun c' => landMap b ms c' == landMap b ms c)).length = 1
+    ∧ (carAt b (landMap b ms c) = false
+        ∨ landMap b ms (landMap b ms c) ≠ landMap b ms c)
+    ∧ b.inBounds (landMap b ms c) := by
+  have hb := landBad_false_of_resolvable b ms h c hc
+  unfold landBad at hb
+  simp only [Bool.or_eq_false_iff, Bool.not_eq_false', beq_iff_eq, Bool.and_eq_false_iff,
+    beq_eq_false_iff_ne, decide_eq_true_eq] at hb
+  exact ⟨hb.1.1, hb.1.2, hb.2⟩
+
+/-- The unique-claim clause: a mover is the ONLY mover landing where it lands. -/
+theorem filter_land_eq_singleton (h : resolvableB b ms = true) (c : Coord)
+    (hc : c ∈ movers b ms) :
+    (movers b ms).filter (fun c' => landMap b ms c' == landMap b ms c) = [c] := by
+  have hlen := (clean_land b ms h c hc).1
+  have hmem : c ∈ (movers b ms).filter (fun c' => landMap b ms c' == landMap b ms c) := by
+    rw [List.mem_filter]; exact ⟨hc, by simp⟩
+  cases hf : (movers b ms).filter (fun c' => landMap b ms c' == landMap b ms c) with
+  | nil => rw [hf] at hlen; simp at hlen
+  | cons a t =>
+    cases t with
+    | nil =>
+      rw [hf] at hmem
+      simp only [List.mem_singleton] at hmem
+      rw [hmem]
+    | cons a' t' => rw [hf] at hlen; simp at hlen
+
+/-- The landing stays on the board. -/
+theorem land_inBounds (h : resolvableB b ms = true) (c : Coord) (hc : c ∈ movers b ms) :
+    b.inBounds (landMap b ms c) := (clean_land b ms h c hc).2.2
+
+end Guarded
+
+/-- **⚑ THE CONSERVATION THEOREM — no hypotheses.** -/
+theorem resolve_conserves (b : Board) (ms : List Move) :
+    Conserves b (resolveMoves b ms) (conservePhi b ms) := by
+  by_cases hres : resolvableB b ms = true
+  · -- the resolving branch
+    have hphi : conservePhi b ms = landMap b ms := by unfold conservePhi; rw [if_pos hres]
+    have hbd : resolveMoves b ms = writeBoard b (movers b ms) (landMap b ms) := by
+      unfold resolveMoves; rw [if_pos hres]
+    -- arrivals of movers
+    have harr : ∀ c ∈ movers b ms,
+        arrivalAt (movers b ms) (landMap b ms) (landMap b ms c) = some c := by
+      intro c hc
+      unfold arrivalAt
+      rw [filter_land_eq_singleton b ms hres c hc]
+      rfl
+    -- no mover lands on a carrying square that is not itself a mover
+    have hnoStayer : ∀ c ∈ movers b ms, ∀ q, landMap b ms c = q → carAt b q = true →
+        q ∈ movers b ms := by
+      intro c hc q hq hcar
+      by_contra hqm
+      have hfix := landMap_of_not_mover b ms q hcar hqm
+      rcases (clean_land b ms hres c hc).2.1 with h' | h'
+      · rw [hq] at h'; rw [h'] at hcar; exact absurd hcar (by simp)
+      · rw [hq, hfix] at h'; exact h' rfl
+    -- so nothing arrives on a carrying non-mover square
+    have hnoArr : ∀ q, carAt b q = true → q ∉ movers b ms →
+        arrivalAt (movers b ms) (landMap b ms) q = none := by
+      intro q hcar hqm
+      unfold arrivalAt
+      have hnil : (movers b ms).filter (fun c => landMap b ms c == q) = [] := by
+        rw [List.filter_eq_nil_iff]
+        intro c hc hcq
+        exact hqm (hnoStayer c hc q (by simpa using hcq) hcar)
+      rw [hnil]; rfl
+    -- an arrival on `q` is a mover that lands on `q`
+    have harrMem : ∀ q c, arrivalAt (movers b ms) (landMap b ms) q = some c →
+        c ∈ movers b ms ∧ landMap b ms c = q := by
+      intro q c hq
+      unfold arrivalAt at hq
+      have hsing : (movers b ms).filter (fun c' => landMap b ms c' == q) = [c] := by
+        cases hfl : (movers b ms).filter (fun c' => landMap b ms c' == q) with
+        | nil => rw [hfl] at hq; simp [uniqueOf] at hq
+        | cons a t =>
+          cases t with
+          | nil =>
+            rw [hfl] at hq
+            simp only [uniqueOf] at hq
+            injection hq with hq'
+            rw [hq']
+          | cons a' t' => rw [hfl] at hq; simp [uniqueOf] at hq
+      have hmem : c ∈ (movers b ms).filter (fun c' => landMap b ms c' == q) := by
+        rw [hsing]; exact List.mem_singleton_self c
+      rw [List.mem_filter] at hmem
+      exact ⟨hmem.1, by simpa using hmem.2⟩
+    refine ⟨?_, ?_, ?_⟩
+    · -- carried
+      intro c hc
+      have hcar : carAt b c = true := by unfold carAt; simp [hc]
+      rw [hphi, hbd]
+      by_cases hm : c ∈ movers b ms
+      · rw [writeBoard_cellAt b _ _ _ (land_inBounds b ms hres c hm), harr c hm]
+      · rw [landMap_of_not_mover b ms c hcar hm,
+            writeBoard_cellAt b _ _ _ (inBounds_of_carrying b c hc),
+            hnoArr c hcar hm]
+        simp only
+        rw [if_neg (by simp [memB_iff]; exact hm)]
+    · -- injOn
+      intro c₁ c₂ h1 h2 heq
+      rw [hphi] at heq
+      have hcar1 : carAt b c₁ = true := by unfold carAt; simp [h1]
+      have hcar2 : carAt b c₂ = true := by unfold carAt; simp [h2]
+      by_cases hm1 : c₁ ∈ movers b ms <;> by_cases hm2 : c₂ ∈ movers b ms
+      · have hsing := filter_land_eq_singleton b ms hres c₁ hm1
+        have hmem : c₂ ∈ (movers b ms).filter
+            (fun c' => landMap b ms c' == landMap b ms c₁) := by
+          rw [List.mem_filter]; exact ⟨hm2, by simp [heq]⟩
+        rw [hsing] at hmem
+        simp only [List.mem_singleton] at hmem
+        exact hmem.symm
+      · exfalso
+        rw [landMap_of_not_mover b ms c₂ hcar2 hm2] at heq
+        exact hm2 (hnoStayer c₁ hm1 c₂ heq hcar2)
+      · exfalso
+        rw [landMap_of_not_mover b ms c₁ hcar1 hm1] at heq
+        exact hm1 (hnoStayer c₂ hm2 c₁ heq.symm hcar1)
+      · rw [landMap_of_not_mover b ms c₁ hcar1 hm1,
+            landMap_of_not_mover b ms c₂ hcar2 hm2] at heq
+        exact heq
+    · -- onto
+      intro q hq
+      rw [hbd] at hq
+      have hib : b.inBounds q :=
+        inBounds_of_carrying (writeBoard b (movers b ms) (landMap b ms)) q hq
+      rw [writeBoard_cellAt b _ _ _ hib] at hq
+      cases harrq : arrivalAt (movers b ms) (landMap b ms) q with
+      | some c =>
+        rw [harrq] at hq
+        obtain ⟨hcm, hcq⟩ := harrMem q c harrq
+        exact ⟨c, hq, by rw [hphi]; exact hcq⟩
+      | none =>
+        rw [harrq] at hq
+        simp only at hq
+        by_cases hqm : memB (movers b ms) q = true
+        · rw [if_pos hqm] at hq; simp [Particle.isVacuum] at hq
+        · rw [if_neg hqm] at hq
+          refine ⟨q, hq, ?_⟩
+          rw [hphi]
+          exact landMap_of_not_mover b ms q (by unfold carAt; simp [hq])
+            (fun hmem => hqm ((memB_iff _ _).mpr hmem))
+  · -- the conflicting branch: the board is unchanged
+    have hphi : conservePhi b ms = id := by unfold conservePhi; rw [if_neg hres]
+    have hbd : resolveMoves b ms = b := by unfold resolveMoves; rw [if_neg hres]
+    rw [hphi, hbd]
+    exact ⟨fun _ _ => rfl, fun _ _ _ _ h => h, fun q hq => ⟨q, hq, rfl⟩⟩
+
+/-! ## §9  ⚑ DETERMINISM — permutation-invariance, PROVEN
+
+PHILOSOPHY.md, Principle of Fairness: *"The success and order of moves should be independent
+of any ordering on players or intrinsic ordering on the moves."*
+
+`Automatafl.lean` stated this as `FairnessObligation` and it was **false** — audit D5 permutes
+four moves and gets a different board. Here it is a theorem, and the reason it is provable is
+structural: every primitive below reads the move list only through membership
+(`List.any`, `List.filter`, `List.map`, `List.dedup`, `List.length`), and the one place that
+could have been order-sensitive — who wins a shared landing square — is a CONFLICT, so
+resolution never runs there. -/
+
+theorem perm_any {α} (p : α → Bool) {l₁ l₂ : List α} (h : l₁.Perm l₂) :
+    l₁.any p = l₂.any p := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [List.any_eq_true]
+  exact ⟨fun ⟨x, hx, hp⟩ => ⟨x, h.mem_iff.mp hx, hp⟩,
+         fun ⟨x, hx, hp⟩ => ⟨x, h.mem_iff.mpr hx, hp⟩⟩
+
+theorem perm_any' {α} {p q : α → Bool} (hpq : ∀ a, p a = q a) {l₁ l₂ : List α}
+    (h : l₁.Perm l₂) : l₁.any p = l₂.any q := by
+  rw [show p = q from funext hpq]; exact perm_any _ h
+
+theorem allEqOpt_spec (l : List Coord) (d : Coord) :
+    allEqOpt l = some d ↔ (d ∈ l ∧ ∀ x ∈ l, x = d) := by
+  cases l with
+  | nil => simp [allEqOpt]
+  | cons a t =>
+    have hhd : (a :: t).head? = some a := rfl
+    simp only [allEqOpt, hhd]
+    by_cases hall : (a :: t).all (fun e => e == a) = true
+    · rw [if_pos hall]
+      constructor
+      · intro h
+        injection h with h
+        subst h
+        exact ⟨List.mem_cons_self, fun x hx => by simpa using List.all_eq_true.mp hall x hx⟩
+      · rintro ⟨_, hev⟩
+        rw [hev a List.mem_cons_self]
+    · rw [if_neg hall]
+      constructor
+      · intro h; exact absurd h (by simp)
+      · rintro ⟨_, hev⟩
+        exfalso
+        apply hall
+        rw [List.all_eq_true]
+        intro x hx
+        rw [hev x hx, hev a List.mem_cons_self]
+        simp
+
+theorem allEqOpt_perm {l₁ l₂ : List Coord} (h : l₁.Perm l₂) :
+    allEqOpt l₁ = allEqOpt l₂ := by
+  apply Option.ext
+  intro d
+  rw [allEqOpt_spec, allEqOpt_spec]
+  constructor
+  · rintro ⟨hm, hev⟩; exact ⟨h.mem_iff.mp hm, fun x hx => hev x (h.mem_iff.mpr hx)⟩
+  · rintro ⟨hm, hev⟩; exact ⟨h.mem_iff.mpr hm, fun x hx => hev x (h.mem_iff.mp hx)⟩
+
+theorem uniqueOf_spec (l : List Coord) (c : Coord) : uniqueOf l = some c ↔ l = [c] := by
+  cases l with
+  | nil => simp [uniqueOf]
+  | cons a t =>
+    cases t with
+    | nil =>
+      constructor
+      · intro h; simp only [uniqueOf] at h; injection h with h; rw [h]
+      · intro h; injection h with h _; rw [h]; rfl
+    | cons a' t' => simp [uniqueOf]
+
+theorem uniqueOf_perm {l₁ l₂ : List Coord} (h : l₁.Perm l₂) :
+    uniqueOf l₁ = uniqueOf l₂ := by
+  apply Option.ext
+  intro c
+  rw [uniqueOf_spec, uniqueOf_spec]
+  constructor
+  · intro h1; subst h1; exact (List.perm_singleton.mp h.symm)
+  · intro h2; subst h2; exact (List.perm_singleton.mp h)
+
+/-- `blockedB` reads the move list only through membership. -/
+theorem blockedB_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) (m : Move) :
+    blockedB b ms₁ m = blockedB b ms₂ m := by
+  unfold blockedB
+  congr 1
+  funext c
+  rw [show (ms₁.any fun m' => m'.frm == c) = (ms₂.any fun m' => m'.frm == c) from perm_any _ h]
+
+/-- The move graph is permutation-invariant. -/
+theorem edgeMap_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) :
+    edgeMap b ms₁ = edgeMap b ms₂ := by
+  funext c
+  unfold edgeMap edgeOf
+  apply allEqOpt_perm
+  apply List.Perm.map
+  have hfe : ms₁.filter (fun m => m.frm == c && !blockedB b ms₁ m)
+      = ms₁.filter (fun m => m.frm == c && !blockedB b ms₂ m) := by
+    apply List.filter_congr
+    intro m _
+    rw [blockedB_perm h b m]
+  rw [hfe]
+  exact h.filter _
+
+/-- The landing map is permutation-invariant. -/
+theorem landMap_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) :
+    landMap b ms₁ = landMap b ms₂ := by
+  unfold landMap
+  rw [edgeMap_perm h b, h.length_eq]
+
+/-- The mover set is permutation-invariant (as a set). -/
+theorem movers_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) :
+    (movers b ms₁).Perm (movers b ms₂) := by
+  unfold movers moverList
+  rw [landMap_perm h b]
+  exact ((h.map _).dedup).filter _
+
+/-- `landBad` is permutation-invariant. -/
+theorem landBad_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) (c : Coord) :
+    landBad b ms₁ c = landBad b ms₂ c := by
+  have hL := landMap_perm h b
+  have hlen : ((movers b ms₁).filter (fun c' => landMap b ms₁ c' == landMap b ms₁ c)).length
+      = ((movers b ms₂).filter (fun c' => landMap b ms₂ c' == landMap b ms₂ c)).length := by
+    rw [hL]; exact ((movers_perm h b).filter _).length_eq
+  unfold landBad
+  rw [hlen, hL]
+
+/-- The contested-coordinate set is permutation-invariant (as a set). -/
+theorem unresolved_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) :
+    (unresolved b ms₁).Perm (unresolved b ms₂) := by
+  unfold unresolved
+  rw [landMap_perm h b]
+  have hf : (movers b ms₁).filter (landBad b ms₁)
+      = (movers b ms₁).filter (landBad b ms₂) := by
+    apply List.filter_congr; intro c _; exact landBad_perm h b c
+  rw [hf]
+  exact (((movers_perm h b).filter _).map _).dedup
+
+/-- The resolvability gate is permutation-invariant. -/
+theorem resolvableB_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) :
+    resolvableB b ms₁ = resolvableB b ms₂ := by
+  have hp := unresolved_perm h b
+  unfold resolvableB
+  apply Bool.eq_iff_iff.mpr
+  simp only [List.isEmpty_iff]
+  constructor
+  · intro h1
+    apply List.Perm.eq_nil
+    rw [← h1]; exact hp.symm
+  · intro h2
+    apply List.Perm.eq_nil
+    rw [← h2]; exact hp
+
+/-- **⚑ THE DETERMINISM THEOREM.** Resolution is permutation-invariant: no player order, no
+submission order, no move-list order can change the resulting board. -/
+theorem resolve_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) (q : Coord) :
+    (resolveMoves b ms₁).cellAt q = (resolveMoves b ms₂).cellAt q := by
+  have hL := landMap_perm h b
+  have hM := movers_perm h b
+  have harr : ∀ x, arrivalAt (movers b ms₁) (landMap b ms₁) x
+      = arrivalAt (movers b ms₂) (landMap b ms₂) x := by
+    intro x
+    unfold arrivalAt
+    rw [hL]
+    exact uniqueOf_perm (hM.filter _)
+  have hmem : ∀ x, memB (movers b ms₁) x = memB (movers b ms₂) x := by
+    intro x; unfold memB; exact perm_any _ hM
+  have hwrite : writeBoard b (movers b ms₁) (landMap b ms₁)
+      = writeBoard b (movers b ms₂) (landMap b ms₂) := by
+    unfold writeBoard
+    congr 1
+    funext x
+    rw [harr x, hmem x]
+  unfold resolveMoves
+  rw [resolvableB_perm h b]
+  by_cases hr : resolvableB b ms₂ = true
+  · rw [if_pos hr, if_pos hr, hwrite]
+  · rw [if_neg hr, if_neg hr]
+
+theorem forkAt_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (s : Coord) :
+    forkAt ms₁ s = forkAt ms₂ s := by
+  unfold forkAt
+  exact perm_any' (fun m₁ => perm_any _ h) h
+
+theorem collideAt_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) (d : Coord) :
+    collideAt b ms₁ d = collideAt b ms₂ d := by
+  unfold collideAt
+  exact perm_any' (fun m₁ => perm_any _ h) h
+
+theorem candidates_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) :
+    (candidates ms₁).Perm (candidates ms₂) := (h.map _).append (h.map _)
+
+/-- Conflict detection is permutation-invariant too, so a round's BRANCH does not depend on
+submission order either. -/
+theorem clashCoords_perm {ms₁ ms₂ : List Move} (h : ms₁.Perm ms₂) (b : Board) (c : Coord) :
+    (c ∈ clashCoords b ms₁) ↔ (c ∈ clashCoords b ms₂) := by
+  unfold clashCoords
+  have hf : (candidates ms₁).filter (fun x => forkAt ms₁ x || collideAt b ms₁ x)
+      = (candidates ms₁).filter (fun x => forkAt ms₂ x || collideAt b ms₂ x) := by
+    apply List.filter_congr
+    intro x _
+    rw [forkAt_perm h x, collideAt_perm h b x]
+  simp only [List.mem_dedup]
+  rw [hf]
+  exact ((candidates_perm h).filter _).mem_iff
+
+/-! ## §10  ⚑ CONFORMANCE TEST BLOCK
+
+One live `#guard` per rules clause, keyed to the audit's divergence table
+(`docs/reference/AUTOMATAFL-RULES-CONFORMANCE-AUDIT.md` §A). Every witness the audit's probe
+`AUTOMATAFL-RULES-CONFORMANCE-PROBE.lean` used to EXHIBIT a divergence appears here behaving
+per the rules — D1, D2, D3, D4a, D4b, D5, D6 — so each fixed divergence has a falsifier that
+would go red if the fix regressed. -/
+
+section Conformance
+
+/-- A move, positionally: `mv who from to`. (Mathlib's token table makes `to := …` in
+structure-instance syntax unparseable, so the witnesses use the anonymous constructor.) -/
+private def mv (w : Pid) (a d : Coord) : Move := ⟨w, a, d⟩
+
+private def cfgCol : GameConfig := ⟨.column⟩
+private def cfgRow : GameConfig := ⟨.row⟩
+private def cfgFrz : GameConfig := ⟨.freeze⟩
+private def noGoals : GoalAssignment := ⟨[]⟩
+
+/-! ### 1.4 — the automaton square is banned as a SOURCE only (ruling D) -/
+
+def autoBoard : Board := mkBoard 3 [(⟨0, 2⟩, .attractor)] ⟨2, 2⟩
+def intoAuto : Move := mv 0 ⟨0, 2⟩ ⟨2, 2⟩
+def outOfAuto : Move := mv 0 ⟨2, 2⟩ ⟨0, 2⟩
+
+-- naming the automaton square as a DESTINATION is legal to propose …
+#guard moveLegalB autoBoard [] intoAuto = true
+-- … and simply FAILS to execute: the square is occupied, so the move is blocked …
+#guard blockedB autoBoard [intoAuto] intoAuto = true
+-- … and the mover is replaced at its origin.
+#guard (resolveMoves autoBoard [intoAuto]).cellAt ⟨0, 2⟩ = Particle.attractor
+#guard (resolveMoves autoBoard [intoAuto]).cellAt ⟨2, 2⟩ = Particle.automaton
+-- naming it as a SOURCE is illegal (model.py `POS_CANT_MOVE_THAT`).
+#guard moveLegalB autoBoard [] outOfAuto = false
+
+/-! ### 1.5 — a marked coordinate is illegal as source AND destination, for everyone -/
+
+#guard moveLegalB autoBoard [⟨0, 2⟩] intoAuto = false            -- marked source
+#guard moveLegalB autoBoard [⟨2, 2⟩] intoAuto = false            -- marked destination
+
+/-! ### 3.2 (audit D1, CRIT) — the destination is ON the path: a non-moving piece there
+BLOCKS, and the mover is replaced at its origin. The old spec DELETED the occupant, with one
+move on a 3x3 board. -/
+
+def d1Board : Board := mkBoard 3 [(⟨0, 0⟩, .attractor), (⟨0, 2⟩, .repulsor)] ⟨2, 2⟩
+def d1Move : Move := mv 0 ⟨0, 0⟩ ⟨0, 2⟩
+
+#guard moveLegalB d1Board [] d1Move = true
+#guard blockedB d1Board [d1Move] d1Move = true                   -- WAS false (exclusive path)
+#guard (resolveMoves d1Board [d1Move]).cellAt ⟨0, 0⟩ = Particle.attractor
+#guard (resolveMoves d1Board [d1Move]).cellAt ⟨0, 2⟩ = Particle.repulsor
+-- the repulsor is still SOMEWHERE on the board (the old spec's scan found none)
+#guard ((List.range 3).any (fun x => (List.range 3).any (fun y =>
+          (resolveMoves d1Board [d1Move]).cellAt ⟨x, y⟩ == Particle.repulsor))) = true
+
+/-! ### 3.3 — chains continue through vacated / vacuum squares -/
+
+def chainBoard : Board := mkBoard 5 [(⟨0, 0⟩, .attractor)] ⟨4, 4⟩
+def ch1 : Move := mv 0 ⟨0, 0⟩ ⟨0, 1⟩
+def ch2 : Move := mv 1 ⟨0, 1⟩ ⟨0, 2⟩   -- source is VACUUM
+
+#guard (resolveMoves chainBoard [ch1, ch2]).cellAt ⟨0, 2⟩ = Particle.attractor
+#guard (resolveMoves chainBoard [ch1, ch2]).cellAt ⟨0, 0⟩ = Particle.vacuum
+
+/-! ### 3.4 — the ERRATUM / caterpillar: a piece landing on another move's source
+participates in that move too, one edge each -/
+
+def catBoard : Board := mkBoard 5 [(⟨0, 0⟩, .attractor), (⟨0, 1⟩, .repulsor)] ⟨4, 4⟩
+def cat1 : Move := mv 0 ⟨0, 0⟩ ⟨0, 1⟩
+def cat2 : Move := mv 1 ⟨0, 1⟩ ⟨0, 2⟩
+
+#guard (resolveMoves catBoard [cat1, cat2]).cellAt ⟨0, 0⟩ = Particle.vacuum
+#guard (resolveMoves catBoard [cat1, cat2]).cellAt ⟨0, 1⟩ = Particle.attractor
+#guard (resolveMoves catBoard [cat1, cat2]).cellAt ⟨0, 2⟩ = Particle.repulsor
+
+/-! ### 3.6 + the author's rule — a move whose destination does NOT empty simply FAILS TO
+EXECUTE ("it doesn't generate a conflict and shouldn't"), and the failure propagates back down
+the chain: the leader is blocked, so the follower stays too. -/
+
+def stuckBoard : Board :=
+  mkBoard 5 [(⟨0, 0⟩, .attractor), (⟨0, 1⟩, .repulsor), (⟨0, 2⟩, .attractor)] ⟨4, 4⟩
+def st1 : Move := mv 0 ⟨0, 0⟩ ⟨0, 1⟩
+def st2 : Move := mv 1 ⟨0, 1⟩ ⟨0, 2⟩       -- (0,2) holds a NON-MOVING piece
+
+#guard blockedB stuckBoard [st1, st2] st2 = true      -- the leader is blocked …
+#guard blockedB stuckBoard [st1, st2] st1 = false     -- … but the follower's own path is clear
+#guard clashCoords stuckBoard [st1, st2] = ([] : List Coord)   -- NOT a conflict
+#guard unresolved stuckBoard [st1, st2] = ([] : List Coord)    -- and not a merge either
+#guard movers stuckBoard [st1, st2] = ([] : List Coord)        -- nothing moves
+#guard (resolveMoves stuckBoard [st1, st2]).cellAt ⟨0, 0⟩ = Particle.attractor
+#guard (resolveMoves stuckBoard [st1, st2]).cellAt ⟨0, 1⟩ = Particle.repulsor
+#guard (resolveMoves stuckBoard [st1, st2]).cellAt ⟨0, 2⟩ = Particle.attractor
+
+-- the guard is not swallowing the ordinary cases: real resolutions ARE resolvable
+#guard resolvableB catBoard [cat1, cat2] = true
+#guard resolvableB chainBoard [ch1, ch2] = true
+
+/-! ### 3.5a (audit D2) — a 2-cycle with pieces on BOTH squares STAYS PUT.
+The old spec SWAPPED them. -/
+
+def d2Board : Board := mkBoard 3 [(⟨0, 0⟩, .attractor), (⟨0, 2⟩, .repulsor)] ⟨2, 2⟩
+def d2A : Move := mv 0 ⟨0, 0⟩ ⟨0, 2⟩
+def d2B : Move := mv 1 ⟨0, 2⟩ ⟨0, 0⟩
+
+#guard clashCoords d2Board [d2A, d2B] = ([] : List Coord)         -- not a conflict
+#guard twoCyc (edgeMap d2Board [d2A, d2B]) ⟨0, 0⟩ = true
+#guard (resolveMoves d2Board [d2A, d2B]).cellAt ⟨0, 0⟩ = Particle.attractor   -- WAS repulsor
+#guard (resolveMoves d2Board [d2A, d2B]).cellAt ⟨0, 2⟩ = Particle.repulsor    -- WAS attractor
+
+/-! ### 3.5b (audit D3) — the README's own named case: *"a move from an empty square directly
+back to some source square — the piece simply doesn't move"*. The old spec moved it. -/
+
+def d3Board : Board := mkBoard 3 [(⟨0, 0⟩, .attractor)] ⟨2, 2⟩
+def d3A : Move := mv 0 ⟨0, 0⟩ ⟨0, 2⟩
+def d3B : Move := mv 1 ⟨0, 2⟩ ⟨0, 0⟩      -- source is VACUUM
+
+#guard (resolveMoves d3Board [d3A, d3B]).cellAt ⟨0, 0⟩ = Particle.attractor   -- WAS vacuum
+#guard (resolveMoves d3Board [d3A, d3B]).cellAt ⟨0, 2⟩ = Particle.vacuum      -- WAS attractor
+
+/-! ### 3.5c (audit D6) — an EMPTY cycle cannot pull a piece in; the move is nullified -/
+
+def d6Board : Board := mkBoard 5 [(⟨0, 0⟩, .attractor)] ⟨4, 4⟩
+def e1 : Move := mv 0 ⟨0, 0⟩ ⟨0, 1⟩
+def e2 : Move := mv 1 ⟨0, 1⟩ ⟨0, 2⟩
+def e3 : Move := mv 2 ⟨0, 2⟩ ⟨0, 1⟩
+
+#guard stopWalk (edgeMap d6Board [e1, e2, e3]) (carAt d6Board) 4 ⟨0, 0⟩ = none
+#guard (resolveMoves d6Board [e1, e2, e3]).cellAt ⟨0, 0⟩ = Particle.attractor  -- WAS vacuum
+#guard (resolveMoves d6Board [e1, e2, e3]).cellAt ⟨0, 2⟩ = Particle.vacuum     -- WAS attractor
+
+/-! ### 3.5d — a >2-cycle with every square carrying ROTATES one position (KEPT) -/
+
+def rotBoard : Board :=
+  mkBoard 5 [(⟨0, 0⟩, .attractor), (⟨2, 0⟩, .repulsor),
+             (⟨2, 2⟩, .attractor), (⟨0, 2⟩, .repulsor)] ⟨4, 4⟩
+def r1 : Move := mv 0 ⟨0, 0⟩ ⟨2, 0⟩
+def r2 : Move := mv 1 ⟨2, 0⟩ ⟨2, 2⟩
+def r3 : Move := mv 2 ⟨2, 2⟩ ⟨0, 2⟩
+def r4 : Move := mv 3 ⟨0, 2⟩ ⟨0, 0⟩
+
+#guard (resolveMoves rotBoard [r1, r2, r3, r4]).cellAt ⟨2, 0⟩ = Particle.attractor
+#guard (resolveMoves rotBoard [r1, r2, r3, r4]).cellAt ⟨2, 2⟩ = Particle.repulsor
+#guard (resolveMoves rotBoard [r1, r2, r3, r4]).cellAt ⟨0, 2⟩ = Particle.attractor
+#guard (resolveMoves rotBoard [r1, r2, r3, r4]).cellAt ⟨0, 0⟩ = Particle.repulsor
+#guard resolvableB rotBoard [r1, r2, r3, r4] = true
+
+/-! ### 2.1 / 2.2 / 2.3 — fork, collide, and the identical-move EXCEPTION (KEPT) -/
+
+def forkBoard : Board := mkBoard 5 [(⟨0, 0⟩, .attractor)] ⟨4, 4⟩
+def fkA : Move := mv 0 ⟨0, 0⟩ ⟨0, 3⟩
+def fkB : Move := mv 1 ⟨0, 0⟩ ⟨3, 0⟩
+def fkSame : Move := mv 1 ⟨0, 0⟩ ⟨0, 3⟩   -- IDENTICAL to fkA
+
+#guard forkAt [fkA, fkB] ⟨0, 0⟩ = true                            -- 2.1
+#guard clashCoords forkBoard [fkA, fkB] = [(⟨0, 0⟩ : Coord)]
+-- 2.3: two players naming the SAME move is not a conflict, and it resolves as one move
+#guard forkAt [fkA, fkSame] ⟨0, 0⟩ = false
+#guard clashCoords forkBoard [fkA, fkSame] = ([] : List Coord)
+#guard movers forkBoard [fkA, fkSame] = [(⟨0, 0⟩ : Coord)]
+#guard (resolveMoves forkBoard [fkA, fkSame]).cellAt ⟨0, 3⟩ = Particle.attractor
+#guard (resolveMoves forkBoard [fkA, fkSame]).cellAt ⟨0, 0⟩ = Particle.vacuum
+
+def collBoard : Board :=
+  mkBoard 5 [(⟨0, 0⟩, .attractor), (⟨4, 0⟩, .attractor), (⟨2, 0⟩, .repulsor)] ⟨4, 4⟩
+#guard collideAt collBoard
+    [mv 0 ⟨0, 0⟩ ⟨2, 0⟩,
+     mv 1 ⟨4, 0⟩ ⟨2, 0⟩] ⟨2, 0⟩ = true     -- 2.2
+
+/-! ### 2.4a–d (audit D4a / D4b) — RE-ENTRY, LOCKING, the marked coordinate, and RECURSION.
+
+`Automatafl.lean` dropped a move only if *its own* source was fork-conflicted or *its own*
+destination collide-conflicted, so a third move merely MENTIONING the conflicted coordinate
+survived and executed. Both witnesses now behave per the rules. -/
+
+-- D4a: destination conflict at (2,0); a third move uses (2,0) as its SOURCE.
+def d4A : Move := mv 0 ⟨0, 0⟩ ⟨2, 0⟩
+def d4B : Move := mv 1 ⟨4, 0⟩ ⟨2, 0⟩
+def d4C : Move := mv 2 ⟨2, 0⟩ ⟨2, 4⟩
+
+#guard (roundStep cfgCol noGoals (openRound collBoard [0, 1, 2]) [d4A, d4B, d4C]).isAgain
+        = true
+#guard (roundStep cfgCol noGoals (openRound collBoard [0, 1, 2]) [d4A, d4B, d4C]).marks
+        = [(⟨2, 0⟩ : Coord)]
+-- the third move is INVALIDATED (it was `conflictResolve = [d4C]` and it EXECUTED)
+#guard (roundStep cfgCol noGoals (openRound collBoard [0, 1, 2]) [d4A, d4B, d4C]).locked
+        = ([] : List Move)
+#guard (roundStep cfgCol noGoals (openRound collBoard [0, 1, 2]) [d4A, d4B, d4C]).waiting
+        = [0, 1, 2]
+
+-- D4b: fork conflict at (0,0); a third move TARGETS (0,0).
+def d5Board : Board := mkBoard 5 [(⟨0, 0⟩, .attractor), (⟨0, 4⟩, .repulsor)] ⟨4, 4⟩
+def d5A : Move := mv 0 ⟨0, 0⟩ ⟨0, 2⟩
+def d5B : Move := mv 1 ⟨0, 0⟩ ⟨2, 0⟩
+def d5C : Move := mv 2 ⟨0, 4⟩ ⟨0, 0⟩
+
+#guard (roundStep cfgCol noGoals (openRound d5Board [0, 1, 2]) [d5A, d5B, d5C]).marks
+        = [(⟨0, 0⟩ : Coord)]
+#guard (roundStep cfgCol noGoals (openRound d5Board [0, 1, 2]) [d5A, d5B, d5C]).locked
+        = ([] : List Move)
+#guard (roundStep cfgCol noGoals (openRound d5Board [0, 1, 2]) [d5A, d5B, d5C]).waiting
+        = [0, 1, 2]
+
+-- LOCKING: a player not involved in the conflict has their move STAND, and does not re-enter.
+def lockBoard : Board :=
+  mkBoard 5 [(⟨0, 0⟩, .attractor), (⟨4, 0⟩, .attractor), (⟨0, 4⟩, .repulsor)] ⟨4, 4⟩
+def lkC : Move := mv 2 ⟨4, 0⟩ ⟨4, 2⟩
+
+#guard (roundStep cfgCol noGoals (openRound lockBoard [0, 1, 2]) [d5A, d5B, lkC]).locked
+        = [lkC]
+#guard (roundStep cfgCol noGoals (openRound lockBoard [0, 1, 2]) [d5A, d5B, lkC]).waiting
+        = [0, 1]
+
+-- RECURSION (2.4d): a marked square is illegal next round, and a clean second round RESOLVES.
+def reenter : Move := mv 0 ⟨0, 4⟩ ⟨0, 2⟩
+def stillMarked : Move := mv 1 ⟨0, 0⟩ ⟨3, 0⟩  -- source still marked
+
+#guard ((runTurn cfgCol noGoals (openRound d5Board [0, 1, 2])
+          [[d5A, d5B, d5C], [reenter, stillMarked]]).map
+          (fun r => r.1.cellAt ⟨0, 2⟩)) = some Particle.repulsor
+#guard ((runTurn cfgCol noGoals (openRound d5Board [0, 1, 2])
+          [[d5A, d5B, d5C], [reenter, stillMarked]]).map
+          (fun r => r.1.cellAt ⟨0, 0⟩)) = some Particle.attractor
+-- one round is not enough: the turn is still awaiting re-entry
+#guard (runTurn cfgCol noGoals (openRound d5Board [0, 1, 2]) [[d5A, d5B, d5C]]).isSome = false
+
+/-! ### 3.7 (audit D5, CRIT) — a vacuum CONFLUENCE is now a CONFLICT.
+
+Two chains converge on (2,0) through vacuum waypoints. Neither the fork nor the collide
+clause fires (both waypoint sources are vacuum), and the old spec awarded the square by
+MOVE-LIST ORDER and DELETED the loser — the permutation `[m3,m4,m1,m2]` produced a different
+board, which is what refuted `FairnessObligation`. Here it is detected and conflicted. -/
+
+def mgBoard : Board := mkBoard 5 [(⟨0, 0⟩, .attractor), (⟨4, 0⟩, .repulsor)] ⟨4, 4⟩
+def m1 : Move := mv 0 ⟨0, 0⟩ ⟨1, 0⟩
+def m2 : Move := mv 1 ⟨1, 0⟩ ⟨2, 0⟩   -- vacuum source
+def m3 : Move := mv 2 ⟨4, 0⟩ ⟨3, 0⟩
+def m4 : Move := mv 3 ⟨3, 0⟩ ⟨2, 0⟩   -- vacuum source
+
+#guard clashCoords mgBoard [m1, m2, m3, m4] = ([] : List Coord)   -- fork/collide silent …
+#guard unresolved mgBoard [m1, m2, m3, m4] = [(⟨2, 0⟩ : Coord)]   -- … the merge clause fires
+#guard resolvableB mgBoard [m1, m2, m3, m4] = false
+#guard (roundStep cfgCol noGoals (openRound mgBoard [0, 1, 2, 3]) [m1, m2, m3, m4]).marks
+        = [(⟨2, 0⟩ : Coord)]
+#guard (roundStep cfgCol noGoals (openRound mgBoard [0, 1, 2, 3]) [m1, m2, m3, m4]).locked
+        = [m1, m3]
+#guard (roundStep cfgCol noGoals (openRound mgBoard [0, 1, 2, 3]) [m1, m2, m3, m4]).waiting
+        = [1, 3]
+-- and no piece is destroyed, under EITHER order (the audit's permutation)
+#guard (resolveMoves mgBoard [m1, m2, m3, m4]).cellAt ⟨0, 0⟩ = Particle.attractor
+#guard (resolveMoves mgBoard [m1, m2, m3, m4]).cellAt ⟨4, 0⟩ = Particle.repulsor
+#guard ((List.range 5).any (fun x => (List.range 5).any (fun y =>
+          (resolveMoves mgBoard [m3, m4, m1, m2]).cellAt ⟨x, y⟩ == Particle.repulsor))) = true
+#guard ((List.range 5).all (fun x => (List.range 5).all (fun y =>
+          (resolveMoves mgBoard [m1, m2, m3, m4]).cellAt ⟨x, y⟩
+            == (resolveMoves mgBoard [m3, m4, m1, m2]).cellAt ⟨x, y⟩))) = true
+
+/-! ### 4.x — the automaton, unchanged; 4.5 — the tie-break is SELECTABLE (ruling B) -/
+
+def tieBoard : Board := mkBoard 5 [(⟨2, 4⟩, .attractor), (⟨4, 2⟩, .attractor)] ⟨2, 2⟩
+
+#guard decisionCmp
+        (evaluateAxis (tieBoard.raycast ⟨2, 2⟩ .xp) (tieBoard.raycast ⟨2, 2⟩ .xn))
+        (evaluateAxis (tieBoard.raycast ⟨2, 2⟩ .yp) (tieBoard.raycast ⟨2, 2⟩ .yn)) = Ordering.eq
+#guard (automatonStepCfg cfgCol tieBoard).automaton = (⟨2, 3⟩ : Coord)   -- column: along Y
+#guard (automatonStepCfg cfgRow tieBoard).automaton = (⟨3, 2⟩ : Coord)   -- row: along X
+#guard (automatonStepCfg cfgFrz tieBoard).automaton = (⟨2, 2⟩ : Coord)   -- freeze: no move
+
+-- the priority cascade itself (unchanged from `Automatafl.lean`)
+def demoBoard : Board := mkBoard 5 [(⟨2, 4⟩, .attractor)] ⟨2, 2⟩
+def repBoard : Board := mkBoard 5 [(⟨2, 1⟩, .repulsor)] ⟨2, 2⟩
+#guard (automatonStepCfg cfgCol demoBoard).automaton = (⟨2, 3⟩ : Coord)  -- toward attractor
+#guard (automatonStepCfg cfgCol repBoard).automaton = (⟨2, 3⟩ : Coord)   -- flee repulsor
+-- the default config IS the old automaton (the Leg-A bridge, witnessed)
+#guard (automatonStepCfg cfgCol demoBoard).automaton = (automatonStep demoBoard).automaton
+#guard (automatonStepCfg cfgCol tieBoard).automaton = (automatonStep tieBoard).automaton
+
+/-! ### 5.1 / 5.2 — SETUP: two corners in the same row each / one corner each -/
+
+#guard (stockGoals2 11).WellFormed2 11 = true
+#guard (stockGoals4 11).WellFormed4 11 = true
+-- `model.py::DEFAULT_GOALS[2]` repeats (10,0) and gives seat 1 a COLUMN — it is NOT well-formed
+#guard (GoalAssignment.mk [(⟨0, 0⟩, 0), (⟨10, 0⟩, 0), (⟨10, 0⟩, 1), (⟨10, 10⟩, 1)]).WellFormed2 11
+        = false
+-- two corners in a COLUMN is not a legal two-player setup either
+#guard (GoalAssignment.mk [(⟨0, 0⟩, 0), (⟨0, 10⟩, 0), (⟨10, 0⟩, 1), (⟨10, 10⟩, 1)]).WellFormed2 11
+        = false
+
+/-! ### 5.4 — the win fires on the automaton MOVING INTO a corner, not sitting on one.
+
+`Automatafl.lean`'s own witness read `#guard winner demoBoard [(⟨2,2⟩, 7)] = some 7` — a win
+on a board where the automaton had not moved at all. It FLIPS. -/
+
+#guard winOnEntry demoBoard demoBoard ⟨[(⟨2, 2⟩, 7)]⟩ = none                    -- WAS some 7
+#guard winOnEntry demoBoard (automatonStepCfg cfgCol demoBoard) ⟨[(⟨2, 3⟩, 3)]⟩ = some 3
+#guard winOnEntry demoBoard (automatonStepCfg cfgCol demoBoard) ⟨[(⟨2, 2⟩, 3)]⟩ = none
+
+/-! ### The stock 11x11 opening — orientation pinned by raycast -/
+
+#guard stockTwoPlayer.cellAt ⟨5, 5⟩ = Particle.automaton
+#guard stockTwoPlayer.cellAt ⟨0, 0⟩ = Particle.repulsor       -- corners are occupied
+#guard stockTwoPlayer.cellAt ⟨3, 1⟩ = Particle.attractor      -- pins [y][x] vs [x][y]
+#guard stockTwoPlayer.cellAt ⟨1, 3⟩ = Particle.vacuum         -- the transpose is NOT the board
+#guard (stockTwoPlayer.raycast ⟨5, 5⟩ .xp).what = Particle.repulsor
+#guard (stockTwoPlayer.raycast ⟨5, 5⟩ .xp).dist = 4
+#guard (stockTwoPlayer.raycast ⟨5, 5⟩ .yp).dist = 4
+-- the opening is symmetric: all four rays are equidistant repulsors, so nothing moves
+#guard (automatonStepCfg cfgCol stockTwoPlayer).automaton = (⟨5, 5⟩ : Coord)
+
+end Conformance
+
+/-! ## §11  Axiom hygiene -/
+
+#assert_all_clean [
+  moveLegalB_iff,
+  chooseOffsetCfg_mem,
+  chooseOffsetCfg_column,
+  automatonOffsetCfg_column,
+  automatonOffsetCfg_bounded,
+  automatonStepCfg_preserves_inBounds,
+  winOnEntry_sound,
+  winOnEntry_corner,
+  landMap_of_not_src,
+  landMap_of_not_mover,
+  filter_land_eq_singleton,
+  resolve_conserves,
+  allEqOpt_perm,
+  uniqueOf_perm,
+  edgeMap_perm,
+  landMap_perm,
+  movers_perm,
+  resolvableB_perm,
+  resolve_perm,
+  clashCoords_perm
+]
+
+end Dregg2.Games.AutomataflRules
