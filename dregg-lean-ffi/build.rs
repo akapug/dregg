@@ -303,6 +303,13 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
         // It lives under `Dregg2/` so its IR emits under `.lake/build/ir/Dregg2/` and the
         // `build_dregg2_archive` splice (which walks `Dregg2/**/*.c`) picks up the export.
         "Dregg2.Bridge.InterchainAdapterDecision",
+        // FRI soundness ledger: the verified per-config arithmetic exported as
+        // `dregg_fri_ledger`; its IR must exist before the archive splice can
+        // expose the optional C bridge.
+        "Dregg2.Circuit.FriLedger",
+        // Deployed constraint evaluator: the PROVEN `admits` decision exported
+        // as `dregg_constraint_admits`, outside the FFI module's import closure.
+        "Dregg2.Exec.DeployedConstraint",
     ];
     let lake_status = Command::new("lake")
         .arg("build")
@@ -1390,6 +1397,8 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_grain_r3_verify_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_holding_grant_weight_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_interchain_reached_consensus_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_fri_ledger_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_constraint_admits_present)");
 
     // ── FAIL-LOUD GATE (DREGG_REQUIRE_LEAN) — see docs/BUILD-LEAN-LINKED-NODE.md ─────────────
     // A distribution / CI / validator build REFUSES a silent degrade to the marshal-only shell
@@ -1707,6 +1716,21 @@ fn main() {
         );
     }
 
+    // DEPLOYED CONSTRAINT evaluator extraction (`dregg_constraint_admits`, module
+    // `Dregg2.Exec.DeployedConstraint`, outside the FFI import closure). Probe the
+    // spliced archive and gate both the Rust extern and C string bridge; a stale
+    // archive degrades visibly instead of leaving a dangling symbol.
+    let constraint_admits_present = archive_exports(&build_archive, "dregg_constraint_admits");
+    if constraint_admits_present {
+        println!("cargo:rustc-cfg=dregg_constraint_admits_present");
+    } else {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_constraint_admits` — \
+             the verified deployed-constraint evaluator bridge is compiled out. Rebuild the archive \
+             (it splices Dregg2.Exec.DeployedConstraint) to run the PROVEN admits."
+        );
+    }
+
     // The NO-COPY DIRECT boundary export (`dregg_exec_full_forest_auth_direct`) + its builder/reader
     // family live in `Dregg2.Exec.FFIDirect`. FFIDirect IMPORTS `Dregg2.Exec.FFI` (not the reverse),
     // so its module initializer is OUTSIDE the FFI closure: `dregg_ffi_init` must run
@@ -1962,6 +1986,19 @@ fn main() {
         println!("cargo:rustc-cfg=dregg_interchain_reached_consensus_present");
     }
 
+    // FRI SOUNDNESS LEDGER (`Dregg2.Circuit.FriLedger.friLedgerFFI`): probe the
+    // spliced archive, then gate the Rust extern and C string bridge together.
+    let fri_ledger_present = archive_exports(&build_archive, "dregg_fri_ledger");
+    if fri_ledger_present {
+        println!("cargo:rustc-cfg=dregg_fri_ledger_present");
+    } else {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_fri_ledger` — \
+             the verified FRI soundness ledger bridge is compiled out. Rebuild the archive \
+             (it splices Dregg2.Circuit.FriLedger) to enable it."
+        );
+    }
+
     let mut shim = cc::Build::new();
     shim.file("src/lean_init.c").include(&lean_include);
     // The SINGLE-THREADED / libuv-thread-free init (docs/EMBEDDABLE-LEAN-RUNTIME.md).
@@ -2006,6 +2043,9 @@ fn main() {
     }
     if decide_refines_present {
         shim.define("DREGG_DECIDE_REFINES", None);
+    }
+    if constraint_admits_present {
+        shim.define("DREGG_CONSTRAINT_ADMITS", None);
     }
     if storage_content_root_present {
         shim.define("DREGG_STORAGE_CONTENT_ROOT", None);
@@ -2054,6 +2094,9 @@ fn main() {
     }
     if interchain_reached_consensus_present {
         shim.define("DREGG_INTERCHAIN_REACHED_CONSENSUS", None);
+    }
+    if fri_ledger_present {
+        shim.define("DREGG_FRI_LEDGER", None);
     }
     if direct_present {
         shim.define("DREGG_DIRECT", None);
