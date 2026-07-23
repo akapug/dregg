@@ -4,6 +4,9 @@
 //! links the verified Lean kernel and exposes `shadow_exec_full_forest_auth`. When the
 //! archive is absent the crate still builds (marshal-only); `lean_available()` is false.
 
+#[cfg(test)]
+mod archive_closure;
+
 #[path = "marshal.rs"]
 pub mod marshal;
 

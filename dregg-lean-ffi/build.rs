@@ -30,6 +30,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "src/archive_closure.rs"]
+mod archive_closure;
+
 // ── ARCHIVE-TOOL NAMES (the binutils trio) ──────────────────────────────────────
 // The archive splice / closure-completion / reachability-GC below shell out to the
 // `ar` / `nm` / `ranlib` trio. On macOS / Linux these resolve to the host binutils
@@ -494,11 +497,15 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
     // (4) Closure-completion. The freshly-built Dregg2 objects may import NEW dependency modules
     // (e.g. a `Mathlib.Order.Extension.Linear` that a concurrent edit just added) whose initializer
     // objects are NOT in the frozen base archive's dependency closure. Splicing in only the Dregg2
-    // objects would then leave a dangling `_initialize_<dep>` undefined symbol and the FINAL Rust
-    // link fails. So we close the archive: detect undefined `_initialize_*` symbols, compile the
-    // matching `.c` from the Lean source/dependency IR trees, splice them in, and repeat until the
-    // archive is self-contained (or no resolvable `.c` remains — which we surface loudly).
-    complete_initializer_closure(meta, sysroot, archive, out_dir);
+    // objects would then leave dangling module-initializer symbols and the FINAL Rust link fails.
+    // So we close the archive: detect all three Lean initializer variants, compile the matching `.c`
+    // from the Lean source/dependency IR trees, splice them in, and repeat to the actual empty fixed
+    // point. An unresolvable non-empty fixed point is a hard build error, never a warning-and-link.
+    let closure_passes = complete_initializer_closure(meta, sysroot, archive, out_dir)
+        .unwrap_or_else(|e| panic!("dregg-lean-ffi: initializer closure extraction failed: {e}"));
+    println!(
+        "cargo:warning=dregg-lean-ffi: initializer closure converged after {closure_passes} pass(es)."
+    );
 
     // (5) Reachability GC. Closure-completion makes the archive self-LINKING, but the base still
     // carries every dependency object it was ever seeded with — including the mathlib CategoryTheory/
@@ -596,62 +603,45 @@ fn build_cfile_index(roots: &[PathBuf]) -> std::collections::HashMap<String, Pat
 }
 
 /// The Lean module initializers that are UNDEFINED in the archive AS A WHOLE: referenced (`U`) by
-/// some member but DEFINED (`T`) by NO member. (`nm -u` is unreliable on archives — it lists symbols
+/// some member but DEFINED by NO member. (`nm -u` is unreliable on archives — it lists symbols
 /// undefined in individual members even when another member defines them — so we run full `nm` once
-/// and compute the U-minus-T set ourselves.) These are the genuine dangling dependency edges the
-/// final Rust link would fail on; closure-completion must supply each one's defining object.
-fn undefined_initializers(archive: &Path) -> Vec<String> {
-    let Ok(out) = Command::new(nm_tool()).arg(archive).output() else {
-        return Vec::new();
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut defined = std::collections::HashSet::new();
-    let mut referenced = std::collections::HashSet::new();
-    for line in text.lines() {
-        // `nm` archive symbol lines come in two shapes:
-        //   "                 U _sym"   (undefined: type letter, then symbol)
-        //   "0000000000001234 T _sym"   (defined: address, type letter, symbol)
-        // Other lines (blank, "archive.a:", "obj.o:") have no type+symbol and are skipped.
-        let toks: Vec<&str> = line.split_whitespace().collect();
-        let (ty, sym) = match toks.as_slice() {
-            [ty, sym] if ty.len() == 1 => (*ty, *sym), // undefined / no-address
-            [_addr, ty, sym] if ty.len() == 1 => (*ty, *sym), // defined / with-address
-            _ => continue,
-        };
-        let name = sym.trim_start_matches('_');
-        if let Some(rest) = name.strip_prefix("initialize_") {
-            // The toolchain stdlib initializers (Init/Std/Lean/Lake) are supplied by the sysroot
-            // static libs the FINAL Rust link pulls in (rustc-link-lib=static={Init,Std,Lean,Lake});
-            // they have no `.c` in the project/dependency IR and are NOT ours to splice. Skip them so
-            // closure-completion chases only genuinely-missing in-closure modules.
-            let toolchain = ["Init", "Std", "Lean", "Lake"]
-                .iter()
-                .any(|lib| rest == *lib || rest.starts_with(&format!("{lib}_")));
-            if toolchain {
-                continue;
-            }
-            if ty == "U" {
-                referenced.insert(name.to_string());
-            } else {
-                defined.insert(name.to_string());
-            }
-        }
+/// and compute the U-minus-defined set ourselves.) Lean v4.30 emits `initialize_`,
+/// `runtime_initialize_`, and `meta_initialize_` variants; all three are final-link obligations.
+fn undefined_initializers(archive: &Path) -> Result<Vec<String>, String> {
+    let out = Command::new(nm_tool())
+        .arg(archive)
+        .output()
+        .map_err(|e| format!("could not run {} on {}: {e}", nm_tool(), archive.display()))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{} failed on {} with {}: {}",
+            nm_tool(),
+            archive.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
-    let mut missing: Vec<String> = referenced.difference(&defined).cloned().collect();
-    missing.sort();
-    missing
+    archive_closure::undefined_initializers_from_nm(&String::from_utf8_lossy(&out.stdout))
+        .map_err(|e| format!("could not validate {} output: {e}", nm_tool()))
 }
 
-/// Map a bare initializer symbol (`initialize_<lib>_<flat>`) to its source `.c` via the index. The
-/// `<lib>` token is a single library name (no internal-underscore doubling); we strip `initialize_`,
-/// then strip a KNOWN library token + `_`, leaving exactly the Lean-mangled `<flat>` index key. This
-/// is unambiguous (vs suffix-guessing, which breaks on `__`-mangled names like `CommMon__`). We try
-/// the known tokens longest-first so e.g. `LeanSearchClient` is preferred over a shorter prefix.
+fn validate_initializer_closure(archive: &Path) -> Result<(), String> {
+    let missing = undefined_initializers(archive)?;
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(archive_closure::describe_unresolved(&missing))
+    }
+}
+
+/// Map a bare initializer symbol (`{initialize,runtime_initialize,meta_initialize}_<lib>_<flat>`)
+/// to its source `.c` via the index. The `<lib>` token is a single library name (no
+/// internal-underscore doubling); stripping it leaves exactly the Lean-mangled `<flat>` index key.
 fn resolve_initializer_cfile<'a>(
     sym: &str,
     index: &'a std::collections::HashMap<String, PathBuf>,
 ) -> Option<(String, &'a PathBuf)> {
-    let rest = sym.strip_prefix("initialize_")?;
+    let rest = archive_closure::initializer_module(sym)?;
     // Library tokens that prefix a module initializer (the project libs + every dependency package).
     // `Init`/`Std`/`Lean`/`Lake` are filtered out earlier (sysroot-provided), so they need not appear.
     let mut libs = [
@@ -678,85 +668,79 @@ fn resolve_initializer_cfile<'a>(
     None
 }
 
-/// Iteratively add the dependency-closure objects the freshly-spliced Dregg2 objects need, until the
-/// archive has no resolvable undefined `_initialize_*` edge left. Each pass compiles the missing
-/// `.c` (cached by flattened name under OUT_DIR) and splices them in; new objects can introduce
-/// further deps, hence the loop. Bounded to avoid runaway; unresolved symbols are surfaced loudly.
-fn complete_initializer_closure(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &Path) {
+/// Iteratively add every dependency object the freshly-spliced Dregg2 objects need. The archive is
+/// monotonic, so the correct stopping condition is the actual empty fixed point — not a guessed pass
+/// count. A repeated non-empty unresolved set, missing IR, compile failure, or splice failure is a
+/// hard error because carrying that archive onward can only defer the same failure to the Rust link.
+fn complete_initializer_closure(
+    meta: &Path,
+    sysroot: &Path,
+    archive: &Path,
+    out_dir: &Path,
+) -> Result<usize, String> {
     let inc = sysroot.join("include");
     let dep_dir = out_dir.join("dregg2_closure_deps");
-    if std::fs::create_dir_all(&dep_dir).is_err() {
-        return;
-    }
+    std::fs::create_dir_all(&dep_dir)
+        .map_err(|e| format!("cannot create {}: {e}", dep_dir.display()))?;
     let roots = discover_ir_roots(meta);
     let index = build_cfile_index(&roots);
 
-    for pass in 0..16 {
-        let undefined = undefined_initializers(archive);
-        if undefined.is_empty() {
-            return;
-        }
-        // Resolve as many as we can to source `.c`; compile those not already cached.
-        let mut to_add: Vec<(String, PathBuf)> = Vec::new(); // (objname, objpath)
-        let mut unresolved = Vec::new();
-        for sym in &undefined {
-            match resolve_initializer_cfile(sym, &index) {
-                Some((flat, cfile)) => {
-                    let obj = dep_dir.join(format!("{flat}.o"));
-                    if newer_than(cfile, &obj) {
-                        // `-fPIC` for the same shared-link-compatibility reason as the splice
-                        // compile above (one archive, both link modes).
-                        let status = Command::new("lake")
-                            .args(["env", "leanc", "-c", "-fPIC", "-I"])
-                            .arg(&inc)
-                            .arg(cfile)
-                            .arg("-o")
-                            .arg(&obj)
-                            .current_dir(meta)
-                            .status();
-                        if !matches!(status, Ok(s) if s.success()) {
-                            let _ = std::fs::remove_file(&obj);
-                            println!(
-                                "cargo:warning=dregg-lean-ffi: closure leanc failed on {} (dep of \
-                                 {sym})",
-                                cfile.display()
-                            );
-                            continue;
+    archive_closure::converge(
+        || undefined_initializers(archive),
+        |pass, undefined| {
+            // One module has three initializer variants, all supplied by the same object. Keying by
+            // member name deduplicates that object while preserving deterministic archive insertion.
+            let mut to_add = std::collections::BTreeMap::new();
+            let mut unresolved = Vec::new();
+            for sym in undefined {
+                match resolve_initializer_cfile(sym, &index) {
+                    Some((flat, cfile)) => {
+                        let obj = dep_dir.join(format!("{flat}.o"));
+                        if newer_than(cfile, &obj) {
+                            let status = Command::new("lake")
+                                .args(["env", "leanc", "-c", "-fPIC", "-I"])
+                                .arg(&inc)
+                                .arg(cfile)
+                                .arg("-o")
+                                .arg(&obj)
+                                .current_dir(meta)
+                                .status()
+                                .map_err(|e| {
+                                    format!(
+                                        "could not run closure leanc on {}: {e}",
+                                        cfile.display()
+                                    )
+                                })?;
+                            if !status.success() {
+                                let _ = std::fs::remove_file(&obj);
+                                return Err(format!(
+                                    "closure leanc failed on {} (dependency of {sym}) with {status}",
+                                    cfile.display()
+                                ));
+                            }
                         }
+                        to_add.insert(format!("{flat}.o"), obj);
                     }
-                    to_add.push((format!("{flat}.o"), obj));
+                    None => unresolved.push(sym.clone()),
                 }
-                None => unresolved.push(sym.clone()),
             }
-        }
-
-        if to_add.is_empty() {
             if !unresolved.is_empty() {
-                println!(
-                    "cargo:warning=dregg-lean-ffi: {} undefined initializer(s) could not be \
-                     resolved to a `.c` in the IR trees (e.g. {}); the archive may not self-link. \
-                     Re-seed the closure (scripts/seed-dregg2-closure.sh) if the dependency set \
-                     changed substantially.",
-                    unresolved.len(),
-                    unresolved.first().map(|s| s.as_str()).unwrap_or("?")
-                );
+                return Err(format!(
+                    "initializer source IR is incomplete; {}",
+                    archive_closure::describe_unresolved(&unresolved)
+                ));
             }
-            return;
-        }
 
-        if let Err(e) = add_objects_to_archive(archive, &to_add, out_dir) {
-            println!("cargo:warning=dregg-lean-ffi: closure splice failed on pass {pass} ({e}).");
-            return;
-        }
-        println!(
-            "cargo:warning=dregg-lean-ffi: closure pass {pass}: added {} dependency object(s).",
-            to_add.len()
-        );
-    }
-    println!(
-        "cargo:warning=dregg-lean-ffi: closure completion hit the 16-pass bound — archive may \
-         still have undefined initializers. Consider re-seeding the closure."
-    );
+            let to_add: Vec<(String, PathBuf)> = to_add.into_iter().collect();
+            add_objects_to_archive(archive, &to_add, out_dir)
+                .map_err(|e| format!("closure splice failed on pass {pass}: {e}"))?;
+            println!(
+                "cargo:warning=dregg-lean-ffi: closure pass {pass}: added {} dependency object(s).",
+                to_add.len()
+            );
+            Ok(to_add.len())
+        },
+    )
 }
 
 /// **Archive reachability GC — the import-graph-trim payoff made durable.**
@@ -1514,6 +1498,7 @@ fn main() {
     let trim_archive = out_dir.join("libdregg_lean_trim.a");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/archive_closure.rs");
     println!("cargo:rerun-if-changed=src/lean_init.c");
     println!("cargo:rerun-if-changed=src/lean_init_st.cpp");
     // OPT-IN runtime trim. rerun-if-env-changed so toggling it re-runs build.rs (and re-derives the
@@ -1593,6 +1578,12 @@ fn main() {
         );
         return;
     }
+
+    validate_initializer_closure(&build_archive).unwrap_or_else(|e| {
+        panic!(
+            "dregg-lean-ffi: final libdregg_lean.a initializer validation failed before link: {e}"
+        )
+    });
 
     // Resolve the Lean sysroot BEFORE committing to the `lean_lib_present` cfg: linking the
     // archive requires the Lean runtime/stdlib from the toolchain. If we cannot find it, we must
