@@ -36,6 +36,7 @@ use dregg_sdk::error::SdkError;
 use dregg_turn::action::Effect;
 use dregg_turn::{ComputronCosts, Turn, TurnExecutor};
 use dregg_types::CellId;
+use serde::Deserialize;
 
 /// The light HTTP client half — ALWAYS compiled, no `deos-js` dependency.
 ///
@@ -46,6 +47,62 @@ use dregg_types::CellId;
 pub struct NodeHttpClient {
     base_url: String,
     http: reqwest::Client,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExecutorStatus {
+    federation_mode: String,
+    public_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FederationInfoWire {
+    id: String,
+    federation_id: String,
+    committee_epoch: u64,
+    threshold: u32,
+    member_count: usize,
+    members: Vec<String>,
+    is_local: bool,
+}
+
+fn configured_federation_id(federations: &[FederationInfoWire]) -> Result<[u8; 32], SdkError> {
+    let mut local = federations.iter().filter(|f| f.is_local);
+    let federation = local.next().ok_or_else(|| {
+        SdkError::Wire("/api/federations has no local federation identity".into())
+    })?;
+    if local.next().is_some() {
+        return Err(SdkError::Wire(
+            "/api/federations has multiple local federation identities".into(),
+        ));
+    }
+    if federation.id != federation.federation_id {
+        return Err(SdkError::Wire(
+            "/api/federations local id and federation_id disagree".into(),
+        ));
+    }
+    if federation.committee_epoch == 0 {
+        return Err(SdkError::Wire(
+            "/api/federations local committee_epoch must be non-zero in full mode".into(),
+        ));
+    }
+    if federation.member_count == 0 || federation.member_count != federation.members.len() {
+        return Err(SdkError::Wire(
+            "/api/federations local member_count does not match a non-empty members list".into(),
+        ));
+    }
+    if federation.threshold == 0 || federation.threshold as usize > federation.member_count {
+        return Err(SdkError::Wire(
+            "/api/federations local threshold is outside the committee".into(),
+        ));
+    }
+    for member in &federation.members {
+        decode_32(member).ok_or_else(|| {
+            SdkError::Wire("/api/federations contains a member key that is not 32-byte hex".into())
+        })?;
+    }
+    decode_32(&federation.federation_id)
+        .ok_or_else(|| SdkError::Wire("/api/federations federation_id is not 32-byte hex".into()))
 }
 
 impl NodeHttpClient {
@@ -186,36 +243,28 @@ impl NodeHttpClient {
 
     /// The executor's federation id — the binding a fire action is signed over.
     /// A remote client cannot derive it: an unconfigured/solo node uses
-    /// `blake3(node_public_key)` (from `GET /status`), a configured federation
-    /// uses its raw `federation_id` (from `GET /api/federation`). For a
-    /// federation whose configured/solo state is ambiguous, obtain the id from
-    /// [`crate::deos_server::discover_server_affordances`] (the proven source
-    /// that hands back `executor_federation_id`) and pass it explicitly.
+    /// `blake3(node_public_key)` (from `GET /status`), while a configured full
+    /// federation publishes its canonical identity as the unique local entry of
+    /// `GET /api/federations`. Both response boundaries are typed and validated;
+    /// an absent, ambiguous, or internally inconsistent identity fails closed.
     pub async fn fetch_executor_federation_id(&self) -> Result<[u8; 32], SdkError> {
-        let status: serde_json::Value = self.get_json(&format!("{}/status", self.base_url)).await?;
-        let mode = status
-            .get("federation_mode")
-            .and_then(|m| m.as_str())
-            .unwrap_or("solo");
-        if mode == "solo" {
-            let pk_hex = status
-                .get("public_key")
-                .and_then(|p| p.as_str())
-                .ok_or_else(|| SdkError::Wire("/status missing public_key".into()))?;
-            let pk = decode_32(pk_hex).ok_or_else(|| {
-                SdkError::Wire("/status public_key is not 32 bytes of hex".into())
-            })?;
-            Ok(*blake3::hash(&pk).as_bytes())
-        } else {
-            let fed: serde_json::Value = self
-                .get_json(&format!("{}/api/federation", self.base_url))
-                .await?;
-            let fid_hex = fed
-                .get("federation_id")
-                .and_then(|f| f.as_str())
-                .ok_or_else(|| SdkError::Wire("/api/federation missing federation_id".into()))?;
-            decode_32(fid_hex)
-                .ok_or_else(|| SdkError::Wire("federation_id is not 32 bytes of hex".into()))
+        let status: ExecutorStatus = self.get_json(&format!("{}/status", self.base_url)).await?;
+        match status.federation_mode.as_str() {
+            "solo" => {
+                let pk = decode_32(&status.public_key).ok_or_else(|| {
+                    SdkError::Wire("/status public_key is not 32-byte hex".into())
+                })?;
+                Ok(*blake3::hash(&pk).as_bytes())
+            }
+            "full" => {
+                let federations: Vec<FederationInfoWire> = self
+                    .get_json(&format!("{}/api/federations", self.base_url))
+                    .await?;
+                configured_federation_id(&federations)
+            }
+            mode => Err(SdkError::Wire(format!(
+                "/status has unknown federation_mode {mode:?}"
+            ))),
         }
     }
 
@@ -282,7 +331,7 @@ impl NodeHttpClient {
     }
 
     /// GET a URL and parse its JSON body, mapping every failure to `SdkError`.
-    async fn get_json(&self, url: &str) -> Result<serde_json::Value, SdkError> {
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, SdkError> {
         let resp = self
             .http
             .get(url)
@@ -374,6 +423,50 @@ pub(crate) fn decode_32(s: &str) -> Option<[u8; 32]> {
         *byte = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod federation_discovery_tests {
+    use super::*;
+
+    fn federation(id: [u8; 32]) -> FederationInfoWire {
+        FederationInfoWire {
+            id: hex::encode(id),
+            federation_id: hex::encode(id),
+            committee_epoch: 1,
+            threshold: 3,
+            member_count: 4,
+            members: [0x11, 0x22, 0x33, 0x44]
+                .map(|byte| hex::encode([byte; 32]))
+                .into(),
+            is_local: true,
+        }
+    }
+
+    #[test]
+    fn configured_identity_validation_rejects_ambiguous_or_conflicting_owner() {
+        let id = [0xA5; 32];
+        assert_eq!(
+            configured_federation_id(&[federation(id)]).expect("valid local identity"),
+            id
+        );
+
+        let duplicate = configured_federation_id(&[federation(id), federation(id)])
+            .expect_err("multiple local owners must fail closed");
+        assert!(
+            duplicate.to_string().contains("multiple local"),
+            "unexpected duplicate-owner error: {duplicate}"
+        );
+
+        let mut conflicting = federation(id);
+        conflicting.federation_id = hex::encode([0x5A; 32]);
+        let conflict = configured_federation_id(&[conflicting])
+            .expect_err("conflicting identity fields must fail closed");
+        assert!(
+            conflict.to_string().contains("disagree"),
+            "unexpected conflicting-identity error: {conflict}"
+        );
+    }
 }
 
 // ───────────────────────── the WorldSink impl (feature-gated) ────────────────

@@ -67,23 +67,6 @@ fn hex_decode_32(s: &str) -> Result<[u8; 32], SdkError> {
 // ─── node response shapes (the fields this client consumes) ───
 
 #[derive(Debug, Deserialize)]
-struct FederationInfoLite {
-    #[serde(default)]
-    federation_id: String,
-    #[serde(default)]
-    is_local: bool,
-    #[serde(default)]
-    member_count: usize,
-    #[serde(default)]
-    committee_epoch: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct NodeIdentityLite {
-    public_key: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct CellDetailLite {
     #[serde(default)]
     found: bool,
@@ -201,19 +184,9 @@ impl RemoteRuntime {
     }
 
     async fn discover_federation_id(&self) -> Result<[u8; 32], SdkError> {
-        if let Ok(feds) = self
-            .get_json::<Vec<FederationInfoLite>>("/api/federations")
+        crate::node_world_sink::NodeHttpClient::new(self.base.clone())
+            .fetch_executor_federation_id()
             .await
-            && let Some(local) = feds
-                .iter()
-                .find(|f| f.is_local && f.member_count > 0 && f.committee_epoch > 0)
-        {
-            return hex_decode_32(&local.federation_id);
-        }
-        // Solo-node derivation: blake3(operator pubkey).
-        let identity: NodeIdentityLite = self.get_json("/api/node/identity").await?;
-        let pk = hex_decode_32(&identity.public_key)?;
-        Ok(*blake3::hash(&pk).as_bytes())
     }
 
     /// The agent cell's live replay counter on the node's ledger (0 when the
@@ -810,14 +783,6 @@ mod tests {
 
     #[test]
     fn node_response_shapes_parse() {
-        let feds: Vec<FederationInfoLite> = serde_json::from_str(
-            r#"[{"federation_id":"aa","is_local":true,"member_count":3,"committee_epoch":2,"extra":1}]"#,
-        )
-        .expect("federations shape");
-        assert!(feds[0].is_local);
-        assert_eq!(feds[0].member_count, 3);
-        assert_eq!(feds[0].committee_epoch, 2);
-
         let receipts: Vec<RemoteReceiptInfo> = serde_json::from_str(
             r#"[{"turn_hash":"00","receipt_hash":"11","chain_index":4,"chain_head":true,"has_proof":false}]"#,
         )

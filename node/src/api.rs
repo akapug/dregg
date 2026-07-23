@@ -9533,6 +9533,43 @@ mod tests {
         assert!(first["num_finalized_roots"].is_u64());
     }
 
+    #[tokio::test]
+    async fn signer_discovers_full_consensus_executor_identity_over_node_router() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let expected = {
+            let mut s = state.write().await;
+            s.committee_epoch = 1;
+            s.set_federation_keys(vec![
+                dregg_types::PublicKey([0x11; 32]),
+                dregg_types::PublicKey([0x22; 32]),
+                dregg_types::PublicKey([0x33; 32]),
+                dregg_types::PublicKey([0x44; 32]),
+            ]);
+            s.federation_id
+        };
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind node router");
+        let addr = listener.local_addr().expect("node router address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve node router");
+        });
+
+        let got = dregg_sdk_net::NodeHttpClient::new(format!("http://{addr}"))
+            .fetch_executor_federation_id()
+            .await
+            .expect("signer discovers executor federation id");
+        server.abort();
+
+        assert_eq!(
+            got, expected,
+            "signer discovery must return the node executor's canonical federation identity"
+        );
+    }
+
     #[test]
     fn submit_handlers_seed_executor_with_committed_receipt_head() {
         let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default());
