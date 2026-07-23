@@ -467,6 +467,50 @@ mod federation_discovery_tests {
             "unexpected conflicting-identity error: {conflict}"
         );
     }
+
+    #[test]
+    fn configured_identity_validation_rejects_every_malformed_committee_field() {
+        let id = [0xA5; 32];
+        let mut cases = Vec::new();
+
+        let mut no_local = federation(id);
+        no_local.is_local = false;
+        cases.push(("no local", no_local));
+
+        let mut zero_epoch = federation(id);
+        zero_epoch.committee_epoch = 0;
+        cases.push(("committee_epoch", zero_epoch));
+
+        let mut wrong_count = federation(id);
+        wrong_count.member_count = wrong_count.members.len() + 1;
+        cases.push(("member_count", wrong_count));
+
+        let mut zero_threshold = federation(id);
+        zero_threshold.threshold = 0;
+        cases.push(("threshold", zero_threshold));
+
+        let mut high_threshold = federation(id);
+        high_threshold.threshold = high_threshold.member_count as u32 + 1;
+        cases.push(("threshold", high_threshold));
+
+        let mut malformed_member = federation(id);
+        malformed_member.members[0] = "not-hex".into();
+        cases.push(("member key", malformed_member));
+
+        let mut malformed_id = federation(id);
+        malformed_id.id = "not-hex".into();
+        malformed_id.federation_id = "not-hex".into();
+        cases.push(("federation_id", malformed_id));
+
+        for (expected, federation) in cases {
+            let error = configured_federation_id(&[federation])
+                .expect_err("malformed federation metadata must fail closed");
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected:?} in rejection, got {error}"
+            );
+        }
+    }
 }
 
 // ───────────────────────── the WorldSink impl (feature-gated) ────────────────
