@@ -275,12 +275,13 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     write_key_file(output, "issuer-well.key", &issuer_well_secret);
     let issuer_well_id = derive_cell_id(&issuer_well_pubkey, &default_token_id);
 
-    // The FEE WELL cell. Deterministic key; starts empty, accumulates fees.
-    let fee_well_secret = blake3::derive_key("dregg-devnet-fee-well-key-v1", b"genesis");
-    let fee_well_signing = ed25519_dalek::SigningKey::from_bytes(&fee_well_secret);
-    let fee_well_pubkey = fee_well_signing.verifying_key().to_bytes();
-    write_key_file(output, "fee-well.key", &fee_well_secret);
-    let fee_well_id = derive_cell_id(&fee_well_pubkey, &default_token_id);
+    // THE FEE LOOP (revolving fund): the fee well is UNIFIED with the faucet
+    // cell (see `fee_well: faucet_id` below), so there is no separate fee-well
+    // cell to derive here. Every per-turn fee move then recirculates into the
+    // exact pool the faucet pays out of — the {agents + faucet} value set is
+    // closed and the faucet cannot be drained by routine coordination turns.
+    // (Previously a standalone `dregg-devnet-fee-well-key-v1` cell accumulated
+    // fees as a PURE SINK with no path back to the faucet.)
 
     // The faucet cell. Its key is deterministic so the running node / faucet
     // endpoint can locate it, but it is still a real derived CellId.
@@ -319,20 +320,15 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
 
     // Declared post-seed balances: the well carries −supply; the column
     // sums to zero.
-    let mut initial_cells = vec![
-        GenesisCell {
-            id: issuer_well_id.clone(),
-            public_key: hex_encode(&issuer_well_pubkey),
-            token_id: hex_encode(&default_token_id),
-            balance: -(total_issued as i64),
-        },
-        GenesisCell {
-            id: fee_well_id.clone(),
-            public_key: hex_encode(&fee_well_pubkey),
-            token_id: hex_encode(&default_token_id),
-            balance: 0,
-        },
-    ];
+    // The fee well is the faucet cell (revolving fund), so no separate
+    // zero-balance fee-well GenesisCell is minted. Removing a zero-balance cell
+    // is a no-op for the sum-to-zero column assert below.
+    let mut initial_cells = vec![GenesisCell {
+        id: issuer_well_id.clone(),
+        public_key: hex_encode(&issuer_well_pubkey),
+        token_id: hex_encode(&default_token_id),
+        balance: -(total_issued as i64),
+    }];
     for (id, pubkey, amount) in &recipients {
         initial_cells.push(GenesisCell {
             id: id.clone(),
@@ -361,7 +357,10 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
         threshold,
         initial_cells,
         issuer_well: issuer_well_id,
-        fee_well: fee_well_id,
+        // THE FEE LOOP: fee well == faucet cell, so freshly-minted genesis
+        // chains recirculate fees back into the faucet pool instead of parking
+        // them in a dead sink.
+        fee_well: faucet_id.clone(),
         genesis_moves,
         starbridge_cells,
     };

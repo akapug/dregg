@@ -6953,7 +6953,7 @@ async fn get_blocklace_checkpoint(
 /// Faucet cell token ID (all zeros — the genesis default token domain; see
 /// `node/src/genesis.rs::write_genesis` which mints the faucet supply under
 /// `default_token_id = [0u8; 32]`).
-const FAUCET_TOKEN_ID: [u8; 32] = [0x00; 32];
+pub(crate) const FAUCET_TOKEN_ID: [u8; 32] = [0x00; 32];
 
 /// The faucet's deterministic Ed25519 signing key.
 ///
@@ -6969,8 +6969,19 @@ fn faucet_signing_key() -> ed25519_dalek::SigningKey {
 }
 
 /// The faucet cell's public key (matches the genesis-minted faucet cell).
-fn faucet_public_key() -> [u8; 32] {
+pub(crate) fn faucet_public_key() -> [u8; 32] {
     faucet_signing_key().verifying_key().to_bytes()
+}
+
+/// The faucet cell's deterministic `CellId` under the default asset.
+///
+/// THE FEE LOOP (revolving fund): this is the single cell the genesis-less
+/// devnet backfill (`lib.rs`) points the fee well at, so every per-turn fee
+/// move recirculates into the pool the faucet pays out of — closing the loop
+/// that otherwise drained the faucet monotonically. Derived identically to the
+/// genesis faucet cell, so both boot modes name the SAME cell.
+pub(crate) fn faucet_cell_id() -> dregg_cell::CellId {
+    dregg_cell::CellId::derive_raw(&faucet_public_key(), &FAUCET_TOKEN_ID)
 }
 
 #[derive(Deserialize)]
@@ -7160,7 +7171,7 @@ async fn post_faucet(
     // touches only the scratch clone (the genesis faucet cell is already present
     // authoritatively cross-node).
     let faucet_pubkey = faucet_public_key();
-    let faucet_cell_id = dregg_cell::CellId::derive_raw(&faucet_pubkey, &FAUCET_TOKEN_ID);
+    let faucet_cell_id = faucet_cell_id();
 
     // Recipient provisioning. CROSS-NODE UNIFORMITY: in multi-party mode the
     // recipient is provisioned by the finalized executor on every node from the
