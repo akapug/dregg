@@ -191,6 +191,14 @@ path = "src/bin/mpc_bench.rs"
 name = "fhe-boundary-bench"
 path = "src/bin/boundary_bench.rs"
 
+# Bounded confidential-energy candidate validator. This evaluates encrypted
+# feasibility and settlement predicates; it deliberately does not solve or
+# prove global optimality.
+[[bin]]
+name = "fhe-energy-dispatch-bench"
+path = "src/bin/energy_dispatch_bench.rs"
+required-features = ["tfhe-integer"]
+
 # Long-running process roles for authenticated reveal-only scalar equality.
 [[bin]]
 name = "fhegg-equality-worker"

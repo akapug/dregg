@@ -106,6 +106,10 @@ pub mod decision_attestation;
 /// independently encrypted BFV bit shares, exact encrypted XOR/product/mask,
 /// and threshold opening of only the one-time-padded product.
 pub mod distributed_bfv_correlation;
+/// Exact-integer TFHE candidate validation for the independently re-specified
+/// three-provider confidential-energy dispatch experiment.
+#[cfg(feature = "tfhe-integer")]
+pub mod energy_dispatch;
 pub mod fhir;
 /// Exact bounded-domain BFV zero conversion using complementary-root pairs.
 pub mod fhir_paired_root_zero;
