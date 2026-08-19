@@ -140,6 +140,66 @@ global_optimality=NOT_EVALUATED
 whole_test_s=279.54
 ```
 
+### Independent x86_64 reproduction
+
+The exact committed source at
+`5ad58ba97c7666e5a9ee72aa056a06ea9cd465ac` was exported with `git archive`
+and copied to an isolated Hbox directory, without using its stale shared
+checkout. The source archive SHA-256 is
+`2a2fdf731bc0cabc74022fabfa730af3a28403d2db946441a3a628a8cd508886`.
+
+Reference host: 12th Gen Intel Core i9-12900, 24 logical CPUs, 30 MiB L3,
+x86_64 Linux 6.11; 123 GiB RAM with about 10--13 GiB available during these
+runs and already-full 8 GiB swap; rustc `1.98.0-nightly
+(8b6558a02 2026-06-20)`; Cargo jobs capped first at four and then at two. The
+cap was sufficient, but the low available-memory/full-swap state makes a wider
+unbounded build inappropriate on this shared host.
+
+The exact source benchmark exited zero and reproduced the same booleans and
+objective:
+
+```text
+keygen_ms=580 encrypt_ms=57 evaluate_total_ms=62990
+witness_checks_ms=7394 trajectory_and_cost_ms=36765
+system_checks_ms=17893 settlement_checks_ms=935
+physical_feasibility=true settlement_conserves=true
+valid_candidate_only=true derived_objective=56
+global_optimality=NOT_EVALUATED
+```
+
+The three-case executable also exited zero:
+
+```text
+independently_reconstructed_feasible_schedules=4
+canonical_cost56: encrypt_ms=57 evaluate_ms=66268 physical=true settlement=true
+suboptimal_cost60: encrypt_ms=48 evaluate_ms=68499 physical=true settlement=true
+forged_settlement_cost59: encrypt_ms=49 evaluate_ms=68388 physical=true settlement=false
+global_optimality=NOT_EVALUATED
+whole_test_s=203.92
+```
+
+The integration-test build required a transparent build-only manifest patch:
+the git archive intentionally has no untracked Lean static archive, while
+release tests normally require that seed, and Cargo otherwise compiles every
+auto-discovered package binary for an integration test. On x86_64 an unrelated
+auto-discovered benchmark unconditionally links Apple's `Accelerate`
+framework. The isolated test build therefore set `DREGG_REQUIRE_LEAN=0` (the
+energy test has no Lean path), disabled autobins, and retained only the explicit
+energy benchmark bin. This did not change a dependency, module, test, fixture,
+or energy semantic. The build-only patch SHA-256 is
+`0e5058c09cc85941d25d260509c6857ec32311f4056a8c75052d4da839578f9e`.
+
+The captured canonical and three-case log SHA-256 values are respectively
+`2f9bec0335938d7b53a421af1575bbe7f7cec328d4a81fcfbd976053ed487893`
+and `1dce5bfbfebc757670c31afbcfb51ee4b752754698220f52d677fd9142b2904f`;
+both adjacent status files contain `0`.
+
+Hbox exposes a Vulkan 1.4 AMD Radeon RX 6750 XT and an Intel UHD 770. This is
+detection only. The selected Cargo feature graph contains `tfhe/integer` and no
+tfhe GPU feature; both cross-host runs used the exact CPU backend. No GPU
+backend, dependency, or semantic variant was added merely to use available
+hardware.
+
 The dominant cost is encrypted trajectory/cost and system arithmetic. This
 first experiment intentionally favors an exact legible predicate over a claim
 of practical dispatch latency. A future hybrid can keep private arithmetic in
