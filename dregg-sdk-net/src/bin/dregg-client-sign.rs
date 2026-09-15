@@ -23,6 +23,12 @@
 //!          full payload string as the turn memo (length-prefixed into
 //!          `Turn::hash`, so the signature binds it). Exit 0 only when the
 //!          node has receipted the turn.
+//!   transfer  move `--amount` computrons from the profile's own cell to
+//!          `--to`. The signer is the SOURCE: `Effect::Transfer { from: own
+//!          cell, to, amount }` on an action whose target is that same cell,
+//!          so the executor gates the withdrawal on `Send` over the signed
+//!          action. Exit 0 only when a receipt for EXACTLY this turn hash is
+//!          on the node's chain at an accepted finality.
 //!
 //! Env (flags win): DREGG_NODE_URL (default http://127.0.0.1:8899),
 //! DREGG_API_TOKEN (bearer for the protected ingress) or DREGG_NODE_PASSPHRASE
@@ -61,6 +67,81 @@ fn pack_payload(payload: &[u8]) -> Vec<[u8; 32]> {
             word
         })
         .collect()
+}
+
+/// Parse a 32-byte cell id in the 64-character lowercase hex every dregg
+/// surface spells cells with. A short, long, odd-length or non-hex value is a
+/// hard error: a signer never guesses at the destination of value.
+fn parse_cell_hex(what: &str, value: &str) -> Result<dregg_sdk::CellId> {
+    let trimmed = value.trim();
+    let bytes = hex::decode(trimmed)
+        .map_err(|e| err(format!("{what} must be 64 hex characters (a 32-byte cell id): {e}")))?;
+    let id: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+        err(format!(
+            "{what} must be 64 hex characters (a 32-byte cell id); got {} bytes",
+            bytes.len()
+        ))
+    })?;
+    Ok(dregg_sdk::CellId(id))
+}
+
+/// Resolve a transfer's destination against the signer's own cell, returning
+/// the canonical lowercase hex.
+///
+/// BOTH REFUSALS HERE ARE USABILITY REFUSALS, NOT THE AUTHORIZATION STORY, and
+/// reading them as authorization would be a mistake. The authority to move
+/// value OUT of the source is decided at its owning layer: the executor
+/// requires `Send` on the action target for an `Effect::Transfer` whose `from`
+/// is that target, and it requires the destination's `Receive` not to be
+/// `AuthRequired::Impossible`. The client presents a signature and the executor
+/// decides. What this function refuses is a caller mistake the executor would
+/// happily commit: a transfer to the signer's OWN cell moves nothing and still
+/// burns the fee.
+///
+/// Note that `send`'s guard is the OPPOSITE shape — it requires `--to` to BE
+/// the signer's own cell, because a client-signed `EmitEvent` can only act as
+/// the signer. Inverting that guard is NOT what makes a transfer authorized;
+/// the two verbs simply refuse different caller mistakes.
+fn resolve_destination(to: &str, own_cell_hex: &str, profile: &str) -> Result<String> {
+    let dest = hex::encode(parse_cell_hex("--to", to)?.as_bytes());
+    if dest.eq_ignore_ascii_case(own_cell_hex) {
+        return Err(err(format!(
+            "--to {dest} is profile '{profile}'s own cell: a self-transfer moves \
+             nothing and still burns the turn fee"
+        )));
+    }
+    Ok(dest)
+}
+
+/// Build the single-action TRANSFER turn: `Effect::Transfer { from, to, amount }`
+/// on an action whose target IS `from`, hybrid-signed by the source's own key.
+///
+/// `Turn::hash` binds this effect: the effect's `from`, `to` and `amount` are
+/// absorbed by `Effect::hash`, which the action hash absorbs, which the call
+/// forest hash absorbs, which `dregg-turn-v3` absorbs alongside the agent, the
+/// nonce and the fee. That chain is why a receipt matching this exact turn hash
+/// is a statement about THIS transfer's recipient and amount, and not merely
+/// about some turn of ours that committed.
+fn build_transfer_turn(
+    clerk: &AgentCipherclerk,
+    from: dregg_sdk::CellId,
+    to: dregg_sdk::CellId,
+    amount: u64,
+    federation_id: &[u8; 32],
+    nonce: u64,
+) -> Turn {
+    let effect = Effect::Transfer { from, to, amount };
+    let action = clerk.sign_action_hybrid(
+        dregg_sdk::raw::unsigned_action_named(from, "transfer", vec![effect]),
+        federation_id,
+        nonce,
+    );
+    let mut turn = clerk.make_turn_with_actions(vec![action]);
+    turn.agent = from;
+    turn.nonce = nonce;
+    turn.memo = None;
+    turn.valid_until = Some(i64::MAX / 2);
+    turn
 }
 
 fn build_chat_turn(
@@ -112,6 +193,156 @@ fn fee_cost_model() -> ComputronCosts {
         costs.coordination_exempt = true;
     }
     costs
+}
+
+/// The two finality words `ReceiptInfo` can carry, lowercased. `Final` is a
+/// BFT quorum (or a fast-path certificate with quorum signatures); `Tentative`
+/// is one node in solo mode, safe only under a no-Byzantine assumption and
+/// awaiting quorum validation on rejoin. A genesis-less single-operator devnet
+/// downgrades EVERY committed receipt to `Tentative`, which is why accepting it
+/// has to be the caller's explicit decision rather than this tool's default.
+const FINALITY_FINAL: &str = "final";
+const FINALITY_TENTATIVE: &str = "tentative";
+
+/// What the node's own receipt chain says about EXACTLY ONE turn hash.
+///
+/// The distinction this type exists to keep is the one a consumer cannot make
+/// for itself: a hash is not a commitment. The client-signed ingress returns a
+/// `turn_hash` on REFUSAL as well as on success, and `accepted` is the node
+/// saying it took the turn, not that the turn moved anything. Only a receipt
+/// on the chain is the node's statement that the transfer committed, because
+/// only a commit appends one.
+#[derive(Debug, PartialEq, Eq)]
+enum Commitment {
+    /// A receipt for exactly this turn hash, at a finality the caller accepts.
+    Committed {
+        receipt_hash: String,
+        chain_index: u64,
+        finality: String,
+    },
+    /// No receipt for this hash yet. NOT a refusal — the turn may still commit.
+    Pending,
+    /// A receipt exists but its finality is below what the caller accepts.
+    /// Also not a refusal: finality can rise.
+    BelowFinality { finality: String },
+    /// The node answered in a shape this reader cannot read. Never a
+    /// commitment, and never a refusal either — it is UNKNOWN, and the caller
+    /// is owed the reason rather than a verdict built on a guess.
+    Unreadable(String),
+}
+
+fn json_kind(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
+fn is_hash_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Read the node's EXACT-turn-hash receipt query into a [`Commitment`].
+///
+/// `body` is the answer to `GET /api/starbridge/receipts?turn_hash=<hex>`,
+/// which filters the WHOLE receipt chain by exact turn hash. That is the
+/// instrument this reader wants and `GET /api/receipts` is not: the latter
+/// serves only the newest 50 receipts, so on a busy node a committed turn falls
+/// out of the window and a reader scanning it concludes "not receipted" about a
+/// transfer that DID move the money — the one wrong answer that invites a
+/// double spend.
+///
+/// EVERY FIELD READ HERE IS ONE WHOSE VALUE IS THE ANSWER, so a field the node
+/// SENT in a shape this reader cannot read makes the answer UNREADABLE rather
+/// than absent. There is no next source to fall through to: this is the single
+/// authoritative statement about whether the transfer committed, and treating a
+/// malformed one as "not yet" would turn a broken answer into a silent Pending
+/// that eventually times out as UNKNOWN with the wrong reason attached.
+fn classify_commitment(
+    want_turn_hash: &str,
+    body: &serde_json::Value,
+    accept_tentative: bool,
+) -> Commitment {
+    let Some(rows) = body.as_array() else {
+        return Commitment::Unreadable(format!(
+            "the exact-hash receipt query answered with {} instead of an array",
+            json_kind(body)
+        ));
+    };
+    if rows.is_empty() {
+        return Commitment::Pending;
+    }
+    if rows.len() > 1 {
+        // A turn hash binds the agent and the nonce, so the chain cannot hold
+        // two receipts for one hash. More than one row means the filter is not
+        // the exact-match filter this reader assumes, and every conclusion
+        // below it would be drawn from a row picked arbitrarily.
+        return Commitment::Unreadable(format!(
+            "the exact-hash receipt query answered with {} rows for one turn hash",
+            rows.len()
+        ));
+    }
+    let row = &rows[0];
+
+    let Some(got_hash) = row.get("turn_hash").and_then(|v| v.as_str()) else {
+        return Commitment::Unreadable(
+            "the receipt row carries no string turn_hash, so it cannot be bound to this transfer"
+                .to_string(),
+        );
+    };
+    if !got_hash.eq_ignore_ascii_case(want_turn_hash) {
+        return Commitment::Unreadable(format!(
+            "the exact-hash receipt query for {want_turn_hash} answered with turn {got_hash}"
+        ));
+    }
+
+    let Some(raw_finality) = row.get("finality").and_then(|v| v.as_str()) else {
+        return Commitment::Unreadable(
+            "the receipt row carries no string finality, so how final this transfer is is unknown"
+                .to_string(),
+        );
+    };
+    let finality = raw_finality.trim().to_ascii_lowercase();
+    match finality.as_str() {
+        FINALITY_FINAL => {}
+        FINALITY_TENTATIVE if accept_tentative => {}
+        FINALITY_TENTATIVE => return Commitment::BelowFinality { finality },
+        other => {
+            // A finality word this reader does not know is UNKNOWN in both
+            // directions. Accepting it would let a future weaker level pass as
+            // commitment; refusing it would report a stronger one as a failure.
+            return Commitment::Unreadable(format!(
+                "the receipt row reports finality '{other}', which this reader does not know: \
+                 it is neither accepted nor refused"
+            ));
+        }
+    }
+
+    let Some(receipt_hash) = row.get("receipt_hash").and_then(|v| v.as_str()) else {
+        return Commitment::Unreadable(
+            "the receipt row carries no string receipt_hash".to_string(),
+        );
+    };
+    if !is_hash_hex(receipt_hash) {
+        return Commitment::Unreadable(format!(
+            "the receipt row's receipt_hash '{receipt_hash}' is not 64 hex characters"
+        ));
+    }
+    let Some(chain_index) = row.get("chain_index").and_then(|v| v.as_u64()) else {
+        return Commitment::Unreadable(
+            "the receipt row carries no unsigned chain_index".to_string(),
+        );
+    };
+
+    Commitment::Committed {
+        receipt_hash: receipt_hash.to_ascii_lowercase(),
+        chain_index,
+        finality,
+    }
 }
 
 fn env(name: &str) -> Option<String> {
@@ -372,6 +603,8 @@ struct Flags {
     topic: String,
     to: Option<String>,
     fund: u64,
+    amount: Option<u64>,
+    accept_tentative: bool,
     rest: Vec<String>,
 }
 
@@ -383,6 +616,8 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
         topic: "client-sign".to_string(),
         to: None,
         fund: 5000,
+        amount: None,
+        accept_tentative: false,
         rest: Vec::new(),
     };
     let mut it = argv.into_iter();
@@ -402,6 +637,14 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
                     .parse()
                     .map_err(|e| err(format!("--fund must be a u64: {e}")))?
             }
+            "--amount" => {
+                f.amount = Some(
+                    val("--amount")?
+                        .parse()
+                        .map_err(|e| err(format!("--amount must be a u64: {e}")))?,
+                )
+            }
+            "--accept-tentative" => f.accept_tentative = true,
             "--help" | "-h" => {
                 eprintln!("{USAGE}");
                 std::process::exit(0);
@@ -418,7 +661,13 @@ const USAGE: &str = "dregg-client-sign: commit CLIENT-SIGNED turns to a dregg no
        ensure the profile identity + a cell funded to at least N computrons\n\
   send [--profile P] [--node-url U] [--token T] [--fund N] [--topic S] [--to CELL_HEX] PAYLOAD...\n\
        ensure at least N computrons, then commit ONE hybrid-signed EmitEvent; payload\n\
-       rides in the signed turn (memo + event data words)\n\n\
+       rides in the signed turn (memo + event data words)\n\
+  transfer --to CELL_HEX --amount N [--profile P] [--node-url U] [--token T]\n\
+           [--fund N] [--accept-tentative]\n\
+       move N computrons from the profile's own cell to another cell. Exit 0 only\n\
+       when a receipt for EXACTLY this turn hash is on the node's chain; the\n\
+       printed `committed` is true only then. A solo-mode devnet marks every\n\
+       receipt `tentative`, so accepting that level needs --accept-tentative\n\n\
 env (flags win): DREGG_NODE_URL, DREGG_API_TOKEN (or DREGG_NODE_PASSPHRASE\n\
 to unlock), DREGG_PROFILE (the SDK's active-profile convention)";
 
@@ -633,6 +882,226 @@ async fn cmd_send(f: Flags) -> Result<()> {
     )))
 }
 
+
+/// `transfer` — move computrons from the profile's own cell to another cell.
+///
+/// The signer is the SOURCE. `Effect::Transfer { from: own cell, to, amount }`
+/// rides an action whose target is that same cell, so the executor's
+/// permission check gates the withdrawal on `Send` over the signed action, and
+/// the destination is gated on its own `Receive`. Nothing here asserts the
+/// authority; the signature is presented and the owning layer decides.
+///
+/// NOT COORDINATION-EXEMPT, unlike `send`. `Turn::is_coordination` requires
+/// every effect to be an `EmitEvent` and no `balance_change`, so a Transfer
+/// leaves the class whatever `DREGG_COORDINATION_EXEMPT` says, and
+/// `estimate_cost` returns the real computron cost. The source must therefore
+/// hold `amount + fee`, not `amount`.
+async fn cmd_transfer(f: Flags) -> Result<()> {
+    let amount = f
+        .amount
+        .ok_or_else(|| err("transfer requires --amount N (computrons)".to_string()))?;
+    if amount == 0 {
+        return Err(err(
+            "transfer requires a positive --amount: a zero transfer moves nothing \
+             and still burns the turn fee"
+                .to_string(),
+        ));
+    }
+    let to_flag = f
+        .to
+        .clone()
+        .ok_or_else(|| err("transfer requires --to CELL_HEX".to_string()))?;
+
+    let http = reqwest::Client::new();
+    let node = NodeHttpClient::new(&f.node_url);
+    let (name, clerk) = resolve_clerk(f.profile.as_deref(), false)?;
+    let from = clerk.cell_id("default");
+    let from_hex = hex::encode(from.as_bytes());
+    let to_hex = resolve_destination(&to_flag, &from_hex, &name)?;
+    let to = parse_cell_hex("--to", &to_hex)?;
+    let pk_hex = hex::encode(clerk.public_key().0);
+
+    // Materialize the source without consuming the funded faucet bucket, the
+    // same zero-amount path `send` opens with.
+    let presence = ensure_cell(&http, &f.node_url, &from_hex, &pk_hex, 0, 0).await?;
+
+    let federation_id = node
+        .fetch_executor_federation_id()
+        .await
+        .map_err(|e| err(format!("fetch executor federation id: {e}")))?;
+    let estimate_nonce = node
+        .fetch_cell_nonce(&from)
+        .await
+        .map_err(|e| err(format!("fetch own-cell nonce for fee estimate: {e}")))?;
+    let mut turn = build_transfer_turn(
+        &clerk,
+        from,
+        to,
+        amount,
+        &federation_id,
+        estimate_nonce,
+    );
+    turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
+
+    // The source must cover the MOVED VALUE AND the fee. `send`'s funding math
+    // covers the fee alone because an EmitEvent moves nothing.
+    let needed = amount.checked_add(turn.fee).ok_or_else(|| {
+        err(format!(
+            "amount {amount} plus fee {} overflows u64",
+            turn.fee
+        ))
+    })?;
+    let desired = f.fund.max(needed);
+    let target = desired.min(presence.balance.saturating_add(FAUCET_MAX_GRANT));
+    if target < needed {
+        return Err(err(format!(
+            "transfer of {amount} plus fee {} needs {needed} computrons; the source holds {} \
+             and the faucet grants at most {FAUCET_MAX_GRANT} per request",
+            turn.fee, presence.balance
+        )));
+    }
+    let funding = ensure_cell(&http, &f.node_url, &from_hex, &pk_hex, needed, target).await?;
+
+    // Funding can wait up to 10s and another sender on this profile can commit
+    // in that window. Refetch the nonce immediately before signing, then
+    // rebuild: `dregg-action-sig-v3` binds the nonce.
+    let nonce = node
+        .fetch_cell_nonce(&from)
+        .await
+        .map_err(|e| err(format!("refetch own-cell nonce after funding: {e}")))?;
+    turn = build_transfer_turn(&clerk, from, to, amount, &federation_id, nonce);
+    turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
+    let needed = amount.checked_add(turn.fee).ok_or_else(|| {
+        err(format!(
+            "amount {amount} plus fee {} overflows u64",
+            turn.fee
+        ))
+    })?;
+    if needed > funding.balance {
+        return Err(err(format!(
+            "final transfer of {amount} plus fee {} exceeds the observed funded balance {}",
+            turn.fee, funding.balance
+        )));
+    }
+    turn.previous_receipt_hash = node
+        .fetch_chain_head()
+        .await
+        .map_err(|e| err(format!("fetch chain head after funding: {e}")))?;
+    let bearer = ensure_token(&http, &f.node_url, f.token.clone()).await?;
+
+    let signed = clerk.sign_turn(&turn);
+    let bytes =
+        postcard::to_stdvec(&signed).map_err(|e| err(format!("serialize SignedTurn: {e}")))?;
+
+    let resp = http
+        .post(format!("{}/turns/submit", f.node_url))
+        .header("Content-Type", "application/octet-stream")
+        .header("Authorization", format!("Bearer {bearer}"))
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|e| err(format!("POST /turns/submit: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(err(format!("/turns/submit returned {status}")));
+    }
+    let verdict: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| err(format!("parse submit response: {e}")))?;
+    // THE SUBMIT RESPONSE CARRIES A TURN HASH ON REFUSAL TOO — the node's
+    // client-signed ingress fills `turn_hash` before it decides, so the hash
+    // proves only that the node parsed a turn. Read the flag, and even a true
+    // one is ADMISSION, never commitment.
+    if verdict.get("accepted").and_then(|a| a.as_bool()) != Some(true) {
+        return Err(err(format!(
+            "node refused the transfer: {}",
+            verdict
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("no reason given")
+        )));
+    }
+    let turn_hash = verdict
+        .get("turn_hash")
+        .and_then(|h| h.as_str())
+        .ok_or_else(|| err("accepted submit response missing turn_hash".to_string()))?
+        .to_string();
+    eprintln!("[client-sign] transfer admitted: {turn_hash}; confirming commitment...");
+
+    // COMMITMENT IS CONFIRMED AGAINST THE CHAIN, BY EXACT HASH. Only a commit
+    // appends a receipt, and the turn hash binds this transfer's source,
+    // destination and amount, so a receipt at this hash is the node's own
+    // statement that THIS transfer moved. The exact-hash query filters the
+    // whole chain; `/api/receipts` serves only the newest 50 and would report
+    // a committed transfer as unreceipted on a busy node.
+    let confirm_url = format!(
+        "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
+        f.node_url
+    );
+    let mut last_below: Option<String> = None;
+    for _ in 0..120 {
+        let body = get_json(&http, &confirm_url).await?;
+        match classify_commitment(&turn_hash, &body, f.accept_tentative) {
+            Commitment::Committed {
+                receipt_hash,
+                chain_index,
+                finality,
+            } => {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "transferred": true,
+                        "committed": true,
+                        "node": f.node_url,
+                        "profile": name,
+                        "from": from_hex,
+                        "to": to_hex,
+                        "amount": amount,
+                        "fee": turn.fee,
+                        "materialized": presence.materialized,
+                        "topped_up": funding.topped_up,
+                        "joined_in_flight": funding.joined_in_flight,
+                        "balance_before_transfer": funding.balance,
+                        "turn_hash": turn_hash,
+                        "receipt_hash": receipt_hash,
+                        "chain_index": chain_index,
+                        "finality": finality,
+                        "finality_required": if f.accept_tentative {
+                            "tentative-or-final"
+                        } else {
+                            FINALITY_FINAL
+                        },
+                    })
+                );
+                return Ok(());
+            }
+            Commitment::Pending => {}
+            Commitment::BelowFinality { finality } => last_below = Some(finality),
+            Commitment::Unreadable(why) => {
+                return Err(err(format!(
+                    "cannot tell whether transfer {turn_hash} committed: {why}. \
+                     This is UNKNOWN, not a refusal — do NOT resubmit."
+                )));
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    let seen = match last_below {
+        Some(finality) => format!(
+            " A receipt for it IS on the chain at finality '{finality}', below the \
+             level this call required"
+        ),
+        None => String::new(),
+    };
+    Err(err(format!(
+        "transfer {turn_hash} was admitted but not confirmed committed within 30s.{seen} \
+         This is UNKNOWN, not a refusal: the turn may commit after this exits. Do NOT \
+         resubmit — a second transfer moves {amount} again. Re-read the node with \
+         `curl '{confirm_url}'` and decide from that."
+    )))
+}
+
 #[tokio::main]
 async fn main() {
     // Route this process's ML-DSA through the Lean-verified cores exported by
@@ -655,6 +1124,7 @@ async fn main() {
         match cmd.as_str() {
             "join" => cmd_join(flags).await,
             "send" => cmd_send(flags).await,
+            "transfer" => cmd_transfer(flags).await,
             _ => Err(err(format!("unknown verb '{cmd}' (try --help)"))),
         }
     };
@@ -1021,5 +1491,205 @@ mod tests {
         assert_eq!(outcome.balance, 9_060);
         assert_eq!(state.lock().await.calls, 1);
         handle.abort();
+    }
+
+    // ── transfer: admission is not commitment ───────────────────────────────
+    //
+    // Every arm here drives `classify_commitment`, the one door `cmd_transfer`
+    // asks "did THIS transfer commit?" through. They need no node: the fixtures
+    // are the exact JSON shapes `GET /api/starbridge/receipts?turn_hash=..`
+    // serves, whose fields come from `ReceiptInfo` with `#[serde(flatten)]`.
+
+    const WANT: &str = "aa11bb22cc33dd44ee55ff6600778899aabbccddeeff00112233445566778899";
+    const OTHER: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    const RECEIPT: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn row(turn_hash: &str, finality: &str) -> serde_json::Value {
+        serde_json::json!({
+            "chain_index": 7,
+            "chain_head": true,
+            "receipt_hash": RECEIPT,
+            "turn_hash": turn_hash,
+            "agent": OTHER,
+            "finality": finality,
+            "effects_hash": RECEIPT,
+        })
+    }
+
+    #[test]
+    fn an_exact_receipt_at_final_is_the_commitment() {
+        // UNCONDITIONAL POSITIVE, first: every refusal below must be a refusal
+        // of something, not the behaviour of a reader that never says yes.
+        assert_eq!(
+            classify_commitment(WANT, &serde_json::json!([row(WANT, "final")]), false),
+            Commitment::Committed {
+                receipt_hash: RECEIPT.to_string(),
+                chain_index: 7,
+                finality: "final".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_admitted_turn_hash_with_no_receipt_is_never_commitment() {
+        // The pole the whole verb exists for: the node handed back a turn hash
+        // and nothing has committed. Pending, and Pending is not success.
+        assert_eq!(
+            classify_commitment(WANT, &serde_json::json!([]), true),
+            Commitment::Pending
+        );
+    }
+
+    #[test]
+    fn a_tentative_receipt_commits_only_when_the_caller_accepted_that_level() {
+        // Both directions in one arm, because the difference between them is
+        // the caller's decision and nothing else about the input changes.
+        assert_eq!(
+            classify_commitment(WANT, &serde_json::json!([row(WANT, "tentative")]), false),
+            Commitment::BelowFinality {
+                finality: "tentative".to_string()
+            }
+        );
+        assert_eq!(
+            classify_commitment(WANT, &serde_json::json!([row(WANT, "tentative")]), true),
+            Commitment::Committed {
+                receipt_hash: RECEIPT.to_string(),
+                chain_index: 7,
+                finality: "tentative".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_receipt_for_another_turn_is_unreadable_not_pending() {
+        // An exact-hash query that answers about a DIFFERENT turn is a broken
+        // filter. Skipping the row would silently downgrade this reader to
+        // "nothing committed yet" on a node that is not answering the question.
+        let got = classify_commitment(WANT, &serde_json::json!([row(OTHER, "final")]), true);
+        assert!(
+            matches!(&got, Commitment::Unreadable(why) if why.contains(OTHER)),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn a_finality_word_this_reader_does_not_know_is_unreadable_in_both_directions() {
+        for word in ["provisional", "", "FINALIZED"] {
+            let got = classify_commitment(WANT, &serde_json::json!([row(WANT, word)]), true);
+            assert!(
+                matches!(got, Commitment::Unreadable(_)),
+                "finality '{word}' must be UNKNOWN, got {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn finality_is_read_case_and_space_insensitively() {
+        assert_eq!(
+            classify_commitment(WANT, &serde_json::json!([row(WANT, " Final ")]), false),
+            Commitment::Committed {
+                receipt_hash: RECEIPT.to_string(),
+                chain_index: 7,
+                finality: "final".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_uppercase_turn_hash_still_binds_to_this_transfer() {
+        assert_eq!(
+            classify_commitment(
+                WANT,
+                &serde_json::json!([row(&WANT.to_uppercase(), "final")]),
+                false
+            ),
+            Commitment::Committed {
+                receipt_hash: RECEIPT.to_string(),
+                chain_index: 7,
+                finality: "final".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_field_whose_value_is_the_answer_is_unreadable_when_malformed() {
+        // Each of these is a field the node SENT in a shape this reader cannot
+        // read, at a site with no next source to fall through to. Absent and
+        // malformed are the same verdict here — UNKNOWN — and neither is
+        // commitment.
+        let cases: Vec<serde_json::Value> = vec![
+            serde_json::json!([{"receipt_hash": RECEIPT, "chain_index": 7, "finality": "final"}]),
+            serde_json::json!([{"turn_hash": 12, "receipt_hash": RECEIPT, "chain_index": 7, "finality": "final"}]),
+            serde_json::json!([{"turn_hash": WANT, "receipt_hash": RECEIPT, "chain_index": 7}]),
+            serde_json::json!([{"turn_hash": WANT, "receipt_hash": RECEIPT, "chain_index": 7, "finality": false}]),
+            serde_json::json!([{"turn_hash": WANT, "chain_index": 7, "finality": "final"}]),
+            serde_json::json!([{"turn_hash": WANT, "receipt_hash": "zz", "chain_index": 7, "finality": "final"}]),
+            serde_json::json!([{"turn_hash": WANT, "receipt_hash": 1, "chain_index": 7, "finality": "final"}]),
+            serde_json::json!([{"turn_hash": WANT, "receipt_hash": RECEIPT, "finality": "final"}]),
+            serde_json::json!([{"turn_hash": WANT, "receipt_hash": RECEIPT, "chain_index": -1, "finality": "final"}]),
+        ];
+        for body in cases {
+            let got = classify_commitment(WANT, &body, true);
+            assert!(
+                matches!(got, Commitment::Unreadable(_)),
+                "{body} must be UNREADABLE, got {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_that_is_not_an_array_is_unreadable() {
+        for body in [
+            serde_json::json!({"error": "not found"}),
+            serde_json::json!(null),
+            serde_json::json!("[]"),
+        ] {
+            let got = classify_commitment(WANT, &body, true);
+            assert!(
+                matches!(got, Commitment::Unreadable(_)),
+                "{body} must be UNREADABLE, got {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_rows_for_one_exact_hash_is_unreadable() {
+        // A turn hash binds the agent and the nonce, so the chain cannot hold
+        // two receipts for one. Taking the first would pick arbitrarily.
+        let got = classify_commitment(
+            WANT,
+            &serde_json::json!([row(WANT, "final"), row(WANT, "final")]),
+            true,
+        );
+        assert!(matches!(got, Commitment::Unreadable(_)), "{got:?}");
+    }
+
+    // ── transfer: the destination refusals ──────────────────────────────────
+
+    #[test]
+    fn a_destination_that_is_not_the_signers_own_cell_is_accepted() {
+        assert_eq!(
+            resolve_destination(&OTHER.to_uppercase(), WANT, "p").unwrap(),
+            OTHER
+        );
+    }
+
+    #[test]
+    fn a_transfer_to_the_signers_own_cell_is_refused() {
+        // `send`'s guard is the opposite shape and this is not its inverse:
+        // both refuse a caller mistake, and neither decides authority.
+        let e = resolve_destination(&WANT.to_uppercase(), WANT, "seat")
+            .expect_err("a self-transfer must be refused");
+        assert!(e.to_string().contains("own cell"), "{e}");
+    }
+
+    #[test]
+    fn a_destination_that_is_not_a_32_byte_cell_is_refused() {
+        for bad in ["", "aa", "nothex", &WANT[..62], &format!("{WANT}aa")] {
+            assert!(
+                resolve_destination(bad, OTHER, "seat").is_err(),
+                "'{bad}' must be refused as a cell id"
+            );
+        }
     }
 }
