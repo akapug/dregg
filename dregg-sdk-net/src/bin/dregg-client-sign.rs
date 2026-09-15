@@ -371,43 +371,58 @@ fn is_hash_hex(value: &str) -> bool {
 /// authoritative statement about whether the transfer committed, and treating a
 /// malformed one as "not yet" would turn a broken answer into a silent Pending
 /// that eventually times out as UNKNOWN with the wrong reason attached.
-fn classify_commitment(
+/// THE EXACT-HASH LOOKUP, shared by every verb that has to know whether ITS
+/// OWN turn reached the chain: `Ok(Some(row))` is the node's receipt for this
+/// exact turn, `Ok(None)` is "not yet" and is never a refusal, and `Err` is a
+/// shape this reader cannot read, which is UNKNOWN in both directions.
+fn exact_receipt<'a>(
     want_turn_hash: &str,
-    body: &serde_json::Value,
-    accept_tentative: bool,
-) -> Commitment {
+    body: &'a serde_json::Value,
+) -> std::result::Result<Option<&'a serde_json::Value>, String> {
     let Some(rows) = body.as_array() else {
-        return Commitment::Unreadable(format!(
+        return Err(format!(
             "the exact-hash receipt query answered with {} instead of an array",
             json_kind(body)
         ));
     };
     if rows.is_empty() {
-        return Commitment::Pending;
+        return Ok(None);
     }
     if rows.len() > 1 {
         // A turn hash binds the agent and the nonce, so the chain cannot hold
         // two receipts for one hash. More than one row means the filter is not
         // the exact-match filter this reader assumes, and every conclusion
         // below it would be drawn from a row picked arbitrarily.
-        return Commitment::Unreadable(format!(
+        return Err(format!(
             "the exact-hash receipt query answered with {} rows for one turn hash",
             rows.len()
         ));
     }
     let row = &rows[0];
-
     let Some(got_hash) = row.get("turn_hash").and_then(|v| v.as_str()) else {
-        return Commitment::Unreadable(
-            "the receipt row carries no string turn_hash, so it cannot be bound to this transfer"
+        return Err(
+            "the receipt row carries no string turn_hash, so it cannot be bound to this turn"
                 .to_string(),
         );
     };
     if !got_hash.eq_ignore_ascii_case(want_turn_hash) {
-        return Commitment::Unreadable(format!(
+        return Err(format!(
             "the exact-hash receipt query for {want_turn_hash} answered with turn {got_hash}"
         ));
     }
+    Ok(Some(row))
+}
+
+fn classify_commitment(
+    want_turn_hash: &str,
+    body: &serde_json::Value,
+    accept_tentative: bool,
+) -> Commitment {
+    let row = match exact_receipt(want_turn_hash, body) {
+        Err(why) => return Commitment::Unreadable(why),
+        Ok(None) => return Commitment::Pending,
+        Ok(Some(row)) => row,
+    };
 
     let Some(raw_finality) = row.get("finality").and_then(|v| v.as_str()) else {
         return Commitment::Unreadable(
@@ -955,12 +970,31 @@ async fn cmd_send(f: Flags) -> Result<()> {
 
     // Receipt resolution across the consensus-finality window (~2s typical).
     // Fail-closed after 30s: exit 0 means RECEIPTED, never merely accepted.
+    //
+    // THE LOOKUP IS BY EXACT TURN HASH OVER THE WHOLE CHAIN. Scanning
+    // `/api/receipts` could not answer this question: that route serves only
+    // the newest fifty receipts, so once fifty land inside the thirty-second
+    // window the receipt for this send is no longer in the response and the
+    // client reports a turn that DID commit as unreceipted. The exact-hash
+    // query filters the whole chain, and an answer it cannot read is UNKNOWN
+    // rather than a silent "not yet" that times out with the wrong reason.
+    //
+    // FINALITY IS REPORTED, NOT DECIDED, which is this verb's existing
+    // contract and is deliberately unchanged: a solo-mode node marks every
+    // committed receipt tentative, and an EmitEvent moves no balance.
+    let confirm_url = format!(
+        "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
+        f.node_url
+    );
     for _ in 0..120 {
-        let receipts = get_json(&http, &format!("{}/api/receipts", f.node_url)).await?;
-        if let Some(r) = receipts.as_array().and_then(|arr| {
-            arr.iter()
-                .find(|r| r.get("turn_hash").and_then(|t| t.as_str()) == Some(&turn_hash))
-        }) {
+        let receipts = get_json(&http, &confirm_url).await?;
+        let found = exact_receipt(&turn_hash, &receipts).map_err(|why| {
+            err(format!(
+                "cannot tell whether turn {turn_hash} was receipted: {why}. \
+                 This is UNKNOWN, not a refusal."
+            ))
+        })?;
+        if let Some(r) = found {
             println!(
                 "{}",
                 serde_json::json!({
@@ -979,7 +1013,6 @@ async fn cmd_send(f: Flags) -> Result<()> {
                     "receipt_hash": r.get("receipt_hash"),
                     "chain_index": r.get("chain_index"),
                     "finality": r.get("finality"),
-                    "consensus_final": r.get("consensus_final"),
                 })
             );
             return Ok(());
@@ -1817,6 +1850,74 @@ mod tests {
                 "'{bad}' must be refused as a cell id"
             );
         }
+    }
+
+    // ── the exact-hash lookup `send` and `transfer` now share ───────────────
+    //
+    // `send` used to scan `GET /api/receipts`, which serves only the newest
+    // FIFTY receipts, so a busy node pushed its own receipt out of the window
+    // and the client reported a committed turn as unreceipted. That cap is the
+    // NODE's (`receipt_infos_from_chain(&s, 50)`) and cannot be exercised from
+    // this crate; what IS pinned here is the reader that replaced the scan.
+
+    #[test]
+    fn the_exact_receipt_for_this_turn_is_returned() {
+        let body = serde_json::json!([row(WANT, "tentative")]);
+        let got = exact_receipt(WANT, &body).expect("readable");
+        assert_eq!(
+            got.and_then(|r| r.get("turn_hash")).and_then(|v| v.as_str()),
+            Some(WANT)
+        );
+    }
+
+    #[test]
+    fn no_receipt_yet_is_not_an_error() {
+        // The distinction the whole poll depends on: "not yet" must keep
+        // waiting, and only a shape the reader cannot read may abort it.
+        assert_eq!(exact_receipt(WANT, &serde_json::json!([])), Ok(None));
+    }
+
+    #[test]
+    fn an_uppercase_turn_hash_is_still_this_turn() {
+        let body = serde_json::json!([row(&WANT.to_uppercase(), "final")]);
+        assert!(exact_receipt(WANT, &body).expect("readable").is_some());
+    }
+
+    #[test]
+    fn an_unreadable_answer_is_an_error_and_never_not_yet() {
+        // Each of these used to be indistinguishable from "no receipt yet",
+        // which is how a broken answer became a thirty-second wait that ended
+        // with the wrong reason attached.
+        let cases: Vec<serde_json::Value> = vec![
+            serde_json::json!([row(OTHER, "final")]),
+            serde_json::json!([row(WANT, "final"), row(WANT, "final")]),
+            serde_json::json!({"error": "not found"}),
+            serde_json::json!(null),
+            serde_json::json!([{"receipt_hash": RECEIPT, "finality": "final"}]),
+            serde_json::json!([{"turn_hash": 12, "finality": "final"}]),
+        ];
+        for body in cases {
+            assert!(
+                exact_receipt(WANT, &body).is_err(),
+                "{body} must be UNREADABLE, not Ok"
+            );
+        }
+    }
+
+    #[test]
+    fn send_does_not_gate_on_finality_the_way_transfer_does() {
+        // THE DELIBERATE ASYMMETRY, pinned so nobody "unifies" it later. An
+        // EmitEvent moves no balance and a solo-mode node marks every receipt
+        // tentative, so `send` reports finality and does not decide on it,
+        // while `transfer` refuses tentative unless the caller asked for it.
+        let tentative = serde_json::json!([row(WANT, "tentative")]);
+        assert!(exact_receipt(WANT, &tentative).expect("readable").is_some());
+        assert_eq!(
+            classify_commitment(WANT, &tentative, false),
+            Commitment::BelowFinality {
+                finality: "tentative".to_string()
+            }
+        );
     }
 
     // ── the submit answer is bound to the hash THIS process signed ─────────
