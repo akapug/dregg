@@ -231,6 +231,82 @@ enum Commitment {
     Unreadable(String),
 }
 
+/// EVERY EXIT AFTER THE SUBMISSION MAY HAVE REACHED THE NODE, in one shape.
+///
+/// A nonzero exit is not proof of refusal. Once the POST has left this
+/// process, an HTTP status, a body this reader cannot parse, a missing or
+/// unbindable hash, a dropped connection and a failed receipt query all say
+/// the same thing about the money: UNKNOWN. A caller that reads any of them as
+/// a refusal resubmits, and a resubmission moves the amount a second time.
+///
+/// A refusal DECIDED BEFORE THE SUBMISSION — bad flags, a self-transfer, a
+/// source that cannot fund the turn — stays an ordinary error, because nothing
+/// was attempted and there is nothing to be uncertain about.
+fn unknown_after_submit(
+    what: String,
+    amount: u64,
+    confirm_url: &str,
+) -> Box<dyn std::error::Error> {
+    err(format!(
+        "{what}. This is UNKNOWN, not a refusal: the transfer may have \
+         committed. Do NOT resubmit — a second transfer moves {amount} again. \
+         Re-read the node with `curl '{confirm_url}'` and decide from that."
+    ))
+}
+
+/// What a submit response says about the turn THIS process signed.
+#[derive(Debug, PartialEq, Eq)]
+enum Admission {
+    /// The node took this exact turn. Admission, never commitment.
+    Took,
+    /// The node executed it and rejected it. Nothing moved, nothing to re-read.
+    Refused(String),
+    /// Anything else. The bytes may have been applied and this process cannot
+    /// say, so it is UNKNOWN and the caller must not resubmit on it.
+    Unknown(String),
+}
+
+/// Bind a submit response to the LOCALLY COMPUTED hash of the turn this
+/// process signed.
+///
+/// THE WANTED HASH IS AN INPUT, and that is the whole point of this function
+/// existing. Taking the hash from the RESPONSE and then confirming a receipt
+/// for it produces a WRONG-OPERATION SUCCESS: a faulty or hostile node names
+/// some other turn, that turn has a perfectly valid receipt, and the client
+/// prints it beside THIS transfer's recipient and amount. A value mover must
+/// never do that, so identity comes from the bytes it signed and the response
+/// is only ever checked AGAINST it.
+fn bind_admission(local_hash: &str, verdict: &serde_json::Value) -> Admission {
+    // A refusal is DECIDED: the node executed the turn and appended no
+    // receipt, so this is the one post-submit answer that is not UNKNOWN.
+    if verdict.get("accepted").and_then(|a| a.as_bool()) == Some(false) {
+        return Admission::Refused(
+            verdict
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("no reason given")
+                .to_string(),
+        );
+    }
+    if verdict.get("accepted").and_then(|a| a.as_bool()) != Some(true) {
+        return Admission::Unknown(
+            "the submit response says neither accepted nor refused".to_string(),
+        );
+    }
+    match verdict.get("turn_hash").and_then(|h| h.as_str()) {
+        Some(reported) if reported.eq_ignore_ascii_case(local_hash) => Admission::Took,
+        Some(reported) => Admission::Unknown(format!(
+            "the node admitted turn {reported}, which is not the transfer this \
+             process signed ({local_hash})"
+        )),
+        None => Admission::Unknown(
+            "the accepted submit response carries no turn_hash, so this \
+             transfer cannot be bound to what the node took"
+                .to_string(),
+        ),
+    }
+}
+
 fn json_kind(v: &serde_json::Value) -> &'static str {
     match v {
         serde_json::Value::Null => "null",
@@ -993,6 +1069,20 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
     let bytes =
         postcard::to_stdvec(&signed).map_err(|e| err(format!("serialize SignedTurn: {e}")))?;
 
+    // THE OPERATION'S IDENTITY IS COMPUTED HERE, FROM THE TURN THIS PROCESS
+    // SIGNED, and never taken from the answer. `Turn::hash` absorbs the call
+    // forest, which absorbs this Transfer's from, to and amount, so this hex
+    // IS this transfer. Confirming against a hash the SERVER chose would let a
+    // faulty or hostile answer point the confirmation at some other committed
+    // turn and have its receipt printed beside THIS transfer's recipient and
+    // amount — a wrong-operation success, which is the one outcome a value
+    // mover must never produce.
+    let turn_hash = hex::encode(signed.turn.hash());
+    let confirm_url = format!(
+        "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
+        f.node_url
+    );
+
     let resp = http
         .post(format!("{}/turns/submit", f.node_url))
         .header("Content-Type", "application/octet-stream")
@@ -1000,33 +1090,31 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         .body(bytes)
         .send()
         .await
-        .map_err(|e| err(format!("POST /turns/submit: {e}")))?;
+        .map_err(|e| {
+            // The bytes may have arrived and the ANSWER been lost. Ambiguous.
+            unknown_after_submit(
+                format!("POST /turns/submit: {e}"), amount, &confirm_url)
+        })?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(err(format!("/turns/submit returned {status}")));
+        return Err(unknown_after_submit(
+            format!("/turns/submit returned {status}"), amount, &confirm_url));
     }
-    let verdict: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| err(format!("parse submit response: {e}")))?;
-    // THE SUBMIT RESPONSE CARRIES A TURN HASH ON REFUSAL TOO — the node's
-    // client-signed ingress fills `turn_hash` before it decides, so the hash
-    // proves only that the node parsed a turn. Read the flag, and even a true
-    // one is ADMISSION, never commitment.
-    if verdict.get("accepted").and_then(|a| a.as_bool()) != Some(true) {
-        return Err(err(format!(
-            "node refused the transfer: {}",
-            verdict
-                .get("error")
-                .and_then(|e| e.as_str())
-                .unwrap_or("no reason given")
-        )));
+    let verdict: serde_json::Value = resp.json().await.map_err(|e| {
+        unknown_after_submit(
+            format!("cannot parse the submit response: {e}"), amount, &confirm_url)
+    })?;
+    // THE LOCAL HASH IS WHAT THE RESPONSE IS CHECKED AGAINST, never the other
+    // way round. This is the only place the submit answer is read.
+    match bind_admission(&turn_hash, &verdict) {
+        Admission::Took => {}
+        Admission::Refused(why) => {
+            return Err(err(format!("node refused the transfer: {why}")));
+        }
+        Admission::Unknown(why) => {
+            return Err(unknown_after_submit(why, amount, &confirm_url));
+        }
     }
-    let turn_hash = verdict
-        .get("turn_hash")
-        .and_then(|h| h.as_str())
-        .ok_or_else(|| err("accepted submit response missing turn_hash".to_string()))?
-        .to_string();
     eprintln!("[client-sign] transfer admitted: {turn_hash}; confirming commitment...");
 
     // COMMITMENT IS CONFIRMED AGAINST THE CHAIN, BY EXACT HASH. Only a commit
@@ -1035,13 +1123,11 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
     // statement that THIS transfer moved. The exact-hash query filters the
     // whole chain; `/api/receipts` serves only the newest 50 and would report
     // a committed transfer as unreceipted on a busy node.
-    let confirm_url = format!(
-        "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
-        f.node_url
-    );
     let mut last_below: Option<String> = None;
     for _ in 0..120 {
-        let body = get_json(&http, &confirm_url).await?;
+        let body = get_json(&http, &confirm_url).await.map_err(|e| {
+            unknown_after_submit(format!("{e}"), amount, &confirm_url)
+        })?;
         match classify_commitment(&turn_hash, &body, f.accept_tentative) {
             Commitment::Committed {
                 receipt_hash,
@@ -1079,10 +1165,10 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
             Commitment::Pending => {}
             Commitment::BelowFinality { finality } => last_below = Some(finality),
             Commitment::Unreadable(why) => {
-                return Err(err(format!(
-                    "cannot tell whether transfer {turn_hash} committed: {why}. \
-                     This is UNKNOWN, not a refusal — do NOT resubmit."
-                )));
+                return Err(unknown_after_submit(
+                    format!("cannot tell whether transfer {turn_hash} \
+                             committed: {why}"),
+                    amount, &confirm_url));
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -1094,12 +1180,10 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         ),
         None => String::new(),
     };
-    Err(err(format!(
-        "transfer {turn_hash} was admitted but not confirmed committed within 30s.{seen} \
-         This is UNKNOWN, not a refusal: the turn may commit after this exits. Do NOT \
-         resubmit — a second transfer moves {amount} again. Re-read the node with \
-         `curl '{confirm_url}'` and decide from that."
-    )))
+    Err(unknown_after_submit(
+        format!("transfer {turn_hash} was admitted but not confirmed committed \
+                 within 30s.{seen}"),
+        amount, &confirm_url))
 }
 
 #[tokio::main]
@@ -1111,7 +1195,16 @@ async fn main() {
     // crate — the gate is right, the host must install.
     let sign_core = dregg_sdk::install_verified_mldsa_sign_core_real();
     let verify_core = dregg_sdk::install_verified_mldsa_verify_core();
-    eprintln!("[client-sign] verified ML-DSA cores: sign {sign_core:?}, verify {verify_core:?}");
+    // THE KEYGEN CORE IS INSTALLED TOO, because `join` CREATES an identity on
+    // first use and that is a keygen. Without it the audit gate aborts the
+    // process with SIGABRT on exactly the documented first-use path: a brand
+    // new profile could never be made by this binary, and the failure is a
+    // signal rather than an error anyone could act on.
+    let keygen_core = dregg_sdk::install_verified_mldsa_keygen_core_real();
+    eprintln!(
+        "[client-sign] verified ML-DSA cores: sign {sign_core:?}, verify \
+         {verify_core:?}, keygen {keygen_core:?}"
+    );
 
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.is_empty() {
@@ -1691,5 +1784,391 @@ mod tests {
                 "'{bad}' must be refused as a cell id"
             );
         }
+    }
+
+    // ── the submit answer is bound to the hash THIS process signed ─────────
+
+    #[test]
+    fn the_node_taking_THIS_turn_is_admission() {
+        // UNCONDITIONAL POSITIVE FIRST, and note what it is NOT: taking the
+        // turn is the node saying it received it. Commitment is a receipt.
+        assert_eq!(
+            bind_admission(WANT, &serde_json::json!({
+                "accepted": true, "turn_hash": WANT
+            })),
+            Admission::Took
+        );
+        assert_eq!(
+            bind_admission(WANT, &serde_json::json!({
+                "accepted": true, "turn_hash": WANT.to_uppercase()
+            })),
+            Admission::Took
+        );
+    }
+
+    #[test]
+    fn a_node_naming_ANOTHER_turn_is_UNKNOWN_never_admission() {
+        // THE WRONG-OPERATION SUCCESS, at the line that decides it. Confirming
+        // the hash the RESPONSE chose would find that other turn's perfectly
+        // valid receipt and print it beside this transfer's amount.
+        let got = bind_admission(WANT, &serde_json::json!({
+            "accepted": true, "turn_hash": OTHER
+        }));
+        assert!(
+            matches!(&got, Admission::Unknown(why)
+                     if why.contains("is not the transfer this process signed")),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn an_accepted_answer_with_no_binding_hash_is_UNKNOWN() {
+        for verdict in [
+            serde_json::json!({"accepted": true}),
+            serde_json::json!({"accepted": true, "turn_hash": 12}),
+            serde_json::json!({"accepted": true, "turn_hash": serde_json::Value::Null}),
+        ] {
+            assert!(
+                matches!(bind_admission(WANT, &verdict), Admission::Unknown(_)),
+                "{verdict} must be UNKNOWN"
+            );
+        }
+    }
+
+    #[test]
+    fn an_answer_that_decides_NEITHER_way_is_UNKNOWN_not_refusal() {
+        // A missing or malformed `accepted` leaves this process unable to say
+        // what the node did with bytes it may well have applied. Reading it as
+        // a refusal is what invites the second transfer.
+        for verdict in [
+            serde_json::json!({}),
+            serde_json::json!({"accepted": "yes", "turn_hash": WANT}),
+            serde_json::json!({"turn_hash": WANT}),
+        ] {
+            assert!(
+                matches!(bind_admission(WANT, &verdict), Admission::Unknown(_)),
+                "{verdict} must be UNKNOWN, never Refused"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_refusal_is_decided_and_carries_its_reason() {
+        // MUST-MISS beside the arm above: this one the node DID decide, so it
+        // must not be reported as something that might have committed.
+        assert_eq!(
+            bind_admission(WANT, &serde_json::json!({
+                "accepted": false, "error": "insufficient balance"
+            })),
+            Admission::Refused("insufficient balance".to_string())
+        );
+        // A refusal with a hash attached is still a refusal: the ingress fills
+        // turn_hash before it decides, so the hash proves only that it parsed.
+        assert_eq!(
+            bind_admission(WANT, &serde_json::json!({
+                "accepted": false, "turn_hash": WANT
+            })),
+            Admission::Refused("no reason given".to_string())
+        );
+    }
+
+    #[test]
+    fn every_post_submit_unknown_carries_the_reread_and_the_warning() {
+        // The guidance is the product here: a nonzero exit that does not say
+        // this is the exit a caller resubmits on.
+        let e = unknown_after_submit(
+            "the answer was lost".to_string(), 100,
+            "http://node/api/starbridge/receipts?turn_hash=abc");
+        let text = e.to_string();
+        assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
+        assert!(text.contains("Do NOT resubmit"), "{text}");
+        assert!(text.contains("moves 100 again"), "{text}");
+        assert!(text.contains("starbridge/receipts?turn_hash=abc"), "{text}");
+    }
+
+    // ── the composed transfer path, against a node that answers ─────────────
+    //
+    // The two roots below live in cmd_transfer's COMPOSITION and no helper
+    // test can reach them: one is which hash the confirmation binds to, the
+    // other is how an exit after the POST is reported. Both need a submission
+    // and a poll, so this mock serves the whole path — /status, the cell, the
+    // chain head, the faucet, /turns/submit and the exact-hash receipt query —
+    // and DREGG_HOME points the profile loader at a temp identity so no real
+    // key is touched and nothing is signed against a live node.
+
+    #[derive(Clone)]
+    enum Submit {
+        /// Behave like the node: decode the postcard turn and echo ITS hash.
+        Honest,
+        /// Accept, and report a DIFFERENT turn's hash.
+        ReportsAnotherTurn,
+        /// Accept, and report no hash at all.
+        ReportsNoHash,
+        /// Answer with an HTTP status rather than a verdict.
+        HttpError,
+        /// Refuse explicitly — the one post-submit answer that is not UNKNOWN.
+        Refuses,
+    }
+
+    struct TransferNode {
+        submit: Submit,
+        /// The receipts the exact-hash query serves, by turn hash.
+        receipted: Mutex<Vec<String>>,
+    }
+
+    async fn transfer_connection(
+        mut socket: tokio::net::TcpStream,
+        node: Arc<TransferNode>,
+    ) {
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let header_end = loop {
+            let Ok(n) = socket.read(&mut chunk).await else { return };
+            if n == 0 {
+                return;
+            }
+            request.extend_from_slice(&chunk[..n]);
+            if let Some(i) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                    .and_then(|n| n.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let Ok(n) = socket.read(&mut chunk).await else { return };
+            if n == 0 {
+                return;
+            }
+            request.extend_from_slice(&chunk[..n]);
+        }
+        let line = headers.lines().next().unwrap_or_default().to_string();
+        let body = request[header_end..header_end + content_length].to_vec();
+
+        let mut code = 200;
+        let response = if line.starts_with("GET /status") {
+            serde_json::json!({"federation_mode": "solo", "public_key": "11".repeat(32)})
+        } else if line.starts_with("GET /api/cell/") {
+            serde_json::json!({"found": true, "balance": 1_000_000, "nonce": 0})
+        } else if line.starts_with("GET /api/receipts") {
+            serde_json::json!([])
+        } else if line.starts_with("POST /api/faucet") {
+            serde_json::json!({"success": true, "turn_hash": "22".repeat(32)})
+        } else if line.starts_with("POST /turns/submit") {
+            match node.submit.clone() {
+                Submit::HttpError => {
+                    code = 503;
+                    serde_json::json!({"error": "upstream unavailable"})
+                }
+                Submit::Refuses => serde_json::json!({
+                    "accepted": false, "error": "insufficient balance"
+                }),
+                Submit::ReportsNoHash => serde_json::json!({"accepted": true}),
+                Submit::ReportsAnotherTurn => {
+                    let other = "33".repeat(32);
+                    node.receipted.lock().await.push(other.clone());
+                    serde_json::json!({"accepted": true, "turn_hash": other})
+                }
+                Submit::Honest => {
+                    let signed: dregg_sdk::SignedTurn = postcard::from_bytes(&body)
+                        .expect("the client must send a postcard SignedTurn");
+                    let hash = hex::encode(signed.turn.hash());
+                    node.receipted.lock().await.push(hash.clone());
+                    serde_json::json!({"accepted": true, "turn_hash": hash})
+                }
+            }
+        } else if line.starts_with("GET /api/starbridge/receipts") {
+            let want = line
+                .split("turn_hash=")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or_default()
+                .to_string();
+            let held = node.receipted.lock().await.clone();
+            if held.iter().any(|h| h.eq_ignore_ascii_case(&want)) {
+                serde_json::json!([{
+                    "chain_index": 3, "chain_head": true,
+                    "receipt_hash": "44".repeat(32),
+                    "turn_hash": want, "finality": "tentative",
+                }])
+            } else {
+                serde_json::json!([])
+            }
+        } else {
+            code = 404;
+            serde_json::json!({"error": "not found"})
+        };
+        let bytes = serde_json::to_vec(&response).unwrap();
+        let head = format!(
+            "HTTP/1.1 {code} OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            bytes.len()
+        );
+        let _ = socket.write_all(head.as_bytes()).await;
+        let _ = socket.write_all(&bytes).await;
+    }
+
+    /// A temp DREGG_HOME with one profile, and a node speaking the whole path.
+    async fn transfer_fixture(
+        submit: Submit,
+    ) -> Option<(String, String, tokio::task::JoinHandle<()>)> {
+        // The same install `main` performs, keygen included: creating the
+        // temp identity below IS a keygen.
+        //
+        // MEASURED ON THIS BUILD: all three come back ExportAbsent, so the
+        // linked archive exports no verified core and dregg-pq ABORTS the
+        // process the moment a key is generated or a turn is signed. These
+        // arms therefore cannot run here, and they say so rather than being
+        // deleted or quietly passing: the composition they cover is the one a
+        // helper cannot reach, so a skipped arm is a known gap and a removed
+        // one is an invisible gap. They run unchanged wherever the archive
+        // exports the cores. Forcing them through by accepting the unaudited
+        // primitive is NOT done: a test is not a reason to turn off an audit
+        // gate, and the gate is reporting a real degradation of this build.
+        let sign = dregg_sdk::install_verified_mldsa_sign_core_real();
+        let keygen = dregg_sdk::install_verified_mldsa_keygen_core_real();
+        if !matches!(sign, dregg_sdk::MlDsaSignCoreRealInstall::Installed)
+            || !matches!(keygen, dregg_sdk::MlDsaKeygenCoreRealInstall::Installed)
+        {
+            return None;
+        }
+        dregg_sdk::install_verified_mldsa_verify_core();
+        let node = Arc::new(TransferNode {
+            submit,
+            receipted: Mutex::new(Vec::new()),
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let shared = node.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                tokio::spawn(transfer_connection(socket, shared.clone()));
+            }
+        });
+        let home = std::env::temp_dir().join(format!(
+            "dregg-client-sign-test-{}",
+            listener_port(&url)
+        ));
+        let _ = std::fs::create_dir_all(home.join("profiles"));
+        Some((url, home.to_string_lossy().into_owned(), handle))
+    }
+
+    fn listener_port(url: &str) -> String {
+        url.rsplit(':').next().unwrap_or("0").to_string()
+    }
+
+    fn transfer_flags(url: &str, to: &str) -> Flags {
+        Flags {
+            node_url: url.trim_end_matches('/').to_string(),
+            profile: Some("hc2-transfer-test".to_string()),
+            token: Some("test-bearer".to_string()),
+            topic: "client-sign".to_string(),
+            to: Some(to.to_string()),
+            fund: 5000,
+            amount: Some(100),
+            accept_tentative: true,
+            rest: Vec::new(),
+        }
+    }
+
+    /// The whole composed run, with the process-global env seams held for the
+    /// duration. `DREGG_HOME` is what keeps this off any real identity.
+    /// `None` when this build cannot run the composed path at all — see
+    /// `transfer_fixture`. Every arm below reports the skip rather than
+    /// passing on it, so a gap stays visible.
+    async fn run_transfer(submit: Submit) -> Option<Result<()>> {
+        // DREGG_HOME AND DREGG_PROFILE ARE PROCESS-GLOBAL, so these arms are
+        // serialized: cargo runs tests on threads, and two of them setting the
+        // same variables would make each one read the other's identity.
+        static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _held = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (url, home, handle) = transfer_fixture(submit).await?;
+        unsafe {
+            std::env::set_var("DREGG_HOME", &home);
+            std::env::set_var("DREGG_PROFILE", "hc2-transfer-test");
+        }
+        let _ = dregg_sdk::profiles::create("hc2-transfer-test");
+        let to = "55".repeat(32);
+        let out = cmd_transfer(transfer_flags(&url, &to)).await;
+        handle.abort();
+        Some(out)
+    }
+
+    /// The one place the skip is announced, so a reader of the output sees
+    /// WHICH property went unexercised and why.
+    fn skipped(what: &str) {
+        eprintln!(
+            "SKIPPED {what}: this build's linked archive exports no verified \
+             ML-DSA core, so signing a turn would abort the process. The arm \
+             is unchanged and runs wherever the cores are exported."
+        );
+    }
+
+    #[test]
+    fn probe_which_verified_pq_cores_this_build_exports() {
+        eprintln!("PQPROBE sign={:?}", dregg_sdk::install_verified_mldsa_sign_core_real());
+        eprintln!("PQPROBE verify={:?}", dregg_sdk::install_verified_mldsa_verify_core());
+        eprintln!("PQPROBE keygen={:?}", dregg_sdk::install_verified_mldsa_keygen_core_real());
+    }
+
+    #[tokio::test]
+    async fn a_transfer_the_node_commits_reports_committed() {
+        // UNCONDITIONAL POSITIVE FIRST, through the whole path: without it the
+        // refusals below could all be satisfied by a verb that never succeeds.
+        let Some(out) = run_transfer(Submit::Honest).await else {
+            return skipped("the committed-transfer positive");
+        };
+        out.expect("an honest node's committed transfer must report success");
+    }
+
+    #[tokio::test]
+    async fn a_receipt_for_ANOTHER_turn_never_reports_THIS_transfer_committed() {
+        // THE WRONG-OPERATION SUCCESS. The node accepts and names a different
+        // turn; that other turn has a perfectly valid receipt. Binding the
+        // confirmation to the hash the SERVER chose would confirm B and print
+        // THIS transfer's recipient and amount beside it.
+        let Some(out) = run_transfer(Submit::ReportsAnotherTurn).await else {
+            return skipped("the wrong-operation-success pole");
+        };
+        let e = out.expect_err("a foreign turn hash must never confirm this transfer");
+        let text = e.to_string();
+        assert!(text.contains("is not the transfer this process signed"), "{text}");
+        assert!(text.contains("Do NOT resubmit"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn every_exit_after_the_post_says_UNKNOWN_and_do_not_resubmit() {
+        // A nonzero exit is not proof of refusal. Each of these leaves the
+        // bytes possibly delivered, so each must carry the same guidance.
+        for submit in [Submit::HttpError, Submit::ReportsNoHash] {
+            let Some(out) = run_transfer(submit).await else {
+                return skipped("the post-submit UNKNOWN poles");
+            };
+            let e = out.expect_err("must not succeed");
+            let text = e.to_string();
+            assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
+            assert!(text.contains("Do NOT resubmit"), "{text}");
+            assert!(text.contains("starbridge/receipts"),
+                    "the caller is owed the exact re-read: {text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_explicit_refusal_is_the_one_post_submit_answer_that_is_not_unknown() {
+        // MUST-MISS beside the arm above: the node executed and rejected, so
+        // nothing moved and there is nothing to re-read. Telling the caller
+        // this might have committed would be its own false alarm.
+        let Some(out) = run_transfer(Submit::Refuses).await else {
+            return skipped("the decided-refusal must-miss");
+        };
+        let e = out.expect_err("a refused transfer must not succeed");
+        let text = e.to_string();
+        assert!(text.contains("node refused the transfer"), "{text}");
+        assert!(!text.contains("UNKNOWN"), "a decided refusal is not UNKNOWN: {text}");
     }
 }
