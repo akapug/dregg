@@ -231,6 +231,28 @@ enum Commitment {
     Unreadable(String),
 }
 
+/// Is a verified ML-DSA core the PRODUCER for this process, for both the
+/// operations a transfer performs?
+///
+/// INSTALL IS ONCE PER PROCESS, so the SECOND call and every one after it
+/// answers `AlreadyInstalled` — which the outcome's own documentation calls
+/// healthy: "a core was already installed this process, crate still out of
+/// TCB". Treating only `Installed` as healthy therefore meant that on a good
+/// archive the FIRST arm ran and every later one silently skipped, reporting a
+/// missing export that was not missing. At most one composed control could
+/// ever execute, and a probe running first could skip them all.
+///
+/// Only `ExportAbsent` is unhealthy, and it is the one state that makes
+/// signing abort.
+fn cores_are_healthy(
+    sign: dregg_sdk::MlDsaSignCoreRealInstall,
+    keygen: dregg_sdk::MlDsaKeygenCoreRealInstall,
+) -> bool {
+    use dregg_sdk::{MlDsaKeygenCoreRealInstall as K, MlDsaSignCoreRealInstall as S};
+    matches!(sign, S::Installed | S::AlreadyInstalled)
+        && matches!(keygen, K::Installed | K::AlreadyInstalled)
+}
+
 /// EVERY EXIT AFTER THE SUBMISSION MAY HAVE REACHED THE NODE, in one shape.
 ///
 /// A nonzero exit is not proof of refusal. Once the POST has left this
@@ -277,32 +299,43 @@ enum Admission {
 /// never do that, so identity comes from the bytes it signed and the response
 /// is only ever checked AGAINST it.
 fn bind_admission(local_hash: &str, verdict: &serde_json::Value) -> Admission {
-    // A refusal is DECIDED: the node executed the turn and appended no
-    // receipt, so this is the one post-submit answer that is not UNKNOWN.
-    if verdict.get("accepted").and_then(|a| a.as_bool()) == Some(false) {
-        return Admission::Refused(
+    // IDENTITY IS ESTABLISHED BEFORE THE ANSWER IS TRUSTED, AND THAT ORDER IS
+    // THE WHOLE POINT — IN BOTH DIRECTIONS. Deciding the refusal first made a
+    // reply carrying NO hash, or SOMEONE ELSE'S, an ordinary decided refusal:
+    // the caller was told nothing moved, on the strength of an answer that
+    // never named this turn. The node's own reject path fills `turn_hash`
+    // before it decides, so a refusal that does name this turn is real
+    // evidence about it and a hashless or foreign one is not that evidence.
+    match verdict.get("turn_hash").and_then(|h| h.as_str()) {
+        Some(reported) if reported.eq_ignore_ascii_case(local_hash) => {}
+        Some(reported) => {
+            return Admission::Unknown(format!(
+                "the node answered about turn {reported}, which is not the \
+                 transfer this process signed ({local_hash})"
+            ));
+        }
+        None => {
+            return Admission::Unknown(
+                "the submit response carries no turn_hash, so it cannot be \
+                 bound to the transfer this process signed"
+                    .to_string(),
+            );
+        }
+    }
+    match verdict.get("accepted").and_then(|a| a.as_bool()) {
+        // The node took THIS turn. Admission, never commitment.
+        Some(true) => Admission::Took,
+        // The node executed THIS turn, rejected it, and appended no receipt,
+        // so nothing moved and there is nothing for a caller to re-read.
+        Some(false) => Admission::Refused(
             verdict
                 .get("error")
                 .and_then(|e| e.as_str())
                 .unwrap_or("no reason given")
                 .to_string(),
-        );
-    }
-    if verdict.get("accepted").and_then(|a| a.as_bool()) != Some(true) {
-        return Admission::Unknown(
+        ),
+        _ => Admission::Unknown(
             "the submit response says neither accepted nor refused".to_string(),
-        );
-    }
-    match verdict.get("turn_hash").and_then(|h| h.as_str()) {
-        Some(reported) if reported.eq_ignore_ascii_case(local_hash) => Admission::Took,
-        Some(reported) => Admission::Unknown(format!(
-            "the node admitted turn {reported}, which is not the transfer this \
-             process signed ({local_hash})"
-        )),
-        None => Admission::Unknown(
-            "the accepted submit response carries no turn_hash, so this \
-             transfer cannot be bound to what the node took"
-                .to_string(),
         ),
     }
 }
@@ -1853,23 +1886,71 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_refusal_is_decided_and_carries_its_reason() {
-        // MUST-MISS beside the arm above: this one the node DID decide, so it
-        // must not be reported as something that might have committed.
+    fn a_refusal_THAT_NAMES_THIS_TURN_is_decided_and_carries_its_reason() {
+        // MUST-MISS beside the UNKNOWN poles: this one the node DID decide
+        // ABOUT THIS TURN, so it must not be reported as something that might
+        // have committed. The node's reject path fills turn_hash before it
+        // decides, so a real refusal names the turn it refused.
         assert_eq!(
             bind_admission(WANT, &serde_json::json!({
-                "accepted": false, "error": "insufficient balance"
+                "accepted": false, "turn_hash": WANT,
+                "error": "insufficient balance"
             })),
             Admission::Refused("insufficient balance".to_string())
         );
-        // A refusal with a hash attached is still a refusal: the ingress fills
-        // turn_hash before it decides, so the hash proves only that it parsed.
         assert_eq!(
             bind_admission(WANT, &serde_json::json!({
-                "accepted": false, "turn_hash": WANT
+                "accepted": false, "turn_hash": WANT.to_uppercase()
             })),
             Admission::Refused("no reason given".to_string())
         );
+    }
+
+    #[test]
+    fn a_refusal_that_names_NO_turn_or_ANOTHER_turn_is_UNKNOWN() {
+        // THE NEGATIVE POLE OF THE IDENTITY RULE, and the oracle that used to
+        // sit here asserted the opposite: a reply carrying no hash, or someone
+        // else's, was reported as a decided refusal, so the caller was told
+        // nothing moved on the strength of an answer that never named this
+        // turn. Identity is established before the answer is trusted, in BOTH
+        // directions.
+        for verdict in [
+            serde_json::json!({"accepted": false, "error": "insufficient balance"}),
+            serde_json::json!({"accepted": false, "turn_hash": OTHER}),
+            serde_json::json!({"accepted": false, "turn_hash": 12}),
+        ] {
+            assert!(
+                matches!(bind_admission(WANT, &verdict), Admission::Unknown(_)),
+                "{verdict} names no evidence about this turn, so it is UNKNOWN"
+            );
+        }
+    }
+
+    #[test]
+    fn a_healthy_repeat_install_is_not_a_missing_export() {
+        // INSTALL IS ONCE PER PROCESS, so every call after the first answers
+        // AlreadyInstalled — which the outcome's own docs call healthy. Reading
+        // only Installed as healthy meant that on a GOOD archive the first arm
+        // ran and every later one skipped with a missing-export reason that was
+        // false, so at most one composed control could ever execute.
+        use dregg_sdk::{MlDsaKeygenCoreRealInstall as K, MlDsaSignCoreRealInstall as S};
+        for sign in [S::Installed, S::AlreadyInstalled] {
+            for keygen in [K::Installed, K::AlreadyInstalled] {
+                assert!(cores_are_healthy(sign, keygen),
+                        "{sign:?}/{keygen:?} is a healthy verified producer");
+            }
+        }
+        // MUST-MISS: only a genuinely absent export is unhealthy, and it must
+        // be unhealthy whichever side is missing.
+        for (sign, keygen) in [
+            (S::ExportAbsent, K::Installed),
+            (S::Installed, K::ExportAbsent),
+            (S::ExportAbsent, K::ExportAbsent),
+            (S::ExportAbsent, K::AlreadyInstalled),
+        ] {
+            assert!(!cores_are_healthy(sign, keygen),
+                    "{sign:?}/{keygen:?} cannot sign a turn");
+        }
     }
 
     #[test]
@@ -1906,8 +1987,12 @@ mod tests {
         ReportsNoHash,
         /// Answer with an HTTP status rather than a verdict.
         HttpError,
-        /// Refuse explicitly — the one post-submit answer that is not UNKNOWN.
+        /// Refuse explicitly, NAMING THIS TURN — the one post-submit answer
+        /// that is not UNKNOWN.
         Refuses,
+        /// Take the turn honestly, then fail the receipt query. The submission
+        /// landed and the poll cannot say what became of it.
+        HonestThenPollFails,
     }
 
     struct TransferNode {
@@ -1966,16 +2051,24 @@ mod tests {
                     code = 503;
                     serde_json::json!({"error": "upstream unavailable"})
                 }
-                Submit::Refuses => serde_json::json!({
-                    "accepted": false, "error": "insufficient balance"
-                }),
+                Submit::Refuses => {
+                    // A GENUINE refusal names the turn it refused, which is
+                    // what the node's own reject path does.
+                    let signed: dregg_sdk::SignedTurn = postcard::from_bytes(&body)
+                        .expect("the client must send a postcard SignedTurn");
+                    serde_json::json!({
+                        "accepted": false,
+                        "turn_hash": hex::encode(signed.turn.hash()),
+                        "error": "insufficient balance"
+                    })
+                }
                 Submit::ReportsNoHash => serde_json::json!({"accepted": true}),
                 Submit::ReportsAnotherTurn => {
                     let other = "33".repeat(32);
                     node.receipted.lock().await.push(other.clone());
                     serde_json::json!({"accepted": true, "turn_hash": other})
                 }
-                Submit::Honest => {
+                Submit::Honest | Submit::HonestThenPollFails => {
                     let signed: dregg_sdk::SignedTurn = postcard::from_bytes(&body)
                         .expect("the client must send a postcard SignedTurn");
                     let hash = hex::encode(signed.turn.hash());
@@ -1983,6 +2076,11 @@ mod tests {
                     serde_json::json!({"accepted": true, "turn_hash": hash})
                 }
             }
+        } else if line.starts_with("GET /api/starbridge/receipts")
+            && matches!(node.submit, Submit::HonestThenPollFails)
+        {
+            code = 500;
+            serde_json::json!({"error": "receipt index unavailable"})
         } else if line.starts_with("GET /api/starbridge/receipts") {
             let want = line
                 .split("turn_hash=")
@@ -2032,12 +2130,10 @@ mod tests {
         // gate, and the gate is reporting a real degradation of this build.
         let sign = dregg_sdk::install_verified_mldsa_sign_core_real();
         let keygen = dregg_sdk::install_verified_mldsa_keygen_core_real();
-        if !matches!(sign, dregg_sdk::MlDsaSignCoreRealInstall::Installed)
-            || !matches!(keygen, dregg_sdk::MlDsaKeygenCoreRealInstall::Installed)
-        {
+        dregg_sdk::install_verified_mldsa_verify_core();
+        if !cores_are_healthy(sign, keygen) {
             return None;
         }
-        dregg_sdk::install_verified_mldsa_verify_core();
         let node = Arc::new(TransferNode {
             submit,
             receipted: Mutex::new(Vec::new()),
@@ -2156,6 +2252,22 @@ mod tests {
             assert!(text.contains("starbridge/receipts"),
                     "the caller is owed the exact re-read: {text}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_poll_that_fails_after_the_turn_landed_is_UNKNOWN() {
+        // THE POLE THE REVIEW ASKED FOR: the submission reached the node and
+        // the receipt query then failed, so this process cannot say whether
+        // the transfer committed. Exiting on it without the warning is what
+        // invites the caller to send again.
+        let Some(out) = run_transfer(Submit::HonestThenPollFails).await else {
+            return skipped("the uncertain-poll pole");
+        };
+        let e = out.expect_err("a failed poll must not report success");
+        let text = e.to_string();
+        assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
+        assert!(text.contains("Do NOT resubmit"), "{text}");
+        assert!(text.contains("starbridge/receipts"), "{text}");
     }
 
     #[tokio::test]
