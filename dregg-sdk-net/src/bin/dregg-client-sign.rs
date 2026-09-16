@@ -936,6 +936,20 @@ async fn cmd_send(f: Flags) -> Result<()> {
     let bytes =
         postcard::to_stdvec(&signed).map_err(|e| err(format!("serialize SignedTurn: {e}")))?;
 
+    // THE OPERATION'S IDENTITY IS COMPUTED HERE, FROM THE TURN THIS PROCESS
+    // SIGNED, and never taken from the answer — the same rule the transfer
+    // verb follows, applied to its sibling.
+    //
+    // WIDENING THE LOOKUP IS WHAT MADE THIS URGENT. Binding to the hash the
+    // SERVER reported was always a trust defect, and the old fifty-receipt
+    // window hid most of it: a response naming some historical turn B could
+    // not be confirmed, because B's receipt had long since fallen out of that
+    // window. Searching the WHOLE chain finds B, so the same wrong answer now
+    // prints `sent: true` beside THIS turn's topic and payload. A cure for one
+    // defect made another reachable, which is the cost of fixing an instance
+    // and leaving its sibling.
+    let turn_hash = hex::encode(signed.turn.hash());
+
     let resp = http
         .post(format!("{}/turns/submit", f.node_url))
         .header("Content-Type", "application/octet-stream")
@@ -952,20 +966,21 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .json()
         .await
         .map_err(|e| err(format!("parse submit response: {e}")))?;
-    if verdict.get("accepted").and_then(|a| a.as_bool()) != Some(true) {
-        return Err(err(format!(
-            "node refused the turn: {}",
-            verdict
-                .get("error")
-                .and_then(|e| e.as_str())
-                .unwrap_or("no reason given")
-        )));
+    match bind_admission(&turn_hash, &verdict) {
+        Admission::Took => {}
+        Admission::Refused(why) => {
+            return Err(err(format!("node refused the turn: {why}")));
+        }
+        Admission::Unknown(why) => {
+            return Err(err(format!(
+                "{why}. This is UNKNOWN, not a refusal: the turn may have \
+                 committed. Re-read the node with \
+                 `curl '{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}'` \
+                 and decide from that.",
+                f.node_url
+            )));
+        }
     }
-    let turn_hash = verdict
-        .get("turn_hash")
-        .and_then(|h| h.as_str())
-        .ok_or_else(|| err("accepted submit response missing turn_hash".to_string()))?
-        .to_string();
     eprintln!("[client-sign] turn accepted: {turn_hash}; awaiting receipt...");
 
     // Receipt resolution across the consensus-finality window (~2s typical).
@@ -1902,6 +1917,39 @@ mod tests {
                 "{body} must be UNREADABLE, not Ok"
             );
         }
+    }
+
+    #[test]
+    fn send_binds_its_confirmation_to_the_turn_IT_signed() {
+        // THE DEFECT WIDENING THE LOOKUP MADE REACHABLE. Binding to the hash
+        // the SERVER reported was always wrong; the old fifty-receipt window
+        // hid most of it, because a response naming a HISTORICAL turn could
+        // not be confirmed once that turn's receipt fell out of the window.
+        // Searching the whole chain finds it, so the same wrong answer would
+        // print success beside this turn's own topic and payload.
+        //
+        // `send` and `transfer` now ask the same question through the same
+        // reader, so the sibling cannot drift from the cure again.
+        assert_eq!(
+            bind_admission(WANT, &serde_json::json!({
+                "accepted": true, "turn_hash": WANT
+            })),
+            Admission::Took
+        );
+        let got = bind_admission(WANT, &serde_json::json!({
+            "accepted": true, "turn_hash": OTHER
+        }));
+        assert!(
+            matches!(&got, Admission::Unknown(why)
+                     if why.contains("is not the transfer this process signed")),
+            "a historical or foreign turn hash must never confirm this send: {got:?}"
+        );
+        // And the receipt for that other turn is perfectly valid on its own,
+        // which is exactly why the binding has to happen before the lookup.
+        let body = serde_json::json!([row(OTHER, "tentative")]);
+        assert!(exact_receipt(OTHER, &body).expect("readable").is_some());
+        assert!(exact_receipt(WANT, &body).is_err(),
+                "asking for THIS turn must not be answered by that one");
     }
 
     #[test]
