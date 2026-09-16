@@ -298,7 +298,14 @@ enum Admission {
 /// prints it beside THIS transfer's recipient and amount. A value mover must
 /// never do that, so identity comes from the bytes it signed and the response
 /// is only ever checked AGAINST it.
-fn bind_admission(local_hash: &str, verdict: &serde_json::Value) -> Admission {
+///
+/// `submitted` NAMES WHAT THIS CALLER SIGNED, because both verbs share this
+/// function and a reason that calls a send a "transfer" tells the operator
+/// about an operation that did not happen. The word is the caller's and never
+/// this function's to assume.
+fn bind_admission(
+    submitted: &str, local_hash: &str, verdict: &serde_json::Value,
+) -> Admission {
     // IDENTITY IS ESTABLISHED BEFORE THE ANSWER IS TRUSTED, AND THAT ORDER IS
     // THE WHOLE POINT — IN BOTH DIRECTIONS. Deciding the refusal first made a
     // reply carrying NO hash, or SOMEONE ELSE'S, an ordinary decided refusal:
@@ -311,15 +318,14 @@ fn bind_admission(local_hash: &str, verdict: &serde_json::Value) -> Admission {
         Some(reported) => {
             return Admission::Unknown(format!(
                 "the node answered about turn {reported}, which is not the \
-                 transfer this process signed ({local_hash})"
+                 {submitted} this process signed ({local_hash})"
             ));
         }
         None => {
-            return Admission::Unknown(
+            return Admission::Unknown(format!(
                 "the submit response carries no turn_hash, so it cannot be \
-                 bound to the transfer this process signed"
-                    .to_string(),
-            );
+                 bound to the {submitted} this process signed"
+            ));
         }
     }
     match verdict.get("accepted").and_then(|a| a.as_bool()) {
@@ -966,7 +972,7 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .json()
         .await
         .map_err(|e| err(format!("parse submit response: {e}")))?;
-    match bind_admission(&turn_hash, &verdict) {
+    match bind_admission("send", &turn_hash, &verdict) {
         Admission::Took => {}
         Admission::Refused(why) => {
             return Err(err(format!("node refused the turn: {why}")));
@@ -1187,7 +1193,7 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
     })?;
     // THE LOCAL HASH IS WHAT THE RESPONSE IS CHECKED AGAINST, never the other
     // way round. This is the only place the submit answer is read.
-    match bind_admission(&turn_hash, &verdict) {
+    match bind_admission("transfer", &turn_hash, &verdict) {
         Admission::Took => {}
         Admission::Refused(why) => {
             return Err(err(format!("node refused the transfer: {why}")));
@@ -1931,12 +1937,12 @@ mod tests {
         // `send` and `transfer` now ask the same question through the same
         // reader, so the sibling cannot drift from the cure again.
         assert_eq!(
-            bind_admission(WANT, &serde_json::json!({
+            bind_admission("transfer", WANT, &serde_json::json!({
                 "accepted": true, "turn_hash": WANT
             })),
             Admission::Took
         );
-        let got = bind_admission(WANT, &serde_json::json!({
+        let got = bind_admission("transfer", WANT, &serde_json::json!({
             "accepted": true, "turn_hash": OTHER
         }));
         assert!(
@@ -1950,6 +1956,33 @@ mod tests {
         assert!(exact_receipt(OTHER, &body).expect("readable").is_some());
         assert!(exact_receipt(WANT, &body).is_err(),
                 "asking for THIS turn must not be answered by that one");
+    }
+
+    #[test]
+    fn the_reason_names_what_this_caller_signed() {
+        // ONE READER SERVING TWO VERBS MUST NOT NAME ONLY ONE OF THEM. The
+        // reason reaches the operator, and telling someone who ran `send`
+        // that their TRANSFER was not bound describes an operation that did
+        // not happen — a false lead at exactly the moment they are deciding
+        // whether value moved.
+        for (submitted, other) in [("send", "transfer"), ("transfer", "send")] {
+            let foreign = bind_admission(submitted, WANT, &serde_json::json!({
+                "accepted": true, "turn_hash": OTHER
+            }));
+            let hashless = bind_admission(submitted, WANT, &serde_json::json!({
+                "accepted": true
+            }));
+            for got in [&foreign, &hashless] {
+                let why = match got {
+                    Admission::Unknown(why) => why,
+                    _ => panic!("expected UNKNOWN, got {got:?}"),
+                };
+                assert!(why.contains(submitted),
+                        "the reason must name what THIS caller signed: {why}");
+                assert!(!why.contains(other),
+                        "and must not name the other verb: {why}");
+            }
+        }
     }
 
     #[test]
@@ -1975,13 +2008,13 @@ mod tests {
         // UNCONDITIONAL POSITIVE FIRST, and note what it is NOT: taking the
         // turn is the node saying it received it. Commitment is a receipt.
         assert_eq!(
-            bind_admission(WANT, &serde_json::json!({
+            bind_admission("transfer", WANT, &serde_json::json!({
                 "accepted": true, "turn_hash": WANT
             })),
             Admission::Took
         );
         assert_eq!(
-            bind_admission(WANT, &serde_json::json!({
+            bind_admission("transfer", WANT, &serde_json::json!({
                 "accepted": true, "turn_hash": WANT.to_uppercase()
             })),
             Admission::Took
@@ -1993,7 +2026,7 @@ mod tests {
         // THE WRONG-OPERATION SUCCESS, at the line that decides it. Confirming
         // the hash the RESPONSE chose would find that other turn's perfectly
         // valid receipt and print it beside this transfer's amount.
-        let got = bind_admission(WANT, &serde_json::json!({
+        let got = bind_admission("transfer", WANT, &serde_json::json!({
             "accepted": true, "turn_hash": OTHER
         }));
         assert!(
@@ -2011,7 +2044,7 @@ mod tests {
             serde_json::json!({"accepted": true, "turn_hash": serde_json::Value::Null}),
         ] {
             assert!(
-                matches!(bind_admission(WANT, &verdict), Admission::Unknown(_)),
+                matches!(bind_admission("transfer", WANT, &verdict), Admission::Unknown(_)),
                 "{verdict} must be UNKNOWN"
             );
         }
@@ -2028,7 +2061,7 @@ mod tests {
             serde_json::json!({"turn_hash": WANT}),
         ] {
             assert!(
-                matches!(bind_admission(WANT, &verdict), Admission::Unknown(_)),
+                matches!(bind_admission("transfer", WANT, &verdict), Admission::Unknown(_)),
                 "{verdict} must be UNKNOWN, never Refused"
             );
         }
@@ -2041,14 +2074,14 @@ mod tests {
         // have committed. The node's reject path fills turn_hash before it
         // decides, so a real refusal names the turn it refused.
         assert_eq!(
-            bind_admission(WANT, &serde_json::json!({
+            bind_admission("transfer", WANT, &serde_json::json!({
                 "accepted": false, "turn_hash": WANT,
                 "error": "insufficient balance"
             })),
             Admission::Refused("insufficient balance".to_string())
         );
         assert_eq!(
-            bind_admission(WANT, &serde_json::json!({
+            bind_admission("transfer", WANT, &serde_json::json!({
                 "accepted": false, "turn_hash": WANT.to_uppercase()
             })),
             Admission::Refused("no reason given".to_string())
@@ -2069,7 +2102,7 @@ mod tests {
             serde_json::json!({"accepted": false, "turn_hash": 12}),
         ] {
             assert!(
-                matches!(bind_admission(WANT, &verdict), Admission::Unknown(_)),
+                matches!(bind_admission("transfer", WANT, &verdict), Admission::Unknown(_)),
                 "{verdict} names no evidence about this turn, so it is UNKNOWN"
             );
         }
