@@ -535,7 +535,7 @@ pub fn deploy_program(
     seed: u8,
     balance: i64,
     program: CellProgram,
-) -> ProgramDeploy {
+) -> Result<ProgramDeploy, String> {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37);
@@ -543,16 +543,16 @@ pub fn deploy_program(
     cell.permissions = open_permissions();
     let want_program = !matches!(program, CellProgram::None);
     cell.program = program;
-    let id = world.genesis_install(cell);
+    let id = world.try_genesis_install(cell)?;
     let installed = world
         .ledger()
         .get(&id)
         .map(|c| want_program == !matches!(c.program, CellProgram::None))
         .unwrap_or(false);
-    ProgramDeploy {
+    Ok(ProgramDeploy {
         cell: id,
         installed,
-    }
+    })
 }
 
 /// The outcome of a validate-then-deploy of an authored forest.
@@ -735,7 +735,7 @@ mod tests {
         let program = ProgramBuilder::new().immutable(0).build();
         assert!(matches!(program, CellProgram::Predicate(_)));
 
-        let dep = deploy_program(&mut w, 0x41, 100, program);
+        let dep = deploy_program(&mut w, 0x41, 100, program).expect("fixture program deploys");
         assert!(
             dep.installed,
             "the live cell must carry the authored program"
@@ -753,7 +753,7 @@ mod tests {
         // artifact is live, not decorative.
         let mut w = World::new();
         let program = ProgramBuilder::new().write_once(0).build();
-        let dep = deploy_program(&mut w, 0x42, 100, program);
+        let dep = deploy_program(&mut w, 0x42, 100, program).expect("fixture program deploys");
         let id = dep.cell;
 
         // First write: slot 0 was zero, WriteOnce admits the first write.
@@ -790,7 +790,7 @@ mod tests {
         // distinction from WriteOnce is real and enforced.
         let mut w = World::new();
         let program = ProgramBuilder::new().immutable(0).build();
-        let dep = deploy_program(&mut w, 0x43, 100, program);
+        let dep = deploy_program(&mut w, 0x43, 100, program).expect("fixture program deploys");
         let id = dep.cell;
         let t = w.turn(
             id,

@@ -405,14 +405,16 @@ mod stack {
         /// pure receipted `SetField` turn the ocap gate legitimately admits).
         /// Cell ids derive from the room's Matrix id, so they are stable and
         /// collision-free against the demo census.
-        pub fn install_on_world(world: &mut World) -> MatrixRoomStack {
+        pub fn install_on_world(world: &mut World) -> Result<MatrixRoomStack, String> {
+            world.mutation_guard()?;
             let wire = MockSource::seeded();
             let me = wire
                 .whoami()
                 .unwrap_or_else(|| "@ember:deos.local".to_string());
 
             let mut rooms = Vec::new();
-            for summary in wire.rooms().unwrap_or_default() {
+            let mut missing = Vec::new();
+            for summary in wire.rooms().map_err(|error| error.to_string())? {
                 let matrix_id = summary.room_id.to_string();
                 // A deterministic, domain-separated pk per room (the cell id
                 // derives from it) — no collision with seed-byte fixture cells.
@@ -422,7 +424,10 @@ mod stack {
                 let pk = *hasher.finalize().as_bytes();
                 let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], 0);
                 cell.permissions = open_permissions();
-                let id = world.genesis_install(cell);
+                let id = cell.id();
+                if !world.ledger().contains(&id) {
+                    missing.push(cell);
+                }
                 rooms.push(RoomSpec {
                     cell: id,
                     matrix_id,
@@ -442,11 +447,15 @@ mod stack {
             for r in &rooms {
                 hand.capabilities.grant(r.cell, AuthRequired::None);
             }
-            let me_cell = world.genesis_install(hand);
+            let me_cell = hand.id();
+            if !world.ledger().contains(&me_cell) {
+                missing.push(hand);
+            }
+            world.try_genesis_install_batch(missing)?;
 
             let mut senders = HashMap::new();
             senders.insert(sender_tag(&me), me.clone());
-            MatrixRoomStack {
+            Ok(MatrixRoomStack {
                 rooms,
                 me_cell,
                 me,
@@ -454,7 +463,7 @@ mod stack {
                 senders,
                 minted: HashSet::new(),
                 verdicts: HashMap::new(),
-            }
+            })
         }
 
         /// The wire backend's honest label (the recorded sync says "mock").
@@ -467,6 +476,7 @@ mod stack {
         /// by the Matrix-hand — the same gates every transition runs through.
         /// Fail-closed on an over-long body and on an executor refusal.
         pub fn send(&self, world: &mut World, room: usize, body: &str) -> Result<SentTurn, String> {
+            world.mutation_guard()?;
             let spec = self.rooms.get(room).ok_or("no such room")?;
             let writes = pack_message(sender_tag(&self.me), body)
                 .ok_or_else(|| format!("message too long ({} > {MAX_BODY} bytes)", body.len()))?;
@@ -475,17 +485,15 @@ mod stack {
                 .map(|(i, v)| set_field(spec.cell, i, v))
                 .collect();
             let turn = world.turn(self.me_cell, effects);
-            let outcome = world.commit_turn(turn);
-            if !outcome.is_committed() {
-                return Err(format!(
-                    "the send turn was refused by the executor (fail-closed): {outcome:?}"
-                ));
-            }
-            let receipt_hex = world
-                .receipts()
-                .last()
-                .map(|r| hex8(&r.receipt_hash()))
-                .unwrap_or_else(|| "????????".to_string());
+            let receipt_hex = match world.commit_turn(turn) {
+                crate::world::CommitOutcome::Committed { receipt, .. } => {
+                    hex8(&receipt.receipt_hash())
+                }
+                crate::world::CommitOutcome::Rejected { reason, .. } => return Err(reason),
+                crate::world::CommitOutcome::Queued { .. } => {
+                    return Err("world suspended: send queued, not committed".into());
+                }
+            };
             Ok(SentTurn {
                 height: world.height(),
                 receipt_hex,
@@ -976,7 +984,10 @@ mod view {
         /// Matrix-hand onto the LIVE World on first open (a census the icons
         /// immediately show), landed mold-ready like every global surface.
         pub(in crate::deos_desktop) fn open_matrix_room(&mut self) {
-            self.ensure_matrix_stack();
+            if let Err(error) = self.ensure_matrix_stack() {
+                self.say(format!("Matrix Room REFUSED: {error}"));
+                return;
+            }
             self.land_in(matrix_room_window_cell(), WinKindTag::MatrixRoom);
             let (rooms, me) = self
                 .matrix_stack
@@ -992,13 +1003,13 @@ mod view {
         /// Install the stack on first use: room cells + the Matrix-hand land on
         /// the live ledger, and the icon census refreshes so they stand on the
         /// desktop at once.
-        fn ensure_matrix_stack(&mut self) {
+        fn ensure_matrix_stack(&mut self) -> Result<(), String> {
             if self.matrix_stack.is_some() {
-                return;
+                return Ok(());
             }
             let stack = {
                 let mut w = self.world.borrow_mut();
-                MatrixRoomStack::install_on_world(&mut w)
+                MatrixRoomStack::install_on_world(&mut w)?
             };
             // Re-read the icon census off the LIVE ledger (the same read
             // `DeosDesktop::new` makes) — the fresh cells appear immediately.
@@ -1009,6 +1020,7 @@ mod view {
             v.sort();
             self.cells = v;
             self.matrix_stack = Some(stack);
+            Ok(())
         }
 
         /// Build the composer's live input on first render — single-line, Enter
@@ -1030,8 +1042,9 @@ mod view {
                         this.matrix_draft = input.read(cx).value().to_string();
                     }
                     InputEvent::PressEnter { .. } => {
-                        this.matrix_send_draft();
-                        input.update(cx, |st, cx| st.set_value("", window, cx));
+                        if this.matrix_send_draft() {
+                            input.update(cx, |st, cx| st.set_value("", window, cx));
+                        }
                         cx.notify();
                     }
                     _ => {}
@@ -1043,11 +1056,10 @@ mod view {
 
         /// **SEND the composer draft** — one verified turn on the LIVE World; the
         /// verdict (receipt hash + height, or the executor's refusal) narrated.
-        fn matrix_send_draft(&mut self) {
-            let body = std::mem::take(&mut self.matrix_draft);
-            let body = body.trim().to_string();
+        fn matrix_send_draft(&mut self) -> bool {
+            let body = self.matrix_draft.trim().to_string();
             if body.is_empty() {
-                return;
+                return false;
             }
             let room = self
                 .matrix_rooms
@@ -1062,12 +1074,19 @@ mod view {
                 }
             };
             match outcome {
-                Ok(sent) => self.say(format!(
-                    "sent onto the World — receipt {} · height {} (the timeline reads it \
-                     back off the chronicle).",
-                    sent.receipt_hex, sent.height
-                )),
-                Err(e) => self.say(format!("send REFUSED: {e}")),
+                Ok(sent) => {
+                    self.matrix_draft.clear();
+                    self.say(format!(
+                        "sent onto the World — receipt {} · height {} (the timeline reads it \
+                         back off the chronicle).",
+                        sent.receipt_hex, sent.height
+                    ));
+                    true
+                }
+                Err(e) => {
+                    self.say(format!("send REFUSED: {e}"));
+                    false
+                }
             }
         }
 
@@ -1112,7 +1131,11 @@ mod view {
             cx: &mut Context<Self>,
         ) -> AnyElement {
             use MatrixRoomTab as T;
-            self.ensure_matrix_stack();
+            if let Err(error) = self.ensure_matrix_stack() {
+                return div()
+                    .child(format!("Matrix Room unavailable: {error}"))
+                    .into_any_element();
+            }
             self.ensure_matrix_input(window, cx);
             let state = self.matrix_rooms.entry(cell).or_default().clone();
             // Each face keeps its OWN persistent scroll handle (tab ordinal keyed).
@@ -1220,8 +1243,12 @@ mod view {
                         )
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
-                                this.matrix_send_draft();
+                            cx.listener(|this, _ev: &MouseDownEvent, window, cx| {
+                                if this.matrix_send_draft() {
+                                    if let Some(input) = this.matrix_input.clone() {
+                                        input.update(cx, |st, cx| st.set_value("", window, cx));
+                                    }
+                                }
                                 cx.notify();
                             }),
                         )
@@ -1368,17 +1395,21 @@ mod view {
         /// SEND `body` to the currently-watched room as a real receipted turn
         /// (what the composer's Enter does). Returns whether the turn COMMITTED.
         pub fn bake_matrix_send(&mut self, body: &str) -> bool {
-            self.ensure_matrix_stack();
             self.matrix_draft = body.to_string();
-            let before = self.world.borrow().height();
-            self.matrix_send_draft();
-            self.world.borrow().height() > before
+            if let Err(error) = self.ensure_matrix_stack() {
+                self.say(format!("Matrix Room REFUSED: {error}"));
+                return false;
+            }
+            self.matrix_send_draft()
         }
 
         /// How many LIVE-leg messages the watched room's timeline decodes off
         /// the receipt chain (a bake assertion — the chronicle IS the timeline).
         pub fn bake_matrix_live_len(&mut self) -> usize {
-            self.ensure_matrix_stack();
+            if let Err(error) = self.ensure_matrix_stack() {
+                self.say(format!("Matrix Room REFUSED: {error}"));
+                return 0;
+            }
             let room = self
                 .matrix_rooms
                 .get(&matrix_room_window_cell())
@@ -1395,7 +1426,7 @@ mod view {
         /// JSON → wire → rehydrate → drive → stitch, plus both refusal probes.
         /// The SAME witness path the unit tests assert on.
         pub fn bake_matrix_membrane_roundtrip(&mut self) -> Result<MembraneRoundtrip, String> {
-            self.ensure_matrix_stack();
+            self.ensure_matrix_stack()?;
             let room = self
                 .matrix_rooms
                 .get(&matrix_room_window_cell())
@@ -1508,7 +1539,8 @@ mod tests {
         fn install_send_and_read_back_off_the_receipt_chain() {
             let (mut world, _anchors) = demo_world();
             let cells_before = world.cell_count();
-            let stack = MatrixRoomStack::install_on_world(&mut world);
+            let stack = MatrixRoomStack::install_on_world(&mut world)
+                .expect("fixture Matrix stack installs");
             assert_eq!(
                 world.cell_count(),
                 cells_before + stack.rooms.len() + 1,
@@ -1565,7 +1597,8 @@ mod tests {
         #[test]
         fn the_membrane_roundtrip_is_real_end_to_end_and_fail_closed() {
             let (mut world, _anchors) = demo_world();
-            let mut stack = MatrixRoomStack::install_on_world(&mut world);
+            let mut stack = MatrixRoomStack::install_on_world(&mut world)
+                .expect("fixture Matrix stack installs");
 
             let witness = membrane_roundtrip(&world, &mut stack, 0).expect("the round trip runs");
             assert!(
@@ -1605,7 +1638,8 @@ mod tests {
         #[test]
         fn a_future_wire_version_is_refused_before_the_snapshot_is_touched() {
             let (mut world, _anchors) = demo_world();
-            let stack = MatrixRoomStack::install_on_world(&mut world);
+            let stack = MatrixRoomStack::install_on_world(&mut world)
+                .expect("fixture Matrix stack installs");
             let mut env = mint_envelope(&world, stack.me_cell, MEMBRANE_DEPTH);
             env.version += 1;
             let err = rehydrate_drive_stitch(&env).unwrap_err();
@@ -1618,7 +1652,8 @@ mod tests {
         #[test]
         fn the_envelope_survives_the_matrix_event_json_byte_faithfully() {
             let (mut world, _anchors) = demo_world();
-            let stack = MatrixRoomStack::install_on_world(&mut world);
+            let stack = MatrixRoomStack::install_on_world(&mut world)
+                .expect("fixture Matrix stack installs");
             let env = mint_envelope(&world, stack.me_cell, MEMBRANE_DEPTH);
             let json = serde_json::to_string(&env).expect("serializes");
             let back: deos_matrix::membrane::MembraneEnvelope =

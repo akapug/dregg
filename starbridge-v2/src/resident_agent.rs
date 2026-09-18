@@ -159,7 +159,10 @@ pub struct PromptSummary {
 /// cap-gated [`HermesGateway`] confined by `mandate`. The returned [`AgentHandle`]
 /// is driven with [`AgentHandle::prompt`]; the room later welds Hire/Fire buttons
 /// to this call (see the module doc).
-pub fn hire_resident(world: &Rc<RefCell<World>>, mandate: ResidentMandate) -> AgentHandle {
+pub fn hire_resident(
+    world: &Rc<RefCell<World>>,
+    mandate: ResidentMandate,
+) -> Result<AgentHandle, String> {
     hire_resident_seeded(world, mandate, 0x5A, 0x5B)
 }
 
@@ -174,15 +177,24 @@ pub fn hire_resident_seeded(
     mandate: ResidentMandate,
     peer_seed: u8,
     agent_seed: u8,
-) -> AgentHandle {
+) -> Result<AgentHandle, String> {
     // Mint the resident's DESKTOP cell (genesis path — no executor turn): a peer
     // it can reach (non-trivial authority) + the resident cell holding that cap,
     // funded with its allowance.
     let cell = {
         let mut w = world.borrow_mut();
-        let peer = w.genesis_cell(peer_seed, 0);
-        let (agent, _slot) = w.genesis_cell_with_cap(agent_seed, mandate.allowance, peer);
+        w.mutation_guard()?;
+        let peer = crate::world::make_open_cell(peer_seed, 0);
+        let mut agent = crate::world::make_open_cell(agent_seed, mandate.allowance);
         agent
+            .capabilities
+            .grant(peer.id(), dregg_cell::AuthRequired::None)
+            .ok_or_else(|| "resident capability slots exhausted".to_string())?;
+        let agent_id = agent.id();
+        // The peer and resident form one resource. Publish neither until their
+        // shared durable birth succeeds, including the resident's initial cap.
+        w.try_genesis_install_batch(vec![peer, agent])?;
+        agent_id
     };
 
     // The gate-side grantor: a root token on a leaked, app-lived runtime (the
@@ -209,7 +221,7 @@ pub fn hire_resident_seeded(
     }
     let gateway = HermesGateway::new(runtime, root, registry);
 
-    AgentHandle {
+    Ok(AgentHandle {
         cell,
         session_id: mandate.session_id,
         gateway: Some(gateway),
@@ -219,7 +231,7 @@ pub fn hire_resident_seeded(
         // Env-resolved by default; the wizard's hermetic pin (set on the returned
         // handle) is what forces on-box regardless of a present key.
         force_on_box: false,
-    }
+    })
 }
 
 impl AgentHandle {
@@ -233,6 +245,17 @@ impl AgentHandle {
     /// recorded in [`AgentHandle::refusals`] — session truth, surfaced, never a
     /// fabricated World turn. Returns a [`PromptSummary`].
     pub fn prompt(&mut self, world: &Rc<RefCell<World>>, prompt: &str) -> PromptSummary {
+        if let Err(reason) = world.borrow().mutation_guard() {
+            self.refusals.push(Refusal {
+                tool: "world".into(),
+                reason: reason.clone(),
+            });
+            return PromptSummary {
+                refused: 1,
+                agent_text: format!("prompt refused: {reason}"),
+                ..Default::default()
+            };
+        }
         // A fresh brain per prompt (on-box by default, BYO-key when present), over
         // the SAME persisted gateway so budgets carry across prompts. The hermetic
         // pin forces on-box even when a provider key sits in the env — the wizard's
@@ -280,10 +303,20 @@ impl AgentHandle {
                             self.receipts.push(receipt.receipt_hash());
                             summary.mirrored += 1;
                         }
-                        // The World's executor is the SECOND tooth — if it rejects
-                        // the mirror (it should not, for a self-emit on an owned
-                        // open cell), we drop it rather than forge a receipt.
-                        CommitOutcome::Rejected { .. } | CommitOutcome::Queued { .. } => {}
+                        CommitOutcome::Rejected { reason, .. } => {
+                            self.refusals.push(Refusal {
+                                tool: call.name.clone(),
+                                reason,
+                            });
+                            summary.refused += 1;
+                        }
+                        CommitOutcome::Queued { .. } => {
+                            self.refusals.push(Refusal {
+                                tool: call.name.clone(),
+                                reason: "world suspended: turn queued, not committed".into(),
+                            });
+                            summary.refused += 1;
+                        }
                     }
                 }
                 PermissionOutcome::Reject { reason, .. } => {
@@ -314,7 +347,8 @@ mod tests {
         let pre_receipts = live.borrow().receipts().len();
         let pre_height = live.borrow().height();
 
-        let mut handle = hire_resident(&live, ResidentMandate::attenuated("resident-bake"));
+        let mut handle = hire_resident(&live, ResidentMandate::attenuated("resident-bake"))
+            .expect("genesis resource installs");
 
         // A prompt whose verbs make the on-box brain plan search + read + write +
         // build (so the denied write is reached, and other tools land).

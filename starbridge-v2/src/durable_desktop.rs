@@ -30,17 +30,15 @@
 //!     a RECOVERED image it uses it as-is and re-derives the anchor ids
 //!     deterministically (they are content-addresses of the fixed demo seeds).
 //!
-//! # Honest fallbacks (never strand, never silently wipe)
+//! # Recovery and explicit replacement
 //!
 //!   * A torn/divergent image is RECOVERED (the divergent tail truncated to the last
 //!     consistent state) rather than refused — [`World::open_recovering`] does this;
 //!     the drop count is reported. `OpenError::Divergent` never reaches the owner.
-//!   * A wholly-unsalvageable store is QUARANTINED aside (kept for forensics, never
-//!     deleted) and a fresh durable image is provisioned in its place — loud warning,
-//!     never a silent wipe ([`BootOrigin::FreshAfterUnsalvageable`]).
-//!   * If even a fresh provision fails (an unwritable disk/path), the desktop falls
-//!     back to an EPHEMERAL demo world so the window still opens — loudly warned that
-//!     this session will not persist ([`BootOrigin::EphemeralFallback`]).
+//!   * An unreadable or unsalvageable store returns an error without replacing it.
+//!     Only the explicit `--fresh-world` choice quarantines the old image first.
+//!   * Failed durable provisioning, seed turns or checkpointing aborts boot. An
+//!     ephemeral World is created only when [`WorldImageSpec::Ephemeral`] was chosen.
 //!
 //! # Costs — the byte-identical-receipt constraint
 //!
@@ -67,7 +65,6 @@ use std::path::PathBuf;
 use dregg_cell::CellId;
 use dregg_turn::ComputronCosts;
 
-use crate::persistence::OpenError;
 use crate::world::{self, World};
 
 /// The demo desktop's cost model — the receipts re-derive bit-identically only under
@@ -107,12 +104,6 @@ pub enum BootOrigin {
     /// A durable image RECOVERED as-is. `dropped` torn turns were truncated to reach
     /// the last consistent state (`0` ⇒ a clean reopen — your world exactly as left).
     Recovered { path: PathBuf, dropped: u64 },
-    /// The prior durable image was UNSALVAGEABLE; it was quarantined aside (kept for
-    /// forensics) and a fresh durable world was seeded in its place.
-    FreshAfterUnsalvageable { path: PathBuf, error: String },
-    /// Not even a fresh durable image could be provisioned (an unwritable disk/path);
-    /// fell back to an ephemeral demo world so the window still opens — NOT persisted.
-    EphemeralFallback { error: String },
 }
 
 impl BootOrigin {
@@ -120,9 +111,7 @@ impl BootOrigin {
     pub fn is_durable(&self) -> bool {
         matches!(
             self,
-            BootOrigin::SeededFresh { .. }
-                | BootOrigin::Recovered { .. }
-                | BootOrigin::FreshAfterUnsalvageable { .. }
+            BootOrigin::SeededFresh { .. } | BootOrigin::Recovered { .. }
         )
     }
 
@@ -148,15 +137,6 @@ impl BootOrigin {
                  the last consistent state (never stranded)",
                 path.display()
             ),
-            BootOrigin::FreshAfterUnsalvageable { path, error } => format!(
-                "DURABLE image at {} — the prior image was UNSALVAGEABLE ({error}); quarantined it \
-                 aside and seeded a fresh durable world",
-                path.display()
-            ),
-            BootOrigin::EphemeralFallback { error } => format!(
-                "EPHEMERAL fallback — could not open OR provision a durable image ({error}); \
-                 the window opens but this session is NOT persisted"
-            ),
         }
     }
 }
@@ -172,18 +152,17 @@ pub struct DurableBoot {
 }
 
 /// **Boot the windowed desktop's World from a [`WorldImageSpec`].** The single entry
-/// the desktop calls; it never strands and never silently wipes (see the module
-/// docs). Ephemeral is the old `demo_world()`; durable opens-recovering, seeds an
-/// empty image, and recovers a populated one.
-pub fn boot_desktop_world(spec: WorldImageSpec) -> DurableBoot {
+/// the desktop calls. Ephemeral is the explicit `demo_world()` choice; durable
+/// opens-recovering, seeds an empty image, and refuses unsuccessful provisioning.
+pub fn boot_desktop_world(spec: WorldImageSpec) -> Result<DurableBoot, String> {
     match spec {
         WorldImageSpec::Ephemeral => {
             let (world, anchors) = world::demo_world();
-            DurableBoot {
+            Ok(DurableBoot {
                 world,
                 anchors,
                 origin: BootOrigin::Ephemeral,
-            }
+            })
         }
         WorldImageSpec::Durable { path, fresh } => open_durable(path, fresh),
     }
@@ -193,27 +172,33 @@ pub fn boot_desktop_world(spec: WorldImageSpec) -> DurableBoot {
 /// image first (the `--fresh-world` override). Mirrors `session::open_session_world`
 /// / `start_fresh_session_world` but seeds the DEMO world (not the per-user session
 /// anchors).
-fn open_durable(path: PathBuf, fresh: bool) -> DurableBoot {
+fn open_durable(path: PathBuf, fresh: bool) -> Result<DurableBoot, String> {
     // Ensure the parent dir exists (the default lives under the user data dir, which
     // may not exist yet) — mirrors `open_session_world`'s `create_dir_all(base_dir)`.
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "could not create durable image directory {}: {error}",
+                parent.display()
+            )
+        })?;
     }
 
     // `--fresh-world`: the owner explicitly wants to start over — quarantine the
     // existing image aside (never delete) so the open below provisions a fresh one.
     if fresh {
-        quarantine(&path);
+        quarantine(&path)?;
     }
 
     // RECOVER, NEVER STRAND: a torn/divergent image is truncated to its last
     // consistent ordinal and reopened at the last-good state rather than refused
-    // (`OpenError::Divergent` never reaches the owner). Only a wholly-unsalvageable
-    // image errs here — we then quarantine + seed fresh (never a dead-end).
-    let (mut world, dropped) = match World::open_recovering(&path, demo_costs()) {
-        Ok(t) => t,
-        Err(e) => return seed_after_unsalvageable(path, e),
-    };
+    // through the shared recovery policy. An unreadable store remains in place;
+    // it is never implicitly replaced or converted into an ephemeral session.
+    let (mut world, dropped) = World::open_recovering(&path, demo_costs())
+        .map_err(|error| format!("could not open durable image {}: {error}", path.display()))?;
     if dropped > 0 {
         eprintln!(
             "[deos-desktop] recovered a divergent durable image by truncating {dropped} torn \
@@ -227,36 +212,41 @@ fn open_durable(path: PathBuf, fresh: bool) -> DurableBoot {
     // single source of truth (if the demo genesis changes, this follows).
     let (_probe_world, probe_anchors, _probe_seed) = world::demo_genesis();
 
-    // FRESH iff the recovered image has no demo anchors yet (an empty store opens to
-    // a genesis-empty World). On a relaunch every anchor + the seeded turns' effects
-    // are RECOVERED from the durable image.
-    let fresh_image = world.ledger().get(&probe_anchors[0]).is_none();
+    // Seed only an actually empty image. Missing anchors in a populated image
+    // indicate incomplete or foreign state, not permission to overwrite it.
+    let fresh_image = world.cell_count() == 0 && world.height() == 0;
     if fresh_image {
         // FIRST RUN — seed the demo genesis + drive all 5 seed turns ONTO the durable
         // world so they PERSIST (genesis mirrored via `record_genesis`, each turn
         // dual-written). A checkpoint bounds the next recovery overlay.
-        let anchors = seed_demo_and_checkpoint(&mut world);
+        let anchors = seed_demo_and_checkpoint(&mut world)?;
         debug_assert_eq!(
             anchors, probe_anchors,
             "the seeded anchors must equal the deterministic demo anchor ids"
         );
-        DurableBoot {
+        Ok(DurableBoot {
             world,
             anchors,
             origin: BootOrigin::SeededFresh { path },
-        }
+        })
     } else {
         // RELAUNCH — use the recovered image as-is; the anchor ids re-derive
         // deterministically and the recovered ledger already holds them.
-        debug_assert!(
-            world.ledger().get(&probe_anchors[2]).is_some(),
-            "the user anchor must be recovered from the durable image on relaunch"
-        );
-        DurableBoot {
+        if probe_anchors
+            .iter()
+            .any(|anchor| !world.ledger().contains(anchor))
+            || world.height() < world::DemoSeed::TOTAL as u64
+        {
+            return Err(format!(
+                "durable image {} has incomplete desktop initialization; refusing to replace or reseed it",
+                path.display(),
+            ));
+        }
+        Ok(DurableBoot {
             world,
             anchors: probe_anchors,
             origin: BootOrigin::Recovered { path, dropped },
-        }
+        })
     }
 }
 
@@ -265,68 +255,24 @@ fn open_durable(path: PathBuf, fresh: bool) -> DurableBoot {
 /// world every install/turn dual-writes; on an ephemeral one this is just the
 /// eager demo seed (the checkpoint is a no-op). Shared by the fresh-image and the
 /// after-unsalvageable paths.
-fn seed_demo_and_checkpoint(world: &mut World) -> [CellId; 3] {
-    let (anchors, mut seed) = world::seed_demo_genesis_onto(world);
+fn seed_demo_and_checkpoint(world: &mut World) -> Result<[CellId; 3], String> {
+    let (anchors, mut seed) = world::try_seed_demo_genesis_onto(world)?;
     // Drive every seed turn (the eager path — the same 5 real verified turns the
     // `demo_world()` route runs; each dual-writes when the world is durable).
-    while seed.next(world).is_some() {}
+    while seed.try_next(world)?.is_some() {}
     // Bound the next recovery overlay (mirrors the persistence tests' post-seed
     // `checkpoint_now`). No-op on an ephemeral world.
-    world.checkpoint_now();
-    anchors
-}
-
-/// The wholly-unsalvageable path: quarantine the corrupt image aside (WARN LOUDLY,
-/// never delete) and provision a fresh durable world in its place. If even the fresh
-/// open fails (an unwritable disk), fall back to an ephemeral demo world so the
-/// window still opens — loudly warned that this session will not persist.
-fn seed_after_unsalvageable(path: PathBuf, err: OpenError) -> DurableBoot {
-    let error = err.to_string();
-    eprintln!(
-        "[deos-desktop] the durable image at {} is UNSALVAGEABLE: {error}",
-        path.display()
-    );
-    quarantine(&path);
-    match World::open(&path, demo_costs()) {
-        Ok(mut world) => {
-            let anchors = seed_demo_and_checkpoint(&mut world);
-            eprintln!(
-                "[deos-desktop] provisioned a FRESH durable world in its place (the corrupt image \
-                 is kept aside for recovery)"
-            );
-            DurableBoot {
-                world,
-                anchors,
-                origin: BootOrigin::FreshAfterUnsalvageable { path, error },
-            }
-        }
-        Err(e) => {
-            // Even a fresh provision failed — the disk/path is unwritable. Do NOT
-            // dead-end: open an ephemeral demo world so the desktop is usable, but say
-            // LOUDLY that nothing this session will persist.
-            eprintln!(
-                "[deos-desktop] could NOT provision a fresh durable image either ({e}); falling \
-                 back to an EPHEMERAL demo world — THIS SESSION WILL NOT PERSIST"
-            );
-            let (world, anchors) = world::demo_world();
-            DurableBoot {
-                world,
-                anchors,
-                origin: BootOrigin::EphemeralFallback {
-                    error: e.to_string(),
-                },
-            }
-        }
-    }
+    world.try_checkpoint_now()?;
+    Ok(anchors)
 }
 
 /// Rename an unsalvageable / to-be-replaced image aside as `<path>.corrupt-<nanos>`
 /// (kept for forensics / manual salvage), never deleted — mirrors
 /// `session::start_fresh_session_world`. A missing file is fine (nothing to move); a
-/// rename failure is non-fatal (the fresh open below will create/overwrite).
-fn quarantine(path: &std::path::Path) {
+/// rename failure refuses the requested replacement.
+fn quarantine(path: &std::path::Path) -> Result<(), String> {
     if !path.exists() {
-        return;
+        return Ok(());
     }
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -334,14 +280,17 @@ fn quarantine(path: &std::path::Path) {
         .unwrap_or(0);
     let aside = path.with_extension(format!("redb.corrupt-{nanos}"));
     match std::fs::rename(path, &aside) {
-        Ok(()) => eprintln!(
-            "[deos-desktop] quarantined the prior durable image aside at {} (kept for recovery)",
-            aside.display()
-        ),
-        Err(e) => eprintln!(
-            "[deos-desktop] could not quarantine the prior durable image ({e}) — proceeding to \
-             provision a fresh one over it"
-        ),
+        Ok(()) => {
+            eprintln!(
+                "[deos-desktop] quarantined the prior durable image aside at {} (kept for recovery)",
+                aside.display()
+            );
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "could not quarantine durable image {}: {error}",
+            path.display()
+        )),
     }
 }
 
@@ -369,6 +318,61 @@ mod tests {
         std::env::temp_dir().join(format!("sbv2-durable-desktop-{pid}-{nanos}-{n}.redb"))
     }
 
+    #[test]
+    fn a_blocked_durable_path_is_refused_without_ephemeral_fallback() {
+        let parent = scratch_path();
+        std::fs::write(&parent, b"this path is already a file").unwrap();
+        assert!(boot_desktop_world(WorldImageSpec::Durable {
+            path: parent.join("image.redb"),
+            fresh: false,
+        })
+        .is_err());
+        assert_eq!(
+            std::fs::read(&parent).unwrap(),
+            b"this path is already a file"
+        );
+        let _ = std::fs::remove_file(parent);
+    }
+
+    #[test]
+    fn an_unreadable_image_is_not_implicitly_replaced() {
+        let path = scratch_path();
+        let contents = b"an invalid image retained for explicit recovery";
+        std::fs::write(&path, contents).unwrap();
+        assert!(boot_desktop_world(WorldImageSpec::Durable {
+            path: path.clone(),
+            fresh: false,
+        })
+        .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), contents);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_failed_seed_is_not_reported_as_a_ready_desktop() {
+        let path = scratch_path();
+        {
+            let mut world = World::open_with_timestamp(&path, demo_costs(), 1_700_000_000)
+                .expect("open durable fixture");
+            crate::world::arm_next_dual_write_failure();
+            assert!(seed_demo_and_checkpoint(&mut world).is_err());
+            assert_eq!(world.height(), 0);
+            assert_eq!(
+                world.durability_status(),
+                world::DurabilityStatus::Unavailable
+            );
+        }
+        // Durable genesis may have completed before the failed first seed turn.
+        // A later launch must identify the incomplete setup rather than silently
+        // accepting it as an already populated desktop or replacing its cells.
+        assert!(boot_desktop_world(WorldImageSpec::Durable {
+            path: path.clone(),
+            fresh: false,
+        })
+        .is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
     /// THE DURABLE-DESKTOP WELD, end to end (the twin of
     /// `persistence::close_and_reopen_restores_the_exact_image`): booting a durable
     /// desktop image seeds the demo world; an EXTRA verified turn committed on it
@@ -386,7 +390,8 @@ mod tests {
             let boot = boot_desktop_world(WorldImageSpec::Durable {
                 path: path.clone(),
                 fresh: false,
-            });
+            })
+            .expect("durable desktop boots");
             assert!(
                 matches!(boot.origin, BootOrigin::SeededFresh { .. }),
                 "first boot of an empty image seeds a fresh durable demo world"
@@ -422,7 +427,8 @@ mod tests {
             let boot = boot_desktop_world(WorldImageSpec::Durable {
                 path: path.clone(),
                 fresh: false,
-            });
+            })
+            .expect("durable desktop boots");
             assert!(
                 matches!(boot.origin, BootOrigin::Recovered { dropped: 0, .. }),
                 "the second boot RECOVERS the durable image cleanly (0 torn turns)"
@@ -448,7 +454,7 @@ mod tests {
     /// RAM, never durable (so `--render-woven` / bakes / CI stay hermetic).
     #[test]
     fn the_ephemeral_hatch_is_the_old_demo_world_and_never_durable() {
-        let boot = boot_desktop_world(WorldImageSpec::Ephemeral);
+        let boot = boot_desktop_world(WorldImageSpec::Ephemeral).expect("explicit ephemeral boot");
         assert!(matches!(boot.origin, BootOrigin::Ephemeral));
         assert!(!boot.origin.is_durable());
         assert!(
@@ -475,7 +481,8 @@ mod tests {
             let boot = boot_desktop_world(WorldImageSpec::Durable {
                 path: path.clone(),
                 fresh: false,
-            });
+            })
+            .expect("durable desktop boots");
             let mut world = boot.world;
             let [treasury, _service, user] = boot.anchors;
             let t = world.turn(treasury, vec![transfer(treasury, user, 3)]);
@@ -491,7 +498,8 @@ mod tests {
             let boot = boot_desktop_world(WorldImageSpec::Durable {
                 path: path.clone(),
                 fresh: true,
-            });
+            })
+            .expect("durable desktop boots");
             assert!(
                 matches!(boot.origin, BootOrigin::SeededFresh { .. }),
                 "a --fresh-world boot seeds a brand-new durable world"

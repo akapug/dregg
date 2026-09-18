@@ -31,7 +31,7 @@ use deos_hermes::egress::EgressNetGrant;
 use deos_hermes::{
     DreggHost, GrantRegistry, HermesGateway, NodeJsHands, ToolCallRequest, agent_cell_of,
 };
-use dregg_cell::AuthRequired;
+use dregg_cell::{AuthRequired, Credential, Requirement};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
 use dregg_sdk_net::NodeHttpClient;
 use dregg_sdk_net::test_support::TestNode;
@@ -115,7 +115,10 @@ fn node_backed_run_js_commits_through_node_execution_and_reads_receipt_back() {
             fed_id,
             AuthRequired::Signature, // held satisfies the `inc` affordance's required
             vec![],                  // no seed fields (counter starts at 0)
-            vec![("inc".to_string(), AuthRequired::Signature)],
+            vec![(
+                "inc".to_string(),
+                Requirement::AtLeast(Credential::Signature),
+            )],
             gateway,
         )
         .expect("hands to a GRANTED node build");

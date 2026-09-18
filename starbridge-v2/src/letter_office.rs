@@ -275,7 +275,7 @@ impl std::fmt::Display for MailError {
                 )
             }
             MailError::Unaddressed => write!(f, "that cell carries no routable letter address"),
-            MailError::Rejected(e) => write!(f, "the delivery turn was refused: {e}"),
+            MailError::Rejected(e) => write!(f, "the mail operation was refused: {e}"),
         }
     }
 }
@@ -289,7 +289,7 @@ impl std::error::Error for MailError {}
 /// the ferry; `Delivered` has landed in the recipient's inbox (moved by a receipted turn).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LetterStatus {
-    /// Composed but not yet posted (reserved; [`send_letter`] posts as `Outbound` at once).
+    /// Composed but not yet posted; a refused send leaves its installed cell as a draft.
     Draft,
     /// Posted — sitting in the sender's outbox, awaiting the ferry's round.
     Outbound,
@@ -492,7 +492,13 @@ pub fn correspondents(world: &World) -> Vec<CellId> {
 /// World, carrying its kind marker + owner witness. Returns its id either way. Balance 0
 /// so the town leaves the World's Σ-conservation untouched (a seeded 0-balance service
 /// cell, like the demo's service anchor).
-fn ensure_office_cell(world: &mut World, owner: CellId, ferry: CellId, magic: u64) -> CellId {
+fn ensure_office_cell(
+    world: &mut World,
+    owner: CellId,
+    ferry: CellId,
+    magic: u64,
+) -> Result<CellId, MailError> {
+    world.mutation_guard().map_err(MailError::Rejected)?;
     let (pk, token) = office_keys(owner, magic);
     let id = CellId::derive_raw(&pk, &token);
     if !world.ledger().contains(&id) {
@@ -500,42 +506,62 @@ fn ensure_office_cell(world: &mut World, owner: CellId, ferry: CellId, magic: u6
         cell.permissions = open_permissions();
         cell.state.fields[SLOT_O_KIND] = pack_u64(magic);
         cell.state.fields[SLOT_O_OWNER] = pack_u64(id_lo(owner));
-        world.genesis_install(cell);
+        world
+            .try_genesis_install(cell)
+            .map_err(MailError::Rejected)?;
         // AUTHORITY (ocap): acting on a NON-SELF cell needs a held capability —
         // open_permissions on the target is not the authorizing mechanism. Granted
-        // exactly once, at creation (before any turn touches the cell, so the
-        // durable genesis-mutation guard stays clean): the OWNER drops/drains its
-        // own box; the FERRY moves letters through every box on its round.
-        world.genesis_grant_cap(&owner, id);
-        world.genesis_grant_cap(&ferry, id);
+        // by a receipted self-grant from this new office. The owner/ferry may
+        // already have a committed history, so rewriting their genesis is invalid.
+        // The OWNER drops/drains its box; the FERRY moves letters through it.
+        commit_forest(
+            world,
+            id,
+            vec![(
+                id,
+                vec![
+                    crate::world::grant_capability(id, owner, id, 0),
+                    crate::world::grant_capability(id, ferry, id, 0),
+                ],
+            )],
+        )?;
     }
-    id
+    Ok(id)
 }
 
 /// Ensure `owner` has both office cells (its inbox and its outbox). Returns
 /// `(inbox, outbox)`. Idempotent — the guard in [`ensure_office_cell`] makes re-opening a
 /// town a no-op.
-pub fn ensure_office(world: &mut World, owner: CellId) -> (CellId, CellId) {
+pub fn ensure_office(world: &mut World, owner: CellId) -> Result<(CellId, CellId), MailError> {
+    world.mutation_guard().map_err(MailError::Rejected)?;
+    if !world.ledger().contains(&owner) {
+        return Err(MailError::Rejected(
+            "the mailbox owner is not on this World".into(),
+        ));
+    }
     // The ferry must exist first — every office cell grants it a cap at creation
     // so a later delivery round can move letters through the box.
-    let ferry = ensure_ferry(world);
-    let inbox = ensure_office_cell(world, owner, ferry, MAIL_INBOX_MAGIC);
-    let outbox = ensure_office_cell(world, owner, ferry, MAIL_OUTBOX_MAGIC);
-    (inbox, outbox)
+    let ferry = ensure_ferry(world)?;
+    let inbox = ensure_office_cell(world, owner, ferry, MAIL_INBOX_MAGIC)?;
+    let outbox = ensure_office_cell(world, owner, ferry, MAIL_OUTBOX_MAGIC)?;
+    Ok((inbox, outbox))
 }
 
 /// Ensure the town-wide ferry (the postmaster / mailman) is installed, and return its id.
 /// The ferry agents every delivery turn — Postmark's *Ferry*, the one who runs the round.
-pub fn ensure_ferry(world: &mut World) -> CellId {
+pub fn ensure_ferry(world: &mut World) -> Result<CellId, MailError> {
+    world.mutation_guard().map_err(MailError::Rejected)?;
     let (pk, token) = ferry_keys();
     let id = CellId::derive_raw(&pk, &token);
     if !world.ledger().contains(&id) {
         let mut cell = Cell::with_balance(pk, token, 0);
         cell.permissions = open_permissions();
         cell.state.fields[SLOT_O_KIND] = pack_u64(MAIL_FERRY_MAGIC);
-        world.genesis_install(cell);
+        world
+            .try_genesis_install(cell)
+            .map_err(MailError::Rejected)?;
     }
-    id
+    Ok(id)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -567,7 +593,8 @@ pub struct MailReceipt {
 /// The letter is content, never a command: the send turn touches only the outbox's tally
 /// and the letter's own witnesses; it grants nothing and commands no one (Postmark's rule,
 /// and `mailtown`'s proven non-amplification, made mechanical here). Returns the letter
-/// cell + the send receipt, or the executor's refusal (nothing committed).
+/// cell + the send receipt, or a refusal. Setup cells already durably installed
+/// before a later refusal remain installed; the caller retains the draft for retry.
 pub fn send_letter(
     world: &mut World,
     from: CellId,
@@ -575,9 +602,10 @@ pub fn send_letter(
     subject: &str,
     body: &str,
 ) -> Result<MailReceipt, MailError> {
-    let (_from_inbox, from_outbox) = ensure_office(world, from);
-    ensure_office(world, to);
-    ensure_ferry(world);
+    world.mutation_guard().map_err(MailError::Rejected)?;
+    let (_from_inbox, from_outbox) = ensure_office(world, from)?;
+    ensure_office(world, to)?;
+    let ferry = ensure_ferry(world)?;
 
     let seq = office_slot(world, from_outbox, SLOT_O_COUNT);
     let digest = body_digest_lo(body);
@@ -600,7 +628,9 @@ pub fn send_letter(
     cell.state.fields[SLOT_L_FROM] = pack_u64(id_lo(from));
     cell.state.fields[SLOT_L_TO] = pack_u64(id_lo(to));
     cell.state.fields[SLOT_L_DIGEST] = pack_u64(digest);
-    cell.state.fields[SLOT_L_STATUS] = pack_u64(LetterStatus::Outbound.as_u64());
+    // Until the receipted send succeeds, this is a draft, never a visible
+    // outbound letter whose outbox tally failed to commit.
+    cell.state.fields[SLOT_L_STATUS] = pack_u64(LetterStatus::Draft.as_u64());
     cell.state.fields[SLOT_L_BODY_LEN] = pack_u64(body.len() as u64);
     cell.state.fields[SLOT_L_SUBJ_LEN] = pack_u64(subject.len() as u64);
     cell.state.fields[SLOT_L_SENT_AT] = pack_u64(sent_at);
@@ -611,10 +641,24 @@ pub fn send_letter(
     heap.insert((COL_ADDR, 1), *to.as_bytes());
     cell.state.heap_map = heap;
     cell.state.reseal_heap_root();
-    world.genesis_install(cell);
+    world
+        .try_genesis_install(cell)
+        .map_err(MailError::Rejected)?;
     // The ferry flips this letter's status Outbound → Delivered on its round, so it
     // needs a capability to it — granted at birth (before any turn touches it).
-    world.genesis_grant_cap(&ferry_cell(), letter);
+    // The new letter self-grants its sender and ferry access through an ordered
+    // turn, preserving their already committed genesis/history.
+    commit_forest(
+        world,
+        letter,
+        vec![(
+            letter,
+            vec![
+                crate::world::grant_capability(letter, from, letter, 0),
+                crate::world::grant_capability(letter, ferry, letter, 0),
+            ],
+        )],
+    )?;
 
     // 2 ── drop it in the outbox (a receipted turn agented by the sender; one action on
     // the sender's outbox cell, bumping its sent + pending tallies + the last-peer/digest).
@@ -625,7 +669,21 @@ pub fn send_letter(
         set_slot(from_outbox, SLOT_O_LAST_PEER, id_lo(to)),
         set_slot(from_outbox, SLOT_O_LAST_DIGEST, digest),
     ];
-    let receipt = commit_forest(world, from, vec![(from_outbox, effects)])?;
+    let receipt = commit_forest(
+        world,
+        from,
+        vec![
+            (from_outbox, effects),
+            (
+                letter,
+                vec![set_slot(
+                    letter,
+                    SLOT_L_STATUS,
+                    LetterStatus::Outbound.as_u64(),
+                )],
+            ),
+        ],
+    )?;
     Ok(MailReceipt { letter, receipt })
 }
 
@@ -647,13 +705,14 @@ pub fn send_letter(
 /// letters out as markdown files and reads inbound files back in as delivery turns) are the
 /// named seams above this on-World mechanic.
 pub fn deliver_now(world: &mut World, letter: CellId) -> Result<MailReceipt, MailError> {
+    world.mutation_guard().map_err(MailError::Rejected)?;
     let view = read_letter(world, letter).ok_or(MailError::UnknownLetter)?;
     if view.status != LetterStatus::Outbound {
         return Err(MailError::NotOutbound(view.status));
     }
-    let (to_inbox, _to_outbox) = ensure_office(world, view.to);
+    let (to_inbox, _to_outbox) = ensure_office(world, view.to)?;
     let from_outbox = outbox_cell(view.from);
-    let ferry = ensure_ferry(world);
+    let ferry = ensure_ferry(world)?;
     let delivered_at = world.height();
     let pending = office_slot(world, from_outbox, SLOT_O_PENDING).saturating_sub(1);
     let received = office_slot(world, to_inbox, SLOT_O_COUNT) + 1;
@@ -718,6 +777,67 @@ fn commit_forest(
 mod tests {
     use super::*;
     use crate::world::World;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn unavailable_world_refuses_resource_creation_without_publishing() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "sbv2-runtime-creation-refusal-{}-{suffix}.redb",
+            std::process::id(),
+        ));
+        let mut world =
+            World::open_with_timestamp(&path, dregg_turn::ComputronCosts::zero(), 1_700_000_000)
+                .expect("open durable fixture");
+        let owner = world.genesis_cell(0x71, 0);
+        let peer = world.genesis_cell(0x72, 0);
+        let checkpoint = crate::agent_memory::AgentMemoryCheckpoint::capture(&world, owner)
+            .expect("capture the existing agent");
+        crate::world::arm_next_dual_write_failure();
+        let turn = world.turn(owner, vec![set_slot(owner, 0, 1)]);
+        assert!(!world.commit_turn(turn).is_committed());
+        let before = (
+            world.state_root(),
+            world.height(),
+            world.cell_count(),
+            world.dynamics().cursor(),
+        );
+
+        assert!(ensure_ferry(&mut world).is_err());
+        assert!(ensure_office(&mut world, owner).is_err());
+        assert!(send_letter(&mut world, owner, peer, "retry", "retain this draft").is_err());
+        assert!(matches!(
+            checkpoint.resume_into(&mut world),
+            Err(crate::agent_memory::AgentMemoryError::Installation(_))
+        ));
+        assert!(crate::edit::deploy_program(
+            &mut world,
+            0x73,
+            0,
+            dregg_cell::program::CellProgram::None,
+        )
+        .is_err());
+        let mut scene = crate::scene::VerifiedScene::with_default_grid();
+        assert!(scene
+            .open_surface(&mut world, owner, vec![1], 0, 0, 0, false)
+            .is_err());
+        assert!(scene.surfaces_in_z_order().is_empty());
+        assert!(scene.compositor_cell(&owner).is_none());
+        assert_eq!(
+            (
+                world.state_root(),
+                world.height(),
+                world.cell_count(),
+                world.dynamics().cursor()
+            ),
+            before,
+        );
+        drop(world);
+        let _ = std::fs::remove_file(path);
+    }
 
     /// Two residents; a letter posted, then delivered by the ferry — the whole round trip.
     /// The letter is a real cell; the inbox/outbox tallies + statuses tell its journey; the

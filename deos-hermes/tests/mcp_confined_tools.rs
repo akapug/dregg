@@ -271,7 +271,7 @@ fn a_rate_zero_terminal_grant_refuses_before_any_shell_runs() {
 #[test]
 fn run_js_routes_through_dregg_to_a_receipted_verified_turn() {
     use deos_hermes::RunJsTool;
-    use dregg_cell::AuthRequired;
+    use dregg_cell::{AuthRequired, Credential, Requirement};
 
     let (runtime, root) = grantor();
     let registry = GrantRegistry::default_for_session(1_000_000)
@@ -285,8 +285,14 @@ fn run_js_routes_through_dregg_to_a_receipted_verified_turn() {
         [0x01; 32],
         vec![(0, deos_js::applet::pack_u64(0))],
         vec![
-            ("bump".to_string(), AuthRequired::Signature),
-            ("escalate".to_string(), AuthRequired::Proof),
+            (
+                "bump".to_string(),
+                Requirement::AtLeast(Credential::Signature),
+            ),
+            (
+                "escalate".to_string(),
+                Requirement::AtLeast(Credential::Proof),
+            ),
         ],
     );
     let host = McpToolHost::new(HermesGateway::new(&runtime, root, registry), 0)

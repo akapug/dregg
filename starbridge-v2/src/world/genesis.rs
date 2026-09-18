@@ -1,9 +1,10 @@
 //! **THE OUT-OF-BAND GENESIS-PATH MUTATORS** — ledger writes that do NOT ride a turn.
 //!
-//! Extracted verbatim from `world/mod.rs` so the reactivity track owns a file rather than
-//! a line-range. No behaviour change. A CHILD module, so it keeps private access to
-//! `World`'s fields and helpers (`durable_regenesis`, `genesis_mutation_would_break_reopen`,
-//! `ensure_record_ledger`) exactly as it had inline.
+//! Extracted from `world/mod.rs` so the reactivity track owns a file rather than
+//! a line-range. A CHILD module, so it keeps private access to
+//! `World`'s fields and helpers (`commit_genesis_update`, `genesis_mutation_would_break_reopen`,
+//! `ensure_record_ledger`). Updates stage a complete cell and persist it before
+//! publishing to either live or replay state. Storage errors require reopen.
 //!
 //! ⚑ CLOSED 2026-07-31 (lane B1). These four used to mutate the ledger and emit NO
 //! `WorldEvent` — the M2 cache-soundness hole: `commit_turn`'s write-set completeness pass
@@ -52,7 +53,9 @@ impl World {
     /// This installs AUTHORITY (a slot caveat), it does not move value or commit a
     /// turn; it is the trusted root's prerogative over a cell it owns, exactly as
     /// `genesis_install` seeds a cell's initial program. Returns `true` if the
-    /// cell existed (in the live engine ledger) and was re-programmed.
+    /// cell existed (in the live engine ledger) and was re-programmed. A refused
+    /// genesis update or unavailable durable store returns `false`; consult
+    /// [`Self::mutation_guard`] for a storage failure requiring reopen.
     pub fn set_cell_program(&mut self, cell: &CellId, program: dregg_cell::CellProgram) -> bool {
         // FAIL-FAST guard (HORIZONLOG persist bug): a genesis-path mutation on a cell
         // a committed turn already touched would make the DURABLE image non-reopenable
@@ -64,24 +67,13 @@ impl World {
         if self.genesis_mutation_would_break_reopen(cell) {
             return false;
         }
-        let existed = if let Some(c) = self.engine.ledger_mut().get_mut(cell) {
-            c.program = program.clone();
-            true
-        } else {
-            false
+        let Some(mut updated) = self.engine.ledger().get(cell).cloned() else {
+            return false;
         };
-        // Keep the replay tape's ledger in lock-step so its recorded roots match
-        // the live engine's (the compositor cell carries the SAME program on both).
-        if let Some(c) = self.record_ledger.get_mut(cell) {
-            c.program = program;
+        updated.program = program;
+        if self.commit_genesis_update(updated).is_err() {
+            return false;
         }
-        // Durable genesis re-record (SEAM §2): the in-place program change carries
-        // no `CommitRecord`, so persist the cell's new post-state for reopen.
-        if existed {
-            self.durable_regenesis(cell);
-        }
-        // Genesis-path ledger mutation without a height bump — bust the memo.
-        self.state_root_memo.set(None);
         // M2 CACHE SOUNDNESS: this write rode no turn, so `commit_turn`'s write-set
         // completeness pass never sees it — name the cell here or a memoized
         // projection of it goes silently stale. SUCCESS LEG ONLY (past the reopen
@@ -89,10 +81,8 @@ impl World {
         // event for a write that did not happen is a spurious invalidation.
         // `CellMutated` is the right tooth — a program install is exactly the
         // "non-field state changed" case it names.
-        if existed {
-            self.emit_dynamics(WorldEvent::CellMutated { cell: *cell });
-        }
-        existed
+        self.emit_dynamics(WorldEvent::CellMutated { cell: *cell });
+        true
     }
 
     /// Grant `holder` a capability reaching `target` via the GENESIS PATH (the
@@ -102,7 +92,8 @@ impl World {
     /// no-amplification rule still gates any later *delegation* of it. Mirrored
     /// into the replay-recorder's ledger so the recorded roots stay in lock-step.
     /// Returns the granted slot (in the live engine ledger), or `None` if the
-    /// holder cell does not exist or its c-list is full.
+    /// holder cell does not exist, its c-list is full, or the update is refused.
+    /// A storage failure is retained by [`Self::mutation_guard`].
     ///
     /// This is the authority leg of a `present()`: the presenter holds a surface
     /// cap on the compositor cell (the Lean `compositorState`'s `[.endpoint cell …]`),
@@ -116,24 +107,9 @@ impl World {
         if self.genesis_mutation_would_break_reopen(holder) {
             return None;
         }
-        let slot = self
-            .engine
-            .ledger_mut()
-            .get_mut(holder)?
-            .capabilities
-            .grant(target, AuthRequired::None);
-        // Mirror into the replay tape's ledger (same holder, same target) so the
-        // recorded roots match the live engine's after a present's SetField.
-        if let Some(c) = self.record_ledger.get_mut(holder) {
-            let _ = c.capabilities.grant(target, AuthRequired::None);
-        }
-        // Durable genesis re-record (SEAM §2): the in-place cap grant carries no
-        // `CommitRecord`, so persist the holder's new post-state for reopen.
-        if slot.is_some() {
-            self.durable_regenesis(holder);
-        }
-        // Genesis-path ledger mutation without a height bump — bust the memo.
-        self.state_root_memo.set(None);
+        let mut updated = self.engine.ledger().get(holder)?.clone();
+        let slot = updated.capabilities.grant(target, AuthRequired::None)?;
+        self.commit_genesis_update(updated).ok()?;
         // M2 CACHE SOUNDNESS, success leg only. `CapabilityGranted` — NOT the
         // cheaper `CellMutated` — even though it is the more expensive tooth
         // (`cockpit::construct::invalidate_for` answers it with
@@ -149,13 +125,11 @@ impl World {
         // memo. A cheaper-but-sound tooth would need a per-target affordance index,
         // which does not exist today — naming it as the fine-grained follow-up
         // rather than paying for it with staleness now.
-        if slot.is_some() {
-            self.emit_dynamics(WorldEvent::CapabilityGranted {
-                from: *holder,
-                to: target,
-            });
-        }
-        slot
+        self.emit_dynamics(WorldEvent::CapabilityGranted {
+            from: *holder,
+            to: target,
+        });
+        Some(slot)
     }
 
     /// Open `cell`'s [`Permissions`] to the single-custody operator set
@@ -179,29 +153,18 @@ impl World {
         if self.genesis_mutation_would_break_reopen(cell) {
             return false;
         }
-        let existed = if let Some(c) = self.engine.ledger_mut().get_mut(cell) {
-            c.permissions = open_permissions();
-            true
-        } else {
-            false
+        let Some(mut updated) = self.engine.ledger().get(cell).cloned() else {
+            return false;
         };
-        if let Some(c) = self.record_ledger.get_mut(cell) {
-            c.permissions = open_permissions();
+        updated.permissions = open_permissions();
+        if self.commit_genesis_update(updated).is_err() {
+            return false;
         }
-        // Durable genesis re-record (SEAM §2): the in-place permissions change
-        // carries no `CommitRecord`, so persist the cell's new post-state.
-        if existed {
-            self.durable_regenesis(cell);
-        }
-        // Genesis-path ledger mutation without a height bump — bust the memo.
-        self.state_root_memo.set(None);
         // M2 CACHE SOUNDNESS, success leg only. `CellMutated` is the tooth its own
         // doc names for a permissions write, and permissions are cell-local (unlike
         // a cap edge, they change no other cell's badge).
-        if existed {
-            self.emit_dynamics(WorldEvent::CellMutated { cell: *cell });
-        }
-        existed
+        self.emit_dynamics(WorldEvent::CellMutated { cell: *cell });
+        true
     }
 
     /// **Write a cell's universal-memory heap out-of-band and reseal its
@@ -244,26 +207,14 @@ impl World {
             c
         };
         let key_count = heap_map.len();
-        let existed = if let Some(c) = self.engine.ledger_mut().get_mut(cell) {
-            c.state.heap_map = heap_map.clone();
-            c.state.reseal_heap_root();
-            true
-        } else {
-            false
+        let Some(mut updated) = self.engine.ledger().get(cell).cloned() else {
+            return false;
         };
-        // Keep the replay tape's ledger in lock-step so its recorded roots match
-        // the live engine's (the document cell carries the SAME umem boundary).
-        if let Some(c) = self.record_ledger.get_mut(cell) {
-            c.state.heap_map = heap_map;
-            c.state.reseal_heap_root();
+        updated.state.heap_map = heap_map;
+        updated.state.reseal_heap_root();
+        if self.commit_genesis_update(updated).is_err() {
+            return false;
         }
-        // Durable genesis re-record (SEAM §2): the in-place heap write carries no
-        // `CommitRecord`, so persist the cell's new post-state for reopen.
-        if existed {
-            self.durable_regenesis(cell);
-        }
-        // Genesis-path ledger mutation without a height bump — bust the memo.
-        self.state_root_memo.set(None);
         // M2 CACHE SOUNDNESS, success leg only — and DELIBERATELY NOT `CellMutated`.
         // This is the desktop document editor's per-keystroke persist path, and the
         // user cell carries both `AGENT_COUNTER_SLOT` (0) and `DOC_REV_SLOT` (14);
@@ -273,14 +224,12 @@ impl World {
         // and a whole-cell projection still drops) while the FIELD-bind registries
         // ignore it — the heap register is orthogonal to `fields_map`, so no field
         // bind can have gone stale.
-        if existed {
-            self.emit_dynamics(WorldEvent::HeapWritten {
-                cell: *cell,
-                collections,
-                key_count,
-            });
-        }
-        existed
+        self.emit_dynamics(WorldEvent::HeapWritten {
+            cell: *cell,
+            collections,
+            key_count,
+        });
+        true
     }
 
     /// Deploy a [`FactoryDescriptor`] into the embedded executor's factory
@@ -290,6 +239,15 @@ impl World {
     /// validated by the real executor. The descriptor is also mirrored into the
     /// replay tape's executor so factory-births re-derive on replay.
     pub fn deploy_factory(&mut self, descriptor: dregg_cell::FactoryDescriptor) -> [u8; 32] {
+        self.try_deploy_factory(descriptor)
+            .expect("factory setup requires an available World")
+    }
+
+    pub fn try_deploy_factory(
+        &mut self,
+        descriptor: dregg_cell::FactoryDescriptor,
+    ) -> Result<[u8; 32], String> {
+        self.mutation_guard()?;
         let vk = self
             .engine
             .executor_mut()
@@ -300,6 +258,6 @@ impl World {
         // Retain the descriptor so a fork can replay it onto its throwaway
         // executor (the live registry isn't enumerable; this is our own record).
         self.deployed_factories.push(descriptor);
-        vk
+        Ok(vk)
     }
 }

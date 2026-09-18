@@ -1341,6 +1341,7 @@ mod layout_cell_drives_the_rail {
                 let view = cx.new(|cx| {
                     let focus = cx.focus_handle();
                     Cockpit::with_node(shared.clone(), anchors, focus, None, None)
+                        .expect("fixture cockpit opens")
                 });
                 view.update(cx, |c, cx| c.focus_on_open(window, cx));
                 view

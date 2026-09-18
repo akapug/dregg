@@ -2,6 +2,28 @@
 
 use super::*;
 
+fn ensure_cockpit_cells(world: &mut World) -> Result<[CellId; 4], String> {
+    world.mutation_guard()?;
+    let cells = [0x5B, 0x5E, 0x5F, 0xA9].map(|seed| world::make_open_cell(seed, 0));
+    let ids = cells.each_ref().map(|cell| cell.id());
+    let missing = cells
+        .into_iter()
+        .filter(|cell| !world.ledger().contains(&cell.id()))
+        .collect();
+    world.try_genesis_install_batch(missing)?;
+    Ok(ids)
+}
+
+fn require_cockpit_commit(outcome: world::CommitOutcome, operation: &str) -> Result<(), String> {
+    match outcome {
+        world::CommitOutcome::Committed { .. } => Ok(()),
+        world::CommitOutcome::Rejected { reason, .. } => Err(format!("{operation}: {reason}")),
+        world::CommitOutcome::Queued { .. } => Err(format!(
+            "{operation}: world suspended; setup was queued, not committed"
+        )),
+    }
+}
+
 impl Cockpit {
     /// Select the active tab by (case-insensitive) name — matched against each
     /// [`Tab::label`] with separators/symbols stripped (so `"inspector"`,
@@ -42,7 +64,10 @@ impl Cockpit {
         focus: FocusHandle,
         node_url: Option<String>,
         pending_seed: Option<world::DemoSeed>,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        world.borrow().mutation_guard()?;
+        let [buffer_backing, inspector_view_backing, workspace_cell_backing, powerbox_app] =
+            ensure_cockpit_cells(&mut world.borrow_mut())?;
         let cells = sorted_cells(&world.borrow());
 
         // Seed the debugger with a demo turn (treasury → user transfer) that
@@ -71,8 +96,19 @@ impl Cockpit {
                 }))
                 .collect();
             let mut w = world.borrow_mut();
-            w.set_cell_program(&service, CellProgram::Cases(cases));
-            w.genesis_open_permissions(&service);
+            let service_cell = w
+                .ledger()
+                .get(&service)
+                .ok_or_else(|| "cockpit service anchor is absent".to_string())?;
+            if matches!(service_cell.program, CellProgram::None) {
+                // Setup may follow session grants on a durable image. Install by
+                // an ordered turn instead of rewriting the anchor's genesis.
+                let turn = w.turn(
+                    service,
+                    vec![world::set_program(service, CellProgram::Cases(cases))],
+                );
+                require_cockpit_commit(w.commit_turn(turn), "install cockpit service program")?;
+            }
         }
 
         let debug_turn = world
@@ -143,7 +179,6 @@ impl Cockpit {
         // (its state slot carries the content digest; the cockpit holds the
         // WRITE cap the shell mints). Open it as a real shell surface so it
         // composites under the A0 verified scene like every other surface.
-        let buffer_backing = world.borrow_mut().genesis_cell(0x5B, 0);
         let editor_buffer_cap = shell.open_cell_view(buffer_backing, "scratch.txt");
         surface_caps.insert(editor_buffer_cap.surface(), editor_buffer_cap.clone());
         let editor_buffer = BufferCell::new(
@@ -161,16 +196,25 @@ impl Cockpit {
         // witnessed (prior-frame) aim is populated. A re-focus mutates the free draft
         // and lands an occasional witnessed SetField commit (the §3.5 stream weight
         // class). The inspector is now itself inspectable (FocusTarget::ViewCell).
-        let inspector_view_backing = world.borrow_mut().genesis_cell(0x5E, 0);
         let inspector_view = {
-            let v = starbridge_v2::view_cell::ViewCell::focused(
+            let restored = starbridge_v2::view_cell::ViewCell::from_world(
+                &world.borrow(),
                 inspector_view_backing,
-                "INSPECTOR",
-                treasury,
-            );
-            // Land the initial aim so the witnessed state matches the boot draft.
-            let _ = v.commit(&mut world.borrow_mut());
-            v
+            )
+            .ok_or_else(|| "cockpit inspector backing cell is absent".to_string())?;
+            if restored.revision(&world.borrow()) == 0 {
+                let initial = starbridge_v2::view_cell::ViewCell::focused(
+                    inspector_view_backing,
+                    "INSPECTOR",
+                    treasury,
+                );
+                initial
+                    .commit(&mut world.borrow_mut())
+                    .map_err(|error| format!("initialize cockpit inspector: {error:?}"))?;
+                initial
+            } else {
+                restored
+            }
         };
 
         // M3 WIDEN — THE WORKSPACE CELL (the §3.4 selector move): the cockpit's
@@ -180,7 +224,6 @@ impl Cockpit {
         // (prior-frame) selector is populated. A tab switch mutates the free draft
         // (`self.tab`) and lands an occasional witnessed `SetField` commit — the active
         // tab becomes a rewindable dregg-graph mutation, conserving nothing.
-        let workspace_cell_backing = world.borrow_mut().genesis_cell(0x5F, 0);
         let workspace_cell = {
             // RESTORE from the (possibly recovered) durable image first: a reopened
             // image already carries the witnessed active-tab AND the torn-off-tabs
@@ -200,7 +243,8 @@ impl Cockpit {
                     workspace_cell_backing,
                     Tab::Home.index(),
                 );
-                let _ = boot.commit(&mut world.borrow_mut());
+                boot.commit(&mut world.borrow_mut())
+                    .map_err(|error| format!("initialize cockpit workspace: {error:?}"))?;
                 boot
             } else {
                 restored
@@ -214,7 +258,6 @@ impl Cockpit {
         // SOMETHING to designate) and a grant demonstrates real attenuation away
         // from the held authority. The user genuinely holds this cap; the powerbox
         // can only ever offer the user's own authority (`mint_needs_held_factory`).
-        let powerbox_app = world.borrow_mut().genesis_cell(0xA9, 0);
         // The user holds full (None) authority reaching `service` — the powerbox can
         // confer this or any narrower right, never wider. The grant rides an ORDERED
         // turn: `service` SELF-GRANTS the cap to `user` (the cap target IS the
@@ -225,11 +268,16 @@ impl Cockpit {
         // turn lands a `CommitRecord` so a durable cockpit image reproduces it.
         {
             let mut w = world.borrow_mut();
-            let t = w.turn(
-                service,
-                vec![world::grant_capability(service, user, service, 0)],
-            );
-            let _ = w.commit_turn(t);
+            if !HeldCapability::all_for(&w, user)
+                .iter()
+                .any(|cap| cap.cap.target == service)
+            {
+                let t = w.turn(
+                    service,
+                    vec![world::grant_capability(service, user, service, 0)],
+                );
+                require_cockpit_commit(w.commit_turn(t), "grant cockpit service capability")?;
+            }
         }
         // …and reaching `treasury` too (same self-grant shape), so the WEB-OF-CELLS ⚡
         // "make interactive" upgrade (a real powerbox grant over the transcluded
@@ -238,11 +286,16 @@ impl Cockpit {
         // any source the user does not hold — `mint_needs_held_factory`).
         {
             let mut w = world.borrow_mut();
-            let t = w.turn(
-                treasury,
-                vec![world::grant_capability(treasury, user, treasury, 0)],
-            );
-            let _ = w.commit_turn(t);
+            if !HeldCapability::all_for(&w, user)
+                .iter()
+                .any(|cap| cap.cap.target == treasury)
+            {
+                let t = w.turn(
+                    treasury,
+                    vec![world::grant_capability(treasury, user, treasury, 0)],
+                );
+                require_cockpit_commit(w.commit_turn(t), "grant cockpit treasury capability")?;
+            }
         }
 
         // The A1 TERMINAL surface: the SERVICE cell backs it — it holds a REAL
@@ -334,7 +387,7 @@ impl Cockpit {
             None => None,
         };
 
-        Self {
+        Ok(Self {
             world,
             cells,
             dynamics_cursor,
@@ -580,7 +633,7 @@ impl Cockpit {
             // first-timer clicks the onboarding affordance; `None` until then.
             #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
             first_card: None,
-        }
+        })
     }
 
     pub(crate) fn refresh_cells(&mut self) {
@@ -860,6 +913,7 @@ mod wake_edge {
                     // `None` seed: NO demo-seeding task exists, so nothing else in
                     // this process is trying to drive the cockpit.
                     Cockpit::with_node(shared.clone(), anchors, focus, None, None)
+                        .expect("fixture cockpit opens")
                 });
                 view.update(cx, |c, cx| c.focus_on_open(window, cx));
                 view

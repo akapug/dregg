@@ -61,18 +61,25 @@ struct WorldSpine {
 impl WorldSpine {
     /// Mount a spine over the live cockpit `World`, installing the editor (author)
     /// cell onto it (genesis path) so saves have an agent that holds the file caps.
-    fn new(world: std::rc::Rc<std::cell::RefCell<crate::world::World>>) -> Self {
+    fn new(world: std::rc::Rc<std::cell::RefCell<crate::world::World>>) -> anyhow::Result<Self> {
         let editor_cell = deos_zed::fs::host_make_editor_cell();
         let editor = editor_cell.id();
-        world.borrow_mut().genesis_install(editor_cell);
-        WorldSpine {
+        {
+            let mut w = world.borrow_mut();
+            w.mutation_guard().map_err(anyhow::Error::msg)?;
+            if !w.ledger().contains(&editor) {
+                w.try_genesis_install(editor_cell)
+                    .map_err(anyhow::Error::msg)?;
+            }
+        }
+        Ok(WorldSpine {
             world,
             editor,
             // Start high so file-cell seeds don't collide with the cockpit's own
             // small genesis seeds (anchors etc.).
             next_seed: std::cell::Cell::new(0x1000_0000),
             per_file: std::cell::RefCell::new(std::collections::BTreeMap::new()),
-        }
+        })
     }
 }
 
@@ -88,16 +95,59 @@ impl deos_zed::fs::LedgerSpine for WorldSpine {
 
     fn install_file(&self, content: &str) -> anyhow::Result<dregg_cell::CellId> {
         let seed = self.next_seed.get();
-        self.next_seed.set(seed.wrapping_add(1));
         // Build the file cell in EXACTLY the layout deos-zed's `load` decodes
         // (the host wire API), install it on the live World as genesis, and grant
         // the editor its per-file edit cap so a later save commits.
-        let file_cell = deos_zed::fs::host_make_file_cell(seed, content);
-        let file = file_cell.id();
         let mut w = self.world.borrow_mut();
-        w.genesis_install(file_cell);
-        w.genesis_grant_cap(&self.editor, file)
-            .ok_or_else(|| anyhow::anyhow!("editor c-list full granting file edit cap"))?;
+        w.mutation_guard().map_err(anyhow::Error::msg)?;
+        if w.is_suspended() {
+            return Err(anyhow::anyhow!("file creation refused: world suspended"));
+        }
+        let slot = w
+            .ledger()
+            .get(&self.editor)
+            .ok_or_else(|| anyhow::anyhow!("editor cell vanished from ledger"))?
+            .capabilities
+            .iter()
+            .map(|cap| cap.slot)
+            .max()
+            .map(|last| last.checked_add(1))
+            .unwrap_or(Some(0))
+            .ok_or_else(|| anyhow::anyhow!("editor capability slots exhausted"))?;
+        // Reopening a pane reuses its author cell. Derive the next free file id
+        // from the live ledger, so an existing document is never overwritten.
+        let mut seed = seed;
+        let file_cell = loop {
+            let candidate = deos_zed::fs::host_make_file_cell(seed, content);
+            if !w.ledger().contains(&candidate.id()) {
+                break candidate;
+            }
+            seed = seed
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("file identity space exhausted"))?;
+        };
+        let file = w
+            .try_genesis_install(file_cell)
+            .map_err(anyhow::Error::msg)?;
+        // The file owns itself and grants the editor access in an ordered turn.
+        // A genesis mutation of the author would stop working after its first
+        // save; this grant remains replayable throughout the session.
+        let grant = crate::world::grant_capability(file, self.editor, file, slot);
+        let turn = w.turn(file, vec![grant]);
+        match w.commit_turn(turn) {
+            crate::world::CommitOutcome::Committed { .. } => {}
+            crate::world::CommitOutcome::Rejected { reason, .. } => {
+                return Err(anyhow::anyhow!(
+                    "file {file} was installed, but its editor access grant was refused: {reason}"
+                ));
+            }
+            crate::world::CommitOutcome::Queued { .. } => {
+                return Err(anyhow::anyhow!(
+                    "file {file} was installed, but its editor access grant is queued (world suspended)"
+                ));
+            }
+        }
+        self.next_seed.set(seed.saturating_add(1));
         Ok(file)
     }
 
@@ -272,7 +322,7 @@ impl EditorPane {
         cx: &mut App,
     ) -> anyhow::Result<Self> {
         let spine: std::rc::Rc<dyn deos_zed::fs::LedgerSpine> =
-            std::rc::Rc::new(WorldSpine::new(world));
+            std::rc::Rc::new(WorldSpine::new(world)?);
         // single-threaded gpui context; the Arc is what `FirmamentFs` hands the editor API
         #[allow(clippy::arc_with_non_send_sync)]
         let firm = std::sync::Arc::new(deos_zed::fs::FirmamentFs::over(spine));
@@ -359,5 +409,116 @@ impl CockpitSurface for EditorPane {
 
     fn boxed_clone(&self) -> Box<dyn CockpitSurface> {
         Box::new(EditorPane(self.0.clone()))
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "firmament",
+    feature = "embedded-executor",
+    not(target_arch = "wasm32")
+))]
+mod tests {
+    use super::WorldSpine;
+    use crate::world::{DurabilityStatus, World};
+    use deos_zed::fs::LedgerSpine;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn image_path(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "sbv2-editor-{label}-{}-{nanos}.redb",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn files_created_after_a_save_and_a_second_mount_reopen_with_their_caps() {
+        let path = image_path("ordered-grants");
+        let world = Rc::new(RefCell::new(
+            World::open_with_timestamp(&path, dregg_turn::ComputronCosts::zero(), 1_700_000_000)
+                .unwrap(),
+        ));
+        let spine = WorldSpine::new(world.clone()).unwrap();
+        let first = spine.install_file("before").unwrap();
+        spine.commit_save(first, "after").unwrap();
+        let second = spine.install_file("second").unwrap();
+        // Reopening the pane must reuse its author without replacing an existing
+        // file at the new pane's initial seed.
+        let next_pane = WorldSpine::new(world.clone()).unwrap();
+        let third = next_pane.install_file("third").unwrap();
+        assert_ne!(first, third);
+        assert_ne!(second, third);
+        let editor = spine.editor_id();
+        let before = world.borrow().state_root();
+        drop(next_pane);
+        drop(spine);
+        drop(world);
+
+        let reopened =
+            World::open_with_timestamp(&path, dregg_turn::ComputronCosts::zero(), 1_700_000_000)
+                .expect("ordered file births and grants replay");
+        assert_eq!(reopened.state_root(), before);
+        for (file, content) in [(first, "after"), (second, "second"), (third, "third")] {
+            assert_eq!(
+                deos_zed::fs::host_decode_content(reopened.ledger().get(&file).unwrap()).unwrap(),
+                content
+            );
+            assert!(reopened
+                .ledger()
+                .get(&editor)
+                .unwrap()
+                .capabilities
+                .holds_unfrozen_ref_to(&file));
+        }
+        drop(reopened);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_failed_file_grant_reports_the_installed_cell_and_refuses_further_births() {
+        let path = image_path("refused-grant");
+        let world = Rc::new(RefCell::new(
+            World::open_with_timestamp(&path, dregg_turn::ComputronCosts::zero(), 1_700_000_000)
+                .unwrap(),
+        ));
+        let spine = WorldSpine::new(world.clone()).unwrap();
+        let file = deos_zed::fs::host_make_file_cell(0x1000_0000, "retained").id();
+        crate::world::arm_next_dual_write_failure();
+        let error = spine.install_file("retained").unwrap_err().to_string();
+        assert!(error.contains(&file.to_string()), "{error}");
+        assert!(error.contains("was installed"), "{error}");
+        assert!(error.contains("durable"), "{error}");
+        assert_eq!(
+            world.borrow().durability_status(),
+            DurabilityStatus::Unavailable
+        );
+        let before = world.borrow().state_root();
+        assert!(spine.install_file("later").is_err());
+        assert_eq!(world.borrow().state_root(), before);
+        let editor = spine.editor_id();
+        drop(spine);
+        drop(world);
+
+        let reopened =
+            World::open_with_timestamp(&path, dregg_turn::ComputronCosts::zero(), 1_700_000_000)
+                .unwrap();
+        assert_eq!(
+            deos_zed::fs::host_decode_content(reopened.ledger().get(&file).unwrap()).unwrap(),
+            "retained"
+        );
+        assert!(!reopened
+            .ledger()
+            .get(&editor)
+            .unwrap()
+            .capabilities
+            .holds_unfrozen_ref_to(&file));
+        assert_eq!(reopened.height(), 0);
+        drop(reopened);
+        std::fs::remove_file(path).unwrap();
     }
 }

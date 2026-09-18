@@ -51,7 +51,7 @@ use deos_hermes::{
     ToolCallRequest, ToolMarket,
 };
 use deos_js::{JsRuntime, WorldSink};
-use dregg_cell::{AuthRequired, Cell, CellId, Permissions};
+use dregg_cell::{AuthRequired, Cell, CellId, Credential, Permissions, Requirement};
 use dregg_sdk::embed::{DreggEngine, EngineConfig};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, Attenuation, HeldToken};
 use dregg_turn::action::Effect;
@@ -210,7 +210,10 @@ fn agent_tool(pk: [u8; 32], tok: [u8; 32]) -> RunJsTool {
         pk,
         tok,
         vec![(0, deos_js::applet::pack_u64(0))],
-        vec![("inc".to_string(), AuthRequired::Signature)],
+        vec![(
+            "inc".to_string(),
+            Requirement::AtLeast(Credential::Signature),
+        )],
     )
 }
 

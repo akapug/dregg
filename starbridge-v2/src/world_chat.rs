@@ -274,7 +274,11 @@ impl ChatSource for WorldChatSource {
     }
 
     fn send(&self, room_id: &str, body: &str) -> Result<String> {
-        let mut world = self.world.lock().unwrap();
+        let mut world = self
+            .world
+            .lock()
+            .map_err(|_| deos_matrix::Error::Other("chat world lock is unavailable".into()))?;
+        world.mutation_guard().map_err(deos_matrix::Error::Other)?;
         let Some(ri) = self.room_index(room_id) else {
             return Err(deos_matrix::Error::Other(format!(
                 "no such room: {room_id}"
@@ -288,17 +292,16 @@ impl ChatSource for WorldChatSource {
             )));
         }
         // The next slot in the room's ring (the order tooth).
-        let k = {
-            let mut cur = self.next_slot.lock().unwrap();
-            let k = cur[ri];
-            if k >= SLOTS_PER_ROOM {
-                return Err(deos_matrix::Error::Other(
-                    "this room's message ring is full (demo capacity)".into(),
-                ));
-            }
-            cur[ri] = k + 1;
-            k
-        };
+        let mut cur = self
+            .next_slot
+            .lock()
+            .map_err(|_| deos_matrix::Error::Other("chat cursor lock is unavailable".into()))?;
+        let k = cur[ri];
+        if k >= SLOTS_PER_ROOM {
+            return Err(deos_matrix::Error::Other(
+                "this room's message ring is full (demo capacity)".into(),
+            ));
+        }
         let slot_id = self.rooms[ri].slots[k];
         let tag = sender_tag(&self.me);
 
@@ -318,6 +321,7 @@ impl ChatSource for WorldChatSource {
                 "the post turn was refused by the executor (fail-closed): {outcome:?}"
             )));
         }
+        cur[ri] = k + 1;
         Ok(crate::reflect::short_hex(slot_id.as_bytes()))
     }
 
@@ -380,6 +384,33 @@ pub fn world_chat_card(me: &str) -> std::result::Result<deos_matrix::chat_card::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_post_keeps_the_next_message_slot() {
+        let chat = WorldChatSource::seeded("@ember:deos.local");
+        let room = chat.rooms[0].matrix_id.clone();
+        let slot = chat.rooms[0].slots[0];
+        {
+            let mut world = chat.world.lock().unwrap();
+            assert!(world.set_cell_program(
+                &slot,
+                crate::edit::ProgramBuilder::new().immutable(0).build()
+            ));
+        }
+        let before = chat.world.lock().unwrap().state_root();
+        assert!(chat.send(&room, "keep this draft").is_err());
+        assert_eq!(chat.next_slot.lock().unwrap()[0], 0);
+        assert_eq!(chat.world.lock().unwrap().state_root(), before);
+        {
+            let mut world = chat.world.lock().unwrap();
+            assert!(world.set_cell_program(&slot, dregg_cell::program::CellProgram::None));
+        }
+        assert_eq!(
+            chat.send(&room, "keep this draft").expect("retry commits"),
+            crate::reflect::short_hex(slot.as_bytes()),
+        );
+        assert_eq!(chat.next_slot.lock().unwrap()[0], 1);
+    }
 
     #[test]
     fn the_chat_is_the_world_send_is_a_real_turn_timeline_is_real_cell_state() {

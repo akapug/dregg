@@ -102,6 +102,15 @@ impl CommitOutcome {
     }
 }
 
+/// The storage contract of this World. An unavailable durable image must be
+/// reopened before it can mutate again; it has not become an ephemeral World.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DurabilityStatus {
+    Ephemeral,
+    Ready,
+    Unavailable,
+}
+
 /// How a suspended world RESUMES its halted loop (meta-debug §3.4).
 pub enum ResumeMode {
     /// Commit the staged pending queue, in arrival order, through the normal
@@ -222,6 +231,10 @@ pub struct World {
     /// single source of truth for the commit cursor (its torn-state guard
     /// re-checks it).
     persist: Option<WorldPersist>,
+    /// A durable write may have reached disk even when its caller received an
+    /// error. Keep the in-memory image read-only until authoritative recovery;
+    /// dropping the failed store must never opt this World into ephemeral mode.
+    durability_failure: Option<String>,
     /// THE WITNESS MODE (SYMBOLIC EXECUTION — `dregg_turn::collapse`). `Full`
     /// (the correct default): every commit materializes its Merkle witness and
     /// records the post-root onto the replay tape, so each receipt is
@@ -312,6 +325,7 @@ impl World {
             suspended: false,
             pending: VecDeque::new(),
             persist: None,
+            durability_failure: None,
             witness_mode: WitnessMode::Full,
             symbolic_turns: Vec::new(),
         }
@@ -491,42 +505,132 @@ impl World {
         }
     }
 
-    /// The path-backed durable World is durable iff this is `true` (it is `false`
-    /// for `new`/`with_costs`/`fork`, and flips to `false` if a durable write ever
-    /// failed — the loud degrade-to-ephemeral path in `commit_turn`).
+    /// Whether this World requires durable storage, including an image whose
+    /// writer is unavailable. Use [`Self::durability_status`] to distinguish a
+    /// ready writer from an image requiring recovery.
     pub fn is_durable(&self) -> bool {
-        self.persist.is_some()
+        self.durability_status() != DurabilityStatus::Ephemeral
+    }
+
+    pub fn durability_status(&self) -> DurabilityStatus {
+        if self.durability_failure.is_some() {
+            DurabilityStatus::Unavailable
+        } else if self.persist.is_some() {
+            DurabilityStatus::Ready
+        } else {
+            DurabilityStatus::Ephemeral
+        }
+    }
+
+    /// Refuse a mutation while the durable image needs recovery. Runtime
+    /// creation paths use the same guard as ordinary turns before preparing
+    /// any new cells or changing their own view of the World.
+    pub fn mutation_guard(&self) -> Result<(), String> {
+        match &self.durability_failure {
+            Some(reason) => Err(reason.clone()),
+            None => Ok(()),
+        }
+    }
+
+    /// The original storage failure retained until this World is replaced by a
+    /// successfully reopened image. There is deliberately no in-place reset.
+    pub fn durability_failure(&self) -> Option<&str> {
+        self.durability_failure.as_deref()
+    }
+
+    fn latch_durability_failure(&mut self, error: impl std::fmt::Display) -> String {
+        let reason = format!(
+            "durable image unavailable after storage failure; reopen the image to recover before \
+             further mutations: {error}"
+        );
+        self.persist = None;
+        self.durability_failure = Some(reason.clone());
+        reason
     }
 
     /// Force a durable full-ledger checkpoint at the current height (C.1) — the
     /// on-close flush so the latest image is always covered and recovery's overlay
     /// stays short. No-op on an ephemeral world.
-    pub fn checkpoint_now(&self) {
-        if let Some(p) = self.persist.as_ref() {
-            p.checkpoint(self.engine.ledger(), self.height);
+    pub fn checkpoint_now(&mut self) {
+        self.try_checkpoint_now()
+            .expect("checkpoint setup requires an available durable image");
+    }
+
+    /// Persist a checkpoint or report the storage failure. An explicitly
+    /// ephemeral image has no checkpoint to write. An unavailable durable image
+    /// remains unavailable and can never take that no-op path.
+    pub fn try_checkpoint_now(&mut self) -> Result<(), String> {
+        self.mutation_guard()?;
+        let Some(p) = self.persist.as_ref() else {
+            return Ok(());
+        };
+        if !self.symbolic_turns.is_empty() {
+            return Err("cannot checkpoint uncollapsed symbolic turns".to_string());
         }
+        let result = p.checkpoint(self.engine.ledger(), self.height);
+        if let Err(error) = result {
+            return Err(self.latch_durability_failure(error));
+        }
+        Ok(())
     }
 
     /// Persist the opaque durable SESSION RECORD blob into this image's redb store
-    /// (SESSION RESUME — `docs/deos/SESSION-LOGIN.md`). No-op on an ephemeral world
-    /// (a not-logged-in / demo image keeps no session). Returns `true` iff the
-    /// write landed durably (so the caller knows the session will resume).
+    /// (SESSION RESUME — `docs/deos/SESSION-LOGIN.md`). Compatibility wrapper for
+    /// fixtures; runtime callers use [`Self::try_put_session_blob`] to handle a
+    /// refusal. A successful return means the bytes reached durable storage.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn put_session_blob(&self, bytes: &[u8]) -> bool {
-        match self.persist.as_ref() {
-            Some(p) => p.put_session(bytes).is_ok(),
-            None => false,
-        }
+    pub fn put_session_blob(&mut self, bytes: &[u8]) -> bool {
+        self.try_put_session_blob(bytes)
+            .expect("session setup requires an available durable image");
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn try_put_session_blob(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.mutation_guard()?;
+        let p = self
+            .persist
+            .as_ref()
+            .ok_or_else(|| "session persistence requires a durable image".to_string())?;
+        let result = p.put_session(bytes);
+        result.map_err(|error| self.latch_durability_failure(error))
     }
 
     /// The durable SESSION RECORD blob for this image, if one was written by a
-    /// prior login. `None` on an ephemeral world or a fresh image never logged
-    /// into. The bytes are opaque here; [`crate::session`] decodes them.
+    /// prior login. Compatibility wrapper for fixtures; runtime callers use
+    /// [`Self::try_session_blob`] to distinguish absent data from a failed read.
+    /// The bytes are opaque here; [`crate::session`] decodes them.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn session_blob(&self) -> Option<Vec<u8>> {
+    pub fn session_blob(&mut self) -> Option<Vec<u8>> {
+        self.try_session_blob()
+            .expect("session read requires an available durable image")
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn try_session_blob(&mut self) -> Result<Option<Vec<u8>>, String> {
+        self.mutation_guard()?;
+        let p = self
+            .persist
+            .as_ref()
+            .ok_or_else(|| "session persistence requires a durable image".to_string())?;
+        let result = p.get_session();
+        result.map_err(|error| self.latch_durability_failure(error))
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn fail_config_io_for_test(&self) {
         self.persist
             .as_ref()
-            .and_then(|p| p.get_session().ok().flatten())
+            .expect("fault targets a durable image")
+            .fail_config_io_for_test();
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn fail_session_write_for_test(&self) {
+        self.persist
+            .as_ref()
+            .expect("fault targets a durable image")
+            .fail_session_write_for_test();
     }
 
     /// The wall-clock this world pinned at construction (folded into every
@@ -875,6 +979,9 @@ impl World {
             // A fork is a what-if COPY: it MUST never persist (committing on the
             // fork would otherwise corrupt the live image's durable log).
             persist: None,
+            // A failed image is not a source of writable snapshots. Recovery
+            // must first decide whether its last attempted turn reached disk.
+            durability_failure: self.durability_failure.clone(),
             // A fork PREDICTS the next turn — it always wants a real witness for
             // the predicted post-state, so it runs Full regardless of the live
             // world's mode (and starts with an empty symbolic buffer). The
@@ -890,47 +997,81 @@ impl World {
     /// executor, the way a node seeds its genesis cells). Emits a `CellBorn`
     /// dynamics event so the visual layer sees it appear. Returns its id.
     pub fn genesis_cell(&mut self, seed: u8, balance: i64) -> CellId {
-        let cell = make_open_cell(seed, balance);
-        self.install_genesis(cell, balance)
+        self.try_genesis_cell(seed, balance)
+            .expect("genesis setup requires an available World and a fresh cell")
+    }
+
+    /// Runtime creation variant which reports an unavailable image or a failed
+    /// durable write without panicking or returning an uninstalled cell id.
+    pub fn try_genesis_cell(&mut self, seed: u8, balance: i64) -> Result<CellId, String> {
+        self.try_install_genesis(make_open_cell(seed, balance), balance)
     }
 
     /// The single genesis install path: inserts `cell` into the live engine's
     /// ledger, records it in the replayable [`History`] (so the post-state root
     /// tooth is captured), and emits the `CellBorn` dynamics. Returns the id.
     fn install_genesis(&mut self, cell: Cell, balance: i64) -> CellId {
-        let id = cell.id();
+        self.try_install_genesis(cell, balance)
+            .expect("genesis setup requires an available World and a fresh cell")
+    }
+
+    fn try_install_genesis(&mut self, cell: Cell, balance: i64) -> Result<CellId, String> {
+        debug_assert_eq!(cell.state.balance(), balance);
+        self.try_genesis_install_batch(vec![cell]).map(|ids| ids[0])
+    }
+
+    /// Install related fresh cells as one durable birth operation. Validate all
+    /// identities before writing; publish cells and events only after the whole
+    /// batch reaches the store. A storage error leaves RAM unchanged and requires
+    /// reopen to establish whether the batch committed.
+    pub fn try_genesis_install_batch(&mut self, cells: Vec<Cell>) -> Result<Vec<CellId>, String> {
+        self.mutation_guard()?;
+        let mut ids = Vec::with_capacity(cells.len());
+        let mut seen = std::collections::BTreeSet::new();
+        for cell in &cells {
+            let id = cell.id();
+            if self.engine.ledger().get(&id).is_some() || !seen.insert(id.0) {
+                return Err(format!("genesis cell {} already exists", short(&id)));
+            }
+            ids.push(id);
+        }
+        if cells.is_empty() {
+            return Ok(ids);
+        }
+        // Persist before exposing any cell or adding it to the replay tape. A
+        // failed response can be ambiguous: latch and let reopen decide whether
+        // disk committed it, without publishing an in-memory success.
+        if let Some(p) = self.persist.as_ref() {
+            if let Err(error) = p.record_genesis_batch(&cells) {
+                return Err(self.latch_durability_failure(error));
+            }
+        }
         // Materialize a deferred replay-tape clone BEFORE the engine insert, so a
         // fork that genesis-installs before committing records onto the fork snapshot
         // (not an empty ledger) and record_genesis inserts into a fresh slot. No-op
         // on the live world (#7).
         self.ensure_record_ledger();
-        // Install into the AUTHORITATIVE engine ledger.
-        self.engine
-            .ledger_mut()
-            .insert_cell(cell.clone())
-            .expect("genesis insert is into a fresh slot");
-        // Mirror into the replay tape (its own ledger), capturing the root
-        // tooth. Same cell, same order → the recorded root equals the engine's.
-        self.history
-            .record_genesis(&mut self.record_ledger, cell.clone());
-        // DURABLE genesis mirror (SEAM §2): a genesis install emits no
-        // `CommitRecord`, so the durable image would miss this cell on reopen
-        // unless we record it here. Last-writer-wins by id (so a later in-place
-        // genesis mutation overwrites). Fail-closed: a durable error refuses the
-        // install rather than leaving RAM ahead of disk.
-        if let Some(p) = self.persist.as_ref() {
-            p.record_genesis(&cell)
-                .expect("durable genesis record must not fail on a healthy image");
+        for cell in cells {
+            let id = cell.id();
+            let balance = cell.state.balance();
+            // Install into the AUTHORITATIVE engine ledger.
+            self.engine
+                .ledger_mut()
+                .insert_cell(cell.clone())
+                .expect("genesis insert is into a fresh slot");
+            // Mirror into the replay tape (its own ledger), capturing the root
+            // tooth. Same cell, same order → the recorded root equals the engine's.
+            self.history.record_genesis(&mut self.record_ledger, cell);
+            self.emit_dynamics(WorldEvent::CellBorn {
+                cell: id,
+                balance,
+                genesis: true,
+            });
         }
-        self.emit_dynamics(WorldEvent::CellBorn {
-            cell: id,
-            balance,
-            genesis: true,
-        });
         // Genesis installs mutate the live ledger WITHOUT bumping height or pushing
         // a receipt, so the witness tooth is unchanged — bust the state_root memo.
         self.state_root_memo.set(None);
-        id
+        Ok(ids)
     }
 
     /// Materialize a DEFERRED replay-tape ledger clone (#7 — the fork double-clone).
@@ -962,44 +1103,49 @@ impl World {
         )
     }
 
-    /// Re-record a cell's current post-state into the durable genesis table (the
-    /// in-place genesis-path mutators call this when the image is durable, so a
-    /// genesis-SETUP `set_cell_program`/`genesis_grant_cap`/`genesis_open_permissions`
-    /// survives a reopen). No-op on an ephemeral world.
-    ///
-    /// This is now load-bearing ONLY for genesis-SETUP (a mutation BEFORE the cell's
-    /// first turn — the genesis-mirror snapshot IS the pre-turn base, so recovery's
-    /// turn re-execution sees the right cell). Runtime customization no longer routes
-    /// here: a mid-session reprogram/grant/permission-change rides an ORDERED turn
-    /// (`Effect::SetProgram` / `GrantCapability` / `SetPermissions`), landing a
-    /// `CommitRecord` so recovery replays it in order — the persist-durability
-    /// category error dissolved at its root.
-    fn durable_regenesis(&self, id: &CellId) {
+    /// Publish a staged genesis update only after its durable write succeeds.
+    /// The caller has already checked that no committed turn depends on this
+    /// cell's previous genesis image. A storage error leaves both RAM ledgers
+    /// unchanged and latches recovery-required state.
+    fn commit_genesis_update(&mut self, cell: Cell) -> Result<(), String> {
+        self.mutation_guard()?;
+        let id = cell.id();
         if let Some(p) = self.persist.as_ref() {
-            if let Some(cell) = self.engine.ledger().get(id) {
-                p.record_genesis(cell)
-                    .expect("durable genesis re-record must not fail on a healthy image");
+            if let Err(error) = p.record_genesis(&cell) {
+                return Err(self.latch_durability_failure(error));
             }
         }
+        self.ensure_record_ledger();
+        *self
+            .engine
+            .ledger_mut()
+            .get_mut(&id)
+            .expect("a staged genesis update retains its existing cell") = cell.clone();
+        if let Some(recorded) = self.record_ledger.get_mut(&id) {
+            *recorded = cell;
+        }
+        self.state_root_memo.set(None);
+        Ok(())
     }
 
     /// Would an in-place genesis-path mutation of `cell` corrupt the DURABLE image's
     /// reopen? TRUE iff this is a durable image AND a committed turn already touched
     /// `cell` — the genesis-mirror-after-turn bug (HORIZONLOG): the post-mutation
-    /// cell, recorded as timeless "genesis" by [`Self::durable_regenesis`], poisons
+    /// cell, recorded as timeless "genesis" by [`Self::commit_genesis_update`], poisons
     /// recovery's re-execution of that turn (it re-executes against the wrong base,
     /// diverges, and the fail-closed integrity check REFUSES the image). Genesis-SETUP
     /// mutations (before the cell's first turn) and ephemeral (non-durable) worlds
     /// return false — they are sound. The genesis-path mutators consult this to
     /// REFUSE fail-fast rather than silently corrupt the image on reopen.
     fn genesis_mutation_would_break_reopen(&self, cell: &CellId) -> bool {
-        self.is_durable()
-            && self.history.steps().iter().any(|s| match s {
-                crate::replay::RecordedStep::Committed { turn, .. } => {
-                    touched_cells(turn).iter().any(|c| c == cell)
-                }
-                crate::replay::RecordedStep::Genesis { .. } => false,
-            })
+        self.durability_failure.is_some()
+            || (self.is_durable()
+                && self.history.steps().iter().any(|s| match s {
+                    crate::replay::RecordedStep::Committed { turn, .. } => {
+                        touched_cells(turn).iter().any(|c| c == cell)
+                    }
+                    crate::replay::RecordedStep::Genesis { .. } => false,
+                }))
     }
 
     /// Install the genesis cell for an identity at its REAL derived id.
@@ -1014,9 +1160,19 @@ impl World {
     /// builds + installs the genesis cell (rather than the panel building the
     /// `Cell` itself).
     pub fn embody(&mut self, public_key: [u8; 32], token_id: [u8; 32], balance: i64) -> CellId {
+        self.try_embody(public_key, token_id, balance)
+            .expect("genesis setup requires an available World and a fresh identity")
+    }
+
+    pub fn try_embody(
+        &mut self,
+        public_key: [u8; 32],
+        token_id: [u8; 32],
+        balance: i64,
+    ) -> Result<CellId, String> {
         let mut cell = Cell::with_balance(public_key, token_id, balance);
         cell.permissions = open_permissions();
-        self.install_genesis(cell, balance)
+        self.try_install_genesis(cell, balance)
     }
 
     /// Install a genesis cell that already HOLDS a capability reaching
@@ -1029,20 +1185,35 @@ impl World {
         balance: i64,
         cap_target: CellId,
     ) -> (CellId, u32) {
+        self.try_genesis_cell_with_cap(seed, balance, cap_target)
+            .expect("genesis setup requires an available World and a fresh cell")
+    }
+
+    pub fn try_genesis_cell_with_cap(
+        &mut self,
+        seed: u8,
+        balance: i64,
+        cap_target: CellId,
+    ) -> Result<(CellId, u32), String> {
         let mut cell = make_open_cell(seed, balance);
         let slot = cell
             .capabilities
             .grant(cap_target, AuthRequired::None)
             .expect("fresh c-list has a free slot");
-        let id = self.install_genesis(cell, balance);
-        (id, slot)
+        let id = self.try_install_genesis(cell, balance)?;
+        Ok((id, slot))
     }
 
     /// Install a fully-specified cell (genesis path). For richer fixtures (a
     /// cell with a program, an issuer well carrying −supply, …).
     pub fn genesis_install(&mut self, cell: Cell) -> CellId {
+        self.try_genesis_install(cell)
+            .expect("genesis setup requires an available World and a fresh cell")
+    }
+
+    pub fn try_genesis_install(&mut self, cell: Cell) -> Result<CellId, String> {
         let balance = cell.state.balance();
-        self.install_genesis(cell, balance)
+        self.try_install_genesis(cell, balance)
     }
 
     // --- THE COMMIT PATH (every real state transition goes through here) -----
@@ -1054,6 +1225,19 @@ impl World {
     /// head, advances the height, appends the receipt to the provenance log, and
     /// derives + emits the dynamics events for the transition.
     pub fn commit_turn(&mut self, mut turn: Turn) -> CommitOutcome {
+        // An uncertain disk write is not an ephemeral-mode switch. This guard
+        // precedes suspension and every executor mutation, including fees and
+        // receipt-chain updates. Only reopening the durable image clears it.
+        if let Err(reason) = self.mutation_guard() {
+            self.emit_dynamics(WorldEvent::TurnRejected {
+                agent: turn.agent,
+                reason: reason.clone(),
+            });
+            return CommitOutcome::Rejected {
+                reason,
+                at_action: vec![],
+            };
+        }
         // THE SUSPEND GATE (meta-debug §3.2): if the live loop is halted, the turn
         // is STAGED, not run. The head freezes; the turn lands in `pending` in
         // arrival order and emits a `TurnQueued` event (so the dynamics stream stays
@@ -1150,21 +1334,21 @@ impl World {
         match self.engine.execute_turn(&turn) {
             Ok(receipt) => {
                 // THE DURABLE DUAL-WRITE (M4, A.2) — O(change), and it GATES the
-                // in-RAM advance. The engine's `execute_turn` above already mutated
-                // the ledger, but NOTHING else has advanced yet: the per-agent chain
-                // head, the replay tape, the height, and the receipts log are all
-                // still at their pre-turn values. We attempt the durable write FIRST,
-                // so a failure UNWINDS the single mutation that did happen (the
-                // ledger) and returns `Rejected` meaning *nothing happened* — never a
-                // half-applied turn (`receipts.len() == height` stays invariant and
-                // the image root stays consistent). Only on a durable SUCCESS (or an
+                // in-RAM publication. The engine's `execute_turn` above already
+                // mutated the ledger and its private receipt head; the replay
+                // tape, height, and public receipts remain at their pre-turn values.
+                // A write failure restores the ledger and private head, refuses
+                // publication, and requires reopen to discover the disk outcome.
+                // `receipts.len() == height` and the in-memory root stay consistent.
+                // Only on a durable SUCCESS (or an
                 // ephemeral/symbolic world that never durably writes) do we advance
                 // the in-RAM head below.
                 //
                 // FAIL-CLOSED (A.2.1, *Green Or Bust*): a durable-write error is NOT
                 // swallowed — the World refuses a commit it could not durably record,
-                // keeping RAM and disk in lock-step (the node's discipline), AND drops
-                // the store to ephemeral (loud, not silent).
+                // unwinding the in-memory attempt and latching the World read-only.
+                // A failed write can have an uncertain disk outcome; authoritative
+                // reopen must resolve it before any further mutation.
                 //
                 // SYMBOLIC EXECUTION: a deferred-witness turn has NO real post-state
                 // root to durably record (its receipt carries the deferred sentinel),
@@ -1190,8 +1374,8 @@ impl World {
                         }
                     }
                     // Split the borrows: take `persist` out, write through the
-                    // disjoint `engine` borrow, then put it back (or drop it on a
-                    // durable failure — the loud degrade-to-ephemeral path).
+                    // disjoint `engine` borrow, then put it back on success. A
+                    // failure drops the writer and latches recovery-required state.
                     let mut p = self.persist.take().expect("checked is_some");
                     // TEST FAULT-INJECTION: exercise the UNWIND path deterministically (a
                     // real redb write failure is not reproducible from a unit test).
@@ -1204,7 +1388,17 @@ impl World {
                             "injected durable-write failure (test: commit_turn unwind)".to_string(),
                         ))
                     } else {
-                        p.dual_write(height, self.engine.ledger(), &write_set, &receipt, &turn)
+                        let lose_response =
+                            FAIL_NEXT_DUAL_WRITE_RESPONSE.with(|c| c.replace(false));
+                        let result =
+                            p.dual_write(height, self.engine.ledger(), &write_set, &receipt, &turn);
+                        if result.is_ok() && lose_response {
+                            Err(dregg_persist::StoreError::Integrity(
+                                "injected error after durable commit".to_string(),
+                            ))
+                        } else {
+                            result
+                        }
                     };
                     #[cfg(not(all(test, not(target_arch = "wasm32"))))]
                     let result =
@@ -1225,8 +1419,9 @@ impl World {
                             self.engine.ledger_mut().commit_restore_point();
                         }
                         Err(e) => {
-                            // FULL UNWIND — restore the pre-turn image so `Rejected`
-                            // means NOTHING happened. `execute_turn` advanced TWO
+                            // Restore the in-memory pre-turn image. The disk
+                            // outcome may be uncertain, so reopening is required.
+                            // `execute_turn` advanced TWO
                             // things in RAM: the engine ledger AND the executor's
                             // per-agent receipt-chain head (the tape / height /
                             // receipts are advanced only below, after a durable
@@ -1235,8 +1430,8 @@ impl World {
                             // head to its captured prior value — so the world is
                             // byte-identical to pre-turn: `receipts.len() == height`
                             // holds and the image root is consistent again. `p` is
-                            // dropped (NOT put back) → the image degrades to
-                            // ephemeral, loudly named.
+                            // dropped (NOT put back); the recovery-required latch
+                            // prevents any later mutation on this image.
                             //
                             // The ledger half is the restore point armed above:
                             // every cell this turn touched (in ANY of the
@@ -1253,9 +1448,7 @@ impl World {
                             // to its pre-turn value; bust the memo so a stale advanced
                             // entry can never be served.
                             self.state_root_memo.set(None);
-                            let reason = format!(
-                                "durable image write failed (image no longer durable): {e}"
-                            );
+                            let reason = self.latch_durability_failure(e);
                             self.emit_dynamics(WorldEvent::TurnRejected {
                                 agent: turn.agent,
                                 reason: reason.clone(),
@@ -2057,23 +2250,37 @@ pub fn demo_genesis_at(timestamp: i64) -> (World, [CellId; 3], DemoSeed) {
 /// behavior (no store ⟹ no mirror). Returns the `[treasury, service, user]` anchors
 /// + the [`DemoSeed`] plan (drive it with [`DemoSeed::next`] to commit the 5 turns).
 pub fn seed_demo_genesis_onto(w: &mut World) -> ([CellId; 3], DemoSeed) {
-    let treasury = w.genesis_cell(0x11, 1_000_000);
-    let user = w.genesis_cell(0x33, 5_000);
+    try_seed_demo_genesis_onto(w).expect("demo setup requires an available World and fresh anchors")
+}
+
+pub fn try_seed_demo_genesis_onto(w: &mut World) -> Result<([CellId; 3], DemoSeed), String> {
+    w.mutation_guard()?;
+    let treasury_cell = make_open_cell(0x11, 1_000_000);
+    let user_cell = make_open_cell(0x33, 5_000);
+    let treasury = treasury_cell.id();
+    let user = user_cell.id();
     // The service is born already holding a capability reaching the user (so it
     // can legitimately re-grant it later — the no-amplification rule).
-    let (service, user_cap_slot) = w.genesis_cell_with_cap(0x22, 0, user);
+    let mut service_cell = make_open_cell(0x22, 0);
+    let service = service_cell.id();
+    let user_cap_slot = service_cell
+        .capabilities
+        .grant(user, AuthRequired::None)
+        .ok_or_else(|| "fresh demo service has no capability slot".to_string())?;
 
     // An issuer well carrying −supply (THE EPOCH: wells hold negative balance).
     let mut well = make_open_cell(0xEE, 0);
-    let _ = well.state.well_debit_balance(1_000_000);
-    w.genesis_install(well);
+    if !well.state.well_debit_balance(1_000_000) {
+        return Err("could not initialize the demo issuer well".to_string());
+    }
+    w.try_genesis_install_batch(vec![treasury_cell, user_cell, service_cell, well])?;
 
     let seed = DemoSeed {
         anchors: [treasury, service, user],
         user_cap_slot,
         step: 0,
     };
-    ([treasury, service, user], seed)
+    Ok(([treasury, service, user], seed))
 }
 
 /// The seed-turn plan for the demo image: the five real executor turns that give
@@ -2111,22 +2318,33 @@ impl DemoSeed {
     /// real verified turn — so a caller can drive it from a paint-friendly async
     /// loop, one turn per yield.
     pub fn next(&mut self, w: &mut World) -> Option<&'static str> {
+        self.try_next(w).expect("demo seed turn must commit")
+    }
+
+    /// Advance only after this seed turn actually commits. Runtime boot keeps
+    /// the same pending step on refusal and can report the storage/executor
+    /// error, instead of presenting an incompletely seeded World as ready.
+    pub fn try_next(&mut self, w: &mut World) -> Result<Option<&'static str>, String> {
+        if self.is_done() {
+            return Ok(None);
+        }
+        w.mutation_guard()?;
+        if w.suspended {
+            return Err("cannot seed a suspended World".to_string());
+        }
         let [treasury, service, user] = self.anchors;
-        let label = match self.step {
+        let (turn, label) = match self.step {
             0 => {
                 let t = w.turn(treasury, vec![transfer(treasury, service, 250_000)]);
-                let _ = w.commit_turn(t);
-                "treasury → service (250,000)"
+                (t, "treasury → service (250,000)")
             }
             1 => {
                 let t = w.turn(treasury, vec![transfer(treasury, user, 50_000)]);
-                let _ = w.commit_turn(t);
-                "treasury → user (50,000)"
+                (t, "treasury → user (50,000)")
             }
             2 => {
                 let t = w.turn(user, vec![transfer(user, service, 1_000)]);
-                let _ = w.commit_turn(t);
-                "user → service (1,000)"
+                (t, "user → service (1,000)")
             }
             3 => {
                 // An ocap grant: the service re-grants its user-capability back to
@@ -2141,19 +2359,25 @@ impl DemoSeed {
                         self.user_cap_slot + 1,
                     )],
                 );
-                let _ = w.commit_turn(t);
-                "service re-grants its user-cap (ocap)"
+                (t, "service re-grants its user-cap (ocap)")
             }
             4 => {
                 // A state-field write on the service cell.
                 let t = w.turn(service, vec![set_field(service, 0, [7u8; 32])]);
-                let _ = w.commit_turn(t);
-                "service state-field write"
+                (t, "service state-field write")
             }
-            _ => return None,
+            _ => return Ok(None),
         };
-        self.step += 1;
-        Some(label)
+        match w.commit_turn(turn) {
+            CommitOutcome::Committed { .. } => {
+                self.step += 1;
+                Ok(Some(label))
+            }
+            CommitOutcome::Rejected { reason, .. } => Err(reason),
+            CommitOutcome::Queued { .. } => {
+                Err("demo seed turn was queued, not committed".to_string())
+            }
+        }
     }
 }
 
@@ -2453,6 +2677,7 @@ impl SemihostCockpit {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 thread_local! {
     static FAIL_NEXT_DUAL_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_DUAL_WRITE_RESPONSE: StdCell<bool> = const { StdCell::new(false) };
 }
 
 /// Arm a one-shot injected durable-write failure: the NEXT `commit_turn` that
@@ -2619,12 +2844,12 @@ mod tests {
 
     /// ADVERSARIAL (durable-write no-rollback correctness bug): a `commit_turn`
     /// whose in-RAM apply SUCCEEDS but whose durable dual-write FAILS must UNWIND
-    /// completely — `Rejected` has to mean *nothing happened*. Before the fix the
+    /// its in-memory attempt completely and require reopen. Before the fix the
     /// engine ledger was mutated, the height/history/chain-head advanced, and the
     /// receipt was NOT pushed, so `receipts.len() == height - 1` (invariant break)
     /// and the image root went inconsistent. This asserts the post-failure state
-    /// is BYTE-IDENTICAL to the pre-turn state on every axis, and that a subsequent
-    /// honest turn commits cleanly off the (un-advanced) head.
+    /// is BYTE-IDENTICAL to the pre-turn state on every axis, and that subsequent
+    /// turns remain refused until authoritative reopen.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn durable_write_failure_fully_unwinds_the_commit() {
@@ -2645,6 +2870,7 @@ mod tests {
         // pre-turn state is non-trivial (chain head is `Some`, height is 1).
         let a = w.genesis_cell(1, 1_000);
         let b = w.genesis_cell(2, 0);
+        let untouched = w.genesis_cell(7, 0);
         let t1 = w.turn(a, vec![transfer(a, b, 100)]);
         assert!(
             w.commit_turn(t1).is_committed(),
@@ -2714,18 +2940,83 @@ mod tests {
             pre_root,
             "the recomputed image root must match (no memo/height/receipt skew)"
         );
-        // The store degraded to ephemeral, loudly (the preserved fail-closed behavior).
         assert!(
-            !w.is_durable(),
-            "a durable-write failure degrades the image to ephemeral"
+            w.is_durable(),
+            "a failure does not erase the durable contract"
         );
+        assert_eq!(w.durability_status(), DurabilityStatus::Unavailable);
+        assert!(w.durability_failure().unwrap().contains("reopen"));
 
-        // --- a subsequent honest turn commits cleanly off the un-advanced head ---
+        // A retry on the unrecovered image must not become an ephemeral commit.
         let t3 = w.turn(a, vec![transfer(a, b, 250)]);
         assert!(
-            w.commit_turn(t3).is_committed(),
-            "an honest turn must commit cleanly off the restored head"
+            matches!(w.commit_turn(t3), CommitOutcome::Rejected { reason, .. }
+                if reason.contains("reopen")),
+            "a later turn requires authoritative recovery"
         );
+        assert_eq!(w.height(), pre_height);
+        assert_eq!(w.receipts().len(), pre_receipts);
+        assert_eq!(w.chain_head(&a), pre_head);
+        assert_eq!(w.state_root(), pre_root);
+        assert_eq!(
+            crate::persistence::canonical_ledger_root(w.ledger()),
+            pre_ledger_root
+        );
+
+        // Suspension cannot hide the storage failure behind a queued promise.
+        w.suspend();
+        let staged = w.turn(a, vec![transfer(a, b, 1)]);
+        assert!(matches!(
+            w.commit_turn(staged),
+            CommitOutcome::Rejected { .. }
+        ));
+        assert_eq!(w.pending_len(), 0);
+        let mut fork = w.fork();
+        let predicted = fork.turn(a, vec![transfer(a, b, 1)]);
+        assert!(matches!(
+            fork.commit_turn(predicted),
+            CommitOutcome::Rejected { .. }
+        ));
+        assert_eq!(fork.durability_status(), DurabilityStatus::Unavailable);
+
+        let pre_cells = w.cell_count();
+        assert!(w.try_genesis_cell(3, 0).is_err());
+        assert!(w.try_genesis_install(make_open_cell(4, 0)).is_err());
+        assert!(w.try_genesis_cell_with_cap(5, 0, a).is_err());
+        assert!(w.try_embody([6; 32], [0; 32], 0).is_err());
+        assert!(w
+            .try_genesis_install_batch(vec![make_open_cell(8, 0)])
+            .is_err());
+        assert!(!w.set_cell_program(&a, dregg_cell::CellProgram::None));
+        assert!(!w.set_cell_heap(&b, std::collections::BTreeMap::new()));
+        assert!(!w.genesis_open_permissions(&a));
+        assert!(w.genesis_grant_cap(&a, b).is_none());
+        // This cell has no prior turn, so the old touched-cell guard cannot
+        // explain refusal. Storage unavailability closes every genesis path.
+        assert!(!w.set_cell_program(&untouched, dregg_cell::CellProgram::Predicate(vec![])));
+        assert!(!w.set_cell_heap(&untouched, doc_shaped_heap()));
+        assert!(!w.genesis_open_permissions(&untouched));
+        assert!(w.genesis_grant_cap(&untouched, a).is_none());
+        assert!(w.collapse().is_err());
+        assert_eq!(w.cell_count(), pre_cells);
+        assert_eq!(w.state_root(), pre_root);
+        assert_eq!(
+            crate::persistence::canonical_ledger_root(w.ledger()),
+            pre_ledger_root
+        );
+
+        drop(w);
+        let mut w = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("reopen decides the durable state before retry");
+        assert_eq!(w.durability_status(), DurabilityStatus::Ready);
+        assert_eq!(w.height(), pre_height);
+        assert_eq!(w.chain_head(&a), pre_head);
+        assert_eq!(
+            crate::persistence::canonical_ledger_root(w.ledger()),
+            pre_ledger_root
+        );
+        let retry = w.turn(a, vec![transfer(a, b, 250)]);
+        assert!(w.commit_turn(retry).is_committed());
         assert_eq!(
             w.height(),
             pre_height + 1,
@@ -2747,7 +3038,329 @@ mod tests {
             "the chain head advances for the successful re-commit"
         );
 
+        drop(w);
+        let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("the recovered retry was durable");
+        assert_eq!(reopened.height(), pre_height + 1);
+        assert_eq!(
+            reopened.ledger().get(&b).unwrap().state.balance(),
+            pre_b + 250
+        );
+        drop(reopened);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_write_failure_after_commit_requires_reopen_to_discover_the_result() {
+        let path = scratch_redb("durwrite-lost-response");
+        let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("fresh durable image");
+        let sender = world.genesis_cell(1, 1_000);
+        let recipient = world.genesis_cell(2, 0);
+        let original = world.turn(sender, vec![transfer(sender, recipient, 250)]);
+        FAIL_NEXT_DUAL_WRITE_RESPONSE.with(|fault| fault.set(true));
+        assert!(matches!(
+            world.commit_turn(original.clone()),
+            CommitOutcome::Rejected { .. }
+        ));
+        assert_eq!(world.durability_status(), DurabilityStatus::Unavailable);
+        assert_eq!(world.height(), 0, "the in-memory attempt was rolled back");
+        assert_eq!(world.ledger().get(&recipient).unwrap().state.balance(), 0);
+        assert!(matches!(
+            world.commit_turn(original),
+            CommitOutcome::Rejected { .. }
+        ));
+        drop(world);
+
+        let mut reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("recovery observes the actual durable outcome");
+        assert_eq!(reopened.durability_status(), DurabilityStatus::Ready);
+        assert_eq!(reopened.height(), 1);
+        assert_eq!(reopened.receipts().len(), 1);
+        assert_eq!(
+            reopened.ledger().get(&recipient).unwrap().state.balance(),
+            250
+        );
+        let next = reopened.turn(sender, vec![transfer(sender, recipient, 10)]);
+        assert!(reopened.commit_turn(next).is_committed());
+        assert_eq!(
+            reopened.ledger().get(&recipient).unwrap().state.balance(),
+            260
+        );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_genesis_batch_validates_every_member_before_publication() {
+        let path = scratch_redb("genesis-batch-validation");
+        let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("fresh durable image");
+        let existing = world.genesis_cell(1, 10);
+        let new = make_open_cell(2, 0);
+        let new_id = new.id();
+        let root = world.state_root();
+        let cursor = world.dynamics().cursor();
+        assert!(world
+            .try_genesis_install_batch(vec![new.clone(), make_open_cell(1, 10)])
+            .is_err());
+        assert!(world
+            .try_genesis_install_batch(vec![new.clone(), new.clone()])
+            .is_err());
+        assert_eq!(world.durability_status(), DurabilityStatus::Ready);
+        assert_eq!(world.state_root(), root);
+        assert_eq!(world.dynamics().cursor(), cursor);
+        assert!(world.ledger().get(&new_id).is_none());
+        drop(world);
+
+        let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("invalid batch wrote no prefix");
+        assert_eq!(world.cell_count(), 1);
+        assert!(world.ledger().get(&existing).is_some());
+        let other = make_open_cell(3, 20);
+        let other_id = other.id();
+        assert_eq!(
+            world.try_genesis_install_batch(vec![new, other]).unwrap(),
+            vec![new_id, other_id]
+        );
+        let root = crate::persistence::canonical_ledger_root(world.ledger());
+        drop(world);
+
+        let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("complete batch survives reopen");
+        assert_eq!(reopened.cell_count(), 3);
+        assert_eq!(
+            crate::persistence::canonical_ledger_root(reopened.ledger()),
+            root
+        );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_genesis_batch_storage_failure_exposes_no_births() {
+        let path = scratch_redb("genesis-batch-storage-failure");
+        let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("fresh durable image");
+        let root = world.state_root();
+        let cursor = world.dynamics().cursor();
+        world.persist.as_ref().unwrap().fail_config_io_for_test();
+        assert!(world
+            .try_genesis_install_batch(vec![make_open_cell(1, 10), make_open_cell(2, 20)])
+            .is_err());
+        assert_eq!(world.durability_status(), DurabilityStatus::Unavailable);
+        assert_eq!(world.cell_count(), 0);
+        assert_eq!(world.record_ledger.len(), 0);
+        assert_eq!(world.state_root(), root);
+        assert_eq!(world.dynamics().cursor(), cursor);
+        assert!(world.try_genesis_cell(3, 0).is_err());
+        drop(world);
+
+        let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("failed genesis batch left an empty image");
+        assert_eq!(reopened.cell_count(), 0);
+        assert_eq!(reopened.durability_status(), DurabilityStatus::Ready);
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_genesis_update_storage_failure_keeps_both_ledgers_and_events_unchanged() {
+        for kind in 0..4 {
+            let path = scratch_redb(&format!("genesis-update-storage-failure-{kind}"));
+            let mut world =
+                World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+                    .expect("fresh durable image");
+            // Default permissions differ from open_permissions, so that case
+            // would make a real change if publication happened before storage.
+            let original = Cell::with_balance([1; 32], [0; 32], 10);
+            let id = world.genesis_install(original);
+            let target = world.genesis_cell(2, 0);
+            let bytes = postcard::to_stdvec(world.ledger().get(&id).unwrap()).unwrap();
+            let root = world.state_root();
+            let cursor = world.dynamics().cursor();
+            world.persist.as_ref().unwrap().fail_config_io_for_test();
+            let changed = match kind {
+                0 => world.set_cell_program(&id, dregg_cell::CellProgram::Predicate(vec![])),
+                1 => world.set_cell_heap(&id, doc_shaped_heap()),
+                2 => world.genesis_open_permissions(&id),
+                _ => world.genesis_grant_cap(&id, target).is_some(),
+            };
+            assert!(
+                !changed,
+                "genesis mutator {kind} must report storage refusal"
+            );
+            assert_eq!(world.durability_status(), DurabilityStatus::Unavailable);
+            assert_eq!(
+                postcard::to_stdvec(world.ledger().get(&id).unwrap()).unwrap(),
+                bytes
+            );
+            assert_eq!(
+                postcard::to_stdvec(world.record_ledger.get(&id).unwrap()).unwrap(),
+                bytes
+            );
+            assert_eq!(world.state_root(), root);
+            assert_eq!(world.dynamics().cursor(), cursor);
+            assert!(world.mutation_guard().unwrap_err().contains("reopen"));
+            drop(world);
+
+            let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+                .expect("failed genesis update retained its old image");
+            assert_eq!(
+                postcard::to_stdvec(reopened.ledger().get(&id).unwrap()).unwrap(),
+                bytes
+            );
+            assert_eq!(reopened.durability_status(), DurabilityStatus::Ready);
+            drop(reopened);
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_session_io_failure_requires_reopen_without_overwriting_the_record() {
+        for reading in [false, true] {
+            let path = scratch_redb(if reading {
+                "session-read-failure"
+            } else {
+                "session-write-failure"
+            });
+            let mut world =
+                World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+                    .expect("fresh durable image");
+            assert_eq!(world.try_session_blob().unwrap(), None);
+            world.try_put_session_blob(b"original-session").unwrap();
+            if reading {
+                world.fail_config_io_for_test();
+                assert!(
+                    world.try_session_blob().is_err(),
+                    "read failure is not a missing record"
+                );
+            } else {
+                world.fail_session_write_for_test();
+                assert!(world.try_put_session_blob(b"replacement-session").is_err());
+            }
+            assert_eq!(world.durability_status(), DurabilityStatus::Unavailable);
+            assert!(world.try_put_session_blob(b"retry").is_err());
+            assert!(world.try_session_blob().is_err());
+            assert!(world.try_checkpoint_now().is_err());
+            assert!(world.try_genesis_cell(1, 0).is_err());
+            drop(world);
+
+            let mut reopened =
+                World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+                    .expect("reopen resolves the session storage state");
+            assert_eq!(
+                reopened.try_session_blob().unwrap(),
+                Some(b"original-session".to_vec())
+            );
+            reopened
+                .try_put_session_blob(b"replacement-session")
+                .unwrap();
+            drop(reopened);
+            let _ = std::fs::remove_file(path);
+        }
+
+        let mut ephemeral = World::new();
+        assert!(ephemeral.try_put_session_blob(b"session").is_err());
+        assert!(ephemeral.try_session_blob().is_err());
+        assert!(ephemeral.try_checkpoint_now().is_ok());
+        assert_eq!(ephemeral.durability_status(), DurabilityStatus::Ephemeral);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_checkpoint_failure_keeps_committed_history_and_requires_reopen() {
+        let path = scratch_redb("checkpoint-failure");
+        let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("fresh durable image");
+        let a = world.genesis_cell(1, 100);
+        let b = world.genesis_cell(2, 0);
+        let turn = world.turn(a, vec![transfer(a, b, 10)]);
+        assert!(world.commit_turn(turn).is_committed());
+        let root = world.state_root();
+        let cursor = world.dynamics().cursor();
+        world.persist.as_ref().unwrap().fail_checkpoint_for_test();
+        assert!(world.try_checkpoint_now().is_err());
+        assert_eq!(world.durability_status(), DurabilityStatus::Unavailable);
+        assert_eq!(world.state_root(), root);
+        assert_eq!(world.dynamics().cursor(), cursor);
+        let next = world.turn(a, vec![transfer(a, b, 1)]);
+        assert!(matches!(
+            world.commit_turn(next),
+            CommitOutcome::Rejected { .. }
+        ));
+        drop(world);
+
+        let mut reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("committed history survives without the failed checkpoint");
+        assert_eq!(reopened.height(), 1);
+        assert_eq!(reopened.state_root(), root);
+        reopened.try_checkpoint_now().unwrap();
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn demo_seed_refusal_preserves_the_pending_step_without_queueing() {
+        let mut world = World::new();
+        let (_, mut seed) = try_seed_demo_genesis_onto(&mut world).unwrap();
+        world.suspend();
+        assert!(seed.try_next(&mut world).is_err());
+        assert_eq!(seed.remaining(), DemoSeed::TOTAL);
+        assert_eq!(world.pending_len(), 0);
+        assert_eq!(world.height(), 0);
+    }
+
+    #[cfg(all(feature = "agent-js", not(target_arch = "wasm32")))]
+    #[test]
+    fn durable_write_failure_is_refused_through_the_attached_world_sink() {
+        use deos_js::WorldSink;
+        use std::{cell::RefCell, rc::Rc};
+
+        let path = scratch_redb("durwrite-attached-sink");
+        let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("fresh durable image");
+        let sender = world.genesis_cell(1, 1_000);
+        let recipient = world.genesis_cell(2, 0);
+        let world = Rc::new(RefCell::new(world));
+        let mut sink = crate::agent_attach::WorldSinkAdapter::live(world.clone());
+        arm_next_dual_write_failure();
+        assert!(sink
+            .fire_effects(sender, "transfer", vec![transfer(sender, recipient, 1)])
+            .unwrap_err()
+            .contains("reopen"));
+        assert!(sink
+            .fire_effects(sender, "transfer", vec![transfer(sender, recipient, 1)])
+            .unwrap_err()
+            .contains("reopen"));
+        assert_eq!(world.borrow().height(), 0);
+        assert_eq!(world.borrow().receipts().len(), 0);
+        assert_eq!(
+            world
+                .borrow()
+                .ledger()
+                .get(&recipient)
+                .unwrap()
+                .state
+                .balance(),
+            0
+        );
+        drop(sink);
+        drop(world);
+        let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
+            .expect("no attached sink attempt became durable");
+        assert_eq!(reopened.height(), 0);
+        assert_eq!(
+            reopened.ledger().get(&recipient).unwrap().state.balance(),
+            0
+        );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
     }
 
     /// ⚑ GATE (a), the CREATION arm. The unwind is no longer a whole-ledger

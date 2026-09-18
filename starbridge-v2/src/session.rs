@@ -402,6 +402,14 @@ impl LoginManager {
         principal: Principal,
         template: &CapTemplate,
     ) -> LoginOutcome {
+        if let Err(reason) = world.mutation_guard() {
+            return LoginOutcome::Denied { reason };
+        }
+        if world.is_suspended() {
+            return LoginOutcome::Denied {
+                reason: "login refused: world suspended".into(),
+            };
+        }
         let root_cell = principal.root_cell();
         let mut receipts = Vec::new();
 
@@ -417,13 +425,36 @@ impl LoginManager {
                 root_cell,
                 "the root cell IS the content-address of the key"
             );
-            world.genesis_install(cell);
+            if let Err(reason) = world.try_genesis_install(cell) {
+                return LoginOutcome::Denied { reason };
+            }
         }
 
         // GRANT the template — each entry, FROM the system principal, via the
         // real grant turn. The session is born holding exactly these.
         let mut granted = Vec::new();
         for entry in &template.entries {
+            // A prior grant may have committed before writing its resume record
+            // failed. Adopt that exact held authority on authenticated retry,
+            // instead of minting duplicate root edges and forgetting the first.
+            let held_slot = world.ledger().get(&root_cell).and_then(|root| {
+                root.capabilities
+                    .iter()
+                    .find(|cap| {
+                        cap.target == entry.target
+                            && cap.permissions == entry.max_permissions
+                            && cap.permissions != AuthRequired::Impossible
+                            && cap.breadstuff.is_none()
+                            && cap.expires_at.is_none()
+                            && cap.allowed_effects.is_none()
+                            && cap.stored_epoch.is_none()
+                    })
+                    .map(|cap| cap.slot)
+            });
+            if let Some(slot) = held_slot {
+                granted.push((entry.target, slot, entry.max_permissions.clone()));
+                continue;
+            }
             let slot = next_free_slot(world, &root_cell);
             let effect = Effect::GrantCapability {
                 from: self.system_principal,
@@ -490,24 +521,42 @@ impl LoginManager {
     /// granted leaf was reachable only through these root edges, so removing them
     /// darkens the whole session.
     ///
-    /// Returns the number of caps revoked (the session was holding them).
-    pub fn logout(&self, world: &mut World, session: &Session) -> usize {
-        let mut revoked = 0;
-        // Revoke from the highest slot down so each removal is stable (a revoke
-        // is over a live slot on the root cell).
-        let mut slots: Vec<u32> = session.granted.iter().map(|(_, slot, _)| *slot).collect();
+    /// Returns the number of session-root caps revoked. The revocations are
+    /// one turn, so a rejected write cannot leave a partially revoked cap set.
+    pub fn logout(&self, world: &mut World, session: &Session) -> Result<usize, String> {
+        world.mutation_guard()?;
+        if world.is_suspended() {
+            return Err("logout refused: world suspended".into());
+        }
+        let root = world
+            .ledger()
+            .get(&session.root_cell)
+            .ok_or_else(|| "logout refused: session root is absent".to_string())?;
+        // Read the whole live root, including caps acquired since login and
+        // grants whose session-record write failed. Logout must not leave those
+        // authorities active merely because the old record did not list them.
+        // An already-revoked root can retry its metadata write without another
+        // revoke turn.
+        let mut slots: Vec<u32> = root.capabilities.iter().map(|cap| cap.slot).collect();
         slots.sort_unstable();
-        for slot in slots.into_iter().rev() {
-            let effect = Effect::RevokeCapability {
+        let revoked = slots.len();
+        if revoked == 0 {
+            return Ok(0);
+        }
+        let effects = slots
+            .into_iter()
+            .rev()
+            .map(|slot| Effect::RevokeCapability {
                 cell: session.root_cell,
                 slot,
-            };
-            let turn = world.turn(session.root_cell, vec![effect]);
-            if world.commit_turn(turn).is_committed() {
-                revoked += 1;
-            }
+            })
+            .collect();
+        let turn = world.turn(session.root_cell, effects);
+        match world.commit_turn(turn) {
+            CommitOutcome::Committed { .. } => Ok(revoked),
+            CommitOutcome::Rejected { reason, .. } => Err(format!("logout refused: {reason}")),
+            CommitOutcome::Queued { .. } => Err("logout queued, not committed".into()),
         }
-        revoked
     }
 }
 
@@ -557,10 +606,16 @@ impl SessionRecord {
 
     /// Encode to the opaque blob stored in the image (postcard).
     pub fn encode(&self) -> Vec<u8> {
+        self.try_encode().expect("session record encodes")
+    }
+
+    /// Encode without turning a serialization failure into an empty record.
+    pub fn try_encode(&self) -> Result<Vec<u8>, String> {
         // A hand-rolled, dependency-free postcard-equivalent is avoided: the codec
         // must round-trip exactly, so use the workspace `postcard` the rest of the
         // persistence spine uses.
-        postcard::to_stdvec(&Encodable::from(self)).unwrap_or_default()
+        postcard::to_stdvec(&Encodable::from(self))
+            .map_err(|error| format!("session record could not be encoded: {error}"))
     }
 
     /// Decode from the opaque blob (returns `None` on a corrupt/empty record —
@@ -654,18 +709,40 @@ impl LoginManager {
         principal: Principal,
         template: &CapTemplate,
     ) -> LoginOutcome {
+        if let Err(reason) = world.mutation_guard() {
+            return LoginOutcome::Denied { reason };
+        }
         let root_cell = principal.root_cell();
 
         // RESUME path: a durable session record present, for THIS principal, NOT
         // revoked, whose granted tree is still live in the recovered ledger.
-        if let Some(record) = world.session_blob().and_then(|b| SessionRecord::decode(&b)) {
+        let saved = match world.try_session_blob() {
+            Ok(saved) => saved,
+            Err(reason) => return LoginOutcome::Denied { reason },
+        };
+        if let Some(bytes) = saved {
+            let Some(record) = SessionRecord::decode(&bytes) else {
+                return LoginOutcome::Denied {
+                    reason: "durable session record is invalid; refusing to overwrite it".into(),
+                };
+            };
             if record.pubkey == principal.pubkey && record.root_cell == root_cell && !record.revoked
             {
                 let session = record.to_session();
                 // Cross-check against the live ledger: the resume is only legitimate
                 // if the cap-tree the record describes is STILL held. A dark tree
                 // (e.g. an out-of-band revoke) falls through to a fresh ceremony.
-                if session.is_live(world) {
+                let intact = world.ledger().get(&root_cell).is_some_and(|root| {
+                    record.granted.iter().all(|(target, slot, permissions)| {
+                        root.capabilities.lookup(*slot).is_some_and(|cap| {
+                            cap.target == *target
+                                && cap.permissions == *permissions
+                                && cap.permissions != AuthRequired::Impossible
+                                && cap.expires_at.is_none()
+                        })
+                    })
+                });
+                if intact {
                     return LoginOutcome::Session(session);
                 }
             }
@@ -678,8 +755,17 @@ impl LoginManager {
         // Persistence is the default for a logged-in durable session — no save button.
         match self.login(world, principal, template) {
             LoginOutcome::Session(session) => {
-                world.put_session_blob(&SessionRecord::of(&session).encode());
-                LoginOutcome::Session(session)
+                match SessionRecord::of(&session)
+                    .try_encode()
+                    .and_then(|bytes| world.try_put_session_blob(&bytes))
+                {
+                    Ok(()) => LoginOutcome::Session(session),
+                    Err(reason) => LoginOutcome::Denied {
+                        reason: format!(
+                            "session grants committed, but resume record failed: {reason}"
+                        ),
+                    },
+                }
             }
             denied => denied,
         }
@@ -688,16 +774,25 @@ impl LoginManager {
     /// **LOGOUT, DURABLE** — revoke the session root (the cap-tree goes dark) AND
     /// write a REVOKED session record into the durable image, so a relaunch does
     /// NOT silently resume the revoked session ([`LoginManager::login_resumable`]
-    /// skips a revoked record). Returns the number of caps revoked.
-    pub fn logout_durable(&self, world: &mut World, session: &Session) -> usize {
+    /// skips a revoked record). Success means both the revoke turn and revoked
+    /// record were written. A later metadata failure preserves the committed
+    /// revocation and reports that the image needs recovery.
+    pub fn logout_durable(&self, world: &mut World, session: &Session) -> Result<usize, String> {
+        world.mutation_guard()?;
+        if !world.is_durable() {
+            return Err("durable logout requires a durable World".into());
+        }
         // The revoke turns dual-write durably (the darkened cap-tree survives a
         // reopen — recovery re-executes the revokes), AND the durable session record
         // is stamped REVOKED so `login_resumable` will not resume it on a relaunch.
-        let revoked = self.logout(world, session);
         let mut record = SessionRecord::of(session);
         record.revoked = true;
-        world.put_session_blob(&record.encode());
-        revoked
+        let bytes = record.try_encode()?;
+        let revoked = self.logout(world, session)?;
+        world.try_put_session_blob(&bytes).map_err(|reason| {
+            format!("session caps revoked, but logout record failed: {reason}")
+        })?;
+        Ok(revoked)
     }
 }
 
@@ -953,15 +1048,30 @@ impl IdentityKeystore {
 /// identity, seeded at construction, is "what authority does this desktop have to
 /// hand out". The login surface grants the per-user `CapTemplate` from here.
 pub fn provision_system_principal(world: &mut World, resources: &[CellId]) -> CellId {
+    try_provision_system_principal(world, resources)
+        .expect("fresh image has room for its system principal")
+}
+
+/// Fallible provisioning for a durable session image. A failed write is a login
+/// refusal, never a reason to continue with an unpersisted authority cell.
+pub fn try_provision_system_principal(
+    world: &mut World,
+    resources: &[CellId],
+) -> Result<CellId, String> {
+    world.mutation_guard()?;
+    world.try_genesis_install(system_principal_cell(resources)?)
+}
+
+fn system_principal_cell(resources: &[CellId]) -> Result<dregg_cell::Cell, String> {
     let mut sys = crate::world::make_open_cell(0x55, 0);
     for r in resources {
         // Full rights over each resource — the ceiling a session template
         // attenuates from. (`AuthRequired::None` = unconditional hold.)
         sys.capabilities
             .grant(*r, AuthRequired::None)
-            .expect("the system principal's c-list has a free slot per resource");
+            .ok_or_else(|| "system principal capability slots exhausted".to_string())?;
     }
-    world.genesis_install(sys)
+    Ok(sys)
 }
 
 // ===========================================================================
@@ -1031,7 +1141,9 @@ pub fn open_session_world(
     costs: dregg_turn::ComputronCosts,
 ) -> Result<(World, [CellId; 3], LoginManager, bool), crate::persistence::OpenError> {
     let path = session_world_path(base_dir, principal);
-    let _ = std::fs::create_dir_all(base_dir);
+    std::fs::create_dir_all(base_dir).map_err(|e| {
+        dregg_persist::StoreError::Database(format!("cannot create session directory: {e}"))
+    })?;
     // RECOVER, NEVER STRAND: a torn/divergent durable image (a crash mid-write,
     // a poisoned cell) is truncated to its last root-consistent ordinal and
     // reopened at the last-good state, rather than refused — the owner can ALWAYS
@@ -1066,10 +1178,20 @@ pub fn open_session_world(
         // re-provisioning. Their ids are content-addresses of the fixed seeds, so a
         // recovered image lines up with the deterministic `anchors` /
         // `system_principal` here.
-        world.genesis_install(crate::world::make_open_cell(s_treasury, 1_000_000));
-        world.genesis_install(crate::world::make_open_cell(s_service, 0));
-        world.genesis_install(crate::world::make_open_cell(s_user, 5_000));
-        let system_principal = provision_system_principal(&mut world, &anchors);
+        let system =
+            system_principal_cell(&anchors).map_err(dregg_persist::StoreError::Database)?;
+        let system_principal = system.id();
+        // Provision the complete anchor/authority set in one durable record.
+        // A failed write cannot strand a half-provisioned session that a reopen
+        // would mistake for a fully initialized one.
+        world
+            .try_genesis_install_batch(vec![
+                crate::world::make_open_cell(s_treasury, 1_000_000),
+                crate::world::make_open_cell(s_service, 0),
+                crate::world::make_open_cell(s_user, 5_000),
+                system,
+            ])
+            .map_err(dregg_persist::StoreError::Database)?;
         debug_assert_eq!(system_principal, anchor_id(SYSTEM_PRINCIPAL_SEED));
         Ok((world, anchors, LoginManager::new(system_principal), true))
     } else {
@@ -1077,10 +1199,17 @@ pub fn open_session_world(
         // content-address of its fixed seed — do NOT re-provision (that would land a
         // duplicate). Re-derive its id deterministically.
         let system_principal = anchor_id(SYSTEM_PRINCIPAL_SEED);
-        debug_assert!(
-            world.ledger().get(&system_principal).is_some(),
-            "the system principal must be recovered from the durable image on relaunch"
-        );
+        if anchors
+            .iter()
+            .chain(std::iter::once(&system_principal))
+            .any(|id| !world.ledger().contains(id))
+        {
+            return Err(dregg_persist::StoreError::Integrity(
+                "session provisioning is incomplete: an anchor or system principal is missing"
+                    .into(),
+            )
+            .into());
+        }
         Ok((world, anchors, LoginManager::new(system_principal), false))
     }
 }
@@ -1107,26 +1236,24 @@ pub fn start_fresh_session_world(
     let path = session_world_path(base_dir, principal);
     // Quarantine the unsalvageable image aside (keep it for forensics), so the
     // canonical path is free for a fresh provision. A missing file is fine (the
-    // image may never have existed); a rename failure is non-fatal — the fresh
-    // open below will overwrite/append, and the recovery has already truncated.
+    // image may never have existed). If quarantine fails, preserve the old image
+    // and refuse the reset; never provision over the image we promised to keep.
     if path.exists() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let aside = path.with_extension(format!("redb.corrupt-{nanos}"));
-        if let Err(e) = std::fs::rename(&path, &aside) {
-            eprintln!(
-                "[starbridge-v2] start_fresh_session_world: could not quarantine the corrupt \
-                 image ({e}) — proceeding to provision a fresh one over it"
-            );
-        } else {
-            eprintln!(
-                "[starbridge-v2] start_fresh_session_world: the prior durable image was \
-                 unsalvageable; quarantined it aside at {} and provisioned a fresh session",
+        std::fs::rename(&path, &aside).map_err(|e| {
+            dregg_persist::StoreError::Database(format!(
+                "session reset refused: could not preserve the prior image at {}: {e}",
                 aside.display()
-            );
-        }
+            ))
+        })?;
+        eprintln!(
+            "[starbridge-v2] start_fresh_session_world: prior image preserved at {}",
+            aside.display()
+        );
     }
     // A fresh open of the (now absent) canonical path provisions a brand-new image.
     open_session_world(base_dir, principal, costs)
@@ -1501,8 +1628,19 @@ mod tests {
         assert!(session.is_live(&w), "live before logout");
         assert!(session.reaches(&w, &home) && session.reaches(&w, &app));
 
-        let revoked = mgr.logout(&mut w, &session);
-        assert_eq!(revoked, 2, "both session caps revoked");
+        // A grant acquired after login is absent from the saved template. It is
+        // still session authority and must go dark with the root on logout.
+        let slot = next_free_slot(&w, &session.root_cell);
+        let acquired =
+            crate::world::grant_capability(mgr.system_principal, session.root_cell, home, slot);
+        let turn = w.turn(mgr.system_principal, vec![acquired]);
+        assert!(w.commit_turn(turn).is_committed());
+
+        let revoked = mgr.logout(&mut w, &session).expect("logout commits");
+        assert_eq!(
+            revoked, 3,
+            "initial and subsequently acquired session caps revoked"
+        );
 
         // The whole tree is dark: the root cell reaches NEITHER target.
         assert!(!session.reaches(&w, &home), "home is dark after logout");
@@ -1519,7 +1657,8 @@ mod tests {
 
         let first = mgr.login(&mut w, p, &user_template(home, app));
         let root = first.session().unwrap().root_cell;
-        mgr.logout(&mut w, first.session().unwrap());
+        mgr.logout(&mut w, first.session().unwrap())
+            .expect("logout commits");
         let cells_after_first = w.cell_count();
 
         // Returning login (same key): no new cell minted; same root cell.
@@ -1582,7 +1721,7 @@ mod tests {
 
         // LOGOUT — revoke the session root. (Revoke the original template slots;
         // the test then proves the WHOLE tree is dark for a fresh exercise.)
-        mgr.logout(&mut w, &session);
+        mgr.logout(&mut w, &session).expect("logout commits");
         // Also revoke the slot the live exercise minted, so the root holds nothing
         // reaching `home` at all (logout in the surface revokes the live c-list).
         let sweep = Effect::RevokeCapability {
@@ -1667,7 +1806,7 @@ mod tests {
 
         // Logout is the agent kill switch.
         assert_eq!(
-            mgr.logout(&mut w, &agent_session),
+            mgr.logout(&mut w, &agent_session).expect("logout commits"),
             1,
             "the agent's one cap revoked"
         );
@@ -1715,7 +1854,7 @@ mod tests {
         // Logout is the kill switch: revoke the agent's root → its whole ability
         // to act on the desktop goes dark in one turn.
         assert_eq!(
-            mgr.logout(&mut w, &session),
+            mgr.logout(&mut w, &session).expect("logout commits"),
             1,
             "the agent's one cap revoked"
         );
@@ -1773,6 +1912,161 @@ mod tests {
     ) -> (World, [CellId; 3], LoginManager, bool) {
         open_session_world(dir, principal, ComputronCosts::zero())
             .expect("open per-user session image")
+    }
+
+    #[test]
+    fn a_corrupt_session_record_refuses_login_without_replacing_it() {
+        let dir = scratch_dir();
+        let principal = Principal { pubkey: [0xE1; 32] };
+        let (mut world, anchors, manager, _) = open_resume(&dir, &principal);
+        world.try_put_session_blob(&[0xFF]).unwrap();
+        let before = (world.state_root(), world.height(), world.cell_count());
+        let outcome =
+            manager.login_resumable(&mut world, principal, &default_user_template(anchors));
+        assert!(matches!(outcome, LoginOutcome::Denied { reason } if reason.contains("invalid")));
+        assert_eq!(world.try_session_blob().unwrap(), Some(vec![0xFF]));
+        assert_eq!(
+            (world.state_root(), world.height(), world.cell_count()),
+            before
+        );
+        drop(world);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_durable_logout_preserves_all_session_caps_and_the_resume_record() {
+        let dir = scratch_dir();
+        let principal = Principal { pubkey: [0xE2; 32] };
+        let (mut world, anchors, manager, _) = open_resume(&dir, &principal);
+        let session =
+            match manager.login_resumable(&mut world, principal, &default_user_template(anchors)) {
+                LoginOutcome::Session(session) => session,
+                LoginOutcome::Denied { reason } => panic!("login: {reason}"),
+            };
+        let before = (world.state_root(), world.height(), world.receipts().len());
+        let record = world.try_session_blob().unwrap();
+        crate::world::arm_next_dual_write_failure();
+        let refusal = manager.logout_durable(&mut world, &session).unwrap_err();
+        assert!(refusal.contains("durable"), "{refusal}");
+        assert!(
+            session.is_live(&world),
+            "no recorded cap was partly revoked"
+        );
+        assert_eq!(
+            (world.state_root(), world.height(), world.receipts().len()),
+            before
+        );
+        assert!(world.try_checkpoint_now().is_err());
+        drop(world);
+
+        let (mut reopened, _, _, _) = open_resume(&dir, &principal);
+        assert!(session.is_live(&reopened));
+        assert_eq!(reopened.try_session_blob().unwrap(), record);
+        assert_eq!(
+            (
+                reopened.state_root(),
+                reopened.height(),
+                reopened.receipts().len()
+            ),
+            before
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn login_record_failure_refuses_then_reuses_the_committed_grants_on_retry() {
+        let dir = scratch_dir();
+        let principal = Principal { pubkey: [0xE3; 32] };
+        let (mut world, anchors, manager, _) = open_resume(&dir, &principal);
+        world.fail_session_write_for_test();
+        let template = default_user_template(anchors);
+        assert!(matches!(
+            manager.login_resumable(&mut world, principal, &template),
+            LoginOutcome::Denied { reason } if reason.contains("resume record failed")
+        ));
+        let root = principal.root_cell();
+        let before = world.state_root();
+        assert_eq!(world.ledger().get(&root).unwrap().capabilities.len(), 2);
+        drop(world);
+
+        let (mut world, _, manager, _) = open_resume(&dir, &principal);
+        assert!(world.try_session_blob().unwrap().is_none());
+        let session = match manager.login_resumable(&mut world, principal, &template) {
+            LoginOutcome::Session(session) => session,
+            LoginOutcome::Denied { reason } => panic!("retry: {reason}"),
+        };
+        assert!(
+            session.receipts.is_empty(),
+            "retry adopts durable grants without duplicating them"
+        );
+        assert_eq!(world.ledger().get(&root).unwrap().capabilities.len(), 2);
+        assert_eq!(world.state_root(), before);
+        assert_eq!(
+            world.try_session_blob().unwrap(),
+            Some(SessionRecord::of(&session).encode())
+        );
+        drop(world);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn logout_record_failure_reports_committed_revocation_and_can_finish_after_reopen() {
+        let dir = scratch_dir();
+        let principal = Principal { pubkey: [0xE4; 32] };
+        let (mut world, anchors, manager, _) = open_resume(&dir, &principal);
+        let session =
+            match manager.login_resumable(&mut world, principal, &default_user_template(anchors)) {
+                LoginOutcome::Session(session) => session,
+                LoginOutcome::Denied { reason } => panic!("login: {reason}"),
+            };
+        world.fail_session_write_for_test();
+        let error = manager.logout_durable(&mut world, &session).unwrap_err();
+        assert!(
+            error.contains("caps revoked, but logout record failed"),
+            "{error}"
+        );
+        assert!(!session.is_live(&world));
+        let height = world.height();
+        drop(world);
+
+        let (mut world, _, manager, _) = open_resume(&dir, &principal);
+        assert!(!session.is_live(&world));
+        assert_eq!(manager.logout_durable(&mut world, &session).unwrap(), 0);
+        assert_eq!(
+            world.height(),
+            height,
+            "finishing metadata is not another revoke"
+        );
+        let record = SessionRecord::decode(&world.try_session_blob().unwrap().unwrap()).unwrap();
+        assert!(record.revoked);
+        drop(world);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_session_record_read_failure_cannot_become_a_fresh_login() {
+        let dir = scratch_dir();
+        let principal = Principal { pubkey: [0xE5; 32] };
+        let (mut world, anchors, manager, _) = open_resume(&dir, &principal);
+        let template = default_user_template(anchors);
+        let session = manager.login_resumable(&mut world, principal, &template);
+        assert!(matches!(session, LoginOutcome::Session(_)));
+        let record = world.try_session_blob().unwrap();
+        let before = world.state_root();
+        world.fail_config_io_for_test();
+        assert!(matches!(
+            manager.login_resumable(&mut world, principal, &template),
+            LoginOutcome::Denied { reason } if reason.contains("durable")
+        ));
+        assert_eq!(world.state_root(), before);
+        drop(world);
+
+        let (mut world, _, _, _) = open_resume(&dir, &principal);
+        assert_eq!(world.try_session_blob().unwrap(), record);
+        assert_eq!(world.state_root(), before);
+        drop(world);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1847,7 +2141,7 @@ mod tests {
                 w.commit_turn(t).is_committed(),
                 "the session value turn commits + dual-writes"
             );
-            w.checkpoint_now();
+            w.try_checkpoint_now().expect("session checkpoint persists");
             (
                 session.root_cell,
                 w.ledger().get(&treasury).unwrap().state.balance(),
@@ -1935,20 +2229,24 @@ mod tests {
                 LoginOutcome::Denied { reason } => panic!("login: {reason}"),
             };
             assert!(session.is_live(&w), "live after login");
-            let revoked = mgr.logout_durable(&mut w, &session);
+            let revoked = mgr
+                .logout_durable(&mut w, &session)
+                .expect("durable logout commits");
             assert_eq!(revoked, 2, "logout revoked both session caps");
             assert!(!session.is_live(&w), "the cap-tree is dark after logout");
-            let rec =
-                SessionRecord::decode(&w.session_blob().expect("a record was written")).unwrap();
+            let rec = SessionRecord::decode(
+                &w.try_session_blob().unwrap().expect("a record was written"),
+            )
+            .unwrap();
             assert!(rec.revoked, "the durable session record is marked revoked");
-            w.checkpoint_now();
+            w.try_checkpoint_now().expect("session checkpoint persists");
         }
 
         // RELAUNCH: the revoked cap-tree stays dark across the reopen, and the
         // revoked record does NOT silently resume.
         {
             let (mut w, anchors, mgr, _fresh) = open_resume(&dir, &p);
-            let rec = SessionRecord::decode(&w.session_blob().unwrap()).unwrap();
+            let rec = SessionRecord::decode(&w.try_session_blob().unwrap().unwrap()).unwrap();
             assert!(
                 rec.revoked,
                 "the revoked record persisted across the reopen"
@@ -1976,7 +2274,7 @@ mod tests {
                 session.is_live(&w),
                 "the freshly re-granted session is live again"
             );
-            let rec2 = SessionRecord::decode(&w.session_blob().unwrap()).unwrap();
+            let rec2 = SessionRecord::decode(&w.try_session_blob().unwrap().unwrap()).unwrap();
             assert!(!rec2.revoked, "the re-login wrote a fresh LIVE record");
         }
 

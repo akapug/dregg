@@ -16,7 +16,7 @@
 //! `deos-js` `AttachedApplet::fire` is a thin wrapper over [`World::commit_turn`]).
 //!
 //! This is pure app/wiring: `project_cell` (checkpoint) + `reify_cell` (resume) +
-//! [`World::genesis_install`] (reconstitute) over the per-cell umem Stage A already
+//! [`World::try_genesis_install`] (reconstitute) over the per-cell umem Stage A already
 //! proved. **No new kernel effect** — the agent's memory is the projection of state it
 //! already owns, and the resume is the `reify_cell` inverse fold the umem boundary
 //! supplies, fail-closed under the SAME anti-substitution root tooth
@@ -58,6 +58,8 @@ pub enum AgentMemoryError {
     IdentityMismatch { expected: CellId, got: CellId },
     /// The carrier bytes could not be (de)serialized.
     Carrier(String),
+    /// The receiving World refused installation, including durable storage failure.
+    Installation(String),
 }
 
 impl std::fmt::Display for AgentMemoryError {
@@ -79,6 +81,7 @@ impl std::fmt::Display for AgentMemoryError {
                 write!(f, "resumed cell id {got} != checkpointed agent {expected}")
             }
             AgentMemoryError::Carrier(e) => write!(f, "checkpoint carrier (de)serialize: {e}"),
+            AgentMemoryError::Installation(e) => write!(f, "checkpoint installation refused: {e}"),
         }
     }
 }
@@ -168,6 +171,9 @@ impl AgentMemoryCheckpoint {
     ///  * the reconstituted id MUST equal the checkpointed agent
     ///    ([`AgentMemoryError::IdentityMismatch`]).
     pub fn resume_into(&self, world: &mut World) -> Result<CellId, AgentMemoryError> {
+        world
+            .mutation_guard()
+            .map_err(AgentMemoryError::Installation)?;
         let cell = umem::reify_cell(self.agent, &self.umem)
             .map_err(|e| AgentMemoryError::Reify(e.to_string()))?;
         let reified_root = cell_root_tooth(&cell);
@@ -185,14 +191,16 @@ impl AgentMemoryCheckpoint {
         if reproj != self.umem {
             return Err(AgentMemoryError::ReprojectionDrift);
         }
-        let id = world.genesis_install(cell);
+        let id = cell.id();
         if id != self.agent {
             return Err(AgentMemoryError::IdentityMismatch {
                 expected: self.agent,
                 got: id,
             });
         }
-        Ok(id)
+        world
+            .try_genesis_install(cell)
+            .map_err(AgentMemoryError::Installation)
     }
 
     /// **RESUME into a fresh World** — the common case: a brand-new World context whose

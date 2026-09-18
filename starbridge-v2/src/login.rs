@@ -336,7 +336,7 @@ impl LoginSurface {
 
         // Swap the shared world to the principal's durable image — the cockpit the
         // session shell builds renders THIS image (resumed or freshly provisioned).
-        *self.world.borrow_mut() = user_world;
+        let previous_world = std::mem::replace(&mut *self.world.borrow_mut(), user_world);
 
         // SUCCESS — transition to the session. Swap the window root to the cockpit
         // over the (now per-user durable) shared world, wrapped in the session
@@ -351,10 +351,17 @@ impl LoginSurface {
         // session record into the principal's durable image.
         let base_dir = session_base_dir();
 
-        SessionShell::open(
+        if let Err(reason) = SessionShell::open(
             window, cx, world, anchors, seed, node_url, manager, identities, session, identity,
             base_dir, fresh,
-        );
+        ) {
+            // Keep the login surface and its previous state. Dropping the failed
+            // image releases its single-writer handle so an explicit retry can
+            // reopen it; no cockpit is mounted over substitute ephemeral state.
+            *self.world.borrow_mut() = previous_world;
+            self.message = Some(format!("could not open the cockpit: {reason}"));
+            cx.notify();
+        }
     }
 
     fn identity_card(&self, identity: &DemoIdentity, cx: &mut Context<Self>) -> impl IntoElement {
@@ -732,6 +739,8 @@ pub struct SessionShell {
     #[allow(dead_code)] // held for the logout-revoke write into the session image
     base_dir: std::path::PathBuf,
     focus: FocusHandle,
+    /// A refused logout remains visible while this same World/session stays mounted.
+    logout_error: Option<String>,
     /// **THE WAKE EDGE** — the cockpit's only repaint driver
     /// ([`Cockpit::spawn_wake_edge`]). Held HERE, not detached, because gpui
     /// cancels a dropped task: the edge must live exactly as long as the cockpit
@@ -763,7 +772,17 @@ impl SessionShell {
         // so the cockpit boots into the calm sparse first-view rather than the full
         // 5-mode wall. A returning owner's wall is familiar (`false`).
         first_run: bool,
-    ) {
+    ) -> Result<(), String> {
+        // Finish all fallible World setup before replacing the login surface.
+        // Failure is returned to its existing in-surface message channel.
+        let cockpit = Cockpit::with_node(
+            world.clone(),
+            anchors,
+            cx.focus_handle(),
+            node_url.clone(),
+            seed,
+        )?;
+        let cockpit = cx.new(|_| cockpit);
         let world_for_root = world.clone();
         let node_for_root = node_url.clone();
         let manager_for_root = manager.clone();
@@ -780,18 +799,8 @@ impl SessionShell {
         // for the post-paint seeding / live-node pump tasks below.
         let mut shell_slot: Option<Entity<SessionShell>> = None;
         window.replace_root(cx, |window, cx| {
-            // Build the cockpit over the SAME shared world the login provisioned —
-            // the session's cap-tree governs what it renders.
-            let cockpit = cx.new(|c_cx| {
-                let focus = c_cx.focus_handle();
-                Cockpit::with_node(
-                    world_for_root.clone(),
-                    anchors,
-                    focus,
-                    node_for_root.clone(),
-                    seed,
-                )
-            });
+            // The cockpit was successfully prepared over this same shared World
+            // before the window root changes.
             // FIRST RUN — flip the cockpit into the calm sparse first-view for a
             // brand-new owner (the warm landing, not the wall). One click ("explore"
             // / a cell / "try this") reveals the full frame.
@@ -815,6 +824,7 @@ impl SessionShell {
                     identity: identity_for_root,
                     base_dir: base_dir_for_root,
                     focus,
+                    logout_error: None,
                     // Installed just below, once the shell (and so the cockpit
                     // entity id) exists.
                     wake_edge: None,
@@ -906,20 +916,30 @@ impl SessionShell {
             })
             .detach();
         }
+        Ok(())
     }
 
     /// LOGOUT — revoke the session root (the whole cap-tree goes dark, synchronous
     /// at `n = 1`) and swap the window root back to a fresh login surface. The
     /// authority simply ceases to exist; there is no stale session to expire.
     fn logout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        {
+        let outcome = (|| -> Result<(), String> {
             let mut w = self.world.borrow_mut();
             // DURABLE LOGOUT — revoke the cap-tree AND stamp the durable session
             // record REVOKED, so a relaunch does NOT silently resume this session
             // (SESSION RESUME's load-bearing security property). Then flush a
             // checkpoint so the revoked record + the darkened tree are on disk.
-            self.manager.logout_durable(&mut w, &self.session);
-            w.checkpoint_now();
+            self.manager.logout_durable(&mut w, &self.session)?;
+            w.try_checkpoint_now()?;
+            Ok(())
+        })();
+        if let Err(reason) = outcome {
+            self.logout_error = Some(format!("Logout could not be completed: {reason}"));
+            cx.notify();
+            return;
+        }
+        {
+            let mut w = self.world.borrow_mut();
             // RELEASE THE DURABLE HANDLE — redb is single-writer per file, so the
             // per-user image must be closed before a re-login (same identity) can
             // reopen it. Swap in a fresh ephemeral world; the next `login_as` opens
@@ -1023,6 +1043,9 @@ impl Render for SessionShell {
                             .child("logout"),
                     ),
             )
+            .when_some(self.logout_error.clone(), |shell, error| {
+                shell.child(div().px_3().py_2().text_color(theme::bad()).child(error))
+            })
             // The cockpit fills the rest — the WM renders exactly what the session
             // root cap authorizes.
             .child(div().flex_1().child(self.cockpit.clone()))

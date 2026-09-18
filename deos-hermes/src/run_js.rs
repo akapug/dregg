@@ -133,7 +133,7 @@ pub struct RunJsTool {
     public_key: [u8; 32],
     token_id: [u8; 32],
     seed_fields: Vec<(usize, FieldElement)>,
-    affordances_spec: Vec<(String, AuthRequired)>,
+    affordances_spec: Vec<(String, Requirement)>,
 }
 
 impl RunJsTool {
@@ -142,16 +142,17 @@ impl RunJsTool {
     ///
     /// `affordances_spec` is the agent's affordance surface — `(name, required)`
     /// pairs. A fire of `name` carries an `apply` that bumps the counter slot by
-    /// the JS-supplied arg (the spike's mutating shape); `required` is the cap the
-    /// fire is gated on. An affordance whose `required` the agent's `held` does
-    /// not satisfy can be *named* by JS but never *fires* — the over-reach the
-    /// cap tooth refuses in-band.
+    /// the JS-supplied arg (the spike's mutating shape); `required` is the
+    /// [`Requirement`] the fire must satisfy, distinct from the caller's held
+    /// [`AuthRequired`] capability. An affordance whose requirement the agent's
+    /// `held` does not satisfy can be *named* by JS but never *fires* — the
+    /// over-reach the cap tooth refuses in-band.
     pub fn new(
         held: AuthRequired,
         public_key: [u8; 32],
         token_id: [u8; 32],
         seed_fields: Vec<(usize, FieldElement)>,
-        affordances_spec: Vec<(String, AuthRequired)>,
+        affordances_spec: Vec<(String, Requirement)>,
     ) -> Self {
         RunJsTool {
             held,

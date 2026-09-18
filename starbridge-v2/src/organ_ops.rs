@@ -209,7 +209,12 @@ impl OrganDriver {
 
         // Birth the organ cell UNINIT (zero balance — value only ever MOVES), with
         // open permissions so the operator's own turns drive it directly.
-        let organ = world.genesis_cell(seed, 0);
+        let organ = world
+            .try_genesis_cell(seed, 0)
+            .map_err(|reason| OrganOpError::PreCheck {
+                op: OrganOp::Open,
+                reason,
+            })?;
 
         // Escrow the full line from the issuer into the organ cell (the funded
         // birth — a real conserving Transfer the executor commits). Done BEFORE
@@ -239,12 +244,9 @@ impl OrganDriver {
         // open permissions gate the program install), landing a `CommitRecord` so a
         // durable image reproduces it on replay — NOT a timeless genesis mutation.
         let install = world.turn(organ, vec![world::set_program(organ, program)]);
-        if let CommitOutcome::Rejected { reason, .. } = world.commit_turn(install) {
-            return Err(OrganOpError::ExecutorRejected {
-                op: OrganOp::Open,
-                reason,
-            });
-        }
+        self.commit(world, OrganOp::Open, organ, install, |_| {
+            "trustline program installed".into()
+        })?;
 
         // Write the terms + step UNINIT → OPEN in ONE program-gated turn. With the
         // new state == OPEN, each `pin_term` requires the literal (satisfied by
@@ -456,7 +458,12 @@ impl OrganDriver {
             return Err(OrganOpError::NotFound { cell: funder });
         }
 
-        let well = world.genesis_cell(seed, 0);
+        let well = world
+            .try_genesis_cell(seed, 0)
+            .map_err(|reason| OrganOpError::PreCheck {
+                op: OrganOp::Open,
+                reason,
+            })?;
         // THE OWNER IS THE WELL CELL ITSELF — read its own pubkey so the lifecycle
         // `SenderIs{owner}` gate is satisfied when the operator-root drives a
         // `world.turn(well, …)` (the acting cell's pubkey == owner). The single-
@@ -500,12 +507,9 @@ impl OrganDriver {
         // self-targeted on the well cell, whose open permissions gate the install).
         // Lands a `CommitRecord` so a durable image reproduces it on replay.
         let install = world.turn(well, vec![world::set_program(well, program)]);
-        if let CommitOutcome::Rejected { reason, .. } = world.commit_turn(install) {
-            return Err(OrganOpError::ExecutorRejected {
-                op: OrganOp::Open,
-                reason,
-            });
-        }
+        self.commit(world, OrganOp::Open, well, install, |_| {
+            "flash well program installed".into()
+        })?;
         // Write terms + prime the ratchet at rung 1 (the priming quantum = fee, the
         // schedule origin) + step UNINIT → OPEN. With state == OPEN, the term-pins
         // require the literals (satisfied here); the rung ladder
@@ -584,7 +588,21 @@ impl OrganDriver {
             // genesis guard refuses it. The sound full fix is born-with-the-adopt-cap
             // at the borrower's birth, or a per-touch program guard that scopes the
             // ratchet tooth to draws only — HORIZONLOG.)
-            world.genesis_grant_cap(&borrower, well);
+            world
+                .mutation_guard()
+                .map_err(|reason| OrganOpError::PreCheck {
+                    op: OrganOp::Draw,
+                    reason,
+                })?;
+            if world.genesis_grant_cap(&borrower, well).is_none() {
+                return Err(OrganOpError::PreCheck {
+                    op: OrganOp::Draw,
+                    reason: world
+                        .durability_failure()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| "borrower capability grant refused".into()),
+                });
+            }
         }
         let next_ratchet = r.ratchet.saturating_add(r.fee);
         // ONE turn the BORROWER signs carrying the whole ring: the draw out (well →

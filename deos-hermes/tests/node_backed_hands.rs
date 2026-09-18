@@ -44,7 +44,7 @@ use deos_hermes::{
     DreggHost, EgressPolicy, GrantRegistry, HermesGateway, NodeHandsError, NodeJsHands,
     ToolCallRequest, agent_cell_of, check_endpoint,
 };
-use dregg_cell::AuthRequired;
+use dregg_cell::{AuthRequired, Credential, Requirement};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
 
 // ───────────────────────────── the grantor ──────────────────────────────────
@@ -223,7 +223,10 @@ fn node_backed_run_js_rides_the_granted_door_and_fails_closed_on_refusal() {
         federation_id,
         AuthRequired::Signature, // held satisfies the `inc` affordance's required
         vec![],                  // no seed fields
-        vec![("inc".to_string(), AuthRequired::Signature)],
+        vec![(
+            "inc".to_string(),
+            Requirement::AtLeast(Credential::Signature),
+        )],
         gateway,
     )
     .expect("hands to a GRANTED node build");
@@ -319,7 +322,10 @@ fn node_outside_the_granted_door_is_refused() {
         [0u8; 32],
         AuthRequired::Signature,
         vec![],
-        vec![("inc".to_string(), AuthRequired::Signature)],
+        vec![(
+            "inc".to_string(),
+            Requirement::AtLeast(Credential::Signature),
+        )],
         gateway,
     );
     match built {

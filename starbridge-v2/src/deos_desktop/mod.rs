@@ -1523,10 +1523,13 @@ impl DeosDesktop {
     /// ensures the operator's post office exists on the World (a genesis-path install of
     /// their inbox + outbox cells + the town ferry), so a fresh room opens ready to write.
     fn open_mail_room(&mut self) {
-        {
+        let outcome = {
             let mut w = self.world.borrow_mut();
-            crate::letter_office::ensure_office(&mut w, self.user);
-            crate::letter_office::ensure_ferry(&mut w);
+            crate::letter_office::ensure_office(&mut w, self.user)
+        };
+        if let Err(error) = outcome {
+            self.say(format!("Mail Room REFUSED — {error}"));
+            return;
         }
         self.open_kind(mail_room::mail_room_window_cell(), WinKindTag::MailRoom);
         self.say(
@@ -6794,8 +6797,9 @@ impl DeosDesktop {
                     this.mail_draft = input.read(cx).value().to_string();
                 }
                 InputEvent::PressEnter { .. } => {
-                    this.mail_send_draft(mail_room::mail_room_window_cell());
-                    input.update(cx, |st, cx| st.set_value("", window, cx));
+                    if this.mail_send_draft(mail_room::mail_room_window_cell()) {
+                        input.update(cx, |st, cx| st.set_value("", window, cx));
+                    }
                     cx.notify();
                 }
                 _ => {}
@@ -6809,11 +6813,10 @@ impl DeosDesktop {
     /// turn from the operator to the chosen correspondent: the letter is born as a cell
     /// (its markdown in the heap), then dropped in the operator's outbox with a receipted
     /// turn. The subject is the first non-empty markdown line; the verdict is narrated.
-    fn mail_send_draft(&mut self, cell: CellId) {
-        let body = std::mem::take(&mut self.mail_draft);
-        let body = body.trim().to_string();
+    fn mail_send_draft(&mut self, cell: CellId) -> bool {
+        let body = self.mail_draft.trim().to_string();
         if body.is_empty() {
-            return;
+            return false;
         }
         let recipient = {
             let w = self.world.borrow();
@@ -6824,7 +6827,7 @@ impl DeosDesktop {
         };
         let Some(to) = recipient else {
             self.say("No one to write to yet — a resident must exist to receive a letter.");
-            return;
+            return false;
         };
         // The subject is the first non-empty line (heading marks trimmed), capped legibly.
         let subject: String = body
@@ -6841,15 +6844,22 @@ impl DeosDesktop {
             crate::letter_office::send_letter(&mut w, from, to, &subject, &body)
         };
         match outcome {
-            Ok(r) => self.say(format!(
-                "Letter posted to {} — it sits in your outbox awaiting the ferry (receipt {}).",
-                id_short(&to),
-                r.receipt[..4]
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-            )),
-            Err(e) => self.say(format!("Letter REFUSED — {e}")),
+            Ok(r) => {
+                self.mail_draft.clear();
+                self.say(format!(
+                    "Letter posted to {} — it sits in your outbox awaiting the ferry (receipt {}).",
+                    id_short(&to),
+                    r.receipt[..4]
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                ));
+                true
+            }
+            Err(e) => {
+                self.say(format!("Letter REFUSED — {e}"));
+                false
+            }
         }
     }
 
@@ -7074,8 +7084,12 @@ impl DeosDesktop {
                         )
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
-                                this.mail_send_draft(cell);
+                            cx.listener(move |this, _ev: &MouseDownEvent, window, cx| {
+                                if this.mail_send_draft(cell) {
+                                    if let Some(input) = this.mail_input.clone() {
+                                        input.update(cx, |st, cx| st.set_value("", window, cx));
+                                    }
+                                }
                                 cx.notify();
                             }),
                         )

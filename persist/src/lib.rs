@@ -314,6 +314,15 @@ impl From<postcard::Error> for StoreError {
 /// Result type alias for store operations.
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+#[cfg(test)]
+thread_local! {
+    // Consumed by one batch on this test thread. Returning before commit drops
+    // the real redb transaction, so tests can observe rollback of an inserted row.
+    static FAIL_CONFIG_BATCH_AFTER: std::cell::Cell<Option<usize>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
 /// The persistent store for all dregg state.
 ///
 /// Backed by `redb`, an embedded ACID key-value store. All operations are
@@ -1888,13 +1897,32 @@ impl PersistentStore {
 
     /// Store a byte blob under a config key.
     pub fn set_config(&self, key: &str, value: &[u8]) -> Result<()> {
+        self.set_config_batch(&[(key, value)])
+    }
+
+    /// Store related config blobs in one transaction. No prefix of this batch
+    /// becomes visible if an insertion fails before commit.
+    /// A commit error still requires the caller to recover its durable state.
+    pub fn set_config_batch(&self, entries: &[(&str, &[u8])]) -> Result<()> {
         if let Some(fault) = self.config_io_fault() {
             return Err(fault);
         }
+        #[cfg(test)]
+        let fail_after = FAIL_CONFIG_BATCH_AFTER.with(|fault| fault.take());
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(tables::METADATA_BYTES)?;
-            table.insert(key, value)?;
+            for (index, (key, value)) in entries.iter().enumerate() {
+                table.insert(*key, *value)?;
+                #[cfg(test)]
+                if fail_after == Some(index + 1) {
+                    return Err(StoreError::Database(
+                        "config batch failure injected after insert".to_string(),
+                    ));
+                }
+                #[cfg(not(test))]
+                let _ = index;
+            }
         }
         write_txn.commit()?;
         Ok(())

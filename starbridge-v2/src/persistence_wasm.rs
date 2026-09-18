@@ -64,7 +64,11 @@ impl WorldPersist {
         match *self {}
     }
 
-    pub fn checkpoint(&self, _ledger: &dregg_cell::Ledger, _height: u64) {
+    pub fn record_genesis_batch(&self, _cells: &[dregg_cell::Cell]) -> Result<(), StoreError> {
+        match *self {}
+    }
+
+    pub fn checkpoint(&self, _ledger: &dregg_cell::Ledger, _height: u64) -> Result<(), StoreError> {
         match *self {}
     }
 

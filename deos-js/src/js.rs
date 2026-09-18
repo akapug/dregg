@@ -868,9 +868,9 @@ impl JsRuntime {
     /// `source` drive the ATTACHED World's real cells (a receipt landing on the live
     /// ledger), with the cap tooth mounted under the agent's `held`.
     ///
-    /// Returns `(script_result, committed_receipt_hashes, the_target_back)`. The
-    /// caller keeps the [`AttachedApplet`] (and through it the `WorldSink`) to inspect
-    /// the live ledger after the run.
+    /// Returns the script status, committed receipt tape, and the target in an
+    /// [`AttachRunOutcome`]. The caller keeps the [`AttachedApplet`] (and through
+    /// it the `WorldSink`) to inspect the live ledger after the run.
     ///
     /// A script error is returned in [`AttachRunOutcome::js_error`] alongside the
     /// applet and its receipts. Earlier fires have already committed through the

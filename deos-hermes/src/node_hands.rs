@@ -49,7 +49,7 @@
 
 use deos_js::{JsRuntime, WorldSink};
 use dregg_cell::state::FieldElement;
-use dregg_cell::{AuthRequired, CellId};
+use dregg_cell::{AuthRequired, CellId, Requirement};
 use dregg_sdk::AgentCipherclerk;
 use dregg_sdk_net::NodeWorldSink;
 
@@ -78,7 +78,8 @@ pub enum NodeHandsError {
     /// Building the [`NodeWorldSink`] failed (e.g. its blocking runtime could not be
     /// stood up).
     Sink(String),
-    /// SpiderMonkey failed to boot, or the script failed to compile/evaluate.
+    /// SpiderMonkey failed to boot, or its attached target could not be recovered.
+    /// Script failures remain in `RunJsOutcome::js_error` with prior receipts.
     Engine(String),
 }
 
@@ -150,7 +151,8 @@ impl<'gw> NodeJsHands<'gw> {
     /// [`NodeHttpClient::fetch_executor_federation_id`](dregg_sdk_net::NodeHttpClient::fetch_executor_federation_id)).
     /// The agent's [`RunJsTool`] is built over the SAME cell identity, `held`,
     /// `seed_fields`, and `affordances_spec`, so a fire commits a turn binding the
-    /// agent's own held cell on the remote node.
+    /// agent's own held cell on the remote node. Each affordance declares a
+    /// [`Requirement`]; the caller's held capability remains [`AuthRequired`].
     ///
     /// Boots the process-global SpiderMonkey engine (one-shot) — call once per
     /// process, or use [`NodeJsHands::with_runtime`].
@@ -162,7 +164,7 @@ impl<'gw> NodeJsHands<'gw> {
         federation_id: [u8; 32],
         held: AuthRequired,
         seed_fields: Vec<(usize, FieldElement)>,
-        affordances_spec: Vec<(String, AuthRequired)>,
+        affordances_spec: Vec<(String, Requirement)>,
         gateway: HermesGateway<'gw>,
     ) -> Result<Self, NodeHandsError> {
         // THE EGRESS TOOTH FIRST — refuse an ungranted node before booting mozjs or
@@ -194,7 +196,7 @@ impl<'gw> NodeJsHands<'gw> {
         federation_id: [u8; 32],
         held: AuthRequired,
         seed_fields: Vec<(usize, FieldElement)>,
-        affordances_spec: Vec<(String, AuthRequired)>,
+        affordances_spec: Vec<(String, Requirement)>,
         gateway: HermesGateway<'gw>,
         rt: JsRuntime,
     ) -> Result<Self, NodeHandsError> {

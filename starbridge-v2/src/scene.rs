@@ -341,31 +341,25 @@ impl VerifiedScene {
         source_state_root: u64,
         z_layer: i64,
         focus: bool,
-    ) -> CellId {
-        self.scene.surfaces.push(CompositedSurface {
-            owner,
-            regions,
-            content_digest: initial_digest,
-            source_state_root,
-            z_layer,
-            focus_flag: focus,
-        });
+    ) -> Result<CellId, String> {
+        world.mutation_guard()?;
         // Seed the compositor cell for this owner if not already present.
         if let Some(existing) = self.compositor_cell.get(&owner) {
-            return *existing;
-        }
-        // Seed the compositor's HELD damage-notify authority over this surface's
-        // wake object — open by default (admit any damage kind) until a watcher
-        // attenuates it. The async damage edge is now a held cap, not ambient emit.
-        self.damage_notify
-            .entry(owner)
-            .or_insert_with(|| NotifyCap {
-                target: surface_notify_object(&owner),
-                rights: Rights::Either,
-                badge_mask: u64::MAX,
+            self.scene.surfaces.push(CompositedSurface {
+                owner,
+                regions,
+                content_digest: initial_digest,
+                source_state_root,
+                z_layer,
+                focus_flag: focus,
             });
+            return Ok(*existing);
+        }
         let cell = make_compositor_cell(owner, initial_digest);
-        let id = world.genesis_install(cell);
+        let id = cell.id();
+        if !world.ledger().contains(&id) {
+            world.try_genesis_install(cell)?;
+        }
         // The shell hands the presenter a surface cap on its compositor cell (the
         // Lean `compositorState`'s `[.endpoint cell …]`): the authority leg of a
         // `present()`. The SCENE CAVEAT, not this cap, is the load-bearing gate —
@@ -377,9 +371,32 @@ impl VerifiedScene {
         // the out-of-band `genesis_grant_cap` mutation — riding a turn lands a
         // `CommitRecord` so a durable image reproduces the grant on replay.
         let grant = world.turn(id, vec![crate::world::grant_capability(id, owner, id, 0)]);
-        let _ = world.commit_turn(grant);
+        match world.commit_turn(grant) {
+            CommitOutcome::Committed { .. } => {}
+            CommitOutcome::Rejected { reason, .. } => return Err(reason),
+            CommitOutcome::Queued { .. } => {
+                return Err("world suspended: surface grant queued, not committed".into());
+            }
+        }
+        // Publish the scene and its notification authority only after the durable
+        // grant succeeds. A refused open leaves the previous scene intact.
+        self.scene.surfaces.push(CompositedSurface {
+            owner,
+            regions,
+            content_digest: initial_digest,
+            source_state_root,
+            z_layer,
+            focus_flag: focus,
+        });
+        self.damage_notify
+            .entry(owner)
+            .or_insert_with(|| NotifyCap {
+                target: surface_notify_object(&owner),
+                rights: Rights::Either,
+                badge_mask: u64::MAX,
+            });
         self.compositor_cell.insert(owner, id);
-        id
+        Ok(id)
     }
 
     /// **PRESENT — the cap-gated frame advance, as a REAL verified turn.** The
@@ -620,9 +637,12 @@ mod tests {
         let browser = world.genesis_cell(0x02, 0);
         let chrome = world.genesis_cell(0x09, 0);
         let mut vs = VerifiedScene::with_default_grid();
-        vs.open_surface(world, wallet, vec![10, 11], 1, 500, 0, true);
-        vs.open_surface(world, browser, vec![20, 21], 5, 600, 0, false);
-        vs.open_surface(world, chrome, vec![99], 9, 700, 100, false);
+        vs.open_surface(world, wallet, vec![10, 11], 1, 500, 0, true)
+            .expect("fixture surface opens");
+        vs.open_surface(world, browser, vec![20, 21], 5, 600, 0, false)
+            .expect("fixture surface opens");
+        vs.open_surface(world, chrome, vec![99], 9, 700, 100, false)
+            .expect("fixture surface opens");
         (vs, wallet, browser)
     }
 
@@ -869,8 +889,10 @@ mod tests {
         let wallet = w.genesis_cell(0x01, 0);
         let browser = w.genesis_cell(0x02, 0);
         let mut vs = VerifiedScene::with_default_grid();
-        vs.open_surface(&mut w, wallet, vec![10, 11], 1, 500, 0, true);
-        vs.open_surface(&mut w, browser, vec![20, 21], 5, 600, 0, true); // ← TWO focus flags
+        vs.open_surface(&mut w, wallet, vec![10, 11], 1, 500, 0, true)
+            .expect("fixture surface opens");
+        vs.open_surface(&mut w, browser, vec![20, 21], 5, 600, 0, true)
+            .expect("fixture surface opens"); // ← TWO focus flags
         let receipts_before = w.receipts().len();
         // The wallet attempts an otherwise-honest present (own region, genuine
         // label, no focus claim) — but the SCENE is ambiguous, so it is refused.

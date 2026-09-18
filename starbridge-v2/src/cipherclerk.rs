@@ -232,12 +232,17 @@ impl Cipherclerk {
     /// the identity's cell at its REAL derived id over the same `(public_key,
     /// token_id)` pair `AgentCipherclerk::cell_id(domain)` derives — so the
     /// installed cell's id equals [`Identity::cell_id`]. Returns that id.
-    pub fn embody(&self, world: &mut World, identity: &Identity, balance: i64) -> CellId {
+    pub fn embody(
+        &self,
+        world: &mut World,
+        identity: &Identity,
+        balance: i64,
+    ) -> Result<CellId, String> {
         let pubkey = identity.public_key().0;
         let token_id = *blake3::hash(identity.domain.as_bytes()).as_bytes();
-        let id = world.embody(pubkey, token_id, balance);
+        let id = world.try_embody(pubkey, token_id, balance)?;
         debug_assert_eq!(id, identity.cell_id());
-        id
+        Ok(id)
     }
 }
 
@@ -907,8 +912,12 @@ mod tests {
         let bob = Identity::from_byte("bob", DOMAIN, 0xB0);
 
         // Embody both identities as real world cells at their real cell ids.
-        let alice_cell = clerk.embody(&mut world, &alice, 500);
-        let bob_cell = clerk.embody(&mut world, &bob, 0);
+        let alice_cell = clerk
+            .embody(&mut world, &alice, 500)
+            .expect("genesis resource installs");
+        let bob_cell = clerk
+            .embody(&mut world, &bob, 0)
+            .expect("genesis resource installs");
 
         // The world cell id IS the identity's real cell_id (the SDK derivation).
         assert_eq!(alice_cell, alice.cell_id());

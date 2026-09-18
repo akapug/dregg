@@ -110,6 +110,7 @@ pub fn boot_cockpit() {
                     // (no remote-federation panel on the web boot — the data plane is
                     // the in-tab executor); `pending_seed` lets it seed in live.
                     Cockpit::with_node(shared.clone(), anchors, focus, None, pending_seed)
+                        .expect("fresh in-browser cockpit opens")
                 });
                 cockpit.update(cx, |c, cx| c.focus_on_open(window, cx));
 

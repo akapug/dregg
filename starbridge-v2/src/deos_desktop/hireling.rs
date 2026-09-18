@@ -269,7 +269,7 @@ impl HirelingState {
         } else {
             resident_brain_from_env().describe()
         };
-        let mut handle = hire_resident_seeded(world, mandate, peer_seed, agent_seed);
+        let mut handle = hire_resident_seeded(world, mandate, peer_seed, agent_seed)?;
         handle.force_on_box = force_on_box;
         let cell = handle.cell;
         self.handle = Some(handle);

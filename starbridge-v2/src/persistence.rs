@@ -122,6 +122,51 @@ const GENESIS_ORDER_KEY: &str = "sbv2_genesis_order";
 /// suffices; logout overwrites it with a REVOKED marker so a revoked session does
 /// not silently resume.
 const SESSION_KEY: &str = "sbv2_session";
+const WORLD_HISTORY_HEAD_KEY: &str = "sbv2_world_history_v1_head";
+const WORLD_HISTORY_STEP_PREFIX: &str = "sbv2_world_history_v1_step:";
+const WORLD_CHECKPOINT_KEY: &str = "sbv2_world_history_v1_checkpoint";
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct WorldHistoryHead {
+    version: u32,
+    next_step: u64,
+    turns: u64,
+    root: [u8; 32],
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+enum WorldOperation {
+    GenesisBirth { cells: Vec<Cell> },
+    GenesisUpdate { cell: Box<Cell> },
+    Turn { ordinal: u64 },
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct WorldHistoryStep {
+    index: u64,
+    pre_root: [u8; 32],
+    post_root: [u8; 32],
+    operation: WorldOperation,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct WorldCheckpoint {
+    pub(crate) next_step: u64,
+    root: [u8; 32],
+    snapshot: LedgerCheckpoint,
+}
+
+fn history_step_key(index: u64) -> String {
+    format!("{WORLD_HISTORY_STEP_PREFIX}{index:020}")
+}
+
+fn encode<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StoreError> {
+    postcard::to_stdvec(value).map_err(|error| StoreError::Serialization(error.to_string()))
+}
+
+fn history_integrity(message: impl Into<String>) -> StoreError {
+    StoreError::Integrity(message.into())
+}
 
 fn turn_key(ordinal: u64) -> String {
     format!("{TURN_KEY_PREFIX}{ordinal:020}")
@@ -142,12 +187,18 @@ pub enum OpenError {
     /// (e.g. a hand-edited checkpoint cell). The image is REFUSED rather than
     /// served as silently-wrong truth (mirrors `state.rs:732-754`).
     Divergent { got: [u8; 32], expected: [u8; 32] },
+    /// Existing evidence lacks the ordered format required for faithful replay.
+    /// Preserve it for explicit migration; never invent lost event positions.
+    UnsupportedHistory { reason: String },
 }
 
 impl std::fmt::Display for OpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OpenError::Store(e) => write!(f, "durable store error: {e}"),
+            OpenError::UnsupportedHistory { reason } => {
+                write!(f, "durable history format unavailable: {reason}")
+            }
             OpenError::Divergent { got, expected } => write!(
                 f,
                 "recovery convergence FAILED: reconstructed ledger root {} != durably recorded \
@@ -184,6 +235,7 @@ pub struct WorldPersist {
     /// of truth (its torn-state guard re-checks it); this mirrors it for O(1)
     /// dual-write without a read-back.
     cursor: u64,
+    history_head: WorldHistoryHead,
     /// The INCREMENTAL canonical-root state (see [`LeafCache`]): `None` until the
     /// first durable commit primes it from the whole ledger, and dropped back to
     /// `None` whenever something changes the ledger outside a dual-write's
@@ -196,6 +248,10 @@ pub struct WorldPersist {
     /// in front of; it also keeps `WorldPersist` `Send + Sync`, which a `RefCell`
     /// would silently take away from every downstream holder.
     leaves: std::sync::Mutex<Option<LeafCache>>,
+    #[cfg(test)]
+    fail_checkpoint: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_session_write: std::sync::atomic::AtomicBool,
 }
 
 /// The incremental canonical-root state: the SORTED leaf set
@@ -280,19 +336,28 @@ pub struct DurableTurn {
 
 /// The fully-recovered image content `World::open` rebuilds its in-RAM spine on.
 pub struct RecoveredImage {
-    /// The recovered ledger (checkpoint ⊕ overlay, convergence-verified).
+    /// The recovered ledger, checked at every ordered step boundary.
     pub ledger: Ledger,
-    /// The durable genesis cells, in install order (for History::record_genesis).
-    pub genesis_cells: Vec<Cell>,
-    /// The durable input turns (each with the wall-clock it committed under), in
-    /// ordinal order. `World::open` RE-EXECUTES these through the embedded executor
-    /// (History::record_commit) to rebuild the History/receipts/engine spine +
-    /// re-prime each agent's chain head — the receipt is re-derived, never carried
-    /// across the durable boundary (A.4) — pinning the executor clock to each
-    /// turn's recorded [`DurableTurn::timestamp`] so the re-derivation is bit-exact.
-    pub committed: Vec<DurableTurn>,
+    pub steps: Vec<RecoveredStep>,
+    pub(crate) checkpoint: Option<WorldCheckpoint>,
     /// The durable commit cursor (== number of committed turns).
     pub cursor: u64,
+}
+
+pub enum RecoveredStep {
+    GenesisBirth {
+        cells: Vec<Cell>,
+        post_root: [u8; 32],
+    },
+    GenesisUpdate {
+        cell: Box<Cell>,
+        post_root: [u8; 32],
+    },
+    Turn {
+        durable: DurableTurn,
+        receipt_hash: [u8; 32],
+        post_root: [u8; 32],
+    },
 }
 
 impl WorldPersist {
@@ -301,14 +366,49 @@ impl WorldPersist {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let store = PersistentStore::open(path)?;
         let cursor = store.commit_cursor()?;
+        let history_head = match store.get_config(WORLD_HISTORY_HEAD_KEY)? {
+            Some(bytes) => {
+                let head: WorldHistoryHead = postcard::from_bytes(&bytes)
+                    .map_err(|error| StoreError::Serialization(error.to_string()))?;
+                if head.version != 1 {
+                    return Err(OpenError::UnsupportedHistory {
+                        reason: format!("World history version {} is unsupported", head.version),
+                    });
+                }
+                head
+            }
+            None => {
+                if cursor != 0
+                    || store.get_config(GENESIS_ORDER_KEY)?.is_some()
+                    || store.load_latest_ledger_checkpoint()?.is_some()
+                    || store.get_config(SESSION_KEY)?.is_some()
+                {
+                    return Err(OpenError::UnsupportedHistory { reason:
+                        "legacy World image has no ordered birth/update history; preserve it for explicit migration".to_string() });
+                }
+                let head = WorldHistoryHead {
+                    version: 1,
+                    next_step: 0,
+                    turns: 0,
+                    root: canonical_ledger_root(&Ledger::new()),
+                };
+                store.set_config(WORLD_HISTORY_HEAD_KEY, &encode(&head)?)?;
+                head
+            }
+        };
         Ok(WorldPersist {
             store,
             cursor,
+            history_head,
             // Unprimed: the first durable commit primes it from the ledger the
             // World rebuilt (`World::open` attaches the store only AFTER the
             // genesis + turn replay, so the first thing this cache ever sees is
             // the fully recovered image).
             leaves: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            fail_checkpoint: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_session_write: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -384,7 +484,7 @@ impl WorldPersist {
             if root != recomputed {
                 // The cache no longer describes the ledger: some cell changed
                 // outside every dual-write's change-set. Refuse the commit (the
-                // World unwinds and degrades to ephemeral, loudly) rather than
+                // World unwinds and requires authoritative reopen) rather than
                 // durably record a root the live image does not have.
                 *slot = None;
                 return Err(StoreError::Integrity(format!(
@@ -420,25 +520,134 @@ impl WorldPersist {
     /// reconstructs it even if no later turn touches it. First write for an id
     /// also appends the id to the install-order list (deterministic recovery
     /// order); a re-record of an existing id just overwrites its snapshot.
-    pub fn record_genesis(&self, cell: &Cell) -> Result<(), StoreError> {
-        // A genesis install / in-place genesis mutation changes the live ledger
-        // OUTSIDE any dual-write change-set, so the incremental leaf set no longer
-        // describes it. Drop it; the next durable commit re-primes from the whole
-        // ledger. (Genesis is setup-time and rare — the full recompute it costs is
-        // paid once per genesis batch, not per turn.)
-        self.invalidate_leaf_cache();
-        let id = cell.id().0;
-        let bytes =
-            postcard::to_stdvec(cell).map_err(|e| StoreError::Serialization(e.to_string()))?;
-        let mut order = self.genesis_order()?;
-        if !order.contains(&id) {
-            order.push(id);
-            let order_bytes = postcard::to_stdvec(&order)
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
-            self.store.set_config(GENESIS_ORDER_KEY, &order_bytes)?;
+    pub fn record_genesis(&mut self, cell: &Cell, before: &Ledger) -> Result<(), StoreError> {
+        if before.get(&cell.id()).is_none() {
+            return Err(history_integrity(
+                "genesis update requires an existing cell",
+            ));
         }
-        self.store.set_config(&genesis_key(&id), &bytes)?;
+        self.record_genesis_operation(
+            std::slice::from_ref(cell),
+            before,
+            WorldOperation::GenesisUpdate {
+                cell: Box::new(cell.clone()),
+            },
+        )
+    }
+
+    /// The exact ordered birth and its compatibility cell index cross one
+    /// transaction boundary. This records trusted setup, not kernel authority
+    /// or conservation; runtime resource birth has a separate accepted effect.
+    pub fn record_genesis_batch(
+        &mut self,
+        cells: &[Cell],
+        before: &Ledger,
+    ) -> Result<(), StoreError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for cell in cells {
+            if before.get(&cell.id()).is_some() || !seen.insert(cell.id().0) {
+                return Err(history_integrity(
+                    "genesis birth requires fresh distinct cells",
+                ));
+            }
+        }
+        self.record_genesis_operation(
+            cells,
+            before,
+            WorldOperation::GenesisBirth {
+                cells: cells.to_vec(),
+            },
+        )
+    }
+
+    fn plan_history_step(
+        &self,
+        operation: WorldOperation,
+        post_root: [u8; 32],
+        turns: u64,
+    ) -> Result<(WorldHistoryHead, Vec<(String, Vec<u8>)>), StoreError> {
+        if self.cursor != self.history_head.turns {
+            return Err(history_integrity(
+                "World turn cursor does not match ordered history",
+            ));
+        }
+        let index = self.history_head.next_step;
+        let next_step = index
+            .checked_add(1)
+            .ok_or_else(|| history_integrity("World history cursor overflow"))?;
+        let head = WorldHistoryHead {
+            version: 1,
+            next_step,
+            turns,
+            root: post_root,
+        };
+        let step = WorldHistoryStep {
+            index,
+            pre_root: self.history_head.root,
+            post_root,
+            operation,
+        };
+        let blobs = vec![
+            (history_step_key(index), encode(&step)?),
+            (WORLD_HISTORY_HEAD_KEY.to_string(), encode(&head)?),
+        ];
+        Ok((head, blobs))
+    }
+
+    fn record_genesis_operation(
+        &mut self,
+        cells: &[Cell],
+        before: &Ledger,
+        operation: WorldOperation,
+    ) -> Result<(), StoreError> {
+        if cells.is_empty() {
+            return Ok(());
+        }
+        if canonical_ledger_root(before) != self.history_head.root {
+            return Err(history_integrity(
+                "genesis pre-state differs from durable ordered history",
+            ));
+        }
+        let mut after = before.clone();
+        for cell in cells {
+            upsert_cell(&mut after, cell.clone());
+        }
+        let (head, mut blobs) =
+            self.plan_history_step(operation, canonical_ledger_root(&after), self.cursor)?;
+        let mut order = self.genesis_order()?;
+        for cell in cells {
+            let id = cell.id().0;
+            if !order.contains(&id) {
+                order.push(id);
+            }
+            blobs.push((genesis_key(&id), encode(cell)?));
+        }
+        blobs.push((GENESIS_ORDER_KEY.to_string(), encode(&order)?));
+        let entries: Vec<(&str, &[u8])> = blobs
+            .iter()
+            .map(|(key, bytes)| (key.as_str(), bytes.as_slice()))
+            .collect();
+        self.store.set_config_batch(&entries)?;
+        self.history_head = head;
+        self.invalidate_leaf_cache();
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_config_io_for_test(&self) {
+        self.store.set_fail_config_io(true);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_checkpoint_for_test(&self) {
+        self.fail_checkpoint
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_session_write_for_test(&self) {
+        self.fail_session_write
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Persist the opaque durable SESSION RECORD blob for this image (SESSION
@@ -446,6 +655,15 @@ impl WorldPersist {
     /// granted c-list snapshot; logout overwrites it with a REVOKED marker so a
     /// relaunch does not silently resume a revoked session.
     pub fn put_session(&self, bytes: &[u8]) -> Result<(), StoreError> {
+        #[cfg(test)]
+        if self
+            .fail_session_write
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(StoreError::Database(
+                "session write failure injected".to_string(),
+            ));
+        }
         self.store.set_config(SESSION_KEY, bytes)
     }
 
@@ -545,34 +763,52 @@ impl WorldPersist {
         let bytes =
             postcard::to_stdvec(&durable).map_err(|e| StoreError::Serialization(e.to_string()))?;
         let key = turn_key(self.cursor);
-        let assigned = match self.store.commit_finalized_turn_with_config(
-            self.cursor,
-            &record,
-            &[(key.as_str(), bytes.as_slice())],
-        ) {
-            Ok(assigned) => assigned,
-            Err(e) => {
-                // The leaf cache was advanced to this turn's post-state above, but
-                // the turn did NOT land: the caller (`World::commit_turn`) unwinds
-                // its ledger to the pre-turn snapshot, so the cache now describes a
-                // ledger that no longer exists. Drop it — the next commit re-primes
-                // from whatever the ledger actually is. (Today that caller also
-                // drops the whole store on this path, so the cache dies anyway;
-                // this makes the invariant local instead of a cross-file
-                // assumption someone else has to keep.)
-                self.invalidate_leaf_cache();
-                return Err(e);
-            }
-        };
+        let next_turn = self
+            .cursor
+            .checked_add(1)
+            .ok_or_else(|| history_integrity("World turn cursor overflow"))?;
+        let (head, mut blobs) = self.plan_history_step(
+            WorldOperation::Turn {
+                ordinal: self.cursor,
+            },
+            ledger_root,
+            next_turn,
+        )?;
+        blobs.push((key, bytes));
+        let entries: Vec<(&str, &[u8])> = blobs
+            .iter()
+            .map(|(key, bytes)| (key.as_str(), bytes.as_slice()))
+            .collect();
+        let assigned =
+            match self
+                .store
+                .commit_finalized_turn_with_config(self.cursor, &record, &entries)
+            {
+                Ok(assigned) => assigned,
+                Err(e) => {
+                    // The leaf cache was advanced to this turn's post-state above, but
+                    // the turn did NOT land: the caller (`World::commit_turn`) unwinds
+                    // its ledger to the pre-turn snapshot, so the cache now describes a
+                    // ledger that no longer exists. Drop it — the next commit re-primes
+                    // from whatever the ledger actually is. (Today that caller also
+                    // drops the whole store on this path, so the cache dies anyway;
+                    // this makes the invariant local instead of a cross-file
+                    // assumption someone else has to keep.)
+                    self.invalidate_leaf_cache();
+                    return Err(e);
+                }
+            };
         self.cursor = assigned + 1;
+        self.history_head = head;
         Ok(())
     }
 
     /// Periodic / on-close durable full-ledger checkpoint (C.1): serialize the
     /// whole ledger to redb keyed by `height`, so recovery's overlay
-    /// (`cell_overlay_since(height)`) is short. Non-fatal on error (a missed
-    /// checkpoint only lengthens the next recovery overlay; the commit log is
-    /// already durable).
+    /// (`cell_overlay_since(height)`) is short. Returns storage errors to the
+    /// World, which requires reopen before further writes. The commit log is
+    /// retained, so recovery can still reconstruct an image without the new
+    /// checkpoint.
     ///
     /// IMPORTANT — NO COMPACTION (the rewindable-image tradeoff, NAMED): the
     /// node's `checkpoint_ledger` CO-DRIVES `compact_below`, which DELETES the
@@ -584,75 +820,184 @@ impl WorldPersist {
     /// commit log (the rewind tape) is retained. Bounding the commit log itself is
     /// the *separate* later move (SEAM §2's collapse) that switches History to a
     /// checkpoint-anchored tape; until then a rewindable image keeps its full tape.
-    pub fn checkpoint(&self, ledger: &Ledger, height: u64) {
-        let snapshot = LedgerCheckpoint {
-            height,
-            cells: ledger.iter().map(|(_, c)| c.clone()).collect(),
-            sovereign_commitments: ledger
-                .iter_sovereign_commitments()
-                .map(|(id, c)| (id.0, *c))
-                .collect(),
-            sovereign_registrations: ledger
-                .iter_sovereign_registrations()
-                .map(|(id, r)| (id.0, r.clone()))
-                .collect(),
-        };
-        if let Err(e) = self.store.store_ledger_checkpoint_snapshot(&snapshot) {
-            eprintln!(
-                "[starbridge-v2] durable ledger checkpoint at height {height} failed: {e} \
-                 (commit log is durable; recovery overlay stays longer)"
-            );
+    pub fn checkpoint(&self, ledger: &Ledger, height: u64) -> Result<(), StoreError> {
+        #[cfg(test)]
+        if self
+            .fail_checkpoint
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(StoreError::Database(
+                "checkpoint failure injected".to_string(),
+            ));
         }
+        if height != self.history_head.turns
+            || canonical_ledger_root(ledger) != self.history_head.root
+        {
+            return Err(history_integrity(
+                "checkpoint must describe the current durable ordered step",
+            ));
+        }
+        let checkpoint = WorldCheckpoint {
+            next_step: self.history_head.next_step,
+            root: self.history_head.root,
+            snapshot: checkpoint_snapshot(ledger, height),
+        };
+        self.store
+            .set_config(WORLD_CHECKPOINT_KEY, &encode(&checkpoint)?)
     }
 
-    /// Boot-recovery: run the EXACT node recovery (checkpoint-load → overlay via
-    /// last-writer-wins `upsert_cell` → FAIL-CLOSED convergence check via the
-    /// canonical root), then load the durable genesis cells + committed turns so
-    /// the caller can rebuild the in-RAM History/receipts/chain-heads.
+    /// Recover trusted setup writes and accepted turns in their original order.
+    /// Every intermediate root is checked; no final genesis snapshot is moved
+    /// backwards over a turn. The independent executor replay in World::open
+    /// then checks the actual turn receipts and the complete checkpoint image.
     pub fn recover(&self) -> Result<RecoveredImage, OpenError> {
-        // 1. Load the latest full ledger checkpoint (or empty if none yet).
-        let (mut ledger, checkpoint_height) = match self.store.load_latest_ledger_checkpoint()? {
-            Some((h, l)) => (l, h),
-            None => (Ledger::new(), 0),
-        };
-
-        // 2. Apply the durable commit-log overlay since the checkpoint, in ordinal
-        //    order, LAST-WRITER-WINS (remove-then-insert) — exactly
-        //    node::upsert_cell. This is the `recover = checkpoint ⊕ overlay` half.
-        let overlay = self.store.cell_overlay_since(checkpoint_height)?;
-        for op in overlay {
-            match op {
-                // A removal (MakeSovereign tombstone) must DELETE, or the cell is
-                // resurrected as hosted and the root diverges — the bug the
-                // `removed` dimension closes.
-                CellOverlayOp::Upsert(cell) => upsert_cell(&mut ledger, cell),
-                CellOverlayOp::Remove(id) => {
-                    let _ = ledger.remove(&id);
+        let checkpoint: Option<WorldCheckpoint> = self
+            .store
+            .get_config(WORLD_CHECKPOINT_KEY)?
+            .map(|bytes| {
+                postcard::from_bytes(&bytes)
+                    .map_err(|error| StoreError::Serialization(error.to_string()))
+            })
+            .transpose()?;
+        if checkpoint
+            .as_ref()
+            .is_some_and(|cp| cp.next_step > self.history_head.next_step)
+        {
+            return Err(history_integrity("checkpoint is ahead of ordered World history").into());
+        }
+        let mut ledger = Ledger::new();
+        let mut steps = Vec::new();
+        let mut turns = 0u64;
+        let mut root = canonical_ledger_root(&ledger);
+        if let Some(cp) = checkpoint.as_ref().filter(|cp| cp.next_step == 0) {
+            verify_world_checkpoint(cp, &ledger, 0)?;
+        }
+        for index in 0..self.history_head.next_step {
+            let bytes = self
+                .store
+                .get_config(&history_step_key(index))?
+                .ok_or_else(|| {
+                    history_integrity(format!("ordered World history step {index} is missing"))
+                })?;
+            let step: WorldHistoryStep = postcard::from_bytes(&bytes)
+                .map_err(|error| StoreError::Serialization(error.to_string()))?;
+            if step.index != index || step.pre_root != root {
+                return Err(history_integrity(format!(
+                    "ordered World history pre-state mismatch at step {index}"
+                ))
+                .into());
+            }
+            let recovered = match step.operation {
+                WorldOperation::GenesisBirth { cells } => {
+                    if cells.is_empty() {
+                        return Err(history_integrity("empty genesis birth record").into());
+                    }
+                    for cell in &cells {
+                        ledger.insert_cell(cell.clone()).map_err(|error| {
+                            history_integrity(format!(
+                                "invalid genesis birth at step {index}: {error:?}"
+                            ))
+                        })?;
+                    }
+                    RecoveredStep::GenesisBirth {
+                        cells,
+                        post_root: step.post_root,
+                    }
                 }
+                WorldOperation::GenesisUpdate { cell } => {
+                    if ledger.get(&cell.id()).is_none() {
+                        return Err(history_integrity(format!(
+                            "genesis update has no prior cell at step {index}"
+                        ))
+                        .into());
+                    }
+                    upsert_cell(&mut ledger, *cell.clone());
+                    RecoveredStep::GenesisUpdate {
+                        cell,
+                        post_root: step.post_root,
+                    }
+                }
+                WorldOperation::Turn { ordinal } => {
+                    if ordinal != turns {
+                        return Err(history_integrity("ordered World turn ordinal mismatch").into());
+                    }
+                    let record = self.store.commit_record_at(ordinal)?.ok_or_else(|| {
+                        history_integrity(format!("World turn record {ordinal} is missing"))
+                    })?;
+                    let bytes = self.store.get_config(&turn_key(ordinal))?.ok_or_else(|| {
+                        history_integrity(format!("World turn input {ordinal} is missing"))
+                    })?;
+                    let durable: DurableTurn = postcard::from_bytes(&bytes)
+                        .map_err(|error| StoreError::Serialization(error.to_string()))?;
+                    if record.ordinal != ordinal
+                        || record.height != turns + 1
+                        || record.ledger_root != step.post_root
+                        || record.turn_hash != durable.turn.hash()
+                        || record.creator != durable.turn.agent.0
+                    {
+                        return Err(history_integrity(format!(
+                            "World turn carrier mismatch at ordinal {ordinal}"
+                        ))
+                        .into());
+                    }
+                    for cell in record.touched_cells {
+                        upsert_cell(&mut ledger, cell);
+                    }
+                    for id in record.removed {
+                        let _ = ledger.remove(&dregg_cell::CellId(id));
+                    }
+                    turns += 1;
+                    RecoveredStep::Turn {
+                        durable,
+                        receipt_hash: record.receipt_hash,
+                        post_root: step.post_root,
+                    }
+                }
+            };
+            root = canonical_ledger_root(&ledger);
+            if root != step.post_root {
+                return Err(history_integrity(format!(
+                    "ordered World history post-state mismatch at step {index}"
+                ))
+                .into());
             }
-        }
-
-        // 3. Convergence FAIL-CLOSED: the reconstructed canonical root MUST equal
-        //    the root the last committed turn durably recorded.
-        if let Some(expected) = self.store.recovered_ledger_root()? {
-            let got = canonical_ledger_root(&ledger);
-            if got != expected {
-                return Err(OpenError::Divergent { got, expected });
+            if let Some(cp) = checkpoint.as_ref().filter(|cp| cp.next_step == index + 1) {
+                if cp.root != root || cp.snapshot.height != turns {
+                    return Err(history_integrity(
+                        "checkpoint coordinates do not match their ordered step",
+                    )
+                    .into());
+                }
+                // Complete cell/sovereignty bytes are checked against actual
+                // execution by World::open, not trusted from this overlay.
             }
+            steps.push(recovered);
         }
-
-        // 4. Load the durable genesis cells + committed turns for the in-RAM spine
-        //    rebuild. The committed turns carry the input `Turn` (A.4) so History
-        //    is rebuildable for rewind, and the `(creator, receipt_hash)` per
-        //    ordinal re-derives each agent's chain head.
+        if root != self.history_head.root || turns != self.history_head.turns {
+            return Err(
+                history_integrity("ordered World history head does not match its steps").into(),
+            );
+        }
         let cursor = self.store.commit_cursor()?;
-        let genesis_cells = self.load_genesis_cells()?;
-        let committed = self.load_committed_turns(cursor)?;
-
+        if cursor > turns {
+            // A direct torn node-log tail has no World journal publication.
+            // Expose the divergence to the explicit recovery path.
+            let expected = self
+                .store
+                .recovered_ledger_root()?
+                .ok_or_else(|| history_integrity("missing unjournaled tail root"))?;
+            return Err(OpenError::Divergent {
+                got: root,
+                expected,
+            });
+        }
+        if cursor != turns {
+            return Err(history_integrity("World journal names missing committed turns").into());
+        }
         Ok(RecoveredImage {
             ledger,
-            genesis_cells,
-            committed,
+            steps,
+            checkpoint,
             cursor,
         })
     }
@@ -715,6 +1060,41 @@ impl WorldPersist {
 fn upsert_cell(ledger: &mut Ledger, cell: Cell) {
     let _ = ledger.remove(&cell.id());
     let _ = ledger.insert_cell(cell);
+}
+
+fn checkpoint_snapshot(ledger: &Ledger, height: u64) -> LedgerCheckpoint {
+    let mut snapshot = LedgerCheckpoint {
+        height,
+        cells: ledger.iter().map(|(_, cell)| cell.clone()).collect(),
+        sovereign_commitments: ledger
+            .iter_sovereign_commitments()
+            .map(|(id, commitment)| (id.0, *commitment))
+            .collect(),
+        sovereign_registrations: ledger
+            .iter_sovereign_registrations()
+            .map(|(id, registration)| (id.0, registration.clone()))
+            .collect(),
+    };
+    snapshot.cells.sort_by_key(|cell| cell.id().0);
+    snapshot.sovereign_commitments.sort_by_key(|(id, _)| *id);
+    snapshot.sovereign_registrations.sort_by_key(|(id, _)| *id);
+    snapshot
+}
+
+pub(crate) fn verify_world_checkpoint(
+    checkpoint: &WorldCheckpoint,
+    ledger: &Ledger,
+    height: u64,
+) -> Result<(), OpenError> {
+    if checkpoint.root != canonical_ledger_root(ledger)
+        || encode(&checkpoint.snapshot)? != encode(&checkpoint_snapshot(ledger, height))?
+    {
+        return Err(history_integrity(
+            "World checkpoint differs from execution at its ordered step",
+        )
+        .into());
+    }
+    Ok(())
 }
 
 // ===========================================================================
@@ -1156,7 +1536,7 @@ mod tests {
     /// a CORRUPT cached leaf is CAUGHT. Poke one leaf in the cache (the exact
     /// failure a stale/incomplete change-set would produce) and the next commit's
     /// full audit must REFUSE — `dual_write` returns `Err`, which `World` turns
-    /// into a rejected turn and a loud degrade-to-ephemeral, rather than durably
+    /// into a rejected turn and recovery-required state, rather than durably
     /// recording a root the live image does not have.
     #[test]
     fn a_corrupted_cached_leaf_is_refused_by_the_full_audit() {

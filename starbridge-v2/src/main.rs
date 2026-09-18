@@ -767,7 +767,10 @@ fn main() {
     #[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
     {
         if args.iter().any(|a| a == "--desktop") {
-            run_desktop_window();
+            if let Err(error) = run_desktop_window() {
+                eprintln!("desktop startup refused: {error}");
+                std::process::exit(1);
+            }
             return;
         }
     }
@@ -1052,7 +1055,7 @@ fn run_window(
 /// calm welcome greets a never-greeted image exactly once, then opens onto the arranged
 /// room. NOT gated behind `render-capture`: this is the live windowed entry, `--desktop`.
 #[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
-fn run_desktop_window() {
+fn run_desktop_window() -> anyhow::Result<()> {
     use gpui::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
     use gpui_platform::application;
     use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout};
@@ -1060,23 +1063,18 @@ fn run_desktop_window() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    // WHERE THE WORLD LIVES — a DURABLE redb image beside the layout sidecar by
-    // DEFAULT, so "your world is one durable image" is LITERALLY true for the windowed
-    // desktop: the World (cells, balances, receipts, every verified turn) survives a
-    // close + reopen, not just the layout sidecar. Overridable via
-    // `--world-image=<path>` / `--fresh-world` / the `DEOS_WORLD_IMAGE` env, with a
-    // `--world-image=:memory:` (aka `ephemeral`) escape hatch that keeps the OLD
-    // `demo_world()` behavior so bakes / tests / CI stay hermetic + deterministic. The
-    // heavy lifting — open-recovering, seed-on-first-run, the never-strand /
-    // never-silently-wipe fallbacks — lives in `durable_desktop`; this only parses the
-    // spec and reports the outcome.
+    // WHERE THE WORLD LIVES — resolve the explicitly selected durable image or
+    // ephemeral mode. `durable_desktop` opens, recovers, and seeds durable stores;
+    // an unsuccessful open, seed, or checkpoint stops startup before a window is
+    // created. Replacing an existing image requires the explicit `--fresh-world`
+    // choice. Report the actual origin after successful boot.
     let args: Vec<String> = std::env::args().collect();
     let spec = resolve_world_image_spec(&args);
     let DurableBoot {
         world,
         anchors,
         origin,
-    } = boot_desktop_world(spec);
+    } = boot_desktop_world(spec).map_err(anyhow::Error::msg)?;
     let [_treasury, _service, user] = anchors;
 
     // STARTUP PROOF (the no-blank-screen receipt): the desktop opens onto the live
@@ -1154,6 +1152,7 @@ fn run_desktop_window() {
         .expect("failed to open window");
         cx.activate(true);
     });
+    Ok(())
 }
 
 /// Resolve WHERE the windowed desktop's World lives from the CLI + the environment
@@ -1161,7 +1160,8 @@ fn run_desktop_window() {
 ///
 ///   1. `--world-image=<v>` / `--world-image <v>` (explicit),
 ///   2. else the `DEOS_WORLD_IMAGE` env knob,
-///   3. else the DEFAULT durable image beside the layout sidecar.
+///   3. else `--durable-world` selects the default image beside the layout sidecar;
+///      without that flag, use an ephemeral image.
 ///
 /// A value of `:memory:` (or `ephemeral`) is the ESCAPE HATCH — the old in-RAM
 /// `demo_world()` (bakes / tests / CI stay hermetic + deterministic). `--fresh-world`
@@ -3536,11 +3536,13 @@ fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
     cx.update(|cx| apply_deos_theme(None, cx));
     let (world, anchors) = world::demo_world();
     let shared = Rc::new(RefCell::new(world));
+    let cockpit = cx
+        .update(|cx| {
+            cockpit::Cockpit::with_node(shared.clone(), anchors, cx.focus_handle(), None, None)
+        })
+        .map_err(anyhow::Error::msg)?;
     let window = cx.open_window(size(px(W), px(H)), |window, cx| {
-        let view = cx.new(|cx| {
-            let focus = cx.focus_handle();
-            cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None)
-        });
+        let view = cx.new(|_cx| cockpit);
         view.update(cx, |c, cx| c.focus_on_open(window, cx));
         view
     })?;
@@ -3821,10 +3823,14 @@ fn render_shared_tape_frame(
     let (world, anchors, _outcome) = starbridge_v2::share_link::replay_fresh(tape);
     let shared = Rc::new(RefCell::new(world));
     let tab = tape.tab.clone();
+    let cockpit = cx
+        .update(|cx| {
+            cockpit::Cockpit::with_node(shared.clone(), anchors, cx.focus_handle(), None, None)
+        })
+        .map_err(anyhow::Error::msg)?;
     let window = cx.open_window(size(px(W), px(H)), |window, cx| {
-        let view = cx.new(|cx| {
-            let focus = cx.focus_handle();
-            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+        let view = cx.new(|_cx| {
+            let mut c = cockpit;
             if let Some(t) = &tab {
                 if !c.select_tab_named(t) {
                     eprintln!("shared replay: no tab named `{t}` — keeping the default surface");
@@ -4005,11 +4011,13 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
 
     let (world, anchors) = world::demo_world();
     let shared = Rc::new(RefCell::new(world));
+    let cockpit = cx
+        .update(|cx| {
+            cockpit::Cockpit::with_node(shared.clone(), anchors, cx.focus_handle(), None, None)
+        })
+        .map_err(anyhow::Error::msg)?;
     let window = cx.open_window(size(px(W), px(H)), |window, cx| {
-        let view = cx.new(|cx| {
-            let focus = cx.focus_handle();
-            cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None)
-        });
+        let view = cx.new(|_cx| cockpit);
         view.update(cx, |c, cx| c.focus_on_open(window, cx));
         view
     })?;
@@ -4238,6 +4246,11 @@ fn render_cockpit_headless(
 
     let shared = Rc::new(RefCell::new(world));
     let tab_owned = tab.map(|s| s.to_string());
+    let cockpit = cx
+        .update(|cx| {
+            cockpit::Cockpit::with_node(shared.clone(), anchors, cx.focus_handle(), None, None)
+        })
+        .map_err(anyhow::Error::msg)?;
 
     // 4. Open a headless window (logical w×h) whose ROOT IS a gpui-component `Root`
     //    wrapping the real Cockpit, on the requested surface (`--render-tab`). The
@@ -4245,9 +4258,8 @@ fn render_cockpit_headless(
     //    any kit text INPUT a surface bears (web-shell URL bar, editor/composer
     //    prompts) aborts on paint via `Root::read(window).unwrap()`. No node, no seed.
     let window = cx.open_window(size(px(w), px(h)), |window, cx| {
-        let view = cx.new(|cx| {
-            let focus = cx.focus_handle();
-            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+        let view = cx.new(|_cx| {
+            let mut c = cockpit;
             if let Some(t) = &tab_owned {
                 if !c.select_tab_named(t) {
                     eprintln!("render-tab: no tab named `{t}` — keeping default");
@@ -4426,10 +4438,14 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
     cx.update(|cx| apply_deos_theme(None, cx));
 
     let shared = rendered_world.clone();
+    let cockpit = cx
+        .update(|cx| {
+            cockpit::Cockpit::with_node(shared.clone(), anchors, cx.focus_handle(), None, None)
+        })
+        .map_err(anyhow::Error::msg)?;
     let window = cx.open_window(size(px(w), px(h)), |window, cx| {
-        let view = cx.new(|cx| {
-            let focus = cx.focus_handle();
-            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+        let view = cx.new(|_cx| {
+            let mut c = cockpit;
             if !c.select_tab_named("inspector") {
                 eprintln!("render-agent-attach: no inspector tab — keeping default");
             }
@@ -4687,11 +4703,13 @@ fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     // 2. Open the full cockpit (the window-root `Root` weld), capturing the inner
     //    `Cockpit` entity out of the builder so we can drive its onboarding methods.
     let mut cockpit_slot: Option<gpui::Entity<cockpit::Cockpit>> = None;
+    let cockpit = cx
+        .update(|cx| {
+            cockpit::Cockpit::with_node(shared.clone(), anchors, cx.focus_handle(), None, None)
+        })
+        .map_err(anyhow::Error::msg)?;
     let window = cx.open_window(size(px(w), px(h)), |window, cx| {
-        let view = cx.new(|cx| {
-            let focus = cx.focus_handle();
-            cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None)
-        });
+        let view = cx.new(|_cx| cockpit);
         view.update(cx, |c, cx| c.focus_on_open(window, cx));
         cockpit_slot = Some(view.clone());
         cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
@@ -6068,10 +6086,14 @@ fn render_webshell_live_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()
     let cockpit_slot: Rc<RefCell<Option<gpui::Entity<cockpit::Cockpit>>>> =
         Rc::new(RefCell::new(None));
     let cockpit_slot_build = cockpit_slot.clone();
+    let cockpit = cx
+        .update(|cx| {
+            cockpit::Cockpit::with_node(shared.clone(), anchors, cx.focus_handle(), None, None)
+        })
+        .map_err(anyhow::Error::msg)?;
     let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
-        let view = cx.new(|cx| {
-            let focus = cx.focus_handle();
-            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+        let view = cx.new(|_cx| {
+            let mut c = cockpit;
             c.select_tab_named("web-shell");
             c
         });
@@ -6231,10 +6253,14 @@ fn bake_inspector_over_world(
     cx.update(|cx| apply_deos_theme(None, cx));
 
     let shared = world.clone();
+    let cockpit = cx
+        .update(|cx| {
+            cockpit::Cockpit::with_node(shared.clone(), anchors, cx.focus_handle(), None, None)
+        })
+        .map_err(anyhow::Error::msg)?;
     let window = cx.open_window(size(px(w), px(h)), |window, cx| {
-        let view = cx.new(|cx| {
-            let focus = cx.focus_handle();
-            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+        let view = cx.new(|_cx| {
+            let mut c = cockpit;
             let _ = c.select_tab_named("inspector");
             c
         });
@@ -6340,8 +6366,14 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         [0x01; 32],
         vec![(AGENT_COUNTER_SLOT, deos_js::applet::pack_u64(pre_field))],
         vec![
-            ("bump".to_string(), AuthRequired::Signature),
-            ("escalate".to_string(), AuthRequired::Proof),
+            (
+                "bump".to_string(),
+                dregg_cell::Requirement::AtLeast(dregg_cell::Credential::Signature),
+            ),
+            (
+                "escalate".to_string(),
+                dregg_cell::Requirement::AtLeast(dregg_cell::Credential::Proof),
+            ),
         ],
     );
     // The accountability gateway: the metered, receipted turn the brain's `run_js`

@@ -743,9 +743,8 @@ impl Cockpit {
         ];
 
         // Mount the editor OVER the live cockpit `World` (the shared-ledger seam):
-        // the editor edits the SAME ledger the inspector reads. Fail-soft to the
-        // per-editor firmament default if the shared mount errors, so a mount
-        // failure can never take down the cockpit — but say so loudly.
+        // the editor edits the SAME ledger the inspector reads. A refused mount
+        // remains a refusal; opening a different store would hide a failed write.
         #[cfg(feature = "embedded-executor")]
         let surface: Box<dyn CockpitSurface> = {
             match EditorPane::firmament_over(
@@ -758,17 +757,9 @@ impl Cockpit {
             ) {
                 Ok(pane) => Box::new(pane),
                 Err(e) => {
-                    eprintln!(
-                        "open_editor_pane: shared-World mount failed, falling back to \
-                         per-editor firmament: {e:#}"
-                    );
-                    Box::new(EditorPane::new(
-                        id,
-                        deos_zed::fs::RealFs::arc(),
-                        root,
-                        window,
-                        cx,
-                    ))
+                    self.last_outcome = Some(format!("could not open World editor: {e:#}"));
+                    cx.notify();
+                    return;
                 }
             }
         };
@@ -3307,6 +3298,7 @@ mod popout_crash_repro {
                 let view = cx.new(|cx| {
                     let focus = cx.focus_handle();
                     Cockpit::with_node(shared.clone(), anchors, focus, None, None)
+                        .expect("demo cockpit resources install")
                 });
                 view.update(cx, |c, cx| c.focus_on_open(window, cx));
                 view
@@ -3524,6 +3516,7 @@ mod agent_memory_cockpit_affordance {
                 let view = cx.new(|cx| {
                     let focus = cx.focus_handle();
                     Cockpit::with_node(shared.clone(), anchors, focus, None, None)
+                        .expect("demo cockpit resources install")
                 });
                 view.update(cx, |c, cx| c.focus_on_open(window, cx));
                 view

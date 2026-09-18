@@ -72,6 +72,15 @@ impl Cockpit {
                 dregg_cell::AuthRequired::None,
             )
         };
+        let launched = match launched {
+            Ok(launched) => launched,
+            Err(reason) => {
+                self.powerbox_outcome = Some(format!("launch refused — {reason}"));
+                self.tab = Tab::Powerbox;
+                cx.notify();
+                return;
+            }
+        };
         // The freshly launched confined app is now the powerbox's current requester:
         // its standing request is routed through the existing Powerbox::present the
         // panel renders. Switch to the POWERBOX tab so the designation flow is in view.
@@ -111,9 +120,16 @@ impl Cockpit {
         let outcome = {
             let mut w = self.world.borrow_mut();
             let seed = (w.cell_count() as u8).wrapping_add(0x70);
-            let id = w.genesis_cell(seed, 0);
-            let turn = w.turn(id, vec![world::seal(id, "operator seal demo")]);
-            w.commit_turn(turn)
+            match w.try_genesis_cell(seed, 0) {
+                Ok(id) => {
+                    let turn = w.turn(id, vec![world::seal(id, "operator seal demo")]);
+                    w.commit_turn(turn)
+                }
+                Err(reason) => CommitOutcome::Rejected {
+                    reason,
+                    at_action: vec![],
+                },
+            }
         };
         self.note_outcome(outcome);
         self.refresh_cells();

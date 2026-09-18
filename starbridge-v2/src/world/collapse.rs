@@ -128,6 +128,7 @@ impl World {
     /// path until repaired. See the section banner above.
     #[doc(hidden)]
     pub fn collapse(&mut self) -> Result<usize, String> {
+        self.mutation_guard()?;
         // Defensive (#7): materialize any deferred replay-tape clone before the
         // Full re-execution reads/writes it. A fork is always Full (never symbolic),
         // so it never reaches collapse deferred; a live symbolic world is never

@@ -818,7 +818,7 @@ pub fn pick_up_gadget(
         }
         s
     };
-    let (shelf, _held_slot) = world.genesis_cell_with_cap(seed, 0, gadget_cell);
+    let (shelf, _held_slot) = world.try_genesis_cell_with_cap(seed, 0, gadget_cell)?;
 
     // The REAL powerbox grant: shelf (the holder) → the session root. One
     // verified turn; the gadget cell is neither the action target nor a grant
@@ -901,7 +901,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(g::PHASE_SUBMISSION),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `submit` through World: the next free WriteOnce slot is read
                         // from World's LIVE state (exactly as `fire_submit` reads the
                         // framework state), so the submission lands on World's ledger.
@@ -960,7 +960,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(a::PHASE_COMMIT),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `commit_bid` through World: next free WriteOnce commit slot
                         // read from World's live state.
                         let seal = dregg_app_framework::field_from_u64(0xB1D);
@@ -1023,7 +1023,7 @@ impl AppRegistry {
                                     value: b::state_field(b::STATE_OPEN),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `claim` through World: OPEN -> CLAIMED (StrictMonotonic
                         // re-enforced by World's executor).
                         let receipt = spine.commit(
@@ -1100,7 +1100,7 @@ impl AppRegistry {
                             default_domain_token(),
                             t::figure_deos_program(),
                             &seed_fields,
-                        );
+                        )?;
                         // COMMIT `commit_move` through World: write the sealed-move slot
                         // (the SAME seal `fire_commit_move` computes for the rest pose).
                         let figure_id = figure.as_bytes()[0];
@@ -1209,7 +1209,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(1),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `worker_step` through World: read the live spend +
                         // epoch off World's ledger (so the meter accumulates), then
                         // SPENT_A += cost, EPOCH += 1 (the SAME effects `fire_worker_step`
@@ -1293,7 +1293,7 @@ impl AppRegistry {
                                     value: genesis_link,
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `append_entry` through World: `append_effects` reads
                         // the live HEAD/TIP off World's ledger and chains the next entry.
                         let claim = dregg_app_framework::field_from_u64(0xC1A1);
@@ -1376,7 +1376,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(0),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `advance_step` through World: advance cursor 0 → 1
                         // (entering step 0 = review), presenting the officer clearance
                         // and the review compartment label — exactly what `fire_advance_step`
@@ -1449,7 +1449,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(j::STATE_POSTED),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `bid` through World: POSTED → BID, recording the provider
                         // + price (the SAME `bid_effects` the framework path fires).
                         let receipt = spine.commit(
@@ -1513,7 +1513,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(e::STATE_LISTED),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `fund` through World: LISTED → FUNDED, escrowing the
                         // buyer's amount (the SAME `fund_effects` the framework path fires).
                         let receipt =
@@ -1583,7 +1583,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(0),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `renew` through World: EXPIRY += one rent epoch, read off
                         // World's live state (Monotonic(EXPIRY) holds) — the SAME advance
                         // `fire_renew` computes.
@@ -1672,7 +1672,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(0),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `record_tally` through World: increment the YES tally,
                         // read off World's live state (the SAME accumulating fire
                         // `fire_record_tally` performs).
@@ -1769,7 +1769,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(0),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `put` through World: read the live volume meter off
                         // World's ledger, debit the object size, and write the object key
                         // + last-op (the SAME `put_effects` the framework path fires).
@@ -1836,7 +1836,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(0),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `publish` through World: read the live head off World's
                         // ledger, advance it, and fold the new message-commitment root
                         // (the SAME `publish_effects` the framework path fires).
@@ -1916,7 +1916,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(1),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `dispatch` through World: read the live worker-A meter +
                         // epoch off World's ledger, debit cost 1, advance the epoch (the
                         // SAME `dispatch_effects` the framework path fires).
@@ -1984,7 +1984,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(0),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT through World carrying the `invoke_tool` METHOD SYMBOL
                         // (the Cases dispatch case; the surface name is `invoke` but the
                         // wire method MUST be `invoke_tool` or the Cases program default-
@@ -2094,7 +2094,7 @@ impl AppRegistry {
                                     value: el::cell_tag(provider),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `advance` through World: read the live durable cursor off
                         // World's ledger and move it forward by one (Monotonic(STEP) holds) —
                         // the SAME advance `fire_advance` computes.
@@ -2175,7 +2175,7 @@ impl AppRegistry {
                                     value: genesis_link,
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `accept_custody` through World, AUTHENTICATED: the incoming
                         // holder takes the baton FOR ITSELF (CUSTODIAN := the firing principal,
                         // unchanged value), strictly advances EPOCH 1 → 2, appends link_1
@@ -2281,7 +2281,7 @@ impl AppRegistry {
                                     value: auth_root,
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `issue` through World, AUTHENTICATED: advance the issuance
                         // counter +1 off live state (MonotonicSequence holds), CARRYING the
                         // single-member membership proof so the real MerkleMembership verifier
@@ -2388,7 +2388,7 @@ impl AppRegistry {
                                     value: dregg_app_framework::field_from_u64(0),
                                 },
                             ],
-                        );
+                        )?;
                         // COMMIT `propose_table_update` through World, AUTHENTICATED: advance
                         // the pending root past its live value (Monotonic in the propose case),
                         // CARRYING the single-member membership proof so the real
@@ -2485,7 +2485,7 @@ impl AppRegistry {
                             default_domain_token(),
                             program,
                             &[],
-                        );
+                        )?;
                         let gov_cell = spine.app_cell();
                         // COMMIT `propose` through World: DRAFT(0) → PROPOSED(1),
                         // staging a proposal hash (WriteOnce) and publishing the

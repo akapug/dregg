@@ -28,7 +28,7 @@ use deos_hermes::run_js::RunJsTool;
 use deos_hermes::{GrantRegistry, HermesGateway, ToolCallRequest};
 use deos_js::JsRuntime;
 use deos_js::applet::pack_u64;
-use dregg_cell::AuthRequired;
+use dregg_cell::{AuthRequired, Credential, Requirement};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
 
 /// deos the grantor: the runtime that admits the agent's `run_js` worker and runs
@@ -56,8 +56,14 @@ fn agent_tool() -> RunJsTool {
         //   * `escalate` — gated Proof: the agent's `held` does NOT satisfy it →
         //     the over-reach the cap tooth refuses in-band.
         vec![
-            ("assist".to_string(), AuthRequired::Signature),
-            ("escalate".to_string(), AuthRequired::Proof),
+            (
+                "assist".to_string(),
+                Requirement::AtLeast(Credential::Signature),
+            ),
+            (
+                "escalate".to_string(),
+                Requirement::AtLeast(Credential::Proof),
+            ),
         ],
     )
 }

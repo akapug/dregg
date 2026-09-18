@@ -437,20 +437,22 @@ impl AppLauncher {
         name: impl Into<String>,
         reason: impl Into<String>,
         desired: AuthRequired,
-    ) -> LaunchedApp {
+    ) -> Result<LaunchedApp, String> {
         // Birth a FRESH confined cell. A `make_open_cell`-shaped genesis cell holds an
         // EMPTY c-list (no ambient authority) — exactly a confined app-as-cell. The seed
         // is chosen unoccupied so the genesis insert lands in a free slot (re-runnable).
-        let seed = fresh_app_seed(world);
-        let app_cell = world.genesis_cell(seed, 0);
+        world.mutation_guard()?;
+        let seed = fresh_app_seed(world)
+            .ok_or_else(|| "app launch refused: cell identity seeds exhausted".to_string())?;
+        let app_cell = world.try_genesis_cell(seed, 0)?;
 
         let name = name.into();
         let request = CapabilityRequest::new(app_cell, reason, desired);
-        LaunchedApp {
+        Ok(LaunchedApp {
             app_cell,
             name,
             request,
-        }
+        })
     }
 }
 
@@ -559,19 +561,18 @@ impl RegistryLauncher {
 /// insert lands in a free slot. `make_open_cell` derives the id from the seed byte
 /// (`pk[0]=seed`, `pk[31]=seed*37`), so scanning seeds = scanning candidate ids. App
 /// seeds start high (`0xA0`) and step by a stride coprime to 256 so a long run of
-/// launches stays collision-free; if (improbably) all 256 are taken, fall back to the
-/// last candidate (the genesis insert is the real backstop).
-fn fresh_app_seed(world: &World) -> u8 {
+/// launches stays collision-free. Exhaustion is a refusal, not a duplicate insert.
+fn fresh_app_seed(world: &World) -> Option<u8> {
     let ledger = world.ledger();
     let mut seed: u8 = 0xA0;
     for _ in 0..256u16 {
         let id = make_open_cell_id(seed);
         if !ledger.contains(&id) {
-            return seed;
+            return Some(seed);
         }
         seed = seed.wrapping_add(7); // stride coprime to 256 → visits every residue
     }
-    seed
+    None
 }
 
 /// The [`CellId`] a `make_open_cell(seed, _)` would derive — id is over the seed-shaped
@@ -895,6 +896,100 @@ mod tests {
 
     // ── THE RUNTIME APP-LAUNCHER tests ────────────────────────────────────────
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn runtime_resource_requests_refuse_after_a_durable_write_failure() {
+        use crate::cipherclerk::{Cipherclerk, Identity};
+        use crate::organ_ops::OrganDriver;
+        use crate::session::{CapTemplate, LoginManager, LoginOutcome};
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "sbv2-resource-refusal-{}-{nanos}.redb",
+            std::process::id()
+        ));
+        let mut world =
+            World::open_with_timestamp(&path, dregg_turn::ComputronCosts::zero(), 1_700_000_000)
+                .expect("fresh durable world");
+        let issuer = world.genesis_cell(1, 1_000);
+        let recipient = world.genesis_cell(2, 0);
+        crate::world::arm_next_dual_write_failure();
+        let turn = world.turn(issuer, vec![crate::world::transfer(issuer, recipient, 10)]);
+        assert!(matches!(
+            world.commit_turn(turn),
+            crate::world::CommitOutcome::Rejected { .. }
+        ));
+        let before = (
+            world.state_root(),
+            world.cell_count(),
+            world.height(),
+            world.receipts().len(),
+        );
+
+        let refusal = AppLauncher::launch(&mut world, "scratch", "notes", AuthRequired::None)
+            .expect_err("an unavailable durable world cannot birth an app");
+        assert!(refusal.contains("durable"), "{refusal}");
+
+        let clerk = Cipherclerk::new();
+        let identity = Identity::from_byte("late", "default", 0xE9);
+        let refusal = clerk.embody(&mut world, &identity, 0).unwrap_err();
+        assert!(refusal.contains("durable"), "{refusal}");
+
+        let refusal = OrganDriver::new()
+            .open_trustline(&mut world, 0xE8, issuer, recipient, 100)
+            .unwrap_err();
+        assert!(refusal.label().contains("durable"), "{refusal:?}");
+
+        let manager = LoginManager::new(issuer);
+        let principal = manager.authenticate([0xE7; 32], true).unwrap();
+        assert!(matches!(
+            manager.login(&mut world, principal, &CapTemplate::empty()),
+            LoginOutcome::Denied { reason } if reason.contains("durable")
+        ));
+
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(world));
+        #[cfg(feature = "app-registry")]
+        {
+            let pk = [0xE6; 32];
+            let token = [0; 32];
+            let id = dregg_cell::Cell::new(pk, token).id();
+            assert!(matches!(
+                crate::app_worldspine::AppWorldSpine::seed(
+                    shared.clone(), id, pk, token, dregg_cell::CellProgram::None, &[]
+                ),
+                Err(crate::app_worldspine::WorldFireError::World { reason })
+                    if reason.contains("durable")
+            ));
+        }
+        #[cfg(feature = "dev-surfaces")]
+        assert!(matches!(
+            crate::resident_agent::hire_resident(
+                &shared,
+                crate::resident_agent::ResidentMandate::attenuated("refused-resident")
+            ),
+            Err(reason) if reason.contains("durable")
+        ));
+
+        {
+            let world = shared.borrow();
+            assert_eq!(
+                (
+                    world.state_root(),
+                    world.cell_count(),
+                    world.height(),
+                    world.receipts().len()
+                ),
+                before,
+                "refused resource requests must preserve the prior image"
+            );
+        }
+        drop(shared);
+        std::fs::remove_file(path).expect("remove the test image");
+    }
+
     #[test]
     fn launching_an_app_births_a_fresh_confined_cell_holding_no_authority() {
         // THE LAUNCH: spawn a confined app at runtime → a fresh cell exists in the live
@@ -908,7 +1003,8 @@ mod tests {
             "scratch-pad",
             "wants to reach one resource",
             AuthRequired::Either,
-        );
+        )
+        .expect("genesis resource installs");
 
         // A brand-new cell was birthed into the live ledger.
         assert_eq!(
@@ -947,7 +1043,8 @@ mod tests {
             "launched-app",
             "needs your docs",
             AuthRequired::None,
-        );
+        )
+        .expect("genesis resource installs");
         assert!(
             !world
                 .ledger()
@@ -1101,9 +1198,12 @@ mod tests {
         // Re-runnable: each launch births a DISTINCT confined app (the seed is chosen
         // unoccupied), so the cockpit's "+ launch" button can spawn many apps.
         let (mut world, _principal, _app, _docs, _peer) = powerbox_world();
-        let a = AppLauncher::launch(&mut world, "app-a", "r", AuthRequired::None);
-        let b = AppLauncher::launch(&mut world, "app-b", "r", AuthRequired::None);
-        let c = AppLauncher::launch(&mut world, "app-c", "r", AuthRequired::None);
+        let a = AppLauncher::launch(&mut world, "app-a", "r", AuthRequired::None)
+            .expect("genesis resource installs");
+        let b = AppLauncher::launch(&mut world, "app-b", "r", AuthRequired::None)
+            .expect("genesis resource installs");
+        let c = AppLauncher::launch(&mut world, "app-c", "r", AuthRequired::None)
+            .expect("genesis resource installs");
         assert_ne!(
             a.app_cell, b.app_cell,
             "two launches → two distinct app-cells"

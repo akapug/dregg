@@ -79,9 +79,8 @@ pub enum WorldFireError {
     /// The cap-gate refused the fire — the turn was NEVER built. The actor lacked
     /// the affordance's `required_rights`.
     Gate(FireExecuteError),
-    /// The gate passed but `World`'s executor refused the committed turn (a program
-    /// constraint bit, a non-conservation, a chain mismatch). Carries the reason the
-    /// real executor reported.
+    /// `World` refused the resource install or turn (an unavailable durable image,
+    /// invalid birth, program constraint, non-conservation, or chain mismatch).
     World { reason: String },
 }
 
@@ -90,10 +89,7 @@ impl std::fmt::Display for WorldFireError {
         match self {
             WorldFireError::Gate(e) => write!(f, "app affordance refused by the cap-gate: {e}"),
             WorldFireError::World { reason } => {
-                write!(
-                    f,
-                    "app turn refused by the cockpit World executor: {reason}"
-                )
+                write!(f, "app operation refused by the cockpit World: {reason}")
             }
         }
     }
@@ -134,7 +130,7 @@ impl AppWorldSpine {
         token_id: [u8; 32],
         program: CellProgram,
         seed_fields: &[SeedField],
-    ) -> Self {
+    ) -> Result<Self, WorldFireError> {
         {
             let mut w = world.borrow_mut();
             // Build the app's primary cell at its REAL derived id (so it equals
@@ -151,17 +147,18 @@ impl AppWorldSpine {
             for sf in seed_fields {
                 cell.state.set_field(sf.slot, sf.value);
             }
-            debug_assert_eq!(
-                cell.id(),
-                app_cell,
-                "the installed app cell id must equal the app's cipherclerk cell id"
-            );
+            if cell.id() != app_cell {
+                return Err(WorldFireError::World {
+                    reason: "the app cell id does not match its public key and token".into(),
+                });
+            }
             // ONE genesis install carries the program + the seeded state onto World's
             // authoritative engine ledger AND the replay tape (so the inspector + the
             // time-travel tape both see the app cell from genesis).
-            w.genesis_install(cell);
+            w.try_genesis_install(cell)
+                .map_err(|reason| WorldFireError::World { reason })?;
         }
-        AppWorldSpine { world, app_cell }
+        Ok(AppWorldSpine { world, app_cell })
     }
 
     /// The app's primary cell id (the agent + the inspector's pointer).
@@ -391,7 +388,8 @@ mod tests {
                     v
                 },
             }],
-        );
+        )
+        .expect("genesis resource installs");
 
         // The cell is on World's ledger with the seeded field (inspector read).
         let before = spine.live_state().expect("seeded cell is live on World");
@@ -453,7 +451,8 @@ mod tests {
             token,
             CellProgram::None,
             &[],
-        );
+        )
+        .expect("genesis resource installs");
         let receipts_before = world.borrow().receipts().len();
 
         // held = Signature does NOT satisfy `Requirement::Root` — refused in-band.

@@ -893,7 +893,8 @@ mod tests {
         // (Proves the fork carries the live cell's PROGRAM, not just its balance.)
         let mut w = World::new();
         let program = edit::ProgramBuilder::new().immutable(0).build();
-        let dep = edit::deploy_program(&mut w, 0x42, 100, program);
+        let dep =
+            edit::deploy_program(&mut w, 0x42, 100, program).expect("fixture program deploys");
         let id = dep.cell;
 
         let mut draft = IntentDraft::new(id);

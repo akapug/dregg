@@ -483,15 +483,21 @@ fn run_mcp_server() {
     #[cfg(feature = "js-agent")]
     let host = {
         use deos_hermes::RunJsTool;
-        use dregg_cell::AuthRequired;
+        use dregg_cell::{AuthRequired, Credential, Requirement};
         let tool = RunJsTool::new(
             AuthRequired::Signature,
             [0x42; 32],
             [0x01; 32],
             vec![(0, deos_js::applet::pack_u64(0))],
             vec![
-                ("bump".to_string(), AuthRequired::Signature),
-                ("escalate".to_string(), AuthRequired::Proof),
+                (
+                    "bump".to_string(),
+                    Requirement::AtLeast(Credential::Signature),
+                ),
+                (
+                    "escalate".to_string(),
+                    Requirement::AtLeast(Credential::Proof),
+                ),
             ],
         );
         // `with_run_js` boots SpiderMonkey; on failure keep the bare host (run_js

@@ -370,7 +370,8 @@ fn a_guest_and_an_agent_are_strictly_attenuated_derived_caps() {
     // LOGOUT is the agent kill switch: one revoke darkens its whole (narrow) tree,
     // and the owner's session is untouched.
     assert_eq!(
-        mgr.logout(&mut world, &agent_session),
+        mgr.logout(&mut world, &agent_session)
+            .expect("logout commits"),
         1,
         "the agent's single cap revoked"
     );

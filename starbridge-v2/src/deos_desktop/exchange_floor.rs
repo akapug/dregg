@@ -362,7 +362,8 @@ impl ExchangeFloorState {
         let cell = dregg_cell::Cell::with_balance(pk, token, 1_000_000).id();
         // Genesis: the job program installed, NO seeded fields — the posting itself
         // is the first verified turn (post is a turn here, not a baked-in baseline).
-        let spine = AppWorldSpine::seed(world, cell, pk, token, job::job_program(), &[]);
+        let spine = AppWorldSpine::seed(world, cell, pk, token, job::job_program(), &[])
+            .map_err(|e| e.to_string())?;
         let receipt = spine
             .commit(
                 job::service::METHOD_POST,

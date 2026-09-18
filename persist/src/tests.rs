@@ -25,6 +25,56 @@ fn new_store() -> PersistentStore {
     PersistentStore::open_in_memory().expect("failed to open in-memory store")
 }
 
+#[test]
+fn config_batch_rollback_and_reopen_keep_related_keys_atomic() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config-batch.redb");
+    let store = PersistentStore::open(&path).unwrap();
+    store.set_config("genesis-order", b"first").unwrap();
+    store.set_config("first", b"original-cell").unwrap();
+
+    // The first row has actually been inserted into the transaction when this
+    // fault fires. Dropping that transaction must roll the row back as well.
+    crate::FAIL_CONFIG_BATCH_AFTER.with(|fault| fault.set(Some(1)));
+    let result =
+        store.set_config_batch(&[("genesis-order", b"first,second"), ("second", b"new-cell")]);
+    assert!(matches!(result, Err(StoreError::Database(message))
+        if message.contains("after insert")));
+    assert_eq!(
+        store.get_config("genesis-order").unwrap(),
+        Some(b"first".to_vec())
+    );
+    assert_eq!(store.get_config("second").unwrap(), None);
+    drop(store);
+
+    let store = PersistentStore::open(&path).unwrap();
+    assert_eq!(
+        store.get_config("genesis-order").unwrap(),
+        Some(b"first".to_vec())
+    );
+    assert_eq!(store.get_config("second").unwrap(), None);
+    store
+        .set_config_batch(&[("genesis-order", b"first,second"), ("second", b"new-cell")])
+        .unwrap();
+    // Preserve the existing set_config overwrite contract on the same path.
+    store.set_config("first", b"updated-cell").unwrap();
+    drop(store);
+
+    let reopened = PersistentStore::open(&path).unwrap();
+    assert_eq!(
+        reopened.get_config("genesis-order").unwrap(),
+        Some(b"first,second".to_vec())
+    );
+    assert_eq!(
+        reopened.get_config("first").unwrap(),
+        Some(b"updated-cell".to_vec())
+    );
+    assert_eq!(
+        reopened.get_config("second").unwrap(),
+        Some(b"new-cell".to_vec())
+    );
+}
+
 /// A fresh store is sealed to whatever `CANONICAL_STATE_SCHEMA_EPOCH` currently reads.
 ///
 /// ⓘ This was called `..._epoch_11` until 2026-08-01, at which point the constant read **22**.
