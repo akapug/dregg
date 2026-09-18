@@ -220,6 +220,16 @@ pub fn lean_available() -> bool {
     lean_init_once().is_ok()
 }
 
+/// Observe the default Lean runtime initializer without starting it.
+///
+/// `None` means the process has not completed an initialization attempt. `Some(Ok(()))`
+/// means initialization succeeded, and `Some(Err(_))` preserves the exact cached failure.
+/// This is primarily an embedding/test diagnostic: export discovery must remain able to
+/// distinguish a linked symbol from an initialized runtime without paying the initializer tax.
+pub fn lean_runtime_init_status() -> Option<Result<(), String>> {
+    ffi::lean_init_status()
+}
+
 /// Whether verified-gate tests must refuse an absent Lean archive/export instead
 /// of reporting a hollow `ok` after self-skipping.
 ///
@@ -739,6 +749,14 @@ pub fn fips204_verify_real_core_available() -> bool {
     ffi::fips204_verify_real_present() && lean_init_once().is_ok()
 }
 
+/// Whether the linked archive exports the real ML-DSA verify core, without initializing Lean.
+///
+/// Use this to register a lazy function-pointer route. The first actual call must still go
+/// through [`shadow_fips204_verify_real`], which initializes Lean once and returns its error.
+pub fn fips204_verify_real_export_present() -> bool {
+    ffi::fips204_verify_real_present()
+}
+
 /// Run the VERIFIED, extracted REAL, FULL-BYTE ML-DSA verify core `@[export] dregg_fips204_verify_real`
 /// (the executable `Dregg2.Crypto.Fips204Verify.verifyRealFFI` over `MlDsaVerifyReal.verifyCore`). This
 /// runs the SECURITY-CRITICAL verify of a REAL ML-DSA-65 key + signature as a Lean-verified object
@@ -807,6 +825,11 @@ pub fn shadow_fips204_sign(wire: &str) -> Result<String, String> {
 /// [`lean_available`]: a stale archive can lack this export.
 pub fn fips204_sign_real_core_available() -> bool {
     ffi::fips204_sign_real_present() && lean_init_once().is_ok()
+}
+
+/// Whether the linked archive exports the real ML-DSA sign core, without initializing Lean.
+pub fn fips204_sign_real_export_present() -> bool {
+    ffi::fips204_sign_real_present()
 }
 
 /// Run the VERIFIED, extracted REAL, FULL-BYTE ML-DSA sign core `@[export] dregg_fips204_sign_real`
@@ -889,6 +912,11 @@ pub fn mlkem_decaps_real_core_available() -> bool {
     ffi::mlkem_decaps_real_present() && lean_init_once().is_ok()
 }
 
+/// Whether the linked archive exports the real ML-KEM decaps core, without initializing Lean.
+pub fn mlkem_decaps_real_export_present() -> bool {
+    ffi::mlkem_decaps_real_present()
+}
+
 /// Run the VERIFIED, extracted REAL, FULL-BYTE ML-KEM-768 decaps core `@[export] dregg_mlkem_decaps_real`
 /// (the executable `Dregg2.Crypto.MlKemDecaps.mlkemDecapsRealFFI` over `mlkemDecaps` — the full FO pipeline:
 /// K-PKE decrypt, `G = SHA3-512` split, re-encryption, byte-exact `c' = c` implicit-reject check). This runs
@@ -917,6 +945,11 @@ pub fn shadow_mlkem_decaps_real(wire: &str) -> Result<String, String> {
 /// lack this export.
 pub fn mlkem_encaps_real_core_available() -> bool {
     ffi::mlkem_encaps_real_present() && lean_init_once().is_ok()
+}
+
+/// Whether the linked archive exports the real ML-KEM encaps core, without initializing Lean.
+pub fn mlkem_encaps_real_export_present() -> bool {
+    ffi::mlkem_encaps_real_present()
 }
 
 /// Run the VERIFIED, extracted REAL, FULL-BYTE ML-KEM-768 encaps core `@[export] dregg_mlkem_encaps_real`
@@ -948,6 +981,11 @@ pub fn mlkem_keygen_real_core_available() -> bool {
     ffi::mlkem_keygen_real_present() && lean_init_once().is_ok()
 }
 
+/// Whether the linked archive exports the real ML-KEM keygen core, without initializing Lean.
+pub fn mlkem_keygen_real_export_present() -> bool {
+    ffi::mlkem_keygen_real_present()
+}
+
 /// Run the VERIFIED, extracted REAL, FULL-BYTE ML-KEM-768 keygen core `@[export] dregg_mlkem_keygen_real`
 /// (the executable `Dregg2.Crypto.MlKemKeygen.mlkemKeygenRealFFI` over `mlkemKeygen` — the deterministic FIPS
 /// 203 ML-KEM.KeyGen_internal: G(d||k) SHA3-512 split, ExpandMatrix, CBD sampling, NTT, t = A*s + e, ByteEncode,
@@ -973,6 +1011,11 @@ pub fn shadow_mlkem_keygen_real(wire: &str) -> Result<String, String> {
 /// to the `fips204` crate keygen. Distinct from [`lean_available`]: a stale archive can lack this export.
 pub fn mldsa_keygen_real_core_available() -> bool {
     ffi::mldsa_keygen_real_present() && lean_init_once().is_ok()
+}
+
+/// Whether the linked archive exports the real ML-DSA keygen core, without initializing Lean.
+pub fn mldsa_keygen_real_export_present() -> bool {
+    ffi::mldsa_keygen_real_present()
 }
 
 /// Run the VERIFIED, extracted REAL, FULL-BYTE ML-DSA-65 keygen core `@[export] dregg_mldsa_keygen_real`
@@ -1873,6 +1916,10 @@ mod ffi {
 
     static INIT: OnceLock<Result<(), String>> = OnceLock::new();
     static INIT_ST: OnceLock<Result<(), String>> = OnceLock::new();
+
+    pub fn lean_init_status() -> Option<Result<(), String>> {
+        INIT.get().cloned()
+    }
 
     pub fn lean_init_once() -> Result<(), String> {
         INIT.get_or_init(|| {
@@ -2840,6 +2887,10 @@ mod ffi {
 
 #[cfg(not(lean_lib_present))]
 mod ffi {
+    pub fn lean_init_status() -> Option<Result<(), String>> {
+        None
+    }
+
     pub fn lean_init_once() -> Result<(), String> {
         Err("libdregg_lean.a was not present at build time".into())
     }

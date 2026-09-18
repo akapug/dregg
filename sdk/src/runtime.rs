@@ -65,8 +65,10 @@ pub fn lean_producer_env_enabled() -> bool {
 /// install the node performs (`dregg_pq::install_verified_mldsa_verify_core`), injecting the two
 /// `dregg-lean-ffi` archive symbols; it is idempotent and once-per-process.
 ///
-/// Gated on `fips204_verify_real_core_available()`: install ONLY when the linked archive EXPORTS the real
-/// core. Returns the outcome so callers / the running-binary gate can assert routing.
+/// Gated on `fips204_verify_real_export_present()`: install ONLY when the linked archive EXPORTS the real
+/// core. Export discovery is deliberately side-effect-free; the installed thunk initializes Lean once on
+/// its first actual verify and propagates an initialization failure into the existing fail-closed refusal.
+/// Returns the outcome so callers / the running-binary gate can assert routing.
 ///
 /// ⚑ `ExportAbsent` IS NOT A FALLBACK. This doc used to say a build without the export "keeps the
 /// `fips204`-crate fallback (a valid FIPS-204 verify) rather than bricking verify". That has been
@@ -81,7 +83,7 @@ pub fn lean_producer_env_enabled() -> bool {
 /// path than a consumer could take. See that function's header.
 pub fn install_verified_mldsa_verify_core() -> dregg_pq::MlDsaVerifyCoreInstall {
     dregg_pq::install_verified_mldsa_verify_core(
-        dregg_lean_ffi::fips204_verify_real_core_available,
+        dregg_lean_ffi::fips204_verify_real_export_present,
         |w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok(),
     )
 }
@@ -103,13 +105,13 @@ pub fn install_verified_mldsa_verify_core() -> dregg_pq::MlDsaVerifyCoreInstall 
 /// WARNING: on the installed path the signer is DETERMINISTIC (`rnd = 0`, the FIPS 204 deterministic
 /// variant — spec-valid), where the crate fallback is hedged/randomized.
 ///
-/// Gated on `fips204_sign_real_core_available()`, and deliberately NOT fatal on `ExportAbsent` — unlike the
+/// Gated on `fips204_sign_real_export_present()`, and deliberately NOT fatal on `ExportAbsent` — unlike the
 /// `drorb` dataplane (which asserts, because it is a single serving binary that always links the archive),
 /// the SDK is also built for `no-lean-link` wasm/zkvm targets that have no archive to export from. Bricking
 /// those is not the tradeoff here; the audit gate still refuses to SIGN unaudited at the point of use.
 pub fn install_verified_mldsa_sign_core_real() -> dregg_pq::MlDsaSignCoreRealInstall {
     dregg_pq::install_verified_mldsa_sign_core_real(
-        dregg_lean_ffi::fips204_sign_real_core_available,
+        dregg_lean_ffi::fips204_sign_real_export_present,
         |w| dregg_lean_ffi::shadow_fips204_sign_real(w).ok(),
     )
 }
@@ -134,7 +136,7 @@ fn ensure_verified_mldsa_sign_core_installed() {
         ),
         S::ExportAbsent => tracing::warn!(
             "ML-DSA sign: the linked Lean archive does NOT export the real sign core \
-             (`fips204_sign_real_core_available()` is false) — NO verified sign core is installed, so any \
+             (`fips204_sign_real_export_present()` is false) — NO verified sign core is installed, so any \
              ML-DSA sign this process reaches will be REFUSED by dregg-pq's audit gate (process abort) \
              unless DREGG_ALLOW_UNAUDITED_PQ=1. Rebuild against a HEAD-matching archive to route sign \
              through Lean."
@@ -163,7 +165,7 @@ fn ensure_verified_mldsa_verify_core_installed() {
         ),
         I::ExportAbsent => tracing::warn!(
             "ML-DSA verify: the linked Lean archive does NOT export the real verify core \
-             (`fips204_verify_real_core_available()` is false) — NO verified verify core is installed, \
+             (`fips204_verify_real_export_present()` is false) — NO verified verify core is installed, \
              so any ML-DSA verify this process reaches will be REFUSED by dregg-pq's audit gate \
              (process abort) unless DREGG_ALLOW_UNAUDITED_PQ=1. This line used to say the verify \
              'falls back to the `fips204` crate (a valid FIPS-204 verify)'; that stopped being true \
@@ -191,14 +193,14 @@ fn ensure_verified_mldsa_verify_core_installed() {
 /// Alg 16, full n=256 ring / NTT / real codec), NIST-ACVP-anchored (byte-exact on the 25 ML-KEM-768
 /// encapDecap cases) — NOT the `ml-kem` crate.
 ///
-/// Gated on `mlkem_encaps_real_core_available()`, and deliberately NOT fatal on `ExportAbsent` — exactly like
+/// Gated on `mlkem_encaps_real_export_present()`, and deliberately NOT fatal on `ExportAbsent` — exactly like
 /// the sign twin above and for the same reason: unlike the `drorb` dataplane (a single serving binary that
 /// always links the archive, so it asserts), the SDK is also built for `no-lean-link` wasm/zkvm targets that
 /// have no archive to export from. Bricking those at construction is not the tradeoff; the audit gate still
 /// refuses to run an unaudited KEM at the point of use (process abort unless `DREGG_ALLOW_UNAUDITED_PQ=1`).
 pub fn install_verified_mlkem_encaps_core() -> dregg_pq::MlKemEncapsCoreInstall {
     dregg_pq::install_verified_mlkem_encaps_core(
-        dregg_lean_ffi::mlkem_encaps_real_core_available,
+        dregg_lean_ffi::mlkem_encaps_real_export_present,
         |w| dregg_lean_ffi::shadow_mlkem_encaps_real(w).ok(),
     )
 }
@@ -213,14 +215,14 @@ pub fn install_verified_mlkem_encaps_core() -> dregg_pq::MlKemEncapsCoreInstall 
 /// idempotent and once-per-process. The extracted core is `Dregg2.Crypto.MlKemDecaps.mlkemDecaps` (the full
 /// FIPS 203 FO decaps pipeline with implicit reject), NIST-ACVP-anchored — NOT the `ml-kem` crate.
 ///
-/// Gated on `mlkem_decaps_real_core_available()`, and deliberately NOT fatal on `ExportAbsent`, for the same
+/// Gated on `mlkem_decaps_real_export_present()`, and deliberately NOT fatal on `ExportAbsent`, for the same
 /// `no-lean-link` reason as its encaps twin. A stale archive lacking the export would make an installed core
 /// return `None` on every call, and `HybridResponder::finish` / `ml_kem768_decaps` fail CLOSED on a core
 /// fault — so keeping the export-gated install (fallback preserved off-archive) is what avoids bricking
 /// decaps on wasm/zkvm; the audit gate still refuses the unaudited decaps at the point of use.
 pub fn install_verified_mlkem_decaps_core() -> dregg_pq::MlKemDecapsCoreInstall {
     dregg_pq::install_verified_mlkem_decaps_core(
-        dregg_lean_ffi::mlkem_decaps_real_core_available,
+        dregg_lean_ffi::mlkem_decaps_real_export_present,
         |w| dregg_lean_ffi::shadow_mlkem_decaps_real(w).ok(),
     )
 }
@@ -232,13 +234,13 @@ pub fn install_verified_mlkem_decaps_core() -> dregg_pq::MlKemDecapsCoreInstall 
 /// (deterministic FIPS 203 ML-KEM.KeyGen_internal), NIST-ACVP-anchored (KAT, the byte<->ring refinement is
 /// OPEN) -- NOT the `ml-kem` crate.
 ///
-/// Gated on `mlkem_keygen_real_core_available()`, and deliberately NOT fatal on `ExportAbsent` -- like the
+/// Gated on `mlkem_keygen_real_export_present()`, and deliberately NOT fatal on `ExportAbsent` -- like the
 /// encaps/decaps twins, for the `no-lean-link` wasm/zkvm targets. Unlike encaps/decaps (whose audit gate
 /// ABORTS at the point of use), the keygen audit gate WARNS and proceeds on the crate; installing the
 /// verified core here routes SDK-hosted keygen through the proven object instead.
 pub fn install_verified_mlkem_keygen_core() -> dregg_pq::MlKemKeygenCoreInstall {
     dregg_pq::install_verified_mlkem_keygen_core(
-        dregg_lean_ffi::mlkem_keygen_real_core_available,
+        dregg_lean_ffi::mlkem_keygen_real_export_present,
         |w| dregg_lean_ffi::shadow_mlkem_keygen_real(w).ok(),
     )
 }
@@ -248,12 +250,12 @@ pub fn install_verified_mlkem_keygen_core() -> dregg_pq::MlKemKeygenCoreInstall 
 /// the proven `MlDsaKeygen.mldsaKeygenInternal` (deterministic FIPS 204 ML-DSA.KeyGen_internal), NIST-ACVP
 /// -anchored (KAT, the byte<->ring refinement is OPEN) — NOT the `fips204` crate.
 ///
-/// Gated on `mldsa_keygen_real_core_available()`, and deliberately NOT fatal on `ExportAbsent` — like the
+/// Gated on `mldsa_keygen_real_export_present()`, and deliberately NOT fatal on `ExportAbsent` — like the
 /// ML-KEM keygen twin, for the `no-lean-link` wasm/zkvm targets. Installing the verified core here routes
 /// SDK-hosted identity-key derivation through the proven object instead of the crate.
 pub fn install_verified_mldsa_keygen_core_real() -> dregg_pq::MlDsaKeygenCoreRealInstall {
     dregg_pq::install_verified_mldsa_keygen_core_real(
-        dregg_lean_ffi::mldsa_keygen_real_core_available,
+        dregg_lean_ffi::mldsa_keygen_real_export_present,
         |w| dregg_lean_ffi::shadow_mldsa_keygen_real(w).ok(),
     )
 }
@@ -277,7 +279,7 @@ fn ensure_verified_mlkem_encaps_core_installed() {
         ),
         E::ExportAbsent => tracing::warn!(
             "ML-KEM encaps: the linked Lean archive does NOT export the real encaps core \
-             (`mlkem_encaps_real_core_available()` is false) — NO verified encaps core is installed, so any \
+             (`mlkem_encaps_real_export_present()` is false) — NO verified encaps core is installed, so any \
              ML-KEM encaps this process reaches will be REFUSED by dregg-pq's audit gate (process abort) \
              unless DREGG_ALLOW_UNAUDITED_PQ=1. Rebuild against a HEAD-matching archive to route encaps \
              through Lean."
@@ -304,7 +306,7 @@ fn ensure_verified_mlkem_keygen_core_installed() {
         ),
         K::ExportAbsent => tracing::warn!(
             "ML-KEM keygen: the linked Lean archive does NOT export the real keygen core \
-             (`mlkem_keygen_real_core_available()` is false) - NO verified keygen core is installed, so this \
+             (`mlkem_keygen_real_export_present()` is false) - NO verified keygen core is installed, so this \
              process's ML-KEM keypairs are minted by the UNAUDITED `ml-kem` crate behind dregg-pq's loud \
              keygen warning (keygen WARNS, it does not abort). Rebuild against a HEAD-matching archive to \
              route keygen through Lean."
@@ -331,7 +333,7 @@ fn ensure_verified_mldsa_keygen_core_installed() {
         ),
         K::ExportAbsent => tracing::warn!(
             "ML-DSA keygen: the linked Lean archive does NOT export the real keygen core \
-             (`mldsa_keygen_real_core_available()` is false) - NO verified keygen core is installed, so this \
+             (`mldsa_keygen_real_export_present()` is false) - NO verified keygen core is installed, so this \
              process's ML-DSA IDENTITY keypair is minted by the UNAUDITED `fips204` crate behind dregg-pq's \
              loud keygen warning (keygen WARNS, it does not abort). Rebuild against a HEAD-matching archive \
              to route identity keygen through Lean."
@@ -342,9 +344,15 @@ fn ensure_verified_mldsa_keygen_core_installed() {
 /// **THE ONE NAMED INSTALLER** — arm ALL SIX Lean-verified post-quantum cores for this SDK-hosted
 /// process, once, so that no call site anywhere has to decide WHICH directions it needs.
 ///
-/// Idempotent, thread-safe, once-per-process. Every install inside it is export-gated by
-/// `dregg-pq`, so an archive that exports nothing installs nothing and the refusal at the point of
-/// use still stands. The mirror of `dregg_node::install_verified_pq_cores` for SDK hosts.
+/// Registration is lazy: the six export-presence probes inspect build-time symbol cfgs and do not
+/// initialize Lean. The first installed core that is actually called enters its existing
+/// `shadow_*` function, which performs the one guarded runtime initialization and propagates any
+/// initialization error into that operation's fail-closed path. Thus an `AgentRuntime` that never
+/// performs PQ work does not initialize every linked Lean module merely to register the routes.
+///
+/// Idempotent, thread-safe, once-per-process. Every install inside it is export-gated by `dregg-pq`,
+/// so an archive that exports nothing installs nothing and the refusal at the point of use still
+/// stands. The mirror of `dregg_node::install_verified_pq_cores` for SDK hosts.
 ///
 /// # ⚑ THE BUG THIS EXISTS TO MAKE UNREPRESENTABLE: A CALL SITE THAT PICKED A SUBSET
 ///
@@ -629,7 +637,7 @@ fn ensure_verified_mlkem_decaps_core_installed() {
         ),
         D::ExportAbsent => tracing::warn!(
             "ML-KEM decaps: the linked Lean archive does NOT export the real decaps core \
-             (`mlkem_decaps_real_core_available()` is false) — NO verified decaps core is installed, so any \
+             (`mlkem_decaps_real_export_present()` is false) — NO verified decaps core is installed, so any \
              ML-KEM decaps this process reaches will be REFUSED by dregg-pq's audit gate (process abort) \
              unless DREGG_ALLOW_UNAUDITED_PQ=1. Rebuild against a HEAD-matching archive to route decaps \
              through Lean."
