@@ -76,6 +76,9 @@ pub enum RecordedStep {
     /// node seeds its genesis block). Carries the full cell so replay
     /// reinstalls it verbatim.
     Genesis { cell: Box<Cell> },
+    /// Related cells installed by one atomic trusted-setup publication. There is
+    /// no history cursor between members. Contains at least two fresh cells.
+    GenesisBatch { cells: Vec<Cell> },
     /// A trusted setup replacement at its actual position in history. This is
     /// neither a new cell nor a kernel-authorized/conserving turn.
     GenesisUpdate { cell: Box<Cell> },
@@ -88,16 +91,10 @@ pub enum RecordedStep {
         /// The canonical [`Ledger::root`] of the post-state, recorded per step —
         /// the same commitment `snapshot.rs` binds against.
         ///
-        /// HONEST BOUNDARY (what actually verifies replay): this is a per-step
-        /// *copy* of the canonical tooth, equal by construction to the parallel
-        /// [`History`]`.roots[k+1]` — both are set from the identical
-        /// `ledger.root()` in [`History::record_commit`]. The value the replay path
-        /// verifies the reconstructed ledger against is that parallel `roots` vector
-        /// ([`History::root_at`]), checked once per landing at the end of
-        /// [`History::replay_to`]; `apply_step` drops this per-step field via `..`
-        /// and no verification path currently consults it. Editing only this field
-        /// (leaving `roots[k]` honest) changes no replay outcome. It is surfaced via
-        /// [`RecordedStep::root_after`] for external inspection, not verification.
+        /// Replay checks this field against the executed post-state, then checks
+        /// the same state against the parallel [`History::root_at`] entry. Every
+        /// traversed step must agree; an honest final root cannot conceal an
+        /// altered intermediate record.
         post_root: [u8; 32],
         /// The executor wall-clock this turn committed under
         /// ([`TurnReceipt::timestamp`]).
@@ -127,13 +124,13 @@ impl RecordedStep {
     /// keyed off it would spuriously reject every genesis step; `None` states the
     /// honest thing instead of a bogus tooth.)
     ///
-    /// This is the recorded per-step *copy* (see [`RecordedStep::Committed`]'s
-    /// `post_root`); the authoritative tooth the replay path verifies against is
-    /// [`History::root_at`]. Use that for verification — this accessor is for
-    /// inspection (timeline UIs, diagnostics), and today has no in-tree consumer.
+    /// Replay verifies a committed step's copy as well as the contextual root in
+    /// [`History::root_at`]. Setup publications carry only the latter.
     pub fn root_after(&self) -> Option<[u8; 32]> {
         match self {
-            RecordedStep::Genesis { .. } | RecordedStep::GenesisUpdate { .. } => None,
+            RecordedStep::Genesis { .. }
+            | RecordedStep::GenesisBatch { .. }
+            | RecordedStep::GenesisUpdate { .. } => None,
             RecordedStep::Committed { post_root, .. } => Some(*post_root),
         }
     }
@@ -150,6 +147,9 @@ impl RecordedStep {
             }
             RecordedStep::GenesisUpdate { cell } => {
                 format!("setup update · cell {}", short(cell.id().as_bytes()))
+            }
+            RecordedStep::GenesisBatch { cells } => {
+                format!("genesis · {} cells", cells.len())
             }
             RecordedStep::Committed { receipt, .. } => format!(
                 "turn · agent {} · {} actions",
@@ -261,7 +261,9 @@ impl History {
             .iter()
             .filter_map(|s| match s {
                 RecordedStep::Committed { timestamp, .. } => Some(*timestamp),
-                RecordedStep::Genesis { .. } | RecordedStep::GenesisUpdate { .. } => None,
+                RecordedStep::Genesis { .. }
+                | RecordedStep::GenesisBatch { .. }
+                | RecordedStep::GenesisUpdate { .. } => None,
             })
             .min()
             .map_or(self.timestamp, |earliest| earliest.min(self.timestamp))
@@ -305,17 +307,38 @@ impl History {
     /// Record a genesis install. Installs `cell` into `ledger` directly (the
     /// genesis path) and appends the step + the new canonical root tooth.
     pub fn record_genesis(&mut self, ledger: &mut Ledger, cell: Cell) -> CellId {
-        let id = cell.id();
-        ledger
-            .insert_cell(cell.clone())
-            .expect("genesis insert is into a fresh slot");
-        self.steps.push(RecordedStep::Genesis {
-            cell: Box::new(cell),
+        self.record_genesis_batch(ledger, vec![cell])
+            .expect("genesis insert is into a fresh slot")[0]
+    }
+
+    /// Record one atomic birth publication. Every identity is checked before
+    /// any insertion. Empty input is a no-op; a singleton retains the `Genesis`
+    /// spelling, and a larger batch has exactly one post-state and cursor.
+    pub fn record_genesis_batch(
+        &mut self,
+        ledger: &mut Ledger,
+        cells: Vec<Cell>,
+    ) -> Result<Vec<CellId>, ReplayError> {
+        let ids = validate_genesis_births(ledger, &cells)?;
+        if cells.is_empty() {
+            return Ok(ids);
+        }
+        for cell in &cells {
+            ledger
+                .insert_cell(cell.clone())
+                .expect("all genesis identities were validated before insertion");
+        }
+        self.steps.push(if cells.len() == 1 {
+            RecordedStep::Genesis {
+                cell: Box::new(cells.into_iter().next().unwrap()),
+            }
+        } else {
+            RecordedStep::GenesisBatch { cells }
         });
         self.roots.push(ledger.root());
         // Capture the umem boundary of the post-state (the reify_to fast-restore image).
         self.boundaries.push(project_ledger(ledger));
-        id
+        Ok(ids)
     }
 
     /// Record an existing-cell setup update without rewriting any earlier step.
@@ -351,13 +374,14 @@ impl History {
         turn.previous_receipt_hash = executor.get_last_receipt_hash(&turn.agent);
         let checkpoint = executor.checkpoint_embedded_candidate(&turn);
         ledger.begin_restore_point();
-        match executor.execute_candidate(&turn, ledger) {
+        let result = executor.execute_candidate(&turn, ledger);
+        match &result {
             TurnResult::Committed { receipt, .. } => {
                 ledger.commit_restore_point();
                 executor.set_last_receipt_hash(receipt.agent, receipt.receipt_hash());
                 let post_root = ledger.root();
                 self.steps.push(RecordedStep::Committed {
-                    turn: Box::new(turn),
+                    turn: Box::new(turn.clone()),
                     // The clock this turn actually ran under — read off the receipt
                     // the executor just stamped, so it can never drift from it.
                     timestamp: receipt.timestamp,
@@ -367,7 +391,8 @@ impl History {
                 self.roots.push(post_root);
                 // Capture the umem boundary of the post-state (the reify_to image).
                 self.boundaries.push(project_ledger(ledger));
-                Some(receipt)
+                executor.observe_committed_candidate(&turn, ledger, &result);
+                Some(receipt.clone())
             }
             _ => {
                 ledger.rollback_restore_point();
@@ -380,8 +405,9 @@ impl History {
     // --- replay / scrub (VERIFIED) ------------------------------------------
 
     /// Reconstruct the world state at step `k` by REPLAY from genesis, and
-    /// verify the reconstructed canonical ledger root matches the recorded
-    /// tooth `roots[k]`. Fail-closed on mismatch.
+    /// verify every reconstructed prefix against its recorded canonical root,
+    /// including the original receipt chain and each exact receipt. Fail-closed
+    /// on mismatch, even when the requested final root would still agree.
     ///
     /// `k` is in `0..=len()`: `k = 0` is the empty pre-genesis ledger, `k =
     /// len()` is the head. This is `replay genesis (take k)` from the recovery
@@ -399,17 +425,30 @@ impl History {
         }
         let mut ledger = Ledger::new();
         let mut executor = self.fresh_executor();
-        for step in &self.steps[..k] {
-            apply_step(&mut executor, &mut ledger, step)?;
-        }
-        // The root tooth: the reconstructed ledger MUST commit to the recorded
-        // root at k (the same anti-substitution discipline as snapshot.rs).
-        let got = ledger.root();
-        let want = self.roots[k];
-        if got != want {
-            return Err(ReplayError::RootMismatch { step: k, got, want });
+        self.verify_root(&mut ledger, 0)?;
+        for index in 0..k {
+            self.apply_recorded_step(&mut executor, &mut ledger, index)?;
         }
         Ok(ledger)
+    }
+
+    fn verify_root(&self, ledger: &mut Ledger, step: usize) -> Result<(), ReplayError> {
+        let got = ledger.root();
+        let want = self.roots[step];
+        if got != want {
+            return Err(ReplayError::RootMismatch { step, got, want });
+        }
+        Ok(())
+    }
+
+    fn apply_recorded_step(
+        &self,
+        executor: &mut TurnExecutor,
+        ledger: &mut Ledger,
+        index: usize,
+    ) -> Result<(), ReplayError> {
+        apply_step(executor, ledger, &self.steps[index], index + 1)?;
+        self.verify_root(ledger, index + 1)
     }
 
     /// **THE UMEM-BOUNDARY RESTORE — the live time-scrub's reconstruction path.**
@@ -485,15 +524,21 @@ impl History {
         let mut executor = self.fresh_executor();
         let mut ledger = Ledger::new();
         let mut out = Vec::with_capacity(self.steps.len());
-        for step in &self.steps {
+        for (index, step) in self.steps.iter().enumerate() {
             match step {
                 RecordedStep::Committed { turn, .. } => {
                     // `ledger` here == replay_to(i): the pre-state for this turn.
                     out.push(Some(turn.is_reversible(&ledger)));
                 }
-                RecordedStep::Genesis { .. } | RecordedStep::GenesisUpdate { .. } => out.push(None),
+                RecordedStep::Genesis { .. }
+                | RecordedStep::GenesisBatch { .. }
+                | RecordedStep::GenesisUpdate { .. } => out.push(None),
             }
-            if apply_step(&mut executor, &mut ledger, step).is_err() {
+            if self
+                .apply_recorded_step(&mut executor, &mut ledger, index)
+                .is_err()
+            {
+                *out.last_mut().unwrap() = None;
                 while out.len() < self.steps.len() {
                     out.push(None);
                 }
@@ -537,26 +582,13 @@ impl History {
         // by replaying through the checkpoint, then continue.
         let mut ledger = Ledger::new();
         let mut executor = self.fresh_executor();
-        for step in &self.steps[..checkpoint_step] {
-            apply_step(&mut executor, &mut ledger, step)?;
-        }
-        // Verify the checkpoint tooth.
-        let cp_got = ledger.root();
-        if cp_got != self.roots[checkpoint_step] {
-            return Err(ReplayError::RootMismatch {
-                step: checkpoint_step,
-                got: cp_got,
-                want: self.roots[checkpoint_step],
-            });
+        self.verify_root(&mut ledger, 0)?;
+        for index in 0..checkpoint_step {
+            self.apply_recorded_step(&mut executor, &mut ledger, index)?;
         }
         // The overlay half: re-execute the post-checkpoint turns.
-        for step in &self.steps[checkpoint_step..k] {
-            apply_step(&mut executor, &mut ledger, step)?;
-        }
-        let got = ledger.root();
-        let want = self.roots[k];
-        if got != want {
-            return Err(ReplayError::RootMismatch { step: k, got, want });
+        for index in checkpoint_step..k {
+            self.apply_recorded_step(&mut executor, &mut ledger, index)?;
         }
         Ok(ledger)
     }
@@ -581,13 +613,23 @@ impl History {
         let mut executor = self.fresh_executor();
         {
             let mut warm = Ledger::new();
-            for step in &self.steps[..k] {
-                apply_step(&mut executor, &mut warm, step)?;
+            for index in 0..k {
+                self.apply_recorded_step(&mut executor, &mut warm, index)?;
             }
         }
         let mut alt = alt;
         alt.previous_receipt_hash = executor.get_last_receipt_hash(&alt.agent);
-        let outcome = match executor.execute(&alt, &mut fork_ledger) {
+        let checkpoint = executor.checkpoint_embedded_candidate(&alt);
+        fork_ledger.begin_restore_point();
+        let result = executor.execute_candidate(&alt, &mut fork_ledger);
+        if matches!(&result, TurnResult::Committed { .. }) {
+            fork_ledger.commit_restore_point();
+            executor.observe_committed_candidate(&alt, &fork_ledger, &result);
+        } else {
+            fork_ledger.rollback_restore_point();
+            executor.rollback_producer_reference(checkpoint);
+        }
+        let outcome = match result {
             TurnResult::Committed { receipt, .. } => {
                 executor.set_last_receipt_hash(receipt.agent, receipt.receipt_hash());
                 ForkOutcome::Committed {
@@ -640,6 +682,21 @@ impl History {
     }
 }
 
+fn validate_genesis_births(ledger: &Ledger, cells: &[Cell]) -> Result<Vec<CellId>, ReplayError> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ids = Vec::with_capacity(cells.len());
+    for cell in cells {
+        let id = cell.id();
+        if ledger.get(&id).is_some() || !seen.insert(id.0) {
+            return Err(ReplayError::InvalidGenesisBatch {
+                reason: format!("cell {} already exists", short(id.as_bytes())),
+            });
+        }
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
 /// Apply one recorded step to a ledger under a (warm) executor, re-deriving it.
 ///
 /// Takes the executor by `&mut` because a committed step must be re-executed under
@@ -651,11 +708,28 @@ fn apply_step(
     executor: &mut TurnExecutor,
     ledger: &mut Ledger,
     step: &RecordedStep,
+    landing: usize,
 ) -> Result<(), ReplayError> {
     match step {
         RecordedStep::Genesis { cell } => {
-            // Genesis is an idempotent direct install (fresh slot on replay).
-            let _ = ledger.insert_cell(*cell.clone());
+            validate_genesis_births(ledger, std::slice::from_ref(cell.as_ref()))?;
+            ledger
+                .insert_cell(*cell.clone())
+                .expect("genesis identity was validated before insertion");
+            Ok(())
+        }
+        RecordedStep::GenesisBatch { cells } => {
+            if cells.len() < 2 {
+                return Err(ReplayError::InvalidGenesisBatch {
+                    reason: "a recorded batch must contain at least two cells".into(),
+                });
+            }
+            validate_genesis_births(ledger, cells)?;
+            for cell in cells {
+                ledger
+                    .insert_cell(cell.clone())
+                    .expect("all batch identities were validated before insertion");
+            }
             Ok(())
         }
         RecordedStep::GenesisUpdate { cell } => {
@@ -670,21 +744,59 @@ fn apply_step(
             turn,
             receipt,
             timestamp,
-            ..
+            post_root,
         } => {
+            let expected_receipt = receipt.receipt_hash();
+            if turn.previous_receipt_hash != executor.get_last_receipt_hash(&turn.agent) {
+                return Err(ReplayError::NondeterministicReplay {
+                    expected_receipt,
+                    got: format!("original receipt-chain predecessor differs at step {landing}"),
+                });
+            }
+            if *timestamp != receipt.timestamp {
+                return Err(ReplayError::NondeterministicReplay {
+                    expected_receipt,
+                    got: format!("recorded clock differs from its receipt at step {landing}"),
+                });
+            }
+            if ledger.has_restore_point() {
+                return Err(ReplayError::NondeterministicReplay {
+                    expected_receipt,
+                    got: "an unresolved restore point prevents recorded-step replay".into(),
+                });
+            }
             executor.set_timestamp(*timestamp);
-            let mut t = turn.clone();
-            t.previous_receipt_hash = executor.get_last_receipt_hash(&t.agent);
-            match executor.execute(&t, ledger) {
-                TurnResult::Committed { receipt: r, .. } => {
-                    executor.set_last_receipt_hash(r.agent, r.receipt_hash());
-                    Ok(())
+            let checkpoint = executor.checkpoint_embedded_candidate(turn);
+            ledger.begin_restore_point();
+            let result = executor.execute_candidate(turn, ledger);
+            let verified = match &result {
+                TurnResult::Committed {
+                    receipt: actual, ..
+                } if actual.receipt_hash() == expected_receipt => {
+                    let got = ledger.root();
+                    if got == *post_root {
+                        Ok(())
+                    } else {
+                        Err(ReplayError::RootMismatch {
+                            step: landing,
+                            got,
+                            want: *post_root,
+                        })
+                    }
                 }
                 other => Err(ReplayError::NondeterministicReplay {
-                    expected_receipt: receipt.receipt_hash(),
+                    expected_receipt,
                     got: format!("{other:?}"),
                 }),
+            };
+            if verified.is_ok() {
+                ledger.commit_restore_point();
+                executor.observe_committed_candidate(turn, ledger, &result);
+            } else {
+                ledger.rollback_restore_point();
+                executor.rollback_producer_reference(checkpoint);
             }
+            verified
         }
     }
 }
@@ -891,6 +1003,9 @@ pub enum ScrubSource {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReplayError {
+    InvalidGenesisBatch {
+        reason: String,
+    },
     MissingGenesisCell {
         cell: CellId,
     },
@@ -908,8 +1023,8 @@ pub enum ReplayError {
         got: [u8; 32],
         want: [u8; 32],
     },
-    /// A recorded turn that committed when first run did NOT commit on replay —
-    /// the executor behaved nondeterministically (a real bug if it ever fires).
+    /// A recorded turn's original chain, clock, or exact receipt disagreed with
+    /// re-execution. This can indicate altered evidence or a determinism bug.
     NondeterministicReplay {
         expected_receipt: [u8; 32],
         got: String,
@@ -919,6 +1034,9 @@ pub enum ReplayError {
 impl std::fmt::Display for ReplayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ReplayError::InvalidGenesisBatch { reason } => {
+                write!(f, "invalid genesis publication: {reason}")
+            }
             ReplayError::MissingGenesisCell { cell } => write!(f, "genesis update refers to absent cell {}", short(cell.as_bytes())),
             ReplayError::OutOfRange { step, len } => {
                 write!(f, "replay step {step} out of range (history len {len})")
@@ -1298,8 +1416,10 @@ pub fn demo_history() -> (History, Ledger, [CellId; 3]) {
     let mut ledger = Ledger::new();
     let executor = history.fresh_executor();
 
-    let treasury = history.record_genesis(&mut ledger, make_open_cell(0x11, 1_000_000));
-    let user = history.record_genesis(&mut ledger, make_open_cell(0x33, 5_000));
+    let treasury_cell = make_open_cell(0x11, 1_000_000);
+    let user_cell = make_open_cell(0x33, 5_000);
+    let treasury = treasury_cell.id();
+    let user = user_cell.id();
 
     // The service holds a capability reaching the user (so a later grant is
     // legitimate under no-amplification).
@@ -1308,12 +1428,17 @@ pub fn demo_history() -> (History, Ledger, [CellId; 3]) {
         .capabilities
         .grant(user, AuthRequired::None)
         .expect("fresh c-list has a free slot");
-    let service = history.record_genesis(&mut ledger, service_cell);
+    let service = service_cell.id();
 
     // An issuer well carrying −supply.
     let mut well = make_open_cell(0xEE, 0);
     let _ = well.state.well_debit_balance(1_000_000);
-    history.record_genesis(&mut ledger, well);
+    history
+        .record_genesis_batch(
+            &mut ledger,
+            vec![treasury_cell, user_cell, service_cell, well],
+        )
+        .expect("demo anchors are one fresh atomic publication");
 
     // Five real turns through the embedded executor (same as demo_world).
     let nonce = |l: &Ledger, a: &CellId| l.get(a).map(|c| c.state.nonce()).unwrap_or(0);
@@ -1360,6 +1485,107 @@ pub fn demo_history() -> (History, Ledger, [CellId; 3]) {
 mod tests {
     use super::*;
     use crate::world::{bare_turn, make_open_cell, transfer};
+
+    #[test]
+    fn genesis_batch_is_one_boundary_and_validation_publishes_no_prefix() {
+        let mut history = History::new(1_700_000_000);
+        let mut ledger = Ledger::new();
+        let a = make_open_cell(0x71, 100);
+        let b = make_open_cell(0x72, 0);
+        let c = make_open_cell(0x73, 0);
+        let ids = history
+            .record_genesis_batch(&mut ledger, vec![a.clone(), b.clone()])
+            .unwrap();
+        assert_eq!(ids, vec![a.id(), b.id()]);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.checkpoints().len(), 2);
+        assert!(matches!(
+            history.steps()[0],
+            RecordedStep::GenesisBatch { .. }
+        ));
+        assert_eq!(history.replay_to(0).unwrap().len(), 0);
+        assert_eq!(history.replay_to(1).unwrap().len(), 2);
+        assert_eq!(history.reify_to(1).unwrap().0.root(), ledger.root());
+        assert_eq!(history.diff(0, 1).unwrap().len(), 2);
+
+        let root = ledger.root();
+        for invalid in [vec![c.clone(), a], vec![c.clone(), c.clone()]] {
+            assert!(matches!(
+                history.record_genesis_batch(&mut ledger, invalid),
+                Err(ReplayError::InvalidGenesisBatch { .. })
+            ));
+            assert_eq!(ledger.root(), root);
+            assert_eq!(history.len(), 1);
+            assert_eq!(history.boundaries.len(), 2);
+            assert!(ledger.get(&c.id()).is_none());
+        }
+        assert!(history
+            .record_genesis_batch(&mut ledger, vec![])
+            .unwrap()
+            .is_empty());
+        assert_eq!(history.len(), 1);
+        history.record_genesis_batch(&mut ledger, vec![c]).unwrap();
+        assert!(matches!(history.steps()[1], RecordedStep::Genesis { .. }));
+    }
+
+    #[test]
+    fn replay_rejects_duplicate_or_malformed_batch_before_any_member_is_inserted() {
+        let history = History::new(1_700_000_000);
+        let mut executor = history.fresh_executor();
+        let mut ledger = Ledger::new();
+        let a = make_open_cell(0x74, 100);
+        let root = ledger.root();
+        for cells in [vec![], vec![a.clone()], vec![a.clone(), a]] {
+            let invalid = RecordedStep::GenesisBatch { cells };
+            assert!(matches!(
+                apply_step(&mut executor, &mut ledger, &invalid, 1),
+                Err(ReplayError::InvalidGenesisBatch { .. })
+            ));
+            assert_eq!(ledger.len(), 0);
+            assert_eq!(ledger.root(), root);
+        }
+    }
+
+    #[test]
+    fn paid_refusal_leaves_no_unrecorded_ledger_or_executor_state() {
+        let mut history = History::with_costs(1_700_000_000, ComputronCosts::default_costs());
+        let executor = history.fresh_executor();
+        let mut ledger = Ledger::new();
+        let a = history.record_genesis(&mut ledger, make_open_cell(0x51, 100_000));
+        let b = history.record_genesis(&mut ledger, make_open_cell(0x52, 0));
+        let mut first = bare_turn(a, 0, vec![transfer(a, b, 10)]);
+        first.fee = 1_000;
+        let prefix = history
+            .record_commit(&executor, &mut ledger, first)
+            .unwrap();
+        let cells = postcard::to_stdvec(ledger.get(&a).unwrap()).unwrap();
+        let root = ledger.root();
+        let steps = history.len();
+        let nonce = ledger.get(&a).unwrap().state.nonce();
+        let mut bad = bare_turn(a, nonce, vec![transfer(a, b, 1), transfer(a, b, 100_000)]);
+        bad.fee = 1_000;
+        assert!(history.record_commit(&executor, &mut ledger, bad).is_none());
+        assert_eq!(postcard::to_stdvec(ledger.get(&a).unwrap()).unwrap(), cells);
+        assert_eq!(ledger.root(), root);
+        assert_eq!(history.len(), steps);
+        assert_eq!(
+            executor.get_last_receipt_hash(&a),
+            Some(prefix.receipt_hash())
+        );
+        assert!(!ledger.has_restore_point());
+
+        let mut next = bare_turn(a, nonce, vec![transfer(a, b, 20)]);
+        next.fee = 1_000;
+        assert!(history
+            .record_commit(&executor, &mut ledger, next)
+            .is_some());
+        assert_eq!(
+            history.replay_to(history.len()).unwrap().root(),
+            ledger.root()
+        );
+        assert_eq!(ledger.get(&a).unwrap().state.balance(), 97_970);
+        assert_eq!(ledger.get(&b).unwrap().state.balance(), 30);
+    }
 
     /// A small fixture history: two cells + three transfers, recorded.
     fn fixture() -> (History, Ledger, CellId, CellId) {
@@ -1536,8 +1762,8 @@ mod tests {
         let (h, _live, _a, _b) = fixture();
         let mut scratch = Ledger::new();
         let mut ex = h.fresh_executor();
-        for step in h.steps() {
-            apply_step(&mut ex, &mut scratch, step).unwrap();
+        for (index, step) in h.steps().iter().enumerate() {
+            apply_step(&mut ex, &mut scratch, step, index + 1).unwrap();
         }
         assert_eq!(scratch.root(), h.root_at(h.len()).unwrap());
     }
@@ -1581,12 +1807,119 @@ mod tests {
             matches!(err, Err(ReplayError::RootMismatch { step: 3, .. })),
             "tampered tooth must fail-closed, got {err:?}"
         );
-        // Untampered steps still verify.
+        // Earlier prefixes still verify; every replay crossing the altered
+        // intermediate root refuses, even though the requested root is honest.
         assert!(h.replay_to(2).is_ok());
-        assert!(h.replay_to(4).is_ok());
+        assert!(matches!(
+            h.replay_to(4),
+            Err(ReplayError::RootMismatch { step: 3, .. })
+        ));
+        for checkpoint in 0..=h.len() {
+            assert!(matches!(
+                h.replay_to_via_checkpoint(h.len(), checkpoint),
+                Err(ReplayError::RootMismatch { step: 3, .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn replay_checks_original_chain_head_instead_of_replacing_it() {
+        let (mut history, _ledger, a, b) = fixture();
+        let final_root = history.root_at(history.len()).unwrap();
+        let RecordedStep::Committed { turn, .. } = &mut history.steps[3] else {
+            panic!("fixture step four is its second transfer");
+        };
+        let original = turn.previous_receipt_hash;
+        turn.previous_receipt_hash = Some([0x99; 32]);
+        assert_ne!(turn.previous_receipt_hash, original);
+        assert_eq!(history.root_at(history.len()), Some(final_root));
+        assert!(matches!(
+            history.replay_to(history.len()),
+            Err(ReplayError::NondeterministicReplay { got, .. })
+                if got.contains("original receipt-chain predecessor")
+        ));
+        assert!(history
+            .fork_at(history.len(), bare_turn(a, 2, vec![transfer(a, b, 1)]))
+            .is_err());
+    }
+
+    #[test]
+    fn replay_checks_receipt_and_clock_even_without_a_ledger_root_change() {
+        for change_clock in [false, true] {
+            let (mut history, _ledger, _a, _b) = fixture();
+            let last = history.len() - 1;
+            let RecordedStep::Committed {
+                receipt, timestamp, ..
+            } = &mut history.steps[last]
+            else {
+                panic!("fixture ends with a transfer");
+            };
+            let before = receipt.receipt_hash();
+            if change_clock {
+                *timestamp += 1;
+                assert_ne!(*timestamp, receipt.timestamp);
+            } else {
+                receipt.computrons_used += 1;
+                assert_ne!(receipt.receipt_hash(), before);
+            }
+            // No later capability provenance is needed to expose altered
+            // evidence: this last transfer's root remains the honest value.
+            assert!(matches!(
+                history.replay_to(history.len()),
+                Err(ReplayError::NondeterministicReplay { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn replay_checks_the_committed_step_root_as_well_as_the_parallel_root() {
+        let (mut history, _ledger, _a, _b) = fixture();
+        let honest = history.root_at(3).unwrap();
+        let RecordedStep::Committed { post_root, .. } = &mut history.steps[2] else {
+            panic!("fixture step three is its first transfer");
+        };
+        post_root[0] ^= 1;
+        assert_ne!(*post_root, honest);
+        assert_eq!(history.root_at(3), Some(honest));
+        assert!(matches!(
+            history.replay_to(history.len()),
+            Err(ReplayError::RootMismatch { step: 3, .. })
+        ));
     }
 
     // --- FORK / what-if ------------------------------------------------------
+
+    #[test]
+    fn paid_rejected_fork_retains_the_exact_branch_point() {
+        let mut history = History::with_costs(1_700_000_000, ComputronCosts::default_costs());
+        let executor = history.fresh_executor();
+        let mut ledger = Ledger::new();
+        let a = history.record_genesis(&mut ledger, make_open_cell(0x75, 100_000));
+        let b = history.record_genesis(&mut ledger, make_open_cell(0x76, 0));
+        let mut first = bare_turn(a, 0, vec![transfer(a, b, 10)]);
+        first.fee = 1_000;
+        history
+            .record_commit(&executor, &mut ledger, first)
+            .unwrap();
+        let branch = history.len();
+        let root = ledger.root();
+        let nonce = ledger.get(&a).unwrap().state.nonce();
+        let mut bad = bare_turn(a, nonce, vec![transfer(a, b, 1), transfer(a, b, 100_000)]);
+        bad.fee = 1_000;
+        let rejected = history.fork_at(branch, bad).unwrap();
+        assert!(!rejected.outcome.is_committed());
+        assert_eq!(rejected.fork_root, root);
+        assert!(rejected.divergence.is_empty());
+
+        let mut next = bare_turn(a, nonce, vec![transfer(a, b, 20)]);
+        next.fee = 1_000;
+        let predicted = history.fork_at(branch, next.clone()).unwrap();
+        assert!(predicted.outcome.is_committed());
+        history.record_commit(&executor, &mut ledger, next).unwrap();
+        assert_eq!(predicted.fork_root, ledger.root());
+        assert_eq!(ledger.get(&a).unwrap().state.balance(), 97_970);
+        assert_eq!(ledger.get(&b).unwrap().state.balance(), 30);
+    }
 
     #[test]
     fn fork_diverges_and_leaves_the_mainline_intact() {
@@ -1704,8 +2037,9 @@ mod tests {
     #[test]
     fn demo_history_is_fully_replayable_and_verified() {
         let (h, live, [treasury, service, user]) = demo_history();
-        // 4 genesis + 5 turns = 9 steps.
-        assert_eq!(h.len(), 9);
+        // One four-cell publication + five turns = six steps.
+        assert_eq!(h.len(), 6);
+        assert!(matches!(h.steps()[0], RecordedStep::GenesisBatch { .. }));
         // Every step verifies.
         for k in 0..=h.len() {
             assert!(h.replay_to(k).is_ok(), "demo step {k} must verify");

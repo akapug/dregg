@@ -214,7 +214,9 @@ pub fn setup_boundaries(history: &History) -> Vec<SetupBoundary> {
     let mut pending = SetupBoundary::default();
     for step in history.steps() {
         match step {
-            RecordedStep::Genesis { .. } => pending.births = true,
+            RecordedStep::Genesis { .. } | RecordedStep::GenesisBatch { .. } => {
+                pending.births = true
+            }
             RecordedStep::GenesisUpdate { .. } => pending.updates = true,
             RecordedStep::Committed { .. } => {
                 out.push(if out.is_empty() {

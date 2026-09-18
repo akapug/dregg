@@ -1558,11 +1558,10 @@ impl TurnExecutor {
     /// `new_commitment` check stay on the execute path, because they need execution to
     /// have happened.
     ///
-    /// ⚑ Why this matters for the validate path: every one of these rules runs AFTER
-    /// Phase 1, and Phase 1 (fee debit + nonce bump) is never rolled back. A turn whose
-    /// witness fails rule 2/5/7b is therefore charged its fee and has its nonce bumped
-    /// before it is refused — so a pre-flight that admits it has told the submitter the
-    /// turn is fine when it is about to cost them.
+    /// These rules run after the raw executor's phase-one fee debit and nonce
+    /// increment. A refusal therefore requires the caller's surrounding rollback,
+    /// as the node and embedded SDK perform. Pre-flight invokes the same rules so
+    /// it cannot call a witness acceptable when execution will refuse it.
     pub(super) fn validate_sovereign_witness(
         &self,
         cell_id: &CellId,
@@ -1895,8 +1894,8 @@ impl TurnExecutor {
             }
         } else {
             // Sovereign-witness rules 0-8 — the SAME function `execute` calls, not a second
-            // transcription. These run AFTER Phase 1 on the execute path, so a witness that
-            // fails here is one the submitter would otherwise pay a fee and a nonce for.
+            // transcription. These run after Phase 1 on the raw execute path;
+            // the caller must roll back that candidate when a witness is refused.
             for (cell_id, witness) in &turn.sovereign_witnesses {
                 self.validate_sovereign_witness(cell_id, witness, turn, ledger)?;
             }

@@ -207,6 +207,14 @@ pub struct World {
     /// explicit `set(None)`.
     #[allow(clippy::type_complexity)] // (height, state_root, receipt_root) memo cell
     state_root_memo: StdCell<Option<(u64, [u8; 32], [u8; 32])>>,
+    /// The canonical Ledger root, distinct from the distribution image hash
+    /// above. Materialized at publication, with the same height/head key and
+    /// setup invalidations, so live cursor checks never clone or hash a ledger.
+    #[allow(clippy::type_complexity)]
+    canonical_root_memo: StdCell<Option<(u64, [u8; 32], [u8; 32])>>,
+    /// Prediction forks start from an unrecorded cloned state. Recording their
+    /// next turn does not supply that missing origin or make the tape replayable.
+    history_has_recorded_origin: bool,
     /// THE SUSPEND GATE (meta-debug, `docs/deos/FIRMAMENT-REFLEXIVE-SUBSTRATE.md`
     /// §3.2). When `true`, the live loop is HALTED: [`World::commit_turn`] stages
     /// every submitted turn in `pending` instead of running the executor, and the
@@ -304,6 +312,9 @@ impl World {
             max_proof_age_secs: 0,
         };
         let history = History::with_costs(timestamp, costs.clone());
+        let empty_root = history
+            .root_at(0)
+            .expect("fresh history has its empty root");
         let record_exec = history.fresh_executor();
         World {
             engine: DreggEngine::new(config),
@@ -322,6 +333,8 @@ impl World {
             turn_fee: 0,
             deployed_factories: Vec::new(),
             state_root_memo: StdCell::new(None),
+            canonical_root_memo: StdCell::new(Some((0, [0; 32], empty_root))),
+            history_has_recorded_origin: true,
             suspended: false,
             pending: VecDeque::new(),
             persist: None,
@@ -715,6 +728,45 @@ impl World {
         &self.history
     }
 
+    /// The current fully recorded publication boundary, for exact live cursors.
+    /// An uncertain durable outcome, deferred symbolic work, or an unresolved
+    /// executor transaction has no supported boundary. The returned root is the
+    /// canonical `Ledger::root`, not `state_root`'s distribution image hash.
+    pub fn current_published_boundary(&self) -> Option<(usize, [u8; 32])> {
+        if !self.history_has_recorded_origin
+            || self.durability_failure.is_some()
+            || !self.symbolic_turns.is_empty()
+            || self.engine.has_unresolved_turn_candidate()
+        {
+            return None;
+        }
+        let step = self.history.len();
+        let recorded = self.history.root_at(step)?;
+        let head = self
+            .receipts
+            .last()
+            .map(|receipt| receipt.receipt_hash())
+            .unwrap_or([0; 32]);
+        let (height, receipt, root) = self.canonical_root_memo.get()?;
+        if height != self.height || receipt != head {
+            return None;
+        }
+        (root == recorded).then_some((step, root))
+    }
+
+    /// Called while publication owns mutable access; `Ledger::root` updates its
+    /// incremental Merkle cache instead of cloning the ledger in a read-only UI.
+    fn refresh_canonical_root_memo(&mut self) {
+        let root = self.engine.ledger_mut().root();
+        let head = self
+            .receipts
+            .last()
+            .map(|receipt| receipt.receipt_hash())
+            .unwrap_or([0; 32]);
+        self.canonical_root_memo
+            .set(Some((self.height, head, root)));
+    }
+
     pub(crate) fn replay_costs(&self) -> ComputronCosts {
         self.engine.executor().costs.clone()
     }
@@ -754,6 +806,12 @@ impl World {
                 RecordedStep::Genesis { cell } => {
                     rebuilt.try_genesis_install(*cell.clone())?;
                 }
+                RecordedStep::GenesisBatch { cells } => {
+                    if cells.len() < 2 {
+                        return Err(format!("malformed genesis batch at step {index}"));
+                    }
+                    rebuilt.try_genesis_install_batch(cells.clone())?;
+                }
                 RecordedStep::GenesisUpdate { cell } => {
                     rebuilt.commit_genesis_update(*cell.clone())?;
                 }
@@ -761,10 +819,13 @@ impl World {
                     turn,
                     receipt,
                     timestamp,
-                    ..
+                    post_root,
                 } => {
                     if turn.previous_receipt_hash != rebuilt.chain_head(&turn.agent) {
                         return Err(format!("history receipt chain mismatch at step {index}"));
+                    }
+                    if *timestamp != receipt.timestamp {
+                        return Err(format!("history receipt clock mismatch at step {index}"));
                     }
                     rebuilt.set_clock(*timestamp);
                     match rebuilt.commit_turn(*turn.clone()) {
@@ -777,9 +838,12 @@ impl World {
                             ))
                         }
                     }
+                    if rebuilt.engine.ledger_mut().root() != *post_root {
+                        return Err(format!("history turn root mismatch at step {}", index + 1));
+                    }
                 }
             }
-            if self.history.root_at(index + 1) != Some(rebuilt.ledger().root()) {
+            if self.history.root_at(index + 1) != Some(rebuilt.engine.ledger_mut().root()) {
                 return Err(format!("history root mismatch at step {}", index + 1));
             }
         }
@@ -871,6 +935,7 @@ impl World {
             genesis: true,
         });
         self.state_root_memo.set(None);
+        self.canonical_root_memo.set(None);
         id
     }
 
@@ -1042,6 +1107,8 @@ impl World {
             turn_fee: self.turn_fee,
             deployed_factories: self.deployed_factories.clone(),
             state_root_memo: StdCell::new(None),
+            canonical_root_memo: StdCell::new(None),
+            history_has_recorded_origin: false,
             // A fork is a throwaway DIVERGENT copy used to PREDICT the next turn; it
             // runs freely (never inherits the live world's suspension), and a
             // suspended live world can still fork to simulate what a queued turn
@@ -1120,29 +1187,32 @@ impl World {
         }
         // Materialize a deferred replay-tape clone BEFORE the engine insert, so a
         // fork that genesis-installs before committing records onto the fork snapshot
-        // (not an empty ledger) and record_genesis inserts into a fresh slot. No-op
+        // (not an empty ledger) and record_genesis_batch inserts fresh slots. No-op
         // on the live world (#7).
         self.ensure_record_ledger();
-        for cell in cells {
-            let id = cell.id();
-            let balance = cell.state.balance();
+        for cell in &cells {
             // Install into the AUTHORITATIVE engine ledger.
             self.engine
                 .ledger_mut()
                 .insert_cell(cell.clone())
                 .expect("genesis insert is into a fresh slot");
-            // Mirror into the replay tape (its own ledger), capturing the root
-            // tooth. Same cell, same order → the recorded root equals the engine's.
-            self.history.record_genesis(&mut self.record_ledger, cell);
+        }
+        // One durable publication has one recorded post-state. A cursor between
+        // its births would display a world that was never actually published.
+        self.history
+            .record_genesis_batch(&mut self.record_ledger, cells.clone())
+            .expect("recorder and engine share the validated pre-publication state");
+        for cell in cells {
             self.emit_dynamics(WorldEvent::CellBorn {
-                cell: id,
-                balance,
+                cell: cell.id(),
+                balance: cell.state.balance(),
                 genesis: true,
             });
         }
         // Genesis installs mutate the live ledger WITHOUT bumping height or pushing
         // a receipt, so the witness tooth is unchanged — bust the state_root memo.
         self.state_root_memo.set(None);
+        self.refresh_canonical_root_memo();
         Ok(ids)
     }
 
@@ -1196,6 +1266,7 @@ impl World {
         self.history
             .record_genesis_update(&mut self.record_ledger, cell);
         self.state_root_memo.set(None);
+        self.refresh_canonical_root_memo();
         Ok(())
     }
 
@@ -1212,6 +1283,7 @@ impl World {
                         touched_cells(turn).iter().any(|c| c == cell)
                     }
                     crate::replay::RecordedStep::Genesis { .. }
+                    | crate::replay::RecordedStep::GenesisBatch { .. }
                     | crate::replay::RecordedStep::GenesisUpdate { .. } => false,
                 }))
     }
@@ -1459,6 +1531,7 @@ impl World {
                             // to its pre-turn value; bust the memo so a stale advanced
                             // entry can never be served.
                             self.state_root_memo.set(None);
+                            self.canonical_root_memo.set(None);
                             let failure = match rollback {
                                 Ok(()) => e.to_string(),
                                 Err(error) => format!("{e}; candidate rollback failed: {error}"),
@@ -1575,6 +1648,11 @@ impl World {
                     self.emit_dynamics(ev.clone());
                 }
                 self.receipts.push(receipt.clone());
+                if self.symbolic_turns.is_empty() {
+                    self.refresh_canonical_root_memo();
+                } else {
+                    self.canonical_root_memo.set(None);
+                }
                 CommitOutcome::Committed {
                     receipt: Box::new(receipt),
                     events,
@@ -2252,14 +2330,12 @@ pub fn demo_genesis_at(timestamp: i64) -> (World, [CellId; 3], DemoSeed) {
 /// [`demo_genesis_at`] builds its own throwaway ephemeral `World`; but the durable
 /// windowed desktop must seed a world it ALREADY OPENED against a redb image (so
 /// the genesis installs — and the [`DemoSeed`] turns driven afterward — DUAL-WRITE
-/// to the attached store and thus PERSIST). Because [`World::genesis_cell`] /
-/// [`World::genesis_install`] mirror each cell via `record_genesis` when a store is
-/// attached, running the identical install sequence here on a durable `world` makes
-/// the warm demo world durable — the newcomer still gets the same image, but now it
-/// survives a close+reopen. The install ORDER (treasury → user → service → well) is
-/// byte-identical to [`demo_genesis_at`], so recovery reinstalls deterministically
-/// and the anchor ids match. On an EPHEMERAL `world` this is exactly the old
-/// behavior (no store ⟹ no mirror). Returns the `[treasury, service, user]` anchors
+/// to the attached store and thus PERSIST). All four cells are installed through
+/// [`World::try_genesis_install_batch`] as one durable publication and one history
+/// step, with no visible intermediate world. The batch order (treasury → user →
+/// service → well) is identical to [`demo_genesis_at`], so recovery reinstalls
+/// deterministically and the anchor ids match. An ephemeral world records the
+/// same publication boundary in memory. Returns the `[treasury, service, user]` anchors
 /// + the [`DemoSeed`] plan (drive it with [`DemoSeed::next`] to commit the 5 turns).
 pub fn seed_demo_genesis_onto(w: &mut World) -> ([CellId; 3], DemoSeed) {
     try_seed_demo_genesis_onto(w).expect("demo setup requires an available World and fresh anchors")
@@ -2862,7 +2938,7 @@ mod tests {
         assert!(first.is_committed(), "paid prefix must commit: {first:?}");
         assert!(world.receipts()[0].computrons_used > 0);
 
-        let ledger_root = world.ledger().root();
+        let ledger_root = world.engine.ledger_mut().root();
         let image_root = world.state_root();
         let a_before = postcard::to_stdvec(world.ledger().get(&a).unwrap()).unwrap();
         let b_before = postcard::to_stdvec(world.ledger().get(&b).unwrap()).unwrap();
@@ -2894,7 +2970,7 @@ mod tests {
             postcard::to_stdvec(world.ledger().get(&b).unwrap()).unwrap(),
             b_before
         );
-        assert_eq!(world.ledger().root(), ledger_root);
+        assert_eq!(world.engine.ledger_mut().root(), ledger_root);
         assert_eq!(world.state_root(), image_root);
         assert_eq!(world.compute_state_root(), image_root);
         assert_eq!(world.record_ledger.root(), ledger_root);
@@ -2917,7 +2993,7 @@ mod tests {
         assert_eq!(world.ledger().get(&b).unwrap().state.balance(), 30);
         assert_eq!(
             world.history.replay_to(world.history.len()).unwrap().root(),
-            world.ledger().root()
+            world.engine.ledger_mut().root()
         );
         assert_eq!(
             world
@@ -2976,6 +3052,158 @@ mod tests {
             roots
         );
         assert_eq!(reopened.height(), 2);
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_publication_failure_restores_revocations_budget_and_observer_boundary() {
+        use dregg_turn::budget_gate::{BudgetGate, BudgetSlice};
+        use dregg_turn::turn::TurnResult;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        struct CountPublished(Arc<AtomicUsize>);
+        impl dregg_turn::shadow::ShadowObserver for CountPublished {
+            fn observe(&self, _turn: &Turn, _ledger: &Ledger, result: &TurnResult, _height: u64) {
+                assert!(result.is_committed());
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let path = scratch_redb("candidate-side-state");
+        let mut world =
+            World::open_with_timestamp(&path, ComputronCosts::default_costs(), 1_700_000_000)
+                .unwrap()
+                .with_turn_fee(1_000);
+        let a = world.genesis_cell(0x41, 100_000);
+        let notifications = Arc::new(AtomicUsize::new(0));
+        world.engine.executor_mut().shadow_observer =
+            Arc::new(CountPublished(notifications.clone()));
+        world
+            .engine
+            .executor_mut()
+            .set_budget_gate(BudgetGate::new(4, BudgetSlice::new(20_000)));
+        let grant = world.turn(a, vec![grant_capability(a, a, a, 0)]);
+        let granted = world.commit_turn(grant);
+        assert!(granted.is_committed(), "grant prerequisite: {granted:?}");
+        assert!(world
+            .ledger()
+            .get(&a)
+            .unwrap()
+            .capabilities
+            .lookup(0)
+            .is_some());
+        assert_eq!(notifications.load(Ordering::SeqCst), 1);
+        let cells = postcard::to_stdvec(world.ledger().get(&a).unwrap()).unwrap();
+        let root = world.state_root();
+        let head = world.chain_head(&a);
+        let write_set = world.engine.executor().last_write_set();
+        let budget = world
+            .engine
+            .executor()
+            .budget_gate
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .slice
+            .clone();
+        let revoked =
+            postcard::to_stdvec(&*world.engine.executor().note_revoked.lock().unwrap()).unwrap();
+
+        arm_next_dual_write_failure();
+        let revoke = world.turn(
+            a,
+            vec![Effect::ExerciseViaCapability {
+                cap_slot: 0,
+                inner_effects: vec![revoke_capability(a, 0)],
+            }],
+        );
+        let refused = world.commit_turn(revoke);
+        assert!(
+            matches!(refused, CommitOutcome::Rejected { ref reason, .. } if reason.contains("injected durable-write failure")),
+            "must reach actual publication failure: {refused:?}"
+        );
+        assert_eq!(world.durability_status(), DurabilityStatus::Unavailable);
+        assert_eq!(
+            postcard::to_stdvec(world.ledger().get(&a).unwrap()).unwrap(),
+            cells
+        );
+        assert_eq!(world.state_root(), root);
+        assert_eq!(world.chain_head(&a), head);
+        assert_eq!(world.engine.executor().last_write_set(), write_set);
+        assert_eq!(
+            world
+                .engine
+                .executor()
+                .budget_gate
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .slice,
+            budget
+        );
+        assert_eq!(
+            postcard::to_stdvec(&*world.engine.executor().note_revoked.lock().unwrap()).unwrap(),
+            revoked
+        );
+        assert_eq!(
+            notifications.load(Ordering::SeqCst),
+            1,
+            "a disk-refused candidate was never published to the observer"
+        );
+        assert!(!world.engine.ledger().has_restore_point());
+        drop(world);
+
+        let mut reopened =
+            World::open_with_timestamp(&path, ComputronCosts::default_costs(), 1_700_000_000)
+                .unwrap()
+                .with_turn_fee(1_000);
+        assert_eq!(reopened.state_root(), root);
+        assert_eq!(
+            reopened
+                .engine
+                .executor()
+                .note_revoked
+                .lock()
+                .unwrap()
+                .len(),
+            0
+        );
+        let revoke = reopened.turn(
+            a,
+            vec![Effect::ExerciseViaCapability {
+                cap_slot: 0,
+                inner_effects: vec![revoke_capability(a, 0)],
+            }],
+        );
+        let committed = reopened.commit_turn(revoke);
+        assert!(
+            committed.is_committed(),
+            "the genuine unrevoked slot survives reopen: {committed:?}"
+        );
+        assert_eq!(
+            reopened
+                .engine
+                .executor()
+                .note_revoked
+                .lock()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(reopened
+            .ledger()
+            .get(&a)
+            .unwrap()
+            .capabilities
+            .lookup(0)
+            .is_none());
         drop(reopened);
         let _ = std::fs::remove_file(path);
     }
@@ -3232,6 +3460,96 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn durable_atomic_birth_batches_keep_one_boundary_across_turns_and_reopen() {
+        let path = scratch_redb("atomic-batch-history-boundaries");
+        let mut world =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000).unwrap();
+        let first = world
+            .try_genesis_install_batch(vec![make_open_cell(0x61, 100), make_open_cell(0x62, 0)])
+            .unwrap();
+        assert_eq!(world.history.len(), 1);
+        let transfer_before = world.turn(first[0], vec![transfer(first[0], first[1], 10)]);
+        assert!(world.commit_turn(transfer_before).is_committed());
+        let later = world
+            .try_genesis_install_batch(vec![make_open_cell(0x63, 0), make_open_cell(0x64, 0)])
+            .unwrap();
+        assert_eq!(world.history.len(), 3);
+        let transfer_after = world.turn(first[0], vec![transfer(first[0], later[1], 5)]);
+        assert!(world.commit_turn(transfer_after).is_committed());
+        world.try_checkpoint_now().unwrap();
+        let roots: Vec<_> = (0..=world.history.len())
+            .map(|step| world.history.root_at(step).unwrap())
+            .collect();
+        let receipts: Vec<_> = world.receipts().iter().map(|r| r.receipt_hash()).collect();
+        let expected_counts = [0, 2, 2, 4, 4];
+        assert_eq!(roots.len(), expected_counts.len());
+        for (step, count) in expected_counts.into_iter().enumerate() {
+            let view = world.replay_to_step(step).unwrap();
+            assert_eq!(view.cell_count(), count);
+            assert_eq!(view.current_published_boundary(), Some((step, roots[step])));
+        }
+        drop(world);
+
+        let reopened =
+            World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_100).unwrap();
+        assert_eq!(reopened.history.len(), 4);
+        assert!(matches!(
+            reopened.history.steps()[0],
+            crate::replay::RecordedStep::GenesisBatch { .. }
+        ));
+        assert!(matches!(
+            reopened.history.steps()[2],
+            crate::replay::RecordedStep::GenesisBatch { .. }
+        ));
+        assert_eq!(
+            reopened
+                .receipts()
+                .iter()
+                .map(|r| r.receipt_hash())
+                .collect::<Vec<_>>(),
+            receipts
+        );
+        for (step, count) in expected_counts.into_iter().enumerate() {
+            let mut replayed = reopened.history.replay_to(step).unwrap();
+            assert_eq!(replayed.len(), count);
+            assert_eq!(replayed.root(), roots[step]);
+            assert_eq!(reopened.replay_to_step(step).unwrap().cell_count(), count);
+        }
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn published_boundary_cache_invalidates_setup_and_refuses_pending_candidates() {
+        let mut world = World::with_costs_and_timestamp(ComputronCosts::zero(), 1_700_000_000);
+        assert_eq!(world.current_published_boundary().unwrap().0, 0);
+        assert!(world.canonical_root_memo.get().is_some());
+        let ids = world
+            .try_genesis_install_batch(vec![make_open_cell(0x65, 100), make_open_cell(0x66, 0)])
+            .unwrap();
+        let born = world.current_published_boundary().unwrap();
+        assert_eq!(born.0, 1);
+        assert_eq!(born.1, world.engine.ledger_mut().root());
+        assert!(world.set_cell_heap(&ids[1], doc_shaped_heap()));
+        let updated = world.current_published_boundary().unwrap();
+        assert_eq!(updated.0, 2);
+        assert_ne!(updated.1, born.1);
+        assert_eq!(updated.1, world.engine.ledger_mut().root());
+
+        let turn = world.turn(ids[0], vec![transfer(ids[0], ids[1], 10)]);
+        world.engine.execute_turn_candidate(&turn).unwrap();
+        assert_eq!(world.current_published_boundary(), None);
+        world.engine.rollback_turn_candidate().unwrap();
+        assert_eq!(world.current_published_boundary(), Some(updated));
+        assert!(world.commit_turn(turn).is_committed());
+        let committed = world.current_published_boundary().unwrap();
+        assert_eq!(committed.0, 3);
+        assert_eq!(committed.1, world.engine.ledger_mut().root());
+        assert_ne!(committed.1, updated.1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn durable_genesis_batch_validates_every_member_before_publication() {
         let path = scratch_redb("genesis-batch-validation");
         let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), 1_700_000_000)
@@ -3337,7 +3655,12 @@ mod tests {
         let root = world.state_root();
         for step in 0..roots.len() {
             assert_eq!(
-                world.replay_to_step(step).unwrap().ledger().root(),
+                world
+                    .replay_to_step(step)
+                    .unwrap()
+                    .engine
+                    .ledger_mut()
+                    .root(),
                 roots[step]
             );
         }
@@ -3362,7 +3685,12 @@ mod tests {
                 roots[step]
             );
             assert_eq!(
-                reopened.replay_to_step(step).unwrap().ledger().root(),
+                reopened
+                    .replay_to_step(step)
+                    .unwrap()
+                    .engine
+                    .ledger_mut()
+                    .root(),
                 roots[step]
             );
         }

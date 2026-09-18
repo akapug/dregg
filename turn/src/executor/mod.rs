@@ -35,21 +35,21 @@
 //! The executor walks the call forest depth-first, checking preconditions,
 //! verifying authorization, applying effects, and metering computrons at each step.
 //!
-//! ## What atomicity means here — the forest, NOT the turn
+//! ## Raw execution and the caller's transaction
 //!
-//! If any action fails, every FOREST effect is rolled back via journal replay. **PHASE 1
-//! is outside that journal and is never rolled back.** `execute_without_shadow` debits the
-//! fee and increments the agent's nonce before the forest runs, deliberately — it is the
-//! anti-DoS charge for an expensive-but-failing turn — and no rejection path restores
-//! either. So a `TurnResult::Rejected` returns a ledger in which the agent is
-//! **fee-debited and nonce-bumped**, and a caller that reads "atomicity guarantee" as
-//! "a rejected turn leaves the ledger untouched" is wrong about the agent cell.
+//! If an action fails, raw execution restores forest effects, but its phase-one
+//! fee debit and nonce increment precede that forest journal. A raw rejected
+//! result can therefore retain those candidate changes. They are not a published
+//! charged refusal: the node's current durability policy discards rejected
+//! candidates (`durableApply_reject_stays`), and the embedded SDK restores the
+//! whole attempted turn as well as executor-owned mutable state.
 //!
-//! Concretely, on a `Rejected` turn: the budget-gate debit IS refunded (`fast_unlock`),
-//! sovereign-witness cell injections ARE removed, the factory-registry checkpoint IS
-//! restored, staged rate-limit debits are DROPPED, and the fee/nonce are NOT.
-//!
-//! This header claimed unqualified atomicity until 2026-08-05.
+//! Callers of raw `execute` own that surrounding transaction. Embedded hosts
+//! use `execute_candidate` with `checkpoint_embedded_candidate`, retaining the
+//! ledger restore point until publication succeeds; `DreggEngine` exposes that
+//! protocol and makes ordinary `execute_turn` atomic on rejection. Successful
+//! publication retains actual fees. Observer notification in candidate mode is
+//! deferred until the host explicitly accepts the committed result.
 
 use std::collections::HashMap;
 use std::fmt;

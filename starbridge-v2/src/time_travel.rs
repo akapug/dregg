@@ -159,6 +159,7 @@ impl TimeCockpitModel {
                         (step.label(), true, revs.get(cp.step - 1).copied().flatten())
                     }
                     crate::replay::RecordedStep::Genesis { .. }
+                    | crate::replay::RecordedStep::GenesisBatch { .. }
                     | crate::replay::RecordedStep::GenesisUpdate { .. } => {
                         (step.label(), false, None)
                     }
@@ -347,6 +348,19 @@ pub fn reversible_mirror(world: &World) -> Result<ReversibleHistory, BranchError
                 }
                 rh.record_genesis(&mut ledger, (**cell).clone());
             }
+            RecordedStep::GenesisBatch { cells } => {
+                if cells.len() < 2 {
+                    return Err(BranchError::ReplayRefused {
+                        step: index,
+                        reason: "recorded birth batch has fewer than two cells".to_string(),
+                    });
+                }
+                rh.record_genesis_batch(&mut ledger, cells.clone())
+                    .map_err(|error| BranchError::ReplayRefused {
+                        step: index,
+                        reason: error.to_string(),
+                    })?;
+            }
             RecordedStep::GenesisUpdate { cell } => {
                 rh.record_genesis_update(&mut ledger, (**cell).clone())
                     .map_err(|error| BranchError::ReplayRefused {
@@ -514,6 +528,18 @@ impl TimeBranch {
                         }
                     })?;
                 }
+                ReversibleStep::GenesisBatch { cells } => {
+                    // This ledger is a private reconstruction. No cursor or
+                    // projection is published until every batch member exists.
+                    for cell in cells {
+                        working.insert_cell(cell.clone()).map_err(|error| {
+                            BranchError::ReplayRefused {
+                                step: index,
+                                reason: format!("{error:?}"),
+                            }
+                        })?;
+                    }
+                }
                 ReversibleStep::GenesisUpdate { before, cell } => {
                     let current =
                         working
@@ -674,6 +700,42 @@ mod tests {
     }
 
     #[test]
+    fn atomic_birth_batches_have_one_tick_and_one_fork_boundary() {
+        let mut world = World::new();
+        let cells = vec![
+            crate::world::make_open_cell(0x11, 1_000),
+            crate::world::make_open_cell(0x22, 0),
+        ];
+        let ids = world
+            .try_genesis_install_batch(cells)
+            .expect("atomic pair birth");
+        assert_eq!(world.recorded_turns().len(), 1);
+        let batch_root = world.ledger().clone().root();
+        let turn = world.turn(ids[0], vec![transfer(ids[0], ids[1], 10)]);
+        assert!(world.commit_turn(turn).is_committed());
+        let mirror = reversible_mirror(&world).expect("mirror complete birth batch");
+        assert_eq!(mirror.len(), 2);
+        assert!(
+            matches!(mirror.steps()[0].as_ref(), ReversibleStep::GenesisBatch { cells } if cells.len() == 2)
+        );
+        assert!(mirror.replay_to(0).unwrap().iter().next().is_none());
+        let at_birth = mirror.replay_to(1).unwrap();
+        assert!(ids.iter().all(|id| at_birth.contains(id)));
+        let model = TimeCockpitModel::build(&world, 1, &MetaStack::new());
+        assert_eq!(model.ticks.len(), 3, "empty, whole batch, one turn");
+        assert!(!model.ticks[1].is_turn);
+        assert_eq!(model.cursor_cells.len(), 2);
+        assert_eq!(model.ticks[1].root, batch_root);
+        let branch =
+            TimeBranch::fork_and_drive(&world, 1, ids[0], vec![transfer(ids[0], ids[1], 20)])
+                .expect("fork after the complete batch");
+        assert_eq!(branch.fork_root, batch_root);
+        assert_eq!(branch.shared_prefix, 1);
+        assert_eq!(branch.cells.len(), 2);
+        assert!(branch.parent_untouched);
+    }
+
+    #[test]
     fn setup_updates_remain_distinct_in_ticks_mirrors_and_forks() {
         let mut world = World::new();
         let treasury = world.genesis_cell(0x11, 1_000);
@@ -730,7 +792,7 @@ mod tests {
         let mirror = reversible_mirror(&world).expect("metered receipt must be reproduced");
         assert_eq!(
             mirror.replay_to(mirror.len()).unwrap().root(),
-            world.ledger().root()
+            world.ledger().clone().root()
         );
     }
 

@@ -134,9 +134,13 @@ impl MetaDebugView {
     ///     with the suspension flag carried separately (Seam 4);
     ///   * [`Liveness::ReplayedDeterministic`] — the cursor fell into the past (the
     ///     world advanced beyond where this level was captured).
+    ///   * [`Liveness::ReconstructedApproximate`] — capture had no published
+    ///     boundary, so it cannot claim a retained historical reconstruction.
     pub fn liveness(&self, world: &World) -> Liveness {
         if self.cursor.is_live_head(world) {
             Liveness::Live
+        } else if self.cursor.ledger_root.is_none() {
+            Liveness::ReconstructedApproximate
         } else {
             Liveness::ReplayedDeterministic
         }
@@ -645,5 +649,18 @@ mod tests {
             Liveness::ReplayedDeterministic,
             "after the head advances, the captured meta-view re-derives from the past"
         );
+    }
+
+    #[test]
+    fn a_pending_symbolic_capture_has_no_replayed_publication_witness() {
+        let (mut world, treasury, sink) = two_cell_world();
+        world.set_witness_mode(dregg_turn::collapse::WitnessMode::Symbolic);
+        let turn = world.turn(treasury, vec![transfer(treasury, sink, 1)]);
+        assert!(world.commit_turn(turn).is_committed());
+        assert_eq!(world.symbolic_pending(), 1);
+        let view = MetaDebugView::capture(&world, MetaLevelId::BASE);
+        assert!(view.cursor.ledger_root.is_none());
+        assert_eq!(view.liveness(&world), Liveness::ReconstructedApproximate);
+        assert!(!view.is_paused_live(&world));
     }
 }

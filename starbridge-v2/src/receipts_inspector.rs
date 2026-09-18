@@ -1433,9 +1433,9 @@ mod tests {
         let (history, _live, [treasury, service, user]) = demo_history();
         let tt = TimeTravel::over(&history);
 
-        // 4 genesis + 5 turns = 9 steps, 10 landings.
-        assert_eq!(tt.head(), 9);
-        assert_eq!(tt.landing_count(), 10);
+        // One atomic four-cell birth + five turns = six published steps.
+        assert_eq!(tt.head(), 6);
+        assert_eq!(tt.landing_count(), 7);
 
         // GENESIS lands on the empty pre-genesis ledger (verified).
         let g = tt.land(TimeTravelMotion::Genesis);
@@ -1445,7 +1445,7 @@ mod tests {
 
         // HEAD lands on the live world (verified) — service holds 250_000 + 1_000.
         let h = tt.land(TimeTravelMotion::Head);
-        assert_eq!(h.step, 9);
+        assert_eq!(h.step, 6);
         assert!(h.root_verified);
         let svc = h.cells.iter().find(|(id, _, _)| *id == service).unwrap();
         assert_eq!(
@@ -1453,12 +1453,14 @@ mod tests {
             "the head landing reconstructs the real service balance"
         );
 
-        // A mid-history STEP lands verified, and its root is the recorded tooth.
-        let mid = tt.land(TimeTravelMotion::Step(4));
+        // The first published boundary contains the complete four-cell birth;
+        // there is no landing after only one, two or three members.
+        let mid = tt.land(TimeTravelMotion::Step(1));
         assert!(mid.root_verified);
+        assert_eq!(mid.cells.len(), 4);
         assert_eq!(
             mid.root,
-            history.root_at(4).unwrap(),
+            history.root_at(1).unwrap(),
             "the landing root IS replay.rs's recorded tooth"
         );
 

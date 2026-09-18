@@ -603,6 +603,9 @@ impl Turn {
 pub enum ReversibleStep {
     /// A cell installed directly at genesis (bypasses the executor).
     Genesis { cell: Cell },
+    /// Several cells installed in one atomic setup publication. There is no
+    /// historical boundary between members of this batch.
+    GenesisBatch { cells: Vec<Cell> },
     /// An existing cell replaced by trusted setup, without a turn or receipt.
     /// Both images are retained so replay checks the preimage and historical
     /// undo restores it. This is not an authorized runtime effect.
@@ -634,6 +637,8 @@ pub enum ReversibleError {
     NondeterministicReplay { step: usize, got: String },
     /// A trusted setup replacement was missing its cell or exact preimage.
     InvalidSetupUpdate { step: usize, reason: String },
+    /// An atomic birth batch was invalid or collided with an unresolved write.
+    InvalidGenesisBatch { step: usize, reason: String },
     /// `undo_to(k)` hit a committed (irreversible) step in `k+1..head` — you
     /// cannot undo *past* a commit. This is the RCCS islands-of-irreversibility
     /// made an API boundary (`FIRST-CLASS-REVERSIBILITY.md` §3.2).
@@ -660,6 +665,9 @@ impl std::fmt::Display for ReversibleError {
             }
             ReversibleError::InvalidSetupUpdate { step, reason } => {
                 write!(f, "invalid setup update at step {step}: {reason}")
+            }
+            ReversibleError::InvalidGenesisBatch { step, reason } => {
+                write!(f, "invalid birth batch at step {step}: {reason}")
             }
             ReversibleError::IrreversibleStep { step, reason } => write!(
                 f,
@@ -792,6 +800,30 @@ impl ReversibleHistory {
         id
     }
 
+    /// Install a complete birth batch and record exactly one publication
+    /// boundary. Empty batches do nothing; single-member batches retain the
+    /// ordinary `Genesis` shape. Failure publishes neither cells nor history.
+    pub fn record_genesis_batch(
+        &mut self,
+        ledger: &mut Ledger,
+        mut cells: Vec<Cell>,
+    ) -> Result<Vec<CellId>, ReversibleError> {
+        let ids = install_genesis_batch(ledger, &cells, self.steps.len())?;
+        if cells.is_empty() {
+            return Ok(ids);
+        }
+        let step = if cells.len() == 1 {
+            ReversibleStep::Genesis {
+                cell: cells.remove(0),
+            }
+        } else {
+            ReversibleStep::GenesisBatch { cells }
+        };
+        self.steps.push(Arc::new(step));
+        self.roots.push(ledger.root());
+        Ok(ids)
+    }
+
     /// Record an existing-cell setup replacement at this exact position. The
     /// prior image remains part of the immutable history, not a rewritten birth.
     pub fn record_genesis_update(
@@ -824,20 +856,35 @@ impl ReversibleHistory {
         ledger: &mut Ledger,
         mut turn: Turn,
     ) -> Option<TurnReceipt> {
+        // Preserve caller-owned candidates. Rejection must restore the raw
+        // executor's phase-one fee/nonce and side state before another turn
+        // can reuse this recorder and ledger.
+        if ledger.has_restore_point() {
+            return None;
+        }
         turn.previous_receipt_hash = executor.get_last_receipt_hash(&turn.agent);
-        match executor.execute(&turn, ledger) {
+        let checkpoint = executor.checkpoint_embedded_candidate(&turn);
+        ledger.begin_restore_point();
+        let result = executor.execute_candidate(&turn, ledger);
+        match &result {
             TurnResult::Committed { receipt, .. } => {
+                ledger.commit_restore_point();
                 executor.set_last_receipt_hash(receipt.agent, receipt.receipt_hash());
                 let post_root = ledger.root();
                 self.steps.push(Arc::new(ReversibleStep::Committed {
-                    turn,
+                    turn: turn.clone(),
                     receipt: receipt.clone(),
                     post_root,
                 }));
                 self.roots.push(post_root);
-                Some(receipt)
+                executor.observe_committed_candidate(&turn, ledger, &result);
+                Some(receipt.clone())
             }
-            _ => None,
+            _ => {
+                ledger.rollback_restore_point();
+                executor.rollback_producer_reference(checkpoint);
+                None
+            }
         }
     }
 
@@ -1029,7 +1076,9 @@ impl ReversibleHistory {
         }
         for idx in k..head {
             match self.steps[idx].as_ref() {
-                ReversibleStep::Genesis { .. } => return false,
+                ReversibleStep::Genesis { .. } | ReversibleStep::GenesisBatch { .. } => {
+                    return false;
+                }
                 ReversibleStep::GenesisUpdate { .. } => {
                     if self.replay_to(idx + 1).is_err() {
                         return false;
@@ -1207,6 +1256,47 @@ fn turn_touched_cells(turn: &Turn) -> std::collections::BTreeSet<CellId> {
     set
 }
 
+/// Validate and install a whole birth batch without exposing a partial result.
+fn install_genesis_batch(
+    ledger: &mut Ledger,
+    cells: &[Cell],
+    step: usize,
+) -> Result<Vec<CellId>, ReversibleError> {
+    if cells.is_empty() {
+        return Ok(Vec::new());
+    }
+    if ledger.has_restore_point() {
+        return Err(ReversibleError::InvalidGenesisBatch {
+            step,
+            reason: "an unresolved ledger restore point is active".to_string(),
+        });
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ids = Vec::with_capacity(cells.len());
+    for cell in cells {
+        let id = cell.id();
+        if ledger.contains(&id) || !seen.insert(id) {
+            return Err(ReversibleError::InvalidGenesisBatch {
+                step,
+                reason: "a birth identity already exists or occurs twice in the batch".to_string(),
+            });
+        }
+        ids.push(id);
+    }
+    ledger.begin_restore_point();
+    for cell in cells {
+        if let Err(error) = ledger.insert_cell(cell.clone()) {
+            ledger.rollback_restore_point();
+            return Err(ReversibleError::InvalidGenesisBatch {
+                step,
+                reason: format!("{error:?}"),
+            });
+        }
+    }
+    ledger.commit_restore_point();
+    Ok(ids)
+}
+
 /// Apply one recorded step to a ledger under a (warm) executor, re-deriving it.
 fn apply_step(
     executor: &mut TurnExecutor,
@@ -1222,6 +1312,16 @@ fn apply_step(
                     got: format!("{error:?}"),
                 }
             })?;
+            Ok(())
+        }
+        ReversibleStep::GenesisBatch { cells } => {
+            if cells.len() < 2 {
+                return Err(ReversibleError::InvalidGenesisBatch {
+                    step: index,
+                    reason: "a recorded birth batch must contain at least two cells".to_string(),
+                });
+            }
+            install_genesis_batch(ledger, cells, index)?;
             Ok(())
         }
         ReversibleStep::GenesisUpdate { before, cell } => {
@@ -1399,6 +1499,159 @@ mod tests {
 
     fn nonce_of(l: &Ledger, id: &CellId) -> u64 {
         l.get(id).map(|c| c.state.nonce()).unwrap_or(0)
+    }
+
+    #[test]
+    fn atomic_birth_batches_have_one_boundary_and_no_partial_failure() {
+        let mut history = ReversibleHistory::new(1_700_000_000);
+        let mut ledger = Ledger::new();
+        let initial = history.record_genesis(&mut ledger, open_cell(1, 100));
+        let before = ledger.root();
+        let cells = vec![open_cell(2, 20), open_cell(3, 30)];
+        let ids = history.record_genesis_batch(&mut ledger, cells).unwrap();
+        assert_eq!(
+            history.len(),
+            2,
+            "one complete batch adds one historical step"
+        );
+        assert!(
+            matches!(history.steps()[1].as_ref(), ReversibleStep::GenesisBatch { cells } if cells.len() == 2)
+        );
+        let prior = history.replay_to(1).unwrap();
+        assert!(prior.contains(&initial));
+        assert!(ids.iter().all(|id| !prior.contains(id)));
+        assert_eq!(history.root_at(1), before);
+        let mut complete = history.replay_to(2).unwrap();
+        assert!(ids.iter().all(|id| complete.contains(id)));
+        assert_eq!(complete.root(), ledger.root());
+        assert!(!history.window_reversible(1));
+        assert!(matches!(
+            history.undo_to(1),
+            Err(ReversibleError::IrreversibleStep { step: 1, .. })
+        ));
+        let fork = history.fork_at(2);
+        assert!(Arc::ptr_eq(&history.steps()[1], &fork.steps()[1]));
+        assert_eq!(fork.replay_to(2).unwrap().root(), ledger.root());
+
+        let root = ledger.root();
+        let fresh = open_cell(4, 40);
+        for bad in [
+            vec![fresh.clone(), fresh.clone()],
+            vec![fresh.clone(), open_cell(1, 100)],
+        ] {
+            assert!(matches!(
+                history.record_genesis_batch(&mut ledger, bad),
+                Err(ReversibleError::InvalidGenesisBatch { .. })
+            ));
+            assert!(!ledger.contains(&fresh.id()));
+            assert_eq!(ledger.root(), root);
+            assert_eq!(history.len(), 2);
+        }
+        assert!(
+            history
+                .record_genesis_batch(&mut ledger, Vec::new())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(history.len(), 2);
+        history
+            .record_genesis_batch(&mut ledger, vec![fresh])
+            .unwrap();
+        assert!(matches!(
+            history.steps()[2].as_ref(),
+            ReversibleStep::Genesis { .. }
+        ));
+    }
+
+    #[test]
+    fn a_paid_refusal_restores_the_reversible_recorder_before_retry() {
+        let mut history =
+            ReversibleHistory::with_costs(1_700_000_000, ComputronCosts::default_costs());
+        let executor = history.fresh_executor();
+        let mut ledger = Ledger::new();
+        let a = history.record_genesis(&mut ledger, open_cell(1, 100_000));
+        let b = history.record_genesis(&mut ledger, open_cell(2, 0));
+        let mut first = turn_with(
+            a,
+            0,
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 10,
+            }],
+        );
+        first.fee = 1_000;
+        let accepted = history
+            .record_commit(&executor, &mut ledger, first)
+            .unwrap();
+        let before = ledger.get(&a).unwrap().clone();
+        let root = ledger.root();
+        let steps = history.len();
+        let mut refused = turn_with(
+            a,
+            before.state.nonce(),
+            vec![
+                Effect::Transfer {
+                    from: a,
+                    to: b,
+                    amount: 1,
+                },
+                Effect::Transfer {
+                    from: a,
+                    to: b,
+                    amount: 100_000,
+                },
+            ],
+        );
+        refused.fee = 1_000;
+        assert!(
+            history
+                .record_commit(&executor, &mut ledger, refused)
+                .is_none()
+        );
+        assert_eq!(ledger.get(&a), Some(&before));
+        assert_eq!(ledger.root(), root);
+        assert_eq!(history.len(), steps);
+        assert_eq!(
+            executor.get_last_receipt_hash(&a),
+            Some(accepted.receipt_hash())
+        );
+        assert!(!ledger.has_restore_point());
+        let mut retry = turn_with(
+            a,
+            before.state.nonce(),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 20,
+            }],
+        );
+        retry.fee = 1_000;
+        assert!(
+            history
+                .record_commit(&executor, &mut ledger, retry)
+                .is_some()
+        );
+        assert_eq!(
+            history.replay_to(history.len()).unwrap().root(),
+            ledger.root()
+        );
+        assert_eq!(ledger.get(&b).unwrap().state.balance(), 30);
+
+        let before_outer = ledger.root();
+        ledger.begin_restore_point();
+        ledger.get_mut(&a).unwrap().state.fields[6] = [0x31; 32];
+        let outer = ledger.root();
+        let next = turn_with(a, nonce_of(&ledger, &a), Vec::new());
+        assert!(
+            history
+                .record_commit(&executor, &mut ledger, next)
+                .is_none()
+        );
+        assert!(ledger.has_restore_point());
+        assert_eq!(ledger.root(), outer);
+        ledger.rollback_restore_point();
+        assert_eq!(ledger.root(), before_outer);
     }
 
     #[test]

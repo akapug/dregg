@@ -127,6 +127,15 @@ struct BudgetCheckpoint {
     debit_len: usize,
 }
 
+fn retain_observation<T: Clone + Default>(slot: &std::sync::Mutex<T>, take: bool) -> T {
+    let mut value = slot.lock().unwrap_or_else(|error| error.into_inner());
+    if take {
+        std::mem::take(&mut *value)
+    } else {
+        value.clone()
+    }
+}
+
 impl TurnExecutor {
     /// Whether this turn can debit factory quota. Used to keep ordinary turns
     /// off the registry-clone path while retaining a whole-turn inverse for
@@ -159,6 +168,14 @@ impl TurnExecutor {
         &self,
         receipt_agent: CellId,
     ) -> ProducerReferenceCheckpoint {
+        self.checkpoint_reference_state(receipt_agent, false)
+    }
+
+    fn checkpoint_reference_state(
+        &self,
+        receipt_agent: CellId,
+        take_observations: bool,
+    ) -> ProducerReferenceCheckpoint {
         let rate_limits = self.rate_limit_state_snapshot();
         let budget = self.budget_gate.as_ref().map(|gate| {
             let gate = gate.lock().unwrap_or_else(|error| error.into_inner());
@@ -168,26 +185,11 @@ impl TurnExecutor {
             }
         });
         let previous_receipt_hash = self.get_last_receipt_hash(&receipt_agent);
-        let last_write_set = self
-            .last_write_set
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
-        let consumed_cap_witnesses = self
-            .consumed_cap_witnesses
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
-        let last_umem_witness = self
-            .last_umem_witness
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
-        let last_umem_yield = self
-            .last_umem_yield
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
+        let last_write_set = retain_observation(&self.last_write_set, take_observations);
+        let consumed_cap_witnesses =
+            retain_observation(&self.consumed_cap_witnesses, take_observations);
+        let last_umem_witness = retain_observation(&self.last_umem_witness, take_observations);
+        let last_umem_yield = retain_observation(&self.last_umem_yield, take_observations);
 
         ProducerReferenceCheckpoint {
             rate_limits,
@@ -220,7 +222,11 @@ impl TurnExecutor {
                 }
             }
         }
-        let mut checkpoint = self.checkpoint_producer_reference(turn.agent);
+        // These are prior-turn observations, not inputs to execution. Move them
+        // into the owned checkpoint: a umem projection can cover the whole
+        // ledger, so cloning it here would make every embedded turn O(ledger).
+        // Refusal restores them; success replaces them with this turn's result.
+        let mut checkpoint = self.checkpoint_reference_state(turn.agent, true);
         checkpoint.embedded = Some(EmbeddedCandidateCheckpoint {
             bridged_nullifiers: writes.bridged.then(|| {
                 self.bridged_nullifiers

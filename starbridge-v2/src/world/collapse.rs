@@ -193,6 +193,7 @@ impl World {
 
         // The live path returns to Full (subsequent turns witness eagerly).
         self.set_witness_mode(WitnessMode::Full);
+        self.refresh_canonical_root_memo();
         Ok(n)
     }
 }

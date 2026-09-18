@@ -329,6 +329,12 @@ impl DreggEngine {
     // Turn execution
     // =========================================================================
 
+    /// Whether the current ledger includes an unresolved execution candidate or
+    /// caller-owned restore point. Such an image is not a published boundary.
+    pub fn has_unresolved_turn_candidate(&self) -> bool {
+        self.pending_candidate.is_some() || self.ledger.has_restore_point()
+    }
+
     /// Execute a turn provided as postcard-encoded bytes.
     ///
     /// On success, the ledger is mutated and a `TurnReceipt` is returned.
@@ -873,6 +879,18 @@ mod tests {
     use dregg_turn::budget_gate::{BudgetGate, BudgetSlice};
     use dregg_turn::{Effect, TurnBuilder};
 
+    struct CountPublished(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl dregg_turn::shadow::ShadowObserver for CountPublished {
+        fn observe(&self, _turn: &Turn, _ledger: &Ledger, result: &TurnResult, _height: u64) {
+            assert!(
+                result.is_committed(),
+                "embedded observers only receive published successes"
+            );
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     fn metered_engine() -> (DreggEngine, CellId, CellId) {
         let mut engine = DreggEngine::new(EngineConfig::new(1_700_000_000));
         engine
@@ -919,7 +937,7 @@ mod tests {
         let first_receipt = engine.execute_turn(&first).unwrap();
         assert!(first_receipt.computrons_used > 0);
         let before = cell_image(&engine);
-        let root = engine.ledger().root();
+        let root = engine.ledger_mut().root();
         let head = engine.executor().get_last_receipt_hash(&a);
         let write_set = engine.executor().last_write_set();
         let budget = engine
@@ -938,7 +956,7 @@ mod tests {
             matches!(error, EmbedError::TurnRejected { at_action, .. } if at_action == vec![1])
         );
         assert_eq!(cell_image(&engine), before);
-        assert_eq!(engine.ledger().root(), root);
+        assert_eq!(engine.ledger_mut().root(), root);
         assert_eq!(engine.executor().get_last_receipt_hash(&a), head);
         assert_eq!(engine.executor().last_write_set(), write_set);
         assert_eq!(
@@ -1026,6 +1044,98 @@ mod tests {
         );
         let committed = engine.execute_turn(&turn).unwrap();
         assert_eq!(committed.receipt_hash(), candidate.receipt_hash());
+        assert!(!engine.ledger().has_restore_point());
+        assert!(engine.pending_candidate.is_none());
+    }
+
+    #[test]
+    fn embedded_observer_runs_once_only_after_candidate_publication() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let (mut engine, a, b) = metered_engine();
+        let notifications = Arc::new(AtomicUsize::new(0));
+        engine.executor_mut().shadow_observer = Arc::new(CountPublished(notifications.clone()));
+        let turn = metered_transfers(&engine, a, b, &[10]);
+        engine.execute_turn_candidate(&turn).unwrap();
+        assert_eq!(notifications.load(Ordering::SeqCst), 0);
+        engine.rollback_turn_candidate().unwrap();
+        assert_eq!(notifications.load(Ordering::SeqCst), 0);
+        engine.execute_turn_candidate(&turn).unwrap();
+        assert_eq!(notifications.load(Ordering::SeqCst), 0);
+        engine.commit_turn_candidate().unwrap();
+        assert_eq!(notifications.load(Ordering::SeqCst), 1);
+        assert!(engine.commit_turn_candidate().is_err());
+        assert_eq!(notifications.load(Ordering::SeqCst), 1);
+        let bad = metered_transfers(&engine, a, b, &[1, 100_000]);
+        assert!(engine.execute_turn(&bad).is_err());
+        assert_eq!(notifications.load(Ordering::SeqCst), 1);
+        let next = metered_transfers(&engine, a, b, &[20]);
+        engine.execute_turn(&next).unwrap();
+        assert_eq!(notifications.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn embedded_execution_unwind_retains_candidate_until_explicit_rollback() {
+        struct PanicVerifier;
+        impl dregg_turn::executor::ProofVerifier for PanicVerifier {
+            fn verify(&self, _proof: &[u8], _action: &str, _resource: &str, _vk: &[u8]) -> bool {
+                panic!("instance-local verifier failure after phase-one fee/nonce");
+            }
+        }
+        let (mut engine, a, b) = metered_engine();
+        let sender = engine.ledger_mut().get_mut(&a).unwrap();
+        sender.permissions.send = AuthRequired::Proof;
+        sender.verification_key = Some(dregg_cell::VerificationKey {
+            hash: [0x44; 32],
+            data: vec![1],
+        });
+        engine.executor_mut().proof_verifier = Some(Box::new(PanicVerifier));
+        let mut turn = metered_transfers(&engine, a, b, &[10]);
+        turn.fee = 2_000;
+        turn.call_forest.roots[0].action.authorization = dregg_turn::Authorization::Proof {
+            proof_bytes: vec![1],
+            bound_action: "transfer".into(),
+            bound_resource: "fixture".into(),
+        };
+        let before = cell_image(&engine);
+        let before_head = engine.executor().get_last_receipt_hash(&a);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.execute_turn_candidate(&turn)
+        }));
+        assert!(
+            panic.is_err(),
+            "the fixture must reach the failing verifier"
+        );
+        assert_ne!(
+            cell_image(&engine),
+            before,
+            "phase one actually ran before the unwind"
+        );
+        let provisional = cell_image(&engine);
+        assert!(engine.execute_turn(&turn).is_err());
+        assert!(engine.commit_turn_candidate().is_err());
+        assert_eq!(
+            cell_image(&engine),
+            provisional,
+            "reentry cannot silently erase the pending attempt"
+        );
+        engine.rollback_turn_candidate().unwrap();
+        assert_eq!(cell_image(&engine), before);
+        assert_eq!(engine.executor().get_last_receipt_hash(&a), before_head);
+        assert_eq!(
+            engine
+                .executor()
+                .budget_gate
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .slice
+                .spent,
+            0
+        );
         assert!(!engine.ledger().has_restore_point());
         assert!(engine.pending_candidate.is_none());
     }

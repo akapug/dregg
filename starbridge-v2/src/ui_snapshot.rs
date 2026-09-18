@@ -70,18 +70,20 @@ pub struct WitnessCursor {
     pub receipt_head: Option<[u8; 32]>,
     /// Exact boundary in the ordered history, including births and setup updates.
     pub history_step: usize,
-    /// Ledger root at that boundary, checked against both history and replay.
-    pub ledger_root: [u8; 32],
+    /// Ledger root at that published boundary. `None` means the captured state
+    /// is pending or unavailable and has no retained publication witness.
+    pub ledger_root: Option<[u8; 32]>,
 }
 
 impl WitnessCursor {
     /// Stamp the cursor at the live head of `world` — the current witness point.
     pub fn at_head(world: &World) -> Self {
+        let boundary = world.current_published_boundary();
         WitnessCursor {
             height: world.height(),
             receipt_head: world.receipts().last().map(|r| r.receipt_hash()),
-            history_step: world.recorded_turns().len(),
-            ledger_root: world.ledger().root(),
+            history_step: boundary.map_or(world.recorded_turns().len(), |(step, _)| step),
+            ledger_root: boundary.map(|(_, root)| root),
         }
     }
 
@@ -89,11 +91,12 @@ impl WitnessCursor {
     /// When true, the camera can read the live ledger directly
     /// (a `Live` rehydration); otherwise it must re-run over the replayed log.
     pub fn is_live_head(&self, world: &World) -> bool {
+        let Some(root) = self.ledger_root else {
+            return false;
+        };
         self.height == world.height()
             && self.receipt_head == world.receipts().last().map(|r| r.receipt_hash())
-            && self.history_step == world.recorded_turns().len()
-            && self.ledger_root == world.ledger().root()
-            && world.recorded_turns().root_at(self.history_step) == Some(self.ledger_root)
+            && world.current_published_boundary() == Some((self.history_step, root))
     }
 }
 
@@ -111,9 +114,10 @@ impl WitnessCursor {
 ///     world was re-derived by ROOT-VERIFIED replay from the durability log and the
 ///     projection re-ran over THAT reconstructed state (the camera re-ran,
 ///     deterministically, from the witnessed trace).
-///   * [`Liveness::ReconstructedApproximate`] — the cursor's height is not
-///     reachable in the log (a pruned / foreign / forged cursor), so the witnessed
-///     trace does NOT support the view; it is surfaced as approximate, never faked.
+///   * [`Liveness::ReconstructedApproximate`] — the cursor has no published
+///     boundary, or its boundary is unreachable or inconsistent (pending work,
+///     a prediction without a recorded origin, or a foreign/forged cursor).
+///     The witnessed trace does not support a presentation there.
 ///
 /// This is the UI-slice sibling of [`crate::affordance::Rehydration`] (which
 /// carries the per-viewer re-expanded affordance set); both express "what the
@@ -278,14 +282,18 @@ impl UiSnapshot {
     /// path, including setup updates, original costs, clocks and receipt checks.
     /// A missing or inconsistent cursor has no supported historical view.
     fn replay_world_to_cursor(&self, world: &World) -> Option<World> {
+        let root = self.cursor.ledger_root?;
         let history: &History = world.recorded_turns();
-        if history.root_at(self.cursor.history_step) != Some(self.cursor.ledger_root) {
+        if history.root_at(self.cursor.history_step) != Some(root) {
             return None;
         }
         let rebuilt = world.replay_to_step(self.cursor.history_step).ok()?;
+        // replay_to_step has checked the actual ledger root at every boundary.
+        // Its retained root is usable even if the source's current storage is
+        // unavailable: this cursor names an earlier, independently replayed state.
         if rebuilt.height() != self.cursor.height
             || rebuilt.receipts().last().map(|r| r.receipt_hash()) != self.cursor.receipt_head
-            || rebuilt.ledger().root() != self.cursor.ledger_root
+            || rebuilt.recorded_turns().root_at(self.cursor.history_step) != Some(root)
         {
             return None;
         }
@@ -338,6 +346,110 @@ mod tests {
             snap.cursor.is_live_head(&w),
             "a fresh capture is the live head"
         );
+    }
+
+    #[test]
+    fn snapshots_land_before_or_after_a_complete_birth_batch() {
+        let mut world = World::new();
+        let first = crate::world::make_open_cell(0x41, 100);
+        let second = crate::world::make_open_cell(0x42, 200);
+        let ids = [first.id(), second.id()];
+        let before = UiSnapshot::capture(
+            &world,
+            FocusTarget::Cell(ids[0]),
+            PresentationKind::RawFields,
+        );
+        world
+            .try_genesis_install_batch(vec![first, second])
+            .unwrap();
+        let after = UiSnapshot::capture(
+            &world,
+            FocusTarget::Cell(ids[0]),
+            PresentationKind::RawFields,
+        );
+        assert_eq!(after.cursor.history_step, before.cursor.history_step + 1);
+        world.genesis_cell(0x43, 300);
+        let empty = before
+            .replay_world_to_cursor(&world)
+            .expect("pre-batch boundary");
+        assert!(ids.iter().all(|id| !empty.ledger().contains(id)));
+        let complete = after
+            .replay_world_to_cursor(&world)
+            .expect("complete batch boundary");
+        assert!(ids.iter().all(|id| complete.ledger().contains(id)));
+        assert_eq!(complete.ledger().iter().count(), 2);
+        assert_eq!(
+            after.rehydrate(&world, ids[0]).liveness,
+            Liveness::ReplayedDeterministic
+        );
+        assert!(before.rehydrate(&world, ids[0]).presentation.is_none());
+    }
+
+    #[test]
+    fn an_unpublished_symbolic_head_does_not_replace_a_retained_snapshot() {
+        let (mut world, treasury, sink) = two_cell_world();
+        let retained = UiSnapshot::capture(
+            &world,
+            FocusTarget::Cell(treasury),
+            PresentationKind::RawFields,
+        );
+        world.set_witness_mode(dregg_turn::collapse::WitnessMode::Symbolic);
+        let turn = world.turn(treasury, vec![transfer(treasury, sink, 100)]);
+        assert!(world.commit_turn(turn).is_committed());
+        let pending = UiSnapshot::capture(
+            &world,
+            FocusTarget::Cell(treasury),
+            PresentationKind::RawFields,
+        );
+        assert!(pending.cursor.ledger_root.is_none());
+        let unsupported = pending.rehydrate(&world, treasury);
+        assert_eq!(unsupported.liveness, Liveness::ReconstructedApproximate);
+        assert!(unsupported.presentation.is_none());
+        let historical = retained.rehydrate(&world, treasury);
+        assert_eq!(historical.liveness, Liveness::ReplayedDeterministic);
+        assert_eq!(
+            raw_balance(historical.presentation.as_ref().unwrap()),
+            Some(1_000)
+        );
+    }
+
+    #[test]
+    fn prediction_forks_do_not_manufacture_a_snapshot_origin() {
+        let (world, treasury, sink) = two_cell_world();
+        assert_eq!(
+            world.height(),
+            0,
+            "a height count cannot detect the missing birth prefix"
+        );
+        let mut prediction = world.fork();
+        let before = UiSnapshot::capture(
+            &prediction,
+            FocusTarget::Cell(treasury),
+            PresentationKind::RawFields,
+        );
+        assert!(before.cursor.ledger_root.is_none());
+        let turn = prediction.turn(treasury, vec![transfer(treasury, sink, 1)]);
+        assert!(prediction.commit_turn(turn).is_committed());
+        assert_eq!(prediction.recorded_turns().len(), 1);
+        let after = UiSnapshot::capture(
+            &prediction,
+            FocusTarget::Cell(treasury),
+            PresentationKind::RawFields,
+        );
+        assert!(
+            after.cursor.ledger_root.is_none(),
+            "a later turn cannot supply the missing origin"
+        );
+        let unsupported = after.rehydrate(&prediction, treasury);
+        assert_eq!(unsupported.liveness, Liveness::ReconstructedApproximate);
+        assert!(unsupported.presentation.is_none());
+        assert!(UiSnapshot::capture(
+            &world,
+            FocusTarget::Cell(treasury),
+            PresentationKind::RawFields
+        )
+        .cursor
+        .is_live_head(&world));
     }
 
     // ── KEYSTONE: capture → advance → rehydrate re-derives the historical view ─
@@ -436,7 +548,7 @@ mod tests {
             height: 999,
             receipt_head: Some([0xABu8; 32]),
             history_step: 999,
-            ledger_root: [0xCDu8; 32],
+            ledger_root: Some([0xCDu8; 32]),
         };
         let slice = snap.rehydrate(&w, treasury);
         assert_eq!(slice.liveness, Liveness::ReconstructedApproximate);
@@ -466,14 +578,17 @@ mod tests {
             .replay_world_to_cursor(&world)
             .expect("exact earlier boundary");
         assert_eq!(historical.ledger().get(&treasury), Some(&before));
-        assert_eq!(historical.ledger().root(), snapshot.cursor.ledger_root);
+        assert_eq!(
+            Some(historical.ledger().clone().root()),
+            snapshot.cursor.ledger_root
+        );
         assert_eq!(
             snapshot.rehydrate(&world, treasury).liveness,
             Liveness::ReplayedDeterministic
         );
 
         let mut forged = snapshot;
-        forged.cursor.ledger_root = world.ledger().root();
+        forged.cursor.ledger_root = Some(world.ledger().clone().root());
         assert_eq!(
             forged.rehydrate(&world, treasury).liveness,
             Liveness::ReconstructedApproximate
