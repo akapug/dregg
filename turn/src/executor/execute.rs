@@ -243,6 +243,35 @@ impl TurnExecutor {
     /// Future: once Effect VM covers all effect types, every turn will carry a STARK proof,
     /// making this function a thin verify-and-commit wrapper (trustless).
     pub fn execute(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
+        self.execute_with_observation(turn, ledger, true)
+    }
+
+    /// Run the same executor without publishing to the post-commit observer.
+    ///
+    /// The host owns candidate rollback, including phase-one fee/nonce. After
+    /// accepting a successful candidate it calls [`Self::observe_committed_candidate`]
+    /// exactly once; a refused candidate must never notify that observer.
+    pub fn execute_candidate(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
+        self.execute_with_observation(turn, ledger, false)
+    }
+
+    /// Notify the observer only after a host has published a committed candidate.
+    /// The host must retain the exact result from [`Self::execute_candidate`].
+    pub fn observe_committed_candidate(&self, turn: &Turn, ledger: &Ledger, result: &TurnResult) {
+        assert!(
+            result.is_committed(),
+            "only an accepted candidate is publishable"
+        );
+        self.shadow_observer
+            .observe(turn, ledger, result, self.block_height);
+    }
+
+    fn execute_with_observation(
+        &self,
+        turn: &Turn,
+        ledger: &mut Ledger,
+        observe: bool,
+    ) -> TurnResult {
         // Exact FNSP-v3 linearity: a committed token must be extracted before this executor can
         // begin another whole turn.  That makes any consumed token observed below attributable to
         // THIS execution, so every rejection can safely restore it to pending.
@@ -266,7 +295,7 @@ impl TurnExecutor {
         // differential never ran. The verified producer builds the SAME ctx itself
         // (`build_shadow_host_ctx`, called from `produce_via_lean`), which is where the bug-1 seam
         // actually lives and where it is exercised.
-        let obs = self.shadow_observer.clone();
+        let obs = observe.then(|| self.shadow_observer.clone());
 
         // Factory quota is part of the same turn transaction as the newborn
         // cell. `CreateCellFromFactory` validates/records before all later
@@ -295,7 +324,9 @@ impl TurnExecutor {
         // (2026-07-30 — the variable was set by nothing and the verdict was dropped by `let _ =`;
         // its cell-by-cell post-state comparison now decides `ProducerOutcome::divergence` on the
         // armed producer seam instead).
-        obs.observe(turn, ledger, &result, self.block_height);
+        if let Some(obs) = obs {
+            obs.observe(turn, ledger, &result, self.block_height);
+        }
 
         if !result.is_committed() {
             let _ = self.restore_exact_fnsp_v3_admission_after_rejection();

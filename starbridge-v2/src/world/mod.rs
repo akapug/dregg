@@ -1339,67 +1339,20 @@ impl World {
             })
             .collect();
 
-        // Will this commit attempt a DURABLE dual-write? (Only a `Full`-mode turn
-        // on a persistent image does — a symbolic turn defers its witness and a
-        // fork/ephemeral world has no store.) If so, ARM THE LEDGER'S OWN
-        // first-touch undo journal before the engine mutates it, so a
-        // durable-write failure can UNWIND the in-RAM apply to a byte-identical
-        // pre-turn image (below). The executor's own journal already rolls back a
-        // turn that FAILS admission — this handles the distinct case of a turn that
-        // COMMITTED cleanly in RAM but could not be durably recorded.
-        //
-        // O(TOUCHED), NOT O(LEDGER): this used to be `self.engine.ledger().clone()`
-        // — a whole-ledger deep copy (every `Cell`'s capability `Vec` + state) on
-        // EVERY durable turn, which made a one-`SetField` commit linear in the
-        // ledger no matter how cheap `dual_write` got. `begin_restore_point`
-        // records each cell's prior WHOLE image on that cell's FIRST mutation, so
-        // the unwind is exact over the same set the mutations came from — complete
-        // at the `Ledger` API rather than by ENUMERATION of a write-set. Every
-        // mutator the executor reaches for journals: `get_mut`, `update_with`,
-        // `insert_cell`, `create_cell`, `remove` — and therefore `make_sovereign`,
-        // which routes its hosted-set deletion through `remove`. The sovereign /
-        // registration / witness-sequence / migration-lock side-maps are captured
-        // whole at arm time (they are small and shallow).
-        //   ⚠ `Ledger::apply_delta` is the ONE mutator that writes `self.cells`
-        //   directly (`apply_delta_in_place`) and so does NOT feed the restore
-        //   point. It has no caller on this path — no caller outside `cell`'s own
-        //   tests, repo-wide — but it is a real hole in the restore point's
-        //   contract for any future caller. Reported, not patched here:
-        //   `cell/src/ledger.rs` belongs to another lane.
-        //   NOT restored (deliberately): `witness_subscribers`. The old whole-ledger
-        //   snapshot restore reinstated the pre-turn subscriber map, which would
-        //   resurrect senders dropped during the turn and discard ones added. It is
-        //   a live notification registry, not consensus state (the canonical root
-        //   does not fold it), so leaving it alone is the correct behavior.
-        //
-        // ⚠ Why NOT the executor's `last_write_set()`: it is derived from the
-        // executor's FOREST journal only. `TurnExecutor::execute` mutates the
-        // ledger in two windows the forest journal does not cover — PHASE 1 (the
-        // agent's fee debit + nonce increment, deliberately "NEVER rolled back")
-        // and PHASE 3 (fee distribution to proposer/treasury/fee-well). An unwind
-        // driven by that write-set would leave the agent's nonce advanced and the
-        // fee spent, so `Rejected` would NOT mean "nothing happened". The ledger's
-        // own restore point sees all three windows because it hooks the mutators.
+        // A durable host must retain the successful executor candidate until
+        // disk publication resolves. The SDK owns the first-touch Ledger undo
+        // journal plus executor side-state; it rolls back every noncommit,
+        // including phase-one fee/nonce, for durable AND ephemeral callers.
+        // Ordinary execution closes success immediately. Candidate execution
+        // leaves only a successful attempt armed for the host's publication
+        // decision, and refuses to overwrite any unresolved restore point.
         let will_dual_write = self.persist.is_some() && !self.witness_mode.is_symbolic();
-        if will_dual_write {
-            self.engine.ledger_mut().begin_restore_point();
-        }
-        // `execute_turn` (below) advances the executor's per-agent receipt-chain
-        // head IN-LINE (`TurnExecutor::execute` inserts the new head), and that
-        // head lives on the EXECUTOR, not in the ledger — so the ledger restore
-        // point does not unwind it. Capture the pre-turn head for
-        // the acting agent (`None` if this is their first turn) to restore on a
-        // durable-write failure — otherwise `chain_head(agent)` leads a receipt
-        // the disk never recorded.
-        let head_snapshot: Option<[u8; 32]> = if will_dual_write {
-            self.engine.executor().get_last_receipt_hash(&turn.agent)
+        let result = if will_dual_write {
+            self.engine.execute_turn_candidate(&turn)
         } else {
-            None
+            self.engine.execute_turn(&turn)
         };
-
-        // Run the turn through the REAL embedded engine (the SDK's DreggEngine,
-        // which owns the executor+ledger borrow internally).
-        match self.engine.execute_turn(&turn) {
+        match result {
             Ok(receipt) => {
                 // THE DURABLE DUAL-WRITE (M4, A.2) — O(change), and it GATES the
                 // in-RAM publication. The engine's `execute_turn` above already
@@ -1482,41 +1435,35 @@ impl World {
                     match result {
                         Ok(()) => {
                             self.persist = Some(p);
-                            // Durably recorded: ACCEPT the in-place mutations and
-                            // drop the undo journal (O(touched)).
-                            self.engine.ledger_mut().commit_restore_point();
+                            // Disk publication succeeded. Resolve the candidate
+                            // before any public receipt/history/dynamics advance.
+                            if let Err(error) = self.engine.commit_turn_candidate() {
+                                let reason = self.latch_durability_failure(error);
+                                self.emit_dynamics(WorldEvent::TurnRejected {
+                                    agent: turn.agent,
+                                    reason: reason.clone(),
+                                });
+                                return CommitOutcome::Rejected {
+                                    reason,
+                                    at_action: vec![],
+                                };
+                            }
                         }
                         Err(e) => {
-                            // Restore the in-memory pre-turn image. The disk
-                            // outcome may be uncertain, so reopening is required.
-                            // `execute_turn` advanced TWO
-                            // things in RAM: the engine ledger AND the executor's
-                            // per-agent receipt-chain head (the tape / height /
-                            // receipts are advanced only below, after a durable
-                            // success, so they are still at their pre-turn values).
-                            // Restore BOTH — the ledger from its snapshot and the
-                            // head to its captured prior value — so the world is
-                            // byte-identical to pre-turn: `receipts.len() == height`
-                            // holds and the image root is consistent again. `p` is
-                            // dropped (NOT put back); the recovery-required latch
-                            // prevents any later mutation on this image.
-                            //
-                            // The ledger half is the restore point armed above:
-                            // every cell this turn touched (in ANY of the
-                            // executor's three mutation windows — fee/nonce, the
-                            // call forest, fee distribution) goes back to its prior
-                            // whole image, a turn-CREATED cell is removed, a
-                            // MakeSovereign'd cell is reinstated hosted, and the
-                            // sovereign/migration side-maps are restored wholesale.
-                            self.engine.ledger_mut().rollback_restore_point();
-                            self.engine
-                                .executor()
-                                .restore_last_receipt_hash(turn.agent, head_snapshot);
+                            // The SDK restores all three ledger mutation windows
+                            // and the candidate's executor-owned side-state. The
+                            // disk result may be uncertain; RAM rollback does not
+                            // authorize retry, so this World still requires reopen.
+                            let rollback = self.engine.rollback_turn_candidate();
                             // The witness tooth (height, receipt-head, ledger) is back
                             // to its pre-turn value; bust the memo so a stale advanced
                             // entry can never be served.
                             self.state_root_memo.set(None);
-                            let reason = self.latch_durability_failure(e);
+                            let failure = match rollback {
+                                Ok(()) => e.to_string(),
+                                Err(error) => format!("{e}; candidate rollback failed: {error}"),
+                            };
+                            let reason = self.latch_durability_failure(failure);
                             self.emit_dynamics(WorldEvent::TurnRejected {
                                 agent: turn.agent,
                                 reason: reason.clone(),
@@ -1534,7 +1481,7 @@ impl World {
                 // the disk does not carry.
                 //
                 // Re-assert the engine's per-agent chain head. `execute_turn`
-                // already advanced it in RAM (see the head snapshot above), so on
+                // already advanced it in the now-resolved candidate, so on
                 // the durable-success path this is an idempotent re-set to the same
                 // receipt hash — kept as the explicit, auditable live-path advance.
                 self.engine
@@ -1634,13 +1581,9 @@ impl World {
                 }
             }
             Err(EmbedError::TurnRejected { reason, at_action }) => {
-                // DISARM, do not roll back. The executor already restored its own
-                // forest journal, and it DELIBERATELY keeps PHASE 1 (the agent's
-                // fee debit + nonce bump) on a rejected turn — that is the
-                // anti-DoS rule ("expensive-but-failing turns still pay"). Rolling
-                // the restore point back here would REFUND them, which is a
-                // behavior change, not an unwind.
-                self.engine.ledger_mut().commit_restore_point();
+                // The SDK has already restored the entire rejected attempt.
+                // Current node policy also discards refused fee/nonce candidates
+                // (durableApply_reject_stays); no charged refusal is published.
                 self.emit_dynamics(WorldEvent::TurnRejected {
                     agent: turn.agent,
                     reason: reason.clone(),
@@ -1648,8 +1591,9 @@ impl World {
                 CommitOutcome::Rejected { reason, at_action }
             }
             Err(other) => {
-                // Same as above: disarm without rolling back.
-                self.engine.ledger_mut().commit_restore_point();
+                // SDK errors never authorize publishing a candidate. In
+                // particular, an existing caller-owned restore point is left
+                // untouched instead of being implicitly committed here.
                 let reason = other.to_string();
                 self.emit_dynamics(WorldEvent::TurnRejected {
                     agent: turn.agent,
@@ -2908,6 +2852,132 @@ mod tests {
         assert_eq!(w.ledger().get(&b).unwrap().state.balance(), 0);
         assert_eq!(w.receipts().len(), 0);
         assert_eq!(w.height(), 0);
+    }
+
+    fn assert_paid_refusal_is_atomic(world: &mut World) {
+        let a = world.genesis_cell(0x31, 100_000);
+        let b = world.genesis_cell(0x32, 0);
+        let first = world.turn(a, vec![transfer(a, b, 10)]);
+        let first = world.commit_turn(first);
+        assert!(first.is_committed(), "paid prefix must commit: {first:?}");
+        assert!(world.receipts()[0].computrons_used > 0);
+
+        let ledger_root = world.ledger().root();
+        let image_root = world.state_root();
+        let a_before = postcard::to_stdvec(world.ledger().get(&a).unwrap()).unwrap();
+        let b_before = postcard::to_stdvec(world.ledger().get(&b).unwrap()).unwrap();
+        let nonce = world.next_nonce(&a);
+        let head = world.chain_head(&a);
+        let steps = world.history.len();
+        let height = world.height();
+        let receipt_count = world.receipts().len();
+
+        // The first root transfers successfully. A later root overspends, after
+        // phase one has already debited a real fee and advanced the nonce.
+        let bad = world.forest_turn(
+            a,
+            vec![
+                (a, vec![transfer(a, b, 1)]),
+                (a, vec![transfer(a, b, 100_000)]),
+            ],
+        );
+        let outcome = world.commit_turn(bad);
+        assert!(
+            matches!(outcome, CommitOutcome::Rejected { ref at_action, .. } if at_action == &vec![1]),
+            "must reach the late forest refusal: {outcome:?}"
+        );
+        assert_eq!(
+            postcard::to_stdvec(world.ledger().get(&a).unwrap()).unwrap(),
+            a_before
+        );
+        assert_eq!(
+            postcard::to_stdvec(world.ledger().get(&b).unwrap()).unwrap(),
+            b_before
+        );
+        assert_eq!(world.ledger().root(), ledger_root);
+        assert_eq!(world.state_root(), image_root);
+        assert_eq!(world.compute_state_root(), image_root);
+        assert_eq!(world.record_ledger.root(), ledger_root);
+        assert_eq!(world.next_nonce(&a), nonce);
+        assert_eq!(world.chain_head(&a), head);
+        assert_eq!(world.history.len(), steps);
+        assert_eq!(world.height(), height);
+        assert_eq!(world.receipts().len(), receipt_count);
+        assert!(!world.engine.ledger().has_restore_point());
+
+        let next = world.turn(a, vec![transfer(a, b, 20)]);
+        assert_eq!(next.nonce, nonce);
+        let outcome = world.commit_turn(next);
+        assert!(
+            outcome.is_committed(),
+            "the next paid turn must commit: {outcome:?}"
+        );
+        assert_eq!(world.next_nonce(&a), nonce + 1);
+        assert_eq!(world.ledger().get(&a).unwrap().state.balance(), 97_970);
+        assert_eq!(world.ledger().get(&b).unwrap().state.balance(), 30);
+        assert_eq!(
+            world.history.replay_to(world.history.len()).unwrap().root(),
+            world.ledger().root()
+        );
+        assert_eq!(
+            world
+                .replay_to_step(world.history.len())
+                .unwrap()
+                .state_root(),
+            world.state_root()
+        );
+    }
+
+    #[test]
+    fn ephemeral_paid_late_refusal_preserves_root_nonce_head_and_replay() {
+        let mut world =
+            World::with_costs_and_timestamp(ComputronCosts::default_costs(), 1_700_000_000)
+                .with_turn_fee(1_000);
+        assert_paid_refusal_is_atomic(&mut world);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn durable_paid_late_refusal_preserves_root_nonce_head_and_reopen() {
+        let path = scratch_redb("paid-refusal-atomicity");
+        let mut world =
+            World::open_with_timestamp(&path, ComputronCosts::default_costs(), 1_700_000_000)
+                .unwrap()
+                .with_turn_fee(1_000);
+        assert_paid_refusal_is_atomic(&mut world);
+        assert_eq!(world.durability_status(), DurabilityStatus::Ready);
+        let root = world.state_root();
+        let hashes: Vec<_> = world
+            .receipts()
+            .iter()
+            .map(TurnReceipt::receipt_hash)
+            .collect();
+        let roots: Vec<_> = (0..=world.history.len())
+            .map(|step| world.history.root_at(step).unwrap())
+            .collect();
+        drop(world);
+
+        let reopened =
+            World::open_with_timestamp(&path, ComputronCosts::default_costs(), 1_700_000_000)
+                .unwrap();
+        assert_eq!(reopened.state_root(), root);
+        assert_eq!(
+            reopened
+                .receipts()
+                .iter()
+                .map(TurnReceipt::receipt_hash)
+                .collect::<Vec<_>>(),
+            hashes
+        );
+        assert_eq!(
+            (0..=reopened.history.len())
+                .map(|step| reopened.history.root_at(step).unwrap())
+                .collect::<Vec<_>>(),
+            roots
+        );
+        assert_eq!(reopened.height(), 2);
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
     }
 
     /// ADVERSARIAL (durable-write no-rollback correctness bug): a `commit_turn`

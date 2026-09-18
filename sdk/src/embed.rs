@@ -100,6 +100,7 @@
 use dregg_bridge::present::{self, BridgePresentationBuilder, WirePresentationProof};
 use dregg_cell::Ledger;
 use dregg_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
+use dregg_turn::executor::ProducerReferenceCheckpoint;
 use dregg_turn::turn::TurnResult;
 use dregg_turn::{Turn, TurnReceipt};
 
@@ -259,10 +260,20 @@ impl EngineConfig {
 pub struct DreggEngine {
     ledger: Ledger,
     executor: TurnExecutor,
+    /// An executed candidate remains reversible until its host publishes it.
+    /// Keeping this here also preserves the checkpoint across a caught unwind.
+    pending_candidate: Option<EmbeddedTurnCandidate>,
     /// The current federation root (caller updates this from their own sync).
     federation_root: [u8; 32],
     /// Maximum proof age in seconds (0 = no freshness check).
     max_proof_age_secs: i64,
+}
+
+struct EmbeddedTurnCandidate {
+    checkpoint: ProducerReferenceCheckpoint,
+    turn: Turn,
+    /// Absent while execution is in flight, or after a caught execution panic.
+    result: Option<TurnResult>,
 }
 
 impl DreggEngine {
@@ -288,6 +299,7 @@ impl DreggEngine {
         Self {
             ledger: Ledger::new(),
             executor,
+            pending_candidate: None,
             federation_root: [0u8; 32],
             max_proof_age_secs: config.max_proof_age_secs,
         }
@@ -307,6 +319,7 @@ impl DreggEngine {
         Self {
             ledger,
             executor,
+            pending_candidate: None,
             federation_root: [0u8; 32],
             max_proof_age_secs: config.max_proof_age_secs,
         }
@@ -326,22 +339,126 @@ impl DreggEngine {
         self.execute_turn(&turn)
     }
 
-    /// Execute a pre-deserialized turn.
+    /// Execute a pre-deserialized turn, publishing only a committed result.
+    ///
+    /// A refusal restores the ledger, including the raw executor's phase-one
+    /// fee and nonce, and its mutable execution state. Successful turns retain
+    /// their actual fees. An unresolved candidate or caller-owned ledger restore
+    /// point is refused without being replaced or rolled back.
     pub fn execute_turn(&mut self, turn: &Turn) -> Result<TurnReceipt, EmbedError> {
-        match self.executor.execute(turn, &mut self.ledger) {
-            TurnResult::Committed { receipt, .. } => Ok(receipt),
-            TurnResult::Rejected { reason, at_action } => Err(EmbedError::TurnRejected {
-                reason: format!("{reason:?}"),
-                at_action,
-            }),
-            TurnResult::Expired => Err(EmbedError::TurnRejected {
-                reason: "conditional turn expired".into(),
-                at_action: vec![],
-            }),
-            TurnResult::Pending => Err(EmbedError::TurnRejected {
-                reason: "conditional turn pending".into(),
-                at_action: vec![],
-            }),
+        let receipt = self.execute_turn_candidate(turn)?;
+        self.commit_turn_candidate()?;
+        Ok(receipt)
+    }
+
+    /// Execute a candidate for a host that must durably publish before accepting.
+    ///
+    /// An error restores the complete pre-attempt ledger and execution state.
+    /// Success leaves the candidate live and reversible: the host must call
+    /// [`Self::commit_turn_candidate`] after publication or
+    /// [`Self::rollback_turn_candidate`] on refusal. The returned receipt is
+    /// provisional until that decision. Neither this method nor ordinary
+    /// execution silently replaces an unresolved candidate/outer restore point.
+    /// If the host catches an execution panic, the retained checkpoint must also
+    /// be explicitly rolled back before another execution can begin.
+    pub fn execute_turn_candidate(&mut self, turn: &Turn) -> Result<TurnReceipt, EmbedError> {
+        if self.pending_candidate.is_some() || self.ledger.has_restore_point() {
+            return Err(Self::candidate_error(
+                "an unresolved turn candidate or caller-owned restore point is active",
+            ));
+        }
+        self.pending_candidate = Some(EmbeddedTurnCandidate {
+            checkpoint: self.executor.checkpoint_embedded_candidate(turn),
+            turn: turn.clone(),
+            result: None,
+        });
+        self.ledger.begin_restore_point();
+        match self.executor.execute_candidate(turn, &mut self.ledger) {
+            result @ TurnResult::Committed { .. } => {
+                let receipt = match &result {
+                    TurnResult::Committed { receipt, .. } => receipt.clone(),
+                    _ => unreachable!("matched committed result"),
+                };
+                self.pending_candidate
+                    .as_mut()
+                    .expect("candidate retained during execution")
+                    .result = Some(result);
+                Ok(receipt)
+            }
+            result => {
+                self.rollback_turn_candidate()?;
+                match result {
+                    TurnResult::Rejected { reason, at_action } => Err(EmbedError::TurnRejected {
+                        reason: format!("{reason:?}"),
+                        at_action,
+                    }),
+                    TurnResult::Expired => Err(Self::candidate_error("conditional turn expired")),
+                    TurnResult::Pending => Err(Self::candidate_error("conditional turn pending")),
+                    TurnResult::Committed { .. } => unreachable!("handled committed result above"),
+                }
+            }
+        }
+    }
+
+    /// Publish the active candidate after the host has accepted it.
+    pub fn commit_turn_candidate(&mut self) -> Result<(), EmbedError> {
+        self.require_turn_candidate()?;
+        if self
+            .pending_candidate
+            .as_ref()
+            .and_then(|c| c.result.as_ref())
+            .is_none()
+        {
+            return Err(Self::candidate_error(
+                "execution did not return a committed candidate; rollback is required",
+            ));
+        }
+        self.ledger.commit_restore_point();
+        let candidate = self
+            .pending_candidate
+            .take()
+            .expect("candidate checked before publication");
+        self.executor.observe_committed_candidate(
+            &candidate.turn,
+            &self.ledger,
+            candidate
+                .result
+                .as_ref()
+                .expect("committed result checked before publication"),
+        );
+        Ok(())
+    }
+
+    /// Restore the active candidate, including executor-owned side tables.
+    ///
+    /// This says nothing about an uncertain external write: a durable host must
+    /// still reopen authoritative storage before accepting more work.
+    pub fn rollback_turn_candidate(&mut self) -> Result<(), EmbedError> {
+        self.require_turn_candidate()?;
+        self.ledger.rollback_restore_point();
+        self.executor.rollback_producer_reference(
+            self.pending_candidate
+                .take()
+                .expect("candidate was checked before rollback")
+                .checkpoint,
+        );
+        Ok(())
+    }
+
+    fn require_turn_candidate(&self) -> Result<(), EmbedError> {
+        if self.pending_candidate.is_some() && self.ledger.has_restore_point() {
+            Ok(())
+        } else {
+            Err(Self::candidate_error(
+                "turn candidate checkpoint and ledger restore point do not match; publication/refusal requires explicit recovery",
+            ))
+        }
+    }
+
+    fn candidate_error(reason: &str) -> EmbedError {
+        EmbedError::TurnRejected {
+            reason: reason.into(),
+            at_action: vec![],
         }
     }
 
@@ -752,6 +869,166 @@ impl DreggEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dregg_cell::{AuthRequired, Cell, CellId};
+    use dregg_turn::budget_gate::{BudgetGate, BudgetSlice};
+    use dregg_turn::{Effect, TurnBuilder};
+
+    fn metered_engine() -> (DreggEngine, CellId, CellId) {
+        let mut engine = DreggEngine::new(EngineConfig::new(1_700_000_000));
+        engine
+            .executor_mut()
+            .set_budget_gate(BudgetGate::new(7, BudgetSlice::new(20_000)));
+        let mut sender = Cell::with_balance([0x11; 32], [0; 32], 100_000);
+        sender.permissions.send = AuthRequired::None;
+        let recipient = Cell::with_balance([0x22; 32], [0; 32], 0);
+        let (a, b) = (sender.id(), recipient.id());
+        engine.ledger_mut().insert_cell(sender).unwrap();
+        engine.ledger_mut().insert_cell(recipient).unwrap();
+        (engine, a, b)
+    }
+
+    fn metered_transfers(engine: &DreggEngine, a: CellId, b: CellId, amounts: &[u64]) -> Turn {
+        let nonce = engine.ledger().get(&a).unwrap().state.nonce();
+        let mut builder = TurnBuilder::new(a, nonce).fee(1_000);
+        for &amount in amounts {
+            builder.add_action(crate::raw::unsigned_action_named(
+                a,
+                "transfer",
+                vec![Effect::Transfer {
+                    from: a,
+                    to: b,
+                    amount,
+                }],
+            ));
+        }
+        let mut turn = builder.build();
+        turn.previous_receipt_hash = engine.executor().get_last_receipt_hash(&a);
+        turn
+    }
+
+    fn cell_image(engine: &DreggEngine) -> Vec<u8> {
+        let mut cells: Vec<_> = engine.ledger().iter().collect();
+        cells.sort_by_key(|(id, _)| **id);
+        postcard::to_stdvec(&cells).unwrap()
+    }
+
+    #[test]
+    fn embedded_paid_late_refusal_restores_state_and_accepts_the_same_next_nonce() {
+        let (mut engine, a, b) = metered_engine();
+        let first = metered_transfers(&engine, a, b, &[10]);
+        let first_receipt = engine.execute_turn(&first).unwrap();
+        assert!(first_receipt.computrons_used > 0);
+        let before = cell_image(&engine);
+        let root = engine.ledger().root();
+        let head = engine.executor().get_last_receipt_hash(&a);
+        let write_set = engine.executor().last_write_set();
+        let budget = engine
+            .executor()
+            .budget_gate
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .slice
+            .clone();
+        let bad = metered_transfers(&engine, a, b, &[1, 100_000]);
+        let wire = postcard::to_stdvec(&bad).unwrap();
+        let error = engine.execute_turn_bytes(&wire).unwrap_err();
+        assert!(
+            matches!(error, EmbedError::TurnRejected { at_action, .. } if at_action == vec![1])
+        );
+        assert_eq!(cell_image(&engine), before);
+        assert_eq!(engine.ledger().root(), root);
+        assert_eq!(engine.executor().get_last_receipt_hash(&a), head);
+        assert_eq!(engine.executor().last_write_set(), write_set);
+        assert_eq!(
+            engine
+                .executor()
+                .budget_gate
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .slice,
+            budget
+        );
+        assert!(!engine.ledger().has_restore_point());
+        assert!(engine.pending_candidate.is_none());
+
+        let next = metered_transfers(&engine, a, b, &[20]);
+        assert_eq!(next.nonce, bad.nonce);
+        let receipt = engine.execute_turn(&next).unwrap();
+        assert_eq!(
+            receipt.previous_receipt_hash,
+            Some(first_receipt.receipt_hash())
+        );
+        assert_eq!(engine.ledger().get(&a).unwrap().state.nonce(), 2);
+        assert_eq!(engine.ledger().get(&a).unwrap().state.balance(), 97_970);
+        assert_eq!(engine.ledger().get(&b).unwrap().state.balance(), 30);
+        assert_eq!(
+            engine
+                .executor()
+                .budget_gate
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .slice
+                .spent,
+            2_000
+        );
+    }
+
+    #[test]
+    fn embedded_candidate_requires_explicit_resolution_and_keeps_outer_restore_points() {
+        let (mut engine, a, b) = metered_engine();
+        let before = cell_image(&engine);
+        let turn = metered_transfers(&engine, a, b, &[10]);
+
+        engine.ledger_mut().begin_restore_point();
+        assert!(
+            engine
+                .ledger_mut()
+                .get_mut(&a)
+                .unwrap()
+                .state
+                .credit_balance(5)
+        );
+        let outer = cell_image(&engine);
+        assert!(engine.execute_turn(&turn).is_err());
+        assert!(engine.execute_turn_candidate(&turn).is_err());
+        assert!(engine.rollback_turn_candidate().is_err());
+        assert_eq!(cell_image(&engine), outer);
+        assert!(engine.ledger().has_restore_point());
+        engine.ledger_mut().rollback_restore_point();
+        assert_eq!(cell_image(&engine), before);
+
+        let candidate = engine.execute_turn_candidate(&turn).unwrap();
+        let provisional = cell_image(&engine);
+        assert!(engine.execute_turn(&turn).is_err());
+        assert_eq!(cell_image(&engine), provisional);
+        assert!(engine.ledger().has_restore_point());
+        engine.rollback_turn_candidate().unwrap();
+        assert_eq!(cell_image(&engine), before);
+        assert_eq!(engine.executor().get_last_receipt_hash(&a), None);
+        assert!(engine.executor().last_write_set().is_empty());
+        assert_eq!(
+            engine
+                .executor()
+                .budget_gate
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .slice
+                .spent,
+            0
+        );
+        let committed = engine.execute_turn(&turn).unwrap();
+        assert_eq!(committed.receipt_hash(), candidate.receipt_hash());
+        assert!(!engine.ledger().has_restore_point());
+        assert!(engine.pending_candidate.is_none());
+    }
 
     #[test]
     fn engine_default_creation() {

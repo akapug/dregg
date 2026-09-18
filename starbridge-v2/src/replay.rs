@@ -342,9 +342,18 @@ impl History {
         ledger: &mut Ledger,
         mut turn: Turn,
     ) -> Option<TurnReceipt> {
+        // Never replace an outer caller's unresolved transaction. A refused
+        // recording cannot leave phase-one fee/nonce or executor side-state
+        // outside the successful-only history we are building.
+        if ledger.has_restore_point() {
+            return None;
+        }
         turn.previous_receipt_hash = executor.get_last_receipt_hash(&turn.agent);
-        match executor.execute(&turn, ledger) {
+        let checkpoint = executor.checkpoint_embedded_candidate(&turn);
+        ledger.begin_restore_point();
+        match executor.execute_candidate(&turn, ledger) {
             TurnResult::Committed { receipt, .. } => {
+                ledger.commit_restore_point();
                 executor.set_last_receipt_hash(receipt.agent, receipt.receipt_hash());
                 let post_root = ledger.root();
                 self.steps.push(RecordedStep::Committed {
@@ -360,7 +369,11 @@ impl History {
                 self.boundaries.push(project_ledger(ledger));
                 Some(receipt)
             }
-            _ => None,
+            _ => {
+                ledger.rollback_restore_point();
+                executor.rollback_producer_reference(checkpoint);
+                None
+            }
         }
     }
 

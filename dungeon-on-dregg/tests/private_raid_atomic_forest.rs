@@ -25,8 +25,8 @@
 //! In particular, later sibling roots observe earlier roots because this embedded executor
 //! walks the forest sequentially over one journaled ledger image. That is executor-local
 //! atomicity/current-state authority, not a claim of distributed consensus finality.
-//! “Atomic” here names the forest effects: the executor intentionally keeps its phase-one
-//! agent nonce/fee accounting when a forest rejects, so the RED case asserts that boundary.
+//! The embedded engine also rolls back phase-one agent nonce/fee accounting on refusal,
+//! matching the node's discarded-candidate policy. The exact honest retry keeps its nonce.
 
 use std::sync::{Arc, OnceLock};
 
@@ -655,19 +655,13 @@ fn real_proof_sigil_party_and_arena_commit_as_one_four_root_forest() {
             .expect("agent remains present")
             .state
             .nonce(),
-        agent_nonce_before + 1,
-        "executor phase-one nonce accounting is intentionally outside forest rollback"
+        agent_nonce_before,
+        "the embedded refusal also restores the submitter nonce"
     );
 
-    // Retry the exact honest forest at the executor's advanced actor nonce; it yields
-    // one receipt covering four actions.
-    raid.turn.nonce = raid
-        .engine
-        .ledger()
-        .get(&raid.agent)
-        .expect("agent remains present")
-        .state
-        .nonce();
+    // Retry the exact honest forest at its original nonce; it yields one receipt
+    // covering four actions, with no unrecorded refusal between receipt states.
+    assert_eq!(raid.turn.nonce, agent_nonce_before);
     let receipt = raid
         .engine
         .execute_turn(&raid.turn)

@@ -6,16 +6,20 @@
 //! may have advanced a receipt head, Stingray budget, rate-limit windows, or
 //! executor observation state.
 //!
-//! Append-only note/revocation accumulators and the reactive/factory registries
-//! are deliberately not cloned here. The producer fences every effect that can
-//! mutate them *before* this checkpoint is taken. Factory quota has its own
-//! whole-turn checkpoint inside `TurnExecutor::execute`, so Rust fallback is
-//! transactional without imposing an O(history) clone on every covered turn.
+//! The ordinary producer fences note/revocation/reactive effects before its
+//! checkpoint. Embedded hosts can instead retain a successful candidate until
+//! durable publication: their explicit checkpoint also captures each additional
+//! side table the turn can mutate. Ordinary field/transfer turns do not clone
+//! unrelated note history or factory registries.
 
-use dregg_cell::CellId;
+use dregg_cell::nullifier_set::NullifierSet;
+use dregg_cell::{CellId, CommitmentSet, FactoryRegistry, RevokedSet, ShieldedNoteSet};
+use dregg_cell_crypto::note_bridge::BridgedNullifierSet;
 
 use super::{RateLimitStateSnapshot, TurnExecutor};
 use crate::{
+    action::Effect,
+    pending::{PendingTurnRegistry, ReactiveNullifierSet},
     turn::{ConsumedCapWitness, TurnReceipt},
     umem::{UProjection, UmemTurnWitness},
 };
@@ -32,6 +36,90 @@ pub struct ProducerReferenceCheckpoint {
     consumed_cap_witnesses: Vec<ConsumedCapWitness>,
     last_umem_witness: Option<Result<UmemTurnWitness, String>>,
     last_umem_yield: Option<UProjection>,
+    embedded: Option<EmbeddedCandidateCheckpoint>,
+}
+
+/// Additional pre-images needed when an accepted Rust candidate can still be
+/// refused by its publisher. The raw forest journal has already been consumed
+/// on success, so its side-table undo information is no longer available.
+struct EmbeddedCandidateCheckpoint {
+    bridged_nullifiers: Option<BridgedNullifierSet>,
+    note_nullifiers: Option<NullifierSet>,
+    note_commitments: Option<CommitmentSet>,
+    note_revoked: Option<RevokedSet>,
+    note_shielded: Option<ShieldedNoteSet>,
+    reactive_registry: Option<PendingTurnRegistry>,
+    reactive_nullifiers: Option<ReactiveNullifierSet>,
+    factory_registry: Option<FactoryRegistry>,
+    restore_exact_admission: bool,
+}
+
+#[derive(Default)]
+struct EmbeddedSideWrites {
+    bridged: bool,
+    nullifiers: bool,
+    commitments: bool,
+    revoked: bool,
+    shielded: bool,
+    reactive: bool,
+    factory: bool,
+}
+
+impl EmbeddedSideWrites {
+    /// Exhaustive over the real effect vocabulary: adding an effect requires
+    /// classifying its executor-owned writes at this publication boundary.
+    fn include(&mut self, effect: &Effect) {
+        match effect {
+            Effect::BridgeMint { .. } => self.bridged = true,
+            Effect::NoteSpend { .. } => self.nullifiers = true,
+            Effect::NoteCreate { .. } => self.commitments = true,
+            Effect::RevokeCapability { .. } => self.revoked = true,
+            Effect::ShieldedTransfer { .. } => {
+                self.nullifiers = true;
+                self.shielded = true;
+            }
+            Effect::Shield { .. } => self.shielded = true,
+            Effect::Deshield { .. } => {
+                self.nullifiers = true;
+                self.commitments = true;
+            }
+            Effect::Promise { .. } | Effect::Notify { .. } | Effect::React { .. } => {
+                self.reactive = true;
+            }
+            Effect::CreateCellFromFactory { .. } => self.factory = true,
+            Effect::ExerciseViaCapability { inner_effects, .. } => {
+                for inner in inner_effects {
+                    self.include(inner);
+                }
+            }
+            Effect::SetField { .. }
+            | Effect::Transfer { .. }
+            | Effect::GrantCapability { .. }
+            | Effect::EmitEvent { .. }
+            | Effect::IncrementNonce { .. }
+            | Effect::CreateCell { .. }
+            | Effect::SetPermissions { .. }
+            | Effect::SetVerificationKey { .. }
+            | Effect::SetProgram { .. }
+            | Effect::SpawnWithDelegation { .. }
+            | Effect::RefreshDelegation { .. }
+            | Effect::RevokeDelegation { .. }
+            | Effect::Introduce { .. }
+            | Effect::PipelinedSend { .. }
+            | Effect::MakeSovereign { .. }
+            | Effect::Refusal { .. }
+            | Effect::CellSeal { .. }
+            | Effect::CellUnseal { .. }
+            | Effect::CellDestroy { .. }
+            | Effect::Burn { .. }
+            | Effect::AttenuateCapability { .. }
+            | Effect::ReceiptArchive { .. }
+            | Effect::Mint { .. }
+            | Effect::Custom { .. }
+            | Effect::CreateHybridCell { .. }
+            | Effect::RotatePqIdentity { .. } => {}
+        }
+    }
 }
 
 struct BudgetCheckpoint {
@@ -110,13 +198,132 @@ impl TurnExecutor {
             consumed_cap_witnesses,
             last_umem_witness,
             last_umem_yield,
+            embedded: None,
         }
+    }
+
+    /// Capture the owned mutable state of an embedded execution candidate.
+    ///
+    /// Unlike the verified producer's restricted reference, an embedded turn
+    /// can reach the full forest vocabulary and remain provisional after Rust
+    /// returns success. Capture only the additional tables that vocabulary can
+    /// mutate. Ledger rollback remains the caller's matching restore point.
+    pub fn checkpoint_embedded_candidate(
+        &self,
+        turn: &crate::turn::Turn,
+    ) -> ProducerReferenceCheckpoint {
+        let mut writes = EmbeddedSideWrites::default();
+        for root in &turn.call_forest.roots {
+            for tree in root.iter_dfs() {
+                for effect in &tree.action.effects {
+                    writes.include(effect);
+                }
+            }
+        }
+        let mut checkpoint = self.checkpoint_producer_reference(turn.agent);
+        checkpoint.embedded = Some(EmbeddedCandidateCheckpoint {
+            bridged_nullifiers: writes.bridged.then(|| {
+                self.bridged_nullifiers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            }),
+            note_nullifiers: writes.nullifiers.then(|| {
+                self.note_nullifiers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            }),
+            note_commitments: writes.commitments.then(|| {
+                self.note_commitments
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            }),
+            note_revoked: writes.revoked.then(|| {
+                self.note_revoked
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            }),
+            note_shielded: writes.shielded.then(|| {
+                self.note_shielded
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            }),
+            reactive_registry: writes.reactive.then(|| {
+                self.reactive_registry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            }),
+            reactive_nullifiers: writes.reactive.then(|| {
+                self.reactive_nullifiers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            }),
+            factory_registry: writes
+                .factory
+                .then(|| self.factory_registry.borrow().clone()),
+            // If execution was already blocked by an earlier applied/consumed
+            // token, refusal must preserve that prior slot rather than treating
+            // it as a token consumed by this attempted execution.
+            restore_exact_admission: self.exact_fnsp_v3_admission_ready_for_execute().is_ok(),
+        });
+        checkpoint
     }
 
     /// Restore the pre-image after the verified producer rejects a turn the
     /// Rust reference speculatively ran. Consuming the checkpoint makes the
     /// inverse single-use.
     pub fn rollback_producer_reference(&self, checkpoint: ProducerReferenceCheckpoint) {
+        if let Some(embedded) = checkpoint.embedded {
+            if let Some(previous) = embedded.bridged_nullifiers {
+                *self
+                    .bridged_nullifiers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = previous;
+            }
+            if let Some(previous) = embedded.note_nullifiers {
+                *self
+                    .note_nullifiers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = previous;
+            }
+            if let Some(previous) = embedded.note_commitments {
+                *self
+                    .note_commitments
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = previous;
+            }
+            if let Some(previous) = embedded.note_revoked {
+                *self.note_revoked.lock().unwrap_or_else(|e| e.into_inner()) = previous;
+            }
+            if let Some(previous) = embedded.note_shielded {
+                *self.note_shielded.lock().unwrap_or_else(|e| e.into_inner()) = previous;
+            }
+            if let Some(previous) = embedded.reactive_registry {
+                *self
+                    .reactive_registry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = previous;
+            }
+            if let Some(previous) = embedded.reactive_nullifiers {
+                *self
+                    .reactive_nullifiers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = previous;
+            }
+            if let Some(previous) = embedded.factory_registry {
+                *self.factory_registry.borrow_mut() = previous;
+            }
+            if embedded.restore_exact_admission {
+                self.restore_exact_fnsp_v3_admission_after_rejection()
+                    .expect("the candidate owns any newly applied exact admission token");
+            }
+        }
         self.restore_rate_limit_state(&checkpoint.rate_limits)
             .expect("an in-memory rate-limit checkpoint is valid");
         if let (Some(gate), Some(previous)) = (&self.budget_gate, checkpoint.budget) {
